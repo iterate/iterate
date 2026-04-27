@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
+import type { Event, EventInput, StreamPath, StreamState } from "@iterate-com/events-contract";
 import {
   AlertTriangleIcon,
   BotIcon,
@@ -71,6 +72,8 @@ import type {
   BashmodeBlockFeedItem,
   CodemodeBlockFeedItem,
   CodemodeResultFeedItem,
+  CustomHtmlRenderErrorFeedItem,
+  CustomHtmlRenderedEventFeedItem,
   DynamicWorkerConfiguredFeedItem,
   DynamicWorkerEnvVarSetFeedItem,
   ChildStreamCreatedFeedItem,
@@ -95,6 +98,20 @@ type StreamLinkSearch = {
   [key: string]: unknown;
 };
 
+type CustomHtmlRendererApi = {
+  streamPath: StreamPath;
+  events: readonly Event[];
+  append: (event: EventInput) => Promise<Event>;
+  getState: () => Promise<StreamState>;
+  history: () => Promise<Event[]>;
+};
+
+declare global {
+  interface Window {
+    __iterateEventsRendererApi?: CustomHtmlRendererApi;
+  }
+}
+
 export function StreamEventFeed({
   feed,
   displayFeed,
@@ -103,6 +120,7 @@ export function StreamEventFeed({
   isPending = false,
   openEventOffset,
   onOpenEventOffsetChange,
+  rendererApi,
 }: {
   feed: readonly StreamFeedItem[];
   displayFeed: readonly StreamFeedItem[] | null;
@@ -111,6 +129,7 @@ export function StreamEventFeed({
   isPending?: boolean;
   openEventOffset?: number;
   onOpenEventOffsetChange?: (offset?: number) => void;
+  rendererApi?: CustomHtmlRendererApi;
 }) {
   const eventFeedItems = useMemo(() => getEventFeedItems(feed), [feed]);
   const eventElapsedByOffset = useMemo(() => {
@@ -138,6 +157,14 @@ export function StreamEventFeed({
   const feedSummary = useMemo(() => summarizeStreamFeed(feed), [feed]);
 
   const items = displayFeed ?? [];
+
+  useEffect(() => {
+    if (rendererApi == null) {
+      return;
+    }
+
+    window.__iterateEventsRendererApi = rendererApi;
+  }, [rendererApi]);
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
@@ -194,6 +221,7 @@ export function StreamEventFeed({
                 rendererMode={rendererMode}
                 eventElapsedByOffset={eventElapsedByOffset}
                 onOpenEventOffsetChange={onOpenEventOffsetChange}
+                rendererApi={rendererApi}
               />
             ))}
           </ConversationContent>
@@ -215,11 +243,13 @@ function StreamFeedItemRenderer({
   rendererMode,
   eventElapsedByOffset,
   onOpenEventOffsetChange,
+  rendererApi,
 }: {
   item: StreamFeedItem;
   rendererMode: StreamRendererMode;
   eventElapsedByOffset: ReadonlyMap<number, string>;
   onOpenEventOffsetChange?: (offset?: number) => void;
+  rendererApi?: CustomHtmlRendererApi;
 }) {
   switch (item.kind) {
     case "event":
@@ -258,6 +288,10 @@ function StreamFeedItemRenderer({
       return <ExternalSubscriberConfiguredCard item={item} />;
     case "jsonata-transformer-configured":
       return <JsonataTransformerConfiguredCard item={item} />;
+    case "custom-html-rendered-event":
+      return <CustomHtmlRenderedEventCard item={item} rendererApi={rendererApi} />;
+    case "custom-html-render-error":
+      return <CustomHtmlRenderErrorCard item={item} />;
     case "stream-lifecycle":
       return <StreamLifecycleLine item={item} />;
     case "dynamic-worker-configured":
@@ -422,6 +456,87 @@ function JsonataTransformerConfiguredCard({
           showToggle
           showCopyButton
         />
+      </ArtifactSection>
+    </AssistantArtifact>
+  );
+}
+
+function CustomHtmlRenderedEventCard({
+  item,
+  rendererApi,
+}: {
+  item: CustomHtmlRenderedEventFeedItem;
+  rendererApi?: CustomHtmlRendererApi;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (container == null) return;
+
+    const timeoutIds = new Set<number>();
+    const runScripts = () => {
+      if (rendererApi != null) {
+        window.__iterateEventsRendererApi = rendererApi;
+      }
+
+      const scripts = Array.from(container.querySelectorAll("script"));
+      for (const script of scripts) {
+        if (script.dataset.iterateExecuted === "true") {
+          continue;
+        }
+
+        script.dataset.iterateExecuted = "true";
+
+        if (script.src) {
+          const executableScript = document.createElement("script");
+          for (const attribute of Array.from(script.attributes)) {
+            executableScript.setAttribute(attribute.name, attribute.value);
+          }
+          script.replaceWith(executableScript);
+          continue;
+        }
+
+        new Function(script.textContent ?? "")();
+      }
+    };
+    const scheduleRunScripts = () => {
+      const timeoutId = window.setTimeout(() => {
+        timeoutIds.delete(timeoutId);
+        runScripts();
+      }, 50);
+      timeoutIds.add(timeoutId);
+    };
+
+    const observer = new MutationObserver(scheduleRunScripts);
+    observer.observe(container, { childList: true, subtree: true });
+    scheduleRunScripts();
+
+    return () => {
+      observer.disconnect();
+      for (const timeoutId of timeoutIds) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, [item.html, rendererApi]);
+
+  return (
+    <div ref={containerRef} className="contents" dangerouslySetInnerHTML={{ __html: item.html }} />
+  );
+}
+
+function CustomHtmlRenderErrorCard({ item }: { item: CustomHtmlRenderErrorFeedItem }) {
+  return (
+    <AssistantArtifact
+      eyebrow={<AlertTriangleIcon className="size-3.5" />}
+      eyebrowLabel="HTML renderer failed"
+      title={item.eventType}
+      badge={item.slug}
+      meta={[formatTime(item.timestamp)]}
+      tone="danger"
+    >
+      <ArtifactSection>
+        <p className="text-sm text-muted-foreground">{item.message}</p>
       </ArtifactSection>
     </AssistantArtifact>
   );
@@ -1246,6 +1361,10 @@ function getFeedItemKey(item: StreamFeedItem, index: number) {
       return `external-subscriber-${item.subscriber.slug}-${item.timestamp}-${index}`;
     case "jsonata-transformer-configured":
       return `jsonata-transformer-${item.transformer.slug}-${item.timestamp}-${index}`;
+    case "custom-html-rendered-event":
+      return `custom-html-rendered-${item.slug}-${item.raw.offset}-${index}`;
+    case "custom-html-render-error":
+      return `custom-html-render-error-${item.slug}-${item.raw.offset}-${index}`;
     case "stream-lifecycle":
       return `lifecycle-${item.label}-${item.timestamp}-${index}`;
     case "dynamic-worker-configured":
