@@ -243,6 +243,24 @@ describe("dispatchCallable", () => {
     });
   });
 
+  test("does not duplicate fetch path bases when value dispatch delegates to fetch dispatch", async () => {
+    const value = await dispatchCallable({
+      callable: {
+        target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+        call: { type: "fetch", path: { base: "/internal" } },
+      },
+      payload: { title: "Bug" },
+      ctx: { env: testEnv },
+    });
+
+    expect(value).toMatchObject({
+      target: "service",
+      method: "POST",
+      path: "/internal",
+      body: '{"title":"Bug"}',
+    });
+  });
+
   test("serializes undefined payloads as JSON null in the default request template", async () => {
     const request = buildCallableRequest({
       callable: {
