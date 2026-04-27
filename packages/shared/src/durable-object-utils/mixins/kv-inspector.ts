@@ -1,6 +1,10 @@
 /// <reference types="@cloudflare/workers-types" />
 
+import { DurableObject } from "cloudflare:workers";
+
 type Constructor<T = object> = abstract new (...args: any[]) => T;
+
+type DurableObjectConstructor = abstract new (...args: any[]) => DurableObject;
 
 type DurableObjectInternals = {
   ctx: DurableObjectState;
@@ -13,32 +17,40 @@ type FetchBase = {
 export type WithKvInspectorResult<TBase extends Constructor> = TBase & Constructor<FetchBase>;
 
 /**
- * Debug-only KV inspector. Do not mount this on a production-routed Durable
- * Object without an explicit auth/dev gate in front of `fetch()`.
+ * Debug-only KV inspector.
+ *
+ * This exposes every key/value pair in the Durable Object's SQLite-backed KV
+ * storage. The `unsafe` option is intentionally noisy so call sites have to
+ * acknowledge that this mixin must sit behind a development-only or otherwise
+ * authenticated route.
  */
-export function withKvInspector<TBase extends Constructor>(
-  Base: TBase,
-): WithKvInspectorResult<TBase> {
-  abstract class KvInspectorMixin extends Base {
-    async fetch(request: Request) {
-      const url = new URL(request.url);
+export function withKvInspector(options: { unsafe: "I_UNDERSTAND_THIS_EXPOSES_KV" }) {
+  void options;
 
-      if (url.pathname === "/__kv" || url.pathname === "/__kv/") {
-        return renderKvPage(this);
+  return function <TBase extends DurableObjectConstructor>(
+    Base: TBase,
+  ): WithKvInspectorResult<TBase> {
+    abstract class KvInspectorMixin extends Base {
+      async fetch(request: Request) {
+        const url = new URL(request.url);
+
+        if (url.pathname === "/__kv" || url.pathname === "/__kv/") {
+          return renderKvPage(this);
+        }
+
+        if (url.pathname === "/__kv/json") {
+          return Response.json(readKvEntries(this));
+        }
+
+        const baseFetch = (Base.prototype as FetchBase).fetch;
+        if (baseFetch !== undefined) return await baseFetch.call(this, request);
+
+        return new Response("Not found", { status: 404 });
       }
-
-      if (url.pathname === "/__kv/json") {
-        return Response.json(readKvEntries(this));
-      }
-
-      const baseFetch = (Base.prototype as FetchBase).fetch;
-      if (baseFetch !== undefined) return await baseFetch.call(this, request);
-
-      return new Response("Not found", { status: 404 });
     }
-  }
 
-  return KvInspectorMixin as unknown as WithKvInspectorResult<TBase>;
+    return KvInspectorMixin as unknown as WithKvInspectorResult<TBase>;
+  };
 }
 
 function renderKvPage(instance: object) {

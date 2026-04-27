@@ -1,6 +1,10 @@
 /// <reference types="@cloudflare/workers-types" />
 
+import { DurableObject } from "cloudflare:workers";
+
 type Constructor<T = object> = abstract new (...args: any[]) => T;
+
+type DurableObjectConstructor = abstract new (...args: any[]) => DurableObject;
 
 type DurableObjectInternals = {
   ctx: DurableObjectState;
@@ -13,30 +17,40 @@ type FetchBase = {
 export type WithOuterbaseResult<TBase extends Constructor> = TBase & Constructor<FetchBase>;
 
 /**
- * Debug-only SQL inspector. Do not mount this on a production-routed Durable
- * Object without an explicit auth/dev gate in front of `fetch()`.
+ * Debug-only SQL inspector.
+ *
+ * This exposes arbitrary SQL execution against the Durable Object's embedded
+ * SQLite storage. The `unsafe` option is intentionally noisy so call sites have
+ * to acknowledge that this mixin must sit behind a development-only or
+ * otherwise authenticated route.
  */
-export function withOuterbase<TBase extends Constructor>(Base: TBase): WithOuterbaseResult<TBase> {
-  abstract class OuterbaseMixin extends Base {
-    async fetch(request: Request) {
-      const url = new URL(request.url);
+export function withOuterbase(options: { unsafe: "I_UNDERSTAND_THIS_EXPOSES_SQL" }) {
+  void options;
 
-      if (url.pathname === "/__outerbase" || url.pathname === "/__outerbase/") {
-        return renderOuterbasePage();
+  return function <TBase extends DurableObjectConstructor>(
+    Base: TBase,
+  ): WithOuterbaseResult<TBase> {
+    abstract class OuterbaseMixin extends Base {
+      async fetch(request: Request) {
+        const url = new URL(request.url);
+
+        if (url.pathname === "/__outerbase" || url.pathname === "/__outerbase/") {
+          return renderOuterbasePage();
+        }
+
+        if (url.pathname === "/__outerbase/sql") {
+          return handleOuterbaseSql(this, request);
+        }
+
+        const baseFetch = (Base.prototype as FetchBase).fetch;
+        if (baseFetch !== undefined) return await baseFetch.call(this, request);
+
+        return new Response("Not found", { status: 404 });
       }
-
-      if (url.pathname === "/__outerbase/sql") {
-        return handleOuterbaseSql(this, request);
-      }
-
-      const baseFetch = (Base.prototype as FetchBase).fetch;
-      if (baseFetch !== undefined) return await baseFetch.call(this, request);
-
-      return new Response("Not found", { status: 404 });
     }
-  }
 
-  return OuterbaseMixin as unknown as WithOuterbaseResult<TBase>;
+    return OuterbaseMixin as unknown as WithOuterbaseResult<TBase>;
+  };
 }
 
 async function handleOuterbaseSql(instance: object, request: Request) {
@@ -54,8 +68,16 @@ async function handleOuterbaseSql(instance: object, request: Request) {
 
   try {
     if (body.statements !== undefined) {
+      const { statements } = body;
+
       return Response.json({
-        data: body.statements.map((statement) => executeSql(ctx.storage.sql, statement, [])),
+        // Outerbase's "transaction" messages can contain multiple statements.
+        // Durable Object SQLite gives us a synchronous transaction wrapper, so
+        // either every statement applies or the first failing statement rolls
+        // back the whole batch.
+        data: ctx.storage.transactionSync(() =>
+          statements.map((statement) => executeSql(ctx.storage.sql, statement, [])),
+        ),
       });
     }
 
@@ -120,7 +142,8 @@ function renderOuterbasePage() {
         if (message.type !== "query" && message.type !== "transaction") return;
 
         try {
-          const response = await fetch("/__outerbase/sql", {
+          const endpointPath = window.location.pathname.replace(/\\/$/, "") + "/sql";
+          const response = await fetch(endpointPath + window.location.search, {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify(message),

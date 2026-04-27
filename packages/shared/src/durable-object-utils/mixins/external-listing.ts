@@ -5,9 +5,9 @@ import type { InitializeMembers, NamedInit } from "./initialize.ts";
 
 type Constructor<T = object> = abstract new (...args: any[]) => T;
 
-type DurableObjectConstructor<T = object> = abstract new (...args: any[]) => DurableObject & T;
-
-type EnvWithD1<BindingName extends string> = Record<BindingName, D1Database>;
+type DurableObjectConstructor<Env, Members = object> = abstract new (
+  ...args: any[]
+) => DurableObject<Env> & Members;
 
 export type ExternalListingRecord<InitParams extends NamedInit> = {
   class: string;
@@ -23,23 +23,39 @@ export type ExternalListingMembers<InitParams extends NamedInit> = {
 };
 
 export type WithExternalListingResult<
-  TBase extends DurableObjectConstructor,
+  TBase extends Constructor,
   InitParams extends NamedInit,
-  BindingName extends string,
+  Env,
 > = TBase &
   Constructor<ExternalListingMembers<InitParams>> &
-  (abstract new <Env extends EnvWithD1<BindingName>>(
+  (abstract new <FinalEnv extends Env>(
     ctx: DurableObjectState,
-    env: Env,
-  ) => DurableObject<Env> & InitializeMembers<InitParams> & ExternalListingMembers<InitParams>);
+    env: FinalEnv,
+  ) => DurableObject<FinalEnv> &
+    InitializeMembers<InitParams> &
+    ExternalListingMembers<InitParams>);
 
-export function withExternalListing<
-  InitParams extends NamedInit,
-  BindingName extends string,
->(options: { d1Binding: BindingName; className: string }) {
-  return function <TBase extends DurableObjectConstructor<InitializeMembers<InitParams>>>(
+/**
+ * Best-effort D1 listing for initialized Durable Objects.
+ *
+ * The D1 dependency is intentionally an explicit function instead of a mixin
+ * that mutates the class' generic Env constraint. That keeps composition easy
+ * to explain: the user's `getDatabase(env)` function is where TypeScript checks
+ * the binding exists.
+ *
+ * The returned constructor is still generic, like Cloudflare's own mixin
+ * pattern. The only constraint it adds is `FinalEnv extends Env`, where `Env`
+ * is the explicit lower-bound selected by the `getDatabase(env)` callback.
+ * That preserves `class Room extends ListedRoomBase<Env>` while still making
+ * the D1 requirement visible at the composition site.
+ */
+export function withExternalListing<InitParams extends NamedInit, Env>(options: {
+  className: string;
+  getDatabase(env: Env): D1Database;
+}) {
+  return function <TBase extends DurableObjectConstructor<Env, InitializeMembers<InitParams>>>(
     Base: TBase,
-  ): WithExternalListingResult<TBase, InitParams, BindingName> {
+  ): WithExternalListingResult<TBase, InitParams, Env> {
     abstract class ExternalListingMixin extends Base implements ExternalListingMembers<InitParams> {
       constructor(...args: any[]) {
         super(...args);
@@ -59,22 +75,33 @@ export function withExternalListing<
       }
 
       async getExternalListing() {
-        const row = await getD1(this.env, options.d1Binding)
-          .prepare(
-            `SELECT class, name, id, init_params_json, created_at, last_started_at
-             FROM mixin_external_listing
-             WHERE class = ? AND name = ?
-             LIMIT 1`,
-          )
-          .bind(options.className, this.assertInitialized().name)
-          .first<{
-            class: string;
-            name: string;
-            id: string;
-            init_params_json: string;
-            created_at: string;
-            last_started_at: string;
-          }>();
+        let row: {
+          class: string;
+          name: string;
+          id: string;
+          init_params_json: string;
+          created_at: string;
+          last_started_at: string;
+        } | null;
+
+        try {
+          row = await options
+            .getDatabase(this.env)
+            .prepare(
+              `SELECT class, name, id, init_params_json, created_at, last_started_at
+               FROM mixin_external_listing
+               WHERE class = ? AND name = ?
+               LIMIT 1`,
+            )
+            .bind(options.className, this.assertInitialized().name)
+            .first();
+        } catch (error) {
+          if (isMissingExternalListingTableError(error)) {
+            return undefined;
+          }
+
+          throw error;
+        }
 
         if (row === null) {
           return undefined;
@@ -93,7 +120,7 @@ export function withExternalListing<
       private scheduleExternalListingUpsert(params: InitParams) {
         this.ctx.waitUntil(
           upsertExternalListing({
-            db: getD1(this.env, options.d1Binding),
+            db: options.getDatabase(this.env),
             className: options.className,
             id: this.ctx.id.toString(),
             params,
@@ -104,11 +131,7 @@ export function withExternalListing<
       }
     }
 
-    return ExternalListingMixin as unknown as WithExternalListingResult<
-      TBase,
-      InitParams,
-      BindingName
-    >;
+    return ExternalListingMixin as unknown as WithExternalListingResult<TBase, InitParams, Env>;
   };
 }
 
@@ -121,15 +144,7 @@ async function upsertExternalListing<InitParams extends NamedInit>(params: {
   const now = new Date().toISOString();
 
   await params.db.batch([
-    params.db.prepare(`CREATE TABLE IF NOT EXISTS mixin_external_listing (
-      class TEXT NOT NULL,
-      name TEXT NOT NULL,
-      id TEXT NOT NULL,
-      init_params_json TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-      last_started_at TEXT NOT NULL,
-      PRIMARY KEY (class, name)
-    )`),
+    params.db.prepare(CREATE_EXTERNAL_LISTING_TABLE_SQL),
     params.db
       .prepare(
         `INSERT INTO mixin_external_listing (
@@ -157,6 +172,16 @@ async function upsertExternalListing<InitParams extends NamedInit>(params: {
   ]);
 }
 
+const CREATE_EXTERNAL_LISTING_TABLE_SQL = `CREATE TABLE IF NOT EXISTS mixin_external_listing (
+      class TEXT NOT NULL,
+      name TEXT NOT NULL,
+      id TEXT NOT NULL,
+      init_params_json TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      last_started_at TEXT NOT NULL,
+      PRIMARY KEY (class, name)
+    )`;
+
 function tryGetInitializedParams<InitParams extends NamedInit>(
   instance: InitializeMembers<InitParams>,
 ) {
@@ -171,6 +196,6 @@ function tryGetInitializedParams<InitParams extends NamedInit>(
   }
 }
 
-function getD1<BindingName extends string>(env: object, bindingName: BindingName) {
-  return (env as Record<BindingName, D1Database>)[bindingName];
+function isMissingExternalListingTableError(error: unknown) {
+  return error instanceof Error && error.message.includes("no such table: mixin_external_listing");
 }

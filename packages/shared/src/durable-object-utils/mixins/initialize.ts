@@ -26,6 +26,36 @@ type DurableObjectBranded = {
 type InitParamsOf<TInstance> =
   TInstance extends InitializeMembers<infer InitParams> ? InitParams : never;
 
+type HasOnlyName<InitParams extends NamedInit> = keyof Omit<InitParams, "name"> extends never
+  ? true
+  : false;
+
+/**
+ * `getInitializedDoStub()` always calls `initialize()`.
+ *
+ * If the Durable Object only needs `{ name }`, callers may omit `initParams`
+ * and the helper initializes with `{ name }`.
+ *
+ * If the Durable Object needs more fields, callers must pass `initParams`.
+ * This keeps the main stub helper honest: a function named
+ * `getInitializedDoStub()` should not be able to return a stub without the
+ * data required to initialize it.
+ *
+ * The conditional type is the whole trick:
+ *
+ * - `{ name: string }` means `initParams?: { name?: string }`
+ * - `{ name: string; ownerUserId: string }` means
+ *   `initParams: { ownerUserId: string; name?: string }`
+ */
+type GetInitializedDoStubOptions<
+  TInstance extends DurableObjectBranded & InitializeMembers<NamedInit>,
+> = {
+  namespace: DurableObjectNamespace<TInstance>;
+  name: string;
+} & (HasOnlyName<InitParamsOf<TInstance>> extends true
+  ? { initParams?: InitializeInput<InitParamsOf<TInstance>> }
+  : { initParams: InitializeInput<InitParamsOf<TInstance>> });
+
 /**
  * Type-only protected surface.
  *
@@ -137,19 +167,19 @@ export function withInitialize<InitParams extends NamedInit>() {
 
 export async function getInitializedDoStub<
   TInstance extends DurableObjectBranded & InitializeMembers<NamedInit>,
->(options: {
-  namespace: DurableObjectNamespace<TInstance>;
-  name: string;
-  initParams?: InitializeInput<InitParamsOf<TInstance>>;
-}) {
+>(options: GetInitializedDoStubOptions<TInstance>) {
   const { namespace, name, initParams } = options;
   const stub = namespace.getByName(name);
+  const input = (initParams ?? {}) as InitializeInput<InitParamsOf<TInstance>>;
 
-  if (initParams !== undefined) {
-    const params = normalizeInitializeParams(name, initParams);
-
-    await (stub as unknown as InitializeMembers<InitParamsOf<TInstance>>).initialize(params);
+  if (input.name !== undefined && input.name !== name) {
+    throw new Error(`initParams.name must match name: expected "${name}", got "${input.name}".`);
   }
+
+  await (stub as unknown as InitializeMembers<InitParamsOf<TInstance>>).initialize({
+    ...input,
+    name,
+  } as unknown as InitParamsOf<TInstance>);
 
   return stub;
 }
@@ -159,22 +189,6 @@ function areInitializeParamsEqual<InitParams extends NamedInit>(
   right: InitParams,
 ): boolean {
   return deepEqual(left, right);
-}
-
-function normalizeInitializeParams<InitParams extends NamedInit>(
-  name: string,
-  input: InitializeInput<InitParams>,
-): InitParams {
-  if (input.name !== undefined && input.name !== name) {
-    throw new Error(
-      `initializeParams.name must match getByName(name): expected "${name}", got "${input.name}".`,
-    );
-  }
-
-  return {
-    ...input,
-    name,
-  } as unknown as InitParams;
 }
 
 function deepEqual(left: unknown, right: unknown): boolean {

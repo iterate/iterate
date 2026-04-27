@@ -63,9 +63,11 @@ export class InitializeTestRoom extends RoomBase<Env> {
   }
 }
 
-const ListedRoomBase = withExternalListing<RoomInit, "DO_LISTINGS">({
-  d1Binding: "DO_LISTINGS",
+const ListedRoomBase = withExternalListing<RoomInit, Env>({
   className: "ListedRoom",
+  getDatabase(env) {
+    return env.DO_LISTINGS;
+  },
 })(withInitialize<RoomInit>()(DurableObject));
 
 export class ListedRoom extends ListedRoomBase<Env> {
@@ -76,7 +78,13 @@ export class ListedRoom extends ListedRoomBase<Env> {
 
 class InspectorRoot extends DurableObject<Env> {}
 
-const InspectorBase = withKvInspector(withOuterbase(InspectorRoot));
+const InspectorBase = withKvInspector({
+  unsafe: "I_UNDERSTAND_THIS_EXPOSES_KV",
+})(
+  withOuterbase({
+    unsafe: "I_UNDERSTAND_THIS_EXPOSES_SQL",
+  })(InspectorRoot),
+);
 
 export class InspectorTestRoom extends InspectorBase {
   seedKv(key: string, value: unknown) {

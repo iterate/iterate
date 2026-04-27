@@ -1,11 +1,11 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { getInitializedDoStub } from "./initialize.ts";
 import {
   type InspectorTestRoom,
   type InitializeTestRoom as InitializeTestRoomInstance,
   type ListedRoom,
 } from "../test-harness/initialize-fronting-worker.ts";
+import { getInitializedDoStub } from "./initialize.ts";
 
 const testEnv = env as {
   DO_LISTINGS: D1Database;
