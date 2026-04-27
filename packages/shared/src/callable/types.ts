@@ -79,6 +79,8 @@ const httpUrlSchema = z.string().refine(
  * collide with Promise/prototype/reserved Worker RPC behavior. Cloudflare
  * reserves several RPC method names, and `then` is denied so a service binding
  * or returned stub cannot accidentally become Promise-like when awaited.
+ * The Cloudflare-reserved names are documented here:
+ * https://developers.cloudflare.com/workers/runtime-apis/rpc/reserved-methods/
  */
 const deniedRpcMethods = new Set([
   "__defineGetter__",
@@ -161,7 +163,8 @@ const dynamicWorkerCacheSchema = z
  * source, and optional `get()` cache identity. Fields like `env`,
  * `globalOutbound`, named entrypoints, tails, and typed modules are real
  * platform features, but they expand the capability surface. V1 parks them in
- * tasks until we add the policy layer that should govern them.
+ * tasks until we add the policy layer that should govern them:
+ * https://developers.cloudflare.com/dynamic-workers/api-reference/
  */
 const dynamicWorkerTargetSchema = z
   .object({

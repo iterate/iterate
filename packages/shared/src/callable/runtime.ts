@@ -17,7 +17,7 @@ type DynamicWorkerStub = {
 type DynamicWorkerLoader = {
   load?: (code: DynamicWorkerCode) => DynamicWorkerStub;
   get: (
-    id: string,
+    id: string | null,
     getCode: () => DynamicWorkerCode | Promise<DynamicWorkerCode>,
   ) => DynamicWorkerStub;
 };
@@ -29,7 +29,7 @@ type DynamicWorkerLoader = {
  * TypeScript cannot protect: databases, queues, config files, and LLM-generated
  * tool manifests.
  */
-export function validateCallable(options: { callable: unknown }) {
+export function validateCallable(options: { callable: unknown }): Callable {
   const parsed = CallableSchema.safeParse(options.callable);
   if (!parsed.success) {
     throw new CallableError("DESCRIPTOR_VALIDATION_FAILED", "Invalid callable", {
@@ -50,7 +50,7 @@ export function validateCallable(options: { callable: unknown }) {
  * JSON-e, and JSON Pointer extraction are intentionally parked in `tasks/`
  * until we have real callers that need them.
  */
-export function buildCallableRequest(options: { callable: FetchCallable; payload: unknown }) {
+function buildCallableRequest(options: { callable: FetchCallable; payload: unknown }): Request {
   const callable = validateFetchCallable({ callable: options.callable });
   const call = getCallableCall({ callable });
   if (call.type !== "fetch") {
@@ -75,7 +75,7 @@ export function buildCallableRequest(options: { callable: FetchCallable; payload
     url.search = new URL(callable.target.url).search;
   }
   const templateQuery = requestOverrides.query ?? {};
-  if (Object.keys(templateQuery).length > 0) {
+  if (requestOverrides.query != null) {
     url.search = "";
   }
   for (const [key, value] of Object.entries(templateQuery)) {
@@ -109,7 +109,7 @@ export async function dispatchCallable(options: {
   callable: Callable;
   payload: unknown;
   ctx: CallableContext;
-}) {
+}): Promise<unknown> {
   const callable = validateCallable({ callable: options.callable });
   const call = getCallableCall({ callable });
   const payload = applyPassthroughArgs({
@@ -175,7 +175,7 @@ export async function dispatchCallableFetch(options: {
   callable: FetchCallable;
   request: Request;
   ctx: CallableContext;
-}) {
+}): Promise<Response> {
   const callable = validateFetchCallable({ callable: options.callable });
   const call = getCallableCall({ callable });
   if (call.type !== "fetch") {
@@ -241,7 +241,7 @@ export async function connectCallableWebSocket(options: {
   headers?: Record<string, string>;
   binaryType?: "blob" | "arraybuffer";
   accept?: { allowHalfOpen?: boolean };
-}) {
+}): Promise<WebSocket> {
   const headers = new Headers(options.headers);
   headers.set("Connection", "Upgrade");
   headers.set("Upgrade", "websocket");
@@ -371,6 +371,7 @@ function buildSyntheticBaseUrl(options: { hostname: string }) {
 
 function joinPathPrefix(prefix: string, incomingPath: string) {
   const normalizedIncoming = incomingPath.startsWith("/") ? incomingPath : `/${incomingPath}`;
+  // Root requests preserve the base path exactly, including a trailing slash.
   if (normalizedIncoming === "/") return prefix || "/";
   const normalizedPrefix = prefix === "/" ? "" : prefix.replace(/\/+$/, "");
   const joined = `${normalizedPrefix}${normalizedIncoming}`;
@@ -506,9 +507,13 @@ function buildRpcArgs(options: { argsMode: "object" | "positional"; payload: unk
 }
 
 async function readCallableResponse(options: { response: Response }) {
+  if (options.response.status === 204 || options.response.status === 205) return null;
+
   const contentType = options.response.headers.get("content-type") ?? "";
   if (contentType.toLowerCase().includes("json")) {
-    return await options.response.json();
+    const text = await options.response.text();
+    if (text === "") return null;
+    return JSON.parse(text);
   }
   return await options.response.text();
 }
@@ -628,13 +633,18 @@ function loadDynamicWorker(options: {
   loader: DynamicWorkerLoader;
   code: DynamicWorkerCode;
 }): DynamicWorkerStub {
-  if (typeof options.loader.load !== "function") {
-    throw new CallableError(
-      "RESOLUTION_FAILED",
-      "Worker Loader binding does not expose load(code)",
-    );
+  if (typeof options.loader.load === "function") {
+    return options.loader.load(options.code);
   }
-  return options.loader.load(options.code);
+
+  /**
+   * Current Dynamic Workers docs expose `load(code)` for one-off workers, but
+   * some generated Worker Loader types in this repo still model that operation
+   * as `get(null, getCode)`. Keep `load()` as the preferred path while accepting
+   * the platform's documented null-ID one-off load shape:
+   * https://developers.cloudflare.com/workers/runtime-apis/bindings/worker-loader/#basic-usage
+   */
+  return options.loader.get(null, () => options.code);
 }
 
 function resolveBinding(options: {

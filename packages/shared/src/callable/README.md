@@ -299,11 +299,16 @@ Fetch path options live under `call.path` because they are part of building a
 // Callee sees https://service.local/internal/users?active=true
 ```
 
+In `prefix` mode, non-root incoming paths are joined with exactly one separator.
+A root incoming path preserves the target or base path exactly, including a
+trailing slash: `https://api.example.com/v1/` plus incoming `/` stays
+`https://api.example.com/v1/`.
+
 Query handling is deliberately simple in v1: there is no merge. In proxy mode,
 the incoming request query is used. In value mode, `dispatchCallable()` creates
 that incoming request; if `call.request.query` is omitted, an HTTP target's
 query is preserved, and if `call.request.query` is present, it replaces the
-target query wholesale.
+target query wholesale. Use `query: {}` to clear the target query.
 
 ```ts
 // Proxy mode drops target query params when the incoming request has no query.
@@ -362,7 +367,9 @@ const callable = {
 ```
 
 By default the runtime calls `loader.load(code)`, which creates a fresh Dynamic
-Worker. Add `cache` only when the ID names this exact code version:
+Worker. If a Worker Loader binding only exposes the older `get(null, getCode)`
+shape, the runtime uses that as the same one-off load operation. Add `cache`
+only when the ID names this exact code version:
 
 ```ts
 const callable = {

@@ -17,6 +17,12 @@ export default defineConfig({
          * binding, not a hand-written `{ fetch() {} }` mock, so fetch and RPC
          * tests exercise the platform binding shape we expect in production.
          * https://developers.cloudflare.com/workers/testing/vitest-integration/configuration/#workerspooloptions
+         *
+         * Tests that need to cross the main Worker fetch boundary use
+         * `exports.default.fetch()` from `cloudflare:workers`; Cloudflare's
+         * current Vitest docs describe that as the replacement for the previous
+         * `SELF` binding:
+         * https://developers.cloudflare.com/workers/testing/vitest-integration/test-apis/#cloudflareworkers-exports
          */
         serviceBindings: {
           CALLABLE_TEST_SERVICE: "callable-test-service",

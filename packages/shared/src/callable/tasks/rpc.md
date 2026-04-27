@@ -20,7 +20,6 @@ Deferred work:
 
 - lifecycle/disposal coverage for Dynamic Worker RPC return values, if real
   callsites need it
-- pass-through args / pre-populated call arguments
 - method allowlists in the capability policy layer
 - richer Cap'n Web lifecycle/disposal tests for returned `RpcTarget`s,
   functions, and stubs

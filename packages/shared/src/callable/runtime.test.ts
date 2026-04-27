@@ -1,7 +1,6 @@
-import { env } from "cloudflare:test";
+import { env, exports as workerExports } from "cloudflare:workers";
 import { describe, expect, test, vi } from "vitest";
 import {
-  buildCallableRequest,
   connectCallableWebSocket,
   dispatchCallable,
   dispatchCallableFetch,
@@ -56,13 +55,10 @@ const dynamicWorkerCode = {
 } as const;
 
 async function dispatchThroughHostWorker(options: { callable: Callable; payload: unknown }) {
-  const response = await workerEntry.fetch(
-    new Request("https://host.local/dispatch", {
-      method: "POST",
-      body: JSON.stringify(options),
-    }),
-    testEnv,
-  );
+  const response = await workerExports.default.fetch("https://host.local/dispatch", {
+    method: "POST",
+    body: JSON.stringify(options),
+  });
   return await response.json();
 }
 
@@ -395,29 +391,42 @@ describe("dispatchCallable", () => {
   });
 
   test("serializes undefined payloads as JSON null in the default request template", async () => {
-    const request = buildCallableRequest({
+    const value = await dispatchCallable({
       callable: {
         target: { type: "http", url: "https://api.example.com/tools" },
       },
       payload: undefined,
+      ctx: {
+        fetcher: async (request) => Response.json({ body: await request.text() }),
+      },
     });
 
-    await expect(request.text()).resolves.toBe("null");
+    expect(value).toEqual({ body: "null" });
   });
 
   test("omits default JSON bodies for GET and HEAD value requests", async () => {
     for (const method of ["GET", "HEAD"] as const) {
-      const request = buildCallableRequest({
+      const value = await dispatchCallable({
         callable: {
           target: { type: "http", url: "https://api.example.com/tools" },
           call: { type: "fetch", request: { method } },
         },
         payload: { ignored: true },
+        ctx: {
+          fetcher: async (request) =>
+            Response.json({
+              method: request.method,
+              hasContentType: request.headers.has("content-type"),
+              body: await request.text(),
+            }),
+        },
       });
 
-      expect(request.method).toBe(method);
-      expect(request.headers.has("content-type")).toBe(false);
-      await expect(request.text()).resolves.toBe("");
+      expect(value).toEqual({
+        method,
+        hasContentType: false,
+        body: "",
+      });
     }
   });
 
@@ -482,6 +491,22 @@ describe("dispatchCallable", () => {
     });
 
     expect(replaced).toEqual({ url: "https://api.example.com/tools?dryRun=true" });
+
+    const cleared = await dispatchCallable({
+      callable: {
+        target: { type: "http", url: "https://api.example.com/tools?fixed=true" },
+        call: {
+          type: "fetch",
+          request: { query: {} },
+        },
+      },
+      payload: { ignored: true },
+      ctx: {
+        fetcher: async (request) => Response.json({ url: request.url }),
+      },
+    });
+
+    expect(cleared).toEqual({ url: "https://api.example.com/tools" });
   });
 
   test("preserves trailing slash target URLs in value mode", async () => {
@@ -722,6 +747,44 @@ describe("dispatchCallable", () => {
     });
   });
 
+  test("loads one-off Dynamic Workers through get(null) when load() is unavailable", async () => {
+    const value = await dispatchCallable({
+      callable: {
+        target: {
+          type: "dynamic-worker",
+          loader: { $binding: "CALLABLE_TEST_GET_ONLY_LOADER" },
+          code: dynamicWorkerCode,
+        },
+      },
+      payload: { title: "Bug" },
+      ctx: {
+        env: {
+          CALLABLE_TEST_GET_ONLY_LOADER: {
+            get: (id: string | null, getCode: () => typeof dynamicWorkerCode) => {
+              expect(id).toBe(null);
+              expect(getCode()).toStrictEqual(dynamicWorkerCode);
+              return {
+                getEntrypoint: () => ({
+                  async fetch(request: Request) {
+                    return Response.json({
+                      target: "dynamic-worker-get-null",
+                      body: await request.text(),
+                    });
+                  },
+                }),
+              };
+            },
+          },
+        },
+      },
+    });
+
+    expect(value).toEqual({
+      target: "dynamic-worker-get-null",
+      body: '{"title":"Bug"}',
+    });
+  });
+
   test("dispatches object-mode Dynamic Worker RPC", async () => {
     const value = await dispatchCallable({
       callable: {
@@ -814,6 +877,42 @@ describe("host Worker dispatch combinations", () => {
     });
   });
 
+  test("routes from the host Worker to a service binding RPC target", async () => {
+    await expect(
+      dispatchThroughHostWorker({
+        callable: {
+          target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+          call: { type: "rpc", method: "echo" },
+        },
+        payload: { from: "host" },
+      }),
+    ).resolves.toEqual({
+      value: { target: "service", input: { from: "host" } },
+    });
+  });
+
+  test("routes from the host Worker to a Durable Object fetch target", async () => {
+    await expect(
+      dispatchThroughHostWorker({
+        callable: {
+          target: {
+            type: "durable-object",
+            binding: { $binding: "CALLABLE_TEST_DURABLE_OBJECT" },
+            address: { type: "name", name: "host-fetch-target" },
+          },
+          call: { type: "fetch", path: { base: "/host-do", mode: "replace" } },
+        },
+        payload: { from: "host" },
+      }),
+    ).resolves.toMatchObject({
+      value: {
+        method: "POST",
+        path: "/host-do",
+        body: '{"from":"host"}',
+      },
+    });
+  });
+
   test("routes from the host Worker to a Dynamic Worker fetch target", async () => {
     await expect(
       dispatchThroughHostWorker({
@@ -834,6 +933,24 @@ describe("host Worker dispatch combinations", () => {
         path: "/host-dynamic",
         body: '{"from":"host"}',
       },
+    });
+  });
+
+  test("routes from the host Worker to a Dynamic Worker RPC target", async () => {
+    await expect(
+      dispatchThroughHostWorker({
+        callable: {
+          target: {
+            type: "dynamic-worker",
+            loader: { $binding: "CALLABLE_TEST_LOADER" },
+            code: dynamicWorkerCode,
+          },
+          call: { type: "rpc", method: "echo" },
+        },
+        payload: { from: "host" },
+      }),
+    ).resolves.toEqual({
+      value: { target: "dynamic-worker", input: { from: "host" } },
     });
   });
 });
@@ -1095,9 +1212,9 @@ describe("dispatchCallableFetch", () => {
   });
 });
 
-describe("buildCallableRequest", () => {
+describe("explicit fetch request templates", () => {
   test("builds a JSON request from an explicit payload template", async () => {
-    const request = buildCallableRequest({
+    const value = await dispatchCallable({
       callable: {
         target: { type: "http", url: "https://api.example.com/tools?fixed=true" },
         call: {
@@ -1111,13 +1228,25 @@ describe("buildCallableRequest", () => {
         },
       },
       payload: { title: "Bug" },
+      ctx: {
+        fetcher: async (request) =>
+          Response.json({
+            url: request.url,
+            method: request.method,
+            tool: request.headers.get("x-tool"),
+            contentType: request.headers.get("content-type"),
+            body: await request.json(),
+          }),
+      },
     });
 
-    expect(request.url).toBe("https://callable.local/?dryRun=true");
-    expect(request.method).toBe("POST");
-    expect(request.headers.get("x-tool")).toBe("create-issue");
-    expect(request.headers.get("content-type")).toBe("application/json");
-    await expect(request.json()).resolves.toEqual({ title: "Bug" });
+    expect(value).toEqual({
+      url: "https://api.example.com/tools?dryRun=true",
+      method: "POST",
+      tool: "create-issue",
+      contentType: "application/json",
+      body: { title: "Bug" },
+    });
   });
 });
 
