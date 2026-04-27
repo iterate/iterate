@@ -184,8 +184,10 @@ async function assertDurableObjectCounter(httpBaseUrl: string) {
 
   const firstClient = new WebSocket(websocketUrl);
   const secondClient = new WebSocket(websocketUrl);
-  await expectCounterStateMessage(firstClient, 0);
-  await expectCounterStateMessage(secondClient, 0);
+  const firstClientInitial = expectCounterStateMessage(firstClient, 0);
+  const secondClientInitial = expectCounterStateMessage(secondClient, 0);
+  await firstClientInitial;
+  await secondClientInitial;
   const firstClientUpdate = expectCounterStateMessage(firstClient, 1);
   const secondClientUpdate = expectCounterStateMessage(secondClient, 1);
 
