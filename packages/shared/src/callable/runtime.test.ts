@@ -243,6 +243,57 @@ describe("callable validation", () => {
       }),
     ).toThrow("Invalid callable");
   });
+
+  test("accepts object passthrough args for fetch and RPC object calls", () => {
+    expect(
+      validateCallable({
+        callable: {
+          target: { type: "http", url: "https://api.example.com/v1" },
+          call: { type: "fetch", passthroughArgs: { provider: "github" } },
+        },
+      }),
+    ).toMatchObject({
+      call: { passthroughArgs: { provider: "github" } },
+    });
+
+    expect(
+      validateCallable({
+        callable: {
+          target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+          call: { type: "rpc", method: "echo", passthroughArgs: { provider: "github" } },
+        },
+      }),
+    ).toMatchObject({
+      call: { passthroughArgs: { provider: "github" } },
+    });
+  });
+
+  test("rejects non-object passthrough args", () => {
+    expect(() =>
+      validateCallable({
+        callable: {
+          target: { type: "http", url: "https://api.example.com/v1" },
+          call: { type: "fetch", passthroughArgs: "github" },
+        },
+      }),
+    ).toThrow("Invalid callable");
+  });
+
+  test("rejects passthrough args for positional RPC", () => {
+    expect(() =>
+      validateCallable({
+        callable: {
+          target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+          call: {
+            type: "rpc",
+            method: "join",
+            argsMode: "positional",
+            passthroughArgs: { left: "a" },
+          },
+        },
+      }),
+    ).toThrow("Invalid callable");
+  });
 });
 
 describe("dispatchCallable", () => {
@@ -282,6 +333,67 @@ describe("dispatchCallable", () => {
     });
   });
 
+  test("sends passthrough args as the default fetch JSON body when runtime payload is empty", async () => {
+    const value = await dispatchCallable({
+      callable: {
+        target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+        call: { type: "fetch", passthroughArgs: { provider: "github", dryRun: true } },
+      },
+      payload: undefined,
+      ctx: { env: testEnv },
+    });
+
+    expect(JSON.parse(value.body)).toEqual({ provider: "github", dryRun: true });
+  });
+
+  test("shallow-merges passthrough args before fetch value dispatch", async () => {
+    const value = await dispatchCallable({
+      callable: {
+        target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+        call: {
+          type: "fetch",
+          passthroughArgs: {
+            provider: "github",
+            options: { dryRun: true },
+          },
+        },
+      },
+      payload: {
+        title: "Bug",
+        options: { dryRun: false },
+      },
+      ctx: { env: testEnv },
+    });
+
+    expect(JSON.parse(value.body)).toEqual({
+      provider: "github",
+      title: "Bug",
+      options: { dryRun: false },
+    });
+  });
+
+  test("keeps the default JSON body when fetch request options only add headers", async () => {
+    const value = await dispatchCallable({
+      callable: {
+        target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+        call: {
+          type: "fetch",
+          request: {
+            headers: { "x-callable-test": "set" },
+          },
+        },
+      },
+      payload: { title: "Bug" },
+      ctx: { env: testEnv },
+    });
+
+    expect(value).toMatchObject({
+      method: "POST",
+      body: '{"title":"Bug"}',
+      contentType: "application/json",
+    });
+  });
+
   test("serializes undefined payloads as JSON null in the default request template", async () => {
     const request = buildCallableRequest({
       callable: {
@@ -291,6 +403,40 @@ describe("dispatchCallable", () => {
     });
 
     await expect(request.text()).resolves.toBe("null");
+  });
+
+  test("omits default JSON bodies for GET and HEAD value requests", async () => {
+    for (const method of ["GET", "HEAD"] as const) {
+      const request = buildCallableRequest({
+        callable: {
+          target: { type: "http", url: "https://api.example.com/tools" },
+          call: { type: "fetch", request: { method } },
+        },
+        payload: { ignored: true },
+      });
+
+      expect(request.method).toBe(method);
+      expect(request.headers.has("content-type")).toBe(false);
+      await expect(request.text()).resolves.toBe("");
+    }
+  });
+
+  test("ignores passthrough args in raw fetch dispatch because the Request already exists", async () => {
+    const response = await dispatchCallableFetch({
+      callable: {
+        target: { type: "http", url: "https://api.example.com" },
+        call: { type: "fetch", passthroughArgs: { provider: "github" } },
+      },
+      request: new Request("https://router.local/raw", {
+        method: "POST",
+        body: JSON.stringify({ title: "Bug" }),
+      }),
+      ctx: {
+        fetcher: async (request) => new Response(await request.text()),
+      },
+    });
+
+    await expect(response.json()).resolves.toEqual({ title: "Bug" });
   });
 
   test("parses text responses when the response is not JSON", async () => {
@@ -399,6 +545,51 @@ describe("dispatchCallable", () => {
     });
 
     expect(value).toEqual({ target: "service", input: { ok: true } });
+  });
+
+  test("shallow-merges passthrough args before RPC object dispatch", async () => {
+    const value = await dispatchCallable({
+      callable: {
+        target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+        call: {
+          type: "rpc",
+          method: "echo",
+          passthroughArgs: {
+            provider: "github",
+            options: { dryRun: true },
+          },
+        },
+      },
+      payload: {
+        name: "createIssue",
+        options: { dryRun: false },
+      },
+      ctx: { env: testEnv },
+    });
+
+    expect(value).toEqual({
+      target: "service",
+      input: {
+        provider: "github",
+        name: "createIssue",
+        options: { dryRun: false },
+      },
+    });
+  });
+
+  test("rejects primitive runtime payloads when passthrough args are present", async () => {
+    await expect(
+      dispatchCallable({
+        callable: {
+          target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+          call: { type: "rpc", method: "echo", passthroughArgs: { provider: "github" } },
+        },
+        payload: "createIssue",
+        ctx: { env: testEnv },
+      }),
+    ).rejects.toMatchObject({
+      code: "PAYLOAD_VALIDATION_FAILED",
+    });
   });
 
   test("does not resolve inherited env properties as service bindings", async () => {

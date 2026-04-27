@@ -45,10 +45,10 @@ export function validateCallable(options: { callable: unknown }) {
  *
  * The default template is intentionally boring: POST the whole payload as JSON.
  * That keeps `dispatchCallable()` useful without making every fetch callable
- * spell out the common case. Explicit templates can still set method,
- * literal headers/query values, and JSON body-from-payload. RFC 6570, JSON-e,
- * JSON Pointer extraction, and pass-through args are intentionally parked in
- * `tasks/` until we have real callers that need them.
+ * spell out the common case. Explicit templates are partial overrides: setting
+ * headers or query does not accidentally drop the default JSON body. RFC 6570,
+ * JSON-e, and JSON Pointer extraction are intentionally parked in `tasks/`
+ * until we have real callers that need them.
  */
 export function buildCallableRequest(options: { callable: FetchCallable; payload: unknown }) {
   const callable = validateFetchCallable({ callable: options.callable });
@@ -57,10 +57,11 @@ export function buildCallableRequest(options: { callable: FetchCallable; payload
     throw new CallableError("DESCRIPTOR_VALIDATION_FAILED", `Unsupported callable kind`);
   }
 
-  const template = call.request ?? {
-    method: "POST" as const,
-    body: { type: "json" as const, from: "payload" as const },
-  };
+  const requestOverrides = call.request ?? {};
+  const method = requestOverrides.method ?? "POST";
+  const body = ["GET", "HEAD"].includes(method)
+    ? undefined
+    : (requestOverrides.body ?? { type: "json" as const, from: "payload" as const });
 
   /**
    * `dispatchCallable()` intentionally creates a boring synthetic Request and
@@ -73,7 +74,7 @@ export function buildCallableRequest(options: { callable: FetchCallable; payload
   if (callable.target.type === "http") {
     url.search = new URL(callable.target.url).search;
   }
-  const templateQuery = template.query ?? {};
+  const templateQuery = requestOverrides.query ?? {};
   if (Object.keys(templateQuery).length > 0) {
     url.search = "";
   }
@@ -81,13 +82,13 @@ export function buildCallableRequest(options: { callable: FetchCallable; payload
     url.searchParams.set(key, String(value));
   }
 
-  const headers = new Headers(template.headers);
+  const headers = new Headers(requestOverrides.headers);
   const requestInit: RequestInit = {
-    method: template.method ?? "POST",
+    method,
     headers,
   };
 
-  if (template.body?.type === "json") {
+  if (body?.type === "json") {
     if (!headers.has("content-type")) headers.set("content-type", "application/json");
     requestInit.body = JSON.stringify(options.payload ?? null);
   }
@@ -111,6 +112,10 @@ export async function dispatchCallable(options: {
 }) {
   const callable = validateCallable({ callable: options.callable });
   const call = getCallableCall({ callable });
+  const payload = applyPassthroughArgs({
+    call,
+    payload: options.payload,
+  });
 
   switch (call.type) {
     case "fetch": {
@@ -126,7 +131,7 @@ export async function dispatchCallable(options: {
 
       const response = await dispatchCallableFetch({
         callable,
-        request: buildCallableRequest({ callable, payload: options.payload }),
+        request: buildCallableRequest({ callable, payload }),
         ctx: options.ctx,
       });
 
@@ -152,7 +157,7 @@ export async function dispatchCallable(options: {
       if (!isRpcCallable(callable)) {
         throw new CallableError("DESCRIPTOR_VALIDATION_FAILED", `Unsupported callable kind`);
       }
-      return await dispatchCallableRpc({ callable, payload: options.payload, ctx: options.ctx });
+      return await dispatchCallableRpc({ callable, payload, ctx: options.ctx });
     }
   }
 }
@@ -277,6 +282,31 @@ export async function connectCallableWebSocket(options: {
 
 function getCallableCall(options: { callable: Callable }) {
   return options.callable.call ?? { type: "fetch" as const };
+}
+
+function applyPassthroughArgs(options: {
+  call: ReturnType<typeof getCallableCall>;
+  payload: unknown;
+}) {
+  if (!("passthroughArgs" in options.call) || options.call.passthroughArgs == null) {
+    return options.payload;
+  }
+  if (options.payload == null) {
+    return { ...options.call.passthroughArgs };
+  }
+  if (!isPlainRecord(options.payload)) {
+    throw new CallableError(
+      "PAYLOAD_VALIDATION_FAILED",
+      "call.passthroughArgs requires the runtime payload to be an object, null, or undefined",
+    );
+  }
+  return { ...options.call.passthroughArgs, ...options.payload };
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 function isRpcCallable(callable: Callable): callable is RpcCallable {

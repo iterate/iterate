@@ -116,6 +116,10 @@ The default request template is:
 - `content-type: application/json`
 - body is `JSON.stringify(payload ?? null)`
 
+If a fetch `call.request` is present, it is a partial override of that default:
+adding headers or query parameters does not drop the JSON body. `GET` and
+`HEAD` value calls do not send a body.
+
 ```ts
 const callable = {
   target: { type: "http", url: "https://api.example.com/tools" },
@@ -127,6 +131,50 @@ const result = await dispatchCallable({
   ctx: { fetcher: fetch },
 });
 ```
+
+Use `call.passthroughArgs` to pre-fill part of the value payload in the
+descriptor. This is deliberately shallow and object-only: runtime payload fields
+override descriptor fields, and nested objects are replaced rather than merged.
+
+```ts
+const callable = {
+  target: { type: "http", url: "https://api.example.com/tools" },
+  call: {
+    type: "fetch",
+    passthroughArgs: { provider: "github", dryRun: true },
+  },
+};
+
+await dispatchCallable({
+  callable,
+  payload: { name: "createIssue", dryRun: false },
+  ctx: { fetcher: fetch },
+});
+
+// POST body:
+// {"provider":"github","dryRun":false,"name":"createIssue"}
+```
+
+`passthroughArgs` also works for RPC object mode:
+
+```ts
+await dispatchCallable({
+  callable: {
+    target: { type: "service", binding: { $binding: "TOOLS" } },
+    call: {
+      type: "rpc",
+      method: "callTool",
+      passthroughArgs: { provider: "github" },
+    },
+  },
+  payload: { name: "createIssue", args: { title: "Bug" } },
+  ctx: { env },
+});
+```
+
+It is not available for `argsMode: "positional"`, and it is not applied by
+`dispatchCallableFetch()`. The lower-level fetch API receives a complete
+`Request`, so there is no JSON payload assembly step where args can be merged.
 
 If the response has a JSON content type, the result is parsed JSON. Otherwise it
 is returned as text. Non-2xx responses throw `CallableError` with code

@@ -1,5 +1,5 @@
 ---
-state: planned
+state: done
 priority: medium
 size: small
 dependsOn: []
@@ -7,8 +7,14 @@ dependsOn: []
 
 # Pass-through args
 
-Add a way to pre-populate part of the payload or request template while still
-passing runtime values through at invocation time.
+Implemented as `call.passthroughArgs` for value dispatch.
 
-This should stay explicit. Avoid broad fallback merging rules that make it hard
-to tell which data reached the callee.
+- object-only JSON args
+- shallow merge only
+- runtime payload wins
+- applies to fetch value dispatch and RPC object mode
+- rejected for RPC positional mode
+- ignored by raw `dispatchCallableFetch()` because the `Request` already exists
+
+Request templating, JSON Pointer extraction, deep merge, and body/query/header
+composition remain future work in the request-templating task.

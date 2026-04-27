@@ -6,6 +6,18 @@ const bindingRefSchema = z.object({ $binding: z.string().min(1) }).strict();
 
 const pathModeSchema = z.enum(["prefix", "replace"]);
 const callableSchemaField = z.literal(CALLABLE_SCHEMA).optional();
+type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
+  z.union([
+    z.null(),
+    z.boolean(),
+    z.number(),
+    z.string(),
+    z.array(jsonValueSchema),
+    z.record(z.string(), jsonValueSchema),
+  ]),
+);
+const passthroughArgsSchema = z.record(z.string(), jsonValueSchema);
 
 /**
  * Service bindings and Durable Object stubs are not URL-authorized resources;
@@ -224,6 +236,7 @@ const requestTemplateSchema = z
 const fetchCallSchema = z
   .object({
     type: z.literal("fetch"),
+    passthroughArgs: passthroughArgsSchema.optional(),
     path: z
       .object({
         base: pathBaseSchema.optional(),
@@ -240,8 +253,18 @@ const rpcCallSchema = z
     type: z.literal("rpc"),
     method: rpcMethodSchema,
     argsMode: z.enum(["object", "positional"]).optional(),
+    passthroughArgs: passthroughArgsSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((call, ctx) => {
+    if (call.argsMode === "positional" && call.passthroughArgs != null) {
+      ctx.addIssue({
+        code: "custom",
+        message: "RPC positional argsMode cannot include passthroughArgs",
+        path: ["passthroughArgs"],
+      });
+    }
+  });
 
 /**
  * A `Callable` is intentionally just JSON data. It names a way to invoke
