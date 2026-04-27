@@ -484,6 +484,20 @@ describe("dispatchCallable", () => {
     expect(replaced).toEqual({ url: "https://api.example.com/tools?dryRun=true" });
   });
 
+  test("preserves trailing slash target URLs in value mode", async () => {
+    const value = await dispatchCallable({
+      callable: {
+        target: { type: "http", url: "https://api.example.com/v1/" },
+      },
+      payload: { ignored: true },
+      ctx: {
+        fetcher: async (request) => Response.json({ url: request.url }),
+      },
+    });
+
+    expect(value).toEqual({ url: "https://api.example.com/v1/" });
+  });
+
   test("requires an explicit fetcher for public HTTP targets", async () => {
     await expect(
       dispatchCallable({
@@ -875,6 +889,22 @@ describe("dispatchCallableFetch", () => {
 
     await expect(response.json()).resolves.toEqual({
       url: "https://api.example.com/v1/users?active=true",
+    });
+  });
+
+  test("proxy mode preserves trailing slash target URLs for root requests", async () => {
+    const response = await dispatchCallableFetch({
+      callable: {
+        target: { type: "http", url: "https://api.example.com/v1/" },
+      },
+      request: new Request("https://router.local/"),
+      ctx: {
+        fetcher: async (request) => Response.json({ url: request.url }),
+      },
+    });
+
+    await expect(response.json()).resolves.toEqual({
+      url: "https://api.example.com/v1/",
     });
   });
 

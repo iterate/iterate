@@ -370,9 +370,9 @@ function buildSyntheticBaseUrl(options: { hostname: string }) {
 }
 
 function joinPathPrefix(prefix: string, incomingPath: string) {
-  const normalizedPrefix = prefix === "/" ? "" : prefix.replace(/\/+$/, "");
   const normalizedIncoming = incomingPath.startsWith("/") ? incomingPath : `/${incomingPath}`;
-  if (normalizedIncoming === "/") return normalizedPrefix || "/";
+  if (normalizedIncoming === "/") return prefix || "/";
+  const normalizedPrefix = prefix === "/" ? "" : prefix.replace(/\/+$/, "");
   const joined = `${normalizedPrefix}${normalizedIncoming}`;
   return joined === "" ? "/" : joined;
 }
