@@ -4,12 +4,12 @@ const sql = `
 update projects
 set custom_hostname = ?,
     metadata = ?,
-    updated_at = ?
+    updated_at = strftime('%Y-%m-%d %H:%M:%S', 'now')
 where id = ?;
 `.trim();
 const query = (data: updateProjectConfig.Data, params: updateProjectConfig.Params) => ({
   sql,
-  args: [data.customHostname, data.metadata, data.updatedAt, params.id],
+  args: [data.customHostname, data.metadata, params.id],
   name: "updateProjectConfig",
 });
 
@@ -28,7 +28,6 @@ export namespace updateProjectConfig {
   export type Data = {
     customHostname: string | null;
     metadata: string;
-    updatedAt: string;
   };
   export type Params = {
     id: string;

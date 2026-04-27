@@ -136,7 +136,6 @@ export const projectsRouter = {
           {
             customHostname: nextCustomHostname,
             metadata: JSON.stringify(nextMetadata),
-            updatedAt: new Date().toISOString(),
           },
           { id: input.id },
         );
