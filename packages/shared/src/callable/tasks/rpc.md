@@ -1,5 +1,5 @@
 ---
-state: planned
+state: completed
 priority: medium
 size: medium
 dependsOn: []
@@ -7,22 +7,24 @@ dependsOn: []
 
 # RPC callable support
 
-Add RPC support after the fetch kernel has proven binding resolution and runtime
-validation. Native Workers RPC / Cap'n Web should be the center of this design:
-resolve live service or Durable Object RPC stubs and call typed methods on those
-stubs, preserving structured-clone values, functions, `RpcTarget`s, and disposal
-semantics.
-
-Planned scope:
+Implemented in the second callable slice:
 
 - service RPC
-- Durable Object RPC
-- typed service and Durable Object RPC stubs
-- Cap'n Web compatibility for browser/server edges
-- method-string invocation only as an adapter for untyped tool manifests, not
-  the core RPC model
-- error mapping
-- lifecycle/disposal tests for RPC-returned values
+- Durable Object RPC by stable name or id
+- serialized `rpcMethod`
+- `argsMode: "object" | "positional"`
+- runtime method-name sanitization
+- shared `dispatchCallable({ callable, payload, ctx })` for fetch and RPC
+
+Deferred work:
+
+- Dynamic Worker RPC
+- pass-through args / pre-populated call arguments
+- method allowlists in the capability policy layer
+- richer Cap'n Web lifecycle/disposal tests for returned `RpcTarget`s,
+  functions, and stubs
+- typed convenience APIs only if real callsites prove the value; the core API
+  should stay `dispatchCallable({ callable, payload, ctx })`
 
 References:
 

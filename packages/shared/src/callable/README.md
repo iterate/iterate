@@ -1,19 +1,42 @@
 # Callable
 
-`Callable` is a small JSON invocation shape for Workers code.
+`Callable` is a small JSON invocation shape for Workers code. It lets a caller
+store or transmit "call this thing" without storing the live Worker binding,
+Durable Object stub, or public `fetch` function.
 
-V1 is intentionally narrow: it only implements fetch-shaped callables. The point
-is to prove the kernel before adding RPC, event subscriptions, tool providers,
-Dynamic Workers, dispatch namespaces, queues, workflows, AI, KV, R2, or retry
-composition.
+The main API is `dispatchCallable({ callable, payload, ctx })`. In the general
+case, callers should not need to know whether the callable is backed by public
+HTTP, a service binding `fetch()`, Durable Object `fetch()`, service RPC, or
+Durable Object RPC.
 
-## Contract
+```ts
+const result = await dispatchCallable({
+  callable,
+  payload: { userId: "usr_123" },
+  ctx: { env },
+});
+```
 
-A `Callable` is JSON data. It is not a live capability.
+Use `dispatchCallableFetch({ callable, request, ctx })` only when you need the
+raw Fetch API surface: streaming request bodies, streaming responses, SSE, or
+WebSocket upgrade responses.
+
+## Shape
+
+The schema marker is optional and defaults to v1:
+
+```ts
+schema?: "https://schemas.iterate.com/callable/v1";
+```
+
+Add it when a persisted record needs to be self-describing. Omit it for normal
+in-repo callsites. There is no `schemaVersion` compatibility layer in this
+prototype.
+
+Fetch callable:
 
 ```ts
 const callable = {
-  schemaVersion: "callable/v1",
   kind: "fetch",
   target: {
     type: "service",
@@ -23,33 +46,171 @@ const callable = {
 };
 ```
 
-The runtime resolves `{ $binding: "USERS" }` against `ctx.env` only when you
-dispatch it:
+RPC callable:
 
 ```ts
-await dispatchCallableFetch({
+const callable = {
+  kind: "rpc",
+  target: {
+    type: "durable-object",
+    binding: { $binding: "USER_REGISTRY" },
+    address: { type: "name", name: "global" },
+  },
+  rpcMethod: "findUser",
+};
+```
+
+`rpcMethod` is baked into the JSON. It must be one direct JavaScript identifier,
+not a dotted path. Names such as `fetch`, `then`, `constructor`, `prototype`,
+and `__proto__` are rejected because they collide with Fetch semantics,
+Promise-like behavior, JavaScript prototype behavior, or Cloudflare RPC
+reserved names.
+
+## Dispatching Values
+
+`dispatchCallable()` turns fetch callables into ordinary value calls by building
+a request, dispatching it, rejecting non-2xx responses, and parsing the body.
+The default request template is:
+
+- `POST`
+- `content-type: application/json`
+- body is `JSON.stringify(payload ?? null)`
+
+```ts
+const callable = {
+  kind: "fetch",
+  target: { type: "http", url: "https://api.example.com/tools" },
+};
+
+const result = await dispatchCallable({
   callable,
+  payload: { title: "Bug" },
+  ctx: { fetcher: fetch },
+});
+```
+
+If the response has a JSON content type, the result is parsed JSON. Otherwise it
+is returned as text. Non-2xx responses throw `CallableError` with code
+`REMOTE_ERROR`, and the error details include the response status and body.
+
+RPC callables dispatch to a service binding or Durable Object stub and call the
+named method. `argsMode` defaults to `object`, so the payload is passed as one
+argument:
+
+```ts
+await dispatchCallable({
+  callable: {
+    kind: "rpc",
+    target: { type: "service", binding: { $binding: "TOOLS" } },
+    rpcMethod: "callTool",
+  },
+  payload: { name: "createIssue", args: { title: "Bug" } },
+  ctx: { env },
+});
+```
+
+Use `argsMode: "positional"` when the payload is an array and should be spread:
+
+```ts
+await dispatchCallable({
+  callable: {
+    kind: "rpc",
+    target: { type: "service", binding: { $binding: "MATH" } },
+    rpcMethod: "add",
+    argsMode: "positional",
+  },
+  payload: [1, 2],
+  ctx: { env },
+});
+```
+
+Cloudflare RPC stubs appear to expose every possible method name. That means
+this library can sanitize the method string, but it cannot prove a real remote
+method exists before calling it. Missing remote methods surface as remote RPC
+errors from the platform.
+
+## Dispatching Fetch
+
+`dispatchCallableFetch()` is the streaming-preserving path. It never reads the
+incoming request body and returns the raw `Response`.
+
+```ts
+const response = await dispatchCallableFetch({
+  callable: {
+    kind: "fetch",
+    target: {
+      type: "durable-object",
+      binding: { $binding: "ROOMS" },
+      address: { type: "name", name: "room-1" },
+      pathPrefix: "/events",
+    },
+  },
   request,
   ctx: { env },
 });
 ```
 
-This is why the docs sometimes call a `Callable` a descriptor: it describes a
-call, but it does not grant one.
+This is also the API used by `connectCallableWebSocket()`: WebSocket is fetch
+with upgrade headers, not a separate callable kind.
 
-Treat Callables like untrusted code. If you pass a full Worker `env` to a
-Callable, you are allowing the JSON to choose any binding name it contains. V1
-keeps that resolver simple on purpose; `tasks/capability-policy.md` tracks the
-policy layer for untrusted tenants, LLM-generated descriptors, and stored user
-configuration.
-
-## Fetch Targets
+## Fetch Targets And Paths
 
 V1 supports:
 
 - `http`: public HTTP via `ctx.fetcher` or `globalThis.fetch`
-- `service`: a Worker service-like binding with `fetch(request)`
-- `durable-object`: a Durable Object namespace, addressed by name or id
+- `service`: a Worker service binding with `fetch(request)`
+- `durable-object`: a Durable Object namespace, addressed by stable name or id
+
+Public HTTP targets use `url`:
+
+```ts
+{ kind: "fetch", target: { type: "http", url: "https://api.example.com/v1" } }
+```
+
+Service and Durable Object targets use `pathPrefix` because the binding object
+is the authority; the URL visible to the callee's `fetch(request)` handler is
+synthetic and chosen by this runtime:
+
+```ts
+{
+  kind: "fetch",
+  target: {
+    type: "service",
+    binding: { $binding: "USERS" },
+    pathPrefix: "/internal"
+  }
+}
+```
+
+`pathMode` lives on the fetch callable and controls what happens to the incoming
+path:
+
+```ts
+// Default: prefix
+{
+  kind: "fetch",
+  target: { type: "http", url: "https://api.example.com/v1" }
+}
+// Incoming /users?active=true
+// Outbound https://api.example.com/v1/users?active=true
+```
+
+```ts
+// Replace
+{
+  kind: "fetch",
+  pathMode: "replace",
+  target: { type: "http", url: "https://api.example.com/status" }
+}
+// Incoming /users?active=true
+// Outbound https://api.example.com/status?active=true
+```
+
+Advanced rewrite behavior is intentionally future work. The task notes track
+the prior art we discussed: Caddy `reverse_proxy` plus `rewrite`/`uri`, Envoy
+`prefix_rewrite`, and NGINX `proxy_pass` URI behavior.
+
+## Durable Object Addresses
 
 Durable Object addresses are deliberately stable:
 
@@ -61,95 +222,18 @@ Durable Object addresses are deliberately stable:
 There is no `newUniqueId` address. Creating a fresh Durable Object id is
 allocation/provisioning work, not a stable invocation descriptor.
 
-## Upstream And Path Modes
+## Security
 
-`target.upstream` is only for public HTTP targets. Service and Durable Object
-targets use `pathPrefix` because the binding object is the actual authority; the
-URL visible to the callee's `fetch(request)` handler is synthetic and chosen by
-the runtime.
+Treat Callables like untrusted code. If you pass a full Worker `env` to a
+Callable, you are allowing the JSON to choose any binding name it contains.
 
-`pathMode` controls how the incoming request path is applied:
+V1 keeps that resolver simple on purpose so the kernel stays small. Do not pass
+tenant-authored, LLM-authored, or user-authored callables a sensitive `env`
+object until `tasks/capability-policy.md` is implemented.
 
-```ts
-// Default: prefix
-{
-  target: { type: "http", upstream: "https://api.example.com/v1" }
-}
-// Incoming /users?active=true
-// Outbound https://api.example.com/v1/users?active=true
-```
-
-```ts
-// Replace
-{
-  target: {
-    type: "http",
-    upstream: "https://api.example.com/status",
-    pathMode: "replace"
-  }
-}
-// Incoming /users?active=true
-// Outbound https://api.example.com/status?active=true
-```
-
-For service and Durable Object targets, the same modes apply to `pathPrefix`:
-
-```ts
-{
-  target: {
-    type: "service",
-    binding: { $binding: "USERS" },
-    pathPrefix: "/internal"
-  }
-}
-// Incoming /users
-// Callee sees https://service.local/internal/users
-```
-
-Advanced proxy rewrite behavior is intentionally future work. The task notes
-track the prior art we discussed: Caddy `reverse_proxy` plus `rewrite`/`uri`,
-Envoy `prefix_rewrite`, and NGINX `proxy_pass` URI behavior.
-
-## WebSockets
-
-WebSocket is not a separate callable kind. It is fetch with upgrade headers:
-
-```ts
-const ws = await connectCallableWebSocket({
-  callable,
-  ctx: { env },
-});
-```
-
-Workers also support `new WebSocket(url)` for public URL endpoints, but this
-folder uses fetch-with-upgrade because it works for non-URL targets like service
-bindings and Durable Object stubs. Cloudflare documents the Workers
-`response.webSocket` extension here:
-https://developers.cloudflare.com/workers/runtime-apis/response/#websocket
-
-## Request Templates
-
-`buildCallableRequest` supports a tiny payload-to-request bridge:
-
-```ts
-const request = buildCallableRequest({
-  callable: {
-    schemaVersion: "callable/v1",
-    kind: "fetch",
-    target: { type: "http", upstream: "https://api.example.com/tools" },
-    requestTemplate: {
-      method: "POST",
-      headers: { "x-tool": "create-issue" },
-      query: { dryRun: true },
-      body: { type: "json", from: "payload" },
-    },
-  },
-  payload: { title: "Bug" },
-});
-```
-
-No RFC 6570, JSON-e, JSON Pointer, or pass-through args yet. Those are parked in
-`tasks/` until real callers force the shape.
+`ctx.fetcher` is only used for public HTTP targets. If omitted, public HTTP
+callables use `globalThis.fetch`, which grants ambient public egress to trusted
+Worker-boundary code. Untrusted descriptors need an explicit policy layer.
 
 ## Tests
 
@@ -164,9 +248,13 @@ The config lives in this folder on purpose:
 - `vitest.config.ts`
 - `wrangler.vitest.jsonc`
 - `entry.workerd.vitest.ts`
+- `service.workerd.vitest.js`
 - `runtime.test.ts`
 
-It uses Cloudflare's Workers Vitest pool:
+The test harness uses Cloudflare's Workers Vitest pool and an auxiliary Worker
+fixture so service binding fetch and service binding RPC are both exercised
+against real Workers runtime objects:
+
 https://developers.cloudflare.com/workers/testing/vitest-integration/configuration/
 
 ## Future Work

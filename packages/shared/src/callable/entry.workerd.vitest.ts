@@ -15,6 +15,14 @@ export class CallableTestDurableObject extends DurableObject {
     return createEchoResponse(request);
   }
 
+  echo(input: unknown) {
+    return { target: "durable-object", input };
+  }
+
+  join(left: string, right: string) {
+    return `${left}:${right}`;
+  }
+
   webSocketMessage() {}
 
   webSocketClose() {}

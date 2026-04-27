@@ -2,8 +2,10 @@ import {
   CallableError,
   CallableSchema,
   type Callable,
-  type CallableFetchContext,
+  type CallableContext,
   type DurableObjectAddress,
+  type FetchCallable,
+  type RpcCallable,
 } from "./types.ts";
 
 /**
@@ -26,10 +28,12 @@ export function validateCallable(options: { callable: unknown }) {
 /**
  * Builds a Request from a JSON payload using the callable's `requestTemplate`.
  *
- * V1 deliberately supports only literal headers/query values and JSON body from
- * the whole payload. RFC 6570, JSON-e, JSON Pointer extraction, and
- * pass-through args are intentionally parked in `tasks/` until we have real
- * callers that need them.
+ * The default template is intentionally boring: POST the whole payload as JSON.
+ * That keeps `dispatchCallable()` useful without making every fetch callable
+ * spell out the common case. Explicit templates can still set method,
+ * literal headers/query values, and JSON body-from-payload. RFC 6570, JSON-e,
+ * JSON Pointer extraction, and pass-through args are intentionally parked in
+ * `tasks/` until we have real callers that need them.
  */
 export function buildCallableRequest(options: { callable: Callable; payload: unknown }) {
   const callable = validateCallable({ callable: options.callable });
@@ -37,13 +41,10 @@ export function buildCallableRequest(options: { callable: Callable; payload: unk
     throw new CallableError("DESCRIPTOR_VALIDATION_FAILED", `Unsupported callable kind`);
   }
 
-  const template = callable.requestTemplate;
-  if (!template) {
-    throw new CallableError(
-      "PAYLOAD_VALIDATION_FAILED",
-      "Cannot build a Request without requestTemplate",
-    );
-  }
+  const template = callable.requestTemplate ?? {
+    method: "POST" as const,
+    body: { type: "json" as const, from: "payload" as const },
+  };
 
   const url = buildCallableTemplateUrl({ callable });
   for (const [key, value] of Object.entries(template.query ?? {})) {
@@ -58,10 +59,65 @@ export function buildCallableRequest(options: { callable: Callable; payload: unk
 
   if (template.body?.type === "json") {
     if (!headers.has("content-type")) headers.set("content-type", "application/json");
-    requestInit.body = JSON.stringify(options.payload);
+    requestInit.body = JSON.stringify(options.payload ?? null);
   }
 
   return new Request(url, requestInit);
+}
+
+/**
+ * Dispatches any v1 Callable and returns the produced value.
+ *
+ * This is the main API for callers that do not care whether the target is
+ * backed by fetch or Workers RPC. Fetch-shaped callables synthesize a Request
+ * from the payload, reject non-2xx responses, and parse JSON/text response
+ * bodies. Use `dispatchCallableFetch()` instead when the caller needs raw
+ * `Request`/`Response` objects or streaming proxy behavior.
+ */
+export async function dispatchCallable(options: {
+  callable: Callable;
+  payload: unknown;
+  ctx: CallableContext;
+}) {
+  const callable = validateCallable({ callable: options.callable });
+
+  switch (callable.kind) {
+    case "fetch": {
+      if (options.payload instanceof Request) {
+        throw new CallableError(
+          "PAYLOAD_VALIDATION_FAILED",
+          "dispatchCallable() does not accept Request payloads; use dispatchCallableFetch() for streaming proxy mode",
+        );
+      }
+
+      const response = await dispatchCallableFetch({
+        callable,
+        request: buildCallableRequest({ callable, payload: options.payload }),
+        ctx: options.ctx,
+      });
+
+      if (!response.ok) {
+        const body = await response.text();
+        throw new CallableError(
+          "REMOTE_ERROR",
+          `Callable fetch target returned ${response.status} ${response.statusText}`,
+          {
+            retryable: response.status >= 500,
+            details: {
+              status: response.status,
+              statusText: response.statusText,
+              body,
+            },
+          },
+        );
+      }
+
+      return await readCallableResponse({ response });
+    }
+    case "rpc": {
+      return await dispatchCallableRpc({ callable, payload: options.payload, ctx: options.ctx });
+    }
+  }
 }
 
 /**
@@ -76,7 +132,7 @@ export function buildCallableRequest(options: { callable: Callable; payload: unk
 export async function dispatchCallableFetch(options: {
   callable: Callable;
   request: Request;
-  ctx: CallableFetchContext;
+  ctx: CallableContext;
 }) {
   const callable = validateCallable({ callable: options.callable });
   if (callable.kind !== "fetch") {
@@ -111,11 +167,18 @@ export async function dispatchCallableFetch(options: {
       }).fetch(outboundRequest);
     }
     case "durable-object": {
-      return await resolveDurableObjectStub({
+      const stub = resolveDurableObjectStub({
         bindingName: callable.target.binding.$binding,
         address: callable.target.address,
         env: options.ctx.env,
-      }).fetch(outboundRequest);
+      });
+      if (!isFetchableBinding(stub)) {
+        throw new CallableError(
+          "RESOLUTION_FAILED",
+          `Durable Object binding "${callable.target.binding.$binding}" did not resolve to a fetchable stub`,
+        );
+      }
+      return await stub.fetch(outboundRequest);
     }
   }
 }
@@ -131,7 +194,7 @@ export async function dispatchCallableFetch(options: {
  */
 export async function connectCallableWebSocket(options: {
   callable: Callable;
-  ctx: CallableFetchContext;
+  ctx: CallableContext;
   url?: string;
   protocols?: string[];
   headers?: Record<string, string>;
@@ -166,29 +229,26 @@ export async function connectCallableWebSocket(options: {
   return response.webSocket;
 }
 
-function buildCallableUrl(options: {
-  callable: Extract<Callable, { kind: "fetch" }>;
-  incomingRequestUrl: string;
-}) {
-  const upstream = resolveBaseUrl(options.callable);
+function buildCallableUrl(options: { callable: FetchCallable; incomingRequestUrl: string }) {
+  const baseUrl = resolveBaseUrl(options.callable);
   const incoming = new URL(options.incomingRequestUrl);
 
-  if ((options.callable.target.pathMode ?? "prefix") === "prefix") {
-    upstream.pathname = joinPathPrefix(upstream.pathname, incoming.pathname);
+  if ((options.callable.pathMode ?? "prefix") === "prefix") {
+    baseUrl.pathname = joinPathPrefix(baseUrl.pathname, incoming.pathname);
   }
 
-  upstream.search = incoming.search;
-  return upstream;
+  baseUrl.search = incoming.search;
+  return baseUrl;
 }
 
-function buildCallableTemplateUrl(options: { callable: Extract<Callable, { kind: "fetch" }> }) {
+function buildCallableTemplateUrl(options: { callable: FetchCallable }) {
   return resolveBaseUrl(options.callable);
 }
 
-function resolveBaseUrl(callable: Extract<Callable, { kind: "fetch" }>) {
+function resolveBaseUrl(callable: FetchCallable) {
   switch (callable.target.type) {
     case "http":
-      return new URL(callable.target.upstream);
+      return new URL(callable.target.url);
     case "service":
       return new URL(callable.target.pathPrefix ?? "/", "https://service.local");
     case "durable-object":
@@ -201,6 +261,89 @@ function joinPathPrefix(prefix: string, incomingPath: string) {
   const normalizedIncoming = incomingPath.startsWith("/") ? incomingPath : `/${incomingPath}`;
   const joined = `${normalizedPrefix}${normalizedIncoming}`;
   return joined === "" ? "/" : joined;
+}
+
+async function dispatchCallableRpc(options: {
+  callable: RpcCallable;
+  payload: unknown;
+  ctx: CallableContext;
+}) {
+  const stub = resolveRpcStub({
+    target: options.callable.target,
+    env: options.ctx.env,
+  });
+  assertRpcMethodResolvable({
+    target: stub,
+    methodName: options.callable.rpcMethod,
+  });
+  const args = buildRpcArgs({
+    argsMode: options.callable.argsMode ?? "object",
+    payload: options.payload,
+  });
+
+  /**
+   * Do not wrap remote method errors here. Workers RPC already preserves the
+   * remote exception shape as much as the platform can; callers generally need
+   * to see that application error rather than a transport-flavored wrapper.
+   */
+  return await (stub as Record<string, (...args: unknown[]) => unknown>)[
+    options.callable.rpcMethod
+  ](...args);
+}
+
+function resolveRpcStub(options: {
+  target: RpcCallable["target"];
+  env: Record<string, unknown> | undefined;
+}) {
+  switch (options.target.type) {
+    case "service":
+      return resolveBinding({ bindingName: options.target.binding.$binding, env: options.env });
+    case "durable-object":
+      return resolveDurableObjectStub({
+        bindingName: options.target.binding.$binding,
+        address: options.target.address,
+        env: options.env,
+      });
+  }
+}
+
+function assertRpcMethodResolvable(options: { target: unknown; methodName: string }) {
+  if (typeof options.target !== "object" || options.target === null) {
+    throw new CallableError("RESOLUTION_FAILED", "RPC target is not an object");
+  }
+
+  /**
+   * On real Workers RPC stubs, Cloudflare intentionally exposes every possible
+   * method name and lets the remote endpoint decide whether it exists. This
+   * check is still useful for plain-object test doubles and invalid bindings,
+   * but it is not a method allowlist. The policy task will add that explicitly.
+   */
+  const method = Reflect.get(options.target, options.methodName);
+  if (typeof method !== "function") {
+    throw new CallableError(
+      "RESOLUTION_FAILED",
+      `RPC method "${options.methodName}" was not found on target`,
+    );
+  }
+}
+
+function buildRpcArgs(options: { argsMode: "object" | "positional"; payload: unknown }) {
+  if (options.argsMode === "object") return [options.payload];
+  if (!Array.isArray(options.payload)) {
+    throw new CallableError(
+      "PAYLOAD_VALIDATION_FAILED",
+      "RPC positional argsMode requires the payload to be an array",
+    );
+  }
+  return options.payload as unknown[];
+}
+
+async function readCallableResponse(options: { response: Response }) {
+  const contentType = options.response.headers.get("content-type") ?? "";
+  if (contentType.toLowerCase().includes("json")) {
+    return await options.response.json();
+  }
+  return await options.response.text();
 }
 
 function resolveServiceBinding(options: {
@@ -270,10 +413,10 @@ function isFetchableBinding(
 }
 
 function isDurableObjectNamespace(value: unknown): value is {
-  getByName?: (name: string) => { fetch: (request: Request) => Response | Promise<Response> };
+  getByName?: (name: string) => object;
   idFromName: (name: string) => unknown;
   idFromString: (id: string) => unknown;
-  get: (id: unknown) => { fetch: (request: Request) => Response | Promise<Response> };
+  get: (id: unknown) => object;
 } {
   return (
     typeof value === "object" &&

@@ -10,6 +10,24 @@ export default defineConfig({
   plugins: [
     cloudflareTest({
       main: "./entry.workerd.vitest.ts",
+      miniflare: {
+        /**
+         * Cloudflare's Workers Vitest pool supports auxiliary Workers through
+         * Miniflare's `workers` option. This fixture gives us a real service
+         * binding, not a hand-written `{ fetch() {} }` mock, so fetch and RPC
+         * tests exercise the platform binding shape we expect in production.
+         */
+        serviceBindings: {
+          CALLABLE_TEST_SERVICE: "callable-test-service",
+        },
+        workers: [
+          {
+            name: "callable-test-service",
+            modules: true,
+            scriptPath: resolve(callableRoot, "service.workerd.vitest.js"),
+          },
+        ],
+      },
       wrangler: {
         configPath: resolve(callableRoot, "wrangler.vitest.jsonc"),
       },

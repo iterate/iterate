@@ -3,10 +3,11 @@ import { describe, expect, test, vi } from "vitest";
 import {
   buildCallableRequest,
   connectCallableWebSocket,
+  dispatchCallable,
   dispatchCallableFetch,
   validateCallable,
 } from "./runtime.ts";
-import type { Callable } from "./types.ts";
+import { CALLABLE_SCHEMA, type Callable } from "./types.ts";
 import workerEntry, { CallableTestDurableObject } from "./entry.workerd.vitest.ts";
 
 void workerEntry;
@@ -14,39 +15,264 @@ void CallableTestDurableObject;
 
 const testEnv = env as {
   CALLABLE_TEST_DURABLE_OBJECT: DurableObjectNamespace;
+  CALLABLE_TEST_SERVICE: {
+    fetch: (request: Request) => Promise<Response>;
+    echo: (input: unknown) => Promise<unknown>;
+    join: (left: string, right: string) => Promise<string>;
+  };
 };
 
 describe("callable validation", () => {
-  test("accepts a JSON round-tripped fetch callable", () => {
+  test("accepts a JSON round-tripped fetch callable with the default schema", () => {
     const callable = {
-      schemaVersion: "callable/v1",
       kind: "fetch",
-      target: { type: "http", upstream: "https://api.example.com/v1" },
+      target: { type: "http", url: "https://api.example.com/v1" },
     } satisfies Callable;
 
     expect(validateCallable({ callable: JSON.parse(JSON.stringify(callable)) })).toEqual(callable);
   });
 
-  test("rejects upstream query because query rewrite semantics are not in v1", () => {
+  test("accepts the explicit schema URL when a stored record wants to be self-describing", () => {
+    const callable = {
+      schema: CALLABLE_SCHEMA,
+      kind: "fetch",
+      target: { type: "http", url: "https://api.example.com/v1" },
+    } satisfies Callable;
+
+    expect(validateCallable({ callable })).toEqual(callable);
+  });
+
+  test("rejects legacy schemaVersion because v1 has no backwards-compatibility layer", () => {
     expect(() =>
       validateCallable({
         callable: {
           schemaVersion: "callable/v1",
           kind: "fetch",
-          target: { type: "http", upstream: "https://api.example.com/v1?x=1" },
+          target: { type: "http", url: "https://api.example.com/v1" },
         },
       }),
     ).toThrow("Invalid callable");
   });
+
+  test("rejects URL query because query rewrite semantics are not in v1", () => {
+    expect(() =>
+      validateCallable({
+        callable: {
+          kind: "fetch",
+          target: { type: "http", url: "https://api.example.com/v1?x=1" },
+        },
+      }),
+    ).toThrow("Invalid callable");
+  });
+
+  test("rejects dangerous RPC method names and dotted paths", () => {
+    for (const rpcMethod of ["then", "__proto__", "fetch", "users.byId"]) {
+      expect(() =>
+        validateCallable({
+          callable: {
+            kind: "rpc",
+            target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+            rpcMethod,
+          },
+        }),
+      ).toThrow("Invalid callable");
+    }
+  });
+});
+
+describe("dispatchCallable", () => {
+  test("posts JSON by default for fetch callables and parses JSON responses", async () => {
+    const value = await dispatchCallable({
+      callable: {
+        kind: "fetch",
+        target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+      },
+      payload: { title: "Bug" },
+      ctx: { env: testEnv },
+    });
+
+    expect(value).toMatchObject({
+      target: "service",
+      method: "POST",
+      path: "/",
+      body: '{"title":"Bug"}',
+      contentType: "application/json",
+    });
+  });
+
+  test("serializes undefined payloads as JSON null in the default request template", async () => {
+    const request = buildCallableRequest({
+      callable: {
+        kind: "fetch",
+        target: { type: "http", url: "https://api.example.com/tools" },
+      },
+      payload: undefined,
+    });
+
+    await expect(request.text()).resolves.toBe("null");
+  });
+
+  test("parses text responses when the response is not JSON", async () => {
+    const value = await dispatchCallable({
+      callable: {
+        kind: "fetch",
+        target: { type: "http", url: "https://api.example.com/text" },
+      },
+      payload: { ignored: true },
+      ctx: {
+        fetcher: async () =>
+          new Response("plain text result", { headers: { "content-type": "text/plain" } }),
+      },
+    });
+
+    expect(value).toBe("plain text result");
+  });
+
+  test("includes the response body when fetch callables return non-2xx", async () => {
+    await expect(
+      dispatchCallable({
+        callable: {
+          kind: "fetch",
+          target: { type: "http", url: "https://api.example.com/fail" },
+        },
+        payload: { ignored: true },
+        ctx: {
+          fetcher: async () => new Response("bad input", { status: 400, statusText: "Bad" }),
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "REMOTE_ERROR",
+      retryable: false,
+      details: {
+        status: 400,
+        statusText: "Bad",
+        body: "bad input",
+      },
+    });
+  });
+
+  test("keeps raw Request payloads on the streaming-only API", async () => {
+    await expect(
+      dispatchCallable({
+        callable: {
+          kind: "fetch",
+          target: { type: "http", url: "https://api.example.com" },
+        },
+        payload: new Request("https://router.local/upload"),
+        ctx: { fetcher: vi.fn() },
+      }),
+    ).rejects.toMatchObject({
+      code: "PAYLOAD_VALIDATION_FAILED",
+    });
+  });
+
+  test("dispatches object-mode service RPC", async () => {
+    const value = await dispatchCallable({
+      callable: {
+        kind: "rpc",
+        target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+        rpcMethod: "echo",
+      },
+      payload: { ok: true },
+      ctx: { env: testEnv },
+    });
+
+    expect(value).toEqual({ target: "service", input: { ok: true } });
+  });
+
+  test("dispatches positional service RPC", async () => {
+    const value = await dispatchCallable({
+      callable: {
+        kind: "rpc",
+        target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+        rpcMethod: "join",
+        argsMode: "positional",
+      },
+      payload: ["left", "right"],
+      ctx: { env: testEnv },
+    });
+
+    expect(value).toBe("left:right");
+  });
+
+  test("dispatches object-mode Durable Object RPC", async () => {
+    const value = await dispatchCallable({
+      callable: {
+        kind: "rpc",
+        target: {
+          type: "durable-object",
+          binding: { $binding: "CALLABLE_TEST_DURABLE_OBJECT" },
+          address: { type: "name", name: "rpc-object-target" },
+        },
+        rpcMethod: "echo",
+      },
+      payload: { ok: true },
+      ctx: { env: testEnv },
+    });
+
+    expect(value).toEqual({ target: "durable-object", input: { ok: true } });
+  });
+
+  test("dispatches positional Durable Object RPC", async () => {
+    const value = await dispatchCallable({
+      callable: {
+        kind: "rpc",
+        target: {
+          type: "durable-object",
+          binding: { $binding: "CALLABLE_TEST_DURABLE_OBJECT" },
+          address: { type: "name", name: "rpc-positional-target" },
+        },
+        rpcMethod: "join",
+        argsMode: "positional",
+      },
+      payload: ["left", "right"],
+      ctx: { env: testEnv },
+    });
+
+    expect(value).toBe("left:right");
+  });
+
+  test("rejects non-array payloads for positional RPC", async () => {
+    await expect(
+      dispatchCallable({
+        callable: {
+          kind: "rpc",
+          target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+          rpcMethod: "join",
+          argsMode: "positional",
+        },
+        payload: { left: "left", right: "right" },
+        ctx: { env: testEnv },
+      }),
+    ).rejects.toMatchObject({
+      code: "PAYLOAD_VALIDATION_FAILED",
+    });
+  });
+
+  test("lets missing methods surface as remote RPC errors on real platform stubs", async () => {
+    await expect(
+      dispatchCallable({
+        callable: {
+          kind: "rpc",
+          target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+          rpcMethod: "missingMethod",
+        },
+        payload: null,
+        ctx: { env: testEnv },
+      }),
+    ).rejects.toMatchObject({
+      remote: true,
+      message: 'The RPC receiver does not implement the method "missingMethod".',
+    });
+  });
 });
 
 describe("dispatchCallableFetch", () => {
-  test("prefixes incoming paths onto the upstream path by default", async () => {
+  test("prefixes incoming paths onto the base URL path by default", async () => {
     const response = await dispatchCallableFetch({
       callable: {
-        schemaVersion: "callable/v1",
         kind: "fetch",
-        target: { type: "http", upstream: "https://api.example.com/v1" },
+        target: { type: "http", url: "https://api.example.com/v1" },
       },
       request: new Request("https://router.local/users/123?expand=items", { method: "POST" }),
       ctx: {
@@ -60,15 +286,14 @@ describe("dispatchCallableFetch", () => {
     });
   });
 
-  test("uses pathMode replace when the upstream path is the complete target path", async () => {
+  test("uses pathMode replace when the base URL path is the complete target path", async () => {
     const response = await dispatchCallableFetch({
       callable: {
-        schemaVersion: "callable/v1",
         kind: "fetch",
+        pathMode: "replace",
         target: {
           type: "http",
-          upstream: "https://api.example.com/status",
-          pathMode: "replace",
+          url: "https://api.example.com/status",
         },
       },
       request: new Request("https://router.local/users/123?expand=items"),
@@ -90,9 +315,8 @@ describe("dispatchCallableFetch", () => {
 
     const response = await dispatchCallableFetch({
       callable: {
-        schemaVersion: "callable/v1",
         kind: "fetch",
-        target: { type: "http", upstream: "https://api.example.com" },
+        target: { type: "http", url: "https://api.example.com" },
       },
       request,
       ctx: {
@@ -106,26 +330,22 @@ describe("dispatchCallableFetch", () => {
     await expect(response.text()).resolves.toBe("streamed-body");
   });
 
-  test("dispatches to a service-like binding through env", async () => {
+  test("dispatches to a real service binding fetch handler through env", async () => {
     const response = await dispatchCallableFetch({
       callable: {
-        schemaVersion: "callable/v1",
         kind: "fetch",
         target: {
           type: "service",
-          binding: { $binding: "ECHO_SERVICE" },
+          binding: { $binding: "CALLABLE_TEST_SERVICE" },
           pathPrefix: "/internal",
         },
       },
       request: new Request("https://router.local/orders/1", { method: "PATCH", body: "patched" }),
-      ctx: {
-        env: {
-          ECHO_SERVICE: { fetch: createEchoResponse },
-        },
-      },
+      ctx: { env: testEnv },
     });
 
     await expect(response.json()).resolves.toMatchObject({
+      target: "service",
       method: "PATCH",
       path: "/internal/orders/1",
       body: "patched",
@@ -135,7 +355,6 @@ describe("dispatchCallableFetch", () => {
   test("dispatches to a Durable Object by name", async () => {
     const response = await dispatchCallableFetch({
       callable: {
-        schemaVersion: "callable/v1",
         kind: "fetch",
         target: {
           type: "durable-object",
@@ -158,14 +377,13 @@ describe("dispatchCallableFetch", () => {
     const id = testEnv.CALLABLE_TEST_DURABLE_OBJECT.idFromName("id-target").toString();
     const response = await dispatchCallableFetch({
       callable: {
-        schemaVersion: "callable/v1",
         kind: "fetch",
+        pathMode: "replace",
         target: {
           type: "durable-object",
           binding: { $binding: "CALLABLE_TEST_DURABLE_OBJECT" },
           address: { type: "id", id },
           pathPrefix: "/exact",
-          pathMode: "replace",
         },
       },
       request: new Request("https://router.local/messages?limit=1"),
@@ -188,9 +406,8 @@ describe("dispatchCallableFetch", () => {
     await expect(
       dispatchCallableFetch({
         callable: {
-          schemaVersion: "callable/v1",
           kind: "fetch",
-          target: { type: "http", upstream: "https://api.example.com" },
+          target: { type: "http", url: "https://api.example.com" },
         },
         request,
         ctx: { fetcher: vi.fn() },
@@ -202,7 +419,6 @@ describe("dispatchCallableFetch", () => {
     await expect(
       dispatchCallableFetch({
         callable: {
-          schemaVersion: "callable/v1",
           kind: "fetch",
           target: {
             type: "durable-object",
@@ -220,12 +436,11 @@ describe("dispatchCallableFetch", () => {
 });
 
 describe("buildCallableRequest", () => {
-  test("builds a JSON request from a payload template", async () => {
+  test("builds a JSON request from an explicit payload template", async () => {
     const request = buildCallableRequest({
       callable: {
-        schemaVersion: "callable/v1",
         kind: "fetch",
-        target: { type: "http", upstream: "https://api.example.com/tools" },
+        target: { type: "http", url: "https://api.example.com/tools" },
         requestTemplate: {
           method: "POST",
           headers: { "x-tool": "create-issue" },
@@ -248,14 +463,13 @@ describe("connectCallableWebSocket", () => {
   test("connects through a Durable Object fetch target", async () => {
     const ws = await connectCallableWebSocket({
       callable: {
-        schemaVersion: "callable/v1",
         kind: "fetch",
+        pathMode: "replace",
         target: {
           type: "durable-object",
           binding: { $binding: "CALLABLE_TEST_DURABLE_OBJECT" },
           address: { type: "name", name: "websocket-target" },
           pathPrefix: "/socket",
-          pathMode: "replace",
         },
       },
       ctx: { env: testEnv },
@@ -267,13 +481,3 @@ describe("connectCallableWebSocket", () => {
     expect(message).toBe("connected");
   });
 });
-
-async function createEchoResponse(request: Request) {
-  const url = new URL(request.url);
-  return Response.json({
-    method: request.method,
-    path: url.pathname,
-    query: url.search,
-    body: request.body ? await request.text() : "",
-  });
-}

@@ -16,6 +16,7 @@ Planned scope:
 
 - allowed binding names
 - allowed HTTP upstream origins
+- allowed RPC methods per binding/target
 - denied headers
 - secret references instead of literal bearer tokens
 - descriptor size limits

@@ -10,6 +10,10 @@ dependsOn: []
 V1 only supports `pathMode: "prefix" | "replace"`. Add richer proxy behavior
 only once callers need it.
 
+The current public HTTP target field is just `url`. Avoid reintroducing
+`origin`, `upstream`, or `mount URL` unless a later design needs more precise
+terminology than a base URL plus path mode.
+
 Prior art to consider:
 
 - Caddy `reverse_proxy`, `rewrite`, `uri strip_prefix`, and `handle_path`:
