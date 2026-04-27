@@ -15,7 +15,7 @@
     "deploy": "doppler run --config prd -- pnpm alchemy:up",
     "destroy": "doppler run --config prd -- pnpm alchemy:down",
     "rpc": "pnpm cli rpc",
-    "sqlfu:generate": "sqlfu generate",
+    "sqlfu:generate": "sqlfu generate && cd src/durable-objects && sqlfu generate",
     "demo": "pnpm cli hello-world",
     "demo:hello-world": "pnpm cli hello-world",
     "typecheck": "tsc --noEmit",
@@ -58,7 +58,7 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "schematch": "0.2.1",
-    "sqlfu": "0.0.3-8",
+    "sqlfu": "https://pkg.pr.new/mmkal/sqlfu@d6bf1a8",
     "tailwindcss": "^4.1.18",
     "yaml": "^2.8.3",
     "zod": "^4.3.6"
