@@ -13,7 +13,6 @@ const items = [
   { to: "/debug", label: "Debug" },
   { to: "/log-stream", label: "Log Stream" },
   { to: "/things", label: "Things" },
-  { to: "/terminal", label: "Terminal" },
 ] as const;
 
 export function AppSidebar() {

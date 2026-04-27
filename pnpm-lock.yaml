@@ -2319,9 +2319,6 @@ importers:
       '@iterate-com/ui':
         specifier: workspace:*
         version: link:../../packages/ui
-      '@lydell/node-pty':
-        specifier: 1.2.0-beta.3
-        version: 1.2.0-beta.3
       '@orpc/client':
         specifier: 1.13.14
         version: 1.13.14(@opentelemetry/api@1.9.0)
@@ -2367,12 +2364,6 @@ importers:
       '@tanstack/react-start':
         specifier: 1.167.5
         version: 1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
-      '@xterm/addon-serialize':
-        specifier: 0.15.0-beta.103
-        version: 0.15.0-beta.103(@xterm/xterm@6.1.0-beta.103)
-      '@xterm/headless':
-        specifier: 6.1.0-beta.103
-        version: 6.1.0-beta.103
       crossws:
         specifier: ^0.4.4
         version: 0.4.4(srvx@0.11.12)
@@ -2461,10 +2452,6 @@ importers:
       wrangler:
         specifier: 4.84.0
         version: 4.84.0(@cloudflare/workers-types@4.20260421.1)
-    optionalDependencies:
-      '@lydell/node-pty-darwin-arm64':
-        specifier: 1.2.0-beta.3
-        version: 1.2.0-beta.3
 
   apps/os2-contract:
     dependencies:

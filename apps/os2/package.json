@@ -33,7 +33,6 @@
     "@iterate-com/os2-contract": "workspace:*",
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",
-    "@lydell/node-pty": "1.2.0-beta.3",
     "@orpc/client": "1.13.14",
     "@orpc/contract": "1.13.14",
     "@orpc/openapi": "1.13.14",
@@ -49,8 +48,6 @@
     "@tanstack/react-router-devtools": "1.166.11",
     "@tanstack/react-router-ssr-query": "^1.166.2",
     "@tanstack/react-start": "1.167.5",
-    "@xterm/addon-serialize": "0.15.0-beta.103",
-    "@xterm/headless": "6.1.0-beta.103",
     "crossws": "^0.4.4",
     "drizzle-orm": "^0.45.1",
     "nitro": "3.0.260311-beta",
@@ -58,9 +55,6 @@
     "react-dom": "^19.2.0",
     "tailwindcss": "^4.1.18",
     "zod": "^4.3.6"
-  },
-  "optionalDependencies": {
-    "@lydell/node-pty-darwin-arm64": "1.2.0-beta.3"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "catalog:cloudflare",

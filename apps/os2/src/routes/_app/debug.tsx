@@ -2,7 +2,7 @@ import { useCallback, useState } from "react";
 import type { PublicAppConfig } from "@iterate-com/shared/apps/config";
 import { useConfig } from "@iterate-com/ui/apps/config";
 import { useQuery } from "@tanstack/react-query";
-import { Link, createFileRoute } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { Button } from "@iterate-com/ui/components/button";
 import { toast } from "@iterate-com/ui/components/sonner";
 import type { AppConfig } from "~/app.ts";
@@ -84,19 +84,6 @@ function DebugPage() {
 
   return (
     <div className="space-y-8 p-4">
-      <section className="space-y-3">
-        <div className="space-y-1">
-          <h2 className="text-sm font-semibold">Runtime deps demo</h2>
-          <p className="text-sm text-muted-foreground">
-            The terminal route uses a runtime-injected PTY dep in Node and a not-implemented
-            fallback in Cloudflare.
-          </p>
-        </div>
-        <Button size="sm" nativeButton={false} render={<Link to="/terminal" />}>
-          Open web terminal
-        </Button>
-      </section>
-
       <section className="space-y-1">
         <h2 className="text-sm font-semibold">oRPC Ping</h2>
         <p className="text-sm text-muted-foreground">{`${ping.message} @ ${ping.serverTime}`}</p>

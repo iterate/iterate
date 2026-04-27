@@ -7,8 +7,6 @@ import type { SharedRequestLogger } from "@iterate-com/shared/request-logging";
 import manifest, { AppConfig } from "~/app.ts";
 import type { AppContext } from "~/context.ts";
 import * as schema from "~/db/schema.ts";
-import { spawnNodePtyProcess } from "~/lib/node-pty.ts";
-import { createTerminalWebSocketHooks } from "~/lib/terminal-websocket.ts";
 
 const env = z
   .object({
@@ -43,11 +41,6 @@ export function createNodeAppContext(args: {
     config,
     rawRequest: args.request,
     db,
-    pty: (request) =>
-      createTerminalWebSocketHooks({
-        request,
-        spawn: spawnNodePtyProcess,
-      }),
     log: args.log,
   };
 }

@@ -18,7 +18,7 @@ const manifest = {
   packageName: packageJson.name,
   version: packageJson.version,
   slug: "os",
-  description: "Minimal full-stack OS app with TanStack Start, oRPC, and a PTY websocket route.",
+  description: "Minimal full-stack OS app with TanStack Start and oRPC.",
 } as const satisfies AppManifest;
 
 export default manifest;

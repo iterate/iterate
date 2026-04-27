@@ -5,7 +5,6 @@ Minimal full-stack app: TanStack Start + oRPC over OpenAPI/HTTP + Drizzle, dual-
 ## Stack
 
 - **API:** oRPC over OpenAPI/HTTP at `/api`
-- **Terminal:** PTY websocket at `/api/pty`
 - **Frontend:** TanStack Start in SPA mode + TanStack Router + TanStack Query
 - **DB:** Drizzle ORM — better-sqlite3 (Node), D1 (Workers). Shared `BaseSQLiteDatabase<"sync" | "async">` type.
 - **Observability:** Node and Workers both use the shared `withEvlog()` runtime wrapper; shared `useEvlog()` only enriches a request-scoped log
@@ -23,7 +22,6 @@ Minimal full-stack app: TanStack Start + oRPC over OpenAPI/HTTP + Drizzle, dual-
 - `src/context.ts` — Start request context + oRPC context types
 - `src/router.tsx` — TanStack Router setup plus SSR Query integration
 - `src/routes/api.$.ts` — OpenAPI oRPC catch-all route mounted at `/api`
-- `src/routes/api.pty.ts` — PTY websocket route
 - `src/routes/__root.tsx` — root route with sidebar shell, SSR-loaded public config, shared app providers, and devtools
 - `vite.config.ts` — Node dev/build via Nitro
 - `vite.cf.config.ts` — Cloudflare dev/build (uses Alchemy plugin)
@@ -34,7 +32,7 @@ Minimal full-stack app: TanStack Start + oRPC over OpenAPI/HTTP + Drizzle, dual-
 
 The browser talks to `/api` over OpenAPI/HTTP. SSR uses `createRouterClient`
 for in-process calls with the same typed router. Runtime app context
-(`manifest`, `config`, `db`, `pty`, `log`) is attached in `entry.node.ts` /
+(`manifest`, `config`, `db`, `log`) is attached in `entry.node.ts` /
 `entry.workerd.ts`, and oRPC initial context is built from that runtime context
 plus `rawRequest`.
 

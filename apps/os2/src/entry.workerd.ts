@@ -1,10 +1,10 @@
 import { env as workerEnv } from "cloudflare:workers";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { withEvlog } from "@iterate-com/shared/apps/logging/with-evlog";
-import handler from "@tanstack/react-start/server-entry";
-import { drizzle as drizzleWorkerd } from "drizzle-orm/d1";
-import crossws from "crossws/adapters/cloudflare";
 import { NitroWebSocketResponse } from "@iterate-com/shared/nitro-ws-response";
+import handler from "@tanstack/react-start/server-entry";
+import crossws from "crossws/adapters/cloudflare";
+import { drizzle as drizzleWorkerd } from "drizzle-orm/d1";
 import manifest, { AppConfig } from "~/app.ts";
 import type { AppContext } from "~/context.ts";
 import * as schema from "~/db/schema.ts";
@@ -31,12 +31,6 @@ export default {
           config,
           rawRequest: request,
           db,
-          pty: () => ({
-            message: (peer) => {
-              peer.send(`\r\n\r\nTerminal is not available in the Cloudflare Worker runtime.\r\n`);
-              peer.close(4000, "Terminal not implemented");
-            },
-          }),
           log,
         };
 

@@ -99,7 +99,6 @@ async function assertSsrHtml(httpBaseUrl: string) {
   expect(res.ok).toBe(true);
 
   const html = await res.text();
-  expect(html).toContain("Runtime deps demo");
   expect(html).toContain("Pirate Secret");
   expect(html).toContain("Observability / failure demo");
 }
@@ -138,49 +137,11 @@ async function assertOrpcWebSocket(httpBaseUrl: string) {
   }
 }
 
-const COMMAND_PREFIX = "\x00[command]\x00";
-
-async function assertTerminalWebSocket(httpBaseUrl: string) {
-  const url = httpToWsUrl(httpBaseUrl, "/api/pty");
-
-  await new Promise<void>((resolve, reject) => {
-    const ws = new WebSocket(url);
-    const timer = setTimeout(() => {
-      ws.close();
-      reject(new Error("terminal WebSocket timeout"));
-    }, 5_000);
-
-    ws.addEventListener("open", () => {
-      ws.send(
-        COMMAND_PREFIX +
-          JSON.stringify({
-            type: "resize",
-            cols: 80,
-            rows: 24,
-          }),
-      );
-    });
-    ws.addEventListener("message", (event) => {
-      const text = typeof event.data === "string" ? event.data : String(event.data);
-      if (text.includes('"type":"ptyId"') || text.includes("Terminal is not available")) {
-        clearTimeout(timer);
-        ws.close();
-        resolve();
-      }
-    });
-    ws.addEventListener("error", () => {
-      clearTimeout(timer);
-      reject(new Error("terminal WebSocket error"));
-    });
-  });
-}
-
 async function assertFullStack(httpBaseUrl: string) {
   await assertSsrHtml(httpBaseUrl);
   await assertTypedClientPing(httpBaseUrl);
   await assertPublicConfigOverride(httpBaseUrl);
   await assertOrpcWebSocket(httpBaseUrl);
-  await assertTerminalWebSocket(httpBaseUrl);
 }
 
 async function waitForReady(httpBaseUrl: string, timeoutMs = 30_000) {
@@ -192,7 +153,7 @@ async function waitForReady(httpBaseUrl: string, timeoutMs = 30_000) {
       const res = await fetch(new URL("/debug", httpBaseUrl), {
         signal: AbortSignal.timeout(2_000),
       });
-      if (res.ok && (await res.text()).includes("Runtime deps demo")) {
+      if (res.ok && (await res.text()).includes("oRPC Ping")) {
         return;
       }
       last = new Error(`GET /debug -> ${res.status}`);
