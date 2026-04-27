@@ -1,0 +1,18 @@
+{
+  "name": "nested-facets-poc",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4"
+  },
+  "dependencies": {
+    "@cloudflare/shell": "^0.3.3",
+    "@cloudflare/worker-bundler": "^0.1.2",
+    "@iterate-com/events-contract": "workspace:*",
+    "isomorphic-git": "^1.37.5",
+    "postal-mime": "^2.4.1"
+  }
+}
