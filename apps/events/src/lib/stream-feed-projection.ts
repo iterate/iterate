@@ -29,8 +29,14 @@ import { buildWorkshopSemanticInsertions } from "~/lib/workshop-stream-reducer.t
  */
 const MAX_SAME_TYPE_RAW_GROUP = 50_000;
 
-export function projectWireToFeed(events: readonly Event[]): StreamFeedItem[] {
+export function projectWireToFeed(
+  events: readonly Event[],
+  options: { customInsertionsByOffset?: ReadonlyMap<number, StreamFeedItem[]> } = {},
+): StreamFeedItem[] {
   const insertionsByOffset = buildSemanticInsertions(events);
+  if (options.customInsertionsByOffset) {
+    mergeInsertions(insertionsByOffset, options.customInsertionsByOffset);
+  }
 
   return events.flatMap((event) => {
     const eventFeedItem = toEventFeedItem(event);

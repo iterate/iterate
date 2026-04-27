@@ -228,6 +228,7 @@ function expectedProcessorsWithTokenBucketCircuitBreaker() {
       subscribersBySlug: {},
     },
     "dynamic-worker": {
+      envVarsByKey: {},
       workersBySlug: {},
     },
     "jsonata-transformer": {
