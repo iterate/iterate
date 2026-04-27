@@ -9,7 +9,7 @@ import {
   updateProjectConfig,
 } from "~/db/queries/.generated/index.ts";
 import {
-  isProjectHostnameBaseHostname,
+  isReservedProjectHostname,
   isValidCustomHostname,
   normalizeCustomHostname,
 } from "~/lib/project-host-routing.ts";
@@ -23,10 +23,6 @@ type ProjectRow = {
   created_at: string;
   updated_at: string;
 };
-
-function typeIdEnv(typeIdPrefix: string) {
-  return { TYPEID_PREFIX: typeIdPrefix };
-}
 
 function toProject(row: ProjectRow) {
   return {
@@ -54,7 +50,7 @@ function normalizeConfigCustomHostname(
     });
   }
 
-  if (isProjectHostnameBaseHostname(customHostname, projectHostnameBases)) {
+  if (isReservedProjectHostname(customHostname, projectHostnameBases)) {
     throw new ORPCError("BAD_REQUEST", {
       message: "Custom hostname cannot use a reserved OS project hostname.",
     });
@@ -71,7 +67,7 @@ export const projectsRouter = {
   projects: {
     create: os.projects.create.handler(async ({ context, input }) => {
       const id = typeid({
-        env: typeIdEnv(context.config.typeIdPrefix.exposeSecret()),
+        env: { TYPEID_PREFIX: context.config.typeIdPrefix.exposeSecret() },
         prefix: "proj",
       });
 

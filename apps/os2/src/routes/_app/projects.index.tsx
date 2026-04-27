@@ -4,6 +4,7 @@ import { Link, createFileRoute } from "@tanstack/react-router";
 import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { Input } from "@iterate-com/ui/components/input";
+import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 import { orpc } from "~/orpc/client.ts";
 
@@ -19,7 +20,6 @@ function ProjectsIndexPage() {
   const queryClient = useQueryClient();
   const [slug, setSlug] = useState("");
   const [metadataJson, setMetadataJson] = useState('{\n  "owner": "os"\n}');
-  const [metadataError, setMetadataError] = useState<string | null>(null);
   const { data: projectsData } = useQuery({
     ...orpc.projects.list.queryOptions({ input: { limit: 20, offset: 0 } }),
     staleTime: 30_000,
@@ -30,9 +30,9 @@ function ProjectsIndexPage() {
       onSuccess: () => {
         setSlug("");
         setMetadataJson('{\n  "owner": "os"\n}');
-        setMetadataError(null);
         void queryClient.invalidateQueries({ queryKey: orpc.projects.list.key() });
       },
+      onError: (error) => toast.error(error.message),
     }),
   );
 
@@ -41,6 +41,7 @@ function ProjectsIndexPage() {
       onSuccess: () => {
         void queryClient.invalidateQueries({ queryKey: orpc.projects.list.key() });
       },
+      onError: (error) => toast.error(error.message),
     }),
   );
 
@@ -52,16 +53,15 @@ function ProjectsIndexPage() {
     try {
       const parsed = JSON.parse(metadataJson);
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        setMetadataError("Metadata must be a JSON object.");
+        toast.error("Metadata must be a JSON object.");
         return;
       }
       metadata = parsed as Record<string, unknown>;
     } catch {
-      setMetadataError("Metadata must be valid JSON.");
+      toast.error("Metadata must be valid JSON.");
       return;
     }
 
-    setMetadataError(null);
     createProject.mutate({ slug: projectSlug, metadata });
   }, [createProject, metadataJson, slug]);
 
@@ -95,7 +95,6 @@ function ProjectsIndexPage() {
             {createProject.isPending ? "Adding..." : "Add"}
           </Button>
         </div>
-        {metadataError && <p className="text-sm text-destructive">{metadataError}</p>}
       </div>
 
       <div className="overflow-x-auto rounded-lg border">

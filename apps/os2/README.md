@@ -70,9 +70,15 @@ sqlfu is the database source of truth:
 - `src/db/queries/*.sql` contains checked-in application queries
 - `src/db/queries/.generated` and `src/db/migrations/.generated` are regenerated with `pnpm sqlfu:generate`
 
-The current domain table is `projects`: `id`, `slug`, `metadata`, `created_at`,
-and `updated_at`. Project IDs are generated in TypeScript with the shared TypeID
-helper using local prefix `proj` and app config `typeIdPrefix`.
+The current domain table is `projects`: `id`, `slug`, `custom_hostname`,
+`metadata`, `created_at`, and `updated_at`. Project IDs are generated in
+TypeScript with the shared TypeID helper using local prefix `proj` and app
+config `typeIdPrefix`.
+
+`created_at` defaults in SQL. `updated_at` is set by the app's update queries
+instead of a SQLite trigger because the Cloudflare D1 migration API rejected the
+trigger migration with `SQL_INPUT_ERROR`/`incomplete input`, while Alchemy also
+needs to apply the same plain migration files during deploy.
 
 `alchemy.run.ts` points the Cloudflare D1 binding at `./src/db/migrations`, so
 `pnpm cf:dev` and `pnpm cf:deploy` apply the same SQL migrations that sqlfu

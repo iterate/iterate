@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  isProjectHostnameBaseHostname,
+  isReservedProjectHostname,
   isValidCustomHostname,
   normalizeCustomHostname,
   normalizeProjectHostnameBase,
@@ -46,8 +46,8 @@ describe("project host routing", () => {
   });
 
   it("detects hostnames reserved for project slug routing", () => {
-    expect(isProjectHostnameBaseHostname("os2.iterate.com", ["os2.iterate.com"])).toBe(true);
-    expect(isProjectHostnameBaseHostname("alpha.os2.iterate.com", ["os2.iterate.com"])).toBe(true);
-    expect(isProjectHostnameBaseHostname("alpha.example.com", ["os2.iterate.com"])).toBe(false);
+    expect(isReservedProjectHostname("os2.iterate.com", ["os2.iterate.com"])).toBe(true);
+    expect(isReservedProjectHostname("alpha.os2.iterate.com", ["os2.iterate.com"])).toBe(true);
+    expect(isReservedProjectHostname("alpha.example.com", ["os2.iterate.com"])).toBe(false);
   });
 });

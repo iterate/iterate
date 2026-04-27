@@ -4,6 +4,7 @@ import { Link, createFileRoute, useRouter } from "@tanstack/react-router";
 import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { Input } from "@iterate-com/ui/components/input";
+import { toast } from "@iterate-com/ui/components/sonner";
 import { orpc } from "~/orpc/client.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectId")({
@@ -32,7 +33,9 @@ function ProjectDetailPage() {
         void queryClient.invalidateQueries({ queryKey: orpc.projects.find.key() });
         void queryClient.invalidateQueries({ queryKey: orpc.projects.list.key() });
         void router.invalidate();
+        toast.success("Project config saved.");
       },
+      onError: (error) => toast.error(error.message),
     }),
   );
 
@@ -48,8 +51,7 @@ function ProjectDetailPage() {
       <div className="space-y-1">
         <h2 className="text-sm font-semibold">{project.slug}</h2>
         <p className="text-sm text-muted-foreground">
-          Detail page for the nested breadcrumb os. The second crumb comes from the route loader,
-          not from pathname parsing.
+          Update hostname routing and inspect the stored project fields.
         </p>
       </div>
 
@@ -77,9 +79,6 @@ function ProjectDetailPage() {
               {updateConfig.isPending ? "Saving..." : "Save"}
             </Button>
           </div>
-          {updateConfig.error && (
-            <p className="text-sm text-destructive">{updateConfig.error.message}</p>
-          )}
         </div>
 
         <div className="space-y-1">

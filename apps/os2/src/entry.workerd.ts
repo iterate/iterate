@@ -17,6 +17,48 @@ const config = parseAppConfigFromEnv({
 
 const mcpHandler = McpAgent.serve("/mcp", { binding: "ITERATE_MCP_SERVER" });
 
+export default {
+  async fetch(request: Request, env: Env, cfCtx: ExecutionContext) {
+    return withEvlog(
+      {
+        request,
+        manifest,
+        config,
+        executionCtx: cfCtx,
+      },
+      async ({ log }) => {
+        const url = new URL(request.url);
+        if (url.pathname === "/mcp" || url.pathname.startsWith("/mcp/")) {
+          if (isBrowserMcpRequest(request)) {
+            return mcpInstructionsResponse(request);
+          }
+
+          return mcpHandler.fetch(request, env, cfCtx);
+        }
+
+        const db = createD1Client(env.DB);
+        const context: AppContext = {
+          manifest,
+          config,
+          rawRequest: request,
+          db,
+          log,
+          projectHostnameBases: parseProjectHostnameBases(env.PROJECT_HOSTNAME_BASES),
+        };
+
+        const response = await handler.fetch(request, {
+          context,
+        });
+        if (response instanceof NitroWebSocketResponse) {
+          return crossws({ hooks: response.crossws }).handleUpgrade(request, env, cfCtx);
+        }
+
+        return response;
+      },
+    );
+  },
+};
+
 function isBrowserMcpRequest(request: Request) {
   if (request.method !== "GET" && request.method !== "HEAD") return false;
 
@@ -101,45 +143,3 @@ function parseProjectHostnameBases(value: string | undefined) {
     .map((entry) => entry.trim())
     .filter(Boolean);
 }
-
-export default {
-  async fetch(request: Request, env: Env, cfCtx: ExecutionContext) {
-    return withEvlog(
-      {
-        request,
-        manifest,
-        config,
-        executionCtx: cfCtx,
-      },
-      async ({ log }) => {
-        const url = new URL(request.url);
-        if (url.pathname === "/mcp" || url.pathname.startsWith("/mcp/")) {
-          if (isBrowserMcpRequest(request)) {
-            return mcpInstructionsResponse(request);
-          }
-
-          return mcpHandler.fetch(request, env, cfCtx);
-        }
-
-        const db = createD1Client(env.DB);
-        const context: AppContext = {
-          manifest,
-          config,
-          rawRequest: request,
-          db,
-          log,
-          projectHostnameBases: parseProjectHostnameBases(env.PROJECT_HOSTNAME_BASES),
-        };
-
-        const response = await handler.fetch(request, {
-          context,
-        });
-        if (response instanceof NitroWebSocketResponse) {
-          return crossws({ hooks: response.crossws }).handleUpgrade(request, env, cfCtx);
-        }
-
-        return response;
-      },
-    );
-  },
-};

@@ -20,7 +20,7 @@ export function isValidCustomHostname(hostname: string) {
   return hostnamePattern.test(hostname);
 }
 
-export function isProjectHostnameBaseHostname(
+export function isReservedProjectHostname(
   hostname: string,
   projectHostnameBases: readonly string[],
 ) {

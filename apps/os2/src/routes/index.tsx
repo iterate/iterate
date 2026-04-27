@@ -9,7 +9,7 @@ import {
   resolveProjectSlugFromHostname,
 } from "~/lib/project-host-routing.ts";
 
-type JSONValue = null | string | number | boolean | JSONValue[] | { [key: string]: JSONValue };
+type JsonValue = null | string | number | boolean | JsonValue[] | { [key: string]: JsonValue };
 
 type ProjectRow = {
   id: string;
@@ -25,7 +25,7 @@ function toProject(row: ProjectRow) {
     id: row.id,
     slug: row.slug,
     customHostname: row.custom_hostname ?? null,
-    metadata: JSON.parse(row.metadata) as Record<string, JSONValue>,
+    metadata: JSON.parse(row.metadata) as Record<string, JsonValue>,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
