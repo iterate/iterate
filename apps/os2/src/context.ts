@@ -7,6 +7,7 @@ export interface AppContext {
   config: AppConfig;
   db: Client;
   log: SharedRequestLogger;
+  projectHostnameBases: string[];
   rawRequest?: Request;
 }
 

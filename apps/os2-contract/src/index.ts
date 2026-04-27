@@ -7,6 +7,7 @@ const JSONObject = z.record(z.string(), z.unknown());
 const Project = z.object({
   id: z.string(),
   slug: z.string(),
+  customHostname: z.string().nullable(),
   metadata: JSONObject,
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -198,6 +199,21 @@ export const osContract = oc.router({
         tags: ["/projects"],
       })
       .input(z.object({ id: z.string() }))
+      .output(Project),
+    updateConfig: oc
+      .route({
+        method: "PATCH",
+        path: "/projects/{id}/config",
+        description: "Update project configuration",
+        tags: ["/projects"],
+      })
+      .input(
+        z.object({
+          id: z.string(),
+          customHostname: z.string().trim().nullable().optional(),
+          metadata: JSONObject.optional(),
+        }),
+      )
       .output(Project),
     remove: oc
       .route({

@@ -1,6 +1,9 @@
-import { Link, createFileRoute } from "@tanstack/react-router";
+import { useCallback, useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Link, createFileRoute, useRouter } from "@tanstack/react-router";
 import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
+import { Input } from "@iterate-com/ui/components/input";
 import { orpc } from "~/orpc/client.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectId")({
@@ -20,6 +23,25 @@ export const Route = createFileRoute("/_app/projects/$projectId")({
 
 function ProjectDetailPage() {
   const { project } = Route.useLoaderData();
+  const router = useRouter();
+  const queryClient = useQueryClient();
+  const [customHostname, setCustomHostname] = useState(project.customHostname ?? "");
+  const updateConfig = useMutation(
+    orpc.projects.updateConfig.mutationOptions({
+      onSuccess: () => {
+        void queryClient.invalidateQueries({ queryKey: orpc.projects.find.key() });
+        void queryClient.invalidateQueries({ queryKey: orpc.projects.list.key() });
+        void router.invalidate();
+      },
+    }),
+  );
+
+  const handleUpdateConfig = useCallback(() => {
+    updateConfig.mutate({
+      id: project.id,
+      customHostname: customHostname.trim() === "" ? null : customHostname,
+    });
+  }, [customHostname, project.id, updateConfig]);
 
   return (
     <section className="space-y-4 p-4">
@@ -40,6 +62,24 @@ function ProjectDetailPage() {
         <div className="space-y-1">
           <p className="text-xs uppercase tracking-wide text-muted-foreground">Identifier</p>
           <Identifier value={project.id} />
+        </div>
+
+        <div className="space-y-2">
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">Custom hostname</p>
+          <div className="flex gap-2">
+            <Input
+              placeholder="app.example.com"
+              value={customHostname}
+              onChange={(event) => setCustomHostname(event.target.value)}
+              onKeyDown={(event) => event.key === "Enter" && handleUpdateConfig()}
+            />
+            <Button size="sm" onClick={handleUpdateConfig} disabled={updateConfig.isPending}>
+              {updateConfig.isPending ? "Saving..." : "Save"}
+            </Button>
+          </div>
+          {updateConfig.error && (
+            <p className="text-sm text-destructive">{updateConfig.error.message}</p>
+          )}
         </div>
 
         <div className="space-y-1">

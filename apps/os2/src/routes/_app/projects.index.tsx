@@ -99,9 +99,10 @@ function ProjectsIndexPage() {
       </div>
 
       <div className="overflow-x-auto rounded-lg border">
-        <div className="grid min-w-[920px] grid-cols-[220px_160px_minmax(220px,1fr)_190px_190px_96px] border-b bg-muted/40 px-3 py-2 text-xs font-medium text-muted-foreground">
+        <div className="grid min-w-[1080px] grid-cols-[220px_160px_220px_minmax(220px,1fr)_190px_190px_96px] border-b bg-muted/40 px-3 py-2 text-xs font-medium text-muted-foreground">
           <div>ID</div>
           <div>Slug</div>
+          <div>Custom hostname</div>
           <div>Metadata</div>
           <div>Created</div>
           <div>Updated</div>
@@ -110,7 +111,7 @@ function ProjectsIndexPage() {
         {projectsData?.projects.map((project) => (
           <div
             key={project.id}
-            className="grid min-w-[920px] grid-cols-[220px_160px_minmax(220px,1fr)_190px_190px_96px] items-start gap-3 border-b px-3 py-3 text-sm last:border-b-0"
+            className="grid min-w-[1080px] grid-cols-[220px_160px_220px_minmax(220px,1fr)_190px_190px_96px] items-start gap-3 border-b px-3 py-3 text-sm last:border-b-0"
           >
             <Identifier value={project.id} textClassName="text-xs text-muted-foreground" />
             <Link
@@ -120,6 +121,9 @@ function ProjectsIndexPage() {
             >
               {project.slug}
             </Link>
+            <div className="truncate text-xs text-muted-foreground">
+              {project.customHostname ?? "None"}
+            </div>
             <code className="line-clamp-3 break-all rounded bg-muted px-2 py-1 font-mono text-xs">
               {formatMetadata(project.metadata)}
             </code>

@@ -3,29 +3,29 @@ import type { Client } from "sqlfu";
 const sql = `
 select id, slug, custom_hostname, metadata, created_at, updated_at
 from projects
-where id = ?
+where slug = ?
 limit 1;
 `.trim();
-const query = (params: getProjectById.Params) => ({
+const query = (params: getProjectBySlug.Params) => ({
   sql,
-  args: [params.id],
-  name: "getProjectById",
+  args: [params.slug],
+  name: "getProjectBySlug",
 });
 
-export const getProjectById = Object.assign(
-  async function getProjectById(
+export const getProjectBySlug = Object.assign(
+  async function getProjectBySlug(
     client: Client,
-    params: getProjectById.Params,
-  ): Promise<getProjectById.Result | null> {
-    const rows = await client.all<getProjectById.Result>(query(params));
+    params: getProjectBySlug.Params,
+  ): Promise<getProjectBySlug.Result | null> {
+    const rows = await client.all<getProjectBySlug.Result>(query(params));
     return rows.length > 0 ? rows[0] : null;
   },
   { sql, query },
 );
 
-export namespace getProjectById {
+export namespace getProjectBySlug {
   export type Params = {
-    id: string;
+    slug: string;
   };
   export type Result = {
     id: string;

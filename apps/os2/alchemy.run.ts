@@ -67,6 +67,17 @@ const app = await alchemy(APP_NAME, {
 const workerName = slugify(`${APP_NAME}-${app.stage}`);
 const primaryUrl = env.WORKER_ROUTES[0] ? `https://${env.WORKER_ROUTES[0]}` : undefined;
 const compatibilityFlags = ["nodejs_compat"];
+const projectHostnameBases = [
+  ...new Set(env.WORKER_ROUTES.map((hostname) => hostname.replace(/^\*\./, ""))),
+];
+const workerRouteHosts = [
+  ...new Set([
+    ...env.WORKER_ROUTES,
+    ...projectHostnameBases
+      .filter((hostname) => !hostname.endsWith(".workers.dev"))
+      .map((hostname) => `*.${hostname}`),
+  ]),
+];
 
 const db = await D1Database("os-db", {
   name: `${workerName}-db`,
@@ -109,12 +120,13 @@ export const worker = await TanStackStart(APP_NAME, {
   bindings: {
     DB: db,
     ITERATE_MCP_SERVER: iterateMcpServer.bindings.ITERATE_MCP_SERVER,
+    PROJECT_HOSTNAME_BASES: projectHostnameBases.join(","),
     APP_CONFIG: alchemy.secret(JSON.stringify(rawAppConfig, null, 2)),
   },
   wrangler: {
     main: "./src/entry.workerd.ts",
   },
-  routes: env.WORKER_ROUTES.map((hostname) => ({
+  routes: workerRouteHosts.map((hostname) => ({
     pattern: `${hostname}/*`,
     adopt: true,
   })),

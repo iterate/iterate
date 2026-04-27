@@ -3,7 +3,7 @@ import type { Client } from "sqlfu";
 const sql = `
 insert into projects (id, slug, metadata)
 values (?, ?, ?)
-returning id, slug, metadata, created_at, updated_at;
+returning id, slug, custom_hostname, metadata, created_at, updated_at;
 `.trim();
 const query = (params: insertProject.Params) => ({
   sql,
@@ -31,6 +31,7 @@ export namespace insertProject {
   export type Result = {
     id: string;
     slug: string;
+    custom_hostname?: string;
     metadata: string;
     created_at: string;
     updated_at: string;

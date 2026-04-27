@@ -17,6 +17,13 @@ const config = parseAppConfigFromEnv({
 
 const mcpHandler = McpAgent.serve("/mcp", { binding: "ITERATE_MCP_SERVER" });
 
+function parseProjectHostnameBases(value: string | undefined) {
+  return (value ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
 export default {
   async fetch(request: Request, env: Env, cfCtx: ExecutionContext) {
     return withEvlog(
@@ -39,6 +46,7 @@ export default {
           rawRequest: request,
           db,
           log,
+          projectHostnameBases: parseProjectHostnameBases(env.PROJECT_HOSTNAME_BASES),
         };
 
         const response = await handler.fetch(request, {
