@@ -12,10 +12,12 @@ Preview environments for `example`, `events`, `semaphore`, and `ingress-proxy` a
 
 The resource slug is the canonical preview environment identifier. Every other name is derived from it.
 
-For `events`, preview slots now use routed custom hosts from the slot Doppler config:
+For `events` and `os2`, preview slots use routed custom hosts from the slot Doppler config:
 
 - `events-preview-1.iterate.com`
 - `*.events-preview-1.iterate.com`
+- `os2-preview-1.iterate.com`
+- `*.os2-preview-1.iterate.com`
 
 That means host-sensitive preview features can behave like staging/production instead of being limited to a plain `workers.dev` host.
 
