@@ -26,10 +26,15 @@ describe("StreamState", () => {
       paused: false,
       pauseReason: null,
       pausedAt: null,
+      config: {
+        burstCapacity: 500,
+        refillRatePerMinute: 500,
+      },
       availableTokens: 100,
       lastRefillAtMs: null,
     });
     expect(parsed.processors["dynamic-worker"]).toEqual({
+      envVarsByKey: {},
       workersBySlug: {},
     });
   });

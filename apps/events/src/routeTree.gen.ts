@@ -25,6 +25,7 @@ import { Route as JsonataTransformerConfiguredRouteImport } from './routes/jsona
 import { Route as ErrorOccurredRouteImport } from './routes/error-occurred'
 import { Route as DynamicWorkerConfiguredRouteImport } from './routes/dynamic-worker-configured'
 import { Route as DocsRouteImport } from './routes/docs'
+import { Route as CircuitBreakerConfiguredRouteImport } from './routes/circuit-breaker-configured'
 import { Route as ChildStreamCreatedRouteImport } from './routes/child-stream-created'
 import { Route as BashmodeBlockAddedRouteImport } from './routes/bashmode-block-added'
 import { Route as AgentInputAddedRouteImport } from './routes/agent-input-added'
@@ -125,6 +126,12 @@ const DocsRoute = DocsRouteImport.update({
   path: '/docs',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CircuitBreakerConfiguredRoute =
+  CircuitBreakerConfiguredRouteImport.update({
+    id: '/circuit-breaker-configured',
+    path: '/circuit-breaker-configured',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ChildStreamCreatedRoute = ChildStreamCreatedRouteImport.update({
   id: '/child-stream-created',
   path: '/child-stream-created',
@@ -200,6 +207,7 @@ export interface FileRoutesByFullPath {
   '/agent-input-added': typeof AgentInputAddedRoute
   '/bashmode-block-added': typeof BashmodeBlockAddedRoute
   '/child-stream-created': typeof ChildStreamCreatedRoute
+  '/circuit-breaker-configured': typeof CircuitBreakerConfiguredRoute
   '/docs': typeof DocsRoute
   '/dynamic-worker-configured': typeof DynamicWorkerConfiguredRoute
   '/error-occurred': typeof ErrorOccurredRoute
@@ -231,6 +239,7 @@ export interface FileRoutesByTo {
   '/agent-input-added': typeof AgentInputAddedRoute
   '/bashmode-block-added': typeof BashmodeBlockAddedRoute
   '/child-stream-created': typeof ChildStreamCreatedRoute
+  '/circuit-breaker-configured': typeof CircuitBreakerConfiguredRoute
   '/docs': typeof DocsRoute
   '/dynamic-worker-configured': typeof DynamicWorkerConfiguredRoute
   '/error-occurred': typeof ErrorOccurredRoute
@@ -262,6 +271,7 @@ export interface FileRoutesById {
   '/agent-input-added': typeof AgentInputAddedRoute
   '/bashmode-block-added': typeof BashmodeBlockAddedRoute
   '/child-stream-created': typeof ChildStreamCreatedRoute
+  '/circuit-breaker-configured': typeof CircuitBreakerConfiguredRoute
   '/docs': typeof DocsRoute
   '/dynamic-worker-configured': typeof DynamicWorkerConfiguredRoute
   '/error-occurred': typeof ErrorOccurredRoute
@@ -295,6 +305,7 @@ export interface FileRouteTypes {
     | '/agent-input-added'
     | '/bashmode-block-added'
     | '/child-stream-created'
+    | '/circuit-breaker-configured'
     | '/docs'
     | '/dynamic-worker-configured'
     | '/error-occurred'
@@ -326,6 +337,7 @@ export interface FileRouteTypes {
     | '/agent-input-added'
     | '/bashmode-block-added'
     | '/child-stream-created'
+    | '/circuit-breaker-configured'
     | '/docs'
     | '/dynamic-worker-configured'
     | '/error-occurred'
@@ -356,6 +368,7 @@ export interface FileRouteTypes {
     | '/agent-input-added'
     | '/bashmode-block-added'
     | '/child-stream-created'
+    | '/circuit-breaker-configured'
     | '/docs'
     | '/dynamic-worker-configured'
     | '/error-occurred'
@@ -389,6 +402,7 @@ export interface RootRouteChildren {
   AgentInputAddedRoute: typeof AgentInputAddedRoute
   BashmodeBlockAddedRoute: typeof BashmodeBlockAddedRoute
   ChildStreamCreatedRoute: typeof ChildStreamCreatedRoute
+  CircuitBreakerConfiguredRoute: typeof CircuitBreakerConfiguredRoute
   DocsRoute: typeof DocsRoute
   DynamicWorkerConfiguredRoute: typeof DynamicWorkerConfiguredRoute
   ErrorOccurredRoute: typeof ErrorOccurredRoute
@@ -523,6 +537,13 @@ declare module '@tanstack/react-router' {
       path: '/docs'
       fullPath: '/docs'
       preLoaderRoute: typeof DocsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/circuit-breaker-configured': {
+      id: '/circuit-breaker-configured'
+      path: '/circuit-breaker-configured'
+      fullPath: '/circuit-breaker-configured'
+      preLoaderRoute: typeof CircuitBreakerConfiguredRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/child-stream-created': {
@@ -670,6 +691,7 @@ const rootRouteChildren: RootRouteChildren = {
   AgentInputAddedRoute: AgentInputAddedRoute,
   BashmodeBlockAddedRoute: BashmodeBlockAddedRoute,
   ChildStreamCreatedRoute: ChildStreamCreatedRoute,
+  CircuitBreakerConfiguredRoute: CircuitBreakerConfiguredRoute,
   DocsRoute: DocsRoute,
   DynamicWorkerConfiguredRoute: DynamicWorkerConfiguredRoute,
   ErrorOccurredRoute: ErrorOccurredRoute,

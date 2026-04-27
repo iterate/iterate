@@ -138,6 +138,10 @@ curl -sS "$BASE_URL/api/streams/__state/%2F" >/dev/null
           paused: false,
           pauseReason: null,
           pausedAt: null,
+          config: {
+            burstCapacity: 500,
+            refillRatePerMinute: 500,
+          },
           availableTokens: expect.any(Number),
           lastRefillAtMs: expect.any(Number),
         },
@@ -145,6 +149,7 @@ curl -sS "$BASE_URL/api/streams/__state/%2F" >/dev/null
           subscribersBySlug: {},
         },
         "dynamic-worker": {
+          envVarsByKey: {},
           workersBySlug: {},
         },
         "jsonata-transformer": {
@@ -164,6 +169,10 @@ curl -sS "$BASE_URL/api/streams/__state/%2F" >/dev/null
           paused: false,
           pauseReason: null,
           pausedAt: null,
+          config: {
+            burstCapacity: 500,
+            refillRatePerMinute: 500,
+          },
           availableTokens: expect.any(Number),
           lastRefillAtMs: expect.any(Number),
         },
@@ -171,6 +180,7 @@ curl -sS "$BASE_URL/api/streams/__state/%2F" >/dev/null
           subscribersBySlug: {},
         },
         "dynamic-worker": {
+          envVarsByKey: {},
           workersBySlug: {},
         },
         "jsonata-transformer": {

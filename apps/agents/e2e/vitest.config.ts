@@ -36,7 +36,7 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    fileParallelism: true,
+    fileParallelism: false,
     hookTimeout: 120_000,
     include: ["./e2e/vitest/**/*.test.ts"],
     provide: {

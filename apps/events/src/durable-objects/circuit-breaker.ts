@@ -1,4 +1,6 @@
 import {
+  type CircuitBreakerConfig,
+  CircuitBreakerConfiguredEvent,
   type CircuitBreakerState,
   StreamPausedError,
   StreamPausedEvent,
@@ -6,8 +8,14 @@ import {
 } from "@iterate-com/events-contract";
 import { defineBuiltinProcessor } from "@iterate-com/events-contract/sdk";
 
-const maxEventsPerSecond = 100;
-const refillRatePerMs = maxEventsPerSecond / 1_000;
+const defaultCircuitBreakerConfig: CircuitBreakerConfig = {
+  burstCapacity: 500,
+  refillRatePerMinute: 500,
+};
+
+function getRefillRatePerMs(config: CircuitBreakerConfig) {
+  return config.refillRatePerMinute / 60_000;
+}
 
 /**
  * Rate-limiting circuit breaker for event streams.
@@ -17,14 +25,13 @@ const refillRatePerMs = maxEventsPerSecond / 1_000;
  *
  * The mental model is:
  * - the bucket starts full, so a stream can absorb a short burst immediately
- * - tokens refill continuously at `maxEventsPerSecond`
+ * - tokens refill continuously at the configured per-minute rate
  * - every appended event spends one token
  * - if an event arrives after the bucket is already empty, the reducer records
  *   a negative balance and `afterAppend` turns that into `stream/paused`
  *
- * In practice this means the processor allows roughly `maxEventsPerSecond`
- * sustained throughput with a burst budget of about the same size, while only
- * persisting two rate-limiter fields:
+ * In practice this means the processor allows a configured sustained throughput
+ * with an explicit burst budget, while only persisting two rate-limiter fields:
  * - `availableTokens`
  * - `lastRefillAtMs`
  *
@@ -46,7 +53,8 @@ export const circuitBreakerProcessor = defineBuiltinProcessor<CircuitBreakerStat
     paused: false,
     pauseReason: null,
     pausedAt: null,
-    availableTokens: maxEventsPerSecond,
+    config: defaultCircuitBreakerConfig,
+    availableTokens: defaultCircuitBreakerConfig.burstCapacity,
     lastRefillAtMs: null,
   },
 
@@ -61,13 +69,24 @@ export const circuitBreakerProcessor = defineBuiltinProcessor<CircuitBreakerStat
 
   reduce({ event, state }) {
     const createdAtMs = Date.parse(event.createdAt);
+    const configuredEvent = CircuitBreakerConfiguredEvent.safeParse(event);
+    if (configuredEvent.success) {
+      return {
+        ...state,
+        config: configuredEvent.data.payload,
+        availableTokens: configuredEvent.data.payload.burstCapacity,
+        lastRefillAtMs: createdAtMs,
+      };
+    }
+
     const pausedEvent = StreamPausedEvent.safeParse(event);
     if (pausedEvent.success) {
       return {
         paused: true,
         pauseReason: pausedEvent.data.payload.reason ?? null,
         pausedAt: event.createdAt,
-        availableTokens: maxEventsPerSecond,
+        config: state.config,
+        availableTokens: state.config.burstCapacity,
         lastRefillAtMs: createdAtMs,
       };
     }
@@ -77,21 +96,23 @@ export const circuitBreakerProcessor = defineBuiltinProcessor<CircuitBreakerStat
         paused: false,
         pauseReason: null,
         pausedAt: null,
-        availableTokens: maxEventsPerSecond,
+        config: state.config,
+        availableTokens: state.config.burstCapacity,
         lastRefillAtMs: createdAtMs,
       };
     }
 
     // Rebuild the current bucket level from the last persisted balance plus
-    // the time that has elapsed since then. We cap at `maxEventsPerSecond`
+    // the time that has elapsed since then. We cap at `burstCapacity`
     // because idle time should restore the full burst budget, not accumulate
     // unbounded credit.
     const refilledTokens =
       state.lastRefillAtMs == null
-        ? maxEventsPerSecond
+        ? state.config.burstCapacity
         : Math.min(
-            maxEventsPerSecond,
-            state.availableTokens + (createdAtMs - state.lastRefillAtMs) * refillRatePerMs,
+            state.config.burstCapacity,
+            state.availableTokens +
+              (createdAtMs - state.lastRefillAtMs) * getRefillRatePerMs(state.config),
           );
 
     return {

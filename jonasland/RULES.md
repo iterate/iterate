@@ -60,6 +60,7 @@ process.env.JONASLAND_E2E_INGRESS_PROXY_DOMAIN ??
 - They must give additional context - it's helpful when they give usage examples or point to other places in the codebase
 - Comments that just explain what the next line does are dumb
 - Docstrings explaining arguments and types and interfaces etc are v helpful for the TS language server
+- Here is an example of an outstandingly documented source code file: https://github.com/capnproto/capnproto/blob/78bd96cef23811ea899d8f60f3d43082152acb36/c++/src/capnp/rpc.c++#L2096
 
 # Naming / Identifiers
 

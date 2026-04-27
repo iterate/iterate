@@ -4,6 +4,27 @@ import {
   GenericEventInput as GenericEventInputBase,
 } from "./event-base-types.ts";
 
+const iterateEventUriPrefix = "https://events.iterate.com/" as const;
+
+export const STREAM_CIRCUIT_BREAKER_CONFIGURED_TYPE =
+  `${iterateEventUriPrefix}events/stream/circuit-breaker-configured` as const;
+
+export const CircuitBreakerConfig = z.strictObject({
+  burstCapacity: z.number().int().positive(),
+  refillRatePerMinute: z.number().int().positive(),
+});
+export type CircuitBreakerConfig = z.infer<typeof CircuitBreakerConfig>;
+
+export const CircuitBreakerConfiguredEventInput = GenericEventInputBase.extend({
+  type: z.literal(STREAM_CIRCUIT_BREAKER_CONFIGURED_TYPE),
+  payload: CircuitBreakerConfig,
+});
+export const CircuitBreakerConfiguredEvent = GenericEventBase.extend(
+  CircuitBreakerConfiguredEventInput.pick({ type: true, payload: true }).shape,
+);
+export type CircuitBreakerConfiguredEventInput = z.infer<typeof CircuitBreakerConfiguredEventInput>;
+export type CircuitBreakerConfiguredEvent = z.infer<typeof CircuitBreakerConfiguredEvent>;
+
 export const StreamPausedEventInput = GenericEventInputBase.extend({
   type: z.literal("https://events.iterate.com/events/stream/paused"),
   payload: z.strictObject({
@@ -32,6 +53,10 @@ export const CircuitBreakerState = z.object({
   paused: z.boolean(),
   pauseReason: z.string().nullable(),
   pausedAt: z.string().nullable(),
+  config: CircuitBreakerConfig.default({
+    burstCapacity: 500,
+    refillRatePerMinute: 500,
+  }),
   availableTokens: z.number(),
   lastRefillAtMs: z.number().int().nonnegative().nullable(),
 });

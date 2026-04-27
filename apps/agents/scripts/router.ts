@@ -9,6 +9,7 @@ import {
   buildStreamAppendUrl,
   buildStreamViewerUrl,
 } from "../src/lib/events-urls.ts";
+import { createEphemeralWorker } from "../e2e/test-support/create-ephemeral-worker.ts";
 
 const DEFAULT_EVENTS_BASE_URL = "https://events.iterate.com";
 const DEFAULT_AGENT_CLASS = "iterate-agent";
@@ -71,7 +72,55 @@ const TunnelInput = z.object({
     .describe("Subscription slug on the stream (defaults to a random dev-<slug>)"),
 });
 
+const DeployEphemeralInput = z.object({
+  eventsBaseUrl: z
+    .string()
+    .trim()
+    .url()
+    .default(DEFAULT_EVENTS_BASE_URL)
+    .describe("Events base URL"),
+  eventsProjectSlug: z
+    .string()
+    .trim()
+    .min(1)
+    .default("ephemeral")
+    .describe("Events project slug for the ephemeral worker"),
+  egressProxy: z.string().trim().url().optional().describe("External egress proxy URL"),
+});
+
 export const router = {
+  deployEphemeral: os
+    .input(DeployEphemeralInput)
+    .meta({
+      description:
+        "Deploy an ephemeral Cloudflare Worker, print its URL, and tear it down on Ctrl+C. Requires ALCHEMY_STATE_TOKEN (from prd doppler config).",
+    })
+    .handler(async ({ input, signal }) => {
+      const worker = await createEphemeralWorker({
+        eventsBaseUrl: input.eventsBaseUrl.replace(/\/+$/, ""),
+        eventsProjectSlug: input.eventsProjectSlug,
+        egressProxy: input.egressProxy,
+      });
+
+      console.info(`\n  Ephemeral worker ready:\n`);
+      console.info(`    URL:   ${worker.url}`);
+      console.info(`    Stage: ${worker.stage}\n`);
+      console.info(`  Ctrl+C to tear down.\n`);
+
+      await new Promise<void>((resolve) => {
+        if (signal?.aborted) {
+          resolve();
+          return;
+        }
+        signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+
+      console.info("\nTearing down...");
+      await worker[Symbol.asyncDispose]();
+
+      return { ok: true as const, url: worker.url, stage: worker.stage };
+    }),
+
   tunnel: os
     .input(TunnelInput)
     .meta({

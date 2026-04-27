@@ -21,7 +21,11 @@ describe("circuitBreaker", () => {
       paused: false,
       pauseReason: null,
       pausedAt: null,
-      availableTokens: 99,
+      config: {
+        burstCapacity: 500,
+        refillRatePerMinute: 500,
+      },
+      availableTokens: 499,
       lastRefillAtMs: Date.parse("2026-04-02T12:00:00.000Z"),
     });
   });
@@ -81,7 +85,11 @@ describe("circuitBreaker", () => {
       paused: true,
       pauseReason: "too hot",
       pausedAt: "2026-04-02T12:00:00.000Z",
-      availableTokens: 100,
+      config: {
+        burstCapacity: 500,
+        refillRatePerMinute: 500,
+      },
+      availableTokens: 500,
       lastRefillAtMs: Date.parse("2026-04-02T12:00:00.000Z"),
     });
 
@@ -98,8 +106,41 @@ describe("circuitBreaker", () => {
       paused: false,
       pauseReason: null,
       pausedAt: null,
-      availableTokens: 100,
+      config: {
+        burstCapacity: 500,
+        refillRatePerMinute: 500,
+      },
+      availableTokens: 500,
       lastRefillAtMs: Date.parse("2026-04-02T12:00:05.000Z"),
+    });
+  });
+
+  test("reduce stores configured circuit breaker settings and resets the bucket", () => {
+    const nextState = circuitBreakerProcessor.reduce!({
+      state: {
+        ...structuredClone(circuitBreakerProcessor.initialState),
+        availableTokens: 123,
+      },
+      event: createEvent({
+        type: "https://events.iterate.com/events/stream/circuit-breaker-configured",
+        payload: {
+          burstCapacity: 750,
+          refillRatePerMinute: 1_200,
+        },
+        createdAt: "2026-04-02T12:00:02.000Z",
+      }),
+    });
+
+    expect(nextState).toEqual({
+      paused: false,
+      pauseReason: null,
+      pausedAt: null,
+      config: {
+        burstCapacity: 750,
+        refillRatePerMinute: 1_200,
+      },
+      availableTokens: 750,
+      lastRefillAtMs: Date.parse("2026-04-02T12:00:02.000Z"),
     });
   });
 
@@ -123,7 +164,11 @@ describe("circuitBreaker", () => {
       paused: false,
       pauseReason: null,
       pausedAt: null,
-      availableTokens: 99,
+      config: {
+        burstCapacity: 500,
+        refillRatePerMinute: 500,
+      },
+      availableTokens: 499,
       lastRefillAtMs: Date.parse("2026-04-02T12:00:00.500Z"),
     });
   });
@@ -131,7 +176,7 @@ describe("circuitBreaker", () => {
   test("reduce drives the bucket negative during a rapid burst", () => {
     let state = structuredClone(circuitBreakerProcessor.initialState);
 
-    for (let index = 0; index < 101; index += 1) {
+    for (let index = 0; index < 501; index += 1) {
       state = circuitBreakerProcessor.reduce!({
         state,
         event: createEvent({
@@ -148,7 +193,7 @@ describe("circuitBreaker", () => {
     let state = structuredClone(circuitBreakerProcessor.initialState);
     const base = Date.parse("2026-04-02T12:00:00.000Z");
 
-    for (let index = 0; index < 105; index += 1) {
+    for (let index = 0; index < 520; index += 1) {
       state = circuitBreakerProcessor.reduce!({
         state,
         event: createEvent({
@@ -177,6 +222,10 @@ describe("circuitBreaker", () => {
         paused: false,
         pauseReason: null,
         pausedAt: null,
+        config: {
+          burstCapacity: 500,
+          refillRatePerMinute: 500,
+        },
         availableTokens: -1,
         lastRefillAtMs: Date.parse("2026-04-02T12:00:00.000Z"),
       },
@@ -203,6 +252,10 @@ describe("circuitBreaker", () => {
           paused: false,
           pauseReason: null,
           pausedAt: null,
+          config: {
+            burstCapacity: 500,
+            refillRatePerMinute: 500,
+          },
           availableTokens: -1,
           lastRefillAtMs: Date.parse("2026-04-02T12:00:00.000Z"),
         },

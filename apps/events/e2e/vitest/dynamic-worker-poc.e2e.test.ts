@@ -225,6 +225,10 @@ describe("dynamic worker processor", () => {
             paused: false,
             pauseReason: null,
             pausedAt: null,
+            config: {
+              burstCapacity: 500,
+              refillRatePerMinute: 500,
+            },
             availableTokens: expect.any(Number),
             lastRefillAtMs: expect.any(Number),
           },

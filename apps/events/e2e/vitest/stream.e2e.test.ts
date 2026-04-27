@@ -30,8 +30,8 @@ const testTimeoutMs = 10_000;
 const circuitBreakerTripTimeoutMs = 15_000;
 const circuitBreakerSlowTestTimeoutMs = 20_000;
 const slowCircuitBreakerDelayMs = 20;
-const rapidCircuitBreakerEventCount = 140;
-const slowCircuitBreakerEventCount = 105;
+const rapidCircuitBreakerEventCount = 540;
+const slowCircuitBreakerEventCount = 540;
 
 describe.sequential("events stream e2e", () => {
   test(
@@ -375,7 +375,7 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
-    "a burst of 100+ quick appends trips the circuit breaker and pauses the stream",
+    "a burst of 500+ quick appends trips the circuit breaker and pauses the stream",
     async () => {
       const path = uniqueStreamPath();
 
@@ -1388,6 +1388,10 @@ function expectedProcessorsWithTokenBucketCircuitBreaker() {
       paused: false,
       pauseReason: null,
       pausedAt: null,
+      config: {
+        burstCapacity: 500,
+        refillRatePerMinute: 500,
+      },
       availableTokens: expect.any(Number),
       lastRefillAtMs: expect.any(Number),
     },
@@ -1395,6 +1399,7 @@ function expectedProcessorsWithTokenBucketCircuitBreaker() {
       subscribersBySlug: {},
     },
     "dynamic-worker": {
+      envVarsByKey: {},
       workersBySlug: {},
     },
     "jsonata-transformer": {

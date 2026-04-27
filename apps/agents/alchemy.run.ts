@@ -3,6 +3,7 @@ import { slugify } from "@iterate-com/shared/slugify";
 import alchemy, { type Scope } from "alchemy";
 import {
   Ai,
+  D1Database,
   DurableObjectNamespace,
   Self,
   TanStackStart,
@@ -77,8 +78,24 @@ const app = await alchemy(APP_NAME, {
 // when the worker name contains characters outside `[a-z0-9-]` (e.g. Doppler
 // personal configs use `dev_<username>` as the stage).
 const workerName = slugify(`${APP_NAME}-${app.stage}`);
+const db = await D1Database("agents-db", {
+  name: `${workerName}-db`,
+  migrationsDir: "./drizzle",
+  adopt: true,
+});
 const iterateAgent = DurableObjectNamespace<IterateAgent>("iterate-agent", {
   className: "IterateAgent",
+  sqlite: true,
+});
+// Deliberately no `<ChildStreamAutoSubscriber>` type parameter here: combined
+// with `DurableObjectNamespace<IterateAgent>` above, TS ends up following
+// `Agent<CloudflareEnv>` → `typeof worker.Env` → back to both DOs and reports
+// `worker` as recursively referencing itself. Skipping the type parameter on
+// the second binding breaks that cycle without losing correctness: the class
+// itself still extends `Agent<CloudflareEnv>`, and `entry.workerd.ts` imports
+// it by value.
+const childStreamAutoSubscriber = DurableObjectNamespace("child-stream-auto-subscriber", {
+  className: "ChildStreamAutoSubscriber",
   sqlite: true,
 });
 
@@ -86,7 +103,9 @@ export const worker = await TanStackStart(APP_NAME, {
   name: workerName,
   adopt: true,
   bindings: {
+    DB: db,
     ITERATE_AGENT: iterateAgent,
+    CHILD_STREAM_AUTO_SUBSCRIBER: childStreamAutoSubscriber,
     LOADER: WorkerLoader(),
     AI: Ai(),
     APP_CONFIG: alchemy.secret(JSON.stringify(rawAppConfig, null, 2)),

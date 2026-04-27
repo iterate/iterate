@@ -7,6 +7,8 @@ import {
   StreamPath,
 } from "./event-base-types.ts";
 import {
+  CircuitBreakerConfiguredEvent,
+  CircuitBreakerConfiguredEventInput,
   CircuitBreakerState,
   StreamPausedEvent,
   StreamPausedEventInput,
@@ -151,6 +153,7 @@ const builtInEventInputOptions = [
   JsonataTransformerConfiguredEventInput,
   DynamicWorkerConfiguredEventInput,
   DynamicWorkerEnvVarSetEventInput,
+  CircuitBreakerConfiguredEventInput,
   StreamPausedEventInput,
   StreamResumedEventInput,
 ] as const;
@@ -171,6 +174,7 @@ const builtInEventOptions = [
   JsonataTransformerConfiguredEvent,
   DynamicWorkerConfiguredEvent,
   DynamicWorkerEnvVarSetEvent,
+  CircuitBreakerConfiguredEvent,
   StreamPausedEvent,
   StreamResumedEvent,
 ] as const;

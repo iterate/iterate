@@ -5,8 +5,11 @@ import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { createExternalEgressProxyFetch } from "@iterate-com/shared/apps/fetch-egress-proxy";
 import { withEvlog } from "@iterate-com/shared/apps/logging/with-evlog";
 import handler from "@tanstack/react-start/server-entry";
+import { drizzle as drizzleWorkerd } from "drizzle-orm/d1";
 import manifest, { AppConfig } from "~/app.ts";
 import type { AppContext } from "~/context.ts";
+import * as schema from "~/db/schema.ts";
+import { ChildStreamAutoSubscriber } from "~/durable-objects/child-stream-auto-subscriber.ts";
 import { IterateAgent } from "~/durable-objects/iterate-agent.ts";
 
 const nativeFetch = globalThis.fetch.bind(globalThis);
@@ -53,10 +56,12 @@ export default {
           return agentResponse;
         }
 
+        const db = drizzleWorkerd(env.DB, { schema });
         const context: AppContext = {
           manifest,
           config,
           env,
+          db,
           rawRequest: request,
           log,
         };
@@ -67,4 +72,4 @@ export default {
   },
 };
 
-export { IterateAgent };
+export { ChildStreamAutoSubscriber, IterateAgent };

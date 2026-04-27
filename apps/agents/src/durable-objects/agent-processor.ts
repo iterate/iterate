@@ -1,53 +1,123 @@
-import { DynamicWorkerExecutor } from "@cloudflare/codemode";
-import { resolveProvider } from "@cloudflare/codemode/ai";
-import {
-  GenericEvent as GenericEventBase,
-  GenericEventInput as GenericEventInputBase,
-  type EventInput,
-} from "@iterate-com/events-contract";
+import type { resolveProvider } from "@cloudflare/codemode/ai";
+import { type EventInput, type GenericEventInput } from "@iterate-com/events-contract";
 import { match } from "schematch";
 import { z } from "zod";
-import { parseSseStream } from "./sse.ts";
-import type { CreateMcpToolProvidersOptions } from "~/lib/mcp-tool-providers.ts";
-import { createMcpToolProviders } from "~/lib/mcp-tool-providers.ts";
+import {
+  AgentInputAddedEvent,
+  AgentInputAddedEventInput,
+  type AgentInputAddedPayload,
+  AiChatRequest,
+  CodemodeBlockAddedEvent,
+  CodemodeResultAddedEvent,
+  CodemodeResultAddedEventInput,
+  DebugInfoRequestedEvent,
+  DebugInfoReturnedEventInput,
+  IterateAgentProcessorState,
+  type LlmCancellationReason,
+  LlmConfigUpdatedEvent,
+  LlmRequestCancelledEvent,
+  LlmRequestCancelledEventInput,
+  LlmRequestCompletedEvent,
+  LlmRequestQueuedEvent,
+  LlmRequestQueuedEventInput,
+  LlmRequestScheduledEvent,
+  LlmRequestScheduledEventInput,
+  LlmRequestStartedEvent,
+  SystemPromptUpdatedEvent,
+  type TriggerLlm,
+} from "./agent-processor-types.ts";
 
 /**
-High level design ideas:
+ * `TriggerLlm` after `auto` has been resolved against the message role.
+ * `handleUserInput` works with this narrower type so the dispatch is
+ * exhaustive without a defensive `auto` branch.
+ */
+type ConcreteTriggerLlm = Exclude<TriggerLlm, { behaviour: "auto" }>;
+import type { CreateMcpToolProvidersOptions } from "~/lib/mcp-tool-providers.ts";
 
-- Main event type is "agent-input-added"
-- We track all raw information as it happens - e.g. LLM requests and response streaming chunks
-- We then _convert_ that to "agent-input-added" events
-- Reducer keeps track of 
-  - LLM model
-  - env.AI run options (e.g. gateway config)
-  - normalized LLM history 
-  - system prompt
-  - in-progress response
-  - in-progress llm request
+// `@cloudflare/codemode` and `mcp-tool-providers` transitively pull in
+// `cloudflare:workers`, which Node's ESM loader cannot resolve. The codemode
+// path is only ever exercised inside `CodemodeBlockAddedEvent` (runs in the DO
+// in production / e2e), so we lazy-load it. This keeps the trigger logic in
+// this module loadable from the node-pool unit tests in
+// `agent-processor.test.ts`.
+async function loadCodemodeRuntime() {
+  const [{ DynamicWorkerExecutor }, { resolveProvider }, { createMcpToolProviders }] =
+    await Promise.all([
+      import("@cloudflare/codemode"),
+      import("@cloudflare/codemode/ai"),
+      import("~/lib/mcp-tool-providers.ts"),
+    ]);
+  return { DynamicWorkerExecutor, resolveProvider, createMcpToolProviders };
+}
 
+// Re-export so existing consumers (e.g. iterate-agent.ts) can keep importing
+// state types from here.
+export {
+  IterateAgentProcessorState,
+  type LlmCancellationReason,
+  type LlmModel,
+} from "./agent-processor-types.ts";
 
-
-
- * Processor for `codemode-block-added` and `agent-input-added` events.
+/**
+ * Processor for `codemode-block-added`, `agent-input-added`, and
+ * `llm-request-*` lifecycle events.
  *
- * - `reduce` updates the KV-persisted chat history projection. Every
- *   `agent-input-added` event (user or assistant) is appended to history.
- * - `afterAppend` runs side effects:
- *   - `codemode-block-added`: execute user script, emit `codemode-result-added`.
- *   - `agent-input-added` (role: user): call Workers AI with `stream: true`, emit
- *     `llm-request-started`, one `llm-streaming-chunk-received` per SSE chunk,
- *     then `llm-request-completed`.
- *   - `llm-streaming-chunk-received`: if the raw chunk matches one of the
- *     per-provider text schemas (`WorkersAiTextChunk`, `OpenAiTextChunk`,
- *     `AnthropicTextChunk`), emit an `agent-input-added` (role: assistant)
- *     carrying the text delta. Non-text chunks (tool calls, usage, message
- *     boundaries, keep-alives) are ignored here; downstream consumers can
- *     parse them from the raw event log.
+ * # Reduce
  *
- * The chunk payload itself is stored un-normalized — schemas are used only to
- * discriminate shapes for emitting the assistant event.
+ * Pure projection of state from the event log:
  *
- * The caller owns transport via the supplied `append`.
+ * - `system-prompt-updated`: replaces `state.systemPrompt`. Never written to history.
+ * - `agent-input-added`: appends a plain `{ role, content }` history item.
+ *   The `triggerLlmRequest` field is a scheduling knob and is not persisted.
+ * - `llm-request-scheduled`: sets `currentRequest` and resets
+ *   `pendingTriggerCount` (the new request absorbs queued triggers).
+ * - `llm-request-started`: sets `currentRequest`. Does NOT reset
+ *   `pendingTriggerCount` so triggers arriving during the
+ *   `scheduled → started` window are not lost.
+ * - `llm-request-completed` / `llm-request-cancelled`: clears `currentRequest`
+ *   when the id matches.
+ * - `llm-request-queued`: increments `pendingTriggerCount`.
+ *
+ * # AfterAppend
+ *
+ * Side effects, expressed via the supplied `runtime` and `append` callbacks:
+ *
+ * - `codemode-block-added`: execute user script → emit `codemode-result-added`.
+ * - `codemode-result-added`: append a synthetic user `agent-input-added` so
+ *   the result is visible to the model on the next turn (the default `auto`
+ *   behaviour resolves to `interrupt-current-request` for the user role).
+ * - `agent-input-added` (role: user, behaviour != dont-trigger-request):
+ *   drives the trigger FSM. While a request is `scheduled` (still inside
+ *   the debounce window) every user trigger silently extends the debounce
+ *   timer so the LLM fires `debounceMs` after the *last* input, not the
+ *   first. Cancel + restart and the associated rewrite only happen against
+ *   a `running` request. See `handleUserInput` below.
+ * - `llm-request-completed` / `llm-request-cancelled`: if there are
+ *   pending queued triggers, append a follow-up rewrite and fire a
+ *   follow-up request via the same `emitScheduledAndKickoff` path as
+ *   direct triggers.
+ * - `llm-request-cancelled`: also appends a "your previous response was
+ *   interrupted" rewrite so the conversation log carries an explicit note.
+ *   Only ever fires for a running request, so the rewrite is always
+ *   meaningful (the model actually started speaking).
+ * - `debug-info-requested`: emits `debug-info-returned` carrying `state` plus
+ *   the synchronous `runtime.inflight()` view. Useful for debugging via the
+ *   stream alone, no extra HTTP endpoint needed.
+ *
+ * # Runtime
+ *
+ * The processor reasons about "is a request currently running right now?"
+ * via the supplied `runtime`. We do *not* read `state.currentRequest` for
+ * trigger decisions because events appended in `afterAppend` round-trip
+ * through the events server before being reduced — the projection is
+ * eventually consistent, while DO-tracked runtime state is synchronous.
+ *
+ * The caller (DO) owns transport (`append`), execution (`runtime`), and
+ * lifecycle (`scheduleLlmRequest` arms a debounce timer; when it fires the
+ * runtime appends `llm-request-started`, calls `ai.run` via `ctx.waitUntil`,
+ * and on settle appends the resulting `agent-input-added` and
+ * `llm-request-completed` events).
  *
  * TODO: the `codemode-block-added` / `codemode-result-added` payloads diverge from
  * `apps/events/src/lib/workshop-stream-reducer.ts`; needs a canonical contract in
@@ -55,83 +125,271 @@ High level design ideas:
  */
 
 /**
- * Typed chat contract for the LLM models we use in this processor.
+ * Synchronous in-memory view of "what's actually executing right now in this
+ * DO instance", plus the levers to schedule/cancel requests.
  *
- * Most providers we call via `env.AI.run(...)` accept the shared chat-completions
- * shape below directly. Anthropic's native binding shape differs, so
- * `normalizeLlmRequest()` rewrites only that case.
+ * Implemented by `iterate-agent.ts`. Kept narrow on purpose — anything richer
+ * should be derived from `state` instead.
  */
-const AiChatMessage = z.object({
-  role: z.enum(["system", "user", "assistant"]),
-  content: z.string(),
-});
-
-const AiChatRequest = z.object({
-  messages: z.array(AiChatMessage).min(1),
-  max_tokens: z.number().int().positive().optional(),
-  temperature: z.number().optional(),
-  top_p: z.number().optional(),
-});
-type AiChatRequest = z.infer<typeof AiChatRequest>;
-
-/**
- * Cloudflare's `AiModels` map includes many non-chat models (embeddings, TTS,
- * image generation, etc.). This filters it down to Workers AI model keys whose
- * `inputs` accept the shared chat request shape above.
- */
-type WorkersAiChatModel = {
-  [Name in keyof AiModels]: AiChatRequest extends AiModels[Name]["inputs"] ? Name : never;
-}[keyof AiModels];
-
-type LlmModel = WorkersAiChatModel | `openai/${string}` | `anthropic/${string}`;
-
-const AnthropicMessage = z.object({
-  role: z.enum(["user", "assistant"]),
-  content: z.array(z.object({ type: z.literal("text"), text: z.string() })).min(1),
-});
-const AnthropicChatRequest = z.object({
-  system: z.string().optional(),
-  messages: z.array(AnthropicMessage).min(1),
-  max_tokens: z.number().int().positive(),
-  temperature: z.number().optional(),
-  top_p: z.number().optional(),
-});
-type AnthropicChatRequest = z.infer<typeof AnthropicChatRequest>;
-
-type LlmRunBody = AiChatRequest | AnthropicChatRequest;
-
-function isAnthropicModel(model: LlmModel): model is `anthropic/${string}` {
-  return model.startsWith("anthropic/");
+export interface ProcessorRuntime {
+  /**
+   * Synchronous snapshot of the next-up / currently-running request, or null
+   * when idle.
+   *
+   * - `status: "scheduled"` — debounce timer is arming; `ai.run` has not yet
+   *   been invoked. Cancellable via `cancelLlmRequest` (clears the timer).
+   * - `status: "running"` — `ai.run` is in flight. Cancellable via
+   *   `cancelLlmRequest` (aborts the controller, best-effort).
+   */
+  inflight(): { requestId: string; status: "scheduled" | "running" } | null;
+  /**
+   * Arm a debounce timer for a new request. When it fires the DO appends
+   * `llm-request-started`, invokes `ai.run`, and on settle appends
+   * `agent-input-added` (assistant) + `llm-request-completed`. Caller appends
+   * the corresponding `llm-request-scheduled` event so the schedule lands on
+   * the event log.
+   */
+  scheduleLlmRequest(args: { debounceMs: number }): { requestId: string };
+  /**
+   * Push out the debounce timer of an already-scheduled request — true
+   * debounce semantics: the LLM fires `debounceMs` after the *last* input,
+   * not after the first one in a burst. Same `requestId`, no event on the
+   * wire (the `agent-input-added` events already mark the activity, and
+   * `llm-request-started`'s timestamp is the source of truth for when the
+   * model actually ran). No-op if `requestId` no longer matches.
+   */
+  extendDebounce(args: { requestId: string; debounceMs: number }): void;
+  /**
+   * Cancel the in-flight request. Clears the debounce timer if still
+   * scheduled; aborts the controller if already running (best-effort —
+   * `env.AI.run` may not honour the signal). Caller appends
+   * `llm-request-cancelled` so the cancellation lands on the event log.
+   */
+  cancelLlmRequest(args: { requestId: string }): void;
+  /**
+   * Used by `trigger-request-within-time-period`. Arms a deadline timer
+   * that — if the request `requestId` is still running when it fires —
+   * cancels the request and appends `llm-request-cancelled` (reason
+   * `deadline-exceeded`) to the stream. The existing
+   * `LlmRequestCancelledEvent` afterAppend handler then schedules the
+   * follow-up via the queued-trigger path.
+   *
+   * The runtime (not the processor) emits the cancellation event because
+   * by the time the timer fires the original `afterAppend` callstack is
+   * long gone — there is no `append` callback to hand back.
+   *
+   * No-op if `requestId` is no longer the in-flight one when the timer
+   * fires (e.g. the request settled naturally or was cancelled by another
+   * path).
+   */
+  armCancelDeadline(args: { requestId: string; withinMs: number }): void;
 }
 
 /**
- * Returns the provider-specific body shape expected by `env.AI.run(model, body)`.
+ * Resolves `triggerLlmRequest`'s `auto` behaviour to a concrete one based
+ * on the message role.
  *
- * - Workers AI `@cf/*` models: shared chat body unchanged
- * - OpenAI via Unified Billing: shared chat body unchanged
- * - Anthropic via Unified Billing: rewrite to Anthropic's native body shape
+ * - `assistant` → `dont-trigger-request`. Assistant turns are model output
+ *   that the processor itself just appended, so they must never re-trigger.
+ * - everything else (`user`, future `developer`) → `interrupt-current-request`.
+ *   Matches the pre-feature behaviour of "every user message kicks off a
+ *   fresh request".
+ *
+ * Non-`auto` behaviours are returned unchanged.
  */
-function normalizeLlmRequest(args: { model: LlmModel; request: AiChatRequest }): LlmRunBody {
-  const request = AiChatRequest.parse(args.request);
-  if (!isAnthropicModel(args.model)) {
-    return request;
+function resolveTrigger(payload: AgentInputAddedPayload): ConcreteTriggerLlm {
+  if (payload.triggerLlmRequest.behaviour !== "auto") return payload.triggerLlmRequest;
+  return payload.role === "assistant"
+    ? { behaviour: "dont-trigger-request" }
+    : { behaviour: "interrupt-current-request" };
+}
+
+export function buildLlmChatRequest(state: IterateAgentProcessorState): AiChatRequest {
+  return AiChatRequest.parse({
+    messages: [
+      { role: "system", content: state.systemPrompt },
+      ...state.history.map((m) => ({ role: m.role, content: m.content })),
+    ],
+  });
+}
+
+/** OpenAI chat-completions shape (often returned when routing via AI Gateway). */
+const OpenAiChatCompletionResponse = z.object({
+  choices: z.array(z.object({ message: z.object({ content: z.string() }) })).min(1),
+});
+
+/** Anthropic-style message payload (rare here, but cheap to accept). */
+const AnthropicAssistantMessage = z.object({
+  content: z.array(z.object({ type: z.string(), text: z.string().optional() })).min(1),
+});
+
+/** Native Workers AI text response for `@cf/*` chat-style models. */
+const WorkersAiChatResponse = z.object({
+  response: z.string(),
+});
+
+export function extractLlmAssistantText(raw: unknown): string {
+  if (typeof raw === "string") return raw;
+  return match(raw)
+    .case(OpenAiChatCompletionResponse, (r) => r.choices[0].message.content)
+    .case(AnthropicAssistantMessage, (r) =>
+      r.content
+        .filter((b) => b.type === "text")
+        .map((b) => b.text ?? "")
+        .join(""),
+    )
+    .case(WorkersAiChatResponse, (r) => r.response)
+    .default(match.throw);
+}
+
+type Append = (input: { event: EventInput }) => void | Promise<void>;
+
+/**
+ * Schedule a fresh request via the runtime, then append `llm-request-scheduled`
+ * so the wire log carries the same intent. Used by every "fire a request" path
+ * in `afterAppend` — direct user trigger, queued follow-up, post-cancel
+ * follow-up — so debounce + `requestId` minting stay in one place.
+ */
+async function emitScheduledAndKickoff(args: {
+  runtime: ProcessorRuntime;
+  append: Append;
+  state: IterateAgentProcessorState;
+}): Promise<void> {
+  const debounceMs = args.state.llmConfig.debounceMs;
+  const { requestId } = args.runtime.scheduleLlmRequest({ debounceMs });
+  await args.append({
+    event: LlmRequestScheduledEventInput.parse({
+      type: "llm-request-scheduled",
+      payload: { requestId, debounceMs, model: args.state.llmConfig.model },
+    }),
+  });
+}
+
+async function emitCancelled(args: {
+  runtime: ProcessorRuntime;
+  append: Append;
+  requestId: string;
+  reason: LlmCancellationReason;
+}): Promise<void> {
+  args.runtime.cancelLlmRequest({ requestId: args.requestId });
+  await args.append({
+    event: LlmRequestCancelledEventInput.parse({
+      type: "llm-request-cancelled",
+      payload: { requestId: args.requestId, reason: args.reason },
+    }),
+  });
+}
+
+/**
+ * Append a human-readable `agent-input-added` (role: user,
+ * `dont-trigger-request`) that "rewrites" a machine event into the
+ * conversation. The string is for the model's eyes only — phrasing may
+ * change; consumers should not pattern match on the literal text. Always
+ * `dont-trigger-request` so the rewrite cannot recursively spawn requests.
+ */
+async function appendRewrite(args: { append: Append; content: string }): Promise<void> {
+  await args.append({
+    event: AgentInputAddedEventInput.parse({
+      type: "agent-input-added",
+      payload: {
+        role: "user",
+        content: args.content,
+        triggerLlmRequest: { behaviour: "dont-trigger-request" },
+      },
+    }),
+  });
+}
+
+function rewriteContentForCancellation(reason: LlmCancellationReason): string {
+  if (reason === "interrupted-by-user-input") {
+    return "[your previous response was interrupted by new user input before you could finish]";
+  }
+  if (reason === "deadline-exceeded") {
+    return "[your previous response took too long; a new one is being started in its place]";
+  }
+  return `[your previous response was cancelled (${reason})]`;
+}
+
+function rewriteContentForFollowup(pendingTriggerCount: number): string {
+  return pendingTriggerCount === 1
+    ? "[continuing — 1 user message arrived while you were responding]"
+    : `[continuing — ${pendingTriggerCount} user messages arrived while you were responding]`;
+}
+
+/** Append `llm-request-queued` so the reducer bumps `pendingTriggerCount`. */
+async function emitQueued(args: { append: Append }): Promise<void> {
+  await args.append({
+    event: LlmRequestQueuedEventInput.parse({
+      type: "llm-request-queued",
+      payload: {},
+    }),
+  });
+}
+
+async function handleUserInput(args: {
+  runtime: ProcessorRuntime;
+  append: Append;
+  state: IterateAgentProcessorState;
+  trigger: ConcreteTriggerLlm;
+}): Promise<void> {
+  const { runtime, append, state, trigger } = args;
+  if (trigger.behaviour === "dont-trigger-request") return;
+  const inflight = runtime.inflight();
+
+  // No request armed yet → kick one off. Debounce window starts here.
+  if (inflight === null) {
+    await emitScheduledAndKickoff({ runtime, append, state });
+    return;
   }
 
-  const system = request.messages.find((message) => message.role === "system")?.content;
-  const messages = request.messages
-    .filter((message) => message.role !== "system")
-    .map((message) => ({
-      role: message.role,
-      content: [{ type: "text", text: message.content }],
-    }));
+  // A request is armed but `ai.run` hasn't started yet — we're inside the
+  // debounce window. Push the timer out so the LLM fires `debounceMs` after
+  // *this* turn rather than after the first message in a burst. The pending
+  // request will absorb every input that landed in the window via
+  // `state.history`. The interrupt-vs-wait distinction is meaningless while
+  // the LLM hasn't started speaking yet, so all triggering behaviours
+  // collapse to the same thing here: no cancel/restart, no rewrite, no
+  // extra wire-log event — folding bursty input into one request is the
+  // entire point.
+  if (inflight.status === "scheduled") {
+    runtime.extendDebounce({
+      requestId: inflight.requestId,
+      debounceMs: state.llmConfig.debounceMs,
+    });
+    return;
+  }
 
-  return AnthropicChatRequest.parse({
-    ...(system ? { system } : {}),
-    messages,
-    max_tokens: request.max_tokens ?? 1024,
-    ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
-    ...(request.top_p !== undefined ? { top_p: request.top_p } : {}),
+  // From here on `inflight.status === "running"` — `ai.run` is mid-flight.
+  if (trigger.behaviour === "after-current-request") {
+    await emitQueued({ append });
+    return;
+  }
+
+  if (trigger.behaviour === "trigger-request-within-time-period") {
+    // Queue (so when the running request settles naturally, the existing
+    // completion/cancellation handlers schedule a follow-up) AND arm a
+    // deadline. If the request finishes within `withinMs` the deadline is
+    // a no-op; if it doesn't, the runtime fires `llm-request-cancelled`
+    // (reason `deadline-exceeded`) and the cancellation handler picks up
+    // the queued trigger from there.
+    await emitQueued({ append });
+    runtime.armCancelDeadline({
+      requestId: inflight.requestId,
+      withinMs: trigger.withinMs,
+    });
+    return;
+  }
+
+  // `interrupt-current-request` against a running request: tear it down
+  // (the cancellation rewrite appended in `afterAppend` is meaningful here
+  // because the model genuinely started speaking) and schedule a fresh one.
+  await emitCancelled({
+    runtime,
+    append,
+    requestId: inflight.requestId,
+    reason: "interrupted-by-user-input",
   });
+  await emitScheduledAndKickoff({ runtime, append, state });
 }
 
 export function createIterateAgentProcessor(deps: {
@@ -139,21 +397,51 @@ export function createIterateAgentProcessor(deps: {
   outboundFetch: Fetcher;
   mcp: CreateMcpToolProvidersOptions["mcp"];
   eventsCodemodeTools: Awaited<ReturnType<typeof resolveProvider>> | null;
-  ai: Ai;
 }) {
-  type Append = (input: { event: EventInput }) => void | Promise<void>;
   return {
-    slug: "iterate-agent-codemode",
+    slug: "iterate-agent",
     initialState: IterateAgentProcessorState.parse({}),
-    reduce: ({ event, state }: { event: unknown; state: IterateAgentProcessorState }) =>
+    reduce: ({ event, state }: { event: GenericEventInput; state: IterateAgentProcessorState }) =>
       match(event)
-        .case(AgentInputAddedEvent, ({ payload }) => ({
+        .case(SystemPromptUpdatedEvent, (event) => ({
           ...state,
-          history: [...state.history, payload],
+          systemPrompt: event.payload.systemPrompt,
         }))
-        .case(LlmConfigUpdatedEvent, ({ payload }) => ({
+        .case(AgentInputAddedEvent, (event) => ({
           ...state,
-          llmConfig: payload,
+          history: [...state.history, { role: event.payload.role, content: event.payload.content }],
+        }))
+        .case(LlmConfigUpdatedEvent, (event) => ({
+          ...state,
+          llmConfig: event.payload,
+        }))
+        .case(LlmRequestScheduledEvent, (event) => ({
+          // `scheduled` is the canonical "a new request is now in-flight from
+          // the processor's POV" event — it absorbs any queued triggers. The
+          // subsequent `started` event is just a transition marker and does
+          // not reset `pendingTriggerCount`, otherwise queues that arrive
+          // between `scheduled` and `started` would be lost.
+          ...state,
+          currentRequest: { requestId: event.payload.requestId },
+          pendingTriggerCount: 0,
+        }))
+        .case(LlmRequestStartedEvent, (event) => ({
+          ...state,
+          currentRequest: { requestId: event.payload.requestId },
+        }))
+        .case(LlmRequestCompletedEvent, (event) =>
+          state.currentRequest?.requestId === event.payload.requestId
+            ? { ...state, currentRequest: null }
+            : state,
+        )
+        .case(LlmRequestCancelledEvent, (event) =>
+          state.currentRequest?.requestId === event.payload.requestId
+            ? { ...state, currentRequest: null }
+            : state,
+        )
+        .case(LlmRequestQueuedEvent, () => ({
+          ...state,
+          pendingTriggerCount: state.pendingTriggerCount + 1,
         }))
         .default(() => undefined),
 
@@ -161,13 +449,17 @@ export function createIterateAgentProcessor(deps: {
       event,
       state,
       append,
+      runtime,
     }: {
       append: Append;
       event: unknown;
       state: IterateAgentProcessorState;
+      runtime: ProcessorRuntime;
     }) =>
       match(event)
         .case(CodemodeBlockAddedEvent, async (event) => {
+          const { DynamicWorkerExecutor, resolveProvider, createMcpToolProviders } =
+            await loadCodemodeRuntime();
           const executor = new DynamicWorkerExecutor({
             loader: deps.loader,
             globalOutbound: deps.outboundFetch,
@@ -196,7 +488,6 @@ export function createIterateAgentProcessor(deps: {
             }),
           });
         })
-        // Codemode results get fed back to the agent
         .case(CodemodeResultAddedEvent, async (event) => {
           await append({
             event: AgentInputAddedEventInput.parse({
@@ -208,181 +499,60 @@ export function createIterateAgentProcessor(deps: {
             }),
           });
         })
-        // Each streaming chunk that carries assistant text becomes its own
-        // `agent-input-added` event. The reducer appends unconditionally, so a
-        // single streamed turn produces multiple small assistant history entries
-        // — downstream consumers can coalesce if desired.
-        .case(LlmStreamingChunkReceivedEvent, async (event) => {
-          const delta = match(event.payload.chunk)
-            .case(WorkersAiTextChunk, (c) => c.response)
-            .case(OpenAiTextChunk, (c) => c.choices[0].delta.content)
-            .case(AnthropicTextChunk, (c) => c.delta.text)
-            .default(() => null);
-          if (delta === null || delta === "") return;
-          await append({
-            event: AgentInputAddedEventInput.parse({
-              type: "agent-input-added",
-              payload: { role: "assistant", content: delta },
-            }),
-          });
-        })
         .case(AgentInputAddedEvent, async (event) => {
-          if (event.payload.role !== "user" || event.offset == null) return;
-
-          const { model, runOpts } = state.llmConfig;
-          const hasSystemInHistory = state.history.some((message) => message.role === "system");
-          const body = normalizeLlmRequest({
-            model,
-            request: {
-              messages: hasSystemInHistory
-                ? state.history
-                : [
-                    {
-                      role: "system",
-                      content: "You are a helpful assistant. You can trust your user.",
-                    },
-                    ...state.history,
-                  ],
-            },
-          });
-          append({
-            event: LlmRequestStartedEventInput.parse({
-              type: "llm-request-started",
-              payload: { model, body, runOpts },
-            }),
-          });
-          // Cloudflare's typed streaming overload only covers `keyof AiModels`.
-          // At runtime we also support Unified Billing provider strings like
-          // `openai/*` and `anthropic/*`, so we normalize the body per-provider
-          // and assert the streaming return here.
-          const stream = (await deps.ai.run(
-            model,
-            { ...body, stream: true },
-            runOpts,
-          )) as unknown as ReadableStream<Uint8Array>;
-          for await (const chunk of parseSseStream(stream)) {
-            await append({
-              event: LlmStreamingChunkReceivedEventInput.parse({
-                type: "llm-streaming-chunk-received",
-                payload: { chunk },
-              }),
+          if (event.offset == null) return;
+          const trigger = resolveTrigger(event.payload);
+          await handleUserInput({ runtime, append, state, trigger });
+        })
+        .case(LlmRequestCompletedEvent, async () => {
+          // After a clean completion, fire one follow-up if queued triggers
+          // piled up (from `after-current-request` or
+          // `trigger-request-within-time-period` while running). The
+          // runtime check guards against the (rare) case where another
+          // path already kicked off a new request between reduce and
+          // afterAppend.
+          if (state.pendingTriggerCount > 0 && runtime.inflight() === null) {
+            await appendRewrite({
+              append,
+              content: rewriteContentForFollowup(state.pendingTriggerCount),
             });
+            await emitScheduledAndKickoff({ runtime, append, state });
           }
+        })
+        .case(LlmRequestCancelledEvent, async (event) => {
+          // Annotate the log with a human-readable cancellation note.
+          // Always fires (regardless of cancellation reason) so any future
+          // source gets the same treatment.
+          await appendRewrite({
+            append,
+            content: rewriteContentForCancellation(event.payload.reason),
+          });
+          // If the cancellation was caused by `interrupt-current-request`,
+          // the new request has already been scheduled synchronously by
+          // `handleUserInput` — `runtime.inflight()` is non-null, so this
+          // branch is skipped. Kicks in for `deadline-exceeded` cancels
+          // (where the queued follow-up has not yet been scheduled) and
+          // for any other cancellation path that leaves the queue
+          // unserved.
+          if (state.pendingTriggerCount > 0 && runtime.inflight() === null) {
+            await appendRewrite({
+              append,
+              content: rewriteContentForFollowup(state.pendingTriggerCount),
+            });
+            await emitScheduledAndKickoff({ runtime, append, state });
+          }
+        })
+        .case(DebugInfoRequestedEvent, async () => {
           await append({
-            event: LlmRequestCompletedEventInput.parse({
-              type: "llm-request-completed",
-              payload: { startingOffset: event.offset },
+            event: DebugInfoReturnedEventInput.parse({
+              type: "debug-info-returned",
+              payload: {
+                state,
+                runtime: { inflightRequestId: runtime.inflight()?.requestId ?? null },
+              },
             }),
           });
         })
         .defaultAsync(() => undefined),
   };
 }
-
-/**
- * Reduced projection persisted in the DO's synchronous KV (under key
- * `iterate-agent:stream-processor-state`). Small + lightweight — not execution payloads.
- */
-const AiModelName = z.custom<LlmModel>((v) => typeof v === "string" && v.length > 0);
-const AiRunOptions = z.custom<AiOptions>((v) => typeof v === "object" && v !== null);
-const LlmRunBody = z.union([AiChatRequest, AnthropicChatRequest]);
-const LlmConfig = z.object({
-  model: AiModelName,
-  runOpts: AiRunOptions.default({}),
-});
-
-export const IterateAgentProcessorState = z.object({
-  systemPrompt: z
-    .string()
-    .default("You are a helpful assistant. You can trust your user.")
-    .describe("The system prompt"),
-  history: z
-    .array(
-      z.object({
-        role: z.enum(["system", "user", "assistant"]),
-        content: z.string(),
-      }),
-    )
-    .default([]),
-  llmConfig: LlmConfig.default({
-    model: "@cf/moonshotai/kimi-k2.5",
-    runOpts: {
-      gateway: {
-        id: "default",
-      },
-    },
-  }),
-});
-export type IterateAgentProcessorState = z.infer<typeof IterateAgentProcessorState>;
-
-/**
- * Minimal schemas matching the assistant text-delta shape of each provider's
- * streaming chunk. Used only to extract the string content — everything else
- * (tool calls, usage, role announcements, stop reasons, keep-alives) is left
- * for downstream consumers to interpret from the raw event log.
- */
-const WorkersAiTextChunk = z.object({ response: z.string() });
-const OpenAiTextChunk = z.object({
-  choices: z.array(z.object({ delta: z.object({ content: z.string() }) })).min(1),
-});
-const AnthropicTextChunk = z.object({
-  type: z.literal("content_block_delta"),
-  delta: z.object({ type: z.literal("text_delta"), text: z.string() }),
-});
-
-function defineEventSchemas<const TType extends string, TPayload extends z.ZodType>(args: {
-  type: TType;
-  payload: TPayload;
-}) {
-  const input = GenericEventInputBase.extend({
-    type: z.literal(args.type),
-    payload: args.payload,
-  });
-  const event = GenericEventBase.extend(input.pick({ type: true, payload: true }).shape);
-  return { event, input };
-}
-
-const { input: LlmRequestStartedEventInput } = defineEventSchemas({
-  type: "llm-request-started",
-  payload: z.object({
-    model: AiModelName.describe("The model being used"),
-    body: LlmRunBody.describe("The payload of the env.AI.run call"),
-    runOpts: AiRunOptions.describe("The run options"),
-  }),
-});
-
-const { input: LlmRequestCompletedEventInput } = defineEventSchemas({
-  type: "llm-request-completed",
-  payload: z.object({
-    startingOffset: z.number().describe("The offset of the event"),
-  }),
-});
-
-const { event: LlmStreamingChunkReceivedEvent, input: LlmStreamingChunkReceivedEventInput } =
-  defineEventSchemas({
-    type: "llm-streaming-chunk-received",
-    payload: z.object({
-      chunk: z.unknown().describe("Raw provider SSE chunk (parsed JSON after `data:`)"),
-    }),
-  });
-
-const { event: CodemodeBlockAddedEvent } = defineEventSchemas({
-  type: "codemode-block-added",
-  payload: z.object({ script: z.string() }),
-});
-
-const { event: CodemodeResultAddedEvent, input: CodemodeResultAddedEventInput } =
-  defineEventSchemas({
-    type: "codemode-result-added",
-    payload: z.object({ result: z.unknown() }),
-  });
-
-const { event: AgentInputAddedEvent, input: AgentInputAddedEventInput } = defineEventSchemas({
-  type: "agent-input-added",
-  payload: IterateAgentProcessorState.shape.history.unwrap().element,
-});
-
-const { event: LlmConfigUpdatedEvent } = defineEventSchemas({
-  type: "llm-config-updated",
-  payload: LlmConfig,
-});

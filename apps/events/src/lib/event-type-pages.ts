@@ -6,6 +6,7 @@ import {
   SCHEDULE_CONFIGURED_TYPE,
   SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE,
   SCHEDULE_INTERNAL_EXECUTION_STARTED_TYPE,
+  STREAM_CIRCUIT_BREAKER_CONFIGURED_TYPE,
   STREAM_APPEND_SCHEDULED_TYPE,
 } from "@iterate-com/events-contract";
 
@@ -559,6 +560,23 @@ const dynamicWorkerEnvVarSetPage = {
   ],
 } satisfies EventTypePageDefinition;
 
+export const circuitBreakerConfiguredPage = {
+  slug: "circuit-breaker-configured",
+  href: "/circuit-breaker-configured/",
+  title: "Circuit Breaker Configured",
+  type: STREAM_CIRCUIT_BREAKER_CONFIGURED_TYPE,
+  summary:
+    "Built-in control event that replaces the stream's circuit breaker burst budget and refill rate.",
+  payloadExample: {
+    burstCapacity: 500,
+    refillRatePerMinute: 500,
+  },
+  details: [
+    "This takes effect immediately and resets the token bucket to the configured burst capacity.",
+    "Burst capacity and refill rate live in reduced state, so durable object wakeups keep the latest configuration.",
+  ],
+} satisfies EventTypePageDefinition;
+
 export const streamPausedPage = {
   slug: "stream-paused",
   href: "/stream-paused/",
@@ -644,6 +662,7 @@ export const bashmodeBlockAddedPage = {
 export const eventTypePages = [
   agentInputAddedPage,
   bashmodeBlockAddedPage,
+  circuitBreakerConfiguredPage,
   dynamicWorkerEnvVarSetPage,
   childStreamCreatedPage,
   dynamicWorkerConfiguredPage,

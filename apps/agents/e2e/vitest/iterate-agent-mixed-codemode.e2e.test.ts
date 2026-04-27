@@ -17,13 +17,11 @@ const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 const harFixturePath = join(appRoot, "e2e/vitest/__snapshots__/iterate-agent-mixed-codemode.har");
 
 const MIXED_CODEMODE_SCRIPT = `
-async ({ awaitEvent }) => {
+async () => {
   const mcpQuery = "workers";
   const answer = await builtin.answer();
   const exampleRes = await fetch("https://example.com/");
   const exampleBody = await exampleRes.text();
-
-  const event = awaitEvent(() => ...)
 
   const streamState = await events.getStreamState({ path: "/" });
   const internalHealth = await events.__internal_health({});
