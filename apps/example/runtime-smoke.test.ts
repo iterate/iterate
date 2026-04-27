@@ -171,12 +171,44 @@ async function assertConfettiWebSocket(httpBaseUrl: string) {
   });
 }
 
-async function assertFullStack(httpBaseUrl: string) {
+async function assertDurableObjectCounter(httpBaseUrl: string) {
+  const base = new URL("/api/durable-counter", httpBaseUrl);
+  const reset = await fetch(new URL("/api/durable-counter/reset", httpBaseUrl), {
+    method: "POST",
+    signal: AbortSignal.timeout(3_000),
+  });
+
+  expect(reset.ok).toBe(true);
+  expect(await reset.json()).toMatchObject({ count: 0 });
+
+  const increment = await fetch(new URL("/api/durable-counter/increment", httpBaseUrl), {
+    method: "POST",
+    signal: AbortSignal.timeout(3_000),
+  });
+
+  expect(increment.ok).toBe(true);
+  expect(await increment.json()).toMatchObject({ count: 1 });
+
+  const current = await fetch(base, {
+    signal: AbortSignal.timeout(3_000),
+  });
+
+  expect(current.ok).toBe(true);
+  expect(await current.json()).toMatchObject({ count: 1 });
+}
+
+async function assertFullStack(
+  httpBaseUrl: string,
+  options: { durableObjectCounter?: boolean } = {},
+) {
   await assertSsrHtml(httpBaseUrl);
   await assertTypedClientPing(httpBaseUrl);
   await assertPublicConfigOverride(httpBaseUrl);
   await assertOrpcWebSocket(httpBaseUrl);
   await assertConfettiWebSocket(httpBaseUrl);
+  if (options.durableObjectCounter) {
+    await assertDurableObjectCounter(httpBaseUrl);
+  }
 }
 
 async function waitForReady(httpBaseUrl: string, timeoutMs = 30_000) {
@@ -317,7 +349,9 @@ describeRuntimeSmoke("runtime smoke", () => {
 
   test.skipIf(!runFullSmoke || !hasCfWranglerLocal)("pnpm cf:dev", async () => {
     const base = `http://127.0.0.1:${CF_DEV_PORT}`;
-    await withServer("pnpm", ["run", "cf:dev"], smokeEnv, base, () => assertFullStack(base));
+    await withServer("pnpm", ["run", "cf:dev"], smokeEnv, base, () =>
+      assertFullStack(base, { durableObjectCounter: true }),
+    );
   });
 
   test.skipIf(!runFullSmoke)(
@@ -337,7 +371,7 @@ describeRuntimeSmoke("runtime smoke", () => {
         throw new Error(`Could not find deployed workers.dev URL in cf:deploy output:\n${output}`);
       }
 
-      await assertFullStack(deployUrl);
+      await assertFullStack(deployUrl, { durableObjectCounter: true });
     },
     600_000,
   );

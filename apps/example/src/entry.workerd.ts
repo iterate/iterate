@@ -15,6 +15,7 @@ const config = parseAppConfigFromEnv({
   env: workerEnv,
 });
 const db = drizzleWorkerd(workerEnv.DB, { schema });
+const durableCounterPrefix = "/api/durable-counter";
 
 export default {
   async fetch(request: Request, env: Env, cfCtx: ExecutionContext) {
@@ -26,6 +27,14 @@ export default {
         executionCtx: cfCtx,
       },
       async ({ log }) => {
+        const url = new URL(request.url);
+        if (
+          url.pathname === durableCounterPrefix ||
+          url.pathname.startsWith(`${durableCounterPrefix}/`)
+        ) {
+          return env.EXAMPLE_COUNTER.getByName("default").fetch(request);
+        }
+
         const context: AppContext = {
           manifest,
           config,

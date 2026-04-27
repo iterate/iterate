@@ -1,10 +1,11 @@
 import alchemy, { type Scope } from "alchemy";
-import { D1Database, TanStackStart } from "alchemy/cloudflare";
+import { D1Database, DurableObjectNamespace, TanStackStart, Worker } from "alchemy/cloudflare";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { compileRawAppConfigFromEnv, parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { slugify } from "@iterate-com/shared/slugify";
 import { z } from "zod";
 import { AppConfig } from "./src/app.ts";
+import type { ExampleCounter } from "./src/durable-objects/example-counter.ts";
 
 const APP_NAME = "example";
 
@@ -72,11 +73,39 @@ const db = await D1Database("example-db", {
   adopt: true,
 });
 
+const exampleCounterWorker = await Worker("example-counter-do", {
+  name: `${workerName}-example-counter-do`,
+  entrypoint: "./src/durable-objects/example-counter.ts",
+  adopt: true,
+  bindings: {
+    EXAMPLE_COUNTER: DurableObjectNamespace<ExampleCounter>("example-counter", {
+      className: "ExampleCounter",
+      sqlite: true,
+    }),
+  },
+  observability: {
+    enabled: true,
+    headSamplingRate: 1,
+    logs: {
+      enabled: true,
+      headSamplingRate: 1,
+      persist: true,
+      invocationLogs: true,
+    },
+    traces: {
+      enabled: true,
+      persist: true,
+      headSamplingRate: 1,
+    },
+  },
+});
+
 export const worker = await TanStackStart(APP_NAME, {
   name: workerName,
   adopt: true,
   bindings: {
     DB: db,
+    EXAMPLE_COUNTER: exampleCounterWorker.bindings.EXAMPLE_COUNTER,
     APP_CONFIG: alchemy.secret(JSON.stringify(rawAppConfig, null, 2)),
   },
   wrangler: {

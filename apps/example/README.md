@@ -6,6 +6,7 @@ Minimal full-stack app: TanStack Start + oRPC over OpenAPI/HTTP + Drizzle, dual-
 
 - **API:** oRPC over OpenAPI/HTTP at `/api`
 - **Confetti:** websocket at `/api/confetti`
+- **Durable Object:** counter demo at `/api/durable-counter`
 - **Frontend:** TanStack Start in SPA mode + TanStack Router + TanStack Query
 - **DB:** Drizzle ORM — better-sqlite3 (Node), D1 (Workers). Shared `BaseSQLiteDatabase<"sync" | "async">` type.
 - **Observability:** Node and Workers both use the shared `withEvlog()` runtime wrapper; shared `useEvlog()` only enriches a request-scoped log
@@ -15,11 +16,12 @@ Minimal full-stack app: TanStack Start + oRPC over OpenAPI/HTTP + Drizzle, dual-
 
 - `src/app.ts` — app manifest plus app config schema
 - `src/entry.node.ts` — Node runtime entry: SQLite, migrations, request context
-- `src/entry.workerd.ts` — Cloudflare Workers runtime entry: D1, request context, websocket upgrade handling
+- `src/entry.workerd.ts` — Cloudflare Workers runtime entry: D1, request context, Durable Object forwarding, websocket upgrade handling
 - `src/orpc/orpc.ts` — oRPC composition point: `implement(contract).$context<T>().use(useEvlog())`
 - `src/orpc/root.ts` — concrete procedure handlers (composed from `orpc/routers/*`)
 - `src/orpc/client.ts` — isomorphic oRPC client plus TanStack Query client factory/query utils
 - `src/db/schema.ts` — Drizzle schema
+- `src/durable-objects/example-counter.ts` — separate-worker Durable Object counter demo
 - `src/context.ts` — Start request context + oRPC context types
 - `src/router.tsx` — TanStack Router setup plus SSR Query integration
 - `src/routes/api.$.ts` — OpenAPI oRPC catch-all route mounted at `/api`

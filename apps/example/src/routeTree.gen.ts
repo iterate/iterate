@@ -17,6 +17,7 @@ import { Route as ApiConfettiRouteImport } from './routes/api.confetti'
 import { Route as ApiSplatRouteImport } from './routes/api.$'
 import { Route as AppThingsRouteImport } from './routes/_app/things'
 import { Route as AppLogStreamRouteImport } from './routes/_app/log-stream'
+import { Route as AppDurableObjectRouteImport } from './routes/_app/durable-object'
 import { Route as AppDebugRouteImport } from './routes/_app/debug'
 import { Route as AppConfettiRouteImport } from './routes/_app/confetti'
 import { Route as AppThingsIndexRouteImport } from './routes/_app/things.index'
@@ -62,6 +63,11 @@ const AppLogStreamRoute = AppLogStreamRouteImport.update({
   path: '/log-stream',
   getParentRoute: () => AppRoute,
 } as any)
+const AppDurableObjectRoute = AppDurableObjectRouteImport.update({
+  id: '/durable-object',
+  path: '/durable-object',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppDebugRoute = AppDebugRouteImport.update({
   id: '/debug',
   path: '/debug',
@@ -92,6 +98,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/confetti': typeof AppConfettiRoute
   '/debug': typeof AppDebugRoute
+  '/durable-object': typeof AppDurableObjectRoute
   '/log-stream': typeof AppLogStreamRoute
   '/things': typeof AppThingsRouteWithChildren
   '/api/$': typeof ApiSplatRoute
@@ -106,6 +113,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/confetti': typeof AppConfettiRoute
   '/debug': typeof AppDebugRoute
+  '/durable-object': typeof AppDurableObjectRoute
   '/log-stream': typeof AppLogStreamRoute
   '/api/$': typeof ApiSplatRoute
   '/api/confetti': typeof ApiConfettiRoute
@@ -121,6 +129,7 @@ export interface FileRoutesById {
   '/_app': typeof AppRouteWithChildren
   '/_app/confetti': typeof AppConfettiRoute
   '/_app/debug': typeof AppDebugRoute
+  '/_app/durable-object': typeof AppDurableObjectRoute
   '/_app/log-stream': typeof AppLogStreamRoute
   '/_app/things': typeof AppThingsRouteWithChildren
   '/api/$': typeof ApiSplatRoute
@@ -137,6 +146,7 @@ export interface FileRouteTypes {
     | '/'
     | '/confetti'
     | '/debug'
+    | '/durable-object'
     | '/log-stream'
     | '/things'
     | '/api/$'
@@ -151,6 +161,7 @@ export interface FileRouteTypes {
     | '/'
     | '/confetti'
     | '/debug'
+    | '/durable-object'
     | '/log-stream'
     | '/api/$'
     | '/api/confetti'
@@ -165,6 +176,7 @@ export interface FileRouteTypes {
     | '/_app'
     | '/_app/confetti'
     | '/_app/debug'
+    | '/_app/durable-object'
     | '/_app/log-stream'
     | '/_app/things'
     | '/api/$'
@@ -244,6 +256,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppLogStreamRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/durable-object': {
+      id: '/_app/durable-object'
+      path: '/durable-object'
+      fullPath: '/durable-object'
+      preLoaderRoute: typeof AppDurableObjectRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/debug': {
       id: '/_app/debug'
       path: '/debug'
@@ -299,6 +318,7 @@ const AppThingsRouteWithChildren = AppThingsRoute._addFileChildren(
 interface AppRouteChildren {
   AppConfettiRoute: typeof AppConfettiRoute
   AppDebugRoute: typeof AppDebugRoute
+  AppDurableObjectRoute: typeof AppDurableObjectRoute
   AppLogStreamRoute: typeof AppLogStreamRoute
   AppThingsRoute: typeof AppThingsRouteWithChildren
 }
@@ -306,6 +326,7 @@ interface AppRouteChildren {
 const AppRouteChildren: AppRouteChildren = {
   AppConfettiRoute: AppConfettiRoute,
   AppDebugRoute: AppDebugRoute,
+  AppDurableObjectRoute: AppDurableObjectRoute,
   AppLogStreamRoute: AppLogStreamRoute,
   AppThingsRoute: AppThingsRouteWithChildren,
 }
