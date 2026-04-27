@@ -107,11 +107,8 @@ test.describe("organization invites", () => {
     // Invitee logs in
     await login(page, inviteeEmail);
 
-    await page.getByText(orgName).waitFor();
-
-    // Click decline (X button next to Accept)
-    const inviteItem = page.locator("[data-slot='item']").filter({ hasText: orgName });
-    await inviteItem.getByRole("button").filter({ hasNotText: "Accept" }).click();
+    await page.getByRole("button", { name: `Decline invite to ${orgName}` }).waitFor();
+    await page.getByRole("button", { name: `Decline invite to ${orgName}` }).click();
     await toast.success(page, "Invite declined").waitFor();
 
     // Invite should be gone, create org form still visible
@@ -192,13 +189,9 @@ test.describe("organization invites", () => {
     await page.getByRole("button", { name: "Accept" }).click();
     await toast.success(page, `Joined ${orgName}`).waitFor();
 
-    // Now leave the org from user settings
-    const orgCard = page.locator("div.border.rounded-lg").filter({ hasText: orgName });
     await page.goto("/user/settings");
-    await orgCard.waitFor();
-
-    // Click leave button on the org card (LogOut icon button)
-    await orgCard.locator("button").click();
+    await page.getByRole("button", { name: `Leave ${orgName}` }).waitFor();
+    await page.getByRole("button", { name: `Leave ${orgName}` }).click();
 
     // Confirm in dialog
     await page.getByRole("dialog").getByRole("button", { name: "Leave" }).click();
