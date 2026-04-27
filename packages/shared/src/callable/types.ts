@@ -69,6 +69,10 @@ const httpUrlSchema = z.string().refine(
  * or returned stub cannot accidentally become Promise-like when awaited.
  */
 const deniedRpcMethods = new Set([
+  "__defineGetter__",
+  "__defineSetter__",
+  "__lookupGetter__",
+  "__lookupSetter__",
   "__proto__",
   "alarm",
   "apply",

@@ -611,7 +611,7 @@ function resolveBinding(options: {
   bindingName: string;
   env: Record<string, unknown> | undefined;
 }) {
-  if (!options.env || !(options.bindingName in options.env)) {
+  if (!options.env || !Object.prototype.hasOwnProperty.call(options.env, options.bindingName)) {
     throw new CallableError("RESOLUTION_FAILED", `Binding "${options.bindingName}" not found`);
   }
   return options.env[options.bindingName];

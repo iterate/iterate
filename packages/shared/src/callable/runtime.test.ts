@@ -148,6 +148,10 @@ describe("callable validation", () => {
     for (const rpcMethod of [
       "then",
       "__proto__",
+      "__defineGetter__",
+      "__defineSetter__",
+      "__lookupGetter__",
+      "__lookupSetter__",
       "fetch",
       "users.byId",
       "toString",
@@ -406,6 +410,22 @@ describe("dispatchCallable", () => {
     });
 
     expect(value).toEqual({ target: "service", input: { ok: true } });
+  });
+
+  test("does not resolve inherited env properties as service bindings", async () => {
+    await expect(
+      dispatchCallable({
+        callable: {
+          target: { type: "service", binding: { $binding: "constructor" } },
+          call: { type: "rpc", method: "keys" },
+        },
+        payload: { accidental: "prototype" },
+        ctx: { env: {} },
+      }),
+    ).rejects.toMatchObject({
+      code: "RESOLUTION_FAILED",
+      message: 'Binding "constructor" not found',
+    });
   });
 
   test("dispatches positional service RPC", async () => {
