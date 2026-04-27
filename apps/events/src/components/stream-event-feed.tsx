@@ -472,16 +472,9 @@ function CustomHtmlRenderedEventCard({ item }: { item: CustomHtmlRenderedEventFe
     const container = containerRef.current;
     if (container == null) return;
 
-    const timeoutIds = new Set<number>();
-    const runScripts = () => {
+    const timeoutId = window.setTimeout(() => {
       const scripts = Array.from(container.querySelectorAll("script"));
       for (const script of scripts) {
-        if (script.dataset.iterateExecuted === "true") {
-          continue;
-        }
-
-        script.dataset.iterateExecuted = "true";
-
         const executableScript = document.createElement("script");
         for (const attribute of Array.from(script.attributes)) {
           executableScript.setAttribute(attribute.name, attribute.value);
@@ -489,24 +482,10 @@ function CustomHtmlRenderedEventCard({ item }: { item: CustomHtmlRenderedEventFe
         executableScript.textContent = script.textContent;
         script.replaceWith(executableScript);
       }
-    };
-    const scheduleRunScripts = () => {
-      const timeoutId = window.setTimeout(() => {
-        timeoutIds.delete(timeoutId);
-        runScripts();
-      }, 50);
-      timeoutIds.add(timeoutId);
-    };
-
-    const observer = new MutationObserver(scheduleRunScripts);
-    observer.observe(container, { childList: true, subtree: true });
-    scheduleRunScripts();
+    }, 50);
 
     return () => {
-      observer.disconnect();
-      for (const timeoutId of timeoutIds) {
-        window.clearTimeout(timeoutId);
-      }
+      window.clearTimeout(timeoutId);
     };
   }, [item.html]);
 

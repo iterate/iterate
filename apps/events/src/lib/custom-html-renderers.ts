@@ -24,6 +24,7 @@ export type CustomHtmlRendererProjection = {
   rendererKey: string;
 };
 
+const MAX_MATCHER_EXPRESSIONS = 100;
 const matcherExpressions = new Map<string, ReturnType<typeof jsonata>>();
 
 export function isHtmlRendererConfiguredEvent(event: Event) {
@@ -115,6 +116,12 @@ async function renderCustomHtmlFeedItem({
     let matcherExpression = matcherExpressions.get(renderer.matcher);
     if (matcherExpression == null) {
       matcherExpression = jsonata(renderer.matcher);
+      if (matcherExpressions.size >= MAX_MATCHER_EXPRESSIONS) {
+        const oldestMatcher = matcherExpressions.keys().next().value;
+        if (oldestMatcher != null) {
+          matcherExpressions.delete(oldestMatcher);
+        }
+      }
       matcherExpressions.set(renderer.matcher, matcherExpression);
     }
 
@@ -133,6 +140,10 @@ async function renderCustomHtmlFeedItem({
       raw: event,
     };
   } catch (error) {
+    if (signal?.aborted) {
+      throw error;
+    }
+
     return {
       kind: "custom-html-render-error",
       slug: renderer.slug,
@@ -156,6 +167,6 @@ function getRendererKey(renderers: ReadonlyMap<string, HtmlRendererDefinition>) 
 
 function throwIfAborted(signal?: AbortSignal) {
   if (signal?.aborted) {
-    throw new Error("HTML renderer projection aborted");
+    throw new DOMException("HTML renderer projection aborted", "AbortError");
   }
 }
