@@ -48,6 +48,9 @@ playwright-report/
 *.db
 *.sqlite
 *.db-wal
+
+# sqlfu scratch databases
+.sqlfu/
 *.db-shm
 *.db-journal
 *.sqlite-wal
