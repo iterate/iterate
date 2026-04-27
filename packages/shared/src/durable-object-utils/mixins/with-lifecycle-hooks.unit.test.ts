@@ -776,6 +776,24 @@ describe("withScheduler", () => {
     });
   });
 
+  it("deletes finite RRULE schedules after their final occurrence", async () => {
+    const room = testEnv.SCHEDULE_ROOMS.getByName("scheduler-unit-finite-rrule-done");
+
+    await room.initialize({
+      name: "scheduler-unit-finite-rrule-done",
+      ownerUserId: "user-scheduler",
+    });
+    await room.seedExhaustedFiniteRruleScheduleForTest("finite-rrule");
+
+    await expect(room.runAlarmNow()).resolves.toBeUndefined();
+    await expect(room.getScheduledExecutionState()).resolves.toMatchObject({
+      runs: 1,
+      payload: { final: true },
+    });
+    await expect(room.getSchedule("finite-rrule")).resolves.toBeNull();
+    await expect(room.getMultiplexedAlarms()).resolves.toEqual([]);
+  });
+
   it("skips overlapping interval schedules while they are recently running", async () => {
     const room = testEnv.SCHEDULE_ROOMS.getByName("scheduler-unit-overlap");
     const startedAtMs = Date.now() - 1_000;

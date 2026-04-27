@@ -469,7 +469,32 @@ export function withScheduler<InitParams extends LifecycleInit>(options?: {
         row: SchedulerRow,
         recurrence: StoredSchedulerRecurrence,
       ): Promise<void> {
-        const nextRunAtMs = computeNextRunAtMs(row.key, recurrence, Date.now());
+        let nextRunAtMs: number;
+
+        try {
+          nextRunAtMs = computeNextRunAtMs(row.key, recurrence, Date.now());
+        } catch (error) {
+          if (!(error instanceof NoNextScheduleOccurrenceError)) {
+            throw error;
+          }
+
+          // Finite RRULEs can be complete after the callback for their final
+          // occurrence runs. That is a successful terminal state, not an alarm
+          // failure: throwing here would make Cloudflare retry the already-due
+          // multiplexed alarm forever. Delete the schedule row and return
+          // normally so `withMultiplexedAlarms()` can delete the logical alarm
+          // that invoked this callback.
+          this.ctx.storage.sql.exec(
+            `DELETE FROM ${SCHEDULER_TABLE}
+             WHERE key = ?`,
+            row.key,
+          );
+          console.info(
+            `[withScheduler] completed finite schedule "${row.key}" with no next occurrence.`,
+          );
+          return;
+        }
+
         const nowMs = Date.now();
 
         this.ctx.storage.sql.exec(

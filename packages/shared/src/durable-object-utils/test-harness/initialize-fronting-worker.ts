@@ -454,6 +454,46 @@ export class SchedulerTestRoom extends SchedulerRoomBase<Env> {
     );
   }
 
+  async seedExhaustedFiniteRruleScheduleForTest(key: string): Promise<void> {
+    const now = Date.now();
+    const onlyOccurrenceMs = now - 60_000;
+
+    // This is the shape a finite RRULE has after its last occurrence becomes
+    // due: the scheduler row is due now, but asking the RRULE library for the
+    // next occurrence after the callback completes will return null. The
+    // production scheduler must treat that as "schedule complete", not as an
+    // alarm failure that Cloudflare retries forever.
+    this.ctx.storage.sql.exec(
+      `INSERT OR REPLACE INTO mixin_scheduler_schedules
+        (key, method, payload_json, recurrence_json, next_run_at_ms, running,
+         execution_started_at_ms, created_at_ms, updated_at_ms)
+       VALUES (?, ?, ?, ?, ?, 0, NULL, ?, ?)`,
+      key,
+      "recordScheduledPayload",
+      JSON.stringify({ final: true }),
+      JSON.stringify({
+        type: "rrule",
+        rrule: "FREQ=DAILY;COUNT=1",
+        timezone: null,
+        dtstartMs: onlyOccurrenceMs,
+      }),
+      now,
+      now,
+      now,
+    );
+
+    await this.scheduleMultiplexedAlarm({
+      key: `scheduler:${key}:${now}`,
+      runAt: now,
+      method: "runScheduledTask",
+      payload: {
+        key,
+        expectedRunAtMs: now,
+      },
+    });
+    await this.ctx.storage.deleteAlarm();
+  }
+
   getScheduledExecutionState(): {
     runs: number;
     failures: number;
