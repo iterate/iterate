@@ -1,5 +1,5 @@
 import { SELF, env } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   type InspectorTestRoom,
   type InitializeTestRoom as InitializeTestRoomInstance,
@@ -161,10 +161,10 @@ describe("withKvInspector", () => {
 });
 
 describe("withExternalListing", () => {
-  it("returns undefined when the object has not been initialized", async () => {
+  it("returns null when the object has not been initialized", async () => {
     const room = testEnv.LISTED_ROOMS.getByName("listed-uninitialized-unit");
 
-    await expect(room.getExternalListing()).resolves.toBeUndefined();
+    await expect(room.getExternalListing()).resolves.toBeNull();
   });
 
   it("returns JSON null through the fronting worker when no listing exists", async () => {
@@ -180,13 +180,15 @@ describe("withExternalListing", () => {
 
     await room.initialize({ name: "listed-unit", ownerUserId: "user-listed" });
 
-    await expect(room.getExternalListing()).resolves.toMatchObject({
-      class: "ListedRoom",
-      name: "listed-unit",
-      initParams: {
+    await vi.waitFor(async () => {
+      await expect(room.getExternalListing()).resolves.toMatchObject({
+        class: "ListedRoom",
         name: "listed-unit",
-        ownerUserId: "user-listed",
-      },
+        initParams: {
+          name: "listed-unit",
+          ownerUserId: "user-listed",
+        },
+      });
     });
   });
 
@@ -198,12 +200,14 @@ describe("withExternalListing", () => {
       ownerUserId: "user-listed",
     });
 
-    await expect(
-      testEnv.DO_LISTINGS.prepare(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'mixin_external_listing'",
-      ).first(),
-    ).resolves.toEqual({
-      name: "mixin_external_listing",
+    await vi.waitFor(async () => {
+      await expect(
+        testEnv.DO_LISTINGS.prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'mixin_external_listing'",
+        ).first(),
+      ).resolves.toEqual({
+        name: "mixin_external_listing",
+      });
     });
   });
 });

@@ -1,5 +1,15 @@
 /// <reference types="@cloudflare/workers-types" />
 
+/**
+ * Test-only fronting Worker for the Durable Object mixins.
+ *
+ * The worker-pool unit tests and deployed E2E tests both use this module as the
+ * Worker entrypoint. It gives tests normal HTTP routes while still exercising
+ * real Durable Object stubs, RPC methods, fetch wrapping, D1 bindings, and
+ * SQLite-backed DO storage. Keeping that wiring in one place makes the unit and
+ * deployed tests cover the same composition shape.
+ */
+
 import { DurableObject } from "cloudflare:workers";
 import { withExternalListing } from "../mixins/external-listing.ts";
 import { getInitializedDoStub, withInitialize } from "../mixins/initialize.ts";
@@ -76,17 +86,15 @@ export class ListedRoom extends ListedRoomBase<Env> {
   }
 }
 
-class InspectorRoot extends DurableObject<Env> {}
-
 const InspectorBase = withKvInspector({
   unsafe: "I_UNDERSTAND_THIS_EXPOSES_KV",
 })(
   withOuterbase({
     unsafe: "I_UNDERSTAND_THIS_EXPOSES_SQL",
-  })(InspectorRoot),
+  })(DurableObject),
 );
 
-export class InspectorTestRoom extends InspectorBase {
+export class InspectorTestRoom extends InspectorBase<Env> {
   seedKv(key: string, value: unknown) {
     this.ctx.storage.kv.put(key, value);
   }
@@ -153,11 +161,7 @@ export default {
       if (request.method === "GET" && action === "listing") {
         const stub = env.LISTED_ROOMS.getByName(name);
 
-        // The external listing write is best-effort and runs through waitUntil,
-        // so callers can observe the "not listed yet" state. JSON has no
-        // representation for `undefined`, and `Response.json(undefined)` throws
-        // at runtime; use `null` as the explicit wire value for "no listing".
-        return json((await stub.getExternalListing()) ?? null);
+        return json(await stub.getExternalListing());
       }
 
       return json({ error: "Not found" }, { status: 404 });
@@ -232,7 +236,10 @@ function requireString(value: string | undefined, fieldName: string): string {
 }
 
 function json(body: unknown, init?: ResponseInit): Response {
-  return Response.json(body, init);
+  // `Response.json(undefined)` throws because `undefined` is not valid JSON.
+  // Normalize it here so future test routes return explicit JSON `null`
+  // instead of a Worker exception.
+  return Response.json(body ?? null, init);
 }
 
 function serializeError(error: unknown): CaughtErrorResult {

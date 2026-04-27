@@ -49,6 +49,8 @@ const env = AlchemyEnv.parse(process.env);
 const stateStore = (scope: Scope) =>
   scope.local ? new SQLiteStateStore(scope, { engine: "libsql" }) : new CloudflareStateStore(scope);
 
+// Alchemy treats CI as non-interactive by default. Local Alchemy runs are a
+// developer workflow, so let Alchemy use its local behavior when requested.
 if (env.ALCHEMY_LOCAL) delete process.env.CI;
 
 const app = await alchemy(APP_NAME, {
@@ -61,18 +63,23 @@ const app = await alchemy(APP_NAME, {
 const workerName = makeWorkerName(APP_NAME, app.stage);
 const rooms = DurableObjectNamespace<InitializeTestRoom>("rooms", {
   className: "InitializeTestRoom",
+  // The initialize mixin relies on SQLite-backed DO synchronous KV.
   sqlite: true,
 });
 const inspectors = DurableObjectNamespace<InspectorTestRoom>("inspectors", {
   className: "InspectorTestRoom",
+  // The inspector routes exercise both `ctx.storage.sql` and synchronous KV.
   sqlite: true,
 });
 const listedRooms = DurableObjectNamespace<ListedRoom>("listed-rooms", {
   className: "ListedRoom",
+  // The listed room combines local SQLite-backed init state with a D1 mirror.
   sqlite: true,
 });
 const listings = await D1Database("listings", {
   name: `${workerName}-listings`,
+  // E2E stages are intentionally reusable by name. `adopt` lets reruns cleanly
+  // take ownership instead of failing if a previous run left resources behind.
   adopt: true,
 });
 
@@ -86,6 +93,8 @@ export const worker = await Worker(APP_NAME, {
     DO_LISTINGS: listings,
   },
   entrypoint: "./src/durable-object-utils/test-harness/initialize-fronting-worker.ts",
+  // Optional routes let CI or a developer bind the ephemeral worker to a real
+  // hostname. Without them, tests use the workers.dev URL returned by Alchemy.
   routes: env.DURABLE_OBJECT_UTILS_E2E_WORKER_ROUTES.map((hostname) => ({
     pattern: `${hostname}/*`,
     adopt: true,

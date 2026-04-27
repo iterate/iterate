@@ -55,7 +55,6 @@ try {
           ALCHEMY_STAGE: stage,
           DURABLE_OBJECT_UTILS_E2E_OUTPUT_JSON: "1",
         },
-        allowFailure: true,
       });
     } catch (error) {
       failed = true;
