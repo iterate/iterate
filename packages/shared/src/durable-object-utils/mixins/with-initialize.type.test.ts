@@ -1,12 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
 import { describe, expectTypeOf, it } from "vitest";
-import { withInitialize as publicWithInitialize } from "@iterate-com/shared/durable-object-utils/mixins/initialize";
-import { withExternalListing } from "./external-listing.ts";
-import type { ExternalListingRecord } from "./external-listing.ts";
-import { withKvInspector } from "./kv-inspector.ts";
-import { withOuterbase } from "./outerbase.ts";
-import type { InitializeInput } from "./initialize.ts";
-import { getInitializedDoStub, withInitialize } from "./initialize.ts";
+import { withInitialize as publicWithInitialize } from "@iterate-com/shared/durable-object-utils/mixins/with-initialize";
+import { withExternalListing } from "./with-external-listing.ts";
+import type { ExternalListingRecord } from "./with-external-listing.ts";
+import { withKvInspector } from "./with-kv-inspector.ts";
+import { withOuterbase } from "./with-outerbase.ts";
+import type { InitializeInput } from "./with-initialize.ts";
+import { getInitializedDoStub, withInitialize } from "./with-initialize.ts";
 
 type Env = {
   EXAMPLE: string;

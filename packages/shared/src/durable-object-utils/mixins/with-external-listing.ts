@@ -1,21 +1,8 @@
 /// <reference types="@cloudflare/workers-types" />
 
 import { DurableObject } from "cloudflare:workers";
-import type { InitializeMembers, NamedInit } from "./initialize.ts";
-
-type Constructor<T = object> = abstract new (...args: any[]) => T;
-
-// A generic Durable Object constructor whose Env must be at least `Env`.
-//
-// Example:
-//
-//   DurableObjectConstructor<{ DO_LISTINGS: D1Database }, InitializeMembers<RoomInit>>
-//
-// accepts `DurableObject<{ DO_LISTINGS: D1Database; OTHER: string }>` because
-// the final worker Env can have more bindings than this mixin needs.
-type DurableObjectConstructor<Env, Members = object> = abstract new (
-  ...args: any[]
-) => DurableObject<Env> & Members;
+import type { InitializeMembers, NamedInit } from "./with-initialize.ts";
+import type { Constructor, DurableObjectConstructor } from "./mixin-types.ts";
 
 export type ExternalListingRecord<InitParams extends NamedInit> = {
   class: string;

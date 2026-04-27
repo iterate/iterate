@@ -1,19 +1,7 @@
 /// <reference types="@cloudflare/workers-types" />
 
-import { DurableObject } from "cloudflare:workers";
-
-type DurableObjectConstructor = abstract new (...args: any[]) => DurableObject;
-
-// A plain constructor type for "this mixin adds these instance members".
-//
-// Example:
-//
-//   Constructor<InitializeMembers<RoomInit>>
-//
-// means "instances constructed by this class have initialize/assertInitialized".
-// We intersect that with TBase below so the returned class keeps the original
-// static side and generic DurableObject constructor shape.
-type Constructor<T = object> = abstract new (...args: any[]) => T;
+import { dequal } from "dequal/lite";
+import type { Constructor, DurableObjectConstructor } from "./mixin-types.ts";
 
 export type NamedInit = {
   /**
@@ -30,7 +18,7 @@ export type NamedInit = {
  * Callers usually already passed `name` to `getInitializedDoStub()`, so the
  * helper accepts init params without `name` and fills it in itself.
  *
- * The `InitParams extends unknown ? ... : never` wrapper makes this work for
+ * The `BaseInitParams extends unknown ? ... : never` wrapper makes this work for
  * unions one variant at a time instead of flattening the union first.
  *
  * Example:
@@ -45,8 +33,8 @@ export type NamedInit = {
  * Without the distributive wrapper, the variant-specific fields are much
  * easier to accidentally weaken when `name` is omitted.
  */
-export type InitializeInput<InitParams extends NamedInit> = InitParams extends unknown
-  ? Omit<InitParams, "name"> & Partial<Pick<InitParams, "name">>
+export type InitializeInput<BaseInitParams extends NamedInit> = BaseInitParams extends unknown
+  ? Omit<BaseInitParams, "name"> & Partial<Pick<BaseInitParams, "name">>
   : never;
 
 export interface InitializeMembers<InitParams extends NamedInit> {
@@ -188,6 +176,11 @@ export function withInitialize<InitParams extends NamedInit>() {
           throw new Error("initialize(params) requires a non-empty params.name.");
         }
 
+        // Cloudflare exposes `ctx.id.name` for objects addressed by
+        // `namespace.getByName(name)` / `idFromName(name)`. The worker-pool
+        // Miniflare tests exercise this same path, including the mismatch
+        // branch, so we keep the production invariant instead of accepting an
+        // unverifiable name when the runtime does not provide one.
         const objectName = this.ctx.id.name;
 
         if (objectName !== params.name) {
@@ -201,7 +194,7 @@ export function withInitialize<InitParams extends NamedInit>() {
           // This makes the helper idempotent across cold starts and retrying
           // callers, while still rejecting attempts to mutate immutable init
           // state after the object exists.
-          if (!areInitializeParamsEqual(existing, params)) {
+          if (!dequal(existing, params)) {
             throw new InitializeParamsMismatchError(params.name);
           }
 
@@ -275,43 +268,4 @@ export async function getInitializedDoStub<
   } as unknown as InitParamsOf<TInstance>);
 
   return stub;
-}
-
-function areInitializeParamsEqual<InitParams extends NamedInit>(
-  left: InitParams,
-  right: InitParams,
-): boolean {
-  // Init params are expected to be plain structured data. This comparison is
-  // deliberately small and order-insensitive for object keys, which is enough
-  // for the JSON-like init shapes used by these mixins.
-  return deepEqual(left, right);
-}
-
-function deepEqual(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) {
-    return true;
-  }
-
-  if (typeof left !== "object" || left === null || typeof right !== "object" || right === null) {
-    return false;
-  }
-
-  if (Array.isArray(left) || Array.isArray(right)) {
-    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
-      return false;
-    }
-
-    return left.every((value, index) => deepEqual(value, right[index]));
-  }
-
-  const leftRecord = left as Record<string, unknown>;
-  const rightRecord = right as Record<string, unknown>;
-  const leftKeys = Object.keys(leftRecord).sort();
-  const rightKeys = Object.keys(rightRecord).sort();
-
-  if (!deepEqual(leftKeys, rightKeys)) {
-    return false;
-  }
-
-  return leftKeys.every((key) => deepEqual(leftRecord[key], rightRecord[key]));
 }

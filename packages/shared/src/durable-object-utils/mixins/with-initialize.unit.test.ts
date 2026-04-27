@@ -5,7 +5,7 @@ import {
   type InitializeTestRoom as InitializeTestRoomInstance,
   type ListedRoom,
 } from "../test-harness/initialize-fronting-worker.ts";
-import { getInitializedDoStub } from "./initialize.ts";
+import { getInitializedDoStub } from "./with-initialize.ts";
 
 const testEnv = env as {
   DO_LISTINGS: D1Database;
@@ -79,6 +79,7 @@ describe("withInitialize", () => {
     await expect(
       room.tryInitialize({ name: "different-room", ownerUserId: "user-a" }),
     ).resolves.toMatchObject({
+      kind: "error",
       name: "InitializeNameMismatchError",
     });
   });

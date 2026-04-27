@@ -22,11 +22,11 @@ The default is **do not code immediately**. First spec the API with the user. If
 
 ## Reference Implementations
 
-- `mixins/initialize.ts`: protected subclass surface, named initialization, static/generic preservation in the simple `TBase & Constructor<Members>` shape.
-- `mixins/external-listing.ts`: env lower-bound via `getDatabase(env)`, best-effort `ctx.waitUntil()` work, D1 table owned by the mixin.
-- `mixins/kv-inspector.ts`: fetch wrapper that preserves generic `Base<Env>`.
-- `mixins/outerbase.ts`: fetch wrapper around SQLite debug routes.
-- `mixins/initialize.type.test.ts`: expect-type examples that prove the type incantations still work.
+- `mixins/with-initialize.ts`: protected subclass surface, named initialization, static/generic preservation in the simple `TBase & Constructor<Members>` shape.
+- `mixins/with-external-listing.ts`: env lower-bound via `getDatabase(env)`, best-effort `ctx.waitUntil()` work, D1 table owned by the mixin.
+- `mixins/with-kv-inspector.ts`: fetch wrapper that preserves generic `Base<Env>`.
+- `mixins/with-outerbase.ts`: fetch wrapper around SQLite debug routes.
+- `mixins/with-initialize.type.test.ts`: expect-type examples that prove the type incantations still work.
 - `test-harness/initialize-fronting-worker.ts`: shared Worker entrypoint for worker-pool unit tests and deployed E2E.
 - `README.md`: human/agent docs for composition, type shapes, runtime behavior, and test commands.
 
@@ -45,6 +45,9 @@ Before editing, write down:
 If any answer is fuzzy, stop and grill the user. Do not encode uncertainty as optional config.
 
 ## Type Pattern
+
+Name each mixin implementation file after the mixin function in kebab-case:
+`with-thing.ts` for `withThing()`.
 
 For a simple member-adding mixin with no new env requirement, use the Cloudflare `withVoice` style:
 

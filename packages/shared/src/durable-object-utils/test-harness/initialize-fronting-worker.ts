@@ -11,10 +11,10 @@
  */
 
 import { DurableObject } from "cloudflare:workers";
-import { withExternalListing } from "../mixins/external-listing.ts";
-import { getInitializedDoStub, withInitialize } from "../mixins/initialize.ts";
-import { withKvInspector } from "../mixins/kv-inspector.ts";
-import { withOuterbase } from "../mixins/outerbase.ts";
+import { withExternalListing } from "../mixins/with-external-listing.ts";
+import { getInitializedDoStub, withInitialize } from "../mixins/with-initialize.ts";
+import { withKvInspector } from "../mixins/with-kv-inspector.ts";
+import { withOuterbase } from "../mixins/with-outerbase.ts";
 
 export type RoomInit = {
   name: string;
@@ -28,6 +28,7 @@ export type SendMessageResult = {
 };
 
 export type CaughtErrorResult = {
+  kind: "error";
   name: string;
   message: string;
 };
@@ -244,6 +245,7 @@ function json(body: unknown, init?: ResponseInit): Response {
 
 function serializeError(error: unknown): CaughtErrorResult {
   return {
+    kind: "error",
     name: error instanceof Error ? error.name : "UnknownError",
     message: error instanceof Error ? error.message : String(error),
   };
@@ -252,5 +254,5 @@ function serializeError(error: unknown): CaughtErrorResult {
 function isCaughtErrorResult(
   value: SendMessageResult | CaughtErrorResult,
 ): value is CaughtErrorResult {
-  return "name" in value && "message" in value;
+  return "kind" in value && value.kind === "error";
 }

@@ -4,9 +4,9 @@ Utilities here are experimental helpers for composing Cloudflare Durable Object 
 
 ## Current Scope
 
-- `mixins/initialize.ts` adds named initialization state for SQLite-backed Durable Objects.
-- `mixins/external-listing.ts` best-effort mirrors initialized objects into a D1 table owned by the mixin.
-- `mixins/outerbase.ts` and `mixins/kv-inspector.ts` are debug inspector mixins. Do not attach them to production-routed objects without an explicit auth/dev gating decision.
+- `mixins/with-initialize.ts` adds named initialization state for SQLite-backed Durable Objects.
+- `mixins/with-external-listing.ts` best-effort mirrors initialized objects into a D1 table owned by the mixin.
+- `mixins/with-outerbase.ts` and `mixins/with-kv-inspector.ts` are debug inspector mixins. Do not attach them to production-routed objects without an explicit auth/dev gating decision.
 - Avoid adding more mixins or composition helpers without speccing the API shape first.
 
 ## Composition Shape
