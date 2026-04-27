@@ -488,16 +488,12 @@ function CustomHtmlRenderedEventCard({
 
         script.dataset.iterateExecuted = "true";
 
-        if (script.src) {
-          const executableScript = document.createElement("script");
-          for (const attribute of Array.from(script.attributes)) {
-            executableScript.setAttribute(attribute.name, attribute.value);
-          }
-          script.replaceWith(executableScript);
-          continue;
+        const executableScript = document.createElement("script");
+        for (const attribute of Array.from(script.attributes)) {
+          executableScript.setAttribute(attribute.name, attribute.value);
         }
-
-        new Function(script.textContent ?? "")();
+        executableScript.textContent = script.textContent;
+        script.replaceWith(executableScript);
       }
     };
     const scheduleRunScripts = () => {
