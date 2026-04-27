@@ -39,8 +39,7 @@ schema?: "https://schemas.iterate.com/callable/v1";
 ```
 
 Add it when a persisted record needs to be self-describing. Omit it for normal
-in-repo callsites. There is no `schemaVersion` compatibility layer in this
-prototype.
+in-repo callsites.
 
 The shape is `target` plus optional `call`:
 

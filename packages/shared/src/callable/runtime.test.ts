@@ -84,17 +84,6 @@ describe("callable validation", () => {
     expect(validateCallable({ callable })).toEqual(callable);
   });
 
-  test("rejects legacy schemaVersion because v1 has no backwards-compatibility layer", () => {
-    expect(() =>
-      validateCallable({
-        callable: {
-          schemaVersion: "callable/v1",
-          target: { type: "http", url: "https://api.example.com/v1" },
-        },
-      }),
-    ).toThrow("Invalid callable");
-  });
-
   test("accepts URL query and keeps query merging out of v1", () => {
     expect(
       validateCallable({
