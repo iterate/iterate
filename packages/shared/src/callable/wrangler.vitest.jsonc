@@ -1,0 +1,19 @@
+{
+  "name": "shared-callable",
+  "main": "entry.workerd.vitest.ts",
+  "compatibility_date": "2026-04-27",
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "CALLABLE_TEST_DURABLE_OBJECT",
+        "class_name": "CallableTestDurableObject",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["CallableTestDurableObject"],
+    },
+  ],
+}
