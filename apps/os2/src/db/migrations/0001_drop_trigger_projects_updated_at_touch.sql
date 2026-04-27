@@ -12,9 +12,3 @@ create table projects (
 insert into projects(id, slug, metadata, created_at, updated_at) select id, slug, metadata, created_at, updated_at from __sqlfu_old_projects;
 drop table __sqlfu_old_projects;
 create index idx_projects_created_at on projects (created_at);
--- recreating trigger "projects_updated_at_touch": table "projects" needs rebuild
-create trigger projects_updated_at_touch after update on projects when new.updated_at = old.updated_at begin
-update projects
-set updated_at = current_timestamp
-where id = new.id;
-end;
