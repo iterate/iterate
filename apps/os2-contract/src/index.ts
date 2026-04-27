@@ -2,9 +2,12 @@ import { eventIterator, oc } from "@orpc/contract";
 import { internalContract } from "@iterate-com/shared/apps/internal-router-contract";
 import { z } from "zod";
 
-const Thing = z.object({
+const JsonObject = z.record(z.string(), z.unknown());
+
+const Project = z.object({
   id: z.string(),
-  thing: z.string(),
+  slug: z.string(),
+  metadata: JsonObject,
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -154,35 +157,54 @@ export const osContract = oc.router({
       // https://orpc.dev/docs/client/event-iterator
       .output(eventIterator(z.string())),
   },
-  things: {
+  projects: {
     create: oc
-      .route({ method: "POST", path: "/things", description: "Create a thing", tags: ["/things"] })
-      .input(z.object({ thing: z.string().min(1) }))
-      .output(Thing),
+      .route({
+        method: "POST",
+        path: "/projects",
+        description: "Create a project",
+        tags: ["/projects"],
+      })
+      .input(
+        z.object({
+          slug: z
+            .string()
+            .trim()
+            .min(1)
+            .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Slug must be lowercase kebab-case"),
+          metadata: JsonObject.default({}),
+        }),
+      )
+      .output(Project),
     list: oc
-      .route({ method: "GET", path: "/things", description: "List things", tags: ["/things"] })
+      .route({
+        method: "GET",
+        path: "/projects",
+        description: "List projects",
+        tags: ["/projects"],
+      })
       .input(
         z.object({
           limit: z.coerce.number().int().min(1).max(100).optional().default(20),
           offset: z.coerce.number().int().min(0).optional().default(0),
         }),
       )
-      .output(z.object({ things: z.array(Thing), total: z.number().int().nonnegative() })),
+      .output(z.object({ projects: z.array(Project), total: z.number().int().nonnegative() })),
     find: oc
       .route({
         method: "GET",
-        path: "/things/{id}",
-        description: "Get thing by id",
-        tags: ["/things"],
+        path: "/projects/{id}",
+        description: "Get project by id",
+        tags: ["/projects"],
       })
       .input(z.object({ id: z.string() }))
-      .output(Thing),
+      .output(Project),
     remove: oc
       .route({
         method: "DELETE",
-        path: "/things/{id}",
-        description: "Delete thing",
-        tags: ["/things"],
+        path: "/projects/{id}",
+        description: "Delete project",
+        tags: ["/projects"],
       })
       .input(z.object({ id: z.string() }))
       .output(z.object({ ok: z.literal(true), id: z.string(), deleted: z.boolean() })),

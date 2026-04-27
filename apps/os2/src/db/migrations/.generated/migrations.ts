@@ -4,7 +4,7 @@
 // Pair with `migrationsFromBundle` + `applyMigrations` from 'sqlfu'.
 
 const bundle = {
-  "src/db/migrations/0000_initial.sql": "create table things (\n  id text primary key not null,\n  thing text not null,\n  created_at text not null,\n  updated_at text not null\n);\n\ncreate index idx_things_created_at on things (created_at);\n",
+  "src/db/migrations/0000_initial.sql": "create table projects (\n  id text primary key not null,\n  slug text not null unique,\n  metadata text not null check (json_valid(metadata)),\n  created_at text not null,\n  updated_at text not null\n);\n\ncreate index idx_projects_created_at on projects (created_at);\n",
 };
 
 export default bundle;

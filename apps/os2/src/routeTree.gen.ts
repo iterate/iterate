@@ -14,12 +14,12 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as PosthogProxySplatRouteImport } from './routes/posthog-proxy.$'
 import { Route as ApiOrpcWsRouteImport } from './routes/api.orpc-ws'
 import { Route as ApiSplatRouteImport } from './routes/api.$'
-import { Route as AppThingsRouteImport } from './routes/_app/things'
+import { Route as AppProjectsRouteImport } from './routes/_app/projects'
 import { Route as AppLogStreamRouteImport } from './routes/_app/log-stream'
 import { Route as AppDebugRouteImport } from './routes/_app/debug'
-import { Route as AppThingsIndexRouteImport } from './routes/_app/things.index'
+import { Route as AppProjectsIndexRouteImport } from './routes/_app/projects.index'
 import { Route as ApiOrpcSplatRouteImport } from './routes/api.orpc.$'
-import { Route as AppThingsThingIdRouteImport } from './routes/_app/things.$thingId'
+import { Route as AppProjectsProjectIdRouteImport } from './routes/_app/projects.$projectId'
 
 const AppRoute = AppRouteImport.update({
   id: '/_app',
@@ -45,9 +45,9 @@ const ApiSplatRoute = ApiSplatRouteImport.update({
   path: '/api/$',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AppThingsRoute = AppThingsRouteImport.update({
-  id: '/things',
-  path: '/things',
+const AppProjectsRoute = AppProjectsRouteImport.update({
+  id: '/projects',
+  path: '/projects',
   getParentRoute: () => AppRoute,
 } as any)
 const AppLogStreamRoute = AppLogStreamRouteImport.update({
@@ -60,33 +60,33 @@ const AppDebugRoute = AppDebugRouteImport.update({
   path: '/debug',
   getParentRoute: () => AppRoute,
 } as any)
-const AppThingsIndexRoute = AppThingsIndexRouteImport.update({
+const AppProjectsIndexRoute = AppProjectsIndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => AppThingsRoute,
+  getParentRoute: () => AppProjectsRoute,
 } as any)
 const ApiOrpcSplatRoute = ApiOrpcSplatRouteImport.update({
   id: '/api/orpc/$',
   path: '/api/orpc/$',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AppThingsThingIdRoute = AppThingsThingIdRouteImport.update({
-  id: '/$thingId',
-  path: '/$thingId',
-  getParentRoute: () => AppThingsRoute,
+const AppProjectsProjectIdRoute = AppProjectsProjectIdRouteImport.update({
+  id: '/$projectId',
+  path: '/$projectId',
+  getParentRoute: () => AppProjectsRoute,
 } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/debug': typeof AppDebugRoute
   '/log-stream': typeof AppLogStreamRoute
-  '/things': typeof AppThingsRouteWithChildren
+  '/projects': typeof AppProjectsRouteWithChildren
   '/api/$': typeof ApiSplatRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
-  '/things/$thingId': typeof AppThingsThingIdRoute
+  '/projects/$projectId': typeof AppProjectsProjectIdRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
-  '/things/': typeof AppThingsIndexRoute
+  '/projects/': typeof AppProjectsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -95,9 +95,9 @@ export interface FileRoutesByTo {
   '/api/$': typeof ApiSplatRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
-  '/things/$thingId': typeof AppThingsThingIdRoute
+  '/projects/$projectId': typeof AppProjectsProjectIdRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
-  '/things': typeof AppThingsIndexRoute
+  '/projects': typeof AppProjectsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -105,13 +105,13 @@ export interface FileRoutesById {
   '/_app': typeof AppRouteWithChildren
   '/_app/debug': typeof AppDebugRoute
   '/_app/log-stream': typeof AppLogStreamRoute
-  '/_app/things': typeof AppThingsRouteWithChildren
+  '/_app/projects': typeof AppProjectsRouteWithChildren
   '/api/$': typeof ApiSplatRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
-  '/_app/things/$thingId': typeof AppThingsThingIdRoute
+  '/_app/projects/$projectId': typeof AppProjectsProjectIdRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
-  '/_app/things/': typeof AppThingsIndexRoute
+  '/_app/projects/': typeof AppProjectsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -119,13 +119,13 @@ export interface FileRouteTypes {
     | '/'
     | '/debug'
     | '/log-stream'
-    | '/things'
+    | '/projects'
     | '/api/$'
     | '/api/orpc-ws'
     | '/posthog-proxy/$'
-    | '/things/$thingId'
+    | '/projects/$projectId'
     | '/api/orpc/$'
-    | '/things/'
+    | '/projects/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -134,22 +134,22 @@ export interface FileRouteTypes {
     | '/api/$'
     | '/api/orpc-ws'
     | '/posthog-proxy/$'
-    | '/things/$thingId'
+    | '/projects/$projectId'
     | '/api/orpc/$'
-    | '/things'
+    | '/projects'
   id:
     | '__root__'
     | '/'
     | '/_app'
     | '/_app/debug'
     | '/_app/log-stream'
-    | '/_app/things'
+    | '/_app/projects'
     | '/api/$'
     | '/api/orpc-ws'
     | '/posthog-proxy/$'
-    | '/_app/things/$thingId'
+    | '/_app/projects/$projectId'
     | '/api/orpc/$'
-    | '/_app/things/'
+    | '/_app/projects/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -198,11 +198,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_app/things': {
-      id: '/_app/things'
-      path: '/things'
-      fullPath: '/things'
-      preLoaderRoute: typeof AppThingsRouteImport
+    '/_app/projects': {
+      id: '/_app/projects'
+      path: '/projects'
+      fullPath: '/projects'
+      preLoaderRoute: typeof AppProjectsRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/log-stream': {
@@ -219,12 +219,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppDebugRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/things/': {
-      id: '/_app/things/'
+    '/_app/projects/': {
+      id: '/_app/projects/'
       path: '/'
-      fullPath: '/things/'
-      preLoaderRoute: typeof AppThingsIndexRouteImport
-      parentRoute: typeof AppThingsRoute
+      fullPath: '/projects/'
+      preLoaderRoute: typeof AppProjectsIndexRouteImport
+      parentRoute: typeof AppProjectsRoute
     }
     '/api/orpc/$': {
       id: '/api/orpc/$'
@@ -233,40 +233,40 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiOrpcSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_app/things/$thingId': {
-      id: '/_app/things/$thingId'
-      path: '/$thingId'
-      fullPath: '/things/$thingId'
-      preLoaderRoute: typeof AppThingsThingIdRouteImport
-      parentRoute: typeof AppThingsRoute
+    '/_app/projects/$projectId': {
+      id: '/_app/projects/$projectId'
+      path: '/$projectId'
+      fullPath: '/projects/$projectId'
+      preLoaderRoute: typeof AppProjectsProjectIdRouteImport
+      parentRoute: typeof AppProjectsRoute
     }
   }
 }
 
-interface AppThingsRouteChildren {
-  AppThingsThingIdRoute: typeof AppThingsThingIdRoute
-  AppThingsIndexRoute: typeof AppThingsIndexRoute
+interface AppProjectsRouteChildren {
+  AppProjectsProjectIdRoute: typeof AppProjectsProjectIdRoute
+  AppProjectsIndexRoute: typeof AppProjectsIndexRoute
 }
 
-const AppThingsRouteChildren: AppThingsRouteChildren = {
-  AppThingsThingIdRoute: AppThingsThingIdRoute,
-  AppThingsIndexRoute: AppThingsIndexRoute,
+const AppProjectsRouteChildren: AppProjectsRouteChildren = {
+  AppProjectsProjectIdRoute: AppProjectsProjectIdRoute,
+  AppProjectsIndexRoute: AppProjectsIndexRoute,
 }
 
-const AppThingsRouteWithChildren = AppThingsRoute._addFileChildren(
-  AppThingsRouteChildren,
+const AppProjectsRouteWithChildren = AppProjectsRoute._addFileChildren(
+  AppProjectsRouteChildren,
 )
 
 interface AppRouteChildren {
   AppDebugRoute: typeof AppDebugRoute
   AppLogStreamRoute: typeof AppLogStreamRoute
-  AppThingsRoute: typeof AppThingsRouteWithChildren
+  AppProjectsRoute: typeof AppProjectsRouteWithChildren
 }
 
 const AppRouteChildren: AppRouteChildren = {
   AppDebugRoute: AppDebugRoute,
   AppLogStreamRoute: AppLogStreamRoute,
-  AppThingsRoute: AppThingsRouteWithChildren,
+  AppProjectsRoute: AppProjectsRouteWithChildren,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

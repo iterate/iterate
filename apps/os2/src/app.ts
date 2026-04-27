@@ -5,6 +5,13 @@ import packageJson from "../package.json" with { type: "json" };
 
 export const AppConfig = BaseAppConfig.extend({
   pirateSecret: redacted(z.string().trim().min(1).default("os")),
+  typeIdPrefix: redacted(
+    z
+      .string()
+      .trim()
+      .regex(/^[a-z]+$/, "Type ID prefix must contain lowercase letters only")
+      .default("os"),
+  ),
   posthog: z
     .object({
       apiKey: publicValue(z.string().trim().min(1)),

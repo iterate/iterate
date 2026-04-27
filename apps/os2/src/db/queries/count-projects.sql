@@ -1,2 +1,2 @@
 select count(*) as total
-from things;
+from projects;

@@ -70,6 +70,10 @@ sqlfu is the database source of truth:
 - `src/db/queries/*.sql` contains checked-in application queries
 - `src/db/queries/.generated` and `src/db/migrations/.generated` are regenerated with `pnpm sqlfu:generate`
 
+The current domain table is `projects`: `id`, `slug`, `metadata`, `created_at`,
+and `updated_at`. Project IDs are generated in TypeScript with the shared TypeID
+helper using local prefix `proj` and app config `typeIdPrefix`.
+
 `alchemy.run.ts` points the Cloudflare D1 binding at `./src/db/migrations`, so
 `pnpm cf:dev` and `pnpm cf:deploy` apply the same SQL migrations that sqlfu
 tracks. `sqlfu.config.ts` uses sqlfu's D1 migration preset against Alchemy's
@@ -109,6 +113,7 @@ Overrides use `__` as the nesting separator and convert env-style keys to the
 schema's camelCase shape. For OS:
 
 - `APP_CONFIG_PIRATE_SECRET=arrr` -> `pirateSecret`
+- `APP_CONFIG_TYPE_ID_PREFIX=os` -> `typeIdPrefix`
 - `APP_CONFIG_LOGS__STDOUT_FORMAT=pretty` -> `logs.stdoutFormat`
 
 The root route loads the typed `__internal.publicConfig` procedure over `/api`
@@ -119,6 +124,7 @@ OS:
 
 ```json
 {
+  "typeIdPrefix": "os",
   "logs": {
     "stdoutFormat": "raw"
   }
