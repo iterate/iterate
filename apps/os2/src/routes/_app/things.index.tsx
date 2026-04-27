@@ -46,7 +46,7 @@ function ThingsIndexPage() {
       <div className="space-y-1">
         <h2 className="text-sm font-semibold">Things</h2>
         <p className="text-sm text-muted-foreground">
-          CRUD backed by Drizzle + SQLite/D1, with each record linking to a nested detail route.
+          CRUD backed by sqlfu + D1, with each record linking to a nested detail route.
         </p>
       </div>
 

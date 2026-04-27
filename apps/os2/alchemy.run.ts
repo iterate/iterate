@@ -68,7 +68,7 @@ const primaryUrl = env.WORKER_ROUTES[0] ? `https://${env.WORKER_ROUTES[0]}` : un
 
 const db = await D1Database("os-db", {
   name: `${workerName}-db`,
-  migrationsDir: "./drizzle",
+  migrationsDir: "./src/db/migrations",
   adopt: true,
 });
 
@@ -101,9 +101,9 @@ export const worker = await TanStackStart(APP_NAME, {
       headSamplingRate: 1,
     },
   },
-  build: "pnpm exec vite build --config vite.cf.config.ts",
+  build: "pnpm exec vite build --config vite.config.ts",
   dev: {
-    command: "pnpm exec vite dev --config vite.cf.config.ts",
+    command: "pnpm exec vite dev --config vite.config.ts",
   },
 });
 

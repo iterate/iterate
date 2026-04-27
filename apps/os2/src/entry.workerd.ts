@@ -4,17 +4,15 @@ import { withEvlog } from "@iterate-com/shared/apps/logging/with-evlog";
 import { NitroWebSocketResponse } from "@iterate-com/shared/nitro-ws-response";
 import handler from "@tanstack/react-start/server-entry";
 import crossws from "crossws/adapters/cloudflare";
-import { drizzle as drizzleWorkerd } from "drizzle-orm/d1";
+import { createD1Client } from "sqlfu";
 import manifest, { AppConfig } from "~/app.ts";
 import type { AppContext } from "~/context.ts";
-import * as schema from "~/db/schema.ts";
 
 const config = parseAppConfigFromEnv({
   configSchema: AppConfig,
   prefix: "APP_CONFIG_",
   env: workerEnv,
 });
-const db = drizzleWorkerd(workerEnv.DB, { schema });
 
 export default {
   async fetch(request: Request, env: Env, cfCtx: ExecutionContext) {
@@ -26,6 +24,7 @@ export default {
         executionCtx: cfCtx,
       },
       async ({ log }) => {
+        const db = createD1Client(env.DB);
         const context: AppContext = {
           manifest,
           config,

@@ -1,47 +1,45 @@
 # OS App
 
-Minimal full-stack app: TanStack Start + oRPC over OpenAPI/HTTP + Drizzle, dual-runtime (Node + Cloudflare Workers).
+Minimal full-stack app: TanStack Start + oRPC over OpenAPI/HTTP + sqlfu, running on Cloudflare Workers.
 
 ## Stack
 
 - **API:** oRPC over OpenAPI/HTTP at `/api`
 - **Frontend:** TanStack Start in SPA mode + TanStack Router + TanStack Query
-- **DB:** Drizzle ORM — better-sqlite3 (Node), D1 (Workers). Shared `BaseSQLiteDatabase<"sync" | "async">` type.
-- **Observability:** Node and Workers both use the shared `withEvlog()` runtime wrapper; shared `useEvlog()` only enriches a request-scoped log
+- **DB:** sqlfu + Cloudflare D1. SQL definitions, migrations, and typed query wrappers live under `src/db`.
+- **Observability:** Workers use the shared `withEvlog()` runtime wrapper; shared `useEvlog()` only enriches a request-scoped log
 - **Runtime config:** optional `APP_CONFIG` JSON env var plus `APP_CONFIG_*` nested overrides, with frontend-visible fields annotated in the schema and exposed through the typed `__internal.publicConfig` oRPC procedure
 
 ## Key files
 
 - `src/app.ts` — app manifest plus app config schema
-- `src/entry.node.ts` — Node runtime entry: SQLite, migrations, request context
 - `src/entry.workerd.ts` — Cloudflare Workers runtime entry: D1, request context, websocket upgrade handling
 - `src/orpc/orpc.ts` — oRPC composition point: `implement(contract).$context<T>().use(useEvlog())`
 - `src/orpc/root.ts` — concrete procedure handlers (composed from `orpc/routers/*`)
 - `src/orpc/client.ts` — isomorphic oRPC client plus TanStack Query client factory/query utils
-- `src/db/schema.ts` — Drizzle schema
+- `src/db/definitions.sql` — sqlfu schema source of truth
+- `src/db/migrations` — SQL migrations consumed by Alchemy for D1
+- `src/db/queries` — checked-in SQL queries plus generated typed wrappers
 - `src/context.ts` — Start request context + oRPC context types
 - `src/router.tsx` — TanStack Router setup plus SSR Query integration
 - `src/routes/api.$.ts` — OpenAPI oRPC catch-all route mounted at `/api`
 - `src/routes/__root.tsx` — root route with sidebar shell, SSR-loaded public config, shared app providers, and devtools
-- `vite.config.ts` — Node dev/build via Nitro
-- `vite.cf.config.ts` — Cloudflare dev/build (uses Alchemy plugin)
+- `vite.config.ts` — Cloudflare dev/build (uses Alchemy plugin)
 - PostHog source maps are not configured for this minimal app.
-- `runtime-smoke.test.ts` — smoke matrix for dev, preview, start, and Cloudflare runtimes
+- `runtime-smoke.test.ts` — sqlfu asset check plus optional Cloudflare runtime smoke checks
 
 ## Runtime architecture
 
 The browser talks to `/api` over OpenAPI/HTTP. SSR uses `createRouterClient`
 for in-process calls with the same typed router. Runtime app context
-(`manifest`, `config`, `db`, `log`) is attached in `entry.node.ts` /
-`entry.workerd.ts`, and oRPC initial context is built from that runtime context
-plus `rawRequest`.
+(`manifest`, `config`, `db`, `log`) is attached in `entry.workerd.ts`, and
+oRPC initial context is built from that runtime context plus `rawRequest`.
 
-Node and Cloudflare Workers both wrap requests with the shared
-`withEvlog()` helper. The runtime entrypoint still assembles app-specific deps,
-but request logger creation, ALS scoping, pretty/raw formatting, filtering, and
-request-final flush now live in one shared place. The shared `useEvlog()` oRPC
-middleware still does not create or emit logs; it only adds app/RPC context to
-the log it receives.
+Cloudflare Workers wrap requests with the shared `withEvlog()` helper. The
+runtime entrypoint still assembles app-specific deps, but request logger
+creation, ALS scoping, pretty/raw formatting, filtering, and request-final flush
+now live in one shared place. The shared `useEvlog()` oRPC middleware still does
+not create or emit logs; it only adds app/RPC context to the log it receives.
 
 Known caveat: the current shared wrapper still flushes in `finally`, so
 long-lived streamed responses such as SSE can have later request-scoped
@@ -63,11 +61,26 @@ keeping the structured wide event fields as the source of truth.
 
 `apps/os2-contract` owns the typed RPC surface. `src/orpc/orpc.ts` binds implementation to contract.
 
+## Database
+
+sqlfu is the database source of truth:
+
+- `src/db/definitions.sql` declares the desired schema
+- `src/db/migrations/*.sql` is the migration history
+- `src/db/queries/*.sql` contains checked-in application queries
+- `src/db/queries/.generated` and `src/db/migrations/.generated` are regenerated with `pnpm sqlfu:generate`
+
+`alchemy.run.ts` points the Cloudflare D1 binding at `./src/db/migrations`, so
+`pnpm cf:dev` and `pnpm cf:deploy` apply the same SQL migrations that sqlfu
+tracks. `sqlfu.config.ts` uses sqlfu's D1 migration preset against Alchemy's
+local Miniflare D1, so `pnpm sqlfu:check` and `pnpm sqlfu:migrate` use the same
+D1 migration table shape as Alchemy/Wrangler once `.alchemy/local/wrangler.jsonc`
+has been materialized.
+
 ## Middleware Notes
 
 This app does not currently use `src/start.ts`. Request logging is now owned by
-the shared `withEvlog()` wrapper in the runtime entrypoints rather than Nitro's
-`evlog/nitro/v3` integration.
+the shared `withEvlog()` wrapper in the Worker runtime entrypoint.
 
 ## Dev
 
@@ -75,13 +88,12 @@ the shared `withEvlog()` wrapper in the runtime entrypoints rather than Nitro's
 doppler run --config dev -- pnpm alchemy:up    # dev deploy
 doppler run --config prd -- pnpm alchemy:up    # production-style deploy
 doppler run --config dev -- pnpm alchemy:down  # destroy the dev stack
-pnpm dev          # Node dev server
-pnpm start        # Run the built server bundle and restart on rebuilds
-pnpm cf:dev       # Cloudflare local dev
-pnpm cf:deploy    # Deploy to Cloudflare
+pnpm dev            # Cloudflare local dev
+pnpm cf:deploy      # Deploy to Cloudflare
+pnpm sqlfu:generate # Regenerate typed SQL wrappers and bundled migrations
+pnpm sqlfu:check    # Check migration history against definitions.sql
+pnpm sqlfu:ui       # Start the sqlfu UI bridge, then open https://sqlfu.dev/ui
 ```
-
-Pin the port with `PORT` or `NITRO_PORT` (default **3000** when unset). The Node bundle uses **srvx**; it prints `➜ Listening on: …` unless `TEST` is set (then the banner is hidden). The `start` script unsets `TEST` so Doppler does not suppress it. Request **evlog** lines match `pnpm dev` once you send traffic.
 
 ## Runtime config
 

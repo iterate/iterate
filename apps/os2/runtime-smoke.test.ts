@@ -1,22 +1,21 @@
 /**
- * Default `pnpm test` runs the `pnpm dev` smoke only (fast, no Cloudflare deploy).
- * Full matrix (build, preview, start, cf:dev, cf:deploy): `pnpm test:smoke` (`RUNTIME_SMOKE_FULL=1`).
- * CI skips this suite so branch test runs do not depend on app runtime boot smoke checks.
+ * Default `pnpm test` checks local sqlfu assets only.
+ * Full runtime checks require Cloudflare local/prod env: `pnpm test:smoke`
+ * (`RUNTIME_SMOKE_FULL=1`).
  */
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { type ContractRouterClient } from "@orpc/contract";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink as WebSocketRPCLink } from "@orpc/client/websocket";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
+import { type ContractRouterClient } from "@orpc/contract";
 import { osContract } from "@iterate-com/os2-contract";
 import { extractPublicConfigSchema } from "@iterate-com/shared/apps/config";
-import getPort from "get-port";
 import { x, type Result } from "tinyexec";
-import { beforeAll, describe, expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import { AppConfig } from "./src/app.ts";
 
 const appRoot = dirname(fileURLToPath(import.meta.url));
@@ -223,63 +222,14 @@ async function withServer(
   }
 }
 
+describe("sqlfu assets", () => {
+  test("generated query and migration bundles exist", () => {
+    expect(existsSync(join(appRoot, "src/db/queries/.generated/index.ts"))).toBe(true);
+    expect(existsSync(join(appRoot, "src/db/migrations/.generated/migrations.ts"))).toBe(true);
+  });
+});
+
 describeRuntimeSmoke("runtime smoke", () => {
-  beforeAll(async () => {
-    if (!runFullSmoke) return;
-
-    await x("pnpm", ["build"], {
-      throwOnError: true,
-      nodeOptions: {
-        cwd: appRoot,
-        stdio: "inherit",
-        env: {
-          ...stripInheritedAppConfig(process.env),
-          ...smokeEnv,
-          NODE_ENV: "production",
-        },
-      },
-    });
-  });
-
-  test("pnpm dev", async () => {
-    const port = await getPort({ host: "127.0.0.1" });
-    const base = `http://127.0.0.1:${port}`;
-
-    await withServer(
-      "pnpm",
-      ["dev", "--host", "127.0.0.1", "--port", String(port)],
-      smokeEnv,
-      base,
-      () => assertFullStack(base),
-    );
-  });
-
-  test.skipIf(!runFullSmoke)("pnpm preview", async () => {
-    const port = await getPort({ host: "127.0.0.1" });
-    const base = `http://127.0.0.1:${port}`;
-
-    await withServer(
-      "pnpm",
-      ["preview", "--host", "127.0.0.1", "--port", String(port)],
-      smokeEnv,
-      base,
-      () => assertFullStack(base),
-    );
-  });
-
-  test.skipIf(!runFullSmoke)("pnpm start", async () => {
-    const port = await getPort({ host: "127.0.0.1" });
-    const base = `http://127.0.0.1:${port}`;
-
-    await withServer(
-      "pnpm",
-      ["start", "--port", String(port)],
-      { ...smokeEnv, HOST: "127.0.0.1" },
-      base,
-      () => assertFullStack(base),
-    );
-  });
-
   test.skipIf(!runFullSmoke || !hasCfWranglerLocal)("pnpm cf:dev", async () => {
     const base = `http://127.0.0.1:${CF_DEV_PORT}`;
     await withServer("pnpm", ["run", "cf:dev"], smokeEnv, base, () => assertFullStack(base));
