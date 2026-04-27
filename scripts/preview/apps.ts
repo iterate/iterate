@@ -5,6 +5,7 @@ export const CloudflarePreviewAppSlug = z.enum([
   "codemode",
   "example",
   "events",
+  "os2",
   "semaphore",
   "ingress-proxy",
 ]);
@@ -62,6 +63,16 @@ export const cloudflarePreviewApps = {
     previewResourceType: "events-preview-environment",
     previewTestBaseUrlEnvVar: "EVENTS_BASE_URL",
     previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
+  },
+  os2: {
+    slug: "os2",
+    displayName: "OS",
+    appPath: "apps/os2",
+    dopplerProject: "os2",
+    paths: ["apps/os2/**", "apps/os2-contract/**"],
+    previewResourceType: "os2-preview-environment",
+    previewTestBaseUrlEnvVar: "OS2_BASE_URL",
+    previewTestCommandArgs: ["pnpm", "test:e2e"],
   },
   semaphore: {
     slug: "semaphore",

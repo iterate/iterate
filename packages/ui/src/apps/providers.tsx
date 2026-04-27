@@ -18,6 +18,7 @@ export function AppProviders<TConfig>(props: {
   config: TConfig;
   children: ReactNode;
   devtools: ReactNode;
+  forcedTheme?: "light" | "dark";
   posthog?: AppProvidersPosthogOptions;
 }) {
   const posthogApiKey = props.posthog?.apiKey ?? getPosthogApiKeyFromConfig(props.config);
@@ -49,6 +50,7 @@ export function AppProviders<TConfig>(props: {
         enableColorScheme
         storageKey="theme"
         disableTransitionOnChange
+        forcedTheme={props.forcedTheme}
       >
         <PostHogProvider client={posthogClient} enabled={posthogEnabled}>
           {/* Base UI tooltips are intended to share a provider; setting delay=0

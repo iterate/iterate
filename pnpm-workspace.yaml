@@ -10,6 +10,8 @@ packages:
   - apps/daemon
   - apps/iterate-com
   - apps/os
+  - apps/os2
+  - apps/os2-contract
   - apps/semaphore
   - apps/semaphore-contract
   - apps/example
