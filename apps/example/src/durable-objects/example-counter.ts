@@ -9,9 +9,13 @@ type CounterStateMessage = CounterState & {
   type: "counter-state";
 };
 
+type ExampleCounterEnv = {
+  EXAMPLE_COUNTER: DurableObjectNamespace<ExampleCounter>;
+};
+
 const counterKey = "counter";
 
-export class ExampleCounter extends DurableObject<Env> {
+export class ExampleCounter extends DurableObject<ExampleCounterEnv> {
   async fetch(request: Request) {
     const url = new URL(request.url);
 
@@ -116,4 +120,4 @@ export default {
   fetch() {
     return Response.json({ ok: true });
   },
-} satisfies ExportedHandler;
+} satisfies ExportedHandler<ExampleCounterEnv>;
