@@ -71,19 +71,29 @@ export const projectsRouter = {
         prefix: "proj",
       });
 
-      const row = await insertProject(context.db, {
-        id,
-        slug: input.slug,
-        metadata: JSON.stringify(input.metadata),
-      });
-
-      if (!row) {
-        throw new ORPCError("INTERNAL_SERVER_ERROR", {
-          message: `Project ${id} was not returned after insert`,
+      try {
+        const row = await insertProject(context.db, {
+          id,
+          slug: input.slug,
+          metadata: JSON.stringify(input.metadata),
         });
-      }
 
-      return toProject(row);
+        if (!row) {
+          throw new ORPCError("INTERNAL_SERVER_ERROR", {
+            message: `Project ${id} was not returned after insert`,
+          });
+        }
+
+        return toProject(row);
+      } catch (error) {
+        if (isUniqueConstraintError(error)) {
+          throw new ORPCError("CONFLICT", {
+            message: `A project with slug ${input.slug} already exists.`,
+          });
+        }
+
+        throw error;
+      }
     }),
     list: os.projects.list.handler(async ({ context, input }) => {
       const [totalRow, rows] = await Promise.all([

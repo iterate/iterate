@@ -91,9 +91,9 @@ export type RandomLogStreamRequest = z.infer<typeof RandomLogStreamRequest>;
 /**
  * Shared source of truth for the OS app's typed RPC surface.
  *
- * `implement(osContract)` in `apps/os2/src/api/base.ts` binds the
+ * `implement(osContract)` in `apps/os2/src/orpc/orpc.ts` binds the
  * server implementation to this contract, and `os.router({...})` in
- * `apps/os2/src/api/router.ts` provides the actual handlers.
+ * `apps/os2/src/orpc/root.ts` provides the actual handlers.
  *
  * The `__internal.*` subtree is the shared app-level operator/debug namespace that
  * all apps may expose under `/__internal/*`, while the rest of this file is the
