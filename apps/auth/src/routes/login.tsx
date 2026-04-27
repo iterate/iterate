@@ -1,5 +1,11 @@
-import { Button } from "@iterate-com/ui";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@iterate-com/ui";
+import { Button } from "@iterate-com/ui/components/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@iterate-com/ui/components/card";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { useMutation } from "@tanstack/react-query";
 import { z } from "zod/v4";

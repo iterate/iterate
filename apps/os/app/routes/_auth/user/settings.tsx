@@ -110,7 +110,9 @@ function UserSettingsPage() {
                   <div className="flex items-center gap-3 min-w-0">
                     <Mail className="h-5 w-5 text-muted-foreground shrink-0" />
                     <div className="min-w-0">
-                      <div className="font-medium truncate">{invite.organization.name}</div>
+                      <div className="font-medium truncate">
+                        {invite.organization?.name ?? "Organization invite"}
+                      </div>
                       <div className="text-sm text-muted-foreground">
                         Invited by {invite.invitedBy.name} as {invite.role}
                       </div>

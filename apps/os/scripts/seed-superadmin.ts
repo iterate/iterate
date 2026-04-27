@@ -42,14 +42,12 @@ export async function seedSuperadmin() {
       .values({
         email: "superadmin@nustom.com",
         name: "Super Admin",
-        role: "admin",
         emailVerified: true,
       })
       .onConflictDoUpdate({
         target: [schema.user.email],
         set: {
           name: sql`excluded.name`,
-          role: sql`excluded.role`,
           emailVerified: sql`excluded.email_verified`,
         },
       })

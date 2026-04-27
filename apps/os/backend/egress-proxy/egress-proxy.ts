@@ -37,6 +37,7 @@ import { attemptSecretRefresh, type RefreshContext } from "../services/oauth-ref
 import { env, waitUntil, type CloudflareEnv } from "../../env.ts";
 import type { Variables } from "../types.ts";
 import { broadcastInvalidation } from "../utils/query-invalidation.ts";
+import { createAuthWorkerClient } from "../utils/auth-worker-client.ts";
 import { parseTokenIdFromApiKey } from "./api-key-utils.ts";
 import { checkEgressPolicy } from "./policy-check.ts";
 import type { ApprovalStatus, DecisionStatus, PolicyCheckResult } from "./types.ts";
@@ -191,23 +192,10 @@ async function lookupSecret(
   conditions.push(
     and(
       eq(schema.secret.key, secretKey),
-      isNull(schema.secret.organizationId),
       isNull(schema.secret.projectId),
       isNull(schema.secret.userId),
     ),
   );
-
-  // Org scope (if provided)
-  if (context.organizationId) {
-    conditions.push(
-      and(
-        eq(schema.secret.key, secretKey),
-        eq(schema.secret.organizationId, context.organizationId),
-        isNull(schema.secret.projectId),
-        isNull(schema.secret.userId),
-      ),
-    );
-  }
 
   // Project scope (if provided) - only finds secrets WITHOUT userId
   // User-scoped secrets require explicit userId in the magic string
@@ -257,10 +245,10 @@ async function lookupSecret(
   }
 
   // Sort by specificity (more specific = higher priority)
-  // User > Project > Org > Global
+  // User > Project > Global
   const sorted = secrets.sort((a, b) => {
-    const scoreA = (a.userId ? 8 : 0) + (a.projectId ? 4 : 0) + (a.organizationId ? 2 : 0);
-    const scoreB = (b.userId ? 8 : 0) + (b.projectId ? 4 : 0) + (b.organizationId ? 2 : 0);
+    const scoreA = (a.userId ? 8 : 0) + (a.projectId ? 4 : 0);
+    const scoreB = (b.userId ? 8 : 0) + (b.projectId ? 4 : 0);
     return scoreB - scoreA; // Higher score first
   });
 
@@ -596,7 +584,7 @@ egressProxyApp.all("/api/egress-proxy", async (c) => {
     // Clone the request to inspect recipients without consuming the original body
     const validationError = await validateResendEmailRecipients(
       db,
-      apiKeyContext.organizationId,
+      apiKeyContext.orgSlug,
       c.req.raw.clone(),
     );
 
@@ -933,8 +921,8 @@ type ResendEmailPayload = { to?: string | string[]; cc?: string | string[] };
  * checking to/cc, we ensure at least one visible recipient is an org member.
  */
 async function validateResendEmailRecipients(
-  db: DB,
-  organizationId: string,
+  _db: DB,
+  organizationSlug: string,
   request: { json: () => Promise<unknown> },
 ): Promise<{ error: string } | null> {
   let payload: ResendEmailPayload | ResendEmailPayload[];
@@ -947,10 +935,9 @@ async function validateResendEmailRecipients(
   // Handle both single email and batch (array) payloads
   const emails = Array.isArray(payload) ? payload : [payload];
 
-  // Get org members' emails upfront (single query for all emails in batch)
-  const orgMembers = await db.query.organizationUserMembership.findMany({
-    where: eq(schema.organizationUserMembership.organizationId, organizationId),
-    with: { user: { columns: { email: true } } },
+  const authClient = createAuthWorkerClient({ serviceToken: env.SERVICE_AUTH_TOKEN });
+  const orgMembers = await authClient.internal.organization.members({
+    organizationSlug,
   });
   const orgMemberEmails = new Set(orgMembers.map((m) => m.user.email.toLowerCase()));
 
@@ -1006,11 +993,7 @@ async function validateAndGetContext(db: DB, apiKey: string): Promise<ApiKeyCont
   const accessToken = await db.query.projectAccessToken.findFirst({
     where: eq(schema.projectAccessToken.id, tokenId),
     with: {
-      project: {
-        with: {
-          organization: true,
-        },
-      },
+      project: true,
     },
   });
 
@@ -1044,9 +1027,9 @@ async function validateAndGetContext(db: DB, apiKey: string): Promise<ApiKeyCont
 
   return {
     projectId: accessToken.project.id,
-    organizationId: accessToken.project.organizationId,
+    organizationId: accessToken.project.authOrganizationId,
     projectSlug: accessToken.project.slug,
-    orgSlug: accessToken.project.organization.slug,
+    orgSlug: accessToken.project.authOrganizationSlug,
   };
 }
 

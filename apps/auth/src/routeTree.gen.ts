@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from "./routes/__root.tsx";
 import { Route as LoginRouteImport } from "./routes/login.tsx";
+import { Route as DeviceRouteImport } from "./routes/device.tsx";
 import { Route as AuthRouteImport } from "./routes/_auth.tsx";
 import { Route as AuthIndexRouteImport } from "./routes/_auth/index.tsx";
 import { Route as AuthSuperadminRouteImport } from "./routes/_auth/superadmin.tsx";
@@ -19,6 +20,11 @@ import { Route as AuthSuperadminClientsRouteImport } from "./routes/_auth/supera
 const LoginRoute = LoginRouteImport.update({
   id: "/login",
   path: "/login",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const DeviceRoute = DeviceRouteImport.update({
+  id: "/device",
+  path: "/device",
   getParentRoute: () => rootRouteImport,
 } as any);
 const AuthRoute = AuthRouteImport.update({
@@ -48,12 +54,14 @@ const AuthSuperadminClientsRoute = AuthSuperadminClientsRouteImport.update({
 
 export interface FileRoutesByFullPath {
   "/": typeof AuthIndexRoute;
+  "/device": typeof DeviceRoute;
   "/login": typeof LoginRoute;
   "/consent": typeof AuthConsentRoute;
   "/superadmin": typeof AuthSuperadminRouteWithChildren;
   "/superadmin/clients": typeof AuthSuperadminClientsRoute;
 }
 export interface FileRoutesByTo {
+  "/device": typeof DeviceRoute;
   "/login": typeof LoginRoute;
   "/consent": typeof AuthConsentRoute;
   "/superadmin": typeof AuthSuperadminRouteWithChildren;
@@ -63,6 +71,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport;
   "/_auth": typeof AuthRouteWithChildren;
+  "/device": typeof DeviceRoute;
   "/login": typeof LoginRoute;
   "/_auth/consent": typeof AuthConsentRoute;
   "/_auth/superadmin": typeof AuthSuperadminRouteWithChildren;
@@ -73,15 +82,23 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
   fullPaths:
     | "/"
+    | "/device"
     | "/login"
     | "/consent"
     | "/superadmin"
     | "/superadmin/clients";
   fileRoutesByTo: FileRoutesByTo;
-  to: "/login" | "/consent" | "/superadmin" | "/" | "/superadmin/clients";
+  to:
+    | "/device"
+    | "/login"
+    | "/consent"
+    | "/superadmin"
+    | "/"
+    | "/superadmin/clients";
   id:
     | "__root__"
     | "/_auth"
+    | "/device"
     | "/login"
     | "/_auth/consent"
     | "/_auth/superadmin"
@@ -91,6 +108,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   AuthRoute: typeof AuthRouteWithChildren;
+  DeviceRoute: typeof DeviceRoute;
   LoginRoute: typeof LoginRoute;
 }
 
@@ -101,6 +119,13 @@ declare module "@tanstack/react-router" {
       path: "/login";
       fullPath: "/login";
       preLoaderRoute: typeof LoginRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/device": {
+      id: "/device";
+      path: "/device";
+      fullPath: "/device";
+      preLoaderRoute: typeof DeviceRouteImport;
       parentRoute: typeof rootRouteImport;
     };
     "/_auth": {
@@ -169,6 +194,7 @@ const AuthRouteWithChildren = AuthRoute._addFileChildren(AuthRouteChildren);
 
 const rootRouteChildren: RootRouteChildren = {
   AuthRoute: AuthRouteWithChildren,
+  DeviceRoute: DeviceRoute,
   LoginRoute: LoginRoute,
 };
 export const routeTree = rootRouteImport

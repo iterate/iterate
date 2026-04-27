@@ -358,17 +358,17 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
 
     const result = await outboxClient.sendCTE({
       query: db
-        .insert(schema.organization)
-        .values({ name: slug, slug })
+        .insert(schema.user)
+        .values({ name: slug, email: `${slug}@example.com` })
         .onConflictDoNothing()
-        .returning({ id: schema.organization.id }),
+        .returning({ id: schema.user.id }),
       name: "test:basic",
       payload: { message: slug },
     });
 
     // The insert should have returned one row
     expect(result).toHaveLength(1);
-    expect(result[0].id).toMatch(/^org_/);
+    expect(result[0].id).toMatch(/^usr_/);
 
     // An outbox event should have been created
     const outboxEvent = await db.query.outboxEvent.findFirst({
@@ -400,10 +400,10 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
     // First insert succeeds
     await outboxClient.sendCTE({
       query: db
-        .insert(schema.organization)
-        .values({ name: slug, slug })
+        .insert(schema.user)
+        .values({ name: slug, email: `${slug}@example.com` })
         .onConflictDoNothing()
-        .returning({ id: schema.organization.id }),
+        .returning({ id: schema.user.id }),
       name: "test:basic",
       payload: { message: slug },
     });
@@ -419,10 +419,10 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
     // Second insert with same slug — onConflictDoNothing means 0 rows from CTE
     const dupeResult = await outboxClient.sendCTE({
       query: db
-        .insert(schema.organization)
-        .values({ name: slug, slug })
+        .insert(schema.user)
+        .values({ name: slug, email: `${slug}@example.com` })
         .onConflictDoNothing()
-        .returning({ id: schema.organization.id }),
+        .returning({ id: schema.user.id }),
       name: "test:basic",
       payload: { message: slug },
     });
@@ -482,17 +482,17 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
     await using fixture = await createOutboxFixture();
     const { db, outboxClient } = fixture;
 
-    const orgs = [
+    const emails = [
       `select-a-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
       `select-b-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
     ];
     await db
-      .insert(schema.organization)
-      .values(orgs.map((value) => ({ name: value, slug: value })))
+      .insert(schema.user)
+      .values(emails.map((value) => ({ name: value, email: `${value}@example.com` })))
       .onConflictDoNothing();
 
     const result = await outboxClient.sendCTE({
-      query: db.select().from(schema.organization).limit(1),
+      query: db.select().from(schema.user).limit(1),
       name: "test:basic",
       payload: {
         message: sql`'the event id was ' || query.id`,
@@ -518,17 +518,17 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
     await using fixture = await createOutboxFixture();
     const { db, outboxClient } = fixture;
 
-    const orgs = [
+    const emails = [
       `selectm-a-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
       `selectm-b-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
     ];
     await db
-      .insert(schema.organization)
-      .values(orgs.map((value) => ({ name: value, slug: value })))
+      .insert(schema.user)
+      .values(emails.map((value) => ({ name: value, email: `${value}@example.com` })))
       .onConflictDoNothing();
 
     const result = await outboxClient.sendCTE({
-      query: db.select().from(schema.organization).limit(2),
+      query: db.select().from(schema.user).limit(2),
       name: "test:basic",
       payload: {
         message: sql`'the event id was ' || query.id`,
@@ -556,15 +556,17 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
     await using fixture = await createOutboxFixture();
     const { db, outboxClient } = fixture;
 
-    const slug = `cb-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
-    const slugs = [`${slug}-a`, `${slug}-b`];
-    await db.insert(schema.organization).values(slugs.map((slug) => ({ name: slug, slug })));
+    const emailPrefix = `cb-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+    const emails = [`${emailPrefix}-a`, `${emailPrefix}-b`];
+    await db
+      .insert(schema.user)
+      .values(emails.map((value) => ({ name: value, email: `${value}@example.com` })));
 
     const result = await outboxClient.sendCTE({
       query: db
         .select()
-        .from(schema.organization)
-        .where(ilike(schema.organization.slug, `${slug}%`)),
+        .from(schema.user)
+        .where(ilike(schema.user.email, `${emailPrefix}%`)),
       name: "test:basic",
       payload: (row) => ({
         message: row.id,
@@ -582,18 +584,19 @@ describe.skipIf(process.env.CI)("outbox integration", () => {
     await using fixture = await createOutboxFixture();
     const { db, outboxClient } = fixture;
 
-    const slug = `camel-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
-    await db.insert(schema.organization).values({ name: slug, slug });
+    const name = `camel-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+    const email = `${name}@example.com`;
+    await db.insert(schema.user).values({ name, email });
 
     const result = await outboxClient.sendCTE({
-      query: db.select().from(schema.organization).where(eq(schema.organization.slug, slug)),
+      query: db.select().from(schema.user).where(eq(schema.user.email, email)),
       name: "test:basic",
       payload: (row) => ({
-        message: row.slug,
+        message: row.email,
       }),
     });
 
-    expect([...result]).toMatchObject([{ slug, outboxEventPayload: { message: slug } }]);
+    expect([...result]).toMatchObject([{ email, outboxEventPayload: { message: email } }]);
   });
 
   test("sendCTE values", async () => {

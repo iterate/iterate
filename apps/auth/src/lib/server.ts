@@ -4,6 +4,11 @@ import { parse, serialize } from "hono/utils/cookie";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import * as oauth from "oauth4webapi";
 import { z } from "zod/v4";
+import {
+  ITERATE_ACTIVE_ORGANIZATION_ID_CLAIM,
+  ITERATE_IS_ADMIN_CLAIM,
+  ITERATE_ROLE_CLAIM,
+} from "@iterate-com/shared/auth-claims";
 
 const DEFAULT_ISSUER = "https://auth.iterate.com/api/auth";
 const SCOPES = ["openid", "profile", "email", "offline_access"] as const;
@@ -41,6 +46,8 @@ const IdTokenClaims = z.looseObject({
   aud: z.string(),
   iat: z.number(),
   exp: z.number(),
+  [ITERATE_IS_ADMIN_CLAIM]: z.boolean().optional(),
+  [ITERATE_ROLE_CLAIM]: z.string().nullable().optional(),
 });
 
 const AccessTokenClaims = z.looseObject({
@@ -52,6 +59,14 @@ const AccessTokenClaims = z.looseObject({
   aud: z.union([z.string(), z.array(z.string())]),
   iat: z.number(),
   exp: z.number(),
+  [ITERATE_IS_ADMIN_CLAIM]: z.boolean().optional(),
+  [ITERATE_ROLE_CLAIM]: z.string().nullable().optional(),
+});
+
+const UserInfoClaims = z.looseObject({
+  [ITERATE_IS_ADMIN_CLAIM]: z.boolean().optional(),
+  [ITERATE_ROLE_CLAIM]: z.string().nullable().optional(),
+  [ITERATE_ACTIVE_ORGANIZATION_ID_CLAIM]: z.string().nullable().optional(),
 });
 
 export type IdTokenClaims = z.infer<typeof IdTokenClaims>;
@@ -65,12 +80,15 @@ export type AuthUser = {
   givenName?: string;
   familyName?: string;
   emailVerified?: boolean;
+  role?: string | null;
+  isAdmin?: boolean;
 };
 
 export type AuthSession = {
   expiresAt: number;
   scope: string;
   sessionId?: string;
+  activeOrganizationId?: string | null;
 };
 
 export type AuthenticatedSession = {
@@ -85,6 +103,7 @@ export type AuthenticatedSession = {
 function buildAuthenticatedSession(
   accessToken: AccessTokenClaims,
   idToken: IdTokenClaims,
+  userInfo?: z.infer<typeof UserInfoClaims> | null,
 ): AuthenticatedSession {
   return {
     user: {
@@ -95,11 +114,22 @@ function buildAuthenticatedSession(
       givenName: idToken.given_name,
       familyName: idToken.family_name,
       emailVerified: idToken.email_verified,
+      role:
+        userInfo?.[ITERATE_ROLE_CLAIM] ??
+        idToken[ITERATE_ROLE_CLAIM] ??
+        accessToken[ITERATE_ROLE_CLAIM] ??
+        null,
+      isAdmin:
+        userInfo?.[ITERATE_IS_ADMIN_CLAIM] ??
+        idToken[ITERATE_IS_ADMIN_CLAIM] ??
+        accessToken[ITERATE_IS_ADMIN_CLAIM] ??
+        false,
     },
     session: {
       expiresAt: accessToken.exp,
       scope: accessToken.scope,
       sessionId: accessToken.sid,
+      activeOrganizationId: userInfo?.[ITERATE_ACTIVE_ORGANIZATION_ID_CLAIM] ?? null,
     },
     tokenClaims: { accessToken, idToken },
   };
@@ -226,6 +256,7 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
   const SESSION_COOKIE = `${prefix}_session`;
   const issuer = new URL(config.issuer ?? DEFAULT_ISSUER).href;
   const { jwks, doRefresh, cookieOpts } = infra;
+  const { getAuthorizationServer } = infra;
 
   function serializeSessionCookie(tokenSet: TokenSet): string {
     const expires = tokenSet.refreshToken
@@ -261,6 +292,7 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
       }
 
       try {
+        const as = await getAuthorizationServer();
         const { payload: rawAccessToken } = await jwtVerify(tokenSet.accessToken, jwks, {
           issuer,
           audience: issuer,
@@ -272,13 +304,32 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
 
         const accessToken = AccessTokenClaims.parse(rawAccessToken);
         const idToken = IdTokenClaims.parse(rawIdToken);
+        let userInfo: z.infer<typeof UserInfoClaims> | null = null;
+        if (as.userinfo_endpoint) {
+          try {
+            const userInfoResponse = await fetch(as.userinfo_endpoint, {
+              headers: {
+                authorization: `Bearer ${tokenSet.accessToken}`,
+                accept: "application/json",
+              },
+            });
+            if (userInfoResponse.ok) {
+              userInfo = UserInfoClaims.parse(await userInfoResponse.json());
+            }
+          } catch {
+            userInfo = null;
+          }
+        }
 
         const responseHeaders = new Headers();
         if (refreshed) {
           responseHeaders.set("Set-Cookie", serializeSessionCookie(tokenSet));
         }
 
-        return { session: buildAuthenticatedSession(accessToken, idToken), responseHeaders };
+        return {
+          session: buildAuthenticatedSession(accessToken, idToken, userInfo),
+          responseHeaders,
+        };
       } catch {
         return { session: null, responseHeaders: new Headers() };
       }
@@ -413,6 +464,7 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
     }
 
     try {
+      const as = await getAuthorizationServer();
       const { payload: rawAccessToken } = await jwtVerify(tokenSet.accessToken, jwks, {
         issuer: issuerURL.href,
         audience: issuerURL.href,
@@ -424,11 +476,27 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
 
       const accessToken = AccessTokenClaims.parse(rawAccessToken);
       const idToken = IdTokenClaims.parse(rawIdToken);
+      let userInfo: z.infer<typeof UserInfoClaims> | null = null;
+      if (as.userinfo_endpoint) {
+        try {
+          const userInfoResponse = await fetch(as.userinfo_endpoint, {
+            headers: {
+              authorization: `Bearer ${tokenSet.accessToken}`,
+              accept: "application/json",
+            },
+          });
+          if (userInfoResponse.ok) {
+            userInfo = UserInfoClaims.parse(await userInfoResponse.json());
+          }
+        } catch {
+          userInfo = null;
+        }
+      }
 
       writeCookie(c, tokenSet);
       return c.json({
         authenticated: true,
-        ...buildAuthenticatedSession(accessToken, idToken),
+        ...buildAuthenticatedSession(accessToken, idToken, userInfo),
       } satisfies SessionResponse);
     } catch {
       deleteCookie(c, SESSION_COOKIE, cookieOpts());

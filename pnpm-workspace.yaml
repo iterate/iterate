@@ -28,6 +28,7 @@ packages:
   - apps/agents-contract
   - apps/codemode
   - apps/codemode-contract
+  - apps/*
   - sandbox
   - jonasland/sandbox
   - jonasland/e2e

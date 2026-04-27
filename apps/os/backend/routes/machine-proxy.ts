@@ -14,6 +14,10 @@ import type { SandboxFetcher } from "@iterate-com/sandbox/providers/types";
 import type { CloudflareEnv } from "../../env.ts";
 import type { Variables } from "../types.ts";
 import * as schema from "../db/schema.ts";
+import {
+  getProjectAccessFromAuthWorker,
+  isAuthWorkerAccessDeniedError,
+} from "../auth/auth-context.ts";
 import { logger } from "../tag-logger.ts";
 import type { DB } from "../db/client.ts";
 import { rewriteHTMLUrls } from "../utils/proxy-html-rewriter.ts";
@@ -27,45 +31,40 @@ export const machineProxyApp = new Hono<{ Bindings: CloudflareEnv; Variables: Va
  */
 async function resolveProxyAccess(
   db: DB,
+  authUserId: string,
   orgSlug: string,
   projectSlug: string,
   machineId: string,
-  userId: string,
-  isSystemAdmin: boolean,
 ): Promise<{
   machine: typeof schema.machine.$inferSelect;
 } | null> {
-  const result = await db
-    .select({
-      machine: schema.machine,
-      membershipId: schema.organizationUserMembership.id,
-    })
-    .from(schema.machine)
-    .innerJoin(schema.project, eq(schema.machine.projectId, schema.project.id))
-    .innerJoin(schema.organization, eq(schema.project.organizationId, schema.organization.id))
-    .leftJoin(
-      schema.organizationUserMembership,
-      and(
-        eq(schema.organizationUserMembership.organizationId, schema.organization.id),
-        eq(schema.organizationUserMembership.userId, userId),
-      ),
-    )
-    .where(
-      and(
-        eq(schema.organization.slug, orgSlug),
-        eq(schema.project.slug, projectSlug),
-        eq(schema.machine.id, machineId),
-      ),
-    )
-    .limit(1);
+  let access: Awaited<ReturnType<typeof getProjectAccessFromAuthWorker>> | null = null;
+  try {
+    access = await getProjectAccessFromAuthWorker({
+      db,
+      authUserId,
+      projectSlug,
+    });
+  } catch (error) {
+    if (isAuthWorkerAccessDeniedError(error)) {
+      return null;
+    }
+    throw error;
+  }
 
-  const row = result[0];
-  if (!row) return null;
+  if (!access || access.organization.slug !== orgSlug) {
+    return null;
+  }
 
-  // Check access: must be member OR system admin
-  if (!row.membershipId && !isSystemAdmin) return null;
+  const machine = await db.query.machine.findFirst({
+    where: and(eq(schema.machine.projectId, access.project.id), eq(schema.machine.id, machineId)),
+  });
 
-  return { machine: row.machine };
+  if (!machine) {
+    return null;
+  }
+
+  return { machine };
 }
 
 /**
@@ -88,14 +87,17 @@ machineProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
   }
 
   // 3. Single query to resolve machine + check access
-  const access = await resolveProxyAccess(
-    db,
-    org,
-    project,
-    machine,
-    c.var.session.user.id,
-    c.var.session.user.role === "admin",
-  );
+  let access: Awaited<ReturnType<typeof resolveProxyAccess>>;
+  try {
+    access = await resolveProxyAccess(db, c.var.session.user.authUserId!, org, project, machine);
+  } catch (error) {
+    logger.error("Machine proxy auth lookup failed", error, {
+      organizationSlug: org,
+      projectSlug: project,
+      machineId: machine,
+    });
+    return c.json({ error: "Auth unavailable" }, 502);
+  }
 
   if (!access) {
     return c.json({ error: "Not found or forbidden" }, 404);

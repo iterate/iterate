@@ -1,5 +1,5 @@
 import { z } from "zod/v4";
-import { and, eq, ilike, sql } from "drizzle-orm";
+import { eq, ilike, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import { adminProcedure, protectedProcedure } from "../procedures.ts";
 import * as schema from "../../db/schema.ts";
@@ -8,44 +8,10 @@ import { getStripe } from "../../integrations/stripe/stripe.ts";
 import { queuer } from "../../outbox/outbox-queuer.ts";
 import { outboxClient } from "../../outbox/client.ts";
 import { getEventsRelatedTo } from "../../utils/machine-metadata.ts";
+import { createAuthWorkerClient } from "../../utils/auth-worker-client.ts";
+import { listOrganizationsFromAuthWorker } from "../../auth/auth-context.ts";
 
 export const adminRouter = {
-  // Impersonate a user (creates a session as that user)
-  impersonate: adminProcedure
-    .input(
-      z.object({
-        userId: z.string(),
-      }),
-    )
-    .handler(async ({ context: ctx, input }) => {
-      // This would typically integrate with better-auth's admin plugin
-      // For now, return the user info that would be impersonated
-      const targetUser = await ctx.db.query.user.findFirst({
-        where: eq(user.id, input.userId),
-      });
-
-      if (!targetUser) {
-        throw new Error("User not found");
-      }
-
-      return {
-        message: "Impersonation would be handled via Better Auth admin plugin",
-        targetUser: {
-          id: targetUser.id,
-          email: targetUser.email,
-          name: targetUser.name,
-        },
-      };
-    }),
-
-  // Stop impersonating
-  stopImpersonating: protectedProcedure.handler(async ({ context: _ctx }) => {
-    // This would integrate with better-auth's admin plugin
-    return {
-      message: "Stop impersonation would be handled via Better Auth admin plugin",
-    };
-  }),
-
   // List all users (admin only)
   listUsers: adminProcedure
     .input(
@@ -71,7 +37,7 @@ export const adminRouter = {
         email: u.email,
         name: u.name,
         image: u.image,
-        role: u.role,
+        role: null,
         createdAt: u.createdAt,
       }));
     }),
@@ -90,27 +56,18 @@ export const adminRouter = {
       const limit = input?.limit ?? 50;
       const offset = input?.offset ?? 0;
 
-      const orgs = await ctx.db.query.organization.findMany({
-        limit,
-        offset,
-        orderBy: (o, { desc }) => [desc(o.createdAt)],
-        with: {
-          projects: true,
-          members: {
-            with: {
-              user: true,
-            },
-          },
-        },
+      const orgs = await listOrganizationsFromAuthWorker({
+        db: ctx.db,
+        authUserId: ctx.user.authUserId!,
       });
 
-      return orgs.map((o) => ({
+      return orgs.slice(offset, offset + limit).map((o) => ({
         id: o.id,
         name: o.name,
         slug: o.slug,
         projectCount: o.projects.length,
-        memberCount: o.members.length,
-        createdAt: o.createdAt,
+        memberCount: null,
+        createdAt: null,
       }));
     }),
 
@@ -143,7 +100,7 @@ export const adminRouter = {
     )
     .handler(async ({ context: ctx, input }) => {
       const account = await ctx.db.query.billingAccount.findFirst({
-        where: eq(billingAccount.organizationId, input.organizationId),
+        where: eq(billingAccount.authOrganizationId, input.organizationId),
       });
 
       if (!account?.stripeCustomerId) {
@@ -208,20 +165,18 @@ export const adminRouter = {
         throw new Error("Project not found");
       }
 
-      const ownerMembership = await ctx.db.query.organizationUserMembership.findFirst({
-        where: and(
-          eq(schema.organizationUserMembership.organizationId, project.organizationId),
-          eq(schema.organizationUserMembership.role, "owner"),
-        ),
-        with: { user: true },
+      const authClient = createAuthWorkerClient({ asUser: { authUserId: ctx.user.authUserId! } });
+      const members = await authClient.organization.members({
+        organizationSlug: project.authOrganizationSlug,
       });
+      const ownerMembership = members.find((member) => member.role === "owner");
 
       if (!ownerMembership) {
         throw new Error("Organization owner not found");
       }
 
       return {
-        userId: ownerMembership.user.id,
+        userId: ownerMembership.userId,
         email: ownerMembership.user.email,
         name: ownerMembership.user.name,
       };
@@ -238,23 +193,9 @@ export const adminRouter = {
       if (input.userId === ctx.user.id && input.role !== "admin") {
         throw new Error("You cannot remove your own admin role");
       }
-
-      const targetUser = await ctx.db.query.user.findFirst({
-        where: eq(user.id, input.userId),
+      throw new ORPCError("NOT_IMPLEMENTED", {
+        message: "User role changes must be performed by the auth provider",
       });
-
-      if (!targetUser) {
-        throw new Error("User not found");
-      }
-
-      await ctx.db.update(user).set({ role: input.role }).where(eq(user.id, input.userId));
-
-      return {
-        userId: input.userId,
-        email: targetUser.email,
-        name: targetUser.name,
-        role: input.role,
-      };
     }),
 
   outbox: {

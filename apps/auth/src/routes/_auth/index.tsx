@@ -1,5 +1,5 @@
-import { Button } from "@iterate-com/ui";
-import { Card, CardContent, CardHeader, CardTitle } from "@iterate-com/ui";
+import { Button } from "@iterate-com/ui/components/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@iterate-com/ui/components/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@iterate-com/ui/components/avatar";
 import { Separator } from "@iterate-com/ui/components/separator";
 import { createFileRoute } from "@tanstack/react-router";

@@ -5,6 +5,7 @@ import type { Variables } from "../types.ts";
 import * as schema from "../db/schema.ts";
 import type { ApprovalStatus, EgressApproval } from "../egress-proxy/types.ts";
 import type { DB } from "../db/client.ts";
+import { requireLocalProjectAccessFromAuthWorker } from "../auth/auth-context.ts";
 import { broadcastInvalidation } from "../utils/query-invalidation.ts";
 import { logger } from "../tag-logger.ts";
 
@@ -24,12 +25,7 @@ egressApprovalsApp.get("/projects/:projectId/approvals", async (c) => {
   }
 
   const db = c.var.db;
-  const access = await requireProjectAccess(
-    db,
-    projectId,
-    session.user.id,
-    session.user.role === "admin",
-  );
+  const access = await requireProjectAccess(db, session.user.authUserId!, projectId);
   if (!access) {
     return c.json({ error: "Not found or forbidden" }, 404);
   }
@@ -57,12 +53,7 @@ egressApprovalsApp.get("/projects/:projectId/approvals/:id", async (c) => {
 
   const { projectId, id } = c.req.param();
   const db = c.var.db;
-  const access = await requireProjectAccess(
-    db,
-    projectId,
-    session.user.id,
-    session.user.role === "admin",
-  );
+  const access = await requireProjectAccess(db, session.user.authUserId!, projectId);
   if (!access) {
     return c.json({ error: "Not found or forbidden" }, 404);
   }
@@ -86,12 +77,7 @@ egressApprovalsApp.post("/projects/:projectId/approvals/:id/approve", async (c) 
 
   const { projectId, id } = c.req.param();
   const db = c.var.db;
-  const access = await requireProjectAccess(
-    db,
-    projectId,
-    session.user.id,
-    session.user.role === "admin",
-  );
+  const access = await requireProjectAccess(db, session.user.authUserId!, projectId);
   if (!access) {
     return c.json({ error: "Not found or forbidden" }, 404);
   }
@@ -129,12 +115,7 @@ egressApprovalsApp.post("/projects/:projectId/approvals/:id/reject", async (c) =
 
   const { projectId, id } = c.req.param();
   const db = c.var.db;
-  const access = await requireProjectAccess(
-    db,
-    projectId,
-    session.user.id,
-    session.user.role === "admin",
-  );
+  const access = await requireProjectAccess(db, session.user.authUserId!, projectId);
   if (!access) {
     return c.json({ error: "Not found or forbidden" }, 404);
   }
@@ -179,30 +160,19 @@ function parseApprovalStatus(status: string | undefined): ApprovalStatus | "inva
 
 async function requireProjectAccess(
   db: DB,
+  authUserId: string,
   projectId: string,
-  userId: string,
-  isSystemAdmin: boolean,
 ): Promise<boolean> {
-  const rows = await db
-    .select({
-      membershipId: schema.organizationUserMembership.id,
-    })
-    .from(schema.project)
-    .innerJoin(schema.organization, eq(schema.project.organizationId, schema.organization.id))
-    .leftJoin(
-      schema.organizationUserMembership,
-      and(
-        eq(schema.organizationUserMembership.organizationId, schema.organization.id),
-        eq(schema.organizationUserMembership.userId, userId),
-      ),
-    )
-    .where(eq(schema.project.id, projectId))
-    .limit(1);
-
-  const row = rows[0];
-  if (!row) return false;
-  if (!row.membershipId && !isSystemAdmin) return false;
-  return true;
+  try {
+    await requireLocalProjectAccessFromAuthWorker({
+      db,
+      authUserId,
+      projectId,
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function updateApprovalDecision(

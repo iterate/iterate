@@ -131,9 +131,6 @@ googleApp.get(
 
             const project = await c.var.db.query.project.findFirst({
               where: eq(schema.project.id, projectId),
-              with: {
-                organization: true,
-              },
             });
 
             if (project) {
@@ -290,7 +287,6 @@ googleApp.get(
           await tx.insert(schema.secret).values({
             key: "google.access_token",
             encryptedValue: encryptedAccessToken,
-            organizationId: projectInfo.organizationId,
             projectId,
             userId,
             metadata: secretMetadata,
@@ -301,9 +297,6 @@ googleApp.get(
 
       return tx.query.project.findFirst({
         where: eq(schema.project.id, projectId),
-        with: {
-          organization: true,
-        },
       });
     });
 

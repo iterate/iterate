@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ORPCError } from "@orpc/server";
 import {
   parseProjectIngressHostname,
   isProjectIngressHostname,
@@ -10,6 +11,14 @@ vi.mock("@iterate-com/sandbox/providers/machine-stub", () => ({
 
 vi.mock("../db/client.ts", () => ({
   getDb: vi.fn(),
+}));
+
+vi.mock("../auth/auth-context.ts", () => ({
+  getProjectAccessFromAuthWorker: vi.fn(),
+  requireLocalProjectAccessFromAuthWorker: vi.fn(),
+  isAuthWorkerAccessDeniedError: vi.fn((error: unknown) => {
+    return error instanceof ORPCError && error.code !== "INTERNAL_SERVER_ERROR";
+  }),
 }));
 
 vi.mock("../tag-logger.ts", () => ({
@@ -25,6 +34,9 @@ vi.mock("../tag-logger.ts", () => ({
 type MockDb = {
   select: ReturnType<typeof vi.fn>;
   query: {
+    project: {
+      findFirst: ReturnType<typeof vi.fn>;
+    };
     machine: {
       findFirst: ReturnType<typeof vi.fn>;
     };
@@ -47,7 +59,6 @@ function createProjectIngressDb(params: {
       const chain = {
         from: vi.fn(() => chain),
         innerJoin: vi.fn(() => chain),
-        leftJoin: vi.fn(() => chain),
         where: vi.fn(() => chain),
         limit: vi.fn(async () => {
           projectQueryCount += 1;
@@ -68,8 +79,9 @@ function createProjectIngressDb(params: {
                   type: "docker",
                   metadata: {},
                 },
+                projectId: "proj_123",
+                projectSlug: "demo",
                 defaultPort: 3000,
-                membershipId: "mem_123",
               },
             ];
           }
@@ -77,8 +89,8 @@ function createProjectIngressDb(params: {
           return [
             {
               projectId: "proj_123",
+              projectSlug: "demo",
               defaultPort: 3000,
-              membershipId: "mem_123",
             },
           ];
         }),
@@ -87,6 +99,23 @@ function createProjectIngressDb(params: {
       return chain;
     }),
     query: {
+      project: {
+        findFirst: vi.fn(async () => {
+          projectQueryCount += 1;
+          if (
+            params.maxProjectQueriesBeforeFailure !== undefined &&
+            projectQueryCount > params.maxProjectQueriesBeforeFailure
+          ) {
+            throw new Error("remaining connection slots are reserved for superuser connections");
+          }
+
+          return {
+            id: "proj_123",
+            slug: "demo",
+            defaultPort: 3000,
+          };
+        }),
+      },
       machine: {
         findFirst: vi.fn(async () => {
           machineQueryCount += 1;
@@ -166,12 +195,17 @@ describe("project ingress hostname resolution", () => {
 
 describe("project ingress request hostname", () => {
   it("avoids repeated DB lookups across a warm burst of authenticated ingress requests", async () => {
+    const { getProjectAccessFromAuthWorker } = await import("../auth/auth-context.ts");
     const { createMachineStub } = await import("@iterate-com/sandbox/providers/machine-stub");
     const { getDb } = await import("../db/client.ts");
     const { handleProjectIngressRequest } = await loadProjectIngressProxyModule();
 
     const db = createProjectIngressDb({ maxProjectQueriesBeforeFailure: 1 });
     vi.mocked(getDb).mockReturnValue(db.db as never);
+    vi.mocked(getProjectAccessFromAuthWorker).mockResolvedValue({
+      project: {} as never,
+      organization: {} as never,
+    });
     vi.mocked(createMachineStub).mockResolvedValue({
       getFetcher: vi.fn().mockResolvedValue(vi.fn().mockResolvedValue(createResponse())),
     } as never);
@@ -196,15 +230,21 @@ describe("project ingress request hostname", () => {
     expect(responses).toHaveLength(100);
     expect(db.getProjectQueryCount()).toBe(1);
     expect(db.getMachineQueryCount()).toBe(1);
+    expect(vi.mocked(getProjectAccessFromAuthWorker)).toHaveBeenCalledTimes(1);
   });
 
   it("does not cache machine resolutions for starting machines", async () => {
+    const { getProjectAccessFromAuthWorker } = await import("../auth/auth-context.ts");
     const { createMachineStub } = await import("@iterate-com/sandbox/providers/machine-stub");
     const { getDb } = await import("../db/client.ts");
     const { handleProjectIngressRequest } = await loadProjectIngressProxyModule();
 
     const db = createProjectIngressDb({ machineState: "starting" });
     vi.mocked(getDb).mockReturnValue(db.db as never);
+    vi.mocked(getProjectAccessFromAuthWorker).mockResolvedValue({
+      project: {} as never,
+      organization: {} as never,
+    });
     vi.mocked(createMachineStub).mockResolvedValue({
       getFetcher: vi.fn().mockResolvedValue(vi.fn().mockResolvedValue(createResponse())),
     } as never);
@@ -228,6 +268,7 @@ describe("project ingress request hostname", () => {
     await handleProjectIngressRequest(requestB, env, session);
 
     expect(db.getProjectQueryCount()).toBe(2);
+    expect(vi.mocked(getProjectAccessFromAuthWorker)).toHaveBeenCalledTimes(2);
   });
 
   it("prefers host header when request url host is localhost", async () => {
@@ -253,5 +294,71 @@ describe("project ingress request hostname", () => {
     });
 
     expect(getProjectIngressRequestHostname(request)).toBe("4096__mach_abc.dev.iterate.com");
+  });
+
+  it("returns 502 when auth worker lookup fails for a custom-domain project route", async () => {
+    const { requireLocalProjectAccessFromAuthWorker } = await import("../auth/auth-context.ts");
+    const { getDb } = await import("../db/client.ts");
+    const { handleProjectIngressRequest } = await loadProjectIngressProxyModule();
+
+    const db = createProjectIngressDb({});
+    vi.mocked(getDb).mockReturnValue({
+      ...db.db,
+      select: vi.fn(() => {
+        const chain = {
+          from: vi.fn(() => chain),
+          where: vi.fn(() => chain),
+          orderBy: vi.fn(() => chain),
+          limit: vi.fn(async () => [
+            {
+              id: "proj_123",
+              slug: "demo",
+              defaultPort: 3000,
+              customDomain: "example.com",
+            },
+          ]),
+        };
+
+        return chain;
+      }),
+      query: {
+        ...db.db.query,
+        project: {
+          ...db.db.query.project,
+          findFirst: vi.fn(async () => ({
+            id: "proj_123",
+            slug: "demo",
+            defaultPort: 3000,
+            customDomain: "example.com",
+          })),
+        },
+      },
+    } as never);
+    vi.mocked(requireLocalProjectAccessFromAuthWorker).mockRejectedValue(
+      new ORPCError("INTERNAL_SERVER_ERROR", { message: "auth worker timeout" }),
+    );
+
+    const request = new Request("https://example.com/", {
+      headers: { host: "example.com" },
+    });
+    const env = {
+      PROJECT_INGRESS_DOMAIN: "iterate.app",
+      VITE_PUBLIC_URL: "https://os.iterate.com",
+    } as never;
+    const session = {
+      user: { id: "usr_123", authUserId: "auth_usr_123", role: "user" },
+    } as never;
+
+    const response = await handleProjectIngressRequest(request, env, session);
+
+    expect(response).not.toBeNull();
+    if (!response) {
+      throw new Error("Expected project ingress response");
+    }
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "auth_unavailable",
+    });
   });
 });

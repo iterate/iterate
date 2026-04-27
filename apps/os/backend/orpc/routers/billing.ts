@@ -10,7 +10,7 @@ import { env } from "../../../env.ts";
 export const billingRouter = {
   getBillingAccount: orgProtectedProcedure.input(OrgInput).handler(async ({ context: ctx }) => {
     const account = await ctx.db.query.billingAccount.findFirst({
-      where: eq(schema.billingAccount.organizationId, ctx.organization.id),
+      where: eq(schema.billingAccount.authOrganizationId, ctx.organization.id),
     });
 
     return account ?? null;
@@ -29,14 +29,14 @@ export const billingRouter = {
 
       const account = await ctx.db.transaction(async (tx) => {
         let existing = await tx.query.billingAccount.findFirst({
-          where: eq(schema.billingAccount.organizationId, ctx.organization.id),
+          where: eq(schema.billingAccount.authOrganizationId, ctx.organization.id),
         });
 
         if (!existing) {
           const [newAccount] = await tx
             .insert(schema.billingAccount)
             .values({
-              organizationId: ctx.organization.id,
+              authOrganizationId: ctx.organization.id,
             })
             .returning();
           existing = newAccount;
@@ -106,7 +106,7 @@ export const billingRouter = {
     const stripe = getStripe();
 
     const account = await ctx.db.query.billingAccount.findFirst({
-      where: eq(schema.billingAccount.organizationId, ctx.organization.id),
+      where: eq(schema.billingAccount.authOrganizationId, ctx.organization.id),
     });
 
     if (!account?.stripeCustomerId) {
@@ -128,7 +128,7 @@ export const billingRouter = {
 
   getUsageSummary: orgProtectedProcedure.input(OrgInput).handler(async ({ context: ctx }) => {
     const account = await ctx.db.query.billingAccount.findFirst({
-      where: eq(schema.billingAccount.organizationId, ctx.organization.id),
+      where: eq(schema.billingAccount.authOrganizationId, ctx.organization.id),
     });
 
     if (!account?.stripeSubscriptionId) {

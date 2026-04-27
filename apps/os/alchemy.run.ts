@@ -2,6 +2,8 @@ import { execSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import { join } from "node:path";
 import { CronExpressionParser } from "cron-parser";
+import { createORPCClient } from "@orpc/client";
+import { RPCLink } from "@orpc/client/fetch";
 import alchemy, { type Scope } from "alchemy";
 import {
   DurableObjectNamespace,
@@ -18,6 +20,7 @@ import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { Exec } from "alchemy/os";
 import { z } from "zod/v4";
 import dedent from "dedent";
+import { SERVICE_TOKEN_HEADER, type AuthContractClient } from "../auth-contract/src/index.ts";
 import {
   ensurePnpmStoreVolume as ensureIteratePnpmStoreVolume,
   getDockerEnvVars,
@@ -67,6 +70,8 @@ const DEV_TUNNEL = DEV_TUNNEL_DISABLED
   : (explicitDevTunnel ?? process.env.ITERATE_USER?.trim());
 const DEV_OS_DOMAIN = "iterate-dev.com";
 const DEV_MACHINE_DOMAIN = "iterate-dev.app";
+const AUTH_EXAMPLE_DEV_VARS_PATH = join(repoRoot, "apps", "auth-example", ".dev.vars");
+const AUTH_EXAMPLE_REDIRECT_URI = "http://localhost:7201/api/iterate-auth/callback";
 
 async function ensureDevTunnelWildcardDns(tunnelId: string) {
   if (!DEV_TUNNEL) return;
@@ -332,6 +337,78 @@ function setupDevTunnelEnv() {
   process.env.VITE_PUBLIC_URL = `https://${DEV_TUNNEL}.${DEV_OS_DOMAIN}`;
 }
 
+async function ensureLocalDevOAuthClients(params: {
+  authAppOrigin: string;
+  serviceAuthToken: string;
+  osPublicUrl: string;
+}) {
+  const client: AuthContractClient = createORPCClient(
+    new RPCLink({
+      url: new URL("/api/orpc", params.authAppOrigin).toString(),
+      fetch: (input: RequestInfo | URL, init?: RequestInit) => {
+        const headers = new Headers(init?.headers);
+        headers.set(SERVICE_TOKEN_HEADER, params.serviceAuthToken);
+        return fetch(input, { ...init, headers });
+      },
+    }),
+  );
+
+  const osRedirectUri = new URL("/api/iterate-auth/callback", params.osPublicUrl).toString();
+
+  const startedAt = Date.now();
+  let authExampleClient: Awaited<ReturnType<typeof client.internal.oauth.ensureClient>>;
+  let osClient: Awaited<ReturnType<typeof client.internal.oauth.ensureClient>>;
+
+  while (true) {
+    try {
+      [authExampleClient, osClient] = await Promise.all([
+        client.internal.oauth.ensureClient({
+          referenceId: "dev:auth-example",
+          clientName: "Iterate Auth Example (Local Dev)",
+          redirectURIs: [AUTH_EXAMPLE_REDIRECT_URI],
+        }),
+        client.internal.oauth.ensureClient({
+          referenceId: "dev:os",
+          clientName: "Iterate OS (Local Dev)",
+          redirectURIs: [osRedirectUri],
+        }),
+      ]);
+      break;
+    } catch (error) {
+      if (Date.now() - startedAt > 180_000) {
+        throw new Error("Timed out waiting for auth dev server to provision local OAuth clients", {
+          cause: error instanceof Error ? error : undefined,
+        });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
+  }
+
+  const authIssuer = new URL("/api/auth", params.authAppOrigin).toString();
+  const nextContents = [
+    "# Managed by apps/os/alchemy.run.ts during `pnpm dev`.",
+    `ITERATE_OAUTH_ISSUER=${authIssuer}`,
+    `ITERATE_OAUTH_CLIENT_ID=${authExampleClient.clientId}`,
+    `ITERATE_OAUTH_CLIENT_SECRET=${authExampleClient.clientSecret}`,
+    `ITERATE_OAUTH_REDIRECT_URI=${AUTH_EXAMPLE_REDIRECT_URI}`,
+    "",
+  ].join("\n");
+
+  const currentContents = fs.existsSync(AUTH_EXAMPLE_DEV_VARS_PATH)
+    ? fs.readFileSync(AUTH_EXAMPLE_DEV_VARS_PATH, "utf8")
+    : null;
+
+  if (currentContents !== nextContents) {
+    fs.writeFileSync(AUTH_EXAMPLE_DEV_VARS_PATH, nextContents, "utf8");
+    console.log(`Updated ${AUTH_EXAMPLE_DEV_VARS_PATH} with local dev OAuth client credentials`);
+  }
+
+  process.env.ITERATE_OAUTH_ISSUER = authIssuer;
+  process.env.ITERATE_OAUTH_CLIENT_ID = osClient.clientId;
+  process.env.ITERATE_OAUTH_CLIENT_SECRET = osClient.clientSecret;
+  process.env.ITERATE_OAUTH_REDIRECT_URI = osRedirectUri;
+}
+
 async function verifyDopplerEnvironment() {
   if (process.env.SKIP_DOPPLER_CHECK) return;
   const dopplerConfig = z
@@ -422,6 +499,11 @@ const Env = z.object({
   POSTHOG_WEBHOOK_SECRET: Optional,
   SERVICE_AUTH_TOKEN: Required,
   VITE_PUBLIC_URL: Required,
+  VITE_AUTH_APP_ORIGIN: Required,
+  ITERATE_OAUTH_ISSUER: Optional,
+  ITERATE_OAUTH_CLIENT_ID: Optional,
+  ITERATE_OAUTH_CLIENT_SECRET: Optional,
+  ITERATE_OAUTH_REDIRECT_URI: Optional,
   PROJECT_INGRESS_DOMAIN: Optional, // optional here; validated after fallback from old var name
   PROJECT_INGRESS_PROXY_CANONICAL_HOST: Optional, // legacy fallback, remove after Doppler update
   VITE_APP_STAGE: Required,
@@ -853,6 +935,19 @@ if (isDevelopment) {
 
 // Setup database and env first
 const dbConfig = await setupDatabase();
+
+if (isDevelopment) {
+  const authAppOrigin = process.env.VITE_AUTH_APP_ORIGIN;
+  const serviceAuthToken = process.env.SERVICE_AUTH_TOKEN;
+  const osPublicUrl = process.env.VITE_PUBLIC_URL;
+  if (!authAppOrigin || !serviceAuthToken || !osPublicUrl) {
+    throw new Error(
+      "VITE_AUTH_APP_ORIGIN, SERVICE_AUTH_TOKEN, and VITE_PUBLIC_URL are required for dev OAuth client provisioning",
+    );
+  }
+  await ensureLocalDevOAuthClients({ authAppOrigin, serviceAuthToken, osPublicUrl });
+}
+
 const envSecrets = await setupEnvironmentVariables();
 
 // Deploy main worker (includes egress proxy on /api/egress-proxy)

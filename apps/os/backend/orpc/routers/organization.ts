@@ -1,5 +1,5 @@
 import { z } from "zod/v4";
-import { eq, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
 import {
   protectedProcedure,
@@ -8,14 +8,10 @@ import {
   orgAdminMutation,
   OrgInput,
 } from "../procedures.ts";
-import {
-  organization,
-  organizationUserMembership,
-  organizationInvite,
-  UserRole,
-  user,
-} from "../../db/schema.ts";
-import { slugify } from "../../utils/slug.ts";
+import * as schema from "../../db/schema.ts";
+import { UserRole } from "../../db/schema.ts";
+import { authClientFor } from "../../utils/auth-worker-client.ts";
+import { listProjectsForOrganizationFromAuthWorker } from "../../auth/auth-context.ts";
 
 export const organizationRouter = {
   create: protectedMutation
@@ -25,36 +21,11 @@ export const organizationRouter = {
       }),
     )
     .handler(async ({ context: ctx, input }) => {
-      const slug = slugify(input.name);
-      const existing = await ctx.db.query.organization.findFirst({
-        where: eq(organization.slug, slug),
+      return authClientFor(ctx).organization.create({
+        name: input.name,
       });
-
-      if (existing) {
-        throw new ORPCError("CONFLICT", {
-          message: "An organization with this name already exists",
-        });
-      }
-
-      const [newOrg] = await ctx.db
-        .insert(organization)
-        .values({ name: input.name, slug })
-        .returning();
-
-      if (!newOrg) {
-        throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "Failed to create organization" });
-      }
-
-      await ctx.db.insert(organizationUserMembership).values({
-        organizationId: newOrg.id,
-        userId: ctx.user.id,
-        role: "owner",
-      });
-
-      return newOrg;
     }),
 
-  // Get organization by slug
   bySlug: orgProtectedProcedure.input(OrgInput).handler(async ({ context: ctx }) => {
     return {
       ...ctx.organization,
@@ -62,22 +33,20 @@ export const organizationRouter = {
     };
   }),
 
-  // Get organization with projects
   withProjects: orgProtectedProcedure.input(OrgInput).handler(async ({ context: ctx }) => {
-    const org = await ctx.db.query.organization.findFirst({
-      where: eq(organization.id, ctx.organization.id),
-      with: {
-        projects: true,
-      },
+    const projects = await listProjectsForOrganizationFromAuthWorker({
+      db: ctx.db,
+      authUserId: ctx.user.authUserId!,
+      organizationSlug: ctx.organization.slug,
     });
 
     return {
-      ...org,
+      ...ctx.organization,
+      projects,
       role: ctx.membership?.role,
     };
   }),
 
-  // Update organization settings
   update: orgAdminMutation
     .input(
       z.object({
@@ -86,38 +55,16 @@ export const organizationRouter = {
       }),
     )
     .handler(async ({ context: ctx, input }) => {
-      const [updated] = await ctx.db
-        .update(organization)
-        .set({
-          ...(input.name && { name: input.name }),
-        })
-        .where(eq(organization.id, ctx.organization.id))
-        .returning();
-
-      return updated;
+      return authClientFor(ctx).organization.update({
+        organizationSlug: ctx.organization.slug,
+        name: input.name ?? ctx.organization.name,
+      });
     }),
 
-  // Get organization members
   members: orgProtectedProcedure.input(OrgInput).handler(async ({ context: ctx }) => {
-    const members = await ctx.db.query.organizationUserMembership.findMany({
-      where: eq(organizationUserMembership.organizationId, ctx.organization.id),
-      with: {
-        user: true,
-      },
+    return authClientFor(ctx).organization.members({
+      organizationSlug: ctx.organization.slug,
     });
-
-    return members.map((m) => ({
-      id: m.id,
-      userId: m.userId,
-      role: m.role,
-      user: {
-        id: m.user.id,
-        name: m.user.name,
-        email: m.user.email,
-        image: m.user.image,
-      },
-      createdAt: m.createdAt,
-    }));
   }),
 
   addMember: orgAdminMutation
@@ -129,46 +76,13 @@ export const organizationRouter = {
       }),
     )
     .handler(async ({ context: ctx, input }) => {
-      const existingUser = await ctx.db.query.user.findFirst({
-        where: eq(user.email, input.email),
+      return authClientFor(ctx).organization.createInvite({
+        organizationSlug: ctx.organization.slug,
+        email: input.email,
+        role: input.role,
       });
-
-      if (!existingUser) {
-        throw new ORPCError("NOT_FOUND", { message: "User not found" });
-      }
-
-      const existingMembership = await ctx.db.query.organizationUserMembership.findFirst({
-        where: and(
-          eq(organizationUserMembership.organizationId, ctx.organization.id),
-          eq(organizationUserMembership.userId, existingUser.id),
-        ),
-      });
-
-      if (existingMembership) {
-        return existingMembership;
-      }
-
-      if (input.role === "owner" && ctx.membership?.role !== "owner") {
-        throw new ORPCError("FORBIDDEN", { message: "Only owners can add other owners" });
-      }
-
-      const [membership] = await ctx.db
-        .insert(organizationUserMembership)
-        .values({
-          organizationId: ctx.organization.id,
-          userId: existingUser.id,
-          role: input.role ?? "member",
-        })
-        .returning();
-
-      if (!membership) {
-        throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "Failed to add member" });
-      }
-
-      return membership;
     }),
 
-  // Update member role
   updateMemberRole: orgAdminMutation
     .input(
       z.object({
@@ -178,31 +92,13 @@ export const organizationRouter = {
       }),
     )
     .handler(async ({ context: ctx, input }) => {
-      // Can't change your own role
-      if (input.userId === ctx.user.id) {
-        throw new ORPCError("FORBIDDEN", { message: "Cannot change your own role" });
-      }
-
-      // Only owners can promote to owner
-      if (input.role === "owner" && ctx.membership?.role !== "owner") {
-        throw new ORPCError("FORBIDDEN", { message: "Only owners can promote to owner" });
-      }
-
-      const [updated] = await ctx.db
-        .update(organizationUserMembership)
-        .set({ role: input.role })
-        .where(
-          and(
-            eq(organizationUserMembership.organizationId, ctx.organization.id),
-            eq(organizationUserMembership.userId, input.userId),
-          ),
-        )
-        .returning();
-
-      return updated;
+      return authClientFor(ctx).organization.updateMemberRole({
+        organizationSlug: ctx.organization.slug,
+        userId: input.userId,
+        role: input.role,
+      });
     }),
 
-  // Remove member from organization
   removeMember: orgAdminMutation
     .input(
       z.object({
@@ -211,49 +107,33 @@ export const organizationRouter = {
       }),
     )
     .handler(async ({ context: ctx, input }) => {
-      // Can't remove yourself
-      if (input.userId === ctx.user.id) {
-        throw new ORPCError("FORBIDDEN", {
-          message: "Cannot remove yourself from the organization",
-        });
-      }
-
-      // Check if trying to remove an owner
-      const targetMembership = await ctx.db.query.organizationUserMembership.findFirst({
-        where: and(
-          eq(organizationUserMembership.organizationId, ctx.organization.id),
-          eq(organizationUserMembership.userId, input.userId),
-        ),
+      return authClientFor(ctx).organization.removeMember({
+        organizationSlug: ctx.organization.slug,
+        userId: input.userId,
       });
-
-      if (targetMembership?.role === "owner" && ctx.membership?.role !== "owner") {
-        throw new ORPCError("FORBIDDEN", { message: "Only owners can remove other owners" });
-      }
-
-      await ctx.db
-        .delete(organizationUserMembership)
-        .where(
-          and(
-            eq(organizationUserMembership.organizationId, ctx.organization.id),
-            eq(organizationUserMembership.userId, input.userId),
-          ),
-        );
-
-      return { success: true };
     }),
 
-  // Delete organization (owner only)
   delete: orgAdminMutation.input(OrgInput).handler(async ({ context: ctx }) => {
-    if (ctx.membership?.role !== "owner") {
+    if (ctx.membership?.role !== "owner" && ctx.user.role !== "admin") {
       throw new ORPCError("FORBIDDEN", { message: "Only owners can delete organizations" });
     }
 
-    await ctx.db.delete(organization).where(eq(organization.id, ctx.organization.id));
+    await authClientFor(ctx).organization.delete({
+      organizationSlug: ctx.organization.slug,
+    });
+
+    await ctx.db.transaction(async (tx) => {
+      await tx
+        .delete(schema.billingAccount)
+        .where(eq(schema.billingAccount.authOrganizationId, ctx.organization.id));
+      await tx
+        .delete(schema.project)
+        .where(eq(schema.project.authOrganizationId, ctx.organization.id));
+    });
 
     return { success: true };
   }),
 
-  // Create an invite for someone to join the organization
   createInvite: orgAdminMutation
     .input(
       z.object({
@@ -263,181 +143,52 @@ export const organizationRouter = {
       }),
     )
     .handler(async ({ context: ctx, input }) => {
-      // Check if user is already a member
-      const existingUser = await ctx.db.query.user.findFirst({
-        where: eq(user.email, input.email),
+      return authClientFor(ctx).organization.createInvite({
+        organizationSlug: ctx.organization.slug,
+        email: input.email,
+        role: input.role,
       });
-
-      if (existingUser) {
-        const existingMembership = await ctx.db.query.organizationUserMembership.findFirst({
-          where: and(
-            eq(organizationUserMembership.organizationId, ctx.organization.id),
-            eq(organizationUserMembership.userId, existingUser.id),
-          ),
-        });
-
-        if (existingMembership) {
-          throw new ORPCError("CONFLICT", {
-            message: "User is already a member of this organization",
-          });
-        }
-      }
-
-      // Check if invite already exists
-      const existingInvite = await ctx.db.query.organizationInvite.findFirst({
-        where: and(
-          eq(organizationInvite.organizationId, ctx.organization.id),
-          eq(organizationInvite.email, input.email),
-        ),
-      });
-
-      if (existingInvite) {
-        throw new ORPCError("CONFLICT", { message: "Invite already sent to this email" });
-      }
-
-      // Only owners can invite as owner
-      if (input.role === "owner" && ctx.membership?.role !== "owner") {
-        throw new ORPCError("FORBIDDEN", { message: "Only owners can invite other owners" });
-      }
-
-      const [invite] = await ctx.db
-        .insert(organizationInvite)
-        .values({
-          organizationId: ctx.organization.id,
-          email: input.email,
-          invitedByUserId: ctx.user.id,
-          role: input.role ?? "member",
-        })
-        .returning();
-
-      return invite;
     }),
 
-  // List pending invites for the organization
   listInvites: orgProtectedProcedure.input(OrgInput).handler(async ({ context: ctx }) => {
-    const invites = await ctx.db.query.organizationInvite.findMany({
-      where: eq(organizationInvite.organizationId, ctx.organization.id),
-      with: {
-        invitedBy: true,
-      },
+    return authClientFor(ctx).organization.listInvites({
+      organizationSlug: ctx.organization.slug,
     });
-
-    return invites.map((inv) => ({
-      id: inv.id,
-      email: inv.email,
-      role: inv.role,
-      invitedBy: {
-        id: inv.invitedBy.id,
-        name: inv.invitedBy.name,
-        email: inv.invitedBy.email,
-      },
-      createdAt: inv.createdAt,
-    }));
   }),
 
-  // Cancel/delete an invite
   cancelInvite: orgAdminMutation
     .input(z.object({ ...OrgInput.shape, inviteId: z.string() }))
     .handler(async ({ context: ctx, input }) => {
-      await ctx.db
-        .delete(organizationInvite)
-        .where(
-          and(
-            eq(organizationInvite.id, input.inviteId),
-            eq(organizationInvite.organizationId, ctx.organization.id),
-          ),
-        );
-
-      return { success: true };
+      return authClientFor(ctx).organization.cancelInvite({
+        organizationSlug: ctx.organization.slug,
+        inviteId: input.inviteId,
+      });
     }),
 
-  // Get invites for the current user (across all orgs)
   myPendingInvites: protectedProcedure.handler(async ({ context: ctx }) => {
-    const invites = await ctx.db.query.organizationInvite.findMany({
-      where: eq(organizationInvite.email, ctx.user.email),
-      with: {
-        organization: true,
-        invitedBy: true,
-      },
-    });
-
-    return invites.map((inv) => ({
-      id: inv.id,
-      role: inv.role,
-      organization: {
-        id: inv.organization.id,
-        name: inv.organization.name,
-        slug: inv.organization.slug,
-      },
-      invitedBy: {
-        id: inv.invitedBy.id,
-        name: inv.invitedBy.name,
-      },
-      createdAt: inv.createdAt,
-    }));
+    return authClientFor(ctx).organization.myPendingInvites();
   }),
 
-  // Accept an invite
   acceptInvite: protectedMutation
     .input(z.object({ inviteId: z.string() }))
     .handler(async ({ context: ctx, input }) => {
-      const invite = await ctx.db.query.organizationInvite.findFirst({
-        where: and(
-          eq(organizationInvite.id, input.inviteId),
-          eq(organizationInvite.email, ctx.user.email),
-        ),
-        with: {
-          organization: true,
-        },
+      return authClientFor(ctx).organization.acceptInvite({
+        inviteId: input.inviteId,
       });
-
-      if (!invite) {
-        throw new ORPCError("NOT_FOUND", { message: "Invite not found or not for this user" });
-      }
-
-      // Add user to organization
-      await ctx.db.insert(organizationUserMembership).values({
-        organizationId: invite.organizationId,
-        userId: ctx.user.id,
-        role: invite.role as (typeof UserRole)[number],
-      });
-
-      // Delete the invite
-      await ctx.db.delete(organizationInvite).where(eq(organizationInvite.id, invite.id));
-
-      return invite.organization;
     }),
 
-  // Decline an invite
   declineInvite: protectedMutation
     .input(z.object({ inviteId: z.string() }))
     .handler(async ({ context: ctx, input }) => {
-      const invite = await ctx.db.query.organizationInvite.findFirst({
-        where: and(
-          eq(organizationInvite.id, input.inviteId),
-          eq(organizationInvite.email, ctx.user.email),
-        ),
+      return authClientFor(ctx).organization.declineInvite({
+        inviteId: input.inviteId,
       });
-
-      if (!invite) {
-        throw new ORPCError("NOT_FOUND", { message: "Invite not found or not for this user" });
-      }
-
-      await ctx.db.delete(organizationInvite).where(eq(organizationInvite.id, invite.id));
-
-      return { success: true };
     }),
 
-  // Leave an organization (self-removal)
   leave: orgProtectedProcedure.input(OrgInput).handler(async ({ context: ctx }) => {
-    await ctx.db
-      .delete(organizationUserMembership)
-      .where(
-        and(
-          eq(organizationUserMembership.organizationId, ctx.organization.id),
-          eq(organizationUserMembership.userId, ctx.user.id),
-        ),
-      );
+    await authClientFor(ctx).organization.leave({
+      organizationSlug: ctx.organization.slug,
+    });
 
     return { success: true };
   }),

@@ -49,12 +49,17 @@ export function initializeOtel(bindings?: Record<string, unknown>): void {
     return;
   }
 
+  type BatchSpanProcessorExporter = ConstructorParameters<typeof BatchSpanProcessor>[0];
+  const spanExporter = new OTLPTraceExporter({
+    url: traceExporterUrl,
+  }) as unknown as BatchSpanProcessorExporter;
+
   const provider = new BasicTracerProvider({
     resource: resourceFromAttributes({
       [ATTR_SERVICE_NAME]: "iterate-os-backend",
       [ATTR_SERVICE_VERSION]: globalThis.process?.env?.npm_package_version || "0.0.0",
     }),
-    spanProcessors: [new BatchSpanProcessor(new OTLPTraceExporter({ url: traceExporterUrl }))],
+    spanProcessors: [new BatchSpanProcessor(spanExporter)],
   });
 
   trace.setGlobalTracerProvider(provider);

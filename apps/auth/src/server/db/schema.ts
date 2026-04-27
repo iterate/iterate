@@ -47,6 +47,23 @@ export const session = sqliteTable(
   (table) => [index("session_userId_idx").on(table.userId)],
 );
 
+export const deviceCode = sqliteTable(
+  "device_code",
+  {
+    id: text("id").primaryKey(),
+    deviceCode: text("device_code").notNull(),
+    userCode: text("user_code").notNull(),
+    userId: text("user_id").references(() => user.id, { onDelete: "cascade" }),
+    expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+    status: text("status").notNull(),
+    lastPolledAt: integer("last_polled_at", { mode: "timestamp_ms" }),
+    pollingInterval: integer("polling_interval"),
+    clientId: text("client_id"),
+    ...withTimestamps,
+  },
+  (table) => [index("device_code_deviceCode_idx").on(table.deviceCode)],
+);
+
 export const account = sqliteTable(
   "account",
   {
@@ -103,6 +120,25 @@ export const organization = sqliteTable(
     metadata: text("metadata"),
   },
   (table) => [uniqueIndex("organization_slug_uidx").on(table.slug)],
+);
+
+export const project = sqliteTable(
+  "project",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    slug: text("slug").notNull().unique(),
+    metadata: text("metadata", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
+    archivedAt: integer("archived_at", { mode: "timestamp_ms" }),
+    ...withTimestamps,
+  },
+  (table) => [
+    index("project_organizationId_idx").on(table.organizationId),
+    uniqueIndex("project_slug_uidx").on(table.slug),
+  ],
 );
 
 export const member = sqliteTable(
@@ -231,6 +267,7 @@ export const oauthConsent = sqliteTable("oauth_consent", {
 export const userRelations = relations(user, ({ many }) => ({
   sessions: many(session),
   accounts: many(account),
+  deviceCodes: many(deviceCode),
   members: many(member),
   invitations: many(invitation),
   oauthClients: many(oauthClient),
@@ -248,6 +285,13 @@ export const sessionRelations = relations(session, ({ one, many }) => ({
   oauthAccessTokens: many(oauthAccessToken),
 }));
 
+export const deviceCodeRelations = relations(deviceCode, ({ one }) => ({
+  user: one(user, {
+    fields: [deviceCode.userId],
+    references: [user.id],
+  }),
+}));
+
 export const accountRelations = relations(account, ({ one }) => ({
   user: one(user, {
     fields: [account.userId],
@@ -258,6 +302,14 @@ export const accountRelations = relations(account, ({ one }) => ({
 export const organizationRelations = relations(organization, ({ many }) => ({
   members: many(member),
   invitations: many(invitation),
+  projects: many(project),
+}));
+
+export const projectRelations = relations(project, ({ one }) => ({
+  organization: one(organization, {
+    fields: [project.organizationId],
+    references: [organization.id],
+  }),
 }));
 
 export const memberRelations = relations(member, ({ one }) => ({

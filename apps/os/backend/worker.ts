@@ -3,6 +3,7 @@ import { minimatch } from "minimatch";
 import { parseRouter } from "trpc-cli";
 import { contextStorage } from "hono/context-storage";
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { setCookie } from "hono/cookie";
 import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
 import { RPCHandler } from "@orpc/server/fetch";
@@ -17,10 +18,12 @@ import {
   isProjectIngressHostname,
   parseProjectIngressHostname,
 } from "@iterate-com/shared/project-ingress";
+import { parseBearerToken } from "@iterate-com/shared/bearer";
 import type { CloudflareEnv } from "../env.ts";
 import { isNonProd } from "../env.ts";
 import { getDb } from "./db/client.ts";
-import { getAuth } from "./auth/auth.ts";
+import { getOAuthMirroredSession, getOsIterateAuth } from "./auth/auth-worker-session.ts";
+import { PROJECT_INGRESS_AUTH_TOKEN_COOKIE } from "./auth/constants.ts";
 import { appRouter } from "./orpc/root.ts";
 import { createContext } from "./orpc/context.ts";
 import { slackApp } from "./integrations/slack/slack.ts";
@@ -51,6 +54,7 @@ import { ProjectDurableObject } from "./durable-objects/project.ts";
 import { DeploymentDurableObject } from "./durable-objects/deployment.ts";
 import type { Variables } from "./types.ts";
 import { getOtelConfig, initializeOtel, withExtractedTraceContext } from "./utils/otel-init.ts";
+import { createAuthWorkerClient } from "./utils/auth-worker-client.ts";
 import {
   buildCanonicalProjectIngressProxyHostname,
   buildControlPlaneProjectIngressProxyLoginUrl,
@@ -207,10 +211,7 @@ app.post("/api/debug/trigger-error", (c) => {
     return c.json({ error: "Not found" }, 404);
   }
 
-  const authorization = c.req.header("authorization");
-  const bearerToken = authorization?.startsWith("Bearer ")
-    ? authorization.slice(7).trim()
-    : undefined;
+  const bearerToken = parseBearerToken(c.req.header("authorization"));
   const providedToken = bearerToken ?? c.req.header("x-iterate-debug-token")?.trim();
 
   if (!providedToken || providedToken !== serviceAuthToken) {
@@ -237,18 +238,23 @@ app.use(
   secureHeaders(),
 );
 
+app.all("/api/iterate-auth/*", (c) => getOsIterateAuth(c.env).handler(c.req.raw));
+
 app.use("*", async (c, next) => {
   const db = await getDb();
-  const auth = getAuth(db);
-  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  const { session, responseHeaders } = await getOAuthMirroredSession({
+    db,
+    env: c.env,
+    headers: c.req.raw.headers,
+  });
   c.set("db", db);
-  c.set("auth", auth);
   c.set("session", session);
   const orpcCaller = createRouterClient(appRouter, {
     context: createContext(c),
   });
   c.set("orpcCaller", orpcCaller);
-  return next();
+  await next();
+  responseHeaders.forEach((value, key) => c.res.headers.append(key, value));
 });
 
 app.get("/api/testing/db-connection-probe", async (c) => {
@@ -344,9 +350,10 @@ app.get(PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH, async (c) => {
     return c.redirect(controlPlaneLoginUrl.toString(), 302);
   }
 
-  const oneTimeToken = await c.var.auth.api.generateOneTimeToken({
-    headers: c.req.raw.headers,
+  const authWorkerClient = createAuthWorkerClient({
+    asUser: { authUserId: c.var.session.user.authUserId! },
   });
+  const oneTimeToken = await authWorkerClient.internal.session.createProjectIngressToken();
   const projectIngressProxyScheme = getIngressSchemeFromPublicUrl(c.env.VITE_PUBLIC_URL);
   const exchangeUrl = new URL(
     `${projectIngressProxyScheme}://${canonicalHost}${PROJECT_INGRESS_PROXY_AUTH_EXCHANGE_PATH}`,
@@ -382,21 +389,29 @@ app.get(PROJECT_INGRESS_PROXY_AUTH_EXCHANGE_PATH, async (c) => {
     }
   }
 
-  const exchangePath = new URL(
-    "/api/auth/project-ingress-proxy/one-time-token/exchange",
-    c.req.url,
-  );
   const token = c.req.query("token");
-  if (token) exchangePath.searchParams.set("token", token);
+  if (!token) {
+    return c.json({ error: "Missing token" }, 400);
+  }
   const redirectPath = c.req.query("redirectPath");
-  if (redirectPath) exchangePath.searchParams.set("redirectPath", redirectPath);
+  const normalizedRedirectPath = normalizeProjectIngressProxyRedirectPath(redirectPath);
 
-  return c.var.auth.handler(
-    new Request(exchangePath.toString(), {
-      method: "GET",
-      headers: c.req.raw.headers,
-    }),
-  );
+  const authWorkerClient = createAuthWorkerClient({
+    serviceToken: c.env.SERVICE_AUTH_TOKEN,
+  });
+  const exchanged = await authWorkerClient.internal.session.exchangeProjectIngressToken({
+    token,
+  });
+
+  setCookie(c, PROJECT_INGRESS_AUTH_TOKEN_COOKIE, exchanged.token, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "Lax",
+    path: "/",
+    maxAge: 60 * 60,
+  });
+
+  return c.redirect(normalizedRedirectPath, 302);
 });
 
 app.onError((err, c) => {
@@ -416,46 +431,53 @@ app.onError((err, c) => {
   return c.json({ error: "Internal Server Error" }, 500);
 });
 
-app.all("/api/auth/*", (c) => c.var.auth.handler(c.req.raw));
+function handleOrpcError(
+  kind: "app" | "daemon",
+  error: unknown,
+  request: { url: URL | string },
+): void {
+  const url = request.url.toString();
+  const maybeStatus =
+    typeof error === "object" &&
+    error !== null &&
+    "status" in error &&
+    typeof (error as { status?: unknown }).status === "number"
+      ? (error as { status: number }).status
+      : undefined;
+  const errorDetails =
+    error instanceof Error
+      ? {
+          name: error.name,
+          message: error.message,
+          stack: error.stack ?? "stack unavailable",
+        }
+      : {
+          name: "NonErrorThrowable",
+          message: String(error),
+          stack: new Error(String(error)).stack ?? "stack unavailable",
+        };
+  const message = `oRPC Error ${maybeStatus ?? "unknown"} ${url}: ${String(
+    (error as { message?: unknown })?.message ?? error,
+  )}`;
+  if (!maybeStatus || maybeStatus >= 500) {
+    if (kind === "daemon") {
+      logger.error(message, errorDetails, error);
+    } else {
+      logger.error(message, errorDetails);
+    }
+  } else {
+    if (kind === "daemon") {
+      logger.set({ status: maybeStatus, url });
+    } else {
+      logger.set({ request: { status: maybeStatus } });
+    }
+    logger.warn(message);
+  }
+}
 
 // oRPC endpoint for client-facing API (app router)
 const appOrpcHandler = new RPCHandler(appRouter, {
-  interceptors: [
-    onError((error, params) => {
-      const maybeStatus =
-        typeof error === "object" &&
-        error !== null &&
-        "status" in error &&
-        typeof (error as { status?: unknown }).status === "number"
-          ? (error as { status: number }).status
-          : undefined;
-      const errorDetails =
-        error instanceof Error
-          ? {
-              name: error.name,
-              message: error.message,
-              stack: error.stack ?? "stack unavailable",
-            }
-          : {
-              name: "NonErrorThrowable",
-              message: String(error),
-              stack: new Error(String(error)).stack ?? "stack unavailable",
-            };
-      const message = `oRPC Error ${maybeStatus ?? "unknown"} ${params.request.url}: ${String(
-        (error as { message?: unknown })?.message ?? error,
-      )}`;
-      if (!maybeStatus || maybeStatus >= 500) {
-        logger.error(message, errorDetails);
-      } else {
-        logger.set({
-          request: {
-            status: maybeStatus,
-          },
-        });
-        logger.warn(message);
-      }
-    }),
-  ],
+  interceptors: [onError((error, params) => handleOrpcError("app", error, params.request))],
 });
 
 app.all("/api/orpc/*", async (c, next) => {
@@ -489,41 +511,7 @@ app.route("", egressProxyApp);
 
 // oRPC handler for daemon→worker communication (API key auth, separate context)
 const daemonOrpcHandler = new RPCHandler(workerRouter, {
-  interceptors: [
-    onError((error, params) => {
-      const maybeStatus =
-        typeof error === "object" &&
-        error !== null &&
-        "status" in error &&
-        typeof (error as { status?: unknown }).status === "number"
-          ? (error as { status: number }).status
-          : undefined;
-      const errorDetails =
-        error instanceof Error
-          ? {
-              name: error.name,
-              message: error.message,
-              stack: error.stack ?? "stack unavailable",
-            }
-          : {
-              name: "NonErrorThrowable",
-              message: String(error),
-              stack: new Error(String(error)).stack ?? "stack unavailable",
-            };
-      const message = `oRPC Error ${maybeStatus ?? "unknown"} ${params.request.url}: ${String(
-        (error as { message?: unknown })?.message ?? error,
-      )}`;
-      if (!maybeStatus || maybeStatus >= 500) {
-        logger.error(message, errorDetails, error);
-      } else {
-        logger.set({
-          status: maybeStatus,
-          url: params.request.url,
-        });
-        logger.warn(message);
-      }
-    }),
-  ],
+  interceptors: [onError((error, params) => handleOrpcError("daemon", error, params.request))],
   plugins: [new RequestHeadersPlugin()],
 });
 app.all("/api/orpc-daemon/*", async (c) => {

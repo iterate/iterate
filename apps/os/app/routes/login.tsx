@@ -40,15 +40,13 @@ export const Route = createFileRoute("/login")({
   validateSearch: z.object({
     redirectUrl: z.string().optional(),
     error: z.string().optional(),
-    email: z.string().email().optional().catch(undefined),
-    step: z.enum(["email", "otp"]).optional(),
   }),
   loaderDeps: ({ search }) => ({ redirectUrl: search.redirectUrl }),
   loader: ({ deps }) => resolveLoginRedirectUrl({ data: deps }),
 });
 
 function LoginPage() {
-  const { error, email, step } = Route.useSearch();
+  const { error } = Route.useSearch();
   const redirectUrl = Route.useLoaderData();
   const errorMessage = extractError(error, redirectUrl);
 
@@ -61,7 +59,7 @@ function LoginPage() {
             <AlertDescription>{formatErrorMessage(errorMessage)}</AlertDescription>
           </Alert>
         )}
-        <LoginCard redirectUrl={redirectUrl} initialEmail={email} initialStep={step} />
+        <LoginCard redirectUrl={redirectUrl} />
       </div>
     </CenteredLayout>
   );
