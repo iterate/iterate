@@ -50,7 +50,12 @@
       "default": "./src/posthog/sourcemaps-vite-plugin.ts"
     },
     "./project-ingress": "./src/project-ingress.ts",
+    "./auth-claims": "./src/auth-claims.ts",
     "./github-agent-path": "./src/github-agent-path.ts",
+    "./bearer": "./src/bearer.ts",
+    "./slug": "./src/slug.ts",
+    "./default-avatar": "./src/default-avatar.ts",
+    "./signup-allowlist": "./src/signup-allowlist.ts",
     "./slug-maker": "./src/slug-maker.ts",
     "./nitro-ws-response": "./src/nitro-ws-response.ts"
   },
@@ -84,6 +89,7 @@
     "evlog": "^1.8.0",
     "get-port": "^7.1.0",
     "hono": "^4.12.5",
+    "minimatch": "^10.1.1",
     "nitro": "3.0.260311-beta",
     "openapi-fetch": "^0.14.0",
     "p-retry": "^7.1.1",

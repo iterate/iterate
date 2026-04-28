@@ -1,5 +1,5 @@
+import { slugify } from "@iterate-com/shared/slug";
 import { isFreeEmailDomain } from "../utils/free-email-domains.ts";
-import { slugify } from "../utils/slug.ts";
 
 export function parseSenderEmail(from: string): string {
   const match = from.match(/<([^>]+)>/);

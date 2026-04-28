@@ -10,9 +10,14 @@ import {
   type ParsedIngressHostname,
 } from "@iterate-com/shared/project-ingress";
 import type { CloudflareEnv } from "../../env.ts";
-import type { AuthSession } from "../auth/auth.ts";
+import type { MirroredAuthSession } from "../auth/auth-worker-session.ts";
 import { getDb } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
+import {
+  getProjectAccessFromAuthWorker,
+  isAuthWorkerAccessDeniedError,
+  requireLocalProjectAccessFromAuthWorker,
+} from "../auth/auth-context.ts";
 import { logger } from "../tag-logger.ts";
 import { SimpleKv } from "../utils/simple-kv.ts";
 
@@ -220,13 +225,12 @@ const resolveMachineForIngressCache = new SimpleKv<ResolveMachineForIngressResul
 function getResolveMachineForIngressCacheKey(params: {
   target: IngressTarget;
   userId: string;
-  isSystemAdmin: boolean;
 }): string {
   const targetKey =
     params.target.kind === "project"
       ? `project:${params.target.projectSlug}:${params.target.targetPort}:${params.target.isPortExplicit}`
       : `machine:${params.target.machineId}:${params.target.targetPort}:${params.target.isPortExplicit}`;
-  return `${params.userId}:${params.isSystemAdmin}:${targetKey}`;
+  return `${params.userId}:${targetKey}`;
 }
 
 function shouldCacheResolveMachineForIngressResult(
@@ -237,14 +241,14 @@ function shouldCacheResolveMachineForIngressResult(
 
 async function resolveMachineForIngress(
   target: IngressTarget,
+  authUserId: string,
   userId: string,
-  isSystemAdmin: boolean,
 ): Promise<ResolveMachineForIngressResult> {
-  const cacheKey = getResolveMachineForIngressCacheKey({ target, userId, isSystemAdmin });
+  const cacheKey = getResolveMachineForIngressCacheKey({ target, userId });
   const cached = resolveMachineForIngressCache.get(cacheKey);
   if (cached) return cached;
 
-  const result = await resolveMachineForIngressUncached(target, userId, isSystemAdmin);
+  const result = await resolveMachineForIngressUncached(target, authUserId);
   if (shouldCacheResolveMachineForIngressResult(result)) {
     resolveMachineForIngressCache.set(cacheKey, result, RESOLVE_MACHINE_FOR_INGRESS_CACHE_TTL_MS);
   } else {
@@ -255,40 +259,38 @@ async function resolveMachineForIngress(
 
 async function resolveMachineForIngressUncached(
   target: IngressTarget,
-  userId: string,
-  isSystemAdmin: boolean,
+  authUserId: string,
 ): Promise<ResolveMachineForIngressResult> {
   const db = await getDb();
 
   if (target.kind === "project") {
-    const rows = await db
-      .select({
-        projectId: schema.project.id,
-        defaultPort: schema.project.defaultPort,
-        membershipId: schema.organizationUserMembership.id,
-      })
-      .from(schema.project)
-      .innerJoin(schema.organization, eq(schema.project.organizationId, schema.organization.id))
-      .leftJoin(
-        schema.organizationUserMembership,
-        and(
-          eq(schema.organizationUserMembership.organizationId, schema.organization.id),
-          eq(schema.organizationUserMembership.userId, userId),
-        ),
-      )
-      .where(eq(schema.project.slug, target.projectSlug))
-      .limit(1);
-
-    const row = rows[0];
+    const row = await db.query.project.findFirst({
+      where: eq(schema.project.slug, target.projectSlug),
+      columns: {
+        id: true,
+        slug: true,
+        defaultPort: true,
+      },
+    });
     if (!row) {
       return { machine: null, projectFound: false };
     }
-    if (!row.membershipId && !isSystemAdmin) {
+
+    try {
+      await getProjectAccessFromAuthWorker({
+        db,
+        authUserId,
+        projectSlug: row.slug,
+      });
+    } catch (error) {
+      if (!isAuthWorkerAccessDeniedError(error)) {
+        throw error;
+      }
       return { machine: null, projectFound: true, accessDenied: true };
     }
 
     const machine = await db.query.machine.findFirst({
-      where: and(eq(schema.machine.projectId, row.projectId), eq(schema.machine.state, "active")),
+      where: and(eq(schema.machine.projectId, row.id), eq(schema.machine.state, "active")),
     });
     return { machine: machine ?? null, projectFound: true, defaultPort: row.defaultPort };
   }
@@ -296,25 +298,27 @@ async function resolveMachineForIngressUncached(
   const rows = await db
     .select({
       machine: schema.machine,
+      projectId: schema.project.id,
+      projectSlug: schema.project.slug,
       defaultPort: schema.project.defaultPort,
-      membershipId: schema.organizationUserMembership.id,
     })
     .from(schema.machine)
     .innerJoin(schema.project, eq(schema.machine.projectId, schema.project.id))
-    .innerJoin(schema.organization, eq(schema.project.organizationId, schema.organization.id))
-    .leftJoin(
-      schema.organizationUserMembership,
-      and(
-        eq(schema.organizationUserMembership.organizationId, schema.organization.id),
-        eq(schema.organizationUserMembership.userId, userId),
-      ),
-    )
     .where(eq(schema.machine.id, target.machineId))
     .limit(1);
 
   const row = rows[0];
   if (!row) return { machine: null, machineExists: false };
-  if (!row.membershipId && !isSystemAdmin) {
+  try {
+    await getProjectAccessFromAuthWorker({
+      db,
+      authUserId,
+      projectSlug: row.projectSlug,
+    });
+  } catch (error) {
+    if (!isAuthWorkerAccessDeniedError(error)) {
+      throw error;
+    }
     return {
       machine: null,
       accessDenied: true,
@@ -451,6 +455,14 @@ function getEffectiveTargetHost(
   return `localhost:${effectivePort}`;
 }
 
+function jsonAuthUnavailable(hostname: string, error: unknown): Response {
+  logger.error("[project-ingress] Auth worker lookup failed", error, { host: hostname });
+  return jsonError(502, "auth_unavailable", {
+    hostname,
+    authError: error instanceof Error ? error.message : String(error),
+  });
+}
+
 function buildParseDetails(params: {
   hostname: string;
   projectIngressDomain: string;
@@ -494,7 +506,7 @@ function buildParseDetails(params: {
 export async function handleProjectIngressRequest(
   request: Request,
   env: CloudflareEnv,
-  session: AuthSession,
+  session: MirroredAuthSession | null,
   cachedCustomDomainProject?: typeof schema.project.$inferSelect,
 ): Promise<Response | null> {
   const url = new URL(request.url);
@@ -573,11 +585,16 @@ export async function handleProjectIngressRequest(
     resolvedHost,
   });
 
-  const resolvedMachine = await resolveMachineForIngress(
-    resolvedHost.target,
-    session.user.id,
-    session.user.role === "admin",
-  );
+  let resolvedMachine: ResolveMachineForIngressResult;
+  try {
+    resolvedMachine = await resolveMachineForIngress(
+      resolvedHost.target,
+      session.user.authUserId!,
+      session.user.id,
+    );
+  } catch (error) {
+    return jsonAuthUnavailable(requestHostname, error);
+  }
   if (resolvedHost.target.kind === "project" && resolvedMachine.projectFound === false) {
     return jsonError(404, "project_not_found", {
       ...parseDetails,
@@ -674,7 +691,7 @@ async function handleCustomDomainRequest(
   url: URL,
   requestHostname: string,
   env: CloudflareEnv,
-  session: AuthSession,
+  session: MirroredAuthSession | null,
   cachedProject?: typeof schema.project.$inferSelect,
 ): Promise<Response | typeof FALL_THROUGH_TO_CONTROL_PLANE | null> {
   // Use the pre-resolved project from shouldHandleProjectIngressHostname, or look it up
@@ -711,20 +728,18 @@ async function handleCustomDomainRequest(
   if (target.kind === "project") {
     // Find the active machine for this project
     const db = await getDb();
-    // Verify access
-    const membershipRows = await db
-      .select({ membershipId: schema.organizationUserMembership.id })
-      .from(schema.organizationUserMembership)
-      .where(
-        and(
-          eq(schema.organizationUserMembership.organizationId, project.organizationId),
-          eq(schema.organizationUserMembership.userId, session.user.id),
-        ),
-      )
-      .limit(1);
+    try {
+      await requireLocalProjectAccessFromAuthWorker({
+        db,
+        authUserId: session.user.authUserId!,
+        projectId: project.id,
+      });
+    } catch (error) {
+      if (isAuthWorkerAccessDeniedError(error)) {
+        return jsonError(403, "forbidden", { hostname: requestHostname });
+      }
 
-    if (membershipRows.length === 0 && session.user.role !== "admin") {
-      return jsonError(403, "forbidden", { hostname: requestHostname });
+      return jsonAuthUnavailable(requestHostname, error);
     }
 
     machine =
@@ -733,11 +748,16 @@ async function handleCustomDomainRequest(
       })) ?? null;
   } else {
     // Machine target — resolve directly
-    const resolved = await resolveMachineForIngress(
-      { ...target, isPortExplicit: true },
-      session.user.id,
-      session.user.role === "admin",
-    );
+    let resolved: ResolveMachineForIngressResult;
+    try {
+      resolved = await resolveMachineForIngress(
+        { ...target, isPortExplicit: true },
+        session.user.authUserId!,
+        session.user.id,
+      );
+    } catch (error) {
+      return jsonAuthUnavailable(requestHostname, error);
+    }
     machine = resolved.machine;
     if (resolved.accessDenied) {
       return jsonError(403, "forbidden", { hostname: requestHostname });

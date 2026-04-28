@@ -3,7 +3,7 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
-    "dev": "pnpm os dev",
+    "dev": "doppler run --preserve-env=DEV_TUNNEL -- sh -c 'export VITE_AUTH_APP_ORIGIN=http://localhost:7101; export ALCHEMY_STAGE=dev-$ITERATE_USER; pnpm -r --parallel --stream --filter @iterate-com/auth --filter @iterate-com/os dev:local'",
     "build": "pnpm -r --parallel build",
     "typecheck": "pnpm -r --parallel --filter '!@iterate-com/daemon-v2' --filter '!@iterate-com/daemon-v2-contract' --filter '!@iterate-com/fake-os' --filter '!@iterate-com/fake-os-contract' --filter '!@iterate-com/jonasland' --filter '!@iterate-com/jonasland-e2e' --filter '!@iterate-com/jonasland-sandbox' typecheck",
     "format": "oxfmt",

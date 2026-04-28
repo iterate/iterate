@@ -7,6 +7,7 @@ interface ViteTypeOptions {
 // Explicit VITE_* env vars - alchemy type inference loses these through the spread
 interface ImportMetaEnv {
   readonly VITE_PUBLIC_URL: string;
+  readonly VITE_AUTH_APP_ORIGIN: string;
   readonly VITE_APP_STAGE: string;
   readonly VITE_ENABLE_EMAIL_OTP_SIGNIN?: "true" | "false";
   readonly VITE_FLY_GRAFANA_ORG_ID?: string;
