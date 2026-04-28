@@ -5,6 +5,7 @@ import {
   useCloudflareTunnelLease,
   useDevServer,
 } from "@iterate-com/shared/test-helpers";
+import { stripInheritedAppConfig } from "./app-config-env.ts";
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -29,8 +30,16 @@ export async function createLocalDevServer(opts: {
   const dispose = async () => {
     if (disposed) return;
     disposed = true;
+    const errors: unknown[] = [];
     for (const d of disposables.reverse()) {
-      await d[Symbol.asyncDispose]();
+      try {
+        await d[Symbol.asyncDispose]();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length > 0) {
+      throw new AggregateError(errors, "Failed to dispose local agents dev server resources.");
     }
   };
 
@@ -77,7 +86,14 @@ export async function createLocalDevServer(opts: {
       },
     };
   } catch (error) {
-    await dispose();
+    try {
+      await dispose();
+    } catch (disposeError) {
+      throw new AggregateError(
+        [error, disposeError],
+        "Failed to create local agents dev server and clean up partial resources.",
+      );
+    }
     throw error;
   }
 }
@@ -89,15 +105,4 @@ function toWssAgentWebsocketUrl(httpsBase: string, instanceName: string) {
   base.search = "";
   base.hash = "";
   return base.toString();
-}
-
-function stripInheritedAppConfig(env: NodeJS.ProcessEnv): Record<string, string> {
-  const next: Record<string, string> = {};
-
-  for (const [key, value] of Object.entries(env)) {
-    if (key === "APP_CONFIG" || key.startsWith("APP_CONFIG_")) continue;
-    if (value != null) next[key] = value;
-  }
-
-  return next;
 }

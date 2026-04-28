@@ -6,6 +6,7 @@ import { agentsContract } from "@iterate-com/agents-contract";
 import { HttpResponse, http, useMockHttpServer } from "@iterate-com/mock-http-proxy";
 import { useCloudflareTunnelLease, useDevServer } from "@iterate-com/shared/test-helpers";
 import { expect, test } from "vitest";
+import { stripInheritedAppConfig } from "../test-support/app-config-env.ts";
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -59,13 +60,4 @@ function createAgentsClient(baseUrl: string): ContractRouterClient<typeof agents
       url: new URL("/api", baseUrl).toString(),
     }),
   );
-}
-
-function stripInheritedAppConfig(env: NodeJS.ProcessEnv): Record<string, string> {
-  const next: Record<string, string> = {};
-  for (const [key, value] of Object.entries(env)) {
-    if (key === "APP_CONFIG" || key.startsWith("APP_CONFIG_")) continue;
-    if (value != null) next[key] = value;
-  }
-  return next;
 }

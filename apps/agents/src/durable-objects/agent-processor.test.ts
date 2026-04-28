@@ -660,11 +660,7 @@ describe("agent-processor / afterAppend trigger matrix", () => {
     });
   });
 
-  test("user after-current-request while a request is debouncing also extends the debounce timer", async () => {
-    // While `scheduled`, all triggering behaviours collapse to the same
-    // thing: the pending request hasn't started yet, so the distinction
-    // between "interrupt" and "queue" is meaningless. They all push the
-    // debounce timer out.
+  test("user after-current-request while a request is debouncing queues a follow-up request", async () => {
     const processor = createProcessorForTests();
     const { runtime, calls } = createTestRuntime({
       initialInflightId: "req_existing",
@@ -685,8 +681,8 @@ describe("agent-processor / afterAppend trigger matrix", () => {
       state: stateWithPrimerAlreadyApplied(processor),
       runtime,
     });
-    expect(calls).toEqual([{ kind: "extend", requestId: "req_existing", debounceMs: 1000 }]);
-    expect(appended).toEqual([]);
+    expect(calls).toEqual([]);
+    expect(appended.map((e) => e.type)).toEqual(["llm-request-queued"]);
   });
 
   test("user trigger-request-within-time-period with running request queues + arms cancel deadline", async () => {
@@ -749,7 +745,7 @@ describe("agent-processor / afterAppend trigger matrix", () => {
     expect(appended.map((e) => e.type)).toEqual(["llm-request-scheduled"]);
   });
 
-  test("user trigger-request-within-time-period during debounce extends the debounce timer", async () => {
+  test("user trigger-request-within-time-period during debounce queues and arms cancel deadline", async () => {
     const processor = createProcessorForTests();
     const { runtime, calls } = createTestRuntime({
       initialInflightId: "req_existing",
@@ -773,8 +769,10 @@ describe("agent-processor / afterAppend trigger matrix", () => {
       state: stateWithPrimerAlreadyApplied(processor),
       runtime,
     });
-    expect(calls).toEqual([{ kind: "extend", requestId: "req_existing", debounceMs: 1000 }]);
-    expect(appended).toEqual([]);
+    expect(calls).toEqual([
+      { kind: "armCancelDeadline", requestId: "req_existing", withinMs: 5000 },
+    ]);
+    expect(appended.map((e) => e.type)).toEqual(["llm-request-queued"]);
   });
 
   test("llm-request-completed with pendingTriggerCount > 0 renders completion event then schedules", async () => {
@@ -836,7 +834,11 @@ describe("agent-processor / afterAppend trigger matrix", () => {
       runtime,
     });
     expect(calls).toEqual([]);
-    expect(appended.map((e) => e.type)).toEqual(["agent-input-added", "agent-input-added"]);
+    expect(appended.map((e) => e.type)).toEqual([
+      "agent-input-added",
+      "agent-input-added",
+      "agent-status-updated",
+    ]);
     expect(appended[1]).toMatchObject({
       type: "agent-input-added",
       payload: {

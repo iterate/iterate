@@ -5,6 +5,8 @@ import { slugify } from "@iterate-com/shared/slugify";
 import {
   appendResultFooter,
   ensureArtifactPaths,
+  E2E_PROJECT_ROOT_KEY,
+  E2E_RUN_ROOT_KEY,
   writeResult,
 } from "@iterate-com/shared/test-support/vitest-e2e";
 import { inject } from "vitest";
@@ -24,8 +26,8 @@ export interface E2EContext {
 
 export async function setupE2E(ctx: TestContext): Promise<E2EContext> {
   const { task, onTestFailed, onTestFinished } = ctx;
-  const runRoot = inject("e2eRunRoot" as never) as string;
-  const projectRoot = inject("e2eProjectRoot" as never) as string;
+  const runRoot = inject(E2E_RUN_ROOT_KEY as never) as string;
+  const projectRoot = inject(E2E_PROJECT_ROOT_KEY as never) as string;
   const eventsBaseUrl = inject(E2E_EVENTS_BASE_URL_KEY as never) as string;
   const runSlug = inject(E2E_RUN_SLUG_KEY as never) as string;
   const repoRoot = inject(E2E_REPO_ROOT_KEY as never) as string;

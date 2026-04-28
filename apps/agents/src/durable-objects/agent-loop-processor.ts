@@ -293,10 +293,20 @@ async function handleUserInput(args: {
   }
 
   if (inflight.status === "scheduled") {
-    runtime.extendDebounce({
-      requestId: inflight.requestId,
-      debounceMs: state.llmConfig.debounceMs,
-    });
+    if (trigger.behaviour === "interrupt-current-request") {
+      runtime.extendDebounce({
+        requestId: inflight.requestId,
+        debounceMs: state.llmConfig.debounceMs,
+      });
+      return;
+    }
+    await emitQueued({ append });
+    if (trigger.behaviour === "trigger-request-within-time-period") {
+      runtime.armCancelDeadline({
+        requestId: inflight.requestId,
+        withinMs: trigger.withinMs,
+      });
+    }
     return;
   }
 
@@ -488,9 +498,18 @@ export async function agentLoopAfterAppend(
       const trigger = resolveTrigger(e.payload);
       await handleUserInput({ runtime, append, state, trigger });
     })
-    .case(LlmRequestCompletedEvent, async () => {
+    .case(LlmRequestCompletedEvent, async (e) => {
       if (state.pendingTriggerCount > 0 && runtime.inflight() === null) {
         await emitScheduledAndKickoff({ runtime, append, state });
+        return;
+      }
+      if (state.pendingTriggerCount === 0 && runtime.inflight() === null) {
+        await emitAgentStatus({
+          append,
+          status: "idle",
+          reason: "llm-request-completed",
+          requestId: e.payload.requestId,
+        });
       }
     })
     .case(LlmRequestCancelledEvent, async (e) => {

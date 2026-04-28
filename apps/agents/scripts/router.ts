@@ -16,6 +16,16 @@ const DEFAULT_AGENT_CLASS = "iterate-agent";
 const DEFAULT_PROJECT_SLUG: ProjectSlug = "public";
 const TUNNEL_READY_TIMEOUT_MS = 120_000;
 
+function waitForAbort(signal: AbortSignal | undefined): Promise<void> {
+  if (signal == null) {
+    throw new Error("AbortSignal is required so CLI resources can be released on shutdown.");
+  }
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    signal.addEventListener("abort", () => resolve(), { once: true });
+  });
+}
+
 /**
  * `pnpm cli tunnel …`
  *
@@ -96,7 +106,7 @@ export const router = {
         "Deploy an ephemeral Cloudflare Worker, print its URL, and tear it down on Ctrl+C. Requires ALCHEMY_STATE_TOKEN (from prd doppler config).",
     })
     .handler(async ({ input, signal }) => {
-      const worker = await createEphemeralWorker({
+      await using worker = await createEphemeralWorker({
         eventsBaseUrl: input.eventsBaseUrl.replace(/\/+$/, ""),
         eventsProjectSlug: input.eventsProjectSlug,
         egressProxy: input.egressProxy,
@@ -107,16 +117,9 @@ export const router = {
       console.info(`    Stage: ${worker.stage}\n`);
       console.info(`  Ctrl+C to tear down.\n`);
 
-      await new Promise<void>((resolve) => {
-        if (signal?.aborted) {
-          resolve();
-          return;
-        }
-        signal?.addEventListener("abort", () => resolve(), { once: true });
-      });
+      await waitForAbort(signal);
 
       console.info("\nTearing down...");
-      await worker[Symbol.asyncDispose]();
 
       return { ok: true as const, url: worker.url, stage: worker.stage };
     }),
@@ -200,13 +203,7 @@ export const router = {
         `\n[tunnel] Tunnel is up. Ctrl+C to release the Semaphore lease and shut down.\n`,
       );
 
-      await new Promise<void>((resolve) => {
-        if (signal?.aborted) {
-          resolve();
-          return;
-        }
-        signal?.addEventListener("abort", () => resolve(), { once: true });
-      });
+      await waitForAbort(signal);
 
       console.info(`[tunnel] Shutting down cloudflared and releasing lease…`);
 

@@ -278,19 +278,15 @@ export async function codemodeAfterAppend(
 
       const dynamicResolved = await Promise.all(
         Object.entries(state.toolProviders).map(async ([slug, config]) => {
-          const types = config.getTypesCallable
-            ? ProviderTypesResponse.parse(
-                await dispatchCallable<unknown>({
-                  callable: config.getTypesCallable,
-                  payload: { namespace: slug },
-                  ctx: { env: deps.env as unknown as Record<string, unknown> },
-                }),
-              ).types
-            : undefined;
+          const typesResult = await safeGetTypes({
+            getTypesCallable: config.getTypesCallable,
+            slug,
+            env: deps.env,
+          });
           return resolveProvider(
             dynamicTools({
               name: slug,
-              types,
+              types: typesResult.kind === "ok" ? typesResult.types : undefined,
               callTool: (name, args) =>
                 dispatchCallable({
                   callable: config.executeCallable,

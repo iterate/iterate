@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
+import { stripInheritedAppConfig } from "./app-config-env.ts";
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -51,10 +52,7 @@ export async function createEphemeralWorker(opts: {
 
   console.info(`[e2e] Ephemeral worker deployed: ${url} (stage=${stage})`);
 
-  // Health-check the deployed worker
-  await waitForHealth({ url, timeoutMs: 30_000 });
-
-  return {
+  const handle = {
     url,
     stage,
     async [Symbol.asyncDispose]() {
@@ -74,6 +72,15 @@ export async function createEphemeralWorker(opts: {
       }
     },
   };
+
+  try {
+    await waitForHealth({ url, timeoutMs: 30_000 });
+  } catch (error) {
+    await handle[Symbol.asyncDispose]();
+    throw error;
+  }
+
+  return handle;
 }
 
 async function runAlchemy(opts: {
@@ -143,13 +150,4 @@ async function waitForHealth(opts: { url: string; timeoutMs: number }) {
   }
 
   throw new Error(`Ephemeral worker health check failed: ${lastError}`);
-}
-
-function stripInheritedAppConfig(env: NodeJS.ProcessEnv): Record<string, string> {
-  const next: Record<string, string> = {};
-  for (const [key, value] of Object.entries(env)) {
-    if (key === "APP_CONFIG" || key.startsWith("APP_CONFIG_")) continue;
-    if (value != null) next[key] = value;
-  }
-  return next;
 }

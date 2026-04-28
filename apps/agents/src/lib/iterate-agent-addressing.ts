@@ -36,15 +36,12 @@ export const CHILD_STREAM_AUTO_SUBSCRIBER_SUBSCRIPTION_SLUG = "child-stream-auto
  * paths always hit different DOs). Must be URL-path-safe because it's
  * interpolated into `/agents/<class>/<instance>`.
  *
- * - `/`           → `root`
- * - `/jonas`      → `jonas`
- * - `/jonas/abc`  → `jonas-abc`
- * - `/a/b.c!/d`   → `a-b-c-d`
+ * Uses a hex encoding of the full path instead of a slug so hierarchy
+ * separators and literal punctuation cannot collapse into the same instance.
  */
 export function streamPathToAgentInstance(streamPath: StreamPath): string {
-  const kebab = streamPath
-    .replace(/^\/+|\/+$/g, "")
-    .replace(/[^a-zA-Z0-9_-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return kebab.length === 0 ? "root" : kebab;
+  const encodedPath = [...new TextEncoder().encode(streamPath)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+  return `stream-${encodedPath}`;
 }
