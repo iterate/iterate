@@ -176,6 +176,31 @@ for `ensureStarted()` before returning. If the init shape is only
 `initParams` so the helper cannot return an uninitialized or unstarted stub by
 accident.
 
+When a Durable Object's name should be derived from init params, define that
+rule once with `createDoInitializer()` and use the returned helper at call
+sites:
+
+```ts
+const projectRooms = createDoInitializer<ProjectRoom>({
+  nameFromInitParams(params) {
+    return `project-room:${params.projectId}:${params.roomSlug}`;
+  },
+});
+
+const stub = await projectRooms.getOrInitialize({
+  namespace: env.PROJECT_ROOMS,
+  initParams: {
+    projectId: "proj_123",
+    roomSlug: "general",
+  },
+});
+```
+
+This is intentionally a caller-side wrapper over `getOrInitializeDoStub()`, not
+a second lifecycle system. Durable Object names remain the Cloudflare-native
+identity primitive; the helper just prevents different call sites from composing
+different names for the same init params.
+
 Inside subclasses, use the protected getter:
 
 ```ts

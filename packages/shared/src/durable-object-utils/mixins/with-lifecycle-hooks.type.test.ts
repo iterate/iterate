@@ -12,7 +12,11 @@ import { withOuterbase } from "./with-outerbase.ts";
 import { withScheduler } from "./with-scheduler.ts";
 import type { SchedulerRecord } from "./with-scheduler.ts";
 import type { LifecycleInitInput } from "./with-lifecycle-hooks.ts";
-import { getOrInitializeDoStub, withLifecycleHooks } from "./with-lifecycle-hooks.ts";
+import {
+  createDoInitializer,
+  getOrInitializeDoStub,
+  withLifecycleHooks,
+} from "./with-lifecycle-hooks.ts";
 
 type Env = {
   EXAMPLE: string;
@@ -109,6 +113,31 @@ describe("withLifecycleHooks types", () => {
     getOrInitializeDoStub({
       namespace,
       name: "room-a",
+    });
+  });
+
+  it("creates typed initializers that derive the Durable Object name from init params", () => {
+    const rooms = createDoInitializer<Room>({
+      nameFromInitParams(params) {
+        expectTypeOf(params).toEqualTypeOf<LifecycleInitInput<RoomInit>>();
+        return `room:${params.ownerUserId}`;
+      },
+    });
+
+    expectTypeOf(
+      rooms.getOrInitialize({
+        namespace,
+        initParams: {
+          ownerUserId: "user-a",
+        },
+      }),
+    ).resolves.toEqualTypeOf<DurableObjectStub<Room>>();
+
+    rooms.getOrInitialize({
+      namespace,
+      // @ts-expect-error ownerUserId is required because the helper has no
+      // separate name argument to fall back to for this init shape.
+      initParams: {},
     });
   });
 
