@@ -7,7 +7,7 @@
  * Run: `pnpm test:e2e` with `--tags-filter slow` (from `apps/agents`).
  */
 import { expect, test } from "vitest";
-import { setupE2E, type E2EContext } from "../test-support/e2e-test.ts";
+import { fetchCallable, setupE2E, type E2EContext } from "../test-support/e2e-test.ts";
 import { createLocalDevServer } from "../test-support/create-local-dev-server.ts";
 import {
   buildAgentStreamProcessorRunnerWebSocketCallbackUrl,
@@ -57,18 +57,18 @@ async function runScenario(args: {
   const viewerUrl = e2e.events.streamViewerUrl(streamPath);
   console.info(`[iterate-agent agent-loop e2e] ${scenario.label} stream: ${viewerUrl}`);
 
-  const callbackUrl = buildAgentStreamProcessorRunnerWebSocketCallbackUrl({
-    publicOrigin: tunnelPublicUrl,
-    runnerInstance: streamPathToAgentInstance(streamPath),
-    streamPath,
-  });
-
   await e2e.events.append(streamPath, {
     type: "events.iterate.com/core/subscription-configured",
     payload: {
       slug: `iterate-agent-agent-loop-ws-${e2e.executionSuffix}`,
       type: "websocket",
-      callbackUrl,
+      callable: fetchCallable(
+        buildAgentStreamProcessorRunnerWebSocketCallbackUrl({
+          publicOrigin: tunnelPublicUrl,
+          runnerInstance: streamPathToAgentInstance(streamPath),
+          streamPath,
+        }),
+      ),
     },
   });
 

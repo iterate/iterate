@@ -306,7 +306,7 @@ const FetchRequest = z
   })
   .strict();
 
-const FetchCallable = z
+export const FetchCallable = z
   .object({
     type: z.literal("fetch"),
     schema: CallableVersion,

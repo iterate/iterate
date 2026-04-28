@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { Callable, FetchCallable } from "@iterate-com/shared/callable/types.ts";
 import {
   GenericEvent as GenericEventBase,
   GenericEventInput as GenericEventInputBase,
@@ -6,19 +7,33 @@ import {
 import { STREAM_SUBSCRIPTION_CONFIGURED_TYPE } from "./core-event-types.ts";
 import { JsonataExpression } from "./jsonata-expression.ts";
 
-const ExternalSubscriberBase = z.strictObject({
+const ExternalSubscriberBase = {
   slug: z.string().trim().min(1),
-  callbackUrl: z.url(),
+  /**
+   * Subscription state stores a Callable instead of a URL so stream replay only
+   * needs JSON data. At delivery time the stream Durable Object supplies the
+   * live authority (fetch, env bindings, and loopback exports) through
+   * CallableContext.
+   */
+  callable: Callable,
+  /**
+   * These stay subscription-level concerns. `jsonataFilter` decides which
+   * committed stream events are delivered, and `jsonataTransform` preserves the
+   * existing webhook payload behavior before the target Callable is invoked.
+   */
   jsonataFilter: JsonataExpression.optional(),
   jsonataTransform: JsonataExpression.optional(),
-});
+};
 
-export const ExternalWebsocketSubscriber = ExternalSubscriberBase.extend({
+export const ExternalWebsocketSubscriber = z.strictObject({
+  ...ExternalSubscriberBase,
+  callable: FetchCallable,
   type: z.literal("websocket"),
 });
 export type ExternalWebsocketSubscriber = z.infer<typeof ExternalWebsocketSubscriber>;
 
-const ExternalWebhookSubscriber = ExternalSubscriberBase.extend({
+const ExternalWebhookSubscriber = z.strictObject({
+  ...ExternalSubscriberBase,
   type: z.literal("webhook"),
 });
 type ExternalWebhookSubscriber = z.infer<typeof ExternalWebhookSubscriber>;

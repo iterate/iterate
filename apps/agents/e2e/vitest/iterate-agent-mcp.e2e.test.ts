@@ -9,7 +9,7 @@
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
-import { setupE2E } from "../test-support/e2e-test.ts";
+import { fetchCallable, setupE2E } from "../test-support/e2e-test.ts";
 import { createLocalDevServer } from "../test-support/create-local-dev-server.ts";
 import { createMockInternet } from "../test-support/create-mock-internet.ts";
 import { MCP_TOOL_PROVIDER_PRESET_EVENT } from "~/lib/default-tool-provider-events.ts";
@@ -62,11 +62,13 @@ test.skip(
       payload: {
         slug: `codemode-runner-mcp-ws-${e2e.executionSuffix}`,
         type: "websocket",
-        callbackUrl: buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
-          publicOrigin: server.publicUrl,
-          runnerInstance: streamPathToAgentInstance(streamPath),
-          streamPath,
-        }),
+        callable: fetchCallable(
+          buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
+            publicOrigin: server.publicUrl,
+            runnerInstance: streamPathToAgentInstance(streamPath),
+            streamPath,
+          }),
+        ),
       },
     });
 

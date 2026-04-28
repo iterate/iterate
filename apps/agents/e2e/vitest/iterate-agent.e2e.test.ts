@@ -12,7 +12,7 @@ import { ProjectSlug } from "@iterate-com/events-contract";
 import { http, passthrough } from "@iterate-com/mock-http-proxy";
 import { expect, test } from "vitest";
 import { getProjectUrl } from "../../../events/src/lib/project-slug.ts";
-import { setupE2E } from "../test-support/e2e-test.ts";
+import { fetchCallable, setupE2E } from "../test-support/e2e-test.ts";
 import { createLocalDevServer } from "../test-support/create-local-dev-server.ts";
 import { createMockInternet } from "../test-support/create-mock-internet.ts";
 import { OPENAPI_TOOL_PROVIDER_PRESET_EVENT } from "~/lib/default-tool-provider-events.ts";
@@ -75,11 +75,13 @@ test(
       payload: {
         slug: `codemode-runner-ws-${e2e.executionSuffix}`,
         type: "websocket",
-        callbackUrl: buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
-          publicOrigin: server.publicUrl,
-          runnerInstance: streamPathToAgentInstance(streamPath),
-          streamPath,
-        }),
+        callable: fetchCallable(
+          buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
+            publicOrigin: server.publicUrl,
+            runnerInstance: streamPathToAgentInstance(streamPath),
+            streamPath,
+          }),
+        ),
       },
     });
 

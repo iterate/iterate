@@ -323,6 +323,14 @@ export class StreamDurableObject extends StreamDurableObjectBase<Env> {
 
     runBuiltinAfterAppend({
       append: (nextEvent) => this.append(nextEvent),
+      // Stored processor state can name Callable targets, but it must not
+      // store live Worker capabilities. The DO supplies those capabilities
+      // only at dispatch time.
+      callableContext: {
+        env: this.env as Record<string, unknown>,
+        exports: (this.ctx as DurableObjectState & { exports?: Record<string, unknown> }).exports,
+        fetch: globalThis.fetch,
+      },
       event,
       processors: this.state.processors,
       onError: ({ error, event, processorSlug }) => {
@@ -583,12 +591,18 @@ function reduceBuiltinProcessors(args: {
 
 function runBuiltinAfterAppend(args: {
   append: (event: EventInput) => Event;
+  callableContext: {
+    env: Record<string, unknown>;
+    exports?: Record<string, unknown>;
+    fetch: typeof fetch;
+  };
   event: Event;
   processors: StreamState["processors"];
   onError(args: { error: unknown; event: Event; processorSlug: string }): void;
 }) {
   const circuitBreakerPromise = circuitBreakerProcessor.afterAppend?.({
     append: args.append,
+    callableContext: args.callableContext,
     event: args.event,
     state: args.processors["circuit-breaker"],
   });
@@ -604,6 +618,7 @@ function runBuiltinAfterAppend(args: {
 
   const externalSubscriberPromise = externalSubscriberProcessor.afterAppend?.({
     append: args.append,
+    callableContext: args.callableContext,
     event: args.event,
     state: args.processors["external-subscriber"],
   });

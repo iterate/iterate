@@ -9,7 +9,7 @@ function testValidExternalSubscriberJsonataExpressionsParse() {
   const parsed = ExternalSubscriber.parse({
     slug: "audit",
     type: "webhook",
-    callbackUrl: "https://example.com/hook",
+    callable: fetchCallable("https://example.com/hook"),
     jsonataFilter: "type = 'ping'",
     jsonataTransform: '{"kind":"hook","value":payload.value}',
   });
@@ -24,7 +24,7 @@ function testInvalidExternalSubscriberJsonataExpressionsFailFast() {
     payload: {
       slug: "audit",
       type: "webhook",
-      callbackUrl: "https://example.com/hook",
+      callable: fetchCallable("https://example.com/hook"),
       jsonataFilter: "{",
     },
   });
@@ -62,3 +62,10 @@ await testValidExternalSubscriberJsonataExpressionsParse();
 await testInvalidExternalSubscriberJsonataExpressionsFailFast();
 await testValidHtmlRendererConfigParses();
 await testInvalidHtmlRendererMatcherFailsFast();
+
+function fetchCallable(url: string) {
+  return {
+    type: "fetch" as const,
+    via: { type: "url" as const, url },
+  };
+}

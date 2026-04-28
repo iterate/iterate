@@ -287,7 +287,7 @@ const subscriptionConfiguredEvent = AppendInput.parse({
     payload: {
       slug: "audit",
       type: "webhook",
-      callbackUrl: "https://example.com/hook",
+      callable: fetchCallable("https://example.com/hook"),
       jsonataFilter: "type = 'source'",
       jsonataTransform: '{"kind":"hook"}',
     },
@@ -297,7 +297,7 @@ const subscriptionConfiguredEvent = AppendInput.parse({
 assert.deepEqual(subscriptionConfiguredEvent.event.payload, {
   slug: "audit",
   type: "webhook",
-  callbackUrl: "https://example.com/hook",
+  callable: fetchCallable("https://example.com/hook"),
   jsonataFilter: "type = 'source'",
   jsonataTransform: '{"kind":"hook"}',
 });
@@ -323,3 +323,10 @@ const durableObjectWokeUpEvent = AppendInput.parse({
 assert.deepEqual(durableObjectWokeUpEvent.event.payload, {});
 
 console.log("events-contract append client typing and runtime normalization checks passed");
+
+function fetchCallable(url: string) {
+  return {
+    type: "fetch" as const,
+    via: { type: "url" as const, url },
+  };
+}
