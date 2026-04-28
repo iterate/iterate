@@ -12,12 +12,16 @@ interface ProjectRow {
 export function adminHTML(projects: ProjectRow[]): string {
   const rows = projects
     .map((p) => {
-      const config = JSON.parse(p.config_json);
+      let config: any = {};
+      try {
+        config = JSON.parse(p.config_json);
+      } catch {}
+      const apps = Array.isArray(config.apps) ? config.apps : [];
       const domain = p.canonical_hostname ?? `${p.slug}.iterate-dev-jonas.app`;
       return `<tr>
     <td><a href="https://${domain}" style="color:#60a5fa">${p.slug}</a></td>
     <td>${p.canonical_hostname ? `<code>${p.canonical_hostname}</code>` : "<em>—</em>"}</td>
-    <td><code>${(config.apps || []).join(", ")}</code></td>
+    <td><code>${apps.join(", ")}</code></td>
     <td>${p.artifacts_repo ? `<code style="font-size:.7rem">${p.artifacts_repo}</code>` : "<em>—</em>"}</td>
     <td style="font-size:.8rem">${p.created_at}</td>
     <td><button onclick="deleteProject('${p.slug}')" style="color:#f87171;background:transparent;border:1px solid #f87171">delete</button></td>

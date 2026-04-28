@@ -13,11 +13,17 @@ import { execSync } from "node:child_process";
 
 const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID ?? "cc7f6f461fbe823c199da2b27f9e0ff3";
 const TOKEN_FILE = `${process.env.HOME}/Library/Preferences/.wrangler/config/default.toml`;
-const tokenLine = fs
-  .readFileSync(TOKEN_FILE, "utf8")
-  .split("\n")
-  .find((l) => l.startsWith("oauth_token"));
-const API_TOKEN = tokenLine!.split('"')[1];
+const tokenLine = fs.existsSync(TOKEN_FILE)
+  ? fs
+      .readFileSync(TOKEN_FILE, "utf8")
+      .split("\n")
+      .find((l) => l.startsWith("oauth_token"))
+  : null;
+const API_TOKEN =
+  process.env.CLOUDFLARE_API_TOKEN_DEV_JONAS ||
+  process.env.CLOUDFLARE_API_TOKEN ||
+  tokenLine?.split('"')[1];
+if (!API_TOKEN) throw new Error("Missing Cloudflare API token");
 const NAMESPACE = "default";
 const BASE_URL = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/artifacts/namespaces/${NAMESPACE}`;
 

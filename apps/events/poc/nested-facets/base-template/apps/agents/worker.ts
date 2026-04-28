@@ -248,10 +248,13 @@ export class StreamProcessor extends Agent {
       );
 
       // Load OpenAPI tool providers from sibling apps
-      const slug = (this.ctx.storage.kv.get("projectSlug") as string) || "test";
+      const slug = ((await this.ctx.storage.kv.get("projectSlug")) as string) || "test";
       for (const [name, appName] of [
         ["tanstack_app", "tanstack-app"],
         ["slack", "slack"],
+        ["linear", "linear"],
+        ["github", "github"],
+        ["discord", "discord"],
       ] as const) {
         try {
           const base = appUrl(appName, slug) + "/api";
@@ -309,6 +312,12 @@ export class StreamProcessor extends Agent {
       JSON.stringify(payload),
       offset ?? null,
       this.sp,
+    );
+  }
+
+  isGeneratedAgentAppend(event: any): boolean {
+    return (
+      typeof event?.idempotencyKey === "string" && event.idempotencyKey.startsWith("agent-output:")
     );
   }
 
@@ -393,10 +402,13 @@ export class StreamProcessor extends Agent {
     ];
 
     // OpenAPI tool providers from sibling apps
-    const slug = (this.ctx.storage.kv.get("projectSlug") as string) || "test";
+    const slug = ((await this.ctx.storage.kv.get("projectSlug")) as string) || "test";
     for (const [name, appName] of [
       ["tanstack_app", "tanstack-app"],
       ["slack", "slack"],
+      ["linear", "linear"],
+      ["github", "github"],
+      ["discord", "discord"],
     ] as const) {
       try {
         const base = appUrl(appName, slug) + "/api";
@@ -511,6 +523,10 @@ export class StreamProcessor extends Agent {
       this.storeEvent("agent-input-added", "user", "[Code result]:\n" + resultStr, {
         role: "user",
         content: "[Code result]:\n" + resultStr,
+      });
+      collect({
+        type: "agent-input-added",
+        payload: { role: "user", content: "[Code result]:\n" + resultStr },
       });
     }
   }
@@ -661,6 +677,10 @@ export class StreamProcessor extends Agent {
       const appends: any[] = [];
       const collect = (evt: any) => appends.push(evt);
 
+      if (this.isGeneratedAgentAppend(event)) {
+        return Response.json({ ok: true, appends, generated: true });
+      }
+
       if (event.type === "agent-input-added" && event.payload?.role === "user") {
         try {
           await this.runAgentLoopCollecting(collect);
@@ -678,6 +698,10 @@ export class StreamProcessor extends Agent {
         this.storeEvent("agent-input-added", "user", "[Code result]:\n" + resultStr, {
           role: "user",
           content: "[Code result]:\n" + resultStr,
+        });
+        collect({
+          type: "agent-input-added",
+          payload: { role: "user", content: "[Code result]:\n" + resultStr },
         });
       }
 
@@ -778,6 +802,8 @@ export class StreamProcessor extends Agent {
           event.offset ?? null,
         );
 
+        if (this.isGeneratedAgentAppend(event)) return;
+
         // Agent loop: on user message, call AI → parse code blocks → execute → follow up
         if (event.type === "agent-input-added" && event.payload?.role === "user") {
           await this.runAgentLoop(ws);
@@ -842,6 +868,53 @@ export class App extends DurableObject {
     return resp;
   }
 
+  #configValue(key: string): string {
+    const rows = this.ctx.storage.sql.exec("SELECT value FROM config WHERE key = ?", key).toArray();
+    return rows.length ? (rows[0].value as string) : "";
+  }
+
+  #hostProjectSlug(req: Request): string {
+    const host = req.headers.get("host") || "";
+    const match = host.match(/^agents\.([^.]+)\./);
+    return match?.[1] || "";
+  }
+
+  async #publishAgentAppends(
+    streamPath: string,
+    sourceEvent: any,
+    appends: any[],
+    req: Request,
+  ): Promise<{ published: number; errors: string[] }> {
+    const eventsBaseUrl = this.#configValue("eventsBaseUrl") || undefined;
+    const projectSlug = this.#configValue("projectSlug") || this.#hostProjectSlug(req) || undefined;
+    const sourceKey = String(sourceEvent?.idempotencyKey || sourceEvent?.offset || Date.now());
+    const errors: string[] = [];
+    let published = 0;
+
+    for (let i = 0; i < appends.length; i++) {
+      const generatedEvent = appends[i];
+      const event = {
+        ...generatedEvent,
+        idempotencyKey:
+          generatedEvent?.idempotencyKey ??
+          `agent-output:${sourceKey}:${i}:${generatedEvent?.type || "event"}`,
+      };
+
+      try {
+        const resp = await this.#appendToStream(streamPath, event, eventsBaseUrl, projectSlug);
+        if (!resp.ok) {
+          errors.push(`${generatedEvent?.type || "event"}:${resp.status}`);
+          continue;
+        }
+        published++;
+      } catch (e: any) {
+        errors.push(`${generatedEvent?.type || "event"}:${e.message}`);
+      }
+    }
+
+    return { published, errors };
+  }
+
   ensureTables() {
     this.ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS subscriptions (
@@ -888,8 +961,16 @@ export class App extends DurableObject {
     return rows.length ? (rows[0].value as string) : "";
   }
 
+  #streamGeneration(streamPath: string): string {
+    return this.#configValue(`streamGeneration:${streamPath}`) || "0";
+  }
+
+  #streamFacetName(streamPath: string): string {
+    return `stream:${streamPath}:g${this.#streamGeneration(streamPath)}`;
+  }
+
   getOrCreateStream(streamPath: string) {
-    const facetName = "stream:" + streamPath;
+    const facetName = this.#streamFacetName(streamPath);
 
     this.ctx.storage.sql.exec(
       "INSERT INTO _facets (name, class_name) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET last_fetch_at = datetime('now')",
@@ -957,8 +1038,9 @@ export class App extends DurableObject {
         }
 
         const proc = this.getOrCreateStream(wsStreamPath);
+        const facetName = this.#streamFacetName(wsStreamPath);
         const resp = await proc.fetch(
-          this.facetRequest("stream:" + wsStreamPath, "http://localhost/process", {
+          this.facetRequest(facetName, "http://localhost/process", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify(frame.event),
@@ -982,7 +1064,7 @@ export class App extends DurableObject {
       // here would cause BOTH the Project DO's and App's webSocketMessage to fire,
       // resulting in duplicate event processing.
 
-      const facetName = "stream:" + streamPath;
+      const facetName = this.#streamFacetName(streamPath);
 
       // /_studio + /_sql
       if (subPath === "/_studio") {
@@ -996,6 +1078,49 @@ export class App extends DurableObject {
             body: req.body,
           }),
         );
+      }
+
+      if (req.method === "POST" && subPath === "/process") {
+        try {
+          const bodyText = await req.text();
+          let sourceEvent: any = null;
+          try {
+            sourceEvent = JSON.parse(bodyText);
+          } catch {}
+
+          const resp = await proc.fetch(
+            this.facetRequest(facetName, "http://localhost/process", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: bodyText,
+            }),
+          );
+          const responseText = await resp.text();
+
+          let responseJson: any = null;
+          try {
+            responseJson = JSON.parse(responseText);
+          } catch {}
+
+          if (responseJson?.appends?.length) {
+            const publishResult = await this.#publishAgentAppends(
+              streamPath,
+              sourceEvent,
+              responseJson.appends,
+              req,
+            );
+            responseJson.publishedAppends = publishResult;
+            return Response.json(responseJson, { status: resp.status });
+          }
+
+          return new Response(responseText, { status: resp.status, headers: resp.headers });
+        } catch (e: any) {
+          console.error(`[Agents] /process failed: ${e?.message || String(e)}`);
+          return Response.json(
+            { ok: false, error: e?.message || String(e), streamPath },
+            { status: 500 },
+          );
+        }
       }
 
       // Forward other requests
@@ -1086,12 +1211,33 @@ export class App extends DurableObject {
       return Response.json({ subscriptions: subs });
     }
 
+    const resetStreamMatch = pathname.match(/^\/api\/reset-stream\/(.+)$/);
+    if (req.method === "POST" && resetStreamMatch) {
+      const streamPath = decodeURIComponent(resetStreamMatch[1]);
+      const facetName = this.#streamFacetName(streamPath);
+      try {
+        (this.ctx as any).facets.abort(facetName, new Error("stream reset requested"));
+      } catch (e: any) {
+        return Response.json({ ok: false, error: e.message }, { status: 500 });
+      }
+      const nextGeneration = String(Number(this.#streamGeneration(streamPath)) + 1);
+      this.ctx.storage.sql.exec(
+        "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
+        `streamGeneration:${streamPath}`,
+        nextGeneration,
+      );
+      this.ctx.storage.sql.exec("DELETE FROM _facets WHERE name = ?", facetName);
+      return Response.json({ ok: true, streamPath, generation: nextGeneration });
+    }
+
     // ── GET /api/stream-events/:streamPath — events from a stream processor ──
     const streamEventsMatch = pathname.match(/^\/api\/stream-events\/(.+)$/);
     if (req.method === "GET" && streamEventsMatch) {
       const streamPath = decodeURIComponent(streamEventsMatch[1]);
       const proc = this.getOrCreateStream(streamPath);
-      return proc.fetch(this.facetRequest("stream:" + streamPath, "http://localhost/api/events"));
+      return proc.fetch(
+        this.facetRequest(this.#streamFacetName(streamPath), "http://localhost/api/events"),
+      );
     }
 
     // For anything else, return 404 — the Project DO serves the SPA from dist assets

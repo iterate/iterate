@@ -278,6 +278,7 @@ export default {
 // ── Project DO ────────────────────────────────────────────────────────────────
 
 type BuildState = "idle" | "building" | "ready" | "error";
+const APP_KEEPALIVE_ALARM_MS = 10_000;
 
 export class Project extends DurableObject<Env> {
   #buildStates: Record<string, BuildState> = {};
@@ -417,6 +418,72 @@ export class Project extends DurableObject<Env> {
     }
   }
 
+  #appFacetName(app: string) {
+    return `app:v2:${app}`;
+  }
+
+  #appFacetVersionKey(app: string) {
+    return `app-facet-version:${app}`;
+  }
+
+  #abortAppFacet(app: string, reason: string) {
+    try {
+      (this.ctx as any).facets.abort(this.#appFacetName(app), new Error(reason));
+      this.log(`Aborted app facet for ${app}: ${reason}`);
+    } catch (e: any) {
+      this.log(`Could not abort app facet for ${app}: ${e.message}`);
+    }
+  }
+
+  async #markAppFacetRebuilt(app: string) {
+    await this.ctx.storage.kv.delete(this.#appFacetVersionKey(app));
+    this.#abortAppFacet(app, "app rebuilt");
+  }
+
+  async #ensureAppFacetVersion(app: string, sourceHash: string) {
+    const key = this.#appFacetVersionKey(app);
+    const previousHash = (await this.ctx.storage.kv.get(key)) as string | null;
+    if (previousHash === sourceHash) return;
+
+    this.#abortAppFacet(
+      app,
+      previousHash == null
+        ? `app facet version initialized as ${sourceHash}`
+        : `app bundle changed from ${previousHash} to ${sourceHash}`,
+    );
+    await this.ctx.storage.kv.put(key, sourceHash);
+  }
+
+  #scheduleAppKeepalive(delayMs = APP_KEEPALIVE_ALARM_MS) {
+    const alarm = this.ctx.storage.setAlarm(Date.now() + delayMs);
+    (this.ctx as any).waitUntil?.(alarm);
+    return alarm;
+  }
+
+  async #hasApp(app: string) {
+    const configStr = (await this.ws.readFile("config.json")) ?? '{"apps":[]}';
+    const config = JSON.parse(configStr) as { apps: string[] };
+    return config.apps.includes(app);
+  }
+
+  async alarm() {
+    try {
+      await this.ensureCloned();
+      if (!(await this.#hasApp("discord"))) return;
+
+      await this.#serveApp(
+        "discord",
+        new Request(`https://discord.${this.slug}${PLATFORM_SUFFIX}/api/connect`, {
+          method: "POST",
+        }),
+      );
+    } catch (e: any) {
+      console.error(`[Project DO] app keepalive failed: ${e.message}`);
+    } finally {
+      this.#scheduleAppKeepalive();
+    }
+  }
+
   async commitAndPush(message: string): Promise<string | null> {
     const token = await this.repo.getToken("write", 3600);
     return this.ws.commitAndPush(message, token);
@@ -534,6 +601,7 @@ export class Project extends DurableObject<Env> {
         assetFiles,
       };
       await this.ws.writeManifest(app, manifest);
+      await this.#markAppFacetRebuilt(app);
 
       try {
         await sandbox.destroy();
@@ -661,9 +729,11 @@ export class Project extends DurableObject<Env> {
       .join("");
 
     const ctx = this.ctx as any;
+    await this.#ensureAppFacetVersion(app, sourceHash);
+
     // Stable facet key (survives rebuilds, keeps WebSocket connections)
     // Hash in LOADER key (picks up new code on rebuild)
-    const facet = ctx.facets.get(`app:${app}`, async () => {
+    const facet = ctx.facets.get(this.#appFacetName(app), async () => {
       const worker = this.env.LOADER.get(`app:${app}:${sourceHash}`, async () => ({
         compatibilityDate: "2026-04-01",
         compatibilityFlags: appCompatFlags,
@@ -894,6 +964,7 @@ export class Project extends DurableObject<Env> {
             builtAt: new Date().toISOString(),
           };
           await this.ws.writeManifest(buildApp, manifest);
+          await this.#markAppFacetRebuilt(buildApp);
 
           let oid: string | null = null;
           try {
@@ -998,6 +1069,7 @@ export class Project extends DurableObject<Env> {
             assetFiles: clientAssetFiles,
           };
           await this.ws.writeManifest(buildApp, manifest);
+          await this.#markAppFacetRebuilt(buildApp);
 
           this.setBuildState(buildApp, "ready");
           this.log(
@@ -1056,6 +1128,7 @@ export class Project extends DurableObject<Env> {
     // Read config to check if app is enabled
     const configStr = (await this.ws.readFile("config.json")) ?? '{"apps":[]}';
     const config = JSON.parse(configStr) as { apps: string[] };
+    if (config.apps.includes("discord")) this.#scheduleAppKeepalive();
     if (!config.apps.includes(app)) {
       return new Response(`App "${app}" not enabled. Enabled: ${config.apps.join(", ")}`, {
         status: 404,

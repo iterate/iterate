@@ -90,13 +90,10 @@ function parseWebhookPayload(payload: SlackWebhookPayload): ParsedEvent {
   const threadTs = (event as any).thread_ts || event.ts;
   if (!threadTs) return { case: "ignored", reason: "no ts" };
 
-  // Skip message events that duplicate app_mention
-  if (event.type === "message" && event.text && new RegExp(`<@${botUserId}>`).test(event.text))
-    return { case: "ignored", reason: "message duplicates app_mention" };
-
+  const mentionsBot = Boolean(event.text && new RegExp(`<@${botUserId}>`).test(event.text));
   const isDM = "channel_type" in event && (event as any).channel_type === "im";
   const isNewThread = !(event as any).thread_ts;
-  const isMention = event.type === "app_mention" || (isDM && isNewThread);
+  const isMention = event.type === "app_mention" || mentionsBot || (isDM && isNewThread);
 
   return { case: isMention ? "mention" : "fyi", event: event as any, threadTs };
 }
@@ -258,13 +255,24 @@ export class App extends DurableObject {
   }
 
   async #webhook(req: Request): Promise<Response> {
-    let payload: any;
     try {
-      payload = JSON.parse(await req.text());
+      return await this.#webhookImpl(req);
+    } catch (e: any) {
+      console.error(`[Slack] webhook failed: ${e?.message || String(e)}`);
+      return Response.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    }
+  }
+
+  async #webhookImpl(req: Request): Promise<Response> {
+    let payload: any;
+    const raw = await req.text();
+    try {
+      payload = JSON.parse(raw);
     } catch {
-      return Response.json({ error: "bad json" }, { status: 400 });
+      payload = Object.fromEntries(new URLSearchParams(raw));
     }
 
+    if (payload.ssl_check) return Response.json({ ok: true });
     if (payload.type === "url_verification")
       return new Response(payload.challenge, { headers: { "content-type": "text/plain" } });
     if (payload.type !== "event_callback") return Response.json({ ok: true, ignored: true });
@@ -272,6 +280,15 @@ export class App extends DurableObject {
     const parsed = parseWebhookPayload(payload);
     if (parsed.case === "ignored")
       return Response.json({ ok: true, ignored: true, reason: parsed.reason });
+
+    const event = parsed.event;
+    const channel = event.channel || "";
+    const threadTs = parsed.threadTs;
+    const threadKey = `agent-thread:${threadTs}`;
+    const isKnownThread = this.#config(threadKey) === "1";
+    if (parsed.case === "fyi" && !isKnownThread) {
+      return Response.json({ ok: true, ignored: true, reason: "not mentioned" });
+    }
 
     // Dedup by message ts (Slack retries + multiple event types for same message)
     const msgTs = parsed.event.ts;
@@ -283,9 +300,7 @@ export class App extends DurableObject {
       this.#setConfig(`seen:${msgTs}`, "1");
     }
 
-    const event = parsed.event;
-    const channel = event.channel || "";
-    const threadTs = parsed.threadTs;
+    this.#setConfig(threadKey, "1");
     const agentPath = `/agents/slack/ts-${threadTs.replace(/\./g, "-")}`;
 
     // Eyes emoji (fire-and-forget)
