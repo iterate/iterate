@@ -54,28 +54,6 @@ const dynamicWorkerCode = {
   },
 } as const;
 
-const dynamicWorkerOutboundCode = {
-  compatibilityDate: "2026-04-27",
-  mainModule: "worker.js",
-  modules: {
-    "worker.js": `
-      export default {
-        async fetch() {
-          try {
-            await fetch("https://example.com/");
-            return Response.json({ blocked: false });
-          } catch (error) {
-            return Response.json({
-              blocked: true,
-              message: error instanceof Error ? error.message : String(error),
-            });
-          }
-        }
-      }
-    `,
-  },
-} as const;
-
 async function dispatchThroughHostWorker(options: { callable: Callable; payload: unknown }) {
   const response = await workerExports.default.fetch("https://host.local/dispatch", {
     method: "POST",
@@ -1159,24 +1137,6 @@ describe("dispatchCallableFetch", () => {
     await expect(response.json()).resolves.toMatchObject({
       target: "dynamic-worker",
       path: "/load-mode",
-    });
-  });
-
-  test("blocks global outbound fetch inside Dynamic Worker targets", async () => {
-    const response = await dispatchCallableFetch({
-      callable: {
-        target: {
-          type: "dynamic-worker",
-          loader: { $binding: "CALLABLE_TEST_LOADER" },
-          code: dynamicWorkerOutboundCode,
-        },
-      },
-      request: new Request("https://router.local/egress"),
-      ctx: { env: testEnv },
-    });
-
-    await expect(response.json()).resolves.toMatchObject({
-      blocked: true,
     });
   });
 

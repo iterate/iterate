@@ -160,12 +160,10 @@ const dynamicWorkerCacheSchema = z
 
 /**
  * Dynamic Worker targets intentionally keep only the loader, inline JavaScript
- * source, and optional `get()` cache identity. V1 always loads code with
- * `globalOutbound: null` in runtime.ts, so dynamic code cannot inherit public
- * egress from the parent Worker. Fields like `env`, custom `globalOutbound`,
- * named entrypoints, tails, and typed modules are real platform features, but
- * they expand the capability surface. V1 parks them in tasks until we add the
- * policy layer that should govern them:
+ * source, and optional `get()` cache identity. Fields like `env`,
+ * `globalOutbound`, named entrypoints, tails, and typed modules are real
+ * platform features, but they expand the capability surface. V1 parks them in
+ * tasks until we add the policy layer that should govern them:
  * https://developers.cloudflare.com/dynamic-workers/api-reference/
  */
 const dynamicWorkerTargetSchema = z

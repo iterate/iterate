@@ -18,13 +18,12 @@ Implemented:
 - optional `cache: { mode: "get", id }` for Worker Loader `get()`
 - strict inline JS-only code shape: compatibility date, main module, modules
 - shared dispatch path after resolving the Dynamic Worker entrypoint
-- `globalOutbound: null` enforced at load time
 
 Deferred:
 
 - dispatch namespace fetch
 - source refs / CIDs / content hashes instead of inline source
-- policy-controlled egress/globalOutbound gateway
+- egress/globalOutbound policy
 - derive or validate `cache.id` from a canonical WorkerCode hash
 - `env`, tails, typed module objects, Python modules
 - named entrypoints

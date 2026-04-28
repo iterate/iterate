@@ -424,15 +424,16 @@ V1 supports only inline JavaScript modules:
 - `code.mainModule` must exist in `code.modules`.
 - every module name must end in `.js`.
 - named entrypoints, entrypoint props, typed module objects, Python,
-  `allowExperimental`, `env`, custom `globalOutbound`, tails, streaming tails,
-  and source refs are future work.
+  `allowExperimental`, `env`, `globalOutbound`, tails, streaming tails, and
+  source refs are future work.
 
-Dynamic Worker targets execute the supplied module source. V1 always loads them
-with `WorkerCode.globalOutbound: null`, so dynamic code cannot use global
-`fetch()` or `connect()` for public egress. Do not dispatch tenant-authored,
-user-authored, LLM-authored, or otherwise untrusted Dynamic Worker callables
-until code provenance, source-size limits, and policy-controlled outbound
-gateways land.
+Dynamic Worker targets execute the supplied module source. V1 does not set
+`WorkerCode.globalOutbound`, so Dynamic Workers get Cloudflare's default
+outbound behavior. That means dynamic code can use global `fetch()`/`connect()`
+unless a later policy layer blocks or intercepts it. Do not dispatch
+tenant-authored, user-authored, LLM-authored, or otherwise untrusted Dynamic
+Worker callables until code provenance, source-size limits, and outbound policy
+land.
 
 Cloudflare Dynamic Workers docs:
 
@@ -469,9 +470,9 @@ Worker-boundary code that wants normal runtime fetch should pass
 created by a shared helper reading ambient globals.
 
 Dynamic Worker callables are especially sensitive: the descriptor contains
-executable source code. V1 blocks their global outbound network access, but it
-does not yet validate code provenance or provide a policy-controlled egress
-gateway.
+executable source code. V1 intentionally leaves Cloudflare's default outbound
+behavior alone, and it does not yet validate code provenance or provide a
+policy-controlled egress gateway.
 
 This warning is the same object-capability boundary Cloudflare describes for
 Workers RPC: holding a binding or stub is authority. A Callable is not itself a

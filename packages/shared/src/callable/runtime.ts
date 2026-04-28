@@ -11,17 +11,14 @@ import {
 type FetchableBinding = { fetch: (request: Request) => Response | Promise<Response> };
 type DynamicWorkerTarget = Extract<FetchCallable["target"], { type: "dynamic-worker" }>;
 type DynamicWorkerCode = DynamicWorkerTarget["code"];
-type DynamicWorkerCodeWithBlockedOutbound = DynamicWorkerCode & { globalOutbound: null };
 type DynamicWorkerStub = {
   getEntrypoint: () => unknown;
 };
 type DynamicWorkerLoader = {
-  load: (code: DynamicWorkerCodeWithBlockedOutbound) => DynamicWorkerStub;
+  load: (code: DynamicWorkerCode) => DynamicWorkerStub;
   get: (
     id: string,
-    getCode: () =>
-      | DynamicWorkerCodeWithBlockedOutbound
-      | Promise<DynamicWorkerCodeWithBlockedOutbound>,
+    getCode: () => DynamicWorkerCode | Promise<DynamicWorkerCode>,
   ) => DynamicWorkerStub;
 };
 
@@ -630,11 +627,10 @@ function resolveDynamicWorkerEntrypoint(options: {
    * identical code for the same ID:
    * https://developers.cloudflare.com/dynamic-workers/api-reference/#get
    */
-  const code = buildDynamicWorkerCode({ code: options.target.code });
   const stub =
     options.target.cache?.mode === "get"
-      ? loader.get(options.target.cache.id, () => code)
-      : loader.load(code);
+      ? loader.get(options.target.cache.id, () => options.target.code)
+      : loader.load(options.target.code);
 
   const entrypoint = stub.getEntrypoint();
   if (typeof entrypoint !== "object" || entrypoint === null) {
@@ -665,19 +661,6 @@ function resolveBinding(options: {
     throw new CallableError("RESOLUTION_FAILED", `Binding "${options.bindingName}" not found`);
   }
   return options.env[options.bindingName];
-}
-
-function buildDynamicWorkerCode(options: {
-  code: DynamicWorkerCode;
-}): DynamicWorkerCodeWithBlockedOutbound {
-  /**
-   * Dynamic Workers inherit the parent Worker's public network access when
-   * `globalOutbound` is omitted. V1 has no capability policy or egress gateway
-   * yet, so it blocks global `fetch()` / `connect()` for dynamic code by
-   * default. Future work can add an explicit policy-controlled gateway:
-   * https://developers.cloudflare.com/dynamic-workers/usage/egress-control/
-   */
-  return { ...options.code, globalOutbound: null };
 }
 
 function isFetchableBinding(
