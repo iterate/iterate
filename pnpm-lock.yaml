@@ -1253,8 +1253,8 @@ importers:
         specifier: 0.2.1
         version: 0.2.1
       sqlfu:
-        specifier: 0.0.3-8
-        version: 0.0.3-8(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0)
+        specifier: 0.0.3-10
+        version: 0.0.3-10(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0)
       tailwindcss:
         specifier: ^4.1.18
         version: 4.2.1
@@ -5226,6 +5226,7 @@ packages:
   '@hono/node-ws@1.3.0':
     resolution: {integrity: sha512-ju25YbbvLuXdqBCmLZLqnNYu1nbHIQjoyUqA8ApZOeL1k4skuiTcw5SW77/5SUYo2Xi2NVBJoVlfQurnKEp03Q==}
     engines: {node: '>=18.14.1'}
+    deprecated: Package no longer supported. Contact Support at https://www.npmjs.com/support for more info.
     peerDependencies:
       '@hono/node-server': ^1.19.2
       hono: ^4.6.0
@@ -16157,6 +16158,15 @@ packages:
 
   sql.js@1.14.1:
     resolution: {integrity: sha512-gcj8zBWU5cFsi9WUP+4bFNXAyF1iRpA3LLyS/DP5xlrNzGmPIizUeBggKa8DbDwdqaKwUcTEnChtd2grWo/x/A==}
+
+  sqlfu@0.0.3-10:
+    resolution: {integrity: sha512-8L/e1ex/jYEyS4IaVDJTLpj9235XQi5cHf1hkdEb0XkQwexvE3gyjPKKhmf+m50d9FyDjfCMMegkDek4V2VCRw==}
+    hasBin: true
+    peerDependencies:
+      '@sqlfu/ui': 0.0.3-10
+    peerDependenciesMeta:
+      '@sqlfu/ui':
+        optional: true
 
   sqlfu@0.0.3-8:
     resolution: {integrity: sha512-jxHN1FQ7nmantuE4ZzWgotlfp+XJBoiw6mP94AyeSKMAQe0e5ki8Mrfz51vHl60Q6nxeXfp9tvLhwfuaHIPK+Q==}
@@ -33911,6 +33921,22 @@ snapshots:
   sql-escaper@1.3.3: {}
 
   sql.js@1.14.1: {}
+
+  sqlfu@0.0.3-10(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0):
+    dependencies:
+      '@clack/prompts': 1.2.0
+      '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
+      trpc-cli: 0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
+      zod: 4.3.6
+    transitivePeerDependencies:
+      - '@opentelemetry/api'
+      - '@trpc/server'
+      - '@valibot/to-json-schema'
+      - crossws
+      - effect
+      - fastify
+      - valibot
+      - ws
 
   sqlfu@0.0.3-8(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0):
     dependencies:
