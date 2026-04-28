@@ -5,9 +5,6 @@ import {
   ErrorOccurredEvent,
   JsonataTransformerConfiguredEvent,
   StreamSubscriptionConfiguredEvent,
-  SCHEDULE_CANCELLED_TYPE,
-  SCHEDULE_CONFIGURED_TYPE,
-  ScheduleConfiguredPayload,
   StreamMetadataUpdatedEvent,
   StreamPausedEvent,
   StreamResumedEvent,
@@ -286,32 +283,6 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     return {
       kind: "stream-error-occurred",
       message: ErrorOccurredEvent.parse(event).payload.message,
-      timestamp: getTimestamp(event.createdAt),
-      raw: event,
-    };
-  }
-
-  if (event.type === SCHEDULE_CONFIGURED_TYPE) {
-    const payload = ScheduleConfiguredPayload.parse(event.payload);
-    return {
-      kind: "scheduler-control",
-      action: "configured",
-      slug: payload.slug,
-      callback: payload.callback,
-      payloadJson: payload.payloadJson ?? null,
-      schedule: payload.schedule,
-      nextRunAt: payload.nextRunAt,
-      timestamp: getTimestamp(event.createdAt),
-      raw: event,
-    };
-  }
-
-  if (event.type === SCHEDULE_CANCELLED_TYPE) {
-    const payload = { slug: (event.payload as { slug: string }).slug };
-    return {
-      kind: "scheduler-control",
-      action: "cancelled",
-      slug: payload.slug,
       timestamp: getTimestamp(event.createdAt),
       raw: event,
     };

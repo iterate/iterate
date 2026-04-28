@@ -1,7 +1,7 @@
 import { parseCronExpression } from "cron-schedule";
+import { type Event, type EventInput } from "@iterate-com/events-contract";
+import { defineBuiltinProcessor } from "@iterate-com/events-contract/sdk";
 import {
-  type Event,
-  type EventInput,
   type SchedulerState,
   SCHEDULE_CANCELLED_TYPE,
   SCHEDULE_CONFIGURED_TYPE,
@@ -15,8 +15,7 @@ import {
   ScheduleInternalExecutionStartedPayload as ScheduleInternalExecutionStartedPayloadSchema,
   StreamAppendScheduledPayload as StreamAppendScheduledPayloadSchema,
   type StreamSchedule,
-} from "@iterate-com/events-contract";
-import { defineBuiltinProcessor } from "@iterate-com/events-contract/sdk";
+} from "./scheduling-types.ts";
 
 /**
  * This file owns the scheduler runtime for `apps/events`.

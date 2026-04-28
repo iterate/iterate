@@ -2,11 +2,16 @@ import { z } from "zod";
 import type {
   BuiltinProcessor,
   BuiltinProcessorImplementation,
+  ConsumedEvent,
   EventCatalog,
   EventDefinition,
   Processor,
   ProcessorContractShape,
   ProcessorImplementation,
+  ProcessorState,
+  ProcessorStreamApi,
+  ProcessorReduction,
+  StreamEvent,
 } from "./types.ts";
 
 const Metadata = z.record(z.string(), z.unknown());
@@ -81,8 +86,9 @@ export function createEvent<
  * Typed identity for processor contracts.
  *
  * The state schema must accept `undefined` so the schema is the single source
- * of truth for initial state. `validateProcessorContract()` checks the same
- * invariant at runtime.
+ * of truth for initial state. Even stateless processors declare
+ * `z.object({}).default({})` for now; requiring state keeps generic host code
+ * from falling back to `{}` or `unknown`.
  */
 export function defineProcessorContract<
   const StateSchema extends z.ZodType,
@@ -95,8 +101,12 @@ export function defineProcessorContract<
     ProcessorContractShape<StateSchema, Events, ProcessorDeps, Consumes, Emits>,
     "state" | "processorDeps" | "consumes" | "emits"
   > & {
-    state: undefined extends z.input<StateSchema> ? StateSchema : never;
-    processorDeps?: ProcessorDeps;
+    state: undefined extends z.input<StateSchema>
+      ? z.output<StateSchema> extends Record<string, unknown>
+        ? StateSchema
+        : never
+      : never;
+    processorDeps: ProcessorDeps;
     consumes: Consumes;
     emits: Emits;
   },
@@ -119,7 +129,11 @@ export function defineProcessorContract<
     ProcessorContractShape<StateSchema, Events, readonly [], Consumes, Emits>,
     "state" | "processorDeps" | "consumes" | "emits"
   > & {
-    state: undefined extends z.input<StateSchema> ? StateSchema : never;
+    state: undefined extends z.input<StateSchema>
+      ? z.output<StateSchema> extends Record<string, unknown>
+        ? StateSchema
+        : never
+      : never;
     processorDeps?: never;
     consumes: Consumes;
     emits: Emits;
@@ -158,7 +172,10 @@ export function validateProcessorContract(contract: {
   consumes: readonly string[];
   emits: readonly string[];
 }) {
-  contract.state.parse(undefined);
+  assertObjectProcessorState({
+    processorSlug: contract.slug,
+    value: getProcessorStateSchema(contract).parse(undefined),
+  });
 
   const resolvedEvents = new Map<string, { owner: string; event: EventDefinition }>();
   for (const dependency of contract.processorDeps ?? []) {
@@ -190,6 +207,139 @@ export function validateProcessorContract(contract: {
     resolvedEvents,
     eventTypes: contract.emits,
   });
+}
+
+export function getProcessorStateSchema(contract: { slug: string; state: z.ZodType }): z.ZodType {
+  return contract.state;
+}
+
+export function runProcessorReduce<
+  const Contract extends {
+    events: EventCatalog;
+    processorDeps?: readonly unknown[];
+    consumes: readonly string[];
+    reduce?: (args: {
+      state: ProcessorState<Contract>;
+      event: ConsumedEvent<Contract>;
+    }) => ProcessorState<Contract> | null | undefined;
+  },
+>(args: {
+  event: StreamEvent;
+  processor: { contract: Contract };
+  state: ProcessorState<Contract>;
+}): ProcessorReduction<Contract> | undefined {
+  const previousState = args.state;
+  const eventDefinition = getConsumedEventDefinition({
+    contract: args.processor.contract,
+    eventType: args.event.type,
+  });
+
+  if (eventDefinition == null) {
+    return undefined;
+  }
+
+  const event = eventDefinition.event.parse(args.event) as ConsumedEvent<Contract>;
+  const nextState =
+    args.processor.contract.reduce?.({
+      state: args.state,
+      event,
+    }) ?? args.state;
+
+  assertObjectProcessorState({
+    processorSlug: getProcessorSlug(args.processor.contract),
+    value: nextState,
+  });
+
+  return {
+    event,
+    previousState,
+    state: nextState,
+  };
+}
+
+export async function runProcessorOnStart<const Contract>(args: {
+  processor: { implementation: ProcessorImplementation<Contract> };
+  state: ProcessorState<Contract>;
+  streamApi: ProcessorStreamApi<Contract>;
+  signal: AbortSignal;
+}): Promise<void> {
+  await args.processor.implementation.onStart?.({
+    state: args.state,
+    streamApi: args.streamApi,
+    signal: args.signal,
+  });
+}
+
+export async function runProcessorAfterAppend<const Contract>(args: {
+  processor: { implementation: ProcessorImplementation<Contract> };
+  event: ConsumedEvent<Contract>;
+  previousState: ProcessorState<Contract>;
+  state: ProcessorState<Contract>;
+  streamApi: ProcessorStreamApi<Contract>;
+  signal: AbortSignal;
+}): Promise<void> {
+  await args.processor.implementation.afterAppend?.({
+    event: args.event,
+    previousState: args.previousState,
+    state: args.state,
+    streamApi: args.streamApi,
+    signal: args.signal,
+  });
+}
+
+function assertObjectProcessorState(args: { processorSlug: string; value: unknown }) {
+  if (typeof args.value === "object" && args.value !== null && !Array.isArray(args.value)) {
+    return;
+  }
+
+  throw new Error(`Processor "${args.processorSlug}" state must be an object.`);
+}
+
+function getConsumedEventDefinition(args: {
+  contract: {
+    events: EventCatalog;
+    processorDeps?: readonly unknown[];
+    consumes: readonly string[];
+  };
+  eventType: string;
+}): EventDefinition | undefined {
+  if (!args.contract.consumes.includes(args.eventType)) {
+    return undefined;
+  }
+
+  const eventDefinition = getResolvedEventDefinition({
+    contract: args.contract,
+    eventType: args.eventType,
+  });
+
+  if (eventDefinition == null) {
+    throw new Error(`Unresolved stream processor consumes event type "${args.eventType}".`);
+  }
+
+  return eventDefinition;
+}
+
+function getResolvedEventDefinition(args: {
+  contract: {
+    events: EventCatalog;
+    processorDeps?: readonly unknown[];
+  };
+  eventType: string;
+}): EventDefinition | undefined {
+  const localEventDefinition = args.contract.events[args.eventType];
+  if (localEventDefinition != null) {
+    return localEventDefinition;
+  }
+
+  for (const dependency of args.contract.processorDeps ?? []) {
+    const dependencyEvents = getDependencyEvents(dependency);
+    const dependencyEventDefinition = dependencyEvents?.[args.eventType];
+    if (dependencyEventDefinition != null) {
+      return dependencyEventDefinition;
+    }
+  }
+
+  return undefined;
 }
 
 function addResolvedEvent(args: {
@@ -230,6 +380,57 @@ function isProcessorContractDependency(
   );
 }
 
+function getDependencyEvents(dependency: unknown): EventCatalog | undefined {
+  if (isEventCatalog(dependency)) {
+    return dependency;
+  }
+
+  if (
+    typeof dependency === "object" &&
+    dependency !== null &&
+    "events" in dependency &&
+    isEventCatalog(dependency.events)
+  ) {
+    return dependency.events;
+  }
+
+  return undefined;
+}
+
+function isEventCatalog(value: unknown): value is EventCatalog {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  return Object.values(value).every(isEventDefinition);
+}
+
+function isEventDefinition(value: unknown): value is EventDefinition {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "type" in value &&
+    typeof value.type === "string" &&
+    "event" in value &&
+    "input" in value &&
+    "createInput" in value &&
+    typeof value.createInput === "function"
+  );
+}
+
+function getProcessorSlug(contract: unknown): string {
+  if (
+    typeof contract === "object" &&
+    contract !== null &&
+    "slug" in contract &&
+    typeof contract.slug === "string"
+  ) {
+    return contract.slug;
+  }
+
+  return "unknown";
+}
+
 export type {
   BuiltinProcessor,
   BuiltinProcessorImplementation,
@@ -241,7 +442,10 @@ export type {
   ProcessorContractShape,
   ProcessorImplementation,
   ProcessorState,
+  ProcessorStateObject,
   ProcessorStreamApi,
+  ProcessorStreamApiProps,
+  ProcessorReduction,
   StreamEvent,
   StreamEventInput,
 } from "./types.ts";

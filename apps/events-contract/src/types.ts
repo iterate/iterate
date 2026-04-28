@@ -7,48 +7,25 @@ import {
   StreamPath,
 } from "./event-base-types.ts";
 import {
-  CircuitBreakerConfiguredEvent,
   CircuitBreakerConfiguredEventInput,
   CircuitBreakerState,
-  StreamPausedEvent,
   StreamPausedEventInput,
-  StreamResumedEvent,
   StreamResumedEventInput,
 } from "./circuit-breaker-types.ts";
 import {
   ExternalSubscriberState,
-  StreamSubscriptionConfiguredEvent,
   StreamSubscriptionConfiguredEventInput,
 } from "./external-subscriber-types.ts";
 import {
-  JsonataTransformerConfiguredEvent,
   JsonataTransformerConfiguredEventInput,
   JsonataTransformerState,
 } from "./jsonata-transformer-types.ts";
-import {
-  HtmlRendererConfiguredEvent,
-  HtmlRendererConfiguredEventInput,
-} from "./html-renderer-types.ts";
+import { HtmlRendererConfiguredEventInput } from "./html-renderer-types.ts";
 import {
   DynamicWorkerState,
   DynamicWorkerConfiguredEventInput,
-  DynamicWorkerConfiguredEvent,
-  DynamicWorkerEnvVarSetEvent,
   DynamicWorkerEnvVarSetEventInput,
 } from "./dynamic-worker-types.ts";
-import {
-  ScheduleConfiguredEvent,
-  ScheduleConfiguredEventInput,
-  ScheduleCancelledEvent,
-  ScheduleCancelledEventInput,
-  ScheduleInternalExecutionFinishedEvent,
-  ScheduleInternalExecutionFinishedEventInput,
-  ScheduleInternalExecutionStartedEvent,
-  ScheduleInternalExecutionStartedEventInput,
-  SchedulerState,
-  StreamAppendScheduledEvent,
-  StreamAppendScheduledEventInput,
-} from "./scheduling-types.ts";
 
 export { JSONObject, StreamPath };
 
@@ -147,11 +124,6 @@ const builtInEventInputOptions = [
   StreamSubscriptionConfiguredEventInput,
   ErrorOccurredEventInput,
   InvalidEventAppendedEventInput,
-  StreamAppendScheduledEventInput,
-  ScheduleConfiguredEventInput,
-  ScheduleCancelledEventInput,
-  ScheduleInternalExecutionStartedEventInput,
-  ScheduleInternalExecutionFinishedEventInput,
   JsonataTransformerConfiguredEventInput,
   DynamicWorkerConfiguredEventInput,
   DynamicWorkerEnvVarSetEventInput,
@@ -161,39 +133,10 @@ const builtInEventInputOptions = [
   StreamResumedEventInput,
 ] as const;
 
-const builtInEventOptions = [
-  StreamInitializedEvent,
-  StreamDurableObjectWokeUpEvent,
-  ChildStreamCreatedEvent,
-  StreamMetadataUpdatedEvent,
-  StreamSubscriptionConfiguredEvent,
-  ErrorOccurredEvent,
-  InvalidEventAppendedEvent,
-  StreamAppendScheduledEvent,
-  ScheduleConfiguredEvent,
-  ScheduleCancelledEvent,
-  ScheduleInternalExecutionStartedEvent,
-  ScheduleInternalExecutionFinishedEvent,
-  JsonataTransformerConfiguredEvent,
-  DynamicWorkerConfiguredEvent,
-  DynamicWorkerEnvVarSetEvent,
-  CircuitBreakerConfiguredEvent,
-  HtmlRendererConfiguredEvent,
-  StreamPausedEvent,
-  StreamResumedEvent,
-] as const;
-const [firstBuiltInType, ...restBuiltInTypes] = builtInEventInputOptions.map(
-  (schema) => schema.shape.type,
-);
-const BuiltInEventType = z.union([firstBuiltInType, ...restBuiltInTypes]);
-
 export const GenericEventInput = GenericEventInputBase;
 export const GenericEvent = GenericEventBase;
 
-export const BuiltInEventInput = z.discriminatedUnion("type", builtInEventInputOptions);
-const BuiltInEvent = z.discriminatedUnion("type", builtInEventOptions);
-export type BuiltInEventInput = z.input<typeof BuiltInEventInput>;
-type BuiltInEvent = z.infer<typeof BuiltInEvent>;
+type BuiltInEventInput = z.input<(typeof builtInEventInputOptions)[number]>;
 
 type WithAutocompleteEventType<T extends { type: string }> = Omit<T, "type"> & {
   type: EventType;
@@ -209,37 +152,11 @@ export type EventInput = GenericEventInput;
 export const Event = GenericEventBase.extend({});
 export type Event = GenericEvent;
 
-const ValidatedGenericEventType = EventTypeSchema.refine(
-  (value) => !BuiltInEventType.safeParse(value).success,
-  {
-    message: "Built-in event types must use their built-in payload schema.",
-  },
-);
-const ValidatedGenericEventInput = GenericEventInputBase.extend({
-  type: ValidatedGenericEventType,
-});
-
-const ValidatedEventInput = z.union([BuiltInEventInput, ValidatedGenericEventInput]);
-
-export const NormalizedEventInput = ValidatedEventInput.catch((ctx) =>
-  InvalidEventAppendedEventInput.parse({
-    type: "https://events.iterate.com/events/stream/invalid-event-appended",
-    payload: {
-      rawInput: toJsonValue(ctx.input),
-      error: prettifyValidatedEventInputError({
-        input: ctx.input,
-        fallbackIssues: ctx.error.issues,
-      }),
-    },
-  }),
-) as unknown as z.ZodType<z.output<typeof EventInput>, EventInput>;
-
 const ProcessorsState = z.object({
   "circuit-breaker": CircuitBreakerState,
   "external-subscriber": ExternalSubscriberState.default({ subscribersBySlug: {} }),
   "dynamic-worker": DynamicWorkerState,
   "jsonata-transformer": JsonataTransformerState,
-  scheduler: SchedulerState,
 });
 
 export const StreamState = z.object({
@@ -257,55 +174,3 @@ export const DestroyStreamResult = z.object({
   finalStateByPath: z.record(z.string(), z.object({ finalState: StreamState.nullable() })),
 });
 export type DestroyStreamResult = z.infer<typeof DestroyStreamResult>;
-
-type JsonValue = null | string | number | boolean | JsonValue[] | { [key: string]: JsonValue };
-
-function prettifyValidatedEventInputError(args: {
-  input: unknown;
-  fallbackIssues: z.ZodError["issues"];
-}) {
-  const specificResult = hasBuiltInEventType(args.input)
-    ? BuiltInEventInput.safeParse(args.input)
-    : GenericEventInput.safeParse(args.input);
-
-  if (!specificResult.success) {
-    return z.prettifyError(specificResult.error);
-  }
-
-  return z.prettifyError(new z.ZodError(args.fallbackIssues));
-}
-
-function hasBuiltInEventType(input: unknown) {
-  if (typeof input !== "object" || input == null || Array.isArray(input)) {
-    return false;
-  }
-
-  return BuiltInEventType.safeParse((input as Record<string, unknown>).type).success;
-}
-
-function toJsonValue(input: unknown): JsonValue {
-  if (input === undefined) {
-    return null;
-  }
-
-  if (
-    input === null ||
-    typeof input === "string" ||
-    typeof input === "number" ||
-    typeof input === "boolean"
-  ) {
-    return input;
-  }
-
-  if (Array.isArray(input)) {
-    return input.map((value) => toJsonValue(value));
-  }
-
-  if (typeof input === "object") {
-    return Object.fromEntries(
-      Object.entries(input).map(([key, value]) => [key, toJsonValue(value)]),
-    );
-  }
-
-  return null;
-}

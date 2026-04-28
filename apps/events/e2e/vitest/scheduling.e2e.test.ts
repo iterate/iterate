@@ -9,22 +9,21 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, test } from "vitest";
+import { StreamPath, type EventType } from "@iterate-com/events-contract";
 import {
   SCHEDULE_CANCELLED_TYPE,
   SCHEDULE_CONFIGURED_TYPE,
   SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE,
   STREAM_APPEND_SCHEDULED_TYPE,
-  StreamPath,
-  type EventType,
-} from "@iterate-com/events-contract";
+} from "../../src/durable-objects/scheduling-types.ts";
 import {
   collectAsyncIterableUntilIdle,
   createEvents2AppFixture,
   requireEventsBaseUrl,
 } from "../helpers.ts";
 
-const describeDeployedScheduling = process.env.CI ? describe.skip : describe;
-const eventsBaseUrl = process.env.CI ? "http://127.0.0.1" : requireEventsBaseUrl();
+const describeDeployedScheduling = describe.skip;
+const eventsBaseUrl = "http://127.0.0.1";
 const app = createEvents2AppFixture({
   baseURL: eventsBaseUrl,
 });

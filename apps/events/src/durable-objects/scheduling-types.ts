@@ -1,9 +1,5 @@
 import { z } from "zod";
-import {
-  EventTypeSchema,
-  GenericEvent as GenericEventBase,
-  GenericEventInput as GenericEventInputBase,
-} from "./event-base-types.ts";
+import { Event, EventInput } from "@iterate-com/events-contract";
 
 /**
  * Scheduling is modeled as stream control events, not as a separate scheduler
@@ -65,9 +61,7 @@ export type StreamSchedule = z.infer<typeof StreamSchedule>;
 // recursively re-run built-in payload discrimination at schedule-creation time.
 // The eventual callback remains the canonical validator when the scheduled
 // event actually fires.
-const ScheduledAppendTargetEventInput = GenericEventInputBase.extend({
-  type: EventTypeSchema,
-});
+const ScheduledAppendTargetEventInput = EventInput;
 type ScheduledAppendTargetEventInput = z.infer<typeof ScheduledAppendTargetEventInput>;
 
 export const StreamAppendScheduledPayload = z.strictObject({
@@ -77,11 +71,11 @@ export const StreamAppendScheduledPayload = z.strictObject({
 });
 export type StreamAppendScheduledPayload = z.infer<typeof StreamAppendScheduledPayload>;
 
-export const StreamAppendScheduledEventInput = GenericEventInputBase.extend({
+export const StreamAppendScheduledEventInput = EventInput.extend({
   type: z.literal(STREAM_APPEND_SCHEDULED_TYPE),
   payload: StreamAppendScheduledPayload,
 });
-export const StreamAppendScheduledEvent = GenericEventBase.extend(
+export const StreamAppendScheduledEvent = Event.extend(
   StreamAppendScheduledEventInput.pick({ type: true, payload: true }).shape,
 );
 export type StreamAppendScheduledEventInput = z.infer<typeof StreamAppendScheduledEventInput>;
@@ -96,11 +90,11 @@ export const ScheduleConfiguredPayload = z.strictObject({
 });
 export type ScheduleConfiguredPayload = z.infer<typeof ScheduleConfiguredPayload>;
 
-export const ScheduleConfiguredEventInput = GenericEventInputBase.extend({
+export const ScheduleConfiguredEventInput = EventInput.extend({
   type: z.literal(SCHEDULE_CONFIGURED_TYPE),
   payload: ScheduleConfiguredPayload,
 });
-export const ScheduleConfiguredEvent = GenericEventBase.extend(
+export const ScheduleConfiguredEvent = Event.extend(
   ScheduleConfiguredEventInput.pick({ type: true, payload: true }).shape,
 );
 
@@ -109,11 +103,11 @@ const ScheduleCancelledPayload = z.strictObject({
 });
 type ScheduleCancelledPayload = z.infer<typeof ScheduleCancelledPayload>;
 
-export const ScheduleCancelledEventInput = GenericEventInputBase.extend({
+export const ScheduleCancelledEventInput = EventInput.extend({
   type: z.literal(SCHEDULE_CANCELLED_TYPE),
   payload: ScheduleCancelledPayload,
 });
-export const ScheduleCancelledEvent = GenericEventBase.extend(
+export const ScheduleCancelledEvent = Event.extend(
   ScheduleCancelledEventInput.pick({ type: true, payload: true }).shape,
 );
 
@@ -125,11 +119,11 @@ export type ScheduleInternalExecutionStartedPayload = z.infer<
   typeof ScheduleInternalExecutionStartedPayload
 >;
 
-export const ScheduleInternalExecutionStartedEventInput = GenericEventInputBase.extend({
+export const ScheduleInternalExecutionStartedEventInput = EventInput.extend({
   type: z.literal(SCHEDULE_INTERNAL_EXECUTION_STARTED_TYPE),
   payload: ScheduleInternalExecutionStartedPayload,
 });
-export const ScheduleInternalExecutionStartedEvent = GenericEventBase.extend(
+export const ScheduleInternalExecutionStartedEvent = Event.extend(
   ScheduleInternalExecutionStartedEventInput.pick({ type: true, payload: true }).shape,
 );
 
@@ -142,11 +136,11 @@ export type ScheduleInternalExecutionFinishedPayload = z.infer<
   typeof ScheduleInternalExecutionFinishedPayload
 >;
 
-export const ScheduleInternalExecutionFinishedEventInput = GenericEventInputBase.extend({
+export const ScheduleInternalExecutionFinishedEventInput = EventInput.extend({
   type: z.literal(SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE),
   payload: ScheduleInternalExecutionFinishedPayload,
 });
-export const ScheduleInternalExecutionFinishedEvent = GenericEventBase.extend(
+export const ScheduleInternalExecutionFinishedEvent = Event.extend(
   ScheduleInternalExecutionFinishedEventInput.pick({ type: true, payload: true }).shape,
 );
 

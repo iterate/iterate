@@ -236,11 +236,10 @@ describe("dynamic worker processor", () => {
             workersBySlug: {
               "ping-pong": {
                 compatibilityDate: "2026-02-05",
-                compatibilityFlags: [],
+                compatibilityFlags: ["nodejs_compat", "nodejs_compat_populate_process_env"],
                 mainModule: "worker.js",
                 modules: {
                   "processor.js": pingPongDynamicWorkerScript,
-                  "runtime-config.js": expect.any(String),
                   "worker.js": expect.any(String),
                 },
               },
@@ -738,7 +737,6 @@ describe("dynamic worker processor", () => {
                 mainModule: "worker.js",
                 modules: {
                   "processor.js": pingPongDynamicWorkerScript,
-                  "runtime-config.js": expect.any(String),
                   "worker.js": expect.any(String),
                 },
               },

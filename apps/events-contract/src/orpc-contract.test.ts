@@ -3,15 +3,8 @@ import type { ContractRouterClient } from "@orpc/contract";
 import { z } from "zod";
 import { AppendInput, eventsContract } from "./orpc-contract.ts";
 import {
-  SCHEDULE_CONFIGURED_TYPE,
-  STREAM_APPEND_SCHEDULED_TYPE,
-  ScheduleConfiguredEventInput,
-  StreamAppendScheduledEventInput,
-} from "./scheduling-types.ts";
-import {
   EventInput,
   InvalidEventAppendedEventInput,
-  NormalizedEventInput,
   StreamQuery,
   StreamMetadataUpdatedEventInput,
   StreamPath,
@@ -164,16 +157,6 @@ assert.deepEqual(parsedBuiltInWithGenericPayload.event.payload, {
   owner: "jonas",
 });
 
-const normalizedMalformedBuiltIn = InvalidEventAppendedEventInput.parse(
-  NormalizedEventInput.parse(parsedBuiltInWithGenericPayload.event),
-);
-
-assert.equal(
-  normalizedMalformedBuiltIn.type,
-  "https://events.iterate.com/events/stream/invalid-event-appended",
-);
-assert.match(normalizedMalformedBuiltIn.payload.error, /metadata/i);
-
 const parsedUnknownEvent = AppendInput.parse({
   path: examplePath,
   event: {
@@ -252,6 +235,27 @@ if (typeof malformedArrayError !== "string") {
 }
 assert.match(malformedArrayError, /expected object/);
 
+const malformedBareObject = InvalidEventAppendedEventInput.parse(
+  AppendInput.parse({
+    path: examplePath,
+    event: {
+      command: "/iterate",
+      team_id: "T123",
+      text: "deploy status",
+    },
+  }).event,
+);
+
+assert.equal(
+  malformedBareObject.type,
+  "https://events.iterate.com/events/stream/invalid-event-appended",
+);
+assert.deepEqual(malformedBareObject.payload.rawInput, {
+  command: "/iterate",
+  team_id: "T123",
+  text: "deploy status",
+});
+
 const nestedFn = () => "nope";
 const genericEventWithNestedNonJsonValues = AppendInput.parse({
   path: examplePath,
@@ -326,112 +330,5 @@ const durableObjectWokeUpEvent = AppendInput.parse({
 });
 
 assert.deepEqual(durableObjectWokeUpEvent.event.payload, {});
-
-const appendScheduledEvent = AppendInput.parse({
-  path: examplePath,
-  event: {
-    type: STREAM_APPEND_SCHEDULED_TYPE,
-    payload: {
-      slug: "type-test-schedule",
-      append: {
-        type: "https://events.iterate.com/events/example/value-recorded",
-        payload: {
-          value: 42,
-        },
-      },
-      schedule: {
-        kind: "once-in",
-        delaySeconds: 30,
-      },
-    },
-  },
-});
-
-assert.deepEqual(appendScheduledEvent.event.payload, {
-  slug: "type-test-schedule",
-  append: {
-    type: "https://events.iterate.com/events/example/value-recorded",
-    payload: {
-      value: 42,
-    },
-  },
-  schedule: {
-    kind: "once-in",
-    delaySeconds: 30,
-  },
-});
-
-assert.equal(
-  StreamAppendScheduledEventInput.safeParse({
-    type: STREAM_APPEND_SCHEDULED_TYPE,
-    payload: {
-      slug: "bad-schedule",
-      append: {
-        type: "https://events.iterate.com/events/example/value-recorded",
-        payload: "not-an-object",
-      },
-      schedule: {
-        kind: "once-in",
-        delaySeconds: 30,
-      },
-    },
-  }).success,
-  false,
-);
-
-const configuredEvent = AppendInput.parse({
-  path: examplePath,
-  event: {
-    type: SCHEDULE_CONFIGURED_TYPE,
-    payload: {
-      slug: "type-test-configured",
-      callback: "append",
-      payloadJson: JSON.stringify({
-        type: "https://events.iterate.com/events/example/value-recorded",
-        payload: {
-          value: 1,
-        },
-      }),
-      schedule: {
-        kind: "once-in",
-        delaySeconds: 30,
-      },
-      nextRunAt: 1_700_000_000,
-    },
-  },
-});
-
-assert.deepEqual(configuredEvent.event.payload, {
-  slug: "type-test-configured",
-  callback: "append",
-  payloadJson: JSON.stringify({
-    type: "https://events.iterate.com/events/example/value-recorded",
-    payload: {
-      value: 1,
-    },
-  }),
-  schedule: {
-    kind: "once-in",
-    delaySeconds: 30,
-  },
-  nextRunAt: 1_700_000_000,
-});
-
-assert.equal(
-  ScheduleConfiguredEventInput.safeParse({
-    type: SCHEDULE_CONFIGURED_TYPE,
-    payload: {
-      slug: "bad-configured",
-      callback: "append",
-      payloadJson: null,
-      schedule: {
-        kind: "every",
-        intervalSeconds: 0,
-      },
-      nextRunAt: 1,
-    },
-  }).success,
-  false,
-);
 
 console.log("events-contract append client typing and runtime normalization checks passed");

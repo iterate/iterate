@@ -14,6 +14,7 @@ import { IterateAgent } from "~/durable-objects/iterate-agent.ts";
 import { MCPClient } from "~/durable-objects/mcp-client.ts";
 import { OpenApiToolClient } from "~/durable-objects/openapi-tool-client.ts";
 import { SlackApi } from "~/durable-objects/slack-api.ts";
+import { StreamApi } from "~/entrypoints/stream-api.ts";
 
 const nativeFetch = globalThis.fetch.bind(globalThis);
 const config = parseAppConfigFromEnv({
@@ -75,4 +76,11 @@ export default {
   },
 };
 
-export { ChildStreamAutoSubscriber, IterateAgent, MCPClient, OpenApiToolClient, SlackApi };
+export {
+  ChildStreamAutoSubscriber,
+  IterateAgent,
+  MCPClient,
+  OpenApiToolClient,
+  SlackApi,
+  StreamApi,
+};

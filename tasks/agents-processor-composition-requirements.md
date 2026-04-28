@@ -28,6 +28,8 @@ Working note for the `apps/agents` processor redesign discussion. This is not co
 - The only stream operations available to processors are: read, subscribe, append.
 - Processor framing, docs, and APIs should make the read / subscribe / append model obvious.
 - Processor runtime hooks should receive a scoped stream service API, not a vague context object.
+- In Cloudflare Workers, the scoped stream API should be a top-level named `WorkerEntrypoint` export instantiated through `ctx.exports.StreamApi({ props: { streamPath } })`.
+- `StreamApi` props should currently include `streamPath?: string`, with room for future operation policies.
 - A processor is bound to a stream path.
 - Appending without a path appends to the bound stream.
 - Appending with a relative path appends to a child/relative stream path.
@@ -35,9 +37,14 @@ Working note for the `apps/agents` processor redesign discussion. This is not co
 - The redesign does not need to preserve the current implementation model.
 - Initial redesign target assumes one processor instance is scoped to one stream and has simple local reduced state for that stream.
 - The host deployment mode owns persistence of reduced state.
-- The processor owns state schema, initial state, and reducer logic, but not where reduced state is stored.
-- Current preference: drop separate `initialState` and require processor state schemas to parse `undefined` into a valid initial state.
-- Add runtime validation/tests for every processor contract that `contract.state.parse(undefined)` succeeds.
+- The processor owns state schema and reducer logic when it needs them, but not where reduced state is stored.
+- Processor state is required for now. Stateless processors should declare `state: z.object({}).default({})`.
+- Drop separate `initialState`; if a processor declares state, require its state schema to parse `undefined` into a valid initial state.
+- Add runtime validation/tests that declared processor state schemas parse `undefined`.
+- Processor state must always be object-shaped. Primitive or array state schemas should fail type tests for authored contracts and fail runtime validation for dynamically assembled contracts.
+- Omitted `reduce` means identity reduction. This keeps side-effect-only processors lightweight while preserving one host lifecycle.
+- A reducer may return `null` or `undefined` to mean that a consumed event leaves state unchanged.
+- Reducer outputs must also be object-shaped at runtime, so a bad dynamic contract cannot corrupt a persisted state slice with a primitive or array.
 - Do not add lifecycle hooks such as `stop` unless a concrete processor example proves the need.
 - Add a concrete startup hook for the point after reduced state has caught up from persisted state or historical replay.
 - The startup hook exists to materialize non-serializable runtime state from reduced state, such as MCP server connections, HTTP clients, subscriptions, timers, or other live handles.
@@ -46,12 +53,13 @@ Working note for the `apps/agents` processor redesign discussion. This is not co
 - Durable Object hosts may load cached reduced state instead of replaying all events, but should still call the startup hook only after that state is available.
 - Push-based hosts such as a Durable Object with an inbound WebSocket stream subscription should call the startup hook when they consume the first live event, after any required reduced-state catch-up for that event.
 - Across deployment modes, the startup invariant is: restore or replay reduced state, then call startup hook, then run live `afterAppend` processing.
+- The shared startup helper should expose this as `runProcessorOnStart({ processor, state, streamApi, signal })`.
 - Processor authors may choose whether to depend on raw host bindings/services or narrower wrapper services. The framework should not force one style unless a deployment mode requires it.
 - Processor implementations should be factory functions that receive dependencies once and return the mountable implementation. Those dependencies are then available inside implementation hooks.
 - Hook argument objects should use object parameters, not positional parameters.
 - In a class-based implementation, hooks should read reduced state from `this.state` rather than receiving state as a positional or hook-local argument.
 - The class instance may keep the current reduced state as an in-memory mirror, while the host still owns persistence.
-- The reducer must remain a standalone contract function so frontend code, tests, projections, and dependent processors can import it without constructing the processor implementation.
+- When present, the reducer must remain a standalone contract function so frontend code, tests, projections, and dependent processors can import it without constructing the processor implementation.
 - Do not lead with a class-based implementation API in the first design. Class-backed processors remain a possible later implementation style, but object/factory processors infer hook argument types more cleanly from the contract.
 - Processor hook designs should pass `previousState` and current `state` in object args because reconciliation logic often needs both.
 - Runtime-only resources such as MCP connections should be reconciled from reduced state, not incrementally trusted. Connection setup/removal should use cancellation or generation checks so stale async work cannot reintroduce removed resources.
@@ -72,6 +80,9 @@ Working note for the `apps/agents` processor redesign discussion. This is not co
 - Reducers should receive events matching the declared consumed event types, not arbitrary stream events.
 - `afterAppend` should receive events matching the declared consumed event types.
 - Hosts are responsible for filtering/narrowing stream events against `contract.consumes` before invoking a reducer or `afterAppend`.
+- The shared reduction helper should expose this as `runProcessorReduce({ processor, event, state })`, returning `{ event, previousState, state }` for consumed events and `undefined` for ignored events.
+- Live hosts should then persist the returned state and call `runProcessorAfterAppend({ processor, ...result, streamApi, signal })`.
+- Historic replay should only call `runProcessorReduce`; it should not call `runProcessorAfterAppend` unless a future processor explicitly opts into replay side effects.
 - `contract.consumes` should currently be expressed as wire event type strings resolved against owned `events` plus `processorDeps`.
 - A processor that consumes all events still needs a deliberate design; do not add an `"all"` string or option branch casually.
 - `stream.append` inside an implementation should accept only events declared in `contract.emits`.
@@ -105,7 +116,7 @@ Working note for the `apps/agents` processor redesign discussion. This is not co
 - Agent/codemode workflows should be able to read processor/event documentation from the stream.
 - Tooling should support reading raw events by offset for LLM/codemode/debug use cases.
 - Event catalogs should be defined separately from processor definitions to avoid self-referential definitions.
-- Public processor modules should still expose ergonomic namespace-like access such as `AgentProcessorContract.events.InputAddedEvent`, `AgentProcessorContract.reducer({ state, event })`, and `AgentProcessorContract.initialState`.
+- Public processor modules should still expose ergonomic namespace-like access such as `AgentProcessorContract.events.InputAddedEvent` and `AgentProcessorContract.reduce?.({ state, event })`.
 - A downstream processor such as Codemode should be able to import `AgentProcessorContract` and use both its event schemas and reducer directly when it wants an independent projection.
 - `contract.events` means event definitions owned by that processor contract.
 - `contract.consumes` and `contract.emits` may reference event definitions owned by other processor contracts.
@@ -183,14 +194,16 @@ Working note for the `apps/agents` processor redesign discussion. This is not co
 ## Soft-Locked Direction
 
 - Use `AgentProcessorContract` / `AgentProcessor` style naming.
-- A processor contract is the public processor surface: identity, version, description, event schemas, state schema, initial state, reducer, `consumes`, and `emits`.
+- A processor contract is the public processor surface: identity, version, description, event schemas, optional state schema, optional reducer, `consumes`, and `emits`.
 - `defineProcessorContract` should be a typed identity function, not a builder that mutates, duplicates, or restructures the contract.
 - A processor implementation is created by a factory such as `createAgentProcessor(deps)`.
 - The implementation factory may return a plain object or a class-backed implementation.
 - Classes are allowed and likely useful for implementations with live dependencies/state, but the public contract stays importable without constructing a class.
 - `implementProcessor(contract, implementation)` should type implementation hooks from the contract:
-  - the handled event is narrowed from `contract.consumes`
-  - `stream.append` accepts only events from `contract.emits`
+- the handled event is narrowed from `contract.consumes`
+- `stream.append` accepts only events from `contract.emits`
+- `state` is optional and defaults to `{}`
+- `reduce` is optional and defaults to identity
 - Event definition shape is soft-locked:
   - authored with `createEvent({ type, description?, payloadSchema })`
   - `createEvent(...)` returns a one-key event catalog entry keyed by the wire event type

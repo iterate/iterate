@@ -4,7 +4,6 @@ import {
   type DestroyStreamResult,
   Event,
   EventInput,
-  NormalizedEventInput,
   type ProjectSlug,
   type StreamCursor,
   type StreamMetadataUpdatedEvent,
@@ -28,12 +27,6 @@ import {
 } from "./external-subscriber.ts";
 import { createDynamicWorkerManager, dynamicWorkerProcessor } from "./dynamic-processor.ts";
 import { jsonataTransformerProcessor } from "./jsonata-transformer.ts";
-import {
-  isSchedulerAlarmEventType,
-  repointSchedulerAlarm,
-  runSchedulerAlarm,
-  schedulingProcessor,
-} from "./scheduling.ts";
 import { getAncestorStreamPaths } from "~/lib/stream-path-ancestors.ts";
 import { getInitializedStreamStub, StreamOffsetPreconditionError } from "~/lib/stream-helpers.ts";
 
@@ -47,7 +40,6 @@ const processors: BuiltinProcessor[] = [
   externalSubscriberProcessor,
   dynamicWorkerProcessor,
   jsonataTransformerProcessor,
-  schedulingProcessor,
 ];
 
 function getProcessorState(state: StreamState, slug: string) {
@@ -91,13 +83,6 @@ function getProcessorState(state: StreamState, slug: string) {
  * the processor model entirely — initialization, storage, offset sequencing,
  * and parent-tree propagation — because they are structural invariants of the
  * stream, not pluggable behavior.
- *
- * Scheduling deliberately stays on the processor side of that boundary. The
- * only scheduler-specific glue here is:
- *
- * - registering the builtin `scheduler` processor
- * - re-pointing the single Durable Object alarm after scheduler state changes
- * - delegating `alarm()` into the scheduler runtime
  *
  * ## Pull subscriptions
  *
@@ -239,6 +224,8 @@ export class StreamDurableObject extends DurableObject<Env> {
       return;
     }
 
+    migrate(this.client);
+
     const processorState = Object.fromEntries(
       processors.map((p) => [p.slug, structuredClone(p.initialState)]),
     ) as StreamState["processors"];
@@ -284,7 +271,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    *   parse → idempotency check → beforeAppend → build event → reduce → commit → afterAppend
    */
   append(inputEvent: EventInput): Event {
-    const input = NormalizedEventInput.parse(inputEvent);
+    const input = EventInput.parse(inputEvent);
 
     if (input.idempotencyKey != null) {
       const existingEvent = this.getEventByIdempotencyKey(input.idempotencyKey);
@@ -428,8 +415,6 @@ export class StreamDurableObject extends DurableObject<Env> {
    *    committed event and its own state slice, then optionally append derived
    *    events back into this stream.
    *
-   * 4. Scheduler alarm maintenance: scheduler control events update the single
-   *    Durable Object alarm pointer from reduced state after commit.
    */
   private afterAppend(event: Event) {
     this.publish(event);
@@ -499,45 +484,6 @@ export class StreamDurableObject extends DurableObject<Env> {
           });
         }),
     );
-
-    if (isSchedulerAlarmEventType(event.type)) {
-      this.ctx.waitUntil(
-        repointSchedulerAlarm({
-          ctx: this.ctx,
-          schedulerState: this.state.processors.scheduler,
-        }).catch((error) => {
-          console.error("[stream-do] failed to repoint scheduler alarm", {
-            path: this.state.path,
-            eventType: event.type,
-            error,
-          });
-        }),
-      );
-    }
-  }
-
-  /**
-   * Cloudflare gives each Durable Object exactly one alarm slot, so the
-   * stream-level `alarm()` entry point must stay tiny and generic: wake the
-   * actor, hand control to the scheduler runtime, and let that runtime derive
-   * due work plus the next alarm pointer from `state.processors.scheduler`.
-   *
-   * This method is intentionally the only scheduler-specific execution hook in
-   * `stream.ts`. The control-event reduction and due-schedule logic live in
-   * `./scheduling.ts`; `stream.ts` only provides the generic stream append
-   * surface and current reduced state.
-   *
-   * First-party references:
-   * - https://developers.cloudflare.com/durable-objects/api/alarms/
-   * - https://developers.cloudflare.com/durable-objects/api/state/
-   */
-  async alarm() {
-    await runSchedulerAlarm({
-      append: (event) => this.append(event),
-      ctx: this.ctx,
-      getSchedulerState: () => this.state.processors.scheduler,
-      instance: this,
-    });
   }
 
   // ---------------------------------------------------------------------------
@@ -613,6 +559,14 @@ export class StreamDurableObject extends DurableObject<Env> {
       const event = this.parseEventRow(row);
       return event ? [event] : [];
     });
+  }
+
+  historyIfInitialized(args: { after?: StreamCursor; before?: StreamCursor } = {}): Event[] {
+    if (this._state == null) {
+      return [];
+    }
+
+    return this.history(args);
   }
 
   stream(args: { after?: StreamCursor; before?: StreamCursor } = {}): ReadableStream<Uint8Array> {

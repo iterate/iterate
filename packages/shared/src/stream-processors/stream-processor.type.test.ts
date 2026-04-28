@@ -5,9 +5,14 @@ import {
   defineProcessorContract,
   implementBuiltinProcessor,
   implementProcessor,
+  runProcessorOnStart,
+  runProcessorReduce,
+  runProcessorAfterAppend,
   type ConsumedEvent,
   type EmittedInput,
   type ProcessorState,
+  type ProcessorReduction,
+  type StreamEvent,
 } from "./stream-processor.ts";
 
 const streamProcessorContract = defineProcessorContract({
@@ -26,7 +31,7 @@ const streamProcessorContract = defineProcessorContract({
   },
   consumes: ["processor-registered"],
   emits: ["processor-registered"],
-  reducer: ({ state }) => state,
+  reduce: ({ state }) => state,
 });
 
 const standaloneEventCatalog = {
@@ -55,7 +60,7 @@ const agentProcessorContract = defineProcessorContract({
   },
   consumes: ["processor-registered", "agent-input-added"],
   emits: ["processor-registered", "agent-input-added"],
-  reducer: ({ state }) => state,
+  reduce: ({ state }) => state,
 });
 
 const codemodeProcessorContract = defineProcessorContract({
@@ -84,7 +89,7 @@ const codemodeProcessorContract = defineProcessorContract({
   },
   consumes: ["processor-registered", "agent-input-added", "codemode-block-added"],
   emits: ["processor-registered", "agent-input-added", "codemode-result-added"],
-  reducer: ({ state, event }) => {
+  reduce: ({ state, event }) => {
     if (event.type === "agent-input-added") {
       expectTypeOf(event.payload).toEqualTypeOf<{
         role: "user" | "assistant";
@@ -112,10 +117,21 @@ const catalogConsumerContract = defineProcessorContract({
   events: {},
   consumes: ["catalog-event"],
   emits: ["catalog-event"],
-  reducer: ({ state, event }) => {
+  reduce: ({ state, event }) => {
     expectTypeOf(event.payload).toEqualTypeOf<{ value: number }>();
     return state;
   },
+});
+
+const statelessForwarderContract = defineProcessorContract({
+  slug: "stateless-forwarder",
+  version: "1.0.0",
+  description: "Side-effect-only processor with empty reduced state and no reducer.",
+  state: z.object({}).default({}),
+  processorDeps: [agentProcessorContract, codemodeProcessorContract],
+  events: {},
+  consumes: ["agent-input-added"],
+  emits: ["codemode-result-added"],
 });
 
 describe("stream processor contract types", () => {
@@ -123,6 +139,31 @@ describe("stream processor contract types", () => {
     expectTypeOf<ProcessorState<typeof codemodeProcessorContract>>().toEqualTypeOf<{
       count: number;
     }>();
+  });
+
+  it("types explicit empty object state for stateless processors", () => {
+    expectTypeOf<ProcessorState<typeof statelessForwarderContract>>().toMatchTypeOf<object>();
+
+    implementProcessor(statelessForwarderContract, {
+      onStart: ({ state }) => {
+        expectTypeOf(state).toMatchTypeOf<object>();
+      },
+      afterAppend: async ({ event, previousState, state, streamApi }) => {
+        expectTypeOf(previousState).toMatchTypeOf<object>();
+        expectTypeOf(state).toMatchTypeOf<object>();
+        expectTypeOf(event.type).toEqualTypeOf<"agent-input-added">();
+        expectTypeOf(event.payload).toEqualTypeOf<{
+          role: "user" | "assistant";
+          content: string;
+        }>();
+
+        await streamApi.append({
+          event: codemodeProcessorContract.events["codemode-result-added"].createInput({
+            payload: { result: event.payload.content },
+          }),
+        });
+      },
+    });
   });
 
   it("narrows consumed events from string-keyed consumes", () => {
@@ -164,62 +205,68 @@ describe("stream processor contract types", () => {
       onStart: async ({ state, streamApi }) => {
         expectTypeOf(state).toEqualTypeOf<{ count: number }>();
 
-        await streamApi.append(
-          codemodeProcessorContract.events["codemode-result-added"].createInput({
+        await streamApi.append({
+          event: codemodeProcessorContract.events["codemode-result-added"].createInput({
             payload: { result: "started" },
           }),
-        );
+        });
       },
-      onEvent: async ({ event, streamApi }) => {
+      afterAppend: async ({ event, streamApi }) => {
         expectTypeOf(event).toEqualTypeOf<ConsumedEvent<typeof codemodeProcessorContract>>();
         if (event.type !== "codemode-block-added") return;
 
-        await streamApi.append(
-          codemodeProcessorContract.events["codemode-result-added"].createInput({
+        await streamApi.append({
+          event: codemodeProcessorContract.events["codemode-result-added"].createInput({
             payload: { result: event.payload.script },
           }),
-        );
+        });
 
-        await streamApi.append(
-          agentProcessorContract.events["agent-input-added"].createInput({
+        await streamApi.append({
+          event: agentProcessorContract.events["agent-input-added"].createInput({
             payload: { role: "user", content: "allowed" },
           }),
-        );
+        });
 
-        await streamApi.append(
-          streamProcessorContract.events["processor-registered"].createInput({
+        await streamApi.append({
+          event: streamProcessorContract.events["processor-registered"].createInput({
             payload: { processorSlug: "codemode", version: "1.0.0" },
           }),
-        );
+        });
 
-        await streamApi.append(
+        await streamApi.append({
           // @ts-expect-error codemode-block-added is consumed but not emitted.
-          codemodeProcessorContract.events["codemode-block-added"].createInput({
+          event: codemodeProcessorContract.events["codemode-block-added"].createInput({
             payload: { script: "not allowed" },
           }),
-        );
+        });
       },
     });
   });
 
   it("rejects raw append inputs outside declared emitted events", () => {
     implementProcessor(codemodeProcessorContract, {
-      onEvent: async ({ streamApi }) => {
+      afterAppend: async ({ streamApi }) => {
         await streamApi.append({
-          type: "codemode-result-added",
-          payload: { result: "ok" },
+          event: {
+            type: "codemode-result-added",
+            payload: { result: "ok" },
+          },
         });
 
         await streamApi.append({
-          type: "codemode-result-added",
-          // @ts-expect-error payload must match the emitted event schema.
-          payload: { wrong: "shape" },
+          event: {
+            type: "codemode-result-added",
+            // @ts-expect-error payload must match the emitted event schema.
+            payload: { wrong: "shape" },
+          },
         });
 
         await streamApi.append({
-          // @ts-expect-error unknown events cannot be appended.
-          type: "unknown-event",
-          payload: { result: "nope" },
+          event: {
+            // @ts-expect-error unknown events cannot be appended.
+            type: "unknown-event",
+            payload: { result: "nope" },
+          },
         });
       },
     });
@@ -240,7 +287,7 @@ describe("stream processor contract types", () => {
       },
       consumes: ["agent-input-added"],
       emits: ["selective-owned"],
-      reducer: ({ state }) => state,
+      reduce: ({ state }) => state,
     });
 
     type SelectiveConsumed = ConsumedEvent<typeof selectiveContract>;
@@ -263,21 +310,21 @@ describe("stream processor contract types", () => {
     expectTypeOf<Extract<SelectiveEmitted, { type: "agent-input-added" }>>().toEqualTypeOf<never>();
 
     implementProcessor(selectiveContract, {
-      onEvent: async ({ event, streamApi }) => {
+      afterAppend: async ({ event, streamApi }) => {
         expectTypeOf(event.type).toEqualTypeOf<"agent-input-added">();
 
-        await streamApi.append(
-          selectiveContract.events["selective-owned"].createInput({
+        await streamApi.append({
+          event: selectiveContract.events["selective-owned"].createInput({
             payload: { owned: true },
           }),
-        );
+        });
 
-        await streamApi.append(
+        await streamApi.append({
           // @ts-expect-error agent-input-added is resolvable but not emitted.
-          agentProcessorContract.events["agent-input-added"].createInput({
+          event: agentProcessorContract.events["agent-input-added"].createInput({
             payload: { role: "user", content: "not allowed" },
           }),
-        );
+        });
       },
     });
   });
@@ -306,6 +353,16 @@ describe("stream processor contract types", () => {
 
   it("requires state schemas that accept undefined", () => {
     defineProcessorContract({
+      slug: "valid-empty-state",
+      version: "1.0.0",
+      description: "Valid default empty state.",
+      state: z.object({}).default({}),
+      events: {},
+      consumes: [],
+      emits: [],
+    });
+
+    defineProcessorContract({
       slug: "valid",
       version: "1.0.0",
       description: "Valid defaultable state.",
@@ -313,7 +370,7 @@ describe("stream processor contract types", () => {
       events: {},
       consumes: [],
       emits: [],
-      reducer: ({ state }) => state,
+      reduce: ({ state }) => state,
     });
 
     defineProcessorContract({
@@ -325,7 +382,114 @@ describe("stream processor contract types", () => {
       events: {},
       consumes: [],
       emits: [],
-      reducer: ({ state }) => state,
+      reduce: ({ state }) => state,
+    });
+  });
+
+  it("requires object-shaped state schemas", () => {
+    defineProcessorContract({
+      slug: "invalid-number-state",
+      version: "1.0.0",
+      description: "Invalid primitive state.",
+      // @ts-expect-error processor state must be object-shaped.
+      state: z.number().default(0),
+      events: {},
+      consumes: [],
+      emits: [],
+      reduce: ({ state }) => state,
+    });
+
+    defineProcessorContract({
+      slug: "invalid-array-state",
+      version: "1.0.0",
+      description: "Invalid array state.",
+      // @ts-expect-error processor state must be object-shaped.
+      state: z.array(z.string()).default([]),
+      events: {},
+      consumes: [],
+      emits: [],
+      reduce: ({ state }) => state,
+    });
+  });
+
+  it("types runProcessorReduce as consumed-event reduction or ignored event", () => {
+    const processor = implementProcessor(codemodeProcessorContract, {});
+    const event = null as unknown as StreamEvent;
+
+    const result = runProcessorReduce({
+      processor,
+      state: { count: 0 },
+      event,
+    });
+
+    expectTypeOf(result).toEqualTypeOf<
+      ProcessorReduction<typeof codemodeProcessorContract> | undefined
+    >();
+  });
+
+  it("types runProcessorAfterAppend from the processor contract", async () => {
+    const processor = implementProcessor(codemodeProcessorContract, {
+      afterAppend: ({ event, state }) => {
+        expectTypeOf(event).toEqualTypeOf<ConsumedEvent<typeof codemodeProcessorContract>>();
+        expectTypeOf(state).toEqualTypeOf<{ count: number }>();
+      },
+    });
+    const result = null as unknown as ProcessorReduction<typeof codemodeProcessorContract>;
+
+    await runProcessorAfterAppend({
+      processor,
+      ...result,
+      streamApi: {
+        append: async (input) => {
+          expectTypeOf(input).toEqualTypeOf<{
+            event: EmittedInput<typeof codemodeProcessorContract>;
+            streamPath?: string;
+          }>();
+          return null as unknown as StreamEvent;
+        },
+        read: async () => [],
+        subscribe: () => null as unknown as AsyncIterable<StreamEvent>,
+      },
+      signal: new AbortController().signal,
+    });
+  });
+
+  it("types runProcessorOnStart from the processor contract", async () => {
+    const processor = implementProcessor(codemodeProcessorContract, {
+      onStart: ({ state }) => {
+        expectTypeOf(state).toEqualTypeOf<{ count: number }>();
+      },
+    });
+
+    await runProcessorOnStart({
+      processor,
+      state: { count: 0 },
+      streamApi: {
+        append: async (input) => {
+          expectTypeOf(input).toEqualTypeOf<{
+            event: EmittedInput<typeof codemodeProcessorContract>;
+            streamPath?: string;
+          }>();
+          return null as unknown as StreamEvent;
+        },
+        read: async () => [],
+        subscribe: () => null as unknown as AsyncIterable<StreamEvent>,
+      },
+      signal: new AbortController().signal,
+    });
+  });
+
+  it("rejects reducers that return non-state values", () => {
+    // @ts-expect-error reducers must return the object-shaped processor state, null, or undefined.
+    defineProcessorContract({
+      slug: "invalid-reducer-return",
+      version: "1.0.0",
+      description: "Invalid primitive reducer return.",
+      state: z.object({}).default({}),
+      events: {},
+      consumes: [],
+      emits: [],
+      reduce: () => 1,
     });
   });
 });

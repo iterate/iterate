@@ -4,7 +4,6 @@ import type { Event, EventInput, StreamPath, StreamState } from "@iterate-com/ev
 import {
   AlertTriangleIcon,
   BotIcon,
-  Clock3Icon,
   BookOpenIcon,
   BracesIcon,
   CableIcon,
@@ -82,7 +81,6 @@ import type {
   ExternalSubscriberConfiguredFeedItem,
   GroupedEventFeedItem,
   JsonataTransformerConfiguredFeedItem,
-  SchedulerControlFeedItem,
   StreamErrorOccurredFeedItem,
   StreamFeedItem,
   StreamLifecycleFeedItem,
@@ -339,8 +337,6 @@ function StreamFeedItemRenderer({
       return <StreamErrorOccurredCard item={item} />;
     case "agent-status":
       return <AgentStatusLine item={item} />;
-    case "scheduler-control":
-      return <SchedulerControlCard item={item} />;
     case "codemode-block":
       return <CodemodeBlockCard item={item} />;
     case "bashmode-block":
@@ -729,41 +725,6 @@ function StreamErrorOccurredCard({ item }: { item: StreamErrorOccurredFeedItem }
   );
 }
 
-function SchedulerControlCard({ item }: { item: SchedulerControlFeedItem }) {
-  const eyebrowLabel = item.action === "configured" ? "Schedule configured" : "Schedule cancelled";
-  const title = item.slug;
-  const data =
-    item.action === "configured"
-      ? {
-          slug: item.slug,
-          callback: item.callback,
-          schedule: item.schedule,
-          nextRunAt: item.nextRunAt,
-          payload: tryParseJson(item.payloadJson),
-        }
-      : { slug: item.slug };
-
-  return (
-    <AssistantArtifact
-      eyebrow={<Clock3Icon className="size-3.5" />}
-      eyebrowLabel={eyebrowLabel}
-      title={title}
-      meta={buildSchedulerControlMeta(item)}
-      tone={item.action === "cancelled" ? "warning" : "default"}
-    >
-      <ArtifactSection>
-        <SerializedObjectCodeBlock
-          data={data}
-          className="min-h-20 max-h-64"
-          initialFormat="yaml"
-          showToggle
-          showCopyButton
-        />
-      </ArtifactSection>
-    </AssistantArtifact>
-  );
-}
-
 function CodemodeBlockCard({ item }: { item: CodemodeBlockFeedItem }) {
   const languageLabel = item.language.toUpperCase();
   const sourceLanguage = item.language === "ts" || item.language === "js" ? "typescript" : "text";
@@ -1008,45 +969,6 @@ function getSourceCodePreview(sourceCode: string, lineCount: number) {
   }
 
   return `${lines.slice(0, lineCount).join("\n")}\n...`;
-}
-
-function buildSchedulerControlMeta(item: SchedulerControlFeedItem) {
-  const meta = [formatTime(item.timestamp)];
-
-  if (item.schedule != null) {
-    meta.unshift(describeSchedule(item.schedule));
-  }
-
-  if (item.action === "configured" && item.nextRunAt != null) {
-    meta.push(`Next run ${formatTime(item.nextRunAt * 1000)}`);
-  }
-
-  return meta;
-}
-
-function describeSchedule(schedule: NonNullable<SchedulerControlFeedItem["schedule"]>) {
-  switch (schedule.kind) {
-    case "once-at":
-      return `Once at ${schedule.at}`;
-    case "once-in":
-      return `Once in ${schedule.delaySeconds}s`;
-    case "every":
-      return `Every ${schedule.intervalSeconds}s`;
-    case "cron":
-      return `Cron ${schedule.cron}`;
-  }
-}
-
-function tryParseJson(payloadJson: string | null | undefined) {
-  if (payloadJson == null) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(payloadJson);
-  } catch {
-    return payloadJson;
-  }
 }
 
 function EventLine({
@@ -1433,8 +1355,6 @@ function getFeedItemKey(item: StreamFeedItem, index: number) {
       return `bashmode-block-${item.timestamp}-${index}`;
     case "codemode-result":
       return `codemode-result-${item.blockId}-${item.blockCount}-${item.timestamp}-${index}`;
-    case "scheduler-control":
-      return `scheduler-control-${item.action}-${item.slug}-${item.raw.offset}`;
     default:
       return `feed-item-${index}`;
   }

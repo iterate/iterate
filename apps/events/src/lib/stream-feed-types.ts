@@ -1,9 +1,4 @@
-import type {
-  Event,
-  ExternalSubscriber,
-  StreamPath,
-  StreamSchedule,
-} from "@iterate-com/events-contract";
+import type { Event, ExternalSubscriber, StreamPath } from "@iterate-com/events-contract";
 
 export const streamRendererModes = ["pretty", "raw-pretty", "raw", "raw-single-json"] as const;
 export type StreamRendererMode = (typeof streamRendererModes)[number];
@@ -244,18 +239,6 @@ export interface CodemodeResultFeedItem {
   raw: Event;
 }
 
-export interface SchedulerControlFeedItem {
-  kind: "scheduler-control";
-  action: "configured" | "cancelled";
-  slug: string;
-  schedule?: StreamSchedule;
-  callback?: string;
-  payloadJson?: string | null;
-  nextRunAt?: number;
-  timestamp: number;
-  raw: Event;
-}
-
 export type StreamFeedItem =
   | MessageFeedItem
   | ToolFeedItem
@@ -277,5 +260,4 @@ export type StreamFeedItem =
   | AgentStatusFeedItem
   | CodemodeBlockFeedItem
   | BashmodeBlockFeedItem
-  | CodemodeResultFeedItem
-  | SchedulerControlFeedItem;
+  | CodemodeResultFeedItem;
