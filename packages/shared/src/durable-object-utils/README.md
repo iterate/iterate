@@ -176,6 +176,11 @@ for `ensureStarted()` before returning. If the init shape is only
 `initParams` so the helper cannot return an uninitialized or unstarted stub by
 accident.
 
+Names are Durable Object identity, so build them from stable identifiers. Prefer
+database IDs, project IDs, user IDs, or another immutable key. Avoid slugs,
+titles, and other mutable labels unless changing that label should intentionally
+create a different Durable Object.
+
 If `name` is omitted, the helper derives a deterministic Durable Object name
 from `initParams`:
 

@@ -415,6 +415,11 @@ export function withLifecycleHooks<InitParams extends LifecycleInit>() {
  *
  *   getOrInitializeDoStub({ namespace, name: "room-a" });
  *
+ * Durable Object names are durable identity, not display labels. Prefer stable
+ * identifiers in names, such as database IDs, project IDs, or user IDs. Avoid
+ * mutable slugs/titles unless changing the slug should deliberately create a
+ * different Durable Object.
+ *
  * If the init shape has required fields beyond `name`, callers must pass them:
  *
  *   getOrInitializeDoStub({
