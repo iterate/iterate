@@ -140,7 +140,7 @@ async function handleSubscriptionCreated(
   });
 
   if (billingAccount) {
-    trackBillingEvent(env, billingAccount.organizationId, "subscription_started", {
+    trackBillingEvent(env, billingAccount.authOrganizationId, "subscription_started", {
       subscription_id: subscription.id,
       status: subscription.status,
       customer_id: customerId,
@@ -223,7 +223,7 @@ async function handleInvoicePaid(env: CloudflareEnv, invoice: Stripe.Invoice): P
   });
 
   if (billingAccount) {
-    trackBillingEvent(env, billingAccount.organizationId, "invoice_paid", {
+    trackBillingEvent(env, billingAccount.authOrganizationId, "invoice_paid", {
       invoice_id: invoice.id,
       amount: invoice.amount_paid,
       currency: invoice.currency,
@@ -252,7 +252,7 @@ async function handlePaymentFailed(env: CloudflareEnv, invoice: Stripe.Invoice):
   });
 
   if (billingAccount) {
-    trackBillingEvent(env, billingAccount.organizationId, "payment_failed", {
+    trackBillingEvent(env, billingAccount.authOrganizationId, "payment_failed", {
       invoice_id: invoice.id,
       amount: invoice.amount_due,
       currency: invoice.currency,

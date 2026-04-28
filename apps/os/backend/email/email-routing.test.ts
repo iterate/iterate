@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { isSignupAllowed } from "@iterate-com/shared/signup-allowlist";
 import {
   getDefaultOrganizationNameFromEmail,
   parseRecipientLocal,
@@ -6,7 +7,6 @@ import {
   parseSenderEmail,
 } from "./email-routing.ts";
 import { buildSpecMachineEmail, parseSpecMachineEmail } from "./spec-machine.ts";
-import { isSignupAllowed } from "./signup-allowlist.ts";
 
 describe("email routing helpers", () => {
   test("organization name defaults to email domain for work emails", () => {

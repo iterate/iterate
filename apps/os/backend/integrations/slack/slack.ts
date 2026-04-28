@@ -321,7 +321,7 @@ slackApp.get(
         // Check if this Slack workspace is already connected to another project
         const existingWorkspaceConnection = await tx.query.projectConnection.findFirst({
           where: (pc, { eq, and }) => and(eq(pc.provider, "slack"), eq(pc.externalId, teamData.id)),
-          with: { project: { with: { organization: true } } },
+          with: { project: true },
         });
 
         if (existingWorkspaceConnection && existingWorkspaceConnection.projectId !== projectId) {
@@ -392,7 +392,6 @@ slackApp.get(
             await tx.insert(schema.secret).values({
               key: "slack.access_token",
               encryptedValue: encryptedAccessToken,
-              organizationId: projectInfo.organizationId,
               projectId,
               egressProxyRule: slackEgressRule,
             });
@@ -401,9 +400,6 @@ slackApp.get(
 
         return tx.query.project.findFirst({
           where: eq(schema.project.id, projectId),
-          with: {
-            organization: true,
-          },
         });
       });
 
@@ -411,7 +407,7 @@ slackApp.get(
       if (project) {
         linkExternalIdToGroups(c.env, {
           distinctId: `slack:${teamData.id}`,
-          organizationId: project.organizationId,
+          organizationId: project.authOrganizationId,
           projectId,
         });
       }
@@ -565,7 +561,7 @@ slackApp.post("/webhook", async (c) => {
             properties: payload,
             groups: connection?.project
               ? {
-                  organization: connection.project.organizationId,
+                  organization: connection.project.authOrganizationId,
                   project: connection.projectId,
                 }
               : undefined,

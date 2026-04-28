@@ -4,16 +4,46 @@ name: Deploy Auth Worker
 permissions:
   contents: read
   deployments: write
+concurrency:
+  group: auth-${{ github.ref_name || inputs.stage || 'prd' }}
+  cancel-in-progress: true
 on:
-  workflow_dispatch: {}
+  push:
+    branches:
+      - main
+    paths:
+      - apps/auth/**
+      - apps/auth-contract/**
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to deploy. Leave empty for the current branch or commit.
+        required: false
+        type: string
+        default: ''
+      stage:
+        description: Doppler config to deploy for manual runs.
+        required: false
+        type: string
+        default: prd
 jobs:
+  variables:
+    runs-on: ubuntu-24.04
+    outputs:
+      stage: ${{ steps.vars.outputs.stage }}
+    steps:
+      - id: vars
+        name: Resolve workflow variables
+        run: echo "stage=${{ github.event_name == 'push' && 'prd' || inputs.stage || 'prd' }}" >> "$GITHUB_OUTPUT"
   deploy:
+    needs:
+      - variables
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ inputs.ref || github.sha }}
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
       - name: Setup Node
@@ -28,12 +58,11 @@ jobs:
           for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
           doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
       - name: Setup Doppler
-        run: doppler setup --config prd --project os
+        run: doppler setup --config ${{ needs.variables.outputs.stage }} --project auth
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - name: Deploy apps/auth
         working-directory: apps/auth
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          APP_STAGE: prd
-        run: pnpm run deploy:prd
+        run: doppler run -- pnpm alchemy:up

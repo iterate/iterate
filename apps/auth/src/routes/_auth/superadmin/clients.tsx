@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useState, type ChangeEvent } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Button, Input } from "@iterate-com/ui";
-import { Card, CardContent, CardHeader, CardTitle } from "@iterate-com/ui";
+import { Button } from "@iterate-com/ui/components/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@iterate-com/ui/components/card";
+import { Input } from "@iterate-com/ui/components/input";
 import { Separator } from "@iterate-com/ui/components/separator";
-import { Label } from "@iterate-com/ui";
+import { Label } from "@iterate-com/ui/components/label";
 import { toast } from "sonner";
 import type { OAuthClientRecord } from "@iterate-com/auth-contract";
 import { orpc } from "../../../utils/query.tsx";
@@ -75,7 +76,7 @@ function CreateClientForm() {
             <Input
               id="clientName"
               value={clientName}
-              onChange={(e) => setClientName(e.target.value)}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setClientName(e.target.value)}
               placeholder="My App"
             />
           </div>
@@ -85,7 +86,7 @@ function CreateClientForm() {
               id="redirectURIs"
               className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
               value={redirectURIs}
-              onChange={(e) => setRedirectURIs(e.target.value)}
+              onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setRedirectURIs(e.target.value)}
               placeholder={"https://example.com/callback"}
             />
           </div>

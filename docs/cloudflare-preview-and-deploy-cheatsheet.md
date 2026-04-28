@@ -2,7 +2,7 @@
 
 ## Cheat sheet
 
-- In scope apps: `codemode`, `example`, `events`, `semaphore`, `ingress-proxy`
+- In scope apps: `agents`, `codemode`, `example`, `events`, `os2`, `semaphore`, `ingress-proxy`
 - PR previews are owned by one workflow: `Cloudflare Previews`
 - Production deploys are owned by per-app workflows:
   - `Deploy Codemode`
@@ -54,7 +54,7 @@ gh workflow run "Deploy Events" --ref main -f ref=main -f stage=prd
    - resource slug like `events-preview-1`
    - Doppler config like `stg_1`
    - Alchemy stage like `preview-1`
-   - public URL from that slot's deploy shape (for example `https://events-preview-1.iterate.com` for `events`, or `https://example-preview-1.iterate.workers.dev` for workers.dev-only apps)
+   - public URL from that slot's deploy shape (for example `https://events-preview-1.iterate.com` for routed apps, or `https://example-preview-1.iterate.workers.dev` for workers.dev-only apps)
 6. It deploys the app with the selected `stg_N` Doppler config intact, runs that app’s preview e2e command, and writes the result back into the PR body.
 7. On PR close, the same workflow runs cleanup and releases the lease.
 

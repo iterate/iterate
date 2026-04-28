@@ -36,12 +36,18 @@ export async function initializeOtel(): Promise<void> {
     return;
   }
 
+  type NodeSdkConfig = ConstructorParameters<typeof NodeSDK>[0];
+  type NodeSdkTraceExporter = NonNullable<NodeSdkConfig>["traceExporter"];
+  const traceExporter = new OTLPTraceExporter({
+    url: traceExporterUrl,
+  }) as unknown as NodeSdkTraceExporter;
+
   const sdk = new NodeSDK({
     resource: resourceFromAttributes({
       [ATTR_SERVICE_NAME]: "iterate-daemon",
       [ATTR_SERVICE_VERSION]: process.env.npm_package_version || "0.0.0",
     }),
-    traceExporter: new OTLPTraceExporter({ url: traceExporterUrl }),
+    traceExporter,
   });
 
   await sdk.start();

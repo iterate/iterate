@@ -1,4 +1,7 @@
-import { createOpenApiReferencePluginForApp } from "@iterate-com/shared/apps/orpc";
+import {
+  createOpenApiReferencePluginForApp,
+  prettyJsonInterceptor,
+} from "@iterate-com/shared/apps/orpc";
 import { EvlogHandlerPlugin } from "@iterate-com/shared/apps/logging/orpc-plugin";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { onError } from "@orpc/server";
@@ -12,6 +15,7 @@ import { appRouter } from "~/orpc/root.ts";
 const plugins = [new CORSPlugin({ origin: "*" }), new EvlogHandlerPlugin<AppContext>()];
 
 export const orpcOpenApiHandler = new OpenAPIHandler(appRouter, {
+  adapterInterceptors: [prettyJsonInterceptor],
   plugins: [
     ...plugins,
     createOpenApiReferencePluginForApp(manifest, ["/debug", "/test", "/things"], {

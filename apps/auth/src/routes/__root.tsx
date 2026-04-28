@@ -1,6 +1,5 @@
 import { createRootRouteWithContext, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
 import type { PropsWithChildren } from "react";
-import { ThemeProvider } from "@iterate-com/ui";
 import { Toaster } from "@iterate-com/ui/components/sonner";
 import type { TanstackRouterContext } from "../router.tsx";
 import appCss from "../styles.css?url";
@@ -34,16 +33,7 @@ function RootDocument({ children }: PropsWithChildren) {
         <HeadContent />
       </head>
       <body className="min-h-screen bg-background font-sans antialiased">
-        <ThemeProvider
-          attribute="class"
-          defaultTheme="system"
-          enableSystem
-          enableColorScheme
-          storageKey="theme"
-          disableTransitionOnChange
-        >
-          {children}
-        </ThemeProvider>
+        {children}
         <Scripts />
       </body>
     </html>

@@ -7,23 +7,64 @@ export default workflow({
     contents: "read",
     deployments: "write",
   },
+  concurrency: {
+    group: "auth-${{ github.ref_name || inputs.stage || 'prd' }}",
+    "cancel-in-progress": true,
+  },
   on: {
-    workflow_dispatch: {},
+    push: {
+      branches: ["main"],
+      paths: ["apps/auth/**", "apps/auth-contract/**"],
+    },
+    workflow_dispatch: {
+      inputs: {
+        ref: {
+          description: "Git ref to deploy. Leave empty for the current branch or commit.",
+          required: false,
+          type: "string",
+          default: "",
+        },
+        stage: {
+          description: "Doppler config to deploy for manual runs.",
+          required: false,
+          type: "string",
+          default: "prd",
+        },
+      },
+    },
   },
   jobs: {
+    variables: {
+      ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
+      outputs: {
+        stage: "${{ steps.vars.outputs.stage }}",
+      },
+      steps: [
+        {
+          id: "vars",
+          name: "Resolve workflow variables",
+          run: "echo \"stage=${{ github.event_name == 'push' && 'prd' || inputs.stage || 'prd' }}\" >> \"$GITHUB_OUTPUT\"",
+        },
+      ],
+    },
     deploy: {
+      needs: ["variables"],
       ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       steps: [
-        ...utils.setupRepo,
-        ...utils.setupDoppler({ config: "prd" }),
+        ...utils.getSetupRepo({
+          ref: "${{ inputs.ref || github.sha }}",
+        }),
+        ...utils.setupDoppler({
+          config: "${{ needs.variables.outputs.stage }}",
+          project: "auth",
+        }),
         {
           name: "Deploy apps/auth",
           "working-directory": "apps/auth",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
-            APP_STAGE: "prd",
           },
-          run: "pnpm run deploy:prd",
+          run: "doppler run -- pnpm alchemy:up",
         },
       ],
     },

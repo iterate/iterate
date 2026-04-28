@@ -16,7 +16,7 @@ pnpm docker:up
 pnpm os db:migrate
 docker buildx create --name iterate --driver docker-container --use
 pnpm sandbox build
-pnpm os dev
+pnpm dev
 ```
 
 ## Repository Structure
@@ -29,8 +29,9 @@ pnpm os dev
 ## Development Commands
 
 ```bash
-pnpm dev          # Run all apps in parallel
+pnpm dev          # Run auth + os together
 pnpm os dev       # Run apps/os only
+pnpm --dir apps/auth dev  # Run apps/auth only
 pnpm daemon dev   # Run apps/daemon only
 pnpm test         # Run all tests
 pnpm typecheck    # Type check all packages

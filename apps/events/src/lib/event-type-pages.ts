@@ -2,6 +2,7 @@ import {
   type EventInput,
   type EventType,
   type JSONObject,
+  HTML_RENDERER_CONFIGURED_TYPE,
   SCHEDULE_CANCELLED_TYPE,
   SCHEDULE_CONFIGURED_TYPE,
   SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE,
@@ -349,6 +350,78 @@ export const jsonataTransformerConfiguredPage = {
   ],
 } satisfies EventTypePageDefinition;
 
+export const htmlRendererConfiguredPage = {
+  slug: "html-renderer-configured",
+  href: "/html-renderer-configured/",
+  title: "HTML Renderer Configured",
+  type: HTML_RENDERER_CONFIGURED_TYPE,
+  summary:
+    "Built-in UI control event that registers or replaces a stream-local HTML renderer by slug.",
+  payloadExample: {
+    slug: "demo-message",
+    matcher: "type = 'demo.message'",
+    template:
+      "<article><h3>{{payload.title}}</h3><p>{{payload.body}}</p><small>event {{offset}}</small></article>",
+  },
+  details: [
+    "The latest configured event for a slug replaces the previous matcher and template.",
+    "Matchers evaluate against the full committed event envelope.",
+    "Templates render against the full committed event envelope and are inserted as HTML in the pretty feed.",
+  ],
+  templates: [
+    {
+      id: "html-renderer-configured:demo-message",
+      label: "HTML Renderer Configured · Demo message",
+      event: {
+        type: HTML_RENDERER_CONFIGURED_TYPE,
+        payload: {
+          slug: "demo-message",
+          matcher: "type = 'demo.message'",
+          template:
+            "<article><h3>{{payload.title}}</h3><p>{{payload.body}}</p><small>event {{offset}}</small></article>",
+        },
+      },
+    },
+    {
+      id: "html-renderer-configured:append-button",
+      label: "HTML Renderer Configured · Web Component append button",
+      event: {
+        type: HTML_RENDERER_CONFIGURED_TYPE,
+        payload: {
+          slug: "append-button",
+          matcher: "type = 'demo.click-target'",
+          template: `<iterate-append-button event-offset="{{offset}}" title="{{payload.title}}"></iterate-append-button>
+<script>
+if (!customElements.get("iterate-append-button")) {
+  customElements.define("iterate-append-button", class extends HTMLElement {
+    connectedCallback() {
+      if (this.shadowRoot) return;
+
+      const root = this.attachShadow({ mode: "open" });
+      root.innerHTML = '<style>:host{display:block;padding:12px;border:1px solid #d4d4d8;border-radius:8px;background:#fff}button{margin-top:8px;padding:6px 10px;border:1px solid #18181b;border-radius:6px;background:#18181b;color:#fff;cursor:pointer}</style><strong></strong><br><button type="button">Append clicked event</button>';
+      root.querySelector("strong").textContent = this.getAttribute("title") || "Interactive event";
+      root.querySelector("button").addEventListener("click", async () => {
+        const api = window.__iterateEventsRendererApi;
+        if (!api) return;
+
+        await api.append({
+          type: "demo.button-clicked",
+          payload: {
+            sourceOffset: Number(this.getAttribute("event-offset")),
+            clickedAt: new Date().toISOString()
+          }
+        });
+      });
+    }
+  });
+}
+</script>`,
+        },
+      },
+    },
+  ],
+} satisfies EventTypePageDefinition;
+
 export const streamSubscriptionConfiguredPage = {
   slug: "stream-subscription-configured",
   href: "/stream-subscription-configured/",
@@ -648,6 +721,7 @@ export const eventTypePages = [
   childStreamCreatedPage,
   dynamicWorkerConfiguredPage,
   errorOccurredPage,
+  htmlRendererConfiguredPage,
   jsonataTransformerConfiguredPage,
   manualEventAppendedPage,
   scheduleCancelledPage,

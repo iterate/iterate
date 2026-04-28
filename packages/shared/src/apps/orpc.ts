@@ -1,7 +1,27 @@
+import type { Context } from "@orpc/server";
+import type { FetchHandleResult, FetchHandlerInterceptorOptions } from "@orpc/server/fetch";
 import { OpenAPIReferencePlugin } from "@orpc/openapi/plugins";
 import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
 import { INTERNAL_OPENAPI_TAG } from "./openapi.ts";
 import type { AppManifest } from "./types.ts";
+
+/**
+ * Adapter interceptor that pretty-prints JSON responses for curl ergonomics.
+ * Leaves SSE (`text/event-stream`) and non-JSON responses untouched.
+ */
+export async function prettyJsonInterceptor(
+  options: FetchHandlerInterceptorOptions<Context> & {
+    next(): Promise<FetchHandleResult>;
+  },
+) {
+  const result = await options.next();
+  const type = result.response?.headers.get("content-type");
+  if (!result.matched || result.response.body === null || !type?.includes("json")) return result;
+  return {
+    ...result,
+    response: new Response(JSON.stringify(await result.response.json(), null, 2), result.response),
+  };
+}
 
 type OpenApiReferencePluginOptions = {
   defaultOpenFirstTag: boolean;

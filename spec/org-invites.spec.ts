@@ -75,11 +75,13 @@ test.describe("organization invites", () => {
     await login(page, inviteeEmail);
 
     // Should be on welcome page with pending invite
-    await page.getByText("Welcome to Iterate").waitFor();
-    await page.getByText(orgName).waitFor();
+    await page.getByRole("heading", { name: "Welcome to Iterate" }).first().waitFor();
+    await page.getByText(orgName).first().waitFor();
+    const inviteItem = page.locator("[data-slot='item']").filter({ hasText: orgName }).first();
+    await inviteItem.getByRole("button", { name: "Accept", exact: true }).waitFor();
 
     // Accept the invite
-    await page.getByRole("button", { name: "Accept", exact: true }).click();
+    await inviteItem.getByRole("button", { name: "Accept", exact: true }).click();
     await toast.success(page, `Joined ${orgName}`).waitFor();
 
     // Should now be in the org
@@ -106,11 +108,12 @@ test.describe("organization invites", () => {
     // Invitee logs in
     await login(page, inviteeEmail);
 
+    await page.getByText(orgName).first().waitFor();
     await page.getByRole("button", { name: `Decline invite to ${orgName}` }).click();
     await toast.success(page, "Invite declined").waitFor();
 
     // Invite should be gone, create org form still visible
-    await page.getByText(orgName).waitFor({ state: "hidden" });
+    await page.getByText(orgName).first().waitFor({ state: "hidden" });
     await page.getByLabel("Organization name").waitFor();
   });
 
@@ -195,6 +198,6 @@ test.describe("organization invites", () => {
     await toast.success(page, `Left ${orgName}`).waitFor();
 
     // Should be back on welcome page
-    await page.getByText("Welcome to Iterate").waitFor();
+    await page.getByRole("heading", { name: "Welcome to Iterate" }).first().waitFor();
   });
 });

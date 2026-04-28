@@ -1,0 +1,4 @@
+@import "tailwindcss";
+@import "@iterate-com/ui/globals.css";
+
+@source "../src/**/*.{ts,tsx}";
