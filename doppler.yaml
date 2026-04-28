@@ -16,6 +16,8 @@ setup:
     path: apps/example-v2/
   - project: example
     path: apps/fetch-test/
+  - project: os2
+    path: apps/os2/
   - project: events
     path: apps/events/
   - project: semaphore

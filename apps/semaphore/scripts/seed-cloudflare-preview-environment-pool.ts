@@ -22,6 +22,10 @@ const previewPools = [
     type: "ingress-proxy-preview-environment",
   },
   {
+    appSlug: "os2",
+    type: "os2-preview-environment",
+  },
+  {
     appSlug: "semaphore",
     type: "semaphore-preview-environment",
   },
