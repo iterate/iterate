@@ -22,10 +22,9 @@ const value = await dispatchCallable({
 In normal product code, callers should not need to know whether dispatch uses
 Fetch or Workers RPC, or whether the live capability comes from a public URL,
 service binding, Durable Object namespace/stub, Worker Loader / Dynamic Worker
-entrypoint, or `ctx.exports` loopback binding. Use `dispatchCallableFetch({
-callable, request, ctx })` only when the caller needs the raw Fetch API surface:
-streaming request bodies, streaming responses, SSE, or WebSocket upgrade
-responses.
+entrypoint, or `ctx.exports` loopback binding. Use `dispatchCallableFetch(...)`
+only when the caller needs the raw Fetch API surface: streaming request bodies,
+streaming responses, SSE, or WebSocket upgrade responses.
 
 Only the runtime and type modules are exported:
 
