@@ -90,7 +90,11 @@ export function StreamPage({
     staleTime: 5_000,
   });
 
-  const { events, isConnecting } = useLiveStreamEvents({
+  const {
+    events,
+    isConnecting,
+    status: liveStreamStatus,
+  } = useLiveStreamEvents({
     streamPath,
     onEvent: useCallback(
       (event: Event) => {
@@ -107,6 +111,14 @@ export function StreamPage({
   const feed = useMemo(() => projectWireToFeed(events), [events]);
   const displayFeed = useMemo(() => buildDisplayFeed(feed, rendererMode), [feed, rendererMode]);
   const feedSummary = useMemo(() => summarizeStreamFeed(feed), [feed]);
+  const headerControls = useMemo(
+    () => ({
+      rendererMode,
+      onRendererModeChange,
+      feedSummary,
+    }),
+    [feedSummary, onRendererModeChange, rendererMode],
+  );
 
   useEffect(() => {
     setAppendInputJson(createEventInputTemplate(selectedTemplateId, "json"));
@@ -114,19 +126,14 @@ export function StreamPage({
   }, [selectedTemplateId]);
 
   useEffect(() => {
-    // The header lives in the parent `_app` layout, outside the concrete stream
-    // route component, so we bridge the validated route search state into that
-    // header here instead of duplicating local renderer state in the page.
-    setHeaderControls({
-      rendererMode,
-      onRendererModeChange,
-      feedSummary,
-    });
+    setHeaderControls(headerControls);
+  }, [headerControls, setHeaderControls]);
 
+  useEffect(() => {
     return () => {
       setHeaderControls(null);
     };
-  }, [feedSummary, onRendererModeChange, rendererMode, setHeaderControls]);
+  }, [setHeaderControls]);
 
   const [destroyChildren, setDestroyChildren] = useState(true);
 
@@ -187,14 +194,22 @@ export function StreamPage({
 
     await submitAppendEvent({
       event: {
-        type: "agent-input-added",
+        type: "webchat-message-received",
         payload: {
-          role: "user",
           content,
         },
       },
     });
     setAgentInputText("");
+  };
+
+  const submitDebugInfoRequest = async () => {
+    await submitAppendEvent({
+      event: {
+        type: "debug-info-requested",
+        payload: {},
+      },
+    });
   };
 
   const handleComposerSubmit = async () => {
@@ -219,7 +234,8 @@ export function StreamPage({
           displayFeed={displayFeed}
           rendererMode={rendererMode}
           emptyLabel="No events received yet."
-          isPending={isConnecting || (streamStateQuery.isPending && events.length === 0)}
+          isPending={isConnecting}
+          liveStreamStatus={liveStreamStatus}
           openEventOffset={openEventOffset}
           onOpenEventOffsetChange={onOpenEventOffsetChange}
         />
@@ -371,7 +387,20 @@ export function StreamPage({
                       ))}
                     </PromptInputSelectContent>
                   </PromptInputSelect>
-                ) : null}
+                ) : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 px-2 text-xs"
+                    disabled={appendEvent.isPending}
+                    onClick={() => {
+                      void submitDebugInfoRequest();
+                    }}
+                  >
+                    Debug info
+                  </Button>
+                )}
               </div>
             </PromptInputTools>
             <PromptInputSubmit

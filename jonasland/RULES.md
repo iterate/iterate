@@ -120,3 +120,11 @@ When you use a particular configuration or approach to something, because you sa
 Similarly, when some other approach didn't work, mention the other approach and what went wrong. Be specific - including about relevant package versions etc
 
 Don't let people wonder "why is this fence here?"
+
+# Handling of slugs and IDs
+
+- We use "slugs" as unique identifiers in many places, because they are url-safe
+- Use packages/shared/src/slugify.ts to create slugs
+- On a technical level, slugs CAN be changed! Esp project slugs.
+- So for stable identifiers (e.g. for durable object names), always use IDs
+- IDs should use typeid from packages/shared/src/typeid.ts with config from app config

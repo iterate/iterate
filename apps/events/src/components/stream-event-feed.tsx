@@ -68,6 +68,7 @@ import { summarizeStreamFeed } from "~/lib/stream-feed-summary.ts";
 import { streamPathToSplat } from "~/lib/stream-links.ts";
 import { defaultStreamViewSearch } from "~/lib/stream-view-search.ts";
 import type {
+  AgentStatusFeedItem,
   BashmodeBlockFeedItem,
   CodemodeBlockFeedItem,
   CodemodeResultFeedItem,
@@ -95,12 +96,18 @@ type StreamLinkSearch = {
   [key: string]: unknown;
 };
 
+function isLiveStreamFailureStatus(status: string | undefined) {
+  if (status == null) return false;
+  return status.startsWith("Error:") || status.startsWith("Timed out");
+}
+
 export function StreamEventFeed({
   feed,
   displayFeed,
   rendererMode,
   emptyLabel,
   isPending = false,
+  liveStreamStatus,
   openEventOffset,
   onOpenEventOffsetChange,
 }: {
@@ -109,6 +116,8 @@ export function StreamEventFeed({
   rendererMode: StreamRendererMode;
   emptyLabel: string;
   isPending?: boolean;
+  /** From `useLiveStreamEvents` — oRPC connect errors / timeouts, independent of the event log. */
+  liveStreamStatus?: string;
   openEventOffset?: number;
   onOpenEventOffsetChange?: (offset?: number) => void;
 }) {
@@ -138,6 +147,7 @@ export function StreamEventFeed({
   const feedSummary = useMemo(() => summarizeStreamFeed(feed), [feed]);
 
   const items = displayFeed ?? [];
+  const liveStreamFailed = !isPending && isLiveStreamFailureStatus(liveStreamStatus);
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
@@ -146,9 +156,21 @@ export function StreamEventFeed({
           {rawEvents.length === 0 ? (
             <ConversationEmptyState
               className="h-full min-h-[240px] rounded-lg border bg-card text-sm text-muted-foreground"
-              description={isPending ? "Connecting to the stream." : emptyLabel}
+              description={
+                isPending
+                  ? "Connecting to the stream."
+                  : liveStreamFailed
+                    ? (liveStreamStatus ?? "")
+                    : emptyLabel
+              }
               icon={isPending ? <Spinner className="size-4" /> : undefined}
-              title={isPending ? "Loading events" : "No events yet"}
+              title={
+                isPending
+                  ? "Loading events"
+                  : liveStreamFailed
+                    ? "Could not open live stream"
+                    : "No events yet"
+              }
             />
           ) : (
             <SerializedObjectCodeBlock
@@ -171,6 +193,12 @@ export function StreamEventFeed({
                   icon={<Spinner className="size-4" />}
                   title="Loading events"
                   description="Connecting to the stream."
+                />
+              ) : liveStreamFailed ? (
+                <ConversationEmptyState
+                  className="min-h-[240px] rounded-lg border border-destructive/30 bg-destructive/5 text-sm text-muted-foreground"
+                  title="Could not open live stream"
+                  description={liveStreamStatus ?? "Unknown error"}
                 />
               ) : rendererMode === "pretty" && feed.length > 0 ? (
                 <ConversationEmptyState
@@ -270,6 +298,8 @@ function StreamFeedItemRenderer({
       return <StreamResumedCard item={item} />;
     case "stream-error-occurred":
       return <StreamErrorOccurredCard item={item} />;
+    case "agent-status":
+      return <AgentStatusLine item={item} />;
     case "scheduler-control":
       return <SchedulerControlCard item={item} />;
     case "codemode-block":
@@ -323,13 +353,24 @@ function ChildStreamCreatedCard({ item }: { item: ChildStreamCreatedFeedItem }) 
 
 function ChatMessageCard({ item }: { item: Extract<StreamFeedItem, { kind: "message" }> }) {
   const content = item.content.map((block) => block.text).join("");
+  const isMarkdownMessage = item.content.every((block) => block.type === "markdown");
   const showStreaming = item.role === "assistant" && item.streamStatus === "streaming";
   const showCopyToolbar = item.role === "assistant" && content.length > 0;
 
   return (
     <Message from={item.role}>
       <MessageContent>
-        <MessageResponse>{content.length > 0 ? content : showStreaming ? "…" : ""}</MessageResponse>
+        {isMarkdownMessage ? (
+          <MessageResponse className="min-w-0 max-w-full overflow-hidden">
+            {content.length > 0 ? content : showStreaming ? "…" : ""}
+          </MessageResponse>
+        ) : item.role === "user" ? (
+          <UserMessageText>{content}</UserMessageText>
+        ) : (
+          <MessageResponse className="min-w-0 max-w-full overflow-hidden">
+            {content.length > 0 ? content : showStreaming ? "…" : ""}
+          </MessageResponse>
+        )}
       </MessageContent>
       {showCopyToolbar ? (
         <MessageToolbar className="mt-1.5 w-fit max-w-full justify-start gap-2">
@@ -348,6 +389,14 @@ function ChatMessageCard({ item }: { item: Extract<StreamFeedItem, { kind: "mess
         </MessageToolbar>
       ) : null}
     </Message>
+  );
+}
+
+function UserMessageText({ children }: { children: string }) {
+  return (
+    <div className="max-h-[40vh] max-w-full overflow-auto whitespace-pre-wrap wrap-break-word leading-6">
+      {children}
+    </div>
   );
 }
 
@@ -434,6 +483,27 @@ function StreamLifecycleLine({ item }: { item: StreamLifecycleFeedItem }) {
       <div className="inline-flex items-center gap-2 rounded-full border bg-background px-3 py-1 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground shadow-sm">
         <CircleIcon className="size-2 fill-current" />
         <span>{item.label}</span>
+      </div>
+      <div className="h-px flex-1 bg-border" />
+    </div>
+  );
+}
+
+function AgentStatusLine({ item }: { item: AgentStatusFeedItem }) {
+  const working = item.status === "working";
+  const label = working ? "Agent working" : "Agent idle";
+  return (
+    <div className="flex items-center gap-3 py-2">
+      <div className="h-px flex-1 bg-border" />
+      <div
+        className={cn(
+          "inline-flex items-center gap-2 rounded-full border bg-background px-3 py-1 text-[11px] font-medium uppercase tracking-[0.14em] shadow-sm",
+          working ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground",
+        )}
+      >
+        <CircleIcon className={`size-2 fill-current ${working ? "animate-pulse" : ""}`} />
+        <span>{label}</span>
+        <span className="normal-case tracking-normal text-muted-foreground">{item.reason}</span>
       </div>
       <div className="h-px flex-1 bg-border" />
     </div>
@@ -609,18 +679,21 @@ function SchedulerControlCard({ item }: { item: SchedulerControlFeedItem }) {
 }
 
 function CodemodeBlockCard({ item }: { item: CodemodeBlockFeedItem }) {
+  const languageLabel = item.language.toUpperCase();
+  const sourceLanguage = item.language === "ts" || item.language === "js" ? "typescript" : "text";
+
   return (
     <AssistantArtifact
       eyebrow={<Code2Icon className="size-3.5" />}
       eyebrowLabel="Codemode block"
       title={item.blockId}
       badge={item.requestId}
-      meta={[item.language.toUpperCase(), formatTime(item.timestamp)]}
+      meta={[languageLabel, formatTime(item.timestamp)]}
     >
       <ArtifactSection>
         <SourceCodeBlock
           code={item.code}
-          language={item.language === "ts" ? "typescript" : "text"}
+          language={sourceLanguage}
           className="min-h-40 max-h-128"
           showCopyButton
         />
@@ -654,6 +727,13 @@ function CodemodeResultCard({ item }: { item: CodemodeResultFeedItem }) {
   const [stderrOpen, setStderrOpen] = useState(item.stderr.length > 0 && !item.success);
   const StatusIcon = item.success ? CheckCircle2Icon : XCircleIcon;
   const statusLabel = item.success ? "Succeeded" : "Failed";
+  const meta = [
+    item.blockCount == null ? null : `Block #${item.blockCount}`,
+    item.exitCode == null ? null : `Exit ${item.exitCode}`,
+    item.durationMs == null ? null : formatDuration(item.durationMs),
+    formatTime(item.timestamp),
+  ].filter((value): value is string => value != null);
+  const hasArtifacts = item.codePath != null || item.outputPath != null;
 
   return (
     <AssistantArtifact
@@ -661,12 +741,7 @@ function CodemodeResultCard({ item }: { item: CodemodeResultFeedItem }) {
       eyebrowLabel="Codemode result"
       title={item.blockId}
       badge={item.requestId}
-      meta={[
-        `Block #${item.blockCount}`,
-        `Exit ${item.exitCode}`,
-        formatDuration(item.durationMs),
-        formatTime(item.timestamp),
-      ]}
+      meta={meta}
       headerExtra={
         <span
           className={cn(
@@ -682,18 +757,20 @@ function CodemodeResultCard({ item }: { item: CodemodeResultFeedItem }) {
       }
       tone={item.success ? "success" : "danger"}
     >
-      <ArtifactSection>
-        <div className="rounded-md border bg-muted/40 p-3 text-xs text-muted-foreground">
-          <div className="flex items-center gap-2">
-            <BracesIcon className="size-3.5" />
-            <span className="font-medium text-foreground">Artifacts</span>
+      {hasArtifacts ? (
+        <ArtifactSection>
+          <div className="rounded-md border bg-muted/40 p-3 text-xs text-muted-foreground">
+            <div className="flex items-center gap-2">
+              <BracesIcon className="size-3.5" />
+              <span className="font-medium text-foreground">Artifacts</span>
+            </div>
+            <div className="mt-2 space-y-1 font-mono">
+              {item.codePath == null ? null : <div>{item.codePath}</div>}
+              {item.outputPath == null ? null : <div>{item.outputPath}</div>}
+            </div>
           </div>
-          <div className="mt-2 space-y-1 font-mono">
-            <div>{item.codePath}</div>
-            <div>{item.outputPath}</div>
-          </div>
-        </div>
-      </ArtifactSection>
+        </ArtifactSection>
+      ) : null}
 
       <ArtifactSection>
         <Collapsible open={stdoutOpen} onOpenChange={setStdoutOpen}>
@@ -1258,6 +1335,8 @@ function getFeedItemKey(item: StreamFeedItem, index: number) {
       return `stream-resumed-${item.timestamp}-${index}`;
     case "stream-error-occurred":
       return `stream-error-occurred-${item.timestamp}-${index}`;
+    case "agent-status":
+      return `agent-status-${item.status}-${item.reason}-${item.raw.offset}`;
     case "codemode-block":
       return `codemode-block-${item.blockId}-${item.timestamp}-${index}`;
     case "bashmode-block":

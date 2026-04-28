@@ -119,6 +119,48 @@ function flushCurrentGroup(displayFeed: StreamFeedItem[], currentGroup: readonly
 }
 
 export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
+  if (event.type === "webchat-message-received") {
+    const payload = event.payload as { content?: unknown };
+    const content = typeof payload.content === "string" ? payload.content : null;
+    if (content == null) return null;
+    return {
+      kind: "message",
+      role: "user",
+      content: [{ type: "text", text: content }],
+      timestamp: getTimestamp(event.createdAt),
+    };
+  }
+
+  if (event.type === "webchat-response-added") {
+    const payload = event.payload as { message?: unknown };
+    const message = typeof payload.message === "string" ? payload.message : null;
+    if (message == null) return null;
+    return {
+      kind: "message",
+      role: "assistant",
+      content: [{ type: "text", text: message }],
+      timestamp: getTimestamp(event.createdAt),
+    };
+  }
+
+  if (event.type === "agent-status-updated") {
+    const payload = event.payload as {
+      status?: unknown;
+      reason?: unknown;
+      requestId?: unknown;
+    };
+    if (payload.status !== "working" && payload.status !== "idle") return null;
+    if (typeof payload.reason !== "string") return null;
+    return {
+      kind: "agent-status",
+      status: payload.status,
+      reason: payload.reason,
+      ...(typeof payload.requestId === "string" ? { requestId: payload.requestId } : {}),
+      timestamp: getTimestamp(event.createdAt),
+      raw: event,
+    };
+  }
+
   if (event.type === "https://events.iterate.com/events/stream/child-stream-created") {
     return {
       kind: "child-stream-created",

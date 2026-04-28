@@ -83,22 +83,13 @@ export function buildAgentWebSocketCallbackUrl(args: {
   agentInstance: string;
 }): string {
   const url = new URL(args.publicOrigin);
-  url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
+  url.protocol = url.protocol === "http:" || isLocalhost(url.hostname) ? "ws:" : "wss:";
   url.pathname = `/agents/${args.agentClass}/${args.agentInstance}`;
   url.search = "";
   url.hash = "";
   return url.toString();
 }
 
-/** Human-friendly HTTP debug page for a specific agent instance. */
-export function buildAgentDebugUrl(args: {
-  publicOrigin: string;
-  agentClass: string;
-  agentInstance: string;
-}): string {
-  const url = new URL(args.publicOrigin);
-  url.pathname = `/agents/${args.agentClass}/${args.agentInstance}/__debug`;
-  url.search = "";
-  url.hash = "";
-  return url.toString();
+function isLocalhost(hostname: string) {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
 }

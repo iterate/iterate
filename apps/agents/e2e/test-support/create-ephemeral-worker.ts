@@ -43,7 +43,7 @@ export async function createEphemeralWorker(opts: {
 
   console.info(`[e2e] Deploying ephemeral worker stage=${stage}...`);
 
-  const { url, output: deployOutput } = await runAlchemy({
+  const { url } = await runAlchemy({
     args: [],
     env,
     timeoutMs: 180_000,

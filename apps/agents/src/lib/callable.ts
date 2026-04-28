@@ -148,9 +148,9 @@ async function dispatchRpc(
         `RPC callable with argsMode "positional" requires array payload, got ${typeof payload}`,
       );
     }
-    return await (method as (...a: unknown[]) => Promise<unknown>).apply(stub, payload);
+    return await (method as (...a: unknown[]) => Promise<unknown>)(...payload);
   }
-  return await (method as (a: unknown) => Promise<unknown>).call(stub, payload);
+  return await (method as (a: unknown) => Promise<unknown>)(payload);
 }
 
 function lookupBinding<T>(env: Record<string, unknown>, name: string): T {

@@ -11,6 +11,7 @@ import {
 import {
   EventInput,
   InvalidEventAppendedEventInput,
+  NormalizedEventInput,
   StreamQuery,
   StreamMetadataUpdatedEventInput,
   StreamPath,
@@ -149,6 +150,30 @@ assert.deepEqual(parsedBuiltIn, {
   },
 });
 
+const parsedBuiltInWithGenericPayload = AppendInput.parse({
+  path: examplePath,
+  event: {
+    type: "https://events.iterate.com/events/stream/metadata-updated",
+    payload: {
+      owner: "jonas",
+    },
+  },
+});
+
+assert.deepEqual(parsedBuiltInWithGenericPayload.event.payload, {
+  owner: "jonas",
+});
+
+const normalizedMalformedBuiltIn = InvalidEventAppendedEventInput.parse(
+  NormalizedEventInput.parse(parsedBuiltInWithGenericPayload.event),
+);
+
+assert.equal(
+  normalizedMalformedBuiltIn.type,
+  "https://events.iterate.com/events/stream/invalid-event-appended",
+);
+assert.match(normalizedMalformedBuiltIn.payload.error, /metadata/i);
+
 const parsedUnknownEvent = AppendInput.parse({
   path: examplePath,
   event: {
@@ -192,7 +217,7 @@ if (typeof malformedBuiltInError !== "string") {
   throw new Error("malformedBuiltIn.payload.error should be a string");
 }
 assert.match(malformedBuiltInError, /payload/i);
-assert.match(malformedBuiltInError, /expected object/i);
+assert.match(malformedBuiltInError, /Invalid input/i);
 assert.doesNotMatch(
   malformedBuiltInError,
   /Built-in event types must use their built-in payload schema/i,

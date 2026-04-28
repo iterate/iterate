@@ -7,6 +7,11 @@ import { makeFunnySlug } from "@iterate-com/shared/slug-maker";
 import { Separator } from "@iterate-com/ui/components/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { AppSidebar } from "~/components/app-sidebar.tsx";
+import {
+  MCP_TOOL_PROVIDER_PRESET_EVENT,
+  OPENAPI_TOOL_PROVIDER_PRESET_EVENT,
+  SLACK_TOOL_PROVIDER_PRESET_EVENT,
+} from "~/lib/default-tool-provider-events.ts";
 import { getOrpcClient } from "~/orpc/client.ts";
 
 /**
@@ -190,6 +195,9 @@ function PresetsSection({
   const [customModel, setCustomModel] = useState("");
   const [runOptsText, setRunOptsText] = useState(DEFAULT_RUN_OPTS_JSON);
   const [systemPrompt, setSystemPrompt] = useState(DEFAULT_SYSTEM_PROMPT);
+  const [includeMcpTools, setIncludeMcpTools] = useState(true);
+  const [includeOpenApiTools, setIncludeOpenApiTools] = useState(true);
+  const [includeSlackTools, setIncludeSlackTools] = useState(true);
   const [advancedText, setAdvancedText] = useState(DEFAULT_ADVANCED_EVENTS_JSON);
 
   const resolvedModel = modelPreset === CUSTOM_MODEL_SENTINEL ? customModel.trim() : modelPreset;
@@ -211,8 +219,33 @@ function PresetsSection({
         payload: { systemPrompt: trimmedPrompt },
       });
     }
+    if (includeMcpTools) {
+      out.push({
+        type: MCP_TOOL_PROVIDER_PRESET_EVENT.type,
+        payload: { ...MCP_TOOL_PROVIDER_PRESET_EVENT.payload },
+      });
+    }
+    if (includeOpenApiTools) {
+      out.push({
+        type: OPENAPI_TOOL_PROVIDER_PRESET_EVENT.type,
+        payload: { ...OPENAPI_TOOL_PROVIDER_PRESET_EVENT.payload },
+      });
+    }
+    if (includeSlackTools) {
+      out.push({
+        type: SLACK_TOOL_PROVIDER_PRESET_EVENT.type,
+        payload: { ...SLACK_TOOL_PROVIDER_PRESET_EVENT.payload },
+      });
+    }
     return out;
-  }, [resolvedModel, runOptsParsed, systemPrompt]);
+  }, [
+    resolvedModel,
+    runOptsParsed,
+    systemPrompt,
+    includeMcpTools,
+    includeOpenApiTools,
+    includeSlackTools,
+  ]);
 
   const previewEvents = useMemo<ContractEvent[]>(
     () => (advancedParsed.kind === "ok" ? [...derived, ...advancedParsed.value] : derived),
@@ -248,9 +281,10 @@ function PresetsSection({
         <p className="text-sm text-muted-foreground">
           Events appended to every new child stream under{" "}
           <code>{trimmedBasePath || "(unset)"}</code>. Basic fields synthesise the common events (
-          <code>llm-config-updated</code>, <code>system-prompt-updated</code>); advanced mode
-          concatenates raw events on top in the order shown in the preview. Saved as a single
-          ordered list per base path; the longest matching base path wins for any given child.
+          <code>llm-config-updated</code>, <code>system-prompt-updated</code>, optional{" "}
+          <code>tool-provider-config-updated</code>); advanced mode concatenates raw events on top
+          in the order shown in the preview. Saved as a single ordered list per base path; the
+          longest matching base path wins for any given child.
         </p>
       </div>
 
@@ -345,6 +379,50 @@ function PresetsSection({
           <p className="text-[11px] text-muted-foreground">
             Empty = no <code>system-prompt-updated</code> event in the output.
           </p>
+        </div>
+
+        <div className="flex flex-col gap-3 md:col-span-2">
+          <p className="text-xs font-medium">Tool providers</p>
+          <p className="text-[11px] text-muted-foreground">
+            Adds <code>tool-provider-config-updated</code> events so codemode can call{" "}
+            <code>cloudflare_docs.*</code> (Cloudflare MCP docs) and <code>iterate_events.*</code>{" "}
+            (Events OpenAPI), plus <code>slack.apiCall(...)</code> (Slack SDK) by default. Uncheck
+            to omit.
+          </p>
+          <label className="flex cursor-pointer items-start gap-2 text-sm leading-snug">
+            <input
+              type="checkbox"
+              className="mt-0.5 rounded border-input"
+              checked={includeMcpTools}
+              onChange={(event) => setIncludeMcpTools(event.target.checked)}
+            />
+            <span>
+              Cloudflare docs — namespace <code className="text-xs">cloudflare_docs</code> (MCP)
+            </span>
+          </label>
+          <label className="flex cursor-pointer items-start gap-2 text-sm leading-snug">
+            <input
+              type="checkbox"
+              className="mt-0.5 rounded border-input"
+              checked={includeOpenApiTools}
+              onChange={(event) => setIncludeOpenApiTools(event.target.checked)}
+            />
+            <span>
+              Iterate Events — namespace <code className="text-xs">iterate_events</code> (OpenAPI)
+            </span>
+          </label>
+          <label className="flex cursor-pointer items-start gap-2 text-sm leading-snug">
+            <input
+              type="checkbox"
+              className="mt-0.5 rounded border-input"
+              checked={includeSlackTools}
+              onChange={(event) => setIncludeSlackTools(event.target.checked)}
+            />
+            <span>
+              Slack — namespace <code className="text-xs">slack</code> (
+              <code className="text-xs">slack.apiCall(method, options)</code> via SDK)
+            </span>
+          </label>
         </div>
 
         <div className="flex flex-col gap-1 md:col-span-2">
@@ -549,7 +627,7 @@ function parseEventsArray(text: string): ParseResult<ContractEvent[]> {
     }
     const entry = candidate as Record<string, unknown>;
     if (typeof entry.type !== "string" || entry.type.trim().length === 0) {
-      return { kind: "error", error: `Entry ${i} must have a non-empty string \"type\".` };
+      return { kind: "error", error: `Entry ${i} must have a non-empty string "type".` };
     }
     const payload = entry.payload ?? {};
     if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {

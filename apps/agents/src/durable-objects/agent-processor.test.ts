@@ -1,17 +1,34 @@
 import type { GenericEventInput } from "@iterate-com/events-contract";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   AgentInputAddedEventInput,
-  DebugInfoRequestedEventInput,
-  IterateAgentProcessorState,
+  type AgentInputAddedPayload,
+  LlmConfigUpdatedEventInput,
   LlmRequestCancelledEventInput,
   LlmRequestCompletedEventInput,
+  LlmRequestFailedEventInput,
   LlmRequestQueuedEventInput,
   LlmRequestScheduledEventInput,
   LlmRequestStartedEventInput,
-  ToolProviderConfigUpdatedEventInput,
+  SystemPromptUpdatedEventInput,
+  WebchatMessageReceivedEventInput,
+} from "./agent-loop-processor-types.ts";
+import { createIterateAgentProcessor } from "./agent-processor.ts";
+import type { ProcessorRuntime } from "./agent-processor-shared.ts";
+import {
+  DebugInfoRequestedEventInput,
+  IterateAgentProcessorState,
 } from "./agent-processor-types.ts";
-import { createIterateAgentProcessor, type ProcessorRuntime } from "./agent-processor.ts";
+import {
+  CODEMODE_PRIMER_IDEMPOTENCY_KEY,
+  extractCodemodeScriptFromAssistantResponse,
+  parseWebchatSendMessageArgs,
+} from "./codemode-processor.ts";
+import {
+  CodemodeResultAddedEventInput,
+  ToolProviderConfigUpdatedEventInput,
+} from "./codemode-processor-types.ts";
+import type { CloudflareEnv } from "~/lib/worker-env.d.ts";
 
 /**
  * Trigger-behavior unit tests. Exercise the processor in isolation:
@@ -40,6 +57,16 @@ function createProcessorForTests() {
     loader: unreachable("loader"),
     outboundFetch: unreachable("outboundFetch"),
     env: unreachable("env"),
+  });
+}
+
+/** Skip primer emission in `afterAppend` — for agent-loop-only assertions. */
+function stateWithPrimerAlreadyApplied(
+  processor: ReturnType<typeof createProcessorForTests>,
+): IterateAgentProcessorState {
+  return IterateAgentProcessorState.parse({
+    ...processor.initialState,
+    hasAppendedCodemodePrompt: true,
   });
 }
 
@@ -108,13 +135,24 @@ async function runAfterAppend(args: {
   event: ReturnType<typeof asEvent>;
   state: IterateAgentProcessorState;
   runtime: ProcessorRuntime;
+  /**
+   * Mimics the events `append` idempotency table across `afterAppend` invocations
+   * (e.g. two inbound events before the primer has round-tripped into state).
+   */
+  idempotencySeenForAppend?: Set<string>;
 }) {
   const appended: Array<GenericEventInput> = [];
+  const idempotencySeen = args.idempotencySeenForAppend ?? new Set<string>();
   await args.processor.afterAppend({
     event: args.event,
     state: args.state,
     runtime: args.runtime,
     append: ({ event }) => {
+      const key = (event as { idempotencyKey?: string }).idempotencyKey;
+      if (key != null) {
+        if (idempotencySeen.has(key)) return;
+        idempotencySeen.add(key);
+      }
       appended.push(event as GenericEventInput);
     },
   });
@@ -138,6 +176,25 @@ describe("agent-processor / reduce", () => {
     expect(next?.history).toEqual([{ role: "user", content: "hi" }]);
     // The trigger knob must not leak into the persisted history item.
     expect(next?.history[0]).not.toHaveProperty("triggerLlmRequest");
+  });
+
+  test("codemode prompt append records history and flips codemode prompt state by idempotency key", () => {
+    const processor = createProcessorForTests();
+    const first = asEvent(
+      AgentInputAddedEventInput.parse({
+        type: "agent-input-added",
+        idempotencyKey: CODEMODE_PRIMER_IDEMPOTENCY_KEY,
+        payload: {
+          role: "user",
+          content: "primer body",
+          triggerLlmRequest: { behaviour: "dont-trigger-request" },
+        },
+      }),
+    );
+    const s = processor.reduce({ state: processor.initialState, event: first })!;
+    expect(s.history).toHaveLength(1);
+    expect(s.hasAppendedCodemodePrompt).toBe(true);
+    expect(s.history[0]?.content).toBe("primer body");
   });
 
   test("llm-request-scheduled sets currentRequest and clears pendingTriggerCount", () => {
@@ -220,6 +277,29 @@ describe("agent-processor / reduce", () => {
     expect(s.currentRequest).toBeNull();
   });
 
+  test("llm-request-failed clears matching currentRequest", () => {
+    const processor = createProcessorForTests();
+    let s = processor.reduce({
+      state: processor.initialState,
+      event: asEvent(
+        LlmRequestScheduledEventInput.parse({
+          type: "llm-request-scheduled",
+          payload: { requestId: "req_1", debounceMs: 1000, model: "@cf/moonshotai/kimi-k2.5" },
+        }),
+      ),
+    })!;
+    s = processor.reduce({
+      state: s,
+      event: asEvent(
+        LlmRequestFailedEventInput.parse({
+          type: "llm-request-failed",
+          payload: { requestId: "req_1", durationMs: 25, error: { message: "boom" } },
+        }),
+      ),
+    })!;
+    expect(s.currentRequest).toBeNull();
+  });
+
   test("tool-provider-config-updated upserts and null-deletes by slug", () => {
     const processor = createProcessorForTests();
     const exec = {
@@ -269,7 +349,7 @@ describe("agent-processor / reduce", () => {
 
   test("llm-request-cancelled with a non-matching id does not clear currentRequest", () => {
     const processor = createProcessorForTests();
-    let s = processor.reduce({
+    const s = processor.reduce({
       state: processor.initialState,
       event: asEvent(
         LlmRequestScheduledEventInput.parse({
@@ -294,6 +374,41 @@ describe("agent-processor / reduce", () => {
 });
 
 describe("agent-processor / afterAppend trigger matrix", () => {
+  test("webchat-message-received renders into triggerable model context", async () => {
+    const processor = createProcessorForTests();
+    const { runtime, calls } = createTestRuntime();
+    const { appended } = await runAfterAppend({
+      processor,
+      event: asEvent(
+        WebchatMessageReceivedEventInput.parse({
+          type: "webchat-message-received",
+          payload: { content: "please help" },
+        }),
+      ),
+      state: stateWithPrimerAlreadyApplied(processor),
+      runtime,
+    });
+    expect(calls).toEqual([]);
+    expect(appended).toHaveLength(2);
+    expect(appended[0]).toMatchObject({
+      type: "agent-input-added",
+      idempotencyKey: "iterate-agent:event-type-explainer:webchat-message-received",
+      payload: {
+        role: "user",
+        triggerLlmRequest: { behaviour: "dont-trigger-request" },
+        content: expect.stringContaining("First `webchat-message-received` event."),
+      },
+    });
+    expect(appended[1]).toMatchObject({
+      type: "agent-input-added",
+      payload: {
+        role: "user",
+        triggerLlmRequest: { behaviour: "auto" },
+        content: expect.stringContaining("type: webchat-message-received"),
+      },
+    });
+  });
+
   test("dont-trigger-request never starts a request", async () => {
     const processor = createProcessorForTests();
     const { runtime, calls } = createTestRuntime();
@@ -309,7 +424,7 @@ describe("agent-processor / afterAppend trigger matrix", () => {
           },
         }),
       ),
-      state: processor.initialState,
+      state: stateWithPrimerAlreadyApplied(processor),
       runtime,
     });
     expect(calls).toEqual([]);
@@ -329,7 +444,7 @@ describe("agent-processor / afterAppend trigger matrix", () => {
           payload: { role: "assistant", content: "hello world" },
         }),
       ),
-      state: processor.initialState,
+      state: stateWithPrimerAlreadyApplied(processor),
       runtime,
     });
     expect(calls).toEqual([]);
@@ -349,7 +464,7 @@ describe("agent-processor / afterAppend trigger matrix", () => {
           payload: { role: "user", content: "hi" },
         }),
       ),
-      state: processor.initialState,
+      state: stateWithPrimerAlreadyApplied(processor),
       runtime,
     });
     expect(calls).toEqual([{ kind: "schedule", requestId: "req_1", debounceMs: 1000 }]);
@@ -371,7 +486,7 @@ describe("agent-processor / afterAppend trigger matrix", () => {
           },
         }),
       ),
-      state: processor.initialState,
+      state: stateWithPrimerAlreadyApplied(processor),
       runtime,
     });
     expect(calls).toEqual([{ kind: "schedule", requestId: "req_1", debounceMs: 1000 }]);
@@ -400,7 +515,7 @@ describe("agent-processor / afterAppend trigger matrix", () => {
           },
         }),
       ),
-      state: processor.initialState,
+      state: stateWithPrimerAlreadyApplied(processor),
       runtime,
     });
     expect(calls).toEqual([
@@ -436,7 +551,7 @@ describe("agent-processor / afterAppend trigger matrix", () => {
           },
         }),
       ),
-      state: processor.initialState,
+      state: stateWithPrimerAlreadyApplied(processor),
       runtime,
     });
     expect(calls).toEqual([{ kind: "extend", requestId: "req_existing", debounceMs: 1000 }]);
@@ -458,7 +573,7 @@ describe("agent-processor / afterAppend trigger matrix", () => {
           },
         }),
       ),
-      state: processor.initialState,
+      state: stateWithPrimerAlreadyApplied(processor),
       runtime,
     });
     expect(calls).toEqual([{ kind: "schedule", requestId: "req_1", debounceMs: 1000 }]);
@@ -483,11 +598,66 @@ describe("agent-processor / afterAppend trigger matrix", () => {
           },
         }),
       ),
-      state: processor.initialState,
+      state: stateWithPrimerAlreadyApplied(processor),
       runtime,
     });
     expect(calls).toEqual([]);
     expect(appended.map((e) => e.type)).toEqual(["llm-request-queued"]);
+  });
+
+  test("llm-request-queued renders a model-visible trace row", async () => {
+    const processor = createProcessorForTests();
+    const { runtime, calls } = createTestRuntime();
+    const { appended } = await runAfterAppend({
+      processor,
+      event: asEvent(LlmRequestQueuedEventInput.parse({ type: "llm-request-queued", payload: {} })),
+      state: stateWithPrimerAlreadyApplied(processor),
+      runtime,
+    });
+    expect(calls).toEqual([]);
+    expect(appended).toHaveLength(2);
+    expect(appended[0]).toMatchObject({
+      type: "agent-input-added",
+      idempotencyKey: "iterate-agent:event-type-explainer:llm-request-queued",
+    });
+    expect(appended[1]).toMatchObject({
+      type: "agent-input-added",
+      payload: {
+        role: "user",
+        triggerLlmRequest: { behaviour: "dont-trigger-request" },
+        content: expect.stringContaining("type: llm-request-queued"),
+      },
+    });
+  });
+
+  test("llm-request-started marks the agent as working", async () => {
+    const processor = createProcessorForTests();
+    const { runtime } = createTestRuntime({ initialInflightId: "req_existing" });
+    const { appended } = await runAfterAppend({
+      processor,
+      event: asEvent(
+        LlmRequestStartedEventInput.parse({
+          type: "llm-request-started",
+          payload: {
+            requestId: "req_existing",
+            model: "@cf/moonshotai/kimi-k2.5",
+            body: { messages: [{ role: "user", content: "hello" }] },
+            runOpts: {},
+          },
+        }),
+      ),
+      state: stateWithPrimerAlreadyApplied(processor),
+      runtime,
+    });
+
+    expect(appended.at(-1)).toMatchObject({
+      type: "agent-status-updated",
+      payload: {
+        status: "working",
+        reason: "llm-request-started",
+        requestId: "req_existing",
+      },
+    });
   });
 
   test("user after-current-request while a request is debouncing also extends the debounce timer", async () => {
@@ -512,7 +682,7 @@ describe("agent-processor / afterAppend trigger matrix", () => {
           },
         }),
       ),
-      state: processor.initialState,
+      state: stateWithPrimerAlreadyApplied(processor),
       runtime,
     });
     expect(calls).toEqual([{ kind: "extend", requestId: "req_existing", debounceMs: 1000 }]);
@@ -543,7 +713,7 @@ describe("agent-processor / afterAppend trigger matrix", () => {
           },
         }),
       ),
-      state: processor.initialState,
+      state: stateWithPrimerAlreadyApplied(processor),
       runtime,
     });
     expect(calls).toEqual([
@@ -572,7 +742,7 @@ describe("agent-processor / afterAppend trigger matrix", () => {
           },
         }),
       ),
-      state: processor.initialState,
+      state: stateWithPrimerAlreadyApplied(processor),
       runtime,
     });
     expect(calls).toEqual([{ kind: "schedule", requestId: "req_1", debounceMs: 1000 }]);
@@ -600,14 +770,14 @@ describe("agent-processor / afterAppend trigger matrix", () => {
           },
         }),
       ),
-      state: processor.initialState,
+      state: stateWithPrimerAlreadyApplied(processor),
       runtime,
     });
     expect(calls).toEqual([{ kind: "extend", requestId: "req_existing", debounceMs: 1000 }]);
     expect(appended).toEqual([]);
   });
 
-  test("llm-request-completed with pendingTriggerCount > 0 emits follow-up rewrite then schedules", async () => {
+  test("llm-request-completed with pendingTriggerCount > 0 renders completion event then schedules", async () => {
     const processor = createProcessorForTests();
     const { runtime, calls } = createTestRuntime();
     // State reflects that req_existing just completed (currentRequest cleared
@@ -624,22 +794,30 @@ describe("agent-processor / afterAppend trigger matrix", () => {
           },
         }),
       ),
-      state: { ...processor.initialState, pendingTriggerCount: 2, currentRequest: null },
+      state: {
+        ...stateWithPrimerAlreadyApplied(processor),
+        pendingTriggerCount: 2,
+        currentRequest: null,
+      },
       runtime,
     });
     expect(calls).toEqual([{ kind: "schedule", requestId: "req_1", debounceMs: 1000 }]);
-    expect(appended.map((e) => e.type)).toEqual(["agent-input-added", "llm-request-scheduled"]);
-    expect(appended[0]).toMatchObject({
+    expect(appended.map((e) => e.type)).toEqual([
+      "agent-input-added",
+      "agent-input-added",
+      "llm-request-scheduled",
+    ]);
+    expect(appended[1]).toMatchObject({
       type: "agent-input-added",
       payload: {
         role: "user",
         triggerLlmRequest: { behaviour: "dont-trigger-request" },
-        content: expect.stringContaining("2 user messages"),
+        content: expect.stringContaining("type: llm-request-completed"),
       },
     });
   });
 
-  test("llm-request-completed with no pending trigger does nothing", async () => {
+  test("llm-request-completed with no pending trigger still renders the event for model context", async () => {
     const processor = createProcessorForTests();
     const { runtime, calls } = createTestRuntime();
     const { appended } = await runAfterAppend({
@@ -654,14 +832,22 @@ describe("agent-processor / afterAppend trigger matrix", () => {
           },
         }),
       ),
-      state: { ...processor.initialState, pendingTriggerCount: 0 },
+      state: { ...stateWithPrimerAlreadyApplied(processor), pendingTriggerCount: 0 },
       runtime,
     });
     expect(calls).toEqual([]);
-    expect(appended).toEqual([]);
+    expect(appended.map((e) => e.type)).toEqual(["agent-input-added", "agent-input-added"]);
+    expect(appended[1]).toMatchObject({
+      type: "agent-input-added",
+      payload: {
+        role: "user",
+        triggerLlmRequest: { behaviour: "dont-trigger-request" },
+        content: expect.stringContaining("durationMs: 42"),
+      },
+    });
   });
 
-  test("llm-request-cancelled with pendingTriggerCount > 0 emits cancel rewrite + follow-up rewrite + schedule", async () => {
+  test("llm-request-cancelled with pendingTriggerCount > 0 renders cancel event + schedules follow-up", async () => {
     const processor = createProcessorForTests();
     const { runtime, calls } = createTestRuntime();
     const { appended } = await runAfterAppend({
@@ -672,26 +858,22 @@ describe("agent-processor / afterAppend trigger matrix", () => {
           payload: { requestId: "req_existing", reason: "interrupted-by-user-input" },
         }),
       ),
-      state: { ...processor.initialState, pendingTriggerCount: 1 },
+      state: { ...stateWithPrimerAlreadyApplied(processor), pendingTriggerCount: 1 },
       runtime,
     });
     expect(calls).toEqual([{ kind: "schedule", requestId: "req_1", debounceMs: 1000 }]);
     expect(appended.map((e) => e.type)).toEqual([
-      "agent-input-added", // cancellation rewrite
-      "agent-input-added", // follow-up rewrite
+      "agent-input-added", // event type explainer
+      "agent-input-added", // rendered cancellation event
       "llm-request-scheduled",
     ]);
-    expect(appended[0]).toMatchObject({
-      type: "agent-input-added",
-      payload: { role: "user", content: expect.stringContaining("interrupted") },
-    });
     expect(appended[1]).toMatchObject({
       type: "agent-input-added",
-      payload: { role: "user", content: expect.stringContaining("1 user message") },
+      payload: { role: "user", content: expect.stringContaining("type: llm-request-cancelled") },
     });
   });
 
-  test("llm-request-cancelled without pending trigger still emits cancel rewrite", async () => {
+  test("llm-request-cancelled without pending trigger still renders the event for model context", async () => {
     const processor = createProcessorForTests();
     const { runtime, calls } = createTestRuntime();
     const { appended } = await runAfterAppend({
@@ -702,18 +884,30 @@ describe("agent-processor / afterAppend trigger matrix", () => {
           payload: { requestId: "req_existing", reason: "interrupted-by-user-input" },
         }),
       ),
-      state: { ...processor.initialState, pendingTriggerCount: 0 },
+      state: { ...stateWithPrimerAlreadyApplied(processor), pendingTriggerCount: 0 },
       runtime,
     });
     expect(calls).toEqual([]);
-    expect(appended.map((e) => e.type)).toEqual(["agent-input-added"]);
-    expect(appended[0]).toMatchObject({
+    expect(appended.map((e) => e.type)).toEqual([
+      "agent-input-added",
+      "agent-input-added",
+      "agent-status-updated",
+    ]);
+    expect(appended[1]).toMatchObject({
       type: "agent-input-added",
       payload: { role: "user", triggerLlmRequest: { behaviour: "dont-trigger-request" } },
     });
+    expect(appended[2]).toMatchObject({
+      type: "agent-status-updated",
+      payload: {
+        status: "idle",
+        reason: "llm-request-cancelled",
+        requestId: "req_existing",
+      },
+    });
   });
 
-  test("llm-request-cancelled with deadline-exceeded reason emits a deadline-specific rewrite + follow-up + schedule", async () => {
+  test("llm-request-cancelled with deadline-exceeded reason renders event + schedules queued follow-up", async () => {
     // When `trigger-request-within-time-period`'s deadline elapses, the
     // runtime emits `llm-request-cancelled` with `deadline-exceeded`. The
     // processor should annotate with a deadline-specific phrase and use
@@ -729,18 +923,52 @@ describe("agent-processor / afterAppend trigger matrix", () => {
           payload: { requestId: "req_existing", reason: "deadline-exceeded" },
         }),
       ),
-      state: { ...processor.initialState, pendingTriggerCount: 1 },
+      state: { ...stateWithPrimerAlreadyApplied(processor), pendingTriggerCount: 1 },
       runtime,
     });
     expect(calls).toEqual([{ kind: "schedule", requestId: "req_1", debounceMs: 1000 }]);
     expect(appended.map((e) => e.type)).toEqual([
-      "agent-input-added", // deadline-exceeded rewrite
-      "agent-input-added", // follow-up rewrite
+      "agent-input-added", // event type explainer
+      "agent-input-added", // rendered deadline-exceeded cancellation event
       "llm-request-scheduled",
     ]);
-    expect(appended[0]).toMatchObject({
+    expect(appended[1]).toMatchObject({
       type: "agent-input-added",
-      payload: { role: "user", content: expect.stringContaining("took too long") },
+      payload: { role: "user", content: expect.stringContaining("reason: deadline-exceeded") },
+    });
+  });
+
+  test("llm-request-failed renders failure event and schedules queued follow-up", async () => {
+    const processor = createProcessorForTests();
+    const { runtime, calls } = createTestRuntime();
+    const { appended } = await runAfterAppend({
+      processor,
+      event: asEvent(
+        LlmRequestFailedEventInput.parse({
+          type: "llm-request-failed",
+          payload: {
+            requestId: "req_existing",
+            durationMs: 12,
+            error: { message: "provider exploded" },
+          },
+        }),
+      ),
+      state: { ...stateWithPrimerAlreadyApplied(processor), pendingTriggerCount: 1 },
+      runtime,
+    });
+    expect(calls).toEqual([{ kind: "schedule", requestId: "req_1", debounceMs: 1000 }]);
+    expect(appended.map((e) => e.type)).toEqual([
+      "agent-input-added",
+      "agent-input-added",
+      "llm-request-scheduled",
+    ]);
+    expect(appended[1]).toMatchObject({
+      type: "agent-input-added",
+      payload: {
+        role: "user",
+        triggerLlmRequest: { behaviour: "dont-trigger-request" },
+        content: expect.stringContaining('error: "provider exploded"'),
+      },
     });
   });
 
@@ -751,7 +979,7 @@ describe("agent-processor / afterAppend trigger matrix", () => {
       initialInflightStatus: "running",
     });
     const stateWithStuff: IterateAgentProcessorState = {
-      ...processor.initialState,
+      ...stateWithPrimerAlreadyApplied(processor),
       systemPrompt: "be helpful",
       history: [{ role: "user", content: "hi" }],
       pendingTriggerCount: 1,
@@ -773,5 +1001,366 @@ describe("agent-processor / afterAppend trigger matrix", () => {
         runtime: { inflightRequestId: "req_existing" },
       },
     });
+  });
+});
+
+describe("agent-processor / codemode primer + provider explainer", () => {
+  test.each([
+    ["raw async arrow", "async () => {\n  return 1;\n}", "async () => {\n  return 1;\n}"],
+    ["js fence", "```js\nasync () => {\n  return 2;\n}\n```", "async () => {\n  return 2;\n}"],
+    [
+      "javascript fence",
+      "```javascript\nasync () => {\n  return 3;\n}\n```",
+      "async () => {\n  return 3;\n}",
+    ],
+    [
+      "codemode fence",
+      "```codemode\nasync () => {\n  return 4;\n}\n```",
+      "async () => {\n  return 4;\n}",
+    ],
+    ["ts fence", "```ts\nasync () => {\n  return 5;\n}\n```", "async () => {\n  return 5;\n}"],
+    [
+      "typescript fence",
+      "```typescript\nasync () => {\n  return 6;\n}\n```",
+      "async () => {\n  return 6;\n}",
+    ],
+  ])("extracts codemode script from assistant response: %s", (_label, content, expected) => {
+    expect(extractCodemodeScriptFromAssistantResponse(content)).toBe(expected);
+  });
+
+  test("webchat provider accepts codemode's positional tool argument array", () => {
+    expect(parseWebchatSendMessageArgs([{ message: "hello" }])).toEqual({ message: "hello" });
+    expect(parseWebchatSendMessageArgs({ message: "hello" })).toEqual({ message: "hello" });
+  });
+
+  test("assistant codemode response appends codemode-block-added", async () => {
+    const processor = createProcessorForTests();
+    const { runtime } = createTestRuntime();
+    const assistantEvent = asEvent(
+      AgentInputAddedEventInput.parse({
+        type: "agent-input-added",
+        payload: {
+          role: "assistant",
+          content: "```js\nasync () => {\n  return await builtin.answer();\n}\n```",
+          triggerLlmRequest: { behaviour: "dont-trigger-request" },
+        },
+      }),
+    );
+    const reduced =
+      processor.reduce({
+        state: stateWithPrimerAlreadyApplied(processor),
+        event: assistantEvent,
+      }) ?? stateWithPrimerAlreadyApplied(processor);
+
+    const { appended } = await runAfterAppend({
+      processor,
+      event: assistantEvent,
+      state: reduced,
+      runtime,
+    });
+
+    expect(appended).toContainEqual({
+      type: "codemode-block-added",
+      payload: { script: "async () => {\n  return await builtin.answer();\n}" },
+    });
+  });
+
+  test("codemode-result-added marks the agent idle when no follow-up is queued", async () => {
+    const processor = createProcessorForTests();
+    const { runtime } = createTestRuntime();
+    const { appended } = await runAfterAppend({
+      processor,
+      event: asEvent(
+        CodemodeResultAddedEventInput.parse({
+          type: "codemode-result-added",
+          payload: { result: { ok: true }, durationMs: 12, logs: [] },
+        }),
+      ),
+      state: stateWithPrimerAlreadyApplied(processor),
+      runtime,
+    });
+
+    expect(appended[0]).toMatchObject({
+      type: "agent-status-updated",
+      payload: { status: "idle", reason: "codemode-result-added" },
+    });
+  });
+
+  test("two preset-like inbound events before primer echoes: same idempotency key → one primer append", async () => {
+    const processor = createProcessorForTests();
+    const { runtime } = createTestRuntime();
+    const idempotencySeen = new Set<string>();
+    const systemPromptEvent = asEvent(
+      SystemPromptUpdatedEventInput.parse({
+        type: "system-prompt-updated",
+        payload: { systemPrompt: "be helpful" },
+      }),
+    );
+    let state =
+      processor.reduce({ state: processor.initialState, event: systemPromptEvent }) ??
+      processor.initialState;
+    const { appended: firstAppend } = await runAfterAppend({
+      processor,
+      event: systemPromptEvent,
+      state,
+      runtime,
+      idempotencySeenForAppend: idempotencySeen,
+    });
+    const llmEvent = asEvent(
+      LlmConfigUpdatedEventInput.parse({
+        type: "llm-config-updated",
+        payload: { model: "@cf/moonshotai/kimi-k2.5", runOpts: {} },
+      }),
+    );
+    state = processor.reduce({ state, event: llmEvent }) ?? state;
+    const { appended: secondAppend } = await runAfterAppend({
+      processor,
+      event: llmEvent,
+      state,
+      runtime,
+      idempotencySeenForAppend: idempotencySeen,
+    });
+
+    const primerRows = [...firstAppend, ...secondAppend].filter(
+      (e) =>
+        e.type === "agent-input-added" &&
+        (e as { idempotencyKey?: string }).idempotencyKey === CODEMODE_PRIMER_IDEMPOTENCY_KEY,
+    );
+    expect(primerRows).toHaveLength(1);
+  });
+
+  test("first afterAppend emits codemode primer; second turn does not re-emit", async () => {
+    const processor = createProcessorForTests();
+    const { runtime } = createTestRuntime();
+    const event = asEvent(
+      SystemPromptUpdatedEventInput.parse({
+        type: "system-prompt-updated",
+        payload: { systemPrompt: "be helpful" },
+      }),
+    );
+    const reduced = processor.reduce({ state: processor.initialState, event })!;
+    const { appended } = await runAfterAppend({ processor, event, state: reduced, runtime });
+    expect(appended[0]).toMatchObject({
+      type: "agent-input-added",
+      idempotencyKey: CODEMODE_PRIMER_IDEMPOTENCY_KEY,
+      payload: {
+        role: "user",
+        triggerLlmRequest: { behaviour: "dont-trigger-request" },
+      },
+    });
+    expect((appended[0] as { payload: { content: string } }).payload.content).toContain("codemode");
+
+    const primerEvent = asEvent(
+      AgentInputAddedEventInput.parse({
+        type: "agent-input-added",
+        idempotencyKey: CODEMODE_PRIMER_IDEMPOTENCY_KEY,
+        payload: (appended[0] as { payload: AgentInputAddedPayload }).payload,
+      }),
+    );
+    const stateAfterPrimer = processor.reduce({ state: reduced, event: primerEvent })!;
+    expect(stateAfterPrimer.hasAppendedCodemodePrompt).toBe(true);
+
+    const userEvent = asEvent(
+      AgentInputAddedEventInput.parse({
+        type: "agent-input-added",
+        payload: { role: "user", content: "hi" },
+      }),
+    );
+    const reducedUser = processor.reduce({ state: stateAfterPrimer, event: userEvent })!;
+    const { appended: second } = await runAfterAppend({
+      processor,
+      event: userEvent,
+      state: reducedUser,
+      runtime,
+    });
+    const primerAgain = second.some(
+      (e) =>
+        e.type === "agent-input-added" &&
+        (e as { idempotencyKey?: string }).idempotencyKey === CODEMODE_PRIMER_IDEMPOTENCY_KEY,
+    );
+    expect(primerAgain).toBe(false);
+  });
+
+  test("tool-provider-config-updated upsert without getTypesCallable says the API surface is missing", async () => {
+    const processor = createProcessorForTests();
+    const { runtime } = createTestRuntime();
+    const exec = {
+      kind: "rpc" as const,
+      target: {
+        type: "durable-object" as const,
+        binding: { $binding: "MCP_CLIENT" },
+        address: { type: "name" as const, name: "cloudflare-docs" },
+      },
+      rpcMethod: "callTool",
+      argsMode: "object" as const,
+    };
+    const upsert = asEvent(
+      ToolProviderConfigUpdatedEventInput.parse({
+        type: "tool-provider-config-updated",
+        payload: { slug: "mcp", executeCallable: exec },
+      }),
+    );
+    const reduced = processor.reduce({
+      state: stateWithPrimerAlreadyApplied(processor),
+      event: upsert,
+    })!;
+    const { appended } = await runAfterAppend({
+      processor,
+      event: upsert,
+      state: reduced,
+      runtime,
+    });
+    const explainer = appended.find((e) => e.type === "agent-input-added");
+    expect(explainer).toBeDefined();
+    const content = (explainer as { payload: { content: string } }).payload.content;
+    expect(content).toContain("Tool provider `mcp`");
+    expect(content).toContain("`mcp.<tool>(...)`");
+    expect(content).toContain("No generated API surface was attached");
+  });
+
+  test("tool-provider-config-updated upsert with getTypesCallable includes resolved types in explainer", async () => {
+    const mockTypesService = {
+      fetch: vi.fn(async () => {
+        return new Response(JSON.stringify({ types: "declare const demoNs: { ping(): string }" }), {
+          headers: { "content-type": "application/json" },
+        });
+      }),
+    } as unknown as Fetcher;
+    const mockExecService = {
+      fetch: vi.fn(async () => {
+        return new Response(JSON.stringify({ ok: true }), {
+          headers: { "content-type": "application/json" },
+        });
+      }),
+    } as unknown as Fetcher;
+    const processor = createIterateAgentProcessor({
+      loader: unreachable("loader"),
+      outboundFetch: unreachable("outboundFetch"),
+      env: {
+        MOCK_TYPES: mockTypesService,
+        MOCK_EXEC: mockExecService,
+      } as CloudflareEnv,
+    });
+    const { runtime } = createTestRuntime();
+    const getTypesCallable = {
+      kind: "fetch" as const,
+      target: { type: "service" as const, binding: { $binding: "MOCK_TYPES" } },
+    };
+    const executeCallable = {
+      kind: "fetch" as const,
+      target: { type: "service" as const, binding: { $binding: "MOCK_EXEC" } },
+    };
+    const upsert = asEvent(
+      ToolProviderConfigUpdatedEventInput.parse({
+        type: "tool-provider-config-updated",
+        payload: { slug: "demoNs", executeCallable, getTypesCallable },
+      }),
+    );
+    const reduced = processor.reduce({
+      state: stateWithPrimerAlreadyApplied(processor),
+      event: upsert,
+    })!;
+    const { appended } = await runAfterAppend({
+      processor,
+      event: upsert,
+      state: reduced,
+      runtime,
+    });
+    const explainer = appended.find((e) => e.type === "agent-input-added");
+    expect(explainer).toBeDefined();
+    const content = (explainer as { payload: { content: string } }).payload.content;
+    expect(content).toContain("Complete generated API surface for `demoNs`");
+    expect(content).toContain("```ts\ndeclare const demoNs: { ping(): string }\n```");
+    expect(mockTypesService.fetch).toHaveBeenCalled();
+  });
+
+  test("tool-provider-config-updated upsert when getTypesCallable fails explains the type-loading failure", async () => {
+    const throwingTypes = {
+      fetch: vi.fn(() => Promise.reject(new Error("boom"))),
+    } as unknown as Fetcher;
+    const mockExecService = {
+      fetch: vi.fn(async () => {
+        return new Response(JSON.stringify({ ok: true }), {
+          headers: { "content-type": "application/json" },
+        });
+      }),
+    } as unknown as Fetcher;
+    const processor = createIterateAgentProcessor({
+      loader: unreachable("loader"),
+      outboundFetch: unreachable("outboundFetch"),
+      env: {
+        MOCK_TYPES: throwingTypes,
+        MOCK_EXEC: mockExecService,
+      } as CloudflareEnv,
+    });
+    const { runtime } = createTestRuntime();
+    const getTypesCallable = {
+      kind: "fetch" as const,
+      target: { type: "service" as const, binding: { $binding: "MOCK_TYPES" } },
+    };
+    const executeCallable = {
+      kind: "fetch" as const,
+      target: { type: "service" as const, binding: { $binding: "MOCK_EXEC" } },
+    };
+    const upsert = asEvent(
+      ToolProviderConfigUpdatedEventInput.parse({
+        type: "tool-provider-config-updated",
+        payload: { slug: "mcp", executeCallable, getTypesCallable },
+      }),
+    );
+    const reduced = processor.reduce({
+      state: stateWithPrimerAlreadyApplied(processor),
+      event: upsert,
+    })!;
+    const { appended } = await runAfterAppend({
+      processor,
+      event: upsert,
+      state: reduced,
+      runtime,
+    });
+    const explainer = appended.find((e) => e.type === "agent-input-added");
+    expect(explainer).toBeDefined();
+    const content = (explainer as { payload: { content: string } }).payload.content;
+    expect(content).toContain("Tool provider `mcp`");
+    expect(content).toContain("Failed to load the generated API surface for `mcp`: boom");
+    expect(content).not.toContain("declare const");
+  });
+
+  test("tool-provider-config-updated delete does not emit provider explainer", async () => {
+    const processor = createProcessorForTests();
+    const { runtime } = createTestRuntime();
+    const exec = {
+      kind: "rpc" as const,
+      target: {
+        type: "durable-object" as const,
+        binding: { $binding: "MCP_CLIENT" },
+        address: { type: "name" as const, name: "cloudflare-docs" },
+      },
+      rpcMethod: "callTool",
+      argsMode: "object" as const,
+    };
+    let s = processor.reduce({
+      state: stateWithPrimerAlreadyApplied(processor),
+      event: asEvent(
+        ToolProviderConfigUpdatedEventInput.parse({
+          type: "tool-provider-config-updated",
+          payload: { slug: "mcp", executeCallable: exec },
+        }),
+      ),
+    })!;
+    const deleteEvent = asEvent(
+      ToolProviderConfigUpdatedEventInput.parse({
+        type: "tool-provider-config-updated",
+        payload: { slug: "mcp", executeCallable: null },
+      }),
+    );
+    s = processor.reduce({ state: s, event: deleteEvent })!;
+    const { appended } = await runAfterAppend({
+      processor,
+      event: deleteEvent,
+      state: s,
+      runtime,
+    });
+    expect(appended.filter((e) => e.type === "agent-input-added")).toEqual([]);
   });
 });

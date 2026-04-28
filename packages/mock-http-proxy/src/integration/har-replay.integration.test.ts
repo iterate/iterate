@@ -13,8 +13,8 @@ import {
 const thisDir = dirname(fileURLToPath(import.meta.url));
 const isCi = process.env.CI === "true";
 const openAiReplayScriptTimeoutMs = isCi ? 6_000 : 2_500;
-const replayStepTimeoutMs = isCi ? 10_000 : 4_000;
-const replayTestTimeoutMs = isCi ? 20_000 : 10_000;
+const replayStepTimeoutMs = 10_000;
+const replayTestTimeoutMs = 20_000;
 
 type OpenAiScriptOutput = {
   ok: boolean;

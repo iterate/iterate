@@ -12,8 +12,6 @@ import type { TestContext } from "vitest";
 import { createEventsHelpers, type EventsHelpers } from "./events-stream.ts";
 import { E2E_EVENTS_BASE_URL_KEY, E2E_REPO_ROOT_KEY, E2E_RUN_SLUG_KEY } from "./provide-keys.ts";
 
-export { E2E_EVENTS_BASE_URL_KEY, E2E_REPO_ROOT_KEY, E2E_RUN_SLUG_KEY } from "./provide-keys.ts";
-
 export interface E2EContext {
   executionSuffix: string;
   runSlug: string;

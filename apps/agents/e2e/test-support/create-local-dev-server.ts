@@ -8,7 +8,7 @@ import {
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 
-export interface LocalDevServerHandle {
+interface LocalDevServerHandle {
   publicUrl: string;
   callbackUrl: string;
   baseUrl: string;

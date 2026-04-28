@@ -4,20 +4,22 @@ import {
   StreamSocketFrame,
 } from "@iterate-com/events-contract";
 import { Agent, type Connection, type WSMessage } from "agents";
+import { CodemodeBlockAddedEventInput } from "~/durable-objects/codemode-processor-types.ts";
 import {
-  AgentInputAddedEventInput,
   type AiChatRequest,
   LlmRequestCancelledEventInput,
   LlmRequestCompletedEventInput,
+  LlmRequestFailedEventInput,
   LlmRequestStartedEventInput,
-} from "~/durable-objects/agent-processor-types.ts";
+} from "~/durable-objects/agent-loop-processor-types.ts";
 import {
   buildLlmChatRequest,
-  createIterateAgentProcessor,
   extractLlmAssistantText,
-  IterateAgentProcessorState,
-  type ProcessorRuntime,
-} from "~/durable-objects/agent-processor.ts";
+} from "~/durable-objects/agent-loop-processor.ts";
+import { createIterateAgentProcessor } from "~/durable-objects/agent-processor.ts";
+import { IterateAgentProcessorState } from "~/durable-objects/agent-processor-types.ts";
+import { type ProcessorRuntime } from "~/durable-objects/agent-processor-shared.ts";
+import { extractCodemodeScriptFromAssistantResponse } from "~/durable-objects/codemode-processor.ts";
 import type { CloudflareEnv } from "~/lib/worker-env.d.ts";
 
 const STREAM_PROCESSOR_STATE_KV_KEY = "iterate-agent:stream-processor-state";
@@ -78,7 +80,7 @@ export class IterateAgent extends Agent<CloudflareEnv> {
    *
    * URL shape: `{host}/agents/iterate-agent/{durable-object-name}` (see Agents SDK routing).
    */
-  async onMessage(connection: Connection, message: WSMessage) {
+  async onMessage(_connection: Connection, message: WSMessage) {
     const t0 = Date.now();
     const log = this.#log.bind(this);
 
@@ -294,11 +296,12 @@ export class IterateAgent extends Agent<CloudflareEnv> {
 
   /**
    * Drives a single LLM request through to a terminal event:
-   * - `agent-input-added` (role: assistant) + `llm-request-completed` on success
+   * - `codemode-block-added` + `llm-request-completed` on success
    * - nothing on cancel (the cancellation event was already appended by the
    *   processor that called `cancelLlmRequest`)
-   * - `llm-request-completed` with empty assistant text on error (TEMP — until
-   *   we add a dedicated error event type)
+   * - `llm-request-failed` on provider errors or response shapes we cannot
+   *   turn into assistant text. The failed event is still terminal: reducers
+   *   clear `currentRequest`, and queued triggers may continue the loop.
    */
   async #runLlmRequestUntilSettled(args: {
     requestId: string;
@@ -308,47 +311,101 @@ export class IterateAgent extends Agent<CloudflareEnv> {
   }) {
     const { requestId, controller, stateAtStart, body } = args;
     const t0 = Date.now();
+    let raw: unknown;
     try {
-      const raw = await this.env.AI.run(
+      raw = await this.env.AI.run(
         stateAtStart.llmConfig.model as never,
         body as never,
         stateAtStart.llmConfig.runOpts as never,
       );
-      if (controller.signal.aborted || this.#inflight?.requestId !== requestId) {
-        this.#log("runLlmRequest.discardSettledAfterCancel", {
-          requestId,
-          ms: Date.now() - t0,
-        });
-        return;
-      }
-      const text = extractLlmAssistantText(raw);
-      this.#inflight = null;
+    } catch (error) {
       this.#appendToStream({
-        event: AgentInputAddedEventInput.parse({
-          type: "agent-input-added",
+        event: LlmRequestFailedEventInput.parse({
+          type: "llm-request-failed",
           payload: {
-            role: "assistant",
-            content: text,
-            triggerLlmRequest: { behaviour: "dont-trigger-request" },
+            requestId,
+            durationMs: Date.now() - t0,
+            error: { message: stringifyError(error) },
           },
         }),
       });
-      const durationMs = Date.now() - t0;
-      this.#appendToStream({
-        event: LlmRequestCompletedEventInput.parse({
-          type: "llm-request-completed",
-          payload: { requestId, rawResponse: raw, durationMs },
-        }),
-      });
-      this.#log("runLlmRequest.completed", { requestId, ms: durationMs });
-    } catch (error) {
       if (this.#inflight?.requestId === requestId) this.#inflight = null;
       this.#logError("runLlmRequest.failed", {
         requestId,
         ms: Date.now() - t0,
         error: stringifyError(error),
       });
+      return;
     }
+
+    if (controller.signal.aborted || this.#inflight?.requestId !== requestId) {
+      this.#log("runLlmRequest.discardSettledAfterCancel", {
+        requestId,
+        ms: Date.now() - t0,
+      });
+      return;
+    }
+
+    let text: string;
+    try {
+      text = extractLlmAssistantText(raw);
+    } catch (error) {
+      const durationMs = Date.now() - t0;
+      if (this.#inflight?.requestId === requestId) this.#inflight = null;
+      this.#appendToStream({
+        event: LlmRequestFailedEventInput.parse({
+          type: "llm-request-failed",
+          payload: {
+            requestId,
+            rawResponse: raw,
+            durationMs,
+            error: { message: stringifyError(error) },
+          },
+        }),
+      });
+      this.#logError("runLlmRequest.failed", {
+        requestId,
+        ms: durationMs,
+        error: stringifyError(error),
+      });
+      return;
+    }
+
+    const script = extractCodemodeScriptFromAssistantResponse(text);
+    const durationMs = Date.now() - t0;
+    if (script == null) {
+      if (this.#inflight?.requestId === requestId) this.#inflight = null;
+      this.#appendToStream({
+        event: LlmRequestFailedEventInput.parse({
+          type: "llm-request-failed",
+          payload: {
+            requestId,
+            rawResponse: raw,
+            durationMs,
+            error: {
+              message:
+                "LLM response did not contain a codemode block. Respond with one fenced js block that calls `webchat.sendMessage({ message })`.",
+            },
+          },
+        }),
+      });
+      return;
+    }
+
+    this.#inflight = null;
+    this.#appendToStream({
+      event: LlmRequestCompletedEventInput.parse({
+        type: "llm-request-completed",
+        payload: { requestId, rawResponse: raw, durationMs },
+      }),
+    });
+    this.#appendToStream({
+      event: CodemodeBlockAddedEventInput.parse({
+        type: "codemode-block-added",
+        payload: { script },
+      }),
+    });
+    this.#log("runLlmRequest.completed", { requestId, ms: durationMs });
   }
 
   async onRequest(request: Request): Promise<Response> {

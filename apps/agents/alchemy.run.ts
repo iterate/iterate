@@ -105,6 +105,14 @@ const mcpClient = DurableObjectNamespace("mcp-client", {
   className: "MCPClient",
   sqlite: true,
 });
+const openApiToolClient = DurableObjectNamespace("openapi-tool-client", {
+  className: "OpenApiToolClient",
+  sqlite: true,
+});
+const slackApi = DurableObjectNamespace("slack-api", {
+  className: "SlackApi",
+  sqlite: true,
+});
 
 export const worker = await TanStackStart(APP_NAME, {
   name: workerName,
@@ -114,6 +122,8 @@ export const worker = await TanStackStart(APP_NAME, {
     ITERATE_AGENT: iterateAgent,
     CHILD_STREAM_AUTO_SUBSCRIBER: childStreamAutoSubscriber,
     MCP_CLIENT: mcpClient,
+    OPENAPI_TOOL_CLIENT: openApiToolClient,
+    SLACK_API: slackApi,
     LOADER: WorkerLoader(),
     AI: Ai(),
     APP_CONFIG: alchemy.secret(JSON.stringify(rawAppConfig, null, 2)),

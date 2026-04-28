@@ -12,6 +12,8 @@ import * as schema from "~/db/schema.ts";
 import { ChildStreamAutoSubscriber } from "~/durable-objects/child-stream-auto-subscriber.ts";
 import { IterateAgent } from "~/durable-objects/iterate-agent.ts";
 import { MCPClient } from "~/durable-objects/mcp-client.ts";
+import { OpenApiToolClient } from "~/durable-objects/openapi-tool-client.ts";
+import { SlackApi } from "~/durable-objects/slack-api.ts";
 
 const nativeFetch = globalThis.fetch.bind(globalThis);
 const config = parseAppConfigFromEnv({
@@ -73,4 +75,4 @@ export default {
   },
 };
 
-export { ChildStreamAutoSubscriber, IterateAgent, MCPClient };
+export { ChildStreamAutoSubscriber, IterateAgent, MCPClient, OpenApiToolClient, SlackApi };

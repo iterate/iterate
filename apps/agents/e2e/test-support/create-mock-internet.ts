@@ -11,7 +11,7 @@ import { getProjectUrl } from "../../../events/src/lib/project-slug.ts";
 import { mcpStreamableHttpGetStubHandlers } from "./mcp-streamable-http-get-stub-handlers.ts";
 import { prepareAgentsHarForReplay } from "./prepare-agents-har-for-replay.ts";
 
-export interface MockInternetHandle {
+interface MockInternetHandle {
   url: string;
   getHar(): ReturnType<MockHttpServerFixture["getHar"]>;
   use: MockHttpServerFixture["use"];

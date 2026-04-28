@@ -55,7 +55,14 @@ export function AppSidebar() {
               {agents.map((agent) => (
                 <SidebarMenuItem key={agent.streamPath}>
                   <SidebarMenuButton
-                    render={<a href={agent.streamViewerUrl} target="_blank" rel="noreferrer" />}
+                    render={
+                      <a
+                        href={agent.streamViewerUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        aria-label={`Open stream ${agent.streamPath}`}
+                      />
+                    }
                   >
                     <div className="grid min-w-0 flex-1 text-left leading-tight">
                       <span className="truncate font-medium">{agent.streamPath}</span>

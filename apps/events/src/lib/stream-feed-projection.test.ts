@@ -581,7 +581,7 @@ describe("projectWireToFeed", () => {
       {
         kind: "message",
         role: "user",
-        content: [{ type: "text", text: "Run a quick bash command." }],
+        content: [{ type: "markdown", text: "Run a quick bash command." }],
         timestamp: messages[0]!.timestamp,
       },
       {
@@ -593,7 +593,9 @@ describe("projectWireToFeed", () => {
       {
         kind: "message",
         role: "user",
-        content: [{ type: "text", text: "Bash result:\nstdout:\nhello\nstderr:\n\nexitCode: 0\n" }],
+        content: [
+          { type: "markdown", text: "Bash result:\nstdout:\nhello\nstderr:\n\nexitCode: 0\n" },
+        ],
         timestamp: messages[2]!.timestamp,
       },
     ]);
@@ -626,16 +628,92 @@ describe("projectWireToFeed", () => {
       {
         kind: "message",
         role: "user",
-        content: [{ type: "text", text: "Tell me a joke I never heard before" }],
+        content: [{ type: "markdown", text: "Tell me a joke I never heard before" }],
         timestamp: messages[0]!.timestamp,
       },
       {
         kind: "message",
         role: "assistant",
-        content: [{ type: "text", text: "I would, but then I'd have to pretend it was original." }],
+        content: [
+          { type: "markdown", text: "I would, but then I'd have to pretend it was original." },
+        ],
         timestamp: messages[1]!.timestamp,
       },
     ]);
+  });
+
+  test("projects webchat ingress and responses as chat messages", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: 1,
+        type: "webchat-message-received",
+        payload: { content: "hello agent" },
+      }),
+      createEvent({
+        offset: 2,
+        type: "webchat-response-added",
+        payload: { message: "hello human" },
+      }),
+    ]);
+
+    const messages = feed.filter(
+      (item): item is Extract<StreamFeedItem, { kind: "message" }> => item.kind === "message",
+    );
+
+    expect(messages).toEqual([
+      {
+        kind: "message",
+        role: "user",
+        content: [{ type: "text", text: "hello agent" }],
+        timestamp: messages[0]!.timestamp,
+      },
+      {
+        kind: "message",
+        role: "assistant",
+        content: [{ type: "text", text: "hello human" }],
+        timestamp: messages[1]!.timestamp,
+      },
+    ]);
+  });
+
+  test("projects agent status updates into status rows", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: 1,
+        type: "agent-status-updated",
+        payload: {
+          status: "working",
+          reason: "llm-request-started",
+          requestId: "req_1",
+        },
+      }),
+      createEvent({
+        offset: 2,
+        type: "agent-status-updated",
+        payload: {
+          status: "idle",
+          reason: "codemode-result-added",
+        },
+      }),
+    ]);
+
+    expect(feed.map((item) => item.kind)).toEqual([
+      "event",
+      "agent-status",
+      "event",
+      "agent-status",
+    ]);
+    expect(feed[1]).toMatchObject({
+      kind: "agent-status",
+      status: "working",
+      reason: "llm-request-started",
+      requestId: "req_1",
+    });
+    expect(feed[3]).toMatchObject({
+      kind: "agent-status",
+      status: "idle",
+      reason: "codemode-result-added",
+    });
   });
 
   test("projects bashmode blocks into dedicated shell cards", () => {
@@ -691,7 +769,7 @@ describe("projectWireToFeed", () => {
       {
         kind: "message",
         role: "user",
-        content: [{ type: "text", text: "Say hello in two words." }],
+        content: [{ type: "markdown", text: "Say hello in two words." }],
         timestamp: messages[0]!.timestamp,
       },
       {
@@ -1082,6 +1160,48 @@ describe("projectWireToFeed", () => {
       success: true,
       stdout: "hello",
       codePath: "/tmp/1/code.ts",
+    });
+  });
+
+  test("projects agents codemode script and result events into dedicated cards", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: 1,
+        type: "codemode-block-added",
+        payload: {
+          script: "async () => {\n  return await webchat.sendMessage({ message: 'hi' });\n}",
+        },
+      }),
+      createEvent({
+        offset: 2,
+        type: "codemode-result-added",
+        payload: {
+          result: { ok: true },
+          durationMs: 17,
+          logs: ["sent webchat response"],
+        },
+      }),
+    ]);
+
+    expect(feed.map((item) => item.kind)).toEqual([
+      "event",
+      "codemode-block",
+      "event",
+      "codemode-result",
+    ]);
+    expect(feed[1]).toMatchObject({
+      kind: "codemode-block",
+      blockId: "codemode",
+      language: "js",
+      code: expect.stringContaining("webchat.sendMessage"),
+    });
+    expect(feed[3]).toMatchObject({
+      kind: "codemode-result",
+      blockId: "codemode",
+      success: true,
+      durationMs: 17,
+      stdout: expect.stringContaining("sent webchat response"),
+      stderr: "",
     });
   });
 

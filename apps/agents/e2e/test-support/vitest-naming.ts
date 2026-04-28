@@ -1,46 +1,7 @@
-import { randomBytes } from "node:crypto";
-import { relative } from "node:path";
 import { slugify } from "@iterate-com/shared/slugify";
-
-export const VITEST_RUN_SLUG_KEY = "VITEST_RUN_SLUG";
 
 export function createVitestRunSlug(now: Date = new Date()) {
   return slugify(`vitest-run-${formatDateTime(now)}`);
-}
-
-export function createTestExecutionSuffix(now: Date = new Date()) {
-  return `${formatDateTime(now)}-${randomBytes(3).toString("hex")}`;
-}
-
-export function createEventsStreamPath(args: {
-  repoRoot: string;
-  testFilePath: string;
-  testFullName: string;
-  executionSuffix: string;
-}) {
-  const relativeFilePath = relative(args.repoRoot, args.testFilePath).replaceAll("\\", "/");
-  const strippedFullName = stripFilePrefix({
-    relativeFilePath,
-    testFullName: args.testFullName,
-  });
-  const hierarchy = strippedFullName.split(" > ").filter(Boolean);
-  const fileSegments = relativeFilePath
-    .split("/")
-    .filter(Boolean)
-    .map((segment) => slugify(segment));
-  const hierarchySegments = hierarchy.map((segment) => slugify(segment));
-  const executionSegment = slugify(args.executionSuffix);
-
-  return `/${[...fileSegments, ...hierarchySegments, executionSegment].join("/")}`;
-}
-
-function stripFilePrefix(args: { relativeFilePath: string; testFullName: string }) {
-  const prefix = `${args.relativeFilePath} > `;
-  if (args.testFullName.startsWith(prefix)) {
-    return args.testFullName.slice(prefix.length);
-  }
-
-  return args.testFullName;
 }
 
 function formatDateTime(date: Date) {

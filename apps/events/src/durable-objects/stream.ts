@@ -4,6 +4,7 @@ import {
   type DestroyStreamResult,
   Event,
   EventInput,
+  NormalizedEventInput,
   type ProjectSlug,
   type StreamCursor,
   type StreamMetadataUpdatedEvent,
@@ -279,7 +280,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    *   parse → idempotency check → beforeAppend → build event → reduce → commit → afterAppend
    */
   append(inputEvent: EventInput): Event {
-    const input = EventInput.parse(inputEvent);
+    const input = NormalizedEventInput.parse(inputEvent);
 
     if (input.idempotencyKey != null) {
       const existingEvent = this.getEventByIdempotencyKey(input.idempotencyKey);

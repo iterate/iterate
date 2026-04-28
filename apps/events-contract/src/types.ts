@@ -181,26 +181,15 @@ const builtInEventOptions = [
 const [firstBuiltInType, ...restBuiltInTypes] = builtInEventInputOptions.map(
   (schema) => schema.shape.type,
 );
-export const BuiltInEventType = z.union([firstBuiltInType, ...restBuiltInTypes]);
+const BuiltInEventType = z.union([firstBuiltInType, ...restBuiltInTypes]);
 
-const GenericEventType = EventTypeSchema.refine(
-  (value) => !BuiltInEventType.safeParse(value).success,
-  {
-    message: "Built-in event types must use their built-in payload schema.",
-  },
-);
-
-export const GenericEventInput = GenericEventInputBase.extend({
-  type: GenericEventType,
-});
-export const GenericEvent = GenericEventBase.extend({
-  type: GenericEventType,
-});
+export const GenericEventInput = GenericEventInputBase;
+export const GenericEvent = GenericEventBase;
 
 export const BuiltInEventInput = z.discriminatedUnion("type", builtInEventInputOptions);
-export const BuiltInEvent = z.discriminatedUnion("type", builtInEventOptions);
+const BuiltInEvent = z.discriminatedUnion("type", builtInEventOptions);
 export type BuiltInEventInput = z.input<typeof BuiltInEventInput>;
-export type BuiltInEvent = z.infer<typeof BuiltInEvent>;
+type BuiltInEvent = z.infer<typeof BuiltInEvent>;
 
 type WithAutocompleteEventType<T extends { type: string }> = Omit<T, "type"> & {
   type: EventType;
@@ -210,11 +199,36 @@ export type EventType = BuiltInEventInput["type"] | (z.infer<typeof EventTypeSch
 export type GenericEventInput = WithAutocompleteEventType<z.input<typeof GenericEventInput>>;
 export type GenericEvent = WithAutocompleteEventType<z.infer<typeof GenericEvent>>;
 
-export const EventInput = z.union([BuiltInEventInput, GenericEventInput]);
-export type EventInput = BuiltInEventInput | GenericEventInput;
+export const EventInput = GenericEventInputBase.extend({});
+export type EventInput = GenericEventInput;
 
-export const Event = z.union([BuiltInEvent, GenericEvent]);
-export type Event = BuiltInEvent | GenericEvent;
+export const Event = GenericEventBase.extend({});
+export type Event = GenericEvent;
+
+const ValidatedGenericEventType = EventTypeSchema.refine(
+  (value) => !BuiltInEventType.safeParse(value).success,
+  {
+    message: "Built-in event types must use their built-in payload schema.",
+  },
+);
+const ValidatedGenericEventInput = GenericEventInputBase.extend({
+  type: ValidatedGenericEventType,
+});
+
+const ValidatedEventInput = z.union([BuiltInEventInput, ValidatedGenericEventInput]);
+
+export const NormalizedEventInput = ValidatedEventInput.catch((ctx) =>
+  InvalidEventAppendedEventInput.parse({
+    type: "https://events.iterate.com/events/stream/invalid-event-appended",
+    payload: {
+      rawInput: toJsonValue(ctx.input),
+      error: prettifyValidatedEventInputError({
+        input: ctx.input,
+        fallbackIssues: ctx.error.issues,
+      }),
+    },
+  }),
+) as unknown as z.ZodType<z.output<typeof EventInput>, EventInput>;
 
 const ProcessorsState = z.object({
   "circuit-breaker": CircuitBreakerState,
@@ -239,3 +253,55 @@ export const DestroyStreamResult = z.object({
   finalStateByPath: z.record(z.string(), z.object({ finalState: StreamState.nullable() })),
 });
 export type DestroyStreamResult = z.infer<typeof DestroyStreamResult>;
+
+type JsonValue = null | string | number | boolean | JsonValue[] | { [key: string]: JsonValue };
+
+function prettifyValidatedEventInputError(args: {
+  input: unknown;
+  fallbackIssues: z.ZodError["issues"];
+}) {
+  const specificResult = hasBuiltInEventType(args.input)
+    ? BuiltInEventInput.safeParse(args.input)
+    : GenericEventInput.safeParse(args.input);
+
+  if (!specificResult.success) {
+    return z.prettifyError(specificResult.error);
+  }
+
+  return z.prettifyError(new z.ZodError(args.fallbackIssues));
+}
+
+function hasBuiltInEventType(input: unknown) {
+  if (typeof input !== "object" || input == null || Array.isArray(input)) {
+    return false;
+  }
+
+  return BuiltInEventType.safeParse((input as Record<string, unknown>).type).success;
+}
+
+function toJsonValue(input: unknown): JsonValue {
+  if (input === undefined) {
+    return null;
+  }
+
+  if (
+    input === null ||
+    typeof input === "string" ||
+    typeof input === "number" ||
+    typeof input === "boolean"
+  ) {
+    return input;
+  }
+
+  if (Array.isArray(input)) {
+    return input.map((value) => toJsonValue(value));
+  }
+
+  if (typeof input === "object") {
+    return Object.fromEntries(
+      Object.entries(input).map(([key, value]) => [key, toJsonValue(value)]),
+    );
+  }
+
+  return null;
+}

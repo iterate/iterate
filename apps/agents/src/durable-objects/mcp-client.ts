@@ -46,7 +46,7 @@ interface McpToolCallResult {
   content?: McpTextContent[];
 }
 
-export interface GetTypesPayload {
+interface GetTypesPayload {
   /**
    * Sandbox namespace the caller intends to register this provider under.
    * `generateTypesFromJsonSchema` always emits `declare const codemode:`,
@@ -56,11 +56,11 @@ export interface GetTypesPayload {
   namespace?: string;
 }
 
-export interface GetTypesResponse {
+interface GetTypesResponse {
   types: string;
 }
 
-export interface CallToolPayload {
+interface CallToolPayload {
   name: string;
   /**
    * Positional argument array forwarded by codemode `dynamicTools.callTool`.
@@ -164,7 +164,7 @@ async function readSingleSseMessage(response: Response): Promise<string> {
   if (!reader) throw new Error("MCP SSE response had no body");
   const decoder = new TextDecoder();
   let buffer = "";
-  let dataLines: string[] = [];
+  const dataLines: string[] = [];
   while (true) {
     const { value, done } = await reader.read();
     if (value) buffer += decoder.decode(value, { stream: true });

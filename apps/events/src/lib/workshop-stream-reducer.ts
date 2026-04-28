@@ -66,23 +66,23 @@ type OpenAiResponseEventAddedPayload = {
 };
 
 type CodemodeBlockAddedPayload = {
-  requestId: string;
+  requestId?: string;
   blockId: string;
   language: string;
   code: string;
 };
 
 type CodemodeResultAddedPayload = {
-  requestId: string;
+  requestId?: string;
   blockId: string;
-  blockCount: number;
+  blockCount?: number;
   success: boolean;
-  exitCode: number;
+  exitCode?: number;
   stdout: string;
   stderr: string;
-  durationMs: number;
-  codePath: string;
-  outputPath: string;
+  durationMs?: number;
+  codePath?: string;
+  outputPath?: string;
 };
 
 type BashmodeBlockAddedPayload = {
@@ -264,7 +264,7 @@ export function buildWorkshopSemanticInsertions(
       appendInsertion(insertionsByOffset, event.offset, {
         kind: "message",
         role: payload.role,
-        content: [{ type: "text", text: payload.content }],
+        content: [{ type: "markdown", text: payload.content }],
         timestamp: getTimestamp(event.createdAt),
       });
 
@@ -1219,6 +1219,14 @@ function isTerminalOpenAiResponseStreamEvent(event: OpenAiResponseStreamEvent) {
 }
 
 function parseCodemodeBlockAddedPayload(payload: unknown): CodemodeBlockAddedPayload | null {
+  if (isRecord(payload) && typeof payload.script === "string") {
+    return {
+      blockId: "codemode",
+      language: "js",
+      code: payload.script,
+    };
+  }
+
   if (
     !isRecord(payload) ||
     typeof payload.requestId !== "string" ||
@@ -1238,6 +1246,20 @@ function parseCodemodeBlockAddedPayload(payload: unknown): CodemodeBlockAddedPay
 }
 
 function parseCodemodeResultAddedPayload(payload: unknown): CodemodeResultAddedPayload | null {
+  if (isRecord(payload) && "result" in payload) {
+    const error = typeof payload.error === "string" ? payload.error : "";
+    const logs = Array.isArray(payload.logs)
+      ? payload.logs.filter((log): log is string => typeof log === "string")
+      : [];
+    return {
+      blockId: "codemode",
+      success: error.length === 0,
+      stdout: formatCodemodeValueWithLogs(payload.result, logs),
+      stderr: error,
+      durationMs: typeof payload.durationMs === "number" ? payload.durationMs : undefined,
+    };
+  }
+
   if (
     !isRecord(payload) ||
     typeof payload.requestId !== "string" ||
@@ -1268,6 +1290,21 @@ function parseCodemodeResultAddedPayload(payload: unknown): CodemodeResultAddedP
     codePath: payload.codePath,
     outputPath: payload.outputPath,
   };
+}
+
+function formatCodemodeValueWithLogs(value: unknown, logs: readonly string[]) {
+  const result = typeof value === "undefined" ? "undefined" : stringifyUnknown(value);
+  if (logs.length === 0) return result;
+  return [`Result:`, result, "", "Logs:", ...logs].join("\n");
+}
+
+function stringifyUnknown(value: unknown) {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
 }
 
 function parseBashmodeBlockAddedPayload(payload: unknown): BashmodeBlockAddedPayload | null {

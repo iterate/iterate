@@ -184,9 +184,18 @@ export interface StreamErrorOccurredFeedItem {
   raw: Event;
 }
 
+export interface AgentStatusFeedItem {
+  kind: "agent-status";
+  status: "working" | "idle";
+  reason: string;
+  requestId?: string;
+  timestamp: number;
+  raw: Event;
+}
+
 export interface CodemodeBlockFeedItem {
   kind: "codemode-block";
-  requestId: string;
+  requestId?: string;
   blockId: string;
   language: string;
   code: string;
@@ -203,16 +212,16 @@ export interface BashmodeBlockFeedItem {
 
 export interface CodemodeResultFeedItem {
   kind: "codemode-result";
-  requestId: string;
+  requestId?: string;
   blockId: string;
-  blockCount: number;
+  blockCount?: number;
   success: boolean;
-  exitCode: number;
+  exitCode?: number;
   stdout: string;
   stderr: string;
-  durationMs: number;
-  codePath: string;
-  outputPath: string;
+  durationMs?: number;
+  codePath?: string;
+  outputPath?: string;
   timestamp: number;
   raw: Event;
 }
@@ -245,6 +254,7 @@ export type StreamFeedItem =
   | StreamPausedFeedItem
   | StreamResumedFeedItem
   | StreamErrorOccurredFeedItem
+  | AgentStatusFeedItem
   | CodemodeBlockFeedItem
   | BashmodeBlockFeedItem
   | CodemodeResultFeedItem

@@ -129,14 +129,6 @@ function getBrowserOrpcState() {
   return browserOrpcState;
 }
 
-export function getOrpcClient() {
-  if (typeof window === "undefined") {
-    return makeOrpcClient({ baseUrl: configuredBaseUrl });
-  }
-
-  return getBrowserOrpcState().client;
-}
-
 export function getOrpc() {
   if (typeof window === "undefined") {
     return createOrpcQueryUtils(makeOrpcClient({ baseUrl: configuredBaseUrl }));

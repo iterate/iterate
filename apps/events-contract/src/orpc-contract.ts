@@ -3,12 +3,9 @@ import { internalContract } from "@iterate-com/shared/apps/internal-router-contr
 import { z } from "zod";
 
 import {
-  BuiltInEventInput,
-  BuiltInEventType,
   DestroyStreamResult,
   Event,
   EventInput,
-  GenericEventInput,
   InvalidEventAppendedEventInput,
   StreamPath,
   StreamQuery,
@@ -187,23 +184,7 @@ export const eventsContract = oc.router({
 type JsonValue = null | string | number | boolean | JsonValue[] | { [key: string]: JsonValue };
 
 function prettifyAppendEventError(args: { input: unknown; fallbackIssues: z.ZodError["issues"] }) {
-  const specificResult = hasBuiltInEventType(args.input)
-    ? BuiltInEventInput.safeParse(args.input)
-    : GenericEventInput.safeParse(args.input);
-
-  if (!specificResult.success) {
-    return z.prettifyError(specificResult.error);
-  }
-
   return z.prettifyError(new z.ZodError(args.fallbackIssues));
-}
-
-function hasBuiltInEventType(input: unknown) {
-  if (typeof input !== "object" || input == null || Array.isArray(input)) {
-    return false;
-  }
-
-  return BuiltInEventType.safeParse((input as Record<string, unknown>).type).success;
 }
 
 function toJsonValue(input: unknown): JsonValue {
