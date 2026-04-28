@@ -74,33 +74,17 @@ type HasOnlyName<InitParams extends LifecycleInit> = keyof Omit<InitParams, "nam
 
 type GetOrInitializeDoStubOptions<
   TInstance extends DurableObjectBranded & LifecycleHooksMembers<LifecycleInit>,
-> = {
-  namespace: DurableObjectNamespace<TInstance>;
-  name: string;
-} & (HasOnlyName<InitParamsOf<TInstance>> extends true
-  ? { initParams?: LifecycleInitInput<InitParamsOf<TInstance>> }
-  : { initParams: LifecycleInitInput<InitParamsOf<TInstance>> });
-
-type CreateDoInitializerOptions<
-  TInstance extends DurableObjectBranded & LifecycleHooksMembers<LifecycleInit>,
-> = {
-  /**
-   * Canonical Durable Object naming rule for an init-param shape.
-   *
-   * Keep this function deterministic and side-effect free. Durable Object names
-   * are Cloudflare's stable identity primitive for `namespace.getByName(name)`,
-   * so deriving them in one reusable helper avoids call sites inventing
-   * incompatible names for the same logical object.
-   */
-  nameFromInitParams(initParams: LifecycleInitInput<InitParamsOf<TInstance>>): string;
-};
-
-type DerivedNameGetOrInitializeOptions<
-  TInstance extends DurableObjectBranded & LifecycleHooksMembers<LifecycleInit>,
-> = {
-  namespace: DurableObjectNamespace<TInstance>;
-  initParams: LifecycleInitInput<InitParamsOf<TInstance>>;
-};
+> =
+  | ({
+      namespace: DurableObjectNamespace<TInstance>;
+      name: string;
+    } & (HasOnlyName<InitParamsOf<TInstance>> extends true
+      ? { initParams?: LifecycleInitInput<InitParamsOf<TInstance>> }
+      : { initParams: LifecycleInitInput<InitParamsOf<TInstance>> }))
+  | {
+      namespace: DurableObjectNamespace<TInstance>;
+      initParams: InitParamsOf<TInstance>;
+    };
 
 /**
  * Type-only protected surface.
@@ -440,11 +424,25 @@ export function withLifecycleHooks<InitParams extends LifecycleInit>() {
  *
  * This keeps the helper honest: it cannot return a stub without the data
  * required to initialize it.
+ *
+ * Callers that derive names from init params can do that before calling the
+ * helper and pass a complete init object:
+ *
+ *   getOrInitializeDoStub({
+ *     namespace,
+ *     initParams: {
+ *       name: projectRoomName({ projectId, roomSlug }),
+ *       projectId,
+ *       roomSlug,
+ *     },
+ *   });
  */
 export async function getOrInitializeDoStub<
   TInstance extends DurableObjectBranded & LifecycleHooksMembers<LifecycleInit>,
 >(options: GetOrInitializeDoStubOptions<TInstance>) {
-  const { namespace, name, initParams } = options;
+  const { namespace } = options;
+  const name = "name" in options ? options.name : options.initParams.name;
+  const initParams = "name" in options ? options.initParams : options.initParams;
   const stub = namespace.getByName(name);
 
   // The options type only permits omitted initParams for name-only init shapes.
@@ -466,44 +464,4 @@ export async function getOrInitializeDoStub<
   } as unknown as InitParamsOf<TInstance>);
 
   return stub;
-}
-
-/**
- * Creates a small caller-side initializer for Durable Objects whose identity is
- * derived from init params.
- *
- * This deliberately wraps `getOrInitializeDoStub()` instead of introducing a
- * second lifecycle path. `withLifecycleHooks()` still owns the object-side
- * initialization contract; this helper only centralizes the stable
- * `initParams -> Durable Object name` rule that callers use before invoking
- * Cloudflare's `namespace.getByName(name)`.
- *
- * Example:
- *
- *   const projectRooms = createDoInitializer<ProjectRoom>({
- *     nameFromInitParams(params) {
- *       return `project-room:${params.projectId}:${params.roomSlug}`;
- *     },
- *   });
- *
- *   await projectRooms.getOrInitialize({
- *     namespace: env.PROJECT_ROOMS,
- *     initParams: { projectId: "proj_123", roomSlug: "general" },
- *   });
- */
-export function createDoInitializer<
-  TInstance extends DurableObjectBranded & LifecycleHooksMembers<LifecycleInit>,
->(options: CreateDoInitializerOptions<TInstance>) {
-  return {
-    nameFromInitParams: options.nameFromInitParams,
-    async getOrInitialize(getOptions: DerivedNameGetOrInitializeOptions<TInstance>) {
-      const name = options.nameFromInitParams(getOptions.initParams);
-
-      return await getOrInitializeDoStub({
-        namespace: getOptions.namespace,
-        name,
-        initParams: getOptions.initParams,
-      } as GetOrInitializeDoStubOptions<TInstance>);
-    },
-  };
 }

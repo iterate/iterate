@@ -8,7 +8,7 @@ import {
   type ListedRoom,
   type SchedulerTestRoom,
 } from "../test-harness/initialize-fronting-worker.ts";
-import { createDoInitializer, getOrInitializeDoStub } from "./with-lifecycle-hooks.ts";
+import { getOrInitializeDoStub } from "./with-lifecycle-hooks.ts";
 
 const testEnv = env as {
   ALARM_FORWARDING_ROOMS: DurableObjectNamespace<AlarmForwardingTestRoom>;
@@ -105,16 +105,11 @@ describe("withLifecycleHooks", () => {
     });
   });
 
-  it("initializes through a derived-name initializer", async () => {
-    const rooms = createDoInitializer<InitializeTestRoomInstance>({
-      nameFromInitParams(params) {
-        return `unit-room-derived-${params.ownerUserId}`;
-      },
-    });
-
-    const room = await rooms.getOrInitialize({
+  it("initializes from complete init params when callers derive the name themselves", async () => {
+    const room = await getOrInitializeDoStub({
       namespace: testEnv.ROOMS,
       initParams: {
+        name: "unit-room-derived-user-derived",
         ownerUserId: "user-derived",
       },
     });
