@@ -32,14 +32,16 @@ import type { Callable } from "@iterate-com/shared/callable/types.ts";
 
 ## Shape
 
-The schema marker is optional and defaults to v1:
+The schema marker is optional; omitted schema is interpreted as v1:
 
 ```ts
 schema?: "https://schemas.iterate.com/callable/v1";
 ```
 
 Add it when a persisted record needs to be self-describing. Omit it for normal
-in-repo callsites.
+in-repo callsites. `validateCallable()` does not write the default back into
+the object; it simply accepts both the explicit marker and the omitted form as
+the v1 shape.
 
 The shape is `target` plus optional `call`:
 
@@ -101,10 +103,15 @@ const callable = {
 ```
 
 RPC `call.method` is baked into the JSON. It must be one direct JavaScript
-identifier, not a dotted path. Names such as `fetch`, `then`, `constructor`,
-`prototype`, and `__proto__` are rejected because they collide with Fetch
-semantics, Promise-like behavior, JavaScript prototype behavior, or Cloudflare
-RPC reserved names.
+identifier, not a dotted path. Names such as `fetch`, `connect`, `call`,
+`alarm`, `then`, `constructor`, `prototype`, and `__proto__` are rejected
+because they collide with Fetch semantics, Promise-like behavior, JavaScript
+prototype behavior, or Cloudflare RPC reserved names.
+
+The runtime denies the Cloudflare-reserved names plus common prototype and
+Promise footguns in `types.ts`. Cloudflare's reserved-method list is here:
+
+https://developers.cloudflare.com/workers/runtime-apis/rpc/reserved-methods/
 
 ## Dispatching Values
 
@@ -132,9 +139,11 @@ const result = await dispatchCallable({
 });
 ```
 
-Use `call.passthroughArgs` to pre-fill part of the value payload in the
-descriptor. This is deliberately shallow and object-only: runtime payload fields
-override descriptor fields, and nested objects are replaced rather than merged.
+Use `call.passthroughArgs` to pass descriptor-owned fields through into the
+value payload. It behaves like shallow default object fields: runtime payload
+fields override descriptor fields, and nested objects are replaced rather than
+merged. The name is intentionally transport-neutral because the same merge runs
+before fetch value dispatch and RPC object dispatch.
 
 ```ts
 const callable = {
@@ -213,6 +222,18 @@ this library can sanitize the method string, but it cannot prove a real remote
 method exists before calling it. Missing remote methods surface as remote RPC
 errors from the platform.
 
+RPC results are returned raw. That is intentional: Workers RPC can return
+ordinary structured-clone values, but it can also return functions, streams,
+`Request`, `Response`, `RpcTarget` instances, or objects containing RPC stubs.
+When Cloudflare gives an RPC result a disposer, the caller owns that lifetime
+and should use `using` or call the disposer manually. `dispatchCallable()` does
+not clone, serialize, or auto-dispose RPC results because that would destroy the
+Cap'n Web object-capability behavior this abstraction is meant to preserve.
+
+Cloudflare documents RPC lifecycle and disposal here:
+
+https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/
+
 ## Dispatching Fetch
 
 `dispatchCallableFetch()` is the streaming-preserving path. It never reads the
@@ -236,8 +257,15 @@ const response = await dispatchCallableFetch({
 This is also the API used by `connectCallableWebSocket()`: WebSocket is fetch
 with upgrade headers, not a separate callable kind.
 
-`connectCallableWebSocket()` accepts `binaryType` and `accept` options so callers
-can set Worker WebSocket behavior before the socket is accepted.
+`connectCallableWebSocket()` accepts:
+
+- `url`: path or absolute URL for the upgrade request; omitted means `/`.
+  `ws:` and `wss:` are converted to `http:` and `https:` because the helper uses
+  fetch-with-upgrade under the hood.
+- `protocols`: written as `Sec-WebSocket-Protocol`.
+- `headers`: additional upgrade request headers.
+- `binaryType` and `accept`: applied before the returned Worker WebSocket is
+  accepted.
 
 ## Fetch Targets And Paths
 
@@ -367,9 +395,7 @@ const callable = {
 ```
 
 By default the runtime calls `loader.load(code)`, which creates a fresh Dynamic
-Worker. If a Worker Loader binding only exposes the older `get(null, getCode)`
-shape, the runtime uses that as the same one-off load operation. Add `cache`
-only when the ID names this exact code version:
+Worker. Add `cache` only when the ID names this exact code version:
 
 ```ts
 const callable = {
@@ -387,7 +413,9 @@ runtime does not memoize Worker stubs; it calls `loader.get(id, ...)` for each
 dispatch. Cloudflare may reuse a warm isolate for the same ID, but the callback
 must return the same code for that ID and callers must not rely on two requests
 hitting the same isolate. If the code changes, use a new ID. Content hashes or
-explicit version strings are good cache IDs.
+explicit version strings are good cache IDs. V1 trusts the supplied ID and does
+not yet derive or validate a hash; that stricter check is tracked in
+`tasks/dynamic-and-dispatch.md`.
 
 V1 supports only inline JavaScript modules:
 
@@ -396,14 +424,15 @@ V1 supports only inline JavaScript modules:
 - `code.mainModule` must exist in `code.modules`.
 - every module name must end in `.js`.
 - named entrypoints, entrypoint props, typed module objects, Python,
-  `allowExperimental`, `env`, `globalOutbound`, tails, streaming tails, and
-  source refs are future work.
+  `allowExperimental`, `env`, custom `globalOutbound`, tails, streaming tails,
+  and source refs are future work.
 
-Dynamic Worker targets execute the supplied module source. V1 does not set
-`WorkerCode.globalOutbound`, so dynamic code inherits the parent Worker's
-outbound network access. Do not dispatch tenant-authored, user-authored,
-LLM-authored, or otherwise untrusted Dynamic Worker callables until egress
-policy and `globalOutbound` support land.
+Dynamic Worker targets execute the supplied module source. V1 always loads them
+with `WorkerCode.globalOutbound: null`, so dynamic code cannot use global
+`fetch()` or `connect()` for public egress. Do not dispatch tenant-authored,
+user-authored, LLM-authored, or otherwise untrusted Dynamic Worker callables
+until code provenance, source-size limits, and policy-controlled outbound
+gateways land.
 
 Cloudflare Dynamic Workers docs:
 
@@ -425,6 +454,9 @@ allocation/provisioning work, not a stable invocation descriptor.
 
 Treat Callables like untrusted code. If you pass a full Worker `env` to a
 Callable, you are allowing the JSON to choose any binding name it contains.
+For service and Durable Object targets, that means the JSON can choose any
+binding exposed in that `env` object and, for Durable Object namespaces, any
+stable name or id inside that namespace.
 
 V1 keeps that resolver simple on purpose so the kernel stays small. Do not pass
 tenant-authored, LLM-authored, or user-authored callables a sensitive `env`
@@ -437,8 +469,17 @@ Worker-boundary code that wants normal runtime fetch should pass
 created by a shared helper reading ambient globals.
 
 Dynamic Worker callables are especially sensitive: the descriptor contains
-executable source code, and this prototype does not sandbox its outbound
-network access.
+executable source code. V1 blocks their global outbound network access, but it
+does not yet validate code provenance or provide a policy-controlled egress
+gateway.
+
+This warning is the same object-capability boundary Cloudflare describes for
+Workers RPC: holding a binding or stub is authority. A Callable is not itself a
+safe capability; it is JSON asking this runtime to resolve one.
+
+https://developers.cloudflare.com/workers/runtime-apis/rpc/visibility/#security-model
+https://blog.cloudflare.com/javascript-native-rpc/
+https://developers.cloudflare.com/durable-objects/api/namespace/
 
 ## Tests
 

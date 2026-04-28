@@ -11,6 +11,9 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 export default class CallableTestService extends WorkerEntrypoint {
   async fetch(request) {
     const url = new URL(request.url);
+    if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
+      return this.handleWebSocketUpgrade(url);
+    }
     if (url.pathname === "/redirect") {
       return Response.redirect("https://public.example.com/leak", 302);
     }
@@ -42,5 +45,20 @@ export default class CallableTestService extends WorkerEntrypoint {
 
   fail() {
     return new Response("service failure body", { status: 418 });
+  }
+
+  handleWebSocketUpgrade(url) {
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    server.accept();
+    server.addEventListener("error", () => {});
+    server.send(
+      JSON.stringify({
+        target: "service",
+        path: url.pathname,
+      }),
+    );
+    server.close(1000, "test complete");
+    return new Response(null, { status: 101, webSocket: client });
   }
 }

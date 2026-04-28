@@ -57,7 +57,8 @@
     "./nitro-ws-response": "./src/nitro-ws-response.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && pnpm typecheck:callable",
+    "typecheck:callable": "tsc -p src/callable/tsconfig.vitest.json --noEmit",
     "test": "vitest run --environment node src/jonasland/ingress-url.test.ts && pnpm test:callable",
     "test:callable": "vitest run --config src/callable/vitest.config.ts"
   },

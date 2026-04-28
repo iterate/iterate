@@ -16,6 +16,12 @@ Implemented in the second callable slice:
 - runtime method-name sanitization
 - shared `dispatchCallable({ callable, payload, ctx })` for fetch and RPC
 
+Known contract:
+
+- `dispatchCallable()` returns raw RPC results. If Cloudflare attaches a
+  disposer to returned stubs / objects, the caller owns that lifecycle and
+  should use `using` or manual disposal.
+
 Deferred work:
 
 - lifecycle/disposal coverage for Dynamic Worker RPC return values, if real

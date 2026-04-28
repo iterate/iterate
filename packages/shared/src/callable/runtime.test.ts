@@ -54,6 +54,28 @@ const dynamicWorkerCode = {
   },
 } as const;
 
+const dynamicWorkerOutboundCode = {
+  compatibilityDate: "2026-04-27",
+  mainModule: "worker.js",
+  modules: {
+    "worker.js": `
+      export default {
+        async fetch() {
+          try {
+            await fetch("https://example.com/");
+            return Response.json({ blocked: false });
+          } catch (error) {
+            return Response.json({
+              blocked: true,
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+      }
+    `,
+  },
+} as const;
+
 async function dispatchThroughHostWorker(options: { callable: Callable; payload: unknown }) {
   const response = await workerExports.default.fetch("https://host.local/dispatch", {
     method: "POST",
@@ -204,26 +226,7 @@ describe("callable validation", () => {
     ).toThrow("Invalid callable");
   });
 
-  test("rejects GET and HEAD request templates with JSON bodies", () => {
-    for (const method of ["GET", "HEAD"]) {
-      expect(() =>
-        validateCallable({
-          callable: {
-            target: { type: "http", url: "https://api.example.com/v1" },
-            call: {
-              type: "fetch",
-              request: {
-                method,
-                body: { type: "json", from: "payload" },
-              },
-            },
-          },
-        }),
-      ).toThrow("Invalid callable");
-    }
-  });
-
-  test("rejects extra fields in request template bodies", () => {
+  test("rejects request template body fields because v1 only has the default JSON body", () => {
     expect(() =>
       validateCallable({
         callable: {
@@ -232,7 +235,7 @@ describe("callable validation", () => {
             type: "fetch",
             request: {
               method: "POST",
-              body: { type: "json", from: "payload", extra: true },
+              body: { type: "json", from: "payload" },
             },
           },
         },
@@ -461,6 +464,28 @@ describe("dispatchCallable", () => {
     });
 
     expect(value).toBe("plain text result");
+  });
+
+  test("wraps invalid JSON success responses as remote callable errors", async () => {
+    await expect(
+      dispatchCallable({
+        callable: {
+          target: { type: "http", url: "https://api.example.com/bad-json" },
+        },
+        payload: { ignored: true },
+        ctx: {
+          fetcher: async () =>
+            new Response("{not-json", { headers: { "content-type": "application/json" } }),
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "REMOTE_ERROR",
+      details: {
+        status: 200,
+        body: "{not-json",
+        contentType: "application/json",
+      },
+    });
   });
 
   test("keeps target URL query in value mode unless call request query replaces it", async () => {
@@ -744,44 +769,6 @@ describe("dispatchCallable", () => {
       path: "/",
       body: '{"title":"Bug"}',
       contentType: "application/json",
-    });
-  });
-
-  test("loads one-off Dynamic Workers through get(null) when load() is unavailable", async () => {
-    const value = await dispatchCallable({
-      callable: {
-        target: {
-          type: "dynamic-worker",
-          loader: { $binding: "CALLABLE_TEST_GET_ONLY_LOADER" },
-          code: dynamicWorkerCode,
-        },
-      },
-      payload: { title: "Bug" },
-      ctx: {
-        env: {
-          CALLABLE_TEST_GET_ONLY_LOADER: {
-            get: (id: string | null, getCode: () => typeof dynamicWorkerCode) => {
-              expect(id).toBe(null);
-              expect(getCode()).toStrictEqual(dynamicWorkerCode);
-              return {
-                getEntrypoint: () => ({
-                  async fetch(request: Request) {
-                    return Response.json({
-                      target: "dynamic-worker-get-null",
-                      body: await request.text(),
-                    });
-                  },
-                }),
-              };
-            },
-          },
-        },
-      },
-    });
-
-    expect(value).toEqual({
-      target: "dynamic-worker-get-null",
-      body: '{"title":"Bug"}',
     });
   });
 
@@ -1175,6 +1162,24 @@ describe("dispatchCallableFetch", () => {
     });
   });
 
+  test("blocks global outbound fetch inside Dynamic Worker targets", async () => {
+    const response = await dispatchCallableFetch({
+      callable: {
+        target: {
+          type: "dynamic-worker",
+          loader: { $binding: "CALLABLE_TEST_LOADER" },
+          code: dynamicWorkerOutboundCode,
+        },
+      },
+      request: new Request("https://router.local/egress"),
+      ctx: { env: testEnv },
+    });
+
+    await expect(response.json()).resolves.toMatchObject({
+      blocked: true,
+    });
+  });
+
   test("rejects a consumed proxy request body", async () => {
     const request = new Request("https://router.local/upload", {
       method: "POST",
@@ -1213,7 +1218,7 @@ describe("dispatchCallableFetch", () => {
 });
 
 describe("explicit fetch request templates", () => {
-  test("builds a JSON request from an explicit payload template", async () => {
+  test("builds a JSON request from explicit method, header, and query options", async () => {
     const value = await dispatchCallable({
       callable: {
         target: { type: "http", url: "https://api.example.com/tools?fixed=true" },
@@ -1223,7 +1228,6 @@ describe("explicit fetch request templates", () => {
             method: "POST",
             headers: { "x-tool": "create-issue" },
             query: { dryRun: true },
-            body: { type: "json", from: "payload" },
           },
         },
       },
@@ -1288,6 +1292,28 @@ describe("connectCallableWebSocket", () => {
       ws.addEventListener("message", (event) => resolve(event.data), { once: true });
     });
     expect(message).toBe("connected");
+    await closed;
+  });
+
+  test("connects through a service binding fetch target", async () => {
+    const ws = await connectCallableWebSocket({
+      callable: {
+        target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+        call: { type: "fetch", path: { base: "/socket", mode: "replace" } },
+      },
+      ctx: { env: testEnv },
+    });
+
+    const closed = new Promise((resolve) => {
+      ws.addEventListener("close", resolve, { once: true });
+    });
+    const message = await new Promise((resolve) => {
+      ws.addEventListener("message", (event) => resolve(event.data), { once: true });
+    });
+    expect(JSON.parse(String(message))).toEqual({
+      target: "service",
+      path: "/socket",
+    });
     await closed;
   });
 });

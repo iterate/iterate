@@ -11,14 +11,17 @@ import {
 type FetchableBinding = { fetch: (request: Request) => Response | Promise<Response> };
 type DynamicWorkerTarget = Extract<FetchCallable["target"], { type: "dynamic-worker" }>;
 type DynamicWorkerCode = DynamicWorkerTarget["code"];
+type DynamicWorkerCodeWithBlockedOutbound = DynamicWorkerCode & { globalOutbound: null };
 type DynamicWorkerStub = {
   getEntrypoint: () => unknown;
 };
 type DynamicWorkerLoader = {
-  load?: (code: DynamicWorkerCode) => DynamicWorkerStub;
+  load: (code: DynamicWorkerCodeWithBlockedOutbound) => DynamicWorkerStub;
   get: (
-    id: string | null,
-    getCode: () => DynamicWorkerCode | Promise<DynamicWorkerCode>,
+    id: string,
+    getCode: () =>
+      | DynamicWorkerCodeWithBlockedOutbound
+      | Promise<DynamicWorkerCodeWithBlockedOutbound>,
   ) => DynamicWorkerStub;
 };
 
@@ -51,7 +54,7 @@ export function validateCallable(options: { callable: unknown }): Callable {
  * until we have real callers that need them.
  */
 function buildCallableRequest(options: { callable: FetchCallable; payload: unknown }): Request {
-  const callable = validateFetchCallable({ callable: options.callable });
+  const callable = options.callable;
   const call = getCallableCall({ callable });
   if (call.type !== "fetch") {
     throw new CallableError("DESCRIPTOR_VALIDATION_FAILED", `Unsupported callable kind`);
@@ -59,9 +62,7 @@ function buildCallableRequest(options: { callable: FetchCallable; payload: unkno
 
   const requestOverrides = call.request ?? {};
   const method = requestOverrides.method ?? "POST";
-  const body = ["GET", "HEAD"].includes(method)
-    ? undefined
-    : (requestOverrides.body ?? { type: "json" as const, from: "payload" as const });
+  const shouldSendJsonBody = !["GET", "HEAD"].includes(method);
 
   /**
    * `dispatchCallable()` intentionally creates a boring synthetic Request and
@@ -88,7 +89,7 @@ function buildCallableRequest(options: { callable: FetchCallable; payload: unkno
     headers,
   };
 
-  if (body?.type === "json") {
+  if (shouldSendJsonBody) {
     if (!headers.has("content-type")) headers.set("content-type", "application/json");
     requestInit.body = JSON.stringify(options.payload ?? null);
   }
@@ -106,7 +107,7 @@ function buildCallableRequest(options: { callable: FetchCallable; payload: unkno
  * `Request`/`Response` objects or streaming proxy behavior.
  */
 export async function dispatchCallable(options: {
-  callable: Callable;
+  callable: unknown;
   payload: unknown;
   ctx: CallableContext;
 }): Promise<unknown> {
@@ -129,7 +130,7 @@ export async function dispatchCallable(options: {
         );
       }
 
-      const response = await dispatchCallableFetch({
+      const response = await dispatchValidatedCallableFetch({
         callable,
         request: buildCallableRequest({ callable, payload }),
         ctx: options.ctx,
@@ -172,11 +173,23 @@ export async function dispatchCallable(options: {
  * https://developers.cloudflare.com/workers/runtime-apis/request/
  */
 export async function dispatchCallableFetch(options: {
+  callable: unknown;
+  request: Request;
+  ctx: CallableContext;
+}): Promise<Response> {
+  return await dispatchValidatedCallableFetch({
+    callable: validateFetchCallable({ callable: options.callable }),
+    request: options.request,
+    ctx: options.ctx,
+  });
+}
+
+async function dispatchValidatedCallableFetch(options: {
   callable: FetchCallable;
   request: Request;
   ctx: CallableContext;
 }): Promise<Response> {
-  const callable = validateFetchCallable({ callable: options.callable });
+  const callable = options.callable;
   const call = getCallableCall({ callable });
   if (call.type !== "fetch") {
     throw new CallableError("DESCRIPTOR_VALIDATION_FAILED", `Unsupported callable kind`);
@@ -243,10 +256,12 @@ export async function connectCallableWebSocket(options: {
   accept?: { allowHalfOpen?: boolean };
 }): Promise<WebSocket> {
   const headers = new Headers(options.headers);
-  headers.set("Connection", "Upgrade");
+  /**
+   * Workers fetch-with-upgrade needs only the Upgrade header from user code.
+   * The runtime owns protocol details such as Sec-WebSocket-Key generation:
+   * https://developers.cloudflare.com/workers/examples/websockets/#write-a-websocket-client
+   */
   headers.set("Upgrade", "websocket");
-  headers.set("Sec-WebSocket-Key", createWebSocketKey());
-  headers.set("Sec-WebSocket-Version", "13");
   if (options.protocols?.length) {
     headers.set("Sec-WebSocket-Protocol", options.protocols.join(", "));
   }
@@ -513,7 +528,19 @@ async function readCallableResponse(options: { response: Response }) {
   if (contentType.toLowerCase().includes("json")) {
     const text = await options.response.text();
     if (text === "") return null;
-    return JSON.parse(text);
+    try {
+      return JSON.parse(text);
+    } catch (error) {
+      throw new CallableError("REMOTE_ERROR", "Callable fetch target returned invalid JSON", {
+        cause: error,
+        details: {
+          status: options.response.status,
+          statusText: options.response.statusText,
+          body: text,
+          contentType,
+        },
+      });
+    }
   }
   return await options.response.text();
 }
@@ -603,10 +630,11 @@ function resolveDynamicWorkerEntrypoint(options: {
    * identical code for the same ID:
    * https://developers.cloudflare.com/dynamic-workers/api-reference/#get
    */
+  const code = buildDynamicWorkerCode({ code: options.target.code });
   const stub =
     options.target.cache?.mode === "get"
-      ? loader.get(options.target.cache.id, () => options.target.code)
-      : loadDynamicWorker({ loader, code: options.target.code });
+      ? loader.get(options.target.cache.id, () => code)
+      : loader.load(code);
 
   const entrypoint = stub.getEntrypoint();
   if (typeof entrypoint !== "object" || entrypoint === null) {
@@ -629,24 +657,6 @@ function resolveDynamicWorkerFetchEntrypoint(options: {
   return entrypoint;
 }
 
-function loadDynamicWorker(options: {
-  loader: DynamicWorkerLoader;
-  code: DynamicWorkerCode;
-}): DynamicWorkerStub {
-  if (typeof options.loader.load === "function") {
-    return options.loader.load(options.code);
-  }
-
-  /**
-   * Current Dynamic Workers docs expose `load(code)` for one-off workers, but
-   * some generated Worker Loader types in this repo still model that operation
-   * as `get(null, getCode)`. Keep `load()` as the preferred path while accepting
-   * the platform's documented null-ID one-off load shape:
-   * https://developers.cloudflare.com/workers/runtime-apis/bindings/worker-loader/#basic-usage
-   */
-  return options.loader.get(null, () => options.code);
-}
-
 function resolveBinding(options: {
   bindingName: string;
   env: Record<string, unknown> | undefined;
@@ -655,6 +665,19 @@ function resolveBinding(options: {
     throw new CallableError("RESOLUTION_FAILED", `Binding "${options.bindingName}" not found`);
   }
   return options.env[options.bindingName];
+}
+
+function buildDynamicWorkerCode(options: {
+  code: DynamicWorkerCode;
+}): DynamicWorkerCodeWithBlockedOutbound {
+  /**
+   * Dynamic Workers inherit the parent Worker's public network access when
+   * `globalOutbound` is omitted. V1 has no capability policy or egress gateway
+   * yet, so it blocks global `fetch()` / `connect()` for dynamic code by
+   * default. Future work can add an explicit policy-controlled gateway:
+   * https://developers.cloudflare.com/dynamic-workers/usage/egress-control/
+   */
+  return { ...options.code, globalOutbound: null };
 }
 
 function isFetchableBinding(
@@ -670,7 +693,12 @@ function isFetchableBinding(
 
 function isDynamicWorkerLoader(value: unknown): value is DynamicWorkerLoader {
   return (
-    typeof value === "object" && value != null && "get" in value && typeof value.get === "function"
+    typeof value === "object" &&
+    value != null &&
+    "load" in value &&
+    "get" in value &&
+    typeof value.load === "function" &&
+    typeof value.get === "function"
   );
 }
 
@@ -690,12 +718,6 @@ function isDurableObjectNamespace(value: unknown): value is {
     typeof value.idFromString === "function" &&
     typeof value.get === "function"
   );
-}
-
-function createWebSocketKey() {
-  const randomBytes = crypto.getRandomValues(new Uint8Array(16));
-  const binary = Array.from(randomBytes, (byte) => String.fromCharCode(byte)).join("");
-  return btoa(binary);
 }
 
 function toSyntheticRequestUrl(pathOrUrl: string) {

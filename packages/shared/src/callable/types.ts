@@ -160,10 +160,12 @@ const dynamicWorkerCacheSchema = z
 
 /**
  * Dynamic Worker targets intentionally keep only the loader, inline JavaScript
- * source, and optional `get()` cache identity. Fields like `env`,
- * `globalOutbound`, named entrypoints, tails, and typed modules are real
- * platform features, but they expand the capability surface. V1 parks them in
- * tasks until we add the policy layer that should govern them:
+ * source, and optional `get()` cache identity. V1 always loads code with
+ * `globalOutbound: null` in runtime.ts, so dynamic code cannot inherit public
+ * egress from the parent Worker. Fields like `env`, custom `globalOutbound`,
+ * named entrypoints, tails, and typed modules are real platform features, but
+ * they expand the capability surface. V1 parks them in tasks until we add the
+ * policy layer that should govern them:
  * https://developers.cloudflare.com/dynamic-workers/api-reference/
  */
 const dynamicWorkerTargetSchema = z
@@ -220,21 +222,8 @@ const requestTemplateSchema = z
     method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]).optional(),
     headers: z.record(z.string(), z.string()).optional(),
     query: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
-    body: z
-      .object({ type: z.literal("json"), from: z.literal("payload") })
-      .strict()
-      .optional(),
   })
-  .strict()
-  .superRefine((request, ctx) => {
-    if ((request.method === "GET" || request.method === "HEAD") && request.body != null) {
-      ctx.addIssue({
-        code: "custom",
-        message: "GET and HEAD request templates cannot include a body",
-        path: ["body"],
-      });
-    }
-  });
+  .strict();
 
 const fetchCallSchema = z
   .object({
