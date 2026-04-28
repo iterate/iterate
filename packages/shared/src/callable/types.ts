@@ -106,14 +106,19 @@ const deniedRpcMethods = new Set([
   "connect",
   "constructor",
   "dup",
+  "email",
   "fetch",
   "hasOwnProperty",
   "isPrototypeOf",
   "prototype",
   "propertyIsEnumerable",
+  "queue",
+  "scheduled",
+  "tail",
   "then",
   "toLocaleString",
   "toString",
+  "trace",
   "valueOf",
   "webSocketClose",
   "webSocketError",
@@ -138,7 +143,7 @@ const dynamicWorkerCodeSchema = z
   })
   .strict()
   .superRefine((code, ctx) => {
-    if (!(code.mainModule in code.modules)) {
+    if (!Object.prototype.hasOwnProperty.call(code.modules, code.mainModule)) {
       ctx.addIssue({
         code: "custom",
         message: "Dynamic Worker mainModule must be present in modules",

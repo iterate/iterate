@@ -167,7 +167,12 @@ describe("callable validation", () => {
       "__defineSetter__",
       "__lookupGetter__",
       "__lookupSetter__",
+      "email",
       "fetch",
+      "queue",
+      "scheduled",
+      "tail",
+      "trace",
       "users.byId",
       "toString",
       "valueOf",
@@ -236,6 +241,25 @@ describe("callable validation", () => {
             workerCode: {
               compatibilityDate: "2026-04-27",
               mainModule: "missing.js",
+              modules: { "worker.js": "export default {}" },
+            },
+          },
+        },
+      }),
+    ).toThrow("Invalid callable");
+  });
+
+  test("rejects Dynamic Worker main modules inherited from Object.prototype", () => {
+    expect(() =>
+      validateCallable({
+        callable: {
+          type: "fetch",
+          via: {
+            type: "env-binding",
+            bindingType: "dynamic-worker",
+            workerCode: {
+              compatibilityDate: "2026-04-27",
+              mainModule: "toString",
               modules: { "worker.js": "export default {}" },
             },
           },
