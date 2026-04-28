@@ -6,6 +6,7 @@ import type {
   LifecycleHooksProtected,
   LifecycleInit,
 } from "./with-lifecycle-hooks.ts";
+import { stringifyJsonPayload } from "./json-payload.ts";
 import type { Constructor, DurableObjectConstructor } from "./mixin-types.ts";
 
 const MULTIPLEXED_ALARMS_TABLE = "mixin_multiplexed_alarms";
@@ -372,17 +373,7 @@ function normalizeRunAtMs(runAt: Date | number): number {
 }
 
 function stringifyPayload(payload: unknown): string {
-  try {
-    const json = JSON.stringify(payload ?? null);
-
-    if (json === undefined) {
-      throw new Error("JSON.stringify returned undefined.");
-    }
-
-    return json;
-  } catch (error) {
-    throw new MultiplexedAlarmPayloadSerializationError(error);
-  }
+  return stringifyJsonPayload(payload, MultiplexedAlarmPayloadSerializationError);
 }
 
 function rowToRecord(row: MultiplexedAlarmRow): MultiplexedAlarmRecord {

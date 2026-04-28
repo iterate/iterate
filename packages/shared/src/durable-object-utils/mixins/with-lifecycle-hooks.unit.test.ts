@@ -794,6 +794,39 @@ describe("withScheduler", () => {
     await expect(room.getMultiplexedAlarms()).resolves.toEqual([]);
   });
 
+  it("does not skip the first RRULE occurrence at dtstart", async () => {
+    const room = testEnv.SCHEDULE_ROOMS.getByName("scheduler-unit-rrule-first-occurrence");
+
+    await room.initialize({
+      name: "scheduler-unit-rrule-first-occurrence",
+      ownerUserId: "user-scheduler",
+    });
+
+    await expect(
+      room.scheduleTask({
+        key: "single-rrule",
+        recurrence: {
+          type: "rrule",
+          rrule: "FREQ=DAILY;COUNT=1",
+        },
+        payload: { occurrence: 1 },
+      }),
+    ).resolves.toMatchObject({
+      key: "single-rrule",
+      recurrence: {
+        type: "rrule",
+      },
+    });
+
+    await room.makeScheduleDueForTest("single-rrule");
+    await expect(room.runAlarmNow()).resolves.toBeUndefined();
+    await expect(room.getScheduledExecutionState()).resolves.toMatchObject({
+      runs: 1,
+      payload: { occurrence: 1 },
+    });
+    await expect(room.getSchedule("single-rrule")).resolves.toBeNull();
+  });
+
   it("skips overlapping interval schedules while they are recently running", async () => {
     const room = testEnv.SCHEDULE_ROOMS.getByName("scheduler-unit-overlap");
     const startedAtMs = Date.now() - 1_000;

@@ -11,6 +11,7 @@ import type {
   MultiplexedAlarmsProtected,
   MultiplexedAlarmsMembers,
 } from "./with-multiplexed-alarms.ts";
+import { stringifyJsonPayload } from "./json-payload.ts";
 import type { Constructor, DurableObjectConstructor } from "./mixin-types.ts";
 
 const SCHEDULER_TABLE = "mixin_scheduler_schedules";
@@ -287,7 +288,13 @@ export function withScheduler<InitParams extends LifecycleInit>(options?: {
 
         const nowMs = Date.now();
         const recurrence = normalizeRecurrence(input.recurrence, nowMs);
-        const nextRunAtMs = computeNextRunAtMs(input.key, recurrence, nowMs);
+        // Initial RRULE scheduling is inclusive because `dtstart` is itself an
+        // occurrence. Without this, `FREQ=DAILY;COUNT=1` with the default
+        // dtstart would ask for the first occurrence strictly after dtstart,
+        // find none, and fail before the schedule is ever stored.
+        const nextRunAtMs = computeNextRunAtMs(input.key, recurrence, nowMs, {
+          includeAfter: true,
+        });
         const existing = this.getSchedulerRow(input.key);
         const payloadJson = stringifySchedulerPayload(input.payload);
         const recurrenceJson = JSON.stringify(recurrence);
@@ -654,6 +661,7 @@ function computeNextRunAtMs(
   key: string,
   recurrence: StoredSchedulerRecurrence,
   afterMs: number,
+  options: { includeAfter?: boolean } = {},
 ): number {
   const after = new Date(afterMs);
   let next: Date | null;
@@ -675,7 +683,7 @@ function computeNextRunAtMs(
       next = rrulestr(recurrence.rrule, {
         dtstart: new Date(recurrence.dtstartMs),
         tzid: recurrence.timezone ?? "UTC",
-      }).after(after, false);
+      }).after(after, options.includeAfter === true);
       break;
   }
 
@@ -719,17 +727,7 @@ function validateTimezone(timezone: string | undefined): void {
 }
 
 function stringifySchedulerPayload(payload: unknown): string {
-  try {
-    const json = JSON.stringify(payload ?? null);
-
-    if (json === undefined) {
-      throw new Error("JSON.stringify returned undefined.");
-    }
-
-    return json;
-  } catch (error) {
-    throw new SchedulerPayloadSerializationError(error);
-  }
+  return stringifyJsonPayload(payload, SchedulerPayloadSerializationError);
 }
 
 function parseStoredRecurrence(value: string): StoredSchedulerRecurrence {
