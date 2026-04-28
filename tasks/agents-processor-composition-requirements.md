@@ -78,6 +78,15 @@ Working note for the `apps/agents` processor redesign discussion. This is not co
 - `contract.emits` should currently be expressed as wire event type strings resolved against owned `events` plus `processorDeps`.
 - Append input types are derived from the event definitions resolved by `contract.emits`.
 - Raw `schematch` should remain usable; not every processor will use `schematch`.
+- `apps/events/src/durable-objects/stream.ts` should be a processor host using the same host/runtime primitives as future Agent/Codemode processor Durable Objects.
+- The reusable host responsibility should include loading/initializing reduced state, persisting reduced state, running reducers, exposing scoped `streamApi`, calling startup once reduced state is available, calling post-commit hooks, and handling hook errors/lifetime management.
+- Do not call the host lifetime primitive `waitUntil` in the processor abstraction. `ctx.waitUntil()` has no Worker-style lifetime effect inside Durable Objects.
+- The host adapter needs a stronger and more explicit lifetime hook such as `trackTask`, `runBackgroundTask`, or `keepAliveWhile`.
+- Durable Object hosts should implement that lifetime hook with the repo's Durable Object lifecycle/keepalive pattern; Worker/pull hosts may map it to `ctx.waitUntil` or direct awaiting as appropriate.
+- Durable Object hosts should contribute deployment-specific pieces: storage adapter, transaction boundary, keepalive/lifetime tracking, bindings, alarms, sockets, and request routing.
+- Processor contracts and implementations should not know whether they are hosted by `stream.ts`, an Agent Durable Object, a Codemode Durable Object, a pull runtime, or a future system-managed facet host.
+- The existing pull/push runtime in `apps/events-contract/src/sdk.ts` is prior art and should be reconciled with the new shared processor contract model rather than left as an unrelated abstraction.
+- The first extraction from `stream.ts` should prove the shared host shape by moving reducer/hook orchestration into a small host helper reusable by future agent/codemode Durable Objects.
 
 ## Design Implications
 

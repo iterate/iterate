@@ -1,6 +1,6 @@
 import { useMemo, useState, useSyncExternalStore, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { createFileRoute } from "@tanstack/react-router";
+import { Link, createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { getRequestHeader } from "@tanstack/react-start/server";
 import { Event, type Event as EventsEvent, type StreamPath } from "@iterate-com/events-contract";
@@ -18,6 +18,7 @@ import {
   OPENAPI_TOOL_PROVIDER_PRESET_EVENT,
   SLACK_TOOL_PROVIDER_PRESET_EVENT,
 } from "~/lib/default-tool-provider-events.ts";
+import { validateAgentViewSearch } from "~/lib/agent-view-search.ts";
 import { createEventsOrpcClient } from "~/lib/events-orpc-client.ts";
 import { getOrpcClient } from "~/orpc/client.ts";
 
@@ -67,6 +68,7 @@ const getPublicAppContext = createServerFn({ method: "GET" }).handler(({ context
 }));
 
 export const Route = createFileRoute("/")({
+  validateSearch: validateAgentViewSearch,
   loader: async () => ({
     sidebarDefaultOpen: (await getSidebarDefaultOpen()).defaultOpen,
     appContext: await getPublicAppContext(),
@@ -76,7 +78,7 @@ export const Route = createFileRoute("/")({
 
 function PresetsPage() {
   const { sidebarDefaultOpen, appContext } = Route.useLoaderData();
-  const [selectedStreamPath, setSelectedStreamPath] = useState<StreamPath | null>(null);
+  const { streamPath: selectedStreamPath } = Route.useSearch();
 
   return (
     <SidebarProvider
@@ -84,10 +86,7 @@ function PresetsPage() {
       className="h-svh"
       style={{ "--sidebar-width": "22rem" } as CSSProperties}
     >
-      <AppSidebar
-        selectedStreamPath={selectedStreamPath}
-        onSelectStreamPath={setSelectedStreamPath}
-      />
+      <AppSidebar selectedStreamPath={selectedStreamPath} />
       <SidebarInset className="min-w-0 overflow-hidden">
         <header className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
           <SidebarTrigger className="-ml-1" />
@@ -118,7 +117,6 @@ function PresetsPage() {
               streamPath={selectedStreamPath}
               eventsBaseUrl={appContext.eventsBaseUrl}
               eventsProjectSlug={appContext.eventsProjectSlug}
-              onBack={() => setSelectedStreamPath(null)}
             />
           )}
         </main>
@@ -135,12 +133,10 @@ function SelectedAgentStreamView({
   streamPath,
   eventsBaseUrl,
   eventsProjectSlug,
-  onBack,
 }: {
   streamPath: StreamPath;
   eventsBaseUrl: string;
   eventsProjectSlug: string;
-  onBack: () => void;
 }) {
   const eventsQuery = useQuery({
     queryKey: ["agentStreamHistory", eventsBaseUrl, eventsProjectSlug, streamPath],
@@ -177,13 +173,13 @@ function SelectedAgentStreamView({
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            type="button"
+          <Link
+            to="/"
+            search={{ streamPath: undefined }}
             className="inline-flex items-center rounded-md border border-input px-3 py-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
-            onClick={onBack}
           >
             Back to presets
-          </button>
+          </Link>
           <a
             href={viewerUrl}
             target="_blank"

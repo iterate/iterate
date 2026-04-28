@@ -67,7 +67,7 @@ function inferJsonRpcMethodFromLegacyHarEntry(entry: HarEntry): string | null {
 }
 
 async function handleMcpReplayPost(
-  request: Request,
+  request: { json(): Promise<unknown> },
   replay: ReturnType<typeof createMcpReplayQueue>,
 ) {
   const body = (await request.json()) as JsonRpcRequest;

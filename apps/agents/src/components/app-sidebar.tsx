@@ -17,15 +17,14 @@ import { getOrpcClient } from "~/orpc/client.ts";
 const LIST_AGENTS_QUERY_KEY = ["listAgents"] as const;
 
 type AppSidebarProps = {
-  selectedStreamPath: StreamPathType | null;
-  onSelectStreamPath: (streamPath: StreamPathType) => void;
+  selectedStreamPath: StreamPathType | undefined;
 };
 
 /**
  * Sidebar listing every agent the auto-subscriber has discovered. Polls
  * every 5s so brand-new agents show up without a refresh; tab-out pauses.
  */
-export function AppSidebar({ selectedStreamPath, onSelectStreamPath }: AppSidebarProps) {
+export function AppSidebar({ selectedStreamPath }: AppSidebarProps) {
   const agentsQuery = useQuery({
     queryKey: LIST_AGENTS_QUERY_KEY,
     queryFn: () => getOrpcClient().listAgents({}),
@@ -58,22 +57,31 @@ export function AppSidebar({ selectedStreamPath, onSelectStreamPath }: AppSideba
             </p>
           ) : (
             <SidebarMenu>
-              {agents.map((agent) => (
-                <SidebarMenuItem key={agent.streamPath}>
-                  <SidebarMenuButton
-                    isActive={agent.streamPath === selectedStreamPath}
-                    onClick={() => onSelectStreamPath(StreamPath.parse(agent.streamPath))}
-                    render={<button type="button" aria-label={`Open stream ${agent.streamPath}`} />}
-                  >
-                    <div className="grid min-w-0 flex-1 text-left leading-tight">
-                      <span className="truncate font-medium">{agent.streamPath}</span>
-                      <span className="truncate text-xs text-sidebar-foreground/70">
-                        {formatDiscoveredAt(agent.discoveredAt)}
-                      </span>
-                    </div>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
+              {agents.map((agent) => {
+                const streamPath = StreamPath.parse(agent.streamPath);
+
+                return (
+                  <SidebarMenuItem key={agent.streamPath}>
+                    <SidebarMenuButton
+                      isActive={streamPath === selectedStreamPath}
+                      render={
+                        <Link
+                          to="/"
+                          search={{ streamPath }}
+                          aria-label={`Open stream ${agent.streamPath}`}
+                        />
+                      }
+                    >
+                      <div className="grid min-w-0 flex-1 text-left leading-tight">
+                        <span className="truncate font-medium">{agent.streamPath}</span>
+                        <span className="truncate text-xs text-sidebar-foreground/70">
+                          {formatDiscoveredAt(agent.discoveredAt)}
+                        </span>
+                      </div>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                );
+              })}
             </SidebarMenu>
           )}
         </SidebarGroupContent>

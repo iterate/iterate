@@ -3,6 +3,8 @@ import { readFile, writeFile } from "node:fs/promises";
 import { ProjectSlug } from "@iterate-com/events-contract";
 import {
   fromTrafficWithWebSocket,
+  HttpResponse,
+  http,
   type HarWithExtensions,
   useMockHttpServer,
   type MockHttpServerFixture,
@@ -53,13 +55,14 @@ export async function createMockInternet(opts: {
     mockServer.use(
       ...fromTrafficWithWebSocket(withoutMcpStreamableHttpPostEntries(har)),
       ...mcpStreamableHttpPostHarHandlers(har),
+      ...localConsolePipeHandlers,
       ...mcpStreamableHttpGetStubHandlers,
     );
   }
 
   if (recordHar) {
     // MCP stub handlers also needed during recording to avoid unhandled GET requests
-    mockServer.use(...mcpStreamableHttpGetStubHandlers);
+    mockServer.use(...localConsolePipeHandlers, ...mcpStreamableHttpGetStubHandlers);
   }
 
   return {
@@ -78,6 +81,10 @@ export async function createMockInternet(opts: {
     },
   };
 }
+
+const localConsolePipeHandlers = [
+  http.post(/^http:\/\/localhost:\d+\/__tsd\/console-pipe\/server$/, () => new HttpResponse(null)),
+];
 
 const VOLATILE_RESPONSE_HEADERS = new Set([
   "cf-ray",
