@@ -3,16 +3,28 @@ import {
   CallableSchema,
   type Callable,
   type CallableContext,
-  type DurableObjectAddress,
+  type DurableObjectSelector,
   type FetchCallable,
   type RpcCallable,
 } from "./types.ts";
 
 type FetchableBinding = { fetch: (request: Request) => Response | Promise<Response> };
-type DynamicWorkerTarget = Extract<FetchCallable["target"], { type: "dynamic-worker" }>;
-type DynamicWorkerCode = DynamicWorkerTarget["code"];
+type EnvBindingTarget = Extract<FetchCallable["target"], { type: "env-binding" }>;
+type DynamicWorkerTarget = Extract<
+  FetchCallable["target"],
+  { type: "env-binding"; bindingType: "dynamic-worker-loader" }
+>;
+type EnvDurableObjectTarget = Extract<
+  FetchCallable["target"],
+  { type: "env-binding"; bindingType: "durable-object-namespace" }
+>;
+type LoopbackDurableObjectTarget = Extract<
+  FetchCallable["target"],
+  { type: "loopback-binding"; bindingType: "durable-object-namespace" }
+>;
+type DynamicWorkerCode = DynamicWorkerTarget["workerCode"];
 type DynamicWorkerStub = {
-  getEntrypoint: () => unknown;
+  getEntrypoint: (name?: string, options?: { props?: unknown }) => unknown;
 };
 type DynamicWorkerLoader = {
   load: (code: DynamicWorkerCode) => DynamicWorkerStub;
@@ -69,7 +81,7 @@ function buildCallableRequest(options: { callable: FetchCallable; payload: unkno
    * dispatcher a separate value-call mode.
    */
   const url = new URL("https://callable.local/");
-  if (callable.target.type === "http") {
+  if (callable.target.type === "url") {
     url.search = new URL(callable.target.url).search;
   }
   const templateQuery = requestOverrides.query ?? {};
@@ -357,19 +369,15 @@ function buildCallableUrl(options: {
 
 function resolveBaseUrl(callable: FetchCallable) {
   switch (callable.target.type) {
-    case "http":
+    case "url":
       return new URL(callable.target.url);
-    case "service":
+    case "env-binding":
       return buildSyntheticBaseUrl({
-        hostname: "service.local",
+        hostname: `${callable.target.bindingType}.local`,
       });
-    case "durable-object":
+    case "loopback-binding":
       return buildSyntheticBaseUrl({
-        hostname: "durable-object.local",
-      });
-    case "dynamic-worker":
-      return buildSyntheticBaseUrl({
-        hostname: "dynamic-worker.local",
+        hostname: `loopback-${callable.target.bindingType}.local`,
       });
   }
 }
@@ -424,7 +432,7 @@ function resolveFetchTarget(options: {
   | { type: "http"; fetch: typeof globalThis.fetch }
   | { type: "binding"; fetch: FetchableBinding } {
   switch (options.callable.target.type) {
-    case "http": {
+    case "url": {
       /**
        * Public HTTP fetch is a capability too. Requiring it in the context keeps
        * this library honest about egress: Worker entrypoints can still pass
@@ -438,50 +446,30 @@ function resolveFetchTarget(options: {
       }
       return { type: "http", fetch: options.ctx.fetch };
     }
-    case "service":
-      return {
-        type: "binding",
-        fetch: resolveServiceBinding({
-          bindingName: options.callable.target.binding.$binding,
-          env: options.ctx.env,
-        }),
-      };
-    case "durable-object":
-      return {
-        type: "binding",
-        fetch: resolveDurableObjectFetchStub({
-          target: options.callable.target,
-          env: options.ctx.env,
-        }),
-      };
-    case "dynamic-worker":
-      return {
-        type: "binding",
-        fetch: resolveDynamicWorkerFetchEntrypoint({
-          target: options.callable.target,
-          env: options.ctx.env,
-        }),
-      };
+    case "env-binding":
+      return resolveEnvBindingFetchTarget({
+        target: options.callable.target,
+        env: options.ctx.env,
+      });
+    case "loopback-binding":
+      return resolveLoopbackBindingFetchTarget({
+        target: options.callable.target,
+        exports: options.ctx.exports,
+      });
   }
 }
 
 function resolveRpcTarget(options: { callable: RpcCallable; ctx: CallableContext }) {
   switch (options.callable.target.type) {
-    case "service":
-      return resolveBinding({
-        bindingName: options.callable.target.binding.$binding,
-        env: options.ctx.env,
-      });
-    case "durable-object":
-      return resolveDurableObjectStub({
-        bindingName: options.callable.target.binding.$binding,
-        address: options.callable.target.address,
-        env: options.ctx.env,
-      });
-    case "dynamic-worker":
-      return resolveDynamicWorkerEntrypoint({
+    case "env-binding":
+      return resolveEnvBindingRpcTarget({
         target: options.callable.target,
         env: options.ctx.env,
+      });
+    case "loopback-binding":
+      return resolveLoopbackBindingRpcTarget({
+        target: options.callable.target,
+        exports: options.ctx.exports,
       });
   }
 }
@@ -555,19 +543,188 @@ function resolveServiceBinding(options: {
   return binding;
 }
 
-function resolveDurableObjectFetchStub(options: {
-  target: Extract<FetchCallable["target"], { type: "durable-object" }>;
+function resolveEnvBindingFetchTarget(options: {
+  target: EnvBindingTarget;
+  env: Record<string, unknown> | undefined;
+}): { type: "binding"; fetch: FetchableBinding } {
+  switch (options.target.bindingType) {
+    case "service":
+      return {
+        type: "binding",
+        fetch: resolveServiceBinding({
+          bindingName: options.target.bindingName,
+          env: options.env,
+        }),
+      };
+    case "durable-object-namespace":
+      return {
+        type: "binding",
+        fetch: resolveDurableObjectFetchStub({
+          target: options.target,
+          source: "env",
+          env: options.env,
+        }),
+      };
+    case "dynamic-worker-loader":
+      return {
+        type: "binding",
+        fetch: resolveDynamicWorkerFetchEntrypoint({
+          target: options.target,
+          env: options.env,
+        }),
+      };
+  }
+}
+
+function resolveEnvBindingRpcTarget(options: {
+  target: EnvBindingTarget;
   env: Record<string, unknown> | undefined;
 }) {
-  const stub = resolveDurableObjectStub({
-    bindingName: options.target.binding.$binding,
-    address: options.target.address,
-    env: options.env,
+  switch (options.target.bindingType) {
+    case "service":
+      return resolveBinding({
+        bindingName: options.target.bindingName,
+        env: options.env,
+      });
+    case "durable-object-namespace":
+      return resolveDurableObjectStub({
+        bindingName: options.target.bindingName,
+        durableObject: options.target.durableObject,
+        env: options.env,
+      });
+    case "dynamic-worker-loader":
+      return resolveDynamicWorkerEntrypoint({
+        target: options.target,
+        env: options.env,
+      });
+  }
+}
+
+function resolveLoopbackBindingFetchTarget(options: {
+  target: Extract<FetchCallable["target"], { type: "loopback-binding" }>;
+  exports: Record<string, unknown> | undefined;
+}): { type: "binding"; fetch: FetchableBinding } {
+  switch (options.target.bindingType) {
+    case "service": {
+      const binding = resolveLoopbackServiceBinding({
+        target: options.target,
+        exports: options.exports,
+      });
+      if (!isFetchableBinding(binding)) {
+        throw new CallableError(
+          "RESOLUTION_FAILED",
+          `Loopback export "${options.target.exportName}" does not expose fetch(request)`,
+        );
+      }
+      return { type: "binding", fetch: binding };
+    }
+    case "durable-object-namespace":
+      return {
+        type: "binding",
+        fetch: resolveDurableObjectFetchStub({
+          target: options.target,
+          source: "loopback",
+          exports: options.exports,
+        }),
+      };
+  }
+}
+
+function resolveLoopbackBindingRpcTarget(options: {
+  target: Extract<RpcCallable["target"], { type: "loopback-binding" }>;
+  exports: Record<string, unknown> | undefined;
+}) {
+  switch (options.target.bindingType) {
+    case "service":
+      return resolveLoopbackServiceBinding({
+        target: options.target,
+        exports: options.exports,
+      });
+    case "durable-object-namespace":
+      return resolveDurableObjectStubFromNamespace({
+        namespace: resolveLoopbackDurableObjectNamespace({
+          exportName: options.target.exportName,
+          exports: options.exports,
+        }),
+        durableObject: options.target.durableObject,
+        description: `Loopback Durable Object export "${options.target.exportName}"`,
+      });
+  }
+}
+
+function resolveLoopbackServiceBinding(options: {
+  target: Extract<FetchCallable["target"], { type: "loopback-binding"; bindingType: "service" }>;
+  exports: Record<string, unknown> | undefined;
+}) {
+  const binding = resolveLoopbackExport({
+    exportName: options.target.exportName,
+    exports: options.exports,
   });
+  if (options.target.props === undefined) return binding;
+  if (typeof binding !== "function") {
+    throw new CallableError(
+      "RESOLUTION_FAILED",
+      `Loopback export "${options.target.exportName}" cannot be parameterized with props`,
+    );
+  }
+  return binding({ props: options.target.props });
+}
+
+function resolveLoopbackDurableObjectNamespace(options: {
+  exportName: string;
+  exports: Record<string, unknown> | undefined;
+}) {
+  const value = resolveLoopbackExport(options);
+  if (isDurableObjectNamespace(value)) return value;
+  if (typeof value !== "function") return value;
+
+  /**
+   * The Cloudflare docs describe `ctx.exports` Durable Object exports as
+   * loopback Durable Object namespace bindings. Some Workers test/runtime
+   * surfaces expose loopback exports as callable binding factories, so we try
+   * the same no-props factory shape that service loopback bindings use before
+   * rejecting the value as non-namespace.
+   * https://developers.cloudflare.com/workers/runtime-apis/context/#exports
+   */
+  try {
+    return value();
+  } catch {
+    return value;
+  }
+}
+
+function resolveDurableObjectFetchStub(
+  options:
+    | {
+        target: EnvDurableObjectTarget;
+        source: "env";
+        env: Record<string, unknown> | undefined;
+      }
+    | {
+        target: LoopbackDurableObjectTarget;
+        source: "loopback";
+        exports: Record<string, unknown> | undefined;
+      },
+) {
+  const stub =
+    options.source === "env"
+      ? resolveDurableObjectStub({
+          bindingName: options.target.bindingName,
+          durableObject: options.target.durableObject,
+          env: options.env,
+        })
+      : resolveDurableObjectStubFromNamespace({
+          namespace: resolveLoopbackDurableObjectNamespace({
+            exportName: options.target.exportName,
+            exports: options.exports,
+          }),
+          durableObject: options.target.durableObject,
+          description: `Loopback Durable Object export "${options.target.exportName}"`,
+        });
   if (!isFetchableBinding(stub)) {
     throw new CallableError(
       "RESOLUTION_FAILED",
-      `Durable Object binding "${options.target.binding.$binding}" did not resolve to a fetchable stub`,
+      "Durable Object target did not resolve to a fetchable stub",
     );
   }
   return stub;
@@ -575,30 +732,52 @@ function resolveDurableObjectFetchStub(options: {
 
 function resolveDurableObjectStub(options: {
   bindingName: string;
-  address: DurableObjectAddress;
+  durableObject: DurableObjectSelector;
   env: Record<string, unknown> | undefined;
 }) {
   const namespace = resolveBinding({ bindingName: options.bindingName, env: options.env });
+  return resolveDurableObjectStubFromNamespace({
+    namespace,
+    durableObject: options.durableObject,
+    description: `Binding "${options.bindingName}"`,
+  });
+}
+
+function resolveDurableObjectStubFromNamespace(options: {
+  namespace: unknown;
+  durableObject: DurableObjectSelector;
+  description: string;
+}) {
+  const namespace = options.namespace;
   if (!isDurableObjectNamespace(namespace)) {
     throw new CallableError(
       "RESOLUTION_FAILED",
-      `Binding "${options.bindingName}" is not a Durable Object namespace`,
+      `${options.description} is not a Durable Object namespace`,
+      {
+        details: {
+          valueType: typeof namespace,
+          keys:
+            (typeof namespace === "object" || typeof namespace === "function") && namespace != null
+              ? Object.keys(namespace)
+              : [],
+        },
+      },
     );
   }
 
-  if (options.address.type === "name") {
+  if ("name" in options.durableObject) {
     if ("getByName" in namespace && typeof namespace.getByName === "function") {
-      return namespace.getByName(options.address.name);
+      return namespace.getByName(options.durableObject.name);
     }
-    return namespace.get(namespace.idFromName(options.address.name));
+    return namespace.get(namespace.idFromName(options.durableObject.name));
   }
 
   try {
-    return namespace.get(namespace.idFromString(options.address.id));
+    return namespace.get(namespace.idFromString(options.durableObject.id));
   } catch (error) {
     throw new CallableError(
       "RESOLUTION_FAILED",
-      `Durable Object id "${options.address.id}" could not be resolved`,
+      `Durable Object id "${options.durableObject.id}" could not be resolved`,
       { cause: error },
     );
   }
@@ -609,29 +788,36 @@ function resolveDynamicWorkerEntrypoint(options: {
   env: Record<string, unknown> | undefined;
 }) {
   const loader = resolveBinding({
-    bindingName: options.target.loader.$binding,
+    bindingName: options.target.bindingName,
     env: options.env,
   });
   if (!isDynamicWorkerLoader(loader)) {
     throw new CallableError(
       "RESOLUTION_FAILED",
-      `Binding "${options.target.loader.$binding}" is not a Worker Loader`,
+      `Binding "${options.target.bindingName}" is not a Worker Loader`,
     );
   }
 
   /**
-   * Dynamic Worker callables keep source code inline for this slice. When
-   * `cache.mode` is `get`, the ID is a cache key for this exact code version;
-   * Cloudflare documents that a loader `get()` callback must keep returning
-   * identical code for the same ID:
+   * Dynamic Worker callables keep source code inline for this slice. When the
+   * target uses Worker Loader `get`, the ID is a cache key for this exact code
+   * version; Cloudflare documents that a loader `get()` callback must keep
+   * returning identical code for the same ID:
    * https://developers.cloudflare.com/dynamic-workers/api-reference/#get
    */
   const stub =
-    options.target.cache?.mode === "get"
-      ? loader.get(options.target.cache.id, () => options.target.code)
-      : loader.load(options.target.code);
+    options.target.load?.type === "get"
+      ? loader.get(options.target.load.id, () => options.target.workerCode)
+      : loader.load(options.target.workerCode);
 
-  const entrypoint = stub.getEntrypoint();
+  const entrypointOptions =
+    options.target.entrypoint?.props === undefined
+      ? undefined
+      : { props: options.target.entrypoint.props };
+  const entrypoint =
+    options.target.entrypoint?.name || entrypointOptions
+      ? stub.getEntrypoint(options.target.entrypoint?.name, entrypointOptions)
+      : stub.getEntrypoint();
   if (typeof entrypoint !== "object" || entrypoint === null) {
     throw new CallableError("RESOLUTION_FAILED", "Dynamic Worker entrypoint is not an object");
   }
@@ -662,11 +848,27 @@ function resolveBinding(options: {
   return options.env[options.bindingName];
 }
 
+function resolveLoopbackExport(options: {
+  exportName: string;
+  exports: Record<string, unknown> | undefined;
+}) {
+  if (
+    !options.exports ||
+    !Object.prototype.hasOwnProperty.call(options.exports, options.exportName)
+  ) {
+    throw new CallableError(
+      "RESOLUTION_FAILED",
+      `Loopback export "${options.exportName}" not found`,
+    );
+  }
+  return options.exports[options.exportName];
+}
+
 function isFetchableBinding(
   value: unknown,
 ): value is { fetch: (request: Request) => Response | Promise<Response> } {
   return (
-    typeof value === "object" &&
+    (typeof value === "object" || typeof value === "function") &&
     value != null &&
     "fetch" in value &&
     typeof value.fetch === "function"

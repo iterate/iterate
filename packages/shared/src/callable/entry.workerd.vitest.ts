@@ -1,15 +1,19 @@
-import { DurableObject } from "cloudflare:workers";
+import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import { dispatchCallable } from "./runtime.ts";
 
 export default {
-  async fetch(request: Request, env: Record<string, unknown>) {
+  async fetch(
+    request: Request,
+    env: Record<string, unknown>,
+    ctx: { exports?: Record<string, unknown> },
+  ) {
     const url = new URL(request.url);
     if (url.pathname === "/dispatch") {
       const input = (await request.json()) as { callable: unknown; payload: unknown };
       const value = await dispatchCallable({
         callable: input.callable,
         payload: input.payload,
-        ctx: { env },
+        ctx: { env, exports: ctx.exports },
       });
       return Response.json({ value });
     }
@@ -17,6 +21,25 @@ export default {
     return new Response("callable test worker");
   },
 };
+
+export class CallableLoopbackService extends WorkerEntrypoint<
+  Record<string, unknown>,
+  { tenantId?: string }
+> {
+  async fetch(request: Request) {
+    const response = await createEchoResponse(request);
+    const value = (await response.json()) as Record<string, unknown>;
+    return Response.json({
+      target: "loopback-service",
+      props: this.ctx.props,
+      ...value,
+    });
+  }
+
+  echo(input: unknown) {
+    return { target: "loopback-service", props: this.ctx.props, input };
+  }
+}
 
 export class CallableTestDurableObject extends DurableObject {
   async fetch(request: Request) {

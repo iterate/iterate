@@ -50,6 +50,23 @@ const dynamicWorkerCode = {
           return left + ":" + right;
         }
       }
+
+      export class NamedEntrypoint extends WorkerEntrypoint {
+        async fetch(request) {
+          const url = new URL(request.url);
+          return Response.json({
+            target: "dynamic-worker-named",
+            props: this.ctx.props,
+            method: request.method,
+            path: url.pathname,
+            body: await request.text(),
+          });
+        }
+
+        echo(input) {
+          return { target: "dynamic-worker-named", props: this.ctx.props, input };
+        }
+      }
     `,
   },
 } as const;
@@ -65,7 +82,7 @@ async function dispatchThroughHostWorker(options: { callable: Callable; payload:
 describe("callable validation", () => {
   test("accepts a JSON round-tripped fetch callable with the default schema", () => {
     const callable = {
-      target: { type: "http", url: "https://api.example.com/v1" },
+      target: { type: "url", url: "https://api.example.com/v1" },
     } satisfies Callable;
 
     expect(validateCallable({ callable: JSON.parse(JSON.stringify(callable)) })).toEqual(callable);
@@ -74,7 +91,7 @@ describe("callable validation", () => {
   test("accepts the explicit schema URL when a stored record wants to be self-describing", () => {
     const callable = {
       schema: CALLABLE_SCHEMA,
-      target: { type: "http", url: "https://api.example.com/v1" },
+      target: { type: "url", url: "https://api.example.com/v1" },
     } satisfies Callable;
 
     expect(validateCallable({ callable })).toEqual(callable);
@@ -84,11 +101,11 @@ describe("callable validation", () => {
     expect(
       validateCallable({
         callable: {
-          target: { type: "http", url: "https://api.example.com/v1?x=1" },
+          target: { type: "url", url: "https://api.example.com/v1?x=1" },
         },
       }),
     ).toEqual({
-      target: { type: "http", url: "https://api.example.com/v1?x=1" },
+      target: { type: "url", url: "https://api.example.com/v1?x=1" },
     });
   });
 
@@ -96,7 +113,7 @@ describe("callable validation", () => {
     expect(() =>
       validateCallable({
         callable: {
-          target: { type: "http", url: "https://user:pass@api.example.com/v1" },
+          target: { type: "url", url: "https://user:pass@api.example.com/v1" },
         },
       }),
     ).toThrow("Invalid callable");
@@ -107,8 +124,9 @@ describe("callable validation", () => {
       validateCallable({
         callable: {
           target: {
-            type: "service",
-            binding: { $binding: "CALLABLE_TEST_SERVICE" },
+            type: "env-binding",
+            bindingType: "service",
+            bindingName: "CALLABLE_TEST_SERVICE",
           },
           call: { type: "fetch", path: { base: "//evil.example/internal" } },
         },
@@ -121,7 +139,11 @@ describe("callable validation", () => {
       expect(() =>
         validateCallable({
           callable: {
-            target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+            target: {
+              type: "env-binding",
+              bindingType: "service",
+              bindingName: "CALLABLE_TEST_SERVICE",
+            },
             call: { type: "fetch", path: { base } },
           },
         }),
@@ -149,7 +171,11 @@ describe("callable validation", () => {
       expect(() =>
         validateCallable({
           callable: {
-            target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+            target: {
+              type: "env-binding",
+              bindingType: "service",
+              bindingName: "CALLABLE_TEST_SERVICE",
+            },
             call: { type: "rpc", method: rpcMethod },
           },
         }),
@@ -161,7 +187,7 @@ describe("callable validation", () => {
     expect(() =>
       validateCallable({
         callable: {
-          target: { type: "http", url: "https://api.example.com/v1" },
+          target: { type: "url", url: "https://api.example.com/v1" },
           call: { type: "rpc", method: "run" },
         },
       }),
@@ -173,9 +199,10 @@ describe("callable validation", () => {
       validateCallable({
         callable: {
           target: {
-            type: "dynamic-worker",
-            loader: { $binding: "CALLABLE_TEST_LOADER" },
-            code: {
+            type: "env-binding",
+            bindingType: "dynamic-worker-loader",
+            bindingName: "CALLABLE_TEST_LOADER",
+            workerCode: {
               compatibilityDate: "2026-04-27",
               mainModule: "worker.js",
               modules: { "worker.txt": "export default {}" },
@@ -191,9 +218,10 @@ describe("callable validation", () => {
       validateCallable({
         callable: {
           target: {
-            type: "dynamic-worker",
-            loader: { $binding: "CALLABLE_TEST_LOADER" },
-            code: {
+            type: "env-binding",
+            bindingType: "dynamic-worker-loader",
+            bindingName: "CALLABLE_TEST_LOADER",
+            workerCode: {
               compatibilityDate: "2026-04-27",
               mainModule: "missing.js",
               modules: { "worker.js": "export default {}" },
@@ -208,7 +236,7 @@ describe("callable validation", () => {
     expect(() =>
       validateCallable({
         callable: {
-          target: { type: "http", url: "https://api.example.com/v1" },
+          target: { type: "url", url: "https://api.example.com/v1" },
           call: {
             type: "fetch",
             request: {
@@ -225,7 +253,7 @@ describe("callable validation", () => {
     expect(
       validateCallable({
         callable: {
-          target: { type: "http", url: "https://api.example.com/v1" },
+          target: { type: "url", url: "https://api.example.com/v1" },
           call: { type: "fetch", passthroughArgs: { provider: "github" } },
         },
       }),
@@ -236,7 +264,11 @@ describe("callable validation", () => {
     expect(
       validateCallable({
         callable: {
-          target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+          target: {
+            type: "env-binding",
+            bindingType: "service",
+            bindingName: "CALLABLE_TEST_SERVICE",
+          },
           call: { type: "rpc", method: "echo", passthroughArgs: { provider: "github" } },
         },
       }),
@@ -249,7 +281,7 @@ describe("callable validation", () => {
     expect(() =>
       validateCallable({
         callable: {
-          target: { type: "http", url: "https://api.example.com/v1" },
+          target: { type: "url", url: "https://api.example.com/v1" },
           call: { type: "fetch", passthroughArgs: "github" },
         },
       }),
@@ -260,7 +292,11 @@ describe("callable validation", () => {
     expect(() =>
       validateCallable({
         callable: {
-          target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+          target: {
+            type: "env-binding",
+            bindingType: "service",
+            bindingName: "CALLABLE_TEST_SERVICE",
+          },
           call: {
             type: "rpc",
             method: "join",
@@ -277,7 +313,11 @@ describe("dispatchCallable", () => {
   test("posts JSON by default for fetch callables and parses JSON responses", async () => {
     const value = await dispatchCallable({
       callable: {
-        target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+        target: {
+          type: "env-binding",
+          bindingType: "service",
+          bindingName: "CALLABLE_TEST_SERVICE",
+        },
       },
       payload: { title: "Bug" },
       ctx: { env: testEnv },
@@ -295,7 +335,11 @@ describe("dispatchCallable", () => {
   test("does not duplicate fetch path bases when value dispatch delegates to fetch dispatch", async () => {
     const value = await dispatchCallable({
       callable: {
-        target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+        target: {
+          type: "env-binding",
+          bindingType: "service",
+          bindingName: "CALLABLE_TEST_SERVICE",
+        },
         call: { type: "fetch", path: { base: "/internal" } },
       },
       payload: { title: "Bug" },
@@ -313,7 +357,11 @@ describe("dispatchCallable", () => {
   test("sends passthrough args as the default fetch JSON body when runtime payload is empty", async () => {
     const value = await dispatchCallable({
       callable: {
-        target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+        target: {
+          type: "env-binding",
+          bindingType: "service",
+          bindingName: "CALLABLE_TEST_SERVICE",
+        },
         call: { type: "fetch", passthroughArgs: { provider: "github", dryRun: true } },
       },
       payload: undefined,
@@ -326,7 +374,11 @@ describe("dispatchCallable", () => {
   test("shallow-merges passthrough args before fetch value dispatch", async () => {
     const value = await dispatchCallable({
       callable: {
-        target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+        target: {
+          type: "env-binding",
+          bindingType: "service",
+          bindingName: "CALLABLE_TEST_SERVICE",
+        },
         call: {
           type: "fetch",
           passthroughArgs: {
@@ -352,7 +404,11 @@ describe("dispatchCallable", () => {
   test("keeps the default JSON body when fetch request options only add headers", async () => {
     const value = await dispatchCallable({
       callable: {
-        target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+        target: {
+          type: "env-binding",
+          bindingType: "service",
+          bindingName: "CALLABLE_TEST_SERVICE",
+        },
         call: {
           type: "fetch",
           request: {
@@ -374,7 +430,7 @@ describe("dispatchCallable", () => {
   test("serializes undefined payloads as JSON null in the default request template", async () => {
     const value = await dispatchCallable({
       callable: {
-        target: { type: "http", url: "https://api.example.com/tools" },
+        target: { type: "url", url: "https://api.example.com/tools" },
       },
       payload: undefined,
       ctx: {
@@ -389,7 +445,7 @@ describe("dispatchCallable", () => {
     for (const method of ["GET", "HEAD"] as const) {
       const value = await dispatchCallable({
         callable: {
-          target: { type: "http", url: "https://api.example.com/tools" },
+          target: { type: "url", url: "https://api.example.com/tools" },
           call: { type: "fetch", request: { method } },
         },
         payload: { ignored: true },
@@ -414,7 +470,7 @@ describe("dispatchCallable", () => {
   test("ignores passthrough args in raw fetch dispatch because the Request already exists", async () => {
     const response = await dispatchCallableFetch({
       callable: {
-        target: { type: "http", url: "https://api.example.com" },
+        target: { type: "url", url: "https://api.example.com" },
         call: { type: "fetch", passthroughArgs: { provider: "github" } },
       },
       request: new Request("https://router.local/raw", {
@@ -432,7 +488,7 @@ describe("dispatchCallable", () => {
   test("parses text responses when the response is not JSON", async () => {
     const value = await dispatchCallable({
       callable: {
-        target: { type: "http", url: "https://api.example.com/text" },
+        target: { type: "url", url: "https://api.example.com/text" },
       },
       payload: { ignored: true },
       ctx: {
@@ -448,7 +504,7 @@ describe("dispatchCallable", () => {
     await expect(
       dispatchCallable({
         callable: {
-          target: { type: "http", url: "https://api.example.com/bad-json" },
+          target: { type: "url", url: "https://api.example.com/bad-json" },
         },
         payload: { ignored: true },
         ctx: {
@@ -469,7 +525,7 @@ describe("dispatchCallable", () => {
   test("keeps target URL query in value mode unless call request query replaces it", async () => {
     const preserved = await dispatchCallable({
       callable: {
-        target: { type: "http", url: "https://api.example.com/tools?fixed=true" },
+        target: { type: "url", url: "https://api.example.com/tools?fixed=true" },
       },
       payload: { ignored: true },
       ctx: {
@@ -481,7 +537,7 @@ describe("dispatchCallable", () => {
 
     const replaced = await dispatchCallable({
       callable: {
-        target: { type: "http", url: "https://api.example.com/tools?fixed=true" },
+        target: { type: "url", url: "https://api.example.com/tools?fixed=true" },
         call: {
           type: "fetch",
           request: { query: { dryRun: true } },
@@ -497,7 +553,7 @@ describe("dispatchCallable", () => {
 
     const cleared = await dispatchCallable({
       callable: {
-        target: { type: "http", url: "https://api.example.com/tools?fixed=true" },
+        target: { type: "url", url: "https://api.example.com/tools?fixed=true" },
         call: {
           type: "fetch",
           request: { query: {} },
@@ -515,7 +571,7 @@ describe("dispatchCallable", () => {
   test("preserves trailing slash target URLs in value mode", async () => {
     const value = await dispatchCallable({
       callable: {
-        target: { type: "http", url: "https://api.example.com/v1/" },
+        target: { type: "url", url: "https://api.example.com/v1/" },
       },
       payload: { ignored: true },
       ctx: {
@@ -530,7 +586,7 @@ describe("dispatchCallable", () => {
     await expect(
       dispatchCallable({
         callable: {
-          target: { type: "http", url: "https://api.example.com/tools" },
+          target: { type: "url", url: "https://api.example.com/tools" },
         },
         payload: { ignored: true },
         ctx: {},
@@ -544,7 +600,7 @@ describe("dispatchCallable", () => {
     await expect(
       dispatchCallable({
         callable: {
-          target: { type: "http", url: "https://api.example.com/fail" },
+          target: { type: "url", url: "https://api.example.com/fail" },
         },
         payload: { ignored: true },
         ctx: {
@@ -566,7 +622,7 @@ describe("dispatchCallable", () => {
     await expect(
       dispatchCallable({
         callable: {
-          target: { type: "http", url: "https://api.example.com" },
+          target: { type: "url", url: "https://api.example.com" },
         },
         payload: new Request("https://router.local/upload"),
         ctx: { fetch: vi.fn() },
@@ -579,7 +635,11 @@ describe("dispatchCallable", () => {
   test("dispatches object-mode service RPC", async () => {
     const value = await dispatchCallable({
       callable: {
-        target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+        target: {
+          type: "env-binding",
+          bindingType: "service",
+          bindingName: "CALLABLE_TEST_SERVICE",
+        },
         call: { type: "rpc", method: "echo" },
       },
       payload: { ok: true },
@@ -592,7 +652,11 @@ describe("dispatchCallable", () => {
   test("shallow-merges passthrough args before RPC object dispatch", async () => {
     const value = await dispatchCallable({
       callable: {
-        target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+        target: {
+          type: "env-binding",
+          bindingType: "service",
+          bindingName: "CALLABLE_TEST_SERVICE",
+        },
         call: {
           type: "rpc",
           method: "echo",
@@ -623,7 +687,11 @@ describe("dispatchCallable", () => {
     await expect(
       dispatchCallable({
         callable: {
-          target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+          target: {
+            type: "env-binding",
+            bindingType: "service",
+            bindingName: "CALLABLE_TEST_SERVICE",
+          },
           call: { type: "rpc", method: "echo", passthroughArgs: { provider: "github" } },
         },
         payload: "createIssue",
@@ -638,7 +706,7 @@ describe("dispatchCallable", () => {
     await expect(
       dispatchCallable({
         callable: {
-          target: { type: "service", binding: { $binding: "constructor" } },
+          target: { type: "env-binding", bindingType: "service", bindingName: "constructor" },
           call: { type: "rpc", method: "keys" },
         },
         payload: { accidental: "prototype" },
@@ -653,7 +721,11 @@ describe("dispatchCallable", () => {
   test("dispatches positional service RPC", async () => {
     const value = await dispatchCallable({
       callable: {
-        target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+        target: {
+          type: "env-binding",
+          bindingType: "service",
+          bindingName: "CALLABLE_TEST_SERVICE",
+        },
         call: { type: "rpc", method: "join", argsMode: "positional" },
       },
       payload: ["left", "right"],
@@ -667,9 +739,10 @@ describe("dispatchCallable", () => {
     const value = await dispatchCallable({
       callable: {
         target: {
-          type: "durable-object",
-          binding: { $binding: "CALLABLE_TEST_DURABLE_OBJECT" },
-          address: { type: "name", name: "rpc-object-target" },
+          type: "env-binding",
+          bindingType: "durable-object-namespace",
+          bindingName: "CALLABLE_TEST_DURABLE_OBJECT",
+          durableObject: { name: "rpc-object-target" },
         },
         call: { type: "rpc", method: "echo" },
       },
@@ -684,9 +757,10 @@ describe("dispatchCallable", () => {
     const value = await dispatchCallable({
       callable: {
         target: {
-          type: "durable-object",
-          binding: { $binding: "CALLABLE_TEST_DURABLE_OBJECT" },
-          address: { type: "name", name: "rpc-positional-target" },
+          type: "env-binding",
+          bindingType: "durable-object-namespace",
+          bindingName: "CALLABLE_TEST_DURABLE_OBJECT",
+          durableObject: { name: "rpc-positional-target" },
         },
         call: { type: "rpc", method: "join", argsMode: "positional" },
       },
@@ -701,7 +775,11 @@ describe("dispatchCallable", () => {
     await expect(
       dispatchCallable({
         callable: {
-          target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+          target: {
+            type: "env-binding",
+            bindingType: "service",
+            bindingName: "CALLABLE_TEST_SERVICE",
+          },
           call: { type: "rpc", method: "join", argsMode: "positional" },
         },
         payload: { left: "left", right: "right" },
@@ -716,7 +794,11 @@ describe("dispatchCallable", () => {
     await expect(
       dispatchCallable({
         callable: {
-          target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+          target: {
+            type: "env-binding",
+            bindingType: "service",
+            bindingName: "CALLABLE_TEST_SERVICE",
+          },
           call: { type: "rpc", method: "missingMethod" },
         },
         payload: null,
@@ -732,9 +814,10 @@ describe("dispatchCallable", () => {
     const value = await dispatchCallable({
       callable: {
         target: {
-          type: "dynamic-worker",
-          loader: { $binding: "CALLABLE_TEST_LOADER" },
-          code: dynamicWorkerCode,
+          type: "env-binding",
+          bindingType: "dynamic-worker-loader",
+          bindingName: "CALLABLE_TEST_LOADER",
+          workerCode: dynamicWorkerCode,
         },
       },
       payload: { title: "Bug" },
@@ -754,10 +837,11 @@ describe("dispatchCallable", () => {
     const value = await dispatchCallable({
       callable: {
         target: {
-          type: "dynamic-worker",
-          loader: { $binding: "CALLABLE_TEST_LOADER" },
-          code: dynamicWorkerCode,
-          cache: { mode: "get", id: "callable-dynamic-worker-rpc-object" },
+          type: "env-binding",
+          bindingType: "dynamic-worker-loader",
+          bindingName: "CALLABLE_TEST_LOADER",
+          workerCode: dynamicWorkerCode,
+          load: { type: "get", id: "callable-dynamic-worker-rpc-object" },
         },
         call: { type: "rpc", method: "echo" },
       },
@@ -772,9 +856,10 @@ describe("dispatchCallable", () => {
     const value = await dispatchCallable({
       callable: {
         target: {
-          type: "dynamic-worker",
-          loader: { $binding: "CALLABLE_TEST_LOADER" },
-          code: dynamicWorkerCode,
+          type: "env-binding",
+          bindingType: "dynamic-worker-loader",
+          bindingName: "CALLABLE_TEST_LOADER",
+          workerCode: dynamicWorkerCode,
         },
         call: { type: "rpc", method: "join", argsMode: "positional" },
       },
@@ -785,14 +870,81 @@ describe("dispatchCallable", () => {
     expect(value).toBe("left:right");
   });
 
+  test("dispatches Dynamic Worker RPC to a named entrypoint with props", async () => {
+    const value = await dispatchCallable({
+      callable: {
+        target: {
+          type: "env-binding",
+          bindingType: "dynamic-worker-loader",
+          bindingName: "CALLABLE_TEST_LOADER",
+          workerCode: dynamicWorkerCode,
+          entrypoint: {
+            name: "NamedEntrypoint",
+            props: { tenantId: "tenant_dynamic" },
+          },
+        },
+        call: { type: "rpc", method: "echo" },
+      },
+      payload: { ok: true },
+      ctx: { env: testEnv },
+    });
+
+    expect(value).toEqual({
+      target: "dynamic-worker-named",
+      props: { tenantId: "tenant_dynamic" },
+      input: { ok: true },
+    });
+  });
+
+  test("dispatches RPC through a loopback service binding with props", async () => {
+    const value = await dispatchCallable({
+      callable: {
+        target: {
+          type: "loopback-binding",
+          bindingType: "service",
+          exportName: "CallableLoopbackService",
+          props: { tenantId: "tenant_loopback" },
+        },
+        call: { type: "rpc", method: "echo" },
+      },
+      payload: { ok: true },
+      ctx: { exports: workerExports },
+    });
+
+    expect(value).toEqual({
+      target: "loopback-service",
+      props: { tenantId: "tenant_loopback" },
+      input: { ok: true },
+    });
+  });
+
+  test("rejects direct loopback Durable Object dispatch without ctx.exports namespace", async () => {
+    await expect(
+      dispatchCallable({
+        callable: {
+          target: {
+            type: "loopback-binding",
+            bindingType: "durable-object-namespace",
+            exportName: "CallableTestDurableObject",
+            durableObject: { name: "loopback-rpc-target" },
+          },
+          call: { type: "rpc", method: "echo" },
+        },
+        payload: { ok: true },
+        ctx: {},
+      }),
+    ).rejects.toMatchObject({ code: "RESOLUTION_FAILED" });
+  });
+
   test("rejects missing Dynamic Worker loader bindings", async () => {
     await expect(
       dispatchCallable({
         callable: {
           target: {
-            type: "dynamic-worker",
-            loader: { $binding: "MISSING_LOADER" },
-            code: dynamicWorkerCode,
+            type: "env-binding",
+            bindingType: "dynamic-worker-loader",
+            bindingName: "MISSING_LOADER",
+            workerCode: dynamicWorkerCode,
           },
         },
         payload: { ok: true },
@@ -809,7 +961,11 @@ describe("host Worker dispatch combinations", () => {
     await expect(
       dispatchThroughHostWorker({
         callable: {
-          target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+          target: {
+            type: "env-binding",
+            bindingType: "service",
+            bindingName: "CALLABLE_TEST_SERVICE",
+          },
           call: { type: "fetch", path: { base: "/host-service", mode: "replace" } },
         },
         payload: { from: "host" },
@@ -829,9 +985,10 @@ describe("host Worker dispatch combinations", () => {
       dispatchThroughHostWorker({
         callable: {
           target: {
-            type: "durable-object",
-            binding: { $binding: "CALLABLE_TEST_DURABLE_OBJECT" },
-            address: { type: "name", name: "host-rpc-target" },
+            type: "env-binding",
+            bindingType: "durable-object-namespace",
+            bindingName: "CALLABLE_TEST_DURABLE_OBJECT",
+            durableObject: { name: "host-rpc-target" },
           },
           call: { type: "rpc", method: "echo" },
         },
@@ -846,7 +1003,11 @@ describe("host Worker dispatch combinations", () => {
     await expect(
       dispatchThroughHostWorker({
         callable: {
-          target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+          target: {
+            type: "env-binding",
+            bindingType: "service",
+            bindingName: "CALLABLE_TEST_SERVICE",
+          },
           call: { type: "rpc", method: "echo" },
         },
         payload: { from: "host" },
@@ -861,9 +1022,10 @@ describe("host Worker dispatch combinations", () => {
       dispatchThroughHostWorker({
         callable: {
           target: {
-            type: "durable-object",
-            binding: { $binding: "CALLABLE_TEST_DURABLE_OBJECT" },
-            address: { type: "name", name: "host-fetch-target" },
+            type: "env-binding",
+            bindingType: "durable-object-namespace",
+            bindingName: "CALLABLE_TEST_DURABLE_OBJECT",
+            durableObject: { name: "host-fetch-target" },
           },
           call: { type: "fetch", path: { base: "/host-do", mode: "replace" } },
         },
@@ -883,9 +1045,10 @@ describe("host Worker dispatch combinations", () => {
       dispatchThroughHostWorker({
         callable: {
           target: {
-            type: "dynamic-worker",
-            loader: { $binding: "CALLABLE_TEST_LOADER" },
-            code: dynamicWorkerCode,
+            type: "env-binding",
+            bindingType: "dynamic-worker-loader",
+            bindingName: "CALLABLE_TEST_LOADER",
+            workerCode: dynamicWorkerCode,
           },
           call: { type: "fetch", path: { base: "/host-dynamic", mode: "replace" } },
         },
@@ -906,9 +1069,10 @@ describe("host Worker dispatch combinations", () => {
       dispatchThroughHostWorker({
         callable: {
           target: {
-            type: "dynamic-worker",
-            loader: { $binding: "CALLABLE_TEST_LOADER" },
-            code: dynamicWorkerCode,
+            type: "env-binding",
+            bindingType: "dynamic-worker-loader",
+            bindingName: "CALLABLE_TEST_LOADER",
+            workerCode: dynamicWorkerCode,
           },
           call: { type: "rpc", method: "echo" },
         },
@@ -924,7 +1088,7 @@ describe("dispatchCallableFetch", () => {
   test("prefixes incoming paths onto the base URL path by default", async () => {
     const response = await dispatchCallableFetch({
       callable: {
-        target: { type: "http", url: "https://api.example.com/v1" },
+        target: { type: "url", url: "https://api.example.com/v1" },
       },
       request: new Request("https://router.local/users/123?expand=items", { method: "POST" }),
       ctx: {
@@ -942,7 +1106,7 @@ describe("dispatchCallableFetch", () => {
     const response = await dispatchCallableFetch({
       callable: {
         target: {
-          type: "http",
+          type: "url",
           url: "https://api.example.com/status",
         },
         call: { type: "fetch", path: { mode: "replace" } },
@@ -961,7 +1125,7 @@ describe("dispatchCallableFetch", () => {
   test("proxy mode replaces target query with incoming request query without merging", async () => {
     const response = await dispatchCallableFetch({
       callable: {
-        target: { type: "http", url: "https://api.example.com/v1?fixed=true" },
+        target: { type: "url", url: "https://api.example.com/v1?fixed=true" },
       },
       request: new Request("https://router.local/users?active=true"),
       ctx: {
@@ -977,7 +1141,7 @@ describe("dispatchCallableFetch", () => {
   test("proxy mode preserves trailing slash target URLs for root requests", async () => {
     const response = await dispatchCallableFetch({
       callable: {
-        target: { type: "http", url: "https://api.example.com/v1/" },
+        target: { type: "url", url: "https://api.example.com/v1/" },
       },
       request: new Request("https://router.local/"),
       ctx: {
@@ -998,7 +1162,7 @@ describe("dispatchCallableFetch", () => {
 
     const response = await dispatchCallableFetch({
       callable: {
-        target: { type: "http", url: "https://api.example.com" },
+        target: { type: "url", url: "https://api.example.com" },
       },
       request,
       ctx: {
@@ -1016,8 +1180,9 @@ describe("dispatchCallableFetch", () => {
     const response = await dispatchCallableFetch({
       callable: {
         target: {
-          type: "service",
-          binding: { $binding: "CALLABLE_TEST_SERVICE" },
+          type: "env-binding",
+          bindingType: "service",
+          bindingName: "CALLABLE_TEST_SERVICE",
         },
         call: { type: "fetch", path: { base: "/internal" } },
       },
@@ -1037,8 +1202,9 @@ describe("dispatchCallableFetch", () => {
     const response = await dispatchCallableFetch({
       callable: {
         target: {
-          type: "service",
-          binding: { $binding: "CALLABLE_TEST_SERVICE" },
+          type: "env-binding",
+          bindingType: "service",
+          bindingName: "CALLABLE_TEST_SERVICE",
         },
         call: { type: "fetch", path: { base: "/redirect", mode: "replace" } },
       },
@@ -1054,9 +1220,10 @@ describe("dispatchCallableFetch", () => {
     const response = await dispatchCallableFetch({
       callable: {
         target: {
-          type: "durable-object",
-          binding: { $binding: "CALLABLE_TEST_DURABLE_OBJECT" },
-          address: { type: "name", name: "named-target" },
+          type: "env-binding",
+          bindingType: "durable-object-namespace",
+          bindingName: "CALLABLE_TEST_DURABLE_OBJECT",
+          durableObject: { name: "named-target" },
         },
         call: { type: "fetch", path: { base: "/do" } },
       },
@@ -1075,9 +1242,10 @@ describe("dispatchCallableFetch", () => {
     const response = await dispatchCallableFetch({
       callable: {
         target: {
-          type: "durable-object",
-          binding: { $binding: "CALLABLE_TEST_DURABLE_OBJECT" },
-          address: { type: "id", id },
+          type: "env-binding",
+          bindingType: "durable-object-namespace",
+          bindingName: "CALLABLE_TEST_DURABLE_OBJECT",
+          durableObject: { id },
         },
         call: { type: "fetch", path: { base: "/exact", mode: "replace" } },
       },
@@ -1100,10 +1268,11 @@ describe("dispatchCallableFetch", () => {
     const response = await dispatchCallableFetch({
       callable: {
         target: {
-          type: "dynamic-worker",
-          loader: { $binding: "CALLABLE_TEST_LOADER" },
-          code: dynamicWorkerCode,
-          cache: { mode: "get", id: "callable-dynamic-worker-fetch" },
+          type: "env-binding",
+          bindingType: "dynamic-worker-loader",
+          bindingName: "CALLABLE_TEST_LOADER",
+          workerCode: dynamicWorkerCode,
+          load: { type: "get", id: "callable-dynamic-worker-fetch" },
         },
         call: { type: "fetch", path: { base: "/internal" } },
       },
@@ -1124,9 +1293,10 @@ describe("dispatchCallableFetch", () => {
     const response = await dispatchCallableFetch({
       callable: {
         target: {
-          type: "dynamic-worker",
-          loader: { $binding: "CALLABLE_TEST_LOADER" },
-          code: dynamicWorkerCode,
+          type: "env-binding",
+          bindingType: "dynamic-worker-loader",
+          bindingName: "CALLABLE_TEST_LOADER",
+          workerCode: dynamicWorkerCode,
         },
         call: { type: "fetch", path: { base: "/load-mode", mode: "replace" } },
       },
@@ -1140,6 +1310,81 @@ describe("dispatchCallableFetch", () => {
     });
   });
 
+  test("dispatches to a Dynamic Worker named entrypoint fetch handler", async () => {
+    const response = await dispatchCallableFetch({
+      callable: {
+        target: {
+          type: "env-binding",
+          bindingType: "dynamic-worker-loader",
+          bindingName: "CALLABLE_TEST_LOADER",
+          workerCode: dynamicWorkerCode,
+          entrypoint: {
+            name: "NamedEntrypoint",
+            props: { tenantId: "tenant_dynamic_fetch" },
+          },
+        },
+        call: { type: "fetch", path: { base: "/named", mode: "replace" } },
+      },
+      request: new Request("https://router.local/ignored", {
+        method: "POST",
+        body: "named-body",
+      }),
+      ctx: { env: testEnv },
+    });
+
+    await expect(response.json()).resolves.toEqual({
+      target: "dynamic-worker-named",
+      props: { tenantId: "tenant_dynamic_fetch" },
+      method: "POST",
+      path: "/named",
+      body: "named-body",
+    });
+  });
+
+  test("dispatches to the default loopback fetch export", async () => {
+    const response = await dispatchCallableFetch({
+      callable: {
+        target: {
+          type: "loopback-binding",
+          bindingType: "service",
+          exportName: "default",
+        },
+        call: { type: "fetch", path: { base: "/loopback-default", mode: "replace" } },
+      },
+      request: new Request("https://router.local/ignored"),
+      ctx: { exports: workerExports },
+    });
+
+    await expect(response.text()).resolves.toBe("callable test worker");
+  });
+
+  test("dispatches to a loopback service binding fetch handler with props", async () => {
+    const response = await dispatchCallableFetch({
+      callable: {
+        target: {
+          type: "loopback-binding",
+          bindingType: "service",
+          exportName: "CallableLoopbackService",
+          props: { tenantId: "tenant_loopback_fetch" },
+        },
+        call: { type: "fetch", path: { base: "/loopback-service", mode: "replace" } },
+      },
+      request: new Request("https://router.local/ignored", {
+        method: "POST",
+        body: "loopback-body",
+      }),
+      ctx: { exports: workerExports },
+    });
+
+    await expect(response.json()).resolves.toMatchObject({
+      target: "loopback-service",
+      props: { tenantId: "tenant_loopback_fetch" },
+      method: "POST",
+      path: "/loopback-service",
+      body: "loopback-body",
+    });
+  });
+
   test("rejects a consumed proxy request body", async () => {
     const request = new Request("https://router.local/upload", {
       method: "POST",
@@ -1150,7 +1395,7 @@ describe("dispatchCallableFetch", () => {
     await expect(
       dispatchCallableFetch({
         callable: {
-          target: { type: "http", url: "https://api.example.com" },
+          target: { type: "url", url: "https://api.example.com" },
         },
         request,
         ctx: { fetch: vi.fn() },
@@ -1163,9 +1408,10 @@ describe("dispatchCallableFetch", () => {
       dispatchCallableFetch({
         callable: {
           target: {
-            type: "durable-object",
-            binding: { $binding: "CALLABLE_TEST_DURABLE_OBJECT" },
-            address: { type: "id", id: "not-a-valid-id" },
+            type: "env-binding",
+            bindingType: "durable-object-namespace",
+            bindingName: "CALLABLE_TEST_DURABLE_OBJECT",
+            durableObject: { id: "not-a-valid-id" },
           },
         },
         request: new Request("https://router.local/messages"),
@@ -1181,7 +1427,7 @@ describe("explicit fetch request templates", () => {
   test("builds a JSON request from explicit method, header, and query options", async () => {
     const value = await dispatchCallable({
       callable: {
-        target: { type: "http", url: "https://api.example.com/tools?fixed=true" },
+        target: { type: "url", url: "https://api.example.com/tools?fixed=true" },
         call: {
           type: "fetch",
           request: {
@@ -1219,7 +1465,7 @@ describe("connectCallableWebSocket", () => {
     await expect(
       connectCallableWebSocket({
         callable: {
-          target: { type: "http", url: "https://api.example.com/socket" },
+          target: { type: "url", url: "https://api.example.com/socket" },
         },
         ctx: {
           fetch: async () => new Response("forbidden", { status: 403, statusText: "Forbidden" }),
@@ -1236,9 +1482,10 @@ describe("connectCallableWebSocket", () => {
     const ws = await connectCallableWebSocket({
       callable: {
         target: {
-          type: "durable-object",
-          binding: { $binding: "CALLABLE_TEST_DURABLE_OBJECT" },
-          address: { type: "name", name: "websocket-target" },
+          type: "env-binding",
+          bindingType: "durable-object-namespace",
+          bindingName: "CALLABLE_TEST_DURABLE_OBJECT",
+          durableObject: { name: "websocket-target" },
         },
         call: { type: "fetch", path: { base: "/socket", mode: "replace" } },
       },
@@ -1258,7 +1505,11 @@ describe("connectCallableWebSocket", () => {
   test("connects through a service binding fetch target", async () => {
     const ws = await connectCallableWebSocket({
       callable: {
-        target: { type: "service", binding: { $binding: "CALLABLE_TEST_SERVICE" } },
+        target: {
+          type: "env-binding",
+          bindingType: "service",
+          bindingName: "CALLABLE_TEST_SERVICE",
+        },
         call: { type: "fetch", path: { base: "/socket", mode: "replace" } },
       },
       ctx: { env: testEnv },

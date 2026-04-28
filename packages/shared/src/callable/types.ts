@@ -2,8 +2,6 @@ import { z } from "zod";
 
 export const CALLABLE_SCHEMA = "https://schemas.iterate.com/callable/v1" as const;
 
-const bindingRefSchema = z.object({ $binding: z.string().min(1) }).strict();
-
 const pathModeSchema = z.enum(["prefix", "replace"]);
 const callableSchemaField = z.literal(CALLABLE_SCHEMA).optional();
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
@@ -20,10 +18,11 @@ const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
 const passthroughArgsSchema = z.record(z.string(), jsonValueSchema);
 
 /**
- * Service bindings and Durable Object stubs are not URL-authorized resources;
- * the binding object is the authority. Fetch callables may still choose a
- * synthetic request path via `call.path.base`, but that is part of the call
- * shape rather than part of target identity.
+ * Service bindings, Durable Object stubs, Dynamic Worker entrypoints, and
+ * loopback bindings are not URL-authorized resources; the resolved platform
+ * object is the authority. Fetch callables may still choose a synthetic
+ * request path via `call.path.base`, but that is part of the call shape rather
+ * than part of target identity.
  */
 const pathBaseSchema = z
   .string()
@@ -118,11 +117,6 @@ const rpcMethodSchema = z
     message: "RPC call method uses a reserved or dangerous method name",
   });
 
-const durableObjectAddressSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("name"), name: z.string().min(1) }).strict(),
-  z.object({ type: z.literal("id"), id: z.string().min(1) }).strict(),
-]);
-
 const dynamicWorkerCodeSchema = z
   .object({
     compatibilityDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -151,69 +145,140 @@ const dynamicWorkerCodeSchema = z
     }
   });
 
-const dynamicWorkerCacheSchema = z
+const durableObjectSelectorSchema = z.union([
+  z.object({ name: z.string().min(1) }).strict(),
+  z.object({ id: z.string().min(1) }).strict(),
+]);
+
+const dynamicWorkerLoadSchema = z.union([
+  z.object({ type: z.literal("load") }).strict(),
+  z
+    .object({
+      type: z.literal("get"),
+      id: z.string().min(1),
+    })
+    .strict(),
+]);
+
+const entrypointPropsSchema = jsonValueSchema;
+
+const dynamicWorkerEntrypointSchema = z
   .object({
-    mode: z.literal("get"),
-    id: z.string().min(1),
+    name: z.string().min(1).optional(),
+    props: entrypointPropsSchema.optional(),
   })
   .strict();
 
 /**
  * Dynamic Worker targets intentionally keep only the loader, inline JavaScript
- * source, and optional `get()` cache identity. Fields like `env`,
- * `globalOutbound`, named entrypoints, tails, and typed modules are real
- * platform features, but they expand the capability surface. V1 parks them in
- * tasks until we add the policy layer that should govern them:
+ * source, optional `get()` identity, and optional entrypoint selection. Fields
+ * like `env`, `globalOutbound`, tails, and typed modules are real platform
+ * features, but they expand the capability surface. V1 parks them in tasks
+ * until we add the policy layer that should govern them:
  * https://developers.cloudflare.com/dynamic-workers/api-reference/
+ *
+ * The binding is deliberately named as an env binding instead of a generic
+ * loader ref. Cloudflare calls Worker Loaders a binding, and bindings are the
+ * capability-bearing values exposed through `env`:
+ * https://developers.cloudflare.com/workers/runtime-apis/bindings/
  */
 const dynamicWorkerTargetSchema = z
   .object({
-    type: z.literal("dynamic-worker"),
-    loader: bindingRefSchema,
-    code: dynamicWorkerCodeSchema,
-    cache: dynamicWorkerCacheSchema.optional(),
+    type: z.literal("env-binding"),
+    bindingType: z.literal("dynamic-worker-loader"),
+    bindingName: z.string().min(1),
+    workerCode: dynamicWorkerCodeSchema,
+    load: dynamicWorkerLoadSchema.optional(),
+    entrypoint: dynamicWorkerEntrypointSchema.optional(),
   })
   .strict();
 
-const fetchTargetSchema = z.discriminatedUnion("type", [
-  z
-    .object({
-      type: z.literal("http"),
-      url: httpUrlSchema,
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal("service"),
-      binding: bindingRefSchema,
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal("durable-object"),
-      binding: bindingRefSchema,
-      address: durableObjectAddressSchema,
-    })
-    .strict(),
+/**
+ * `env-binding` targets resolve through `CallableContext.env[bindingName]`.
+ *
+ * Cloudflare describes bindings as "a permission and an API in one piece".
+ * This descriptor stores only the configured binding name and expected binding
+ * type; the live binding object is supplied by the caller's context at dispatch
+ * time.
+ * https://developers.cloudflare.com/workers/runtime-apis/bindings/
+ */
+const serviceEnvBindingTargetSchema = z
+  .object({
+    type: z.literal("env-binding"),
+    bindingType: z.literal("service"),
+    bindingName: z.string().min(1),
+  })
+  .strict();
+
+/**
+ * Durable Object callables resolve a Durable Object namespace binding, then use
+ * either `getByName(name)` or `idFromString(id)` + `get(id)` to obtain a
+ * DurableObjectStub. The nested `durableObject` selector is intentionally not
+ * called `address`: Cloudflare's first-party API talks about namespaces,
+ * stubs, names, and IDs.
+ * https://developers.cloudflare.com/durable-objects/api/namespace/
+ */
+const durableObjectEnvBindingTargetSchema = z
+  .object({
+    type: z.literal("env-binding"),
+    bindingType: z.literal("durable-object-namespace"),
+    bindingName: z.string().min(1),
+    durableObject: durableObjectSelectorSchema,
+  })
+  .strict();
+
+/**
+ * `loopback-binding` targets resolve through `CallableContext.exports`, which
+ * is the `ctx.exports` object from a Worker or Durable Object invocation.
+ *
+ * Cloudflare documents these as automatically configured "loopback bindings"
+ * for a Worker's top-level exports. Loopback service bindings can also be
+ * parameterized with dynamic `props`, unlike regular env service bindings.
+ * https://developers.cloudflare.com/workers/runtime-apis/context/#exports
+ */
+const loopbackServiceTargetSchema = z
+  .object({
+    type: z.literal("loopback-binding"),
+    bindingType: z.literal("service"),
+    exportName: z.string().min(1),
+    props: jsonValueSchema.optional(),
+  })
+  .strict();
+
+const loopbackDurableObjectTargetSchema = z
+  .object({
+    type: z.literal("loopback-binding"),
+    bindingType: z.literal("durable-object-namespace"),
+    exportName: z.string().min(1),
+    durableObject: durableObjectSelectorSchema,
+  })
+  .strict();
+
+const envBindingTargetSchema = z.discriminatedUnion("bindingType", [
+  serviceEnvBindingTargetSchema,
+  durableObjectEnvBindingTargetSchema,
   dynamicWorkerTargetSchema,
 ]);
 
-const rpcTargetSchema = z.discriminatedUnion("type", [
-  z
-    .object({
-      type: z.literal("service"),
-      binding: bindingRefSchema,
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal("durable-object"),
-      binding: bindingRefSchema,
-      address: durableObjectAddressSchema,
-    })
-    .strict(),
-  dynamicWorkerTargetSchema,
+const loopbackBindingTargetSchema = z.discriminatedUnion("bindingType", [
+  loopbackServiceTargetSchema,
+  loopbackDurableObjectTargetSchema,
 ]);
+
+const urlTargetSchema = z
+  .object({
+    type: z.literal("url"),
+    url: httpUrlSchema,
+  })
+  .strict();
+
+const fetchTargetSchema = z.union([
+  urlTargetSchema,
+  envBindingTargetSchema,
+  loopbackBindingTargetSchema,
+]);
+
+const rpcTargetSchema = z.union([envBindingTargetSchema, loopbackBindingTargetSchema]);
 
 const requestTemplateSchema = z
   .object({
@@ -297,27 +362,41 @@ export const CallableSchema = z.union([fetchCallableSchema, rpcCallableSchema]);
 export type Callable = z.infer<typeof CallableSchema>;
 export type FetchCallable = z.infer<typeof fetchCallableSchema>;
 export type RpcCallable = z.infer<typeof rpcCallableSchema>;
-export type DurableObjectAddress = Extract<
+export type DurableObjectSelector = Extract<
   Callable["target"],
-  { type: "durable-object" }
->["address"];
+  { type: "env-binding"; bindingType: "durable-object-namespace" }
+>["durableObject"];
 
 export type CallableContext = {
   /**
-   * Worker bindings keyed by their runtime binding name. Callables keep only
-   * symbolic binding refs (`{ $binding: "NAME" }`), so this object is the
-   * only place where a stored Callable can resolve to a live platform
-   * capability.
+   * Worker bindings keyed by their runtime binding name. `env-binding` targets
+   * keep only `bindingName`, so this object is where a stored Callable resolves
+   * to a live platform capability.
+   *
+   * Cloudflare bindings are intentionally capability-bearing APIs, not plain
+   * configuration values:
+   * https://developers.cloudflare.com/workers/runtime-apis/bindings/
    */
   env?: Record<string, unknown>;
   /**
+   * Loopback bindings from `ctx.exports`, keyed by top-level export name.
+   *
+   * Cloudflare documents `ctx.exports` as automatically configured loopback
+   * bindings for this Worker's own exports. They can represent service
+   * bindings and Durable Object namespace bindings. Loopback service bindings
+   * can also receive dynamic `props`.
+   * https://developers.cloudflare.com/workers/runtime-apis/context/#exports
+   */
+  exports?: Record<string, unknown>;
+  /**
    * Public HTTP fetch capability used only by callables targeting
-   * `{ type: "http" }`.
+   * `{ type: "url" }`.
    *
    * Worker-boundary code can pass the runtime function directly as
    * `{ fetch }`. Keeping it explicit is important: public egress should not be
    * created by a shared helper silently reading `globalThis.fetch`. Binding
-   * targets ignore this field because their authority comes from `env`.
+   * targets ignore this field because their authority comes from `env` or
+   * `ctx.exports`.
    */
   fetch?: typeof globalThis.fetch;
 };

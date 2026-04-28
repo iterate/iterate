@@ -11,6 +11,8 @@ Implemented in the second callable slice:
 
 - service RPC
 - Durable Object RPC by stable name or id
+- Dynamic Worker RPC
+- loopback service binding RPC through `ctx.exports`
 - serialized `call: { type: "rpc", method }`
 - `call.argsMode: "object" | "positional"`
 - runtime method-name sanitization

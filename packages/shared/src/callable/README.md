@@ -1,13 +1,14 @@
 # Callable
 
-`Callable` is a small JSON invocation shape for Workers code. It lets a caller
-store or transmit "call this thing" without storing the live Worker binding,
-Durable Object stub, or public `fetch` function.
+`Callable` is a small JSON invocation shape for Cloudflare Workers code. It
+lets us store or transmit "call this thing" without storing live capabilities
+such as Worker service bindings, Durable Object stubs, Worker Loader bindings,
+`ctx.exports` loopback bindings, or public `fetch`.
 
-The main API is `dispatchCallable({ callable, payload, ctx })`. In the general
-case, callers should not need to know whether the callable is backed by public
-HTTP, a service binding `fetch()`, Durable Object `fetch()`, service RPC, or
-Durable Object RPC.
+The main API is `dispatchCallable({ callable, payload, ctx })`. In normal
+product code, callers should not need to know whether a callable is backed by a
+remote URL, `env.SERVICE.fetch()`, Workers RPC, a Durable Object stub, a Dynamic
+Worker, or a loopback binding.
 
 ```ts
 import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
@@ -15,13 +16,19 @@ import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
 const result = await dispatchCallable({
   callable,
   payload: { userId: "usr_123" },
-  ctx: { env },
+  ctx: { env, exports: ctx.exports, fetch },
 });
 ```
 
-Use `dispatchCallableFetch({ callable, request, ctx })` only when you need the
-raw Fetch API surface: streaming request bodies, streaming responses, SSE, or
-WebSocket upgrade responses.
+Use `dispatchCallableFetch({ callable, request, ctx })` only when the caller
+needs the raw Fetch API surface: streaming request bodies, streaming responses,
+SSE, or WebSocket upgrade responses.
+
+```ts
+import { dispatchCallableFetch } from "@iterate-com/shared/callable/runtime.ts";
+
+const response = await dispatchCallableFetch({ callable, request, ctx });
+```
 
 Only the runtime and type modules are exported from the package:
 
@@ -30,7 +37,7 @@ import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
 import type { Callable } from "@iterate-com/shared/callable/types.ts";
 ```
 
-## Shape
+## Schema
 
 The schema marker is optional; omitted schema is interpreted as v1:
 
@@ -38,116 +45,252 @@ The schema marker is optional; omitted schema is interpreted as v1:
 schema?: "https://schemas.iterate.com/callable/v1";
 ```
 
-Add it when a persisted record needs to be self-describing. Omit it for normal
-in-repo callsites. `validateCallable()` does not write the default back into
-the object; it simply accepts both the explicit marker and the omitted form as
-the v1 shape.
+Add it when a persisted record needs to be self-describing. Omit it for ordinary
+in-repo callsites. `validateCallable()` accepts both the explicit marker and
+the omitted form; it does not write the default marker back into the object.
 
-The shape is `target` plus optional `call`:
+## Mental Model
 
-- `target` identifies the capability to resolve: a public URL, Worker binding,
-  Durable Object address, or Worker Loader plus code. For HTTP targets,
-  `target.url` is also the default fetch base URL.
-- `call` describes the operation performed after resolution: fetch request
-  shaping or RPC method invocation.
-- omitted `call` means `{ type: "fetch" }` for fetch-capable targets.
+A callable has two parts:
 
-The small case is intentionally tiny:
+- `target`: where the authority comes from.
+- `call`: what to do with the resolved target.
+
+There are three target families:
 
 ```ts
-const callable = {
-  target: { type: "http", url: "https://api.example.com/tools?fixed=true" },
-};
+type CallableTarget =
+  | { type: "url"; url: string }
+  | { type: "env-binding"; bindingType: string; bindingName: string }
+  | { type: "loopback-binding"; bindingType: string; exportName: string };
 ```
 
-That means "fetch this URL". `dispatchCallable()` will POST the JSON payload to
-that URL and preserve its query string.
+This tracks Cloudflare terminology directly:
 
-Service binding fetch is similarly terse:
+- Cloudflare calls `env` values "bindings", and describes a binding as "a
+  permission and an API in one piece":
+  https://developers.cloudflare.com/workers/runtime-apis/bindings/
+- Cloudflare calls `ctx.exports` values "loopback bindings":
+  https://developers.cloudflare.com/workers/runtime-apis/context/#exports
+- Service bindings expose both `fetch()` and Workers RPC:
+  https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/
+- Durable Object namespace bindings resolve Durable Object stubs by name or ID:
+  https://developers.cloudflare.com/durable-objects/api/namespace/
+- Worker Loader bindings load Dynamic Workers:
+  https://developers.cloudflare.com/dynamic-workers/api-reference/
 
-```ts
-const callable = {
-  target: {
-    type: "service",
-    binding: { $binding: "USERS" },
-  },
-};
-```
+Omitted `call` means `{ type: "fetch" }` for fetch-capable targets. RPC always
+needs an explicit `call` because the RPC method is part of the serialized
+invocation.
 
-Add `call` when fetch needs options:
+## Target Examples
 
-```ts
-const callable = {
-  target: {
-    type: "service",
-    binding: { $binding: "USERS" },
-  },
-  call: {
-    type: "fetch",
-    path: { base: "/internal", mode: "prefix" },
-  },
-};
-```
-
-RPC always needs an explicit call because the method is part of the invocation:
+Fetch a public URL. `ctx.fetch` is required because public egress is a
+capability, not something this shared helper reads from `globalThis`.
 
 ```ts
 const callable = {
-  target: {
-    type: "durable-object",
-    binding: { $binding: "USER_REGISTRY" },
-    address: { type: "name", name: "global" },
-  },
-  call: { type: "rpc", method: "findUser" },
-};
-```
-
-RPC `call.method` is baked into the JSON. It must be one direct JavaScript
-identifier, not a dotted path. Names such as `fetch`, `connect`, `call`,
-`alarm`, `then`, `constructor`, `prototype`, and `__proto__` are rejected
-because they collide with Fetch semantics, Promise-like behavior, JavaScript
-prototype behavior, or Cloudflare RPC reserved names.
-
-The runtime denies the Cloudflare-reserved names plus common prototype and
-Promise footguns in `types.ts`. Cloudflare's reserved-method list is here:
-
-https://developers.cloudflare.com/workers/runtime-apis/rpc/reserved-methods/
-
-## Dispatching Values
-
-`dispatchCallable()` turns fetch callables into ordinary value calls by building
-a request, dispatching it, rejecting non-2xx responses, and parsing the body.
-The default request template is:
-
-- `POST`
-- `content-type: application/json`
-- body is `JSON.stringify(payload ?? null)`
-
-If a fetch `call.request` is present, it is a partial override of that default:
-adding headers or query parameters does not drop the JSON body. `GET` and
-`HEAD` value calls do not send a body.
-
-```ts
-const callable = {
-  target: { type: "http", url: "https://api.example.com/tools" },
+  target: { type: "url", url: "https://api.example.com/tools?fixed=true" },
 };
 
-const result = await dispatchCallable({
+await dispatchCallable({
   callable,
   payload: { title: "Bug" },
   ctx: { fetch },
 });
 ```
 
-Use `call.passthroughArgs` to pass descriptor-owned fields through into the
-value payload. It behaves like shallow default object fields: runtime payload
-fields override descriptor fields, and nested objects are replaced rather than
-merged. The name is intentionally transport-neutral because the same merge runs
-before fetch value dispatch and RPC object dispatch.
+Fetch a configured service binding. This maps to `env.USERS.fetch(request)`.
 
 ```ts
 const callable = {
-  target: { type: "http", url: "https://api.example.com/tools" },
+  target: {
+    type: "env-binding",
+    bindingType: "service",
+    bindingName: "USERS",
+  },
+};
+```
+
+Call Workers RPC on a configured service binding. This maps to
+`env.TOOLS.callTool(payload)`.
+
+```ts
+const callable = {
+  target: {
+    type: "env-binding",
+    bindingType: "service",
+    bindingName: "TOOLS",
+  },
+  call: { type: "rpc", method: "callTool" },
+};
+```
+
+Call a Durable Object by stable name. This resolves
+`env.TOOL_REGISTRY.getByName("global")` when the runtime exposes
+`getByName()`, otherwise it falls back to `idFromName()` plus `get()`.
+
+```ts
+const callable = {
+  target: {
+    type: "env-binding",
+    bindingType: "durable-object-namespace",
+    bindingName: "TOOL_REGISTRY",
+    durableObject: { name: "global" },
+  },
+  call: { type: "rpc", method: "listTools" },
+};
+```
+
+Call a Durable Object by a previously persisted Durable Object ID string. There
+is no `newUniqueId` callable selector; allocation belongs in provisioning code.
+
+```ts
+const callable = {
+  target: {
+    type: "env-binding",
+    bindingType: "durable-object-namespace",
+    bindingName: "TOOL_REGISTRY",
+    durableObject: { id: "<durable-object-id-string>" },
+  },
+  call: { type: "fetch" },
+};
+```
+
+Load a Dynamic Worker through a Worker Loader binding. The target resolves the
+loader first, then treats the selected Dynamic Worker entrypoint like the same
+fetch/RPC target shape used by service bindings and Durable Object stubs.
+
+```ts
+const callable = {
+  target: {
+    type: "env-binding",
+    bindingType: "dynamic-worker-loader",
+    bindingName: "LOADER",
+    workerCode: {
+      compatibilityDate: "2026-04-27",
+      mainModule: "worker.js",
+      modules: {
+        "worker.js": "export default { fetch() { return Response.json({ ok: true }) } }",
+      },
+    },
+  },
+};
+```
+
+Select a named Dynamic Worker entrypoint and pass `ctx.props` to it.
+
+```ts
+const callable = {
+  target: {
+    type: "env-binding",
+    bindingType: "dynamic-worker-loader",
+    bindingName: "LOADER",
+    workerCode,
+    entrypoint: {
+      name: "Agent",
+      props: { tenantId: "tenant_123" },
+    },
+  },
+  call: { type: "rpc", method: "run" },
+};
+```
+
+Use Worker Loader `get(id, callback)` instead of `load(code)` when the ID names
+this exact code version. Omit `load` for `load(code)`.
+
+```ts
+const callable = {
+  target: {
+    type: "env-binding",
+    bindingType: "dynamic-worker-loader",
+    bindingName: "LOADER",
+    workerCode,
+    load: { type: "get", id: "sha256:..." },
+  },
+};
+```
+
+Use a loopback service binding from `ctx.exports`. This is how a Worker can call
+one of its own top-level `WorkerEntrypoint` exports, optionally with dynamic
+props. Cloudflare documents this as a capability that regular env service
+bindings do not have.
+
+```ts
+const callable = {
+  target: {
+    type: "loopback-binding",
+    bindingType: "service",
+    exportName: "Streams",
+    props: { tenantId: "tenant_123" },
+  },
+  call: { type: "rpc", method: "write" },
+};
+
+await dispatchCallable({
+  callable,
+  payload: { stream: "events", value: { ok: true } },
+  ctx: { exports: ctx.exports },
+});
+```
+
+The default export is also just an export name when the runtime exposes it as a
+loopback service binding:
+
+```ts
+const callable = {
+  target: {
+    type: "loopback-binding",
+    bindingType: "service",
+    exportName: "default",
+  },
+};
+```
+
+Loopback Durable Object namespace bindings are part of the schema because the
+Cloudflare docs say `ctx.exports` includes Durable Object namespace bindings for
+migrated Durable Object exports. The current Workers Vitest fixture does not
+expose that namespace shape for this package's test DO, so the runtime branch is
+implemented and documented but not treated as the primary tested path yet.
+
+```ts
+const callable = {
+  target: {
+    type: "loopback-binding",
+    bindingType: "durable-object-namespace",
+    exportName: "TenantObject",
+    durableObject: { name: "tenant_123" },
+  },
+  call: { type: "rpc", method: "run" },
+};
+```
+
+## Value Dispatch
+
+`dispatchCallable()` turns fetch callables into ordinary value calls by building
+a request, dispatching it, rejecting non-2xx responses, and parsing the body.
+The default request template is deliberately boring:
+
+- `POST`
+- `content-type: application/json`
+- body is `JSON.stringify(payload ?? null)`
+
+If `call.request` is present, it is a partial override. Adding headers or query
+parameters does not drop the default JSON body. `GET` and `HEAD` value calls do
+not send a body.
+
+If the response has a JSON content type, the result is parsed JSON. Otherwise,
+it is returned as text. Non-2xx responses throw `CallableError` with code
+`REMOTE_ERROR`, and `error.details.body` contains the response body.
+
+Use `call.passthroughArgs` to pre-populate descriptor-owned fields into the
+value payload. It behaves like shallow default object fields: runtime payload
+fields override descriptor fields, and nested objects are replaced rather than
+merged.
+
+```ts
+const callable = {
+  target: { type: "url", url: "https://api.example.com/tools" },
   call: {
     type: "fetch",
     passthroughArgs: { provider: "github", dryRun: true },
@@ -169,7 +312,11 @@ await dispatchCallable({
 ```ts
 await dispatchCallable({
   callable: {
-    target: { type: "service", binding: { $binding: "TOOLS" } },
+    target: {
+      type: "env-binding",
+      bindingType: "service",
+      bindingName: "TOOLS",
+    },
     call: {
       type: "rpc",
       method: "callTool",
@@ -185,18 +332,20 @@ It is not available for `argsMode: "positional"`, and it is not applied by
 `dispatchCallableFetch()`. The lower-level fetch API receives a complete
 `Request`, so there is no JSON payload assembly step where args can be merged.
 
-If the response has a JSON content type, the result is parsed JSON. Otherwise it
-is returned as text. Non-2xx responses throw `CallableError` with code
-`REMOTE_ERROR`, and the error details include the response status and body.
+## RPC
 
-RPC callables dispatch to a service binding or Durable Object stub and call the
-named method. `argsMode` defaults to `object`, so the payload is passed as one
-argument:
+RPC results are returned raw. Workers RPC can return structured-clone values,
+functions, streams, `Request`, `Response`, `RpcTarget` instances, and objects
+containing RPC stubs. `dispatchCallable()` does not clone, serialize, or
+auto-dispose RPC results because that would destroy the Cap'n Web
+object-capability behavior this abstraction is meant to preserve.
+
+`argsMode` defaults to `object`, so the payload is passed as one argument:
 
 ```ts
 await dispatchCallable({
   callable: {
-    target: { type: "service", binding: { $binding: "TOOLS" } },
+    target: { type: "env-binding", bindingType: "service", bindingName: "TOOLS" },
     call: { type: "rpc", method: "callTool" },
   },
   payload: { name: "createIssue", args: { title: "Bug" } },
@@ -209,7 +358,7 @@ Use `argsMode: "positional"` when the payload is an array and should be spread:
 ```ts
 await dispatchCallable({
   callable: {
-    target: { type: "service", binding: { $binding: "MATH" } },
+    target: { type: "env-binding", bindingType: "service", bindingName: "MATH" },
     call: { type: "rpc", method: "add", argsMode: "positional" },
   },
   payload: [1, 2],
@@ -217,24 +366,20 @@ await dispatchCallable({
 });
 ```
 
-Cloudflare RPC stubs appear to expose every possible method name. That means
-this library can sanitize the method string, but it cannot prove a real remote
-method exists before calling it. Missing remote methods surface as remote RPC
-errors from the platform.
+`call.method` must be one direct JavaScript identifier, not a dotted path. Names
+such as `fetch`, `connect`, `call`, `alarm`, `then`, `constructor`, `prototype`,
+and `__proto__` are rejected because they collide with Fetch semantics,
+Promise-like behavior, JavaScript prototype behavior, or Cloudflare RPC
+reserved names.
 
-RPC results are returned raw. That is intentional: Workers RPC can return
-ordinary structured-clone values, but it can also return functions, streams,
-`Request`, `Response`, `RpcTarget` instances, or objects containing RPC stubs.
-When Cloudflare gives an RPC result a disposer, the caller owns that lifetime
-and should use `using` or call the disposer manually. `dispatchCallable()` does
-not clone, serialize, or auto-dispose RPC results because that would destroy the
-Cap'n Web object-capability behavior this abstraction is meant to preserve.
+Cloudflare RPC docs:
 
-Cloudflare documents RPC lifecycle and disposal here:
+- https://developers.cloudflare.com/workers/runtime-apis/rpc/
+- https://developers.cloudflare.com/workers/runtime-apis/rpc/reserved-methods/
+- https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/
+- https://blog.cloudflare.com/javascript-native-rpc/
 
-https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/
-
-## Dispatching Fetch
+## Fetch Dispatch
 
 `dispatchCallableFetch()` is the streaming-preserving path. It never reads the
 incoming request body and returns the raw `Response`.
@@ -243,9 +388,10 @@ incoming request body and returns the raw `Response`.
 const response = await dispatchCallableFetch({
   callable: {
     target: {
-      type: "durable-object",
-      binding: { $binding: "ROOMS" },
-      address: { type: "name", name: "room-1" },
+      type: "env-binding",
+      bindingType: "durable-object-namespace",
+      bindingName: "ROOMS",
+      durableObject: { name: "room-1" },
     },
     call: { type: "fetch", path: { base: "/events" } },
   },
@@ -267,30 +413,29 @@ with upgrade headers, not a separate callable kind.
 - `binaryType` and `accept`: applied before the returned Worker WebSocket is
   accepted.
 
-## Fetch Targets And Paths
+Cloudflare WebSocket docs:
 
-V1 supports:
+- https://developers.cloudflare.com/workers/examples/websockets/
+- https://developers.cloudflare.com/workers/runtime-apis/response/#websocket
 
-- `http`: public HTTP via the explicit `ctx.fetch` capability
-- `service`: a Worker service binding with `fetch(request)`
-- `durable-object`: a Durable Object namespace, addressed by stable name or id
-- `dynamic-worker`: a Worker loaded through a Worker Loader binding
+## Fetch Paths
 
-Public HTTP targets use `url`, and the URL may include a query string:
+Public URL targets use `url`, and the URL may include a query string:
 
 ```ts
-{ target: { type: "http", url: "https://api.example.com/v1?fixed=true" } }
+{ target: { type: "url", url: "https://api.example.com/v1?fixed=true" } }
 ```
 
-Service and Durable Object targets do not have public URLs. The binding or DO
-stub is the authority, and the URL visible to the callee's `fetch(request)`
+Env and loopback binding targets do not have public URLs. The resolved binding
+or stub is the authority, and the URL visible to the callee's `fetch(request)`
 handler is synthetic and chosen by this runtime:
 
 ```ts
 {
   target: {
-    type: "service",
-    binding: { $binding: "USERS" }
+    type: "env-binding",
+    bindingType: "service",
+    bindingName: "USERS"
   }
 }
 ```
@@ -301,7 +446,7 @@ Fetch path options live under `call.path` because they are part of building a
 ```ts
 // Default call: omitted means { type: "fetch" }
 {
-  target: { type: "http", url: "https://api.example.com/v1" }
+  target: { type: "url", url: "https://api.example.com/v1" }
 }
 // Incoming /users?active=true
 // Outbound https://api.example.com/v1/users?active=true
@@ -310,7 +455,7 @@ Fetch path options live under `call.path` because they are part of building a
 ```ts
 // Replace
 {
-  target: { type: "http", url: "https://api.example.com/status" },
+  target: { type: "url", url: "https://api.example.com/status" },
   call: { type: "fetch", path: { mode: "replace" } }
 }
 // Incoming /users?active=true
@@ -320,7 +465,11 @@ Fetch path options live under `call.path` because they are part of building a
 ```ts
 // Service binding with a synthetic path base
 {
-  target: { type: "service", binding: { $binding: "USERS" } },
+  target: {
+    type: "env-binding",
+    bindingType: "service",
+    bindingName: "USERS"
+  },
   call: { type: "fetch", path: { base: "/internal", mode: "prefix" } }
 }
 // Incoming /users?active=true
@@ -334,153 +483,79 @@ trailing slash: `https://api.example.com/v1/` plus incoming `/` stays
 
 Query handling is deliberately simple in v1: there is no merge. In proxy mode,
 the incoming request query is used. In value mode, `dispatchCallable()` creates
-that incoming request; if `call.request.query` is omitted, an HTTP target's
-query is preserved, and if `call.request.query` is present, it replaces the
-target query wholesale. Use `query: {}` to clear the target query.
+that incoming request; if `call.request.query` is omitted, a URL target's query
+is preserved, and if `call.request.query` is present, it replaces the target
+query wholesale. Use `query: {}` to clear the target query.
 
-```ts
-// Proxy mode drops target query params when the incoming request has no query.
-{ target: { type: "http", url: "https://api.example.com/v1?fixed=true" } }
-// Incoming /users
-// Outbound https://api.example.com/v1/users
-```
+Advanced rewrite behavior is future work. The task notes track the prior art we
+discussed: Caddy `reverse_proxy` plus `rewrite`/`uri`, Envoy `prefix_rewrite`,
+and NGINX `proxy_pass` URI behavior.
 
-```ts
-// Proxy mode uses the incoming query wholesale.
-{ target: { type: "http", url: "https://api.example.com/v1?fixed=true" } }
-// Incoming /users?active=true
-// Outbound https://api.example.com/v1/users?active=true
-```
+## Dynamic Workers
 
-Advanced rewrite behavior is intentionally future work. The task notes track
-the prior art we discussed: Caddy `reverse_proxy` plus `rewrite`/`uri`, Envoy
-`prefix_rewrite`, and NGINX `proxy_pass` URI behavior.
+V1 supports a strict subset of Cloudflare `WorkerCode`:
 
-## Dynamic Worker Targets
+- `workerCode.compatibilityDate` is required.
+- `workerCode.compatibilityFlags` is an optional string array.
+- `workerCode.mainModule` must exist in `workerCode.modules`.
+- every module name must end in `.js`.
+- module bodies are strings.
 
-Dynamic Workers behave like binding-backed targets once resolved. The only
-Dynamic Worker-specific work is resolving the Worker Loader binding, loading the
-inline code, and taking the default entrypoint. After that, fetch and RPC use
-the same dispatch paths as service bindings and Durable Object stubs.
-
-Omitted `call` means fetch:
+Named entrypoints and entrypoint props are supported:
 
 ```ts
 const callable = {
   target: {
-    type: "dynamic-worker",
-    loader: { $binding: "LOADER" },
-    code: {
-      compatibilityDate: "2026-04-27",
-      mainModule: "worker.js",
-      modules: {
-        "worker.js": "export default { fetch() { return Response.json({ ok: true }) } }",
-      },
+    type: "env-binding",
+    bindingType: "dynamic-worker-loader",
+    bindingName: "LOADER",
+    workerCode,
+    entrypoint: {
+      name: "Agent",
+      props: { tenantId: "tenant_123" },
     },
-  },
-};
-```
-
-RPC uses the same `call.method` and `argsMode` rules as service/DO RPC:
-
-```ts
-const callable = {
-  target: {
-    type: "dynamic-worker",
-    loader: { $binding: "LOADER" },
-    code,
   },
   call: { type: "rpc", method: "run" },
 };
 ```
 
-By default the runtime calls `loader.load(code)`, which creates a fresh Dynamic
-Worker. Add `cache` only when the ID names this exact code version:
+V1 does not support typed module objects, Python, `allowExperimental`,
+Dynamic Worker `env`, `globalOutbound`, tails, source refs, or Durable Object
+facets. Those are real Cloudflare features, but they require a policy story and
+are parked in `tasks/`.
 
-```ts
-const callable = {
-  target: {
-    type: "dynamic-worker",
-    loader: { $binding: "LOADER" },
-    code,
-    cache: { mode: "get", id: "sha256:..." },
-  },
-};
-```
+V1 does not set `WorkerCode.globalOutbound`, so Dynamic Workers get
+Cloudflare's default outbound behavior. Do not dispatch tenant-authored,
+user-authored, LLM-authored, or otherwise untrusted Dynamic Worker callables
+until code provenance, source-size limits, and outbound policy land.
 
-`cache` is loader identity, not application state affinity. The callable
-runtime does not memoize Worker stubs; it calls `loader.get(id, ...)` for each
-dispatch. Cloudflare may reuse a warm isolate for the same ID, but the callback
-must return the same code for that ID and callers must not rely on two requests
-hitting the same isolate. If the code changes, use a new ID. Content hashes or
-explicit version strings are good cache IDs. V1 trusts the supplied ID and does
-not yet derive or validate a hash; that stricter check is tracked in
-`tasks/dynamic-and-dispatch.md`.
+Dynamic Worker docs:
 
-V1 supports only inline JavaScript modules:
-
-- `code.compatibilityDate` is required.
-- `code.compatibilityFlags` is an optional string array.
-- `code.mainModule` must exist in `code.modules`.
-- every module name must end in `.js`.
-- named entrypoints, entrypoint props, typed module objects, Python,
-  `allowExperimental`, `env`, `globalOutbound`, tails, streaming tails, and
-  source refs are future work.
-
-Dynamic Worker targets execute the supplied module source. V1 does not set
-`WorkerCode.globalOutbound`, so Dynamic Workers get Cloudflare's default
-outbound behavior. That means dynamic code can use global `fetch()`/`connect()`
-unless a later policy layer blocks or intercepts it. Do not dispatch
-tenant-authored, user-authored, LLM-authored, or otherwise untrusted Dynamic
-Worker callables until code provenance, source-size limits, and outbound policy
-land.
-
-Cloudflare Dynamic Workers docs:
-
-https://developers.cloudflare.com/dynamic-workers/api-reference/
-
-## Durable Object Addresses
-
-Durable Object addresses are deliberately stable:
-
-```ts
-{ type: "name", name: "room-1" }
-{ type: "id", id: "..." }
-```
-
-There is no `newUniqueId` address. Creating a fresh Durable Object id is
-allocation/provisioning work, not a stable invocation descriptor.
+- https://developers.cloudflare.com/dynamic-workers/api-reference/
+- https://developers.cloudflare.com/dynamic-workers/usage/bindings/
+- https://blog.cloudflare.com/dynamic-workers/
 
 ## Security
 
 Treat Callables like untrusted code. If you pass a full Worker `env` to a
-Callable, you are allowing the JSON to choose any binding name it contains.
-For service and Durable Object targets, that means the JSON can choose any
-binding exposed in that `env` object and, for Durable Object namespaces, any
-stable name or id inside that namespace.
+Callable, you are allowing the JSON to choose any `env-binding.bindingName` it
+contains. For Durable Object namespace bindings, it can also choose any stable
+name or ID inside that namespace.
 
-V1 keeps that resolver simple on purpose so the kernel stays small. Do not pass
-tenant-authored, LLM-authored, or user-authored callables a sensitive `env`
-object until `tasks/capability-policy.md` is implemented.
-
-`ctx.fetch` is only used for public HTTP targets and is required for them.
-Worker-boundary code that wants normal runtime fetch should pass
-`ctx: { fetch }` explicitly. The library does not fall back to
-`globalThis.fetch`, because public egress is a capability and should not be
-created by a shared helper reading ambient globals.
-
-Dynamic Worker callables are especially sensitive: the descriptor contains
-executable source code. V1 intentionally leaves Cloudflare's default outbound
-behavior alone, and it does not yet validate code provenance or provide a
-policy-controlled egress gateway.
+V1 keeps that resolver simple so the kernel stays small. Do not pass
+tenant-authored, LLM-authored, or user-authored callables a sensitive `env`,
+`ctx.exports`, or `fetch` capability until `tasks/capability-policy.md` is
+implemented.
 
 This warning is the same object-capability boundary Cloudflare describes for
 Workers RPC: holding a binding or stub is authority. A Callable is not itself a
 safe capability; it is JSON asking this runtime to resolve one.
 
-https://developers.cloudflare.com/workers/runtime-apis/rpc/visibility/#security-model
-https://blog.cloudflare.com/javascript-native-rpc/
-https://developers.cloudflare.com/durable-objects/api/namespace/
+Security references:
+
+- https://developers.cloudflare.com/workers/runtime-apis/rpc/visibility/#security-model
+- https://blog.cloudflare.com/javascript-native-rpc/
+- https://github.com/cloudflare/capnweb
 
 ## Tests
 
