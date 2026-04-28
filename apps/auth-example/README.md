@@ -1,4 +1,4 @@
 # auth-example
 
 Example app that uses Iterate Auth api and sdk
-right now its not automatically deployed as manually created OAuth credentials are required from the deployed auth app.
+local dev OAuth credentials are auto-generated into `.dev.vars` when `pnpm dev` is run from the repo root.

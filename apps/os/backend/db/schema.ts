@@ -70,12 +70,11 @@ export const iterateId = <P extends string>(prefix: P) =>
 // #region ========== Better Auth Schema ==========
 export const user = pgTable("user", (t) => ({
   id: iterateId("usr"),
+  authUserId: t.text().unique(),
   name: t.text().notNull(),
   email: t.text().notNull().unique(),
   emailVerified: t.boolean().default(false).notNull(),
   image: t.text(),
-  // https://www.better-auth.com/docs/plugins/admin#schema
-  role: t.text().default("user"),
   banned: t.boolean(),
   banReason: t.text(),
   banExpires: t.timestamp(),
@@ -83,32 +82,8 @@ export const user = pgTable("user", (t) => ({
 }));
 
 export const userRelations = relations(user, ({ many }) => ({
-  session: many(session),
   account: many(account),
-  organizationUserMembership: many(organizationUserMembership),
   projectConnections: many(projectConnection),
-}));
-
-export const session = pgTable("better_auth_session", (t) => ({
-  id: iterateId("ses"),
-  expiresAt: t.timestamp().notNull(),
-  token: t.text().notNull().unique(),
-  ipAddress: t.text(),
-  userAgent: t.text(),
-  userId: t
-    .text()
-    .notNull()
-    .references(() => user.id, { onDelete: "cascade" }),
-  // https://www.better-auth.com/docs/plugins/admin#schema
-  impersonatedBy: t.text().references(() => user.id, { onDelete: "cascade" }),
-  ...withTimestamps,
-}));
-
-export const sessionRelations = relations(session, ({ one }) => ({
-  user: one(user, {
-    fields: [session.userId],
-    references: [user.id],
-  }),
 }));
 
 export const account = pgTable(
@@ -147,120 +122,19 @@ export const verification = pgTable("better_auth_verification", (t) => ({
   expiresAt: t.timestamp().notNull(),
   ...withTimestamps,
 }));
-export const deviceCode = pgTable("device_code", (t) => ({
-  id: iterateId("dvc"),
-  deviceCode: t.text().notNull(),
-  userCode: t.text().notNull(),
-  userId: t.text().references(() => user.id, { onDelete: "cascade" }),
-  expiresAt: t.timestamp().notNull(),
-  status: t.text().notNull(), // pending, approved, denied
-  lastPolledAt: t.timestamp(),
-  pollingInterval: t.integer(),
-  clientId: t.text(),
-  ...withTimestamps,
-}));
 // #endregion ========== Better Auth Schema ==========
 
-// #region ========== Organization & Project ==========
-export const organization = pgTable(
-  "organization",
-  (t) => ({
-    id: iterateId("org"),
-    name: t.text().notNull(),
-    slug: t.text().notNull().unique(), // URL-safe slug: alphanumeric only, must contain letter
-    ...withTimestamps,
-  }),
-  () => [slugCheck("slug", "organization_slug_valid")],
-);
-
-export const organizationRelations = relations(organization, ({ many, one }) => ({
-  projects: many(project),
-  members: many(organizationUserMembership),
-  invites: many(organizationInvite),
-  billingAccount: one(billingAccount),
-}));
-
-export const organizationUserMembership = pgTable(
-  "organization_user_membership",
-  (t) => ({
-    id: iterateId("member"),
-    organizationId: t
-      .text()
-      .notNull()
-      .references(() => organization.id, { onDelete: "cascade" }),
-    userId: t
-      .text()
-      .notNull()
-      .references(() => user.id, { onDelete: "cascade" }),
-    role: t
-      .text({ enum: [...UserRole] })
-      .notNull()
-      .default("member"),
-    ...withTimestamps,
-  }),
-  (t) => [uniqueIndex().on(t.userId, t.organizationId)],
-);
-
-export const organizationUserMembershipRelations = relations(
-  organizationUserMembership,
-  ({ one }) => ({
-    organization: one(organization, {
-      fields: [organizationUserMembership.organizationId],
-      references: [organization.id],
-    }),
-    user: one(user, {
-      fields: [organizationUserMembership.userId],
-      references: [user.id],
-    }),
-  }),
-);
-
-// Organization invites (pending invitations by email)
-export const organizationInvite = pgTable(
-  "organization_invite",
-  (t) => ({
-    id: iterateId("inv"),
-    organizationId: t
-      .text()
-      .notNull()
-      .references(() => organization.id, { onDelete: "cascade" }),
-    email: t.text().notNull(),
-    invitedByUserId: t
-      .text()
-      .notNull()
-      .references(() => user.id, { onDelete: "cascade" }),
-    role: t
-      .text({ enum: [...UserRole] })
-      .notNull()
-      .default("member"),
-    ...withTimestamps,
-  }),
-  (t) => [uniqueIndex().on(t.organizationId, t.email)],
-);
-
-export const organizationInviteRelations = relations(organizationInvite, ({ one }) => ({
-  organization: one(organization, {
-    fields: [organizationInvite.organizationId],
-    references: [organization.id],
-  }),
-  invitedBy: one(user, {
-    fields: [organizationInvite.invitedByUserId],
-    references: [user.id],
-  }),
-}));
-
-// Project (renamed from instance/estate)
+// #region ========== Project ==========
 export const project = pgTable(
   "project",
   (t) => ({
     id: iterateId("prj"),
+    authProjectId: t.text().unique(),
+    authOrganizationId: t.text().notNull(),
+    authOrganizationSlug: t.text().notNull(),
     name: t.text().notNull(),
     slug: t.text().notNull().unique(), // Globally unique URL-safe slug
     jonasLand: t.boolean().notNull().default(false),
-    organizationId: t
-      .text()
-      .notNull()
-      .references(() => organization.id, { onDelete: "cascade" }),
     sandboxProvider: t.text({ enum: [...PROJECT_SANDBOX_PROVIDER] }).notNull(),
     configRepoId: t.text(),
     configRepoFullName: t.text(),
@@ -269,14 +143,14 @@ export const project = pgTable(
     defaultPort: t.integer(),
     ...withTimestamps,
   }),
-  (t) => [uniqueIndex().on(t.organizationId, t.name), slugCheck("slug", "project_slug_valid")],
+  (t) => [
+    uniqueIndex().on(t.authOrganizationId, t.name),
+    index().on(t.authOrganizationId),
+    slugCheck("slug", "project_slug_valid"),
+  ],
 );
 
-export const projectRelations = relations(project, ({ one, many }) => ({
-  organization: one(organization, {
-    fields: [project.organizationId],
-    references: [organization.id],
-  }),
+export const projectRelations = relations(project, ({ many }) => ({
   machines: many(machine),
   envVars: many(projectEnvVar),
   accessTokens: many(projectAccessToken),
@@ -317,13 +191,12 @@ export const projectEnvVarRelations = relations(projectEnvVar, ({ one }) => ({
   }),
 }));
 
-// Secrets table - encrypted values with hierarchy (global > org > project > user)
+// Secrets table - encrypted values with hierarchy (global > project > user)
 // All scope fields nullable: null = global scope
 export const secret = pgTable(
   "secret",
   (t) => ({
     id: iterateId("sec"),
-    organizationId: t.text().references(() => organization.id, { onDelete: "cascade" }),
     projectId: t.text().references(() => project.id, { onDelete: "cascade" }),
     userId: t.text().references(() => user.id, { onDelete: "cascade" }),
     key: t.text().notNull(), // e.g. "openai_api_key", "gmail.access_token"
@@ -337,10 +210,7 @@ export const secret = pgTable(
   }),
   (t) => [
     // Unique within each scope level (NULLS NOT DISTINCT so global secrets with NULL scope are unique)
-    unique("secret_scope_key_idx")
-      .on(t.organizationId, t.projectId, t.userId, t.key)
-      .nullsNotDistinct(),
-    index().on(t.organizationId),
+    unique("secret_scope_key_idx").on(t.projectId, t.userId, t.key).nullsNotDistinct(),
     index().on(t.projectId),
     index().on(t.userId),
     index().on(t.key),
@@ -348,10 +218,6 @@ export const secret = pgTable(
 );
 
 export const secretRelations = relations(secret, ({ one }) => ({
-  organization: one(organization, {
-    fields: [secret.organizationId],
-    references: [organization.id],
-  }),
   project: one(project, {
     fields: [secret.projectId],
     references: [project.id],
@@ -600,11 +466,7 @@ export const billingAccount = pgTable(
   "billing_account",
   (t) => ({
     id: iterateId("bill"),
-    organizationId: t
-      .text()
-      .notNull()
-      .unique()
-      .references(() => organization.id, { onDelete: "cascade" }),
+    authOrganizationId: t.text().notNull().unique(),
     stripeCustomerId: t.text().unique(),
     stripeSubscriptionId: t.text().unique(),
     stripeSubscriptionItemId: t.text(),
@@ -614,15 +476,14 @@ export const billingAccount = pgTable(
     cancelAtPeriodEnd: t.boolean().default(false),
     ...withTimestamps,
   }),
-  (t) => [index().on(t.stripeCustomerId), index().on(t.stripeSubscriptionId)],
+  (t) => [
+    index().on(t.authOrganizationId),
+    index().on(t.stripeCustomerId),
+    index().on(t.stripeSubscriptionId),
+  ],
 );
 
-export const billingAccountRelations = relations(billingAccount, ({ one }) => ({
-  organization: one(organization, {
-    fields: [billingAccount.organizationId],
-    references: [organization.id],
-  }),
-}));
+export const billingAccountRelations = relations(billingAccount, () => ({}));
 
 // #endregion ========== Billing ==========
 

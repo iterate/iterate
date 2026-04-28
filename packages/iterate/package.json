@@ -47,6 +47,7 @@
     "prepack": "pnpm build"
   },
   "dependencies": {
+    "@iterate-com/auth-contract": "workspace:*",
     "@clack/prompts": "^1.0.0",
     "@orpc/client": "1.13.14",
     "@orpc/server": "1.13.14",
