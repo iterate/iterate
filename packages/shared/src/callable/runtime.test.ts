@@ -1910,6 +1910,30 @@ describe("connectCallableWebSocket", () => {
     });
   });
 
+  test("preserves public URL callable query parameters on the upgrade request", async () => {
+    let requestUrl: string | undefined;
+
+    await expect(
+      connectCallableWebSocket({
+        callable: {
+          type: "fetch",
+          via: { type: "url", url: "https://api.example.com/socket?streamPath=%2Fdemo&token=abc" },
+        },
+        ctx: {
+          fetch: async (request) => {
+            requestUrl = request.url;
+            return new Response("forbidden", { status: 403, statusText: "Forbidden" });
+          },
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "TRANSPORT_FAILED",
+      retryable: false,
+    });
+
+    expect(requestUrl).toBe("https://api.example.com/socket?streamPath=%2Fdemo&token=abc");
+  });
+
   test("connects through a Durable Object fetch callable", async () => {
     const ws = await connectCallableWebSocket({
       callable: {

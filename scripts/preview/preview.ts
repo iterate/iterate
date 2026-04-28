@@ -410,7 +410,7 @@ export async function testCloudflarePreviewForPullRequest(
       ...params.previewTestCommandArgs,
     ],
     command: "doppler",
-    environment: params.commandEnvironment,
+    environment: stripInheritedAppConfigEnv(params.commandEnvironment),
     maxAttempts: defaultPreviewTestMaxAttempts,
     retryDelayMs: defaultPreviewTestRetryDelayMs,
     signal: params.signal,
@@ -598,7 +598,7 @@ async function createPreviewEnvironment(
     const deployResult = await runCommand({
       args: deployArgs,
       command: "doppler",
-      environment: params.commandEnvironment,
+      environment: stripInheritedAppConfigEnv(params.commandEnvironment),
       signal: params.signal,
       workingDirectory: params.workingDirectory,
     });
@@ -695,7 +695,7 @@ async function destroyPreviewEnvironment(
   const destroyResult = await runCommand({
     args: destroyArgs,
     command: "doppler",
-    environment: params.commandEnvironment,
+    environment: stripInheritedAppConfigEnv(params.commandEnvironment),
     signal: params.signal,
     workingDirectory: params.workingDirectory,
   });
@@ -904,6 +904,23 @@ function canRunPreviewTests(
     entry.publicUrl &&
     ["awaiting-tests", "deployed", "tests-failed"].includes(entry.status),
   );
+}
+
+function stripInheritedAppConfigEnv(env: NodeJS.ProcessEnv) {
+  const next = { ...env };
+  /**
+   * The preview workflow itself runs inside the `os` Doppler project so it can
+   * access shared orchestration secrets. The command this file launches then
+   * runs a second, app-specific `doppler run`. Doppler preserves inherited env
+   * vars, so without this scrub the inner app sees unrelated `APP_CONFIG_*`
+   * values from `os` and the app config typo guard correctly rejects them.
+   */
+  for (const key of Object.keys(next)) {
+    if (key === "APP_CONFIG" || key.startsWith("APP_CONFIG_")) {
+      delete next[key];
+    }
+  }
+  return next;
 }
 
 async function runCommand(params: {
