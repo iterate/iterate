@@ -20,7 +20,12 @@ ALTER TABLE "secret" DROP CONSTRAINT "secret_organization_id_organization_id_fk"
 DROP INDEX "project_organization_id_name_index";--> statement-breakpoint
 DROP INDEX "secret_organization_id_index";--> statement-breakpoint
 ALTER TABLE "project" ADD COLUMN "auth_project_id" text;--> statement-breakpoint
-ALTER TABLE "project" ADD COLUMN "auth_organization_slug" text NOT NULL;--> statement-breakpoint
+ALTER TABLE "project" ADD COLUMN "auth_organization_slug" text;--> statement-breakpoint
+UPDATE "project"
+SET "auth_organization_slug" = "organization"."slug"
+FROM "organization"
+WHERE "project"."auth_organization_id" = "organization"."id";--> statement-breakpoint
+ALTER TABLE "project" ALTER COLUMN "auth_organization_slug" SET NOT NULL;--> statement-breakpoint
 ALTER TABLE "user" ADD COLUMN "auth_user_id" text;--> statement-breakpoint
 CREATE INDEX "billing_account_auth_organization_id_index" ON "billing_account" USING btree ("auth_organization_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "project_auth_organization_id_name_index" ON "project" USING btree ("auth_organization_id","name");--> statement-breakpoint
