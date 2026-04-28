@@ -4,18 +4,14 @@
 
 import { dispatchCallable } from "../callable/runtime.ts";
 import type { CallableContext } from "../callable/types.ts";
-import type { CallableToolProvider, ToolProvider, ToolProviderDescription } from "./types.ts";
-
-const NO_TYPES_DESCRIPTION: ToolProviderDescription = {
-  typeDefinitions: "(...args: unknown[]) => Promise<unknown>",
-};
+import type { CallableToolProvider, ToolProvider } from "./types.ts";
 
 export function resolveCallableToolProvider(
   descriptor: CallableToolProvider,
   ctx: CallableContext,
 ): ToolProvider {
   return {
-    async execute(path: string[], payload: unknown): Promise<unknown> {
+    async execute(path, payload) {
       return await dispatchCallable({
         callable: descriptor.execute,
         payload: { path, payload },
@@ -23,11 +19,11 @@ export function resolveCallableToolProvider(
       });
     },
 
-    async describe(): Promise<ToolProviderDescription> {
+    async describe() {
       if (!descriptor.describe) {
         const pathLabel = descriptor.path.join(".");
         return {
-          typeDefinitions: `/** The "${pathLabel}" tool provider has not provided type information. */\n${NO_TYPES_DESCRIPTION.typeDefinitions}`,
+          typeDefinitions: `/** The "${pathLabel}" tool provider has not provided type information. */\n(...args: unknown[]) => Promise<unknown>`,
         };
       }
 
@@ -43,10 +39,10 @@ export function resolveCallableToolProvider(
         "typeDefinitions" in result &&
         typeof (result as Record<string, unknown>).typeDefinitions === "string"
       ) {
-        return result as ToolProviderDescription;
+        return result as { typeDefinitions: string };
       }
 
-      return NO_TYPES_DESCRIPTION;
+      return { typeDefinitions: "(...args: unknown[]) => Promise<unknown>" };
     },
   };
 }

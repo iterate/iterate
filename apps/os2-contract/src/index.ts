@@ -1,39 +1,9 @@
 import { eventIterator, oc } from "@orpc/contract";
 import { internalContract } from "@iterate-com/shared/apps/internal-router-contract";
-import { Callable } from "@iterate-com/shared/callable/types.ts";
+import { CallableToolProvider, CodemodeEvent } from "@iterate-com/shared/codemode/types";
 import { z } from "zod";
 
 const JSONObject = z.record(z.string(), z.unknown());
-
-// ── Codemode schemas ─────────────────────────────────────────────────
-
-const CallableToolProviderInput = z.object({
-  path: z.array(z.string().min(1)).min(1),
-  execute: Callable,
-  describe: Callable.optional(),
-});
-
-const CodemodeEventSchema = z
-  .object({
-    blockId: z.string(),
-    timestamp: z.string(),
-    type: z.string(),
-  })
-  .passthrough();
-
-const CodemodeExecuteInput = z.object({
-  code: z.string().min(1),
-  blockId: z.string().optional(),
-  providers: z.array(CallableToolProviderInput).default([]),
-});
-
-const CodemodeDescribeInput = z.object({
-  providers: z.array(CallableToolProviderInput),
-});
-
-const CodemodeDescribeOutput = z.object({
-  typeDefinitions: z.string(),
-});
 
 const Project = z.object({
   id: z.string(),
@@ -188,8 +158,14 @@ export const osContract = oc.router({
         description: "Execute code in a sandboxed dynamic worker with tool providers",
         tags: ["/codemode"],
       })
-      .input(CodemodeExecuteInput)
-      .output(eventIterator(CodemodeEventSchema)),
+      .input(
+        z.object({
+          code: z.string().min(1),
+          blockId: z.string().optional(),
+          providers: z.array(CallableToolProvider).default([]),
+        }),
+      )
+      .output(eventIterator(CodemodeEvent)),
     describe: oc
       .route({
         method: "POST",
@@ -197,8 +173,8 @@ export const osContract = oc.router({
         description: "Fetch type descriptions from tool providers",
         tags: ["/codemode"],
       })
-      .input(CodemodeDescribeInput)
-      .output(CodemodeDescribeOutput),
+      .input(z.object({ providers: z.array(CallableToolProvider) }))
+      .output(z.object({ typeDefinitions: z.string() })),
   },
   projects: {
     create: oc
