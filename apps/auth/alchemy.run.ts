@@ -1,7 +1,8 @@
-import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import alchemy, { type Scope } from "alchemy";
-import { z } from "zod/v4";
 import { D1Database, TanStackStart } from "alchemy/cloudflare";
+import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
+import { slugify } from "@iterate-com/shared/slugify";
+import { z } from "zod/v4";
 
 const APP_NAME = "auth";
 
@@ -17,19 +18,28 @@ const AlchemyEnv = z.object({
   CLOUDFLARE_ACCOUNT_ID: z.string().trim().min(1, "CLOUDFLARE_ACCOUNT_ID is required"),
   WORKER_ROUTES: z
     .string()
-    .trim()
     .optional()
     .transform((value) =>
-      value
-        ? value
-            .split(",")
-            .map((entry) => entry.trim())
-            .filter(Boolean)
-        : [],
+      (value ?? "")
+        .split(",")
+        .map((entry) => entry.trim())
+        .map((entry) => entry.replace(/\/\*$/, ""))
+        .filter(Boolean),
+    )
+    .pipe(
+      z.array(
+        z
+          .string()
+          .min(1)
+          .refine(
+            (hostname) => !hostname.includes("/") && !hostname.includes("://"),
+            "WORKER_ROUTES entries must be hostnames without scheme or path",
+          ),
+      ),
     ),
   // ================================
   VITE_AUTH_APP_ORIGIN: z.url(),
-  VITE_PUBLIC_URL: z.url(),
+  VITE_PUBLIC_URL: z.url().optional(),
   BETTER_AUTH_SECRET: z.string(),
   SERVICE_AUTH_TOKEN: z.string(),
   RESEND_BOT_DOMAIN: z.string(),
@@ -41,9 +51,13 @@ const AlchemyEnv = z.object({
 });
 
 const alchemyEnv = AlchemyEnv.parse(process.env);
+const publicUrl = alchemyEnv.VITE_PUBLIC_URL ?? alchemyEnv.VITE_AUTH_APP_ORIGIN;
 
 const stateStore = (scope: Scope) =>
   scope.local ? new SQLiteStateStore(scope, { engine: "libsql" }) : new CloudflareStateStore(scope);
+const primaryUrl = alchemyEnv.WORKER_ROUTES[0]
+  ? `https://${alchemyEnv.WORKER_ROUTES[0]}`
+  : undefined;
 
 const app = await alchemy(APP_NAME, {
   password: alchemyEnv.ALCHEMY_PASSWORD,
@@ -53,7 +67,7 @@ const app = await alchemy(APP_NAME, {
   stateStore,
 });
 
-const workerName = `${app.stage}-${APP_NAME}`;
+const workerName = slugify(`${APP_NAME}-${app.stage}`);
 
 const DB = await D1Database("auth-db", {
   name: `${workerName}-auth-db`,
@@ -65,7 +79,7 @@ const worker = await TanStackStart(APP_NAME, {
   bindings: {
     DB,
     VITE_AUTH_APP_ORIGIN: alchemy.secret(alchemyEnv.VITE_AUTH_APP_ORIGIN),
-    VITE_PUBLIC_URL: alchemy.secret(alchemyEnv.VITE_PUBLIC_URL),
+    VITE_PUBLIC_URL: alchemy.secret(publicUrl),
     BETTER_AUTH_SECRET: alchemy.secret(alchemyEnv.BETTER_AUTH_SECRET),
     SERVICE_AUTH_TOKEN: alchemy.secret(alchemyEnv.SERVICE_AUTH_TOKEN),
     RESEND_BOT_DOMAIN: alchemy.secret(alchemyEnv.RESEND_BOT_DOMAIN),
@@ -91,6 +105,14 @@ const worker = await TanStackStart(APP_NAME, {
     command: "vite dev --port 7101",
   },
 });
+
+console.dir(
+  {
+    url: primaryUrl ?? worker.url,
+    workersDevUrl: worker.url,
+  },
+  { depth: null },
+);
 
 await app.finalize();
 
