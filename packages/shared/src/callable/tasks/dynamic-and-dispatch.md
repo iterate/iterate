@@ -11,6 +11,24 @@ Dynamic Worker fetch/RPC is implemented for default and named entrypoints with
 inline JavaScript source. The remaining scope is dispatch namespace support and
 the larger Dynamic Worker capability surface.
 
+Keep the current schema shape for now:
+
+```ts
+via: {
+  type: "env-binding";
+  bindingType: "dynamic-worker";
+  workerLoaderBindingName?: string;
+  workerCode: WorkerCodeSubset;
+}
+```
+
+This is slightly less Cloudflare-literal than `bindingType: "worker-loader"`,
+because the actual env binding is the Worker Loader and the Dynamic Worker is
+what that loader returns. The current names make the callable's eventual
+invocation target clear while `workerLoaderBindingName` keeps the resolver
+honest about which binding is used. Revisit only if this keeps confusing real
+callers.
+
 Implemented:
 
 - Dynamic Worker fetch

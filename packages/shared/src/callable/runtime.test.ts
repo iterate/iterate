@@ -244,7 +244,26 @@ describe("callable validation", () => {
     ).toThrow("Invalid callable");
   });
 
-  test("rejects fetchRequest body fields because v1 only has the default JSON body", () => {
+  test("accepts JSONata body construction for fetch value dispatch", () => {
+    expect(
+      validateCallable({
+        callable: {
+          type: "fetch",
+          via: { type: "url", url: "https://api.example.com/v1" },
+          fetchRequest: {
+            method: "POST",
+            body: { jsonata: '{ "title": title, "source": $ambient.source }' },
+          },
+        },
+      }),
+    ).toMatchObject({
+      fetchRequest: {
+        body: { jsonata: '{ "title": title, "source": $ambient.source }' },
+      },
+    });
+  });
+
+  test("rejects non-JSONata fetchRequest body shapes", () => {
     expect(() =>
       validateCallable({
         callable: {
@@ -259,17 +278,17 @@ describe("callable validation", () => {
     ).toThrow("Invalid callable");
   });
 
-  test("accepts object passthrough args for fetch and RPC object calls", () => {
+  test("accepts input transforms for fetch and RPC calls", () => {
     expect(
       validateCallable({
         callable: {
           type: "fetch",
           via: { type: "url", url: "https://api.example.com/v1" },
-          passthroughArgs: { provider: "github" },
+          transformInput: { shallowMerge: { provider: "github" } },
         },
       }),
     ).toMatchObject({
-      passthroughArgs: { provider: "github" },
+      transformInput: { shallowMerge: { provider: "github" } },
     });
 
     expect(
@@ -282,39 +301,31 @@ describe("callable validation", () => {
             bindingName: "CALLABLE_TEST_SERVICE",
           },
           rpcMethod: "echo",
-          passthroughArgs: { provider: "github" },
+          transformInput: { jsonata: '{ "provider": "github", "input": $ }' },
         },
       }),
     ).toMatchObject({
-      passthroughArgs: { provider: "github" },
+      transformInput: { jsonata: '{ "provider": "github", "input": $ }' },
     });
   });
 
-  test("rejects non-object passthrough args", () => {
+  test("rejects empty or invalid input transforms", () => {
     expect(() =>
       validateCallable({
         callable: {
           type: "fetch",
           via: { type: "url", url: "https://api.example.com/v1" },
-          passthroughArgs: "github",
+          transformInput: {},
         },
       }),
     ).toThrow("Invalid callable");
-  });
 
-  test("rejects passthrough args for positional RPC", () => {
     expect(() =>
       validateCallable({
         callable: {
-          type: "workers-rpc",
-          via: {
-            type: "env-binding",
-            bindingType: "service",
-            bindingName: "CALLABLE_TEST_SERVICE",
-          },
-          rpcMethod: "join",
-          argsMode: "positional",
-          passthroughArgs: { left: "a" },
+          type: "fetch",
+          via: { type: "url", url: "https://api.example.com/v1" },
+          transformInput: "github",
         },
       }),
     ).toThrow("Invalid callable");
@@ -368,7 +379,7 @@ describe("dispatchCallable", () => {
     });
   });
 
-  test("sends passthrough args as the default fetch JSON body when runtime payload is empty", async () => {
+  test("uses transformInput.shallowMerge as the default fetch JSON body when runtime payload is empty", async () => {
     const value = await dispatchCallable({
       callable: {
         type: "fetch",
@@ -377,7 +388,7 @@ describe("dispatchCallable", () => {
           bindingType: "service",
           bindingName: "CALLABLE_TEST_SERVICE",
         },
-        passthroughArgs: { provider: "github", dryRun: true },
+        transformInput: { shallowMerge: { provider: "github", dryRun: true } },
       },
       payload: undefined,
       ctx: { env: testEnv },
@@ -386,7 +397,7 @@ describe("dispatchCallable", () => {
     expect(JSON.parse(value.body)).toEqual({ provider: "github", dryRun: true });
   });
 
-  test("shallow-merges passthrough args before fetch value dispatch", async () => {
+  test("merges the runtime payload into transformInput.shallowMerge before fetch value dispatch", async () => {
     const value = await dispatchCallable({
       callable: {
         type: "fetch",
@@ -395,9 +406,11 @@ describe("dispatchCallable", () => {
           bindingType: "service",
           bindingName: "CALLABLE_TEST_SERVICE",
         },
-        passthroughArgs: {
-          provider: "github",
-          options: { dryRun: true },
+        transformInput: {
+          shallowMerge: {
+            provider: "github",
+            options: { dryRun: true },
+          },
         },
       },
       payload: {
@@ -411,6 +424,58 @@ describe("dispatchCallable", () => {
       provider: "github",
       title: "Bug",
       options: { dryRun: false },
+    });
+  });
+
+  test("uses transformInput JSONata before the default fetch JSON body is built", async () => {
+    const value = await dispatchCallable({
+      callable: {
+        type: "fetch",
+        via: {
+          type: "env-binding",
+          bindingType: "service",
+          bindingName: "CALLABLE_TEST_SERVICE",
+        },
+        transformInput: {
+          jsonata: '{ "provider": $ambient.provider, "issue": { "title": title } }',
+        },
+      },
+      payload: { title: "Bug" },
+      ctx: { env: testEnv, ambient: { provider: "github" } },
+    });
+
+    expect(JSON.parse(value.body)).toEqual({
+      provider: "github",
+      issue: { title: "Bug" },
+    });
+  });
+
+  test("uses fetchRequest body JSONata to build the JSON body from transformed input", async () => {
+    const value = await dispatchCallable({
+      callable: {
+        type: "fetch",
+        via: {
+          type: "env-binding",
+          bindingType: "service",
+          bindingName: "CALLABLE_TEST_SERVICE",
+        },
+        transformInput: {
+          shallowMerge: { provider: "github" },
+        },
+        fetchRequest: {
+          body: {
+            jsonata: '{ "source": provider, "title": title, "tenant": $ambient.tenantId }',
+          },
+        },
+      },
+      payload: { title: "Bug" },
+      ctx: { env: testEnv, ambient: { tenantId: "tenant_123" } },
+    });
+
+    expect(JSON.parse(value.body)).toEqual({
+      source: "github",
+      title: "Bug",
+      tenant: "tenant_123",
     });
   });
 
@@ -480,12 +545,33 @@ describe("dispatchCallable", () => {
     }
   });
 
-  test("ignores passthrough args in raw fetch dispatch because the Request already exists", async () => {
+  test("rejects fetchRequest body JSONata for GET and HEAD value requests", async () => {
+    for (const method of ["GET", "HEAD"] as const) {
+      await expect(
+        dispatchCallable({
+          callable: {
+            type: "fetch",
+            via: { type: "url", url: "https://api.example.com/tools" },
+            fetchRequest: {
+              method,
+              body: { jsonata: "$" },
+            },
+          },
+          payload: { ignored: true },
+          ctx: { fetch: vi.fn() },
+        }),
+      ).rejects.toMatchObject({
+        code: "PAYLOAD_VALIDATION_FAILED",
+      });
+    }
+  });
+
+  test("ignores transformInput in raw fetch dispatch because the Request already exists", async () => {
     const response = await dispatchCallableFetch({
       callable: {
         type: "fetch",
         via: { type: "url", url: "https://api.example.com" },
-        passthroughArgs: { provider: "github" },
+        transformInput: { shallowMerge: { provider: "github" } },
       },
       request: new Request("https://router.local/raw", {
         method: "POST",
@@ -497,6 +583,25 @@ describe("dispatchCallable", () => {
     });
 
     await expect(response.json()).resolves.toEqual({ title: "Bug" });
+  });
+
+  test("rejects fetchRequest body JSONata in raw fetch dispatch because the Request already exists", async () => {
+    await expect(
+      dispatchCallableFetch({
+        callable: {
+          type: "fetch",
+          via: { type: "url", url: "https://api.example.com" },
+          fetchRequest: { body: { jsonata: "$" } },
+        },
+        request: new Request("https://router.local/raw", {
+          method: "POST",
+          body: JSON.stringify({ title: "Bug" }),
+        }),
+        ctx: { fetch: vi.fn() },
+      }),
+    ).rejects.toMatchObject({
+      code: "PAYLOAD_VALIDATION_FAILED",
+    });
   });
 
   test("parses text responses when the response is not JSON", async () => {
@@ -667,7 +772,7 @@ describe("dispatchCallable", () => {
     expect(value).toEqual({ target: "service", input: { ok: true } });
   });
 
-  test("shallow-merges passthrough args before RPC object dispatch", async () => {
+  test("merges the runtime payload into transformInput.shallowMerge before RPC object dispatch", async () => {
     const value = await dispatchCallable({
       callable: {
         type: "workers-rpc",
@@ -677,9 +782,11 @@ describe("dispatchCallable", () => {
           bindingName: "CALLABLE_TEST_SERVICE",
         },
         rpcMethod: "echo",
-        passthroughArgs: {
-          provider: "github",
-          options: { dryRun: true },
+        transformInput: {
+          shallowMerge: {
+            provider: "github",
+            options: { dryRun: true },
+          },
         },
       },
       payload: {
@@ -699,7 +806,36 @@ describe("dispatchCallable", () => {
     });
   });
 
-  test("rejects primitive runtime payloads when passthrough args are present", async () => {
+  test("uses transformInput JSONata before RPC object dispatch", async () => {
+    const value = await dispatchCallable({
+      callable: {
+        type: "workers-rpc",
+        via: {
+          type: "env-binding",
+          bindingType: "service",
+          bindingName: "CALLABLE_TEST_SERVICE",
+        },
+        rpcMethod: "echo",
+        transformInput: {
+          shallowMerge: { provider: "github" },
+          jsonata: '{ "toolProvider": provider, "tool": name, "tenant": $ambient.tenantId }',
+        },
+      },
+      payload: { name: "createIssue" },
+      ctx: { env: testEnv, ambient: { tenantId: "tenant_123" } },
+    });
+
+    expect(value).toEqual({
+      target: "service",
+      input: {
+        toolProvider: "github",
+        tool: "createIssue",
+        tenant: "tenant_123",
+      },
+    });
+  });
+
+  test("rejects primitive runtime payloads when transformInput.shallowMerge is present", async () => {
     await expect(
       dispatchCallable({
         callable: {
@@ -710,7 +846,7 @@ describe("dispatchCallable", () => {
             bindingName: "CALLABLE_TEST_SERVICE",
           },
           rpcMethod: "echo",
-          passthroughArgs: { provider: "github" },
+          transformInput: { shallowMerge: { provider: "github" } },
         },
         payload: "createIssue",
         ctx: { env: testEnv },
@@ -1193,7 +1329,7 @@ describe("dispatchCallableFetch", () => {
     });
   });
 
-  test("proxy mode replaces target query with incoming request query without merging", async () => {
+  test("raw fetch dispatch replaces target query with incoming request query without merging", async () => {
     const response = await dispatchCallableFetch({
       callable: {
         type: "fetch",
@@ -1261,7 +1397,7 @@ describe("dispatchCallableFetch", () => {
     });
   });
 
-  test("does not read the request body in proxy mode", async () => {
+  test("does not read the request body in raw fetch dispatch", async () => {
     const request = new Request("https://router.local/upload", {
       method: "POST",
       body: "streamed-body",

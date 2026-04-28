@@ -49,7 +49,7 @@ type Callable =
       schema?: "https://schemas.iterate.com/callable/v1";
       type: "fetch";
       via: FetchVia;
-      passthroughArgs?: Record<string, JsonValue>;
+      transformInput?: TransformInput;
       fetchRequest?: FetchRequest;
     }
   | {
@@ -58,7 +58,7 @@ type Callable =
       via: WorkersRpcVia;
       rpcMethod: string;
       argsMode?: "object" | "positional";
-      passthroughArgs?: Record<string, JsonValue>;
+      transformInput?: TransformInput;
     };
 ```
 
@@ -76,6 +76,42 @@ Cloudflare terminology references:
 - Durable Object namespaces: https://developers.cloudflare.com/durable-objects/api/namespace/
 - Worker Loader / Dynamic Workers: https://developers.cloudflare.com/dynamic-workers/api-reference/
 - Workers RPC: https://developers.cloudflare.com/workers/runtime-apis/rpc/
+
+## Payload To Input
+
+The value-dispatch pipeline has three names:
+
+1. `payload` is the value passed to `dispatchCallable({ payload })`.
+2. `input` is the value after optional `transformInput` runs.
+3. The callable type decides how to use `input`.
+
+For Workers RPC, `input` is passed as the single RPC argument by default. For
+Fetch, `input` is used to build a `Request`: by default `POST` with JSON body,
+or with `fetchRequest` overrides for method, headers, query, path, and JSONata
+body construction.
+
+```ts
+const callable = {
+  type: "workers-rpc",
+  via: { type: "env-binding", bindingType: "service", bindingName: "TOOLS" },
+  rpcMethod: "callTool",
+  transformInput: {
+    shallowMerge: { provider: "github" },
+    jsonata: '{ "provider": provider, "tool": name, "args": args }',
+  },
+};
+```
+
+`transformInput.shallowMerge` means the runtime payload is merged into the fixed
+object:
+
+```ts
+input = { ...shallowMerge, ...payload };
+```
+
+If both `shallowMerge` and `jsonata` are present, shallow merge runs first and
+JSONata receives the merged value as its root (`$`). Host-owned context is
+available to JSONata as `$ambient` via `ctx.ambient`.
 
 ## Fetch
 
@@ -130,11 +166,13 @@ value-mode Request is deliberately boring:
 
 - `POST`
 - `content-type: application/json`
-- body is `JSON.stringify(effectivePayload ?? null)`
+- body is `JSON.stringify(input ?? null)`
 
 `fetchRequest` configures the outbound Fetch API `Request`. In value mode it is
 applied after the synthetic Request is created. In raw fetch mode it is applied
-to the caller-provided Request without reading the body.
+to the caller-provided Request without reading the body. Raw fetch mode receives
+a complete `Request`, so it ignores `transformInput` and rejects
+`fetchRequest.body`.
 
 ```ts
 const callable = {
@@ -144,13 +182,10 @@ const callable = {
     method: "POST",
     headers: { "x-tool": "create-issue" },
     query: { dryRun: true },
+    body: { jsonata: '{ "title": title, "tenant": $ambient.tenantId }' },
   },
 };
 ```
-
-V1 intentionally has no body template DSL. The default JSON body covers the
-common case. JSONata-based request construction is tracked in
-`tasks/request-templating.md`.
 
 Path handling is simple:
 
@@ -192,8 +227,8 @@ A root incoming path preserves the base path exactly, including a trailing
 slash.
 
 Query handling is also simple in v1. In raw fetch mode, the incoming Request
-query is used unless `fetchRequest.query` is present. In value mode, a URL
-via value's query is preserved unless `fetchRequest.query` is present. Use
+query is used unless `fetchRequest.query` is present. In value mode, the query
+in `via.url` is preserved unless `fetchRequest.query` is present. Use
 `query: {}` to clear it.
 
 ## Workers RPC
@@ -252,7 +287,7 @@ const callable = {
 There is no `newUniqueId` selector. Allocation belongs in provisioning code
 that persists the generated ID before creating a callable.
 
-`argsMode` defaults to `object`, so the payload is passed as one argument. Use
+`argsMode` defaults to `object`, so `input` is passed as one argument. Use
 `argsMode: "positional"` when the payload is an array and should be spread.
 
 ```ts
@@ -387,33 +422,6 @@ documents `ctx.exports` as including Durable Object namespace bindings for
 migrated Durable Object exports. Workers Vitest does not expose that namespace
 shape for this package's fixture DO, so the branch is implemented but not the
 primary tested path yet.
-
-## Pass-Through Args
-
-`passthroughArgs` pre-populates callable-owned fields into the value payload.
-It is top-level because it modifies the payload before either Fetch value
-dispatch or Workers RPC object dispatch sees it.
-
-```ts
-const callable = {
-  type: "workers-rpc",
-  via: { type: "env-binding", bindingType: "service", bindingName: "TOOLS" },
-  rpcMethod: "callTool",
-  passthroughArgs: { provider: "github", tenantId: "tenant_123" },
-};
-```
-
-The merge is shallow and runtime payload wins:
-
-```ts
-effectivePayload = { ...passthroughArgs, ...payload };
-```
-
-`passthroughArgs` is rejected for positional RPC and ignored by
-`dispatchCallableFetch()`, because the lower-level API already receives a
-complete `Request`.
-
-Future merge policies are tracked in `tasks/pass-through-args.md`.
 
 ## WebSockets
 

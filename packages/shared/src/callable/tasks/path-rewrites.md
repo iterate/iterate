@@ -8,11 +8,11 @@ dependsOn: []
 # Advanced fetch path rewrites
 
 V1 only supports `fetchRequest.path.mode: "prefix" | "replace"` with an
-optional `fetchRequest.path.base`. Add richer proxy behavior only once callers
-need it.
+optional `fetchRequest.path.base`. Add richer request rewrite behavior only
+once callers need it.
 
 The current public URL via field is just `url`. Avoid reintroducing
-`origin`, `upstream`, or `mount URL` unless a later design needs more precise
+terms like `origin` or `mount URL` unless a later design needs more precise
 terminology than a URL via value plus `fetchRequest.path`.
 
 Prior art to consider:

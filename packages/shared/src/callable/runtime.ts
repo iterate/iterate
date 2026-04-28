@@ -1,3 +1,4 @@
+import jsonata from "jsonata";
 import {
   CallableError,
   CallableSchema,
@@ -53,18 +54,30 @@ export function validateCallable(options: { callable: unknown }): Callable {
 
 /**
  * Builds the source Request used by value dispatch before the shared Fetch
- * dispatcher applies `fetchRequest` metadata.
+ * dispatcher applies URL/path metadata.
  *
- * The default is intentionally boring: POST the whole payload as JSON.
+ * The default is intentionally boring: POST the whole input as JSON.
  * That keeps `dispatchCallable()` useful without making every fetch callable
- * spell out the common case. JSONata body/query/header construction is
- * intentionally parked in `tasks/` until we have real callers that need it.
+ * spell out the common case. When a caller needs a different JSON body shape,
+ * `fetchRequest.body.jsonata` transforms the input into that body. The lower
+ * level `dispatchCallableFetch()` path never runs this because it already
+ * receives a complete Request.
  */
-function buildCallableRequest(options: { callable: FetchCallable; payload: unknown }): Request {
+async function buildCallableRequest(options: {
+  callable: FetchCallable;
+  input: unknown;
+  ctx: CallableContext;
+}): Promise<Request> {
   const callable = options.callable;
   const requestOverrides = callable.fetchRequest ?? {};
   const method = requestOverrides.method ?? "POST";
   const shouldSendJsonBody = !["GET", "HEAD"].includes(method);
+  if (!shouldSendJsonBody && requestOverrides.body) {
+    throw new CallableError(
+      "PAYLOAD_VALIDATION_FAILED",
+      "fetchRequest.body cannot be used with GET or HEAD value dispatch",
+    );
+  }
 
   /**
    * `dispatchCallable()` intentionally creates a boring synthetic Request and
@@ -93,7 +106,15 @@ function buildCallableRequest(options: { callable: FetchCallable; payload: unkno
 
   if (shouldSendJsonBody) {
     if (!headers.has("content-type")) headers.set("content-type", "application/json");
-    requestInit.body = JSON.stringify(options.payload ?? null);
+    const body =
+      requestOverrides.body == null
+        ? options.input
+        : await evaluateJsonata({
+            expression: requestOverrides.body.jsonata,
+            input: options.input,
+            ctx: options.ctx,
+          });
+    requestInit.body = JSON.stringify(body ?? null);
   }
 
   return new Request(url, requestInit);
@@ -106,7 +127,7 @@ function buildCallableRequest(options: { callable: FetchCallable; payload: unkno
  * backed by fetch or Workers RPC. Fetch-shaped callables synthesize a Request
  * from the payload, reject non-2xx responses, and parse JSON/text response
  * bodies. Use `dispatchCallableFetch()` instead when the caller needs raw
- * `Request`/`Response` objects or streaming proxy behavior.
+ * `Request`/`Response` objects or streaming behavior.
  */
 export async function dispatchCallable(options: {
   callable: unknown;
@@ -114,9 +135,10 @@ export async function dispatchCallable(options: {
   ctx: CallableContext;
 }): Promise<unknown> {
   const callable = validateCallable({ callable: options.callable });
-  const payload = applyPassthroughArgs({
+  const input = await transformCallableInput({
     callable,
     payload: options.payload,
+    ctx: options.ctx,
   });
 
   switch (callable.type) {
@@ -124,14 +146,15 @@ export async function dispatchCallable(options: {
       if (options.payload instanceof Request) {
         throw new CallableError(
           "PAYLOAD_VALIDATION_FAILED",
-          "dispatchCallable() does not accept Request payloads; use dispatchCallableFetch() for streaming proxy mode",
+          "dispatchCallable() does not accept Request payloads; use dispatchCallableFetch() for raw fetch dispatch",
         );
       }
 
       const response = await dispatchValidatedCallableFetch({
         callable,
-        request: buildCallableRequest({ callable, payload }),
+        request: await buildCallableRequest({ callable, input, ctx: options.ctx }),
         ctx: options.ctx,
+        source: "value",
       });
 
       if (!response.ok) {
@@ -153,7 +176,7 @@ export async function dispatchCallable(options: {
       return await readCallableResponse({ response });
     }
     case "workers-rpc": {
-      return await dispatchCallableRpc({ callable, payload, ctx: options.ctx });
+      return await dispatchCallableRpc({ callable, input, ctx: options.ctx });
     }
   }
 }
@@ -161,10 +184,10 @@ export async function dispatchCallable(options: {
 /**
  * Dispatches a fetch-shaped Callable.
  *
- * The important invariant is that proxy mode never reads the request body. We
- * use `new Request(outboundUrl, request)` because Cloudflare documents cloning
- * a Request as the way to rewrite immutable URL/header state while preserving
- * the rest of the request shape:
+ * The important invariant is that raw fetch dispatch never reads the request
+ * body. We use `new Request(outboundUrl, request)` because Cloudflare documents
+ * cloning a Request as the way to rewrite immutable URL/header state while
+ * preserving the rest of the request shape:
  * https://developers.cloudflare.com/workers/runtime-apis/request/
  */
 export async function dispatchCallableFetch(options: {
@@ -176,6 +199,7 @@ export async function dispatchCallableFetch(options: {
     callable: validateFetchCallable({ callable: options.callable }),
     request: options.request,
     ctx: options.ctx,
+    source: "request",
   });
 }
 
@@ -183,8 +207,15 @@ async function dispatchValidatedCallableFetch(options: {
   callable: FetchCallable;
   request: Request;
   ctx: CallableContext;
+  source: "value" | "request";
 }): Promise<Response> {
   const callable = options.callable;
+  if (options.source === "request" && callable.fetchRequest?.body) {
+    throw new CallableError(
+      "PAYLOAD_VALIDATION_FAILED",
+      "fetchRequest.body is only supported by dispatchCallable() value dispatch",
+    );
+  }
   if (options.request.bodyUsed) {
     throw new CallableError("PAYLOAD_VALIDATION_FAILED", "Request body was already consumed");
   }
@@ -283,20 +314,60 @@ export async function connectCallableWebSocket(options: {
   return response.webSocket;
 }
 
-function applyPassthroughArgs(options: { callable: Callable; payload: unknown }) {
-  if (options.callable.passthroughArgs == null) {
+async function transformCallableInput(options: {
+  callable: Callable;
+  payload: unknown;
+  ctx: CallableContext;
+}) {
+  const transform = options.callable.transformInput;
+  if (transform == null) {
     return options.payload;
   }
+  let input = options.payload;
+  if (transform.shallowMerge != null) {
+    input = applyShallowMergeInput({
+      base: transform.shallowMerge,
+      payload: input,
+    });
+  }
+  if (transform.jsonata != null) {
+    input = await evaluateJsonata({
+      expression: transform.jsonata,
+      input,
+      ctx: options.ctx,
+    });
+  }
+  return input;
+}
+
+function applyShallowMergeInput(options: { base: Record<string, unknown>; payload: unknown }) {
   if (options.payload == null) {
-    return { ...options.callable.passthroughArgs };
+    return { ...options.base };
   }
   if (!isPlainRecord(options.payload)) {
     throw new CallableError(
       "PAYLOAD_VALIDATION_FAILED",
-      "passthroughArgs requires the runtime payload to be an object, null, or undefined",
+      "transformInput.shallowMerge requires the runtime payload to be an object, null, or undefined",
     );
   }
-  return { ...options.callable.passthroughArgs, ...options.payload };
+  return { ...options.base, ...options.payload };
+}
+
+async function evaluateJsonata(options: {
+  expression: string;
+  input: unknown;
+  ctx: CallableContext;
+}) {
+  try {
+    const expression = jsonata(options.expression);
+    return await expression.evaluate(options.input, {
+      ambient: options.ctx.ambient ?? {},
+    });
+  } catch (error) {
+    throw new CallableError("PAYLOAD_VALIDATION_FAILED", "JSONata evaluation failed", {
+      cause: error,
+    });
+  }
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -400,7 +471,7 @@ function joinPathPrefix(prefix: string, incomingPath: string) {
 
 async function dispatchCallableRpc(options: {
   callable: WorkersRpcCallable;
-  payload: unknown;
+  input: unknown;
   ctx: CallableContext;
 }) {
   const resolvedRpc = resolveRpcVia({
@@ -413,7 +484,7 @@ async function dispatchCallableRpc(options: {
   });
   const args = buildRpcArgs({
     argsMode: options.callable.argsMode ?? "object",
-    payload: options.payload,
+    input: options.input,
   });
 
   /**
@@ -496,15 +567,15 @@ function assertRpcMethodResolvable(options: { resolvedRpc: unknown; methodName: 
   }
 }
 
-function buildRpcArgs(options: { argsMode: "object" | "positional"; payload: unknown }) {
-  if (options.argsMode === "object") return [options.payload];
-  if (!Array.isArray(options.payload)) {
+function buildRpcArgs(options: { argsMode: "object" | "positional"; input: unknown }) {
+  if (options.argsMode === "object") return [options.input];
+  if (!Array.isArray(options.input)) {
     throw new CallableError(
       "PAYLOAD_VALIDATION_FAILED",
-      "RPC positional argsMode requires the payload to be an array",
+      "RPC positional argsMode requires the transformed input to be an array",
     );
   }
-  return options.payload as unknown[];
+  return options.input as unknown[];
 }
 
 async function readCallableResponse(options: { response: Response }) {

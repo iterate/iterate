@@ -15,7 +15,18 @@ const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
     z.record(z.string(), jsonValueSchema),
   ]),
 );
-const passthroughArgsSchema = z.record(z.string(), jsonValueSchema);
+
+const jsonataExpressionSchema = z.string().min(1);
+
+const transformInputSchema = z
+  .object({
+    shallowMerge: z.record(z.string(), jsonValueSchema).optional(),
+    jsonata: jsonataExpressionSchema.optional(),
+  })
+  .strict()
+  .refine((value) => value.shallowMerge != null || value.jsonata != null, {
+    message: "transformInput must include shallowMerge or jsonata",
+  });
 
 /**
  * Service bindings, Durable Object stubs, Dynamic Worker entrypoints, and
@@ -279,6 +290,7 @@ const fetchRequestSchema = z
     method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]).optional(),
     headers: z.record(z.string(), z.string()).optional(),
     query: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
+    body: z.object({ jsonata: jsonataExpressionSchema }).strict().optional(),
     path: z
       .object({
         base: pathBaseSchema.optional(),
@@ -294,7 +306,7 @@ const fetchCallableSchema = z
     type: z.literal("fetch"),
     schema: callableSchemaField,
     via: fetchViaSchema,
-    passthroughArgs: passthroughArgsSchema.optional(),
+    transformInput: transformInputSchema.optional(),
     fetchRequest: fetchRequestSchema.optional(),
   })
   .strict();
@@ -306,18 +318,9 @@ const workersRpcCallableSchema = z
     via: workersRpcViaSchema,
     rpcMethod: rpcMethodSchema,
     argsMode: z.enum(["object", "positional"]).optional(),
-    passthroughArgs: passthroughArgsSchema.optional(),
+    transformInput: transformInputSchema.optional(),
   })
-  .strict()
-  .superRefine((callable, ctx) => {
-    if (callable.argsMode === "positional" && callable.passthroughArgs != null) {
-      ctx.addIssue({
-        code: "custom",
-        message: "RPC positional argsMode cannot include passthroughArgs",
-        path: ["passthroughArgs"],
-      });
-    }
-  });
+  .strict();
 
 /**
  * A `Callable` is intentionally just JSON data. It names a way to invoke
@@ -370,6 +373,14 @@ export type CallableContext = {
    * https://developers.cloudflare.com/workers/runtime-apis/context/#exports
    */
   exports?: Record<string, unknown>;
+  /**
+   * Host-owned values available to JSONata expressions as `$ambient`.
+   *
+   * The expression root remains the callable input so `$` is always the value
+   * being transformed. Keeping ambient data in a JSONata variable avoids
+   * smuggling host context into user payload fields.
+   */
+  ambient?: Record<string, unknown>;
   /**
    * Public URL fetch capability used only by callables using
    * `{ type: "url" }`.
