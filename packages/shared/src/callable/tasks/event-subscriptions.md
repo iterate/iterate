@@ -8,7 +8,7 @@ dependsOn: ["rpc.md"]
 # Event subscriptions
 
 Add subscription records after the callable kernel can dispatch both fetch and
-RPC targets. Prefer capability-first subscriptions for internal Workers: pass
+Workers RPC callables. Prefer capability-first subscriptions for internal Workers: pass
 callback stubs and return disposable subscription objects where possible. Custom
 WebSocket frames remain useful at public edges, but should not be the only
 model.

@@ -17,10 +17,10 @@ Planned scope:
 
 - allowed binding names
 - allowed loopback export names
-- allowed public URL targets
-- allowed RPC methods per binding/target
+- allowed public URL via values
+- allowed RPC methods per binding or via shape
 - denied headers
 - secret references instead of literal bearer tokens
-- descriptor size limits
+- callable size limits
 - template output limits
-- a resolver API that avoids passing raw `env` to untrusted descriptors
+- a resolver API that avoids passing raw `env` to untrusted Callables

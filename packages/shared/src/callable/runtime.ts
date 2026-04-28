@@ -5,24 +5,24 @@ import {
   type CallableContext,
   type DurableObjectSelector,
   type FetchCallable,
-  type RpcCallable,
+  type WorkersRpcCallable,
 } from "./types.ts";
 
 type FetchableBinding = { fetch: (request: Request) => Response | Promise<Response> };
-type EnvBindingTarget = Extract<FetchCallable["target"], { type: "env-binding" }>;
-type DynamicWorkerTarget = Extract<
-  FetchCallable["target"],
-  { type: "env-binding"; bindingType: "dynamic-worker-loader" }
+type EnvBindingVia = Extract<FetchCallable["via"], { type: "env-binding" }>;
+type DynamicWorkerVia = Extract<
+  FetchCallable["via"],
+  { type: "env-binding"; bindingType: "dynamic-worker" }
 >;
-type EnvDurableObjectTarget = Extract<
-  FetchCallable["target"],
+type EnvDurableObjectVia = Extract<
+  FetchCallable["via"],
   { type: "env-binding"; bindingType: "durable-object-namespace" }
 >;
-type LoopbackDurableObjectTarget = Extract<
-  FetchCallable["target"],
+type LoopbackDurableObjectVia = Extract<
+  FetchCallable["via"],
   { type: "loopback-binding"; bindingType: "durable-object-namespace" }
 >;
-type DynamicWorkerCode = DynamicWorkerTarget["workerCode"];
+type DynamicWorkerCode = DynamicWorkerVia["workerCode"];
 type DynamicWorkerStub = {
   getEntrypoint: (name?: string, options?: { props?: unknown }) => unknown;
 };
@@ -52,37 +52,30 @@ export function validateCallable(options: { callable: unknown }): Callable {
 }
 
 /**
- * Builds a Request from a JSON payload using the callable's fetch request
- * options.
+ * Builds the source Request used by value dispatch before the shared Fetch
+ * dispatcher applies `fetchRequest` metadata.
  *
- * The default template is intentionally boring: POST the whole payload as JSON.
+ * The default is intentionally boring: POST the whole payload as JSON.
  * That keeps `dispatchCallable()` useful without making every fetch callable
- * spell out the common case. Explicit templates are partial overrides: setting
- * headers or query does not accidentally drop the default JSON body. RFC 6570,
- * JSON-e, and JSON Pointer extraction are intentionally parked in `tasks/`
- * until we have real callers that need them.
+ * spell out the common case. JSONata body/query/header construction is
+ * intentionally parked in `tasks/` until we have real callers that need it.
  */
 function buildCallableRequest(options: { callable: FetchCallable; payload: unknown }): Request {
   const callable = options.callable;
-  const call = getCallableCall({ callable });
-  if (call.type !== "fetch") {
-    throw new CallableError("DESCRIPTOR_VALIDATION_FAILED", `Unsupported callable kind`);
-  }
-
-  const requestOverrides = call.request ?? {};
+  const requestOverrides = callable.fetchRequest ?? {};
   const method = requestOverrides.method ?? "POST";
   const shouldSendJsonBody = !["GET", "HEAD"].includes(method);
 
   /**
    * `dispatchCallable()` intentionally creates a boring synthetic Request and
-   * then delegates to `dispatchCallableFetch()`. When the target is a public
-   * URL with a query string, carrying that query into the synthetic request
-   * keeps the common "fetch this URL" case literal without teaching the fetch
-   * dispatcher a separate value-call mode.
+   * then delegates to `dispatchCallableFetch()`. When `via` is a public
+   * URL with a query string, carrying that query into the source request keeps
+   * the common "fetch this URL" case literal without teaching the fetch
+   * dispatcher a separate value-call path.
    */
   const url = new URL("https://callable.local/");
-  if (callable.target.type === "url") {
-    url.search = new URL(callable.target.url).search;
+  if (callable.via.type === "url") {
+    url.search = new URL(callable.via.url).search;
   }
   const templateQuery = requestOverrides.query ?? {};
   if (requestOverrides.query != null) {
@@ -109,7 +102,7 @@ function buildCallableRequest(options: { callable: FetchCallable; payload: unkno
 /**
  * Dispatches any v1 Callable and returns the produced value.
  *
- * This is the main API for callers that do not care whether the target is
+ * This is the main API for callers that do not care whether the callable is
  * backed by fetch or Workers RPC. Fetch-shaped callables synthesize a Request
  * from the payload, reject non-2xx responses, and parse JSON/text response
  * bodies. Use `dispatchCallableFetch()` instead when the caller needs raw
@@ -121,17 +114,13 @@ export async function dispatchCallable(options: {
   ctx: CallableContext;
 }): Promise<unknown> {
   const callable = validateCallable({ callable: options.callable });
-  const call = getCallableCall({ callable });
   const payload = applyPassthroughArgs({
-    call,
+    callable,
     payload: options.payload,
   });
 
-  switch (call.type) {
+  switch (callable.type) {
     case "fetch": {
-      if (!isFetchCallable(callable)) {
-        throw new CallableError("DESCRIPTOR_VALIDATION_FAILED", `Unsupported callable kind`);
-      }
       if (options.payload instanceof Request) {
         throw new CallableError(
           "PAYLOAD_VALIDATION_FAILED",
@@ -149,7 +138,7 @@ export async function dispatchCallable(options: {
         const body = await response.text();
         throw new CallableError(
           "REMOTE_ERROR",
-          `Callable fetch target returned ${response.status} ${response.statusText}`,
+          `Callable fetch returned ${response.status} ${response.statusText}`,
           {
             retryable: response.status >= 500,
             details: {
@@ -163,10 +152,7 @@ export async function dispatchCallable(options: {
 
       return await readCallableResponse({ response });
     }
-    case "rpc": {
-      if (!isRpcCallable(callable)) {
-        throw new CallableError("DESCRIPTOR_VALIDATION_FAILED", `Unsupported callable kind`);
-      }
+    case "workers-rpc": {
       return await dispatchCallableRpc({ callable, payload, ctx: options.ctx });
     }
   }
@@ -199,48 +185,42 @@ async function dispatchValidatedCallableFetch(options: {
   ctx: CallableContext;
 }): Promise<Response> {
   const callable = options.callable;
-  const call = getCallableCall({ callable });
-  if (call.type !== "fetch") {
-    throw new CallableError("DESCRIPTOR_VALIDATION_FAILED", `Unsupported callable kind`);
-  }
   if (options.request.bodyUsed) {
     throw new CallableError("PAYLOAD_VALIDATION_FAILED", "Request body was already consumed");
   }
 
-  const outboundUrl = buildCallableUrl({
+  const rewrittenRequest = buildOutboundFetchRequest({
     callable,
-    call,
-    incomingRequestUrl: options.request.url,
+    request: options.request,
   });
-  const rewrittenRequest = new Request(outboundUrl, options.request);
 
-  const target = resolveFetchTarget({
+  const resolvedFetch = resolveFetchVia({
     callable,
     ctx: options.ctx,
   });
 
-  switch (target.type) {
+  switch (resolvedFetch.type) {
     case "url": {
       /**
-       * Public URL is the one target where dispatch needs an explicit fetch
+       * Public URL is the one via kind where dispatch needs an explicit fetch
        * capability from the caller. Service, Durable Object, and Dynamic Worker
-       * targets resolve from bindings; public egress should not happen just
+       * via values resolve from bindings; public egress should not happen just
        * because a shared helper read ambient `globalThis.fetch`.
        */
-      return await target.fetch(rewrittenRequest);
+      return await resolvedFetch.fetch(rewrittenRequest);
     }
     case "binding": {
       /**
        * Service bindings and Durable Object stubs use Fetch semantics, not RPC
        * semantics, for `.fetch()`. Redirect-following on an internal binding
        * can therefore turn a trusted binding call into public egress. Keep
-       * internal fetch targets manual by default. Dynamic Worker entrypoints
+       * internal binding fetches manual by default. Dynamic Worker entrypoints
        * use this same path after their loader binding resolves to a Worker
        * entrypoint:
        * https://developers.cloudflare.com/workers/runtime-apis/rpc/reserved-methods/#fetch
        */
       const outboundRequest = new Request(rewrittenRequest, { redirect: "manual" });
-      return await target.fetch.fetch(outboundRequest);
+      return await resolvedFetch.fetch.fetch(outboundRequest);
     }
   }
 }
@@ -303,27 +283,20 @@ export async function connectCallableWebSocket(options: {
   return response.webSocket;
 }
 
-function getCallableCall(options: { callable: Callable }) {
-  return options.callable.call ?? { type: "fetch" as const };
-}
-
-function applyPassthroughArgs(options: {
-  call: ReturnType<typeof getCallableCall>;
-  payload: unknown;
-}) {
-  if (!("passthroughArgs" in options.call) || options.call.passthroughArgs == null) {
+function applyPassthroughArgs(options: { callable: Callable; payload: unknown }) {
+  if (options.callable.passthroughArgs == null) {
     return options.payload;
   }
   if (options.payload == null) {
-    return { ...options.call.passthroughArgs };
+    return { ...options.callable.passthroughArgs };
   }
   if (!isPlainRecord(options.payload)) {
     throw new CallableError(
       "PAYLOAD_VALIDATION_FAILED",
-      "call.passthroughArgs requires the runtime payload to be an object, null, or undefined",
+      "passthroughArgs requires the runtime payload to be an object, null, or undefined",
     );
   }
-  return { ...options.call.passthroughArgs, ...options.payload };
+  return { ...options.callable.passthroughArgs, ...options.payload };
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -332,12 +305,8 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return prototype === Object.prototype || prototype === null;
 }
 
-function isRpcCallable(callable: Callable): callable is RpcCallable {
-  return callable.call?.type === "rpc";
-}
-
 function isFetchCallable(callable: Callable): callable is FetchCallable {
-  return callable.call?.type !== "rpc";
+  return callable.type === "fetch";
 }
 
 function validateFetchCallable(options: { callable: unknown }): FetchCallable {
@@ -348,36 +317,68 @@ function validateFetchCallable(options: { callable: unknown }): FetchCallable {
   return callable;
 }
 
-function buildCallableUrl(options: {
-  callable: FetchCallable;
-  call: NonNullable<FetchCallable["call"]>;
-  incomingRequestUrl: string;
-}) {
+function buildCallableUrl(options: { callable: FetchCallable; incomingRequestUrl: string }) {
   const baseUrl = resolveBaseUrl(options.callable);
   const incoming = new URL(options.incomingRequestUrl);
-  if (options.call.path?.base) {
-    baseUrl.pathname = options.call.path.base;
+  const fetchRequest = options.callable.fetchRequest;
+  if (fetchRequest?.path?.base) {
+    baseUrl.pathname = fetchRequest.path.base;
   }
 
-  if ((options.call.path?.mode ?? "prefix") === "prefix") {
+  if ((fetchRequest?.path?.mode ?? "prefix") === "prefix") {
     baseUrl.pathname = joinPathPrefix(baseUrl.pathname, incoming.pathname);
   }
 
-  baseUrl.search = incoming.search;
+  if (fetchRequest?.query != null) {
+    baseUrl.search = "";
+    for (const [key, value] of Object.entries(fetchRequest.query)) {
+      baseUrl.searchParams.set(key, String(value));
+    }
+  } else {
+    baseUrl.search = incoming.search;
+  }
   return baseUrl;
 }
 
+function buildOutboundFetchRequest(options: { callable: FetchCallable; request: Request }) {
+  const fetchRequest = options.callable.fetchRequest;
+  const outboundUrl = buildCallableUrl({
+    callable: options.callable,
+    incomingRequestUrl: options.request.url,
+  });
+  if (!fetchRequest?.method && !fetchRequest?.headers) {
+    return new Request(outboundUrl, options.request);
+  }
+
+  const method = fetchRequest.method ?? options.request.method;
+  const headers = new Headers(options.request.headers);
+  for (const [key, value] of Object.entries(fetchRequest.headers ?? {})) {
+    headers.set(key, value);
+  }
+  const shouldPreserveBody = !["GET", "HEAD"].includes(method);
+  const requestInit: RequestInit & { duplex?: "half" } = {
+    method,
+    headers,
+    body: shouldPreserveBody ? options.request.body : null,
+    redirect: options.request.redirect,
+  };
+  if (shouldPreserveBody && options.request.body) {
+    requestInit.duplex = "half";
+  }
+  return new Request(outboundUrl, requestInit);
+}
+
 function resolveBaseUrl(callable: FetchCallable) {
-  switch (callable.target.type) {
+  switch (callable.via.type) {
     case "url":
-      return new URL(callable.target.url);
+      return new URL(callable.via.url);
     case "env-binding":
       return buildSyntheticBaseUrl({
-        hostname: `${callable.target.bindingType}.local`,
+        hostname: `${callable.via.bindingType}.local`,
       });
     case "loopback-binding":
       return buildSyntheticBaseUrl({
-        hostname: `loopback-${callable.target.bindingType}.local`,
+        hostname: `loopback-${callable.via.bindingType}.local`,
       });
   }
 }
@@ -398,20 +399,20 @@ function joinPathPrefix(prefix: string, incomingPath: string) {
 }
 
 async function dispatchCallableRpc(options: {
-  callable: RpcCallable;
+  callable: WorkersRpcCallable;
   payload: unknown;
   ctx: CallableContext;
 }) {
-  const target = resolveRpcTarget({
+  const resolvedRpc = resolveRpcVia({
     callable: options.callable,
     ctx: options.ctx,
   });
   assertRpcMethodResolvable({
-    target,
-    methodName: options.callable.call.method,
+    resolvedRpc,
+    methodName: options.callable.rpcMethod,
   });
   const args = buildRpcArgs({
-    argsMode: options.callable.call.argsMode ?? "object",
+    argsMode: options.callable.argsMode ?? "object",
     payload: options.payload,
   });
 
@@ -420,16 +421,16 @@ async function dispatchCallableRpc(options: {
    * remote exception shape as much as the platform can; callers generally need
    * to see that application error rather than a transport-flavored wrapper.
    */
-  return await (target as Record<string, (...args: unknown[]) => unknown>)[
-    options.callable.call.method
+  return await (resolvedRpc as Record<string, (...args: unknown[]) => unknown>)[
+    options.callable.rpcMethod
   ](...args);
 }
 
-function resolveFetchTarget(options: {
+function resolveFetchVia(options: {
   callable: FetchCallable;
   ctx: CallableContext;
 }): { type: "url"; fetch: typeof globalThis.fetch } | { type: "binding"; fetch: FetchableBinding } {
-  switch (options.callable.target.type) {
+  switch (options.callable.via.type) {
     case "url": {
       /**
        * Public URL fetch is a capability too. Requiring it in the context keeps
@@ -446,48 +447,51 @@ function resolveFetchTarget(options: {
     }
     case "env-binding":
       return resolveEnvBindingFetchTarget({
-        target: options.callable.target,
+        via: options.callable.via,
         env: options.ctx.env,
       });
     case "loopback-binding":
       return resolveLoopbackBindingFetchTarget({
-        target: options.callable.target,
+        via: options.callable.via,
         exports: options.ctx.exports,
       });
   }
 }
 
-function resolveRpcTarget(options: { callable: RpcCallable; ctx: CallableContext }) {
-  switch (options.callable.target.type) {
+function resolveRpcVia(options: { callable: WorkersRpcCallable; ctx: CallableContext }) {
+  switch (options.callable.via.type) {
     case "env-binding":
       return resolveEnvBindingRpcTarget({
-        target: options.callable.target,
+        via: options.callable.via,
         env: options.ctx.env,
       });
     case "loopback-binding":
       return resolveLoopbackBindingRpcTarget({
-        target: options.callable.target,
+        via: options.callable.via,
         exports: options.ctx.exports,
       });
   }
 }
 
-function assertRpcMethodResolvable(options: { target: unknown; methodName: string }) {
-  if (typeof options.target !== "object" || options.target === null) {
-    throw new CallableError("RESOLUTION_FAILED", "RPC target is not an object");
+function assertRpcMethodResolvable(options: { resolvedRpc: unknown; methodName: string }) {
+  if (typeof options.resolvedRpc !== "object" || options.resolvedRpc === null) {
+    throw new CallableError(
+      "RESOLUTION_FAILED",
+      "Workers RPC via value did not resolve to an object",
+    );
   }
 
   /**
    * On real Workers RPC stubs, Cloudflare intentionally exposes every possible
-   * method name and lets the remote target decide whether it exists. This
+   * method name and lets the remote object decide whether it exists. This
    * check is still useful for plain-object test doubles and invalid bindings,
    * but it is not a method allowlist. The policy task will add that explicitly.
    */
-  const method = Reflect.get(options.target, options.methodName);
+  const method = Reflect.get(options.resolvedRpc, options.methodName);
   if (typeof method !== "function") {
     throw new CallableError(
       "RESOLUTION_FAILED",
-      `RPC method "${options.methodName}" was not found on target`,
+      `RPC method "${options.methodName}" was not found on the resolved RPC object`,
     );
   }
 }
@@ -513,7 +517,7 @@ async function readCallableResponse(options: { response: Response }) {
     try {
       return JSON.parse(text);
     } catch (error) {
-      throw new CallableError("REMOTE_ERROR", "Callable fetch target returned invalid JSON", {
+      throw new CallableError("REMOTE_ERROR", "Callable fetch returned invalid JSON", {
         cause: error,
         details: {
           status: options.response.status,
@@ -542,15 +546,15 @@ function resolveServiceBinding(options: {
 }
 
 function resolveEnvBindingFetchTarget(options: {
-  target: EnvBindingTarget;
+  via: EnvBindingVia;
   env: Record<string, unknown> | undefined;
 }): { type: "binding"; fetch: FetchableBinding } {
-  switch (options.target.bindingType) {
+  switch (options.via.bindingType) {
     case "service":
       return {
         type: "binding",
         fetch: resolveServiceBinding({
-          bindingName: options.target.bindingName,
+          bindingName: options.via.bindingName,
           env: options.env,
         }),
       };
@@ -558,16 +562,16 @@ function resolveEnvBindingFetchTarget(options: {
       return {
         type: "binding",
         fetch: resolveDurableObjectFetchStub({
-          target: options.target,
+          via: options.via,
           source: "env",
           env: options.env,
         }),
       };
-    case "dynamic-worker-loader":
+    case "dynamic-worker":
       return {
         type: "binding",
         fetch: resolveDynamicWorkerFetchEntrypoint({
-          target: options.target,
+          via: options.via,
           env: options.env,
         }),
       };
@@ -575,43 +579,43 @@ function resolveEnvBindingFetchTarget(options: {
 }
 
 function resolveEnvBindingRpcTarget(options: {
-  target: EnvBindingTarget;
+  via: EnvBindingVia;
   env: Record<string, unknown> | undefined;
 }) {
-  switch (options.target.bindingType) {
+  switch (options.via.bindingType) {
     case "service":
       return resolveBinding({
-        bindingName: options.target.bindingName,
+        bindingName: options.via.bindingName,
         env: options.env,
       });
     case "durable-object-namespace":
       return resolveDurableObjectStub({
-        bindingName: options.target.bindingName,
-        durableObject: options.target.durableObject,
+        bindingName: options.via.bindingName,
+        durableObject: options.via.durableObject,
         env: options.env,
       });
-    case "dynamic-worker-loader":
+    case "dynamic-worker":
       return resolveDynamicWorkerEntrypoint({
-        target: options.target,
+        via: options.via,
         env: options.env,
       });
   }
 }
 
 function resolveLoopbackBindingFetchTarget(options: {
-  target: Extract<FetchCallable["target"], { type: "loopback-binding" }>;
+  via: Extract<FetchCallable["via"], { type: "loopback-binding" }>;
   exports: Record<string, unknown> | undefined;
 }): { type: "binding"; fetch: FetchableBinding } {
-  switch (options.target.bindingType) {
+  switch (options.via.bindingType) {
     case "service": {
       const binding = resolveLoopbackServiceBinding({
-        target: options.target,
+        via: options.via,
         exports: options.exports,
       });
       if (!isFetchableBinding(binding)) {
         throw new CallableError(
           "RESOLUTION_FAILED",
-          `Loopback export "${options.target.exportName}" does not expose fetch(request)`,
+          `Loopback export "${options.via.exportName}" does not expose fetch(request)`,
         );
       }
       return { type: "binding", fetch: binding };
@@ -620,7 +624,7 @@ function resolveLoopbackBindingFetchTarget(options: {
       return {
         type: "binding",
         fetch: resolveDurableObjectFetchStub({
-          target: options.target,
+          via: options.via,
           source: "loopback",
           exports: options.exports,
         }),
@@ -629,54 +633,54 @@ function resolveLoopbackBindingFetchTarget(options: {
 }
 
 function resolveLoopbackBindingRpcTarget(options: {
-  target: Extract<RpcCallable["target"], { type: "loopback-binding" }>;
+  via: Extract<WorkersRpcCallable["via"], { type: "loopback-binding" }>;
   exports: Record<string, unknown> | undefined;
 }) {
-  switch (options.target.bindingType) {
+  switch (options.via.bindingType) {
     case "service":
       return resolveLoopbackServiceBinding({
-        target: options.target,
+        via: options.via,
         exports: options.exports,
       });
     case "durable-object-namespace":
       return resolveDurableObjectStubFromNamespace({
         namespace: resolveLoopbackExport({
-          exportName: options.target.exportName,
+          exportName: options.via.exportName,
           exports: options.exports,
         }),
-        durableObject: options.target.durableObject,
-        description: `Loopback Durable Object export "${options.target.exportName}"`,
+        durableObject: options.via.durableObject,
+        description: `Loopback Durable Object export "${options.via.exportName}"`,
       });
   }
 }
 
 function resolveLoopbackServiceBinding(options: {
-  target: Extract<FetchCallable["target"], { type: "loopback-binding"; bindingType: "service" }>;
+  via: Extract<FetchCallable["via"], { type: "loopback-binding"; bindingType: "service" }>;
   exports: Record<string, unknown> | undefined;
 }) {
   const binding = resolveLoopbackExport({
-    exportName: options.target.exportName,
+    exportName: options.via.exportName,
     exports: options.exports,
   });
-  if (options.target.props === undefined) return binding;
+  if (options.via.props === undefined) return binding;
   if (typeof binding !== "function") {
     throw new CallableError(
       "RESOLUTION_FAILED",
-      `Loopback export "${options.target.exportName}" cannot be parameterized with props`,
+      `Loopback export "${options.via.exportName}" cannot be parameterized with props`,
     );
   }
-  return binding({ props: options.target.props });
+  return binding({ props: options.via.props });
 }
 
 function resolveDurableObjectFetchStub(
   options:
     | {
-        target: EnvDurableObjectTarget;
+        via: EnvDurableObjectVia;
         source: "env";
         env: Record<string, unknown> | undefined;
       }
     | {
-        target: LoopbackDurableObjectTarget;
+        via: LoopbackDurableObjectVia;
         source: "loopback";
         exports: Record<string, unknown> | undefined;
       },
@@ -684,22 +688,22 @@ function resolveDurableObjectFetchStub(
   const stub =
     options.source === "env"
       ? resolveDurableObjectStub({
-          bindingName: options.target.bindingName,
-          durableObject: options.target.durableObject,
+          bindingName: options.via.bindingName,
+          durableObject: options.via.durableObject,
           env: options.env,
         })
       : resolveDurableObjectStubFromNamespace({
           namespace: resolveLoopbackExport({
-            exportName: options.target.exportName,
+            exportName: options.via.exportName,
             exports: options.exports,
           }),
-          durableObject: options.target.durableObject,
-          description: `Loopback Durable Object export "${options.target.exportName}"`,
+          durableObject: options.via.durableObject,
+          description: `Loopback Durable Object export "${options.via.exportName}"`,
         });
   if (!isFetchableBinding(stub)) {
     throw new CallableError(
       "RESOLUTION_FAILED",
-      "Durable Object target did not resolve to a fetchable stub",
+      "Durable Object via value did not resolve to a fetchable stub",
     );
   }
   return stub;
@@ -759,39 +763,40 @@ function resolveDurableObjectStubFromNamespace(options: {
 }
 
 function resolveDynamicWorkerEntrypoint(options: {
-  target: DynamicWorkerTarget;
+  via: DynamicWorkerVia;
   env: Record<string, unknown> | undefined;
 }) {
+  const workerLoaderBindingName = options.via.workerLoaderBindingName ?? "LOADER";
   const loader = resolveBinding({
-    bindingName: options.target.bindingName,
+    bindingName: workerLoaderBindingName,
     env: options.env,
   });
   if (!isDynamicWorkerLoader(loader)) {
     throw new CallableError(
       "RESOLUTION_FAILED",
-      `Binding "${options.target.bindingName}" is not a Worker Loader`,
+      `Binding "${workerLoaderBindingName}" is not a Worker Loader`,
     );
   }
 
   /**
    * Dynamic Worker callables keep source code inline for this slice. When the
-   * target uses Worker Loader `get`, the ID is a cache key for this exact code
+   * via uses Worker Loader `get`, the ID is a cache key for this exact code
    * version; Cloudflare documents that a loader `get()` callback must keep
    * returning identical code for the same ID:
    * https://developers.cloudflare.com/dynamic-workers/api-reference/#get
    */
   const stub =
-    options.target.load?.type === "get"
-      ? loader.get(options.target.load.id, () => options.target.workerCode)
-      : loader.load(options.target.workerCode);
+    options.via.loader?.type === "get"
+      ? loader.get(options.via.loader.id, () => options.via.workerCode)
+      : loader.load(options.via.workerCode);
 
   const entrypointOptions =
-    options.target.entrypoint?.props === undefined
+    options.via.entrypoint?.props === undefined
       ? undefined
-      : { props: options.target.entrypoint.props };
+      : { props: options.via.entrypoint.props };
   const entrypoint =
-    options.target.entrypoint?.name || entrypointOptions
-      ? stub.getEntrypoint(options.target.entrypoint?.name, entrypointOptions)
+    options.via.entrypoint?.name || entrypointOptions
+      ? stub.getEntrypoint(options.via.entrypoint?.name, entrypointOptions)
       : stub.getEntrypoint();
   if (typeof entrypoint !== "object" || entrypoint === null) {
     throw new CallableError("RESOLUTION_FAILED", "Dynamic Worker entrypoint is not an object");
@@ -800,7 +805,7 @@ function resolveDynamicWorkerEntrypoint(options: {
 }
 
 function resolveDynamicWorkerFetchEntrypoint(options: {
-  target: DynamicWorkerTarget;
+  via: DynamicWorkerVia;
   env: Record<string, unknown> | undefined;
 }) {
   const entrypoint = resolveDynamicWorkerEntrypoint(options);

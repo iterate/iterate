@@ -21,8 +21,8 @@ const passthroughArgsSchema = z.record(z.string(), jsonValueSchema);
  * Service bindings, Durable Object stubs, Dynamic Worker entrypoints, and
  * loopback bindings are not URL-authorized resources; the resolved platform
  * object is the authority. Fetch callables may still choose a synthetic
- * request path via `call.path.base`, but that is part of the call shape rather
- * than part of target identity.
+ * request path via `fetchRequest.path.base`, but that is part of the Fetch
+ * request shape rather than part of capability identity.
  */
 const pathBaseSchema = z
   .string()
@@ -150,7 +150,7 @@ const durableObjectSelectorSchema = z.union([
   z.object({ id: z.string().min(1) }).strict(),
 ]);
 
-const dynamicWorkerLoadSchema = z
+const dynamicWorkerLoaderSchema = z
   .object({
     type: z.literal("get"),
     id: z.string().min(1),
@@ -165,39 +165,41 @@ const dynamicWorkerEntrypointSchema = z
   .strict();
 
 /**
- * Dynamic Worker targets intentionally keep only the loader, inline JavaScript
- * source, optional `get()` identity, and optional entrypoint selection. Fields
+ * Dynamic Worker `via` values intentionally keep only the Worker Loader env
+ * binding, inline JavaScript source, optional `get()` identity, and optional
+ * entrypoint selection. Fields
  * like `env`, `globalOutbound`, tails, and typed modules are real platform
  * features, but they expand the capability surface. V1 parks them in tasks
  * until we add the policy layer that should govern them:
  * https://developers.cloudflare.com/dynamic-workers/api-reference/
  *
- * The binding is deliberately named as an env binding instead of a generic
- * loader ref. Cloudflare calls Worker Loaders a binding, and bindings are the
- * capability-bearing values exposed through `env`:
+ * The loader env binding defaults to `LOADER`. The property is deliberately
+ * named `workerLoaderBindingName`, not `bindingName`: the callable invokes the
+ * loaded Dynamic Worker entrypoint, but the env capability used to get there is
+ * specifically a Worker Loader binding.
  * https://developers.cloudflare.com/workers/runtime-apis/bindings/
  */
-const dynamicWorkerTargetSchema = z
+const dynamicWorkerViaSchema = z
   .object({
     type: z.literal("env-binding"),
-    bindingType: z.literal("dynamic-worker-loader"),
-    bindingName: z.string().min(1),
+    bindingType: z.literal("dynamic-worker"),
+    workerLoaderBindingName: z.string().min(1).optional(),
     workerCode: dynamicWorkerCodeSchema,
-    load: dynamicWorkerLoadSchema.optional(),
+    loader: dynamicWorkerLoaderSchema.optional(),
     entrypoint: dynamicWorkerEntrypointSchema.optional(),
   })
   .strict();
 
 /**
- * `env-binding` targets resolve through `CallableContext.env[bindingName]`.
+ * `env-binding` via values resolve through `CallableContext.env[bindingName]`.
  *
  * Cloudflare describes bindings as "a permission and an API in one piece".
- * This descriptor stores only the configured binding name and expected binding
+ * This callable stores only the configured binding name and expected binding
  * type; the live binding object is supplied by the caller's context at dispatch
  * time.
  * https://developers.cloudflare.com/workers/runtime-apis/bindings/
  */
-const serviceEnvBindingTargetSchema = z
+const serviceEnvBindingViaSchema = z
   .object({
     type: z.literal("env-binding"),
     bindingType: z.literal("service"),
@@ -213,7 +215,7 @@ const serviceEnvBindingTargetSchema = z
  * stubs, names, and IDs.
  * https://developers.cloudflare.com/durable-objects/api/namespace/
  */
-const durableObjectEnvBindingTargetSchema = z
+const durableObjectEnvBindingViaSchema = z
   .object({
     type: z.literal("env-binding"),
     bindingType: z.literal("durable-object-namespace"),
@@ -223,7 +225,7 @@ const durableObjectEnvBindingTargetSchema = z
   .strict();
 
 /**
- * `loopback-binding` targets resolve through `CallableContext.exports`, which
+ * `loopback-binding` via values resolve through `CallableContext.exports`, which
  * is the `ctx.exports` object from a Worker or Durable Object invocation.
  *
  * Cloudflare documents these as automatically configured "loopback bindings"
@@ -231,7 +233,7 @@ const durableObjectEnvBindingTargetSchema = z
  * parameterized with dynamic `props`, unlike regular env service bindings.
  * https://developers.cloudflare.com/workers/runtime-apis/context/#exports
  */
-const loopbackServiceTargetSchema = z
+const loopbackServiceViaSchema = z
   .object({
     type: z.literal("loopback-binding"),
     bindingType: z.literal("service"),
@@ -240,7 +242,7 @@ const loopbackServiceTargetSchema = z
   })
   .strict();
 
-const loopbackDurableObjectTargetSchema = z
+const loopbackDurableObjectViaSchema = z
   .object({
     type: z.literal("loopback-binding"),
     bindingType: z.literal("durable-object-namespace"),
@@ -249,44 +251,33 @@ const loopbackDurableObjectTargetSchema = z
   })
   .strict();
 
-const envBindingTargetSchema = z.discriminatedUnion("bindingType", [
-  serviceEnvBindingTargetSchema,
-  durableObjectEnvBindingTargetSchema,
-  dynamicWorkerTargetSchema,
+const envBindingViaSchema = z.discriminatedUnion("bindingType", [
+  serviceEnvBindingViaSchema,
+  durableObjectEnvBindingViaSchema,
+  dynamicWorkerViaSchema,
 ]);
 
-const loopbackBindingTargetSchema = z.discriminatedUnion("bindingType", [
-  loopbackServiceTargetSchema,
-  loopbackDurableObjectTargetSchema,
+const loopbackBindingViaSchema = z.discriminatedUnion("bindingType", [
+  loopbackServiceViaSchema,
+  loopbackDurableObjectViaSchema,
 ]);
 
-const urlTargetSchema = z
+const urlViaSchema = z
   .object({
     type: z.literal("url"),
     url: httpUrlSchema,
   })
   .strict();
 
-const fetchTargetSchema = z.union([
-  urlTargetSchema,
-  envBindingTargetSchema,
-  loopbackBindingTargetSchema,
-]);
+const fetchViaSchema = z.union([urlViaSchema, envBindingViaSchema, loopbackBindingViaSchema]);
 
-const rpcTargetSchema = z.union([envBindingTargetSchema, loopbackBindingTargetSchema]);
+const workersRpcViaSchema = z.union([envBindingViaSchema, loopbackBindingViaSchema]);
 
-const requestTemplateSchema = z
+const fetchRequestSchema = z
   .object({
     method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]).optional(),
     headers: z.record(z.string(), z.string()).optional(),
     query: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
-  })
-  .strict();
-
-const fetchCallSchema = z
-  .object({
-    type: z.literal("fetch"),
-    passthroughArgs: passthroughArgsSchema.optional(),
     path: z
       .object({
         base: pathBaseSchema.optional(),
@@ -294,20 +285,31 @@ const fetchCallSchema = z
       })
       .strict()
       .optional(),
-    request: requestTemplateSchema.optional(),
   })
   .strict();
 
-const rpcCallSchema = z
+const fetchCallableSchema = z
   .object({
-    type: z.literal("rpc"),
-    method: rpcMethodSchema,
+    type: z.literal("fetch"),
+    schema: callableSchemaField,
+    via: fetchViaSchema,
+    passthroughArgs: passthroughArgsSchema.optional(),
+    fetchRequest: fetchRequestSchema.optional(),
+  })
+  .strict();
+
+const workersRpcCallableSchema = z
+  .object({
+    type: z.literal("workers-rpc"),
+    schema: callableSchemaField,
+    via: workersRpcViaSchema,
+    rpcMethod: rpcMethodSchema,
     argsMode: z.enum(["object", "positional"]).optional(),
     passthroughArgs: passthroughArgsSchema.optional(),
   })
   .strict()
-  .superRefine((call, ctx) => {
-    if (call.argsMode === "positional" && call.passthroughArgs != null) {
+  .superRefine((callable, ctx) => {
+    if (callable.argsMode === "positional" && callable.passthroughArgs != null) {
       ctx.addIssue({
         code: "custom",
         message: "RPC positional argsMode cannot include passthroughArgs",
@@ -328,40 +330,27 @@ const rpcCallSchema = z
  * Callable. `tasks/capability-policy.md` tracks the hardened resolver/policy
  * layer.
  */
-const fetchCallableSchema = z
-  .object({
-    schema: callableSchemaField,
-    target: fetchTargetSchema,
-    call: fetchCallSchema.optional(),
-  })
-  .strict();
-
-const rpcCallableSchema = z
-  .object({
-    schema: callableSchemaField,
-    target: rpcTargetSchema,
-    call: rpcCallSchema,
-  })
-  .strict();
-
-export const CallableSchema = z.union([fetchCallableSchema, rpcCallableSchema]);
+export const CallableSchema = z.discriminatedUnion("type", [
+  fetchCallableSchema,
+  workersRpcCallableSchema,
+]);
 
 /**
- * JSON that names a target capability and an optional call to make against it.
+ * JSON that names an invocation protocol and the capability to invoke it via.
  *
  * Dispatching a Callable resolves live authority from `CallableContext`: public
  * HTTP fetch, Worker bindings, Durable Object namespaces, and Worker Loader
- * bindings are not stored in the descriptor itself. Treat descriptors as
+ * bindings are not stored in the callable itself. Treat Callables as
  * untrusted code until the capability-policy task is implemented.
  */
 export type Callable = z.infer<typeof CallableSchema>;
 export type FetchCallable = z.infer<typeof fetchCallableSchema>;
-export type RpcCallable = z.infer<typeof rpcCallableSchema>;
+export type WorkersRpcCallable = z.infer<typeof workersRpcCallableSchema>;
 export type DurableObjectSelector = z.infer<typeof durableObjectSelectorSchema>;
 
 export type CallableContext = {
   /**
-   * Worker bindings keyed by their runtime binding name. `env-binding` targets
+   * Worker bindings keyed by their runtime binding name. `env-binding` via
    * keep only `bindingName`, so this object is where a stored Callable resolves
    * to a live platform capability.
    *
@@ -381,14 +370,14 @@ export type CallableContext = {
    */
   exports?: Record<string, unknown>;
   /**
-   * Public URL fetch capability used only by callables targeting
+   * Public URL fetch capability used only by callables using
    * `{ type: "url" }`.
    *
    * Worker-boundary code can pass the runtime function directly as
    * `{ fetch }`. Keeping it explicit is important: public egress should not be
-   * created by a shared helper silently reading `globalThis.fetch`. Binding
-   * targets ignore this field because their authority comes from `env` or
-   * `ctx.exports`.
+   * created by a shared helper silently reading `globalThis.fetch`. Env and
+   * loopback binding via values ignore this field because their authority comes
+   * from `env` or `ctx.exports`.
    */
   fetch?: typeof globalThis.fetch;
 };

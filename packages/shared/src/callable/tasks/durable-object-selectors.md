@@ -13,7 +13,7 @@ V1 supports Cloudflare's native stable selectors:
 - `durableObject: { id }`
 
 The nested `durableObject` object exists so future selectors can be added
-without flattening more mutually exclusive fields onto the target.
+without flattening more mutually exclusive fields onto `via`.
 
 Planned scope:
 
