@@ -2,13 +2,14 @@
 
 import {
   delegateToBaseFetch,
-  getDurableObjectState,
   type DurableObjectClass,
   type RuntimeDurableObjectConstructor,
   type WithFetchMixinResult,
 } from "./fetch-mixin-utils.ts";
+import type { Constructor } from "./mixin-types.ts";
+import type { DurableObjectCoreProtected } from "./with-durable-object-core.ts";
 
-export type WithKvInspectorResult<TBase extends DurableObjectClass> = WithFetchMixinResult<TBase>;
+type WithKvInspectorResult<TBase extends DurableObjectClass> = WithFetchMixinResult<TBase>;
 
 /**
  * Debug-only KV inspector for a Durable Object's embedded KV storage.
@@ -26,8 +27,13 @@ export type WithKvInspectorResult<TBase extends DurableObjectClass> = WithFetchM
 export function withKvInspector(options: { unsafe: "I_UNDERSTAND_THIS_EXPOSES_KV" }) {
   void options;
 
-  return function <TBase extends DurableObjectClass>(Base: TBase): WithKvInspectorResult<TBase> {
-    abstract class KvInspectorMixin extends (Base as unknown as RuntimeDurableObjectConstructor) {
+  return function <TBase extends DurableObjectClass>(
+    Base: TBase & Constructor<DurableObjectCoreProtected>,
+  ): WithKvInspectorResult<TBase> {
+    const BaseWithCore = Base as unknown as RuntimeDurableObjectConstructor &
+      Constructor<DurableObjectCoreProtected>;
+
+    abstract class KvInspectorMixin extends BaseWithCore {
       async fetch(request: Request) {
         const url = new URL(request.url);
 
@@ -35,11 +41,11 @@ export function withKvInspector(options: { unsafe: "I_UNDERSTAND_THIS_EXPOSES_KV
         // inspector under a prefix, it must strip that prefix before forwarding
         // the request to `stub.fetch()`.
         if (url.pathname === "/__kv" || url.pathname === "/__kv/") {
-          return renderKvPage(this);
+          return renderKvPage(this.getDurableObjectKv());
         }
 
         if (url.pathname === "/__kv/json") {
-          return Response.json(readKvEntries(this));
+          return Response.json(readKvEntries(this.getDurableObjectKv()));
         }
 
         return await delegateToBaseFetch(Base, this, request);
@@ -48,13 +54,13 @@ export function withKvInspector(options: { unsafe: "I_UNDERSTAND_THIS_EXPOSES_KV
 
     // The class expression really adds fetch(), but TypeScript cannot preserve
     // the generic DurableObject constructor plus accumulated members through
-    // the mixin automatically. WithKvInspectorResult is the public composed
+    // the mixin automatically. WithKvInspectorResult is the internal composed
     // shape we verify in the expect-type tests.
     return KvInspectorMixin as unknown as WithKvInspectorResult<TBase>;
   };
 }
 
-function renderKvPage(instance: object) {
+function renderKvPage(kv: SyncKvStorage) {
   return new Response(
     `<!doctype html>
 <html>
@@ -70,7 +76,7 @@ function renderKvPage(instance: object) {
   </head>
   <body>
     <h1>Durable Object KV</h1>
-    <pre>${escapeHtml(JSON.stringify(readKvEntries(instance), null, 2))}</pre>
+    <pre>${escapeHtml(JSON.stringify(readKvEntries(kv), null, 2))}</pre>
   </body>
 </html>`,
     {
@@ -81,9 +87,8 @@ function renderKvPage(instance: object) {
   );
 }
 
-function readKvEntries(instance: object) {
-  const ctx = getDurableObjectState(instance);
-  return Array.from(ctx.storage.kv.list()).map(([key, value]) => ({ key, value }));
+function readKvEntries(kv: SyncKvStorage) {
+  return Array.from(kv.list()).map(([key, value]) => ({ key, value }));
 }
 
 function escapeHtml(value: string) {

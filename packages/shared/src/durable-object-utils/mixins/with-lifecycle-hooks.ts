@@ -1,7 +1,15 @@
 /// <reference types="@cloudflare/workers-types" />
 
 import { dequal } from "dequal/lite";
-import type { Constructor, DurableObjectConstructor } from "./mixin-types.ts";
+import type {
+  Constructor,
+  DurableObjectClass,
+  DurableObjectConstructor,
+  MembersOf,
+  ReqEnvOf,
+  StaticSide,
+} from "./mixin-types.ts";
+import type { DurableObjectCoreProtected } from "./with-durable-object-core.ts";
 
 export type LifecycleInit = {
   /**
@@ -107,21 +115,28 @@ export abstract class LifecycleHooksProtected<InitParams extends LifecycleInit> 
   }
 }
 
-export type WithLifecycleHooksResult<
-  TBase extends DurableObjectConstructor,
-  InitParams extends LifecycleInit,
-> =
-  // Preserve the original class value. This is what keeps Cloudflare's
-  // `class Room extends RoomBase<Env>` style working after the mixin wraps
-  // `DurableObject`.
-  TBase &
+type WithLifecycleHooksResult<TBase extends DurableObjectClass, InitParams extends LifecycleInit> =
+  // Preserve the generic Durable Object constructor so this remains legal:
+  //
+  //   const RoomBase = withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject));
+  //   class Room extends RoomBase<Env> {}
+  //
+  // The lifecycle mixin consumes the protected core capabilities instead of
+  // reaching into Cloudflare's `ctx` directly. That mirrors the Agents SDK
+  // layering where `Agent` adapts `ctx.storage.sql` and feature mixins consume
+  // the exposed capability.
+  StaticSide<TBase> &
+    DurableObjectClass<
+      ReqEnvOf<TBase>,
+      MembersOf<TBase> & LifecycleHooksMembers<InitParams> & LifecycleHooksProtected<InitParams>
+    > &
     // Add the instance members introduced by this mixin. The protected getter
     // has to come from `LifecycleHooksProtected` because protected members cannot
     // be expressed with an interface.
     //
     // Benefit:
     //
-    //   const RoomBase = withLifecycleHooks<RoomInit>()(DurableObject);
+    //   const RoomBase = withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject));
     //   class Room extends RoomBase<Env> {
     //     send() { return this.initParams.ownerUserId; } // typed
     //   }
@@ -170,10 +185,18 @@ export class InitializeParamsMismatchError extends Error {
  * `env` when the Durable Object starts.
  */
 export function withLifecycleHooks<InitParams extends LifecycleInit>() {
-  return function <TBase extends DurableObjectConstructor>(
-    Base: TBase,
+  return function <TBase extends DurableObjectClass>(
+    Base: TBase & Constructor<DurableObjectCoreProtected>,
   ): WithLifecycleHooksResult<TBase, InitParams> {
-    abstract class LifecycleHooksMixin extends Base implements LifecycleHooksMembers<InitParams> {
+    const BaseWithCore = Base as unknown as DurableObjectConstructor<
+      unknown,
+      DurableObjectCoreProtected
+    >;
+
+    abstract class LifecycleHooksMixin
+      extends BaseWithCore
+      implements LifecycleHooksMembers<InitParams>
+    {
       #initParams: InitParams | undefined;
       #firstInitializeHooks: Array<LifecycleHook<InitParams>> = [];
       #startHooks: Array<LifecycleHook<InitParams>> = [];
@@ -189,7 +212,7 @@ export function withLifecycleHooks<InitParams extends LifecycleInit>() {
         // construction without `blockConcurrencyWhile`, because no async storage
         // call is needed before requests can run.
         // https://developers.cloudflare.com/durable-objects/api/storage-api/#synchronous-kv-api
-        this.#initParams = this.ctx.storage.kv.get<InitParams>(LIFECYCLE_PARAMS_STORAGE_KEY);
+        this.#initParams = this.getDurableObjectKv().get<InitParams>(LIFECYCLE_PARAMS_STORAGE_KEY);
       }
 
       /**
@@ -224,9 +247,11 @@ export function withLifecycleHooks<InitParams extends LifecycleInit>() {
        * Register work that should run once per Durable Object activation, after
        * init params exist and after first-initialize hooks have completed.
        *
-       * Hooks are awaited by `ensureStarted()`. If the work is best-effort,
-       * explicitly put that work in `ctx.waitUntil()` and return quickly so the
-       * hook does not become part of the object's readiness boundary.
+       * Hooks are awaited by `ensureStarted()`. If the work is best-effort, start
+       * a separately caught promise and return quickly so the hook does not become
+       * part of the object's readiness boundary. Cloudflare's Durable Object
+       * `ctx.waitUntil()` exists for Worker API compatibility but does not extend
+       * lifetime in Durable Objects.
        */
       protected registerOnStart(fn: LifecycleHook<InitParams>): void {
         if (this.#started || this.#startPromise !== undefined) {
@@ -246,13 +271,13 @@ export function withLifecycleHooks<InitParams extends LifecycleInit>() {
         // Miniflare tests exercise this same path, including the mismatch
         // branch, so we keep the production invariant instead of accepting an
         // unverifiable name when the runtime does not provide one.
-        const objectName = this.ctx.id.name;
+        const objectName = this.getDurableObjectName();
 
         if (objectName !== params.name) {
           throw new InitializeNameMismatchError(params.name, objectName);
         }
 
-        const existing = this.ctx.storage.kv.get<InitParams>(LIFECYCLE_PARAMS_STORAGE_KEY);
+        const existing = this.getDurableObjectKv().get<InitParams>(LIFECYCLE_PARAMS_STORAGE_KEY);
 
         if (existing !== undefined) {
           // Repeated initialization is allowed only when the full params match.
@@ -267,7 +292,7 @@ export function withLifecycleHooks<InitParams extends LifecycleInit>() {
           return await this.ensureStarted();
         }
 
-        this.ctx.storage.kv.put(LIFECYCLE_PARAMS_STORAGE_KEY, params);
+        this.getDurableObjectKv().put(LIFECYCLE_PARAMS_STORAGE_KEY, params);
         this.#initParams = params;
 
         return await this.ensureStarted();
@@ -305,20 +330,20 @@ export function withLifecycleHooks<InitParams extends LifecycleInit>() {
           let hasStartupError = false;
           let startupError: unknown;
 
-          await this.ctx.blockConcurrencyWhile(async () => {
+          await this.blockDurableObjectConcurrencyWhile(async () => {
             try {
               this.#runningLifecycleHooks = true;
               initialized = this.assertInitialized();
 
               const firstInitializeDone =
-                this.ctx.storage.kv.get<boolean>(FIRST_INITIALIZE_DONE_STORAGE_KEY) ?? false;
+                this.getDurableObjectKv().get<boolean>(FIRST_INITIALIZE_DONE_STORAGE_KEY) ?? false;
 
               if (!firstInitializeDone) {
                 for (const fn of this.#firstInitializeHooks) {
                   await fn.call(this, initialized);
                 }
 
-                this.ctx.storage.kv.put(FIRST_INITIALIZE_DONE_STORAGE_KEY, true);
+                this.getDurableObjectKv().put(FIRST_INITIALIZE_DONE_STORAGE_KEY, true);
               }
 
               for (const fn of this.#startHooks) {

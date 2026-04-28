@@ -13,8 +13,8 @@ The default is **do not code immediately**. First spec the API with the user. If
 ## Ground Rules
 
 - Keep `DurableObject` as the root. Do not add a separate root class, `pipe`, `flow`, or builder unless explicitly specced.
-- Prefer nested composition: `withB(withA(DurableObject))`.
-- Preserve Cloudflare-style ergonomics: `const Base = withX(...)(DurableObject); class Room extends Base<Env> {}`.
+- Prefer nested composition: `withB(withA(withDurableObjectCore(DurableObject)))` when the stack needs local storage, alarms, or lifecycle hooks.
+- Preserve Cloudflare-style ergonomics: `const Base = withX(...)(withDurableObjectCore(DurableObject)); class Room extends Base<Env> {}`.
 - Keep env requirements and capability requirements separate.
 - Use the smallest public API that solves the problem. Do not add optional knobs for hypothetical users.
 - Document every non-obvious type expression with the call-site benefit it protects.
@@ -22,8 +22,9 @@ The default is **do not code immediately**. First spec the API with the user. If
 
 ## Reference Implementations
 
-- `mixins/with-lifecycle-hooks.ts`: protected subclass surface, named initialization, first-initialize/start hooks, static/generic preservation in the simple `TBase & Constructor<Members>` shape.
-- `mixins/with-d1-object-catalog.ts`: env lower-bound via `getDatabase(env)`, best-effort `ctx.waitUntil()` work, D1 tables owned by the mixin, and init-param indexes.
+- `mixins/with-durable-object-core.ts`: root adapter for Cloudflare's protected `ctx` APIs. It exposes protected local SQLite, synchronous KV, and platform alarm capabilities so feature mixins do not reach into `ctx` directly.
+- `mixins/with-lifecycle-hooks.ts`: protected subclass surface, named initialization, first-initialize/start hooks, static/generic preservation through `DurableObjectClass`.
+- `mixins/with-d1-object-catalog.ts`: env lower-bound via `getDatabase(env)`, detached/caught best-effort D1 work, D1 tables owned by the mixin, and init-param indexes.
 - `mixins/with-multiplexed-alarms.ts`: one owner for Cloudflare's single Durable Object alarm slot, protected scheduling methods, SQLite-backed logical alarm rows.
 - `mixins/with-scheduler.ts`: key-based scheduler layered above multiplexed alarms, tagged recurrence rows, split one-shot/recurring failure policy.
 - `mixins/with-kv-inspector.ts`: fetch wrapper that preserves generic `Base<Env>`.
@@ -41,8 +42,8 @@ Before editing, write down:
 - If it overrides `alarm`, `fetch`, or another runtime hook, does it call the inherited implementation and document what subclasses above it must do?
 - Does it require env bindings? If yes, what is the minimum env shape?
 - Does it require members from earlier mixins? If yes, what exact capability interface should the base satisfy?
-- Does it use SQLite `ctx.storage.sql` or synchronous `ctx.storage.kv`? If yes, document that it requires SQLite-backed DOs.
-- Is any work best-effort? If yes, use `ctx.waitUntil()` and make failure logging explicit.
+- Does it need local SQLite, synchronous KV, or platform alarms? If yes, depend on `DurableObjectCoreProtected` from `withDurableObjectCore()` instead of reaching into `ctx` directly.
+- Is any work best-effort? If yes, start a detached promise, catch/log failures, and document that Cloudflare's Durable Object `ctx.waitUntil()` has no Worker-style lifetime effect.
 - What should happen if a caller uses the mixin in production by accident?
 
 If any answer is fuzzy, stop and grill the user. Do not encode uncertainty as optional config.
@@ -75,6 +76,12 @@ Use comments to explain:
 - `Members` is the instance surface accumulated so far.
 - The purpose is to keep `class Room extends Base<Env>` valid after composition.
 
+Feature mixins should generally consume protected capabilities from lower layers
+instead of touching Cloudflare `ctx` directly. For example, `withScheduler()`
+uses `withMultiplexedAlarms()` and `withDurableObjectCore()`, while
+`withDurableObjectCore()` is the only reusable layer that adapts
+`ctx.storage.sql`, `ctx.storage.kv`, and platform alarms.
+
 For env bindings, prefer a lower-bound type selected by the call site:
 
 ```ts
@@ -87,7 +94,7 @@ const Base = withD1ObjectCatalog<RoomInit, NeedsCatalog>({
   getDatabase(env) {
     return env.DO_CATALOG;
   },
-})(withLifecycleHooks<RoomInit>()(DurableObject));
+})(withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject)));
 
 class Room extends Base<NeedsCatalog & { OTHER: string }> {}
 ```
@@ -102,7 +109,7 @@ Every mixin needs:
 - A clear warning if it exposes storage, SQL, debug state, or unsafe behavior.
 - Comments beside type aliases when preserving `TBase`, `ReqEnv`, `Members`, protected members, or env lower-bounds.
 - README examples showing the call-site benefit, not just implementation details.
-- A note explaining any `ctx.waitUntil()`, synchronous KV, SQLite, D1, or Alchemy behavior that is not obvious.
+- A note explaining any detached promises, synchronous KV, SQLite, D1, or Alchemy behavior that is not obvious.
 
 Do not write “magic” comments. Prefer:
 

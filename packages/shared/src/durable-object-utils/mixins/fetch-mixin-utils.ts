@@ -1,53 +1,19 @@
 /// <reference types="@cloudflare/workers-types" />
 
-import { DurableObject } from "cloudflare:workers";
-
-/**
- * Generic Durable Object class value used by fetch-wrapper mixins.
- *
- * Cloudflare-style mixins need to preserve this call-site shape:
- *
- *   const Base = withKvInspector(...)(DurableObject);
- *   class Room extends Base<Env> {}
- *
- * `ReqEnv` is the minimum Env required by mixins applied so far. `Members` is
- * the instance surface accumulated so far. Keeping both in one constructor type
- * lets later mixins add routes while retaining earlier env requirements and
- * methods.
- */
-export type DurableObjectClass<ReqEnv = unknown, Members = object> = abstract new <
-  Env extends ReqEnv,
->(
-  ctx: DurableObjectState,
-  env: Env,
-) => DurableObject<Env> & Members;
-
-export type ReqEnvOf<C> =
-  C extends DurableObjectClass<infer ReqEnv, infer _Members> ? ReqEnv : unknown;
-
-export type MembersOf<C> =
-  C extends DurableObjectClass<infer _ReqEnv, infer Members> ? Members : object;
-
-/**
- * Copy static properties without copying the original constructor signature.
- *
- * Intersecting two constructor signatures can make TypeScript require both
- * constructors to return the exact same instance type, which breaks composed
- * mixins. StaticSide<TBase> keeps useful statics while WithFetchMixinResult
- * below supplies one fresh generic Durable Object constructor.
- */
-export type StaticSide<T> = {
-  [K in keyof T]: T[K];
-};
-
-export type RuntimeDurableObjectConstructor = abstract new (
-  ctx: DurableObjectState,
-  env: unknown,
-) => DurableObject;
-
-type DurableObjectInternals = {
-  ctx: DurableObjectState;
-};
+import type {
+  DurableObjectClass,
+  MembersOf,
+  ReqEnvOf,
+  RuntimeDurableObjectConstructor,
+  StaticSide,
+} from "./mixin-types.ts";
+export type {
+  DurableObjectClass,
+  MembersOf,
+  ReqEnvOf,
+  RuntimeDurableObjectConstructor,
+  StaticSide,
+} from "./mixin-types.ts";
 
 export type FetchBase = {
   fetch(request: Request): Response | Promise<Response>;
@@ -62,7 +28,7 @@ type OptionalFetchBase = {
  *
  * Benefit:
  *
- *   const Base = withKvInspector(...)(withOuterbase(...)(DurableObject));
+ *   const Base = withKvInspector(...)(withOuterbase(...)(withDurableObjectCore(DurableObject)));
  *   class Room extends Base<Env> {}
  *
  * The composed class remains generic in Env, statics from the wrapped class are
@@ -87,16 +53,4 @@ export async function delegateToBaseFetch(
   if (baseFetch !== undefined) return await baseFetch.call(instance, request);
 
   return new Response("Not found", { status: 404 });
-}
-
-/**
- * Local escape hatch for protected DurableObject internals.
- *
- * The constructor constraint proves inspector mixins only wrap DurableObject
- * classes. `ctx` is protected, so route helpers that need SQLite/KV access use
- * this one narrow cast rather than spreading protected-field casts through each
- * inspector implementation.
- */
-export function getDurableObjectState(instance: object): DurableObjectState {
-  return (instance as unknown as DurableObjectInternals).ctx;
 }

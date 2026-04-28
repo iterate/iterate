@@ -1,13 +1,20 @@
 /// <reference types="@cloudflare/workers-types" />
 
-import { DurableObject } from "cloudflare:workers";
 import type {
   LifecycleHooksMembers,
   LifecycleHooksProtected,
   LifecycleInit,
 } from "./with-lifecycle-hooks.ts";
 import { stringifyJsonPayload } from "./json-payload.ts";
-import type { Constructor, DurableObjectConstructor } from "./mixin-types.ts";
+import type {
+  Constructor,
+  DurableObjectClass,
+  DurableObjectConstructor,
+  MembersOf,
+  ReqEnvOf,
+  StaticSide,
+} from "./mixin-types.ts";
+import type { DurableObjectCoreProtected } from "./with-durable-object-core.ts";
 
 const MULTIPLEXED_ALARMS_TABLE = "mixin_multiplexed_alarms";
 const MAX_DUE_ALARMS_PER_TICK = 50;
@@ -47,8 +54,10 @@ export type ScheduleMultiplexedAlarmInput = {
   /**
    * Payload passed as the method's only argument.
    *
-   * Payloads must be JSON-serializable because alarm rows must survive
-   * eviction, hibernation, and deploys. We intentionally do not encode JSON
+   * Payloads must be plain JSON-style data because alarm rows must survive
+   * eviction, hibernation, and deploys. JSON.stringify catches some failures,
+   * like circular data and BigInt, but it can silently drop/coerce nested
+   * functions, Maps, and class instances. We intentionally do not encode JSON
    * serializability in TypeScript because recursive JSON types make call sites
    * noisy while still not proving runtime serializability.
    */
@@ -91,20 +100,19 @@ export abstract class MultiplexedAlarmsProtected {
   }
 }
 
-export type WithMultiplexedAlarmsResult<TBase extends DurableObjectConstructor> =
-  // Preserve the original class value so `class Room extends Base<Env>` keeps
-  // working after this wrapper, matching Cloudflare's `withVoice` style.
-  TBase &
-    Constructor<MultiplexedAlarmsMembers & MultiplexedAlarmsProtected> &
-    // Publish that the wrapped class still has a Durable Object alarm method.
-    // Classes above this mixin may override alarm(), but must call
-    // `super.alarm?.()` or these logical alarms will not dispatch. The optional
-    // call is the TypeScript-friendly shape because Cloudflare's root
-    // DurableObject declares alarm as an optional hook.
-    (abstract new <Env>(
-      ctx: DurableObjectState,
-      env: Env,
-    ) => DurableObject<Env> & MultiplexedAlarmsMembers);
+type WithMultiplexedAlarmsResult<TBase extends DurableObjectClass> =
+  // Preserve statics and publish one generic Durable Object constructor with
+  // the accumulated instance surface. This is the same intent as Cloudflare's
+  // `withVoice()` return type, but our stack has multiple wrappers and env
+  // lower-bounds, so the shared DurableObjectClass helper carries those through
+  // without each mixin hand-writing a bespoke constructor.
+  StaticSide<TBase> &
+    DurableObjectClass<
+      ReqEnvOf<TBase>,
+      MembersOf<TBase> & MultiplexedAlarmsMembers & MultiplexedAlarmsProtected
+    > &
+    Constructor<MultiplexedAlarmsMembers> &
+    Constructor<MultiplexedAlarmsProtected>;
 
 type MultiplexedAlarmRow = {
   key: string;
@@ -139,19 +147,31 @@ export class MissingMultiplexedAlarmMethodError extends Error {
  * Public method: `getMultiplexedAlarms()` for diagnostics.
  * Protected subclass/mixin surface: `scheduleMultiplexedAlarm()` and
  * `cancelMultiplexedAlarm()`. Classes above this mixin may override `alarm()`,
- * but must call `super.alarm?.()` or persisted logical alarms will not dispatch.
+ * but must call `super.alarm?.(alarmInfo)` or persisted logical alarms will not dispatch.
  *
  * Cloudflare alarm behavior this mixin is built around:
  * https://developers.cloudflare.com/durable-objects/api/alarms/
  */
 export function withMultiplexedAlarms<InitParams extends LifecycleInit>() {
-  return function <
-    TBase extends DurableObjectConstructor<
+  return function <TBase extends DurableObjectClass>(
+    Base: TBase &
+      Constructor<
+        DurableObjectCoreProtected &
+          LifecycleHooksMembers<InitParams> &
+          LifecycleHooksProtected<InitParams>
+      >,
+  ): WithMultiplexedAlarmsResult<TBase> {
+    const BaseWithCapabilities = Base as unknown as DurableObjectConstructor<
       unknown,
-      LifecycleHooksMembers<InitParams> & LifecycleHooksProtected<InitParams>
-    >,
-  >(Base: TBase): WithMultiplexedAlarmsResult<TBase> {
-    abstract class MultiplexedAlarmsMixin extends Base implements MultiplexedAlarmsMembers {
+      DurableObjectCoreProtected &
+        LifecycleHooksMembers<InitParams> &
+        LifecycleHooksProtected<InitParams>
+    >;
+
+    abstract class MultiplexedAlarmsMixin
+      extends BaseWithCapabilities
+      implements MultiplexedAlarmsMembers
+    {
       constructor(...args: any[]) {
         super(...args);
 
@@ -159,7 +179,7 @@ export function withMultiplexedAlarms<InitParams extends LifecycleInit>() {
         // schema calls are synchronous and do not yield the event loop, so the
         // constructor only creates the tiny local table needed to multiplex the
         // single Cloudflare alarm slot.
-        this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS ${MULTIPLEXED_ALARMS_TABLE} (
+        this.getDurableObjectSql().exec(`CREATE TABLE IF NOT EXISTS ${MULTIPLEXED_ALARMS_TABLE} (
           key TEXT PRIMARY KEY,
           method TEXT NOT NULL,
           payload_json TEXT NOT NULL,
@@ -167,14 +187,14 @@ export function withMultiplexedAlarms<InitParams extends LifecycleInit>() {
           created_at_ms INTEGER NOT NULL,
           updated_at_ms INTEGER NOT NULL
         )`);
-        this.ctx.storage.sql.exec(`CREATE INDEX IF NOT EXISTS mixin_multiplexed_alarms_run_at
+        this.getDurableObjectSql().exec(`CREATE INDEX IF NOT EXISTS mixin_multiplexed_alarms_run_at
           ON ${MULTIPLEXED_ALARMS_TABLE} (run_at_ms)`);
 
         this.registerOnStart(() => this.armNextMultiplexedAlarm());
       }
 
       getMultiplexedAlarms(): MultiplexedAlarmRecord[] {
-        return this.ctx.storage.sql
+        return this.getDurableObjectSql()
           .exec<MultiplexedAlarmRow>(
             `SELECT key, method, payload_json, run_at_ms, created_at_ms, updated_at_ms
              FROM ${MULTIPLEXED_ALARMS_TABLE}
@@ -202,7 +222,7 @@ export function withMultiplexedAlarms<InitParams extends LifecycleInit>() {
 
         this.getMultiplexedAlarmMethod(input.key, input.method);
 
-        this.ctx.storage.sql.exec(
+        this.getDurableObjectSql().exec(
           `INSERT INTO ${MULTIPLEXED_ALARMS_TABLE}
             (key, method, payload_json, run_at_ms, created_at_ms, updated_at_ms)
            VALUES (?, ?, ?, ?, ?, ?)
@@ -225,7 +245,7 @@ export function withMultiplexedAlarms<InitParams extends LifecycleInit>() {
       protected async cancelMultiplexedAlarm(key: string): Promise<boolean> {
         await this.ensureStarted();
 
-        const existing = this.ctx.storage.sql
+        const existing = this.getDurableObjectSql()
           .exec<{ key: string }>(
             `SELECT key FROM ${MULTIPLEXED_ALARMS_TABLE} WHERE key = ? LIMIT 1`,
             key,
@@ -236,7 +256,10 @@ export function withMultiplexedAlarms<InitParams extends LifecycleInit>() {
           return false;
         }
 
-        this.ctx.storage.sql.exec(`DELETE FROM ${MULTIPLEXED_ALARMS_TABLE} WHERE key = ?`, key);
+        this.getDurableObjectSql().exec(
+          `DELETE FROM ${MULTIPLEXED_ALARMS_TABLE} WHERE key = ?`,
+          key,
+        );
         await this.armNextMultiplexedAlarm();
 
         return true;
@@ -246,9 +269,9 @@ export function withMultiplexedAlarms<InitParams extends LifecycleInit>() {
        * Owns Cloudflare's single Durable Object alarm for this mixin stack.
        *
        * Classes above this mixin may override alarm(), but must call
-       * `super.alarm()` or persisted multiplexed alarms will never dispatch.
+       * `super.alarm(alarmInfo)` or persisted multiplexed alarms will never dispatch.
        */
-      async alarm(): Promise<void> {
+      async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
         const baseAlarm = Reflect.get(
           Object.getPrototypeOf(MultiplexedAlarmsMixin.prototype),
           "alarm",
@@ -256,7 +279,15 @@ export function withMultiplexedAlarms<InitParams extends LifecycleInit>() {
         );
 
         if (typeof baseAlarm === "function") {
-          await (baseAlarm as () => void | Promise<void>).call(this);
+          // Cloudflare passes retry metadata to alarm handlers. Forward it so a
+          // lower alarm owner composed below this mixin can keep platform retry
+          // semantics, for example logging retryCount or changing behavior on
+          // retries.
+          // https://developers.cloudflare.com/durable-objects/api/alarms/#alarm
+          await (baseAlarm as (info?: AlarmInvocationInfo) => void | Promise<void>).call(
+            this,
+            alarmInfo,
+          );
         }
 
         await this.ensureStarted();
@@ -266,7 +297,7 @@ export function withMultiplexedAlarms<InitParams extends LifecycleInit>() {
 
       private async runDueMultiplexedAlarms(): Promise<void> {
         const nowMs = Date.now();
-        const rows = this.ctx.storage.sql
+        const rows = this.getDurableObjectSql()
           .exec<MultiplexedAlarmRow>(
             `SELECT key, method, payload_json, run_at_ms, created_at_ms, updated_at_ms
              FROM ${MULTIPLEXED_ALARMS_TABLE}
@@ -291,7 +322,7 @@ export function withMultiplexedAlarms<InitParams extends LifecycleInit>() {
           // the old callback returns. Match the full persisted snapshot we
           // dispatched instead. If the row changed, zero rows are deleted and the
           // replacement remains the owner of this key.
-          this.ctx.storage.sql.exec(
+          this.getDurableObjectSql().exec(
             `DELETE FROM ${MULTIPLEXED_ALARMS_TABLE}
              WHERE key = ?
                AND method = ?
@@ -322,7 +353,7 @@ export function withMultiplexedAlarms<InitParams extends LifecycleInit>() {
       }
 
       private async armNextMultiplexedAlarm(): Promise<void> {
-        const next = this.ctx.storage.sql
+        const next = this.getDurableObjectSql()
           .exec<{ run_at_ms: number }>(
             `SELECT run_at_ms FROM ${MULTIPLEXED_ALARMS_TABLE}
              ORDER BY run_at_ms ASC, key ASC
@@ -331,7 +362,7 @@ export function withMultiplexedAlarms<InitParams extends LifecycleInit>() {
           .toArray()[0];
 
         if (next === undefined) {
-          await this.ctx.storage.deleteAlarm();
+          await this.deleteDurableObjectAlarm();
           return;
         }
 
@@ -348,7 +379,7 @@ export function withMultiplexedAlarms<InitParams extends LifecycleInit>() {
         // this method re-arms another checkpoint until the real due time arrives.
         // Cloudflare Agents documents the same 30-day ceiling for schedules.
         // https://developers.cloudflare.com/agents/api-reference/schedule-tasks/
-        await this.ctx.storage.setAlarm(
+        await this.setDurableObjectAlarm(
           Math.min(Math.max(next.run_at_ms, nowMs), nowMs + MAX_PLATFORM_ALARM_DELAY_MS),
         );
       }

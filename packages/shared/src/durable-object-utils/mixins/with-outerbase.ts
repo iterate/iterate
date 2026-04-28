@@ -2,13 +2,14 @@
 
 import {
   delegateToBaseFetch,
-  getDurableObjectState,
   type DurableObjectClass,
   type RuntimeDurableObjectConstructor,
   type WithFetchMixinResult,
 } from "./fetch-mixin-utils.ts";
+import type { Constructor } from "./mixin-types.ts";
+import type { DurableObjectCoreProtected } from "./with-durable-object-core.ts";
 
-export type WithOuterbaseResult<TBase extends DurableObjectClass> = WithFetchMixinResult<TBase>;
+type WithOuterbaseResult<TBase extends DurableObjectClass> = WithFetchMixinResult<TBase>;
 
 /**
  * Debug-only SQL inspector for a Durable Object's embedded SQLite storage.
@@ -16,20 +17,26 @@ export type WithOuterbaseResult<TBase extends DurableObjectClass> = WithFetchMix
  * This wraps `fetch()` and owns two routes:
  *
  * - `GET /__outerbase` renders a tiny page that embeds libSQL Studio.
- * - `POST /__outerbase/sql` executes SQL against `ctx.storage.sql` and returns
- *   rows/column metadata in the shape expected by the embedded UI.
+ * - `POST /__outerbase/sql` executes SQL against DO-local SQLite storage and
+ *   returns rows/column metadata in the shape expected by the embedded UI.
  *
  * The SQL endpoint can run arbitrary reads and writes against the Durable
- * Object's embedded SQLite database. The `unsafe` option is intentionally noisy
- * so call sites have to acknowledge that this mixin must sit behind a
- * development-only or otherwise authenticated route. It is only an
+ * Object's embedded SQLite database. The page also sends query results and
+ * errors to the embedded third-party libSQL Studio iframe. The `unsafe` option
+ * is intentionally noisy so call sites have to acknowledge that this mixin must
+ * sit behind a development-only or otherwise authenticated route. It is only an
  * acknowledgement, not runtime auth.
  */
 export function withOuterbase(options: { unsafe: "I_UNDERSTAND_THIS_EXPOSES_SQL" }) {
   void options;
 
-  return function <TBase extends DurableObjectClass>(Base: TBase): WithOuterbaseResult<TBase> {
-    abstract class OuterbaseMixin extends (Base as unknown as RuntimeDurableObjectConstructor) {
+  return function <TBase extends DurableObjectClass>(
+    Base: TBase & Constructor<DurableObjectCoreProtected>,
+  ): WithOuterbaseResult<TBase> {
+    const BaseWithCore = Base as unknown as RuntimeDurableObjectConstructor &
+      Constructor<DurableObjectCoreProtected>;
+
+    abstract class OuterbaseMixin extends BaseWithCore {
       async fetch(request: Request) {
         const url = new URL(request.url);
 
@@ -41,7 +48,11 @@ export function withOuterbase(options: { unsafe: "I_UNDERSTAND_THIS_EXPOSES_SQL"
         }
 
         if (url.pathname === "/__outerbase/sql") {
-          return handleOuterbaseSql(this, request);
+          return handleOuterbaseSql(
+            this.getDurableObjectSql(),
+            (closure) => this.transactionSync(closure),
+            request,
+          );
         }
 
         return await delegateToBaseFetch(Base, this, request);
@@ -50,18 +61,20 @@ export function withOuterbase(options: { unsafe: "I_UNDERSTAND_THIS_EXPOSES_SQL"
 
     // The class expression really adds fetch(), but TypeScript cannot preserve
     // the generic DurableObject constructor plus accumulated members through
-    // the mixin automatically. WithOuterbaseResult is the public composed shape
-    // we verify in the expect-type tests.
+    // the mixin automatically. WithOuterbaseResult is the internal composed
+    // shape we verify in the expect-type tests.
     return OuterbaseMixin as unknown as WithOuterbaseResult<TBase>;
   };
 }
 
-async function handleOuterbaseSql(instance: object, request: Request) {
+async function handleOuterbaseSql(
+  sql: SqlStorage,
+  transactionSync: <T>(closure: () => T) => T,
+  request: Request,
+) {
   if (request.method !== "POST") {
     return Response.json({ error: "Method not allowed" }, { status: 405 });
   }
-
-  const ctx = getDurableObjectState(instance);
 
   try {
     const body = await request.json<{
@@ -88,9 +101,7 @@ async function handleOuterbaseSql(instance: object, request: Request) {
         // Durable Object SQLite gives us a synchronous transaction wrapper, so
         // if any statement throws, the whole batch rolls back and the handler
         // returns one 400 error instead of partial per-statement results.
-        data: ctx.storage.transactionSync(() =>
-          statements.map((statement) => executeSql(ctx.storage.sql, statement, [])),
-        ),
+        data: transactionSync(() => statements.map((statement) => executeSql(sql, statement, []))),
       });
     }
 
@@ -100,7 +111,7 @@ async function handleOuterbaseSql(instance: object, request: Request) {
     }
 
     return Response.json({
-      data: executeSql(ctx.storage.sql, statement, readParams(body.params)),
+      data: executeSql(sql, statement, readParams(body.params)),
     });
   } catch (error) {
     return Response.json(
@@ -127,9 +138,24 @@ function readStatements(value: unknown) {
 
 function readParams(value: unknown): SqlStorageValue[] {
   if (value === undefined) return [];
-  if (Array.isArray(value)) return value as SqlStorageValue[];
+  if (Array.isArray(value)) {
+    return value.map(readSqlStorageValue);
+  }
 
   throw new Error("params must be an array.");
+}
+
+function readSqlStorageValue(value: unknown): SqlStorageValue {
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    value === null ||
+    value instanceof ArrayBuffer
+  ) {
+    return value;
+  }
+
+  throw new Error("params entries must be strings, numbers, null, or ArrayBuffers.");
 }
 
 function executeSql(sql: SqlStorage, statement: string, params: SqlStorageValue[]) {

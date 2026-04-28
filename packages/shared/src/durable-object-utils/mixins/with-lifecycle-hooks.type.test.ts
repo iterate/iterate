@@ -1,8 +1,10 @@
 import { DurableObject } from "cloudflare:workers";
 import { describe, expectTypeOf, it } from "vitest";
+import { withDurableObjectCore as publicWithDurableObjectCore } from "@iterate-com/shared/durable-object-utils/mixins/with-durable-object-core";
 import { withLifecycleHooks as publicWithLifecycleHooks } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { withD1ObjectCatalog } from "./with-d1-object-catalog.ts";
 import type { D1ObjectCatalogRecord } from "./with-d1-object-catalog.ts";
+import { withDurableObjectCore } from "./with-durable-object-core.ts";
 import { withKvInspector } from "./with-kv-inspector.ts";
 import { withMultiplexedAlarms } from "./with-multiplexed-alarms.ts";
 import type { MultiplexedAlarmRecord } from "./with-multiplexed-alarms.ts";
@@ -27,9 +29,11 @@ type RoomInit = {
   ownerUserId: string;
 };
 
+const DurableObjectCore = withDurableObjectCore(DurableObject);
+
 // The normal incantation: build a generic base once, then extend it as
 // `RoomBase<Env>`.
-const RoomBase = withLifecycleHooks<RoomInit>()(DurableObject);
+const RoomBase = withLifecycleHooks<RoomInit>()(DurableObjectCore);
 
 class Room extends RoomBase<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
@@ -113,7 +117,7 @@ describe("withLifecycleHooks types", () => {
       name: string;
     };
 
-    const NameOnlyRoomBase = withLifecycleHooks<NameOnlyInit>()(DurableObject);
+    const NameOnlyRoomBase = withLifecycleHooks<NameOnlyInit>()(DurableObjectCore);
 
     class NameOnlyRoom extends NameOnlyRoomBase<Env> {}
 
@@ -191,7 +195,7 @@ describe("withLifecycleHooks types", () => {
       }
     }
 
-    const StaticRoomBase = withLifecycleHooks<RoomInit>()(RootWithStatic);
+    const StaticRoomBase = withLifecycleHooks<RoomInit>()(withDurableObjectCore(RootWithStatic));
 
     class StaticRoom extends StaticRoomBase<Env> {}
 
@@ -204,18 +208,23 @@ describe("withLifecycleHooks types", () => {
   it("rejects non-DurableObject bases", () => {
     class NotDurableObject {}
 
-    // @ts-expect-error mixins require a DurableObject base class because they use this.ctx.
+    // @ts-expect-error lifecycle hooks require the core Durable Object adapter below them.
     withLifecycleHooks<RoomInit>()(NotDurableObject);
 
-    // @ts-expect-error inspector mixins require a DurableObject base class because they use this.ctx.
+    // @ts-expect-error lifecycle hooks require withDurableObjectCore below them.
+    withLifecycleHooks<RoomInit>()(DurableObject);
+
+    // @ts-expect-error inspector mixins require the core Durable Object adapter below them.
     withOuterbase({ unsafe: "I_UNDERSTAND_THIS_EXPOSES_SQL" })(NotDurableObject);
 
-    // @ts-expect-error inspector mixins require a DurableObject base class because they use this.ctx.
+    // @ts-expect-error inspector mixins require the core Durable Object adapter below them.
     withKvInspector({ unsafe: "I_UNDERSTAND_THIS_EXPOSES_KV" })(NotDurableObject);
   });
 
   it("works through the package export path", () => {
-    const PublicRoomBase = publicWithLifecycleHooks<RoomInit>()(DurableObject);
+    const PublicRoomBase = publicWithLifecycleHooks<RoomInit>()(
+      publicWithDurableObjectCore(DurableObject),
+    );
 
     class PublicRoom extends PublicRoomBase<Env> {}
 
@@ -349,7 +358,7 @@ describe("inspector mixin types", () => {
     })(
       withOuterbase({
         unsafe: "I_UNDERSTAND_THIS_EXPOSES_SQL",
-      })(DurableObject),
+      })(DurableObjectCore),
     );
 
     class Inspector extends InspectorBase<Env> {}

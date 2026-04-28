@@ -6,6 +6,7 @@ import { z } from "zod";
 import { slugify } from "../../slugify.ts";
 import type {
   AlarmTestRoom,
+  AlarmForwardingTestRoom,
   InitializeTestRoom,
   InspectorTestRoom,
   ListedRoom,
@@ -73,6 +74,14 @@ const alarmRooms = DurableObjectNamespace<AlarmTestRoom>("alarm-rooms", {
   // Multiplexed alarms store logical alarm rows in local DO SQLite.
   sqlite: true,
 });
+const alarmForwardingRooms = DurableObjectNamespace<AlarmForwardingTestRoom>(
+  "alarm-forwarding-rooms",
+  {
+    className: "AlarmForwardingTestRoom",
+    // Verifies alarmInfo is forwarded through composed alarm() implementations.
+    sqlite: true,
+  },
+);
 const scheduleRooms = DurableObjectNamespace<SchedulerTestRoom>("schedule-rooms", {
   className: "SchedulerTestRoom",
   // Scheduler rows are local SQLite metadata projected onto multiplexed alarms.
@@ -101,6 +110,7 @@ export const worker = await Worker(APP_NAME, {
   bindings: {
     ROOMS: rooms,
     ALARM_ROOMS: alarmRooms,
+    ALARM_FORWARDING_ROOMS: alarmForwardingRooms,
     SCHEDULE_ROOMS: scheduleRooms,
     INSPECTORS: inspectors,
     LISTED_ROOMS: listedRooms,

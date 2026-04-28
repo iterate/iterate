@@ -15,6 +15,7 @@ import {
   listD1ObjectCatalogRecordsByIndex,
   withD1ObjectCatalog,
 } from "../mixins/with-d1-object-catalog.ts";
+import { withDurableObjectCore } from "../mixins/with-durable-object-core.ts";
 import { getOrInitializeDoStub, withLifecycleHooks } from "../mixins/with-lifecycle-hooks.ts";
 import { withKvInspector } from "../mixins/with-kv-inspector.ts";
 import { withMultiplexedAlarms } from "../mixins/with-multiplexed-alarms.ts";
@@ -41,6 +42,7 @@ export type CaughtErrorResult = {
 
 type Env = {
   ALARM_ROOMS: DurableObjectNamespace<AlarmTestRoom>;
+  ALARM_FORWARDING_ROOMS: DurableObjectNamespace<AlarmForwardingTestRoom>;
   SCHEDULE_ROOMS: DurableObjectNamespace<SchedulerTestRoom>;
   ROOMS: DurableObjectNamespace<InitializeTestRoom>;
   INSPECTORS: DurableObjectNamespace<InspectorTestRoom>;
@@ -48,7 +50,9 @@ type Env = {
   DO_CATALOG: D1Database;
 };
 
-const RoomBase = withLifecycleHooks<RoomInit>()(DurableObject);
+const DurableObjectCore = withDurableObjectCore(DurableObject);
+
+const RoomBase = withLifecycleHooks<RoomInit>()(DurableObjectCore);
 
 export class InitializeTestRoom extends RoomBase<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
@@ -176,7 +180,7 @@ const ListedRoomBase = withD1ObjectCatalog<RoomInit, Env>({
       return params.ownerUserId;
     },
   },
-})(withLifecycleHooks<RoomInit>()(DurableObject));
+})(withLifecycleHooks<RoomInit>()(DurableObjectCore));
 
 export class ListedRoom extends ListedRoomBase<Env> {
   getInitParams(): RoomInit {
@@ -185,7 +189,7 @@ export class ListedRoom extends ListedRoomBase<Env> {
 }
 
 const AlarmRoomBase = withMultiplexedAlarms<RoomInit>()(
-  withLifecycleHooks<RoomInit>()(DurableObject),
+  withLifecycleHooks<RoomInit>()(DurableObjectCore),
 );
 
 export class AlarmTestRoom extends AlarmRoomBase<Env> {
@@ -334,8 +338,38 @@ export class AlarmTestRoom extends AlarmRoomBase<Env> {
   }
 }
 
+const AlarmForwardingLifecycleBase = withLifecycleHooks<RoomInit>()(DurableObjectCore);
+
+class AlarmForwardingRoot<FinalEnv> extends AlarmForwardingLifecycleBase<FinalEnv> {
+  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+    this.ctx.storage.kv.put("test.forwardedAlarmInfo", alarmInfo ?? null);
+  }
+}
+
+const AlarmForwardingRoomBase = withMultiplexedAlarms<RoomInit>()(AlarmForwardingRoot);
+
+export class AlarmForwardingTestRoom extends AlarmForwardingRoomBase<Env> {
+  getForwardedAlarmInfo(): AlarmInvocationInfo | null {
+    return this.ctx.storage.kv.get<AlarmInvocationInfo | null>("test.forwardedAlarmInfo") ?? null;
+  }
+
+  async runAlarmNow(alarmInfo?: AlarmInvocationInfo): Promise<void | CaughtErrorResult> {
+    try {
+      const alarm = this.alarm;
+
+      if (alarm === undefined) {
+        throw new Error("alarm() is not installed.");
+      }
+
+      await alarm.call(this, alarmInfo);
+    } catch (error) {
+      return serializeError(error);
+    }
+  }
+}
+
 const SchedulerRoomBase = withScheduler<RoomInit>()(
-  withMultiplexedAlarms<RoomInit>()(withLifecycleHooks<RoomInit>()(DurableObject)),
+  withMultiplexedAlarms<RoomInit>()(withLifecycleHooks<RoomInit>()(DurableObjectCore)),
 );
 
 export class SchedulerTestRoom extends SchedulerRoomBase<Env> {
@@ -568,7 +602,7 @@ const InspectorBase = withKvInspector({
 })(
   withOuterbase({
     unsafe: "I_UNDERSTAND_THIS_EXPOSES_SQL",
-  })(DurableObject),
+  })(DurableObjectCore),
 );
 
 export class InspectorTestRoom extends InspectorBase<Env> {

@@ -4,6 +4,7 @@ Utilities here are experimental helpers for composing Cloudflare Durable Object 
 
 ## Current Scope
 
+- `mixins/with-durable-object-core.ts` is the root adapter for mixins that need Cloudflare's protected Durable Object `ctx` APIs. It exposes small protected capabilities for local SQLite, synchronous KV, and the single platform alarm slot.
 - `mixins/with-lifecycle-hooks.ts` adds named initialization state and tiny lifecycle hooks for SQLite-backed Durable Objects.
 - `mixins/with-d1-object-catalog.ts` best-effort mirrors initialized objects into D1 tables owned by the mixin, with optional secondary indexes derived from init params.
 - `mixins/with-multiplexed-alarms.ts` stores many logical one-shot alarms behind Cloudflare's single Durable Object alarm slot.
@@ -40,7 +41,7 @@ const RoomBase = withD1ObjectCatalog<RoomInit, NeedsCatalog>({
       return params.ownerUserId;
     },
   },
-})(withLifecycleHooks<RoomInit>()(DurableObject));
+})(withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject)));
 
 export class Room extends RoomBase<Env> {}
 ```
@@ -53,7 +54,14 @@ static members visible in the right places.
 
 ## Type Shapes
 
-The mixin return types mostly follow this pattern:
+The bottom of most stacks should be `withDurableObjectCore(DurableObject)`.
+That core layer is intentionally tiny: it is the one reusable place where our
+mixins adapt Cloudflare's protected `ctx.storage` and alarm APIs into protected
+capabilities. Higher mixins consume those capabilities, similar to how the
+Cloudflare Agents SDK exposes `Agent.sql()` and `withVoice()` consumes `sql`
+instead of reaching into `ctx.storage.sql` itself.
+
+Simple mixin return types mostly follow this pattern:
 
 ```ts
 type WithSomeMixinResult<TBase> = TBase & Constructor<MembersAddedByTheMixin>;
@@ -63,7 +71,7 @@ type WithSomeMixinResult<TBase> = TBase & Constructor<MembersAddedByTheMixin>;
 `DurableObject` class, keeping `TBase` in the return type keeps this valid:
 
 ```ts
-const Base = withLifecycleHooks<RoomInit>()(DurableObject);
+const Base = withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject));
 
 export class Room extends Base<Env> {}
 ```
@@ -97,7 +105,7 @@ const Base = withD1ObjectCatalog<RoomInit, NeedsCatalog>({
   getDatabase(env) {
     return env.DO_CATALOG;
   },
-})(withLifecycleHooks<RoomInit>()(DurableObject));
+})(withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject)));
 
 class Room extends Base<Env> {} // ok: Env has DO_CATALOG
 
@@ -227,14 +235,21 @@ class Room extends RoomBase<Env> {
 Hooks are awaited by `initialize()` and `ensureStarted()` by default. That makes
 `ensureStarted()` an honest readiness boundary: after it resolves, params exist,
 first-initialize hooks have completed, and start hooks have completed. If work
-is only a best-effort mirror or log, put the fire-and-forget part inside
-`ctx.waitUntil()` explicitly and return quickly:
+is only a best-effort mirror or log, start a separate caught promise and return
+quickly:
 
 ```ts
 this.registerOnStart((params) => {
-  this.ctx.waitUntil(this.updateExternalIndex(params));
+  void this.updateExternalIndex(params).catch((error) => {
+    console.error("failed to update external index", error);
+  });
 });
 ```
+
+Do not use `ctx.waitUntil()` as a lifetime primitive here. Cloudflare documents
+that it has no effect in Durable Objects; DOs remain active while there is
+ongoing work or pending I/O. The important part is catching the detached promise
+so best-effort work cannot become an unhandled rejection.
 
 Start hooks are retryable until the whole startup gate succeeds. If one start
 hook writes to an external system and a later start hook fails, the earlier hook
@@ -277,7 +292,7 @@ const CatalogedRoomBase = withD1ObjectCatalog<RoomInit, NeedsCatalog>({
       return params.ownerUserId;
     },
   },
-})(withLifecycleHooks<RoomInit>()(DurableObject));
+})(withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject)));
 ```
 
 The D1 write is best-effort and idempotent. The mixin sends
@@ -285,10 +300,11 @@ The D1 write is best-effort and idempotent. The mixin sends
 batch as each upsert, so object construction does not block on catalog-table
 setup.
 
-Catalog writes happen from the lifecycle start hook via `ctx.waitUntil()`. That
-is deliberate: this mixin is just a consumer of `withLifecycleHooks()`, not a
-separate lifecycle system. The Durable Object's local initialization remains
-the source of truth, and D1 is only a discoverability index.
+Catalog writes happen from the lifecycle start hook as a detached, caught
+promise. That is deliberate: this mixin is just a consumer of
+`withLifecycleHooks()`, not a separate lifecycle system. The Durable Object's
+local initialization remains the source of truth, and D1 is only a
+discoverability index.
 `getD1ObjectCatalogRecord()` therefore returns `null` when the object is
 uninitialized, the background D1 write has not completed yet, or the catalog
 tables do not exist yet. It never uses
@@ -297,9 +313,12 @@ throws in Worker runtimes.
 
 The object row is keyed by `(class, name)`. `created_at` is the first insert
 time, while `last_started_at` is updated whenever the start hook runs. Init
-params used with this mixin must be JSON-compatible because the D1 mirror stores
-them as JSON text. This is stricter than the base lifecycle hooks mixin, which
-only requires values that can be persisted in Durable Object storage.
+params used with this mixin must be JSON-compatible by convention because the D1
+mirror stores them as JSON text. `JSON.stringify()` catches some failures, such
+as circular references and `BigInt`, but it can silently drop or coerce nested
+functions, `Map`, and class instances. Use plain records/arrays/primitives. This
+is stricter than the base lifecycle hooks mixin, which only requires values that
+can be persisted in Durable Object storage.
 
 Secondary indexes are stored in a separate table:
 
@@ -354,7 +373,9 @@ type RoomInit = {
   ownerUserId: string;
 };
 
-const RoomBase = withMultiplexedAlarms<RoomInit>()(withLifecycleHooks<RoomInit>()(DurableObject));
+const RoomBase = withMultiplexedAlarms<RoomInit>()(
+  withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject)),
+);
 
 class Room extends RoomBase<Env> {
   async scheduleSummary() {
@@ -388,9 +409,11 @@ the current class, and checks again at dispatch time in case a deploy removed
 or renamed the method while a persisted row still exists. Missing methods are
 logged and throw `MissingMultiplexedAlarmMethodError`.
 
-Payloads are `unknown` and validated by `JSON.stringify()` at schedule time.
-Do not pass clients, handles, functions, sockets, or class instances. Alarm
-rows must survive eviction, hibernation, and deploys, so the method should
+Payloads are `unknown` and persisted through JSON text at schedule time.
+`JSON.stringify()` catches some failures, such as circular references and
+`BigInt`, but it can silently drop or coerce nested functions, `Map`, and class
+instances. Do not pass clients, handles, functions, sockets, or class instances.
+Alarm rows must survive eviction, hibernation, and deploys, so the method should
 rebuild dependencies from `env` and use init params only for persisted identity
 or configuration.
 
@@ -401,9 +424,10 @@ semantics can retry the work. Each alarm tick processes at most 50 due rows and
 then re-arms the platform alarm for whatever remains.
 
 If another mixin or subclass above `withMultiplexedAlarms()` overrides
-`alarm()`, it must call `super.alarm?.()`. Otherwise the platform alarm will
-wake the object but the persisted logical rows owned by this mixin will not
-dispatch.
+`alarm(alarmInfo)`, it must call `super.alarm?.(alarmInfo)`. Otherwise the
+platform alarm will wake the object but the persisted logical rows owned by this
+mixin will not dispatch, and lower alarm implementations will lose Cloudflare's
+retry metadata.
 
 ## Scheduler
 
@@ -412,7 +436,9 @@ dispatch.
 
 ```ts
 const RoomBase = withScheduler<RoomInit>()(
-  withMultiplexedAlarms<RoomInit>()(withLifecycleHooks<RoomInit>()(DurableObject)),
+  withMultiplexedAlarms<RoomInit>()(
+    withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject)),
+  ),
 );
 
 class Room extends RoomBase<Env> {
@@ -480,6 +506,11 @@ If `timezone` is omitted, cron and RRULE schedules are evaluated in UTC. Provide
 an IANA timezone only when you want civil-time behavior such as "9am in
 Europe/London", including daylight-saving transitions.
 
+Scheduler payloads follow the same JSON-text rule as multiplexed alarms: use
+plain records/arrays/primitives, not clients, handles, functions, sockets,
+`Map`, or class instances. The runtime catches some stringify failures, but it
+does not prove semantic round-tripping for every JavaScript value.
+
 RRULE input is deliberately narrow: pass a bare rule body such as
 `FREQ=MONTHLY;BYDAY=MO;BYSETPOS=1`. Use the explicit `dtstart` and `timezone`
 fields for start/timezone configuration. Full iCalendar snippets with embedded
@@ -541,7 +572,9 @@ type Env = {
 };
 
 const DiscordBase = withScheduler<DiscordInit>()(
-  withMultiplexedAlarms<DiscordInit>()(withLifecycleHooks<DiscordInit>()(DurableObject)),
+  withMultiplexedAlarms<DiscordInit>()(
+    withLifecycleHooks<DiscordInit>()(withDurableObjectCore(DurableObject)),
+  ),
 );
 
 export class DiscordConnection extends DiscordBase<Env> {
@@ -662,7 +695,7 @@ const InspectorBase = withKvInspector({
 })(
   withOuterbase({
     unsafe: "I_UNDERSTAND_THIS_EXPOSES_SQL",
-  })(DurableObject),
+  })(withDurableObjectCore(DurableObject)),
 );
 ```
 
@@ -673,7 +706,9 @@ default production route.
 The `unsafe` option is only an acknowledgement at the composition site. It is
 not runtime authentication. `/__kv/json` can expose every KV entry in the
 object, and `/__outerbase/sql` can execute arbitrary SQL against the object's
-SQLite storage.
+SQLite storage. The `/__outerbase` page embeds `https://libsqlstudio.com` and
+posts query results/errors to that iframe, so do not mount it where third-party
+UI exposure is unacceptable.
 
 ## Testing
 
@@ -693,9 +728,12 @@ Run the Cloudflare-backed e2e deployment check only when you need production-run
 doppler run --config <config> -- pnpm test:durable-object-utils:e2e:deploy
 ```
 
-The deployment script expects Cloudflare and Alchemy variables from the current
-environment. Use whichever `_shared` Doppler config should own the deployment,
-for example `dev_jonas`, `dev`, or `test`.
+The deployment script expects these variables from the current environment:
+`ALCHEMY_PASSWORD`, `CLOUDFLARE_API_TOKEN`, and `CLOUDFLARE_ACCOUNT_ID`.
+`DURABLE_OBJECT_UTILS_E2E_WORKER_ROUTES` is optional when workers.dev is
+available, and required when the account does not return a workers.dev URL. Use
+whichever `_shared` Doppler config should own the deployment, for example
+`dev_jonas`, `dev`, or `test`.
 
 ## Local Rules
 

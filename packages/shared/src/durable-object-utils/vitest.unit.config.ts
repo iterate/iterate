@@ -31,6 +31,10 @@ writeFileSync(
             class_name: "AlarmTestRoom",
           },
           {
+            name: "ALARM_FORWARDING_ROOMS",
+            class_name: "AlarmForwardingTestRoom",
+          },
+          {
             name: "SCHEDULE_ROOMS",
             class_name: "SchedulerTestRoom",
           },
@@ -58,6 +62,7 @@ writeFileSync(
           new_sqlite_classes: [
             "InitializeTestRoom",
             "AlarmTestRoom",
+            "AlarmForwardingTestRoom",
             "SchedulerTestRoom",
             "InspectorTestRoom",
             "ListedRoom",

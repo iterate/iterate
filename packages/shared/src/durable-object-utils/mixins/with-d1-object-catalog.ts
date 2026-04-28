@@ -1,12 +1,19 @@
 /// <reference types="@cloudflare/workers-types" />
 
-import { DurableObject } from "cloudflare:workers";
 import type {
   LifecycleHooksMembers,
   LifecycleHooksProtected,
   LifecycleInit,
 } from "./with-lifecycle-hooks.ts";
-import type { Constructor, DurableObjectConstructor } from "./mixin-types.ts";
+import type {
+  Constructor,
+  DurableObjectClass,
+  DurableObjectConstructor,
+  MembersOf,
+  ReqEnvOf,
+  StaticSide,
+} from "./mixin-types.ts";
+import type { DurableObjectCoreProtected } from "./with-durable-object-core.ts";
 
 export type D1ObjectCatalogRecord<InitParams extends LifecycleInit> = {
   class: string;
@@ -36,17 +43,13 @@ export type D1ObjectCatalogMembers<InitParams extends LifecycleInit> = {
   getD1ObjectCatalogRecord(): Promise<D1ObjectCatalogRecord<InitParams> | null>;
 };
 
-export type WithD1ObjectCatalogResult<
-  TBase extends Constructor,
+type WithD1ObjectCatalogResult<
+  TBase extends DurableObjectClass,
   InitParams extends LifecycleInit,
   Env,
-> = TBase &
-  // This non-generic constructor keeps the added method visible on subclasses.
-  // The explicit generic constructor below keeps `Base<FinalEnv>` valid and
-  // carries the D1 Env lower-bound.
-  Constructor<D1ObjectCatalogMembers<InitParams>> &
+> = StaticSide<TBase> &
   // Preserve the Cloudflare-style `class Room extends Base<Env>` ergonomics
-  // while also carrying the D1 requirement forward.
+  // while carrying the D1 requirement forward.
   //
   // `Env` here is not necessarily the final worker env. It is the smallest env
   // shape required by `getDatabase(env)`, for example:
@@ -62,21 +65,16 @@ export type WithD1ObjectCatalogResult<
   // And this fails because MissingEnv does not satisfy the lower bound:
   //
   //   class Broken extends Base<{ OTHER: string }> {}
-  (abstract new <FinalEnv extends Env>(
-    ctx: DurableObjectState,
-    env: FinalEnv,
-  ) => DurableObject<FinalEnv> &
-    LifecycleHooksMembers<InitParams> &
-    D1ObjectCatalogMembers<InitParams>);
+  DurableObjectClass<ReqEnvOf<TBase> & Env, MembersOf<TBase> & D1ObjectCatalogMembers<InitParams>> &
+  Constructor<D1ObjectCatalogMembers<InitParams>>;
 
 /**
  * Best-effort D1 catalog for initialized Durable Objects.
  *
  * This is intentionally implemented as a lifecycle-hooks consumer: it registers
- * an `onStart` hook, then uses `ctx.waitUntil()` to mirror the initialized DO
- * into D1 without making startup depend on an external database. Local Durable
- * Object storage remains the source of truth; D1 is only for discovery and
- * cross-object lookup.
+ * an `onStart` hook, then starts a separately caught D1 write so startup does
+ * not depend on an external database. Local Durable Object storage remains the
+ * source of truth; D1 is only for discovery and cross-object lookup.
  *
  * `indexes` derives secondary lookup rows from init params. Use it for stable
  * identity fields such as `ownerUserId` or `projectId`, not for mutable state.
@@ -86,13 +84,20 @@ export function withD1ObjectCatalog<InitParams extends LifecycleInit, Env>(optio
   getDatabase(env: Env): D1Database;
   indexes?: D1ObjectCatalogIndexDefinitions<InitParams>;
 }) {
-  return function <
-    TBase extends DurableObjectConstructor<
+  return function <TBase extends DurableObjectClass>(
+    Base: TBase,
+  ): WithD1ObjectCatalogResult<TBase, InitParams, Env> {
+    const BaseWithLifecycle = Base as unknown as DurableObjectConstructor<
       Env,
-      LifecycleHooksMembers<InitParams> & LifecycleHooksProtected<InitParams>
-    >,
-  >(Base: TBase): WithD1ObjectCatalogResult<TBase, InitParams, Env> {
-    abstract class D1ObjectCatalogMixin extends Base implements D1ObjectCatalogMembers<InitParams> {
+      DurableObjectCoreProtected &
+        LifecycleHooksMembers<InitParams> &
+        LifecycleHooksProtected<InitParams>
+    >;
+
+    abstract class D1ObjectCatalogMixin
+      extends BaseWithLifecycle
+      implements D1ObjectCatalogMembers<InitParams>
+    {
       constructor(...args: any[]) {
         super(...args);
 
@@ -119,35 +124,37 @@ export function withD1ObjectCatalog<InitParams extends LifecycleInit, Env>(optio
       /**
        * Fire-and-log catalog update.
        *
-       * D1 is outside the Durable Object's local transaction boundary. Keeping
-       * this behind `waitUntil()` makes the catalog explicitly best-effort:
-       * startup can succeed and callers can retry even when D1 is temporarily
-       * unavailable.
+       * D1 is outside the Durable Object's local transaction boundary. This
+       * promise is deliberately detached and caught: startup can succeed and
+       * callers can retry even when D1 is temporarily unavailable.
+       *
+       * Cloudflare documents that `ctx.waitUntil()` has no Worker-style lifetime
+       * effect inside Durable Objects. DOs stay alive while there is ongoing work
+       * or pending I/O, so the important behavior here is starting the promise and
+       * handling its rejection.
        * https://developers.cloudflare.com/durable-objects/api/state/#waituntil
        */
       private scheduleD1ObjectCatalogUpsert(params: InitParams) {
-        this.ctx.waitUntil(
-          Promise.resolve()
-            .then(() =>
-              upsertD1ObjectCatalog({
-                db: options.getDatabase(this.env),
-                className: options.className,
-                id: this.ctx.id.toString(),
-                indexes: options.indexes,
-                params,
-              }),
-            )
-            .catch((error: unknown) => {
-              console.error("[withD1ObjectCatalog] failed to upsert catalog row", error);
+        void Promise.resolve()
+          .then(() =>
+            upsertD1ObjectCatalog({
+              db: options.getDatabase(this.env),
+              className: options.className,
+              id: this.getDurableObjectId().toString(),
+              indexes: options.indexes,
+              params,
             }),
-        );
+          )
+          .catch((error: unknown) => {
+            console.error("[withD1ObjectCatalog] failed to upsert catalog row", error);
+          });
       }
     }
 
     // TypeScript cannot infer that this class expression preserves Base's
-    // static/protected side while adding a generic `FinalEnv extends Env`
-    // constructor surface. The implementation above provides the runtime
-    // methods; this cast publishes that composed class shape.
+    // static/protected side while adding the D1 env lower-bound. The result type
+    // above publishes that composed class shape and keeps `class Room extends
+    // Base<FullEnv>` working when FullEnv includes the D1 binding fragment.
     return D1ObjectCatalogMixin as unknown as WithD1ObjectCatalogResult<TBase, InitParams, Env>;
   };
 }
@@ -251,7 +258,7 @@ async function upsertD1ObjectCatalog<InitParams extends LifecycleInit>(input: {
   // Idempotent bootstrap + upsert: every write can create both mixin-owned
   // tables, then replace the `(class, name)` row and the derived index rows.
   // Constructors stay cheap because this happens from the lifecycle start hook,
-  // inside waitUntil. `created_at` remains the first insertion time;
+  // outside the startup readiness boundary. `created_at` remains the first insertion time;
   // `last_started_at` moves whenever the object starts and the hook runs.
   await input.db.batch([
     input.db.prepare(CREATE_D1_OBJECT_CATALOG_OBJECTS_TABLE_SQL),
@@ -277,8 +284,10 @@ async function upsertD1ObjectCatalog<InitParams extends LifecycleInit>(input: {
         input.params.name,
         input.id,
         // The catalog is intentionally a simple external index. Init params
-        // used with this mixin must be JSON-compatible; non-JSON values fail
-        // this best-effort write and are logged by waitUntil.
+        // used with this mixin must be JSON-compatible by convention. JSON.stringify
+        // catches some failures, like BigInt and circular references, but it can
+        // silently coerce or drop functions, Maps, and class instances. Use plain
+        // records/arrays/primitives for cataloged init params.
         JSON.stringify(input.params),
         now,
         now,

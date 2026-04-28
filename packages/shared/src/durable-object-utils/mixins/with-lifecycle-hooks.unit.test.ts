@@ -1,6 +1,7 @@
 import { SELF, env } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 import {
+  type AlarmForwardingTestRoom,
   type AlarmTestRoom,
   type InspectorTestRoom,
   type InitializeTestRoom as InitializeTestRoomInstance,
@@ -10,6 +11,7 @@ import {
 import { getOrInitializeDoStub } from "./with-lifecycle-hooks.ts";
 
 const testEnv = env as {
+  ALARM_FORWARDING_ROOMS: DurableObjectNamespace<AlarmForwardingTestRoom>;
   ALARM_ROOMS: DurableObjectNamespace<AlarmTestRoom>;
   DO_CATALOG: D1Database;
   INSPECTORS: DurableObjectNamespace<InspectorTestRoom>;
@@ -280,6 +282,26 @@ describe("withOuterbase", () => {
       data: {
         rows: [{ text: "hello" }],
       },
+    });
+  });
+
+  it("rejects SQL params that cannot be bound to Durable Object SQLite", async () => {
+    const inspector = testEnv.INSPECTORS.getByName("outerbase-unit-bad-params");
+
+    await inspector.seedSql();
+
+    const response = await inspector.fetch("https://example.com/__outerbase/sql", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        statement: "SELECT text FROM messages WHERE id = ?",
+        params: [{ id: "msg_1" }],
+      }),
+    });
+
+    await expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "params entries must be strings, numbers, null, or ArrayBuffers.",
     });
   });
 });
@@ -590,6 +612,28 @@ describe("withMultiplexedAlarms", () => {
     await expect(room.runAlarmNow()).resolves.toBeUndefined();
     await expect(room.getAlarmExecutionState()).resolves.toMatchObject({
       runs: 50,
+    });
+  });
+
+  it("forwards Cloudflare alarm retry metadata to lower alarm implementations", async () => {
+    const room = testEnv.ALARM_FORWARDING_ROOMS.getByName("alarm-unit-forward-info");
+
+    await room.initialize({
+      name: "alarm-unit-forward-info",
+      ownerUserId: "user-alarm",
+    });
+
+    await expect(
+      room.runAlarmNow({
+        isRetry: true,
+        retryCount: 3,
+        scheduledTime: 123,
+      }),
+    ).resolves.toBeUndefined();
+    await expect(room.getForwardedAlarmInfo()).resolves.toEqual({
+      isRetry: true,
+      retryCount: 3,
+      scheduledTime: 123,
     });
   });
 });

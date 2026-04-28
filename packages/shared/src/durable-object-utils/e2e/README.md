@@ -19,12 +19,15 @@ cd packages/shared
 doppler run --config <config> -- pnpm test:durable-object-utils:e2e:deploy
 ```
 
-The deployment script expects Cloudflare and Alchemy environment variables to
-already be present. Use any Doppler config that provides those values, for
-example `dev_jonas`, `dev`, or a CI/test config in the `_shared` project. The
-script deploys an ephemeral Alchemy stage, runs Vitest against the Worker URL,
-and then destroys the stage. Cleanup failure fails the command so orphaned
-resources are visible instead of silently ignored.
+The deployment script expects these environment variables to already be present:
+`ALCHEMY_PASSWORD`, `CLOUDFLARE_API_TOKEN`, and `CLOUDFLARE_ACCOUNT_ID`.
+`DURABLE_OBJECT_UTILS_E2E_WORKER_ROUTES` is optional when workers.dev is
+available, and required when the account does not return a workers.dev URL. Use
+any Doppler config that provides those values, for example `dev_jonas`, `dev`,
+or a CI/test config in the `_shared` project. The script deploys an ephemeral
+Alchemy stage, runs Vitest against the Worker URL, and then destroys the stage.
+Cleanup failure fails the command so orphaned resources are visible instead of
+silently ignored.
 
 This harness is intentionally separate from the default package tests. The
 normal CI path runs the local type/unit/worker-pool checks through
