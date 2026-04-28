@@ -19,11 +19,12 @@ const value = await dispatchCallable({
 });
 ```
 
-In normal product code, callers should not need to know whether a callable is a
-public URL, service binding, Durable Object, Dynamic Worker, loopback binding,
-or Workers RPC method. Use `dispatchCallableFetch({ callable, request, ctx })`
-only when the caller needs the raw Fetch API surface: streaming request bodies,
-streaming responses, SSE, or WebSocket upgrade responses.
+In normal product code, callers should not need to know whether dispatch uses
+Fetch or Workers RPC, or whether the live capability comes from a public URL,
+service binding, Durable Object, Dynamic Worker, or loopback binding. Use
+`dispatchCallableFetch({ callable, request, ctx })` only when the caller needs
+the raw Fetch API surface: streaming request bodies, streaming responses, SSE,
+or WebSocket upgrade responses.
 
 Only the runtime and type modules are exported:
 
@@ -45,12 +46,14 @@ A callable is operation-rooted:
 ```ts
 type Callable =
   | {
+      schema?: "https://schemas.iterate.com/callable/v1";
       type: "fetch";
       via: FetchVia;
       passthroughArgs?: Record<string, JsonValue>;
       fetchRequest?: FetchRequest;
     }
   | {
+      schema?: "https://schemas.iterate.com/callable/v1";
       type: "workers-rpc";
       via: WorkersRpcVia;
       rpcMethod: string;
@@ -261,11 +264,12 @@ const callable = {
 };
 ```
 
-`rpcMethod` must be one direct JavaScript identifier, not a dotted path. Names
-such as `fetch`, `connect`, `call`, `alarm`, `then`, `constructor`,
-`prototype`, and `__proto__` are rejected because they collide with Fetch
-semantics, Promise-like behavior, JavaScript prototype behavior, or Cloudflare
-RPC reserved names.
+`rpcMethod` must be one direct JavaScript identifier, not a dotted path.
+Cloudflare-reserved names such as `fetch`, `connect`, `alarm`, and
+`constructor` are rejected. Callable also rejects local JavaScript footguns such
+as `then`, `call`, `prototype`, and `__proto__` so a serialized RPC method name
+cannot accidentally become Promise-like, walk prototypes, or invoke reflective
+function behavior.
 
 RPC results are returned raw. `dispatchCallable()` does not clone, serialize, or
 auto-dispose RPC results because that would destroy the Cap'n Web
@@ -347,7 +351,9 @@ until code provenance, source-size limits, and outbound policy land.
 
 ## Loopback Bindings
 
-Loopback bindings resolve from `ctx.exports`, not `env`.
+Loopback bindings resolve from `ctx.exports`, not `env`. Cloudflare requires
+the `enable_ctx_exports` compatibility flag for this API, and exposes the same
+loopback binding idea from Durable Object state as `this.ctx.exports`.
 
 ```ts
 const callable = {
@@ -429,6 +435,10 @@ const ws = await connectCallableWebSocket({
   ctx: { env },
 });
 ```
+
+Supported options are `url`, `protocols`, `headers`, `binaryType`, and
+`accept`. The helper constructs the upgrade `Request`, validates the 101
+response, accepts `response.webSocket`, and returns it.
 
 Cloudflare WebSocket docs:
 

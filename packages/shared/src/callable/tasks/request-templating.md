@@ -35,7 +35,10 @@ Proposed future shape:
 }
 ```
 
-Evaluation input for value dispatch should include:
+Evaluation input for value dispatch should include the effective payload as the
+JSONata root object. That is why the example can reference `dryRun`, `title`,
+`body`, and `labels` directly. Ambient context should be namespaced under
+`ambient`, so host-owned values stay visibly separate from caller payload:
 
 - effective payload after `passthroughArgs`
 - ambient context

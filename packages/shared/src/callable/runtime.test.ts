@@ -15,6 +15,7 @@ void CallableTestDurableObject;
 const testEnv = env as {
   CALLABLE_TEST_DURABLE_OBJECT: DurableObjectNamespace;
   CALLABLE_TEST_LOADER: unknown;
+  LOADER: unknown;
   CALLABLE_TEST_SERVICE: {
     fetch: (request: Request) => Promise<Response>;
     echo: (input: unknown) => Promise<unknown>;
@@ -128,7 +129,7 @@ describe("callable validation", () => {
     expect(() =>
       validateCallable({
         callable: {
-          type: "workers-rpc",
+          type: "fetch",
           via: {
             type: "env-binding",
             bindingType: "service",
@@ -195,7 +196,7 @@ describe("callable validation", () => {
     expect(() =>
       validateCallable({
         callable: {
-          type: "fetch",
+          type: "workers-rpc",
           via: { type: "url", url: "https://api.example.com/v1" },
           rpcMethod: "run",
         },
@@ -860,6 +861,34 @@ describe("dispatchCallable", () => {
     });
   });
 
+  test("uses the LOADER Worker Loader binding when Dynamic Worker via omits a binding name", async () => {
+    const value = await dispatchCallable({
+      callable: {
+        type: "fetch",
+        via: {
+          type: "env-binding",
+          bindingType: "dynamic-worker",
+          workerCode: dynamicWorkerCode,
+        },
+      },
+      payload: { title: "Bug" },
+      ctx: {
+        env: {
+          ...testEnv,
+          LOADER: testEnv.CALLABLE_TEST_LOADER,
+        },
+      },
+    });
+
+    expect(value).toMatchObject({
+      target: "dynamic-worker",
+      method: "POST",
+      path: "/",
+      body: '{"title":"Bug"}',
+      contentType: "application/json",
+    });
+  });
+
   test("dispatches object-mode Dynamic Worker RPC", async () => {
     const value = await dispatchCallable({
       callable: {
@@ -1181,6 +1210,40 @@ describe("dispatchCallableFetch", () => {
     });
   });
 
+  test("raw fetch mode replaces or clears the incoming query when fetchRequest query is present", async () => {
+    const replaced = await dispatchCallableFetch({
+      callable: {
+        type: "fetch",
+        via: { type: "url", url: "https://api.example.com/v1?fixed=true" },
+        fetchRequest: { query: { active: true } },
+      },
+      request: new Request("https://router.local/users?expand=items"),
+      ctx: {
+        fetch: async (request) => Response.json({ url: request.url }),
+      },
+    });
+
+    await expect(replaced.json()).resolves.toEqual({
+      url: "https://api.example.com/v1/users?active=true",
+    });
+
+    const cleared = await dispatchCallableFetch({
+      callable: {
+        type: "fetch",
+        via: { type: "url", url: "https://api.example.com/v1?fixed=true" },
+        fetchRequest: { query: {} },
+      },
+      request: new Request("https://router.local/users?expand=items"),
+      ctx: {
+        fetch: async (request) => Response.json({ url: request.url }),
+      },
+    });
+
+    await expect(cleared.json()).resolves.toEqual({
+      url: "https://api.example.com/v1/users",
+    });
+  });
+
   test("raw fetch mode preserves trailing slash URL via values for root requests", async () => {
     const response = await dispatchCallableFetch({
       callable: {
@@ -1219,6 +1282,44 @@ describe("dispatchCallableFetch", () => {
     });
 
     await expect(response.text()).resolves.toBe("streamed-body");
+  });
+
+  test("raw fetch mode can apply method and header overrides while preserving the request body", async () => {
+    const request = new Request("https://router.local/upload", {
+      method: "POST",
+      body: "streamed-body",
+      headers: { "content-type": "text/plain" },
+    });
+
+    const response = await dispatchCallableFetch({
+      callable: {
+        type: "fetch",
+        via: { type: "url", url: "https://api.example.com" },
+        fetchRequest: {
+          method: "PATCH",
+          headers: { "x-callable-test": "set" },
+        },
+      },
+      request,
+      ctx: {
+        fetch: async (outboundRequest) => {
+          expect(request.bodyUsed).toBe(false);
+          return Response.json({
+            method: outboundRequest.method,
+            header: outboundRequest.headers.get("x-callable-test"),
+            contentType: outboundRequest.headers.get("content-type"),
+            body: await outboundRequest.text(),
+          });
+        },
+      },
+    });
+
+    await expect(response.json()).resolves.toEqual({
+      method: "PATCH",
+      header: "set",
+      contentType: "text/plain",
+      body: "streamed-body",
+    });
   });
 
   test("dispatches to a real service binding fetch handler through env", async () => {

@@ -12,6 +12,9 @@
   },
   "worker_loaders": [
     {
+      "binding": "LOADER",
+    },
+    {
       "binding": "CALLABLE_TEST_LOADER",
     },
   ],

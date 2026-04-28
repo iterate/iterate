@@ -75,10 +75,11 @@ const httpUrlSchema = z.string().refine(
 /**
  * This is deliberately stricter than JavaScript property access. A serialized
  * RPC callable should name one direct public method, not walk object graphs or
- * collide with Promise/prototype/reserved Worker RPC behavior. Cloudflare
- * reserves several RPC method names, and `then` is denied so a service binding
- * or returned stub cannot accidentally become Promise-like when awaited.
- * The Cloudflare-reserved names are documented here:
+ * collide with Promise/prototype/reserved Worker RPC behavior. This set mixes
+ * Cloudflare-reserved method names with local callable hardening: for example,
+ * `then` is not a Cloudflare RPC reserved name, but denying it prevents a
+ * service binding or returned stub from accidentally becoming Promise-like when
+ * awaited. The Cloudflare-reserved names are documented here:
  * https://developers.cloudflare.com/workers/runtime-apis/rpc/reserved-methods/
  */
 const deniedRpcMethods = new Set([
