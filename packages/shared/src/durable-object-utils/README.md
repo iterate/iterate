@@ -189,7 +189,7 @@ const stub = await getOrInitializeDoStub({
   namespace: env.PROJECT_ROOMS,
   initParams: {
     projectId: "proj_123",
-    roomSlug: "general",
+    roomId: "room_456",
   },
 });
 ```
