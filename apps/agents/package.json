@@ -19,6 +19,7 @@
     "test": "pnpm typecheck && pnpm test:unit",
     "test:unit": "pnpm exec vitest run --config ./vitest.unit.config.ts",
     "test:e2e": "doppler run --no-cache -- pnpm exec vitest run --config ./e2e/vitest.config.ts",
+    "test:e2e:preview": "node -e \"if (!process.env.AGENTS_BASE_URL) { console.error('AGENTS_BASE_URL is required for agents preview e2e tests'); process.exit(1); }\" && env AGENTS_E2E_RUNTIME_SMOKE=1 pnpm exec vitest run --config ./e2e/vitest.config.ts --tags-filter deployed-live-worker",
     "test:e2e:record": "doppler run --no-cache -- env AGENTS_E2E_RECORD_HAR=1 pnpm exec vitest run --config ./e2e/vitest.config.ts --tags-filter mocked-internet",
     "test:e2e:runtime-smoke": "doppler run --no-cache -- sh -c 'if [ -z \"$AGENTS_BASE_URL\" ]; then echo \"AGENTS_BASE_URL is required\"; exit 1; fi; export AGENTS_E2E_RUNTIME_SMOKE=1; pnpm exec vitest run --config ./e2e/vitest.config.ts --tags-filter deployed-live-worker'"
   },
