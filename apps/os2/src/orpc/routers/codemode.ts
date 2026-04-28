@@ -1,4 +1,3 @@
-import { os } from "~/orpc/orpc.ts";
 import { CodemodeExecutor } from "@iterate-com/shared/codemode/executor";
 import { resolveCallableToolProvider } from "@iterate-com/shared/codemode/resolve";
 import { validateProviderPaths } from "@iterate-com/shared/codemode/validate";
@@ -8,6 +7,7 @@ import type {
   ToolProvider,
 } from "@iterate-com/shared/codemode/types";
 import type { CallableContext } from "@iterate-com/shared/callable/types.ts";
+import { os } from "~/orpc/orpc.ts";
 
 function generateBlockId(): string {
   const chars = "0123456789abcdefghijklmnopqrstuvwxyz";

@@ -1,5 +1,6 @@
 import alchemy, { type Scope } from "alchemy";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
+import { z } from "zod";
 import {
   compileRawAppConfigFromEnv,
   parseAppConfigFromEnv,
@@ -7,7 +8,6 @@ import {
 } from "../apps/config.ts";
 import type { AppManifest } from "../apps/types.ts";
 import { slugify } from "../slugify.ts";
-import { z } from "zod";
 
 const AlchemyEnv = z.object({
   ALCHEMY_PASSWORD: z.string().trim().min(1, "ALCHEMY_PASSWORD is required"),
