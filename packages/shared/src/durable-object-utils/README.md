@@ -512,6 +512,146 @@ protected async pollAPI(payload: unknown, schedule: SchedulerRecord) {
 }
 ```
 
+### Runtime maintenance loops
+
+The scheduler is also the right primitive for periodic runtime maintenance. A
+good example is a Durable Object that owns an outbound Discord connection.
+
+The scheduler does **not** make the WebSocket durable. The socket is ordinary
+in-memory runtime state and is lost on eviction, deploys, runtime restarts, or
+remote close. The durable part is the app-owned desired state plus the schedule
+row that periodically calls an idempotent method to make runtime state match
+that desired state.
+
+That distinction is important enough to keep out of a separate
+`enableKeepAlive()` API. A method that persists `{ key, method, everyMs }` and
+calls a method repeatedly is just scheduling. Use `withScheduler()` for that,
+and let the concrete object decide that the scheduled method means "ensure this
+connection exists".
+
+```ts
+type DiscordInit = {
+  name: string;
+  guildId: string;
+};
+
+type Env = {
+  DISCORD_GATEWAY_URL: string;
+  DISCORD_TOKEN: string;
+};
+
+const DiscordBase = withScheduler<DiscordInit>()(
+  withMultiplexedAlarms<DiscordInit>()(withLifecycleHooks<DiscordInit>()(DurableObject)),
+);
+
+export class DiscordConnection extends DiscordBase<Env> {
+  #socket: WebSocket | undefined;
+
+  async connect() {
+    this.ctx.storage.kv.put("discord.desired", true);
+
+    await this.schedule({
+      key: "discord-connection",
+      method: "ensureDiscordConnected",
+      recurrence: {
+        type: "interval",
+        everyMs: 30_000,
+      },
+    });
+
+    // Do not wait for the first interval tick. The scheduled row is what
+    // brings the object back after restart; this immediate call gives the
+    // current activation a chance to connect now.
+    await this.ensureDiscordConnected();
+  }
+
+  async disconnect() {
+    this.ctx.storage.kv.put("discord.desired", false);
+    await this.cancelSchedule("discord-connection");
+
+    this.#socket?.close();
+    this.#socket = undefined;
+  }
+
+  getStatus() {
+    return {
+      desired: this.ctx.storage.kv.get<boolean>("discord.desired") ?? false,
+      connected: this.#socket?.readyState === WebSocket.OPEN,
+      schedules: this.getSchedules(),
+    };
+  }
+
+  protected async ensureDiscordConnected() {
+    const desired = this.ctx.storage.kv.get<boolean>("discord.desired") ?? false;
+
+    if (!desired) {
+      await this.cancelSchedule("discord-connection");
+      this.#socket?.close();
+      this.#socket = undefined;
+      return;
+    }
+
+    if (this.#socket?.readyState === WebSocket.OPEN) {
+      return;
+    }
+
+    const socket = new WebSocket(this.env.DISCORD_GATEWAY_URL);
+    this.#socket = socket;
+
+    socket.addEventListener("open", () => {
+      // This is deliberately not a complete Discord gateway implementation.
+      // Real code should send a valid Identify or Resume payload and persist
+      // enough sequence/session state in DO storage to resume after restart.
+      console.log("connected Discord gateway for guild", this.initParams.guildId);
+      socket.send(
+        JSON.stringify({
+          token: this.env.DISCORD_TOKEN,
+        }),
+      );
+    });
+
+    socket.addEventListener("message", (event) => {
+      void this.handleDiscordMessage(event.data);
+    });
+
+    socket.addEventListener("close", () => {
+      if (this.#socket === socket) {
+        this.#socket = undefined;
+      }
+      // The interval schedule will reconnect on the next tick as long as
+      // discord.desired is still true.
+    });
+
+    socket.addEventListener("error", () => {
+      if (this.#socket === socket) {
+        this.#socket = undefined;
+      }
+      socket.close();
+      // The interval schedule will reconnect on the next tick.
+    });
+  }
+
+  private async handleDiscordMessage(data: string | ArrayBuffer) {
+    // Discord-specific event handling. Protocol resume state belongs in DO
+    // storage, not in #socket or another in-memory field, because the scheduled
+    // reconciling method must be able to rebuild from storage after eviction.
+    void data;
+  }
+}
+```
+
+The same shape works for event-sourced AI agent loops. Derive "should be
+working" from the append-only event log, then schedule an idempotent method that
+replays the projection and starts work only if the projection says work is
+still needed. Progress belongs in domain events, not in scheduler or keepalive
+metadata.
+
+For an opaque long-running promise, use a future `keepAliveWhile({ promise })`
+style helper only as best-effort in-memory liveness. It can reduce the chance
+that a current activation goes idle while the promise is pending, but it cannot
+recover the promise, local variables, sockets, or partially completed external
+side effects after a restart.
+
 ## Debug Inspectors
 
 The inspector mixins are intentionally noisy at the call site:

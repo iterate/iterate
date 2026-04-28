@@ -202,6 +202,14 @@ export class NoNextScheduleOccurrenceError extends Error {
  * intervals, cron expressions, and RRULE expressions. Every schedule row is
  * projected into one underlying multiplexed alarm whose payload points back to
  * the schedule key.
+ *
+ * Schedules are also the intended low-level primitive for runtime maintenance
+ * loops, such as "periodically ensure my Discord socket is connected". The
+ * scheduler only provides durable wakeups. The concrete Durable Object must
+ * persist the desired state and make the scheduled method idempotently rebuild
+ * any in-memory state from storage and env. Do not add a second durable
+ * `enableKeepAlive({ key, method, everyMs })` API for that shape; it would be
+ * another scheduler with a less precise name.
  */
 export function withScheduler<InitParams extends LifecycleInit>(options?: {
   /**
@@ -488,30 +496,70 @@ export function withScheduler<InitParams extends LifecycleInit>(options?: {
           // Finite RRULEs can be complete after the callback for their final
           // occurrence runs. That is a successful terminal state, not an alarm
           // failure: throwing here would make Cloudflare retry the already-due
-          // multiplexed alarm forever. Delete the schedule row and return
-          // normally so `withMultiplexedAlarms()` can delete the logical alarm
-          // that invoked this callback.
-          this.ctx.storage.sql.exec(
+          // multiplexed alarm forever.
+          //
+          // The callback may also have replaced this schedule key while it was
+          // running. In that case the replacement row is the new source of truth
+          // and already has its own backing multiplexed alarm. Match the exact
+          // row snapshot we started from so final-occurrence cleanup only deletes
+          // the old row, never the replacement.
+          const deleteCursor = this.ctx.storage.sql.exec(
             `DELETE FROM ${SCHEDULER_TABLE}
-             WHERE key = ?`,
+             WHERE key = ?
+               AND method = ?
+               AND payload_json = ?
+               AND recurrence_json = ?
+               AND next_run_at_ms = ?
+               AND updated_at_ms = ?`,
             row.key,
+            row.method,
+            row.payload_json,
+            row.recurrence_json,
+            row.next_run_at_ms,
+            row.updated_at_ms,
           );
-          console.info(
-            `[withScheduler] completed finite schedule "${row.key}" with no next occurrence.`,
-          );
+
+          if (deleteCursor.rowsWritten > 0) {
+            console.info(
+              `[withScheduler] completed finite schedule "${row.key}" with no next occurrence.`,
+            );
+          }
+
           return;
         }
 
         const nowMs = Date.now();
 
-        this.ctx.storage.sql.exec(
+        // Recurring callbacks are allowed to replace their own schedule by
+        // calling `this.schedule({ key: sameKey, ... })`. That is useful when a
+        // domain API wants to say "run on an interval until condition X, then
+        // switch to a different cadence". If we updated by key only, the stale
+        // pre-callback recurrence would overwrite the replacement's next run.
+        // Match the exact row snapshot instead; zero rows written means the
+        // callback deliberately changed the schedule and the replacement has
+        // already armed its own multiplexed alarm.
+        const updateCursor = this.ctx.storage.sql.exec(
           `UPDATE ${SCHEDULER_TABLE}
            SET next_run_at_ms = ?, running = 0, execution_started_at_ms = NULL, updated_at_ms = ?
-           WHERE key = ?`,
+           WHERE key = ?
+             AND method = ?
+             AND payload_json = ?
+             AND recurrence_json = ?
+             AND next_run_at_ms = ?
+             AND updated_at_ms = ?`,
           nextRunAtMs,
           nowMs,
           row.key,
+          row.method,
+          row.payload_json,
+          row.recurrence_json,
+          row.next_run_at_ms,
+          row.updated_at_ms,
         );
+
+        if (updateCursor.rowsWritten === 0) {
+          return;
+        }
 
         await this.scheduleMultiplexedAlarm({
           key: schedulerAlarmKey(row.key, nextRunAtMs),

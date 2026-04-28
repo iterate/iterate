@@ -521,6 +521,12 @@ export class SchedulerTestRoom extends SchedulerRoomBase<Env> {
     };
   }
 
+  getScheduleNextRunAtMsForTest(key: string): number | null {
+    const schedule = this.getSchedule(key);
+
+    return schedule === null ? null : Date.parse(schedule.nextRunAt);
+  }
+
   protected recordScheduledPayload(payload: unknown): void {
     const runs = this.ctx.storage.kv.get<number>("test.scheduleRuns") ?? 0;
 

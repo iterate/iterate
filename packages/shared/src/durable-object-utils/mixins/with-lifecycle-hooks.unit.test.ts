@@ -722,6 +722,71 @@ describe("withScheduler", () => {
     ]);
   });
 
+  it("does not advance over a replacement schedule created while a recurring task is running", async () => {
+    const room = testEnv.SCHEDULE_ROOMS.getByName("scheduler-unit-replace-during-recurring-run");
+    const beforeRunMs = Date.now();
+
+    await room.initialize({
+      name: "scheduler-unit-replace-during-recurring-run",
+      ownerUserId: "user-scheduler",
+    });
+    await room.scheduleSelfReplacingTask({
+      key: "replace-recurring-while-running",
+      recurrence: {
+        type: "interval",
+        everyMs: 3_600_000,
+      },
+    });
+
+    await room.makeScheduleDueForTest("replace-recurring-while-running");
+    await expect(room.runAlarmNow()).resolves.toBeUndefined();
+
+    await expect(room.getSchedules()).resolves.toMatchObject([
+      {
+        key: "replace-recurring-while-running",
+        method: "recordScheduledPayload",
+        payload: { version: "replacement" },
+        recurrence: {
+          type: "delayed",
+          delayMs: 60_000,
+        },
+      },
+    ]);
+    await expect(
+      room.getScheduleNextRunAtMsForTest("replace-recurring-while-running"),
+    ).resolves.toBeLessThan(beforeRunMs + 120_000);
+  });
+
+  it("does not delete a replacement schedule created by a final finite RRULE run", async () => {
+    const room = testEnv.SCHEDULE_ROOMS.getByName("scheduler-unit-replace-final-rrule");
+
+    await room.initialize({
+      name: "scheduler-unit-replace-final-rrule",
+      ownerUserId: "user-scheduler",
+    });
+    await room.scheduleSelfReplacingTask({
+      key: "replace-final-rrule",
+      recurrence: {
+        type: "rrule",
+        rrule: "FREQ=DAILY;COUNT=1",
+      },
+    });
+
+    await room.makeScheduleDueForTest("replace-final-rrule");
+    await expect(room.runAlarmNow()).resolves.toBeUndefined();
+    await expect(room.getSchedules()).resolves.toMatchObject([
+      {
+        key: "replace-final-rrule",
+        method: "recordScheduledPayload",
+        payload: { version: "replacement" },
+        recurrence: {
+          type: "delayed",
+          delayMs: 60_000,
+        },
+      },
+    ]);
+  });
+
   it("cancels schedules and their backing multiplexed alarm", async () => {
     const room = testEnv.SCHEDULE_ROOMS.getByName("scheduler-unit-cancel");
 
