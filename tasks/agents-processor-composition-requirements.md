@@ -66,9 +66,15 @@ Working note for the `apps/agents` processor redesign discussion. This is not co
 - Agent/codemode workflows should be able to read processor/event documentation from the stream.
 - Tooling should support reading raw events by offset for LLM/codemode/debug use cases.
 - Event catalogs should be defined separately from processor definitions to avoid self-referential definitions.
-- Public processor modules should still expose ergonomic namespace-like access such as `AgentLoop.events.inputAdded`, `AgentLoop.reducer({ state, event })`, and `AgentLoop.initialState`.
+- Public processor modules should still expose ergonomic namespace-like access such as `AgentLoop.events.InputAdded`, `AgentLoop.reducer({ state, event })`, and `AgentLoop.initialState`.
 - A downstream processor such as Codemode should be able to import `AgentLoop` and use both its event schemas and reducer directly when it wants an independent projection.
 - Event construction helper naming is unresolved. Candidate helpers include `create`, `createInput`, or raw object literals with `satisfies`.
+- Zod schemas and event identifiers should start with a capital letter.
+- Zod schemas and their inferred types should share the same identifier.
+- Zod schema identifiers should not end in `Schema`.
+- Zod docs support the existing repo convention: define a schema value, infer its type with `z.infer<typeof Value>`, and use `z.input` / `z.output` when input and parsed output diverge.
+- Zod 4 metadata registries and `.meta()` may be useful for processor/event documentation.
+- Zod 4 `z.toJSONSchema()` can generate event docs, but `z.custom()` and similar unrepresentable types need care.
 
 ## Discuss Later
 
