@@ -2,26 +2,26 @@ import { z } from "zod";
 
 export const CALLABLE_SCHEMA = "https://schemas.iterate.com/callable/v1" as const;
 
-const pathModeSchema = z.enum(["prefix", "replace"]);
-const callableSchemaField = z.literal(CALLABLE_SCHEMA).optional();
-type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
-const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
+const PathMode = z.enum(["prefix", "replace"]);
+const CallableVersion = z.literal(CALLABLE_SCHEMA).optional();
+type JSONValue = null | boolean | number | string | JSONValue[] | { [key: string]: JSONValue };
+const JSONValue: z.ZodType<JSONValue> = z.lazy(() =>
   z.union([
     z.null(),
     z.boolean(),
     z.number(),
     z.string(),
-    z.array(jsonValueSchema),
-    z.record(z.string(), jsonValueSchema),
+    z.array(JSONValue),
+    z.record(z.string(), JSONValue),
   ]),
 );
 
-const jsonataExpressionSchema = z.string().min(1);
+const JsonataExpression = z.string().min(1);
 
-const transformInputSchema = z
+const TransformInput = z
   .object({
-    shallowMerge: z.record(z.string(), jsonValueSchema).optional(),
-    jsonata: jsonataExpressionSchema.optional(),
+    shallowMerge: z.record(z.string(), JSONValue).optional(),
+    jsonata: JsonataExpression.optional(),
   })
   .strict()
   .refine((value) => value.shallowMerge != null || value.jsonata != null, {
@@ -35,7 +35,7 @@ const transformInputSchema = z
  * request path via `fetchRequest.path.base`, but that is part of the Fetch
  * request shape rather than part of capability identity.
  */
-const pathBaseSchema = z
+const PathBase = z
   .string()
   .refine(
     (value) =>
@@ -64,7 +64,7 @@ function hasDotPathSegment(path: string) {
   });
 }
 
-const httpUrlSchema = z.string().refine(
+const HTTPURL = z.string().refine(
   (value) => {
     try {
       const url = new URL(value);
@@ -125,7 +125,7 @@ const deniedRpcMethods = new Set([
   "webSocketMessage",
 ]);
 
-const rpcMethodSchema = z
+const RPCMethod = z
   .string()
   .regex(/^[A-Za-z_$][A-Za-z0-9_$]*$/, {
     message: "RPC call method must be a single JavaScript identifier, not a dotted path",
@@ -134,7 +134,7 @@ const rpcMethodSchema = z
     message: "RPC call method uses a reserved or dangerous method name",
   });
 
-const dynamicWorkerCodeSchema = z
+const DynamicWorkerCode = z
   .object({
     compatibilityDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     compatibilityFlags: z.array(z.string()).optional(),
@@ -162,22 +162,22 @@ const dynamicWorkerCodeSchema = z
     }
   });
 
-const durableObjectSelectorSchema = z.union([
+const DurableObjectSelector = z.union([
   z.object({ name: z.string().min(1) }).strict(),
   z.object({ id: z.string().min(1) }).strict(),
 ]);
 
-const dynamicWorkerLoaderSchema = z
+const DynamicWorkerLoader = z
   .object({
     type: z.literal("get"),
     id: z.string().min(1),
   })
   .strict();
 
-const dynamicWorkerEntrypointSchema = z
+const DynamicWorkerEntrypoint = z
   .object({
     name: z.string().min(1).optional(),
-    props: jsonValueSchema.optional(),
+    props: JSONValue.optional(),
   })
   .strict();
 
@@ -196,14 +196,14 @@ const dynamicWorkerEntrypointSchema = z
  * specifically a Worker Loader binding.
  * https://developers.cloudflare.com/workers/runtime-apis/bindings/
  */
-const dynamicWorkerViaSchema = z
+const DynamicWorkerVia = z
   .object({
     type: z.literal("env-binding"),
     bindingType: z.literal("dynamic-worker"),
     workerLoaderBindingName: z.string().min(1).optional(),
-    workerCode: dynamicWorkerCodeSchema,
-    loader: dynamicWorkerLoaderSchema.optional(),
-    entrypoint: dynamicWorkerEntrypointSchema.optional(),
+    workerCode: DynamicWorkerCode,
+    loader: DynamicWorkerLoader.optional(),
+    entrypoint: DynamicWorkerEntrypoint.optional(),
   })
   .strict();
 
@@ -216,7 +216,7 @@ const dynamicWorkerViaSchema = z
  * time.
  * https://developers.cloudflare.com/workers/runtime-apis/bindings/
  */
-const serviceEnvBindingViaSchema = z
+const ServiceEnvBindingVia = z
   .object({
     type: z.literal("env-binding"),
     bindingType: z.literal("service"),
@@ -232,12 +232,12 @@ const serviceEnvBindingViaSchema = z
  * stubs, names, and IDs.
  * https://developers.cloudflare.com/durable-objects/api/namespace/
  */
-const durableObjectEnvBindingViaSchema = z
+const DurableObjectEnvBindingVia = z
   .object({
     type: z.literal("env-binding"),
     bindingType: z.literal("durable-object-namespace"),
     bindingName: z.string().min(1),
-    durableObject: durableObjectSelectorSchema,
+    durableObject: DurableObjectSelector,
   })
   .strict();
 
@@ -250,80 +250,80 @@ const durableObjectEnvBindingViaSchema = z
  * parameterized with dynamic `props`, unlike regular env service bindings.
  * https://developers.cloudflare.com/workers/runtime-apis/context/#exports
  */
-const loopbackServiceViaSchema = z
+const LoopbackServiceVia = z
   .object({
     type: z.literal("loopback-binding"),
     bindingType: z.literal("service"),
     exportName: z.string().min(1),
-    props: jsonValueSchema.optional(),
+    props: JSONValue.optional(),
   })
   .strict();
 
-const loopbackDurableObjectViaSchema = z
+const LoopbackDurableObjectVia = z
   .object({
     type: z.literal("loopback-binding"),
     bindingType: z.literal("durable-object-namespace"),
     exportName: z.string().min(1),
-    durableObject: durableObjectSelectorSchema,
+    durableObject: DurableObjectSelector,
   })
   .strict();
 
-const envBindingViaSchema = z.discriminatedUnion("bindingType", [
-  serviceEnvBindingViaSchema,
-  durableObjectEnvBindingViaSchema,
-  dynamicWorkerViaSchema,
+const EnvBindingVia = z.discriminatedUnion("bindingType", [
+  ServiceEnvBindingVia,
+  DurableObjectEnvBindingVia,
+  DynamicWorkerVia,
 ]);
 
-const loopbackBindingViaSchema = z.discriminatedUnion("bindingType", [
-  loopbackServiceViaSchema,
-  loopbackDurableObjectViaSchema,
+const LoopbackBindingVia = z.discriminatedUnion("bindingType", [
+  LoopbackServiceVia,
+  LoopbackDurableObjectVia,
 ]);
 
-const urlViaSchema = z
+const URLVia = z
   .object({
     type: z.literal("url"),
-    url: httpUrlSchema,
+    url: HTTPURL,
   })
   .strict();
 
-const fetchViaSchema = z.union([urlViaSchema, envBindingViaSchema, loopbackBindingViaSchema]);
+const FetchVia = z.union([URLVia, EnvBindingVia, LoopbackBindingVia]);
 
-const workersRpcViaSchema = z.union([envBindingViaSchema, loopbackBindingViaSchema]);
+const WorkersRpcVia = z.union([EnvBindingVia, LoopbackBindingVia]);
 
-const fetchRequestSchema = z
+const FetchRequest = z
   .object({
     method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]).optional(),
     headers: z.record(z.string(), z.string()).optional(),
     query: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
-    body: z.object({ jsonata: jsonataExpressionSchema }).strict().optional(),
+    body: z.object({ jsonata: JsonataExpression }).strict().optional(),
     path: z
       .object({
-        base: pathBaseSchema.optional(),
-        mode: pathModeSchema.optional(),
+        base: PathBase.optional(),
+        mode: PathMode.optional(),
       })
       .strict()
       .optional(),
   })
   .strict();
 
-const fetchCallableSchema = z
+const FetchCallable = z
   .object({
     type: z.literal("fetch"),
-    schema: callableSchemaField,
-    via: fetchViaSchema,
-    transformInput: transformInputSchema.optional(),
-    fetchRequest: fetchRequestSchema.optional(),
+    schema: CallableVersion,
+    via: FetchVia,
+    transformInput: TransformInput.optional(),
+    fetchRequest: FetchRequest.optional(),
   })
   .strict();
 
-const workersRpcCallableSchema = z
+const WorkersRpcCallable = z
   .object({
     type: z.literal("workers-rpc"),
-    schema: callableSchemaField,
-    via: workersRpcViaSchema,
-    rpcMethod: rpcMethodSchema,
+    schema: CallableVersion,
+    via: WorkersRpcVia,
+    rpcMethod: RPCMethod,
     argsMode: z.enum(["object", "positional"]).optional(),
-    transformInput: transformInputSchema.optional(),
+    transformInput: TransformInput.optional(),
   })
   .strict()
   .superRefine((callable, ctx) => {
@@ -353,10 +353,7 @@ const workersRpcCallableSchema = z
  * Callable. `tasks/capability-policy.md` tracks the hardened resolver/policy
  * layer.
  */
-export const CallableSchema = z.discriminatedUnion("type", [
-  fetchCallableSchema,
-  workersRpcCallableSchema,
-]);
+export const Callable = z.discriminatedUnion("type", [FetchCallable, WorkersRpcCallable]);
 
 /**
  * JSON that names an invocation protocol and the capability to invoke it via.
@@ -366,10 +363,10 @@ export const CallableSchema = z.discriminatedUnion("type", [
  * bindings are not stored in the callable itself. Treat Callables as
  * untrusted code until the capability-policy task is implemented.
  */
-export type Callable = z.infer<typeof CallableSchema>;
-export type FetchCallable = z.infer<typeof fetchCallableSchema>;
-export type WorkersRpcCallable = z.infer<typeof workersRpcCallableSchema>;
-export type DurableObjectSelector = z.infer<typeof durableObjectSelectorSchema>;
+export type Callable = z.infer<typeof Callable>;
+export type FetchCallable = z.infer<typeof FetchCallable>;
+export type WorkersRpcCallable = z.infer<typeof WorkersRpcCallable>;
+export type DurableObjectSelector = z.infer<typeof DurableObjectSelector>;
 
 export type CallableContext = {
   /**

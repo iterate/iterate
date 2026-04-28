@@ -1,7 +1,7 @@
 import jsonata from "jsonata";
 import {
+  Callable as CallableDefinition,
   CallableError,
-  CallableSchema,
   type Callable,
   type CallableContext,
   type DurableObjectSelector,
@@ -43,7 +43,7 @@ type DynamicWorkerLoader = {
  * tool manifests.
  */
 export function validateCallable(options: { callable: unknown }): Callable {
-  const parsed = CallableSchema.safeParse(options.callable);
+  const parsed = CallableDefinition.safeParse(options.callable);
   if (!parsed.success) {
     throw new CallableError("DESCRIPTOR_VALIDATION_FAILED", "Invalid callable", {
       cause: parsed.error,
