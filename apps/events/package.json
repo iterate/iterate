@@ -58,7 +58,7 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "schematch": "0.2.1",
-    "sqlfu": "https://pkg.pr.new/mmkal/sqlfu@d6bf1a8",
+    "sqlfu": "0.0.3-10",
     "tailwindcss": "^4.1.18",
     "yaml": "^2.8.3",
     "zod": "^4.3.6"
