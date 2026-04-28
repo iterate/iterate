@@ -41,11 +41,11 @@ export function withKvInspector(options: { unsafe: "I_UNDERSTAND_THIS_EXPOSES_KV
         // inspector under a prefix, it must strip that prefix before forwarding
         // the request to `stub.fetch()`.
         if (url.pathname === "/__kv" || url.pathname === "/__kv/") {
-          return renderKvPage(this.getDurableObjectKv());
+          return this.useDurableObjectKv((kv) => renderKvPage(readKvEntries(kv)));
         }
 
         if (url.pathname === "/__kv/json") {
-          return Response.json(readKvEntries(this.getDurableObjectKv()));
+          return this.useDurableObjectKv((kv) => Response.json(readKvEntries(kv)));
         }
 
         return await delegateToBaseFetch(Base, this, request);
@@ -60,7 +60,7 @@ export function withKvInspector(options: { unsafe: "I_UNDERSTAND_THIS_EXPOSES_KV
   };
 }
 
-function renderKvPage(kv: SyncKvStorage) {
+function renderKvPage(entries: Array<{ key: string; value: unknown }>) {
   return new Response(
     `<!doctype html>
 <html>
@@ -76,7 +76,7 @@ function renderKvPage(kv: SyncKvStorage) {
   </head>
   <body>
     <h1>Durable Object KV</h1>
-    <pre>${escapeHtml(JSON.stringify(readKvEntries(kv), null, 2))}</pre>
+    <pre>${escapeHtml(JSON.stringify(entries, null, 2))}</pre>
   </body>
 </html>`,
     {

@@ -19,10 +19,40 @@ import type {
  * The real implementations are installed by `withDurableObjectCore()` below.
  */
 export abstract class DurableObjectCoreProtected {
+  /**
+   * Run one synchronous operation against DO-local SQLite.
+   *
+   * Prefer this shape when a mixin only needs storage for a single operation:
+   * it keeps the raw Cloudflare storage handle scoped to the callback instead
+   * of passing it through unrelated helper functions.
+   */
+  protected useDurableObjectSql<T>(_operation: (sql: SqlStorage) => T): T {
+    throw new Error("DurableObjectCoreProtected is type-only and should never run.");
+  }
+
+  /**
+   * Run one synchronous operation against DO-local KV storage.
+   *
+   * This mirrors `useDurableObjectSql()` for mixins like debug inspectors that
+   * only need to snapshot KV during a request.
+   */
+  protected useDurableObjectKv<T>(_operation: (kv: SyncKvStorage) => T): T {
+    throw new Error("DurableObjectCoreProtected is type-only and should never run.");
+  }
+
+  /**
+   * Return the raw DO-local SQLite handle for mixins that own a table and need
+   * many storage calls in one method. Keep this protected; exposing it publicly
+   * would make it remotely callable on Durable Object stubs.
+   */
   protected getDurableObjectSql(): SqlStorage {
     throw new Error("DurableObjectCoreProtected is type-only and should never run.");
   }
 
+  /**
+   * Return the raw synchronous KV handle for lifecycle code that repeatedly
+   * reads/writes initialization state.
+   */
   protected getDurableObjectKv(): SyncKvStorage {
     throw new Error("DurableObjectCoreProtected is type-only and should never run.");
   }
@@ -81,6 +111,14 @@ export function withDurableObjectCore<TBase extends DurableObjectClass>(
   Base: TBase,
 ): WithDurableObjectCoreResult<TBase> {
   abstract class DurableObjectCoreMixin extends (Base as unknown as RuntimeDurableObjectConstructor) {
+    protected useDurableObjectSql<T>(operation: (sql: SqlStorage) => T): T {
+      return operation(this.ctx.storage.sql);
+    }
+
+    protected useDurableObjectKv<T>(operation: (kv: SyncKvStorage) => T): T {
+      return operation(this.ctx.storage.kv);
+    }
+
     protected getDurableObjectSql(): SqlStorage {
       return this.ctx.storage.sql;
     }

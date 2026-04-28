@@ -82,6 +82,16 @@ uses `withMultiplexedAlarms()` and `withDurableObjectCore()`, while
 `withDurableObjectCore()` is the only reusable layer that adapts
 `ctx.storage.sql`, `ctx.storage.kv`, and platform alarms.
 
+When a mixin needs one storage operation, prefer the scoped callback helpers:
+
+```ts
+return this.useDurableObjectKv((kv) => Response.json(readKvEntries(kv)));
+```
+
+Only use the raw protected storage handles when the mixin owns durable state and
+needs several related operations in one method. This keeps debug/fetch helpers
+from passing raw Cloudflare storage handles through unrelated rendering code.
+
 For env bindings, prefer a lower-bound type selected by the call site:
 
 ```ts

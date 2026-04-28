@@ -48,10 +48,8 @@ export function withOuterbase(options: { unsafe: "I_UNDERSTAND_THIS_EXPOSES_SQL"
         }
 
         if (url.pathname === "/__outerbase/sql") {
-          return handleOuterbaseSql(
-            this.getDurableObjectSql(),
-            (closure) => this.transactionSync(closure),
-            request,
+          return this.useDurableObjectSql((sql) =>
+            handleOuterbaseSql(sql, (closure) => this.transactionSync(closure), request),
           );
         }
 

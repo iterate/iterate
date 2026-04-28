@@ -61,6 +61,18 @@ capabilities. Higher mixins consume those capabilities, similar to how the
 Cloudflare Agents SDK exposes `Agent.sql()` and `withVoice()` consumes `sql`
 instead of reaching into `ctx.storage.sql` itself.
 
+Core exposes both scoped callback helpers and raw protected handles. Prefer the
+callback helpers for one-off access:
+
+```ts
+return this.useDurableObjectKv((kv) => Response.json(readKvEntries(kv)));
+```
+
+That keeps storage access inside the mixin method and lets plain helper
+functions operate on plain data. Use the raw protected handles only when a mixin
+owns durable schema/state and needs several related storage operations in one
+method, such as the scheduler or multiplexed alarm dispatcher.
+
 Simple mixin return types mostly follow this pattern:
 
 ```ts
