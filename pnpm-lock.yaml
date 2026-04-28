@@ -3097,6 +3097,9 @@ importers:
       '@posthog/rollup-plugin':
         specifier: ^1.2.14
         version: 1.2.15(rollup@4.59.0)
+      acorn:
+        specifier: ^8.16.0
+        version: 8.16.0
       alchemy:
         specifier: ^0.83.3
         version: 0.83.3(@aws-sdk/client-s3@3.1002.0)(@cloudflare/vite-plugin@1.33.2(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))(workerd@1.20260424.1)(wrangler@4.85.0(@cloudflare/workers-types@4.20260426.1)))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.16)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)(vite@7.3.1(@types/node@25.3.3)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2))(workerd@1.20260424.1)(wrangler@4.85.0(@cloudflare/workers-types@4.20260426.1))
@@ -3185,9 +3188,6 @@ importers:
       '@types/react':
         specifier: ^19.2.14
         version: 19.2.14
-      acorn:
-        specifier: ^8.16.0
-        version: 8.16.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
