@@ -14,7 +14,7 @@ import { Route as StreamResumedRouteImport } from './routes/stream-resumed'
 import { Route as StreamPausedRouteImport } from './routes/stream-paused'
 import { Route as StreamMetadataUpdatedRouteImport } from './routes/stream-metadata-updated'
 import { Route as StreamInitializedRouteImport } from './routes/stream-initialized'
-import { Route as StreamDurableObjectConstructedRouteImport } from './routes/stream-durable-object-constructed'
+import { Route as StreamDurableObjectWokeUpRouteImport } from './routes/stream-durable-object-woke-up'
 import { Route as StreamAppendScheduledRouteImport } from './routes/stream-append-scheduled'
 import { Route as ScheduleExecutionStartedRouteImport } from './routes/schedule-execution-started'
 import { Route as ScheduleExecutionFinishedRouteImport } from './routes/schedule-execution-finished'
@@ -68,10 +68,10 @@ const StreamInitializedRoute = StreamInitializedRouteImport.update({
   path: '/stream-initialized',
   getParentRoute: () => rootRouteImport,
 } as any)
-const StreamDurableObjectConstructedRoute =
-  StreamDurableObjectConstructedRouteImport.update({
-    id: '/stream-durable-object-constructed',
-    path: '/stream-durable-object-constructed',
+const StreamDurableObjectWokeUpRoute =
+  StreamDurableObjectWokeUpRouteImport.update({
+    id: '/stream-durable-object-woke-up',
+    path: '/stream-durable-object-woke-up',
     getParentRoute: () => rootRouteImport,
   } as any)
 const StreamAppendScheduledRoute = StreamAppendScheduledRouteImport.update({
@@ -225,7 +225,7 @@ export interface FileRoutesByFullPath {
   '/schedule-execution-finished': typeof ScheduleExecutionFinishedRoute
   '/schedule-execution-started': typeof ScheduleExecutionStartedRoute
   '/stream-append-scheduled': typeof StreamAppendScheduledRoute
-  '/stream-durable-object-constructed': typeof StreamDurableObjectConstructedRoute
+  '/stream-durable-object-woke-up': typeof StreamDurableObjectWokeUpRoute
   '/stream-initialized': typeof StreamInitializedRoute
   '/stream-metadata-updated': typeof StreamMetadataUpdatedRoute
   '/stream-paused': typeof StreamPausedRoute
@@ -258,7 +258,7 @@ export interface FileRoutesByTo {
   '/schedule-execution-finished': typeof ScheduleExecutionFinishedRoute
   '/schedule-execution-started': typeof ScheduleExecutionStartedRoute
   '/stream-append-scheduled': typeof StreamAppendScheduledRoute
-  '/stream-durable-object-constructed': typeof StreamDurableObjectConstructedRoute
+  '/stream-durable-object-woke-up': typeof StreamDurableObjectWokeUpRoute
   '/stream-initialized': typeof StreamInitializedRoute
   '/stream-metadata-updated': typeof StreamMetadataUpdatedRoute
   '/stream-paused': typeof StreamPausedRoute
@@ -291,7 +291,7 @@ export interface FileRoutesById {
   '/schedule-execution-finished': typeof ScheduleExecutionFinishedRoute
   '/schedule-execution-started': typeof ScheduleExecutionStartedRoute
   '/stream-append-scheduled': typeof StreamAppendScheduledRoute
-  '/stream-durable-object-constructed': typeof StreamDurableObjectConstructedRoute
+  '/stream-durable-object-woke-up': typeof StreamDurableObjectWokeUpRoute
   '/stream-initialized': typeof StreamInitializedRoute
   '/stream-metadata-updated': typeof StreamMetadataUpdatedRoute
   '/stream-paused': typeof StreamPausedRoute
@@ -326,7 +326,7 @@ export interface FileRouteTypes {
     | '/schedule-execution-finished'
     | '/schedule-execution-started'
     | '/stream-append-scheduled'
-    | '/stream-durable-object-constructed'
+    | '/stream-durable-object-woke-up'
     | '/stream-initialized'
     | '/stream-metadata-updated'
     | '/stream-paused'
@@ -359,7 +359,7 @@ export interface FileRouteTypes {
     | '/schedule-execution-finished'
     | '/schedule-execution-started'
     | '/stream-append-scheduled'
-    | '/stream-durable-object-constructed'
+    | '/stream-durable-object-woke-up'
     | '/stream-initialized'
     | '/stream-metadata-updated'
     | '/stream-paused'
@@ -391,7 +391,7 @@ export interface FileRouteTypes {
     | '/schedule-execution-finished'
     | '/schedule-execution-started'
     | '/stream-append-scheduled'
-    | '/stream-durable-object-constructed'
+    | '/stream-durable-object-woke-up'
     | '/stream-initialized'
     | '/stream-metadata-updated'
     | '/stream-paused'
@@ -426,7 +426,7 @@ export interface RootRouteChildren {
   ScheduleExecutionFinishedRoute: typeof ScheduleExecutionFinishedRoute
   ScheduleExecutionStartedRoute: typeof ScheduleExecutionStartedRoute
   StreamAppendScheduledRoute: typeof StreamAppendScheduledRoute
-  StreamDurableObjectConstructedRoute: typeof StreamDurableObjectConstructedRoute
+  StreamDurableObjectWokeUpRoute: typeof StreamDurableObjectWokeUpRoute
   StreamInitializedRoute: typeof StreamInitializedRoute
   StreamMetadataUpdatedRoute: typeof StreamMetadataUpdatedRoute
   StreamPausedRoute: typeof StreamPausedRoute
@@ -475,11 +475,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof StreamInitializedRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/stream-durable-object-constructed': {
-      id: '/stream-durable-object-constructed'
-      path: '/stream-durable-object-constructed'
-      fullPath: '/stream-durable-object-constructed'
-      preLoaderRoute: typeof StreamDurableObjectConstructedRouteImport
+    '/stream-durable-object-woke-up': {
+      id: '/stream-durable-object-woke-up'
+      path: '/stream-durable-object-woke-up'
+      fullPath: '/stream-durable-object-woke-up'
+      preLoaderRoute: typeof StreamDurableObjectWokeUpRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/stream-append-scheduled': {
@@ -723,7 +723,7 @@ const rootRouteChildren: RootRouteChildren = {
   ScheduleExecutionFinishedRoute: ScheduleExecutionFinishedRoute,
   ScheduleExecutionStartedRoute: ScheduleExecutionStartedRoute,
   StreamAppendScheduledRoute: StreamAppendScheduledRoute,
-  StreamDurableObjectConstructedRoute: StreamDurableObjectConstructedRoute,
+  StreamDurableObjectWokeUpRoute: StreamDurableObjectWokeUpRoute,
   StreamInitializedRoute: StreamInitializedRoute,
   StreamMetadataUpdatedRoute: StreamMetadataUpdatedRoute,
   StreamPausedRoute: StreamPausedRoute,

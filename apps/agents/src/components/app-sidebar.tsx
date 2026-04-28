@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
+import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/events-contract";
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -15,11 +16,16 @@ import { getOrpcClient } from "~/orpc/client.ts";
 
 const LIST_AGENTS_QUERY_KEY = ["listAgents"] as const;
 
+type AppSidebarProps = {
+  selectedStreamPath: StreamPathType | null;
+  onSelectStreamPath: (streamPath: StreamPathType) => void;
+};
+
 /**
  * Sidebar listing every agent the auto-subscriber has discovered. Polls
  * every 5s so brand-new agents show up without a refresh; tab-out pauses.
  */
-export function AppSidebar() {
+export function AppSidebar({ selectedStreamPath, onSelectStreamPath }: AppSidebarProps) {
   const agentsQuery = useQuery({
     queryKey: LIST_AGENTS_QUERY_KEY,
     queryFn: () => getOrpcClient().listAgents({}),
@@ -55,14 +61,9 @@ export function AppSidebar() {
               {agents.map((agent) => (
                 <SidebarMenuItem key={agent.streamPath}>
                   <SidebarMenuButton
-                    render={
-                      <a
-                        href={agent.streamViewerUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        aria-label={`Open stream ${agent.streamPath}`}
-                      />
-                    }
+                    isActive={agent.streamPath === selectedStreamPath}
+                    onClick={() => onSelectStreamPath(StreamPath.parse(agent.streamPath))}
+                    render={<button type="button" aria-label={`Open stream ${agent.streamPath}`} />}
                   >
                     <div className="grid min-w-0 flex-1 text-left leading-tight">
                       <span className="truncate font-medium">{agent.streamPath}</span>

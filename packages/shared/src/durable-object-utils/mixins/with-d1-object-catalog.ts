@@ -72,7 +72,7 @@ type WithD1ObjectCatalogResult<
  * Best-effort D1 catalog for initialized Durable Objects.
  *
  * This is intentionally implemented as a lifecycle-hooks consumer: it registers
- * an `onStart` hook, then starts a separately caught D1 write so startup does
+ * an instance wake hook, then starts a separately caught D1 write so startup does
  * not depend on an external database. Local Durable Object storage remains the
  * source of truth; D1 is only for discovery and cross-object lookup.
  *
@@ -101,7 +101,7 @@ export function withD1ObjectCatalog<InitParams extends LifecycleInit, Env>(optio
       constructor(...args: any[]) {
         super(...args);
 
-        this.registerOnStart((params) => {
+        this.registerOnInstanceWake((params) => {
           this.scheduleD1ObjectCatalogUpsert(params);
         });
       }
@@ -257,9 +257,9 @@ async function upsertD1ObjectCatalog<InitParams extends LifecycleInit>(input: {
 
   // Idempotent bootstrap + upsert: every write can create both mixin-owned
   // tables, then replace the `(class, name)` row and the derived index rows.
-  // Constructors stay cheap because this happens from the lifecycle start hook,
-  // outside the startup readiness boundary. `created_at` remains the first insertion time;
-  // `last_started_at` moves whenever the object starts and the hook runs.
+  // Constructors stay cheap because this happens from the lifecycle instance
+  // wake hook, outside the startup readiness boundary. `created_at` remains the
+  // first insertion time; `last_started_at` moves whenever the hook runs.
   await input.db.batch([
     input.db.prepare(CREATE_D1_OBJECT_CATALOG_OBJECTS_TABLE_SQL),
     input.db.prepare(CREATE_D1_OBJECT_CATALOG_INDEXES_TABLE_SQL),

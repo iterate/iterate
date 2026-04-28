@@ -14,13 +14,17 @@ import {
   DropdownMenuTrigger,
 } from "@iterate-com/ui/components/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
+import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { streamPathFromPathname } from "~/lib/stream-links.ts";
 import { streamRendererModeOptions, type StreamRendererMode } from "~/lib/stream-feed-types.ts";
 import type { StreamFeedSummary } from "~/lib/stream-feed-summary.ts";
+import { type StreamFeedViewMode } from "~/lib/stream-view-search.ts";
 
 type StreamHeaderControls = {
   rendererMode: StreamRendererMode;
   onRendererModeChange?: (mode: StreamRendererMode) => void;
+  feedViewMode: StreamFeedViewMode;
+  onFeedViewModeChange?: (mode: StreamFeedViewMode) => void;
   feedSummary?: StreamFeedSummary;
 };
 
@@ -100,6 +104,22 @@ export function StreamsHeaderAction() {
           </Badge>
         </div>
       ) : null}
+      <Tabs
+        value={headerControls.feedViewMode}
+        onValueChange={(value) =>
+          headerControls.onFeedViewModeChange?.(value as StreamFeedViewMode)
+        }
+      >
+        <TabsList className="h-8">
+          <TabsTrigger value="current" className="px-2 text-xs">
+            Current
+          </TabsTrigger>
+          <TabsTrigger value="clean" className="px-2 text-xs">
+            Clean
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
+
       {/* shadcn/ui's Dropdown Menu radio group is a better fit than Select here
           because the options need short explanations, not just terse labels.
           First-party docs: https://github.com/shadcn-ui/ui/blob/main/apps/v4/content/docs/components/base/dropdown-menu.mdx */}

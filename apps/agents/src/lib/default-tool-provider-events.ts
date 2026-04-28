@@ -1,23 +1,17 @@
+import type { Callable } from "@iterate-com/shared/callable/types.ts";
+
 function rpcCallable(
-  binding: string,
+  bindingName: string,
   durableObjectName: string,
   method: "callTool" | "getTypes",
-): {
-  kind: "rpc";
-  target: {
-    type: "durable-object";
-    binding: { $binding: string };
-    address: { type: "name"; name: string };
-  };
-  rpcMethod: string;
-  argsMode: "object";
-} {
+): Extract<Callable, { type: "workers-rpc" }> {
   return {
-    kind: "rpc",
-    target: {
-      type: "durable-object",
-      binding: { $binding: binding },
-      address: { type: "name", name: durableObjectName },
+    type: "workers-rpc",
+    via: {
+      type: "env-binding",
+      bindingType: "durable-object-namespace",
+      bindingName,
+      durableObject: { name: durableObjectName },
     },
     rpcMethod: method,
     argsMode: "object",

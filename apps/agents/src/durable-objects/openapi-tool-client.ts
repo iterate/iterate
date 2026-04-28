@@ -3,6 +3,7 @@ import { ProjectSlug } from "@iterate-com/events-contract";
 import { parseAppConfig } from "@iterate-com/shared/apps/config";
 import { getProjectUrl } from "../../../events/src/lib/project-slug.ts";
 import { AppConfig } from "~/app.ts";
+import { workerReachableLocalUrl } from "~/lib/events-urls.ts";
 import type { CloudflareEnv } from "~/lib/worker-env.d.ts";
 import { createOpenApiToolProvider } from "~/lib/openapi-tool-provider.ts";
 
@@ -14,7 +15,8 @@ const ITERATE_EVENTS_OPERATION_IDS = [
 
 /**
  * Callable-backed DO exposing Iterate Events OpenAPI operations as codemode tools,
- * wired from presets via {@link import("~/lib/callable.ts").Callable} RPC refs.
+ * wired from presets via
+ * {@link import("@iterate-com/shared/callable/types.ts").Callable} RPC refs.
  */
 
 interface GetTypesPayload {
@@ -42,11 +44,12 @@ export class OpenApiToolClient extends DurableObject<CloudflareEnv> {
     })
       .toString()
       .replace(/\/+$/, "");
+    const eventsFetchOrigin = workerReachableLocalUrl(eventsOrigin).replace(/\/+$/, "");
     this.#providerPromise = state.blockConcurrencyWhile(() =>
       createOpenApiToolProvider({
         name: "iterate_events",
-        spec: `${eventsOrigin}/api/openapi.json`,
-        baseUrl: `${eventsOrigin}/api/`,
+        spec: `${eventsFetchOrigin}/api/openapi.json`,
+        baseUrl: `${eventsFetchOrigin}/api/`,
         operationIds: ITERATE_EVENTS_OPERATION_IDS,
         fetch: globalThis.fetch.bind(globalThis),
       }),

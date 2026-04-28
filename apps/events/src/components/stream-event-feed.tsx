@@ -96,6 +96,7 @@ type StreamLinkSearch = {
   composer?: string;
   event?: number;
   renderer?: string;
+  view?: string;
   [key: string]: unknown;
 };
 
@@ -373,6 +374,7 @@ function ChildStreamCreatedCard({ item }: { item: ChildStreamCreatedFeedItem }) 
             event: undefined,
             composer: previous.composer ?? defaultStreamViewSearch.composer,
             renderer: previous.renderer ?? defaultStreamViewSearch.renderer,
+            view: previous.view ?? defaultStreamViewSearch.view,
           })}
           className="block min-w-0 max-w-full text-foreground hover:text-primary hover:underline"
         >

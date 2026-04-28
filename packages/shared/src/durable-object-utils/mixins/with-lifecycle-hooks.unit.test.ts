@@ -178,10 +178,10 @@ describe("withLifecycleHooks", () => {
     await expect(room.getLifecycleHookState()).resolves.toEqual({
       firstInitializeRuns: 1,
       firstInitializeOwnerUserId: "user-hook",
-      startRuns: 1,
-      startStarted: true,
-      startFinished: true,
-      startFailedOnce: false,
+      instanceWakeRuns: 1,
+      instanceWakeStarted: true,
+      instanceWakeFinished: true,
+      instanceWakeFailedOnce: false,
     });
   });
 
@@ -218,11 +218,11 @@ describe("withLifecycleHooks", () => {
 
     await expect(room.getLifecycleHookState()).resolves.toMatchObject({
       firstInitializeRuns: 1,
-      startRuns: 1,
+      instanceWakeRuns: 1,
     });
   });
 
-  it("retries start hooks after a startup failure", async () => {
+  it("retries instance wake hooks after a startup failure", async () => {
     const room = testEnv.ROOMS.getByName("unit-room-hook-fails-once");
 
     await expect(
@@ -233,15 +233,15 @@ describe("withLifecycleHooks", () => {
     ).resolves.toMatchObject({
       kind: "error",
       name: "Error",
-      message: "start hook failed once",
+      message: "instance wake hook failed once",
     });
 
     await expect(room.getLifecycleHookState()).resolves.toMatchObject({
       firstInitializeRuns: 1,
-      startRuns: 1,
-      startStarted: true,
-      startFinished: false,
-      startFailedOnce: true,
+      instanceWakeRuns: 1,
+      instanceWakeStarted: true,
+      instanceWakeFinished: false,
+      instanceWakeFailedOnce: true,
     });
 
     await expect(
@@ -257,14 +257,14 @@ describe("withLifecycleHooks", () => {
     await expect(room.getLifecycleHookState()).resolves.toEqual({
       firstInitializeRuns: 1,
       firstInitializeOwnerUserId: "user-fails-once",
-      startRuns: 2,
-      startStarted: true,
-      startFinished: true,
-      startFailedOnce: true,
+      instanceWakeRuns: 2,
+      instanceWakeStarted: true,
+      instanceWakeFinished: true,
+      instanceWakeFailedOnce: true,
     });
   });
 
-  it("treats throw undefined from a start hook as a real startup failure", async () => {
+  it("treats throw undefined from an instance wake hook as a real startup failure", async () => {
     const room = testEnv.ROOMS.getByName("unit-room-hook-throws-undefined");
 
     await expect(
@@ -280,9 +280,9 @@ describe("withLifecycleHooks", () => {
 
     await expect(room.getLifecycleHookState()).resolves.toMatchObject({
       firstInitializeRuns: 1,
-      startRuns: 1,
-      startStarted: true,
-      startFinished: false,
+      instanceWakeRuns: 1,
+      instanceWakeStarted: true,
+      instanceWakeFinished: false,
     });
 
     await expect(room.tryEnsureReady()).resolves.toEqual({
@@ -293,9 +293,9 @@ describe("withLifecycleHooks", () => {
 
     await expect(room.getLifecycleHookState()).resolves.toMatchObject({
       firstInitializeRuns: 1,
-      startRuns: 2,
-      startStarted: true,
-      startFinished: false,
+      instanceWakeRuns: 2,
+      instanceWakeStarted: true,
+      instanceWakeFinished: false,
     });
   });
 });

@@ -45,16 +45,16 @@ export const streamInitializedPage = {
   ],
 } satisfies EventTypePageDefinition;
 
-export const streamDurableObjectConstructedPage = {
-  slug: "stream-durable-object-constructed",
-  href: "/stream-durable-object-constructed/",
-  title: "Stream Durable Object Constructed",
-  type: "https://events.iterate.com/events/stream/durable-object-constructed",
+export const streamDurableObjectWokeUpPage = {
+  slug: "stream-durable-object-woke-up",
+  href: "/stream-durable-object-woke-up/",
+  title: "Stream Durable Object Woke Up",
+  type: "https://events.iterate.com/events/stream/durable-object-woke-up",
   summary:
     "Internal meta event emitted when a previously initialized stream durable object wakes and reconstructs itself from persisted state.",
   payloadExample: {},
   details: [
-    "This only appears after the durable object constructor rehydrates an already initialized stream from SQLite state.",
+    "This only appears after a durable object instance wakes and rehydrates an already initialized stream from SQLite state.",
     "Fresh streams do not emit it on first initialize because there is no prior reduced state to rehydrate.",
     "It is useful when debugging durable object cold starts, hibernation, and resume behavior.",
   ],
@@ -748,7 +748,7 @@ export const eventTypePages = [
   scheduleExecutionFinishedPage,
   scheduleExecutionStartedPage,
   streamAppendScheduledPage,
-  streamDurableObjectConstructedPage,
+  streamDurableObjectWokeUpPage,
   streamInitializedPage,
   streamMetadataUpdatedPage,
   streamPausedPage,

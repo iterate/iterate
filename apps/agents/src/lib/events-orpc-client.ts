@@ -3,6 +3,7 @@ import { createORPCClient } from "@orpc/client";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { ProjectSlug, eventsContract } from "@iterate-com/events-contract";
 import { getProjectUrl } from "../../../events/src/lib/project-slug.ts";
+import { workerReachableLocalUrl } from "~/lib/events-urls.ts";
 
 export type EventsOrpcClient = ContractRouterClient<typeof eventsContract>;
 
@@ -16,10 +17,11 @@ export function createEventsOrpcClient(options: {
   })
     .toString()
     .replace(/\/+$/, "");
+  const fetchOrigin = workerReachableLocalUrl(projectOrigin).replace(/\/+$/, "");
 
   return createORPCClient(
     new OpenAPILink(eventsContract, {
-      url: new URL("/api", projectOrigin).toString(),
+      url: new URL("/api", fetchOrigin).toString(),
       // Bare `fetch` loses the correct `this` when OpenAPILink invokes it (Workers illegal invocation).
       fetch: (input, init) => globalThis.fetch(input, init),
     }),

@@ -247,8 +247,9 @@ init params or payloads must also round-trip through JSON.
 - `registerOnFirstInitialize(fn)` runs after params are created for the first
   time. Completion is marked in the Durable Object's own storage. Hooks can
   retry after failure, so external side effects must still be idempotent.
-- `registerOnStart(fn)` runs once per Durable Object activation, after params
-  exist and after first-initialize hooks have completed.
+- `registerOnInstanceWake(fn)` runs once for each successful JavaScript
+  Durable Object instance wake, after params exist and after first-initialize
+  hooks have completed.
 
 Both hook types are protected so only subclasses and later mixins can register
 them. They should be registered in constructors so the full hook list exists
@@ -263,8 +264,8 @@ class Room extends RoomBase<Env> {
       await this.createInitialIndexes(params);
     });
 
-    this.registerOnStart((params) => {
-      this.ctx.storage.kv.put("last-started-room", params.name);
+    this.registerOnInstanceWake((params) => {
+      this.ctx.storage.kv.put("last-woken-room", params.name);
     });
   }
 }
@@ -272,12 +273,12 @@ class Room extends RoomBase<Env> {
 
 Hooks are awaited by `initialize()` and `ensureStarted()` by default. That makes
 `ensureStarted()` an honest readiness boundary: after it resolves, params exist,
-first-initialize hooks have completed, and start hooks have completed. If work
-is only a best-effort mirror or log, start a separate caught promise and return
-quickly:
+first-initialize hooks have completed, and instance wake hooks have completed.
+If work is only a best-effort mirror or log, start a separate caught promise and
+return quickly:
 
 ```ts
-this.registerOnStart((params) => {
+this.registerOnInstanceWake((params) => {
   void this.updateExternalIndex(params).catch((error) => {
     console.error("failed to update external index", error);
   });
@@ -289,11 +290,11 @@ that it has no effect in Durable Objects; DOs remain active while there is
 ongoing work or pending I/O. The important part is catching the detached promise
 so best-effort work cannot become an unhandled rejection.
 
-Start hooks are retryable until the whole startup gate succeeds. If one start
-hook writes to an external system and a later start hook fails, the earlier hook
-may run again on the next `ensureStarted()` attempt. Treat start hooks as
-at-least-once work unless they only mutate local Durable Object storage inside
-the same startup gate.
+Instance wake hooks are retryable until the whole startup gate succeeds. If one
+instance wake hook writes to an external system and a later instance wake hook
+fails, the earlier hook may run again on the next `ensureStarted()` attempt.
+Treat instance wake hooks as at-least-once work unless they only mutate local
+Durable Object storage inside the same startup gate.
 
 `registerOnFirstInitialize()` is not a distributed exactly-once guarantee. It
 marks completion in the Durable Object after the hook succeeds. If the hook
@@ -338,7 +339,7 @@ The D1 write is best-effort and idempotent. The mixin sends
 batch as each upsert, so object construction does not block on catalog-table
 setup.
 
-Catalog writes happen from the lifecycle start hook as a detached, caught
+Catalog writes happen from the lifecycle instance wake hook as a detached, caught
 promise. That is deliberate: this mixin is just a consumer of
 `withLifecycleHooks()`, not a separate lifecycle system. The Durable Object's
 local initialization remains the source of truth, and D1 is only a
@@ -350,7 +351,7 @@ tables do not exist yet. It never uses
 throws in Worker runtimes.
 
 The object row is keyed by `(class, name)`. `created_at` is the first insert
-time, while `last_started_at` is updated whenever the start hook runs. Init
+time, while `last_started_at` is updated whenever the instance wake hook runs. Init
 params used with this mixin must be JSON-compatible by convention because the D1
 mirror stores them as JSON text. `JSON.stringify()` catches some failures, such
 as circular references and `BigInt`, but it can silently drop or coerce nested
@@ -401,7 +402,7 @@ platform alarm is always armed for the earliest row.
 
 This mixin requires `withLifecycleHooks()` below it. Scheduling and dispatch
 call `ensureStarted()`, so logical alarms only run after initialization,
-first-initialize hooks, and start hooks have completed. The diagnostic read
+first-initialize hooks, and instance wake hooks have completed. The diagnostic read
 `getMultiplexedAlarms()` intentionally does not require initialization because
 seeing alarm rows on an uninitialized object is useful debugging evidence.
 
@@ -437,7 +438,7 @@ cancel rows; external callers can only inspect rows through
 `getMultiplexedAlarms()` unless the object exposes its own public method.
 
 `key` is a stable idempotency key. Scheduling the same key again replaces the
-existing row, which makes it safe to call from `registerOnStart()` without
+existing row, which makes it safe to call from `registerOnInstanceWake()` without
 creating duplicates on every Durable Object activation.
 
 `method` is a string on purpose. TypeScript cannot reflect protected instance
@@ -504,10 +505,10 @@ verbose, but it keeps the recurrence semantics explicit and follows this repo's
 rule to prefer options bags when positional parameters are easy to confuse.
 
 Every schedule has a required `key`. Reusing the same key replaces the existing
-schedule, so calls from `registerOnStart()` are idempotent by default:
+schedule, so calls from `registerOnInstanceWake()` are idempotent by default:
 
 ```ts
-this.registerOnStart(() =>
+this.registerOnInstanceWake(() =>
   this.schedule({
     key: "poll-api",
     method: "pollAPI",

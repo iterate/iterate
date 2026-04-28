@@ -28,6 +28,8 @@
     "./durable-object-utils/mixins/with-scheduler": "./src/durable-object-utils/mixins/with-scheduler.ts",
     "./durable-object-utils/mixins/with-kv-inspector": "./src/durable-object-utils/mixins/with-kv-inspector.ts",
     "./durable-object-utils/mixins/with-outerbase": "./src/durable-object-utils/mixins/with-outerbase.ts",
+    "./stream-processors": "./src/stream-processors/stream-processor.ts",
+    "./stream-processors/types": "./src/stream-processors/types.ts",
     "./request-logging": "./src/request-logging.ts",
     "./slugify": "./src/slugify.ts",
     "./typeid": "./src/typeid.ts",
@@ -72,11 +74,12 @@
   "scripts": {
     "typecheck": "tsc --noEmit && pnpm typecheck:callable",
     "typecheck:callable": "tsc -p src/callable/tsconfig.vitest.json --noEmit",
-    "test": "vitest run --environment node src/jonasland/ingress-url.test.ts && pnpm test:callable && pnpm test:durable-object-utils",
+    "test": "vitest run --environment node src/jonasland/ingress-url.test.ts && pnpm test:callable && pnpm test:durable-object-utils && pnpm test:stream-processors",
     "test:callable": "vitest run --config src/callable/vitest.config.ts",
     "test:durable-object-utils": "pnpm test:durable-object-utils:type && pnpm test:durable-object-utils:unit",
     "test:durable-object-utils:type": "vitest run --config ./src/durable-object-utils/vitest.type.config.ts --typecheck.only",
     "test:durable-object-utils:unit": "vitest run --config ./src/durable-object-utils/vitest.unit.config.ts",
+    "test:stream-processors": "vitest run src/stream-processors/stream-processor.test.ts && vitest run --config ./src/stream-processors/vitest.type.config.ts --typecheck.only",
     "test:durable-object-utils:e2e": "node -e \"if (!process.env.DURABLE_OBJECT_UTILS_E2E_BASE_URL) { console.error('DURABLE_OBJECT_UTILS_E2E_BASE_URL is required'); process.exit(1); }\" && vitest run --config ./src/durable-object-utils/e2e/vitest.config.ts",
     "test:durable-object-utils:e2e:deploy": "tsx ./src/durable-object-utils/e2e/run-test-deployment.ts",
     "deploy:durable-object-utils:e2e": "sh -c 'stage=\"${ALCHEMY_STAGE:-do-utils-e2e}\"; ALCHEMY_STAGE=\"$stage\" pnpm exec alchemy deploy ./src/durable-object-utils/e2e/alchemy.run.ts --stage \"$stage\"'"

@@ -16,8 +16,8 @@ import {
   CodemodeResultAddedEventInput,
   ToolProviderConfigUpdatedEvent,
 } from "./codemode-processor-types.ts";
-import type { Callable } from "~/lib/callable.ts";
-import { dispatchCallable } from "~/lib/callable.ts";
+import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
+import type { Callable } from "@iterate-com/shared/callable/types.ts";
 import type { CloudflareEnv } from "~/lib/worker-env.d.ts";
 
 /** Wire shape returned by a `ToolProviderConfig.getTypesCallable`. */
@@ -86,7 +86,7 @@ async function safeGetTypes(args: {
   if (getTypesCallable == null) return { kind: "missing" };
   try {
     const { types } = ProviderTypesResponse.parse(
-      await dispatchCallable<unknown>({
+      await dispatchCallable({
         callable: getTypesCallable,
         payload: { namespace: slug },
         ctx: { env: env as unknown as Record<string, unknown> },

@@ -7,8 +7,11 @@ import {
 
 export const streamComposerModes = ["json", "yaml", "agent"] as const;
 const DEFAULT_STREAM_COMPOSER_MODE = "json" as const;
+export const streamFeedViewModes = ["current", "clean"] as const;
+const DEFAULT_STREAM_FEED_VIEW_MODE = "current" as const;
 
 export type StreamComposerMode = (typeof streamComposerModes)[number];
+export type StreamFeedViewMode = (typeof streamFeedViewModes)[number];
 
 // Keep stream view state in the route search params so renderer choice and the
 // currently open event sheet are shareable deep links instead of local UI state.
@@ -20,18 +23,21 @@ export type StreamComposerMode = (typeof streamComposerModes)[number];
 const StreamViewSearch = z.object({
   renderer: z.enum(streamRendererModes).optional(),
   composer: z.enum(streamComposerModes).optional(),
+  view: z.enum(streamFeedViewModes).optional(),
   event: z.coerce.number().int().positive().optional(),
 });
 
 type StreamViewSearch = {
   renderer: StreamRendererMode;
   composer: StreamComposerMode;
+  view: StreamFeedViewMode;
   event: number | undefined;
 };
 
 export const defaultStreamViewSearch: StreamViewSearch = {
   renderer: DEFAULT_STREAM_RENDERER_MODE,
   composer: DEFAULT_STREAM_COMPOSER_MODE,
+  view: DEFAULT_STREAM_FEED_VIEW_MODE,
   event: undefined,
 };
 
@@ -47,6 +53,9 @@ export function validateStreamViewSearch(search: unknown): StreamViewSearch {
     composer: result.success
       ? (result.data.composer ?? defaultStreamViewSearch.composer)
       : defaultStreamViewSearch.composer,
+    view: result.success
+      ? (result.data.view ?? defaultStreamViewSearch.view)
+      : defaultStreamViewSearch.view,
     event: result.success ? result.data.event : defaultStreamViewSearch.event,
   };
 }

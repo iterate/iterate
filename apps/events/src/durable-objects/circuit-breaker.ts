@@ -61,7 +61,7 @@ export const circuitBreakerProcessor = defineBuiltinProcessor<CircuitBreakerStat
   beforeAppend({ event, state }) {
     if (!state.paused) return;
     if (event.type === "https://events.iterate.com/events/stream/resumed") return;
-    if (event.type === "https://events.iterate.com/events/stream/durable-object-constructed") {
+    if (event.type === "https://events.iterate.com/events/stream/durable-object-woke-up") {
       return;
     }
     throw new StreamPausedError();

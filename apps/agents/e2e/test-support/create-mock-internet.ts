@@ -9,6 +9,10 @@ import {
 } from "@iterate-com/mock-http-proxy";
 import { getProjectUrl } from "../../../events/src/lib/project-slug.ts";
 import { mcpStreamableHttpGetStubHandlers } from "./mcp-streamable-http-get-stub-handlers.ts";
+import {
+  mcpStreamableHttpPostHarHandlers,
+  withoutMcpStreamableHttpPostEntries,
+} from "./mcp-streamable-http-post-har-handlers.ts";
 import { prepareAgentsHarForReplay } from "./prepare-agents-har-for-replay.ts";
 
 interface MockInternetHandle {
@@ -46,7 +50,11 @@ export async function createMockInternet(opts: {
     ).hostname;
     const harRaw = JSON.parse(await readFile(opts.harPath, "utf8")) as HarWithExtensions;
     const har = prepareAgentsHarForReplay(harRaw, eventsProjectHostname);
-    mockServer.use(...fromTrafficWithWebSocket(har), ...mcpStreamableHttpGetStubHandlers);
+    mockServer.use(
+      ...fromTrafficWithWebSocket(withoutMcpStreamableHttpPostEntries(har)),
+      ...mcpStreamableHttpPostHarHandlers(har),
+      ...mcpStreamableHttpGetStubHandlers,
+    );
   }
 
   if (recordHar) {

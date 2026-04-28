@@ -1,4 +1,5 @@
 import type { GenericEventInput } from "@iterate-com/events-contract";
+import type { Callable } from "@iterate-com/shared/callable/types.ts";
 import { describe, expect, test, vi } from "vitest";
 import {
   AgentInputAddedEventInput,
@@ -58,6 +59,35 @@ function createProcessorForTests() {
     outboundFetch: unreachable("outboundFetch"),
     env: unreachable("env"),
   });
+}
+
+function durableObjectRpcCallable(args: {
+  bindingName: string;
+  durableObjectName: string;
+  rpcMethod: string;
+}): Callable {
+  return {
+    type: "workers-rpc",
+    via: {
+      type: "env-binding",
+      bindingType: "durable-object-namespace",
+      bindingName: args.bindingName,
+      durableObject: { name: args.durableObjectName },
+    },
+    rpcMethod: args.rpcMethod,
+    argsMode: "object",
+  };
+}
+
+function serviceFetchCallable(bindingName: string): Callable {
+  return {
+    type: "fetch",
+    via: {
+      type: "env-binding",
+      bindingType: "service",
+      bindingName,
+    },
+  };
 }
 
 /** Skip primer emission in `afterAppend` — for agent-loop-only assertions. */
@@ -302,26 +332,16 @@ describe("agent-processor / reduce", () => {
 
   test("tool-provider-config-updated upserts and null-deletes by slug", () => {
     const processor = createProcessorForTests();
-    const exec = {
-      kind: "rpc" as const,
-      target: {
-        type: "durable-object" as const,
-        binding: { $binding: "MCP_CLIENT" },
-        address: { type: "name" as const, name: "cloudflare-docs" },
-      },
+    const exec = durableObjectRpcCallable({
+      bindingName: "MCP_CLIENT",
+      durableObjectName: "cloudflare-docs",
       rpcMethod: "callTool",
-      argsMode: "object" as const,
-    };
-    const types = {
-      kind: "rpc" as const,
-      target: {
-        type: "durable-object" as const,
-        binding: { $binding: "MCP_CLIENT" },
-        address: { type: "name" as const, name: "cloudflare-docs" },
-      },
+    });
+    const types = durableObjectRpcCallable({
+      bindingName: "MCP_CLIENT",
+      durableObjectName: "cloudflare-docs",
       rpcMethod: "getTypes",
-      argsMode: "object" as const,
-    };
+    });
     const upserted = processor.reduce({
       state: processor.initialState,
       event: asEvent(
@@ -1186,16 +1206,11 @@ describe("agent-processor / codemode primer + provider explainer", () => {
   test("tool-provider-config-updated upsert without getTypesCallable says the API surface is missing", async () => {
     const processor = createProcessorForTests();
     const { runtime } = createTestRuntime();
-    const exec = {
-      kind: "rpc" as const,
-      target: {
-        type: "durable-object" as const,
-        binding: { $binding: "MCP_CLIENT" },
-        address: { type: "name" as const, name: "cloudflare-docs" },
-      },
+    const exec = durableObjectRpcCallable({
+      bindingName: "MCP_CLIENT",
+      durableObjectName: "cloudflare-docs",
       rpcMethod: "callTool",
-      argsMode: "object" as const,
-    };
+    });
     const upsert = asEvent(
       ToolProviderConfigUpdatedEventInput.parse({
         type: "tool-provider-config-updated",
@@ -1244,14 +1259,8 @@ describe("agent-processor / codemode primer + provider explainer", () => {
       } as CloudflareEnv,
     });
     const { runtime } = createTestRuntime();
-    const getTypesCallable = {
-      kind: "fetch" as const,
-      target: { type: "service" as const, binding: { $binding: "MOCK_TYPES" } },
-    };
-    const executeCallable = {
-      kind: "fetch" as const,
-      target: { type: "service" as const, binding: { $binding: "MOCK_EXEC" } },
-    };
+    const getTypesCallable = serviceFetchCallable("MOCK_TYPES");
+    const executeCallable = serviceFetchCallable("MOCK_EXEC");
     const upsert = asEvent(
       ToolProviderConfigUpdatedEventInput.parse({
         type: "tool-provider-config-updated",
@@ -1296,14 +1305,8 @@ describe("agent-processor / codemode primer + provider explainer", () => {
       } as CloudflareEnv,
     });
     const { runtime } = createTestRuntime();
-    const getTypesCallable = {
-      kind: "fetch" as const,
-      target: { type: "service" as const, binding: { $binding: "MOCK_TYPES" } },
-    };
-    const executeCallable = {
-      kind: "fetch" as const,
-      target: { type: "service" as const, binding: { $binding: "MOCK_EXEC" } },
-    };
+    const getTypesCallable = serviceFetchCallable("MOCK_TYPES");
+    const executeCallable = serviceFetchCallable("MOCK_EXEC");
     const upsert = asEvent(
       ToolProviderConfigUpdatedEventInput.parse({
         type: "tool-provider-config-updated",
@@ -1331,16 +1334,11 @@ describe("agent-processor / codemode primer + provider explainer", () => {
   test("tool-provider-config-updated delete does not emit provider explainer", async () => {
     const processor = createProcessorForTests();
     const { runtime } = createTestRuntime();
-    const exec = {
-      kind: "rpc" as const,
-      target: {
-        type: "durable-object" as const,
-        binding: { $binding: "MCP_CLIENT" },
-        address: { type: "name" as const, name: "cloudflare-docs" },
-      },
+    const exec = durableObjectRpcCallable({
+      bindingName: "MCP_CLIENT",
+      durableObjectName: "cloudflare-docs",
       rpcMethod: "callTool",
-      argsMode: "object" as const,
-    };
+    });
     let s = processor.reduce({
       state: stateWithPrimerAlreadyApplied(processor),
       event: asEvent(

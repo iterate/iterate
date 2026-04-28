@@ -10,11 +10,10 @@ type JsonSchema = JsonSchemaToolDescriptors[string]["inputSchema"];
  * instance opens its own connection during the first concurrent block of
  * the constructor and caches the tools list.
  *
- * Designed to be addressed via a {@link import("~/lib/callable.ts").Callable}
- * (`{ kind: "rpc", target: { type: "durable-object", binding: { $binding:
- * "MCP_CLIENT" }, address: { ... } }, rpcMethod: "callTool" | "getTypes" }`)
- * so that codemode tool providers can be registered and invoked entirely
- * via JSON-serialisable references.
+ * Designed to be addressed via a
+ * {@link import("@iterate-com/shared/callable/types.ts").Callable} so that
+ * codemode tool providers can be registered and invoked entirely via
+ * JSON-serialisable references.
  *
  * The transport here is a minimal `fetch`-based JSON-RPC over Streamable
  * HTTP (servers reply either with `application/json` or a single-event
@@ -117,11 +116,23 @@ export class MCPClient extends DurableObject<CloudflareEnv> {
       capabilities: {},
       clientInfo: { name: "iterate-mcp-client", version: "0.0.1" },
     });
-    // Stateless `notifications/initialized` is a fire-and-forget formality;
-    // skipped here because the docs server doesn't require it. Add when
-    // we encounter a server that does.
+    await this.#notify("notifications/initialized", {});
     const list = await this.#rpc<{ tools: McpToolListEntry[] }>("tools/list", {});
     return list.tools ?? [];
+  }
+
+  async #notify(method: string, params: Record<string, unknown>): Promise<void> {
+    const response = await fetch(MCP_SERVER_URL, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", method, params }),
+    });
+    if (!response.ok) {
+      throw new Error(`MCP ${method} HTTP ${response.status}: ${await response.text()}`);
+    }
   }
 
   async #rpc<T>(method: string, params: Record<string, unknown>): Promise<T> {

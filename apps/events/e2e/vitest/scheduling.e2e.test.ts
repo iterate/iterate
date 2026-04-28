@@ -33,8 +33,7 @@ const pollIntervalMs = 1_000;
 const scheduleDelaySeconds = 5;
 const settleAfterFireMs = 8_000;
 const waitForAlarmTimeoutMs = 90_000;
-const durableObjectConstructedType =
-  "https://events.iterate.com/events/stream/durable-object-constructed";
+const durableObjectWokeUpType = "https://events.iterate.com/events/stream/durable-object-woke-up";
 
 describeDeployedScheduling("events scheduling e2e", () => {
   test("append-scheduled fires within 10 seconds when scheduled for 5 seconds from now", async () => {
@@ -236,7 +235,7 @@ async function readHistory(path: StreamPath) {
   return events.filter(
     (event) =>
       !(
-        event.type === durableObjectConstructedType ||
+        event.type === durableObjectWokeUpType ||
         (event.type === "https://events.iterate.com/events/stream/initialized" &&
           event.streamPath === path &&
           getPayloadPath(event) === path)

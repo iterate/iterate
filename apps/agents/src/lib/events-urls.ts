@@ -14,6 +14,20 @@ function projectOrigin(args: { eventsBaseUrl: string; projectSlug: ProjectSlug }
     .replace(/\/+$/, "");
 }
 
+/**
+ * Browser URLs should stay human-friendly (`localhost`), but local workerd
+ * outbound fetches to `localhost:<port>` can resolve back into the current
+ * app instead of the sibling dev server. IPv6 loopback reaches the host-bound
+ * service consistently in local dev while leaving preview/prod URLs untouched.
+ */
+export function workerReachableLocalUrl(rawUrl: string): string {
+  const url = new URL(rawUrl);
+  if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
+    url.hostname = "[::1]";
+  }
+  return url.toString();
+}
+
 /** Human-readable stream viewer URL (matches the e2e helper in `test-support/events-stream-helpers`). */
 export function buildStreamViewerUrl(args: {
   eventsBaseUrl: string;
@@ -83,6 +97,9 @@ export function buildAgentWebSocketCallbackUrl(args: {
   agentInstance: string;
 }): string {
   const url = new URL(args.publicOrigin);
+  if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
+    url.hostname = "[::1]";
+  }
   url.protocol = url.protocol === "http:" || isLocalhost(url.hostname) ? "ws:" : "wss:";
   url.pathname = `/agents/${args.agentClass}/${args.agentInstance}`;
   url.search = "";
@@ -91,5 +108,10 @@ export function buildAgentWebSocketCallbackUrl(args: {
 }
 
 function isLocalhost(hostname: string) {
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "::1" ||
+    hostname === "[::1]"
+  );
 }

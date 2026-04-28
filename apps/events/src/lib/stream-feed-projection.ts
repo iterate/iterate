@@ -214,7 +214,7 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     };
   }
 
-  if (event.type === "https://events.iterate.com/events/stream/durable-object-constructed") {
+  if (event.type === "https://events.iterate.com/events/stream/durable-object-woke-up") {
     return {
       kind: "stream-lifecycle",
       label: "Durable object woke up",

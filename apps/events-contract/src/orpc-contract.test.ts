@@ -307,25 +307,25 @@ assert.deepEqual(subscriptionConfiguredEvent.event.payload, {
   jsonataTransform: '{"kind":"hook"}',
 });
 
-const streamDurableObjectConstructedEvent = AppendInput.parse({
+const streamDurableObjectWokeUpEvent = AppendInput.parse({
   path: examplePath,
   event: {
-    type: "https://events.iterate.com/events/stream/durable-object-constructed",
+    type: "https://events.iterate.com/events/stream/durable-object-woke-up",
     payload: {},
   },
 });
 
-assert.deepEqual(streamDurableObjectConstructedEvent.event.payload, {});
+assert.deepEqual(streamDurableObjectWokeUpEvent.event.payload, {});
 
-const durableObjectConstructedEvent = AppendInput.parse({
+const durableObjectWokeUpEvent = AppendInput.parse({
   path: examplePath,
   event: {
-    type: "https://events.iterate.com/events/stream/durable-object-constructed",
+    type: "https://events.iterate.com/events/stream/durable-object-woke-up",
     payload: {},
   },
 });
 
-assert.deepEqual(durableObjectConstructedEvent.event.payload, {});
+assert.deepEqual(durableObjectWokeUpEvent.event.payload, {});
 
 const appendScheduledEvent = AppendInput.parse({
   path: examplePath,

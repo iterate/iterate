@@ -201,17 +201,14 @@ export class StreamDurableObject extends DurableObject<Env> {
 
         try {
           this.append({
-            type: "https://events.iterate.com/events/stream/durable-object-constructed",
+            type: "https://events.iterate.com/events/stream/durable-object-woke-up",
             payload: {},
           });
         } catch (error) {
-          console.error(
-            "[stream-do] failed to append durable-object-constructed after rehydration",
-            {
-              path: parsed.data.path,
-              error,
-            },
-          );
+          console.error("[stream-do] failed to append durable-object-woke-up after rehydration", {
+            path: parsed.data.path,
+            error,
+          });
           throw error;
         }
         return;

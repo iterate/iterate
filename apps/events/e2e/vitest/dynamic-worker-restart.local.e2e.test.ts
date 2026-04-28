@@ -62,7 +62,7 @@ describeLocalRestart("dynamic worker restart", () => {
         path,
         totalEvents: 10,
         counts: {
-          "https://events.iterate.com/events/stream/durable-object-constructed": 1,
+          "https://events.iterate.com/events/stream/durable-object-woke-up": 1,
           [configuredEventType]: 2,
           [valueRecordedEventType]: 2,
           pong: 2,
@@ -134,7 +134,7 @@ describeLocalRestart("dynamic worker restart", () => {
         path,
         totalEvents: 10,
         counts: {
-          "https://events.iterate.com/events/stream/durable-object-constructed": 1,
+          "https://events.iterate.com/events/stream/durable-object-woke-up": 1,
           [configuredEventType]: 2,
           [valueRecordedEventType]: 3,
           pong: 1,

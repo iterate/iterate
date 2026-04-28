@@ -31,8 +31,7 @@ const intervalFireDelayMs = 12_000;
 const idleGapDelayMs = 75_000;
 const wakeCanaryIdleGapMs = 180_000;
 const wakeCanaryFutureDelaySeconds = 600;
-const durableObjectConstructedType =
-  "https://events.iterate.com/events/stream/durable-object-constructed";
+const durableObjectWokeUpType = "https://events.iterate.com/events/stream/durable-object-woke-up";
 
 describeDeployedScheduling("events recurring/restart scheduling e2e", () => {
   test("an interval schedule keeps emitting ordered callback and finished events", async () => {
@@ -182,12 +181,12 @@ describeDeployedScheduling("events recurring/restart scheduling e2e", () => {
 
     const events = await readHistoryIncludingWake(path);
     expect(events.map((event) => event.type)).toContain(SCHEDULE_CONFIGURED_TYPE);
-    expect(events.map((event) => event.type)).toContain(durableObjectConstructedType);
+    expect(events.map((event) => event.type)).toContain(durableObjectWokeUpType);
 
     const configuredOffset = events.find(
       (event) => event.type === SCHEDULE_CONFIGURED_TYPE,
     )?.offset;
-    const wakeOffset = events.find((event) => event.type === durableObjectConstructedType)?.offset;
+    const wakeOffset = events.find((event) => event.type === durableObjectWokeUpType)?.offset;
 
     expect(configuredOffset).toBeTypeOf("number");
     expect(wakeOffset).toBeTypeOf("number");
@@ -207,7 +206,7 @@ async function readHistory(path: StreamPath) {
   return events.filter(
     (event) =>
       !(
-        event.type === durableObjectConstructedType ||
+        event.type === durableObjectWokeUpType ||
         (event.type === "https://events.iterate.com/events/stream/initialized" &&
           event.streamPath === path &&
           getPayloadPath(event) === path)

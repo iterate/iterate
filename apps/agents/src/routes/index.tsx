@@ -3,7 +3,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { getRequestHeader } from "@tanstack/react-start/server";
+import { Event, type Event as EventsEvent, type StreamPath } from "@iterate-com/events-contract";
 import { makeFunnySlug } from "@iterate-com/shared/slug-maker";
+import {
+  processEventsWithViewProcessor,
+  rawPrettyEventsStreamViewProcessor,
+} from "@iterate-com/ui/components/events/feed-processors";
+import { EventsStreamFeed } from "@iterate-com/ui/components/events/stream-feed";
 import { Separator } from "@iterate-com/ui/components/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { AppSidebar } from "~/components/app-sidebar.tsx";
@@ -12,6 +18,7 @@ import {
   OPENAPI_TOOL_PROVIDER_PRESET_EVENT,
   SLACK_TOOL_PROVIDER_PRESET_EVENT,
 } from "~/lib/default-tool-provider-events.ts";
+import { createEventsOrpcClient } from "~/lib/events-orpc-client.ts";
 import { getOrpcClient } from "~/orpc/client.ts";
 
 /**
@@ -69,6 +76,7 @@ export const Route = createFileRoute("/")({
 
 function PresetsPage() {
   const { sidebarDefaultOpen, appContext } = Route.useLoaderData();
+  const [selectedStreamPath, setSelectedStreamPath] = useState<StreamPath | null>(null);
 
   return (
     <SidebarProvider
@@ -76,29 +84,148 @@ function PresetsPage() {
       className="h-svh"
       style={{ "--sidebar-width": "22rem" } as CSSProperties}
     >
-      <AppSidebar />
+      <AppSidebar
+        selectedStreamPath={selectedStreamPath}
+        onSelectStreamPath={setSelectedStreamPath}
+      />
       <SidebarInset className="min-w-0 overflow-hidden">
         <header className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
           <SidebarTrigger className="-ml-1" />
           <Separator orientation="vertical" className="mr-1 h-4" />
           <div className="min-w-0">
-            <p className="truncate text-sm font-medium">Presets</p>
+            <p className="truncate text-sm font-medium">
+              {selectedStreamPath == null ? "Presets" : "Agent stream"}
+            </p>
           </div>
         </header>
 
-        <main className="flex min-h-0 flex-1 flex-col overflow-auto p-4">
-          <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
-            <AutoSubscribeSection />
-            <PresetsSection
-              streamPathPrefix={appContext.streamPathPrefix}
+        <main
+          className={`flex min-h-0 flex-1 flex-col p-4 ${
+            selectedStreamPath == null ? "overflow-auto" : "overflow-hidden"
+          }`}
+        >
+          {selectedStreamPath == null ? (
+            <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
+              <AutoSubscribeSection />
+              <PresetsSection
+                streamPathPrefix={appContext.streamPathPrefix}
+                eventsBaseUrl={appContext.eventsBaseUrl}
+                eventsProjectSlug={appContext.eventsProjectSlug}
+              />
+            </div>
+          ) : (
+            <SelectedAgentStreamView
+              streamPath={selectedStreamPath}
               eventsBaseUrl={appContext.eventsBaseUrl}
               eventsProjectSlug={appContext.eventsProjectSlug}
+              onBack={() => setSelectedStreamPath(null)}
             />
-          </div>
+          )}
         </main>
       </SidebarInset>
     </SidebarProvider>
   );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Section: Agent stream                                                      */
+/* -------------------------------------------------------------------------- */
+
+function SelectedAgentStreamView({
+  streamPath,
+  eventsBaseUrl,
+  eventsProjectSlug,
+  onBack,
+}: {
+  streamPath: StreamPath;
+  eventsBaseUrl: string;
+  eventsProjectSlug: string;
+  onBack: () => void;
+}) {
+  const eventsQuery = useQuery({
+    queryKey: ["agentStreamHistory", eventsBaseUrl, eventsProjectSlug, streamPath],
+    queryFn: () =>
+      readAgentStreamHistory({
+        eventsBaseUrl,
+        eventsProjectSlug,
+        streamPath,
+      }),
+    refetchInterval: 2000,
+    refetchOnWindowFocus: true,
+  });
+  const viewState = useMemo(
+    () =>
+      processEventsWithViewProcessor({
+        events: eventsQuery.data ?? [],
+        processor: rawPrettyEventsStreamViewProcessor,
+      }),
+    [eventsQuery.data],
+  );
+  const viewerUrl = buildStreamComposerUrl({
+    eventsBaseUrl,
+    projectSlug: eventsProjectSlug,
+    streamPath,
+  });
+
+  return (
+    <section className="flex min-h-0 w-full flex-1 flex-col gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate font-mono text-sm font-medium">{streamPath}</p>
+          <p className="text-xs text-muted-foreground">
+            Finite stream history; refreshed every 2s.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="inline-flex items-center rounded-md border border-input px-3 py-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
+            onClick={onBack}
+          >
+            Back to presets
+          </button>
+          <a
+            href={viewerUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center rounded-md border border-input px-3 py-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
+          >
+            Open in events
+          </a>
+        </div>
+      </div>
+
+      <div className="min-h-[420px] flex-1 overflow-hidden rounded-lg border bg-background">
+        <EventsStreamFeed
+          feedItems={viewState.feedItems}
+          emptyLabel="No events on this agent stream yet."
+          isPending={eventsQuery.isPending}
+          errorLabel={eventsQuery.error ? formatError(eventsQuery.error) : undefined}
+        />
+      </div>
+    </section>
+  );
+}
+
+async function readAgentStreamHistory(args: {
+  eventsBaseUrl: string;
+  eventsProjectSlug: string;
+  streamPath: StreamPath;
+}): Promise<EventsEvent[]> {
+  const client = createEventsOrpcClient({
+    baseUrl: args.eventsBaseUrl,
+    projectSlug: args.eventsProjectSlug,
+  });
+  const stream = await client.stream({
+    path: args.streamPath,
+    afterOffset: "start",
+    beforeOffset: "end",
+  });
+  const events: EventsEvent[] = [];
+  for await (const value of stream) {
+    events.push(Event.parse(value));
+  }
+  return events;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -605,6 +732,10 @@ function parseJsonObject(text: string): ParseResult<Record<string, unknown>> {
   } catch (err) {
     return { kind: "error", error: err instanceof Error ? err.message : String(err) };
   }
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function parseEventsArray(text: string): ParseResult<ContractEvent[]> {

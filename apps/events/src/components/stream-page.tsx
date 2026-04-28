@@ -21,6 +21,15 @@ import {
 } from "@iterate-com/ui/components/ai-elements/prompt-input";
 import { Button } from "@iterate-com/ui/components/button";
 import { Checkbox } from "@iterate-com/ui/components/checkbox";
+import {
+  prettyEventsStreamViewProcessor,
+  processEventsWithViewProcessor,
+  rawEventsStreamViewProcessor,
+  reduceEventsToRawJsonDumpViewState,
+  rawPrettyEventsStreamViewProcessor,
+} from "@iterate-com/ui/components/events/feed-processors";
+import type { EventsStreamViewProcessor } from "@iterate-com/ui/components/events/feed-items";
+import { EventsStreamFeed } from "@iterate-com/ui/components/events/stream-feed";
 import { Label } from "@iterate-com/ui/components/label";
 import { Separator } from "@iterate-com/ui/components/separator";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
@@ -51,7 +60,11 @@ import {
   type StreamRendererMode,
 } from "~/lib/stream-feed-types.ts";
 import { formatClientError } from "~/lib/format-client-error.ts";
-import { defaultStreamViewSearch, type StreamComposerMode } from "~/lib/stream-view-search.ts";
+import {
+  defaultStreamViewSearch,
+  type StreamComposerMode,
+  type StreamFeedViewMode,
+} from "~/lib/stream-view-search.ts";
 import { getOrpc, getOrpcClient } from "~/orpc/client.ts";
 import { useStreamsChrome } from "~/components/streams-chrome.tsx";
 
@@ -62,18 +75,22 @@ export function StreamPage({
   streamPath,
   rendererMode = DEFAULT_STREAM_RENDERER_MODE,
   composerMode = defaultStreamViewSearch.composer,
+  feedViewMode = defaultStreamViewSearch.view,
   openEventOffset,
   onOpenEventOffsetChange,
   onRendererModeChange,
   onComposerModeChange,
+  onFeedViewModeChange,
 }: {
   streamPath: StreamPath;
   rendererMode?: StreamRendererMode;
   composerMode?: StreamComposerMode;
+  feedViewMode?: StreamFeedViewMode;
   openEventOffset?: number;
   onOpenEventOffsetChange?: (offset?: number) => void;
   onRendererModeChange?: (mode: StreamRendererMode) => void;
   onComposerModeChange?: (mode: StreamComposerMode) => void;
+  onFeedViewModeChange?: (mode: StreamFeedViewMode) => void;
 }) {
   const queryClient = useQueryClient();
   const { closeMetadata, metadataOpen, setHeaderControls } = useStreamsChrome();
@@ -150,14 +167,22 @@ export function StreamPage({
     [customHtmlInsertionsQuery.data, events],
   );
   const displayFeed = useMemo(() => buildDisplayFeed(feed, rendererMode), [feed, rendererMode]);
+  // In the clean feed, renderer modes select stream-view processors. Rendering
+  // stays mode-agnostic and only switches on each feed item's `type`.
+  const cleanViewState = useMemo(
+    () => reduceCleanViewState({ events, mode: rendererMode }),
+    [events, rendererMode],
+  );
   const feedSummary = useMemo(() => summarizeStreamFeed(feed), [feed]);
   const headerControls = useMemo(
     () => ({
       rendererMode,
       onRendererModeChange,
+      feedViewMode,
+      onFeedViewModeChange,
       feedSummary,
     }),
-    [feedSummary, onRendererModeChange, rendererMode],
+    [feedSummary, feedViewMode, onFeedViewModeChange, onRendererModeChange, rendererMode],
   );
 
   useEffect(() => {
@@ -303,17 +328,29 @@ export function StreamPage({
   return (
     <section className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
       <div className="min-h-0 flex-1 overflow-hidden">
-        <StreamEventFeed
-          feed={feed}
-          displayFeed={displayFeed}
-          rendererMode={rendererMode}
-          emptyLabel="No events received yet."
-          isPending={isConnecting}
-          liveStreamStatus={liveStreamStatus}
-          openEventOffset={openEventOffset}
-          onOpenEventOffsetChange={onOpenEventOffsetChange}
-          rendererApi={rendererApi}
-        />
+        {feedViewMode === "clean" ? (
+          <EventsStreamFeed
+            feedItems={cleanViewState.feedItems}
+            emptyLabel="No events received yet."
+            isPending={isConnecting}
+            errorLabel={getLiveStreamFailureLabel({
+              isPending: isConnecting,
+              liveStreamStatus,
+            })}
+          />
+        ) : (
+          <StreamEventFeed
+            feed={feed}
+            displayFeed={displayFeed}
+            rendererMode={rendererMode}
+            emptyLabel="No events received yet."
+            isPending={isConnecting}
+            liveStreamStatus={liveStreamStatus}
+            openEventOffset={openEventOffset}
+            onOpenEventOffsetChange={onOpenEventOffsetChange}
+            rendererApi={rendererApi}
+          />
+        )}
       </div>
 
       <Sheet
@@ -508,4 +545,44 @@ function createEventInputTemplate(templateId: string, format: "json" | "yaml") {
 
 function parseAppendEventInput(value: string, format: "json" | "yaml") {
   return parseObjectFromComposerText(value, format) as EventInput;
+}
+
+function getLiveStreamFailureLabel({
+  isPending,
+  liveStreamStatus,
+}: {
+  isPending: boolean;
+  liveStreamStatus?: string;
+}) {
+  if (isPending || liveStreamStatus == null) {
+    return undefined;
+  }
+
+  return liveStreamStatus.startsWith("Error:") || liveStreamStatus.startsWith("Timed out")
+    ? liveStreamStatus
+    : undefined;
+}
+
+function reduceCleanViewState(args: { events: readonly Event[]; mode: StreamRendererMode }) {
+  if (args.mode === "raw-single-json") {
+    return reduceEventsToRawJsonDumpViewState(args.events);
+  }
+
+  return processEventsWithViewProcessor({
+    events: args.events,
+    processor: selectCleanViewProcessor(args.mode),
+  });
+}
+
+function selectCleanViewProcessor(
+  mode: Exclude<StreamRendererMode, "raw-single-json">,
+): EventsStreamViewProcessor {
+  switch (mode) {
+    case "raw":
+      return rawEventsStreamViewProcessor;
+    case "pretty":
+      return prettyEventsStreamViewProcessor;
+    case "raw-pretty":
+      return rawPrettyEventsStreamViewProcessor;
+  }
 }

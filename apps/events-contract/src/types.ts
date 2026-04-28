@@ -82,17 +82,15 @@ export const StreamInitializedEvent = GenericEventBase.extend(
 );
 export type StreamInitializedEvent = z.infer<typeof StreamInitializedEvent>;
 
-const StreamDurableObjectConstructedEventInput = GenericEventInputBase.extend({
-  type: z.literal("https://events.iterate.com/events/stream/durable-object-constructed"),
+const StreamDurableObjectWokeUpEventInput = GenericEventInputBase.extend({
+  type: z.literal("https://events.iterate.com/events/stream/durable-object-woke-up"),
   payload: z.strictObject({}),
 });
-const StreamDurableObjectConstructedEvent = GenericEventBase.extend(
-  StreamDurableObjectConstructedEventInput.pick({ type: true, payload: true }).shape,
+const StreamDurableObjectWokeUpEvent = GenericEventBase.extend(
+  StreamDurableObjectWokeUpEventInput.pick({ type: true, payload: true }).shape,
 );
-type StreamDurableObjectConstructedEventInput = z.infer<
-  typeof StreamDurableObjectConstructedEventInput
->;
-type StreamDurableObjectConstructedEvent = z.infer<typeof StreamDurableObjectConstructedEvent>;
+type StreamDurableObjectWokeUpEventInput = z.infer<typeof StreamDurableObjectWokeUpEventInput>;
+type StreamDurableObjectWokeUpEvent = z.infer<typeof StreamDurableObjectWokeUpEvent>;
 
 const ChildStreamCreatedEventInput = GenericEventInputBase.extend({
   type: z.literal("https://events.iterate.com/events/stream/child-stream-created"),
@@ -143,7 +141,7 @@ type InvalidEventAppendedEvent = z.infer<typeof InvalidEventAppendedEvent>;
 
 const builtInEventInputOptions = [
   StreamInitializedEventInput,
-  StreamDurableObjectConstructedEventInput,
+  StreamDurableObjectWokeUpEventInput,
   ChildStreamCreatedEventInput,
   StreamMetadataUpdatedEventInput,
   StreamSubscriptionConfiguredEventInput,
@@ -165,7 +163,7 @@ const builtInEventInputOptions = [
 
 const builtInEventOptions = [
   StreamInitializedEvent,
-  StreamDurableObjectConstructedEvent,
+  StreamDurableObjectWokeUpEvent,
   ChildStreamCreatedEvent,
   StreamMetadataUpdatedEvent,
   StreamSubscriptionConfiguredEvent,

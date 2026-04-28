@@ -27,8 +27,7 @@ const app = createEvents2AppFixture({
   baseURL: eventsBaseUrl,
 });
 const historyIdleTimeoutMs = 250;
-const durableObjectConstructedType =
-  "https://events.iterate.com/events/stream/durable-object-constructed";
+const durableObjectWokeUpType = "https://events.iterate.com/events/stream/durable-object-woke-up";
 const shortDelaySeconds = 8;
 const firstFireDelaySeconds = 2;
 const secondFireDelaySeconds = 4;
@@ -206,7 +205,7 @@ async function readHistory(path: StreamPath) {
   return events.filter(
     (event) =>
       !(
-        event.type === durableObjectConstructedType ||
+        event.type === durableObjectWokeUpType ||
         (event.type === "https://events.iterate.com/events/stream/initialized" &&
           event.streamPath === path &&
           getPayloadPath(event) === path)

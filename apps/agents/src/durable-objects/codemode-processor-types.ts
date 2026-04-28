@@ -2,8 +2,8 @@ import {
   GenericEvent as GenericEventBase,
   GenericEventInput as GenericEventInputBase,
 } from "@iterate-com/events-contract";
+import { Callable } from "@iterate-com/shared/callable/types.ts";
 import { z } from "zod";
-import { Callable } from "~/lib/callable.ts";
 
 /**
  * Persistent description of a codemode tool provider, keyed by `slug` (the
