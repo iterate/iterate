@@ -12,23 +12,26 @@ V1 supports Cloudflare's native stable selectors:
 - `durableObject: { name }`
 - `durableObject: { id }`
 
-The nested `durableObject` object exists so future selectors can be added
-without flattening more mutually exclusive fields onto `via`.
+The default answer should stay boring: if a Durable Object's identity is derived
+from init params, compose a stable name from those params and store
+`durableObject: { name }` in the callable. That keeps the callable descriptor
+native to Cloudflare's Durable Object namespace API and avoids adding lookup
+machinery that may never be needed.
 
-The durable-object-utils mixins merged after callable v1 make this less
-speculative. `withLifecycleHooks()` gives named Durable Objects persistent
-`initParams`, `getOrInitializeDoStub()` initializes named stubs before use, and
+Keep this task only as a parking lot for cases where name composition is not
+enough. The durable-object-utils mixins make that possible:
+`withLifecycleHooks()` gives named Durable Objects persistent `initParams`,
+`getOrInitializeDoStub()` initializes named stubs before use, and
 `withD1ObjectCatalog()` mirrors initialized object metadata and secondary
-indexes into D1. Callable should not depend on those mixins in v1, but future
-selector helpers can use that catalog/provisioning layer to resolve a selector
-to a normal Durable Object stub before dispatch enters the existing fetch/RPC
-code path.
+indexes into D1. If we later add indexed selectors, callable should resolve the
+selector to a normal Durable Object stub first, then enter the existing fetch/RPC
+dispatch path.
 
-Planned scope:
+Possible future scope:
 
-- init-param selectors, for example `durableObject: { initParam: { key, value } }`
+- document name-composition conventions for common init-param shapes
 - indexed init-param selectors backed by `withD1ObjectCatalog()` or another
-  registry
+  registry, only if a real caller cannot use deterministic names
 - named initialization helpers that call `getOrInitializeDoStub()` before
   creating or invoking a callable when the target object follows the lifecycle
   mixin contract
