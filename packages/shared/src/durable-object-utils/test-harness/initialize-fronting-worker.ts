@@ -75,6 +75,13 @@ export class InitializeTestRoom extends RoomBase<Env> {
         }
       }
 
+      if (params.name.includes("hook-throws-undefined")) {
+        // JavaScript allows throwing any value, including `undefined`.
+        // The lifecycle implementation must treat that as a real startup
+        // failure rather than confusing it with the "no error captured" state.
+        throw undefined;
+      }
+
       this.ctx.storage.kv.put("test.startHookFinished", true);
     });
   }

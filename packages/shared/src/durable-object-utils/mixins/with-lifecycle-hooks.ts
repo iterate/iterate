@@ -302,6 +302,7 @@ export function withLifecycleHooks<InitParams extends LifecycleInit>() {
 
         this.#startPromise ??= (async () => {
           let initialized = params;
+          let hasStartupError = false;
           let startupError: unknown;
 
           await this.ctx.blockConcurrencyWhile(async () => {
@@ -326,6 +327,11 @@ export function withLifecycleHooks<InitParams extends LifecycleInit>() {
 
               this.#started = true;
             } catch (error) {
+              // JavaScript can throw any value, including `undefined`.
+              // Keep an explicit boolean so `throw undefined` is still treated
+              // as a real startup failure rather than the "no error captured"
+              // sentinel.
+              hasStartupError = true;
               startupError = error;
             } finally {
               this.#runningLifecycleHooks = false;
@@ -339,7 +345,7 @@ export function withLifecycleHooks<InitParams extends LifecycleInit>() {
           // Capture and re-throw after the gate so initialize()/ensureStarted()
           // callers can catch and retry normally.
           // https://developers.cloudflare.com/durable-objects/api/state/#blockconcurrencywhile
-          if (startupError !== undefined) {
+          if (hasStartupError) {
             throw startupError;
           }
 

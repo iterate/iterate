@@ -220,6 +220,41 @@ describe("withLifecycleHooks", () => {
       startFailedOnce: true,
     });
   });
+
+  it("treats throw undefined from a start hook as a real startup failure", async () => {
+    const room = testEnv.ROOMS.getByName("unit-room-hook-throws-undefined");
+
+    await expect(
+      room.tryInitialize({
+        name: "unit-room-hook-throws-undefined",
+        ownerUserId: "user-throws-undefined",
+      }),
+    ).resolves.toEqual({
+      kind: "error",
+      name: "UnknownError",
+      message: "undefined",
+    });
+
+    await expect(room.getLifecycleHookState()).resolves.toMatchObject({
+      firstInitializeRuns: 1,
+      startRuns: 1,
+      startStarted: true,
+      startFinished: false,
+    });
+
+    await expect(room.tryEnsureReady()).resolves.toEqual({
+      kind: "error",
+      name: "UnknownError",
+      message: "undefined",
+    });
+
+    await expect(room.getLifecycleHookState()).resolves.toMatchObject({
+      firstInitializeRuns: 1,
+      startRuns: 2,
+      startStarted: true,
+      startFinished: false,
+    });
+  });
 });
 
 describe("withOuterbase", () => {
