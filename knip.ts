@@ -102,7 +102,9 @@ function makeEventsCloudflareWorkspace(workerEnvShim: string): WorkspaceConfig {
 
   return {
     ...workspace,
-    entry: [...(workspace.entry ?? []), "scripts/demo/router.ts"],
+    entry: [...(workspace.entry ?? []), "scripts/demo/router.ts", "sqlfu.config.ts"],
+    ignoreBinaries: [...(workspace.ignoreBinaries ?? []), "sqlfu"],
+    ignoreDependencies: [...(workspace.ignoreDependencies ?? []), "miniflare"],
   };
 }
 
@@ -186,6 +188,14 @@ const config: KnipConfig = {
     "apps/agents/src/lib/events-orpc-client.ts": ["exports", "types"],
     "apps/agents/src/lib/mcp-tool-providers.ts": ["types"],
     "apps/agents/src/lib/openapi-tool-provider.ts": ["types"],
+    // Generated SQLFU bundles/configs are loaded by scripts/runtime conventions.
+    "apps/events/src/db/migrations/.generated/migrations.ts": ["files", "exports", "types"],
+    "apps/events/src/durable-objects/db/migrations/.generated/migrations.ts": ["exports", "types"],
+    "apps/events/src/durable-objects/db/queries/.generated/tables.ts": ["types"],
+    "apps/events/src/db/queries/.generated/tables.ts": ["types"],
+    "apps/events/src/durable-objects/sqlfu.config.ts": ["files"],
+    // Cloudflare discovers DO default exports through Worker bindings.
+    "apps/example/src/durable-objects/example-counter.ts": ["exports"],
   },
   workspaces: {
     "apps/agents": makeAgentsTanStackAppWorkspace("./src/lib/worker-env.d.ts"),

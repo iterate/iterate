@@ -22,6 +22,7 @@ import { Route as ScheduleConfiguredRouteImport } from './routes/schedule-config
 import { Route as ScheduleCancelledRouteImport } from './routes/schedule-cancelled'
 import { Route as ManualEventAppendedRouteImport } from './routes/manual-event-appended'
 import { Route as JsonataTransformerConfiguredRouteImport } from './routes/jsonata-transformer-configured'
+import { Route as HtmlRendererConfiguredRouteImport } from './routes/html-renderer-configured'
 import { Route as ErrorOccurredRouteImport } from './routes/error-occurred'
 import { Route as DynamicWorkerConfiguredRouteImport } from './routes/dynamic-worker-configured'
 import { Route as DocsRouteImport } from './routes/docs'
@@ -111,6 +112,11 @@ const JsonataTransformerConfiguredRoute =
     path: '/jsonata-transformer-configured',
     getParentRoute: () => rootRouteImport,
   } as any)
+const HtmlRendererConfiguredRoute = HtmlRendererConfiguredRouteImport.update({
+  id: '/html-renderer-configured',
+  path: '/html-renderer-configured',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ErrorOccurredRoute = ErrorOccurredRouteImport.update({
   id: '/error-occurred',
   path: '/error-occurred',
@@ -211,6 +217,7 @@ export interface FileRoutesByFullPath {
   '/docs': typeof DocsRoute
   '/dynamic-worker-configured': typeof DynamicWorkerConfiguredRoute
   '/error-occurred': typeof ErrorOccurredRoute
+  '/html-renderer-configured': typeof HtmlRendererConfiguredRoute
   '/jsonata-transformer-configured': typeof JsonataTransformerConfiguredRoute
   '/manual-event-appended': typeof ManualEventAppendedRoute
   '/schedule-cancelled': typeof ScheduleCancelledRoute
@@ -243,6 +250,7 @@ export interface FileRoutesByTo {
   '/docs': typeof DocsRoute
   '/dynamic-worker-configured': typeof DynamicWorkerConfiguredRoute
   '/error-occurred': typeof ErrorOccurredRoute
+  '/html-renderer-configured': typeof HtmlRendererConfiguredRoute
   '/jsonata-transformer-configured': typeof JsonataTransformerConfiguredRoute
   '/manual-event-appended': typeof ManualEventAppendedRoute
   '/schedule-cancelled': typeof ScheduleCancelledRoute
@@ -275,6 +283,7 @@ export interface FileRoutesById {
   '/docs': typeof DocsRoute
   '/dynamic-worker-configured': typeof DynamicWorkerConfiguredRoute
   '/error-occurred': typeof ErrorOccurredRoute
+  '/html-renderer-configured': typeof HtmlRendererConfiguredRoute
   '/jsonata-transformer-configured': typeof JsonataTransformerConfiguredRoute
   '/manual-event-appended': typeof ManualEventAppendedRoute
   '/schedule-cancelled': typeof ScheduleCancelledRoute
@@ -309,6 +318,7 @@ export interface FileRouteTypes {
     | '/docs'
     | '/dynamic-worker-configured'
     | '/error-occurred'
+    | '/html-renderer-configured'
     | '/jsonata-transformer-configured'
     | '/manual-event-appended'
     | '/schedule-cancelled'
@@ -341,6 +351,7 @@ export interface FileRouteTypes {
     | '/docs'
     | '/dynamic-worker-configured'
     | '/error-occurred'
+    | '/html-renderer-configured'
     | '/jsonata-transformer-configured'
     | '/manual-event-appended'
     | '/schedule-cancelled'
@@ -372,6 +383,7 @@ export interface FileRouteTypes {
     | '/docs'
     | '/dynamic-worker-configured'
     | '/error-occurred'
+    | '/html-renderer-configured'
     | '/jsonata-transformer-configured'
     | '/manual-event-appended'
     | '/schedule-cancelled'
@@ -406,6 +418,7 @@ export interface RootRouteChildren {
   DocsRoute: typeof DocsRoute
   DynamicWorkerConfiguredRoute: typeof DynamicWorkerConfiguredRoute
   ErrorOccurredRoute: typeof ErrorOccurredRoute
+  HtmlRendererConfiguredRoute: typeof HtmlRendererConfiguredRoute
   JsonataTransformerConfiguredRoute: typeof JsonataTransformerConfiguredRoute
   ManualEventAppendedRoute: typeof ManualEventAppendedRoute
   ScheduleCancelledRoute: typeof ScheduleCancelledRoute
@@ -516,6 +529,13 @@ declare module '@tanstack/react-router' {
       path: '/jsonata-transformer-configured'
       fullPath: '/jsonata-transformer-configured'
       preLoaderRoute: typeof JsonataTransformerConfiguredRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/html-renderer-configured': {
+      id: '/html-renderer-configured'
+      path: '/html-renderer-configured'
+      fullPath: '/html-renderer-configured'
+      preLoaderRoute: typeof HtmlRendererConfiguredRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/error-occurred': {
@@ -695,6 +715,7 @@ const rootRouteChildren: RootRouteChildren = {
   DocsRoute: DocsRoute,
   DynamicWorkerConfiguredRoute: DynamicWorkerConfiguredRoute,
   ErrorOccurredRoute: ErrorOccurredRoute,
+  HtmlRendererConfiguredRoute: HtmlRendererConfiguredRoute,
   JsonataTransformerConfiguredRoute: JsonataTransformerConfiguredRoute,
   ManualEventAppendedRoute: ManualEventAppendedRoute,
   ScheduleCancelledRoute: ScheduleCancelledRoute,

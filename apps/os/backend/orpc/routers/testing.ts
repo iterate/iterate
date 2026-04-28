@@ -1,6 +1,8 @@
 import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
+import { slugifyWithSuffix } from "@iterate-com/shared/slug";
+import { generateDefaultAvatar } from "@iterate-com/shared/default-avatar";
 import {
   publicProcedure,
   publicMutation,
@@ -8,27 +10,10 @@ import {
   projectProtectedProcedure,
   ProjectInput,
 } from "../procedures.ts";
-import {
-  user,
-  organization,
-  project,
-  organizationUserMembership,
-  projectConnection,
-} from "../../db/schema.ts";
-import { slugifyWithSuffix } from "../../utils/slug.ts";
+import { user, project, projectConnection } from "../../db/schema.ts";
 import { getDefaultProjectSandboxProvider } from "../../utils/sandbox-providers.ts";
 import { isNonProd } from "../../../env.ts";
-
-/** Generate a DiceBear avatar URL using a hash of the email as seed */
-function generateDefaultAvatar(email: string): string {
-  const normalized = email.trim().toLowerCase();
-  let hash = 0;
-  for (let i = 0; i < normalized.length; i++) {
-    hash = (hash << 5) - hash + normalized.charCodeAt(i);
-    hash |= 0;
-  }
-  return `https://api.dicebear.com/9.x/notionists/svg?seed=${Math.abs(hash).toString(36)}`;
-}
+import { createAuthWorkerClient } from "../../utils/auth-worker-client.ts";
 
 /**
  * Testing router - provides helpers for test setup
@@ -70,7 +55,6 @@ export const testingRouter = {
         .values({
           email: input.email,
           name: input.name,
-          role: input.role,
           emailVerified: true,
           image: generateDefaultAvatar(input.email),
         })
@@ -78,7 +62,6 @@ export const testingRouter = {
           target: user.email,
           set: {
             name: input.name,
-            role: input.role,
           },
         })
         .returning();
@@ -100,40 +83,32 @@ export const testingRouter = {
           message: "Testing endpoints are not available in production",
         });
       }
-      const orgSlug = slugifyWithSuffix(input.name);
-
-      const [newOrg] = await ctx.db
-        .insert(organization)
-        .values({
-          name: input.name,
-          slug: orgSlug,
-        })
-        .returning();
-
-      if (!newOrg) {
-        throw new Error("Failed to create organization");
-      }
-
-      await ctx.db.insert(organizationUserMembership).values({
-        organizationId: newOrg.id,
-        userId: ctx.user.id,
-        role: "owner",
+      const authClient = createAuthWorkerClient({ asUser: { authUserId: ctx.user.authUserId! } });
+      const authOrganization = await authClient.organization.create({
+        name: input.name,
       });
 
       const projSlug = slugifyWithSuffix(input.projectName || "default");
       const sandboxProvider = getDefaultProjectSandboxProvider(ctx.env, import.meta.env.DEV);
+      const authProject = await authClient.project.create({
+        organizationSlug: authOrganization.slug,
+        name: input.projectName || "Default Project",
+        slug: projSlug,
+      });
       const [newProject] = await ctx.db
         .insert(project)
         .values({
-          name: input.projectName || "Default Project",
-          slug: projSlug,
-          organizationId: newOrg.id,
+          authProjectId: authProject.id,
+          authOrganizationId: authOrganization.id,
+          authOrganizationSlug: authOrganization.slug,
+          name: authProject.name,
+          slug: authProject.slug,
           sandboxProvider,
         })
         .returning();
 
       return {
-        organization: newOrg,
+        organization: authOrganization,
         project: newProject,
       };
     }),
@@ -161,10 +136,10 @@ export const testingRouter = {
 
       if (input.organizationSlug) {
         const deleted = await ctx.db
-          .delete(organization)
-          .where(eq(organization.slug, input.organizationSlug))
+          .delete(project)
+          .where(eq(project.authOrganizationSlug, input.organizationSlug))
           .returning();
-        results.push(`Deleted ${deleted.length} organizations`);
+        results.push(`Deleted ${deleted.length} projects for organization slug`);
       }
 
       return { results };

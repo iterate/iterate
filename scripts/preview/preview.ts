@@ -744,8 +744,8 @@ function derivePreviewEnvironment(input: {
     previewEnvironmentSlug: input.previewEnvironmentSlug,
     previewEnvironmentType: input.previewEnvironmentType,
     publicUrl:
-      input.appSlug === "events"
-        ? `https://events-preview-${slot}.iterate.com`
+      input.appSlug === "events" || input.appSlug === "os2"
+        ? `https://${input.previewEnvironmentSlug}.iterate.com`
         : `https://${input.previewEnvironmentSlug}.iterate.workers.dev`,
   };
 }

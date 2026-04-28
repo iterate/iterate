@@ -5,7 +5,7 @@ import { usePostHog } from "posthog-js/react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { fromString } from "typeid-js";
-import { authClient, signOut } from "../lib/auth-client.ts";
+import { authClient } from "../lib/auth-client.ts";
 import { orpc, orpcClient } from "../lib/orpc.tsx";
 import { useDebounce } from "../hooks/use-debounce.ts";
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar.tsx";
@@ -352,11 +352,8 @@ export function SidebarShell({ header, children, user }: SidebarShellProps) {
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   onClick={() => {
-                    // Reset PostHog identity before logout to prevent session linking
                     posthog?.reset();
-                    signOut().then(() => {
-                      window.location.href = "/login";
-                    });
+                    window.location.href = "/logout";
                   }}
                 >
                   <LogOut className="mr-2 h-4 w-4" />

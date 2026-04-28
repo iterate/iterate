@@ -10,6 +10,8 @@ packages:
   - apps/daemon
   - apps/iterate-com
   - apps/os
+  - apps/os2
+  - apps/os2-contract
   - apps/semaphore
   - apps/semaphore-contract
   - apps/example
@@ -28,6 +30,7 @@ packages:
   - apps/agents-contract
   - apps/codemode
   - apps/codemode-contract
+  - apps/*
   - sandbox
   - jonasland/sandbox
   - jonasland/e2e
@@ -43,13 +46,13 @@ catalogs:
   cloudflare:
     "@cloudflare/codemode": "https://pkg.pr.new/iterate/agents/@cloudflare/codemode@7c0735e"
     "@cloudflare/unenv-preset": ^2.16.0
-    "@cloudflare/vite-plugin": 1.33.1
+    "@cloudflare/vite-plugin": 1.33.2
     "@cloudflare/vitest-pool-workers": ^0.14.9
     "@cloudflare/worker-bundler": ^0.1.2
-    "@cloudflare/workers-types": ^4.20260423.1
-    miniflare: 4.20260420.0
-    workerd: 1.20260420.1
-    wrangler: 4.84.1
+    "@cloudflare/workers-types": ^4.20260426.1
+    miniflare: 4.20260424.0
+    workerd: 1.20260426.1
+    wrangler: 4.85.0
 
 minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
@@ -78,6 +81,7 @@ minimumReleaseAgeExclude:
   - "@mariozechner/pi-tui"
   - pidnap
   - schematch
+  - sqlfu
   - trpc-cli
   - hono
   - "@hono/node-server"

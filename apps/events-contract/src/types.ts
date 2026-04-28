@@ -26,6 +26,10 @@ import {
   JsonataTransformerState,
 } from "./jsonata-transformer-types.ts";
 import {
+  HtmlRendererConfiguredEvent,
+  HtmlRendererConfiguredEventInput,
+} from "./html-renderer-types.ts";
+import {
   DynamicWorkerState,
   DynamicWorkerConfiguredEventInput,
   DynamicWorkerConfiguredEvent,
@@ -154,6 +158,7 @@ const builtInEventInputOptions = [
   DynamicWorkerConfiguredEventInput,
   DynamicWorkerEnvVarSetEventInput,
   CircuitBreakerConfiguredEventInput,
+  HtmlRendererConfiguredEventInput,
   StreamPausedEventInput,
   StreamResumedEventInput,
 ] as const;
@@ -175,6 +180,7 @@ const builtInEventOptions = [
   DynamicWorkerConfiguredEvent,
   DynamicWorkerEnvVarSetEvent,
   CircuitBreakerConfiguredEvent,
+  HtmlRendererConfiguredEvent,
   StreamPausedEvent,
   StreamResumedEvent,
 ] as const;

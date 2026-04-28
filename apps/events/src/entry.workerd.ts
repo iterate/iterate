@@ -2,10 +2,9 @@ import { env as workerEnv } from "cloudflare:workers";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { withEvlog } from "@iterate-com/shared/apps/logging/with-evlog";
 import handler from "@tanstack/react-start/server-entry";
-import { drizzle as drizzleWorkerd } from "drizzle-orm/d1";
+import { createD1Client } from "sqlfu";
 import manifest, { AppConfig } from "~/app.ts";
 import type { AppContext } from "~/context.ts";
-import * as schema from "~/db/schema.ts";
 import { DynamicWorkerEgressGateway } from "~/dynamic-worker-egress-gateway.ts";
 import { StreamDurableObject } from "~/durable-objects/stream.ts";
 
@@ -25,7 +24,7 @@ export default {
         executionCtx: cfCtx,
       },
       async ({ log }) => {
-        const db = drizzleWorkerd(env.DB, { schema });
+        const db = createD1Client(env.DB);
         const context: AppContext = {
           manifest,
           config,

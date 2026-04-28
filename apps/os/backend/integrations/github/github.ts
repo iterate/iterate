@@ -207,9 +207,6 @@ githubApp.get(
         installationConflictState.value = { installationId: installation_id };
         return tx.query.project.findFirst({
           where: eq(schema.project.id, projectId),
-          with: {
-            organization: true,
-          },
         });
       }
 
@@ -307,7 +304,6 @@ githubApp.get(
           await tx.insert(schema.secret).values({
             key: "github.access_token",
             encryptedValue: encryptedToken,
-            organizationId: projectInfo.organizationId,
             projectId,
             metadata: secretMetadata,
             egressProxyRule: githubEgressRule,
@@ -317,9 +313,6 @@ githubApp.get(
 
       return tx.query.project.findFirst({
         where: eq(schema.project.id, projectId),
-        with: {
-          organization: true,
-        },
       });
     });
 
@@ -727,11 +720,11 @@ githubApp.post("/webhook", async (c) => {
       if (repoOwner && repoName) {
         const projectRecord = await db.query.project.findFirst({
           where: (project, { eq }) => eq(project.configRepoFullName, `${repoOwner}/${repoName}`),
-          columns: { id: true, organizationId: true },
+          columns: { id: true, authOrganizationId: true },
         });
         if (projectRecord) {
           groups = {
-            organization: projectRecord.organizationId,
+            organization: projectRecord.authOrganizationId,
             project: projectRecord.id,
           };
         }
@@ -1148,7 +1141,6 @@ async function recreateMachinesForAllProjects(params: {
 }): Promise<void> {
   const projectsWithActiveMachines = await params.db.query.project.findMany({
     with: {
-      organization: true,
       machines: {
         where: (m, { eq: whereEq }) => whereEq(m.state, "active"),
         limit: 1,

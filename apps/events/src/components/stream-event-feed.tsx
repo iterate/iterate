@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
+import type { Event, EventInput, StreamPath, StreamState } from "@iterate-com/events-contract";
 import {
   AlertTriangleIcon,
   BotIcon,
@@ -72,6 +73,8 @@ import type {
   BashmodeBlockFeedItem,
   CodemodeBlockFeedItem,
   CodemodeResultFeedItem,
+  CustomHtmlRenderErrorFeedItem,
+  CustomHtmlRenderedEventFeedItem,
   DynamicWorkerConfiguredFeedItem,
   DynamicWorkerEnvVarSetFeedItem,
   ChildStreamCreatedFeedItem,
@@ -101,6 +104,20 @@ function isLiveStreamFailureStatus(status: string | undefined) {
   return status.startsWith("Error:") || status.startsWith("Timed out");
 }
 
+export type CustomHtmlRendererApi = {
+  streamPath: StreamPath;
+  events: readonly Event[];
+  append: (event: EventInput) => Promise<Event>;
+  getState: () => Promise<StreamState>;
+  history: () => Promise<Event[]>;
+};
+
+declare global {
+  interface Window {
+    __iterateEventsRendererApi?: CustomHtmlRendererApi;
+  }
+}
+
 export function StreamEventFeed({
   feed,
   displayFeed,
@@ -110,6 +127,7 @@ export function StreamEventFeed({
   liveStreamStatus,
   openEventOffset,
   onOpenEventOffsetChange,
+  rendererApi,
 }: {
   feed: readonly StreamFeedItem[];
   displayFeed: readonly StreamFeedItem[] | null;
@@ -120,6 +138,7 @@ export function StreamEventFeed({
   liveStreamStatus?: string;
   openEventOffset?: number;
   onOpenEventOffsetChange?: (offset?: number) => void;
+  rendererApi?: CustomHtmlRendererApi;
 }) {
   const eventFeedItems = useMemo(() => getEventFeedItems(feed), [feed]);
   const eventElapsedByOffset = useMemo(() => {
@@ -148,6 +167,21 @@ export function StreamEventFeed({
 
   const items = displayFeed ?? [];
   const liveStreamFailed = !isPending && isLiveStreamFailureStatus(liveStreamStatus);
+
+  useEffect(() => {
+    if (rendererApi == null) {
+      window.__iterateEventsRendererApi = undefined;
+      return;
+    }
+
+    window.__iterateEventsRendererApi = rendererApi;
+
+    return () => {
+      if (window.__iterateEventsRendererApi === rendererApi) {
+        window.__iterateEventsRendererApi = undefined;
+      }
+    };
+  }, [rendererApi]);
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
@@ -286,6 +320,10 @@ function StreamFeedItemRenderer({
       return <ExternalSubscriberConfiguredCard item={item} />;
     case "jsonata-transformer-configured":
       return <JsonataTransformerConfiguredCard item={item} />;
+    case "custom-html-rendered-event":
+      return <CustomHtmlRenderedEventCard item={item} />;
+    case "custom-html-render-error":
+      return <CustomHtmlRenderErrorCard item={item} />;
     case "stream-lifecycle":
       return <StreamLifecycleLine item={item} />;
     case "dynamic-worker-configured":
@@ -471,6 +509,52 @@ function JsonataTransformerConfiguredCard({
           showToggle
           showCopyButton
         />
+      </ArtifactSection>
+    </AssistantArtifact>
+  );
+}
+
+function CustomHtmlRenderedEventCard({ item }: { item: CustomHtmlRenderedEventFeedItem }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (container == null) return;
+
+    const timeoutId = window.setTimeout(() => {
+      const scripts = Array.from(container.querySelectorAll("script"));
+      for (const script of scripts) {
+        const executableScript = document.createElement("script");
+        for (const attribute of Array.from(script.attributes)) {
+          executableScript.setAttribute(attribute.name, attribute.value);
+        }
+        executableScript.textContent = script.textContent;
+        script.replaceWith(executableScript);
+      }
+    }, 50);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [item.html]);
+
+  return (
+    <div ref={containerRef} className="contents" dangerouslySetInnerHTML={{ __html: item.html }} />
+  );
+}
+
+function CustomHtmlRenderErrorCard({ item }: { item: CustomHtmlRenderErrorFeedItem }) {
+  return (
+    <AssistantArtifact
+      eyebrow={<AlertTriangleIcon className="size-3.5" />}
+      eyebrowLabel="HTML renderer failed"
+      title={item.eventType}
+      badge={item.slug}
+      meta={[formatTime(item.timestamp)]}
+      tone="danger"
+    >
+      <ArtifactSection>
+        <p className="text-sm text-muted-foreground">{item.message}</p>
       </ArtifactSection>
     </AssistantArtifact>
   );
@@ -1323,6 +1407,10 @@ function getFeedItemKey(item: StreamFeedItem, index: number) {
       return `external-subscriber-${item.subscriber.slug}-${item.timestamp}-${index}`;
     case "jsonata-transformer-configured":
       return `jsonata-transformer-${item.transformer.slug}-${item.timestamp}-${index}`;
+    case "custom-html-rendered-event":
+      return `custom-html-rendered-${item.slug}-${item.raw.offset}-${index}`;
+    case "custom-html-render-error":
+      return `custom-html-render-error-${item.slug}-${item.raw.offset}-${index}`;
     case "stream-lifecycle":
       return `lifecycle-${item.label}-${item.timestamp}-${index}`;
     case "dynamic-worker-configured":
