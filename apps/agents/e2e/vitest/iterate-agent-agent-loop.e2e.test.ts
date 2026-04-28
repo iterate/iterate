@@ -81,29 +81,28 @@ async function runScenario(args: {
     payload: { role: "user", content: AGENT_INPUT_CONTENT },
   });
 
-  const assistantEvent = await e2e.events.waitForEvent(
+  const webchatEvent = await e2e.events.waitForEvent(
     streamPath,
     (event) => {
-      if (event.type !== "agent-input-added") return false;
-      const payload = event.payload as { role?: string };
-      return payload.role === "assistant";
+      if (event.type !== "webchat-response-added") return false;
+      const payload = event.payload as { message?: string };
+      return typeof payload.message === "string" && payload.message.trim().length > 0;
     },
-    { timeoutMs: 10_000 },
+    { timeoutMs: 45_000 },
   );
   const llmMs = Date.now() - llmT0;
 
-  const payload = assistantEvent.payload as { role?: string; content?: string };
-  expect(payload.role, `${scenario.label} assistant role`).toBe("assistant");
-  expect(typeof payload.content, `${scenario.label} assistant content type`).toBe("string");
+  const payload = webchatEvent.payload as { message?: string };
+  expect(typeof payload.message, `${scenario.label} webchat message type`).toBe("string");
   expect(
-    (payload.content ?? "").trim().length,
-    `${scenario.label} assistant content non-empty`,
+    (payload.message ?? "").trim().length,
+    `${scenario.label} webchat message non-empty`,
   ).toBeGreaterThan(0);
 
   return {
     label: scenario.label,
     model: scenario.model,
-    content: payload.content ?? "",
+    content: payload.message ?? "",
     llmMs,
   };
 }

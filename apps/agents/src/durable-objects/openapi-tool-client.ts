@@ -9,6 +9,8 @@ import { createOpenApiToolProvider } from "~/lib/openapi-tool-provider.ts";
 
 const ITERATE_EVENTS_OPERATION_IDS = [
   "appendStreamEvents",
+  "getStreamState",
+  "__internal.health",
   "streamEvents",
   "listChildren",
 ] as const;

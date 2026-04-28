@@ -351,7 +351,7 @@ tables do not exist yet. It never uses
 throws in Worker runtimes.
 
 The object row is keyed by `(class, name)`. `created_at` is the first insert
-time, while `last_started_at` is updated whenever the instance wake hook runs. Init
+time, while `last_woken_at` is updated whenever the instance wake hook runs. Init
 params used with this mixin must be JSON-compatible by convention because the D1
 mirror stores them as JSON text. `JSON.stringify()` catches some failures, such
 as circular references and `BigInt`, but it can silently drop or coerce nested
@@ -439,7 +439,7 @@ cancel rows; external callers can only inspect rows through
 
 `key` is a stable idempotency key. Scheduling the same key again replaces the
 existing row, which makes it safe to call from `registerOnInstanceWake()` without
-creating duplicates on every Durable Object activation.
+creating duplicates on every JavaScript Durable Object instance wake.
 
 `method` is a string on purpose. TypeScript cannot reflect protected instance
 methods into a clean payload-safe scheduler API without making the mixin much
@@ -633,7 +633,7 @@ export class DiscordConnection extends DiscordBase<Env> {
 
     // Do not wait for the first interval tick. The scheduled row is what
     // brings the object back after restart; this immediate call gives the
-    // current activation a chance to connect now.
+    // current JavaScript instance a chance to connect now.
     await this.ensureDiscordConnected();
   }
 
@@ -720,9 +720,9 @@ metadata.
 
 For an opaque long-running promise, use a future `keepAliveWhile({ promise })`
 style helper only as best-effort in-memory liveness. It can reduce the chance
-that a current activation goes idle while the promise is pending, but it cannot
-recover the promise, local variables, sockets, or partially completed external
-side effects after a restart.
+that a current JavaScript instance goes idle while the promise is pending, but it
+cannot recover the promise, local variables, sockets, or partially completed
+external side effects after a restart.
 
 ## Debug Inspectors
 

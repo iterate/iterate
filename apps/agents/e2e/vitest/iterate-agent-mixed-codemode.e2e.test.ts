@@ -12,6 +12,10 @@ import { getProjectUrl } from "../../../events/src/lib/project-slug.ts";
 import { setupE2E } from "../test-support/e2e-test.ts";
 import { createLocalDevServer } from "../test-support/create-local-dev-server.ts";
 import { createMockInternet } from "../test-support/create-mock-internet.ts";
+import {
+  MCP_TOOL_PROVIDER_PRESET_EVENT,
+  OPENAPI_TOOL_PROVIDER_PRESET_EVENT,
+} from "~/lib/default-tool-provider-events.ts";
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 const harFixturePath = join(appRoot, "e2e/vitest/__snapshots__/iterate-agent-mixed-codemode.har");
@@ -23,8 +27,8 @@ async () => {
   const exampleRes = await fetch("https://example.com/");
   const exampleBody = await exampleRes.text();
 
-  const streamState = await events.getStreamState({ path: "/" });
-  const internalHealth = await events.__internal_health({});
+  const streamState = await iterate_events.getStreamState({ path: "/" });
+  const internalHealth = await iterate_events.__internal_health({});
   const docSearch = await cloudflare_docs.search_cloudflare_documentation({ query: mcpQuery });
   const docText = typeof docSearch === "string" ? docSearch : JSON.stringify(docSearch);
   return {
@@ -76,6 +80,27 @@ test(
         callbackUrl: server.callbackUrl,
       },
     });
+
+    await e2e.events.append(streamPath, OPENAPI_TOOL_PROVIDER_PRESET_EVENT);
+    await e2e.events.append(streamPath, MCP_TOOL_PROVIDER_PRESET_EVENT);
+
+    await e2e.events.waitForEvent(
+      streamPath,
+      (event) =>
+        event.type === "agent-input-added" &&
+        typeof event.payload.content === "string" &&
+        event.payload.content.includes("Tool provider `iterate_events` is now available"),
+      { timeoutMs: 120_000 },
+    );
+
+    await e2e.events.waitForEvent(
+      streamPath,
+      (event) =>
+        event.type === "agent-input-added" &&
+        typeof event.payload.content === "string" &&
+        event.payload.content.includes("Tool provider `cloudflare_docs` is now available"),
+      { timeoutMs: 120_000 },
+    );
 
     await e2e.events.append(streamPath, {
       type: "codemode-block-added",

@@ -4,6 +4,7 @@ import {
   type EphemeralWorkerHandle,
 } from "../test-support/create-ephemeral-worker.ts";
 import { setupE2E } from "../test-support/e2e-test.ts";
+import { OPENAPI_TOOL_PROVIDER_PRESET_EVENT } from "~/lib/default-tool-provider-events.ts";
 
 const hasAlchemyStateToken = Boolean(process.env.ALCHEMY_STATE_TOKEN?.trim());
 
@@ -67,6 +68,17 @@ describeEphemeral("ephemeral worker", () => {
         },
       });
 
+      await e2e.events.append(streamPath, OPENAPI_TOOL_PROVIDER_PRESET_EVENT);
+
+      await e2e.events.waitForEvent(
+        streamPath,
+        (event) =>
+          event.type === "agent-input-added" &&
+          typeof event.payload.content === "string" &&
+          event.payload.content.includes("Tool provider `iterate_events` is now available"),
+        { timeoutMs: 45_000 },
+      );
+
       await e2e.events.append(streamPath, {
         type: "codemode-block-added",
         payload: { script: LIVE_CODEMODE_SCRIPT },
@@ -93,8 +105,8 @@ const LIVE_CODEMODE_SCRIPT = `
 async () => {
   const exampleRes = await fetch("https://example.com/");
   const exampleBody = await exampleRes.text();
-  const streamState = await events.getStreamState({ path: "/" });
-  const internalHealth = await events.__internal_health({});
+  const streamState = await iterate_events.getStreamState({ path: "/" });
+  const internalHealth = await iterate_events.__internal_health({});
   return {
     summary: "Codemode e2e: builtin + Events + example.com — all OK.",
     answer: await builtin.answer(),

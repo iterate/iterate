@@ -36,7 +36,7 @@ export type ScheduleMultiplexedAlarmInput = {
    *
    * Reusing a key replaces the existing row. This makes mixins safe to call
    * from lifecycle instance wake hooks without creating duplicate work on every
-   * Durable Object activation.
+   * JavaScript Durable Object instance wake.
    */
   key: string;
   /**
