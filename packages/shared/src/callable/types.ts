@@ -150,22 +150,17 @@ const durableObjectSelectorSchema = z.union([
   z.object({ id: z.string().min(1) }).strict(),
 ]);
 
-const dynamicWorkerLoadSchema = z.union([
-  z.object({ type: z.literal("load") }).strict(),
-  z
-    .object({
-      type: z.literal("get"),
-      id: z.string().min(1),
-    })
-    .strict(),
-]);
-
-const entrypointPropsSchema = jsonValueSchema;
+const dynamicWorkerLoadSchema = z
+  .object({
+    type: z.literal("get"),
+    id: z.string().min(1),
+  })
+  .strict();
 
 const dynamicWorkerEntrypointSchema = z
   .object({
     name: z.string().min(1).optional(),
-    props: entrypointPropsSchema.optional(),
+    props: jsonValueSchema.optional(),
   })
   .strict();
 
@@ -362,10 +357,7 @@ export const CallableSchema = z.union([fetchCallableSchema, rpcCallableSchema]);
 export type Callable = z.infer<typeof CallableSchema>;
 export type FetchCallable = z.infer<typeof fetchCallableSchema>;
 export type RpcCallable = z.infer<typeof rpcCallableSchema>;
-export type DurableObjectSelector = Extract<
-  Callable["target"],
-  { type: "env-binding"; bindingType: "durable-object-namespace" }
->["durableObject"];
+export type DurableObjectSelector = z.infer<typeof durableObjectSelectorSchema>;
 
 export type CallableContext = {
   /**
@@ -389,7 +381,7 @@ export type CallableContext = {
    */
   exports?: Record<string, unknown>;
   /**
-   * Public HTTP fetch capability used only by callables targeting
+   * Public URL fetch capability used only by callables targeting
    * `{ type: "url" }`.
    *
    * Worker-boundary code can pass the runtime function directly as

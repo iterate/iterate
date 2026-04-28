@@ -17,7 +17,7 @@ Planned scope:
 
 - allowed binding names
 - allowed loopback export names
-- allowed HTTP upstream origins
+- allowed public URL targets
 - allowed RPC methods per binding/target
 - denied headers
 - secret references instead of literal bearer tokens

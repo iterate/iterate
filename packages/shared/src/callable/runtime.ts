@@ -220,9 +220,9 @@ async function dispatchValidatedCallableFetch(options: {
   });
 
   switch (target.type) {
-    case "http": {
+    case "url": {
       /**
-       * Public HTTP is the one target where dispatch needs an explicit fetch
+       * Public URL is the one target where dispatch needs an explicit fetch
        * capability from the caller. Service, Durable Object, and Dynamic Worker
        * targets resolve from bindings; public egress should not happen just
        * because a shared helper read ambient `globalThis.fetch`.
@@ -428,23 +428,21 @@ async function dispatchCallableRpc(options: {
 function resolveFetchTarget(options: {
   callable: FetchCallable;
   ctx: CallableContext;
-}):
-  | { type: "http"; fetch: typeof globalThis.fetch }
-  | { type: "binding"; fetch: FetchableBinding } {
+}): { type: "url"; fetch: typeof globalThis.fetch } | { type: "binding"; fetch: FetchableBinding } {
   switch (options.callable.target.type) {
     case "url": {
       /**
-       * Public HTTP fetch is a capability too. Requiring it in the context keeps
+       * Public URL fetch is a capability too. Requiring it in the context keeps
        * this library honest about egress: Worker entrypoints can still pass
        * `{ fetch }`, but helpers never silently reach for a global.
        */
       if (!options.ctx.fetch) {
         throw new CallableError(
           "RESOLUTION_FAILED",
-          "HTTP callables require ctx.fetch; pass fetch explicitly at the Worker boundary",
+          "URL callables require ctx.fetch; pass fetch explicitly at the Worker boundary",
         );
       }
-      return { type: "http", fetch: options.ctx.fetch };
+      return { type: "url", fetch: options.ctx.fetch };
     }
     case "env-binding":
       return resolveEnvBindingFetchTarget({
@@ -642,7 +640,7 @@ function resolveLoopbackBindingRpcTarget(options: {
       });
     case "durable-object-namespace":
       return resolveDurableObjectStubFromNamespace({
-        namespace: resolveLoopbackDurableObjectNamespace({
+        namespace: resolveLoopbackExport({
           exportName: options.target.exportName,
           exports: options.exports,
         }),
@@ -670,29 +668,6 @@ function resolveLoopbackServiceBinding(options: {
   return binding({ props: options.target.props });
 }
 
-function resolveLoopbackDurableObjectNamespace(options: {
-  exportName: string;
-  exports: Record<string, unknown> | undefined;
-}) {
-  const value = resolveLoopbackExport(options);
-  if (isDurableObjectNamespace(value)) return value;
-  if (typeof value !== "function") return value;
-
-  /**
-   * The Cloudflare docs describe `ctx.exports` Durable Object exports as
-   * loopback Durable Object namespace bindings. Some Workers test/runtime
-   * surfaces expose loopback exports as callable binding factories, so we try
-   * the same no-props factory shape that service loopback bindings use before
-   * rejecting the value as non-namespace.
-   * https://developers.cloudflare.com/workers/runtime-apis/context/#exports
-   */
-  try {
-    return value();
-  } catch {
-    return value;
-  }
-}
-
 function resolveDurableObjectFetchStub(
   options:
     | {
@@ -714,7 +689,7 @@ function resolveDurableObjectFetchStub(
           env: options.env,
         })
       : resolveDurableObjectStubFromNamespace({
-          namespace: resolveLoopbackDurableObjectNamespace({
+          namespace: resolveLoopbackExport({
             exportName: options.target.exportName,
             exports: options.exports,
           }),
