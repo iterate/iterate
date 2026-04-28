@@ -320,7 +320,21 @@ const workersRpcCallableSchema = z
     argsMode: z.enum(["object", "positional"]).optional(),
     transformInput: transformInputSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((callable, ctx) => {
+    if (
+      callable.argsMode === "positional" &&
+      callable.transformInput?.shallowMerge != null &&
+      callable.transformInput.jsonata == null
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["transformInput", "shallowMerge"],
+        message:
+          "positional RPC cannot use transformInput.shallowMerge unless transformInput.jsonata also produces the positional array",
+      });
+    }
+  });
 
 /**
  * A `Callable` is intentionally just JSON data. It names a way to invoke

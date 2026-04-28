@@ -309,6 +309,24 @@ describe("callable validation", () => {
     });
   });
 
+  test("rejects positional RPC shallowMerge without JSONata to produce the args array", () => {
+    expect(() =>
+      validateCallable({
+        callable: {
+          type: "workers-rpc",
+          via: {
+            type: "env-binding",
+            bindingType: "service",
+            bindingName: "CALLABLE_TEST_SERVICE",
+          },
+          rpcMethod: "join",
+          argsMode: "positional",
+          transformInput: { shallowMerge: { left: "left" } },
+        },
+      }),
+    ).toThrow("Invalid callable");
+  });
+
   test("rejects empty or invalid input transforms", () => {
     expect(() =>
       validateCallable({
@@ -450,6 +468,23 @@ describe("dispatchCallable", () => {
     });
   });
 
+  test("wraps JSONata evaluation errors as payload validation failures", async () => {
+    await expect(
+      dispatchCallable({
+        callable: {
+          type: "fetch",
+          via: { type: "url", url: "https://api.example.com/tools" },
+          transformInput: { jsonata: "{" },
+        },
+        payload: { title: "Bug" },
+        ctx: { fetch: vi.fn() },
+      }),
+    ).rejects.toMatchObject({
+      code: "PAYLOAD_VALIDATION_FAILED",
+      message: "JSONata evaluation failed",
+    });
+  });
+
   test("uses fetchRequest body JSONata to build the JSON body from transformed input", async () => {
     const value = await dispatchCallable({
       callable: {
@@ -571,7 +606,7 @@ describe("dispatchCallable", () => {
       callable: {
         type: "fetch",
         via: { type: "url", url: "https://api.example.com" },
-        transformInput: { shallowMerge: { provider: "github" } },
+        transformInput: { jsonata: "{" },
       },
       request: new Request("https://router.local/raw", {
         method: "POST",
@@ -745,12 +780,15 @@ describe("dispatchCallable", () => {
         callable: {
           type: "fetch",
           via: { type: "url", url: "https://api.example.com" },
+          transformInput: { jsonata: "{" },
         },
         payload: new Request("https://router.local/upload"),
         ctx: { fetch: vi.fn() },
       }),
     ).rejects.toMatchObject({
       code: "PAYLOAD_VALIDATION_FAILED",
+      message:
+        "dispatchCallable() does not accept Request payloads; use dispatchCallableFetch() for raw fetch dispatch",
     });
   });
 
@@ -833,6 +871,26 @@ describe("dispatchCallable", () => {
         tenant: "tenant_123",
       },
     });
+  });
+
+  test("uses transformInput JSONata before positional service RPC dispatch", async () => {
+    const value = await dispatchCallable({
+      callable: {
+        type: "workers-rpc",
+        via: {
+          type: "env-binding",
+          bindingType: "service",
+          bindingName: "CALLABLE_TEST_SERVICE",
+        },
+        rpcMethod: "join",
+        argsMode: "positional",
+        transformInput: { jsonata: "[left, right]" },
+      },
+      payload: { left: "left", right: "right" },
+      ctx: { env: testEnv },
+    });
+
+    expect(value).toBe("left:right");
   });
 
   test("rejects primitive runtime payloads when transformInput.shallowMerge is present", async () => {
@@ -931,7 +989,7 @@ describe("dispatchCallable", () => {
     expect(value).toBe("left:right");
   });
 
-  test("rejects non-array payloads for positional RPC", async () => {
+  test("rejects non-array transformed inputs for positional RPC", async () => {
     await expect(
       dispatchCallable({
         callable: {

@@ -21,10 +21,11 @@ const value = await dispatchCallable({
 
 In normal product code, callers should not need to know whether dispatch uses
 Fetch or Workers RPC, or whether the live capability comes from a public URL,
-service binding, Durable Object, Dynamic Worker, or loopback binding. Use
-`dispatchCallableFetch({ callable, request, ctx })` only when the caller needs
-the raw Fetch API surface: streaming request bodies, streaming responses, SSE,
-or WebSocket upgrade responses.
+service binding, Durable Object namespace/stub, Worker Loader / Dynamic Worker
+entrypoint, or `ctx.exports` loopback binding. Use `dispatchCallableFetch({
+callable, request, ctx })` only when the caller needs the raw Fetch API surface:
+streaming request bodies, streaming responses, SSE, or WebSocket upgrade
+responses.
 
 Only the runtime and type modules are exported:
 
@@ -168,11 +169,12 @@ value-mode Request is deliberately boring:
 - `content-type: application/json`
 - body is `JSON.stringify(input ?? null)`
 
-`fetchRequest` configures the outbound Fetch API `Request`. In value mode it is
-applied after the synthetic Request is created. In raw fetch mode it is applied
-to the caller-provided Request without reading the body. Raw fetch mode receives
-a complete `Request`, so it ignores `transformInput` and rejects
-`fetchRequest.body`.
+`fetchRequest` configures the Fetch API `Request`. In value mode, method,
+headers, query, and JSONata body construction are part of building the
+synthetic Request from `input`; path handling runs when that Request is
+dispatched. In raw fetch mode, the caller already supplies a complete
+`Request`, so the runtime ignores `transformInput`, rejects `fetchRequest.body`,
+and applies only request-to-request fields without reading the body.
 
 ```ts
 const callable = {
@@ -288,7 +290,7 @@ There is no `newUniqueId` selector. Allocation belongs in provisioning code
 that persists the generated ID before creating a callable.
 
 `argsMode` defaults to `object`, so `input` is passed as one argument. Use
-`argsMode: "positional"` when the payload is an array and should be spread.
+`argsMode: "positional"` when `input` is an array and should be spread.
 
 ```ts
 const callable = {

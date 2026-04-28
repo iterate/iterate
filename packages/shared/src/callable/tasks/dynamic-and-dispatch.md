@@ -46,6 +46,7 @@ Deferred:
 - egress/globalOutbound policy
 - derive or validate `loader.id` from a canonical WorkerCode hash
 - `env`, tails, typed module objects, Python modules
+- Durable Object facets
 - Dynamic Worker WebSocket-specific test coverage, if we find a clean way to
   avoid additional workerd teardown noise
 

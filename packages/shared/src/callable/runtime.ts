@@ -90,11 +90,11 @@ async function buildCallableRequest(options: {
   if (callable.via.type === "url") {
     url.search = new URL(callable.via.url).search;
   }
-  const templateQuery = requestOverrides.query ?? {};
+  const configuredQuery = requestOverrides.query ?? {};
   if (requestOverrides.query != null) {
     url.search = "";
   }
-  for (const [key, value] of Object.entries(templateQuery)) {
+  for (const [key, value] of Object.entries(configuredQuery)) {
     url.searchParams.set(key, String(value));
   }
 
@@ -124,10 +124,10 @@ async function buildCallableRequest(options: {
  * Dispatches any v1 Callable and returns the produced value.
  *
  * This is the main API for callers that do not care whether the callable is
- * backed by fetch or Workers RPC. Fetch-shaped callables synthesize a Request
- * from the payload, reject non-2xx responses, and parse JSON/text response
- * bodies. Use `dispatchCallableFetch()` instead when the caller needs raw
- * `Request`/`Response` objects or streaming behavior.
+ * backed by fetch or Workers RPC. Fetch-shaped callables transform the payload
+ * into input, build a Request from that input, reject non-2xx responses, and
+ * parse JSON/text response bodies. Use `dispatchCallableFetch()` instead when
+ * the caller needs raw `Request`/`Response` objects or streaming behavior.
  */
 export async function dispatchCallable(options: {
   callable: unknown;
@@ -135,6 +135,13 @@ export async function dispatchCallable(options: {
   ctx: CallableContext;
 }): Promise<unknown> {
   const callable = validateCallable({ callable: options.callable });
+  if (callable.type === "fetch" && options.payload instanceof Request) {
+    throw new CallableError(
+      "PAYLOAD_VALIDATION_FAILED",
+      "dispatchCallable() does not accept Request payloads; use dispatchCallableFetch() for raw fetch dispatch",
+    );
+  }
+
   const input = await transformCallableInput({
     callable,
     payload: options.payload,
@@ -143,13 +150,6 @@ export async function dispatchCallable(options: {
 
   switch (callable.type) {
     case "fetch": {
-      if (options.payload instanceof Request) {
-        throw new CallableError(
-          "PAYLOAD_VALIDATION_FAILED",
-          "dispatchCallable() does not accept Request payloads; use dispatchCallableFetch() for raw fetch dispatch",
-        );
-      }
-
       const response = await dispatchValidatedCallableFetch({
         callable,
         request: await buildCallableRequest({ callable, input, ctx: options.ctx }),
