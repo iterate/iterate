@@ -1,2 +1,0 @@
-SELECT slug
-FROM leases;

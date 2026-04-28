@@ -16,7 +16,7 @@
     "rpc": "pnpm cli rpc",
     "seed:preview-pool": "pnpm cli seed-cloudflare-preview-environment-pool",
     "seed:tunnel-pool": "pnpm cli seed-cloudflare-tunnel-pool",
-    "sqlfu:generate": "sqlfu generate && cd src/durable-objects && sqlfu generate",
+    "sqlfu:generate": "sqlfu generate && cd src/durable-objects && sqlfu generate && cd ../.. && oxfmt src/db/queries/.generated src/durable-objects/db/queries/.generated",
     "typecheck": "tsc --noEmit",
     "test": "pnpm typecheck",
     "test:e2e": "node -e \"if (!process.env.SEMAPHORE_BASE_URL) { console.error('SEMAPHORE_BASE_URL is required for semaphore e2e tests'); process.exit(1); }\" && vitest run --config ./e2e/vitest.config.ts",

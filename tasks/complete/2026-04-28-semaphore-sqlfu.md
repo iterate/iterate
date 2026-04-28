@@ -6,7 +6,7 @@ size: medium
 
 # Move semaphore to SQLFu
 
-Status summary: implemented and verified. Semaphore now uses SQLFu for D1 resource storage and ResourceCoordinator Durable Object SQLite storage. No known missing pieces remain.
+Status summary: implemented and verified. Semaphore now uses SQLFu for D1 resource storage and ResourceCoordinator Durable Object SQLite storage, with one `queries.sql` file per SQLFu project. No known missing pieces remain.
 
 ## Goal
 
@@ -21,9 +21,9 @@ Move `apps/semaphore` to SQLFu, matching the direction already taken by `apps/ev
 
 ## Checklist
 
-- [x] Add SQLFu config and SQL files for the semaphore D1 resource database. _Implemented in `apps/semaphore/sqlfu.config.ts` and `apps/semaphore/src/db`._
+- [x] Add SQLFu config and SQL files for the semaphore D1 resource database. _Implemented in `apps/semaphore/sqlfu.config.ts` and `apps/semaphore/src/db`, with D1 queries collapsed into `src/db/queries/queries.sql`._
 - [x] Replace `apps/semaphore/sql/queries.ts` imports/usages with SQLFu-generated query modules. _Resource store and oRPC handlers now use `src/db/queries/.generated` via the request SQLFu client._
-- [x] Add SQLFu config, migrations, definitions, and generated query modules for `ResourceCoordinator` Durable Object storage. _Implemented under `apps/semaphore/src/durable-objects/db`; `ResourceCoordinator` now runs the bundled migration._
+- [x] Add SQLFu config, migrations, definitions, and generated query modules for `ResourceCoordinator` Durable Object storage. _Implemented under `apps/semaphore/src/durable-objects/db`; DO queries live in `db/queries/queries.sql`, and `ResourceCoordinator` now runs the bundled migration._
 - [x] Remove the old TypeSQL generator script/config and package dependency. _Deleted `scripts/generate-queries.ts`, `typesql.json`, `raw-sql.d.ts`, and `sql/queries.*`; removed `typesql-cli`._
 - [x] Update semaphore package scripts to use `sqlfu generate`. _Added `sqlfu:generate` and pointed `db:types` at it._
 - [x] Run focused verification for `apps/semaphore`. _Ran SQLFu generation, D1 + Durable Object migration/definition checks, `pnpm --dir apps/semaphore typecheck`, and `pnpm --dir apps/semaphore test`._
