@@ -112,6 +112,24 @@ describe("withLifecycleHooks types", () => {
     });
   });
 
+  it("accepts complete init params when callers derive the Durable Object name themselves", () => {
+    expectTypeOf(
+      getOrInitializeDoStub({
+        namespace,
+        initParams: {
+          ownerUserId: "user-a",
+        },
+      }),
+    ).resolves.toEqualTypeOf<DurableObjectStub<Room>>();
+
+    getOrInitializeDoStub({
+      namespace,
+      // @ts-expect-error ownerUserId is required because the helper has no
+      // separate name argument to fall back to for this init shape.
+      initParams: {},
+    });
+  });
+
   it("allows omitted initParams when name is the whole init shape", () => {
     type NameOnlyInit = {
       name: string;

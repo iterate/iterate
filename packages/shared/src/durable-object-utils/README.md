@@ -176,6 +176,32 @@ for `ensureStarted()` before returning. If the init shape is only
 `initParams` so the helper cannot return an uninitialized or unstarted stub by
 accident.
 
+Names are Durable Object identity, so build them from stable identifiers. Prefer
+database IDs, project IDs, user IDs, or another immutable key. Avoid slugs,
+titles, and other mutable labels unless changing that label should intentionally
+create a different Durable Object.
+
+If `name` is omitted, the helper derives a deterministic Durable Object name
+from `initParams`:
+
+```ts
+const stub = await getOrInitializeDoStub({
+  namespace: env.PROJECT_ROOMS,
+  initParams: {
+    projectId: "proj_123",
+    roomId: "room_456",
+  },
+});
+```
+
+Durable Object names remain the Cloudflare-native identity primitive. The
+library only needs one initialization helper; app code can pass `name`
+explicitly when it has a human-readable or externally defined name, or omit it
+when the whole init-param object should define identity. Use
+`deriveDurableObjectNameFromInitParams({ initParams })` directly when other code
+needs the same generated name, for example before storing a callable with
+`durableObject: { name }`.
+
 Inside subclasses, use the protected getter:
 
 ```ts
