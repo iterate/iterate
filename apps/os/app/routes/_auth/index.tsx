@@ -164,7 +164,7 @@ function IndexPage() {
                       <Button
                         variant="ghost"
                         size="sm"
-                        aria-label={`Decline invite to ${invite.organization.name}`}
+                        aria-label={`Decline invite to ${invite.organization?.name ?? "organization"}`}
                         onClick={() => declineInvite.mutate(invite.id)}
                         disabled={acceptInvite.isPending || declineInvite.isPending}
                       >
