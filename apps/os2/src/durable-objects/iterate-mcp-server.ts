@@ -2,11 +2,24 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpAgent } from "agents/mcp";
 import { z } from "zod";
 import { CodemodeExecutor } from "@iterate-com/shared/codemode/executor";
-import { validateProviderPaths } from "@iterate-com/shared/codemode/validate";
-import type { CodemodeEvent, ToolProvider } from "@iterate-com/shared/codemode/types";
 import packageJson from "../../package.json" with { type: "json" };
 
-export class IterateMcpServer extends McpAgent {
+/**
+ * MCP server for os2, exposed at /mcp on the main worker.
+ *
+ * Runs as a Durable Object in a separate Worker (`iterate-mcp-server-do`)
+ * with its own LOADER binding for sandboxed code execution.
+ *
+ * Tools:
+ * - run_code: Execute JavaScript in an isolated dynamic worker sandbox
+ */
+
+interface McpServerEnv {
+  LOADER: WorkerLoader;
+  ITERATE_MCP_SERVER: DurableObjectNamespace;
+}
+
+export class IterateMcpServer extends McpAgent<McpServerEnv> {
   server = new McpServer({
     name: "os2",
     version: packageJson.version,
@@ -26,8 +39,7 @@ export class IterateMcpServer extends McpAgent {
         }),
       },
       async ({ code }) => {
-        const loader = (this.env as Record<string, unknown>).LOADER as WorkerLoader | undefined;
-        if (!loader) {
+        if (!this.env.LOADER) {
           return {
             content: [{ type: "text" as const, text: "LOADER binding not available" }],
             isError: true,
@@ -36,34 +48,21 @@ export class IterateMcpServer extends McpAgent {
 
         const blockId = `cblk_mcp_${crypto.randomUUID().slice(0, 8)}`;
         const logs: string[] = [];
-        const toolCalls: string[] = [];
 
-        const executor = new CodemodeExecutor({ loader });
+        const executor = new CodemodeExecutor({ loader: this.env.LOADER });
         const result = await executor.execute({
           code,
           providers: [],
           blockId,
-          onEvent: (event: CodemodeEvent) => {
-            switch (event.type) {
-              case "codemode-log-emitted":
-                logs.push(`[${event.level}] ${event.message}`);
-                break;
-              case "codemode-tool-call-requested":
-                toolCalls.push(`-> ${event.path.join(".")}(${JSON.stringify(event.payload)})`);
-                break;
-              case "codemode-tool-call-succeeded":
-                toolCalls.push(`<- ${JSON.stringify(event.result)}`);
-                break;
-              case "codemode-tool-call-failed":
-                toolCalls.push(`<! ${event.error}`);
-                break;
+          onEvent: (event) => {
+            if (event.type === "codemode-log-emitted") {
+              logs.push(`[${event.level}] ${event.message}`);
             }
           },
         });
 
         const parts: string[] = [];
         if (logs.length > 0) parts.push(`Console:\n${logs.join("\n")}`);
-        if (toolCalls.length > 0) parts.push(`Tool calls:\n${toolCalls.join("\n")}`);
         if (result.error) {
           parts.push(`Error: ${result.error}`);
         } else {
@@ -79,6 +78,7 @@ export class IterateMcpServer extends McpAgent {
   }
 }
 
+/** Health-check handler for direct worker invocations (not via DO). */
 export default {
   fetch() {
     return new Response("ok");

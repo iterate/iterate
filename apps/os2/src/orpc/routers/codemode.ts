@@ -1,31 +1,9 @@
 import { CodemodeExecutor } from "@iterate-com/shared/codemode/executor";
 import { resolveCallableToolProvider } from "@iterate-com/shared/codemode/resolve";
 import { validateProviderPaths } from "@iterate-com/shared/codemode/validate";
-import type {
-  CallableToolProvider,
-  CodemodeEvent,
-  ToolProvider,
-} from "@iterate-com/shared/codemode/types";
+import type { CodemodeEvent } from "@iterate-com/shared/codemode/types";
 import type { CallableContext } from "@iterate-com/shared/callable/types.ts";
 import { os } from "~/orpc/orpc.ts";
-
-function generateBlockId(): string {
-  const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
-  let id = "cblk_";
-  for (let i = 0; i < 16; i++) {
-    id += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return id;
-}
-
-function generateCallId(): string {
-  const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
-  let id = "ccal_";
-  for (let i = 0; i < 12; i++) {
-    id += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return id;
-}
 
 export const codemodeRouter = {
   codemode: {
@@ -45,7 +23,6 @@ export const codemodeRouter = {
         return;
       }
 
-      // Validate provider paths
       const validationError = validateProviderPaths(input.providers);
       if (validationError) {
         yield {
@@ -58,14 +35,12 @@ export const codemodeRouter = {
         return;
       }
 
-      // Build callable context for resolving remote providers
-      const callableCtx: CallableContext = {
-        env: {},
-        fetch: globalThis.fetch,
-      };
+      if (signal?.aborted) return;
 
-      // 1. Emit provider-registered events
+      const callableCtx: CallableContext = { env: {}, fetch: globalThis.fetch };
+
       for (const provider of input.providers) {
+        if (signal?.aborted) return;
         yield {
           blockId,
           timestamp: now(),
@@ -74,10 +49,9 @@ export const codemodeRouter = {
         };
       }
 
-      // 2. Resolve providers and emit described events
-      const resolvedProviders: Array<{ path: string[]; provider: ToolProvider }> = [];
-
+      const resolvedProviders = [];
       for (const descriptor of input.providers) {
+        if (signal?.aborted) return;
         const resolved = resolveCallableToolProvider(descriptor, callableCtx);
         resolvedProviders.push({ path: descriptor.path, provider: resolved });
 
@@ -103,36 +77,25 @@ export const codemodeRouter = {
         }
       }
 
-      // 3. Emit block-added
-      yield {
-        blockId,
-        timestamp: now(),
-        type: "codemode-block-added",
-        code: input.code,
-      };
+      if (signal?.aborted) return;
 
-      // 4. Execute code with streaming events
+      yield { blockId, timestamp: now(), type: "codemode-block-added", code: input.code };
+
       const events: CodemodeEvent[] = [];
-      const executor = new CodemodeExecutor({
-        loader: context.loader,
-      });
+      const executor = new CodemodeExecutor({ loader: context.loader });
 
       const result = await executor.execute({
         code: input.code,
         providers: resolvedProviders,
         blockId,
-        onEvent: (event) => {
-          events.push(event);
-        },
-        signal: signal ?? undefined,
+        onEvent: (event) => events.push(event),
+        signal,
       });
 
-      // Yield all accumulated events from execution
       for (const event of events) {
-        yield event as CodemodeEvent & Record<string, unknown>;
+        yield event;
       }
 
-      // 5. Emit block-result-added
       yield {
         blockId,
         timestamp: now(),
@@ -142,12 +105,8 @@ export const codemodeRouter = {
       };
     }),
 
-    describe: os.codemode.describe.handler(async ({ input, context }) => {
-      const callableCtx: CallableContext = {
-        env: {},
-        fetch: globalThis.fetch,
-      };
-
+    describe: os.codemode.describe.handler(async ({ input }) => {
+      const callableCtx: CallableContext = { env: {}, fetch: globalThis.fetch };
       const typeBlocks: string[] = [];
 
       for (const descriptor of input.providers) {
@@ -156,16 +115,22 @@ export const codemodeRouter = {
           const description = await resolved.describe();
           typeBlocks.push(description.typeDefinitions);
         } catch (err) {
-          const pathLabel = descriptor.path.join(".");
           typeBlocks.push(
-            `/** Error loading types for "${pathLabel}": ${err instanceof Error ? err.message : String(err)} */`,
+            `/** Error loading types for "${descriptor.path.join(".")}": ${err instanceof Error ? err.message : String(err)} */`,
           );
         }
       }
 
-      return {
-        typeDefinitions: typeBlocks.join("\n\n"),
-      };
+      return { typeDefinitions: typeBlocks.join("\n\n") };
     }),
   },
 };
+
+function generateBlockId() {
+  const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
+  let id = "cblk_";
+  for (let i = 0; i < 16; i++) {
+    id += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return id;
+}
