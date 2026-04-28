@@ -1,5 +1,7 @@
 # Stage
 
+> **Note:** This document describes the `apps/os` (v1) stage and URL model. For `apps/os2`, see `docs/os2-environments.md` — os2 uses dedicated zone pairs per environment instead of subdomain-based URL derivation.
+
 Stage is an **input**, not something derived. The deployer decides what stage to deploy to.
 
 ## What stage means

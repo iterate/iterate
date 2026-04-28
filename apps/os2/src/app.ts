@@ -4,7 +4,7 @@ import { z } from "zod";
 import packageJson from "../package.json" with { type: "json" };
 
 export const AppConfig = BaseAppConfig.extend({
-  pirateSecret: redacted(z.string().trim().min(1).default("os")),
+  projectHostnameBases: z.array(z.string().trim().min(1)).default([]),
   typeIdPrefix: redacted(
     z
       .string()
@@ -24,8 +24,8 @@ export type AppConfig = z.output<typeof AppConfig>;
 const manifest = {
   packageName: packageJson.name,
   version: packageJson.version,
-  slug: "os",
-  description: "Minimal full-stack OS app with TanStack Start and oRPC.",
+  slug: "os2",
+  description: "Iterate OS v2 — dashboard and project subdomain routing.",
 } as const satisfies AppManifest;
 
 export default manifest;

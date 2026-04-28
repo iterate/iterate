@@ -118,7 +118,8 @@ missing, schema defaults and env overrides can still produce a valid config.
 Overrides use `__` as the nesting separator and convert env-style keys to the
 schema's camelCase shape. For OS:
 
-- `APP_CONFIG_PIRATE_SECRET=arrr` -> `pirateSecret`
+- `APP_CONFIG_BASE_URL=https://os.iterate2.com` -> `baseUrl`
+- `APP_CONFIG_PROJECT_HOSTNAME_BASES=["iterate2.app"]` -> `projectHostnameBases`
 - `APP_CONFIG_TYPE_ID_PREFIX=os` -> `typeIdPrefix`
 - `APP_CONFIG_LOGS__STDOUT_FORMAT=pretty` -> `logs.stdoutFormat`
 
@@ -140,6 +141,6 @@ OS:
 OS override:
 
 ```bash
-APP_CONFIG='{"pirateSecret":"base-secret"}' \
-APP_CONFIG_PIRATE_SECRET=override-secret
+APP_CONFIG_BASE_URL=https://os.iterate-dev-jonas.com \
+APP_CONFIG_PROJECT_HOSTNAME_BASES='["iterate-dev-jonas.app"]'
 ```

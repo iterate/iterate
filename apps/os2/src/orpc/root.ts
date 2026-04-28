@@ -16,8 +16,5 @@ export const appRouter = createAppRouterWithInternal({
         message: "pong",
         serverTime: new Date().toISOString(),
       })),
-      pirateSecret: os.pirateSecret.handler(async ({ context }) => ({
-        secret: context.config.pirateSecret.exposeSecret(),
-      })),
     }),
 });

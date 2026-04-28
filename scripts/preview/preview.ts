@@ -554,6 +554,7 @@ async function createPreviewEnvironment(
       previewEnvironmentSlug: lease.slug,
       previewEnvironmentType: params.previewResourceType,
       publicUrl: previewEnvironment.publicUrl,
+      projectSubdomainUrl: previewEnvironment.projectSubdomainUrl ?? null,
       runUrl: params.workflowRunUrl ?? null,
       shortSha: params.pullRequestHeadSha.slice(0, 7),
       updatedAt: new Date().toISOString(),
@@ -737,16 +738,24 @@ function derivePreviewEnvironment(input: {
     );
   }
 
+  const publicUrl =
+    input.appSlug === "os2"
+      ? `https://os.iterate-preview-${slot}.com`
+      : input.appSlug === "events"
+        ? `https://${input.previewEnvironmentSlug}.iterate.com`
+        : `https://${input.previewEnvironmentSlug}.iterate.workers.dev`;
+
+  const projectSubdomainUrl =
+    input.appSlug === "os2" ? `https://iterate-preview-${slot}.app` : null;
+
   return {
     previewEnvironmentAlchemyStageName: `preview-${slot}`,
     previewEnvironmentDopplerConfigName: `stg_${slot}`,
     previewEnvironmentIdentifier: input.previewEnvironmentSlug,
     previewEnvironmentSlug: input.previewEnvironmentSlug,
     previewEnvironmentType: input.previewEnvironmentType,
-    publicUrl:
-      input.appSlug === "events" || input.appSlug === "os2"
-        ? `https://${input.previewEnvironmentSlug}.iterate.com`
-        : `https://${input.previewEnvironmentSlug}.iterate.workers.dev`,
+    publicUrl,
+    projectSubdomainUrl,
   };
 }
 

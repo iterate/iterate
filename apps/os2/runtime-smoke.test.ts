@@ -25,9 +25,7 @@ const runFullSmoke = process.env.RUNTIME_SMOKE_FULL === "1";
 const describeRuntimeSmoke = process.env.CI ? describe.skip : describe.sequential;
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
 const smokeEnv = {
-  APP_CONFIG: JSON.stringify({
-    pirateSecret: "smoke-secret",
-  }),
+  APP_CONFIG: JSON.stringify({}),
 };
 
 /** Drop inherited `APP_CONFIG` / `APP_CONFIG_*` so Doppler (or local shells) cannot override smoke fixtures. */
@@ -98,7 +96,6 @@ async function assertSsrHtml(httpBaseUrl: string) {
   expect(res.ok).toBe(true);
 
   const html = await res.text();
-  expect(html).toContain("Pirate Secret");
   expect(html).toContain("Observability / failure demo");
 }
 

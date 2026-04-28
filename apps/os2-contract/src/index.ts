@@ -105,15 +105,6 @@ export const osContract = oc.router({
     .route({ method: "GET", path: "/ping", description: "Ping", tags: ["/debug"] })
     .input(z.object({}).optional().default({}))
     .output(z.object({ message: z.string(), serverTime: z.string() })),
-  pirateSecret: oc
-    .route({
-      method: "GET",
-      path: "/pirate-secret",
-      description: "Reveal the configured pirate secret",
-      tags: ["/debug"],
-    })
-    .input(z.object({}).optional().default({}))
-    .output(z.object({ secret: z.string() })),
   test: {
     logDemo: oc
       .route({
