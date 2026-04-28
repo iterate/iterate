@@ -7,6 +7,28 @@ import {
   type SemaphoreLeaseRecord,
 } from "@iterate-com/semaphore-contract";
 import { z } from "zod";
+import {
+  createD1Client,
+  createDurableObjectClient,
+  type AsyncClient,
+  type SyncClient,
+} from "sqlfu";
+import { migrate } from "./db/migrations/.generated/migrations.ts";
+import {
+  deleteLeaseBySlug,
+  deleteLeaseBySlugAndLeaseId,
+  insertCoordinatorType,
+  insertEvent,
+  insertLease,
+  selectActiveLeaseSlugs,
+  selectCoordinatorType,
+  selectExpiredLeases,
+  selectLeaseBySlug,
+  selectLeaseCountBySlug,
+  selectLeaseIdBySlug,
+  selectNextLease,
+  updateLeaseExpires,
+} from "./db/queries/.generated/index.ts";
 import type { Env } from "~/env.ts";
 import {
   markResourceAvailableInDb,
@@ -25,14 +47,18 @@ type Waiter = {
 };
 
 export class ResourceCoordinator extends DurableObject<Env> {
+  private readonly client: SyncClient;
+  private readonly resourcesDb: AsyncClient;
   private waiters: Waiter[] = [];
   private nextWaiterId = 0;
   private coordinatorType: string | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    this.client = createDurableObjectClient(ctx.storage);
+    this.resourcesDb = createD1Client(env.DB);
     this.ctx.blockConcurrencyWhile(async () => {
-      this.initializeSql();
+      migrate(this.client);
       await this.scheduleNextAlarm();
     });
   }
@@ -78,17 +104,15 @@ export class ResourceCoordinator extends DurableObject<Env> {
   async release(params: { type: string; slug: string; leaseId: string }): Promise<boolean> {
     const { type, slug, leaseId } = ReleaseResourceInput.parse(params);
     this.rememberCoordinatorType(type);
-    const existing = this.ctx.storage.sql
-      .exec<{ lease_id: string }>("SELECT lease_id FROM leases WHERE slug = ?", slug)
-      .toArray()[0];
+    const existing = selectLeaseIdBySlug(this.client, { slug });
 
     if (!existing || existing.lease_id !== leaseId) {
       return false;
     }
 
-    this.ctx.storage.sql.exec("DELETE FROM leases WHERE slug = ?", slug);
+    deleteLeaseBySlug(this.client, { slug });
     this.logEvent("released", slug, { leaseId });
-    await markResourceAvailableInDb(this.env.DB, {
+    await markResourceAvailableInDb(this.resourcesDb, {
       type,
       slug,
       lastReleasedAt: Date.now(),
@@ -102,12 +126,7 @@ export class ResourceCoordinator extends DurableObject<Env> {
     const parsed = DeleteResourceInput.parse(params);
     this.rememberCoordinatorType(parsed.type);
     await this.reapExpiredLeases(parsed.type);
-    const existing = this.ctx.storage.sql
-      .exec<{ lease_id: string; expires_at: number }>(
-        "SELECT lease_id, expires_at FROM leases WHERE slug = ?",
-        parsed.slug,
-      )
-      .toArray()[0];
+    const existing = selectLeaseBySlug(this.client, { slug: parsed.slug });
 
     if (!existing) {
       return null;
@@ -130,14 +149,12 @@ export class ResourceCoordinator extends DurableObject<Env> {
 
     this.rememberCoordinatorType(parsed.type);
     await this.reapExpiredLeases(parsed.type);
-    const activeLease = this.ctx.storage.sql
-      .exec<{ slug: string }>("SELECT slug FROM leases WHERE slug = ?", parsed.slug)
-      .toArray()[0];
+    const activeLease = selectLeaseIdBySlug(this.client, { slug: parsed.slug });
     if (activeLease) {
       return null;
     }
 
-    const inventory = await selectInventoryByType(this.env.DB, parsed.type);
+    const inventory = await selectInventoryByType(this.resourcesDb, parsed.type);
     const candidate = inventory.find((resource) => resource.slug === parsed.slug);
     if (!candidate) {
       return null;
@@ -158,14 +175,12 @@ export class ResourceCoordinator extends DurableObject<Env> {
 
     this.rememberCoordinatorType(parsed.type);
     await this.reapExpiredLeases(parsed.type);
-    const existing = this.ctx.storage.sql
-      .exec<{ lease_id: string }>("SELECT lease_id FROM leases WHERE slug = ?", parsed.slug)
-      .toArray()[0];
+    const existing = selectLeaseIdBySlug(this.client, { slug: parsed.slug });
     if (!existing || existing.lease_id !== parsed.leaseId) {
       return null;
     }
 
-    const inventory = await selectInventoryByType(this.env.DB, parsed.type);
+    const inventory = await selectInventoryByType(this.resourcesDb, parsed.type);
     const candidate = inventory.find((resource) => resource.slug === parsed.slug);
     if (!candidate) {
       await this.release(parsed);
@@ -174,13 +189,8 @@ export class ResourceCoordinator extends DurableObject<Env> {
 
     const now = Date.now();
     const expiresAt = now + parsed.leaseMs;
-    this.ctx.storage.sql.exec(
-      "UPDATE leases SET expires_at = ? WHERE slug = ? AND lease_id = ?",
-      expiresAt,
-      parsed.slug,
-      parsed.leaseId,
-    );
-    await markResourceLeasedInDb(this.env.DB, {
+    updateLeaseExpires(this.client, { expiresAt }, { slug: parsed.slug, leaseId: parsed.leaseId });
+    await markResourceLeasedInDb(this.resourcesDb, {
       type: parsed.type,
       slug: parsed.slug,
       leasedUntil: expiresAt,
@@ -202,9 +212,10 @@ export class ResourceCoordinator extends DurableObject<Env> {
     const { type, slug } = DeleteResourceInput.parse(params);
     this.rememberCoordinatorType(type);
     await this.reapExpiredLeases(type);
-    const row = this.ctx.storage.sql
-      .exec<{ count: number }>("SELECT COUNT(*) AS count FROM leases WHERE slug = ?", slug)
-      .one();
+    const row = selectLeaseCountBySlug(this.client, { slug });
+    if (!row) {
+      return false;
+    }
     return row.count > 0;
   }
 
@@ -217,35 +228,6 @@ export class ResourceCoordinator extends DurableObject<Env> {
     await this.reapExpiredLeases();
     await this.scheduleNextAlarm();
     await this.dispatchWaiters();
-  }
-
-  private initializeSql() {
-    this.ctx.storage.sql.exec(`
-      CREATE TABLE IF NOT EXISTS leases (
-        slug TEXT PRIMARY KEY,
-        lease_id TEXT NOT NULL,
-        expires_at INTEGER NOT NULL,
-        created_at INTEGER NOT NULL
-      )
-    `);
-    this.ctx.storage.sql.exec(`
-      CREATE TABLE IF NOT EXISTS events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        occurred_at INTEGER NOT NULL,
-        event TEXT NOT NULL,
-        slug TEXT,
-        payload TEXT NOT NULL
-      )
-    `);
-    this.ctx.storage.sql.exec(`
-      CREATE TABLE IF NOT EXISTS metadata (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      )
-    `);
-    this.ctx.storage.sql.exec(
-      "CREATE INDEX IF NOT EXISTS idx_leases_expires_at ON leases(expires_at)",
-    );
   }
 
   private rememberCoordinatorType(type: string): void {
@@ -262,10 +244,7 @@ export class ResourceCoordinator extends DurableObject<Env> {
       return;
     }
 
-    this.ctx.storage.sql.exec(
-      "INSERT OR REPLACE INTO metadata (key, value) VALUES ('type', ?)",
-      parsedType,
-    );
+    insertCoordinatorType(this.client, { type: parsedType });
     this.coordinatorType = parsedType;
   }
 
@@ -274,9 +253,7 @@ export class ResourceCoordinator extends DurableObject<Env> {
       return this.coordinatorType;
     }
 
-    const row = this.ctx.storage.sql
-      .exec<{ value: string }>("SELECT value FROM metadata WHERE key = 'type'")
-      .toArray()[0];
+    const row = selectCoordinatorType(this.client);
     const storedType = row?.value ? parseType(row.value) : null;
     this.coordinatorType = storedType;
     return storedType;
@@ -285,17 +262,12 @@ export class ResourceCoordinator extends DurableObject<Env> {
   private async tryAcquire(type: string, leaseMs: number): Promise<SemaphoreLeaseRecord | null> {
     await this.reapExpiredLeases();
 
-    const inventory = await selectInventoryByType(this.env.DB, type);
+    const inventory = await selectInventoryByType(this.resourcesDb, type);
     if (inventory.length === 0) {
       return null;
     }
 
-    const activeLeases = new Set(
-      this.ctx.storage.sql
-        .exec<{ slug: string }>("SELECT slug FROM leases")
-        .toArray()
-        .map((row) => row.slug),
-    );
+    const activeLeases = new Set(selectActiveLeaseSlugs(this.client).map((row) => row.slug));
 
     const candidates = inventory.filter((resource) => !activeLeases.has(resource.slug));
     if (candidates.length === 0) {
@@ -314,12 +286,7 @@ export class ResourceCoordinator extends DurableObject<Env> {
 
   private async reapExpiredLeases(type?: string): Promise<void> {
     const now = Date.now();
-    const expired = this.ctx.storage.sql
-      .exec<{ slug: string; lease_id: string; expires_at: number }>(
-        "SELECT slug, lease_id, expires_at FROM leases WHERE expires_at <= ? ORDER BY expires_at ASC",
-        now,
-      )
-      .toArray();
+    const expired = selectExpiredLeases(this.client, { now });
 
     if (expired.length === 0) {
       return;
@@ -383,8 +350,8 @@ export class ResourceCoordinator extends DurableObject<Env> {
     event: string,
     payload: SemaphoreJsonObject & { releasedAt: number | null },
   ): Promise<void> {
-    this.ctx.storage.sql.exec("DELETE FROM leases WHERE slug = ? AND lease_id = ?", slug, leaseId);
-    await markResourceAvailableInDb(this.env.DB, {
+    deleteLeaseBySlugAndLeaseId(this.client, { slug, leaseId });
+    await markResourceAvailableInDb(this.resourcesDb, {
       type,
       slug,
       lastReleasedAt: payload.releasedAt,
@@ -400,15 +367,14 @@ export class ResourceCoordinator extends DurableObject<Env> {
     const now = Date.now();
     const expiresAt = now + leaseMs;
     const leaseId = crypto.randomUUID();
-    this.ctx.storage.sql.exec(
-      "INSERT INTO leases (slug, lease_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
-      candidate.slug,
+    insertLease(this.client, {
+      slug: candidate.slug,
       leaseId,
       expiresAt,
-      now,
-    );
+      createdAt: now,
+    });
 
-    const mirrored = await markResourceLeasedInDb(this.env.DB, {
+    const mirrored = await markResourceLeasedInDb(this.resourcesDb, {
       type: candidate.type,
       slug: candidate.slug,
       leasedUntil: expiresAt,
@@ -440,9 +406,7 @@ export class ResourceCoordinator extends DurableObject<Env> {
   }
 
   private async scheduleNextAlarm(): Promise<void> {
-    const nextLease = this.ctx.storage.sql
-      .exec<{ expires_at: number }>("SELECT expires_at FROM leases ORDER BY expires_at ASC LIMIT 1")
-      .toArray()[0];
+    const nextLease = selectNextLease(this.client);
 
     if (!nextLease) {
       await this.ctx.storage.deleteAlarm();
@@ -453,12 +417,11 @@ export class ResourceCoordinator extends DurableObject<Env> {
   }
 
   private logEvent(event: string, slug: string | null, payload: SemaphoreJsonObject) {
-    this.ctx.storage.sql.exec(
-      "INSERT INTO events (occurred_at, event, slug, payload) VALUES (?, ?, ?, ?)",
-      Date.now(),
+    insertEvent(this.client, {
+      occurredAt: Date.now(),
       event,
       slug,
-      JSON.stringify(payload),
-    );
+      payload: JSON.stringify(payload),
+    });
   }
 }

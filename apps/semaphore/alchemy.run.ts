@@ -65,7 +65,7 @@ const primaryUrl = env.WORKER_ROUTES[0] ? `https://${env.WORKER_ROUTES[0]}` : un
 
 const db = await D1Database("resources-db", {
   name: `${workerName}-resources`,
-  migrationsDir: "./migrations",
+  migrationsDir: "./src/db/migrations",
   adopt: true,
 });
 

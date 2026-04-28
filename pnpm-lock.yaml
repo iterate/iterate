@@ -2702,6 +2702,9 @@ importers:
       react-dom:
         specifier: ^19.2.0
         version: 19.2.4(react@19.2.4)
+      sqlfu:
+        specifier: 0.0.3-10
+        version: 0.0.3-10(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0)
       tailwindcss:
         specifier: ^4.1.18
         version: 4.2.1
@@ -2739,15 +2742,15 @@ importers:
       esbuild:
         specifier: ^0.27.4
         version: 0.27.4
+      miniflare:
+        specifier: catalog:cloudflare
+        version: 4.20260424.0
       tsx:
         specifier: ^4.20.6
         version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
-      typesql-cli:
-        specifier: github:iterate/typesql#5687eb2
-        version: https://codeload.github.com/iterate/typesql/tar.gz/5687eb2(@types/node@25.3.3)
       vite:
         specifier: ^8.0.0
         version: 8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)

@@ -90,7 +90,7 @@ const addResourceProcedure = os.resources.add
         });
       }
 
-      const created = await insertResource(context.env.DB, {
+      const created = await insertResource(context.db, {
         type,
         slug,
         data,
@@ -107,7 +107,7 @@ const deleteResourceProcedure = os.resources.delete
   .handler(async ({ context, input }) => {
     try {
       const { type, slug } = input;
-      const deleted = await deleteResourceFromDb(context.env.DB, { type, slug });
+      const deleted = await deleteResourceFromDb(context.db, { type, slug });
       return { deleted };
     } catch (error) {
       return mapResourceError(error);
@@ -118,7 +118,7 @@ const listResourcesProcedure = os.resources.list
   .use(authProcedure)
   .handler(async ({ context, input }) => {
     try {
-      return await listResourcesFromDb(context.env.DB, { type: input.type });
+      return await listResourcesFromDb(context.db, { type: input.type });
     } catch (error) {
       return mapResourceError(error);
     }
@@ -128,7 +128,7 @@ const findResourceProcedure = os.resources.find
   .use(authProcedure)
   .handler(async ({ context, input }) => {
     try {
-      const resource = await findResourceByKey(context.env.DB, input);
+      const resource = await findResourceByKey(context.db, input);
       if (!resource) {
         throw new ORPCError("NOT_FOUND", {
           message: `No resource exists for ${input.type}/${input.slug}.`,
@@ -146,7 +146,7 @@ const acquireResourceProcedure = os.resources.acquire
   .handler(async ({ context, input }) => {
     try {
       const { type, leaseMs, waitMs = 0 } = input;
-      const hasInventory = await hasInventoryForType(context.env.DB, type);
+      const hasInventory = await hasInventoryForType(context.db, type);
       if (!hasInventory) {
         throw new ORPCError("NOT_FOUND", {
           message: "No resources are configured for this type.",

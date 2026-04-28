@@ -5,6 +5,7 @@ import {
   type SemaphoreResourceRecord,
 } from "@iterate-com/semaphore-contract";
 import { z } from "zod";
+import type { AsyncClient } from "sqlfu";
 import {
   deleteResourceByTypeAndSlug,
   insertResourceRow,
@@ -14,7 +15,7 @@ import {
   selectResourcesByType,
   updateResourceAvailable,
   updateResourceLeased,
-} from "../../sql/queries.ts";
+} from "~/db/queries/.generated/index.ts";
 
 type ResourceRow = {
   type: string;
@@ -46,6 +47,10 @@ function parseData(value: string): SemaphoreJsonObject {
   }
 }
 
+function currentSqlTimestamp(): string {
+  return new Date().toISOString().replace("T", " ").slice(0, 19);
+}
+
 function rowToResourceRecord(row: ResourceRow): SemaphoreResourceRecord {
   return {
     type: row.type,
@@ -61,7 +66,7 @@ function rowToResourceRecord(row: ResourceRow): SemaphoreResourceRecord {
 }
 
 export async function listResourcesFromDb(
-  db: D1Database,
+  db: AsyncClient,
   params: { type?: string } = {},
 ): Promise<SemaphoreResourceRecord[]> {
   const rows = params.type
@@ -71,7 +76,7 @@ export async function listResourcesFromDb(
 }
 
 export async function findResourceByKey(
-  db: D1Database,
+  db: AsyncClient,
   key: { type: string; slug: string },
 ): Promise<SemaphoreResourceRecord | null> {
   const row = await selectResourceByTypeAndSlug(db, key);
@@ -79,7 +84,7 @@ export async function findResourceByKey(
 }
 
 export async function insertResource(
-  db: D1Database,
+  db: AsyncClient,
   resource: {
     type: string;
     slug: string;
@@ -105,30 +110,30 @@ export async function insertResource(
 }
 
 export async function deleteResourceFromDb(
-  db: D1Database,
+  db: AsyncClient,
   key: {
     type: string;
     slug: string;
   },
 ): Promise<boolean> {
   const result = await deleteResourceByTypeAndSlug(db, key);
-  return (result.changes ?? 0) > 0;
+  return (result.rowsAffected || 0) > 0;
 }
 
 export async function selectInventoryByType(
-  db: D1Database,
+  db: AsyncClient,
   type: string,
 ): Promise<SemaphoreResourceRecord[]> {
   return listResourcesFromDb(db, { type });
 }
 
-export async function hasInventoryForType(db: D1Database, type: string): Promise<boolean> {
+export async function hasInventoryForType(db: AsyncClient, type: string): Promise<boolean> {
   const result = await selectResourcePresenceByType(db, { type });
   return Boolean(result?.present);
 }
 
 export async function markResourceLeasedInDb(
-  db: D1Database,
+  db: AsyncClient,
   params: {
     type: string;
     slug: string;
@@ -139,19 +144,21 @@ export async function markResourceLeasedInDb(
   const result = await updateResourceLeased(
     db,
     {
+      leaseState: "leased",
       leasedUntil: params.leasedUntil,
       lastAcquiredAt: params.lastAcquiredAt,
+      updatedAt: currentSqlTimestamp(),
     },
     {
       type: params.type,
       slug: params.slug,
     },
   );
-  return (result.changes ?? 0) > 0;
+  return (result.rowsAffected || 0) > 0;
 }
 
 export async function markResourceAvailableInDb(
-  db: D1Database,
+  db: AsyncClient,
   params: {
     type: string;
     slug: string;
@@ -161,7 +168,10 @@ export async function markResourceAvailableInDb(
   await updateResourceAvailable(
     db,
     {
+      leaseState: "available",
+      leasedUntil: null,
       lastReleasedAt: params.lastReleasedAt,
+      updatedAt: currentSqlTimestamp(),
     },
     {
       type: params.type,

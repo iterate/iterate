@@ -6,7 +6,7 @@ Cloudflare-only: TanStack Start + oRPC + raw D1 inventory storage, with a Durabl
 
 - **API:** oRPC over OpenAPI/HTTP at `/api`
 - **Frontend:** TanStack Start + Router + Query
-- **DB:** raw D1 queries via generated TypeSQL helpers (`sql/queries.ts`)
+- **DB:** D1 inventory storage via SQLFu-generated helpers under `src/db`
 - **Coordinator:** one Durable Object per resource `type` handles active leases, waiters, and expiry
 - **Secrets:** Doppler project `semaphore` (see repo `doppler.yaml`). `DOPPLER_CONFIG` is injected by `doppler run`, and `_shared` defines `ALCHEMY_STAGE=${DOPPLER_CONFIG}`. The bearer token now lives in root-level `APP_CONFIG.sharedApiSecret`.
 
@@ -28,6 +28,7 @@ pnpm dev          # doppler + Alchemy local (Vite); optional PORT= for fixed por
 pnpm build        # production client/server bundle
 pnpm deploy       # `doppler run --config prd` — `_shared` resolves `ALCHEMY_STAGE=prd`
 pnpm seed:tunnel-pool
+pnpm db:types     # regenerate SQLFu helpers for D1 + Durable Object SQLite
 pnpm test         # typecheck only
 pnpm test:e2e     # requires `SEMAPHORE_BASE_URL`
 ```

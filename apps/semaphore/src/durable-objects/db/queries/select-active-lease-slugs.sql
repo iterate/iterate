@@ -1,0 +1,2 @@
+SELECT slug
+FROM leases;
