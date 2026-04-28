@@ -5,7 +5,7 @@ Utilities here are experimental helpers for composing Cloudflare Durable Object 
 ## Current Scope
 
 - `mixins/with-lifecycle-hooks.ts` adds named initialization state and tiny lifecycle hooks for SQLite-backed Durable Objects.
-- `mixins/with-external-listing.ts` best-effort mirrors initialized objects into a D1 table owned by the mixin.
+- `mixins/with-d1-object-catalog.ts` best-effort mirrors initialized objects into D1 tables owned by the mixin, with optional secondary indexes derived from init params.
 - `mixins/with-multiplexed-alarms.ts` stores many logical one-shot alarms behind Cloudflare's single Durable Object alarm slot.
 - `mixins/with-scheduler.ts` adds key-based one-shot, delayed, interval, cron, and RRULE scheduling on top of multiplexed alarms.
 - `mixins/with-outerbase.ts` and `mixins/with-kv-inspector.ts` are debug inspector mixins. Do not attach them to production-routed objects without an explicit auth/dev gating decision.
@@ -22,18 +22,23 @@ type RoomInit = {
   ownerUserId: string;
 };
 
-type NeedsListings = {
-  DO_LISTINGS: D1Database;
+type NeedsCatalog = {
+  DO_CATALOG: D1Database;
 };
 
-type Env = NeedsListings & {
+type Env = NeedsCatalog & {
   OTHER_BINDING: Fetcher;
 };
 
-const RoomBase = withExternalListing<RoomInit, NeedsListings>({
+const RoomBase = withD1ObjectCatalog<RoomInit, NeedsCatalog>({
   className: "Room",
   getDatabase(env) {
-    return env.DO_LISTINGS;
+    return env.DO_CATALOG;
+  },
+  indexes: {
+    ownerUserId(params) {
+      return params.ownerUserId;
+    },
   },
 })(withLifecycleHooks<RoomInit>()(DurableObject));
 
@@ -69,35 +74,35 @@ the returned class is still generic in `Env`.
 Some mixins also spell out a generic constructor surface explicitly:
 
 ```ts
-abstract new <FinalEnv extends NeedsListings>(
+abstract new <FinalEnv extends NeedsCatalog>(
   ctx: DurableObjectState,
   env: FinalEnv,
-) => DurableObject<FinalEnv> & ExternalListingMembers<RoomInit>
+) => DurableObject<FinalEnv> & D1ObjectCatalogMembers<RoomInit>
 ```
 
-That is how `withExternalListing()` keeps the D1 requirement visible without
+That is how `withD1ObjectCatalog()` keeps the D1 requirement visible without
 forcing the final app env to be exactly the small requirement:
 
 ```ts
-type NeedsListings = {
-  DO_LISTINGS: D1Database;
+type NeedsCatalog = {
+  DO_CATALOG: D1Database;
 };
 
-type Env = NeedsListings & {
+type Env = NeedsCatalog & {
   OTHER_BINDING: Fetcher;
 };
 
-const Base = withExternalListing<RoomInit, NeedsListings>({
+const Base = withD1ObjectCatalog<RoomInit, NeedsCatalog>({
   className: "Room",
   getDatabase(env) {
-    return env.DO_LISTINGS;
+    return env.DO_CATALOG;
   },
 })(withLifecycleHooks<RoomInit>()(DurableObject));
 
-class Room extends Base<Env> {} // ok: Env has DO_LISTINGS
+class Room extends Base<Env> {} // ok: Env has DO_CATALOG
 
 class Broken extends Base<{ OTHER_BINDING: Fetcher }> {}
-// TypeScript error: missing DO_LISTINGS
+// TypeScript error: missing DO_CATALOG
 ```
 
 The protected `initParams` type uses an abstract class instead of an interface
@@ -250,43 +255,84 @@ params for the same name, is treated as a programming error because otherwise
 different callers could silently disagree about the identity of the same named
 object.
 
-## External Listing
+## D1 Object Catalog
 
-`withExternalListing()` deliberately takes `getDatabase(env)` instead of a
+`withD1ObjectCatalog()` deliberately takes `getDatabase(env)` instead of a
 string binding name. That keeps the type story explicit: the call site decides
 the minimal `Env` shape that can retrieve D1, and the returned mixin class keeps
-that shape as the lower bound for `class Room extends ListedRoomBase<Env>`.
+that shape as the lower bound for `class Room extends CatalogedRoomBase<Env>`.
 
 ```ts
-type NeedsListings = {
-  DO_LISTINGS: D1Database;
+type NeedsCatalog = {
+  DO_CATALOG: D1Database;
 };
 
-const ListedRoomBase = withExternalListing<RoomInit, NeedsListings>({
+const CatalogedRoomBase = withD1ObjectCatalog<RoomInit, NeedsCatalog>({
   className: "Room",
   getDatabase(env) {
-    return env.DO_LISTINGS;
+    return env.DO_CATALOG;
+  },
+  indexes: {
+    ownerUserId(params) {
+      return params.ownerUserId;
+    },
   },
 })(withLifecycleHooks<RoomInit>()(DurableObject));
 ```
 
 The D1 write is best-effort and idempotent. The mixin sends
-`CREATE TABLE IF NOT EXISTS` in the same D1 batch as each upsert, so object
-construction does not block on listing-table setup.
+`CREATE TABLE IF NOT EXISTS` for its object and index tables in the same D1
+batch as each upsert, so object construction does not block on catalog-table
+setup.
 
-Listing writes happen from the lifecycle start hook via `ctx.waitUntil()`. That
-is deliberate: the Durable Object's local initialization remains the source of
-truth, and D1 is only a discoverability index. `getExternalListing()` therefore
-returns `null` when the object is uninitialized, the background D1 write has not
-completed yet, or the listing table does not exist yet. It never uses
+Catalog writes happen from the lifecycle start hook via `ctx.waitUntil()`. That
+is deliberate: this mixin is just a consumer of `withLifecycleHooks()`, not a
+separate lifecycle system. The Durable Object's local initialization remains
+the source of truth, and D1 is only a discoverability index.
+`getD1ObjectCatalogRecord()` therefore returns `null` when the object is
+uninitialized, the background D1 write has not completed yet, or the catalog
+tables do not exist yet. It never uses
 `undefined` as the public "missing row" value because `Response.json(undefined)`
 throws in Worker runtimes.
 
-The D1 row is keyed by `(class, name)`. `created_at` is the first insert time,
-while `last_started_at` is updated whenever the start hook runs. Init params
-used with this mixin must be JSON-compatible because the D1 mirror stores them
-as JSON text. This is stricter than the base lifecycle hooks mixin, which only
-requires values that can be persisted in Durable Object storage.
+The object row is keyed by `(class, name)`. `created_at` is the first insert
+time, while `last_started_at` is updated whenever the start hook runs. Init
+params used with this mixin must be JSON-compatible because the D1 mirror stores
+them as JSON text. This is stricter than the base lifecycle hooks mixin, which
+only requires values that can be persisted in Durable Object storage.
+
+Secondary indexes are stored in a separate table:
+
+```sql
+PRIMARY KEY (class, index_name, index_value, name)
+```
+
+That avoids dynamic D1 columns and migrations for every new lookup dimension.
+Index functions should derive stable values from init params, for example
+`ownerUserId`, `projectId`, or a list of member IDs:
+
+```ts
+indexes: {
+  ownerUserId: (params) => params.ownerUserId,
+  projectId: (params) => params.projectId,
+  memberUserIds: (params) => params.memberUserIds,
+}
+```
+
+Use the free helpers when listing from outside a specific Durable Object:
+
+```ts
+await getD1ObjectCatalogRecord<RoomInit>(env.DO_CATALOG, {
+  className: "Room",
+  name: "room-a",
+});
+
+await listD1ObjectCatalogRecordsByIndex<RoomInit>(env.DO_CATALOG, {
+  className: "Room",
+  indexName: "ownerUserId",
+  indexValue: "user-a",
+});
+```
 
 ## Multiplexed Alarms
 

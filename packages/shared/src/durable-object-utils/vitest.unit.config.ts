@@ -46,10 +46,10 @@ writeFileSync(
       },
       d1_databases: [
         {
-          binding: "DO_LISTINGS",
-          database_id: "durable-object-utils-listings-test",
-          database_name: "durable-object-utils-listings-test",
-          preview_database_id: "durable-object-utils-listings-test",
+          binding: "DO_CATALOG",
+          database_id: "durable-object-utils-catalog-test",
+          database_name: "durable-object-utils-catalog-test",
+          preview_database_id: "durable-object-utils-catalog-test",
         },
       ],
       migrations: [

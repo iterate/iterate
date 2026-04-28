@@ -11,7 +11,7 @@ import { getOrInitializeDoStub } from "./with-lifecycle-hooks.ts";
 
 const testEnv = env as {
   ALARM_ROOMS: DurableObjectNamespace<AlarmTestRoom>;
-  DO_LISTINGS: D1Database;
+  DO_CATALOG: D1Database;
   INSPECTORS: DurableObjectNamespace<InspectorTestRoom>;
   LISTED_ROOMS: DurableObjectNamespace<ListedRoom>;
   ROOMS: DurableObjectNamespace<InitializeTestRoomInstance>;
@@ -299,16 +299,16 @@ describe("withKvInspector", () => {
   });
 });
 
-describe("withExternalListing", () => {
+describe("withD1ObjectCatalog", () => {
   it("returns null when the object has not been initialized", async () => {
     const room = testEnv.LISTED_ROOMS.getByName("listed-uninitialized-unit");
 
-    await expect(room.getExternalListing()).resolves.toBeNull();
+    await expect(room.getD1ObjectCatalogRecord()).resolves.toBeNull();
   });
 
-  it("returns JSON null through the fronting worker when no listing exists", async () => {
+  it("returns JSON null through the fronting worker when no catalog record exists", async () => {
     const response = await SELF.fetch(
-      "https://example.com/listed-rooms/listed-missing-unit/listing",
+      "https://example.com/listed-rooms/listed-missing-unit/catalog",
     );
 
     await expect(response.json()).resolves.toBeNull();
@@ -320,7 +320,7 @@ describe("withExternalListing", () => {
     await room.initialize({ name: "listed-unit", ownerUserId: "user-listed" });
 
     await vi.waitFor(async () => {
-      await expect(room.getExternalListing()).resolves.toMatchObject({
+      await expect(room.getD1ObjectCatalogRecord()).resolves.toMatchObject({
         class: "ListedRoom",
         name: "listed-unit",
         initParams: {
@@ -331,7 +331,7 @@ describe("withExternalListing", () => {
     });
   });
 
-  it("creates the listing table on first write", async () => {
+  it("creates the catalog table on first write", async () => {
     const room = testEnv.LISTED_ROOMS.getByName("listed-creates-table");
 
     await room.initialize({
@@ -341,12 +341,38 @@ describe("withExternalListing", () => {
 
     await vi.waitFor(async () => {
       await expect(
-        testEnv.DO_LISTINGS.prepare(
-          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'mixin_external_listing'",
+        testEnv.DO_CATALOG.prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'mixin_d1_object_catalog_objects'",
         ).first(),
       ).resolves.toEqual({
-        name: "mixin_external_listing",
+        name: "mixin_d1_object_catalog_objects",
       });
+    });
+  });
+
+  it("indexes initialized objects by configured init params", async () => {
+    const room = testEnv.LISTED_ROOMS.getByName("listed-owner-index-unit");
+
+    await room.initialize({
+      name: "listed-owner-index-unit",
+      ownerUserId: "user-indexed",
+    });
+
+    await vi.waitFor(async () => {
+      const response = await SELF.fetch(
+        "https://example.com/listed-rooms/by-owner-user-id/user-indexed",
+      );
+
+      await expect(response.json()).resolves.toMatchObject([
+        {
+          class: "ListedRoom",
+          name: "listed-owner-index-unit",
+          initParams: {
+            name: "listed-owner-index-unit",
+            ownerUserId: "user-indexed",
+          },
+        },
+      ]);
     });
   });
 });

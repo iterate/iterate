@@ -73,32 +73,45 @@ describe("inspector mixins fronting worker", () => {
   });
 });
 
-describe("withExternalListing fronting worker", () => {
-  it("returns JSON null when a listed object has no external listing yet", async () => {
+describe("withD1ObjectCatalog fronting worker", () => {
+  it("returns JSON null when a cataloged object has no D1 record yet", async () => {
     const roomName = `e2e-listed-missing-${crypto.randomUUID()}`;
-    const response = await getWithRouteRetry(`/listed-rooms/${roomName}/listing`);
+    const response = await getWithRouteRetry(`/listed-rooms/${roomName}/catalog`);
 
     expect(response.status).toBe(200);
     expect(await response.json()).toBeNull();
   });
 
-  it("creates the D1 table and mirrors initialized objects", async () => {
+  it("creates the D1 tables, mirrors initialized objects, and indexes init params", async () => {
     const roomName = `e2e-listed-${crypto.randomUUID()}`;
+    const ownerUserId = `user-listed-e2e-${crypto.randomUUID()}`;
 
     const initialized = await postJson(`/listed-rooms/${roomName}/initialize`, {
-      ownerUserId: "user-listed-e2e",
+      ownerUserId,
     });
     expect(initialized.status).toBe(200);
 
-    const listing = await waitForJson(`/listed-rooms/${roomName}/listing`);
-    expect(listing).toMatchObject({
+    const record = await waitForJson(`/listed-rooms/${roomName}/catalog`);
+    expect(record).toMatchObject({
       class: "ListedRoom",
       name: roomName,
       initParams: {
         name: roomName,
-        ownerUserId: "user-listed-e2e",
+        ownerUserId,
       },
     });
+
+    const indexed = await waitForJson(`/listed-rooms/by-owner-user-id/${ownerUserId}`);
+    expect(indexed).toMatchObject([
+      {
+        class: "ListedRoom",
+        name: roomName,
+        initParams: {
+          name: roomName,
+          ownerUserId,
+        },
+      },
+    ]);
   });
 });
 

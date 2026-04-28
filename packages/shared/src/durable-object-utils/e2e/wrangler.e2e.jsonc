@@ -29,10 +29,10 @@
   },
   "d1_databases": [
     {
-      "binding": "DO_LISTINGS",
-      "database_id": "durable-object-utils-listings-e2e",
-      "database_name": "durable-object-utils-listings-e2e",
-      "preview_database_id": "durable-object-utils-listings-e2e",
+      "binding": "DO_CATALOG",
+      "database_id": "durable-object-utils-catalog-e2e",
+      "database_name": "durable-object-utils-catalog-e2e",
+      "preview_database_id": "durable-object-utils-catalog-e2e",
     },
   ],
   "migrations": [

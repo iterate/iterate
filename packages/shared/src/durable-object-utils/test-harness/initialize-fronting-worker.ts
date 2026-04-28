@@ -11,7 +11,10 @@
  */
 
 import { DurableObject } from "cloudflare:workers";
-import { withExternalListing } from "../mixins/with-external-listing.ts";
+import {
+  listD1ObjectCatalogRecordsByIndex,
+  withD1ObjectCatalog,
+} from "../mixins/with-d1-object-catalog.ts";
 import { getOrInitializeDoStub, withLifecycleHooks } from "../mixins/with-lifecycle-hooks.ts";
 import { withKvInspector } from "../mixins/with-kv-inspector.ts";
 import { withMultiplexedAlarms } from "../mixins/with-multiplexed-alarms.ts";
@@ -42,7 +45,7 @@ type Env = {
   ROOMS: DurableObjectNamespace<InitializeTestRoom>;
   INSPECTORS: DurableObjectNamespace<InspectorTestRoom>;
   LISTED_ROOMS: DurableObjectNamespace<ListedRoom>;
-  DO_LISTINGS: D1Database;
+  DO_CATALOG: D1Database;
 };
 
 const RoomBase = withLifecycleHooks<RoomInit>()(DurableObject);
@@ -163,10 +166,15 @@ export class InitializeTestRoom extends RoomBase<Env> {
   }
 }
 
-const ListedRoomBase = withExternalListing<RoomInit, Env>({
+const ListedRoomBase = withD1ObjectCatalog<RoomInit, Env>({
   className: "ListedRoom",
   getDatabase(env) {
-    return env.DO_LISTINGS;
+    return env.DO_CATALOG;
+  },
+  indexes: {
+    ownerUserId(params) {
+      return params.ownerUserId;
+    },
   },
 })(withLifecycleHooks<RoomInit>()(DurableObject));
 
@@ -602,6 +610,20 @@ export default {
       return await stub.fetch(new Request(proxiedUrl, request));
     }
 
+    const listedOwnerIndexMatch = url.pathname.match(/^\/listed-rooms\/by-owner-user-id\/([^/]+)$/);
+
+    if (listedOwnerIndexMatch !== null) {
+      const [, rawOwnerUserId] = listedOwnerIndexMatch;
+
+      return json(
+        await listD1ObjectCatalogRecordsByIndex<RoomInit>(env.DO_CATALOG, {
+          className: "ListedRoom",
+          indexName: "ownerUserId",
+          indexValue: decodeURIComponent(rawOwnerUserId),
+        }),
+      );
+    }
+
     const listedMatch = url.pathname.match(/^\/listed-rooms\/([^/]+)\/([^/]+)$/);
 
     if (listedMatch !== null) {
@@ -621,10 +643,10 @@ export default {
         return json(await stub.getInitParams());
       }
 
-      if (request.method === "GET" && action === "listing") {
+      if (request.method === "GET" && action === "catalog") {
         const stub = env.LISTED_ROOMS.getByName(name);
 
-        return json(await stub.getExternalListing());
+        return json(await stub.getD1ObjectCatalogRecord());
       }
 
       return json({ error: "Not found" }, { status: 404 });

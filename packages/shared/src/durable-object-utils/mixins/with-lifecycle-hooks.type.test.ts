@@ -1,8 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
 import { describe, expectTypeOf, it } from "vitest";
 import { withLifecycleHooks as publicWithLifecycleHooks } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import { withExternalListing } from "./with-external-listing.ts";
-import type { ExternalListingRecord } from "./with-external-listing.ts";
+import { withD1ObjectCatalog } from "./with-d1-object-catalog.ts";
+import type { D1ObjectCatalogRecord } from "./with-d1-object-catalog.ts";
 import { withKvInspector } from "./with-kv-inspector.ts";
 import { withMultiplexedAlarms } from "./with-multiplexed-alarms.ts";
 import type { MultiplexedAlarmRecord } from "./with-multiplexed-alarms.ts";
@@ -17,7 +17,7 @@ type Env = {
 };
 
 type ListingEnv = {
-  DO_LISTINGS: D1Database;
+  DO_CATALOG: D1Database;
 };
 
 type EnvWithListings = Env & ListingEnv;
@@ -225,20 +225,25 @@ describe("withLifecycleHooks types", () => {
   });
 });
 
-describe("withExternalListing types", () => {
+describe("withD1ObjectCatalog types", () => {
   it("keeps the D1 env lower-bound on the composed class", () => {
     // The second generic is the minimum env shape getDatabase needs, not
     // necessarily the final Worker Env.
-    const ListedRoomBase = withExternalListing<RoomInit, ListingEnv>({
+    const ListedRoomBase = withD1ObjectCatalog<RoomInit, ListingEnv>({
       className: "Room",
       getDatabase(env) {
-        return env.DO_LISTINGS;
+        return env.DO_CATALOG;
+      },
+      indexes: {
+        ownerUserId(params) {
+          return params.ownerUserId;
+        },
       },
     })(RoomBase);
 
     class ListedRoom extends ListedRoomBase<EnvWithListings> {
       getOwnerUserId() {
-        // External listing must not erase withLifecycleHooks' protected subclass
+        // D1 cataloging must not erase withLifecycleHooks' protected subclass
         // surface.
         return this.initParams.ownerUserId;
       }
@@ -246,15 +251,15 @@ describe("withExternalListing types", () => {
 
     const listedRoom = {} as ListedRoom;
 
-    expectTypeOf(listedRoom.getExternalListing).toBeFunction();
+    expectTypeOf(listedRoom.getD1ObjectCatalogRecord).toBeFunction();
     expectTypeOf(
-      listedRoom.getExternalListing(),
-    ).resolves.toEqualTypeOf<ExternalListingRecord<RoomInit> | null>();
+      listedRoom.getD1ObjectCatalogRecord(),
+    ).resolves.toEqualTypeOf<D1ObjectCatalogRecord<RoomInit> | null>();
     expectTypeOf(listedRoom.getOwnerUserId()).toEqualTypeOf<string>();
 
-    // This is the env lower-bound payoff: the mixin only needs DO_LISTINGS, but
+    // This is the env lower-bound payoff: the mixin only needs DO_CATALOG, but
     // every final Env used with the composed class must still include it.
-    // @ts-expect-error ListedRoomBase requires an Env with DO_LISTINGS because getDatabase reads env.DO_LISTINGS.
+    // @ts-expect-error ListedRoomBase requires an Env with DO_CATALOG because getDatabase reads env.DO_CATALOG.
     void class extends ListedRoomBase<Env> {};
   });
 });

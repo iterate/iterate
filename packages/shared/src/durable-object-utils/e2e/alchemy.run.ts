@@ -88,8 +88,8 @@ const listedRooms = DurableObjectNamespace<ListedRoom>("listed-rooms", {
   // The listed room combines local SQLite-backed init state with a D1 mirror.
   sqlite: true,
 });
-const listings = await D1Database("listings", {
-  name: `${workerName}-listings`,
+const catalog = await D1Database("catalog", {
+  name: `${workerName}-catalog`,
   // E2E stages are intentionally reusable by name. `adopt` lets reruns cleanly
   // take ownership instead of failing if a previous run left resources behind.
   adopt: true,
@@ -104,7 +104,7 @@ export const worker = await Worker(APP_NAME, {
     SCHEDULE_ROOMS: scheduleRooms,
     INSPECTORS: inspectors,
     LISTED_ROOMS: listedRooms,
-    DO_LISTINGS: listings,
+    DO_CATALOG: catalog,
   },
   entrypoint: "./src/durable-object-utils/test-harness/initialize-fronting-worker.ts",
   // Optional routes let CI or a developer bind the ephemeral worker to a real

@@ -23,7 +23,7 @@ The default is **do not code immediately**. First spec the API with the user. If
 ## Reference Implementations
 
 - `mixins/with-lifecycle-hooks.ts`: protected subclass surface, named initialization, first-initialize/start hooks, static/generic preservation in the simple `TBase & Constructor<Members>` shape.
-- `mixins/with-external-listing.ts`: env lower-bound via `getDatabase(env)`, best-effort `ctx.waitUntil()` work, D1 table owned by the mixin.
+- `mixins/with-d1-object-catalog.ts`: env lower-bound via `getDatabase(env)`, best-effort `ctx.waitUntil()` work, D1 tables owned by the mixin, and init-param indexes.
 - `mixins/with-multiplexed-alarms.ts`: one owner for Cloudflare's single Durable Object alarm slot, protected scheduling methods, SQLite-backed logical alarm rows.
 - `mixins/with-scheduler.ts`: key-based scheduler layered above multiplexed alarms, tagged recurrence rows, split one-shot/recurring failure policy.
 - `mixins/with-kv-inspector.ts`: fetch wrapper that preserves generic `Base<Env>`.
@@ -78,18 +78,18 @@ Use comments to explain:
 For env bindings, prefer a lower-bound type selected by the call site:
 
 ```ts
-type NeedsListings = {
-  DO_LISTINGS: D1Database;
+type NeedsCatalog = {
+  DO_CATALOG: D1Database;
 };
 
-const Base = withExternalListing<RoomInit, NeedsListings>({
+const Base = withD1ObjectCatalog<RoomInit, NeedsCatalog>({
   className: "Room",
   getDatabase(env) {
-    return env.DO_LISTINGS;
+    return env.DO_CATALOG;
   },
 })(withLifecycleHooks<RoomInit>()(DurableObject));
 
-class Room extends Base<NeedsListings & { OTHER: string }> {}
+class Room extends Base<NeedsCatalog & { OTHER: string }> {}
 ```
 
 Avoid app-wide `Env` in the library if a smaller binding fragment is enough.
