@@ -135,7 +135,7 @@ const callable = {
 const result = await dispatchCallable({
   callable,
   payload: { title: "Bug" },
-  ctx: { fetcher: fetch },
+  ctx: { fetch },
 });
 ```
 
@@ -157,7 +157,7 @@ const callable = {
 await dispatchCallable({
   callable,
   payload: { name: "createIssue", dryRun: false },
-  ctx: { fetcher: fetch },
+  ctx: { fetch },
 });
 
 // POST body:
@@ -271,7 +271,7 @@ with upgrade headers, not a separate callable kind.
 
 V1 supports:
 
-- `http`: public HTTP via the explicit `ctx.fetcher` capability
+- `http`: public HTTP via the explicit `ctx.fetch` capability
 - `service`: a Worker service binding with `fetch(request)`
 - `durable-object`: a Durable Object namespace, addressed by stable name or id
 - `dynamic-worker`: a Worker loaded through a Worker Loader binding
@@ -463,9 +463,9 @@ V1 keeps that resolver simple on purpose so the kernel stays small. Do not pass
 tenant-authored, LLM-authored, or user-authored callables a sensitive `env`
 object until `tasks/capability-policy.md` is implemented.
 
-`ctx.fetcher` is only used for public HTTP targets and is required for them.
+`ctx.fetch` is only used for public HTTP targets and is required for them.
 Worker-boundary code that wants normal runtime fetch should pass
-`ctx: { fetcher: fetch }` explicitly. The library does not fall back to
+`ctx: { fetch }` explicitly. The library does not fall back to
 `globalThis.fetch`, because public egress is a capability and should not be
 created by a shared helper reading ambient globals.
 

@@ -215,8 +215,7 @@ async function dispatchValidatedCallableFetch(options: {
        * targets resolve from bindings; public egress should not happen just
        * because a shared helper read ambient `globalThis.fetch`.
        */
-      const fetcher = target.fetcher;
-      return await fetcher(rewrittenRequest);
+      return await target.fetch(rewrittenRequest);
     }
     case "binding": {
       /**
@@ -229,7 +228,7 @@ async function dispatchValidatedCallableFetch(options: {
        * https://developers.cloudflare.com/workers/runtime-apis/rpc/reserved-methods/#fetch
        */
       const outboundRequest = new Request(rewrittenRequest, { redirect: "manual" });
-      return await target.fetcher.fetch(outboundRequest);
+      return await target.fetch.fetch(outboundRequest);
     }
   }
 }
@@ -422,27 +421,27 @@ function resolveFetchTarget(options: {
   callable: FetchCallable;
   ctx: CallableContext;
 }):
-  | { type: "http"; fetcher: typeof globalThis.fetch }
-  | { type: "binding"; fetcher: FetchableBinding } {
+  | { type: "http"; fetch: typeof globalThis.fetch }
+  | { type: "binding"; fetch: FetchableBinding } {
   switch (options.callable.target.type) {
     case "http": {
       /**
        * Public HTTP fetch is a capability too. Requiring it in the context keeps
        * this library honest about egress: Worker entrypoints can still pass
-       * `{ fetcher: fetch }`, but helpers never silently reach for a global.
+       * `{ fetch }`, but helpers never silently reach for a global.
        */
-      if (!options.ctx.fetcher) {
+      if (!options.ctx.fetch) {
         throw new CallableError(
           "RESOLUTION_FAILED",
-          "HTTP callables require ctx.fetcher; pass fetch explicitly at the Worker boundary",
+          "HTTP callables require ctx.fetch; pass fetch explicitly at the Worker boundary",
         );
       }
-      return { type: "http", fetcher: options.ctx.fetcher };
+      return { type: "http", fetch: options.ctx.fetch };
     }
     case "service":
       return {
         type: "binding",
-        fetcher: resolveServiceBinding({
+        fetch: resolveServiceBinding({
           bindingName: options.callable.target.binding.$binding,
           env: options.ctx.env,
         }),
@@ -450,7 +449,7 @@ function resolveFetchTarget(options: {
     case "durable-object":
       return {
         type: "binding",
-        fetcher: resolveDurableObjectFetchStub({
+        fetch: resolveDurableObjectFetchStub({
           target: options.callable.target,
           env: options.ctx.env,
         }),
@@ -458,7 +457,7 @@ function resolveFetchTarget(options: {
     case "dynamic-worker":
       return {
         type: "binding",
-        fetcher: resolveDynamicWorkerFetchEntrypoint({
+        fetch: resolveDynamicWorkerFetchEntrypoint({
           target: options.callable.target,
           env: options.ctx.env,
         }),

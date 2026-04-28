@@ -311,12 +311,15 @@ export type CallableContext = {
    */
   env?: Record<string, unknown>;
   /**
-   * Public HTTP fetch dependency used only by fetch callables targeting
-   * `{ type: "http" }`. RPC callables ignore it. Worker-boundary code that
-   * wants runtime fetch must pass it explicitly as `{ fetcher: fetch }`; the
-   * runtime deliberately does not fall back to ambient global fetch.
+   * Public HTTP fetch capability used only by callables targeting
+   * `{ type: "http" }`.
+   *
+   * Worker-boundary code can pass the runtime function directly as
+   * `{ fetch }`. Keeping it explicit is important: public egress should not be
+   * created by a shared helper silently reading `globalThis.fetch`. Binding
+   * targets ignore this field because their authority comes from `env`.
    */
-  fetcher?: typeof globalThis.fetch;
+  fetch?: typeof globalThis.fetch;
 };
 
 export type CallableErrorCode =

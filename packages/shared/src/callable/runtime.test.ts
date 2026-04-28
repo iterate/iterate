@@ -378,7 +378,7 @@ describe("dispatchCallable", () => {
       },
       payload: undefined,
       ctx: {
-        fetcher: async (request) => Response.json({ body: await request.text() }),
+        fetch: async (request) => Response.json({ body: await request.text() }),
       },
     });
 
@@ -394,7 +394,7 @@ describe("dispatchCallable", () => {
         },
         payload: { ignored: true },
         ctx: {
-          fetcher: async (request) =>
+          fetch: async (request) =>
             Response.json({
               method: request.method,
               hasContentType: request.headers.has("content-type"),
@@ -422,7 +422,7 @@ describe("dispatchCallable", () => {
         body: JSON.stringify({ title: "Bug" }),
       }),
       ctx: {
-        fetcher: async (request) => new Response(await request.text()),
+        fetch: async (request) => new Response(await request.text()),
       },
     });
 
@@ -436,7 +436,7 @@ describe("dispatchCallable", () => {
       },
       payload: { ignored: true },
       ctx: {
-        fetcher: async () =>
+        fetch: async () =>
           new Response("plain text result", { headers: { "content-type": "text/plain" } }),
       },
     });
@@ -452,7 +452,7 @@ describe("dispatchCallable", () => {
         },
         payload: { ignored: true },
         ctx: {
-          fetcher: async () =>
+          fetch: async () =>
             new Response("{not-json", { headers: { "content-type": "application/json" } }),
         },
       }),
@@ -473,7 +473,7 @@ describe("dispatchCallable", () => {
       },
       payload: { ignored: true },
       ctx: {
-        fetcher: async (request) => Response.json({ url: request.url }),
+        fetch: async (request) => Response.json({ url: request.url }),
       },
     });
 
@@ -489,7 +489,7 @@ describe("dispatchCallable", () => {
       },
       payload: { ignored: true },
       ctx: {
-        fetcher: async (request) => Response.json({ url: request.url }),
+        fetch: async (request) => Response.json({ url: request.url }),
       },
     });
 
@@ -505,7 +505,7 @@ describe("dispatchCallable", () => {
       },
       payload: { ignored: true },
       ctx: {
-        fetcher: async (request) => Response.json({ url: request.url }),
+        fetch: async (request) => Response.json({ url: request.url }),
       },
     });
 
@@ -519,14 +519,14 @@ describe("dispatchCallable", () => {
       },
       payload: { ignored: true },
       ctx: {
-        fetcher: async (request) => Response.json({ url: request.url }),
+        fetch: async (request) => Response.json({ url: request.url }),
       },
     });
 
     expect(value).toEqual({ url: "https://api.example.com/v1/" });
   });
 
-  test("requires an explicit fetcher for public HTTP targets", async () => {
+  test("requires explicit ctx.fetch for public HTTP targets", async () => {
     await expect(
       dispatchCallable({
         callable: {
@@ -548,7 +548,7 @@ describe("dispatchCallable", () => {
         },
         payload: { ignored: true },
         ctx: {
-          fetcher: async () => new Response("bad input", { status: 400, statusText: "Bad" }),
+          fetch: async () => new Response("bad input", { status: 400, statusText: "Bad" }),
         },
       }),
     ).rejects.toMatchObject({
@@ -569,7 +569,7 @@ describe("dispatchCallable", () => {
           target: { type: "http", url: "https://api.example.com" },
         },
         payload: new Request("https://router.local/upload"),
-        ctx: { fetcher: vi.fn() },
+        ctx: { fetch: vi.fn() },
       }),
     ).rejects.toMatchObject({
       code: "PAYLOAD_VALIDATION_FAILED",
@@ -928,7 +928,7 @@ describe("dispatchCallableFetch", () => {
       },
       request: new Request("https://router.local/users/123?expand=items", { method: "POST" }),
       ctx: {
-        fetcher: async (request) => Response.json({ url: request.url, method: request.method }),
+        fetch: async (request) => Response.json({ url: request.url, method: request.method }),
       },
     });
 
@@ -949,7 +949,7 @@ describe("dispatchCallableFetch", () => {
       },
       request: new Request("https://router.local/users/123?expand=items"),
       ctx: {
-        fetcher: async (request) => Response.json({ url: request.url }),
+        fetch: async (request) => Response.json({ url: request.url }),
       },
     });
 
@@ -965,7 +965,7 @@ describe("dispatchCallableFetch", () => {
       },
       request: new Request("https://router.local/users?active=true"),
       ctx: {
-        fetcher: async (request) => Response.json({ url: request.url }),
+        fetch: async (request) => Response.json({ url: request.url }),
       },
     });
 
@@ -981,7 +981,7 @@ describe("dispatchCallableFetch", () => {
       },
       request: new Request("https://router.local/"),
       ctx: {
-        fetcher: async (request) => Response.json({ url: request.url }),
+        fetch: async (request) => Response.json({ url: request.url }),
       },
     });
 
@@ -1002,7 +1002,7 @@ describe("dispatchCallableFetch", () => {
       },
       request,
       ctx: {
-        fetcher: async (outboundRequest) => {
+        fetch: async (outboundRequest) => {
           expect(request.bodyUsed).toBe(false);
           return new Response(await outboundRequest.text());
         },
@@ -1153,7 +1153,7 @@ describe("dispatchCallableFetch", () => {
           target: { type: "http", url: "https://api.example.com" },
         },
         request,
-        ctx: { fetcher: vi.fn() },
+        ctx: { fetch: vi.fn() },
       }),
     ).rejects.toThrow("Request body was already consumed");
   });
@@ -1193,7 +1193,7 @@ describe("explicit fetch request templates", () => {
       },
       payload: { title: "Bug" },
       ctx: {
-        fetcher: async (request) =>
+        fetch: async (request) =>
           Response.json({
             url: request.url,
             method: request.method,
@@ -1222,7 +1222,7 @@ describe("connectCallableWebSocket", () => {
           target: { type: "http", url: "https://api.example.com/socket" },
         },
         ctx: {
-          fetcher: async () => new Response("forbidden", { status: 403, statusText: "Forbidden" }),
+          fetch: async () => new Response("forbidden", { status: 403, statusText: "Forbidden" }),
         },
       }),
     ).rejects.toMatchObject({
