@@ -345,7 +345,12 @@ async function fetchWithRouteRetry(input: URL, init: RequestInit) {
 
   while (Date.now() < deadline) {
     const response = await fetch(input, init);
-    if (![404, 500, 503].includes(response.status)) {
+    // The deployed E2E worker can briefly return routing-level 404/503 while
+    // Cloudflare propagates the freshly deployed Worker. A 500 is different:
+    // it means the Worker code ran and returned an application error. Some
+    // tests assert those structured 500s directly, so retrying them would hide
+    // whether the error response is immediate and waste the whole deadline.
+    if (![404, 503].includes(response.status)) {
       return response;
     }
 
