@@ -265,12 +265,7 @@ function OrgMembershipCard({ membership }: { membership: Membership }) {
           <div className="font-medium truncate">{membership.organization.name}</div>
           <div className="text-sm text-muted-foreground">{membership.role}</div>
         </div>
-        <Button
-          size="sm"
-          variant="outline"
-          aria-label={`Leave ${membership.organization.name}`}
-          onClick={() => setConfirmLeaveOpen(true)}
-        >
+        <Button size="sm" variant="outline" onClick={() => setConfirmLeaveOpen(true)}>
           <LogOut className="h-4 w-4" />
         </Button>
       </div>

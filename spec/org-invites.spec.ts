@@ -78,10 +78,10 @@ test.describe("organization invites", () => {
     await page.getByRole("heading", { name: "Welcome to Iterate" }).first().waitFor();
     await page.getByText(orgName).first().waitFor();
     const inviteItem = page.locator("[data-slot='item']").filter({ hasText: orgName }).first();
-    await inviteItem.getByRole("button", { name: "Accept", exact: true }).waitFor();
+    await inviteItem.getByRole("button", { name: "Accept" }).waitFor();
 
     // Accept the invite
-    await inviteItem.getByRole("button", { name: "Accept", exact: true }).click();
+    await inviteItem.getByRole("button", { name: "Accept" }).click();
     await toast.success(page, `Joined ${orgName}`).waitFor();
 
     // Should now be in the org
@@ -109,7 +109,10 @@ test.describe("organization invites", () => {
     await login(page, inviteeEmail);
 
     await page.getByText(orgName).first().waitFor();
-    await page.getByRole("button", { name: `Decline invite to ${orgName}` }).click();
+
+    // Click decline (X button next to Accept)
+    const inviteItem = page.locator("[data-slot='item']").filter({ hasText: orgName }).first();
+    await inviteItem.getByRole("button").filter({ hasNotText: "Accept" }).click();
     await toast.success(page, "Invite declined").waitFor();
 
     // Invite should be gone, create org form still visible
@@ -187,11 +190,16 @@ test.describe("organization invites", () => {
     // User accepts invite from welcome page
     await login(page, userEmail);
     await page.getByText(orgName).first().waitFor();
-    await page.getByRole("button", { name: "Accept", exact: true }).click();
+    await page.getByRole("button", { name: "Accept" }).click();
     await toast.success(page, `Joined ${orgName}`).waitFor();
 
+    // Now leave the org from user settings
     await page.goto("/user/settings");
-    await page.getByRole("button", { name: `Leave ${orgName}` }).click();
+    const orgCard = page.locator("div.border.rounded-lg").filter({ hasText: orgName }).first();
+    await orgCard.waitFor();
+
+    // Click leave button on the org card (LogOut icon button)
+    await orgCard.locator("button").click();
 
     // Confirm in dialog
     await page.getByRole("dialog").getByRole("button", { name: "Leave" }).click();
