@@ -6,6 +6,8 @@
 # `doppler run` resolves `project` from the current working directory against these `path` entries
 # (see `doppler setup`). Scripts should not hard-code `--project` unless there is a special reason.
 setup:
+  - project: _shared
+    path: packages/shared/
   - project: os
     path: ./
   - project: ingress-proxy
