@@ -1,8 +1,39 @@
 import { eventIterator, oc } from "@orpc/contract";
 import { internalContract } from "@iterate-com/shared/apps/internal-router-contract";
+import { Callable } from "@iterate-com/shared/callable/types.ts";
 import { z } from "zod";
 
 const JSONObject = z.record(z.string(), z.unknown());
+
+// ── Codemode schemas ─────────────────────────────────────────────────
+
+const CallableToolProviderInput = z.object({
+  path: z.array(z.string().min(1)).min(1),
+  execute: Callable,
+  describe: Callable.optional(),
+});
+
+const CodemodeEventSchema = z
+  .object({
+    blockId: z.string(),
+    timestamp: z.string(),
+    type: z.string(),
+  })
+  .passthrough();
+
+const CodemodeExecuteInput = z.object({
+  code: z.string().min(1),
+  blockId: z.string().optional(),
+  providers: z.array(CallableToolProviderInput).default([]),
+});
+
+const CodemodeDescribeInput = z.object({
+  providers: z.array(CallableToolProviderInput),
+});
+
+const CodemodeDescribeOutput = z.object({
+  typeDefinitions: z.string(),
+});
 
 const Project = z.object({
   id: z.string(),
@@ -148,6 +179,26 @@ export const osContract = oc.router({
       // https://orpc.dev/docs/event-iterator
       // https://orpc.dev/docs/client/event-iterator
       .output(eventIterator(z.string())),
+  },
+  codemode: {
+    execute: oc
+      .route({
+        method: "POST",
+        path: "/codemode/execute",
+        description: "Execute code in a sandboxed dynamic worker with tool providers",
+        tags: ["/codemode"],
+      })
+      .input(CodemodeExecuteInput)
+      .output(eventIterator(CodemodeEventSchema)),
+    describe: oc
+      .route({
+        method: "POST",
+        path: "/codemode/describe",
+        description: "Fetch type descriptions from tool providers",
+        tags: ["/codemode"],
+      })
+      .input(CodemodeDescribeInput)
+      .output(CodemodeDescribeOutput),
   },
   projects: {
     create: oc

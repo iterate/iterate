@@ -1,4 +1,4 @@
-import { D1Database, DurableObjectNamespace, Worker } from "alchemy/cloudflare";
+import { D1Database, DurableObjectNamespace, Worker, WorkerLoader } from "alchemy/cloudflare";
 import { initAlchemy } from "@iterate-com/shared/alchemy/init";
 import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
 import manifest, { AppConfig } from "./src/app.ts";
@@ -22,6 +22,7 @@ const iterateMcpServer = await Worker("iterate-mcp-server-do", {
       className: "IterateMcpServer",
       sqlite: true,
     }),
+    LOADER: WorkerLoader(),
   },
 });
 
@@ -32,6 +33,7 @@ const projectHostnameBases = ctx.compiledAppConfig.projectHostnameBases ?? [];
 const { worker, afterFinalize } = await IterateApp(ctx, {
   bindings: {
     DB: db,
+    LOADER: WorkerLoader(),
     ITERATE_MCP_SERVER: iterateMcpServer.bindings.ITERATE_MCP_SERVER,
     PROJECT_HOSTNAME_BASES: projectHostnameBases.join(","),
   },

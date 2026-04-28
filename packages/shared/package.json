@@ -68,6 +68,7 @@
     "./codemode/utils": "./src/codemode/utils.ts",
     "./codemode/type-tree": "./src/codemode/type-tree.ts",
     "./codemode/json-schema-types": "./src/codemode/json-schema-types.ts",
+    "./codemode/executor": "./src/codemode/executor.ts",
     "./project-ingress": "./src/project-ingress.ts",
     "./auth-claims": "./src/auth-claims.ts",
     "./github-agent-path": "./src/github-agent-path.ts",

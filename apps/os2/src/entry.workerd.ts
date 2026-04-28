@@ -44,6 +44,7 @@ export default {
           db,
           log,
           projectHostnameBases: parseProjectHostnameBases(env.PROJECT_HOSTNAME_BASES),
+          loader: env.LOADER,
         };
 
         const response = await handler.fetch(request, {

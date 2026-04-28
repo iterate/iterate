@@ -9,6 +9,7 @@ export interface AppContext {
   log: SharedRequestLogger;
   projectHostnameBases: string[];
   rawRequest?: Request;
+  loader?: WorkerLoader;
 }
 
 declare module "@tanstack/react-start" {
