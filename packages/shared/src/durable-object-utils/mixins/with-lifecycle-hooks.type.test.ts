@@ -117,7 +117,6 @@ describe("withLifecycleHooks types", () => {
       getOrInitializeDoStub({
         namespace,
         initParams: {
-          name: "room:user-a",
           ownerUserId: "user-a",
         },
       }),
@@ -127,7 +126,7 @@ describe("withLifecycleHooks types", () => {
       namespace,
       // @ts-expect-error ownerUserId is required because the helper has no
       // separate name argument to fall back to for this init shape.
-      initParams: { name: "room:user-a" },
+      initParams: {},
     });
   });
 

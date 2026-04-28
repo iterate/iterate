@@ -8,7 +8,10 @@ import {
   type ListedRoom,
   type SchedulerTestRoom,
 } from "../test-harness/initialize-fronting-worker.ts";
-import { getOrInitializeDoStub } from "./with-lifecycle-hooks.ts";
+import {
+  deriveDurableObjectNameFromInitParams,
+  getOrInitializeDoStub,
+} from "./with-lifecycle-hooks.ts";
 
 const testEnv = env as {
   ALARM_FORWARDING_ROOMS: DurableObjectNamespace<AlarmForwardingTestRoom>;
@@ -105,19 +108,42 @@ describe("withLifecycleHooks", () => {
     });
   });
 
-  it("initializes from complete init params when callers derive the name themselves", async () => {
+  it("initializes from a deterministic name when callers omit the name", async () => {
     const room = await getOrInitializeDoStub({
       namespace: testEnv.ROOMS,
       initParams: {
-        name: "unit-room-derived-user-derived",
         ownerUserId: "user-derived",
       },
     });
 
+    const expectedName = deriveDurableObjectNameFromInitParams({
+      initParams: { ownerUserId: "user-derived" },
+    });
+
     await expect(room.getInitParams()).resolves.toEqual({
-      name: "unit-room-derived-user-derived",
+      name: expectedName,
       ownerUserId: "user-derived",
     });
+  });
+
+  it("derives the same name regardless of init param object key order", () => {
+    expect(
+      deriveDurableObjectNameFromInitParams({
+        initParams: { ownerUserId: "user-derived", projectId: "project-a" },
+      }),
+    ).toBe(
+      deriveDurableObjectNameFromInitParams({
+        initParams: { projectId: "project-a", ownerUserId: "user-derived" },
+      }),
+    );
+  });
+
+  it("rejects helper calls with neither name nor init params", async () => {
+    await expect(
+      getOrInitializeDoStub({
+        namespace: testEnv.ROOMS,
+      } as never),
+    ).rejects.toThrow("requires either name or initParams");
   });
 
   it("keeps initialization idempotent across direct and helper initialization", async () => {

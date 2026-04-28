@@ -83,7 +83,8 @@ type GetOrInitializeDoStubOptions<
       : { initParams: LifecycleInitInput<InitParamsOf<TInstance>> }))
   | {
       namespace: DurableObjectNamespace<TInstance>;
-      initParams: InitParamsOf<TInstance>;
+      name?: never;
+      initParams: LifecycleInitInput<InitParamsOf<TInstance>>;
     };
 
 /**
@@ -425,30 +426,43 @@ export function withLifecycleHooks<InitParams extends LifecycleInit>() {
  * This keeps the helper honest: it cannot return a stub without the data
  * required to initialize it.
  *
- * Callers that derive names from init params can do that before calling the
- * helper and pass a complete init object:
+ * If `name` is omitted, the helper derives a stable name from `initParams`.
+ * That keeps simple call sites concise while still storing the derived name
+ * inside the Durable Object's persisted init params:
  *
  *   getOrInitializeDoStub({
  *     namespace,
  *     initParams: {
- *       name: projectRoomName({ projectId, roomSlug }),
  *       projectId,
  *       roomSlug,
  *     },
  *   });
+ *
+ * Use `deriveDurableObjectNameFromInitParams()` directly when other code needs
+ * the same generated name, for example before storing a callable that addresses
+ * the object by `{ name }`.
  */
 export async function getOrInitializeDoStub<
   TInstance extends DurableObjectBranded & LifecycleHooksMembers<LifecycleInit>,
 >(options: GetOrInitializeDoStubOptions<TInstance>) {
   const { namespace } = options;
-  const name = "name" in options ? options.name : options.initParams.name;
-  const initParams = "name" in options ? options.initParams : options.initParams;
-  const stub = namespace.getByName(name);
+  const hasName = "name" in options && options.name !== undefined;
+  const hasInitParams = "initParams" in options && options.initParams !== undefined;
+
+  if (!hasName && !hasInitParams) {
+    throw new Error("getOrInitializeDoStub() requires either name or initParams.");
+  }
+
+  const initParams = hasInitParams ? options.initParams : undefined;
 
   // The options type only permits omitted initParams for name-only init shapes.
   // After destructuring, TypeScript no longer carries that conditional fact, so
   // `{}` is the runtime default and `name` is added before initialize() runs.
   const input = (initParams ?? {}) as LifecycleInitInput<InitParamsOf<TInstance>>;
+  const name =
+    (hasName ? options.name : input.name) ??
+    deriveDurableObjectNameFromInitParams({ initParams: input });
+  const stub = namespace.getByName(name);
 
   if (input.name !== undefined && input.name !== name) {
     throw new Error(`initParams.name must match name: expected "${name}", got "${input.name}".`);
@@ -464,4 +478,38 @@ export async function getOrInitializeDoStub<
   } as unknown as InitParamsOf<TInstance>);
 
   return stub;
+}
+
+/**
+ * Deterministically derives a Durable Object name from init params.
+ *
+ * This is intentionally boring and local: sort object keys, omit `undefined`
+ * object fields, preserve array order, then prefix the canonical JSON. It is
+ * not an index or lookup layer. It is just the default name used when
+ * `getOrInitializeDoStub()` receives init params without an explicit name.
+ */
+export function deriveDurableObjectNameFromInitParams(options: { initParams: unknown }): string {
+  return `init:${canonicalJson(options.initParams)}`;
+}
+
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(canonicalizeJsonValue(value));
+}
+
+function canonicalizeJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => canonicalizeJsonValue(item));
+  }
+
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+
+  const entries = Object.entries(value)
+    .filter(([, entryValue]) => entryValue !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right));
+
+  return Object.fromEntries(
+    entries.map(([key, entryValue]) => [key, canonicalizeJsonValue(entryValue)]),
+  );
 }
