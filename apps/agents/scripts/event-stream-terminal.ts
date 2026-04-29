@@ -62,6 +62,11 @@ import {
   formatRelativeStreamPath as formatRelativeStreamPathForCurrent,
   resolveStreamPath as resolveStreamPathForCurrent,
 } from "../src/stream-tui/stream-paths.ts";
+import {
+  getDefaultExpandedStreamPaths,
+  getStreamTreeRows,
+  type StreamTreeRow,
+} from "../src/stream-tui/stream-tree.ts";
 
 if (!process.stdin.isTTY || !process.stdout.isTTY) {
   throw new Error("stream-tui requires an interactive terminal.");
@@ -87,6 +92,10 @@ let renderedView: StreamTuiView = "feed";
 let currentStreamPath = args.streamPath;
 let activeStreamController: AbortController | undefined;
 let streamSummaries: StreamSummary[] = [];
+let selectedStreamPath: StreamPath | undefined = currentStreamPath;
+let expandedStreamPaths = getDefaultExpandedStreamPaths(currentStreamPath);
+let streamSearchOpen = false;
+let streamSearchQuery = "";
 let pulseInterval: ReturnType<typeof setInterval> | undefined;
 const collapsedOffsets = new Set<number>();
 
@@ -210,6 +219,14 @@ renderer.prependInputHandler((sequence) => {
 
   if (key.name === "tab") {
     focusAdjacentRegion(key.shift ? -1 : 1);
+    return true;
+  }
+
+  if (
+    navigationState.focus === "feed" &&
+    navigationState.view === "streams" &&
+    handleStreamsViewKey({ key, sequence })
+  ) {
     return true;
   }
 
@@ -371,7 +388,7 @@ async function runSlashCommand(content: string) {
 
   appendStatus ||= `/${invocation.slash}`;
   updateHeader();
-  updateFeed("keep");
+  updateFeed(navigationState.view === "streams" ? "selected" : "keep");
   return true;
 }
 
@@ -415,9 +432,23 @@ const appContext: AppContext = {
   },
   setStreamSummaries(streams) {
     streamSummaries = streams;
+    selectedStreamPath = currentStreamPath;
+    expandedStreamPaths = new Set([
+      ...expandedStreamPaths,
+      ...getDefaultExpandedStreamPaths(currentStreamPath),
+    ]);
+    streamSearchOpen = false;
+    streamSearchQuery = "";
   },
   navigateToStream(streamPath) {
     currentStreamPath = streamPath;
+    selectedStreamPath = streamPath;
+    expandedStreamPaths = new Set([
+      ...expandedStreamPaths,
+      ...getDefaultExpandedStreamPaths(streamPath),
+    ]);
+    streamSearchOpen = false;
+    streamSearchQuery = "";
     navigationState = setStreamTuiView(navigationState, "feed");
     appendStatus = `opened ${streamPath}`;
     startStream(streamPath);
@@ -617,7 +648,9 @@ function updateFeed(scroll: "selected" | "keep" = "keep") {
     feed.add(child);
   }
 
-  if (scroll === "selected") {
+  if (scroll === "selected" && navigationState.view === "streams") {
+    setImmediate(() => feed.scrollChildIntoView(getStreamRowId(selectedStreamPath)));
+  } else if (scroll === "selected") {
     setImmediate(() => feed.scrollChildIntoView(getRawEventCardId(selectedOffset)));
   } else if (shouldStickToBottom) {
     requestFeedBottomScroll();
@@ -674,28 +707,54 @@ function renderStateViewChildren() {
 }
 
 function renderStreamsViewChildren() {
-  const content =
-    streamSummaries.length === 0
-      ? "No child streams loaded. Type /stream.child <name> to create one, or /view.feed to return."
-      : streamSummaries
-          .map((stream) =>
-            [
-              stream.path,
-              formatTime(new Date(stream.createdAt).getTime()),
-              `/stream.open ${formatRelativeStreamPathForCurrent({ currentStreamPath, streamPath: stream.path })}`,
-            ].join(" · "),
-          )
-          .join("\n");
+  const rows = getVisibleStreamRows();
+  const children = [];
 
-  return [
-    new TextRenderable(renderer, {
-      id: "events-feed-streams",
-      content,
-      width: "100%",
-      height: countTextLines(content),
-      fg: "#cbd5e1",
-    }),
-  ];
+  if (streamSearchOpen) {
+    children.push(
+      new TextRenderable(renderer, {
+        id: "events-feed-stream-search",
+        content: new StyledText([
+          selectedSummaryText(` /${streamSearchQuery.padEnd(Math.max(1, feed.width - 3))}`),
+        ]),
+        width: "100%",
+        height: 1,
+        fg: "#cbd5e1",
+      }),
+    );
+  }
+
+  if (rows.length === 0) {
+    const content =
+      streamSearchQuery.trim().length > 0
+        ? `No streams match "${streamSearchQuery}".`
+        : "No streams loaded. Type /streams to load the stream tree.";
+
+    children.push(
+      new TextRenderable(renderer, {
+        id: "events-feed-streams-empty",
+        content,
+        width: "100%",
+        height: 1,
+        fg: "#71717a",
+      }),
+    );
+    return children;
+  }
+
+  for (const row of rows) {
+    children.push(
+      new TextRenderable(renderer, {
+        id: getStreamRowId(row.path),
+        content: new StyledText(renderStreamTreeRowChunks(row)),
+        width: "100%",
+        height: 1,
+        fg: "#cbd5e1",
+      }),
+    );
+  }
+
+  return children;
 }
 
 function renderFeedItemChild(item: EventsStreamBuiltInElement, elapsedLabel?: string) {
@@ -783,10 +842,15 @@ function focusFeed() {
   const rawItems = getRawFeedItems();
 
   navigationState = focusStreamTuiFeed(navigationState);
-  if (rawItems.length > 0) {
+  if (navigationState.view === "streams") {
+    selectedStreamPath ??= currentStreamPath;
+    input.placeholder = "Streams focus: Up/Down selects, Enter toggles, o opens, / searches";
+  } else if (rawItems.length > 0) {
     selectedOffset ??= rawItems[rawItems.length - 1]?.props.offset;
+    input.placeholder = "Main focus: Up/Down selects, Enter toggles, Esc returns";
+  } else {
+    input.placeholder = "Main focus: Up/Down selects, Enter toggles, Esc returns";
   }
-  input.placeholder = "Main focus: Up/Down selects, Enter toggles, Esc returns";
   feed.focus();
   updateHeader();
   updateFeed("selected");
@@ -794,6 +858,7 @@ function focusFeed() {
 
 function focusInput() {
   navigationState = focusStreamTuiComposer(navigationState);
+  streamSearchOpen = false;
   input.placeholder = "Type a message or / for commands";
   input.focus();
   updateHeader();
@@ -838,6 +903,186 @@ function toggleSelectedFeedItem() {
   updateFeed("selected");
 }
 
+function handleStreamsViewKey(args: { key: KeyEvent; sequence: string }) {
+  if (args.key.name === "escape") {
+    if (streamSearchOpen) {
+      streamSearchOpen = false;
+      streamSearchQuery = "";
+      updateFeed("selected");
+      return true;
+    }
+
+    return false;
+  }
+
+  if (args.key.name === "down") {
+    selectAdjacentStreamRow(1);
+    return true;
+  }
+
+  if (args.key.name === "up") {
+    selectAdjacentStreamRow(-1);
+    return true;
+  }
+
+  if (streamSearchOpen) {
+    if (args.key.name === "return") {
+      openSelectedStreamPath();
+      return true;
+    }
+
+    if (args.key.name === "backspace" || args.sequence === "\u007f") {
+      streamSearchQuery = streamSearchQuery.slice(0, -1);
+      selectFirstMatchedStreamRow();
+      updateFeed("selected");
+      return true;
+    }
+
+    if (isPrintableCharacter(args.sequence)) {
+      streamSearchQuery += args.sequence;
+      selectFirstMatchedStreamRow();
+      updateFeed("selected");
+      return true;
+    }
+
+    return true;
+  }
+
+  if (args.sequence === "/") {
+    streamSearchOpen = true;
+    streamSearchQuery = "";
+    selectFirstMatchedStreamRow();
+    updateFeed("selected");
+    return true;
+  }
+
+  if (args.key.name === "return" || args.sequence === " ") {
+    toggleSelectedStreamPath();
+    return true;
+  }
+
+  if (args.key.name === "right") {
+    setSelectedStreamExpanded(true);
+    return true;
+  }
+
+  if (args.key.name === "left") {
+    setSelectedStreamExpanded(false);
+    return true;
+  }
+
+  if (args.sequence.toLowerCase() === "o") {
+    openSelectedStreamPath();
+    return true;
+  }
+
+  return false;
+}
+
+function getVisibleStreamRows() {
+  return getStreamTreeRows({
+    streams: streamSummaries,
+    currentStreamPath,
+    expandedPaths: expandedStreamPaths,
+    searchQuery: streamSearchOpen ? streamSearchQuery : "",
+    selectedPath: selectedStreamPath,
+  });
+}
+
+function renderStreamTreeRowChunks(row: StreamTreeRow) {
+  const prefix = `${"  ".repeat(row.depth)}${row.hasChildren ? (row.expanded ? "▾" : "▸") : " "} `;
+  const suffix = [
+    row.current ? "current" : "",
+    row.createdAt == null ? "" : formatTime(new Date(row.createdAt).getTime()),
+    row.path === currentStreamPath
+      ? ""
+      : `/stream.open ${formatRelativeStreamPathForCurrent({ currentStreamPath, streamPath: row.path })}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const chunks = [
+    ...renderStreamRowText({ row, value: prefix }),
+    ...row.labelSegments.flatMap((segment) =>
+      renderStreamRowText({ row, value: segment.text, matched: segment.matched }),
+    ),
+  ];
+
+  if (suffix.length > 0) {
+    chunks.push(...renderStreamRowText({ row, value: `  ${suffix}` }));
+  }
+
+  return chunks;
+}
+
+function renderStreamRowText(args: { row: StreamTreeRow; value: string; matched?: boolean }) {
+  const color = args.row.current ? "#e5e7eb" : "#94a3b8";
+  const selected = navigationState.focus === "feed" && args.row.selected;
+  const chunk = selected ? bg("#1f2937")(fg(color)(args.value)) : fg(color)(args.value);
+
+  return [args.matched ? bold(chunk) : chunk];
+}
+
+function selectAdjacentStreamRow(direction: -1 | 1) {
+  const rows = getVisibleStreamRows();
+  if (rows.length === 0) return;
+
+  const currentIndex = rows.findIndex((row) => row.path === selectedStreamPath);
+  const nextIndex =
+    currentIndex === -1
+      ? direction === 1
+        ? 0
+        : rows.length - 1
+      : (currentIndex + direction + rows.length) % rows.length;
+
+  selectedStreamPath = rows[nextIndex].path;
+  updateFeed("selected");
+}
+
+function selectFirstMatchedStreamRow() {
+  const rows = getVisibleStreamRows();
+  selectedStreamPath =
+    rows.find((row) => row.labelSegments.some((segment) => segment.matched))?.path ??
+    rows.find((row) => row.path === currentStreamPath)?.path ??
+    rows[0]?.path;
+}
+
+function toggleSelectedStreamPath() {
+  const selectedRow = getSelectedStreamRow();
+  if (selectedRow == null) return;
+
+  if (!selectedRow.hasChildren) {
+    openSelectedStreamPath();
+    return;
+  }
+
+  setSelectedStreamExpanded(!selectedRow.expanded);
+}
+
+function setSelectedStreamExpanded(expanded: boolean) {
+  if (selectedStreamPath == null) return;
+
+  if (expanded) {
+    expandedStreamPaths.add(selectedStreamPath);
+  } else {
+    expandedStreamPaths.delete(selectedStreamPath);
+  }
+
+  updateFeed("selected");
+}
+
+function openSelectedStreamPath() {
+  if (selectedStreamPath == null) return;
+  appContext.navigateToStream(selectedStreamPath);
+}
+
+function getSelectedStreamRow() {
+  return getVisibleStreamRows().find((row) => row.path === selectedStreamPath);
+}
+
+function isPrintableCharacter(sequence: string) {
+  return sequence.length === 1 && sequence >= " " && sequence !== "\u007f";
+}
+
 function getRawFeedItems() {
   return state.slots.feed.filter((item) => item.type === "raw-event");
 }
@@ -858,6 +1103,10 @@ function requestFeedBottomScroll() {
 
 function getRawEventCardId(offset: number | undefined) {
   return `events-feed-raw-event-${offset ?? "none"}`;
+}
+
+function getStreamRowId(path: StreamPath | undefined) {
+  return `events-feed-stream-${path ?? "none"}`;
 }
 
 function parseArgs(argv: string[]) {

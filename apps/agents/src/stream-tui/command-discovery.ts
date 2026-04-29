@@ -38,6 +38,11 @@ export type SlashCommandLabelSegment = {
   matched: boolean;
 };
 
+export type FuzzyMatchRange = {
+  start: number;
+  end: number;
+};
+
 export function parseSlashAutocompleteQuery(input: string) {
   if (!input.startsWith("/")) return undefined;
 
@@ -136,7 +141,7 @@ function commandNeedsInput(command: SlashCommandRecord) {
   return command.input?.positional?.required === true;
 }
 
-function fuzzyMatchRanges(value: string, query: string) {
+export function fuzzyMatchRanges(value: string, query: string): FuzzyMatchRange[] {
   const normalizedValue = value.toLowerCase();
   const normalizedQuery = query.toLowerCase();
   const contiguousIndex = normalizedValue.indexOf(normalizedQuery);
@@ -159,10 +164,7 @@ function fuzzyMatchRanges(value: string, query: string) {
   return ranges;
 }
 
-function splitMatchedSegments(args: {
-  text: string;
-  ranges: readonly { start: number; end: number }[];
-}) {
+export function splitMatchedSegments(args: { text: string; ranges: readonly FuzzyMatchRange[] }) {
   const segments: SlashCommandLabelSegment[] = [];
   let cursor = 0;
 

@@ -290,7 +290,7 @@ const commandRouter = {
         },
       })
       .handler(async ({ context }) => {
-        const children = await context.streamApi.listChildren();
+        const children = await context.streamApi.listChildren({ streamPath: "/" });
         context.setStreamSummaries(children);
         context.toast.info(`${children.length} stream${children.length === 1 ? "" : "s"}`);
         context.setActiveView("streams");

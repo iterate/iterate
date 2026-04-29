@@ -57,14 +57,22 @@ test("Stream TUI starts and accepts slash command input", async ({ terminal }) =
 
   terminal.submit("/streams");
 
-  await expect(terminal.getByText("/stream.open .", { strict: false })).toBeVisible();
+  await expect(terminal.getByText("current", { strict: false })).toBeVisible();
 
   const view = terminal.serialize().view;
   expect(view).toContain(streamPath);
   expect(view).toContain("●");
   expect(view).toContain("Type a message or / for commands");
-  expect(view).toContain("/stream.open .");
+  expect(view).toContain("current");
   expect(view).not.toContain("raw event");
+
+  terminal.write("\t");
+  await expect(terminal.getByText("Streams focus:", { strict: false })).toBeVisible();
+
+  terminal.write(`/microsoft-tui-test`);
+
+  await expect(terminal.getByText(` /microsoft-tui-test`, { strict: false })).toBeVisible();
+  await expect(terminal.getByText(streamPath, { strict: false })).toBeVisible();
 });
 
 test.when(
