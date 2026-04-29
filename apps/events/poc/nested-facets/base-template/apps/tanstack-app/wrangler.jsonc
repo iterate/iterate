@@ -1,8 +1,0 @@
-{
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "tanstack-app",
-  "compatibility_date": "2026-04-23",
-  "compatibility_flags": ["nodejs_compat"],
-  "main": "src/entry.facet.ts",
-  "observability": { "enabled": true },
-}
