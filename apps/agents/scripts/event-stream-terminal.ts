@@ -17,7 +17,12 @@ import type {
   EventsStreamBuiltInElement,
   EventsStreamRawEventElement,
 } from "@iterate-com/ui/components/events/feed-items";
-import { rawPrettyEventsStreamViewReducer } from "@iterate-com/ui/components/events/feed-processors";
+import type { EventsStreamViewReducer } from "@iterate-com/ui/components/events/feed-items";
+import {
+  prettyEventsStreamViewReducer,
+  rawEventsStreamViewReducer,
+  rawPrettyEventsStreamViewReducer,
+} from "@iterate-com/ui/components/events/feed-processors";
 import {
   BoxRenderable,
   InputRenderable,
@@ -144,8 +149,23 @@ const client = createEventsOrpcClient({
 // OpenTUI's imperative API (same approach as the core examples).
 // ---------------------------------------------------------------------------
 
+/**
+ * Available feed modes: raw (YAML per event), mixed (summary rows + pretty),
+ * chat (pretty only, for conversational streams).
+ */
+const feedModes = {
+  raw: { label: "Raw", reducer: rawEventsStreamViewReducer },
+  mixed: { label: "Mixed", reducer: rawPrettyEventsStreamViewReducer },
+  chat: { label: "Chat", reducer: prettyEventsStreamViewReducer },
+} as const;
+type FeedMode = keyof typeof feedModes;
+
+let currentFeedMode: FeedMode = "mixed";
+let currentReducer: EventsStreamViewReducer = feedModes.mixed.reducer;
+/** Raw events buffer — kept so we can replay through a different reducer on mode switch. */
+let rawEvents: Event[] = [];
 type ReducedStreamState = ReturnType<typeof rawPrettyEventsStreamViewReducer.createInitialState>;
-let state: ReducedStreamState = rawPrettyEventsStreamViewReducer.createInitialState();
+let state: ReducedStreamState = currentReducer.createInitialState();
 let status = "connecting";
 let appendStatus = "";
 let eventCount = 0;
@@ -417,7 +437,8 @@ startStream(currentStreamPath);
 function startStream(streamPath: StreamPath) {
   activeStreamController?.abort();
   activeStreamController = new AbortController();
-  state = rawPrettyEventsStreamViewReducer.createInitialState();
+  rawEvents = [];
+  state = currentReducer.createInitialState();
   eventCount = 0;
   selectedOffset = undefined;
   detailEventOffset = undefined;
@@ -428,6 +449,26 @@ function startStream(streamPath: StreamPath) {
   updateHeader();
   updateFeed();
   void streamEvents({ streamPath, signal: activeStreamController.signal });
+}
+
+/** Switch the feed reducer and replay all buffered events through it. */
+function switchFeedMode(mode: FeedMode) {
+  if (mode === currentFeedMode) return;
+  currentFeedMode = mode;
+  currentReducer = feedModes[mode].reducer;
+
+  // Replay all events through the new reducer
+  state = currentReducer.createInitialState();
+  for (const event of rawEvents) {
+    state = currentReducer.reduce({ event, state }) ?? state;
+  }
+
+  selectedOffset = undefined;
+  detailEventOffset = undefined;
+  navigationState = setStreamTuiView(navigationState, "feed");
+  appendStatus = `${feedModes[mode].label} mode`;
+  updateHeader();
+  updateFeed("keep");
 }
 
 /** Long-running async loop that consumes the server-sent event stream. */
@@ -443,8 +484,9 @@ async function streamEvents(args: { streamPath: StreamPath; signal: AbortSignal 
     for await (const value of stream) {
       if (args.signal.aborted || args.streamPath !== currentStreamPath) return;
       const event = Event.parse(value);
+      rawEvents.push(event);
       eventCount += 1;
-      state = rawPrettyEventsStreamViewReducer.reduce({ event, state }) ?? state;
+      state = currentReducer.reduce({ event, state }) ?? state;
       updateHeader();
       updateFeed("keep");
     }
@@ -579,6 +621,9 @@ const appContext: AppContext = {
   setActiveView(view) {
     navigationState = setStreamTuiView(navigationState, view);
   },
+  switchFeedMode(mode: FeedMode) {
+    switchFeedMode(mode);
+  },
   setStreamSummaries(streams, filter) {
     streamSummaries = streams;
     selectedStreamPath = currentStreamPath;
@@ -660,6 +705,7 @@ function updateHeader() {
   connectedIndicator.content = "●";
   connectedIndicator.fg = status === "streaming" ? (pulseOn ? P.accent : P.accentDim) : P.warning;
   statsText.content = [
+    feedModes[currentFeedMode].label,
     `${eventCount} event${eventCount === 1 ? "" : "s"}`,
     `${state.slots.feed.length} item${state.slots.feed.length === 1 ? "" : "s"}`,
     status === "streaming" ? "" : status,

@@ -148,13 +148,6 @@ curl -sS "$BASE_URL/api/streams/__state/%2F" >/dev/null
         "external-subscriber": {
           subscribersBySlug: {},
         },
-        "dynamic-worker": {
-          envVarsByKey: {},
-          workersBySlug: {},
-        },
-        "jsonata-transformer": {
-          transformersBySlug: {},
-        },
       },
     });
     expect(JSON.parse(slashEscapedStateJson)).toMatchObject({
@@ -177,13 +170,6 @@ curl -sS "$BASE_URL/api/streams/__state/%2F" >/dev/null
         },
         "external-subscriber": {
           subscribersBySlug: {},
-        },
-        "dynamic-worker": {
-          envVarsByKey: {},
-          workersBySlug: {},
-        },
-        "jsonata-transformer": {
-          transformersBySlug: {},
         },
       },
     });

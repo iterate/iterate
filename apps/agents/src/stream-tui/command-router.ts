@@ -39,6 +39,7 @@ export type AppContext = {
   get reducedState(): EventsStreamViewState;
   streamApi: StreamApi;
   setActiveView: (view: StreamTuiView) => void;
+  switchFeedMode: (mode: "raw" | "mixed" | "chat") => void;
   setStreamSummaries: (streams: StreamSummary[], filter?: string) => void;
   navigateToStream: (streamPath: StreamPath) => void;
   restartStream: () => void;
@@ -84,6 +85,42 @@ const commandRouter = {
       })
       .handler(({ context }) => {
         context.setActiveView("feed");
+      }),
+    raw: commandBase
+      .meta({
+        tui: {
+          title: "Raw mode",
+          description: "Show one raw YAML card per event",
+          category: "View",
+          slash: { name: "view.raw", aliases: ["raw"] },
+        },
+      })
+      .handler(({ context }) => {
+        context.switchFeedMode("raw");
+      }),
+    mixed: commandBase
+      .meta({
+        tui: {
+          title: "Mixed mode",
+          description: "Summary rows + pretty renderers (default)",
+          category: "View",
+          slash: { name: "view.mixed", aliases: ["mixed"] },
+        },
+      })
+      .handler(({ context }) => {
+        context.switchFeedMode("mixed");
+      }),
+    chat: commandBase
+      .meta({
+        tui: {
+          title: "Chat mode",
+          description: "Pretty renderers only (for conversational streams)",
+          category: "View",
+          slash: { name: "view.chat", aliases: ["chat"] },
+        },
+      })
+      .handler(({ context }) => {
+        context.switchFeedMode("chat");
       }),
     state: commandBase
       .meta({

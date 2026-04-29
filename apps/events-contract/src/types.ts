@@ -16,13 +16,9 @@ import {
   ExternalSubscriberState,
   StreamSubscriptionConfiguredEventInput,
 } from "./external-subscriber-types.ts";
-import {
-  JsonataTransformerConfiguredEventInput,
-  JsonataTransformerState,
-} from "./jsonata-transformer-types.ts";
+import { JsonataTransformerConfiguredEventInput } from "./jsonata-transformer-types.ts";
 import { HtmlRendererConfiguredEventInput } from "./html-renderer-types.ts";
 import {
-  DynamicWorkerState,
   DynamicWorkerConfiguredEventInput,
   DynamicWorkerEnvVarSetEventInput,
 } from "./dynamic-worker-types.ts";
@@ -163,8 +159,6 @@ export type Event = GenericEvent;
 const ProcessorsState = z.object({
   "circuit-breaker": CircuitBreakerState,
   "external-subscriber": ExternalSubscriberState,
-  "dynamic-worker": DynamicWorkerState,
-  "jsonata-transformer": JsonataTransformerState,
 });
 
 export const StreamState = z.object({

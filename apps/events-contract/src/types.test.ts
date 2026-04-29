@@ -21,9 +21,6 @@ describe("StreamState", () => {
             availableTokens: 100,
             lastRefillAtMs: null,
           },
-          "jsonata-transformer": {
-            transformersBySlug: {},
-          },
         },
       }),
     ).toThrow();
@@ -50,21 +47,13 @@ describe("StreamState", () => {
           "external-subscriber": {
             subscribersBySlug: {},
           },
-          "dynamic-worker": {
-            envVarsByKey: {},
-            workersBySlug: {},
-          },
-          "jsonata-transformer": {
-            transformersBySlug: {},
-          },
         },
       }),
     ).toMatchObject({
       path: "/current",
       processors: {
-        "dynamic-worker": {
-          envVarsByKey: {},
-          workersBySlug: {},
+        "external-subscriber": {
+          subscribersBySlug: {},
         },
       },
     });

@@ -27,12 +27,10 @@ import {
   insertEvent,
   upsertReducedState,
 } from "./db/queries/.generated/index.ts";
-import { createDynamicWorkerManager, dynamicWorkerProcessor } from "./dynamic-processor.ts";
 import {
   externalSubscriberProcessor,
   resetSubscriberSocketsForStream,
 } from "./external-subscriber.ts";
-import { jsonataTransformerProcessor } from "./jsonata-transformer.ts";
 import { getAncestorStreamPaths } from "~/lib/stream-path-ancestors.ts";
 import { getInitializedStreamStub, StreamOffsetPreconditionError } from "~/lib/stream-helpers.ts";
 
@@ -62,7 +60,6 @@ export class StreamDurableObject extends StreamDurableObjectBase<Env> {
   private _state: StreamState | null = null;
   private readonly client: SyncClient;
   private readonly subscribers = new Set<ReadableStreamDefaultController<Uint8Array>>();
-  private readonly dynamicWorkerManager: ReturnType<typeof createDynamicWorkerManager>;
 
   private get state(): StreamState {
     if (this._state == null) {
@@ -91,29 +88,6 @@ export class StreamDurableObject extends StreamDurableObjectBase<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.client = createDurableObjectClient(ctx.storage);
-    // Dynamic workers are an event-service-owned processor deployment. Their
-    // reduced state is handled by `dynamicWorkerProcessor` like any other
-    // builtin processor; this manager reconciles that reduced state into live
-    // Cloudflare Dynamic Worker instances.
-    //
-    // First-party references:
-    // - https://developers.cloudflare.com/dynamic-workers/
-    // - https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/
-    this.dynamicWorkerManager = createDynamicWorkerManager({
-      append: (event) => this.append(event),
-      history: (args) => this.history(args),
-      stream: (args) => this.stream(args),
-      createLoopbackBinding: ({ exportName }) => {
-        if (exportName !== "DynamicWorkerEgressGateway") {
-          throw new Error(`Unsupported loopback binding export: ${exportName}`);
-        }
-
-        return this.env.DYNAMIC_WORKER_EGRESS_GATEWAY as unknown as Fetcher;
-      },
-      getPath: () => this.state.path,
-      getProjectSlug: () => this.state.projectSlug,
-      loader: this.env.LOADER,
-    });
 
     void this.blockDurableObjectConcurrencyWhile(async () => {
       migrate(this.client);
@@ -129,9 +103,8 @@ export class StreamDurableObject extends StreamDurableObjectBase<Env> {
       if (parsed.success) {
         this._state = parsed.data;
         // Append an explicit lifecycle event so processor code can observe that
-        // this JavaScript instance woke up. The event's afterAppend phase also
-        // reconciles dynamic workers from reduced state, so constructor startup
-        // stays limited to local SQLite work.
+        // this JavaScript instance woke up. Constructor startup stays limited
+        // to local SQLite work.
         try {
           this.append({
             type: STREAM_DURABLE_OBJECT_WOKE_UP_TYPE,
@@ -319,10 +292,6 @@ export class StreamDurableObject extends StreamDurableObjectBase<Env> {
    *    committed event and its own state slice, then optionally append derived
    *    events back into this stream.
    *
-   * 4. Dynamic worker runtime reconciliation: the `dynamic-worker` processor
-   *    has already reduced configuration state; the manager turns that state
-   *    into live Dynamic Worker instances.
-   *
    * We deliberately do not use ctx.waitUntil() here. Cloudflare documents that
    * it has no effect in Durable Objects; pending I/O keeps the object alive.
    * https://developers.cloudflare.com/durable-objects/api/state/#waituntil
@@ -358,19 +327,6 @@ export class StreamDurableObject extends StreamDurableObjectBase<Env> {
         });
       },
     });
-
-    void this.dynamicWorkerManager
-      .afterAppend({
-        event,
-        state: this.state.processors["dynamic-worker"],
-      })
-      .catch((error) => {
-        console.error("[stream-do] dynamic worker manager afterAppend failed", {
-          path: this.state.path,
-          eventType: event.type,
-          error,
-        });
-      });
   }
 
   // ---------------------------------------------------------------------------
@@ -384,7 +340,6 @@ export class StreamDurableObject extends StreamDurableObjectBase<Env> {
   async destroy(args: { destroyChildren?: boolean } = {}): Promise<DestroyStreamResult> {
     if (this._state == null) {
       this.closeSubscribers();
-      await this.dynamicWorkerManager.dispose();
       await this.ctx.storage.deleteAll();
       return {
         destroyedStreamCount: 0,
@@ -415,8 +370,6 @@ export class StreamDurableObject extends StreamDurableObjectBase<Env> {
     if (path != null) {
       resetSubscriberSocketsForStream(path);
     }
-
-    await this.dynamicWorkerManager.dispose();
 
     await this.ctx.storage.deleteAll();
 
@@ -553,58 +506,40 @@ function createInitialStreamState(args: {
   };
 }
 
-/**
- * Builtin processors run inside the Stream durable object. Keep this list
- * small: `circuit-breaker` is genuinely privileged because it rejects appends
- * before commit; the others are in-process deployment choices until ordinary
- * StreamProcessorRunner deployments are ready for event-service-owned processors.
- */
-const builtinProcessors = [
-  circuitBreakerProcessor,
-  externalSubscriberProcessor,
-  dynamicWorkerProcessor,
-  jsonataTransformerProcessor,
-] as readonly unknown[] as readonly StreamBuiltinProcessor[];
-
 function createInitialBuiltinProcessorState(): StreamState["processors"] {
-  return Object.fromEntries(
-    builtinProcessors.map((processor) => [processor.slug, structuredClone(processor.initialState)]),
-  ) as StreamState["processors"];
+  return {
+    "circuit-breaker": structuredClone(circuitBreakerProcessor.initialState),
+    "external-subscriber": structuredClone(externalSubscriberProcessor.initialState),
+  };
 }
 
 function runBuiltinBeforeAppend(args: {
   event: EventInput;
   processors: StreamState["processors"];
 }) {
-  for (const processor of builtinProcessors) {
-    processor.beforeAppend?.({
-      event: args.event,
-      state: getProcessorState(args.processors, processor.slug),
-    });
-  }
+  // Circuit breaker is the only current privileged pre-commit gate. Keep this
+  // explicit so adding another beforeAppend hook is a conscious stream-core
+  // decision, not a side effect of appending to an array above.
+  circuitBreakerProcessor.beforeAppend?.({
+    event: args.event,
+    state: args.processors["circuit-breaker"],
+  });
 }
 
 function reduceBuiltinProcessors(args: {
   event: Event;
   processors: StreamState["processors"];
 }): StreamState["processors"] {
-  let processors = args.processors;
-
-  for (const processor of builtinProcessors) {
-    if (processor.reduce == null) {
-      continue;
-    }
-
-    processors = {
-      ...processors,
-      [processor.slug]: processor.reduce({
-        event: args.event,
-        state: getProcessorState(processors, processor.slug),
-      }),
-    };
-  }
-
-  return processors;
+  return {
+    "circuit-breaker": circuitBreakerProcessor.reduce!({
+      event: args.event,
+      state: args.processors["circuit-breaker"],
+    }),
+    "external-subscriber": externalSubscriberProcessor.reduce!({
+      event: args.event,
+      state: args.processors["external-subscriber"],
+    }),
+  };
 }
 
 function runBuiltinAfterAppend(args: {
@@ -613,29 +548,35 @@ function runBuiltinAfterAppend(args: {
   processors: StreamState["processors"];
   onError(args: { error: unknown; event: Event; processorSlug: string }): void;
 }) {
-  for (const processor of builtinProcessors) {
-    const promise = processor.afterAppend?.({
-      append: args.append,
-      event: args.event,
-      state: getProcessorState(args.processors, processor.slug),
-    });
-
-    if (promise == null) {
-      continue;
-    }
-
-    void promise.catch((error) => {
+  const circuitBreakerPromise = circuitBreakerProcessor.afterAppend?.({
+    append: args.append,
+    event: args.event,
+    state: args.processors["circuit-breaker"],
+  });
+  if (circuitBreakerPromise != null) {
+    void circuitBreakerPromise.catch((error) => {
       args.onError({
         error,
         event: args.event,
-        processorSlug: processor.slug,
+        processorSlug: circuitBreakerProcessor.slug,
       });
     });
   }
-}
 
-function getProcessorState(processors: StreamState["processors"], slug: string): unknown {
-  return processors[slug as ProcessorSlugKey];
+  const externalSubscriberPromise = externalSubscriberProcessor.afterAppend?.({
+    append: args.append,
+    event: args.event,
+    state: args.processors["external-subscriber"],
+  });
+  if (externalSubscriberPromise != null) {
+    void externalSubscriberPromise.catch((error) => {
+      args.onError({
+        error,
+        event: args.event,
+        processorSlug: externalSubscriberProcessor.slug,
+      });
+    });
+  }
 }
 
 function reduceStreamCore(args: { state: StreamState; event: Event }): StreamState {
@@ -762,19 +703,6 @@ const textEncoder = new TextEncoder();
 function encodeEventLine(event: Event) {
   return textEncoder.encode(`${JSON.stringify(event)}\n`);
 }
-
-type ProcessorSlugKey = keyof StreamState["processors"];
-type StreamBuiltinProcessor = {
-  slug: string;
-  initialState: unknown;
-  beforeAppend?(args: { event: EventInput; state: unknown }): void;
-  reduce?(args: { event: Event; state: unknown }): unknown;
-  afterAppend?(args: {
-    append: (event: EventInput) => Event;
-    event: Event;
-    state: unknown;
-  }): Promise<void>;
-};
 
 // Shape parseEventRow accepts. The generated query Result types from
 // db/queries/.generated use `string | undefined` for nullable columns,
