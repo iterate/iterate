@@ -16,7 +16,6 @@ import type {
   ProcessorReduction,
   ProcessorState,
   ProcessorStreamApi,
-  ResolvedEventTypesOnly,
   ResolvedEventType,
   StreamEvent,
   StreamEventInput,

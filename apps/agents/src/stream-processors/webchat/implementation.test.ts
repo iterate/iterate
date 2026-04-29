@@ -95,6 +95,7 @@ function testStreamApi(args: {
     },
     read: async () => [],
     subscribe: async function* () {
+      yield* [] as AsyncIterable<StreamEvent>;
       return;
     },
   };

@@ -178,6 +178,7 @@ function testStreamApi(args: {
     },
     read: async () => args.storedEvents,
     subscribe: async function* () {
+      yield* [] as AsyncIterable<StreamEvent>;
       return;
     },
   };

@@ -35,7 +35,7 @@ export type DerivedIdempotencyKeyArgs = {
 };
 
 export type EventDefinition<
-  Type extends string = string,
+  _Type extends string = string,
   PayloadOutput = unknown,
   PayloadInput = PayloadOutput,
 > = {

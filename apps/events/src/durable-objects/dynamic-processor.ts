@@ -6,7 +6,6 @@ import {
   type DynamicWorkerState,
   type Event,
   EventInput,
-  STREAM_DYNAMIC_WORKER_CONFIGURED_TYPE,
   type StreamCursor,
   type StreamPath,
 } from "@iterate-com/events-contract";
@@ -43,7 +42,7 @@ export default {
 
   async afterAppend({ append, event }) {
     if (
-      event.type === STREAM_DYNAMIC_WORKER_CONFIGURED_TYPE ||
+      event.type === "events.iterate.com/core/dynamic-worker-configured" ||
       !/\\bping\\b/i.test(
         JSON.stringify({
           type: event.type,
@@ -66,7 +65,7 @@ export default {
 
 export const httpbinEchoDynamicWorkerScript = `
 function containsPing(event) {
-  if (event.type === STREAM_DYNAMIC_WORKER_CONFIGURED_TYPE) {
+  if (event.type === "events.iterate.com/core/dynamic-worker-configured") {
     return false;
   }
 

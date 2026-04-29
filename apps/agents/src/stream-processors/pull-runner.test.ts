@@ -152,6 +152,7 @@ describe("runPullProcessor", () => {
           }),
         ],
         subscribe: async function* () {
+          yield* [] as AsyncIterable<StreamEvent>;
           abortController.abort();
           throw abortError();
         },
