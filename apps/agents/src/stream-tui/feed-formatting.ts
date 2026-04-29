@@ -4,6 +4,7 @@ import type {
   EventsStreamRawEventElement,
 } from "@iterate-com/ui/components/events/feed-items";
 
+/** Build a map of offset → elapsed time label (e.g. "+2.3s") for consecutive events. */
 export function getElapsedByOffset(feedItems: readonly EventsStreamBuiltInElement[]) {
   const elapsedByOffset = new Map<number, string>();
   const rawEvents = feedItems.filter((item) => item.type === "raw-event");
@@ -27,6 +28,7 @@ export function formatEventSummary(item: EventsStreamRawEventElement, elapsedLab
     .join(" · ");
 }
 
+/** Reorder event keys for readable YAML: type, payload, metadata first, then the rest. */
 export function orderEventKeysForYamlDisplay(event: Event): Record<string, unknown> {
   const eventRecord = event as Record<string, unknown>;
   const orderedEvent: Record<string, unknown> = {};
@@ -48,6 +50,7 @@ export function orderEventKeysForYamlDisplay(event: Event): Record<string, unkno
   return orderedEvent;
 }
 
+/** Hard-wrap a string at `width` characters, returning one or more lines. */
 export function wrapLine(value: string, width: number) {
   if (value.length <= width) return [value];
 
@@ -58,6 +61,7 @@ export function wrapLine(value: string, width: number) {
   return lines;
 }
 
+/** Right-align text to `width` chars, truncating from the left if too long. */
 export function rightAlign(value: string, width: number) {
   const trimmed = value.length > width ? value.slice(value.length - width) : value;
   return trimmed.padStart(width);

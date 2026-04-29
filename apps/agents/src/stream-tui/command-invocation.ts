@@ -80,18 +80,6 @@ export function removeStringOption(rawArgs: string, optionName: string) {
   return `${rawArgs.slice(0, match.start)} ${rawArgs.slice(match.end)}`.trim();
 }
 
-function requireRawArgs(args: { commandTitle: string; slashName: string; rawArgs: string }) {
-  const rawArgs = removeStringOption(args.rawArgs, "--stream").trim();
-  if (rawArgs.length === 0) {
-    throw new MissingCommandArgumentsError({
-      commandTitle: args.commandTitle,
-      slashName: args.slashName,
-    });
-  }
-
-  return rawArgs;
-}
-
 function matchStringOption(rawArgs: string, optionName: string) {
   const pattern = new RegExp(
     `(?:^|\\s)${escapeRegExp(optionName)}(?:=|\\s+)(?:"([^"]+)"|'([^']+)'|(\\S+))`,

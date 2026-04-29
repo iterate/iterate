@@ -208,13 +208,19 @@ const topBar = new BoxRenderable(renderer, {
   backgroundColor: P.surface,
 });
 
-const connectedIndicator = new TextRenderable(renderer, { content: "●", width: 2, fg: P.warning });
+// iterate brand mark: white square with italic i
+const brandMark = new TextRenderable(renderer, {
+  content: new StyledText([bg("#ffffff")(fg("#000000")(" 𝑖 "))]),
+  width: 4,
+  fg: P.text,
+});
 const streamPathText = new TextRenderable(renderer, {
   content: currentStreamPath,
   flexGrow: 1,
   fg: P.text,
 });
 const statsText = new TextRenderable(renderer, { content: "", fg: P.textSecondary });
+const connectedIndicator = new TextRenderable(renderer, { content: "●", width: 2, fg: P.warning });
 
 const feed = new ScrollBoxRenderable(renderer, {
   width: "100%",
@@ -272,6 +278,7 @@ const inputSeparator = new BoxRenderable(renderer, {
 });
 
 // Assemble the widget tree
+topBar.add(brandMark);
 topBar.add(streamPathText);
 topBar.add(statsText);
 topBar.add(connectedIndicator);

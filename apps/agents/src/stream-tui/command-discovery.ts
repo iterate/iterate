@@ -43,6 +43,10 @@ export type FuzzyMatchRange = {
   end: number;
 };
 
+/**
+ * Extract the slash query from an input string like "/vie" → "vie".
+ * Returns undefined if the input isn't a slash query (no leading "/" or has spaces).
+ */
 export function parseSlashAutocompleteQuery(input: string) {
   if (!input.startsWith("/")) return undefined;
 
@@ -52,6 +56,7 @@ export function parseSlashAutocompleteQuery(input: string) {
   return query.toLowerCase();
 }
 
+/** Find a command by exact slash name or alias match. */
 export function findSlashCommand<TCommand extends SlashCommandRecord>(args: {
   commands: readonly TCommand[];
   slash: string;
@@ -66,6 +71,11 @@ export function findSlashCommand<TCommand extends SlashCommandRecord>(args: {
   });
 }
 
+/**
+ * Return up to `limit` commands matching the slash query in the input,
+ * ranked by match quality (exact > prefix > substring > fuzzy).
+ * Aliases are scored but don't create duplicate entries.
+ */
 export function suggestSlashCommands<TCommand extends SlashCommandRecord>(args: {
   commands: readonly TCommand[];
   input: string;
@@ -141,6 +151,11 @@ function commandNeedsInput(command: SlashCommandRecord) {
   return command.input?.positional?.required === true;
 }
 
+/**
+ * Find character ranges in `value` that match `query` — first tries contiguous
+ * substring, then falls back to sparse character-by-character fuzzy match.
+ * Returns empty array if no match.
+ */
 export function fuzzyMatchRanges(value: string, query: string): FuzzyMatchRange[] {
   const normalizedValue = value.toLowerCase();
   const normalizedQuery = query.toLowerCase();
@@ -164,6 +179,7 @@ export function fuzzyMatchRanges(value: string, query: string): FuzzyMatchRange[
   return ranges;
 }
 
+/** Split text into segments tagged as matched or unmatched based on fuzzy match ranges. */
 export function splitMatchedSegments(args: { text: string; ranges: readonly FuzzyMatchRange[] }) {
   const segments: SlashCommandLabelSegment[] = [];
   let cursor = 0;
