@@ -5,9 +5,9 @@ import {
   implementProcessor,
   type ProcessorStreamApi,
 } from "@iterate-com/shared/stream-processors";
-import { AgentProcessorContract, type AgentState } from "./contract.ts";
 import { CoreProcessorRegisteredEventType } from "../core/contract.ts";
 import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
+import { AgentProcessorContract, type AgentState } from "./contract.ts";
 
 /**
  * Backend-only dependencies for the Agent processor implementation.
