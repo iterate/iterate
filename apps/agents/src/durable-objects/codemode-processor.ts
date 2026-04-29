@@ -2,6 +2,7 @@ import type { GenericEventInput } from "@iterate-com/events-contract";
 import { match } from "schematch";
 import { z } from "zod";
 import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
+import type { Callable } from "@iterate-com/shared/callable/types.ts";
 import {
   AgentInputAddedEvent,
   AgentInputAddedEventInput,
@@ -17,7 +18,6 @@ import {
   CodemodeResultAddedEventInput,
   ToolProviderConfigUpdatedEvent,
 } from "./codemode-processor-types.ts";
-import type { Callable } from "@iterate-com/shared/callable/types.ts";
 import type { CloudflareEnv } from "~/lib/worker-env.d.ts";
 
 /** Wire shape returned by a `ToolProviderConfig.getTypesCallable`. */

@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { getInitialProcessorState, type StreamEvent } from "@iterate-com/shared/stream-processors";
 import {
   CoreProcessorRegisteredEventType,
   createProcessorRegisteredInput,
 } from "../core/contract.ts";
 import { AgentProcessorContract, reduceAgentEvents } from "./contract.ts";
 import { wellBehavedProcessorDefaults } from "../core/well-behaved-processor-defaults.ts";
-import { getInitialProcessorState, type StreamEvent } from "@iterate-com/shared/stream-processors";
 
 describe("AgentProcessorContract", () => {
   it("initializes frontend-safe reduced state from the contract schema", () => {
