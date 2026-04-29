@@ -291,7 +291,7 @@ export default {
 
   async afterAppend({ append, event }) {
     if (
-      event.type === STREAM_DYNAMIC_WORKER_CONFIGURED_TYPE ||
+      event.type === "events.iterate.com/core/dynamic-worker-configured" ||
       !/\\bping\\b/i.test(
         JSON.stringify({
           type: event.type,
