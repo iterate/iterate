@@ -47,10 +47,10 @@ Send this through the visible webchat composer:
 Please use codemode only. Call webchat.sendMessage with exactly this message: webchat-codemode-proof-<timestamp>. Return the result.
 ```
 
-Proof requires the stream to contain `events.iterate.com/webchat/message-received`,
-`events.iterate.com/llm/request-started`,
+Proof requires the stream to contain `events.iterate.com/agent-webchat/message-received`,
+`events.iterate.com/agent/request-started`,
 `events.iterate.com/codemode/block-added`,
-`events.iterate.com/webchat/response-added`, and
+`events.iterate.com/agent-webchat/response-added`, and
 `events.iterate.com/codemode/result-added`.
 
 The events stream is:
@@ -185,7 +185,7 @@ echo "agents=https://agents.test.iterate-dev-jonas.app/streams/%2Fagents%2Fslack
 Expected external behavior: the Jonasland Slack app replies in the thread and
 reacts to the triggering message. Expected stream behavior: raw
 `events.iterate.com/slack/webhook-received`, `agent-input-added`,
-`llm-request-started`, `codemode/block-added`, and `codemode/result-added`.
+`events.iterate.com/agent/request-started`, `events.iterate.com/codemode/block-added`, and `events.iterate.com/codemode/result-added`.
 
 To resolve the exact Slack stream for a browser-authored message:
 
@@ -309,7 +309,7 @@ stronger proof is a browser/manual message from a real user in the channel.
 - No raw event: platform webhook/gateway is not configured or app credentials
   are stale.
 - Raw event but no `agent-input-added`: channel rewrite processor failed.
-- `agent-input-added` but no `llm-request-started`: agent app subscription or
+- `agent-input-added` but no `events.iterate.com/agent/request-started`: agent app subscription or
   direct process kickoff failed.
 - `codemode-block-added` but no external response: channel provider credentials
   or SDK/API call failed.

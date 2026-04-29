@@ -76,7 +76,7 @@ async function emitScheduledAndKickoff(args: {
   const { requestId } = args.runtime.scheduleLlmRequest({ debounceMs });
   await args.append({
     event: {
-      type: "events.iterate.com/llm/request-scheduled",
+      type: "events.iterate.com/agent/request-scheduled",
       payload: { requestId, debounceMs, model: args.state.llmConfig.model },
     },
   });
@@ -91,7 +91,7 @@ async function emitCancelled(args: {
   args.runtime.cancelLlmRequest({ requestId: args.requestId });
   await args.append({
     event: {
-      type: "events.iterate.com/llm/request-cancelled",
+      type: "events.iterate.com/agent/request-cancelled",
       payload: { requestId: args.requestId, reason: args.reason },
     },
   });
@@ -130,49 +130,51 @@ async function appendEventTypeExplanation(args: {
 }
 
 function eventTypeExplanation(eventType: string): string | null {
-  if (eventType === "events.iterate.com/webchat/message-received") {
+  if (eventType === "events.iterate.com/agent-webchat/message-received") {
     return eventTypeExplanationBlock({
       type: eventType,
       meaning: "This represents a message received from the webchat user.",
     });
   }
-  if (eventType === "events.iterate.com/webchat/response-added") {
+  if (eventType === "events.iterate.com/agent-webchat/response-added") {
     return eventTypeExplanationBlock({
       type: eventType,
       meaning:
         "This represents a message you sent by writing a codemode block that calls `webchat.sendMessage({ message })`.",
     });
   }
-  if (eventType === "events.iterate.com/llm/request-started") {
+  if (eventType === "events.iterate.com/agent/request-started") {
     return eventTypeExplanationBlock({
       type: eventType,
       meaning:
-        "An LLM request began. The requestId links later completion, cancellation, or failure events.",
+        "An agent response request began. The requestId links later completion, cancellation, or failure events.",
     });
   }
-  if (eventType === "events.iterate.com/llm/request-queued") {
+  if (eventType === "events.iterate.com/agent/request-queued") {
     return eventTypeExplanationBlock({
       type: eventType,
       meaning:
-        "A trigger arrived while an LLM request was running. It should be handled after the current request ends.",
+        "A trigger arrived while an agent response request was running. It should be handled after the current request ends.",
     });
   }
-  if (eventType === "events.iterate.com/llm/request-cancelled") {
+  if (eventType === "events.iterate.com/agent/request-cancelled") {
     return eventTypeExplanationBlock({
       type: eventType,
-      meaning: "The current LLM request was interrupted or timed out before it completed.",
+      meaning:
+        "The current agent response request was interrupted or timed out before it completed.",
     });
   }
-  if (eventType === "events.iterate.com/llm/request-failed") {
+  if (eventType === "events.iterate.com/agent/request-failed") {
     return eventTypeExplanationBlock({
       type: eventType,
-      meaning: "The current LLM request failed before producing a usable codemode response.",
+      meaning:
+        "The current agent response request failed before producing a usable codemode response.",
     });
   }
-  if (eventType === "events.iterate.com/llm/request-completed") {
+  if (eventType === "events.iterate.com/agent/request-completed") {
     return eventTypeExplanationBlock({
       type: eventType,
-      meaning: "The current LLM request produced a usable codemode response.",
+      meaning: "The current agent response request produced a usable codemode response.",
     });
   }
   return null;
@@ -210,7 +212,7 @@ function yamlBlockScalar(key: string, value: string): string[] {
 }
 
 async function emitQueued(args: { append: Append }): Promise<void> {
-  await args.append({ event: { type: "events.iterate.com/llm/request-queued", payload: {} } });
+  await args.append({ event: { type: "events.iterate.com/agent/request-queued", payload: {} } });
 }
 
 async function emitAgentStatus(args: {
@@ -301,29 +303,29 @@ export function reduceAgentLoop(
     const item: HistoryItem = { role, content };
     return { ...state, history: [...state.history, item] };
   }
-  if (event.type === "events.iterate.com/llm/config-updated") {
+  if (event.type === "events.iterate.com/agent/config-updated") {
     return { ...state, llmConfig: event.payload as any };
   }
-  if (event.type === "events.iterate.com/llm/request-scheduled") {
+  if (event.type === "events.iterate.com/agent/request-scheduled") {
     return {
       ...state,
       currentRequest: { requestId: String(event.payload?.requestId) },
       pendingTriggerCount: 0,
     };
   }
-  if (event.type === "events.iterate.com/llm/request-started") {
+  if (event.type === "events.iterate.com/agent/request-started") {
     return { ...state, currentRequest: { requestId: String(event.payload?.requestId) } };
   }
   if (
-    event.type === "events.iterate.com/llm/request-completed" ||
-    event.type === "events.iterate.com/llm/request-cancelled" ||
-    event.type === "events.iterate.com/llm/request-failed"
+    event.type === "events.iterate.com/agent/request-completed" ||
+    event.type === "events.iterate.com/agent/request-cancelled" ||
+    event.type === "events.iterate.com/agent/request-failed"
   ) {
     return state.currentRequest?.requestId === event.payload?.requestId
       ? { ...state, currentRequest: null }
       : state;
   }
-  if (event.type === "events.iterate.com/llm/request-queued") {
+  if (event.type === "events.iterate.com/agent/request-queued") {
     return { ...state, pendingTriggerCount: state.pendingTriggerCount + 1 };
   }
   return undefined;
@@ -334,7 +336,7 @@ export async function agentLoopAfterAppend(
 ): Promise<void> {
   const { append, state, runtime, event } = args;
 
-  if (event.type === "events.iterate.com/webchat/message-received") {
+  if (event.type === "events.iterate.com/agent-webchat/message-received") {
     if (event.offset == null) return;
     await appendEventTypeExplanation({ append, eventType: event.type });
     await append({
@@ -354,7 +356,7 @@ export async function agentLoopAfterAppend(
     return;
   }
 
-  if (event.type === "events.iterate.com/webchat/response-added") {
+  if (event.type === "events.iterate.com/agent-webchat/response-added") {
     if (event.offset == null) return;
     await appendEventTypeExplanation({ append, eventType: event.type });
     await appendRewrite({
@@ -369,7 +371,7 @@ export async function agentLoopAfterAppend(
     return;
   }
 
-  if (event.type === "events.iterate.com/llm/request-started") {
+  if (event.type === "events.iterate.com/agent/request-started") {
     if (event.offset == null) return;
     await appendEventTypeExplanation({ append, eventType: event.type });
     await appendRewrite({
@@ -389,13 +391,13 @@ export async function agentLoopAfterAppend(
     await emitAgentStatus({
       append,
       status: "working",
-      reason: "events.iterate.com/llm/request-started",
+      reason: "events.iterate.com/agent/request-started",
       requestId: String(event.payload?.requestId ?? ""),
     });
     return;
   }
 
-  if (event.type === "events.iterate.com/llm/request-queued") {
+  if (event.type === "events.iterate.com/agent/request-queued") {
     if (event.offset == null) return;
     await appendEventTypeExplanation({ append, eventType: event.type });
     await appendRewrite({
@@ -405,7 +407,7 @@ export async function agentLoopAfterAppend(
     return;
   }
 
-  if (event.type === "events.iterate.com/llm/request-failed") {
+  if (event.type === "events.iterate.com/agent/request-failed") {
     if (event.offset == null) return;
     await appendEventTypeExplanation({ append, eventType: event.type });
     await appendRewrite({
@@ -442,7 +444,7 @@ Your previous assistant response was not a complete executable codemode block. R
       await emitAgentStatus({
         append,
         status: "idle",
-        reason: "events.iterate.com/llm/request-failed",
+        reason: "events.iterate.com/agent/request-failed",
         requestId: String(event.payload?.requestId ?? ""),
       });
     }
@@ -456,7 +458,7 @@ Your previous assistant response was not a complete executable codemode block. R
     return;
   }
 
-  if (event.type === "events.iterate.com/llm/request-completed") {
+  if (event.type === "events.iterate.com/agent/request-completed") {
     if (event.offset != null) {
       await appendEventTypeExplanation({ append, eventType: event.type });
       await appendRewrite({
@@ -479,14 +481,14 @@ Your previous assistant response was not a complete executable codemode block. R
       await emitAgentStatus({
         append,
         status: "idle",
-        reason: "events.iterate.com/llm/request-completed",
+        reason: "events.iterate.com/agent/request-completed",
         requestId: String(event.payload?.requestId ?? ""),
       });
     }
     return;
   }
 
-  if (event.type === "events.iterate.com/llm/request-cancelled") {
+  if (event.type === "events.iterate.com/agent/request-cancelled") {
     if (event.offset != null) {
       await appendEventTypeExplanation({ append, eventType: event.type });
       await appendRewrite({
@@ -509,7 +511,7 @@ Your previous assistant response was not a complete executable codemode block. R
       await emitAgentStatus({
         append,
         status: "idle",
-        reason: "events.iterate.com/llm/request-cancelled",
+        reason: "events.iterate.com/agent/request-cancelled",
         requestId: String(event.payload?.requestId ?? ""),
       });
     }

@@ -516,11 +516,14 @@ export class StreamProcessor extends Agent {
         )
         .toArray();
       if (seen.length > 0) {
-        if (event.type === "events.iterate.com/llm/request-scheduled" && event.payload?.requestId) {
+        if (
+          event.type === "events.iterate.com/agent/request-scheduled" &&
+          event.payload?.requestId
+        ) {
           const started = this.ctx.storage.sql
             .exec(
               "SELECT id FROM events WHERE type = ? AND payload LIKE ? AND stream_path = ? LIMIT 1",
-              "events.iterate.com/llm/request-started",
+              "events.iterate.com/agent/request-started",
               `%${event.payload.requestId}%`,
               this.sp,
             )
@@ -555,7 +558,7 @@ export class StreamProcessor extends Agent {
 
     const scheduledRequests = appends.filter(
       (append) =>
-        append.type === "events.iterate.com/llm/request-scheduled" && append.payload?.requestId,
+        append.type === "events.iterate.com/agent/request-scheduled" && append.payload?.requestId,
     );
     for (const scheduled of scheduledRequests) {
       const requestId = scheduled.payload.requestId;
@@ -571,14 +574,14 @@ export class StreamProcessor extends Agent {
     const body = buildLlmChatRequest(state);
     const startedAt = Date.now();
     const startedEvent = {
-      type: "events.iterate.com/llm/request-started",
+      type: "events.iterate.com/agent/request-started",
       payload: {
         requestId,
         model: state.llmConfig.model,
         body,
         runOpts: state.llmConfig.runOpts,
       },
-      idempotencyKey: `llm-started:${requestId}`,
+      idempotencyKey: `agent-request-started:${requestId}`,
     };
 
     let raw: unknown = undefined;
@@ -596,16 +599,16 @@ export class StreamProcessor extends Agent {
       const assistantEvent = {
         type: "events.iterate.com/agent/input-added",
         payload: { role: "assistant", content },
-        idempotencyKey: `llm-assistant:${requestId}`,
+        idempotencyKey: `agent-assistant:${requestId}`,
       };
       if (extractCodemodeScriptFromAssistantResponse(content) == null) {
         return [
           startedEvent,
           assistantEvent,
           {
-            type: "events.iterate.com/llm/request-failed",
+            type: "events.iterate.com/agent/request-failed",
             payload: invalidCodemodeFailurePayload({ requestId, startedAt, raw, state }),
-            idempotencyKey: `llm-failed:${requestId}`,
+            idempotencyKey: `agent-request-failed:${requestId}`,
           },
         ];
       }
@@ -613,23 +616,23 @@ export class StreamProcessor extends Agent {
         startedEvent,
         assistantEvent,
         {
-          type: "events.iterate.com/llm/request-completed",
+          type: "events.iterate.com/agent/request-completed",
           payload: { requestId, durationMs: Date.now() - startedAt, raw },
-          idempotencyKey: `llm-completed:${requestId}`,
+          idempotencyKey: `agent-request-completed:${requestId}`,
         },
       ];
     } catch (error: any) {
       return [
         startedEvent,
         {
-          type: "events.iterate.com/llm/request-failed",
+          type: "events.iterate.com/agent/request-failed",
           payload: {
             requestId,
             durationMs: Date.now() - startedAt,
             error: { message: error?.message || String(error) },
             raw,
           },
-          idempotencyKey: `llm-failed:${requestId}`,
+          idempotencyKey: `agent-request-failed:${requestId}`,
         },
       ];
     } finally {
@@ -685,9 +688,9 @@ export class StreamProcessor extends Agent {
           if (this.#inflight.timer) clearTimeout(this.#inflight.timer);
           this.#inflight = null;
           this.#appendToStream({
-            type: "events.iterate.com/llm/request-cancelled",
+            type: "events.iterate.com/agent/request-cancelled",
             payload: { requestId, reason: "deadline-exceeded" },
-            idempotencyKey: `llm-cancel-deadline:${requestId}`,
+            idempotencyKey: `agent-request-cancel-deadline:${requestId}`,
           }).catch((error: any) =>
             console.error(
               "[Agent] deadline cancel append failed:",
@@ -709,14 +712,14 @@ export class StreamProcessor extends Agent {
     const startedAt = Date.now();
 
     await this.#appendToStream({
-      type: "events.iterate.com/llm/request-started",
+      type: "events.iterate.com/agent/request-started",
       payload: {
         requestId,
         model: state.llmConfig.model,
         body,
         runOpts: state.llmConfig.runOpts,
       },
-      idempotencyKey: `llm-started:${requestId}`,
+      idempotencyKey: `agent-request-started:${requestId}`,
     });
 
     let raw: unknown = undefined;
@@ -735,31 +738,31 @@ export class StreamProcessor extends Agent {
       await this.#appendToStream({
         type: "events.iterate.com/agent/input-added",
         payload: { role: "assistant", content },
-        idempotencyKey: `llm-assistant:${requestId}`,
+        idempotencyKey: `agent-assistant:${requestId}`,
       });
       if (extractCodemodeScriptFromAssistantResponse(content) == null) {
         await this.#appendToStream({
-          type: "events.iterate.com/llm/request-failed",
+          type: "events.iterate.com/agent/request-failed",
           payload: invalidCodemodeFailurePayload({ requestId, startedAt, raw, state }),
-          idempotencyKey: `llm-failed:${requestId}`,
+          idempotencyKey: `agent-request-failed:${requestId}`,
         });
         return;
       }
       await this.#appendToStream({
-        type: "events.iterate.com/llm/request-completed",
+        type: "events.iterate.com/agent/request-completed",
         payload: { requestId, durationMs: Date.now() - startedAt, raw },
-        idempotencyKey: `llm-completed:${requestId}`,
+        idempotencyKey: `agent-request-completed:${requestId}`,
       });
     } catch (error: any) {
       await this.#appendToStream({
-        type: "events.iterate.com/llm/request-failed",
+        type: "events.iterate.com/agent/request-failed",
         payload: {
           requestId,
           durationMs: Date.now() - startedAt,
           error: { message: error?.message || String(error) },
           raw,
         },
-        idempotencyKey: `llm-failed:${requestId}`,
+        idempotencyKey: `agent-request-failed:${requestId}`,
       });
     } finally {
       if (this.#inflight?.requestId === requestId) this.#inflight = null;
@@ -810,7 +813,7 @@ export class StreamProcessor extends Agent {
             const message = String(input?.message ?? "");
             if (!message) throw new Error("webchat.sendMessage requires message");
             await this.#appendToStream({
-              type: "events.iterate.com/webchat/response-added",
+              type: "events.iterate.com/agent-webchat/response-added",
               payload: { message },
               idempotencyKey: `webchat-response:${crypto.randomUUID()}`,
             });
@@ -1472,7 +1475,7 @@ export class App extends DurableObject {
       if (!content) return Response.json({ ok: false, error: "content required" }, { status: 400 });
 
       const event = {
-        type: "events.iterate.com/webchat/message-received",
+        type: "events.iterate.com/agent-webchat/message-received",
         payload: { content },
         idempotencyKey: `webchat-message:${crypto.randomUUID()}`,
       };
