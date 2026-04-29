@@ -70,7 +70,11 @@ export const cloudflarePreviewApps = {
     displayName: "OS",
     appPath: "apps/os2",
     dopplerProject: "os2",
-    excludedPreviewSlots: [1],
+    // OS2 previews need routed dashboard + project hosts. Slots 1 and 10 are
+    // still present in the generic Semaphore inventory, but their
+    // `iterate-preview-N.app` zones are not deployable in this Cloudflare
+    // account, so the preview allocator must skip them until the zones exist.
+    excludedPreviewSlots: [1, 10],
     paths: ["apps/os2/**", "apps/os2-contract/**"],
     previewResourceType: "os2-preview-environment",
     previewTestBaseUrlEnvVar: "OS2_BASE_URL",

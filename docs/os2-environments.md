@@ -94,7 +94,10 @@ Vite picks a free port automatically (defaults to 5173, increments if taken). Th
 
 ## Preview environments
 
-Preview environments use a semaphore-controlled pool of 10 slots (`os2-preview-1` through `os2-preview-10`).
+Preview environments use a semaphore-controlled pool. The generic inventory is
+`os2-preview-1` through `os2-preview-10`; OS2 currently allocates routed preview
+slots 2 through 9 because slots 1 and 10 do not have deployable
+`iterate-preview-N.app` zones in the Cloudflare account.
 
 ### How it works
 
@@ -107,8 +110,8 @@ Preview environments use a semaphore-controlled pool of 10 slots (`os2-preview-1
 
 ### Cloudflare zones for previews
 
-Each preview slot N uses the `iterate-preview-N.app` zone for both the dashboard
-host (`os.iterate-preview-N.app`) and project subdomains
+Each deployable preview slot N uses the `iterate-preview-N.app` zone for both
+the dashboard host (`os.iterate-preview-N.app`) and project subdomains
 (`<project>.iterate-preview-N.app`).
 
 These zones must exist in the `cc7f` Cloudflare account.
