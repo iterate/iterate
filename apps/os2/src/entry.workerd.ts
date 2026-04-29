@@ -63,17 +63,17 @@ export default {
             return new Response(null, { headers: mcpCorsHeaders });
           }
 
-          const mcpAuth = await authenticateMcpRequest(request, config);
-          if (mcpAuth instanceof Response) {
-            return mcpAuth;
-          }
-
           const projectSlug = resolveProjectSlugFromHostname(url.hostname, projectHostnameBases);
           if (!projectSlug) {
             return new Response("MCP is only available at <project>.<project-host-base>/mcp.", {
               status: 404,
               headers: mcpCorsHeaders,
             });
+          }
+
+          const mcpAuth = await authenticateMcpRequest(request, config);
+          if (mcpAuth instanceof Response) {
+            return mcpAuth;
           }
 
           const project = await getProjectBySlug(db, {
