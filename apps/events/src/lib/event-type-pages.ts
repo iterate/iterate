@@ -121,15 +121,15 @@ export const jsonataTransformerConfiguredPage = {
   href: "/jsonata-transformer-configured/",
   title: "JSONata Transformer Configured",
   type: STREAM_JSONATA_TRANSFORMER_CONFIGURED_TYPE,
-  summary:
-    "Built-in control event that registers or replaces an append-time JSONata transformer by slug.",
+  summary: "Configuration event shape for a standalone JSONata transformer processor.",
   payloadExample: {
     slug: "normalize-webhook",
     matcher: "type = 'webhook.raw'",
     transform: '{"type":"webhook.normalized","payload":{"body":payload}}',
   },
   details: [
-    "The latest configured event for a slug replaces the previous matcher and transform.",
+    "The Stream durable object no longer runs this processor itself; a separate processor runner must consume these events.",
+    "The latest configured event for a slug replaces the previous matcher and transform in that processor's reduced state.",
     "Transformers evaluate against the full committed event envelope, not just payload.",
   ],
   templates: [
@@ -317,14 +317,14 @@ export const dynamicWorkerConfiguredPage = {
   href: "/dynamic-worker-configured/",
   title: "Dynamic Worker Configured",
   type: STREAM_DYNAMIC_WORKER_CONFIGURED_TYPE,
-  summary:
-    "Built-in control event that registers or replaces a dynamic worker processor by slug for a stream.",
+  summary: "Configuration event shape for a standalone dynamic worker processor.",
   payloadExample: {
     slug: "ping-pong",
     script: pingPongDynamicWorkerTemplateScript,
   },
   details: [
-    "The latest configured event for a slug replaces the previous dynamic worker runtime for that slug on the same stream.",
+    "The Stream durable object no longer runs this processor itself; a separate processor runner must consume these events.",
+    "The latest configured event for a slug replaces the previous dynamic worker runtime for that slug in that processor's reduced state.",
     "The raw composer template uses `script` directly so it is copy-pastable without any bundling or dependencies.",
     "If `outboundGateway` is omitted, the dynamic worker uses the default `DynamicWorkerEgressGateway`, so outbound requests can resolve `getIterateSecret(...)` header sentinels.",
     'This trivial example replies with `{ type: "pong" }` whenever a later event contains the word `ping`.',
