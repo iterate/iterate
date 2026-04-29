@@ -13,6 +13,7 @@ import { inject } from "vitest";
 import type { TestContext } from "vitest";
 import { createEventsHelpers, type EventsHelpers } from "./events-stream.ts";
 import { E2E_EVENTS_BASE_URL_KEY, E2E_REPO_ROOT_KEY, E2E_RUN_SLUG_KEY } from "./provide-keys.ts";
+import { formatDateTime } from "./vitest-naming.ts";
 
 export interface E2EContext {
   executionSuffix: string;
@@ -116,16 +117,6 @@ export async function setupE2E(ctx: TestContext): Promise<E2EContext> {
 
 function createTestExecutionSuffix(now: Date = new Date()) {
   return `${formatDateTime(now)}-${randomBytes(3).toString("hex")}`;
-}
-
-function formatDateTime(date: Date) {
-  const yyyy = String(date.getFullYear());
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-  const dd = String(date.getDate()).padStart(2, "0");
-  const hh = String(date.getHours()).padStart(2, "0");
-  const min = String(date.getMinutes()).padStart(2, "0");
-  const ss = String(date.getSeconds()).padStart(2, "0");
-  return `${yyyy}${mm}${dd}-${hh}${min}${ss}`;
 }
 
 function stripFilePrefix(args: { relativeFilePath: string; testFullName: string }) {

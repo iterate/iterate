@@ -39,20 +39,25 @@ function isMcpStreamableHttpPost(entry: HarEntry): boolean {
 }
 
 function createMcpReplayQueue(entries: HarEntry[]) {
-  const entriesByMethod = new Map<string, HarEntry[]>();
+  const entriesByRequest = new Map<string, HarEntry[]>();
   for (const entry of entries) {
     const method = inferJsonRpcMethodFromLegacyHarEntry(entry);
     if (!method) continue;
-    const existing = entriesByMethod.get(method) ?? [];
+    const key = mcpReplayKey({ url: entry.request.url, method });
+    const existing = entriesByRequest.get(key) ?? [];
     existing.push(entry);
-    entriesByMethod.set(method, existing);
+    entriesByRequest.set(key, existing);
   }
 
   return {
-    next(method: string): HarEntry | undefined {
-      return entriesByMethod.get(method)?.shift();
+    next(args: { url: string; method: string }): HarEntry | undefined {
+      return entriesByRequest.get(mcpReplayKey(args))?.shift();
     },
   };
+}
+
+function mcpReplayKey(args: { url: string; method: string }) {
+  return `${args.url}\u0000${args.method}`;
 }
 
 function inferJsonRpcMethodFromLegacyHarEntry(entry: HarEntry): string | null {
@@ -67,7 +72,7 @@ function inferJsonRpcMethodFromLegacyHarEntry(entry: HarEntry): string | null {
 }
 
 async function handleMcpReplayPost(
-  request: { json(): Promise<unknown> },
+  request: { json(): Promise<unknown>; url: string },
   replay: ReturnType<typeof createMcpReplayQueue>,
 ) {
   const body = (await request.json()) as JsonRpcRequest;
@@ -75,10 +80,10 @@ async function handleMcpReplayPost(
     return HttpResponse.json({ error: "MCP JSON-RPC request missing method" }, { status: 400 });
   }
 
-  const entry = replay.next(body.method);
+  const entry = replay.next({ url: request.url, method: body.method });
   if (!entry) {
     return HttpResponse.json(
-      { error: `No MCP HAR response left for ${body.method}` },
+      { error: `No MCP HAR response left for ${body.method} at ${request.url}` },
       { status: 502 },
     );
   }
