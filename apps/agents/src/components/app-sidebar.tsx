@@ -50,7 +50,7 @@ export function AppSidebar({ selectedStreamPath }: AppSidebarProps) {
           {agentsQuery.isPending ? (
             <p className="px-2 text-xs text-muted-foreground">Loading…</p>
           ) : agentsQuery.error ? (
-            <p className="px-2 text-xs text-destructive">{agentsQuery.error.message}</p>
+            <p className="px-2 text-xs text-destructive">{formatError(agentsQuery.error)}</p>
           ) : agents.length === 0 ? (
             <p className="px-2 text-xs text-muted-foreground">
               No agents yet — pick a preset and click 🎲 New agent.
@@ -88,6 +88,10 @@ export function AppSidebar({ selectedStreamPath }: AppSidebarProps) {
       </SidebarGroup>
     </SidebarShell>
   );
+}
+
+function formatError(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function AppSidebarBrand() {
