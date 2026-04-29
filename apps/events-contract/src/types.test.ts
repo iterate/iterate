@@ -6,7 +6,7 @@ describe("StreamState", () => {
     expect(() =>
       StreamState.parse({
         projectSlug: "public",
-        path: "/legacy",
+        path: "/missing-required-processor-slices",
         eventCount: 2,
         metadata: {},
         processors: {

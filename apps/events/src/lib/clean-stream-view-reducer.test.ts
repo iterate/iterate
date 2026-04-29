@@ -290,7 +290,7 @@ describe("clean stream view reducers", () => {
     ]);
   });
 
-  test("raw-pretty leaves legacy codemode event names as raw-only summaries", () => {
+  test("raw-pretty leaves unknown codemode-like event names as raw-only summaries", () => {
     const viewState = processEventsWithViewReducer({
       reducer: rawPrettyEventsStreamViewReducer,
       events: [

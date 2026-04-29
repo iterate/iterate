@@ -59,7 +59,7 @@ export default {
     }
 
     await append({
-      type: "legacy-pong",
+      type: "on-event-pong",
       payload: {
         previousSeen: prevState.seen,
         seen: state.seen,
@@ -288,17 +288,17 @@ describe("dynamic worker processor", () => {
 
       await append(path, {
         type: valueRecordedEventType,
-        payload: { message: "legacy ping" },
+        payload: { message: "on-event ping" },
       });
 
       await expectEvent(iterator, {
         streamPath: path,
         type: valueRecordedEventType,
-        payload: { message: "legacy ping" },
+        payload: { message: "on-event ping" },
       });
       await expectEvent(iterator, {
         streamPath: path,
-        type: "legacy-pong",
+        type: "on-event-pong",
         payload: {
           previousSeen: 0,
           seen: 1,

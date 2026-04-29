@@ -35,7 +35,7 @@ describe("validateStreamViewSearch", () => {
     });
   });
 
-  test("falls back to default for old 'raw' composer value", () => {
+  test("falls back to default for an invalid composer value", () => {
     expect(validateStreamViewSearch({ composer: "raw" })).toEqual(defaultStreamViewSearch);
   });
 });

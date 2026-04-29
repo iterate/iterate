@@ -305,13 +305,11 @@ renderer.root.add(root);
 
 input.focus();
 renderer.prependInputHandler((sequence) => {
-  const parsedKey = parseKeypress(sequence);
-
-  if (parsedKey != null) {
-    appendStatus = `key: ${parsedKey.name} shift:${parsedKey.shift} seq:${JSON.stringify(sequence)} ac:${slashAutocomplete.height}`;
-    updateHeader();
-  }
-
+  // OpenTUI enables Kitty keyboard protocol by default (renderer.ts:636).
+  // Ghostty and other modern terminals send Kitty-encoded keys (e.g. \x1b[9;2u
+  // for Shift+Tab instead of legacy \x1b[Z). We must pass useKittyKeyboard so
+  // parseKeypress can decode both Kitty and legacy escape sequences.
+  const parsedKey = parseKeypress(sequence, { useKittyKeyboard: true });
   if (parsedKey == null) return false;
 
   const key = new KeyEvent(parsedKey);
