@@ -25,7 +25,10 @@ const runFullSmoke = process.env.RUNTIME_SMOKE_FULL === "1";
 const describeRuntimeSmoke = process.env.CI ? describe.skip : describe.sequential;
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
 const smokeEnv = {
-  APP_CONFIG: JSON.stringify({}),
+  APP_CONFIG: JSON.stringify({
+    eventsBaseUrl: "https://events.iterate.com",
+    mcpProofSecret: "runtime-smoke-proof-secret",
+  }),
 };
 
 /** Drop inherited `APP_CONFIG` / `APP_CONFIG_*` so Doppler (or local shells) cannot override smoke fixtures. */

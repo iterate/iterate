@@ -50,11 +50,11 @@ export async function initAlchemy<TSchema extends z.ZodTypeAny>(
   const alchemyEnv = AlchemyEnv.parse(env);
   if (alchemyEnv.ALCHEMY_LOCAL) delete env.CI;
 
-  const compiledAppConfig: BaseAppConfig & z.output<TSchema> = parseAppConfigFromEnv({
+  const compiledAppConfig = parseAppConfigFromEnv({
     configSchema,
     prefix: "APP_CONFIG_",
     env,
-  });
+  }) as BaseAppConfig & z.output<TSchema>;
 
   const rawAppConfig = compileRawAppConfigFromEnv({
     configSchema,

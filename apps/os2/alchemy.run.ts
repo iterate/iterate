@@ -20,6 +20,7 @@ const iterateMcpServer = await Worker("iterate-mcp-server-do", {
   compatibilityFlags: ["nodejs_compat"],
   bindings: {
     EVENTS_BASE_URL: ctx.compiledAppConfig.eventsBaseUrl,
+    MCP_PROOF_SECRET: ctx.compiledAppConfig.mcpProofSecret.exposeSecret(),
     ITERATE_MCP_SERVER: DurableObjectNamespace<IterateMcpServer>("iterate-mcp-server", {
       className: "IterateMcpServer",
       sqlite: true,

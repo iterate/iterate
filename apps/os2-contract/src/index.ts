@@ -1,6 +1,6 @@
 import { eventIterator, oc } from "@orpc/contract";
 import { internalContract } from "@iterate-com/shared/apps/internal-router-contract";
-import { CallableToolProvider, CodemodeEvent } from "@iterate-com/shared/codemode/types";
+import { ToolProviderDescriptor, CodemodeEvent } from "@iterate-com/shared/codemode/types";
 import { z } from "zod";
 
 const JSONObject = z.record(z.string(), z.unknown());
@@ -162,7 +162,7 @@ export const osContract = oc.router({
         z.object({
           code: z.string().min(1),
           blockId: z.string().optional(),
-          providers: z.array(CallableToolProvider).default([]),
+          providers: z.array(ToolProviderDescriptor).default([]),
         }),
       )
       .output(eventIterator(CodemodeEvent)),
@@ -173,7 +173,7 @@ export const osContract = oc.router({
         description: "Fetch type descriptions from tool providers",
         tags: ["/codemode"],
       })
-      .input(z.object({ providers: z.array(CallableToolProvider) }))
+      .input(z.object({ providers: z.array(ToolProviderDescriptor) }))
       .output(z.object({ typeDefinitions: z.string() })),
   },
   projects: {

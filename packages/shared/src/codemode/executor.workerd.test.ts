@@ -14,8 +14,8 @@ function makeProvider(
   executeFn: (path: string[], payload: unknown) => Promise<unknown>,
 ): ToolProvider {
   return {
-    execute: executeFn,
-    async describe() {
+    executeToolFunction: executeFn,
+    async describeToolFunctions() {
       return { typeDefinitions: "" };
     },
   };
@@ -75,7 +75,7 @@ describe("CodemodeExecutor", () => {
     expect(add).toHaveBeenCalledWith({ a: 3, b: 4 });
   });
 
-  it("emits tool-call events", async () => {
+  it("emits tool-function-call events", async () => {
     const echo = vi.fn(async (payload: unknown) => payload);
     const executor = new CodemodeExecutor({ loader: env.LOADER });
     const { events, onEvent } = collectEvents();
@@ -87,18 +87,18 @@ describe("CodemodeExecutor", () => {
       onEvent,
     });
 
-    const requested = events.find((e) => e.type === "codemode-tool-call-requested");
-    const succeeded = events.find((e) => e.type === "codemode-tool-call-succeeded");
+    const requested = events.find((e) => e.type === "codemode-tool-function-call-requested");
+    const succeeded = events.find((e) => e.type === "codemode-tool-function-call-succeeded");
 
     expect(requested).toBeDefined();
     expect(succeeded).toBeDefined();
-    if (requested?.type === "codemode-tool-call-requested") {
+    if (requested?.type === "codemode-tool-function-call-requested") {
       expect(requested.path).toEqual(["echo"]);
       expect(requested.payload).toEqual({ msg: "hi" });
     }
   });
 
-  it("emits tool-call-failed on error", async () => {
+  it("emits tool-function-call-failed on error", async () => {
     const failing = async () => {
       throw new Error("boom");
     };
@@ -112,9 +112,9 @@ describe("CodemodeExecutor", () => {
       onEvent,
     });
 
-    const failed = events.find((e) => e.type === "codemode-tool-call-failed");
+    const failed = events.find((e) => e.type === "codemode-tool-function-call-failed");
     expect(failed).toBeDefined();
-    if (failed?.type === "codemode-tool-call-failed") {
+    if (failed?.type === "codemode-tool-function-call-failed") {
       expect(failed.error).toBe("boom");
     }
   });
@@ -195,7 +195,7 @@ describe("CodemodeExecutor", () => {
     expect(result.error).toBe("boom");
   });
 
-  it("handles concurrent tool calls via Promise.all", async () => {
+  it("handles concurrent tool function calls via Promise.all", async () => {
     const slow = async (payload: unknown) => {
       const { id } = payload as { id: number };
       return { id };
@@ -344,7 +344,7 @@ describe("CodemodeExecutor", () => {
     expect(result.result).toBe(42);
   });
 
-  it("supports deep sub-paths in tool calls", async () => {
+  it("supports deep sub-paths in tool function calls", async () => {
     const provider = makeProvider(async (path, payload) => {
       return { path, payload };
     });

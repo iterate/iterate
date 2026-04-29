@@ -2471,6 +2471,9 @@ importers:
 
   apps/os2:
     dependencies:
+      '@iterate-com/events-contract':
+        specifier: workspace:*
+        version: link:../events-contract
       '@iterate-com/os2-contract':
         specifier: workspace:*
         version: link:../os2-contract

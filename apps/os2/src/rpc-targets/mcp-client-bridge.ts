@@ -1,6 +1,6 @@
 /**
  * MCP client bridge — a Durable Object that connects to a remote MCP server
- * and exposes its tools through our ToolProvider interface (execute + describe).
+ * and exposes its tools through our ToolProvider interface.
  *
  * Unlike the stateless OpenApiBridge, this is a DO because MCP clients maintain
  * session state (initialize handshake, session ID, tool cache).
@@ -8,7 +8,7 @@
  * The DO name encodes the server URL. On first call, it connects and caches
  * the tool list. Subsequent calls reuse the connection.
  *
- * Use createMcpClientProvider() to construct the CallableToolProvider descriptor.
+ * Use createMcpClientProvider() to construct the ToolProviderDescriptor.
  *
  * MCP streamable HTTP transport:
  * https://modelcontextprotocol.io/docs/concepts/transports#streamable-http
@@ -17,7 +17,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { CallableToolProvider } from "@iterate-com/shared/codemode/types";
+import type { ToolProviderDescriptor } from "@iterate-com/shared/codemode/types";
 
 interface CachedTool {
   name: string;
@@ -56,15 +56,16 @@ export class McpClientBridge extends DurableObject {
   }
 
   /**
-   * Execute a tool on the remote MCP server.
+   * Execute a tool function on the remote MCP server.
    *
    * Called via Workers RPC from a callable with payload { path: string[], payload: unknown }.
    */
-  async execute(input: { path: string[]; payload: unknown }) {
+  async executeToolFunction(input: { path: string[]; payload: unknown }) {
     await this.ensureConnected();
 
     const toolName = input.path[0];
-    if (!toolName) throw new Error("execute requires path with at least one segment (tool name)");
+    if (!toolName)
+      throw new Error("executeToolFunction requires path with at least one segment (tool name)");
 
     const args =
       input.payload != null && typeof input.payload === "object" && !Array.isArray(input.payload)
@@ -77,18 +78,13 @@ export class McpClientBridge extends DurableObject {
 
     if (result.isError) {
       const message =
-        (result.content ?? [])
-          .filter((c): c is { type: "text"; text: string } => c.type === "text")
-          .map((c) => c.text)
-          .join("\n") || "MCP tool call failed";
+        extractTextContent(result.content).join("\n") || "MCP tool function call failed";
       throw new Error(message);
     }
 
-    const textParts = (result.content ?? []).filter(
-      (c): c is { type: "text"; text: string } => c.type === "text",
-    );
+    const textParts = extractTextContent(result.content);
     if (textParts.length > 0) {
-      const text = textParts.map((c) => c.text).join("\n");
+      const text = textParts.join("\n");
       try {
         return JSON.parse(text);
       } catch {
@@ -100,16 +96,16 @@ export class McpClientBridge extends DurableObject {
   }
 
   /**
-   * Describe available tools as TypeScript declarations.
+   * Describe available tool functions as TypeScript declarations.
    *
    * Called via Workers RPC from a callable with payload {}.
    */
-  async describe() {
+  async describeToolFunctions() {
     await this.ensureConnected();
     const tools = this.#tools ?? [];
 
     if (tools.length === 0) {
-      return { typeDefinitions: "/** No tools found on MCP server */" };
+      return { typeDefinitions: "/** No tool functions found on MCP server */" };
     }
 
     const lines = tools.map((tool) => {
@@ -123,7 +119,7 @@ export class McpClientBridge extends DurableObject {
 }
 
 /**
- * Construct a CallableToolProvider that routes through the McpClientBridge DO.
+ * Construct a ToolProviderDescriptor that routes through the McpClientBridge DO.
  *
  * The DO instance name is the server URL itself, so multiple providers
  * pointing at the same MCP server share a connection and tool cache.
@@ -138,7 +134,7 @@ export class McpClientBridge extends DurableObject {
 export function createMcpClientProvider(options: {
   path: string[];
   serverUrl: string;
-}): CallableToolProvider {
+}): ToolProviderDescriptor {
   const via = {
     type: "loopback-binding" as const,
     bindingType: "durable-object-namespace" as const,
@@ -148,7 +144,32 @@ export function createMcpClientProvider(options: {
 
   return {
     path: options.path,
-    execute: { type: "workers-rpc" as const, via, rpcMethod: "execute" },
-    describe: { type: "workers-rpc" as const, via, rpcMethod: "describe" },
+    executeToolFunction: { type: "workers-rpc" as const, via, rpcMethod: "executeToolFunction" },
+    describeToolFunctions: {
+      type: "workers-rpc" as const,
+      via,
+      rpcMethod: "describeToolFunctions",
+    },
   };
+}
+
+function extractTextContent(content: unknown) {
+  if (!Array.isArray(content)) {
+    return [];
+  }
+
+  return content.flatMap((item) => {
+    if (
+      item != null &&
+      typeof item === "object" &&
+      "type" in item &&
+      item.type === "text" &&
+      "text" in item &&
+      typeof item.text === "string"
+    ) {
+      return [item.text];
+    }
+
+    return [];
+  });
 }

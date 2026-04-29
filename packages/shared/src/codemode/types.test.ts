@@ -1,27 +1,27 @@
 import { describe, it, expect } from "vitest";
-import { CallableToolProvider, CodemodeEvent } from "./types.ts";
+import { ToolProviderDescriptor, CodemodeEvent } from "./types.ts";
 
-describe("CallableToolProvider schema", () => {
-  it("accepts a valid descriptor with execute only", () => {
-    const result = CallableToolProvider.safeParse({
+describe("ToolProviderDescriptor schema", () => {
+  it("accepts a valid descriptor with executeToolFunction only", () => {
+    const result = ToolProviderDescriptor.safeParse({
       path: ["mcp", "linear"],
-      execute: {
+      executeToolFunction: {
         type: "workers-rpc",
         via: {
           type: "loopback-binding",
           bindingType: "service",
           exportName: "LinearBridge",
         },
-        rpcMethod: "execute",
+        rpcMethod: "executeToolFunction",
       },
     });
     expect(result.success).toBe(true);
   });
 
-  it("accepts a valid descriptor with execute and describe", () => {
-    const result = CallableToolProvider.safeParse({
+  it("accepts a valid descriptor with executeToolFunction and describeToolFunctions", () => {
+    const result = ToolProviderDescriptor.safeParse({
       path: ["openapi", "petstore"],
-      execute: {
+      executeToolFunction: {
         type: "workers-rpc",
         via: {
           type: "loopback-binding",
@@ -29,9 +29,9 @@ describe("CallableToolProvider schema", () => {
           exportName: "OpenApiBridge",
           props: { specUrl: "https://petstore.swagger.io/v2/swagger.json" },
         },
-        rpcMethod: "execute",
+        rpcMethod: "executeToolFunction",
       },
-      describe: {
+      describeToolFunctions: {
         type: "workers-rpc",
         via: {
           type: "loopback-binding",
@@ -39,16 +39,16 @@ describe("CallableToolProvider schema", () => {
           exportName: "OpenApiBridge",
           props: { specUrl: "https://petstore.swagger.io/v2/swagger.json" },
         },
-        rpcMethod: "describe",
+        rpcMethod: "describeToolFunctions",
       },
     });
     expect(result.success).toBe(true);
   });
 
   it("rejects empty path", () => {
-    const result = CallableToolProvider.safeParse({
+    const result = ToolProviderDescriptor.safeParse({
       path: [],
-      execute: {
+      executeToolFunction: {
         type: "fetch",
         via: { type: "url", url: "https://example.com" },
       },
@@ -56,8 +56,8 @@ describe("CallableToolProvider schema", () => {
     expect(result.success).toBe(false);
   });
 
-  it("rejects missing execute", () => {
-    const result = CallableToolProvider.safeParse({
+  it("rejects missing executeToolFunction", () => {
+    const result = ToolProviderDescriptor.safeParse({
       path: ["foo"],
     });
     expect(result.success).toBe(false);
@@ -86,10 +86,10 @@ describe("CodemodeEvent schema", () => {
     expect(result.success).toBe(true);
   });
 
-  it("accepts codemode-tool-call-requested", () => {
+  it("accepts codemode-tool-function-call-requested", () => {
     const result = CodemodeEvent.safeParse({
       ...base,
-      type: "codemode-tool-call-requested",
+      type: "codemode-tool-function-call-requested",
       callId: "ccal_xyz",
       path: ["createIssue"],
       payload: { title: "Bug" },
@@ -97,20 +97,20 @@ describe("CodemodeEvent schema", () => {
     expect(result.success).toBe(true);
   });
 
-  it("accepts codemode-tool-call-succeeded", () => {
+  it("accepts codemode-tool-function-call-succeeded", () => {
     const result = CodemodeEvent.safeParse({
       ...base,
-      type: "codemode-tool-call-succeeded",
+      type: "codemode-tool-function-call-succeeded",
       callId: "ccal_xyz",
       result: { id: 123 },
     });
     expect(result.success).toBe(true);
   });
 
-  it("accepts codemode-tool-call-failed", () => {
+  it("accepts codemode-tool-function-call-failed", () => {
     const result = CodemodeEvent.safeParse({
       ...base,
-      type: "codemode-tool-call-failed",
+      type: "codemode-tool-function-call-failed",
       callId: "ccal_xyz",
       error: "not found",
     });

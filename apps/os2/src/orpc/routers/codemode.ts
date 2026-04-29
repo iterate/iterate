@@ -1,5 +1,5 @@
 import { CodemodeExecutor } from "@iterate-com/shared/codemode/executor";
-import { resolveCallableToolProvider } from "@iterate-com/shared/codemode/resolve";
+import { resolveToolProviderDescriptor } from "@iterate-com/shared/codemode/resolve";
 import { validateProviderPaths } from "@iterate-com/shared/codemode/validate";
 import type { CodemodeEvent } from "@iterate-com/shared/codemode/types";
 import type { CallableContext } from "@iterate-com/shared/callable/types.ts";
@@ -52,12 +52,12 @@ export const codemodeRouter = {
       const resolvedProviders = [];
       for (const descriptor of input.providers) {
         if (signal?.aborted) return;
-        const resolved = resolveCallableToolProvider(descriptor, callableCtx);
+        const resolved = resolveToolProviderDescriptor(descriptor, callableCtx);
         resolvedProviders.push({ path: descriptor.path, provider: resolved });
 
-        if (descriptor.describe) {
+        if (descriptor.describeToolFunctions) {
           try {
-            const description = await resolved.describe();
+            const description = await resolved.describeToolFunctions();
             yield {
               blockId,
               timestamp: now(),
@@ -110,9 +110,9 @@ export const codemodeRouter = {
       const typeBlocks: string[] = [];
 
       for (const descriptor of input.providers) {
-        const resolved = resolveCallableToolProvider(descriptor, callableCtx);
+        const resolved = resolveToolProviderDescriptor(descriptor, callableCtx);
         try {
-          const description = await resolved.describe();
+          const description = await resolved.describeToolFunctions();
           typeBlocks.push(description.typeDefinitions);
         } catch (err) {
           typeBlocks.push(

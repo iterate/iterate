@@ -6,7 +6,7 @@
  *
  * Key differences from upstream:
  * - Paths are string[] instead of dotted strings
- * - Event callbacks for log/tool-call streaming
+ * - Event callbacks for log/tool-function-call streaming
  * - LogDispatcher RpcTarget for streaming logs back from sandbox
  */
 
@@ -92,7 +92,7 @@ export class ToolDispatcher extends RpcTarget {
 
       this.#onToolCall?.(callId, path, payload);
 
-      const result = await this.#provider.execute(path, payload);
+      const result = await this.#provider.executeToolFunction(path, payload);
 
       this.#onToolResult?.(callId, result);
       return JSON.stringify({ result });
@@ -249,7 +249,7 @@ export class CodemodeExecutor {
         generateCallId,
         onToolCall: (callId, toolPath, payload) => {
           onEvent({
-            type: "codemode-tool-call-requested",
+            type: "codemode-tool-function-call-requested",
             blockId,
             timestamp: new Date().toISOString(),
             callId,
@@ -259,7 +259,7 @@ export class CodemodeExecutor {
         },
         onToolResult: (callId, result) => {
           onEvent({
-            type: "codemode-tool-call-succeeded",
+            type: "codemode-tool-function-call-succeeded",
             blockId,
             timestamp: new Date().toISOString(),
             callId,
@@ -268,7 +268,7 @@ export class CodemodeExecutor {
         },
         onToolError: (callId, error) => {
           onEvent({
-            type: "codemode-tool-call-failed",
+            type: "codemode-tool-function-call-failed",
             blockId,
             timestamp: new Date().toISOString(),
             callId,

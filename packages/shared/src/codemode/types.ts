@@ -2,7 +2,7 @@
  * Core types for the codemode system.
  *
  * - ToolProvider: resolved interface (local or remote, same shape)
- * - CallableToolProvider: serializable wire format (Callable-based)
+ * - ToolProviderDescriptor: serializable wire format (Callable-based)
  * - CodemodeEvent: discriminated union of all streaming execution events
  */
 
@@ -12,19 +12,19 @@ import { Callable } from "../callable/types.ts";
 // ── ToolProvider (resolved interface) ────────────────────────────────
 
 export interface ToolProvider {
-  execute(path: string[], payload: unknown): Promise<unknown>;
-  describe(): Promise<{ typeDefinitions: string }>;
+  executeToolFunction(path: string[], payload: unknown): Promise<unknown>;
+  describeToolFunctions(): Promise<{ typeDefinitions: string }>;
 }
 
-// ── CallableToolProvider (wire format) ───────────────────────────────
+// ── ToolProviderDescriptor (wire format) ───────────────────────────────
 
-export const CallableToolProvider = z.object({
+export const ToolProviderDescriptor = z.object({
   path: z.array(z.string().min(1)).min(1),
-  execute: Callable,
-  describe: Callable.optional(),
+  executeToolFunction: Callable,
+  describeToolFunctions: Callable.optional(),
 });
 
-export type CallableToolProvider = z.infer<typeof CallableToolProvider>;
+export type ToolProviderDescriptor = z.infer<typeof ToolProviderDescriptor>;
 
 // ── CodemodeEvent (streaming execution events) ───────────────────────
 
@@ -55,21 +55,21 @@ const CodemodeLogEmitted = BaseEvent.extend({
   message: z.string(),
 });
 
-const CodemodeToolCallRequested = BaseEvent.extend({
-  type: z.literal("codemode-tool-call-requested"),
+const CodemodeToolFunctionCallRequested = BaseEvent.extend({
+  type: z.literal("codemode-tool-function-call-requested"),
   callId: z.string(),
   path: z.array(z.string()),
   payload: z.unknown(),
 });
 
-const CodemodeToolCallSucceeded = BaseEvent.extend({
-  type: z.literal("codemode-tool-call-succeeded"),
+const CodemodeToolFunctionCallSucceeded = BaseEvent.extend({
+  type: z.literal("codemode-tool-function-call-succeeded"),
   callId: z.string(),
   result: z.unknown(),
 });
 
-const CodemodeToolCallFailed = BaseEvent.extend({
-  type: z.literal("codemode-tool-call-failed"),
+const CodemodeToolFunctionCallFailed = BaseEvent.extend({
+  type: z.literal("codemode-tool-function-call-failed"),
   callId: z.string(),
   error: z.string(),
 });
@@ -85,9 +85,9 @@ export const CodemodeEvent = z.discriminatedUnion("type", [
   CodemodeToolProviderDescribed,
   CodemodeBlockAdded,
   CodemodeLogEmitted,
-  CodemodeToolCallRequested,
-  CodemodeToolCallSucceeded,
-  CodemodeToolCallFailed,
+  CodemodeToolFunctionCallRequested,
+  CodemodeToolFunctionCallSucceeded,
+  CodemodeToolFunctionCallFailed,
   CodemodeBlockResultAdded,
 ]);
 

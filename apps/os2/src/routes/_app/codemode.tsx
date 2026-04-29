@@ -16,7 +16,7 @@ export const Route = createFileRoute("/_app/codemode")({
 });
 
 function CodemodePage() {
-  const [code, setCode] = useState('async () => {\n  console.log("hello");\n  return 1 + 1;\n}');
+  const [code, setCode] = useState('console.log("hello");\n1 + 1');
   const [events, setEvents] = useState<CodemodeEvent[]>([]);
   const [status, setStatus] = useState<RunStatus>("idle");
   const [lastError, setLastError] = useState<string | null>(null);
@@ -89,7 +89,7 @@ function CodemodePage() {
           <div className="space-y-1">
             <h2 className="text-sm font-semibold">Code</h2>
             <p className="text-sm text-muted-foreground">
-              Write an async function body. It will be executed in a sandboxed worker.
+              Write JavaScript. The final expression is returned from a sandboxed worker.
             </p>
           </div>
 
@@ -220,24 +220,24 @@ function EventLine({ event }: { event: CodemodeEvent }) {
         <div className="text-muted-foreground">[provider-described] {event.path.join(".")}</div>
       );
 
-    case "codemode-tool-call-requested":
+    case "codemode-tool-function-call-requested":
       return (
         <div className="text-blue-600 dark:text-blue-400">
-          [tool-call] {event.path.join(".")} ({event.callId})
+          [tool-function-call] {event.path.join(".")} ({event.callId})
         </div>
       );
 
-    case "codemode-tool-call-succeeded":
+    case "codemode-tool-function-call-succeeded":
       return (
         <div className="text-green-600 dark:text-green-400">
-          [tool-result] {event.callId}: {formatValue(event.result)}
+          [tool-function-result] {event.callId}: {formatValue(event.result)}
         </div>
       );
 
-    case "codemode-tool-call-failed":
+    case "codemode-tool-function-call-failed":
       return (
         <div className="text-destructive">
-          [tool-error] {event.callId}: {event.error}
+          [tool-function-error] {event.callId}: {event.error}
         </div>
       );
 

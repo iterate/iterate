@@ -1,26 +1,26 @@
 /**
- * Resolve a CallableToolProvider (wire format) into a ToolProvider (runtime interface).
+ * Resolve a ToolProviderDescriptor (wire format) into a ToolProvider (runtime interface).
  */
 
 import { dispatchCallable } from "../callable/runtime.ts";
 import type { CallableContext } from "../callable/types.ts";
-import type { CallableToolProvider, ToolProvider } from "./types.ts";
+import type { ToolProviderDescriptor, ToolProvider } from "./types.ts";
 
-export function resolveCallableToolProvider(
-  descriptor: CallableToolProvider,
+export function resolveToolProviderDescriptor(
+  descriptor: ToolProviderDescriptor,
   ctx: CallableContext,
 ): ToolProvider {
   return {
-    async execute(path, payload) {
+    async executeToolFunction(path, payload) {
       return await dispatchCallable({
-        callable: descriptor.execute,
+        callable: descriptor.executeToolFunction,
         payload: { path, payload },
         ctx,
       });
     },
 
-    async describe() {
-      if (!descriptor.describe) {
+    async describeToolFunctions() {
+      if (!descriptor.describeToolFunctions) {
         const pathLabel = descriptor.path.join(".");
         return {
           typeDefinitions: `/** The "${pathLabel}" tool provider has not provided type information. */\n(...args: unknown[]) => Promise<unknown>`,
@@ -28,7 +28,7 @@ export function resolveCallableToolProvider(
       }
 
       const result = await dispatchCallable({
-        callable: descriptor.describe,
+        callable: descriptor.describeToolFunctions,
         payload: {},
         ctx,
       });

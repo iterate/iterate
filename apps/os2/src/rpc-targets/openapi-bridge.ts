@@ -1,6 +1,6 @@
 /**
  * OpenAPI bridge — a stateless WorkerEntrypoint that translates
- * ToolProvider.execute(path, payload) into HTTP calls against an OpenAPI spec.
+ * ToolProvider.executeToolFunction(path, payload) into HTTP calls against an OpenAPI spec.
  *
  * Deployed as a named export from the os2 worker. Callables reach it via
  * loopback-binding with props containing the spec URL and base URL:
@@ -8,11 +8,11 @@
  *   { type: "loopback-binding", bindingType: "service",
  *     exportName: "OpenApiBridge", props: { specUrl, baseUrl } }
  *
- * Use createOpenApiProvider() to construct the CallableToolProvider descriptor.
+ * Use createOpenApiProvider() to construct the ToolProviderDescriptor.
  */
 
 import { WorkerEntrypoint } from "cloudflare:workers";
-import type { CallableToolProvider } from "@iterate-com/shared/codemode/types";
+import type { ToolProviderDescriptor } from "@iterate-com/shared/codemode/types";
 
 interface OpenApiBridgeProps {
   specUrl: string;
@@ -40,24 +40,29 @@ interface OpenApiOperation {
 
 export class OpenApiBridge extends WorkerEntrypoint<Record<string, unknown>, OpenApiBridgeProps> {
   /**
-   * Execute a tool call against the OpenAPI spec.
+   * Execute a tool function call against the OpenAPI spec.
    *
    * path[0] is the operationId. payload is the request body or query params.
    */
-  async execute(path: string[], payload: unknown) {
+  async executeToolFunction(input: { path: string[]; payload: unknown }) {
     const spec = await this.fetchSpec();
-    const operationId = path[0];
+    const operationId = input.path[0];
     if (!operationId)
-      throw new Error("execute requires a path with at least one segment (operationId)");
+      throw new Error(
+        "executeToolFunction requires a path with at least one segment (operationId)",
+      );
 
     const operation = this.findOperation(spec, operationId);
     if (!operation) throw new Error(`Operation "${operationId}" not found in spec`);
 
-    const url = this.buildUrl(operation, payload as Record<string, unknown>);
+    const url = this.buildUrl(operation, input.payload as Record<string, unknown>);
     const response = await fetch(url, {
       method: operation.method.toUpperCase(),
       headers: operation.method !== "get" ? { "content-type": "application/json" } : undefined,
-      body: operation.method !== "get" && payload != null ? JSON.stringify(payload) : undefined,
+      body:
+        operation.method !== "get" && input.payload != null
+          ? JSON.stringify(input.payload)
+          : undefined,
     });
 
     if (!response.ok) {
@@ -73,7 +78,7 @@ export class OpenApiBridge extends WorkerEntrypoint<Record<string, unknown>, Ope
   /**
    * Describe the available operations as TypeScript declarations.
    */
-  async describe() {
+  async describeToolFunctions() {
     const spec = await this.fetchSpec();
     const operations = this.listOperations(spec);
 
@@ -154,7 +159,7 @@ export class OpenApiBridge extends WorkerEntrypoint<Record<string, unknown>, Ope
 }
 
 /**
- * Construct a CallableToolProvider that routes through the OpenApiBridge
+ * Construct a ToolProviderDescriptor that routes through the OpenApiBridge
  * loopback entrypoint. The descriptor is pure JSON — it can be stored,
  * transmitted, or passed to the codemode execute endpoint.
  *
@@ -168,7 +173,7 @@ export function createOpenApiProvider(options: {
   path: string[];
   specUrl: string;
   baseUrl: string;
-}): CallableToolProvider {
+}): ToolProviderDescriptor {
   const via = {
     type: "loopback-binding" as const,
     bindingType: "service" as const,
@@ -178,7 +183,11 @@ export function createOpenApiProvider(options: {
 
   return {
     path: options.path,
-    execute: { type: "workers-rpc" as const, via, rpcMethod: "execute" },
-    describe: { type: "workers-rpc" as const, via, rpcMethod: "describe" },
+    executeToolFunction: { type: "workers-rpc" as const, via, rpcMethod: "executeToolFunction" },
+    describeToolFunctions: {
+      type: "workers-rpc" as const,
+      via,
+      rpcMethod: "describeToolFunctions",
+    },
   };
 }
