@@ -27,7 +27,7 @@ or select a different processor.
 
 The shape follows stream processors such as
 `apps/agents/src/durable-objects/agent-processor.ts`: each processor has
-`slug`, `initialState`, and `reduce({ event, state })`.
+`slug`, `createInitialState()`, and `reduce({ event, state })`.
 
 Current processors:
 
@@ -35,7 +35,7 @@ Current processors:
 - `prettyEventsStreamViewProcessor` emits only semantic items.
 - `rawPrettyEventsStreamViewProcessor` interleaves grouped raw events and
   semantic items.
-- `reduceEventsToRawJsonDumpViewState` emits one `raw-json-dump` item.
+- `rawJsonDumpEventsStreamViewProcessor` emits one `raw-json-dump` item.
 
 Keep processors explicit. Prefer adding a new named processor over adding a mode
 parameter with conditionals. If processors start sharing complicated logic,

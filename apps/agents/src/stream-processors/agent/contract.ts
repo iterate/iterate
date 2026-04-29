@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  assertNever,
   defineProcessorContract,
   reduceProcessorEvents,
   type StreamEvent,
@@ -177,16 +178,13 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-queued",
     "events.iterate.com/agent/status-updated",
   ],
-  reduce({ state, event }) {
+  reduce({ contract, state, event }) {
     switch (event.type) {
       case CoreProcessorRegisteredEventType:
         return wellBehavedProcessorDefaults.reduce({
           state,
           event,
-          contract: {
-            slug: "agent",
-            version: "0.1.0",
-          },
+          contract,
         });
       case "events.iterate.com/agent/system-prompt-updated":
         return { ...state, systemPrompt: event.payload.systemPrompt };
@@ -219,6 +217,14 @@ export const AgentProcessorContract = defineProcessorContract({
           ...state,
           pendingTriggerCount: state.pendingTriggerCount + 1,
         };
+
+      // we consume these events, but they don't update our state but they do cause side-effects in the implementation
+      case "events.iterate.com/agent/status-updated":
+      case "events.iterate.com/agent/webchat-message-received":
+      case "events.iterate.com/agent/webchat-response-added":
+        return state;
+      default:
+        return assertNever(event);
     }
   },
 });

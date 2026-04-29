@@ -10,18 +10,20 @@ import type {
 
 const MAX_SAME_TYPE_RAW_GROUP = 50_000;
 
-const initialEventsStreamViewState: EventsStreamViewState = {
-  feedItems: [],
-  activity: {
-    currentLlmRequestId: null,
-  },
-};
+function createInitialEventsStreamViewState(): EventsStreamViewState {
+  return {
+    feedItems: [],
+    activity: {
+      currentLlmRequestId: null,
+    },
+  };
+}
 
 export function processEventsWithViewProcessor(args: {
   events: readonly Event[];
   processor: EventsStreamViewProcessor;
 }) {
-  let state = structuredClone(args.processor.initialState) as EventsStreamViewState;
+  let state = args.processor.createInitialState();
 
   for (const event of args.events) {
     state = args.processor.reduce({ event, state }) ?? state;
@@ -38,44 +40,54 @@ export function processEventsWithViewProcessor(args: {
 export const rawPrettyEventsStreamViewProcessor = createEventsStreamViewProcessor({
   slug: "raw-pretty",
   reduceEventToFeedItems: reduceEventToRawPrettyFeedItems,
+  groupConsecutiveRawEvents: true,
 });
 
 /** Raw mode is one feed item per wire event. */
 export const rawEventsStreamViewProcessor = createEventsStreamViewProcessor({
   slug: "raw",
   reduceEventToFeedItems: (event) => [toRawEventFeedItem(event)],
+  groupConsecutiveRawEvents: false,
 });
 
 /** Pretty mode emits only semantic items; unsupported event types disappear. */
 export const prettyEventsStreamViewProcessor = createEventsStreamViewProcessor({
   slug: "pretty",
   reduceEventToFeedItems: reduceEventToSemanticFeedItems,
+  groupConsecutiveRawEvents: false,
 });
 
-/** Raw Single JSON is finalized after reduction so it can see the full event list. */
-export function reduceEventsToRawJsonDumpViewState(
-  events: readonly Event[],
-): EventsStreamViewState {
-  return {
-    ...initialEventsStreamViewState,
-    feedItems:
-      events.length === 0
-        ? []
-        : [{ type: "raw-json-dump", id: "raw-json-dump", events: [...events] }],
-  };
-}
+/** Raw Single JSON keeps the full stream in one feed item for renderer-level inspection. */
+export const rawJsonDumpEventsStreamViewProcessor: EventsStreamViewProcessor = {
+  slug: "raw-single-json",
+  createInitialState: createInitialEventsStreamViewState,
+  reduce: ({ event, state }) => {
+    const previousDump = state.feedItems[0];
+    const previousEvents = previousDump?.type === "raw-json-dump" ? previousDump.events : [];
+    const activity = reduceActivityState({ event, state });
+
+    return {
+      feedItems: [
+        { type: "raw-json-dump", id: "raw-json-dump", events: [...previousEvents, event] },
+      ],
+      activity,
+    };
+  },
+};
 
 function createEventsStreamViewProcessor(args: {
   slug: string;
   reduceEventToFeedItems: (event: Event) => EventsStreamFeedItem[];
+  groupConsecutiveRawEvents: boolean;
 }): EventsStreamViewProcessor {
   return {
     slug: args.slug,
-    initialState: initialEventsStreamViewState,
+    createInitialState: createInitialEventsStreamViewState,
     reduce: ({ event, state }) => {
       const feedItems = appendFeedItems({
         feedItems: state.feedItems,
         nextItems: args.reduceEventToFeedItems(event),
+        groupConsecutiveRawEvents: args.groupConsecutiveRawEvents,
       });
       const activity = reduceActivityState({ event, state });
 
@@ -95,6 +107,7 @@ function reduceEventToRawPrettyFeedItems(event: Event): EventsStreamFeedItem[] {
 function appendFeedItems(args: {
   feedItems: EventsStreamFeedItem[];
   nextItems: readonly EventsStreamFeedItem[];
+  groupConsecutiveRawEvents: boolean;
 }): EventsStreamFeedItem[] {
   if (args.nextItems.length === 0) {
     return args.feedItems;
@@ -103,6 +116,11 @@ function appendFeedItems(args: {
   const feedItems = [...args.feedItems];
 
   for (const item of args.nextItems) {
+    if (!args.groupConsecutiveRawEvents) {
+      feedItems.push(item);
+      continue;
+    }
+
     const previousItem = feedItems[feedItems.length - 1];
     if (previousItem?.type === "grouped-raw-event" && item.type === "raw-event") {
       if (previousItem.eventType === item.eventType) {
@@ -322,5 +340,5 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function getTimestamp(createdAt: string) {
-  return Number.isNaN(Date.parse(createdAt)) ? Date.now() : Date.parse(createdAt);
+  return Date.parse(createdAt);
 }

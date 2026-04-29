@@ -3,16 +3,21 @@ import type {
   BuiltinProcessor,
   BuiltinProcessorImplementation,
   ConsumedEvent,
+  DerivedIdempotencyKeyArgs,
   EventCatalog,
   EventDefinition,
+  FirstAttachAfterAppendPolicy,
   Processor,
+  ProcessorContractInput,
+  ProcessorContractInputWithoutDeps,
   ProcessorContractShape,
-  ProcessorHostState,
+  StoredProcessorState,
   ProcessorImplementation,
   ProcessorReduction,
   ProcessorState,
   ProcessorStreamApi,
   ResolvedEventTypesOnly,
+  ResolvedEventType,
   StreamEvent,
   StreamEventInput,
 } from "./types.ts";
@@ -52,7 +57,7 @@ export function createEvent<
  *
  * Most processor authors should not call this directly. `streamApi.append(...)`
  * is typed from `contract.emits`, so ordinary object literals are the ergonomic
- * path. Hosts can use this helper at the append boundary when they need to
+ * path. Runners can use this helper at the append boundary when they need to
  * validate that a raw event input matches the payload schema for its `type`.
  */
 export function getEventInputSchema<
@@ -82,7 +87,7 @@ export function getEventInputSchema<
  *
  * Processor contracts intentionally author event definitions as plain
  * `{ description, payloadSchema }` values keyed by the event type string. The
- * key is the durable event type; the value does not repeat it. Hosts therefore
+ * key is the durable event type; the value does not repeat it. Runners therefore
  * rebuild the concrete Zod envelope from the catalog key plus `payloadSchema`
  * whenever they validate append input or committed stream events.
  *
@@ -139,29 +144,24 @@ export function getEventSchema<
  * - `stateSchema` must parse to an object-shaped reduced state;
  * - `initialState`, when present, must be valid input for `stateSchema`;
  * - every string in `consumes` and `emits` must resolve against local `events`
- *   plus `processorDeps`.
+ *   plus `processorDeps`;
+ * - `consumes` and `emits` are contextually typed as the resolved event string
+ *   union, so editors can autocomplete event types from owned events and
+ *   processor deps while still preserving the literal tuple for reducer and
+ *   append inference.
  *
- * `initialState` is optional. If it is omitted, hosts initialize by parsing
- * `undefined` through `stateSchema`. If it is present, hosts initialize by
+ * `initialState` is optional. If it is omitted, runners initialize by parsing
+ * `undefined` through `stateSchema`. If it is present, runners initialize by
  * parsing `initialState` through `stateSchema`.
  */
 export function defineProcessorContract<
   const StateSchema extends z.ZodType,
   const Events extends EventCatalog,
   const ProcessorDeps extends readonly unknown[],
-  const Consumes extends readonly string[] = readonly [],
-  const Emits extends readonly string[] = readonly [],
+  const Consumes extends readonly ResolvedEventType<Events, ProcessorDeps>[],
+  const Emits extends readonly ResolvedEventType<Events, ProcessorDeps>[],
 >(
-  contract: Omit<
-    ProcessorContractShape<StateSchema, Events, ProcessorDeps, Consumes, Emits>,
-    "stateSchema" | "initialState" | "processorDeps" | "consumes" | "emits"
-  > & {
-    stateSchema: z.output<StateSchema> extends Record<string, unknown> ? StateSchema : never;
-    initialState?: z.input<StateSchema>;
-    processorDeps: ProcessorDeps;
-    consumes: Consumes & ResolvedEventTypesOnly<Events, ProcessorDeps, Consumes>;
-    emits: Emits & ResolvedEventTypesOnly<Events, ProcessorDeps, Emits>;
-  },
+  contract: ProcessorContractInput<StateSchema, Events, ProcessorDeps, Consumes, Emits>,
 ): Omit<
   ProcessorContractShape<StateSchema, Events, ProcessorDeps, Consumes, Emits>,
   "stateSchema" | "initialState" | "processorDeps" | "consumes" | "emits"
@@ -175,19 +175,10 @@ export function defineProcessorContract<
 export function defineProcessorContract<
   const StateSchema extends z.ZodType,
   const Events extends EventCatalog,
-  const Consumes extends readonly string[] = readonly [],
-  const Emits extends readonly string[] = readonly [],
+  const Consumes extends readonly ResolvedEventType<Events, readonly []>[],
+  const Emits extends readonly ResolvedEventType<Events, readonly []>[],
 >(
-  contract: Omit<
-    ProcessorContractShape<StateSchema, Events, readonly [], Consumes, Emits>,
-    "stateSchema" | "initialState" | "processorDeps" | "consumes" | "emits"
-  > & {
-    stateSchema: z.output<StateSchema> extends Record<string, unknown> ? StateSchema : never;
-    initialState?: z.input<StateSchema>;
-    processorDeps?: never;
-    consumes: Consumes & ResolvedEventTypesOnly<Events, readonly [], Consumes>;
-    emits: Emits & ResolvedEventTypesOnly<Events, readonly [], Emits>;
-  },
+  contract: ProcessorContractInputWithoutDeps<StateSchema, Events, Consumes, Emits>,
 ): Omit<
   ProcessorContractShape<StateSchema, Events, readonly [], Consumes, Emits>,
   "stateSchema" | "initialState" | "processorDeps" | "consumes" | "emits"
@@ -213,6 +204,55 @@ export function implementBuiltinProcessor<const Contract>(
   implementation: BuiltinProcessorImplementation<Contract>,
 ): BuiltinProcessor<Contract> {
   return { contract, implementation };
+}
+
+/**
+ * Compile-time exhaustiveness guard for discriminated unions.
+ *
+ * Use this at the end of `switch (event.type)` in reducers and `afterAppend`
+ * hooks when the processor should deliberately handle every event in
+ * `contract.consumes`.
+ *
+ * ```ts
+ * switch (event.type) {
+ *   case "events.iterate.com/agent/input-added":
+ *     return nextState;
+ *   case "events.iterate.com/agent/status-updated":
+ *     return state; // deliberately ignored by the reducer
+ *   default:
+ *     return assertNever(event);
+ * }
+ * ```
+ *
+ * If a new consumed event type is added without a matching `case`, `event` will
+ * no longer be `never` in the default branch and TypeScript will fail the
+ * build. This is especially useful for processor contracts because
+ * `ConsumedEvent<Contract>` is inferred directly from `contract.consumes`.
+ */
+export function assertNever(value: never): never {
+  throw new Error(`Unhandled discriminated union member: ${JSON.stringify(value)}`);
+}
+
+/**
+ * Build an idempotency key for an event derived from one committed source event.
+ *
+ * This is intentionally only a string helper, not an `appendDerived(...)`
+ * wrapper. Processor implementations should still call `streamApi.append(...)`
+ * directly so the emitted event stays visible and typechecked against
+ * `contract.emits`.
+ *
+ * Include a stable `purpose` per derivation site. If one source event produces
+ * two different derived events, each site should use a different purpose.
+ */
+export function buildDerivedIdempotencyKey(args: DerivedIdempotencyKeyArgs): string {
+  return [
+    "stream-processor",
+    args.slug,
+    "derived",
+    args.purpose,
+    args.event.streamPath,
+    String(args.event.offset),
+  ].join(":");
 }
 
 export function validateProcessorContract(contract: {
@@ -278,14 +318,20 @@ export function getInitialProcessorState<
   return contract.stateSchema.parse(contract.initialState) as ProcessorState<Contract>;
 }
 
-export function createProcessorHostState<const Contract extends { stateSchema: z.ZodType }>(args: {
+export function createStoredProcessorState<
+  const Contract extends { stateSchema: z.ZodType },
+>(args: {
   contract: Contract;
   state?: ProcessorState<Contract>;
+  hasCompletedFirstAttach?: boolean;
+  liveAfterOffset?: number;
   reducedThroughOffset?: number;
   afterAppendCompletedThroughOffset?: number;
-}): ProcessorHostState<Contract> {
+}): StoredProcessorState<Contract> {
   return {
     state: args.state === undefined ? getInitialProcessorState(args.contract) : args.state,
+    hasCompletedFirstAttach: args.hasCompletedFirstAttach ?? false,
+    liveAfterOffset: args.liveAfterOffset ?? 0,
     reducedThroughOffset: args.reducedThroughOffset ?? 0,
     afterAppendCompletedThroughOffset: args.afterAppendCompletedThroughOffset ?? 0,
   };
@@ -297,6 +343,7 @@ export function runProcessorReduce<
     processorDeps?: readonly unknown[];
     consumes: readonly string[];
     reduce?: (args: {
+      contract: Contract;
       state: ProcessorState<Contract>;
       event: ConsumedEvent<Contract>;
     }) => ProcessorState<Contract> | null | undefined;
@@ -325,6 +372,7 @@ export function runProcessorReduce<
   }).parse(args.event) as ConsumedEvent<Contract>;
   const nextState =
     args.processor.contract.reduce?.({
+      contract: args.processor.contract,
       state: args.state,
       event,
     }) ?? args.state;
@@ -350,6 +398,7 @@ export function reduceProcessorEvents<
     processorDeps?: readonly unknown[];
     consumes: readonly string[];
     reduce?: (args: {
+      contract: Contract;
       state: ProcessorState<Contract>;
       event: ConsumedEvent<Contract>;
     }) => ProcessorState<Contract> | null | undefined;
@@ -549,18 +598,23 @@ export type {
   BuiltinProcessor,
   BuiltinProcessorImplementation,
   ConsumedEvent,
+  DerivedIdempotencyKeyArgs,
   EmittedInput,
   EventCatalog,
   EventDefinition,
+  FirstAttachAfterAppendPolicy,
   Processor,
+  ProcessorContractInput,
+  ProcessorContractInputWithoutDeps,
   ProcessorContractShape,
-  ProcessorHostState,
+  StoredProcessorState,
   ProcessorImplementation,
   ProcessorReduction,
   ProcessorState,
   ProcessorStateObject,
   ProcessorStreamApi,
   ProcessorStreamApiProps,
+  ResolvedEventType,
   StreamEvent,
   StreamEventInput,
 } from "./types.ts";

@@ -1,6 +1,7 @@
 import { describe, expectTypeOf, it } from "vitest";
 import { z } from "zod";
 import {
+  assertNever,
   createEvent,
   defineProcessorContract,
   implementBuiltinProcessor,
@@ -10,9 +11,12 @@ import {
   runProcessorAfterAppend,
   type ConsumedEvent,
   type EmittedInput,
-  type ProcessorHostState,
+  type EventCatalog,
+  type FirstAttachAfterAppendPolicy,
+  type StoredProcessorState,
   type ProcessorState,
   type ProcessorReduction,
+  type ResolvedEventType,
   type StreamEvent,
 } from "./stream-processor.ts";
 
@@ -183,6 +187,141 @@ describe("stream processor contract types", () => {
       script: string;
     }>();
     expectTypeOf<Extract<Consumed, { type: "codemode-result-added" }>>().toEqualTypeOf<never>();
+  });
+
+  it("resolves autocomplete candidate event types from owned events and processor deps", () => {
+    type Resolved = ResolvedEventType<
+      typeof codemodeProcessorContract.events,
+      typeof codemodeProcessorContract.processorDeps
+    >;
+
+    expectTypeOf<Resolved>().toEqualTypeOf<
+      | "processor-registered"
+      | "agent-input-added"
+      | "codemode-block-added"
+      | "codemode-result-added"
+    >();
+
+    const validConsumes = [
+      "processor-registered",
+      "agent-input-added",
+      "codemode-block-added",
+      "codemode-result-added",
+    ] as const satisfies readonly Resolved[];
+
+    [
+      "processor-registered",
+      // @ts-expect-error this is not owned locally or by processorDeps.
+      "missing-event",
+    ] as const satisfies readonly Resolved[];
+
+    expectTypeOf<(typeof validConsumes)[number]>().toEqualTypeOf<
+      | "processor-registered"
+      | "agent-input-added"
+      | "codemode-block-added"
+      | "codemode-result-added"
+    >();
+  });
+
+  it("preserves inline string-keyed event catalogs without createEvent", () => {
+    const inlineContract = defineProcessorContract({
+      slug: "inline",
+      version: "1.0.0",
+      description: "Uses the real inline event authoring shape.",
+      stateSchema: z.object({ seen: z.number().default(0) }).prefault({}),
+      events: {
+        "inline-input": {
+          description: "Inline input event.",
+          payloadSchema: z.object({ text: z.string() }),
+        },
+        "inline-output": {
+          description: "Inline output event.",
+          payloadSchema: z.object({ value: z.number() }),
+        },
+      },
+      consumes: ["inline-input"],
+      emits: ["inline-output"],
+      reduce: ({ state, event }) => {
+        expectTypeOf(event.type).toEqualTypeOf<"inline-input">();
+        expectTypeOf(event.payload).toEqualTypeOf<{ text: string }>();
+        return { seen: state.seen + 1 };
+      },
+    });
+
+    expectTypeOf<typeof inlineContract.consumes>().toEqualTypeOf<readonly ["inline-input"]>();
+    expectTypeOf<typeof inlineContract.emits>().toEqualTypeOf<readonly ["inline-output"]>();
+    expectTypeOf<
+      Extract<ConsumedEvent<typeof inlineContract>, { type: "inline-input" }>["payload"]
+    >().toEqualTypeOf<{ text: string }>();
+    expectTypeOf<
+      Extract<EmittedInput<typeof inlineContract>, { type: "inline-output" }>["payload"]
+    >().toEqualTypeOf<{ value: number }>();
+  });
+
+  it("fails closed for widened event catalogs and widened event arrays", () => {
+    const widenedEvents: EventCatalog = {
+      "widened-event": {
+        payloadSchema: z.object({}),
+      },
+    };
+
+    defineProcessorContract({
+      slug: "widened-events",
+      version: "1.0.0",
+      description: "Widened event catalogs should not make every string valid.",
+      stateSchema: z.object({}).default({}),
+      events: widenedEvents,
+      // @ts-expect-error broad EventCatalog loses literal keys, so no local event strings are resolvable.
+      consumes: ["widened-event"],
+      emits: [],
+    });
+
+    const widenedConsumes = ["agent-input-added"];
+    defineProcessorContract({
+      slug: "widened-consumes",
+      version: "1.0.0",
+      description: "Widened arrays hide the visible event literal list.",
+      stateSchema: z.object({}).default({}),
+      processorDeps: [agentProcessorContract],
+      events: {},
+      // @ts-expect-error consumes should be a visible literal tuple, not string[].
+      consumes: widenedConsumes,
+      emits: [],
+    });
+  });
+
+  it("supports exhaustive guards over consumed event unions", () => {
+    function exhaustive(event: ConsumedEvent<typeof codemodeProcessorContract>) {
+      switch (event.type) {
+        case "processor-registered":
+          return event.payload.version;
+        case "agent-input-added":
+          return event.payload.content;
+        case "codemode-block-added":
+          return event.payload.script;
+        default:
+          return assertNever(event);
+      }
+    }
+
+    function missingOneCase(event: ConsumedEvent<typeof codemodeProcessorContract>) {
+      switch (event.type) {
+        case "processor-registered":
+          return event.payload.version;
+        case "agent-input-added":
+          return event.payload.content;
+        default:
+          // @ts-expect-error codemode-block-added has not been handled.
+          return assertNever(event);
+      }
+    }
+
+    expectTypeOf(exhaustive).toEqualTypeOf<
+      (event: ConsumedEvent<typeof codemodeProcessorContract>) => string
+    >();
+    expectTypeOf(missingOneCase).toEqualTypeOf<
+      (event: ConsumedEvent<typeof codemodeProcessorContract>) => string
+    >();
   });
 
   it("infers emitted append inputs from string-keyed emits", () => {
@@ -426,12 +565,12 @@ describe("stream processor contract types", () => {
       reduce: ({ state }) => state,
     });
 
-    // @ts-expect-error initialState must be valid input for stateSchema.
     defineProcessorContract({
       slug: "invalid-initial-state",
       version: "1.0.0",
       description: "Invalid initial state input.",
       stateSchema: z.object({ count: z.number().default(0) }),
+      // @ts-expect-error initialState must be valid input for stateSchema.
       initialState: { count: "nope" },
       events: {},
       consumes: [],
@@ -480,9 +619,11 @@ describe("stream processor contract types", () => {
     >();
   });
 
-  it("types the host-owned state envelope from the processor contract", () => {
-    expectTypeOf<ProcessorHostState<typeof codemodeProcessorContract>>().toEqualTypeOf<{
+  it("types the stored runner state envelope from the processor contract", () => {
+    expectTypeOf<StoredProcessorState<typeof codemodeProcessorContract>>().toEqualTypeOf<{
       state: { count: number };
+      hasCompletedFirstAttach: boolean;
+      liveAfterOffset: number;
       reducedThroughOffset: number;
       afterAppendCompletedThroughOffset: number;
     }>();
@@ -515,6 +656,17 @@ describe("stream processor contract types", () => {
     });
   });
 
+  it("types implementation first-attach side-effect policy without putting it on the contract", () => {
+    const processor = implementProcessor(codemodeProcessorContract, {
+      firstAttachAfterAppend: { mode: "lookback", milliseconds: 250 },
+    });
+
+    expectTypeOf(processor.contract).not.toHaveProperty("firstAttachAfterAppend");
+    expectTypeOf(processor.implementation.firstAttachAfterAppend).toEqualTypeOf<
+      FirstAttachAfterAppendPolicy | undefined
+    >();
+  });
+
   it("types runProcessorOnStart from the processor contract", async () => {
     const processor = implementProcessor(codemodeProcessorContract, {
       onStart: ({ state }) => {
@@ -541,7 +693,6 @@ describe("stream processor contract types", () => {
   });
 
   it("rejects reducers that return non-state values", () => {
-    // @ts-expect-error reducers must return the object-shaped processor state, null, or undefined.
     defineProcessorContract({
       slug: "invalid-reducer-return",
       version: "1.0.0",
@@ -550,6 +701,7 @@ describe("stream processor contract types", () => {
       events: {},
       consumes: [],
       emits: [],
+      // @ts-expect-error reducers must return the object-shaped processor state, null, or undefined.
       reduce: () => 1,
     });
   });

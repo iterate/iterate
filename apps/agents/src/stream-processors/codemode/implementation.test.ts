@@ -1,0 +1,151 @@
+import { describe, expect, it } from "vitest";
+import {
+  getInitialProcessorState,
+  type ProcessorStreamApi,
+  type StreamEvent,
+  type StreamEventInput,
+} from "@iterate-com/shared/stream-processors";
+import { AgentProcessorContract } from "../agent/contract.ts";
+import { buildProcessorRegisteredEvent } from "../core/contract.ts";
+import {
+  CODEMODE_PRIMER_IDEMPOTENCY_KEY,
+  CodemodeProcessorContract,
+  reduceCodemodeEvents,
+  type CodemodeState,
+} from "./contract.ts";
+import {
+  createCodemodeProcessor,
+  extractCodemodeScriptFromAssistantResponse,
+} from "./implementation.ts";
+
+describe("createCodemodeProcessor", () => {
+  it("appends the exactly-once primer and extracts assistant codemode blocks", async () => {
+    const appended: StreamEventInput[] = [];
+    const processor = createCodemodeProcessor({
+      loader: undefined as unknown as WorkerLoader,
+      outboundFetch: undefined as unknown as Fetcher,
+      env: undefined as unknown as Env,
+    });
+
+    await processor.implementation.afterAppend?.({
+      event: committedEvent({
+        type: "events.iterate.com/agent/input-added",
+        payload: {
+          role: "assistant",
+          content: "```js\nasync () => {\n  return 1;\n}\n```",
+        },
+        offset: 5,
+      }),
+      previousState: registeredState({ hasAppendedCodemodePrompt: false }),
+      state: registeredState({ hasAppendedCodemodePrompt: false }),
+      streamApi: testStreamApi({ appended, storedEvents: [] }),
+      signal: new AbortController().signal,
+    });
+
+    expect(appended).toEqual([
+      {
+        type: "events.iterate.com/agent/input-added",
+        idempotencyKey: CODEMODE_PRIMER_IDEMPOTENCY_KEY,
+        payload: {
+          role: "user",
+          content: expect.stringContaining("codemode is how you use tools"),
+          triggerLlmRequest: { behaviour: "dont-trigger-request" },
+        },
+      },
+      {
+        type: "events.iterate.com/codemode/block-added",
+        idempotencyKey: "stream-processor:codemode:derived:assistant-input-to-block:/agents/test:5",
+        payload: {
+          script: "async () => {\n  return 1;\n}",
+        },
+      },
+    ]);
+  });
+
+  it("uses embedded agent dependency state before appending idle status", async () => {
+    const appended: StreamEventInput[] = [];
+    const processor = createCodemodeProcessor({
+      loader: undefined as unknown as WorkerLoader,
+      outboundFetch: undefined as unknown as Fetcher,
+      env: undefined as unknown as Env,
+    });
+
+    await processor.implementation.afterAppend?.({
+      event: committedEvent({
+        type: "events.iterate.com/codemode/result-added",
+        payload: { result: { ok: true }, durationMs: 10 },
+        offset: 9,
+      }),
+      previousState: registeredState({ hasAppendedCodemodePrompt: true }),
+      state: reduceCodemodeEvents({
+        state: registeredState({ hasAppendedCodemodePrompt: true }),
+        events: [
+          committedEvent(buildProcessorRegisteredEvent({ contract: AgentProcessorContract })),
+        ],
+      }),
+      streamApi: testStreamApi({
+        appended,
+        storedEvents: [],
+      }),
+      signal: new AbortController().signal,
+    });
+
+    expect(appended.at(-1)).toEqual({
+      type: "events.iterate.com/agent/status-updated",
+      idempotencyKey:
+        "stream-processor:codemode:derived:codemode-result-to-idle-status:/agents/test:9",
+      payload: {
+        status: "idle",
+        reason: "codemode-result-added",
+      },
+    });
+  });
+
+  it("extracts codemode scripts from fenced assistant responses", () => {
+    expect(
+      extractCodemodeScriptFromAssistantResponse("```js\nasync () => {\n  return 1;\n}\n```"),
+    ).toBe("async () => {\n  return 1;\n}");
+  });
+});
+
+function registeredState(args: { hasAppendedCodemodePrompt: boolean }): CodemodeState {
+  return {
+    ...getInitialProcessorState(CodemodeProcessorContract),
+    hasRegisteredCurrentVersion: true,
+    hasAppendedCodemodePrompt: args.hasAppendedCodemodePrompt,
+  };
+}
+
+function testStreamApi(args: {
+  appended: StreamEventInput[];
+  storedEvents: StreamEvent[];
+}): ProcessorStreamApi<typeof CodemodeProcessorContract> {
+  return {
+    append: async ({ event }) => {
+      args.appended.push(event);
+      return committedEvent(event);
+    },
+    read: async () => args.storedEvents,
+    subscribe: async function* () {
+      return;
+    },
+  };
+}
+
+function committedEvent(args: {
+  type: string;
+  payload: unknown;
+  metadata?: Record<string, unknown>;
+  idempotencyKey?: string;
+  offset?: number;
+}): StreamEvent {
+  return {
+    streamPath: "/agents/test",
+    type: args.type,
+    payload: args.payload,
+    metadata: args.metadata,
+    idempotencyKey: args.idempotencyKey,
+    offset: args.offset ?? 1,
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+}

@@ -25,7 +25,7 @@ import {
   prettyEventsStreamViewProcessor,
   processEventsWithViewProcessor,
   rawEventsStreamViewProcessor,
-  reduceEventsToRawJsonDumpViewState,
+  rawJsonDumpEventsStreamViewProcessor,
   rawPrettyEventsStreamViewProcessor,
 } from "@iterate-com/ui/components/events/feed-processors";
 import type { EventsStreamViewProcessor } from "@iterate-com/ui/components/events/feed-items";
@@ -564,19 +564,13 @@ function getLiveStreamFailureLabel({
 }
 
 function reduceCleanViewState(args: { events: readonly Event[]; mode: StreamRendererMode }) {
-  if (args.mode === "raw-single-json") {
-    return reduceEventsToRawJsonDumpViewState(args.events);
-  }
-
   return processEventsWithViewProcessor({
     events: args.events,
     processor: selectCleanViewProcessor(args.mode),
   });
 }
 
-function selectCleanViewProcessor(
-  mode: Exclude<StreamRendererMode, "raw-single-json">,
-): EventsStreamViewProcessor {
+function selectCleanViewProcessor(mode: StreamRendererMode): EventsStreamViewProcessor {
   switch (mode) {
     case "raw":
       return rawEventsStreamViewProcessor;
@@ -584,5 +578,7 @@ function selectCleanViewProcessor(
       return prettyEventsStreamViewProcessor;
     case "raw-pretty":
       return rawPrettyEventsStreamViewProcessor;
+    case "raw-single-json":
+      return rawJsonDumpEventsStreamViewProcessor;
   }
 }

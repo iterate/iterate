@@ -2,7 +2,8 @@ import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/shared/stream-processors";
 import type { EventCatalog, StreamEventInput } from "@iterate-com/shared/stream-processors";
 
-export const CoreProcessorRegisteredEventType = "events.iterate.com/core/processor/registered";
+export const CoreProcessorRegisteredEventType =
+  "events.iterate.com/core/stream-processor-registered";
 
 /**
  * Minimal core processor contract for shared processor lifecycle events.
@@ -17,7 +18,7 @@ export const CoreProcessorContract = defineProcessorContract({
   description: "Core stream processor lifecycle events.",
   stateSchema: z.object({}).default({}),
   events: {
-    "events.iterate.com/core/processor/registered": {
+    "events.iterate.com/core/stream-processor-registered": {
       description: "A processor registered its public contract on this stream.",
       payloadSchema: z.object({
         slug: z.string(),
@@ -35,10 +36,19 @@ export const CoreProcessorContract = defineProcessorContract({
     },
   },
   consumes: [],
-  emits: ["events.iterate.com/core/processor/registered"],
+  emits: ["events.iterate.com/core/stream-processor-registered"],
 });
 
-export function createProcessorRegisteredInput(args: {
+/**
+ * Builds the standard core registration event for a processor contract.
+ *
+ * Well-behaved processors append this event once per processor version. Keeping
+ * this helper centralized prevents each processor from hand-building the same
+ * payload and idempotency key, and it guarantees the event describes only the
+ * processor's owned event catalog. Imported `processorDeps` still appear in
+ * `consumes` / `emits`, but their schemas are owned and documented elsewhere.
+ */
+export function buildProcessorRegisteredEvent(args: {
   contract: {
     slug: string;
     version: string;
@@ -62,20 +72,10 @@ export function createProcessorRegisteredInput(args: {
       description: args.contract.description,
       consumes: [...args.contract.consumes],
       emits: [...args.contract.emits],
-      ownedEvents: Object.values(args.contract.events).map((event) => ({
-        type: getEventType(args.contract.events, event),
+      ownedEvents: Object.entries(args.contract.events).map(([type, event]) => ({
+        type,
         ...(event.description == null ? {} : { description: event.description }),
       })),
     },
   };
-}
-
-function getEventType(events: EventCatalog, eventDefinition: EventCatalog[string]): string {
-  for (const [eventType, event] of Object.entries(events)) {
-    if (event === eventDefinition) {
-      return eventType;
-    }
-  }
-
-  throw new Error("Event definition does not belong to the provided event catalog.");
 }

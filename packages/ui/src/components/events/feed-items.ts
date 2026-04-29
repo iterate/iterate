@@ -36,7 +36,7 @@ export type EventsStreamActivityState = {
 
 export type EventsStreamViewProcessor = {
   slug: string;
-  initialState: EventsStreamViewState;
+  createInitialState: () => EventsStreamViewState;
   reduce: (args: {
     event: Event;
     state: EventsStreamViewState;

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { getInitialProcessorState, type StreamEvent } from "@iterate-com/shared/stream-processors";
 import {
+  buildProcessorRegisteredEvent,
   CoreProcessorRegisteredEventType,
-  createProcessorRegisteredInput,
 } from "../core/contract.ts";
 import { wellBehavedProcessorDefaults } from "../core/well-behaved-processor-defaults.ts";
 import { AgentProcessorContract, reduceAgentEvents } from "./contract.ts";
@@ -24,7 +24,7 @@ describe("AgentProcessorContract", () => {
   });
 
   it("projects current-version processor registration from the core event", () => {
-    const input = createProcessorRegisteredInput({ contract: AgentProcessorContract });
+    const input = buildProcessorRegisteredEvent({ contract: AgentProcessorContract });
 
     expect(
       reduceAgentEvents({
@@ -40,7 +40,7 @@ describe("AgentProcessorContract", () => {
           committedEvent({
             type: CoreProcessorRegisteredEventType,
             payload: {
-              ...createProcessorRegisteredInput({ contract: AgentProcessorContract }).payload,
+              ...buildProcessorRegisteredEvent({ contract: AgentProcessorContract }).payload,
               version: "0.0.0",
             },
           }),
@@ -64,7 +64,7 @@ describe("AgentProcessorContract", () => {
     });
 
     expect(appended).toEqual([
-      createProcessorRegisteredInput({
+      buildProcessorRegisteredEvent({
         contract: AgentProcessorContract,
       }),
     ]);

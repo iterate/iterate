@@ -2,7 +2,6 @@ import { Event, ProjectSlug, StreamPath, type EventInput } from "@iterate-com/ev
 import type {
   EventsStreamFeedItem,
   EventsStreamRawEventFeedItem,
-  EventsStreamViewState,
 } from "@iterate-com/ui/components/events/feed-items";
 import { rawEventsStreamViewProcessor } from "@iterate-com/ui/components/events/feed-processors";
 import {
@@ -15,7 +14,8 @@ import {
   bg,
   createCliRenderer,
   fg,
-  type TextChunk,
+  KeyEvent,
+  parseKeypress,
 } from "@opentui/core";
 import { stringify as stringifyYaml } from "yaml";
 import { createEventsOrpcClient } from "../src/lib/events-orpc-client.ts";
@@ -30,17 +30,85 @@ const client = createEventsOrpcClient({
   projectSlug: args.projectSlug,
 });
 
-let state = structuredClone(rawEventsStreamViewProcessor.initialState) as EventsStreamViewState;
+type StreamView = "feed" | "state" | "commands";
+type StreamCommand = {
+  id: string;
+  title: string;
+  description: string;
+  slash: string;
+  run: (args: string) => void | Promise<void>;
+};
+
+let state = rawEventsStreamViewProcessor.createInitialState();
 let status = "connecting";
 let appendStatus = "";
 let eventCount = 0;
 let pulseOn = true;
+let selectedOffset: number | undefined;
+let feedNavigation = false;
+let activeView: StreamView = "feed";
+const collapsedOffsets = new Set<number>();
+
+// One command record powers slash commands now and can back a palette later.
+// OpenCode treats slash entries as TUI commands too:
+// https://opencode.ai/docs/tui/#slash-commands
+const streamCommands: StreamCommand[] = [
+  {
+    id: "view.feed",
+    title: "Show feed",
+    description: "Return to the event feed",
+    slash: "feed",
+    run() {
+      activeView = "feed";
+    },
+  },
+  {
+    id: "view.state",
+    title: "Show reduced state",
+    description: "Inspect the current reducer state",
+    slash: "state",
+    run() {
+      activeView = "state";
+    },
+  },
+  {
+    id: "view.commands",
+    title: "Show commands",
+    description: "List available slash commands",
+    slash: "help",
+    run() {
+      activeView = "commands";
+    },
+  },
+  {
+    id: "feed.collapse-all",
+    title: "Collapse all feed items",
+    description: "Collapse every raw event card",
+    slash: "collapse",
+    run() {
+      for (const item of getRawFeedItems()) {
+        collapsedOffsets.add(item.offset);
+      }
+      activeView = "feed";
+    },
+  },
+  {
+    id: "feed.expand-all",
+    title: "Expand all feed items",
+    description: "Expand every raw event card",
+    slash: "expand",
+    run() {
+      collapsedOffsets.clear();
+      activeView = "feed";
+    },
+  },
+];
 
 const renderer = await createCliRenderer({
   exitOnCtrlC: true,
   targetFps: 30,
-  useAlternateScreen: true,
-  useConsole: false,
+  screenMode: "alternate-screen",
+  consoleMode: "disabled",
 });
 
 const root = new BoxRenderable(renderer, {
@@ -69,20 +137,19 @@ const statsText = new TextRenderable(renderer, { content: "", fg: "#9ca3af" });
 const feed = new ScrollBoxRenderable(renderer, {
   width: "100%",
   flexGrow: 1,
+  // OpenTUI's native sticky scroll pauses when the user scrolls away, then
+  // resumes when they return to the edge:
+  // https://opentui.com/docs/components/scrollbox#sticky-scroll
+  stickyScroll: true,
+  stickyStart: "bottom",
   contentOptions: { flexDirection: "column", paddingLeft: 1, paddingRight: 1 },
   backgroundColor: "#0b0f14",
 });
-const feedText = new TextRenderable(renderer, {
-  content: "Waiting for events...",
-  width: "100%",
-  fg: "#d1d5db",
-});
 const input = new InputRenderable(renderer, {
   width: "100%",
-  height: 1,
   placeholder: "Type a message and press Enter",
-  backgroundColor: "#030712",
-  focusedBackgroundColor: "#030712",
+  backgroundColor: "transparent",
+  focusedBackgroundColor: "transparent",
   textColor: "#e5e7eb",
   focusedTextColor: "#e5e7eb",
   placeholderColor: "#6b7280",
@@ -91,28 +158,70 @@ const input = new InputRenderable(renderer, {
 const inputBox = new BoxRenderable(renderer, {
   width: "100%",
   height: 3,
+  flexDirection: "column",
   padding: 1,
   backgroundColor: "#0b0f14",
 });
+const inputSeparator = new BoxRenderable(renderer, {
+  width: "100%",
+  height: 1,
+  backgroundColor: "#27272a",
+});
 
-topBar.add(connectedIndicator);
 topBar.add(streamPathText);
 topBar.add(statsText);
+topBar.add(connectedIndicator);
 root.add(topBar);
-feed.add(feedText);
 root.add(feed);
 inputBox.add(input);
+root.add(inputSeparator);
 root.add(inputBox);
 renderer.root.add(root);
-input.focus();
 
+// Let OpenTUI focus own keyboard input. Forwarding raw stdin or renderer key
+// events into this input duplicates real terminal keystrokes.
+input.focus();
+renderer.prependInputHandler((sequence) => {
+  const parsedKey = parseKeypress(sequence);
+  if (parsedKey == null) return false;
+
+  const key = new KeyEvent(parsedKey);
+  if (!feedNavigation) {
+    if (key.name !== "escape") return false;
+
+    focusFeed();
+    return true;
+  }
+
+  if (key.name === "escape") {
+    focusInput();
+    return true;
+  }
+
+  if (key.name === "tab") {
+    selectAdjacentFeedItem(key.shift ? -1 : 1);
+    return true;
+  }
+
+  if (key.name === "return" && selectedOffset != null) {
+    toggleSelectedFeedItem();
+    return true;
+  }
+
+  if (feed.handleKeyPress(key)) {
+    return true;
+  }
+
+  return true;
+});
 input.on(InputRenderableEvents.ENTER, () => void appendInput());
 setInterval(() => {
   pulseOn = !pulseOn;
-  updateView();
+  updateHeader();
 }, 700).unref();
 
-updateView();
+updateHeader();
+updateFeed();
 void streamEvents();
 
 async function streamEvents() {
@@ -122,13 +231,15 @@ async function streamEvents() {
       afterOffset: "start",
     });
     status = "streaming";
-    updateView();
+    updateHeader();
 
     for await (const value of stream) {
       const event = Event.parse(value);
       eventCount += 1;
       state = rawEventsStreamViewProcessor.reduce({ event, state }) ?? state;
-      updateView();
+      collapsedOffsets.delete(event.offset);
+      updateHeader();
+      updateFeed("keep");
     }
 
     status = "stream closed";
@@ -136,7 +247,7 @@ async function streamEvents() {
     status = `stream error: ${formatError(error)}`;
   }
 
-  updateView();
+  updateHeader();
 }
 
 async function appendInput() {
@@ -144,8 +255,10 @@ async function appendInput() {
   if (content.length === 0) return;
 
   input.value = "";
+  if (await runSlashCommand(content)) return;
+
   appendStatus = "sending";
-  updateView();
+  updateHeader();
 
   const event: EventInput = {
     type: "webchat-message-received",
@@ -157,62 +270,147 @@ async function appendInput() {
   } catch (error) {
     appendStatus = `append error: ${formatError(error)}`;
   }
-  updateView();
+  updateHeader();
 }
 
-function updateView() {
+async function runSlashCommand(content: string) {
+  if (!content.startsWith("/")) return false;
+
+  const [slash = "", ...args] = content.slice(1).trim().split(/\s+/);
+  const command = streamCommands.find((candidate) => candidate.slash === slash);
+  if (command == null) {
+    appendStatus = `unknown command /${slash}`;
+    updateHeader();
+    return true;
+  }
+
+  await command.run(args.join(" "));
+  appendStatus = `/${command.slash}`;
+  updateHeader();
+  updateFeed("keep");
+  return true;
+}
+
+function updateHeader() {
   connectedIndicator.content = "●";
   connectedIndicator.fg = status === "streaming" ? (pulseOn ? "#22c55e" : "#16a34a") : "#facc15";
   statsText.content = [
     `${eventCount} event${eventCount === 1 ? "" : "s"}`,
     `${state.feedItems.length} item${state.feedItems.length === 1 ? "" : "s"}`,
+    activeView === "feed" ? "" : activeView,
+    feedNavigation ? "feed focus" : "",
     status === "streaming" ? "" : status,
     appendStatus,
   ]
     .filter(Boolean)
     .join(" · ");
-  feedText.content = renderFeed();
-  feed.scrollTo({ x: 0, y: feed.scrollHeight });
 }
 
-function renderFeed() {
+function updateFeed(scroll: "selected" | "keep" = "keep") {
+  feed.stickyScroll = activeView === "feed";
+  feed.stickyStart = activeView === "feed" ? "bottom" : undefined;
+
+  for (const child of feed.getChildren()) {
+    feed.remove(child.id);
+  }
+
+  for (const child of renderFeedChildren()) {
+    feed.add(child);
+  }
+
+  if (scroll === "selected") {
+    const selectedCardId = getRawEventCardId(selectedOffset);
+    setImmediate(() => feed.scrollChildIntoView(selectedCardId));
+  } else if (activeView !== "feed") {
+    setImmediate(() => feed.scrollTo(0));
+  }
+}
+
+function renderFeedChildren() {
+  if (activeView === "state") return renderStateViewChildren();
+  if (activeView === "commands") return renderCommandViewChildren();
+
   if (state.feedItems.length === 0) {
-    return "Waiting for events...";
+    return [
+      new TextRenderable(renderer, {
+        id: "events-feed-waiting",
+        content: "Waiting for events...",
+        width: "100%",
+        fg: "#d1d5db",
+      }),
+    ];
   }
 
   const elapsedByOffset = getElapsedByOffset(state.feedItems);
-  const chunks = state.feedItems.flatMap((item) => {
+  return state.feedItems.flatMap((item) => {
     const elapsedLabel = item.type === "raw-event" ? elapsedByOffset.get(item.offset) : undefined;
-    return renderFeedItem({ item, elapsedLabel });
+    return renderFeedItemChild(item, elapsedLabel);
   });
-
-  return new StyledText(chunks);
 }
 
-function renderFeedItem({
-  item,
-  elapsedLabel,
-}: {
-  item: EventsStreamFeedItem;
-  elapsedLabel?: string;
-}): TextChunk[] {
+function renderStateViewChildren() {
+  return [
+    new TextRenderable(renderer, {
+      id: "events-feed-state",
+      content: stringifyYaml({
+        streamPath: args.streamPath,
+        status,
+        appendStatus,
+        eventCount,
+        activeView,
+        feedNavigation,
+        selectedOffset,
+        collapsedOffsets: [...collapsedOffsets],
+        reducedState: state,
+      }).trimEnd(),
+      width: "100%",
+      fg: "#cbd5e1",
+    }),
+  ];
+}
+
+function renderCommandViewChildren() {
+  const content = streamCommands
+    .map((command) => `/${command.slash.padEnd(10)} ${command.title}\n  ${command.description}`)
+    .join("\n\n");
+
+  return [
+    new TextRenderable(renderer, {
+      id: "events-feed-commands",
+      content,
+      width: "100%",
+      fg: "#cbd5e1",
+    }),
+  ];
+}
+
+function renderFeedItemChild(item: EventsStreamFeedItem, elapsedLabel?: string) {
   if (item.type !== "raw-event") return [];
 
-  return renderRawEventCard({ item, elapsedLabel });
+  return [
+    new TextRenderable(renderer, {
+      id: getRawEventCardId(item.offset),
+      content: new StyledText(renderRawEventCard(item, elapsedLabel)),
+      width: "100%",
+      fg: "#d1d5db",
+    }),
+  ];
 }
 
-function renderRawEventCard({
-  item,
-  elapsedLabel,
-}: {
-  item: EventsStreamRawEventFeedItem;
-  elapsedLabel?: string;
-}) {
-  const width = Math.max(48, feed.width - 2);
+function renderRawEventCard(item: EventsStreamRawEventFeedItem, elapsedLabel?: string) {
+  const width = Math.max(3, feed.width - 2);
   const yaml = stringifyYaml(orderEventKeysForYamlDisplay(item.raw)).trimEnd();
+  const isSelected = feedNavigation && item.offset === selectedOffset;
+  const isCollapsed = collapsedOffsets.has(item.offset);
+  const summary = `${rightAlign(formatEventSummary(item, elapsedLabel), width)}\n`;
+
+  if (isCollapsed) {
+    return [mutedText("\n"), isSelected ? selectedSummaryText(summary) : summaryText(summary)];
+  }
+
   return [
     mutedText("\n"),
-    summaryText(`${rightAlign(formatEventSummary({ item, elapsedLabel }), width)}\n`),
+    isSelected ? selectedSummaryText(summary) : summaryText(summary),
     rawText(` ${" ".repeat(width - 2)} \n`),
     ...yaml
       .split("\n")
@@ -224,6 +422,10 @@ function renderRawEventCard({
 
 function summaryText(value: string) {
   return fg("#71717a")(value);
+}
+
+function selectedSummaryText(value: string) {
+  return bg("#1f2937")(fg("#e5e7eb")(value));
 }
 
 function mutedText(value: string) {
@@ -248,13 +450,63 @@ function getElapsedByOffset(feedItems: readonly EventsStreamFeedItem[]) {
   return elapsedByOffset;
 }
 
-function formatEventSummary({
-  item,
-  elapsedLabel,
-}: {
-  item: EventsStreamRawEventFeedItem;
-  elapsedLabel?: string;
-}) {
+function selectAdjacentFeedItem(direction: -1 | 1) {
+  const rawItems = getRawFeedItems();
+  if (rawItems.length === 0) return;
+
+  const currentIndex = rawItems.findIndex((item) => item.offset === selectedOffset);
+  const nextIndex =
+    currentIndex === -1
+      ? direction === 1
+        ? 0
+        : rawItems.length - 1
+      : (currentIndex + direction + rawItems.length) % rawItems.length;
+
+  selectedOffset = rawItems[nextIndex].offset;
+  updateFeed("selected");
+}
+
+function focusFeed() {
+  const rawItems = getRawFeedItems();
+  if (rawItems.length === 0) return;
+
+  feedNavigation = true;
+  selectedOffset ??= rawItems[rawItems.length - 1]?.offset;
+  input.placeholder = "Feed focus: Tab selects, Enter toggles, Esc returns";
+  input.blur();
+  updateHeader();
+  updateFeed("selected");
+}
+
+function focusInput() {
+  feedNavigation = false;
+  input.placeholder = "Type a message and press Enter";
+  input.focus();
+  updateHeader();
+  updateFeed("keep");
+}
+
+function toggleSelectedFeedItem() {
+  if (selectedOffset == null) return;
+
+  if (collapsedOffsets.has(selectedOffset)) {
+    collapsedOffsets.delete(selectedOffset);
+  } else {
+    collapsedOffsets.add(selectedOffset);
+  }
+
+  updateFeed("selected");
+}
+
+function getRawFeedItems() {
+  return state.feedItems.filter((item) => item.type === "raw-event");
+}
+
+function getRawEventCardId(offset: number | undefined) {
+  return `events-feed-raw-event-${offset ?? "none"}`;
+}
+
+function formatEventSummary(item: EventsStreamRawEventFeedItem, elapsedLabel?: string) {
   return [item.offset, item.eventType, elapsedLabel, formatTime(item.timestamp)]
     .filter(Boolean)
     .join(" · ");
@@ -309,7 +561,7 @@ function formatElapsedTime(durationMs: number) {
 
   if (normalizedDurationMs < 60_000) {
     const seconds = Math.floor(normalizedDurationMs / 100) / 10;
-    return `+${trimTrailingZero(seconds)}s`;
+    return `+${seconds.toFixed(1).replace(/\.0$/, "")}s`;
   }
 
   const totalSeconds = Math.floor(normalizedDurationMs / 1_000);
@@ -317,10 +569,6 @@ function formatElapsedTime(durationMs: number) {
   const seconds = totalSeconds % 60;
 
   return `+${totalMinutes}m${seconds}s`;
-}
-
-function trimTrailingZero(value: number) {
-  return value.toFixed(1).replace(/\.0$/, "");
 }
 
 function parseArgs(argv: string[]) {

@@ -116,7 +116,7 @@ base class and the fused processor state.
 
 ## Phase 6: Extract `withStreamProcessor`
 
-Only after one or two real DOs exist, extract common host code into a mixin:
+Only after one or two real DOs exist, extract common runner code into a mixin:
 
 ```ts
 const Base = withStreamProcessor({
@@ -151,7 +151,7 @@ The mixin should not own:
 
 ## Phase 7: Clean Up `stream.ts`
 
-`stream.ts` should become a host for:
+`stream.ts` should become a runner for:
 
 - append-only log
 - offset allocation
@@ -160,7 +160,7 @@ The mixin should not own:
 - subscriber fanout
 - child stream propagation
 - built-in `beforeAppend` processors only
-- alarm slot delegation
+- alarm mountedProcessor delegation
 
 Move out:
 
@@ -199,7 +199,7 @@ Likely stream events:
 
 ### Required State Is Better For Now
 
-Allowing omitted state seemed ergonomic, but it made generic host helpers infer
+Allowing omitted state seemed ergonomic, but it made generic runner helpers infer
 `{}` or `unknown` in awkward places. Requiring `state: z.object({}).default({})`
 for stateless processors is a good temporary tradeoff.
 
@@ -217,7 +217,7 @@ If yes, it is basically a small processor.
 
 ### Order Should Not Be Semantic
 
-Same-host ordering can exist mechanically, but no ordinary processor should rely
+Same-runner ordering can exist mechanically, but no ordinary processor should rely
 on it for correctness. If Codemode needs AgentLoop to know something, it appends
 an event.
 
@@ -237,6 +237,6 @@ It does not mean:
 
 ### `stream.ts` Should Stay Boring
 
-The more `stream.ts` looks like "append, persist, fan out, host built-ins", the
+The more `stream.ts` looks like "append, persist, fan out, runner built-ins", the
 better. Processor-specific scheduling, dynamic workers, subscriptions, renderers,
 and docs should move out where possible.

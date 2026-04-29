@@ -162,14 +162,15 @@ Working note for the `apps/agents` processor redesign discussion. This is not co
 - Registration/self-description will be a recurring pattern and likely needs a small reusable helper.
 - Processor registration/self-description should be a core stream event owned by the events system, not an agents-only event.
 - Standard processor registration behavior currently lives in a temporary `wellBehavedProcessorDefaults` bag with `stateShape`, `initialState`, `processorDeps`, `consumes`, `emits`, `reduce`, and `afterAppend` pieces.
+- `wellBehavedProcessorDefaults` is also the current home for base reduced state that every ordinary processor wants. Today that base state is `hasRegisteredCurrentVersion`; add future universal processor state here before inventing a new base-state abstraction.
 - `wellBehavedProcessorDefaults` is deliberately not the final composition abstraction. It records recurring behavior while we learn whether these pieces should become a small processor in their own right.
-- The core processor registration event type is `events.iterate.com/core/processor/registered`.
+- The core processor registration event type is `events.iterate.com/core/stream-processor-registered`.
 - Processor event type strings should not include `https://`.
 - Processor event type strings should not include the processor version for now.
 - Processor-owned event types should use `events.iterate.com/{processor-slug}/{short-event-type}`.
 - Do not add extra slash subfolders under ordinary processor namespaces for now; prefer `events.iterate.com/agent/input-added`, not `events.iterate.com/agent/input/added`.
-- Processors should explicitly include `events.iterate.com/core/processor/registered` in `consumes` if their reducer handles registration state.
-- Processors that append their own registration/self-description event should explicitly include `events.iterate.com/core/processor/registered` in `emits`, so typed `stream.append` allows it.
+- Processors should explicitly include `events.iterate.com/core/stream-processor-registered` in `consumes` if their reducer handles registration state.
+- Processors that append their own registration/self-description event should explicitly include `events.iterate.com/core/stream-processor-registered` in `emits`, so typed `stream.append` allows it.
 - Shared constants/helpers may make this boilerplate small, but the final contract should remain explicit.
 - `consumes` and `emits` arrays should show visible string literals in processor contracts, not hidden helper constants.
 - Zod schemas and event identifiers should start with a capital letter.
@@ -210,6 +211,8 @@ Working note for the `apps/agents` processor redesign discussion. This is not co
 - How to support quick throwaway processor contracts with inline event schemas without forcing every event definition to be named above the contract object.
 - Whether event catalogs should be keyed by stable wire event type strings such as `events["agent-input-added"]` instead of semantic property names such as `events.InputAddedEvent`.
 - `processorDeps` shape is currently favored as an array of processor contracts or event catalogs.
+- Dependency reduced-state composition should stay explicit for now. If codemode relies on agent state, codemode should store a serializable snapshot such as `state.processorDeps.agent` and update it by running `reduceAgentEvents(...)` inside its own reducer.
+- We may introduce helper syntax for dependency state later, but do not make `stateSchema` a function of deps yet; keep contracts plain and inspectable while this is still being designed.
 - Whether processor contract values should be lower camel case, e.g. `agentProcessorContract`, since they are ordinary values rather than classes or Zod schemas.
 - Avoid naming schema/event imports `dependencies`, because runtime processor factories also receive dependencies such as AI bindings, loaders, MCP clients, and `streamApi`.
 - Add expect-type tests for processor factories/contracts showing event narrowing and append rejection for undeclared emitted events.

@@ -1,14 +1,21 @@
 import { z } from "zod";
 import type { EventCatalog, StreamEventInput } from "@iterate-com/shared/stream-processors";
 import {
+  buildProcessorRegisteredEvent,
   CoreProcessorContract,
   CoreProcessorRegisteredEventType,
-  createProcessorRegisteredInput,
 } from "./contract.ts";
 
 /**
- * A temporary bag of contract and implementation pieces that most processors
- * should use while the processor-composition model is still settling.
+ * Base contract and implementation pieces that most processors should use
+ * while the processor-composition model is still settling.
+ *
+ * This is the current home for the "base reduced state" every ordinary
+ * processor wants. Right now that base state is only
+ * `hasRegisteredCurrentVersion`, which tracks whether the processor's current
+ * public contract has been announced on the stream. If more universal
+ * processor state appears later, add it here before inventing a wider
+ * composition abstraction.
  *
  * This is intentionally plain:
  *
@@ -56,8 +63,8 @@ export const wellBehavedProcessorDefaults = {
   },
   initialState: {},
   processorDeps: [CoreProcessorContract],
-  consumes: ["events.iterate.com/core/processor/registered"],
-  emits: ["events.iterate.com/core/processor/registered"],
+  consumes: ["events.iterate.com/core/stream-processor-registered"],
+  emits: ["events.iterate.com/core/stream-processor-registered"],
 
   reduce<const State extends { hasRegisteredCurrentVersion: boolean }>(args: {
     state: State;
@@ -68,6 +75,7 @@ export const wellBehavedProcessorDefaults = {
     contract: {
       slug: string;
       version: string;
+      description?: string;
     };
   }): State {
     if (args.event.type !== CoreProcessorRegisteredEventType) {
@@ -115,7 +123,7 @@ export const wellBehavedProcessorDefaults = {
     }
 
     await args.streamApi.append({
-      event: createProcessorRegisteredInput({
+      event: buildProcessorRegisteredEvent({
         contract: args.contract,
       }),
     });

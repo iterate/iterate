@@ -8,7 +8,7 @@ The goal is to make the design concrete enough to critique:
 - AgentLoop and Codemode are separate processors.
 - Each processor has its own contract, state schema, reducer, and implementation.
 - Processors coordinate through stream events, not shared state or direct calls.
-- Hosts own persistence, subscriptions, stream bindings, and deployment details.
+- Runners own persistence, subscriptions, stream bindings, and deployment details.
 - Processor code is deployable in multiple ways:
   - pull subscription runner
   - inbound WebSocket subscription Durable Object
@@ -49,6 +49,8 @@ Processor implementation:
 ```ts
 export function createAgentProcessor(deps: AgentDeps) {
   return implementProcessor(AgentProcessorContract, {
+    firstAttachAfterAppend: { mode: "lookback", milliseconds: 250 },
+
     async onStart({ state, streamApi, signal }) {
       reconcileRuntimeFromReducedState({ state, streamApi, signal, deps });
     },
@@ -59,7 +61,7 @@ export function createAgentProcessor(deps: AgentDeps) {
 }
 ```
 
-Host live delivery:
+Runner live delivery:
 
 ```ts
 const reduction = runProcessorReduce({ processor, event, state });
@@ -70,7 +72,7 @@ if (reduction != null) {
 }
 ```
 
-Host replay:
+Runner replay:
 
 ```ts
 for await (const event of historicEvents) {
@@ -93,7 +95,7 @@ The contract is importable anywhere:
 - docs generation
 - event schema catalog
 
-The implementation is host/runtime code:
+The implementation is runner/runtime code:
 
 - calls third-party APIs
 - appends derived events
@@ -102,7 +104,7 @@ The implementation is host/runtime code:
 
 ### Runtime State vs Reduced State
 
-Reduced state is serializable and owned by the host.
+Reduced state is serializable and owned by the runner.
 
 Runtime state belongs inside the implementation instance or a separate DO:
 
@@ -112,12 +114,12 @@ Runtime state belongs inside the implementation instance or a separate DO:
 - loaded dynamic workers
 - HTTP clients
 
-`onStart` is the key bridge. It fires only after the host has loaded or replayed
+`onStart` is the key bridge. It fires only after the runner has loaded or replayed
 reduced state.
 
 ### Composition
 
-Same-host composition is a deployment optimization, not a correctness model.
+Same-runner composition is a deployment optimization, not a correctness model.
 
 If AgentLoop and Codemode run together, they still communicate through appended
 events. The same code should work if they run across a network with different
@@ -134,15 +136,16 @@ Everything else should be expressible as normal contracts plus normal
 ## Files
 
 - `contracts.ts`: concrete AgentLoop, Codemode, CoreStream, and MCP event shapes.
-- `composition.ts`: same-host composition without state sharing.
+- `composition.ts`: same-runner composition without state sharing.
 - `pull-runner.ts`: pull subscription runner sketch.
-- `websocket-subscription-processor-do.ts`: inbound WebSocket subscription DO host.
+- `websocket-subscription-processor-do.ts`: inbound WebSocket subscription DO runner.
 - `with-stream-processor.ts`: possible Durable Object mixin API.
 - `clean-stream-do.ts`: what a cleaned-up `stream.ts` could look like.
 - `mcp-connection-do.ts`: separate MCP connection DO / tool provider sketch.
 - `frontend-reducer-poc.contract.ts`: frontend-safe AgentLoop contract/projection proof of concept.
 - `frontend-reducer-poc.ui.tsx`: agents UI sketch that imports the contract but not the backend implementation.
 - `frontend-reducer-poc.md`: notes from the frontend reducer proof of concept.
+- `runner-sketches.md`: pull, Durable Object, and built-in stream runner sketches.
 - `design-review-sharp-edges.md`: consolidated critique from review agents.
 - `prior-art-notes.md`: prior art scan and blind spots.
 - `how-to-write-a-processor.md`: concise authoring guide we update as the API settles.

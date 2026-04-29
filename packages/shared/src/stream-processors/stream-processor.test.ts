@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
-  createProcessorHostState,
+  createStoredProcessorState,
   createEvent,
+  buildDerivedIdempotencyKey,
   defineProcessorContract,
   getEventInputSchema,
   getEventSchema,
@@ -66,6 +67,19 @@ describe("stream processor contracts", () => {
       payload: { text: "hello" },
       idempotencyKey: "echo:1",
     });
+  });
+
+  it("builds stable idempotency keys for derived appends", () => {
+    expect(
+      buildDerivedIdempotencyKey({
+        slug: "codemode",
+        purpose: "result-to-agent-input",
+        event: {
+          streamPath: "/agents/test",
+          offset: 42,
+        },
+      }),
+    ).toBe("stream-processor:codemode:derived:result-to-agent-input:/agents/test:42");
   });
 
   it("parses event input and event output strictly", () => {
@@ -605,7 +619,27 @@ describe("stream processor contracts", () => {
     ]);
   });
 
-  it("documents replay host flow as reducer-only", () => {
+  it("initializes stored processor state with runner progress defaults", () => {
+    const contract = defineProcessorContract({
+      slug: "counter",
+      version: "1.0.0",
+      description: "Counts committed increment events.",
+      stateSchema: z.object({ count: z.number().default(0) }).prefault({}),
+      events: {},
+      consumes: [],
+      emits: [],
+    });
+
+    expect(createStoredProcessorState({ contract })).toEqual({
+      state: { count: 0 },
+      hasCompletedFirstAttach: false,
+      liveAfterOffset: 0,
+      reducedThroughOffset: 0,
+      afterAppendCompletedThroughOffset: 0,
+    });
+  });
+
+  it("documents replay runner flow as reducer-only", () => {
     const afterAppendCalls: unknown[] = [];
     const contract = defineProcessorContract({
       slug: "counter",
@@ -642,7 +676,7 @@ describe("stream processor contracts", () => {
     expect(afterAppendCalls).toEqual([]);
   });
 
-  it("documents live host flow as reduce, save, then afterAppend", async () => {
+  it("documents live runner flow as reduce, save, then afterAppend", async () => {
     const calls: unknown[] = [];
     const contract = defineProcessorContract({
       slug: "counter",
@@ -668,11 +702,11 @@ describe("stream processor contracts", () => {
       },
     });
 
-    const state = await processLiveProcessorEvent<typeof contract>({
+    const state = await processLiveProcessorEventInRunner<typeof contract>({
       processor,
       state: { count: 1 },
       event: committedEvent({ type: "counter-incremented", payload: { by: 2 } }),
-      saveProcessorState: async (nextState) => {
+      saveStoredProcessorState: async (nextState) => {
         calls.push(["save", nextState.count]);
       },
       streamApi: createTestStreamApi(),
@@ -687,7 +721,7 @@ describe("stream processor contracts", () => {
     ]);
   });
 
-  it("documents live host flow for ignored events as no save and no afterAppend", async () => {
+  it("documents live runner flow for ignored events as no save and no afterAppend", async () => {
     const calls: unknown[] = [];
     const contract = defineProcessorContract({
       slug: "counter",
@@ -710,11 +744,11 @@ describe("stream processor contracts", () => {
       },
     });
 
-    const state = await processLiveProcessorEvent<typeof contract>({
+    const state = await processLiveProcessorEventInRunner<typeof contract>({
       processor,
       state: { count: 1 },
       event: committedEvent({ type: "counter-ignored", payload: {} }),
-      saveProcessorState: async (nextState) => {
+      saveStoredProcessorState: async (nextState) => {
         calls.push(["save", nextState.count]);
       },
       streamApi: createTestStreamApi(),
@@ -725,7 +759,7 @@ describe("stream processor contracts", () => {
     expect(calls).toEqual([]);
   });
 
-  it("keeps reduced progress separate from afterAppend completion for host retries", async () => {
+  it("keeps reduced progress separate from afterAppend completion for runner retries", async () => {
     const contract = defineProcessorContract({
       slug: "counter",
       version: "1.0.0",
@@ -751,17 +785,17 @@ describe("stream processor contracts", () => {
       payload: { by: 2 },
       offset: 7,
     });
-    let hostState = createProcessorHostState({ contract, state: { count: 1 } });
+    let storedState = createStoredProcessorState({ contract, state: { count: 1 } });
 
     const reduction = runProcessorReduce({
       processor,
-      state: hostState.state,
+      state: storedState.state,
       event,
     });
 
     expect(reduction).toBeDefined();
-    hostState = {
-      ...hostState,
+    storedState = {
+      ...storedState,
       state: reduction!.state,
       reducedThroughOffset: reduction!.event.offset,
     };
@@ -774,8 +808,10 @@ describe("stream processor contracts", () => {
       }),
     ).rejects.toThrow("transient side effect failure");
 
-    expect(hostState).toEqual({
+    expect(storedState).toEqual({
       state: { count: 3 },
+      hasCompletedFirstAttach: false,
+      liveAfterOffset: 0,
       reducedThroughOffset: 7,
       afterAppendCompletedThroughOffset: 0,
     });
@@ -803,16 +839,16 @@ describe("stream processor contracts", () => {
       payload: { by: 2 },
       offset: 9,
     });
-    let hostState = createProcessorHostState({ contract, state: { count: 1 } });
+    let storedState = createStoredProcessorState({ contract, state: { count: 1 } });
     const reduction = runProcessorReduce({
       processor,
-      state: hostState.state,
+      state: storedState.state,
       event,
     });
 
     expect(reduction).toBeDefined();
-    hostState = {
-      ...hostState,
+    storedState = {
+      ...storedState,
       state: reduction!.state,
       reducedThroughOffset: reduction!.event.offset,
     };
@@ -822,13 +858,15 @@ describe("stream processor contracts", () => {
       streamApi: createTestStreamApi<typeof contract>(),
       signal: new AbortController().signal,
     });
-    hostState = {
-      ...hostState,
+    storedState = {
+      ...storedState,
       afterAppendCompletedThroughOffset: reduction!.event.offset,
     };
 
-    expect(hostState).toEqual({
+    expect(storedState).toEqual({
       state: { count: 3 },
+      hasCompletedFirstAttach: false,
+      liveAfterOffset: 0,
       reducedThroughOffset: 9,
       afterAppendCompletedThroughOffset: 9,
     });
@@ -988,9 +1026,10 @@ function replayProcessorEvents<const Contract extends RunnableProcessorContract>
   return state;
 }
 
-async function processLiveProcessorEvent<
+async function processLiveProcessorEventInRunner<
   const Contract extends RunnableProcessorContract & {
     reduce?: (args: {
+      contract: Contract;
       state: ProcessorState<Contract>;
       event: ConsumedEvent<Contract>;
     }) => ProcessorState<Contract> | null | undefined;
@@ -999,7 +1038,7 @@ async function processLiveProcessorEvent<
   processor: Processor<Contract>;
   state: ProcessorState<Contract>;
   event: StreamEvent;
-  saveProcessorState(state: ProcessorState<Contract>): Promise<void>;
+  saveStoredProcessorState(state: ProcessorState<Contract>): Promise<void>;
   streamApi: ProcessorStreamApi<Contract>;
   signal: AbortSignal;
 }): Promise<ProcessorState<Contract>> {
@@ -1012,7 +1051,7 @@ async function processLiveProcessorEvent<
     return args.state;
   }
 
-  await args.saveProcessorState(reduction.state);
+  await args.saveStoredProcessorState(reduction.state);
   await runProcessorAfterAppend({
     processor: args.processor,
     ...reduction,

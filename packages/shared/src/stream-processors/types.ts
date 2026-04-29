@@ -17,6 +17,23 @@ export type StreamEvent<Type extends string = string, Payload = unknown> = Strea
   createdAt: string;
 };
 
+export type DerivedIdempotencyKeyArgs = {
+  /**
+   * Processor or helper that owns the derived append. This should usually be
+   * the processor contract's `slug`.
+   */
+  slug: string;
+  /**
+   * Human-readable name for the derivation, for example
+   * `render-webchat-message` or `codemode-result-to-agent-input`.
+   */
+  purpose: string;
+  /**
+   * Committed source event that caused the derived append.
+   */
+  event: Pick<StreamEvent, "streamPath" | "offset">;
+};
+
 export type EventDefinition<
   Type extends string = string,
   PayloadOutput = unknown,
@@ -62,7 +79,13 @@ export type ProcessorStateObject = Record<string, unknown>;
  * types recover "event type string -> payload schema" from those keys.
  */
 export type EventCatalogFromObject<Value> = {
-  [Key in keyof Value as Value[Key] extends EventDefinition ? Key : never]: Value[Key];
+  [Key in keyof Value as string extends Key
+    ? never
+    : number extends Key
+      ? never
+      : Value[Key] extends EventDefinition
+        ? Key
+        : never]: Value[Key];
 };
 
 /**
@@ -86,7 +109,10 @@ export type ContractEventCatalog<ContractOrCatalog> = ContractOrCatalog extends 
 export type ResolvedEventType<
   Events extends EventCatalog,
   ProcessorDeps extends readonly unknown[],
-> = Extract<keyof Events | EventTypeFromProcessorDeps<ProcessorDeps>, string>;
+> = Extract<
+  keyof EventCatalogFromObject<Events> | EventTypeFromProcessorDeps<ProcessorDeps>,
+  string
+>;
 
 /**
  * Distributes over each item in `processorDeps` and collects its event keys.
@@ -153,7 +179,7 @@ export type EventFromDefinitionForType<Definition, Type extends string> =
  *
  * We accept both Zod input and output payload shapes. That lets authors use
  * Zod defaults/transforms in payload schemas without forcing append callers to
- * provide already-parsed output. Hosts still validate at the append boundary.
+ * provide already-parsed output. Runners still validate at the append boundary.
  */
 export type InputFromDefinitionForType<Definition, Type extends string> =
   Definition extends EventDefinition<string, infer PayloadOutput, infer PayloadInput>
@@ -230,8 +256,8 @@ export type ProcessorContractShape<
    */
   stateSchema: StateSchema;
   /**
-   * Optional initial reduced state. Hosts parse this through `stateSchema`
-   * before using it. If omitted, hosts parse `undefined`, which is useful for
+   * Optional initial reduced state. Runners parse this through `stateSchema`
+   * before using it. If omitted, runners parse `undefined`, which is useful for
    * tiny processors that prefer Zod defaults.
    */
   initialState?: z.input<StateSchema>;
@@ -246,6 +272,20 @@ export type ProcessorContractShape<
    * processors lightweight while preserving the same catch-up/checkpoint path.
    */
   reduce?(args: {
+    /**
+     * The current processor contract. This is passed by the runner so reusable
+     * reducer fragments can inspect processor identity and event metadata
+     * without each processor copying `slug` / `version` into helper calls.
+     */
+    contract: {
+      slug: string;
+      version: string;
+      description: string;
+      events: NoInferValue<Events>;
+      processorDeps?: NoInferValue<ProcessorDeps>;
+      consumes: NoInferValue<Consumes>;
+      emits: NoInferValue<Emits>;
+    };
     state: z.output<NoInferValue<StateSchema>>;
     event: ConsumedEvent<{
       state: NoInferValue<StateSchema>;
@@ -275,6 +315,43 @@ export type ResolvedEventTypesOnly<
   ProcessorDeps extends readonly unknown[],
   Types extends readonly string[],
 > = [UnresolvedEventTypes<Events, ProcessorDeps, Types>] extends [never] ? unknown : never;
+
+export type ProcessorContractInput<
+  StateSchema extends z.ZodType,
+  Events extends EventCatalog,
+  ProcessorDeps extends readonly unknown[],
+  Consumes extends readonly string[],
+  Emits extends readonly string[],
+> = {
+  slug: string;
+  version: string;
+  description: string;
+  stateSchema: z.output<StateSchema> extends Record<string, unknown> ? StateSchema : never;
+  initialState?: z.input<StateSchema>;
+  processorDeps: ProcessorDeps;
+  events: Events;
+  consumes: Consumes & ResolvedEventTypesOnly<Events, ProcessorDeps, Consumes>;
+  emits: Emits & ResolvedEventTypesOnly<Events, ProcessorDeps, Emits>;
+  reduce?: ProcessorContractShape<StateSchema, Events, ProcessorDeps, Consumes, Emits>["reduce"];
+};
+
+export type ProcessorContractInputWithoutDeps<
+  StateSchema extends z.ZodType,
+  Events extends EventCatalog,
+  Consumes extends readonly string[],
+  Emits extends readonly string[],
+> = {
+  slug: string;
+  version: string;
+  description: string;
+  stateSchema: z.output<StateSchema> extends Record<string, unknown> ? StateSchema : never;
+  initialState?: z.input<StateSchema>;
+  processorDeps?: never;
+  events: Events;
+  consumes: Consumes & ResolvedEventTypesOnly<Events, readonly [], Consumes>;
+  emits: Emits & ResolvedEventTypesOnly<Events, readonly [], Emits>;
+  reduce?: ProcessorContractShape<StateSchema, Events, readonly [], Consumes, Emits>["reduce"];
+};
 
 export type ProcessorDepsOf<Contract> = Contract extends {
   processorDeps?: infer ProcessorDeps;
@@ -331,8 +408,8 @@ export type EmittedInput<Contract> = Contract extends {
 export type ProcessorStreamApiProps = {
   /**
    * Bound stream path for this API instance. If an operation omits
-   * `streamPath`, the host should use this path. Relative method paths are
-   * resolved by the host against this bound path; absolute paths target that
+   * `streamPath`, the runner should use this path. Relative method paths are
+   * resolved by the runner against this bound path; absolute paths target that
    * absolute stream directly.
    */
   streamPath?: string;
@@ -359,22 +436,61 @@ export type ProcessorReduction<Contract> = {
 };
 
 /**
- * Host-owned durable progress for one processor bound to one stream.
+ * Runner-owned durable progress for one processor bound to one stream.
  *
  * `reducedThroughOffset` and `afterAppendCompletedThroughOffset` are separate
- * on purpose. A host may successfully reduce and persist state for an event,
- * then fail while running `afterAppend`. Keeping both offsets lets the host
+ * on purpose. A runner may successfully reduce and persist state for an event,
+ * then fail while running `afterAppend`. Keeping both offsets lets the runner
  * retry live side effects without replaying reducer state from scratch.
+ *
+ * This is not part of the processor contract. It is runner bookkeeping: the
+ * processor owns `state`, while the runner owns stream progress and side-effect
+ * delivery policy.
  */
-export type ProcessorHostState<Contract> = {
+export type StoredProcessorState<Contract> = {
   state: ProcessorState<Contract>;
+  /**
+   * Whether this runner has finished its first attachment to the stream. Before
+   * this flips to true, the runner may apply `firstAttachAfterAppend` to a
+   * recent historical lookback window. After it flips, backlog events are not
+   * "ancient"; they are missed live events from an already-attached processor.
+   */
+  hasCompletedFirstAttach: boolean;
+  /**
+   * Offset boundary captured during first attach. Events above this offset are
+   * live from the processor's perspective. Events at or below it are historical
+   * unless a first-attach lookback policy deliberately treats them as live-ish.
+   */
+  liveAfterOffset: number;
   reducedThroughOffset: number;
   afterAppendCompletedThroughOffset: number;
 };
 
+/**
+ * Runner policy for the very first time a processor is attached to an existing
+ * stream.
+ *
+ * Historical replay is normally reduce-only because `afterAppend` calls APIs
+ * and appends derived events. A short lookback window is useful for processors
+ * that are installed just after stream creation and still need to react to a
+ * very recent event such as stream initialization. This policy is deliberately
+ * backend-only: frontend projections import contracts/reducers and should never
+ * decide when side effects run.
+ */
+export type FirstAttachAfterAppendPolicy =
+  | { mode: "none" }
+  | { mode: "lookback"; milliseconds: number }
+  | { mode: "all" };
+
 export type ProcessorImplementation<Contract> = {
   /**
-   * Runs after the host has loaded or replayed reduced state, but before live
+   * Default first-attach side-effect policy for runners. A specific runner
+   * deployment may override this. Keep this off the contract so frontend code
+   * can import contracts without learning backend lifecycle policy.
+   */
+  firstAttachAfterAppend?: FirstAttachAfterAppendPolicy;
+  /**
+   * Runs after the runner has loaded or replayed reduced state, but before live
    * post-append processing begins. Use this to materialize runtime-only state
    * such as HTTP clients, MCP connections, subscriptions, or timers.
    */
@@ -384,7 +500,7 @@ export type ProcessorImplementation<Contract> = {
     signal: AbortSignal;
   }): Promise<void> | void;
   /**
-   * Runs for live committed events after the host has reduced and persisted the
+   * Runs for live committed events after the runner has reduced and persisted the
    * processor state for that event. Historical catch-up is reduce-only by
    * default so side effects are not replayed accidentally.
    */
