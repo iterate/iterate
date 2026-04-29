@@ -1,4 +1,8 @@
 import { env as workerEnv } from "cloudflare:workers";
+
+// Re-export rpc-targets so loopback-binding callables can resolve them from ctx.exports.
+// https://developers.cloudflare.com/workers/runtime-apis/context/#exports
+export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { withEvlog } from "@iterate-com/shared/apps/logging/with-evlog";
 import { NitroWebSocketResponse } from "@iterate-com/shared/nitro-ws-response";
