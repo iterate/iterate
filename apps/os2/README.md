@@ -92,6 +92,42 @@ has been materialized.
 This app does not currently use `src/start.ts`. Request logging is now owned by
 the shared `withEvlog()` wrapper in the Worker runtime entrypoint.
 
+## Codemode
+
+Execute JavaScript in isolated dynamic worker sandboxes via oRPC or MCP.
+
+- **UI:** `/codemode` — code editor with streaming event log
+- **oRPC:** `codemode.execute` (streaming eventIterator) and `codemode.describe`
+- **MCP:** `run_code` tool on the MCP server at `/mcp`
+
+### Using the MCP server with Claude CLI
+
+One-liner (no config files needed):
+
+```bash
+claude -p 'Use run_code to compute 6 * 7' \
+  --mcp-config '{"mcpServers":{"os2":{"type":"http","url":"https://os.iterate-dev-jonas.com/mcp"}}}' \
+  --strict-mcp-config \
+  --allowedTools "mcp__os2__run_code"
+```
+
+For persistent use, add it to the project:
+
+```bash
+claude mcp add --transport http os2 https://os.iterate-dev-jonas.com/mcp --scope project
+```
+
+Then in any conversation: "Use run_code to compute the first 10 fibonacci numbers"
+
+### Testing oRPC with curl
+
+```bash
+# Execute code (returns SSE event stream)
+curl 'https://os.iterate-dev-jonas.com/api/codemode/execute' \
+  -X POST -H 'content-type: application/json' \
+  -d '{"code":"async () => 1 + 1","providers":[]}'
+```
+
 ## Dev
 
 ```bash
