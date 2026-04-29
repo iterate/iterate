@@ -199,7 +199,7 @@ export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
           callbackUrl: subscription.callbackUrl,
           error: stringifyError(error),
         });
-        return;
+        continue;
       }
     }
 

@@ -59,6 +59,7 @@ export async function createLocalDevServer(opts: {
       args: ["exec", "tsx", "./alchemy.run.ts"],
       port: tunnelLease.localPort,
       env,
+      inheritEnv: false,
     });
     disposables.push(devServer);
     console.info(`[e2e] Agents dev server: ${devServer.baseUrl}`);
