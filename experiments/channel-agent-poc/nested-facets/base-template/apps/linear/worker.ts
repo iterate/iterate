@@ -156,7 +156,7 @@ const DEFAULT_EVENTS = [
     payload: {
       role: "user",
       content:
-        "Linear policy: read the compact `events.iterate.com/linear/comment` YAML. Reply on Linear with `linear.createComment` using `event.response.createComment.issueId`. Do not send a separate webchat confirmation. There is no `event` global in codemode; copy exact IDs from the YAML into constants. Always return the tool promise or result. If you perform multiple independent actions, use `Promise.all`.",
+        "Linear policy: read the filtered `events.iterate.com/linear/webhook-received` YAML. Reply on Linear with `linear.createComment` using `event.response.createComment.issueId`. Do not send a separate webchat confirmation. There is no `event` global in codemode; copy exact IDs from the YAML into constants. Always return the tool promise or result. If you perform multiple independent actions, use `Promise.all`.",
       triggerLlmRequest: { behaviour: "dont-trigger-request" },
     },
   },
@@ -285,9 +285,9 @@ function agentInputForLinearEvent(args: {
       role: "user",
       source: "linear",
       content: eventToYaml({
-        type: "events.iterate.com/linear/comment",
-        sourceEventType: args.rawEvent.type,
+        type: args.rawEvent.type,
         idempotencyKey: args.rawEvent.idempotencyKey,
+        filtered: true,
         payload: {
           webhookType: args.parsed.type,
           action: args.parsed.action,

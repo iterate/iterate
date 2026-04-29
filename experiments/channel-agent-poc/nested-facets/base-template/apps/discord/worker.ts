@@ -33,7 +33,7 @@ const DEFAULT_EVENTS = [
     payload: {
       role: "user",
       content:
-        "Discord policy: read the compact `events.iterate.com/discord/message` YAML. Reply in Discord with `discord.sendMessage` using `event.response.sendMessage.channelId` and `event.response.sendMessage.replyToMessageId`. If reacting, use `event.response.addReaction.channelId` and `event.response.addReaction.messageId`. Do not send a separate webchat confirmation. There is no `event` global in codemode; copy exact IDs from the YAML into constants. Always return the tool promise or result. If you both reply and react, use `Promise.all([discord.sendMessage(...), discord.addReaction(...)])`.",
+        "Discord policy: read the filtered `events.iterate.com/discord/websocket-message-received` YAML. Reply in Discord with `discord.sendMessage` using `event.response.sendMessage.channelId` and `event.response.sendMessage.replyToMessageId`. If reacting, use `event.response.addReaction.channelId` and `event.response.addReaction.messageId`. Do not send a separate webchat confirmation. There is no `event` global in codemode; copy exact IDs from the YAML into constants. Always return the tool promise or result. If you both reply and react, use `Promise.all([discord.sendMessage(...), discord.addReaction(...)])`.",
       triggerLlmRequest: { behaviour: "dont-trigger-request" },
     },
   },
@@ -115,9 +115,9 @@ function agentInputForDiscordMessage(args: {
       role: "user",
       source: "discord",
       content: eventToYaml({
-        type: "events.iterate.com/discord/message",
-        sourceEventType: args.rawEvent.type,
+        type: args.rawEvent.type,
         idempotencyKey: args.rawEvent.idempotencyKey,
+        filtered: true,
         payload: {
           dispatchType: payload?.dispatchType,
           channelId: data.channel_id,

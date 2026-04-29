@@ -53,7 +53,7 @@ const DEFAULT_EVENTS = [
     payload: {
       role: "user",
       content:
-        "Slack policy: read the compact `events.iterate.com/slack/message` YAML. Use `event.response.chatPostMessage.channel` and `event.response.chatPostMessage.thread_ts` when replying. Use `event.response.reactionsAdd.channel` and `event.response.reactionsAdd.timestamp` when reacting. For ordinary replies, return only `Promise.all([slack.chat.postMessage({ channel, thread_ts, text }), slack.reactions.add({ channel, timestamp, name })])`. For longer work, set Slack assistant thread status before/during the work and clear it at the end. Do not send a separate webchat confirmation. There is no `event` global in codemode; copy exact IDs from the YAML into constants. Always return the tool promise or result.",
+        "Slack policy: read the filtered `events.iterate.com/slack/webhook-received` YAML. Use `event.response.chatPostMessage.channel` and `event.response.chatPostMessage.thread_ts` when replying. Use `event.response.reactionsAdd.channel` and `event.response.reactionsAdd.timestamp` when reacting. For ordinary replies, return only `Promise.all([slack.chat.postMessage({ channel, thread_ts, text }), slack.reactions.add({ channel, timestamp, name })])`. For longer work, set Slack assistant thread status before/during the work and clear it at the end. Do not send a separate webchat confirmation. There is no `event` global in codemode; copy exact IDs from the YAML into constants. Always return the tool promise or result.",
       triggerLlmRequest: { behaviour: "dont-trigger-request" },
     },
   },
@@ -218,9 +218,9 @@ function agentInputForSlackMessage(args: {
       role: "user",
       source: "slack",
       content: eventToYaml({
-        type: "events.iterate.com/slack/message",
-        sourceEventType: args.rawEvent.type,
+        type: args.rawEvent.type,
         idempotencyKey: args.rawEvent.idempotencyKey,
+        filtered: true,
         payload: {
           channel: event.channel,
           thread_ts: args.parsed.threadTs,

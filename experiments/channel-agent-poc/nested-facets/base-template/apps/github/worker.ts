@@ -168,7 +168,7 @@ const DEFAULT_EVENTS = [
     payload: {
       role: "user",
       content:
-        "GitHub policy: read the compact `events.iterate.com/github/comment` YAML. Respond with GitHub App actions only. For PR or issue comments, normally call `github.createIssueComment(owner, repo, issueNumber, body)` using the values under `event.response.createIssueComment`. This provider is backed by `@octokit/rest`. For lower-level GitHub REST access, use `github.octokit.request({ owner, repo, method, path, body })`, which maps to Octokit.request; `body` is the Octokit route parameters / JSON body, and the tool returns Octokit's `response.data` directly. Do not send a separate webchat confirmation. There is no `event` global in codemode; copy exact IDs from the YAML into constants. Always return the tool promise or result. If you perform multiple independent actions, use `Promise.all`.",
+        "GitHub policy: read the filtered `events.iterate.com/github/webhook-received` YAML. Respond with GitHub App actions only. For PR or issue comments, normally call `github.createIssueComment(owner, repo, issueNumber, body)` using the values under `event.response.createIssueComment`. This provider is backed by `@octokit/rest`. For lower-level GitHub REST access, use `github.octokit.request({ owner, repo, method, path, body })`, which maps to Octokit.request; `body` is the Octokit route parameters / JSON body, and the tool returns Octokit's `response.data` directly. Do not send a separate webchat confirmation. There is no `event` global in codemode; copy exact IDs from the YAML into constants. Always return the tool promise or result. If you perform multiple independent actions, use `Promise.all`.",
       triggerLlmRequest: { behaviour: "dont-trigger-request" },
     },
   },
@@ -446,9 +446,9 @@ function agentInputForGitHubEvent(args: {
       role: "user",
       source: "github",
       content: eventToYaml({
-        type: "events.iterate.com/github/comment",
-        sourceEventType: args.rawEvent.type,
+        type: args.rawEvent.type,
         idempotencyKey: args.rawEvent.idempotencyKey,
+        filtered: true,
         payload: {
           webhookEvent: args.meta.eventType,
           deliveryId: args.meta.deliveryId,
