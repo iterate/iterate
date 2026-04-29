@@ -5,7 +5,10 @@ import {
   type EventInput,
   type StreamPath,
 } from "@iterate-com/events-contract/sdk";
-import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
+import {
+  assertCallableDispatchContext,
+  dispatchCallable,
+} from "@iterate-com/shared/callable/runtime.ts";
 import type { CallableContext } from "@iterate-com/shared/callable/types.ts";
 import type { ToolProviderDescriptor } from "@iterate-com/shared/codemode/types";
 import { withD1ObjectCatalog } from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
@@ -83,6 +86,11 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
 
   async registerToolProvider(input: RegisterToolProviderInput) {
     await this.ensureStarted();
+    validateToolProviderDispatchContext({
+      callableContext: this.createCallableContext(),
+      provider: input.provider,
+    });
+
     const registry = this.readToolProviderRegistry();
     const registryKey = toolProviderRegistryKey(input.provider.path);
     registry[registryKey] = input.provider;
@@ -344,6 +352,31 @@ function serializeError(error: unknown) {
   }
 
   return { message: String(error) };
+}
+
+function validateToolProviderDispatchContext(input: {
+  callableContext: CallableContext;
+  provider: ToolProviderDescriptor;
+}) {
+  try {
+    assertCallableDispatchContext({
+      callable: input.provider.executeToolFunction,
+      ctx: input.callableContext,
+    });
+    if (input.provider.describeToolFunctions) {
+      assertCallableDispatchContext({
+        callable: input.provider.describeToolFunctions,
+        ctx: input.callableContext,
+      });
+    }
+  } catch (error) {
+    throw new Error(
+      `Tool provider "${input.provider.path.join(".")}" cannot be dispatched by this Codemode Session worker: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      { cause: error },
+    );
+  }
 }
 
 function buildScriptExecutorModule(code: string) {
