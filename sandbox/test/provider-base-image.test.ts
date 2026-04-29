@@ -10,8 +10,9 @@ import { describe } from "vitest";
 import { RUN_SANDBOX_TESTS, TEST_BASE_SNAPSHOT_ID, TEST_CONFIG, test } from "./helpers.ts";
 
 const PREVIEW_BODY = "preview-ok";
+const TEST_APP_PREFIX = process.env.SANDBOX_TEST_APP_PREFIX ?? "test-base-image-test";
 const TEST_RUN_SUFFIX = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-const TEST_EXTERNAL_ID = `test-base-image-test-${TEST_RUN_SUFFIX}`;
+const TEST_EXTERNAL_ID = `${TEST_APP_PREFIX}-${TEST_RUN_SUFFIX}`;
 const TEST_ID = `base-image-test-${TEST_RUN_SUFFIX}`;
 const PROVIDER_API_TEST_TIMEOUT_MS = TEST_CONFIG.provider === "fly" ? 180_000 : 120_000;
 
