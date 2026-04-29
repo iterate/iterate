@@ -239,3 +239,4 @@ PSCALE_DATABASE_URL=$(doppler secrets --config prd get --plain PLANETSCALE_PROD_
 - Drizzle migration workflow: `.agents/skills/drizzle-migrations/SKILL.md` (MUST follow when making schema changes)
 - Drizzle migration conflicts: `docs/fixing-drizzle-migration-conflicts.md`
 - Sandbox image pipeline (build, tag, push, CI): `sandbox/README.md`
+- Why `apps/os` pins older Cloudflare deps: `docs/cloudflare-deps-split-versions.md`

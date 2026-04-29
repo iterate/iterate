@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   type Event,
   type EventInput,
   type JSONObject,
   type StreamPath,
+  type StreamState,
 } from "@iterate-com/events-contract";
 import {
   PromptInput,
@@ -34,19 +35,28 @@ import {
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { stringify as stringifyYaml } from "yaml";
-import { StreamEventFeed } from "~/components/stream-event-feed.tsx";
+import { StreamEventFeed, type CustomHtmlRendererApi } from "~/components/stream-event-feed.tsx";
 import { useLiveStreamEvents } from "~/hooks/use-live-stream-events.ts";
 import { eventInputTemplates, getEventInputTemplateById } from "~/lib/event-type-pages.ts";
 import { parseObjectFromComposerText } from "~/lib/stream-composer-input.ts";
+import {
+  buildCustomHtmlRendererProjection,
+  type CustomHtmlRendererProjection,
+} from "~/lib/custom-html-renderers.ts";
 import { buildDisplayFeed, projectWireToFeed } from "~/lib/stream-feed-projection.ts";
 import { summarizeStreamFeed } from "~/lib/stream-feed-summary.ts";
-import { DEFAULT_STREAM_RENDERER_MODE, type StreamRendererMode } from "~/lib/stream-feed-types.ts";
+import {
+  DEFAULT_STREAM_RENDERER_MODE,
+  type StreamFeedItem,
+  type StreamRendererMode,
+} from "~/lib/stream-feed-types.ts";
 import { formatClientError } from "~/lib/format-client-error.ts";
 import { defaultStreamViewSearch, type StreamComposerMode } from "~/lib/stream-view-search.ts";
-import { getOrpc } from "~/orpc/client.ts";
+import { getOrpc, getOrpcClient } from "~/orpc/client.ts";
 import { useStreamsChrome } from "~/components/streams-chrome.tsx";
 
 const DEFAULT_EVENT_TEMPLATE_ID = "manual-event-appended:default";
+const EMPTY_CUSTOM_INSERTIONS = new Map<number, StreamFeedItem[]>();
 
 export function StreamPage({
   streamPath,
@@ -104,7 +114,37 @@ export function StreamPage({
       [listChildrenOptions.queryKey, queryClient, streamPath],
     ),
   });
-  const feed = useMemo(() => projectWireToFeed(events), [events]);
+  const eventProjectionKey = useMemo(
+    () => events.map((event) => `${event.offset}:${event.type}:${event.createdAt}`).join("|"),
+    [events],
+  );
+  const customHtmlRendererProjectionRef = useRef<{
+    streamPath: StreamPath;
+    projection: CustomHtmlRendererProjection;
+  } | null>(null);
+  const customHtmlInsertionsQuery = useQuery({
+    queryKey: ["custom-html-renderers", streamPath, eventProjectionKey],
+    queryFn: async ({ signal }) => {
+      const projection = await buildCustomHtmlRendererProjection({
+        events,
+        previousProjection:
+          customHtmlRendererProjectionRef.current?.streamPath === streamPath
+            ? customHtmlRendererProjectionRef.current.projection
+            : undefined,
+        signal,
+      });
+      customHtmlRendererProjectionRef.current = { streamPath, projection };
+      return projection.insertionsByOffset;
+    },
+    placeholderData: (previous) => previous ?? EMPTY_CUSTOM_INSERTIONS,
+  });
+  const feed = useMemo(
+    () =>
+      projectWireToFeed(events, {
+        customInsertionsByOffset: customHtmlInsertionsQuery.data ?? EMPTY_CUSTOM_INSERTIONS,
+      }),
+    [customHtmlInsertionsQuery.data, events],
+  );
   const displayFeed = useMemo(() => buildDisplayFeed(feed, rendererMode), [feed, rendererMode]);
   const feedSummary = useMemo(() => summarizeStreamFeed(feed), [feed]);
 
@@ -137,6 +177,40 @@ export function StreamPage({
         await queryClient.invalidateQueries({ queryKey: streamStateOptions.queryKey });
       },
     }),
+  );
+  const eventsRef = useRef(events);
+  useEffect(() => {
+    eventsRef.current = events;
+  }, [events]);
+  const rendererApi = useMemo<CustomHtmlRendererApi>(
+    () => ({
+      streamPath,
+      get events() {
+        return eventsRef.current;
+      },
+      append: async (event: EventInput) => {
+        const result = await getOrpcClient().append({
+          path: streamPath,
+          event,
+        });
+        void queryClient.invalidateQueries({ queryKey: listChildrenOptions.queryKey });
+        await queryClient.invalidateQueries({ queryKey: streamStateOptions.queryKey });
+        return result.event;
+      },
+      getState: () => getOrpcClient().getState({ path: streamPath }) as Promise<StreamState>,
+      history: async () => {
+        const historyStream = await getOrpcClient().stream({
+          path: streamPath,
+          beforeOffset: "end",
+        });
+        const historyEvents: Event[] = [];
+        for await (const event of historyStream) {
+          historyEvents.push(event);
+        }
+        return historyEvents;
+      },
+    }),
+    [listChildrenOptions.queryKey, queryClient, streamPath, streamStateOptions.queryKey],
   );
 
   const resetStream = useMutation(
@@ -222,6 +296,7 @@ export function StreamPage({
           isPending={isConnecting || (streamStateQuery.isPending && events.length === 0)}
           openEventOffset={openEventOffset}
           onOpenEventOffsetChange={onOpenEventOffsetChange}
+          rendererApi={rendererApi}
         />
       </div>
 

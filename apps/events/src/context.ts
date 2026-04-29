@@ -1,13 +1,12 @@
-import type { BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
+import type { AsyncClient } from "sqlfu";
 import type { SharedRequestLogger } from "@iterate-com/shared/request-logging";
 import manifest, { type AppConfig } from "~/app.ts";
-import type * as schema from "~/db/schema.ts";
 
 export interface AppContext {
   manifest: typeof manifest;
   config: AppConfig;
   env: Env;
-  db: BaseSQLiteDatabase<"sync" | "async", unknown, typeof schema>;
+  db: AsyncClient;
   log: SharedRequestLogger;
   rawRequest?: Request;
 }

@@ -5,7 +5,7 @@ import * as utils from "../utils/index.ts";
 export default workflow({
   name: "specs",
   on: {
-    push: {},
+    workflow_dispatch: {},
   },
   env: {
     SLACK_CLIENT_ID: "fake123",

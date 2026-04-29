@@ -11,6 +11,8 @@ packages:
   - apps/daemon
   - apps/iterate-com
   - apps/os
+  - apps/os2
+  - apps/os2-contract
   - apps/semaphore
   - apps/semaphore-contract
   - apps/example
@@ -29,6 +31,7 @@ packages:
   - apps/agents-contract
   - apps/codemode
   - apps/codemode-contract
+  - apps/*
   - sandbox
   - jonasland/sandbox
   - jonasland/e2e
@@ -40,15 +43,37 @@ packages:
   - repo-templates/**/*
   - .github/ts-workflows
 
+catalogs:
+  cloudflare:
+    "@cloudflare/codemode": ^0.3.4
+    "@cloudflare/unenv-preset": ^2.16.0
+    "@cloudflare/vite-plugin": 1.33.2
+    "@cloudflare/vitest-pool-workers": ^0.14.9
+    "@cloudflare/worker-bundler": ^0.1.2
+    "@cloudflare/workers-types": ^4.20260426.1
+    miniflare: 4.20260424.0
+    workerd: 1.20260426.1
+    wrangler: 4.85.0
+
 minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
   - drizzle-kit
+  - alchemy
   - miniflare
   - wrangler
-  - "@cloudflare/unenv-preset"
-  - alchemy
-  - "@cloudflare/sandbox"
   - workerd
+  - "@cloudflare/workerd-darwin-64"
+  - "@cloudflare/workerd-darwin-arm64"
+  - "@cloudflare/workerd-linux-64"
+  - "@cloudflare/workerd-linux-arm64"
+  - "@cloudflare/workerd-windows-64"
+  - "@cloudflare/codemode"
+  - "@cloudflare/sandbox"
+  - "@cloudflare/unenv-preset"
+  - "@cloudflare/vite-plugin"
+  - "@cloudflare/vitest-pool-workers"
+  - "@cloudflare/worker-bundler"
+  - "@cloudflare/workers-types"
   - "@mmkal/jsonata"
   - "@mmkal/json-schema-to-typescript"
   - "@mariozechner/pi-ai"
@@ -57,6 +82,7 @@ minimumReleaseAgeExclude:
   - "@mariozechner/pi-tui"
   - pidnap
   - schematch
+  - sqlfu
   - trpc-cli
   - hono
   - "@hono/node-server"

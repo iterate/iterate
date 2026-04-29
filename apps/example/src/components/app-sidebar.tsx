@@ -11,9 +11,10 @@ import { SidebarShell } from "@iterate-com/ui/components/sidebar-shell";
 
 const items = [
   { to: "/debug", label: "Debug" },
+  { to: "/confetti", label: "Confetti" },
+  { to: "/durable-object", label: "Durable Object" },
   { to: "/log-stream", label: "Log Stream" },
   { to: "/things", label: "Things" },
-  { to: "/terminal", label: "Terminal" },
 ] as const;
 
 export function AppSidebar() {

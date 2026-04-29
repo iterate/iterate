@@ -1,7 +1,8 @@
 import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
 import { protectedProcedure } from "../procedures.ts";
-import { user, organizationUserMembership } from "../../db/schema.ts";
+import { user } from "../../db/schema.ts";
+import { listOrganizationsFromAuthWorker } from "../../auth/auth-context.ts";
 
 export const userRouter = {
   // Get current user
@@ -11,39 +12,26 @@ export const userRouter = {
 
   // Get user's organizations
   myOrganizations: protectedProcedure.handler(async ({ context: ctx }) => {
-    const memberships = await ctx.db.query.organizationUserMembership.findMany({
-      where: eq(organizationUserMembership.userId, ctx.user.id),
-      with: {
-        organization: {
-          with: {
-            projects: true,
-          },
-        },
-      },
+    return listOrganizationsFromAuthWorker({
+      db: ctx.db,
+      authUserId: ctx.user.authUserId!,
     });
-
-    return memberships.map((m) => ({
-      ...m.organization,
-      role: m.role,
-    }));
   }),
 
   // Get user's memberships with org details (for settings page)
   memberships: protectedProcedure.handler(async ({ context: ctx }) => {
-    const memberships = await ctx.db.query.organizationUserMembership.findMany({
-      where: eq(organizationUserMembership.userId, ctx.user.id),
-      with: {
-        organization: true,
-      },
+    const organizations = await listOrganizationsFromAuthWorker({
+      db: ctx.db,
+      authUserId: ctx.user.authUserId!,
     });
 
-    return memberships.map((m) => ({
-      id: m.id,
-      role: m.role,
+    return organizations.map((organization) => ({
+      id: `${organization.id}:${ctx.user.id}`,
+      role: organization.role,
       organization: {
-        id: m.organization.id,
-        name: m.organization.name,
-        slug: m.organization.slug,
+        id: organization.id,
+        name: organization.name,
+        slug: organization.slug,
       },
     }));
   }),

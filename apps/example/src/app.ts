@@ -5,6 +5,18 @@ import packageJson from "../package.json" with { type: "json" };
 
 export const AppConfig = BaseAppConfig.extend({
   pirateSecret: redacted(z.string().trim().min(1)),
+  typeId: z.preprocess(
+    (value) => value ?? {},
+    z.object({
+      prefix: redacted(
+        z
+          .string()
+          .trim()
+          .regex(/^[a-z]+$/)
+          .default("example"),
+      ),
+    }),
+  ),
   posthog: z.object({
     apiKey: publicValue(z.string().trim().min(1)),
   }),
@@ -16,8 +28,7 @@ const manifest = {
   packageName: packageJson.name,
   version: packageJson.version,
   slug: "example",
-  description:
-    "Minimal full-stack example app with TanStack Start, oRPC, and a PTY websocket route.",
+  description: "Minimal full-stack example app with TanStack Start, oRPC, and websocket routes.",
 } as const satisfies AppManifest;
 
 export default manifest;

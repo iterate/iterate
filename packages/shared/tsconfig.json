@@ -14,5 +14,11 @@
     "skipLibCheck": true
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"],
-  "exclude": ["src/**/*.test.ts", "src/**/old/**"]
+  "exclude": [
+    "src/**/*.test.ts",
+    "src/**/*.test-d.ts",
+    "src/**/old/**",
+    "src/callable/entry.workerd.vitest.ts",
+    "src/callable/vitest.config.ts"
+  ]
 }

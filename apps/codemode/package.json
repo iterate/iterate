@@ -22,8 +22,8 @@
     "test:e2e:doppler": "node -e \"if (!process.env.CODEMODE_BASE_URL) { console.error('CODEMODE_BASE_URL is required for codemode e2e tests'); process.exit(1); } if (!process.env.DOPPLER_PROJECT || !process.env.DOPPLER_CONFIG) { console.error('DOPPLER_PROJECT and DOPPLER_CONFIG are required for codemode e2e Doppler runs'); process.exit(1); }\" && doppler run --project \"$DOPPLER_PROJECT\" --config \"$DOPPLER_CONFIG\" -- pnpm exec vitest run --config ./e2e/vitest.config.ts"
   },
   "dependencies": {
-    "@cloudflare/codemode": "^0.3.2",
-    "@cloudflare/worker-bundler": "^0.0.4",
+    "@cloudflare/codemode": "catalog:cloudflare",
+    "@cloudflare/worker-bundler": "catalog:cloudflare",
     "@iterate-com/codemode-contract": "workspace:*",
     "@iterate-com/events-contract": "workspace:*",
     "@iterate-com/example-contract": "workspace:*",
@@ -57,8 +57,8 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "^1.29.1",
-    "@cloudflare/workers-types": "^4.20260317.1",
+    "@cloudflare/vite-plugin": "catalog:cloudflare",
+    "@cloudflare/workers-types": "catalog:cloudflare",
     "@tailwindcss/vite": "^4.1.18",
     "@tanstack/devtools-vite": "^0.6.0",
     "@types/node": "^25.0.10",
@@ -73,6 +73,6 @@
     "typescript": "^5.9.3",
     "vite": "^8.0.0",
     "vitest": "4.0.15",
-    "wrangler": "^4.75.0"
+    "wrangler": "catalog:cloudflare"
   }
 }

@@ -1,6 +1,11 @@
-import { and, desc, eq, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
-import { secretsTable } from "~/db/schema.ts";
+import {
+  countSecrets,
+  deleteSecret,
+  getSecretById,
+  insertSecret,
+  listSecrets,
+} from "~/db/queries/.generated/index.ts";
 import { os, withProject } from "~/orpc/orpc.ts";
 
 function isUniqueConstraintError(error: unknown): boolean {
@@ -15,7 +20,7 @@ export const secretsRouter = {
       const name = input.name.trim();
 
       try {
-        await context.db.insert(secretsTable).values({
+        await insertSecret(context.db, {
           id,
           projectSlug: context.projectSlug,
           name,
@@ -42,44 +47,37 @@ export const secretsRouter = {
       };
     }),
     list: os.secrets.list.use(withProject).handler(async ({ context, input }) => {
-      const scopedTotalRow = await context.db
-        .select({ value: sql<number>`count(*)` })
-        .from(secretsTable)
-        .where(eq(secretsTable.projectSlug, context.projectSlug));
-      const rows = await context.db
-        .select({
-          id: secretsTable.id,
-          name: secretsTable.name,
-          description: secretsTable.description,
-          createdAt: secretsTable.createdAt,
-          updatedAt: secretsTable.updatedAt,
-        })
-        .from(secretsTable)
-        .where(eq(secretsTable.projectSlug, context.projectSlug))
-        .orderBy(desc(secretsTable.createdAt))
-        .limit(input.limit)
-        .offset(input.offset);
+      const [totalRow, rows] = await Promise.all([
+        countSecrets(context.db, { projectSlug: context.projectSlug }),
+        listSecrets(context.db, {
+          projectSlug: context.projectSlug,
+          limit: input.limit,
+          offset: input.offset,
+        }),
+      ]);
 
-      return { secrets: rows, total: scopedTotalRow[0]?.value ?? 0 };
+      return {
+        secrets: rows.map((row) => ({
+          id: row.id,
+          name: row.name,
+          description: row.description ?? null,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        })),
+        total: totalRow?.total ?? 0,
+      };
     }),
     remove: os.secrets.remove.use(withProject).handler(async ({ context, input }) => {
-      const [existing] = await context.db
-        .select()
-        .from(secretsTable)
-        .where(
-          and(eq(secretsTable.id, input.id), eq(secretsTable.projectSlug, context.projectSlug)),
-        )
-        .limit(1);
+      const existing = await getSecretById(context.db, {
+        id: input.id,
+        projectSlug: context.projectSlug,
+      });
 
       if (!existing) {
         return { ok: true as const, id: input.id, deleted: false };
       }
 
-      await context.db
-        .delete(secretsTable)
-        .where(
-          and(eq(secretsTable.id, input.id), eq(secretsTable.projectSlug, context.projectSlug)),
-        );
+      await deleteSecret(context.db, { id: input.id, projectSlug: context.projectSlug });
       return { ok: true as const, id: input.id, deleted: true };
     }),
   },

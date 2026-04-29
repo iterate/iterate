@@ -8,16 +8,21 @@
     "./client": "./src/lib/client.ts"
   },
   "scripts": {
+    "alchemy:up": "tsx ./alchemy.run.ts",
+    "alchemy:down": "tsx ./alchemy.run.ts --destroy",
+    "dev:local": "alchemy dev",
+    "dev": "doppler run --project auth --config dev -- alchemy dev",
     "auth:dev": "doppler run --project auth --config dev -- alchemy dev",
     "build": "vite build",
     "typecheck": "tsgo --noEmit",
     "db:generate": "drizzle-kit generate",
-    "deploy:prd": "doppler run --project auth --config prd -- alchemy deploy"
+    "deploy:prd": "doppler run --project auth --config prd -- pnpm alchemy:up"
   },
   "dependencies": {
     "@better-auth/drizzle-adapter": "^1.5.5",
     "@better-auth/oauth-provider": "^1.5.5",
     "@iterate-com/auth-contract": "workspace:*",
+    "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",
     "@orpc/server": "^1.13.7",
     "@orpc/tanstack-query": "^1.13.6",
@@ -37,8 +42,8 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "^1.28.0",
-    "@cloudflare/workers-types": "^4.20260317.1",
+    "@cloudflare/vite-plugin": "catalog:cloudflare",
+    "@cloudflare/workers-types": "catalog:cloudflare",
     "@tailwindcss/vite": "^4.2.1",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
@@ -46,6 +51,6 @@
     "@vitejs/plugin-react": "^6.0.1",
     "drizzle-kit": "^0.31.9",
     "vite": "^8.0.0",
-    "wrangler": "^4.74.0"
+    "wrangler": "catalog:cloudflare"
   }
 }

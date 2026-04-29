@@ -1,0 +1,438 @@
+import { z } from "zod";
+
+export const CALLABLE_SCHEMA = "https://schemas.iterate.com/callable/v1" as const;
+
+const PathMode = z.enum(["prefix", "replace"]);
+const CallableVersion = z.literal(CALLABLE_SCHEMA).optional();
+type JSONValue = null | boolean | number | string | JSONValue[] | { [key: string]: JSONValue };
+const JSONValue: z.ZodType<JSONValue> = z.lazy(() =>
+  z.union([
+    z.null(),
+    z.boolean(),
+    z.number(),
+    z.string(),
+    z.array(JSONValue),
+    z.record(z.string(), JSONValue),
+  ]),
+);
+
+const JsonataExpression = z.string().min(1);
+
+const TransformInput = z
+  .object({
+    shallowMerge: z.record(z.string(), JSONValue).optional(),
+    jsonata: JsonataExpression.optional(),
+  })
+  .strict()
+  .refine((value) => value.shallowMerge != null || value.jsonata != null, {
+    message: "transformInput must include shallowMerge or jsonata",
+  });
+
+/**
+ * Service bindings, Durable Object stubs, Dynamic Worker entrypoints, and
+ * loopback bindings are not URL-authorized resources; the resolved platform
+ * object is the authority. Fetch callables may still choose a synthetic
+ * request path via `fetchRequest.path.base`, but that is part of the Fetch
+ * request shape rather than part of capability identity.
+ */
+const PathBase = z
+  .string()
+  .refine(
+    (value) =>
+      value.startsWith("/") &&
+      !value.startsWith("//") &&
+      !value.includes("?") &&
+      !value.includes("#") &&
+      !value.includes("\\"),
+    {
+      message:
+        "path base must start with one / and must not be protocol-relative or include query/hash/backslash",
+    },
+  )
+  .refine((value) => !hasDotPathSegment(value), {
+    message: "path base must not include dot path segments",
+  });
+
+function hasDotPathSegment(path: string) {
+  return path.split("/").some((segment) => {
+    try {
+      const decoded = decodeURIComponent(segment);
+      return decoded === "." || decoded === "..";
+    } catch {
+      return segment === "." || segment === "..";
+    }
+  });
+}
+
+const HTTPURL = z.string().refine(
+  (value) => {
+    try {
+      const url = new URL(value);
+      return (
+        (url.protocol === "http:" || url.protocol === "https:") &&
+        url.hash === "" &&
+        url.username === "" &&
+        url.password === ""
+      );
+    } catch {
+      return false;
+    }
+  },
+  {
+    message: "url must be an absolute http(s) URL without a hash or credentials",
+  },
+);
+
+/**
+ * This is deliberately stricter than JavaScript property access. A serialized
+ * RPC callable should name one direct public method, not walk object graphs or
+ * collide with Promise/prototype/reserved Worker RPC behavior. This set mixes
+ * Cloudflare-reserved method names with local callable hardening: for example,
+ * `then` is not a Cloudflare RPC reserved name, but denying it prevents a
+ * service binding or returned stub from accidentally becoming Promise-like when
+ * awaited. The Cloudflare-reserved names are documented here:
+ * https://developers.cloudflare.com/workers/runtime-apis/rpc/reserved-methods/
+ */
+const deniedRpcMethods = new Set([
+  "__defineGetter__",
+  "__defineSetter__",
+  "__lookupGetter__",
+  "__lookupSetter__",
+  "__proto__",
+  "alarm",
+  "apply",
+  "bind",
+  "call",
+  "connect",
+  "constructor",
+  "dup",
+  "email",
+  "fetch",
+  "hasOwnProperty",
+  "isPrototypeOf",
+  "prototype",
+  "propertyIsEnumerable",
+  "queue",
+  "scheduled",
+  "tail",
+  "then",
+  "toLocaleString",
+  "toString",
+  "trace",
+  "valueOf",
+  "webSocketClose",
+  "webSocketError",
+  "webSocketMessage",
+]);
+
+const RPCMethod = z
+  .string()
+  .regex(/^[A-Za-z_$][A-Za-z0-9_$]*$/, {
+    message: "RPC call method must be a single JavaScript identifier, not a dotted path",
+  })
+  .refine((value) => !deniedRpcMethods.has(value), {
+    message: "RPC call method uses a reserved or dangerous method name",
+  });
+
+const DynamicWorkerCode = z
+  .object({
+    compatibilityDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    compatibilityFlags: z.array(z.string()).optional(),
+    mainModule: z.string().min(1),
+    modules: z.record(z.string(), z.string()),
+  })
+  .strict()
+  .superRefine((code, ctx) => {
+    if (!Object.prototype.hasOwnProperty.call(code.modules, code.mainModule)) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Dynamic Worker mainModule must be present in modules",
+        path: ["mainModule"],
+      });
+    }
+
+    for (const moduleName of Object.keys(code.modules)) {
+      if (!moduleName.endsWith(".js")) {
+        ctx.addIssue({
+          code: "custom",
+          message: "Dynamic Worker module names must end in .js in callable v1",
+          path: ["modules", moduleName],
+        });
+      }
+    }
+  });
+
+const DurableObjectSelector = z.union([
+  z.object({ name: z.string().min(1) }).strict(),
+  z.object({ id: z.string().min(1) }).strict(),
+]);
+
+const DynamicWorkerLoader = z
+  .object({
+    type: z.literal("get"),
+    id: z.string().min(1),
+  })
+  .strict();
+
+const DynamicWorkerEntrypoint = z
+  .object({
+    name: z.string().min(1).optional(),
+    props: JSONValue.optional(),
+  })
+  .strict();
+
+/**
+ * Dynamic Worker `via` values intentionally keep only the Worker Loader env
+ * binding, inline JavaScript source, optional `get()` identity, and optional
+ * entrypoint selection. Fields
+ * like `env`, `globalOutbound`, tails, and typed modules are real platform
+ * features, but they expand the capability surface. V1 parks them in tasks
+ * until we add the policy layer that should govern them:
+ * https://developers.cloudflare.com/dynamic-workers/api-reference/
+ *
+ * The loader env binding defaults to `LOADER`. The property is deliberately
+ * named `workerLoaderBindingName`, not `bindingName`: the callable invokes the
+ * loaded Dynamic Worker entrypoint, but the env capability used to get there is
+ * specifically a Worker Loader binding.
+ * https://developers.cloudflare.com/workers/runtime-apis/bindings/
+ */
+const DynamicWorkerVia = z
+  .object({
+    type: z.literal("env-binding"),
+    bindingType: z.literal("dynamic-worker"),
+    workerLoaderBindingName: z.string().min(1).optional(),
+    workerCode: DynamicWorkerCode,
+    loader: DynamicWorkerLoader.optional(),
+    entrypoint: DynamicWorkerEntrypoint.optional(),
+  })
+  .strict();
+
+/**
+ * `env-binding` via values resolve through `CallableContext.env[bindingName]`.
+ *
+ * Cloudflare describes bindings as "a permission and an API in one piece".
+ * This callable stores only the configured binding name and expected binding
+ * type; the live binding object is supplied by the caller's context at dispatch
+ * time.
+ * https://developers.cloudflare.com/workers/runtime-apis/bindings/
+ */
+const ServiceEnvBindingVia = z
+  .object({
+    type: z.literal("env-binding"),
+    bindingType: z.literal("service"),
+    bindingName: z.string().min(1),
+  })
+  .strict();
+
+/**
+ * Durable Object callables resolve a Durable Object namespace binding, then use
+ * either `getByName(name)` or `idFromString(id)` + `get(id)` to obtain a
+ * DurableObjectStub. The nested `durableObject` selector is intentionally not
+ * called `address`: Cloudflare's first-party API talks about namespaces,
+ * stubs, names, and IDs.
+ * https://developers.cloudflare.com/durable-objects/api/namespace/
+ */
+const DurableObjectEnvBindingVia = z
+  .object({
+    type: z.literal("env-binding"),
+    bindingType: z.literal("durable-object-namespace"),
+    bindingName: z.string().min(1),
+    durableObject: DurableObjectSelector,
+  })
+  .strict();
+
+/**
+ * `loopback-binding` via values resolve through `CallableContext.exports`, which
+ * is the `ctx.exports` object from a Worker or Durable Object invocation.
+ *
+ * Cloudflare documents these as automatically configured "loopback bindings"
+ * for a Worker's top-level exports. Loopback service bindings can also be
+ * parameterized with dynamic `props`, unlike regular env service bindings.
+ * https://developers.cloudflare.com/workers/runtime-apis/context/#exports
+ */
+const LoopbackServiceVia = z
+  .object({
+    type: z.literal("loopback-binding"),
+    bindingType: z.literal("service"),
+    exportName: z.string().min(1),
+    props: JSONValue.optional(),
+  })
+  .strict();
+
+const LoopbackDurableObjectVia = z
+  .object({
+    type: z.literal("loopback-binding"),
+    bindingType: z.literal("durable-object-namespace"),
+    exportName: z.string().min(1),
+    durableObject: DurableObjectSelector,
+  })
+  .strict();
+
+const EnvBindingVia = z.discriminatedUnion("bindingType", [
+  ServiceEnvBindingVia,
+  DurableObjectEnvBindingVia,
+  DynamicWorkerVia,
+]);
+
+const LoopbackBindingVia = z.discriminatedUnion("bindingType", [
+  LoopbackServiceVia,
+  LoopbackDurableObjectVia,
+]);
+
+const URLVia = z
+  .object({
+    type: z.literal("url"),
+    url: HTTPURL,
+  })
+  .strict();
+
+const FetchVia = z.union([URLVia, EnvBindingVia, LoopbackBindingVia]);
+
+const WorkersRpcVia = z.union([EnvBindingVia, LoopbackBindingVia]);
+
+const FetchRequest = z
+  .object({
+    method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]).optional(),
+    headers: z.record(z.string(), z.string()).optional(),
+    query: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
+    body: z.object({ jsonata: JsonataExpression }).strict().optional(),
+    path: z
+      .object({
+        base: PathBase.optional(),
+        mode: PathMode.optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+const FetchCallable = z
+  .object({
+    type: z.literal("fetch"),
+    schema: CallableVersion,
+    via: FetchVia,
+    transformInput: TransformInput.optional(),
+    fetchRequest: FetchRequest.optional(),
+  })
+  .strict();
+
+const WorkersRpcCallable = z
+  .object({
+    type: z.literal("workers-rpc"),
+    schema: CallableVersion,
+    via: WorkersRpcVia,
+    rpcMethod: RPCMethod,
+    argsMode: z.enum(["object", "positional"]).optional(),
+    transformInput: TransformInput.optional(),
+  })
+  .strict()
+  .superRefine((callable, ctx) => {
+    if (
+      callable.argsMode === "positional" &&
+      callable.transformInput?.shallowMerge != null &&
+      callable.transformInput.jsonata == null
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["transformInput", "shallowMerge"],
+        message:
+          "positional RPC cannot use transformInput.shallowMerge unless transformInput.jsonata also produces the positional array",
+      });
+    }
+  });
+
+/**
+ * A `Callable` is intentionally just JSON data. It names a way to invoke
+ * something, but it does not contain the live Worker binding, Durable Object
+ * stub, or public `fetch` capability.
+ *
+ * Treat a Callable as untrusted code. Dispatching it with `ctx.env` is an
+ * explicit decision to let the JSON select from those binding names. V1 keeps
+ * policy out of the kernel so the first slice stays small, but callers must not
+ * pass sensitive bindings unless they mean to make them nameable by the
+ * Callable. `tasks/capability-policy.md` tracks the hardened resolver/policy
+ * layer.
+ */
+export const Callable = z.discriminatedUnion("type", [FetchCallable, WorkersRpcCallable]);
+
+/**
+ * JSON that names an invocation protocol and the capability to invoke it via.
+ *
+ * Dispatching a Callable resolves live authority from `CallableContext`: public
+ * HTTP fetch, Worker bindings, Durable Object namespaces, and Worker Loader
+ * bindings are not stored in the callable itself. Treat Callables as
+ * untrusted code until the capability-policy task is implemented.
+ */
+export type Callable = z.infer<typeof Callable>;
+export type FetchCallable = z.infer<typeof FetchCallable>;
+export type WorkersRpcCallable = z.infer<typeof WorkersRpcCallable>;
+export type DurableObjectSelector = z.infer<typeof DurableObjectSelector>;
+
+export type CallableContext = {
+  /**
+   * Worker bindings keyed by their runtime binding name. `env-binding` via
+   * keep only `bindingName`, so this object is where a stored Callable resolves
+   * to a live platform capability.
+   *
+   * Cloudflare bindings are intentionally capability-bearing APIs, not plain
+   * configuration values:
+   * https://developers.cloudflare.com/workers/runtime-apis/bindings/
+   */
+  env?: Record<string, unknown>;
+  /**
+   * Loopback bindings from `ctx.exports`, keyed by top-level export name.
+   *
+   * Cloudflare documents `ctx.exports` as automatically configured loopback
+   * bindings for this Worker's own exports. They can represent service
+   * bindings and Durable Object namespace bindings. Loopback service bindings
+   * can also receive dynamic `props`.
+   * https://developers.cloudflare.com/workers/runtime-apis/context/#exports
+   */
+  exports?: Record<string, unknown>;
+  /**
+   * Host-owned values available to JSONata expressions as `$ambient`.
+   *
+   * The expression root remains the callable input so `$` is always the value
+   * being transformed. Keeping ambient data in a JSONata variable avoids
+   * smuggling host context into user payload fields.
+   */
+  ambient?: Record<string, unknown>;
+  /**
+   * Public URL fetch capability used only by callables using
+   * `{ type: "url" }`.
+   *
+   * Worker-boundary code can pass the runtime function directly as
+   * `{ fetch }`. Keeping it explicit is important: public egress should not be
+   * created by a shared helper silently reading `globalThis.fetch`. Env and
+   * loopback binding via values ignore this field because their authority comes
+   * from `env` or `ctx.exports`.
+   */
+  fetch?: typeof globalThis.fetch;
+};
+
+export type CallableErrorCode =
+  | "DESCRIPTOR_VALIDATION_FAILED"
+  | "PAYLOAD_VALIDATION_FAILED"
+  | "RESOLUTION_FAILED"
+  | "TRANSPORT_FAILED"
+  | "REMOTE_ERROR";
+
+export class CallableError extends Error {
+  readonly code: CallableErrorCode;
+  readonly retryable: boolean;
+  readonly cause: unknown;
+  readonly details: Record<string, unknown> | undefined;
+
+  constructor(
+    code: CallableErrorCode,
+    message: string,
+    options: { retryable?: boolean; cause?: unknown; details?: Record<string, unknown> } = {},
+  ) {
+    super(message);
+    this.name = "CallableError";
+    this.code = code;
+    this.retryable = options.retryable ?? false;
+    this.cause = options.cause;
+    this.details = options.details;
+  }
+}

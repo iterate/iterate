@@ -1,13 +1,22 @@
 import { desc, eq, sql } from "drizzle-orm";
 import { ORPCError } from "@orpc/server";
+import { typeid } from "@iterate-com/shared/typeid";
+import type { AppConfig } from "~/app.ts";
 import { thingsTable } from "~/db/schema.ts";
 import { os } from "~/orpc/orpc.ts";
+
+function createThingId(config: AppConfig) {
+  return typeid({
+    env: { TYPEID_PREFIX: config.typeId.prefix.exposeSecret() },
+    prefix: "thing",
+  });
+}
 
 export const thingsRouter = {
   things: {
     create: os.things.create.handler(async ({ context, input }) => {
       const now = new Date().toISOString();
-      const id = crypto.randomUUID();
+      const id = createThingId(context.config);
 
       await context.db.insert(thingsTable).values({
         id,

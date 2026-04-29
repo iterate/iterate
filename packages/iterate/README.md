@@ -30,6 +30,7 @@ Initial setup (writes auth + launcher config):
 ```bash
 npx iterate setup \
   --os-base-url https://dev-yourname-os.dev.iterate.com \
+  --auth-base-url https://auth.iterate.com \
   --daemon-base-url http://localhost:3001 \
   --admin-password-env-var-name SERVICE_AUTH_TOKEN \
   --user-email dev-yourname@iterate.com \
@@ -39,7 +40,10 @@ npx iterate setup \
 Then run commands:
 
 ```bash
+npx iterate config local
+npx iterate login
 npx iterate whoami
+npx iterate orgs list
 npx iterate os project list
 ```
 
@@ -49,10 +53,27 @@ npx iterate os project list
 - `iterate doctor` - print resolved config/runtime info
 - `iterate install` - force clone/install for resolved checkout
 - `iterate whoami`
+- `iterate orgs list`
 - `iterate os ...`
 - `iterate daemon ...`
 
 `setup --scope global` writes auth + launcher values into `global`; `setup --scope workspace` writes them into `workspaces[process.cwd()]`.
+
+For local auth development, set `authBaseUrl` to `http://localhost:7101`. If you omit it and
+your `osBaseUrl` is `http://localhost:*` or `*.iterate-dev.com`, the CLI defaults to
+`http://localhost:7101`.
+
+To bootstrap a local repo config quickly, run:
+
+```bash
+npx iterate config local
+```
+
+That creates a `local` config with:
+
+- `osBaseUrl = https://<your-username>.iterate-dev.com`
+- `authBaseUrl = http://localhost:7101`
+- `daemonBaseUrl = http://localhost:3001`
 
 ## Config file
 
@@ -67,6 +88,7 @@ Config shape:
   "configs": {
     "default": {
       "osBaseUrl": "https://os.iterate.com",
+      "authBaseUrl": "https://auth.iterate.com",
       "daemonBaseUrl": "http://localhost:3000",
       "auth": {
         "strategy": "device"
@@ -74,6 +96,7 @@ Config shape:
     },
     "dev": {
       "osBaseUrl": "https://dev-yourname-os.dev.iterate.com",
+      "authBaseUrl": "https://auth-dev-yourname.iterate.com",
       "daemonBaseUrl": "http://localhost:3001",
       "auth": {
         "strategy": "superadmin",

@@ -10,6 +10,10 @@ import {
   toEventFeedItem,
   toSemanticFeedItem,
 } from "~/lib/stream-feed-projection.ts";
+import {
+  buildCustomHtmlRendererInsertions,
+  buildCustomHtmlRendererProjection,
+} from "~/lib/custom-html-renderers.ts";
 import type { EventFeedItem, StreamFeedItem } from "~/lib/stream-feed-types.ts";
 
 describe("toEventFeedItem", () => {
@@ -1143,6 +1147,202 @@ describe("projectWireToFeed", () => {
 describe("toSemanticFeedItem", () => {
   test("returns null for unknown events", () => {
     expect(toSemanticFeedItem(createEvent())).toBeNull();
+  });
+});
+
+describe("buildCustomHtmlRendererInsertions", () => {
+  test("applies final slug-keyed renderers retroactively to all matching events", async () => {
+    const events = [
+      createEvent({
+        offset: 1,
+        type: "demo.message",
+        payload: { title: "Before", body: "Rendered before config" },
+      }),
+      createEvent({
+        offset: 2,
+        type: "https://events.iterate.com/events/stream/html-renderer-configured",
+        payload: {
+          slug: "demo-card",
+          matcher: "type = 'demo.message'",
+          template: "<h3>{{payload.title}}</h3><p>{{payload.body}}</p>",
+        },
+      }),
+      createEvent({
+        offset: 3,
+        type: "demo.message",
+        payload: { title: "After", body: "Rendered after config" },
+      }),
+    ];
+
+    const insertions = await buildCustomHtmlRendererInsertions(events);
+    const feed = projectWireToFeed(events, { customInsertionsByOffset: insertions });
+
+    expect(feed.map((item) => item.kind)).toEqual([
+      "event",
+      "custom-html-rendered-event",
+      "event",
+      "event",
+      "custom-html-rendered-event",
+    ]);
+    expect(feed[1]).toMatchObject({
+      kind: "custom-html-rendered-event",
+      slug: "demo-card",
+      html: "<h3>Before</h3><p>Rendered before config</p>",
+    });
+    expect(feed[4]).toMatchObject({
+      kind: "custom-html-rendered-event",
+      slug: "demo-card",
+      html: "<h3>After</h3><p>Rendered after config</p>",
+    });
+  });
+
+  test("renders once for each matching unique renderer slug and latest config wins", async () => {
+    const events = [
+      createEvent({
+        offset: 1,
+        type: "https://events.iterate.com/events/stream/html-renderer-configured",
+        payload: {
+          slug: "summary",
+          matcher: "type = 'demo.message'",
+          template: "old {{payload.title}}",
+        },
+      }),
+      createEvent({
+        offset: 2,
+        type: "https://events.iterate.com/events/stream/html-renderer-configured",
+        payload: {
+          slug: "detail",
+          matcher: "payload.title = 'Hello'",
+          template: "detail {{payload.body}}",
+        },
+      }),
+      createEvent({
+        offset: 3,
+        type: "https://events.iterate.com/events/stream/html-renderer-configured",
+        payload: {
+          slug: "summary",
+          matcher: "type = 'demo.message'",
+          template: "new {{payload.title}}",
+        },
+      }),
+      createEvent({
+        offset: 4,
+        type: "demo.message",
+        payload: { title: "Hello", body: "World" },
+      }),
+    ];
+
+    const insertions = await buildCustomHtmlRendererInsertions(events);
+    const rendered = insertions.get(4) ?? [];
+
+    expect(rendered).toHaveLength(2);
+    expect(rendered).toEqual([
+      expect.objectContaining({
+        kind: "custom-html-rendered-event",
+        slug: "summary",
+        html: "new Hello",
+      }),
+      expect.objectContaining({
+        kind: "custom-html-rendered-event",
+        slug: "detail",
+        html: "detail World",
+      }),
+    ]);
+  });
+
+  test("emits a render error item when a matcher fails", async () => {
+    const events = [
+      createEvent({
+        offset: 1,
+        type: "https://events.iterate.com/events/stream/html-renderer-configured",
+        payload: {
+          slug: "bad-card",
+          matcher: "$error('boom')",
+          template: "{{payload.title}}",
+        },
+      }),
+      createEvent({
+        offset: 2,
+        type: "demo.message",
+        payload: { title: "Hello" },
+      }),
+    ];
+
+    const insertions = await buildCustomHtmlRendererInsertions(events);
+
+    expect(insertions.get(2)).toEqual([
+      expect.objectContaining({
+        kind: "custom-html-render-error",
+        slug: "bad-card",
+        eventType: "demo.message",
+      }),
+    ]);
+  });
+
+  test("projects appended events incrementally until renderer config changes", async () => {
+    const firstEvents = [
+      createEvent({
+        offset: 1,
+        type: "https://events.iterate.com/events/stream/html-renderer-configured",
+        payload: {
+          slug: "demo-card",
+          matcher: "type = 'demo.message'",
+          template: "one {{payload.title}}",
+        },
+      }),
+      createEvent({
+        offset: 2,
+        type: "demo.message",
+        payload: { title: "First" },
+      }),
+    ];
+    const firstProjection = await buildCustomHtmlRendererProjection({ events: firstEvents });
+    const appendedProjection = await buildCustomHtmlRendererProjection({
+      events: [
+        ...firstEvents,
+        createEvent({
+          offset: 3,
+          type: "demo.message",
+          payload: { title: "Second" },
+        }),
+      ],
+      previousProjection: firstProjection,
+    });
+
+    expect(appendedProjection.insertionsByOffset.get(2)).toBe(
+      firstProjection.insertionsByOffset.get(2),
+    );
+    expect(appendedProjection.insertionsByOffset.get(3)).toEqual([
+      expect.objectContaining({ html: "one Second" }),
+    ]);
+
+    const reconfiguredProjection = await buildCustomHtmlRendererProjection({
+      events: [
+        ...firstEvents,
+        createEvent({
+          offset: 3,
+          type: "demo.message",
+          payload: { title: "Second" },
+        }),
+        createEvent({
+          offset: 4,
+          type: "https://events.iterate.com/events/stream/html-renderer-configured",
+          payload: {
+            slug: "demo-card",
+            matcher: "type = 'demo.message'",
+            template: "two {{payload.title}}",
+          },
+        }),
+      ],
+      previousProjection: appendedProjection,
+    });
+
+    expect(reconfiguredProjection.insertionsByOffset.get(2)).toEqual([
+      expect.objectContaining({ html: "two First" }),
+    ]);
+    expect(reconfiguredProjection.insertionsByOffset.get(3)).toEqual([
+      expect.objectContaining({ html: "two Second" }),
+    ]);
   });
 });
 

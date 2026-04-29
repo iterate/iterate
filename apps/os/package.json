@@ -3,6 +3,7 @@
   "type": "module",
   "version": "0.0.1",
   "scripts": {
+    "dev:local": "sh -c 'tsx ./alchemy.run.ts cli --dev --stage dev-$ITERATE_USER'",
     "build": "doppler run -- vite build",
     "deploy:prd": "doppler run --config prd -- sh -c 'tsx ./alchemy.run.ts cli deploy --stage \"$APP_STAGE\"'",
     "deploy:stg": "doppler run --config stg -- sh -c 'tsx ./alchemy.run.ts cli deploy --stage \"$APP_STAGE\"'",
@@ -38,13 +39,16 @@
     "@hono/vite-dev-server": "^0.24.0",
     "@hono/zod-validator": "^0.7.5",
     "@hookform/resolvers": "^5.2.2",
+    "@iterate-com/auth": "workspace:*",
     "@iterate-com/sandbox": "workspace:*",
     "@iterate-com/shared": "workspace:*",
     "@mariozechner/pi-ai": "^0.42.0",
     "@mariozechner/pi-coding-agent": "^0.42.0",
     "@mmkal/jsonata": "^2.2.0",
     "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/core": "^2.6.1",
     "@opentelemetry/exporter-trace-otlp-http": "^0.206.0",
+    "@opentelemetry/otlp-exporter-base": "^0.214.0",
     "@opentelemetry/resources": "^2.1.0",
     "@opentelemetry/sdk-trace-base": "^2.1.0",
     "@opentelemetry/semantic-conventions": "^1.38.0",
@@ -121,7 +125,7 @@
     "zod": "4.1.12"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "^1.15.3",
+    "@cloudflare/vite-plugin": "1.15.3",
     "@cloudflare/workers-types": "^4.20251128.0",
     "@effect/vitest": "^0.22.0",
     "@opencode-ai/plugin": "^1.1.36",
@@ -149,7 +153,7 @@
     "vite": "7.2.4",
     "vite-tsconfig-paths": "^6.0.4",
     "vitest": "4.0.15",
-    "wrangler": "^4.64.0",
+    "wrangler": "4.84.0",
     "ws": "^8.19.0"
   }
 }

@@ -33,7 +33,6 @@
     "@iterate-com/example-contract": "workspace:*",
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",
-    "@lydell/node-pty": "1.2.0-beta.3",
     "@orpc/client": "1.13.14",
     "@orpc/contract": "1.13.14",
     "@orpc/openapi": "1.13.14",
@@ -49,8 +48,6 @@
     "@tanstack/react-router-devtools": "1.166.11",
     "@tanstack/react-router-ssr-query": "^1.166.2",
     "@tanstack/react-start": "1.167.5",
-    "@xterm/addon-serialize": "0.15.0-beta.103",
-    "@xterm/headless": "6.1.0-beta.103",
     "crossws": "^0.4.4",
     "drizzle-orm": "^0.45.1",
     "nitro": "3.0.260311-beta",
@@ -59,12 +56,9 @@
     "tailwindcss": "^4.1.18",
     "zod": "^4.3.6"
   },
-  "optionalDependencies": {
-    "@lydell/node-pty-darwin-arm64": "1.2.0-beta.3"
-  },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "^1.29.1",
-    "@cloudflare/workers-types": "^4.20260317.1",
+    "@cloudflare/vite-plugin": "catalog:cloudflare",
+    "@cloudflare/workers-types": "catalog:cloudflare",
     "@tailwindcss/vite": "^4.1.18",
     "@tanstack/devtools-vite": "^0.6.0",
     "@types/better-sqlite3": "^7.6.13",
@@ -84,6 +78,6 @@
     "typescript": "^5.9.3",
     "vite": "^8.0.0",
     "vitest": "4.0.15",
-    "wrangler": "^4.75.0"
+    "wrangler": "catalog:cloudflare"
   }
 }

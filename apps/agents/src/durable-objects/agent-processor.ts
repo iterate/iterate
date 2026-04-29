@@ -128,13 +128,13 @@ export const IterateAgentProcessorState = z.object({
       }),
     )
     .default([]),
-  llmConfig: LlmConfig.default({ model: "@cf/moonshotai/kimi-k2.5", runOpts: {} }),
+  llmConfig: LlmConfig.default({ model: "@cf/moonshotai/kimi-k2.6", runOpts: {} }),
 });
 export type IterateAgentProcessorState = z.infer<typeof IterateAgentProcessorState>;
 
 export const iterateAgentProcessorInitialState: IterateAgentProcessorState = {
   history: [],
-  llmConfig: { model: "@cf/moonshotai/kimi-k2.5", runOpts: {} },
+  llmConfig: { model: "@cf/moonshotai/kimi-k2.6", runOpts: {} },
 };
 
 const CodemodeBlockAddedEvent = z.object({

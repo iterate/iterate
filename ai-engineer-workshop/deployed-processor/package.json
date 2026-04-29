@@ -14,10 +14,10 @@
     "openai": "^6.33.0"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "^1.29.1",
-    "@cloudflare/workers-types": "^4.20260317.1",
+    "@cloudflare/vite-plugin": "catalog:cloudflare",
+    "@cloudflare/workers-types": "catalog:cloudflare",
     "typescript": "^5.9.3",
     "vite": "^8.0.0",
-    "wrangler": "^4.75.0"
+    "wrangler": "catalog:cloudflare"
   }
 }
