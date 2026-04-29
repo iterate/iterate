@@ -775,39 +775,63 @@ async function acquireSupportedPreviewLease(input: {
   semaphore: PreviewSemaphoreResourceClient;
   waitMs?: number;
 }) {
-  const skippedUnsupported: string[] = [];
+  const skippedUnsupported: Array<{ leaseId: string; slug: string }> = [];
   const excludedPreviewSlots = new Set(input.excludedPreviewSlots ?? []);
 
-  for (;;) {
-    const lease = await input.semaphore.acquire({
-      type: input.previewResourceType,
-      leaseMs: input.leaseMs,
-      waitMs: input.waitMs,
-    });
+  try {
+    for (;;) {
+      const lease = await input.semaphore.acquire({
+        type: input.previewResourceType,
+        leaseMs: input.leaseMs,
+        waitMs: input.waitMs,
+      });
 
-    if (
-      isSupportedPreviewEnvironmentSlug({
-        appSlug: input.appSlug,
-        excludedPreviewSlots,
-        slug: lease.slug,
-      })
-    ) {
-      return lease;
+      if (
+        isSupportedPreviewEnvironmentSlug({
+          appSlug: input.appSlug,
+          excludedPreviewSlots,
+          slug: lease.slug,
+        })
+      ) {
+        await releaseSkippedUnsupportedPreviewLeases({
+          leases: skippedUnsupported,
+          previewResourceType: input.previewResourceType,
+          semaphore: input.semaphore,
+        });
+        return lease;
+      }
+
+      skippedUnsupported.push({ leaseId: lease.leaseId, slug: lease.slug });
+      if (skippedUnsupported.length >= 10) {
+        throw new Error(
+          `No supported ${input.appSlug} preview slots are available. Skipped: ${skippedUnsupported.map(({ slug }) => slug).join(", ")}.`,
+        );
+      }
     }
-
-    skippedUnsupported.push(lease.slug);
-    await input.semaphore.release({
-      type: input.previewResourceType,
-      slug: lease.slug,
-      leaseId: lease.leaseId,
+  } catch (error) {
+    await releaseSkippedUnsupportedPreviewLeases({
+      leases: skippedUnsupported,
+      previewResourceType: input.previewResourceType,
+      semaphore: input.semaphore,
     });
-
-    if (skippedUnsupported.length >= 10) {
-      throw new Error(
-        `No supported ${input.appSlug} preview slots are available. Skipped: ${skippedUnsupported.join(", ")}.`,
-      );
-    }
+    throw error;
   }
+}
+
+async function releaseSkippedUnsupportedPreviewLeases(input: {
+  leases: Array<{ leaseId: string; slug: string }>;
+  previewResourceType: string;
+  semaphore: PreviewSemaphoreResourceClient;
+}) {
+  await Promise.all(
+    input.leases.map((lease) =>
+      input.semaphore.release({
+        type: input.previewResourceType,
+        slug: lease.slug,
+        leaseId: lease.leaseId,
+      }),
+    ),
+  );
 }
 
 export function isSupportedPreviewEnvironmentSlug(input: {
