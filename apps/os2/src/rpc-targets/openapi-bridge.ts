@@ -8,11 +8,11 @@
  *   { type: "loopback-binding", bindingType: "service",
  *     exportName: "OpenApiBridge", props: { specUrl, baseUrl } }
  *
- * See createOpenApiBridgeProvider() for the helper that builds the
- * CallableToolProvider descriptor.
+ * Use createOpenApiProvider() to construct the CallableToolProvider descriptor.
  */
 
 import { WorkerEntrypoint } from "cloudflare:workers";
+import type { CallableToolProvider } from "@iterate-com/shared/codemode/types";
 
 interface OpenApiBridgeProps {
   specUrl: string;
@@ -151,4 +151,34 @@ export class OpenApiBridge extends WorkerEntrypoint<Record<string, unknown>, Ope
 
     return url;
   }
+}
+
+/**
+ * Construct a CallableToolProvider that routes through the OpenApiBridge
+ * loopback entrypoint. The descriptor is pure JSON — it can be stored,
+ * transmitted, or passed to the codemode execute endpoint.
+ *
+ *   createOpenApiProvider({
+ *     path: ["petstore"],
+ *     specUrl: "https://petstore.swagger.io/v2/swagger.json",
+ *     baseUrl: "https://petstore.swagger.io/v2",
+ *   })
+ */
+export function createOpenApiProvider(options: {
+  path: string[];
+  specUrl: string;
+  baseUrl: string;
+}): CallableToolProvider {
+  const via = {
+    type: "loopback-binding" as const,
+    bindingType: "service" as const,
+    exportName: "OpenApiBridge",
+    props: { specUrl: options.specUrl, baseUrl: options.baseUrl },
+  };
+
+  return {
+    path: options.path,
+    execute: { type: "workers-rpc" as const, via, rpcMethod: "execute" },
+    describe: { type: "workers-rpc" as const, via, rpcMethod: "describe" },
+  };
 }

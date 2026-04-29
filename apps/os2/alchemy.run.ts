@@ -3,6 +3,7 @@ import { initAlchemy } from "@iterate-com/shared/alchemy/init";
 import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
 import manifest, { AppConfig } from "./src/app.ts";
 import type { IterateMcpServer } from "./src/durable-objects/iterate-mcp-server.ts";
+import type { McpClientBridge } from "./src/rpc-targets/mcp-client-bridge.ts";
 
 const ctx = await initAlchemy(manifest, AppConfig, process.env);
 
@@ -18,6 +19,7 @@ const iterateMcpServer = await Worker("iterate-mcp-server-do", {
   adopt: true,
   compatibilityFlags: ["nodejs_compat"],
   bindings: {
+    EVENTS_BASE_URL: ctx.compiledAppConfig.eventsBaseUrl,
     ITERATE_MCP_SERVER: DurableObjectNamespace<IterateMcpServer>("iterate-mcp-server", {
       className: "IterateMcpServer",
       sqlite: true,
@@ -35,6 +37,9 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     DB: db,
     LOADER: WorkerLoader(),
     ITERATE_MCP_SERVER: iterateMcpServer.bindings.ITERATE_MCP_SERVER,
+    MCP_CLIENT_BRIDGE: DurableObjectNamespace<McpClientBridge>("mcp-client-bridge", {
+      className: "McpClientBridge",
+    }),
     PROJECT_HOSTNAME_BASES: projectHostnameBases.join(","),
   },
   extraRouteHostnames: [...projectHostnameBases, ...projectHostnameBases.map((h) => `*.${h}`)],
