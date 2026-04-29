@@ -7,13 +7,15 @@ import { createBrowserOpenApiClient, createBrowserWebSocketClient } from "~/orpc
 
 type RunStatus = "idle" | "connecting" | "streaming" | "completed" | "error";
 
-export const Route = createFileRoute("/_app/codemode")({
-  ssr: false,
-  staticData: {
-    breadcrumb: "Codemode",
+export const Route = createFileRoute("/_app/orgs/$organizationSlug/projects/$projectSlug/run-code")(
+  {
+    ssr: false,
+    staticData: {
+      breadcrumb: "Run code",
+    },
+    component: CodemodePage,
   },
-  component: CodemodePage,
-});
+);
 
 function CodemodePage() {
   const [code, setCode] = useState('async (ctx) => {\n  console.log("hello");\n  return 1 + 1;\n}');

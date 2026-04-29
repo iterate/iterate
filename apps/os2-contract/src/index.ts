@@ -6,7 +6,7 @@ import { z } from "zod";
 
 const JSONObject = z.record(z.string(), z.unknown());
 
-const Project = z.object({
+export const Project = z.object({
   id: z.string(),
   slug: z.string(),
   clerkOrgId: z.string(),
@@ -16,6 +16,7 @@ const Project = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
 });
+export type Project = z.output<typeof Project>;
 
 export const RandomLogStreamRequest = z
   .object({
@@ -257,6 +258,15 @@ export const osContract = oc.router({
         tags: ["/projects"],
       })
       .input(z.object({ id: z.string() }))
+      .output(Project),
+    findBySlug: oc
+      .route({
+        method: "GET",
+        path: "/projects/by-slug/{slug}",
+        description: "Get project by slug in the active organization",
+        tags: ["/projects"],
+      })
+      .input(z.object({ slug: z.string() }))
       .output(Project),
     updateConfig: oc
       .route({

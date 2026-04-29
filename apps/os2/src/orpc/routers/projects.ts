@@ -4,6 +4,7 @@ import {
   countProjects,
   deleteProject,
   getProjectById,
+  getProjectBySlug,
   insertProject,
   listProjects,
   updateProjectConfig,
@@ -145,6 +146,21 @@ export const projectsRouter = {
 
       return toProject(row);
     }),
+    findBySlug: os.projects.findBySlug
+      .use(activeOrganizationMiddleware)
+      .handler(async ({ context, input }) => {
+        const auth = context.activeOrganization;
+        const row = await getProjectBySlug(context.db, {
+          clerkOrgId: auth.orgId,
+          slug: input.slug,
+        });
+
+        if (!row) {
+          throw new ORPCError("NOT_FOUND", { message: `Project ${input.slug} not found` });
+        }
+
+        return toProject(row);
+      }),
     updateConfig: os.projects.updateConfig
       .use(activeOrganizationMiddleware)
       .handler(async ({ context, input }) => {

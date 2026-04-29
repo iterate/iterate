@@ -10,7 +10,7 @@ export const activeOrganizationMiddleware = os.middleware(async ({ context, next
     throw new ORPCError("UNAUTHORIZED");
   }
 
-  if (!context.auth.orgId) {
+  if (!context.auth.orgId || !context.auth.orgSlug) {
     throw new ORPCError("FORBIDDEN", {
       message: "OS2 requires an active Clerk Organization.",
     });

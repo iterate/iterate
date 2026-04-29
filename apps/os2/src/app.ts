@@ -16,8 +16,8 @@ export const AppConfig = BaseAppConfig.extend({
     afterSignInUrl: publicValue(z.string().trim().min(1).default("/")),
     afterSignUpUrl: publicValue(z.string().trim().min(1).default("/")),
     mcpOauthScopes: z
-      .array(z.enum(["profile", "email", "public_metadata", "private_metadata"]))
-      .default(["email", "profile"]),
+      .array(z.enum(["openid", "profile", "email"]))
+      .default(["openid", "profile", "email"]),
   }),
   mcpProofSecret: redacted(z.string().trim().min(1)),
   projectHostnameBases: z.array(z.string().trim().min(1)).default([]),

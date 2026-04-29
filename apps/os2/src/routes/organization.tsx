@@ -12,8 +12,12 @@ function OrganizationRoute() {
     <main className="grid min-h-svh place-items-center bg-background p-4">
       <OrganizationList
         hidePersonal
-        afterCreateOrganizationUrl="/"
-        afterSelectOrganizationUrl="/"
+        afterCreateOrganizationUrl={(organization) =>
+          `/orgs/${organization.slug ?? organization.id}`
+        }
+        afterSelectOrganizationUrl={(organization) =>
+          `/orgs/${organization.slug ?? organization.id}`
+        }
       />
     </main>
   );

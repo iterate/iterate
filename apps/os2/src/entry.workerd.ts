@@ -8,7 +8,7 @@ import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { withEvlog } from "@iterate-com/shared/apps/logging/with-evlog";
 import { NitroWebSocketResponse } from "@iterate-com/shared/nitro-ws-response";
 import handler from "@tanstack/react-start/server-entry";
-import { verifyToken } from "@clerk/backend";
+import { createClerkClient, verifyToken } from "@clerk/backend";
 import { generateProtectedResourceMetadata } from "@clerk/mcp-tools/server";
 import { McpAgent } from "agents/mcp";
 import crossws from "crossws/adapters/cloudflare";
@@ -123,10 +123,22 @@ async function authenticateMcpRequest(request: Request, appConfig: AppConfig) {
   }
 
   try {
-    const claims = (await verifyToken(token, {
+    const clerk = createClerkClient({
+      secretKey: appConfig.clerk.secretKey.exposeSecret(),
+      publishableKey: appConfig.clerk.publishableKey,
       jwtKey: appConfig.clerk.jwtKey.exposeSecret(),
-    })) as Record<string, unknown>;
-    const userId = readStringClaim(claims, "sub");
+    });
+    const requestState = await clerk.authenticateRequest(request, {
+      acceptsToken: "oauth_token",
+    });
+    const oauthAuth = requestState.toAuth();
+
+    if (!oauthAuth.isAuthenticated) {
+      return unauthorizedMcpResponse(request, "Invalid bearer token");
+    }
+
+    const claims = await tryReadJwtClaims(token, appConfig);
+    const userId = oauthAuth.userId;
     const orgId = readOrganizationIdClaim(claims);
 
     if (!userId) {
@@ -146,11 +158,21 @@ async function authenticateMcpRequest(request: Request, appConfig: AppConfig) {
       orgRole: readOrganizationRoleClaim(claims),
       orgSlug: readOrganizationSlugClaim(claims),
       orgPermissions: readOrganizationPermissionsClaim(claims),
-      scopes: readScopeClaims(claims),
-      clientId: readStringClaim(claims, "client_id"),
+      scopes: oauthAuth.scopes.length > 0 ? oauthAuth.scopes : readScopeClaims(claims),
+      clientId: oauthAuth.clientId ?? readStringClaim(claims, "client_id"),
     } satisfies IterateMcpServerProps;
   } catch {
     return unauthorizedMcpResponse(request, "Invalid bearer token");
+  }
+}
+
+async function tryReadJwtClaims(token: string, appConfig: AppConfig) {
+  try {
+    return (await verifyToken(token, {
+      jwtKey: appConfig.clerk.jwtKey.exposeSecret(),
+    })) as Record<string, unknown>;
+  } catch {
+    return {};
   }
 }
 

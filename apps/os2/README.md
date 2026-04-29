@@ -24,7 +24,8 @@ Minimal full-stack app: TanStack Start + oRPC over OpenAPI/HTTP + sqlfu, running
 - `src/context.ts` — Start request context + oRPC context types
 - `src/router.tsx` — TanStack Router setup plus SSR Query integration
 - `src/routes/api.$.ts` — OpenAPI oRPC catch-all route mounted at `/api`
-- `src/routes/__root.tsx` — root route with sidebar shell, SSR-loaded public config, shared app providers, and devtools
+- `src/routes/__root.tsx` — root route with SSR-loaded public config, shared app providers, Clerk provider, and devtools
+- `src/routes/_app/orgs.$organizationSlug.tsx` — authenticated organization app shell with Clerk org/user controls
 - `vite.config.ts` — Cloudflare dev/build (uses Alchemy plugin)
 - PostHog source maps are not configured for this minimal app.
 - `runtime-smoke.test.ts` — sqlfu asset check plus optional Cloudflare runtime smoke checks
@@ -38,9 +39,9 @@ sent to `/organization` to create or select one. The app shell uses Clerk's
 
 The browser talks to `/api` over OpenAPI/HTTP. SSR uses `createRouterClient`
 for in-process calls with the same typed router. Runtime app context
-(`manifest`, `config`, `db`, `log`, `auth`) is attached in `entry.workerd.ts`
-and the API routes, and oRPC initial context is built from that runtime context
-plus `rawRequest`. Runtime auth checks are implemented as oRPC middleware:
+(`manifest`, `config`, `db`, `log`) is attached in `entry.workerd.ts`; API
+routes and SSR oRPC calls add Clerk `auth()` before invoking protected
+procedures. Runtime auth checks are implemented as oRPC middleware:
 `activeOrganizationMiddleware` rejects unauthenticated or personal-account
 requests and injects `context.activeOrganization` for handlers.
 
@@ -104,11 +105,19 @@ First-party references:
 - Clerk TanStack Start middleware:
   https://clerk.com/docs/reference/tanstack-react-start/clerk-middleware
 - Clerk TanStack Start provider:
-  https://clerk.com/docs/tanstack-react-start/components/clerk-provider
+  https://clerk.com/docs/tanstack-react-start/reference/components/clerk-provider
+- Clerk TanStack Start custom sign-in catch-all route:
+  https://clerk.com/docs/tanstack-react-start/guides/development/custom-sign-in-or-up-page
+- Clerk redirect URL behavior:
+  https://clerk.com/docs/guides/custom-redirects
 - Clerk Organization switcher:
   https://clerk.com/docs/tanstack-react-start/reference/components/organization/organization-switcher
+- Clerk Organization list:
+  https://clerk.com/docs/tanstack-react-start/reference/components/organization/organization-list
 - Clerk Organizations:
   https://clerk.com/docs/organizations/overview
+- Clerk OAuth token verification:
+  https://clerk.com/docs/guides/configure/auth-strategies/oauth/verify-oauth-tokens
 - Clerk OAuth / MCP guide:
   https://clerk.com/docs/nextjs/guides/ai/mcp/build-mcp-server
 - Clerk OAuth implementation:
@@ -129,15 +138,31 @@ Required Clerk dashboard setup:
    JWT, enable public/PKCE clients, and enable Dynamic Client Registration for
    MCP clients that self-register.
 5. The MCP OAuth application only needs Clerk-supported data scopes such as
-   `email` and `profile`; OS2 authorization remains org/project scoped in app
-   code.
+   `openid`, `email`, and `profile`; OS2 authorization remains org/project
+   scoped in app code.
 
 `/mcp` is a protected OAuth resource. OS2 publishes RFC 9728 metadata at
 `/.well-known/oauth-protected-resource` and
 `/.well-known/oauth-protected-resource/mcp`, pointing clients at Clerk as the
-authorization server. The Worker verifies Clerk-issued bearer tokens
-networklessly with `CLERK_JWT_KEY` before passing identity props to the
-`IterateMcpServer` Durable Object.
+authorization server. The Worker verifies Clerk-issued OAuth bearer tokens with
+Clerk's SDK using `acceptsToken: "oauth_token"`. If the token is JWT-formatted,
+OS2 also reads Clerk org claims with the configured JWT public key before
+passing identity props to the `IterateMcpServer` Durable Object. Opaque OAuth
+tokens are valid Clerk OAuth tokens but currently fail OS2's MCP org check
+unless the token can still be mapped to an active Clerk Organization.
+
+## Routes
+
+OS2 user-facing app routes are organization-scoped:
+
+- `/orgs/$organizationSlug/projects`
+- `/orgs/$organizationSlug/projects/$projectSlug`
+- `/orgs/$organizationSlug/projects/$projectSlug/run-code`
+- `/orgs/$organizationSlug/projects/$projectSlug/settings`
+
+The project root redirects to `run-code`. Project route reads are scoped by the
+active Clerk Organization plus project slug; project mutations can still use the
+stable project ID returned by the API.
 
 ## Middleware Notes
 
@@ -149,7 +174,7 @@ entrypoint.
 
 Execute JavaScript in isolated dynamic worker sandboxes via oRPC or MCP.
 
-- **UI:** `/codemode` — code editor with streaming event log
+- **UI:** `/orgs/$organizationSlug/projects/$projectSlug/run-code` — code editor with streaming event log
 - **oRPC:** `codemode.executeScript` starts a Script Execution and returns the
   committed request event; `codemode.streamEvents` reads events from the Event
   Stream Path; `codemode.execute` remains a compatibility iterator for older

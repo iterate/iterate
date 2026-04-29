@@ -12,8 +12,8 @@ function SignUpSSOCallbackRoute() {
         signInUrl="/sign-in"
         signUpUrl="/sign-up"
         continueSignUpUrl="/sign-up"
-        signInForceRedirectUrl="/"
-        signUpForceRedirectUrl="/"
+        signInFallbackRedirectUrl="/"
+        signUpFallbackRedirectUrl="/"
       />
     </main>
   );

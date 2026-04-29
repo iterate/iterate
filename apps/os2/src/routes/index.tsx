@@ -3,7 +3,11 @@ import { requireActiveOrganizationForRoute } from "../lib/auth.ts";
 
 export const Route = createFileRoute("/")({
   loader: async () => {
-    await requireActiveOrganizationForRoute();
-    throw redirect({ to: "/debug", replace: true });
+    const auth = await requireActiveOrganizationForRoute();
+    throw redirect({
+      to: "/orgs/$organizationSlug",
+      params: { organizationSlug: auth.orgSlug },
+      replace: true,
+    });
   },
 });

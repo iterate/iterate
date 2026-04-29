@@ -26,9 +26,25 @@ _Avoid_: Personal organization, default organization
 A person authenticated by Clerk who acts inside a Clerk Organization.
 _Avoid_: Member, account
 
+**Clerk OAuth Token**:
+A Clerk-issued OAuth access token used by a remote MCP client to call OS2 as a protected resource.
+_Avoid_: MCP JWT, session token
+
 **Project**:
 An OS2-managed app surface owned by exactly one Clerk Organization.
 _Avoid_: App, site, workspace
+
+**Project Route**:
+The organization-scoped URL for a Project, identified by Clerk Organization slug and Project slug.
+_Avoid_: Global project URL, project ID URL
+
+**Project MCP Endpoint**:
+The project-scoped MCP endpoint for one Project.
+_Avoid_: Global MCP server, MCP project selector
+
+**Project Run Code Session**:
+A project-scoped user workbench for running scripts, backed by exactly one Codemode Session.
+_Avoid_: Project session, code block, Event Stream Path
 
 ### Codemode
 
@@ -98,8 +114,17 @@ _Avoid_: CallableToolProvider
 - The **OS2 App** hides **Personal Account** mode and requires a **Clerk Organization** context.
 - A **Clerk Organization** owns zero or more **Projects**.
 - A **Project** belongs to exactly one **Clerk Organization**.
+- A **Project Route** includes both the owning **Clerk Organization** slug and the **Project** slug.
+- A **Project MCP Endpoint** identifies exactly one **Project**.
 - A **Clerk User** acts through their **Active Organization** when managing **Projects**.
 - A signed-in **Clerk User** without an **Active Organization** must create or select a **Clerk Organization** before using OS2.
+- A remote MCP client calls OS2 with a **Clerk OAuth Token**, not a Clerk session token.
+- OS2 accepts Clerk's OAuth token contract for MCP; JWT token format is the preferred Clerk environment setting, not the domain boundary.
+- A **Project** may have many **Project Run Code Sessions** over time.
+- A **Project Run Code Session** is backed by exactly one **Codemode Session**.
+- The primary interface for creating and using **Project Run Code Sessions** is the **Project MCP Endpoint**.
+- Browser oRPC calls identify the **Project** through the **Project Route** and frontend route context.
+- The **OS2 App** UI observes and manages **Project Run Code Sessions** through the same session and event model.
 - A **Codemode Session** is initialized with exactly one **Event Stream Path**.
 - An **Event Stream Path** may exist before a **Codemode Session** is attached to it.
 - For any given **Event Stream Path**, there is at most one **Codemode Session**.
@@ -150,14 +175,26 @@ _Avoid_: CallableToolProvider
 > **Dev:** "Should starting a Script stream all results back from the command?"
 > **Domain expert:** "No. Starting a **Script Execution** returns the committed request event immediately. Output is read from the **Event Stream Path**."
 
+> **Dev:** "What is the user-facing thing on a Project where scripts are run?"
+> **Domain expert:** "Use **Project Run Code Session**. It is the project-scoped workbench; internally it is backed by a **Codemode Session** and **Event Stream Path**."
+
+> **Dev:** "Should MCP `run_code` take a project selector?"
+> **Domain expert:** "No. MCP is project-scoped: the **Project MCP Endpoint** identifies the **Project**. Browser oRPC gets the project from the **Project Route**."
+
 > **Dev:** "Can someone open an OS2 project page without signing in?"
 > **Domain expert:** "No. The **OS2 App** is authenticated, and every **Project** is managed through the user's active **Clerk Organization**."
 
 > **Dev:** "Can a **Personal Account** own a **Project**?"
 > **Domain expert:** "No. OS2 only lets a **Clerk Organization** own **Projects**."
 
+> **Dev:** "Can a project page be addressed without the organization slug?"
+> **Domain expert:** "No. A **Project Route** is organization-scoped and includes both the Clerk Organization slug and the Project slug."
+
 > **Dev:** "What should OS2 show after sign-in if Clerk has no **Active Organization**?"
 > **Domain expert:** "Show Clerk's organization selection or creation flow before rendering the **OS2 App**."
+
+> **Dev:** "Does the MCP server require a Clerk JWT?"
+> **Domain expert:** "No. The MCP server requires a valid **Clerk OAuth Token**. JWT is the preferred Clerk token format for cheaper verification, but OS2 should not model MCP auth as JWT-only."
 
 ## Flagged Ambiguities
 
@@ -169,3 +206,5 @@ _Avoid_: CallableToolProvider
 - "session id" and "stream path" were conflated. Resolved: **Event Stream Path** is the public identity; Durable Object identity is derived infrastructure identity.
 - "app" can mean the OS2 product or a managed project surface. Resolved: use **OS2 App** for this dashboard and **Project** for the managed app surface.
 - "personal organization" is misleading because Clerk treats personal accounts separately from organizations. Resolved: use **Personal Account** for Clerk's non-organization user context.
+- "MCP JWT" is too narrow for Clerk OAuth Applications. Resolved: use **Clerk OAuth Token** for MCP bearer tokens, regardless of Clerk's token format setting.
+- "project URL" was ambiguous between stable IDs and slugs. Resolved: use **Project Route** for the user-facing organization-slug/project-slug URL.

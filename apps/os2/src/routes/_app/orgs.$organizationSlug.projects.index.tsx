@@ -8,7 +8,13 @@ import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 import { orpc } from "~/orpc/client.ts";
 
-export const Route = createFileRoute("/_app/projects/")({
+export const Route = createFileRoute("/_app/orgs/$organizationSlug/projects/")({
+  loader: async ({ context }) => {
+    await context.queryClient.ensureQueryData({
+      ...orpc.projects.list.queryOptions({ input: { limit: 20, offset: 0 } }),
+      staleTime: 30_000,
+    });
+  },
   component: ProjectsIndexPage,
 });
 
@@ -17,6 +23,7 @@ function formatMetadata(metadata: Record<string, unknown>) {
 }
 
 function ProjectsIndexPage() {
+  const params = Route.useParams();
   const queryClient = useQueryClient();
   const [slug, setSlug] = useState("");
   const [metadataJson, setMetadataJson] = useState('{\n  "owner": "os"\n}');
@@ -114,8 +121,11 @@ function ProjectsIndexPage() {
           >
             <Identifier value={project.id} textClassName="text-xs text-muted-foreground" />
             <Link
-              to="/projects/$projectId"
-              params={{ projectId: project.id }}
+              to="/orgs/$organizationSlug/projects/$projectSlug"
+              params={{
+                organizationSlug: params.organizationSlug,
+                projectSlug: project.slug,
+              }}
               className="truncate font-medium hover:underline"
             >
               {project.slug}
