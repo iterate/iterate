@@ -199,25 +199,6 @@ export type EventsStreamCodemodeResultElement = EventsStreamRenderedElement<
 >;
 
 /**
- * Props for a codemode tool-provider configuration event card.
- */
-export type EventsStreamCodemodeToolProviderElementProps = {
-  slug: string;
-  operation: "configured" | "removed";
-  hasTypesCallable: boolean;
-  timestamp: number;
-  raw: Event;
-};
-
-/**
- * Codemode tool-provider configuration event card element.
- */
-export type EventsStreamCodemodeToolProviderElement = EventsStreamRenderedElement<
-  "codemode-tool-provider",
-  EventsStreamCodemodeToolProviderElementProps
->;
-
-/**
  * Props for the current stream activity indicator, usually rendered in the
  * header slot.
  */
@@ -233,6 +214,22 @@ export type EventsStreamActivityElementProps = {
 export type EventsStreamActivityElement = EventsStreamRenderedElement<
   "activity",
   EventsStreamActivityElementProps
+>;
+
+/**
+ * Props for the reduced stream event counter, usually rendered in the header
+ * slot.
+ */
+export type EventsStreamEventCounterElementProps = {
+  count: number;
+};
+
+/**
+ * Header-slot event counter element.
+ */
+export type EventsStreamEventCounterElement = EventsStreamRenderedElement<
+  "event-counter",
+  EventsStreamEventCounterElementProps
 >;
 
 /**
@@ -282,8 +279,8 @@ export type EventsStreamBuiltInElement =
   | EventsStreamErrorElement
   | EventsStreamCodemodeBlockElement
   | EventsStreamCodemodeResultElement
-  | EventsStreamCodemodeToolProviderElement
   | EventsStreamActivityElement
+  | EventsStreamEventCounterElement
   | EventsStreamComposerSuggestionElement;
 
 /**

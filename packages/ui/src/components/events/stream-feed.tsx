@@ -9,7 +9,6 @@ import {
   FolderPlusIcon,
   SparklesIcon,
   TerminalSquareIcon,
-  WrenchIcon,
   XCircleIcon,
 } from "lucide-react";
 
@@ -19,11 +18,7 @@ import {
   ConversationEmptyState,
   ConversationScrollButton,
 } from "@iterate-com/ui/components/ai-elements/conversation";
-import {
-  Message,
-  MessageContent,
-  MessageResponse,
-} from "@iterate-com/ui/components/ai-elements/message";
+import { Message, MessageContent } from "@iterate-com/ui/components/ai-elements/message";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import { IterateMark } from "@iterate-com/ui/components/iterate-mark";
@@ -37,9 +32,9 @@ import type {
   EventsStreamChildStreamCreatedElement,
   EventsStreamCodemodeBlockElement,
   EventsStreamCodemodeResultElement,
-  EventsStreamCodemodeToolProviderElement,
   EventsStreamComposerSuggestionElement,
   EventsStreamErrorElement,
+  EventsStreamEventCounterElement,
   EventsStreamGroupedRawEventElement,
   EventsStreamInputAction,
   EventsStreamMessageElement,
@@ -48,6 +43,11 @@ import type {
   EventsStreamRawJsonDumpElement,
   EventsStreamViewState,
 } from "@iterate-com/ui/components/events/feed-items";
+import {
+  EventsStreamLayout,
+  EventsStreamLayoutHeader,
+  EventsStreamLayoutMain,
+} from "@iterate-com/ui/components/events/stream-layout";
 import { cn } from "@iterate-com/ui/lib/utils";
 
 /**
@@ -78,48 +78,73 @@ export function EventsStreamView({
   className?: string;
 }) {
   return (
-    <div className={cn("flex h-full min-h-0 flex-col overflow-hidden", className)}>
-      <EventsStreamHeader elements={viewState.slots.header} />
-      <EventsStreamFeed
-        elements={viewState.slots.feed}
-        emptyLabel={emptyLabel}
-        isPending={isPending}
-        errorLabel={errorLabel}
-        onOpenEventOffsetChange={onOpenEventOffsetChange}
-      />
+    <EventsStreamLayout className={className}>
+      {viewState.slots.header.length === 0 ? null : (
+        <EventsStreamLayoutHeader>
+          <EventsStreamHeader elements={viewState.slots.header} />
+        </EventsStreamLayoutHeader>
+      )}
+      <EventsStreamLayoutMain>
+        <EventsStreamFeed
+          elements={viewState.slots.feed}
+          emptyLabel={emptyLabel}
+          isPending={isPending}
+          errorLabel={errorLabel}
+          onOpenEventOffsetChange={onOpenEventOffsetChange}
+        />
+      </EventsStreamLayoutMain>
       <EventsStreamEventInspectorSheet
         events={events}
         openEventOffset={openEventOffset}
         onOpenEventOffsetChange={onOpenEventOffsetChange}
         getEventTypeHref={getEventTypeHref}
       />
-    </div>
+    </EventsStreamLayout>
   );
 }
 
-function EventsStreamHeader({ elements }: { elements: readonly EventsStreamBuiltInElement[] }) {
+/**
+ * Renders header-slot elements from reduced stream state.
+ */
+export function EventsStreamHeader({
+  elements,
+}: {
+  elements: readonly EventsStreamBuiltInElement[];
+}) {
   if (elements.length === 0) {
     return null;
   }
 
   return (
-    <div className="shrink-0 border-b bg-background/95 px-4 py-2">
-      <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        {elements.map((element) => (
-          <EventsStreamHeaderElementRenderer key={element.id} element={element} />
-        ))}
-      </div>
+    <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground">
+      {elements.map((element) => (
+        <EventsStreamHeaderElementRenderer key={element.id} element={element} />
+      ))}
     </div>
   );
 }
 
 function EventsStreamHeaderElementRenderer({ element }: { element: EventsStreamBuiltInElement }) {
   switch (element.type) {
+    case "event-counter":
+      return <EventCounterHeaderElement element={element} />;
     case "activity":
       return <ActivityHeaderElement element={element} />;
     default:
       return <UnknownStreamElement element={element} />;
   }
+}
+
+function EventCounterHeaderElement({ element }: { element: EventsStreamEventCounterElement }) {
+  return (
+    <Badge
+      variant="outline"
+      className="px-1.5 font-mono text-[10px] font-normal tabular-nums text-muted-foreground"
+      aria-label={`${element.props.count} event${element.props.count === 1 ? "" : "s"} in stream`}
+    >
+      {element.props.count} {element.props.count === 1 ? "event" : "events"}
+    </Badge>
+  );
 }
 
 /**
@@ -284,17 +309,15 @@ function EventsStreamFeedElementRenderer({
         />
       );
     case "child-stream-created":
-      return <ChildStreamCreatedCard element={element} />;
+      return <ChildStreamCreatedLine element={element} />;
     case "metadata-updated":
-      return <MetadataUpdatedCard element={element} />;
+      return <MetadataUpdatedBlock element={element} />;
     case "error":
-      return <ErrorEventCard element={element} />;
+      return <ErrorEventLine element={element} />;
     case "codemode-block":
-      return <CodemodeBlockCard element={element} />;
+      return <CodemodeBlockBlock element={element} />;
     case "codemode-result":
-      return <CodemodeResultCard element={element} />;
-    case "codemode-tool-provider":
-      return <CodemodeToolProviderCard element={element} />;
+      return <CodemodeResultBlock element={element} />;
     default:
       return <UnknownStreamElement element={element} />;
   }
@@ -327,15 +350,9 @@ function MessageFeedItemCard({ element }: { element: EventsStreamMessageElement 
   return (
     <Message from={element.props.role}>
       <MessageContent>
-        {element.props.role === "user" ? (
-          <div className="max-h-[40vh] max-w-full overflow-auto whitespace-pre-wrap wrap-break-word leading-6">
-            {element.props.text}
-          </div>
-        ) : (
-          <MessageResponse className="min-w-0 max-w-full overflow-hidden">
-            {element.props.text}
-          </MessageResponse>
-        )}
+        <div className="max-h-[40vh] max-w-full overflow-auto whitespace-pre-wrap wrap-break-word leading-6">
+          {element.props.text}
+        </div>
       </MessageContent>
     </Message>
   );
@@ -413,24 +430,22 @@ function CoreEventTypeLabel({ type, className }: { type: string; className?: str
   );
 }
 
-function ChildStreamCreatedCard({ element }: { element: EventsStreamChildStreamCreatedElement }) {
+function ChildStreamCreatedLine({ element }: { element: EventsStreamChildStreamCreatedElement }) {
   return (
-    <FeedEventCard
+    <FeedEvent
       icon={<FolderPlusIcon className="size-3.5" />}
-      eyebrow="Child stream created"
-      title={element.props.childPath}
-      meta={[element.props.parentPath, formatTime(element.props.timestamp)]}
+      label="Child stream created"
+      value={element.props.childPath}
     />
   );
 }
 
-function MetadataUpdatedCard({ element }: { element: EventsStreamMetadataUpdatedElement }) {
+function MetadataUpdatedBlock({ element }: { element: EventsStreamMetadataUpdatedElement }) {
   return (
-    <FeedEventCard
+    <FeedEvent
       icon={<BotIcon className="size-3.5" />}
-      eyebrow="Metadata updated"
-      title={element.props.path}
-      meta={[formatTime(element.props.timestamp)]}
+      label="Metadata updated"
+      value={element.props.path}
     >
       <SerializedObjectCodeBlock
         data={element.props.metadata}
@@ -439,48 +454,42 @@ function MetadataUpdatedCard({ element }: { element: EventsStreamMetadataUpdated
         showToggle
         showCopyButton
       />
-    </FeedEventCard>
+    </FeedEvent>
   );
 }
 
-function ErrorEventCard({ element }: { element: EventsStreamErrorElement }) {
+function ErrorEventLine({ element }: { element: EventsStreamErrorElement }) {
   return (
-    <FeedEventCard
+    <FeedEvent
       icon={<AlertTriangleIcon className="size-3.5" />}
-      eyebrow="Error occurred"
-      title={element.props.message}
-      meta={[formatTime(element.props.timestamp)]}
+      label="Error"
+      value={element.props.message}
       tone="danger"
     />
   );
 }
 
-function CodemodeBlockCard({ element }: { element: EventsStreamCodemodeBlockElement }) {
+function CodemodeBlockBlock({ element }: { element: EventsStreamCodemodeBlockElement }) {
   return (
-    <FeedEventCard
-      icon={<Code2Icon className="size-3.5" />}
-      eyebrow="Codemode block"
-      title="JavaScript"
-      meta={[formatTime(element.props.timestamp)]}
-    >
+    <FeedEvent icon={<Code2Icon className="size-3.5" />} label="Codemode block">
       <SourceCodeBlock
         code={element.props.script}
         language="typescript"
         className="min-h-40 max-h-128"
         showCopyButton
       />
-    </FeedEventCard>
+    </FeedEvent>
   );
 }
 
-function CodemodeResultCard({ element }: { element: EventsStreamCodemodeResultElement }) {
+function CodemodeResultBlock({ element }: { element: EventsStreamCodemodeResultElement }) {
   const StatusIcon = element.props.success ? CheckCircle2Icon : XCircleIcon;
 
   return (
-    <FeedEventCard
+    <FeedEvent
       icon={<TerminalSquareIcon className="size-3.5" />}
-      eyebrow="Codemode result"
-      title={
+      label="Codemode result"
+      value={
         <span className="inline-flex min-w-0 items-center gap-2">
           <StatusIcon
             className={cn(
@@ -489,9 +498,10 @@ function CodemodeResultCard({ element }: { element: EventsStreamCodemodeResultEl
             )}
           />
           <span>{element.props.success ? "Succeeded" : "Failed"}</span>
+          <span className="text-muted-foreground">·</span>
+          <span className="text-muted-foreground">{formatDuration(element.props.durationMs)}</span>
         </span>
       }
-      meta={[formatDuration(element.props.durationMs), formatTime(element.props.timestamp)]}
       tone={element.props.success ? "default" : "danger"}
     >
       <div className="space-y-3">
@@ -519,26 +529,7 @@ function CodemodeResultCard({ element }: { element: EventsStreamCodemodeResultEl
           />
         )}
       </div>
-    </FeedEventCard>
-  );
-}
-
-function CodemodeToolProviderCard({
-  element,
-}: {
-  element: EventsStreamCodemodeToolProviderElement;
-}) {
-  return (
-    <FeedEventCard
-      icon={<WrenchIcon className="size-3.5" />}
-      eyebrow="Codemode tool provider"
-      title={element.props.slug}
-      meta={[
-        element.props.operation,
-        element.props.hasTypesCallable ? "types available" : "no types callable",
-        formatTime(element.props.timestamp),
-      ]}
-    />
+    </FeedEvent>
   );
 }
 
@@ -564,23 +555,24 @@ function TimelineLine({ icon, label }: { icon: ReactNode; label: string }) {
 }
 
 /**
- * Shared card chrome for explicit event renderers.
+ * Compact chrome for explicit event renderers.
  *
- * This is only a React helper, not a catch-all Rendered Element type. New event
- * families should add a named element type before they use this chrome.
+ * Semantic event rows should stay lighter than raw payload inspection. The
+ * inspector owns timestamps and full event metadata; these rows show the useful
+ * domain fact and only add payload UI when the event actually carries payload.
  */
-function FeedEventCard({
+function FeedEvent({
   icon,
-  eyebrow,
-  title,
-  meta = [],
+  label,
+  value,
+  detail,
   tone = "default",
   children,
 }: {
   icon: ReactNode;
-  eyebrow: string;
-  title: ReactNode;
-  meta?: string[];
+  label: string;
+  value?: ReactNode;
+  detail?: ReactNode;
   tone?: "default" | "danger";
   children?: ReactNode;
 }) {
@@ -588,30 +580,32 @@ function FeedEventCard({
     <Message from="assistant" className="max-w-3xl">
       <MessageContent
         className={cn(
-          "w-full gap-0 overflow-hidden rounded-lg border bg-card px-0 py-0 shadow-sm",
-          tone === "danger" && "border-destructive/30",
+          "w-full gap-2 rounded-none border-0 bg-transparent px-0 py-0",
+          tone === "danger" && "text-destructive",
         )}
       >
-        <div className="border-b px-4 py-3">
-          <div className="min-w-0 space-y-1">
-            <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-              {icon}
-              <span>{eyebrow}</span>
-            </div>
-            <div className="font-mono text-sm font-medium leading-snug">{title}</div>
-            {meta.length > 0 ? (
-              <div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground">
-                {meta.map((part, index) => (
-                  <div key={`${part}-${index}`} className="flex items-center gap-2">
-                    {index > 0 ? <span>·</span> : null}
-                    <span>{part}</span>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-          </div>
+        <div
+          className={cn(
+            "flex min-w-0 items-center gap-2 py-1 text-xs text-muted-foreground",
+            tone === "danger" && "text-destructive",
+          )}
+        >
+          <span className="shrink-0">{icon}</span>
+          <span className="shrink-0 font-medium">
+            {label}
+            {value == null && detail == null ? "" : ":"}
+          </span>
+          {value == null ? null : (
+            <span className="min-w-0 truncate font-mono text-foreground">{value}</span>
+          )}
+          {detail == null ? null : (
+            <>
+              <span className="shrink-0 text-muted-foreground/70">·</span>
+              <span className="min-w-0 truncate text-muted-foreground">{detail}</span>
+            </>
+          )}
         </div>
-        {children ? <div className="px-4 py-3">{children}</div> : null}
+        {children == null ? null : <div className="min-w-0">{children}</div>}
       </MessageContent>
     </Message>
   );

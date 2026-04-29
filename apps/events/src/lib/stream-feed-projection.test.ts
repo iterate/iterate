@@ -650,12 +650,12 @@ describe("projectWireToFeed", () => {
     const feed = projectWireToFeed([
       createEvent({
         offset: 1,
-        type: "webchat-message-received",
+        type: "events.iterate.com/webchat/user-message-added",
         payload: { content: "hello agent" },
       }),
       createEvent({
         offset: 2,
-        type: "webchat-response-added",
+        type: "events.iterate.com/webchat/agent-response-added",
         payload: { message: "hello human" },
       }),
     ]);

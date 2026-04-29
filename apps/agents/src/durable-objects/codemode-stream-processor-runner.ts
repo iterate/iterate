@@ -10,42 +10,37 @@ import {
   type StreamProcessorRunnerState,
 } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor-runner";
 import type { StreamEvent } from "@iterate-com/shared/stream-processors";
-import { AgentProcessorContract } from "~/stream-processors/agent/contract.ts";
-import { createAgentProcessor } from "~/stream-processors/agent/implementation.ts";
+import { createCloudflareCodemodeCodeExecutor } from "~/stream-processors/codemode/cloudflare-code-executor.ts";
+import { CodemodeProcessorContract } from "~/stream-processors/codemode/contract.ts";
+import { createCodemodeProcessor } from "~/stream-processors/codemode/implementation.ts";
 import type { CloudflareEnv } from "~/lib/worker-env.d.ts";
 import {
   createStreamProcessorApi,
   streamProcessorWebSocketMessageToString,
 } from "./stream-processor-runner-common.ts";
 
-export type AgentStreamProcessorRunnerInit = {
+export type CodemodeStreamProcessorRunnerInit = {
   name: string;
   streamPath: StreamPath;
 };
 
-type AgentStreamProcessorRunnerCatalogEnv = Pick<CloudflareEnv, "DB">;
+type CodemodeStreamProcessorRunnerCatalogEnv = Pick<CloudflareEnv, "DB">;
 
-function createAgentStreamProcessor(args: { ctx: DurableObjectState; env: CloudflareEnv }) {
-  return createAgentProcessor({
-    ai: {
-      /**
-       * `Ai.run` is model-specific in Cloudflare's generated types, while the
-       * processor deliberately receives a tiny model-agnostic surface. Keep
-       * the Worker binding cast at this boundary so the processor can still
-       * run in tests or another runner with any compatible executor.
-       */
-      run: async (model, body, runOpts) =>
-        await args.env.AI.run(model as never, body as never, runOpts as never),
-    },
-    waitUntil: (promise) => args.ctx.waitUntil(promise),
+function createCodemodeStreamProcessor(args: { env: CloudflareEnv }) {
+  return createCodemodeProcessor({
+    codeExecutor: createCloudflareCodemodeCodeExecutor({
+      loader: args.env.LOADER,
+      outboundFetch: args.env.CODEMODE_OUTBOUND_FETCH,
+    }),
+    env: args.env as unknown as Record<string, unknown>,
   });
 }
 
-const AgentStreamProcessorRunnerCore = withD1ObjectCatalog<
-  AgentStreamProcessorRunnerInit,
-  AgentStreamProcessorRunnerCatalogEnv
+const CodemodeStreamProcessorRunnerCore = withD1ObjectCatalog<
+  CodemodeStreamProcessorRunnerInit,
+  CodemodeStreamProcessorRunnerCatalogEnv
 >({
-  className: "AgentStreamProcessorRunner",
+  className: "CodemodeStreamProcessorRunner",
   getDatabase(env) {
     return env.DB;
   },
@@ -54,42 +49,43 @@ const AgentStreamProcessorRunnerCore = withD1ObjectCatalog<
       return params.streamPath;
     },
   },
-})(withLifecycleHooks<AgentStreamProcessorRunnerInit>()(withDurableObjectCore(DurableObject)));
+})(withLifecycleHooks<CodemodeStreamProcessorRunnerInit>()(withDurableObjectCore(DurableObject)));
 
-const AgentStreamProcessorRunnerBase = withStreamProcessorRunner<
-  AgentStreamProcessorRunnerInit,
+const CodemodeStreamProcessorRunnerBase = withStreamProcessorRunner<
+  CodemodeStreamProcessorRunnerInit,
   CloudflareEnv,
-  typeof AgentProcessorContract
+  typeof CodemodeProcessorContract
 >({
-  processor: createAgentStreamProcessor,
+  processor: createCodemodeStreamProcessor,
   streamApi(args) {
     return createStreamProcessorApi({
       ctx: args.ctx,
       streamPath: args.initParams.streamPath,
     });
   },
-})(AgentStreamProcessorRunnerCore);
+})(CodemodeStreamProcessorRunnerCore);
 
-const AgentStreamProcessorRunnerDebugBase = withOuterbase({
+const CodemodeStreamProcessorRunnerDebugBase = withOuterbase({
   unsafe: "I_UNDERSTAND_THIS_EXPOSES_SQL",
 })(
   withKvInspector({
     unsafe: "I_UNDERSTAND_THIS_EXPOSES_KV",
-  })(AgentStreamProcessorRunnerBase),
+  })(CodemodeStreamProcessorRunnerBase),
 );
 
-export type AgentStreamProcessorRunnerState = StreamProcessorRunnerState<
-  typeof AgentProcessorContract
+export type CodemodeStreamProcessorRunnerState = StreamProcessorRunnerState<
+  typeof CodemodeProcessorContract
 >;
 
 /**
- * Durable Object runner for the Agent processor.
+ * Durable Object runner for the Codemode processor.
  *
- * The generic mixin owns processor state persistence and the reduce/afterAppend
- * loop. This class owns only the push WebSocket endpoint used by Events and the
- * app-specific processor dependencies configured above.
+ * This class is deployment glue: it injects Cloudflare's dynamic worker code
+ * executor and forwards Events websocket frames into the shared processor
+ * runner mixin. Codemode's contract/reducer remain frontend-safe and its
+ * implementation depends only on a narrow code-executor interface.
  */
-export class AgentStreamProcessorRunner extends AgentStreamProcessorRunnerDebugBase<CloudflareEnv> {
+export class CodemodeStreamProcessorRunner extends CodemodeStreamProcessorRunnerDebugBase<CloudflareEnv> {
   constructor(ctx: DurableObjectState, env: CloudflareEnv) {
     super(ctx, env);
 
@@ -133,15 +129,15 @@ export class AgentStreamProcessorRunner extends AgentStreamProcessorRunnerDebugB
     await this.consumeEvent({ event: frame.data.event });
   }
 
-  async catchUp(): Promise<AgentStreamProcessorRunnerState> {
+  async catchUp(): Promise<CodemodeStreamProcessorRunnerState> {
     return await this.catchUpStreamProcessor();
   }
 
-  async consumeEvent(args: { event: StreamEvent }): Promise<AgentStreamProcessorRunnerState> {
+  async consumeEvent(args: { event: StreamEvent }): Promise<CodemodeStreamProcessorRunnerState> {
     return await this.consumeStreamProcessorEvent(args);
   }
 
-  async getRunnerState(): Promise<AgentStreamProcessorRunnerState> {
+  async getRunnerState(): Promise<CodemodeStreamProcessorRunnerState> {
     await this.ensureStarted();
     return this.getStreamProcessorRunnerState();
   }

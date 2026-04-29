@@ -10,6 +10,7 @@ import { Callable } from "@iterate-com/shared/callable/types.ts";
 import { AgentProcessorContract, reduceAgentEvents } from "../agent/contract.ts";
 import { CoreProcessorRegisteredEventType } from "../core/contract.ts";
 import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
+import { WebchatProcessorContract } from "../webchat/contract.ts";
 
 /**
  * Idempotency key used for the one-time codemode primer row.
@@ -65,7 +66,11 @@ export const CodemodeProcessorContract = defineProcessorContract({
     ...standardProcessorBehavior.initialState,
     agentProcessor: initialAgentProcessorState,
   },
-  processorDeps: [...standardProcessorBehavior.processorDeps, AgentProcessorContract],
+  processorDeps: [
+    ...standardProcessorBehavior.processorDeps,
+    AgentProcessorContract,
+    WebchatProcessorContract,
+  ],
   events: {
     "events.iterate.com/codemode/block-added": {
       description: "A JavaScript codemode block was extracted for execution.",
@@ -103,8 +108,8 @@ export const CodemodeProcessorContract = defineProcessorContract({
   emits: [
     ...standardProcessorBehavior.emits,
     "events.iterate.com/agent/input-added",
-    "events.iterate.com/agent/webchat-response-added",
     "events.iterate.com/agent/status-updated",
+    "events.iterate.com/webchat/agent-response-added",
     "events.iterate.com/codemode/block-added",
     "events.iterate.com/codemode/result-added",
   ],
@@ -134,8 +139,6 @@ export const CodemodeProcessorContract = defineProcessorContract({
         }
         break;
       case "events.iterate.com/agent/system-prompt-updated":
-      case "events.iterate.com/agent/webchat-message-received":
-      case "events.iterate.com/agent/webchat-response-added":
       case "events.iterate.com/agent/llm-config-updated":
       case "events.iterate.com/agent/llm-request-scheduled":
       case "events.iterate.com/agent/llm-request-started":

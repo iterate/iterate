@@ -124,50 +124,6 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
         case "events.iterate.com/agent/llm-request-scheduled":
         case "events.iterate.com/agent/status-updated":
           return;
-        case "events.iterate.com/agent/webchat-message-received": {
-          await appendEventTypeExplanation({
-            eventType: event.type,
-            streamApi,
-          });
-          await streamApi.append({
-            event: {
-              type: "events.iterate.com/agent/input-added",
-              idempotencyKey: buildDerivedIdempotencyKey({
-                slug: AgentProcessorContract.slug,
-                purpose: "render-webchat-message",
-                event,
-              }),
-              payload: {
-                role: "user",
-                content: eventBlock({
-                  offset: event.offset,
-                  type: event.type,
-                  bodyTag: "content",
-                  body: event.payload.content,
-                }),
-              },
-            },
-          });
-          return;
-        }
-        case "events.iterate.com/agent/webchat-response-added": {
-          await appendEventTypeExplanation({
-            eventType: event.type,
-            streamApi,
-          });
-          await appendRewrite({
-            streamApi,
-            event,
-            purpose: "render-webchat-response",
-            content: eventBlock({
-              offset: event.offset,
-              type: event.type,
-              bodyTag: "message",
-              body: event.payload.message,
-            }),
-          });
-          return;
-        }
         case "events.iterate.com/agent/input-added":
           await handleAgentInputAddedForLlmRequest({
             streamApi,
@@ -658,19 +614,6 @@ async function appendEventTypeExplanation(args: { streamApi: AgentStreamApi; eve
 }
 
 function eventTypeExplanation(eventType: string): string | null {
-  if (eventType === "events.iterate.com/agent/webchat-message-received") {
-    return eventTypeExplanationBlock({
-      type: eventType,
-      meaning: "This represents a message received from the webchat user.",
-    });
-  }
-  if (eventType === "events.iterate.com/agent/webchat-response-added") {
-    return eventTypeExplanationBlock({
-      type: eventType,
-      meaning:
-        "This represents a message sent by codemode through `webchat.sendMessage({ message })`.",
-    });
-  }
   if (eventType === "events.iterate.com/agent/llm-request-started") {
     return eventTypeExplanationBlock({
       type: eventType,

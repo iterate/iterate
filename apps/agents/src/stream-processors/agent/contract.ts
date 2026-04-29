@@ -51,14 +51,6 @@ export const AgentProcessorContract = defineProcessorContract({
       description: "Updates the system prompt used for future LLM requests.",
       payloadSchema: z.object({ systemPrompt: z.string() }),
     },
-    "events.iterate.com/agent/webchat-message-received": {
-      description: "Raw inbound webchat message before it is rendered into model context.",
-      payloadSchema: z.object({ content: z.string() }),
-    },
-    "events.iterate.com/agent/webchat-response-added": {
-      description: "User-visible webchat response emitted by a tool call.",
-      payloadSchema: z.object({ message: z.string() }),
-    },
     "events.iterate.com/agent/input-added": {
       description: "A curated model-visible row of agent context.",
       payloadSchema: z.object({
@@ -155,8 +147,6 @@ export const AgentProcessorContract = defineProcessorContract({
   consumes: [
     ...standardProcessorBehavior.consumes,
     "events.iterate.com/agent/system-prompt-updated",
-    "events.iterate.com/agent/webchat-message-received",
-    "events.iterate.com/agent/webchat-response-added",
     "events.iterate.com/agent/input-added",
     "events.iterate.com/agent/llm-config-updated",
     "events.iterate.com/agent/llm-request-scheduled",
@@ -225,8 +215,6 @@ export const AgentProcessorContract = defineProcessorContract({
 
       // we consume these events, but they don't update our state but they do cause side-effects in the implementation
       case "events.iterate.com/agent/status-updated":
-      case "events.iterate.com/agent/webchat-message-received":
-      case "events.iterate.com/agent/webchat-response-added":
         return nextState;
       default:
         return assertNever(event);

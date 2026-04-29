@@ -19,7 +19,7 @@ describe("clean stream view reducers", () => {
       events: [
         event({
           offset: 1,
-          type: "events.iterate.com/agent/webchat-message-received",
+          type: "events.iterate.com/webchat/user-message-added",
           payload: { content: "hello" },
         }),
       ],
@@ -31,7 +31,7 @@ describe("clean stream view reducers", () => {
         id: "raw-event-1",
         props: {
           offset: 1,
-          eventType: "events.iterate.com/agent/webchat-message-received",
+          eventType: "events.iterate.com/webchat/user-message-added",
         },
       },
       {
@@ -43,6 +43,14 @@ describe("clean stream view reducers", () => {
         },
       },
     ]);
+    expect(viewState.slots.header).toMatchObject([
+      {
+        type: "event-counter",
+        props: {
+          count: 1,
+        },
+      },
+    ]);
   });
 
   test("raw-pretty projects webchat responses as assistant messages", () => {
@@ -51,7 +59,7 @@ describe("clean stream view reducers", () => {
       events: [
         event({
           offset: 1,
-          type: "events.iterate.com/agent/webchat-response-added",
+          type: "events.iterate.com/webchat/agent-response-added",
           payload: { message: "hi from codemode" },
         }),
       ],
@@ -61,7 +69,7 @@ describe("clean stream view reducers", () => {
       {
         type: "raw-event",
         props: {
-          eventType: "events.iterate.com/agent/webchat-response-added",
+          eventType: "events.iterate.com/webchat/agent-response-added",
         },
       },
       {
@@ -110,6 +118,14 @@ describe("clean stream view reducers", () => {
         },
       },
     ]);
+    expect(viewState.slots.header).toMatchObject([
+      {
+        type: "event-counter",
+        props: {
+          count: 2,
+        },
+      },
+    ]);
   });
 
   test("raw-pretty does not group a raw summary when that event also emits a semantic item", () => {
@@ -118,12 +134,12 @@ describe("clean stream view reducers", () => {
       events: [
         event({
           offset: 1,
-          type: "events.iterate.com/agent/webchat-message-received",
+          type: "events.iterate.com/webchat/user-message-added",
           payload: {},
         }),
         event({
           offset: 2,
-          type: "events.iterate.com/agent/webchat-message-received",
+          type: "events.iterate.com/webchat/user-message-added",
           payload: { content: "hello" },
         }),
       ],
@@ -165,7 +181,7 @@ describe("clean stream view reducers", () => {
     ]);
   });
 
-  test("raw-pretty projects canonical codemode events into dedicated cards", () => {
+  test("raw-pretty projects canonical codemode execution events into dedicated renderers", () => {
     const viewState = processEventsWithViewReducer({
       reducer: rawPrettyEventsStreamViewReducer,
       events: [
@@ -201,7 +217,6 @@ describe("clean stream view reducers", () => {
       "raw-event",
       "codemode-result",
       "raw-event",
-      "codemode-tool-provider",
     ]);
     expect(viewState.slots.feed).toMatchObject([
       {},
@@ -223,14 +238,6 @@ describe("clean stream view reducers", () => {
         },
       },
       {},
-      {
-        type: "codemode-tool-provider",
-        props: {
-          slug: "github",
-          operation: "configured",
-          hasTypesCallable: true,
-        },
-      },
     ]);
   });
 

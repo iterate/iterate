@@ -123,12 +123,46 @@ export function buildAgentStreamProcessorRunnerWebSocketCallbackUrl(args: {
   runnerInstance: string;
   streamPath: StreamPath;
 }): string {
+  return buildStreamProcessorRunnerWebSocketCallbackUrl({
+    ...args,
+    runnerSlug: "agent-stream-processor-runner",
+  });
+}
+
+export function buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl(args: {
+  publicOrigin: string;
+  runnerInstance: string;
+  streamPath: StreamPath;
+}): string {
+  return buildStreamProcessorRunnerWebSocketCallbackUrl({
+    ...args,
+    runnerSlug: "codemode-stream-processor-runner",
+  });
+}
+
+export function buildWebchatStreamProcessorRunnerWebSocketCallbackUrl(args: {
+  publicOrigin: string;
+  runnerInstance: string;
+  streamPath: StreamPath;
+}): string {
+  return buildStreamProcessorRunnerWebSocketCallbackUrl({
+    ...args,
+    runnerSlug: "webchat-stream-processor-runner",
+  });
+}
+
+function buildStreamProcessorRunnerWebSocketCallbackUrl(args: {
+  publicOrigin: string;
+  runnerSlug: string;
+  runnerInstance: string;
+  streamPath: StreamPath;
+}): string {
   const url = new URL(args.publicOrigin);
   if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
     url.hostname = "[::1]";
   }
   url.protocol = url.protocol === "http:" || isLocalhost(url.hostname) ? "ws:" : "wss:";
-  url.pathname = `/api/agent-stream-processor-runner/${encodeURIComponent(args.runnerInstance)}/websocket`;
+  url.pathname = `/api/${args.runnerSlug}/${encodeURIComponent(args.runnerInstance)}/websocket`;
   url.search = "";
   url.searchParams.set("streamPath", args.streamPath);
   url.hash = "";

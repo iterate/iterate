@@ -115,7 +115,8 @@ Working note for the `apps/agents` processor redesign discussion. This is not co
 ## Design Implications
 
 - AgentLoop and Codemode should communicate through events, not direct calls or shared mutable state.
-- AgentLoop and Codemode must be modeled as clearly separate processor contracts, implementations, and reduced state slices.
+- Webchat, Agent, and Codemode must be modeled as clearly separate processor contracts, implementations, runners, and reduced state slices.
+- Webchat behavior should come out of the Agent processor. Webchat owns raw webchat events, Agent owns model context and LLM scheduling, and Codemode owns code execution.
 - Do not preserve the current `IterateAgent` / composed `IterateAgentProcessorState` design as the target architecture; it can be replaced.
 - The future agent processor Durable Object should not subclass Cloudflare's `Agent`.
 - MCP connections should move into a separate Durable Object, e.g. `MCPConnection`, that can act as a Codemode tool provider.

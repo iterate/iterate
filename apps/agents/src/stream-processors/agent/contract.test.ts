@@ -225,23 +225,6 @@ describe("AgentProcessorContract", () => {
 
     expect(state.currentRequest).toEqual({ requestId: "req_current" });
   });
-
-  it("ignores raw webchat events in the reduced state projection", () => {
-    const state = reduceAgentEvents({
-      events: [
-        committedEvent({
-          type: "events.iterate.com/agent/webchat-message-received",
-          payload: { content: "hello" },
-        }),
-        committedEvent({
-          type: "events.iterate.com/agent/webchat-response-added",
-          payload: { message: "hi" },
-        }),
-      ],
-    });
-
-    expect(state).toEqual(getInitialProcessorState(AgentProcessorContract));
-  });
 });
 
 function committedEvent(args: {

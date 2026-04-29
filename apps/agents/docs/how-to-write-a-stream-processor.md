@@ -168,4 +168,12 @@ await runner.consumeEvent({ event });
 
 For push subscriptions, the worker websocket route initializes the StreamProcessorRunner with `{ name, streamPath }` and forwards frames into the Durable Object. The StreamProcessorRunner then catches up before it processes the first pushed event.
 
+`apps/agents` currently uses three independent runners for one chat stream:
+
+- `WebchatStreamProcessorRunner` consumes `events.iterate.com/webchat/*` and renders those raw events into `events.iterate.com/agent/input-added`.
+- `AgentStreamProcessorRunner` consumes curated agent input and owns LLM scheduling/status events.
+- `CodemodeStreamProcessorRunner` consumes agent assistant input, executes codemode blocks through an injected code executor, and may emit `events.iterate.com/webchat/agent-response-added`.
+
+This separation is deliberate. The processors coordinate only through appended stream events, so they can later move across network boundaries without changing their contracts.
+
 Do not assume same-runner ordering between processors. If Codemode needs Agent state, keep an explicit local projection in Codemode state and update it by running Agent's reducer over consumed Agent events.

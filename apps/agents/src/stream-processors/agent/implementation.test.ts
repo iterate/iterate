@@ -9,7 +9,7 @@ import { AgentProcessorContract, type AgentState } from "./contract.ts";
 import { createAgentProcessor } from "./implementation.ts";
 
 describe("createAgentProcessor", () => {
-  it("renders webchat messages into derived agent input rows", async () => {
+  it("does not schedule LLM work for explicitly non-triggering agent input", async () => {
     const appended: StreamEventInput[] = [];
     const processor = createAgentProcessor({
       ai: {
@@ -22,8 +22,12 @@ describe("createAgentProcessor", () => {
 
     await processor.implementation.afterAppend?.({
       event: committedEvent({
-        type: "events.iterate.com/agent/webchat-message-received",
-        payload: { content: "hello" },
+        type: "events.iterate.com/agent/input-added",
+        payload: {
+          role: "user",
+          content: "hello",
+          triggerLlmRequest: { behaviour: "dont-trigger-request" },
+        },
         offset: 42,
       }),
       previousState: registeredState(),
@@ -32,28 +36,7 @@ describe("createAgentProcessor", () => {
       signal: new AbortController().signal,
     });
 
-    expect(appended).toEqual([
-      {
-        type: "events.iterate.com/agent/input-added",
-        idempotencyKey:
-          "stream-processor:agent:event-type-explainer:events.iterate.com/agent/webchat-message-received",
-        payload: {
-          role: "user",
-          content:
-            "First `events.iterate.com/agent/webchat-message-received` event. This represents a message received from the webchat user.",
-          triggerLlmRequest: { behaviour: "dont-trigger-request" },
-        },
-      },
-      {
-        type: "events.iterate.com/agent/input-added",
-        idempotencyKey: "stream-processor:agent:derived:render-webchat-message:/agents/test:42",
-        payload: {
-          role: "user",
-          content:
-            "```yaml\nevent:\n  offset: 42\n  type: events.iterate.com/agent/webchat-message-received\n  content: |-\n    hello\n```",
-        },
-      },
-    ]);
+    expect(appended).toEqual([]);
   });
 });
 

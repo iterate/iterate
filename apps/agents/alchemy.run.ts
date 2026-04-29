@@ -94,6 +94,14 @@ const agentStreamProcessorRunner = DurableObjectNamespace("agent-stream-processo
   className: "AgentStreamProcessorRunner",
   sqlite: true,
 });
+const codemodeStreamProcessorRunner = DurableObjectNamespace("codemode-stream-processor-runner", {
+  className: "CodemodeStreamProcessorRunner",
+  sqlite: true,
+});
+const webchatStreamProcessorRunner = DurableObjectNamespace("webchat-stream-processor-runner", {
+  className: "WebchatStreamProcessorRunner",
+  sqlite: true,
+});
 // Deliberately no `<ChildStreamAutoSubscriber>` type parameter here: combined
 // with `DurableObjectNamespace<IterateAgent>` above, TS ends up following
 // `Agent<CloudflareEnv>` → `typeof worker.Env` → back to both DOs and reports
@@ -128,6 +136,8 @@ export const worker = await TanStackStart(APP_NAME, {
     DB: db,
     ITERATE_AGENT: iterateAgent,
     AGENT_STREAM_PROCESSOR_RUNNER: agentStreamProcessorRunner,
+    CODEMODE_STREAM_PROCESSOR_RUNNER: codemodeStreamProcessorRunner,
+    WEBCHAT_STREAM_PROCESSOR_RUNNER: webchatStreamProcessorRunner,
     CHILD_STREAM_AUTO_SUBSCRIBER: childStreamAutoSubscriber,
     MCP_CLIENT: mcpClient,
     OPENAPI_TOOL_CLIENT: openApiToolClient,

@@ -14,7 +14,11 @@ import { createEventsOrpcClient } from "~/lib/events-orpc-client.ts";
 import {
   AGENT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
   buildAgentStreamProcessorRunnerWebSocketCallbackUrl,
+  buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl,
+  buildWebchatStreamProcessorRunnerWebSocketCallbackUrl,
+  CODEMODE_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
   streamPathToAgentInstance,
+  WEBCHAT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
 } from "~/lib/iterate-agent-addressing.ts";
 import type { CloudflareEnv } from "~/lib/worker-env.d.ts";
 
@@ -133,41 +137,70 @@ export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
     const childPath = childCreated.data.payload.childPath;
     const projectSlug = ProjectSlug.parse(appConfig.eventsProjectSlug);
     const runnerInstance = streamPathToAgentInstance(childPath);
-    const callbackUrl = buildAgentStreamProcessorRunnerWebSocketCallbackUrl({
-      publicOrigin: publicBaseUrl,
-      runnerInstance,
-      streamPath: childPath,
-    });
+    const runnerSubscriptions = [
+      {
+        slug: WEBCHAT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
+        callbackUrl: buildWebchatStreamProcessorRunnerWebSocketCallbackUrl({
+          publicOrigin: publicBaseUrl,
+          runnerInstance,
+          streamPath: childPath,
+        }),
+      },
+      {
+        slug: AGENT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
+        callbackUrl: buildAgentStreamProcessorRunnerWebSocketCallbackUrl({
+          publicOrigin: publicBaseUrl,
+          runnerInstance,
+          streamPath: childPath,
+        }),
+      },
+      {
+        slug: CODEMODE_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
+        callbackUrl: buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
+          publicOrigin: publicBaseUrl,
+          runnerInstance,
+          streamPath: childPath,
+        }),
+      },
+    ];
 
     const eventsClient = createEventsOrpcClient({
       baseUrl: appConfig.eventsBaseUrl,
       projectSlug,
     });
 
-    // Subscribe the runner FIRST so the DO is connected by the time the
-    // default events land — every default we append below is a normal
-    // websocket frame the processor will see live, no replay round-trip required.
-    try {
-      await eventsClient.append({
-        path: childPath,
-        event: {
-          type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-          payload: {
-            slug: AGENT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
-            type: "websocket",
-            callbackUrl,
+    // Subscribe processors before defaults so newly appended defaults can be
+    // delivered through websocket frames. The processors remain independent:
+    // no correctness relies on the order in this local array.
+    for (const subscription of runnerSubscriptions) {
+      try {
+        await eventsClient.append({
+          path: childPath,
+          event: {
+            type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
+            payload: {
+              slug: subscription.slug,
+              type: "websocket",
+              callbackUrl: subscription.callbackUrl,
+            },
           },
-        },
-      });
-      log("onMessage.subscribed", { childPath, runnerInstance, callbackUrl });
-    } catch (error) {
-      this.#logError("onMessage.subscribeFailed", {
-        childPath,
-        runnerInstance,
-        callbackUrl,
-        error: stringifyError(error),
-      });
-      return;
+        });
+        log("onMessage.subscribed", {
+          childPath,
+          runnerInstance,
+          slug: subscription.slug,
+          callbackUrl: subscription.callbackUrl,
+        });
+      } catch (error) {
+        this.#logError("onMessage.subscribeFailed", {
+          childPath,
+          runnerInstance,
+          slug: subscription.slug,
+          callbackUrl: subscription.callbackUrl,
+          error: stringifyError(error),
+        });
+        return;
+      }
     }
 
     // Record the discovery so the dashboard's sidebar can list every agent

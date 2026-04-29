@@ -32,6 +32,8 @@ items" versus "feed items" inside the feed slot.
 - `feed-items.ts` defines `EventsStreamRenderedElement`, built-in element prop
   types, `EventsStreamSlots`, and the reduced stream view state.
 - `feed-processors.ts` defines selectable view reducers.
+- `stream-layout.tsx` defines the package-owned header/main/message-input
+  layout regions for browser stream UIs.
 - `stream-feed.tsx` renders the stream view and feed items by `item.type`.
 - `event-inspector-sheet.tsx` renders the shared raw event detail drawer.
 
@@ -61,6 +63,7 @@ falls back to `raw-pretty`.
 
 All reducers also share small cross-slot projections:
 
+- event counts become an `event-counter` element in the header slot.
 - active LLM requests become an `activity` element in the header slot.
 - stream error events become a `composer-suggestion` element in the input slot.
 

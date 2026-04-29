@@ -10,42 +10,26 @@ import {
   type StreamProcessorRunnerState,
 } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor-runner";
 import type { StreamEvent } from "@iterate-com/shared/stream-processors";
-import { AgentProcessorContract } from "~/stream-processors/agent/contract.ts";
-import { createAgentProcessor } from "~/stream-processors/agent/implementation.ts";
+import { WebchatProcessorContract } from "~/stream-processors/webchat/contract.ts";
+import { createWebchatProcessor } from "~/stream-processors/webchat/implementation.ts";
 import type { CloudflareEnv } from "~/lib/worker-env.d.ts";
 import {
   createStreamProcessorApi,
   streamProcessorWebSocketMessageToString,
 } from "./stream-processor-runner-common.ts";
 
-export type AgentStreamProcessorRunnerInit = {
+export type WebchatStreamProcessorRunnerInit = {
   name: string;
   streamPath: StreamPath;
 };
 
-type AgentStreamProcessorRunnerCatalogEnv = Pick<CloudflareEnv, "DB">;
+type WebchatStreamProcessorRunnerCatalogEnv = Pick<CloudflareEnv, "DB">;
 
-function createAgentStreamProcessor(args: { ctx: DurableObjectState; env: CloudflareEnv }) {
-  return createAgentProcessor({
-    ai: {
-      /**
-       * `Ai.run` is model-specific in Cloudflare's generated types, while the
-       * processor deliberately receives a tiny model-agnostic surface. Keep
-       * the Worker binding cast at this boundary so the processor can still
-       * run in tests or another runner with any compatible executor.
-       */
-      run: async (model, body, runOpts) =>
-        await args.env.AI.run(model as never, body as never, runOpts as never),
-    },
-    waitUntil: (promise) => args.ctx.waitUntil(promise),
-  });
-}
-
-const AgentStreamProcessorRunnerCore = withD1ObjectCatalog<
-  AgentStreamProcessorRunnerInit,
-  AgentStreamProcessorRunnerCatalogEnv
+const WebchatStreamProcessorRunnerCore = withD1ObjectCatalog<
+  WebchatStreamProcessorRunnerInit,
+  WebchatStreamProcessorRunnerCatalogEnv
 >({
-  className: "AgentStreamProcessorRunner",
+  className: "WebchatStreamProcessorRunner",
   getDatabase(env) {
     return env.DB;
   },
@@ -54,42 +38,42 @@ const AgentStreamProcessorRunnerCore = withD1ObjectCatalog<
       return params.streamPath;
     },
   },
-})(withLifecycleHooks<AgentStreamProcessorRunnerInit>()(withDurableObjectCore(DurableObject)));
+})(withLifecycleHooks<WebchatStreamProcessorRunnerInit>()(withDurableObjectCore(DurableObject)));
 
-const AgentStreamProcessorRunnerBase = withStreamProcessorRunner<
-  AgentStreamProcessorRunnerInit,
+const WebchatStreamProcessorRunnerBase = withStreamProcessorRunner<
+  WebchatStreamProcessorRunnerInit,
   CloudflareEnv,
-  typeof AgentProcessorContract
+  typeof WebchatProcessorContract
 >({
-  processor: createAgentStreamProcessor,
+  processor: createWebchatProcessor,
   streamApi(args) {
     return createStreamProcessorApi({
       ctx: args.ctx,
       streamPath: args.initParams.streamPath,
     });
   },
-})(AgentStreamProcessorRunnerCore);
+})(WebchatStreamProcessorRunnerCore);
 
-const AgentStreamProcessorRunnerDebugBase = withOuterbase({
+const WebchatStreamProcessorRunnerDebugBase = withOuterbase({
   unsafe: "I_UNDERSTAND_THIS_EXPOSES_SQL",
 })(
   withKvInspector({
     unsafe: "I_UNDERSTAND_THIS_EXPOSES_KV",
-  })(AgentStreamProcessorRunnerBase),
+  })(WebchatStreamProcessorRunnerBase),
 );
 
-export type AgentStreamProcessorRunnerState = StreamProcessorRunnerState<
-  typeof AgentProcessorContract
+export type WebchatStreamProcessorRunnerState = StreamProcessorRunnerState<
+  typeof WebchatProcessorContract
 >;
 
 /**
- * Durable Object runner for the Agent processor.
+ * Durable Object runner for the Webchat processor.
  *
- * The generic mixin owns processor state persistence and the reduce/afterAppend
- * loop. This class owns only the push WebSocket endpoint used by Events and the
- * app-specific processor dependencies configured above.
+ * Webchat has no backend-only runtime dependencies today, but it still runs in
+ * its own Durable Object so webchat event rendering, Agent LLM scheduling, and
+ * Codemode execution are independently deployable processors.
  */
-export class AgentStreamProcessorRunner extends AgentStreamProcessorRunnerDebugBase<CloudflareEnv> {
+export class WebchatStreamProcessorRunner extends WebchatStreamProcessorRunnerDebugBase<CloudflareEnv> {
   constructor(ctx: DurableObjectState, env: CloudflareEnv) {
     super(ctx, env);
 
@@ -133,15 +117,15 @@ export class AgentStreamProcessorRunner extends AgentStreamProcessorRunnerDebugB
     await this.consumeEvent({ event: frame.data.event });
   }
 
-  async catchUp(): Promise<AgentStreamProcessorRunnerState> {
+  async catchUp(): Promise<WebchatStreamProcessorRunnerState> {
     return await this.catchUpStreamProcessor();
   }
 
-  async consumeEvent(args: { event: StreamEvent }): Promise<AgentStreamProcessorRunnerState> {
+  async consumeEvent(args: { event: StreamEvent }): Promise<WebchatStreamProcessorRunnerState> {
     return await this.consumeStreamProcessorEvent(args);
   }
 
-  async getRunnerState(): Promise<AgentStreamProcessorRunnerState> {
+  async getRunnerState(): Promise<WebchatStreamProcessorRunnerState> {
     await this.ensureStarted();
     return this.getStreamProcessorRunnerState();
   }

@@ -134,6 +134,7 @@ function flushCurrentGroup(displayFeed: StreamFeedItem[], currentGroup: readonly
 
 export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
   if (
+    event.type === "events.iterate.com/webchat/user-message-added" ||
     event.type === "webchat-message-received" ||
     event.type === "events.iterate.com/agent/webchat-message-received"
   ) {
@@ -149,6 +150,7 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
   }
 
   if (
+    event.type === "events.iterate.com/webchat/agent-response-added" ||
     event.type === "webchat-response-added" ||
     event.type === "events.iterate.com/agent/webchat-response-added"
   ) {

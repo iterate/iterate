@@ -19,8 +19,6 @@ type CreateAgentResult = {
   streamViewerUrl: string;
 };
 
-const WEBCHAT_RESPONSE_EVENT_TYPE = "events.iterate.com/agent/webchat-response-added";
-
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   const deadline = Date.now() + options.timeoutMs;
@@ -46,7 +44,7 @@ async function main(): Promise<void> {
     });
 
     const matchingResponse = lastEvents.find((event) => {
-      if (event.type !== WEBCHAT_RESPONSE_EVENT_TYPE) return false;
+      if (event.type !== "events.iterate.com/webchat/agent-response-added") return false;
       if (!isRecord(event.payload)) return false;
       return event.payload.message === options.expected;
     });
@@ -73,7 +71,7 @@ async function main(): Promise<void> {
 
   throw new Error(
     [
-      `Timed out after ${options.timeoutMs}ms waiting for ${WEBCHAT_RESPONSE_EVENT_TYPE} with payload.message=${JSON.stringify(options.expected)}.`,
+      `Timed out after ${options.timeoutMs}ms waiting for events.iterate.com/webchat/agent-response-added with payload.message=${JSON.stringify(options.expected)}.`,
       `Stream path: ${options.streamPath}`,
       `Last event types: ${lastEvents.map((event) => event.type).join(", ") || "(none)"}`,
     ].join("\n"),

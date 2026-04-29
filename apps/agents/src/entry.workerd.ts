@@ -11,12 +11,18 @@ import type { AppContext } from "~/context.ts";
 import * as schema from "~/db/schema.ts";
 import { AgentStreamProcessorRunner } from "~/durable-objects/agent-stream-processor-runner.ts";
 import { ChildStreamAutoSubscriber } from "~/durable-objects/child-stream-auto-subscriber.ts";
+import { CodemodeStreamProcessorRunner } from "~/durable-objects/codemode-stream-processor-runner.ts";
 import { IterateAgent } from "~/durable-objects/iterate-agent.ts";
 import { MCPClient } from "~/durable-objects/mcp-client.ts";
 import { OpenApiToolClient } from "~/durable-objects/openapi-tool-client.ts";
 import { SlackApi } from "~/durable-objects/slack-api.ts";
+import { WebchatStreamProcessorRunner } from "~/durable-objects/webchat-stream-processor-runner.ts";
 import { StreamApi } from "~/entrypoints/stream-api.ts";
-import { handleAgentStreamProcessorRunnerSocket } from "~/server/agent-stream-processor-runner-socket.ts";
+import {
+  handleAgentStreamProcessorRunnerSocket,
+  handleCodemodeStreamProcessorRunnerSocket,
+  handleWebchatStreamProcessorRunnerSocket,
+} from "~/server/agent-stream-processor-runner-socket.ts";
 
 const nativeFetch = globalThis.fetch.bind(globalThis);
 const config = parseAppConfigFromEnv({
@@ -57,10 +63,19 @@ export default {
         executionCtx: cfCtx,
       },
       async ({ log }) => {
-        const runnerSocketResponse = await handleAgentStreamProcessorRunnerSocket({
-          env,
-          request,
-        });
+        const runnerSocketResponse =
+          (await handleAgentStreamProcessorRunnerSocket({
+            env,
+            request,
+          })) ??
+          (await handleCodemodeStreamProcessorRunnerSocket({
+            env,
+            request,
+          })) ??
+          (await handleWebchatStreamProcessorRunnerSocket({
+            env,
+            request,
+          }));
         if (runnerSocketResponse) {
           return runnerSocketResponse;
         }
@@ -89,9 +104,11 @@ export default {
 export {
   AgentStreamProcessorRunner,
   ChildStreamAutoSubscriber,
+  CodemodeStreamProcessorRunner,
   IterateAgent,
   MCPClient,
   OpenApiToolClient,
   SlackApi,
   StreamApi,
+  WebchatStreamProcessorRunner,
 };

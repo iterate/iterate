@@ -2,7 +2,6 @@ import { createContext, useContext, useMemo, useState, type PropsWithChildren } 
 import { ChevronDownIcon, InfoIcon } from "lucide-react";
 import { useLocation } from "@tanstack/react-router";
 import { type StreamPath } from "@iterate-com/events-contract";
-import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   DropdownMenu,
@@ -17,7 +16,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/compone
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { streamPathFromPathname } from "~/lib/stream-links.ts";
 import { streamRendererModeOptions, type StreamRendererMode } from "~/lib/stream-feed-types.ts";
-import type { StreamFeedSummary } from "~/lib/stream-feed-summary.ts";
 import { type StreamFeedViewMode } from "~/lib/stream-view-search.ts";
 
 type StreamHeaderControls = {
@@ -25,7 +23,6 @@ type StreamHeaderControls = {
   onRendererModeChange?: (mode: StreamRendererMode) => void;
   feedViewMode: StreamFeedViewMode;
   onFeedViewModeChange?: (mode: StreamFeedViewMode) => void;
-  feedSummary?: StreamFeedSummary;
 };
 
 type StreamsChromeContextValue = {
@@ -92,18 +89,6 @@ export function StreamsHeaderAction() {
 
   return (
     <div className="flex items-center gap-2">
-      {headerControls.feedSummary ? (
-        <div className="hidden lg:flex">
-          <Badge
-            variant="outline"
-            className="px-1.5 font-mono text-[10px] font-normal tabular-nums text-muted-foreground"
-            aria-label={`${headerControls.feedSummary.rawEvents} event${headerControls.feedSummary.rawEvents === 1 ? "" : "s"} in stream`}
-          >
-            {headerControls.feedSummary.rawEvents}{" "}
-            {headerControls.feedSummary.rawEvents === 1 ? "event" : "events"}
-          </Badge>
-        </div>
-      ) : null}
       <Tabs
         value={headerControls.feedViewMode}
         onValueChange={(value) =>

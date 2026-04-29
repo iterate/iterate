@@ -70,8 +70,6 @@ export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
       switch (event.type) {
         case CoreProcessorRegisteredEventType:
         case "events.iterate.com/agent/system-prompt-updated":
-        case "events.iterate.com/agent/webchat-message-received":
-        case "events.iterate.com/agent/webchat-response-added":
         case "events.iterate.com/agent/llm-config-updated":
         case "events.iterate.com/agent/llm-request-scheduled":
         case "events.iterate.com/agent/llm-request-started":
@@ -217,7 +215,7 @@ async function executeCodemodeBlock(args: {
         const { message } = parseWebchatSendMessageArgs(rawArgs);
         await args.streamApi.append({
           event: {
-            type: "events.iterate.com/agent/webchat-response-added",
+            type: "events.iterate.com/webchat/agent-response-added",
             idempotencyKey: buildDerivedIdempotencyKey({
               slug: CodemodeProcessorContract.slug,
               purpose: `webchat-send-message:${webchatMessageSeq}`,

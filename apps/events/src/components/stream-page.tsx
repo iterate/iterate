@@ -8,18 +8,6 @@ import {
   type StreamPath,
   type StreamState,
 } from "@iterate-com/events-contract";
-import {
-  PromptInput,
-  PromptInputBody,
-  PromptInputFooter,
-  PromptInputSelect,
-  PromptInputSelectContent,
-  PromptInputSelectItem,
-  PromptInputSelectTrigger,
-  PromptInputSubmit,
-  PromptInputTextarea,
-  PromptInputTools,
-} from "@iterate-com/ui/components/ai-elements/prompt-input";
 import { Button } from "@iterate-com/ui/components/button";
 import { Checkbox } from "@iterate-com/ui/components/checkbox";
 import {
@@ -31,14 +19,21 @@ import type {
   EventsStreamInputAction,
   EventsStreamViewReducer,
 } from "@iterate-com/ui/components/events/feed-items";
+import { EventsStreamEventInspectorSheet } from "@iterate-com/ui/components/events/event-inspector-sheet";
 import {
+  EventsStreamFeed,
+  EventsStreamHeader,
   EventsStreamInputSlot,
-  EventsStreamView,
 } from "@iterate-com/ui/components/events/stream-feed";
+import {
+  EventsStreamLayout,
+  EventsStreamLayoutHeader,
+  EventsStreamLayoutMain,
+  EventsStreamLayoutMessageInput,
+} from "@iterate-com/ui/components/events/stream-layout";
 import { Label } from "@iterate-com/ui/components/label";
 import { Separator } from "@iterate-com/ui/components/separator";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
-import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import {
   Sheet,
   SheetContent,
@@ -47,22 +42,17 @@ import {
   SheetTitle,
 } from "@iterate-com/ui/components/sheet";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { stringify as stringifyYaml } from "yaml";
 import { StreamEventFeed, type CustomHtmlRendererApi } from "~/components/stream-event-feed.tsx";
+import { StreamComposer } from "~/components/stream-composer.tsx";
 import { useLiveStreamEvents } from "~/hooks/use-live-stream-events.ts";
-import {
-  eventInputTemplates,
-  getEventInputTemplateById,
-  getEventTypePageByType,
-} from "~/lib/event-type-pages.ts";
+import { getEventInputTemplateById, getEventTypePageByType } from "~/lib/event-type-pages.ts";
 import { parseObjectFromComposerText } from "~/lib/stream-composer-input.ts";
 import {
   buildCustomHtmlRendererProjection,
   type CustomHtmlRendererProjection,
 } from "~/lib/custom-html-renderers.ts";
 import { buildDisplayFeed, projectWireToFeed } from "~/lib/stream-feed-projection.ts";
-import { summarizeStreamFeed } from "~/lib/stream-feed-summary.ts";
 import {
   DEFAULT_STREAM_RENDERER_MODE,
   type StreamFeedItem,
@@ -179,17 +169,31 @@ export function StreamPage({
     () => reduceCleanViewState({ events, mode: rendererMode }),
     [events, rendererMode],
   );
-  const feedSummary = useMemo(() => summarizeStreamFeed(feed), [feed]);
+  const onRendererModeChangeRef = useRef(onRendererModeChange);
+  const onFeedViewModeChangeRef = useRef(onFeedViewModeChange);
+  onRendererModeChangeRef.current = onRendererModeChange;
+  onFeedViewModeChangeRef.current = onFeedViewModeChange;
+  /*
+   * Header controls live in the surrounding streams chrome, but their actions
+   * are owned by this route. Keep the callbacks stable so publishing controls
+   * into context does not retrigger itself through a provider rerender.
+   */
+  const handleHeaderRendererModeChange = useCallback((mode: StreamRendererMode) => {
+    onRendererModeChangeRef.current?.(mode);
+  }, []);
+  const handleHeaderFeedViewModeChange = useCallback((mode: StreamFeedViewMode) => {
+    onFeedViewModeChangeRef.current?.(mode);
+  }, []);
   const headerControls = useMemo(
     () => ({
       rendererMode,
-      onRendererModeChange,
+      onRendererModeChange: handleHeaderRendererModeChange,
       feedViewMode,
-      onFeedViewModeChange,
-      feedSummary,
+      onFeedViewModeChange: handleHeaderFeedViewModeChange,
     }),
-    [feedSummary, feedViewMode, onFeedViewModeChange, onRendererModeChange, rendererMode],
+    [feedViewMode, handleHeaderFeedViewModeChange, handleHeaderRendererModeChange, rendererMode],
   );
+  const publishedHeaderControlsRef = useRef<typeof headerControls | null>(null);
 
   useEffect(() => {
     setAppendInputJson(createEventInputTemplate(selectedTemplateId, "json"));
@@ -197,11 +201,28 @@ export function StreamPage({
   }, [selectedTemplateId]);
 
   useEffect(() => {
+    const previous = publishedHeaderControlsRef.current;
+    if (
+      previous?.rendererMode === headerControls.rendererMode &&
+      previous?.feedViewMode === headerControls.feedViewMode &&
+      previous?.onRendererModeChange === headerControls.onRendererModeChange &&
+      previous?.onFeedViewModeChange === headerControls.onFeedViewModeChange
+    ) {
+      return;
+    }
+
+    /*
+     * This effect bridges route-owned stream state into the app chrome. Compare
+     * the meaningful fields before publishing so harmless object churn from
+     * replaying the feed cannot create an update loop.
+     */
+    publishedHeaderControlsRef.current = headerControls;
     setHeaderControls(headerControls);
   }, [headerControls, setHeaderControls]);
 
   useEffect(() => {
     return () => {
+      publishedHeaderControlsRef.current = null;
       setHeaderControls(null);
     };
   }, [setHeaderControls]);
@@ -299,7 +320,7 @@ export function StreamPage({
 
     await submitAppendEvent({
       event: {
-        type: "events.iterate.com/agent/webchat-message-received",
+        type: "events.iterate.com/webchat/user-message-added",
         payload: {
           content,
         },
@@ -338,23 +359,27 @@ export function StreamPage({
         break;
     }
   };
+  const liveStreamFailureLabel = getLiveStreamFailureLabel({
+    isPending: isConnecting,
+    liveStreamStatus,
+  });
 
   return (
-    <section className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
-      <div className="min-h-0 flex-1 overflow-hidden">
+    <EventsStreamLayout>
+      {feedViewMode === "clean" && cleanViewState.slots.header.length > 0 ? (
+        <EventsStreamLayoutHeader>
+          <EventsStreamHeader elements={cleanViewState.slots.header} />
+        </EventsStreamLayoutHeader>
+      ) : null}
+
+      <EventsStreamLayoutMain>
         {feedViewMode === "clean" ? (
-          <EventsStreamView
-            viewState={cleanViewState}
-            events={events}
-            openEventOffset={openEventOffset}
-            onOpenEventOffsetChange={onOpenEventOffsetChange}
-            getEventTypeHref={(eventType) => getEventTypePageByType(eventType)?.href}
+          <EventsStreamFeed
+            elements={cleanViewState.slots.feed}
             emptyLabel="No events received yet."
             isPending={isConnecting}
-            errorLabel={getLiveStreamFailureLabel({
-              isPending: isConnecting,
-              liveStreamStatus,
-            })}
+            errorLabel={liveStreamFailureLabel}
+            onOpenEventOffsetChange={onOpenEventOffsetChange}
           />
         ) : (
           <StreamEventFeed
@@ -369,7 +394,16 @@ export function StreamPage({
             rendererApi={rendererApi}
           />
         )}
-      </div>
+      </EventsStreamLayoutMain>
+
+      {feedViewMode === "clean" ? (
+        <EventsStreamEventInspectorSheet
+          events={events}
+          openEventOffset={openEventOffset}
+          onOpenEventOffsetChange={onOpenEventOffsetChange}
+          getEventTypeHref={(eventType) => getEventTypePageByType(eventType)?.href}
+        />
+      ) : null}
 
       <Sheet
         open={metadataOpen}
@@ -445,7 +479,10 @@ export function StreamPage({
         </SheetContent>
       </Sheet>
 
-      <footer className="supports-backdrop-filter:bg-background/80 shrink-0 border-t bg-background/95 px-4 py-4">
+      <EventsStreamLayoutMessageInput>
+        {/* Input-slot elements are reducer output. This is the proof point that
+            stream events can draw affordances into the composer region without
+            the reducer owning the app-specific composer implementation. */}
         {feedViewMode === "clean" ? (
           <EventsStreamInputSlot
             elements={cleanViewState.slots.input}
@@ -454,109 +491,23 @@ export function StreamPage({
           />
         ) : null}
 
-        <PromptInput className="relative w-full" onSubmit={handleComposerSubmit}>
-          <PromptInputBody>
-            {composerMode === "agent" ? (
-              <PromptInputTextarea
-                value={agentInputText}
-                onChange={(event) => setAgentInputText(event.currentTarget.value)}
-                placeholder="Message this agent"
-                className="min-h-11 max-h-[45vh] text-sm leading-5"
-              />
-            ) : composerMode === "yaml" ? (
-              <SourceCodeBlock
-                code={appendInputYaml}
-                language="yaml"
-                editable
-                onChange={setAppendInputYaml}
-                onModEnter={handleComposerSubmit}
-                showCopyButton={false}
-                className="w-full max-h-[45vh]"
-              />
-            ) : (
-              <SourceCodeBlock
-                code={appendInputJson}
-                language="json"
-                editable
-                onChange={setAppendInputJson}
-                onModEnter={handleComposerSubmit}
-                showCopyButton={false}
-                className="w-full max-h-[45vh]"
-              />
-            )}
-          </PromptInputBody>
-          <PromptInputFooter className="items-center justify-between gap-2 border-t p-2.5">
-            <PromptInputTools className="min-w-0 flex-1">
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <Tabs
-                  value={composerMode}
-                  onValueChange={(value) => onComposerModeChange?.(value as StreamComposerMode)}
-                >
-                  <TabsList className="h-8">
-                    <TabsTrigger value="json" className="px-2 text-xs">
-                      JSON
-                    </TabsTrigger>
-                    <TabsTrigger value="yaml" className="px-2 text-xs">
-                      YAML
-                    </TabsTrigger>
-                    <TabsTrigger value="agent" className="px-2 text-xs">
-                      Agent
-                    </TabsTrigger>
-                  </TabsList>
-                </Tabs>
-
-                {composerMode !== "agent" ? (
-                  <PromptInputSelect
-                    value={selectedTemplateId}
-                    onValueChange={(value) => {
-                      setSelectedTemplateId(value as string);
-                    }}
-                  >
-                    <PromptInputSelectTrigger className="h-8 max-w-full min-w-0 text-xs sm:max-w-[18rem]">
-                      <span className="truncate">
-                        {getEventInputTemplateById(selectedTemplateId)?.label ?? "Event template"}
-                      </span>
-                    </PromptInputSelectTrigger>
-                    <PromptInputSelectContent align="start" className="w-fit">
-                      {eventInputTemplates.map((template) => (
-                        <PromptInputSelectItem key={template.id} value={template.id}>
-                          {template.label}
-                        </PromptInputSelectItem>
-                      ))}
-                    </PromptInputSelectContent>
-                  </PromptInputSelect>
-                ) : (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-8 px-2 text-xs"
-                    disabled={appendEvent.isPending}
-                    onClick={() => {
-                      void submitDebugInfoRequest();
-                    }}
-                  >
-                    Debug info
-                  </Button>
-                )}
-              </div>
-            </PromptInputTools>
-            <PromptInputSubmit
-              className="shrink-0"
-              disabled={
-                appendEvent.isPending ||
-                (composerMode === "agent"
-                  ? !agentInputText.trim()
-                  : composerMode === "yaml"
-                    ? !appendInputYaml.trim()
-                    : !appendInputJson.trim())
-              }
-              status={appendEvent.isPending ? "submitted" : "ready"}
-            />
-          </PromptInputFooter>
-        </PromptInput>
-      </footer>
-    </section>
+        <StreamComposer
+          composerMode={composerMode}
+          onComposerModeChange={onComposerModeChange}
+          selectedTemplateId={selectedTemplateId}
+          onSelectedTemplateIdChange={setSelectedTemplateId}
+          agentInputText={agentInputText}
+          onAgentInputTextChange={setAgentInputText}
+          appendInputJson={appendInputJson}
+          onAppendInputJsonChange={setAppendInputJson}
+          appendInputYaml={appendInputYaml}
+          onAppendInputYamlChange={setAppendInputYaml}
+          isSubmitting={appendEvent.isPending}
+          onSubmit={handleComposerSubmit}
+          onDebugInfoRequest={submitDebugInfoRequest}
+        />
+      </EventsStreamLayoutMessageInput>
+    </EventsStreamLayout>
   );
 }
 

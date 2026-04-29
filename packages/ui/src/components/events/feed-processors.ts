@@ -19,8 +19,6 @@ import type {
 const MAX_SAME_TYPE_RAW_GROUP = 50_000;
 const CODEMODE_BLOCK_ADDED_TYPE = "events.iterate.com/codemode/block-added";
 const CODEMODE_RESULT_ADDED_TYPE = "events.iterate.com/codemode/result-added";
-const CODEMODE_TOOL_PROVIDER_CONFIG_UPDATED_TYPE =
-  "events.iterate.com/codemode/tool-provider-config-updated";
 
 function createInitialEventsStreamViewState(): EventsStreamViewState {
   return createEventsStreamViewState({
@@ -38,7 +36,7 @@ function createEventsStreamViewState(args: {
 }): EventsStreamViewState {
   const slots = {
     feed: args.feed,
-    header: createHeaderSlotElements(args.activity),
+    header: createHeaderSlotElements({ activity: args.activity, feed: args.feed }),
     input: createInputSlotElements(args.activity),
   };
 
@@ -140,24 +138,58 @@ function createEventsStreamViewReducer(args: {
   };
 }
 
-function createHeaderSlotElements(
-  activity: EventsStreamViewState["activity"],
-): EventsStreamBuiltInElement[] {
-  if (activity.currentLlmRequestId == null) {
-    return [];
+function createHeaderSlotElements(args: {
+  activity: EventsStreamViewState["activity"];
+  feed: readonly EventsStreamBuiltInElement[];
+}): EventsStreamBuiltInElement[] {
+  const elements: EventsStreamBuiltInElement[] = [];
+  const eventCount = countRawEventsInFeed(args.feed);
+
+  if (eventCount > 0) {
+    elements.push({
+      type: "event-counter",
+      id: "event-counter",
+      props: {
+        count: eventCount,
+      },
+    });
   }
 
-  return [
-    {
+  if (args.activity.currentLlmRequestId != null) {
+    elements.push({
       type: "activity",
       id: "activity",
       props: {
         status: "working",
         label: "Agent working",
-        detail: activity.currentLlmRequestId,
+        detail: args.activity.currentLlmRequestId,
       },
-    },
-  ];
+    });
+  }
+
+  return elements;
+}
+
+function countRawEventsInFeed(elements: readonly EventsStreamBuiltInElement[]) {
+  let count = 0;
+
+  for (const element of elements) {
+    if (element.type === "raw-event") {
+      count += 1;
+      continue;
+    }
+
+    if (element.type === "grouped-raw-event") {
+      count += element.props.count;
+      continue;
+    }
+
+    if (element.type === "raw-json-dump") {
+      count += element.props.events.length;
+    }
+  }
+
+  return count;
 }
 
 function createInputSlotElements(
@@ -280,6 +312,7 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
   const timestamp = getTimestamp(event.createdAt);
 
   if (
+    event.type === "events.iterate.com/webchat/user-message-added" ||
     event.type === "webchat-message-received" ||
     event.type === "events.iterate.com/agent/webchat-message-received"
   ) {
@@ -300,6 +333,7 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
   }
 
   if (
+    event.type === "events.iterate.com/webchat/agent-response-added" ||
     event.type === "webchat-response-added" ||
     event.type === "events.iterate.com/agent/webchat-response-added"
   ) {
@@ -430,25 +464,6 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
           ...(error == null ? {} : { error }),
           logs: readStringArrayPayloadField(event, "logs"),
           durationMs,
-          timestamp,
-          raw: event,
-        },
-      },
-    ];
-  }
-
-  if (event.type === CODEMODE_TOOL_PROVIDER_CONFIG_UPDATED_TYPE) {
-    const slug = readStringPayloadField(event, "slug");
-    if (slug == null) return [];
-    const payload = readPayloadRecord(event);
-    return [
-      {
-        type: "codemode-tool-provider",
-        id: `codemode-tool-provider-${slug}-${event.offset}`,
-        props: {
-          slug,
-          operation: payload?.executeCallable === null ? "removed" : "configured",
-          hasTypesCallable: payload?.getTypesCallable != null,
           timestamp,
           raw: event,
         },

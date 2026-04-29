@@ -91,9 +91,13 @@ export function EventsStreamEventInspectorSheet({
     };
   }, [nextOffset, onOpenEventOffsetChange, previousOffset, selectedEvent]);
 
+  if (selectedEvent == null) {
+    return null;
+  }
+
   return (
     <Sheet
-      open={selectedEvent != null}
+      open
       onOpenChange={(open) => {
         if (!open) {
           onOpenEventOffsetChange?.(undefined);

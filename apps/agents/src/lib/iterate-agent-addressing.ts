@@ -3,6 +3,8 @@ import type { StreamPath } from "@iterate-com/events-contract";
 export {
   buildAgentStreamProcessorRunnerWebSocketCallbackUrl,
   buildAgentWebSocketCallbackUrl,
+  buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl,
+  buildWebchatStreamProcessorRunnerWebSocketCallbackUrl,
 } from "~/lib/events-urls.ts";
 
 /**
@@ -28,6 +30,9 @@ export const ITERATE_AGENT_SUBSCRIPTION_SLUG = "iterate-agent";
  * the other.
  */
 export const AGENT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG = "agent-stream-processor-runner";
+export const CODEMODE_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG =
+  "codemode-stream-processor-runner";
+export const WEBCHAT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG = "webchat-stream-processor-runner";
 
 /**
  * Agents SDK kebab-case URL segment for the `ChildStreamAutoSubscriber` class.
