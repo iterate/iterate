@@ -18,6 +18,12 @@ import { withLifecycleHooks } from "@iterate-com/shared/durable-object-utils/mix
 import { withOuterbase } from "@iterate-com/shared/durable-object-utils/mixins/with-outerbase";
 
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
+// CodemodeSession dispatches stored MCP Provider Descriptors through an
+// MCP_CLIENT_BRIDGE Durable Object namespace binding. Cloudflare requires every
+// bound Durable Object class to be exported by the Worker module that owns the
+// binding, even when the class implementation lives in a shared rpc-target file.
+// https://developers.cloudflare.com/durable-objects/api/namespace/
+export { McpClientBridge } from "~/rpc-targets/mcp-client-bridge.ts";
 
 export type CodemodeSessionInitParams = {
   name: string;
