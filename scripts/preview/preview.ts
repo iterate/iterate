@@ -16,7 +16,11 @@ import { splitRepositoryFullName } from "./repository-full-name.ts";
 
 const defaultSemaphoreBaseUrl = "https://semaphore.iterate.com";
 const defaultPreviewLeaseMs = 60 * 60 * 1000;
-const defaultPreviewReadyTimeoutMs = 30_000;
+// Routed previews can be healthy before Cloudflare has finished issuing edge
+// certificates for newly-created wildcard hostnames. Keep this long enough for
+// Total TLS first-issuance while still returning immediately once the health
+// endpoint is reachable.
+const defaultPreviewReadyTimeoutMs = 180_000;
 const defaultPreviewReadyUrlPath = "/api/__internal/health";
 const defaultPreviewTestMaxAttempts = 2;
 const defaultPreviewTestRetryDelayMs = 5_000;
@@ -746,13 +750,13 @@ function derivePreviewEnvironment(input: {
 
   const publicUrl =
     input.appSlug === "os2"
-      ? `https://os.iterate-preview-${slot}.app`
+      ? `https://os.iterate-preview-${slot}.iterate.app`
       : input.appSlug === "events"
         ? `https://${input.previewEnvironmentSlug}.iterate.com`
         : `https://${input.previewEnvironmentSlug}.iterate.workers.dev`;
 
   const projectSubdomainUrl =
-    input.appSlug === "os2" ? `https://iterate-preview-${slot}.app` : null;
+    input.appSlug === "os2" ? `https://iterate-preview-${slot}.iterate.app` : null;
 
   const previewEnvironmentDopplerConfigName = `preview_${slot}`;
 

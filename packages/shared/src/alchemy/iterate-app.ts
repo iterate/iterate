@@ -150,17 +150,17 @@ export async function IterateApp<B extends Bindings>(
 
   // --- Production/preview DNS ---
   // Worker routes tell Cloudflare "send requests matching this pattern to this
-  // worker", but the hostname still needs a DNS record to resolve. We create
+  // worker", but the hostname still needs a proxied DNS record. We create
   // routes after TanStackStart returns so the route resource depends on an
   // uploaded Worker script; Cloudflare rejects route creation for scripts that
-  // do not exist yet. We then create proxied CNAME records pointing each route
-  // hostname to the worker's workers.dev hostname. Without these, requests to
-  // the custom domain 404.
+  // do not exist yet. We then create originless dummy A records so Cloudflare
+  // can terminate DNS/TLS and invoke the route without trying to resolve the
+  // worker's workers.dev hostname as an origin.
   // https://developers.cloudflare.com/workers/configuration/routing/routes/#subdomains-must-have-a-dns-record
+  // https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/get-started/hostname-routing/
 
   if (!app.local && worker.url && routeHosts.length > 0) {
     const cloudflareApi = await createCloudflareApi({});
-    const workerHostname = new URL(worker.url).hostname;
 
     await Promise.all(
       routeHosts.map((hostname) =>
@@ -183,9 +183,9 @@ export async function IterateApp<B extends Bindings>(
           zoneId,
           records: [
             {
-              type: "CNAME",
+              type: "A",
               name: hostname,
-              content: workerHostname,
+              content: "192.0.2.1",
               proxied: true,
               ttl: 1,
               comment: `Managed by ${manifest.slug} alchemy (${app.stage}).`,
