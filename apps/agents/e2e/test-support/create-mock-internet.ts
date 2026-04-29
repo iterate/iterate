@@ -28,8 +28,8 @@ export async function createMockInternet(opts: {
   eventsBaseUrl: string;
   eventsProjectSlug: string;
 }): Promise<MockInternetHandle & AsyncDisposable> {
-  const recordHar = process.env.AGENTS_E2E_RECORD_HAR === "1";
   const harExists = existsSync(opts.harPath);
+  const recordHar = process.env.AGENTS_E2E_RECORD_HAR === "1" || !harExists;
   const replayMode = !recordHar && harExists;
 
   const mockServer = await useMockHttpServer({

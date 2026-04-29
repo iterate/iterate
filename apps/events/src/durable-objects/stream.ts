@@ -3,7 +3,7 @@ import { withDurableObjectCore } from "@iterate-com/shared/durable-object-utils/
 import { withKvInspector } from "@iterate-com/shared/durable-object-utils/mixins/with-kv-inspector";
 import { withOuterbase } from "@iterate-com/shared/durable-object-utils/mixins/with-outerbase";
 import {
-  type ChildStreamCreatedEvent,
+  ChildStreamCreatedEvent,
   type DestroyStreamResult,
   Event,
   EventInput,
@@ -11,9 +11,10 @@ import {
   STREAM_CHILD_STREAM_CREATED_TYPE,
   STREAM_DURABLE_OBJECT_WOKE_UP_TYPE,
   STREAM_FIRST_INITIALIZED_TYPE,
+  StreamInitializedEvent,
   STREAM_METADATA_UPDATED_TYPE,
   type StreamCursor,
-  type StreamMetadataUpdatedEvent,
+  StreamMetadataUpdatedEvent,
   StreamPath,
   StreamState,
 } from "@iterate-com/events-contract";
@@ -237,6 +238,12 @@ export class StreamDurableObject extends StreamDurableObjectBase<Env> {
         `Client-supplied offset ${input.offset} does not match next generated offset ${nextOffset}.`,
       );
     }
+
+    assertValidCoreEventInput({
+      input,
+      nextOffset,
+      streamPath: this.state.path,
+    });
 
     runBuiltinBeforeAppend({
       event: input,
@@ -490,6 +497,38 @@ export class StreamDurableObject extends StreamDurableObjectBase<Env> {
       createdAt: row.created_at,
     } as Event;
   }
+}
+
+function assertValidCoreEventInput(args: {
+  input: EventInput;
+  nextOffset: number;
+  streamPath: StreamPath;
+}) {
+  const candidateEvent = {
+    streamPath: args.streamPath,
+    ...args.input,
+    offset: args.nextOffset,
+    createdAt: new Date().toISOString(),
+  };
+
+  const result =
+    args.input.type === STREAM_FIRST_INITIALIZED_TYPE
+      ? StreamInitializedEvent.safeParse(candidateEvent)
+      : args.input.type === STREAM_CHILD_STREAM_CREATED_TYPE
+        ? ChildStreamCreatedEvent.safeParse(candidateEvent)
+        : args.input.type === STREAM_METADATA_UPDATED_TYPE
+          ? StreamMetadataUpdatedEvent.safeParse(candidateEvent)
+          : null;
+
+  if (result == null || result.success) {
+    return;
+  }
+
+  throw new Error(
+    `Invalid core event payload for ${args.input.type}: ${result.error.issues
+      .map((issue) => issue.message)
+      .join("; ")}`,
+  );
 }
 
 function createInitialStreamState(args: {

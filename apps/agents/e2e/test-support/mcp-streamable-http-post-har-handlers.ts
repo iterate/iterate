@@ -60,9 +60,9 @@ function inferJsonRpcMethodFromLegacyHarEntry(entry: HarEntry): string | null {
 
   const text = entry.response.content.text ?? "";
   if (text.includes('"protocolVersion"')) return "initialize";
+  if (text.includes('"content"')) return "tools/call";
   if (text.includes('"tools"')) return "tools/list";
   if (text.includes('"prompts"')) return "prompts/list";
-  if (text.includes('"content"')) return "tools/call";
   return null;
 }
 
