@@ -314,9 +314,9 @@ renderer.prependInputHandler((sequence) => {
   if (handleSlashAutocompleteKey(key)) return true;
 
   // Tab / Shift+Tab cycles focus between header, feed, and input.
-  // Terminals send Shift+Tab as a distinct "backtab" escape sequence.
-  if (key.name === "tab" || key.name === "backtab") {
-    focusAdjacentRegion(key.shift || key.name === "backtab" ? -1 : 1);
+  // OpenTUI's parseKeypress maps \x1b[Z (Shift+Tab) to name:"tab" + shift:true.
+  if (key.name === "tab") {
+    focusAdjacentRegion(key.shift ? -1 : 1);
     return true;
   }
 
@@ -336,10 +336,12 @@ renderer.prependInputHandler((sequence) => {
     return true;
   }
 
-  // Esc from feed — close detail view if open, otherwise return to input
+  // Esc from feed — close detail view (return to feed with selection visible),
+  // or return to input if already on the feed
   if (key.name === "escape") {
     if (detailEventOffset != null) {
       detailEventOffset = undefined;
+      updateHeader();
       updateFeed("selected");
       return true;
     }
@@ -370,9 +372,13 @@ renderer.prependInputHandler((sequence) => {
     return true;
   }
 
-  // Enter opens the event detail view for the selected raw event
-  if (key.name === "return" && selectedOffset != null) {
+  // Enter, Space, or Right arrow opens the event detail view
+  if (
+    (key.name === "return" || key.name === "right" || key.name === "space") &&
+    selectedOffset != null
+  ) {
     detailEventOffset = selectedOffset;
+    updateHeader();
     updateFeed("keep");
     return true;
   }
@@ -1280,6 +1286,10 @@ function showCommandDocs(command: CommandEntry) {
  * Returns true if the key was consumed.
  */
 function handleSlashAutocompleteKey(key: KeyEvent) {
+  // Only intercept keys when the autocomplete dropdown is actually visible.
+  // Without this guard, any "/" left in the input (e.g. after Esc) would cause
+  // suggestSlashCommands to return results, swallowing Tab/Shift+Tab forever.
+  if (slashAutocomplete.height === 0) return false;
   const commands = suggestSlashCommands({ commands: commandEntries, input: input.value, limit: 8 });
   if (commands.length === 0) return false;
 
@@ -1290,10 +1300,10 @@ function handleSlashAutocompleteKey(key: KeyEvent) {
     return true;
   }
 
-  if (key.name === "tab" || key.name === "backtab" || key.name === "down") {
+  if (key.name === "tab" || key.name === "down") {
     // Move selection in the autocomplete list
     const currentIndex = commands.findIndex((c) => c.path === selectedSlashCommandPath);
-    const direction = key.shift || key.name === "backtab" ? -1 : 1;
+    const direction = key.shift ? -1 : 1;
     const nextIndex =
       currentIndex === -1
         ? direction === 1
