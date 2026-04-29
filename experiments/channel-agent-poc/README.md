@@ -29,6 +29,32 @@ shape:
 
 The old `apps/events/poc` directory has been removed.
 
+## Doppler
+
+The POC has its own Doppler project: `channel-agent-poc`.
+
+Use `dev_jonas` for the live Jonas dev setup:
+
+```bash
+cd experiments/channel-agent-poc/nested-facets
+doppler setup --project channel-agent-poc --config dev_jonas
+doppler run -- ./scripts/deploy.sh --worker
+```
+
+Secrets that belong to this POC live there, not in `events` or `agents`:
+
+- `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_API_TOKEN_DEV_JONAS`: Cloudflare account/API token for the disposable Artifacts + Worker account.
+- `CHANNEL_AGENT_POC_PROJECT_HOST`, `CHANNEL_AGENT_POC_EVENTS_BASE_URL`: live test host defaults.
+- `CHANNEL_TEST_SLACK_*`: Slack workspace, bot, channel, and CI posting token used to test on behalf of a non-agent user.
+- `CHANNEL_TEST_GITHUB_*`: GitHub App, installation, repo, PR, and fallback token used for channel tests.
+- `CHANNEL_TEST_LINEAR_*`: Linear OAuth client, installed actor token, webhook secret, team, and issue test state.
+- `CHANNEL_TEST_DISCORD_*`: Discord bot token, guild, channel, bot user, and live app host.
+
+The channel app runtime credentials are still installed into each live mini app
+through its `/api/install` endpoint and stored in that app's local config table.
+Doppler is the source of truth for the credentials and IDs used to recreate or
+test those installs.
+
 ## What This Proves
 
 - Raw channel event cross-posting into agent streams.

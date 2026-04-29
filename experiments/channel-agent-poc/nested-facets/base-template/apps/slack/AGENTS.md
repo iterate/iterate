@@ -27,15 +27,15 @@ Single DO class (`App`). No facets, no stream processors. Webhook handler append
 ### Tokens
 
 - **jonasland bot token**: stored via `/api/install` in the Slack app's config table
-- **CI bot token** (for testing): `SLACK_CI_BOT_TOKEN` in doppler `os` project, dev config. Use this to post test messages as a different bot that @mentions jonasland.
-- **OS slack tokens**: `doppler run --config dev -- env | grep SLACK`
+- **CI bot token** (for testing): `CHANNEL_TEST_SLACK_CI_BOT_TOKEN` in Doppler `channel-agent-poc/dev_jonas`. Use this to post test messages as a different bot that @mentions jonasland.
+- **POC Slack test IDs**: `CHANNEL_TEST_SLACK_*` in Doppler `channel-agent-poc/dev_jonas`
 
 ### Testing the pipeline
 
 ```bash
 # Post a test message (from CI bot, mentioning jonasland bot)
 curl -X POST "https://slack.com/api/chat.postMessage" \
-  -H "Authorization: Bearer $SLACK_CI_BOT_TOKEN" \
+  -H "Authorization: Bearer $CHANNEL_TEST_SLACK_CI_BOT_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"channel":"C08R1SMTZGD","text":"<@U0B0214F274> what is 2+2?"}'
 

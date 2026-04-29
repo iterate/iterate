@@ -4,8 +4,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-ACCOUNT_ID="cc7f6f461fbe823c199da2b27f9e0ff3"
-PROJECT_HOST="test.iterate-dev-jonas.app"
+ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:?CLOUDFLARE_ACCOUNT_ID is required. Run under doppler project channel-agent-poc.}"
+PROJECT_HOST="${CHANNEL_AGENT_POC_PROJECT_HOST:-test.iterate-dev-jonas.app}"
 
 echo "=== 1. Sync base template ==="
 CLOUDFLARE_ACCOUNT_ID=$ACCOUNT_ID npx tsx scripts/sync-base-artifact.ts ./base-template

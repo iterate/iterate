@@ -2,7 +2,7 @@
 // Sync a local folder into the base-template artifact repo.
 //
 // Usage:
-//   CLOUDFLARE_ACCOUNT_ID=cc7f6f461fbe823c199da2b27f9e0ff3 npx tsx scripts/sync-base-artifact.ts ./base-template
+//   doppler run --project channel-agent-poc --config dev_jonas -- npx tsx scripts/sync-base-artifact.ts ./base-template
 //
 // The folder should contain config.json and apps/<name>/index.js (or TS+React apps with package.json).
 // Everything in the folder is committed and force-pushed to the base-template artifact repo.
@@ -11,19 +11,18 @@ import fs from "node:fs";
 import path from "node:path";
 import { execSync } from "node:child_process";
 
-const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID ?? "cc7f6f461fbe823c199da2b27f9e0ff3";
-const TOKEN_FILE = `${process.env.HOME}/Library/Preferences/.wrangler/config/default.toml`;
-const tokenLine = fs.existsSync(TOKEN_FILE)
-  ? fs
-      .readFileSync(TOKEN_FILE, "utf8")
-      .split("\n")
-      .find((l) => l.startsWith("oauth_token"))
-  : null;
-const API_TOKEN =
-  process.env.CLOUDFLARE_API_TOKEN_DEV_JONAS ||
-  process.env.CLOUDFLARE_API_TOKEN ||
-  tokenLine?.split('"')[1];
-if (!API_TOKEN) throw new Error("Missing Cloudflare API token");
+const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
+if (!ACCOUNT_ID) {
+  throw new Error(
+    "Missing CLOUDFLARE_ACCOUNT_ID. Run under Doppler project channel-agent-poc/dev_jonas.",
+  );
+}
+const API_TOKEN = process.env.CLOUDFLARE_API_TOKEN_DEV_JONAS || process.env.CLOUDFLARE_API_TOKEN;
+if (!API_TOKEN) {
+  throw new Error(
+    "Missing Cloudflare API token. Run under Doppler project channel-agent-poc/dev_jonas.",
+  );
+}
 const NAMESPACE = "default";
 const BASE_URL = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/artifacts/namespaces/${NAMESPACE}`;
 
