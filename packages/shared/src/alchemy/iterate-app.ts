@@ -1,6 +1,7 @@
 import alchemy from "alchemy";
 import {
   DnsRecords,
+  Route,
   TanStackStart,
   Tunnel,
   createCloudflareApi,
@@ -87,10 +88,6 @@ export async function IterateApp<B extends Bindings>(
       APP_CONFIG: alchemy.secret(JSON.stringify(rawAppConfig, null, 2)),
     },
     wrangler: { main: "./src/entry.workerd.ts" },
-    routes:
-      routeHosts.length > 0
-        ? routeHosts.map((hostname) => ({ pattern: `${hostname}/*`, adopt: true }))
-        : undefined,
     // Full sampling with persistent logs/traces for all Iterate workers.
     // https://developers.cloudflare.com/workers/observability/logs/workers-logs/
     observability: {
@@ -149,13 +146,26 @@ export async function IterateApp<B extends Bindings>(
   // --- Production/preview DNS ---
   // Worker routes tell Cloudflare "send requests matching this pattern to this
   // worker", but the hostname still needs a DNS record to resolve. We create
-  // proxied CNAME records pointing each route hostname to the worker's
-  // workers.dev hostname. Without these, requests to the custom domain 404.
+  // routes after TanStackStart returns so the route resource depends on an
+  // uploaded Worker script; Cloudflare rejects route creation for scripts that
+  // do not exist yet. We then create proxied CNAME records pointing each route
+  // hostname to the worker's workers.dev hostname. Without these, requests to
+  // the custom domain 404.
   // https://developers.cloudflare.com/workers/configuration/routing/routes/#subdomains-must-have-a-dns-record
 
   if (!app.local && worker.url && routeHosts.length > 0) {
     const cloudflareApi = await createCloudflareApi({});
     const workerHostname = new URL(worker.url).hostname;
+
+    await Promise.all(
+      routeHosts.map((hostname) =>
+        Route(`route-${slugify(hostname)}`, {
+          pattern: `${hostname}/*`,
+          script: worker,
+          adopt: true,
+        }),
+      ),
+    );
 
     await Promise.all(
       routeHosts.map(async (hostname) => {
