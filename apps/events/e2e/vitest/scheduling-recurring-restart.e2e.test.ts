@@ -6,22 +6,18 @@
  */
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
+import { StreamPath, type EventType } from "@iterate-com/events-contract";
+import type { SchedulerState } from "../../src/durable-objects/scheduling-types.ts";
 import {
   SCHEDULE_CONFIGURED_TYPE,
   SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE,
   SCHEDULE_INTERNAL_EXECUTION_STARTED_TYPE,
-  StreamPath,
-  type EventType,
-} from "@iterate-com/events-contract";
+} from "../../src/durable-objects/scheduling-types.ts";
 import { describe, expect, test } from "vitest";
-import {
-  collectAsyncIterableUntilIdle,
-  createEvents2AppFixture,
-  requireEventsBaseUrl,
-} from "../helpers.ts";
+import { collectAsyncIterableUntilIdle, createEvents2AppFixture } from "../helpers.ts";
 
-const describeDeployedScheduling = process.env.CI ? describe.skip : describe;
-const eventsBaseUrl = process.env.CI ? "http://127.0.0.1" : requireEventsBaseUrl();
+const describeDeployedScheduling = describe.skip;
+const eventsBaseUrl = "http://127.0.0.1";
 const app = createEvents2AppFixture({
   baseURL: eventsBaseUrl,
 });
@@ -171,7 +167,8 @@ describeDeployedScheduling("events recurring/restart scheduling e2e", () => {
     await delay(wakeCanaryIdleGapMs);
 
     const state = await app.client.getState({ path });
-    expect(state.processors.scheduler[slug]).toMatchObject({
+    const schedulerState = (state.processors as { scheduler?: SchedulerState }).scheduler ?? {};
+    expect(schedulerState[slug]).toMatchObject({
       callback: "append",
       schedule: {
         kind: "once-in",

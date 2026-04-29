@@ -16,11 +16,7 @@ import {
   SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE,
   STREAM_APPEND_SCHEDULED_TYPE,
 } from "../../src/durable-objects/scheduling-types.ts";
-import {
-  collectAsyncIterableUntilIdle,
-  createEvents2AppFixture,
-  requireEventsBaseUrl,
-} from "../helpers.ts";
+import { collectAsyncIterableUntilIdle, createEvents2AppFixture } from "../helpers.ts";
 
 const describeDeployedScheduling = describe.skip;
 const eventsBaseUrl = "http://127.0.0.1";

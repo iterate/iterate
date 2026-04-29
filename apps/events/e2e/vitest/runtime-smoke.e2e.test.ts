@@ -238,7 +238,6 @@ function expectedProcessorsWithTokenBucketCircuitBreaker() {
     "jsonata-transformer": {
       transformersBySlug: {},
     },
-    scheduler: {},
   };
 }
 
