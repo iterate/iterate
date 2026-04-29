@@ -703,18 +703,19 @@ function updateFeed(scroll: "selected" | "keep" = "keep") {
     feed.add(child);
   }
 
+  // scrollChildIntoView needs valid layout coordinates, which require a render
+  // frame after children are added. setTimeout(0) defers until after the next
+  // frame — this is the pattern opencode uses (dialog-select.tsx:147).
   if (scroll === "selected" && navigationState.view === "streams") {
-    setImmediate(() =>
-      feed.scrollChildIntoView(`events-feed-stream-${selectedStreamPath ?? "none"}`),
-    );
+    const id = `events-feed-stream-${selectedStreamPath ?? "none"}`;
+    setTimeout(() => feed.scrollChildIntoView(id), 0);
   } else if (scroll === "selected") {
-    // Raw event IDs from the reducer are "raw-event-{offset}"
-    setImmediate(() => feed.scrollChildIntoView(`raw-event-${selectedOffset ?? "none"}`));
+    const id = `raw-event-${selectedOffset ?? "none"}`;
+    setTimeout(() => feed.scrollChildIntoView(id), 0);
   } else if (shouldStickToBottom) {
-    setImmediate(() => feed.scrollTo(feed.scrollHeight));
-    setTimeout(() => feed.scrollTo(feed.scrollHeight), 0).unref();
+    setTimeout(() => feed.scrollTo(feed.scrollHeight), 0);
   } else if (navigationState.view !== "feed") {
-    setImmediate(() => feed.scrollTo(0));
+    setTimeout(() => feed.scrollTo(0), 0);
   }
 }
 
