@@ -103,6 +103,8 @@ function makeEventsCloudflareWorkspace(workerEnvShim: string): WorkspaceConfig {
   return {
     ...workspace,
     entry: [...(workspace.entry ?? []), "scripts/demo/router.ts"],
+    ignore: ["src/db/migrations/.generated/migrations.ts", "src/durable-objects/sqlfu.config.ts"],
+    ignoreDependencies: [...(workspace.ignoreDependencies ?? []), "miniflare"],
   };
 }
 
@@ -138,8 +140,13 @@ function makeSharedWorkspace(): WorkspaceConfig {
     // This package exposes many subpath exports from package.json rather than a
     // single `src/index.ts`, so keep the workspace config minimal and let Knip
     // use the declared export map as the public entry surface.
-    entry: ["bin/iterate-app-cli.js", "src/apps/cli-entry.ts"],
+    entry: [
+      "bin/iterate-app-cli.js",
+      "src/apps/cli-entry.ts",
+      "src/durable-object-utils/e2e/alchemy.run.ts",
+    ],
     project: ["src/**/*.ts"],
+    ignoreDependencies: ["alchemy", "cloudflare", "wrangler"],
   };
 }
 
@@ -186,6 +193,17 @@ const config: KnipConfig = {
     "apps/agents/src/lib/events-orpc-client.ts": ["exports", "types"],
     "apps/agents/src/lib/mcp-tool-providers.ts": ["types"],
     "apps/agents/src/lib/openapi-tool-provider.ts": ["types"],
+    "apps/agents/src/lib/llm-normalization.ts": ["exports"],
+    "apps/events/src/durable-objects/db/migrations/.generated/migrations.ts": ["exports", "types"],
+    "apps/events/src/lib/custom-html-renderers.ts": ["exports"],
+    "apps/events/src/db/queries/.generated/tables.ts": ["types"],
+    "apps/events/src/durable-objects/db/queries/.generated/tables.ts": ["types"],
+    "apps/example/src/durable-objects/example-counter.ts": ["exports"],
+    "packages/shared/src/callable/entry.workerd.vitest.ts": ["exports"],
+    "packages/shared/src/durable-object-utils/test-harness/initialize-fronting-worker.ts": [
+      "exports",
+      "types",
+    ],
   },
   workspaces: {
     "apps/agents": makeAgentsTanStackAppWorkspace("./src/lib/worker-env.d.ts"),

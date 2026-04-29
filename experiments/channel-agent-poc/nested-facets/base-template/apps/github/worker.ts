@@ -144,17 +144,6 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function parseQuery(urlStr: string): Record<string, string> {
-  const params: Record<string, string> = {};
-  const qIdx = urlStr.indexOf("?");
-  if (qIdx === -1) return params;
-  for (const p of urlStr.slice(qIdx + 1).split("&")) {
-    const [k, v] = p.split("=");
-    if (k) params[decodeURIComponent(k)] = decodeURIComponent(v ?? "");
-  }
-  return params;
-}
-
 const DEFAULT_EVENTS = [
   {
     type: "events.iterate.com/agent/system-prompt-updated",
@@ -1045,7 +1034,7 @@ export class App extends DurableObject {
       const eventsText = String(body.eventsText ?? "");
       try {
         parseDefaultEvents(eventsText);
-      } catch (e: any) {
+      } catch (_e: any) {
         return Response.json({ ok: false, error: e.message }, { status: 400 });
       }
       this.#setConfig("defaultEvents", eventsText);
@@ -1078,7 +1067,7 @@ export class App extends DurableObject {
           },
         });
         if (matched && response) return response;
-      } catch (e: any) {
+      } catch (_e: any) {
         // If GitHub token not configured, docs/spec still fail gracefully
         if (path === "/api/docs" || path === "/api/openapi.json") {
           return new Response("Run /api/install first to configure the GitHub token", {

@@ -60,7 +60,7 @@ class LinearClient {
     );
   }
 
-  async listIssues(teamId: string, first: number = 20) {
+  async listIssues(teamId: string, first = 20) {
     return this.#query(
       `query($teamId: String!, $first: Int!) {
         team(id: $teamId) {

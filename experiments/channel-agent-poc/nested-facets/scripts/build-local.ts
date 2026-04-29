@@ -15,8 +15,8 @@ import {
   rmSync,
 } from "node:fs";
 import { join, relative } from "node:path";
-import * as esbuild from "esbuild";
 import { fileURLToPath } from "node:url";
+import * as esbuild from "esbuild";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const BASE_TEMPLATE = join(__dirname, "../base-template");

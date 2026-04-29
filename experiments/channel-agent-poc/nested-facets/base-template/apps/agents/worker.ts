@@ -126,11 +126,6 @@ type ToolProvider = {
   types?: string;
 };
 
-function providerTypes(name: string, tools: string[]): string {
-  const methods = tools.map((tool) => `  ${tool}(args?: unknown): Promise<unknown>;`).join("\n");
-  return `declare const ${name}: {\n${methods}\n};`;
-}
-
 function providerNamesForStream(streamPath: string): Set<string> {
   if (streamPath.startsWith("/agents/webchat")) return new Set(["webchat"]);
   if (streamPath.startsWith("/agents/slack/")) return new Set(["slack"]);
@@ -666,12 +661,12 @@ export class StreamProcessor extends Agent {
         this.#inflight == null
           ? null
           : { requestId: this.#inflight.requestId, status: this.#inflight.status },
-      scheduleLlmRequest: ({ debounceMs }) => {
+      scheduleLlmRequest: () => {
         const requestId = crypto.randomUUID();
         this.#inflight = { requestId, status: "scheduled" };
         return { requestId };
       },
-      extendDebounce: ({ requestId, debounceMs }) => {
+      extendDebounce: ({ requestId }) => {
         if (this.#inflight?.requestId !== requestId || this.#inflight.status !== "scheduled")
           return;
       },

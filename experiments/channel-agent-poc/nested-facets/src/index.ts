@@ -7,20 +7,11 @@
 
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
-import {
-  createApp,
-  createWorker,
-  InMemoryFileSystem,
-  type CreateWorkerResult,
-  type CreateAppResult,
-} from "@cloudflare/worker-bundler";
+import { createApp, createWorker } from "@cloudflare/worker-bundler";
 import { Sandbox, getSandbox } from "@cloudflare/sandbox";
 import PostalMime from "postal-mime";
 import { adminHTML } from "./admin.ts";
 import { editorHTML } from "./editor.ts";
-export { EgressGateway } from "./egress-gateway.ts";
-export { RepoDO } from "./repo-do.ts";
-export { WorkspaceDO } from "./workspace-do.ts";
 import type { RepoDO } from "./repo-do.ts";
 import type { WorkspaceDO } from "./workspace-do.ts";
 import { parseHost, PLATFORM_SUFFIX, PLATFORM_BARE } from "./host-parser.ts";
@@ -28,6 +19,10 @@ import { studioHTML, execSQL } from "./sql-studio.ts";
 import { inferContentType, cacheHeaders } from "./content-types.ts";
 import { handleAdminAPI } from "./admin-api.ts";
 import { deriveThreadId, storeThreadMapping, appendEmailEvent } from "./email.ts";
+
+export { EgressGateway } from "./egress-gateway.ts";
+export { RepoDO } from "./repo-do.ts";
+export { WorkspaceDO } from "./workspace-do.ts";
 
 // Export BuildSandbox for the container DO binding
 export class BuildSandbox extends Sandbox<Env> {}
@@ -1266,7 +1261,7 @@ export class Project extends DurableObject<Env> {
     }
   }
 
-  async handleRunnerUI(app: string, url: URL, req: Request, slug: string): Promise<Response> {
+  async handleRunnerUI(app: string, url: URL, req: Request, _slug: string): Promise<Response> {
     const appDir = `apps/${app}`;
     const manifest = await this.ws.readFile(`${appDir}/dist/manifest.json`);
     const pkg = await this.ws.readFile(`${appDir}/package.json`);

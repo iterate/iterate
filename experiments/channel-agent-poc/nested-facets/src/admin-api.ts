@@ -2,15 +2,6 @@
 
 import { provisionProject, deprovisionProject } from "./provisioning.ts";
 
-interface ProjectRow {
-  slug: string;
-  canonical_hostname: string | null;
-  config_json: string;
-  artifacts_repo: string | null;
-  artifacts_remote: string | null;
-  created_at: string;
-}
-
 interface AdminEnv {
   DB: D1Database;
   PROJECT: DurableObjectNamespace;

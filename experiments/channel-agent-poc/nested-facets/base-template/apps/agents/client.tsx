@@ -72,7 +72,7 @@ function eventToYaml(event: StreamEvent): string {
   }).join("\n");
 }
 
-function AgentsWebchat() {
+export function AgentsWebchat() {
   const [streamPath, setStreamPath] = useState(initialStreamPath);
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const [content, setContent] = useState("");

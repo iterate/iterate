@@ -35,7 +35,7 @@ export function inferContentType(path: string): string {
 
 // Content-hashed filenames (e.g. index-BNby28Aj.js) are immutable
 export function isContentHashed(path: string): boolean {
-  return /[-\.][A-Za-z0-9_-]{6,}\.\w+$/.test(path);
+  return /[-.][A-Za-z0-9_-]{6,}\.\w+$/.test(path);
 }
 
 export function cacheHeaders(path: string): string {
