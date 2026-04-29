@@ -12,9 +12,9 @@ vi.mock("../callable/runtime.ts", () => ({
   dispatchCallable: vi.fn(),
 }));
 
-import { resolveCallableToolProvider } from "./resolve.ts";
 import { dispatchCallable } from "../callable/runtime.ts";
 import type { CallableContext } from "../callable/types.ts";
+import { resolveCallableToolProvider } from "./resolve.ts";
 import type { CallableToolProvider } from "./types.ts";
 
 const mockDispatch = vi.mocked(dispatchCallable);
