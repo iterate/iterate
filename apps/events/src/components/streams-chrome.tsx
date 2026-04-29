@@ -88,7 +88,7 @@ export function StreamsHeaderAction() {
     streamRendererModeOptions[0];
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex min-w-0 items-center gap-1.5 sm:gap-2">
       <Tabs
         value={headerControls.feedViewMode}
         onValueChange={(value) =>
@@ -114,14 +114,14 @@ export function StreamsHeaderAction() {
             <Button
               variant="outline"
               size="sm"
-              className="min-w-56 justify-between gap-2 text-left"
+              className="w-24 min-w-0 justify-between gap-2 text-left max-[359px]:w-8 max-[359px]:justify-center max-[359px]:px-0 sm:w-56"
             />
           }
         >
-          <span className="truncate">{selectedRendererMode.label}</span>
+          <span className="truncate max-[359px]:sr-only">{selectedRendererMode.label}</span>
           <ChevronDownIcon className="size-4 text-muted-foreground" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-80">
+        <DropdownMenuContent align="end" className="w-[min(20rem,calc(100vw-1rem))]">
           <DropdownMenuGroup>
             <DropdownMenuLabel>Renderer mode</DropdownMenuLabel>
             <DropdownMenuRadioGroup

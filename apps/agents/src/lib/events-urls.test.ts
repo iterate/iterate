@@ -23,9 +23,9 @@ describe("buildAgentWebSocketCallbackUrl", () => {
     expect(
       buildAgentWebSocketCallbackUrl({
         publicOrigin: "http://localhost:5174",
-        agentClass: "iterate-agent",
+        agentClass: "child-stream-auto-subscriber",
         agentInstance: "stream-demo",
       }),
-    ).toBe("ws://[::1]:5174/agents/iterate-agent/stream-demo");
+    ).toBe("ws://[::1]:5174/agents/child-stream-auto-subscriber/stream-demo");
   });
 });

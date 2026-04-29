@@ -7,28 +7,6 @@ export {
   buildWebchatStreamProcessorRunnerWebSocketCallbackUrl,
 } from "~/lib/events-urls.ts";
 
-/**
- * Agents SDK kebab-case URL segment for the `IterateAgent` Durable Object
- * class. Used both when creating subscriptions that target it and when
- * composing its debug URLs.
- */
-export const ITERATE_AGENT_CLASS = "iterate-agent";
-
-/**
- * Slug used for every `subscription/configured` event that subscribes the
- * `IterateAgent` to a stream. Intentionally constant: Events upserts
- * subscriptions by `slug`, so reusing the same slug replaces the old
- * subscription in place instead of stacking up dead ones.
- */
-export const ITERATE_AGENT_SUBSCRIPTION_SLUG = "iterate-agent";
-
-/**
- * Slug for the experimental plain Durable Object processor runner subscription.
- *
- * Keep this separate from {@link ITERATE_AGENT_SUBSCRIPTION_SLUG} while both
- * runners exist, otherwise Events would replace one websocket subscription with
- * the other.
- */
 export const AGENT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG = "agent-stream-processor-runner";
 export const CODEMODE_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG =
   "codemode-stream-processor-runner";
@@ -41,9 +19,9 @@ export const CHILD_STREAM_AUTO_SUBSCRIBER_CLASS = "child-stream-auto-subscriber"
 
 /**
  * Slug used for the `subscription/configured` event that attaches the
- * `ChildStreamAutoSubscriber` to a prefix stream. Like
- * {@link ITERATE_AGENT_SUBSCRIPTION_SLUG}, stable across reinstalls so
- * calling `installProcessor` twice replaces the subscription in place.
+ * `ChildStreamAutoSubscriber` to a prefix stream. Stable across reinstalls so
+ * calling `installProcessor` twice replaces the subscription in place instead
+ * of stacking duplicate websocket subscriptions.
  */
 export const CHILD_STREAM_AUTO_SUBSCRIBER_SUBSCRIPTION_SLUG = "child-stream-auto-subscriber";
 

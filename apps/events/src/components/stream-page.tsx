@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import {
   type Event,
   type EventInput,
@@ -53,6 +54,7 @@ import {
   type CustomHtmlRendererProjection,
 } from "~/lib/custom-html-renderers.ts";
 import { buildDisplayFeed, projectWireToFeed } from "~/lib/stream-feed-projection.ts";
+import { streamPathToSplat } from "~/lib/stream-links.ts";
 import {
   DEFAULT_STREAM_RENDERER_MODE,
   type StreamFeedItem,
@@ -380,6 +382,21 @@ export function StreamPage({
             isPending={isConnecting}
             errorLabel={liveStreamFailureLabel}
             onOpenEventOffsetChange={onOpenEventOffsetChange}
+            renderStreamPathLink={({ path, children, className }) => (
+              <Link
+                to="/streams/$/"
+                params={{ _splat: streamPathToSplat(path) }}
+                search={(previous: typeof defaultStreamViewSearch) => ({
+                  event: undefined,
+                  composer: previous.composer ?? defaultStreamViewSearch.composer,
+                  renderer: previous.renderer ?? defaultStreamViewSearch.renderer,
+                  view: previous.view ?? defaultStreamViewSearch.view,
+                })}
+                className={className}
+              >
+                {children}
+              </Link>
+            )}
           />
         ) : (
           <StreamEventFeed

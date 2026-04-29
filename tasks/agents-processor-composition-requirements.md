@@ -86,10 +86,10 @@ Working note for the `apps/agents` processor redesign discussion. This is not co
 - Durable Object StreamProcessorRunners must serialize processor delivery and avoid reentrant processor delivery when processors append during event handling.
 - Pull/replay StreamProcessorRunners must make replay/live behavior explicit. Historical catch-up should not run side-effect hooks by default.
 - Durable Object StreamProcessorRunners should bind their stream path through durable lifecycle init params, not as a loose argument on every runner method.
-- A stream-bound Durable Object StreamProcessorRunner should be initialized once with `{ name, streamPath }`, then consume pushed live events with an API shaped like `consumeLiveEvent({ event })`.
+- A stream-bound Durable Object StreamProcessorRunner should be initialized once with `{ name, streamPath }`, then consume pushed events with an API shaped like `consumeEvent({ event })`.
 - The `apps/agents` replacement for `IterateAgent` should support the old push-subscription deployment shape. Because the new StreamProcessorRunner is a plain Durable Object rather than an Agents SDK subclass, websocket routing must be explicit in the Worker instead of relying on `/agents/...`.
-- Cutover direction: keep the old `IterateAgent` class exported for now, but stop wiring new child streams to it. `ChildStreamAutoSubscriber` should subscribe the plain Durable Object StreamProcessorRunner instead.
-- Existing streams that already have an `iterate-agent` websocket subscription may continue hitting the old class until the subscription is replaced or the stream is recreated.
+- Cutover direction: the old `IterateAgent` class has been removed. Keep legacy tests skipped while their coverage is rebuilt around the Webchat, Agent, and Codemode StreamProcessorRunner callbacks.
+- Existing streams that already have an `iterate-agent` websocket subscription must be recreated or resubscribed to the new runner callback URLs.
 - `contract.consumes` should mean every event the processor may inspect in `reducer` or `afterAppend`.
 - Reducers should receive events matching the declared consumed event types, not arbitrary stream events.
 - `afterAppend` should receive events matching the declared consumed event types.

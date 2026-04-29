@@ -34,7 +34,10 @@ export function EventsStreamLayoutHeader({
   className?: string;
 }) {
   return (
-    <header className={cn("shrink-0 border-b bg-background/95 px-4 py-2", className)}>
+    <header
+      data-slot="event-stream-header"
+      className={cn("shrink-0 border-b bg-background/95 px-4 py-2", className)}
+    >
       {children}
     </header>
   );
@@ -50,7 +53,11 @@ export function EventsStreamLayoutMain({
   children: ReactNode;
   className?: string;
 }) {
-  return <main className={cn("min-h-0 flex-1 overflow-hidden", className)}>{children}</main>;
+  return (
+    <main data-slot="event-stream-main" className={cn("min-h-0 flex-1 overflow-hidden", className)}>
+      {children}
+    </main>
+  );
 }
 
 /**
@@ -65,6 +72,7 @@ export function EventsStreamLayoutMessageInput({
 }) {
   return (
     <footer
+      data-slot="event-stream-message-input"
       className={cn(
         "supports-backdrop-filter:bg-background/80 shrink-0 border-t bg-background/95 px-4 py-4",
         className,

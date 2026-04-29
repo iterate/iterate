@@ -50,6 +50,10 @@ export function createCloudflareCodemodeCodeExecutor(
       }),
     );
 
-    return await executor.execute(script, [webchatProvider, ...dynamicResolved]);
+    return await executor.execute(script, [
+      { name: "builtin", fns: { answer: async () => 42 } },
+      webchatProvider,
+      ...dynamicResolved,
+    ]);
   };
 }

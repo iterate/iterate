@@ -17,7 +17,7 @@ import type {
   EventsStreamBuiltInElement,
   EventsStreamRawEventElement,
 } from "@iterate-com/ui/components/events/feed-items";
-import { rawEventsStreamViewReducer } from "@iterate-com/ui/components/events/feed-processors";
+import { rawPrettyEventsStreamViewReducer } from "@iterate-com/ui/components/events/feed-processors";
 import {
   BoxRenderable,
   InputRenderable,
@@ -57,6 +57,7 @@ import {
   type StreamSummary,
 } from "../src/stream-tui/command-router.ts";
 import {
+  formatElapsedTime,
   formatEventSummary,
   formatTime,
   getElapsedByOffset,
@@ -139,8 +140,8 @@ const client = createEventsOrpcClient({
 // OpenTUI's imperative API (same approach as the core examples).
 // ---------------------------------------------------------------------------
 
-type ReducedStreamState = ReturnType<typeof rawEventsStreamViewReducer.createInitialState>;
-let state: ReducedStreamState = rawEventsStreamViewReducer.createInitialState();
+type ReducedStreamState = ReturnType<typeof rawPrettyEventsStreamViewReducer.createInitialState>;
+let state: ReducedStreamState = rawPrettyEventsStreamViewReducer.createInitialState();
 let status = "connecting";
 let appendStatus = "";
 let eventCount = 0;
@@ -194,7 +195,7 @@ const root = new BoxRenderable(renderer, {
 
 const topBar = new BoxRenderable(renderer, {
   width: "100%",
-  height: 5,
+  height: 3,
   flexDirection: "row",
   gap: 1,
   border: true,
@@ -202,7 +203,6 @@ const topBar = new BoxRenderable(renderer, {
   borderColor: P.borderHeader,
   focusedBorderColor: P.accent,
   focusable: true,
-  paddingTop: 1,
   paddingLeft: 1,
   paddingRight: 1,
   backgroundColor: P.surface,
@@ -267,14 +267,15 @@ const slashAutocomplete = new BoxRenderable(renderer, {
 
 const inputBox = new BoxRenderable(renderer, {
   width: "100%",
-  height: 5,
+  height: 3,
   flexDirection: "column",
   border: true,
   borderStyle: "single",
   borderColor: P.surface,
   focusedBorderColor: P.accent,
   focusable: true,
-  padding: 1,
+  paddingLeft: 1,
+  paddingRight: 1,
   backgroundColor: P.bg,
 });
 
@@ -389,7 +390,7 @@ startStream(currentStreamPath);
 function startStream(streamPath: StreamPath) {
   activeStreamController?.abort();
   activeStreamController = new AbortController();
-  state = rawEventsStreamViewReducer.createInitialState();
+  state = rawPrettyEventsStreamViewReducer.createInitialState();
   eventCount = 0;
   selectedOffset = undefined;
   collapsedOffsets.clear();
@@ -414,7 +415,7 @@ async function streamEvents(args: { streamPath: StreamPath; signal: AbortSignal 
       if (args.signal.aborted || args.streamPath !== currentStreamPath) return;
       const event = Event.parse(value);
       eventCount += 1;
-      state = rawEventsStreamViewReducer.reduce({ event, state }) ?? state;
+      state = rawPrettyEventsStreamViewReducer.reduce({ event, state }) ?? state;
       collapsedOffsets.delete(event.offset);
       updateHeader();
       updateFeed("keep");
@@ -446,7 +447,7 @@ async function appendInput() {
   updateHeader();
 
   const event: EventInput = {
-    type: "events.iterate.com/webchat/user-message-added",
+    type: "events.iterate.com/tui/user-message-added",
     payload: { content },
   };
   try {
@@ -704,19 +705,52 @@ function renderFeedChildren() {
   }
 
   const elapsedByOffset = getElapsedByOffset(state.slots.feed);
-  return state.slots.feed.flatMap((item) => {
-    if (item.type !== "raw-event") return [];
-    const chunks = renderRawEventCard(item, elapsedByOffset.get(item.props.offset));
-    return [
+  const children: TextRenderable[] = [];
+  let lastDateStr: string | undefined;
+
+  for (const item of state.slots.feed) {
+    // Date boundary — insert a horizontal rule when events cross a calendar date
+    const itemTimestamp = getItemTimestamp(item);
+    if (itemTimestamp != null) {
+      const dateStr = new Date(itemTimestamp).toLocaleDateString(undefined, {
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      });
+      if (lastDateStr != null && dateStr !== lastDateStr) {
+        const width = getFeedContentWidth();
+        const label = ` ${dateStr} `;
+        const lineLen = Math.max(0, width - label.length);
+        const left = "─".repeat(Math.floor(lineLen / 2));
+        const right = "─".repeat(Math.ceil(lineLen / 2));
+        children.push(
+          new TextRenderable(renderer, {
+            id: `date-boundary-${itemTimestamp}`,
+            content: new StyledText([fg(P.textDim)(`${left}${label}${right}\n`)]),
+            width: "100%",
+            height: 2,
+            fg: P.textDim,
+          }),
+        );
+      }
+      lastDateStr = dateStr;
+    }
+
+    const chunks = renderFeedItem(item, elapsedByOffset);
+    if (chunks.length === 0) continue;
+    children.push(
       new TextRenderable(renderer, {
-        id: `events-feed-raw-event-${item.props.offset}`,
+        id: item.id,
         content: new StyledText(chunks),
         width: "100%",
         height: countTextLines(chunks.map((c) => c.text).join("")),
         fg: P.textBody,
       }),
-    ];
-  });
+    );
+  }
+
+  return children;
 }
 
 /** Debug view: dump the full TUI + reducer state as YAML. */
@@ -830,14 +864,94 @@ function renderStreamTreeRowChunks(row: StreamTreeRow) {
 }
 
 // ---------------------------------------------------------------------------
-// Event card rendering
+// Feed item rendering — dispatch by element type
+// ---------------------------------------------------------------------------
+
+/** Extract a timestamp from any feed element (used for date boundary detection). */
+function getItemTimestamp(item: EventsStreamBuiltInElement): number | undefined {
+  if ("timestamp" in item.props) return item.props.timestamp as number;
+  if ("firstTimestamp" in item.props) return item.props.firstTimestamp as number;
+  return undefined;
+}
+
+/** Route a feed element to its renderer, returning styled text chunks. */
+function renderFeedItem(item: EventsStreamBuiltInElement, elapsedByOffset: Map<number, string>) {
+  if (item.type === "raw-event")
+    return renderRawEventCard(item, elapsedByOffset.get(item.props.offset));
+  if (item.type === "message") return renderMessageItem(item.props);
+  if (item.type === "lifecycle") return renderLifecycleItem(item.props);
+  if (item.type === "error") return renderErrorItem(item.props);
+  if (item.type === "child-stream-created") return renderChildStreamItem(item.props);
+  if (item.type === "grouped-raw-event") return renderGroupedRawItem(item.props);
+  return [];
+}
+
+/** Render a chat message (user or assistant) as a styled block. */
+function renderMessageItem(props: { role: "user" | "assistant"; text: string; timestamp: number }) {
+  const width = getFeedContentWidth();
+  const isUser = props.role === "user";
+  const label = isUser ? "You" : "Agent";
+  const labelColor = isUser ? P.accent : "#a78bfa";
+  const time = formatTime(props.timestamp);
+  const header = `${label}${" ".repeat(Math.max(1, width - label.length - time.length))}${time}\n`;
+  const wrappedLines = props.text.split("\n").flatMap((line) => wrapLine(line, width));
+  return [
+    fg(P.bg)("\n"),
+    bold(fg(labelColor)(header)),
+    ...wrappedLines.map((line) => fg(P.text)(`${line}\n`)),
+  ];
+}
+
+/** Render a lifecycle event (stream initialized, DO woke up) as a dim one-liner. */
+function renderLifecycleItem(props: { label: string; timestamp: number }) {
+  const width = getFeedContentWidth();
+  const time = formatTime(props.timestamp);
+  const text = `  ○ ${props.label}`;
+  const line = `${text}${" ".repeat(Math.max(1, width - text.length - time.length))}${time}\n`;
+  return [fg(P.textDim)(line)];
+}
+
+/** Render an error event as a red-highlighted line. */
+function renderErrorItem(props: { message: string; timestamp: number }) {
+  const width = getFeedContentWidth();
+  const time = formatTime(props.timestamp);
+  const text = `  ✕ ${props.message}`;
+  const line = `${text}${" ".repeat(Math.max(1, width - text.length - time.length))}${time}\n`;
+  return [fg("#ef4444")(line)];
+}
+
+/** Render a child-stream-created event showing the new child path. */
+function renderChildStreamItem(props: { childPath: string; timestamp: number }) {
+  const width = getFeedContentWidth();
+  const time = formatTime(props.timestamp);
+  const text = `  ┗ child: ${props.childPath}`;
+  const line = `${text}${" ".repeat(Math.max(1, width - text.length - time.length))}${time}\n`;
+  return [fg(P.textSubdued)(line)];
+}
+
+/** Render a grouped raw event as a compact summary. */
+function renderGroupedRawItem(props: {
+  eventType: string;
+  count: number;
+  firstTimestamp: number;
+  lastTimestamp: number;
+}) {
+  const width = getFeedContentWidth();
+  const elapsed = formatElapsedTime(props.lastTimestamp - props.firstTimestamp);
+  const text = `  … ${props.count}× ${props.eventType} (${elapsed})`;
+  const time = formatTime(props.lastTimestamp);
+  const line = `${text}${" ".repeat(Math.max(1, width - text.length - time.length))}${time}\n`;
+  return [fg(P.textDim)(line)];
+}
+
+// ---------------------------------------------------------------------------
+// Raw event YAML card
 // ---------------------------------------------------------------------------
 
 /**
- * Render an event as a styled card: right-aligned summary line + YAML body.
+ * Render a raw event as a styled card: right-aligned summary line + YAML body.
  * Background colors are applied per-character via StyledText chunks, padded
- * to the full content width (backgrounds only cover the characters in the
- * string, not the full renderable width).
+ * to the full content width.
  */
 function renderRawEventCard(item: EventsStreamRawEventElement, elapsedLabel?: string) {
   const width = getFeedContentWidth();
@@ -858,12 +972,10 @@ function renderRawEventCard(item: EventsStreamRawEventElement, elapsedLabel?: st
   return [
     fg(P.bg)("\n"),
     styledSummary,
-    bodyLine(" ".repeat(width - 2)),
     ...yaml
       .split("\n")
       .flatMap((line) => wrapLine(line, width - 2))
       .map(bodyLine),
-    bodyLine(" ".repeat(width - 2)),
   ];
 }
 

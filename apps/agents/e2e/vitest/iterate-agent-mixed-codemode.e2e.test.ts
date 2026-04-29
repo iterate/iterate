@@ -1,8 +1,8 @@
 /**
- * Single `codemode-block-added` script that exercises **multiple provider kinds** in one run:
- * - `builtin` (inline fns), `events` (OpenAPI), `cloudflare_docs` (MCP), global `fetch` (egress)
+ * Legacy end-to-end coverage for the deleted monolithic `IterateAgent`.
  *
- * Re-record fixture: `pnpm test:e2e:record` (from `apps/agents`, Doppler + network).
+ * Kept skipped while the equivalent mixed-provider codemode coverage is
+ * rebuilt around the stream processor runner callbacks.
  */
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -50,7 +50,7 @@ async () => {
 }
 `.trim();
 
-test(
+test.skip(
   "one codemode block uses builtin + events OpenAPI + MCP + fetch (HAR replay)",
   { tags: ["local-dev-server", "mocked-internet"], timeout: 150_000 },
   async (ctx) => {

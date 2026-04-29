@@ -49,7 +49,9 @@ describeEphemeral("ephemeral worker", () => {
     },
   );
 
-  test(
+  // Legacy `/agents/iterate-agent/...` websocket path. Keep the test skipped
+  // while the runner-based deployed-worker smoke coverage is rebuilt.
+  test.skip(
     "websocket codemode with builtin + events OpenAPI + fetch",
     { tags: ["deployed-ephemeral-worker-with-egress-capture", "live-internet"], timeout: 60_000 },
     async (ctx) => {

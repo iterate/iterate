@@ -494,7 +494,7 @@ export const manualEventAppendedPage = {
   slug: "manual-event-appended",
   href: "/manual-event-appended/",
   title: "Manual Event Appended",
-  type: "https://events.iterate.com/manual-event-appended",
+  type: "events.iterate.com/manual-event-appended",
   summary:
     "Small hand-written example event for trying the UI and proving that an event type can have its own real page route.",
   payloadExample: {

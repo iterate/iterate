@@ -1,7 +1,8 @@
 /**
- * End-to-end: Events host + Semaphore tunnel + `cloudflared` -> public `wss://` to
- * `IterateAgent` -> lightweight chat agent loop calls Workers AI via
- * `env.AI.run()` routed through the `e2e` AI Gateway.
+ * Legacy end-to-end coverage for the deleted monolithic `IterateAgent`.
+ *
+ * Kept skipped while the equivalent coverage is rebuilt around the Webchat,
+ * Agent, and Codemode stream processor runners.
  *
  * Run: `pnpm test:e2e` with `--tags-filter slow` (from `apps/agents`).
  */
@@ -15,7 +16,7 @@ const AGENT_INPUT_CONTENT = "What is the capital of France? Answer with one word
 // Only kimi (native Workers AI) is exercised for now.
 const SCENARIOS = [{ label: "kimi", model: "@cf/moonshotai/kimi-k2.5" }] as const;
 
-test(
+test.skip(
   "websocket subscription drives Workers AI chat loop (kimi) via e2e AI Gateway",
   { tags: ["local-dev-server", "live-internet", "slow"], timeout: 240_000 },
   async (ctx) => {

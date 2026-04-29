@@ -23,7 +23,7 @@ import { createEventsOrpcClient } from "~/lib/events-orpc-client.ts";
 import { getOrpcClient } from "~/orpc/client.ts";
 
 /**
- * Curated model presets the IterateAgent processor is known to accept via
+ * Curated model presets the Agent stream processor is known to accept via
  * `env.AI.run(model, …)`. Free-form strings are still supported via the
  * "Custom…" option — paste any model id you want.
  */
@@ -230,10 +230,10 @@ async function readAgentStreamHistory(args: {
 
 /**
  * One-time wiring step: install the `child-stream-auto-subscriber` processor
- * on `appConfig.streamPathPrefix`. Without it, child streams under the
- * prefix won't get a stream processor runner durable object attached or any
- * preset events applied. Re-running is safe — the events service upserts
- * the subscription by slug.
+ * on `appConfig.streamPathPrefix`. Without it, child streams under the prefix
+ * won't get the Webchat, Agent, and Codemode stream processor runner Durable
+ * Objects attached, and no preset events are applied. Re-running is safe: the
+ * events service upserts the subscription by slug.
  */
 function AutoSubscribeSection() {
   const publicBaseUrl = useWindowOrigin();
@@ -247,11 +247,11 @@ function AutoSubscribeSection() {
   return (
     <section className="space-y-4 rounded-lg border bg-card p-4">
       <div className="space-y-1">
-        <p className="text-sm font-semibold">Auto-subscribe processor</p>
+        <p className="text-sm font-semibold">Auto-subscribe stream processors</p>
         <p className="text-sm text-muted-foreground">
           Wires the <code>child-stream-auto-subscriber</code> processor to the configured prefix so
-          every new descendant stream gets an <code>agent-stream-processor-runner</code> WebSocket
-          subscription, plus any preset events configured below. One-time setup; running again is
+          every new descendant stream gets Webchat, Agent, and Codemode runner WebSocket
+          subscriptions, plus any preset events configured below. One-time setup; running again is
           safe.
         </p>
       </div>
@@ -688,7 +688,7 @@ function PresetRow({
             className="inline-flex items-center rounded-md bg-primary px-2 py-1 text-xs font-medium text-primary-foreground"
             onClick={openNewAgent}
           >
-            🎲 New agent
+            New agent
           </button>
           <button
             type="button"

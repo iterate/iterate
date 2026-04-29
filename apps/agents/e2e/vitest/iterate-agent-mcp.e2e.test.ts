@@ -1,6 +1,8 @@
 /**
- * End-to-end: codemode invokes Cloudflare Docs MCP (`search_cloudflare_documentation`) with outbound
- * traffic mocked via committed HAR.
+ * Legacy end-to-end coverage for the deleted monolithic `IterateAgent`.
+ *
+ * Kept skipped while the equivalent MCP/codemode coverage is rebuilt around
+ * the stream processor runner callbacks.
  *
  * Re-record: `pnpm test:e2e:record` (from `apps/agents`, with Doppler + network).
  */
@@ -31,7 +33,7 @@ async () => {
 }
 `.trim();
 
-test(
+test.skip(
   "codemode calls Cloudflare Docs MCP with mocked egress (HAR replay)",
   { tags: ["local-dev-server", "mocked-internet"], timeout: 150_000 },
   async (ctx) => {

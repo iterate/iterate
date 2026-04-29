@@ -313,6 +313,7 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
 
   if (
     event.type === "events.iterate.com/webchat/user-message-added" ||
+    event.type === "events.iterate.com/tui/user-message-added" ||
     event.type === "webchat-message-received" ||
     event.type === "events.iterate.com/agent/webchat-message-received"
   ) {
@@ -334,6 +335,7 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
 
   if (
     event.type === "events.iterate.com/webchat/agent-response-added" ||
+    event.type === "events.iterate.com/tui/agent-response-added" ||
     event.type === "webchat-response-added" ||
     event.type === "events.iterate.com/agent/webchat-response-added"
   ) {

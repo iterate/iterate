@@ -13,7 +13,6 @@ import {
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { z } from "zod";
 import { AppConfig } from "./src/app.ts";
-import type { IterateAgent } from "./src/durable-objects/iterate-agent.ts";
 
 const APP_NAME = "agents";
 
@@ -83,10 +82,6 @@ const db = await D1Database("agents-db", {
   migrationsDir: "./drizzle",
   adopt: true,
 });
-const iterateAgent = DurableObjectNamespace<IterateAgent>("iterate-agent", {
-  className: "IterateAgent",
-  sqlite: true,
-});
 // No type parameter here: this namespace points at a class whose Env includes
 // the generated worker bindings, so typing the binding feeds the generated
 // worker Env back into the worker resource initializer.
@@ -102,13 +97,11 @@ const webchatStreamProcessorRunner = DurableObjectNamespace("webchat-stream-proc
   className: "WebchatStreamProcessorRunner",
   sqlite: true,
 });
-// Deliberately no `<ChildStreamAutoSubscriber>` type parameter here: combined
-// with `DurableObjectNamespace<IterateAgent>` above, TS ends up following
-// `Agent<CloudflareEnv>` → `typeof worker.Env` → back to both DOs and reports
-// `worker` as recursively referencing itself. Skipping the type parameter on
-// the second binding breaks that cycle without losing correctness: the class
-// itself still extends `Agent<CloudflareEnv>`, and `entry.workerd.ts` imports
-// it by value.
+// Deliberately no `<ChildStreamAutoSubscriber>` type parameter here: the class
+// extends `Agent<CloudflareEnv>`, and threading that through Alchemy's inferred
+// Worker env easily creates recursive binding types. The exported DO class is
+// still imported by value from `entry.workerd.ts`, so runtime wiring remains
+// explicit.
 const childStreamAutoSubscriber = DurableObjectNamespace("child-stream-auto-subscriber", {
   className: "ChildStreamAutoSubscriber",
   sqlite: true,
@@ -134,7 +127,6 @@ export const worker = await TanStackStart(APP_NAME, {
   adopt: true,
   bindings: {
     DB: db,
-    ITERATE_AGENT: iterateAgent,
     AGENT_STREAM_PROCESSOR_RUNNER: agentStreamProcessorRunner,
     CODEMODE_STREAM_PROCESSOR_RUNNER: codemodeStreamProcessorRunner,
     WEBCHAT_STREAM_PROCESSOR_RUNNER: webchatStreamProcessorRunner,

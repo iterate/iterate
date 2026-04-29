@@ -1,148 +1,32 @@
-import { DurableObject } from "cloudflare:workers";
-import { StreamSocketFrame, type StreamPath } from "@iterate-com/events-contract";
-import { withD1ObjectCatalog } from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
-import { withDurableObjectCore } from "@iterate-com/shared/durable-object-utils/mixins/with-durable-object-core";
-import { withKvInspector } from "@iterate-com/shared/durable-object-utils/mixins/with-kv-inspector";
-import { withLifecycleHooks } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import { withOuterbase } from "@iterate-com/shared/durable-object-utils/mixins/with-outerbase";
+import type { StreamProcessorRunnerState } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor-runner";
 import {
-  withStreamProcessorRunner,
-  type StreamProcessorRunnerState,
-} from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor-runner";
-import type { StreamEvent } from "@iterate-com/shared/stream-processors";
+  createStreamProcessorRunnerDurableObject,
+  type StreamProcessorRunnerInit,
+} from "./stream-processor-runner-common.ts";
 import { AgentProcessorContract } from "~/stream-processors/agent/contract.ts";
 import { createAgentProcessor } from "~/stream-processors/agent/implementation.ts";
-import type { CloudflareEnv } from "~/lib/worker-env.d.ts";
-import {
-  createStreamProcessorApi,
-  streamProcessorWebSocketMessageToString,
-} from "./stream-processor-runner-common.ts";
 
-export type AgentStreamProcessorRunnerInit = {
-  name: string;
-  streamPath: StreamPath;
-};
+export type AgentStreamProcessorRunnerInit = StreamProcessorRunnerInit;
 
-type AgentStreamProcessorRunnerCatalogEnv = Pick<CloudflareEnv, "DB">;
-
-function createAgentStreamProcessor(args: { ctx: DurableObjectState; env: CloudflareEnv }) {
-  return createAgentProcessor({
-    ai: {
-      /**
-       * `Ai.run` is model-specific in Cloudflare's generated types, while the
-       * processor deliberately receives a tiny model-agnostic surface. Keep
-       * the Worker binding cast at this boundary so the processor can still
-       * run in tests or another runner with any compatible executor.
-       */
-      run: async (model, body, runOpts) =>
-        await args.env.AI.run(model as never, body as never, runOpts as never),
-    },
-    waitUntil: (promise) => args.ctx.waitUntil(promise),
-  });
-}
-
-const AgentStreamProcessorRunnerCore = withD1ObjectCatalog<
-  AgentStreamProcessorRunnerInit,
-  AgentStreamProcessorRunnerCatalogEnv
->({
+const AgentStreamProcessorRunnerBase = createStreamProcessorRunnerDurableObject({
   className: "AgentStreamProcessorRunner",
-  getDatabase(env) {
-    return env.DB;
-  },
-  indexes: {
-    streamPath(params) {
-      return params.streamPath;
-    },
-  },
-})(withLifecycleHooks<AgentStreamProcessorRunnerInit>()(withDurableObjectCore(DurableObject)));
-
-const AgentStreamProcessorRunnerBase = withStreamProcessorRunner<
-  AgentStreamProcessorRunnerInit,
-  CloudflareEnv,
-  typeof AgentProcessorContract
->({
-  processor: createAgentStreamProcessor,
-  streamApi(args) {
-    return createStreamProcessorApi({
-      ctx: args.ctx,
-      streamPath: args.initParams.streamPath,
+  processor(args) {
+    return createAgentProcessor({
+      ai: {
+        /**
+         * `Ai.run` is model-specific in Cloudflare's generated types, while the
+         * processor deliberately receives a tiny model-agnostic surface.
+         */
+        run: async (model, body, runOpts) =>
+          await args.env.AI.run(model as never, body as never, runOpts as never),
+      },
+      waitUntil: (promise) => args.ctx.waitUntil(promise),
     });
   },
-})(AgentStreamProcessorRunnerCore);
-
-const AgentStreamProcessorRunnerDebugBase = withOuterbase({
-  unsafe: "I_UNDERSTAND_THIS_EXPOSES_SQL",
-})(
-  withKvInspector({
-    unsafe: "I_UNDERSTAND_THIS_EXPOSES_KV",
-  })(AgentStreamProcessorRunnerBase),
-);
+});
 
 export type AgentStreamProcessorRunnerState = StreamProcessorRunnerState<
   typeof AgentProcessorContract
 >;
 
-/**
- * Durable Object runner for the Agent processor.
- *
- * The generic mixin owns processor state persistence and the reduce/afterAppend
- * loop. This class owns only the push WebSocket endpoint used by Events and the
- * app-specific processor dependencies configured above.
- */
-export class AgentStreamProcessorRunner extends AgentStreamProcessorRunnerDebugBase<CloudflareEnv> {
-  constructor(ctx: DurableObjectState, env: CloudflareEnv) {
-    super(ctx, env);
-
-    this.registerOnInstanceWake(async () => {
-      await this.catchUp();
-    });
-  }
-
-  async fetch(request: Request): Promise<Response> {
-    if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
-      return await super.fetch(request);
-    }
-
-    await this.ensureStarted();
-
-    const pair = new WebSocketPair();
-    const client = pair[0];
-    const server = pair[1];
-    this.ctx.acceptWebSocket(server);
-
-    return new Response(null, {
-      status: 101,
-      webSocket: client,
-    });
-  }
-
-  async webSocketMessage(_socket: WebSocket, message: string | ArrayBuffer): Promise<void> {
-    const text = streamProcessorWebSocketMessageToString(message);
-    if (text == null) return;
-
-    let json: unknown;
-    try {
-      json = JSON.parse(text);
-    } catch {
-      return;
-    }
-
-    const frame = StreamSocketFrame.safeParse(json);
-    if (!frame.success || frame.data.type !== "event") return;
-
-    await this.consumeEvent({ event: frame.data.event });
-  }
-
-  async catchUp(): Promise<AgentStreamProcessorRunnerState> {
-    return await this.catchUpStreamProcessor();
-  }
-
-  async consumeEvent(args: { event: StreamEvent }): Promise<AgentStreamProcessorRunnerState> {
-    return await this.consumeStreamProcessorEvent(args);
-  }
-
-  async getRunnerState(): Promise<AgentStreamProcessorRunnerState> {
-    await this.ensureStarted();
-    return this.getStreamProcessorRunnerState();
-  }
-}
+export class AgentStreamProcessorRunner extends AgentStreamProcessorRunnerBase {}

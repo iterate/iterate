@@ -10,11 +10,9 @@ const RUNNER_SOCKET_SUFFIX = "/websocket";
  * Handles the websocket callback URL used by Events push subscriptions for the
  * plain Durable Object stream processor runner.
  *
- * The old `IterateAgent` runner relies on the Agents SDK's `/agents/...`
- * router. This route is the explicit equivalent for a normal Durable Object:
- * parse the runner instance name, initialize that object with its immutable
- * stream path, then forward the websocket upgrade to the Durable Object's
- * `fetch()` method.
+ * Parse the runner instance name, initialize that Durable Object with its
+ * immutable stream path, then forward the websocket upgrade to the Durable
+ * Object's `fetch()` method.
  */
 export async function handleAgentStreamProcessorRunnerSocket(args: {
   env: Env;

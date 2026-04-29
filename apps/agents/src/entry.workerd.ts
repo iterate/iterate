@@ -12,7 +12,6 @@ import * as schema from "~/db/schema.ts";
 import { AgentStreamProcessorRunner } from "~/durable-objects/agent-stream-processor-runner.ts";
 import { ChildStreamAutoSubscriber } from "~/durable-objects/child-stream-auto-subscriber.ts";
 import { CodemodeStreamProcessorRunner } from "~/durable-objects/codemode-stream-processor-runner.ts";
-import { IterateAgent } from "~/durable-objects/iterate-agent.ts";
 import { MCPClient } from "~/durable-objects/mcp-client.ts";
 import { OpenApiToolClient } from "~/durable-objects/openapi-tool-client.ts";
 import { SlackApi } from "~/durable-objects/slack-api.ts";
@@ -105,7 +104,6 @@ export {
   AgentStreamProcessorRunner,
   ChildStreamAutoSubscriber,
   CodemodeStreamProcessorRunner,
-  IterateAgent,
   MCPClient,
   OpenApiToolClient,
   SlackApi,

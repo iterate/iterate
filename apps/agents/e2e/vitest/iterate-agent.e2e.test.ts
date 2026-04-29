@@ -1,19 +1,25 @@
 /**
- * End-to-end: real Events host + Semaphore tunnel + `cloudflared` -> public `wss://` to
- * `IterateAgent` -> codemode runs `builtin` + events OpenAPI + `fetch("https://example.com/")`
- * (egress via mock proxy / HAR).
+ * End-to-end: real Events host + Semaphore tunnel + `cloudflared` -> public
+ * `wss://` to `CodemodeStreamProcessorRunner` -> codemode runs `builtin` +
+ * Events OpenAPI + `fetch("https://example.com/")` with egress via HAR replay.
  *
- * After changing `CODEMODE_SCRIPT` or proxy expectations, re-record: `pnpm test:e2e:record`
+ * After changing `CODEMODE_SCRIPT` or proxy expectations, re-record:
+ * `pnpm test:e2e:record`.
  */
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ProjectSlug } from "@iterate-com/events-contract";
+import { http, passthrough } from "@iterate-com/mock-http-proxy";
 import { expect, test } from "vitest";
 import { getProjectUrl } from "../../../events/src/lib/project-slug.ts";
 import { setupE2E } from "../test-support/e2e-test.ts";
 import { createLocalDevServer } from "../test-support/create-local-dev-server.ts";
 import { createMockInternet } from "../test-support/create-mock-internet.ts";
 import { OPENAPI_TOOL_PROVIDER_PRESET_EVENT } from "~/lib/default-tool-provider-events.ts";
+import {
+  buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl,
+  streamPathToAgentInstance,
+} from "~/lib/iterate-agent-addressing.ts";
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 const harFixturePath = join(appRoot, "e2e/vitest/__snapshots__/iterate-agent-codemode.har");
@@ -40,7 +46,7 @@ async () => {
 `.trim();
 
 test(
-  "websocket subscription runs codemode with mocked egress (HAR replay)",
+  "codemode stream processor runner executes a block with mocked egress (HAR replay)",
   { tags: ["local-dev-server", "mocked-internet"], timeout: 120_000 },
   async (ctx) => {
     const e2e = await setupE2E(ctx);
@@ -51,6 +57,11 @@ test(
       eventsBaseUrl: e2e.eventsBaseUrl,
       eventsProjectSlug: e2e.runSlug,
     });
+    mock.use(
+      http.all(eventsStreamUrlPattern({ e2e, streamPath }), () => {
+        return passthrough();
+      }),
+    );
 
     await using server = await createLocalDevServer({
       egressProxy: mock.url,
@@ -63,9 +74,13 @@ test(
     await e2e.events.append(streamPath, {
       type: "https://events.iterate.com/events/stream/subscription/configured",
       payload: {
-        slug: `iterate-agent-ws-${e2e.executionSuffix}`,
+        slug: `codemode-runner-ws-${e2e.executionSuffix}`,
         type: "websocket",
-        callbackUrl: server.callbackUrl,
+        callbackUrl: buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
+          publicOrigin: server.publicUrl,
+          runnerInstance: streamPathToAgentInstance(streamPath),
+          streamPath,
+        }),
       },
     });
 
@@ -74,20 +89,20 @@ test(
     await e2e.events.waitForEvent(
       streamPath,
       (event) =>
-        event.type === "agent-input-added" &&
+        event.type === "events.iterate.com/agent/input-added" &&
         typeof event.payload.content === "string" &&
         event.payload.content.includes("Tool provider `iterate_events` is now available"),
       { timeoutMs: 120_000 },
     );
 
     await e2e.events.append(streamPath, {
-      type: "codemode-block-added",
+      type: "events.iterate.com/codemode/block-added",
       payload: { script: CODEMODE_SCRIPT },
     });
 
     const resultEvent = await e2e.events.waitForEvent(
       streamPath,
-      (event) => event.type === "codemode-result-added",
+      (event) => event.type === "events.iterate.com/codemode/result-added",
       { timeoutMs: 90_000 },
     );
 
@@ -122,3 +137,23 @@ test(
     expect(urls.some((url) => url.includes("example.com"))).toBe(true);
   },
 );
+
+function eventsStreamUrlPattern(args: {
+  e2e: Awaited<ReturnType<typeof setupE2E>>;
+  streamPath: string;
+}) {
+  const eventsHost = new URL(
+    getProjectUrl({
+      currentUrl: args.e2e.eventsBaseUrl,
+      projectSlug: ProjectSlug.parse(args.e2e.runSlug),
+    }).toString(),
+  ).hostname;
+  const encodedStreamPath = encodeURIComponent(args.streamPath);
+  return new RegExp(
+    `^https://${escapeRegExp(eventsHost)}/api/streams/${escapeRegExp(encodedStreamPath)}(?:[/?]|$)`,
+  );
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}

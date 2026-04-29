@@ -1,5 +1,5 @@
 import { type ReactNode } from "react";
-import { getCoreEventTypeSlug, type Event } from "@iterate-com/events-contract";
+import { getCoreEventTypeSlug, type Event, type StreamPath } from "@iterate-com/events-contract";
 import {
   AlertTriangleIcon,
   BotIcon,
@@ -48,7 +48,14 @@ import {
   EventsStreamLayoutHeader,
   EventsStreamLayoutMain,
 } from "@iterate-com/ui/components/events/stream-layout";
+import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
 import { cn } from "@iterate-com/ui/lib/utils";
+
+export type EventsStreamPathLinkRenderer = (args: {
+  path: StreamPath;
+  children: ReactNode;
+  className?: string;
+}) => ReactNode;
 
 /**
  * Renders a complete stream view snapshot for browser clients.
@@ -62,6 +69,7 @@ export function EventsStreamView({
   openEventOffset,
   onOpenEventOffsetChange,
   getEventTypeHref,
+  renderStreamPathLink,
   emptyLabel,
   isPending,
   errorLabel,
@@ -72,6 +80,7 @@ export function EventsStreamView({
   openEventOffset?: number;
   onOpenEventOffsetChange?: (offset?: number) => void;
   getEventTypeHref?: (eventType: string) => string | undefined;
+  renderStreamPathLink?: EventsStreamPathLinkRenderer;
   emptyLabel?: string;
   isPending?: boolean;
   errorLabel?: string;
@@ -91,6 +100,7 @@ export function EventsStreamView({
           isPending={isPending}
           errorLabel={errorLabel}
           onOpenEventOffsetChange={onOpenEventOffsetChange}
+          renderStreamPathLink={renderStreamPathLink}
         />
       </EventsStreamLayoutMain>
       <EventsStreamEventInspectorSheet
@@ -231,6 +241,7 @@ function ComposerSuggestionElement({
 export function EventsStreamFeed({
   elements,
   onOpenEventOffsetChange,
+  renderStreamPathLink,
   emptyLabel = "No events yet",
   isPending = false,
   errorLabel,
@@ -238,6 +249,7 @@ export function EventsStreamFeed({
 }: {
   elements: readonly EventsStreamBuiltInElement[];
   onOpenEventOffsetChange?: (offset?: number) => void;
+  renderStreamPathLink?: EventsStreamPathLinkRenderer;
   emptyLabel?: string;
   isPending?: boolean;
   errorLabel?: string;
@@ -270,6 +282,7 @@ export function EventsStreamFeed({
               key={element.id}
               element={element}
               onOpenEventOffsetChange={onOpenEventOffsetChange}
+              renderStreamPathLink={renderStreamPathLink}
             />
           ))}
         </ConversationContent>
@@ -282,9 +295,11 @@ export function EventsStreamFeed({
 function EventsStreamFeedElementRenderer({
   element,
   onOpenEventOffsetChange,
+  renderStreamPathLink,
 }: {
   element: EventsStreamBuiltInElement;
   onOpenEventOffsetChange?: (offset?: number) => void;
+  renderStreamPathLink?: EventsStreamPathLinkRenderer;
 }) {
   /*
    * This is the renderer registry. Keep it mode-agnostic: modes select
@@ -309,7 +324,9 @@ function EventsStreamFeedElementRenderer({
         />
       );
     case "child-stream-created":
-      return <ChildStreamCreatedLine element={element} />;
+      return (
+        <ChildStreamCreatedLine element={element} renderStreamPathLink={renderStreamPathLink} />
+      );
     case "metadata-updated":
       return <MetadataUpdatedBlock element={element} />;
     case "error":
@@ -430,12 +447,41 @@ function CoreEventTypeLabel({ type, className }: { type: string; className?: str
   );
 }
 
-function ChildStreamCreatedLine({ element }: { element: EventsStreamChildStreamCreatedElement }) {
+function ChildStreamCreatedLine({
+  element,
+  renderStreamPathLink,
+}: {
+  element: EventsStreamChildStreamCreatedElement;
+  renderStreamPathLink?: EventsStreamPathLinkRenderer;
+}) {
+  const label = getRelativeStreamPath({
+    basePath: element.props.parentPath,
+    targetPath: element.props.childPath,
+  });
+  const pathLabel = (
+    <EventsStreamPathLabel
+      path={element.props.childPath}
+      label={label}
+      className="w-full max-w-full overflow-hidden"
+      startChars={28}
+      endChars={18}
+    />
+  );
+  const value =
+    renderStreamPathLink == null
+      ? pathLabel
+      : renderStreamPathLink({
+          path: element.props.childPath,
+          className:
+            "inline-flex min-w-0 max-w-full text-foreground hover:text-primary hover:underline",
+          children: pathLabel,
+        });
+
   return (
     <FeedEvent
       icon={<FolderPlusIcon className="size-3.5" />}
       label="Child stream created"
-      value={element.props.childPath}
+      value={value}
     />
   );
 }
@@ -622,6 +668,25 @@ function formatDuration(durationMs: number) {
 
   const seconds = Math.round(durationMs / 100) / 10;
   return `${seconds.toFixed(1).replace(/\.0$/, "")}s`;
+}
+
+function getRelativeStreamPath({
+  basePath,
+  targetPath,
+}: {
+  basePath: StreamPath;
+  targetPath: StreamPath;
+}) {
+  if (basePath === "/") {
+    return `.${targetPath}`;
+  }
+
+  const childPrefix = `${basePath}/`;
+  if (targetPath.startsWith(childPrefix)) {
+    return `.${targetPath.slice(basePath.length)}`;
+  }
+
+  return targetPath;
 }
 
 function collectRawEventsFromElements(elements: readonly EventsStreamBuiltInElement[]): Event[] {
