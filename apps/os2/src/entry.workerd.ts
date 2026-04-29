@@ -12,7 +12,10 @@ import manifest, { AppConfig } from "~/app.ts";
 import type { AppContext } from "~/context.ts";
 import type { IterateMcpServerProps } from "~/durable-objects/iterate-mcp-server.ts";
 import { getProjectBySlug } from "~/db/queries/.generated/index.ts";
-import { resolveProjectSlugFromHostname } from "~/lib/project-host-routing.ts";
+import {
+  normalizeRequestHostname,
+  resolveProjectSlugFromHostname,
+} from "~/lib/project-host-routing.ts";
 
 // Re-export rpc-targets so loopback-binding callables can resolve them from ctx.exports.
 // https://developers.cloudflare.com/workers/runtime-apis/context/#exports
@@ -63,7 +66,11 @@ export default {
             return new Response(null, { headers: mcpCorsHeaders });
           }
 
-          const projectSlug = resolveProjectSlugFromHostname(url.hostname, projectHostnameBases);
+          const projectSlug = resolveProjectSlugForProjectHostname({
+            appConfig: config,
+            hostname: url.hostname,
+            projectHostnameBases,
+          });
           if (!projectSlug) {
             return new Response("MCP is only available at <project>.<project-host-base>/mcp.", {
               status: 404,
@@ -147,10 +154,11 @@ async function redirectAuthenticatedProjectHostRoot(input: {
 }) {
   if (input.request.method !== "GET" || input.url.pathname !== "/") return null;
 
-  const projectSlug = resolveProjectSlugFromHostname(
-    input.url.hostname,
-    input.projectHostnameBases,
-  );
+  const projectSlug = resolveProjectSlugForProjectHostname({
+    appConfig: input.appConfig,
+    hostname: input.url.hostname,
+    projectHostnameBases: input.projectHostnameBases,
+  });
   if (!projectSlug) return null;
 
   const auth = await tryAuthenticateSessionRequest(input.request, input.appConfig);
@@ -187,6 +195,31 @@ async function tryAuthenticateSessionRequest(request: Request, appConfig: AppCon
   } catch {
     return null;
   }
+}
+
+/**
+ * Resolves project-host requests while reserving the configured dashboard host.
+ *
+ * OS2 preview uses `os.iterate-preview-N.app` for the dashboard and
+ * `<project>.iterate-preview-N.app` for project/MCP hosts. Because both sit
+ * under the same wildcard route, the worker must exclude AppConfig `baseUrl`
+ * before interpreting the leftmost label as a project slug. Cloudflare Worker
+ * routes allow a specific route and wildcard route to point at the same Worker;
+ * this resolver is the runtime split between those two roles.
+ * https://developers.cloudflare.com/workers/configuration/routing/routes/
+ */
+function resolveProjectSlugForProjectHostname(input: {
+  appConfig: AppConfig;
+  hostname: string;
+  projectHostnameBases: readonly string[];
+}) {
+  const dashboardHostname = input.appConfig.baseUrl
+    ? normalizeRequestHostname(new URL(input.appConfig.baseUrl).hostname)
+    : null;
+  const requestHostname = normalizeRequestHostname(input.hostname);
+  if (dashboardHostname && requestHostname === dashboardHostname) return undefined;
+
+  return resolveProjectSlugFromHostname(requestHostname, input.projectHostnameBases);
 }
 
 const mcpCorsHeaders = {

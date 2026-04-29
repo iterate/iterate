@@ -61,7 +61,7 @@ const targets: Target[] = [
     return {
       dopplerConfig: `preview_${previewNumber}`,
       clerkAppName: `OS2 preview ${previewNumber}`,
-      baseUrl: `https://os.iterate-preview-${previewNumber}.com`,
+      baseUrl: `https://os.iterate-preview-${previewNumber}.app`,
       projectHostnameBase: `iterate-preview-${previewNumber}.app`,
     };
   }),

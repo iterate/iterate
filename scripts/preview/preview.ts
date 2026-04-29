@@ -745,7 +745,7 @@ function derivePreviewEnvironment(input: {
 
   const publicUrl =
     input.appSlug === "os2"
-      ? `https://os.iterate-preview-${slot}.com`
+      ? `https://os.iterate-preview-${slot}.app`
       : input.appSlug === "events"
         ? `https://${input.previewEnvironmentSlug}.iterate.com`
         : `https://${input.previewEnvironmentSlug}.iterate.workers.dev`;

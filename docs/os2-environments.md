@@ -8,10 +8,12 @@ Every environment serves two roles via two domains:
 
 | Role               | Pattern             | Example (prod)        | Example (dev-jonas)            | Example (preview-3)            |
 | ------------------ | ------------------- | --------------------- | ------------------------------ | ------------------------------ |
-| Dashboard          | `os.<zone>.com`     | `os.iterate2.com`     | `os.iterate-dev-jonas.com`     | `os.iterate-preview-3.com`     |
+| Dashboard          | `os.<zone>`         | `os.iterate2.com`     | `os.iterate-dev-jonas.com`     | `os.iterate-preview-3.app`     |
 | Project subdomains | `<proj>.<zone>.app` | `<proj>.iterate2.app` | `<proj>.iterate-dev-jonas.app` | `<proj>.iterate-preview-3.app` |
 
-The design principle: **dev must structurally mirror production.** Each developer and each preview slot gets its own pair of `.com` + `.app` zones — no subdomain nesting.
+The design principle: **dev must structurally mirror production.** Each developer
+and each preview slot gets dedicated dashboard and project hostnames with no
+subdomain nesting.
 
 ## AppConfig
 
@@ -43,7 +45,7 @@ _shared          ← CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, ALCHEMY_STAGE=
 │   ├── dev_misha
 │   └── dev_rahul
 ├── preview      ← ALCHEMY_LOCAL=false, preview base
-│   ├── preview_1    ← preview slot 1: os.iterate-preview-1.com / iterate-preview-1.app
+│   ├── preview_1    ← preview slot 1: os.iterate-preview-1.app / iterate-preview-1.app
 │   ├── preview_2    ← preview slot 2
 │   ├── ...
 │   └── preview_10   ← preview slot 10
@@ -54,7 +56,7 @@ _shared          ← CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, ALCHEMY_STAGE=
 
 | Var                                 | dev_jonas                          | preview_N                          | prd                              |
 | ----------------------------------- | ---------------------------------- | ---------------------------------- | -------------------------------- |
-| `APP_CONFIG_BASE_URL`               | `https://os.iterate-dev-jonas.com` | `https://os.iterate-preview-N.com` | `https://os.iterate2.com`        |
+| `APP_CONFIG_BASE_URL`               | `https://os.iterate-dev-jonas.com` | `https://os.iterate-preview-N.app` | `https://os.iterate2.com`        |
 | `APP_CONFIG_PROJECT_HOSTNAME_BASES` | `["iterate-dev-jonas.app"]`        | `["iterate-preview-N.app"]`        | `["iterate2.app"]`               |
 | `ALCHEMY_LOCAL`                     | `true`                             | `false`                            | `false`                          |
 | `ALCHEMY_STAGE`                     | inherited as `${DOPPLER_CONFIG}`   | inherited as `${DOPPLER_CONFIG}`   | inherited as `${DOPPLER_CONFIG}` |
@@ -98,17 +100,16 @@ Preview environments use a semaphore-controlled pool of 10 slots (`os2-preview-1
 
 1. CI acquires a slot from Semaphore (e.g. `os2-preview-3`)
 2. `derivePreviewEnvironment` maps slot 3 → Doppler config `preview_3`
-3. `preview_3` has `APP_CONFIG_BASE_URL=https://os.iterate-preview-3.com` and `APP_CONFIG_PROJECT_HOSTNAME_BASES=["iterate-preview-3.app"]`
+3. `preview_3` has `APP_CONFIG_BASE_URL=https://os.iterate-preview-3.app` and `APP_CONFIG_PROJECT_HOSTNAME_BASES=["iterate-preview-3.app"]`
 4. `doppler run --config preview_3 -- pnpm alchemy:up` deploys the worker with correct routes. `ALCHEMY_STAGE` comes from `_shared` as `${DOPPLER_CONFIG}` and is slugified by the app into Cloudflare names like `os2-preview-3`.
 5. PR body is updated with both `publicUrl` and `projectSubdomainUrl`
 6. On PR close, the slot is released back to Semaphore and the worker is destroyed
 
 ### Cloudflare zones for previews
 
-Each preview slot N uses:
-
-- `iterate-preview-N.com` (dashboard)
-- `iterate-preview-N.app` (project subdomains)
+Each preview slot N uses the `iterate-preview-N.app` zone for both the dashboard
+host (`os.iterate-preview-N.app`) and project subdomains
+(`<project>.iterate-preview-N.app`).
 
 These zones must exist in the `cc7f` Cloudflare account.
 
@@ -137,16 +138,12 @@ cd apps/os2
 doppler run --project os2 --config preview_3 -- pnpm alchemy:up
 
 # Hit it
-open https://os.iterate-preview-3.com          # dashboard
+open https://os.iterate-preview-3.app          # dashboard
 open https://myproject.iterate-preview-3.app    # project subdomain
 
 # Clean up
 doppler run --project os2 --config preview_3 -- pnpm alchemy:down
 ```
-
-### Known issue: preview slot 1
-
-`iterate-preview-1.com` is in Cloudflare account `376e...` instead of `cc7f...`. Worker routes for the `.com` domain fail for slot 1. Use slots 2-10 until this zone is moved.
 
 ### Adding a new developer
 
