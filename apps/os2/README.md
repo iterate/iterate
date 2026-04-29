@@ -150,7 +150,10 @@ entrypoint.
 Execute JavaScript in isolated dynamic worker sandboxes via oRPC or MCP.
 
 - **UI:** `/codemode` — code editor with streaming event log
-- **oRPC:** `codemode.execute` (streaming eventIterator) and `codemode.describe`
+- **oRPC:** `codemode.executeScript` starts a Script Execution and returns the
+  committed request event; `codemode.streamEvents` reads events from the Event
+  Stream Path; `codemode.execute` remains a compatibility iterator for older
+  callers.
 - **MCP:** `run_code` tool on the MCP server at `/mcp`
 
 ### Using the MCP server with Claude CLI
@@ -169,7 +172,12 @@ the Clerk OAuth flow.
 ### Testing oRPC with curl
 
 ```bash
-# Execute code (returns SSE event stream)
+# Start code execution (returns the committed script-execution-requested event)
+curl 'https://os.iterate-dev-jonas.com/api/codemode/scripts' \
+  -X POST -H 'content-type: application/json' \
+  -d '{"code":"async () => 1 + 1","providers":[]}'
+
+# Compatibility endpoint (returns SSE event stream)
 curl 'https://os.iterate-dev-jonas.com/api/codemode/execute' \
   -X POST -H 'content-type: application/json' \
   -d '{"code":"async () => 1 + 1","providers":[]}'

@@ -6,6 +6,7 @@
  *   OS2_BASE_URL=https://os.iterate-dev-jonas.com pnpm test:e2e
  */
 import { createORPCClient } from "@orpc/client";
+import { RPCLink as WebSocketRPCLink } from "@orpc/client/websocket";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import type { RouterClient } from "@orpc/server";
 import { describe, expect, it } from "vitest";
@@ -25,6 +26,62 @@ function requireBaseUrl() {
 function createClient(baseUrl: string) {
   return createORPCClient(new OpenAPILink(osContract, { url: `${baseUrl}/api` })) as OrpcClient;
 }
+
+function createWebSocketClient(baseUrl: string) {
+  const url = new URL("/api/orpc-ws", baseUrl);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  const websocket = new WebSocket(url.toString());
+  const client = createORPCClient(new WebSocketRPCLink({ websocket })) as OrpcClient;
+  return {
+    client,
+    close: () => websocket.close(),
+  };
+}
+
+describe("codemode.executeScript", () => {
+  it("starts a script immediately and reads output events from the stream path", async () => {
+    const baseUrl = requireBaseUrl();
+    const client = createClient(baseUrl);
+    const wsClient = createWebSocketClient(baseUrl);
+
+    try {
+      const started = await client.codemode.executeScript({
+        code: "async () => 1 + 1",
+        providers: [],
+      });
+
+      expect(started.event.type).toBe("events.iterate.com/codemode/script-execution-requested");
+      expect(started.streamPath).toBeTruthy();
+
+      const stream = await wsClient.client.codemode.streamEvents({
+        afterOffset: started.event.offset > 1 ? started.event.offset - 1 : "start",
+        streamPath: started.streamPath,
+      });
+
+      const events: Array<Record<string, unknown>> = [];
+      for await (const event of stream) {
+        events.push(event as Record<string, unknown>);
+        const payload = event.payload as Record<string, unknown>;
+        if (
+          event.type === "events.iterate.com/codemode/script-execution-finished" &&
+          payload.scriptExecutionRequestedOffset === started.event.offset
+        ) {
+          break;
+        }
+      }
+
+      const finished = events.find(
+        (event) => event.type === "events.iterate.com/codemode/script-execution-finished",
+      );
+      expect(finished?.payload).toMatchObject({
+        result: 2,
+        scriptExecutionRequestedOffset: started.event.offset,
+      });
+    } finally {
+      wsClient.close();
+    }
+  });
+});
 
 describe("codemode.execute", () => {
   it("executes simple code and returns a result event stream", async () => {
