@@ -20,6 +20,27 @@ This verifies:
 - live project rebase works,
 - all dynamic channel apps build.
 
+## Post Test Stimuli
+
+The one-command stimulus helper posts to every channel it can using tokens from
+`channel-agent-poc/dev_jonas` and prints the external links plus agent stream
+links:
+
+```bash
+doppler run -- npx tsx scripts/post-channel-test-stimuli.ts
+```
+
+This helper uses:
+
+- `CHANNEL_TEST_SLACK_NITERATE_BOT_TOKEN`, falling back to the CI Slack bot
+  tokens, to post a Slack mention.
+- `CHANNEL_TEST_GITHUB_USER_TOKEN` to post a GitHub PR comment.
+- `CHANNEL_TEST_LINEAR_USER_API_KEY` to post a Linear issue comment.
+- `CHANNEL_TEST_DISCORD_APP_BOT_TOKEN` to post a Discord REST smoke message.
+
+Slack and Discord bot-authored messages are smoke tests for token/API access.
+Use browser/manual user messages for final end-to-end proof on those platforms.
+
 ## Check App Health
 
 ```bash
@@ -82,17 +103,34 @@ Canonical proof: post from a real Slack user in the configured channel:
 
 Then open the Slack thread and the matching agent stream.
 
-The CI bot token can post a stimulus message, but Slack may not deliver bot
-messages to the Jonasland app as `app_mention`/`message.channels` events in the
-same way as real user messages. If the stream only contains `stream/initialized`
-after this command, use the manual user-message proof above.
+With the user's logged-in Chrome session:
+
+```bash
+agent-browser connect 9222
+agent-browser tab list
+agent-browser tab <slack-tab-id>
+agent-browser snapshot -i
+MARKER="slack-browser-$(date +%s)"
+agent-browser fill <message-textbox-ref> "<@U08T48230AD> reply exactly marker ${MARKER}"
+agent-browser click <send-button-ref>
+```
+
+The channel is `#test-blank` in workspace `iterate`. If the composer already
+contains draft text, clear it before sending; Slack will preserve the draft
+prefix otherwise.
+
+The niterate/CI bot tokens can post stimulus messages, but Slack may not deliver
+bot messages to the Jonasland app as `app_mention`/`message.channels` events in
+the same way as real user messages. If the stream only contains
+`stream/initialized` after this command, use the manual user-message proof
+above.
 
 ```bash
 doppler run -- bash -lc '
 set -euo pipefail
 MARKER="slack-proof-$(date +%s)"
 RESP=$(curl -fsS -X POST "https://slack.com/api/chat.postMessage" \
-  -H "authorization: Bearer ${CHANNEL_TEST_SLACK_CI_BOT_TOKEN}" \
+  -H "authorization: Bearer ${CHANNEL_TEST_SLACK_NITERATE_BOT_TOKEN:-${CHANNEL_TEST_SLACK_CI_BOT_TOKEN}}" \
   -H "content-type: application/json" \
   -d "{\"channel\":\"${CHANNEL_TEST_SLACK_CHANNEL_ID}\",\"text\":\"<@${CHANNEL_TEST_SLACK_BOT_USER_ID}> reply exactly marker ${MARKER}\"}")
 echo "$RESP" | jq .
@@ -110,6 +148,33 @@ reacts to the triggering message. Expected stream behavior: raw
 `events.iterate.com/slack/webhook-received`, `agent-input-added`,
 `llm-request-started`, `codemode/block-added`, and `codemode/result-added`.
 
+To resolve the exact Slack stream for a browser-authored message:
+
+```bash
+doppler run -- bash -lc '
+set -euo pipefail
+MARKER="slack-browser-<timestamp>"
+node <<'"'"'NODE'"'"'
+const marker = process.env.MARKER;
+const env = process.env;
+const resp = await fetch("https://slack.com/api/conversations.history", {
+  method: "POST",
+  headers: {
+    authorization: `Bearer ${env.CHANNEL_TEST_SLACK_BOT_TOKEN}`,
+    "content-type": "application/json",
+  },
+  body: JSON.stringify({ channel: env.CHANNEL_TEST_SLACK_CHANNEL_ID, limit: 50 }),
+});
+const hist = await resp.json();
+const msg = hist.messages.find((m) => (m.text || "").includes(marker));
+if (!msg) throw new Error(`Marker not found: ${marker}`);
+const dashed = msg.ts.replace(".", "-");
+console.log(`https://test.events.iterate.com/streams/agents/slack/ts-${dashed}/?renderer=raw-pretty&composer=json`);
+console.log(`https://agents.test.iterate-dev-jonas.app/streams/%2Fagents%2Fslack%2Fts-${dashed}`);
+NODE
+'
+```
+
 ## GitHub Test
 
 Use a PR in the test repo and mention the GitHub App slug:
@@ -122,7 +187,7 @@ OWNER="${CHANNEL_TEST_GITHUB_REPO%%/*}"
 REPO="${CHANNEL_TEST_GITHUB_REPO#*/}"
 PR="${CHANNEL_TEST_GITHUB_PR_NUMBER}"
 curl -fsS -X POST "https://api.github.com/repos/${OWNER}/${REPO}/issues/${PR}/comments" \
-  -H "authorization: Bearer ${CHANNEL_TEST_GITHUB_TOKEN}" \
+  -H "authorization: Bearer ${CHANNEL_TEST_GITHUB_USER_TOKEN}" \
   -H "accept: application/vnd.github+json" \
   -H "x-github-api-version: 2022-11-28" \
   -d "{\"body\":\"@${CHANNEL_TEST_GITHUB_APP_SLUG} reply exactly marker ${MARKER}\"}" | jq .
@@ -145,7 +210,7 @@ set -euo pipefail
 MARKER="linear-proof-$(date +%s)"
 BODY="@jonasland reply exactly marker ${MARKER}"
 curl -fsS -X POST "https://api.linear.app/graphql" \
-  -H "authorization: Bearer ${CHANNEL_TEST_LINEAR_ACCESS_TOKEN}" \
+  -H "authorization: ${CHANNEL_TEST_LINEAR_USER_API_KEY}" \
   -H "content-type: application/json" \
   -d "{\"query\":\"mutation($input: CommentCreateInput!) { commentCreate(input: $input) { success comment { id url } } }\",\"variables\":{\"input\":{\"issueId\":\"${CHANNEL_TEST_LINEAR_ISSUE_ID}\",\"body\":\"${BODY}\"}}}" | jq .
 echo "marker=${MARKER}"
@@ -162,6 +227,22 @@ Expected external behavior: the Linear app actor comments on the same issue.
 Canonical proof: use Discord in the browser and send a normal user message
 mentioning the bot in the configured channel.
 
+With the user's logged-in Chrome session:
+
+```bash
+agent-browser connect 9222
+agent-browser tab list
+agent-browser tab <discord-tab-id>
+agent-browser snapshot -i
+MARKER="discord-browser-$(date +%s)"
+agent-browser fill <message-textbox-ref> "<@1498397463579594883> reply exactly marker ${MARKER}"
+agent-browser press Enter
+```
+
+Use the explicit bot user mention id `<@1498397463579594883>`. Typing
+`@iterate-test` can resolve to a role mention (`<@&...>`) instead, which creates
+a real Discord message but does not necessarily trigger the bot mention filter.
+
 Bot self-posting is useful only for checking the Discord REST token. It may be
 ignored by gateway filtering and should not be treated as end-to-end proof.
 
@@ -172,7 +253,7 @@ doppler run -- bash -lc '
 set -euo pipefail
 MARKER="discord-proof-$(date +%s)"
 curl -fsS -X POST "https://discord.com/api/v10/channels/${CHANNEL_TEST_DISCORD_CHANNEL_ID}/messages" \
-  -H "authorization: Bot ${CHANNEL_TEST_DISCORD_BOT_TOKEN}" \
+  -H "authorization: Bot ${CHANNEL_TEST_DISCORD_APP_BOT_TOKEN}" \
   -H "content-type: application/json" \
   -d "{\"content\":\"<@${CHANNEL_TEST_DISCORD_BOT_USER_ID}> reply exactly marker ${MARKER}\"}" | jq .
 echo "marker=${MARKER}"

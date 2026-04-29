@@ -30,7 +30,26 @@ Required secrets are owned by `channel-agent-poc/dev_jonas`:
 - `CHANNEL_TEST_LINEAR_*`
 - `CHANNEL_TEST_DISCORD_*`
 
+Important actor-token aliases:
+
+- `CHANNEL_TEST_SLACK_BOT_TOKEN`: Jonasland Slack app token installed into the
+  Slack mini app.
+- `CHANNEL_TEST_SLACK_NITERATE_BOT_TOKEN`: niterate Slack bot token used as a
+  non-Jonasland Slack test actor.
+- `CHANNEL_TEST_SLACK_CI_BOT_TOKEN` and `CHANNEL_TEST_SLACK_OS_CI_BOT_TOKEN`:
+  CI/user-bot Slack test actors.
+- `CHANNEL_TEST_GITHUB_USER_TOKEN`: GitHub token used to create test PR
+  comments that mention the installed GitHub App.
+- `CHANNEL_TEST_LINEAR_USER_API_KEY`: Linear API key used to create test issue
+  comments that mention the Linear app actor.
+- `CHANNEL_TEST_DISCORD_APP_BOT_TOKEN`: Discord app bot token used for REST and
+  gateway smoke tests.
+
 Do not put POC test credentials in `events`, `agents`, or `os`.
+
+Do not copy browser cookies, localStorage, Slack web tokens, Discord web tokens,
+or other interactive user-session material into Doppler. Browser-authenticated
+manual proofs should use the user's open Chrome session through `agent-browser`.
 
 ## Normal Deploy
 
