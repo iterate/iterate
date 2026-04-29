@@ -37,27 +37,27 @@ Note: Account-level tokens (`cfat_*`) do NOT work for zone-level DNS operations.
 ### Config hierarchy
 
 ```
-_shared          ← CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, SEMAPHORE_*
+_shared          ← CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, ALCHEMY_STAGE=${DOPPLER_CONFIG}
 ├── dev          ← ALCHEMY_LOCAL=true, base dev settings
 │   ├── dev_jonas   ← APP_CONFIG_BASE_URL, APP_CONFIG_PROJECT_HOSTNAME_BASES
 │   ├── dev_misha
 │   └── dev_rahul
-├── stg          ← ALCHEMY_LOCAL=false, staging base
-│   ├── stg_1    ← preview slot 1: os.iterate-preview-1.com / iterate-preview-1.app
-│   ├── stg_2    ← preview slot 2
+├── preview      ← ALCHEMY_LOCAL=false, preview base
+│   ├── preview_1    ← preview slot 1: os.iterate-preview-1.com / iterate-preview-1.app
+│   ├── preview_2    ← preview slot 2
 │   ├── ...
-│   └── stg_10   ← preview slot 10
+│   └── preview_10   ← preview slot 10
 └── prd          ← os.iterate2.com / iterate2.app
 ```
 
 ### Key env vars per config type
 
-| Var                                 | dev_jonas                          | stg_N                                 | prd                       |
-| ----------------------------------- | ---------------------------------- | ------------------------------------- | ------------------------- |
-| `APP_CONFIG_BASE_URL`               | `https://os.iterate-dev-jonas.com` | `https://os.iterate-preview-N.com`    | `https://os.iterate2.com` |
-| `APP_CONFIG_PROJECT_HOSTNAME_BASES` | `["iterate-dev-jonas.app"]`        | `["iterate-preview-N.app"]`           | `["iterate2.app"]`        |
-| `ALCHEMY_LOCAL`                     | `true`                             | `false`                               | `false`                   |
-| `ALCHEMY_STAGE`                     | `dev_jonas`                        | (overridden to `preview-N` at deploy) | `prd`                     |
+| Var                                 | dev_jonas                          | preview_N                          | prd                              |
+| ----------------------------------- | ---------------------------------- | ---------------------------------- | -------------------------------- |
+| `APP_CONFIG_BASE_URL`               | `https://os.iterate-dev-jonas.com` | `https://os.iterate-preview-N.com` | `https://os.iterate2.com`        |
+| `APP_CONFIG_PROJECT_HOSTNAME_BASES` | `["iterate-dev-jonas.app"]`        | `["iterate-preview-N.app"]`        | `["iterate2.app"]`               |
+| `ALCHEMY_LOCAL`                     | `true`                             | `false`                            | `false`                          |
+| `ALCHEMY_STAGE`                     | inherited as `${DOPPLER_CONFIG}`   | inherited as `${DOPPLER_CONFIG}`   | inherited as `${DOPPLER_CONFIG}` |
 
 ## Local development
 
@@ -97,9 +97,9 @@ Preview environments use a semaphore-controlled pool of 10 slots (`os2-preview-1
 ### How it works
 
 1. CI acquires a slot from Semaphore (e.g. `os2-preview-3`)
-2. `derivePreviewEnvironment` maps slot 3 → alchemy stage `preview-3`, doppler config `stg_3`
-3. `stg_3` has `APP_CONFIG_BASE_URL=https://os.iterate-preview-3.com` and `APP_CONFIG_PROJECT_HOSTNAME_BASES=["iterate-preview-3.app"]`
-4. `doppler run --config stg_3 -- pnpm alchemy:up` deploys the worker with correct routes
+2. `derivePreviewEnvironment` maps slot 3 → Doppler config `preview_3`
+3. `preview_3` has `APP_CONFIG_BASE_URL=https://os.iterate-preview-3.com` and `APP_CONFIG_PROJECT_HOSTNAME_BASES=["iterate-preview-3.app"]`
+4. `doppler run --config preview_3 -- pnpm alchemy:up` deploys the worker with correct routes. `ALCHEMY_STAGE` comes from `_shared` as `${DOPPLER_CONFIG}` and is slugified by the app into Cloudflare names like `os2-preview-3`.
 5. PR body is updated with both `publicUrl` and `projectSubdomainUrl`
 6. On PR close, the slot is released back to Semaphore and the worker is destroyed
 
@@ -134,14 +134,14 @@ For a quick manual deploy to a specific slot (bypassing semaphore):
 
 ```bash
 cd apps/os2
-doppler run --project os2 --config stg_3 -- env ALCHEMY_STAGE=preview-3 pnpm alchemy:up
+doppler run --project os2 --config preview_3 -- pnpm alchemy:up
 
 # Hit it
 open https://os.iterate-preview-3.com          # dashboard
 open https://myproject.iterate-preview-3.app    # project subdomain
 
 # Clean up
-doppler run --project os2 --config stg_3 -- env ALCHEMY_STAGE=preview-3 pnpm alchemy:down
+doppler run --project os2 --config preview_3 -- pnpm alchemy:down
 ```
 
 ### Known issue: preview slot 1

@@ -4,6 +4,8 @@
 export type ProjectsRow = {
   id: string;
   slug: string;
+  clerk_org_id: string | null;
+  created_by_clerk_user_id: string | null;
   custom_hostname: string | null;
   metadata: string;
   created_at: string;

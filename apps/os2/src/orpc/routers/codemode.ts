@@ -3,11 +3,15 @@ import { resolveToolProviderDescriptor } from "@iterate-com/shared/codemode/reso
 import { validateProviderPaths } from "@iterate-com/shared/codemode/validate";
 import type { CodemodeEvent } from "@iterate-com/shared/codemode/types";
 import type { CallableContext } from "@iterate-com/shared/callable/types.ts";
-import { os } from "~/orpc/orpc.ts";
+import { activeOrganizationMiddleware, os } from "~/orpc/orpc.ts";
 
 export const codemodeRouter = {
   codemode: {
-    execute: os.codemode.execute.handler(async function* ({ input, context, signal }) {
+    execute: os.codemode.execute.use(activeOrganizationMiddleware).handler(async function* ({
+      input,
+      context,
+      signal,
+    }) {
       const blockId = input.blockId || generateBlockId();
       const now = () => new Date().toISOString();
 
@@ -105,7 +109,7 @@ export const codemodeRouter = {
       };
     }),
 
-    describe: os.codemode.describe.handler(async ({ input }) => {
+    describe: os.codemode.describe.use(activeOrganizationMiddleware).handler(async ({ input }) => {
       const callableCtx: CallableContext = { env: {}, fetch: globalThis.fetch };
       const typeBlocks: string[] = [];
 

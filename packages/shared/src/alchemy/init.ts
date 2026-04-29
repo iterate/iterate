@@ -60,7 +60,7 @@ export async function initAlchemy<TSchema extends z.ZodTypeAny>(
     configSchema,
     prefix: "APP_CONFIG_",
     env,
-  });
+  }) as Record<string, unknown>;
 
   const stateStore = (scope: Scope) =>
     scope.local
@@ -74,11 +74,39 @@ export async function initAlchemy<TSchema extends z.ZodTypeAny>(
     stateStore,
   });
 
+  const workerName = slugify(`${manifest.slug}-${app.stage}`);
+  const compiledAppConfigWithDeployment = withDeploymentConfig(compiledAppConfig, {
+    workerScriptName: workerName,
+  });
+  const rawAppConfigWithDeployment = withDeploymentConfig(rawAppConfig, {
+    workerScriptName: workerName,
+  });
+
   return {
     app,
     manifest,
-    workerName: slugify(`${manifest.slug}-${app.stage}`),
-    compiledAppConfig,
-    rawAppConfig,
+    workerName,
+    compiledAppConfig: compiledAppConfigWithDeployment,
+    rawAppConfig: rawAppConfigWithDeployment,
+  };
+}
+
+function withDeploymentConfig<TConfig extends Record<string, unknown>>(
+  config: TConfig,
+  deployment: NonNullable<BaseAppConfig["deployment"]>,
+) {
+  const existingDeployment =
+    typeof config.deployment === "object" &&
+    config.deployment !== null &&
+    !Array.isArray(config.deployment)
+      ? config.deployment
+      : {};
+
+  return {
+    ...config,
+    deployment: {
+      ...existingDeployment,
+      ...deployment,
+    },
   };
 }

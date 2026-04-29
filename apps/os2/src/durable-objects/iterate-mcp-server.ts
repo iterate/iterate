@@ -25,10 +25,20 @@ interface McpServerEnv {
   ITERATE_MCP_SERVER: DurableObjectNamespace;
 }
 
+export interface IterateMcpServerProps extends Record<string, unknown> {
+  userId: string;
+  orgId: string;
+  orgRole: string | null;
+  orgSlug: string | null;
+  orgPermissions: string[];
+  scopes: string[];
+  clientId: string | null;
+}
+
 const sessionSlugStorageKey = "mcpServerSessionSlug";
 const eventTypePrefix = "https://events.iterate.com/mcp-server";
 
-export class IterateMcpServer extends McpAgent<McpServerEnv> {
+export class IterateMcpServer extends McpAgent<McpServerEnv, unknown, IterateMcpServerProps> {
   server = new McpServer({
     name: "os2",
     version: packageJson.version,
@@ -94,8 +104,10 @@ export class IterateMcpServer extends McpAgent<McpServerEnv> {
       async () => {
         const invocationId = `mcp_tool_${crypto.randomUUID()}`;
         const startedAt = Date.now();
+        const auth = this.requireAuthProps();
 
         await this.emitLifecycleEvent("tool-invocation-started", {
+          auth: summarizeAuthProps(auth),
           input: {},
           invocationId,
           toolName: "reveal_secret",
@@ -107,6 +119,7 @@ export class IterateMcpServer extends McpAgent<McpServerEnv> {
         };
 
         await this.emitLifecycleEvent("tool-invocation-finished", {
+          auth: summarizeAuthProps(auth),
           durationMs: Date.now() - startedAt,
           input: {},
           invocationId,
@@ -132,6 +145,8 @@ export class IterateMcpServer extends McpAgent<McpServerEnv> {
         }),
       },
       async ({ code }) => {
+        const auth = this.requireAuthProps();
+
         if (!this.env.LOADER) {
           return {
             content: [{ type: "text" as const, text: "LOADER binding not available" }],
@@ -145,6 +160,7 @@ export class IterateMcpServer extends McpAgent<McpServerEnv> {
         const startedAt = Date.now();
 
         await this.emitLifecycleEvent("tool-invocation-started", {
+          auth: summarizeAuthProps(auth),
           blockId,
           input: { code },
           invocationId,
@@ -178,6 +194,7 @@ export class IterateMcpServer extends McpAgent<McpServerEnv> {
           };
 
           await this.emitLifecycleEvent("tool-invocation-finished", {
+            auth: summarizeAuthProps(auth),
             blockId,
             durationMs: Date.now() - startedAt,
             input: { code },
@@ -190,6 +207,7 @@ export class IterateMcpServer extends McpAgent<McpServerEnv> {
           return response;
         } catch (error) {
           await this.emitLifecycleEvent("tool-invocation-finished", {
+            auth: summarizeAuthProps(auth),
             blockId,
             durationMs: Date.now() - startedAt,
             error: serializeError(error),
@@ -231,6 +249,14 @@ export class IterateMcpServer extends McpAgent<McpServerEnv> {
         slug,
       });
     }
+  }
+
+  private requireAuthProps() {
+    if (!this.props?.userId || !this.props.orgId) {
+      throw new Error("MCP request is missing verified Clerk auth props.");
+    }
+
+    return this.props;
   }
 
   private async getSessionStreamPath() {
@@ -278,6 +304,17 @@ function summarizeRequest(request: Request) {
     method: request.method,
     pathname: url.pathname,
     userAgent: request.headers.get("user-agent"),
+  };
+}
+
+function summarizeAuthProps(props: IterateMcpServerProps) {
+  return {
+    clientId: props.clientId,
+    orgId: props.orgId,
+    orgRole: props.orgRole,
+    orgSlug: props.orgSlug,
+    scopes: props.scopes,
+    userId: props.userId,
   };
 }
 

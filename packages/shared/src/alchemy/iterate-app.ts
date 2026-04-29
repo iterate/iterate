@@ -159,7 +159,11 @@ export async function IterateApp<B extends Bindings>(
     await Promise.all(
       routeHosts.map(async (hostname) => {
         const { zoneId } = await findZoneForHostname(cloudflareApi, hostname);
-        return DnsRecords(`dns-${slugify(hostname)}`, {
+        const dnsResourceId = hostname.startsWith("*.")
+          ? `dns-wildcard-${slugify(hostname.slice(2))}`
+          : `dns-${slugify(hostname)}`;
+
+        return DnsRecords(dnsResourceId, {
           zoneId,
           records: [
             {

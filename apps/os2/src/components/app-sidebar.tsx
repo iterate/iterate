@@ -1,4 +1,5 @@
 import { Link, useMatchRoute } from "@tanstack/react-router";
+import { OrganizationSwitcher, UserButton } from "@clerk/tanstack-react-start";
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -6,7 +7,6 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@iterate-com/ui/components/sidebar";
-import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
 import { SidebarShell } from "@iterate-com/ui/components/sidebar-shell";
 
 const items = [
@@ -18,25 +18,38 @@ const items = [
 
 export function AppSidebar() {
   return (
-    <SidebarShell header={<AppSidebarBrand />}>
+    <SidebarShell header={<AppSidebarOrganization />} footer={<AppSidebarUser />}>
       <AppSidebarNav />
     </SidebarShell>
   );
 }
 
-function AppSidebarBrand() {
+function AppSidebarOrganization() {
   return (
-    <SidebarMenu>
-      <SidebarMenuItem>
-        <SidebarMenuButton size="lg" render={<Link to="/debug" />}>
-          <IterateLogo className="size-8 rounded-lg" />
-          <div className="grid flex-1 text-left text-sm leading-tight">
-            <span className="truncate font-semibold">os</span>
-            <span className="text-sidebar-foreground/70 truncate text-xs">tanstack start</span>
-          </div>
-        </SidebarMenuButton>
-      </SidebarMenuItem>
-    </SidebarMenu>
+    <div className="px-2">
+      <OrganizationSwitcher
+        hidePersonal
+        afterCreateOrganizationUrl="/"
+        afterLeaveOrganizationUrl="/organization"
+        afterSelectOrganizationUrl="/"
+        appearance={{
+          elements: {
+            organizationSwitcherTrigger:
+              "w-full justify-start rounded-md border border-sidebar-border bg-sidebar-accent px-3 py-2 text-sidebar-accent-foreground shadow-none",
+            organizationPreview: "min-w-0",
+            organizationPreviewTextContainer: "min-w-0 text-left",
+          },
+        }}
+      />
+    </div>
+  );
+}
+
+function AppSidebarUser() {
+  return (
+    <div className="flex items-center px-3 py-2">
+      <UserButton />
+    </div>
   );
 }
 

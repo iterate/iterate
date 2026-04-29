@@ -5,6 +5,7 @@ import { Separator } from "@iterate-com/ui/components/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { AppSidebar } from "../components/app-sidebar.tsx";
 import { PathBreadcrumbs } from "../components/path-breadcrumbs.tsx";
+import { requireActiveOrganizationForRoute } from "../lib/auth.ts";
 
 const getSidebarDefaultOpen = createServerFn({ method: "GET" }).handler(() => ({
   defaultOpen: !/(?:^|;\s*)sidebar_state=false(?:;|$)/.test(getRequestHeader("cookie") ?? ""),
@@ -12,6 +13,7 @@ const getSidebarDefaultOpen = createServerFn({ method: "GET" }).handler(() => ({
 
 export const Route = createFileRoute("/_app")({
   loader: async () => ({
+    auth: await requireActiveOrganizationForRoute(),
     sidebarDefaultOpen: (await getSidebarDefaultOpen()).defaultOpen,
   }),
   component: AppLayout,

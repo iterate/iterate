@@ -5,6 +5,20 @@ import packageJson from "../package.json" with { type: "json" };
 
 export const AppConfig = BaseAppConfig.extend({
   eventsBaseUrl: z.string().trim().url(),
+  clerk: z.object({
+    publishableKey: publicValue(z.string().trim().min(1)),
+    secretKey: redacted(z.string().trim().min(1)),
+    jwtKey: redacted(z.string().trim().min(1)),
+    oauthClientId: publicValue(z.string().trim().min(1)).optional(),
+    oauthClientSecret: redacted(z.string().trim().min(1)).optional(),
+    signInUrl: publicValue(z.string().trim().min(1).default("/sign-in")),
+    signUpUrl: publicValue(z.string().trim().min(1).default("/sign-up")),
+    afterSignInUrl: publicValue(z.string().trim().min(1).default("/")),
+    afterSignUpUrl: publicValue(z.string().trim().min(1).default("/")),
+    mcpOauthScopes: z
+      .array(z.enum(["profile", "email", "public_metadata", "private_metadata"]))
+      .default(["email", "profile"]),
+  }),
   mcpProofSecret: redacted(z.string().trim().min(1)),
   projectHostnameBases: z.array(z.string().trim().min(1)).default([]),
   typeIdPrefix: redacted(

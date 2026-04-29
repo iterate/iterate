@@ -1,6 +1,6 @@
 # Stage
 
-> **Note:** This document describes the `apps/os` (v1) stage and URL model. For `apps/os2`, see `docs/os2-environments.md` — os2 uses dedicated zone pairs per environment instead of subdomain-based URL derivation.
+> **Note:** This document describes the generic stage naming rules used by Alchemy-based apps. For repo-managed PR previews, see `docs/cloudflare-preview-environments.md`. For `apps/os2`, see `docs/os2-environments.md` because os2 uses dedicated zone pairs per environment.
 
 Stage is an **input**, not something derived. The deployer decides what stage to deploy to.
 
@@ -8,12 +8,12 @@ Stage is an **input**, not something derived. The deployer decides what stage to
 
 Stage determines the URL namespace and identity of a deployment:
 
-| Stage           | URL                          |
-| --------------- | ---------------------------- |
-| `prd`           | os.iterate.com               |
-| `stg`           | os-stg.iterate.com           |
-| `preview-alpha` | os-preview-alpha.iterate.com |
-| `dev-jonas`     | os-dev-jonas.iterate.com     |
+| Stage       | URL                      |
+| ----------- | ------------------------ |
+| `prd`       | os.iterate.com           |
+| `preview`   | os-preview.iterate.com   |
+| `preview_1` | os-preview-1.iterate.com |
+| `dev-jonas` | os-dev-jonas.iterate.com |
 
 That's it. Stage is just "which URL". Everything else—secrets, database, OAuth clients, Slack tokens—are separate concerns configured via environment variables.
 
@@ -31,8 +31,8 @@ For `apps/iterate-com`, replace `os` with `www`.
 ## Usage
 
 ```bash
-# Deploy to a stage
-pnpm deploy --stage preview-alpha
+# Deploy to a numbered preview stage
+pnpm deploy --stage preview_1
 
 # Local dev with your stage
 pnpm dev --stage dev-jonas
@@ -42,11 +42,11 @@ pnpm dev --stage dev-jonas
 
 ### Stage is not environment
 
-We don't use "environment" as a concept. There's no `ENV=production` or `ENVIRONMENT=staging`. Just stage.
+We don't use "environment" as a concept. There's no `ENV=production` or `ENVIRONMENT=preview`. Just stage.
 
 ### Avoid NODE_ENV
 
-`NODE_ENV` is not informative. On Cloudflare Workers, it's always `"production"` even for staging deployments. We only use it for:
+`NODE_ENV` is not informative. On Cloudflare Workers, it's always `"production"` even for preview deployments. We only use it for:
 
 - Dev server detection (vite vs built)
 - Test framework detection (vitest sets it)
@@ -94,18 +94,18 @@ Secrets come from Doppler configs. While stage and secrets are conceptually inde
 
 Use Doppler branch configs for isolation:
 
-| Config pattern    | Purpose                              |
-| ----------------- | ------------------------------------ |
-| `dev`             | Base dev config (don't use directly) |
-| `dev_jonas`       | Engineer-specific dev config         |
-| `dev_rahul`       | Engineer-specific dev config         |
-| `stg`             | Base staging config                  |
-| `preview_alpha`   | Preview environment A                |
-| `preview_bravo`   | Preview environment B                |
-| `preview_charlie` | Preview environment C                |
-| `prd`             | Production                           |
+| Config pattern | Purpose                              |
+| -------------- | ------------------------------------ |
+| `dev`          | Base dev config (don't use directly) |
+| `dev_jonas`    | Engineer-specific dev config         |
+| `dev_rahul`    | Engineer-specific dev config         |
+| `preview`      | Base preview config                  |
+| `preview_1`    | Preview slot 1                       |
+| `preview_2`    | Preview slot 2                       |
+| `preview_N`    | Preview slot N                       |
+| `prd`          | Production                           |
 
-Engineers should use `dev_{name}` configs. Preview environments use `preview_alpha`, `preview_bravo`, etc. (not numbered—implies no ordering).
+Engineers should use `dev_{name}` configs. Repo-managed preview environments use numbered `preview_N` configs that correspond to Semaphore preview slots.
 
 **Never use `dev_personal`**. It's a Doppler built-in that makes it impossible for others to fix secrets. We've banned it.
 
@@ -113,8 +113,8 @@ Engineers should use `dev_{name}` configs. Preview environments use `preview_alp
 
 ```
 prd stage → requires prd doppler config
-stg stage → requires stg doppler config
-preview-* stages → requires preview_* doppler config
+preview stage → requires preview doppler config
+preview_N stages → requires preview_N doppler config
 dev-* stages → requires dev_* doppler config
 ```
 
@@ -136,8 +136,8 @@ Like doppler, we validate DB config to prevent accidents:
 | Stage       | Allowed DB         | Branch allowed? |
 | ----------- | ------------------ | --------------- |
 | `prd`       | production DB only | No              |
-| `stg`       | staging DB only    | No              |
-| `preview-*` | dev DB only        | Yes             |
+| `preview`   | preview DB only    | No              |
+| `preview_N` | dev DB only        | Yes             |
 | `dev-*`     | dev DB only        | Yes             |
 
 Non-prd stages **fail** if `DATABASE_URL` points to production. Bypass with `SKIP_DB_SAFETY_CHECK=true`.
@@ -148,17 +148,17 @@ CI sets up isolated branches automatically:
 
 ```bash
 DATABASE_URL=<dev-db-connection>
-DATABASE_BRANCH=preview-alpha  # isolated branch per preview env
+DATABASE_BRANCH=preview_1  # isolated branch per preview env
 ```
 
 Each preview env gets its own branch of the dev database—isolated from other preview envs but sharing the dev DB infrastructure.
 
 ### Debugging with different DBs
 
-To point local dev at staging DB (e.g., to debug an issue):
+To point local dev at preview DB (e.g., to debug an issue):
 
 ```bash
-SKIP_DB_SAFETY_CHECK=true DATABASE_URL=<staging-url> pnpm dev
+SKIP_DB_SAFETY_CHECK=true DATABASE_URL=<preview-url> pnpm dev
 ```
 
 Explicit override required—you can't do this accidentally.

@@ -6,6 +6,7 @@ Minimal full-stack app: TanStack Start + oRPC over OpenAPI/HTTP + sqlfu, running
 
 - **API:** oRPC over OpenAPI/HTTP at `/api`
 - **Frontend:** TanStack Start in SPA mode + TanStack Router + TanStack Query
+- **Auth:** Clerk sessions for the app, Clerk OAuth Applications for remote MCP clients
 - **DB:** sqlfu + Cloudflare D1. SQL definitions, migrations, and typed query wrappers live under `src/db`.
 - **Observability:** Workers use the shared `withEvlog()` runtime wrapper; shared `useEvlog()` only enriches a request-scoped log
 - **Runtime config:** optional `APP_CONFIG` JSON env var plus `APP_CONFIG_*` nested overrides, with frontend-visible fields annotated in the schema and exposed through the typed `__internal.publicConfig` oRPC procedure
@@ -14,7 +15,7 @@ Minimal full-stack app: TanStack Start + oRPC over OpenAPI/HTTP + sqlfu, running
 
 - `src/app.ts` — app manifest plus app config schema
 - `src/entry.workerd.ts` — Cloudflare Workers runtime entry: D1, request context, websocket upgrade handling
-- `src/orpc/orpc.ts` — oRPC composition point: `implement(contract).$context<T>().use(useEvlog())`
+- `src/orpc/orpc.ts` — oRPC composition point plus `activeOrganizationMiddleware`
 - `src/orpc/root.ts` — concrete procedure handlers (composed from `orpc/routers/*`)
 - `src/orpc/client.ts` — isomorphic oRPC client plus TanStack Query client factory/query utils
 - `src/db/definitions.sql` — sqlfu schema source of truth
@@ -30,10 +31,18 @@ Minimal full-stack app: TanStack Start + oRPC over OpenAPI/HTTP + sqlfu, running
 
 ## Runtime architecture
 
+The OS2 app has no public product pages. Browser users without a Clerk session
+are sent to `/sign-in`; signed-in users without an active Clerk Organization are
+sent to `/organization` to create or select one. The app shell uses Clerk's
+`OrganizationSwitcher` with `hidePersonal` and `UserButton` in the sidebar.
+
 The browser talks to `/api` over OpenAPI/HTTP. SSR uses `createRouterClient`
 for in-process calls with the same typed router. Runtime app context
-(`manifest`, `config`, `db`, `log`) is attached in `entry.workerd.ts`, and
-oRPC initial context is built from that runtime context plus `rawRequest`.
+(`manifest`, `config`, `db`, `log`, `auth`) is attached in `entry.workerd.ts`
+and the API routes, and oRPC initial context is built from that runtime context
+plus `rawRequest`. Runtime auth checks are implemented as oRPC middleware:
+`activeOrganizationMiddleware` rejects unauthenticated or personal-account
+requests and injects `context.activeOrganization` for handlers.
 
 Cloudflare Workers wrap requests with the shared `withEvlog()` helper. The
 runtime entrypoint still assembles app-specific deps, but request logger
@@ -70,10 +79,11 @@ sqlfu is the database source of truth:
 - `src/db/queries/*.sql` contains checked-in application queries
 - `src/db/queries/.generated` and `src/db/migrations/.generated` are regenerated with `pnpm sqlfu:generate`
 
-The current domain table is `projects`: `id`, `slug`, `custom_hostname`,
-`metadata`, `created_at`, and `updated_at`. Project IDs are generated in
-TypeScript with the shared TypeID helper using local prefix `proj` and app
-config `typeIdPrefix`.
+The current domain table is `projects`: `id`, `slug`, `clerk_org_id`,
+`created_by_clerk_user_id`, `custom_hostname`, `metadata`, `created_at`, and
+`updated_at`. A project belongs to exactly one Clerk Organization. Project IDs
+are generated in TypeScript with the shared TypeID helper using local prefix
+`proj` and app config `typeIdPrefix`.
 
 `created_at` defaults in SQL. `updated_at` is set by the app's update queries
 instead of a SQLite trigger because the Cloudflare D1 migration API rejected the
@@ -87,10 +97,53 @@ local Miniflare D1, so `pnpm sqlfu:check` and `pnpm sqlfu:migrate` use the same
 D1 migration table shape as Alchemy/Wrangler once `.alchemy/local/wrangler.jsonc`
 has been materialized.
 
+## Clerk Auth
+
+First-party references:
+
+- Clerk TanStack Start middleware:
+  https://clerk.com/docs/reference/tanstack-react-start/clerk-middleware
+- Clerk TanStack Start provider:
+  https://clerk.com/docs/tanstack-react-start/components/clerk-provider
+- Clerk Organization switcher:
+  https://clerk.com/docs/tanstack-react-start/reference/components/organization/organization-switcher
+- Clerk Organizations:
+  https://clerk.com/docs/organizations/overview
+- Clerk OAuth / MCP guide:
+  https://clerk.com/docs/nextjs/guides/ai/mcp/build-mcp-server
+- Clerk OAuth implementation:
+  https://clerk.com/docs/guides/configure/auth-strategies/oauth/how-clerk-implements-oauth
+- Cloudflare `McpAgent` auth props:
+  https://developers.cloudflare.com/agents/model-context-protocol/mcp-agent-api/
+- oRPC context and middleware:
+  https://orpc.dev/docs/context and https://orpc.dev/docs/middleware
+
+Required Clerk dashboard setup:
+
+1. Enable Organizations for the Clerk application used by OS2.
+2. Configure the app to require organization context for OS2 usage. OS2 also
+   hides Clerk Personal Account mode in the sidebar with `hidePersonal`.
+3. Copy the Clerk publishable key, secret key, and JWT public key into OS2
+   runtime config.
+4. Create a Clerk OAuth Application for OS2 MCP clients. Keep token format as
+   JWT, enable public/PKCE clients, and enable Dynamic Client Registration for
+   MCP clients that self-register.
+5. The MCP OAuth application only needs Clerk-supported data scopes such as
+   `email` and `profile`; OS2 authorization remains org/project scoped in app
+   code.
+
+`/mcp` is a protected OAuth resource. OS2 publishes RFC 9728 metadata at
+`/.well-known/oauth-protected-resource` and
+`/.well-known/oauth-protected-resource/mcp`, pointing clients at Clerk as the
+authorization server. The Worker verifies Clerk-issued bearer tokens
+networklessly with `CLERK_JWT_KEY` before passing identity props to the
+`IterateMcpServer` Durable Object.
+
 ## Middleware Notes
 
-This app does not currently use `src/start.ts`. Request logging is now owned by
-the shared `withEvlog()` wrapper in the Worker runtime entrypoint.
+`src/start.ts` installs Clerk's TanStack Start request middleware. Request
+logging is owned by the shared `withEvlog()` wrapper in the Worker runtime
+entrypoint.
 
 ## Codemode
 
@@ -102,22 +155,16 @@ Execute JavaScript in isolated dynamic worker sandboxes via oRPC or MCP.
 
 ### Using the MCP server with Claude CLI
 
-One-liner (no config files needed):
-
-```bash
-claude -p 'Use run_code to compute 6 * 7' \
-  --mcp-config '{"mcpServers":{"os2":{"type":"http","url":"https://os.iterate-dev-jonas.com/mcp"}}}' \
-  --strict-mcp-config \
-  --allowedTools "mcp__os2__run_code"
-```
-
-For persistent use, add it to the project:
+After the Clerk OAuth Application is configured with Dynamic Client
+Registration, add the OS2 remote MCP endpoint to the project:
 
 ```bash
 claude mcp add --transport http os2 https://os.iterate-dev-jonas.com/mcp --scope project
 ```
 
-Then in any conversation: "Use run_code to compute the first 10 fibonacci numbers"
+Then in any conversation: "Use run_code to compute the first 10 fibonacci
+numbers". The client should discover OS2's protected-resource metadata and run
+the Clerk OAuth flow.
 
 ### Testing oRPC with curl
 
@@ -155,6 +202,11 @@ Overrides use `__` as the nesting separator and convert env-style keys to the
 schema's camelCase shape. For OS:
 
 - `APP_CONFIG_BASE_URL=https://os.iterate2.com` -> `baseUrl`
+- `APP_CONFIG_CLERK__PUBLISHABLE_KEY=pk_test_...` -> `clerk.publishableKey`
+- `APP_CONFIG_CLERK__SECRET_KEY=sk_test_...` -> `clerk.secretKey`
+- `APP_CONFIG_CLERK__JWT_KEY='-----BEGIN PUBLIC KEY-----...'` -> `clerk.jwtKey`
+- `APP_CONFIG_CLERK__OAUTH_CLIENT_ID=...` -> `clerk.oauthClientId`
+- `APP_CONFIG_CLERK__OAUTH_CLIENT_SECRET=...` -> `clerk.oauthClientSecret`
 - `APP_CONFIG_PROJECT_HOSTNAME_BASES=["iterate2.app"]` -> `projectHostnameBases`
 - `APP_CONFIG_TYPE_ID_PREFIX=os` -> `typeIdPrefix`
 - `APP_CONFIG_LOGS__STDOUT_FORMAT=pretty` -> `logs.stdoutFormat`
@@ -167,6 +219,13 @@ OS:
 
 ```json
 {
+  "clerk": {
+    "publishableKey": "pk_test_...",
+    "secretKey": "sk_test_...",
+    "jwtKey": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----",
+    "oauthClientId": "...",
+    "oauthClientSecret": "..."
+  },
   "typeIdPrefix": "os",
   "logs": {
     "stdoutFormat": "raw"

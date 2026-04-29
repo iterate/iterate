@@ -2,22 +2,33 @@
  * OpenAPI bridge — a stateless WorkerEntrypoint that translates
  * ToolProvider.executeToolFunction(path, payload) into HTTP calls against an OpenAPI spec.
  *
- * Deployed as a named export from the os2 worker. Callables reach it via
- * loopback-binding with props containing the spec URL and base URL:
+ * Deployed as a named export from the os2 worker. Same-worker callables can
+ * reach it via loopback-binding with props containing the spec URL and base URL:
  *
  *   { type: "loopback-binding", bindingType: "service",
  *     exportName: "OpenApiBridge", props: { specUrl, baseUrl } }
+ *
+ * Storable cross-worker descriptors use createOpenApiProvider({ workerScriptName })
+ * and pass the same provider props in the RPC input instead. Regular Service
+ * Bindings cannot receive dynamic ctx.props; only ctx.exports loopback bindings can.
  *
  * Use createOpenApiProvider() to construct the ToolProviderDescriptor.
  */
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type { ToolProviderDescriptor } from "@iterate-com/shared/codemode/types";
+import { createSelfToolProviderDescriptor } from "@iterate-com/shared/codemode/self-callable";
 
 interface OpenApiBridgeProps {
   specUrl: string;
   baseUrl: string;
 }
+
+type OpenApiBridgeInput = {
+  path: string[];
+  payload: unknown;
+  providerProps?: OpenApiBridgeProps;
+};
 
 interface OpenApiOperation {
   operationId: string;
@@ -44,8 +55,9 @@ export class OpenApiBridge extends WorkerEntrypoint<Record<string, unknown>, Ope
    *
    * path[0] is the operationId. payload is the request body or query params.
    */
-  async executeToolFunction(input: { path: string[]; payload: unknown }) {
-    const spec = await this.fetchSpec();
+  async executeToolFunction(input: OpenApiBridgeInput) {
+    const providerProps = this.resolveProviderProps(input);
+    const spec = await this.fetchSpec(providerProps);
     const operationId = input.path[0];
     if (!operationId)
       throw new Error(
@@ -55,7 +67,7 @@ export class OpenApiBridge extends WorkerEntrypoint<Record<string, unknown>, Ope
     const operation = this.findOperation(spec, operationId);
     if (!operation) throw new Error(`Operation "${operationId}" not found in spec`);
 
-    const url = this.buildUrl(operation, input.payload as Record<string, unknown>);
+    const url = this.buildUrl(operation, input.payload as Record<string, unknown>, providerProps);
     const response = await fetch(url, {
       method: operation.method.toUpperCase(),
       headers: operation.method !== "get" ? { "content-type": "application/json" } : undefined,
@@ -78,8 +90,9 @@ export class OpenApiBridge extends WorkerEntrypoint<Record<string, unknown>, Ope
   /**
    * Describe the available operations as TypeScript declarations.
    */
-  async describeToolFunctions() {
-    const spec = await this.fetchSpec();
+  async describeToolFunctions(input?: { providerProps?: OpenApiBridgeProps }) {
+    const providerProps = this.resolveProviderProps(input);
+    const spec = await this.fetchSpec(providerProps);
     const operations = this.listOperations(spec);
 
     if (operations.length === 0) {
@@ -96,8 +109,12 @@ export class OpenApiBridge extends WorkerEntrypoint<Record<string, unknown>, Ope
     };
   }
 
-  private async fetchSpec() {
-    const response = await fetch(this.ctx.props.specUrl);
+  private resolveProviderProps(input?: { providerProps?: OpenApiBridgeProps }) {
+    return input?.providerProps ?? this.ctx.props;
+  }
+
+  private async fetchSpec(providerProps: OpenApiBridgeProps) {
+    const response = await fetch(providerProps.specUrl);
     if (!response.ok) throw new Error(`Failed to fetch OpenAPI spec: ${response.status}`);
     return (await response.json()) as Record<string, unknown>;
   }
@@ -129,8 +146,12 @@ export class OpenApiBridge extends WorkerEntrypoint<Record<string, unknown>, Ope
     return this.listOperations(spec).find((op) => op.operationId === operationId);
   }
 
-  private buildUrl(operation: OpenApiOperation, payload: Record<string, unknown> | null) {
-    const baseUrl = this.ctx.props.baseUrl.replace(/\/+$/, "");
+  private buildUrl(
+    operation: OpenApiOperation,
+    payload: Record<string, unknown> | null,
+    providerProps: OpenApiBridgeProps,
+  ) {
+    const baseUrl = providerProps.baseUrl.replace(/\/+$/, "");
     let resolvedPath = operation.path;
 
     // Substitute path parameters
@@ -160,8 +181,9 @@ export class OpenApiBridge extends WorkerEntrypoint<Record<string, unknown>, Ope
 
 /**
  * Construct a ToolProviderDescriptor that routes through the OpenApiBridge
- * loopback entrypoint. The descriptor is pure JSON — it can be stored,
- * transmitted, or passed to the codemode execute endpoint.
+ * entrypoint. Without `workerScriptName`, the descriptor uses same-worker
+ * loopback props. With `workerScriptName`, it becomes a self-callable descriptor
+ * that can be stored and dispatched by another worker.
  *
  *   createOpenApiProvider({
  *     path: ["petstore"],
@@ -169,11 +191,35 @@ export class OpenApiBridge extends WorkerEntrypoint<Record<string, unknown>, Ope
  *     baseUrl: "https://petstore.swagger.io/v2",
  *   })
  */
-export function createOpenApiProvider(options: {
+type OpenApiProviderOptions = {
   path: string[];
   specUrl: string;
   baseUrl: string;
-}): ToolProviderDescriptor {
+} & (
+  | {
+      workerScriptName: string;
+      bindingName?: string;
+    }
+  | {
+      workerScriptName?: undefined;
+      bindingName?: undefined;
+    }
+);
+
+export function createOpenApiProvider(options: OpenApiProviderOptions): ToolProviderDescriptor {
+  if (options.workerScriptName) {
+    return createSelfToolProviderDescriptor({
+      path: options.path,
+      workerScriptName: options.workerScriptName,
+      entrypoint: "OpenApiBridge",
+      bindingName: options.bindingName,
+      providerProps: {
+        specUrl: options.specUrl,
+        baseUrl: options.baseUrl,
+      },
+    });
+  }
+
   const via = {
     type: "loopback-binding" as const,
     bindingType: "service" as const,

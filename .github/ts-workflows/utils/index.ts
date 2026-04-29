@@ -49,9 +49,9 @@ export const setupRepo = getSetupRepo();
 
 type DopplerConfigName =
   | `dev_${string}`
-  | `stg_${string}`
+  | `preview_${string}`
   | "dev"
-  | "stg"
+  | "preview"
   | "prd"
   | `\${{ ${string} }}`;
 type DopplerProjectName = string;

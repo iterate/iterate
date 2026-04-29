@@ -1,7 +1,7 @@
 /**
  * Returns the logo path based on VITE_APP_STAGE environment.
  * - prd: black/white logo
- * - stg: purple logo
+ * - preview: purple logo
  * - dev (default): yellow logo
  */
 export function getEnvLogo(): string {
@@ -11,8 +11,8 @@ export function getEnvLogo(): string {
     return "/logo-prd.svg";
   }
 
-  if (["stg", "staging"].includes(stage)) {
-    return "/logo-stg.svg";
+  if (["preview"].includes(stage)) {
+    return "/logo-preview.svg";
   }
 
   // Default to dev

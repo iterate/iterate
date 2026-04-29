@@ -8,6 +8,8 @@ const JSONObject = z.record(z.string(), z.unknown());
 const Project = z.object({
   id: z.string(),
   slug: z.string(),
+  clerkOrgId: z.string(),
+  createdByClerkUserId: z.string(),
   customHostname: z.string().nullable(),
   metadata: JSONObject,
   createdAt: z.string(),
@@ -135,7 +137,7 @@ export const osContract = oc.router({
           message: z.string().trim().min(1).default("OS server test exception"),
         }),
       )
-      .output(z.never()),
+      .output(z.unknown()),
     randomLogStream: oc
       .route({
         method: "POST",

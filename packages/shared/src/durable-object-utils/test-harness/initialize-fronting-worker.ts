@@ -20,6 +20,11 @@ import { getOrInitializeDoStub, withLifecycleHooks } from "../mixins/with-lifecy
 import { withKvInspector } from "../mixins/with-kv-inspector.ts";
 import { withMultiplexedAlarms } from "../mixins/with-multiplexed-alarms.ts";
 import { withOuterbase } from "../mixins/with-outerbase.ts";
+import {
+  registerDurableObjectPublicRoute,
+  routeDurableObjectRequest,
+  withPublicFetchRoute,
+} from "../mixins/with-public-fetch-route.ts";
 import { withScheduler } from "../mixins/with-scheduler.ts";
 import type { SchedulerRecurrence } from "../mixins/with-scheduler.ts";
 
@@ -47,6 +52,7 @@ type Env = {
   ROOMS: DurableObjectNamespace<InitializeTestRoom>;
   INSPECTORS: DurableObjectNamespace<InspectorTestRoom>;
   LISTED_ROOMS: DurableObjectNamespace<ListedRoom>;
+  PUBLIC_ROUTE_ROOMS: DurableObjectNamespace<PublicRouteTestRoom>;
   DO_CATALOG: D1Database;
 };
 
@@ -167,6 +173,53 @@ export class InitializeTestRoom extends RoomBase<Env> {
     } catch (error) {
       return serializeError(error);
     }
+  }
+}
+
+const PublicRouteRoomBase = withPublicFetchRoute({
+  namespaceSlug: "public-route-rooms",
+  defaultAddressing: "by-init-params",
+})(withLifecycleHooks<RoomInit>()(DurableObjectCore));
+
+export class PublicRouteTestRoom extends PublicRouteRoomBase<Env> {
+  async fetch(request: Request): Promise<Response> {
+    await this.ensureStarted();
+    const init = this.assertInitialized();
+
+    const url = new URL(request.url);
+    const bodyText =
+      request.method === "GET" || request.method === "HEAD" ? null : await request.text();
+
+    return json({
+      durableObjectName: init.name,
+      ownerUserId: init.ownerUserId,
+      pathname: url.pathname,
+      search: url.search,
+      method: request.method,
+      bodyText,
+    });
+  }
+
+  getIdStringForTest(): string {
+    return this.getDurableObjectId().toString();
+  }
+
+  getInitParamsForTest(): RoomInit {
+    return this.assertInitialized();
+  }
+
+  getPublicPathsForTest(): {
+    defaultPath: string;
+    byNamePath: string;
+    byIdPath: string;
+    byInitParamsPath: string;
+  } {
+    return {
+      defaultPath: this.getPublicDurableObjectPath(),
+      byNamePath: this.getPublicDurableObjectPath({ mode: "by-name" }),
+      byIdPath: this.getPublicDurableObjectPath({ mode: "by-id" }),
+      byInitParamsPath: this.getPublicDurableObjectPath({ mode: "by-init-params" }),
+    };
   }
 }
 
@@ -624,6 +677,16 @@ export class InspectorTestRoom extends InspectorBase<Env> {
 
 export default {
   async fetch(request, env): Promise<Response> {
+    const routedDurableObjectResponse = await routeDurableObjectRequest(request, [
+      registerDurableObjectPublicRoute({
+        namespace: env.PUBLIC_ROUTE_ROOMS,
+        class: PublicRouteTestRoom,
+      }),
+    ]);
+    if (routedDurableObjectResponse !== undefined) {
+      return routedDurableObjectResponse;
+    }
+
     const url = new URL(request.url);
     const inspectorMatch = url.pathname.match(/^\/inspectors\/([^/]+)(\/.*)$/);
 

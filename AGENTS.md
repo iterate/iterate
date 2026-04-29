@@ -1,3 +1,15 @@
+<!-- intent-skills:start -->
+
+## Skill Loading
+
+Before substantial work:
+
+- Skill check: run `npx @tanstack/intent@latest list`, or use skills already listed in context.
+- Skill guidance: if one local skill clearly matches the task, run `npx @tanstack/intent@latest load <package>#<skill>` and follow the returned `SKILL.md`.
+- Monorepos: when working across packages, run the skill check from the workspace root and prefer the local skill for the package being changed.
+- Multiple matches: prefer the most specific local skill for the package or concern you are changing; load additional skills only when the task spans multiple packages or concerns.
+<!-- intent-skills:end -->
+
 ## Repository structure
 
 Important directories:
@@ -49,6 +61,8 @@ You can use the `playwriter-spec` skill to run a spec dynamically when the featu
 When you're writing helpers/utilities/library functions, you have to try to LIMIT complexity and optionality. If you have a function that is only called once then DON'T give it any optional properties. Make the ones that are actually used required, and drop all the others. That makes call sites more explicit. If there are multiple parameters of the same type, use "options-bags" rather than long lists of positional parameters which can be accidentally flipped.
 
 Similarly, avoid "fallback" values which just encourage the proliferation of uncertain system behavior. Instead of accomodating for bizarre system states and adding code complexity to account for it, make the bizarre state impossible to reach in the first place.
+
+Durable Objects should normally live behind tiny dedicated workers and be invoked from app workers through namespace bindings. This keeps app worker startup smaller and makes the Durable Object deployment boundary explicit. Prefer the mixins in `packages/shared/src/durable-object-utils` for new Durable Objects unless there is a clear reason not to.
 
 ## Writing React
 

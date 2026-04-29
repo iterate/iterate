@@ -48,7 +48,7 @@ Two separate concepts:
    - Controlled by `SANDBOX_NAME_PREFIX` (per Doppler config)
    - Expected values:
      - `dev`: `dev`
-     - `stg`: `stg`
+     - `preview`: `preview`
      - `prd`: `prd`
    - Current behavior: one Fly app per machine.
    - App name format: `<prefix>-<project-slug>-<machine-id>` (shortened to <=63 chars).
@@ -71,7 +71,7 @@ If `SANDBOX_FLY_REGISTRY_APP` points to a missing Fly app, image push fails with
 ## How defaults work
 
 ```
-Doppler env var (per config: dev/stg/prd)
+Doppler env var (per config: dev/preview/prd)
   │
   ▼
 Provider.defaultSnapshotId
@@ -150,7 +150,7 @@ docker buildx build --load -f sandbox/Dockerfile -t iterate-sandbox:local --buil
 1. deploy-os-early (fast worker rollout with current env vars)
 2. build-sandbox-image (build + push new image)
 3. test-sandbox-fly (verify Fly provider against new image)
-4. promote-fly-default-image (update Doppler FLY_DEFAULT_IMAGE in dev/stg/prd)
+4. promote-fly-default-image (update Doppler FLY_DEFAULT_IMAGE in dev/preview/prd)
 5. deploy (final worker deploy with promoted env vars)
 ```
 
@@ -200,12 +200,12 @@ Set by the dev launcher (`apps/os/alchemy.run.ts`).
 ```bash
 # Create/ensure Fly apps and sync Doppler
 # - shared image app: iterate-sandbox
-# - machine name prefixes: dev, stg, prd
+# - machine name prefixes: dev, preview, prd
 pnpm sandbox fly:bootstrap-apps
 
 # Cleanup stale machines
 pnpm sandbox fly:cleanup -- --timeframe 24h --action stop --prefix dev    # stop machines idle >24h
-pnpm sandbox fly:cleanup -- --timeframe 7d --action delete --prefix stg   # delete machines idle >7d
+pnpm sandbox fly:cleanup -- --timeframe 7d --action delete --prefix preview   # delete machines idle >7d
 ```
 
 ## Testing

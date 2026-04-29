@@ -567,8 +567,6 @@ async function createPreviewEnvironment(
       "--config",
       previewEnvironment.previewEnvironmentDopplerConfigName,
       "--",
-      "env",
-      `ALCHEMY_STAGE=${previewEnvironment.previewEnvironmentAlchemyStageName}`,
       "pnpm",
       "alchemy:up",
     ];
@@ -666,8 +664,6 @@ async function destroyPreviewEnvironment(
     "--config",
     params.previewEnvironmentDopplerConfigName,
     "--",
-    "env",
-    `ALCHEMY_STAGE=${params.previewEnvironmentAlchemyStageName}`,
     "pnpm",
     "alchemy:down",
   ];
@@ -748,9 +744,11 @@ function derivePreviewEnvironment(input: {
   const projectSubdomainUrl =
     input.appSlug === "os2" ? `https://iterate-preview-${slot}.app` : null;
 
+  const previewEnvironmentDopplerConfigName = `preview_${slot}`;
+
   return {
-    previewEnvironmentAlchemyStageName: `preview-${slot}`,
-    previewEnvironmentDopplerConfigName: `stg_${slot}`,
+    previewEnvironmentAlchemyStageName: previewEnvironmentDopplerConfigName,
+    previewEnvironmentDopplerConfigName,
     previewEnvironmentIdentifier: input.previewEnvironmentSlug,
     previewEnvironmentSlug: input.previewEnvironmentSlug,
     previewEnvironmentType: input.previewEnvironmentType,

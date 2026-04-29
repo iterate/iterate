@@ -22,7 +22,7 @@ export default workflow({
           type: "string",
         },
         doppler_config: {
-          description: "Doppler config (dev, stg, prd)",
+          description: "Doppler config (dev, preview, prd)",
           required: false,
           type: "string",
           default: "dev",
@@ -43,7 +43,7 @@ export default workflow({
           type: "string",
         },
         doppler_config: {
-          description: "Doppler config (dev, stg, prd)",
+          description: "Doppler config (dev, preview, prd)",
           required: false,
           type: "string",
           default: "dev",
