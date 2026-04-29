@@ -58,10 +58,7 @@ import {
   setStreamTuiView,
   type StreamTuiView,
 } from "../src/stream-tui/navigation-state.ts";
-import {
-  formatRelativeStreamPath as formatRelativeStreamPathForCurrent,
-  resolveStreamPath as resolveStreamPathForCurrent,
-} from "../src/stream-tui/stream-paths.ts";
+import { resolveStreamPath as resolveStreamPathForCurrent } from "../src/stream-tui/stream-paths.ts";
 import {
   getDefaultExpandedStreamPaths,
   getStreamTreeRows,
@@ -96,6 +93,7 @@ let selectedStreamPath: StreamPath | undefined = currentStreamPath;
 let expandedStreamPaths = getDefaultExpandedStreamPaths(currentStreamPath);
 let streamSearchOpen = false;
 let streamSearchQuery = "";
+let lastSpaceTimestamp = 0;
 let pulseInterval: ReturnType<typeof setInterval> | undefined;
 const collapsedOffsets = new Set<number>();
 
@@ -129,7 +127,7 @@ const topBar = new BoxRenderable(renderer, {
   border: true,
   borderStyle: "single",
   borderColor: "#3f3f46",
-  focusedBorderColor: "#38bdf8",
+  focusedBorderColor: "#22c55e",
   focusable: true,
   paddingTop: 1,
   paddingLeft: 1,
@@ -217,8 +215,8 @@ renderer.prependInputHandler((sequence) => {
     return true;
   }
 
-  if (key.name === "tab") {
-    focusAdjacentRegion(key.shift ? -1 : 1);
+  if (key.name === "tab" || key.name === "backtab") {
+    focusAdjacentRegion(key.shift || key.name === "backtab" ? -1 : 1);
     return true;
   }
 
@@ -233,24 +231,21 @@ renderer.prependInputHandler((sequence) => {
   if (navigationState.focus !== "feed") {
     if (key.name !== "escape") return false;
 
-    if (navigationState.focus === "header") {
-      focusInput();
-      return true;
-    }
-
     if (navigationState.view !== "feed") {
       navigationState = setStreamTuiView(navigationState, "feed");
       updateHeader();
       updateFeed("keep");
-      focusInput();
-      return true;
     }
-
-    focusFeed();
+    focusInput();
     return true;
   }
 
   if (key.name === "escape") {
+    if (navigationState.view !== "feed") {
+      navigationState = setStreamTuiView(navigationState, "feed");
+      updateHeader();
+      updateFeed("keep");
+    }
     focusInput();
     return true;
   }
@@ -344,7 +339,7 @@ async function appendInput() {
   updateHeader();
 
   const event: EventInput = {
-    type: "webchat-message-received",
+    type: "events.iterate.com/webchat/user-message-added",
     payload: { content },
   };
   try {
@@ -430,15 +425,20 @@ const appContext: AppContext = {
   setActiveView(view) {
     navigationState = setStreamTuiView(navigationState, view);
   },
-  setStreamSummaries(streams) {
+  setStreamSummaries(streams, filter) {
     streamSummaries = streams;
     selectedStreamPath = currentStreamPath;
     expandedStreamPaths = new Set([
       ...expandedStreamPaths,
       ...getDefaultExpandedStreamPaths(currentStreamPath),
     ]);
-    streamSearchOpen = false;
-    streamSearchQuery = "";
+    if (filter != null && filter.length > 0) {
+      streamSearchOpen = true;
+      streamSearchQuery = filter;
+    } else {
+      streamSearchOpen = false;
+      streamSearchQuery = "";
+    }
   },
   navigateToStream(streamPath) {
     currentStreamPath = streamPath;
@@ -468,6 +468,11 @@ const appContext: AppContext = {
   },
   expandVisibleFeedItems() {
     collapsedOffsets.clear();
+  },
+  exit() {
+    cleanupRuntime();
+    renderer.destroy();
+    process.exit(0);
   },
   toast: {
     info(message) {
@@ -558,8 +563,8 @@ function handleSlashAutocompleteKey(key: KeyEvent) {
     return true;
   }
 
-  if (key.name === "tab" || key.name === "down") {
-    selectAdjacentSlashCommand(key.shift ? -1 : 1);
+  if (key.name === "tab" || key.name === "backtab" || key.name === "down") {
+    selectAdjacentSlashCommand(key.shift || key.name === "backtab" ? -1 : 1);
     return true;
   }
 
@@ -613,15 +618,17 @@ function resolveStreamPath(streamPath?: string) {
 }
 
 function updateHeader() {
-  streamPathText.content = currentStreamPath;
+  streamPathText.content =
+    navigationState.view === "streams"
+      ? "Streams"
+      : navigationState.view === "state"
+        ? "State"
+        : currentStreamPath;
   connectedIndicator.content = "●";
   connectedIndicator.fg = status === "streaming" ? (pulseOn ? "#22c55e" : "#16a34a") : "#facc15";
   statsText.content = [
     `${eventCount} event${eventCount === 1 ? "" : "s"}`,
     `${state.slots.feed.length} item${state.slots.feed.length === 1 ? "" : "s"}`,
-    navigationState.view === "feed" ? "" : navigationState.view,
-    navigationState.focus === "feed" ? "main focus" : "",
-    navigationState.focus === "header" ? "header focus" : "",
     status === "streaming" ? "" : status,
     appendStatus,
   ]
@@ -710,25 +717,25 @@ function renderStreamsViewChildren() {
   const rows = getVisibleStreamRows();
   const children = [];
 
-  if (streamSearchOpen) {
-    children.push(
-      new TextRenderable(renderer, {
-        id: "events-feed-stream-search",
-        content: new StyledText([
-          selectedSummaryText(` /${streamSearchQuery.padEnd(Math.max(1, feed.width - 3))}`),
-        ]),
-        width: "100%",
-        height: 1,
-        fg: "#cbd5e1",
-      }),
-    );
-  }
+  const helpText = streamSearchOpen
+    ? `filter: ${streamSearchQuery}▏`
+    : "↑↓ navigate · ←→ expand/collapse · Space toggle · 2×Space expand all · Enter open · Type to filter";
+
+  children.push(
+    new TextRenderable(renderer, {
+      id: "events-feed-streams-help",
+      content: new StyledText([summaryText(` ${helpText}\n`)]),
+      width: "100%",
+      height: 2,
+      fg: "#6b7280",
+    }),
+  );
 
   if (rows.length === 0) {
     const content =
       streamSearchQuery.trim().length > 0
         ? `No streams match "${streamSearchQuery}".`
-        : "No streams loaded. Type /streams to load the stream tree.";
+        : "No streams loaded. Type /streams.tree to load the stream tree.";
 
     children.push(
       new TextRenderable(renderer, {
@@ -773,7 +780,7 @@ function renderFeedItemChild(item: EventsStreamBuiltInElement, elapsedLabel?: st
 }
 
 function renderRawEventCard(item: EventsStreamRawEventElement, elapsedLabel?: string) {
-  const width = Math.max(3, feed.width - 2);
+  const width = Math.max(3, feed.viewport.width - 2);
   const yaml = stringifyYaml(orderEventKeysForYamlDisplay(item.props.raw)).trimEnd();
   const isSelected = navigationState.focus === "feed" && item.props.offset === selectedOffset;
   const isCollapsed = collapsedOffsets.has(item.props.offset);
@@ -844,13 +851,10 @@ function focusFeed() {
   navigationState = focusStreamTuiFeed(navigationState);
   if (navigationState.view === "streams") {
     selectedStreamPath ??= currentStreamPath;
-    input.placeholder = "Streams focus: Up/Down selects, Enter toggles, o opens, / searches";
-  } else if (rawItems.length > 0) {
-    selectedOffset ??= rawItems[rawItems.length - 1]?.props.offset;
-    input.placeholder = "Main focus: Up/Down selects, Enter toggles, Esc returns";
   } else {
-    input.placeholder = "Main focus: Up/Down selects, Enter toggles, Esc returns";
+    selectedOffset ??= rawItems[rawItems.length - 1]?.props.offset;
   }
+  input.placeholder = "Tab to return to input";
   feed.focus();
   updateHeader();
   updateFeed("selected");
@@ -867,14 +871,14 @@ function focusInput() {
 
 function focusHeader() {
   navigationState = focusStreamTuiHeader(navigationState);
-  input.placeholder = "Header focus: Tab changes region, Esc returns";
+  input.placeholder = "Tab to return to input";
   topBar.focus();
   updateHeader();
   updateFeed("keep");
 }
 
 function focusAdjacentRegion(direction: -1 | 1) {
-  const regions = ["composer", "feed", "header"] as const;
+  const regions = ["header", "feed", "composer"] as const;
   const currentIndex = regions.indexOf(navigationState.focus);
   const nextIndex = (currentIndex + direction + regions.length) % regions.length;
 
@@ -933,6 +937,9 @@ function handleStreamsViewKey(args: { key: KeyEvent; sequence: string }) {
 
     if (args.key.name === "backspace" || args.sequence === "\u007f") {
       streamSearchQuery = streamSearchQuery.slice(0, -1);
+      if (streamSearchQuery.length === 0) {
+        streamSearchOpen = false;
+      }
       selectFirstMatchedStreamRow();
       updateFeed("selected");
       return true;
@@ -948,16 +955,20 @@ function handleStreamsViewKey(args: { key: KeyEvent; sequence: string }) {
     return true;
   }
 
-  if (args.sequence === "/") {
-    streamSearchOpen = true;
-    streamSearchQuery = "";
-    selectFirstMatchedStreamRow();
-    updateFeed("selected");
+  if (args.key.name === "return") {
+    openSelectedStreamPath();
     return true;
   }
 
-  if (args.key.name === "return" || args.sequence === " ") {
-    toggleSelectedStreamPath();
+  if (args.sequence === " ") {
+    const now = Date.now();
+    if (now - lastSpaceTimestamp < 300) {
+      expandAllDescendants();
+      lastSpaceTimestamp = 0;
+    } else {
+      toggleSelectedStreamPath();
+      lastSpaceTimestamp = now;
+    }
     return true;
   }
 
@@ -971,8 +982,11 @@ function handleStreamsViewKey(args: { key: KeyEvent; sequence: string }) {
     return true;
   }
 
-  if (args.sequence.toLowerCase() === "o") {
-    openSelectedStreamPath();
+  if (isPrintableCharacter(args.sequence)) {
+    streamSearchOpen = true;
+    streamSearchQuery = args.sequence;
+    selectFirstMatchedStreamRow();
+    updateFeed("selected");
     return true;
   }
 
@@ -990,26 +1004,28 @@ function getVisibleStreamRows() {
 }
 
 function renderStreamTreeRowChunks(row: StreamTreeRow) {
+  const width = Math.max(3, feed.viewport.width - 2);
   const prefix = `${"  ".repeat(row.depth)}${row.hasChildren ? (row.expanded ? "▾" : "▸") : " "} `;
   const suffix = [
-    row.current ? "current" : "",
+    row.current ? "●" : "",
     row.createdAt == null ? "" : formatTime(new Date(row.createdAt).getTime()),
-    row.path === currentStreamPath
-      ? ""
-      : `/stream.open ${formatRelativeStreamPathForCurrent({ currentStreamPath, streamPath: row.path })}`,
   ]
     .filter(Boolean)
-    .join(" · ");
+    .join("  ");
+
+  const label = row.labelSegments.map((s) => s.text).join("");
+  const leftLen = prefix.length + label.length;
+  const rightLen = suffix.length;
+  const gap = Math.max(2, width - leftLen - rightLen);
+  const paddedSuffix = suffix.length > 0 ? " ".repeat(gap) + suffix : " ".repeat(gap);
+
   const chunks = [
     ...renderStreamRowText({ row, value: prefix }),
     ...row.labelSegments.flatMap((segment) =>
       renderStreamRowText({ row, value: segment.text, matched: segment.matched }),
     ),
+    ...renderStreamRowText({ row, value: paddedSuffix }),
   ];
-
-  if (suffix.length > 0) {
-    chunks.push(...renderStreamRowText({ row, value: `  ${suffix}` }));
-  }
 
   return chunks;
 }
@@ -1067,6 +1083,18 @@ function setSelectedStreamExpanded(expanded: boolean) {
     expandedStreamPaths.delete(selectedStreamPath);
   }
 
+  updateFeed("selected");
+}
+
+function expandAllDescendants() {
+  if (selectedStreamPath == null) return;
+
+  for (const stream of streamSummaries) {
+    if (stream.path === selectedStreamPath || stream.path.startsWith(selectedStreamPath + "/")) {
+      expandedStreamPaths.add(stream.path);
+    }
+  }
+  expandedStreamPaths.add(selectedStreamPath);
   updateFeed("selected");
 }
 

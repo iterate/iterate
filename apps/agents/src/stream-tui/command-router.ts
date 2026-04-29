@@ -39,12 +39,13 @@ export type AppContext = {
   get reducedState(): EventsStreamViewState;
   streamApi: StreamApi;
   setActiveView: (view: StreamTuiView) => void;
-  setStreamSummaries: (streams: StreamSummary[]) => void;
+  setStreamSummaries: (streams: StreamSummary[], filter?: string) => void;
   navigateToStream: (streamPath: StreamPath) => void;
   restartStream: () => void;
   prefillInput: (value: string) => void;
   collapseVisibleFeedItems: () => void;
   expandVisibleFeedItems: () => void;
+  exit: () => void;
   toast: {
     info: (message: string) => void;
     success: (message: string) => void;
@@ -283,10 +284,28 @@ const commandRouter = {
     children: commandBase
       .meta({
         tui: {
-          title: "List child streams",
-          description: "Show child streams discovered from this stream",
+          title: "Show children",
+          description: "Show streams under the current path",
           category: "Stream",
-          slash: { name: "stream.children", aliases: ["streams"] },
+          slash: { name: "stream.children", aliases: ["children"] },
+        },
+      })
+      .handler(async ({ context }) => {
+        const children = await context.streamApi.listChildren({ streamPath: "/" });
+        const filter = context.streamPath === "/" ? "" : context.streamPath + "/";
+        context.setStreamSummaries(children, filter);
+        context.toast.info(`${children.length} stream${children.length === 1 ? "" : "s"}`);
+        context.setActiveView("streams");
+      }),
+  },
+  streams: {
+    tree: commandBase
+      .meta({
+        tui: {
+          title: "Show stream tree",
+          description: "Show all streams as a tree",
+          category: "Stream",
+          slash: { name: "streams.tree", aliases: ["streams", "tree"] },
         },
       })
       .handler(async ({ context }) => {
@@ -296,6 +315,18 @@ const commandRouter = {
         context.setActiveView("streams");
       }),
   },
+  exit: commandBase
+    .meta({
+      tui: {
+        title: "Exit",
+        description: "Quit the TUI",
+        category: "App",
+        slash: { name: "exit", aliases: ["quit"] },
+      },
+    })
+    .handler(({ context }) => {
+      context.exit();
+    }),
   feed: {
     collapseAll: commandBase
       .meta({
