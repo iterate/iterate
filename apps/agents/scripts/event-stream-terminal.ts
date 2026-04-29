@@ -208,10 +208,17 @@ const topBar = new BoxRenderable(renderer, {
   backgroundColor: P.surface,
 });
 
-// iterate brand mark: white square with italic i
+// iterate brand mark: white 𝑖 on black, using half-block characters (▐ ▌) for
+// smooth sub-cell edges that blend into the parent background.
+// ▐ (U+2590) fills the RIGHT half of the cell with fg color.
+// ▌ (U+258C) fills the LEFT half of the cell with fg color.
 const brandMark = new TextRenderable(renderer, {
-  content: new StyledText([bg("#ffffff")(fg("#000000")(" 𝑖 "))]),
-  width: 4,
+  content: new StyledText([
+    fg("#000000")(bg(P.surface)("▐")),
+    bg("#000000")(fg("#ffffff")(" 𝑖 ")),
+    fg("#000000")(bg(P.surface)("▌")),
+  ]),
+  width: 6,
   fg: P.text,
 });
 const streamPathText = new TextRenderable(renderer, {
