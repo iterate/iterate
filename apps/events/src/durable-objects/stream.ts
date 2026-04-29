@@ -1,4 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
+import { withDurableObjectCore } from "@iterate-com/shared/durable-object-utils/mixins/with-durable-object-core";
+import { withKvInspector } from "@iterate-com/shared/durable-object-utils/mixins/with-kv-inspector";
+import { withOuterbase } from "@iterate-com/shared/durable-object-utils/mixins/with-outerbase";
 import {
   type ChildStreamCreatedEvent,
   type DestroyStreamResult,
@@ -33,6 +36,14 @@ import { jsonataTransformerProcessor } from "./jsonata-transformer.ts";
 import { getAncestorStreamPaths } from "~/lib/stream-path-ancestors.ts";
 import { getInitializedStreamStub, StreamOffsetPreconditionError } from "~/lib/stream-helpers.ts";
 
+const StreamDurableObjectBase = withKvInspector({
+  unsafe: "I_UNDERSTAND_THIS_EXPOSES_KV",
+})(
+  withOuterbase({
+    unsafe: "I_UNDERSTAND_THIS_EXPOSES_SQL",
+  })(withDurableObjectCore(DurableObject)),
+);
+
 /**
  * One Stream durable object owns one append-only SQLite event log, its reduced
  * state, and lightweight newline-delimited live readers.
@@ -47,7 +58,7 @@ import { getInitializedStreamStub, StreamOffsetPreconditionError } from "~/lib/s
  * Durable Object rules:
  * https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/
  */
-export class StreamDurableObject extends DurableObject<Env> {
+export class StreamDurableObject extends StreamDurableObjectBase<Env> {
   private _state: StreamState | null = null;
   private readonly client: SyncClient;
   private readonly subscribers = new Set<ReadableStreamDefaultController<Uint8Array>>();
