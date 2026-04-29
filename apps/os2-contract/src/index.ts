@@ -1,13 +1,10 @@
 import { eventIterator, oc } from "@orpc/contract";
+import { Event, StreamCursor, StreamPath } from "@iterate-com/events-contract";
 import { internalContract } from "@iterate-com/shared/apps/internal-router-contract";
 import { ToolProviderDescriptor, CodemodeEvent } from "@iterate-com/shared/codemode/types";
 import { z } from "zod";
 
 const JSONObject = z.record(z.string(), z.unknown());
-const StreamPath = z
-  .string()
-  .max(1023)
-  .regex(/^\/(?:[a-z0-9_-]+(?:\/[a-z0-9_-]+)*)?$/);
 
 const Project = z.object({
   id: z.string(),
@@ -157,6 +154,42 @@ export const osContract = oc.router({
       .output(eventIterator(z.string())),
   },
   codemode: {
+    executeScript: oc
+      .route({
+        method: "POST",
+        path: "/codemode/scripts",
+        description:
+          "Append a Script Execution request to a Codemode Session and return the committed event",
+        tags: ["/codemode"],
+      })
+      .input(
+        z.object({
+          code: z.string().min(1),
+          providers: z.array(ToolProviderDescriptor).default([]),
+          streamPath: StreamPath.optional(),
+        }),
+      )
+      .output(
+        z.object({
+          event: Event,
+          streamPath: StreamPath,
+        }),
+      ),
+    streamEvents: oc
+      .route({
+        method: "GET",
+        path: "/codemode/events/{+streamPath}",
+        description: "Read events from a Codemode Session's Event Stream Path",
+        tags: ["/codemode"],
+      })
+      .input(
+        z.object({
+          afterOffset: StreamCursor.optional(),
+          beforeOffset: StreamCursor.optional(),
+          streamPath: StreamPath,
+        }),
+      )
+      .output(eventIterator(Event)),
     execute: oc
       .route({
         method: "POST",

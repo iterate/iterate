@@ -106,6 +106,7 @@ _Avoid_: CallableToolProvider
 - The **Event Stream Path** is the public identity of a **Codemode Session**; the Durable Object name is derived infrastructure identity.
 - For now, a **Codemode Session** appends to its **Event Stream Path** by calling the events service directly.
 - A **Codemode Session** starts a **Script** by appending a script-execution-requested event and returning that committed event immediately.
+- Reading Script Execution output is a subscription to the **Event Stream Path**, not part of the start command.
 - A **Codemode Session** owns the Tool Provider registry for its **Event Stream Path**.
 - One-shot adapters may register Tool Providers immediately before starting a **Script Execution**.
 - A **Codemode Session** exposes a **Codemode Session Capability**.
@@ -145,6 +146,9 @@ _Avoid_: CallableToolProvider
 
 > **Dev:** "Should we store an execution ID when a script starts?"
 > **Domain expert:** "Not yet. A **Script Execution** is the script-execution-requested event; use its offset for correlation."
+
+> **Dev:** "Should starting a Script stream all results back from the command?"
+> **Domain expert:** "No. Starting a **Script Execution** returns the committed request event immediately. Output is read from the **Event Stream Path**."
 
 > **Dev:** "Can someone open an OS2 project page without signing in?"
 > **Domain expert:** "No. The **OS2 App** is authenticated, and every **Project** is managed through the user's active **Clerk Organization**."

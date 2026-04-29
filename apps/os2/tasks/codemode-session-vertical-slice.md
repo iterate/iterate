@@ -57,8 +57,8 @@ helper stops tripping deep TypeScript instantiation in OS2.
 - [x] Add a shared `createCodemodeContext()` proxy helper.
 - [x] Start a Dynamic Worker with a scoped `CodemodeSessionCapability`.
 - [x] Prove provider-to-provider Tool Function Calls end-to-end through the session worker.
-- [ ] Replace the oRPC compatibility iterator with event-stream-native UI
-      consumption.
+- [x] Add event-stream-native command/read oRPC methods.
+- [x] Move the Codemode page from the compatibility iterator to event-stream-native consumption.
 - [ ] Generalize cross-worker self-callable bindings beyond the OpenAPI bridge
       proof path.
 

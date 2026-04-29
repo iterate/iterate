@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { ORPCError } from "@orpc/client";
 import { createFileRoute } from "@tanstack/react-router";
-import type { CodemodeEvent } from "@iterate-com/shared/codemode/types";
+import type { Event } from "@iterate-com/events-contract";
 import { Button } from "@iterate-com/ui/components/button";
-import { createBrowserWebSocketClient } from "~/orpc/client.ts";
+import { createBrowserOpenApiClient, createBrowserWebSocketClient } from "~/orpc/client.ts";
 
 type RunStatus = "idle" | "connecting" | "streaming" | "completed" | "error";
 
@@ -16,8 +16,8 @@ export const Route = createFileRoute("/_app/codemode")({
 });
 
 function CodemodePage() {
-  const [code, setCode] = useState('console.log("hello");\n1 + 1');
-  const [events, setEvents] = useState<CodemodeEvent[]>([]);
+  const [code, setCode] = useState('async (ctx) => {\n  console.log("hello");\n  return 1 + 1;\n}');
+  const [events, setEvents] = useState<Event[]>([]);
   const [status, setStatus] = useState<RunStatus>("idle");
   const [lastError, setLastError] = useState<string | null>(null);
   const [runToken, setRunToken] = useState(0);
@@ -28,6 +28,7 @@ function CodemodePage() {
 
     const controller = new AbortController();
     let isCurrent = true;
+    const openApiClient = createBrowserOpenApiClient();
     const wsClient = createBrowserWebSocketClient();
 
     setStatus("connecting");
@@ -36,7 +37,7 @@ function CodemodePage() {
 
     void (async () => {
       try {
-        const stream = await wsClient.client.codemode.execute(
+        const started = await openApiClient.codemode.executeScript(
           { code, providers: [] },
           { signal: controller.signal },
         );
@@ -44,9 +45,20 @@ function CodemodePage() {
         if (!isCurrent || controller.signal.aborted) return;
         setStatus("streaming");
 
+        const stream = await wsClient.client.codemode.streamEvents(
+          {
+            afterOffset: started.event.offset > 1 ? started.event.offset - 1 : "start",
+            streamPath: started.streamPath,
+          },
+          { signal: controller.signal },
+        );
+
         for await (const event of stream) {
           if (!isCurrent || controller.signal.aborted) return;
           setEvents((prev) => [...prev, event]);
+          if (isScriptExecutionFinished(event, started.event.offset)) {
+            break;
+          }
         }
 
         if (!isCurrent || controller.signal.aborted) return;
@@ -73,8 +85,7 @@ function CodemodePage() {
   }, [events]);
 
   const resultEvent = events.find(
-    (e): e is Extract<CodemodeEvent, { type: "codemode-block-result-added" }> =>
-      e.type === "codemode-block-result-added",
+    (e) => e.type === "events.iterate.com/codemode/script-execution-finished",
   );
 
   const handleRun = () => {
@@ -88,9 +99,7 @@ function CodemodePage() {
         <div className="max-w-md space-y-4">
           <div className="space-y-1">
             <h2 className="text-sm font-semibold">Code</h2>
-            <p className="text-sm text-muted-foreground">
-              Write JavaScript. The final expression is returned from a sandboxed worker.
-            </p>
+            <p className="text-sm text-muted-foreground">Write an async codemode function.</p>
           </div>
 
           <textarea
@@ -139,7 +148,7 @@ function CodemodePage() {
           {resultEvent && (
             <div
               className={`rounded-lg border p-4 ${
-                resultEvent.error
+                readEventPayloadString(resultEvent, "error")
                   ? "border-destructive/40 bg-destructive/5"
                   : "border-green-500/40 bg-green-500/5"
               }`}
@@ -148,13 +157,13 @@ function CodemodePage() {
               <p className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                 Result
               </p>
-              {resultEvent.error ? (
+              {readEventPayloadString(resultEvent, "error") ? (
                 <pre className="whitespace-pre-wrap font-mono text-sm text-destructive">
-                  {resultEvent.error}
+                  {readEventPayloadString(resultEvent, "error")}
                 </pre>
               ) : (
                 <pre className="whitespace-pre-wrap font-mono text-sm">
-                  {formatValue(resultEvent.result)}
+                  {formatValue(readEventPayloadValue(resultEvent, "result"))}
                 </pre>
               )}
             </div>
@@ -191,65 +200,69 @@ function CodemodePage() {
   );
 }
 
-function EventLine({ event }: { event: CodemodeEvent }) {
+function EventLine({ event }: { event: Event }) {
   switch (event.type) {
-    case "codemode-block-added":
-      return <div className="text-muted-foreground">[block-added] code submitted</div>;
+    case "events.iterate.com/codemode/script-execution-requested":
+      return <div className="text-muted-foreground">[script-requested] offset {event.offset}</div>;
 
-    case "codemode-log-emitted": {
+    case "events.iterate.com/codemode/log-emitted": {
+      const level = readEventPayloadString(event, "level");
       const color =
-        event.level === "error"
+        level === "error"
           ? "text-destructive"
-          : event.level === "warn"
+          : level === "warn"
             ? "text-yellow-600 dark:text-yellow-400"
             : "text-foreground";
       return (
         <div className={color}>
-          [{event.level}] {event.message}
+          [{level || "log"}] {readEventPayloadString(event, "message")}
         </div>
       );
     }
 
-    case "codemode-tool-provider-registered":
+    case "events.iterate.com/codemode/tool-provider-registered":
       return (
-        <div className="text-muted-foreground">[provider-registered] {event.path.join(".")}</div>
+        <div className="text-muted-foreground">
+          [provider-registered] {readEventPayloadPath(event, "path")}
+        </div>
       );
 
-    case "codemode-tool-provider-described":
-      return (
-        <div className="text-muted-foreground">[provider-described] {event.path.join(".")}</div>
-      );
-
-    case "codemode-tool-function-call-requested":
+    case "events.iterate.com/codemode/tool-function-call-requested":
       return (
         <div className="text-blue-600 dark:text-blue-400">
-          [tool-function-call] {event.path.join(".")} ({event.callId})
+          [tool-function-call] {readEventPayloadPath(event, "path")}
         </div>
       );
 
-    case "codemode-tool-function-call-succeeded":
+    case "events.iterate.com/codemode/tool-function-call-succeeded":
       return (
         <div className="text-green-600 dark:text-green-400">
-          [tool-function-result] {event.callId}: {formatValue(event.result)}
+          [tool-function-result] {formatValue(readEventPayloadValue(event, "result"))}
         </div>
       );
 
-    case "codemode-tool-function-call-failed":
+    case "events.iterate.com/codemode/tool-function-call-failed":
       return (
         <div className="text-destructive">
-          [tool-function-error] {event.callId}: {event.error}
+          [tool-function-error] {formatValue(readEventPayloadValue(event, "error"))}
         </div>
       );
 
-    case "codemode-block-result-added":
+    case "events.iterate.com/codemode/script-execution-finished": {
+      const error = readEventPayloadString(event, "error");
       return (
-        <div className={event.error ? "text-destructive" : "text-green-600 dark:text-green-400"}>
-          [result] {event.error ? `error: ${event.error}` : formatValue(event.result)}
+        <div className={error ? "text-destructive" : "text-green-600 dark:text-green-400"}>
+          [result] {error ? `error: ${error}` : formatValue(readEventPayloadValue(event, "result"))}
         </div>
       );
+    }
 
     default:
-      return <div className="text-muted-foreground">[unknown] {JSON.stringify(event)}</div>;
+      return (
+        <div className="text-muted-foreground">
+          [{event.type}] {formatValue(event.payload)}
+        </div>
+      );
   }
 }
 
@@ -278,4 +291,27 @@ function formatValue(value: unknown): string {
   if (value === undefined) return "undefined";
   if (typeof value === "string") return value;
   return JSON.stringify(value, null, 2);
+}
+
+function isScriptExecutionFinished(event: Event, scriptExecutionRequestedOffset: number) {
+  if (event.type !== "events.iterate.com/codemode/script-execution-finished") return false;
+  return (
+    readEventPayloadValue(event, "scriptExecutionRequestedOffset") ===
+    scriptExecutionRequestedOffset
+  );
+}
+
+function readEventPayloadValue(event: Event, key: string) {
+  const payload = event.payload as Record<string, unknown>;
+  return payload[key];
+}
+
+function readEventPayloadString(event: Event, key: string) {
+  const value = readEventPayloadValue(event, key);
+  return typeof value === "string" ? value : "";
+}
+
+function readEventPayloadPath(event: Event, key: string) {
+  const value = readEventPayloadValue(event, key);
+  return Array.isArray(value) ? value.join(".") : "";
 }
