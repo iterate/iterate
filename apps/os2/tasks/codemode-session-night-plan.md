@@ -14,9 +14,12 @@ before implementation resumes.
 
 ## Current Decisions
 
-- A **Codemode Session** is the durable authority for one **Event Stream Path**.
-- The **Event Stream Path** is the public identity; Durable Object names are
-  derived infrastructure identity.
+- A **Codemode Session** is the durable codemode authority for one stable
+  Project ID and one **Event Stream Path**.
+- The **Project ID** and **Event Stream Path** together are the Codemode Session
+  identity.
+- Durable Object names are derived from `{ projectId, streamPath }` using the
+  normal lifecycle mixin pattern.
 - A **Script Execution** starts when the session appends
   `events.iterate.com/codemode/script-execution-requested`.
 - `executeScript` is a command and returns the committed request event
@@ -36,6 +39,23 @@ before implementation resumes.
 - A callable descriptor is only known to be dispatchable against a concrete
   dispatch context. `loopback-binding` is valid when the dispatching worker has
   the matching `ctx.exports`; it is not globally valid or invalid.
+- Browser UI explicitly creates and selects Codemode Sessions for a Project;
+  these behave like REPLs with their own Event Stream Paths.
+- Browser oRPC session creation accepts an optional Event Stream Path. If absent,
+  OS2 generates one for the Project.
+- Codemode Session creation is attach-or-create for `{ projectId, streamPath }`.
+- Inbound MCP server sessions already have Event Stream Paths. Codemode should
+  attach a Codemode Session to that same path so MCP and codemode events
+  interleave.
+- Project Routes and Project MCP Endpoints resolve mutable Project Slugs to the
+  stable Project ID before initializing a Codemode Session.
+- Outbound MCP client connections are Tool Providers. They are Durable Object
+  instances representing OS2's connection to an external MCP server.
+- Do not introduce a separate "Project Run Code Session" concept.
+- A **Codemode Preset** is a Project-owned named `EventInput[]`.
+- One-shot browser execution sends `{ projectId, streamPath?, events, code }`.
+- Applying a preset means appending its events to the Codemode Session before
+  starting the Script Execution.
 
 ## Current Implementation Map
 
@@ -59,26 +79,29 @@ before implementation resumes.
   - Stateless Provider Bridge for OpenAPI specs.
 - `apps/os2/src/rpc-targets/mcp-client-bridge.ts`
   - Stateful Provider Bridge for remote MCP servers.
+- `apps/os2/src/rpc-targets/*-core.test.ts`
+  - Offline bridge proofs using `@iterate-com/mock-http-proxy` for mocked
+    OpenAPI and MCP servers.
 
 ## Outcome We Want
 
 End state for this slice:
 
-1. A Project MCP Endpoint can create or attach to a Project Run Code Session
-   for its Project.
+1. Browser UI can explicitly create/select Codemode Sessions for a Project.
 2. The session can register durable Provider Descriptors.
 3. Provider Descriptors can point to first-party bridge entrypoints without
    depending on whichever worker happens to dispatch the call.
 4. A script can call a bridge-backed Tool Function through `ctx.provider.fn()`.
 5. A provider can call another provider through the same Codemode Session
    Capability.
-6. MCP `run_code` can start a Script Execution and return useful results while
-   preserving the underlying event stream.
-7. The UI can observe and manage Project Run Code Sessions through the same
-   session/event model, with Project identity supplied by the browser route and
-   oRPC client.
+6. Inbound MCP `run_code` can start a Script Execution on a Codemode Session
+   using the MCP session's existing Event Stream Path.
+7. Outbound MCP client connections can be registered as Tool Providers without
+   confusing them with inbound MCP server sessions.
 8. The remaining unsafe or deliberately-unimplemented surfaces are captured as
    explicit follow-up tasks, not implicit TODOs.
+9. Project presets can seed a session with reusable Event Inputs from the
+   standalone Codemode UI.
 
 ## Proposed Workstreams
 
@@ -211,18 +234,21 @@ Likely first slice:
 - Continue punting policy allowlists to follow-up.
 - Add recursion tests before any public bridge/provider surfaces are encouraged.
 
-### 6. MCP Server Integration
+### 6. Inbound MCP Server Integration
 
-Goal: make remote MCP clients the primary way to create and use Project Run Code
-Sessions. Each Project has its own MCP endpoint, so MCP tools should not ask
-the caller to select a Project in their input.
+Goal: when OS2 is acting as an MCP server, codemode should attach to the
+existing event stream for the inbound MCP session. Each Project has its own MCP
+endpoint, so MCP tools should not ask the caller to select a Project in their
+input.
 
 Questions to resolve:
 
-- Does each MCP client session map to one Project Run Code Session by default?
-- Does each `run_code` tool call create a fresh Project Run Code Session, or a
-  new Script Execution inside an existing Project Run Code Session?
-- How does the Project MCP Endpoint resolve the Project from the request route?
+- Does each inbound MCP session map to one Codemode Session?
+- Does each `run_code` tool call create only a new Script Execution on that
+  Codemode Session?
+- How does the Project MCP Endpoint resolve the stable Project ID from the request route?
+  Resolved: route slugs identify the Project route; the handler looks up the
+  Project row and initializes CodemodeSession with stable `project.id`.
 - Should MCP `run_code` return final text only, event offsets, the Event Stream
   Path, or a combination?
 - Should MCP expose tools to register Provider Descriptors, or should provider
@@ -231,16 +257,17 @@ Questions to resolve:
 
 Likely product stance:
 
-- MCP is the primary interface for running code.
+- Inbound MCP is a primary interface for running code, but it is not the only
+  owner of Codemode Sessions.
 - MCP project identity comes from the Project MCP Endpoint, not from a project
   selector in tool arguments.
-- UI is an observer and management surface for project-scoped run sessions.
+- Inbound MCP codemode events interleave with the MCP session's existing events.
 - Browser oRPC project identity comes from the Project Route and frontend route
   context.
 - MCP responses can be simplified for client ergonomics, but every run must
   still be backed by canonical codemode events.
 
-### 7. UI and Project Route Integration
+### 7. Browser UI and Project Route Integration
 
 Goal: wire codemode into the new organization/project route shape without
 fighting the current routing churn.
@@ -252,10 +279,13 @@ Known local route direction:
 
 Questions to resolve:
 
-- Is a Project Run Code Session per Project MCP client session, per Project, per Script
-  block, or user-chosen?
-- Where is the Event Stream Path chosen?
-- Should Run Code create a new Event Stream Path by default every run?
+- How does the UI create a new Codemode Session and Event Stream Path?
+  Resolved: oRPC accepts optional `streamPath`; if absent, server generates one.
+- What happens if the supplied Event Stream Path already has a session for the
+  same Project ID? Resolved: attach-or-create.
+- How does the UI list/select existing Codemode Sessions for a Project?
+- Should running a script create a new Script Execution on the selected
+  Codemode Session, rather than creating a new session?
 - Should a Project have a default Provider Registry, or should each session get
   providers explicitly?
 - Does the UI expose raw Provider Descriptor editing, curated bridge setup, or
@@ -279,7 +309,8 @@ Questions to resolve:
 These are intentionally ordered so each answer narrows later work.
 
 1. What is the unit of user intent: Project Run Code Session, Script Execution,
-   or Event Stream Path? Resolved: **Project Run Code Session**.
+   or Event Stream Path? Superseded: do not introduce Project Run Code Session;
+   use **Codemode Session** directly.
 2. Should stored Provider Descriptors always be dispatchable by the Codemode
    Session worker, or can some descriptors be one-shot only?
 3. Should self-callable first-party bridge descriptors become the default for
@@ -294,9 +325,13 @@ These are intentionally ordered so each answer narrows later work.
 9. What should happen when a provider registration appends the registry event
    but later dispatch validation fails?
 10. How much of this needs to be Project-persistent versus session-local?
-11. Since MCP is primary and project-scoped, should each MCP client session get
-    one sticky Project Run Code Session or should each `run_code` call create a
-    fresh one by default?
+11. Since inbound MCP sessions already have Event Stream Paths, should each
+    inbound MCP session attach to exactly one Codemode Session?
+12. How should browser UI-created Codemode Sessions be named/listed for a
+    Project?
+13. Should CodemodeSession init params be exactly `{ projectId, streamPath }`,
+    or do we keep a lifecycle `name` field as infrastructure-only input?
+    Resolved: identity and DO name are derived from `{ projectId, streamPath }`.
 
 ## Implementation Checkpoints
 
@@ -308,6 +343,6 @@ These are intentionally ordered so each answer narrows later work.
 - [ ] Prove MCP bridge through Codemode Session or create a blocker task.
 - [ ] Add explicit codemode event schemas.
 - [ ] Add runtime limit/cycle tests.
-- [ ] Wire Run Code route to the session/event model.
-- [ ] Move MCP `run_code` onto the session/event model.
+- [ ] Wire browser Run Code route to explicit Codemode Session creation/selection.
+- [ ] Move inbound MCP `run_code` onto the MCP-session Event Stream Path.
 - [ ] Delete or deprecate compatibility `codemode.execute`.

@@ -1,5 +1,5 @@
 import { eventIterator, oc } from "@orpc/contract";
-import { Event, StreamCursor, StreamPath } from "@iterate-com/events-contract";
+import { Event, EventInput, StreamCursor, StreamPath } from "@iterate-com/events-contract";
 import { internalContract } from "@iterate-com/shared/apps/internal-router-contract";
 import { ToolProviderDescriptor, CodemodeEvent } from "@iterate-com/shared/codemode/types";
 import { z } from "zod";
@@ -17,6 +17,17 @@ export const Project = z.object({
   updatedAt: z.string(),
 });
 export type Project = z.output<typeof Project>;
+
+export const ProjectPreset = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  name: z.string(),
+  description: z.string().nullable(),
+  events: z.array(EventInput),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type ProjectPreset = z.output<typeof ProjectPreset>;
 
 export const RandomLogStreamRequest = z
   .object({
@@ -166,6 +177,8 @@ export const osContract = oc.router({
       .input(
         z.object({
           code: z.string().min(1),
+          events: z.array(EventInput).default([]),
+          projectId: z.string(),
           providers: z.array(ToolProviderDescriptor).default([]),
           streamPath: StreamPath.optional(),
         }),
@@ -202,6 +215,8 @@ export const osContract = oc.router({
         z.object({
           code: z.string().min(1),
           blockId: z.string().optional(),
+          events: z.array(EventInput).default([]),
+          projectId: z.string(),
           providers: z.array(ToolProviderDescriptor).default([]),
           streamPath: StreamPath.optional(),
         }),
@@ -292,5 +307,58 @@ export const osContract = oc.router({
       })
       .input(z.object({ id: z.string() }))
       .output(z.object({ ok: z.literal(true), id: z.string(), deleted: z.boolean() })),
+    presets: {
+      list: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectId}/presets",
+          description: "List project presets",
+          tags: ["/projects"],
+        })
+        .input(z.object({ projectId: z.string() }))
+        .output(z.object({ presets: z.array(ProjectPreset) })),
+      create: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectId}/presets",
+          description: "Create a project preset",
+          tags: ["/projects"],
+        })
+        .input(
+          z.object({
+            projectId: z.string(),
+            name: z.string().trim().min(1),
+            description: z.string().trim().nullable().optional(),
+            events: z.array(EventInput),
+          }),
+        )
+        .output(ProjectPreset),
+      update: oc
+        .route({
+          method: "PATCH",
+          path: "/projects/{projectId}/presets/{id}",
+          description: "Update a project preset",
+          tags: ["/projects"],
+        })
+        .input(
+          z.object({
+            id: z.string(),
+            projectId: z.string(),
+            name: z.string().trim().min(1),
+            description: z.string().trim().nullable().optional(),
+            events: z.array(EventInput),
+          }),
+        )
+        .output(ProjectPreset),
+      remove: oc
+        .route({
+          method: "DELETE",
+          path: "/projects/{projectId}/presets/{id}",
+          description: "Delete a project preset",
+          tags: ["/projects"],
+        })
+        .input(z.object({ id: z.string(), projectId: z.string() }))
+        .output(z.object({ ok: z.literal(true), id: z.string(), deleted: z.boolean() })),
+    },
   },
 });

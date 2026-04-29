@@ -10,7 +10,7 @@ import {
   dispatchCallable,
 } from "@iterate-com/shared/callable/runtime.ts";
 import type { CallableContext } from "@iterate-com/shared/callable/types.ts";
-import type { ToolProviderDescriptor } from "@iterate-com/shared/codemode/types";
+import { ToolProviderDescriptor } from "@iterate-com/shared/codemode/types";
 import { withD1ObjectCatalog } from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
 import { withDurableObjectCore } from "@iterate-com/shared/durable-object-utils/mixins/with-durable-object-core";
 import { withKvInspector } from "@iterate-com/shared/durable-object-utils/mixins/with-kv-inspector";
@@ -21,6 +21,7 @@ export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
 
 export type CodemodeSessionInitParams = {
   name: string;
+  projectId: string;
   streamPath: StreamPath;
 };
 
@@ -58,6 +59,7 @@ const CodemodeSessionLifecycleBase = withD1ObjectCatalog<
   className: "CodemodeSession",
   getDatabase: (env) => env.DO_CATALOG,
   indexes: {
+    projectId: (params) => params.projectId,
     streamPath: (params) => params.streamPath,
   },
 })(withLifecycleHooks<CodemodeSessionInitParams>()(withDurableObjectCore(DurableObject)));
@@ -81,6 +83,7 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
 
   async append(input: EventInput) {
     await this.ensureStarted();
+    this.applyAppendedEventToSessionState(input);
     return await this.appendToStream(input);
   }
 
@@ -291,6 +294,31 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
 
   private writeToolProviderRegistry(registry: Record<string, ToolProviderDescriptor>) {
     this.getDurableObjectKv().put(TOOL_PROVIDER_REGISTRY_STORAGE_KEY, registry);
+  }
+
+  private applyAppendedEventToSessionState(input: EventInput) {
+    if (input.type !== `${EVENT_TYPE_PREFIX}/tool-provider-registered`) return;
+
+    const payload =
+      input.payload != null && typeof input.payload === "object"
+        ? (input.payload as Record<string, unknown>)
+        : {};
+    const descriptor = ToolProviderDescriptor.safeParse(payload.descriptor);
+    if (!descriptor.success) return;
+
+    try {
+      validateToolProviderDispatchContext({
+        callableContext: this.createCallableContext(),
+        provider: descriptor.data,
+      });
+    } catch (error) {
+      console.warn("[codemode-session] appended provider descriptor is not dispatchable", error);
+      return;
+    }
+
+    const registry = this.readToolProviderRegistry();
+    registry[toolProviderRegistryKey(descriptor.data.path)] = descriptor.data;
+    this.writeToolProviderRegistry(registry);
   }
 }
 

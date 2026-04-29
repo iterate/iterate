@@ -116,6 +116,24 @@ function AppSidebarNav({ organizationSlug }: AppSidebarProps) {
                 <SidebarMenuSubButton
                   render={
                     <Link
+                      to="/orgs/$organizationSlug/projects/$projectSlug/presets"
+                      params={{ organizationSlug, projectSlug: project.slug }}
+                    />
+                  }
+                  isActive={Boolean(
+                    matchRoute({
+                      to: "/orgs/$organizationSlug/projects/$projectSlug/presets",
+                      params: { organizationSlug, projectSlug: project.slug },
+                    }),
+                  )}
+                >
+                  <span>Presets</span>
+                </SidebarMenuSubButton>
+              </SidebarMenuSubItem>
+              <SidebarMenuSubItem>
+                <SidebarMenuSubButton
+                  render={
+                    <Link
                       to="/orgs/$organizationSlug/projects/$projectSlug/settings"
                       params={{ organizationSlug, projectSlug: project.slug }}
                     />

@@ -1,4 +1,7 @@
 import { spawn } from "node:child_process";
+import { promises as dns } from "node:dns";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
 import { stripAnsi } from "../../packages/shared/src/jonasland/strip-ansi.ts";
@@ -137,6 +140,7 @@ export async function syncCloudflarePreviewForPullRequest(
       semaphoreBaseUrl: string;
     }) => PreviewSemaphoreResourceClient;
     dopplerProject: string;
+    excludedPreviewSlots?: number[];
     paths: readonly string[];
     previewResourceType: string;
     previewTestBaseUrlEnvVar: string;
@@ -209,6 +213,7 @@ export async function deployCloudflarePreviewForPullRequest(
       semaphoreBaseUrl: string;
     }) => PreviewSemaphoreResourceClient;
     dopplerProject: string;
+    excludedPreviewSlots?: number[];
     paths: readonly string[];
     previewResourceType: string;
     signal?: AbortSignal;
@@ -512,6 +517,7 @@ async function createPreviewEnvironment(
       semaphoreBaseUrl: string;
     }) => PreviewSemaphoreResourceClient;
     dopplerProject: string;
+    excludedPreviewSlots?: number[];
     previewResourceType: string;
     signal?: AbortSignal;
     workingDirectory: string;
@@ -532,9 +538,12 @@ async function createPreviewEnvironment(
       appSlug: params.appSlug,
       type: params.previewResourceType,
     });
-    lease = await semaphore.acquire({
-      type: params.previewResourceType,
+    lease = await acquireSupportedPreviewLease({
+      excludedPreviewSlots: params.excludedPreviewSlots,
+      appSlug: params.appSlug,
       leaseMs: params.leaseMs,
+      previewResourceType: params.previewResourceType,
+      semaphore,
       waitMs: params.waitMs,
     });
     const previewEnvironment = derivePreviewEnvironment({
@@ -757,6 +766,70 @@ function derivePreviewEnvironment(input: {
   };
 }
 
+async function acquireSupportedPreviewLease(input: {
+  appSlug: string;
+  excludedPreviewSlots?: number[];
+  leaseMs: number;
+  previewResourceType: string;
+  semaphore: PreviewSemaphoreResourceClient;
+  waitMs?: number;
+}) {
+  const skippedUnsupported: string[] = [];
+  const excludedPreviewSlots = new Set(input.excludedPreviewSlots ?? []);
+
+  for (;;) {
+    const lease = await input.semaphore.acquire({
+      type: input.previewResourceType,
+      leaseMs: input.leaseMs,
+      waitMs: input.waitMs,
+    });
+
+    if (
+      isSupportedPreviewEnvironmentSlug({
+        appSlug: input.appSlug,
+        excludedPreviewSlots,
+        slug: lease.slug,
+      })
+    ) {
+      return lease;
+    }
+
+    skippedUnsupported.push(lease.slug);
+    await input.semaphore.release({
+      type: input.previewResourceType,
+      slug: lease.slug,
+      leaseId: lease.leaseId,
+    });
+
+    if (skippedUnsupported.length >= 10) {
+      throw new Error(
+        `No supported ${input.appSlug} preview slots are available. Skipped: ${skippedUnsupported.join(", ")}.`,
+      );
+    }
+  }
+}
+
+export function isSupportedPreviewEnvironmentSlug(input: {
+  appSlug: string;
+  excludedPreviewSlots?: ReadonlySet<number> | readonly number[];
+  slug: string;
+}) {
+  const slot = parsePreviewSlot({ appSlug: input.appSlug, slug: input.slug });
+  if (slot === null) return false;
+  const excludedPreviewSlots =
+    input.excludedPreviewSlots instanceof Set
+      ? input.excludedPreviewSlots
+      : new Set(input.excludedPreviewSlots ?? []);
+  return !excludedPreviewSlots.has(slot);
+}
+
+function parsePreviewSlot(input: { appSlug: string; slug: string }) {
+  const prefix = `${input.appSlug}-preview-`;
+  if (!input.slug.startsWith(prefix)) return null;
+  const slot = Number(input.slug.slice(prefix.length));
+  return Number.isInteger(slot) && slot > 0 ? slot : null;
+}
+
 function hasPreviewDestroyPayload(
   entry: CloudflarePreviewEntryType | undefined,
 ): entry is CloudflarePreviewEntryType & {
@@ -857,16 +930,12 @@ async function waitForHttpReadiness(params: { signal?: AbortSignal; timeoutMs: n
 
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(params.url, {
-        method: "GET",
-        redirect: "follow",
-        signal: params.signal,
-      });
-      if (response.ok) {
+      const status = await fetchReadinessStatus(params.url, params.signal);
+      if (status >= 200 && status < 300) {
         return { ok: true as const };
       }
 
-      lastFailure = `Readiness check returned ${response.status} for ${params.url.toString()}.`;
+      lastFailure = `Readiness check returned ${status} for ${params.url.toString()}.`;
     } catch (error) {
       lastFailure = formatPreviewErrorMessage(error);
     }
@@ -878,6 +947,70 @@ async function waitForHttpReadiness(params: { signal?: AbortSignal; timeoutMs: n
     message: `Timed out waiting for preview readiness at ${params.url.toString()}. ${lastFailure}`,
     ok: false as const,
   };
+}
+
+async function fetchReadinessStatus(url: URL, signal: AbortSignal | undefined): Promise<number> {
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      redirect: "follow",
+      signal,
+    });
+    return response.status;
+  } catch (error) {
+    if (!isDnsLookupError(error)) {
+      throw error;
+    }
+
+    return await requestStatusWithDnsResolve(url, signal);
+  }
+}
+
+async function requestStatusWithDnsResolve(url: URL, signal: AbortSignal | undefined) {
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(`Unsupported readiness URL protocol: ${url.protocol}`);
+  }
+
+  const addresses = await dns.resolve4(url.hostname);
+  const address = addresses[0];
+  if (!address) {
+    throw new Error(`No A record found for ${url.hostname}`);
+  }
+
+  const request = url.protocol === "https:" ? httpsRequest : httpRequest;
+  const resolvedUrl = new URL(url);
+  resolvedUrl.hostname = address;
+
+  return await new Promise<number>((resolve, reject) => {
+    const req = request(
+      resolvedUrl,
+      {
+        headers: { Host: url.host },
+        method: "GET",
+        servername: url.hostname,
+        signal,
+      },
+      (response) => {
+        const statusCode = response.statusCode ?? 0;
+        response.resume();
+        response.on("end", () => resolve(statusCode));
+      },
+    );
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+function isDnsLookupError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const cause = "cause" in error ? error.cause : null;
+  return (
+    ("code" in error && error.code === "ENOTFOUND") ||
+    (cause instanceof Error && "code" in cause && cause.code === "ENOTFOUND")
+  );
 }
 
 async function shouldSyncPreviewEnvironment(params: {

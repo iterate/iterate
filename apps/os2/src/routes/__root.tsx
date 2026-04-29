@@ -73,7 +73,6 @@ function RootComponent() {
         signInUrl={config.clerk.signInUrl}
         signUpUrl={config.clerk.signUpUrl}
         afterSignOutUrl={config.clerk.signInUrl}
-        taskUrls={{ "choose-organization": "/organization" }}
       >
         <Outlet />
       </ClerkProvider>

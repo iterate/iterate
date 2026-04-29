@@ -16,14 +16,13 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { ToolProviderDescriptor } from "@iterate-com/shared/codemode/types";
-
-interface CachedTool {
-  name: string;
-  description?: string;
-  inputSchema?: Record<string, unknown>;
-}
+import {
+  type CachedMcpTool,
+  connectMcpClient,
+  describeMcpToolFunctions,
+  executeMcpToolFunction,
+} from "./mcp-client-bridge-core.ts";
 
 /**
  * Each DO instance bridges a single remote MCP server. The server URL is
@@ -32,7 +31,7 @@ interface CachedTool {
  */
 export class McpClientBridge extends DurableObject {
   #client: Client | null = null;
-  #tools: CachedTool[] | null = null;
+  #tools: CachedMcpTool[] | null = null;
 
   private async ensureConnected() {
     if (this.#client) return;
@@ -42,17 +41,9 @@ export class McpClientBridge extends DurableObject {
     if (!serverUrl)
       throw new Error("McpClientBridge DO must be created with a name (the MCP server URL)");
 
-    const transport = new StreamableHTTPClientTransport(new URL(serverUrl));
-    const client = new Client({ name: "os2-mcp-bridge", version: "1.0.0" });
-    await client.connect(transport);
-    this.#client = client;
-
-    const response = await client.listTools();
-    this.#tools = response.tools.map((t) => ({
-      name: t.name,
-      description: t.description,
-      inputSchema: t.inputSchema as Record<string, unknown> | undefined,
-    }));
+    const connection = await connectMcpClient({ serverUrl });
+    this.#client = connection.client;
+    this.#tools = connection.tools;
   }
 
   /**
@@ -63,36 +54,11 @@ export class McpClientBridge extends DurableObject {
   async executeToolFunction(input: { path: string[]; payload: unknown }) {
     await this.ensureConnected();
 
-    const toolName = input.path[0];
-    if (!toolName)
-      throw new Error("executeToolFunction requires path with at least one segment (tool name)");
-
-    const args =
-      input.payload != null && typeof input.payload === "object" && !Array.isArray(input.payload)
-        ? (input.payload as Record<string, unknown>)
-        : {};
-
-    const result = await this.#client!.callTool({ name: toolName, arguments: args });
-
-    if (result.structuredContent != null) return result.structuredContent;
-
-    if (result.isError) {
-      const message =
-        extractTextContent(result.content).join("\n") || "MCP tool function call failed";
-      throw new Error(message);
-    }
-
-    const textParts = extractTextContent(result.content);
-    if (textParts.length > 0) {
-      const text = textParts.join("\n");
-      try {
-        return JSON.parse(text);
-      } catch {
-        return text;
-      }
-    }
-
-    return result;
+    return await executeMcpToolFunction({
+      client: this.#client!,
+      path: input.path,
+      payload: input.payload,
+    });
   }
 
   /**
@@ -102,19 +68,7 @@ export class McpClientBridge extends DurableObject {
    */
   async describeToolFunctions() {
     await this.ensureConnected();
-    const tools = this.#tools ?? [];
-
-    if (tools.length === 0) {
-      return { typeDefinitions: "/** No tool functions found on MCP server */" };
-    }
-
-    const lines = tools.map((tool) => {
-      const desc = tool.description ?? tool.name;
-      const safeName = tool.name.replace(/[^a-zA-Z0-9_$]/g, "_");
-      return `  /** ${desc} */\n  ${safeName}(input: Record<string, unknown>): Promise<unknown>;`;
-    });
-
-    return { typeDefinitions: `{\n${lines.join("\n")}\n}` };
+    return describeMcpToolFunctions(this.#tools ?? []);
   }
 }
 
@@ -151,25 +105,4 @@ export function createMcpClientProvider(options: {
       rpcMethod: "describeToolFunctions",
     },
   };
-}
-
-function extractTextContent(content: unknown) {
-  if (!Array.isArray(content)) {
-    return [];
-  }
-
-  return content.flatMap((item) => {
-    if (
-      item != null &&
-      typeof item === "object" &&
-      "type" in item &&
-      item.type === "text" &&
-      "text" in item &&
-      typeof item.text === "string"
-    ) {
-      return [item.text];
-    }
-
-    return [];
-  });
 }

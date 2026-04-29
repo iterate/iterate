@@ -37,6 +37,7 @@ export interface IterateMcpServerProps extends Record<string, unknown> {
 
 const sessionSlugStorageKey = "mcpServerSessionSlug";
 const eventTypePrefix = "https://events.iterate.com/mcp-server";
+const requiredToolScope = "profile";
 
 export class IterateMcpServer extends McpAgent<McpServerEnv, unknown, IterateMcpServerProps> {
   server = new McpServer({
@@ -105,6 +106,7 @@ export class IterateMcpServer extends McpAgent<McpServerEnv, unknown, IterateMcp
         const invocationId = `mcp_tool_${crypto.randomUUID()}`;
         const startedAt = Date.now();
         const auth = this.requireAuthProps();
+        this.requireScope(auth, requiredToolScope);
 
         await this.emitLifecycleEvent("tool-invocation-started", {
           auth: summarizeAuthProps(auth),
@@ -146,6 +148,7 @@ export class IterateMcpServer extends McpAgent<McpServerEnv, unknown, IterateMcp
       },
       async ({ code }) => {
         const auth = this.requireAuthProps();
+        this.requireScope(auth, requiredToolScope);
 
         if (!this.env.LOADER) {
           return {
@@ -257,6 +260,12 @@ export class IterateMcpServer extends McpAgent<McpServerEnv, unknown, IterateMcp
     }
 
     return this.props;
+  }
+
+  private requireScope(props: IterateMcpServerProps, scope: string) {
+    if (!props.scopes.includes(scope)) {
+      throw new Error(`MCP token is missing required scope: ${scope}`);
+    }
   }
 
   private async getSessionStreamPath() {

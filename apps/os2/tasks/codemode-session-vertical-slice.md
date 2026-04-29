@@ -15,9 +15,9 @@ worker.
 - tiny worker: `codemode-session-do`
 - Durable Object class: `CodemodeSession`
 - main OS2 worker binding: `CODEMODE_SESSION`
-- init params: `{ name: string; streamPath: StreamPath }`
-- public identity: `streamPath`
-- DO name: derived from `{ streamPath }` using the lifecycle mixin helper
+- init params: `{ projectId: string; streamPath: StreamPath }`
+- identity: `{ projectId, streamPath }`
+- DO name: derived from `{ projectId, streamPath }` using the lifecycle mixin helper
 - D1 catalog: existing OS2 D1 bound as `DO_CATALOG`
 - event app access: call events service directly for now
 
@@ -42,7 +42,9 @@ Use the shared durable object utils:
 
 Inherited lifecycle API is not domain API. Callers should use
 `deriveDurableObjectNameFromInitParams()` and `initialize()` until the typed
-helper stops tripping deep TypeScript instantiation in OS2.
+helper stops tripping deep TypeScript instantiation in OS2. The lifecycle
+`name` is derived from the Codemode Session domain init params: stable
+`projectId` and `streamPath`.
 
 ## Current Slice
 

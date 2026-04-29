@@ -1,9 +1,4 @@
 import { env as workerEnv } from "cloudflare:workers";
-
-// Re-export rpc-targets so loopback-binding callables can resolve them from ctx.exports.
-// https://developers.cloudflare.com/workers/runtime-apis/context/#exports
-export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
-export { McpClientBridge } from "~/rpc-targets/mcp-client-bridge.ts";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { withEvlog } from "@iterate-com/shared/apps/logging/with-evlog";
 import { NitroWebSocketResponse } from "@iterate-com/shared/nitro-ws-response";
@@ -16,6 +11,11 @@ import { createD1Client } from "sqlfu";
 import manifest, { AppConfig } from "~/app.ts";
 import type { AppContext } from "~/context.ts";
 import type { IterateMcpServerProps } from "~/durable-objects/iterate-mcp-server.ts";
+
+// Re-export rpc-targets so loopback-binding callables can resolve them from ctx.exports.
+// https://developers.cloudflare.com/workers/runtime-apis/context/#exports
+export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
+export { McpClientBridge } from "~/rpc-targets/mcp-client-bridge.ts";
 
 const config = parseAppConfigFromEnv({
   configSchema: AppConfig,
@@ -90,9 +90,10 @@ function parseProjectHostnameBases(value: string | undefined) {
 
 const mcpCorsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "Authorization, Content-Type, Mcp-Session-Id",
+  "Access-Control-Allow-Headers":
+    "Authorization, Content-Type, Mcp-Session-Id, Mcp-Protocol-Version",
   "Access-Control-Expose-Headers": "WWW-Authenticate, Mcp-Session-Id",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
 };
 
 function isMcpProtectedResourceMetadataRequest(url: URL) {
@@ -221,6 +222,10 @@ function readOrganizationSlugClaim(claims: Record<string, unknown>) {
 function readOrganizationPermissionsClaim(claims: Record<string, unknown>) {
   const organization = readRecordClaim(claims, "o");
   const permissions = organization.per;
+  if (typeof permissions === "string") {
+    return permissions.split(/[,\s]+/).filter(Boolean);
+  }
+
   return Array.isArray(permissions) ? permissions.filter((value) => typeof value === "string") : [];
 }
 

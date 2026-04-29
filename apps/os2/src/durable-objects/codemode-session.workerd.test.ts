@@ -5,7 +5,7 @@ import { describe, expect, test } from "vitest";
 import type { CodemodeSession } from "./codemode-session.ts";
 
 type CodemodeSessionStub = DurableObjectStub<CodemodeSession> & {
-  initialize(params: { name: string; streamPath: StreamPath }): Promise<unknown>;
+  initialize(params: { name: string; projectId: string; streamPath: StreamPath }): Promise<unknown>;
   registerToolProvider(input: { provider: ToolProviderDescriptorInput }): Promise<Event>;
   callToolFunction(input: {
     path: string[];
@@ -159,14 +159,15 @@ describe("CodemodeSession provider-to-provider calls", () => {
 });
 
 async function initializeSession(streamPath: StreamPath) {
+  const projectId = "proj__test__codemodesession";
   const name = deriveDurableObjectNameFromInitParams({
-    initParams: { streamPath },
+    initParams: { projectId, streamPath },
   });
   const session = (env as TestEnv).CODEMODE_SESSION.getByName(
     name,
   ) as unknown as CodemodeSessionStub;
 
-  await session.initialize({ name, streamPath });
+  await session.initialize({ name, projectId, streamPath });
   return session;
 }
 

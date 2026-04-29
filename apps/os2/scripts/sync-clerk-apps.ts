@@ -20,6 +20,16 @@ type ClerkOAuthApplication = {
   client_id: string;
 };
 
+const mcpOAuthScopes = ["openid", "email", "profile"];
+const mcpOAuthApplicationPatch = {
+  name: "OS2 MCP / CLI",
+  public: true,
+  pkce_required: true,
+  consent_screen_enabled: true,
+  scopes: [...mcpOAuthScopes, "offline_access"].join(" "),
+  redirect_uris: ["http://127.0.0.1/*"],
+};
+
 type Target = {
   dopplerConfig: string;
   clerkAppName: string;
@@ -185,7 +195,23 @@ async function findOrCreateOAuthApplication(applicationId: string) {
   ) as { data: ClerkOAuthApplication[] };
 
   const match = existing.data.find((app) => app.name === "OS2 MCP / CLI");
-  if (match) return match;
+  if (match) {
+    return JSON.parse(
+      exec("clerk", [
+        "api",
+        `/oauth_applications/${match.id}`,
+        "--app",
+        applicationId,
+        "--instance",
+        "dev",
+        "--method",
+        "PATCH",
+        "--data",
+        JSON.stringify(mcpOAuthApplicationPatch),
+        "--yes",
+      ]),
+    ) as ClerkOAuthApplication;
+  }
 
   return JSON.parse(
     exec("clerk", [
@@ -196,13 +222,7 @@ async function findOrCreateOAuthApplication(applicationId: string) {
       "--instance",
       "dev",
       "--data",
-      JSON.stringify({
-        name: "OS2 MCP / CLI",
-        public: true,
-        consent_screen_enabled: true,
-        scopes: "email offline_access profile",
-        redirect_uris: [],
-      }),
+      JSON.stringify(mcpOAuthApplicationPatch),
       "--yes",
     ]),
   ) as ClerkOAuthApplication;
@@ -248,7 +268,7 @@ async function setDopplerSecrets(
     ["APP_CONFIG_CLERK__SECRET_KEY", instance.secret_key!],
     ["APP_CONFIG_CLERK__JWT_KEY", jwtKey.toString()],
     ["APP_CONFIG_CLERK__OAUTH_CLIENT_ID", oauthApplication.client_id],
-    ["APP_CONFIG_CLERK__MCP_OAUTH_SCOPES", JSON.stringify(["email", "profile"])],
+    ["APP_CONFIG_CLERK__MCP_OAUTH_SCOPES", JSON.stringify(mcpOAuthScopes)],
   ]);
 
   for (const [key, value] of secrets) {

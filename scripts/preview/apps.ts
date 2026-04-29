@@ -17,6 +17,7 @@ export type CloudflarePreviewApp = {
   displayName: string;
   appPath: `apps/${string}`;
   dopplerProject: string;
+  excludedPreviewSlots?: number[];
   paths: string[];
   previewResourceType: string;
   previewTestBaseUrlEnvVar: string;
@@ -69,6 +70,7 @@ export const cloudflarePreviewApps = {
     displayName: "OS",
     appPath: "apps/os2",
     dopplerProject: "os2",
+    excludedPreviewSlots: [1],
     paths: ["apps/os2/**", "apps/os2-contract/**"],
     previewResourceType: "os2-preview-environment",
     previewTestBaseUrlEnvVar: "OS2_BASE_URL",

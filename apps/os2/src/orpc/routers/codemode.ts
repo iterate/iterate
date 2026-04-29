@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import { createEventsClient, type Event } from "@iterate-com/events-contract/sdk";
+import { createEventsClient, type Event, type EventInput } from "@iterate-com/events-contract/sdk";
 import { CodemodeExecutor } from "@iterate-com/shared/codemode/executor";
 import { resolveToolProviderDescriptor } from "@iterate-com/shared/codemode/resolve";
 import { validateProviderPaths } from "@iterate-com/shared/codemode/validate";
@@ -7,6 +7,8 @@ import type { CodemodeEvent, ToolProviderDescriptor } from "@iterate-com/shared/
 import type { CallableContext } from "@iterate-com/shared/callable/types.ts";
 import { deriveDurableObjectNameFromInitParams } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import type { AppContext } from "~/context.ts";
+import { getProjectById } from "~/db/queries/.generated/index.ts";
+import type { ActiveOrganizationAuth } from "~/lib/auth.ts";
 import { activeOrganizationMiddleware, os } from "~/orpc/orpc.ts";
 
 export const codemodeRouter = {
@@ -15,10 +17,15 @@ export const codemodeRouter = {
       .use(activeOrganizationMiddleware)
       .handler(async ({ input, context }) => {
         const result = await executeScriptOnSession({
+          activeOrganization: context.activeOrganization,
           code: input.code,
           context,
+          events: input.events,
+          projectId: input.projectId,
           providers: input.providers,
-          streamPath: input.streamPath ?? defaultStreamPathForBlock(generateBlockId()),
+          streamPath:
+            input.streamPath ??
+            defaultStreamPathForProjectBlock(input.projectId, generateBlockId()),
         });
         return {
           event: result.event,
@@ -53,12 +60,16 @@ export const codemodeRouter = {
       const now = () => new Date().toISOString();
 
       if (context.codemodeSession) {
-        const streamPath = input.streamPath ?? defaultStreamPathForBlock(blockId);
+        const streamPath =
+          input.streamPath ?? defaultStreamPathForProjectBlock(input.projectId, blockId);
 
         try {
           const result = await executeScriptOnSession({
+            activeOrganization: context.activeOrganization,
             code: input.code,
             context,
+            events: input.events,
+            projectId: input.projectId,
             providers: input.providers,
             streamPath,
           });
@@ -232,8 +243,11 @@ export const codemodeRouter = {
 };
 
 async function executeScriptOnSession(input: {
+  activeOrganization: ActiveOrganizationAuth;
   code: string;
   context: AppContext;
+  events: EventInput[];
+  projectId: string;
   providers: ToolProviderDescriptor[];
   streamPath: string;
 }) {
@@ -241,6 +255,16 @@ async function executeScriptOnSession(input: {
   if (!context.codemodeSession) {
     throw new ORPCError("INTERNAL_SERVER_ERROR", {
       message: "CODEMODE_SESSION binding not available.",
+    });
+  }
+
+  const project = await getProjectById(context.db, {
+    clerkOrgId: input.activeOrganization.orgId,
+    id: input.projectId,
+  });
+  if (!project) {
+    throw new ORPCError("NOT_FOUND", {
+      message: `Project ${input.projectId} not found`,
     });
   }
 
@@ -252,14 +276,21 @@ async function executeScriptOnSession(input: {
   }
 
   const sessionName = deriveDurableObjectNameFromInitParams({
-    initParams: { streamPath: input.streamPath },
+    initParams: { projectId: input.projectId, streamPath: input.streamPath },
   });
   const session = context.codemodeSession.getByName(
     sessionName,
   ) as unknown as CodemodeSessionRpcStub;
-  await session.initialize({ name: sessionName, streamPath: input.streamPath });
+  await session.initialize({
+    name: sessionName,
+    projectId: input.projectId,
+    streamPath: input.streamPath,
+  });
 
   const registeredProviderEvents: Event[] = [];
+  for (const event of input.events) {
+    await session.append(event);
+  }
   for (const provider of input.providers) {
     registeredProviderEvents.push((await session.registerToolProvider({ provider })) as Event);
   }
@@ -281,8 +312,8 @@ function generateBlockId() {
   return id;
 }
 
-function defaultStreamPathForBlock(blockId: string) {
-  return `/codemode-sessions/${blockId}`;
+function defaultStreamPathForProjectBlock(projectId: string, blockId: string) {
+  return `/projects/${projectId}/codemode-sessions/${blockId}`;
 }
 
 function findDuplicateProviderPath(paths: string[][]) {
@@ -297,7 +328,8 @@ function findDuplicateProviderPath(paths: string[][]) {
 }
 
 type CodemodeSessionRpcStub = {
-  initialize(params: { name: string; streamPath: string }): Promise<unknown>;
+  initialize(params: { name: string; projectId: string; streamPath: string }): Promise<unknown>;
+  append(input: EventInput): Promise<unknown>;
   registerToolProvider(input: { provider: ToolProviderDescriptor }): Promise<unknown>;
   executeScript(input: { code: string }): Promise<unknown>;
 };

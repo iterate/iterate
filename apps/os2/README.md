@@ -122,24 +122,41 @@ First-party references:
   https://clerk.com/docs/nextjs/guides/ai/mcp/build-mcp-server
 - Clerk OAuth implementation:
   https://clerk.com/docs/guides/configure/auth-strategies/oauth/how-clerk-implements-oauth
+- Clerk OAuth application create/update API:
+  https://clerk.com/docs/reference/backend/oauth-applications/create and
+  https://clerk.com/docs/reference/backend/oauth-applications/update
+- Clerk Google social connection:
+  https://clerk.com/docs/authentication/social-connections/google
+- Clerk CLI:
+  https://clerk.com/docs/cli
 - Cloudflare `McpAgent` auth props:
   https://developers.cloudflare.com/agents/model-context-protocol/mcp-agent-api/
 - oRPC context and middleware:
   https://orpc.dev/docs/context and https://orpc.dev/docs/middleware
 
-Required Clerk dashboard setup:
+Clerk apps and Doppler config are managed by
+`apps/os2/scripts/sync-clerk-apps.ts`. Re-run it after changing Clerk auth
+shape so every OS2 dev, preview, and prd Doppler config gets the same schema
+keys and the matching Clerk app/OAuth app configuration.
+
+Required Clerk setup:
 
 1. Enable Organizations for the Clerk application used by OS2.
 2. Configure the app to require organization context for OS2 usage. OS2 also
    hides Clerk Personal Account mode in the sidebar with `hidePersonal`.
 3. Copy the Clerk publishable key, secret key, and JWT public key into OS2
    runtime config.
-4. Create a Clerk OAuth Application for OS2 MCP clients. Keep token format as
-   JWT, enable public/PKCE clients, and enable Dynamic Client Registration for
-   MCP clients that self-register.
+4. Create/update a Clerk OAuth Application for OS2 MCP/CLI clients. Keep token
+   format as JWT, enable public/PKCE clients, require consent, add the loopback
+   redirect URI for CLI auth, and enable Dynamic Client Registration for MCP
+   clients that self-register.
 5. The MCP OAuth application only needs Clerk-supported data scopes such as
    `openid`, `email`, and `profile`; OS2 authorization remains org/project
    scoped in app code.
+6. Google social login is enabled for dev/preview apps through Clerk's shared
+   development credentials. Production Clerk instances require custom Google
+   OAuth credentials and the exact Clerk Authorized Redirect URI configured in
+   Google Cloud.
 
 `/mcp` is a protected OAuth resource. OS2 publishes RFC 9728 metadata at
 `/.well-known/oauth-protected-resource` and
@@ -158,6 +175,7 @@ OS2 user-facing app routes are organization-scoped:
 - `/orgs/$organizationSlug/projects`
 - `/orgs/$organizationSlug/projects/$projectSlug`
 - `/orgs/$organizationSlug/projects/$projectSlug/run-code`
+- `/orgs/$organizationSlug/projects/$projectSlug/presets`
 - `/orgs/$organizationSlug/projects/$projectSlug/settings`
 
 The project root redirects to `run-code`. Project route reads are scoped by the
@@ -240,6 +258,8 @@ schema's camelCase shape. For OS:
 - `APP_CONFIG_CLERK__JWT_KEY='-----BEGIN PUBLIC KEY-----...'` -> `clerk.jwtKey`
 - `APP_CONFIG_CLERK__OAUTH_CLIENT_ID=...` -> `clerk.oauthClientId`
 - `APP_CONFIG_CLERK__OAUTH_CLIENT_SECRET=...` -> `clerk.oauthClientSecret`
+- `APP_CONFIG_CLERK__MCP_OAUTH_SCOPES=["openid","email","profile"]` ->
+  `clerk.mcpOauthScopes`
 - `APP_CONFIG_PROJECT_HOSTNAME_BASES=["iterate2.app"]` -> `projectHostnameBases`
 - `APP_CONFIG_TYPE_ID_PREFIX=os` -> `typeIdPrefix`
 - `APP_CONFIG_LOGS__STDOUT_FORMAT=pretty` -> `logs.stdoutFormat`

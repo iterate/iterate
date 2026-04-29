@@ -82,9 +82,12 @@ export const orpc = createTanstackQueryUtils(orpcClient);
  * The log stream demo needs explicit transport switching between OpenAPI fetch
  * and the websocket endpoint, so we keep the browser-only transport helpers here.
  */
-export function createBrowserWebSocketClient() {
+export function createBrowserWebSocketClient(options?: { organizationSlug?: string }) {
   const url = new URL("/api/orpc-ws", window.location.origin);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  if (options?.organizationSlug) {
+    url.searchParams.set("organizationSlug", options.organizationSlug);
+  }
   const websocket = new WebSocket(url.toString());
   const client = createORPCClient(new WebSocketRPCLink({ websocket })) as OrpcClient;
 

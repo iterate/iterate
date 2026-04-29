@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { ORPCError } from "@orpc/client";
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
+import { useAuth } from "@clerk/tanstack-react-start";
 import type { Event } from "@iterate-com/events-contract";
 import { Button } from "@iterate-com/ui/components/button";
-import { createBrowserOpenApiClient, createBrowserWebSocketClient } from "~/orpc/client.ts";
+import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
+import { createBrowserOpenApiClient, createBrowserWebSocketClient, orpc } from "~/orpc/client.ts";
 
 type RunStatus = "idle" | "connecting" | "streaming" | "completed" | "error";
 
@@ -18,12 +21,35 @@ export const Route = createFileRoute("/_app/orgs/$organizationSlug/projects/$pro
 );
 
 function CodemodePage() {
+  const params = Route.useParams();
+  const { orgSlug } = useAuth();
+  const { data: project } = useQuery({
+    ...orpc.projects.findBySlug.queryOptions({ input: { slug: params.projectSlug } }),
+    staleTime: 30_000,
+  });
+  const { data: presetsData } = useQuery({
+    ...orpc.projects.presets.list.queryOptions({ input: { projectId: project?.id ?? "" } }),
+    enabled: Boolean(project),
+    staleTime: 30_000,
+  });
   const [code, setCode] = useState('async (ctx) => {\n  console.log("hello");\n  return 1 + 1;\n}');
+  const [selectedPresetId, setSelectedPresetId] = useState("");
   const [events, setEvents] = useState<Event[]>([]);
   const [status, setStatus] = useState<RunStatus>("idle");
   const [lastError, setLastError] = useState<string | null>(null);
   const [runToken, setRunToken] = useState(0);
   const logEndRef = useRef<HTMLDivElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const wsClientRef = useRef<ReturnType<typeof createBrowserWebSocketClient> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+      wsClientRef.current?.close();
+      abortControllerRef.current = null;
+      wsClientRef.current = null;
+    };
+  }, [orgSlug, params.organizationSlug]);
 
   useEffect(() => {
     if (runToken === 0) return;
@@ -31,7 +57,9 @@ function CodemodePage() {
     const controller = new AbortController();
     let isCurrent = true;
     const openApiClient = createBrowserOpenApiClient();
-    const wsClient = createBrowserWebSocketClient();
+    const wsClient = createBrowserWebSocketClient({ organizationSlug: params.organizationSlug });
+    abortControllerRef.current = controller;
+    wsClientRef.current = wsClient;
 
     setStatus("connecting");
     setEvents([]);
@@ -39,8 +67,14 @@ function CodemodePage() {
 
     void (async () => {
       try {
+        if (!project) {
+          throw new Error("Project has not loaded yet.");
+        }
+
+        const presetEvents =
+          presetsData?.presets.find((preset) => preset.id === selectedPresetId)?.events ?? [];
         const started = await openApiClient.codemode.executeScript(
-          { code, providers: [] },
+          { code, events: presetEvents, projectId: project.id, providers: [] },
           { signal: controller.signal },
         );
 
@@ -77,6 +111,12 @@ function CodemodePage() {
       isCurrent = false;
       controller.abort();
       wsClient.close();
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+      }
+      if (wsClientRef.current === wsClient) {
+        wsClientRef.current = null;
+      }
     };
     // runToken is the only trigger -- code is captured at submit time via the closure
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -112,6 +152,20 @@ function CodemodePage() {
             data-testid="codemode-input"
           />
 
+          <NativeSelect
+            className="w-full"
+            value={selectedPresetId}
+            onChange={(event) => setSelectedPresetId(event.target.value)}
+            disabled={!presetsData || presetsData.presets.length === 0}
+          >
+            <NativeSelectOption value="">No preset</NativeSelectOption>
+            {presetsData?.presets.map((preset) => (
+              <NativeSelectOption key={preset.id} value={preset.id}>
+                {preset.name}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+
           {lastError && (
             <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
               {lastError}
@@ -122,7 +176,10 @@ function CodemodePage() {
             <Button
               onClick={handleRun}
               disabled={
-                status === "connecting" || status === "streaming" || code.trim().length === 0
+                !project ||
+                status === "connecting" ||
+                status === "streaming" ||
+                code.trim().length === 0
               }
               data-testid="codemode-run"
             >

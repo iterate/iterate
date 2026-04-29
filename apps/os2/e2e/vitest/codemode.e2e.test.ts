@@ -23,6 +23,14 @@ function requireBaseUrl() {
   return baseUrl;
 }
 
+function requireProjectId() {
+  const projectId = process.env.OS2_E2E_PROJECT_ID?.trim();
+  if (!projectId) {
+    throw new Error("OS2_E2E_PROJECT_ID is required for os2 codemode e2e tests.");
+  }
+  return projectId;
+}
+
 function createClient(baseUrl: string) {
   return createORPCClient(new OpenAPILink(osContract, { url: `${baseUrl}/api` })) as OrpcClient;
 }
@@ -43,10 +51,12 @@ describe("codemode.executeScript", () => {
     const baseUrl = requireBaseUrl();
     const client = createClient(baseUrl);
     const wsClient = createWebSocketClient(baseUrl);
+    const projectId = requireProjectId();
 
     try {
       const started = await client.codemode.executeScript({
         code: "async () => 1 + 1",
+        projectId,
         providers: [],
       });
 
@@ -87,9 +97,11 @@ describe("codemode.execute", () => {
   it("executes simple code and returns a result event stream", async () => {
     const baseUrl = requireBaseUrl();
     const client = createClient(baseUrl);
+    const projectId = requireProjectId();
 
     const stream = await client.codemode.execute({
       code: "async () => 1 + 1",
+      projectId,
       providers: [],
     });
 
@@ -112,9 +124,11 @@ describe("codemode.execute", () => {
   it("returns log events from console.log", async () => {
     const baseUrl = requireBaseUrl();
     const client = createClient(baseUrl);
+    const projectId = requireProjectId();
 
     const stream = await client.codemode.execute({
       code: 'async () => { console.log("hello from sandbox"); return "done"; }',
+      projectId,
       providers: [],
     });
 
@@ -135,9 +149,11 @@ describe("codemode.execute", () => {
   it("generates a blockId when not provided", async () => {
     const baseUrl = requireBaseUrl();
     const client = createClient(baseUrl);
+    const projectId = requireProjectId();
 
     const stream = await client.codemode.execute({
       code: "async () => 42",
+      projectId,
       providers: [],
     });
 
@@ -160,10 +176,12 @@ describe("codemode.execute", () => {
   it("uses caller-provided blockId", async () => {
     const baseUrl = requireBaseUrl();
     const client = createClient(baseUrl);
+    const projectId = requireProjectId();
 
     const stream = await client.codemode.execute({
       code: "async () => 42",
       blockId: "cblk_custom_test_123",
+      projectId,
       providers: [],
     });
 
@@ -180,9 +198,11 @@ describe("codemode.execute", () => {
   it("returns error for code that throws", async () => {
     const baseUrl = requireBaseUrl();
     const client = createClient(baseUrl);
+    const projectId = requireProjectId();
 
     const stream = await client.codemode.execute({
       code: 'async () => { throw new Error("test error"); }',
+      projectId,
       providers: [],
     });
 
