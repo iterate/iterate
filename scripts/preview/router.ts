@@ -75,6 +75,7 @@ function getPreviewAppRuntime(app: (typeof cloudflarePreviewApps)[CloudflarePrev
     commandEnvironment: env,
     createPreviewSemaphoreResourceClient: createPreviewSemaphoreClient,
     dopplerProject: app.dopplerProject,
+    excludedPreviewSlots: app.excludedPreviewSlots,
     previewResourceType: app.previewResourceType,
     previewTestBaseUrlEnvVar: app.previewTestBaseUrlEnvVar,
     previewTestCommandArgs: app.previewTestCommandArgs,
