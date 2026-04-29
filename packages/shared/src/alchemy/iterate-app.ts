@@ -159,7 +159,7 @@ export async function IterateApp<B extends Bindings>(
 
     await Promise.all(
       routeHosts.map((hostname) =>
-        Route(`route-${slugify(hostname)}`, {
+        Route(routeResourceIdForHostname(hostname), {
           pattern: `${hostname}/*`,
           script: worker,
           adopt: true,
@@ -211,6 +211,12 @@ export async function IterateApp<B extends Bindings>(
   }
 
   return { worker, afterFinalize };
+}
+
+function routeResourceIdForHostname(hostname: string) {
+  return hostname.startsWith("*.")
+    ? `route-wildcard-${slugify(hostname.slice(2))}`
+    : `route-${slugify(hostname)}`;
 }
 
 // ---------------------------------------------------------------------------
