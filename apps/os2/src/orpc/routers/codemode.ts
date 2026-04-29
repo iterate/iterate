@@ -191,10 +191,10 @@ export const codemodeRouter = {
 
       yield { blockId, timestamp: now(), type: "codemode-block-added", code: input.code };
 
-      const events: CodemodeEvent[] = [];
+      const events = createAsyncEventQueue<CodemodeEvent>();
       const executor = new CodemodeExecutor({ loader: context.loader });
 
-      const result = await executor.execute({
+      const execution = executor.execute({
         code: input.code,
         providers: resolvedProviders,
         blockId,
@@ -202,10 +202,15 @@ export const codemodeRouter = {
         signal,
       });
 
-      for (const event of events) {
+      void execution.then(
+        () => events.close(),
+        () => events.close(),
+      );
+      for await (const event of events) {
         yield event;
       }
 
+      const result = await execution;
       yield {
         blockId,
         timestamp: now(),
@@ -415,6 +420,48 @@ function stringifyPayloadError(value: unknown) {
     if (typeof message === "string") return message;
   }
   return String(value);
+}
+
+/**
+ * Lets the legacy dynamic-worker executor emit generator events while the
+ * script is still running. `CodemodeExecutor.execute()` reports logs/tool calls
+ * through a callback but resolves only at the end; this queue bridges that
+ * callback shape into the async-iterator shape expected by oRPC streaming.
+ */
+function createAsyncEventQueue<T>() {
+  const values: T[] = [];
+  const waiters: Array<(value: IteratorResult<T>) => void> = [];
+  let closed = false;
+
+  return {
+    push(value: T) {
+      const waiter = waiters.shift();
+      if (waiter) {
+        waiter({ done: false, value });
+        return;
+      }
+      values.push(value);
+    },
+    close() {
+      closed = true;
+      for (const waiter of waiters.splice(0)) {
+        waiter({ done: true, value: undefined });
+      }
+    },
+    async *[Symbol.asyncIterator](): AsyncGenerator<T> {
+      while (true) {
+        const value = values.shift();
+        if (value) {
+          yield value;
+          continue;
+        }
+        if (closed) return;
+        const next = await new Promise<IteratorResult<T>>((resolve) => waiters.push(resolve));
+        if (next.done) return;
+        yield next.value;
+      }
+    },
+  };
 }
 
 function generateBlockId() {

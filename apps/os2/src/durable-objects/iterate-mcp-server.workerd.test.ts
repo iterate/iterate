@@ -34,18 +34,22 @@ describe("IterateMcpServer inbound MCP", () => {
         name: "run_code",
         arguments: {
           code: `async (ctx) => {
-  console.log("hello from inbound mcp");
+  const message = \`hello from \${"inbound mcp"}\`;
+  console.log(message);
   await ctx.codemode.append({
     type: "events.iterate.com/codemode/test-note",
     payload: { source: "inbound-mcp-e2e" },
   });
-  return { value: 6 * 7 };
+  return { message, value: 6 * 7 };
 }`,
         },
       });
 
       expect(result.isError).not.toBe(true);
       expect(extractTextContent(result.content).join("\n")).toContain('"value": 42');
+      expect(extractTextContent(result.content).join("\n")).toContain(
+        '"message": "hello from inbound mcp"',
+      );
       expect(extractTextContent(result.content).join("\n")).toContain("hello from inbound mcp");
 
       const sessionId = transport.sessionId;
@@ -77,7 +81,7 @@ describe("IterateMcpServer inbound MCP", () => {
           expect.objectContaining({
             type: "events.iterate.com/codemode/script-execution-finished",
             payload: expect.objectContaining({
-              result: { value: 42 },
+              result: { message: "hello from inbound mcp", value: 42 },
             }),
           }),
           expect.objectContaining({
