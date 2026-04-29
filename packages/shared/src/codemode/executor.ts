@@ -12,7 +12,7 @@
 
 import { RpcTarget } from "cloudflare:workers";
 import { normalizeCode } from "./normalize.ts";
-import { sanitizeToolName, sanitizeToolPath } from "./utils.ts";
+import { sanitizeToolName } from "./utils.ts";
 import type { ToolProvider, CodemodeEvent } from "./types.ts";
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -158,7 +158,9 @@ export class CodemodeExecutor {
       providerKeys.set(key, safePath);
     }
 
-    // Build proxy initializers for each provider namespace
+    // Build proxy initializers for each provider namespace. Promise-like keys
+    // must stay undefined or `await provider.foo` will treat the proxy itself
+    // as a thenable before a tool function is actually called.
     const proxyInits = providers.map(({ path }) => {
       const safePath = path.map((s) => sanitizeToolName(s));
       const providerKey = safePath.join(".");
@@ -175,7 +177,10 @@ export class CodemodeExecutor {
         ...setupLines,
         `    ${assignTarget} = (() => {`,
         `      const make = (path = []) => new Proxy(async () => {}, {`,
-        `        get: (_, key) => typeof key === "string" ? make([...path, key]) : undefined,`,
+        `        get: (_, key) => {`,
+        `          if (key === "then" || key === "catch" || key === "finally") return undefined;`,
+        `          return typeof key === "string" ? make([...path, key]) : undefined;`,
+        `        },`,
         `        apply: async (_, __, args) => {`,
         `          const resJson = await __dispatchers[${JSON.stringify(providerKey)}].call(JSON.stringify(path), JSON.stringify(args));`,
         `          const data = JSON.parse(resJson);`,

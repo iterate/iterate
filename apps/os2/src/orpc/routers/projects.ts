@@ -336,7 +336,7 @@ export const projectsRouter = {
                 description: input.description ?? null,
                 eventsJson: JSON.stringify(input.events),
               },
-              { id: input.id, projectId: input.projectId },
+              { clerkOrgId: auth.orgId, id: input.id, projectId: input.projectId },
             );
           } catch (error) {
             if (isUniqueConstraintError(error)) {

@@ -2,16 +2,25 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpAgent } from "agents/mcp";
 import type { Connection } from "agents";
 import { z } from "zod";
-import { StreamPath, type EventInput } from "@iterate-com/events-contract";
+import { StreamPath, type Event, type EventInput } from "@iterate-com/events-contract";
 import { createEventsClient } from "@iterate-com/events-contract/sdk";
-import { CodemodeExecutor } from "@iterate-com/shared/codemode/executor";
 import packageJson from "../../package.json" with { type: "json" };
+import {
+  type CodemodeSessionNamespace,
+  startCodemodeScriptOnSession,
+} from "~/codemode/codemode-session-rpc.ts";
 
 /**
- * MCP server for os2, exposed at /mcp on the main worker.
+ * MCP server for os2, exposed at `/mcp` on project hostnames only.
  *
- * Runs as a Durable Object in a separate Worker (`iterate-mcp-server-do`)
- * with its own LOADER binding for sandboxed code execution.
+ * Runs as a Durable Object in a separate Worker (`iterate-mcp-server-do`).
+ * `entry.workerd.ts` verifies Clerk OAuth, resolves the request hostname to a
+ * project, and passes that identity into this Durable Object through McpAgent
+ * props. That mirrors Cloudflare's documented OAuth integration point while
+ * letting Clerk remain the authorization server:
+ * https://developers.cloudflare.com/agents/model-context-protocol/mcp-agent-api/
+ *
+ * Code execution is delegated to the project/stream-scoped CodemodeSession DO.
  *
  * Tools:
  * - run_code: Execute JavaScript in an isolated dynamic worker sandbox
@@ -19,13 +28,15 @@ import packageJson from "../../package.json" with { type: "json" };
  */
 
 interface McpServerEnv {
+  CODEMODE_SESSION: CodemodeSessionNamespace;
   EVENTS_BASE_URL: string;
-  LOADER: WorkerLoader;
   MCP_PROOF_SECRET: string;
   ITERATE_MCP_SERVER: DurableObjectNamespace;
 }
 
 export interface IterateMcpServerProps extends Record<string, unknown> {
+  projectId: string | null;
+  projectSlug: string | null;
   userId: string;
   orgId: string;
   orgRole: string | null;
@@ -36,8 +47,17 @@ export interface IterateMcpServerProps extends Record<string, unknown> {
 }
 
 const sessionSlugStorageKey = "mcpServerSessionSlug";
-const eventTypePrefix = "https://events.iterate.com/mcp-server";
+const eventTypePrefix = "events.iterate.com/mcp-server";
 const requiredToolScope = "profile";
+const mcpEventInputSchema = z
+  .object({
+    idempotencyKey: z.string().optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+    offset: z.number().int().positive().optional(),
+    payload: z.record(z.string(), z.unknown()).optional(),
+    type: z.string(),
+  })
+  .strict();
 
 export class IterateMcpServer extends McpAgent<McpServerEnv, unknown, IterateMcpServerProps> {
   server = new McpServer({
@@ -105,13 +125,15 @@ export class IterateMcpServer extends McpAgent<McpServerEnv, unknown, IterateMcp
       async () => {
         const invocationId = `mcp_tool_${crypto.randomUUID()}`;
         const startedAt = Date.now();
-        const auth = this.requireAuthProps();
+        const auth = this.requireProjectAuthProps();
         this.requireScope(auth, requiredToolScope);
 
         await this.emitLifecycleEvent("tool-invocation-started", {
           auth: summarizeAuthProps(auth),
           input: {},
           invocationId,
+          projectId: auth.projectId,
+          projectSlug: auth.projectSlug,
           toolName: "reveal_secret",
         });
 
@@ -126,6 +148,8 @@ export class IterateMcpServer extends McpAgent<McpServerEnv, unknown, IterateMcp
           input: {},
           invocationId,
           output: response,
+          projectId: auth.projectId,
+          projectSlug: auth.projectSlug,
           result: this.env.MCP_PROOF_SECRET,
           toolName: "reveal_secret",
         });
@@ -144,66 +168,69 @@ export class IterateMcpServer extends McpAgent<McpServerEnv, unknown, IterateMcp
           'Example: console.log("hello"); 1 + 1',
         inputSchema: z.object({
           code: z.string().describe("JavaScript code to execute"),
+          events: z
+            .array(mcpEventInputSchema)
+            .optional()
+            .describe("Event inputs to append to the Codemode Session before executing code."),
         }),
       },
-      async ({ code }) => {
-        const auth = this.requireAuthProps();
+      async ({ code, events = [] }) => {
+        const auth = this.requireProjectAuthProps();
         this.requireScope(auth, requiredToolScope);
 
-        if (!this.env.LOADER) {
-          return {
-            content: [{ type: "text" as const, text: "LOADER binding not available" }],
-            isError: true,
-          };
-        }
-
         const invocationId = `mcp_tool_${crypto.randomUUID()}`;
-        const blockId = `cblk_mcp_${crypto.randomUUID().slice(0, 8)}`;
-        const logs: string[] = [];
         const startedAt = Date.now();
+        const streamPath = await this.getSessionStreamPath();
 
         await this.emitLifecycleEvent("tool-invocation-started", {
           auth: summarizeAuthProps(auth),
-          blockId,
-          input: { code },
+          input: { code, eventCount: events.length },
           invocationId,
+          projectId: auth.projectId,
+          projectSlug: auth.projectSlug,
+          streamPath,
           toolName: "run_code",
         });
 
-        const executor = new CodemodeExecutor({ loader: this.env.LOADER });
         try {
-          const result = await executor.execute({
+          const started = await startCodemodeScriptOnSession({
             code,
+            events: events as EventInput[],
+            namespace: this.env.CODEMODE_SESSION,
+            projectId: auth.projectId,
             providers: [],
-            blockId,
-            onEvent: (event) => {
-              if (event.type === "codemode-log-emitted") {
-                logs.push(`[${event.level}] ${event.message}`);
-              }
-            },
+            streamPath,
+          });
+          const output = await waitForScriptExecutionFinished({
+            eventsBaseUrl: this.env.EVENTS_BASE_URL,
+            scriptExecutionRequestedOffset: started.event.offset,
+            streamPath,
           });
 
           const parts: string[] = [];
-          if (logs.length > 0) parts.push(`Console:\n${logs.join("\n")}`);
-          if (result.error) {
-            parts.push(`Error: ${result.error}`);
+          if (output.logs.length > 0) parts.push(`Console:\n${output.logs.join("\n")}`);
+          if (output.error) {
+            parts.push(`Error: ${output.error}`);
           } else {
-            parts.push(`Result: ${JSON.stringify(result.result, null, 2)}`);
+            parts.push(`Result: ${JSON.stringify(output.result, null, 2)}`);
           }
 
           const response = {
             content: [{ type: "text" as const, text: parts.join("\n\n") }],
-            isError: !!result.error,
+            isError: !!output.error,
           };
 
           await this.emitLifecycleEvent("tool-invocation-finished", {
             auth: summarizeAuthProps(auth),
-            blockId,
             durationMs: Date.now() - startedAt,
-            input: { code },
+            input: { code, eventCount: events.length },
             invocationId,
             output: response,
-            result,
+            projectId: auth.projectId,
+            projectSlug: auth.projectSlug,
+            result: output,
+            scriptExecutionRequestedOffset: started.event.offset,
+            streamPath,
             toolName: "run_code",
           });
 
@@ -211,12 +238,14 @@ export class IterateMcpServer extends McpAgent<McpServerEnv, unknown, IterateMcp
         } catch (error) {
           await this.emitLifecycleEvent("tool-invocation-finished", {
             auth: summarizeAuthProps(auth),
-            blockId,
             durationMs: Date.now() - startedAt,
             error: serializeError(error),
-            input: { code },
+            input: { code, eventCount: events.length },
             invocationId,
             isError: true,
+            projectId: auth.projectId,
+            projectSlug: auth.projectSlug,
+            streamPath,
             toolName: "run_code",
           });
 
@@ -254,6 +283,7 @@ export class IterateMcpServer extends McpAgent<McpServerEnv, unknown, IterateMcp
     }
   }
 
+  /** Returns the verified Clerk identity injected by the Worker before McpAgent dispatch. */
   private requireAuthProps() {
     if (!this.props?.userId || !this.props.orgId) {
       throw new Error("MCP request is missing verified Clerk auth props.");
@@ -262,14 +292,32 @@ export class IterateMcpServer extends McpAgent<McpServerEnv, unknown, IterateMcp
     return this.props;
   }
 
+  /**
+   * MCP tools are project-scoped: clients connect to
+   * `<project>.<project-host-base>/mcp`, not a global OS2 MCP endpoint. Keeping
+   * this guard in the DO prevents future tools from accidentally running against
+   * only org-level auth if the Worker routing changes.
+   */
+  private requireProjectAuthProps() {
+    const auth = this.requireAuthProps();
+    if (!auth.projectId || !auth.projectSlug) {
+      throw new Error("MCP tools require a project hostname such as <project>.example.app.");
+    }
+
+    return auth as IterateMcpServerProps & { projectId: string; projectSlug: string };
+  }
+
   private requireScope(props: IterateMcpServerProps, scope: string) {
     if (!props.scopes.includes(scope)) {
       throw new Error(`MCP token is missing required scope: ${scope}`);
     }
   }
 
+  /** Stable event stream for lifecycle and codemode events emitted by one MCP session. */
   private async getSessionStreamPath() {
-    return StreamPath.parse(`/mcp-server-sessions/${await this.getSessionSlug()}`);
+    const auth = this.requireAuthProps();
+    const ownerPath = auth.projectId ? `/projects/${auth.projectId}` : `/orgs/${auth.orgId}`;
+    return StreamPath.parse(`${ownerPath}/mcp-server-sessions/${await this.getSessionSlug()}`);
   }
 
   private async getSessionSlug() {
@@ -322,6 +370,8 @@ function summarizeAuthProps(props: IterateMcpServerProps) {
     orgId: props.orgId,
     orgRole: props.orgRole,
     orgSlug: props.orgSlug,
+    projectId: props.projectId,
+    projectSlug: props.projectSlug,
     scopes: props.scopes,
     userId: props.userId,
   };
@@ -337,6 +387,63 @@ function serializeError(error: unknown) {
   }
 
   return { message: String(error) };
+}
+
+/**
+ * Bridges the request/response shape expected by MCP tools onto CodemodeSession's
+ * event stream. Codemode execution is asynchronous and durable; the MCP tool
+ * waits for the matching `script-execution-finished` event instead of calling a
+ * separate in-memory executor, so web UI code mode and inbound MCP share one
+ * execution path.
+ */
+async function waitForScriptExecutionFinished(input: {
+  eventsBaseUrl: string;
+  scriptExecutionRequestedOffset: number;
+  streamPath: StreamPath;
+}) {
+  const client = createEventsClient(input.eventsBaseUrl);
+  const stream = await client.stream(
+    {
+      afterOffset:
+        input.scriptExecutionRequestedOffset > 1
+          ? input.scriptExecutionRequestedOffset - 1
+          : "start",
+      path: input.streamPath,
+    },
+    { signal: AbortSignal.timeout(60_000) },
+  );
+  const logs: string[] = [];
+
+  for await (const event of stream) {
+    const payload = readPayload(event);
+    if (
+      event.type === "events.iterate.com/codemode/log-emitted" &&
+      payload.scriptExecutionRequestedOffset === input.scriptExecutionRequestedOffset
+    ) {
+      const level = typeof payload.level === "string" ? payload.level : "log";
+      const message = typeof payload.message === "string" ? payload.message : "";
+      logs.push(`[${level}] ${message}`);
+    }
+
+    if (
+      event.type === "events.iterate.com/codemode/script-execution-finished" &&
+      payload.scriptExecutionRequestedOffset === input.scriptExecutionRequestedOffset
+    ) {
+      return {
+        error: typeof payload.error === "string" ? payload.error : undefined,
+        logs,
+        result: payload.result,
+      };
+    }
+  }
+
+  throw new Error("Codemode Script Execution stream ended before a result event was appended.");
+}
+
+function readPayload(event: Event) {
+  return event.payload != null && typeof event.payload === "object"
+    ? (event.payload as Record<string, unknown>)
+    : {};
 }
 
 function slugifySegment(value: string) {

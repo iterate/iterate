@@ -11,6 +11,8 @@ import { createD1Client } from "sqlfu";
 import manifest, { AppConfig } from "~/app.ts";
 import type { AppContext } from "~/context.ts";
 import type { IterateMcpServerProps } from "~/durable-objects/iterate-mcp-server.ts";
+import { getProjectBySlug } from "~/db/queries/.generated/index.ts";
+import { resolveProjectSlugFromHostname } from "~/lib/project-host-routing.ts";
 
 // Re-export rpc-targets so loopback-binding callables can resolve them from ctx.exports.
 // https://developers.cloudflare.com/workers/runtime-apis/context/#exports
@@ -23,6 +25,10 @@ const config = parseAppConfigFromEnv({
   env: workerEnv,
 });
 
+// Cloudflare's McpAgent receives per-request auth through ExecutionContext props.
+// We fill those props after Clerk OAuth verification below, then delegate to the
+// durable MCP handler. First-party ref:
+// https://developers.cloudflare.com/agents/model-context-protocol/mcp-agent-api/
 const mcpHandler = McpAgent.serve("/mcp", { binding: "ITERATE_MCP_SERVER" });
 
 export default {
@@ -36,8 +42,20 @@ export default {
       },
       async ({ log }) => {
         const url = new URL(request.url);
+        const db = createD1Client(env.DB);
+        const projectHostnameBases = parseProjectHostnameBases(env.PROJECT_HOSTNAME_BASES);
         if (isMcpProtectedResourceMetadataRequest(url)) {
           return mcpProtectedResourceMetadataResponse(request, config);
+        }
+
+        const projectHostRootRedirect = await redirectAuthenticatedProjectHostRoot({
+          appConfig: config,
+          projectHostnameBases,
+          request,
+          url,
+        });
+        if (projectHostRootRedirect) {
+          return projectHostRootRedirect;
         }
 
         if (url.pathname === "/mcp" || url.pathname.startsWith("/mcp/")) {
@@ -50,19 +68,41 @@ export default {
             return mcpAuth;
           }
 
+          const projectSlug = resolveProjectSlugFromHostname(url.hostname, projectHostnameBases);
+          if (!projectSlug) {
+            return new Response("MCP is only available at <project>.<project-host-base>/mcp.", {
+              status: 404,
+              headers: mcpCorsHeaders,
+            });
+          }
+
+          const project = await getProjectBySlug(db, {
+            clerkOrgId: mcpAuth.orgId,
+            slug: projectSlug,
+          });
+          if (!project) {
+            return new Response("Project not found for MCP endpoint.", {
+              status: 404,
+              headers: mcpCorsHeaders,
+            });
+          }
+
           const ctxWithProps = cfCtx as ExecutionContext & { props?: IterateMcpServerProps };
-          ctxWithProps.props = mcpAuth;
+          ctxWithProps.props = {
+            ...mcpAuth,
+            projectId: project.id,
+            projectSlug: project.slug,
+          };
           return mcpHandler.fetch(request, env, cfCtx);
         }
 
-        const db = createD1Client(env.DB);
         const context: AppContext = {
           manifest,
           config,
           rawRequest: request,
           db,
           log,
-          projectHostnameBases: parseProjectHostnameBases(env.PROJECT_HOSTNAME_BASES),
+          projectHostnameBases,
           loader: env.LOADER,
           codemodeSession: env.CODEMODE_SESSION,
           callableEnv: env,
@@ -81,11 +121,72 @@ export default {
   },
 };
 
+/** Parses the comma-delimited Worker binding generated from AppConfig projectHostnameBases. */
 function parseProjectHostnameBases(value: string | undefined) {
   return (value ?? "")
     .split(",")
     .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+/**
+ * Sends signed-in users from `<project>.<project-host-base>/` to the canonical
+ * org/project route while preserving the project-host entry point for signed-out
+ * users. This is why an unauthenticated visit to a project hostname can go
+ * through Clerk's `redirect_url` flow and still land on the project after login.
+ *
+ * Clerk documents that sign-in pages should preserve `redirect_url` and use
+ * fallback redirects only when no redirect was provided:
+ * https://clerk.com/docs/guides/development/customize-redirect-urls
+ */
+async function redirectAuthenticatedProjectHostRoot(input: {
+  appConfig: AppConfig;
+  projectHostnameBases: readonly string[];
+  request: Request;
+  url: URL;
+}) {
+  if (input.request.method !== "GET" || input.url.pathname !== "/") return null;
+
+  const projectSlug = resolveProjectSlugFromHostname(
+    input.url.hostname,
+    input.projectHostnameBases,
+  );
+  if (!projectSlug) return null;
+
+  const auth = await tryAuthenticateSessionRequest(input.request, input.appConfig);
+  if (!auth?.orgSlug) return null;
+
+  return Response.redirect(
+    new URL(
+      `/orgs/${encodeURIComponent(auth.orgSlug)}/projects/${encodeURIComponent(projectSlug)}/run-code`,
+      input.url,
+    ),
+    302,
+  );
+}
+
+/**
+ * Best-effort session check used only for the project-host root redirect. The
+ * actual app routes still enforce auth through TanStack Start route loaders, so
+ * failures here intentionally fall through to the normal Clerk sign-in path.
+ */
+async function tryAuthenticateSessionRequest(request: Request, appConfig: AppConfig) {
+  try {
+    const clerk = createClerkClient({
+      secretKey: appConfig.clerk.secretKey.exposeSecret(),
+      publishableKey: appConfig.clerk.publishableKey,
+      jwtKey: appConfig.clerk.jwtKey.exposeSecret(),
+    });
+    const requestState = await clerk.authenticateRequest(request);
+    const sessionAuth = requestState.toAuth() as {
+      isAuthenticated: boolean;
+      orgSlug?: string | null;
+    };
+    if (!sessionAuth.isAuthenticated) return null;
+    return { orgSlug: sessionAuth.orgSlug ?? null };
+  } catch {
+    return null;
+  }
 }
 
 const mcpCorsHeaders = {
@@ -105,6 +206,11 @@ function isMcpProtectedResourceMetadataRequest(url: URL) {
 
 function mcpProtectedResourceMetadataResponse(request: Request, appConfig: AppConfig) {
   const url = new URL(request.url);
+  // MCP OAuth clients discover the Clerk authorization server through RFC 9728
+  // protected-resource metadata. Clerk's helper emits the standard shape and
+  // points clients at the Clerk Frontend API auth server:
+  // https://github.com/clerk/mcp-tools
+  // https://clerk.com/docs/nextjs/mcp/build-mcp-server
   const metadata = generateProtectedResourceMetadata({
     authServerUrl: deriveClerkFrontendApiUrl(appConfig.clerk.publishableKey),
     resourceUrl: new URL("/mcp", url.origin).toString(),
@@ -138,6 +244,10 @@ async function authenticateMcpRequest(request: Request, appConfig: AppConfig) {
       return unauthorizedMcpResponse(request, "Invalid bearer token");
     }
 
+    // `authenticateRequest({ acceptsToken: "oauth_token" })` is the Clerk-owned
+    // validation path for MCP bearer tokens. We read JWT claims only after that
+    // succeeds because OS2 still needs Clerk's org claim shape (`o.id`, `o.rol`,
+    // `o.per`) for local authorization and lifecycle event attribution.
     const claims = await tryReadJwtClaims(token, appConfig);
     const userId = oauthAuth.userId;
     const orgId = readOrganizationIdClaim(claims);
@@ -161,6 +271,8 @@ async function authenticateMcpRequest(request: Request, appConfig: AppConfig) {
       orgPermissions: readOrganizationPermissionsClaim(claims),
       scopes: oauthAuth.scopes.length > 0 ? oauthAuth.scopes : readScopeClaims(claims),
       clientId: oauthAuth.clientId ?? readStringClaim(claims, "client_id"),
+      projectId: null,
+      projectSlug: null,
     } satisfies IterateMcpServerProps;
   } catch {
     return unauthorizedMcpResponse(request, "Invalid bearer token");

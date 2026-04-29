@@ -651,7 +651,11 @@ async function setupDatabase() {
 
   if (isPreviewStage) {
     const planetscaleDb = await Database("planetscale-db", {
-      name: "os-preview",
+      // Keep the existing PlanetScale database name while the public stage name
+      // changes from stg to preview. Renaming this field would make Alchemy
+      // adopt/create a different empty database even though the resource ID is
+      // unchanged.
+      name: "os-staging",
       clusterSize: "PS_10",
       adopt: true,
       arch: "x86",

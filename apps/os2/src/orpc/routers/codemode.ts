@@ -1,11 +1,12 @@
 import { ORPCError } from "@orpc/server";
+import { StreamPath } from "@iterate-com/events-contract";
 import { createEventsClient, type Event, type EventInput } from "@iterate-com/events-contract/sdk";
 import { CodemodeExecutor } from "@iterate-com/shared/codemode/executor";
 import { resolveToolProviderDescriptor } from "@iterate-com/shared/codemode/resolve";
 import { validateProviderPaths } from "@iterate-com/shared/codemode/validate";
 import type { CodemodeEvent, ToolProviderDescriptor } from "@iterate-com/shared/codemode/types";
 import type { CallableContext } from "@iterate-com/shared/callable/types.ts";
-import { deriveDurableObjectNameFromInitParams } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import { startCodemodeScriptOnSession } from "~/codemode/codemode-session-rpc.ts";
 import type { AppContext } from "~/context.ts";
 import { getProjectById } from "~/db/queries/.generated/index.ts";
 import type { ActiveOrganizationAuth } from "~/lib/auth.ts";
@@ -98,15 +99,13 @@ export const codemodeRouter = {
           if (signal?.aborted) return;
 
           yield { blockId, timestamp: now(), type: "codemode-block-added", code: input.code };
-          yield {
+          yield* streamSessionExecutionAsCodemodeEvents({
             blockId,
-            timestamp: now(),
-            type: "codemode-block-result-added",
-            result: {
-              event: result.event,
-              streamPath,
-            },
-          };
+            context,
+            scriptExecutionRequestedOffset: result.event.offset,
+            signal,
+            streamPath,
+          });
         } catch (error) {
           yield {
             blockId,
@@ -275,32 +274,147 @@ async function executeScriptOnSession(input: {
     });
   }
 
-  const sessionName = deriveDurableObjectNameFromInitParams({
-    initParams: { projectId: input.projectId, streamPath: input.streamPath },
-  });
-  const session = context.codemodeSession.getByName(
-    sessionName,
-  ) as unknown as CodemodeSessionRpcStub;
-  await session.initialize({
-    name: sessionName,
+  return await startCodemodeScriptOnSession({
+    code: input.code,
+    events: input.events,
+    namespace: context.codemodeSession,
     projectId: input.projectId,
-    streamPath: input.streamPath,
+    providers: input.providers,
+    streamPath: StreamPath.parse(input.streamPath),
   });
+}
 
-  const registeredProviderEvents: Event[] = [];
-  for (const event of input.events) {
-    await session.append(event);
-  }
-  for (const provider of input.providers) {
-    registeredProviderEvents.push((await session.registerToolProvider({ provider })) as Event);
+/**
+ * Adapts CodemodeSession's durable event stream back to the legacy
+ * `codemode.execute` generator contract. `executeScriptOnSession()` only
+ * appends the durable "requested" event; the user-visible result and logs are
+ * appended asynchronously by the CodemodeSession worker. Streaming the Events
+ * app here keeps old clients real-time while the new Run Code page can consume
+ * the durable event stream directly.
+ */
+async function* streamSessionExecutionAsCodemodeEvents(input: {
+  blockId: string;
+  context: AppContext;
+  scriptExecutionRequestedOffset: number;
+  signal?: AbortSignal;
+  streamPath: string;
+}): AsyncGenerator<CodemodeEvent> {
+  const client = createEventsClient(input.context.config.eventsBaseUrl);
+  const stream = await client.stream(
+    {
+      afterOffset:
+        input.scriptExecutionRequestedOffset > 1
+          ? input.scriptExecutionRequestedOffset - 1
+          : "start",
+      path: input.streamPath,
+    },
+    { signal: input.signal },
+  );
+
+  for await (const event of stream) {
+    const codemodeEvent = toLegacyCodemodeEvent({
+      blockId: input.blockId,
+      event,
+      scriptExecutionRequestedOffset: input.scriptExecutionRequestedOffset,
+    });
+    if (!codemodeEvent) continue;
+
+    yield codemodeEvent;
+    if (codemodeEvent.type === "codemode-block-result-added") return;
   }
 
-  const event = (await session.executeScript({ code: input.code })) as Event;
-  return {
-    event,
-    registeredProviderEvents,
-    streamPath: input.streamPath,
-  };
+  throw new ORPCError("INTERNAL_SERVER_ERROR", {
+    message: "Codemode Session stream ended before a result event was appended.",
+  });
+}
+
+function toLegacyCodemodeEvent(input: {
+  blockId: string;
+  event: Event;
+  scriptExecutionRequestedOffset: number;
+}): CodemodeEvent | null {
+  const payload = readPayload(input.event);
+  const timestamp = input.event.createdAt;
+
+  if (
+    payload.scriptExecutionRequestedOffset !== input.scriptExecutionRequestedOffset &&
+    input.event.type !== "events.iterate.com/codemode/tool-provider-registered"
+  ) {
+    return null;
+  }
+
+  switch (input.event.type) {
+    case "events.iterate.com/codemode/log-emitted":
+      return {
+        blockId: input.blockId,
+        timestamp,
+        type: "codemode-log-emitted",
+        level: parseLogLevel(payload.level),
+        message: typeof payload.message === "string" ? payload.message : "",
+      };
+    case "events.iterate.com/codemode/tool-function-call-requested":
+      return {
+        blockId: input.blockId,
+        timestamp,
+        type: "codemode-tool-function-call-requested",
+        callId: callIdForEvent(input.blockId, input.event.offset),
+        path: parsePath(payload.path),
+        payload: payload.payload,
+      };
+    case "events.iterate.com/codemode/tool-function-call-succeeded":
+      return {
+        blockId: input.blockId,
+        timestamp,
+        type: "codemode-tool-function-call-succeeded",
+        callId: callIdForEvent(input.blockId, payload.toolFunctionCallRequestedOffset),
+        result: payload.result,
+      };
+    case "events.iterate.com/codemode/tool-function-call-failed":
+      return {
+        blockId: input.blockId,
+        timestamp,
+        type: "codemode-tool-function-call-failed",
+        callId: callIdForEvent(input.blockId, payload.toolFunctionCallRequestedOffset),
+        error: stringifyPayloadError(payload.error),
+      };
+    case "events.iterate.com/codemode/script-execution-finished":
+      return {
+        blockId: input.blockId,
+        timestamp,
+        type: "codemode-block-result-added",
+        result: payload.result,
+        error: typeof payload.error === "string" ? payload.error : undefined,
+      };
+    default:
+      return null;
+  }
+}
+
+function readPayload(event: Event) {
+  return event.payload != null && typeof event.payload === "object"
+    ? (event.payload as Record<string, unknown>)
+    : {};
+}
+
+function parseLogLevel(value: unknown) {
+  return value === "error" || value === "warn" ? value : "log";
+}
+
+function parsePath(value: unknown) {
+  return Array.isArray(value) ? value.filter((segment) => typeof segment === "string") : [];
+}
+
+function callIdForEvent(blockId: string, offset: unknown) {
+  return `ccal_${blockId}_${typeof offset === "number" ? offset : "unknown"}`;
+}
+
+function stringifyPayloadError(value: unknown) {
+  if (typeof value === "string") return value;
+  if (value != null && typeof value === "object" && "message" in value) {
+    const message = (value as { message?: unknown }).message;
+    if (typeof message === "string") return message;
+  }
+  return String(value);
 }
 
 function generateBlockId() {
@@ -326,10 +440,3 @@ function findDuplicateProviderPath(paths: string[][]) {
 
   return null;
 }
-
-type CodemodeSessionRpcStub = {
-  initialize(params: { name: string; projectId: string; streamPath: string }): Promise<unknown>;
-  append(input: EventInput): Promise<unknown>;
-  registerToolProvider(input: { provider: ToolProviderDescriptor }): Promise<unknown>;
-  executeScript(input: { code: string }): Promise<unknown>;
-};

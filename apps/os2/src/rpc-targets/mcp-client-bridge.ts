@@ -83,16 +83,20 @@ export class McpClientBridge extends DurableObject {
  *     serverUrl: "https://mcp.linear.app/mcp",
  *   })
  *
- * Requires a MCP_CLIENT_BRIDGE DurableObjectNamespace binding on the worker.
+ * Requires an MCP_CLIENT_BRIDGE DurableObjectNamespace binding on the worker
+ * that dispatches this callable. This deliberately uses an env binding rather
+ * than `ctx.exports` because CodemodeSession runs in its own Worker module, and
+ * Cloudflare loopback exports only resolve top-level exports from that module:
+ * https://developers.cloudflare.com/workers/runtime-apis/context/#exports
  */
 export function createMcpClientProvider(options: {
   path: string[];
   serverUrl: string;
 }): ToolProviderDescriptor {
   const via = {
-    type: "loopback-binding" as const,
+    type: "env-binding" as const,
     bindingType: "durable-object-namespace" as const,
-    exportName: "MCP_CLIENT_BRIDGE",
+    bindingName: "MCP_CLIENT_BRIDGE",
     durableObject: { name: options.serverUrl },
   };
 

@@ -8,7 +8,6 @@ import {
 } from "alchemy/cloudflare";
 import type { Bindings } from "alchemy/cloudflare";
 import { slugify } from "../slugify.ts";
-import type { AppManifest } from "../apps/types.ts";
 import type { initAlchemy } from "./init.ts";
 import { startCloudflared } from "./start-cloudflared.ts";
 
@@ -53,9 +52,10 @@ export async function IterateApp<B extends Bindings>(
     /** App-specific worker bindings (D1, DOs, etc). APP_CONFIG is added automatically. */
     bindings: B;
     /**
-     * Override compatibility flags. Default: `["nodejs_compat"]`.
-     * Events uses `["enable_request_signal"]` for oRPC abort detection —
-     * see https://developers.cloudflare.com/workers/runtime-apis/request/
+     * Additional compatibility flags. `nodejs_compat` is always included because
+     * TanStack Start and several shared packages depend on Node-compatible APIs.
+     * Events adds `enable_request_signal` for oRPC abort detection:
+     * https://developers.cloudflare.com/workers/runtime-apis/request/
      */
     compatibilityFlags?: string[];
     /**
@@ -73,6 +73,7 @@ export async function IterateApp<B extends Bindings>(
 ) {
   const { app, workerName, rawAppConfig, compiledAppConfig, manifest } = ctx;
   const routeHosts = deriveWorkerRouteHosts(compiledAppConfig.baseUrl, props.extraRouteHostnames);
+  const compatibilityFlags = [...new Set(["nodejs_compat", ...(props.compatibilityFlags ?? [])])];
 
   const worker = await TanStackStart(manifest.slug, {
     name: workerName,
@@ -80,7 +81,7 @@ export async function IterateApp<B extends Bindings>(
     // Needed because dev/preview workers persist across alchemy runs.
     // See https://alchemy.run/concepts/resources/ (adopt section)
     adopt: true,
-    compatibilityFlags: props.compatibilityFlags ?? ["nodejs_compat"],
+    compatibilityFlags,
     bindings: {
       ...props.bindings,
       APP_CONFIG: alchemy.secret(JSON.stringify(rawAppConfig, null, 2)),
@@ -160,7 +161,7 @@ export async function IterateApp<B extends Bindings>(
       routeHosts.map(async (hostname) => {
         const { zoneId } = await findZoneForHostname(cloudflareApi, hostname);
         const dnsResourceId = hostname.startsWith("*.")
-          ? `dns-wildcard-${slugify(hostname.slice(2))}`
+          ? `project-wildcard-dns-${slugify(hostname)}`
           : `dns-${slugify(hostname)}`;
 
         return DnsRecords(dnsResourceId, {

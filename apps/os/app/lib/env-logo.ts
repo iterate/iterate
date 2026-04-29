@@ -11,7 +11,7 @@ export function getEnvLogo(): string {
     return "/logo-prd.svg";
   }
 
-  if (["preview"].includes(stage)) {
+  if (stage === "preview" || stage?.startsWith("preview_") || stage?.startsWith("preview-")) {
     return "/logo-preview.svg";
   }
 

@@ -15,28 +15,15 @@ const db = await D1Database("os-db", {
   adopt: true,
 });
 
-const iterateMcpServer = await Worker("iterate-mcp-server-do", {
-  name: `${ctx.workerName}-iterate-mcp-server-do`,
-  entrypoint: "./src/durable-objects/iterate-mcp-server.ts",
-  adopt: true,
-  compatibilityFlags: ["nodejs_compat"],
-  bindings: {
-    EVENTS_BASE_URL: ctx.compiledAppConfig.eventsBaseUrl,
-    MCP_PROOF_SECRET: ctx.compiledAppConfig.mcpProofSecret.exposeSecret(),
-    ITERATE_MCP_SERVER: DurableObjectNamespace<IterateMcpServer>("iterate-mcp-server", {
-      className: "IterateMcpServer",
-      sqlite: true,
-    }),
-    LOADER: WorkerLoader(),
-  },
-});
-
 // os2 serves project subdomains at <slug>.iterate2.app (prod) or
 // <slug>.iterate-dev-jonas.app (dev). These need both bare and wildcard routes.
 const projectHostnameBases = ctx.compiledAppConfig.projectHostnameBases ?? [];
 const openApiBridgeBindingName = selfToolProviderBindingName({
   workerScriptName: ctx.workerName,
   entrypoint: "OpenApiBridge",
+});
+const mcpClientBridge = DurableObjectNamespace<McpClientBridge>("mcp-client-bridge", {
+  className: "McpClientBridge",
 });
 
 const codemodeSessionWorker = await Worker("codemode-session-do", {
@@ -52,7 +39,27 @@ const codemodeSessionWorker = await Worker("codemode-session-do", {
     DO_CATALOG: db,
     EVENTS_BASE_URL: ctx.compiledAppConfig.eventsBaseUrl,
     LOADER: WorkerLoader(),
+    MCP_CLIENT_BRIDGE: mcpClientBridge,
     [openApiBridgeBindingName]: Worker.experimentalEntrypoint(Self, "OpenApiBridge"),
+  },
+});
+
+// The inbound MCP worker is declared after CodemodeSession because MCP tools run
+// code by calling the same project/stream-scoped CodemodeSession DO that powers
+// the web UI. This keeps the MCP and browser code paths behaviorally identical.
+const iterateMcpServer = await Worker("iterate-mcp-server-do", {
+  name: `${ctx.workerName}-iterate-mcp-server-do`,
+  entrypoint: "./src/durable-objects/iterate-mcp-server.ts",
+  adopt: true,
+  compatibilityFlags: ["nodejs_compat"],
+  bindings: {
+    CODEMODE_SESSION: codemodeSessionWorker.bindings.CODEMODE_SESSION,
+    EVENTS_BASE_URL: ctx.compiledAppConfig.eventsBaseUrl,
+    MCP_PROOF_SECRET: ctx.compiledAppConfig.mcpProofSecret.exposeSecret(),
+    ITERATE_MCP_SERVER: DurableObjectNamespace<IterateMcpServer>("iterate-mcp-server", {
+      className: "IterateMcpServer",
+      sqlite: true,
+    }),
   },
 });
 
@@ -76,9 +83,7 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     CODEMODE_SESSION: codemodeSessionWorker.bindings.CODEMODE_SESSION,
     [openApiBridgeBindingName]: Worker.experimentalEntrypoint(Self, "OpenApiBridge"),
     ITERATE_MCP_SERVER: iterateMcpServer.bindings.ITERATE_MCP_SERVER,
-    MCP_CLIENT_BRIDGE: DurableObjectNamespace<McpClientBridge>("mcp-client-bridge", {
-      className: "McpClientBridge",
-    }),
+    MCP_CLIENT_BRIDGE: mcpClientBridge,
     PROJECT_HOSTNAME_BASES: projectHostnameBases.join(","),
   },
   extraRouteHostnames: [...projectHostnameBases, ...projectHostnameBases.map((h) => `*.${h}`)],

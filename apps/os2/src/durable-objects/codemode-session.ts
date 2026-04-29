@@ -199,15 +199,16 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
 
     try {
       const entrypoint = loader
-        .get(`codemode-session-script-${input.scriptExecutionRequestedOffset}`, () => ({
+        .load({
           compatibilityDate: "2025-06-01",
           compatibilityFlags: ["nodejs_compat"],
           mainModule: "executor.js",
           modules: {
-            "executor.js": buildScriptExecutorModule(input.code),
+            "executor.js": buildScriptExecutorModule(),
+            "user-code.js": buildUserCodeModule(input.code),
           },
           globalOutbound: null,
-        }))
+        })
         .getEntrypoint() as unknown as {
         evaluate(
           capability: CodemodeSessionCapability,
@@ -407,9 +408,15 @@ function validateToolProviderDispatchContext(input: {
   }
 }
 
-function buildScriptExecutorModule(code: string) {
+function buildScriptExecutorModule() {
+  // The user's code is inserted as JavaScript source because Cloudflare's
+  // dynamically loaded Workers run with string eval disabled. WorkerLoader is
+  // the sandbox boundary here; the outer catch below reports module/evaluation
+  // errors back onto the CodemodeSession event stream.
+  // https://developers.cloudflare.com/workers/runtime-apis/bindings/worker-loader/
   return `
 import { WorkerEntrypoint } from "cloudflare:workers";
+import __userScript from "./user-code.js";
 
 function __stringify(value) {
   if (typeof value === "string") return value;
@@ -420,7 +427,7 @@ function __stringify(value) {
 function __createCodemodeContext(options) {
   const make = (path = []) => new Proxy(async () => {}, {
     get: (_target, key) => {
-      if (key === "then") return undefined;
+      if (key === "then" || key === "catch" || key === "finally") return undefined;
       if (key === "codemode" && path.length === 0) {
         return {
           append: (input) => options.codemodeSessionCapability.append(input),
@@ -459,7 +466,6 @@ export default class CodeExecutor extends WorkerEntrypoint {
     };
 
     try {
-      const __userScript = (${code});
       if (typeof __userScript !== "function") {
         throw new Error("Codemode script must evaluate to a function.");
       }
@@ -477,6 +483,12 @@ export default class CodeExecutor extends WorkerEntrypoint {
     }
   }
 }
+`;
+}
+
+function buildUserCodeModule(code: string) {
+  return `const __userScript = (${code});
+export default __userScript;
 `;
 }
 
