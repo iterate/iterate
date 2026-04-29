@@ -11,7 +11,6 @@ const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 interface LocalDevServerHandle {
   publicUrl: string;
-  callbackUrl: string;
   baseUrl: string;
   streamPath: StreamPath;
 }
@@ -20,9 +19,7 @@ export async function createLocalDevServer(opts: {
   egressProxy?: string;
   eventsBaseUrl: string;
   eventsProjectSlug: string;
-  executionSuffix: string;
   streamPath: StreamPath;
-  instancePrefix?: string;
 }): Promise<LocalDevServerHandle & AsyncDisposable> {
   const disposables: AsyncDisposable[] = [];
   let disposed = false;
@@ -72,13 +69,8 @@ export async function createLocalDevServer(opts: {
     });
     disposables.push(tunnel);
 
-    const prefix = opts.instancePrefix ?? "e2e";
-    const agentInstance = `${prefix}-${opts.executionSuffix}`;
-    const callbackUrl = toWssAgentWebsocketUrl(tunnel.publicUrl, agentInstance);
-
     return {
       publicUrl: tunnel.publicUrl,
-      callbackUrl,
       baseUrl: devServer.baseUrl,
       streamPath: opts.streamPath,
       async [Symbol.asyncDispose]() {
@@ -96,13 +88,4 @@ export async function createLocalDevServer(opts: {
     }
     throw error;
   }
-}
-
-function toWssAgentWebsocketUrl(httpsBase: string, instanceName: string) {
-  const base = new URL(httpsBase);
-  base.protocol = "wss:";
-  base.pathname = `/agents/iterate-agent/${instanceName}`;
-  base.search = "";
-  base.hash = "";
-  return base.toString();
 }

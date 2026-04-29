@@ -67,12 +67,11 @@ test(
       egressProxy: mock.url,
       eventsBaseUrl: e2e.eventsBaseUrl,
       eventsProjectSlug: e2e.runSlug,
-      executionSuffix: e2e.executionSuffix,
       streamPath,
     });
 
     await e2e.events.append(streamPath, {
-      type: "https://events.iterate.com/events/stream/subscription/configured",
+      type: "events.iterate.com/core/subscription-configured",
       payload: {
         slug: `codemode-runner-ws-${e2e.executionSuffix}`,
         type: "websocket",

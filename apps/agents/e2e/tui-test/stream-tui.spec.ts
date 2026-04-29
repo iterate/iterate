@@ -37,7 +37,9 @@ test("Stream TUI starts and accepts slash command input", async ({ terminal }) =
   terminal.write("hello from microsoft tui test");
   terminal.submit();
 
-  await expect(terminal.getByText("agent-input-added", { strict: false })).toBeVisible();
+  await expect(
+    terminal.getByText("events.iterate.com/agent/input-added", { strict: false }),
+  ).toBeVisible();
 
   terminal.write("/e");
 

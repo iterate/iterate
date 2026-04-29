@@ -31,9 +31,9 @@ Inbound frames use the events stream socket protocol
 (`StreamSocketFrame` in `@iterate-com/events-contract`): wrap stream events as
 `{ "type": "event", "event": { ...full Event... } }`.
 
-The old monolithic `IterateAgent` class has been removed. Any e2e tests that
-still target `/agents/iterate-agent/...` are intentionally skipped while their
-coverage is rebuilt around the runner architecture.
+The old monolithic `IterateAgent` class has been removed. Skipped legacy e2e
+files stay in place as reminders of coverage that still needs rebuilding, but
+new subscriptions should target the runner URLs above.
 
 ### Production / Tunnel Callbacks
 

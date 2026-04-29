@@ -12,14 +12,13 @@ test(
     await using server = await createLocalDevServer({
       eventsBaseUrl: e2e.eventsBaseUrl,
       eventsProjectSlug: e2e.runSlug,
-      executionSuffix: e2e.executionSuffix,
       streamPath,
     });
 
     const callbackUrl = new URL("/api/events-forwarded", server.publicUrl).toString();
 
     await e2e.events.append(streamPath, {
-      type: "https://events.iterate.com/events/stream/subscription/configured",
+      type: "events.iterate.com/core/subscription-configured",
       payload: {
         slug: `agents-forwarded-${e2e.executionSuffix}`,
         type: "webhook",

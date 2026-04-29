@@ -16,6 +16,10 @@ import {
   MCP_TOOL_PROVIDER_PRESET_EVENT,
   OPENAPI_TOOL_PROVIDER_PRESET_EVENT,
 } from "~/lib/default-tool-provider-events.ts";
+import {
+  buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl,
+  streamPathToAgentInstance,
+} from "~/lib/iterate-agent-addressing.ts";
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 const harFixturePath = join(appRoot, "e2e/vitest/__snapshots__/iterate-agent-mixed-codemode.har");
@@ -67,17 +71,19 @@ test.skip(
       egressProxy: mock.url,
       eventsBaseUrl: e2e.eventsBaseUrl,
       eventsProjectSlug: e2e.runSlug,
-      executionSuffix: e2e.executionSuffix,
       streamPath,
-      instancePrefix: "e2e-mixed",
     });
 
     await e2e.events.append(streamPath, {
-      type: "https://events.iterate.com/events/stream/subscription/configured",
+      type: "events.iterate.com/core/subscription-configured",
       payload: {
-        slug: `iterate-agent-mixed-ws-${e2e.executionSuffix}`,
+        slug: `codemode-runner-mixed-ws-${e2e.executionSuffix}`,
         type: "websocket",
-        callbackUrl: server.callbackUrl,
+        callbackUrl: buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
+          publicOrigin: server.publicUrl,
+          runnerInstance: streamPathToAgentInstance(streamPath),
+          streamPath,
+        }),
       },
     });
 
@@ -87,7 +93,7 @@ test.skip(
     await e2e.events.waitForEvent(
       streamPath,
       (event) =>
-        event.type === "agent-input-added" &&
+        event.type === "events.iterate.com/agent/input-added" &&
         typeof event.payload.content === "string" &&
         event.payload.content.includes("Tool provider `iterate_events` is now available"),
       { timeoutMs: 120_000 },
@@ -96,20 +102,20 @@ test.skip(
     await e2e.events.waitForEvent(
       streamPath,
       (event) =>
-        event.type === "agent-input-added" &&
+        event.type === "events.iterate.com/agent/input-added" &&
         typeof event.payload.content === "string" &&
         event.payload.content.includes("Tool provider `cloudflare_docs` is now available"),
       { timeoutMs: 120_000 },
     );
 
     await e2e.events.append(streamPath, {
-      type: "codemode-block-added",
+      type: "events.iterate.com/codemode/block-added",
       payload: { script: MIXED_CODEMODE_SCRIPT },
     });
 
     const resultEvent = await e2e.events.waitForEvent(
       streamPath,
-      (event) => event.type === "codemode-result-added",
+      (event) => event.type === "events.iterate.com/codemode/result-added",
       { timeoutMs: 120_000 },
     );
 

@@ -5,6 +5,10 @@ import {
 } from "../test-support/create-ephemeral-worker.ts";
 import { setupE2E } from "../test-support/e2e-test.ts";
 import { OPENAPI_TOOL_PROVIDER_PRESET_EVENT } from "~/lib/default-tool-provider-events.ts";
+import {
+  buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl,
+  streamPathToAgentInstance,
+} from "~/lib/iterate-agent-addressing.ts";
 
 const hasAlchemyStateToken = Boolean(process.env.ALCHEMY_STATE_TOKEN?.trim());
 
@@ -49,8 +53,7 @@ describeEphemeral("ephemeral worker", () => {
     },
   );
 
-  // Legacy `/agents/iterate-agent/...` websocket path. Keep the test skipped
-  // while the runner-based deployed-worker smoke coverage is rebuilt.
+  // Keep skipped while the runner-based deployed-worker smoke coverage is rebuilt.
   test.skip(
     "websocket codemode with builtin + events OpenAPI + fetch",
     { tags: ["deployed-ephemeral-worker-with-egress-capture", "live-internet"], timeout: 60_000 },
@@ -58,11 +61,14 @@ describeEphemeral("ephemeral worker", () => {
       const e2e = await setupE2E(ctx);
       const streamPath = e2e.createStreamPath();
 
-      const agentInstance = `e2e-${e2e.executionSuffix}`;
-      const callbackUrl = toWssAgentWebsocketUrl(worker!.url, agentInstance);
+      const callbackUrl = buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
+        publicOrigin: worker!.url,
+        runnerInstance: streamPathToAgentInstance(streamPath),
+        streamPath,
+      });
 
       await e2e.events.append(streamPath, {
-        type: "https://events.iterate.com/events/stream/subscription/configured",
+        type: "events.iterate.com/core/subscription-configured",
         payload: {
           slug: `iterate-agent-ws-${e2e.executionSuffix}`,
           type: "websocket",
@@ -75,20 +81,20 @@ describeEphemeral("ephemeral worker", () => {
       await e2e.events.waitForEvent(
         streamPath,
         (event) =>
-          event.type === "agent-input-added" &&
+          event.type === "events.iterate.com/agent/input-added" &&
           typeof event.payload.content === "string" &&
           event.payload.content.includes("Tool provider `iterate_events` is now available"),
         { timeoutMs: 45_000 },
       );
 
       await e2e.events.append(streamPath, {
-        type: "codemode-block-added",
+        type: "events.iterate.com/codemode/block-added",
         payload: { script: LIVE_CODEMODE_SCRIPT },
       });
 
       const resultEvent = await e2e.events.waitForEvent(
         streamPath,
-        (event) => event.type === "codemode-result-added",
+        (event) => event.type === "events.iterate.com/codemode/result-added",
         { timeoutMs: 45_000 },
       );
 
@@ -122,12 +128,3 @@ async () => {
   };
 }
 `.trim();
-
-function toWssAgentWebsocketUrl(httpsBase: string, instanceName: string) {
-  const base = new URL(httpsBase);
-  base.protocol = "wss:";
-  base.pathname = `/agents/iterate-agent/${instanceName}`;
-  base.search = "";
-  base.hash = "";
-  return base.toString();
-}

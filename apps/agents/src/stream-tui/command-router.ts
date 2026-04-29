@@ -187,7 +187,7 @@ const commandRouter = {
       })
       .handler(async ({ context, input }) => {
         const event: EventInput = {
-          type: "agent-input-added",
+          type: "events.iterate.com/agent/input-added",
           payload: { role: "user", content: input.content },
         };
         const appended = await context.streamApi.append({ event, streamPath: input.streamPath });

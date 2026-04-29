@@ -9,6 +9,10 @@
 import { expect, test } from "vitest";
 import { setupE2E, type E2EContext } from "../test-support/e2e-test.ts";
 import { createLocalDevServer } from "../test-support/create-local-dev-server.ts";
+import {
+  buildAgentStreamProcessorRunnerWebSocketCallbackUrl,
+  streamPathToAgentInstance,
+} from "~/lib/iterate-agent-addressing.ts";
 
 const GATEWAY_ID = "e2e";
 const AGENT_INPUT_CONTENT = "What is the capital of France? Answer with one word.";
@@ -26,9 +30,7 @@ test.skip(
     await using server = await createLocalDevServer({
       eventsBaseUrl: e2e.eventsBaseUrl,
       eventsProjectSlug: e2e.runSlug,
-      executionSuffix: e2e.executionSuffix,
       streamPath,
-      instancePrefix: "e2e-agent-loop",
     });
 
     const results = await Promise.all(
@@ -55,11 +57,14 @@ async function runScenario(args: {
   const viewerUrl = e2e.events.streamViewerUrl(streamPath);
   console.info(`[iterate-agent agent-loop e2e] ${scenario.label} stream: ${viewerUrl}`);
 
-  const agentInstance = `e2e-agent-loop-${scenario.label}-${e2e.executionSuffix}`;
-  const callbackUrl = toWssAgentWebsocketUrl(tunnelPublicUrl, agentInstance);
+  const callbackUrl = buildAgentStreamProcessorRunnerWebSocketCallbackUrl({
+    publicOrigin: tunnelPublicUrl,
+    runnerInstance: streamPathToAgentInstance(streamPath),
+    streamPath,
+  });
 
   await e2e.events.append(streamPath, {
-    type: "https://events.iterate.com/events/stream/subscription/configured",
+    type: "events.iterate.com/core/subscription-configured",
     payload: {
       slug: `iterate-agent-agent-loop-ws-${e2e.executionSuffix}`,
       type: "websocket",
@@ -68,7 +73,7 @@ async function runScenario(args: {
   });
 
   await e2e.events.append(streamPath, {
-    type: "llm-config-updated",
+    type: "events.iterate.com/agent/llm-config-updated",
     payload: {
       model: scenario.model,
       runOpts: { gateway: { id: GATEWAY_ID } },
@@ -78,14 +83,14 @@ async function runScenario(args: {
   const llmT0 = Date.now();
 
   await e2e.events.append(streamPath, {
-    type: "agent-input-added",
+    type: "events.iterate.com/agent/input-added",
     payload: { role: "user", content: AGENT_INPUT_CONTENT },
   });
 
   const webchatEvent = await e2e.events.waitForEvent(
     streamPath,
     (event) => {
-      if (event.type !== "webchat-response-added") return false;
+      if (event.type !== "events.iterate.com/webchat/agent-response-added") return false;
       const payload = event.payload as { message?: string };
       return typeof payload.message === "string" && payload.message.trim().length > 0;
     },
@@ -106,13 +111,4 @@ async function runScenario(args: {
     content: payload.message ?? "",
     llmMs,
   };
-}
-
-function toWssAgentWebsocketUrl(httpsBase: string, instanceName: string) {
-  const base = new URL(httpsBase);
-  base.protocol = "wss:";
-  base.pathname = `/agents/iterate-agent/${instanceName}`;
-  base.search = "";
-  base.hash = "";
-  return base.toString();
 }

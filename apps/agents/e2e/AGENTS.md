@@ -169,35 +169,45 @@ Both use Semaphore tunnel lease + cloudflared. Never need both simultaneously.
 import { test } from "../test-support/e2e-test.ts";
 import { createMockInternet } from "../test-support/create-mock-internet.ts";
 import { createLocalDevServer } from "../test-support/create-local-dev-server.ts";
+import {
+  buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl,
+  streamPathToAgentInstance,
+} from "~/lib/iterate-agent-addressing.ts";
 
 test(
   "codemode runs builtin + OpenAPI + fetch",
   { tags: ["local-dev-server", "mocked-internet"] },
   async ({ e2e }) => {
+    const streamPath = e2e.createStreamPath();
     await using mock = await createMockInternet();
     await using server = await createLocalDevServer({
       egressProxy: mock.url,
       eventsBaseUrl: e2e.eventsBaseUrl,
       eventsProjectSlug: e2e.runSlug,
+      streamPath,
     });
 
-    await e2e.events.append(server.streamPath, {
-      type: "https://events.iterate.com/events/stream/subscription/configured",
+    await e2e.events.append(streamPath, {
+      type: "events.iterate.com/core/subscription-configured",
       payload: {
         slug: `sub-${e2e.executionSuffix}`,
         type: "websocket",
-        callbackUrl: server.callbackUrl,
+        callbackUrl: buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
+          publicOrigin: server.publicUrl,
+          runnerInstance: streamPathToAgentInstance(streamPath),
+          streamPath,
+        }),
       },
     });
 
-    await e2e.events.append(server.streamPath, {
-      type: "codemode-block-added",
+    await e2e.events.append(streamPath, {
+      type: "events.iterate.com/codemode/block-added",
       payload: { script: CODEMODE_SCRIPT },
     });
 
     const result = await e2e.events.waitForEvent(
-      server.streamPath,
-      (e) => e.type === "codemode-result-added",
+      streamPath,
+      (e) => e.type === "events.iterate.com/codemode/result-added",
     );
 
     expect(result.payload.answer).toBe(42);

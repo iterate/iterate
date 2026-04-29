@@ -7,15 +7,14 @@ import { z } from "zod";
 import { useCloudflareTunnel, useCloudflareTunnelLease } from "@iterate-com/shared/test-helpers";
 import { ProjectSlug, StreamPath } from "@iterate-com/events-contract";
 import { createEventsOrpcClient } from "../src/lib/events-orpc-client.ts";
+import { buildStreamAppendUrl, buildStreamViewerUrl } from "../src/lib/events-urls.ts";
 import {
-  buildAgentWebSocketCallbackUrl,
-  buildStreamAppendUrl,
-  buildStreamViewerUrl,
-} from "../src/lib/events-urls.ts";
+  buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl,
+  streamPathToAgentInstance,
+} from "../src/lib/iterate-agent-addressing.ts";
 import { createEphemeralWorker } from "../e2e/test-support/create-ephemeral-worker.ts";
 
 const DEFAULT_EVENTS_BASE_URL = "https://events.iterate.com";
-const DEFAULT_AGENT_CLASS = "iterate-agent";
 const DEFAULT_PROJECT_SLUG: ProjectSlug = "public";
 const TUNNEL_READY_TIMEOUT_MS = 120_000;
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
@@ -66,18 +65,14 @@ const TunnelInput = z.object({
     .url()
     .default(DEFAULT_EVENTS_BASE_URL)
     .describe("Events base URL"),
-  agentClass: z
-    .string()
-    .trim()
-    .min(1)
-    .default(DEFAULT_AGENT_CLASS)
-    .describe("Agents SDK class name in kebab-case (matches /agents/<class>/<instance>)"),
-  agentInstance: z
+  runnerInstance: z
     .string()
     .trim()
     .min(1)
     .optional()
-    .describe("Agent instance name (defaults to a random dev-<slug>)"),
+    .describe(
+      "Codemode runner Durable Object instance name (defaults to the stream path instance)",
+    ),
   subscriptionSlug: z
     .string()
     .trim()
@@ -165,7 +160,7 @@ export const router = {
       const streamPath = StreamPath.parse(input.streamPath ?? `/dev/${slug}`);
       const projectSlug = ProjectSlug.parse(input.projectSlug);
       const eventsBaseUrl = input.eventsBaseUrl.replace(/\/+$/, "");
-      const agentInstance = input.agentInstance ?? `dev-${slug}`;
+      const runnerInstance = input.runnerInstance ?? streamPathToAgentInstance(streamPath);
       const subscriptionSlug = input.subscriptionSlug ?? `dev-${slug}`;
 
       console.info("[tunnel] Acquiring Cloudflare tunnel lease from Semaphore…");
@@ -186,14 +181,14 @@ export const router = {
         timeoutMs: TUNNEL_READY_TIMEOUT_MS,
       });
 
-      const callbackUrl = buildAgentWebSocketCallbackUrl({
+      const callbackUrl = buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
         publicOrigin: tunnel.publicUrl,
-        agentClass: input.agentClass,
-        agentInstance,
+        runnerInstance,
+        streamPath,
       });
 
       const subscriptionEvent = {
-        type: "https://events.iterate.com/events/stream/subscription/configured",
+        type: "events.iterate.com/core/subscription-configured",
         payload: {
           slug: subscriptionSlug,
           type: "websocket" as const,
