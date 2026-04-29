@@ -20,8 +20,13 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const BASE_TEMPLATE = join(__dirname, "../base-template");
-const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID || "cc7f6f461fbe823c199da2b27f9e0ff3";
-const PROJECT_HOST = process.env.PROJECT_HOST || "test.iterate-dev-jonas.app";
+const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID;
+if (!ACCOUNT_ID) {
+  throw new Error(
+    "Missing CLOUDFLARE_ACCOUNT_ID. Run under Doppler project channel-agent-poc/dev_jonas.",
+  );
+}
+const PROJECT_HOST = process.env.CHANNEL_AGENT_POC_PROJECT_HOST || "test.iterate-dev-jonas.app";
 
 const config = JSON.parse(readFileSync(join(BASE_TEMPLATE, "config.json"), "utf8")) as {
   apps: string[];

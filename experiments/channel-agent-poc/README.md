@@ -29,6 +29,17 @@ shape:
 
 The old `apps/events/poc` directory has been removed.
 
+## Start Here
+
+- [ARCHITECTURE.md](./ARCHITECTURE.md): big ideas, event flow, app boundaries,
+  stream paths, and known POC tradeoffs.
+- [DEPLOYMENT.md](./DEPLOYMENT.md): Doppler setup, deploy commands, app install
+  commands, webhook URLs, and useful live URLs.
+- [TESTING.md](./TESTING.md): smoke checks and exact Slack/GitHub/Linear/Discord
+  test commands.
+- [ARCHITECTURE-REVIEW.md](./ARCHITECTURE-REVIEW.md): self-review and cleanup
+  backlog.
+
 ## Doppler
 
 The POC has its own Doppler project: `channel-agent-poc`.

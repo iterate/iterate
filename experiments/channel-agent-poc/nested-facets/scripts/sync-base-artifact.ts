@@ -35,7 +35,7 @@ async function api(method: string, apiPath: string, body?: object) {
   return resp.json() as any;
 }
 
-const SKIP_DIRS = new Set(["node_modules", ".git"]);
+const SKIP_DIRS = new Set(["node_modules", ".git", "dist"]);
 
 function copyDirSync(src: string, dest: string) {
   const entries = fs.readdirSync(src, { withFileTypes: true });
