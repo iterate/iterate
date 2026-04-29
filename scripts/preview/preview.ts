@@ -295,6 +295,7 @@ export async function deployCloudflarePreviewForPullRequest(
     commandEnvironment: params.commandEnvironment,
     createPreviewSemaphoreResourceClient: params.createPreviewSemaphoreResourceClient,
     dopplerProject: params.dopplerProject,
+    excludedPreviewSlots: params.excludedPreviewSlots,
     leaseMs: params.leaseMs,
     previewResourceType: params.previewResourceType,
     pullRequestHeadSha: pullRequest.pullRequestHeadSha,
