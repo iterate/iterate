@@ -110,10 +110,8 @@ export const DynamicWorkerConfig = z.object({
 });
 export type DynamicWorkerConfig = z.infer<typeof DynamicWorkerConfig>;
 
-export const DynamicWorkerState = z
-  .object({
-    envVarsByKey: z.record(z.string(), z.string()).default({}),
-    workersBySlug: z.record(z.string(), DynamicWorkerConfig).default({}),
-  })
-  .default({ envVarsByKey: {}, workersBySlug: {} });
+export const DynamicWorkerState = z.object({
+  envVarsByKey: z.record(z.string(), z.string()),
+  workersBySlug: z.record(z.string(), DynamicWorkerConfig),
+});
 export type DynamicWorkerState = z.infer<typeof DynamicWorkerState>;

@@ -306,6 +306,12 @@ renderer.root.add(root);
 input.focus();
 renderer.prependInputHandler((sequence) => {
   const parsedKey = parseKeypress(sequence);
+
+  if (parsedKey != null) {
+    appendStatus = `key: ${parsedKey.name} shift:${parsedKey.shift} seq:${JSON.stringify(sequence)} ac:${slashAutocomplete.height}`;
+    updateHeader();
+  }
+
   if (parsedKey == null) return false;
 
   const key = new KeyEvent(parsedKey);

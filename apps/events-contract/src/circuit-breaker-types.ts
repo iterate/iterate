@@ -53,10 +53,7 @@ export const CircuitBreakerState = z.object({
   paused: z.boolean(),
   pauseReason: z.string().nullable(),
   pausedAt: z.string().nullable(),
-  config: CircuitBreakerConfig.default({
-    burstCapacity: 500,
-    refillRatePerMinute: 500,
-  }),
+  config: CircuitBreakerConfig,
   availableTokens: z.number(),
   lastRefillAtMs: z.number().int().nonnegative().nullable(),
 });

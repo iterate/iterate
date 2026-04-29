@@ -162,7 +162,7 @@ export type Event = GenericEvent;
 
 const ProcessorsState = z.object({
   "circuit-breaker": CircuitBreakerState,
-  "external-subscriber": ExternalSubscriberState.default({ subscribersBySlug: {} }),
+  "external-subscriber": ExternalSubscriberState,
   "dynamic-worker": DynamicWorkerState,
   "jsonata-transformer": JsonataTransformerState,
 });
@@ -171,7 +171,7 @@ export const StreamState = z.object({
   projectSlug: ProjectSlug,
   path: StreamPath,
   eventCount: z.number().int().nonnegative(),
-  childPaths: z.array(StreamPath).default([]),
+  childPaths: z.array(StreamPath),
   metadata: JSONObject,
   processors: ProcessorsState,
 });
