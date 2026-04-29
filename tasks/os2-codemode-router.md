@@ -154,6 +154,65 @@ Simple form UI in apps/os2 (similar to apps/codemode):
 - Run button → streams events into a log view
 - Result display
 
+## Manual testing
+
+### Testing the MCP server with Claude CLI
+
+```bash
+# Add the MCP server temporarily (project-scoped, from apps/os2/)
+claude mcp add --transport http os2-test https://os.iterate-dev-jonas.com/mcp --scope project
+
+# Test it in non-interactive mode
+claude -p 'Use run_code to compute 6 * 7' --allowedTools "mcp__os2-test__run_code"
+# Expected output: 42
+
+# Clean up
+claude mcp remove os2-test --scope project
+```
+
+### Testing the oRPC endpoint with curl
+
+```bash
+# Execute code via OpenAPI endpoint (SSE response)
+curl -s 'https://os.iterate-dev-jonas.com/api/codemode/execute' \
+  -X POST -H 'content-type: application/json' \
+  -d '{"code":"async () => 1 + 1","providers":[]}'
+
+# Describe providers (plain JSON response)
+curl -s 'https://os.iterate-dev-jonas.com/api/codemode/describe' \
+  -X POST -H 'content-type: application/json' \
+  -d '{"providers":[{"path":["test"],"execute":{"type":"fetch","via":{"type":"url","url":"https://httpbin.org/post"}}}]}'
+```
+
+### Testing MCP protocol directly with curl
+
+```bash
+# Initialize session (capture mcp-session-id header)
+curl -sv 'https://os.iterate-dev-jonas.com/mcp' \
+  -X POST -H 'content-type: application/json' \
+  -H 'accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'
+
+# List tools (use session ID from previous response)
+curl -s 'https://os.iterate-dev-jonas.com/mcp' \
+  -X POST -H 'content-type: application/json' \
+  -H 'accept: application/json, text/event-stream' \
+  -H 'mcp-session-id: <SESSION_ID>' \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+
+# Call run_code
+cat <<'EOF' | curl -s 'https://os.iterate-dev-jonas.com/mcp' \
+  -X POST -H 'content-type: application/json' \
+  -H 'accept: application/json, text/event-stream' \
+  -H 'mcp-session-id: <SESSION_ID>' -d @-
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"run_code","arguments":{"code":"async () => Math.PI"}}}
+EOF
+```
+
+### Testing the UI
+
+Visit `https://os.iterate-dev-jonas.com/codemode` — write code, click Run, see streaming events.
+
 ## Implementation order
 
 1. **Kernel** — `packages/shared/src/codemode/`: copy adapted executor + utils + tests, new types/schemas, resolve/validate logic
