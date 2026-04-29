@@ -1167,11 +1167,10 @@ function selectAdjacentFeedItem(direction: -1 | 1) {
 
   const currentIndex = rawItems.findIndex((item) => item.props.offset === selectedOffset);
   const nextIndex =
-    currentIndex === -1
-      ? direction === 1
-        ? 0
-        : rawItems.length - 1
-      : (currentIndex + direction + rawItems.length) % rawItems.length;
+    currentIndex === -1 ? (direction === 1 ? 0 : rawItems.length - 1) : currentIndex + direction;
+
+  // Clamp to bounds — don't wrap around
+  if (nextIndex < 0 || nextIndex >= rawItems.length) return;
 
   selectedOffset = rawItems[nextIndex].props.offset;
   updateFeed("selected");
