@@ -168,7 +168,7 @@ const DEFAULT_EVENTS = [
     payload: {
       role: "user",
       content:
-        "GitHub policy: read the raw `events.iterate.com/github/webhook-received` YAML. Respond with GitHub App actions only. For PR or issue comments, normally call `github.createIssueComment(owner, repo, issueNumber, body)` using `payload.body.repository.owner.login`, `payload.body.repository.name`, and `payload.body.issue.number`. This provider is backed by `@octokit/rest`. For lower-level GitHub REST access, use `github.octokit.request({ owner, repo, method, path, body })`, which maps to Octokit.request; `body` is the Octokit route parameters / JSON body, and the tool returns Octokit's `response.data` directly. Do not send a separate webchat confirmation. There is no `event` global in codemode; copy exact IDs from the YAML into constants. Always return the tool promise or result. If you perform multiple independent actions, use `Promise.all`.",
+        "GitHub policy: read the compact `events.iterate.com/github/comment` YAML. Respond with GitHub App actions only. For PR or issue comments, normally call `github.createIssueComment(owner, repo, issueNumber, body)` using the values under `event.response.createIssueComment`. This provider is backed by `@octokit/rest`. For lower-level GitHub REST access, use `github.octokit.request({ owner, repo, method, path, body })`, which maps to Octokit.request; `body` is the Octokit route parameters / JSON body, and the tool returns Octokit's `response.data` directly. Do not send a separate webchat confirmation. There is no `event` global in codemode; copy exact IDs from the YAML into constants. Always return the tool promise or result. If you perform multiple independent actions, use `Promise.all`.",
       triggerLlmRequest: { behaviour: "dont-trigger-request" },
     },
   },
@@ -418,13 +418,72 @@ function agentInputForGitHubEvent(args: {
   parsed: Exclude<ParsedEvent, { case: "ignored" }>;
   rawEvent: { type: string; payload?: unknown; idempotencyKey?: string };
 }) {
+  const parsed = args.parsed;
+  const issueNumber =
+    parsed.case === "pull_request" || parsed.case === "pull_request_review_comment"
+      ? parsed.prNumber
+      : parsed.case === "push"
+        ? undefined
+        : parsed.issueNumber;
+  const title =
+    parsed.case === "pull_request_review_comment"
+      ? parsed.prTitle
+      : parsed.case === "issue_comment"
+        ? parsed.issueTitle
+        : parsed.case === "push"
+          ? parsed.ref
+          : parsed.title;
+  const commentBody =
+    parsed.case === "issue_comment" || parsed.case === "pull_request_review_comment"
+      ? parsed.commentBody
+      : parsed.case === "push"
+        ? parsed.commits.map((commit) => `${commit.id.slice(0, 12)} ${commit.message}`).join("\n")
+        : parsed.body;
   return {
     type: "events.iterate.com/agent/input-added",
     idempotencyKey: `${args.rawEvent.idempotencyKey || crypto.randomUUID()}:agent-input`,
     payload: {
       role: "user",
       source: "github",
-      content: eventToYaml(args.rawEvent),
+      content: eventToYaml({
+        type: "events.iterate.com/github/comment",
+        sourceEventType: args.rawEvent.type,
+        idempotencyKey: args.rawEvent.idempotencyKey,
+        payload: {
+          webhookEvent: args.meta.eventType,
+          deliveryId: args.meta.deliveryId,
+          case: parsed.case,
+          action: "action" in parsed ? parsed.action : undefined,
+          owner: parsed.owner,
+          repo: parsed.repo,
+          issueNumber,
+          title,
+          sender: parsed.sender,
+          commentId: "commentId" in parsed ? parsed.commentId : undefined,
+          commentUser: "commentUser" in parsed ? parsed.commentUser : undefined,
+          text: commentBody,
+          url: "htmlUrl" in parsed ? parsed.htmlUrl : undefined,
+        },
+        response:
+          issueNumber == null
+            ? {
+                octokitRequest: {
+                  owner: parsed.owner,
+                  repo: parsed.repo,
+                  method: "POST",
+                  path: "/repos/{owner}/{repo}/issues",
+                  body: {},
+                },
+              }
+            : {
+                createIssueComment: {
+                  owner: parsed.owner,
+                  repo: parsed.repo,
+                  issueNumber,
+                  body: "<your reply>",
+                },
+              },
+      }),
     },
   };
 }

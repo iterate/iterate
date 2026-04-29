@@ -25,7 +25,7 @@ const DEFAULT_EVENTS = [
     type: "events.iterate.com/agent/system-prompt-updated",
     payload: {
       systemPrompt:
-        "You are an Iterate Discord bot. Respond to Discord notifications by writing exactly one fenced `js` codemode block containing the program body directly. Top-level `await` and `return` are valid. Do not write an `async () => { ... }` wrapper; the runtime supplies it. Use the `discord` provider only. Do not call `webchat`. Keep the block short and complete. Never write prose outside the fence. For Discord MESSAGE_CREATE gateway events, use `payload.data.channel_id` as channelId and `payload.data.id` as messageId. If you need multiple independent Discord API calls in one response, run them concurrently with `Promise.all([...])`.",
+        "You are an Iterate Discord bot. Respond to compact Discord message notifications by writing exactly one fenced `js` codemode block containing the program body directly. Top-level `await` and `return` are valid. Do not write an `async () => { ... }` wrapper; the runtime supplies it. Use the `discord` provider only. Do not call `webchat`. Keep the block short and complete. Never write prose outside the fence. Copy channelId and messageId from the compact YAML. If you need multiple independent Discord API calls in one response, run them concurrently with `Promise.all([...])`.",
     },
   },
   {
@@ -33,7 +33,7 @@ const DEFAULT_EVENTS = [
     payload: {
       role: "user",
       content:
-        "Discord policy: read the raw `events.iterate.com/discord/websocket-message-received` YAML. Reply in Discord with `discord.sendMessage` using `payload.data.channel_id` as channelId and `payload.data.id` as replyToMessageId. If reacting, use `payload.data.channel_id` and `payload.data.id`. Do not send a separate webchat confirmation. There is no `event` global in codemode; copy exact IDs from the YAML into constants. Always return the tool promise or result. If you both reply and react, use `Promise.all([discord.sendMessage(...), discord.addReaction(...)])`.",
+        "Discord policy: read the compact `events.iterate.com/discord/message` YAML. Reply in Discord with `discord.sendMessage` using `event.response.sendMessage.channelId` and `event.response.sendMessage.replyToMessageId`. If reacting, use `event.response.addReaction.channelId` and `event.response.addReaction.messageId`. Do not send a separate webchat confirmation. There is no `event` global in codemode; copy exact IDs from the YAML into constants. Always return the tool promise or result. If you both reply and react, use `Promise.all([discord.sendMessage(...), discord.addReaction(...)])`.",
       triggerLlmRequest: { behaviour: "dont-trigger-request" },
     },
   },
@@ -106,13 +106,42 @@ function eventToYaml(event: unknown): string {
 function agentInputForDiscordMessage(args: {
   rawEvent: { type: string; payload?: unknown; idempotencyKey?: string };
 }) {
+  const payload = args.rawEvent.payload as any;
+  const data = payload?.data ?? {};
   return {
     type: "events.iterate.com/agent/input-added",
     idempotencyKey: `${args.rawEvent.idempotencyKey || crypto.randomUUID()}:agent-input`,
     payload: {
       role: "user",
       source: "discord",
-      content: eventToYaml(args.rawEvent),
+      content: eventToYaml({
+        type: "events.iterate.com/discord/message",
+        sourceEventType: args.rawEvent.type,
+        idempotencyKey: args.rawEvent.idempotencyKey,
+        payload: {
+          dispatchType: payload?.dispatchType,
+          channelId: data.channel_id,
+          threadKey: payload?.streamPath,
+          messageId: data.id,
+          authorId: data.author?.id,
+          authorUsername: data.author?.username || data.member?.nick,
+          guildId: data.guild_id,
+          text: data.content || "",
+          referencedMessageId: data.message_reference?.message_id,
+        },
+        response: {
+          sendMessage: {
+            channelId: data.channel_id,
+            content: "<your reply>",
+            replyToMessageId: data.id,
+          },
+          addReaction: {
+            channelId: data.channel_id,
+            messageId: data.id,
+            emoji: "<emoji>",
+          },
+        },
+      }),
     },
   };
 }

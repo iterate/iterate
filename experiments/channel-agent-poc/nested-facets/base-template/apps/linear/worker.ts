@@ -156,7 +156,7 @@ const DEFAULT_EVENTS = [
     payload: {
       role: "user",
       content:
-        "Linear policy: read the raw `events.iterate.com/linear/webhook-received` YAML. Reply on Linear with `linear.createComment` using the exact issue id from the incoming event; for comment webhooks this is usually `payload.body.data.issue.id`. Do not send a separate webchat confirmation. There is no `event` global in codemode; copy exact IDs from the YAML into constants. Always return the tool promise or result. If you perform multiple independent actions, use `Promise.all`.",
+        "Linear policy: read the compact `events.iterate.com/linear/comment` YAML. Reply on Linear with `linear.createComment` using `event.response.createComment.issueId`. Do not send a separate webchat confirmation. There is no `event` global in codemode; copy exact IDs from the YAML into constants. Always return the tool promise or result. If you perform multiple independent actions, use `Promise.all`.",
       triggerLlmRequest: { behaviour: "dont-trigger-request" },
     },
   },
@@ -277,13 +277,35 @@ function agentInputForLinearEvent(args: {
   parsed: ParsedLinearEvent;
   rawEvent: { type: string; payload?: unknown; idempotencyKey?: string };
 }) {
+  const data = args.parsed.data;
   return {
     type: "events.iterate.com/agent/input-added",
     idempotencyKey: `${args.rawEvent.idempotencyKey || crypto.randomUUID()}:agent-input`,
     payload: {
       role: "user",
       source: "linear",
-      content: eventToYaml(args.rawEvent),
+      content: eventToYaml({
+        type: "events.iterate.com/linear/comment",
+        sourceEventType: args.rawEvent.type,
+        idempotencyKey: args.rawEvent.idempotencyKey,
+        payload: {
+          webhookType: args.parsed.type,
+          action: args.parsed.action,
+          issueId: args.parsed.issueId,
+          issueIdentifier: data.issue?.identifier || data.issueIdentifier,
+          title: args.parsed.title,
+          text: data.body || data.description || data.title || "",
+          actor: data.user?.name || data.creator?.name || data.createdBy?.name || "unknown",
+          url: args.parsed.url,
+          commentId: args.parsed.type === "Comment" ? data.id : undefined,
+        },
+        response: {
+          createComment: {
+            issueId: args.parsed.issueId,
+            body: "<your reply>",
+          },
+        },
+      }),
     },
   };
 }

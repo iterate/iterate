@@ -45,7 +45,7 @@ const DEFAULT_EVENTS = [
     type: "events.iterate.com/agent/system-prompt-updated",
     payload: {
       systemPrompt:
-        "You are an Iterate Slack bot. Respond to Slack notifications by writing exactly one fenced `js` codemode block containing the program body directly. Top-level `await` and `return` are valid. Do not write an `async () => { ... }` wrapper; the runtime supplies it. Use the `slack` provider only. Do not call `webchat`. Keep the block short and complete. Never write prose outside the fence. For a top-level Slack message, `body.event.thread_ts` is absent; use `body.event.ts` as the reply `thread_ts` and as the reaction `timestamp`. For a thread reply, use `body.event.thread_ts` as `thread_ts` and `body.event.ts` as `timestamp`. Reply and react concurrently with `Promise.all([...])`.",
+        "You are an Iterate Slack bot. Respond to compact Slack message notifications by writing exactly one fenced `js` codemode block containing the program body directly. Top-level `await` and `return` are valid. Do not write an `async () => { ... }` wrapper; the runtime supplies it. Use the `slack` provider only. Do not call `webchat`. Keep the block short and complete. Never write prose outside the fence. Copy channel, thread_ts, and message_ts from the compact YAML. Reply and react concurrently with `Promise.all([...])`.",
     },
   },
   {
@@ -53,7 +53,7 @@ const DEFAULT_EVENTS = [
     payload: {
       role: "user",
       content:
-        "Slack policy: read the raw `events.iterate.com/slack/webhook-received` YAML. Use `event.payload.body.event.channel` as `channel`. Use `event.payload.body.event.thread_ts ?? event.payload.body.event.ts` as `thread_ts`. Use `event.payload.body.event.ts` as the reaction `timestamp`. For ordinary replies, return only `Promise.all([slack.chat.postMessage({ channel, thread_ts, text }), slack.reactions.add({ channel, timestamp, name })])`. For longer work, set Slack assistant thread status before/during the work and clear it at the end. Do not send a separate webchat confirmation. There is no `event` global in codemode; copy exact IDs from the YAML into constants. Always return the tool promise or result.",
+        "Slack policy: read the compact `events.iterate.com/slack/message` YAML. Use `event.response.chatPostMessage.channel` and `event.response.chatPostMessage.thread_ts` when replying. Use `event.response.reactionsAdd.channel` and `event.response.reactionsAdd.timestamp` when reacting. For ordinary replies, return only `Promise.all([slack.chat.postMessage({ channel, thread_ts, text }), slack.reactions.add({ channel, timestamp, name })])`. For longer work, set Slack assistant thread status before/during the work and clear it at the end. Do not send a separate webchat confirmation. There is no `event` global in codemode; copy exact IDs from the YAML into constants. Always return the tool promise or result.",
       triggerLlmRequest: { behaviour: "dont-trigger-request" },
     },
   },
@@ -207,14 +207,46 @@ function eventToYaml(event: unknown): string {
 
 function agentInputForSlackMessage(args: {
   rawEvent: { type: string; payload?: unknown; idempotencyKey?: string };
+  parsed: { event: any; threadTs: string; case: "mention" | "fyi" };
 }) {
+  const event = args.parsed.event;
+  const messageTs = event.ts || event.event_ts || args.parsed.threadTs;
   return {
     type: "events.iterate.com/agent/input-added",
     idempotencyKey: `${args.rawEvent.idempotencyKey || crypto.randomUUID()}:agent-input`,
     payload: {
       role: "user",
       source: "slack",
-      content: eventToYaml(args.rawEvent),
+      content: eventToYaml({
+        type: "events.iterate.com/slack/message",
+        sourceEventType: args.rawEvent.type,
+        idempotencyKey: args.rawEvent.idempotencyKey,
+        payload: {
+          channel: event.channel,
+          thread_ts: args.parsed.threadTs,
+          message_ts: messageTs,
+          user: event.user || event.bot_id || "unknown",
+          text: event.text || "",
+          case: args.parsed.case,
+        },
+        response: {
+          chatPostMessage: {
+            channel: event.channel,
+            thread_ts: args.parsed.threadTs,
+            text: "<your reply>",
+          },
+          reactionsAdd: {
+            channel: event.channel,
+            timestamp: messageTs,
+            name: "<emoji name without colons>",
+          },
+          assistantSetStatus: {
+            channel_id: event.channel,
+            thread_ts: args.parsed.threadTs,
+            status: "<status or empty string>",
+          },
+        },
+      }),
     },
   };
 }
@@ -758,15 +790,11 @@ export class App extends DurableObject {
       idempotencyBase: payload.event_id || payload.event?.ts || crypto.randomUUID(),
     });
 
-    try {
-      await this.#appendToStream("/slack/webhooks", slackWebhookEvent);
-    } catch (e: any) {
-      console.error(`[Slack] raw webhook append failed: ${e.message}`);
-    }
-
     const parsed = parseWebhookPayload(payload);
-    if (parsed.case === "ignored")
+    if (parsed.case === "ignored") {
+      this.ctx.waitUntil(this.#appendRawSlackWebhook(slackWebhookEvent));
       return Response.json({ ok: true, ignored: true, reason: parsed.reason });
+    }
 
     const event = parsed.event;
     const channel = event.channel || "";
@@ -781,71 +809,127 @@ export class App extends DurableObject {
       const seen = this.ctx.storage.sql
         .exec("SELECT 1 FROM config WHERE key = ?", `seen:${msgTs}`)
         .toArray();
-      if (seen.length) return Response.json({ ok: true, duplicate: true });
+      if (seen.length) {
+        this.ctx.waitUntil(this.#appendRawSlackWebhook(slackWebhookEvent));
+        return Response.json({ ok: true, duplicate: true });
+      }
       this.#setConfig(`seen:${msgTs}`, "1");
     }
 
     const agentPath = `/agents/slack/ts-${threadTs.replace(/\./g, "-")}`;
-
-    if (isDebug) {
-      this.#setConfig(threadKey, "1");
-      const eventsBaseUrl = this.#config("eventsBaseUrl") || "https://events.iterate.com";
-      const projectSlug = this.#config("projectSlug") || "test";
-      const hostHeader = this.#config("hostHeader") || "slack.test.iterate-dev-jonas.app";
-      const result = await this.#slackClient().apiCall("chat.postMessage", {
+    this.ctx.waitUntil(
+      this.#handleSlackWebhookEvent({
+        slackWebhookEvent,
+        parsed,
         channel,
-        thread_ts: threadTs,
-        text: debugResponse({
-          eventsBaseUrl,
-          projectSlug,
-          hostHeader,
-          agentPath,
-          channel,
-          threadTs,
-          messageTs: msgTs || threadTs,
-        }),
-      });
-      return Response.json({ ok: true, debug: true, result });
+        threadTs,
+        threadKey,
+        isKnownThread,
+        msgTs,
+        isDebug,
+        agentPath,
+      }),
+    );
+
+    return Response.json({ ok: true, eventId: payload.event_id, agentPath, queued: true });
+  }
+
+  async #appendRawSlackWebhook(slackWebhookEvent: any): Promise<void> {
+    try {
+      await this.#appendToStream("/slack/webhooks", slackWebhookEvent);
+    } catch (e: any) {
+      console.error(`[Slack] raw webhook append failed: ${e.message}`);
     }
+  }
 
-    if (parsed.case === "fyi" && !isKnownThread) {
-      return Response.json({ ok: true, ignored: true, reason: "not mentioned" });
-    }
-
-    this.#setConfig(threadKey, "1");
-
-    const slackContext = this.#ensureSlackThreadContext({
-      agentPath,
+  async #handleSlackWebhookEvent(args: {
+    slackWebhookEvent: any;
+    parsed: Extract<ReturnType<typeof parseWebhookPayload>, { event: any }>;
+    channel: string;
+    threadTs: string;
+    threadKey: string;
+    isKnownThread: boolean;
+    msgTs?: string;
+    isDebug: boolean;
+    agentPath: string;
+  }): Promise<void> {
+    const {
+      slackWebhookEvent,
+      parsed,
       channel,
       threadTs,
-      emojiTimestamp: parsed.case === "mention" ? event.ts : undefined,
-      emoji: parsed.case === "mention" ? "eyes" : undefined,
-    });
+      threadKey,
+      isKnownThread,
+      msgTs,
+      isDebug,
+      agentPath,
+    } = args;
 
     try {
-      await this.#ensureDefaultEvents(agentPath);
+      await this.#appendRawSlackWebhook(slackWebhookEvent);
 
-      // Cross-post the raw webhook verbatim, then append the channel-derived
-      // agent input. The generic agents processor does not parse Slack payloads.
-      try {
-        await this.#appendToStream(agentPath, slackWebhookEvent);
-      } catch (e: any) {
-        console.error(`[Slack] stream append failed: ${e.message}`);
+      if (isDebug) {
+        this.#setConfig(threadKey, "1");
+        const eventsBaseUrl = this.#config("eventsBaseUrl") || "https://events.iterate.com";
+        const projectSlug = this.#config("projectSlug") || "test";
+        const hostHeader = this.#config("hostHeader") || "slack.test.iterate-dev-jonas.app";
+        const result = await this.#slackClient().apiCall("chat.postMessage", {
+          channel,
+          thread_ts: threadTs,
+          text: debugResponse({
+            eventsBaseUrl,
+            projectSlug,
+            hostHeader,
+            agentPath,
+            channel,
+            threadTs,
+            messageTs: msgTs || threadTs,
+          }),
+        });
+        if (result?.ok === false) console.error("[Slack] debug response failed", result);
+        return;
       }
 
-      this.#scheduleThreadStatusUpdate(agentPath, slackContext, "🤔 Thinking");
-      const agentInput = await this.#appendToStream(
-        agentPath,
-        agentInputForSlackMessage({ rawEvent: slackWebhookEvent }),
-      );
-      await this.#processAgentEvent(agentPath, agentInput);
-    } catch (e: any) {
-      console.error(`[Slack] direct agent trigger failed: ${e.message}`);
-    } finally {
-      await this.#cleanupSlackThreadContext(agentPath, slackContext);
-    }
+      if (parsed.case === "fyi" && !isKnownThread) {
+        return;
+      }
 
-    return Response.json({ ok: true, eventId: payload.event_id, agentPath });
+      this.#setConfig(threadKey, "1");
+
+      const event = parsed.event;
+      const slackContext = this.#ensureSlackThreadContext({
+        agentPath,
+        channel,
+        threadTs,
+        emojiTimestamp: parsed.case === "mention" ? event.ts : undefined,
+        emoji: parsed.case === "mention" ? "eyes" : undefined,
+      });
+
+      try {
+        await this.#ensureDefaultEvents(agentPath);
+
+        // Cross-post the raw webhook verbatim, then append the channel-derived
+        // agent input. The generic agents processor does not parse Slack payloads.
+        try {
+          await this.#appendToStream(agentPath, slackWebhookEvent);
+        } catch (e: any) {
+          console.error(`[Slack] stream append failed: ${e.message}`);
+        }
+
+        this.#scheduleThreadStatusUpdate(agentPath, slackContext, "🤔 Thinking");
+        const agentInput = await this.#appendToStream(
+          agentPath,
+          agentInputForSlackMessage({ rawEvent: slackWebhookEvent, parsed }),
+        );
+        await this.#processAgentEvent(agentPath, agentInput);
+      } catch (e: any) {
+        console.error(`[Slack] direct agent trigger failed: ${e.message}`);
+      } finally {
+        await this.#cleanupSlackThreadContext(agentPath, slackContext);
+      }
+    } catch (e: any) {
+      console.error(`[Slack] background webhook handling failed: ${e?.message || String(e)}`);
+    }
   }
 
   async #install(req: Request): Promise<Response> {
