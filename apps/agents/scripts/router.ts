@@ -1,4 +1,7 @@
 import { randomBytes } from "node:crypto";
+import { spawn } from "node:child_process";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { os } from "@orpc/server";
 import { z } from "zod";
 import { useCloudflareTunnel, useCloudflareTunnelLease } from "@iterate-com/shared/test-helpers";
@@ -15,6 +18,7 @@ const DEFAULT_EVENTS_BASE_URL = "https://events.iterate.com";
 const DEFAULT_AGENT_CLASS = "iterate-agent";
 const DEFAULT_PROJECT_SLUG: ProjectSlug = "public";
 const TUNNEL_READY_TIMEOUT_MS = 120_000;
+const scriptsDir = dirname(fileURLToPath(import.meta.url));
 
 function waitForAbort(signal: AbortSignal | undefined): Promise<void> {
   if (signal == null) {
@@ -98,7 +102,33 @@ const DeployEphemeralInput = z.object({
   egressProxy: z.string().trim().url().optional().describe("External egress proxy URL"),
 });
 
+const EventStreamTerminalInput = z.object({
+  projectSlug: z.string().trim().min(1).describe("Events project slug"),
+  streamPath: z.string().trim().min(1).describe("Events stream path, e.g. /agents/demo"),
+});
+
 export const router = {
+  streamTui: os
+    .input(EventStreamTerminalInput)
+    .meta({
+      description: "Open a minimal OpenTUI event stream viewer",
+    })
+    .handler(async ({ input }) => {
+      const scriptPath = join(scriptsDir, "event-stream-terminal.ts");
+      // OpenTUI is currently Bun-only: https://opentui.com/docs/getting-started/
+      await runInheritedProcess("bun", [
+        scriptPath,
+        "--events-base-url",
+        DEFAULT_EVENTS_BASE_URL,
+        "--project-slug",
+        input.projectSlug,
+        "--stream-path",
+        input.streamPath,
+      ]);
+
+      return { ok: true as const };
+    }),
+
   deployEphemeral: os
     .input(DeployEphemeralInput)
     .meta({
@@ -217,3 +247,19 @@ export const router = {
       };
     }),
 };
+
+async function runInheritedProcess(command: string, args: string[]): Promise<void> {
+  const child = spawn(command, args, {
+    stdio: "inherit",
+    env: process.env,
+  });
+
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("exit", (code) => resolve(code));
+  });
+
+  if (exitCode !== 0) {
+    throw new Error(`${command} exited with code ${exitCode ?? "unknown"}.`);
+  }
+}

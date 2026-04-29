@@ -22,17 +22,8 @@ export type EventDefinition<
   PayloadOutput = unknown,
   PayloadInput = PayloadOutput,
 > = {
-  type: Type;
   description?: string;
   payloadSchema: z.ZodType<PayloadOutput, PayloadInput>;
-  input: z.ZodType<StreamEventInput<Type, PayloadOutput>, StreamEventInput<Type, PayloadInput>>;
-  event: z.ZodType<StreamEvent<Type, PayloadOutput>, StreamEvent<Type, PayloadInput>>;
-  createInput(args: {
-    payload: PayloadInput;
-    metadata?: Record<string, unknown>;
-    idempotencyKey?: string;
-    offset?: number;
-  }): StreamEventInput<Type, PayloadOutput>;
 };
 
 export type EventCatalog = Record<string, EventDefinition<string, unknown, unknown>>;
@@ -40,21 +31,71 @@ export type EventCatalog = Record<string, EventDefinition<string, unknown, unkno
 export type NoInferValue<Value> = [Value][Value extends unknown ? 0 : never];
 export type ProcessorStateObject = Record<string, unknown>;
 
+/**
+ * Type-level event lookup for string-keyed processor contracts.
+ *
+ * This section is the main "type-fu" in the stream processor prototype. The
+ * requirements behind it are recorded in
+ * `tasks/agents-processor-composition-requirements.md`, especially:
+ *
+ * - processor authors want inline event definitions keyed by the durable wire
+ *   event type:
+ *
+ *   ```ts
+ *   events: {
+ *     "events.iterate.com/agent/input-added": {
+ *       description: "...",
+ *       payloadSchema: z.object({ ... }),
+ *     },
+ *   }
+ *   ```
+ *
+ * - `consumes` and `emits` should stay as visible string arrays in the
+ *   contract, not hidden behind helper constants;
+ * - a processor may consume or emit events owned by `processorDeps`;
+ * - reducers and `afterAppend` should receive a union of only consumed events;
+ * - `streamApi.append(...)` should accept ordinary object literals, but only
+ *   for event types listed in `emits`, with the matching payload shape.
+ *
+ * The consequence is that the event type string is not stored inside the event
+ * definition value. It is the key of the event catalog object. These helper
+ * types recover "event type string -> payload schema" from those keys.
+ */
 export type EventCatalogFromObject<Value> = {
   [Key in keyof Value as Value[Key] extends EventDefinition ? Key : never]: Value[Key];
 };
 
+/**
+ * Accept either a full processor contract (`{ events: ... }`) or a standalone
+ * event catalog. `processorDeps` deliberately supports both so a processor can
+ * depend on another processor's full contract or on a small shared catalog.
+ */
 export type ContractEventCatalog<ContractOrCatalog> = ContractOrCatalog extends {
   events: infer Events;
 }
   ? EventCatalogFromObject<Events>
   : EventCatalogFromObject<ContractOrCatalog>;
 
+/**
+ * All event type strings resolvable from local `events` plus `processorDeps`.
+ *
+ * `defineProcessorContract(...)` uses this to make typos in `consumes` and
+ * `emits` fail at the contract definition site. Runtime validation still does
+ * the same check for dynamically assembled contracts.
+ */
 export type ResolvedEventType<
   Events extends EventCatalog,
   ProcessorDeps extends readonly unknown[],
 > = Extract<keyof Events | EventTypeFromProcessorDeps<ProcessorDeps>, string>;
 
+/**
+ * Distributes over each item in `processorDeps` and collects its event keys.
+ *
+ * The `ProcessorDep extends unknown` branch is intentional: it makes TypeScript
+ * distribute over unions, which is how an array like
+ * `[CoreProcessorContract, AgentProcessorContract]` turns into the union of all
+ * event strings owned by both contracts.
+ */
 export type EventTypeFromProcessorDeps<ProcessorDeps extends readonly unknown[]> =
   ProcessorDeps[number] extends infer ProcessorDep
     ? ProcessorDep extends unknown
@@ -62,6 +103,9 @@ export type EventTypeFromProcessorDeps<ProcessorDeps extends readonly unknown[]>
       : never
     : never;
 
+/**
+ * Looks up one event definition by string key from one processor dependency.
+ */
 export type EventDefinitionFromProcessorDep<
   ProcessorDep,
   Type extends string,
@@ -76,6 +120,14 @@ export type EventDefinitionFromProcessorDeps<
   Type extends string,
 > = EventDefinitionFromProcessorDep<ProcessorDeps[number], Type>;
 
+/**
+ * Resolve a string event type to the event definition that owns it.
+ *
+ * Local events win over dependency events in the type-level lookup, but runtime
+ * validation rejects duplicate ownership. Duplicate event ownership is a
+ * contract error because otherwise a string such as
+ * `"events.iterate.com/agent/input-added"` could map to two payload schemas.
+ */
 export type EventDefinitionForType<
   Events extends EventCatalog,
   ProcessorDeps extends readonly unknown[],
@@ -84,16 +136,42 @@ export type EventDefinitionForType<
   ? Events[Type]
   : EventDefinitionFromProcessorDeps<ProcessorDeps, Type>;
 
-export type EventFromDefinition<Definition> =
-  Definition extends EventDefinition<infer Type, infer PayloadOutput, unknown>
+/**
+ * Turn an event definition plus its catalog key into a committed stream event.
+ *
+ * The catalog key is passed separately because authored event definitions are
+ * plain `{ description, payloadSchema }` values and intentionally do not repeat
+ * the event type inside the value.
+ */
+export type EventFromDefinitionForType<Definition, Type extends string> =
+  Definition extends EventDefinition<string, infer PayloadOutput, unknown>
     ? StreamEvent<Type, PayloadOutput>
     : never;
 
-export type InputFromDefinition<Definition> =
-  Definition extends EventDefinition<infer Type, infer PayloadOutput, infer PayloadInput>
+/**
+ * Turn an event definition plus its catalog key into append input.
+ *
+ * We accept both Zod input and output payload shapes. That lets authors use
+ * Zod defaults/transforms in payload schemas without forcing append callers to
+ * provide already-parsed output. Hosts still validate at the append boundary.
+ */
+export type InputFromDefinitionForType<Definition, Type extends string> =
+  Definition extends EventDefinition<string, infer PayloadOutput, infer PayloadInput>
     ? StreamEventInput<Type, PayloadOutput | PayloadInput>
     : never;
 
+/**
+ * Build the union of committed events corresponding to a `consumes` string
+ * array. This is what makes reducer/`afterAppend` narrowing work:
+ *
+ * ```ts
+ * reduce({ event }) {
+ *   if (event.type === "events.iterate.com/agent/input-added") {
+ *     event.payload.content; // correctly typed
+ *   }
+ * }
+ * ```
+ */
 export type EventFromTypes<
   Events extends EventCatalog,
   ProcessorDeps extends readonly unknown[],
@@ -105,9 +183,23 @@ export type EventFromType<
   ProcessorDeps extends readonly unknown[],
   Type extends string,
 > = Type extends unknown
-  ? EventFromDefinition<EventDefinitionForType<Events, ProcessorDeps, Type>>
+  ? EventFromDefinitionForType<EventDefinitionForType<Events, ProcessorDeps, Type>, Type>
   : never;
 
+/**
+ * Build the union of append inputs corresponding to an `emits` string array.
+ * This is what makes raw object-literal appends work without generated
+ * `.createInput(...)` helpers:
+ *
+ * ```ts
+ * await streamApi.append({
+ *   event: {
+ *     type: "events.iterate.com/agent/input-added",
+ *     payload: { role: "user", content: "hello" },
+ *   },
+ * });
+ * ```
+ */
 export type InputFromTypes<
   Events extends EventCatalog,
   ProcessorDeps extends readonly unknown[],
@@ -119,7 +211,7 @@ export type InputFromType<
   ProcessorDeps extends readonly unknown[],
   Type extends string,
 > = Type extends unknown
-  ? InputFromDefinition<EventDefinitionForType<Events, ProcessorDeps, Type>>
+  ? InputFromDefinitionForType<EventDefinitionForType<Events, ProcessorDeps, Type>, Type>
   : never;
 
 export type ProcessorContractShape<
@@ -133,14 +225,16 @@ export type ProcessorContractShape<
   version: string;
   description: string;
   /**
-   * Serializable reduced state schema. Processor state must be object-shaped
-   * so slices can evolve safely over time and hooks never have to branch on
-   * primitive state values.
-   *
-   * Stateless processors should use `z.object({}).default({})`. Keeping state
-   * required avoids generic host code falling back to `{}` or `unknown`.
+   * Serializable reduced state schema. Processor state must be object-shaped so
+   * slices can evolve safely and hooks never have to branch on primitive state.
    */
-  state: StateSchema;
+  stateSchema: StateSchema;
+  /**
+   * Optional initial reduced state. Hosts parse this through `stateSchema`
+   * before using it. If omitted, hosts parse `undefined`, which is useful for
+   * tiny processors that prefer Zod defaults.
+   */
+  initialState?: z.input<StateSchema>;
   processorDeps?: ProcessorDeps;
   events: Events;
   consumes: Consumes;
@@ -168,6 +262,14 @@ export type UnresolvedEventTypes<
   Types extends readonly string[],
 > = Exclude<Types[number], ResolvedEventType<Events, ProcessorDeps>>;
 
+/**
+ * Compile-time typo guard for `consumes` and `emits`.
+ *
+ * If every string in `Types` can be resolved from local events plus
+ * `processorDeps`, this returns `unknown` and the contract argument remains
+ * unchanged. If any string is unresolved, this returns `never`, causing the
+ * `defineProcessorContract(...)` call to fail where the bad string is written.
+ */
 export type ResolvedEventTypesOnly<
   Events extends EventCatalog,
   ProcessorDeps extends readonly unknown[],
@@ -183,11 +285,19 @@ export type ProcessorDepsOf<Contract> = Contract extends {
   : readonly [];
 
 export type ProcessorState<Contract> = Contract extends {
-  state: infer State extends z.ZodType;
+  stateSchema: infer State extends z.ZodType;
 }
   ? z.output<State>
   : never;
 
+/**
+ * The committed event union visible to a processor implementation.
+ *
+ * This intentionally depends on `contract.consumes`, not on every resolvable
+ * event. A processor can depend on a contract for append permission or schema
+ * lookup without receiving all of that contract's events in `reduce` and
+ * `afterAppend`.
+ */
 export type ConsumedEvent<Contract> = Contract extends {
   events: infer Events extends EventCatalog;
   consumes: infer Consumes extends readonly string[];
@@ -195,6 +305,14 @@ export type ConsumedEvent<Contract> = Contract extends {
   ? EventFromTypes<Events, ProcessorDepsOf<Contract>, Consumes>
   : never;
 
+/**
+ * The append input union allowed for `streamApi.append(...)`.
+ *
+ * This intentionally depends on `contract.emits`. It enforces the requirement
+ * from the design discussion that a processor gets a type error if it appends
+ * an event it did not declare in `emits`, while still letting authors pass
+ * plain object literals.
+ */
 export type EmittedInput<Contract> = Contract extends {
   events: infer Events extends EventCatalog;
   emits: infer Emits extends readonly string[];
@@ -238,6 +356,20 @@ export type ProcessorReduction<Contract> = {
   event: ConsumedEvent<Contract>;
   previousState: ProcessorState<Contract>;
   state: ProcessorState<Contract>;
+};
+
+/**
+ * Host-owned durable progress for one processor bound to one stream.
+ *
+ * `reducedThroughOffset` and `afterAppendCompletedThroughOffset` are separate
+ * on purpose. A host may successfully reduce and persist state for an event,
+ * then fail while running `afterAppend`. Keeping both offsets lets the host
+ * retry live side effects without replaying reducer state from scratch.
+ */
+export type ProcessorHostState<Contract> = {
+  state: ProcessorState<Contract>;
+  reducedThroughOffset: number;
+  afterAppendCompletedThroughOffset: number;
 };
 
 export type ProcessorImplementation<Contract> = {

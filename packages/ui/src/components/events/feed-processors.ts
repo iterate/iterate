@@ -32,7 +32,8 @@ export function processEventsWithViewProcessor(args: {
 
 /**
  * Raw + Pretty keeps grouped wire events in the feed and inserts semantic items
- * immediately after the raw event that produced them.
+ * immediately after the raw event that produced them. It is shared by the web
+ * stream view and the agents terminal CLI proof of concept.
  */
 export const rawPrettyEventsStreamViewProcessor = createEventsStreamViewProcessor({
   slug: "raw-pretty",
@@ -272,16 +273,21 @@ function addRawEventToGroup(
   event: EventsStreamRawEventFeedItem,
 ): EventsStreamGroupedRawEventFeedItem {
   const events = [...group.events, event];
+  const count = group.count + 1;
 
   if (events.length > MAX_SAME_TYPE_RAW_GROUP) {
-    return createRawEventGroup(events.slice(-MAX_SAME_TYPE_RAW_GROUP));
+    return createRawEventGroup(events.slice(-MAX_SAME_TYPE_RAW_GROUP), {
+      count,
+      firstTimestamp: group.firstTimestamp,
+    });
   }
 
-  return createRawEventGroup(events);
+  return createRawEventGroup(events, { count, firstTimestamp: group.firstTimestamp });
 }
 
 function createRawEventGroup(
   events: readonly EventsStreamRawEventFeedItem[],
+  state?: { count: number; firstTimestamp: number },
 ): EventsStreamGroupedRawEventFeedItem {
   const firstEvent = events[0];
   const lastEvent = events[events.length - 1];
@@ -290,9 +296,9 @@ function createRawEventGroup(
     type: "grouped-raw-event",
     id: `grouped-raw-event-${firstEvent.eventType}-${firstEvent.offset}-${lastEvent.offset}`,
     eventType: firstEvent.eventType,
-    count: events.length,
+    count: state?.count ?? events.length,
     events: [...events],
-    firstTimestamp: firstEvent.timestamp,
+    firstTimestamp: state?.firstTimestamp ?? firstEvent.timestamp,
     lastTimestamp: lastEvent.timestamp,
   };
 }

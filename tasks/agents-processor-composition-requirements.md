@@ -38,10 +38,14 @@ Working note for the `apps/agents` processor redesign discussion. This is not co
 - Initial redesign target assumes one processor instance is scoped to one stream and has simple local reduced state for that stream.
 - The host deployment mode owns persistence of reduced state.
 - The processor owns state schema and reducer logic when it needs them, but not where reduced state is stored.
-- Processor state is required for now. Stateless processors should declare `state: z.object({}).default({})`.
-- Drop separate `initialState`; if a processor declares state, require its state schema to parse `undefined` into a valid initial state.
-- Add runtime validation/tests that declared processor state schemas parse `undefined`.
+- Processor state schema is required for now. Name the property `stateSchema`.
+- `initialState` is optional. If it is present, hosts parse it through `stateSchema`; if it is omitted, hosts parse `undefined` through `stateSchema`.
+- Prefer explicit `initialState` for non-trivial processors so authors do not need to know Zod's `.prefault(...)` behavior.
+- Stateless processors may declare `stateSchema: z.object({}).default({})` and omit `initialState`.
+- Add runtime validation/tests that processor contracts can produce an initial state from `initialState` or `undefined`.
 - Processor state must always be object-shaped. Primitive or array state schemas should fail type tests for authored contracts and fail runtime validation for dynamically assembled contracts.
+- Authored contracts should fail at `defineProcessorContract(...)` when `consumes` or `emits` names an event type that cannot be resolved from owned events plus `processorDeps`.
+- Runtime contract validation is still required for dynamically loaded or assembled contracts.
 - Omitted `reduce` means identity reduction. This keeps side-effect-only processors lightweight while preserving one host lifecycle.
 - A reducer may return `null` or `undefined` to mean that a consumed event leaves state unchanged.
 - Reducer outputs must also be object-shaped at runtime, so a bad dynamic contract cannot corrupt a persisted state slice with a primitive or array.
@@ -74,6 +78,11 @@ Working note for the `apps/agents` processor redesign discussion. This is not co
 - Derived appends need a first-class idempotency convention based on processor identity, source event offset/id, and a caller-provided suffix.
 - Do not add a special `appendDerived` stream method in the first design. Prefer a small helper that returns ordinary event input fields that can be spread into `createInput(...)`.
 - Hosts should treat processor delivery, reduced-state persistence, checkpoints, and derived appends as one consistency problem. The transaction boundary must be explicit in the design before stabilizing the public API.
+- Host-owned processor progress should keep reduced-state progress separate from live hook completion.
+- The current minimal host state envelope is `{ state, reducedThroughOffset, afterAppendCompletedThroughOffset }`.
+- `reducedThroughOffset` means the reducer result for that committed event has been persisted.
+- `afterAppendCompletedThroughOffset` means live `afterAppend` work for that committed event has completed successfully.
+- If `afterAppend` fails after state is reduced, the host must be able to see that `afterAppendCompletedThroughOffset < reducedThroughOffset` and retry live effects without re-reducing from scratch.
 - Durable Object hosts must serialize processor delivery and avoid reentrant processor delivery when processors append during event handling.
 - Pull/replay hosts must make replay/live behavior explicit. Historical catch-up should not run side-effect hooks by default.
 - `contract.consumes` should mean every event the processor may inspect in `reducer` or `afterAppend`.
@@ -95,15 +104,23 @@ Working note for the `apps/agents` processor redesign discussion. This is not co
 - Durable Object hosts should contribute deployment-specific pieces: storage adapter, transaction boundary, `waitUntil`, bindings, alarms, sockets, and request routing.
 - Processor contracts and implementations should not know whether they are hosted by `stream.ts`, an Agent Durable Object, a Codemode Durable Object, a pull runtime, or a future system-managed facet host.
 - The existing pull/push runtime in `apps/events-contract/src/sdk.ts` is prior art and should be reconciled with the new shared processor contract model rather than left as an unrelated abstraction.
+- For the current exploration, do not change `events-contract`; continue proving the processor abstraction independently before reconciling envelopes and SDKs.
 - The first extraction from `stream.ts` should prove the shared host shape by moving reducer/hook orchestration into a small host helper reusable by future agent/codemode Durable Objects.
 
 ## Design Implications
 
 - AgentLoop and Codemode should communicate through events, not direct calls or shared mutable state.
+- AgentLoop and Codemode must be modeled as clearly separate processor contracts, implementations, and reduced state slices.
+- Do not preserve the current `IterateAgent` / composed `IterateAgentProcessorState` design as the target architecture; it can be replaced.
+- The future agent processor Durable Object should not subclass Cloudflare's `Agent`.
+- MCP connections should move into a separate Durable Object, e.g. `MCPConnection`, that can act as a Codemode tool provider.
 - Same-host composition may be an optimization, but must not be required for correctness unless the processor is explicitly built-in-only.
 - If Codemode emits an event that AgentLoop consumes, correctness should come from the later committed event offset, not from Codemode running first in an in-process loop.
 - Composition APIs should avoid implying deterministic same-turn ordering for ordinary processors.
 - Public schemas/reducers should be ordinary TypeScript imports, not runtime dependency injection.
+- Frontend code should be able to import processor contract modules without importing backend-only runtime implementations.
+- Frontend projection should use the same pure reducer path as replay hosts to compute UI state from committed stream events.
+- Contract modules intended for frontend import must not import Durable Objects, `WorkerEntrypoint`, `Ai`, `Fetcher`, dynamic worker loaders, MCP clients, or other backend-only runtime objects.
 - `append` should be framed as writing a new event to the stream, not invoking another processor.
 - `afterAppend` primarily needs the scoped stream API for appending derived events; read/subscribe may still belong on the same scoped stream service for completeness and testing.
 - Processor self-description is important. A processor should be able to append an event describing itself, including event schemas and documentation.
@@ -144,20 +161,28 @@ Working note for the `apps/agents` processor redesign discussion. This is not co
 - Processor implementations need access to their contract slug and version.
 - Registration/self-description will be a recurring pattern and likely needs a small reusable helper.
 - Processor registration/self-description should be a core stream event owned by the events system, not an agents-only event.
-- Processors should explicitly include the core `ProcessorRegisteredEvent` in `consumes` if their reducer handles registration state.
-- Processors that append their own registration/self-description event should explicitly include the core `ProcessorRegisteredEvent` in `emits`, so typed `stream.append` allows it.
+- Standard processor registration behavior currently lives in a temporary `wellBehavedProcessorDefaults` bag with `stateShape`, `initialState`, `processorDeps`, `consumes`, `emits`, `reduce`, and `afterAppend` pieces.
+- `wellBehavedProcessorDefaults` is deliberately not the final composition abstraction. It records recurring behavior while we learn whether these pieces should become a small processor in their own right.
+- The core processor registration event type is `events.iterate.com/core/processor/registered`.
+- Processor event type strings should not include `https://`.
+- Processor event type strings should not include the processor version for now.
+- Processor-owned event types should use `events.iterate.com/{processor-slug}/{short-event-type}`.
+- Do not add extra slash subfolders under ordinary processor namespaces for now; prefer `events.iterate.com/agent/input-added`, not `events.iterate.com/agent/input/added`.
+- Processors should explicitly include `events.iterate.com/core/processor/registered` in `consumes` if their reducer handles registration state.
+- Processors that append their own registration/self-description event should explicitly include `events.iterate.com/core/processor/registered` in `emits`, so typed `stream.append` allows it.
 - Shared constants/helpers may make this boilerplate small, but the final contract should remain explicit.
-- Event construction helper name is soft-locked as `createInput`.
+- `consumes` and `emits` arrays should show visible string literals in processor contracts, not hidden helper constants.
 - Zod schemas and event identifiers should start with a capital letter.
 - Zod schemas and their inferred types should share the same identifier.
 - Zod schema identifiers should not end in `Schema`.
 - Zod docs support the existing repo convention: define a schema value, infer its type with `z.infer<typeof Value>`, and use `z.input` / `z.output` when input and parsed output diverge.
 - Zod 4 metadata registries and `.meta()` may be useful for processor/event documentation.
 - Zod 4 `z.toJSONSchema()` can generate event docs, but `z.custom()` and similar unrepresentable types need care.
+- Event definitions should be authored inline as string-keyed objects, e.g. `"events.iterate.com/agent/input-added": { description, payloadSchema }`.
 - Event definitions should be authored with normal Zod objects and `.meta(...)` for docs where possible.
 - Event descriptors do not need a `.Payload` property.
-- `createInput` should fill the event `type` and run the result through the append input parser.
-- Event helper naming remains open. A critique of `.Input` is that it is non-idiomatic as a runtime property and may obscure Zod's `z.input` / `z.output` distinction; `.inputSchema` / `.schema` / `.create(...)` are plainer alternatives to revisit.
+- Do not require a `createEvent(...)` spread helper in authored processor contracts.
+- Event input helper naming remains open now that event definitions are plain inline objects.
 
 ## Discuss Later
 
@@ -202,15 +227,14 @@ Working note for the `apps/agents` processor redesign discussion. This is not co
 - `implementProcessor(contract, implementation)` should type implementation hooks from the contract:
 - the handled event is narrowed from `contract.consumes`
 - `stream.append` accepts only events from `contract.emits`
-- `state` is optional and defaults to `{}`
+- `stateSchema` is required; `initialState` is optional and is parsed through `stateSchema`
 - `reduce` is optional and defaults to identity
 - Event definition shape is soft-locked:
-  - authored with `createEvent({ type, description?, payloadSchema })`
-  - `createEvent(...)` returns a one-key event catalog entry keyed by the wire event type
-  - the event definition has `.input` for append input parsing
-  - the event definition has `.event` for committed stream event parsing
-  - the event definition has `.type` for the wire event type string
-  - the returned value has `.createInput({ payload, metadata?, idempotencyKey? })`
+  - authored inline as `{ "events.iterate.com/agent/input-added": { description, payloadSchema } }`
+  - the event catalog key is the wire event type string
+  - the event definition stores `description` and `payloadSchema`
+  - append input and committed event schemas can be derived by host/helpers from the catalog key and `payloadSchema`
+  - append object literals should be typechecked from `contract.emits`; do not require generated `.createInput(...)`
   - no `.Payload` property
 - Startup semantics are soft-locked:
   - the startup hook means reduced state has caught up and the processor may hydrate runtime-only resources from it

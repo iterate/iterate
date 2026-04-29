@@ -49,6 +49,12 @@ to exist even when the selected processor never emits that item type.
 Do not make renderer selection depend on the dropdown mode. The mode selects the
 processor; `item.type` selects the renderer.
 
+This directory currently has a web renderer in `stream-feed.tsx`. The Bun +
+OpenTUI proof of concept in `apps/agents/scripts/event-stream-terminal.ts`
+reuses `feed-items.ts` and `feed-processors.ts`, but defines its own terminal
+renderer. That is the intended split: processors and feed item data are shared;
+renderers belong to each UI runtime.
+
 ## Shape Rules
 
 - Feed items must be serializable data structures.

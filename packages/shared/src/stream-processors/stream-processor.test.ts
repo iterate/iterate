@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
+  createProcessorHostState,
   createEvent,
   defineProcessorContract,
+  getEventInputSchema,
+  getEventSchema,
+  getInitialProcessorState,
   getProcessorStateSchema,
   implementProcessor,
   runProcessorOnStart,
@@ -21,7 +25,7 @@ const streamProcessorContract = defineProcessorContract({
   slug: "stream-core",
   version: "1.0.0",
   description: "Core stream events.",
-  state: z.object({}).default({}),
+  stateSchema: z.object({}).default({}),
   events: {
     ...createEvent({
       type: "processor-registered",
@@ -47,10 +51,13 @@ describe("stream processor contracts", () => {
     };
 
     expect(Object.keys(events)).toEqual(["echo-requested"]);
-    expect(events["echo-requested"].type).toBe("echo-requested");
     expect(events["echo-requested"].description).toBe("Requests an echo response.");
     expect(
-      events["echo-requested"].createInput({
+      getEventInputSchema({
+        type: "echo-requested",
+        payloadSchema: events["echo-requested"].payloadSchema,
+      }).parse({
+        type: "echo-requested",
         payload: { text: "hello" },
         idempotencyKey: "echo:1",
       }),
@@ -68,29 +75,37 @@ describe("stream processor contracts", () => {
         payloadSchema: z.object({ text: z.string() }),
       }),
     };
+    const eventInputSchema = getEventInputSchema({
+      type: "strict-event",
+      payloadSchema: events["strict-event"].payloadSchema,
+    });
+    const eventSchema = getEventSchema({
+      type: "strict-event",
+      payloadSchema: events["strict-event"].payloadSchema,
+    });
 
     expect(() =>
-      events["strict-event"].input.parse({
+      eventInputSchema.parse({
         type: "strict-event",
         payload: { text: "hello" },
         extra: true,
       }),
     ).toThrow();
     expect(() =>
-      events["strict-event"].input.parse({
+      eventInputSchema.parse({
         type: "wrong-event",
         payload: { text: "hello" },
       }),
     ).toThrow();
     expect(() =>
-      events["strict-event"].input.parse({
+      eventInputSchema.parse({
         type: "strict-event",
         payload: { text: "hello" },
         idempotencyKey: " ",
       }),
     ).toThrow();
     expect(() =>
-      events["strict-event"].event.parse({
+      eventSchema.parse({
         type: "strict-event",
         payload: { text: "hello" },
         streamPath: "/stream",
@@ -104,7 +119,7 @@ describe("stream processor contracts", () => {
       slug: "echo",
       version: "1.0.0",
       description: "Echo test processor.",
-      state: z.object({ count: z.number().default(0) }).prefault({}),
+      stateSchema: z.object({ count: z.number().default(0) }).prefault({}),
       processorDeps: [streamProcessorContract],
       events: {
         ...createEvent({
@@ -125,7 +140,7 @@ describe("stream processor contracts", () => {
       slug: "stateless",
       version: "1.0.0",
       description: "Stateless test processor.",
-      state: z.object({}).default({}),
+      stateSchema: z.object({}).default({}),
       events: {},
       consumes: [],
       emits: [],
@@ -135,10 +150,24 @@ describe("stream processor contracts", () => {
     expect(() => validateProcessorContract(contract)).not.toThrow();
   });
 
-  it("rejects state schemas that cannot parse undefined", () => {
+  it("accepts explicit initial state for schemas that cannot parse undefined", () => {
     const contract = {
       slug: "echo",
-      state: z.object({ count: z.number() }),
+      stateSchema: z.object({ count: z.number() }),
+      initialState: { count: 0 },
+      events: {},
+      consumes: [],
+      emits: [],
+    };
+
+    expect(() => validateProcessorContract(contract)).not.toThrow();
+    expect(getInitialProcessorState(contract)).toEqual({ count: 0 });
+  });
+
+  it("rejects schemas that cannot parse omitted initial state", () => {
+    const contract = {
+      slug: "echo",
+      stateSchema: z.object({ count: z.number() }),
       events: {},
       consumes: [],
       emits: [],
@@ -150,14 +179,14 @@ describe("stream processor contracts", () => {
   it("rejects state schemas that parse undefined into non-object states", () => {
     const primitiveStateContract = {
       slug: "primitive-state",
-      state: z.number().default(0),
+      stateSchema: z.number().default(0),
       events: {},
       consumes: [],
       emits: [],
     };
     const arrayStateContract = {
       slug: "array-state",
-      state: z.array(z.string()).default([]),
+      stateSchema: z.array(z.string()).default([]),
       events: {},
       consumes: [],
       emits: [],
@@ -176,7 +205,7 @@ describe("stream processor contracts", () => {
       slug: "echo",
       version: "1.0.0",
       description: "Echo test processor.",
-      state: z.object({ count: z.number().default(0) }).prefault({}),
+      stateSchema: z.object({ count: z.number().default(0) }).prefault({}),
       events: {},
       consumes: ["missing-consumed-event"],
       emits: ["missing-emitted-event"],
@@ -192,7 +221,7 @@ describe("stream processor contracts", () => {
       slug: "echo",
       version: "1.0.0",
       description: "Echo test processor.",
-      state: z.object({}).default({}),
+      stateSchema: z.object({}).default({}),
       events: {},
       consumes: [],
       emits: ["missing-emitted-event"],
@@ -208,7 +237,7 @@ describe("stream processor contracts", () => {
       slug: "duplicate-stream-core",
       version: "1.0.0",
       description: "Duplicate core stream events.",
-      state: z.object({}).default({}),
+      stateSchema: z.object({}).default({}),
       events: {
         ...createEvent({
           type: "processor-registered",
@@ -224,7 +253,7 @@ describe("stream processor contracts", () => {
       slug: "echo",
       version: "1.0.0",
       description: "Echo test processor.",
-      state: z.object({}).default({}),
+      stateSchema: z.object({}).default({}),
       processorDeps: [streamProcessorContract, duplicateProcessorContract],
       events: {},
       consumes: ["processor-registered"],
@@ -242,7 +271,7 @@ describe("stream processor contracts", () => {
       slug: "echo",
       version: "1.0.0",
       description: "Echo test processor.",
-      state: z.object({}).default({}),
+      stateSchema: z.object({}).default({}),
       processorDeps: [streamProcessorContract],
       events: {
         ...createEvent({
@@ -271,7 +300,7 @@ describe("stream processor contracts", () => {
       slug: "echo",
       version: "1.0.0",
       description: "Echo test processor.",
-      state: z.object({}).default({}),
+      stateSchema: z.object({}).default({}),
       processorDeps: [streamProcessorContract, standaloneEvents],
       events: {},
       consumes: [],
@@ -287,7 +316,7 @@ describe("stream processor contracts", () => {
       slug: "counter",
       version: "1.0.0",
       description: "Counts committed increment events.",
-      state: z.object({ count: z.number().default(0) }).prefault({}),
+      stateSchema: z.object({ count: z.number().default(0) }).prefault({}),
       events: {
         ...createEvent({
           type: "counter-incremented",
@@ -324,7 +353,7 @@ describe("stream processor contracts", () => {
       slug: "counter",
       version: "1.0.0",
       description: "Counts committed increment events.",
-      state: z.object({ count: z.number().default(0) }).prefault({}),
+      stateSchema: z.object({ count: z.number().default(0) }).prefault({}),
       events: {
         ...createEvent({
           type: "counter-incremented",
@@ -362,7 +391,7 @@ describe("stream processor contracts", () => {
       slug: "no-reducer",
       version: "1.0.0",
       description: "Consumes without reducing.",
-      state: z.object({ count: z.number().default(0) }).prefault({}),
+      stateSchema: z.object({ count: z.number().default(0) }).prefault({}),
       events: eventDefinition,
       consumes: ["noop"],
       emits: [],
@@ -371,7 +400,7 @@ describe("stream processor contracts", () => {
       slug: "null-reducer",
       version: "1.0.0",
       description: "Uses null to keep state unchanged.",
-      state: z.object({ count: z.number().default(0) }).prefault({}),
+      stateSchema: z.object({ count: z.number().default(0) }).prefault({}),
       events: eventDefinition,
       consumes: ["noop"],
       emits: [],
@@ -381,7 +410,7 @@ describe("stream processor contracts", () => {
       slug: "undefined-reducer",
       version: "1.0.0",
       description: "Uses undefined to keep state unchanged.",
-      state: z.object({ count: z.number().default(0) }).prefault({}),
+      stateSchema: z.object({ count: z.number().default(0) }).prefault({}),
       events: eventDefinition,
       consumes: ["noop"],
       emits: [],
@@ -418,7 +447,7 @@ describe("stream processor contracts", () => {
       slug: "counter",
       version: "1.0.0",
       description: "Counts committed increment events.",
-      state: z.object({ count: z.number().default(0) }).prefault({}),
+      stateSchema: z.object({ count: z.number().default(0) }).prefault({}),
       events: {
         ...createEvent({
           type: "counter-incremented",
@@ -448,7 +477,7 @@ describe("stream processor contracts", () => {
       slug: "bad-reducer",
       version: "1.0.0",
       description: "Has a reducer that is patched to return bad state.",
-      state: z.object({ count: z.number().default(0) }).prefault({}),
+      stateSchema: z.object({ count: z.number().default(0) }).prefault({}),
       events: {
         ...createEvent({
           type: "counter-incremented",
@@ -482,7 +511,7 @@ describe("stream processor contracts", () => {
       slug: "counter",
       version: "1.0.0",
       description: "Counts committed increment events.",
-      state: z.object({ count: z.number().default(0) }).prefault({}),
+      stateSchema: z.object({ count: z.number().default(0) }).prefault({}),
       events: {
         ...createEvent({
           type: "counter-incremented",
@@ -543,7 +572,7 @@ describe("stream processor contracts", () => {
       slug: "starter",
       version: "1.0.0",
       description: "Starts from reduced state.",
-      state: z.object({ connected: z.boolean().default(false) }).prefault({}),
+      stateSchema: z.object({ connected: z.boolean().default(false) }).prefault({}),
       events: {},
       consumes: [],
       emits: [],
@@ -559,7 +588,7 @@ describe("stream processor contracts", () => {
 
     await runProcessorOnStart({
       processor,
-      state: contract.state.parse(undefined),
+      state: contract.stateSchema.parse(undefined),
       streamApi: {
         append: async () => committedEvent({ type: "unused", payload: {} }),
         read: async () => [],
@@ -582,7 +611,7 @@ describe("stream processor contracts", () => {
       slug: "counter",
       version: "1.0.0",
       description: "Counts committed increment events.",
-      state: z.object({ count: z.number().default(0) }).prefault({}),
+      stateSchema: z.object({ count: z.number().default(0) }).prefault({}),
       events: {
         ...createEvent({
           type: "counter-incremented",
@@ -601,7 +630,7 @@ describe("stream processor contracts", () => {
 
     const state = replayProcessorEvents({
       processor,
-      state: contract.state.parse(undefined),
+      state: contract.stateSchema.parse(undefined),
       events: [
         committedEvent({ type: "counter-incremented", payload: { by: 1 } }),
         committedEvent({ type: "counter-ignored", payload: {} }),
@@ -619,7 +648,7 @@ describe("stream processor contracts", () => {
       slug: "counter",
       version: "1.0.0",
       description: "Counts committed increment events.",
-      state: z.object({ count: z.number().default(0) }).prefault({}),
+      stateSchema: z.object({ count: z.number().default(0) }).prefault({}),
       events: {
         ...createEvent({
           type: "counter-incremented",
@@ -664,7 +693,7 @@ describe("stream processor contracts", () => {
       slug: "counter",
       version: "1.0.0",
       description: "Counts committed increment events.",
-      state: z.object({ count: z.number().default(0) }).prefault({}),
+      stateSchema: z.object({ count: z.number().default(0) }).prefault({}),
       events: {
         ...createEvent({
           type: "counter-incremented",
@@ -695,14 +724,238 @@ describe("stream processor contracts", () => {
     expect(state).toEqual({ count: 1 });
     expect(calls).toEqual([]);
   });
+
+  it("keeps reduced progress separate from afterAppend completion for host retries", async () => {
+    const contract = defineProcessorContract({
+      slug: "counter",
+      version: "1.0.0",
+      description: "Counts committed increment events.",
+      stateSchema: z.object({ count: z.number().default(0) }).prefault({}),
+      events: {
+        ...createEvent({
+          type: "counter-incremented",
+          payloadSchema: z.object({ by: z.number() }),
+        }),
+      },
+      consumes: ["counter-incremented"],
+      emits: [],
+      reduce: ({ state, event }) => ({ count: state.count + event.payload.by }),
+    });
+    const processor = implementProcessor(contract, {
+      afterAppend: () => {
+        throw new Error("transient side effect failure");
+      },
+    });
+    const event = committedEvent({
+      type: "counter-incremented",
+      payload: { by: 2 },
+      offset: 7,
+    });
+    let hostState = createProcessorHostState({ contract, state: { count: 1 } });
+
+    const reduction = runProcessorReduce({
+      processor,
+      state: hostState.state,
+      event,
+    });
+
+    expect(reduction).toBeDefined();
+    hostState = {
+      ...hostState,
+      state: reduction!.state,
+      reducedThroughOffset: reduction!.event.offset,
+    };
+    await expect(
+      runProcessorAfterAppend({
+        processor,
+        ...reduction!,
+        streamApi: createTestStreamApi<typeof contract>(),
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("transient side effect failure");
+
+    expect(hostState).toEqual({
+      state: { count: 3 },
+      reducedThroughOffset: 7,
+      afterAppendCompletedThroughOffset: 0,
+    });
+  });
+
+  it("marks afterAppend completion separately when live effects succeed", async () => {
+    const contract = defineProcessorContract({
+      slug: "counter",
+      version: "1.0.0",
+      description: "Counts committed increment events.",
+      stateSchema: z.object({ count: z.number().default(0) }).prefault({}),
+      events: {
+        ...createEvent({
+          type: "counter-incremented",
+          payloadSchema: z.object({ by: z.number() }),
+        }),
+      },
+      consumes: ["counter-incremented"],
+      emits: [],
+      reduce: ({ state, event }) => ({ count: state.count + event.payload.by }),
+    });
+    const processor = implementProcessor(contract, {});
+    const event = committedEvent({
+      type: "counter-incremented",
+      payload: { by: 2 },
+      offset: 9,
+    });
+    let hostState = createProcessorHostState({ contract, state: { count: 1 } });
+    const reduction = runProcessorReduce({
+      processor,
+      state: hostState.state,
+      event,
+    });
+
+    expect(reduction).toBeDefined();
+    hostState = {
+      ...hostState,
+      state: reduction!.state,
+      reducedThroughOffset: reduction!.event.offset,
+    };
+    await runProcessorAfterAppend({
+      processor,
+      ...reduction!,
+      streamApi: createTestStreamApi<typeof contract>(),
+      signal: new AbortController().signal,
+    });
+    hostState = {
+      ...hostState,
+      afterAppendCompletedThroughOffset: reduction!.event.offset,
+    };
+
+    expect(hostState).toEqual({
+      state: { count: 3 },
+      reducedThroughOffset: 9,
+      afterAppendCompletedThroughOffset: 9,
+    });
+  });
+
+  it("projects frontend-visible agent loop state with the backend reducer only", () => {
+    const agentLoopContract = defineProcessorContract({
+      slug: "agent-loop",
+      version: "1.0.0",
+      description: "Frontend-visible agent loop projection.",
+      stateSchema: z
+        .object({
+          computing: z.boolean().default(false),
+          currentRequestId: z.string().nullable().default(null),
+          queuedMessageCount: z.number().int().nonnegative().default(0),
+          transcript: z
+            .array(
+              z.object({
+                role: z.enum(["user", "assistant"]),
+                content: z.string(),
+              }),
+            )
+            .default([]),
+        })
+        .prefault({}),
+      events: {
+        ...createEvent({
+          type: "agent-input-added",
+          payloadSchema: z.object({
+            role: z.enum(["user", "assistant"]),
+            content: z.string(),
+          }),
+        }),
+        ...createEvent({
+          type: "llm-request-scheduled",
+          payloadSchema: z.object({ requestId: z.string() }),
+        }),
+        ...createEvent({
+          type: "llm-request-started",
+          payloadSchema: z.object({ requestId: z.string() }),
+        }),
+        ...createEvent({
+          type: "llm-request-completed",
+          payloadSchema: z.object({ requestId: z.string() }),
+        }),
+      },
+      consumes: [
+        "agent-input-added",
+        "llm-request-scheduled",
+        "llm-request-started",
+        "llm-request-completed",
+      ],
+      emits: [],
+      reduce: ({ state, event }) => {
+        switch (event.type) {
+          case "agent-input-added":
+            return {
+              ...state,
+              transcript: [
+                ...state.transcript,
+                { role: event.payload.role, content: event.payload.content },
+              ],
+            };
+          case "llm-request-scheduled":
+            return { ...state, queuedMessageCount: state.queuedMessageCount + 1 };
+          case "llm-request-started":
+            return {
+              ...state,
+              queuedMessageCount: Math.max(0, state.queuedMessageCount - 1),
+              computing: true,
+              currentRequestId: event.payload.requestId,
+            };
+          case "llm-request-completed":
+            return state.currentRequestId === event.payload.requestId
+              ? { ...state, computing: false, currentRequestId: null }
+              : undefined;
+          default:
+            return undefined;
+        }
+      },
+    });
+
+    const state = replayProcessorEvents({
+      processor: implementProcessor(agentLoopContract, {}),
+      state: agentLoopContract.stateSchema.parse(undefined),
+      events: [
+        committedEvent({
+          type: "agent-input-added",
+          payload: { role: "user", content: "build the thing" },
+          offset: 1,
+        }),
+        committedEvent({
+          type: "llm-request-scheduled",
+          payload: { requestId: "req_1" },
+          offset: 2,
+        }),
+        committedEvent({
+          type: "llm-request-started",
+          payload: { requestId: "req_1" },
+          offset: 3,
+        }),
+        committedEvent({
+          type: "agent-input-added",
+          payload: { role: "assistant", content: "working" },
+          offset: 4,
+        }),
+      ],
+    });
+
+    expect(state).toEqual({
+      computing: true,
+      currentRequestId: "req_1",
+      queuedMessageCount: 0,
+      transcript: [
+        { role: "user", content: "build the thing" },
+        { role: "assistant", content: "working" },
+      ],
+    });
+  });
 });
 
-function committedEvent(args: { type: string; payload: unknown }): StreamEvent {
+function committedEvent(args: { type: string; payload: unknown; offset?: number }): StreamEvent {
   return {
     streamPath: "/streams/test",
     type: args.type,
     payload: args.payload,
-    offset: 1,
+    offset: args.offset ?? 1,
     createdAt: "2026-01-01T00:00:00.000Z",
   };
 }

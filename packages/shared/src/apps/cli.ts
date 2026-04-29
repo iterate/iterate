@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import { os } from "@orpc/server";
+import * as prompts from "@clack/prompts";
 import { createCli, parseRouter, type AnyRouter } from "trpc-cli";
 import type { StandardSchemaV1 } from "trpc-cli/dist/standard-schema/contract.js";
 import { parse as parseYaml } from "yaml";
@@ -108,6 +109,7 @@ export async function runAppCli() {
 
   await cli.run({
     formatError: formatAppCliError,
+    prompts,
   });
 }
 

@@ -5,7 +5,8 @@ import type { Event, StreamPath } from "@iterate-com/events-contract";
  *
  * Processors choose which item sequence a view should show. Renderers only look
  * at `item.type`, so a view can emit any subset of the available item types
- * without changing the renderer registry.
+ * without changing the renderer registry. This model is intentionally renderer
+ * neutral: the web Events app and the agents terminal CLI both consume it.
  */
 export type EventsStreamFeedItem =
   | EventsStreamMessageFeedItem

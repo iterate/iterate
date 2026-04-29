@@ -7,11 +7,14 @@ import type {
   EventDefinition,
   Processor,
   ProcessorContractShape,
+  ProcessorHostState,
   ProcessorImplementation,
+  ProcessorReduction,
   ProcessorState,
   ProcessorStreamApi,
-  ProcessorReduction,
+  ResolvedEventTypesOnly,
   StreamEvent,
+  StreamEventInput,
 } from "./types.ts";
 
 const Metadata = z.record(z.string(), z.unknown());
@@ -19,19 +22,10 @@ const EventOffset = z.number().int().positive();
 const CreatedAt = z.iso.datetime({ offset: true });
 
 /**
- * Creates a single event definition as a one-key catalog entry.
+ * Creates a one-key event catalog entry.
  *
- * Returning `{ [type]: definition }` lets processor contracts keep event
- * definitions inline while making the durable wire event type the catalog key:
- *
- * ```ts
- * events: {
- *   ...createEvent({
- *     type: "agent-input-added",
- *     payloadSchema: AgentInputAddedPayload,
- *   }),
- * }
- * ```
+ * Prefer inline event catalogs for new processors. This helper remains useful
+ * in tests and for mechanically generated event catalogs.
  */
 export function createEvent<
   const Type extends string,
@@ -43,39 +37,10 @@ export function createEvent<
 }): {
   [Key in Type]: EventDefinition<Type, z.output<PayloadSchema>, z.input<PayloadSchema>>;
 } {
-  const type = z.literal(args.type);
-  const input = z.strictObject({
-    type,
-    payload: args.payloadSchema,
-    metadata: Metadata.optional(),
-    idempotencyKey: z.string().trim().min(1).optional(),
-    offset: EventOffset.optional(),
-  });
-  const event = z.strictObject({
-    streamPath: z.string().trim().min(1),
-    ...input.shape,
-    offset: EventOffset,
-    createdAt: CreatedAt,
-  });
-
   return {
     [args.type]: {
-      type: args.type,
       ...(args.description == null ? {} : { description: args.description }),
       payloadSchema: args.payloadSchema,
-      input,
-      event,
-      createInput(inputArgs: {
-        payload: z.input<PayloadSchema>;
-        metadata?: Record<string, unknown>;
-        idempotencyKey?: string;
-        offset?: number;
-      }) {
-        return input.parse({
-          type: args.type,
-          ...inputArgs,
-        });
-      },
     },
   } as unknown as {
     [Key in Type]: EventDefinition<Type, z.output<PayloadSchema>, z.input<PayloadSchema>>;
@@ -83,12 +48,102 @@ export function createEvent<
 }
 
 /**
+ * Runtime append-input parser for a string-keyed event definition.
+ *
+ * Most processor authors should not call this directly. `streamApi.append(...)`
+ * is typed from `contract.emits`, so ordinary object literals are the ergonomic
+ * path. Hosts can use this helper at the append boundary when they need to
+ * validate that a raw event input matches the payload schema for its `type`.
+ */
+export function getEventInputSchema<
+  const Type extends string,
+  const PayloadSchema extends z.ZodType,
+>(args: {
+  type: Type;
+  payloadSchema: PayloadSchema;
+}): z.ZodType<
+  StreamEventInput<Type, z.output<PayloadSchema>>,
+  StreamEventInput<Type, z.input<PayloadSchema>>
+> {
+  return z.strictObject({
+    type: z.literal(args.type),
+    payload: args.payloadSchema,
+    metadata: Metadata.optional(),
+    idempotencyKey: z.string().trim().min(1).optional(),
+    offset: EventOffset.optional(),
+  }) as unknown as z.ZodType<
+    StreamEventInput<Type, z.output<PayloadSchema>>,
+    StreamEventInput<Type, z.input<PayloadSchema>>
+  >;
+}
+
+/**
+ * Runtime committed-event parser for a string-keyed event definition.
+ *
+ * Processor contracts intentionally author event definitions as plain
+ * `{ description, payloadSchema }` values keyed by the event type string. The
+ * key is the durable event type; the value does not repeat it. Hosts therefore
+ * rebuild the concrete Zod envelope from the catalog key plus `payloadSchema`
+ * whenever they validate append input or committed stream events.
+ *
+ * The cast is local to this helper because Zod's object inference cannot keep
+ * the generic literal `Type` and generic `PayloadSchema` relationship through
+ * `z.strictObject(...)`. The runtime schema still exactly matches
+ * `StreamEvent<Type, z.output<PayloadSchema>>`.
+ */
+export function getEventSchema<
+  const Type extends string,
+  const PayloadSchema extends z.ZodType,
+>(args: {
+  type: Type;
+  payloadSchema: PayloadSchema;
+}): z.ZodType<
+  StreamEvent<Type, z.output<PayloadSchema>>,
+  StreamEvent<Type, z.input<PayloadSchema>>
+> {
+  return z.strictObject({
+    streamPath: z.string().trim().min(1),
+    type: z.literal(args.type),
+    payload: args.payloadSchema,
+    metadata: Metadata.optional(),
+    idempotencyKey: z.string().trim().min(1).optional(),
+    offset: EventOffset,
+    createdAt: CreatedAt,
+  }) as unknown as z.ZodType<
+    StreamEvent<Type, z.output<PayloadSchema>>,
+    StreamEvent<Type, z.input<PayloadSchema>>
+  >;
+}
+
+/**
  * Typed identity for processor contracts.
  *
- * The state schema must accept `undefined` so the schema is the single source
- * of truth for initial state. Even stateless processors declare
- * `z.object({}).default({})` for now; requiring state keeps generic host code
- * from falling back to `{}` or `unknown`.
+ * This is intentionally not a builder. It returns the exact object it receives
+ * and does not rewrite event definitions, inject constants, or generate append
+ * helpers. That keeps the contract shape aligned with the design requirements
+ * in `tasks/agents-processor-composition-requirements.md`:
+ *
+ * ```ts
+ * events: {
+ *   "events.iterate.com/agent/input-added": {
+ *     description: "...",
+ *     payloadSchema: z.object({ ... }),
+ *   },
+ * },
+ * consumes: ["events.iterate.com/agent/input-added"],
+ * emits: ["events.iterate.com/agent/input-added"],
+ * ```
+ *
+ * The overloads still enforce the important invariants at authoring time:
+ *
+ * - `stateSchema` must parse to an object-shaped reduced state;
+ * - `initialState`, when present, must be valid input for `stateSchema`;
+ * - every string in `consumes` and `emits` must resolve against local `events`
+ *   plus `processorDeps`.
+ *
+ * `initialState` is optional. If it is omitted, hosts initialize by parsing
+ * `undefined` through `stateSchema`. If it is present, hosts initialize by
+ * parsing `initialState` through `stateSchema`.
  */
 export function defineProcessorContract<
   const StateSchema extends z.ZodType,
@@ -99,22 +154,20 @@ export function defineProcessorContract<
 >(
   contract: Omit<
     ProcessorContractShape<StateSchema, Events, ProcessorDeps, Consumes, Emits>,
-    "state" | "processorDeps" | "consumes" | "emits"
+    "stateSchema" | "initialState" | "processorDeps" | "consumes" | "emits"
   > & {
-    state: undefined extends z.input<StateSchema>
-      ? z.output<StateSchema> extends Record<string, unknown>
-        ? StateSchema
-        : never
-      : never;
+    stateSchema: z.output<StateSchema> extends Record<string, unknown> ? StateSchema : never;
+    initialState?: z.input<StateSchema>;
     processorDeps: ProcessorDeps;
-    consumes: Consumes;
-    emits: Emits;
+    consumes: Consumes & ResolvedEventTypesOnly<Events, ProcessorDeps, Consumes>;
+    emits: Emits & ResolvedEventTypesOnly<Events, ProcessorDeps, Emits>;
   },
 ): Omit<
   ProcessorContractShape<StateSchema, Events, ProcessorDeps, Consumes, Emits>,
-  "state" | "processorDeps" | "consumes" | "emits"
+  "stateSchema" | "initialState" | "processorDeps" | "consumes" | "emits"
 > & {
-  state: StateSchema;
+  stateSchema: StateSchema;
+  initialState?: z.input<StateSchema>;
   processorDeps: ProcessorDeps;
   consumes: Consumes;
   emits: Emits;
@@ -127,22 +180,20 @@ export function defineProcessorContract<
 >(
   contract: Omit<
     ProcessorContractShape<StateSchema, Events, readonly [], Consumes, Emits>,
-    "state" | "processorDeps" | "consumes" | "emits"
+    "stateSchema" | "initialState" | "processorDeps" | "consumes" | "emits"
   > & {
-    state: undefined extends z.input<StateSchema>
-      ? z.output<StateSchema> extends Record<string, unknown>
-        ? StateSchema
-        : never
-      : never;
+    stateSchema: z.output<StateSchema> extends Record<string, unknown> ? StateSchema : never;
+    initialState?: z.input<StateSchema>;
     processorDeps?: never;
-    consumes: Consumes;
-    emits: Emits;
+    consumes: Consumes & ResolvedEventTypesOnly<Events, readonly [], Consumes>;
+    emits: Emits & ResolvedEventTypesOnly<Events, readonly [], Emits>;
   },
 ): Omit<
   ProcessorContractShape<StateSchema, Events, readonly [], Consumes, Emits>,
-  "state" | "processorDeps" | "consumes" | "emits"
+  "stateSchema" | "initialState" | "processorDeps" | "consumes" | "emits"
 > & {
-  state: StateSchema;
+  stateSchema: StateSchema;
+  initialState?: z.input<StateSchema>;
   consumes: Consumes;
   emits: Emits;
 };
@@ -166,7 +217,8 @@ export function implementBuiltinProcessor<const Contract>(
 
 export function validateProcessorContract(contract: {
   slug: string;
-  state: z.ZodType;
+  stateSchema: z.ZodType;
+  initialState?: unknown;
   events: EventCatalog;
   processorDeps?: readonly ({ slug?: string; events: EventCatalog } | EventCatalog)[];
   consumes: readonly string[];
@@ -174,7 +226,7 @@ export function validateProcessorContract(contract: {
 }) {
   assertObjectProcessorState({
     processorSlug: contract.slug,
-    value: getProcessorStateSchema(contract).parse(undefined),
+    value: getInitialProcessorState(contract),
   });
 
   const resolvedEvents = new Map<string, { owner: string; event: EventDefinition }>();
@@ -184,17 +236,18 @@ export function validateProcessorContract(contract: {
       ? (dependency.slug ?? "processor dependency")
       : "event catalog";
 
-    for (const event of Object.values(events)) {
+    for (const [eventType, event] of Object.entries(events)) {
       addResolvedEvent({
         resolvedEvents,
+        eventType,
         event,
         owner,
       });
     }
   }
 
-  for (const event of Object.values(contract.events)) {
-    addResolvedEvent({ resolvedEvents, event, owner: contract.slug });
+  for (const [eventType, event] of Object.entries(contract.events)) {
+    addResolvedEvent({ resolvedEvents, eventType, event, owner: contract.slug });
   }
 
   assertResolvedEventTypes({
@@ -209,8 +262,33 @@ export function validateProcessorContract(contract: {
   });
 }
 
-export function getProcessorStateSchema(contract: { slug: string; state: z.ZodType }): z.ZodType {
-  return contract.state;
+export function getProcessorStateSchema(contract: {
+  slug: string;
+  stateSchema: z.ZodType;
+}): z.ZodType {
+  return contract.stateSchema;
+}
+
+export function getInitialProcessorState<
+  const Contract extends {
+    stateSchema: z.ZodType;
+    initialState?: unknown;
+  },
+>(contract: Contract): ProcessorState<Contract> {
+  return contract.stateSchema.parse(contract.initialState) as ProcessorState<Contract>;
+}
+
+export function createProcessorHostState<const Contract extends { stateSchema: z.ZodType }>(args: {
+  contract: Contract;
+  state?: ProcessorState<Contract>;
+  reducedThroughOffset?: number;
+  afterAppendCompletedThroughOffset?: number;
+}): ProcessorHostState<Contract> {
+  return {
+    state: args.state === undefined ? getInitialProcessorState(args.contract) : args.state,
+    reducedThroughOffset: args.reducedThroughOffset ?? 0,
+    afterAppendCompletedThroughOffset: args.afterAppendCompletedThroughOffset ?? 0,
+  };
 }
 
 export function runProcessorReduce<
@@ -238,7 +316,13 @@ export function runProcessorReduce<
     return undefined;
   }
 
-  const event = eventDefinition.event.parse(args.event) as ConsumedEvent<Contract>;
+  // `eventDefinition` was resolved by string lookup across local `events` and
+  // `processorDeps`. Rebuilding the parser from the string key and payload
+  // schema keeps replay and live delivery on the same validation path.
+  const event = getEventSchema({
+    type: args.event.type,
+    payloadSchema: eventDefinition.payloadSchema,
+  }).parse(args.event) as ConsumedEvent<Contract>;
   const nextState =
     args.processor.contract.reduce?.({
       state: args.state,
@@ -257,8 +341,40 @@ export function runProcessorReduce<
   };
 }
 
+export function reduceProcessorEvents<
+  const Contract extends {
+    slug: string;
+    stateSchema: z.ZodType;
+    initialState?: unknown;
+    events: EventCatalog;
+    processorDeps?: readonly unknown[];
+    consumes: readonly string[];
+    reduce?: (args: {
+      state: ProcessorState<Contract>;
+      event: ConsumedEvent<Contract>;
+    }) => ProcessorState<Contract> | null | undefined;
+  },
+>(args: {
+  contract: Contract;
+  events: readonly StreamEvent[];
+  state?: ProcessorState<Contract>;
+}): ProcessorState<Contract> {
+  let state = args.state ?? getInitialProcessorState(args.contract);
+
+  for (const event of args.events) {
+    const reduction = runProcessorReduce({
+      processor: { contract: args.contract },
+      event,
+      state,
+    });
+    state = reduction?.state ?? state;
+  }
+
+  return state;
+}
+
 export async function runProcessorOnStart<const Contract>(args: {
-  processor: { implementation: ProcessorImplementation<Contract> };
+  processor: { contract: Contract; implementation: ProcessorImplementation<Contract> };
   state: ProcessorState<Contract>;
   streamApi: ProcessorStreamApi<Contract>;
   signal: AbortSignal;
@@ -271,7 +387,7 @@ export async function runProcessorOnStart<const Contract>(args: {
 }
 
 export async function runProcessorAfterAppend<const Contract>(args: {
-  processor: { implementation: ProcessorImplementation<Contract> };
+  processor: { contract: Contract; implementation: ProcessorImplementation<Contract> };
   event: ConsumedEvent<Contract>;
   previousState: ProcessorState<Contract>;
   state: ProcessorState<Contract>;
@@ -344,16 +460,17 @@ function getResolvedEventDefinition(args: {
 
 function addResolvedEvent(args: {
   resolvedEvents: Map<string, { owner: string; event: EventDefinition }>;
+  eventType: string;
   owner: string;
   event: EventDefinition;
 }) {
-  const existing = args.resolvedEvents.get(args.event.type);
+  const existing = args.resolvedEvents.get(args.eventType);
   if (existing != null && existing.event !== args.event) {
     throw new Error(
-      `Duplicate stream processor event type "${args.event.type}" owned by both "${existing.owner}" and "${args.owner}".`,
+      `Duplicate stream processor event type "${args.eventType}" owned by both "${existing.owner}" and "${args.owner}".`,
     );
   }
-  args.resolvedEvents.set(args.event.type, {
+  args.resolvedEvents.set(args.eventType, {
     event: args.event,
     owner: args.owner,
   });
@@ -409,12 +526,9 @@ function isEventDefinition(value: unknown): value is EventDefinition {
   return (
     typeof value === "object" &&
     value !== null &&
-    "type" in value &&
-    typeof value.type === "string" &&
-    "event" in value &&
-    "input" in value &&
-    "createInput" in value &&
-    typeof value.createInput === "function"
+    "payloadSchema" in value &&
+    typeof value.payloadSchema === "object" &&
+    value.payloadSchema !== null
   );
 }
 
@@ -440,12 +554,13 @@ export type {
   EventDefinition,
   Processor,
   ProcessorContractShape,
+  ProcessorHostState,
   ProcessorImplementation,
+  ProcessorReduction,
   ProcessorState,
   ProcessorStateObject,
   ProcessorStreamApi,
   ProcessorStreamApiProps,
-  ProcessorReduction,
   StreamEvent,
   StreamEventInput,
 } from "./types.ts";
