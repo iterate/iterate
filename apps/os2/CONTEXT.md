@@ -134,6 +134,8 @@ _Avoid_: CallableToolProvider
 - A **Project Slug** is route identity and may change; a **Project ID** is stable identity.
 - The **Project Slug** used in the **Project Route** corresponds to the project slug used by the events app.
 - A **Project MCP Endpoint** identifies exactly one **Project**.
+- A **Project MCP Endpoint** is served at `https://<project>.<project-host-base>/mcp`.
+- OS2 does not expose a normal global MCP endpoint; `/mcp` is only valid on a project hostname.
 - A **Codemode Preset** belongs to exactly one **Project**.
 - A **Codemode Preset** stores Event Inputs without interpreting their event types.
 - Applying a **Codemode Preset** appends each stored Event Input to the Codemode Session's Event Stream Path.
@@ -147,6 +149,7 @@ _Avoid_: CallableToolProvider
 - Browser oRPC may pass an **Event Stream Path** when creating a **Codemode Session**; if it does not, OS2 generates one for the Project.
 - Creating a **Codemode Session** is attach-or-create for the pair of **Project ID** and **Event Stream Path**.
 - An **Inbound MCP Session** already has an **Event Stream Path**; when it runs codemode, the **Codemode Session** uses that same Event Stream Path.
+- Inbound MCP `run_code` may include Event Inputs, such as Tool Provider registration events, which are appended to the **Codemode Session** before the **Script Execution** starts.
 - An **Outbound MCP Client Connection** is a Tool Provider; it is unrelated to **Inbound MCP Session** identity.
 - A **Codemode Session** is initialized with exactly one stable **Project ID** and exactly one **Event Stream Path**.
 - An **Event Stream Path** may exist before a **Codemode Session** is attached to it.
@@ -170,6 +173,7 @@ _Avoid_: CallableToolProvider
 - A **Provider Bridge** adapts an external system into a **Tool Provider**.
 - A **Provider Descriptor** is stored or transmitted; a **Tool Provider** is the live runtime implementation.
 - A **Self-Callable Provider Descriptor** survives crossing into another worker because it names the source worker script and entrypoint, not the currently dispatching worker's exports.
+- A Provider Descriptor stored on a **Codemode Session** must resolve from the Codemode Session worker's dispatch context.
 - Codemode calls **Tool Functions** with `callToolFunction(...)`; **Tool Providers** execute Tool Functions with `executeToolFunction(...)`.
 - Tool Provider Descriptors name `executeToolFunction` and `describeToolFunctions` callables.
 - `ctx.<provider>.<toolFunction>(payload)` calls a **Tool Function**.
