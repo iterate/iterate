@@ -10,6 +10,17 @@ type AssetFile = {
   type: string;
 };
 
+class CloudflareHttpError extends Error {
+  readonly status: number;
+
+  constructor(input: { body: string; status: number; statusText: string }) {
+    super(
+      `Cloudflare asset upload failed (${String(input.status)}): ${input.body || input.statusText}`,
+    );
+    this.status = input.status;
+  }
+}
+
 const args = parseArgs(process.argv.slice(2));
 
 await preuploadWorkerAssets({
@@ -40,15 +51,24 @@ async function preuploadWorkerAssets(input: { assetsPath: string; workerName: st
   );
 
   const apiBaseUrl = `https://api.cloudflare.com/client/v4/accounts/${accountId}`;
-  const uploadSession = await cloudflareJson<{
-    buckets: string[][];
-    jwt: string;
-  }>({
+  let uploadSession = await createAssetsUploadSession({
+    apiBaseUrl,
     apiToken,
-    body: { manifest },
-    method: "POST",
-    url: `${apiBaseUrl}/workers/scripts/${input.workerName}/assets-upload-session`,
+    manifest,
+    workerName: input.workerName,
   });
+  if (uploadSession instanceof CloudflareHttpError && uploadSession.status === 401) {
+    await ensureWorkerShell({ apiBaseUrl, apiToken, workerName: input.workerName });
+    uploadSession = await createAssetsUploadSession({
+      apiBaseUrl,
+      apiToken,
+      manifest,
+      workerName: input.workerName,
+    });
+  }
+  if (uploadSession instanceof CloudflareHttpError) {
+    throw uploadSession;
+  }
 
   let completionToken = uploadSession.jwt;
   for (const bucket of uploadSession.buckets) {
@@ -62,7 +82,7 @@ async function preuploadWorkerAssets(input: { assetsPath: string; workerName: st
     }
 
     const uploadResult = await cloudflareJson<{ jwt?: string }>({
-      apiToken,
+      apiToken: completionToken,
       body: formData,
       method: "POST",
       url: `${apiBaseUrl}/workers/assets/upload?base64=true`,
@@ -77,6 +97,73 @@ async function preuploadWorkerAssets(input: { assetsPath: string; workerName: st
   console.log(
     `[preupload-worker-assets] ${input.workerName}: ${String(files.length)} files, ${String(uploadSession.buckets.length)} buckets`,
   );
+}
+
+async function createAssetsUploadSession(input: {
+  apiBaseUrl: string;
+  apiToken: string;
+  manifest: Record<string, { hash: string; size: number }>;
+  workerName: string;
+}) {
+  try {
+    return await cloudflareJson<{
+      buckets: string[][];
+      jwt: string;
+    }>({
+      apiToken: input.apiToken,
+      body: { manifest: input.manifest },
+      method: "POST",
+      url: `${input.apiBaseUrl}/workers/scripts/${input.workerName}/assets-upload-session`,
+    });
+  } catch (error) {
+    if (error instanceof CloudflareHttpError) return error;
+    throw error;
+  }
+}
+
+/**
+ * Creates a throwaway module Worker so Cloudflare will open an assets upload
+ * session for a freshly recycled preview script name. Alchemy immediately
+ * replaces this shell with the real bundled Worker in the next resource step.
+ *
+ * First-party upload endpoint reference:
+ * https://developers.cloudflare.com/api/resources/workers/subresources/scripts/methods/update/
+ */
+async function ensureWorkerShell(input: {
+  apiBaseUrl: string;
+  apiToken: string;
+  workerName: string;
+}) {
+  const formData = new FormData();
+  formData.append(
+    "metadata",
+    new Blob(
+      [
+        JSON.stringify({
+          compatibility_date: "2026-04-24",
+          main_module: "worker.js",
+        }),
+      ],
+      { type: "application/json" },
+    ),
+  );
+  formData.append(
+    "worker.js",
+    new Blob(
+      [
+        "export default { fetch() { return new Response('OS2 preview worker shell', { status: 503 }); } };",
+      ],
+      { type: "application/javascript+module" },
+    ),
+    "worker.js",
+  );
+
+  await cloudflareJson<unknown>({
+    apiToken: input.apiToken,
+    body: formData,
+    method: "PUT",
+    url: `${input.apiBaseUrl}/workers/scripts/${input.workerName}`,
+  });
 }
 
 async function readAssets(root: string): Promise<AssetFile[]> {
@@ -120,7 +207,7 @@ async function computeCloudflareAssetHash(filePath: string) {
 async function cloudflareJson<T>(input: {
   apiToken: string;
   body: FormData | object;
-  method: "POST";
+  method: "POST" | "PUT";
   url: string;
 }): Promise<T> {
   const response = await fetch(input.url, {
@@ -135,14 +222,28 @@ async function cloudflareJson<T>(input: {
     body: input.body instanceof FormData ? input.body : JSON.stringify(input.body),
   });
 
-  const payload = (await response.json()) as {
+  const text = await response.text();
+  let payload: {
     errors?: Array<{ code: number; message: string }>;
     result?: T;
   };
+  try {
+    payload = JSON.parse(text) as typeof payload;
+  } catch {
+    throw new CloudflareHttpError({
+      body: text,
+      status: response.status,
+      statusText: response.statusText,
+    });
+  }
 
   if (!response.ok || !payload.result) {
     const errors = payload.errors?.map((error) => `${error.code}: ${error.message}`).join("; ");
-    throw new Error(`Cloudflare asset upload failed: ${errors || response.statusText}`);
+    throw new CloudflareHttpError({
+      body: errors || response.statusText,
+      status: response.status,
+      statusText: response.statusText,
+    });
   }
 
   return payload.result;
