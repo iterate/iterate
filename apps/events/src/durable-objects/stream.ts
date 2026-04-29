@@ -1,20 +1,15 @@
 import { DurableObject } from "cloudflare:workers";
 import {
-  type ChildStreamCreatedEvent,
   type DestroyStreamResult,
   Event,
   EventInput,
   type ProjectSlug,
-  STREAM_CHILD_STREAM_CREATED_TYPE,
   STREAM_DURABLE_OBJECT_WOKE_UP_TYPE,
   STREAM_FIRST_INITIALIZED_TYPE,
-  STREAM_METADATA_UPDATED_TYPE,
   type StreamCursor,
-  type StreamMetadataUpdatedEvent,
   StreamPath,
   StreamState,
 } from "@iterate-com/events-contract";
-import type { BuiltinProcessor } from "@iterate-com/events-contract/sdk";
 import { createDurableObjectClient, type SyncClient } from "sqlfu";
 import { migrate } from "./db/migrations/.generated/migrations.ts";
 import {
@@ -24,31 +19,16 @@ import {
   insertEvent,
   upsertReducedState,
 } from "./db/queries/.generated/index.ts";
-import { circuitBreakerProcessor } from "./circuit-breaker.ts";
 import {
-  externalSubscriberProcessor,
-  resetSubscriberSocketsForStream,
-} from "./external-subscriber.ts";
-import { createDynamicWorkerManager, dynamicWorkerProcessor } from "./dynamic-processor.ts";
-import { jsonataTransformerProcessor } from "./jsonata-transformer.ts";
-import { getAncestorStreamPaths } from "~/lib/stream-path-ancestors.ts";
+  reduceBuiltinProcessors,
+  runBuiltinAfterAppend,
+  runBuiltinBeforeAppend,
+} from "./builtin-processors.ts";
+import { resetSubscriberSocketsForStream } from "./external-subscriber.ts";
+import { createDynamicWorkerManager } from "./dynamic-processor.ts";
+import { createInitialStreamState, reduceStreamCore } from "./stream-core-reducer.ts";
+import { propagateInitializedStreamToAncestors } from "./stream-tree-propagation.ts";
 import { getInitializedStreamStub, StreamOffsetPreconditionError } from "~/lib/stream-helpers.ts";
-
-type ProcessorSlugKey = keyof StreamState["processors"];
-
-// Keep callback fanout as a builtin processor rather than growing bespoke
-// stream-core branches. `stream.ts` stays responsible for lifecycle ordering
-// while the external subscriber processor owns its own reduced state + delivery.
-const processors: BuiltinProcessor[] = [
-  circuitBreakerProcessor,
-  externalSubscriberProcessor,
-  dynamicWorkerProcessor,
-  jsonataTransformerProcessor,
-];
-
-function getProcessorState(state: StreamState, slug: string) {
-  return state.processors[slug as ProcessorSlugKey];
-}
 
 /**
  * One stream per Durable Object: an append-only event log persisted in SQLite,
@@ -230,18 +210,10 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     migrate(this.client);
 
-    const processorState = Object.fromEntries(
-      processors.map((p) => [p.slug, structuredClone(p.initialState)]),
-    ) as StreamState["processors"];
-
-    this._state = {
+    this._state = createInitialStreamState({
       projectSlug: args.projectSlug,
       path: args.path,
-      eventCount: 0,
-      childPaths: [],
-      metadata: {},
-      processors: processorState,
-    };
+    });
 
     try {
       this.append({
@@ -337,12 +309,10 @@ export class StreamDurableObject extends DurableObject<Env> {
       );
     }
 
-    for (const processor of processors) {
-      processor.beforeAppend?.({
-        event: input,
-        state: getProcessorState(this.state, processor.slug),
-      });
-    }
+    runBuiltinBeforeAppend({
+      event: input,
+      processors: this.state.processors,
+    });
 
     return nextOffset;
   }
@@ -363,41 +333,18 @@ export class StreamDurableObject extends DurableObject<Env> {
       );
     }
 
-    let nextState: StreamState = {
-      ...structuredClone(this.state),
-      eventCount: this.state.eventCount + 1,
+    let nextState = reduceStreamCore({
+      state: this.state,
+      event,
+    });
+
+    nextState = {
+      ...nextState,
+      processors: reduceBuiltinProcessors({
+        event,
+        processors: nextState.processors,
+      }),
     };
-
-    switch (event.type) {
-      case STREAM_METADATA_UPDATED_TYPE: {
-        const metadataUpdatedEvent = event as StreamMetadataUpdatedEvent;
-        nextState = { ...nextState, metadata: metadataUpdatedEvent.payload.metadata };
-        break;
-      }
-      case STREAM_CHILD_STREAM_CREATED_TYPE: {
-        const childPath = getImmediateChildPath({
-          parentPath: this.state.path,
-          childPath: (event as ChildStreamCreatedEvent).payload.childPath,
-        });
-        if (childPath != null && !nextState.childPaths.includes(childPath)) {
-          nextState = { ...nextState, childPaths: [...nextState.childPaths, childPath] };
-        }
-        break;
-      }
-    }
-
-    for (const processor of processors) {
-      if (processor.reduce) {
-        const nextSlice = processor.reduce({
-          event,
-          state: getProcessorState(nextState, processor.slug),
-        });
-        nextState = {
-          ...nextState,
-          processors: { ...nextState.processors, [processor.slug]: nextSlice },
-        };
-      }
-    }
 
     return nextState;
   }
@@ -421,55 +368,33 @@ export class StreamDurableObject extends DurableObject<Env> {
     this.publish(event);
 
     if (event.type === STREAM_FIRST_INITIALIZED_TYPE) {
-      const ancestorPaths = getAncestorStreamPaths(event.streamPath);
-
-      void Promise.all(
-        ancestorPaths.map(async (path) => {
-          const stream = await getInitializedStreamStub({
-            projectSlug: this.state.projectSlug,
-            path,
-          });
-          await stream.append({
-            type: STREAM_CHILD_STREAM_CREATED_TYPE,
-            payload: { childPath: event.streamPath },
-            metadata: event.metadata,
-          });
-        }),
-      ).catch((error) => {
-        console.error("[stream-do] failed to propagate event to ancestor streams", {
-          path: event.streamPath,
-          ancestorPaths,
-          eventType: STREAM_CHILD_STREAM_CREATED_TYPE,
-          error,
-        });
-      });
-    }
-
-    for (const processor of processors) {
-      const result = processor.afterAppend?.({
-        append: (nextEvent: EventInput) => this.append(nextEvent),
-        event,
-        state: getProcessorState(this.state, processor.slug),
-      });
-
-      if (result == null) {
-        continue;
-      }
-
-      // Builtin processor side effects are asynchronous, but they still belong
-      // to the append lifecycle. Hold the DO open so fire-and-forget callback
-      // delivery does not get cut off once the request returns.
       this.ctx.waitUntil(
-        result.catch((error) => {
-          console.error("[stream-do] processor afterAppend failed", {
-            path: this.state.path,
-            processor: processor.slug,
-            eventType: event.type,
+        propagateInitializedStreamToAncestors({
+          childInitializedEvent: event,
+          projectSlug: this.state.projectSlug,
+        }).catch((error) => {
+          console.error("[stream-do] failed to propagate initialized stream to ancestors", {
+            path: event.streamPath,
             error,
           });
         }),
       );
     }
+
+    runBuiltinAfterAppend({
+      append: (nextEvent) => this.append(nextEvent),
+      event,
+      processors: this.state.processors,
+      waitUntil: (promise) => this.ctx.waitUntil(promise),
+      onError: ({ error, event, processorSlug }) => {
+        console.error("[stream-do] processor afterAppend failed", {
+          path: this.state.path,
+          processor: processorSlug,
+          eventType: event.type,
+          error,
+        });
+      },
+    });
 
     this.ctx.waitUntil(
       this.dynamicWorkerManager
@@ -676,29 +601,6 @@ const textEncoder = new TextEncoder();
 
 function encodeEventLine(event: Event) {
   return textEncoder.encode(`${JSON.stringify(event)}\n`);
-}
-
-function getImmediateChildPath(args: {
-  parentPath: StreamPath;
-  childPath: StreamPath;
-}): StreamPath | null {
-  if (args.childPath === args.parentPath) {
-    return null;
-  }
-
-  if (args.parentPath === "/") {
-    const [firstSegment] = args.childPath.split("/").filter(Boolean);
-    return firstSegment == null ? null : StreamPath.parse(`/${firstSegment}`);
-  }
-
-  const parentPrefix = `${args.parentPath}/`;
-  if (!args.childPath.startsWith(parentPrefix)) {
-    return null;
-  }
-
-  const remainingPath = args.childPath.slice(parentPrefix.length);
-  const [firstSegment] = remainingPath.split("/");
-  return firstSegment == null ? null : StreamPath.parse(`${args.parentPath}/${firstSegment}`);
 }
 
 // Shape parseEventRow accepts. The generated query Result types from
