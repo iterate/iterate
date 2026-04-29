@@ -416,7 +416,6 @@ export class StreamProcessor extends Agent {
       // Load OpenAPI tool providers from sibling apps
       const slug = ((await this.ctx.storage.kv.get("projectSlug")) as string) || "test";
       for (const [name, appName] of [
-        ["tanstack_app", "tanstack-app"],
         ["slack", "slack"],
         ["linear", "linear"],
         ["github", "github"],
@@ -432,8 +431,8 @@ export class StreamProcessor extends Agent {
         }
       }
     } catch (e: any) {
-      // In facet context, broadcastMcpServers may fail due to DO I/O isolation
-      // (WebSocket connections belong to parent DO). Safe to ignore — onRequest still works.
+      // In facet context, broadcastMcpServers may fail due to DO I/O isolation.
+      // Safe to ignore; fetch-based processor requests still work.
       console.error("[StreamProcessor] onStart error (may be facet I/O isolation):", e.message);
     }
   }
@@ -824,7 +823,6 @@ export class StreamProcessor extends Agent {
     // OpenAPI tool providers from sibling apps
     const slug = ((await this.ctx.storage.kv.get("projectSlug")) as string) || "test";
     for (const [name, appName] of [
-      ["tanstack_app", "tanstack-app"],
       ["slack", "slack"],
       ["linear", "linear"],
       ["github", "github"],
@@ -863,7 +861,7 @@ export class StreamProcessor extends Agent {
     }
   }
 
-  // Agent lifecycle: onRequest handles non-WebSocket HTTP (Agent calls onStart first)
+  // Agent lifecycle: onRequest handles fetch-based processor calls.
   async onRequest(req: Request): Promise<Response> {
     this.ensureTable();
     const pathname = getPathname(req.url);
@@ -877,16 +875,6 @@ export class StreamProcessor extends Agent {
     }
     if (req.method === "POST" && pathname === "/_sql") {
       return handleSqlExec(this.ctx.storage.sql, req);
-    }
-
-    // WebSocket upgrade — events.iterate.com connects here
-    if (req.headers.get("Upgrade") === "websocket") {
-      const pair = new WebSocketPair();
-      this.ctx.acceptWebSocket(pair[1]);
-      console.log("[StreamProcessor] WebSocket accepted for stream:", streamPath);
-      // Send a welcome message to confirm the connection works
-      pair[1].send(JSON.stringify({ type: "connected", stream: streamPath }));
-      return new Response(null, { status: 101, webSocket: pair[0] });
     }
 
     // GET /api/test-providers — debug: build and list providers
@@ -992,10 +980,6 @@ export class StreamProcessor extends Agent {
 
     return Response.json({ error: "not found" }, { status: 404 });
   }
-
-  webSocketClose(ws: WebSocket) {
-    ws.close();
-  }
 }
 
 // ── App — main DO, serves React SPA, manages subscriptions ──
@@ -1055,7 +1039,6 @@ export class App extends DurableObject {
     const providers: ToolProvider[] = [];
 
     for (const [name, appName] of [
-      ["tanstack_app", "tanstack-app"],
       ["slack", "slack"],
       ["linear", "linear"],
       ["github", "github"],
@@ -1366,50 +1349,12 @@ export class App extends DurableObject {
       return handleSqlExec(this.ctx.storage.sql, req);
     }
 
-    // ── POST /_ws-message — WebSocket message dispatch from Project DO ──
-    if (req.method === "POST" && pathname === "/_ws-message") {
-      const body = (await req.json()) as { pathname: string; message: string };
-      // Parse the stream path from the original WebSocket URL pathname
-      // pathname is like /streams/%2Fagents%2Ftest/ws
-      const wsPathMatch = body.pathname.match(/^\/streams\/([^/]+)/);
-      if (!wsPathMatch) return Response.json({ appends: [] });
-      const wsStreamPath = decodeURIComponent(wsPathMatch[1]);
-
-      try {
-        const frame = JSON.parse(body.message);
-        if (frame.type !== "event" || !frame.event) return Response.json({ appends: [] });
-
-        // Monitor: auto-subscribe to child streams under /agents/
-        if (
-          (wsStreamPath === "/agents/" || wsStreamPath === "/agents") &&
-          (frame.event.type === "events.iterate.com/stream/child-stream-created" ||
-            frame.event.type === "https://events.iterate.com/events/stream/child-stream-created") &&
-          frame.event.payload?.childPath
-        ) {
-          const childPath = frame.event.payload.childPath as string;
-          console.log("[Agents] child-stream-created (via _ws-message):", childPath);
-          this.autoSubscribeChild(childPath).catch((e: any) =>
-            console.error("[Agents] autoSubscribeChild error:", e.message),
-          );
-        }
-
-        return this.#processAndPublish(wsStreamPath, frame.event, req);
-      } catch (e: any) {
-        return Response.json({ appends: [], error: e.message });
-      }
-    }
-
     // ── Streams routing: /streams/:encodedPath/... ──
     const streamsMatch = pathname.match(/^\/streams\/([^/]+)(\/.*)?$/);
     if (streamsMatch) {
       const streamPath = decodeURIComponent(streamsMatch[1]);
       const subPath = streamsMatch[2] || "/";
       const proc = this.getOrCreateStream(streamPath);
-
-      // WebSocket upgrades are handled by the Project DO (which dispatches via _ws-message).
-      // Do NOT accept WebSockets here — facets share the parent's context, so accepting
-      // here would cause BOTH the Project DO's and App's webSocketMessage to fire,
-      // resulting in duplicate event processing.
 
       const facetName = this.#streamFacetName(streamPath);
       await this.#initStreamProcessor(proc, facetName, streamPath);
@@ -1428,13 +1373,26 @@ export class App extends DurableObject {
         );
       }
 
-      if (req.method === "POST" && subPath === "/process") {
+      if (req.method === "POST" && (subPath === "/process" || subPath === "/webhook")) {
         let sourceEvent: any = null;
         try {
           const bodyText = await req.text();
           try {
             sourceEvent = JSON.parse(bodyText);
           } catch {}
+          if (
+            (streamPath === "/agents/" || streamPath === "/agents") &&
+            (sourceEvent?.type === "events.iterate.com/stream/child-stream-created" ||
+              sourceEvent?.type ===
+                "https://events.iterate.com/events/stream/child-stream-created") &&
+            sourceEvent?.payload?.childPath
+          ) {
+            const childPath = sourceEvent.payload.childPath as string;
+            console.log("[Agents] child-stream-created:", childPath);
+            this.autoSubscribeChild(childPath).catch((error: any) =>
+              console.error("[Agents] autoSubscribeChild error:", error.message),
+            );
+          }
           return this.#processAndPublish(streamPath, sourceEvent, req);
         } catch (e: any) {
           const fallback = await this.#fallbackProcessAssistantCodemode(
@@ -1461,17 +1419,6 @@ export class App extends DurableObject {
           body: req.body,
         }),
       );
-    }
-
-    // ── UI WebSocket ──
-    if (req.headers.get("Upgrade") === "websocket" && pathname === "/api/ws") {
-      const pair = new WebSocketPair();
-      this.ctx.acceptWebSocket(pair[1]);
-      const subs = this.ctx.storage.sql
-        .exec("SELECT * FROM subscriptions ORDER BY id DESC")
-        .toArray();
-      pair[1].send(JSON.stringify({ type: "sync", subscriptions: subs }));
-      return new Response(null, { status: 101, webSocket: pair[0] });
     }
 
     // ── GET /api/install — one-time setup: subscribe to /agents/ parent stream ──
@@ -1568,7 +1515,7 @@ export class App extends DurableObject {
       // Avoid new URL() — may not be available in dynamically loaded workers
       const hostHeader = req.headers.get("host") || "localhost";
       const callbackUrl =
-        "wss://" + hostHeader + "/streams/" + encodeURIComponent(streamPath) + "/ws";
+        "https://" + hostHeader + "/streams/" + encodeURIComponent(streamPath) + "/webhook";
 
       // Remove stale subscription for the same stream (prevents duplicate deliveries)
       this.ctx.storage.sql.exec("DELETE FROM subscriptions WHERE stream_path = ?", streamPath);
@@ -1591,8 +1538,8 @@ export class App extends DurableObject {
         await this.#appendToStream(
           streamPath,
           {
-            type: "events.iterate.com/stream/subscription-configured",
-            payload: { slug, type: "websocket", callbackUrl },
+            type: "https://events.iterate.com/events/stream/subscription/configured",
+            payload: { slug, type: "webhook", callbackUrl },
           },
           body.eventsBaseUrl,
           body.eventsProjectSlug,
@@ -1601,7 +1548,6 @@ export class App extends DurableObject {
         appendError = e.message;
       }
 
-      this.broadcastSync();
       return Response.json({ ok: !appendError, slug, callbackUrl, error: appendError });
     }
 
@@ -1691,7 +1637,7 @@ export class App extends DurableObject {
     const streamPath = "/agents";
     const slug = "agents-monitor";
     const callbackUrl =
-      "wss://" + hostHeader + "/streams/" + encodeURIComponent(streamPath) + "/ws";
+      "https://" + hostHeader + "/streams/" + encodeURIComponent(streamPath) + "/webhook";
     const alreadyInstalled =
       this.ctx.storage.sql.exec("SELECT value FROM config WHERE key = 'installed'").toArray()
         .length > 0;
@@ -1715,8 +1661,8 @@ export class App extends DurableObject {
         await this.#appendToStream(
           streamPath,
           {
-            type: "events.iterate.com/stream/subscription-configured",
-            payload: { slug, type: "websocket", callbackUrl },
+            type: "https://events.iterate.com/events/stream/subscription/configured",
+            payload: { slug, type: "webhook", callbackUrl },
           },
           eventsBaseUrl,
           projectSlug,
@@ -1730,8 +1676,6 @@ export class App extends DurableObject {
     } else {
       result = { skipped: true, reason: "already installed" };
     }
-
-    this.broadcastSync();
 
     return Response.json({
       ok: !error,
@@ -1768,7 +1712,8 @@ export class App extends DurableObject {
     }
 
     const slug = "agent-child-" + childPath.replace(/\//g, "-");
-    const callbackUrl = "wss://" + hostHeader + "/streams/" + encodeURIComponent(childPath) + "/ws";
+    const callbackUrl =
+      "https://" + hostHeader + "/streams/" + encodeURIComponent(childPath) + "/webhook";
 
     this.ctx.storage.sql.exec("DELETE FROM subscriptions WHERE slug = ?", slug);
     this.ctx.storage.sql.exec(
@@ -1785,8 +1730,8 @@ export class App extends DurableObject {
       await this.#appendToStream(
         childPath,
         {
-          type: "events.iterate.com/stream/subscription-configured",
-          payload: { slug, type: "websocket", callbackUrl },
+          type: "https://events.iterate.com/events/stream/subscription/configured",
+          payload: { slug, type: "webhook", callbackUrl },
           idempotencyKey: `sub:${slug}`,
         },
         eventsBaseUrl,
@@ -1796,23 +1741,5 @@ export class App extends DurableObject {
     } catch (e: any) {
       console.error("[Agents] subscribe error:", e.message);
     }
-
-    this.broadcastSync();
   }
-
-  broadcastSync() {
-    const subs = this.ctx.storage.sql
-      .exec("SELECT * FROM subscriptions ORDER BY id DESC")
-      .toArray();
-    const msg = JSON.stringify({ type: "sync", subscriptions: subs });
-    for (const ws of this.ctx.getWebSockets()) {
-      try {
-        ws.send(msg);
-      } catch {}
-    }
-  }
-
-  // No webSocketMessage handler — WebSocket events are dispatched by the Project DO
-  // via _ws-message (HTTP POST). Having both would cause duplicate processing because
-  // facets share the parent DO's WebSocket context.
 }

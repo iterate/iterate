@@ -276,8 +276,7 @@ export default {
 
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
-    const isWs = req.headers.get("Upgrade") === "websocket";
-    console.log(`[Worker] ${req.method} ${url.hostname}${url.pathname} ws=${isWs}`);
+    console.log(`[Worker] ${req.method} ${url.hostname}${url.pathname}`);
 
     if (url.pathname.startsWith("/admin/api/")) return handleAdminAPI(req, url, env as any);
 
@@ -463,11 +462,6 @@ export class Project extends DurableObject<Env> {
     console.log(`[Project DO] ${message}`);
     this.#logBuffer.push(entry);
     if (this.#logBuffer.length > 100) this.#logBuffer.shift();
-    for (const ws of this.ctx.getWebSockets()) {
-      try {
-        ws.send(JSON.stringify({ type: "log", ...entry }));
-      } catch {}
-    }
   }
 
   #appFacetName(app: string) {
@@ -701,13 +695,6 @@ export class Project extends DurableObject<Env> {
       return execSQL(this.ctx.storage.sql, req);
     }
 
-    // WebSocket upgrade — accept at Project DO and dispatch messages via webSocketMessage
-    if (req.headers.get("Upgrade") === "websocket") {
-      const pair = new WebSocketPair();
-      this.ctx.acceptWebSocket(pair[1], [`ws:${url.pathname}`, `app:${app}`]);
-      return new Response(null, { status: 101, webSocket: pair[0] });
-    }
-
     // Read manifest
     const manifestStr = await this.ws.readFile(`apps/${app}/dist/manifest.json`);
     if (!manifestStr) {
@@ -784,8 +771,7 @@ export class Project extends DurableObject<Env> {
     const ctx = this.ctx as any;
     await this.#ensureAppFacetVersion(app, sourceHash);
 
-    // Stable facet key (survives rebuilds, keeps WebSocket connections)
-    // Hash in LOADER key (picks up new code on rebuild)
+    // Stable facet key. Hash in LOADER key picks up new code on rebuild.
     const facet = ctx.facets.get(this.#appFacetName(app), async () => {
       const worker = this.env.LOADER.get(`app:${app}:${sourceHash}`, async () => ({
         compatibilityDate: "2026-04-01",
@@ -1159,12 +1145,8 @@ export class Project extends DurableObject<Env> {
         return Response.json({ states: this.#buildStates, doId });
       }
 
-      // WebSocket: log streaming
-      if (req.headers.get("Upgrade") === "websocket" && url.pathname === "/api/logs") {
-        const pair = new WebSocketPair();
-        this.ctx.acceptWebSocket(pair[1]);
-        pair[1].send(JSON.stringify({ type: "history", logs: this.#logBuffer }));
-        return new Response(null, { status: 101, webSocket: pair[0] });
+      if (req.method === "GET" && url.pathname === "/api/logs") {
+        return Response.json({ logs: this.#logBuffer });
       }
 
       // GET / — editor UI
@@ -1263,7 +1245,7 @@ export class Project extends DurableObject<Env> {
 
     // POST /__runner/rebuild
     if (req.method === "POST" && url.pathname === "/__runner/rebuild") {
-      const buildReq = new Request(`https://internal/api/build-vite/${app}`, {
+      const buildReq = new Request(`https://internal/api/build/${app}`, {
         method: "POST",
       });
       await this.fetch(buildReq);
@@ -1307,52 +1289,5 @@ ${distFiles.length ? `<h2>Dist (${distFiles.length} files)</h2><pre>${distFiles.
 <h2>Build Logs</h2><pre>${this.#logBuffer.map((l) => `${new Date(l.ts).toISOString()} ${l.message}`).join("\n") || "(empty)"}</pre>
 </body></html>`;
     return new Response(html, { headers: { "content-type": "text/html;charset=utf-8" } });
-  }
-
-  // ── WebSocket handling (ported from AppRunner) ───────────────────────
-
-  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
-    const tags = this.ctx.getTags(ws);
-    const wsTag = tags.find((t) => t.startsWith("ws:"));
-    if (!wsTag) return;
-
-    const pathname = wsTag.slice(3);
-
-    try {
-      // Derive app from the tag (format: "ws:/path" with app from "app:<appname>")
-      const appTag = tags.find((t) => t.startsWith("app:"));
-      const app = appTag?.slice(4);
-      if (!app) return;
-
-      const manifestStr = await this.ws.readFile(`apps/${app}/dist/manifest.json`);
-      if (!manifestStr) return;
-      const meta = JSON.parse(manifestStr);
-
-      const resp = await this.#dispatchToFacet(
-        app,
-        meta,
-        new Request("http://localhost/_ws-message", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ pathname, message: typeof message === "string" ? message : "" }),
-        }),
-      );
-      const result = (await resp.json()) as { appends?: any[] };
-
-      if (result.appends) {
-        for (const event of result.appends) {
-          ws.send(JSON.stringify({ type: "append", event }));
-        }
-      }
-    } catch (e: any) {
-      console.error(`[Project DO] WS dispatch error: ${e.message}`);
-      try {
-        ws.send(JSON.stringify({ type: "error", message: e.message }));
-      } catch {}
-    }
-  }
-
-  webSocketClose(ws: WebSocket) {
-    ws.close();
   }
 }

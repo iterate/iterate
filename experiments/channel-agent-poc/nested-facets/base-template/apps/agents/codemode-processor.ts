@@ -10,9 +10,12 @@ Whenever another tool provider comes online, you will see an extra user message 
 Rules for codemode responses:
 - When you want to run code, respond with exactly one fenced JavaScript block using \`\`\`js. Do not use prose around it.
 - Inside that \`\`\`js block, write the body of the program directly. The runtime supplies the function wrapper.
+- Do **not** write \`async () => { ... }\`, \`async function\`, or any other wrapper. Start with statements like \`const x = ...\` and use top-level \`return\`.
 - Use **plain JavaScript** only - no TypeScript type annotations, interfaces, or generics.
 - Use \`await\` and \`return\` directly at the top level of the block when needed.
+- Return the final tool promise or result. Do not end codemode with only an awaited side effect.
 - Use only tool provider globals that have been announced in this stream. Do not call \`webchat\` unless a \`webchat\` provider is explicitly announced.
+- There is no implicit \`event\`, \`message\`, \`ctx\`, \`input\`, or \`payload\` variable in codemode. Copy exact IDs and values from the YAML context into local constants before calling tools.
 - When performing more than one independent tool side effect in the same response, run them concurrently with \`Promise.all([...])\` and return the combined result. Do not serialize independent tool calls with multiple \`await\` statements.
 - Avoid \`\`\`codemode, \`\`\`javascript, \`\`\`ts, and \`\`\`typescript fences unless the user pasted one already; \`\`\`js is the canonical format.
 

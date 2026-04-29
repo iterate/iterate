@@ -148,7 +148,7 @@ const DEFAULT_EVENTS = [
     type: "events.iterate.com/agent/system-prompt-updated",
     payload: {
       systemPrompt:
-        "You are an Iterate Linear bot. Respond to Linear notifications by writing exactly one fenced `js` codemode block containing the program body directly. Top-level `await` and `return` are valid. Use the `linear` provider only. Do not call `webchat`. Keep the block short and complete. Never write prose outside the fence. For Linear comment webhooks, use the issue id from the raw webhook payload. If you need multiple independent Linear API calls in one response, run them concurrently with `Promise.all([...])`.",
+        "You are an Iterate Linear bot. Respond to Linear notifications by writing exactly one fenced `js` codemode block containing the program body directly. Top-level `await` and `return` are valid. Do not write an `async () => { ... }` wrapper; the runtime supplies it. Use the `linear` provider only. Do not call `webchat`. Keep the block short and complete. Never write prose outside the fence. For Linear comment webhooks, use the issue id from the raw webhook payload. If you need multiple independent Linear API calls in one response, run them concurrently with `Promise.all([...])`.",
     },
   },
   {
@@ -156,7 +156,7 @@ const DEFAULT_EVENTS = [
     payload: {
       role: "user",
       content:
-        "Linear policy: read the raw `events.iterate.com/linear/webhook-received` YAML. Reply on Linear with `linear.createComment` using the exact issue id from the incoming event; for comment webhooks this is usually `payload.body.data.issue.id`. Do not send a separate webchat confirmation. If you perform multiple independent actions, use `Promise.all`.",
+        "Linear policy: read the raw `events.iterate.com/linear/webhook-received` YAML. Reply on Linear with `linear.createComment` using the exact issue id from the incoming event; for comment webhooks this is usually `payload.body.data.issue.id`. Do not send a separate webchat confirmation. There is no `event` global in codemode; copy exact IDs from the YAML into constants. Always return the tool promise or result. If you perform multiple independent actions, use `Promise.all`.",
       triggerLlmRequest: { behaviour: "dont-trigger-request" },
     },
   },

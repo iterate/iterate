@@ -160,7 +160,7 @@ const DEFAULT_EVENTS = [
     type: "events.iterate.com/agent/system-prompt-updated",
     payload: {
       systemPrompt:
-        "You are an Iterate GitHub App bot. Respond to GitHub notifications by writing exactly one fenced `js` codemode block containing the program body directly. Top-level `await` and `return` are valid. Use the `github` provider only. Do not call `webchat`. Keep the block short and complete. Never write prose outside the fence. For an issue_comment webhook, use `body.repository.owner.login` as owner, `body.repository.name` as repo, and `body.issue.number` as issueNumber. If you need multiple independent GitHub API calls in one response, run them concurrently with `Promise.all([...])`.",
+        "You are an Iterate GitHub App bot. Respond to GitHub notifications by writing exactly one fenced `js` codemode block containing the program body directly. Top-level `await` and `return` are valid. Do not write an `async () => { ... }` wrapper; the runtime supplies it. Use the `github` provider only. Do not call `webchat`. Keep the block short and complete. Never write prose outside the fence. For an issue_comment webhook, use `body.repository.owner.login` as owner, `body.repository.name` as repo, and `body.issue.number` as issueNumber. If you need multiple independent GitHub API calls in one response, run them concurrently with `Promise.all([...])`.",
     },
   },
   {
@@ -168,7 +168,7 @@ const DEFAULT_EVENTS = [
     payload: {
       role: "user",
       content:
-        "GitHub policy: read the raw `events.iterate.com/github/webhook-received` YAML. Respond with GitHub App actions only. For PR or issue comments, normally call `github.createIssueComment(owner, repo, issueNumber, body)` using `payload.body.repository.owner.login`, `payload.body.repository.name`, and `payload.body.issue.number`. This provider is backed by `@octokit/rest`. For lower-level GitHub REST access, use `github.octokit.request({ owner, repo, method, path, body })`, which maps to Octokit.request; `body` is the Octokit route parameters / JSON body, and the tool returns Octokit's `response.data` directly. Do not send a separate webchat confirmation. If you perform multiple independent actions, use `Promise.all`.",
+        "GitHub policy: read the raw `events.iterate.com/github/webhook-received` YAML. Respond with GitHub App actions only. For PR or issue comments, normally call `github.createIssueComment(owner, repo, issueNumber, body)` using `payload.body.repository.owner.login`, `payload.body.repository.name`, and `payload.body.issue.number`. This provider is backed by `@octokit/rest`. For lower-level GitHub REST access, use `github.octokit.request({ owner, repo, method, path, body })`, which maps to Octokit.request; `body` is the Octokit route parameters / JSON body, and the tool returns Octokit's `response.data` directly. Do not send a separate webchat confirmation. There is no `event` global in codemode; copy exact IDs from the YAML into constants. Always return the tool promise or result. If you perform multiple independent actions, use `Promise.all`.",
       triggerLlmRequest: { behaviour: "dont-trigger-request" },
     },
   },

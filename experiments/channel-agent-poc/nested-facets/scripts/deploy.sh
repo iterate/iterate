@@ -20,7 +20,7 @@ curl -sf -X POST "https://$PROJECT_HOST/api/rebase?force=1" -H 'x-level: project
   python3 -c "import sys,json; print('  rebase:', json.loads(sys.stdin.read())['ok'])"
 
 echo "=== 4. Build apps ==="
-for app in agents billing chatbot counter; do
+for app in agents slack github linear discord; do
   result=$(curl -sf -X POST "https://$PROJECT_HOST/api/build/$app" -H 'x-level: project' 2>/dev/null || echo '{"ok":false}')
   ok=$(echo "$result" | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('ok','?'))" 2>/dev/null || echo "skip")
   echo "  $app: $ok"

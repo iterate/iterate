@@ -246,26 +246,27 @@ export function editorHTML(
     saveBtn.style.display = 'none';
   }
 
-  // ── WebSocket log connection ──
-  let ws;
-  function connectWS() {
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(proto + '//' + location.host + '/api/logs');
-    ws.onopen = function() { wsStatus.textContent = 'connected'; wsStatus.className = 'ws-status connected'; };
-    ws.onclose = function() { wsStatus.textContent = 'disconnected'; wsStatus.className = 'ws-status disconnected'; setTimeout(connectWS, 2000); };
-    ws.onerror = function() { ws.close(); };
-    ws.onmessage = function(e) {
-      try {
-        const msg = JSON.parse(e.data);
-        if (msg.type === 'history') {
-          msg.logs.forEach(function(l) { addLogEntry(l); });
-        } else if (msg.type === 'log') {
-          addLogEntry(msg);
-        }
-      } catch (err) {}
-    };
+  // ── Log polling ──
+  const seenLogKeys = new Set();
+  async function refreshLogs() {
+    try {
+      const resp = await fetch('/api/logs', { headers: { accept: 'application/json' } });
+      const msg = await resp.json();
+      wsStatus.textContent = 'connected';
+      wsStatus.className = 'ws-status connected';
+      (msg.logs || []).forEach(function(l) {
+        const key = String(l.ts) + ':' + String(l.message);
+        if (seenLogKeys.has(key)) return;
+        seenLogKeys.add(key);
+        addLogEntry(l);
+      });
+    } catch (err) {
+      wsStatus.textContent = 'disconnected';
+      wsStatus.className = 'ws-status disconnected';
+    }
   }
-  connectWS();
+  refreshLogs();
+  setInterval(refreshLogs, 2000);
 
   function addLogEntry(entry) {
     const div = document.createElement('div');

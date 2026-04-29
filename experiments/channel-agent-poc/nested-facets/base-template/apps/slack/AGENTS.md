@@ -11,7 +11,7 @@ Agent (codemode) → slack.chat.postMessage({ channel, thread_ts, text }) → Sl
 Agent (codemode) → slack.reactions.add({ channel, timestamp, name }) → Slack
 ```
 
-Single DO class (`App`). No facets, no stream processors. Webhook handler appends the raw event and explicitly kicks the agents app processor; the agents app's WebSocket subscription path also publishes generated appends recursively.
+Single DO class (`App`). No facets, no stream processors. Webhook handler appends the raw event and explicitly kicks the agents app processor; agents subscriptions use HTTPS webhook callbacks into `/streams/:path/webhook` and publish generated appends recursively.
 
 ## Setup
 
@@ -57,7 +57,7 @@ curl -X POST "https://slack.<project>.iterate-dev-jonas.app/api/rpc/chat.postMes
 - **Duplicate replies**: Stale event subscriptions from prior deploys. Use a fresh project or clean up subscriptions on events.iterate.com.
 - **Bot loop**: Bot's own messages should be filtered by `parseWebhookPayload` (checks `event.user === botUserId` and `bot_profile`). If looping, check that the webhook payload includes `authorizations` with `is_bot: true`.
 - **Rebase not updating files**: Force rebase may fail silently on recreated projects. Upload files directly via `PUT /api/files/<path>`.
-- **Auto-kickoff**: The channel app calls the agents app `/process` route after appending the raw event. If that fails, inspect both the channel app logs and the agents app stream processor logs. WebSocket subscription delivery should also publish generated appends recursively.
+- **Auto-kickoff**: The channel app calls the agents app `/process` route after appending the raw event. If that fails, inspect both the channel app logs and the agents app stream processor logs. HTTPS webhook subscription delivery should also publish generated appends recursively.
 
 ### Key IDs
 
