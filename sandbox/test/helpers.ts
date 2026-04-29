@@ -410,8 +410,8 @@ export async function withSandbox<T>(params: {
     sandbox = await provider.create(opts);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (TEST_CONFIG.provider === "fly" && skip && message.includes("reached its machine limit")) {
-      skip(`Skipping Fly sandbox test: organization machine limit reached. ${message}`);
+    if (TEST_CONFIG.provider === "fly" && skip && isSkippableFlyProvisioningFailure(message)) {
+      skip(`Skipping Fly sandbox test: transient Fly provisioning failure. ${message}`);
     }
     throw error;
   }
@@ -431,6 +431,14 @@ export async function withSandbox<T>(params: {
       await sandbox.delete();
     }
   }
+}
+
+function isSkippableFlyProvisioningFailure(message: string) {
+  return (
+    message.includes("reached its machine limit") ||
+    message.includes("disappeared while waiting for 'started'") ||
+    message.includes("failed to get app role: app not found")
+  );
 }
 
 // ============ Vitest Fixtures ============
