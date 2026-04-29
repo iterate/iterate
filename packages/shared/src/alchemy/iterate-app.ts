@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import alchemy from "alchemy";
 import {
   DnsRecords,
@@ -75,6 +76,10 @@ export async function IterateApp<B extends Bindings>(
   const { app, workerName, rawAppConfig, compiledAppConfig, manifest } = ctx;
   const routeHosts = deriveWorkerRouteHosts(compiledAppConfig.baseUrl, props.extraRouteHostnames);
   const compatibilityFlags = [...new Set(["nodejs_compat", ...(props.compatibilityFlags ?? [])])];
+  const buildCommand = withSequentialCloudflareAssetPreupload({
+    command: props.build ?? "pnpm exec vite build --config vite.config.ts",
+    workerName,
+  });
 
   const worker = await TanStackStart(manifest.slug, {
     name: workerName,
@@ -96,7 +101,7 @@ export async function IterateApp<B extends Bindings>(
       logs: { enabled: true, headSamplingRate: 1, persist: true, invocationLogs: true },
       traces: { enabled: true, persist: true, headSamplingRate: 1 },
     },
-    build: props.build ?? "pnpm exec vite build --config vite.config.ts",
+    build: buildCommand,
     dev: props.dev ?? { command: "pnpm exec vite dev --config vite.config.ts" },
   });
 
@@ -217,6 +222,23 @@ function routeResourceIdForHostname(hostname: string) {
   return hostname.startsWith("*.")
     ? `route-wildcard-${slugify(hostname.slice(2))}`
     : `route-${slugify(hostname)}`;
+}
+
+function withSequentialCloudflareAssetPreupload(input: { command: string; workerName: string }) {
+  const preuploadScriptPath = fileURLToPath(
+    new URL("./preupload-worker-assets.ts", import.meta.url),
+  );
+
+  // Alchemy's Cloudflare Assets helper currently uploads multiple asset buckets
+  // concurrently. The Cloudflare Assets API returns the final completion JWT only
+  // from the bucket that completes the upload session, so concurrent buckets can
+  // race and leave the later Worker upload with an `ASSETS` binding but no
+  // completed asset set. This pre-upload uses the same manifest shape as
+  // Cloudflare's documented direct-upload flow, but uploads buckets
+  // sequentially before Alchemy creates the Worker. Alchemy then opens its own
+  // session, sees no remaining buckets, and attaches a stable completion token.
+  // https://developers.cloudflare.com/workers/static-assets/direct-upload/
+  return `${input.command} && pnpm exec tsx ${JSON.stringify(preuploadScriptPath)} --worker-name ${JSON.stringify(input.workerName)} --assets ${JSON.stringify("dist/client")}`;
 }
 
 // ---------------------------------------------------------------------------
