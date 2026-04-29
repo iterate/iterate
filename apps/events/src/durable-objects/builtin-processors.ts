@@ -21,10 +21,16 @@ type StreamBuiltinProcessor = {
  * Builtin processors run inside the stream Durable Object and may therefore
  * use privileged hooks such as `beforeAppend`.
  *
- * Keep this list small. Processors that do not need synchronous rejection
- * should eventually move to ordinary StreamProcessorRunner deployments, but
- * centralizing the list here already keeps `stream.ts` from growing one branch
- * per feature.
+ * Keep this list small:
+ * - `circuit-breaker` is genuinely privileged because it rejects appends before
+ *   they commit.
+ * - `external-subscriber`, `dynamic-worker`, and `jsonata-transformer` are
+ *   in-process deployment choices for now. They should be able to move to
+ *   ordinary StreamProcessorRunner deployments once those runners are ready for
+ *   event-service-owned processors.
+ *
+ * Centralizing the list here keeps `stream.ts` from growing one branch per
+ * feature while preserving the existing runtime behavior.
  */
 const builtinProcessors = [
   circuitBreakerProcessor,
