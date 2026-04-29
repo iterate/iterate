@@ -151,6 +151,8 @@ let appendStatus = "";
 let eventCount = 0;
 let pulseOn = true;
 let selectedOffset: number | undefined;
+/** When set, the feed shows the full YAML detail for this event offset. */
+let detailEventOffset: number | undefined;
 let selectedSlashCommandPath: string | undefined;
 let selectedSlashQuery: string | undefined;
 let navigationState = initialStreamTuiNavigationState;
@@ -164,7 +166,6 @@ let streamSearchOpen = false;
 let streamSearchQuery = "";
 let lastSpaceTimestamp = 0;
 let pulseInterval: ReturnType<typeof setInterval> | undefined;
-const collapsedOffsets = new Set<number>();
 
 /** Tear down background work (stream subscription, pulse timer). */
 function cleanupRuntime() {
@@ -335,10 +336,28 @@ renderer.prependInputHandler((sequence) => {
     return true;
   }
 
-  // Esc from feed → return to input + feed view
+  // Esc from feed — close detail view if open, otherwise return to input
   if (key.name === "escape") {
+    if (detailEventOffset != null) {
+      detailEventOffset = undefined;
+      updateFeed("selected");
+      return true;
+    }
     returnToFeedView();
     return true;
+  }
+
+  // In event detail view: left/right navigates between events
+  if (detailEventOffset != null) {
+    if (key.name === "left") {
+      navigateDetailEvent(-1);
+      return true;
+    }
+    if (key.name === "right") {
+      navigateDetailEvent(1);
+      return true;
+    }
+    return false;
   }
 
   // Arrow keys navigate feed items when feed is focused
@@ -351,9 +370,10 @@ renderer.prependInputHandler((sequence) => {
     return true;
   }
 
-  // Enter toggles expand/collapse on the selected feed item
+  // Enter opens the event detail view for the selected raw event
   if (key.name === "return" && selectedOffset != null) {
-    toggleSelectedFeedItem();
+    detailEventOffset = selectedOffset;
+    updateFeed("keep");
     return true;
   }
 
@@ -390,7 +410,7 @@ function startStream(streamPath: StreamPath) {
   state = rawPrettyEventsStreamViewReducer.createInitialState();
   eventCount = 0;
   selectedOffset = undefined;
-  collapsedOffsets.clear();
+  detailEventOffset = undefined;
   status = "connecting";
   // Force renderedView to differ from the current view so updateFeed() detects a
   // "view change" and re-enables sticky scroll to bottom for the fresh stream.
@@ -415,7 +435,6 @@ async function streamEvents(args: { streamPath: StreamPath; signal: AbortSignal 
       const event = Event.parse(value);
       eventCount += 1;
       state = rawPrettyEventsStreamViewReducer.reduce({ event, state }) ?? state;
-      collapsedOffsets.delete(event.offset);
       updateHeader();
       updateFeed("keep");
     }
@@ -586,13 +605,15 @@ const appContext: AppContext = {
     focusInput();
     updateSlashAutocomplete();
   },
-  collapseVisibleFeedItems() {
-    for (const item of getRawFeedItems()) {
-      collapsedOffsets.add(item.props.offset);
-    }
-  },
-  expandVisibleFeedItems() {
-    collapsedOffsets.clear();
+  collapseVisibleFeedItems() {},
+  expandVisibleFeedItems() {},
+  openEventDetail(offset) {
+    detailEventOffset = offset;
+    selectedOffset = offset;
+    navigationState = setStreamTuiView(navigationState, "feed");
+    updateHeader();
+    updateFeed("keep");
+    focusFeed();
   },
   exit() {
     cleanupRuntime();
@@ -619,11 +640,13 @@ const appContext: AppContext = {
 /** Update the top bar to reflect current view, connection status, and stats. */
 function updateHeader() {
   streamPathText.content =
-    navigationState.view === "streams"
-      ? "Streams"
-      : navigationState.view === "state"
-        ? "State"
-        : currentStreamPath;
+    detailEventOffset != null
+      ? `Event ${detailEventOffset}`
+      : navigationState.view === "streams"
+        ? "Streams"
+        : navigationState.view === "state"
+          ? "State"
+          : currentStreamPath;
   connectedIndicator.content = "●";
   connectedIndicator.fg = status === "streaming" ? (pulseOn ? P.accent : P.accentDim) : P.warning;
   statsText.content = [
@@ -690,6 +713,7 @@ function updateFeed(scroll: "selected" | "keep" = "keep") {
 function renderFeedChildren() {
   if (navigationState.view === "state") return renderStateViewChildren();
   if (navigationState.view === "streams") return renderStreamsViewChildren();
+  if (detailEventOffset != null) return renderEventDetailView();
 
   if (state.slots.feed.length === 0) {
     return [
@@ -761,7 +785,7 @@ function renderStateViewChildren() {
     eventCount,
     navigationState,
     selectedOffset,
-    collapsedOffsets: [...collapsedOffsets],
+    detailEventOffset,
     reducedState: state,
   }).trimEnd();
 
@@ -876,7 +900,7 @@ function getItemTimestamp(item: EventsStreamBuiltInElement): number | undefined 
 /** Route a feed element to its renderer, returning styled text chunks. */
 function renderFeedItem(item: EventsStreamBuiltInElement, elapsedByOffset: Map<number, string>) {
   if (item.type === "raw-event")
-    return renderRawEventCard(item, elapsedByOffset.get(item.props.offset));
+    return renderRawEventSummary(item, elapsedByOffset.get(item.props.offset));
   if (item.type === "message") return renderMessageItem(item.props);
   if (item.type === "lifecycle") return renderLifecycleItem(item.props);
   if (item.type === "error") return renderErrorItem(item.props);
@@ -971,38 +995,94 @@ function renderGroupedRawItem(props: {
 }
 
 // ---------------------------------------------------------------------------
-// Raw event YAML card
+// Raw event summary row — compact right-aligned one-liner matching the web's
+// tiny muted justify-end style. Press Enter to open the detail view.
 // ---------------------------------------------------------------------------
 
 /**
- * Render a raw event as a styled card: right-aligned summary line + YAML body.
- * Background colors are applied per-character via StyledText chunks, padded
- * to the full content width.
+ * Render a raw event as a compact right-aligned summary row.
+ * Shows: offset · event type · elapsed · timestamp
+ * Highlighted when selected (feed focus mode).
  */
-function renderRawEventCard(item: EventsStreamRawEventElement, elapsedLabel?: string) {
+function renderRawEventSummary(item: EventsStreamRawEventElement, elapsedLabel?: string) {
   const width = getFeedContentWidth();
-  const yaml = stringifyYaml(orderEventKeysForYamlDisplay(item.props.raw)).trimEnd();
   const isSelected = navigationState.focus === "feed" && item.props.offset === selectedOffset;
-  const isCollapsed = collapsedOffsets.has(item.props.offset);
   const summary = `${rightAlign(formatEventSummary(item, elapsedLabel), width)}\n`;
-  const styledSummary = isSelected
-    ? bg(P.surfaceSelected)(fg(P.text)(summary))
-    : fg(P.textDim)(summary);
+  return [isSelected ? bg(P.surfaceSelected)(fg(P.text)(summary)) : fg(P.textDim)(summary)];
+}
 
-  if (isCollapsed) {
-    return [fg(P.bg)("\n"), styledSummary];
+// ---------------------------------------------------------------------------
+// Event detail view — full YAML payload with left/right navigation.
+// Mirrors the web's EventInspectorSheet (packages/ui event-inspector-sheet.tsx).
+// ---------------------------------------------------------------------------
+
+/** Render the full event detail view for detailEventOffset. */
+function renderEventDetailView(): TextRenderable[] {
+  const rawEvents = getRawFeedItems();
+  const currentIndex = rawEvents.findIndex((item) => item.props.offset === detailEventOffset);
+  const event = rawEvents[currentIndex]?.props.raw;
+
+  if (event == null) {
+    detailEventOffset = undefined;
+    return [];
   }
 
+  const width = getFeedContentWidth();
+  const prevEvent = rawEvents[currentIndex - 1]?.props.raw;
+  const nextEvent = rawEvents[currentIndex + 1]?.props.raw;
+  const sincePrev = prevEvent
+    ? formatElapsedTime(Date.parse(event.createdAt) - Date.parse(prevEvent.createdAt))
+    : undefined;
+  const toNext = nextEvent
+    ? formatElapsedTime(Date.parse(nextEvent.createdAt) - Date.parse(event.createdAt))
+    : undefined;
+
+  // Header: event type and navigation hints
+  const headerLine = bold(fg(P.text)(`${event.type}\n`));
+  const metaParts = [
+    `offset ${event.offset}`,
+    event.createdAt,
+    sincePrev ? `since prev: ${sincePrev}` : undefined,
+    toNext ? `until next: ${toNext}` : undefined,
+  ].filter(Boolean);
+  const metaLine = fg(P.textSubdued)(`${metaParts.join(" · ")}\n`);
+  const navHint = fg(P.textDim)("← prev · → next · Esc close\n");
+  const separator = fg(P.textDim)(`${"─".repeat(width)}\n`);
+
+  // YAML body
+  const yaml = stringifyYaml(orderEventKeysForYamlDisplay(event)).trimEnd();
   const bodyLine = (line: string) =>
     bg(P.surfaceCard)(fg(P.textContent)(` ${line.padEnd(width - 2)} \n`));
+  const bodyLines = yaml
+    .split("\n")
+    .flatMap((line) => wrapLine(line, width - 2))
+    .map(bodyLine);
+
+  const chunks = [headerLine, metaLine, navHint, separator, ...bodyLines];
+
   return [
-    fg(P.bg)("\n"),
-    styledSummary,
-    ...yaml
-      .split("\n")
-      .flatMap((line) => wrapLine(line, width - 2))
-      .map(bodyLine),
+    new TextRenderable(renderer, {
+      id: `event-detail-${detailEventOffset}`,
+      content: new StyledText(chunks),
+      width: "100%",
+      height: countTextLines(chunks.map((c) => c.text).join("")),
+      fg: P.textBody,
+    }),
   ];
+}
+
+/** Navigate to the previous/next raw event in the detail view. */
+function navigateDetailEvent(direction: -1 | 1) {
+  const rawEvents = getRawFeedItems();
+  const currentIndex = rawEvents.findIndex((item) => item.props.offset === detailEventOffset);
+  if (currentIndex === -1) return;
+
+  const nextIndex = currentIndex + direction;
+  if (nextIndex < 0 || nextIndex >= rawEvents.length) return;
+
+  detailEventOffset = rawEvents[nextIndex].props.offset;
+  selectedOffset = detailEventOffset;
+  updateFeed("keep");
 }
 
 // ---------------------------------------------------------------------------
@@ -1085,17 +1165,6 @@ function selectAdjacentFeedItem(direction: -1 | 1) {
       : (currentIndex + direction + rawItems.length) % rawItems.length;
 
   selectedOffset = rawItems[nextIndex].props.offset;
-  updateFeed("selected");
-}
-
-/** Toggle expand/collapse on the currently selected feed item. */
-function toggleSelectedFeedItem() {
-  if (selectedOffset == null) return;
-  if (collapsedOffsets.has(selectedOffset)) {
-    collapsedOffsets.delete(selectedOffset);
-  } else {
-    collapsedOffsets.add(selectedOffset);
-  }
   updateFeed("selected");
 }
 

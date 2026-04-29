@@ -17,6 +17,7 @@ import type {
 } from "@iterate-com/ui/components/events/feed-items";
 
 const MAX_SAME_TYPE_RAW_GROUP = 50_000;
+const AGENT_INPUT_ADDED_TYPE = "events.iterate.com/agent/input-added";
 const CODEMODE_BLOCK_ADDED_TYPE = "events.iterate.com/codemode/block-added";
 const CODEMODE_RESULT_ADDED_TYPE = "events.iterate.com/codemode/result-added";
 
@@ -311,6 +312,25 @@ function reduceActivityState(args: {
 function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElement[] {
   const timestamp = getTimestamp(event.createdAt);
 
+  if (event.type === AGENT_INPUT_ADDED_TYPE) {
+    const content = readStringPayloadField(event, "content");
+    const role = readAgentMessageRole(event);
+    if (content == null || role == null) return [];
+    return [
+      {
+        type: "message",
+        id: `message-${role}-${event.offset}`,
+        props: {
+          role,
+          text: content,
+          format: "markdown",
+          timestamp,
+          raw: event,
+        },
+      },
+    ];
+  }
+
   if (
     event.type === "events.iterate.com/webchat/user-message-added" ||
     event.type === "events.iterate.com/tui/user-message-added" ||
@@ -536,6 +556,16 @@ function createRawEventGroup(
 function readStringPayloadField(event: Event, key: string) {
   const value = readPayloadRecord(event)?.[key];
   return typeof value === "string" ? value : null;
+}
+
+function readAgentMessageRole(event: Event) {
+  const role = readPayloadRecord(event)?.role;
+
+  if (role == null) {
+    return "user";
+  }
+
+  return role === "user" || role === "assistant" ? role : null;
 }
 
 function readRecordPayloadField(event: Event, key: string): Record<string, unknown> | null {

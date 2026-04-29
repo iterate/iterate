@@ -12,6 +12,18 @@ import {
 } from "@iterate-com/ui/components/events/feed-processors";
 import { describe, expect, test } from "vitest";
 
+const SLACK_AGENT_INPUT_CONTENT = [
+  "```yaml",
+  "event:",
+  "  type: events.iterate.com/slack/webhook-received",
+  "  idempotencyKey: slack-webhook:Ev0B09JZ1SF9",
+  "  filtered: true",
+  "  payload:",
+  "    channel: C08R1SMTZGD",
+  '    text: "<@U08T48230AD> reply exactly slack-filtered-original-type-1777497600"',
+  "```",
+].join("\n");
+
 describe("clean stream view reducers", () => {
   test("raw-pretty emits one raw summary plus one semantic item for semantic events", () => {
     const viewState = processEventsWithViewReducer({
@@ -77,6 +89,43 @@ describe("clean stream view reducers", () => {
         props: {
           role: "assistant",
           text: "hi from codemode",
+        },
+      },
+    ]);
+  });
+
+  test("raw-pretty projects canonical agent input-added events as markdown messages", () => {
+    const viewState = processEventsWithViewReducer({
+      reducer: rawPrettyEventsStreamViewReducer,
+      events: [
+        event({
+          offset: 7,
+          type: "events.iterate.com/agent/input-added",
+          payload: {
+            role: "user",
+            source: "slack",
+            content: SLACK_AGENT_INPUT_CONTENT,
+          },
+        }),
+      ],
+    });
+
+    expect(viewState.slots.feed).toMatchObject([
+      {
+        type: "raw-event",
+        id: "raw-event-7",
+        props: {
+          offset: 7,
+          eventType: "events.iterate.com/agent/input-added",
+        },
+      },
+      {
+        type: "message",
+        id: "message-user-7",
+        props: {
+          role: "user",
+          text: SLACK_AGENT_INPUT_CONTENT,
+          format: "markdown",
         },
       },
     ]);

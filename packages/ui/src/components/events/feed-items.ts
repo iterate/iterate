@@ -22,6 +22,12 @@ export type EventsStreamRenderedElement<
 export type EventsStreamMessageElementProps = {
   role: "user" | "assistant";
   text: string;
+  /**
+   * How the message text should be interpreted by the built-in message
+   * renderer. Plain text preserves whitespace; markdown enables fenced code
+   * blocks for agent prompts that embed structured instructions.
+   */
+  format?: "text" | "markdown";
   timestamp: number;
   raw: Event;
 };

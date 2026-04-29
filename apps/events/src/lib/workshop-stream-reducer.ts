@@ -12,6 +12,7 @@ const CODEMODE_BLOCK_ADDED_TYPE = "codemode-block-added" as const;
 const CODEMODE_RESULT_ADDED_TYPE = "codemode-result-added" as const;
 const BASHMODE_BLOCK_ADDED_TYPE = "bashmode-block-added" as const;
 const AGENT_INPUT_ADDED_TYPE = "agent-input-added" as const;
+const CANONICAL_AGENT_INPUT_ADDED_TYPE = "events.iterate.com/agent/input-added" as const;
 const AGENT_OUTPUT_ADDED_TYPE = "agent-output-added" as const;
 const AGENT_REQUEST_FAILED_TYPE = "agent-request-failed" as const;
 
@@ -255,7 +256,7 @@ export function buildWorkshopSemanticInsertions(
   const pendingStreamingAgentTurns: StreamingAgentTurn[] = [];
 
   for (const event of events) {
-    if (event.type === AGENT_INPUT_ADDED_TYPE) {
+    if (event.type === AGENT_INPUT_ADDED_TYPE || event.type === CANONICAL_AGENT_INPUT_ADDED_TYPE) {
       const payload = parseAgentInputAddedPayload(event.payload);
       if (!payload) {
         continue;

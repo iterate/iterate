@@ -16,6 +16,18 @@ import {
 } from "~/lib/custom-html-renderers.ts";
 import type { EventFeedItem, StreamFeedItem } from "~/lib/stream-feed-types.ts";
 
+const SLACK_AGENT_INPUT_CONTENT = [
+  "```yaml",
+  "event:",
+  "  type: events.iterate.com/slack/webhook-received",
+  "  idempotencyKey: slack-webhook:Ev0B09JZ1SF9",
+  "  filtered: true",
+  "  payload:",
+  "    channel: C08R1SMTZGD",
+  '    text: "<@U08T48230AD> reply exactly slack-filtered-original-type-1777497600"',
+  "```",
+].join("\n");
+
 describe("toEventFeedItem", () => {
   test("maps contract events to feed events", () => {
     const event = createEvent({
@@ -644,6 +656,29 @@ describe("projectWireToFeed", () => {
         timestamp: messages[1]!.timestamp,
       },
     ]);
+  });
+
+  test("projects canonical agent input-added events as markdown chat messages", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: 7,
+        type: "events.iterate.com/agent/input-added",
+        createdAt: "2026-04-29T21:20:09.134Z",
+        payload: {
+          role: "user",
+          source: "slack",
+          content: SLACK_AGENT_INPUT_CONTENT,
+        },
+      }),
+    ]);
+
+    expect(feed.map((item) => item.kind)).toEqual(["event", "message"]);
+    expect(feed[1]).toEqual({
+      kind: "message",
+      role: "user",
+      content: [{ type: "markdown", text: SLACK_AGENT_INPUT_CONTENT }],
+      timestamp: Date.parse("2026-04-29T21:20:09.134Z"),
+    });
   });
 
   test("projects webchat ingress and responses as chat messages", () => {

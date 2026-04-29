@@ -18,7 +18,11 @@ import {
   ConversationEmptyState,
   ConversationScrollButton,
 } from "@iterate-com/ui/components/ai-elements/conversation";
-import { Message, MessageContent } from "@iterate-com/ui/components/ai-elements/message";
+import {
+  Message,
+  MessageContent,
+  MessageResponse,
+} from "@iterate-com/ui/components/ai-elements/message";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import { IterateMark } from "@iterate-com/ui/components/iterate-mark";
@@ -364,6 +368,18 @@ function RawJsonDump({ element }: { element: EventsStreamRawJsonDumpElement }) {
 }
 
 function MessageFeedItemCard({ element }: { element: EventsStreamMessageElement }) {
+  if (element.props.format === "markdown") {
+    return (
+      <Message from={element.props.role}>
+        <MessageContent>
+          <MessageResponse className="min-w-0 max-w-full overflow-hidden">
+            {element.props.text}
+          </MessageResponse>
+        </MessageContent>
+      </Message>
+    );
+  }
+
   return (
     <Message from={element.props.role}>
       <MessageContent>

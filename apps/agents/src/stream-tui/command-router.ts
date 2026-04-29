@@ -45,6 +45,7 @@ export type AppContext = {
   prefillInput: (value: string) => void;
   collapseVisibleFeedItems: () => void;
   expandVisibleFeedItems: () => void;
+  openEventDetail: (offset: number) => void;
   exit: () => void;
   toast: {
     info: (message: string) => void;
@@ -327,32 +328,31 @@ const commandRouter = {
     .handler(({ context }) => {
       context.exit();
     }),
-  feed: {
-    collapseAll: commandBase
+  event: {
+    details: commandBase
+      .input(
+        z.object({
+          offset: z
+            .string()
+            .trim()
+            .min(1)
+            .meta({ positional: true })
+            .describe("Event offset number"),
+        }),
+      )
       .meta({
         tui: {
-          title: "Collapse all feed items",
-          description: "Collapse every raw event card",
-          category: "Feed",
-          slash: { name: "feed.collapse", aliases: ["collapse"] },
+          title: "Event details",
+          description: "Open the raw event payload inspector",
+          category: "Event",
+          slash: { name: "event.details", aliases: ["details", "inspect"] },
+          input: { positional: { name: "offset", required: true } },
         },
       })
-      .handler(({ context }) => {
-        context.collapseVisibleFeedItems();
-        context.setActiveView("feed");
-      }),
-    expandAll: commandBase
-      .meta({
-        tui: {
-          title: "Expand all feed items",
-          description: "Expand every raw event card",
-          category: "Feed",
-          slash: { name: "feed.expand", aliases: ["expand"] },
-        },
-      })
-      .handler(({ context }) => {
-        context.expandVisibleFeedItems();
-        context.setActiveView("feed");
+      .handler(({ context, input }) => {
+        const offset = Number.parseInt(input.offset, 10);
+        if (Number.isNaN(offset)) throw new Error(`Invalid offset: ${input.offset}`);
+        context.openEventDetail(offset);
       }),
   },
 };
