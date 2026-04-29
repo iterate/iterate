@@ -6,9 +6,10 @@
  *   OS2_BASE_URL=https://os.iterate-dev-jonas.com pnpm test:e2e
  */
 import { createORPCClient } from "@orpc/client";
-import { StandardRPCLink } from "@orpc/client/standard";
+import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import type { RouterClient } from "@orpc/server";
 import { describe, expect, it } from "vitest";
+import { osContract } from "@iterate-com/os2-contract";
 import type { appRouter } from "~/orpc/root.ts";
 
 type OrpcClient = RouterClient<typeof appRouter>;
@@ -22,7 +23,7 @@ function requireBaseUrl() {
 }
 
 function createClient(baseUrl: string) {
-  return createORPCClient(new StandardRPCLink({ url: `${baseUrl}/api/orpc` })) as OrpcClient;
+  return createORPCClient(new OpenAPILink(osContract, { url: `${baseUrl}/api` })) as OrpcClient;
 }
 
 describe("codemode.execute", () => {

@@ -17,6 +17,7 @@ import { Route as ApiSplatRouteImport } from './routes/api.$'
 import { Route as AppProjectsRouteImport } from './routes/_app/projects'
 import { Route as AppLogStreamRouteImport } from './routes/_app/log-stream'
 import { Route as AppDebugRouteImport } from './routes/_app/debug'
+import { Route as AppCodemodeRouteImport } from './routes/_app/codemode'
 import { Route as AppProjectsIndexRouteImport } from './routes/_app/projects.index'
 import { Route as ApiOrpcSplatRouteImport } from './routes/api.orpc.$'
 import { Route as AppProjectsProjectIdRouteImport } from './routes/_app/projects.$projectId'
@@ -60,6 +61,11 @@ const AppDebugRoute = AppDebugRouteImport.update({
   path: '/debug',
   getParentRoute: () => AppRoute,
 } as any)
+const AppCodemodeRoute = AppCodemodeRouteImport.update({
+  id: '/codemode',
+  path: '/codemode',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppProjectsIndexRoute = AppProjectsIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -78,6 +84,7 @@ const AppProjectsProjectIdRoute = AppProjectsProjectIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/codemode': typeof AppCodemodeRoute
   '/debug': typeof AppDebugRoute
   '/log-stream': typeof AppLogStreamRoute
   '/projects': typeof AppProjectsRouteWithChildren
@@ -90,6 +97,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/codemode': typeof AppCodemodeRoute
   '/debug': typeof AppDebugRoute
   '/log-stream': typeof AppLogStreamRoute
   '/api/$': typeof ApiSplatRoute
@@ -103,6 +111,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/_app': typeof AppRouteWithChildren
+  '/_app/codemode': typeof AppCodemodeRoute
   '/_app/debug': typeof AppDebugRoute
   '/_app/log-stream': typeof AppLogStreamRoute
   '/_app/projects': typeof AppProjectsRouteWithChildren
@@ -117,6 +126,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/codemode'
     | '/debug'
     | '/log-stream'
     | '/projects'
@@ -129,6 +139,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/codemode'
     | '/debug'
     | '/log-stream'
     | '/api/$'
@@ -141,6 +152,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/_app'
+    | '/_app/codemode'
     | '/_app/debug'
     | '/_app/log-stream'
     | '/_app/projects'
@@ -219,6 +231,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppDebugRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/codemode': {
+      id: '/_app/codemode'
+      path: '/codemode'
+      fullPath: '/codemode'
+      preLoaderRoute: typeof AppCodemodeRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/projects/': {
       id: '/_app/projects/'
       path: '/'
@@ -258,12 +277,14 @@ const AppProjectsRouteWithChildren = AppProjectsRoute._addFileChildren(
 )
 
 interface AppRouteChildren {
+  AppCodemodeRoute: typeof AppCodemodeRoute
   AppDebugRoute: typeof AppDebugRoute
   AppLogStreamRoute: typeof AppLogStreamRoute
   AppProjectsRoute: typeof AppProjectsRouteWithChildren
 }
 
 const AppRouteChildren: AppRouteChildren = {
+  AppCodemodeRoute: AppCodemodeRoute,
   AppDebugRoute: AppDebugRoute,
   AppLogStreamRoute: AppLogStreamRoute,
   AppProjectsRoute: AppProjectsRouteWithChildren,

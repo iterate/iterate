@@ -6,7 +6,14 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { sanitizeToolName, sanitizeToolPath, quoteProp } from "./utils.ts";
+import {
+  sanitizeToolName,
+  sanitizeToolPath,
+  quoteProp,
+  toPascalCase,
+  escapeStringLiteral,
+  escapeJsDoc,
+} from "./utils.ts";
 
 describe("sanitizeToolName", () => {
   it("passes through a valid identifier", () => {
@@ -37,6 +44,30 @@ describe("sanitizeToolName", () => {
   it("strips non-identifier chars", () => {
     expect(sanitizeToolName("hello@world!")).toBe("helloworld");
   });
+
+  it("preserves double dollar signs", () => {
+    expect(sanitizeToolName("$$ref")).toBe("$$ref");
+  });
+
+  it("leaves valid identifiers unchanged", () => {
+    expect(sanitizeToolName("getWeather")).toBe("getWeather");
+    expect(sanitizeToolName("_private")).toBe("_private");
+    expect(sanitizeToolName("$jquery")).toBe("$jquery");
+  });
+
+  it("handles string with only special characters", () => {
+    // $ is a valid identifier character, so "@#$" keeps "$"
+    expect(sanitizeToolName("@#$")).toBe("$");
+    expect(sanitizeToolName("@#!")).toBe("_");
+  });
+
+  it("replaces spaces with underscores", () => {
+    expect(sanitizeToolName("my tool")).toBe("my_tool");
+  });
+
+  it("appends underscore to delete reserved word", () => {
+    expect(sanitizeToolName("delete")).toBe("delete_");
+  });
 });
 
 describe("sanitizeToolPath", () => {
@@ -50,6 +81,18 @@ describe("sanitizeToolPath", () => {
 
   it("filters empty segments", () => {
     expect(sanitizeToolPath("a..b")).toBe("a.b");
+  });
+
+  it("sanitizes dotted paths segment-by-segment", () => {
+    expect(sanitizeToolPath("foo-bar.baz-qux")).toBe("foo_bar.baz_qux");
+  });
+
+  it("preserves nesting dots", () => {
+    expect(sanitizeToolPath("bla.bla.doIt")).toBe("bla.bla.doIt");
+  });
+
+  it("falls back to a valid identifier for empty paths", () => {
+    expect(sanitizeToolPath("")).toBe("_");
   });
 });
 
@@ -68,5 +111,73 @@ describe("quoteProp", () => {
 
   it("escapes special characters", () => {
     expect(quoteProp('a"b')).toBe('"a\\"b"');
+  });
+
+  it("escapes newlines and tabs", () => {
+    expect(quoteProp("has\nnewline")).toBe('"has\\nnewline"');
+    expect(quoteProp("has\ttab")).toBe('"has\\ttab"');
+  });
+
+  it("handles empty string", () => {
+    expect(quoteProp("")).toBe('""');
+  });
+});
+
+describe("toPascalCase", () => {
+  it("capitalizes the first letter", () => {
+    expect(toPascalCase("hello")).toBe("Hello");
+  });
+
+  it("converts underscore-separated segments", () => {
+    expect(toPascalCase("get_weather")).toBe("GetWeather");
+  });
+
+  it("handles already PascalCase input", () => {
+    expect(toPascalCase("GetWeather")).toBe("GetWeather");
+  });
+
+  it("handles single character", () => {
+    expect(toPascalCase("a")).toBe("A");
+  });
+
+  it("converts multi-underscore segments", () => {
+    expect(toPascalCase("create_github_issue")).toBe("CreateGithubIssue");
+  });
+});
+
+describe("escapeStringLiteral", () => {
+  it("escapes double quotes", () => {
+    expect(escapeStringLiteral('say "hello"')).toBe('say \\"hello\\"');
+  });
+
+  it("escapes backslashes", () => {
+    expect(escapeStringLiteral("back\\slash")).toBe("back\\\\slash");
+  });
+
+  it("escapes newlines and tabs", () => {
+    expect(escapeStringLiteral("line\none")).toBe("line\\none");
+    expect(escapeStringLiteral("tab\there")).toBe("tab\\there");
+  });
+
+  it("escapes carriage returns", () => {
+    expect(escapeStringLiteral("cr\rhere")).toBe("cr\\rhere");
+  });
+
+  it("passes through simple strings unchanged", () => {
+    expect(escapeStringLiteral("hello world")).toBe("hello world");
+  });
+});
+
+describe("escapeJsDoc", () => {
+  it("escapes */ sequences", () => {
+    expect(escapeJsDoc("value */ breaks")).toBe("value *\\/ breaks");
+  });
+
+  it("passes through text without */", () => {
+    expect(escapeJsDoc("normal text")).toBe("normal text");
+  });
+
+  it("handles multiple */ occurrences", () => {
+    expect(escapeJsDoc("a */ b */ c")).toBe("a *\\/ b *\\/ c");
   });
 });
