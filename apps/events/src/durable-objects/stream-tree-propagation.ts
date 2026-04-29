@@ -2,7 +2,7 @@ import {
   type Event,
   type ProjectSlug,
   STREAM_CHILD_STREAM_CREATED_TYPE,
-  type StreamPath,
+  StreamPath,
 } from "@iterate-com/events-contract";
 import { getAncestorStreamPaths } from "~/lib/stream-path-ancestors.ts";
 import { getInitializedStreamStub } from "~/lib/stream-helpers.ts";
@@ -29,7 +29,7 @@ export async function propagateInitializedStreamToAncestors(args: {
       });
       await stream.append({
         type: STREAM_CHILD_STREAM_CREATED_TYPE,
-        payload: { childPath: args.childInitializedEvent.streamPath as StreamPath },
+        payload: { childPath: StreamPath.parse(args.childInitializedEvent.streamPath) },
         metadata: args.childInitializedEvent.metadata,
       });
     }),

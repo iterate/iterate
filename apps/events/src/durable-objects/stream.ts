@@ -25,8 +25,10 @@ import {
   runBuiltinBeforeAppend,
 } from "./builtin-processors.ts";
 import { resetSubscriberSocketsForStream } from "./external-subscriber.ts";
-import { createDynamicWorkerManager } from "./dynamic-processor.ts";
+import { resolveStreamRange } from "./stream-cursors.ts";
+import { createStreamDynamicWorkerManager } from "./stream-dynamic-worker-manager.ts";
 import { createInitialStreamState, reduceStreamCore } from "./stream-core-reducer.ts";
+import { StreamLiveReaders } from "./stream-live-readers.ts";
 import { propagateInitializedStreamToAncestors } from "./stream-tree-propagation.ts";
 import { getInitializedStreamStub, StreamOffsetPreconditionError } from "~/lib/stream-helpers.ts";
 
@@ -85,8 +87,8 @@ import { getInitializedStreamStub, StreamOffsetPreconditionError } from "~/lib/s
 export class StreamDurableObject extends DurableObject<Env> {
   private _state: StreamState | null = null;
   private readonly client: SyncClient;
-  private readonly subscribers = new Set<ReadableStreamDefaultController<Uint8Array>>();
-  private readonly dynamicWorkerManager: ReturnType<typeof createDynamicWorkerManager>;
+  private readonly liveReaders = new StreamLiveReaders();
+  private readonly dynamicWorkerManager: ReturnType<typeof createStreamDynamicWorkerManager>;
 
   private get state(): StreamState {
     if (this._state == null) {
@@ -115,38 +117,14 @@ export class StreamDurableObject extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.client = createDurableObjectClient(ctx.storage);
-    // Dynamic workers are intentionally not "frameworkized" as a generic
-    // processor runtime. This experimental feature owns its own manager in
-    // `dynamic-processor.ts`, and `stream.ts` only provides the minimal stream
-    // capabilities it needs: append/history/live-stream plus the dynamic worker
-    // loader and the loopback egress binding.
-    //
-    // First-party references:
-    // - Dynamic Workers overview: https://developers.cloudflare.com/dynamic-workers/
-    // - RPC lifecycle / targets: https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/
-    this.dynamicWorkerManager = createDynamicWorkerManager({
+    this.dynamicWorkerManager = createStreamDynamicWorkerManager({
+      ctx: this.ctx,
+      env: this.env,
       append: (event) => this.append(event),
-      history: (args) =>
-        this.history({
-          after: args?.after,
-          before: args?.before,
-        }),
-      stream: (args) =>
-        this.stream({
-          after: args?.after,
-          before: args?.before,
-        }),
-      createLoopbackBinding: ({ exportName }) => {
-        if (exportName !== "DynamicWorkerEgressGateway") {
-          throw new Error(`Unsupported loopback binding export: ${exportName}`);
-        }
-
-        return this.env.DYNAMIC_WORKER_EGRESS_GATEWAY as unknown as Fetcher;
-      },
+      history: (args) => this.history(args),
+      stream: (args) => this.stream(args),
       getPath: () => this.state.path,
       getProjectSlug: () => this.state.projectSlug,
-      loader: this.env.LOADER,
-      waitUntil: (promise) => this.ctx.waitUntil(promise),
     });
 
     void this.ctx.blockConcurrencyWhile(async () => {
@@ -365,7 +343,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    *
    */
   private afterAppend(event: Event) {
-    this.publish(event);
+    this.liveReaders.publish(event);
 
     if (event.type === STREAM_FIRST_INITIALIZED_TYPE) {
       this.ctx.waitUntil(
@@ -440,12 +418,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     const stateBeforeDelete = structuredClone(this._state);
     const path = stateBeforeDelete?.path;
 
-    for (const subscriber of this.subscribers) {
-      try {
-        subscriber.close();
-      } catch {}
-    }
-    this.subscribers.clear();
+    this.liveReaders.closeAll();
     if (path != null) {
       resetSubscriberSocketsForStream(path);
     }
@@ -500,40 +473,10 @@ export class StreamDurableObject extends DurableObject<Env> {
       after: args.after,
       before: args.before ?? "end",
     });
-    let subscriber: ReadableStreamDefaultController<Uint8Array> | undefined;
-
-    return new ReadableStream<Uint8Array>({
-      start: (controller) => {
-        for (const event of backlog) {
-          controller.enqueue(encodeEventLine(event));
-        }
-
-        if (args.before != null) {
-          controller.close();
-          return;
-        }
-
-        subscriber = controller;
-        this.subscribers.add(controller);
-      },
-      cancel: () => {
-        if (subscriber) {
-          this.subscribers.delete(subscriber);
-        }
-      },
+    return this.liveReaders.createReadableStream({
+      backlog,
+      closeAfterBacklog: args.before != null,
     });
-  }
-
-  private publish(event: Event) {
-    const chunk = encodeEventLine(event);
-
-    for (const subscriber of this.subscribers) {
-      try {
-        subscriber.enqueue(chunk);
-      } catch {
-        this.subscribers.delete(subscriber);
-      }
-    }
   }
 
   // ---------------------------------------------------------------------------
@@ -560,47 +503,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       createdAt: row.created_at,
     } as Event;
   }
-}
-
-function resolveStreamRange(args: {
-  after?: StreamCursor;
-  before?: StreamCursor;
-  endOffset: number;
-}) {
-  return {
-    afterOffset: resolveAfterCursor(args.after, args.endOffset),
-    beforeOffset: resolveBeforeCursor(args.before, args.endOffset),
-  };
-}
-
-function resolveAfterCursor(cursor: StreamCursor | undefined, endOffset: number) {
-  if (cursor == null || cursor === "start") {
-    return 0;
-  }
-
-  if (cursor === "end") {
-    return endOffset;
-  }
-
-  return cursor;
-}
-
-function resolveBeforeCursor(cursor: StreamCursor | undefined, endOffset: number) {
-  if (cursor == null || cursor === "end") {
-    return endOffset + 1;
-  }
-
-  if (cursor === "start") {
-    return 1;
-  }
-
-  return cursor;
-}
-
-const textEncoder = new TextEncoder();
-
-function encodeEventLine(event: Event) {
-  return textEncoder.encode(`${JSON.stringify(event)}\n`);
 }
 
 // Shape parseEventRow accepts. The generated query Result types from
