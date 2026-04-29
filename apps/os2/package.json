@@ -21,6 +21,7 @@
     "sqlfu:ui": "sqlfu",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:codemode-session": "OS2_CODEMODE_SESSION_TEST_APP_ROOT=$PWD pnpm --dir ../../packages/shared exec vitest run --config ../../apps/os2/src/durable-objects/codemode-session.vitest.config.ts",
     "test:e2e": "node -e \"if (!process.env.OS2_BASE_URL) { console.error('OS2_BASE_URL is required for OS e2e tests'); process.exit(1); }\" && vitest run --config ./e2e/vitest.config.ts",
     "test:smoke": "RUNTIME_SMOKE_FULL=1 vitest run",
     "test:watch": "vitest"

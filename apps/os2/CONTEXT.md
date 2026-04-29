@@ -114,6 +114,8 @@ _Avoid_: CallableToolProvider
 - A **Script Execution** is identified by the script-execution-requested event on the **Event Stream Path**.
 - Events belonging to a **Script Execution** refer to the requested event by `scriptExecutionRequestedOffset`.
 - A **Tool Provider** may receive a **Codemode Session Capability** when executing a **Tool Function**.
+- A **Tool Provider** may use that **Codemode Session Capability** to make another **Tool Function Call**.
+- Provider-to-provider calls are still mediated by the **Codemode Session** and produce normal Tool Function lifecycle events.
 - A **Tool Provider** provides one or more **Tool Functions**.
 - A **Leaf Tool Function** is a **Tool Function** whose remaining path is empty after provider resolution.
 - A **Provider Bridge** adapts an external system into a **Tool Provider**.
@@ -131,6 +133,9 @@ _Avoid_: CallableToolProvider
 
 > **Dev:** "Is `ctx.codemode.append(...)` also a Tool Function Call?"
 > **Domain expert:** "No. It uses the **Codemode Control Surface** to append an event directly, so it does not create Tool Function lifecycle events."
+
+> **Dev:** "If Provider B calls Provider A while executing a Tool Function, is that a private provider call?"
+> **Domain expert:** "No. Provider B uses the **Codemode Session Capability** to make another **Tool Function Call**, so the **Codemode Session** records the same lifecycle events as any other Tool Function Call."
 
 > **Dev:** "Does creating a **Codemode Session** always create a new stream?"
 > **Domain expert:** "No. A **Codemode Session** is attached to an **Event Stream Path**, which may be newly chosen by OS2 or may already exist."

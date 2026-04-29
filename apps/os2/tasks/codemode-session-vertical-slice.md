@@ -56,7 +56,7 @@ helper stops tripping deep TypeScript instantiation in OS2.
       the committed `script-execution-requested` event.
 - [x] Add a shared `createCodemodeContext()` proxy helper.
 - [x] Start a Dynamic Worker with a scoped `CodemodeSessionCapability`.
-- [ ] Prove provider A calling provider B end-to-end through the session worker.
+- [x] Prove provider-to-provider Tool Function Calls end-to-end through the session worker.
 - [ ] Replace the oRPC compatibility iterator with event-stream-native UI
       consumption.
 - [ ] Generalize cross-worker self-callable bindings beyond the OpenAPI bridge
