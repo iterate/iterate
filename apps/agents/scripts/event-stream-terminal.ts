@@ -119,6 +119,10 @@ const P = {
   textDim: "#71717a",
   /** Subdued text (non-current stream rows) */
   textSubdued: "#94a3b8",
+  /** Assistant/agent message header */
+  agent: "#a78bfa",
+  /** Error/danger text */
+  danger: "#ef4444",
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -279,12 +283,6 @@ const inputBox = new BoxRenderable(renderer, {
   backgroundColor: P.bg,
 });
 
-const inputSeparator = new BoxRenderable(renderer, {
-  width: "100%",
-  height: 1,
-  backgroundColor: P.surface,
-});
-
 // Assemble the widget tree
 topBar.add(brandMark);
 topBar.add(streamPathText);
@@ -294,7 +292,6 @@ root.add(topBar);
 root.add(feed);
 inputBox.add(input);
 root.add(slashAutocomplete);
-root.add(inputSeparator);
 root.add(inputBox);
 renderer.root.add(root);
 
@@ -395,6 +392,8 @@ function startStream(streamPath: StreamPath) {
   selectedOffset = undefined;
   collapsedOffsets.clear();
   status = "connecting";
+  // Force renderedView to differ from the current view so updateFeed() detects a
+  // "view change" and re-enables sticky scroll to bottom for the fresh stream.
   renderedView = navigationState.view === "feed" ? "state" : renderedView;
   updateHeader();
   updateFeed();
@@ -727,7 +726,7 @@ function renderFeedChildren() {
         children.push(
           new TextRenderable(renderer, {
             id: `date-boundary-${itemTimestamp}`,
-            content: new StyledText([fg(P.textDim)(`${left}${label}${right}\n`)]),
+            content: new StyledText([fg(P.textDim)(`\n${left}${label}${right}\n`)]),
             width: "100%",
             height: 2,
             fg: P.textDim,
@@ -896,7 +895,7 @@ function renderMessageItem(props: { role: "user" | "assistant"; text: string; ti
   const width = getFeedContentWidth();
   const isUser = props.role === "user";
   const label = isUser ? "You" : "Agent";
-  const labelColor = isUser ? P.accent : "#a78bfa";
+  const labelColor = isUser ? P.accent : P.agent;
   const time = formatTime(props.timestamp);
   const wrappedLines = props.text.split("\n").flatMap((line) => wrapLine(line, width - 2));
 
@@ -940,7 +939,7 @@ function renderErrorItem(props: { message: string; timestamp: number }) {
   const text = `⚠ Error: ${props.message}`;
   const time = formatTime(props.timestamp);
   const padded = `${text}${" ".repeat(Math.max(1, width - text.length - time.length))}${time}`;
-  return [fg(P.bg)("\n"), fg("#ef4444")(`${padded}\n`)];
+  return [fg(P.bg)("\n"), fg(P.danger)(`${padded}\n`)];
 }
 
 /**
@@ -1104,8 +1103,30 @@ function toggleSelectedFeedItem() {
 // Slash command autocomplete
 // ---------------------------------------------------------------------------
 
-/** Refresh the autocomplete dropdown based on the current input value. */
+/**
+ * Refresh the autocomplete dropdown based on the current input value.
+ *
+ * Two modes:
+ * - **Search mode**: input is a partial slash query (e.g. "/str") — show matching commands
+ * - **Docs mode**: input is a resolved command with args (e.g. "/stream.reset --no-children")
+ *   — show the command's description, usage, and available arguments
+ */
 function updateSlashAutocomplete() {
+  // Check if the input matches a resolved command (has a space after the slash name)
+  if (input.value.startsWith("/") && input.value.includes(" ")) {
+    const invocation = parseSlashInvocation(input.value);
+    if (invocation != null) {
+      const command = findDiscoveredSlashCommand({
+        commands: commandEntries,
+        slash: invocation.slash,
+      });
+      if (command != null) {
+        showCommandDocs(command);
+        return;
+      }
+    }
+  }
+
   const commands = suggestSlashCommands({ commands: commandEntries, input: input.value, limit: 8 });
 
   if (commands.length === 0) {
@@ -1142,6 +1163,41 @@ function updateSlashAutocomplete() {
       new TextRenderable(renderer, {
         id: `events-slash-command-${command.path}`,
         content: new StyledText(chunks),
+        width: "100%",
+        height: 1,
+        fg: P.textContent,
+      }),
+    );
+  }
+}
+
+/**
+ * Show inline documentation for a resolved command in the autocomplete area.
+ * Displays: command name, description, positional arg, options, and flags.
+ */
+function showCommandDocs(command: CommandEntry) {
+  clearBoxChildren(slashAutocomplete);
+
+  const lines: string[] = [];
+  lines.push(`/${command.slash.name}  ${command.description ?? command.title}`);
+
+  if (command.input?.positional) {
+    const pos = command.input.positional;
+    lines.push(`  <${pos.name}>${pos.required ? "" : "?"} ${pos.placeholder ?? ""}`);
+  }
+  for (const opt of command.input?.options ?? []) {
+    lines.push(`  ${opt.flag} <${opt.name}>`);
+  }
+  for (const flag of command.input?.flags ?? []) {
+    lines.push(`  ${flag.flag}`);
+  }
+
+  slashAutocomplete.height = lines.length;
+  for (const [i, line] of lines.entries()) {
+    slashAutocomplete.add(
+      new TextRenderable(renderer, {
+        id: `events-slash-docs-${i}`,
+        content: new StyledText([i === 0 ? bold(fg(P.text)(line)) : fg(P.textSubdued)(line)]),
         width: "100%",
         height: 1,
         fg: P.textContent,
