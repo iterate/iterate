@@ -7,13 +7,13 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { StreamPath, type EventType } from "@iterate-com/events-contract";
+import { describe, expect, test } from "vitest";
 import type { SchedulerState } from "../../src/durable-objects/scheduling-types.ts";
 import {
   SCHEDULE_CONFIGURED_TYPE,
   SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE,
   SCHEDULE_INTERNAL_EXECUTION_STARTED_TYPE,
 } from "../../src/durable-objects/scheduling-types.ts";
-import { describe, expect, test } from "vitest";
 import { collectAsyncIterableUntilIdle, createEvents2AppFixture } from "../helpers.ts";
 
 const describeDeployedScheduling = describe.skip;

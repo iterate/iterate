@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { AgentProcessorContract, reduceAgentEvents } from "./contract.ts";
 import {
   CoreProcessorRegisteredEventType,
   createProcessorRegisteredInput,
 } from "../core/contract.ts";
+import { AgentProcessorContract, reduceAgentEvents } from "./contract.ts";
 import { wellBehavedProcessorDefaults } from "../core/well-behaved-processor-defaults.ts";
 import { getInitialProcessorState, type StreamEvent } from "@iterate-com/shared/stream-processors";
 

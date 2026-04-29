@@ -1,9 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
+import type { StreamEvent } from "../../packages/shared/src/stream-processors/stream-processor.ts";
 import {
   AgentLoopProcessorContract,
   reduceAgentLoopEvents,
 } from "./frontend-reducer-poc.contract.ts";
-import type { StreamEvent } from "../../packages/shared/src/stream-processors/stream-processor.ts";
 
 /**
  * Frontend usage sketch for the agents UI.

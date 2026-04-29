@@ -1,6 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { env } from "cloudflare:test";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import { describe, expect, it } from "vitest";
 import type { SchedulerState } from "./scheduling-types.ts";
 import {
   SCHEDULE_CANCELLED_TYPE,
@@ -9,7 +10,6 @@ import {
   SCHEDULE_INTERNAL_EXECUTION_STARTED_TYPE,
   STREAM_APPEND_SCHEDULED_TYPE,
 } from "./scheduling-types.ts";
-import { describe, expect, it } from "vitest";
 import { HUNG_INTERVAL_TIMEOUT_SECONDS } from "~/durable-objects/scheduling.ts";
 import workerEntry, {
   StreamDurableObject,
