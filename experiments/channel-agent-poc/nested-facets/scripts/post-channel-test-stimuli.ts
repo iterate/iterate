@@ -115,15 +115,16 @@ async function main() {
     const channelId = required("CHANNEL_TEST_DISCORD_CHANNEL_ID");
     const botUserId = required("CHANNEL_TEST_DISCORD_BOT_USER_ID");
     const marker = `discord-${markerBase}`;
-    await jsonFetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
+    const discord = await jsonFetch(`https://discord.com/api/v10/channels/${channelId}/messages`, {
       method: "POST",
       headers: { authorization: `Bot ${discordToken}`, "content-type": "application/json" },
       body: JSON.stringify({ content: `<@${botUserId}> reply exactly marker ${marker}` }),
     });
+    const streamPath = `/agents/discord/thread-${channelId}-${discord.id}`;
     output.discord = {
       marker,
-      eventsUrl: `https://test.events.iterate.com/streams/agents/discord/channel-${channelId}/?renderer=raw-pretty&composer=json`,
-      agentsUrl: `https://agents.test.iterate-dev-jonas.app/streams/%2Fagents%2Fdiscord%2Fchannel-${channelId}`,
+      eventsUrl: `https://test.events.iterate.com/streams${streamPath}/?renderer=raw-pretty&composer=json`,
+      agentsUrl: `https://agents.test.iterate-dev-jonas.app/streams/${encodeURIComponent(streamPath)}`,
       note: "Bot-authored Discord messages are a REST token smoke test; use a browser user message for final proof.",
     };
   }

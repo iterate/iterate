@@ -33,7 +33,7 @@ const DEFAULT_EVENTS = [
     payload: {
       role: "user",
       content:
-        "Discord policy: read the raw `events.iterate.com/discord/gateway-event-received` YAML. Reply in Discord with `discord.sendMessage` using `payload.data.channel_id` as channelId. If reacting, use `payload.data.channel_id` and `payload.data.id`. Do not send a separate webchat confirmation. There is no `event` global in codemode; copy exact IDs from the YAML into constants. Always return the tool promise or result. If you both reply and react, use `Promise.all([discord.sendMessage(...), discord.addReaction(...)])`.",
+        "Discord policy: read the raw `events.iterate.com/discord/websocket-message-received` YAML. Reply in Discord with `discord.sendMessage` using `payload.data.channel_id` as channelId and `payload.data.id` as replyToMessageId. If reacting, use `payload.data.channel_id` and `payload.data.id`. Do not send a separate webchat confirmation. There is no `event` global in codemode; copy exact IDs from the YAML into constants. Always return the tool promise or result. If you both reply and react, use `Promise.all([discord.sendMessage(...), discord.addReaction(...)])`.",
       triggerLlmRequest: { behaviour: "dont-trigger-request" },
     },
   },
@@ -117,21 +117,23 @@ function agentInputForDiscordMessage(args: {
   };
 }
 
-function discordGatewayEventReceivedEvent(args: {
+function discordWebsocketMessageReceivedEvent(args: {
   dispatchType: string;
   data: any;
+  streamPath: string;
   sequence?: number | null;
   receivedAt: string;
 }) {
   return {
-    type: "events.iterate.com/discord/gateway-event-received",
+    type: "events.iterate.com/discord/websocket-message-received",
     payload: {
       dispatchType: args.dispatchType,
       data: args.data,
+      streamPath: args.streamPath,
       sequence: args.sequence ?? null,
       receivedAt: args.receivedAt,
     },
-    idempotencyKey: `discord-gateway:${args.dispatchType}:${args.data?.id || args.sequence || Date.now()}`,
+    idempotencyKey: `discord-websocket-message:${args.dispatchType}:${args.data?.id || args.sequence || Date.now()}`,
   };
 }
 
@@ -275,18 +277,33 @@ export class App extends DurableObject {
     this.#setConfig(key, hash);
   }
 
+  #discordThreadKey(d: any): string {
+    const referencedMessageId = d.message_reference?.message_id;
+    if (referencedMessageId) {
+      const existing = this.#config(`discordThreadByMessage:${referencedMessageId}`);
+      if (existing) return existing;
+      return `${d.channel_id}-${referencedMessageId}`;
+    }
+    return `${d.channel_id}-${d.id}`;
+  }
+
+  #discordAgentPath(d: any): string {
+    return `/agents/discord/thread-${this.#discordThreadKey(d)}`;
+  }
+
   async #routeToAgent(d: any) {
-    const agentPath = `/agents/discord/channel-${d.channel_id}`;
-    const rawEvent = discordGatewayEventReceivedEvent({
+    const agentPath = this.#discordAgentPath(d);
+    const rawEvent = discordWebsocketMessageReceivedEvent({
       dispatchType: "MESSAGE_CREATE",
       data: d,
+      streamPath: agentPath,
       sequence: this.#sequence,
       receivedAt: new Date().toISOString(),
     });
     try {
-      await this.#appendToStream("/discord/gateway", rawEvent);
+      await this.#appendToStream("/discord/websocket-messages", rawEvent);
     } catch (e: any) {
-      console.error(`[Discord] raw gateway append failed: ${e.message}`);
+      console.error(`[Discord] raw websocket message append failed: ${e.message}`);
     }
 
     const dedupKey = `seen:${d.id}`;
@@ -296,6 +313,7 @@ export class App extends DurableObject {
       return;
     }
     this.#setConfig(dedupKey, "1");
+    this.#setConfig(`discordThreadByMessage:${d.id}`, this.#discordThreadKey(d));
 
     try {
       await this.#client().addReaction(d.channel_id, d.id, "👀");

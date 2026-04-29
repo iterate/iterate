@@ -59,7 +59,7 @@ POC event types use processor-qualified names:
 - `events.iterate.com/slack/webhook-received`
 - `events.iterate.com/github/webhook-received`
 - `events.iterate.com/linear/webhook-received`
-- `events.iterate.com/discord/gateway-event-received`
+- `events.iterate.com/discord/websocket-message-received`
 
 Legacy streams may still contain older event names from previous debugging.
 Create fresh test threads when validating current behavior.
@@ -71,14 +71,19 @@ Raw global streams:
 - `/slack/webhooks`
 - `/github/webhooks`
 - `/linear/webhooks`
-- `/discord/gateway`
+- `/discord/websocket-messages`
 
 Agent thread streams:
 
 - `/agents/slack/ts-<thread-ts-with-dot-replaced-by-dash>`
 - `/agents/github/pr-<owner>-<repo>-<number>`
 - `/agents/linear/issue-<linear-issue-id>`
-- `/agents/discord/channel-<channel-id>`
+- `/agents/discord/thread-<discord-channel-id>-<root-message-id>`
+
+Discord uses one agent stream per Discord conversation root. A top-level
+mention uses that message id as the root; a reply reuses the referenced message
+mapping when known. Messages inside a real Discord thread use that thread
+channel id as part of the stream key.
 
 ## Deployment Shape
 

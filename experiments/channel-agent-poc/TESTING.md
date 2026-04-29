@@ -117,7 +117,7 @@ Replace the path after `/streams/` as needed:
 https://test.events.iterate.com/streams/agents/slack/ts-<thread-ts-dashed>/?renderer=raw-pretty&composer=json
 https://test.events.iterate.com/streams/agents/github/pr-<owner>-<repo>-<number>/?renderer=raw-pretty&composer=json
 https://test.events.iterate.com/streams/agents/linear/issue-<issue-id>/?renderer=raw-pretty&composer=json
-https://test.events.iterate.com/streams/agents/discord/channel-<channel-id>/?renderer=raw-pretty&composer=json
+https://test.events.iterate.com/streams/agents/discord/thread-<channel-id>-<root-message-id>/?renderer=raw-pretty&composer=json
 ```
 
 Agents mini app deep link:
@@ -291,13 +291,13 @@ REST token smoke:
 doppler run -- bash -lc '
 set -euo pipefail
 MARKER="discord-proof-$(date +%s)"
-curl -fsS -X POST "https://discord.com/api/v10/channels/${CHANNEL_TEST_DISCORD_CHANNEL_ID}/messages" \
+MESSAGE_ID=$(curl -fsS -X POST "https://discord.com/api/v10/channels/${CHANNEL_TEST_DISCORD_CHANNEL_ID}/messages" \
   -H "authorization: Bot ${CHANNEL_TEST_DISCORD_APP_BOT_TOKEN}" \
   -H "content-type: application/json" \
-  -d "{\"content\":\"<@${CHANNEL_TEST_DISCORD_BOT_USER_ID}> reply exactly marker ${MARKER}\"}" | jq .
+  -d "{\"content\":\"<@${CHANNEL_TEST_DISCORD_BOT_USER_ID}> reply exactly marker ${MARKER}\"}" | jq -r .id)
 echo "marker=${MARKER}"
-echo "events=https://test.events.iterate.com/streams/agents/discord/channel-${CHANNEL_TEST_DISCORD_CHANNEL_ID}/?renderer=raw-pretty&composer=json"
-echo "agents=https://agents.test.iterate-dev-jonas.app/streams/%2Fagents%2Fdiscord%2Fchannel-${CHANNEL_TEST_DISCORD_CHANNEL_ID}"
+echo "events=https://test.events.iterate.com/streams/agents/discord/thread-${CHANNEL_TEST_DISCORD_CHANNEL_ID}-${MESSAGE_ID}/?renderer=raw-pretty&composer=json"
+echo "agents=https://agents.test.iterate-dev-jonas.app/streams/%2Fagents%2Fdiscord%2Fthread-${CHANNEL_TEST_DISCORD_CHANNEL_ID}-${MESSAGE_ID}"
 '
 ```
 
