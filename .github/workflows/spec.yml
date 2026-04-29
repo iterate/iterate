@@ -2,7 +2,7 @@
 
 name: specs
 on:
-  workflow_dispatch: {}
+  push: {}
 env:
   SLACK_CLIENT_ID: fake123
   DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
