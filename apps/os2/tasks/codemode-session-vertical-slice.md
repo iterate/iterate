@@ -1,5 +1,5 @@
 ---
-state: todo
+state: in_progress
 priority: high
 size: large
 dependsOn: []
@@ -17,7 +17,7 @@ worker.
 - main OS2 worker binding: `CODEMODE_SESSION`
 - init params: `{ name: string; streamPath: StreamPath }`
 - public identity: `streamPath`
-- DO name: derived from init params by `getOrInitializeDoStub`
+- DO name: derived from `{ streamPath }` using the lifecycle mixin helper
 - D1 catalog: existing OS2 D1 bound as `DO_CATALOG`
 - event app access: call events service directly for now
 
@@ -41,7 +41,26 @@ Use the shared durable object utils:
 - `getScopedRpcTarget()`
 
 Inherited lifecycle API is not domain API. Callers should use
-`getOrInitializeDoStub()`.
+`deriveDurableObjectNameFromInitParams()` and `initialize()` until the typed
+helper stops tripping deep TypeScript instantiation in OS2.
+
+## Current Slice
+
+- [x] Create `codemode-session-do` tiny worker.
+- [x] Bind `CODEMODE_SESSION` into the main OS2 worker.
+- [x] Add `CodemodeSession` with lifecycle, D1 catalog, KV inspector, and
+      Outerbase mixins.
+- [x] Store the Tool Provider registry on the session.
+- [x] Append codemode events directly to the events app.
+- [x] Route one-shot oRPC execution through the session and immediately return
+      the committed `script-execution-requested` event.
+- [x] Add a shared `createCodemodeContext()` proxy helper.
+- [x] Start a Dynamic Worker with a scoped `CodemodeSessionCapability`.
+- [ ] Prove provider A calling provider B end-to-end through the session worker.
+- [ ] Replace the oRPC compatibility iterator with event-stream-native UI
+      consumption.
+- [ ] Generalize cross-worker self-callable bindings beyond the OpenAPI bridge
+      proof path.
 
 ## Acceptance Tests
 
