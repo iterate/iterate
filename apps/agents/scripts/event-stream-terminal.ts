@@ -886,50 +886,79 @@ function renderFeedItem(item: EventsStreamBuiltInElement, elapsedByOffset: Map<n
   return [];
 }
 
-/** Render a chat message (user or assistant) as a styled block. */
+/**
+ * Render a chat message. Mirrors the web renderer's pattern:
+ * - User messages: right-aligned with accent color header
+ * - Assistant messages: left-aligned with purple header
+ * Both show "role · timestamp" header then wrapped body text.
+ */
 function renderMessageItem(props: { role: "user" | "assistant"; text: string; timestamp: number }) {
   const width = getFeedContentWidth();
   const isUser = props.role === "user";
   const label = isUser ? "You" : "Agent";
   const labelColor = isUser ? P.accent : "#a78bfa";
   const time = formatTime(props.timestamp);
-  const header = `${label}${" ".repeat(Math.max(1, width - label.length - time.length))}${time}\n`;
-  const wrappedLines = props.text.split("\n").flatMap((line) => wrapLine(line, width));
+  const wrappedLines = props.text.split("\n").flatMap((line) => wrapLine(line, width - 2));
+
+  if (isUser) {
+    // User: right-aligned header, content indented from right (matches web's ml-auto bubble)
+    const header = rightAlign(`${label} · ${time}`, width);
+    return [
+      fg(P.bg)("\n"),
+      bold(fg(labelColor)(`${header}\n`)),
+      ...wrappedLines.map((line) => fg(P.text)(`${rightAlign(line, width)}\n`)),
+    ];
+  }
+
+  // Assistant: left-aligned, no bubble (matches web's bare left-aligned text)
   return [
     fg(P.bg)("\n"),
-    bold(fg(labelColor)(header)),
-    ...wrappedLines.map((line) => fg(P.text)(`${line}\n`)),
+    bold(fg(labelColor)(`${label} · ${time}\n`)),
+    ...wrappedLines.map((line) => fg(P.text)(`  ${line}\n`)),
   ];
 }
 
-/** Render a lifecycle event (stream initialized, DO woke up) as a dim one-liner. */
+/**
+ * Render a lifecycle event as a centered horizontal rule with label pill.
+ * Matches the web renderer's TimelineLine: ──── label ────
+ */
 function renderLifecycleItem(props: { label: string; timestamp: number }) {
   const width = getFeedContentWidth();
-  const time = formatTime(props.timestamp);
-  const text = `  ○ ${props.label}`;
-  const line = `${text}${" ".repeat(Math.max(1, width - text.length - time.length))}${time}\n`;
-  return [fg(P.textDim)(line)];
+  const label = ` ${props.label} · ${formatTime(props.timestamp)} `;
+  const lineLen = Math.max(0, width - label.length);
+  const left = "─".repeat(Math.floor(lineLen / 2));
+  const right = "─".repeat(Math.ceil(lineLen / 2));
+  return [fg(P.textDim)(`${left}${label}${right}\n`)];
 }
 
-/** Render an error event as a red-highlighted line. */
+/**
+ * Render an error event. Matches the web's FeedEvent with tone="danger":
+ * ⚠ Error: message · timestamp
+ */
 function renderErrorItem(props: { message: string; timestamp: number }) {
   const width = getFeedContentWidth();
+  const text = `⚠ Error: ${props.message}`;
   const time = formatTime(props.timestamp);
-  const text = `  ✕ ${props.message}`;
-  const line = `${text}${" ".repeat(Math.max(1, width - text.length - time.length))}${time}\n`;
-  return [fg("#ef4444")(line)];
+  const padded = `${text}${" ".repeat(Math.max(1, width - text.length - time.length))}${time}`;
+  return [fg(P.bg)("\n"), fg("#ef4444")(`${padded}\n`)];
 }
 
-/** Render a child-stream-created event showing the new child path. */
+/**
+ * Render a child-stream-created event.
+ * Matches the web's FeedEvent with FolderPlusIcon.
+ */
 function renderChildStreamItem(props: { childPath: string; timestamp: number }) {
   const width = getFeedContentWidth();
+  const text = `＋ Child stream: ${props.childPath}`;
   const time = formatTime(props.timestamp);
-  const text = `  ┗ child: ${props.childPath}`;
-  const line = `${text}${" ".repeat(Math.max(1, width - text.length - time.length))}${time}\n`;
-  return [fg(P.textSubdued)(line)];
+  const padded = `${text}${" ".repeat(Math.max(1, width - text.length - time.length))}${time}`;
+  return [fg(P.textSubdued)(`${padded}\n`)];
 }
 
-/** Render a grouped raw event as a compact summary. */
+/**
+ * Render a grouped raw event as a right-aligned compact summary.
+ * Matches the web's right-aligned muted text with count badge and · separators.
+ */
 function renderGroupedRawItem(props: {
   eventType: string;
   count: number;
@@ -938,10 +967,8 @@ function renderGroupedRawItem(props: {
 }) {
   const width = getFeedContentWidth();
   const elapsed = formatElapsedTime(props.lastTimestamp - props.firstTimestamp);
-  const text = `  … ${props.count}× ${props.eventType} (${elapsed})`;
-  const time = formatTime(props.lastTimestamp);
-  const line = `${text}${" ".repeat(Math.max(1, width - text.length - time.length))}${time}\n`;
-  return [fg(P.textDim)(line)];
+  const summary = `${props.eventType} · ×${props.count} · ${elapsed} · ${formatTime(props.lastTimestamp)}`;
+  return [fg(P.textDim)(`${rightAlign(summary, width)}\n`)];
 }
 
 // ---------------------------------------------------------------------------

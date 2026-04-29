@@ -42,9 +42,10 @@ items" versus "feed items" inside the feed slot.
 Reducers are the view policy. If a dropdown mode wants different content, add
 or select a different reducer.
 
-The shape follows stream processors such as
-`apps/agents/src/durable-objects/agent-processor.ts`: each reducer has
-`slug`, `createInitialState()`, and `reduce({ event, state })`.
+The shape follows the same reducer discipline as the stream processor contracts
+under `apps/agents/src/stream-processors`: each reducer is plain data plus a
+pure `reduce({ event, state })` function. Rendering concerns stay outside the
+reducer.
 
 Current primary reducers:
 
