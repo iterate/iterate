@@ -708,9 +708,8 @@ function updateFeed(scroll: "selected" | "keep" = "keep") {
       feed.scrollChildIntoView(`events-feed-stream-${selectedStreamPath ?? "none"}`),
     );
   } else if (scroll === "selected") {
-    setImmediate(() =>
-      feed.scrollChildIntoView(`events-feed-raw-event-${selectedOffset ?? "none"}`),
-    );
+    // Raw event IDs from the reducer are "raw-event-{offset}"
+    setImmediate(() => feed.scrollChildIntoView(`raw-event-${selectedOffset ?? "none"}`));
   } else if (shouldStickToBottom) {
     setImmediate(() => feed.scrollTo(feed.scrollHeight));
     setTimeout(() => feed.scrollTo(feed.scrollHeight), 0).unref();

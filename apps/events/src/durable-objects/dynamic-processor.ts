@@ -345,7 +345,6 @@ export function createDynamicWorkerManager(context: {
   getPath: () => StreamPath;
   getProjectSlug: () => string;
   loader: WorkerLoader;
-  waitUntil: (promise: Promise<unknown>) => void;
 }) {
   const runsBySlug = new Map<
     string,
@@ -455,7 +454,6 @@ export function createDynamicWorkerManager(context: {
         };
 
         runsBySlug.set(slug, nextRun);
-        context.waitUntil(run);
 
         void run.then(
           () => {

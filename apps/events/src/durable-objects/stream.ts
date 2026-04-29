@@ -102,7 +102,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       getPath: () => this.state.path,
       getProjectSlug: () => this.state.projectSlug,
       loader: this.env.LOADER,
-      waitUntil: (promise) => this.ctx.waitUntil(promise),
     });
 
     void this.ctx.blockConcurrencyWhile(async () => {
@@ -315,32 +314,32 @@ export class StreamDurableObject extends DurableObject<Env> {
    *    has already reduced configuration state; the manager turns that state
    *    into live Dynamic Worker instances.
    *
-   * These are currently `waitUntil` tasks, so they are best-effort relative to
-   * the committed source event. Correctness-critical derived work should move
-   * behind a durable event/outbox cursor before we rely on it operationally.
+   * We deliberately do not use ctx.waitUntil() here. Cloudflare documents that
+   * it has no effect in Durable Objects; pending I/O keeps the object alive.
+   * https://developers.cloudflare.com/durable-objects/api/state/#waituntil
+   *
+   * Correctness-critical derived work still needs a durable event/outbox cursor
+   * before we rely on it operationally.
    */
   private afterAppend(event: Event) {
     this.publish(event);
 
     if (event.type === STREAM_FIRST_INITIALIZED_TYPE) {
-      this.ctx.waitUntil(
-        propagateInitializedStreamToAncestors({
-          childInitializedEvent: event,
-          projectSlug: this.state.projectSlug,
-        }).catch((error) => {
-          console.error("[stream-do] failed to propagate initialized stream to ancestors", {
-            path: event.streamPath,
-            error,
-          });
-        }),
-      );
+      void propagateInitializedStreamToAncestors({
+        childInitializedEvent: event,
+        projectSlug: this.state.projectSlug,
+      }).catch((error) => {
+        console.error("[stream-do] failed to propagate initialized stream to ancestors", {
+          path: event.streamPath,
+          error,
+        });
+      });
     }
 
     runBuiltinAfterAppend({
       append: (nextEvent) => this.append(nextEvent),
       event,
       processors: this.state.processors,
-      waitUntil: (promise) => this.ctx.waitUntil(promise),
       onError: ({ error, event, processorSlug }) => {
         console.error("[stream-do] processor afterAppend failed", {
           path: this.state.path,
@@ -351,20 +350,18 @@ export class StreamDurableObject extends DurableObject<Env> {
       },
     });
 
-    this.ctx.waitUntil(
-      this.dynamicWorkerManager
-        .afterAppend({
-          event,
-          state: this.state.processors["dynamic-worker"],
-        })
-        .catch((error) => {
-          console.error("[stream-do] dynamic worker manager afterAppend failed", {
-            path: this.state.path,
-            eventType: event.type,
-            error,
-          });
-        }),
-    );
+    void this.dynamicWorkerManager
+      .afterAppend({
+        event,
+        state: this.state.processors["dynamic-worker"],
+      })
+      .catch((error) => {
+        console.error("[stream-do] dynamic worker manager afterAppend failed", {
+          path: this.state.path,
+          eventType: event.type,
+          error,
+        });
+      });
   }
 
   // ---------------------------------------------------------------------------
@@ -605,7 +602,6 @@ function runBuiltinAfterAppend(args: {
   append: (event: EventInput) => Event;
   event: Event;
   processors: StreamState["processors"];
-  waitUntil: (promise: Promise<unknown>) => void;
   onError(args: { error: unknown; event: Event; processorSlug: string }): void;
 }) {
   for (const processor of builtinProcessors) {
@@ -619,15 +615,13 @@ function runBuiltinAfterAppend(args: {
       continue;
     }
 
-    args.waitUntil(
-      promise.catch((error) => {
-        args.onError({
-          error,
-          event: args.event,
-          processorSlug: processor.slug,
-        });
-      }),
-    );
+    void promise.catch((error) => {
+      args.onError({
+        error,
+        event: args.event,
+        processorSlug: processor.slug,
+      });
+    });
   }
 }
 
