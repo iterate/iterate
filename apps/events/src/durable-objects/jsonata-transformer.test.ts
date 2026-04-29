@@ -189,7 +189,7 @@ function createConfiguredEvent(args: {
   transform: string;
 }): JsonataTransformerConfiguredEvent {
   return createEvent({
-    type: "https://events.iterate.com/events/stream/jsonata-transformer-configured",
+    type: "events.iterate.com/core/jsonata-transformer-configured",
     payload: {
       slug: args.slug,
       matcher: args.matcher,

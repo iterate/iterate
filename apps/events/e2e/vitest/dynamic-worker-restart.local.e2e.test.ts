@@ -8,7 +8,7 @@ import { describe, expect, test } from "vitest";
 import { pingPongDynamicWorkerScript } from "../../src/durable-objects/dynamic-processor.ts";
 import { collectAsyncIterableUntilIdle, createEvents2AppFixture } from "../helpers.ts";
 
-const configuredEventType = "https://events.iterate.com/events/stream/dynamic-worker/configured";
+const configuredEventType = "events.iterate.com/core/dynamic-worker-configured";
 const valueRecordedEventType = "https://events.iterate.com/events/example/value-recorded";
 const localBaseUrl = "http://localhost:5173";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
@@ -62,7 +62,7 @@ describeLocalRestart("dynamic worker restart", () => {
         path,
         totalEvents: 10,
         counts: {
-          "https://events.iterate.com/events/stream/durable-object-woke-up": 1,
+          "events.iterate.com/core/durable-object-woke-up": 1,
           [configuredEventType]: 2,
           [valueRecordedEventType]: 2,
           pong: 2,
@@ -134,7 +134,7 @@ describeLocalRestart("dynamic worker restart", () => {
         path,
         totalEvents: 10,
         counts: {
-          "https://events.iterate.com/events/stream/durable-object-woke-up": 1,
+          "events.iterate.com/core/durable-object-woke-up": 1,
           [configuredEventType]: 2,
           [valueRecordedEventType]: 3,
           pong: 1,

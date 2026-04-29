@@ -1,5 +1,13 @@
 import { z } from "zod";
-import { Event, EventInput } from "@iterate-com/events-contract";
+import {
+  Event,
+  EventInput,
+  STREAM_APPEND_SCHEDULED_TYPE,
+  STREAM_SCHEDULE_CANCELLED_TYPE,
+  STREAM_SCHEDULE_CONFIGURED_TYPE,
+  STREAM_SCHEDULE_EXECUTION_FINISHED_TYPE,
+  STREAM_SCHEDULE_EXECUTION_STARTED_TYPE,
+} from "@iterate-com/events-contract";
 
 /**
  * Scheduling is modeled as stream control events, not as a separate scheduler
@@ -24,18 +32,10 @@ import { Event, EventInput } from "@iterate-com/events-contract";
  * - Cloudflare Agents scheduling docs:
  *   https://developers.cloudflare.com/agents/api-reference/schedule-tasks/
  */
-const iterateEventUriPrefix = "https://events.iterate.com/" as const;
-
-export const STREAM_APPEND_SCHEDULED_TYPE =
-  `${iterateEventUriPrefix}events/stream/append-scheduled` as const;
-export const SCHEDULE_CONFIGURED_TYPE =
-  `${iterateEventUriPrefix}events/stream/schedule/configured` as const;
-export const SCHEDULE_CANCELLED_TYPE =
-  `${iterateEventUriPrefix}events/stream/schedule/cancelled` as const;
-export const SCHEDULE_INTERNAL_EXECUTION_STARTED_TYPE =
-  `${iterateEventUriPrefix}events/stream/schedule/internal/execution-started` as const;
-export const SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE =
-  `${iterateEventUriPrefix}events/stream/schedule/internal/execution-finished` as const;
+export const SCHEDULE_CONFIGURED_TYPE = STREAM_SCHEDULE_CONFIGURED_TYPE;
+export const SCHEDULE_CANCELLED_TYPE = STREAM_SCHEDULE_CANCELLED_TYPE;
+export const SCHEDULE_INTERNAL_EXECUTION_STARTED_TYPE = STREAM_SCHEDULE_EXECUTION_STARTED_TYPE;
+export const SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE = STREAM_SCHEDULE_EXECUTION_FINISHED_TYPE;
 
 export const StreamSchedule = z.discriminatedUnion("kind", [
   z.strictObject({

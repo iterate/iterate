@@ -200,7 +200,7 @@ curl -sS "$BASE_URL/api/streams/__state/%2F" >/dev/null
         projectSlug,
       },
       streamPath: "<streamPath>",
-      type: "https://events.iterate.com/events/stream/initialized",
+      type: "events.iterate.com/core/stream-first-initialized",
     });
     expect(parseSseMessage(streamMessages[2])).toEqual({
       createdAt: "<ts>",

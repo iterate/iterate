@@ -27,7 +27,7 @@ const intervalFireDelayMs = 12_000;
 const idleGapDelayMs = 75_000;
 const wakeCanaryIdleGapMs = 180_000;
 const wakeCanaryFutureDelaySeconds = 600;
-const durableObjectWokeUpType = "https://events.iterate.com/events/stream/durable-object-woke-up";
+const durableObjectWokeUpType = "events.iterate.com/core/durable-object-woke-up";
 
 describeDeployedScheduling("events recurring/restart scheduling e2e", () => {
   test("an interval schedule keeps emitting ordered callback and finished events", async () => {
@@ -204,7 +204,7 @@ async function readHistory(path: StreamPath) {
     (event) =>
       !(
         event.type === durableObjectWokeUpType ||
-        (event.type === "https://events.iterate.com/events/stream/initialized" &&
+        (event.type === "events.iterate.com/core/stream-first-initialized" &&
           event.streamPath === path &&
           getPayloadPath(event) === path)
       ),
@@ -223,7 +223,7 @@ async function readHistoryIncludingWake(path: StreamPath) {
   return events.filter(
     (event) =>
       !(
-        event.type === "https://events.iterate.com/events/stream/initialized" &&
+        event.type === "events.iterate.com/core/stream-first-initialized" &&
         event.streamPath === path &&
         getPayloadPath(event) === path
       ),

@@ -2,6 +2,9 @@ import {
   type CircuitBreakerConfig,
   CircuitBreakerConfiguredEvent,
   type CircuitBreakerState,
+  STREAM_DURABLE_OBJECT_WOKE_UP_TYPE,
+  STREAM_PAUSED_TYPE,
+  STREAM_RESUMED_TYPE,
   StreamPausedError,
   StreamPausedEvent,
   StreamResumedEvent,
@@ -60,8 +63,8 @@ export const circuitBreakerProcessor = defineBuiltinProcessor<CircuitBreakerStat
 
   beforeAppend({ event, state }) {
     if (!state.paused) return;
-    if (event.type === "https://events.iterate.com/events/stream/resumed") return;
-    if (event.type === "https://events.iterate.com/events/stream/durable-object-woke-up") {
+    if (event.type === STREAM_RESUMED_TYPE) return;
+    if (event.type === STREAM_DURABLE_OBJECT_WOKE_UP_TYPE) {
       return;
     }
     throw new StreamPausedError();
@@ -130,7 +133,7 @@ export const circuitBreakerProcessor = defineBuiltinProcessor<CircuitBreakerStat
     if (state.availableTokens >= 0) return;
 
     await append({
-      type: "https://events.iterate.com/events/stream/paused",
+      type: STREAM_PAUSED_TYPE,
       payload: { reason: "circuit breaker tripped: burst rate limit exceeded" },
     });
   },

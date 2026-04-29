@@ -52,7 +52,7 @@ describe("circuitBreaker", () => {
       circuitBreakerProcessor.beforeAppend?.({
         state,
         event: {
-          type: "https://events.iterate.com/events/stream/resumed",
+          type: "events.iterate.com/core/resumed",
           payload: { reason: "operator override" },
         },
       }),
@@ -62,7 +62,7 @@ describe("circuitBreaker", () => {
       circuitBreakerProcessor.beforeAppend?.({
         state,
         event: {
-          type: "https://events.iterate.com/events/stream/durable-object-woke-up",
+          type: "events.iterate.com/core/durable-object-woke-up",
           payload: {},
         },
       }),
@@ -75,7 +75,7 @@ describe("circuitBreaker", () => {
     const pausedState = circuitBreakerProcessor.reduce!({
       state,
       event: createEvent({
-        type: "https://events.iterate.com/events/stream/paused",
+        type: "events.iterate.com/core/paused",
         payload: { reason: "too hot" },
         createdAt: "2026-04-02T12:00:00.000Z",
       }),
@@ -96,7 +96,7 @@ describe("circuitBreaker", () => {
     const resumedState = circuitBreakerProcessor.reduce!({
       state: pausedState,
       event: createEvent({
-        type: "https://events.iterate.com/events/stream/resumed",
+        type: "events.iterate.com/core/resumed",
         payload: { reason: "operator override" },
         createdAt: "2026-04-02T12:00:05.000Z",
       }),
@@ -122,7 +122,7 @@ describe("circuitBreaker", () => {
         availableTokens: 123,
       },
       event: createEvent({
-        type: "https://events.iterate.com/events/stream/circuit-breaker-configured",
+        type: "events.iterate.com/core/circuit-breaker-configured",
         payload: {
           burstCapacity: 750,
           refillRatePerMinute: 1_200,
@@ -233,7 +233,7 @@ describe("circuitBreaker", () => {
 
     expect(appended).toEqual([
       {
-        type: "https://events.iterate.com/events/stream/paused",
+        type: "events.iterate.com/core/paused",
         payload: {
           reason: "circuit breaker tripped: burst rate limit exceeded",
         },

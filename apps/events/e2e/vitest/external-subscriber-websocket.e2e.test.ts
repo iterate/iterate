@@ -190,7 +190,7 @@ async function configureWebsocketSubscriber(args: {
   jsonataTransform?: string;
 }) {
   await append(args.path, {
-    type: "https://events.iterate.com/events/stream/subscription/configured",
+    type: "events.iterate.com/core/subscription-configured",
     payload: {
       slug: args.slug,
       type: "websocket",

@@ -5,6 +5,10 @@ import {
   Event,
   EventInput,
   type ProjectSlug,
+  STREAM_CHILD_STREAM_CREATED_TYPE,
+  STREAM_DURABLE_OBJECT_WOKE_UP_TYPE,
+  STREAM_FIRST_INITIALIZED_TYPE,
+  STREAM_METADATA_UPDATED_TYPE,
   type StreamCursor,
   type StreamMetadataUpdatedEvent,
   StreamPath,
@@ -186,7 +190,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
         try {
           this.append({
-            type: "https://events.iterate.com/events/stream/durable-object-woke-up",
+            type: STREAM_DURABLE_OBJECT_WOKE_UP_TYPE,
             payload: {},
           });
         } catch (error) {
@@ -241,7 +245,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     try {
       this.append({
-        type: "https://events.iterate.com/events/stream/initialized",
+        type: STREAM_FIRST_INITIALIZED_TYPE,
         payload: { projectSlug: args.projectSlug, path: args.path },
       });
     } catch (error) {
@@ -321,10 +325,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    * known to be a genuinely new event.
    */
   private beforeAppend(input: EventInput): number {
-    if (
-      input.type === "https://events.iterate.com/events/stream/initialized" &&
-      this.state.eventCount > 0
-    ) {
+    if (input.type === STREAM_FIRST_INITIALIZED_TYPE && this.state.eventCount > 0) {
       throw new Error("stream-initialized may only be appended once");
     }
 
@@ -368,12 +369,12 @@ export class StreamDurableObject extends DurableObject<Env> {
     };
 
     switch (event.type) {
-      case "https://events.iterate.com/events/stream/metadata-updated": {
+      case STREAM_METADATA_UPDATED_TYPE: {
         const metadataUpdatedEvent = event as StreamMetadataUpdatedEvent;
         nextState = { ...nextState, metadata: metadataUpdatedEvent.payload.metadata };
         break;
       }
-      case "https://events.iterate.com/events/stream/child-stream-created": {
+      case STREAM_CHILD_STREAM_CREATED_TYPE: {
         const childPath = getImmediateChildPath({
           parentPath: this.state.path,
           childPath: (event as ChildStreamCreatedEvent).payload.childPath,
@@ -419,7 +420,7 @@ export class StreamDurableObject extends DurableObject<Env> {
   private afterAppend(event: Event) {
     this.publish(event);
 
-    if (event.type === "https://events.iterate.com/events/stream/initialized") {
+    if (event.type === STREAM_FIRST_INITIALIZED_TYPE) {
       const ancestorPaths = getAncestorStreamPaths(event.streamPath);
 
       void Promise.all(
@@ -429,7 +430,7 @@ export class StreamDurableObject extends DurableObject<Env> {
             path,
           });
           await stream.append({
-            type: "https://events.iterate.com/events/stream/child-stream-created",
+            type: STREAM_CHILD_STREAM_CREATED_TYPE,
             payload: { childPath: event.streamPath },
             metadata: event.metadata,
           });
@@ -438,7 +439,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         console.error("[stream-do] failed to propagate event to ancestor streams", {
           path: event.streamPath,
           ancestorPaths,
-          eventType: "https://events.iterate.com/events/stream/child-stream-created",
+          eventType: STREAM_CHILD_STREAM_CREATED_TYPE,
           error,
         });
       });

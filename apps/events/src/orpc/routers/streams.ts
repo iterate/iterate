@@ -2,6 +2,8 @@ import { ORPCError } from "@orpc/server";
 import {
   type ChildStreamCreatedEvent,
   type ProjectSlug,
+  STREAM_CHILD_STREAM_CREATED_TYPE,
+  STREAM_FIRST_INITIALIZED_TYPE,
   type StreamPath,
   StreamPausedError,
 } from "@iterate-com/events-contract";
@@ -71,9 +73,9 @@ export const streamsRouter = {
     const discovered: Record<StreamPath, string> = {};
 
     for (const event of events) {
-      if (event.type === "https://events.iterate.com/events/stream/child-stream-created") {
+      if (event.type === STREAM_CHILD_STREAM_CREATED_TYPE) {
         discovered[(event as ChildStreamCreatedEvent).payload.childPath] = event.createdAt;
-      } else if (event.type === "https://events.iterate.com/events/stream/initialized") {
+      } else if (event.type === STREAM_FIRST_INITIALIZED_TYPE) {
         discovered[input.path] = event.createdAt;
       }
     }

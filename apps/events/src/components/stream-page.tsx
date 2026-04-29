@@ -4,6 +4,7 @@ import {
   type Event,
   type EventInput,
   type JSONObject,
+  STREAM_CHILD_STREAM_CREATED_TYPE,
   type StreamPath,
   type StreamState,
 } from "@iterate-com/events-contract";
@@ -22,14 +23,18 @@ import {
 import { Button } from "@iterate-com/ui/components/button";
 import { Checkbox } from "@iterate-com/ui/components/checkbox";
 import {
-  prettyEventsStreamViewProcessor,
-  processEventsWithViewProcessor,
-  rawEventsStreamViewProcessor,
-  rawJsonDumpEventsStreamViewProcessor,
-  rawPrettyEventsStreamViewProcessor,
+  processEventsWithViewReducer,
+  rawJsonDumpEventsStreamViewReducer,
+  rawPrettyEventsStreamViewReducer,
 } from "@iterate-com/ui/components/events/feed-processors";
-import type { EventsStreamViewProcessor } from "@iterate-com/ui/components/events/feed-items";
-import { EventsStreamFeed } from "@iterate-com/ui/components/events/stream-feed";
+import type {
+  EventsStreamInputAction,
+  EventsStreamViewReducer,
+} from "@iterate-com/ui/components/events/feed-items";
+import {
+  EventsStreamInputSlot,
+  EventsStreamView,
+} from "@iterate-com/ui/components/events/stream-feed";
 import { Label } from "@iterate-com/ui/components/label";
 import { Separator } from "@iterate-com/ui/components/separator";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
@@ -125,10 +130,7 @@ export function StreamPage({
     streamPath,
     onEvent: useCallback(
       (event: Event) => {
-        if (
-          streamPath === "/" &&
-          event.type === "https://events.iterate.com/events/stream/child-stream-created"
-        ) {
+        if (streamPath === "/" && event.type === STREAM_CHILD_STREAM_CREATED_TYPE) {
           void queryClient.invalidateQueries({ queryKey: listChildrenOptions.queryKey });
         }
       },
@@ -167,7 +169,7 @@ export function StreamPage({
     [customHtmlInsertionsQuery.data, events],
   );
   const displayFeed = useMemo(() => buildDisplayFeed(feed, rendererMode), [feed, rendererMode]);
-  // In the clean feed, renderer modes select stream-view processors. Rendering
+  // In the clean feed, renderer modes select stream-view reducers. Rendering
   // stays mode-agnostic and only switches on each feed item's `type`.
   const cleanViewState = useMemo(
     () => reduceCleanViewState({ events, mode: rendererMode }),
@@ -293,7 +295,7 @@ export function StreamPage({
 
     await submitAppendEvent({
       event: {
-        type: "webchat-message-received",
+        type: "events.iterate.com/agent/webchat-message-received",
         payload: {
           content,
         },
@@ -324,13 +326,21 @@ export function StreamPage({
 
     await submitRawAppend({ inputText: appendInputJson, format: "json" });
   };
+  const handleInputSlotAction = (action: EventsStreamInputAction) => {
+    switch (action.type) {
+      case "prefill-agent-message":
+        setAgentInputText(action.text);
+        onComposerModeChange?.("agent");
+        break;
+    }
+  };
 
   return (
     <section className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
       <div className="min-h-0 flex-1 overflow-hidden">
         {feedViewMode === "clean" ? (
-          <EventsStreamFeed
-            feedItems={cleanViewState.feedItems}
+          <EventsStreamView
+            viewState={cleanViewState}
             emptyLabel="No events received yet."
             isPending={isConnecting}
             errorLabel={getLiveStreamFailureLabel({
@@ -428,6 +438,14 @@ export function StreamPage({
       </Sheet>
 
       <footer className="supports-backdrop-filter:bg-background/80 shrink-0 border-t bg-background/95 px-4 py-4">
+        {feedViewMode === "clean" ? (
+          <EventsStreamInputSlot
+            elements={cleanViewState.slots.input}
+            onAction={handleInputSlotAction}
+            className="mb-3"
+          />
+        ) : null}
+
         <PromptInput className="relative w-full" onSubmit={handleComposerSubmit}>
           <PromptInputBody>
             {composerMode === "agent" ? (
@@ -564,21 +582,20 @@ function getLiveStreamFailureLabel({
 }
 
 function reduceCleanViewState(args: { events: readonly Event[]; mode: StreamRendererMode }) {
-  return processEventsWithViewProcessor({
+  return processEventsWithViewReducer({
     events: args.events,
-    processor: selectCleanViewProcessor(args.mode),
+    reducer: selectCleanViewReducer(args.mode),
   });
 }
 
-function selectCleanViewProcessor(mode: StreamRendererMode): EventsStreamViewProcessor {
+function selectCleanViewReducer(mode: StreamRendererMode): EventsStreamViewReducer {
   switch (mode) {
-    case "raw":
-      return rawEventsStreamViewProcessor;
-    case "pretty":
-      return prettyEventsStreamViewProcessor;
     case "raw-pretty":
-      return rawPrettyEventsStreamViewProcessor;
+      return rawPrettyEventsStreamViewReducer;
     case "raw-single-json":
-      return rawJsonDumpEventsStreamViewProcessor;
+      return rawJsonDumpEventsStreamViewReducer;
+    case "raw":
+    case "pretty":
+      return rawPrettyEventsStreamViewReducer;
   }
 }

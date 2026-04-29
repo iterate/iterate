@@ -16,7 +16,7 @@ import {
 const app = createEvents2AppFixture({
   baseURL: requireEventsBaseUrl(),
 });
-const configuredEventType = "https://events.iterate.com/events/stream/dynamic-worker/configured";
+const configuredEventType = "events.iterate.com/core/dynamic-worker-configured";
 const httpbinEchoedEventType = "https://events.iterate.com/events/example/httpbin-echoed";
 const valueRecordedEventType = "https://events.iterate.com/events/example/value-recorded";
 

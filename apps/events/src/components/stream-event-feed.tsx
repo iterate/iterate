@@ -57,6 +57,7 @@ import { toast } from "@iterate-com/ui/components/sonner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { StreamErrorAlert } from "~/components/stream-error-alert.tsx";
+import { CoreEventTypeLabel } from "~/components/event-type.tsx";
 import { StreamPathLabel } from "~/components/stream-path-label.tsx";
 import { StreamToolCard } from "~/components/stream-tool-card.tsx";
 import { getEventTypePageByType } from "~/lib/event-type-pages.ts";
@@ -1041,7 +1042,7 @@ function GroupedEventLine({
               : ""}
           </span>
           <span>·</span>
-          <span className="truncate font-mono">{group.eventType}</span>
+          <CoreEventTypeLabel type={group.eventType} className="truncate" />
           <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
             x{group.count}
           </Badge>
@@ -1075,7 +1076,7 @@ function renderEventSummary({
     <>
       <span className="font-mono">{event.offset}</span>
       <span>·</span>
-      <span className="truncate font-mono">{event.eventType}</span>
+      <CoreEventTypeLabel type={event.eventType} className="truncate" />
       {elapsedLabel ? (
         <>
           <span>·</span>

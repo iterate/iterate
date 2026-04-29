@@ -282,7 +282,7 @@ describe.skip("scheduler control events", () => {
 
     const history = await streamStub.history();
     expect(history.map((event) => event.type)).toEqual([
-      "https://events.iterate.com/events/stream/initialized",
+      "events.iterate.com/core/stream-first-initialized",
       SCHEDULE_CONFIGURED_TYPE,
       SCHEDULE_INTERNAL_EXECUTION_STARTED_TYPE,
       SCHEDULE_INTERNAL_EXECUTION_FINISHED_TYPE,
@@ -332,7 +332,7 @@ describe.skip("scheduler control events", () => {
 
     const history = await streamStub.history();
     expect(history.map((event) => event.type)).toEqual([
-      "https://events.iterate.com/events/stream/initialized",
+      "events.iterate.com/core/stream-first-initialized",
       SCHEDULE_CONFIGURED_TYPE,
       SCHEDULE_INTERNAL_EXECUTION_STARTED_TYPE,
     ]);

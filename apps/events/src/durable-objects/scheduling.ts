@@ -1,5 +1,9 @@
 import { parseCronExpression } from "cron-schedule";
-import { type Event, type EventInput } from "@iterate-com/events-contract";
+import {
+  STREAM_APPEND_SCHEDULED_TYPE,
+  type Event,
+  type EventInput,
+} from "@iterate-com/events-contract";
 import { defineBuiltinProcessor } from "@iterate-com/events-contract/sdk";
 import {
   type SchedulerState,
@@ -59,7 +63,7 @@ export const schedulingProcessor = defineBuiltinProcessor<SchedulerState>(() => 
   },
 
   async afterAppend({ append, event }) {
-    if (event.type !== "https://events.iterate.com/events/stream/append-scheduled") {
+    if (event.type !== STREAM_APPEND_SCHEDULED_TYPE) {
       return;
     }
 

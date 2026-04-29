@@ -685,7 +685,7 @@ describe("externalSubscriber", () => {
 
 function createConfiguredEvent(payload: ExternalSubscriber): StreamSubscriptionConfiguredEvent {
   return createEvent({
-    type: "https://events.iterate.com/events/stream/subscription/configured",
+    type: "events.iterate.com/core/subscription-configured",
     payload,
   }) as StreamSubscriptionConfiguredEvent;
 }

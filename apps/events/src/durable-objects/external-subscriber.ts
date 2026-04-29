@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
   type Event,
   type EventInput,
   type ExternalSubscriber,
@@ -112,7 +113,7 @@ async function publishToExternalSubscriber(args: {
 async function evaluateFilter(args: { event: Event; subscriber: ExternalSubscriber }) {
   if (
     args.subscriber.type === "webhook" &&
-    args.event.type === "https://events.iterate.com/events/stream/subscription/configured" &&
+    args.event.type === STREAM_SUBSCRIPTION_CONFIGURED_TYPE &&
     args.subscriber.jsonataFilter == null
   ) {
     return false;

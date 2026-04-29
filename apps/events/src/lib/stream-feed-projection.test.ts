@@ -52,7 +52,7 @@ describe("projectWireToFeed", () => {
     const feed = projectEventToFeed(
       createEvent({
         streamPath: "/",
-        type: "https://events.iterate.com/events/stream/child-stream-created",
+        type: "events.iterate.com/core/child-stream-created",
         payload: { childPath: "/child-stream" },
       }),
     );
@@ -69,7 +69,7 @@ describe("projectWireToFeed", () => {
     const feed = projectEventToFeed(
       createEvent({
         streamPath: "/demo",
-        type: "https://events.iterate.com/events/stream/metadata-updated",
+        type: "events.iterate.com/core/metadata-updated",
         payload: { metadata: { owner: "jonas" } },
       }),
     );
@@ -86,7 +86,7 @@ describe("projectWireToFeed", () => {
     const feed = projectEventToFeed(
       createEvent({
         streamPath: "/demo",
-        type: "https://events.iterate.com/events/stream/dynamic-worker/configured",
+        type: "events.iterate.com/core/dynamic-worker-configured",
         payload: {
           slug: "simple-openai-loop",
           script: [
@@ -125,7 +125,7 @@ describe("projectWireToFeed", () => {
     const feed = projectEventToFeed(
       createEvent({
         streamPath: "/demo",
-        type: "https://events.iterate.com/events/stream/dynamic-worker/env-var-set",
+        type: "events.iterate.com/core/dynamic-worker-env-var-set",
         payload: {
           key: "OPENAI_API_KEY",
           value: "getIterateSecret({secretKey: 'openai'})",
@@ -145,7 +145,7 @@ describe("projectWireToFeed", () => {
     const feed = projectEventToFeed(
       createEvent({
         streamPath: "/demo",
-        type: "https://events.iterate.com/events/stream/append-scheduled",
+        type: "events.iterate.com/core/append-scheduled",
         payload: {
           slug: "nightly-rollup",
           append: {
@@ -167,7 +167,7 @@ describe("projectWireToFeed", () => {
     const feed = projectEventToFeed(
       createEvent({
         streamPath: "/demo",
-        type: "https://events.iterate.com/events/stream/schedule/internal/execution-finished",
+        type: "events.iterate.com/core/schedule-execution-finished",
         payload: {
           slug: "nightly-rollup",
           outcome: "succeeded",
@@ -182,7 +182,7 @@ describe("projectWireToFeed", () => {
     const feed = projectWireToFeed([
       createEvent({
         streamPath: "/",
-        type: "https://events.iterate.com/events/stream/child-stream-created",
+        type: "events.iterate.com/core/child-stream-created",
         payload: { childPath: "/child-stream" },
       }),
     ]);
@@ -1280,7 +1280,7 @@ describe("buildCustomHtmlRendererInsertions", () => {
       }),
       createEvent({
         offset: 2,
-        type: "https://events.iterate.com/events/stream/html-renderer-configured",
+        type: "events.iterate.com/core/html-renderer-configured",
         payload: {
           slug: "demo-card",
           matcher: "type = 'demo.message'",
@@ -1320,7 +1320,7 @@ describe("buildCustomHtmlRendererInsertions", () => {
     const events = [
       createEvent({
         offset: 1,
-        type: "https://events.iterate.com/events/stream/html-renderer-configured",
+        type: "events.iterate.com/core/html-renderer-configured",
         payload: {
           slug: "summary",
           matcher: "type = 'demo.message'",
@@ -1329,7 +1329,7 @@ describe("buildCustomHtmlRendererInsertions", () => {
       }),
       createEvent({
         offset: 2,
-        type: "https://events.iterate.com/events/stream/html-renderer-configured",
+        type: "events.iterate.com/core/html-renderer-configured",
         payload: {
           slug: "detail",
           matcher: "payload.title = 'Hello'",
@@ -1338,7 +1338,7 @@ describe("buildCustomHtmlRendererInsertions", () => {
       }),
       createEvent({
         offset: 3,
-        type: "https://events.iterate.com/events/stream/html-renderer-configured",
+        type: "events.iterate.com/core/html-renderer-configured",
         payload: {
           slug: "summary",
           matcher: "type = 'demo.message'",
@@ -1374,7 +1374,7 @@ describe("buildCustomHtmlRendererInsertions", () => {
     const events = [
       createEvent({
         offset: 1,
-        type: "https://events.iterate.com/events/stream/html-renderer-configured",
+        type: "events.iterate.com/core/html-renderer-configured",
         payload: {
           slug: "bad-card",
           matcher: "$error('boom')",
@@ -1403,7 +1403,7 @@ describe("buildCustomHtmlRendererInsertions", () => {
     const firstEvents = [
       createEvent({
         offset: 1,
-        type: "https://events.iterate.com/events/stream/html-renderer-configured",
+        type: "events.iterate.com/core/html-renderer-configured",
         payload: {
           slug: "demo-card",
           matcher: "type = 'demo.message'",
@@ -1446,7 +1446,7 @@ describe("buildCustomHtmlRendererInsertions", () => {
         }),
         createEvent({
           offset: 4,
-          type: "https://events.iterate.com/events/stream/html-renderer-configured",
+          type: "events.iterate.com/core/html-renderer-configured",
           payload: {
             slug: "demo-card",
             matcher: "type = 'demo.message'",
@@ -1473,7 +1473,7 @@ describe("buildDisplayFeed", () => {
       createEvent({ offset: 2, type: "https://events.iterate.com/demo/a" }),
       createEvent({
         offset: 3,
-        type: "https://events.iterate.com/events/stream/metadata-updated",
+        type: "events.iterate.com/core/metadata-updated",
         payload: { metadata: { color: "blue" } },
       }),
     ]);
@@ -1542,13 +1542,13 @@ describe("buildDisplayFeed", () => {
       createEvent({
         streamPath: "/",
         offset: 1,
-        type: "https://events.iterate.com/events/stream/child-stream-created",
+        type: "events.iterate.com/core/child-stream-created",
         payload: { childPath: "/created" },
       }),
       createEvent({
         streamPath: "/created",
         offset: 2,
-        type: "https://events.iterate.com/events/stream/metadata-updated",
+        type: "events.iterate.com/core/metadata-updated",
         payload: { metadata: { color: "blue" } },
       }),
     ]);
@@ -1576,7 +1576,7 @@ describe("getAdjacentEventOffset", () => {
         createEvent({ offset: 2, type: "https://events.iterate.com/demo/b" }),
         createEvent({
           offset: 3,
-          type: "https://events.iterate.com/events/stream/child-stream-created",
+          type: "events.iterate.com/core/child-stream-created",
           payload: { childPath: "/child" },
         }),
       ]),

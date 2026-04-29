@@ -13,8 +13,8 @@ const eventsBaseUrl = requireEventsBaseUrl();
 const app = createEvents2AppFixture({
   baseURL: eventsBaseUrl,
 });
-const configuredEventType = "https://events.iterate.com/events/stream/dynamic-worker/configured";
-const envVarSetEventType = "https://events.iterate.com/events/stream/dynamic-worker/env-var-set";
+const configuredEventType = "events.iterate.com/core/dynamic-worker-configured";
+const envVarSetEventType = "events.iterate.com/core/dynamic-worker-env-var-set";
 const envVarObservedEventType = "https://events.iterate.com/events/example/env-var-observed";
 const httpbinEchoedEventType = "https://events.iterate.com/events/example/httpbin-echoed";
 const valueRecordedEventType = "https://events.iterate.com/events/example/value-recorded";
@@ -37,7 +37,7 @@ export default {
   initialState: { seen: 0 },
 
   reduce({ state, event }) {
-    if (event.type === "https://events.iterate.com/events/stream/dynamic-worker/configured") {
+    if (event.type === "events.iterate.com/core/dynamic-worker-configured") {
       return state;
     }
 
@@ -52,7 +52,7 @@ export default {
 
   async onEvent({ append, event, prevState, state }) {
     if (
-      event.type === "https://events.iterate.com/events/stream/dynamic-worker/configured" ||
+      event.type === "events.iterate.com/core/dynamic-worker-configured" ||
       !/\\bping\\b/i.test(JSON.stringify({ type: event.type, payload: event.payload }))
     ) {
       return;
@@ -907,7 +907,7 @@ describe("dynamic worker processor", () => {
 async function expectInitialized(iterator: AsyncIterator<unknown>, path: StreamPath) {
   await expectEvent(iterator, {
     streamPath: path,
-    type: "https://events.iterate.com/events/stream/initialized",
+    type: "events.iterate.com/core/stream-first-initialized",
   });
 }
 

@@ -4,6 +4,17 @@ import {
   DynamicWorkerEnvVarSetEvent,
   ErrorOccurredEvent,
   JsonataTransformerConfiguredEvent,
+  STREAM_CHILD_STREAM_CREATED_TYPE,
+  STREAM_DURABLE_OBJECT_WOKE_UP_TYPE,
+  STREAM_DYNAMIC_WORKER_CONFIGURED_TYPE,
+  STREAM_DYNAMIC_WORKER_ENV_VAR_SET_TYPE,
+  STREAM_ERROR_OCCURRED_TYPE,
+  STREAM_FIRST_INITIALIZED_TYPE,
+  STREAM_JSONATA_TRANSFORMER_CONFIGURED_TYPE,
+  STREAM_METADATA_UPDATED_TYPE,
+  STREAM_PAUSED_TYPE,
+  STREAM_RESUMED_TYPE,
+  STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
   StreamSubscriptionConfiguredEvent,
   StreamMetadataUpdatedEvent,
   StreamPausedEvent,
@@ -122,7 +133,10 @@ function flushCurrentGroup(displayFeed: StreamFeedItem[], currentGroup: readonly
 }
 
 export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
-  if (event.type === "webchat-message-received") {
+  if (
+    event.type === "webchat-message-received" ||
+    event.type === "events.iterate.com/agent/webchat-message-received"
+  ) {
     const payload = event.payload as { content?: unknown };
     const content = typeof payload.content === "string" ? payload.content : null;
     if (content == null) return null;
@@ -134,7 +148,10 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     };
   }
 
-  if (event.type === "webchat-response-added") {
+  if (
+    event.type === "webchat-response-added" ||
+    event.type === "events.iterate.com/agent/webchat-response-added"
+  ) {
     const payload = event.payload as { message?: unknown };
     const message = typeof payload.message === "string" ? payload.message : null;
     if (message == null) return null;
@@ -146,7 +163,10 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     };
   }
 
-  if (event.type === "agent-status-updated") {
+  if (
+    event.type === "agent-status-updated" ||
+    event.type === "events.iterate.com/agent/status-updated"
+  ) {
     const payload = event.payload as {
       status?: unknown;
       reason?: unknown;
@@ -164,7 +184,7 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     };
   }
 
-  if (event.type === "https://events.iterate.com/events/stream/child-stream-created") {
+  if (event.type === STREAM_CHILD_STREAM_CREATED_TYPE) {
     return {
       kind: "child-stream-created",
       parentPath: event.streamPath,
@@ -174,7 +194,7 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     };
   }
 
-  if (event.type === "https://events.iterate.com/events/stream/metadata-updated") {
+  if (event.type === STREAM_METADATA_UPDATED_TYPE) {
     return {
       kind: "stream-metadata-updated",
       path: event.streamPath,
@@ -184,7 +204,7 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     };
   }
 
-  if (event.type === "https://events.iterate.com/events/stream/subscription/configured") {
+  if (event.type === STREAM_SUBSCRIPTION_CONFIGURED_TYPE) {
     return {
       kind: "external-subscriber-configured",
       subscriber: getStreamSubscriptionConfiguredSubscriber(event),
@@ -193,7 +213,7 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     };
   }
 
-  if (event.type === "https://events.iterate.com/events/stream/jsonata-transformer-configured") {
+  if (event.type === STREAM_JSONATA_TRANSFORMER_CONFIGURED_TYPE) {
     return {
       kind: "jsonata-transformer-configured",
       transformer: getJsonataTransformerConfiguredTransformer(event),
@@ -202,7 +222,7 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     };
   }
 
-  if (event.type === "https://events.iterate.com/events/stream/initialized") {
+  if (event.type === STREAM_FIRST_INITIALIZED_TYPE) {
     return {
       kind: "stream-lifecycle",
       label: "Durable object initialized",
@@ -211,7 +231,7 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     };
   }
 
-  if (event.type === "https://events.iterate.com/events/stream/durable-object-woke-up") {
+  if (event.type === STREAM_DURABLE_OBJECT_WOKE_UP_TYPE) {
     return {
       kind: "stream-lifecycle",
       label: "Durable object woke up",
@@ -220,7 +240,7 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     };
   }
 
-  if (event.type === "https://events.iterate.com/events/stream/dynamic-worker/configured") {
+  if (event.type === STREAM_DYNAMIC_WORKER_CONFIGURED_TYPE) {
     const configured = DynamicWorkerConfiguredEvent.parse(event);
     const sourceCode =
       configured.payload.script ??
@@ -247,7 +267,7 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     };
   }
 
-  if (event.type === "https://events.iterate.com/events/stream/dynamic-worker/env-var-set") {
+  if (event.type === STREAM_DYNAMIC_WORKER_ENV_VAR_SET_TYPE) {
     const envVarSet = DynamicWorkerEnvVarSetEvent.parse(event);
 
     return {
@@ -259,7 +279,7 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     };
   }
 
-  if (event.type === "https://events.iterate.com/events/stream/paused") {
+  if (event.type === STREAM_PAUSED_TYPE) {
     const paused = StreamPausedEvent.parse(event);
     return {
       kind: "stream-paused",
@@ -269,7 +289,7 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     };
   }
 
-  if (event.type === "https://events.iterate.com/events/stream/resumed") {
+  if (event.type === STREAM_RESUMED_TYPE) {
     const resumed = StreamResumedEvent.parse(event);
     return {
       kind: "stream-resumed",
@@ -279,7 +299,7 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     };
   }
 
-  if (event.type === "https://events.iterate.com/events/stream/error-occurred") {
+  if (event.type === STREAM_ERROR_OCCURRED_TYPE) {
     return {
       kind: "stream-error-occurred",
       message: ErrorOccurredEvent.parse(event).payload.message,

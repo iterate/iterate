@@ -2,6 +2,7 @@ import { basename, resolve } from "node:path";
 import {
   DynamicWorkerConfiguredEventInput,
   type DynamicWorkerConfiguredEventInput as DynamicWorkerConfiguredEventInputType,
+  STREAM_DYNAMIC_WORKER_CONFIGURED_TYPE,
 } from "@iterate-com/events-contract";
 import { build } from "esbuild";
 
@@ -23,7 +24,7 @@ export async function buildDynamicWorkerConfiguredEvent(
   });
 
   return DynamicWorkerConfiguredEventInput.parse({
-    type: "https://events.iterate.com/events/stream/dynamic-worker/configured",
+    type: STREAM_DYNAMIC_WORKER_CONFIGURED_TYPE,
     payload: {
       slug: options.slug ?? slugFromEntryFile(absoluteEntryFile),
       ...(options.compatibilityDate != null

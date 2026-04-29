@@ -3,7 +3,19 @@ import {
   type EventType,
   type JSONObject,
   HTML_RENDERER_CONFIGURED_TYPE,
+  STREAM_DURABLE_OBJECT_WOKE_UP_TYPE,
+  STREAM_DYNAMIC_WORKER_CONFIGURED_TYPE,
+  STREAM_DYNAMIC_WORKER_ENV_VAR_SET_TYPE,
+  STREAM_ERROR_OCCURRED_TYPE,
+  STREAM_FIRST_INITIALIZED_TYPE,
+  STREAM_INVALID_EVENT_APPENDED_TYPE,
+  STREAM_JSONATA_TRANSFORMER_CONFIGURED_TYPE,
+  STREAM_METADATA_UPDATED_TYPE,
+  STREAM_PAUSED_TYPE,
+  STREAM_RESUMED_TYPE,
   STREAM_CIRCUIT_BREAKER_CONFIGURED_TYPE,
+  STREAM_CHILD_STREAM_CREATED_TYPE,
+  STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
 } from "@iterate-com/events-contract";
 
 export type EventTypePageDefinition = {
@@ -26,9 +38,9 @@ export type EventInputTemplateDefinition = {
 export const streamInitializedPage = {
   slug: "stream-initialized",
   href: "/stream-initialized/",
-  title: "Stream Initialized",
-  type: "https://events.iterate.com/events/stream/initialized",
-  summary: "Internal meta event emitted exactly once when a stream initializes itself.",
+  title: "Stream First Initialized",
+  type: STREAM_FIRST_INITIALIZED_TYPE,
+  summary: "Internal meta event emitted exactly once, the first time a stream initializes itself.",
   payloadExample: {
     projectSlug: "public",
     path: "/demo/stream",
@@ -44,7 +56,7 @@ export const streamDurableObjectWokeUpPage = {
   slug: "stream-durable-object-woke-up",
   href: "/stream-durable-object-woke-up/",
   title: "Stream Durable Object Woke Up",
-  type: "https://events.iterate.com/events/stream/durable-object-woke-up",
+  type: STREAM_DURABLE_OBJECT_WOKE_UP_TYPE,
   summary:
     "Internal meta event emitted when a previously initialized stream durable object wakes and reconstructs itself from persisted state.",
   payloadExample: {},
@@ -59,7 +71,7 @@ export const streamMetadataUpdatedPage = {
   slug: "stream-metadata-updated",
   href: "/stream-metadata-updated/",
   title: "Stream Metadata Updated",
-  type: "https://events.iterate.com/events/stream/metadata-updated",
+  type: STREAM_METADATA_UPDATED_TYPE,
   summary: "Internal metadata event that replaces the reduced metadata snapshot for a stream.",
   payloadExample: {
     metadata: {
@@ -77,7 +89,7 @@ export const childStreamCreatedPage = {
   slug: "child-stream-created",
   href: "/child-stream-created/",
   title: "Child Stream Created",
-  type: "https://events.iterate.com/events/stream/child-stream-created",
+  type: STREAM_CHILD_STREAM_CREATED_TYPE,
   summary:
     "Built-in event propagated to a parent stream when a new child stream is initialized beneath it.",
   payloadExample: {
@@ -93,7 +105,7 @@ export const errorOccurredPage = {
   slug: "error-occurred",
   href: "/error-occurred/",
   title: "Error Occurred",
-  type: "https://events.iterate.com/events/stream/error-occurred",
+  type: STREAM_ERROR_OCCURRED_TYPE,
   summary: "Built-in error event for recording failures directly in a stream.",
   payloadExample: {
     message: "Failed to fetch remote state",
@@ -108,7 +120,7 @@ export const jsonataTransformerConfiguredPage = {
   slug: "jsonata-transformer-configured",
   href: "/jsonata-transformer-configured/",
   title: "JSONata Transformer Configured",
-  type: "https://events.iterate.com/events/stream/jsonata-transformer-configured",
+  type: STREAM_JSONATA_TRANSFORMER_CONFIGURED_TYPE,
   summary:
     "Built-in control event that registers or replaces an append-time JSONata transformer by slug.",
   payloadExample: {
@@ -125,11 +137,10 @@ export const jsonataTransformerConfiguredPage = {
       id: "jsonata-transformer-configured:slack-webhook",
       label: "JSONata Transformer Configured · Slack webhook",
       event: {
-        type: "https://events.iterate.com/events/stream/jsonata-transformer-configured",
+        type: STREAM_JSONATA_TRANSFORMER_CONFIGURED_TYPE,
         payload: {
           slug: "slack-webhook",
-          matcher:
-            "type = 'https://events.iterate.com/events/stream/invalid-event-appended' and payload.rawInput.command = '/iterate'",
+          matcher: `type = '${STREAM_INVALID_EVENT_APPENDED_TYPE}' and payload.rawInput.command = '/iterate'`,
           transform: `{
   "type":"https://events.iterate.com/events/example/slack-webhook-received",
   "payload":{
@@ -226,7 +237,7 @@ export const streamSubscriptionConfiguredPage = {
   slug: "stream-subscription-configured",
   href: "/stream-subscription-configured/",
   title: "Stream Subscription Configured",
-  type: "https://events.iterate.com/events/stream/subscription/configured",
+  type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
   summary:
     "Built-in control event that upserts an external subscriber by slug, using either websocket fanout or fire-and-forget webhook delivery.",
   payloadExample: {
@@ -244,7 +255,7 @@ export const streamSubscriptionConfiguredPage = {
       id: "stream-subscription-configured:websocket-processor",
       label: "Subscription Configured · Websocket processor",
       event: {
-        type: "https://events.iterate.com/events/stream/subscription/configured",
+        type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
         payload: {
           slug: "processor:ping-pong",
           callbackUrl: "ws://127.0.0.1:8788/after-event-handler?streamPath=%2Fdemo",
@@ -256,7 +267,7 @@ export const streamSubscriptionConfiguredPage = {
       id: "stream-subscription-configured:webhook-audit",
       label: "Subscription Configured · Webhook audit",
       event: {
-        type: "https://events.iterate.com/events/stream/subscription/configured",
+        type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
         payload: {
           slug: "audit",
           callbackUrl: "https://example.com/hooks/events",
@@ -280,7 +291,7 @@ export default {
 
   async afterAppend({ append, event }) {
     if (
-      event.type === "https://events.iterate.com/events/stream/dynamic-worker/configured" ||
+      event.type === STREAM_DYNAMIC_WORKER_CONFIGURED_TYPE ||
       !/\\bping\\b/i.test(
         JSON.stringify({
           type: event.type,
@@ -305,7 +316,7 @@ export const dynamicWorkerConfiguredPage = {
   slug: "dynamic-worker-configured",
   href: "/dynamic-worker-configured/",
   title: "Dynamic Worker Configured",
-  type: "https://events.iterate.com/events/stream/dynamic-worker/configured",
+  type: STREAM_DYNAMIC_WORKER_CONFIGURED_TYPE,
   summary:
     "Built-in control event that registers or replaces a dynamic worker processor by slug for a stream.",
   payloadExample: {
@@ -323,7 +334,7 @@ export const dynamicWorkerConfiguredPage = {
       id: "dynamic-worker-configured:openai-fetch-append",
       label: "Dynamic Worker Configured · OpenAI fetch append",
       event: {
-        type: "https://events.iterate.com/events/stream/dynamic-worker/configured",
+        type: STREAM_DYNAMIC_WORKER_CONFIGURED_TYPE,
         payload: {
           slug: "openai-fetch-append",
           script: `
@@ -418,7 +429,7 @@ const dynamicWorkerEnvVarSetPage = {
   slug: "dynamic-worker-env-var-set",
   href: "/dynamic-worker-env-var-set/",
   title: "Dynamic Worker Env Var Set",
-  type: "https://events.iterate.com/events/stream/dynamic-worker/env-var-set",
+  type: STREAM_DYNAMIC_WORKER_ENV_VAR_SET_TYPE,
   summary:
     "Built-in control event that stores a stream-wide env var string to inject into dynamic workers via `process.env`.",
   payloadExample: {
@@ -453,7 +464,7 @@ export const streamPausedPage = {
   slug: "stream-paused",
   href: "/stream-paused/",
   title: "Stream Paused",
-  type: "https://events.iterate.com/events/stream/paused",
+  type: STREAM_PAUSED_TYPE,
   summary: "Built-in control event that marks a stream as temporarily rejecting new events.",
   payloadExample: {
     reason: "circuit breaker tripped: burst rate limit exceeded",
@@ -468,7 +479,7 @@ export const streamResumedPage = {
   slug: "stream-resumed",
   href: "/stream-resumed/",
   title: "Stream Resumed",
-  type: "https://events.iterate.com/events/stream/resumed",
+  type: STREAM_RESUMED_TYPE,
   summary: "Built-in control event that re-opens a paused stream for new appends.",
   payloadExample: {
     reason: "operator override",

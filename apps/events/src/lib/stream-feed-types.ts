@@ -15,18 +15,6 @@ export const streamRendererModeOptions: ReadonlyArray<{
       "Keep grouped raw wire rows while interleaving semantic cards at the same cursor—best when you need both fidelity and readability.",
   },
   {
-    value: "raw",
-    label: "Raw",
-    description:
-      "Render every raw event as its own YAML item in the timeline, without semantic projection cards.",
-  },
-  {
-    value: "pretty",
-    label: "Pretty",
-    description:
-      "Hide raw wire rows and show only semantic projections (messages, tools, lifecycle, errors). Use when chunk noise is distracting.",
-  },
-  {
     value: "raw-single-json",
     label: "Raw Single JSON",
     description:
