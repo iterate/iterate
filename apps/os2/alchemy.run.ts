@@ -3,6 +3,7 @@ import { initAlchemy } from "@iterate-com/shared/alchemy/init";
 import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
 import { selfToolProviderBindingName } from "@iterate-com/shared/codemode/self-callable";
 import manifest, { AppConfig } from "./src/app.ts";
+import type { CodemodeSession } from "./src/durable-objects/codemode-session.ts";
 import type { IterateMcpServer } from "./src/durable-objects/iterate-mcp-server.ts";
 import type { McpClientBridge } from "./src/rpc-targets/mcp-client-bridge.ts";
 
@@ -38,6 +39,23 @@ const openApiBridgeBindingName = selfToolProviderBindingName({
   entrypoint: "OpenApiBridge",
 });
 
+const codemodeSessionWorker = await Worker("codemode-session-do", {
+  name: `${ctx.workerName}-codemode-session-do`,
+  entrypoint: "./src/durable-objects/codemode-session.ts",
+  adopt: true,
+  compatibilityFlags: ["nodejs_compat"],
+  bindings: {
+    CODEMODE_SESSION: DurableObjectNamespace<CodemodeSession>("codemode-session", {
+      className: "CodemodeSession",
+      sqlite: true,
+    }),
+    DO_CATALOG: db,
+    EVENTS_BASE_URL: ctx.compiledAppConfig.eventsBaseUrl,
+    LOADER: WorkerLoader(),
+    [openApiBridgeBindingName]: Worker.experimentalEntrypoint(Self, "OpenApiBridge"),
+  },
+});
+
 const { worker, afterFinalize } = await IterateApp(ctx, {
   bindings: {
     CLERK_JWT_KEY: ctx.compiledAppConfig.clerk.jwtKey.exposeSecret(),
@@ -55,6 +73,7 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     CLERK_SIGN_UP_URL: ctx.compiledAppConfig.clerk.signUpUrl,
     DB: db,
     LOADER: WorkerLoader(),
+    CODEMODE_SESSION: codemodeSessionWorker.bindings.CODEMODE_SESSION,
     [openApiBridgeBindingName]: Worker.experimentalEntrypoint(Self, "OpenApiBridge"),
     ITERATE_MCP_SERVER: iterateMcpServer.bindings.ITERATE_MCP_SERVER,
     MCP_CLIENT_BRIDGE: DurableObjectNamespace<McpClientBridge>("mcp-client-bridge", {

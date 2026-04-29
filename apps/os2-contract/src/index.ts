@@ -4,6 +4,10 @@ import { ToolProviderDescriptor, CodemodeEvent } from "@iterate-com/shared/codem
 import { z } from "zod";
 
 const JSONObject = z.record(z.string(), z.unknown());
+const StreamPath = z
+  .string()
+  .max(1023)
+  .regex(/^\/(?:[a-z0-9_-]+(?:\/[a-z0-9_-]+)*)?$/);
 
 const Project = z.object({
   id: z.string(),
@@ -165,6 +169,7 @@ export const osContract = oc.router({
           code: z.string().min(1),
           blockId: z.string().optional(),
           providers: z.array(ToolProviderDescriptor).default([]),
+          streamPath: StreamPath.optional(),
         }),
       )
       .output(eventIterator(CodemodeEvent)),

@@ -66,6 +66,7 @@
     "./codemode/validate": "./src/codemode/validate.ts",
     "./codemode/resolve": "./src/codemode/resolve.ts",
     "./codemode/self-callable": "./src/codemode/self-callable.ts",
+    "./codemode/context-proxy": "./src/codemode/context-proxy.ts",
     "./codemode/normalize": "./src/codemode/normalize.ts",
     "./codemode/utils": "./src/codemode/utils.ts",
     "./codemode/type-tree": "./src/codemode/type-tree.ts",
