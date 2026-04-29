@@ -87,6 +87,13 @@ const iterateAgent = DurableObjectNamespace<IterateAgent>("iterate-agent", {
   className: "IterateAgent",
   sqlite: true,
 });
+// No type parameter here: this namespace points at a class whose Env includes
+// the generated worker bindings, so typing the binding feeds the generated
+// worker Env back into the worker resource initializer.
+const agentStreamProcessorRunner = DurableObjectNamespace("agent-stream-processor-runner", {
+  className: "AgentStreamProcessorRunner",
+  sqlite: true,
+});
 // Deliberately no `<ChildStreamAutoSubscriber>` type parameter here: combined
 // with `DurableObjectNamespace<IterateAgent>` above, TS ends up following
 // `Agent<CloudflareEnv>` → `typeof worker.Env` → back to both DOs and reports
@@ -120,6 +127,7 @@ export const worker = await TanStackStart(APP_NAME, {
   bindings: {
     DB: db,
     ITERATE_AGENT: iterateAgent,
+    AGENT_STREAM_PROCESSOR_RUNNER: agentStreamProcessorRunner,
     CHILD_STREAM_AUTO_SUBSCRIBER: childStreamAutoSubscriber,
     MCP_CLIENT: mcpClient,
     OPENAPI_TOOL_CLIENT: openApiToolClient,

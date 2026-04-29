@@ -4,7 +4,7 @@ import {
   buildProcessorRegisteredEvent,
   CoreProcessorRegisteredEventType,
 } from "../core/contract.ts";
-import { wellBehavedProcessorDefaults } from "../core/well-behaved-processor-defaults.ts";
+import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
 import { AgentProcessorContract, reduceAgentEvents } from "./contract.ts";
 
 describe("AgentProcessorContract", () => {
@@ -49,10 +49,10 @@ describe("AgentProcessorContract", () => {
     ).toBe(false);
   });
 
-  it("appends processor registration through the well-behaved processor defaults", async () => {
+  it("appends processor registration through the standard processor behavior", async () => {
     const appended: unknown[] = [];
 
-    await wellBehavedProcessorDefaults.afterAppend({
+    await standardProcessorBehavior.afterAppend({
       state: getInitialProcessorState(AgentProcessorContract),
       contract: AgentProcessorContract,
       streamApi: {

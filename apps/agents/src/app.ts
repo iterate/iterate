@@ -12,7 +12,8 @@ export const AppConfig = BaseAppConfig.extend({
   /**
    * Parent stream path to attach the `child-stream-auto-subscriber` processor
    * to via the `installProcessor` oRPC procedure. New streams that appear below
-   * this path get an `iterate-agent` WebSocket subscription auto-installed.
+   * this path get an `agent-stream-processor-runner` WebSocket subscription
+   * auto-installed.
    */
   streamPathPrefix: StreamPath.default("/agents"),
   posthog: z

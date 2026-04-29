@@ -11,6 +11,7 @@ import {
   StreamQuery,
   StreamState,
 } from "./types.ts";
+import { STREAM_INVALID_EVENT_APPENDED_TYPE } from "./core-event-types.ts";
 
 const PathMungingDescription =
   "For curl ergonomics, nested stream paths accept either raw nested segments or percent-escaped slash forms. Both resolve to the same canonical stream path.";
@@ -25,7 +26,7 @@ const NormalizedAppendEventInput = z.unknown().transform((input) => {
   }
 
   return InvalidEventAppendedEventInput.parse({
-    type: "https://events.iterate.com/events/stream/invalid-event-appended",
+    type: STREAM_INVALID_EVENT_APPENDED_TYPE,
     payload: {
       rawInput: toJsonValue(input),
       error: prettifyAppendEventError({

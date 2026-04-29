@@ -26,6 +26,7 @@
     "./durable-object-utils/mixins/with-lifecycle-hooks": "./src/durable-object-utils/mixins/with-lifecycle-hooks.ts",
     "./durable-object-utils/mixins/with-multiplexed-alarms": "./src/durable-object-utils/mixins/with-multiplexed-alarms.ts",
     "./durable-object-utils/mixins/with-scheduler": "./src/durable-object-utils/mixins/with-scheduler.ts",
+    "./durable-object-utils/mixins/with-stream-processor-runner": "./src/durable-object-utils/mixins/with-stream-processor-runner.ts",
     "./durable-object-utils/mixins/with-kv-inspector": "./src/durable-object-utils/mixins/with-kv-inspector.ts",
     "./durable-object-utils/mixins/with-outerbase": "./src/durable-object-utils/mixins/with-outerbase.ts",
     "./stream-processors": "./src/stream-processors/stream-processor.ts",

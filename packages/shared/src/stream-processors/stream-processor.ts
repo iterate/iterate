@@ -83,13 +83,13 @@ export function getEventInputSchema<
 }
 
 /**
- * Runtime committed-event parser for a string-keyed event definition.
+ * Runtime stream-event parser for a string-keyed event definition.
  *
  * Processor contracts intentionally author event definitions as plain
  * `{ description, payloadSchema }` values keyed by the event type string. The
  * key is the durable event type; the value does not repeat it. Runners therefore
  * rebuild the concrete Zod envelope from the catalog key plus `payloadSchema`
- * whenever they validate append input or committed stream events.
+ * whenever they validate append input or stream events.
  *
  * The cast is local to this helper because Zod's object inference cannot keep
  * the generic literal `Type` and generic `PayloadSchema` relationship through
@@ -234,7 +234,7 @@ export function assertNever(value: never): never {
 }
 
 /**
- * Build an idempotency key for an event derived from one committed source event.
+ * Build an idempotency key for an event derived from one source event.
  *
  * This is intentionally only a string helper, not an `appendDerived(...)`
  * wrapper. Processor implementations should still call `streamApi.append(...)`
@@ -450,6 +450,230 @@ export async function runProcessorAfterAppend<const Contract>(args: {
     streamApi: args.streamApi,
     signal: args.signal,
   });
+}
+
+/**
+ * Bring a processor's stored reduced state up to the stream's current end.
+ *
+ * This is the startup/restart path for runners. It reads a finite stream range,
+ * reduces every event into state, calls `onStart` after state is current, and
+ * applies the first-attach lookback policy for any historical events that are
+ * recent enough to run `afterAppend`.
+ */
+export async function catchUpProcessorFromStream<
+  const Contract extends {
+    stateSchema: z.ZodType;
+    events: EventCatalog;
+    processorDeps?: readonly unknown[];
+    consumes: readonly string[];
+    reduce?: (args: {
+      contract: Contract;
+      state: ProcessorState<Contract>;
+      event: ConsumedEvent<Contract>;
+    }) => ProcessorState<Contract> | null | undefined;
+  },
+>(args: {
+  processor: Processor<Contract>;
+  storedState: StoredProcessorState<Contract>;
+  saveStoredProcessorState(storedState: StoredProcessorState<Contract>): Promise<void>;
+  streamApi: ProcessorStreamApi<Contract>;
+  signal: AbortSignal;
+  now?: Date;
+  firstAttachAfterAppend?: FirstAttachAfterAppendPolicy;
+}): Promise<StoredProcessorState<Contract>> {
+  const events = await args.streamApi.read({
+    afterOffset: args.storedState.reducedThroughOffset,
+    beforeOffset: "end",
+  });
+  /**
+   * Current stream reads are full-range, unfiltered, and unpaginated. Streams
+   * also start with an initialization event. That means:
+   *
+   * - on first attach from offset 0, a real stream should return at least that
+   *   initialization event, so the last event offset is the catch-up boundary;
+   * - on restart from offset N, an empty read means there is nothing after N,
+   *   so N remains the catch-up boundary.
+   *
+   * If reads later become filtered or paginated, this should change to a
+   * cursor-returning read result.
+   */
+  const readThroughOffset = events.at(-1)?.offset ?? args.storedState.reducedThroughOffset;
+  const firstAttach = !args.storedState.hasCompletedFirstAttach;
+  const firstAttachPolicy =
+    args.firstAttachAfterAppend ??
+    args.processor.implementation.firstAttachAfterAppend ??
+    ({ mode: "none" } satisfies FirstAttachAfterAppendPolicy);
+  const now = args.now ?? new Date();
+
+  let storedState: StoredProcessorState<Contract> = {
+    ...args.storedState,
+    liveAfterOffset: firstAttach ? readThroughOffset : args.storedState.liveAfterOffset,
+    hasCompletedFirstAttach: true,
+  };
+  const pendingAfterAppend: ProcessorReduction<Contract>[] = [];
+
+  for (const event of events) {
+    const reduction = runProcessorReduce({
+      processor: args.processor,
+      state: storedState.state,
+      event,
+    });
+
+    if (reduction != null) {
+      storedState = { ...storedState, state: reduction.state };
+      if (
+        shouldRunAfterAppendDuringCatchUp({
+          event: reduction.event,
+          firstAttach,
+          firstAttachPolicy,
+          now,
+          afterAppendCompletedThroughOffset: args.storedState.afterAppendCompletedThroughOffset,
+        })
+      ) {
+        pendingAfterAppend.push(reduction);
+      }
+    }
+
+    storedState = {
+      ...storedState,
+      reducedThroughOffset: Math.max(storedState.reducedThroughOffset, event.offset),
+    };
+  }
+
+  storedState = {
+    ...storedState,
+    reducedThroughOffset: Math.max(storedState.reducedThroughOffset, readThroughOffset),
+  };
+  await args.saveStoredProcessorState(storedState);
+
+  await runProcessorOnStart({
+    processor: args.processor,
+    state: storedState.state,
+    streamApi: args.streamApi,
+    signal: args.signal,
+  });
+
+  for (const reduction of pendingAfterAppend) {
+    await runProcessorAfterAppend({
+      processor: args.processor,
+      ...reduction,
+      streamApi: args.streamApi,
+      signal: args.signal,
+    });
+    storedState = {
+      ...storedState,
+      afterAppendCompletedThroughOffset: Math.max(
+        storedState.afterAppendCompletedThroughOffset,
+        reduction.event.offset,
+      ),
+    };
+    await args.saveStoredProcessorState(storedState);
+  }
+
+  const beforeFinalAfterAppendCompletedThroughOffset =
+    storedState.afterAppendCompletedThroughOffset;
+  storedState = {
+    ...storedState,
+    afterAppendCompletedThroughOffset: Math.max(
+      storedState.afterAppendCompletedThroughOffset,
+      readThroughOffset,
+    ),
+  };
+  if (
+    storedState.afterAppendCompletedThroughOffset > beforeFinalAfterAppendCompletedThroughOffset
+  ) {
+    await args.saveStoredProcessorState(storedState);
+  }
+  return storedState;
+}
+
+/**
+ * Consume one stream event that the runner is treating as live.
+ *
+ * The helper always advances runner progress for the event. If the processor
+ * declares the event in `consumes`, it also reduces state, persists that state,
+ * then runs `afterAppend`. If the event is not consumed, no hook runs.
+ */
+export async function consumeLiveProcessorEvent<
+  const Contract extends {
+    events: EventCatalog;
+    processorDeps?: readonly unknown[];
+    consumes: readonly string[];
+    reduce?: (args: {
+      contract: Contract;
+      state: ProcessorState<Contract>;
+      event: ConsumedEvent<Contract>;
+    }) => ProcessorState<Contract> | null | undefined;
+  },
+>(args: {
+  processor: Processor<Contract>;
+  storedState: StoredProcessorState<Contract>;
+  event: StreamEvent;
+  saveStoredProcessorState(storedState: StoredProcessorState<Contract>): Promise<void>;
+  streamApi: ProcessorStreamApi<Contract>;
+  signal: AbortSignal;
+}): Promise<StoredProcessorState<Contract>> {
+  const reduction = runProcessorReduce({
+    processor: args.processor,
+    event: args.event,
+    state: args.storedState.state,
+  });
+  const storedStateAfterReduce: StoredProcessorState<Contract> = {
+    ...args.storedState,
+    state: reduction?.state ?? args.storedState.state,
+    reducedThroughOffset: Math.max(args.storedState.reducedThroughOffset, args.event.offset),
+    afterAppendCompletedThroughOffset:
+      reduction == null
+        ? Math.max(args.storedState.afterAppendCompletedThroughOffset, args.event.offset)
+        : args.storedState.afterAppendCompletedThroughOffset,
+  };
+
+  await args.saveStoredProcessorState(storedStateAfterReduce);
+
+  if (reduction == null) {
+    return storedStateAfterReduce;
+  }
+
+  await runProcessorAfterAppend({
+    processor: args.processor,
+    ...reduction,
+    streamApi: args.streamApi,
+    signal: args.signal,
+  });
+
+  const storedStateAfterAppend: StoredProcessorState<Contract> = {
+    ...storedStateAfterReduce,
+    afterAppendCompletedThroughOffset: Math.max(
+      storedStateAfterReduce.afterAppendCompletedThroughOffset,
+      args.event.offset,
+    ),
+  };
+  await args.saveStoredProcessorState(storedStateAfterAppend);
+  return storedStateAfterAppend;
+}
+
+function shouldRunAfterAppendDuringCatchUp(args: {
+  event: Pick<StreamEvent, "createdAt" | "offset">;
+  firstAttach: boolean;
+  firstAttachPolicy: FirstAttachAfterAppendPolicy;
+  now: Date;
+  afterAppendCompletedThroughOffset: number;
+}) {
+  if (!args.firstAttach) {
+    return args.event.offset > args.afterAppendCompletedThroughOffset;
+  }
+
+  if (args.firstAttachPolicy.mode === "all") {
+    return true;
+  }
+
+  if (args.firstAttachPolicy.mode === "none") {
+    return false;
+  }
+
+  return (
+    Date.parse(args.event.createdAt) >= args.now.getTime() - args.firstAttachPolicy.milliseconds
+  );
 }
 
 function assertObjectProcessorState(args: { processorSlug: string; value: unknown }) {

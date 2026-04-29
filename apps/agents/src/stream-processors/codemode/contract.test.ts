@@ -13,9 +13,7 @@ describe("CodemodeProcessorContract", () => {
   it("initializes separate frontend-safe reduced state", () => {
     expect(getInitialProcessorState(CodemodeProcessorContract)).toEqual({
       hasRegisteredCurrentVersion: false,
-      processorDeps: {
-        agent: getInitialProcessorState(AgentProcessorContract),
-      },
+      agentProcessor: getInitialProcessorState(AgentProcessorContract),
       hasAppendedCodemodePrompt: false,
       toolProviders: {},
     });
@@ -53,13 +51,13 @@ describe("CodemodeProcessorContract", () => {
     });
 
     expect(state.hasAppendedCodemodePrompt).toBe(true);
-    expect(state.processorDeps.agent.history).toEqual([
+    expect(state.agentProcessor.history).toEqual([
       { role: "user", content: "ordinary row" },
       { role: "user", content: "codemode primer" },
     ]);
   });
 
-  it("keeps dependency reduced state embedded in its own reduced state", () => {
+  it("keeps Agent processor reduced state embedded in its own reduced state", () => {
     expect(
       reduceCodemodeEvents({
         events: [
@@ -68,7 +66,7 @@ describe("CodemodeProcessorContract", () => {
             payload: {},
           }),
         ],
-      }).processorDeps.agent.pendingTriggerCount,
+      }).agentProcessor.pendingTriggerCount,
     ).toBe(1);
   });
 

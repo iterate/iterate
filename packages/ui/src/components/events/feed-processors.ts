@@ -1,136 +1,226 @@
-import { StreamPath, type Event } from "@iterate-com/events-contract";
+import {
+  STREAM_CHILD_STREAM_CREATED_TYPE,
+  STREAM_DURABLE_OBJECT_WOKE_UP_TYPE,
+  STREAM_ERROR_OCCURRED_TYPE,
+  STREAM_FIRST_INITIALIZED_TYPE,
+  STREAM_METADATA_UPDATED_TYPE,
+  StreamPath,
+  type Event,
+} from "@iterate-com/events-contract";
 
 import type {
-  EventsStreamFeedItem,
-  EventsStreamGroupedRawEventFeedItem,
-  EventsStreamRawEventFeedItem,
-  EventsStreamViewProcessor,
+  EventsStreamBuiltInElement,
+  EventsStreamGroupedRawEventElement,
+  EventsStreamRawEventElement,
+  EventsStreamViewReducer,
   EventsStreamViewState,
 } from "@iterate-com/ui/components/events/feed-items";
 
 const MAX_SAME_TYPE_RAW_GROUP = 50_000;
+const CODEMODE_BLOCK_ADDED_TYPE = "events.iterate.com/codemode/block-added";
+const CODEMODE_RESULT_ADDED_TYPE = "events.iterate.com/codemode/result-added";
+const CODEMODE_TOOL_PROVIDER_CONFIG_UPDATED_TYPE =
+  "events.iterate.com/codemode/tool-provider-config-updated";
 
 function createInitialEventsStreamViewState(): EventsStreamViewState {
-  return {
-    feedItems: [],
+  return createEventsStreamViewState({
+    feed: [],
     activity: {
       currentLlmRequestId: null,
+      latestStreamError: null,
     },
+  });
+}
+
+function createEventsStreamViewState(args: {
+  feed: EventsStreamBuiltInElement[];
+  activity: EventsStreamViewState["activity"];
+}): EventsStreamViewState {
+  const slots = {
+    feed: args.feed,
+    header: createHeaderSlotElements(args.activity),
+    input: createInputSlotElements(args.activity),
+  };
+
+  return {
+    slots,
+    outlets: slots,
+    feedItems: slots.feed,
+    activity: args.activity,
   };
 }
 
-export function processEventsWithViewProcessor(args: {
+export function processEventsWithViewReducer(args: {
   events: readonly Event[];
-  processor: EventsStreamViewProcessor;
+  reducer: EventsStreamViewReducer;
 }) {
-  let state = args.processor.createInitialState();
+  let state = args.reducer.createInitialState();
 
   for (const event of args.events) {
-    state = args.processor.reduce({ event, state }) ?? state;
+    state = args.reducer.reduce({ event, state }) ?? state;
   }
 
   return state;
 }
 
 /**
- * Raw + Pretty keeps grouped wire events in the feed and inserts semantic items
- * immediately after the raw event that produced them. It is shared by the web
- * stream view and the agents terminal CLI proof of concept.
+ * Raw + Pretty is the default stream view: every event contributes to a raw
+ * summary row, and events with semantic meaning contribute one additional
+ * pretty element immediately after that raw summary.
+ *
+ * Consecutive unsupported events with the same type can collapse into one
+ * grouped raw summary only when each event produced no other feed item. The
+ * group still carries every raw event so the inspector can navigate through the
+ * underlying wire log.
  */
-export const rawPrettyEventsStreamViewProcessor = createEventsStreamViewProcessor({
+export const rawPrettyEventsStreamViewReducer = createEventsStreamViewReducer({
   slug: "raw-pretty",
   reduceEventToFeedItems: reduceEventToRawPrettyFeedItems,
   groupConsecutiveRawEvents: true,
 });
 
 /** Raw mode is one feed item per wire event. */
-export const rawEventsStreamViewProcessor = createEventsStreamViewProcessor({
+export const rawEventsStreamViewReducer = createEventsStreamViewReducer({
   slug: "raw",
   reduceEventToFeedItems: (event) => [toRawEventFeedItem(event)],
   groupConsecutiveRawEvents: false,
 });
 
 /** Pretty mode emits only semantic items; unsupported event types disappear. */
-export const prettyEventsStreamViewProcessor = createEventsStreamViewProcessor({
+export const prettyEventsStreamViewReducer = createEventsStreamViewReducer({
   slug: "pretty",
   reduceEventToFeedItems: reduceEventToSemanticFeedItems,
   groupConsecutiveRawEvents: false,
 });
 
 /** Raw Single JSON keeps the full stream in one feed item for renderer-level inspection. */
-export const rawJsonDumpEventsStreamViewProcessor: EventsStreamViewProcessor = {
+export const rawJsonDumpEventsStreamViewReducer: EventsStreamViewReducer = {
   slug: "raw-single-json",
   createInitialState: createInitialEventsStreamViewState,
   reduce: ({ event, state }) => {
-    const previousDump = state.feedItems[0];
-    const previousEvents = previousDump?.type === "raw-json-dump" ? previousDump.events : [];
+    const previousDump = state.slots.feed[0];
+    const previousEvents = previousDump?.type === "raw-json-dump" ? previousDump.props.events : [];
     const activity = reduceActivityState({ event, state });
 
-    return {
-      feedItems: [
-        { type: "raw-json-dump", id: "raw-json-dump", events: [...previousEvents, event] },
+    return createEventsStreamViewState({
+      feed: [
+        {
+          type: "raw-json-dump",
+          id: "raw-json-dump",
+          props: { events: [...previousEvents, event] },
+        },
       ],
       activity,
-    };
+    });
   },
 };
 
-function createEventsStreamViewProcessor(args: {
+function createEventsStreamViewReducer(args: {
   slug: string;
-  reduceEventToFeedItems: (event: Event) => EventsStreamFeedItem[];
+  reduceEventToFeedItems: (event: Event) => EventsStreamBuiltInElement[];
   groupConsecutiveRawEvents: boolean;
-}): EventsStreamViewProcessor {
+}): EventsStreamViewReducer {
   return {
     slug: args.slug,
     createInitialState: createInitialEventsStreamViewState,
     reduce: ({ event, state }) => {
       const feedItems = appendFeedItems({
-        feedItems: state.feedItems,
+        feedItems: state.slots.feed,
         nextItems: args.reduceEventToFeedItems(event),
         groupConsecutiveRawEvents: args.groupConsecutiveRawEvents,
       });
       const activity = reduceActivityState({ event, state });
 
-      if (feedItems === state.feedItems && activity === state.activity) {
+      if (feedItems === state.slots.feed && activity === state.activity) {
         return undefined;
       }
 
-      return { feedItems, activity };
+      return createEventsStreamViewState({ feed: feedItems, activity });
     },
   };
 }
 
-function reduceEventToRawPrettyFeedItems(event: Event): EventsStreamFeedItem[] {
+function createHeaderSlotElements(
+  activity: EventsStreamViewState["activity"],
+): EventsStreamBuiltInElement[] {
+  if (activity.currentLlmRequestId == null) {
+    return [];
+  }
+
+  return [
+    {
+      type: "activity",
+      id: "activity",
+      props: {
+        status: "working",
+        label: "Agent working",
+        detail: activity.currentLlmRequestId,
+      },
+    },
+  ];
+}
+
+function createInputSlotElements(
+  activity: EventsStreamViewState["activity"],
+): EventsStreamBuiltInElement[] {
+  if (activity.latestStreamError == null) {
+    return [];
+  }
+
+  const text = `Can you help debug this stream error?\n\n${activity.latestStreamError.message}`;
+
+  return [
+    {
+      type: "composer-suggestion",
+      id: `composer-suggestion-stream-error-${activity.latestStreamError.offset}`,
+      props: {
+        label: "Ask agent to debug this error",
+        text,
+        action: {
+          type: "prefill-agent-message",
+          text,
+        },
+        sourceOffset: activity.latestStreamError.offset,
+      },
+    },
+  ];
+}
+
+function reduceEventToRawPrettyFeedItems(event: Event): EventsStreamBuiltInElement[] {
   return [toRawEventFeedItem(event), ...reduceEventToSemanticFeedItems(event)];
 }
 
 function appendFeedItems(args: {
-  feedItems: EventsStreamFeedItem[];
-  nextItems: readonly EventsStreamFeedItem[];
+  feedItems: EventsStreamBuiltInElement[];
+  nextItems: readonly EventsStreamBuiltInElement[];
   groupConsecutiveRawEvents: boolean;
-}): EventsStreamFeedItem[] {
+}): EventsStreamBuiltInElement[] {
   if (args.nextItems.length === 0) {
     return args.feedItems;
   }
 
   const feedItems = [...args.feedItems];
+  const canGroupNextItems =
+    args.groupConsecutiveRawEvents &&
+    args.nextItems.length === 1 &&
+    args.nextItems[0]?.type === "raw-event";
 
   for (const item of args.nextItems) {
-    if (!args.groupConsecutiveRawEvents) {
+    if (!canGroupNextItems) {
       feedItems.push(item);
       continue;
     }
 
     const previousItem = feedItems[feedItems.length - 1];
     if (previousItem?.type === "grouped-raw-event" && item.type === "raw-event") {
-      if (previousItem.eventType === item.eventType) {
+      if (previousItem.props.eventType === item.props.eventType) {
         feedItems[feedItems.length - 1] = addRawEventToGroup(previousItem, item);
         continue;
       }
     }
 
     if (previousItem?.type === "raw-event" && item.type === "raw-event") {
-      if (previousItem.eventType === item.eventType) {
+      if (previousItem.props.eventType === item.props.eventType) {
         feedItems[feedItems.length - 1] = createRawEventGroup([previousItem, item]);
         continue;
       }
@@ -146,13 +236,28 @@ function reduceActivityState(args: {
   event: Event;
   state: EventsStreamViewState;
 }): EventsStreamViewState["activity"] {
+  if (args.event.type === STREAM_ERROR_OCCURRED_TYPE) {
+    const message = readStringPayloadField(args.event, "message") ?? "Stream error";
+
+    return {
+      ...args.state.activity,
+      latestStreamError: {
+        message,
+        offset: args.event.offset,
+      },
+    };
+  }
+
   const requestId = readStringPayloadField(args.event, "requestId");
 
   if (requestId == null) {
     return args.state.activity;
   }
 
-  if (args.event.type === "llm-request-started") {
+  if (
+    args.event.type === "llm-request-started" ||
+    args.event.type === "events.iterate.com/agent/llm-request-started"
+  ) {
     return { ...args.state.activity, currentLlmRequestId: requestId };
   }
 
@@ -160,7 +265,10 @@ function reduceActivityState(args: {
     args.state.activity.currentLlmRequestId === requestId &&
     (args.event.type === "llm-request-completed" ||
       args.event.type === "llm-request-cancelled" ||
-      args.event.type === "llm-request-failed")
+      args.event.type === "llm-request-failed" ||
+      args.event.type === "events.iterate.com/agent/llm-request-completed" ||
+      args.event.type === "events.iterate.com/agent/llm-request-cancelled" ||
+      args.event.type === "events.iterate.com/agent/llm-request-failed")
   ) {
     return { ...args.state.activity, currentLlmRequestId: null };
   }
@@ -168,64 +276,78 @@ function reduceActivityState(args: {
   return args.state.activity;
 }
 
-function reduceEventToSemanticFeedItems(event: Event): EventsStreamFeedItem[] {
+function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElement[] {
   const timestamp = getTimestamp(event.createdAt);
 
-  if (event.type === "webchat-message-received") {
+  if (
+    event.type === "webchat-message-received" ||
+    event.type === "events.iterate.com/agent/webchat-message-received"
+  ) {
     const content = readStringPayloadField(event, "content");
     if (content == null) return [];
     return [
       {
         type: "message",
         id: `message-user-${event.offset}`,
-        role: "user",
-        text: content,
-        timestamp,
-        raw: event,
+        props: {
+          role: "user",
+          text: content,
+          timestamp,
+          raw: event,
+        },
       },
     ];
   }
 
-  if (event.type === "webchat-response-added") {
+  if (
+    event.type === "webchat-response-added" ||
+    event.type === "events.iterate.com/agent/webchat-response-added"
+  ) {
     const message = readStringPayloadField(event, "message");
     if (message == null) return [];
     return [
       {
         type: "message",
         id: `message-assistant-${event.offset}`,
-        role: "assistant",
-        text: message,
-        timestamp,
-        raw: event,
+        props: {
+          role: "assistant",
+          text: message,
+          timestamp,
+          raw: event,
+        },
       },
     ];
   }
 
-  if (event.type === "https://events.iterate.com/events/stream/initialized") {
+  if (event.type === STREAM_FIRST_INITIALIZED_TYPE) {
     return [
       {
         type: "lifecycle",
         id: `lifecycle-initialized-${event.offset}`,
-        label: "Stream initialized",
-        timestamp,
-        raw: event,
+        props: {
+          label: "Stream initialized",
+          timestamp,
+          raw: event,
+        },
       },
     ];
   }
 
-  if (event.type === "https://events.iterate.com/events/stream/durable-object-woke-up") {
+  if (event.type === STREAM_DURABLE_OBJECT_WOKE_UP_TYPE) {
     return [
       {
         type: "lifecycle",
         id: `lifecycle-woke-up-${event.offset}`,
-        label: "Durable object woke up",
-        timestamp,
-        raw: event,
+        props: {
+          label: "Durable object woke up",
+          timestamp,
+          raw: event,
+        },
       },
     ];
   }
 
-  if (event.type === "https://events.iterate.com/events/stream/child-stream-created") {
+  if (event.type === STREAM_CHILD_STREAM_CREATED_TYPE) {
     const childPath = readStringPayloadField(event, "childPath");
     if (childPath == null) return [];
     const parsedChildPath = StreamPath.safeParse(childPath);
@@ -234,90 +356,163 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamFeedItem[] {
       {
         type: "child-stream-created",
         id: `child-stream-created-${event.offset}`,
-        parentPath: event.streamPath,
-        childPath: parsedChildPath.data,
-        timestamp,
-        raw: event,
+        props: {
+          parentPath: event.streamPath,
+          childPath: parsedChildPath.data,
+          timestamp,
+          raw: event,
+        },
       },
     ];
   }
 
-  if (event.type === "https://events.iterate.com/events/stream/metadata-updated") {
+  if (event.type === STREAM_METADATA_UPDATED_TYPE) {
     const metadata = readRecordPayloadField(event, "metadata");
     if (metadata == null) return [];
     return [
       {
         type: "metadata-updated",
         id: `metadata-updated-${event.offset}`,
-        path: event.streamPath,
-        metadata,
-        timestamp,
-        raw: event,
+        props: {
+          path: event.streamPath,
+          metadata,
+          timestamp,
+          raw: event,
+        },
       },
     ];
   }
 
-  if (event.type === "https://events.iterate.com/events/stream/error-occurred") {
+  if (event.type === STREAM_ERROR_OCCURRED_TYPE) {
     const message = readStringPayloadField(event, "message") ?? "Stream error";
     return [
       {
         type: "error",
         id: `error-${event.offset}`,
-        message,
-        timestamp,
-        raw: event,
+        props: {
+          message,
+          timestamp,
+          raw: event,
+        },
       },
     ];
   }
 
+  if (event.type === CODEMODE_BLOCK_ADDED_TYPE) {
+    const script = readStringPayloadField(event, "script");
+    if (script == null) return [];
+    return [
+      {
+        type: "codemode-block",
+        id: `codemode-block-${event.offset}`,
+        props: {
+          script,
+          language: "javascript",
+          timestamp,
+          raw: event,
+        },
+      },
+    ];
+  }
+
+  if (event.type === CODEMODE_RESULT_ADDED_TYPE) {
+    const payload = readPayloadRecord(event);
+    const durationMs = readNumberPayloadField(event, "durationMs");
+    if (payload == null || durationMs == null || !("result" in payload)) return [];
+    const error = readStringPayloadField(event, "error") ?? undefined;
+    return [
+      {
+        type: "codemode-result",
+        id: `codemode-result-${event.offset}`,
+        props: {
+          success: error == null,
+          result: payload.result,
+          ...(error == null ? {} : { error }),
+          logs: readStringArrayPayloadField(event, "logs"),
+          durationMs,
+          timestamp,
+          raw: event,
+        },
+      },
+    ];
+  }
+
+  if (event.type === CODEMODE_TOOL_PROVIDER_CONFIG_UPDATED_TYPE) {
+    const slug = readStringPayloadField(event, "slug");
+    if (slug == null) return [];
+    const payload = readPayloadRecord(event);
+    return [
+      {
+        type: "codemode-tool-provider",
+        id: `codemode-tool-provider-${slug}-${event.offset}`,
+        props: {
+          slug,
+          operation: payload?.executeCallable === null ? "removed" : "configured",
+          hasTypesCallable: payload?.getTypesCallable != null,
+          timestamp,
+          raw: event,
+        },
+      },
+    ];
+  }
+
+  /*
+   * Keep unsupported semantic events as raw summaries for now. Add a dedicated
+   * Rendered Element type when an event family earns a real renderer; avoid a
+   * vague catch-all card that hides product decisions behind generic UI.
+   */
   return [];
 }
 
-function toRawEventFeedItem(event: Event): EventsStreamRawEventFeedItem {
+function toRawEventFeedItem(event: Event): EventsStreamRawEventElement {
   return {
     type: "raw-event",
     id: `raw-event-${event.offset}`,
-    streamPath: event.streamPath,
-    offset: event.offset,
-    createdAt: event.createdAt,
-    eventType: event.type,
-    timestamp: getTimestamp(event.createdAt),
-    raw: event,
+    props: {
+      streamPath: event.streamPath,
+      offset: event.offset,
+      createdAt: event.createdAt,
+      eventType: event.type,
+      timestamp: getTimestamp(event.createdAt),
+      raw: event,
+    },
   };
 }
 
 function addRawEventToGroup(
-  group: EventsStreamGroupedRawEventFeedItem,
-  event: EventsStreamRawEventFeedItem,
-): EventsStreamGroupedRawEventFeedItem {
-  const events = [...group.events, event];
-  const count = group.count + 1;
+  group: EventsStreamGroupedRawEventElement,
+  event: EventsStreamRawEventElement,
+): EventsStreamGroupedRawEventElement {
+  const events = [...group.props.events, event];
+  const count = group.props.count + 1;
 
   if (events.length > MAX_SAME_TYPE_RAW_GROUP) {
     return createRawEventGroup(events.slice(-MAX_SAME_TYPE_RAW_GROUP), {
       count,
-      firstTimestamp: group.firstTimestamp,
+      firstTimestamp: group.props.firstTimestamp,
     });
   }
 
-  return createRawEventGroup(events, { count, firstTimestamp: group.firstTimestamp });
+  return createRawEventGroup(events, { count, firstTimestamp: group.props.firstTimestamp });
 }
 
 function createRawEventGroup(
-  events: readonly EventsStreamRawEventFeedItem[],
+  events: readonly EventsStreamRawEventElement[],
   state?: { count: number; firstTimestamp: number },
-): EventsStreamGroupedRawEventFeedItem {
+): EventsStreamGroupedRawEventElement {
   const firstEvent = events[0];
   const lastEvent = events[events.length - 1];
 
   return {
     type: "grouped-raw-event",
-    id: `grouped-raw-event-${firstEvent.eventType}-${firstEvent.offset}-${lastEvent.offset}`,
-    eventType: firstEvent.eventType,
-    count: state?.count ?? events.length,
-    events: [...events],
-    firstTimestamp: state?.firstTimestamp ?? firstEvent.timestamp,
-    lastTimestamp: lastEvent.timestamp,
+    id: `grouped-raw-event-${firstEvent.props.eventType}-${firstEvent.props.offset}-${lastEvent.props.offset}`,
+    props: {
+      eventType: firstEvent.props.eventType,
+      count: state?.count ?? events.length,
+      events: [...events],
+      firstTimestamp: state?.firstTimestamp ?? firstEvent.props.timestamp,
+      lastTimestamp: lastEvent.props.timestamp,
+    },
   };
 }
 
@@ -329,6 +524,18 @@ function readStringPayloadField(event: Event, key: string) {
 function readRecordPayloadField(event: Event, key: string): Record<string, unknown> | null {
   const value = readPayloadRecord(event)?.[key];
   return isRecord(value) ? value : null;
+}
+
+function readNumberPayloadField(event: Event, key: string) {
+  const value = readPayloadRecord(event)?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function readStringArrayPayloadField(event: Event, key: string) {
+  const value = readPayloadRecord(event)?.[key];
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
 }
 
 function readPayloadRecord(event: Event) {

@@ -37,7 +37,7 @@ pnpm --dir apps/events cli dynamic-worker-configured-event \
 ```
 
 That emits a
-`https://events.iterate.com/events/stream/dynamic-worker/configured` event with
+`events.iterate.com/core/dynamic-worker-configured` event with
 the bundled script in `payload.script`.
 
 ### Proof script
@@ -78,8 +78,8 @@ The successful output from this branch included:
 {
   "ok": true,
   "eventTypes": [
-    "https://events.iterate.com/events/stream/initialized",
-    "https://events.iterate.com/events/stream/dynamic-worker/configured",
+    "events.iterate.com/core/stream-first-initialized",
+    "events.iterate.com/core/dynamic-worker-configured",
     "agent-input-added",
     "agent-output-added"
   ],
@@ -121,7 +121,7 @@ examples. The Hono app only provides:
 - `POST /after-event-handler` for webhook delivery
 
 Streams opt in by appending
-`https://events.iterate.com/events/stream/subscription/configured`.
+`events.iterate.com/core/subscription-configured`.
 
 The callback URL may also include `projectSlug=...` when the target events
 service is multi-project. Local `apps/events` and preview proofs in this branch
@@ -179,8 +179,8 @@ Observed local OpenAI streams ended with:
 
 ```json
 [
-  "https://events.iterate.com/events/stream/initialized",
-  "https://events.iterate.com/events/stream/subscription/configured",
+  "events.iterate.com/core/stream-first-initialized",
+  "events.iterate.com/core/subscription-configured",
   "user-message",
   "openai-response-output",
   "assistant-message"
@@ -236,7 +236,7 @@ Observed deployed OpenAI event types:
 
 ```json
 [
-  "https://events.iterate.com/events/stream/initialized",
+  "events.iterate.com/core/stream-first-initialized",
   "user-message",
   "openai-response-output",
   "assistant-message"
@@ -307,8 +307,8 @@ Observed websocket ping result:
 
 ```json
 [
-  "https://events.iterate.com/events/stream/initialized",
-  "https://events.iterate.com/events/stream/subscription/configured",
+  "events.iterate.com/core/stream-first-initialized",
+  "events.iterate.com/core/subscription-configured",
   "value-recorded",
   "pong"
 ]
@@ -318,8 +318,8 @@ Observed webhook OpenAI result:
 
 ```json
 [
-  "https://events.iterate.com/events/stream/initialized",
-  "https://events.iterate.com/events/stream/subscription/configured",
+  "events.iterate.com/core/stream-first-initialized",
+  "events.iterate.com/core/subscription-configured",
   "user-message",
   "openai-response-output",
   "assistant-message"

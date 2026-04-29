@@ -6,14 +6,14 @@ import {
   type StreamEvent,
 } from "@iterate-com/shared/stream-processors";
 import { CoreProcessorRegisteredEventType } from "../core/contract.ts";
-import { wellBehavedProcessorDefaults } from "../core/well-behaved-processor-defaults.ts";
+import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
 
 /**
  * Frontend-safe public contract for the agent processor.
  *
  * Keep this file free of Durable Objects, WorkerEntrypoints, `Ai`, `Fetcher`,
  * dynamic worker loaders, MCP clients, and other backend-only runtime objects.
- * The agents UI can import this module to project committed stream events into
+ * The agents UI can import this module to project stream events into
  * display state without constructing the backend processor implementation.
  */
 export const AgentProcessorContract = defineProcessorContract({
@@ -22,7 +22,7 @@ export const AgentProcessorContract = defineProcessorContract({
   description:
     "Maintains model-visible agent history and the frontend-visible LLM request projection.",
   stateSchema: z.object({
-    ...wellBehavedProcessorDefaults.stateShape,
+    ...standardProcessorBehavior.stateShape,
     systemPrompt: z.string().default("You are a helpful assistant. You can trust your user."),
     history: z
       .array(
@@ -43,9 +43,9 @@ export const AgentProcessorContract = defineProcessorContract({
     pendingTriggerCount: z.number().int().nonnegative().default(0),
   }),
   initialState: {
-    ...wellBehavedProcessorDefaults.initialState,
+    ...standardProcessorBehavior.initialState,
   },
-  processorDeps: [...wellBehavedProcessorDefaults.processorDeps],
+  processorDeps: [...standardProcessorBehavior.processorDeps],
   events: {
     "events.iterate.com/agent/system-prompt-updated": {
       description: "Updates the system prompt used for future LLM requests.",
@@ -153,7 +153,7 @@ export const AgentProcessorContract = defineProcessorContract({
     },
   },
   consumes: [
-    ...wellBehavedProcessorDefaults.consumes,
+    ...standardProcessorBehavior.consumes,
     "events.iterate.com/agent/system-prompt-updated",
     "events.iterate.com/agent/webchat-message-received",
     "events.iterate.com/agent/webchat-response-added",
@@ -168,7 +168,7 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/status-updated",
   ],
   emits: [
-    ...wellBehavedProcessorDefaults.emits,
+    ...standardProcessorBehavior.emits,
     "events.iterate.com/agent/input-added",
     "events.iterate.com/agent/llm-request-scheduled",
     "events.iterate.com/agent/llm-request-started",
@@ -179,50 +179,55 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/status-updated",
   ],
   reduce({ contract, state, event }) {
+    const nextState = standardProcessorBehavior.reduce({
+      state,
+      event,
+      contract,
+    });
+
     switch (event.type) {
       case CoreProcessorRegisteredEventType:
-        return wellBehavedProcessorDefaults.reduce({
-          state,
-          event,
-          contract,
-        });
+        return nextState;
       case "events.iterate.com/agent/system-prompt-updated":
-        return { ...state, systemPrompt: event.payload.systemPrompt };
+        return { ...nextState, systemPrompt: event.payload.systemPrompt };
       case "events.iterate.com/agent/input-added":
         return {
-          ...state,
-          history: [...state.history, { role: event.payload.role, content: event.payload.content }],
+          ...nextState,
+          history: [
+            ...nextState.history,
+            { role: event.payload.role, content: event.payload.content },
+          ],
         };
       case "events.iterate.com/agent/llm-config-updated":
-        return { ...state, llmConfig: event.payload };
+        return { ...nextState, llmConfig: event.payload };
       case "events.iterate.com/agent/llm-request-scheduled":
         return {
-          ...state,
+          ...nextState,
           currentRequest: { requestId: event.payload.requestId },
           pendingTriggerCount: 0,
         };
       case "events.iterate.com/agent/llm-request-started":
         return {
-          ...state,
+          ...nextState,
           currentRequest: { requestId: event.payload.requestId },
         };
       case "events.iterate.com/agent/llm-request-completed":
       case "events.iterate.com/agent/llm-request-failed":
       case "events.iterate.com/agent/llm-request-cancelled":
-        return state.currentRequest?.requestId === event.payload.requestId
-          ? { ...state, currentRequest: null }
-          : state;
+        return nextState.currentRequest?.requestId === event.payload.requestId
+          ? { ...nextState, currentRequest: null }
+          : nextState;
       case "events.iterate.com/agent/llm-request-queued":
         return {
-          ...state,
-          pendingTriggerCount: state.pendingTriggerCount + 1,
+          ...nextState,
+          pendingTriggerCount: nextState.pendingTriggerCount + 1,
         };
 
       // we consume these events, but they don't update our state but they do cause side-effects in the implementation
       case "events.iterate.com/agent/status-updated":
       case "events.iterate.com/agent/webchat-message-received":
       case "events.iterate.com/agent/webchat-response-added":
-        return state;
+        return nextState;
       default:
         return assertNever(event);
     }

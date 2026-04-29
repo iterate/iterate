@@ -3,9 +3,13 @@ import {
   GenericEvent as GenericEventBase,
   GenericEventInput as GenericEventInputBase,
 } from "./event-base-types.ts";
+import {
+  STREAM_DYNAMIC_WORKER_CONFIGURED_TYPE,
+  STREAM_DYNAMIC_WORKER_ENV_VAR_SET_TYPE,
+} from "./core-event-types.ts";
 
 export const DynamicWorkerConfiguredEventInput = GenericEventInputBase.extend({
-  type: z.literal("https://events.iterate.com/events/stream/dynamic-worker/configured"),
+  type: z.literal(STREAM_DYNAMIC_WORKER_CONFIGURED_TYPE),
   payload: z
     .strictObject({
       slug: z.string().trim().min(1),
@@ -74,7 +78,7 @@ export type DynamicWorkerConfiguredEventInput = z.infer<typeof DynamicWorkerConf
 export type DynamicWorkerConfiguredEvent = z.infer<typeof DynamicWorkerConfiguredEvent>;
 
 export const DynamicWorkerEnvVarSetEventInput = GenericEventInputBase.extend({
-  type: z.literal("https://events.iterate.com/events/stream/dynamic-worker/env-var-set"),
+  type: z.literal(STREAM_DYNAMIC_WORKER_ENV_VAR_SET_TYPE),
   payload: z.strictObject({
     key: z.string().trim().min(1),
     value: z.string(),

@@ -30,25 +30,25 @@ import {
  * ```ts
  * defineProcessorContract({
  *   stateSchema: z.object({
- *     ...wellBehavedProcessorDefaults.stateShape,
+ *     ...standardProcessorBehavior.stateShape,
  *     // processor-specific state...
  *   }),
  *   initialState: {
- *     ...wellBehavedProcessorDefaults.initialState,
+ *     ...standardProcessorBehavior.initialState,
  *   },
- *   processorDeps: [...wellBehavedProcessorDefaults.processorDeps],
+ *   processorDeps: [...standardProcessorBehavior.processorDeps],
  *   consumes: [
- *     ...wellBehavedProcessorDefaults.consumes,
+ *     ...standardProcessorBehavior.consumes,
  *     "events.iterate.com/agent/input-added",
  *   ],
  *   emits: [
- *     ...wellBehavedProcessorDefaults.emits,
+ *     ...standardProcessorBehavior.emits,
  *     "events.iterate.com/agent/status-updated",
  *   ],
  * });
  * ```
  *
- * The behavior encoded here is "well-behaved processors register their public
+ * The behavior encoded here is "standard processors register their public
  * contract on the stream exactly once per processor version". The reduced
  * state tracks whether the current version's registration event has already
  * been observed. The `afterAppend` helper appends the registration event when
@@ -57,7 +57,7 @@ import {
  * This may become a small composed processor later. Keeping it as a bag for now
  * makes the repeated behavior visible without committing to a composition API.
  */
-export const wellBehavedProcessorDefaults = {
+export const standardProcessorBehavior = {
   stateShape: {
     hasRegisteredCurrentVersion: z.boolean().default(false),
   },

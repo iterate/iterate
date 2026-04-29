@@ -78,7 +78,7 @@ const ConfigureBasePathDefaultsInput = z.object({
   events: z
     .array(ContractEventInput)
     .describe(
-      "Ordered list of events that should be appended to every new child stream under `basePath`, after the auto-subscriber wires up the iterate-agent processor.",
+      "Ordered list of events that should be appended to every new child stream under `basePath`, after the auto-subscriber wires up the stream processor runner.",
     ),
 });
 
@@ -148,7 +148,7 @@ const CreateAgentInput = z.object({
     .string()
     .min(1)
     .describe(
-      "First user message. Appended as an `agent-input-added` event with role `user`, which kicks off the LLM via the processor's debounce timer.",
+      "First user message. Appended as an `events.iterate.com/agent/input-added` event with role `user`, which kicks off the LLM via the processor's debounce timer.",
     ),
 });
 
@@ -185,7 +185,7 @@ export const agentsContract = oc.router({
       method: "POST",
       path: "/install-processor",
       description:
-        "Attach the `child-stream-auto-subscriber` processor to `appConfig.streamPathPrefix`. Each new child stream under the prefix will automatically get an `iterate-agent` WebSocket subscription installed plus any default events configured via `configureBasePathDefaults`.",
+        "Attach the `child-stream-auto-subscriber` processor to `appConfig.streamPathPrefix`. Each new child stream under the prefix will automatically get an `agent-stream-processor-runner` WebSocket subscription installed plus any default events configured via `configureBasePathDefaults`.",
       tags: ["/agents-config"],
     })
     .input(InstallProcessorInput)
@@ -196,7 +196,7 @@ export const agentsContract = oc.router({
       method: "POST",
       path: "/configure-base-path-defaults",
       description:
-        "Store an ordered list of events to append to every new child stream under `basePath`. The auto-subscriber looks up the longest-matching base path on each `child-stream-created` event and applies the events sequentially after the iterate-agent subscription is wired up. Idempotent: writing the same `basePath` twice overwrites the previous entry.",
+        "Store an ordered list of events to append to every new child stream under `basePath`. The auto-subscriber looks up the longest-matching base path on each `child-stream-created` event and applies the events sequentially after the stream processor runner subscription is wired up. Idempotent: writing the same `basePath` twice overwrites the previous entry.",
       tags: ["/agents-config"],
     })
     .input(ConfigureBasePathDefaultsInput)
@@ -207,7 +207,7 @@ export const agentsContract = oc.router({
       method: "POST",
       path: "/clear-base-path-defaults",
       description:
-        "Remove the stored default events for a base path. New streams will still get an iterate-agent subscription via the auto-subscriber, but no default events.",
+        "Remove the stored default events for a base path. New streams will still get a stream processor runner subscription via the auto-subscriber, but no default events.",
       tags: ["/agents-config"],
     })
     .input(ClearBasePathDefaultsInput)
@@ -239,7 +239,7 @@ export const agentsContract = oc.router({
       method: "POST",
       path: "/create-agent",
       description:
-        "Append an `agent-input-added` user message to a brand-new (or existing) stream under the auto-subscriber's prefix. The auto-subscriber wires up the iterate-agent durable object and applies any configured base-path defaults; this procedure is a thin convenience wrapper around `events.append`.",
+        "Append an `events.iterate.com/agent/input-added` user message to a brand-new (or existing) stream under the auto-subscriber's prefix. The auto-subscriber wires up the stream processor runner durable object and applies any configured base-path defaults; this procedure is a thin convenience wrapper around `events.append`.",
       tags: ["/agents-config"],
     })
     .input(CreateAgentInput)

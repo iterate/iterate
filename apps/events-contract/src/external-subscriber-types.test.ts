@@ -21,7 +21,7 @@ function testValidExternalSubscriberJsonataExpressionsParse() {
 
 function testInvalidExternalSubscriberJsonataExpressionsFailFast() {
   const parsed = StreamSubscriptionConfiguredEventInput.safeParse({
-    type: "https://events.iterate.com/events/stream/subscription/configured",
+    type: "events.iterate.com/core/subscription-configured",
     payload: {
       slug: "audit",
       type: "webhook",
@@ -35,7 +35,7 @@ function testInvalidExternalSubscriberJsonataExpressionsFailFast() {
 
 function testInvalidJsonataTransformerExpressionsFailFast() {
   const parsed = JsonataTransformerConfiguredEventInput.safeParse({
-    type: "https://events.iterate.com/events/stream/jsonata-transformer-configured",
+    type: "events.iterate.com/core/jsonata-transformer-configured",
     payload: {
       slug: "fanout",
       matcher: "type = ",
@@ -48,7 +48,7 @@ function testInvalidJsonataTransformerExpressionsFailFast() {
 
 function testValidHtmlRendererConfigParses() {
   const parsed = HtmlRendererConfiguredEventInput.parse({
-    type: "https://events.iterate.com/events/stream/html-renderer-configured",
+    type: "events.iterate.com/core/html-renderer-configured",
     payload: {
       slug: "todo-card",
       matcher: "type = 'todo.created'",
@@ -61,7 +61,7 @@ function testValidHtmlRendererConfigParses() {
 
 function testInvalidHtmlRendererMatcherFailsFast() {
   const parsed = HtmlRendererConfiguredEventInput.safeParse({
-    type: "https://events.iterate.com/events/stream/html-renderer-configured",
+    type: "events.iterate.com/core/html-renderer-configured",
     payload: {
       slug: "todo-card",
       matcher: "type = ",

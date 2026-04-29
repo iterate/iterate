@@ -1,4 +1,4 @@
-import { ProjectSlug } from "@iterate-com/events-contract";
+import { ProjectSlug, STREAM_SUBSCRIPTION_CONFIGURED_TYPE } from "@iterate-com/events-contract";
 import { createEventsOrpcClient } from "~/lib/events-orpc-client.ts";
 import {
   AUTO_SUBSCRIBER_INSTANCE,
@@ -38,7 +38,7 @@ export const installProcessorRouter = {
     await eventsClient.append({
       path: streamPath,
       event: {
-        type: "https://events.iterate.com/events/stream/subscription/configured",
+        type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
         payload: {
           slug: CHILD_STREAM_AUTO_SUBSCRIBER_SUBSCRIPTION_SLUG,
           type: "websocket",

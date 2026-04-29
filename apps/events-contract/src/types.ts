@@ -26,6 +26,14 @@ import {
   DynamicWorkerConfiguredEventInput,
   DynamicWorkerEnvVarSetEventInput,
 } from "./dynamic-worker-types.ts";
+import {
+  STREAM_CHILD_STREAM_CREATED_TYPE,
+  STREAM_DURABLE_OBJECT_WOKE_UP_TYPE,
+  STREAM_ERROR_OCCURRED_TYPE,
+  STREAM_FIRST_INITIALIZED_TYPE,
+  STREAM_INVALID_EVENT_APPENDED_TYPE,
+  STREAM_METADATA_UPDATED_TYPE,
+} from "./core-event-types.ts";
 
 export { JSONObject, StreamPath };
 
@@ -48,7 +56,7 @@ export const StreamQuery = z
 export type StreamQuery = z.infer<typeof StreamQuery>;
 
 const StreamInitializedEventInput = GenericEventInputBase.extend({
-  type: z.literal("https://events.iterate.com/events/stream/initialized"),
+  type: z.literal(STREAM_FIRST_INITIALIZED_TYPE),
   payload: z.strictObject({
     projectSlug: ProjectSlug,
     path: StreamPath,
@@ -60,7 +68,7 @@ export const StreamInitializedEvent = GenericEventBase.extend(
 export type StreamInitializedEvent = z.infer<typeof StreamInitializedEvent>;
 
 const StreamDurableObjectWokeUpEventInput = GenericEventInputBase.extend({
-  type: z.literal("https://events.iterate.com/events/stream/durable-object-woke-up"),
+  type: z.literal(STREAM_DURABLE_OBJECT_WOKE_UP_TYPE),
   payload: z.strictObject({}),
 });
 const StreamDurableObjectWokeUpEvent = GenericEventBase.extend(
@@ -70,7 +78,7 @@ type StreamDurableObjectWokeUpEventInput = z.infer<typeof StreamDurableObjectWok
 type StreamDurableObjectWokeUpEvent = z.infer<typeof StreamDurableObjectWokeUpEvent>;
 
 const ChildStreamCreatedEventInput = GenericEventInputBase.extend({
-  type: z.literal("https://events.iterate.com/events/stream/child-stream-created"),
+  type: z.literal(STREAM_CHILD_STREAM_CREATED_TYPE),
   payload: z.strictObject({
     childPath: StreamPath,
   }),
@@ -81,7 +89,7 @@ export const ChildStreamCreatedEvent = GenericEventBase.extend(
 export type ChildStreamCreatedEvent = z.infer<typeof ChildStreamCreatedEvent>;
 
 export const StreamMetadataUpdatedEventInput = GenericEventInputBase.extend({
-  type: z.literal("https://events.iterate.com/events/stream/metadata-updated"),
+  type: z.literal(STREAM_METADATA_UPDATED_TYPE),
   payload: z.strictObject({
     metadata: JSONObject,
   }),
@@ -93,7 +101,7 @@ export type StreamMetadataUpdatedEventInput = z.infer<typeof StreamMetadataUpdat
 export type StreamMetadataUpdatedEvent = z.infer<typeof StreamMetadataUpdatedEvent>;
 
 const ErrorOccurredEventInput = GenericEventInputBase.extend({
-  type: z.literal("https://events.iterate.com/events/stream/error-occurred"),
+  type: z.literal(STREAM_ERROR_OCCURRED_TYPE),
   payload: z.strictObject({
     message: z.string().trim().min(1),
   }),
@@ -104,7 +112,7 @@ export const ErrorOccurredEvent = GenericEventBase.extend(
 export type ErrorOccurredEvent = z.infer<typeof ErrorOccurredEvent>;
 
 export const InvalidEventAppendedEventInput = GenericEventInputBase.extend({
-  type: z.literal("https://events.iterate.com/events/stream/invalid-event-appended"),
+  type: z.literal(STREAM_INVALID_EVENT_APPENDED_TYPE),
   payload: z.strictObject({
     rawInput: z.json(),
     error: z.string().trim().min(1),

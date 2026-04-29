@@ -20,7 +20,7 @@ function rpcCallable(
 
 /** Preset event: Cloudflare MCP docs server, sandbox namespace `cloudflare_docs`. */
 export const MCP_TOOL_PROVIDER_PRESET_EVENT = {
-  type: "tool-provider-config-updated",
+  type: "events.iterate.com/codemode/tool-provider-config-updated",
   payload: {
     slug: "cloudflare_docs",
     executeCallable: rpcCallable("MCP_CLIENT", "iterate-mcp", "callTool"),
@@ -30,7 +30,7 @@ export const MCP_TOOL_PROVIDER_PRESET_EVENT = {
 
 /** Preset event: Iterate Events OpenAPI, sandbox namespace `iterate_events`. */
 export const OPENAPI_TOOL_PROVIDER_PRESET_EVENT = {
-  type: "tool-provider-config-updated",
+  type: "events.iterate.com/codemode/tool-provider-config-updated",
   payload: {
     slug: "iterate_events",
     executeCallable: rpcCallable("OPENAPI_TOOL_CLIENT", "iterate-events", "callTool"),
@@ -40,7 +40,7 @@ export const OPENAPI_TOOL_PROVIDER_PRESET_EVENT = {
 
 /** Preset event: Slack SDK-backed API, sandbox namespace `slack`. */
 export const SLACK_TOOL_PROVIDER_PRESET_EVENT = {
-  type: "tool-provider-config-updated",
+  type: "events.iterate.com/codemode/tool-provider-config-updated",
   payload: {
     slug: "slack",
     executeCallable: rpcCallable("SLACK_API", "slack", "callTool"),

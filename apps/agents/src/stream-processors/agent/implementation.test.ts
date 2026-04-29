@@ -12,13 +12,12 @@ describe("createAgentProcessor", () => {
   it("renders webchat messages into derived agent input rows", async () => {
     const appended: StreamEventInput[] = [];
     const processor = createAgentProcessor({
-      runtime: {
-        inflight: () => null,
-        scheduleLlmRequest: () => ({ requestId: "req_1" }),
-        extendDebounce: () => undefined,
-        cancelLlmRequest: () => undefined,
-        armCancelDeadline: () => undefined,
+      ai: {
+        run: async () => {
+          throw new Error("This test should not run an LLM request.");
+        },
       },
+      waitUntil: () => undefined,
     });
 
     await processor.implementation.afterAppend?.({

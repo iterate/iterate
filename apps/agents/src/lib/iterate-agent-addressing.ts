@@ -1,6 +1,9 @@
 import type { StreamPath } from "@iterate-com/events-contract";
 
-export { buildAgentWebSocketCallbackUrl } from "~/lib/events-urls.ts";
+export {
+  buildAgentStreamProcessorRunnerWebSocketCallbackUrl,
+  buildAgentWebSocketCallbackUrl,
+} from "~/lib/events-urls.ts";
 
 /**
  * Agents SDK kebab-case URL segment for the `IterateAgent` Durable Object
@@ -16,6 +19,15 @@ export const ITERATE_AGENT_CLASS = "iterate-agent";
  * subscription in place instead of stacking up dead ones.
  */
 export const ITERATE_AGENT_SUBSCRIPTION_SLUG = "iterate-agent";
+
+/**
+ * Slug for the experimental plain Durable Object processor runner subscription.
+ *
+ * Keep this separate from {@link ITERATE_AGENT_SUBSCRIPTION_SLUG} while both
+ * runners exist, otherwise Events would replace one websocket subscription with
+ * the other.
+ */
+export const AGENT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG = "agent-stream-processor-runner";
 
 /**
  * Agents SDK kebab-case URL segment for the `ChildStreamAutoSubscriber` class.

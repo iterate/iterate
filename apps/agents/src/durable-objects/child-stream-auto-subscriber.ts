@@ -2,6 +2,7 @@ import {
   ChildStreamCreatedEvent,
   EventInput,
   ProjectSlug,
+  STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
   StreamPath,
   StreamSocketFrame,
 } from "@iterate-com/events-contract";
@@ -11,15 +12,14 @@ import { z } from "zod";
 import { AppConfig } from "~/app.ts";
 import { createEventsOrpcClient } from "~/lib/events-orpc-client.ts";
 import {
-  buildAgentWebSocketCallbackUrl,
-  ITERATE_AGENT_CLASS,
-  ITERATE_AGENT_SUBSCRIPTION_SLUG,
+  AGENT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
+  buildAgentStreamProcessorRunnerWebSocketCallbackUrl,
   streamPathToAgentInstance,
 } from "~/lib/iterate-agent-addressing.ts";
 import type { CloudflareEnv } from "~/lib/worker-env.d.ts";
 
 /** Query parameter on this DO's callback URL that carries the public origin
- *  which subsequent `iterate-agent` subscriptions should point back at.
+ *  which subsequent stream processor runner subscriptions should point back at.
  *
  *  Set by `installProcessor` when it configures the subscription on
  *  `appConfig.streamPathPrefix`. Read here on every message via
@@ -40,8 +40,8 @@ export const AUTO_SUBSCRIBER_INSTANCE = "default";
 const DEFAULTS_KV_PREFIX = "defaults:";
 
 /**
- * KV key prefix for "we've seen this child stream and wired up an
- * iterate-agent for it". Stored as `{ discoveredAt: number }` under
+ * KV key prefix for "we've seen this child stream and wired up a stream
+ * processor runner for it". Stored as `{ discoveredAt: number }` under
  * `agent:<streamPath>`. The `listAgents` RPC reads these entries to populate
  * the sidebar. Idempotent on re-discovery: subsequent `child-stream-created`
  * events for the same path just refresh `discoveredAt` (cheap, and means a
@@ -69,7 +69,7 @@ type WireDiscoveredAgent = { streamPath: string; discoveredAt: number };
  * Watches for `child-stream-created` events on the parent stream
  * (`AppConfig.streamPathPrefix`, by default `/agents`) and, for every newly
  * appearing descendant stream:
- *   1. Auto-subscribes the `IterateAgent` processor (via WebSocket) so the
+ *   1. Auto-subscribes the stream processor runner (via WebSocket) so the
  *      durable object connects and starts processing events.
  *   2. Appends the configured "default events" (model, system prompt,
  *      arbitrary advanced events…) for the longest matching base path stored
@@ -80,9 +80,9 @@ type WireDiscoveredAgent = { streamPath: string; discoveredAt: number };
  * so subscribing this single processor to a single ancestor (the prefix) is
  * enough to see every descendant.
  *
- * The callback URL it posts when subscribing `iterate-agent` to the child
- * stream is derived from the `publicBaseUrl` that `installProcessor` encoded
- * into this DO's own WebSocket upgrade URL as a query parameter. Using
+ * The callback URL it posts when subscribing the runner to the child stream is
+ * derived from the `publicBaseUrl` that `installProcessor` encoded into this
+ * DO's own WebSocket upgrade URL as a query parameter. Using
  * `connection.uri` as the source of truth keeps the control plane
  * (`installProcessor`) coupled to the DO only through the subscription
  * `callbackUrl` that Events stores — nothing else.
@@ -132,11 +132,11 @@ export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
     const appConfig = parseAppConfig(AppConfig, this.env.APP_CONFIG);
     const childPath = childCreated.data.payload.childPath;
     const projectSlug = ProjectSlug.parse(appConfig.eventsProjectSlug);
-    const agentInstance = streamPathToAgentInstance(childPath);
-    const callbackUrl = buildAgentWebSocketCallbackUrl({
+    const runnerInstance = streamPathToAgentInstance(childPath);
+    const callbackUrl = buildAgentStreamProcessorRunnerWebSocketCallbackUrl({
       publicOrigin: publicBaseUrl,
-      agentClass: ITERATE_AGENT_CLASS,
-      agentInstance,
+      runnerInstance,
+      streamPath: childPath,
     });
 
     const eventsClient = createEventsOrpcClient({
@@ -144,26 +144,26 @@ export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
       projectSlug,
     });
 
-    // Subscribe iterate-agent FIRST so the DO is connected by the time the
+    // Subscribe the runner FIRST so the DO is connected by the time the
     // default events land — every default we append below is a normal
-    // websocket frame the agent will see live, no replay round-trip required.
+    // websocket frame the processor will see live, no replay round-trip required.
     try {
       await eventsClient.append({
         path: childPath,
         event: {
-          type: "https://events.iterate.com/events/stream/subscription/configured",
+          type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
           payload: {
-            slug: ITERATE_AGENT_SUBSCRIPTION_SLUG,
+            slug: AGENT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
             type: "websocket",
             callbackUrl,
           },
         },
       });
-      log("onMessage.subscribed", { childPath, agentInstance, callbackUrl });
+      log("onMessage.subscribed", { childPath, runnerInstance, callbackUrl });
     } catch (error) {
       this.#logError("onMessage.subscribeFailed", {
         childPath,
-        agentInstance,
+        runnerInstance,
         callbackUrl,
         error: stringifyError(error),
       });

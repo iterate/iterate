@@ -22,9 +22,8 @@ describe("createCodemodeProcessor", () => {
   it("appends the exactly-once primer and extracts assistant codemode blocks", async () => {
     const appended: StreamEventInput[] = [];
     const processor = createCodemodeProcessor({
-      loader: undefined as unknown as WorkerLoader,
-      outboundFetch: undefined as unknown as Fetcher,
-      env: undefined as unknown as Env,
+      codeExecutor: async () => ({ result: { ok: true } }),
+      env: {},
     });
 
     await processor.implementation.afterAppend?.({
@@ -65,9 +64,8 @@ describe("createCodemodeProcessor", () => {
   it("uses embedded agent dependency state before appending idle status", async () => {
     const appended: StreamEventInput[] = [];
     const processor = createCodemodeProcessor({
-      loader: undefined as unknown as WorkerLoader,
-      outboundFetch: undefined as unknown as Fetcher,
-      env: undefined as unknown as Env,
+      codeExecutor: async () => ({ result: { ok: true } }),
+      env: {},
     });
 
     await processor.implementation.afterAppend?.({
@@ -99,6 +97,59 @@ describe("createCodemodeProcessor", () => {
         reason: "codemode-result-added",
       },
     });
+  });
+
+  it("executes codemode blocks through the injected executor dependency", async () => {
+    const appended: StreamEventInput[] = [];
+    const executorCalls: { script: string; toolProviderCount: number }[] = [];
+    const processor = createCodemodeProcessor({
+      codeExecutor: async ({ script, toolProviders, webchat }) => {
+        executorCalls.push({ script, toolProviderCount: toolProviders.length });
+        await webchat.callTool({
+          name: "sendMessage",
+          rawArgs: { message: "hello from fake executor" },
+        });
+        return { result: { ok: true }, logs: ["ran in fake executor"] };
+      },
+      env: {},
+    });
+
+    await processor.implementation.afterAppend?.({
+      event: committedEvent({
+        type: "events.iterate.com/codemode/block-added",
+        payload: {
+          script: "async () => ({ ok: true })",
+        },
+        offset: 12,
+      }),
+      previousState: registeredState({ hasAppendedCodemodePrompt: true }),
+      state: registeredState({ hasAppendedCodemodePrompt: true }),
+      streamApi: testStreamApi({ appended, storedEvents: [] }),
+      signal: new AbortController().signal,
+    });
+
+    expect(executorCalls).toEqual([
+      {
+        script: "async () => ({ ok: true })",
+        toolProviderCount: 0,
+      },
+    ]);
+    expect(appended).toEqual([
+      {
+        type: "events.iterate.com/agent/webchat-response-added",
+        idempotencyKey: "stream-processor:codemode:derived:webchat-send-message:1:/agents/test:12",
+        payload: { message: "hello from fake executor" },
+      },
+      {
+        type: "events.iterate.com/codemode/result-added",
+        idempotencyKey: "stream-processor:codemode:derived:block-to-result:/agents/test:12",
+        payload: {
+          result: { ok: true },
+          durationMs: expect.any(Number),
+          logs: ["ran in fake executor"],
+        },
+      },
+    ]);
   });
 
   it("extracts codemode scripts from fenced assistant responses", () => {

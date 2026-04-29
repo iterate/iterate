@@ -9,6 +9,7 @@ Utilities here are experimental helpers for composing Cloudflare Durable Object 
 - `mixins/with-d1-object-catalog.ts` best-effort mirrors initialized objects into D1 tables owned by the mixin, with optional secondary indexes derived from init params.
 - `mixins/with-multiplexed-alarms.ts` stores many logical one-shot alarms behind Cloudflare's single Durable Object alarm slot.
 - `mixins/with-scheduler.ts` adds key-based one-shot, delayed, interval, cron, and RRULE scheduling on top of multiplexed alarms.
+- `mixins/with-stream-processor-runner.ts` stores stream processor reduced state/progress per processor slug and exposes protected catch-up / live-event / subscription runner methods. It assumes one stream path per Durable Object instance.
 - `mixins/with-outerbase.ts` and `mixins/with-kv-inspector.ts` are debug inspector mixins. Do not attach them to production-routed objects without an explicit auth/dev gating decision.
 - Avoid adding more mixins or composition helpers without speccing the API shape first.
 
@@ -124,6 +125,80 @@ class Room extends Base<Env> {} // ok: Env has DO_CATALOG
 class Broken extends Base<{ OTHER_BINDING: Fetcher }> {}
 // TypeScript error: missing DO_CATALOG
 ```
+
+## Stream Processor Runner
+
+Use `withStreamProcessorRunner(...)` when a Durable Object should persist
+reduced state for stream processors and apply the shared processor lifecycle
+helpers. The mixin is configured with one processor and scoped stream API, so
+the subclass can stay focused on Durable Object entrypoints such as `fetch()` or
+`webSocketMessage()`.
+
+For the current one-stream-per-runner model, put the stream path in lifecycle
+init params. That makes the Durable Object instance itself the stream-bound
+processor runner; pushed/subscribed event methods then receive events, not
+another loose `streamPath` argument:
+
+```ts
+type AgentProcessorInit = {
+  name: string;
+  streamPath: string;
+};
+
+function createProcessor(args: { ctx: DurableObjectState; env: Env }) {
+  return createAgentProcessor({
+    ai: args.env.AI,
+    waitUntil: (promise) => args.ctx.waitUntil(promise),
+  });
+}
+
+const AgentProcessorBase = withStreamProcessorRunner<
+  AgentProcessorInit,
+  Env,
+  typeof AgentProcessorContract
+>({
+  processor: createProcessor,
+  streamApi(args) {
+    return args.ctx.exports.StreamApi({
+      props: { streamPath: args.initParams.streamPath },
+    }) as ProcessorStreamApi<typeof AgentProcessorContract>;
+  },
+})(withLifecycleHooks<AgentProcessorInit>()(withDurableObjectCore(DurableObject)));
+
+class AgentProcessorDO extends AgentProcessorBase<Env> {
+  async catchUp() {
+    return await this.catchUpStreamProcessor();
+  }
+
+  async consumeEvent(args: { event: StreamEvent }) {
+    return await this.consumeStreamProcessorEvent(args);
+  }
+}
+```
+
+Callers should initialize the object once with the immutable stream binding:
+
+```ts
+const runner = await getOrInitializeDoStub({
+  namespace: env.AGENT_PROCESSORS,
+  name: streamPathToRunnerName(streamPath),
+  initParams: { streamPath },
+});
+
+await runner.consumeEvent({ event });
+```
+
+The mixin stores its processor state at
+`stream-processor:<processor-slug>:stored-state`. That is deliberately simple:
+it is for the current "one processor instance is bound to one stream path"
+model. If you need Agent + Codemode in one Durable Object, compose them into one
+processor first and pass that composed processor to the mixin.
+
+The configured `processor(...)` callback runs once per Durable Object wake and
+the result is cached. That is deliberate: processor implementations may keep
+runtime-only closure state such as timers, abort controllers, HTTP connections,
+or request sequence counters. Reduced state is still stored through the mixin;
+the cached processor object only preserves warm-instance state.
 
 The protected `initParams` type uses an abstract class instead of an interface
 because TypeScript interfaces cannot add protected members to a class returned

@@ -7,18 +7,24 @@ import {
 } from "@iterate-com/shared/stream-processors";
 import { AgentProcessorContract, type AgentState } from "./contract.ts";
 import { CoreProcessorRegisteredEventType } from "../core/contract.ts";
-import { wellBehavedProcessorDefaults } from "../core/well-behaved-processor-defaults.ts";
+import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
 
-type AgentProcessorRuntime = {
-  inflight(): { requestId: string; status: "scheduled" | "running" } | null;
-  scheduleLlmRequest(args: { debounceMs: number }): { requestId: string };
-  extendDebounce(args: { requestId: string; debounceMs: number }): void;
-  cancelLlmRequest(args: { requestId: string }): void;
-  armCancelDeadline(args: { requestId: string; withinMs: number }): void;
-};
-
+/**
+ * Backend-only dependencies for the Agent processor implementation.
+ *
+ * Keep this narrow. The processor owns scheduling, cancellation, request IDs,
+ * and timers; callers only provide external capabilities that the processor
+ * cannot create itself.
+ */
 export type AgentProcessorDeps = {
-  runtime: AgentProcessorRuntime;
+  ai: {
+    run(model: string, body: unknown, runOpts?: unknown): Promise<unknown>;
+  };
+  /**
+   * Lets timer-fired LLM work remain associated with the surrounding runner.
+   * Durable Object runners usually pass `ctx.waitUntil`.
+   */
+  waitUntil(promise: Promise<unknown>): void;
 };
 
 type AgentStreamApi = ProcessorStreamApi<typeof AgentProcessorContract>;
@@ -26,6 +32,11 @@ type AgentInputPayload = z.infer<
   (typeof AgentProcessorContract.events)["events.iterate.com/agent/input-added"]["payloadSchema"]
 >;
 type ConcreteTriggerLlm = Exclude<AgentInputPayload["triggerLlmRequest"], { behaviour: "auto" }>;
+type JsonValue = z.infer<ReturnType<typeof z.json>>;
+
+type InflightLlmRequest =
+  | { kind: "scheduled"; requestId: string; timer: ReturnType<typeof setTimeout> }
+  | { kind: "running"; requestId: string; controller: AbortController };
 
 const OpenAiChatCompletionResponse = z.object({
   choices: z.array(z.object({ message: z.object({ content: z.string() }) })).min(1),
@@ -43,8 +54,8 @@ const WorkersAiChatResponse = z.object({
  * Build the model request from reduced state only.
  *
  * Frontend code can compute this same state by importing the contract reducer;
- * backend hosts can call this helper when their runtime fires a scheduled LLM
- * request.
+ * backend processor implementations call this helper when their local debounce
+ * timer fires.
  */
 export function buildLlmChatRequest(state: AgentState) {
   return {
@@ -79,11 +90,28 @@ export function extractLlmAssistantText(raw: unknown): string {
 }
 
 export function createAgentProcessor(deps: AgentProcessorDeps) {
+  /**
+   * Warm-instance state owned by this processor instance.
+   *
+   * This is deliberately not reduced state: timers, abort controllers, and the
+   * current in-flight request cannot be serialized or replayed. Losing this on
+   * Durable Object eviction is acceptable because durable facts still live in
+   * the stream as `llm-request-*` events.
+   */
+  let inflightLlmRequest: InflightLlmRequest | null = null;
+  let llmRequestSeq = 0;
+  let latestAgentState: AgentState | null = null;
+
   return implementProcessor(AgentProcessorContract, {
     firstAttachAfterAppend: { mode: "lookback", milliseconds: 250 },
 
+    onStart({ state }) {
+      latestAgentState = state;
+    },
+
     async afterAppend({ event, state, streamApi }) {
-      await wellBehavedProcessorDefaults.afterAppend({
+      latestAgentState = state;
+      await standardProcessorBehavior.afterAppend({
         contract: AgentProcessorContract,
         state,
         streamApi,
@@ -141,8 +169,7 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
           return;
         }
         case "events.iterate.com/agent/input-added":
-          await handleAgentInput({
-            runtime: deps.runtime,
+          await handleAgentInputAddedForLlmRequest({
             streamApi,
             state,
             trigger: resolveTrigger(event.payload),
@@ -204,8 +231,7 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
               },
             }),
           });
-          await maybeContinueAfterTerminalEvent({
-            runtime: deps.runtime,
+          await handleTerminalLlmRequestEvent({
             streamApi,
             state,
             reason: "llm-request-completed",
@@ -231,8 +257,7 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
               },
             }),
           });
-          await maybeContinueAfterTerminalEvent({
-            runtime: deps.runtime,
+          await handleTerminalLlmRequestEvent({
             streamApi,
             state,
             reason: "llm-request-failed",
@@ -257,8 +282,7 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
               },
             }),
           });
-          await maybeContinueAfterTerminalEvent({
-            runtime: deps.runtime,
+          await handleTerminalLlmRequestEvent({
             streamApi,
             state,
             reason: "llm-request-cancelled",
@@ -270,6 +294,271 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
       }
     },
   });
+
+  /**
+   * Applies the Agent processor's LLM scheduling policy for a model-visible
+   * input row. The durable facts are appended as `llm-request-*` events; the
+   * timers and abort controllers below are warm-instance state only.
+   */
+  async function handleAgentInputAddedForLlmRequest(args: {
+    streamApi: AgentStreamApi;
+    state: AgentState;
+    trigger: ConcreteTriggerLlm;
+  }) {
+    const { streamApi, state, trigger } = args;
+    if (trigger.behaviour === "dont-trigger-request") return;
+
+    if (inflightLlmRequest === null) {
+      await appendLlmRequestScheduled({ streamApi, state });
+      return;
+    }
+
+    if (inflightLlmRequest.kind === "scheduled") {
+      if (trigger.behaviour === "interrupt-current-request") {
+        clearTimeout(inflightLlmRequest.timer);
+        armLlmRequestDebounceTimer({
+          requestId: inflightLlmRequest.requestId,
+          debounceMs: state.llmConfig.debounceMs,
+          streamApi,
+        });
+        return;
+      }
+
+      await emitQueued({ streamApi });
+      if (trigger.behaviour === "trigger-request-within-time-period") {
+        armLlmRequestCancelDeadline({
+          requestId: inflightLlmRequest.requestId,
+          withinMs: trigger.withinMs,
+          streamApi,
+        });
+      }
+      return;
+    }
+
+    if (trigger.behaviour === "after-current-request") {
+      await emitQueued({ streamApi });
+      return;
+    }
+
+    if (trigger.behaviour === "trigger-request-within-time-period") {
+      await emitQueued({ streamApi });
+      armLlmRequestCancelDeadline({
+        requestId: inflightLlmRequest.requestId,
+        withinMs: trigger.withinMs,
+        streamApi,
+      });
+      return;
+    }
+
+    const interruptedRequestId = inflightLlmRequest.requestId;
+    cancelInflightLlmRequest({ requestId: interruptedRequestId });
+    await streamApi.append({
+      event: {
+        type: "events.iterate.com/agent/llm-request-cancelled",
+        payload: {
+          requestId: interruptedRequestId,
+          reason: "interrupted-by-user-input",
+        },
+      },
+    });
+    await appendLlmRequestScheduled({ streamApi, state });
+  }
+
+  /**
+   * Reacts to completed/failed/cancelled request events after the reducer has
+   * already cleared or retained `currentRequest`. Queued triggers become a new
+   * scheduled request; otherwise the processor publishes an idle status.
+   */
+  async function handleTerminalLlmRequestEvent(args: {
+    streamApi: AgentStreamApi;
+    state: AgentState;
+    reason: "llm-request-completed" | "llm-request-failed" | "llm-request-cancelled";
+    requestId: string;
+  }) {
+    if (args.state.pendingTriggerCount > 0 && inflightLlmRequest === null) {
+      await appendLlmRequestScheduled({
+        streamApi: args.streamApi,
+        state: args.state,
+      });
+      return;
+    }
+
+    if (args.state.pendingTriggerCount === 0 && inflightLlmRequest === null) {
+      await emitAgentStatus({
+        streamApi: args.streamApi,
+        status: "idle",
+        reason: args.reason,
+        requestId: args.requestId,
+      });
+    }
+  }
+
+  async function appendLlmRequestScheduled(args: { streamApi: AgentStreamApi; state: AgentState }) {
+    const debounceMs = args.state.llmConfig.debounceMs;
+    llmRequestSeq += 1;
+    const requestId = `req_${Date.now()}_${llmRequestSeq}`;
+    armLlmRequestDebounceTimer({ requestId, debounceMs, streamApi: args.streamApi });
+    await args.streamApi.append({
+      event: {
+        type: "events.iterate.com/agent/llm-request-scheduled",
+        payload: {
+          requestId,
+          debounceMs,
+          model: args.state.llmConfig.model,
+        },
+      },
+    });
+  }
+
+  function cancelInflightLlmRequest(args: { requestId: string }) {
+    if (inflightLlmRequest?.requestId !== args.requestId) {
+      return;
+    }
+
+    if (inflightLlmRequest.kind === "scheduled") {
+      clearTimeout(inflightLlmRequest.timer);
+    } else {
+      inflightLlmRequest.controller.abort();
+    }
+    inflightLlmRequest = null;
+  }
+
+  /**
+   * Arms a best-effort deadline for "finish within N ms" triggers. The request
+   * ID guard makes the timer harmless if the request finishes or is superseded
+   * before the deadline fires.
+   */
+  function armLlmRequestCancelDeadline(args: {
+    requestId: string;
+    withinMs: number;
+    streamApi: AgentStreamApi;
+  }) {
+    setTimeout(() => {
+      if (
+        inflightLlmRequest?.requestId !== args.requestId ||
+        inflightLlmRequest.kind !== "running"
+      ) {
+        return;
+      }
+
+      inflightLlmRequest.controller.abort();
+      inflightLlmRequest = null;
+      deps.waitUntil(
+        args.streamApi.append({
+          event: {
+            type: "events.iterate.com/agent/llm-request-cancelled",
+            payload: { requestId: args.requestId, reason: "deadline-exceeded" },
+          },
+        }),
+      );
+    }, args.withinMs);
+  }
+
+  function armLlmRequestDebounceTimer(args: {
+    requestId: string;
+    debounceMs: number;
+    streamApi: AgentStreamApi;
+  }) {
+    const timer = setTimeout(() => {
+      deps.waitUntil(
+        runScheduledLlmRequest({
+          requestId: args.requestId,
+          streamApi: args.streamApi,
+        }),
+      );
+    }, args.debounceMs);
+    inflightLlmRequest = { kind: "scheduled", requestId: args.requestId, timer };
+  }
+
+  async function runScheduledLlmRequest(args: { requestId: string; streamApi: AgentStreamApi }) {
+    if (
+      inflightLlmRequest?.requestId !== args.requestId ||
+      inflightLlmRequest.kind !== "scheduled"
+    ) {
+      return;
+    }
+
+    const stateAtStart = latestAgentState;
+    if (stateAtStart == null) {
+      return;
+    }
+
+    const controller = new AbortController();
+    inflightLlmRequest = { kind: "running", requestId: args.requestId, controller };
+    const body = buildLlmChatRequest(stateAtStart);
+    const startedAt = Date.now();
+
+    await args.streamApi.append({
+      event: {
+        type: "events.iterate.com/agent/llm-request-started",
+        payload: {
+          requestId: args.requestId,
+          model: stateAtStart.llmConfig.model,
+          body,
+          runOpts: stateAtStart.llmConfig.runOpts,
+        },
+      },
+    });
+
+    let raw: unknown;
+    try {
+      raw = await deps.ai.run(stateAtStart.llmConfig.model, body, stateAtStart.llmConfig.runOpts);
+    } catch (error) {
+      if (inflightLlmRequest?.requestId === args.requestId) {
+        inflightLlmRequest = null;
+      }
+      await appendLlmRequestFailed({
+        streamApi: args.streamApi,
+        requestId: args.requestId,
+        startedAt,
+        error,
+      });
+      return;
+    }
+
+    if (controller.signal.aborted || inflightLlmRequest?.requestId !== args.requestId) {
+      return;
+    }
+
+    let assistantText: string;
+    try {
+      assistantText = extractLlmAssistantText(raw);
+    } catch (error) {
+      if (inflightLlmRequest?.requestId === args.requestId) {
+        inflightLlmRequest = null;
+      }
+      await appendLlmRequestFailed({
+        streamApi: args.streamApi,
+        requestId: args.requestId,
+        rawResponse: toJsonValue(raw),
+        startedAt,
+        error,
+      });
+      return;
+    }
+
+    inflightLlmRequest = null;
+    await args.streamApi.append({
+      event: {
+        type: "events.iterate.com/agent/llm-request-completed",
+        payload: {
+          requestId: args.requestId,
+          rawResponse: toJsonValue(raw),
+          durationMs: Date.now() - startedAt,
+        },
+      },
+    });
+    await args.streamApi.append({
+      event: {
+        type: "events.iterate.com/agent/input-added",
+        payload: {
+          role: "assistant",
+          content: assistantText,
+          triggerLlmRequest: { behaviour: "dont-trigger-request" },
+        },
+      },
+    });
+  }
 }
 
 function resolveTrigger(payload: AgentInputPayload): ConcreteTriggerLlm {
@@ -281,116 +570,31 @@ function resolveTrigger(payload: AgentInputPayload): ConcreteTriggerLlm {
     : { behaviour: "interrupt-current-request" };
 }
 
-async function handleAgentInput(args: {
-  runtime: AgentProcessorRuntime;
-  streamApi: AgentStreamApi;
-  state: AgentState;
-  trigger: ConcreteTriggerLlm;
-}) {
-  const { runtime, streamApi, state, trigger } = args;
-  if (trigger.behaviour === "dont-trigger-request") return;
-
-  const inflight = runtime.inflight();
-  if (inflight === null) {
-    await emitScheduled({ runtime, streamApi, state });
-    return;
-  }
-
-  if (inflight.status === "scheduled") {
-    if (trigger.behaviour === "interrupt-current-request") {
-      runtime.extendDebounce({
-        requestId: inflight.requestId,
-        debounceMs: state.llmConfig.debounceMs,
-      });
-      return;
-    }
-    await emitQueued({ streamApi });
-    if (trigger.behaviour === "trigger-request-within-time-period") {
-      runtime.armCancelDeadline({
-        requestId: inflight.requestId,
-        withinMs: trigger.withinMs,
-      });
-    }
-    return;
-  }
-
-  if (trigger.behaviour === "after-current-request") {
-    await emitQueued({ streamApi });
-    return;
-  }
-
-  if (trigger.behaviour === "trigger-request-within-time-period") {
-    await emitQueued({ streamApi });
-    runtime.armCancelDeadline({
-      requestId: inflight.requestId,
-      withinMs: trigger.withinMs,
-    });
-    return;
-  }
-
-  runtime.cancelLlmRequest({ requestId: inflight.requestId });
-  await streamApi.append({
-    event: {
-      type: "events.iterate.com/agent/llm-request-cancelled",
-      payload: {
-        requestId: inflight.requestId,
-        reason: "interrupted-by-user-input",
-      },
-    },
-  });
-  await emitScheduled({ runtime, streamApi, state });
-}
-
-async function maybeContinueAfterTerminalEvent(args: {
-  runtime: AgentProcessorRuntime;
-  streamApi: AgentStreamApi;
-  state: AgentState;
-  reason: "llm-request-completed" | "llm-request-failed" | "llm-request-cancelled";
-  requestId: string;
-}) {
-  if (args.state.pendingTriggerCount > 0 && args.runtime.inflight() === null) {
-    await emitScheduled({
-      runtime: args.runtime,
-      streamApi: args.streamApi,
-      state: args.state,
-    });
-    return;
-  }
-
-  if (args.state.pendingTriggerCount === 0 && args.runtime.inflight() === null) {
-    await emitAgentStatus({
-      streamApi: args.streamApi,
-      status: "idle",
-      reason: args.reason,
-      requestId: args.requestId,
-    });
-  }
-}
-
-async function emitScheduled(args: {
-  runtime: AgentProcessorRuntime;
-  streamApi: AgentStreamApi;
-  state: AgentState;
-}) {
-  const debounceMs = args.state.llmConfig.debounceMs;
-  const { requestId } = args.runtime.scheduleLlmRequest({ debounceMs });
-  await args.streamApi.append({
-    event: {
-      type: "events.iterate.com/agent/llm-request-scheduled",
-      payload: {
-        requestId,
-        debounceMs,
-        model: args.state.llmConfig.model,
-      },
-    },
-  });
-}
-
 async function emitQueued(args: { streamApi: AgentStreamApi }) {
   await args.streamApi.append({
     event: {
       type: "events.iterate.com/agent/llm-request-queued",
       payload: {},
+    },
+  });
+}
+
+async function appendLlmRequestFailed(args: {
+  streamApi: AgentStreamApi;
+  requestId: string;
+  rawResponse?: JsonValue;
+  startedAt: number;
+  error: unknown;
+}) {
+  await args.streamApi.append({
+    event: {
+      type: "events.iterate.com/agent/llm-request-failed",
+      payload: {
+        requestId: args.requestId,
+        durationMs: Date.now() - args.startedAt,
+        error: { message: stringifyError(args.error) },
+        ...(args.rawResponse === undefined ? {} : { rawResponse: args.rawResponse }),
+      },
     },
   });
 }
@@ -531,4 +735,20 @@ function yamlScalar(value: string | number): string {
 
 function yamlBlockScalar(key: string, value: string): string[] {
   return [`  ${key}: |-`, ...value.split("\n").map((line) => `    ${line}`)];
+}
+
+function stringifyError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+function toJsonValue(value: unknown): JsonValue {
+  return z.json().parse(value);
 }

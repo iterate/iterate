@@ -52,7 +52,7 @@ type _clientStreamArgsExposeTypedCursors = Assert<
 const builtInEvent: AppendArgs = {
   path: examplePath,
   event: {
-    type: "https://events.iterate.com/events/stream/metadata-updated",
+    type: "events.iterate.com/core/metadata-updated",
     payload: {
       metadata: {
         source: "type-test",
@@ -122,7 +122,7 @@ assert.equal(
 const parsedBuiltIn = AppendInput.parse({
   path: examplePath,
   event: {
-    type: "https://events.iterate.com/events/stream/metadata-updated",
+    type: "events.iterate.com/core/metadata-updated",
     payload: {
       metadata: {
         owner: "jonas",
@@ -134,7 +134,7 @@ const parsedBuiltIn = AppendInput.parse({
 assert.deepEqual(parsedBuiltIn, {
   path: examplePath,
   event: {
-    type: "https://events.iterate.com/events/stream/metadata-updated",
+    type: "events.iterate.com/core/metadata-updated",
     payload: {
       metadata: {
         owner: "jonas",
@@ -146,7 +146,7 @@ assert.deepEqual(parsedBuiltIn, {
 const parsedBuiltInWithGenericPayload = AppendInput.parse({
   path: examplePath,
   event: {
-    type: "https://events.iterate.com/events/stream/metadata-updated",
+    type: "events.iterate.com/core/metadata-updated",
     payload: {
       owner: "jonas",
     },
@@ -181,18 +181,15 @@ const malformedBuiltIn = InvalidEventAppendedEventInput.parse(
   AppendInput.parse({
     path: examplePath,
     event: {
-      type: "https://events.iterate.com/events/stream/metadata-updated",
+      type: "events.iterate.com/core/metadata-updated",
       payload: "not-an-object",
     },
   }).event,
 );
 
-assert.equal(
-  malformedBuiltIn.type,
-  "https://events.iterate.com/events/stream/invalid-event-appended",
-);
+assert.equal(malformedBuiltIn.type, "events.iterate.com/core/invalid-event-appended");
 assert.deepEqual(malformedBuiltIn.payload.rawInput, {
-  type: "https://events.iterate.com/events/stream/metadata-updated",
+  type: "events.iterate.com/core/metadata-updated",
   payload: "not-an-object",
 });
 const malformedBuiltInError = malformedBuiltIn.payload.error;
@@ -208,7 +205,7 @@ assert.doesNotMatch(
 
 assert.equal(
   StreamMetadataUpdatedEventInput.safeParse({
-    type: "https://events.iterate.com/events/stream/metadata-updated",
+    type: "events.iterate.com/core/metadata-updated",
     payload: {
       metadata: {},
     },
@@ -224,10 +221,7 @@ const malformedArray = InvalidEventAppendedEventInput.parse(
   }).event,
 );
 
-assert.equal(
-  malformedArray.type,
-  "https://events.iterate.com/events/stream/invalid-event-appended",
-);
+assert.equal(malformedArray.type, "events.iterate.com/core/invalid-event-appended");
 assert.deepEqual(malformedArray.payload.rawInput, ["weird", { posted: true }]);
 const malformedArrayError = malformedArray.payload.error;
 if (typeof malformedArrayError !== "string") {
@@ -246,10 +240,7 @@ const malformedBareObject = InvalidEventAppendedEventInput.parse(
   }).event,
 );
 
-assert.equal(
-  malformedBareObject.type,
-  "https://events.iterate.com/events/stream/invalid-event-appended",
-);
+assert.equal(malformedBareObject.type, "events.iterate.com/core/invalid-event-appended");
 assert.deepEqual(malformedBareObject.payload.rawInput, {
   command: "/iterate",
   team_id: "T123",
@@ -279,7 +270,7 @@ assert.equal(genericEventWithNestedNonJsonValues.payload.nested[2].deeper[1], un
 const streamInitializedEvent = AppendInput.parse({
   path: examplePath,
   event: {
-    type: "https://events.iterate.com/events/stream/initialized",
+    type: "events.iterate.com/core/stream-first-initialized",
     payload: { projectSlug: "public", path: examplePath },
   },
 });
@@ -292,7 +283,7 @@ assert.deepEqual(streamInitializedEvent.event.payload, {
 const subscriptionConfiguredEvent = AppendInput.parse({
   path: examplePath,
   event: {
-    type: "https://events.iterate.com/events/stream/subscription/configured",
+    type: "events.iterate.com/core/subscription-configured",
     payload: {
       slug: "audit",
       type: "webhook",
@@ -314,7 +305,7 @@ assert.deepEqual(subscriptionConfiguredEvent.event.payload, {
 const streamDurableObjectWokeUpEvent = AppendInput.parse({
   path: examplePath,
   event: {
-    type: "https://events.iterate.com/events/stream/durable-object-woke-up",
+    type: "events.iterate.com/core/durable-object-woke-up",
     payload: {},
   },
 });
@@ -324,7 +315,7 @@ assert.deepEqual(streamDurableObjectWokeUpEvent.event.payload, {});
 const durableObjectWokeUpEvent = AppendInput.parse({
   path: examplePath,
   event: {
-    type: "https://events.iterate.com/events/stream/durable-object-woke-up",
+    type: "events.iterate.com/core/durable-object-woke-up",
     payload: {},
   },
 });

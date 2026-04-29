@@ -3,10 +3,10 @@ import {
   GenericEvent as GenericEventBase,
   GenericEventInput as GenericEventInputBase,
 } from "./event-base-types.ts";
+import { STREAM_HTML_RENDERER_CONFIGURED_TYPE } from "./core-event-types.ts";
 import { JsonataExpression } from "./jsonata-expression.ts";
 
-export const HTML_RENDERER_CONFIGURED_TYPE =
-  "https://events.iterate.com/events/stream/html-renderer-configured";
+export const HTML_RENDERER_CONFIGURED_TYPE = STREAM_HTML_RENDERER_CONFIGURED_TYPE;
 
 export const HtmlRendererConfiguredEventInput = GenericEventInputBase.extend({
   type: z.literal(HTML_RENDERER_CONFIGURED_TYPE),

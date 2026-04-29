@@ -13,9 +13,9 @@ import {
   CodemodeProcessorContract,
   type CodemodeState,
 } from "./contract.ts";
+import type { CodemodeCodeExecutor } from "./code-executor.ts";
 import { CoreProcessorRegisteredEventType } from "../core/contract.ts";
-import { wellBehavedProcessorDefaults } from "../core/well-behaved-processor-defaults.ts";
-import type { CloudflareEnv } from "~/lib/worker-env.d.ts";
+import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
 
 const ProviderTypesResponse = z.object({
   types: z.string(),
@@ -41,9 +41,8 @@ type CodemodeStreamApi = ProcessorStreamApi<typeof CodemodeProcessorContract>;
 type CodemodeConsumedEvent = ConsumedEvent<typeof CodemodeProcessorContract>;
 
 export type CodemodeProcessorDeps = {
-  loader: WorkerLoader;
-  outboundFetch: Fetcher;
-  env: CloudflareEnv;
+  codeExecutor: CodemodeCodeExecutor;
+  env: Record<string, unknown>;
 };
 
 type ToolProviderTypesResult =
@@ -55,13 +54,17 @@ export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
   return implementProcessor(CodemodeProcessorContract, {
     firstAttachAfterAppend: { mode: "lookback", milliseconds: 250 },
 
-    async afterAppend({ event, state, streamApi }) {
-      await wellBehavedProcessorDefaults.afterAppend({
+    async afterAppend({ event, state, streamApi, signal }) {
+      // Standard processor behavior is just another side effect Codemode wants
+      // to run before its event-specific side effects.
+      await standardProcessorBehavior.afterAppend({
         contract: CodemodeProcessorContract,
         state,
         streamApi,
       });
 
+      // Codemode owns this one-time primer. The reducer observes the eventual
+      // appended event by idempotency key and records that the primer landed.
       await appendCodemodePrimerIfNeeded({ state, streamApi });
 
       switch (event.type) {
@@ -82,6 +85,7 @@ export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
           await executeCodemodeBlock({
             deps,
             event,
+            signal,
             state,
             streamApi,
           });
@@ -177,46 +181,35 @@ async function appendCodemodePrimerIfNeeded(args: {
 async function executeCodemodeBlock(args: {
   deps: CodemodeProcessorDeps;
   event: Extract<CodemodeConsumedEvent, { type: "events.iterate.com/codemode/block-added" }>;
+  signal: AbortSignal;
   state: CodemodeState;
   streamApi: CodemodeStreamApi;
 }) {
-  const [{ DynamicWorkerExecutor, resolveProvider }, { dynamicTools }] = await Promise.all([
-    import("@cloudflare/codemode"),
-    import("@cloudflare/codemode/dynamic"),
-  ]);
-  const executor = new DynamicWorkerExecutor({
-    loader: args.deps.loader,
-    globalOutbound: args.deps.outboundFetch,
-  });
-
-  const dynamicResolved = await Promise.all(
+  const toolProviders = await Promise.all(
     Object.entries(args.state.toolProviders).map(async ([slug, config]) => {
       const typesResult = await safeGetTypes({
         getTypesCallable: config.getTypesCallable,
         slug,
         env: args.deps.env,
       });
-      return resolveProvider(
-        dynamicTools({
-          name: slug,
-          types: typesResult.kind === "ok" ? typesResult.types : undefined,
-          callTool: (name, toolArgs) =>
-            dispatchCallable({
-              callable: config.executeCallable,
-              payload: { name, args: toolArgs },
-              ctx: { env: args.deps.env as unknown as Record<string, unknown> },
-            }),
-        }),
-      );
+      return {
+        slug,
+        executeCallable: config.executeCallable,
+        ...(typesResult.kind === "ok" ? { types: typesResult.types } : {}),
+      };
     }),
   );
 
   let webchatMessageSeq = 0;
-  const webchatProvider = await resolveProvider(
-    dynamicTools({
-      name: "webchat",
+  const t0 = Date.now();
+  const result = await args.deps.codeExecutor({
+    script: args.event.payload.script,
+    env: args.deps.env,
+    signal: args.signal,
+    toolProviders,
+    webchat: {
       types: WEBCHAT_PROVIDER_TYPES,
-      callTool: async (name, rawArgs) => {
+      async callTool({ name, rawArgs }) {
         if (name !== "sendMessage") {
           throw new Error(`Unknown webchat tool: ${name}`);
         }
@@ -235,14 +228,8 @@ async function executeCodemodeBlock(args: {
         });
         return { ok: true };
       },
-    }),
-  );
-
-  const t0 = Date.now();
-  const result = await executor.execute(args.event.payload.script, [
-    webchatProvider,
-    ...dynamicResolved,
-  ]);
+    },
+  });
 
   await args.streamApi.append({
     event: {
@@ -301,16 +288,16 @@ async function appendCodemodeResultAsAgentInput(args: {
  * Example of "peeking" another processor without coupling to its instance.
  *
  * Codemode does not get to read an in-memory AgentProcessor object. Its
- * contract reducer keeps `state.processorDeps.agent` current by running the
- * frontend-safe agent reducer, and the hook makes a local decision from that
- * embedded dependency snapshot.
+ * contract reducer keeps `state.agentProcessor` current by running the
+ * frontend-safe Agent reducer, and the hook makes a local decision from that
+ * embedded state.
  */
 async function appendIdleStatusIfAgentHasNoQueuedTriggers(args: {
   event: Extract<CodemodeConsumedEvent, { type: "events.iterate.com/codemode/result-added" }>;
   state: CodemodeState;
   streamApi: CodemodeStreamApi;
 }) {
-  if (args.state.processorDeps.agent.pendingTriggerCount > 0) return;
+  if (args.state.agentProcessor.pendingTriggerCount > 0) return;
 
   await args.streamApi.append({
     event: {
@@ -331,7 +318,7 @@ async function appendIdleStatusIfAgentHasNoQueuedTriggers(args: {
 async function safeGetTypes(args: {
   getTypesCallable: Callable | null | undefined;
   slug: string;
-  env: CloudflareEnv;
+  env: Record<string, unknown>;
 }): Promise<ToolProviderTypesResult> {
   if (args.getTypesCallable == null) return { kind: "missing" };
 
@@ -340,7 +327,7 @@ async function safeGetTypes(args: {
       await dispatchCallable({
         callable: args.getTypesCallable,
         payload: { namespace: args.slug },
-        ctx: { env: args.env as unknown as Record<string, unknown> },
+        ctx: { env: args.env },
       }),
     );
     return { kind: "ok", types };

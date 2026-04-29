@@ -4,13 +4,10 @@ import type { Event, EventInput, StreamPath, StreamState } from "@iterate-com/ev
 import {
   AlertTriangleIcon,
   BotIcon,
-  BookOpenIcon,
   BracesIcon,
   CableIcon,
   CheckCircle2Icon,
   ChevronDownIcon,
-  ChevronLeftIcon,
-  ChevronRightIcon,
   CircleIcon,
   Code2Icon,
   CopyIcon,
@@ -43,15 +40,9 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@iterate-com/ui/components/collapsible";
+import { EventsStreamEventInspectorSheet } from "@iterate-com/ui/components/events/event-inspector-sheet";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Spinner } from "@iterate-com/ui/components/spinner";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@iterate-com/ui/components/sheet";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
@@ -63,7 +54,7 @@ import { StreamToolCard } from "~/components/stream-tool-card.tsx";
 import { getEventTypePageByType } from "~/lib/event-type-pages.ts";
 import { orderEventKeysForYamlDisplay } from "~/lib/order-event-keys-for-yaml-display.ts";
 import { formatElapsedTime } from "~/lib/stream-feed-time.ts";
-import { getAdjacentEventOffset, getEventFeedItems } from "~/lib/stream-feed-projection.ts";
+import { getEventFeedItems } from "~/lib/stream-feed-projection.ts";
 import { getRelativeStreamPath } from "~/lib/stream-path-relative.ts";
 import { summarizeStreamFeed } from "~/lib/stream-feed-summary.ts";
 import { streamPathToSplat } from "~/lib/stream-links.ts";
@@ -263,10 +254,11 @@ export function StreamEventFeed({
         </Conversation>
       )}
 
-      <EventInspectorSheet
-        events={eventFeedItems}
+      <EventsStreamEventInspectorSheet
+        events={eventFeedItems.map((item) => item.raw)}
         openEventOffset={openEventOffset}
         onOpenEventOffsetChange={onOpenEventOffsetChange}
+        getEventTypeHref={(eventType) => getEventTypePageByType(eventType)?.href}
       />
     </div>
   );
@@ -1121,177 +1113,6 @@ function RawEventLineButton({
         </TooltipContent>
       </Tooltip>
     </div>
-  );
-}
-
-function EventInspectorSheet({
-  events,
-  openEventOffset,
-  onOpenEventOffsetChange,
-}: {
-  events: readonly EventFeedItem[];
-  openEventOffset?: number;
-  onOpenEventOffsetChange?: (offset?: number) => void;
-}) {
-  const selectedEvent = useMemo(
-    () => events.find((event) => event.offset === openEventOffset),
-    [events, openEventOffset],
-  );
-  const previousOffset = useMemo(
-    () => getAdjacentEventOffset(events, openEventOffset, "previous"),
-    [events, openEventOffset],
-  );
-  const nextOffset = useMemo(
-    () => getAdjacentEventOffset(events, openEventOffset, "next"),
-    [events, openEventOffset],
-  );
-  const previousEvent = useMemo(
-    () => events.find((event) => event.offset === previousOffset),
-    [events, previousOffset],
-  );
-  const nextEvent = useMemo(
-    () => events.find((event) => event.offset === nextOffset),
-    [events, nextOffset],
-  );
-  const docsHref = selectedEvent
-    ? getEventTypePageByType(selectedEvent.eventType)?.href
-    : undefined;
-  const timeSincePreviousEvent =
-    selectedEvent && previousEvent
-      ? formatElapsedTime(selectedEvent.timestamp - previousEvent.timestamp)
-      : undefined;
-  const timeToNextEvent =
-    selectedEvent && nextEvent
-      ? formatElapsedTime(nextEvent.timestamp - selectedEvent.timestamp)
-      : undefined;
-
-  useEffect(() => {
-    if (selectedEvent == null) {
-      return;
-    }
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
-        return;
-      }
-
-      if (event.key === "ArrowLeft" && previousOffset) {
-        event.preventDefault();
-        onOpenEventOffsetChange?.(previousOffset);
-      }
-
-      if (event.key === "ArrowRight" && nextOffset) {
-        event.preventDefault();
-        onOpenEventOffsetChange?.(nextOffset);
-      }
-    };
-
-    // Route search state owns the currently selected event, so keyboard
-    // navigation updates `?event=<offset>` instead of mutating local state.
-    // TanStack Router docs:
-    // https://github.com/tanstack/router/blob/main/docs/router/guide/search-params.md
-    // https://github.com/tanstack/router/blob/main/docs/router/how-to/navigate-with-search-params.md
-    //
-    window.addEventListener("keydown", handleKeyDown, { capture: true });
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown, { capture: true });
-    };
-  }, [nextOffset, onOpenEventOffsetChange, previousOffset, selectedEvent]);
-
-  return (
-    <Sheet
-      open={selectedEvent != null}
-      onOpenChange={(open) => {
-        if (!open) {
-          onOpenEventOffsetChange?.(undefined);
-        }
-      }}
-    >
-      <SheetContent className="w-full gap-0 data-[side=right]:sm:w-[min(96vw,120rem)] data-[side=right]:sm:max-w-[min(96vw,120rem)]">
-        <SheetHeader className="space-y-2 border-b px-4 py-3 pr-14">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0 flex-1 space-y-1">
-              <SheetTitle className="truncate font-mono text-sm">
-                {docsHref ? (
-                  <a
-                    href={docsHref}
-                    className="inline-flex items-center gap-2 hover:text-primary hover:underline"
-                  >
-                    <span className="truncate">{selectedEvent?.eventType ?? "Event"}</span>
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <span className="inline-flex items-center text-muted-foreground hover:text-primary" />
-                        }
-                      >
-                        <BookOpenIcon className="size-3.5" />
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>RTFM</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </a>
-                ) : (
-                  (selectedEvent?.eventType ?? "Event")
-                )}
-              </SheetTitle>
-              <SheetDescription>{selectedEvent?.createdAt ?? "No event selected"}</SheetDescription>
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={!previousOffset}
-                onClick={() => onOpenEventOffsetChange?.(previousOffset)}
-              >
-                <ChevronLeftIcon />
-                Prev
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={!nextOffset}
-                onClick={() => onOpenEventOffsetChange?.(nextOffset)}
-              >
-                Next
-                <ChevronRightIcon />
-              </Button>
-            </div>
-          </div>
-          {selectedEvent ? (
-            <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center">
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <span>Event {selectedEvent.offset}</span>
-                <span className="text-muted-foreground/70">Use left and right arrow keys.</span>
-              </div>
-              <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-2.5 py-1">
-                <span className="text-muted-foreground/70">Since previous</span>
-                <span className="font-mono text-foreground">
-                  {timeSincePreviousEvent ?? "No previous event"}
-                </span>
-              </div>
-              <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-2.5 py-1">
-                <span className="text-muted-foreground/70">Until next</span>
-                <span className="font-mono text-foreground">
-                  {timeToNextEvent ?? "No next event"}
-                </span>
-              </div>
-            </div>
-          ) : null}
-        </SheetHeader>
-
-        <div className="min-h-0 flex-1 overflow-hidden px-4 py-3">
-          <div className="pb-2 text-xs text-muted-foreground">Raw event payload</div>
-          <SerializedObjectCodeBlock
-            data={selectedEvent == null ? null : orderEventKeysForYamlDisplay(selectedEvent.raw)}
-            className="h-full min-h-[68vh]"
-            initialFormat="yaml"
-            showToggle
-            showCopyButton
-          />
-        </div>
-      </SheetContent>
-    </Sheet>
   );
 }
 

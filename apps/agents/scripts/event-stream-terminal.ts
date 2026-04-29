@@ -1,9 +1,9 @@
 import { Event, ProjectSlug, StreamPath, type EventInput } from "@iterate-com/events-contract";
 import type {
-  EventsStreamFeedItem,
-  EventsStreamRawEventFeedItem,
+  EventsStreamBuiltInElement,
+  EventsStreamRawEventElement,
 } from "@iterate-com/ui/components/events/feed-items";
-import { rawEventsStreamViewProcessor } from "@iterate-com/ui/components/events/feed-processors";
+import { rawEventsStreamViewReducer } from "@iterate-com/ui/components/events/feed-processors";
 import {
   BoxRenderable,
   InputRenderable,
@@ -11,14 +11,57 @@ import {
   ScrollBoxRenderable,
   StyledText,
   TextRenderable,
+  bold,
   bg,
   createCliRenderer,
   fg,
+  CliRenderEvents,
   KeyEvent,
   parseKeypress,
 } from "@opentui/core";
+import { ORPCError } from "@orpc/server";
 import { stringify as stringifyYaml } from "yaml";
 import { createEventsOrpcClient } from "../src/lib/events-orpc-client.ts";
+import {
+  acceptedSlashInput,
+  findSlashCommand as findDiscoveredSlashCommand,
+  formatSlashCommandLabelSegments,
+  parseSlashAutocompleteQuery,
+  suggestSlashCommands,
+} from "../src/stream-tui/command-discovery.ts";
+import {
+  MissingCommandArgumentsError,
+  parseSlashCommandInput,
+  parseSlashInvocation,
+} from "../src/stream-tui/command-invocation.ts";
+import {
+  commandEntries,
+  runCommand as runTuiCommand,
+  type AppContext,
+  type CommandEntry,
+  type StreamApi,
+  type StreamSummary,
+} from "../src/stream-tui/command-router.ts";
+import {
+  formatEventSummary,
+  formatTime,
+  getElapsedByOffset,
+  orderEventKeysForYamlDisplay,
+  rightAlign,
+  wrapLine,
+} from "../src/stream-tui/feed-formatting.ts";
+import {
+  focusStreamTuiComposer,
+  focusStreamTuiFeed,
+  focusStreamTuiHeader,
+  initialStreamTuiNavigationState,
+  setStreamTuiView,
+  type StreamTuiView,
+} from "../src/stream-tui/navigation-state.ts";
+import {
+  formatRelativeStreamPath as formatRelativeStreamPathForCurrent,
+  resolveStreamPath as resolveStreamPathForCurrent,
+} from "../src/stream-tui/stream-paths.ts";
 
 if (!process.stdin.isTTY || !process.stdout.isTTY) {
   throw new Error("stream-tui requires an interactive terminal.");
@@ -30,85 +73,37 @@ const client = createEventsOrpcClient({
   projectSlug: args.projectSlug,
 });
 
-type StreamView = "feed" | "state" | "commands";
-type StreamCommand = {
-  id: string;
-  title: string;
-  description: string;
-  slash: string;
-  run: (args: string) => void | Promise<void>;
-};
-
-let state = rawEventsStreamViewProcessor.createInitialState();
+type ReducedStreamState = ReturnType<typeof rawEventsStreamViewReducer.createInitialState>;
+let state: ReducedStreamState = rawEventsStreamViewReducer.createInitialState();
 let status = "connecting";
 let appendStatus = "";
 let eventCount = 0;
 let pulseOn = true;
 let selectedOffset: number | undefined;
-let feedNavigation = false;
-let activeView: StreamView = "feed";
+let selectedSlashCommandPath: string | undefined;
+let selectedSlashQuery: string | undefined;
+let navigationState = initialStreamTuiNavigationState;
+let renderedView: StreamTuiView = "feed";
+let currentStreamPath = args.streamPath;
+let activeStreamController: AbortController | undefined;
+let streamSummaries: StreamSummary[] = [];
+let pulseInterval: ReturnType<typeof setInterval> | undefined;
 const collapsedOffsets = new Set<number>();
 
-// One command record powers slash commands now and can back a palette later.
-// OpenCode treats slash entries as TUI commands too:
-// https://opencode.ai/docs/tui/#slash-commands
-const streamCommands: StreamCommand[] = [
-  {
-    id: "view.feed",
-    title: "Show feed",
-    description: "Return to the event feed",
-    slash: "feed",
-    run() {
-      activeView = "feed";
-    },
-  },
-  {
-    id: "view.state",
-    title: "Show reduced state",
-    description: "Inspect the current reducer state",
-    slash: "state",
-    run() {
-      activeView = "state";
-    },
-  },
-  {
-    id: "view.commands",
-    title: "Show commands",
-    description: "List available slash commands",
-    slash: "help",
-    run() {
-      activeView = "commands";
-    },
-  },
-  {
-    id: "feed.collapse-all",
-    title: "Collapse all feed items",
-    description: "Collapse every raw event card",
-    slash: "collapse",
-    run() {
-      for (const item of getRawFeedItems()) {
-        collapsedOffsets.add(item.offset);
-      }
-      activeView = "feed";
-    },
-  },
-  {
-    id: "feed.expand-all",
-    title: "Expand all feed items",
-    description: "Expand every raw event card",
-    slash: "expand",
-    run() {
-      collapsedOffsets.clear();
-      activeView = "feed";
-    },
-  },
-];
+function cleanupRuntime() {
+  activeStreamController?.abort();
+  if (pulseInterval != null) {
+    clearInterval(pulseInterval);
+    pulseInterval = undefined;
+  }
+}
 
 const renderer = await createCliRenderer({
   exitOnCtrlC: true,
   targetFps: 30,
   screenMode: "alternate-screen",
   consoleMode: "disabled",
+  onDestroy: cleanupRuntime,
 });
 
 const root = new BoxRenderable(renderer, {
@@ -119,9 +114,14 @@ const root = new BoxRenderable(renderer, {
 });
 const topBar = new BoxRenderable(renderer, {
   width: "100%",
-  height: 3,
+  height: 5,
   flexDirection: "row",
   gap: 1,
+  border: true,
+  borderStyle: "single",
+  borderColor: "#3f3f46",
+  focusedBorderColor: "#38bdf8",
+  focusable: true,
   paddingTop: 1,
   paddingLeft: 1,
   paddingRight: 1,
@@ -129,7 +129,7 @@ const topBar = new BoxRenderable(renderer, {
 });
 const connectedIndicator = new TextRenderable(renderer, { content: "●", width: 2, fg: "#facc15" });
 const streamPathText = new TextRenderable(renderer, {
-  content: args.streamPath,
+  content: currentStreamPath,
   flexGrow: 1,
   fg: "#e5e7eb",
 });
@@ -137,6 +137,10 @@ const statsText = new TextRenderable(renderer, { content: "", fg: "#9ca3af" });
 const feed = new ScrollBoxRenderable(renderer, {
   width: "100%",
   flexGrow: 1,
+  border: true,
+  borderStyle: "single",
+  borderColor: "#27272a",
+  focusedBorderColor: "#22c55e",
   // OpenTUI's native sticky scroll pauses when the user scrolls away, then
   // resumes when they return to the edge:
   // https://opentui.com/docs/components/scrollbox#sticky-scroll
@@ -147,7 +151,7 @@ const feed = new ScrollBoxRenderable(renderer, {
 });
 const input = new InputRenderable(renderer, {
   width: "100%",
-  placeholder: "Type a message and press Enter",
+  placeholder: "Type a message or / for commands",
   backgroundColor: "transparent",
   focusedBackgroundColor: "transparent",
   textColor: "#e5e7eb",
@@ -155,10 +159,23 @@ const input = new InputRenderable(renderer, {
   placeholderColor: "#6b7280",
   cursorColor: "#22c55e",
 });
+const slashAutocomplete = new BoxRenderable(renderer, {
+  width: "100%",
+  height: 0,
+  flexDirection: "column",
+  paddingLeft: 1,
+  paddingRight: 1,
+  backgroundColor: "#111827",
+});
 const inputBox = new BoxRenderable(renderer, {
   width: "100%",
-  height: 3,
+  height: 5,
   flexDirection: "column",
+  border: true,
+  borderStyle: "single",
+  borderColor: "#27272a",
+  focusedBorderColor: "#22c55e",
+  focusable: true,
   padding: 1,
   backgroundColor: "#0b0f14",
 });
@@ -174,6 +191,7 @@ topBar.add(connectedIndicator);
 root.add(topBar);
 root.add(feed);
 inputBox.add(input);
+root.add(slashAutocomplete);
 root.add(inputSeparator);
 root.add(inputBox);
 renderer.root.add(root);
@@ -186,8 +204,30 @@ renderer.prependInputHandler((sequence) => {
   if (parsedKey == null) return false;
 
   const key = new KeyEvent(parsedKey);
-  if (!feedNavigation) {
+  if (handleSlashAutocompleteKey(key)) {
+    return true;
+  }
+
+  if (key.name === "tab") {
+    focusAdjacentRegion(key.shift ? -1 : 1);
+    return true;
+  }
+
+  if (navigationState.focus !== "feed") {
     if (key.name !== "escape") return false;
+
+    if (navigationState.focus === "header") {
+      focusInput();
+      return true;
+    }
+
+    if (navigationState.view !== "feed") {
+      navigationState = setStreamTuiView(navigationState, "feed");
+      updateHeader();
+      updateFeed("keep");
+      focusInput();
+      return true;
+    }
 
     focusFeed();
     return true;
@@ -198,8 +238,13 @@ renderer.prependInputHandler((sequence) => {
     return true;
   }
 
-  if (key.name === "tab") {
-    selectAdjacentFeedItem(key.shift ? -1 : 1);
+  if (key.name === "down") {
+    selectAdjacentFeedItem(1);
+    return true;
+  }
+
+  if (key.name === "up") {
+    selectAdjacentFeedItem(-1);
     return true;
   }
 
@@ -208,35 +253,54 @@ renderer.prependInputHandler((sequence) => {
     return true;
   }
 
-  if (feed.handleKeyPress(key)) {
-    return true;
-  }
-
-  return true;
+  return false;
 });
-input.on(InputRenderableEvents.ENTER, () => void appendInput());
-setInterval(() => {
+input.on(InputRenderableEvents.INPUT, () => updateSlashAutocomplete());
+pulseInterval = setInterval(() => {
   pulseOn = !pulseOn;
   updateHeader();
 }, 700).unref();
+input.on(InputRenderableEvents.ENTER, () => void appendInput());
+renderer.on(CliRenderEvents.RESIZE, () => {
+  updateHeader();
+  updateFeed("keep");
+});
 
 updateHeader();
 updateFeed();
-void streamEvents();
+startStream(currentStreamPath);
 
-async function streamEvents() {
+function startStream(streamPath: StreamPath) {
+  activeStreamController?.abort();
+  activeStreamController = new AbortController();
+  state = rawEventsStreamViewReducer.createInitialState();
+  eventCount = 0;
+  selectedOffset = undefined;
+  collapsedOffsets.clear();
+  status = "connecting";
+  renderedView = navigationState.view === "feed" ? "state" : renderedView;
+  updateHeader();
+  updateFeed();
+  void streamEvents({ streamPath, signal: activeStreamController.signal });
+}
+
+async function streamEvents(args: { streamPath: StreamPath; signal: AbortSignal }) {
   try {
-    const stream = await client.stream({
-      path: args.streamPath,
-      afterOffset: "start",
-    });
+    const stream = await client.stream(
+      {
+        path: args.streamPath,
+        afterOffset: "start",
+      },
+      { signal: args.signal },
+    );
     status = "streaming";
     updateHeader();
 
     for await (const value of stream) {
+      if (args.signal.aborted || args.streamPath !== currentStreamPath) return;
       const event = Event.parse(value);
       eventCount += 1;
-      state = rawEventsStreamViewProcessor.reduce({ event, state }) ?? state;
+      state = rawEventsStreamViewReducer.reduce({ event, state }) ?? state;
       collapsedOffsets.delete(event.offset);
       updateHeader();
       updateFeed("keep");
@@ -244,6 +308,7 @@ async function streamEvents() {
 
     status = "stream closed";
   } catch (error) {
+    if (args.signal.aborted || args.streamPath !== currentStreamPath) return;
     status = `stream error: ${formatError(error)}`;
   }
 
@@ -255,6 +320,7 @@ async function appendInput() {
   if (content.length === 0) return;
 
   input.value = "";
+  updateSlashAutocomplete();
   if (await runSlashCommand(content)) return;
 
   appendStatus = "sending";
@@ -265,8 +331,8 @@ async function appendInput() {
     payload: { content },
   };
   try {
-    const result = await client.append({ path: args.streamPath, event });
-    appendStatus = `sent offset ${result.event.offset}`;
+    const appendedEvent = await streamApi.append({ event });
+    appendStatus = `sent offset ${appendedEvent.offset}`;
   } catch (error) {
     appendStatus = `append error: ${formatError(error)}`;
   }
@@ -276,29 +342,255 @@ async function appendInput() {
 async function runSlashCommand(content: string) {
   if (!content.startsWith("/")) return false;
 
-  const [slash = "", ...args] = content.slice(1).trim().split(/\s+/);
-  const command = streamCommands.find((candidate) => candidate.slash === slash);
+  const invocation = parseSlashInvocation(content);
+  if (invocation == null) return false;
+
+  const command = findDiscoveredSlashCommand({ commands: commandEntries, slash: invocation.slash });
   if (command == null) {
-    appendStatus = `unknown command /${slash}`;
+    appendStatus = `unknown command /${invocation.slash}`;
     updateHeader();
     return true;
   }
 
-  await command.run(args.join(" "));
-  appendStatus = `/${command.slash}`;
+  try {
+    await runCommand({
+      command,
+      inputValue: parseSlashCommandInput({
+        commandTitle: command.title,
+        slashName: command.slash.name,
+        input: command.input,
+        rawArgs: invocation.rawArgs,
+      }),
+    });
+  } catch (error) {
+    if (error instanceof MissingCommandArgumentsError) {
+      appContext.prefillInput(`/${error.slashName} `);
+    }
+    appContext.toast.error(formatError(error));
+  }
+
+  appendStatus ||= `/${invocation.slash}`;
   updateHeader();
   updateFeed("keep");
   return true;
 }
 
+const streamApi: StreamApi = {
+  append: async (input) => {
+    const result = await client.append({
+      path: resolveStreamPath(input.streamPath),
+      event: input.event,
+    });
+    return result.event;
+  },
+  getState: async (input = {}) => {
+    return client.getState({ path: resolveStreamPath(input.streamPath) });
+  },
+  listChildren: async (input = {}) => {
+    const children = await client.listChildren({ path: resolveStreamPath(input.streamPath) });
+    return children.map((child) => ({
+      path: StreamPath.parse(child.path),
+      createdAt: child.createdAt,
+    }));
+  },
+  reset: async (input) => {
+    return client.destroy({
+      params: { path: resolveStreamPath(input.streamPath) },
+      query: { destroyChildren: input.destroyChildren },
+    });
+  },
+  resolvePath: resolveStreamPath,
+};
+
+const appContext: AppContext = {
+  get streamPath() {
+    return currentStreamPath;
+  },
+  get reducedState() {
+    return state;
+  },
+  streamApi,
+  setActiveView(view) {
+    navigationState = setStreamTuiView(navigationState, view);
+  },
+  setStreamSummaries(streams) {
+    streamSummaries = streams;
+  },
+  navigateToStream(streamPath) {
+    currentStreamPath = streamPath;
+    navigationState = setStreamTuiView(navigationState, "feed");
+    appendStatus = `opened ${streamPath}`;
+    startStream(streamPath);
+  },
+  restartStream() {
+    startStream(currentStreamPath);
+  },
+  prefillInput(value) {
+    input.value = value;
+    focusInput();
+    updateSlashAutocomplete();
+  },
+  collapseVisibleFeedItems() {
+    for (const item of getRawFeedItems()) {
+      collapsedOffsets.add(item.props.offset);
+    }
+  },
+  expandVisibleFeedItems() {
+    collapsedOffsets.clear();
+  },
+  toast: {
+    info(message) {
+      appendStatus = message;
+    },
+    success(message) {
+      appendStatus = message;
+    },
+    error(message) {
+      appendStatus = `error: ${message}`;
+    },
+  },
+};
+
+async function runCommand(args: { command: CommandEntry; inputValue: unknown }) {
+  appendStatus = "";
+  await runTuiCommand({
+    appContext,
+    command: args.command,
+    inputValue: args.inputValue,
+  });
+}
+
+function getSlashCommandEntries() {
+  return suggestSlashCommands({ commands: commandEntries, input: input.value, limit: 8 });
+}
+
+function updateSlashAutocomplete() {
+  const commands = getSlashCommandEntries();
+
+  if (commands.length === 0) {
+    selectedSlashCommandPath = undefined;
+    selectedSlashQuery = undefined;
+    slashAutocomplete.height = 0;
+    clearBoxChildren(slashAutocomplete);
+    return;
+  }
+
+  const query = parseSlashAutocompleteQuery(input.value);
+  if (
+    query !== selectedSlashQuery ||
+    !commands.some((command) => command.path === selectedSlashCommandPath)
+  ) {
+    selectedSlashCommandPath = commands[0].path;
+    selectedSlashQuery = query;
+  }
+
+  slashAutocomplete.height = Math.min(commands.length, 8);
+  clearBoxChildren(slashAutocomplete);
+
+  for (const command of commands) {
+    const isSelected = command.path === selectedSlashCommandPath;
+    slashAutocomplete.add(
+      new TextRenderable(renderer, {
+        id: `events-slash-command-${command.path}`,
+        content: new StyledText(renderSlashCommandLabelChunks({ command, isSelected })),
+        width: "100%",
+        height: 1,
+        fg: "#cbd5e1",
+      }),
+    );
+  }
+}
+
+function renderSlashCommandLabelChunks(args: { command: CommandEntry; isSelected: boolean }) {
+  return formatSlashCommandLabelSegments({ command: args.command, input: input.value }).map(
+    (segment) => {
+      const chunk = args.isSelected ? selectedSummaryText(segment.text) : summaryText(segment.text);
+      return segment.matched ? bold(chunk) : chunk;
+    },
+  );
+}
+
+function clearBoxChildren(box: BoxRenderable) {
+  for (const child of box.getChildren()) {
+    child.destroyRecursively();
+  }
+}
+
+function handleSlashAutocompleteKey(key: KeyEvent) {
+  const commands = getSlashCommandEntries();
+  if (commands.length === 0) return false;
+
+  if (key.name === "escape") {
+    selectedSlashCommandPath = undefined;
+    slashAutocomplete.height = 0;
+    clearBoxChildren(slashAutocomplete);
+    return true;
+  }
+
+  if (key.name === "tab" || key.name === "down") {
+    selectAdjacentSlashCommand(key.shift ? -1 : 1);
+    return true;
+  }
+
+  if (key.name === "up") {
+    selectAdjacentSlashCommand(-1);
+    return true;
+  }
+
+  if (key.name === "return") {
+    acceptSelectedSlashCommand();
+    return true;
+  }
+
+  return false;
+}
+
+function selectAdjacentSlashCommand(direction: -1 | 1) {
+  const commands = getSlashCommandEntries();
+  if (commands.length === 0) return;
+
+  const currentIndex = commands.findIndex((command) => command.path === selectedSlashCommandPath);
+  const nextIndex =
+    currentIndex === -1
+      ? direction === 1
+        ? 0
+        : commands.length - 1
+      : (currentIndex + direction + commands.length) % commands.length;
+
+  selectedSlashCommandPath = commands[nextIndex].path;
+  updateSlashAutocomplete();
+}
+
+function acceptSelectedSlashCommand() {
+  const command = getSlashCommandEntries().find((entry) => entry.path === selectedSlashCommandPath);
+  if (command == null) return;
+
+  input.value = acceptedSlashInput(command);
+  updateSlashAutocomplete();
+
+  if (!commandNeedsInput(command)) {
+    void appendInput();
+  }
+}
+
+function commandNeedsInput(command: CommandEntry) {
+  return command.input?.positional?.required === true;
+}
+
+function resolveStreamPath(streamPath?: string) {
+  return resolveStreamPathForCurrent({ currentStreamPath, streamPath });
+}
+
 function updateHeader() {
+  streamPathText.content = currentStreamPath;
   connectedIndicator.content = "●";
   connectedIndicator.fg = status === "streaming" ? (pulseOn ? "#22c55e" : "#16a34a") : "#facc15";
   statsText.content = [
     `${eventCount} event${eventCount === 1 ? "" : "s"}`,
-    `${state.feedItems.length} item${state.feedItems.length === 1 ? "" : "s"}`,
-    activeView === "feed" ? "" : activeView,
-    feedNavigation ? "feed focus" : "",
+    `${state.slots.feed.length} item${state.slots.feed.length === 1 ? "" : "s"}`,
+    navigationState.view === "feed" ? "" : navigationState.view,
+    navigationState.focus === "feed" ? "main focus" : "",
+    navigationState.focus === "header" ? "header focus" : "",
     status === "streaming" ? "" : status,
     appendStatus,
   ]
@@ -307,11 +599,18 @@ function updateHeader() {
 }
 
 function updateFeed(scroll: "selected" | "keep" = "keep") {
-  feed.stickyScroll = activeView === "feed";
-  feed.stickyStart = activeView === "feed" ? "bottom" : undefined;
+  const viewChanged = navigationState.view !== renderedView;
+  const shouldStickToBottom =
+    navigationState.view === "feed" &&
+    scroll === "keep" &&
+    (navigationState.focus !== "feed" || viewChanged || isFeedAtBottom());
+
+  feed.stickyScroll = navigationState.view === "feed";
+  feed.stickyStart = navigationState.view === "feed" ? "bottom" : undefined;
+  renderedView = navigationState.view;
 
   for (const child of feed.getChildren()) {
-    feed.remove(child.id);
+    child.destroyRecursively();
   }
 
   for (const child of renderFeedChildren()) {
@@ -319,89 +618,106 @@ function updateFeed(scroll: "selected" | "keep" = "keep") {
   }
 
   if (scroll === "selected") {
-    const selectedCardId = getRawEventCardId(selectedOffset);
-    setImmediate(() => feed.scrollChildIntoView(selectedCardId));
-  } else if (activeView !== "feed") {
+    setImmediate(() => feed.scrollChildIntoView(getRawEventCardId(selectedOffset)));
+  } else if (shouldStickToBottom) {
+    requestFeedBottomScroll();
+  } else if (navigationState.view !== "feed") {
     setImmediate(() => feed.scrollTo(0));
   }
 }
 
 function renderFeedChildren() {
-  if (activeView === "state") return renderStateViewChildren();
-  if (activeView === "commands") return renderCommandViewChildren();
+  if (navigationState.view === "state") return renderStateViewChildren();
+  if (navigationState.view === "streams") return renderStreamsViewChildren();
 
-  if (state.feedItems.length === 0) {
+  if (state.slots.feed.length === 0) {
     return [
       new TextRenderable(renderer, {
         id: "events-feed-waiting",
         content: "Waiting for events...",
         width: "100%",
+        height: 1,
         fg: "#d1d5db",
       }),
     ];
   }
 
-  const elapsedByOffset = getElapsedByOffset(state.feedItems);
-  return state.feedItems.flatMap((item) => {
-    const elapsedLabel = item.type === "raw-event" ? elapsedByOffset.get(item.offset) : undefined;
+  const elapsedByOffset = getElapsedByOffset(state.slots.feed);
+  return state.slots.feed.flatMap((item) => {
+    const elapsedLabel =
+      item.type === "raw-event" ? elapsedByOffset.get(item.props.offset) : undefined;
     return renderFeedItemChild(item, elapsedLabel);
   });
 }
 
 function renderStateViewChildren() {
+  const content = stringifyYaml({
+    streamPath: currentStreamPath,
+    status,
+    appendStatus,
+    eventCount,
+    navigationState,
+    selectedOffset,
+    collapsedOffsets: [...collapsedOffsets],
+    reducedState: state,
+  }).trimEnd();
+
   return [
     new TextRenderable(renderer, {
       id: "events-feed-state",
-      content: stringifyYaml({
-        streamPath: args.streamPath,
-        status,
-        appendStatus,
-        eventCount,
-        activeView,
-        feedNavigation,
-        selectedOffset,
-        collapsedOffsets: [...collapsedOffsets],
-        reducedState: state,
-      }).trimEnd(),
-      width: "100%",
-      fg: "#cbd5e1",
-    }),
-  ];
-}
-
-function renderCommandViewChildren() {
-  const content = streamCommands
-    .map((command) => `/${command.slash.padEnd(10)} ${command.title}\n  ${command.description}`)
-    .join("\n\n");
-
-  return [
-    new TextRenderable(renderer, {
-      id: "events-feed-commands",
       content,
       width: "100%",
+      height: countTextLines(content),
       fg: "#cbd5e1",
     }),
   ];
 }
 
-function renderFeedItemChild(item: EventsStreamFeedItem, elapsedLabel?: string) {
-  if (item.type !== "raw-event") return [];
+function renderStreamsViewChildren() {
+  const content =
+    streamSummaries.length === 0
+      ? "No child streams loaded. Type /stream.child <name> to create one, or /view.feed to return."
+      : streamSummaries
+          .map((stream) =>
+            [
+              stream.path,
+              formatTime(new Date(stream.createdAt).getTime()),
+              `/stream.open ${formatRelativeStreamPathForCurrent({ currentStreamPath, streamPath: stream.path })}`,
+            ].join(" · "),
+          )
+          .join("\n");
 
   return [
     new TextRenderable(renderer, {
-      id: getRawEventCardId(item.offset),
-      content: new StyledText(renderRawEventCard(item, elapsedLabel)),
+      id: "events-feed-streams",
+      content,
       width: "100%",
+      height: countTextLines(content),
+      fg: "#cbd5e1",
+    }),
+  ];
+}
+
+function renderFeedItemChild(item: EventsStreamBuiltInElement, elapsedLabel?: string) {
+  if (item.type !== "raw-event") return [];
+
+  const chunks = renderRawEventCard(item, elapsedLabel);
+  return [
+    new TextRenderable(renderer, {
+      id: getRawEventCardId(item.props.offset),
+      content: new StyledText(chunks),
+      width: "100%",
+      height: countChunkLines(chunks),
       fg: "#d1d5db",
     }),
   ];
 }
 
-function renderRawEventCard(item: EventsStreamRawEventFeedItem, elapsedLabel?: string) {
+function renderRawEventCard(item: EventsStreamRawEventElement, elapsedLabel?: string) {
   const width = Math.max(3, feed.width - 2);
-  const yaml = stringifyYaml(orderEventKeysForYamlDisplay(item.raw)).trimEnd();
-  const isSelected = feedNavigation && item.offset === selectedOffset;
-  const isCollapsed = collapsedOffsets.has(item.offset);
+  const yaml = stringifyYaml(orderEventKeysForYamlDisplay(item.props.raw)).trimEnd();
+  const isSelected = navigationState.focus === "feed" && item.props.offset === selectedOffset;
+  const isCollapsed = collapsedOffsets.has(item.props.offset);
   const summary = `${rightAlign(formatEventSummary(item, elapsedLabel), width)}\n`;
 
   if (isCollapsed) {
@@ -420,6 +736,17 @@ function renderRawEventCard(item: EventsStreamRawEventFeedItem, elapsedLabel?: s
   ];
 }
 
+function countChunkLines(chunks: readonly { text: string }[]) {
+  return countTextLines(chunks.map((chunk) => chunk.text).join(""));
+}
+
+function countTextLines(value: string) {
+  if (value.length === 0) return 1;
+
+  const lineBreaks = value.match(/\n/g)?.length ?? 0;
+  return value.endsWith("\n") ? Math.max(1, lineBreaks) : lineBreaks + 1;
+}
+
 function summaryText(value: string) {
   return fg("#71717a")(value);
 }
@@ -436,25 +763,11 @@ function rawText(value: string) {
   return bg("#0f172a")(fg("#cbd5e1")(value));
 }
 
-function getElapsedByOffset(feedItems: readonly EventsStreamFeedItem[]) {
-  const elapsedByOffset = new Map<number, string>();
-  const rawEvents = feedItems.filter((item) => item.type === "raw-event");
-
-  for (const [index, item] of rawEvents.entries()) {
-    const previousItem = rawEvents[index - 1];
-    if (previousItem == null) continue;
-
-    elapsedByOffset.set(item.offset, formatElapsedTime(item.timestamp - previousItem.timestamp));
-  }
-
-  return elapsedByOffset;
-}
-
 function selectAdjacentFeedItem(direction: -1 | 1) {
   const rawItems = getRawFeedItems();
   if (rawItems.length === 0) return;
 
-  const currentIndex = rawItems.findIndex((item) => item.offset === selectedOffset);
+  const currentIndex = rawItems.findIndex((item) => item.props.offset === selectedOffset);
   const nextIndex =
     currentIndex === -1
       ? direction === 1
@@ -462,28 +775,55 @@ function selectAdjacentFeedItem(direction: -1 | 1) {
         : rawItems.length - 1
       : (currentIndex + direction + rawItems.length) % rawItems.length;
 
-  selectedOffset = rawItems[nextIndex].offset;
+  selectedOffset = rawItems[nextIndex].props.offset;
   updateFeed("selected");
 }
 
 function focusFeed() {
   const rawItems = getRawFeedItems();
-  if (rawItems.length === 0) return;
 
-  feedNavigation = true;
-  selectedOffset ??= rawItems[rawItems.length - 1]?.offset;
-  input.placeholder = "Feed focus: Tab selects, Enter toggles, Esc returns";
-  input.blur();
+  navigationState = focusStreamTuiFeed(navigationState);
+  if (rawItems.length > 0) {
+    selectedOffset ??= rawItems[rawItems.length - 1]?.props.offset;
+  }
+  input.placeholder = "Main focus: Up/Down selects, Enter toggles, Esc returns";
+  feed.focus();
   updateHeader();
   updateFeed("selected");
 }
 
 function focusInput() {
-  feedNavigation = false;
-  input.placeholder = "Type a message and press Enter";
+  navigationState = focusStreamTuiComposer(navigationState);
+  input.placeholder = "Type a message or / for commands";
   input.focus();
   updateHeader();
   updateFeed("keep");
+}
+
+function focusHeader() {
+  navigationState = focusStreamTuiHeader(navigationState);
+  input.placeholder = "Header focus: Tab changes region, Esc returns";
+  topBar.focus();
+  updateHeader();
+  updateFeed("keep");
+}
+
+function focusAdjacentRegion(direction: -1 | 1) {
+  const regions = ["composer", "feed", "header"] as const;
+  const currentIndex = regions.indexOf(navigationState.focus);
+  const nextIndex = (currentIndex + direction + regions.length) % regions.length;
+
+  if (regions[nextIndex] === "composer") {
+    focusInput();
+    return;
+  }
+
+  if (regions[nextIndex] === "feed") {
+    focusFeed();
+    return;
+  }
+
+  focusHeader();
 }
 
 function toggleSelectedFeedItem() {
@@ -499,76 +839,25 @@ function toggleSelectedFeedItem() {
 }
 
 function getRawFeedItems() {
-  return state.feedItems.filter((item) => item.type === "raw-event");
+  return state.slots.feed.filter((item) => item.type === "raw-event");
+}
+
+function isFeedAtBottom() {
+  const maxScrollTop = Math.max(0, feed.scrollHeight - feed.viewport.height);
+  return feed.scrollTop >= maxScrollTop - 1;
+}
+
+function scrollFeedToBottom() {
+  feed.scrollTo(feed.scrollHeight);
+}
+
+function requestFeedBottomScroll() {
+  setImmediate(scrollFeedToBottom);
+  setTimeout(scrollFeedToBottom, 0).unref();
 }
 
 function getRawEventCardId(offset: number | undefined) {
   return `events-feed-raw-event-${offset ?? "none"}`;
-}
-
-function formatEventSummary(item: EventsStreamRawEventFeedItem, elapsedLabel?: string) {
-  return [item.offset, item.eventType, elapsedLabel, formatTime(item.timestamp)]
-    .filter(Boolean)
-    .join(" · ");
-}
-
-function orderEventKeysForYamlDisplay(event: Event): Record<string, unknown> {
-  const eventRecord = event as Record<string, unknown>;
-  const orderedEvent: Record<string, unknown> = {};
-
-  for (const key of ["type", "payload", "metadata", "idempotencyKey", "offset", "createdAt"]) {
-    if (key in eventRecord) {
-      orderedEvent[key] = eventRecord[key];
-    }
-  }
-
-  for (const [key, value] of Object.entries(eventRecord)) {
-    if (key === "streamPath" || key in orderedEvent) {
-      continue;
-    }
-
-    orderedEvent[key] = value;
-  }
-
-  return orderedEvent;
-}
-
-function wrapLine(value: string, width: number) {
-  if (value.length <= width) return [value];
-
-  const lines: string[] = [];
-  for (let index = 0; index < value.length; index += width) {
-    lines.push(value.slice(index, index + width));
-  }
-  return lines;
-}
-
-function rightAlign(value: string, width: number) {
-  const trimmed = value.length > width ? value.slice(value.length - width) : value;
-  return trimmed.padStart(width);
-}
-
-function formatTime(timestamp: number) {
-  return new Date(timestamp).toLocaleTimeString();
-}
-
-function formatElapsedTime(durationMs: number) {
-  const normalizedDurationMs = Math.max(0, Math.floor(durationMs));
-
-  if (normalizedDurationMs < 1_000) {
-    return `+${normalizedDurationMs}ms`;
-  }
-
-  if (normalizedDurationMs < 60_000) {
-    const seconds = Math.floor(normalizedDurationMs / 100) / 10;
-    return `+${seconds.toFixed(1).replace(/\.0$/, "")}s`;
-  }
-
-  const totalSeconds = Math.floor(normalizedDurationMs / 1_000);
-  const totalMinutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-
-  return `+${totalMinutes}m${seconds}s`;
 }
 
 function parseArgs(argv: string[]) {
@@ -602,5 +891,9 @@ function readFlag(argv: string[], flagName: string) {
 }
 
 function formatError(error: unknown) {
+  if (error instanceof ORPCError) {
+    return `${error.code}: ${error.message}`;
+  }
+
   return error instanceof Error ? error.message : String(error);
 }

@@ -6,7 +6,7 @@ import { CoreProcessorContract } from "./contract.ts";
  *
  * The core contract owns shared lifecycle event schemas, but today it has no
  * side effects of its own. Processors that want standard registration behavior
- * compose `wellBehavedProcessorDefaults` into their own reducer and hook.
+ * compose `standardProcessorBehavior` into their own reducer and hook.
  */
 export function createCoreProcessor() {
   return implementProcessor(CoreProcessorContract, {});

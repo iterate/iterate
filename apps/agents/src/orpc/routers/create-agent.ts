@@ -5,10 +5,10 @@ import { os } from "~/orpc/orpc.ts";
 
 /**
  * Thin wrapper around `events.append` that drops a single
- * `agent-input-added` (role: user) event onto a stream under the
+ * `events.iterate.com/agent/input-added` (role: user) event onto a stream under the
  * auto-subscriber's prefix.
  *
- * Everything else — wiring up the iterate-agent DO, applying base-path
+ * Everything else — wiring up the stream processor runner DO, applying base-path
  * defaults — happens automatically once the events service notifies the
  * auto-subscriber via `child-stream-created`. We don't need to record the
  * agent anywhere here; the events service is the registry.
@@ -26,7 +26,7 @@ export const createAgentRouter = {
     await eventsClient.append({
       path: streamPath,
       event: {
-        type: "agent-input-added",
+        type: "events.iterate.com/agent/input-added",
         payload: {
           role: "user",
           content: input.initialPrompt,

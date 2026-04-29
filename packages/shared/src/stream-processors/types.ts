@@ -163,7 +163,7 @@ export type EventDefinitionForType<
   : EventDefinitionFromProcessorDeps<ProcessorDeps, Type>;
 
 /**
- * Turn an event definition plus its catalog key into a committed stream event.
+ * Turn an event definition plus its catalog key into a stream event.
  *
  * The catalog key is passed separately because authored event definitions are
  * plain `{ description, payloadSchema }` values and intentionally do not repeat
@@ -187,7 +187,7 @@ export type InputFromDefinitionForType<Definition, Type extends string> =
     : never;
 
 /**
- * Build the union of committed events corresponding to a `consumes` string
+ * Build the union of stream events corresponding to a `consumes` string
  * array. This is what makes reducer/`afterAppend` narrowing work:
  *
  * ```ts
@@ -368,7 +368,7 @@ export type ProcessorState<Contract> = Contract extends {
   : never;
 
 /**
- * The committed event union visible to a processor implementation.
+ * The stream event union visible to a processor implementation.
  *
  * This intentionally depends on `contract.consumes`, not on every resolvable
  * event. A processor can depend on a contract for append permission or schema
@@ -419,12 +419,12 @@ export type ProcessorStreamApi<Contract> = {
   append(args: { event: EmittedInput<Contract>; streamPath?: string }): Promise<StreamEvent>;
   read(args?: {
     streamPath?: string;
-    afterOffset?: number;
-    beforeOffset?: number;
+    afterOffset?: number | "start" | "end";
+    beforeOffset?: number | "start" | "end";
   }): Promise<StreamEvent[]>;
   subscribe(args?: {
     streamPath?: string;
-    afterOffset?: number;
+    afterOffset?: number | "start" | "end";
     signal?: AbortSignal;
   }): AsyncIterable<StreamEvent>;
 };
@@ -500,7 +500,7 @@ export type ProcessorImplementation<Contract> = {
     signal: AbortSignal;
   }): Promise<void> | void;
   /**
-   * Runs for live committed events after the runner has reduced and persisted the
+   * Runs for live stream events after the runner has reduced and persisted the
    * processor state for that event. Historical catch-up is reduce-only by
    * default so side effects are not replayed accidentally.
    */

@@ -6,10 +6,10 @@ import { getRequestHeader } from "@tanstack/react-start/server";
 import { Event, type Event as EventsEvent, type StreamPath } from "@iterate-com/events-contract";
 import { makeFunnySlug } from "@iterate-com/shared/slug-maker";
 import {
-  processEventsWithViewProcessor,
-  rawPrettyEventsStreamViewProcessor,
+  processEventsWithViewReducer,
+  rawPrettyEventsStreamViewReducer,
 } from "@iterate-com/ui/components/events/feed-processors";
-import { EventsStreamFeed } from "@iterate-com/ui/components/events/stream-feed";
+import { EventsStreamView } from "@iterate-com/ui/components/events/stream-feed";
 import { Separator } from "@iterate-com/ui/components/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { AppSidebar } from "~/components/app-sidebar.tsx";
@@ -151,9 +151,9 @@ function SelectedAgentStreamView({
   });
   const viewState = useMemo(
     () =>
-      processEventsWithViewProcessor({
+      processEventsWithViewReducer({
         events: eventsQuery.data ?? [],
-        processor: rawPrettyEventsStreamViewProcessor,
+        reducer: rawPrettyEventsStreamViewReducer,
       }),
     [eventsQuery.data],
   );
@@ -192,8 +192,8 @@ function SelectedAgentStreamView({
       </div>
 
       <div className="min-h-[420px] flex-1 overflow-hidden rounded-lg border bg-background">
-        <EventsStreamFeed
-          feedItems={viewState.feedItems}
+        <EventsStreamView
+          viewState={viewState}
           emptyLabel="No events on this agent stream yet."
           isPending={eventsQuery.isPending}
           errorLabel={eventsQuery.error ? formatError(eventsQuery.error) : undefined}
@@ -231,7 +231,7 @@ async function readAgentStreamHistory(args: {
 /**
  * One-time wiring step: install the `child-stream-auto-subscriber` processor
  * on `appConfig.streamPathPrefix`. Without it, child streams under the
- * prefix won't get an `iterate-agent` durable object attached or any
+ * prefix won't get a stream processor runner durable object attached or any
  * preset events applied. Re-running is safe — the events service upserts
  * the subscription by slug.
  */
@@ -250,9 +250,9 @@ function AutoSubscribeSection() {
         <p className="text-sm font-semibold">Auto-subscribe processor</p>
         <p className="text-sm text-muted-foreground">
           Wires the <code>child-stream-auto-subscriber</code> processor to the configured prefix so
-          every new descendant stream gets an
-          <code> iterate-agent</code> WebSocket subscription, plus any preset events configured
-          below. One-time setup; running again is safe.
+          every new descendant stream gets an <code>agent-stream-processor-runner</code> WebSocket
+          subscription, plus any preset events configured below. One-time setup; running again is
+          safe.
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-3">
@@ -331,14 +331,14 @@ function PresetsSection({
     const out: ContractEvent[] = [];
     if (resolvedModel.length > 0 && runOptsParsed.kind === "ok") {
       out.push({
-        type: "llm-config-updated",
+        type: "events.iterate.com/agent/llm-config-updated",
         payload: { model: resolvedModel, runOpts: runOptsParsed.value },
       });
     }
     const trimmedPrompt = systemPrompt.trim();
     if (trimmedPrompt.length > 0) {
       out.push({
-        type: "system-prompt-updated",
+        type: "events.iterate.com/agent/system-prompt-updated",
         payload: { systemPrompt: trimmedPrompt },
       });
     }
@@ -403,11 +403,10 @@ function PresetsSection({
         <p className="text-sm font-semibold">Presets</p>
         <p className="text-sm text-muted-foreground">
           Events appended to every new child stream under{" "}
-          <code>{trimmedBasePath || "(unset)"}</code>. Basic fields synthesise the common events (
-          <code>llm-config-updated</code>, <code>system-prompt-updated</code>, optional{" "}
-          <code>tool-provider-config-updated</code>); advanced mode concatenates raw events on top
-          in the order shown in the preview. Saved as a single ordered list per base path; the
-          longest matching base path wins for any given child.
+          <code>{trimmedBasePath || "(unset)"}</code>. Basic fields synthesise the common agent and
+          codemode configuration events; advanced mode concatenates raw events on top in the order
+          shown in the preview. Saved as a single ordered list per base path; the longest matching
+          base path wins for any given child.
         </p>
       </div>
 
@@ -500,17 +499,18 @@ function PresetsSection({
             className="rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
           <p className="text-[11px] text-muted-foreground">
-            Empty = no <code>system-prompt-updated</code> event in the output.
+            Empty = no <code>events.iterate.com/agent/system-prompt-updated</code> event in the
+            output.
           </p>
         </div>
 
         <div className="flex flex-col gap-3 md:col-span-2">
           <p className="text-xs font-medium">Tool providers</p>
           <p className="text-[11px] text-muted-foreground">
-            Adds <code>tool-provider-config-updated</code> events so codemode can call{" "}
-            <code>cloudflare_docs.*</code> (Cloudflare MCP docs) and <code>iterate_events.*</code>{" "}
-            (Events OpenAPI), plus <code>slack.apiCall(...)</code> (Slack SDK) by default. Uncheck
-            to omit.
+            Adds <code>events.iterate.com/codemode/tool-provider-config-updated</code> events so
+            codemode can call <code>cloudflare_docs.*</code> (Cloudflare MCP docs) and{" "}
+            <code>iterate_events.*</code> (Events OpenAPI), plus <code>slack.apiCall(...)</code>{" "}
+            (Slack SDK) by default. Uncheck to omit.
           </p>
           <label className="flex cursor-pointer items-start gap-2 text-sm leading-snug">
             <input
@@ -647,7 +647,7 @@ function PresetsSection({
  * don't pre-create the stream via oRPC: the stream springs into existence
  * the moment the user types something in the events viewer, which fires
  * `child-stream-created` to the auto-subscriber, which subscribes the
- * iterate-agent DO and applies this preset's events.
+ * stream processor runner DO and applies this preset's events.
  */
 function PresetRow({
   basePath,

@@ -1,0 +1,87 @@
+import type { Event } from "@iterate-com/events-contract";
+import type {
+  EventsStreamBuiltInElement,
+  EventsStreamRawEventElement,
+} from "@iterate-com/ui/components/events/feed-items";
+
+export function getElapsedByOffset(feedItems: readonly EventsStreamBuiltInElement[]) {
+  const elapsedByOffset = new Map<number, string>();
+  const rawEvents = feedItems.filter((item) => item.type === "raw-event");
+
+  for (const [index, item] of rawEvents.entries()) {
+    const previousItem = rawEvents[index - 1];
+    if (previousItem == null) continue;
+
+    elapsedByOffset.set(
+      item.props.offset,
+      formatElapsedTime(item.props.timestamp - previousItem.props.timestamp),
+    );
+  }
+
+  return elapsedByOffset;
+}
+
+export function formatEventSummary(item: EventsStreamRawEventElement, elapsedLabel?: string) {
+  return [item.props.offset, item.props.eventType, elapsedLabel, formatTime(item.props.timestamp)]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+export function orderEventKeysForYamlDisplay(event: Event): Record<string, unknown> {
+  const eventRecord = event as Record<string, unknown>;
+  const orderedEvent: Record<string, unknown> = {};
+
+  for (const key of ["type", "payload", "metadata", "idempotencyKey", "offset", "createdAt"]) {
+    if (key in eventRecord) {
+      orderedEvent[key] = eventRecord[key];
+    }
+  }
+
+  for (const [key, value] of Object.entries(eventRecord)) {
+    if (key === "streamPath" || key in orderedEvent) {
+      continue;
+    }
+
+    orderedEvent[key] = value;
+  }
+
+  return orderedEvent;
+}
+
+export function wrapLine(value: string, width: number) {
+  if (value.length <= width) return [value];
+
+  const lines: string[] = [];
+  for (let index = 0; index < value.length; index += width) {
+    lines.push(value.slice(index, index + width));
+  }
+  return lines;
+}
+
+export function rightAlign(value: string, width: number) {
+  const trimmed = value.length > width ? value.slice(value.length - width) : value;
+  return trimmed.padStart(width);
+}
+
+export function formatTime(timestamp: number) {
+  return new Date(timestamp).toLocaleTimeString();
+}
+
+export function formatElapsedTime(durationMs: number) {
+  const normalizedDurationMs = Math.max(0, Math.floor(durationMs));
+
+  if (normalizedDurationMs < 1_000) {
+    return `+${normalizedDurationMs}ms`;
+  }
+
+  if (normalizedDurationMs < 60_000) {
+    const seconds = Math.floor(normalizedDurationMs / 100) / 10;
+    return `+${seconds.toFixed(1).replace(/\.0$/, "")}s`;
+  }
+
+  const totalSeconds = Math.floor(normalizedDurationMs / 1_000);
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  return `+${totalMinutes}m${seconds}s`;
+}

@@ -107,6 +107,34 @@ export function buildAgentWebSocketCallbackUrl(args: {
   return url.toString();
 }
 
+/**
+ * WebSocket endpoint for the plain Durable Object stream processor runner.
+ *
+ * This mirrors the old Agents SDK push subscription shape, but the route is
+ * explicit because `AgentStreamProcessorRunner` is a normal Durable Object, not
+ * an `agents` package subclass that receives `/agents/...` routing for free.
+ *
+ * The runner name addresses the Durable Object instance. The stream path is
+ * also included because runner lifecycle init params bake in the stream binding
+ * before any pushed event is consumed.
+ */
+export function buildAgentStreamProcessorRunnerWebSocketCallbackUrl(args: {
+  publicOrigin: string;
+  runnerInstance: string;
+  streamPath: StreamPath;
+}): string {
+  const url = new URL(args.publicOrigin);
+  if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
+    url.hostname = "[::1]";
+  }
+  url.protocol = url.protocol === "http:" || isLocalhost(url.hostname) ? "ws:" : "wss:";
+  url.pathname = `/api/agent-stream-processor-runner/${encodeURIComponent(args.runnerInstance)}/websocket`;
+  url.search = "";
+  url.searchParams.set("streamPath", args.streamPath);
+  url.hash = "";
+  return url.toString();
+}
+
 function isLocalhost(hostname: string) {
   return (
     hostname === "localhost" ||

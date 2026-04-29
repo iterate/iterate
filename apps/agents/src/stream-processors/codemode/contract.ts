@@ -9,7 +9,7 @@ import {
 import { Callable } from "@iterate-com/shared/callable/types.ts";
 import { AgentProcessorContract, reduceAgentEvents } from "../agent/contract.ts";
 import { CoreProcessorRegisteredEventType } from "../core/contract.ts";
-import { wellBehavedProcessorDefaults } from "../core/well-behaved-processor-defaults.ts";
+import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
 
 /**
  * Idempotency key used for the one-time codemode primer row.
@@ -27,30 +27,29 @@ const initialAgentProcessorState = getInitialProcessorState(AgentProcessorContra
  * Frontend-safe public contract for the codemode processor.
  *
  * This file owns only schemas, reduced state, and pure projection logic. The
- * backend implementation that imports `@cloudflare/codemode`, calls callable
- * tool providers, and appends derived events belongs in a separate file.
+ * backend implementation that receives an injected code executor, calls
+ * callable tool providers, and appends derived events belongs in a separate
+ * file.
  */
 export const CodemodeProcessorContract = defineProcessorContract({
   slug: "codemode",
   version: "0.1.0",
   description: "Turns assistant codemode blocks into tool execution results.",
   stateSchema: z.object({
-    ...wellBehavedProcessorDefaults.stateShape,
+    ...standardProcessorBehavior.stateShape,
     /**
-     * Explicit dependency-state composition.
+     * Manual Agent processor state.
      *
-     * Codemode relies on the agent processor's reduced state, so it stores an
-     * agent snapshot inside its own serializable state. The reducer below keeps
-     * this snapshot current by running the public agent reducer for every event
-     * codemode consumes. We may introduce a helper for this later, but keeping
-     * it spelled out here makes the composition model easy to inspect while the
-     * abstraction is still young.
+     * Codemode needs to inspect Agent's reduced state, so it stores an Agent
+     * snapshot directly inside its own serializable state. The reducer below
+     * keeps this snapshot current by running the public Agent reducer for every
+     * event Codemode consumes.
+     *
+     * If this pattern appears in more processors, we can give it a proper
+     * helper and a proper name. For now the concrete field is easier to reason
+     * about than a generic container.
      */
-    processorDeps: z
-      .object({
-        agent: AgentProcessorContract.stateSchema.default(initialAgentProcessorState),
-      })
-      .default({ agent: initialAgentProcessorState }),
+    agentProcessor: AgentProcessorContract.stateSchema.default(initialAgentProcessorState),
     hasAppendedCodemodePrompt: z.boolean().default(false),
     toolProviders: z
       .record(
@@ -63,12 +62,10 @@ export const CodemodeProcessorContract = defineProcessorContract({
       .default({}),
   }),
   initialState: {
-    ...wellBehavedProcessorDefaults.initialState,
-    processorDeps: {
-      agent: initialAgentProcessorState,
-    },
+    ...standardProcessorBehavior.initialState,
+    agentProcessor: initialAgentProcessorState,
   },
-  processorDeps: [...wellBehavedProcessorDefaults.processorDeps, AgentProcessorContract],
+  processorDeps: [...standardProcessorBehavior.processorDeps, AgentProcessorContract],
   events: {
     "events.iterate.com/codemode/block-added": {
       description: "A JavaScript codemode block was extracted for execution.",
@@ -104,7 +101,7 @@ export const CodemodeProcessorContract = defineProcessorContract({
     "events.iterate.com/codemode/tool-provider-config-updated",
   ],
   emits: [
-    ...wellBehavedProcessorDefaults.emits,
+    ...standardProcessorBehavior.emits,
     "events.iterate.com/agent/input-added",
     "events.iterate.com/agent/webchat-response-added",
     "events.iterate.com/agent/status-updated",
@@ -112,31 +109,30 @@ export const CodemodeProcessorContract = defineProcessorContract({
     "events.iterate.com/codemode/result-added",
   ],
   reduce({ contract, state, event }) {
-    // Keep embedded dependency state current before reducing codemode's own
-    // state. This is intentionally explicit for now; a future helper may
-    // package this pattern once we have more examples than agent -> codemode.
-    const stateWithProcessorDeps = {
-      ...state,
-      processorDeps: {
-        ...state.processorDeps,
-        agent: reduceAgentEvents({
-          state: state.processorDeps.agent,
-          events: [event],
-        }),
-      },
+    let nextState = state;
+
+    nextState = standardProcessorBehavior.reduce({
+      state: nextState,
+      event,
+      contract,
+    });
+
+    nextState = {
+      ...nextState,
+      agentProcessor: reduceAgentEvents({
+        state: nextState.agentProcessor,
+        events: [event],
+      }),
     };
 
     switch (event.type) {
       case CoreProcessorRegisteredEventType:
-        return wellBehavedProcessorDefaults.reduce({
-          state: stateWithProcessorDeps,
-          event,
-          contract,
-        });
+        return nextState;
       case "events.iterate.com/agent/input-added":
-        return event.idempotencyKey === CODEMODE_PRIMER_IDEMPOTENCY_KEY
-          ? { ...stateWithProcessorDeps, hasAppendedCodemodePrompt: true }
-          : stateWithProcessorDeps;
+        if (event.idempotencyKey === CODEMODE_PRIMER_IDEMPOTENCY_KEY) {
+          return { ...nextState, hasAppendedCodemodePrompt: true };
+        }
+        break;
       case "events.iterate.com/agent/system-prompt-updated":
       case "events.iterate.com/agent/webchat-message-received":
       case "events.iterate.com/agent/webchat-response-added":
@@ -148,21 +144,21 @@ export const CodemodeProcessorContract = defineProcessorContract({
       case "events.iterate.com/agent/llm-request-cancelled":
       case "events.iterate.com/agent/llm-request-queued":
       case "events.iterate.com/agent/status-updated":
-        return stateWithProcessorDeps;
+        break;
       case "events.iterate.com/codemode/block-added":
       case "events.iterate.com/codemode/result-added":
-        return stateWithProcessorDeps;
+        break;
       case "events.iterate.com/codemode/tool-provider-config-updated": {
         const { slug, executeCallable, getTypesCallable } = event.payload;
         if (executeCallable === null) {
-          const { [slug]: _removed, ...toolProviders } = stateWithProcessorDeps.toolProviders;
-          return { ...stateWithProcessorDeps, toolProviders };
+          const { [slug]: _removed, ...toolProviders } = nextState.toolProviders;
+          return { ...nextState, toolProviders };
         }
 
         return {
-          ...stateWithProcessorDeps,
+          ...nextState,
           toolProviders: {
-            ...stateWithProcessorDeps.toolProviders,
+            ...nextState.toolProviders,
             [slug]: {
               executeCallable,
               ...(getTypesCallable == null ? {} : { getTypesCallable }),
@@ -173,6 +169,8 @@ export const CodemodeProcessorContract = defineProcessorContract({
       default:
         return assertNever(event);
     }
+
+    return nextState;
   },
 });
 

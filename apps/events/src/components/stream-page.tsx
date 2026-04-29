@@ -51,7 +51,11 @@ import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { stringify as stringifyYaml } from "yaml";
 import { StreamEventFeed, type CustomHtmlRendererApi } from "~/components/stream-event-feed.tsx";
 import { useLiveStreamEvents } from "~/hooks/use-live-stream-events.ts";
-import { eventInputTemplates, getEventInputTemplateById } from "~/lib/event-type-pages.ts";
+import {
+  eventInputTemplates,
+  getEventInputTemplateById,
+  getEventTypePageByType,
+} from "~/lib/event-type-pages.ts";
 import { parseObjectFromComposerText } from "~/lib/stream-composer-input.ts";
 import {
   buildCustomHtmlRendererProjection,
@@ -341,6 +345,10 @@ export function StreamPage({
         {feedViewMode === "clean" ? (
           <EventsStreamView
             viewState={cleanViewState}
+            events={events}
+            openEventOffset={openEventOffset}
+            onOpenEventOffsetChange={onOpenEventOffsetChange}
+            getEventTypeHref={(eventType) => getEventTypePageByType(eventType)?.href}
             emptyLabel="No events received yet."
             isPending={isConnecting}
             errorLabel={getLiveStreamFailureLabel({

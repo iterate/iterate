@@ -1471,7 +1471,7 @@ function makeInitializedEvent(args: {
   return makeEvent({
     streamPath: args.streamPath,
     offset: args.offset,
-    type: "https://events.iterate.com/events/stream/initialized",
+    type: "events.iterate.com/core/stream-first-initialized",
     payload: {
       projectSlug: "public",
       path: args.streamPath,
@@ -1488,7 +1488,7 @@ function makeChildStreamCreatedEvent(args: {
   return makeEvent({
     streamPath: args.streamPath ?? StreamPath.parse("/"),
     offset: args.offset,
-    type: "https://events.iterate.com/events/stream/child-stream-created",
+    type: "events.iterate.com/core/child-stream-created",
     payload: {
       childPath: args.childPath,
     },

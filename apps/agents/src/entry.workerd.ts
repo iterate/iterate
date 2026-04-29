@@ -9,12 +9,14 @@ import { drizzle as drizzleWorkerd } from "drizzle-orm/d1";
 import manifest, { AppConfig } from "~/app.ts";
 import type { AppContext } from "~/context.ts";
 import * as schema from "~/db/schema.ts";
+import { AgentStreamProcessorRunner } from "~/durable-objects/agent-stream-processor-runner.ts";
 import { ChildStreamAutoSubscriber } from "~/durable-objects/child-stream-auto-subscriber.ts";
 import { IterateAgent } from "~/durable-objects/iterate-agent.ts";
 import { MCPClient } from "~/durable-objects/mcp-client.ts";
 import { OpenApiToolClient } from "~/durable-objects/openapi-tool-client.ts";
 import { SlackApi } from "~/durable-objects/slack-api.ts";
 import { StreamApi } from "~/entrypoints/stream-api.ts";
+import { handleAgentStreamProcessorRunnerSocket } from "~/server/agent-stream-processor-runner-socket.ts";
 
 const nativeFetch = globalThis.fetch.bind(globalThis);
 const config = parseAppConfigFromEnv({
@@ -55,6 +57,14 @@ export default {
         executionCtx: cfCtx,
       },
       async ({ log }) => {
+        const runnerSocketResponse = await handleAgentStreamProcessorRunnerSocket({
+          env,
+          request,
+        });
+        if (runnerSocketResponse) {
+          return runnerSocketResponse;
+        }
+
         const agentResponse = await routeAgentRequest(request, env);
         if (agentResponse) {
           return agentResponse;
@@ -77,6 +87,7 @@ export default {
 };
 
 export {
+  AgentStreamProcessorRunner,
   ChildStreamAutoSubscriber,
   IterateAgent,
   MCPClient,

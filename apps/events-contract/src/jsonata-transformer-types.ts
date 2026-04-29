@@ -3,10 +3,11 @@ import {
   GenericEvent as GenericEventBase,
   GenericEventInput as GenericEventInputBase,
 } from "./event-base-types.ts";
+import { STREAM_JSONATA_TRANSFORMER_CONFIGURED_TYPE } from "./core-event-types.ts";
 import { JsonataExpression } from "./jsonata-expression.ts";
 
 export const JsonataTransformerConfiguredEventInput = GenericEventInputBase.extend({
-  type: z.literal("https://events.iterate.com/events/stream/jsonata-transformer-configured"),
+  type: z.literal(STREAM_JSONATA_TRANSFORMER_CONFIGURED_TYPE),
   payload: z.strictObject({
     slug: z.string().trim().min(1),
     matcher: JsonataExpression,
