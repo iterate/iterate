@@ -630,7 +630,7 @@ export class Project extends DurableObject<Env> {
           : "<html><body><div id='root'></div></body></html>";
         html = html.replace(
           "</body>",
-          `<script type="module" src="/assets/client.js?v=${Date.now()}"></script></body>`,
+          `<script type="module" src="assets/client.js?v=${Date.now()}"></script></body>`,
         );
         await this.ws.writeFile(`apps/${app}/dist/assets/index.html`, html);
         assetFiles.push("assets/index.html");
@@ -740,6 +740,13 @@ export class Project extends DurableObject<Env> {
     return this.#dispatchToFacet(app, meta, req);
   }
 
+  #stripProjectAppMount(req: Request, mountPrefix: string): Request {
+    const mountedUrl = new URL(req.url);
+    const strippedPath = mountedUrl.pathname.slice(mountPrefix.length) || "/";
+    mountedUrl.pathname = strippedPath.startsWith("/") ? strippedPath : `/${strippedPath}`;
+    return new Request(mountedUrl, req);
+  }
+
   async #dispatchToFacet(
     app: string,
     meta: { mainModule: string; moduleFiles: string[] },
@@ -783,6 +790,7 @@ export class Project extends DurableObject<Env> {
           AI: this.env.AI_PROXY,
           EXEC: this.env.CODE_EXECUTOR,
           EVENTS_API_BASE: this.env.EVENTS_BASE_URL.replace("://", `://${this.slug}.`),
+          PROJECT_SLUG: this.slug,
         },
       }));
       return { class: (worker as any).getDurableObjectClass("App") };
@@ -858,6 +866,24 @@ export class Project extends DurableObject<Env> {
 
     // ── Level 2: Artifact editor ────────────────────────────────────────
     if (level === "project") {
+      // Path-mounted app access for fresh projects while nested app-subdomain
+      // TLS is provisioning: https://<project>.iterate-dev-jonas.app/apps/agents/
+      const mountedAppMatch = url.pathname.match(/^\/apps\/([a-z0-9-]+)(\/.*)?$/);
+      if (mountedAppMatch) {
+        const mountedApp = mountedAppMatch[1];
+        const suffix = mountedAppMatch[2] ?? "";
+        if (!(await this.#hasApp(mountedApp))) {
+          return new Response(`App "${mountedApp}" not enabled`, { status: 404 });
+        }
+        if (!suffix) {
+          return Response.redirect(`${url.origin}/apps/${mountedApp}/${url.search}`, 302);
+        }
+        const mountedReq = this.#stripProjectAppMount(req, `/apps/${mountedApp}`);
+        const mountedUrl = new URL(mountedReq.url);
+        const appResp = await this.#serveApp(mountedApp, mountedReq);
+        return this.#interceptEmailReply(mountedReq, mountedUrl, appResp, slug);
+      }
+
       // SQL Studio (Project DO)
       if (url.pathname === "/_studio") {
         this.ensureFacetsTable();
@@ -984,7 +1010,10 @@ export class Project extends DurableObject<Env> {
             }
             const clientScripts = assetKeys
               .filter((k) => k.endsWith(".js"))
-              .map((k) => `<script type="module" src="${k}?v=${Date.now()}"></script>`)
+              .map(
+                (k) =>
+                  `<script type="module" src="${k.replace(/^\/+/, "")}?v=${Date.now()}"></script>`,
+              )
               .join("\n");
             if (clientScripts) {
               html = html.includes("</body>")

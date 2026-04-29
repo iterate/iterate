@@ -1029,13 +1029,24 @@ export class App extends DurableObject {
 
   #hostProjectSlug(req: Request): string {
     const host = req.headers.get("host") || "";
-    const match = host.match(/^agents\.([^.]+)\./);
-    return match?.[1] || "";
+    return (
+      host.match(/^agents\.([^.]+)\./)?.[1] ||
+      host.match(/^([^.]+)\.iterate-dev-jonas\.app$/)?.[1] ||
+      ""
+    );
+  }
+
+  #runtimeProjectSlug(req: Request): string {
+    return (
+      this.#configValue("projectSlug") ||
+      String((this as any).env?.PROJECT_SLUG ?? "") ||
+      this.#hostProjectSlug(req)
+    );
   }
 
   async #buildProvidersForStream(streamPath: string, req: Request): Promise<ToolProvider[]> {
     const allowedProviders = providerNamesForStream(streamPath);
-    const projectSlug = this.#configValue("projectSlug") || this.#hostProjectSlug(req) || "test";
+    const projectSlug = this.#runtimeProjectSlug(req) || "test";
     const providers: ToolProvider[] = [];
 
     for (const [name, appName] of [
@@ -1082,7 +1093,7 @@ export class App extends DurableObject {
     if (script == null) return null;
 
     const eventsBaseUrl = this.#configValue("eventsBaseUrl") || undefined;
-    const projectSlug = this.#configValue("projectSlug") || this.#hostProjectSlug(req) || undefined;
+    const projectSlug = this.#runtimeProjectSlug(req) || undefined;
     const sourceKey = String(sourceEvent?.idempotencyKey || sourceEvent?.offset || Date.now());
     const blockEvent = {
       type: "events.iterate.com/codemode/block-added",
@@ -1122,7 +1133,7 @@ export class App extends DurableObject {
     branchPath = "",
   ): Promise<{ published: number; processed: number; errors: string[] }> {
     const eventsBaseUrl = this.#configValue("eventsBaseUrl") || undefined;
-    const projectSlug = this.#configValue("projectSlug") || this.#hostProjectSlug(req) || undefined;
+    const projectSlug = this.#runtimeProjectSlug(req) || undefined;
     const errors: string[] = [];
     let published = 0;
     let processed = 0;
@@ -1282,7 +1293,7 @@ export class App extends DurableObject {
     const rows = this.ctx.storage.sql
       .exec("SELECT value FROM config WHERE key = 'projectSlug'")
       .toArray();
-    return rows.length ? (rows[0].value as string) : "";
+    return rows.length ? (rows[0].value as string) : String((this as any).env?.PROJECT_SLUG ?? "");
   }
 
   #streamGeneration(streamPath: string): string {
@@ -1430,7 +1441,7 @@ export class App extends DurableObject {
     }
 
     if (req.method === "GET" && pathname === "/api/webchat-config") {
-      const projectSlug = this.#configValue("projectSlug") || this.#hostProjectSlug(req) || "test";
+      const projectSlug = this.#runtimeProjectSlug(req) || "test";
       return Response.json({
         defaultStreamPath: "/agents/webchat",
         projectSlug,

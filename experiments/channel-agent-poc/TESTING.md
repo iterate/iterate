@@ -20,6 +20,45 @@ This verifies:
 - live project rebase works,
 - all dynamic channel apps build.
 
+## Fresh Project Webchat Codemode Proof
+
+Create a brand-new project from the browser or admin API, build `agents`, then
+open the agents app in the browser:
+
+```bash
+SLUG="webchat-proof-$(date +%s)"
+curl -fsS -X POST "https://iterate-dev-jonas.app/admin/api/projects" \
+  -H "content-type: application/json" \
+  -d "{\"slug\":\"${SLUG}\",\"apps\":[\"agents\"]}" | jq .
+curl -fsS -X POST "https://${SLUG}.iterate-dev-jonas.app/api/build/agents" | jq .
+agent-browser connect 9222
+agent-browser open "https://agents.${SLUG}.iterate-dev-jonas.app/"
+```
+
+If nested app-subdomain TLS is still provisioning, use the project-host fallback:
+
+```bash
+agent-browser open "https://${SLUG}.iterate-dev-jonas.app/apps/agents/"
+```
+
+Send this through the visible webchat composer:
+
+```text
+Please use codemode only. Call webchat.sendMessage with exactly this message: webchat-codemode-proof-<timestamp>. Return the result.
+```
+
+Proof requires the stream to contain `events.iterate.com/webchat/message-received`,
+`events.iterate.com/llm/request-started`,
+`events.iterate.com/codemode/block-added`,
+`events.iterate.com/webchat/response-added`, and
+`events.iterate.com/codemode/result-added`.
+
+The events stream is:
+
+```text
+https://<slug>.events.iterate.com/streams/agents/webchat/?renderer=raw-pretty&composer=json
+```
+
 ## Post Test Stimuli
 
 The one-command stimulus helper posts to every channel it can using tokens from

@@ -90,6 +90,39 @@ doppler run -- ./scripts/deploy.sh --worker
 
 `--worker` runs `wrangler deploy` before rebasing/building the dynamic apps.
 
+The live worker also needs a `CF_API_TOKEN` worker secret so the admin API can
+provision DNS/routes for new projects:
+
+```bash
+printf %s "$CLOUDFLARE_API_TOKEN_DEV_JONAS" | npx wrangler secret put CF_API_TOKEN --name nested-facets-poc
+```
+
+Wrangler deploys this POC's container binding as part of the worker deploy. If
+deploy fails at the Cloudflare Containers step with a 403, use a token that has
+container deploy permissions for account `cc7f6f461fbe823c199da2b27f9e0ff3`.
+
+## Fresh Project App URLs
+
+Brand-new project hosts are available immediately at:
+
+```text
+https://<project>.iterate-dev-jonas.app/
+```
+
+App subdomains normally become available after Cloudflare finishes provisioning
+TLS:
+
+```text
+https://agents.<project>.iterate-dev-jonas.app/
+```
+
+The worker also exposes a project-host fallback that does not depend on nested
+subdomain TLS:
+
+```text
+https://<project>.iterate-dev-jonas.app/apps/agents/
+```
+
 ## Base Artifact Only
 
 Use this to verify the Cloudflare Artifacts token and upload the template

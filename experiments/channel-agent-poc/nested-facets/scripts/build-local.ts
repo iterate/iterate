@@ -131,7 +131,7 @@ async function buildApp(appName: string) {
         : '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body><div id="root"></div></body></html>';
       const html = htmlTemplate.replace(
         "</body>",
-        `<script type="module" src="/assets/client.js?v=${Date.now()}"></script></body>`,
+        `<script type="module" src="assets/client.js?v=${Date.now()}"></script></body>`,
       );
       writeFileSync(join(assetDir, "index.html"), html);
       assetFiles.push("assets/index.html");

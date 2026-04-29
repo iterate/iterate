@@ -20,6 +20,13 @@ function initialStreamPath() {
   return normalizeStreamPath(params.get("path") ?? "/agents/webchat");
 }
 
+function appBasePath() {
+  const match = window.location.pathname.match(/^\/apps\/agents(?:\/|$)/);
+  return match ? "/apps/agents" : "";
+}
+
+const APP_BASE_PATH = appBasePath();
+
 function yamlScalar(value: unknown): string {
   if (value == null) return "null";
   if (typeof value === "number" || typeof value === "boolean") return String(value);
@@ -87,7 +94,7 @@ function AgentsWebchat() {
 
   useEffect(() => {
     if (new URLSearchParams(window.location.search).has("path")) return;
-    fetch("/api/webchat-config")
+    fetch(`${APP_BASE_PATH}/api/webchat-config`)
       .then((r) => r.json())
       .then((config) => {
         if (config.defaultStreamPath) setStreamPath(config.defaultStreamPath);
@@ -100,7 +107,7 @@ function AgentsWebchat() {
     setConnected(false);
     setError(null);
     const source = new EventSource(
-      `/api/webchat-stream?path=${encodeURIComponent(normalizedPath)}`,
+      `${APP_BASE_PATH}/api/webchat-stream?path=${encodeURIComponent(normalizedPath)}`,
     );
     source.onopen = () => setConnected(true);
     source.onerror = () => setConnected(false);
@@ -141,7 +148,7 @@ function AgentsWebchat() {
     setSending(true);
     setError(null);
     try {
-      const resp = await fetch("/api/webchat-message", {
+      const resp = await fetch(`${APP_BASE_PATH}/api/webchat-message`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ streamPath: normalizedPath, content: text }),
