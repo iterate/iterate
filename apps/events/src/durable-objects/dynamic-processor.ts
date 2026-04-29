@@ -494,9 +494,6 @@ export function createDynamicWorkerManager(context: {
   }
 
   return {
-    sync(state: DynamicWorkerState) {
-      return ensureConfiguredWorkers(state);
-    },
     afterAppend({ state }: { event: Event; state: DynamicWorkerState }) {
       return ensureConfiguredWorkers(state);
     },

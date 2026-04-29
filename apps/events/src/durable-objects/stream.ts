@@ -115,7 +115,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<Env> {
       loader: this.env.LOADER,
     });
 
-    void this.ctx.blockConcurrencyWhile(async () => {
+    void this.blockDurableObjectConcurrencyWhile(async () => {
       migrate(this.client);
 
       const persistedStateRow = getReducedState(this.client);
@@ -128,12 +128,10 @@ export class StreamDurableObject extends StreamDurableObjectBase<Env> {
       const parsed = StreamState.safeParse(rawState);
       if (parsed.success) {
         this._state = parsed.data;
-        // Reconnect any previously configured dynamic workers before normal
-        // traffic resumes. The manager restores one runtime per slug from the
-        // reduced processor state, and then we append an explicit lifecycle
-        // event so processor code can observe that this DO instance woke up.
-        await this.dynamicWorkerManager.sync(parsed.data.processors["dynamic-worker"]);
-
+        // Append an explicit lifecycle event so processor code can observe that
+        // this JavaScript instance woke up. The event's afterAppend phase also
+        // reconciles dynamic workers from reduced state, so constructor startup
+        // stays limited to local SQLite work.
         try {
           this.append({
             type: STREAM_DURABLE_OBJECT_WOKE_UP_TYPE,
