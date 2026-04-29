@@ -9,13 +9,13 @@ import {
 import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
 import type { Callable } from "@iterate-com/shared/callable/types.ts";
 import { CoreProcessorRegisteredEventType } from "../core/contract.ts";
+import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
 import {
   CODEMODE_PRIMER_IDEMPOTENCY_KEY,
   CodemodeProcessorContract,
   type CodemodeState,
 } from "./contract.ts";
 import type { CodemodeCodeExecutor } from "./code-executor.ts";
-import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
 
 const ProviderTypesResponse = z.object({
   types: z.string(),
