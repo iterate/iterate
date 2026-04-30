@@ -28,6 +28,12 @@ const defaultPreviewReadyTimeoutMs = 600_000;
 const defaultPreviewReadyUrlPath = "/api/__internal/health";
 const defaultPreviewTestMaxAttempts = 2;
 const defaultPreviewTestRetryDelayMs = 5_000;
+const sharedPreviewDependencyPaths = [
+  ".github/workflows/cloudflare-preview.yml",
+  "packages/shared/src/alchemy/**",
+  "packages/shared/src/apps/**",
+  "scripts/preview/**",
+] as const;
 
 export type PreviewSemaphoreResourceClient = {
   ensurePreviewInventory: (input: { appSlug: string; type: string }) => Promise<void>;
@@ -1071,7 +1077,11 @@ async function shouldSyncPreviewEnvironment(params: {
     comparison.data.files?.flatMap((file) => (file.filename ? [file.filename] : [])) ?? [];
 
   return {
-    shouldSync: changedFiles.some((filename) => matchesPreviewPath(filename, params.appPaths)),
+    shouldSync: changedFiles.some(
+      (filename) =>
+        matchesPreviewPath(filename, params.appPaths) ||
+        matchesPreviewPath(filename, sharedPreviewDependencyPaths),
+    ),
   };
 }
 
