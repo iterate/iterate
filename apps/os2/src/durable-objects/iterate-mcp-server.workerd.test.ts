@@ -3,8 +3,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { StreamPath } from "@iterate-com/events-contract";
 import { type Event, type EventInput } from "@iterate-com/events-contract";
-import { createEventsClient } from "~/lib/events-client.ts";
 import { describe, expect, test } from "vitest";
+import { createEventsClient } from "~/lib/events-client.ts";
 
 type TestEnv = {
   EVENTS_BASE_URL: string;
