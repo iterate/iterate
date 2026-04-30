@@ -293,6 +293,10 @@ async function executeScriptOnSession(input: {
     context,
     projectId: input.projectId,
   });
+  requireCodemodeStreamPathProject({
+    projectId: input.projectId,
+    streamPath: input.streamPath,
+  });
 
   const duplicateProviderPath = findDuplicateProviderPath(input.providers.map((p) => p.path));
   if (duplicateProviderPath) {
@@ -466,6 +470,21 @@ async function requireCodemodeProject(input: {
   }
 
   return project;
+}
+
+/**
+ * The durable CodemodeSession writes to the shared Events service at a caller
+ * supplied path. Keep that path bound to the same project ID we just authorized
+ * through Clerk org membership; otherwise a caller could authorize one project
+ * and append events into another project's guessed stream path.
+ */
+function requireCodemodeStreamPathProject(input: { projectId: string; streamPath: string }) {
+  const streamProjectId = projectIdFromCodemodeStreamPath(input.streamPath);
+  if (streamProjectId !== input.projectId) {
+    throw new ORPCError("BAD_REQUEST", {
+      message: "Codemode stream path project does not match the requested project.",
+    });
+  }
 }
 
 /**

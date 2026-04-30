@@ -13,6 +13,8 @@ const db = await D1Database("ingress-proxy-routes", {
 
 const { worker, afterFinalize } = await IterateApp(ctx, {
   bindings: { DB: db },
+  build: "pnpm exec vite build",
+  dev: { command: "pnpm exec vite dev" },
 });
 
 export { worker };
