@@ -1,4 +1,6 @@
 import { Link, useMatchRoute } from "@tanstack/react-router";
+import type { PublicAppConfig } from "@iterate-com/shared/apps/config";
+import { useConfig } from "@iterate-com/ui/apps/config";
 import { OrganizationSwitcher, UserButton } from "@clerk/tanstack-react-start";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -13,7 +15,11 @@ import {
   SidebarMenuSubItem,
 } from "@iterate-com/ui/components/sidebar";
 import { SidebarShell } from "@iterate-com/ui/components/sidebar-shell";
+import type { AppConfig } from "~/app.ts";
+import { buildProjectMcpUrl } from "~/lib/project-host-routing.ts";
 import { orpc } from "~/orpc/client.ts";
+
+type PublicConfig = PublicAppConfig<AppConfig>;
 
 type AppSidebarProps = {
   organizationSlug: string;
@@ -58,6 +64,7 @@ function AppSidebarUser() {
 
 function AppSidebarNav({ organizationSlug }: AppSidebarProps) {
   const matchRoute = useMatchRoute();
+  const config = useConfig<PublicConfig>();
   const { data } = useQuery({
     ...orpc.projects.list.queryOptions({ input: { limit: 100, offset: 0 } }),
     staleTime: 30_000,
@@ -90,68 +97,110 @@ function AppSidebarNav({ organizationSlug }: AppSidebarProps) {
       </SidebarGroup>
 
       {projects.map((project) => (
-        <SidebarGroup key={project.id}>
-          <SidebarGroupLabel>{project.slug}</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenuSub>
-              <SidebarMenuSubItem>
-                <SidebarMenuSubButton
-                  render={
-                    <Link
-                      to="/orgs/$organizationSlug/projects/$projectSlug/run-code"
-                      params={{ organizationSlug, projectSlug: project.slug }}
-                    />
-                  }
-                  isActive={Boolean(
-                    matchRoute({
-                      to: "/orgs/$organizationSlug/projects/$projectSlug/run-code",
-                      params: { organizationSlug, projectSlug: project.slug },
-                    }),
-                  )}
-                >
-                  <span>Run code</span>
-                </SidebarMenuSubButton>
-              </SidebarMenuSubItem>
-              <SidebarMenuSubItem>
-                <SidebarMenuSubButton
-                  render={
-                    <Link
-                      to="/orgs/$organizationSlug/projects/$projectSlug/presets"
-                      params={{ organizationSlug, projectSlug: project.slug }}
-                    />
-                  }
-                  isActive={Boolean(
-                    matchRoute({
-                      to: "/orgs/$organizationSlug/projects/$projectSlug/presets",
-                      params: { organizationSlug, projectSlug: project.slug },
-                    }),
-                  )}
-                >
-                  <span>Presets</span>
-                </SidebarMenuSubButton>
-              </SidebarMenuSubItem>
-              <SidebarMenuSubItem>
-                <SidebarMenuSubButton
-                  render={
-                    <Link
-                      to="/orgs/$organizationSlug/projects/$projectSlug/settings"
-                      params={{ organizationSlug, projectSlug: project.slug }}
-                    />
-                  }
-                  isActive={Boolean(
-                    matchRoute({
-                      to: "/orgs/$organizationSlug/projects/$projectSlug/settings",
-                      params: { organizationSlug, projectSlug: project.slug },
-                    }),
-                  )}
-                >
-                  <span>Settings</span>
-                </SidebarMenuSubButton>
-              </SidebarMenuSubItem>
-            </SidebarMenuSub>
-          </SidebarGroupContent>
-        </SidebarGroup>
+        <ProjectSidebarGroup
+          key={project.id}
+          organizationSlug={organizationSlug}
+          projectSlug={project.slug}
+          projectHostnameBases={config.projectHostnameBases}
+        />
       ))}
     </>
+  );
+}
+
+function ProjectSidebarGroup({
+  organizationSlug,
+  projectHostnameBases,
+  projectSlug,
+}: {
+  organizationSlug: string;
+  projectHostnameBases: readonly string[];
+  projectSlug: string;
+}) {
+  const matchRoute = useMatchRoute();
+  const mcpUrl = buildProjectMcpUrl({ projectSlug, projectHostnameBases });
+
+  return (
+    <SidebarGroup>
+      <SidebarGroupLabel>{projectSlug}</SidebarGroupLabel>
+      <SidebarGroupContent>
+        <SidebarMenuSub>
+          <SidebarMenuSubItem>
+            <SidebarMenuSubButton
+              render={
+                <Link
+                  to="/orgs/$organizationSlug/projects/$projectSlug/run-code"
+                  params={{ organizationSlug, projectSlug }}
+                />
+              }
+              isActive={Boolean(
+                matchRoute({
+                  to: "/orgs/$organizationSlug/projects/$projectSlug/run-code",
+                  params: { organizationSlug, projectSlug },
+                }),
+              )}
+            >
+              <span>Run code</span>
+            </SidebarMenuSubButton>
+          </SidebarMenuSubItem>
+          {mcpUrl ? (
+            <SidebarMenuSubItem>
+              <SidebarMenuSubButton
+                render={
+                  <Link
+                    to="/orgs/$organizationSlug/projects/$projectSlug/mcp"
+                    params={{ organizationSlug, projectSlug }}
+                  />
+                }
+                isActive={Boolean(
+                  matchRoute({
+                    to: "/orgs/$organizationSlug/projects/$projectSlug/mcp",
+                    params: { organizationSlug, projectSlug },
+                  }),
+                )}
+              >
+                <span>MCP</span>
+              </SidebarMenuSubButton>
+            </SidebarMenuSubItem>
+          ) : null}
+          <SidebarMenuSubItem>
+            <SidebarMenuSubButton
+              render={
+                <Link
+                  to="/orgs/$organizationSlug/projects/$projectSlug/presets"
+                  params={{ organizationSlug, projectSlug }}
+                />
+              }
+              isActive={Boolean(
+                matchRoute({
+                  to: "/orgs/$organizationSlug/projects/$projectSlug/presets",
+                  params: { organizationSlug, projectSlug },
+                }),
+              )}
+            >
+              <span>Presets</span>
+            </SidebarMenuSubButton>
+          </SidebarMenuSubItem>
+          <SidebarMenuSubItem>
+            <SidebarMenuSubButton
+              render={
+                <Link
+                  to="/orgs/$organizationSlug/projects/$projectSlug/settings"
+                  params={{ organizationSlug, projectSlug }}
+                />
+              }
+              isActive={Boolean(
+                matchRoute({
+                  to: "/orgs/$organizationSlug/projects/$projectSlug/settings",
+                  params: { organizationSlug, projectSlug },
+                }),
+              )}
+            >
+              <span>Settings</span>
+            </SidebarMenuSubButton>
+          </SidebarMenuSubItem>
+        </SidebarMenuSub>
+      </SidebarGroupContent>
+    </SidebarGroup>
   );
 }

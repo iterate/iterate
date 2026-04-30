@@ -20,7 +20,7 @@ export const AppConfig = BaseAppConfig.extend({
       .default(["openid", "profile", "email"]),
   }),
   mcpProofSecret: redacted(z.string().trim().min(1)),
-  projectHostnameBases: z.array(z.string().trim().min(1)).default([]),
+  projectHostnameBases: publicValue(z.array(z.string().trim().min(1)).default([])),
   typeIdPrefix: redacted(
     z
       .string()

@@ -49,3 +49,21 @@ export function resolveProjectSlugFromHostname(
 
   return undefined;
 }
+
+export function buildProjectMcpUrl(input: {
+  projectSlug: string;
+  projectHostnameBases: readonly string[];
+}) {
+  if (!projectSlugPattern.test(input.projectSlug)) return null;
+
+  const projectHostnameBase = input.projectHostnameBases[0];
+  if (!projectHostnameBase) return null;
+
+  // The first configured project host base is the canonical environment URL for
+  // human-facing links. The worker may route several bases, but MCP clients need
+  // one absolute endpoint such as https://demo.iterate2.app/mcp.
+  const normalizedBase = normalizeProjectHostnameBase(projectHostnameBase);
+  if (!hostnamePattern.test(normalizedBase)) return null;
+
+  return `https://${input.projectSlug}.${normalizedBase}/mcp`;
+}
