@@ -178,7 +178,7 @@ export async function IterateApp<B extends Bindings>(
     );
 
     await Promise.all(
-      routeHosts.map(async (hostname) => {
+      routeHosts.filter(shouldCreateDnsRecordForRouteHostname).map(async (hostname) => {
         const { zoneId } = await findZoneForHostname(cloudflareApi, hostname);
         const dnsResourceId = hostname.startsWith("*.")
           ? `project-wildcard-dns-${slugify(hostname)}`
@@ -227,6 +227,14 @@ function routeResourceIdForHostname(hostname: string) {
   return hostname.startsWith("*.")
     ? `route-wildcard-${slugify(hostname.slice(2))}`
     : `route-${slugify(hostname)}`;
+}
+
+function shouldCreateDnsRecordForRouteHostname(hostname: string) {
+  // Cloudflare accepts route patterns like `*-preview-1.iterate.app/*`, but
+  // DNS has no equivalent partial-label wildcard record. OS2 preview relies on
+  // the existing proxied `*.iterate.app` DNS record for those one-label project
+  // hosts, while ordinary exact and `*.` wildcard routes still get app-owned DNS.
+  return !hostname.startsWith("*") || hostname.startsWith("*.");
 }
 
 function withSequentialCloudflareAssetPreupload(input: { command: string; workerName: string }) {

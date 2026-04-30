@@ -15,6 +15,11 @@ describe("project host routing", () => {
     expect(
       resolveProjectSlugFromHostname("my-project.os2.iterate.com", ["*.os2.iterate.com"]),
     ).toBe("my-project");
+    expect(
+      resolveProjectSlugFromHostname("my-project-preview-3.iterate.app", [
+        "-preview-3.iterate.app",
+      ]),
+    ).toBe("my-project");
   });
 
   it("normalizes case and port suffixes", () => {
@@ -30,6 +35,11 @@ describe("project host routing", () => {
     ).toBeUndefined();
     expect(
       resolveProjectSlugFromHostname("bad_slug.os2.iterate.com", ["os2.iterate.com"]),
+    ).toBeUndefined();
+    expect(
+      resolveProjectSlugFromHostname("api.my-project-preview-3.iterate.app", [
+        "-preview-3.iterate.app",
+      ]),
     ).toBeUndefined();
   });
 
@@ -48,6 +58,9 @@ describe("project host routing", () => {
   it("detects hostnames reserved for project slug routing", () => {
     expect(isReservedProjectHostname("os2.iterate.com", ["os2.iterate.com"])).toBe(true);
     expect(isReservedProjectHostname("alpha.os2.iterate.com", ["os2.iterate.com"])).toBe(true);
+    expect(
+      isReservedProjectHostname("alpha-preview-3.iterate.app", ["-preview-3.iterate.app"]),
+    ).toBe(true);
     expect(isReservedProjectHostname("alpha.example.com", ["os2.iterate.com"])).toBe(false);
   });
 });

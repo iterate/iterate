@@ -22,8 +22,15 @@ For `events`, preview slots use routed custom hosts from the slot Doppler config
 For `os2`, each preview slot gets routed hosts under the active `iterate.app`
 zone (see `docs/os2-environments.md`):
 
-- `os.iterate-preview-N.iterate.app` (dashboard)
-- `*.iterate-preview-N.iterate.app` (project subdomains)
+- `os-preview-N.iterate.app` (dashboard)
+- `*-preview-N.iterate.app` (project subdomains)
+
+This shape is intentionally one DNS label below `iterate.app`. Cloudflare
+Universal SSL covers the zone apex and one subdomain level by default, while
+multi-level hosts such as `os.iterate-preview-N.iterate.app` require per-host
+Total TLS issuance and can stay pending long enough to make CI flaky.
+First-party reference:
+https://developers.cloudflare.com/ssl/edge-certificates/universal-ssl/limitations/#full-setup
 
 For `agents`, `codemode`, `example`, `semaphore`, and `ingress-proxy`,
 preview slot `APP_CONFIG_BASE_URL` values use the Worker URL directly:

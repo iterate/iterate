@@ -18,9 +18,16 @@ async function expectStatus(input: { method?: string; status: number; url: URL }
 }
 
 function projectHostnameFor(baseUrl: URL) {
+  const previewDashboardPrefix = "os-preview-";
+  if (baseUrl.hostname.startsWith(previewDashboardPrefix)) {
+    return `demo-preview-${baseUrl.hostname.slice(previewDashboardPrefix.length)}`;
+  }
+
   const dashboardPrefix = "os.";
   if (!baseUrl.hostname.startsWith(dashboardPrefix)) {
-    throw new Error(`OS2 preview base URL must start with os.; received ${baseUrl.hostname}.`);
+    throw new Error(
+      `OS2 preview base URL must start with os. or os-preview-; received ${baseUrl.hostname}.`,
+    );
   }
   return `demo.${baseUrl.hostname.slice(dashboardPrefix.length)}`;
 }

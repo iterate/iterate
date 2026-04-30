@@ -204,12 +204,13 @@ async function tryAuthenticateSessionRequest(request: Request, appConfig: AppCon
 /**
  * Resolves project-host requests while reserving the configured dashboard host.
  *
- * OS2 preview uses `os.iterate-preview-N.iterate.app` for the dashboard and
- * `<project>.iterate-preview-N.iterate.app` for project/MCP hosts. Because both sit
- * under the same wildcard route, the worker must exclude AppConfig `baseUrl`
- * before interpreting the leftmost label as a project slug. Cloudflare Worker
- * routes allow a specific route and wildcard route to point at the same Worker;
- * this resolver is the runtime split between those two roles.
+ * OS2 preview uses `os-preview-N.iterate.app` for the dashboard and
+ * `<project>-preview-N.iterate.app` for project/MCP hosts so the preview hosts
+ * are covered by the one-label `*.iterate.app` certificate. The worker must
+ * still exclude AppConfig `baseUrl` before interpreting the host suffix as a
+ * project slug. Cloudflare Worker routes allow a specific route and wildcard
+ * route to point at the same Worker; this resolver is the runtime split between
+ * those two roles.
  * https://developers.cloudflare.com/workers/configuration/routing/routes/
  */
 function resolveProjectSlugForProjectHostname(input: {
