@@ -8,26 +8,26 @@ Every environment serves two roles via two domains:
 
 | Role               | Pattern         | Example (prod)        | Example (dev-jonas)            | Example (preview-3)            |
 | ------------------ | --------------- | --------------------- | ------------------------------ | ------------------------------ |
-| Dashboard          | `os.<zone>`     | `os.iterate2.com`     | `os.iterate-dev-jonas.com`     | `os-preview-3.iterate.app`     |
-| Project subdomains | `<proj>.<zone>` | `<proj>.iterate2.app` | `<proj>.iterate-dev-jonas.app` | `<proj>-preview-3.iterate.app` |
+| Dashboard          | configured host | `os.iterate2.com`     | `os.iterate-dev-jonas.com`     | `os2.iterate-preview-3.com`    |
+| Project subdomains | `<proj>.<zone>` | `<proj>.iterate2.app` | `<proj>.iterate-dev-jonas.app` | `<proj>.iterate-preview-3.app` |
 
 The design principle: **dev must structurally mirror production.** Each environment
-gets one dashboard hostname and one project-hostname base. Preview hostnames live
-under the active `iterate.app` Cloudflare zone so they can be deployed without
-registering one second-level domain per slot.
+gets one dashboard hostname and one project-hostname base. Preview slots use
+dedicated zone pairs: `iterate-preview-N.com` for the dashboard and
+`iterate-preview-N.app` for project/MCP hosts.
 
 ## AppConfig
 
 Domain identity lives in `AppConfig` (runtime config available to the worker):
 
 - `baseUrl` — canonical dashboard URL (e.g. `https://os.iterate2.com`). Used for generating links in emails, redirects, etc. Optional — when absent (local dev without tunnel), the worker infers from the request.
-- `projectHostnameBases` — array of project host bases. Normal bases match `<project>.<base>` (e.g. `["iterate2.app"]`). Preview bases start with `-` and match `<project>-preview-N.iterate.app` so preview hosts stay under the existing `*.iterate.app` TLS certificate.
+- `projectHostnameBases` — array of project host bases. Normal bases match `<project>.<base>` (e.g. `["iterate2.app"]`). Preview bases are normal bases too, e.g. `["iterate-preview-3.app"]`.
 
-At deploy time, `alchemy.run.ts` reads AppConfig and derives Cloudflare worker routes from these two fields. No separate `WORKER_ROUTES` env var is needed for route computation, though it's still set in Doppler for backwards compatibility with the deploy workflow metadata step.
+At deploy time, `alchemy.run.ts` reads AppConfig and derives Cloudflare worker routes from these two fields. No separate `WORKER_ROUTES` env var is needed for os2 route computation.
 
 ## Cloudflare accounts
 
-All os2 zones (dev, preview, prod) live in account `cc7f6f461fbe823c199da2b27f9e0ff3`. The API token (`cfut_...` user token) must have:
+All os2 zones (dev, preview, prod) live in account `04b3b57291ef2626c6a8daa9d47065a7`. The API token (`cfut_...` user token) must have:
 
 - Zone : DNS : Edit
 - Zone : Zone : Read
@@ -46,7 +46,7 @@ _shared          ← CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, ALCHEMY_STAGE=
 │   ├── dev_misha
 │   └── dev_rahul
 ├── preview      ← ALCHEMY_LOCAL=false, preview base
-│   ├── preview_1    ← preview slot 1: os-preview-1.iterate.app / <project>-preview-1.iterate.app
+│   ├── preview_1    ← preview slot 1: os2.iterate-preview-1.com / <project>.iterate-preview-1.app
 │   ├── preview_2    ← preview slot 2
 │   ├── ...
 │   └── preview_10   ← preview slot 10
@@ -57,9 +57,9 @@ _shared          ← CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, ALCHEMY_STAGE=
 
 | Var                                 | dev_jonas                              | preview_N                              | prd                              |
 | ----------------------------------- | -------------------------------------- | -------------------------------------- | -------------------------------- |
-| `APP_CONFIG_BASE_URL`               | `https://os.iterate-dev-jonas.com`     | `https://os-preview-N.iterate.app`     | `https://os.iterate2.com`        |
+| `APP_CONFIG_BASE_URL`               | `https://os.iterate-dev-jonas.com`     | `https://os2.iterate-preview-N.com`    | `https://os.iterate2.com`        |
 | `APP_CONFIG_EVENTS_BASE_URL`        | `https://events.iterate-dev-jonas.com` | `https://events-preview-N.iterate.com` | `https://events.iterate.com`     |
-| `APP_CONFIG_PROJECT_HOSTNAME_BASES` | `["iterate-dev-jonas.app"]`            | `["-preview-N.iterate.app"]`           | `["iterate2.app"]`               |
+| `APP_CONFIG_PROJECT_HOSTNAME_BASES` | `["iterate-dev-jonas.app"]`            | `["iterate-preview-N.app"]`            | `["iterate2.app"]`               |
 | `ALCHEMY_LOCAL`                     | `true`                                 | `false`                                | `false`                          |
 | `ALCHEMY_STAGE`                     | inherited as `${DOPPLER_CONFIG}`       | inherited as `${DOPPLER_CONFIG}`       | inherited as `${DOPPLER_CONFIG}` |
 
@@ -103,23 +103,20 @@ Preview environments use a semaphore-controlled pool. The inventory is
 
 1. CI acquires a slot from Semaphore (e.g. `os2-preview-3`)
 2. `derivePreviewEnvironment` maps slot 3 → Doppler config `preview_3`
-3. `preview_3` has `APP_CONFIG_BASE_URL=https://os-preview-3.iterate.app` and `APP_CONFIG_PROJECT_HOSTNAME_BASES=["-preview-3.iterate.app"]`
+3. `preview_3` has `APP_CONFIG_BASE_URL=https://os2.iterate-preview-3.com` and `APP_CONFIG_PROJECT_HOSTNAME_BASES=["iterate-preview-3.app"]`
 4. `doppler run --config preview_3 -- pnpm alchemy:up` deploys the worker with correct routes. `ALCHEMY_STAGE` comes from `_shared` as `${DOPPLER_CONFIG}` and is slugified by the app into Cloudflare names like `os2-preview-3`.
 5. PR body is updated with both `publicUrl` and `projectSubdomainUrl`
 6. On PR close, the slot is released back to Semaphore and the worker is destroyed
 
 ### Cloudflare zones for previews
 
-Each preview slot N uses hostnames under the active `iterate.app` Cloudflare zone:
-`os-preview-N.iterate.app` for the dashboard and
-`<project>-preview-N.iterate.app` for project subdomains and MCP.
+Each preview slot N uses two Cloudflare zones:
 
-This keeps preview hosts one label below `iterate.app`, which is covered by
-Cloudflare Universal SSL. Multi-level preview hosts require Total TLS issuance
-and made first-request CI readiness depend on certificate validation timing.
-Reference: https://developers.cloudflare.com/ssl/edge-certificates/universal-ssl/limitations/#full-setup
+- `iterate-preview-N.com` for the dashboard host `os2.iterate-preview-N.com`
+- `iterate-preview-N.app` for project and MCP hosts like `<project>.iterate-preview-N.app`
 
-The `iterate.app` zone must exist in the `cc7f` Cloudflare account.
+Both zones must exist in the `04b3` Cloudflare account before the preview slot
+can deploy routes and DNS records.
 
 ### Manual preview deploy
 
@@ -146,8 +143,8 @@ cd apps/os2
 doppler run --project os2 --config preview_3 -- pnpm alchemy:up
 
 # Hit it
-open https://os-preview-3.iterate.app          # dashboard
-open https://myproject-preview-3.iterate.app   # project subdomain
+open https://os2.iterate-preview-3.com         # dashboard
+open https://myproject.iterate-preview-3.app   # project subdomain
 
 # Clean up
 doppler run --project os2 --config preview_3 -- pnpm alchemy:down
@@ -155,7 +152,7 @@ doppler run --project os2 --config preview_3 -- pnpm alchemy:down
 
 ### Adding a new developer
 
-1. Buy/register `iterate-dev-<name>.com` and `iterate-dev-<name>.app` in the `cc7f` account
+1. Buy/register `iterate-dev-<name>.com` and `iterate-dev-<name>.app` in the `04b3` account
 2. Create doppler config: `doppler configs create dev_<name> --project os2`
 3. Set the domain vars:
    ```bash

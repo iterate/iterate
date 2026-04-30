@@ -16,9 +16,7 @@ describe("project host routing", () => {
       resolveProjectSlugFromHostname("my-project.os2.iterate.com", ["*.os2.iterate.com"]),
     ).toBe("my-project");
     expect(
-      resolveProjectSlugFromHostname("my-project-preview-3.iterate.app", [
-        "-preview-3.iterate.app",
-      ]),
+      resolveProjectSlugFromHostname("my-project.iterate-preview-3.app", ["iterate-preview-3.app"]),
     ).toBe("my-project");
   });
 
@@ -37,8 +35,8 @@ describe("project host routing", () => {
       resolveProjectSlugFromHostname("bad_slug.os2.iterate.com", ["os2.iterate.com"]),
     ).toBeUndefined();
     expect(
-      resolveProjectSlugFromHostname("api.my-project-preview-3.iterate.app", [
-        "-preview-3.iterate.app",
+      resolveProjectSlugFromHostname("api.my-project.iterate-preview-3.app", [
+        "iterate-preview-3.app",
       ]),
     ).toBeUndefined();
   });
@@ -59,7 +57,7 @@ describe("project host routing", () => {
     expect(isReservedProjectHostname("os2.iterate.com", ["os2.iterate.com"])).toBe(true);
     expect(isReservedProjectHostname("alpha.os2.iterate.com", ["os2.iterate.com"])).toBe(true);
     expect(
-      isReservedProjectHostname("alpha-preview-3.iterate.app", ["-preview-3.iterate.app"]),
+      isReservedProjectHostname("alpha.iterate-preview-3.app", ["iterate-preview-3.app"]),
     ).toBe(true);
     expect(isReservedProjectHostname("alpha.example.com", ["os2.iterate.com"])).toBe(false);
   });

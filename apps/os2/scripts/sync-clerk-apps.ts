@@ -76,9 +76,9 @@ const targets: Target[] = [
       clerkAppName: `OS2 preview ${previewNumber}`,
       clerkEnvironmentType: "development",
       clerkInstanceArg: "dev",
-      baseUrl: `https://os-preview-${previewNumber}.iterate.app`,
+      baseUrl: `https://os2.iterate-preview-${previewNumber}.com`,
       eventsBaseUrl: `https://events-preview-${previewNumber}.iterate.com`,
-      projectHostnameBase: `-preview-${previewNumber}.iterate.app`,
+      projectHostnameBase: `iterate-preview-${previewNumber}.app`,
     } satisfies Target;
   }),
   {

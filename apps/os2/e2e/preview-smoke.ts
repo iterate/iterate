@@ -25,15 +25,15 @@ async function expectStatus(input: { method?: string; status: number; url: URL }
 function projectHostnameFor(baseUrl: URL, projectBaseUrlOverride: URL | null) {
   if (projectBaseUrlOverride) return projectBaseUrlOverride.hostname;
 
-  const previewDashboardPrefix = "os-preview-";
-  if (baseUrl.hostname.startsWith(previewDashboardPrefix)) {
-    return `demo-preview-${baseUrl.hostname.slice(previewDashboardPrefix.length)}`;
+  const previewMatch = /^os2\.iterate-preview-(\d+)\.com$/.exec(baseUrl.hostname);
+  if (previewMatch) {
+    return `demo.iterate-preview-${previewMatch[1]}.app`;
   }
 
   const dashboardPrefix = "os.";
   if (!baseUrl.hostname.startsWith(dashboardPrefix)) {
     throw new Error(
-      `OS2 preview base URL must start with os. or os-preview-; received ${baseUrl.hostname}.`,
+      `OS2 preview base URL must be os2.iterate-preview-N.com or start with os.; received ${baseUrl.hostname}.`,
     );
   }
   const projectHostnameBase = baseUrl.hostname

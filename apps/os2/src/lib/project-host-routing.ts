@@ -26,7 +26,6 @@ export function isReservedProjectHostname(
 ) {
   return projectHostnameBases.some((rawBase) => {
     const base = normalizeProjectHostnameBase(rawBase);
-    if (base.startsWith("-")) return hostname.endsWith(base);
     return hostname === base || hostname.endsWith(`.${base}`);
   });
 }
@@ -40,18 +39,6 @@ export function resolveProjectSlugFromHostname(
   const normalizedHostname = normalizeRequestHostname(hostname);
   for (const rawBase of projectHostnameBases) {
     const base = normalizeProjectHostnameBase(rawBase);
-    // Preview bases intentionally start with "-" and match
-    // `<slug>-preview-N.iterate.app`. That keeps preview project hosts one DNS
-    // label below `iterate.app`, so Cloudflare's Universal SSL wildcard covers
-    // them without waiting for per-slot Total TLS certificate issuance.
-    if (base.startsWith("-")) {
-      if (!normalizedHostname.endsWith(base)) continue;
-
-      const slug = normalizedHostname.slice(0, -base.length);
-      if (!slug || slug.includes(".")) continue;
-      return projectSlugPattern.test(slug) ? slug : undefined;
-    }
-
     const suffix = `.${base}`;
     if (!normalizedHostname.endsWith(suffix)) continue;
 

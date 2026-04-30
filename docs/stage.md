@@ -8,12 +8,12 @@ Stage is an **input**, not something derived. The deployer decides what stage to
 
 Stage determines the URL namespace and identity of a deployment:
 
-| Stage       | URL                      |
-| ----------- | ------------------------ |
-| `prd`       | os.iterate.com           |
-| `preview`   | os-preview.iterate.com   |
-| `preview_1` | os-preview-1.iterate.com |
-| `dev-jonas` | os-dev-jonas.iterate.com |
+| Stage       | URL                       |
+| ----------- | ------------------------- |
+| `prd`       | app.iterate.com           |
+| `preview`   | app-preview.iterate.com   |
+| `preview_1` | app-preview-1.iterate.com |
+| `dev-jonas` | app-dev-jonas.iterate.com |
 
 That's it. Stage is just "which URL". Everything else—secrets, database, OAuth clients, Slack tokens—are separate concerns configured via environment variables.
 
@@ -22,7 +22,7 @@ That's it. Stage is just "which URL". Everything else—secrets, database, OAuth
 Stage maps to URL via simple transformation:
 
 ```ts
-const subdomain = `os-${stage}`.replace(/^os-prd$/, "os");
+const subdomain = `app-${stage}`.replace(/^app-prd$/, "app");
 const url = `${subdomain}.iterate.com`;
 ```
 
