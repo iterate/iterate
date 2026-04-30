@@ -1,9 +1,13 @@
 import { redirect } from "@tanstack/react-router";
-import { createServerFn } from "@tanstack/react-start";
+import { createServerFn, getGlobalStartContext } from "@tanstack/react-start";
 import { getRequestUrl } from "@tanstack/react-start/server";
 import { auth } from "@clerk/tanstack-react-start/server";
 import { z } from "zod";
 import type { ClerkAuth } from "~/context.ts";
+import {
+  normalizeRequestHostname,
+  resolveProjectSlugFromHostname,
+} from "~/lib/project-host-routing.ts";
 
 export interface ActiveOrganizationAuth {
   userId: string;
@@ -94,6 +98,25 @@ export const redirectAuthenticatedUserFromAuthRoute = createServerFn({ method: "
   },
 );
 
+export const requireAuthenticatedRootRedirectTarget = createServerFn({ method: "GET" }).handler(
+  async () => {
+    const session = await auth();
+
+    if (!session.isAuthenticated) {
+      throw redirectToSignIn();
+    }
+
+    if (!session.orgId || !session.orgSlug) {
+      throw redirect({ to: "/organization" });
+    }
+
+    return {
+      orgSlug: session.orgSlug,
+      projectSlug: resolveCurrentProjectHostSlug(),
+    };
+  },
+);
+
 export function normalizeActiveOrganizationAuth(session: ClerkAuth): ActiveOrganizationAuth {
   if (!session.isAuthenticated || !session.orgId || !session.orgSlug) {
     throw new Error("Expected authenticated Clerk session with active organization.");
@@ -117,4 +140,21 @@ function redirectToSignIn(): never {
       redirect_url: request.pathname + request.search,
     },
   });
+}
+
+function resolveCurrentProjectHostSlug() {
+  const context = getGlobalStartContext();
+  const requestUrl = getRequestUrl();
+  const dashboardHostname = context?.config.baseUrl
+    ? normalizeRequestHostname(new URL(context.config.baseUrl).hostname)
+    : null;
+  const requestHostname = normalizeRequestHostname(requestUrl.hostname);
+  if (dashboardHostname && requestHostname === dashboardHostname) return null;
+
+  // Clerk returns custom sign-in flows to `/` after authentication. For project
+  // hosts, the root route must recover the project slug from the hostname so
+  // `<project>-preview-N.iterate.app` lands directly in that project's app/OS.
+  return (
+    resolveProjectSlugFromHostname(requestHostname, context?.projectHostnameBases ?? []) ?? null
+  );
 }
