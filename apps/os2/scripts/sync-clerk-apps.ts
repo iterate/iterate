@@ -33,6 +33,8 @@ const mcpOAuthApplicationPatch = {
 type Target = {
   dopplerConfig: string;
   clerkAppName: string;
+  clerkEnvironmentType: "development" | "production";
+  clerkInstanceArg: "dev" | "prod";
   baseUrl: string;
   eventsBaseUrl: string;
   projectHostnameBase: string;
@@ -42,6 +44,8 @@ const targets: Target[] = [
   {
     dopplerConfig: "dev_jonas",
     clerkAppName: "OS2 dev jonas",
+    clerkEnvironmentType: "development",
+    clerkInstanceArg: "dev",
     baseUrl: "https://os.iterate-dev-jonas.com",
     eventsBaseUrl: "https://events.iterate-dev-jonas.com",
     projectHostnameBase: "iterate-dev-jonas.app",
@@ -49,6 +53,8 @@ const targets: Target[] = [
   {
     dopplerConfig: "dev_misha",
     clerkAppName: "OS2 dev misha",
+    clerkEnvironmentType: "development",
+    clerkInstanceArg: "dev",
     baseUrl: "https://os.iterate-dev-misha.com",
     eventsBaseUrl: "https://events.iterate-dev-misha.com",
     projectHostnameBase: "iterate-dev-misha.app",
@@ -56,6 +62,8 @@ const targets: Target[] = [
   {
     dopplerConfig: "dev_rahul",
     clerkAppName: "OS2 dev rahul",
+    clerkEnvironmentType: "development",
+    clerkInstanceArg: "dev",
     baseUrl: "https://os.iterate-dev-rahul.com",
     eventsBaseUrl: "https://events.iterate-dev-rahul.com",
     projectHostnameBase: "iterate-dev-rahul.app",
@@ -65,14 +73,18 @@ const targets: Target[] = [
     return {
       dopplerConfig: `preview_${previewNumber}`,
       clerkAppName: `OS2 preview ${previewNumber}`,
+      clerkEnvironmentType: "development",
+      clerkInstanceArg: "dev",
       baseUrl: `https://os-preview-${previewNumber}.iterate.app`,
       eventsBaseUrl: `https://events-preview-${previewNumber}.iterate.com`,
       projectHostnameBase: `-preview-${previewNumber}.iterate.app`,
-    };
+    } satisfies Target;
   }),
   {
     dopplerConfig: "prd",
     clerkAppName: "OS2 prd",
+    clerkEnvironmentType: "production",
+    clerkInstanceArg: "prod",
     baseUrl: "https://os.iterate2.com",
     eventsBaseUrl: "https://events.iterate.com",
     projectHostnameBase: "iterate2.app",
@@ -84,11 +96,11 @@ async function main() {
 
   for (const target of targets) {
     const app = findOrCreateClerkApp(apps, target.clerkAppName);
-    const instance = getDevelopmentInstance(app.application_id);
+    const instance = getClerkInstance(app.application_id, target);
 
-    patchInstanceConfig(app.application_id);
-    patchOAuthApplicationSettings(app.application_id);
-    const oauthApplication = findOrCreateOAuthApplication(app.application_id);
+    patchInstanceConfig(app.application_id, target);
+    patchOAuthApplicationSettings(app.application_id, target);
+    const oauthApplication = findOrCreateOAuthApplication(app.application_id, target);
     const jwtKey = await getJwtPublicKey(instance.publishable_key);
 
     setDopplerSecrets(target, instance, oauthApplication, jwtKey);
@@ -109,7 +121,7 @@ function findOrCreateClerkApp(apps: ClerkApplication[], name: string) {
   return created;
 }
 
-function getDevelopmentInstance(applicationId: string) {
+function getClerkInstance(applicationId: string, target: Target) {
   const app = JSON.parse(
     exec("clerk", [
       "api",
@@ -118,15 +130,17 @@ function getDevelopmentInstance(applicationId: string) {
     ]),
   ) as ClerkApplication;
 
-  const instance = app.instances.find((entry) => entry.environment_type === "development");
+  const instance = app.instances.find(
+    (entry) => entry.environment_type === target.clerkEnvironmentType,
+  );
   if (!instance?.secret_key) {
-    throw new Error(`No development instance secret key found for ${app.name}`);
+    throw new Error(`No ${target.clerkEnvironmentType} instance secret key found for ${app.name}`);
   }
 
   return instance;
 }
 
-function patchInstanceConfig(applicationId: string) {
+function patchInstanceConfig(applicationId: string, target: Target) {
   const patch = {
     auth_email: {
       required_for_sign_up: true,
@@ -169,21 +183,25 @@ function patchInstanceConfig(applicationId: string) {
     "--app",
     applicationId,
     "--instance",
-    "dev",
+    target.clerkInstanceArg,
     "--json",
     JSON.stringify(patch),
     "--yes",
   ]);
 }
 
-function patchOAuthApplicationSettings(applicationId: string) {
+function patchOAuthApplicationSettings(applicationId: string, target: Target) {
+  // Clerk CLI accepts `dev`, `prod`, or an instance ID here. Keeping this on the
+  // target prevents production Doppler from ever receiving development Clerk
+  // keys, while still letting preview slots use cheaper development instances.
+  // `clerk api --help` documents the accepted `--instance` values.
   exec("clerk", [
     "api",
     "/instance/oauth_application_settings",
     "--app",
     applicationId,
     "--instance",
-    "dev",
+    target.clerkInstanceArg,
     "--method",
     "PATCH",
     "--data",
@@ -195,9 +213,16 @@ function patchOAuthApplicationSettings(applicationId: string) {
   ]);
 }
 
-function findOrCreateOAuthApplication(applicationId: string) {
+function findOrCreateOAuthApplication(applicationId: string, target: Target) {
   const existing = JSON.parse(
-    exec("clerk", ["api", "/oauth_applications", "--app", applicationId, "--instance", "dev"]),
+    exec("clerk", [
+      "api",
+      "/oauth_applications",
+      "--app",
+      applicationId,
+      "--instance",
+      target.clerkInstanceArg,
+    ]),
   ) as { data: ClerkOAuthApplication[] };
 
   const match = existing.data.find((app) => app.name === "OS2 MCP / CLI");
@@ -209,7 +234,7 @@ function findOrCreateOAuthApplication(applicationId: string) {
         "--app",
         applicationId,
         "--instance",
-        "dev",
+        target.clerkInstanceArg,
         "--method",
         "PATCH",
         "--data",
@@ -226,7 +251,7 @@ function findOrCreateOAuthApplication(applicationId: string) {
       "--app",
       applicationId,
       "--instance",
-      "dev",
+      target.clerkInstanceArg,
       "--data",
       JSON.stringify(mcpOAuthApplicationPatch),
       "--yes",
