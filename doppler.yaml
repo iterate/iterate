@@ -32,3 +32,5 @@ setup:
     path: ai-engineer-workshop/
   - project: agents
     path: apps/agents/
+  - project: channel-agent-poc
+    path: experiments/channel-agent-poc/nested-facets/

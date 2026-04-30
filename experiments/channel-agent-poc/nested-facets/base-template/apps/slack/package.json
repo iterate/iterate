@@ -1,0 +1,23 @@
+{
+  "name": "slack",
+  "dependencies": {
+    "@orpc/contract": "^1",
+    "@orpc/openapi": "^1.14.0",
+    "@orpc/server": "^1",
+    "@orpc/zod": "^1.14.0",
+    "@slack/types": "^2",
+    "zod": "^3"
+  },
+  "buildConfig": {
+    "compatibilityFlags": [
+      "nodejs_compat"
+    ],
+    "sandboxBuild": true,
+    "esbuildConditions": [
+      "workerd",
+      "worker",
+      "browser"
+    ],
+    "esbuildPlatform": "node"
+  }
+}

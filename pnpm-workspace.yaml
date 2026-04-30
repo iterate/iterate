@@ -2,6 +2,7 @@ packages:
   - ai-engineer-workshop
   - ai-engineer-workshop/*
   - ai-engineer-workshop/examples/*
+  - experiments/channel-agent-poc/nested-facets
   - jonasland
   - apps/ingress-proxy
   - apps/ingress-proxy-contract
