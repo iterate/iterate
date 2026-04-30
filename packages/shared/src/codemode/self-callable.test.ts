@@ -26,7 +26,7 @@ describe("createSelfToolProviderDescriptor", () => {
     });
 
     expect(ToolProviderDescriptor.parse(descriptor)).toEqual(descriptor);
-    expect(descriptor.executeToolFunction).toMatchObject({
+    expect(descriptor.callable).toMatchObject({
       type: "workers-rpc",
       via: {
         type: "env-binding",
@@ -53,7 +53,7 @@ describe("createSelfToolProviderDescriptor", () => {
       bindingName: "OPEN_API_BRIDGE",
     });
 
-    expect(descriptor.executeToolFunction).toMatchObject({
+    expect(descriptor.callable).toMatchObject({
       via: {
         type: "env-binding",
         bindingType: "service",

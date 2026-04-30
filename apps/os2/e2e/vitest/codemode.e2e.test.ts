@@ -267,7 +267,7 @@ describe("codemode.describe", () => {
       providers: [
         {
           path: ["test"],
-          executeToolFunction: {
+          callable: {
             type: "fetch",
             via: { type: "url", url: "https://httpbin.org/post" },
           },

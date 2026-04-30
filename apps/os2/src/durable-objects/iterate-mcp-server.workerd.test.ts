@@ -329,14 +329,14 @@ function providerMatrixEvents(input: { baseUrl: string; mcpServerUrl: string }):
   return [
     toolProviderRegisteredEvent({
       path: ["builtin", "matrix"],
-      executeToolFunction: workersRpcCallable({
+      callable: workersRpcCallable({
         bindingName: "BUILTIN_MATRIX_PROVIDER",
         bindingType: "service",
       }),
     }),
     toolProviderRegisteredEvent({
       path: ["integrations", "http", "catalog"],
-      executeToolFunction: workersRpcCallable({
+      callable: workersRpcCallable({
         bindingName: "OPENAPI_BRIDGE",
         bindingType: "service",
         providerProps: {
@@ -347,7 +347,7 @@ function providerMatrixEvents(input: { baseUrl: string; mcpServerUrl: string }):
     }),
     toolProviderRegisteredEvent({
       path: ["integrations", "publicMcp"],
-      executeToolFunction: {
+      callable: {
         rpcMethod: "executeToolFunction",
         type: "workers-rpc",
         via: {
@@ -360,7 +360,7 @@ function providerMatrixEvents(input: { baseUrl: string; mcpServerUrl: string }):
     }),
     toolProviderRegisteredEvent({
       path: ["leaf"],
-      executeToolFunction: workersRpcCallable({
+      callable: workersRpcCallable({
         bindingName: "LEAF_PROVIDER",
         bindingType: "service",
       }),

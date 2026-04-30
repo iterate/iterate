@@ -13,7 +13,6 @@ export type SelfToolProviderDescriptorInput = SelfToolProviderEntrypoint & {
   providerProps?: JSONValue;
   bindingName?: string;
   executeToolFunctionMethod?: string;
-  describeToolFunctionsMethod?: string;
 };
 
 export function selfToolProviderBindingName(input: SelfToolProviderEntrypoint) {
@@ -48,14 +47,9 @@ export function createSelfToolProviderDescriptor(
 
   return {
     path: input.path,
-    executeToolFunction: createSelfToolProviderCallable({
+    callable: createSelfToolProviderCallable({
       via,
       rpcMethod: input.executeToolFunctionMethod ?? "executeToolFunction",
-      providerProps: input.providerProps,
-    }),
-    describeToolFunctions: createSelfToolProviderCallable({
-      via,
-      rpcMethod: input.describeToolFunctionsMethod ?? "describeToolFunctions",
       providerProps: input.providerProps,
     }),
   };

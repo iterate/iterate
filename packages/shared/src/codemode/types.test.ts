@@ -2,10 +2,10 @@ import { describe, it, expect } from "vitest";
 import { ToolProviderDescriptor, CodemodeEvent } from "./types.ts";
 
 describe("ToolProviderDescriptor schema", () => {
-  it("accepts a valid descriptor with executeToolFunction only", () => {
+  it("accepts a valid descriptor with one callable", () => {
     const result = ToolProviderDescriptor.safeParse({
       path: ["mcp", "linear"],
-      executeToolFunction: {
+      callable: {
         type: "workers-rpc",
         via: {
           type: "loopback-binding",
@@ -18,7 +18,7 @@ describe("ToolProviderDescriptor schema", () => {
     expect(result.success).toBe(true);
   });
 
-  it("accepts a valid descriptor with executeToolFunction and describeToolFunctions", () => {
+  it("rejects a legacy descriptor with separate execute and describe callables", () => {
     const result = ToolProviderDescriptor.safeParse({
       path: ["openapi", "petstore"],
       executeToolFunction: {
@@ -42,13 +42,17 @@ describe("ToolProviderDescriptor schema", () => {
         rpcMethod: "describeToolFunctions",
       },
     });
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(false);
   });
 
-  it("rejects empty path", () => {
+  it("rejects extra descriptor callables", () => {
     const result = ToolProviderDescriptor.safeParse({
-      path: [],
-      executeToolFunction: {
+      path: ["openapi", "petstore"],
+      callable: {
+        type: "fetch",
+        via: { type: "url", url: "https://example.com" },
+      },
+      describeToolFunctions: {
         type: "fetch",
         via: { type: "url", url: "https://example.com" },
       },
@@ -56,7 +60,18 @@ describe("ToolProviderDescriptor schema", () => {
     expect(result.success).toBe(false);
   });
 
-  it("rejects missing executeToolFunction", () => {
+  it("rejects empty path", () => {
+    const result = ToolProviderDescriptor.safeParse({
+      path: [],
+      callable: {
+        type: "fetch",
+        via: { type: "url", url: "https://example.com" },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects missing callable", () => {
     const result = ToolProviderDescriptor.safeParse({
       path: ["foo"],
     });

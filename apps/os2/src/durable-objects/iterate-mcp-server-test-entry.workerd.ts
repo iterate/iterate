@@ -1,6 +1,7 @@
 import { McpAgent } from "agents/mcp";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { createCodemodeContext } from "@iterate-com/shared/codemode/context-proxy";
+import { DESCRIBE_TOOL_FUNCTION_NAME } from "@iterate-com/shared/codemode/types";
 import type { IterateMcpServerProps } from "./iterate-mcp-server.ts";
 
 export { CodemodeSession } from "./codemode-session.ts";
@@ -21,6 +22,10 @@ type ToolFunctionInput = {
 export class TestBuiltinMatrixProvider extends WorkerEntrypoint {
   async executeToolFunction(input: ToolFunctionInput) {
     const path = input.path.join(".");
+    if (path === DESCRIBE_TOOL_FUNCTION_NAME) {
+      return { typeDefinitions: "{ compose(input: Record<string, unknown>): Promise<unknown>; }" };
+    }
+
     if (path !== "compose") {
       throw new Error(`TestBuiltinMatrixProvider does not implement ${path}`);
     }
@@ -51,6 +56,10 @@ export class TestBuiltinMatrixProvider extends WorkerEntrypoint {
 
 export class TestLeafProvider extends WorkerEntrypoint {
   async executeToolFunction(input: ToolFunctionInput) {
+    if (input.path.length === 1 && input.path[0] === DESCRIBE_TOOL_FUNCTION_NAME) {
+      return { typeDefinitions: "(input: { value: number }): Promise<{ value: number }>" };
+    }
+
     if (input.path.length > 0) {
       throw new Error(`TestLeafProvider expected leaf call, got ${input.path.join(".")}`);
     }

@@ -156,7 +156,7 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
 
     try {
       const result = await dispatchCallable({
-        callable: match.provider.executeToolFunction,
+        callable: match.provider.callable,
         payload: {
           path: match.toolFunctionPath,
           payload: input.payload,
@@ -400,15 +400,9 @@ function validateToolProviderDispatchContext(input: {
 }) {
   try {
     assertCallableDispatchContext({
-      callable: input.provider.executeToolFunction,
+      callable: input.provider.callable,
       ctx: input.callableContext,
     });
-    if (input.provider.describeToolFunctions) {
-      assertCallableDispatchContext({
-        callable: input.provider.describeToolFunctions,
-        ctx: input.callableContext,
-      });
-    }
   } catch (error) {
     throw new Error(
       `Tool provider "${input.provider.path.join(".")}" cannot be dispatched by this Codemode Session worker: ${

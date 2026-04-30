@@ -185,25 +185,23 @@ export const codemodeRouter = {
         const resolved = resolveToolProviderDescriptor(descriptor, callableCtx);
         resolvedProviders.push({ path: descriptor.path, provider: resolved });
 
-        if (descriptor.describeToolFunctions) {
-          try {
-            const description = await resolved.describeToolFunctions();
-            yield {
-              blockId,
-              timestamp: now(),
-              type: "codemode-tool-provider-described",
-              path: descriptor.path,
-              typeDefinitions: description.typeDefinitions,
-            };
-          } catch (err) {
-            yield {
-              blockId,
-              timestamp: now(),
-              type: "codemode-tool-provider-described",
-              path: descriptor.path,
-              typeDefinitions: `/** Error loading types for "${descriptor.path.join(".")}": ${err instanceof Error ? err.message : String(err)} */`,
-            };
-          }
+        try {
+          const description = await resolved.describeToolFunctions();
+          yield {
+            blockId,
+            timestamp: now(),
+            type: "codemode-tool-provider-described",
+            path: descriptor.path,
+            typeDefinitions: description.typeDefinitions,
+          };
+        } catch (err) {
+          yield {
+            blockId,
+            timestamp: now(),
+            type: "codemode-tool-provider-described",
+            path: descriptor.path,
+            typeDefinitions: `/** Error loading types for "${descriptor.path.join(".")}": ${err instanceof Error ? err.message : String(err)} */`,
+          };
         }
       }
 

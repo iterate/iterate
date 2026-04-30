@@ -4,7 +4,11 @@
 
 import { dispatchCallable } from "../callable/runtime.ts";
 import type { CallableContext } from "../callable/types.ts";
-import type { ToolProviderDescriptor, ToolProvider } from "./types.ts";
+import {
+  DESCRIBE_TOOL_FUNCTION_NAME,
+  type ToolProviderDescriptor,
+  type ToolProvider,
+} from "./types.ts";
 
 export function resolveToolProviderDescriptor(
   descriptor: ToolProviderDescriptor,
@@ -13,23 +17,16 @@ export function resolveToolProviderDescriptor(
   return {
     async executeToolFunction(path, payload) {
       return await dispatchCallable({
-        callable: descriptor.executeToolFunction,
+        callable: descriptor.callable,
         payload: { path, payload },
         ctx,
       });
     },
 
     async describeToolFunctions() {
-      if (!descriptor.describeToolFunctions) {
-        const pathLabel = descriptor.path.join(".");
-        return {
-          typeDefinitions: `/** The "${pathLabel}" tool provider has not provided type information. */\n(...args: unknown[]) => Promise<unknown>`,
-        };
-      }
-
       const result = await dispatchCallable({
-        callable: descriptor.describeToolFunctions,
-        payload: {},
+        callable: descriptor.callable,
+        payload: { path: [DESCRIBE_TOOL_FUNCTION_NAME], payload: {} },
         ctx,
       });
 
@@ -42,7 +39,11 @@ export function resolveToolProviderDescriptor(
         return result as { typeDefinitions: string };
       }
 
-      return { typeDefinitions: "(...args: unknown[]) => Promise<unknown>" };
+      return {
+        typeDefinitions: `/** The "${descriptor.path.join(
+          ".",
+        )}" tool provider has not provided type information via __describe. */\n(...args: unknown[]) => Promise<unknown>`,
+      };
     },
   };
 }

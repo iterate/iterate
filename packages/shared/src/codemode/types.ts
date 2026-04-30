@@ -2,7 +2,7 @@
  * Core types for the codemode system.
  *
  * - ToolProvider: resolved interface (local or remote, same shape)
- * - ToolProviderDescriptor: serializable wire format (Callable-based)
+ * - ToolProviderDescriptor: serializable wire format with one Callable
  * - CodemodeEvent: discriminated union of all streaming execution events
  */
 
@@ -16,13 +16,16 @@ export interface ToolProvider {
   describeToolFunctions(): Promise<{ typeDefinitions: string }>;
 }
 
+export const DESCRIBE_TOOL_FUNCTION_NAME = "__describe";
+
 // ── ToolProviderDescriptor (wire format) ───────────────────────────────
 
-export const ToolProviderDescriptor = z.object({
-  path: z.array(z.string().min(1)).min(1),
-  executeToolFunction: Callable,
-  describeToolFunctions: Callable.optional(),
-});
+export const ToolProviderDescriptor = z
+  .object({
+    path: z.array(z.string().min(1)).min(1),
+    callable: Callable,
+  })
+  .strict();
 
 export type ToolProviderDescriptor = z.infer<typeof ToolProviderDescriptor>;
 

@@ -1,5 +1,6 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { createCodemodeContext } from "@iterate-com/shared/codemode/context-proxy";
+import { DESCRIBE_TOOL_FUNCTION_NAME } from "@iterate-com/shared/codemode/types";
 
 export { CodemodeSession } from "./codemode-session.ts";
 
@@ -14,6 +15,10 @@ type ToolFunctionInput = {
 export class ProviderA extends WorkerEntrypoint {
   async executeToolFunction(input: ToolFunctionInput) {
     const path = input.path.join(".");
+
+    if (path === DESCRIBE_TOOL_FUNCTION_NAME) {
+      return providerATypeDefinitions();
+    }
 
     if (path === "compose.exclaimViaB") {
       const ctx = createCodemodeContext({
@@ -49,27 +54,15 @@ export class ProviderA extends WorkerEntrypoint {
 
     throw new Error(`Provider A does not implement ${path}`);
   }
-
-  async describeToolFunctions() {
-    return {
-      typeDefinitions: `{
-  compose: {
-    exclaimViaB(input: { value: string }): Promise<{ value: string }>;
-  };
-  math: {
-    add(input: { left: number; right: number }): Promise<{ value: number }>;
-  };
-  text: {
-    upper(input: { value: string }): Promise<{ value: string }>;
-  };
-}`,
-    };
-  }
 }
 
 export class ProviderB extends WorkerEntrypoint {
   async executeToolFunction(input: ToolFunctionInput) {
     const path = input.path.join(".");
+
+    if (path === DESCRIBE_TOOL_FUNCTION_NAME) {
+      return providerBTypeDefinitions();
+    }
 
     if (path === "compose.addThenUpper") {
       const ctx = createCodemodeContext({
@@ -101,10 +94,27 @@ export class ProviderB extends WorkerEntrypoint {
 
     throw new Error(`Provider B does not implement ${path}`);
   }
+}
 
-  async describeToolFunctions() {
-    return {
-      typeDefinitions: `{
+function providerATypeDefinitions() {
+  return {
+    typeDefinitions: `{
+  compose: {
+    exclaimViaB(input: { value: string }): Promise<{ value: string }>;
+  };
+  math: {
+    add(input: { left: number; right: number }): Promise<{ value: number }>;
+  };
+  text: {
+    upper(input: { value: string }): Promise<{ value: string }>;
+  };
+}`,
+  };
+}
+
+function providerBTypeDefinitions() {
+  return {
+    typeDefinitions: `{
   compose: {
     addThenUpper(input: { left: number; right: number }): Promise<{ value: string }>;
   };
@@ -112,8 +122,7 @@ export class ProviderB extends WorkerEntrypoint {
     exclaim(input: { value: string }): Promise<{ value: string }>;
   };
 }`,
-    };
-  }
+  };
 }
 
 export default {

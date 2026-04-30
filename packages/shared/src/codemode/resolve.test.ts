@@ -27,7 +27,7 @@ const fakeCtx: CallableContext = {
 function makeDescriptor(overrides?: Partial<ToolProviderDescriptor>): ToolProviderDescriptor {
   return {
     path: ["mcp", "test"],
-    executeToolFunction: {
+    callable: {
       type: "workers-rpc",
       via: {
         type: "loopback-binding",
@@ -56,7 +56,7 @@ describe("resolveToolProviderDescriptor", () => {
 
     expect(mockDispatch).toHaveBeenCalledOnce();
     expect(mockDispatch).toHaveBeenCalledWith({
-      callable: descriptor.executeToolFunction,
+      callable: descriptor.callable,
       payload: { path: ["createIssue"], payload: { title: "Bug" } },
       ctx: fakeCtx,
     });
@@ -70,20 +70,10 @@ describe("resolveToolProviderDescriptor", () => {
     await expect(provider.executeToolFunction(["tool"], {})).rejects.toThrow("dispatch failed");
   });
 
-  // --- describe with callable ---
+  // --- describe through the same callable ---
 
-  it("dispatches describeToolFunctions callable and returns typeDefinitions", async () => {
-    const descriptor = makeDescriptor({
-      describeToolFunctions: {
-        type: "workers-rpc",
-        via: {
-          type: "loopback-binding",
-          bindingType: "service",
-          exportName: "TestBridge",
-        },
-        rpcMethod: "describeToolFunctions",
-      },
-    });
+  it("dispatches __describe through the provider callable and returns typeDefinitions", async () => {
+    const descriptor = makeDescriptor();
 
     mockDispatch.mockResolvedValueOnce({
       typeDefinitions: "declare const mcp: { test: { createIssue: () => void } }",
@@ -93,117 +83,53 @@ describe("resolveToolProviderDescriptor", () => {
     const result = await provider.describeToolFunctions();
 
     expect(mockDispatch).toHaveBeenCalledWith({
-      callable: descriptor.describeToolFunctions,
-      payload: {},
+      callable: descriptor.callable,
+      payload: { path: ["__describe"], payload: {} },
       ctx: fakeCtx,
     });
     expect(result.typeDefinitions).toBe("declare const mcp: { test: { createIssue: () => void } }");
   });
 
-  // --- describe fallback (no describeToolFunctions callable) ---
+  // --- describe fallback (malformed data from callable) ---
 
-  it("returns a fallback type definition when no describeToolFunctions callable is provided", async () => {
-    const descriptor = makeDescriptor({ describeToolFunctions: undefined });
-    const provider = resolveToolProviderDescriptor(descriptor, fakeCtx);
-
-    const result = await provider.describeToolFunctions();
-
-    expect(mockDispatch).not.toHaveBeenCalled();
-    expect(result.typeDefinitions).toContain("mcp.test");
-    expect(result.typeDefinitions).toContain("has not provided type information");
-  });
-
-  it("uses the full dotted path label in the fallback", async () => {
-    const descriptor = makeDescriptor({
-      path: ["openapi", "petstore", "v2"],
-      describeToolFunctions: undefined,
-    });
-    const provider = resolveToolProviderDescriptor(descriptor, fakeCtx);
-
-    const result = await provider.describeToolFunctions();
-
-    expect(result.typeDefinitions).toContain("openapi.petstore.v2");
-  });
-
-  // --- describe fallback (malformed data from describe callable) ---
-
-  it("returns fallback when describeToolFunctions returns null", async () => {
-    const descriptor = makeDescriptor({
-      describeToolFunctions: {
-        type: "workers-rpc",
-        via: {
-          type: "loopback-binding",
-          bindingType: "service",
-          exportName: "TestBridge",
-        },
-        rpcMethod: "describeToolFunctions",
-      },
-    });
+  it("returns fallback when __describe returns null", async () => {
+    const descriptor = makeDescriptor();
 
     mockDispatch.mockResolvedValueOnce(null);
     const provider = resolveToolProviderDescriptor(descriptor, fakeCtx);
     const result = await provider.describeToolFunctions();
 
-    expect(result.typeDefinitions).toBe("(...args: unknown[]) => Promise<unknown>");
+    expect(result.typeDefinitions).toContain("mcp.test");
+    expect(result.typeDefinitions).toContain("__describe");
   });
 
-  it("returns fallback when describeToolFunctions returns a non-object", async () => {
-    const descriptor = makeDescriptor({
-      describeToolFunctions: {
-        type: "workers-rpc",
-        via: {
-          type: "loopback-binding",
-          bindingType: "service",
-          exportName: "TestBridge",
-        },
-        rpcMethod: "describeToolFunctions",
-      },
-    });
+  it("returns fallback when __describe returns a non-object", async () => {
+    const descriptor = makeDescriptor();
 
     mockDispatch.mockResolvedValueOnce("not an object");
     const provider = resolveToolProviderDescriptor(descriptor, fakeCtx);
     const result = await provider.describeToolFunctions();
 
-    expect(result.typeDefinitions).toBe("(...args: unknown[]) => Promise<unknown>");
+    expect(result.typeDefinitions).toContain("__describe");
   });
 
-  it("returns fallback when describeToolFunctions returns object without typeDefinitions", async () => {
-    const descriptor = makeDescriptor({
-      describeToolFunctions: {
-        type: "workers-rpc",
-        via: {
-          type: "loopback-binding",
-          bindingType: "service",
-          exportName: "TestBridge",
-        },
-        rpcMethod: "describeToolFunctions",
-      },
-    });
+  it("returns fallback when __describe returns object without typeDefinitions", async () => {
+    const descriptor = makeDescriptor();
 
     mockDispatch.mockResolvedValueOnce({ something: "else" });
     const provider = resolveToolProviderDescriptor(descriptor, fakeCtx);
     const result = await provider.describeToolFunctions();
 
-    expect(result.typeDefinitions).toBe("(...args: unknown[]) => Promise<unknown>");
+    expect(result.typeDefinitions).toContain("__describe");
   });
 
   it("returns fallback when typeDefinitions is not a string", async () => {
-    const descriptor = makeDescriptor({
-      describeToolFunctions: {
-        type: "workers-rpc",
-        via: {
-          type: "loopback-binding",
-          bindingType: "service",
-          exportName: "TestBridge",
-        },
-        rpcMethod: "describeToolFunctions",
-      },
-    });
+    const descriptor = makeDescriptor();
 
     mockDispatch.mockResolvedValueOnce({ typeDefinitions: 42 });
     const provider = resolveToolProviderDescriptor(descriptor, fakeCtx);
     const result = await provider.describeToolFunctions();
 
-    expect(result.typeDefinitions).toBe("(...args: unknown[]) => Promise<unknown>");
+    expect(result.typeDefinitions).toContain("__describe");
   });
 });

@@ -1,6 +1,6 @@
 /**
  * OpenAPI bridge — a stateless WorkerEntrypoint that translates
- * ToolProvider.executeToolFunction(path, payload) into HTTP calls against an OpenAPI spec.
+ * provider Tool Function calls into HTTP calls against an OpenAPI spec.
  *
  * Deployed as a named export from the os2 worker. Same-worker callables can
  * reach it via loopback-binding with props containing the spec URL and base URL:
@@ -13,10 +13,15 @@
  * Bindings cannot receive dynamic ctx.props; only ctx.exports loopback bindings can.
  *
  * Use createOpenApiProvider() to construct the ToolProviderDescriptor.
+ * The descriptor has one Callable; this bridge handles the reserved
+ * `__describe` path inside executeToolFunction.
  */
 
 import { WorkerEntrypoint } from "cloudflare:workers";
-import type { ToolProviderDescriptor } from "@iterate-com/shared/codemode/types";
+import {
+  DESCRIBE_TOOL_FUNCTION_NAME,
+  type ToolProviderDescriptor,
+} from "@iterate-com/shared/codemode/types";
 import { createSelfToolProviderDescriptor } from "@iterate-com/shared/codemode/self-callable";
 import {
   describeOpenApiToolFunctions,
@@ -29,20 +34,20 @@ export class OpenApiBridge extends WorkerEntrypoint<Record<string, unknown>, Ope
   /**
    * Execute a tool function call against the OpenAPI spec.
    *
-   * path[0] is the operationId. payload is the request body or query params.
+   * path[0] is either `__describe` or an operationId. payload is the request
+   * body or query params.
    */
   async executeToolFunction(input: OpenApiBridgeInput) {
+    if (input.path.length === 1 && input.path[0] === DESCRIBE_TOOL_FUNCTION_NAME) {
+      return await describeOpenApiToolFunctions({
+        providerProps: this.resolveProviderProps(input),
+      });
+    }
+
     return await executeOpenApiToolFunction({
       ...input,
       providerProps: this.resolveProviderProps(input),
     });
-  }
-
-  /**
-   * Describe the available operations as TypeScript declarations.
-   */
-  async describeToolFunctions(input?: { providerProps?: OpenApiBridgeProps }) {
-    return await describeOpenApiToolFunctions({ providerProps: this.resolveProviderProps(input) });
   }
 
   private resolveProviderProps(input?: { providerProps?: OpenApiBridgeProps }) {
@@ -100,11 +105,6 @@ export function createOpenApiProvider(options: OpenApiProviderOptions): ToolProv
 
   return {
     path: options.path,
-    executeToolFunction: { type: "workers-rpc" as const, via, rpcMethod: "executeToolFunction" },
-    describeToolFunctions: {
-      type: "workers-rpc" as const,
-      via,
-      rpcMethod: "describeToolFunctions",
-    },
+    callable: { type: "workers-rpc" as const, via, rpcMethod: "executeToolFunction" },
   };
 }

@@ -16,16 +16,7 @@ type CodemodeSessionStub = DurableObjectStub<CodemodeSession> & {
 
 type ToolProviderDescriptorInput = {
   path: string[];
-  executeToolFunction: {
-    rpcMethod: string;
-    type: "workers-rpc";
-    via: {
-      bindingName: string;
-      bindingType: "service";
-      type: "env-binding";
-    };
-  };
-  describeToolFunctions?: {
+  callable: {
     rpcMethod: string;
     type: "workers-rpc";
     via: {
@@ -198,13 +189,8 @@ function serviceProviderDescriptor(input: {
 
   return {
     path: input.path,
-    executeToolFunction: {
+    callable: {
       rpcMethod: "executeToolFunction",
-      type: "workers-rpc",
-      via,
-    },
-    describeToolFunctions: {
-      rpcMethod: "describeToolFunctions",
       type: "workers-rpc",
       via,
     },

@@ -9,6 +9,8 @@
  * the tool list. Subsequent calls reuse the connection.
  *
  * Use createMcpClientProvider() to construct the ToolProviderDescriptor.
+ * The descriptor has one Callable; this bridge handles the reserved
+ * `__describe` path inside executeToolFunction.
  *
  * MCP streamable HTTP transport:
  * https://modelcontextprotocol.io/docs/concepts/transports#streamable-http
@@ -16,7 +18,10 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import type { ToolProviderDescriptor } from "@iterate-com/shared/codemode/types";
+import {
+  DESCRIBE_TOOL_FUNCTION_NAME,
+  type ToolProviderDescriptor,
+} from "@iterate-com/shared/codemode/types";
 import {
   type CachedMcpTool,
   connectMcpClient,
@@ -47,28 +52,22 @@ export class McpClientBridge extends DurableObject {
   }
 
   /**
-   * Execute a tool function on the remote MCP server.
+   * Execute a tool function on the remote MCP server, or describe the provider.
    *
    * Called via Workers RPC from a callable with payload { path: string[], payload: unknown }.
    */
   async executeToolFunction(input: { path: string[]; payload: unknown }) {
     await this.ensureConnected();
 
+    if (input.path.length === 1 && input.path[0] === DESCRIBE_TOOL_FUNCTION_NAME) {
+      return describeMcpToolFunctions(this.#tools ?? []);
+    }
+
     return await executeMcpToolFunction({
       client: this.#client!,
       path: input.path,
       payload: input.payload,
     });
-  }
-
-  /**
-   * Describe available tool functions as TypeScript declarations.
-   *
-   * Called via Workers RPC from a callable with payload {}.
-   */
-  async describeToolFunctions() {
-    await this.ensureConnected();
-    return describeMcpToolFunctions(this.#tools ?? []);
   }
 }
 
@@ -102,11 +101,6 @@ export function createMcpClientProvider(options: {
 
   return {
     path: options.path,
-    executeToolFunction: { type: "workers-rpc" as const, via, rpcMethod: "executeToolFunction" },
-    describeToolFunctions: {
-      type: "workers-rpc" as const,
-      via,
-      rpcMethod: "describeToolFunctions",
-    },
+    callable: { type: "workers-rpc" as const, via, rpcMethod: "executeToolFunction" },
   };
 }

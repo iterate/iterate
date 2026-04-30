@@ -175,7 +175,8 @@ _Avoid_: CallableToolProvider
 - A **Self-Callable Provider Descriptor** survives crossing into another worker because it names the source worker script and entrypoint, not the currently dispatching worker's exports.
 - A Provider Descriptor stored on a **Codemode Session** must resolve from the Codemode Session worker's dispatch context.
 - Codemode calls **Tool Functions** with `callToolFunction(...)`; **Tool Providers** execute Tool Functions with `executeToolFunction(...)`.
-- Tool Provider Descriptors name `executeToolFunction` and `describeToolFunctions` callables.
+- Tool Provider Descriptors contain exactly one `callable`.
+- Tool Providers describe their Tool Functions by executing the reserved provider-relative `__describe` Tool Function.
 - `ctx.<provider>.<toolFunction>(payload)` calls a **Tool Function**.
 - `ctx.codemode.*` uses the **Codemode Control Surface** and does not create Tool Function lifecycle events.
 
@@ -189,6 +190,9 @@ _Avoid_: CallableToolProvider
 
 > **Dev:** "If Provider B calls Provider A while executing a Tool Function, is that a private provider call?"
 > **Domain expert:** "No. Provider B uses the **Codemode Session Capability** to make another **Tool Function Call**, so the **Codemode Session** records the same lifecycle events as any other Tool Function Call."
+
+> **Dev:** "How does a Provider Descriptor describe its types if it only has one callable?"
+> **Domain expert:** "The provider handles the reserved provider-relative `__describe` Tool Function and returns `{ typeDefinitions: string }`."
 
 > **Dev:** "Does creating a **Codemode Session** always create a new stream?"
 > **Domain expert:** "No. A **Codemode Session** is attached to an **Event Stream Path**, which may be newly chosen by OS2 or may already exist."
@@ -241,6 +245,7 @@ _Avoid_: CallableToolProvider
 - "script" and "execution" were conflated. Resolved: **Script** is code; **Script Execution** is one attempt to run it.
 - "execute" and "call" were used interchangeably. Resolved: codemode **calls** Tool Functions; Tool Providers **execute** Tool Functions.
 - "tools" was used for both the whole context and provider functions. Resolved: the local object is **Codemode Context**; provider callables are **Tool Functions**.
+- "describe callable" added a second Provider Descriptor execution path. Resolved: a Provider Descriptor has one `callable`; `__describe` is a reserved Tool Function handled by the Tool Provider.
 - "ExecutionContext" conflicts with Cloudflare's Worker `ExecutionContext`. Resolved: use **Codemode Context** for codemode userland.
 - "session id" and "stream path" were conflated. Resolved: **Project ID** plus **Event Stream Path** is the **Codemode Session** identity.
 - "app" can mean the OS2 product or a managed project surface. Resolved: use **OS2 App** for this dashboard and **Project** for the managed app surface.
