@@ -144,6 +144,12 @@ export const codemodeRouter = {
 
       if (signal?.aborted) return;
 
+      await requireCodemodeProject({
+        activeOrganization: context.activeOrganization,
+        context,
+        projectId: input.projectId,
+      });
+
       const callableCtx: CallableContext = {
         env: context.callableEnv ?? {},
         fetch: globalThis.fetch,
@@ -275,15 +281,11 @@ async function executeScriptOnSession(input: {
     });
   }
 
-  const project = await getProjectById(context.db, {
-    clerkOrgId: input.activeOrganization.orgId,
-    id: input.projectId,
+  await requireCodemodeProject({
+    activeOrganization: input.activeOrganization,
+    context,
+    projectId: input.projectId,
   });
-  if (!project) {
-    throw new ORPCError("NOT_FOUND", {
-      message: `Project ${input.projectId} not found`,
-    });
-  }
 
   const duplicateProviderPath = findDuplicateProviderPath(input.providers.map((p) => p.path));
   if (duplicateProviderPath) {
@@ -354,10 +356,7 @@ function toLegacyCodemodeEvent(input: {
   const payload = readPayload(input.event);
   const timestamp = input.event.createdAt;
 
-  if (
-    payload.scriptExecutionRequestedOffset !== input.scriptExecutionRequestedOffset &&
-    input.event.type !== "events.iterate.com/codemode/tool-provider-registered"
-  ) {
+  if (payload.scriptExecutionRequestedOffset !== input.scriptExecutionRequestedOffset) {
     return null;
   }
 
@@ -434,6 +433,32 @@ function stringifyPayloadError(value: unknown) {
     if (typeof message === "string") return message;
   }
   return String(value);
+}
+
+/**
+ * Confirms that both codemode execution paths are project-scoped before any
+ * code runs. The durable CodemodeSession path already needs this lookup to find
+ * the stream owner; the legacy WorkerLoader fallback must share the same guard
+ * so a user cannot execute code against a project ID outside their active
+ * Clerk organization.
+ */
+async function requireCodemodeProject(input: {
+  activeOrganization: ActiveOrganizationAuth;
+  context: AppContext;
+  projectId: string;
+}) {
+  const project = await getProjectById(input.context.db, {
+    clerkOrgId: input.activeOrganization.orgId,
+    id: input.projectId,
+  });
+
+  if (!project) {
+    throw new ORPCError("NOT_FOUND", {
+      message: `Project ${input.projectId} not found`,
+    });
+  }
+
+  return project;
 }
 
 /**
