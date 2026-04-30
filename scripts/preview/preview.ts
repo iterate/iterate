@@ -699,12 +699,15 @@ async function destroyPreviewEnvironment(
     signal: params.signal,
     workingDirectory: params.workingDirectory,
   });
+  const missingDopplerConfig = isMissingDopplerConfigError(destroyResult);
   const destroyMessage =
     destroyResult.exitCode === 0
       ? null
-      : commandFailureMessage(destroyResult, "Preview teardown failed.");
+      : missingDopplerConfig
+        ? "Preview teardown skipped because the recorded Doppler config no longer exists."
+        : commandFailureMessage(destroyResult, "Preview teardown failed.");
 
-  if (destroyResult.exitCode !== 0) {
+  if (destroyResult.exitCode !== 0 && !missingDopplerConfig) {
     return {
       message: destroyMessage ?? "Preview teardown failed.",
       ok: false,
@@ -726,7 +729,7 @@ async function destroyPreviewEnvironment(
         destroyMessage,
         released.released ? "Preview environment released." : "Semaphore lease was already gone.",
       ),
-      ok: destroyResult.exitCode === 0,
+      ok: destroyResult.exitCode === 0 || missingDopplerConfig,
     };
   } catch (error) {
     return {
@@ -737,6 +740,21 @@ async function destroyPreviewEnvironment(
       ok: false,
     };
   }
+}
+
+function isMissingDopplerConfigError(result: { stderr: string; stdout: string }) {
+  const output = `${result.stdout}\n${result.stderr}`;
+  /**
+   * Preview config names are part of the preview orchestration contract and have
+   * changed before (`stg_N` -> `preview_N`). Stale PR-body entries can therefore
+   * point at a config that has intentionally been removed. In that one case,
+   * deployment should release the old semaphore lease and create a fresh preview
+   * with the current derived config name instead of wedging the PR forever.
+   */
+  return (
+    output.includes("Doppler Error: Could not find requested config") ||
+    output.includes("Doppler Error: Config not found")
+  );
 }
 
 function derivePreviewEnvironment(input: {
