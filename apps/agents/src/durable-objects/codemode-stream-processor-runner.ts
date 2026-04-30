@@ -1,11 +1,11 @@
 import type { StreamProcessorRunnerState } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor-runner";
+import { CodemodeProcessorContract } from "@iterate-com/shared/stream-processors/codemode/contract";
+import { createCodemodeProcessor } from "@iterate-com/shared/stream-processors/codemode/implementation";
 import {
   createStreamProcessorRunnerDurableObject,
   type StreamProcessorRunnerInit,
 } from "./stream-processor-runner-common.ts";
 import { createCloudflareCodemodeCodeExecutor } from "~/stream-processors/codemode/cloudflare-code-executor.ts";
-import { CodemodeProcessorContract } from "~/stream-processors/codemode/contract.ts";
-import { createCodemodeProcessor } from "~/stream-processors/codemode/implementation.ts";
 
 export type CodemodeStreamProcessorRunnerInit = StreamProcessorRunnerInit;
 

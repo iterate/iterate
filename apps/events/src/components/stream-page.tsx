@@ -47,7 +47,7 @@ import { stringify as stringifyYaml } from "yaml";
 import { StreamEventFeed, type CustomHtmlRendererApi } from "~/components/stream-event-feed.tsx";
 import { StreamComposer } from "~/components/stream-composer.tsx";
 import { useLiveStreamEvents } from "~/hooks/use-live-stream-events.ts";
-import { getEventInputTemplateById, getEventTypePageByType } from "~/lib/event-type-pages.ts";
+import { getEventInputTemplateById, getProcessorEventDocByType } from "~/lib/processor-docs.ts";
 import { parseObjectFromComposerText } from "~/lib/stream-composer-input.ts";
 import {
   buildCustomHtmlRendererProjection,
@@ -69,7 +69,7 @@ import {
 import { getOrpc, getOrpcClient } from "~/orpc/client.ts";
 import { useStreamsChrome } from "~/components/streams-chrome.tsx";
 
-const DEFAULT_EVENT_TEMPLATE_ID = "manual-event-appended:default";
+const DEFAULT_EVENT_TEMPLATE_ID = "core:durable-object-woke-up";
 const EMPTY_CUSTOM_INSERTIONS = new Map<number, StreamFeedItem[]>();
 
 export function StreamPage({
@@ -418,7 +418,7 @@ export function StreamPage({
           events={events}
           openEventOffset={openEventOffset}
           onOpenEventOffsetChange={onOpenEventOffsetChange}
-          getEventTypeHref={(eventType) => getEventTypePageByType(eventType)?.href}
+          getEventTypeHref={(eventType) => getProcessorEventDocByType(eventType)?.href}
         />
       ) : null}
 

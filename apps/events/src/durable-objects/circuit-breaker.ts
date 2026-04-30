@@ -9,7 +9,7 @@ import {
   StreamPausedEvent,
   StreamResumedEvent,
 } from "@iterate-com/events-contract";
-import { defineBuiltinProcessor } from "@iterate-com/events-contract/sdk";
+import type { BuiltinProcessor } from "./builtin-processor.ts";
 
 const defaultCircuitBreakerConfig: CircuitBreakerConfig = {
   burstCapacity: 500,
@@ -50,7 +50,7 @@ function getRefillRatePerMs(config: CircuitBreakerConfig) {
  * This prevents runaway producers from flooding a stream while still allowing
  * an operator to resume manually.
  */
-export const circuitBreakerProcessor = defineBuiltinProcessor<CircuitBreakerState>(() => ({
+export const circuitBreakerProcessor = {
   slug: "circuit-breaker",
   initialState: {
     paused: false,
@@ -137,4 +137,4 @@ export const circuitBreakerProcessor = defineBuiltinProcessor<CircuitBreakerStat
       payload: { reason: "circuit breaker tripped: burst rate limit exceeded" },
     });
   },
-}));
+} satisfies BuiltinProcessor<CircuitBreakerState>;

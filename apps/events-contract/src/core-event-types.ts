@@ -11,20 +11,10 @@ export const STREAM_METADATA_UPDATED_TYPE = coreEventType("metadata-updated");
 export const STREAM_ERROR_OCCURRED_TYPE = coreEventType("error-occurred");
 export const STREAM_INVALID_EVENT_APPENDED_TYPE = coreEventType("invalid-event-appended");
 export const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = coreEventType("subscription-configured");
-export const STREAM_JSONATA_TRANSFORMER_CONFIGURED_TYPE = coreEventType(
-  "jsonata-transformer-configured",
-);
-export const STREAM_DYNAMIC_WORKER_CONFIGURED_TYPE = coreEventType("dynamic-worker-configured");
-export const STREAM_DYNAMIC_WORKER_ENV_VAR_SET_TYPE = coreEventType("dynamic-worker-env-var-set");
 export const STREAM_CIRCUIT_BREAKER_CONFIGURED_TYPE = coreEventType("circuit-breaker-configured");
 export const STREAM_HTML_RENDERER_CONFIGURED_TYPE = coreEventType("html-renderer-configured");
 export const STREAM_PAUSED_TYPE = coreEventType("paused");
 export const STREAM_RESUMED_TYPE = coreEventType("resumed");
-export const STREAM_APPEND_SCHEDULED_TYPE = coreEventType("append-scheduled");
-export const STREAM_SCHEDULE_CONFIGURED_TYPE = coreEventType("schedule-configured");
-export const STREAM_SCHEDULE_CANCELLED_TYPE = coreEventType("schedule-cancelled");
-export const STREAM_SCHEDULE_EXECUTION_STARTED_TYPE = coreEventType("schedule-execution-started");
-export const STREAM_SCHEDULE_EXECUTION_FINISHED_TYPE = coreEventType("schedule-execution-finished");
 
 export function getCoreEventTypeSlug(type: string) {
   if (!type.startsWith(CORE_EVENT_TYPE_PREFIX)) {

@@ -3,11 +3,9 @@ import { Link } from "@tanstack/react-router";
 import type { Event, EventInput, StreamPath, StreamState } from "@iterate-com/events-contract";
 import {
   AlertTriangleIcon,
-  BotIcon,
   BracesIcon,
   CableIcon,
   CheckCircle2Icon,
-  ChevronDownIcon,
   CircleIcon,
   Code2Icon,
   CopyIcon,
@@ -51,7 +49,7 @@ import { StreamErrorAlert } from "~/components/stream-error-alert.tsx";
 import { CoreEventTypeLabel } from "~/components/event-type.tsx";
 import { StreamPathLabel } from "~/components/stream-path-label.tsx";
 import { StreamToolCard } from "~/components/stream-tool-card.tsx";
-import { getEventTypePageByType } from "~/lib/event-type-pages.ts";
+import { getProcessorEventDocByType } from "~/lib/processor-docs.ts";
 import { orderEventKeysForYamlDisplay } from "~/lib/order-event-keys-for-yaml-display.ts";
 import { formatElapsedTime } from "~/lib/stream-feed-time.ts";
 import { getEventFeedItems } from "~/lib/stream-feed-projection.ts";
@@ -61,18 +59,14 @@ import { streamPathToSplat } from "~/lib/stream-links.ts";
 import { defaultStreamViewSearch } from "~/lib/stream-view-search.ts";
 import type {
   AgentStatusFeedItem,
-  BashmodeBlockFeedItem,
   CodemodeBlockFeedItem,
   CodemodeResultFeedItem,
   CustomHtmlRenderErrorFeedItem,
   CustomHtmlRenderedEventFeedItem,
-  DynamicWorkerConfiguredFeedItem,
-  DynamicWorkerEnvVarSetFeedItem,
   ChildStreamCreatedFeedItem,
   EventFeedItem,
   ExternalSubscriberConfiguredFeedItem,
   GroupedEventFeedItem,
-  JsonataTransformerConfiguredFeedItem,
   StreamErrorOccurredFeedItem,
   StreamFeedItem,
   StreamLifecycleFeedItem,
@@ -258,7 +252,7 @@ export function StreamEventFeed({
         events={eventFeedItems.map((item) => item.raw)}
         openEventOffset={openEventOffset}
         onOpenEventOffsetChange={onOpenEventOffsetChange}
-        getEventTypeHref={(eventType) => getEventTypePageByType(eventType)?.href}
+        getEventTypeHref={(eventType) => getProcessorEventDocByType(eventType)?.href}
       />
     </div>
   );
@@ -310,18 +304,12 @@ function StreamFeedItemRenderer({
       return <StreamMetadataUpdatedCard item={item} />;
     case "external-subscriber-configured":
       return <ExternalSubscriberConfiguredCard item={item} />;
-    case "jsonata-transformer-configured":
-      return <JsonataTransformerConfiguredCard item={item} />;
     case "custom-html-rendered-event":
       return <CustomHtmlRenderedEventCard item={item} />;
     case "custom-html-render-error":
       return <CustomHtmlRenderErrorCard item={item} />;
     case "stream-lifecycle":
       return <StreamLifecycleLine item={item} />;
-    case "dynamic-worker-configured":
-      return <DynamicWorkerConfiguredCard item={item} />;
-    case "dynamic-worker-env-var-set":
-      return <DynamicWorkerEnvVarSetCard item={item} />;
     case "stream-paused":
       return <StreamPausedCard item={item} />;
     case "stream-resumed":
@@ -332,8 +320,6 @@ function StreamFeedItemRenderer({
       return <AgentStatusLine item={item} />;
     case "codemode-block":
       return <CodemodeBlockCard item={item} />;
-    case "bashmode-block":
-      return <BashmodeBlockCard item={item} />;
     case "codemode-result":
       return <CodemodeResultCard item={item} />;
     default:
@@ -480,31 +466,6 @@ function ExternalSubscriberConfiguredCard({
   );
 }
 
-function JsonataTransformerConfiguredCard({
-  item,
-}: {
-  item: JsonataTransformerConfiguredFeedItem;
-}) {
-  return (
-    <AssistantArtifact
-      eyebrow={<Settings2Icon className="size-3.5" />}
-      eyebrowLabel="JSONata transformer configured"
-      title={item.transformer.slug}
-      meta={[formatTime(item.timestamp)]}
-    >
-      <ArtifactSection>
-        <SerializedObjectCodeBlock
-          data={item.transformer}
-          className="min-h-24 max-h-56"
-          initialFormat="json"
-          showToggle
-          showCopyButton
-        />
-      </ArtifactSection>
-    </AssistantArtifact>
-  );
-}
-
 function CustomHtmlRenderedEventCard({ item }: { item: CustomHtmlRenderedEventFeedItem }) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -585,103 +546,6 @@ function AgentStatusLine({ item }: { item: AgentStatusFeedItem }) {
   );
 }
 
-function DynamicWorkerConfiguredCard({ item }: { item: DynamicWorkerConfiguredFeedItem }) {
-  const [open, setOpen] = useState(false);
-  const previewCode = getSourceCodePreview(item.sourceCode, 10);
-  const hasMoreCode = previewCode !== item.sourceCode;
-  const gatewaySummary = item.outboundGateway
-    ? item.outboundGateway.secretHeaderName
-      ? `${item.outboundGateway.entrypoint} · injects ${item.outboundGateway.secretHeaderName}`
-      : item.outboundGateway.entrypoint
-    : undefined;
-
-  return (
-    <AssistantArtifact
-      eyebrow={<BotIcon className="size-3.5" />}
-      eyebrowLabel="Dynamic worker configured"
-      title={item.slug}
-      meta={[
-        ...(item.compatibilityDate ? [item.compatibilityDate] : []),
-        ...(item.compatibilityFlags.length > 0
-          ? [
-              `${item.compatibilityFlags.length} compatibility flag${item.compatibilityFlags.length === 1 ? "" : "s"}`,
-            ]
-          : []),
-        ...(gatewaySummary ? [gatewaySummary] : []),
-        formatTime(item.timestamp),
-      ]}
-    >
-      <ArtifactSection>
-        <div className="rounded-md border bg-muted/30 p-3">
-          <div className="flex items-center justify-between gap-3">
-            <div className="space-y-0.5">
-              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Processor source
-              </div>
-              <div className="text-xs text-muted-foreground">
-                {hasMoreCode ? "Showing first 10 lines" : "Full source"}
-              </div>
-            </div>
-            {hasMoreCode ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 gap-1.5 px-2 text-xs"
-                onClick={() => setOpen((value) => !value)}
-              >
-                {open ? "Collapse" : "Expand"}
-                <ChevronDownIcon
-                  className={cn("size-3.5 transition-transform duration-200", open && "rotate-180")}
-                />
-              </Button>
-            ) : null}
-          </div>
-
-          <div
-            className={cn(
-              "grid transition-all duration-300 ease-in-out",
-              open || !hasMoreCode ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-100",
-            )}
-          >
-            <div className="overflow-hidden pt-3">
-              <SourceCodeBlock
-                code={open || !hasMoreCode ? item.sourceCode : previewCode}
-                language="typescript"
-                className={cn("min-h-32", open ? "max-h-144" : "max-h-72")}
-                showCopyButton
-              />
-            </div>
-          </div>
-        </div>
-      </ArtifactSection>
-    </AssistantArtifact>
-  );
-}
-
-function DynamicWorkerEnvVarSetCard({ item }: { item: DynamicWorkerEnvVarSetFeedItem }) {
-  return (
-    <AssistantArtifact
-      eyebrow={<Settings2Icon className="size-3.5" />}
-      eyebrowLabel="Dynamic worker env var set"
-      title={item.key}
-      meta={[
-        item.usesIterateSecret ? "Uses getIterateSecret placeholder" : "Literal string value",
-        formatTime(item.timestamp),
-      ]}
-    >
-      <ArtifactSection>
-        <p className="text-sm text-muted-foreground">
-          Available to dynamic workers as <code>{`process.env.${item.key}`}</code>.
-        </p>
-        <p className="text-sm text-muted-foreground">
-          Pretty view hides the raw value; inspect the raw event payload if you need the exact
-          stored string.
-        </p>
-      </ArtifactSection>
-    </AssistantArtifact>
-  );
-}
-
 function StreamPausedCard({ item }: { item: StreamPausedFeedItem }) {
   return (
     <AssistantArtifact
@@ -735,26 +599,6 @@ function CodemodeBlockCard({ item }: { item: CodemodeBlockFeedItem }) {
           code={item.code}
           language={sourceLanguage}
           className="min-h-40 max-h-128"
-          showCopyButton
-        />
-      </ArtifactSection>
-    </AssistantArtifact>
-  );
-}
-
-function BashmodeBlockCard({ item }: { item: BashmodeBlockFeedItem }) {
-  return (
-    <AssistantArtifact
-      eyebrow={<TerminalSquareIcon className="size-3.5" />}
-      eyebrowLabel="Bash block"
-      title="shell"
-      meta={[formatTime(item.timestamp)]}
-    >
-      <ArtifactSection>
-        <SourceCodeBlock
-          code={item.content}
-          language="text"
-          className="min-h-32 max-h-128"
           showCopyButton
         />
       </ArtifactSection>
@@ -955,15 +799,6 @@ function ArtifactSection({ children }: { children: ReactNode }) {
   return <div className="space-y-2">{children}</div>;
 }
 
-function getSourceCodePreview(sourceCode: string, lineCount: number) {
-  const lines = sourceCode.split("\n");
-  if (lines.length <= lineCount) {
-    return sourceCode;
-  }
-
-  return `${lines.slice(0, lineCount).join("\n")}\n...`;
-}
-
 function EventLine({
   event,
   elapsedLabel,
@@ -1151,18 +986,12 @@ function getFeedItemKey(item: StreamFeedItem, index: number) {
       return `stream-metadata-${item.path}-${item.timestamp}-${index}`;
     case "external-subscriber-configured":
       return `external-subscriber-${item.subscriber.slug}-${item.timestamp}-${index}`;
-    case "jsonata-transformer-configured":
-      return `jsonata-transformer-${item.transformer.slug}-${item.timestamp}-${index}`;
     case "custom-html-rendered-event":
       return `custom-html-rendered-${item.slug}-${item.raw.offset}-${index}`;
     case "custom-html-render-error":
       return `custom-html-render-error-${item.slug}-${item.raw.offset}-${index}`;
     case "stream-lifecycle":
       return `lifecycle-${item.label}-${item.timestamp}-${index}`;
-    case "dynamic-worker-configured":
-      return `dynamic-worker-configured-${item.slug}-${item.raw.offset}`;
-    case "dynamic-worker-env-var-set":
-      return `dynamic-worker-env-var-set-${item.key}-${item.raw.offset}`;
     case "stream-paused":
       return `stream-paused-${item.timestamp}-${index}`;
     case "stream-resumed":
@@ -1173,8 +1002,6 @@ function getFeedItemKey(item: StreamFeedItem, index: number) {
       return `agent-status-${item.status}-${item.reason}-${item.raw.offset}`;
     case "codemode-block":
       return `codemode-block-${item.blockId}-${item.timestamp}-${index}`;
-    case "bashmode-block":
-      return `bashmode-block-${item.timestamp}-${index}`;
     case "codemode-result":
       return `codemode-result-${item.blockId}-${item.blockCount}-${item.timestamp}-${index}`;
     default:

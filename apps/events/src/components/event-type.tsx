@@ -2,7 +2,7 @@ import { getCoreEventTypeSlug } from "@iterate-com/events-contract";
 import { ExternalLink } from "lucide-react";
 import { IterateMark } from "@iterate-com/ui/components/iterate-mark";
 import { cn } from "@iterate-com/ui/lib/utils";
-import { getEventTypePageByType } from "~/lib/event-type-pages.ts";
+import { getProcessorEventDocByType } from "~/lib/processor-docs.ts";
 
 export function CoreEventTypeLabel({ type, className }: { type: string; className?: string }) {
   const slug = getCoreEventTypeSlug(type);
@@ -20,15 +20,15 @@ export function CoreEventTypeLabel({ type, className }: { type: string; classNam
 }
 
 export function EventType({ type, className }: { type: string; className?: string }) {
-  const page = getEventTypePageByType(type);
+  const eventDoc = getProcessorEventDocByType(type);
 
-  if (!page) {
+  if (!eventDoc) {
     return <CoreEventTypeLabel type={type} className={className} />;
   }
 
   return (
     <a
-      href={page.href}
+      href={eventDoc.href}
       target="_blank"
       rel="noreferrer"
       className={cn(

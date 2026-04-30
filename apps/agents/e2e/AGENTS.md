@@ -121,7 +121,8 @@ record/replay mode, not vitest snapshot assertions.
   produce meaningful git diffs.
 - **Hostname rewriting at replay time**: `prepareAgentsHarForReplay` rewrites run-specific
   project hostnames so MSW matchers work with the current run slug.
-- One record script: `pnpm test:e2e:record` (replaces the 3 separate record scripts)
+- HAR replay only: `pnpm test:e2e:mocked-internet`
+- Record HARs: `pnpm test:e2e:record`
 
 ## Event waiting model
 

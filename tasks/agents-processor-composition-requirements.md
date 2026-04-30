@@ -108,7 +108,7 @@ Working note for the `apps/agents` processor redesign discussion. This is not co
 - Use a simple `waitUntil(promise)` runner hook for now. Do not add task tracking / keepalive abstractions until a concrete StreamProcessorRunner needs them.
 - Durable Object StreamProcessorRunners should contribute deployment-specific pieces: storage adapter, transaction boundary, `waitUntil`, bindings, alarms, sockets, and request routing.
 - Processor contracts and implementations should not know whether they are run by `stream.ts`, an Agent Durable Object, a Codemode Durable Object, a pull StreamProcessorRunner, or a future system-managed facet StreamProcessorRunner.
-- The existing pull/push runtime in `apps/events-contract/src/sdk.ts` is prior art and should be reconciled with the new shared processor contract model rather than left as an unrelated abstraction.
+- The deleted events SDK prototype was useful prior art, but new work should use the shared processor contract and runner model directly.
 - For the current exploration, do not change `events-contract`; continue proving the processor abstraction independently before reconciling envelopes and SDKs.
 - The first extraction from `stream.ts` should prove the shared StreamProcessorRunner shape by moving reducer/hook orchestration into a small runner helper reusable by future agent/codemode Durable Objects.
 

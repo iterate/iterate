@@ -7,9 +7,9 @@ import {
   type StreamPath,
 } from "@iterate-com/events-contract";
 import type { ProcessorStreamApi } from "@iterate-com/shared/stream-processors";
+import { CodemodeProcessorContract } from "@iterate-com/shared/stream-processors/codemode/contract";
+import { createCodemodeProcessor } from "@iterate-com/shared/stream-processors/codemode/implementation";
 import { setupE2E, type E2EContext } from "../test-support/e2e-test.ts";
-import { CodemodeProcessorContract } from "../../src/stream-processors/codemode/contract.ts";
-import { createCodemodeProcessor } from "../../src/stream-processors/codemode/implementation.ts";
 import {
   createMemoryPullProcessorStorage,
   runPullProcessor,

@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import {
   ExternalSubscriber,
   HtmlRendererConfiguredEventInput,
-  JsonataTransformerConfiguredEventInput,
   StreamSubscriptionConfiguredEventInput,
 } from "./index.ts";
 
@@ -27,19 +26,6 @@ function testInvalidExternalSubscriberJsonataExpressionsFailFast() {
       type: "webhook",
       callbackUrl: "https://example.com/hook",
       jsonataFilter: "{",
-    },
-  });
-
-  assert.equal(parsed.success, false);
-}
-
-function testInvalidJsonataTransformerExpressionsFailFast() {
-  const parsed = JsonataTransformerConfiguredEventInput.safeParse({
-    type: "events.iterate.com/core/jsonata-transformer-configured",
-    payload: {
-      slug: "fanout",
-      matcher: "type = ",
-      transform: '{"kind":"copy"}',
     },
   });
 
@@ -74,6 +60,5 @@ function testInvalidHtmlRendererMatcherFailsFast() {
 
 await testValidExternalSubscriberJsonataExpressionsParse();
 await testInvalidExternalSubscriberJsonataExpressionsFailFast();
-await testInvalidJsonataTransformerExpressionsFailFast();
 await testValidHtmlRendererConfigParses();
 await testInvalidHtmlRendererMatcherFailsFast();

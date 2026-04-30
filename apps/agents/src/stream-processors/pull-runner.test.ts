@@ -4,10 +4,13 @@ import {
   type StreamEvent,
   type StreamEventInput,
 } from "@iterate-com/shared/stream-processors";
-import { buildProcessorRegisteredEvent } from "./core/contract.ts";
+import {
+  CODEMODE_PRIMER_IDEMPOTENCY_KEY,
+  CodemodeProcessorContract,
+} from "@iterate-com/shared/stream-processors/codemode/contract";
+import { createCodemodeProcessor } from "@iterate-com/shared/stream-processors/codemode/implementation";
+import { buildProcessorRegisteredEvent } from "@iterate-com/shared/stream-processors/core/contract";
 import { createMemoryPullProcessorStorage, runPullProcessor } from "./pull-runner.ts";
-import { CODEMODE_PRIMER_IDEMPOTENCY_KEY, CodemodeProcessorContract } from "./codemode/contract.ts";
-import { createCodemodeProcessor } from "./codemode/implementation.ts";
 
 describe("runPullProcessor", () => {
   it("catches up, subscribes from the reduced offset, and consumes live events", async () => {

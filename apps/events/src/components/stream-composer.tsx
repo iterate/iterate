@@ -13,7 +13,7 @@ import {
 import { Button } from "@iterate-com/ui/components/button";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
-import { eventInputTemplates, getEventInputTemplateById } from "~/lib/event-type-pages.ts";
+import { eventInputTemplates, getEventInputTemplateById } from "~/lib/processor-docs.ts";
 import type { StreamComposerMode } from "~/lib/stream-view-search.ts";
 
 /**

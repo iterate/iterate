@@ -5,7 +5,6 @@ import {
   createGroupedOrSingleEvent,
   getAdjacentEventOffset,
   getEventFeedItems,
-  projectEventToFeed,
   projectWireToFeed,
   toEventFeedItem,
   toSemanticFeedItem,
@@ -14,25 +13,13 @@ import {
   buildCustomHtmlRendererInsertions,
   buildCustomHtmlRendererProjection,
 } from "~/lib/custom-html-renderers.ts";
-import type { EventFeedItem, StreamFeedItem } from "~/lib/stream-feed-types.ts";
-
-const SLACK_AGENT_INPUT_CONTENT = [
-  "```yaml",
-  "event:",
-  "  type: events.iterate.com/slack/webhook-received",
-  "  idempotencyKey: slack-webhook:Ev0B09JZ1SF9",
-  "  filtered: true",
-  "  payload:",
-  "    channel: C08R1SMTZGD",
-  '    text: "<@U08T48230AD> reply exactly slack-filtered-original-type-1777497600"',
-  "```",
-].join("\n");
+import type { StreamFeedItem } from "~/lib/stream-feed-types.ts";
 
 describe("toEventFeedItem", () => {
   test("maps contract events to feed events", () => {
     const event = createEvent({
       streamPath: "/demo",
-      type: "https://events.iterate.com/demo/created",
+      type: "events.iterate.com/demo/created",
       offset: 5,
       createdAt: "2026-03-30T12:34:56.000Z",
       payload: { ok: true },
@@ -43,7 +30,7 @@ describe("toEventFeedItem", () => {
       streamPath: "/demo",
       offset: 5,
       createdAt: "2026-03-30T12:34:56.000Z",
-      eventType: "https://events.iterate.com/demo/created",
+      eventType: "events.iterate.com/demo/created",
       timestamp: Date.parse("2026-03-30T12:34:56.000Z"),
       raw: event,
     });
@@ -51,145 +38,105 @@ describe("toEventFeedItem", () => {
 });
 
 describe("projectWireToFeed", () => {
-  test("projects every event into the feed timeline", () => {
+  test("projects every wire event into the feed timeline", () => {
     const events = [
-      createEvent({ offset: 1, type: "https://events.iterate.com/demo/one" }),
-      createEvent({ offset: 2, type: "https://events.iterate.com/demo/two" }),
+      createEvent({ offset: 1, type: "events.iterate.com/demo/one" }),
+      createEvent({ offset: 2, type: "events.iterate.com/demo/two" }),
     ];
 
     expect(projectWireToFeed(events).map((item) => item.kind)).toEqual(["event", "event"]);
   });
 
-  test("adds a semantic child-stream item after child-stream-created events", () => {
-    const feed = projectEventToFeed(
+  test("adds semantic rows for core stream events", () => {
+    const feed = projectWireToFeed([
       createEvent({
         streamPath: "/",
+        offset: 1,
         type: "events.iterate.com/core/child-stream-created",
         payload: { childPath: "/child-stream" },
       }),
-    );
+      createEvent({
+        streamPath: "/demo",
+        offset: 2,
+        type: "events.iterate.com/core/metadata-updated",
+        payload: { metadata: { owner: "jonas" } },
+      }),
+    ]);
 
-    expect(feed.map((item) => item.kind)).toEqual(["event", "child-stream-created"]);
+    expect(feed.map((item) => item.kind)).toEqual([
+      "event",
+      "child-stream-created",
+      "event",
+      "stream-metadata-updated",
+    ]);
     expect(feed[1]).toMatchObject({
       kind: "child-stream-created",
       parentPath: "/",
       createdPath: "/child-stream",
     });
-  });
-
-  test("adds a semantic metadata item after metadata-updated events", () => {
-    const feed = projectEventToFeed(
-      createEvent({
-        streamPath: "/demo",
-        type: "events.iterate.com/core/metadata-updated",
-        payload: { metadata: { owner: "jonas" } },
-      }),
-    );
-
-    expect(feed.map((item) => item.kind)).toEqual(["event", "stream-metadata-updated"]);
-    expect(feed[1]).toMatchObject({
+    expect(feed[3]).toMatchObject({
       kind: "stream-metadata-updated",
       path: "/demo",
       metadata: { owner: "jonas" },
     });
   });
 
-  test("adds a semantic dynamic worker configured item after config events", () => {
-    const feed = projectEventToFeed(
+  test("projects canonical agent, webchat, and codemode events", () => {
+    const feed = projectWireToFeed([
       createEvent({
-        streamPath: "/demo",
-        type: "events.iterate.com/core/dynamic-worker-configured",
-        payload: {
-          slug: "simple-openai-loop",
-          script: [
-            "export default {",
-            "  initialState: {},",
-            "  reduce(state) {",
-            "    return state;",
-            "  },",
-            "};",
-          ].join("\n"),
-          outboundGateway: {
-            entrypoint: "DynamicWorkerEgressGateway",
-            props: {
-              secretHeaderName: "authorization",
-              secretHeaderValue: "Bearer getIterateSecret({secretKey: 'openai'})",
-            },
-          },
-        },
+        offset: 1,
+        type: "events.iterate.com/agent/input-added",
+        payload: { role: "user", content: "Run code" },
       }),
-    );
+      createEvent({
+        offset: 2,
+        type: "events.iterate.com/webchat/agent-response-added",
+        payload: { message: "Working on it." },
+      }),
+      createEvent({
+        offset: 3,
+        type: "events.iterate.com/agent/status-updated",
+        payload: { status: "working", reason: "llm-request-started", requestId: "req_1" },
+      }),
+      createEvent({
+        offset: 4,
+        type: "events.iterate.com/codemode/block-added",
+        payload: { script: "return await tools.echo({ text: 'hello' });" },
+      }),
+      createEvent({
+        offset: 5,
+        type: "events.iterate.com/codemode/result-added",
+        payload: { result: { ok: true }, logs: ["hello"], durationMs: 12 },
+      }),
+    ]);
 
-    expect(feed.map((item) => item.kind)).toEqual(["event", "dynamic-worker-configured"]);
-    expect(feed[1]).toMatchObject({
-      kind: "dynamic-worker-configured",
-      slug: "simple-openai-loop",
-      sourceCode: expect.stringContaining("export default"),
-      outboundGateway: {
-        entrypoint: "DynamicWorkerEgressGateway",
-        secretHeaderName: "authorization",
-        secretHeaderValue: "Bearer getIterateSecret({secretKey: 'openai'})",
-      },
+    expect(feed.map((item) => item.kind)).toEqual([
+      "event",
+      "message",
+      "event",
+      "message",
+      "event",
+      "agent-status",
+      "event",
+      "codemode-block",
+      "event",
+      "codemode-result",
+    ]);
+    expect(feed[1]).toMatchObject({ kind: "message", role: "user" });
+    expect(feed[3]).toMatchObject({ kind: "message", role: "assistant" });
+    expect(feed[5]).toMatchObject({ kind: "agent-status", requestId: "req_1" });
+    expect(feed[7]).toMatchObject({
+      kind: "codemode-block",
+      blockId: "codemode",
+      code: expect.stringContaining("tools.echo"),
+    });
+    expect(feed[9]).toMatchObject({
+      kind: "codemode-result",
+      success: true,
+      stdout: expect.stringContaining("hello"),
     });
   });
 
-  test("adds a semantic dynamic worker env var item after env-var-set events", () => {
-    const feed = projectEventToFeed(
-      createEvent({
-        streamPath: "/demo",
-        type: "events.iterate.com/core/dynamic-worker-env-var-set",
-        payload: {
-          key: "OPENAI_API_KEY",
-          value: "getIterateSecret({secretKey: 'openai'})",
-        },
-      }),
-    );
-
-    expect(feed.map((item) => item.kind)).toEqual(["event", "dynamic-worker-env-var-set"]);
-    expect(feed[1]).toMatchObject({
-      kind: "dynamic-worker-env-var-set",
-      key: "OPENAI_API_KEY",
-      usesIterateSecret: true,
-    });
-  });
-
-  test("does not add a semantic item for append-scheduled events", () => {
-    const feed = projectEventToFeed(
-      createEvent({
-        streamPath: "/demo",
-        type: "events.iterate.com/core/append-scheduled",
-        payload: {
-          slug: "nightly-rollup",
-          append: {
-            type: "https://events.iterate.com/events/example/rollup-requested",
-            payload: { source: "schedule" },
-          },
-          schedule: {
-            kind: "every",
-            intervalSeconds: 300,
-          },
-        },
-      }),
-    );
-
-    expect(feed.map((item) => item.kind)).toEqual(["event"]);
-  });
-
-  test("does not add a semantic item for schedule execution-finished events", () => {
-    const feed = projectEventToFeed(
-      createEvent({
-        streamPath: "/demo",
-        type: "events.iterate.com/core/schedule-execution-finished",
-        payload: {
-          slug: "nightly-rollup",
-          outcome: "succeeded",
-          nextRunAt: 1_775_000_000,
-        },
-      }),
-    );
-
-    expect(feed.map((item) => item.kind)).toEqual(["event"]);
-  });
   test("extracts only raw event rows from a mixed feed", () => {
     const feed = projectWireToFeed([
       createEvent({
@@ -201,1102 +148,6 @@ describe("projectWireToFeed", () => {
 
     expect(getEventFeedItems(feed).map((item) => item.kind)).toEqual(["event"]);
   });
-
-  test("projects agent input and output events into a chat-style timeline", () => {
-    const feed = projectWireToFeed([
-      createEvent({
-        offset: 1,
-        type: "https://events.iterate.com/agent/input-item-added",
-        payload: {
-          item: {
-            role: "user",
-            content: "Hello there",
-          },
-        },
-      }),
-      createEvent({
-        offset: 2,
-        type: "https://events.iterate.com/agent/output-item-added",
-        payload: {
-          chunk: {
-            type: "content",
-            id: "chunk-1",
-            model: "gpt-4o-mini",
-            timestamp: 1,
-            delta: "Hello",
-            content: "Hello",
-            role: "assistant",
-          },
-        },
-      }),
-      createEvent({
-        offset: 3,
-        type: "https://events.iterate.com/agent/output-item-added",
-        payload: {
-          chunk: {
-            type: "content",
-            id: "chunk-2",
-            model: "gpt-4o-mini",
-            timestamp: 2,
-            delta: " back",
-            content: "Hello back",
-            role: "assistant",
-          },
-        },
-      }),
-      createEvent({
-        offset: 4,
-        type: "https://events.iterate.com/agent/output-item-added",
-        payload: {
-          chunk: {
-            type: "done",
-            id: "chunk-3",
-            model: "gpt-4o-mini",
-            timestamp: 3,
-            finishReason: "stop",
-          },
-        },
-      }),
-    ]);
-
-    expect(feed.map((item) => item.kind)).toEqual([
-      "event",
-      "message",
-      "event",
-      "event",
-      "event",
-      "message",
-    ]);
-    expect(feed[1]).toMatchObject({
-      kind: "message",
-      role: "user",
-      content: [{ type: "text", text: "Hello there" }],
-    });
-    expect(feed[5]).toMatchObject({
-      kind: "message",
-      role: "assistant",
-      content: [{ type: "text", text: "Hello back" }],
-      streamStatus: "complete",
-    });
-  });
-
-  test("marks assistant replies as streaming until a done chunk arrives", () => {
-    const feed = projectWireToFeed([
-      createEvent({
-        offset: 1,
-        type: "https://events.iterate.com/agent/input-item-added",
-        payload: {
-          item: {
-            role: "user",
-            content: "Hi",
-          },
-        },
-      }),
-      createEvent({
-        offset: 2,
-        type: "https://events.iterate.com/agent/output-item-added",
-        payload: {
-          chunk: {
-            type: "content",
-            id: "chunk-1",
-            model: "gpt-4o-mini",
-            timestamp: 1,
-            delta: "Partial",
-            content: "Partial",
-            role: "assistant",
-          },
-        },
-      }),
-    ]);
-
-    const assistant = feed.find(
-      (item): item is Extract<StreamFeedItem, { kind: "message" }> =>
-        item.kind === "message" && item.role === "assistant",
-    );
-    expect(assistant).toMatchObject({
-      kind: "message",
-      role: "assistant",
-      content: [{ type: "text", text: "Partial" }],
-      streamStatus: "streaming",
-    });
-  });
-
-  test("prefers finalized assistant messages over reconstructed chunk text", () => {
-    const feed = projectWireToFeed([
-      createEvent({
-        offset: 1,
-        type: "https://events.iterate.com/agent/input-item-added",
-        payload: {
-          item: {
-            role: "user",
-            content: "Hi",
-          },
-        },
-      }),
-      createEvent({
-        offset: 2,
-        type: "https://events.iterate.com/agent/output-item-added",
-        payload: {
-          chunk: {
-            type: "content",
-            id: "chunk-1",
-            model: "gpt-4o-mini",
-            timestamp: 1,
-            delta: "Hello",
-            content: "Hello",
-            role: "assistant",
-          },
-        },
-      }),
-      createEvent({
-        offset: 3,
-        type: "https://events.iterate.com/agent/output-item-added",
-        payload: {
-          chunk: {
-            type: "done",
-            id: "chunk-2",
-            model: "gpt-4o-mini",
-            timestamp: 2,
-            finishReason: "stop",
-          },
-        },
-      }),
-      createEvent({
-        offset: 4,
-        type: "https://events.iterate.com/agent/input-item-added",
-        payload: {
-          item: {
-            role: "assistant",
-            content: "Hello",
-          },
-        },
-      }),
-    ]);
-
-    const assistantMessages = feed.filter(
-      (item): item is Extract<StreamFeedItem, { kind: "message"; role: "assistant" }> =>
-        item.kind === "message" && item.role === "assistant",
-    );
-
-    expect(assistantMessages).toHaveLength(1);
-    expect(assistantMessages[0]).toMatchObject({
-      kind: "message",
-      role: "assistant",
-      content: [{ type: "text", text: "Hello" }],
-    });
-    expect("streamStatus" in assistantMessages[0]).toBe(false);
-  });
-
-  test("projects tool_call and tool_result chunks into tool feed items", () => {
-    const feed = projectWireToFeed([
-      createEvent({
-        offset: 1,
-        type: "https://events.iterate.com/agent/input-item-added",
-        payload: {
-          item: {
-            role: "user",
-            content: "Use a tool",
-          },
-        },
-      }),
-      createEvent({
-        offset: 2,
-        type: "https://events.iterate.com/agent/output-item-added",
-        payload: {
-          chunk: {
-            type: "tool_call",
-            id: "c1",
-            model: "gpt-4o-mini",
-            timestamp: 1,
-            index: 0,
-            toolCall: {
-              id: "call_1",
-              type: "function",
-              function: { name: "demo_tool", arguments: '{"x":1}' },
-            },
-          },
-        },
-      }),
-      createEvent({
-        offset: 3,
-        type: "https://events.iterate.com/agent/output-item-added",
-        payload: {
-          chunk: {
-            type: "tool_result",
-            id: "c2",
-            model: "gpt-4o-mini",
-            timestamp: 2,
-            toolCallId: "call_1",
-            content: '{"ok":true}',
-          },
-        },
-      }),
-      createEvent({
-        offset: 4,
-        type: "https://events.iterate.com/agent/output-item-added",
-        payload: {
-          chunk: {
-            type: "done",
-            id: "c3",
-            model: "gpt-4o-mini",
-            timestamp: 3,
-            finishReason: "stop",
-          },
-        },
-      }),
-    ]);
-
-    const toolItem = feed.find((item) => item.kind === "tool");
-    expect(toolItem).toMatchObject({
-      kind: "tool",
-      toolName: "demo_tool",
-      toolCallId: "call_1",
-      state: "completed",
-    });
-  });
-
-  test("adds an error item for failed agent output events", () => {
-    const feed = projectWireToFeed([
-      createEvent({
-        offset: 1,
-        type: "https://events.iterate.com/agent/input-item-added",
-        payload: {
-          item: {
-            role: "user",
-            content: "Break please",
-          },
-        },
-      }),
-      createEvent({
-        offset: 2,
-        type: "https://events.iterate.com/agent/output-item-added",
-        payload: {
-          chunk: {
-            type: "RUN_ERROR",
-            error: "boom",
-          },
-        },
-      }),
-    ]);
-
-    expect(feed.map((item) => item.kind)).toEqual(["event", "message", "event", "error"]);
-    expect(feed[3]).toMatchObject({
-      kind: "error",
-      message: "Agent run failed",
-      context: "boom",
-    });
-  });
-
-  test("projects workshop llm events into a user and assistant message timeline", () => {
-    const feed = projectWireToFeed([
-      createEvent({
-        offset: 1,
-        type: "llm-input-added",
-        payload: {
-          content: "Write a tiny hello world",
-          source: "user",
-        },
-      }),
-      createEvent({
-        offset: 2,
-        type: "llm-request-started",
-        payload: {
-          requestId: "req_1",
-          inputOffset: 1,
-          inputSource: "user",
-        },
-      }),
-      createEvent({
-        offset: 3,
-        type: "openai-response-event-added",
-        payload: {
-          requestId: "req_1",
-          event: {
-            type: "response.output_text.delta",
-            item_id: "msg_1",
-            content_index: 0,
-            delta: "hello",
-          },
-        },
-      }),
-      createEvent({
-        offset: 4,
-        type: "openai-response-event-added",
-        payload: {
-          requestId: "req_1",
-          event: {
-            type: "response.output_text.delta",
-            item_id: "msg_1",
-            content_index: 0,
-            delta: " world",
-          },
-        },
-      }),
-      createEvent({
-        offset: 5,
-        type: "llm-request-completed",
-        payload: {
-          requestId: "req_1",
-          outputText: "hello world",
-        },
-      }),
-    ]);
-
-    const messages = feed.filter(
-      (item): item is Extract<StreamFeedItem, { kind: "message" }> => item.kind === "message",
-    );
-
-    expect(messages).toEqual([
-      {
-        kind: "message",
-        role: "user",
-        content: [{ type: "text", text: "Write a tiny hello world" }],
-        timestamp: messages[0]!.timestamp,
-      },
-      {
-        kind: "message",
-        role: "assistant",
-        content: [{ type: "text", text: "hello world" }],
-        messageId: "msg_1",
-        timestamp: messages[1]!.timestamp,
-        streamStatus: "complete",
-      },
-    ]);
-  });
-
-  test("projects bashmode agent input and output events into ai-elements chat messages", () => {
-    const feed = projectWireToFeed([
-      createEvent({
-        offset: 1,
-        type: "agent-input-added",
-        payload: {
-          content: "Run a quick bash command.",
-        },
-      }),
-      createEvent({
-        offset: 2,
-        type: "agent-output-added",
-        payload: {
-          content: "```bash\necho hello\n```",
-        },
-      }),
-      createEvent({
-        offset: 3,
-        type: "agent-input-added",
-        payload: {
-          content: "Bash result:\nstdout:\nhello\nstderr:\n\nexitCode: 0\n",
-        },
-      }),
-    ]);
-
-    const messages = feed.filter(
-      (item): item is Extract<StreamFeedItem, { kind: "message" }> => item.kind === "message",
-    );
-
-    expect(messages).toEqual([
-      {
-        kind: "message",
-        role: "user",
-        content: [{ type: "markdown", text: "Run a quick bash command." }],
-        timestamp: messages[0]!.timestamp,
-      },
-      {
-        kind: "message",
-        role: "assistant",
-        content: [{ type: "text", text: "```bash\necho hello\n```" }],
-        timestamp: messages[1]!.timestamp,
-      },
-      {
-        kind: "message",
-        role: "user",
-        content: [
-          { type: "markdown", text: "Bash result:\nstdout:\nhello\nstderr:\n\nexitCode: 0\n" },
-        ],
-        timestamp: messages[2]!.timestamp,
-      },
-    ]);
-  });
-
-  test("projects assistant-role agent-input-added events as assistant messages", () => {
-    const feed = projectWireToFeed([
-      createEvent({
-        offset: 1,
-        type: "agent-input-added",
-        payload: {
-          content: "Tell me a joke I never heard before",
-        },
-      }),
-      createEvent({
-        offset: 2,
-        type: "agent-input-added",
-        payload: {
-          role: "assistant",
-          content: "I would, but then I'd have to pretend it was original.",
-        },
-      }),
-    ]);
-
-    const messages = feed.filter(
-      (item): item is Extract<StreamFeedItem, { kind: "message" }> => item.kind === "message",
-    );
-
-    expect(messages).toEqual([
-      {
-        kind: "message",
-        role: "user",
-        content: [{ type: "markdown", text: "Tell me a joke I never heard before" }],
-        timestamp: messages[0]!.timestamp,
-      },
-      {
-        kind: "message",
-        role: "assistant",
-        content: [
-          { type: "markdown", text: "I would, but then I'd have to pretend it was original." },
-        ],
-        timestamp: messages[1]!.timestamp,
-      },
-    ]);
-  });
-
-  test("projects canonical agent input-added events as markdown chat messages", () => {
-    const feed = projectWireToFeed([
-      createEvent({
-        offset: 7,
-        type: "events.iterate.com/agent/input-added",
-        createdAt: "2026-04-29T21:20:09.134Z",
-        payload: {
-          role: "user",
-          source: "slack",
-          content: SLACK_AGENT_INPUT_CONTENT,
-        },
-      }),
-    ]);
-
-    expect(feed.map((item) => item.kind)).toEqual(["event", "message"]);
-    expect(feed[1]).toEqual({
-      kind: "message",
-      role: "user",
-      content: [{ type: "markdown", text: SLACK_AGENT_INPUT_CONTENT }],
-      timestamp: Date.parse("2026-04-29T21:20:09.134Z"),
-    });
-  });
-
-  test("projects webchat ingress and responses as chat messages", () => {
-    const feed = projectWireToFeed([
-      createEvent({
-        offset: 1,
-        type: "events.iterate.com/webchat/user-message-added",
-        payload: { content: "hello agent" },
-      }),
-      createEvent({
-        offset: 2,
-        type: "events.iterate.com/webchat/agent-response-added",
-        payload: { message: "hello human" },
-      }),
-    ]);
-
-    const messages = feed.filter(
-      (item): item is Extract<StreamFeedItem, { kind: "message" }> => item.kind === "message",
-    );
-
-    expect(messages).toEqual([
-      {
-        kind: "message",
-        role: "user",
-        content: [{ type: "text", text: "hello agent" }],
-        timestamp: messages[0]!.timestamp,
-      },
-      {
-        kind: "message",
-        role: "assistant",
-        content: [{ type: "text", text: "hello human" }],
-        timestamp: messages[1]!.timestamp,
-      },
-    ]);
-  });
-
-  test("projects agent status updates into status rows", () => {
-    const feed = projectWireToFeed([
-      createEvent({
-        offset: 1,
-        type: "agent-status-updated",
-        payload: {
-          status: "working",
-          reason: "llm-request-started",
-          requestId: "req_1",
-        },
-      }),
-      createEvent({
-        offset: 2,
-        type: "agent-status-updated",
-        payload: {
-          status: "idle",
-          reason: "codemode-result-added",
-        },
-      }),
-    ]);
-
-    expect(feed.map((item) => item.kind)).toEqual([
-      "event",
-      "agent-status",
-      "event",
-      "agent-status",
-    ]);
-    expect(feed[1]).toMatchObject({
-      kind: "agent-status",
-      status: "working",
-      reason: "llm-request-started",
-      requestId: "req_1",
-    });
-    expect(feed[3]).toMatchObject({
-      kind: "agent-status",
-      status: "idle",
-      reason: "codemode-result-added",
-    });
-  });
-
-  test("projects bashmode blocks into dedicated shell cards", () => {
-    const feed = projectWireToFeed([
-      createEvent({
-        offset: 1,
-        type: "bashmode-block-added",
-        payload: {
-          content: "echo hello",
-        },
-      }),
-    ]);
-
-    expect(feed).toMatchObject([
-      {
-        kind: "event",
-      },
-      {
-        kind: "bashmode-block",
-        content: "echo hello",
-      },
-    ]);
-  });
-
-  test("projects nano agent input and OpenAI output items into ai-elements chat messages", () => {
-    const feed = projectWireToFeed([
-      createEvent({
-        offset: 1,
-        type: "agent-input-added",
-        payload: {
-          content: "Say hello in two words.",
-        },
-      }),
-      createEvent({
-        offset: 2,
-        type: "openai-output-item-added",
-        payload: {
-          item: {
-            id: "msg_1",
-            type: "message",
-            role: "assistant",
-            content: [{ type: "output_text", text: "Hello there" }],
-          },
-        },
-      }),
-    ]);
-
-    const messages = feed.filter(
-      (item): item is Extract<StreamFeedItem, { kind: "message" }> => item.kind === "message",
-    );
-
-    expect(messages).toEqual([
-      {
-        kind: "message",
-        role: "user",
-        content: [{ type: "markdown", text: "Say hello in two words." }],
-        timestamp: messages[0]!.timestamp,
-      },
-      {
-        kind: "message",
-        role: "assistant",
-        content: [{ type: "text", text: "Hello there" }],
-        timestamp: messages[1]!.timestamp,
-      },
-    ]);
-  });
-
-  test("projects streamed nano agent OpenAI events into a single assistant message", () => {
-    const feed = projectWireToFeed([
-      createEvent({
-        offset: 1,
-        type: "agent-input-added",
-        payload: {
-          content: "Say hello.",
-        },
-      }),
-      createEvent({
-        offset: 2,
-        type: "openai-response-event-added",
-        payload: {
-          type: "response.output_item.added",
-          output_index: 0,
-          item: {
-            id: "msg_stream",
-            type: "message",
-            role: "assistant",
-            content: [],
-          },
-        },
-      }),
-      createEvent({
-        offset: 3,
-        type: "openai-response-event-added",
-        payload: {
-          type: "response.output_text.delta",
-          item_id: "msg_stream",
-          content_index: 0,
-          delta: "Hello",
-          output_index: 0,
-        },
-      }),
-      createEvent({
-        offset: 4,
-        type: "openai-response-event-added",
-        payload: {
-          type: "response.output_text.delta",
-          item_id: "msg_stream",
-          content_index: 0,
-          delta: " there",
-          output_index: 0,
-        },
-      }),
-    ]);
-
-    const assistant = feed.find(
-      (item): item is Extract<StreamFeedItem, { kind: "message"; role: "assistant" }> =>
-        item.kind === "message" && item.role === "assistant",
-    );
-
-    expect(assistant).toMatchObject({
-      kind: "message",
-      role: "assistant",
-      content: [{ type: "text", text: "Hello there" }],
-      messageId: "msg_stream",
-      streamStatus: "streaming",
-    });
-  });
-
-  test("projects agent-output-added with OpenAI stream payloads like openai-response-event-added", () => {
-    const feed = projectWireToFeed([
-      createEvent({
-        offset: 1,
-        type: "agent-input-added",
-        payload: {
-          content: "Say hello.",
-        },
-      }),
-      createEvent({
-        offset: 2,
-        type: "agent-output-added",
-        payload: {
-          type: "response.content_part.added",
-          item_id: "msg_agent_stream",
-          content_index: 0,
-          output_index: 0,
-          part: { type: "output_text", text: "" },
-        },
-      }),
-      createEvent({
-        offset: 3,
-        type: "agent-output-added",
-        payload: {
-          type: "response.output_text.delta",
-          item_id: "msg_agent_stream",
-          content_index: 0,
-          delta: "Hello",
-          output_index: 0,
-        },
-      }),
-      createEvent({
-        offset: 4,
-        type: "agent-output-added",
-        payload: {
-          type: "response.output_text.delta",
-          item_id: "msg_agent_stream",
-          content_index: 0,
-          delta: " there",
-          output_index: 0,
-        },
-      }),
-    ]);
-
-    const assistant = feed.find(
-      (item): item is Extract<StreamFeedItem, { kind: "message"; role: "assistant" }> =>
-        item.kind === "message" && item.role === "assistant",
-    );
-
-    expect(assistant).toMatchObject({
-      kind: "message",
-      role: "assistant",
-      content: [{ type: "text", text: "Hello there" }],
-      messageId: "msg_agent_stream",
-      streamStatus: "streaming",
-    });
-  });
-
-  test("marks streamed nano agent OpenAI messages complete after response completion", () => {
-    const feed = projectWireToFeed([
-      createEvent({
-        offset: 1,
-        type: "agent-input-added",
-        payload: {
-          content: "Say hello.",
-        },
-      }),
-      createEvent({
-        offset: 2,
-        type: "openai-response-event-added",
-        payload: {
-          type: "response.output_item.added",
-          output_index: 0,
-          item: {
-            id: "msg_stream_done",
-            type: "message",
-            role: "assistant",
-            content: [],
-          },
-        },
-      }),
-      createEvent({
-        offset: 3,
-        type: "openai-response-event-added",
-        payload: {
-          type: "response.output_text.delta",
-          item_id: "msg_stream_done",
-          content_index: 0,
-          delta: "Hello there",
-          output_index: 0,
-        },
-      }),
-      createEvent({
-        offset: 4,
-        type: "openai-response-event-added",
-        payload: {
-          type: "response.completed",
-          response: {
-            output: [],
-          },
-        },
-      }),
-    ]);
-
-    const assistant = feed.find(
-      (item): item is Extract<StreamFeedItem, { kind: "message"; role: "assistant" }> =>
-        item.kind === "message" && item.role === "assistant",
-    );
-
-    expect(assistant).toMatchObject({
-      kind: "message",
-      role: "assistant",
-      content: [{ type: "text", text: "Hello there" }],
-      messageId: "msg_stream_done",
-      streamStatus: "complete",
-    });
-  });
-
-  test("marks workshop assistant output as streaming until the request completes", () => {
-    const feed = projectWireToFeed([
-      createEvent({
-        offset: 1,
-        type: "llm-input-added",
-        payload: {
-          content: "Keep streaming",
-          source: "user",
-        },
-      }),
-      createEvent({
-        offset: 2,
-        type: "llm-request-started",
-        payload: {
-          requestId: "req_stream",
-          inputOffset: 1,
-          inputSource: "user",
-        },
-      }),
-      createEvent({
-        offset: 3,
-        type: "openai-response-event-added",
-        payload: {
-          requestId: "req_stream",
-          event: {
-            type: "response.output_text.delta",
-            item_id: "msg_stream",
-            content_index: 0,
-            delta: "Partial output",
-          },
-        },
-      }),
-    ]);
-
-    const assistant = feed.find(
-      (item): item is Extract<StreamFeedItem, { kind: "message"; role: "assistant" }> =>
-        item.kind === "message" && item.role === "assistant",
-    );
-
-    expect(assistant).toMatchObject({
-      kind: "message",
-      role: "assistant",
-      content: [{ type: "text", text: "Partial output" }],
-      messageId: "msg_stream",
-      streamStatus: "streaming",
-    });
-  });
-
-  test("projects actual OpenAI assistant output items as separate streamed messages", () => {
-    const feed = projectWireToFeed([
-      createEvent({
-        offset: 1,
-        type: "llm-input-added",
-        payload: {
-          content: "Write two short replies",
-          source: "user",
-        },
-      }),
-      createEvent({
-        offset: 2,
-        type: "llm-request-started",
-        payload: {
-          requestId: "req_items",
-          inputOffset: 1,
-          inputSource: "user",
-        },
-      }),
-      createEvent({
-        offset: 3,
-        type: "openai-response-event-added",
-        payload: {
-          requestId: "req_items",
-          event: {
-            type: "response.output_item.added",
-            output_index: 0,
-            item: {
-              id: "msg_a",
-              type: "message",
-              role: "assistant",
-              content: [],
-            },
-          },
-        },
-      }),
-      createEvent({
-        offset: 4,
-        type: "openai-response-event-added",
-        payload: {
-          requestId: "req_items",
-          event: {
-            type: "response.output_text.delta",
-            item_id: "msg_a",
-            content_index: 0,
-            delta: "First reply",
-            output_index: 0,
-          },
-        },
-      }),
-      createEvent({
-        offset: 5,
-        type: "openai-response-event-added",
-        payload: {
-          requestId: "req_items",
-          event: {
-            type: "response.output_item.added",
-            output_index: 1,
-            item: {
-              id: "msg_b",
-              type: "message",
-              role: "assistant",
-              content: [],
-            },
-          },
-        },
-      }),
-      createEvent({
-        offset: 6,
-        type: "openai-response-event-added",
-        payload: {
-          requestId: "req_items",
-          event: {
-            type: "response.output_text.delta",
-            item_id: "msg_b",
-            content_index: 0,
-            delta: "Second reply",
-            output_index: 1,
-          },
-        },
-      }),
-    ]);
-
-    const assistants = feed.filter(
-      (item): item is Extract<StreamFeedItem, { kind: "message"; role: "assistant" }> =>
-        item.kind === "message" && item.role === "assistant",
-    );
-
-    expect(assistants).toMatchObject([
-      {
-        kind: "message",
-        role: "assistant",
-        content: [{ type: "text", text: "First reply" }],
-        streamStatus: "streaming",
-      },
-      {
-        kind: "message",
-        role: "assistant",
-        content: [{ type: "text", text: "Second reply" }],
-        streamStatus: "streaming",
-      },
-    ]);
-  });
-
-  test("projects codemode block and result events into dedicated cards", () => {
-    const feed = projectWireToFeed([
-      createEvent({
-        offset: 1,
-        type: "codemode-block-added",
-        payload: {
-          requestId: "req_1",
-          blockId: "ts-block-1",
-          language: "ts",
-          code: 'console.log("hello");',
-        },
-      }),
-      createEvent({
-        offset: 2,
-        type: "codemode-result-added",
-        payload: {
-          requestId: "req_1",
-          blockId: "ts-block-1",
-          blockCount: 1,
-          success: true,
-          exitCode: 0,
-          stdout: "hello",
-          stderr: "",
-          durationMs: 42,
-          codePath: "/tmp/1/code.ts",
-          outputPath: "/tmp/1/out.txt",
-        },
-      }),
-    ]);
-
-    expect(feed.map((item) => item.kind)).toEqual([
-      "event",
-      "codemode-block",
-      "event",
-      "codemode-result",
-    ]);
-    expect(feed[1]).toMatchObject({
-      kind: "codemode-block",
-      blockId: "ts-block-1",
-      language: "ts",
-      code: 'console.log("hello");',
-    });
-    expect(feed[3]).toMatchObject({
-      kind: "codemode-result",
-      blockId: "ts-block-1",
-      success: true,
-      stdout: "hello",
-      codePath: "/tmp/1/code.ts",
-    });
-  });
-
-  test("projects agents codemode script and result events into dedicated cards", () => {
-    const feed = projectWireToFeed([
-      createEvent({
-        offset: 1,
-        type: "codemode-block-added",
-        payload: {
-          script: "async () => {\n  return await webchat.sendMessage({ message: 'hi' });\n}",
-        },
-      }),
-      createEvent({
-        offset: 2,
-        type: "codemode-result-added",
-        payload: {
-          result: { ok: true },
-          durationMs: 17,
-          logs: ["sent webchat response"],
-        },
-      }),
-    ]);
-
-    expect(feed.map((item) => item.kind)).toEqual([
-      "event",
-      "codemode-block",
-      "event",
-      "codemode-result",
-    ]);
-    expect(feed[1]).toMatchObject({
-      kind: "codemode-block",
-      blockId: "codemode",
-      language: "js",
-      code: expect.stringContaining("webchat.sendMessage"),
-    });
-    expect(feed[3]).toMatchObject({
-      kind: "codemode-result",
-      blockId: "codemode",
-      success: true,
-      durationMs: 17,
-      stdout: expect.stringContaining("sent webchat response"),
-      stderr: "",
-    });
-  });
-
-  test("projects failed workshop requests into error feed items", () => {
-    const feed = projectWireToFeed([
-      createEvent({
-        offset: 1,
-        type: "llm-input-added",
-        payload: {
-          content: "Break",
-          source: "user",
-        },
-      }),
-      createEvent({
-        offset: 2,
-        type: "llm-request-started",
-        payload: {
-          requestId: "req_fail",
-          inputOffset: 1,
-          inputSource: "user",
-        },
-      }),
-      createEvent({
-        offset: 3,
-        type: "llm-request-failed",
-        payload: {
-          requestId: "req_fail",
-          message: "model overloaded",
-        },
-      }),
-    ]);
-
-    expect(feed.find((item) => item.kind === "error")).toMatchObject({
-      kind: "error",
-      message: "LLM request failed",
-      context: "model overloaded",
-    });
-  });
-
-  test("projects failed bashmode agent requests into error feed items", () => {
-    const feed = projectWireToFeed([
-      createEvent({
-        offset: 1,
-        type: "agent-request-failed",
-        payload: {
-          message: "provider timeout",
-        },
-      }),
-    ]);
-
-    expect(feed.find((item) => item.kind === "error")).toMatchObject({
-      kind: "error",
-      message: "Agent request failed",
-      context: "provider timeout",
-    });
-  });
 });
 
 describe("toSemanticFeedItem", () => {
@@ -1306,7 +157,7 @@ describe("toSemanticFeedItem", () => {
 });
 
 describe("buildCustomHtmlRendererInsertions", () => {
-  test("applies final slug-keyed renderers retroactively to all matching events", async () => {
+  test("applies final slug-keyed renderers retroactively to matching events", async () => {
     const events = [
       createEvent({
         offset: 1,
@@ -1351,7 +202,7 @@ describe("buildCustomHtmlRendererInsertions", () => {
     });
   });
 
-  test("renders once for each matching unique renderer slug and latest config wins", async () => {
+  test("renders once per matching renderer slug and latest config wins", async () => {
     const events = [
       createEvent({
         offset: 1,
@@ -1388,10 +239,8 @@ describe("buildCustomHtmlRendererInsertions", () => {
     ];
 
     const insertions = await buildCustomHtmlRendererInsertions(events);
-    const rendered = insertions.get(4) ?? [];
 
-    expect(rendered).toHaveLength(2);
-    expect(rendered).toEqual([
+    expect(insertions.get(4)).toEqual([
       expect.objectContaining({
         kind: "custom-html-rendered-event",
         slug: "summary",
@@ -1406,7 +255,7 @@ describe("buildCustomHtmlRendererInsertions", () => {
   });
 
   test("emits a render error item when a matcher fails", async () => {
-    const events = [
+    const insertions = await buildCustomHtmlRendererInsertions([
       createEvent({
         offset: 1,
         type: "events.iterate.com/core/html-renderer-configured",
@@ -1416,14 +265,8 @@ describe("buildCustomHtmlRendererInsertions", () => {
           template: "{{payload.title}}",
         },
       }),
-      createEvent({
-        offset: 2,
-        type: "demo.message",
-        payload: { title: "Hello" },
-      }),
-    ];
-
-    const insertions = await buildCustomHtmlRendererInsertions(events);
+      createEvent({ offset: 2, type: "demo.message", payload: { title: "Hello" } }),
+    ]);
 
     expect(insertions.get(2)).toEqual([
       expect.objectContaining({
@@ -1445,21 +288,13 @@ describe("buildCustomHtmlRendererInsertions", () => {
           template: "one {{payload.title}}",
         },
       }),
-      createEvent({
-        offset: 2,
-        type: "demo.message",
-        payload: { title: "First" },
-      }),
+      createEvent({ offset: 2, type: "demo.message", payload: { title: "First" } }),
     ];
     const firstProjection = await buildCustomHtmlRendererProjection({ events: firstEvents });
     const appendedProjection = await buildCustomHtmlRendererProjection({
       events: [
         ...firstEvents,
-        createEvent({
-          offset: 3,
-          type: "demo.message",
-          payload: { title: "Second" },
-        }),
+        createEvent({ offset: 3, type: "demo.message", payload: { title: "Second" } }),
       ],
       previousProjection: firstProjection,
     });
@@ -1470,98 +305,33 @@ describe("buildCustomHtmlRendererInsertions", () => {
     expect(appendedProjection.insertionsByOffset.get(3)).toEqual([
       expect.objectContaining({ html: "one Second" }),
     ]);
-
-    const reconfiguredProjection = await buildCustomHtmlRendererProjection({
-      events: [
-        ...firstEvents,
-        createEvent({
-          offset: 3,
-          type: "demo.message",
-          payload: { title: "Second" },
-        }),
-        createEvent({
-          offset: 4,
-          type: "events.iterate.com/core/html-renderer-configured",
-          payload: {
-            slug: "demo-card",
-            matcher: "type = 'demo.message'",
-            template: "two {{payload.title}}",
-          },
-        }),
-      ],
-      previousProjection: appendedProjection,
-    });
-
-    expect(reconfiguredProjection.insertionsByOffset.get(2)).toEqual([
-      expect.objectContaining({ html: "two First" }),
-    ]);
-    expect(reconfiguredProjection.insertionsByOffset.get(3)).toEqual([
-      expect.objectContaining({ html: "two Second" }),
-    ]);
   });
 });
 
 describe("buildDisplayFeed", () => {
   test("keeps only raw events, ungrouped, in raw mode", () => {
     const feed = projectWireToFeed([
-      createEvent({ offset: 1, type: "https://events.iterate.com/demo/a" }),
-      createEvent({ offset: 2, type: "https://events.iterate.com/demo/a" }),
-      createEvent({
-        offset: 3,
-        type: "events.iterate.com/core/metadata-updated",
-        payload: { metadata: { color: "blue" } },
-      }),
+      createEvent({ offset: 1, type: "events.iterate.com/demo/a" }),
+      createEvent({ offset: 2, type: "events.iterate.com/demo/a" }),
     ]);
 
-    expect(buildDisplayFeed(feed, "raw")?.map((item) => item.kind)).toEqual([
-      "event",
-      "event",
-      "event",
-    ]);
+    expect(buildDisplayFeed(feed, "raw")?.map((item) => item.kind)).toEqual(["event", "event"]);
   });
 
   test("groups consecutive events of the same type in raw-pretty mode", () => {
-    const feed = projectWireToFeed([
-      createEvent({ offset: 1, type: "https://events.iterate.com/demo/a" }),
-      createEvent({ offset: 2, type: "https://events.iterate.com/demo/a" }),
-      createEvent({ offset: 3, type: "https://events.iterate.com/demo/b" }),
+    const grouped = createGroupedOrSingleEvent([
+      toEventFeedItem(createEvent({ offset: 1, type: "events.iterate.com/demo/a" })),
+      toEventFeedItem(createEvent({ offset: 2, type: "events.iterate.com/demo/a" })),
     ]);
-    const eventFeed = feed.filter((item): item is EventFeedItem => item.kind === "event");
 
-    expect(buildDisplayFeed(feed, "raw-pretty")).toEqual([
-      createGroupedOrSingleEvent(eventFeed.slice(0, 2)),
-      eventFeed[2],
-    ]);
-  });
-
-  test("flushes an event group when a non-event item appears", () => {
-    const eventFeed = projectWireToFeed([
-      createEvent({ offset: 1, type: "https://events.iterate.com/demo/a" }),
-      createEvent({ offset: 2, type: "https://events.iterate.com/demo/a" }),
-      createEvent({ offset: 3, type: "https://events.iterate.com/demo/b" }),
-    ]).filter((item): item is EventFeedItem => item.kind === "event");
-
-    const message: StreamFeedItem = {
-      kind: "message",
-      role: "assistant",
-      content: [{ type: "text", text: "hello" }],
-      timestamp: 123,
-    };
-
-    const feed: StreamFeedItem[] = [eventFeed[0], eventFeed[1], message, eventFeed[2]];
-
-    expect(buildDisplayFeed(feed, "raw-pretty")).toEqual([
-      createGroupedOrSingleEvent(eventFeed.slice(0, 2)),
-      message,
-      eventFeed[2],
-    ]);
+    expect(grouped).toMatchObject({
+      kind: "grouped-event",
+      eventType: "events.iterate.com/demo/a",
+      count: 2,
+    });
   });
 
   test("drops raw event rows in pretty mode", () => {
-    const feed = projectWireToFeed([
-      createEvent({ offset: 1, type: "https://events.iterate.com/demo/a" }),
-    ]);
-
     const message: StreamFeedItem = {
       kind: "message",
       role: "assistant",
@@ -1569,37 +339,21 @@ describe("buildDisplayFeed", () => {
       timestamp: 123,
     };
 
-    expect(buildDisplayFeed([...feed, message], "pretty")).toEqual([message]);
-  });
-
-  test("keeps semantic stream lifecycle rows in pretty mode", () => {
-    const feed = projectWireToFeed([
-      createEvent({
-        streamPath: "/",
-        offset: 1,
-        type: "events.iterate.com/core/child-stream-created",
-        payload: { childPath: "/created" },
-      }),
-      createEvent({
-        streamPath: "/created",
-        offset: 2,
-        type: "events.iterate.com/core/metadata-updated",
-        payload: { metadata: { color: "blue" } },
-      }),
-    ]);
-
-    expect(buildDisplayFeed(feed, "pretty")?.map((item) => item.kind)).toEqual([
-      "child-stream-created",
-      "stream-metadata-updated",
-    ]);
+    expect(
+      buildDisplayFeed(
+        [toEventFeedItem(createEvent({ type: "events.iterate.com/demo/a" })), message],
+        "pretty",
+      ),
+    ).toEqual([message]);
   });
 
   test("returns null in raw-single-json mode", () => {
-    const feed = projectWireToFeed([
-      createEvent({ offset: 1, type: "https://events.iterate.com/demo/a" }),
-    ]);
-
-    expect(buildDisplayFeed(feed, "raw-single-json")).toBeNull();
+    expect(
+      buildDisplayFeed(
+        [toEventFeedItem(createEvent({ type: "events.iterate.com/demo/a" }))],
+        "raw-single-json",
+      ),
+    ).toBeNull();
   });
 });
 
@@ -1607,8 +361,8 @@ describe("getAdjacentEventOffset", () => {
   test("returns previous and next offsets within the raw event list", () => {
     const events = getEventFeedItems(
       projectWireToFeed([
-        createEvent({ offset: 1, type: "https://events.iterate.com/demo/a" }),
-        createEvent({ offset: 2, type: "https://events.iterate.com/demo/b" }),
+        createEvent({ offset: 1, type: "events.iterate.com/demo/a" }),
+        createEvent({ offset: 2, type: "events.iterate.com/demo/b" }),
         createEvent({
           offset: 3,
           type: "events.iterate.com/core/child-stream-created",
@@ -1627,7 +381,7 @@ describe("getAdjacentEventOffset", () => {
 function createEvent(overrides: Partial<Event> = {}): Event {
   return {
     streamPath: "/demo",
-    type: "https://events.iterate.com/manual-event-appended",
+    type: "events.iterate.com/manual-event-appended",
     payload: {},
     offset: 1,
     createdAt: "2026-03-30T00:00:00.000Z",

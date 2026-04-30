@@ -43,8 +43,6 @@ function createEventsStreamViewState(args: {
 
   return {
     slots,
-    outlets: slots,
-    feedItems: slots.feed,
     activity: args.activity,
   };
 }
@@ -287,19 +285,13 @@ function reduceActivityState(args: {
     return args.state.activity;
   }
 
-  if (
-    args.event.type === "llm-request-started" ||
-    args.event.type === "events.iterate.com/agent/llm-request-started"
-  ) {
+  if (args.event.type === "events.iterate.com/agent/llm-request-started") {
     return { ...args.state.activity, currentLlmRequestId: requestId };
   }
 
   if (
     args.state.activity.currentLlmRequestId === requestId &&
-    (args.event.type === "llm-request-completed" ||
-      args.event.type === "llm-request-cancelled" ||
-      args.event.type === "llm-request-failed" ||
-      args.event.type === "events.iterate.com/agent/llm-request-completed" ||
+    (args.event.type === "events.iterate.com/agent/llm-request-completed" ||
       args.event.type === "events.iterate.com/agent/llm-request-cancelled" ||
       args.event.type === "events.iterate.com/agent/llm-request-failed")
   ) {
@@ -333,9 +325,7 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
 
   if (
     event.type === "events.iterate.com/webchat/user-message-added" ||
-    event.type === "events.iterate.com/tui/user-message-added" ||
-    event.type === "webchat-message-received" ||
-    event.type === "events.iterate.com/agent/webchat-message-received"
+    event.type === "events.iterate.com/tui/user-message-added"
   ) {
     const content = readStringPayloadField(event, "content");
     if (content == null) return [];
@@ -355,9 +345,7 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
 
   if (
     event.type === "events.iterate.com/webchat/agent-response-added" ||
-    event.type === "events.iterate.com/tui/agent-response-added" ||
-    event.type === "webchat-response-added" ||
-    event.type === "events.iterate.com/agent/webchat-response-added"
+    event.type === "events.iterate.com/tui/agent-response-added"
   ) {
     const message = readStringPayloadField(event, "message");
     if (message == null) return [];

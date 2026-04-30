@@ -16,12 +16,7 @@ import {
   ExternalSubscriberState,
   StreamSubscriptionConfiguredEventInput,
 } from "./external-subscriber-types.ts";
-import { JsonataTransformerConfiguredEventInput } from "./jsonata-transformer-types.ts";
 import { HtmlRendererConfiguredEventInput } from "./html-renderer-types.ts";
-import {
-  DynamicWorkerConfiguredEventInput,
-  DynamicWorkerEnvVarSetEventInput,
-} from "./dynamic-worker-types.ts";
 import {
   STREAM_CHILD_STREAM_CREATED_TYPE,
   STREAM_DURABLE_OBJECT_WOKE_UP_TYPE,
@@ -128,9 +123,6 @@ const builtInEventInputOptions = [
   StreamSubscriptionConfiguredEventInput,
   ErrorOccurredEventInput,
   InvalidEventAppendedEventInput,
-  JsonataTransformerConfiguredEventInput,
-  DynamicWorkerConfiguredEventInput,
-  DynamicWorkerEnvVarSetEventInput,
   CircuitBreakerConfiguredEventInput,
   HtmlRendererConfiguredEventInput,
   StreamPausedEventInput,

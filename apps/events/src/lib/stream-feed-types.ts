@@ -105,17 +105,6 @@ export interface ExternalSubscriberConfiguredFeedItem {
   raw: Event;
 }
 
-export interface JsonataTransformerConfiguredFeedItem {
-  kind: "jsonata-transformer-configured";
-  transformer: {
-    slug: string;
-    matcher: string;
-    transform: string;
-  };
-  timestamp: number;
-  raw: Event;
-}
-
 export interface CustomHtmlRenderedEventFeedItem {
   kind: "custom-html-rendered-event";
   slug: string;
@@ -137,29 +126,6 @@ export interface CustomHtmlRenderErrorFeedItem {
 export interface StreamLifecycleFeedItem {
   kind: "stream-lifecycle";
   label: string;
-  timestamp: number;
-  raw: Event;
-}
-
-export interface DynamicWorkerConfiguredFeedItem {
-  kind: "dynamic-worker-configured";
-  slug: string;
-  sourceCode: string;
-  compatibilityDate?: string;
-  compatibilityFlags: string[];
-  outboundGateway?: {
-    entrypoint: string;
-    secretHeaderName?: string;
-    secretHeaderValue?: string;
-  };
-  timestamp: number;
-  raw: Event;
-}
-
-export interface DynamicWorkerEnvVarSetFeedItem {
-  kind: "dynamic-worker-env-var-set";
-  key: string;
-  usesIterateSecret: boolean;
   timestamp: number;
   raw: Event;
 }
@@ -204,13 +170,6 @@ export interface CodemodeBlockFeedItem {
   raw: Event;
 }
 
-export interface BashmodeBlockFeedItem {
-  kind: "bashmode-block";
-  content: string;
-  timestamp: number;
-  raw: Event;
-}
-
 export interface CodemodeResultFeedItem {
   kind: "codemode-result";
   requestId?: string;
@@ -236,16 +195,12 @@ export type StreamFeedItem =
   | ChildStreamCreatedFeedItem
   | StreamMetadataUpdatedFeedItem
   | ExternalSubscriberConfiguredFeedItem
-  | JsonataTransformerConfiguredFeedItem
   | CustomHtmlRenderedEventFeedItem
   | CustomHtmlRenderErrorFeedItem
   | StreamLifecycleFeedItem
-  | DynamicWorkerConfiguredFeedItem
-  | DynamicWorkerEnvVarSetFeedItem
   | StreamPausedFeedItem
   | StreamResumedFeedItem
   | StreamErrorOccurredFeedItem
   | AgentStatusFeedItem
   | CodemodeBlockFeedItem
-  | BashmodeBlockFeedItem
   | CodemodeResultFeedItem;

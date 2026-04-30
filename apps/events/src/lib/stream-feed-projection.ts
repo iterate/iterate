@@ -1,16 +1,10 @@
 import {
   ChildStreamCreatedEvent,
-  DynamicWorkerConfiguredEvent,
-  DynamicWorkerEnvVarSetEvent,
   ErrorOccurredEvent,
-  JsonataTransformerConfiguredEvent,
   STREAM_CHILD_STREAM_CREATED_TYPE,
   STREAM_DURABLE_OBJECT_WOKE_UP_TYPE,
-  STREAM_DYNAMIC_WORKER_CONFIGURED_TYPE,
-  STREAM_DYNAMIC_WORKER_ENV_VAR_SET_TYPE,
   STREAM_ERROR_OCCURRED_TYPE,
   STREAM_FIRST_INITIALIZED_TYPE,
-  STREAM_JSONATA_TRANSFORMER_CONFIGURED_TYPE,
   STREAM_METADATA_UPDATED_TYPE,
   STREAM_PAUSED_TYPE,
   STREAM_RESUMED_TYPE,
@@ -27,9 +21,7 @@ import type {
   StreamFeedItem,
   StreamRendererMode,
 } from "~/lib/stream-feed-types.ts";
-import { findIterateSecretReferences } from "~/lib/iterate-secret-references.ts";
 import { buildAgentSemanticInsertions } from "~/lib/agent-stream-reducer.ts";
-import { buildWorkshopSemanticInsertions } from "~/lib/workshop-stream-reducer.ts";
 
 /**
  * Raw + Pretty groups consecutive wire rows of the same `eventType`. Very large
@@ -133,11 +125,19 @@ function flushCurrentGroup(displayFeed: StreamFeedItem[], currentGroup: readonly
 }
 
 export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
-  if (
-    event.type === "events.iterate.com/webchat/user-message-added" ||
-    event.type === "webchat-message-received" ||
-    event.type === "events.iterate.com/agent/webchat-message-received"
-  ) {
+  if (event.type === "events.iterate.com/agent/input-added") {
+    const payload = event.payload as { role?: unknown; content?: unknown };
+    if (payload.role !== "user" && payload.role !== "assistant") return null;
+    if (typeof payload.content !== "string") return null;
+    return {
+      kind: "message",
+      role: payload.role,
+      content: [{ type: "markdown", text: payload.content }],
+      timestamp: getTimestamp(event.createdAt),
+    };
+  }
+
+  if (event.type === "events.iterate.com/webchat/user-message-added") {
     const payload = event.payload as { content?: unknown };
     const content = typeof payload.content === "string" ? payload.content : null;
     if (content == null) return null;
@@ -149,11 +149,7 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     };
   }
 
-  if (
-    event.type === "events.iterate.com/webchat/agent-response-added" ||
-    event.type === "webchat-response-added" ||
-    event.type === "events.iterate.com/agent/webchat-response-added"
-  ) {
+  if (event.type === "events.iterate.com/webchat/agent-response-added") {
     const payload = event.payload as { message?: unknown };
     const message = typeof payload.message === "string" ? payload.message : null;
     if (message == null) return null;
@@ -165,10 +161,7 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     };
   }
 
-  if (
-    event.type === "agent-status-updated" ||
-    event.type === "events.iterate.com/agent/status-updated"
-  ) {
+  if (event.type === "events.iterate.com/agent/status-updated") {
     const payload = event.payload as {
       status?: unknown;
       reason?: unknown;
@@ -181,6 +174,42 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
       status: payload.status,
       reason: payload.reason,
       ...(typeof payload.requestId === "string" ? { requestId: payload.requestId } : {}),
+      timestamp: getTimestamp(event.createdAt),
+      raw: event,
+    };
+  }
+
+  if (event.type === "events.iterate.com/codemode/block-added") {
+    const payload = event.payload as { script?: unknown };
+    if (typeof payload.script !== "string") return null;
+    return {
+      kind: "codemode-block",
+      blockId: "codemode",
+      language: "js",
+      code: payload.script,
+      timestamp: getTimestamp(event.createdAt),
+      raw: event,
+    };
+  }
+
+  if (event.type === "events.iterate.com/codemode/result-added") {
+    const payload = event.payload as {
+      result?: unknown;
+      error?: unknown;
+      logs?: unknown;
+      durationMs?: unknown;
+    };
+    const logs = Array.isArray(payload.logs)
+      ? payload.logs.filter((log): log is string => typeof log === "string")
+      : [];
+    const error = typeof payload.error === "string" ? payload.error : "";
+    return {
+      kind: "codemode-result",
+      blockId: "codemode",
+      success: error.length === 0,
+      stdout: [...logs, JSON.stringify(payload.result, null, 2)].filter(Boolean).join("\n"),
+      stderr: error,
+      ...(typeof payload.durationMs === "number" ? { durationMs: payload.durationMs } : {}),
       timestamp: getTimestamp(event.createdAt),
       raw: event,
     };
@@ -215,15 +244,6 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     };
   }
 
-  if (event.type === STREAM_JSONATA_TRANSFORMER_CONFIGURED_TYPE) {
-    return {
-      kind: "jsonata-transformer-configured",
-      transformer: getJsonataTransformerConfiguredTransformer(event),
-      timestamp: getTimestamp(event.createdAt),
-      raw: event,
-    };
-  }
-
   if (event.type === STREAM_FIRST_INITIALIZED_TYPE) {
     return {
       kind: "stream-lifecycle",
@@ -237,45 +257,6 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     return {
       kind: "stream-lifecycle",
       label: "Durable object woke up",
-      timestamp: getTimestamp(event.createdAt),
-      raw: event,
-    };
-  }
-
-  if (event.type === STREAM_DYNAMIC_WORKER_CONFIGURED_TYPE) {
-    const configured = DynamicWorkerConfiguredEvent.parse(event);
-    const sourceCode =
-      configured.payload.script ??
-      configured.payload.modules?.["processor.ts"] ??
-      Object.values(configured.payload.modules ?? {})[0] ??
-      "";
-
-    return {
-      kind: "dynamic-worker-configured",
-      slug: configured.payload.slug,
-      sourceCode,
-      compatibilityDate: configured.payload.compatibilityDate,
-      compatibilityFlags: configured.payload.compatibilityFlags ?? [],
-      outboundGateway:
-        configured.payload.outboundGateway == null
-          ? undefined
-          : {
-              entrypoint: configured.payload.outboundGateway.entrypoint,
-              secretHeaderName: configured.payload.outboundGateway.props?.secretHeaderName,
-              secretHeaderValue: configured.payload.outboundGateway.props?.secretHeaderValue,
-            },
-      timestamp: getTimestamp(event.createdAt),
-      raw: event,
-    };
-  }
-
-  if (event.type === STREAM_DYNAMIC_WORKER_ENV_VAR_SET_TYPE) {
-    const envVarSet = DynamicWorkerEnvVarSetEvent.parse(event);
-
-    return {
-      kind: "dynamic-worker-env-var-set",
-      key: envVarSet.payload.key,
-      usesIterateSecret: findIterateSecretReferences(envVarSet.payload.value).length > 0,
       timestamp: getTimestamp(event.createdAt),
       raw: event,
     };
@@ -338,7 +319,6 @@ function buildSemanticInsertions(events: readonly Event[]) {
   }
 
   mergeInsertions(insertionsByOffset, buildAgentSemanticInsertions(events));
-  mergeInsertions(insertionsByOffset, buildWorkshopSemanticInsertions(events));
 
   return insertionsByOffset;
 }
@@ -367,10 +347,6 @@ function getStreamMetadataUpdatedEventMetadata(event: Event) {
 
 function getStreamSubscriptionConfiguredSubscriber(event: Event) {
   return StreamSubscriptionConfiguredEvent.parse(event).payload;
-}
-
-function getJsonataTransformerConfiguredTransformer(event: Event) {
-  return JsonataTransformerConfiguredEvent.parse(event).payload;
 }
 
 export function createGroupedOrSingleEvent(

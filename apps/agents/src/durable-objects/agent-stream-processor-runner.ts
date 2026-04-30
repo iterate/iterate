@@ -1,10 +1,10 @@
 import type { StreamProcessorRunnerState } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor-runner";
+import { AgentProcessorContract } from "@iterate-com/shared/stream-processors/agent/contract";
+import { createAgentProcessor } from "@iterate-com/shared/stream-processors/agent/implementation";
 import {
   createStreamProcessorRunnerDurableObject,
   type StreamProcessorRunnerInit,
 } from "./stream-processor-runner-common.ts";
-import { AgentProcessorContract } from "~/stream-processors/agent/contract.ts";
-import { createAgentProcessor } from "~/stream-processors/agent/implementation.ts";
 
 export type AgentStreamProcessorRunnerInit = StreamProcessorRunnerInit;
 

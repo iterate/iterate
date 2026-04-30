@@ -28,7 +28,5 @@ setup:
     path: apps/codemode/
   - project: test
     path: apps/test/
-  - project: ai-engineer-workshop
-    path: ai-engineer-workshop/
   - project: agents
     path: apps/agents/

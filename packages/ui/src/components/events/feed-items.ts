@@ -323,15 +323,10 @@ export type EventsStreamActivityState = {
  * Reduced view state for an event stream.
  *
  * The canonical render surface is `slots`: each slot contains the same
- * Rendered Element model. `outlets` and `feedItems` are temporary compatibility
- * aliases for older terminal/rendering code while the model migration lands.
+ * Rendered Element model.
  */
 export type EventsStreamViewState = {
   slots: EventsStreamSlots;
-  /** @deprecated Use `slots` instead. */
-  outlets: EventsStreamSlots;
-  /** @deprecated Use `slots.feed` instead. */
-  feedItems: EventsStreamBuiltInElement[];
   activity: EventsStreamActivityState;
 };
 
@@ -350,48 +345,3 @@ export type EventsStreamViewReducer = {
     state: EventsStreamViewState;
   }) => EventsStreamViewState | undefined;
 };
-
-/**
- * @deprecated Use `EventsStreamBuiltInElement` or `EventsStreamRenderedElement`.
- */
-export type EventsStreamFeedItem = EventsStreamBuiltInElement;
-
-/**
- * @deprecated Use `EventsStreamMessageElement`.
- */
-export type EventsStreamMessageFeedItem = EventsStreamMessageElement;
-
-/**
- * @deprecated Use `EventsStreamRawEventElement`.
- */
-export type EventsStreamRawEventFeedItem = EventsStreamRawEventElement;
-
-/**
- * @deprecated Use `EventsStreamGroupedRawEventElement`.
- */
-export type EventsStreamGroupedRawEventFeedItem = EventsStreamGroupedRawEventElement;
-
-/**
- * @deprecated Use `EventsStreamRawJsonDumpElement`.
- */
-export type EventsStreamRawJsonDumpFeedItem = EventsStreamRawJsonDumpElement;
-
-/**
- * @deprecated Use `EventsStreamLifecycleElement`.
- */
-export type EventsStreamLifecycleFeedItem = EventsStreamLifecycleElement;
-
-/**
- * @deprecated Use `EventsStreamChildStreamCreatedElement`.
- */
-export type EventsStreamChildStreamCreatedFeedItem = EventsStreamChildStreamCreatedElement;
-
-/**
- * @deprecated Use `EventsStreamMetadataUpdatedElement`.
- */
-export type EventsStreamMetadataUpdatedFeedItem = EventsStreamMetadataUpdatedElement;
-
-/**
- * @deprecated Use `EventsStreamErrorElement`.
- */
-export type EventsStreamErrorFeedItem = EventsStreamErrorElement;

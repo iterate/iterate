@@ -19,6 +19,7 @@
     "test": "pnpm typecheck && pnpm test:unit",
     "test:unit": "pnpm exec vitest run --config ./vitest.unit.config.ts",
     "test:e2e": "doppler run --no-cache -- pnpm exec vitest run --config ./e2e/vitest.config.ts",
+    "test:e2e:mocked-internet": "doppler run --no-cache -- pnpm exec vitest run --config ./e2e/vitest.config.ts --tags-filter mocked-internet",
     "test:e2e:tui": "doppler run --no-cache -- sh -c 'cd e2e/tui-test && ../../node_modules/.bin/tui-test'",
     "test:e2e:tui:update-snapshots": "doppler run --no-cache -- sh -c 'cd e2e/tui-test && AGENTS_TUI_SNAPSHOT=1 ../../node_modules/.bin/tui-test -u'",
     "test:e2e:preview": "node -e \"if (!process.env.AGENTS_BASE_URL) { console.error('AGENTS_BASE_URL is required for agents preview e2e tests'); process.exit(1); }\" && env AGENTS_E2E_RUNTIME_SMOKE=1 pnpm exec vitest run --config ./e2e/vitest.config.ts --tags-filter deployed-live-worker",

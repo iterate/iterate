@@ -1,5 +1,5 @@
 import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
-import type { CodemodeCodeExecutor } from "./code-executor.ts";
+import type { CodemodeCodeExecutor } from "@iterate-com/shared/stream-processors/codemode/code-executor";
 
 export type CloudflareCodemodeCodeExecutorDeps = {
   loader: WorkerLoader;
