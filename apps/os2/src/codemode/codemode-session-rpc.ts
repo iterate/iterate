@@ -1,4 +1,4 @@
-import { type Event, type EventInput, type StreamPath } from "@iterate-com/events-contract/sdk";
+import { type Event, type EventInput, type StreamPath } from "@iterate-com/events-contract";
 import type { ToolProviderDescriptor } from "@iterate-com/shared/codemode/types";
 import { deriveDurableObjectNameFromInitParams } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import type { CodemodeSession } from "~/durable-objects/codemode-session.ts";

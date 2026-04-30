@@ -110,7 +110,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
       });
       expect(rootEvents[0]).toMatchObject({
         streamPath: "/",
-        type: "https://events.iterate.com/events/stream/initialized",
+        type: "events.iterate.com/core/stream-first-initialized",
       });
       expect(await app.client.getState({ path: "/" })).toMatchObject({
         projectSlug: defaultProjectSlug,
@@ -129,7 +129,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
       expect(events).toHaveLength(2);
       expect(events[0]).toMatchObject({
         streamPath: path,
-        type: "https://events.iterate.com/events/stream/initialized",
+        type: "events.iterate.com/core/stream-first-initialized",
         offset: expectedStoredOffset(0),
         payload: { projectSlug: defaultProjectSlug, path },
       });
@@ -151,7 +151,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
       const rootHistoryResponse = await app.fetch("/api/streams/%2F?beforeOffset=end");
       expect(rootHistoryResponse.status).toBe(200);
       expect(await rootHistoryResponse.text()).toContain(
-        "https://events.iterate.com/events/stream/initialized",
+        "events.iterate.com/core/stream-first-initialized",
       );
 
       const rootStateResponse = await app.fetch("/api/streams/__state/%2F");
@@ -176,7 +176,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
           void app.append({
             streamPath: path,
             event: {
-              type: "https://events.iterate.com/events/stream/metadata-updated",
+              type: "events.iterate.com/core/metadata-updated",
               payload: {
                 metadata: {
                   live: true,
@@ -231,14 +231,6 @@ function expectedProcessorsWithTokenBucketCircuitBreaker() {
     "external-subscriber": {
       subscribersBySlug: {},
     },
-    "dynamic-worker": {
-      envVarsByKey: {},
-      workersBySlug: {},
-    },
-    "jsonata-transformer": {
-      transformersBySlug: {},
-    },
-    scheduler: {},
   };
 }
 

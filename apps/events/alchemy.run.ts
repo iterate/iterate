@@ -1,4 +1,4 @@
-import { D1Database, DurableObjectNamespace, Self, Worker, WorkerLoader } from "alchemy/cloudflare";
+import { D1Database, DurableObjectNamespace } from "alchemy/cloudflare";
 import { initAlchemy } from "@iterate-com/shared/alchemy/init";
 import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
 import manifest, { AppConfig } from "./src/app.ts";
@@ -21,12 +21,6 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
   bindings: {
     DB: db,
     STREAM: stream,
-    SELF: Self,
-    DYNAMIC_WORKER_EGRESS_GATEWAY: Worker.experimentalEntrypoint(
-      Self,
-      "DynamicWorkerEgressGateway",
-    ),
-    LOADER: WorkerLoader(),
   },
   // Cloudflare gates `request.signal` behind this flag — needed by the oRPC
   // logging plugin to distinguish aborted client requests from real failures.

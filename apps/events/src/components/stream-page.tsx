@@ -1,30 +1,40 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import {
   type Event,
   type EventInput,
   type JSONObject,
+  STREAM_CHILD_STREAM_CREATED_TYPE,
   type StreamPath,
   type StreamState,
 } from "@iterate-com/events-contract";
-import {
-  PromptInput,
-  PromptInputBody,
-  PromptInputFooter,
-  PromptInputSelect,
-  PromptInputSelectContent,
-  PromptInputSelectItem,
-  PromptInputSelectTrigger,
-  PromptInputSubmit,
-  PromptInputTextarea,
-  PromptInputTools,
-} from "@iterate-com/ui/components/ai-elements/prompt-input";
 import { Button } from "@iterate-com/ui/components/button";
 import { Checkbox } from "@iterate-com/ui/components/checkbox";
+import {
+  processEventsWithViewReducer,
+  rawJsonDumpEventsStreamViewReducer,
+  rawPrettyEventsStreamViewReducer,
+} from "@iterate-com/ui/components/events/feed-processors";
+import type {
+  EventsStreamInputAction,
+  EventsStreamViewReducer,
+} from "@iterate-com/ui/components/events/feed-items";
+import { EventsStreamEventInspectorSheet } from "@iterate-com/ui/components/events/event-inspector-sheet";
+import {
+  EventsStreamFeed,
+  EventsStreamHeader,
+  EventsStreamInputSlot,
+} from "@iterate-com/ui/components/events/stream-feed";
+import {
+  EventsStreamLayout,
+  EventsStreamLayoutHeader,
+  EventsStreamLayoutMain,
+  EventsStreamLayoutMessageInput,
+} from "@iterate-com/ui/components/events/stream-layout";
 import { Label } from "@iterate-com/ui/components/label";
 import { Separator } from "@iterate-com/ui/components/separator";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
-import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import {
   Sheet,
   SheetContent,
@@ -33,47 +43,55 @@ import {
   SheetTitle,
 } from "@iterate-com/ui/components/sheet";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { stringify as stringifyYaml } from "yaml";
 import { StreamEventFeed, type CustomHtmlRendererApi } from "~/components/stream-event-feed.tsx";
+import { StreamComposer } from "~/components/stream-composer.tsx";
 import { useLiveStreamEvents } from "~/hooks/use-live-stream-events.ts";
-import { eventInputTemplates, getEventInputTemplateById } from "~/lib/event-type-pages.ts";
+import { getEventInputTemplateById, getProcessorEventDocByType } from "~/lib/processor-docs.ts";
 import { parseObjectFromComposerText } from "~/lib/stream-composer-input.ts";
 import {
   buildCustomHtmlRendererProjection,
   type CustomHtmlRendererProjection,
 } from "~/lib/custom-html-renderers.ts";
 import { buildDisplayFeed, projectWireToFeed } from "~/lib/stream-feed-projection.ts";
-import { summarizeStreamFeed } from "~/lib/stream-feed-summary.ts";
+import { streamPathToSplat } from "~/lib/stream-links.ts";
 import {
   DEFAULT_STREAM_RENDERER_MODE,
   type StreamFeedItem,
   type StreamRendererMode,
 } from "~/lib/stream-feed-types.ts";
 import { formatClientError } from "~/lib/format-client-error.ts";
-import { defaultStreamViewSearch, type StreamComposerMode } from "~/lib/stream-view-search.ts";
+import {
+  defaultStreamViewSearch,
+  type StreamComposerMode,
+  type StreamFeedViewMode,
+} from "~/lib/stream-view-search.ts";
 import { getOrpc, getOrpcClient } from "~/orpc/client.ts";
 import { useStreamsChrome } from "~/components/streams-chrome.tsx";
 
-const DEFAULT_EVENT_TEMPLATE_ID = "manual-event-appended:default";
+const DEFAULT_EVENT_TEMPLATE_ID = "core:durable-object-woke-up";
 const EMPTY_CUSTOM_INSERTIONS = new Map<number, StreamFeedItem[]>();
 
 export function StreamPage({
   streamPath,
   rendererMode = DEFAULT_STREAM_RENDERER_MODE,
   composerMode = defaultStreamViewSearch.composer,
+  feedViewMode = defaultStreamViewSearch.view,
   openEventOffset,
   onOpenEventOffsetChange,
   onRendererModeChange,
   onComposerModeChange,
+  onFeedViewModeChange,
 }: {
   streamPath: StreamPath;
   rendererMode?: StreamRendererMode;
   composerMode?: StreamComposerMode;
+  feedViewMode?: StreamFeedViewMode;
   openEventOffset?: number;
   onOpenEventOffsetChange?: (offset?: number) => void;
   onRendererModeChange?: (mode: StreamRendererMode) => void;
   onComposerModeChange?: (mode: StreamComposerMode) => void;
+  onFeedViewModeChange?: (mode: StreamFeedViewMode) => void;
 }) {
   const queryClient = useQueryClient();
   const { closeMetadata, metadataOpen, setHeaderControls } = useStreamsChrome();
@@ -100,14 +118,15 @@ export function StreamPage({
     staleTime: 5_000,
   });
 
-  const { events, isConnecting } = useLiveStreamEvents({
+  const {
+    events,
+    isConnecting,
+    status: liveStreamStatus,
+  } = useLiveStreamEvents({
     streamPath,
     onEvent: useCallback(
       (event: Event) => {
-        if (
-          streamPath === "/" &&
-          event.type === "https://events.iterate.com/events/stream/child-stream-created"
-        ) {
+        if (streamPath === "/" && event.type === STREAM_CHILD_STREAM_CREATED_TYPE) {
           void queryClient.invalidateQueries({ queryKey: listChildrenOptions.queryKey });
         }
       },
@@ -146,7 +165,37 @@ export function StreamPage({
     [customHtmlInsertionsQuery.data, events],
   );
   const displayFeed = useMemo(() => buildDisplayFeed(feed, rendererMode), [feed, rendererMode]);
-  const feedSummary = useMemo(() => summarizeStreamFeed(feed), [feed]);
+  // In the clean feed, renderer modes select stream-view reducers. Rendering
+  // stays mode-agnostic and only switches on each feed item's `type`.
+  const cleanViewState = useMemo(
+    () => reduceCleanViewState({ events, mode: rendererMode }),
+    [events, rendererMode],
+  );
+  const onRendererModeChangeRef = useRef(onRendererModeChange);
+  const onFeedViewModeChangeRef = useRef(onFeedViewModeChange);
+  onRendererModeChangeRef.current = onRendererModeChange;
+  onFeedViewModeChangeRef.current = onFeedViewModeChange;
+  /*
+   * Header controls live in the surrounding streams chrome, but their actions
+   * are owned by this route. Keep the callbacks stable so publishing controls
+   * into context does not retrigger itself through a provider rerender.
+   */
+  const handleHeaderRendererModeChange = useCallback((mode: StreamRendererMode) => {
+    onRendererModeChangeRef.current?.(mode);
+  }, []);
+  const handleHeaderFeedViewModeChange = useCallback((mode: StreamFeedViewMode) => {
+    onFeedViewModeChangeRef.current?.(mode);
+  }, []);
+  const headerControls = useMemo(
+    () => ({
+      rendererMode,
+      onRendererModeChange: handleHeaderRendererModeChange,
+      feedViewMode,
+      onFeedViewModeChange: handleHeaderFeedViewModeChange,
+    }),
+    [feedViewMode, handleHeaderFeedViewModeChange, handleHeaderRendererModeChange, rendererMode],
+  );
+  const publishedHeaderControlsRef = useRef<typeof headerControls | null>(null);
 
   useEffect(() => {
     setAppendInputJson(createEventInputTemplate(selectedTemplateId, "json"));
@@ -154,19 +203,31 @@ export function StreamPage({
   }, [selectedTemplateId]);
 
   useEffect(() => {
-    // The header lives in the parent `_app` layout, outside the concrete stream
-    // route component, so we bridge the validated route search state into that
-    // header here instead of duplicating local renderer state in the page.
-    setHeaderControls({
-      rendererMode,
-      onRendererModeChange,
-      feedSummary,
-    });
+    const previous = publishedHeaderControlsRef.current;
+    if (
+      previous?.rendererMode === headerControls.rendererMode &&
+      previous?.feedViewMode === headerControls.feedViewMode &&
+      previous?.onRendererModeChange === headerControls.onRendererModeChange &&
+      previous?.onFeedViewModeChange === headerControls.onFeedViewModeChange
+    ) {
+      return;
+    }
 
+    /*
+     * This effect bridges route-owned stream state into the app chrome. Compare
+     * the meaningful fields before publishing so harmless object churn from
+     * replaying the feed cannot create an update loop.
+     */
+    publishedHeaderControlsRef.current = headerControls;
+    setHeaderControls(headerControls);
+  }, [headerControls, setHeaderControls]);
+
+  useEffect(() => {
     return () => {
+      publishedHeaderControlsRef.current = null;
       setHeaderControls(null);
     };
-  }, [feedSummary, onRendererModeChange, rendererMode, setHeaderControls]);
+  }, [setHeaderControls]);
 
   const [destroyChildren, setDestroyChildren] = useState(true);
 
@@ -261,14 +322,22 @@ export function StreamPage({
 
     await submitAppendEvent({
       event: {
-        type: "agent-input-added",
+        type: "events.iterate.com/webchat/user-message-added",
         payload: {
-          role: "user",
           content,
         },
       },
     });
     setAgentInputText("");
+  };
+
+  const submitDebugInfoRequest = async () => {
+    await submitAppendEvent({
+      event: {
+        type: "debug-info-requested",
+        payload: {},
+      },
+    });
   };
 
   const handleComposerSubmit = async () => {
@@ -284,21 +353,74 @@ export function StreamPage({
 
     await submitRawAppend({ inputText: appendInputJson, format: "json" });
   };
+  const handleInputSlotAction = (action: EventsStreamInputAction) => {
+    switch (action.type) {
+      case "prefill-agent-message":
+        setAgentInputText(action.text);
+        onComposerModeChange?.("agent");
+        break;
+    }
+  };
+  const liveStreamFailureLabel = getLiveStreamFailureLabel({
+    isPending: isConnecting,
+    liveStreamStatus,
+  });
 
   return (
-    <section className="flex h-full min-h-0 flex-1 flex-col overflow-hidden">
-      <div className="min-h-0 flex-1 overflow-hidden">
-        <StreamEventFeed
-          feed={feed}
-          displayFeed={displayFeed}
-          rendererMode={rendererMode}
-          emptyLabel="No events received yet."
-          isPending={isConnecting || (streamStateQuery.isPending && events.length === 0)}
+    <EventsStreamLayout>
+      {feedViewMode === "clean" && cleanViewState.slots.header.length > 0 ? (
+        <EventsStreamLayoutHeader>
+          <EventsStreamHeader elements={cleanViewState.slots.header} />
+        </EventsStreamLayoutHeader>
+      ) : null}
+
+      <EventsStreamLayoutMain>
+        {feedViewMode === "clean" ? (
+          <EventsStreamFeed
+            elements={cleanViewState.slots.feed}
+            emptyLabel="No events received yet."
+            isPending={isConnecting}
+            errorLabel={liveStreamFailureLabel}
+            onOpenEventOffsetChange={onOpenEventOffsetChange}
+            renderStreamPathLink={({ path, children, className }) => (
+              <Link
+                to="/streams/$/"
+                params={{ _splat: streamPathToSplat(path) }}
+                search={(previous: typeof defaultStreamViewSearch) => ({
+                  event: undefined,
+                  composer: previous.composer ?? defaultStreamViewSearch.composer,
+                  renderer: previous.renderer ?? defaultStreamViewSearch.renderer,
+                  view: previous.view ?? defaultStreamViewSearch.view,
+                })}
+                className={className}
+              >
+                {children}
+              </Link>
+            )}
+          />
+        ) : (
+          <StreamEventFeed
+            feed={feed}
+            displayFeed={displayFeed}
+            rendererMode={rendererMode}
+            emptyLabel="No events received yet."
+            isPending={isConnecting}
+            liveStreamStatus={liveStreamStatus}
+            openEventOffset={openEventOffset}
+            onOpenEventOffsetChange={onOpenEventOffsetChange}
+            rendererApi={rendererApi}
+          />
+        )}
+      </EventsStreamLayoutMain>
+
+      {feedViewMode === "clean" ? (
+        <EventsStreamEventInspectorSheet
+          events={events}
           openEventOffset={openEventOffset}
           onOpenEventOffsetChange={onOpenEventOffsetChange}
-          rendererApi={rendererApi}
+          getEventTypeHref={(eventType) => getProcessorEventDocByType(eventType)?.href}
         />
-      </div>
+      ) : null}
 
       <Sheet
         open={metadataOpen}
@@ -374,97 +496,35 @@ export function StreamPage({
         </SheetContent>
       </Sheet>
 
-      <footer className="supports-backdrop-filter:bg-background/80 shrink-0 border-t bg-background/95 px-4 py-4">
-        <PromptInput className="relative w-full" onSubmit={handleComposerSubmit}>
-          <PromptInputBody>
-            {composerMode === "agent" ? (
-              <PromptInputTextarea
-                value={agentInputText}
-                onChange={(event) => setAgentInputText(event.currentTarget.value)}
-                placeholder="Message this agent"
-                className="min-h-11 max-h-[45vh] text-sm leading-5"
-              />
-            ) : composerMode === "yaml" ? (
-              <SourceCodeBlock
-                code={appendInputYaml}
-                language="yaml"
-                editable
-                onChange={setAppendInputYaml}
-                onModEnter={handleComposerSubmit}
-                showCopyButton={false}
-                className="w-full max-h-[45vh]"
-              />
-            ) : (
-              <SourceCodeBlock
-                code={appendInputJson}
-                language="json"
-                editable
-                onChange={setAppendInputJson}
-                onModEnter={handleComposerSubmit}
-                showCopyButton={false}
-                className="w-full max-h-[45vh]"
-              />
-            )}
-          </PromptInputBody>
-          <PromptInputFooter className="items-center justify-between gap-2 border-t p-2.5">
-            <PromptInputTools className="min-w-0 flex-1">
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <Tabs
-                  value={composerMode}
-                  onValueChange={(value) => onComposerModeChange?.(value as StreamComposerMode)}
-                >
-                  <TabsList className="h-8">
-                    <TabsTrigger value="json" className="px-2 text-xs">
-                      JSON
-                    </TabsTrigger>
-                    <TabsTrigger value="yaml" className="px-2 text-xs">
-                      YAML
-                    </TabsTrigger>
-                    <TabsTrigger value="agent" className="px-2 text-xs">
-                      Agent
-                    </TabsTrigger>
-                  </TabsList>
-                </Tabs>
+      <EventsStreamLayoutMessageInput>
+        {/* Input-slot elements are reducer output. This is the proof point that
+            stream events can draw affordances into the composer region without
+            the reducer owning the app-specific composer implementation. */}
+        {feedViewMode === "clean" ? (
+          <EventsStreamInputSlot
+            elements={cleanViewState.slots.input}
+            onAction={handleInputSlotAction}
+            className="mb-3"
+          />
+        ) : null}
 
-                {composerMode !== "agent" ? (
-                  <PromptInputSelect
-                    value={selectedTemplateId}
-                    onValueChange={(value) => {
-                      setSelectedTemplateId(value as string);
-                    }}
-                  >
-                    <PromptInputSelectTrigger className="h-8 max-w-full min-w-0 text-xs sm:max-w-[18rem]">
-                      <span className="truncate">
-                        {getEventInputTemplateById(selectedTemplateId)?.label ?? "Event template"}
-                      </span>
-                    </PromptInputSelectTrigger>
-                    <PromptInputSelectContent align="start" className="w-fit">
-                      {eventInputTemplates.map((template) => (
-                        <PromptInputSelectItem key={template.id} value={template.id}>
-                          {template.label}
-                        </PromptInputSelectItem>
-                      ))}
-                    </PromptInputSelectContent>
-                  </PromptInputSelect>
-                ) : null}
-              </div>
-            </PromptInputTools>
-            <PromptInputSubmit
-              className="shrink-0"
-              disabled={
-                appendEvent.isPending ||
-                (composerMode === "agent"
-                  ? !agentInputText.trim()
-                  : composerMode === "yaml"
-                    ? !appendInputYaml.trim()
-                    : !appendInputJson.trim())
-              }
-              status={appendEvent.isPending ? "submitted" : "ready"}
-            />
-          </PromptInputFooter>
-        </PromptInput>
-      </footer>
-    </section>
+        <StreamComposer
+          composerMode={composerMode}
+          onComposerModeChange={onComposerModeChange}
+          selectedTemplateId={selectedTemplateId}
+          onSelectedTemplateIdChange={setSelectedTemplateId}
+          agentInputText={agentInputText}
+          onAgentInputTextChange={setAgentInputText}
+          appendInputJson={appendInputJson}
+          onAppendInputJsonChange={setAppendInputJson}
+          appendInputYaml={appendInputYaml}
+          onAppendInputYamlChange={setAppendInputYaml}
+          isSubmitting={appendEvent.isPending}
+          onSubmit={handleComposerSubmit}
+          onDebugInfoRequest={submitDebugInfoRequest}
+        />
+      </EventsStreamLayoutMessageInput>
+    </EventsStreamLayout>
   );
 }
 
@@ -479,4 +539,39 @@ function createEventInputTemplate(templateId: string, format: "json" | "yaml") {
 
 function parseAppendEventInput(value: string, format: "json" | "yaml") {
   return parseObjectFromComposerText(value, format) as EventInput;
+}
+
+function getLiveStreamFailureLabel({
+  isPending,
+  liveStreamStatus,
+}: {
+  isPending: boolean;
+  liveStreamStatus?: string;
+}) {
+  if (isPending || liveStreamStatus == null) {
+    return undefined;
+  }
+
+  return liveStreamStatus.startsWith("Error:") || liveStreamStatus.startsWith("Timed out")
+    ? liveStreamStatus
+    : undefined;
+}
+
+function reduceCleanViewState(args: { events: readonly Event[]; mode: StreamRendererMode }) {
+  return processEventsWithViewReducer({
+    events: args.events,
+    reducer: selectCleanViewReducer(args.mode),
+  });
+}
+
+function selectCleanViewReducer(mode: StreamRendererMode): EventsStreamViewReducer {
+  switch (mode) {
+    case "raw-pretty":
+      return rawPrettyEventsStreamViewReducer;
+    case "raw-single-json":
+      return rawJsonDumpEventsStreamViewReducer;
+    case "raw":
+    case "pretty":
+      return rawPrettyEventsStreamViewReducer;
+  }
 }

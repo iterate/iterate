@@ -1,9 +1,4 @@
-import type {
-  Event,
-  ExternalSubscriber,
-  StreamPath,
-  StreamSchedule,
-} from "@iterate-com/events-contract";
+import type { Event, ExternalSubscriber, StreamPath } from "@iterate-com/events-contract";
 
 export const streamRendererModes = ["pretty", "raw-pretty", "raw", "raw-single-json"] as const;
 export type StreamRendererMode = (typeof streamRendererModes)[number];
@@ -18,18 +13,6 @@ export const streamRendererModeOptions: ReadonlyArray<{
     label: "Raw + Pretty",
     description:
       "Keep grouped raw wire rows while interleaving semantic cards at the same cursor—best when you need both fidelity and readability.",
-  },
-  {
-    value: "raw",
-    label: "Raw",
-    description:
-      "Render every raw event as its own YAML item in the timeline, without semantic projection cards.",
-  },
-  {
-    value: "pretty",
-    label: "Pretty",
-    description:
-      "Hide raw wire rows and show only semantic projections (messages, tools, lifecycle, errors). Use when chunk noise is distracting.",
   },
   {
     value: "raw-single-json",
@@ -122,17 +105,6 @@ export interface ExternalSubscriberConfiguredFeedItem {
   raw: Event;
 }
 
-export interface JsonataTransformerConfiguredFeedItem {
-  kind: "jsonata-transformer-configured";
-  transformer: {
-    slug: string;
-    matcher: string;
-    transform: string;
-  };
-  timestamp: number;
-  raw: Event;
-}
-
 export interface CustomHtmlRenderedEventFeedItem {
   kind: "custom-html-rendered-event";
   slug: string;
@@ -158,29 +130,6 @@ export interface StreamLifecycleFeedItem {
   raw: Event;
 }
 
-export interface DynamicWorkerConfiguredFeedItem {
-  kind: "dynamic-worker-configured";
-  slug: string;
-  sourceCode: string;
-  compatibilityDate?: string;
-  compatibilityFlags: string[];
-  outboundGateway?: {
-    entrypoint: string;
-    secretHeaderName?: string;
-    secretHeaderValue?: string;
-  };
-  timestamp: number;
-  raw: Event;
-}
-
-export interface DynamicWorkerEnvVarSetFeedItem {
-  kind: "dynamic-worker-env-var-set";
-  key: string;
-  usesIterateSecret: boolean;
-  timestamp: number;
-  raw: Event;
-}
-
 export interface StreamPausedFeedItem {
   kind: "stream-paused";
   reason: string;
@@ -202,9 +151,18 @@ export interface StreamErrorOccurredFeedItem {
   raw: Event;
 }
 
+export interface AgentStatusFeedItem {
+  kind: "agent-status";
+  status: "working" | "idle";
+  reason: string;
+  requestId?: string;
+  timestamp: number;
+  raw: Event;
+}
+
 export interface CodemodeBlockFeedItem {
   kind: "codemode-block";
-  requestId: string;
+  requestId?: string;
   blockId: string;
   language: string;
   code: string;
@@ -212,37 +170,18 @@ export interface CodemodeBlockFeedItem {
   raw: Event;
 }
 
-export interface BashmodeBlockFeedItem {
-  kind: "bashmode-block";
-  content: string;
-  timestamp: number;
-  raw: Event;
-}
-
 export interface CodemodeResultFeedItem {
   kind: "codemode-result";
-  requestId: string;
+  requestId?: string;
   blockId: string;
-  blockCount: number;
+  blockCount?: number;
   success: boolean;
-  exitCode: number;
+  exitCode?: number;
   stdout: string;
   stderr: string;
-  durationMs: number;
-  codePath: string;
-  outputPath: string;
-  timestamp: number;
-  raw: Event;
-}
-
-export interface SchedulerControlFeedItem {
-  kind: "scheduler-control";
-  action: "configured" | "cancelled";
-  slug: string;
-  schedule?: StreamSchedule;
-  callback?: string;
-  payloadJson?: string | null;
-  nextRunAt?: number;
+  durationMs?: number;
+  codePath?: string;
+  outputPath?: string;
   timestamp: number;
   raw: Event;
 }
@@ -256,16 +195,12 @@ export type StreamFeedItem =
   | ChildStreamCreatedFeedItem
   | StreamMetadataUpdatedFeedItem
   | ExternalSubscriberConfiguredFeedItem
-  | JsonataTransformerConfiguredFeedItem
   | CustomHtmlRenderedEventFeedItem
   | CustomHtmlRenderErrorFeedItem
   | StreamLifecycleFeedItem
-  | DynamicWorkerConfiguredFeedItem
-  | DynamicWorkerEnvVarSetFeedItem
   | StreamPausedFeedItem
   | StreamResumedFeedItem
   | StreamErrorOccurredFeedItem
+  | AgentStatusFeedItem
   | CodemodeBlockFeedItem
-  | BashmodeBlockFeedItem
-  | CodemodeResultFeedItem
-  | SchedulerControlFeedItem;
+  | CodemodeResultFeedItem;

@@ -189,13 +189,12 @@ describe("RestartingProcess", () => {
       const startTime = Date.now();
       proc.start();
 
-      // Wait for 2 restarts
-      await wait(600);
+      await expect
+        .poll(() => proc.restarts, { timeout: POLL_TIMEOUT_MS })
+        .toBeGreaterThanOrEqual(1);
 
       const elapsed = Date.now() - startTime;
-      // Should have at least 2 delays of 100ms each
-      expect(elapsed).toBeGreaterThanOrEqual(180);
-      expect(proc.restarts).toBeGreaterThanOrEqual(1);
+      expect(elapsed).toBeGreaterThanOrEqual(90);
 
       await proc.stop();
     });

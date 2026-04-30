@@ -23,7 +23,7 @@ type StreamRouteSearch = ReturnType<typeof Route.useSearch>;
 
 function StreamsDetailPage() {
   const { streamPath } = Route.useLoaderData();
-  const { composer, event, renderer } = Route.useSearch();
+  const { composer, event, renderer, view } = Route.useSearch();
   const navigate = Route.useNavigate();
   const updateEventOffset = useCallback(
     (nextEventOffset?: number) => {
@@ -64,16 +64,30 @@ function StreamsDetailPage() {
     },
     [navigate],
   );
+  const updateFeedView = useCallback(
+    (nextView: typeof view) => {
+      void navigate({
+        search: (previous: StreamRouteSearch) => ({
+          ...previous,
+          view: nextView,
+        }),
+        replace: true,
+      });
+    },
+    [navigate],
+  );
 
   return (
     <StreamPage
       streamPath={streamPath}
       rendererMode={renderer}
       composerMode={composer}
+      feedViewMode={view}
       openEventOffset={event}
       onOpenEventOffsetChange={updateEventOffset}
       onRendererModeChange={updateRenderer}
       onComposerModeChange={updateComposer}
+      onFeedViewModeChange={updateFeedView}
     />
   );
 }

@@ -35,8 +35,8 @@ export type ScheduleMultiplexedAlarmInput = {
    * Stable logical alarm key.
    *
    * Reusing a key replaces the existing row. This makes mixins safe to call
-   * from lifecycle start hooks without creating duplicate work on every
-   * Durable Object activation.
+   * from lifecycle instance wake hooks without creating duplicate work on every
+   * JavaScript Durable Object instance wake.
    */
   key: string;
   /**
@@ -190,7 +190,7 @@ export function withMultiplexedAlarms<InitParams extends LifecycleInit>() {
         this.getDurableObjectSql().exec(`CREATE INDEX IF NOT EXISTS mixin_multiplexed_alarms_run_at
           ON ${MULTIPLEXED_ALARMS_TABLE} (run_at_ms)`);
 
-        this.registerOnStart(() => this.armNextMultiplexedAlarm());
+        this.registerOnInstanceWake(() => this.armNextMultiplexedAlarm());
       }
 
       getMultiplexedAlarms(): MultiplexedAlarmRecord[] {

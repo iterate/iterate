@@ -1,6 +1,9 @@
 import { ORPCError } from "@orpc/server";
 import {
   type ChildStreamCreatedEvent,
+  type ProjectSlug,
+  STREAM_CHILD_STREAM_CREATED_TYPE,
+  STREAM_FIRST_INITIALIZED_TYPE,
   type StreamPath,
   StreamPausedError,
 } from "@iterate-com/events-contract";
@@ -60,23 +63,19 @@ export const streamsRouter = {
   }),
 
   listChildren: os.listChildren.use(withProject).handler(async ({ input, context }) => {
-    const streamStub =
+    const events =
       input.path === "/"
-        ? await getInitializedStreamStub({
+        ? await getRootStreamHistory({ projectSlug: context.projectSlug, path: input.path })
+        : await getStreamStub({
             projectSlug: context.projectSlug,
             path: input.path,
-          })
-        : getStreamStub({
-            projectSlug: context.projectSlug,
-            path: input.path,
-          });
-    const events = await streamStub.history();
+          }).historyIfInitialized();
     const discovered: Record<StreamPath, string> = {};
 
     for (const event of events) {
-      if (event.type === "https://events.iterate.com/events/stream/child-stream-created") {
+      if (event.type === STREAM_CHILD_STREAM_CREATED_TYPE) {
         discovered[(event as ChildStreamCreatedEvent).payload.childPath] = event.createdAt;
-      } else if (event.type === "https://events.iterate.com/events/stream/initialized") {
+      } else if (event.type === STREAM_FIRST_INITIALIZED_TYPE) {
         discovered[input.path] = event.createdAt;
       }
     }
@@ -90,6 +89,11 @@ export const streamsRouter = {
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }),
 };
+
+async function getRootStreamHistory(args: { projectSlug: ProjectSlug; path: "/" }) {
+  const streamStub = await getInitializedStreamStub(args);
+  return streamStub.history();
+}
 
 function mapAppendOrpcError(error: unknown) {
   if (

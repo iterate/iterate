@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import {
   ExternalSubscriber,
   HtmlRendererConfiguredEventInput,
-  JsonataTransformerConfiguredEventInput,
   StreamSubscriptionConfiguredEventInput,
 } from "./index.ts";
 
@@ -21,7 +20,7 @@ function testValidExternalSubscriberJsonataExpressionsParse() {
 
 function testInvalidExternalSubscriberJsonataExpressionsFailFast() {
   const parsed = StreamSubscriptionConfiguredEventInput.safeParse({
-    type: "https://events.iterate.com/events/stream/subscription/configured",
+    type: "events.iterate.com/core/subscription-configured",
     payload: {
       slug: "audit",
       type: "webhook",
@@ -33,22 +32,9 @@ function testInvalidExternalSubscriberJsonataExpressionsFailFast() {
   assert.equal(parsed.success, false);
 }
 
-function testInvalidJsonataTransformerExpressionsFailFast() {
-  const parsed = JsonataTransformerConfiguredEventInput.safeParse({
-    type: "https://events.iterate.com/events/stream/jsonata-transformer-configured",
-    payload: {
-      slug: "fanout",
-      matcher: "type = ",
-      transform: '{"kind":"copy"}',
-    },
-  });
-
-  assert.equal(parsed.success, false);
-}
-
 function testValidHtmlRendererConfigParses() {
   const parsed = HtmlRendererConfiguredEventInput.parse({
-    type: "https://events.iterate.com/events/stream/html-renderer-configured",
+    type: "events.iterate.com/core/html-renderer-configured",
     payload: {
       slug: "todo-card",
       matcher: "type = 'todo.created'",
@@ -61,7 +47,7 @@ function testValidHtmlRendererConfigParses() {
 
 function testInvalidHtmlRendererMatcherFailsFast() {
   const parsed = HtmlRendererConfiguredEventInput.safeParse({
-    type: "https://events.iterate.com/events/stream/html-renderer-configured",
+    type: "events.iterate.com/core/html-renderer-configured",
     payload: {
       slug: "todo-card",
       matcher: "type = ",
@@ -74,6 +60,5 @@ function testInvalidHtmlRendererMatcherFailsFast() {
 
 await testValidExternalSubscriberJsonataExpressionsParse();
 await testInvalidExternalSubscriberJsonataExpressionsFailFast();
-await testInvalidJsonataTransformerExpressionsFailFast();
 await testValidHtmlRendererConfigParses();
 await testInvalidHtmlRendererMatcherFailsFast();

@@ -276,7 +276,7 @@ export function withScheduler<InitParams extends LifecycleInit>(options?: {
           .exec(`CREATE INDEX IF NOT EXISTS mixin_scheduler_schedules_next_run_at
           ON ${SCHEDULER_TABLE} (next_run_at_ms)`);
 
-        this.registerOnStart(() => this.armSchedulerRows());
+        this.registerOnInstanceWake(() => this.armSchedulerRows());
       }
 
       getSchedule(key: string): SchedulerRecord | null {

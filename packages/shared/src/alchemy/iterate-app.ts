@@ -102,7 +102,10 @@ export async function IterateApp<B extends Bindings>(
       traces: { enabled: true, persist: true, headSamplingRate: 1 },
     },
     build: buildCommand,
-    dev: props.dev ?? { command: "pnpm exec vite dev --config vite.config.ts" },
+    dev: props.dev ?? {
+      command:
+        "pnpm exec vite dev --config vite.config.ts --host ${HOST:-127.0.0.1} --port ${PORT:-5173}",
+    },
   });
 
   // --- Dev tunnel: route real domains to the local vite server ---

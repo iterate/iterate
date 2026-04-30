@@ -70,21 +70,22 @@ export class InitializeTestRoom extends RoomBase<Env> {
       this.ctx.storage.kv.put("test.firstInitializeHookOwnerUserId", params.ownerUserId);
     });
 
-    this.registerOnStart(async (params) => {
-      const runs = this.ctx.storage.kv.get<number>("test.startHookRuns") ?? 0;
-      this.ctx.storage.kv.put("test.startHookRuns", runs + 1);
-      this.ctx.storage.kv.put("test.startHookStarted", true);
+    this.registerOnInstanceWake(async (params) => {
+      const runs = this.ctx.storage.kv.get<number>("test.instanceWakeHookRuns") ?? 0;
+      this.ctx.storage.kv.put("test.instanceWakeHookRuns", runs + 1);
+      this.ctx.storage.kv.put("test.instanceWakeHookStarted", true);
 
       // Keep this asynchronous so tests prove initialize()/ensureStarted()
       // wait for hook completion rather than fire-and-forget constructor work.
       await Promise.resolve();
 
       if (params.name.includes("hook-fails-once")) {
-        const alreadyFailed = this.ctx.storage.kv.get<boolean>("test.startHookFailedOnce") ?? false;
+        const alreadyFailed =
+          this.ctx.storage.kv.get<boolean>("test.instanceWakeHookFailedOnce") ?? false;
 
         if (!alreadyFailed) {
-          this.ctx.storage.kv.put("test.startHookFailedOnce", true);
-          throw new Error("start hook failed once");
+          this.ctx.storage.kv.put("test.instanceWakeHookFailedOnce", true);
+          throw new Error("instance wake hook failed once");
         }
       }
 
@@ -95,7 +96,7 @@ export class InitializeTestRoom extends RoomBase<Env> {
         throw undefined;
       }
 
-      this.ctx.storage.kv.put("test.startHookFinished", true);
+      this.ctx.storage.kv.put("test.instanceWakeHookFinished", true);
     });
   }
 
@@ -120,19 +121,22 @@ export class InitializeTestRoom extends RoomBase<Env> {
   getLifecycleHookState(): {
     firstInitializeRuns: number;
     firstInitializeOwnerUserId: string | null;
-    startRuns: number;
-    startStarted: boolean;
-    startFinished: boolean;
-    startFailedOnce: boolean;
+    instanceWakeRuns: number;
+    instanceWakeStarted: boolean;
+    instanceWakeFinished: boolean;
+    instanceWakeFailedOnce: boolean;
   } {
     return {
       firstInitializeRuns: this.ctx.storage.kv.get<number>("test.firstInitializeHookRuns") ?? 0,
       firstInitializeOwnerUserId:
         this.ctx.storage.kv.get<string>("test.firstInitializeHookOwnerUserId") ?? null,
-      startRuns: this.ctx.storage.kv.get<number>("test.startHookRuns") ?? 0,
-      startStarted: this.ctx.storage.kv.get<boolean>("test.startHookStarted") ?? false,
-      startFinished: this.ctx.storage.kv.get<boolean>("test.startHookFinished") ?? false,
-      startFailedOnce: this.ctx.storage.kv.get<boolean>("test.startHookFailedOnce") ?? false,
+      instanceWakeRuns: this.ctx.storage.kv.get<number>("test.instanceWakeHookRuns") ?? 0,
+      instanceWakeStarted:
+        this.ctx.storage.kv.get<boolean>("test.instanceWakeHookStarted") ?? false,
+      instanceWakeFinished:
+        this.ctx.storage.kv.get<boolean>("test.instanceWakeHookFinished") ?? false,
+      instanceWakeFailedOnce:
+        this.ctx.storage.kv.get<boolean>("test.instanceWakeHookFailedOnce") ?? false,
     };
   }
 
@@ -147,7 +151,7 @@ export class InitializeTestRoom extends RoomBase<Env> {
 
     return {
       results,
-      hookRuns: this.getLifecycleHookState().startRuns,
+      hookRuns: this.getLifecycleHookState().instanceWakeRuns,
     };
   }
 

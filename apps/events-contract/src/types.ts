@@ -7,46 +7,24 @@ import {
   StreamPath,
 } from "./event-base-types.ts";
 import {
+  CircuitBreakerConfiguredEventInput,
   CircuitBreakerState,
-  StreamPausedEvent,
   StreamPausedEventInput,
-  StreamResumedEvent,
   StreamResumedEventInput,
 } from "./circuit-breaker-types.ts";
 import {
   ExternalSubscriberState,
-  StreamSubscriptionConfiguredEvent,
   StreamSubscriptionConfiguredEventInput,
 } from "./external-subscriber-types.ts";
+import { HtmlRendererConfiguredEventInput } from "./html-renderer-types.ts";
 import {
-  JsonataTransformerConfiguredEvent,
-  JsonataTransformerConfiguredEventInput,
-  JsonataTransformerState,
-} from "./jsonata-transformer-types.ts";
-import {
-  HtmlRendererConfiguredEvent,
-  HtmlRendererConfiguredEventInput,
-} from "./html-renderer-types.ts";
-import {
-  DynamicWorkerState,
-  DynamicWorkerConfiguredEventInput,
-  DynamicWorkerConfiguredEvent,
-  DynamicWorkerEnvVarSetEvent,
-  DynamicWorkerEnvVarSetEventInput,
-} from "./dynamic-worker-types.ts";
-import {
-  ScheduleConfiguredEvent,
-  ScheduleConfiguredEventInput,
-  ScheduleCancelledEvent,
-  ScheduleCancelledEventInput,
-  ScheduleInternalExecutionFinishedEvent,
-  ScheduleInternalExecutionFinishedEventInput,
-  ScheduleInternalExecutionStartedEvent,
-  ScheduleInternalExecutionStartedEventInput,
-  SchedulerState,
-  StreamAppendScheduledEvent,
-  StreamAppendScheduledEventInput,
-} from "./scheduling-types.ts";
+  STREAM_CHILD_STREAM_CREATED_TYPE,
+  STREAM_DURABLE_OBJECT_WOKE_UP_TYPE,
+  STREAM_ERROR_OCCURRED_TYPE,
+  STREAM_FIRST_INITIALIZED_TYPE,
+  STREAM_INVALID_EVENT_APPENDED_TYPE,
+  STREAM_METADATA_UPDATED_TYPE,
+} from "./core-event-types.ts";
 
 export { JSONObject, StreamPath };
 
@@ -69,7 +47,7 @@ export const StreamQuery = z
 export type StreamQuery = z.infer<typeof StreamQuery>;
 
 const StreamInitializedEventInput = GenericEventInputBase.extend({
-  type: z.literal("https://events.iterate.com/events/stream/initialized"),
+  type: z.literal(STREAM_FIRST_INITIALIZED_TYPE),
   payload: z.strictObject({
     projectSlug: ProjectSlug,
     path: StreamPath,
@@ -80,20 +58,18 @@ export const StreamInitializedEvent = GenericEventBase.extend(
 );
 export type StreamInitializedEvent = z.infer<typeof StreamInitializedEvent>;
 
-const StreamDurableObjectConstructedEventInput = GenericEventInputBase.extend({
-  type: z.literal("https://events.iterate.com/events/stream/durable-object-constructed"),
+const StreamDurableObjectWokeUpEventInput = GenericEventInputBase.extend({
+  type: z.literal(STREAM_DURABLE_OBJECT_WOKE_UP_TYPE),
   payload: z.strictObject({}),
 });
-const StreamDurableObjectConstructedEvent = GenericEventBase.extend(
-  StreamDurableObjectConstructedEventInput.pick({ type: true, payload: true }).shape,
+const StreamDurableObjectWokeUpEvent = GenericEventBase.extend(
+  StreamDurableObjectWokeUpEventInput.pick({ type: true, payload: true }).shape,
 );
-type StreamDurableObjectConstructedEventInput = z.infer<
-  typeof StreamDurableObjectConstructedEventInput
->;
-type StreamDurableObjectConstructedEvent = z.infer<typeof StreamDurableObjectConstructedEvent>;
+type StreamDurableObjectWokeUpEventInput = z.infer<typeof StreamDurableObjectWokeUpEventInput>;
+type StreamDurableObjectWokeUpEvent = z.infer<typeof StreamDurableObjectWokeUpEvent>;
 
 const ChildStreamCreatedEventInput = GenericEventInputBase.extend({
-  type: z.literal("https://events.iterate.com/events/stream/child-stream-created"),
+  type: z.literal(STREAM_CHILD_STREAM_CREATED_TYPE),
   payload: z.strictObject({
     childPath: StreamPath,
   }),
@@ -104,7 +80,7 @@ export const ChildStreamCreatedEvent = GenericEventBase.extend(
 export type ChildStreamCreatedEvent = z.infer<typeof ChildStreamCreatedEvent>;
 
 export const StreamMetadataUpdatedEventInput = GenericEventInputBase.extend({
-  type: z.literal("https://events.iterate.com/events/stream/metadata-updated"),
+  type: z.literal(STREAM_METADATA_UPDATED_TYPE),
   payload: z.strictObject({
     metadata: JSONObject,
   }),
@@ -116,7 +92,7 @@ export type StreamMetadataUpdatedEventInput = z.infer<typeof StreamMetadataUpdat
 export type StreamMetadataUpdatedEvent = z.infer<typeof StreamMetadataUpdatedEvent>;
 
 const ErrorOccurredEventInput = GenericEventInputBase.extend({
-  type: z.literal("https://events.iterate.com/events/stream/error-occurred"),
+  type: z.literal(STREAM_ERROR_OCCURRED_TYPE),
   payload: z.strictObject({
     message: z.string().trim().min(1),
   }),
@@ -127,7 +103,7 @@ export const ErrorOccurredEvent = GenericEventBase.extend(
 export type ErrorOccurredEvent = z.infer<typeof ErrorOccurredEvent>;
 
 export const InvalidEventAppendedEventInput = GenericEventInputBase.extend({
-  type: z.literal("https://events.iterate.com/events/stream/invalid-event-appended"),
+  type: z.literal(STREAM_INVALID_EVENT_APPENDED_TYPE),
   payload: z.strictObject({
     rawInput: z.json(),
     error: z.string().trim().min(1),
@@ -141,68 +117,22 @@ type InvalidEventAppendedEvent = z.infer<typeof InvalidEventAppendedEvent>;
 
 const builtInEventInputOptions = [
   StreamInitializedEventInput,
-  StreamDurableObjectConstructedEventInput,
+  StreamDurableObjectWokeUpEventInput,
   ChildStreamCreatedEventInput,
   StreamMetadataUpdatedEventInput,
   StreamSubscriptionConfiguredEventInput,
   ErrorOccurredEventInput,
   InvalidEventAppendedEventInput,
-  StreamAppendScheduledEventInput,
-  ScheduleConfiguredEventInput,
-  ScheduleCancelledEventInput,
-  ScheduleInternalExecutionStartedEventInput,
-  ScheduleInternalExecutionFinishedEventInput,
-  JsonataTransformerConfiguredEventInput,
-  DynamicWorkerConfiguredEventInput,
-  DynamicWorkerEnvVarSetEventInput,
+  CircuitBreakerConfiguredEventInput,
   HtmlRendererConfiguredEventInput,
   StreamPausedEventInput,
   StreamResumedEventInput,
 ] as const;
 
-const builtInEventOptions = [
-  StreamInitializedEvent,
-  StreamDurableObjectConstructedEvent,
-  ChildStreamCreatedEvent,
-  StreamMetadataUpdatedEvent,
-  StreamSubscriptionConfiguredEvent,
-  ErrorOccurredEvent,
-  InvalidEventAppendedEvent,
-  StreamAppendScheduledEvent,
-  ScheduleConfiguredEvent,
-  ScheduleCancelledEvent,
-  ScheduleInternalExecutionStartedEvent,
-  ScheduleInternalExecutionFinishedEvent,
-  JsonataTransformerConfiguredEvent,
-  DynamicWorkerConfiguredEvent,
-  DynamicWorkerEnvVarSetEvent,
-  HtmlRendererConfiguredEvent,
-  StreamPausedEvent,
-  StreamResumedEvent,
-] as const;
-const [firstBuiltInType, ...restBuiltInTypes] = builtInEventInputOptions.map(
-  (schema) => schema.shape.type,
-);
-export const BuiltInEventType = z.union([firstBuiltInType, ...restBuiltInTypes]);
+export const GenericEventInput = GenericEventInputBase;
+export const GenericEvent = GenericEventBase;
 
-const GenericEventType = EventTypeSchema.refine(
-  (value) => !BuiltInEventType.safeParse(value).success,
-  {
-    message: "Built-in event types must use their built-in payload schema.",
-  },
-);
-
-export const GenericEventInput = GenericEventInputBase.extend({
-  type: GenericEventType,
-});
-export const GenericEvent = GenericEventBase.extend({
-  type: GenericEventType,
-});
-
-export const BuiltInEventInput = z.discriminatedUnion("type", builtInEventInputOptions);
-export const BuiltInEvent = z.discriminatedUnion("type", builtInEventOptions);
-export type BuiltInEventInput = z.input<typeof BuiltInEventInput>;
-export type BuiltInEvent = z.infer<typeof BuiltInEvent>;
+type BuiltInEventInput = z.input<(typeof builtInEventInputOptions)[number]>;
 
 type WithAutocompleteEventType<T extends { type: string }> = Omit<T, "type"> & {
   type: EventType;
@@ -212,25 +142,22 @@ export type EventType = BuiltInEventInput["type"] | (z.infer<typeof EventTypeSch
 export type GenericEventInput = WithAutocompleteEventType<z.input<typeof GenericEventInput>>;
 export type GenericEvent = WithAutocompleteEventType<z.infer<typeof GenericEvent>>;
 
-export const EventInput = z.union([BuiltInEventInput, GenericEventInput]);
-export type EventInput = BuiltInEventInput | GenericEventInput;
+export const EventInput = GenericEventInputBase.extend({});
+export type EventInput = GenericEventInput;
 
-export const Event = z.union([BuiltInEvent, GenericEvent]);
-export type Event = BuiltInEvent | GenericEvent;
+export const Event = GenericEventBase.extend({});
+export type Event = GenericEvent;
 
 const ProcessorsState = z.object({
   "circuit-breaker": CircuitBreakerState,
-  "external-subscriber": ExternalSubscriberState.default({ subscribersBySlug: {} }),
-  "dynamic-worker": DynamicWorkerState,
-  "jsonata-transformer": JsonataTransformerState,
-  scheduler: SchedulerState,
+  "external-subscriber": ExternalSubscriberState,
 });
 
 export const StreamState = z.object({
   projectSlug: ProjectSlug,
   path: StreamPath,
   eventCount: z.number().int().nonnegative(),
-  childPaths: z.array(StreamPath).default([]),
+  childPaths: z.array(StreamPath),
   metadata: JSONObject,
   processors: ProcessorsState,
 });

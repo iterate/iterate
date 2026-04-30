@@ -3,12 +3,6 @@ import type { ContractRouterClient } from "@orpc/contract";
 import { z } from "zod";
 import { AppendInput, eventsContract } from "./orpc-contract.ts";
 import {
-  SCHEDULE_CONFIGURED_TYPE,
-  STREAM_APPEND_SCHEDULED_TYPE,
-  ScheduleConfiguredEventInput,
-  StreamAppendScheduledEventInput,
-} from "./scheduling-types.ts";
-import {
   EventInput,
   InvalidEventAppendedEventInput,
   StreamQuery,
@@ -58,7 +52,7 @@ type _clientStreamArgsExposeTypedCursors = Assert<
 const builtInEvent: AppendArgs = {
   path: examplePath,
   event: {
-    type: "https://events.iterate.com/events/stream/metadata-updated",
+    type: "events.iterate.com/core/metadata-updated",
     payload: {
       metadata: {
         source: "type-test",
@@ -128,7 +122,7 @@ assert.equal(
 const parsedBuiltIn = AppendInput.parse({
   path: examplePath,
   event: {
-    type: "https://events.iterate.com/events/stream/metadata-updated",
+    type: "events.iterate.com/core/metadata-updated",
     payload: {
       metadata: {
         owner: "jonas",
@@ -140,13 +134,27 @@ const parsedBuiltIn = AppendInput.parse({
 assert.deepEqual(parsedBuiltIn, {
   path: examplePath,
   event: {
-    type: "https://events.iterate.com/events/stream/metadata-updated",
+    type: "events.iterate.com/core/metadata-updated",
     payload: {
       metadata: {
         owner: "jonas",
       },
     },
   },
+});
+
+const parsedBuiltInWithGenericPayload = AppendInput.parse({
+  path: examplePath,
+  event: {
+    type: "events.iterate.com/core/metadata-updated",
+    payload: {
+      owner: "jonas",
+    },
+  },
+});
+
+assert.deepEqual(parsedBuiltInWithGenericPayload.event.payload, {
+  owner: "jonas",
 });
 
 const parsedUnknownEvent = AppendInput.parse({
@@ -173,18 +181,15 @@ const malformedBuiltIn = InvalidEventAppendedEventInput.parse(
   AppendInput.parse({
     path: examplePath,
     event: {
-      type: "https://events.iterate.com/events/stream/metadata-updated",
+      type: "events.iterate.com/core/metadata-updated",
       payload: "not-an-object",
     },
   }).event,
 );
 
-assert.equal(
-  malformedBuiltIn.type,
-  "https://events.iterate.com/events/stream/invalid-event-appended",
-);
+assert.equal(malformedBuiltIn.type, "events.iterate.com/core/invalid-event-appended");
 assert.deepEqual(malformedBuiltIn.payload.rawInput, {
-  type: "https://events.iterate.com/events/stream/metadata-updated",
+  type: "events.iterate.com/core/metadata-updated",
   payload: "not-an-object",
 });
 const malformedBuiltInError = malformedBuiltIn.payload.error;
@@ -192,7 +197,7 @@ if (typeof malformedBuiltInError !== "string") {
   throw new Error("malformedBuiltIn.payload.error should be a string");
 }
 assert.match(malformedBuiltInError, /payload/i);
-assert.match(malformedBuiltInError, /expected object/i);
+assert.match(malformedBuiltInError, /Invalid input/i);
 assert.doesNotMatch(
   malformedBuiltInError,
   /Built-in event types must use their built-in payload schema/i,
@@ -200,7 +205,7 @@ assert.doesNotMatch(
 
 assert.equal(
   StreamMetadataUpdatedEventInput.safeParse({
-    type: "https://events.iterate.com/events/stream/metadata-updated",
+    type: "events.iterate.com/core/metadata-updated",
     payload: {
       metadata: {},
     },
@@ -216,16 +221,31 @@ const malformedArray = InvalidEventAppendedEventInput.parse(
   }).event,
 );
 
-assert.equal(
-  malformedArray.type,
-  "https://events.iterate.com/events/stream/invalid-event-appended",
-);
+assert.equal(malformedArray.type, "events.iterate.com/core/invalid-event-appended");
 assert.deepEqual(malformedArray.payload.rawInput, ["weird", { posted: true }]);
 const malformedArrayError = malformedArray.payload.error;
 if (typeof malformedArrayError !== "string") {
   throw new Error("malformedArray.payload.error should be a string");
 }
 assert.match(malformedArrayError, /expected object/);
+
+const malformedBareObject = InvalidEventAppendedEventInput.parse(
+  AppendInput.parse({
+    path: examplePath,
+    event: {
+      command: "/iterate",
+      team_id: "T123",
+      text: "deploy status",
+    },
+  }).event,
+);
+
+assert.equal(malformedBareObject.type, "events.iterate.com/core/invalid-event-appended");
+assert.deepEqual(malformedBareObject.payload.rawInput, {
+  command: "/iterate",
+  team_id: "T123",
+  text: "deploy status",
+});
 
 const nestedFn = () => "nope";
 const genericEventWithNestedNonJsonValues = AppendInput.parse({
@@ -250,7 +270,7 @@ assert.equal(genericEventWithNestedNonJsonValues.payload.nested[2].deeper[1], un
 const streamInitializedEvent = AppendInput.parse({
   path: examplePath,
   event: {
-    type: "https://events.iterate.com/events/stream/initialized",
+    type: "events.iterate.com/core/stream-first-initialized",
     payload: { projectSlug: "public", path: examplePath },
   },
 });
@@ -263,7 +283,7 @@ assert.deepEqual(streamInitializedEvent.event.payload, {
 const subscriptionConfiguredEvent = AppendInput.parse({
   path: examplePath,
   event: {
-    type: "https://events.iterate.com/events/stream/subscription/configured",
+    type: "events.iterate.com/core/subscription-configured",
     payload: {
       slug: "audit",
       type: "webhook",
@@ -282,131 +302,24 @@ assert.deepEqual(subscriptionConfiguredEvent.event.payload, {
   jsonataTransform: '{"kind":"hook"}',
 });
 
-const streamDurableObjectConstructedEvent = AppendInput.parse({
+const streamDurableObjectWokeUpEvent = AppendInput.parse({
   path: examplePath,
   event: {
-    type: "https://events.iterate.com/events/stream/durable-object-constructed",
+    type: "events.iterate.com/core/durable-object-woke-up",
     payload: {},
   },
 });
 
-assert.deepEqual(streamDurableObjectConstructedEvent.event.payload, {});
+assert.deepEqual(streamDurableObjectWokeUpEvent.event.payload, {});
 
-const durableObjectConstructedEvent = AppendInput.parse({
+const durableObjectWokeUpEvent = AppendInput.parse({
   path: examplePath,
   event: {
-    type: "https://events.iterate.com/events/stream/durable-object-constructed",
+    type: "events.iterate.com/core/durable-object-woke-up",
     payload: {},
   },
 });
 
-assert.deepEqual(durableObjectConstructedEvent.event.payload, {});
-
-const appendScheduledEvent = AppendInput.parse({
-  path: examplePath,
-  event: {
-    type: STREAM_APPEND_SCHEDULED_TYPE,
-    payload: {
-      slug: "type-test-schedule",
-      append: {
-        type: "https://events.iterate.com/events/example/value-recorded",
-        payload: {
-          value: 42,
-        },
-      },
-      schedule: {
-        kind: "once-in",
-        delaySeconds: 30,
-      },
-    },
-  },
-});
-
-assert.deepEqual(appendScheduledEvent.event.payload, {
-  slug: "type-test-schedule",
-  append: {
-    type: "https://events.iterate.com/events/example/value-recorded",
-    payload: {
-      value: 42,
-    },
-  },
-  schedule: {
-    kind: "once-in",
-    delaySeconds: 30,
-  },
-});
-
-assert.equal(
-  StreamAppendScheduledEventInput.safeParse({
-    type: STREAM_APPEND_SCHEDULED_TYPE,
-    payload: {
-      slug: "bad-schedule",
-      append: {
-        type: "https://events.iterate.com/events/example/value-recorded",
-        payload: "not-an-object",
-      },
-      schedule: {
-        kind: "once-in",
-        delaySeconds: 30,
-      },
-    },
-  }).success,
-  false,
-);
-
-const configuredEvent = AppendInput.parse({
-  path: examplePath,
-  event: {
-    type: SCHEDULE_CONFIGURED_TYPE,
-    payload: {
-      slug: "type-test-configured",
-      callback: "append",
-      payloadJson: JSON.stringify({
-        type: "https://events.iterate.com/events/example/value-recorded",
-        payload: {
-          value: 1,
-        },
-      }),
-      schedule: {
-        kind: "once-in",
-        delaySeconds: 30,
-      },
-      nextRunAt: 1_700_000_000,
-    },
-  },
-});
-
-assert.deepEqual(configuredEvent.event.payload, {
-  slug: "type-test-configured",
-  callback: "append",
-  payloadJson: JSON.stringify({
-    type: "https://events.iterate.com/events/example/value-recorded",
-    payload: {
-      value: 1,
-    },
-  }),
-  schedule: {
-    kind: "once-in",
-    delaySeconds: 30,
-  },
-  nextRunAt: 1_700_000_000,
-});
-
-assert.equal(
-  ScheduleConfiguredEventInput.safeParse({
-    type: SCHEDULE_CONFIGURED_TYPE,
-    payload: {
-      slug: "bad-configured",
-      callback: "append",
-      payloadJson: null,
-      schedule: {
-        kind: "every",
-        intervalSeconds: 0,
-      },
-      nextRunAt: 1,
-    },
-  }).success,
-  false,
-);
+assert.deepEqual(durableObjectWokeUpEvent.event.payload, {});
 
 console.log("events-contract append client typing and runtime normalization checks passed");

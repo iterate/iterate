@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
   type Event,
   type EventInput,
   type ExternalSubscriber,
@@ -10,8 +11,8 @@ import {
   StreamSocketEventFrame,
   StreamSubscriptionConfiguredEvent,
 } from "@iterate-com/events-contract";
-import { defineBuiltinProcessor } from "@iterate-com/events-contract/sdk";
 import { match } from "schematch";
+import type { BuiltinProcessor } from "./builtin-processor.ts";
 import { getCompiledJsonata } from "./compiled-jsonata.ts";
 import { openOutboundWebSocket } from "./outbound-websocket.ts";
 
@@ -25,7 +26,7 @@ const connectionsBySubscriberKey = new Map<string, SubscriberConnection>();
 const connectPromisesBySubscriberKey = new Map<string, Promise<WebSocket>>();
 const connectionGenerationBySubscriberKey = new Map<string, number>();
 
-export const externalSubscriberProcessor = defineBuiltinProcessor<ExternalSubscriberState>(() => ({
+export const externalSubscriberProcessor = {
   slug: "external-subscriber",
   initialState: {
     subscribersBySlug: {},
@@ -56,7 +57,7 @@ export const externalSubscriberProcessor = defineBuiltinProcessor<ExternalSubscr
       ),
     );
   },
-}));
+} satisfies BuiltinProcessor<ExternalSubscriberState>;
 
 async function publishToExternalSubscriber(args: {
   append: (event: EventInput) => Promise<Event>;
@@ -112,7 +113,7 @@ async function publishToExternalSubscriber(args: {
 async function evaluateFilter(args: { event: Event; subscriber: ExternalSubscriber }) {
   if (
     args.subscriber.type === "webhook" &&
-    args.event.type === "https://events.iterate.com/events/stream/subscription/configured" &&
+    args.event.type === STREAM_SUBSCRIPTION_CONFIGURED_TYPE &&
     args.subscriber.jsonataFilter == null
   ) {
     return false;

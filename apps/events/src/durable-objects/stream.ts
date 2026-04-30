@@ -1,17 +1,25 @@
 import { DurableObject } from "cloudflare:workers";
+import { withDurableObjectCore } from "@iterate-com/shared/durable-object-utils/mixins/with-durable-object-core";
+import { withKvInspector } from "@iterate-com/shared/durable-object-utils/mixins/with-kv-inspector";
+import { withOuterbase } from "@iterate-com/shared/durable-object-utils/mixins/with-outerbase";
 import {
-  type ChildStreamCreatedEvent,
+  ChildStreamCreatedEvent,
   type DestroyStreamResult,
   Event,
   EventInput,
   type ProjectSlug,
+  STREAM_CHILD_STREAM_CREATED_TYPE,
+  STREAM_DURABLE_OBJECT_WOKE_UP_TYPE,
+  STREAM_FIRST_INITIALIZED_TYPE,
+  StreamInitializedEvent,
+  STREAM_METADATA_UPDATED_TYPE,
   type StreamCursor,
-  type StreamMetadataUpdatedEvent,
+  StreamMetadataUpdatedEvent,
   StreamPath,
   StreamState,
 } from "@iterate-com/events-contract";
-import type { BuiltinProcessor } from "@iterate-com/events-contract/sdk";
 import { createDurableObjectClient, type SyncClient } from "sqlfu";
+import { circuitBreakerProcessor } from "./circuit-breaker.ts";
 import { migrate } from "./db/migrations/.generated/migrations.ts";
 import {
   getEventByIdempotencyKey,
@@ -20,103 +28,39 @@ import {
   insertEvent,
   upsertReducedState,
 } from "./db/queries/.generated/index.ts";
-import { circuitBreakerProcessor } from "./circuit-breaker.ts";
 import {
   externalSubscriberProcessor,
   resetSubscriberSocketsForStream,
 } from "./external-subscriber.ts";
-import { createDynamicWorkerManager, dynamicWorkerProcessor } from "./dynamic-processor.ts";
-import { jsonataTransformerProcessor } from "./jsonata-transformer.ts";
-import {
-  isSchedulerAlarmEventType,
-  repointSchedulerAlarm,
-  runSchedulerAlarm,
-  schedulingProcessor,
-} from "./scheduling.ts";
 import { getAncestorStreamPaths } from "~/lib/stream-path-ancestors.ts";
 import { getInitializedStreamStub, StreamOffsetPreconditionError } from "~/lib/stream-helpers.ts";
 
-type ProcessorSlugKey = keyof StreamState["processors"];
-
-// Keep callback fanout as a builtin processor rather than growing bespoke
-// stream-core branches. `stream.ts` stays responsible for lifecycle ordering
-// while the external subscriber processor owns its own reduced state + delivery.
-const processors: BuiltinProcessor[] = [
-  circuitBreakerProcessor,
-  externalSubscriberProcessor,
-  dynamicWorkerProcessor,
-  jsonataTransformerProcessor,
-  schedulingProcessor,
-];
-
-function getProcessorState(state: StreamState, slug: string) {
-  return state.processors[slug as ProcessorSlugKey];
-}
+const StreamDurableObjectBase = withKvInspector({
+  unsafe: "I_UNDERSTAND_THIS_EXPOSES_KV",
+})(
+  withOuterbase({
+    unsafe: "I_UNDERSTAND_THIS_EXPOSES_SQL",
+  })(withDurableObjectCore(DurableObject)),
+);
 
 /**
- * One stream per Durable Object: an append-only event log persisted in SQLite,
- * with a reduced in-memory projection and newline-delimited fanout for live
- * readers.
+ * One Stream durable object owns one append-only SQLite event log, its reduced
+ * state, and lightweight newline-delimited live readers.
  *
- * ## Append lifecycle
+ * Append lifecycle:
+ * parse -> idempotency -> beforeAppend -> reduce -> commit -> afterAppend.
  *
- * Every event passes through three phases that intentionally mirror the hooks
- * on `Processor` / `BuiltinProcessor` in `@iterate-com/events-contract/sdk`:
+ * `beforeAppend` is why builtin processors exist: only code running inside this
+ * DO can reject an append before commit. Ordinary stream processors should run
+ * outside this file as StreamProcessorRunners and coordinate through events.
  *
- *   beforeAppend  →  reduce  →  afterAppend
- *
- * The stream core runs its own logic in each phase first (idempotency, offset
- * guards, eventCount, parent propagation), then delegates to the registered
- * builtin processors in the same phase. This is by design: the stream core is
- * effectively the "zeroth" processor, but its state lives at the top level of
- * StreamState (path, eventCount, metadata) rather than under
- * `state.processors`, because it owns structural invariants that are not
- * pluggable.
- *
- * ## Processor asymmetry
- *
- * The design intent is that _most_ stream functionality should be
- * implementable as a Processor — a pluggable unit with `reduce` and
- * `afterAppend` hooks that can, in principle, run across a network boundary
- * (reading the event stream remotely, then deciding whether to enact side
- * effects or append derived events back).
- *
- * BuiltinProcessors are a privileged subset that run in-process inside this
- * Durable Object. Because they share the single-threaded actor, they
- * additionally get a synchronous `beforeAppend` hook that can reject events
- * before they are committed (e.g. the circuit breaker).
- *
- * The stream core itself has a handful of responsibilities that sit outside
- * the processor model entirely — initialization, storage, offset sequencing,
- * and parent-tree propagation — because they are structural invariants of the
- * stream, not pluggable behavior.
- *
- * Scheduling deliberately stays on the processor side of that boundary. The
- * only scheduler-specific glue here is:
- *
- * - registering the builtin `scheduler` processor
- * - re-pointing the single Durable Object alarm after scheduler state changes
- * - delegating `alarm()` into the scheduler runtime
- *
- * ## Pull subscriptions
- *
- * The `history()` and `stream()` methods expose the event log for pull-based
- * consumption. A remote consumer reads events, then either enacts external
- * side effects or appends derived events to this or other streams. Those
- * consumers are conceptually Processors (not BuiltinProcessors), since they
- * do not run synchronously inside this Durable Object.
- *
- * ## Cloudflare Durable Object docs
- *
- * - https://developers.cloudflare.com/durable-objects/concepts/what-are-durable-objects/
- * - https://developers.cloudflare.com/durable-objects/api/state/
- * - https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/
+ * Durable Object rules:
+ * https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/
  */
-export class StreamDurableObject extends DurableObject<Env> {
+export class StreamDurableObject extends StreamDurableObjectBase<Env> {
   private _state: StreamState | null = null;
   private readonly client: SyncClient;
   private readonly subscribers = new Set<ReadableStreamDefaultController<Uint8Array>>();
-  private readonly dynamicWorkerManager: ReturnType<typeof createDynamicWorkerManager>;
 
   private get state(): StreamState {
     if (this._state == null) {
@@ -145,41 +89,8 @@ export class StreamDurableObject extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.client = createDurableObjectClient(ctx.storage);
-    // Dynamic workers are intentionally not "frameworkized" as a generic
-    // processor runtime. This experimental feature owns its own manager in
-    // `dynamic-processor.ts`, and `stream.ts` only provides the minimal stream
-    // capabilities it needs: append/history/live-stream plus the dynamic worker
-    // loader and the loopback egress binding.
-    //
-    // First-party references:
-    // - Dynamic Workers overview: https://developers.cloudflare.com/dynamic-workers/
-    // - RPC lifecycle / targets: https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/
-    this.dynamicWorkerManager = createDynamicWorkerManager({
-      append: (event) => this.append(event),
-      history: (args) =>
-        this.history({
-          after: args?.after,
-          before: args?.before,
-        }),
-      stream: (args) =>
-        this.stream({
-          after: args?.after,
-          before: args?.before,
-        }),
-      createLoopbackBinding: ({ exportName }) => {
-        if (exportName !== "DynamicWorkerEgressGateway") {
-          throw new Error(`Unsupported loopback binding export: ${exportName}`);
-        }
 
-        return this.env.DYNAMIC_WORKER_EGRESS_GATEWAY as unknown as Fetcher;
-      },
-      getPath: () => this.state.path,
-      getProjectSlug: () => this.state.projectSlug,
-      loader: this.env.LOADER,
-      waitUntil: (promise) => this.ctx.waitUntil(promise),
-    });
-
-    void this.ctx.blockConcurrencyWhile(async () => {
+    void this.blockDurableObjectConcurrencyWhile(async () => {
       migrate(this.client);
 
       const persistedStateRow = getReducedState(this.client);
@@ -192,34 +103,30 @@ export class StreamDurableObject extends DurableObject<Env> {
       const parsed = StreamState.safeParse(rawState);
       if (parsed.success) {
         this._state = parsed.data;
-        // Reconnect any previously configured dynamic workers before normal
-        // traffic resumes. The manager restores one runtime per slug from the
-        // reduced processor state, and then we append an explicit lifecycle
-        // event so processor code can observe that this DO instance woke up.
-        await this.dynamicWorkerManager.sync(parsed.data.processors["dynamic-worker"]);
-
+        // Append an explicit lifecycle event so processor code can observe that
+        // this JavaScript instance woke up. Constructor startup stays limited
+        // to local SQLite work.
         try {
           this.append({
-            type: "https://events.iterate.com/events/stream/durable-object-constructed",
+            type: STREAM_DURABLE_OBJECT_WOKE_UP_TYPE,
             payload: {},
           });
         } catch (error) {
-          console.error(
-            "[stream-do] failed to append durable-object-constructed after rehydration",
-            {
-              path: parsed.data.path,
-              error,
-            },
-          );
+          console.error("[stream-do] failed to append durable-object-woke-up after rehydration", {
+            path: parsed.data.path,
+            error,
+          });
           throw error;
         }
         return;
       }
 
-      // Deliberately not crashing — throwing from the DO constructor makes
-      // the object permanently unaddressable and much harder to debug.
+      // Deliberately not crashing — throwing from the DO constructor makes the
+      // object permanently unaddressable and much harder to debug. This is not
+      // full recovery: initialize() cannot safely rebuild an existing stream
+      // from events yet. See apps/events/tasks/rebuild-stream-state-on-parse-error.md.
       console.error(
-        "[stream-do] persisted reduced_state failed validation, leaving _state null so initialize() can re-derive it",
+        "[stream-do] persisted reduced_state failed validation, leaving _state null until explicit recovery is implemented",
         { error: parsed.error, raw: persistedStateRow.json },
       );
     });
@@ -241,22 +148,16 @@ export class StreamDurableObject extends DurableObject<Env> {
       return;
     }
 
-    const processorState = Object.fromEntries(
-      processors.map((p) => [p.slug, structuredClone(p.initialState)]),
-    ) as StreamState["processors"];
+    migrate(this.client);
 
-    this._state = {
+    this._state = createInitialStreamState({
       projectSlug: args.projectSlug,
       path: args.path,
-      eventCount: 0,
-      childPaths: [],
-      metadata: {},
-      processors: processorState,
-    };
+    });
 
     try {
       this.append({
-        type: "https://events.iterate.com/events/stream/initialized",
+        type: STREAM_FIRST_INITIALIZED_TYPE,
         payload: { projectSlug: args.projectSlug, path: args.path },
       });
     } catch (error) {
@@ -267,16 +168,6 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   // ---------------------------------------------------------------------------
   // Append lifecycle
-  //
-  // The four methods below — append, beforeAppend, reduce, afterAppend —
-  // mirror the hook structure on BuiltinProcessor in `@iterate-com/events-contract/sdk`.
-  //
-  // In each phase the stream core runs its own privileged logic first, then
-  // delegates to the registered builtin processors. This symmetry is
-  // intentional: the stream core is effectively the "zeroth" processor, but
-  // its state lives at the top level of StreamState rather than under
-  // `state.processors`, because it owns structural invariants (path,
-  // eventCount, initialization, parent propagation) that are not pluggable.
   // ---------------------------------------------------------------------------
 
   /**
@@ -336,10 +227,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    * known to be a genuinely new event.
    */
   private beforeAppend(input: EventInput): number {
-    if (
-      input.type === "https://events.iterate.com/events/stream/initialized" &&
-      this.state.eventCount > 0
-    ) {
+    if (input.type === STREAM_FIRST_INITIALIZED_TYPE && this.state.eventCount > 0) {
       throw new Error("stream-initialized may only be appended once");
     }
 
@@ -351,12 +239,16 @@ export class StreamDurableObject extends DurableObject<Env> {
       );
     }
 
-    for (const processor of processors) {
-      processor.beforeAppend?.({
-        event: input,
-        state: getProcessorState(this.state, processor.slug),
-      });
-    }
+    assertValidCoreEventInput({
+      input,
+      nextOffset,
+      streamPath: this.state.path,
+    });
+
+    runBuiltinBeforeAppend({
+      event: input,
+      processors: this.state.processors,
+    });
 
     return nextOffset;
   }
@@ -377,41 +269,18 @@ export class StreamDurableObject extends DurableObject<Env> {
       );
     }
 
-    let nextState: StreamState = {
-      ...structuredClone(this.state),
-      eventCount: this.state.eventCount + 1,
+    let nextState = reduceStreamCore({
+      state: this.state,
+      event,
+    });
+
+    nextState = {
+      ...nextState,
+      processors: reduceBuiltinProcessors({
+        event,
+        processors: nextState.processors,
+      }),
     };
-
-    switch (event.type) {
-      case "https://events.iterate.com/events/stream/metadata-updated": {
-        const metadataUpdatedEvent = event as StreamMetadataUpdatedEvent;
-        nextState = { ...nextState, metadata: metadataUpdatedEvent.payload.metadata };
-        break;
-      }
-      case "https://events.iterate.com/events/stream/child-stream-created": {
-        const childPath = getImmediateChildPath({
-          parentPath: this.state.path,
-          childPath: (event as ChildStreamCreatedEvent).payload.childPath,
-        });
-        if (childPath != null && !nextState.childPaths.includes(childPath)) {
-          nextState = { ...nextState, childPaths: [...nextState.childPaths, childPath] };
-        }
-        break;
-      }
-    }
-
-    for (const processor of processors) {
-      if (processor.reduce) {
-        const nextSlice = processor.reduce({
-          event,
-          state: getProcessorState(nextState, processor.slug),
-        });
-        nextState = {
-          ...nextState,
-          processors: { ...nextState.processors, [processor.slug]: nextSlice },
-        };
-      }
-    }
 
     return nextState;
   }
@@ -430,115 +299,40 @@ export class StreamDurableObject extends DurableObject<Env> {
    *    committed event and its own state slice, then optionally append derived
    *    events back into this stream.
    *
-   * 4. Scheduler alarm maintenance: scheduler control events update the single
-   *    Durable Object alarm pointer from reduced state after commit.
+   * We deliberately do not use ctx.waitUntil() here. Cloudflare documents that
+   * it has no effect in Durable Objects; pending I/O keeps the object alive.
+   * https://developers.cloudflare.com/durable-objects/api/state/#waituntil
+   *
+   * Correctness-critical derived work still needs a durable event/outbox cursor
+   * before we rely on it operationally.
    */
   private afterAppend(event: Event) {
     this.publish(event);
 
-    if (event.type === "https://events.iterate.com/events/stream/initialized") {
-      const ancestorPaths = getAncestorStreamPaths(event.streamPath);
-
-      void Promise.all(
-        ancestorPaths.map(async (path) => {
-          const stream = await getInitializedStreamStub({
-            projectSlug: this.state.projectSlug,
-            path,
-          });
-          await stream.append({
-            type: "https://events.iterate.com/events/stream/child-stream-created",
-            payload: { childPath: event.streamPath },
-            metadata: event.metadata,
-          });
-        }),
-      ).catch((error) => {
-        console.error("[stream-do] failed to propagate event to ancestor streams", {
+    if (event.type === STREAM_FIRST_INITIALIZED_TYPE) {
+      void propagateInitializedStreamToAncestors({
+        childInitializedEvent: event,
+        projectSlug: this.state.projectSlug,
+      }).catch((error) => {
+        console.error("[stream-do] failed to propagate initialized stream to ancestors", {
           path: event.streamPath,
-          ancestorPaths,
-          eventType: "https://events.iterate.com/events/stream/child-stream-created",
           error,
         });
       });
     }
 
-    for (const processor of processors) {
-      const result = processor.afterAppend?.({
-        append: (nextEvent: EventInput) => this.append(nextEvent),
-        event,
-        state: getProcessorState(this.state, processor.slug),
-      });
-
-      if (result == null) {
-        continue;
-      }
-
-      // Builtin processor side effects are asynchronous, but they still belong
-      // to the append lifecycle. Hold the DO open so fire-and-forget callback
-      // delivery does not get cut off once the request returns.
-      this.ctx.waitUntil(
-        result.catch((error) => {
-          console.error("[stream-do] processor afterAppend failed", {
-            path: this.state.path,
-            processor: processor.slug,
-            eventType: event.type,
-            error,
-          });
-        }),
-      );
-    }
-
-    this.ctx.waitUntil(
-      this.dynamicWorkerManager
-        .afterAppend({
-          event,
-          state: this.state.processors["dynamic-worker"],
-        })
-        .catch((error) => {
-          console.error("[stream-do] dynamic worker manager afterAppend failed", {
-            path: this.state.path,
-            eventType: event.type,
-            error,
-          });
-        }),
-    );
-
-    if (isSchedulerAlarmEventType(event.type)) {
-      this.ctx.waitUntil(
-        repointSchedulerAlarm({
-          ctx: this.ctx,
-          schedulerState: this.state.processors.scheduler,
-        }).catch((error) => {
-          console.error("[stream-do] failed to repoint scheduler alarm", {
-            path: this.state.path,
-            eventType: event.type,
-            error,
-          });
-        }),
-      );
-    }
-  }
-
-  /**
-   * Cloudflare gives each Durable Object exactly one alarm slot, so the
-   * stream-level `alarm()` entry point must stay tiny and generic: wake the
-   * actor, hand control to the scheduler runtime, and let that runtime derive
-   * due work plus the next alarm pointer from `state.processors.scheduler`.
-   *
-   * This method is intentionally the only scheduler-specific execution hook in
-   * `stream.ts`. The control-event reduction and due-schedule logic live in
-   * `./scheduling.ts`; `stream.ts` only provides the generic stream append
-   * surface and current reduced state.
-   *
-   * First-party references:
-   * - https://developers.cloudflare.com/durable-objects/api/alarms/
-   * - https://developers.cloudflare.com/durable-objects/api/state/
-   */
-  async alarm() {
-    await runSchedulerAlarm({
-      append: (event) => this.append(event),
-      ctx: this.ctx,
-      getSchedulerState: () => this.state.processors.scheduler,
-      instance: this,
+    runBuiltinAfterAppend({
+      append: (nextEvent) => this.append(nextEvent),
+      event,
+      processors: this.state.processors,
+      onError: ({ error, event, processorSlug }) => {
+        console.error("[stream-do] processor afterAppend failed", {
+          path: this.state.path,
+          processor: processorSlug,
+          eventType: event.type,
+          error,
+        });
+      },
     });
   }
 
@@ -551,6 +345,15 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   async destroy(args: { destroyChildren?: boolean } = {}): Promise<DestroyStreamResult> {
+    if (this._state == null) {
+      this.closeSubscribers();
+      await this.ctx.storage.deleteAll();
+      return {
+        destroyedStreamCount: 0,
+        finalStateByPath: {},
+      };
+    }
+
     const childEntries: DestroyStreamResult["finalStateByPath"] = args.destroyChildren
       ? await Promise.all(
           [...this.state.childPaths].sort().map(async (path) => {
@@ -570,17 +373,10 @@ export class StreamDurableObject extends DurableObject<Env> {
     const stateBeforeDelete = structuredClone(this._state);
     const path = stateBeforeDelete?.path;
 
-    for (const subscriber of this.subscribers) {
-      try {
-        subscriber.close();
-      } catch {}
-    }
-    this.subscribers.clear();
+    this.closeSubscribers();
     if (path != null) {
       resetSubscriberSocketsForStream(path);
     }
-
-    await this.dynamicWorkerManager.dispose();
 
     await this.ctx.storage.deleteAll();
 
@@ -617,11 +413,20 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
+  historyIfInitialized(args: { after?: StreamCursor; before?: StreamCursor } = {}): Event[] {
+    if (this._state == null) {
+      return [];
+    }
+
+    return this.history(args);
+  }
+
   stream(args: { after?: StreamCursor; before?: StreamCursor } = {}): ReadableStream<Uint8Array> {
     const backlog = this.history({
       after: args.after,
       before: args.before ?? "end",
     });
+
     let subscriber: ReadableStreamDefaultController<Uint8Array> | undefined;
 
     return new ReadableStream<Uint8Array>({
@@ -639,7 +444,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         this.subscribers.add(controller);
       },
       cancel: () => {
-        if (subscriber) {
+        if (subscriber != null) {
           this.subscribers.delete(subscriber);
         }
       },
@@ -656,6 +461,16 @@ export class StreamDurableObject extends DurableObject<Env> {
         this.subscribers.delete(subscriber);
       }
     }
+  }
+
+  private closeSubscribers() {
+    for (const subscriber of this.subscribers) {
+      try {
+        subscriber.close();
+      } catch {}
+    }
+
+    this.subscribers.clear();
   }
 
   // ---------------------------------------------------------------------------
@@ -684,6 +499,209 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 }
 
+function assertValidCoreEventInput(args: {
+  input: EventInput;
+  nextOffset: number;
+  streamPath: StreamPath;
+}) {
+  const candidateEvent = {
+    streamPath: args.streamPath,
+    ...args.input,
+    offset: args.nextOffset,
+    createdAt: new Date().toISOString(),
+  };
+
+  const result =
+    args.input.type === STREAM_FIRST_INITIALIZED_TYPE
+      ? StreamInitializedEvent.safeParse(candidateEvent)
+      : args.input.type === STREAM_CHILD_STREAM_CREATED_TYPE
+        ? ChildStreamCreatedEvent.safeParse(candidateEvent)
+        : args.input.type === STREAM_METADATA_UPDATED_TYPE
+          ? StreamMetadataUpdatedEvent.safeParse(candidateEvent)
+          : null;
+
+  if (result == null || result.success) {
+    return;
+  }
+
+  throw new Error(
+    `Invalid core event payload for ${args.input.type}: ${result.error.issues
+      .map((issue) => issue.message)
+      .join("; ")}`,
+  );
+}
+
+function createInitialStreamState(args: {
+  projectSlug: ProjectSlug;
+  path: StreamPath;
+}): StreamState {
+  return {
+    projectSlug: args.projectSlug,
+    path: args.path,
+    eventCount: 0,
+    childPaths: [],
+    metadata: {},
+    processors: createInitialBuiltinProcessorState(),
+  };
+}
+
+function createInitialBuiltinProcessorState(): StreamState["processors"] {
+  return {
+    "circuit-breaker": structuredClone(circuitBreakerProcessor.initialState),
+    "external-subscriber": structuredClone(externalSubscriberProcessor.initialState),
+  };
+}
+
+function runBuiltinBeforeAppend(args: {
+  event: EventInput;
+  processors: StreamState["processors"];
+}) {
+  // Circuit breaker is the only current privileged pre-commit gate. Keep this
+  // explicit so adding another beforeAppend hook is a conscious stream-core
+  // decision, not a side effect of appending to an array above.
+  circuitBreakerProcessor.beforeAppend?.({
+    event: args.event,
+    state: args.processors["circuit-breaker"],
+  });
+}
+
+function reduceBuiltinProcessors(args: {
+  event: Event;
+  processors: StreamState["processors"];
+}): StreamState["processors"] {
+  return {
+    "circuit-breaker": circuitBreakerProcessor.reduce!({
+      event: args.event,
+      state: args.processors["circuit-breaker"],
+    }),
+    "external-subscriber": externalSubscriberProcessor.reduce!({
+      event: args.event,
+      state: args.processors["external-subscriber"],
+    }),
+  };
+}
+
+function runBuiltinAfterAppend(args: {
+  append: (event: EventInput) => Event;
+  event: Event;
+  processors: StreamState["processors"];
+  onError(args: { error: unknown; event: Event; processorSlug: string }): void;
+}) {
+  const circuitBreakerPromise = circuitBreakerProcessor.afterAppend?.({
+    append: args.append,
+    event: args.event,
+    state: args.processors["circuit-breaker"],
+  });
+  if (circuitBreakerPromise != null) {
+    void circuitBreakerPromise.catch((error) => {
+      args.onError({
+        error,
+        event: args.event,
+        processorSlug: circuitBreakerProcessor.slug,
+      });
+    });
+  }
+
+  const externalSubscriberPromise = externalSubscriberProcessor.afterAppend?.({
+    append: args.append,
+    event: args.event,
+    state: args.processors["external-subscriber"],
+  });
+  if (externalSubscriberPromise != null) {
+    void externalSubscriberPromise.catch((error) => {
+      args.onError({
+        error,
+        event: args.event,
+        processorSlug: externalSubscriberProcessor.slug,
+      });
+    });
+  }
+}
+
+function reduceStreamCore(args: { state: StreamState; event: Event }): StreamState {
+  let nextState: StreamState = {
+    ...structuredClone(args.state),
+    eventCount: args.state.eventCount + 1,
+  };
+
+  switch (args.event.type) {
+    case STREAM_METADATA_UPDATED_TYPE: {
+      const metadataUpdatedEvent = args.event as StreamMetadataUpdatedEvent;
+      nextState = { ...nextState, metadata: metadataUpdatedEvent.payload.metadata };
+      break;
+    }
+    case STREAM_CHILD_STREAM_CREATED_TYPE: {
+      const childPath = getImmediateChildPath({
+        parentPath: args.state.path,
+        childPath: (args.event as ChildStreamCreatedEvent).payload.childPath,
+      });
+      if (childPath != null && !nextState.childPaths.includes(childPath)) {
+        nextState = { ...nextState, childPaths: [...nextState.childPaths, childPath] };
+      }
+      break;
+    }
+  }
+
+  return nextState;
+}
+
+function getImmediateChildPath(args: {
+  parentPath: StreamPath;
+  childPath: StreamPath;
+}): StreamPath | null {
+  if (args.childPath === args.parentPath) {
+    return null;
+  }
+
+  if (args.parentPath === "/") {
+    const [firstSegment] = args.childPath.split("/").filter(Boolean);
+    return firstSegment == null ? null : StreamPath.parse(`/${firstSegment}`);
+  }
+
+  const parentPrefix = `${args.parentPath}/`;
+  if (!args.childPath.startsWith(parentPrefix)) {
+    return null;
+  }
+
+  const remainingPath = args.childPath.slice(parentPrefix.length);
+  const [firstSegment] = remainingPath.split("/");
+  return firstSegment == null ? null : StreamPath.parse(`${args.parentPath}/${firstSegment}`);
+}
+
+/**
+ * Propagates a newly initialized stream to every ancestor as a
+ * `child-stream-created` event.
+ *
+ * Each append uses a deterministic idempotency key so retries cannot create
+ * duplicate topology events for the same parent/child pair.
+ */
+async function propagateInitializedStreamToAncestors(args: {
+  childInitializedEvent: Event;
+  projectSlug: ProjectSlug;
+}) {
+  const childPath = StreamPath.parse(args.childInitializedEvent.streamPath);
+  const ancestorPaths = getAncestorStreamPaths(childPath);
+
+  await Promise.all(
+    ancestorPaths.map(async (path) => {
+      const stream = await getInitializedStreamStub({
+        projectSlug: args.projectSlug,
+        path,
+      });
+      await stream.append({
+        type: STREAM_CHILD_STREAM_CREATED_TYPE,
+        payload: { childPath },
+        metadata: args.childInitializedEvent.metadata,
+        idempotencyKey: `child-stream-created:${path}:${childPath}`,
+      });
+    }),
+  );
+}
+
+/**
+ * Converts public stream cursors into the half-open SQLite offset range used
+ * by the generated `history` query: offset > afterOffset and offset < beforeOffset.
+ */
 function resolveStreamRange(args: {
   after?: StreamCursor;
   before?: StreamCursor;
@@ -723,29 +741,6 @@ const textEncoder = new TextEncoder();
 
 function encodeEventLine(event: Event) {
   return textEncoder.encode(`${JSON.stringify(event)}\n`);
-}
-
-function getImmediateChildPath(args: {
-  parentPath: StreamPath;
-  childPath: StreamPath;
-}): StreamPath | null {
-  if (args.childPath === args.parentPath) {
-    return null;
-  }
-
-  if (args.parentPath === "/") {
-    const [firstSegment] = args.childPath.split("/").filter(Boolean);
-    return firstSegment == null ? null : StreamPath.parse(`/${firstSegment}`);
-  }
-
-  const parentPrefix = `${args.parentPath}/`;
-  if (!args.childPath.startsWith(parentPrefix)) {
-    return null;
-  }
-
-  const remainingPath = args.childPath.slice(parentPrefix.length);
-  const [firstSegment] = remainingPath.split("/");
-  return firstSegment == null ? null : StreamPath.parse(`${args.parentPath}/${firstSegment}`);
 }
 
 // Shape parseEventRow accepts. The generated query Result types from

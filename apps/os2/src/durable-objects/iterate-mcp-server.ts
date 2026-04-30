@@ -7,13 +7,13 @@ import {
   StreamPath,
   type EventInput,
 } from "@iterate-com/events-contract";
-import { createEventsClient } from "@iterate-com/events-contract/sdk";
 import packageJson from "../../package.json" with { type: "json" };
 import {
   type CodemodeSessionNamespace,
   startCodemodeScriptOnSession,
 } from "~/codemode/codemode-session-rpc.ts";
 import { readEventPayload, stringifyPayloadError } from "~/lib/codemode-event-payload.ts";
+import { createEventsClient } from "~/lib/events-client.ts";
 
 /**
  * MCP server for os2, exposed at `/mcp` on project hostnames only.

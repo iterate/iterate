@@ -108,7 +108,6 @@ The Semaphore UI labels this as an operator token. It is the same shared API sec
 ## Prod verification commands
 
 ```bash
-CODEMODE_BASE_URL=https://codemode.iterate.com DOPPLER_PROJECT=ai-engineer-workshop DOPPLER_CONFIG=dev_jonas pnpm --dir apps/codemode test:e2e:doppler
 EXAMPLE_BASE_URL=https://example.iterate.com pnpm --dir apps/example test:e2e
 EVENTS_BASE_URL=https://events.iterate.com pnpm --dir apps/events test:e2e:preview
 doppler run --project semaphore --config prd -- env SEMAPHORE_BASE_URL=https://semaphore.iterate.com pnpm --dir apps/semaphore test:e2e:preview

@@ -9,6 +9,7 @@ Utilities here are experimental helpers for composing Cloudflare Durable Object 
 - `mixins/with-d1-object-catalog.ts` best-effort mirrors initialized objects into D1 tables owned by the mixin, with optional secondary indexes derived from init params.
 - `mixins/with-multiplexed-alarms.ts` stores many logical one-shot alarms behind Cloudflare's single Durable Object alarm slot.
 - `mixins/with-scheduler.ts` adds key-based one-shot, delayed, interval, cron, and RRULE scheduling on top of multiplexed alarms.
+- `mixins/with-stream-processor-runner.ts` stores stream processor reduced state/progress per processor slug and exposes protected catch-up / live-event / subscription runner methods. It assumes one stream path per Durable Object instance.
 - `mixins/with-public-fetch-route.ts` adds instance helpers for stable public Durable Object paths and a worker-side fetcher that proxies `/durable-objects/:namespaceSlug/:mode/:payload/...` straight to `stub.fetch()`.
 - `mixins/with-outerbase.ts` and `mixins/with-kv-inspector.ts` are debug inspector mixins. Do not attach them to production-routed objects without an explicit auth/dev gating decision.
 - Avoid adding more mixins or composition helpers without speccing the API shape first.
@@ -125,6 +126,80 @@ class Room extends Base<Env> {} // ok: Env has DO_CATALOG
 class Broken extends Base<{ OTHER_BINDING: Fetcher }> {}
 // TypeScript error: missing DO_CATALOG
 ```
+
+## Stream Processor Runner
+
+Use `withStreamProcessorRunner(...)` when a Durable Object should persist
+reduced state for stream processors and apply the shared processor lifecycle
+helpers. The mixin is configured with one processor and scoped stream API, so
+the subclass can stay focused on Durable Object entrypoints such as `fetch()` or
+`webSocketMessage()`.
+
+For the current one-stream-per-runner model, put the stream path in lifecycle
+init params. That makes the Durable Object instance itself the stream-bound
+processor runner; pushed/subscribed event methods then receive events, not
+another loose `streamPath` argument:
+
+```ts
+type AgentProcessorInit = {
+  name: string;
+  streamPath: string;
+};
+
+function createProcessor(args: { ctx: DurableObjectState; env: Env }) {
+  return createAgentProcessor({
+    ai: args.env.AI,
+    waitUntil: (promise) => args.ctx.waitUntil(promise),
+  });
+}
+
+const AgentProcessorBase = withStreamProcessorRunner<
+  AgentProcessorInit,
+  Env,
+  typeof AgentProcessorContract
+>({
+  processor: createProcessor,
+  streamApi(args) {
+    return args.ctx.exports.StreamApi({
+      props: { streamPath: args.initParams.streamPath },
+    }) as ProcessorStreamApi<typeof AgentProcessorContract>;
+  },
+})(withLifecycleHooks<AgentProcessorInit>()(withDurableObjectCore(DurableObject)));
+
+class AgentProcessorDO extends AgentProcessorBase<Env> {
+  async catchUp() {
+    return await this.catchUpStreamProcessor();
+  }
+
+  async consumeEvent(args: { event: StreamEvent }) {
+    return await this.consumeStreamProcessorEvent(args);
+  }
+}
+```
+
+Callers should initialize the object once with the immutable stream binding:
+
+```ts
+const runner = await getOrInitializeDoStub({
+  namespace: env.AGENT_PROCESSORS,
+  name: streamPathToRunnerName(streamPath),
+  initParams: { streamPath },
+});
+
+await runner.consumeEvent({ event });
+```
+
+The mixin stores its processor state at
+`stream-processor:<processor-slug>:stored-state`. That is deliberately simple:
+it is for the current "one processor instance is bound to one stream path"
+model. If you need Agent + Codemode in one Durable Object, compose them into one
+processor first and pass that composed processor to the mixin.
+
+The configured `processor(...)` callback runs once per Durable Object wake and
+the result is cached. That is deliberate: processor implementations may keep
+runtime-only closure state such as timers, abort controllers, HTTP connections,
+or request sequence counters. Reduced state is still stored through the mixin;
+the cached processor object only preserves warm-instance state.
 
 The protected `initParams` type uses an abstract class instead of an interface
 because TypeScript interfaces cannot add protected members to a class returned
@@ -308,8 +383,9 @@ init params or payloads must also round-trip through JSON.
 - `registerOnFirstInitialize(fn)` runs after params are created for the first
   time. Completion is marked in the Durable Object's own storage. Hooks can
   retry after failure, so external side effects must still be idempotent.
-- `registerOnStart(fn)` runs once per Durable Object activation, after params
-  exist and after first-initialize hooks have completed.
+- `registerOnInstanceWake(fn)` runs once for each successful JavaScript
+  Durable Object instance wake, after params exist and after first-initialize
+  hooks have completed.
 
 Both hook types are protected so only subclasses and later mixins can register
 them. They should be registered in constructors so the full hook list exists
@@ -324,8 +400,8 @@ class Room extends RoomBase<Env> {
       await this.createInitialIndexes(params);
     });
 
-    this.registerOnStart((params) => {
-      this.ctx.storage.kv.put("last-started-room", params.name);
+    this.registerOnInstanceWake((params) => {
+      this.ctx.storage.kv.put("last-woken-room", params.name);
     });
   }
 }
@@ -333,12 +409,12 @@ class Room extends RoomBase<Env> {
 
 Hooks are awaited by `initialize()` and `ensureStarted()` by default. That makes
 `ensureStarted()` an honest readiness boundary: after it resolves, params exist,
-first-initialize hooks have completed, and start hooks have completed. If work
-is only a best-effort mirror or log, start a separate caught promise and return
-quickly:
+first-initialize hooks have completed, and instance wake hooks have completed.
+If work is only a best-effort mirror or log, start a separate caught promise and
+return quickly:
 
 ```ts
-this.registerOnStart((params) => {
+this.registerOnInstanceWake((params) => {
   void this.updateExternalIndex(params).catch((error) => {
     console.error("failed to update external index", error);
   });
@@ -350,11 +426,11 @@ that it has no effect in Durable Objects; DOs remain active while there is
 ongoing work or pending I/O. The important part is catching the detached promise
 so best-effort work cannot become an unhandled rejection.
 
-Start hooks are retryable until the whole startup gate succeeds. If one start
-hook writes to an external system and a later start hook fails, the earlier hook
-may run again on the next `ensureStarted()` attempt. Treat start hooks as
-at-least-once work unless they only mutate local Durable Object storage inside
-the same startup gate.
+Instance wake hooks are retryable until the whole startup gate succeeds. If one
+instance wake hook writes to an external system and a later instance wake hook
+fails, the earlier hook may run again on the next `ensureStarted()` attempt.
+Treat instance wake hooks as at-least-once work unless they only mutate local
+Durable Object storage inside the same startup gate.
 
 `registerOnFirstInitialize()` is not a distributed exactly-once guarantee. It
 marks completion in the Durable Object after the hook succeeds. If the hook
@@ -399,7 +475,7 @@ The D1 write is best-effort and idempotent. The mixin sends
 batch as each upsert, so object construction does not block on catalog-table
 setup.
 
-Catalog writes happen from the lifecycle start hook as a detached, caught
+Catalog writes happen from the lifecycle instance wake hook as a detached, caught
 promise. That is deliberate: this mixin is just a consumer of
 `withLifecycleHooks()`, not a separate lifecycle system. The Durable Object's
 local initialization remains the source of truth, and D1 is only a
@@ -411,7 +487,7 @@ tables do not exist yet. It never uses
 throws in Worker runtimes.
 
 The object row is keyed by `(class, name)`. `created_at` is the first insert
-time, while `last_started_at` is updated whenever the start hook runs. Init
+time, while `last_woken_at` is updated whenever the instance wake hook runs. Init
 params used with this mixin must be JSON-compatible by convention because the D1
 mirror stores them as JSON text. `JSON.stringify()` catches some failures, such
 as circular references and `BigInt`, but it can silently drop or coerce nested
@@ -462,7 +538,7 @@ platform alarm is always armed for the earliest row.
 
 This mixin requires `withLifecycleHooks()` below it. Scheduling and dispatch
 call `ensureStarted()`, so logical alarms only run after initialization,
-first-initialize hooks, and start hooks have completed. The diagnostic read
+first-initialize hooks, and instance wake hooks have completed. The diagnostic read
 `getMultiplexedAlarms()` intentionally does not require initialization because
 seeing alarm rows on an uninitialized object is useful debugging evidence.
 
@@ -498,8 +574,8 @@ cancel rows; external callers can only inspect rows through
 `getMultiplexedAlarms()` unless the object exposes its own public method.
 
 `key` is a stable idempotency key. Scheduling the same key again replaces the
-existing row, which makes it safe to call from `registerOnStart()` without
-creating duplicates on every Durable Object activation.
+existing row, which makes it safe to call from `registerOnInstanceWake()` without
+creating duplicates on every JavaScript Durable Object instance wake.
 
 `method` is a string on purpose. TypeScript cannot reflect protected instance
 methods into a clean payload-safe scheduler API without making the mixin much
@@ -565,10 +641,10 @@ verbose, but it keeps the recurrence semantics explicit and follows this repo's
 rule to prefer options bags when positional parameters are easy to confuse.
 
 Every schedule has a required `key`. Reusing the same key replaces the existing
-schedule, so calls from `registerOnStart()` are idempotent by default:
+schedule, so calls from `registerOnInstanceWake()` are idempotent by default:
 
 ```ts
-this.registerOnStart(() =>
+this.registerOnInstanceWake(() =>
   this.schedule({
     key: "poll-api",
     method: "pollAPI",
@@ -693,7 +769,7 @@ export class DiscordConnection extends DiscordBase<Env> {
 
     // Do not wait for the first interval tick. The scheduled row is what
     // brings the object back after restart; this immediate call gives the
-    // current activation a chance to connect now.
+    // current JavaScript instance a chance to connect now.
     await this.ensureDiscordConnected();
   }
 
@@ -780,9 +856,9 @@ metadata.
 
 For an opaque long-running promise, use a future `keepAliveWhile({ promise })`
 style helper only as best-effort in-memory liveness. It can reduce the chance
-that a current activation goes idle while the promise is pending, but it cannot
-recover the promise, local variables, sockets, or partially completed external
-side effects after a restart.
+that a current JavaScript instance goes idle while the promise is pending, but it
+cannot recover the promise, local variables, sockets, or partially completed
+external side effects after a restart.
 
 ## Debug Inspectors
 

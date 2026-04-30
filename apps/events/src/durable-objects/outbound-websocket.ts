@@ -36,8 +36,17 @@ function getWebsocketUpgradeFetchUrl(callbackUrl: string) {
   if (url.protocol === "ws:") {
     url.protocol = "http:";
   } else if (url.protocol === "wss:") {
-    url.protocol = "https:";
+    url.protocol = isLocalhost(url.hostname) ? "http:" : "https:";
   }
 
   return url;
+}
+
+function isLocalhost(hostname: string) {
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "::1" ||
+    hostname === "[::1]"
+  );
 }

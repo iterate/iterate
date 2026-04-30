@@ -13,6 +13,9 @@ export function prepareAgentsHarForReplay(
 
   for (const entry of clone.log.entries) {
     entry.request.url = rewriteUrlIfEventsProjectHost(entry.request.url, targetEventsHostname);
+    entry.response.headers = entry.response.headers.filter(
+      (header) => header.name.toLowerCase() !== "content-length",
+    );
   }
 
   return clone;

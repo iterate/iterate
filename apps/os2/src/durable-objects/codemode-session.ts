@@ -1,10 +1,5 @@
 import { DurableObject, RpcTarget } from "cloudflare:workers";
-import {
-  createEventsClient,
-  type Event,
-  type EventInput,
-  type StreamPath,
-} from "@iterate-com/events-contract/sdk";
+import { type Event, type EventInput, type StreamPath } from "@iterate-com/events-contract";
 import {
   assertCallableDispatchContext,
   dispatchCallable,
@@ -16,6 +11,7 @@ import { withDurableObjectCore } from "@iterate-com/shared/durable-object-utils/
 import { withKvInspector } from "@iterate-com/shared/durable-object-utils/mixins/with-kv-inspector";
 import { withLifecycleHooks } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { withOuterbase } from "@iterate-com/shared/durable-object-utils/mixins/with-outerbase";
+import { createEventsClient } from "~/lib/events-client.ts";
 
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
 // CodemodeSession dispatches stored MCP Provider Descriptors through an

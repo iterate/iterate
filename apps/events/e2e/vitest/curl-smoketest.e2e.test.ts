@@ -165,19 +165,16 @@ retry_curl "$BASE_URL/api/streams/__state/%2F" >/dev/null
           paused: false,
           pauseReason: null,
           pausedAt: null,
+          config: {
+            burstCapacity: 500,
+            refillRatePerMinute: 500,
+          },
           availableTokens: expect.any(Number),
           lastRefillAtMs: expect.any(Number),
         },
         "external-subscriber": {
           subscribersBySlug: {},
         },
-        "dynamic-worker": {
-          workersBySlug: {},
-        },
-        "jsonata-transformer": {
-          transformersBySlug: {},
-        },
-        scheduler: {},
       },
     });
     expect(JSON.parse(slashEscapedStateJson)).toMatchObject({
@@ -191,19 +188,16 @@ retry_curl "$BASE_URL/api/streams/__state/%2F" >/dev/null
           paused: false,
           pauseReason: null,
           pausedAt: null,
+          config: {
+            burstCapacity: 500,
+            refillRatePerMinute: 500,
+          },
           availableTokens: expect.any(Number),
           lastRefillAtMs: expect.any(Number),
         },
         "external-subscriber": {
           subscribersBySlug: {},
         },
-        "dynamic-worker": {
-          workersBySlug: {},
-        },
-        "jsonata-transformer": {
-          transformersBySlug: {},
-        },
-        scheduler: {},
       },
     });
     const streamMessages = streamOutput
@@ -219,7 +213,7 @@ retry_curl "$BASE_URL/api/streams/__state/%2F" >/dev/null
         projectSlug,
       },
       streamPath: "<streamPath>",
-      type: "https://events.iterate.com/events/stream/initialized",
+      type: "events.iterate.com/core/stream-first-initialized",
     });
     expect(parseSseMessage(streamMessages[2])).toEqual({
       createdAt: "<ts>",

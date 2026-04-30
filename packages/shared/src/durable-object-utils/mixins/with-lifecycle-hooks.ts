@@ -116,7 +116,7 @@ export abstract class LifecycleHooksProtected<InitParams extends LifecycleInit> 
     throw new Error("LifecycleHooksProtected is type-only and should never run.");
   }
 
-  protected registerOnStart(_fn: LifecycleHook<InitParams>): void {
+  protected registerOnInstanceWake(_fn: LifecycleHook<InitParams>): void {
     throw new Error("LifecycleHooksProtected is type-only and should never run.");
   }
 }
@@ -183,7 +183,7 @@ export class InitializeParamsMismatchError extends Error {
  *
  * Public methods: `initialize()`, `ensureStarted()`, and `assertInitialized()`.
  * Protected subclass/mixin surface: `initParams`, `registerOnFirstInitialize()`,
- * and `registerOnStart()`.
+ * and `registerOnInstanceWake()`.
  *
  * Init params are persisted in local Durable Object storage, so they must be
  * values that can cross Durable Object RPC and survive storage serialization.
@@ -205,9 +205,9 @@ export function withLifecycleHooks<InitParams extends LifecycleInit>() {
     {
       #initParams: InitParams | undefined;
       #firstInitializeHooks: Array<LifecycleHook<InitParams>> = [];
-      #startHooks: Array<LifecycleHook<InitParams>> = [];
+      #instanceWakeHooks: Array<LifecycleHook<InitParams>> = [];
       #started = false;
-      #startPromise: Promise<InitParams> | undefined;
+      #instanceWakePromise: Promise<InitParams> | undefined;
       #runningLifecycleHooks = false;
 
       constructor(...args: any[]) {
@@ -240,7 +240,7 @@ export function withLifecycleHooks<InitParams extends LifecycleInit>() {
        * the DO's SQLite storage and that external service.
        */
       protected registerOnFirstInitialize(fn: LifecycleHook<InitParams>): void {
-        if (this.#started || this.#startPromise !== undefined) {
+        if (this.#started || this.#instanceWakePromise !== undefined) {
           throw new Error(
             "registerOnFirstInitialize() must be called before lifecycle hooks start.",
           );
@@ -250,8 +250,8 @@ export function withLifecycleHooks<InitParams extends LifecycleInit>() {
       }
 
       /**
-       * Register work that should run once per Durable Object activation, after
-       * init params exist and after first-initialize hooks have completed.
+       * Register work that should run once per JavaScript Durable Object instance
+       * wake, after init params exist and after first-initialize hooks complete.
        *
        * Hooks are awaited by `ensureStarted()`. If the work is best-effort, start
        * a separately caught promise and return quickly so the hook does not become
@@ -259,12 +259,12 @@ export function withLifecycleHooks<InitParams extends LifecycleInit>() {
        * `ctx.waitUntil()` exists for Worker API compatibility but does not extend
        * lifetime in Durable Objects.
        */
-      protected registerOnStart(fn: LifecycleHook<InitParams>): void {
-        if (this.#started || this.#startPromise !== undefined) {
-          throw new Error("registerOnStart() must be called before lifecycle hooks start.");
+      protected registerOnInstanceWake(fn: LifecycleHook<InitParams>): void {
+        if (this.#started || this.#instanceWakePromise !== undefined) {
+          throw new Error("registerOnInstanceWake() must be called before lifecycle hooks start.");
         }
 
-        this.#startHooks.push(fn);
+        this.#instanceWakeHooks.push(fn);
       }
 
       async initialize(params: InitParams): Promise<InitParams> {
@@ -319,19 +319,20 @@ export function withLifecycleHooks<InitParams extends LifecycleInit>() {
           return params;
         }
 
-        // Start hooks can legitimately call protected APIs from later mixins.
+        // Instance wake hooks can legitimately call protected APIs from later mixins.
         // Those APIs usually call ensureStarted() because normal public/RPC calls
         // must not mutate scheduler/alarm state before lifecycle startup is done.
         //
         // During this exact window we are already inside the startup gate, so
-        // waiting on #startPromise would deadlock: the hook waits for startup, and
-        // startup waits for the hook. Returning the initialized params is safe
-        // because blockConcurrencyWhile keeps external calls behind the gate.
+        // waiting on #instanceWakePromise would deadlock: the hook waits for
+        // startup, and startup waits for the hook. Returning the initialized
+        // params is safe because blockConcurrencyWhile keeps external calls
+        // behind the gate.
         if (this.#runningLifecycleHooks) {
           return params;
         }
 
-        this.#startPromise ??= (async () => {
+        this.#instanceWakePromise ??= (async () => {
           let initialized = params;
           let hasStartupError = false;
           let startupError: unknown;
@@ -352,7 +353,7 @@ export function withLifecycleHooks<InitParams extends LifecycleInit>() {
                 this.getDurableObjectKv().put(FIRST_INITIALIZE_DONE_STORAGE_KEY, true);
               }
 
-              for (const fn of this.#startHooks) {
+              for (const fn of this.#instanceWakeHooks) {
                 await fn.call(this, initialized);
               }
 
@@ -384,13 +385,13 @@ export function withLifecycleHooks<InitParams extends LifecycleInit>() {
         })();
 
         try {
-          return await this.#startPromise;
+          return await this.#instanceWakePromise;
         } catch (error) {
           // Failed startup should be retryable. Without clearing the shared
           // promise, every later ensureStarted() would observe the same
           // rejected promise and the Durable Object would stay stuck until
           // eviction.
-          this.#startPromise = undefined;
+          this.#instanceWakePromise = undefined;
           throw error;
         }
       }

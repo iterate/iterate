@@ -5,7 +5,6 @@ import handler from "@tanstack/react-start/server-entry";
 import { createD1Client } from "sqlfu";
 import manifest, { AppConfig } from "~/app.ts";
 import type { AppContext } from "~/context.ts";
-import { DynamicWorkerEgressGateway } from "~/dynamic-worker-egress-gateway.ts";
 import { StreamDurableObject } from "~/durable-objects/stream.ts";
 
 const config = parseAppConfigFromEnv({
@@ -40,4 +39,4 @@ export default {
   },
 };
 
-export { DynamicWorkerEgressGateway, StreamDurableObject };
+export { StreamDurableObject };

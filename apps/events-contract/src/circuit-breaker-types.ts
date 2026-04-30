@@ -3,9 +3,30 @@ import {
   GenericEvent as GenericEventBase,
   GenericEventInput as GenericEventInputBase,
 } from "./event-base-types.ts";
+import {
+  STREAM_CIRCUIT_BREAKER_CONFIGURED_TYPE,
+  STREAM_PAUSED_TYPE,
+  STREAM_RESUMED_TYPE,
+} from "./core-event-types.ts";
+
+export const CircuitBreakerConfig = z.strictObject({
+  burstCapacity: z.number().int().positive(),
+  refillRatePerMinute: z.number().int().positive(),
+});
+export type CircuitBreakerConfig = z.infer<typeof CircuitBreakerConfig>;
+
+export const CircuitBreakerConfiguredEventInput = GenericEventInputBase.extend({
+  type: z.literal(STREAM_CIRCUIT_BREAKER_CONFIGURED_TYPE),
+  payload: CircuitBreakerConfig,
+});
+export const CircuitBreakerConfiguredEvent = GenericEventBase.extend(
+  CircuitBreakerConfiguredEventInput.pick({ type: true, payload: true }).shape,
+);
+export type CircuitBreakerConfiguredEventInput = z.infer<typeof CircuitBreakerConfiguredEventInput>;
+export type CircuitBreakerConfiguredEvent = z.infer<typeof CircuitBreakerConfiguredEvent>;
 
 export const StreamPausedEventInput = GenericEventInputBase.extend({
-  type: z.literal("https://events.iterate.com/events/stream/paused"),
+  type: z.literal(STREAM_PAUSED_TYPE),
   payload: z.strictObject({
     reason: z.string().trim().min(1).optional(),
   }),
@@ -17,7 +38,7 @@ export type StreamPausedEventInput = z.infer<typeof StreamPausedEventInput>;
 export type StreamPausedEvent = z.infer<typeof StreamPausedEvent>;
 
 export const StreamResumedEventInput = GenericEventInputBase.extend({
-  type: z.literal("https://events.iterate.com/events/stream/resumed"),
+  type: z.literal(STREAM_RESUMED_TYPE),
   payload: z.strictObject({
     reason: z.string().trim().min(1).optional(),
   }),
@@ -32,6 +53,7 @@ export const CircuitBreakerState = z.object({
   paused: z.boolean(),
   pauseReason: z.string().nullable(),
   pausedAt: z.string().nullable(),
+  config: CircuitBreakerConfig,
   availableTokens: z.number(),
   lastRefillAtMs: z.number().int().nonnegative().nullable(),
 });

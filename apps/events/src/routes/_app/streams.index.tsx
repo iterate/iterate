@@ -16,7 +16,7 @@ export const Route = createFileRoute("/_app/streams/")({
 type StreamRouteSearch = ReturnType<typeof Route.useSearch>;
 
 function StreamsIndexPage() {
-  const { composer, event, renderer } = Route.useSearch();
+  const { composer, event, renderer, view } = Route.useSearch();
   const navigate = Route.useNavigate();
   const updateEventOffset = useCallback(
     (nextEventOffset?: number) => {
@@ -58,16 +58,30 @@ function StreamsIndexPage() {
     },
     [navigate],
   );
+  const updateFeedView = useCallback(
+    (nextView: typeof view) => {
+      void navigate({
+        search: (previous: StreamRouteSearch) => ({
+          ...previous,
+          view: nextView,
+        }),
+        replace: true,
+      });
+    },
+    [navigate],
+  );
 
   return (
     <StreamPage
       streamPath="/"
       rendererMode={renderer}
       composerMode={composer}
+      feedViewMode={view}
       openEventOffset={event}
       onOpenEventOffsetChange={updateEventOffset}
       onRendererModeChange={updateRenderer}
       onComposerModeChange={updateComposer}
+      onFeedViewModeChange={updateFeedView}
     />
   );
 }

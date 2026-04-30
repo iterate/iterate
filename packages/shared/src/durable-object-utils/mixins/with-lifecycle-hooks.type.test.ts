@@ -49,9 +49,9 @@ class Room extends RoomBase<Env> {
       expectTypeOf(params).toEqualTypeOf<RoomInit>();
     });
 
-    // They can also register per-activation start work. This is where future
+    // They can also register per-instance wake work. This is where future
     // alarm/scheduler mixins rehydrate state after params exist.
-    this.registerOnStart((params) => {
+    this.registerOnInstanceWake((params) => {
       expectTypeOf(params).toEqualTypeOf<RoomInit>();
     });
   }
@@ -93,8 +93,8 @@ describe("withLifecycleHooks types", () => {
     // @ts-expect-error registerOnFirstInitialize is for subclasses/mixins, not external callers.
     room.registerOnFirstInitialize;
 
-    // @ts-expect-error registerOnStart is for subclasses/mixins, not external callers.
-    room.registerOnStart;
+    // @ts-expect-error registerOnInstanceWake is for subclasses/mixins, not external callers.
+    room.registerOnInstanceWake;
   });
 
   it("requires initParams when the init shape has fields beyond name", () => {

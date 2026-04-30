@@ -202,12 +202,7 @@ So:
   - `requireEventsBaseUrl()`
   - `createEvents2AppFixture({ baseURL })`
   - `collectAsyncIterableUntilIdle(...)`
-- `apps/events/e2e/vitest/dynamic-worker-egress.e2e.test.ts`
-  - already shows the right outer shape for a real network e2e against `EVENTS_BASE_URL`
-  - uses unique stream paths and polls history until a derived event appears
-- `ai-engineer-workshop/lib/deploy-processor.ts`
-  - already knows how to convert a processor file into a `dynamic-worker/configured` event and append it to a stream
-  - likely the most reusable way to "deploy" a processor into apps/events for tests
+- Old dynamic-worker E2E paths have been removed. New processor E2E should target the shared processor contracts and runners directly.
 
 ## Existing agents e2e precedent
 
@@ -344,8 +339,6 @@ And it probably returns:
   - maybe raw fixture handle from `useMockHttpServer(...)`
 - `processorTarget`
   - either a locally started server or an already-deployed processor endpoint
-- `deployProcessor(...)` helper
-  - for the case where the test wants to push a processor into apps/events via `dynamic-worker/configured`
 - `waitForEvent(...)`
   - probably lifted/adapted from `packages/agent/src/test-helpers.ts`
 
@@ -353,12 +346,7 @@ And it probably returns:
 
 There are really 2 different higher-level modes hidden in this task:
 
-1. **Dynamic worker mode**
-   - the "processor" is deployed into apps/events by appending a configured event
-   - `ai-engineer-workshop/lib/deploy-processor.ts` is already close to the right primitive
-   - no separate processor server is required
-
-2. **External processor server mode**
+1. **External processor server mode**
    - the processor under test is its own long-running service
    - we need to start or deploy it and give it egress settings pointing at the mock proxy
    - this is where the tunnel + FRP + standalone proxy pieces matter most
@@ -410,7 +398,7 @@ So the most realistic staged rollout seems to be:
 - generate unique stream paths
 - treat `apps/agents` as the main app-under-test
 - prefer lower-level primitives over a polished composed test rig in the first pass
-- support dynamic-worker processors first via `deployProcessor(...)`
+- support shared processor runners directly; dynamic-worker deployment is not the first E2E target
 - support HAR replay via standalone `external-egress-proxy.ts`
 - when remote reachability is needed, reuse the Semaphore + tunnel + FRP helpers from `jonasland`
 - copy/adapt `waitForEvent(...)` from `packages/agent/src/test-helpers.ts`

@@ -67,11 +67,17 @@ export function StreamsSidebar() {
       }),
     [rootEvents, searchValue, selectedStreamPath],
   );
+  const defaultExpandedPathsKey = defaultExpandedPaths.join("\n");
   const [expandedPaths, setExpandedPaths] = useState<Set<StreamPathType>>(new Set(["/"]));
 
   useEffect(() => {
-    setExpandedPaths(new Set(defaultExpandedPaths));
-  }, [defaultExpandedPaths]);
+    const nextExpandedPaths = new Set(defaultExpandedPathsKey.split("\n") as StreamPathType[]);
+    setExpandedPaths((currentExpandedPaths) =>
+      areSetsEqual(currentExpandedPaths, nextExpandedPaths)
+        ? currentExpandedPaths
+        : nextExpandedPaths,
+    );
+  }, [defaultExpandedPathsKey]);
 
   function openCreateStreamForm() {
     setNewStreamPathInput("/some-stream");
@@ -395,6 +401,20 @@ function toggleExpandedPath(expandedPaths: ReadonlySet<StreamPathType>, path: St
   }
 
   return nextExpandedPaths;
+}
+
+function areSetsEqual<T>(left: ReadonlySet<T>, right: ReadonlySet<T>) {
+  if (left.size !== right.size) {
+    return false;
+  }
+
+  for (const value of left) {
+    if (!right.has(value)) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function countDescendantStreams(node: StreamsSidebarTreeNode): number {

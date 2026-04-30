@@ -1,6 +1,5 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
-import { EventType } from "~/components/event-type.tsx";
-import { eventTypePages } from "~/lib/event-type-pages.ts";
+import { processorDocs } from "~/lib/processor-docs.ts";
 
 export const Route = createFileRoute("/docs")({
   component: DocsPage,
@@ -12,20 +11,22 @@ function DocsPage() {
       <div className="space-y-1">
         <h2 className="text-lg font-semibold">Event docs</h2>
         <p className="text-sm text-muted-foreground">
-          Add a small route file in `src/routes/` when you want a real page for a specific event
-          type.
+          Processor contracts generate these pages. Add or change a processor contract to change the
+          docs.
         </p>
       </div>
 
       <div className="space-y-3">
-        {eventTypePages.map((page) => (
-          <div key={page.slug} className="rounded-lg border bg-card p-4">
+        {processorDocs.map((processor) => (
+          <div key={processor.contract.slug} className="rounded-lg border bg-card p-4">
             <div className="space-y-1">
-              <Link to={page.href} className="block font-medium hover:underline">
-                {page.title}
+              <Link to={processor.href} className="block font-medium hover:underline">
+                {processor.contract.slug}
               </Link>
-              <p className="text-sm text-muted-foreground">{page.summary}</p>
-              <EventType type={page.type} className="text-xs" />
+              <p className="text-sm text-muted-foreground">{processor.contract.description}</p>
+              <p className="text-xs text-muted-foreground">
+                {processor.events.length} event{processor.events.length === 1 ? "" : "s"}
+              </p>
             </div>
           </div>
         ))}

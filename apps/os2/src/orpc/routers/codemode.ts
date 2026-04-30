@@ -1,6 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import { StreamPath } from "@iterate-com/events-contract";
-import { createEventsClient, type Event, type EventInput } from "@iterate-com/events-contract/sdk";
+import { StreamPath, type Event, type EventInput } from "@iterate-com/events-contract";
 import { CodemodeExecutor } from "@iterate-com/shared/codemode/executor";
 import { resolveToolProviderDescriptor } from "@iterate-com/shared/codemode/resolve";
 import { validateProviderPaths } from "@iterate-com/shared/codemode/validate";
@@ -11,6 +10,7 @@ import type { AppContext } from "~/context.ts";
 import { getProjectById } from "~/db/queries/.generated/index.ts";
 import type { ActiveOrganizationAuth } from "~/lib/auth.ts";
 import { readEventPayload, stringifyPayloadError } from "~/lib/codemode-event-payload.ts";
+import { createEventsClient } from "~/lib/events-client.ts";
 import { activeOrganizationMiddleware, os } from "~/orpc/orpc.ts";
 
 export const codemodeRouter = {

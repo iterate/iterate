@@ -307,15 +307,57 @@ export const MessageBranchPage = ({
   );
 };
 
+type MarkdownCodeProps = ComponentProps<"code"> & {
+  node?: {
+    position?: {
+      start?: { line?: number };
+      end?: { line?: number };
+    };
+  };
+};
+
+function MessageMarkdownPre({ children }: ComponentProps<"pre">) {
+  return children;
+}
+
+function MessageMarkdownCode({ children, className, node, ...props }: MarkdownCodeProps) {
+  const singleLine = node?.position?.start?.line === node?.position?.end?.line;
+  if (singleLine) {
+    return (
+      <code
+        className={cn("rounded bg-muted px-1.5 py-0.5 font-mono text-sm", className)}
+        {...props}
+      >
+        {children}
+      </code>
+    );
+  }
+
+  return (
+    <div className="my-4 max-w-full overflow-hidden rounded-xl border bg-muted/30">
+      <pre className="max-h-[60vh] overflow-auto p-4 text-sm leading-6">
+        <code className={cn("font-mono", className)} {...props}>
+          {children}
+        </code>
+      </pre>
+    </div>
+  );
+}
+
 export type MessageResponseProps = ComponentProps<typeof Streamdown>;
 
 export const MessageResponse = memo(
-  ({ className, ...props }: MessageResponseProps) => (
+  ({ className, components, ...props }: MessageResponseProps) => (
     <Streamdown
       className={cn(
         "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
         className
       )}
+      components={{
+        code: MessageMarkdownCode,
+        pre: MessageMarkdownPre,
+        ...components,
+      }}
       {...props}
     />
   ),

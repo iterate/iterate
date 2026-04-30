@@ -1,8 +1,9 @@
 import { env } from "cloudflare:test";
-import { createEventsClient, type Event, type StreamPath } from "@iterate-com/events-contract/sdk";
+import { type Event, type StreamPath } from "@iterate-com/events-contract";
 import { deriveDurableObjectNameFromInitParams } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { describe, expect, test } from "vitest";
 import type { CodemodeSession } from "./codemode-session.ts";
+import { createEventsClient } from "~/lib/events-client.ts";
 
 type CodemodeSessionStub = DurableObjectStub<CodemodeSession> & {
   initialize(params: { name: string; projectId: string; streamPath: StreamPath }): Promise<unknown>;

@@ -173,7 +173,7 @@ const payloadCases = [
     expectedResponse: (canonicalPath) => ({
       event: {
         streamPath: canonicalPath,
-        type: "https://events.iterate.com/events/stream/invalid-event-appended",
+        type: "events.iterate.com/core/invalid-event-appended",
         payload: {
           rawInput: invalidEvent,
           error: expect.stringContaining("payload"),
@@ -188,7 +188,7 @@ const payloadCases = [
     expectedResponse: (canonicalPath) => ({
       event: {
         streamPath: canonicalPath,
-        type: "https://events.iterate.com/events/stream/invalid-event-appended",
+        type: "events.iterate.com/core/invalid-event-appended",
         payload: {
           rawInput: invalidEvent,
           error: expect.stringContaining("payload"),

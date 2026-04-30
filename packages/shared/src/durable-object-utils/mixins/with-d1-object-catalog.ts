@@ -21,7 +21,7 @@ export type D1ObjectCatalogRecord<InitParams extends LifecycleInit> = {
   id: string;
   initParams: InitParams;
   createdAt: string;
-  lastStartedAt: string;
+  lastWokenAt: string;
 };
 
 export type D1ObjectCatalogIndexValue = string | number | readonly (string | number)[];
@@ -72,7 +72,7 @@ type WithD1ObjectCatalogResult<
  * Best-effort D1 catalog for initialized Durable Objects.
  *
  * This is intentionally implemented as a lifecycle-hooks consumer: it registers
- * an `onStart` hook, then starts a separately caught D1 write so startup does
+ * an instance wake hook, then starts a separately caught D1 write so startup does
  * not depend on an external database. Local Durable Object storage remains the
  * source of truth; D1 is only for discovery and cross-object lookup.
  *
@@ -101,7 +101,7 @@ export function withD1ObjectCatalog<InitParams extends LifecycleInit, Env>(optio
       constructor(...args: any[]) {
         super(...args);
 
-        this.registerOnStart((params) => {
+        this.registerOnInstanceWake((params) => {
           this.scheduleD1ObjectCatalogUpsert(params);
         });
       }
@@ -169,7 +169,7 @@ export async function getD1ObjectCatalogRecord<InitParams extends LifecycleInit>
   try {
     const row = await db
       .prepare(
-        `SELECT class, name, id, init_params_json, created_at, last_started_at
+        `SELECT class, name, id, init_params_json, created_at, last_woken_at
          FROM mixin_d1_object_catalog_objects
          WHERE class = ? AND name = ?
          LIMIT 1`,
@@ -198,7 +198,7 @@ export async function listD1ObjectCatalogRecordsByIndex<InitParams extends Lifec
   try {
     const { results } = await db
       .prepare(
-        `SELECT o.class, o.name, o.id, o.init_params_json, o.created_at, o.last_started_at
+        `SELECT o.class, o.name, o.id, o.init_params_json, o.created_at, o.last_woken_at
          FROM mixin_d1_object_catalog_indexes i
          JOIN mixin_d1_object_catalog_objects o
            ON o.class = i.class AND o.name = i.name
@@ -227,7 +227,7 @@ export async function listD1ObjectCatalogRecords<InitParams extends LifecycleIni
   try {
     const { results } = await db
       .prepare(
-        `SELECT class, name, id, init_params_json, created_at, last_started_at
+        `SELECT class, name, id, init_params_json, created_at, last_woken_at
          FROM mixin_d1_object_catalog_objects
          WHERE class = ?
          ORDER BY created_at ASC, name ASC`,
@@ -257,9 +257,9 @@ async function upsertD1ObjectCatalog<InitParams extends LifecycleInit>(input: {
 
   // Idempotent bootstrap + upsert: every write can create both mixin-owned
   // tables, then replace the `(class, name)` row and the derived index rows.
-  // Constructors stay cheap because this happens from the lifecycle start hook,
-  // outside the startup readiness boundary. `created_at` remains the first insertion time;
-  // `last_started_at` moves whenever the object starts and the hook runs.
+  // Constructors stay cheap because this happens from the lifecycle instance
+  // wake hook, outside the startup readiness boundary. `created_at` remains the
+  // first insertion time; `last_woken_at` moves whenever the hook runs.
   await input.db.batch([
     input.db.prepare(CREATE_D1_OBJECT_CATALOG_OBJECTS_TABLE_SQL),
     input.db.prepare(CREATE_D1_OBJECT_CATALOG_INDEXES_TABLE_SQL),
@@ -271,13 +271,13 @@ async function upsertD1ObjectCatalog<InitParams extends LifecycleInit>(input: {
           id,
           init_params_json,
           created_at,
-          last_started_at
+          last_woken_at
         )
         VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(class, name) DO UPDATE SET
           id = excluded.id,
           init_params_json = excluded.init_params_json,
-          last_started_at = excluded.last_started_at`,
+          last_woken_at = excluded.last_woken_at`,
       )
       .bind(
         input.className,
@@ -320,7 +320,7 @@ const CREATE_D1_OBJECT_CATALOG_OBJECTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS m
       id TEXT NOT NULL,
       init_params_json TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-      last_started_at TEXT NOT NULL,
+      last_woken_at TEXT NOT NULL,
       PRIMARY KEY (class, name)
     )`;
 
@@ -338,7 +338,7 @@ type D1ObjectCatalogRow = {
   id: string;
   init_params_json: string;
   created_at: string;
-  last_started_at: string;
+  last_woken_at: string;
 };
 
 function parseD1ObjectCatalogRow<InitParams extends LifecycleInit>(
@@ -350,7 +350,7 @@ function parseD1ObjectCatalogRow<InitParams extends LifecycleInit>(
     id: row.id,
     initParams: JSON.parse(row.init_params_json) as InitParams,
     createdAt: row.created_at,
-    lastStartedAt: row.last_started_at,
+    lastWokenAt: row.last_woken_at,
   };
 }
 

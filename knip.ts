@@ -102,8 +102,9 @@ function makeEventsCloudflareWorkspace(workerEnvShim: string): WorkspaceConfig {
 
   return {
     ...workspace,
-    entry: [...(workspace.entry ?? []), "scripts/demo/router.ts"],
+    entry: [...(workspace.entry ?? []), "scripts/demo/router.ts", "sqlfu.config.ts"],
     ignore: ["src/db/migrations/.generated/migrations.ts", "src/durable-objects/sqlfu.config.ts"],
+    ignoreBinaries: [...(workspace.ignoreBinaries ?? []), "sqlfu"],
     ignoreDependencies: [...(workspace.ignoreDependencies ?? []), "miniflare"],
   };
 }
@@ -178,9 +179,6 @@ const config: KnipConfig = {
     // This file is generated from Fly's OpenAPI schema and intentionally emits
     // a couple of placeholder exported types that are never imported directly.
     "packages/shared/src/jonasland/deployment/fly-api/generated/openapi.gen.ts": ["types"],
-    // This SDK is intentionally re-exported by ai-engineer-workshop, which is
-    // outside the scoped root Knip command on purpose.
-    "apps/events-contract/src/sdk.ts": ["exports", "types"],
     // TanStack Start resolves these router factories by convention from the
     // entrypoint, so there is no direct import Knip can follow.
     "apps/daemon-v2/src/router.tsx": ["exports"],
@@ -194,10 +192,14 @@ const config: KnipConfig = {
     "apps/agents/src/lib/mcp-tool-providers.ts": ["types"],
     "apps/agents/src/lib/openapi-tool-provider.ts": ["types"],
     "apps/agents/src/lib/llm-normalization.ts": ["exports"],
+    // Generated SQLFU bundles/configs are loaded by scripts/runtime conventions.
+    "apps/events/src/db/migrations/.generated/migrations.ts": ["files", "exports", "types"],
     "apps/events/src/durable-objects/db/migrations/.generated/migrations.ts": ["exports", "types"],
-    "apps/events/src/lib/custom-html-renderers.ts": ["exports"],
-    "apps/events/src/db/queries/.generated/tables.ts": ["types"],
     "apps/events/src/durable-objects/db/queries/.generated/tables.ts": ["types"],
+    "apps/events/src/db/queries/.generated/tables.ts": ["types"],
+    "apps/events/src/durable-objects/sqlfu.config.ts": ["files"],
+    "apps/events/src/lib/custom-html-renderers.ts": ["exports"],
+    // Cloudflare discovers DO default exports through Worker bindings.
     "apps/example/src/durable-objects/example-counter.ts": ["exports"],
     "packages/shared/src/callable/entry.workerd.vitest.ts": ["exports"],
     "packages/shared/src/durable-object-utils/test-harness/initialize-fronting-worker.ts": [

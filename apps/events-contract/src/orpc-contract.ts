@@ -3,37 +3,38 @@ import { internalContract } from "@iterate-com/shared/apps/internal-router-contr
 import { z } from "zod";
 
 import {
-  BuiltInEventInput,
-  BuiltInEventType,
   DestroyStreamResult,
   Event,
   EventInput,
-  GenericEventInput,
   InvalidEventAppendedEventInput,
   StreamPath,
   StreamQuery,
   StreamState,
 } from "./types.ts";
+import { STREAM_INVALID_EVENT_APPENDED_TYPE } from "./core-event-types.ts";
 
 const PathMungingDescription =
   "For curl ergonomics, nested stream paths accept either raw nested segments or percent-escaped slash forms. Both resolve to the same canonical stream path.";
 
-// `.catch()` keeps the server lenient — malformed events are stored as
-// InvalidEventAppendedEvent instead of rejected. The cast preserves the input
-// side as `EventInput` for client typing while keeping the output side aligned
-// with Zod's parsed output shape.
-const NormalizedAppendEventInput = EventInput.catch((ctx) =>
-  InvalidEventAppendedEventInput.parse({
-    type: "https://events.iterate.com/events/stream/invalid-event-appended",
+// `.transform()` keeps the server lenient — malformed events are stored as
+// InvalidEventAppendedEvent instead of rejected. This preserves the original
+// input before defaults inside EventInput can obscure malformed bare JSON.
+const NormalizedAppendEventInput = z.unknown().transform((input) => {
+  const parsed = EventInput.safeParse(input);
+  if (parsed.success) {
+    return parsed.data;
+  }
+
+  return InvalidEventAppendedEventInput.parse({
+    type: STREAM_INVALID_EVENT_APPENDED_TYPE,
     payload: {
-      rawInput: toJsonValue(ctx.input),
+      rawInput: toJsonValue(input),
       error: prettifyAppendEventError({
-        input: ctx.input,
-        fallbackIssues: ctx.error.issues,
+        fallbackIssues: parsed.error.issues,
       }),
     },
-  }),
-) as unknown as z.ZodType<z.output<typeof EventInput>, EventInput>;
+  });
+}) as unknown as z.ZodType<z.output<typeof EventInput>, EventInput>;
 
 export const AppendInput = z.object({
   path: StreamPath,
@@ -186,24 +187,8 @@ export const eventsContract = oc.router({
 
 type JsonValue = null | string | number | boolean | JsonValue[] | { [key: string]: JsonValue };
 
-function prettifyAppendEventError(args: { input: unknown; fallbackIssues: z.ZodError["issues"] }) {
-  const specificResult = hasBuiltInEventType(args.input)
-    ? BuiltInEventInput.safeParse(args.input)
-    : GenericEventInput.safeParse(args.input);
-
-  if (!specificResult.success) {
-    return z.prettifyError(specificResult.error);
-  }
-
+function prettifyAppendEventError(args: { fallbackIssues: z.ZodError["issues"] }) {
   return z.prettifyError(new z.ZodError(args.fallbackIssues));
-}
-
-function hasBuiltInEventType(input: unknown) {
-  if (typeof input !== "object" || input == null || Array.isArray(input)) {
-    return false;
-  }
-
-  return BuiltInEventType.safeParse((input as Record<string, unknown>).type).success;
 }
 
 function toJsonValue(input: unknown): JsonValue {

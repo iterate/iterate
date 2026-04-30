@@ -3,6 +3,7 @@ import {
   GenericEvent as GenericEventBase,
   GenericEventInput as GenericEventInputBase,
 } from "./event-base-types.ts";
+import { STREAM_SUBSCRIPTION_CONFIGURED_TYPE } from "./core-event-types.ts";
 import { JsonataExpression } from "./jsonata-expression.ts";
 
 const ExternalSubscriberBase = z.strictObject({
@@ -29,7 +30,7 @@ export const ExternalSubscriber = z.discriminatedUnion("type", [
 export type ExternalSubscriber = z.infer<typeof ExternalSubscriber>;
 
 export const StreamSubscriptionConfiguredEventInput = GenericEventInputBase.extend({
-  type: z.literal("https://events.iterate.com/events/stream/subscription/configured"),
+  type: z.literal(STREAM_SUBSCRIPTION_CONFIGURED_TYPE),
   payload: ExternalSubscriber,
 });
 export const StreamSubscriptionConfiguredEvent = GenericEventBase.extend(

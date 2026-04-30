@@ -165,7 +165,7 @@ This fits the current code better, because the app already has:
 
 - projection logic in `src/lib/stream-feed-projection.ts`
 - renderer switching in `src/components/stream-event-feed.tsx`
-- event-type metadata in `src/lib/event-type-pages.ts`
+- processor/event metadata in `src/lib/processor-docs.ts`
 
 So the proposed SDK is an evolution of the current split, not a totally new mental model.
 
@@ -257,7 +257,7 @@ The current app already has the right raw ingredients:
 - `src/components/stream-event-feed.tsx`
 - `src/lib/stream-feed-projection.ts`
 - `src/lib/stream-feed-types.ts`
-- `src/lib/event-type-pages.ts`
+- `src/lib/processor-docs.ts`
 - `src/hooks/use-live-stream-events.ts`
 
 The refactor would mostly be:
@@ -285,8 +285,6 @@ The refactor would mostly be:
 
 If this task is accepted later, the likely shape is:
 
-1. create `src/sdk/` inside `apps/events`
-2. export the SDK from `@iterate-com/events`
-3. refactor `apps/events` to consume its own shared SDK through route adapters
-4. add React Query + SDK wiring in a workshop host app
-5. prove that the workshop app can pass custom pretty reducers/renderers per `StreamDetailView` instance
+1. extract route-agnostic stream UI primitives without adding a new events SDK first
+2. refactor `apps/events` to consume those primitives through route adapters
+3. prove that another app can pass custom pretty reducers/renderers per `StreamDetailView` instance
