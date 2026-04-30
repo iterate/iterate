@@ -2,13 +2,18 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpAgent } from "agents/mcp";
 import type { Connection } from "agents";
 import { z } from "zod";
-import { StreamPath, type Event, type EventInput } from "@iterate-com/events-contract";
+import {
+  EventInput as EventInputSchema,
+  StreamPath,
+  type EventInput,
+} from "@iterate-com/events-contract";
 import { createEventsClient } from "@iterate-com/events-contract/sdk";
 import packageJson from "../../package.json" with { type: "json" };
 import {
   type CodemodeSessionNamespace,
   startCodemodeScriptOnSession,
 } from "~/codemode/codemode-session-rpc.ts";
+import { readEventPayload, stringifyPayloadError } from "~/lib/codemode-event-payload.ts";
 
 /**
  * MCP server for os2, exposed at `/mcp` on project hostnames only.
@@ -177,6 +182,12 @@ export class IterateMcpServer extends McpAgent<McpServerEnv, unknown, IterateMcp
       async ({ code, events = [] }) => {
         const auth = this.requireProjectAuthProps();
         this.requireScope(auth, requiredToolScope);
+        // Cloudflare's MCP SDK validates tool input before invoking handlers,
+        // but this is the trust boundary before OS2 appends caller-provided
+        // events to the durable CodemodeSession stream. Parse again here so
+        // future SDK or test harness changes cannot bypass EventInput shape
+        // validation with a cast.
+        const parsedEvents = z.array(EventInputSchema).parse(events);
 
         const invocationId = `mcp_tool_${crypto.randomUUID()}`;
         const startedAt = Date.now();
@@ -195,7 +206,7 @@ export class IterateMcpServer extends McpAgent<McpServerEnv, unknown, IterateMcp
         try {
           const started = await startCodemodeScriptOnSession({
             code,
-            events: events as EventInput[],
+            events: parsedEvents,
             namespace: this.env.CODEMODE_SESSION,
             projectId: auth.projectId,
             providers: [],
@@ -415,7 +426,7 @@ async function waitForScriptExecutionFinished(input: {
   const logs: string[] = [];
 
   for await (const event of stream) {
-    const payload = readPayload(event);
+    const payload = readEventPayload(event);
     if (
       event.type === "events.iterate.com/codemode/log-emitted" &&
       payload.scriptExecutionRequestedOffset === input.scriptExecutionRequestedOffset
@@ -438,22 +449,6 @@ async function waitForScriptExecutionFinished(input: {
   }
 
   throw new Error("Codemode Script Execution stream ended before a result event was appended.");
-}
-
-function readPayload(event: Event) {
-  return event.payload != null && typeof event.payload === "object"
-    ? (event.payload as Record<string, unknown>)
-    : {};
-}
-
-function stringifyPayloadError(value: unknown) {
-  if (value == null) return undefined;
-  if (typeof value === "string") return value;
-  if (typeof value === "object" && "message" in value) {
-    const message = (value as { message?: unknown }).message;
-    if (typeof message === "string") return message;
-  }
-  return String(value);
 }
 
 function slugifySegment(value: string) {

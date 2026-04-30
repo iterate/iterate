@@ -10,6 +10,7 @@ import { startCodemodeScriptOnSession } from "~/codemode/codemode-session-rpc.ts
 import type { AppContext } from "~/context.ts";
 import { getProjectById } from "~/db/queries/.generated/index.ts";
 import type { ActiveOrganizationAuth } from "~/lib/auth.ts";
+import { readEventPayload, stringifyPayloadError } from "~/lib/codemode-event-payload.ts";
 import { activeOrganizationMiddleware, os } from "~/orpc/orpc.ts";
 
 export const codemodeRouter = {
@@ -380,7 +381,7 @@ function toLegacyCodemodeEvent(input: {
   event: Event;
   scriptExecutionRequestedOffset: number;
 }): CodemodeEvent | null {
-  const payload = readPayload(input.event);
+  const payload = readEventPayload(input.event);
   const timestamp = input.event.createdAt;
 
   if (payload.scriptExecutionRequestedOffset !== input.scriptExecutionRequestedOffset) {
@@ -434,12 +435,6 @@ function toLegacyCodemodeEvent(input: {
   }
 }
 
-function readPayload(event: Event) {
-  return event.payload != null && typeof event.payload === "object"
-    ? (event.payload as Record<string, unknown>)
-    : {};
-}
-
 function parseLogLevel(value: unknown) {
   return value === "error" || value === "warn" ? value : "log";
 }
@@ -450,16 +445,6 @@ function parsePath(value: unknown) {
 
 function callIdForEvent(blockId: string, offset: unknown) {
   return `ccal_${blockId}_${typeof offset === "number" ? offset : "unknown"}`;
-}
-
-function stringifyPayloadError(value: unknown) {
-  if (value == null) return undefined;
-  if (typeof value === "string") return value;
-  if (value != null && typeof value === "object" && "message" in value) {
-    const message = (value as { message?: unknown }).message;
-    if (typeof message === "string") return message;
-  }
-  return String(value);
 }
 
 /**
