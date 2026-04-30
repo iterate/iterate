@@ -20,6 +20,8 @@ import { Route as ApiOrpcWsRouteImport } from './routes/api.orpc-ws'
 import { Route as ApiSplatRouteImport } from './routes/api.$'
 import { Route as AppLogStreamRouteImport } from './routes/_app/log-stream'
 import { Route as AppDebugRouteImport } from './routes/_app/debug'
+import { Route as SignUpTasksChooseOrganizationRouteImport } from './routes/sign-up.tasks.choose-organization'
+import { Route as SignInTasksChooseOrganizationRouteImport } from './routes/sign-in.tasks.choose-organization'
 import { Route as ApiOrpcSplatRouteImport } from './routes/api.orpc.$'
 import { Route as AppOrgsOrganizationSlugRouteImport } from './routes/_app/orgs.$organizationSlug'
 import { Route as AppOrgsOrganizationSlugIndexRouteImport } from './routes/_app/orgs.$organizationSlug.index'
@@ -86,6 +88,18 @@ const AppDebugRoute = AppDebugRouteImport.update({
   path: '/debug',
   getParentRoute: () => AppRoute,
 } as any)
+const SignUpTasksChooseOrganizationRoute =
+  SignUpTasksChooseOrganizationRouteImport.update({
+    id: '/sign-up/tasks/choose-organization',
+    path: '/sign-up/tasks/choose-organization',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const SignInTasksChooseOrganizationRoute =
+  SignInTasksChooseOrganizationRouteImport.update({
+    id: '/sign-in/tasks/choose-organization',
+    path: '/sign-in/tasks/choose-organization',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiOrpcSplatRoute = ApiOrpcSplatRouteImport.update({
   id: '/api/orpc/$',
   path: '/api/orpc/$',
@@ -158,6 +172,8 @@ export interface FileRoutesByFullPath {
   '/sign-up/$': typeof SignUpSplatRoute
   '/orgs/$organizationSlug': typeof AppOrgsOrganizationSlugRouteWithChildren
   '/api/orpc/$': typeof ApiOrpcSplatRoute
+  '/sign-in/tasks/choose-organization': typeof SignInTasksChooseOrganizationRoute
+  '/sign-up/tasks/choose-organization': typeof SignUpTasksChooseOrganizationRoute
   '/orgs/$organizationSlug/projects': typeof AppOrgsOrganizationSlugProjectsRouteWithChildren
   '/orgs/$organizationSlug/': typeof AppOrgsOrganizationSlugIndexRoute
   '/orgs/$organizationSlug/projects/$projectSlug': typeof AppOrgsOrganizationSlugProjectsProjectSlugRouteWithChildren
@@ -179,6 +195,8 @@ export interface FileRoutesByTo {
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
+  '/sign-in/tasks/choose-organization': typeof SignInTasksChooseOrganizationRoute
+  '/sign-up/tasks/choose-organization': typeof SignUpTasksChooseOrganizationRoute
   '/orgs/$organizationSlug': typeof AppOrgsOrganizationSlugIndexRoute
   '/orgs/$organizationSlug/projects': typeof AppOrgsOrganizationSlugProjectsIndexRoute
   '/orgs/$organizationSlug/projects/$projectSlug/presets': typeof AppOrgsOrganizationSlugProjectsProjectSlugPresetsRoute
@@ -201,6 +219,8 @@ export interface FileRoutesById {
   '/sign-up/$': typeof SignUpSplatRoute
   '/_app/orgs/$organizationSlug': typeof AppOrgsOrganizationSlugRouteWithChildren
   '/api/orpc/$': typeof ApiOrpcSplatRoute
+  '/sign-in/tasks/choose-organization': typeof SignInTasksChooseOrganizationRoute
+  '/sign-up/tasks/choose-organization': typeof SignUpTasksChooseOrganizationRoute
   '/_app/orgs/$organizationSlug/projects': typeof AppOrgsOrganizationSlugProjectsRouteWithChildren
   '/_app/orgs/$organizationSlug/': typeof AppOrgsOrganizationSlugIndexRoute
   '/_app/orgs/$organizationSlug/projects/$projectSlug': typeof AppOrgsOrganizationSlugProjectsProjectSlugRouteWithChildren
@@ -225,6 +245,8 @@ export interface FileRouteTypes {
     | '/sign-up/$'
     | '/orgs/$organizationSlug'
     | '/api/orpc/$'
+    | '/sign-in/tasks/choose-organization'
+    | '/sign-up/tasks/choose-organization'
     | '/orgs/$organizationSlug/projects'
     | '/orgs/$organizationSlug/'
     | '/orgs/$organizationSlug/projects/$projectSlug'
@@ -246,6 +268,8 @@ export interface FileRouteTypes {
     | '/sign-in/$'
     | '/sign-up/$'
     | '/api/orpc/$'
+    | '/sign-in/tasks/choose-organization'
+    | '/sign-up/tasks/choose-organization'
     | '/orgs/$organizationSlug'
     | '/orgs/$organizationSlug/projects'
     | '/orgs/$organizationSlug/projects/$projectSlug/presets'
@@ -267,6 +291,8 @@ export interface FileRouteTypes {
     | '/sign-up/$'
     | '/_app/orgs/$organizationSlug'
     | '/api/orpc/$'
+    | '/sign-in/tasks/choose-organization'
+    | '/sign-up/tasks/choose-organization'
     | '/_app/orgs/$organizationSlug/projects'
     | '/_app/orgs/$organizationSlug/'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug'
@@ -288,6 +314,8 @@ export interface RootRouteChildren {
   SignInSplatRoute: typeof SignInSplatRoute
   SignUpSplatRoute: typeof SignUpSplatRoute
   ApiOrpcSplatRoute: typeof ApiOrpcSplatRoute
+  SignInTasksChooseOrganizationRoute: typeof SignInTasksChooseOrganizationRoute
+  SignUpTasksChooseOrganizationRoute: typeof SignUpTasksChooseOrganizationRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -368,6 +396,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/debug'
       preLoaderRoute: typeof AppDebugRouteImport
       parentRoute: typeof AppRoute
+    }
+    '/sign-up/tasks/choose-organization': {
+      id: '/sign-up/tasks/choose-organization'
+      path: '/sign-up/tasks/choose-organization'
+      fullPath: '/sign-up/tasks/choose-organization'
+      preLoaderRoute: typeof SignUpTasksChooseOrganizationRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sign-in/tasks/choose-organization': {
+      id: '/sign-in/tasks/choose-organization'
+      path: '/sign-in/tasks/choose-organization'
+      fullPath: '/sign-in/tasks/choose-organization'
+      preLoaderRoute: typeof SignInTasksChooseOrganizationRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/api/orpc/$': {
       id: '/api/orpc/$'
@@ -526,6 +568,8 @@ const rootRouteChildren: RootRouteChildren = {
   SignInSplatRoute: SignInSplatRoute,
   SignUpSplatRoute: SignUpSplatRoute,
   ApiOrpcSplatRoute: ApiOrpcSplatRoute,
+  SignInTasksChooseOrganizationRoute: SignInTasksChooseOrganizationRoute,
+  SignUpTasksChooseOrganizationRoute: SignUpTasksChooseOrganizationRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
