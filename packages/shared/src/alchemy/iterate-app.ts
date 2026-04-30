@@ -177,25 +177,31 @@ export async function IterateApp<B extends Bindings>(
       ),
     );
 
+    const dnsRouteHosts = routeHosts.filter(shouldCreateDnsRecordForRouteHostname);
     await Promise.all(
-      routeHosts.filter(shouldCreateDnsRecordForRouteHostname).map(async (hostname) => {
+      dnsRouteHosts.map(async (hostname) => {
         const { zoneId } = await findZoneForHostname(cloudflareApi, hostname);
         const dnsResourceId = hostname.startsWith("*.")
           ? `project-wildcard-dns-${slugify(hostname)}`
           : `dns-${slugify(hostname)}`;
+        const record = {
+          type: "A" as const,
+          name: hostname,
+          content: "192.0.2.1",
+          proxied: true,
+          ttl: 1,
+          comment: `Managed by ${manifest.slug} alchemy (${app.stage}).`,
+        };
 
-        return DnsRecords(dnsResourceId, {
+        await DnsRecords(dnsResourceId, {
           zoneId,
-          records: [
-            {
-              type: "A",
-              name: hostname,
-              content: "192.0.2.1",
-              proxied: true,
-              ttl: 1,
-              comment: `Managed by ${manifest.slug} alchemy (${app.stage}).`,
-            },
-          ],
+          records: [record],
+        });
+
+        await ensureCloudflareDnsRecord({
+          cloudflareApi,
+          record,
+          zoneId,
         });
       }),
     );
@@ -235,6 +241,58 @@ function shouldCreateDnsRecordForRouteHostname(hostname: string) {
   // the existing proxied `*.iterate.app` DNS record for those one-label project
   // hosts, while ordinary exact and `*.` wildcard routes still get app-owned DNS.
   return !hostname.startsWith("*") || hostname.startsWith("*.");
+}
+
+/**
+ * Verify the DNS record exists after Alchemy's DnsRecords resource runs.
+ *
+ * DnsRecords can believe an unchanged record still exists because its local
+ * state says so. Preview environments are routinely cleaned up outside the
+ * current Alchemy state lifetime, so a stale output record can leave the Worker
+ * route created but the hostname unresolvable. This direct Cloudflare upsert is
+ * intentionally idempotent and keeps preview readiness tied to real DNS.
+ */
+async function ensureCloudflareDnsRecord(input: {
+  cloudflareApi: Awaited<ReturnType<typeof createCloudflareApi>>;
+  record: {
+    comment: string;
+    content: string;
+    name: string;
+    proxied: boolean;
+    ttl: number;
+    type: "A";
+  };
+  zoneId: string;
+}) {
+  const params = new URLSearchParams({
+    name: input.record.name,
+    type: input.record.type,
+  });
+  const listResponse = await input.cloudflareApi.get(
+    `/zones/${input.zoneId}/dns_records?${params.toString()}`,
+  );
+  if (!listResponse.ok) {
+    throw new Error(
+      `Failed to check DNS record ${input.record.name}: ${listResponse.status} ${await listResponse.text()}`,
+    );
+  }
+
+  const listResult = (await listResponse.json()) as {
+    result?: Array<{ id: string }>;
+  };
+  const existingRecordId = listResult.result?.[0]?.id;
+  const response = existingRecordId
+    ? await input.cloudflareApi.put(
+        `/zones/${input.zoneId}/dns_records/${existingRecordId}`,
+        input.record,
+      )
+    : await input.cloudflareApi.post(`/zones/${input.zoneId}/dns_records`, input.record);
+
+  if (!response.ok) {
+    throw new Error(
+      `Failed to upsert DNS record ${input.record.name}: ${response.status} ${await response.text()}`,
+    );
+  }
 }
 
 function withSequentialCloudflareAssetPreupload(input: { command: string; workerName: string }) {
