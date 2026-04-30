@@ -60,7 +60,7 @@ retry_json_get() {
   local body=""
 
   for _ in 1 2 3 4 5; do
-    body="$(curl -sS "$url" "$@")"
+    body="$(retry_curl "$url" "$@")"
     if [[ "$body" == \\{* ]]; then
       printf '%s' "$body"
       return 0
@@ -72,7 +72,25 @@ retry_json_get() {
   return 1
 }
 
-curl -sS -X POST "$BASE_URL/api/streams/$STREAM_CURL_PATH" \\
+retry_curl() {
+  local body=""
+  local exit_code=0
+
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    exit_code=0
+    body="$(curl -sS "$@" 2>&1)" || exit_code="$?"
+    if [[ "$exit_code" == "0" ]]; then
+      printf '%s' "$body"
+      return 0
+    fi
+    sleep 1
+  done
+
+  printf '%s' "$body" >&2
+  return "$exit_code"
+}
+
+retry_curl -X POST "$BASE_URL/api/streams/$STREAM_CURL_PATH" \\
   -H 'content-type: application/json' \\
   -d '{"type":"https://events.iterate.com/events/example/value-recorded","payload":{"curl":true}}'
 echo
@@ -83,11 +101,11 @@ echo '---'
 retry_json_get "$BASE_URL/api/streams/__state/$STREAM_RPATH"
 echo
 echo '---'
-curl -sS -N "$BASE_URL/api/streams/$STREAM_CURL_PATH?beforeOffset=end"
+retry_curl -N "$BASE_URL/api/streams/$STREAM_CURL_PATH?beforeOffset=end"
 echo
 echo '---'
-curl -sS "$BASE_URL/api/streams/__children/%2F" >/dev/null
-curl -sS "$BASE_URL/api/streams/__state/%2F" >/dev/null
+retry_curl "$BASE_URL/api/streams/__children/%2F" >/dev/null
+retry_curl "$BASE_URL/api/streams/__state/%2F" >/dev/null
 `;
 
     const result = await x("bash", ["-lc", script], {
