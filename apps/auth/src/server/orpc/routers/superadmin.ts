@@ -1,7 +1,7 @@
 import { ORPCError } from "@orpc/server";
-import { and, desc, eq, isNull } from "drizzle-orm";
 import { os, superadminOnlyMiddleware } from "../orpc.ts";
-import { schema } from "../../db/index.ts";
+import { parseStringArray } from "../../db/helpers.ts";
+import { listSystemOAuthClients } from "../../db/queries/index.ts";
 import { auth } from "../../auth.ts";
 
 const superadminCreateOAuthClient = os.superadmin.oauth.createClient
@@ -30,15 +30,12 @@ const superadminCreateOAuthClient = os.superadmin.oauth.createClient
 const superadminListOAuthClients = os.superadmin.oauth.listClients
   .use(superadminOnlyMiddleware)
   .handler(async ({ context }) => {
-    const clients = await context.db.query.oauthClient.findMany({
-      where: and(eq(schema.oauthClient.disabled, false), isNull(schema.oauthClient.userId)),
-      orderBy: desc(schema.oauthClient.createdAt),
-    });
+    const clients = await listSystemOAuthClients(context.db);
 
     return clients.map((client) => ({
       clientId: client.clientId,
       clientName: client.name ?? "",
-      redirectURIs: client.redirectUris,
+      redirectURIs: parseStringArray(client.redirectUrisJson),
     }));
   });
 

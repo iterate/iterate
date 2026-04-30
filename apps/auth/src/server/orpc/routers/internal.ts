@@ -1,9 +1,24 @@
 import { ORPCError } from "@orpc/server";
-import { eq } from "drizzle-orm";
 import { resolveUniqueSlug } from "@iterate-com/shared/slug";
 import { os, protectedMiddleware, serviceMiddleware } from "../orpc.ts";
 import { auth, createProjectIngressToken as createSignedProjectIngressToken } from "../../auth.ts";
-import { schema } from "../../db/index.ts";
+import { parseProjectMetadata, parseStringArray } from "../../db/helpers.ts";
+import {
+  disableOAuthClientById,
+  getOAuthClientByReferenceId,
+  getOrganizationBySlug,
+  getProjectBySlug,
+  getUserByEmail,
+  getUserById,
+  insertMembership,
+  insertOrganization,
+  insertProjectReturning,
+  insertUser,
+  listMembersByOrganizationId,
+  updateOAuthClientById,
+  updateOAuthClientReferenceByClientId,
+  updateVerifiedUserById,
+} from "../../db/queries/index.ts";
 import {
   generateId,
   toMembershipRole,
@@ -16,19 +31,20 @@ const upsertVerifiedEmail = os.internal.user.upsertVerifiedEmail
   .use(serviceMiddleware)
   .handler(async ({ context, input }) => {
     const normalizedEmail = input.email.trim().toLowerCase();
-    const existing = await context.db.query.user.findFirst({
-      where: eq(schema.user.email, normalizedEmail),
-    });
+    const existing = await getUserByEmail(context.db, { email: normalizedEmail });
 
     if (existing) {
-      await context.db
-        .update(schema.user)
-        .set({
+      await updateVerifiedUserById(
+        context.db,
+        {
           name: input.name,
           image: input.image ?? existing.image ?? null,
-          emailVerified: true,
-        })
-        .where(eq(schema.user.id, existing.id));
+          updatedAt: Date.now(),
+        },
+        {
+          id: existing.id,
+        },
+      );
 
       return toUserRecord({
         ...existing,
@@ -38,15 +54,16 @@ const upsertVerifiedEmail = os.internal.user.upsertVerifiedEmail
     }
 
     const id = generateId("usr");
-    await context.db.insert(schema.user).values({
+    const now = Date.now();
+    await insertUser(context.db, {
       id,
       name: input.name,
       email: normalizedEmail,
-      emailVerified: true,
+      emailVerified: 1,
       image: input.image ?? null,
       role: "user",
-      createdAt: new Date(),
-      updatedAt: new Date(),
+      createdAt: now,
+      updatedAt: now,
     });
 
     return toUserRecord({
@@ -61,9 +78,7 @@ const upsertVerifiedEmail = os.internal.user.upsertVerifiedEmail
 const createForUser = os.internal.organization.createForUser
   .use(serviceMiddleware)
   .handler(async ({ context, input }) => {
-    const user = await context.db.query.user.findFirst({
-      where: eq(schema.user.id, input.userId),
-    });
+    const user = await getUserById(context.db, { id: input.userId });
     if (!user) {
       throw new ORPCError("NOT_FOUND", { message: "User not found" });
     }
@@ -72,29 +87,28 @@ const createForUser = os.internal.organization.createForUser
       name: input.name,
       slug: input.slug,
       isTaken: async (candidate) =>
-        Boolean(
-          await context.db.query.organization.findFirst({
-            where: eq(schema.organization.slug, candidate),
-          }),
-        ),
+        Boolean(await getOrganizationBySlug(context.db, { slug: candidate })),
     });
 
     const organizationId = generateId("org");
-    await context.db.insert(schema.organization).values({
-      id: organizationId,
-      name: input.name,
-      slug,
-      createdAt: new Date(),
-      metadata: null,
-      logo: null,
-    });
+    const now = Date.now();
+    await context.db.transaction(async (tx) => {
+      await insertOrganization(tx, {
+        id: organizationId,
+        name: input.name,
+        slug,
+        createdAt: now,
+        metadata: null,
+        logo: null,
+      });
 
-    await context.db.insert(schema.member).values({
-      id: generateId("member"),
-      organizationId,
-      userId: input.userId,
-      role: "owner",
-      createdAt: new Date(),
+      await insertMembership(tx, {
+        id: generateId("member"),
+        organizationId,
+        userId: input.userId,
+        role: "owner",
+        createdAt: now,
+      });
     });
 
     return toOrganizationRecord({
@@ -107,33 +121,36 @@ const createForUser = os.internal.organization.createForUser
 const members = os.internal.organization.members
   .use(serviceMiddleware)
   .handler(async ({ context, input }) => {
-    const organization = await context.db.query.organization.findFirst({
-      where: eq(schema.organization.slug, input.organizationSlug),
+    const organization = await getOrganizationBySlug(context.db, {
+      slug: input.organizationSlug,
     });
     if (!organization) {
       throw new ORPCError("NOT_FOUND", { message: "Organization not found" });
     }
 
-    const members = await context.db.query.member.findMany({
-      where: eq(schema.member.organizationId, organization.id),
-      with: {
-        user: true,
-      },
+    const members = await listMembersByOrganizationId(context.db, {
+      organizationId: organization.id,
     });
 
     return members.map((member) => ({
       id: member.id,
       userId: member.userId,
       role: toMembershipRole(member.role),
-      user: toUserRecord(member.user),
+      user: toUserRecord({
+        id: member.userId,
+        name: member.userName,
+        email: member.userEmail,
+        image: member.userImage ?? null,
+        role: member.userRole ?? null,
+      }),
     }));
   });
 
 const createForOrganization = os.internal.project.createForOrganization
   .use(serviceMiddleware)
   .handler(async ({ context, input }) => {
-    const organization = await context.db.query.organization.findFirst({
-      where: eq(schema.organization.slug, input.organizationSlug),
+    const organization = await getOrganizationBySlug(context.db, {
+      slug: input.organizationSlug,
     });
     if (!organization) {
       throw new ORPCError("NOT_FOUND", { message: "Organization not found" });
@@ -143,31 +160,28 @@ const createForOrganization = os.internal.project.createForOrganization
       name: input.name,
       slug: input.slug,
       isTaken: async (candidate) =>
-        Boolean(
-          await context.db.query.project.findFirst({
-            where: eq(schema.project.slug, candidate),
-          }),
-        ),
+        Boolean(await getProjectBySlug(context.db, { slug: candidate })),
     });
 
     const projectId = generateId("prj");
-    await context.db.insert(schema.project).values({
+    const now = Date.now();
+    const created = await insertProjectReturning(context.db, {
       id: projectId,
       organizationId: organization.id,
       name: input.name,
       slug,
-      metadata: input.metadata ?? {},
+      metadata: JSON.stringify(input.metadata ?? {}),
       archivedAt: null,
-      createdAt: new Date(),
-      updatedAt: new Date(),
+      createdAt: now,
+      updatedAt: now,
     });
 
     return toProjectRecord({
-      id: projectId,
-      organizationId: organization.id,
-      name: input.name,
-      slug,
-      metadata: input.metadata ?? {},
+      id: created.id,
+      organizationId: created.organization_id,
+      name: created.name,
+      slug: created.slug,
+      metadata: parseProjectMetadata(created.metadata),
       archivedAt: null,
     });
   });
@@ -176,28 +190,31 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
   .use(serviceMiddleware)
   .handler(async ({ context, input }) => {
     const redirectURIs = [...new Set(input.redirectURIs.map((uri) => uri.trim()))].sort();
-    const existing = await context.db.query.oauthClient.findFirst({
-      where: eq(schema.oauthClient.referenceId, input.referenceId),
+    const existing = await getOAuthClientByReferenceId(context.db, {
+      referenceId: input.referenceId,
     });
     const shouldRotateDevClient = input.referenceId.startsWith("dev:");
 
     if (existing?.clientSecret && !shouldRotateDevClient) {
-      const existingSorted = [...(existing.redirectUris ?? [])].sort();
+      const existingSorted = parseStringArray(existing.redirectUrisJson).sort();
       const needsUpdate =
         existing.name !== input.clientName ||
-        existing.disabled !== false ||
+        existing.disabled !== 0 ||
         JSON.stringify(existingSorted) !== JSON.stringify(redirectURIs);
 
       if (needsUpdate) {
-        await context.db
-          .update(schema.oauthClient)
-          .set({
+        await updateOAuthClientById(
+          context.db,
+          {
             name: input.clientName,
-            redirectUris: redirectURIs,
-            disabled: false,
-            updatedAt: new Date(),
-          })
-          .where(eq(schema.oauthClient.id, existing.id));
+            redirectUris: JSON.stringify(redirectURIs),
+            disabled: 0,
+            updatedAt: Date.now(),
+          },
+          {
+            id: existing.id,
+          },
+        );
       }
 
       return {
@@ -209,14 +226,15 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
     }
 
     if (existing && shouldRotateDevClient) {
-      await context.db
-        .update(schema.oauthClient)
-        .set({
-          referenceId: null,
-          disabled: true,
-          updatedAt: new Date(),
-        })
-        .where(eq(schema.oauthClient.id, existing.id));
+      await disableOAuthClientById(
+        context.db,
+        {
+          updatedAt: Date.now(),
+        },
+        {
+          id: existing.id,
+        },
+      );
     }
 
     const created = await auth.api.adminCreateOAuthClient({
@@ -233,16 +251,18 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
       });
     }
 
-    await context.db
-      .update(schema.oauthClient)
-      .set({
+    await updateOAuthClientReferenceByClientId(
+      context.db,
+      {
         referenceId: input.referenceId,
         name: input.clientName,
-        redirectUris: redirectURIs,
-        disabled: false,
-        updatedAt: new Date(),
-      })
-      .where(eq(schema.oauthClient.clientId, created.client_id));
+        redirectUris: JSON.stringify(redirectURIs),
+        updatedAt: Date.now(),
+      },
+      {
+        clientId: created.client_id,
+      },
+    );
 
     return {
       clientId: created.client_id,

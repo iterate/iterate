@@ -1,9 +1,13 @@
 import { ORPCError } from "@orpc/server";
-import { and, eq } from "drizzle-orm";
 import { authContract } from "@iterate-com/auth-contract";
 import { implement } from "@orpc/server";
 import type { RequestHeadersPluginContext } from "@orpc/server/plugins";
-import { schema } from "../db/index.ts";
+import { parseProjectMetadata } from "../db/helpers.ts";
+import {
+  getMembershipByOrganizationAndUserId,
+  getOrganizationBySlug,
+  getProjectWithOrganizationBySlug,
+} from "../db/queries/index.ts";
 import type { Variables } from "../utils/hono.ts";
 import type { CloudflareEnv } from "../env.ts";
 
@@ -56,18 +60,16 @@ async function loadOrganization(params: {
   organizationSlug: string;
   user: { id: string; role?: string | null };
 }) {
-  const organization = await params.db.query.organization.findFirst({
-    where: eq(schema.organization.slug, params.organizationSlug),
+  const organization = await getOrganizationBySlug(params.db, {
+    slug: params.organizationSlug,
   });
   if (!organization) {
     throw new ORPCError("NOT_FOUND", { message: "Organization not found" });
   }
 
-  const membership = await params.db.query.member.findFirst({
-    where: and(
-      eq(schema.member.organizationId, organization.id),
-      eq(schema.member.userId, params.user.id),
-    ),
+  const membership = await getMembershipByOrganizationAndUserId(params.db, {
+    organizationId: organization.id,
+    userId: params.user.id,
   });
   if (!membership && params.user.role !== "admin") {
     throw new ORPCError("FORBIDDEN", { message: "You do not have access to this organization" });
@@ -143,20 +145,29 @@ async function loadProject(params: {
   projectSlug: string;
   user: { id: string; role?: string | null };
 }) {
-  const projectRow = await params.db.query.project.findFirst({
-    where: eq(schema.project.slug, params.projectSlug),
-    with: { organization: true },
+  const projectRow = await getProjectWithOrganizationBySlug(params.db, {
+    slug: params.projectSlug,
   });
   if (!projectRow) {
     throw new ORPCError("NOT_FOUND", { message: "Project not found" });
   }
-  const { organization, ...project } = projectRow;
+  const organization = {
+    id: projectRow.organizationRecordId,
+    name: projectRow.organizationName,
+    slug: projectRow.organizationSlug,
+  };
+  const project = {
+    id: projectRow.id,
+    organizationId: projectRow.organizationId,
+    name: projectRow.name,
+    slug: projectRow.slug,
+    metadata: parseProjectMetadata(projectRow.metadata),
+    archivedAt: typeof projectRow.archivedAt === "number" ? new Date(projectRow.archivedAt) : null,
+  };
 
-  const membership = await params.db.query.member.findFirst({
-    where: and(
-      eq(schema.member.organizationId, organization.id),
-      eq(schema.member.userId, params.user.id),
-    ),
+  const membership = await getMembershipByOrganizationAndUserId(params.db, {
+    organizationId: organization.id,
+    userId: params.user.id,
   });
   if (!membership && params.user.role !== "admin") {
     throw new ORPCError("FORBIDDEN", { message: "You do not have access to this project" });

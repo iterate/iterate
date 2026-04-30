@@ -74,6 +74,8 @@ const DB = await D1Database("auth-db", {
   migrationsDir: "./src/server/db/migrations",
 });
 
+console.log(DB.name);
+
 const worker = await TanStackStart(APP_NAME, {
   name: workerName,
   bindings: {
