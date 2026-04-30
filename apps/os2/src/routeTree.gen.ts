@@ -18,6 +18,7 @@ import { Route as SignUpSsoCallbackRouteImport } from './routes/sign-up.sso-call
 import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
 import { Route as SignInSsoCallbackRouteImport } from './routes/sign-in.sso-callback'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
+import { Route as SessionTasksChooseOrganizationRouteImport } from './routes/session-tasks.choose-organization'
 import { Route as PosthogProxySplatRouteImport } from './routes/posthog-proxy.$'
 import { Route as ApiOrpcWsRouteImport } from './routes/api.orpc-ws'
 import { Route as ApiSplatRouteImport } from './routes/api.$'
@@ -78,6 +79,12 @@ const SignInSplatRoute = SignInSplatRouteImport.update({
   path: '/$',
   getParentRoute: () => SignInRoute,
 } as any)
+const SessionTasksChooseOrganizationRoute =
+  SessionTasksChooseOrganizationRouteImport.update({
+    id: '/session-tasks/choose-organization',
+    path: '/session-tasks/choose-organization',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const PosthogProxySplatRoute = PosthogProxySplatRouteImport.update({
   id: '/posthog-proxy/$',
   path: '/posthog-proxy/$',
@@ -172,6 +179,7 @@ export interface FileRoutesByFullPath {
   '/api/$': typeof ApiSplatRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
+  '/session-tasks/choose-organization': typeof SessionTasksChooseOrganizationRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-in/sso-callback': typeof SignInSsoCallbackRoute
   '/sign-up/$': typeof SignUpSplatRoute
@@ -197,6 +205,7 @@ export interface FileRoutesByTo {
   '/api/$': typeof ApiSplatRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
+  '/session-tasks/choose-organization': typeof SessionTasksChooseOrganizationRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-in/sso-callback': typeof SignInSsoCallbackRoute
   '/sign-up/$': typeof SignUpSplatRoute
@@ -221,6 +230,7 @@ export interface FileRoutesById {
   '/api/$': typeof ApiSplatRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
+  '/session-tasks/choose-organization': typeof SessionTasksChooseOrganizationRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-in/sso-callback': typeof SignInSsoCallbackRoute
   '/sign-up/$': typeof SignUpSplatRoute
@@ -248,6 +258,7 @@ export interface FileRouteTypes {
     | '/api/$'
     | '/api/orpc-ws'
     | '/posthog-proxy/$'
+    | '/session-tasks/choose-organization'
     | '/sign-in/$'
     | '/sign-in/sso-callback'
     | '/sign-up/$'
@@ -273,6 +284,7 @@ export interface FileRouteTypes {
     | '/api/$'
     | '/api/orpc-ws'
     | '/posthog-proxy/$'
+    | '/session-tasks/choose-organization'
     | '/sign-in/$'
     | '/sign-in/sso-callback'
     | '/sign-up/$'
@@ -296,6 +308,7 @@ export interface FileRouteTypes {
     | '/api/$'
     | '/api/orpc-ws'
     | '/posthog-proxy/$'
+    | '/session-tasks/choose-organization'
     | '/sign-in/$'
     | '/sign-in/sso-callback'
     | '/sign-up/$'
@@ -321,6 +334,7 @@ export interface RootRouteChildren {
   ApiSplatRoute: typeof ApiSplatRoute
   ApiOrpcWsRoute: typeof ApiOrpcWsRoute
   PosthogProxySplatRoute: typeof PosthogProxySplatRoute
+  SessionTasksChooseOrganizationRoute: typeof SessionTasksChooseOrganizationRoute
   ApiOrpcSplatRoute: typeof ApiOrpcSplatRoute
 }
 
@@ -388,6 +402,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/sign-in/$'
       preLoaderRoute: typeof SignInSplatRouteImport
       parentRoute: typeof SignInRoute
+    }
+    '/session-tasks/choose-organization': {
+      id: '/session-tasks/choose-organization'
+      path: '/session-tasks/choose-organization'
+      fullPath: '/session-tasks/choose-organization'
+      preLoaderRoute: typeof SessionTasksChooseOrganizationRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/posthog-proxy/$': {
       id: '/posthog-proxy/$'
@@ -605,6 +626,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiSplatRoute: ApiSplatRoute,
   ApiOrpcWsRoute: ApiOrpcWsRoute,
   PosthogProxySplatRoute: PosthogProxySplatRoute,
+  SessionTasksChooseOrganizationRoute: SessionTasksChooseOrganizationRoute,
   ApiOrpcSplatRoute: ApiOrpcSplatRoute,
 }
 export const routeTree = rootRouteImport

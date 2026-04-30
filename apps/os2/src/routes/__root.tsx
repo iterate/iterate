@@ -73,6 +73,11 @@ function RootComponent() {
         signInUrl={config.clerk.signInUrl}
         signUpUrl={config.clerk.signUpUrl}
         afterSignOutUrl={config.clerk.signInUrl}
+        // Clerk sends sessions with pending tasks to task-specific routes.
+        // `choose-organization` must render TaskChooseOrganization, not the
+        // normal OrganizationList chooser:
+        // https://clerk.com/docs/tanstack-react-start/reference/components/authentication/task-choose-organization
+        taskUrls={{ "choose-organization": "/session-tasks/choose-organization" }}
       >
         <Outlet />
       </ClerkProvider>
