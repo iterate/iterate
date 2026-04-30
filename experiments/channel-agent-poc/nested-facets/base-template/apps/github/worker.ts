@@ -1034,7 +1034,7 @@ export class App extends DurableObject {
       const eventsText = String(body.eventsText ?? "");
       try {
         parseDefaultEvents(eventsText);
-      } catch (_e: any) {
+      } catch (e: any) {
         return Response.json({ ok: false, error: e.message }, { status: 400 });
       }
       this.#setConfig("defaultEvents", eventsText);
