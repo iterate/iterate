@@ -75,7 +75,7 @@
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^6.0.1",
-    "alchemy": "^0.92.2",
+    "alchemy": "^0.83.3",
     "drizzle-kit": "^0.31.10",
     "tsx": "^4.20.3",
     "typescript": "^5.9.3",

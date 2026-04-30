@@ -2,9 +2,14 @@ import type { Client } from "sqlfu";
 
 const sql = `
 delete from projects
-where id = ?;
+where id = ?
+  and clerk_org_id = ?;
 `.trim();
-const query = (params: deleteProject.Params) => ({ sql, args: [params.id], name: "deleteProject" });
+const query = (params: deleteProject.Params) => ({
+  sql,
+  args: [params.id, params.clerkOrgId],
+  name: "deleteProject",
+});
 
 export const deleteProject = Object.assign(
   async function deleteProject(client: Client, params: deleteProject.Params) {
@@ -16,5 +21,6 @@ export const deleteProject = Object.assign(
 export namespace deleteProject {
   export type Params = {
     id: string;
+    clerkOrgId: string;
   };
 }

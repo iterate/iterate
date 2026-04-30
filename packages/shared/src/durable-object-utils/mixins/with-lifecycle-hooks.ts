@@ -495,7 +495,18 @@ export async function getOrInitializeDoStub<
  * `getOrInitializeDoStub()` receives init params without an explicit name.
  */
 export function deriveDurableObjectNameFromInitParams(options: { initParams: unknown }): string {
-  return `init:${canonicalJson(options.initParams)}`;
+  return `init:${serializeDurableObjectInitParams(options)}`;
+}
+
+/**
+ * Canonical JSON representation used for init-param-derived Durable Object identity.
+ *
+ * This keeps every caller on the same serialization rule: sort object keys,
+ * omit `undefined` object fields, preserve array order, and stringify the
+ * resulting JSON value.
+ */
+export function serializeDurableObjectInitParams(options: { initParams: unknown }): string {
+  return canonicalJson(options.initParams);
 }
 
 function canonicalJson(value: unknown): string {

@@ -1,29 +1,48 @@
 import { useCallback, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, createFileRoute, useRouter } from "@tanstack/react-router";
+import type { Project } from "@iterate-com/os2-contract";
 import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { orpc } from "~/orpc/client.ts";
 
-export const Route = createFileRoute("/_app/projects/$projectId")({
-  loader: async ({ context, params }) => {
-    const project = await context.queryClient.ensureQueryData({
-      ...orpc.projects.find.queryOptions({ input: { id: params.projectId } }),
-      staleTime: 30_000,
-    });
+export const Route = createFileRoute("/_app/orgs/$organizationSlug/projects/$projectSlug/settings")(
+  {
+    loader: async ({ context, params }) => {
+      await context.queryClient.ensureQueryData({
+        ...orpc.projects.findBySlug.queryOptions({ input: { slug: params.projectSlug } }),
+        staleTime: 30_000,
+      });
 
-    return {
-      breadcrumb: project.slug,
-      project,
-    };
+      return {
+        breadcrumb: "Settings",
+      };
+    },
+    component: ProjectDetailPage,
   },
-  component: ProjectDetailPage,
-});
+);
 
 function ProjectDetailPage() {
-  const { project } = Route.useLoaderData();
+  const params = Route.useParams();
+  const { data: project } = useQuery({
+    ...orpc.projects.findBySlug.queryOptions({ input: { slug: params.projectSlug } }),
+    staleTime: 30_000,
+  });
+
+  if (!project) return null;
+
+  return <ProjectDetailContent organizationSlug={params.organizationSlug} project={project} />;
+}
+
+function ProjectDetailContent({
+  organizationSlug,
+  project,
+}: {
+  organizationSlug: string;
+  project: Project;
+}) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [customHostname, setCustomHostname] = useState(project.customHostname ?? "");
@@ -31,6 +50,7 @@ function ProjectDetailPage() {
     orpc.projects.updateConfig.mutationOptions({
       onSuccess: () => {
         void queryClient.invalidateQueries({ queryKey: orpc.projects.find.key() });
+        void queryClient.invalidateQueries({ queryKey: orpc.projects.findBySlug.key() });
         void queryClient.invalidateQueries({ queryKey: orpc.projects.list.key() });
         void router.invalidate();
         toast.success("Project config saved.");
@@ -99,7 +119,12 @@ function ProjectDetailPage() {
         </div>
       </div>
 
-      <Button size="sm" variant="outline" nativeButton={false} render={<Link to="/projects" />}>
+      <Button
+        size="sm"
+        variant="outline"
+        nativeButton={false}
+        render={<Link to="/orgs/$organizationSlug/projects" params={{ organizationSlug }} />}
+      >
         Back to projects
       </Button>
     </section>

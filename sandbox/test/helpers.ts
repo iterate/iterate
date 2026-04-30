@@ -33,7 +33,7 @@
  *
  * Fly provider requires (typically from Doppler):
  *   - FLY_API_TOKEN
- *   - SANDBOX_NAME_PREFIX (dev|stg|prd)
+ *   - SANDBOX_NAME_PREFIX (dev|preview|prd)
  *   - FLY_DEFAULT_IMAGE (optional, defaults to registry.fly.io/iterate-sandbox:main)
  *
  * ## Usage Examples

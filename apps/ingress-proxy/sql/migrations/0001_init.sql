@@ -11,7 +11,7 @@
 --
 -- Each row also has a stable application-generated `id`. The worker generates
 -- this in TypeScript using the shared TypeID helper plus `TYPEID_PREFIX` from
--- env so ids stay explicit across development, staging, and production.
+-- env so ids stay explicit across development, preview, and production.
 CREATE TABLE IF NOT EXISTS ingress_proxy_route (
   id TEXT PRIMARY KEY,
   root_host TEXT NOT NULL UNIQUE,

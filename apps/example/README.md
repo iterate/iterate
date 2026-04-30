@@ -76,9 +76,13 @@ the shared `withEvlog()` wrapper in the runtime entrypoints rather than Nitro's
 ## Dev
 
 ```bash
-doppler run --config stg -- pnpm alchemy:up    # staging-style deploy
+# Normal preview lifecycle is managed from the repo root:
+# doppler run --project os --config prd -- pnpm preview sync --app example
+#
+# Fixed-slot manual deploy:
+doppler run --project example --config preview_1 -- pnpm alchemy:up
+doppler run --project example --config preview_1 -- pnpm alchemy:down
 doppler run --config prd -- pnpm alchemy:up    # production-style deploy
-doppler run --config stg -- pnpm alchemy:down  # destroy the staging stack
 pnpm dev          # Node dev server
 pnpm start        # Run the built server bundle and restart on rebuilds
 pnpm cf:dev       # Cloudflare local dev

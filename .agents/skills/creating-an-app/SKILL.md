@@ -46,7 +46,7 @@ doppler run --project os --config prd -- pnpm preview cleanup --app <slug>
 
 Workflow rules:
 
-- PR pushes deploy `stg`
+- PR pushes deploy `preview_N`
 - pushes to `main` deploy `prd`
 - PR deploys update the sticky PR comment
 - `main` deploy successes post to Slack
@@ -62,6 +62,6 @@ Use the `new-doppler-project` skill for the project/config setup.
 The app package should work with:
 
 ```bash
-doppler run --config stg -- pnpm alchemy:up
+doppler run --config preview_1 -- pnpm alchemy:up
 doppler run --config prd -- pnpm alchemy:up
 ```

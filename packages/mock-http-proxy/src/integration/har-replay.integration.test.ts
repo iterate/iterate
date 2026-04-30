@@ -11,8 +11,7 @@ import {
 } from "../server/mock-http-server-fixture.ts";
 
 const thisDir = dirname(fileURLToPath(import.meta.url));
-const isCi = process.env.CI === "true";
-const openAiReplayScriptTimeoutMs = isCi ? 6_000 : 2_500;
+const openAiReplayScriptTimeoutMs = 6_000;
 const replayStepTimeoutMs = 10_000;
 const replayTestTimeoutMs = 20_000;
 

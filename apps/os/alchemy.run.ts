@@ -52,7 +52,7 @@ if (!/^[\w-]+$/.test(app.stage)) {
 }
 
 const isProduction = app.stage === "prd";
-const isStaging = app.stage === "stg";
+const isPreviewStage = app.stage === "preview";
 const isDevelopment = app.local;
 const isPreview =
   app.stage === "dev" ||
@@ -428,9 +428,9 @@ async function verifyDopplerEnvironment() {
     );
   }
 
-  if (isStaging && !dopplerConfig.environment.startsWith("stg")) {
+  if (isPreviewStage && !dopplerConfig.environment.startsWith("preview")) {
     throw new Error(
-      `You are trying to deploy to staging, but the doppler environment is set to ${dopplerConfig.environment}, exiting...`,
+      `You are trying to deploy to preview, but the doppler environment is set to ${dopplerConfig.environment}, exiting...`,
     );
   }
 
@@ -460,7 +460,7 @@ const Env = z.object({
   SANDBOX_DAYTONA_ENABLED: BoolyString,
   SANDBOX_DOCKER_ENABLED: BoolyString,
   SANDBOX_FLY_ENABLED: BoolyString,
-  SANDBOX_NAME_PREFIX: z.enum(["dev", "stg", "prd"]),
+  SANDBOX_NAME_PREFIX: z.enum(["dev", "preview", "prd"]),
   SANDBOX_PROVIDER_PREFERENCE: Optional, // comma-separated list of providers in order of preference
   FLY_API_TOKEN: Optional,
   FLY_ORG: Optional,
@@ -649,8 +649,12 @@ async function setupDatabase() {
     };
   }
 
-  if (isStaging) {
+  if (isPreviewStage) {
     const planetscaleDb = await Database("planetscale-db", {
+      // Keep the existing PlanetScale database name while the public stage name
+      // changes from stg to preview. Renaming this field would make Alchemy
+      // adopt/create a different empty database even though the resource ID is
+      // unchanged.
       name: "os-staging",
       clusterSize: "PS_10",
       adopt: true,
@@ -810,7 +814,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
 
   const osWorkerRoutes = parseCsv(process.env.OS_WORKER_ROUTES);
   if (osWorkerRoutes.length === 0) {
-    throw new Error("OS_WORKER_ROUTES is required. Set it in Doppler for dev/stg/prd.");
+    throw new Error("OS_WORKER_ROUTES is required. Set it in Doppler for dev/preview/prd.");
   }
   const routeHosts = [...new Set([...osWorkerRoutes, ...domains, `*.${projectIngressDomain}`])];
   const allowedDomains = [
@@ -872,7 +876,11 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       // Use empty defaults outside dev so worker.Env contains these bindings for typing.
       ...dockerBindings,
     },
-    name: isProduction ? "os" : isStaging ? "os-staging" : undefined,
+    // Public environment names moved from staging/stg to preview, but this is
+    // the Cloudflare Worker script name Alchemy adopts. Keeping the historical
+    // os-staging resource avoids orphaning the existing preview worker while
+    // Doppler, URLs, and Alchemy stages use preview terminology.
+    name: isProduction ? "os" : isPreviewStage ? "os-staging" : undefined,
     // Place the worker near the PlanetScale Postgres primary
     // to minimise round-trip latency on DB-heavy pages.
     placement: { region: regionConfig.workerPlacementRegion },

@@ -5,7 +5,7 @@
 Prereqs:
 
 - `pnpm install` at repo root
-- `doppler setup --project os --config prd` (or `stg`/`dev`)
+- `doppler setup --project os --config prd` (or `preview_N`/`dev`)
 
 Deploy:
 

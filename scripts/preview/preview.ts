@@ -1,4 +1,7 @@
 import { spawn } from "node:child_process";
+import { promises as dns } from "node:dns";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
 import { stripAnsi } from "../../packages/shared/src/jonasland/strip-ansi.ts";
@@ -13,10 +16,24 @@ import { splitRepositoryFullName } from "./repository-full-name.ts";
 
 const defaultSemaphoreBaseUrl = "https://semaphore.iterate.com";
 const defaultPreviewLeaseMs = 60 * 60 * 1000;
-const defaultPreviewReadyTimeoutMs = 30_000;
+// Routed previews can be healthy before Cloudflare has finished issuing edge
+// certificates for newly-created wildcard hostnames. OS2 preview project hosts
+// are deeper subdomains, which Cloudflare Universal SSL does not cover; Total
+// TLS has to issue per-host certificates first:
+// https://developers.cloudflare.com/ssl/edge-certificates/universal-ssl/limitations/#full-setup
+// https://developers.cloudflare.com/ssl/edge-certificates/additional-options/total-tls/
+// Keep this long enough for first issuance while still returning immediately
+// once the health endpoint is reachable.
+const defaultPreviewReadyTimeoutMs = 600_000;
 const defaultPreviewReadyUrlPath = "/api/__internal/health";
 const defaultPreviewTestMaxAttempts = 2;
 const defaultPreviewTestRetryDelayMs = 5_000;
+const sharedPreviewDependencyPaths = [
+  ".github/workflows/cloudflare-preview.yml",
+  "packages/shared/src/alchemy/**",
+  "packages/shared/src/apps/**",
+  "scripts/preview/**",
+] as const;
 
 export type PreviewSemaphoreResourceClient = {
   ensurePreviewInventory: (input: { appSlug: string; type: string }) => Promise<void>;
@@ -137,6 +154,7 @@ export async function syncCloudflarePreviewForPullRequest(
       semaphoreBaseUrl: string;
     }) => PreviewSemaphoreResourceClient;
     dopplerProject: string;
+    excludedPreviewSlots?: number[];
     paths: readonly string[];
     previewResourceType: string;
     previewTestBaseUrlEnvVar: string;
@@ -209,6 +227,7 @@ export async function deployCloudflarePreviewForPullRequest(
       semaphoreBaseUrl: string;
     }) => PreviewSemaphoreResourceClient;
     dopplerProject: string;
+    excludedPreviewSlots?: number[];
     paths: readonly string[];
     previewResourceType: string;
     signal?: AbortSignal;
@@ -290,6 +309,7 @@ export async function deployCloudflarePreviewForPullRequest(
     commandEnvironment: params.commandEnvironment,
     createPreviewSemaphoreResourceClient: params.createPreviewSemaphoreResourceClient,
     dopplerProject: params.dopplerProject,
+    excludedPreviewSlots: params.excludedPreviewSlots,
     leaseMs: params.leaseMs,
     previewResourceType: params.previewResourceType,
     pullRequestHeadSha: pullRequest.pullRequestHeadSha,
@@ -512,6 +532,7 @@ async function createPreviewEnvironment(
       semaphoreBaseUrl: string;
     }) => PreviewSemaphoreResourceClient;
     dopplerProject: string;
+    excludedPreviewSlots?: number[];
     previewResourceType: string;
     signal?: AbortSignal;
     workingDirectory: string;
@@ -532,9 +553,12 @@ async function createPreviewEnvironment(
       appSlug: params.appSlug,
       type: params.previewResourceType,
     });
-    lease = await semaphore.acquire({
-      type: params.previewResourceType,
+    lease = await acquireSupportedPreviewLease({
+      excludedPreviewSlots: params.excludedPreviewSlots,
+      appSlug: params.appSlug,
       leaseMs: params.leaseMs,
+      previewResourceType: params.previewResourceType,
+      semaphore,
       waitMs: params.waitMs,
     });
     const previewEnvironment = derivePreviewEnvironment({
@@ -554,6 +578,7 @@ async function createPreviewEnvironment(
       previewEnvironmentSlug: lease.slug,
       previewEnvironmentType: params.previewResourceType,
       publicUrl: previewEnvironment.publicUrl,
+      projectSubdomainUrl: previewEnvironment.projectSubdomainUrl ?? null,
       runUrl: params.workflowRunUrl ?? null,
       shortSha: params.pullRequestHeadSha.slice(0, 7),
       updatedAt: new Date().toISOString(),
@@ -566,8 +591,6 @@ async function createPreviewEnvironment(
       "--config",
       previewEnvironment.previewEnvironmentDopplerConfigName,
       "--",
-      "env",
-      `ALCHEMY_STAGE=${previewEnvironment.previewEnvironmentAlchemyStageName}`,
       "pnpm",
       "alchemy:up",
     ];
@@ -590,10 +613,10 @@ async function createPreviewEnvironment(
       };
     }
 
-    const readiness = await waitForHttpReadiness({
+    const readiness = await waitForPreviewEnvironmentReadiness({
+      previewEnvironment,
       signal: params.signal,
       timeoutMs: defaultPreviewReadyTimeoutMs,
-      url: new URL(defaultPreviewReadyUrlPath, previewEnvironment.publicUrl),
     });
     if (!readiness.ok) {
       return {
@@ -665,8 +688,6 @@ async function destroyPreviewEnvironment(
     "--config",
     params.previewEnvironmentDopplerConfigName,
     "--",
-    "env",
-    `ALCHEMY_STAGE=${params.previewEnvironmentAlchemyStageName}`,
     "pnpm",
     "alchemy:down",
   ];
@@ -737,17 +758,119 @@ function derivePreviewEnvironment(input: {
     );
   }
 
+  const publicUrl =
+    input.appSlug === "os2"
+      ? `https://os2.iterate-preview-${slot}.com`
+      : input.appSlug === "events"
+        ? `https://${input.previewEnvironmentSlug}.iterate.com`
+        : `https://${input.previewEnvironmentSlug}.iterate-dev-stg.workers.dev`;
+
+  const projectSubdomainUrl =
+    input.appSlug === "os2"
+      ? `https://project.iterate-preview-${slot}.app`
+      : input.appSlug === "events"
+        ? `https://test.${input.previewEnvironmentSlug}.iterate.com`
+        : null;
+
+  const previewEnvironmentDopplerConfigName = `preview_${slot}`;
+
   return {
-    previewEnvironmentAlchemyStageName: `preview-${slot}`,
-    previewEnvironmentDopplerConfigName: `stg_${slot}`,
+    previewEnvironmentAlchemyStageName: previewEnvironmentDopplerConfigName,
+    previewEnvironmentDopplerConfigName,
     previewEnvironmentIdentifier: input.previewEnvironmentSlug,
     previewEnvironmentSlug: input.previewEnvironmentSlug,
     previewEnvironmentType: input.previewEnvironmentType,
-    publicUrl:
-      input.appSlug === "events" || input.appSlug === "os2"
-        ? `https://${input.previewEnvironmentSlug}.iterate.com`
-        : `https://${input.previewEnvironmentSlug}.iterate.workers.dev`,
+    publicUrl,
+    projectSubdomainUrl,
   };
+}
+
+async function acquireSupportedPreviewLease(input: {
+  appSlug: string;
+  excludedPreviewSlots?: number[];
+  leaseMs: number;
+  previewResourceType: string;
+  semaphore: PreviewSemaphoreResourceClient;
+  waitMs?: number;
+}) {
+  const skippedUnsupported: Array<{ leaseId: string; slug: string }> = [];
+  const excludedPreviewSlots = new Set(input.excludedPreviewSlots ?? []);
+
+  try {
+    for (;;) {
+      const lease = await input.semaphore.acquire({
+        type: input.previewResourceType,
+        leaseMs: input.leaseMs,
+        waitMs: input.waitMs,
+      });
+
+      if (
+        isSupportedPreviewEnvironmentSlug({
+          appSlug: input.appSlug,
+          excludedPreviewSlots,
+          slug: lease.slug,
+        })
+      ) {
+        await releaseSkippedUnsupportedPreviewLeases({
+          leases: skippedUnsupported,
+          previewResourceType: input.previewResourceType,
+          semaphore: input.semaphore,
+        });
+        return lease;
+      }
+
+      skippedUnsupported.push({ leaseId: lease.leaseId, slug: lease.slug });
+      if (skippedUnsupported.length >= 10) {
+        throw new Error(
+          `No supported ${input.appSlug} preview slots are available. Skipped: ${skippedUnsupported.map(({ slug }) => slug).join(", ")}.`,
+        );
+      }
+    }
+  } catch (error) {
+    await releaseSkippedUnsupportedPreviewLeases({
+      leases: skippedUnsupported,
+      previewResourceType: input.previewResourceType,
+      semaphore: input.semaphore,
+    });
+    throw error;
+  }
+}
+
+async function releaseSkippedUnsupportedPreviewLeases(input: {
+  leases: Array<{ leaseId: string; slug: string }>;
+  previewResourceType: string;
+  semaphore: PreviewSemaphoreResourceClient;
+}) {
+  await Promise.all(
+    input.leases.map((lease) =>
+      input.semaphore.release({
+        type: input.previewResourceType,
+        slug: lease.slug,
+        leaseId: lease.leaseId,
+      }),
+    ),
+  );
+}
+
+export function isSupportedPreviewEnvironmentSlug(input: {
+  appSlug: string;
+  excludedPreviewSlots?: ReadonlySet<number> | readonly number[];
+  slug: string;
+}) {
+  const slot = parsePreviewSlot({ appSlug: input.appSlug, slug: input.slug });
+  if (slot === null) return false;
+  const excludedPreviewSlots =
+    input.excludedPreviewSlots instanceof Set
+      ? input.excludedPreviewSlots
+      : new Set(input.excludedPreviewSlots ?? []);
+  return !excludedPreviewSlots.has(slot);
+}
+
+function parsePreviewSlot(input: { appSlug: string; slug: string }) {
+  const prefix = `${input.appSlug}-preview-`;
+  if (!input.slug.startsWith(prefix)) return null;
+  const slot = Number(input.slug.slice(prefix.length));
+  return Number.isInteger(slot) && slot > 0 ? slot : null;
 }
 
 function hasPreviewDestroyPayload(
@@ -850,16 +973,12 @@ async function waitForHttpReadiness(params: { signal?: AbortSignal; timeoutMs: n
 
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(params.url, {
-        method: "GET",
-        redirect: "follow",
-        signal: params.signal,
-      });
-      if (response.ok) {
+      const status = await fetchReadinessStatus(params.url, params.signal);
+      if (status >= 200 && status < 300) {
         return { ok: true as const };
       }
 
-      lastFailure = `Readiness check returned ${response.status} for ${params.url.toString()}.`;
+      lastFailure = `Readiness check returned ${status} for ${params.url.toString()}.`;
     } catch (error) {
       lastFailure = formatPreviewErrorMessage(error);
     }
@@ -871,6 +990,94 @@ async function waitForHttpReadiness(params: { signal?: AbortSignal; timeoutMs: n
     message: `Timed out waiting for preview readiness at ${params.url.toString()}. ${lastFailure}`,
     ok: false as const,
   };
+}
+
+async function waitForPreviewEnvironmentReadiness(params: {
+  previewEnvironment: ReturnType<typeof derivePreviewEnvironment>;
+  signal?: AbortSignal;
+  timeoutMs: number;
+}) {
+  const urls = [
+    new URL(defaultPreviewReadyUrlPath, params.previewEnvironment.publicUrl),
+    ...(params.previewEnvironment.projectSubdomainUrl
+      ? [new URL(defaultPreviewReadyUrlPath, params.previewEnvironment.projectSubdomainUrl)]
+      : []),
+  ];
+
+  for (const url of urls) {
+    const readiness = await waitForHttpReadiness({
+      signal: params.signal,
+      timeoutMs: params.timeoutMs,
+      url,
+    });
+    if (!readiness.ok) return readiness;
+  }
+
+  return { ok: true as const };
+}
+
+async function fetchReadinessStatus(url: URL, signal: AbortSignal | undefined): Promise<number> {
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      redirect: "follow",
+      signal,
+    });
+    return response.status;
+  } catch (error) {
+    if (!isDnsLookupError(error)) {
+      throw error;
+    }
+
+    return await requestStatusWithDnsResolve(url, signal);
+  }
+}
+
+async function requestStatusWithDnsResolve(url: URL, signal: AbortSignal | undefined) {
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(`Unsupported readiness URL protocol: ${url.protocol}`);
+  }
+
+  const addresses = await dns.resolve4(url.hostname);
+  const address = addresses[0];
+  if (!address) {
+    throw new Error(`No A record found for ${url.hostname}`);
+  }
+
+  const request = url.protocol === "https:" ? httpsRequest : httpRequest;
+  const resolvedUrl = new URL(url);
+  resolvedUrl.hostname = address;
+
+  return await new Promise<number>((resolve, reject) => {
+    const req = request(
+      resolvedUrl,
+      {
+        headers: { Host: url.host },
+        method: "GET",
+        servername: url.hostname,
+        signal,
+      },
+      (response) => {
+        const statusCode = response.statusCode ?? 0;
+        response.resume();
+        response.on("end", () => resolve(statusCode));
+      },
+    );
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+function isDnsLookupError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const cause = "cause" in error ? error.cause : null;
+  return (
+    ("code" in error && error.code === "ENOTFOUND") ||
+    (cause instanceof Error && "code" in cause && cause.code === "ENOTFOUND")
+  );
 }
 
 async function shouldSyncPreviewEnvironment(params: {
@@ -898,7 +1105,11 @@ async function shouldSyncPreviewEnvironment(params: {
     comparison.data.files?.flatMap((file) => (file.filename ? [file.filename] : [])) ?? [];
 
   return {
-    shouldSync: changedFiles.some((filename) => matchesPreviewPath(filename, params.appPaths)),
+    shouldSync: changedFiles.some(
+      (filename) =>
+        matchesPreviewPath(filename, params.appPaths) ||
+        matchesPreviewPath(filename, sharedPreviewDependencyPaths),
+    ),
   };
 }
 

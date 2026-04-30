@@ -1,5 +1,11 @@
 {
-  "include": ["**/*.ts", "**/*.tsx", "**/*.d.ts", "alchemy.run.ts"],
+  "include": ["**/*.ts", "**/*.tsx", "**/*.d.ts"],
+  "exclude": [
+    "alchemy.run.ts",
+    "tmp/**",
+    "**/*.workerd.test.ts",
+    "../../packages/shared/src/alchemy/**"
+  ],
   "compilerOptions": {
     "target": "ES2024",
     "jsx": "react-jsx",

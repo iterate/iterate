@@ -10,10 +10,9 @@
     "alchemy:up": "tsx ./alchemy.run.ts",
     "alchemy:down": "tsx ./alchemy.run.ts --destroy",
     "cli": "doppler run --project os2 -- iterate-app-cli",
-    "dev": "pnpm cf:dev",
+    "dev": "doppler run --project os2 -- tsx ./alchemy.run.ts",
     "build": "doppler run -- pnpm exec vite build",
     "rpc": "pnpm cli rpc",
-    "cf:dev": "doppler run --project os2 -- tsx ./alchemy.run.ts",
     "cf:deploy": "doppler run --project os2 --config prd -- pnpm alchemy:up",
     "cf:destroy": "doppler run --project os2 --config prd -- pnpm alchemy:down",
     "sqlfu:check": "sqlfu check all",
@@ -22,7 +21,10 @@
     "sqlfu:ui": "sqlfu",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:codemode-session": "OS2_CODEMODE_SESSION_TEST_APP_ROOT=$PWD pnpm --dir ../../packages/shared exec vitest run --config ../../apps/os2/src/durable-objects/codemode-session.vitest.config.ts",
+    "test:iterate-mcp-server": "OS2_ITERATE_MCP_SERVER_TEST_APP_ROOT=$PWD pnpm --dir ../../packages/shared exec vitest run --config ../../apps/os2/src/durable-objects/iterate-mcp-server.vitest.config.ts",
     "test:e2e": "node -e \"if (!process.env.OS2_BASE_URL) { console.error('OS2_BASE_URL is required for OS e2e tests'); process.exit(1); }\" && vitest run --config ./e2e/vitest.config.ts",
+    "test:e2e:preview": "tsx ./e2e/preview-smoke.ts",
     "test:smoke": "RUNTIME_SMOKE_FULL=1 vitest run",
     "test:watch": "vitest"
   },
@@ -32,6 +34,10 @@
     }
   },
   "dependencies": {
+    "@clerk/backend": "^3.4.1",
+    "@clerk/mcp-tools": "^0.5.0",
+    "@clerk/tanstack-react-start": "^1.1.7",
+    "@iterate-com/events-contract": "workspace:*",
     "@iterate-com/os2-contract": "workspace:*",
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",
@@ -62,11 +68,13 @@
   "devDependencies": {
     "@cloudflare/vite-plugin": "catalog:cloudflare",
     "@cloudflare/workers-types": "catalog:cloudflare",
+    "@iterate-com/mock-http-proxy": "workspace:*",
     "@tailwindcss/vite": "^4.1.18",
     "@tanstack/devtools-vite": "^0.6.0",
     "@types/node": "^25.0.10",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^6.0.1",
     "alchemy": "^0.83.3",
     "esbuild": "^0.27.4",
@@ -77,6 +85,7 @@
     "typescript": "^5.9.3",
     "vite": "^8.0.0",
     "vitest": "4.0.15",
-    "wrangler": "catalog:cloudflare"
+    "wrangler": "catalog:cloudflare",
+    "ws": "8.19.0"
   }
 }

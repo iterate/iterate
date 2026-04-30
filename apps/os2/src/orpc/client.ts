@@ -5,6 +5,7 @@ import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { createTanstackQueryUtils } from "@orpc/tanstack-query";
 import { createRouterClient, type RouterClient } from "@orpc/server";
 import { createIsomorphicFn, getGlobalStartContext } from "@tanstack/react-start";
+import { auth } from "@clerk/tanstack-react-start/server";
 import { osContract } from "@iterate-com/os2-contract";
 import { appRouter } from "~/orpc/root.ts";
 
@@ -54,7 +55,7 @@ const makeOrpcClient = createIsomorphicFn()
   .server(
     (): OrpcClient =>
       createRouterClient(appRouter, {
-        context: () => {
+        context: async () => {
           const context = getGlobalStartContext();
           if (!context) {
             throw new Error(
@@ -62,7 +63,10 @@ const makeOrpcClient = createIsomorphicFn()
             );
           }
 
-          return context;
+          return {
+            ...context,
+            auth: await auth(),
+          };
         },
       }),
   )
@@ -78,9 +82,12 @@ export const orpc = createTanstackQueryUtils(orpcClient);
  * The log stream demo needs explicit transport switching between OpenAPI fetch
  * and the websocket endpoint, so we keep the browser-only transport helpers here.
  */
-export function createBrowserWebSocketClient() {
+export function createBrowserWebSocketClient(options?: { organizationSlug?: string }) {
   const url = new URL("/api/orpc-ws", window.location.origin);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  if (options?.organizationSlug) {
+    url.searchParams.set("organizationSlug", options.organizationSlug);
+  }
   const websocket = new WebSocket(url.toString());
   const client = createORPCClient(new WebSocketRPCLink({ websocket })) as OrpcClient;
 

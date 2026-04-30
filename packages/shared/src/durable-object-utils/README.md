@@ -10,6 +10,7 @@ Utilities here are experimental helpers for composing Cloudflare Durable Object 
 - `mixins/with-multiplexed-alarms.ts` stores many logical one-shot alarms behind Cloudflare's single Durable Object alarm slot.
 - `mixins/with-scheduler.ts` adds key-based one-shot, delayed, interval, cron, and RRULE scheduling on top of multiplexed alarms.
 - `mixins/with-stream-processor-runner.ts` stores stream processor reduced state/progress per processor slug and exposes protected catch-up / live-event / subscription runner methods. It assumes one stream path per Durable Object instance.
+- `mixins/with-public-fetch-route.ts` adds instance helpers for stable public Durable Object paths and a worker-side fetcher that proxies `/durable-objects/:namespaceSlug/:mode/:payload/...` straight to `stub.fetch()`.
 - `mixins/with-outerbase.ts` and `mixins/with-kv-inspector.ts` are debug inspector mixins. Do not attach them to production-routed objects without an explicit auth/dev gating decision.
 - Avoid adding more mixins or composition helpers without speccing the API shape first.
 
@@ -304,6 +305,66 @@ async function handleRequest(this: Room) {
   return init.name;
 }
 ```
+
+## Public Fetch Routing
+
+Use `withPublicFetchRoute()` when a Durable Object should advertise a stable
+public Worker route while still owning its own internal `fetch()` paths:
+
+```ts
+const ProjectBase = withPublicFetchRoute({
+  namespaceSlug: "projects",
+  defaultAddressing: "by-name",
+})(withLifecycleHooks<ProjectInit>()(withDurableObjectCore(DurableObject)));
+
+export class Project extends ProjectBase<Env> {
+  async fetch(request: Request) {
+    await this.ensureStarted();
+    return new Response(new URL(request.url).pathname);
+  }
+}
+```
+
+Instances can generate their own public path:
+
+```ts
+project.getPublicDurableObjectPath();
+project.getPublicDurableObjectPath({ mode: "by-id" });
+project.getPublicDurableObjectPath({ mode: "by-init-params" });
+```
+
+The worker entrypoint mounts the proxy once near the top of `fetch()`, similar
+to Cloudflare Agents' `routeAgentRequest()` pattern:
+
+```ts
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const durableObjectResponse = await routeDurableObjectRequest(request, [
+      registerDurableObjectPublicRoute({
+        namespace: env.PROJECTS,
+        class: Project,
+      }),
+    ]);
+    if (durableObjectResponse) {
+      return durableObjectResponse;
+    }
+
+    return new Response("not a durable object route", { status: 404 });
+  },
+};
+```
+
+Public URLs always use one of these explicit address forms:
+
+- `/durable-objects/:namespaceSlug/by-name/:name/...`
+- `/durable-objects/:namespaceSlug/by-id/:durableObjectId/...`
+- `/durable-objects/:namespaceSlug/by-init-params/:encodedCanonicalJson/...`
+
+The fetcher returns `undefined` when the request is outside the
+`/durable-objects` prefix, so the worker can continue with its normal routing.
+When it does match, the fetcher strips the public prefix, preserves the
+remaining path/query/method/headers/body, and forwards the rewritten request to
+`stub.fetch()`.
 
 Init params are persistent identity/config, not dependency injection. They must
 be values that can cross Durable Object RPC and be stored in Durable Object

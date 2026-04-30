@@ -31,6 +31,7 @@ export const CloudflarePreviewEntry = z.object({
   previewEnvironmentSlug: z.string().trim().min(1).nullable().optional(),
   previewEnvironmentType: z.string().trim().min(1).nullable().optional(),
   publicUrl: z.string().trim().url().nullable().optional(),
+  projectSubdomainUrl: z.string().trim().url().nullable().optional(),
   runUrl: z.string().trim().url().nullable().optional(),
   shortSha: z.string().trim().min(1).nullable().optional(),
 });
@@ -142,6 +143,7 @@ function renderPreviewEntry(entry: CloudflarePreviewEntry) {
     `Status: ${renderStatusLabel(entry.status)}`,
     entry.shortSha ? `Commit: \`${entry.shortSha}\`` : null,
     entry.publicUrl ? `Preview: ${entry.publicUrl}` : null,
+    entry.projectSubdomainUrl ? `Projects: ${entry.projectSubdomainUrl}` : null,
     entry.previewEnvironmentIdentifier
       ? `Environment: \`${entry.previewEnvironmentIdentifier}\``
       : null,

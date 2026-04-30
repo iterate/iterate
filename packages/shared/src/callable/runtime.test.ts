@@ -1,6 +1,7 @@
 import { env, exports as workerExports } from "cloudflare:workers";
 import { describe, expect, test, vi } from "vitest";
 import {
+  assertCallableDispatchContext,
   connectCallableWebSocket,
   dispatchCallable,
   dispatchCallableFetch,
@@ -371,6 +372,63 @@ describe("callable validation", () => {
         },
       }),
     ).toThrow("Invalid callable");
+  });
+});
+
+describe("callable dispatch context validation", () => {
+  test("accepts loopback bindings when the dispatch context has matching exports", () => {
+    expect(
+      assertCallableDispatchContext({
+        callable: {
+          type: "workers-rpc",
+          via: {
+            type: "loopback-binding",
+            bindingType: "service",
+            exportName: "CallableLoopbackService",
+            props: { tenantId: "tenant_loopback" },
+          },
+          rpcMethod: "echo",
+        },
+        ctx: { exports: workerExports },
+      }),
+    ).toMatchObject({
+      type: "workers-rpc",
+      via: { type: "loopback-binding" },
+    });
+  });
+
+  test("rejects loopback bindings when the dispatch context has no exports", () => {
+    expect(() =>
+      assertCallableDispatchContext({
+        callable: {
+          type: "workers-rpc",
+          via: {
+            type: "loopback-binding",
+            bindingType: "service",
+            exportName: "CallableLoopbackService",
+          },
+          rpcMethod: "echo",
+        },
+        ctx: {},
+      }),
+    ).toThrow("Loopback export");
+  });
+
+  test("rejects missing env bindings in the dispatch context", () => {
+    expect(() =>
+      assertCallableDispatchContext({
+        callable: {
+          type: "workers-rpc",
+          via: {
+            type: "env-binding",
+            bindingType: "service",
+            bindingName: "MISSING_SERVICE",
+          },
+          rpcMethod: "echo",
+        },
+        ctx: { env: testEnv },
+      }),
+    ).toThrow('Binding "MISSING_SERVICE" not found');
   });
 });
 

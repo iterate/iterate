@@ -12,7 +12,8 @@
   - `Deploy Ingress Proxy`
 - Preview state lives in the managed PR body section, not in PR comments
 - Semaphore stores preview pool inventory and leases
-- Doppler `stg_N` configs back preview slots
+- Doppler `preview_N` configs back preview slots
+- `_shared/preview` sets `ALCHEMY_STAGE=${DOPPLER_CONFIG}`, so the selected `preview_N` config determines the Alchemy stage
 - Doppler `prd` config backs real deploys
 
 ## Most useful commands
@@ -38,7 +39,7 @@ gh workflow run "Deploy Events" --ref main -f ref=main -f stage=prd
 
 ## Mental model
 
-- Previews are temporary `stg_N` deploys attached to leased Semaphore slots.
+- Previews are temporary `preview_N` deploys attached to leased Semaphore slots.
 - Production deploys are plain `prd` deploys for each app.
 - Previews and production are deliberately separate:
   - PRs never use the per-app prod deploy workflows
@@ -52,11 +53,30 @@ gh workflow run "Deploy Events" --ref main -f ref=main -f stage=prd
 4. It acquires a Semaphore lease from the app’s preview pool.
 5. It derives the preview slot names from the leased slug:
    - resource slug like `events-preview-1`
-   - Doppler config like `stg_1`
-   - Alchemy stage like `preview-1`
+   - Doppler config like `preview_1`
+   - Alchemy stage like `preview_1`
    - public URL from that slot's deploy shape (for example `https://events-preview-1.iterate.com` for routed apps, or `https://example-preview-1.iterate.workers.dev` for workers.dev-only apps)
-6. It deploys the app with the selected `stg_N` Doppler config intact, runs that app’s preview e2e command, and writes the result back into the PR body.
+6. It deploys the app with the selected `preview_N` Doppler config intact, runs that app’s preview e2e command, and writes the result back into the PR body.
 7. On PR close, the same workflow runs cleanup and releases the lease.
+
+## Semaphore token
+
+Preview commands need a Semaphore bearer token. The repo-root preview router gets it from `SEMAPHORE_API_TOKEN`, falling back to `APP_CONFIG_SHARED_API_SECRET`.
+
+For normal operator work, use the `os` production Doppler config:
+
+```bash
+doppler run --project os --config prd -- pnpm preview status
+doppler run --project os --config prd -- pnpm preview sync --app os2 --pull-request-number 1234
+```
+
+For Semaphore maintenance itself, use the `semaphore` production Doppler config:
+
+```bash
+doppler run --project semaphore --config prd -- pnpm seed:preview-pool
+```
+
+The Semaphore UI labels this as an operator token. It is the same shared API secret; never commit it or paste the value into a PR.
 
 ## How production deploys work
 
@@ -82,7 +102,7 @@ gh workflow run "Deploy Events" --ref main -f ref=main -f stage=prd
 - If the PR body state is lost, the next sync can create a fresh preview and an old preview may linger until later cleanup or slot reuse.
 - Preview jobs that mutate the PR body must stay serialized per PR.
 - Preview tests are intentionally narrower than the slowest full app e2e suites.
-- Preview deploys do not blank `WORKER_ROUTES`; route-driven previews should be configured in the app's `stg_N` Doppler configs.
+- Preview deploys do not override `ALCHEMY_STAGE`; route-driven previews should be configured in the app's `preview_N` Doppler configs.
 - `example` currently has no real network e2e cases; its `test:e2e` command passes with no tests.
 
 ## Prod verification commands

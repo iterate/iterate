@@ -1,4 +1,5 @@
 packages:
+  - experiments/channel-agent-poc/nested-facets
   - jonasland
   - apps/ingress-proxy
   - apps/ingress-proxy-contract

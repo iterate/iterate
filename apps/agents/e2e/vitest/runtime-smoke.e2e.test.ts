@@ -4,6 +4,7 @@ import { AppConfig } from "../../src/app.ts";
 
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
 const agentsBaseUrl = process.env.AGENTS_BASE_URL?.trim();
+/** Opt-in: production/preview agents URL must respond (Cloudflare 522 if origin is down). */
 const runRuntimeSmoke =
   process.env.AGENTS_E2E_RUNTIME_SMOKE === "1" && Boolean(agentsBaseUrl) && !process.env.CI;
 

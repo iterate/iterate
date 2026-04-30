@@ -46,6 +46,10 @@ writeFileSync(
             name: "LISTED_ROOMS",
             class_name: "ListedRoom",
           },
+          {
+            name: "PUBLIC_ROUTE_ROOMS",
+            class_name: "PublicRouteTestRoom",
+          },
         ],
       },
       d1_databases: [
@@ -66,6 +70,7 @@ writeFileSync(
             "SchedulerTestRoom",
             "InspectorTestRoom",
             "ListedRoom",
+            "PublicRouteTestRoom",
           ],
         },
       ],
@@ -88,6 +93,10 @@ export default defineConfig({
     include: ["./src/durable-object-utils/**/*.unit.test.ts"],
     exclude: [...defaultExclude],
     hookTimeout: 60_000,
+    // KNOWN_RRULE_SOURCEMAP_WARNING: `rrule@2.8.1` ships sourcemap references
+    // to source files that are not included in the published package. Vite
+    // prints noisy warnings during this suite. Leave test behavior untouched
+    // here unless we decide to solve it at a broader tooling boundary.
     testTimeout: 45_000,
   },
   root,

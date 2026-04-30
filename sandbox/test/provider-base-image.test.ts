@@ -14,7 +14,11 @@ const TEST_APP_PREFIX = process.env.SANDBOX_TEST_APP_PREFIX ?? "test-base-image-
 const TEST_RUN_SUFFIX = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const TEST_EXTERNAL_ID = `${TEST_APP_PREFIX}-${TEST_RUN_SUFFIX}`;
 const TEST_ID = `base-image-test-${TEST_RUN_SUFFIX}`;
-const PROVIDER_API_TEST_TIMEOUT_MS = TEST_CONFIG.provider === "fly" ? 180_000 : 120_000;
+// Fly machine creation can spend most of the provider's 300s wait budget pulling
+// the freshly-built image before the machine reaches `started`. Keep the test
+// timeout above that provider timeout so CI reports the provider's diagnostic
+// error instead of Vitest killing the test mid-wait.
+const PROVIDER_API_TEST_TIMEOUT_MS = TEST_CONFIG.provider === "fly" ? 360_000 : 120_000;
 
 describe
   .runIf(RUN_SANDBOX_TESTS)
