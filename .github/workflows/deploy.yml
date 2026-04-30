@@ -5,7 +5,7 @@ on:
   workflow_call:
     inputs:
       stage:
-        description: The stage to deploy to. Must correspond to a Doppler config in the os project (prd, stg, dev, dev_bob etc.).
+        description: The production stage to deploy. This workflow currently accepts only prd.
         required: true
         type: string
       deploy_iterate_com:

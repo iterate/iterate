@@ -23,9 +23,13 @@ Cloudflare-only: TanStack Start + oRPC + raw D1 route registry, plus public-host
 ## Scripts
 
 ```bash
-doppler run --config stg -- pnpm alchemy:up
+# Normal preview lifecycle is managed from the repo root:
+# doppler run --project os --config prd -- pnpm preview sync --app ingress-proxy
+#
+# Fixed-slot manual deploy:
+doppler run --project ingress-proxy --config preview_1 -- pnpm alchemy:up
+doppler run --project ingress-proxy --config preview_1 -- pnpm alchemy:down
 doppler run --config prd -- pnpm alchemy:up
-doppler run --config stg -- pnpm alchemy:down
 doppler run --config prd -- pnpm alchemy:down
 ```
 

@@ -42,13 +42,13 @@ describe("buildCanonicalMachineExternalId", () => {
   it("respects max length by truncating only project slug", () => {
     const machineId = "mach_01k8j0abcdxyz1234567890pqrs";
     const externalId = buildCanonicalMachineExternalId({
-      prefix: "stg",
+      prefix: "preview",
       projectSlug: "project-with-a-really-really-really-really-really-long-slug",
       machineId,
     });
 
     expect(externalId.length).toBeLessThanOrEqual(MAX_CANONICAL_MACHINE_NAME_LENGTH);
-    expect(externalId.startsWith("stg-")).toBe(true);
+    expect(externalId.startsWith("preview-")).toBe(true);
     expect(externalId.endsWith(`-${machineId.replaceAll("_", "-")}`)).toBe(true);
   });
 

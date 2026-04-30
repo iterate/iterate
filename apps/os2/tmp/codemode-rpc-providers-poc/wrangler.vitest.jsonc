@@ -1,0 +1,36 @@
+{
+  "name": "os2-codemode-rpc-providers-poc",
+  "main": "entry.workerd.vitest.ts",
+  "compatibility_date": "2026-04-27",
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "CODEMODE_HOST",
+        "class_name": "CodemodeHost",
+      },
+      {
+        "name": "CODEMODE_SESSION",
+        "class_name": "CodemodeSession",
+      },
+      {
+        "name": "PROVIDER_A",
+        "class_name": "ProviderA",
+      },
+      {
+        "name": "PROVIDER_B",
+        "class_name": "ProviderB",
+      },
+    ],
+  },
+  "worker_loaders": [
+    {
+      "binding": "LOADER",
+    },
+  ],
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["CodemodeHost", "CodemodeSession", "ProviderA", "ProviderB"],
+    },
+  ],
+}

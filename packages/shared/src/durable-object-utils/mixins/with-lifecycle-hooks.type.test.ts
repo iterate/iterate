@@ -9,6 +9,10 @@ import { withKvInspector } from "./with-kv-inspector.ts";
 import { withMultiplexedAlarms } from "./with-multiplexed-alarms.ts";
 import type { MultiplexedAlarmRecord } from "./with-multiplexed-alarms.ts";
 import { withOuterbase } from "./with-outerbase.ts";
+import {
+  registerDurableObjectPublicRoute,
+  withPublicFetchRoute,
+} from "./with-public-fetch-route.ts";
 import { withScheduler } from "./with-scheduler.ts";
 import type { SchedulerRecord } from "./with-scheduler.ts";
 import type { LifecycleInitInput } from "./with-lifecycle-hooks.ts";
@@ -388,5 +392,30 @@ describe("inspector mixin types", () => {
     // Constructor<FetchBase>` result is enough. If this stops compiling, a
     // wrapper erased the normal `Base<Env>` Durable Object shape.
     expectTypeOf(inspector.fetch).toBeFunction();
+  });
+});
+
+describe("public fetch route mixin types", () => {
+  it("adds an instance path helper and preserves the generic Durable Object base shape", () => {
+    const PublicRouteRoomBase = withPublicFetchRoute({
+      namespaceSlug: "rooms",
+      defaultAddressing: "by-init-params",
+    })(RoomBase);
+
+    class PublicRouteRoom extends PublicRouteRoomBase<Env> {}
+
+    const publicRouteRoom = {} as PublicRouteRoom;
+    const publicRouteNamespace = {} as DurableObjectNamespace<PublicRouteRoom>;
+
+    expectTypeOf(publicRouteRoom.getPublicDurableObjectPath()).toEqualTypeOf<string>();
+    expectTypeOf(
+      publicRouteRoom.getPublicDurableObjectPath({ mode: "by-id" }),
+    ).toEqualTypeOf<string>();
+    const registration = registerDurableObjectPublicRoute({
+      namespace: publicRouteNamespace,
+      class: PublicRouteRoom,
+    });
+
+    expectTypeOf(registration.namespaceSlug).toEqualTypeOf<string>();
   });
 });

@@ -52,9 +52,11 @@ function createPreviewSemaphoreClient(input: {
 
   return {
     ensurePreviewInventory: async ({ appSlug, type }: { appSlug: string; type: string }) => {
+      const app = cloudflarePreviewApps[CloudflarePreviewAppSlug.parse(appSlug)];
       await ensurePreviewInventory({
         appSlug,
         client: { add, list },
+        excludedSlots: app.excludedPreviewSlots,
         type,
       });
     },
@@ -73,6 +75,7 @@ function getPreviewAppRuntime(app: (typeof cloudflarePreviewApps)[CloudflarePrev
     commandEnvironment: env,
     createPreviewSemaphoreResourceClient: createPreviewSemaphoreClient,
     dopplerProject: app.dopplerProject,
+    excludedPreviewSlots: app.excludedPreviewSlots,
     previewResourceType: app.previewResourceType,
     previewTestBaseUrlEnvVar: app.previewTestBaseUrlEnvVar,
     previewTestCommandArgs: app.previewTestCommandArgs,

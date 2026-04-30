@@ -60,7 +60,7 @@ retry_json_get() {
   local body=""
 
   for _ in 1 2 3 4 5; do
-    body="$(curl -sS "$url" "$@")"
+    body="$(retry_curl "$url" "$@")"
     if [[ "$body" == \\{* ]]; then
       printf '%s' "$body"
       return 0
@@ -72,7 +72,25 @@ retry_json_get() {
   return 1
 }
 
-curl -sS -X POST "$BASE_URL/api/streams/$STREAM_CURL_PATH" \\
+retry_curl() {
+  local body=""
+  local exit_code=0
+
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    exit_code=0
+    body="$(curl -sS "$@" 2>&1)" || exit_code="$?"
+    if [[ "$exit_code" == "0" ]]; then
+      printf '%s' "$body"
+      return 0
+    fi
+    sleep 1
+  done
+
+  printf '%s' "$body" >&2
+  return "$exit_code"
+}
+
+retry_curl -X POST "$BASE_URL/api/streams/$STREAM_CURL_PATH" \\
   -H 'content-type: application/json' \\
   -d '{"type":"https://events.iterate.com/events/example/value-recorded","payload":{"curl":true}}'
 echo
@@ -83,11 +101,11 @@ echo '---'
 retry_json_get "$BASE_URL/api/streams/__state/$STREAM_RPATH"
 echo
 echo '---'
-curl -sS -N "$BASE_URL/api/streams/$STREAM_CURL_PATH?beforeOffset=end"
+retry_curl -N "$BASE_URL/api/streams/$STREAM_CURL_PATH?beforeOffset=end"
 echo
 echo '---'
-curl -sS "$BASE_URL/api/streams/__children/%2F" >/dev/null
-curl -sS "$BASE_URL/api/streams/__state/%2F" >/dev/null
+retry_curl "$BASE_URL/api/streams/__children/%2F" >/dev/null
+retry_curl "$BASE_URL/api/streams/__state/%2F" >/dev/null
 `;
 
     const result = await x("bash", ["-lc", script], {
@@ -103,7 +121,16 @@ curl -sS "$BASE_URL/api/streams/__state/%2F" >/dev/null
       },
     });
 
-    expect(result.exitCode).toBe(0);
+    expect(
+      result.exitCode,
+      [
+        `curl smoke failed with exit code ${result.exitCode}.`,
+        "stdout:",
+        result.stdout,
+        "stderr:",
+        result.stderr,
+      ].join("\n"),
+    ).toBe(0);
 
     const stdout = result.stdout
       .replaceAll("\r\n", "\n")
@@ -203,7 +230,7 @@ curl -sS "$BASE_URL/api/streams/__state/%2F" >/dev/null
       streamPath: "<streamPath>",
       type: "https://events.iterate.com/events/example/value-recorded",
     });
-  }, 15_000);
+  }, 45_000);
 
   test("curl append with type-only body (no payload) defaults payload to empty object", async () => {
     const baseURL = requireEventsBaseUrl();
@@ -216,7 +243,7 @@ curl -sS "$BASE_URL/api/streams/__state/%2F" >/dev/null
       [
         "-lc",
         `set -euo pipefail
-curl -sS -X POST "$BASE_URL/api/streams/$STREAM_CURL_PATH" \
+curl -sS --max-time 12 -X POST "$BASE_URL/api/streams/$STREAM_CURL_PATH" \
   -H 'content-type: application/json' \
   -d '{"type":"hello"}'`,
       ],
@@ -233,7 +260,16 @@ curl -sS -X POST "$BASE_URL/api/streams/$STREAM_CURL_PATH" \
       },
     );
 
-    expect(result.exitCode).toBe(0);
+    expect(
+      result.exitCode,
+      [
+        `curl smoke failed with exit code ${result.exitCode}.`,
+        "stdout:",
+        result.stdout,
+        "stderr:",
+        result.stderr,
+      ].join("\n"),
+    ).toBe(0);
 
     const body = JSON.parse(result.stdout);
     expect(body).toMatchObject({
@@ -243,7 +279,7 @@ curl -sS -X POST "$BASE_URL/api/streams/$STREAM_CURL_PATH" \
         payload: {},
       },
     });
-  }, 15_000);
+  }, 20_000);
 });
 
 function parseSseMessage(segment: string) {

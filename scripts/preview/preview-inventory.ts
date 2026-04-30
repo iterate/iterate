@@ -9,13 +9,19 @@ export async function ensurePreviewInventory(input: {
   appSlug: string;
   client: PreviewInventoryClient;
   count?: number;
+  excludedSlots?: number[];
   type: string;
 }) {
   const existingResources = await input.client.list({ type: input.type });
   const existingSlugs = new Set(existingResources.map((resource) => resource.slug));
   const count = input.count ?? DEFAULT_PREVIEW_RESOURCE_COUNT;
+  const excludedSlots = new Set(input.excludedSlots ?? []);
 
   for (let slot = 1; slot <= count; slot += 1) {
+    if (excludedSlots.has(slot)) {
+      continue;
+    }
+
     const slug = `${input.appSlug}-preview-${slot}`;
     if (existingSlugs.has(slug)) {
       continue;

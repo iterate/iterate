@@ -4,7 +4,23 @@ import { z } from "zod";
 import packageJson from "../package.json" with { type: "json" };
 
 export const AppConfig = BaseAppConfig.extend({
-  pirateSecret: redacted(z.string().trim().min(1).default("os")),
+  eventsBaseUrl: z.string().trim().url(),
+  clerk: z.object({
+    publishableKey: publicValue(z.string().trim().min(1)),
+    secretKey: redacted(z.string().trim().min(1)),
+    jwtKey: redacted(z.string().trim().min(1)),
+    oauthClientId: publicValue(z.string().trim().min(1)).optional(),
+    oauthClientSecret: redacted(z.string().trim().min(1)).optional(),
+    signInUrl: publicValue(z.string().trim().min(1).default("/sign-in")),
+    signUpUrl: publicValue(z.string().trim().min(1).default("/sign-up")),
+    afterSignInUrl: publicValue(z.string().trim().min(1).default("/")),
+    afterSignUpUrl: publicValue(z.string().trim().min(1).default("/")),
+    mcpOauthScopes: z
+      .array(z.enum(["openid", "profile", "email"]))
+      .default(["openid", "profile", "email"]),
+  }),
+  mcpProofSecret: redacted(z.string().trim().min(1)),
+  projectHostnameBases: publicValue(z.array(z.string().trim().min(1)).default([])),
   typeIdPrefix: redacted(
     z
       .string()
@@ -24,8 +40,8 @@ export type AppConfig = z.output<typeof AppConfig>;
 const manifest = {
   packageName: packageJson.name,
   version: packageJson.version,
-  slug: "os",
-  description: "Minimal full-stack OS app with TanStack Start and oRPC.",
+  slug: "os2",
+  description: "Iterate OS v2 — dashboard and project subdomain routing.",
 } as const satisfies AppManifest;
 
 export default manifest;

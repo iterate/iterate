@@ -26,7 +26,7 @@ export default {
       inputs: {
         stage: {
           description:
-            "The stage to deploy to. Must correspond to a Doppler config in the os project (prd, stg, dev, dev_bob etc.).",
+            "The stage to deploy to. Must correspond to a Doppler config in the os project (prd, preview, dev, dev_bob etc.).",
           required: false,
           type: "string",
         },
@@ -105,8 +105,8 @@ export default {
           },
           run: [
             "set -euo pipefail",
-            'echo "Promoting FLY_DEFAULT_IMAGE=${FLY_IMAGE_TAG} to dev/stg/prd"',
-            "for cfg in dev stg prd; do",
+            'echo "Promoting FLY_DEFAULT_IMAGE=${FLY_IMAGE_TAG} to os dev/preview/prd base configs"',
+            "for cfg in dev preview prd; do",
             '  doppler secrets set FLY_DEFAULT_IMAGE="${FLY_IMAGE_TAG}" --project os --config "${cfg}"',
             "done",
           ].join("\n"),

@@ -38,7 +38,7 @@ export default workflow({
           default: false,
         },
         doppler_config: {
-          description: "Doppler config (dev, stg, prd)",
+          description: "Doppler config (dev, preview, prd)",
           required: false,
           type: "string",
           default: "dev",
@@ -56,7 +56,7 @@ export default workflow({
           default: false,
         },
         doppler_configs_to_update: {
-          description: "Comma-separated Doppler configs to update (e.g. dev,stg,prd)",
+          description: "Comma-separated Doppler configs to update (e.g. dev,preview,prd)",
           required: false,
           type: "string",
           default: "",
@@ -98,7 +98,7 @@ export default workflow({
           default: false,
         },
         doppler_config: {
-          description: "Doppler config (dev, stg, prd)",
+          description: "Doppler config (dev, preview, prd)",
           required: false,
           type: "string",
           default: "dev",
@@ -116,7 +116,7 @@ export default workflow({
           default: false,
         },
         doppler_configs_to_update: {
-          description: "Comma-separated Doppler configs to update (e.g. dev,stg,prd)",
+          description: "Comma-separated Doppler configs to update (e.g. dev,preview,prd)",
           required: false,
           type: "string",
           default: "",

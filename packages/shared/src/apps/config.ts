@@ -60,7 +60,13 @@ const appConfigSchemaMetadata = new WeakMap<z.ZodTypeAny, AppConfigSchemaMetadat
  * runtime code.
  */
 export const BaseAppConfig = z.object({
+  baseUrl: z.url().optional(),
   externalEgressProxy: z.url().optional(),
+  deployment: z
+    .object({
+      workerScriptName: z.string().trim().min(1),
+    })
+    .optional(),
   logs: AppLogsConfig.default({
     stdoutFormat: "pretty",
     filtering: {

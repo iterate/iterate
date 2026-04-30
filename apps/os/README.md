@@ -82,7 +82,7 @@ All environments use a single PostHog project with `$environment` property set v
 | Stage     | Description                  |
 | --------- | ---------------------------- |
 | `local-*` | Developer local environments |
-| `stg`     | Staging                      |
+| `preview` | Preview                      |
 | `prd`     | Production                   |
 | `pr-*`    | PR preview environments      |
 
@@ -117,7 +117,7 @@ registerTrackedMutation("router.mutationName", {
 2. Create a single project named "OS"
 3. Get API key from Settings > Project API Key
 4. Enable Session Replay in settings
-5. Add environment variables to Doppler for each environment (dev, stg, prd)
+5. Add environment variables to Doppler for each environment (dev, preview, prd)
 
 **Note:** Group types (`organization` and `project`) are automatically created when the first event with a group is sent. You'll see them appear in Settings > Group Analytics after deploying and using the app.
 

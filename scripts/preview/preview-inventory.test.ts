@@ -71,4 +71,32 @@ describe("ensurePreviewInventory", () => {
       ],
     ]);
   });
+
+  it("does not add excluded slots", async () => {
+    const add = vi.fn(async () => undefined);
+    const list = vi.fn(async () => []);
+
+    await ensurePreviewInventory({
+      appSlug: "os2",
+      client: { add, list },
+      count: 3,
+      excludedSlots: [1],
+      type: "os2-preview-environment",
+    });
+
+    expect(add.mock.calls).toEqual([
+      [
+        {
+          slug: "os2-preview-2",
+          type: "os2-preview-environment",
+        },
+      ],
+      [
+        {
+          slug: "os2-preview-3",
+          type: "os2-preview-environment",
+        },
+      ],
+    ]);
+  });
 });

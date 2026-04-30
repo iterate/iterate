@@ -8,7 +8,7 @@ Cloudflare-only: TanStack Start + oRPC + raw D1 inventory storage, with a Durabl
 - **Frontend:** TanStack Start + Router + Query
 - **DB:** raw D1 queries via generated TypeSQL helpers (`sql/queries.ts`)
 - **Coordinator:** one Durable Object per resource `type` handles active leases, waiters, and expiry
-- **Secrets:** Doppler project `semaphore` (see repo `doppler.yaml`). `DOPPLER_CONFIG` is injected by `doppler run`, and `_shared` defines `ALCHEMY_STAGE=${DOPPLER_CONFIG}`. The bearer token now lives in root-level `APP_CONFIG.sharedApiSecret`.
+- **Secrets:** Doppler project `semaphore` (see repo `doppler.yaml`). `DOPPLER_CONFIG` is injected by `doppler run`, and `_shared` defines `ALCHEMY_STAGE=${DOPPLER_CONFIG}`. The bearer/operator token is `APP_CONFIG.sharedApiSecret`; callers can expose the same value as `SEMAPHORE_API_TOKEN`.
 
 ## Key files
 
@@ -28,9 +28,26 @@ pnpm dev          # doppler + Alchemy local (Vite); optional PORT= for fixed por
 pnpm build        # production client/server bundle
 pnpm deploy       # `doppler run --config prd` — `_shared` resolves `ALCHEMY_STAGE=prd`
 pnpm seed:tunnel-pool
+pnpm seed:preview-pool
 pnpm test         # typecheck only
 pnpm test:e2e     # requires `SEMAPHORE_BASE_URL`
 ```
+
+## Preview pools and tokens
+
+Semaphore owns the shared preview slot inventory for Cloudflare preview environments. The preview router usually runs through the `os` production Doppler config:
+
+```bash
+doppler run --project os --config prd -- pnpm preview status
+```
+
+The router reads `SEMAPHORE_API_TOKEN` first and falls back to `APP_CONFIG_SHARED_API_SECRET`. To seed or repair the preview inventory from this package, run:
+
+```bash
+doppler run --project semaphore --config prd -- pnpm seed:preview-pool
+```
+
+The browser UI calls this value the operator token. Do not copy the token into source files, docs, or PR comments.
 
 ## Contract
 
@@ -40,7 +57,7 @@ pnpm test:e2e     # requires `SEMAPHORE_BASE_URL`
 
 Use the raw lifecycle scripts with Doppler outside the package script:
 
-- `doppler run --config stg -- pnpm alchemy:up`
+- `doppler run --project semaphore --config preview_1 -- pnpm alchemy:up`
 - `doppler run --config prd -- pnpm alchemy:up`
-- `doppler run --config stg -- pnpm alchemy:down`
+- `doppler run --project semaphore --config preview_1 -- pnpm alchemy:down`
 - `doppler run --config prd -- pnpm alchemy:down`

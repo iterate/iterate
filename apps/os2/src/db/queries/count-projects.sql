@@ -1,2 +1,3 @@
 select count(*) as total
-from projects;
+from projects
+where clerk_org_id = :clerkOrgId;
