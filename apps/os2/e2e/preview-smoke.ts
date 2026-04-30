@@ -6,6 +6,11 @@ function requireBaseUrl() {
   return new URL(baseUrl);
 }
 
+function readProjectBaseUrlOverride() {
+  const url = process.env.OS2_PROJECT_BASE_URL?.trim();
+  return url ? new URL(url) : null;
+}
+
 async function expectStatus(input: { method?: string; status: number; url: URL }) {
   const response = await fetch(input.url, {
     method: input.method ?? "GET",
@@ -17,7 +22,9 @@ async function expectStatus(input: { method?: string; status: number; url: URL }
   return response;
 }
 
-function projectHostnameFor(baseUrl: URL) {
+function projectHostnameFor(baseUrl: URL, projectBaseUrlOverride: URL | null) {
+  if (projectBaseUrlOverride) return projectBaseUrlOverride.hostname;
+
   const previewDashboardPrefix = "os-preview-";
   if (baseUrl.hostname.startsWith(previewDashboardPrefix)) {
     return `demo-preview-${baseUrl.hostname.slice(previewDashboardPrefix.length)}`;
@@ -29,10 +36,19 @@ function projectHostnameFor(baseUrl: URL) {
       `OS2 preview base URL must start with os. or os-preview-; received ${baseUrl.hostname}.`,
     );
   }
-  return `demo.${baseUrl.hostname.slice(dashboardPrefix.length)}`;
+  const projectHostnameBase = baseUrl.hostname
+    .slice(dashboardPrefix.length)
+    // OS2 dashboard hosts use `.com` for the app shell while project/MCP hosts
+    // use `.app` for user code and OAuth resource URLs. Keep the smoke test's
+    // fallback derivation aligned with the deployed dev/prod host contract, and
+    // allow OS2_PROJECT_BASE_URL above for any future topology that cannot be
+    // inferred from OS2_BASE_URL alone.
+    .replace(/\.com$/, ".app");
+  return `demo.${projectHostnameBase}`;
 }
 
 const baseUrl = requireBaseUrl();
+const projectBaseUrlOverride = readProjectBaseUrlOverride();
 
 // This smoke test intentionally avoids authenticated application procedures.
 // Preview CI has no stable seeded Clerk user/project, so it proves the deployed
@@ -57,7 +73,7 @@ await expectStatus({
   status: 404,
 });
 
-const projectOrigin = `${baseUrl.protocol}//${projectHostnameFor(baseUrl)}`;
+const projectOrigin = `${projectBaseUrlOverride?.protocol ?? baseUrl.protocol}//${projectHostnameFor(baseUrl, projectBaseUrlOverride)}`;
 const projectMcpUrl = new URL("/mcp", projectOrigin);
 const projectMcpResponse = await expectStatus({
   url: projectMcpUrl,
