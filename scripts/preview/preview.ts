@@ -17,10 +17,14 @@ import { splitRepositoryFullName } from "./repository-full-name.ts";
 const defaultSemaphoreBaseUrl = "https://semaphore.iterate.com";
 const defaultPreviewLeaseMs = 60 * 60 * 1000;
 // Routed previews can be healthy before Cloudflare has finished issuing edge
-// certificates for newly-created wildcard hostnames. Keep this long enough for
-// Total TLS first-issuance while still returning immediately once the health
-// endpoint is reachable.
-const defaultPreviewReadyTimeoutMs = 180_000;
+// certificates for newly-created wildcard hostnames. OS2 preview project hosts
+// are deeper subdomains, which Cloudflare Universal SSL does not cover; Total
+// TLS has to issue per-host certificates first:
+// https://developers.cloudflare.com/ssl/edge-certificates/universal-ssl/limitations/#full-setup
+// https://developers.cloudflare.com/ssl/edge-certificates/additional-options/total-tls/
+// Keep this long enough for first issuance while still returning immediately
+// once the health endpoint is reachable.
+const defaultPreviewReadyTimeoutMs = 600_000;
 const defaultPreviewReadyUrlPath = "/api/__internal/health";
 const defaultPreviewTestMaxAttempts = 2;
 const defaultPreviewTestRetryDelayMs = 5_000;
