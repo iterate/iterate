@@ -170,20 +170,26 @@ export async function IterateApp<B extends Bindings>(
       workerName: worker.name,
     });
 
-    await Promise.all(
-      routeHosts.map((hostname) =>
+    const routeZoneIds = new Map<string, string>();
+    for (const hostname of routeHosts) {
+      const { zoneId } = await findZoneForHostname(cloudflareApi, hostname);
+      routeZoneIds.set(hostname, zoneId);
+
+      await retryCloudflareRouteCreation(() =>
         Route(routeResourceIdForHostname(hostname), {
           pattern: `${hostname}/*`,
           script: worker,
           adopt: true,
+          zoneId,
         }),
-      ),
-    );
+      );
+    }
 
     const dnsRouteHosts = routeHosts.filter(shouldCreateDnsRecordForRouteHostname);
     await Promise.all(
       dnsRouteHosts.map(async (hostname) => {
-        const { zoneId } = await findZoneForHostname(cloudflareApi, hostname);
+        const zoneId =
+          routeZoneIds.get(hostname) ?? (await findZoneForHostname(cloudflareApi, hostname)).zoneId;
         const dnsResourceId = hostname.startsWith("*.")
           ? `project-wildcard-dns-${slugify(hostname)}`
           : `dns-${slugify(hostname)}`;
@@ -360,6 +366,40 @@ async function waitForCloudflareWorkerScript(params: {
 
   throw new Error(
     `Cloudflare Worker script ${params.workerName} was not visible before route creation. Last status: ${lastStatus}. Last body: ${lastBody}`,
+  );
+}
+
+async function retryCloudflareRouteCreation<T>(createRoute: () => Promise<T>) {
+  const maxAttempts = 6;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await createRoute();
+    } catch (error) {
+      if (attempt >= maxAttempts || !isCloudflareRouteWorkerMissingError(error)) {
+        throw error;
+      }
+
+      await sleep(5_000);
+    }
+  }
+}
+
+function isCloudflareRouteWorkerMissingError(error: unknown) {
+  const maybeError = error as {
+    errorData?: unknown;
+    message?: unknown;
+    status?: unknown;
+  };
+  const details = `${String(maybeError.message ?? "")}\n${JSON.stringify(maybeError.errorData ?? "")}`;
+  /**
+   * The Workers Scripts read API can return the script before the Routes API's
+   * backing lookup is caught up. In that small window Cloudflare returns 10019
+   * even though the upload has completed. Retrying only this exact condition
+   * keeps normal route/config errors loud while absorbing the propagation race.
+   */
+  return (
+    maybeError.status === 400 &&
+    details.includes("Cannot configure a route for a Worker which does not exist")
   );
 }
 
