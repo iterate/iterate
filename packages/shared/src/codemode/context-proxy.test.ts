@@ -31,6 +31,16 @@ describe("createCodemodeContext", () => {
     });
   });
 
+  test("does not treat promise inspection keys as tool path segments", () => {
+    const capability = fakeCapability();
+    const ctx = createCodemodeContext({ codemodeSessionCapability: capability });
+
+    expect(ctx.linear.then).toBeUndefined();
+    expect(ctx.linear.catch).toBeUndefined();
+    expect(ctx.linear.finally).toBeUndefined();
+    expect(capability.callToolFunction).not.toHaveBeenCalled();
+  });
+
   test("keeps codemode controls separate from tool function calls", async () => {
     const abortController = new AbortController();
     const capability = fakeCapability();

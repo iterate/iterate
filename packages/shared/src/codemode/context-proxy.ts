@@ -61,7 +61,10 @@ export interface ToolFunctionProxy {
 function createPathProxy(path: string[], options: CreateCodemodeContextOptions): ToolFunctionProxy {
   return new Proxy(async () => undefined, {
     get(_target, key) {
-      if (key === "then") return undefined;
+      // Promise utilities probe `then`/`catch`/`finally` to detect thenables.
+      // Tool provider paths are arbitrary, so returning a nested proxy here
+      // would turn promise introspection into accidental tool calls.
+      if (key === "then" || key === "catch" || key === "finally") return undefined;
       if (key === "codemode" && path.length === 0) {
         return createCodemodeControlSurface(options);
       }
