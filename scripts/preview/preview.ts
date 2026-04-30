@@ -778,17 +778,13 @@ function derivePreviewEnvironment(input: {
 
   const publicUrl =
     input.appSlug === "os2"
-      ? `https://os2.iterate-preview-${slot}.com`
+      ? `https://${input.previewEnvironmentSlug}.iterate.workers.dev`
       : input.appSlug === "events"
         ? `https://${input.previewEnvironmentSlug}.iterate.com`
         : `https://${input.previewEnvironmentSlug}.iterate-dev-stg.workers.dev`;
 
   const projectSubdomainUrl =
-    input.appSlug === "os2"
-      ? `https://project.iterate-preview-${slot}.app`
-      : input.appSlug === "events"
-        ? `https://test.${input.previewEnvironmentSlug}.iterate.com`
-        : null;
+    input.appSlug === "events" ? `https://test.${input.previewEnvironmentSlug}.iterate.com` : null;
 
   const previewEnvironmentDopplerConfigName = `preview_${slot}`;
 

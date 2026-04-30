@@ -70,10 +70,10 @@ export const cloudflarePreviewApps = {
     displayName: "OS",
     appPath: "apps/os2",
     dopplerProject: "os2",
-    // OS2 routed previews need two real Cloudflare zones per slot:
-    // `iterate-preview-N.com` for the dashboard and `iterate-preview-N.app`
-    // for project hosts. Only slots 1 and 10 are currently provisioned, so
-    // keep the other leases out of circulation until their zones exist.
+    // OS2 preview slots still map to Doppler configs. Only slots 1 and 10 are
+    // configured today. The routed `iterate-preview-N.{com,app}` zones exist
+    // but are not delegated yet, so the preview router currently publishes the
+    // workers.dev URL and keeps the unconfigured leases out of circulation.
     excludedPreviewSlots: [2, 3, 4, 5, 6, 7, 8, 9],
     paths: ["apps/os2/**", "apps/os2-contract/**"],
     previewResourceType: "os2-preview-environment",
