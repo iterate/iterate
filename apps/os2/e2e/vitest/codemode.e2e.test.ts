@@ -55,14 +55,18 @@ function createClient(baseUrl: string) {
     new OpenAPILink(osContract, {
       url: `${baseUrl}/api`,
       fetch: (input, init) => {
+        const requestInit: RequestInit = init ?? {};
         const headers = new Headers(input instanceof Request ? input.headers : undefined);
+        for (const [key, value] of new Headers(requestInit.headers)) {
+          headers.set(key, value);
+        }
         for (const [key, value] of Object.entries(authHeaders)) {
           headers.set(key, value);
         }
         if (input instanceof Request) {
-          return fetch(new Request(input, { headers }));
+          return fetch(new Request(input, { ...requestInit, headers }));
         }
-        return fetch(input, { ...init, headers });
+        return fetch(input, { ...requestInit, headers });
       },
     }),
   ) as OrpcClient;
