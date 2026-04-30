@@ -549,11 +549,13 @@ function defaultStreamPathForProjectBlock(projectId: string, blockId: string) {
  * subscribe to another org's stream if it guessed the durable path.
  */
 function projectIdFromCodemodeStreamPath(streamPath: string) {
-  const match = streamPath.match(/^\/projects\/([^/]+)\/codemode-sessions(?:\/|$)/);
+  const match = streamPath.match(
+    /^\/projects\/([^/]+)\/(?:codemode-sessions|mcp-server-sessions)(?:\/|$)/,
+  );
   if (!match?.[1]) {
     throw new ORPCError("BAD_REQUEST", {
       message:
-        "Codemode event streams must be scoped to /projects/:projectId/codemode-sessions/...",
+        "Codemode event streams must be scoped to /projects/:projectId/codemode-sessions/... or /projects/:projectId/mcp-server-sessions/...",
     });
   }
 

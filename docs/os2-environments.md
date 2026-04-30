@@ -55,12 +55,13 @@ _shared          ← CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, ALCHEMY_STAGE=
 
 ### Key env vars per config type
 
-| Var                                 | dev_jonas                          | preview_N                          | prd                              |
-| ----------------------------------- | ---------------------------------- | ---------------------------------- | -------------------------------- |
-| `APP_CONFIG_BASE_URL`               | `https://os.iterate-dev-jonas.com` | `https://os-preview-N.iterate.app` | `https://os.iterate2.com`        |
-| `APP_CONFIG_PROJECT_HOSTNAME_BASES` | `["iterate-dev-jonas.app"]`        | `["-preview-N.iterate.app"]`       | `["iterate2.app"]`               |
-| `ALCHEMY_LOCAL`                     | `true`                             | `false`                            | `false`                          |
-| `ALCHEMY_STAGE`                     | inherited as `${DOPPLER_CONFIG}`   | inherited as `${DOPPLER_CONFIG}`   | inherited as `${DOPPLER_CONFIG}` |
+| Var                                 | dev_jonas                              | preview_N                              | prd                              |
+| ----------------------------------- | -------------------------------------- | -------------------------------------- | -------------------------------- |
+| `APP_CONFIG_BASE_URL`               | `https://os.iterate-dev-jonas.com`     | `https://os-preview-N.iterate.app`     | `https://os.iterate2.com`        |
+| `APP_CONFIG_EVENTS_BASE_URL`        | `https://events.iterate-dev-jonas.com` | `https://events-preview-N.iterate.com` | `https://events.iterate.com`     |
+| `APP_CONFIG_PROJECT_HOSTNAME_BASES` | `["iterate-dev-jonas.app"]`            | `["-preview-N.iterate.app"]`           | `["iterate2.app"]`               |
+| `ALCHEMY_LOCAL`                     | `true`                                 | `false`                                | `false`                          |
+| `ALCHEMY_STAGE`                     | inherited as `${DOPPLER_CONFIG}`       | inherited as `${DOPPLER_CONFIG}`       | inherited as `${DOPPLER_CONFIG}` |
 
 ## Local development
 

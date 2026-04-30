@@ -34,6 +34,7 @@ type Target = {
   dopplerConfig: string;
   clerkAppName: string;
   baseUrl: string;
+  eventsBaseUrl: string;
   projectHostnameBase: string;
 };
 
@@ -42,18 +43,21 @@ const targets: Target[] = [
     dopplerConfig: "dev_jonas",
     clerkAppName: "OS2 dev jonas",
     baseUrl: "https://os.iterate-dev-jonas.com",
+    eventsBaseUrl: "https://events.iterate-dev-jonas.com",
     projectHostnameBase: "iterate-dev-jonas.app",
   },
   {
     dopplerConfig: "dev_misha",
     clerkAppName: "OS2 dev misha",
     baseUrl: "https://os.iterate-dev-misha.com",
+    eventsBaseUrl: "https://events.iterate-dev-misha.com",
     projectHostnameBase: "iterate-dev-misha.app",
   },
   {
     dopplerConfig: "dev_rahul",
     clerkAppName: "OS2 dev rahul",
     baseUrl: "https://os.iterate-dev-rahul.com",
+    eventsBaseUrl: "https://events.iterate-dev-rahul.com",
     projectHostnameBase: "iterate-dev-rahul.app",
   },
   ...Array.from({ length: 10 }, (_, index) => {
@@ -62,6 +66,7 @@ const targets: Target[] = [
       dopplerConfig: `preview_${previewNumber}`,
       clerkAppName: `OS2 preview ${previewNumber}`,
       baseUrl: `https://os-preview-${previewNumber}.iterate.app`,
+      eventsBaseUrl: `https://events-preview-${previewNumber}.iterate.com`,
       projectHostnameBase: `-preview-${previewNumber}.iterate.app`,
     };
   }),
@@ -69,6 +74,7 @@ const targets: Target[] = [
     dopplerConfig: "prd",
     clerkAppName: "OS2 prd",
     baseUrl: "https://os.iterate2.com",
+    eventsBaseUrl: "https://events.iterate.com",
     projectHostnameBase: "iterate2.app",
   },
 ];
@@ -257,7 +263,10 @@ function setDopplerSecrets(
 ) {
   const secrets = new Map([
     ["APP_CONFIG_BASE_URL", target.baseUrl],
-    ["APP_CONFIG_EVENTS_BASE_URL", "https://events.iterate.com"],
+    // Codemode streams are written through the Events app. Keep this aligned
+    // per Doppler config so dev and preview OS2 sessions do not write into
+    // production event streams.
+    ["APP_CONFIG_EVENTS_BASE_URL", target.eventsBaseUrl],
     [
       "APP_CONFIG_MCP_PROOF_SECRET",
       readExistingDopplerSecret(target.dopplerConfig, "APP_CONFIG_MCP_PROOF_SECRET") ??
@@ -311,7 +320,7 @@ function readExistingDopplerSecret(config: string, key: string) {
       "--",
       "node",
       "-e",
-      `process.stdout.write(process.env.${key} || "")`,
+      `process.stdout.write(process.env[${JSON.stringify(key)}] || "")`,
     ],
     {
       encoding: "utf8",

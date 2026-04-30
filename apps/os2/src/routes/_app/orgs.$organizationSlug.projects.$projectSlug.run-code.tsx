@@ -360,7 +360,10 @@ function isScriptExecutionFinished(event: Event, scriptExecutionRequestedOffset:
 }
 
 function readEventPayloadValue(event: Event, key: string) {
-  const payload = event.payload as Record<string, unknown>;
+  const payload =
+    event.payload != null && typeof event.payload === "object"
+      ? (event.payload as Record<string, unknown>)
+      : {};
   return payload[key];
 }
 
