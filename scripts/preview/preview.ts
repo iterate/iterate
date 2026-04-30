@@ -753,7 +753,7 @@ function derivePreviewEnvironment(input: {
       ? `https://os.iterate-preview-${slot}.iterate.app`
       : input.appSlug === "events"
         ? `https://${input.previewEnvironmentSlug}.iterate.com`
-        : `https://${input.previewEnvironmentSlug}.iterate.workers.dev`;
+        : `https://${input.previewEnvironmentSlug}.iterate-dev-stg.workers.dev`;
 
   const projectSubdomainUrl =
     input.appSlug === "os2" ? `https://iterate-preview-${slot}.iterate.app` : null;

@@ -28,7 +28,7 @@ zone (see `docs/os2-environments.md`):
 For `agents`, `codemode`, `example`, `semaphore`, and `ingress-proxy`,
 preview slot `APP_CONFIG_BASE_URL` values use the Worker URL directly:
 
-- `https://<app>-preview-N.iterate.workers.dev`
+- `https://<app>-preview-N.iterate-dev-stg.workers.dev`
 
 `workers.dev` routes are assigned automatically from the Worker name, so
 `IterateApp` deliberately does not create Cloudflare Route/DNS resources for
