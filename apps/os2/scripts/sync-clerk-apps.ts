@@ -74,27 +74,27 @@ const targets: Target[] = [
 ];
 
 async function main() {
-  const apps = await listClerkApps();
+  const apps = listClerkApps();
 
   for (const target of targets) {
-    const app = await findOrCreateClerkApp(apps, target.clerkAppName);
-    const instance = await getDevelopmentInstance(app.application_id);
+    const app = findOrCreateClerkApp(apps, target.clerkAppName);
+    const instance = getDevelopmentInstance(app.application_id);
 
-    await patchInstanceConfig(app.application_id);
-    await patchOAuthApplicationSettings(app.application_id);
-    const oauthApplication = await findOrCreateOAuthApplication(app.application_id);
+    patchInstanceConfig(app.application_id);
+    patchOAuthApplicationSettings(app.application_id);
+    const oauthApplication = findOrCreateOAuthApplication(app.application_id);
     const jwtKey = await getJwtPublicKey(instance.publishable_key);
 
-    await setDopplerSecrets(target, instance, oauthApplication, jwtKey);
+    setDopplerSecrets(target, instance, oauthApplication, jwtKey);
     console.log(`synced ${target.dopplerConfig} -> ${target.clerkAppName}`);
   }
 }
 
-async function listClerkApps() {
+function listClerkApps() {
   return JSON.parse(exec("clerk", ["apps", "list", "--json"])) as ClerkApplication[];
 }
 
-async function findOrCreateClerkApp(apps: ClerkApplication[], name: string) {
+function findOrCreateClerkApp(apps: ClerkApplication[], name: string) {
   const existing = apps.find((app) => app.name === name);
   if (existing) return existing;
 
@@ -103,7 +103,7 @@ async function findOrCreateClerkApp(apps: ClerkApplication[], name: string) {
   return created;
 }
 
-async function getDevelopmentInstance(applicationId: string) {
+function getDevelopmentInstance(applicationId: string) {
   const app = JSON.parse(
     exec("clerk", [
       "api",
@@ -120,7 +120,7 @@ async function getDevelopmentInstance(applicationId: string) {
   return instance;
 }
 
-async function patchInstanceConfig(applicationId: string) {
+function patchInstanceConfig(applicationId: string) {
   const patch = {
     auth_email: {
       required_for_sign_up: true,
@@ -170,7 +170,7 @@ async function patchInstanceConfig(applicationId: string) {
   ]);
 }
 
-async function patchOAuthApplicationSettings(applicationId: string) {
+function patchOAuthApplicationSettings(applicationId: string) {
   exec("clerk", [
     "api",
     "/instance/oauth_application_settings",
@@ -189,7 +189,7 @@ async function patchOAuthApplicationSettings(applicationId: string) {
   ]);
 }
 
-async function findOrCreateOAuthApplication(applicationId: string) {
+function findOrCreateOAuthApplication(applicationId: string) {
   const existing = JSON.parse(
     exec("clerk", ["api", "/oauth_applications", "--app", applicationId, "--instance", "dev"]),
   ) as { data: ClerkOAuthApplication[] };
@@ -249,7 +249,7 @@ function deriveFrontendApiUrl(publishableKey: string) {
   return `https://${Buffer.from(encoded, "base64").toString("utf8").replace(/\$/, "")}`;
 }
 
-async function setDopplerSecrets(
+function setDopplerSecrets(
   target: Target,
   instance: ClerkInstance,
   oauthApplication: ClerkOAuthApplication,

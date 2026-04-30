@@ -115,6 +115,11 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
   }
 
   async executeScript(input: ExecuteScriptInput) {
+    // Keep the lifecycle read explicit before scheduling background execution.
+    // The follow-up outcome events are appended after this RPC returns, so we
+    // want startup failures to surface on the request RPC instead of being
+    // swallowed by the detached execution promise.
+    await this.ensureStarted();
     const requestedEvent = await this.appendToStream({
       type: `${EVENT_TYPE_PREFIX}/script-execution-requested`,
       payload: {

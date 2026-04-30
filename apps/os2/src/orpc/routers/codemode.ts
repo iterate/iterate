@@ -37,6 +37,13 @@ export const codemodeRouter = {
     streamEvents: os.codemode.streamEvents
       .use(activeOrganizationMiddleware)
       .handler(async function* ({ input, context, signal }) {
+        const projectId = projectIdFromCodemodeStreamPath(input.streamPath);
+        await requireCodemodeProject({
+          activeOrganization: context.activeOrganization,
+          context,
+          projectId,
+        });
+
         const client = createEventsClient(context.config.eventsBaseUrl);
         const stream = await client.stream(
           {
@@ -514,6 +521,24 @@ function generateBlockId() {
 
 function defaultStreamPathForProjectBlock(projectId: string, blockId: string) {
   return `/projects/${projectId}/codemode-sessions/${blockId}`;
+}
+
+/**
+ * Codemode event streams are path-addressed in the shared Events service, so
+ * the read endpoint has to recover the project owner from the stream path
+ * before proxying the subscription. Without this guard, any signed-in org could
+ * subscribe to another org's stream if it guessed the durable path.
+ */
+function projectIdFromCodemodeStreamPath(streamPath: string) {
+  const match = streamPath.match(/^\/projects\/([^/]+)\/codemode-sessions(?:\/|$)/);
+  if (!match?.[1]) {
+    throw new ORPCError("BAD_REQUEST", {
+      message:
+        "Codemode event streams must be scoped to /projects/:projectId/codemode-sessions/...",
+    });
+  }
+
+  return match[1];
 }
 
 function findDuplicateProviderPath(paths: string[][]) {

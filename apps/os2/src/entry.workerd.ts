@@ -48,7 +48,11 @@ export default {
         const db = createD1Client(env.DB);
         const projectHostnameBases = parseProjectHostnameBases(env.PROJECT_HOSTNAME_BASES);
         if (isMcpProtectedResourceMetadataRequest(url)) {
-          return mcpProtectedResourceMetadataResponse(request, config);
+          return mcpProtectedResourceMetadataResponse({
+            appConfig: config,
+            projectHostnameBases,
+            request,
+          });
         }
 
         const projectHostRootRedirect = await redirectAuthenticatedProjectHostRoot({
@@ -237,18 +241,34 @@ function isMcpProtectedResourceMetadataRequest(url: URL) {
   );
 }
 
-function mcpProtectedResourceMetadataResponse(request: Request, appConfig: AppConfig) {
-  const url = new URL(request.url);
+function mcpProtectedResourceMetadataResponse(input: {
+  appConfig: AppConfig;
+  projectHostnameBases: readonly string[];
+  request: Request;
+}) {
+  const url = new URL(input.request.url);
+  const projectSlug = resolveProjectSlugForProjectHostname({
+    appConfig: input.appConfig,
+    hostname: url.hostname,
+    projectHostnameBases: input.projectHostnameBases,
+  });
+  if (!projectSlug) {
+    return new Response("MCP OAuth metadata is only available on project hostnames.", {
+      status: 404,
+      headers: mcpCorsHeaders,
+    });
+  }
+
   // MCP OAuth clients discover the Clerk authorization server through RFC 9728
   // protected-resource metadata. Clerk's helper emits the standard shape and
   // points clients at the Clerk Frontend API auth server:
   // https://github.com/clerk/mcp-tools
   // https://clerk.com/docs/nextjs/mcp/build-mcp-server
   const metadata = generateProtectedResourceMetadata({
-    authServerUrl: deriveClerkFrontendApiUrl(appConfig.clerk.publishableKey),
+    authServerUrl: deriveClerkFrontendApiUrl(input.appConfig.clerk.publishableKey),
     resourceUrl: new URL("/mcp", url.origin).toString(),
     properties: {
-      scopes_supported: appConfig.clerk.mcpOauthScopes,
+      scopes_supported: input.appConfig.clerk.mcpOauthScopes,
       service_documentation: "https://clerk.com/docs",
     },
   });
