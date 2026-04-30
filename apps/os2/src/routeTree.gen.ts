@@ -9,14 +9,10 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as SignUpRouteImport } from './routes/sign-up'
-import { Route as SignInRouteImport } from './routes/sign-in'
 import { Route as OrganizationRouteImport } from './routes/organization'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as SignUpSsoCallbackRouteImport } from './routes/sign-up.sso-callback'
 import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
-import { Route as SignInSsoCallbackRouteImport } from './routes/sign-in.sso-callback'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
 import { Route as SessionTasksChooseOrganizationRouteImport } from './routes/session-tasks.choose-organization'
 import { Route as PosthogProxySplatRouteImport } from './routes/posthog-proxy.$'
@@ -35,16 +31,6 @@ import { Route as AppOrgsOrganizationSlugProjectsProjectSlugSettingsRouteImport 
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugRunCodeRouteImport } from './routes/_app/orgs.$organizationSlug.projects.$projectSlug.run-code'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugPresetsRouteImport } from './routes/_app/orgs.$organizationSlug.projects.$projectSlug.presets'
 
-const SignUpRoute = SignUpRouteImport.update({
-  id: '/sign-up',
-  path: '/sign-up',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SignInRoute = SignInRouteImport.update({
-  id: '/sign-in',
-  path: '/sign-in',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const OrganizationRoute = OrganizationRouteImport.update({
   id: '/organization',
   path: '/organization',
@@ -59,25 +45,15 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const SignUpSsoCallbackRoute = SignUpSsoCallbackRouteImport.update({
-  id: '/sso-callback',
-  path: '/sso-callback',
-  getParentRoute: () => SignUpRoute,
-} as any)
 const SignUpSplatRoute = SignUpSplatRouteImport.update({
-  id: '/$',
-  path: '/$',
-  getParentRoute: () => SignUpRoute,
-} as any)
-const SignInSsoCallbackRoute = SignInSsoCallbackRouteImport.update({
-  id: '/sso-callback',
-  path: '/sso-callback',
-  getParentRoute: () => SignInRoute,
+  id: '/sign-up/$',
+  path: '/sign-up/$',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const SignInSplatRoute = SignInSplatRouteImport.update({
-  id: '/$',
-  path: '/$',
-  getParentRoute: () => SignInRoute,
+  id: '/sign-in/$',
+  path: '/sign-in/$',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const SessionTasksChooseOrganizationRoute =
   SessionTasksChooseOrganizationRouteImport.update({
@@ -172,8 +148,6 @@ const AppOrgsOrganizationSlugProjectsProjectSlugPresetsRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/organization': typeof OrganizationRoute
-  '/sign-in': typeof SignInRouteWithChildren
-  '/sign-up': typeof SignUpRouteWithChildren
   '/debug': typeof AppDebugRoute
   '/log-stream': typeof AppLogStreamRoute
   '/api/$': typeof ApiSplatRoute
@@ -181,9 +155,7 @@ export interface FileRoutesByFullPath {
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/session-tasks/choose-organization': typeof SessionTasksChooseOrganizationRoute
   '/sign-in/$': typeof SignInSplatRoute
-  '/sign-in/sso-callback': typeof SignInSsoCallbackRoute
   '/sign-up/$': typeof SignUpSplatRoute
-  '/sign-up/sso-callback': typeof SignUpSsoCallbackRoute
   '/orgs/$organizationSlug': typeof AppOrgsOrganizationSlugRouteWithChildren
   '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/orgs/$organizationSlug/projects': typeof AppOrgsOrganizationSlugProjectsRouteWithChildren
@@ -198,8 +170,6 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/organization': typeof OrganizationRoute
-  '/sign-in': typeof SignInRouteWithChildren
-  '/sign-up': typeof SignUpRouteWithChildren
   '/debug': typeof AppDebugRoute
   '/log-stream': typeof AppLogStreamRoute
   '/api/$': typeof ApiSplatRoute
@@ -207,9 +177,7 @@ export interface FileRoutesByTo {
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/session-tasks/choose-organization': typeof SessionTasksChooseOrganizationRoute
   '/sign-in/$': typeof SignInSplatRoute
-  '/sign-in/sso-callback': typeof SignInSsoCallbackRoute
   '/sign-up/$': typeof SignUpSplatRoute
-  '/sign-up/sso-callback': typeof SignUpSsoCallbackRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/orgs/$organizationSlug': typeof AppOrgsOrganizationSlugIndexRoute
   '/orgs/$organizationSlug/projects': typeof AppOrgsOrganizationSlugProjectsIndexRoute
@@ -223,8 +191,6 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/_app': typeof AppRouteWithChildren
   '/organization': typeof OrganizationRoute
-  '/sign-in': typeof SignInRouteWithChildren
-  '/sign-up': typeof SignUpRouteWithChildren
   '/_app/debug': typeof AppDebugRoute
   '/_app/log-stream': typeof AppLogStreamRoute
   '/api/$': typeof ApiSplatRoute
@@ -232,9 +198,7 @@ export interface FileRoutesById {
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/session-tasks/choose-organization': typeof SessionTasksChooseOrganizationRoute
   '/sign-in/$': typeof SignInSplatRoute
-  '/sign-in/sso-callback': typeof SignInSsoCallbackRoute
   '/sign-up/$': typeof SignUpSplatRoute
-  '/sign-up/sso-callback': typeof SignUpSsoCallbackRoute
   '/_app/orgs/$organizationSlug': typeof AppOrgsOrganizationSlugRouteWithChildren
   '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/_app/orgs/$organizationSlug/projects': typeof AppOrgsOrganizationSlugProjectsRouteWithChildren
@@ -251,8 +215,6 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/organization'
-    | '/sign-in'
-    | '/sign-up'
     | '/debug'
     | '/log-stream'
     | '/api/$'
@@ -260,9 +222,7 @@ export interface FileRouteTypes {
     | '/posthog-proxy/$'
     | '/session-tasks/choose-organization'
     | '/sign-in/$'
-    | '/sign-in/sso-callback'
     | '/sign-up/$'
-    | '/sign-up/sso-callback'
     | '/orgs/$organizationSlug'
     | '/api/orpc/$'
     | '/orgs/$organizationSlug/projects'
@@ -277,8 +237,6 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/organization'
-    | '/sign-in'
-    | '/sign-up'
     | '/debug'
     | '/log-stream'
     | '/api/$'
@@ -286,9 +244,7 @@ export interface FileRouteTypes {
     | '/posthog-proxy/$'
     | '/session-tasks/choose-organization'
     | '/sign-in/$'
-    | '/sign-in/sso-callback'
     | '/sign-up/$'
-    | '/sign-up/sso-callback'
     | '/api/orpc/$'
     | '/orgs/$organizationSlug'
     | '/orgs/$organizationSlug/projects'
@@ -301,8 +257,6 @@ export interface FileRouteTypes {
     | '/'
     | '/_app'
     | '/organization'
-    | '/sign-in'
-    | '/sign-up'
     | '/_app/debug'
     | '/_app/log-stream'
     | '/api/$'
@@ -310,9 +264,7 @@ export interface FileRouteTypes {
     | '/posthog-proxy/$'
     | '/session-tasks/choose-organization'
     | '/sign-in/$'
-    | '/sign-in/sso-callback'
     | '/sign-up/$'
-    | '/sign-up/sso-callback'
     | '/_app/orgs/$organizationSlug'
     | '/api/orpc/$'
     | '/_app/orgs/$organizationSlug/projects'
@@ -329,31 +281,17 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AppRoute: typeof AppRouteWithChildren
   OrganizationRoute: typeof OrganizationRoute
-  SignInRoute: typeof SignInRouteWithChildren
-  SignUpRoute: typeof SignUpRouteWithChildren
   ApiSplatRoute: typeof ApiSplatRoute
   ApiOrpcWsRoute: typeof ApiOrpcWsRoute
   PosthogProxySplatRoute: typeof PosthogProxySplatRoute
   SessionTasksChooseOrganizationRoute: typeof SessionTasksChooseOrganizationRoute
+  SignInSplatRoute: typeof SignInSplatRoute
+  SignUpSplatRoute: typeof SignUpSplatRoute
   ApiOrpcSplatRoute: typeof ApiOrpcSplatRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/sign-up': {
-      id: '/sign-up'
-      path: '/sign-up'
-      fullPath: '/sign-up'
-      preLoaderRoute: typeof SignUpRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/sign-in': {
-      id: '/sign-in'
-      path: '/sign-in'
-      fullPath: '/sign-in'
-      preLoaderRoute: typeof SignInRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/organization': {
       id: '/organization'
       path: '/organization'
@@ -375,33 +313,19 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/sign-up/sso-callback': {
-      id: '/sign-up/sso-callback'
-      path: '/sso-callback'
-      fullPath: '/sign-up/sso-callback'
-      preLoaderRoute: typeof SignUpSsoCallbackRouteImport
-      parentRoute: typeof SignUpRoute
-    }
     '/sign-up/$': {
       id: '/sign-up/$'
-      path: '/$'
+      path: '/sign-up/$'
       fullPath: '/sign-up/$'
       preLoaderRoute: typeof SignUpSplatRouteImport
-      parentRoute: typeof SignUpRoute
-    }
-    '/sign-in/sso-callback': {
-      id: '/sign-in/sso-callback'
-      path: '/sso-callback'
-      fullPath: '/sign-in/sso-callback'
-      preLoaderRoute: typeof SignInSsoCallbackRouteImport
-      parentRoute: typeof SignInRoute
+      parentRoute: typeof rootRouteImport
     }
     '/sign-in/$': {
       id: '/sign-in/$'
-      path: '/$'
+      path: '/sign-in/$'
       fullPath: '/sign-in/$'
       preLoaderRoute: typeof SignInSplatRouteImport
-      parentRoute: typeof SignInRoute
+      parentRoute: typeof rootRouteImport
     }
     '/session-tasks/choose-organization': {
       id: '/session-tasks/choose-organization'
@@ -591,42 +515,16 @@ const AppRouteChildren: AppRouteChildren = {
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 
-interface SignInRouteChildren {
-  SignInSplatRoute: typeof SignInSplatRoute
-  SignInSsoCallbackRoute: typeof SignInSsoCallbackRoute
-}
-
-const SignInRouteChildren: SignInRouteChildren = {
-  SignInSplatRoute: SignInSplatRoute,
-  SignInSsoCallbackRoute: SignInSsoCallbackRoute,
-}
-
-const SignInRouteWithChildren =
-  SignInRoute._addFileChildren(SignInRouteChildren)
-
-interface SignUpRouteChildren {
-  SignUpSplatRoute: typeof SignUpSplatRoute
-  SignUpSsoCallbackRoute: typeof SignUpSsoCallbackRoute
-}
-
-const SignUpRouteChildren: SignUpRouteChildren = {
-  SignUpSplatRoute: SignUpSplatRoute,
-  SignUpSsoCallbackRoute: SignUpSsoCallbackRoute,
-}
-
-const SignUpRouteWithChildren =
-  SignUpRoute._addFileChildren(SignUpRouteChildren)
-
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AppRoute: AppRouteWithChildren,
   OrganizationRoute: OrganizationRoute,
-  SignInRoute: SignInRouteWithChildren,
-  SignUpRoute: SignUpRouteWithChildren,
   ApiSplatRoute: ApiSplatRoute,
   ApiOrpcWsRoute: ApiOrpcWsRoute,
   PosthogProxySplatRoute: PosthogProxySplatRoute,
   SessionTasksChooseOrganizationRoute: SessionTasksChooseOrganizationRoute,
+  SignInSplatRoute: SignInSplatRoute,
+  SignUpSplatRoute: SignUpSplatRoute,
   ApiOrpcSplatRoute: ApiOrpcSplatRoute,
 }
 export const routeTree = rootRouteImport
