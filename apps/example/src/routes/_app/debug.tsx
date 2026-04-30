@@ -89,7 +89,6 @@ function DebugPage() {
           <h2 className="text-sm font-semibold">Runtime deps demo</h2>
           <p className="text-sm text-muted-foreground">
             The confetti route uses the same server-side websocket handler in Node and Cloudflare.
-            Preview test verified.
           </p>
         </div>
         <Button size="sm" nativeButton={false} render={<Link to="/confetti" />}>
