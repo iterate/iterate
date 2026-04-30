@@ -32,6 +32,7 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
   // logging plugin to distinguish aborted client requests from real failures.
   // https://developers.cloudflare.com/workers/runtime-apis/request/
   compatibilityFlags: ["enable_request_signal"],
+  extraRouteHostnames: projectRouteHostnamesForBaseUrl(ctx.compiledAppConfig.baseUrl),
 });
 
 export { worker };
@@ -40,3 +41,12 @@ await ctx.app.finalize();
 await afterFinalize();
 
 if (!ctx.app.local) process.exit(0);
+
+function projectRouteHostnamesForBaseUrl(baseUrl: string | undefined) {
+  if (!baseUrl) return [];
+
+  const hostname = new URL(baseUrl).hostname;
+  if (hostname === "localhost" || hostname.endsWith(".workers.dev")) return [];
+
+  return [`*.${hostname}`];
+}
