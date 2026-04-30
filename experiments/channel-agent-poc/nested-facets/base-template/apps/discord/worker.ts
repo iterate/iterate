@@ -195,15 +195,14 @@ class DiscordClient {
   }
 
   async #call(method: string, path: string, body?: unknown): Promise<unknown> {
+    const hasBody = body !== undefined && method !== "GET";
     const resp = await fetch(`${this.apiBase}${path}`, {
       method,
       headers: {
         authorization: `Bot ${this.token}`,
-        ...(body && method !== "PUT" && method !== "GET"
-          ? { "content-type": "application/json" }
-          : {}),
+        ...(hasBody ? { "content-type": "application/json" } : {}),
       },
-      ...(body && method !== "PUT" && method !== "GET" ? { body: JSON.stringify(body) } : {}),
+      ...(hasBody ? { body: JSON.stringify(body) } : {}),
     });
     if (resp.status === 204) return { ok: true };
     const raw = await resp.text();

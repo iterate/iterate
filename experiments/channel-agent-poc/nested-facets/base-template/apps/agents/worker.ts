@@ -375,7 +375,6 @@ const MCP_SERVERS = [
 ] as const;
 
 export class StreamProcessor extends Agent {
-  #openApiProviders: ToolProvider[] = [];
   #inflight: { requestId: string; status: "scheduled" | "running"; timer?: any } | null = null;
   #deadlineTimers = new Map<string, any>();
   #processor = createIterateAgentProcessor({
@@ -407,24 +406,6 @@ export class StreamProcessor extends Agent {
           }
         }),
       );
-
-      // Load OpenAPI tool providers from sibling apps
-      const slug = ((await this.ctx.storage.kv.get("projectSlug")) as string) || "test";
-      for (const [name, appName] of [
-        ["slack", "slack"],
-        ["linear", "linear"],
-        ["github", "github"],
-        ["discord", "discord"],
-      ] as const) {
-        try {
-          const base = appUrl(appName, slug) + "/api";
-          const provider = await createOpenApiProvider(name, base + "/openapi.json", base);
-          this.#openApiProviders.push(provider);
-          console.log(`[OpenAPI] ${name}:`, Object.keys(provider.fns).join(", "));
-        } catch (e: any) {
-          console.error(`[OpenAPI] ${name} failed:`, e.message);
-        }
-      }
     } catch (e: any) {
       // In facet context, broadcastMcpServers may fail due to DO I/O isolation.
       // Safe to ignore; fetch-based processor requests still work.
