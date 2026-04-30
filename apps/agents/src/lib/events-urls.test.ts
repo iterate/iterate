@@ -28,4 +28,14 @@ describe("buildAgentWebSocketCallbackUrl", () => {
       }),
     ).toBe("ws://[::1]:5174/agents/child-stream-auto-subscriber/stream-demo");
   });
+
+  test("preserves explicit IPv4 loopback hosts", () => {
+    expect(
+      buildAgentWebSocketCallbackUrl({
+        publicOrigin: "http://127.0.0.1:3000",
+        agentClass: "child-stream-auto-subscriber",
+        agentInstance: "stream-demo",
+      }),
+    ).toBe("ws://127.0.0.1:3000/agents/child-stream-auto-subscriber/stream-demo");
+  });
 });

@@ -58,7 +58,7 @@ test(
       eventsProjectSlug: e2e.runSlug,
     });
     mock.use(
-      http.all(eventsStreamUrlPattern({ e2e, streamPath }), () => {
+      http.all(eventsApiUrlPattern({ e2e }), () => {
         return passthrough();
       }),
     );
@@ -126,31 +126,25 @@ test(
 
     const har = mock.getHar();
     const urls = har.log.entries.map((entry) => entry.request.url);
-    const eventsHost = new URL(
-      getProjectUrl({
-        currentUrl: e2e.eventsBaseUrl,
-        projectSlug: ProjectSlug.parse(e2e.runSlug),
-      }).toString(),
-    ).hostname;
-    expect(urls.some((url) => url.includes(eventsHost))).toBe(true);
+    expect(urls.some((url) => eventsApiUrlPattern({ e2e }).test(url))).toBe(true);
     expect(urls.some((url) => url.includes("example.com"))).toBe(true);
   },
 );
 
-function eventsStreamUrlPattern(args: {
-  e2e: Awaited<ReturnType<typeof setupE2E>>;
-  streamPath: string;
-}) {
-  const eventsHost = new URL(
-    getProjectUrl({
-      currentUrl: args.e2e.eventsBaseUrl,
-      projectSlug: ProjectSlug.parse(args.e2e.runSlug),
-    }).toString(),
-  ).hostname;
-  const encodedStreamPath = encodeURIComponent(args.streamPath);
-  return new RegExp(
-    `^https://${escapeRegExp(eventsHost)}/api/streams/${escapeRegExp(encodedStreamPath)}(?:[/?]|$)`,
-  );
+function eventsApiUrlPattern(args: { e2e: Awaited<ReturnType<typeof setupE2E>> }) {
+  const eventsUrl = getProjectUrl({
+    currentUrl: args.e2e.eventsBaseUrl,
+    projectSlug: ProjectSlug.parse(args.e2e.runSlug),
+  });
+  const hostPattern = isLocalEventsUrl(eventsUrl)
+    ? String.raw`(?:localhost|127\.0\.0\.1|\[::1\])`
+    : escapeRegExp(eventsUrl.hostname);
+  const portPattern = eventsUrl.port ? `:${escapeRegExp(eventsUrl.port)}` : "";
+  return new RegExp(`^${escapeRegExp(eventsUrl.protocol)}//${hostPattern}${portPattern}/api/`);
+}
+
+function isLocalEventsUrl(url: URL) {
+  return url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
 }
 
 function escapeRegExp(value: string) {

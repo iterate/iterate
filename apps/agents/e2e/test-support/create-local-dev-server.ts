@@ -64,6 +64,17 @@ export async function createLocalDevServer(opts: {
     disposables.push(devServer);
     console.info(`[e2e] Agents dev server: ${devServer.baseUrl}`);
 
+    if (isLocalUrl(opts.eventsBaseUrl)) {
+      return {
+        publicUrl: devServer.baseUrl,
+        baseUrl: devServer.baseUrl,
+        streamPath: opts.streamPath,
+        async [Symbol.asyncDispose]() {
+          await dispose();
+        },
+      };
+    }
+
     const tunnel = await useCloudflareTunnel({
       token: tunnelLease.tunnelToken,
       publicUrl: tunnelLease.publicUrl,
@@ -89,4 +100,9 @@ export async function createLocalDevServer(opts: {
     }
     throw error;
   }
+}
+
+function isLocalUrl(value: string) {
+  const url = new URL(value);
+  return url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
 }

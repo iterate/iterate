@@ -88,8 +88,10 @@ export function buildStreamAppendUrl(args: {
  * instance. Protocol mirrors the public origin: `http://` → `ws://`,
  * everything else → `wss://`. Plain `ws:` is required for local dev where
  * the agents app runs on `http://localhost:5174` (workerd has no TLS
- * endpoint). Anywhere else (preview / prod tunnels) is `https:` so we keep
- * `wss:`.
+ * endpoint). We rewrite `localhost` to `[::1]` because workerd reaches
+ * sibling local dev servers that way in our usual Alchemy dev setup, but we
+ * leave explicit `127.0.0.1` origins alone for tests that intentionally bind
+ * Vite to IPv4.
  */
 export function buildAgentWebSocketCallbackUrl(args: {
   publicOrigin: string;
@@ -97,7 +99,7 @@ export function buildAgentWebSocketCallbackUrl(args: {
   agentInstance: string;
 }): string {
   const url = new URL(args.publicOrigin);
-  if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
+  if (url.hostname === "localhost") {
     url.hostname = "[::1]";
   }
   url.protocol = url.protocol === "http:" || isLocalhost(url.hostname) ? "ws:" : "wss:";
@@ -158,7 +160,7 @@ function buildStreamProcessorRunnerWebSocketCallbackUrl(args: {
   streamPath: StreamPath;
 }): string {
   const url = new URL(args.publicOrigin);
-  if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
+  if (url.hostname === "localhost") {
     url.hostname = "[::1]";
   }
   url.protocol = url.protocol === "http:" || isLocalhost(url.hostname) ? "ws:" : "wss:";
