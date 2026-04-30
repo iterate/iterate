@@ -258,11 +258,14 @@ function withSequentialCloudflareAssetPreupload(input: { command: string; worker
  *    os2 uses this for project subdomain routing (`iterate2.app`, `*.iterate2.app`).
  *
  * Returns a deduplicated array of hostnames. Returns empty if no routes are
- * configured (localhost-only dev).
+ * configured (localhost-only dev, or workers.dev-only previews).
  *
  * @see https://developers.cloudflare.com/workers/configuration/routing/routes/
+ * @see https://developers.cloudflare.com/workers/configuration/routing/workers-dev/
  */
 function deriveWorkerRouteHosts(baseUrl: string | undefined, extraRouteHostnames: string[] = []) {
   const baseUrlHostname = baseUrl ? new URL(baseUrl).hostname : undefined;
-  return [...new Set([...(baseUrlHostname ? [baseUrlHostname] : []), ...extraRouteHostnames])];
+  return [
+    ...new Set([...(baseUrlHostname ? [baseUrlHostname] : []), ...extraRouteHostnames]),
+  ].filter((hostname) => !hostname.endsWith(".workers.dev"));
 }

@@ -25,6 +25,15 @@ zone (see `docs/os2-environments.md`):
 - `os.iterate-preview-N.iterate.app` (dashboard)
 - `*.iterate-preview-N.iterate.app` (project subdomains)
 
+For `agents`, `codemode`, `example`, `semaphore`, and `ingress-proxy`,
+preview slot `APP_CONFIG_BASE_URL` values use the Worker URL directly:
+
+- `https://<app>-preview-N.iterate.workers.dev`
+
+`workers.dev` routes are assigned automatically from the Worker name, so
+`IterateApp` deliberately does not create Cloudflare Route/DNS resources for
+those hostnames.
+
 That means host-sensitive preview features can behave like preview/production instead of being limited to a plain `workers.dev` host.
 
 ## Source Of Truth
