@@ -26,8 +26,6 @@ const defaultPreviewLeaseMs = 60 * 60 * 1000;
 // once the health endpoint is reachable.
 const defaultPreviewReadyTimeoutMs = 600_000;
 const defaultPreviewReadyUrlPath = "/api/__internal/health";
-const defaultPreviewDeployMaxAttempts = 2;
-const defaultPreviewDeployRetryDelayMs = 15_000;
 const defaultPreviewTestMaxAttempts = 2;
 const defaultPreviewTestRetryDelayMs = 5_000;
 const sharedPreviewDependencyPaths = [
@@ -597,16 +595,10 @@ async function createPreviewEnvironment(
       "alchemy:up",
     ];
 
-    // Alchemy applies the Worker and its routes in one command. Cloudflare can
-    // briefly reject route creation with error 10019 ("Worker does not exist")
-    // while the just-created Worker propagates through the API, so preview
-    // deploys get one full re-apply before we mark the semaphore slot failed.
-    const deployResult = await runCommandWithRetries({
+    const deployResult = await runCommand({
       args: deployArgs,
       command: "doppler",
       environment: params.commandEnvironment,
-      maxAttempts: defaultPreviewDeployMaxAttempts,
-      retryDelayMs: defaultPreviewDeployRetryDelayMs,
       signal: params.signal,
       workingDirectory: params.workingDirectory,
     });

@@ -162,6 +162,11 @@ export async function IterateApp<B extends Bindings>(
   if (!app.local && worker.url && routeHosts.length > 0) {
     const cloudflareApi = await createCloudflareApi({});
 
+    await waitForCloudflareWorkerScript({
+      cloudflareApi,
+      workerName: worker.name,
+    });
+
     await Promise.all(
       routeHosts.map((hostname) =>
         Route(routeResourceIdForHostname(hostname), {
@@ -239,6 +244,58 @@ function withSequentialCloudflareAssetPreupload(input: { command: string; worker
   // session, sees no remaining buckets, and attaches a stable completion token.
   // https://developers.cloudflare.com/workers/static-assets/direct-upload/
   return `${input.command} && pnpm exec tsx ${JSON.stringify(preuploadScriptPath)} --worker-name ${JSON.stringify(input.workerName)} --assets ${JSON.stringify("dist/client")}`;
+}
+
+/**
+ * Wait until Cloudflare's Workers Scripts API can read the just-uploaded
+ * script before creating zone routes for it.
+ *
+ * Alchemy's `TanStackStart` returns after the upload step, but in CI we have
+ * seen the immediately-following Routes API call fail with Cloudflare error
+ * 10019 ("Worker does not exist"). Polling the first-party script-read endpoint
+ * keeps the dependency inside `IterateApp` instead of requiring each preview
+ * job to retry the whole deployment command.
+ *
+ * Cloudflare routes docs:
+ * https://developers.cloudflare.com/workers/configuration/routing/routes/
+ *
+ * Workers Scripts API:
+ * https://developers.cloudflare.com/workers/api/
+ */
+async function waitForCloudflareWorkerScript(params: {
+  cloudflareApi: Awaited<ReturnType<typeof createCloudflareApi>>;
+  workerName: string;
+}) {
+  const deadline = Date.now() + 120_000;
+  let lastStatus = 0;
+  let lastBody = "";
+
+  while (Date.now() < deadline) {
+    const response = await params.cloudflareApi.get(
+      `/accounts/${params.cloudflareApi.accountId}/workers/scripts/${encodeURIComponent(params.workerName)}`,
+    );
+
+    if (response.ok) return;
+
+    lastStatus = response.status;
+    lastBody = await response.text();
+
+    if (response.status !== 404) {
+      throw new Error(
+        `Cloudflare Workers Scripts API returned ${response.status} while checking ${params.workerName}: ${lastBody}`,
+      );
+    }
+
+    await sleep(5_000);
+  }
+
+  throw new Error(
+    `Cloudflare Worker script ${params.workerName} was not visible before route creation. Last status: ${lastStatus}. Last body: ${lastBody}`,
+  );
+}
+
+async function sleep(ms: number) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // ---------------------------------------------------------------------------
