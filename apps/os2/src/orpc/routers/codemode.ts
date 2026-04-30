@@ -249,6 +249,16 @@ export const codemodeRouter = {
     describe: os.codemode.describe
       .use(activeOrganizationMiddleware)
       .handler(async ({ input, context }) => {
+        // Describing providers can invoke caller-supplied Callable descriptors.
+        // Keep it project-scoped for the same reason execution is project-scoped:
+        // a Clerk org session must prove access to the project before any
+        // provider descriptor is resolved.
+        await requireCodemodeProject({
+          activeOrganization: context.activeOrganization,
+          context,
+          projectId: input.projectId,
+        });
+
         const callableCtx: CallableContext = {
           env: context.callableEnv ?? {},
           fetch: globalThis.fetch,

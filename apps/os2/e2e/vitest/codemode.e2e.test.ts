@@ -256,8 +256,10 @@ describe("codemode.describe", () => {
   it("returns type definitions placeholder when no providers have describe", async () => {
     const baseUrl = requireBaseUrl();
     const client = createClient(baseUrl);
+    const projectId = requireProjectId();
 
     const result = await client.codemode.describe({
+      projectId,
       providers: [
         {
           path: ["test"],

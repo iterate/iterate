@@ -229,7 +229,12 @@ export const osContract = oc.router({
         description: "Fetch type descriptions from tool providers",
         tags: ["/codemode"],
       })
-      .input(z.object({ providers: z.array(ToolProviderDescriptor) }))
+      .input(
+        z.object({
+          projectId: z.string(),
+          providers: z.array(ToolProviderDescriptor),
+        }),
+      )
       .output(z.object({ typeDefinitions: z.string() })),
   },
   projects: {
