@@ -1,6 +1,6 @@
 import type { PublicAppConfig } from "@iterate-com/shared/apps/config";
 import { useConfig } from "@iterate-com/ui/apps/config";
-import { Button } from "@iterate-com/ui/components/button";
+import { buttonVariants } from "@iterate-com/ui/components/button";
 import { createFileRoute } from "@tanstack/react-router";
 import type { AppConfig } from "~/app.ts";
 import { buildProjectMcpUrl } from "~/lib/project-host-routing.ts";
@@ -67,20 +67,14 @@ function ProjectMcpPage() {
         <p className="text-sm text-muted-foreground">
           Then run <code>/mcp</code> in Claude Code and authenticate the server in the browser.
         </p>
-        <Button
-          size="sm"
-          variant="outline"
-          nativeButton={false}
-          render={
-            <a
-              href="https://docs.anthropic.com/en/docs/claude-code/mcp"
-              target="_blank"
-              rel="noreferrer"
-            />
-          }
+        <a
+          className={buttonVariants({ size: "sm", variant: "outline" })}
+          href="https://docs.anthropic.com/en/docs/claude-code/mcp"
+          target="_blank"
+          rel="noreferrer"
         >
           Claude Code docs
-        </Button>
+        </a>
       </div>
 
       <div className="space-y-2 rounded-lg border bg-card p-4">
@@ -89,20 +83,14 @@ function ProjectMcpPage() {
           Add a remote MCP server using the endpoint above. Cursor will use the server&apos;s OAuth
           metadata to start the Clerk sign-in flow.
         </p>
-        <Button
-          size="sm"
-          variant="outline"
-          nativeButton={false}
-          render={
-            <a
-              href="https://docs.cursor.com/advanced/model-context-protocol"
-              target="_blank"
-              rel="noreferrer"
-            />
-          }
+        <a
+          className={buttonVariants({ size: "sm", variant: "outline" })}
+          href="https://docs.cursor.com/advanced/model-context-protocol"
+          target="_blank"
+          rel="noreferrer"
         >
           Cursor MCP docs
-        </Button>
+        </a>
       </div>
     </section>
   );
