@@ -7,7 +7,7 @@
  */
 import { describe, it, expect, vi } from "vitest";
 import { env } from "cloudflare:workers";
-import { CodemodeExecutor, type ResolvedProvider } from "./executor.ts";
+import { CodemodeExecutor } from "./executor.ts";
 import type { ToolProvider, CodemodeEvent } from "./types.ts";
 
 function makeProvider(
@@ -43,7 +43,7 @@ const blockId = "cblk_test";
 describe("CodemodeExecutor", () => {
   it("executes simple code that returns a value", async () => {
     const executor = new CodemodeExecutor({ loader: env.LOADER });
-    const { events, onEvent } = collectEvents();
+    const { events: _events, onEvent } = collectEvents();
 
     const result = await executor.execute({
       code: "async () => 42",
@@ -62,7 +62,7 @@ describe("CodemodeExecutor", () => {
       return a + b;
     });
     const executor = new CodemodeExecutor({ loader: env.LOADER });
-    const { events, onEvent } = collectEvents();
+    const { events: _events, onEvent } = collectEvents();
 
     const result = await executor.execute({
       code: "async () => await tools.add({ a: 3, b: 4 })",
@@ -78,7 +78,7 @@ describe("CodemodeExecutor", () => {
   it("emits tool-function-call events", async () => {
     const echo = vi.fn(async (payload: unknown) => payload);
     const executor = new CodemodeExecutor({ loader: env.LOADER });
-    const { events, onEvent } = collectEvents();
+    const { events: _events, onEvent } = collectEvents();
 
     await executor.execute({
       code: 'async () => await tools.echo({ msg: "hi" })',
@@ -87,8 +87,8 @@ describe("CodemodeExecutor", () => {
       onEvent,
     });
 
-    const requested = events.find((e) => e.type === "codemode-tool-function-call-requested");
-    const succeeded = events.find((e) => e.type === "codemode-tool-function-call-succeeded");
+    const requested = _events.find((e) => e.type === "codemode-tool-function-call-requested");
+    const succeeded = _events.find((e) => e.type === "codemode-tool-function-call-succeeded");
 
     expect(requested).toBeDefined();
     expect(succeeded).toBeDefined();
@@ -103,7 +103,7 @@ describe("CodemodeExecutor", () => {
       throw new Error("boom");
     };
     const executor = new CodemodeExecutor({ loader: env.LOADER });
-    const { events, onEvent } = collectEvents();
+    const { events: _events, onEvent } = collectEvents();
 
     await executor.execute({
       code: "async () => await tools.failing({})",
@@ -112,7 +112,7 @@ describe("CodemodeExecutor", () => {
       onEvent,
     });
 
-    const failed = events.find((e) => e.type === "codemode-tool-function-call-failed");
+    const failed = _events.find((e) => e.type === "codemode-tool-function-call-failed");
     expect(failed).toBeDefined();
     if (failed?.type === "codemode-tool-function-call-failed") {
       expect(failed.error).toBe("boom");
@@ -121,7 +121,7 @@ describe("CodemodeExecutor", () => {
 
   it("captures console output in result logs", async () => {
     const executor = new CodemodeExecutor({ loader: env.LOADER });
-    const { events, onEvent } = collectEvents();
+    const { events: _events, onEvent } = collectEvents();
 
     const result = await executor.execute({
       code: 'async () => { console.log("hello"); console.warn("careful"); return "done"; }',
@@ -141,7 +141,7 @@ describe("CodemodeExecutor", () => {
       return `done:${x}`;
     });
     const executor = new CodemodeExecutor({ loader: env.LOADER });
-    const { events, onEvent } = collectEvents();
+    const { events: _events, onEvent } = collectEvents();
 
     const result = await executor.execute({
       code: 'async () => await mcp.linear.doIt({ x: "hi" })',
@@ -158,7 +158,7 @@ describe("CodemodeExecutor", () => {
     const storeGet = vi.fn(async () => ({ from: "store" }));
     const cacheGet = vi.fn(async () => ({ from: "cache" }));
     const executor = new CodemodeExecutor({ loader: env.LOADER });
-    const { events, onEvent } = collectEvents();
+    const { events: _events, onEvent } = collectEvents();
 
     const result = await executor.execute({
       code: `async () => {
@@ -183,7 +183,7 @@ describe("CodemodeExecutor", () => {
 
   it("returns error when code throws", async () => {
     const executor = new CodemodeExecutor({ loader: env.LOADER });
-    const { events, onEvent } = collectEvents();
+    const { events: _events, onEvent } = collectEvents();
 
     const result = await executor.execute({
       code: 'async () => { throw new Error("boom"); }',
@@ -201,7 +201,7 @@ describe("CodemodeExecutor", () => {
       return { id };
     };
     const executor = new CodemodeExecutor({ loader: env.LOADER });
-    const { events, onEvent } = collectEvents();
+    const { events: _events, onEvent } = collectEvents();
 
     const result = await executor.execute({
       code: `async () => {
@@ -225,7 +225,7 @@ describe("CodemodeExecutor", () => {
       loader: env.LOADER,
       timeout: 100,
     });
-    const { events, onEvent } = collectEvents();
+    const { events: _events, onEvent } = collectEvents();
 
     const result = await executor.execute({
       code: "async () => { await new Promise(r => setTimeout(r, 5000)); return 'done'; }",
@@ -239,7 +239,7 @@ describe("CodemodeExecutor", () => {
 
   it("normalizes bare expressions", async () => {
     const executor = new CodemodeExecutor({ loader: env.LOADER });
-    const { events, onEvent } = collectEvents();
+    const { events: _events, onEvent } = collectEvents();
 
     const result = await executor.execute({
       code: "42",
@@ -253,7 +253,7 @@ describe("CodemodeExecutor", () => {
 
   it("strips markdown fences", async () => {
     const executor = new CodemodeExecutor({ loader: env.LOADER });
-    const { events, onEvent } = collectEvents();
+    const { events: _events, onEvent } = collectEvents();
 
     const result = await executor.execute({
       code: "```js\n1 + 1\n```",
@@ -267,7 +267,7 @@ describe("CodemodeExecutor", () => {
 
   it("blocks external fetch by default", async () => {
     const executor = new CodemodeExecutor({ loader: env.LOADER });
-    const { events, onEvent } = collectEvents();
+    const { events: _events, onEvent } = collectEvents();
 
     const result = await executor.execute({
       code: 'async () => { const r = await fetch("https://example.com"); return r.status; }',
@@ -281,7 +281,7 @@ describe("CodemodeExecutor", () => {
 
   it("rejects duplicate provider paths", async () => {
     const executor = new CodemodeExecutor({ loader: env.LOADER });
-    const { events, onEvent } = collectEvents();
+    const { events: _events, onEvent } = collectEvents();
     const provider = simpleProvider({});
 
     const result = await executor.execute({
@@ -299,7 +299,7 @@ describe("CodemodeExecutor", () => {
 
   it("rejects conflicting provider paths", async () => {
     const executor = new CodemodeExecutor({ loader: env.LOADER });
-    const { events, onEvent } = collectEvents();
+    const { events: _events, onEvent } = collectEvents();
     const provider = simpleProvider({});
 
     const result = await executor.execute({
@@ -317,7 +317,7 @@ describe("CodemodeExecutor", () => {
 
   it("rejects reserved path segments", async () => {
     const executor = new CodemodeExecutor({ loader: env.LOADER });
-    const { events, onEvent } = collectEvents();
+    const { events: _events, onEvent } = collectEvents();
     const provider = simpleProvider({});
 
     const result = await executor.execute({
@@ -332,7 +332,7 @@ describe("CodemodeExecutor", () => {
 
   it("works with empty providers array", async () => {
     const executor = new CodemodeExecutor({ loader: env.LOADER });
-    const { events, onEvent } = collectEvents();
+    const { events: _events, onEvent } = collectEvents();
 
     const result = await executor.execute({
       code: "async () => 42",
@@ -349,7 +349,7 @@ describe("CodemodeExecutor", () => {
       return { path, payload };
     });
     const executor = new CodemodeExecutor({ loader: env.LOADER });
-    const { events, onEvent } = collectEvents();
+    const { events: _events, onEvent } = collectEvents();
 
     const result = await executor.execute({
       code: 'async () => await mcp.files.read({ name: "test.txt" })',

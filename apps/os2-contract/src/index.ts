@@ -150,7 +150,7 @@ export const osContract = oc.router({
           message: z.string().trim().min(1).default("OS server test exception"),
         }),
       )
-      .output(z.unknown()),
+      .output(z.never()),
     randomLogStream: oc
       .route({
         method: "POST",

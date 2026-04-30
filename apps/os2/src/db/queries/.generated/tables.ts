@@ -14,8 +14,8 @@ export type ProjectPresetsRow = {
 export type ProjectsRow = {
   id: string;
   slug: string;
-  clerk_org_id: string | null;
-  created_by_clerk_user_id: string | null;
+  clerk_org_id: string;
+  created_by_clerk_user_id: string;
   custom_hostname: string | null;
   metadata: string;
   created_at: string;

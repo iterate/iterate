@@ -430,7 +430,7 @@ async function waitForScriptExecutionFinished(input: {
       payload.scriptExecutionRequestedOffset === input.scriptExecutionRequestedOffset
     ) {
       return {
-        error: typeof payload.error === "string" ? payload.error : undefined,
+        error: stringifyPayloadError(payload.error),
         logs,
         result: payload.result,
       };
@@ -444,6 +444,16 @@ function readPayload(event: Event) {
   return event.payload != null && typeof event.payload === "object"
     ? (event.payload as Record<string, unknown>)
     : {};
+}
+
+function stringifyPayloadError(value: unknown) {
+  if (value == null) return undefined;
+  if (typeof value === "string") return value;
+  if (typeof value === "object" && "message" in value) {
+    const message = (value as { message?: unknown }).message;
+    if (typeof message === "string") return message;
+  }
+  return String(value);
 }
 
 function slugifySegment(value: string) {

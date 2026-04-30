@@ -621,6 +621,7 @@ function assertFetchCallableContext(options: { callable: FetchCallable; ctx: Cal
           });
           return;
       }
+      return;
     }
     case "loopback-binding": {
       switch (options.callable.via.bindingType) {
@@ -683,6 +684,7 @@ function assertRpcCallableContext(options: { callable: WorkersRpcCallable; ctx: 
           });
           return;
       }
+      return;
     }
     case "loopback-binding": {
       switch (options.callable.via.bindingType) {

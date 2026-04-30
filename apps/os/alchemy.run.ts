@@ -876,7 +876,11 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       // Use empty defaults outside dev so worker.Env contains these bindings for typing.
       ...dockerBindings,
     },
-    name: isProduction ? "os" : isPreviewStage ? "os-preview" : undefined,
+    // Public environment names moved from staging/stg to preview, but this is
+    // the Cloudflare Worker script name Alchemy adopts. Keeping the historical
+    // os-staging resource avoids orphaning the existing preview worker while
+    // Doppler, URLs, and Alchemy stages use preview terminology.
+    name: isProduction ? "os" : isPreviewStage ? "os-staging" : undefined,
     // Place the worker near the PlanetScale Postgres primary
     // to minimise round-trip latency on DB-heavy pages.
     placement: { region: regionConfig.workerPlacementRegion },

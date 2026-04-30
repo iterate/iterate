@@ -140,8 +140,6 @@ describe("codemode.execute", () => {
     const result = events.find((e) => e.type === "codemode-block-result-added");
     expect(result?.result).toBe("done");
 
-    // Logs may arrive via events or in the result (depends on timing)
-    const logEvents = events.filter((e) => e.type === "codemode-log-emitted");
     // At minimum, the result should have logs in the response
     expect(result?.error).toBeUndefined();
   });

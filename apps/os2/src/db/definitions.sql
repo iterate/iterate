@@ -1,8 +1,8 @@
 create table projects (
   id text primary key not null,
   slug text not null,
-  clerk_org_id text,
-  created_by_clerk_user_id text,
+  clerk_org_id text not null,
+  created_by_clerk_user_id text not null,
   custom_hostname text unique,
   metadata text not null check (json_valid(metadata)),
   created_at text not null default current_timestamp,

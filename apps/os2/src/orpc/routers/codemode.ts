@@ -210,13 +210,26 @@ export const codemodeRouter = {
         yield event;
       }
 
-      const result = await execution;
+      let result: Awaited<typeof execution>;
+      try {
+        result = await execution;
+      } catch (error) {
+        yield {
+          blockId,
+          timestamp: now(),
+          type: "codemode-block-result-added",
+          result: undefined,
+          error: stringifyPayloadError(error),
+        };
+        return;
+      }
+
       yield {
         blockId,
         timestamp: now(),
         type: "codemode-block-result-added",
         result: result.result,
-        error: result.error,
+        error: stringifyPayloadError(result.error),
       };
     }),
 
@@ -380,7 +393,7 @@ function toLegacyCodemodeEvent(input: {
         timestamp,
         type: "codemode-tool-function-call-failed",
         callId: callIdForEvent(input.blockId, payload.toolFunctionCallRequestedOffset),
-        error: stringifyPayloadError(payload.error),
+        error: stringifyPayloadError(payload.error) ?? "Tool function call failed.",
       };
     case "events.iterate.com/codemode/script-execution-finished":
       return {
@@ -388,7 +401,7 @@ function toLegacyCodemodeEvent(input: {
         timestamp,
         type: "codemode-block-result-added",
         result: payload.result,
-        error: typeof payload.error === "string" ? payload.error : undefined,
+        error: stringifyPayloadError(payload.error),
       };
     default:
       return null;
@@ -414,6 +427,7 @@ function callIdForEvent(blockId: string, offset: unknown) {
 }
 
 function stringifyPayloadError(value: unknown) {
+  if (value == null) return undefined;
   if (typeof value === "string") return value;
   if (value != null && typeof value === "object" && "message" in value) {
     const message = (value as { message?: unknown }).message;

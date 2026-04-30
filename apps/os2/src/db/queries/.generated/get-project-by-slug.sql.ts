@@ -33,7 +33,7 @@ export namespace getProjectBySlug {
     id: string;
     slug: string;
     clerk_org_id: string;
-    created_by_clerk_user_id?: string;
+    created_by_clerk_user_id: string;
     custom_hostname?: string;
     metadata: string;
     created_at: string;

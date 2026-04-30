@@ -118,8 +118,7 @@ function CodemodePage() {
         wsClientRef.current = null;
       }
     };
-    // runToken is the only trigger -- code is captured at submit time via the closure
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runToken is the only trigger; code is captured at submit time via the closure.
   }, [runToken]);
 
   useEffect(() => {

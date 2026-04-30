@@ -1,3 +1,4 @@
+import { ORPCError } from "@orpc/server";
 import { activeOrganizationMiddleware, os } from "~/orpc/orpc.ts";
 
 export const testRouter = {
@@ -107,12 +108,11 @@ export const testRouter = {
           steps: [...steps],
         };
       }),
-    serverThrow: os.test.serverThrow
-      .use(activeOrganizationMiddleware)
-      .handler(async ({ input }): Promise<never> => {
-        await new Promise((resolve) => setTimeout(resolve, 50));
-        throw new Error(input.message);
-      }),
+    serverThrow: os.test.serverThrow.handler(async ({ context, input }): Promise<never> => {
+      requireActiveOrganizationForNeverEndpoint(context);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      throw new Error(input.message);
+    }),
     randomLogStream: os.test.randomLogStream
       .use(activeOrganizationMiddleware)
       .handler(async function* ({ input, context, signal }) {
@@ -146,6 +146,27 @@ export const testRouter = {
       }),
   },
 };
+
+/**
+ * `serverThrow` intentionally has a `z.never()` output contract so OpenAPI and
+ * clients know it only exercises the server error path. oRPC's middleware
+ * generics currently infer a concrete middleware output and cannot compose that
+ * with `never`, so this debug-only route performs the same active-organization
+ * gate inline while keeping the public contract precise.
+ */
+function requireActiveOrganizationForNeverEndpoint(context: {
+  auth?: { isAuthenticated: boolean; orgId?: string | null; orgSlug?: string | null };
+}) {
+  if (!context.auth?.isAuthenticated) {
+    throw new ORPCError("UNAUTHORIZED");
+  }
+
+  if (!context.auth.orgId || !context.auth.orgSlug) {
+    throw new ORPCError("FORBIDDEN", {
+      message: "OS2 requires an active Clerk Organization.",
+    });
+  }
+}
 
 function randomIntBetween(min: number, max: number) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
