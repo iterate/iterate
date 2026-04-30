@@ -115,6 +115,8 @@ export const codemodeRouter = {
             streamPath,
           });
         } catch (error) {
+          if (error instanceof ORPCError) throw error;
+
           yield {
             blockId,
             timestamp: now(),

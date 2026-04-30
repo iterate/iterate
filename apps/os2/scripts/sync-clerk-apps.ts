@@ -262,9 +262,14 @@ function findOrCreateOAuthApplication(applicationId: string, target: Target) {
 
 async function getJwtPublicKey(publishableKey: string) {
   const frontendApiUrl = deriveClerkFrontendApiUrl(publishableKey);
-  const jwks = (await fetch(`${frontendApiUrl}/.well-known/jwks.json`).then((response) =>
-    response.json(),
-  )) as { keys: JsonWebKey[] };
+  const response = await fetch(`${frontendApiUrl}/.well-known/jwks.json`);
+  if (!response.ok) {
+    throw new Error(
+      `JWKS fetch failed for ${frontendApiUrl}: ${response.status} ${response.statusText}`,
+    );
+  }
+
+  const jwks = (await response.json()) as { keys: JsonWebKey[] };
   const signingKey = jwks.keys.find((key) => key.use === "sig") ?? jwks.keys[0];
   if (!signingKey) {
     throw new Error(`No JWT signing key found at ${frontendApiUrl}`);

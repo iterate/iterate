@@ -613,10 +613,10 @@ async function createPreviewEnvironment(
       };
     }
 
-    const readiness = await waitForHttpReadiness({
+    const readiness = await waitForPreviewEnvironmentReadiness({
+      previewEnvironment,
       signal: params.signal,
       timeoutMs: defaultPreviewReadyTimeoutMs,
-      url: new URL(defaultPreviewReadyUrlPath, previewEnvironment.publicUrl),
     });
     if (!readiness.ok) {
       return {
@@ -766,7 +766,11 @@ function derivePreviewEnvironment(input: {
         : `https://${input.previewEnvironmentSlug}.iterate-dev-stg.workers.dev`;
 
   const projectSubdomainUrl =
-    input.appSlug === "os2" ? `https://project.iterate-preview-${slot}.app` : null;
+    input.appSlug === "os2"
+      ? `https://project.iterate-preview-${slot}.app`
+      : input.appSlug === "events"
+        ? `https://test.${input.previewEnvironmentSlug}.iterate.com`
+        : null;
 
   const previewEnvironmentDopplerConfigName = `preview_${slot}`;
 
@@ -986,6 +990,30 @@ async function waitForHttpReadiness(params: { signal?: AbortSignal; timeoutMs: n
     message: `Timed out waiting for preview readiness at ${params.url.toString()}. ${lastFailure}`,
     ok: false as const,
   };
+}
+
+async function waitForPreviewEnvironmentReadiness(params: {
+  previewEnvironment: ReturnType<typeof derivePreviewEnvironment>;
+  signal?: AbortSignal;
+  timeoutMs: number;
+}) {
+  const urls = [
+    new URL(defaultPreviewReadyUrlPath, params.previewEnvironment.publicUrl),
+    ...(params.previewEnvironment.projectSubdomainUrl
+      ? [new URL(defaultPreviewReadyUrlPath, params.previewEnvironment.projectSubdomainUrl)]
+      : []),
+  ];
+
+  for (const url of urls) {
+    const readiness = await waitForHttpReadiness({
+      signal: params.signal,
+      timeoutMs: params.timeoutMs,
+      url,
+    });
+    if (!readiness.ok) return readiness;
+  }
+
+  return { ok: true as const };
 }
 
 async function fetchReadinessStatus(url: URL, signal: AbortSignal | undefined): Promise<number> {
