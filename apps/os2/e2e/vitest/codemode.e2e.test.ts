@@ -3,12 +3,15 @@
  * Runs against a live os2 deployment (dev or preview).
  *
  * Set OS2_BASE_URL to the deployment URL before running:
- *   OS2_BASE_URL=https://os.iterate-dev-jonas.com pnpm test:e2e
+ *   OS2_BASE_URL=https://os.iterate-dev-jonas.com \
+ *   OS2_E2E_PROJECT_ID=proj_... \
+ *   OS2_E2E_COOKIE='__session=...' pnpm test:e2e
  */
 import { createORPCClient } from "@orpc/client";
 import { RPCLink as WebSocketRPCLink } from "@orpc/client/websocket";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import type { RouterClient } from "@orpc/server";
+import WebSocket from "ws";
 import { describe, expect, it } from "vitest";
 import { osContract } from "@iterate-com/os2-contract";
 import type { appRouter } from "~/orpc/root.ts";
@@ -31,14 +34,48 @@ function requireProjectId() {
   return projectId;
 }
 
+function requireAuthHeaders() {
+  const bearerToken = process.env.OS2_E2E_BEARER_TOKEN?.trim();
+  const cookie = process.env.OS2_E2E_COOKIE?.trim();
+  if (!bearerToken && !cookie) {
+    throw new Error(
+      "OS2_E2E_BEARER_TOKEN or OS2_E2E_COOKIE is required for os2 codemode e2e tests.",
+    );
+  }
+
+  return {
+    ...(bearerToken ? { Authorization: `Bearer ${bearerToken}` } : {}),
+    ...(cookie ? { Cookie: cookie } : {}),
+  };
+}
+
 function createClient(baseUrl: string) {
-  return createORPCClient(new OpenAPILink(osContract, { url: `${baseUrl}/api` })) as OrpcClient;
+  const authHeaders = requireAuthHeaders();
+  return createORPCClient(
+    new OpenAPILink(osContract, {
+      url: `${baseUrl}/api`,
+      fetch: (input, init) => {
+        const headers = new Headers(input instanceof Request ? input.headers : undefined);
+        for (const [key, value] of Object.entries(authHeaders)) {
+          headers.set(key, value);
+        }
+        if (input instanceof Request) {
+          return fetch(new Request(input, { headers }));
+        }
+        return fetch(input, { ...init, headers });
+      },
+    }),
+  ) as OrpcClient;
 }
 
 function createWebSocketClient(baseUrl: string) {
+  const authHeaders = requireAuthHeaders();
   const url = new URL("/api/orpc-ws", baseUrl);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  const websocket = new WebSocket(url.toString());
+  // Browser WebSocket cannot set headers, but these e2e tests run in Node.
+  // `ws` lets us carry the same Clerk session cookie/bearer token through the
+  // upgrade request that the server's Clerk auth() call reads.
+  const websocket = new WebSocket(url.toString(), { headers: authHeaders });
   const client = createORPCClient(new WebSocketRPCLink({ websocket })) as OrpcClient;
   return {
     client,

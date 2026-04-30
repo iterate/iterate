@@ -16,6 +16,7 @@ import {
   normalizeRequestHostname,
   resolveProjectSlugFromHostname,
 } from "~/lib/project-host-routing.ts";
+import { deriveClerkFrontendApiUrl } from "~/lib/clerk-frontend-api.ts";
 
 // Re-export rpc-targets so loopback-binding callables can resolve them from ctx.exports.
 // https://developers.cloudflare.com/workers/runtime-apis/context/#exports
@@ -358,11 +359,6 @@ function unauthorizedMcpResponse(request: Request, message: string) {
       "WWW-Authenticate": `Bearer resource_metadata="${metadataUrl.toString()}"`,
     },
   });
-}
-
-function deriveClerkFrontendApiUrl(publishableKey: string) {
-  const encoded = publishableKey.replace(/^pk_(?:test|live)_/, "");
-  return `https://${atob(encoded).replace(/\$/, "")}`;
 }
 
 function readStringClaim(claims: Record<string, unknown>, key: string) {

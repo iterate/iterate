@@ -1,5 +1,6 @@
 import { createPublicKey, randomBytes } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
+import { deriveClerkFrontendApiUrl } from "../src/lib/clerk-frontend-api.ts";
 
 type ClerkApplication = {
   application_id: string;
@@ -260,7 +261,7 @@ function findOrCreateOAuthApplication(applicationId: string, target: Target) {
 }
 
 async function getJwtPublicKey(publishableKey: string) {
-  const frontendApiUrl = deriveFrontendApiUrl(publishableKey);
+  const frontendApiUrl = deriveClerkFrontendApiUrl(publishableKey);
   const jwks = (await fetch(`${frontendApiUrl}/.well-known/jwks.json`).then((response) =>
     response.json(),
   )) as { keys: JsonWebKey[] };
@@ -273,11 +274,6 @@ async function getJwtPublicKey(publishableKey: string) {
     type: "spki",
     format: "pem",
   });
-}
-
-function deriveFrontendApiUrl(publishableKey: string) {
-  const encoded = publishableKey.replace(/^pk_(?:test|live)_/, "");
-  return `https://${Buffer.from(encoded, "base64").toString("utf8").replace(/\$/, "")}`;
 }
 
 function setDopplerSecrets(
