@@ -83,6 +83,10 @@ export default {
             });
           }
 
+          if (isBrowserMcpInstructionsRequest(request)) {
+            return mcpInstructionsPageResponse({ projectSlug, url });
+          }
+
           const mcpAuth = await authenticateMcpRequest(request, config);
           if (mcpAuth instanceof Response) {
             return mcpAuth;
@@ -358,6 +362,69 @@ function unauthorizedMcpResponse(request: Request, message: string) {
       "WWW-Authenticate": `Bearer resource_metadata="${metadataUrl.toString()}"`,
     },
   });
+}
+
+function isBrowserMcpInstructionsRequest(request: Request) {
+  return request.method === "GET" && request.headers.get("accept")?.includes("text/html");
+}
+
+function mcpInstructionsPageResponse(input: { projectSlug: string; url: URL }) {
+  const mcpUrl = new URL("/mcp", input.url.origin).toString();
+  const claudeCommand = `claude mcp add --transport http ${input.projectSlug} ${mcpUrl}`;
+
+  // Browsers navigating directly to /mcp need human setup instructions, while
+  // actual MCP clients need the unauthenticated 401 challenge so they can
+  // discover Clerk through RFC 9728 metadata and start OAuth. We distinguish
+  // those paths by the browser's text/html Accept header.
+  return new Response(
+    `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${escapeHtml(input.projectSlug)} MCP</title>
+  <style>
+    body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #fafafa; color: #171717; }
+    main { max-width: 640px; padding: 32px 20px; margin: 0 auto; }
+    h1 { font-size: 18px; margin: 0 0 8px; }
+    p { color: #525252; line-height: 1.5; }
+    section { margin-top: 16px; border: 1px solid #e5e5e5; border-radius: 8px; background: white; padding: 16px; }
+    code { display: block; overflow-wrap: anywhere; white-space: pre-wrap; border-radius: 6px; background: #f5f5f5; padding: 12px; font: 13px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+    a { color: #155dfc; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>${escapeHtml(input.projectSlug)} MCP</h1>
+    <p>Connect an MCP client to this project endpoint. The endpoint uses Clerk OAuth, so your client should open a browser sign-in flow when it connects.</p>
+    <section>
+      <p>Endpoint</p>
+      <code>${escapeHtml(mcpUrl)}</code>
+    </section>
+    <section>
+      <p>Claude Code</p>
+      <code>${escapeHtml(claudeCommand)}</code>
+      <p>Then run <code style="display: inline; padding: 2px 4px;">/mcp</code> in Claude Code and authenticate this server.</p>
+      <p><a href="https://docs.anthropic.com/en/docs/claude-code/mcp">Claude Code MCP docs</a></p>
+    </section>
+    <section>
+      <p>Cursor</p>
+      <p>Add a remote MCP server using the endpoint above. Cursor should discover this server's OAuth metadata and authenticate through Clerk.</p>
+      <p><a href="https://docs.cursor.com/advanced/model-context-protocol">Cursor MCP docs</a></p>
+    </section>
+  </main>
+</body>
+</html>`,
+    {
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+      },
+    },
+  );
+}
+
+function escapeHtml(value: string) {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
 function readStringClaim(claims: Record<string, unknown>, key: string) {
