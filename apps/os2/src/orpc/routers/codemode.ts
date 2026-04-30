@@ -156,6 +156,12 @@ export const codemodeRouter = {
         context,
         projectId: input.projectId,
       });
+      if (input.streamPath) {
+        requireCodemodeStreamPathProject({
+          projectId: input.projectId,
+          streamPath: input.streamPath,
+        });
+      }
 
       const callableCtx: CallableContext = {
         env: context.callableEnv ?? {},
