@@ -16,8 +16,8 @@ function HomePage() {
       <div className="space-y-1">
         <p className="text-xl font-semibold">hello world</p>
         <p className="text-sm text-muted-foreground">
-          Tiny agents app with the shared PostHog and oRPC plumbing still wired up. Preview
-          deployment test.
+          Tiny agents app with the shared PostHog and oRPC plumbing still wired up. Preview test
+          verified.
         </p>
       </div>
 
