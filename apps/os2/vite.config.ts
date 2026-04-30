@@ -10,6 +10,11 @@ const port = process.env.PORT ? Number(process.env.PORT) : 5173;
 
 export default defineConfig({
   build: {
+    rollupOptions: {
+      output: {
+        chunkFileNames: safeRollupChunkFileName,
+      },
+    },
     sourcemap: true,
   },
   resolve: {
@@ -35,3 +40,14 @@ export default defineConfig({
     tailwindcss(),
   ],
 });
+
+function safeRollupChunkFileName(chunkInfo: { name: string }) {
+  const sanitizedName = chunkInfo.name.replace(/^\.+/, "").replaceAll(/[^A-Za-z0-9_-]+/g, "-");
+
+  // Rollup lets chunkFileNames be a function:
+  // https://rollupjs.org/configuration-options/#output-chunkfilenames
+  // OS2 imports sqlfu bundles from `.generated` directories. Without this
+  // sanitizer, Rollup can emit Worker module chunks like `assets/.generated-*`,
+  // which Cloudflare rejects as missing modules during script upload.
+  return `assets/${sanitizedName || "chunk"}-[hash].js`;
+}
