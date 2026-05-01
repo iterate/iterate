@@ -1,8 +1,16 @@
 import type { Step, Workflow } from "@jlarky/gha-ts/workflow-types";
-import { cloudflarePreviewApps } from "../../../scripts/preview/apps.ts";
+import {
+  cloudflarePreviewApps,
+  cloudflarePreviewSharedPaths,
+} from "../../../scripts/preview/apps.ts";
 import * as utils from "../utils/index.ts";
 
-const previewPaths = [...new Set(Object.values(cloudflarePreviewApps).flatMap((app) => app.paths))];
+const previewPaths = [
+  ...new Set([
+    ...cloudflarePreviewSharedPaths,
+    ...Object.values(cloudflarePreviewApps).flatMap((app) => app.paths),
+  ]),
+];
 
 function createPreviewCommand(input: {
   command: string;

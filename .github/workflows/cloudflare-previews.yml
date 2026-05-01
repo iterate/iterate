@@ -29,6 +29,11 @@ jobs:
             github.log = { ...console, debug: () => {} };
             const vars = { github, context, core, glob, io, require };
             const previewPaths = [
+              ".github/workflows/cloudflare-previews.yml",
+              ".github/ts-workflows/workflows/cloudflare-previews.ts",
+              "packages/shared/src/alchemy/**",
+              "packages/shared/src/apps/**",
+              "scripts/preview/**",
               "apps/agents/**",
               "apps/agents-contract/**",
               "apps/codemode/**",

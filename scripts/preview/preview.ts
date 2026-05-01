@@ -14,7 +14,11 @@ import {
   updateCloudflarePreviewState,
 } from "./state.ts";
 import { splitRepositoryFullName } from "./repository-full-name.ts";
-import { type CloudflarePreviewAppSlug, cloudflarePreviewApps } from "./apps.ts";
+import {
+  type CloudflarePreviewAppSlug,
+  cloudflarePreviewApps,
+  cloudflarePreviewSharedPaths,
+} from "./apps.ts";
 import {
   CLOUDFLARE_PREVIEW_RESOURCE_TYPE,
   parsePreviewEnvironmentData,
@@ -26,14 +30,6 @@ const defaultPreviewReadyTimeoutMs = 600_000;
 const defaultPreviewReadyUrlPath = "/api/__internal/health";
 const defaultPreviewTestMaxAttempts = 2;
 const defaultPreviewTestRetryDelayMs = 5_000;
-const sharedPreviewDependencyPaths = [
-  ".github/workflows/cloudflare-previews.yml",
-  ".github/ts-workflows/workflows/cloudflare-previews.ts",
-  "packages/shared/src/alchemy/**",
-  "packages/shared/src/apps/**",
-  "scripts/preview/**",
-] as const;
-
 export type PreviewSemaphoreResourceClient = {
   acquire: (input: { leaseMs: number; type: string; waitMs?: number }) => Promise<{
     data: Record<string, unknown>;
@@ -701,7 +697,7 @@ async function selectPreviewAppsForPullRequest(input: {
   const changedFiles =
     comparison.data.files?.flatMap((file) => (file.filename ? [file.filename] : [])) ?? [];
 
-  if (changedFiles.some((filename) => matchesPreviewPath(filename, sharedPreviewDependencyPaths))) {
+  if (changedFiles.some((filename) => matchesPreviewPath(filename, cloudflarePreviewSharedPaths))) {
     return Object.values(cloudflarePreviewApps);
   }
 

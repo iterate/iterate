@@ -28,6 +28,14 @@ export type CloudflarePreviewApp = {
   previewTestCommandArgs: readonly [string, ...string[]];
 };
 
+export const cloudflarePreviewSharedPaths = [
+  ".github/workflows/cloudflare-previews.yml",
+  ".github/ts-workflows/workflows/cloudflare-previews.ts",
+  "packages/shared/src/alchemy/**",
+  "packages/shared/src/apps/**",
+  "scripts/preview/**",
+] as const;
+
 export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflarePreviewApp> = {
   agents: {
     slug: "agents",
