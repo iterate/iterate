@@ -17,13 +17,13 @@ import { splitRepositoryFullName } from "./repository-full-name.ts";
 const defaultSemaphoreBaseUrl = "https://semaphore.iterate.com";
 const defaultPreviewLeaseMs = 60 * 60 * 1000;
 // Routed previews can be healthy before Cloudflare has finished issuing edge
-// certificates for newly-created wildcard hostnames. OS2 preview project hosts
-// are deeper subdomains, which Cloudflare Universal SSL does not cover; Total
-// TLS has to issue per-host certificates first:
+// certificates for newly-created hostnames. Some apps record a separate
+// project-subdomain URL; wait on that URL only when it is expected to be
+// certificate-covered in the preview environment.
 // https://developers.cloudflare.com/ssl/edge-certificates/universal-ssl/limitations/#full-setup
 // https://developers.cloudflare.com/ssl/edge-certificates/additional-options/total-tls/
-// Keep this long enough for first issuance while still returning immediately
-// once the health endpoint is reachable.
+// Keep this long enough for first issuance of supported hostnames while still
+// returning immediately once the health endpoint is reachable.
 const defaultPreviewReadyTimeoutMs = 600_000;
 const defaultPreviewReadyUrlPath = "/api/__internal/health";
 const defaultPreviewTestMaxAttempts = 2;
@@ -766,11 +766,7 @@ function derivePreviewEnvironment(input: {
         : `https://${input.previewEnvironmentSlug}.iterate-dev-stg.workers.dev`;
 
   const projectSubdomainUrl =
-    input.appSlug === "os2"
-      ? `https://project.iterate-preview-${slot}.app`
-      : input.appSlug === "events"
-        ? `https://test.${input.previewEnvironmentSlug}.iterate.com`
-        : null;
+    input.appSlug === "os2" ? `https://project.iterate-preview-${slot}.app` : null;
 
   const previewEnvironmentDopplerConfigName = `preview_${slot}`;
 
