@@ -1,33 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { isSupportedPreviewEnvironmentSlug } from "./preview.ts";
+import { expandPreviewDependencies } from "./preview.ts";
 
-describe("preview environment selection", () => {
-  it("skips excluded preview slots", () => {
-    expect(
-      isSupportedPreviewEnvironmentSlug({
-        appSlug: "os2",
-        excludedPreviewSlots: [1],
-        slug: "os2-preview-1",
-      }),
-    ).toBe(false);
-    expect(
-      isSupportedPreviewEnvironmentSlug({
-        appSlug: "os2",
-        excludedPreviewSlots: [1],
-        slug: "os2-preview-2",
-      }),
-    ).toBe(true);
+describe("preview app dependency expansion", () => {
+  it("adds explicit dependencies for affected apps", () => {
+    expect(expandPreviewDependencies(["os2"])).toEqual(["events", "os2"]);
   });
 
-  it("does not exclude slots without app config", () => {
-    expect(isSupportedPreviewEnvironmentSlug({ appSlug: "events", slug: "events-preview-1" })).toBe(
-      true,
-    );
+  it("keeps independent apps as-is", () => {
+    expect(expandPreviewDependencies(["events"])).toEqual(["events"]);
   });
 
-  it("rejects slugs that do not belong to the app", () => {
-    expect(isSupportedPreviewEnvironmentSlug({ appSlug: "events", slug: "os2-preview-2" })).toBe(
-      false,
-    );
+  it("deduplicates dependencies", () => {
+    expect(expandPreviewDependencies(["events", "os2"])).toEqual(["events", "os2"]);
   });
 });

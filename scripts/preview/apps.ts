@@ -17,21 +17,24 @@ export type CloudflarePreviewApp = {
   displayName: string;
   appPath: `apps/${string}`;
   dopplerProject: string;
-  excludedPreviewSlots?: number[];
   paths: string[];
-  previewResourceType: string;
+  /**
+   * Temporary preview orchestration dependency graph. This belongs in app
+   * manifests/contracts long-term; the preview script should not own product
+   * topology once manifests can express cross-app runtime dependencies.
+   */
+  previewDependencies?: CloudflarePreviewAppSlug[];
   previewTestBaseUrlEnvVar: string;
   previewTestCommandArgs: readonly [string, ...string[]];
 };
 
-export const cloudflarePreviewApps = {
+export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflarePreviewApp> = {
   agents: {
     slug: "agents",
     displayName: "Agents",
     appPath: "apps/agents",
     dopplerProject: "agents",
     paths: ["apps/agents/**", "apps/agents-contract/**"],
-    previewResourceType: "agents-preview-environment",
     previewTestBaseUrlEnvVar: "AGENTS_BASE_URL",
     previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
   },
@@ -41,7 +44,6 @@ export const cloudflarePreviewApps = {
     appPath: "apps/codemode",
     dopplerProject: "codemode",
     paths: ["apps/codemode/**", "apps/codemode-contract/**"],
-    previewResourceType: "codemode-preview-environment",
     previewTestBaseUrlEnvVar: "CODEMODE_BASE_URL",
     previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
   },
@@ -51,7 +53,6 @@ export const cloudflarePreviewApps = {
     appPath: "apps/example",
     dopplerProject: "example",
     paths: ["apps/example/**"],
-    previewResourceType: "example-preview-environment",
     previewTestBaseUrlEnvVar: "EXAMPLE_BASE_URL",
     previewTestCommandArgs: ["pnpm", "test:e2e"],
   },
@@ -61,7 +62,6 @@ export const cloudflarePreviewApps = {
     appPath: "apps/events",
     dopplerProject: "events",
     paths: ["apps/events/**"],
-    previewResourceType: "events-preview-environment",
     previewTestBaseUrlEnvVar: "EVENTS_BASE_URL",
     previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
   },
@@ -71,7 +71,7 @@ export const cloudflarePreviewApps = {
     appPath: "apps/os2",
     dopplerProject: "os2",
     paths: ["apps/os2/**", "apps/os2-contract/**"],
-    previewResourceType: "os2-preview-environment",
+    previewDependencies: ["events"],
     previewTestBaseUrlEnvVar: "OS2_BASE_URL",
     previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
   },
@@ -81,7 +81,6 @@ export const cloudflarePreviewApps = {
     appPath: "apps/semaphore",
     dopplerProject: "semaphore",
     paths: ["apps/semaphore/**"],
-    previewResourceType: "semaphore-preview-environment",
     previewTestBaseUrlEnvVar: "SEMAPHORE_BASE_URL",
     previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
   },
@@ -91,8 +90,7 @@ export const cloudflarePreviewApps = {
     appPath: "apps/ingress-proxy",
     dopplerProject: "ingress-proxy",
     paths: ["apps/ingress-proxy/**"],
-    previewResourceType: "ingress-proxy-preview-environment",
     previewTestBaseUrlEnvVar: "INGRESS_PROXY_BASE_URL",
     previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
   },
-} satisfies Record<CloudflarePreviewAppSlug, CloudflarePreviewApp>;
+};

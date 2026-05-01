@@ -96,17 +96,18 @@ Vite picks a free port automatically (defaults to 5173, increments if taken). Th
 
 ## Preview environments
 
-Preview environments use a semaphore-controlled pool. The inventory is
-`os2-preview-1` through `os2-preview-10`.
+Preview environments use a shared Semaphore-controlled config pool. The
+inventory is `preview-1` through `preview-10`, each with
+`data.dopplerConfig` pointing at `preview_1` through `preview_10`.
 
 ### How it works
 
-1. CI acquires a slot from Semaphore (e.g. `os2-preview-3`)
-2. `derivePreviewEnvironment` maps slot 3 → Doppler config `preview_3`
+1. CI acquires a shared config slot from Semaphore (e.g. `preview-3`)
+2. The resource data maps the slot to Doppler config `preview_3`
 3. `preview_3` has `APP_CONFIG_BASE_URL=https://os2.iterate-preview-3.com` and `APP_CONFIG_PROJECT_HOSTNAME_BASES=["iterate-preview-3.app"]`
-4. `doppler run --config preview_3 -- pnpm alchemy:up` deploys the worker with correct routes. `ALCHEMY_STAGE` comes from `_shared` as `${DOPPLER_CONFIG}` and is slugified by the app into Cloudflare names like `os2-preview-3`.
-5. PR body is updated with both `publicUrl` and `projectSubdomainUrl`
-6. On PR close, the slot is released back to Semaphore and the worker is destroyed
+4. `doppler run --project os2 --config preview_3 -- pnpm alchemy:up` deploys the worker with correct routes. `ALCHEMY_STAGE` comes from `_shared` as `${DOPPLER_CONFIG}` and is slugified by the app into Cloudflare names like `os2-preview-3`.
+5. PR body is updated with the shared lease and per-app deployment status
+6. On PR close, recorded apps are torn down and the shared slot is released back to Semaphore
 
 ### Cloudflare zones for previews
 
@@ -126,14 +127,14 @@ The `pnpm preview` CLI (from repo root) manages the full lifecycle. It uses the 
 # Check which slots are free
 doppler run --project os --config prd -- pnpm preview status
 
-# Full lifecycle for a PR (acquire slot, deploy, test, update PR body)
-doppler run --project os --config prd -- pnpm preview sync --app os2
+# Full lifecycle for a PR (acquire slot, deploy affected apps, test, update PR body)
+doppler run --project os --config prd -- pnpm preview sync --pull-request-number 1234
 
 # Or just deploy without tests
-doppler run --project os --config prd -- pnpm preview deploy --app os2
+doppler run --project os --config prd -- pnpm preview deploy --pull-request-number 1234
 
 # Clean up
-doppler run --project os --config prd -- pnpm preview cleanup --app os2
+doppler run --project os --config prd -- pnpm preview cleanup --pull-request-number 1234
 ```
 
 For a quick manual deploy to a specific slot (bypassing semaphore):

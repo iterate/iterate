@@ -105,6 +105,19 @@ export const AcquireResourceInput = z.object({
   waitMs: semaphoreWaitMsSchema.optional(),
 });
 
+const AcquireSpecificResourceInput = z.object({
+  type: semaphoreTypeSchema,
+  slug: semaphoreSlugSchema,
+  leaseMs: semaphoreLeaseMsSchema,
+});
+
+const RenewResourceLeaseInput = z.object({
+  type: semaphoreTypeSchema,
+  slug: semaphoreSlugSchema,
+  leaseId: z.string().uuid(),
+  leaseMs: semaphoreLeaseMsSchema,
+});
+
 export const ReleaseResourceInput = z.object({
   type: semaphoreTypeSchema,
   slug: semaphoreSlugSchema,
@@ -166,6 +179,24 @@ export const semaphoreContract = oc.router({
       })
       .input(AcquireResourceInput)
       .output(SemaphoreLeaseRecord),
+
+    acquireSpecific: oc
+      .route({
+        method: "POST",
+        path: "/resources/acquire-specific",
+        tags: ["/resources"],
+      })
+      .input(AcquireSpecificResourceInput)
+      .output(SemaphoreLeaseRecord.nullable()),
+
+    renew: oc
+      .route({
+        method: "POST",
+        path: "/resources/renew",
+        tags: ["/resources"],
+      })
+      .input(RenewResourceLeaseInput)
+      .output(SemaphoreLeaseRecord.nullable()),
 
     release: oc
       .route({

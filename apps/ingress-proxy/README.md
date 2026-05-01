@@ -24,7 +24,7 @@ Cloudflare-only: TanStack Start + oRPC + raw D1 route registry, plus public-host
 
 ```bash
 # Normal preview lifecycle is managed from the repo root:
-# doppler run --project os --config prd -- pnpm preview sync --app ingress-proxy
+# doppler run --project os --config prd -- pnpm preview sync --pull-request-number 1234
 #
 # Fixed-slot manual deploy:
 doppler run --project ingress-proxy --config preview_1 -- pnpm alchemy:up

@@ -11,7 +11,7 @@
   - `Deploy Semaphore`
   - `Deploy Ingress Proxy`
 - Preview state lives in the managed PR body section, not in PR comments
-- Semaphore stores preview pool inventory and leases
+- Semaphore stores shared preview environment inventory and leases
 - Doppler `preview_N` configs back preview slots
 - `_shared/preview` sets `ALCHEMY_STAGE=${DOPPLER_CONFIG}`, so the selected `preview_N` config determines the Alchemy stage
 - Doppler `prd` config backs real deploys
@@ -19,19 +19,19 @@
 ## Most useful commands
 
 ```bash
-# inspect preview pool state / leases
+# inspect preview environment state / leases
 doppler run --project os --config prd -- pnpm preview status
 
-# create or refresh one preview for a PR
-doppler run --project os --config prd -- pnpm preview sync --app events --pull-request-number 1234
+# create or refresh a PR preview; affected apps and dependencies are selected automatically
+doppler run --project os --config prd -- pnpm preview sync --pull-request-number 1234
 
-# create a preview even if the PR did not touch that app
-doppler run --project os --config prd -- pnpm preview sync --app events --pull-request-number 1234 --force true
+# deploy every preview-managed app even if the PR did not touch all of them
+doppler run --project os --config prd -- pnpm preview sync --pull-request-number 1234 --force true
 
 # split preview into explicit phases
-doppler run --project os --config prd -- pnpm preview deploy --app events --pull-request-number 1234
-doppler run --project os --config prd -- pnpm preview test --app events --pull-request-number 1234
-doppler run --project os --config prd -- pnpm preview cleanup --app events --pull-request-number 1234
+doppler run --project os --config prd -- pnpm preview deploy --pull-request-number 1234
+doppler run --project os --config prd -- pnpm preview test --pull-request-number 1234
+doppler run --project os --config prd -- pnpm preview cleanup --pull-request-number 1234
 
 # manual prod deploy from GitHub Actions
 gh workflow run "Deploy Events" --ref main -f ref=main -f stage=prd
@@ -39,7 +39,8 @@ gh workflow run "Deploy Events" --ref main -f ref=main -f stage=prd
 
 ## Mental model
 
-- Previews are temporary `preview_N` deploys attached to leased Semaphore slots.
+- Previews are temporary deploys into a leased `preview_N` Doppler config.
+- The Semaphore lease gives the config dimension, not an app-specific pool.
 - Production deploys are plain `prd` deploys for each app.
 - Previews and production are deliberately separate:
   - PRs never use the per-app prod deploy workflows
@@ -50,14 +51,12 @@ gh workflow run "Deploy Events" --ref main -f ref=main -f stage=prd
 1. The shared `Cloudflare Previews` workflow runs on PRs for the in-scope apps.
 2. It runs the repo-local preview CLI in `scripts/preview/router.ts`.
 3. The CLI reads the managed preview section from the PR body.
-4. It acquires a Semaphore lease from the app’s preview pool.
-5. It derives the preview slot names from the leased slug:
-   - resource slug like `events-preview-1`
-   - Doppler config like `preview_1`
-   - Alchemy stage like `preview_1`
-   - public URL from that slot's deploy shape (for example `https://events-preview-1.iterate.com` for routed apps, or `https://example-preview-1.iterate.workers.dev` for workers.dev-only apps)
-6. It deploys the app with the selected `preview_N` Doppler config intact, runs that app’s preview e2e command, and writes the result back into the PR body.
-7. On PR close, the same workflow runs cleanup and releases the lease.
+4. It renews or reacquires the existing shared preview lease when possible.
+5. If reuse fails, it acquires any available `cloudflare-preview-environment`.
+6. It reads `data.dopplerConfig` from the leased Semaphore resource.
+7. It deploys affected apps and explicit dependencies with that same Doppler config.
+8. It records each app result in the PR body. If one app fails, the overall preview is unhealthy and the lease is kept.
+9. On PR close, cleanup tears down recorded apps and releases the shared lease only after successful teardown.
 
 ## Semaphore token
 
@@ -67,7 +66,7 @@ For normal operator work, use the `os` production Doppler config:
 
 ```bash
 doppler run --project os --config prd -- pnpm preview status
-doppler run --project os --config prd -- pnpm preview sync --app os2 --pull-request-number 1234
+doppler run --project os --config prd -- pnpm preview sync --pull-request-number 1234
 ```
 
 For Semaphore maintenance itself, use the `semaphore` production Doppler config:
@@ -89,6 +88,7 @@ The Semaphore UI labels this as an operator token. It is the same shared API sec
 ## What to know before touching this
 
 - The preview app registry is `scripts/preview/apps.ts`.
+- The shared Semaphore seed inventory is `scripts/preview/preview-inventory.ts`.
 - The preview CLI/router is `scripts/preview/router.ts`.
 - Preview lifecycle logic is `scripts/preview/preview.ts`.
 - Preview PR-body rendering/state is `scripts/preview/state.ts`.
@@ -99,10 +99,11 @@ The Semaphore UI labels this as an operator token. It is the same shared API sec
 ## Failure modes / footguns
 
 - Deleting the managed preview section from the PR body is treated as state loss.
-- If the PR body state is lost, the next sync can create a fresh preview and an old preview may linger until later cleanup or slot reuse.
+- If the PR body state is lost, the next sync can create a fresh lease and an old preview may linger until later cleanup or slot reuse.
 - Preview jobs that mutate the PR body must stay serialized per PR.
 - Preview tests are intentionally narrower than the slowest full app e2e suites.
 - Preview deploys do not override `ALCHEMY_STAGE`; route-driven previews should be configured in the app's `preview_N` Doppler configs.
+- The temporary dependency graph in `scripts/preview/apps.ts` exists only until app manifests or contracts can express cross-app deploy dependencies.
 - `example` currently has no real network e2e cases; its `test:e2e` command passes with no tests.
 
 ## Prod verification commands

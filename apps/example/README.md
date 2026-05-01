@@ -77,7 +77,7 @@ the shared `withEvlog()` wrapper in the runtime entrypoints rather than Nitro's
 
 ```bash
 # Normal preview lifecycle is managed from the repo root:
-# doppler run --project os --config prd -- pnpm preview sync --app example
+# doppler run --project os --config prd -- pnpm preview sync --pull-request-number 1234
 #
 # Fixed-slot manual deploy:
 doppler run --project example --config preview_1 -- pnpm alchemy:up

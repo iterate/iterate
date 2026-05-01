@@ -2,97 +2,72 @@ import { spawn } from "node:child_process";
 import { promises as dns } from "node:dns";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
+import { resolve } from "node:path";
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
 import { stripAnsi } from "../../packages/shared/src/jonasland/strip-ansi.ts";
 import {
-  CloudflarePreviewEntry,
-  type CloudflarePreviewEntry as CloudflarePreviewEntryType,
-  clearCloudflarePreviewDestroyPayload,
+  CloudflarePreviewAppEntry,
+  type CloudflarePreviewEnvironment,
+  type CloudflarePreviewState,
   readCloudflarePreviewState,
-  upsertCloudflarePreviewStateEntry,
+  updateCloudflarePreviewState,
 } from "./state.ts";
 import { splitRepositoryFullName } from "./repository-full-name.ts";
+import { type CloudflarePreviewAppSlug, cloudflarePreviewApps } from "./apps.ts";
+import {
+  CLOUDFLARE_PREVIEW_RESOURCE_TYPE,
+  parsePreviewEnvironmentData,
+} from "./preview-inventory.ts";
 
 const defaultSemaphoreBaseUrl = "https://semaphore.iterate.com";
 const defaultPreviewLeaseMs = 60 * 60 * 1000;
-// Routed previews can be healthy before Cloudflare has finished issuing edge
-// certificates for newly-created wildcard hostnames. OS2 preview project hosts
-// are deeper subdomains, which Cloudflare Universal SSL does not cover; Total
-// TLS has to issue per-host certificates first:
-// https://developers.cloudflare.com/ssl/edge-certificates/universal-ssl/limitations/#full-setup
-// https://developers.cloudflare.com/ssl/edge-certificates/additional-options/total-tls/
-// Keep this long enough for first issuance while still returning immediately
-// once the health endpoint is reachable.
 const defaultPreviewReadyTimeoutMs = 600_000;
 const defaultPreviewReadyUrlPath = "/api/__internal/health";
 const defaultPreviewTestMaxAttempts = 2;
 const defaultPreviewTestRetryDelayMs = 5_000;
 const sharedPreviewDependencyPaths = [
-  ".github/workflows/cloudflare-preview.yml",
+  ".github/workflows/cloudflare-previews.yml",
+  ".github/ts-workflows/workflows/cloudflare-previews.ts",
   "packages/shared/src/alchemy/**",
   "packages/shared/src/apps/**",
   "scripts/preview/**",
 ] as const;
 
 export type PreviewSemaphoreResourceClient = {
-  ensurePreviewInventory: (input: { appSlug: string; type: string }) => Promise<void>;
   acquire: (input: { leaseMs: number; type: string; waitMs?: number }) => Promise<{
+    data: Record<string, unknown>;
     expiresAt: number;
     leaseId: string;
     slug: string;
+    type: string;
   }>;
+  acquireSpecific: (input: { leaseMs: number; slug: string; type: string }) => Promise<{
+    data: Record<string, unknown>;
+    expiresAt: number;
+    leaseId: string;
+    slug: string;
+    type: string;
+  } | null>;
+  renew: (input: { leaseId: string; leaseMs: number; slug: string; type: string }) => Promise<{
+    data: Record<string, unknown>;
+    expiresAt: number;
+    leaseId: string;
+    slug: string;
+    type: string;
+  } | null>;
   release: (input: { leaseId: string; slug: string; type: string }) => Promise<{
     released: boolean;
   }>;
 };
 
-type PreviewSyncResult = {
-  entry: CloudflarePreviewEntryType | null;
+type PreviewLifecycleResult = {
   ok: boolean;
   skipped?: boolean;
+  state: CloudflarePreviewState;
 };
 
-function createPreviewCreateInputSchema(env: NodeJS.ProcessEnv) {
-  return z.object({
-    pullRequestHeadSha: requiredStringWithEnvDefault(env, "GITHUB_SHA"),
-    pullRequestNumber: requiredNumberWithEnvDefault(env, "GITHUB_PR_NUMBER"),
-    semaphoreApiToken: semaphoreApiTokenWithEnvDefault(env),
-    semaphoreBaseUrl: z.string().trim().url().default(defaultSemaphoreBaseUrl),
-    waitMs: optionalNumberWithEnvDefault(env, "PREVIEW_WAIT_MS"),
-    workflowRunUrl: optionalUrlWithEnvDefault(env, "WORKFLOW_RUN_URL", {
-      defaultValue: makeDefaultWorkflowRunUrl(env),
-    }),
-    leaseMs: requiredNumberWithEnvDefault(env, "PREVIEW_LEASE_MS", {
-      defaultValue: defaultPreviewLeaseMs,
-    }),
-  });
-}
-
-function createPreviewDestroyInputSchema(env: NodeJS.ProcessEnv) {
-  return z.object({
-    previewEnvironmentAlchemyStageName: requiredStringWithEnvDefault(
-      env,
-      "PREVIEW_ENVIRONMENT_ALCHEMY_STAGE_NAME",
-    ),
-    previewEnvironmentDopplerConfigName: requiredStringWithEnvDefault(
-      env,
-      "PREVIEW_ENVIRONMENT_DOPPLER_CONFIG_NAME",
-    ),
-    previewEnvironmentIdentifier: requiredStringWithEnvDefault(
-      env,
-      "PREVIEW_ENVIRONMENT_IDENTIFIER",
-    ),
-    previewEnvironmentSemaphoreLeaseId: requiredStringWithEnvDefault(
-      env,
-      "PREVIEW_ENVIRONMENT_SEMAPHORE_LEASE_ID",
-    ).pipe(z.string().trim().uuid()),
-    previewEnvironmentSlug: requiredStringWithEnvDefault(env, "PREVIEW_ENVIRONMENT_SLUG"),
-    previewEnvironmentType: requiredStringWithEnvDefault(env, "PREVIEW_ENVIRONMENT_TYPE"),
-    semaphoreApiToken: semaphoreApiTokenWithEnvDefault(env),
-    semaphoreBaseUrl: z.string().trim().url().default(defaultSemaphoreBaseUrl),
-  });
-}
+type PreviewAppRuntime = (typeof cloudflarePreviewApps)[CloudflarePreviewAppSlug];
 
 export function createCloudflarePreviewSyncInputSchema(env: NodeJS.ProcessEnv) {
   return z.object({
@@ -146,314 +121,238 @@ export function createCloudflarePreviewTestInputSchema(env: NodeJS.ProcessEnv) {
 
 export async function syncCloudflarePreviewForPullRequest(
   params: z.infer<ReturnType<typeof createCloudflarePreviewSyncInputSchema>> & {
-    appDisplayName: string;
-    appSlug: string;
     commandEnvironment: NodeJS.ProcessEnv;
     createPreviewSemaphoreResourceClient: (input: {
       semaphoreApiToken: string;
       semaphoreBaseUrl: string;
     }) => PreviewSemaphoreResourceClient;
-    dopplerProject: string;
-    excludedPreviewSlots?: number[];
-    paths: readonly string[];
-    previewResourceType: string;
-    previewTestBaseUrlEnvVar: string;
-    previewTestCommandArgs: readonly [string, ...string[]];
+    repositoryRoot: string;
     signal?: AbortSignal;
-    workingDirectory: string;
   },
-): Promise<PreviewSyncResult> {
-  const pullRequest = await resolvePullRequestPreviewContext(params);
-
-  if (pullRequest.isFork) {
-    const entry = CloudflarePreviewEntry.parse({
-      appDisplayName: params.appDisplayName,
-      appSlug: params.appSlug,
-      headSha: pullRequest.pullRequestHeadSha,
-      message: "Preview environments are unavailable for fork pull requests.",
-      runUrl: params.workflowRunUrl ?? null,
-      shortSha: pullRequest.pullRequestHeadSha.slice(0, 7),
-      status: "fork-unavailable",
-      updatedAt: new Date().toISOString(),
-    });
-    try {
-      await upsertCloudflarePreviewStateEntry({
-        entry,
-        githubToken: params.githubToken,
-        repositoryFullName: params.repositoryFullName,
-        pullRequestNumber: params.pullRequestNumber,
-      });
-    } catch {
-      // Fork PRs do not create preview resources, so a denied PR-body write should not fail the job.
-    }
-    return {
-      entry,
-      ok: true,
-    };
-  }
-
-  const deployResult = await deployCloudflarePreviewForPullRequest({
-    ...params,
-    ...pullRequest,
-  });
+): Promise<PreviewLifecycleResult> {
+  const deployResult = await deployCloudflarePreviewForPullRequest(params);
   if (!deployResult.ok || deployResult.skipped) {
     return deployResult;
   }
 
   return await testCloudflarePreviewForPullRequest({
-    appDisplayName: params.appDisplayName,
-    appSlug: params.appSlug,
     commandEnvironment: params.commandEnvironment,
-    dopplerProject: params.dopplerProject,
     githubToken: params.githubToken,
-    previewTestBaseUrlEnvVar: params.previewTestBaseUrlEnvVar,
-    previewTestCommandArgs: params.previewTestCommandArgs,
-    pullRequestHeadSha: pullRequest.pullRequestHeadSha,
+    pullRequestHeadSha: params.pullRequestHeadSha,
     pullRequestNumber: params.pullRequestNumber,
     repositoryFullName: params.repositoryFullName,
+    repositoryRoot: params.repositoryRoot,
     signal: params.signal,
     workflowRunUrl: params.workflowRunUrl,
-    workingDirectory: params.workingDirectory,
   });
 }
 
 export async function deployCloudflarePreviewForPullRequest(
   params: z.infer<ReturnType<typeof createCloudflarePreviewSyncInputSchema>> & {
-    appDisplayName: string;
-    appSlug: string;
     commandEnvironment: NodeJS.ProcessEnv;
     createPreviewSemaphoreResourceClient: (input: {
       semaphoreApiToken: string;
       semaphoreBaseUrl: string;
     }) => PreviewSemaphoreResourceClient;
-    dopplerProject: string;
-    excludedPreviewSlots?: number[];
-    paths: readonly string[];
-    previewResourceType: string;
+    repositoryRoot: string;
     signal?: AbortSignal;
-    workingDirectory: string;
   },
-): Promise<PreviewSyncResult> {
+): Promise<PreviewLifecycleResult> {
   const pullRequest = await resolvePullRequestPreviewContext(params);
+
+  if (pullRequest.isFork) {
+    const appSlugs = Object.keys(cloudflarePreviewApps) as CloudflarePreviewAppSlug[];
+    const state = await recordForkUnavailable({
+      appSlugs,
+      params,
+      pullRequestHeadSha: pullRequest.pullRequestHeadSha,
+    }).catch(() => ({
+      apps: {},
+      environment: null,
+    }));
+    return { ok: true, state };
+  }
+
   const current = await readCloudflarePreviewState({
     githubToken: params.githubToken,
     repositoryFullName: params.repositoryFullName,
     pullRequestNumber: params.pullRequestNumber,
   });
-  const previousEntry = current.state[params.appSlug];
-  if (!params.force) {
-    const syncDecision = await shouldSyncPreviewEnvironment({
-      appPaths: params.paths,
-      githubToken: params.githubToken,
-      pullRequestNumber: params.pullRequestNumber,
-      pullRequestBaseSha: pullRequest.pullRequestBaseSha,
-      pullRequestHeadSha: pullRequest.pullRequestHeadSha,
-      previousEntry,
-      repositoryFullName: params.repositoryFullName,
-    });
-    if (!syncDecision.shouldSync) {
-      return {
-        entry: previousEntry ?? null,
-        ok: true,
-        skipped: true,
-      };
-    }
-  }
-
-  if (hasPreviewDestroyPayload(previousEntry)) {
-    const cleanupResult = await destroyPreviewEnvironment({
-      commandEnvironment: params.commandEnvironment,
-      createPreviewSemaphoreResourceClient: params.createPreviewSemaphoreResourceClient,
-      dopplerProject: params.dopplerProject,
-      previewEnvironmentAlchemyStageName: previousEntry.previewEnvironmentAlchemyStageName,
-      previewEnvironmentDopplerConfigName: previousEntry.previewEnvironmentDopplerConfigName,
-      previewEnvironmentIdentifier: previousEntry.previewEnvironmentIdentifier,
-      previewEnvironmentSemaphoreLeaseId: previousEntry.previewEnvironmentSemaphoreLeaseId,
-      previewEnvironmentSlug: previousEntry.previewEnvironmentSlug,
-      previewEnvironmentType: previousEntry.previewEnvironmentType,
-      semaphoreApiToken: requireValue(
-        params.semaphoreApiToken,
-        "SEMAPHORE_API_TOKEN is required to destroy an existing preview.",
-      ),
-      semaphoreBaseUrl: params.semaphoreBaseUrl ?? defaultSemaphoreBaseUrl,
-      signal: params.signal,
-      workingDirectory: params.workingDirectory,
-    });
-    if (!cleanupResult.ok) {
-      const cleanupEntry = {
-        ...previousEntry,
-        appDisplayName: params.appDisplayName,
-        appSlug: params.appSlug,
-        message: cleanupResult.message,
-        runUrl: params.workflowRunUrl ?? previousEntry.runUrl ?? null,
-        shortSha: pullRequest.pullRequestHeadSha.slice(0, 7),
-        status: "cleanup-failed",
-        updatedAt: new Date().toISOString(),
-      } satisfies CloudflarePreviewEntryType;
-      await upsertCloudflarePreviewStateEntry({
-        entry: CloudflarePreviewEntry.parse(cleanupEntry),
-        githubToken: params.githubToken,
-        repositoryFullName: params.repositoryFullName,
-        pullRequestNumber: params.pullRequestNumber,
-      });
-      return {
-        entry: CloudflarePreviewEntry.parse(cleanupEntry),
-        ok: false,
-      };
-    }
-  }
-
-  const createResult = await createPreviewEnvironment({
-    appDisplayName: params.appDisplayName,
-    appSlug: params.appSlug,
-    commandEnvironment: params.commandEnvironment,
-    createPreviewSemaphoreResourceClient: params.createPreviewSemaphoreResourceClient,
-    dopplerProject: params.dopplerProject,
-    excludedPreviewSlots: params.excludedPreviewSlots,
-    leaseMs: params.leaseMs,
-    previewResourceType: params.previewResourceType,
+  const selectedApps = await selectPreviewAppsForPullRequest({
+    force: params.force ?? false,
+    githubToken: params.githubToken,
+    previousState: current.state,
+    pullRequestBaseSha: pullRequest.pullRequestBaseSha,
     pullRequestHeadSha: pullRequest.pullRequestHeadSha,
     pullRequestNumber: params.pullRequestNumber,
+    repositoryFullName: params.repositoryFullName,
+  });
+
+  if (selectedApps.length === 0) {
+    return {
+      ok: true,
+      skipped: true,
+      state: current.state,
+    };
+  }
+
+  const environment = await claimPreviewEnvironment({
+    createPreviewSemaphoreResourceClient: params.createPreviewSemaphoreResourceClient,
+    leaseMs: params.leaseMs,
+    previousEnvironment: current.state.environment,
     semaphoreApiToken: requireValue(
       params.semaphoreApiToken,
       "SEMAPHORE_API_TOKEN is required to create a preview.",
     ),
     semaphoreBaseUrl: params.semaphoreBaseUrl ?? defaultSemaphoreBaseUrl,
-    signal: params.signal,
     waitMs: params.waitMs,
-    workflowRunUrl: params.workflowRunUrl,
-    workingDirectory: params.workingDirectory,
   });
-  try {
-    await upsertCloudflarePreviewStateEntry({
-      entry: createResult.entry!,
-      githubToken: params.githubToken,
-      repositoryFullName: params.repositoryFullName,
-      pullRequestNumber: params.pullRequestNumber,
+  await updatePreviewState(params, (state) => ({
+    ...state,
+    environment,
+  }));
+
+  let ok = true;
+  let latestState = current.state;
+  for (const app of selectedApps) {
+    const entry = await deployPreviewAppWithStatus({
+      app,
+      commandEnvironment: params.commandEnvironment,
+      dopplerConfig: environment.dopplerConfig,
+      pullRequestHeadSha: pullRequest.pullRequestHeadSha,
+      repositoryRoot: params.repositoryRoot,
+      runUrl: params.workflowRunUrl ?? null,
+      signal: params.signal,
     });
-  } catch (error) {
-    if (createResult.entry && hasPreviewDestroyPayload(createResult.entry)) {
-      try {
-        await destroyPreviewEnvironment({
-          commandEnvironment: params.commandEnvironment,
-          createPreviewSemaphoreResourceClient: params.createPreviewSemaphoreResourceClient,
-          dopplerProject: params.dopplerProject,
-          previewEnvironmentAlchemyStageName: createResult.entry.previewEnvironmentAlchemyStageName,
-          previewEnvironmentDopplerConfigName:
-            createResult.entry.previewEnvironmentDopplerConfigName,
-          previewEnvironmentIdentifier: createResult.entry.previewEnvironmentIdentifier,
-          previewEnvironmentSemaphoreLeaseId: createResult.entry.previewEnvironmentSemaphoreLeaseId,
-          previewEnvironmentSlug: createResult.entry.previewEnvironmentSlug,
-          previewEnvironmentType: createResult.entry.previewEnvironmentType,
-          semaphoreApiToken: requireValue(
-            params.semaphoreApiToken,
-            "SEMAPHORE_API_TOKEN is required to clean up an unrecorded preview.",
-          ),
-          semaphoreBaseUrl: params.semaphoreBaseUrl ?? defaultSemaphoreBaseUrl,
-          signal: params.signal,
-          workingDirectory: params.workingDirectory,
-        });
-      } catch {
-        // best-effort cleanup when the PR body cannot be updated
-      }
+    if (entry.status === "deploy-failed") {
+      ok = false;
     }
 
-    throw error;
+    const update = await updatePreviewState(params, (state) => ({
+      ...state,
+      environment,
+      apps: {
+        ...state.apps,
+        [app.slug]: entry,
+      },
+    }));
+    latestState = update.state;
+
+    if (!ok) {
+      break;
+    }
   }
-  return createResult;
+
+  return {
+    ok,
+    state: latestState,
+  };
 }
 
 export async function testCloudflarePreviewForPullRequest(
   params: z.infer<ReturnType<typeof createCloudflarePreviewTestInputSchema>> & {
-    appDisplayName: string;
-    appSlug: string;
     commandEnvironment: NodeJS.ProcessEnv;
-    dopplerProject: string;
-    previewTestBaseUrlEnvVar: string;
-    previewTestCommandArgs: readonly [string, ...string[]];
+    repositoryRoot: string;
     signal?: AbortSignal;
-    workingDirectory: string;
   },
-): Promise<PreviewSyncResult> {
+): Promise<PreviewLifecycleResult> {
   const current = await readCloudflarePreviewState({
     githubToken: params.githubToken,
     repositoryFullName: params.repositoryFullName,
     pullRequestNumber: params.pullRequestNumber,
   });
-  const existingEntry = current.state[params.appSlug];
-  if (!canRunPreviewTests(existingEntry)) {
+  const environment = current.state.environment;
+  if (environment == null) {
     return {
-      entry: existingEntry ?? null,
       ok: true,
       skipped: true,
+      state: current.state,
     };
   }
 
-  if (params.pullRequestHeadSha && existingEntry.headSha !== params.pullRequestHeadSha) {
+  const testableApps = Object.values(current.state.apps)
+    .filter((entry) => canRunPreviewTests(entry))
+    .filter((entry) => !params.pullRequestHeadSha || entry.headSha === params.pullRequestHeadSha)
+    .map((entry) => cloudflarePreviewApps[entry.appSlug as CloudflarePreviewAppSlug])
+    .filter((app): app is PreviewAppRuntime => app != null);
+
+  if (testableApps.length === 0) {
     return {
-      entry: existingEntry,
       ok: true,
       skipped: true,
+      state: current.state,
     };
   }
 
-  const testResult = await runCommandWithRetries({
-    args: [
-      "run",
-      "--project",
-      params.dopplerProject,
-      "--config",
-      existingEntry.previewEnvironmentDopplerConfigName,
-      "--",
-      "env",
-      `${params.previewTestBaseUrlEnvVar}=${existingEntry.publicUrl}`,
-      ...params.previewTestCommandArgs,
-    ],
-    command: "doppler",
-    environment: params.commandEnvironment,
-    maxAttempts: defaultPreviewTestMaxAttempts,
-    retryDelayMs: defaultPreviewTestRetryDelayMs,
-    signal: params.signal,
-    workingDirectory: params.workingDirectory,
-  });
+  let ok = true;
+  let latestState = current.state;
+  for (const app of testableApps) {
+    const existingEntry = latestState.apps[app.slug];
+    if (!existingEntry?.publicUrl) {
+      continue;
+    }
 
-  const nextEntry = CloudflarePreviewEntry.parse({
-    ...existingEntry,
-    appDisplayName: params.appDisplayName,
-    appSlug: params.appSlug,
-    message:
-      testResult.exitCode === 0
-        ? null
-        : commandFailureMessage(testResult, "Preview tests failed after deploy."),
-    runUrl: params.workflowRunUrl ?? existingEntry.runUrl ?? null,
-    status: testResult.exitCode === 0 ? "deployed" : "tests-failed",
-    updatedAt: new Date().toISOString(),
-  });
-  await upsertCloudflarePreviewStateEntry({
-    entry: nextEntry,
-    githubToken: params.githubToken,
-    repositoryFullName: params.repositoryFullName,
-    pullRequestNumber: params.pullRequestNumber,
-  });
+    const testResult = await runCommandWithRetries({
+      args: [
+        "run",
+        "--project",
+        app.dopplerProject,
+        "--config",
+        environment.dopplerConfig,
+        "--",
+        "env",
+        `${app.previewTestBaseUrlEnvVar}=${existingEntry.publicUrl}`,
+        ...app.previewTestCommandArgs,
+      ],
+      command: "doppler",
+      environment: params.commandEnvironment,
+      maxAttempts: defaultPreviewTestMaxAttempts,
+      retryDelayMs: defaultPreviewTestRetryDelayMs,
+      signal: params.signal,
+      workingDirectory: resolve(params.repositoryRoot, app.appPath),
+    });
+
+    const entry = CloudflarePreviewAppEntry.parse({
+      ...existingEntry,
+      appDisplayName: app.displayName,
+      appSlug: app.slug,
+      message:
+        testResult.exitCode === 0
+          ? null
+          : commandFailureMessage(testResult, "Preview tests failed after deploy."),
+      runUrl: params.workflowRunUrl ?? existingEntry.runUrl ?? null,
+      status: testResult.exitCode === 0 ? "deployed" : "tests-failed",
+      updatedAt: new Date().toISOString(),
+    });
+    if (entry.status === "tests-failed") {
+      ok = false;
+    }
+
+    const update = await updatePreviewState(params, (state) => ({
+      ...state,
+      apps: {
+        ...state.apps,
+        [app.slug]: entry,
+      },
+    }));
+    latestState = update.state;
+  }
 
   return {
-    entry: nextEntry,
-    ok: testResult.exitCode === 0,
+    ok,
+    state: latestState,
   };
 }
 
 export async function cleanupCloudflarePreviewForPullRequest(
   params: z.infer<ReturnType<typeof createCloudflarePreviewCleanupInputSchema>> & {
-    appDisplayName: string;
-    appSlug: string;
     commandEnvironment: NodeJS.ProcessEnv;
     createPreviewSemaphoreResourceClient: (input: {
       semaphoreApiToken: string;
       semaphoreBaseUrl: string;
     }) => PreviewSemaphoreResourceClient;
-    dopplerProject: string;
+    repositoryRoot: string;
     signal?: AbortSignal;
-    workingDirectory: string;
   },
 ) {
   const current = await readCloudflarePreviewState({
@@ -461,510 +360,394 @@ export async function cleanupCloudflarePreviewForPullRequest(
     repositoryFullName: params.repositoryFullName,
     pullRequestNumber: params.pullRequestNumber,
   });
-  const existingEntry = current.state[params.appSlug];
-  if (!hasPreviewDestroyPayload(existingEntry)) {
+  const environment = current.state.environment;
+  if (environment == null) {
     return {
-      entry: existingEntry ?? null,
       ok: true,
       released: false,
+      state: current.state,
     };
   }
 
-  const destroyResult = await destroyPreviewEnvironment({
-    commandEnvironment: params.commandEnvironment,
-    createPreviewSemaphoreResourceClient: params.createPreviewSemaphoreResourceClient,
-    dopplerProject: params.dopplerProject,
-    previewEnvironmentAlchemyStageName: existingEntry.previewEnvironmentAlchemyStageName,
-    previewEnvironmentDopplerConfigName: existingEntry.previewEnvironmentDopplerConfigName,
-    previewEnvironmentIdentifier: existingEntry.previewEnvironmentIdentifier,
-    previewEnvironmentSemaphoreLeaseId: existingEntry.previewEnvironmentSemaphoreLeaseId,
-    previewEnvironmentSlug: existingEntry.previewEnvironmentSlug,
-    previewEnvironmentType: existingEntry.previewEnvironmentType,
+  let ok = true;
+  let latestState = current.state;
+  for (const appSlug of Object.keys(current.state.apps) as CloudflarePreviewAppSlug[]) {
+    const app = cloudflarePreviewApps[appSlug];
+    if (!app) {
+      continue;
+    }
+
+    const destroyResult = await runCommand({
+      args: [
+        "run",
+        "--project",
+        app.dopplerProject,
+        "--config",
+        environment.dopplerConfig,
+        "--",
+        "pnpm",
+        "alchemy:down",
+      ],
+      command: "doppler",
+      environment: params.commandEnvironment,
+      signal: params.signal,
+      workingDirectory: resolve(params.repositoryRoot, app.appPath),
+    });
+    const existingEntry = latestState.apps[app.slug];
+    const entry = CloudflarePreviewAppEntry.parse({
+      ...existingEntry,
+      appDisplayName: app.displayName,
+      appSlug: app.slug,
+      message:
+        destroyResult.exitCode === 0
+          ? "Preview app released."
+          : commandFailureMessage(destroyResult, "Preview teardown failed."),
+      status: destroyResult.exitCode === 0 ? "released" : "cleanup-failed",
+      updatedAt: new Date().toISOString(),
+    });
+    if (entry.status === "cleanup-failed") {
+      ok = false;
+    }
+
+    const update = await updatePreviewState(params, (state) => ({
+      ...state,
+      apps: {
+        ...state.apps,
+        [app.slug]: entry,
+      },
+    }));
+    latestState = update.state;
+  }
+
+  if (!ok) {
+    return {
+      ok: false,
+      released: false,
+      state: latestState,
+    };
+  }
+
+  const semaphore = params.createPreviewSemaphoreResourceClient({
     semaphoreApiToken: requireValue(
       params.semaphoreApiToken,
       "SEMAPHORE_API_TOKEN is required to clean up previews.",
     ),
     semaphoreBaseUrl: params.semaphoreBaseUrl ?? defaultSemaphoreBaseUrl,
-    signal: params.signal,
-    workingDirectory: params.workingDirectory,
   });
-
-  const nextEntry = CloudflarePreviewEntry.parse(
-    destroyResult.ok
-      ? {
-          ...clearCloudflarePreviewDestroyPayload(existingEntry),
-          appDisplayName: params.appDisplayName,
-          appSlug: params.appSlug,
-          message: destroyResult.message,
-          status: "released",
-          updatedAt: new Date().toISOString(),
-        }
-      : {
-          ...existingEntry,
-          appDisplayName: params.appDisplayName,
-          appSlug: params.appSlug,
-          message: destroyResult.message,
-          status: "cleanup-failed",
-          updatedAt: new Date().toISOString(),
-        },
-  );
-  await upsertCloudflarePreviewStateEntry({
-    entry: nextEntry,
-    githubToken: params.githubToken,
-    repositoryFullName: params.repositoryFullName,
-    pullRequestNumber: params.pullRequestNumber,
+  const released = await semaphore.release({
+    type: environment.type,
+    slug: environment.slug,
+    leaseId: environment.leaseId,
   });
+  const update = await updatePreviewState(params, (state) => ({
+    ...state,
+    environment: null,
+  }));
 
   return {
-    entry: nextEntry,
-    ok: destroyResult.ok,
-    released: destroyResult.ok,
+    ok: released.released,
+    released: released.released,
+    state: update.state,
   };
 }
 
-async function createPreviewEnvironment(
-  params: z.infer<ReturnType<typeof createPreviewCreateInputSchema>> & {
-    appDisplayName: string;
-    appSlug: string;
-    commandEnvironment: NodeJS.ProcessEnv;
-    createPreviewSemaphoreResourceClient: (input: {
-      semaphoreApiToken: string;
-      semaphoreBaseUrl: string;
-    }) => PreviewSemaphoreResourceClient;
-    dopplerProject: string;
-    excludedPreviewSlots?: number[];
-    previewResourceType: string;
-    signal?: AbortSignal;
-    workingDirectory: string;
-  },
-): Promise<PreviewSyncResult> {
-  let lease: {
-    expiresAt: number;
-    leaseId: string;
-    slug: string;
-  } | null = null;
+async function recordForkUnavailable(input: {
+  appSlugs: CloudflarePreviewAppSlug[];
+  params: {
+    githubToken: string;
+    pullRequestNumber: number;
+    repositoryFullName: string;
+    workflowRunUrl?: string;
+  };
+  pullRequestHeadSha: string;
+}) {
+  const updatedAt = new Date().toISOString();
+  const update = await updatePreviewState(input.params, (state) => ({
+    ...state,
+    apps: {
+      ...state.apps,
+      ...Object.fromEntries(
+        input.appSlugs.map((appSlug) => {
+          const app = cloudflarePreviewApps[appSlug];
+          return [
+            appSlug,
+            CloudflarePreviewAppEntry.parse({
+              appDisplayName: app.displayName,
+              appSlug,
+              headSha: input.pullRequestHeadSha,
+              message: "Preview environments are unavailable for fork pull requests.",
+              runUrl: input.params.workflowRunUrl ?? null,
+              shortSha: input.pullRequestHeadSha.slice(0, 7),
+              status: "fork-unavailable",
+              updatedAt,
+            }),
+          ];
+        }),
+      ),
+    },
+  }));
 
+  return update.state;
+}
+
+async function deployPreviewAppWithStatus(input: {
+  app: PreviewAppRuntime;
+  commandEnvironment: NodeJS.ProcessEnv;
+  dopplerConfig: string;
+  pullRequestHeadSha: string;
+  repositoryRoot: string;
+  runUrl: string | null;
+  signal?: AbortSignal;
+}) {
   try {
-    const semaphore = params.createPreviewSemaphoreResourceClient({
-      semaphoreApiToken: params.semaphoreApiToken,
-      semaphoreBaseUrl: params.semaphoreBaseUrl,
-    });
-    await semaphore.ensurePreviewInventory({
-      appSlug: params.appSlug,
-      type: params.previewResourceType,
-    });
-    lease = await acquireSupportedPreviewLease({
-      excludedPreviewSlots: params.excludedPreviewSlots,
-      appSlug: params.appSlug,
-      leaseMs: params.leaseMs,
-      previewResourceType: params.previewResourceType,
-      semaphore,
-      waitMs: params.waitMs,
-    });
-    const previewEnvironment = derivePreviewEnvironment({
-      appSlug: params.appSlug,
-      previewEnvironmentSlug: lease.slug,
-      previewEnvironmentType: params.previewResourceType,
-    });
-    const baseEntry = {
-      appDisplayName: params.appDisplayName,
-      appSlug: params.appSlug,
-      headSha: params.pullRequestHeadSha,
-      leasedUntil: lease.expiresAt,
-      previewEnvironmentAlchemyStageName: previewEnvironment.previewEnvironmentAlchemyStageName,
-      previewEnvironmentDopplerConfigName: previewEnvironment.previewEnvironmentDopplerConfigName,
-      previewEnvironmentIdentifier: previewEnvironment.previewEnvironmentIdentifier,
-      previewEnvironmentSemaphoreLeaseId: lease.leaseId,
-      previewEnvironmentSlug: lease.slug,
-      previewEnvironmentType: params.previewResourceType,
-      publicUrl: previewEnvironment.publicUrl,
-      projectSubdomainUrl: previewEnvironment.projectSubdomainUrl ?? null,
-      runUrl: params.workflowRunUrl ?? null,
-      shortSha: params.pullRequestHeadSha.slice(0, 7),
+    return await deployPreviewApp(input);
+  } catch (error) {
+    return CloudflarePreviewAppEntry.parse({
+      appDisplayName: input.app.displayName,
+      appSlug: input.app.slug,
+      headSha: input.pullRequestHeadSha,
+      message: formatPreviewErrorMessage(error),
+      runUrl: input.runUrl,
+      shortSha: input.pullRequestHeadSha.slice(0, 7),
+      status: "deploy-failed",
       updatedAt: new Date().toISOString(),
-    } as const;
+    });
+  }
+}
 
-    const deployArgs = [
+async function deployPreviewApp(input: {
+  app: PreviewAppRuntime;
+  commandEnvironment: NodeJS.ProcessEnv;
+  dopplerConfig: string;
+  pullRequestHeadSha: string;
+  repositoryRoot: string;
+  runUrl: string | null;
+  signal?: AbortSignal;
+}) {
+  const appConfig = await readPreviewAppConfig({
+    commandEnvironment: input.commandEnvironment,
+    dopplerConfig: input.dopplerConfig,
+    dopplerProject: input.app.dopplerProject,
+    signal: input.signal,
+    workingDirectory: resolve(input.repositoryRoot, input.app.appPath),
+  });
+  const baseEntry = {
+    appDisplayName: input.app.displayName,
+    appSlug: input.app.slug,
+    headSha: input.pullRequestHeadSha,
+    publicUrl: appConfig.baseUrl,
+    runUrl: input.runUrl,
+    shortSha: input.pullRequestHeadSha.slice(0, 7),
+    updatedAt: new Date().toISOString(),
+  } as const;
+
+  const deployResult = await runCommand({
+    args: [
       "run",
       "--project",
-      params.dopplerProject,
+      input.app.dopplerProject,
       "--config",
-      previewEnvironment.previewEnvironmentDopplerConfigName,
+      input.dopplerConfig,
       "--",
       "pnpm",
       "alchemy:up",
-    ];
-
-    const deployResult = await runCommand({
-      args: deployArgs,
-      command: "doppler",
-      environment: params.commandEnvironment,
-      signal: params.signal,
-      workingDirectory: params.workingDirectory,
-    });
-    if (deployResult.exitCode !== 0) {
-      return {
-        entry: CloudflarePreviewEntry.parse({
-          ...baseEntry,
-          message: commandFailureMessage(deployResult, "Preview deployment failed."),
-          status: "deploy-failed",
-        }),
-        ok: false,
-      };
-    }
-
-    const readiness = await waitForPreviewEnvironmentReadiness({
-      previewEnvironment,
-      signal: params.signal,
-      timeoutMs: defaultPreviewReadyTimeoutMs,
-    });
-    if (!readiness.ok) {
-      return {
-        entry: CloudflarePreviewEntry.parse({
-          ...baseEntry,
-          message: readiness.message,
-          status: "deploy-failed",
-        }),
-        ok: false,
-      };
-    }
-
-    return {
-      entry: CloudflarePreviewEntry.parse({
-        ...baseEntry,
-        status: "awaiting-tests",
-      }),
-      ok: true,
-    };
-  } catch (error) {
-    if (lease) {
-      try {
-        const semaphore = params.createPreviewSemaphoreResourceClient({
-          semaphoreApiToken: params.semaphoreApiToken,
-          semaphoreBaseUrl: params.semaphoreBaseUrl,
-        });
-        await semaphore.release({
-          type: params.previewResourceType,
-          slug: lease.slug,
-          leaseId: lease.leaseId,
-        });
-      } catch {
-        // best-effort cleanup for failures before the normal preview payload is recorded
-      }
-    }
-
-    return {
-      entry: CloudflarePreviewEntry.parse({
-        appDisplayName: params.appDisplayName,
-        appSlug: params.appSlug,
-        headSha: params.pullRequestHeadSha,
-        message: formatPreviewErrorMessage(error),
-        runUrl: params.workflowRunUrl,
-        shortSha: params.pullRequestHeadSha.slice(0, 7),
-        status: "claim-failed",
-        updatedAt: new Date().toISOString(),
-      }),
-      ok: false,
-    };
-  }
-}
-
-async function destroyPreviewEnvironment(
-  params: z.infer<ReturnType<typeof createPreviewDestroyInputSchema>> & {
-    commandEnvironment: NodeJS.ProcessEnv;
-    createPreviewSemaphoreResourceClient: (input: {
-      semaphoreApiToken: string;
-      semaphoreBaseUrl: string;
-    }) => PreviewSemaphoreResourceClient;
-    dopplerProject: string;
-    signal?: AbortSignal;
-    workingDirectory: string;
-  },
-) {
-  const destroyArgs = [
-    "run",
-    "--project",
-    params.dopplerProject,
-    "--config",
-    params.previewEnvironmentDopplerConfigName,
-    "--",
-    "pnpm",
-    "alchemy:down",
-  ];
-
-  const destroyResult = await runCommand({
-    args: destroyArgs,
+    ],
     command: "doppler",
-    environment: params.commandEnvironment,
-    signal: params.signal,
-    workingDirectory: params.workingDirectory,
+    environment: input.commandEnvironment,
+    signal: input.signal,
+    workingDirectory: resolve(input.repositoryRoot, input.app.appPath),
   });
-  const destroyMessage =
-    destroyResult.exitCode === 0
-      ? null
-      : commandFailureMessage(destroyResult, "Preview teardown failed.");
-
-  if (destroyResult.exitCode !== 0) {
-    return {
-      message: destroyMessage ?? "Preview teardown failed.",
-      ok: false,
-    };
-  }
-
-  try {
-    const semaphore = params.createPreviewSemaphoreResourceClient({
-      semaphoreApiToken: params.semaphoreApiToken,
-      semaphoreBaseUrl: params.semaphoreBaseUrl,
+  if (deployResult.exitCode !== 0) {
+    return CloudflarePreviewAppEntry.parse({
+      ...baseEntry,
+      message: commandFailureMessage(deployResult, "Preview deployment failed."),
+      status: "deploy-failed",
     });
-    const released = await semaphore.release({
-      type: params.previewEnvironmentType,
-      slug: params.previewEnvironmentSlug,
-      leaseId: params.previewEnvironmentSemaphoreLeaseId,
+  }
+
+  const readiness = await waitForPreviewAppReadiness({
+    publicUrl: appConfig.baseUrl,
+    signal: input.signal,
+    timeoutMs: defaultPreviewReadyTimeoutMs,
+  });
+  if (!readiness.ok) {
+    return CloudflarePreviewAppEntry.parse({
+      ...baseEntry,
+      message: readiness.message,
+      status: "deploy-failed",
     });
-    return {
-      message: joinPreviewMessages(
-        destroyMessage,
-        released.released ? "Preview environment released." : "Semaphore lease was already gone.",
-      ),
-      ok: destroyResult.exitCode === 0,
-    };
-  } catch (error) {
-    return {
-      message: joinPreviewMessages(
-        destroyMessage,
-        error instanceof Error ? error.message : String(error),
-      ),
-      ok: false,
-    };
-  }
-}
-
-function derivePreviewEnvironment(input: {
-  appSlug: string;
-  previewEnvironmentSlug: string;
-  previewEnvironmentType: string;
-}) {
-  const prefix = `${input.appSlug}-preview-`;
-  if (!input.previewEnvironmentSlug.startsWith(prefix)) {
-    throw new Error(
-      `Preview slug ${input.previewEnvironmentSlug} does not match expected ${prefix}<slot>.`,
-    );
   }
 
-  const slot = Number(input.previewEnvironmentSlug.slice(prefix.length));
-  if (!Number.isInteger(slot) || slot <= 0) {
-    throw new Error(
-      `Preview slug ${input.previewEnvironmentSlug} does not end with a valid slot number.`,
-    );
-  }
-
-  const publicUrl =
-    input.appSlug === "os2"
-      ? `https://os2.iterate-preview-${slot}.com`
-      : input.appSlug === "events"
-        ? `https://${input.previewEnvironmentSlug}.iterate.com`
-        : `https://${input.previewEnvironmentSlug}.iterate-dev-stg.workers.dev`;
-
-  const projectSubdomainUrl =
-    input.appSlug === "os2"
-      ? `https://project.iterate-preview-${slot}.app`
-      : input.appSlug === "events"
-        ? `https://test.${input.previewEnvironmentSlug}.iterate.com`
-        : null;
-
-  const previewEnvironmentDopplerConfigName = `preview_${slot}`;
-
-  return {
-    previewEnvironmentAlchemyStageName: previewEnvironmentDopplerConfigName,
-    previewEnvironmentDopplerConfigName,
-    previewEnvironmentIdentifier: input.previewEnvironmentSlug,
-    previewEnvironmentSlug: input.previewEnvironmentSlug,
-    previewEnvironmentType: input.previewEnvironmentType,
-    publicUrl,
-    projectSubdomainUrl,
-  };
+  return CloudflarePreviewAppEntry.parse({
+    ...baseEntry,
+    status: "awaiting-tests",
+  });
 }
 
-async function acquireSupportedPreviewLease(input: {
-  appSlug: string;
-  excludedPreviewSlots?: number[];
-  leaseMs: number;
-  previewResourceType: string;
-  semaphore: PreviewSemaphoreResourceClient;
-  waitMs?: number;
-}) {
-  const skippedUnsupported: Array<{ leaseId: string; slug: string }> = [];
-  const excludedPreviewSlots = new Set(input.excludedPreviewSlots ?? []);
-
-  try {
-    for (;;) {
-      const lease = await input.semaphore.acquire({
-        type: input.previewResourceType,
-        leaseMs: input.leaseMs,
-        waitMs: input.waitMs,
-      });
-
-      if (
-        isSupportedPreviewEnvironmentSlug({
-          appSlug: input.appSlug,
-          excludedPreviewSlots,
-          slug: lease.slug,
-        })
-      ) {
-        await releaseSkippedUnsupportedPreviewLeases({
-          leases: skippedUnsupported,
-          previewResourceType: input.previewResourceType,
-          semaphore: input.semaphore,
-        });
-        return lease;
-      }
-
-      skippedUnsupported.push({ leaseId: lease.leaseId, slug: lease.slug });
-      if (skippedUnsupported.length >= 10) {
-        throw new Error(
-          `No supported ${input.appSlug} preview slots are available. Skipped: ${skippedUnsupported.map(({ slug }) => slug).join(", ")}.`,
-        );
-      }
-    }
-  } catch (error) {
-    await releaseSkippedUnsupportedPreviewLeases({
-      leases: skippedUnsupported,
-      previewResourceType: input.previewResourceType,
-      semaphore: input.semaphore,
-    });
-    throw error;
-  }
-}
-
-async function releaseSkippedUnsupportedPreviewLeases(input: {
-  leases: Array<{ leaseId: string; slug: string }>;
-  previewResourceType: string;
-  semaphore: PreviewSemaphoreResourceClient;
-}) {
-  await Promise.all(
-    input.leases.map((lease) =>
-      input.semaphore.release({
-        type: input.previewResourceType,
-        slug: lease.slug,
-        leaseId: lease.leaseId,
-      }),
-    ),
-  );
-}
-
-export function isSupportedPreviewEnvironmentSlug(input: {
-  appSlug: string;
-  excludedPreviewSlots?: ReadonlySet<number> | readonly number[];
-  slug: string;
-}) {
-  const slot = parsePreviewSlot({ appSlug: input.appSlug, slug: input.slug });
-  if (slot === null) return false;
-  const excludedPreviewSlots =
-    input.excludedPreviewSlots instanceof Set
-      ? input.excludedPreviewSlots
-      : new Set(input.excludedPreviewSlots ?? []);
-  return !excludedPreviewSlots.has(slot);
-}
-
-function parsePreviewSlot(input: { appSlug: string; slug: string }) {
-  const prefix = `${input.appSlug}-preview-`;
-  if (!input.slug.startsWith(prefix)) return null;
-  const slot = Number(input.slug.slice(prefix.length));
-  return Number.isInteger(slot) && slot > 0 ? slot : null;
-}
-
-function hasPreviewDestroyPayload(
-  entry: CloudflarePreviewEntryType | undefined,
-): entry is CloudflarePreviewEntryType & {
-  previewEnvironmentAlchemyStageName: string;
-  previewEnvironmentDopplerConfigName: string;
-  previewEnvironmentIdentifier: string;
-  previewEnvironmentSemaphoreLeaseId: string;
-  previewEnvironmentSlug: string;
-  previewEnvironmentType: string;
-} {
-  return Boolean(
-    entry?.previewEnvironmentAlchemyStageName &&
-    entry.previewEnvironmentDopplerConfigName &&
-    entry.previewEnvironmentIdentifier &&
-    entry.previewEnvironmentSemaphoreLeaseId &&
-    entry.previewEnvironmentSlug &&
-    entry.previewEnvironmentType,
-  );
-}
-
-function canRunPreviewTests(
-  entry: CloudflarePreviewEntryType | undefined,
-): entry is CloudflarePreviewEntryType & {
-  previewEnvironmentDopplerConfigName: string;
-  publicUrl: string;
-} {
-  return Boolean(
-    entry?.previewEnvironmentDopplerConfigName &&
-    entry.publicUrl &&
-    ["awaiting-tests", "deployed", "tests-failed"].includes(entry.status),
-  );
-}
-
-async function runCommand(params: {
-  args: string[];
-  command: string;
-  environment: NodeJS.ProcessEnv;
+async function readPreviewAppConfig(input: {
+  commandEnvironment: NodeJS.ProcessEnv;
+  dopplerConfig: string;
+  dopplerProject: string;
   signal?: AbortSignal;
   workingDirectory: string;
 }) {
-  return await new Promise<{
-    exitCode: number | null;
-    stderr: string;
-    stdout: string;
-  }>((resolve, reject) => {
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
-    const child = spawn(params.command, params.args, {
-      cwd: params.workingDirectory,
-      env: params.environment,
-      signal: params.signal,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdoutChunks.push(Buffer.from(chunk));
-      process.stdout.write(chunk);
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderrChunks.push(Buffer.from(chunk));
-      process.stderr.write(chunk);
-    });
-    child.on("error", reject);
-    child.on("close", (exitCode) => {
-      resolve({
-        exitCode,
-        stderr: Buffer.concat(stderrChunks).toString("utf8"),
-        stdout: Buffer.concat(stdoutChunks).toString("utf8"),
-      });
-    });
+  const script = [
+    "const config = { baseUrl: process.env.APP_CONFIG_BASE_URL ?? null };",
+    "console.log(JSON.stringify(config));",
+  ].join("\n");
+  const result = await runCommand({
+    args: [
+      "run",
+      "--project",
+      input.dopplerProject,
+      "--config",
+      input.dopplerConfig,
+      "--",
+      "node",
+      "-e",
+      script,
+    ],
+    command: "doppler",
+    echoOutput: false,
+    environment: input.commandEnvironment,
+    signal: input.signal,
+    workingDirectory: input.workingDirectory,
   });
-}
-
-async function runCommandWithRetries(
-  params: Parameters<typeof runCommand>[0] & {
-    maxAttempts: number;
-    retryDelayMs: number;
-  },
-) {
-  let attempt = 1;
-  let lastResult = await runCommand(params);
-
-  while (attempt < params.maxAttempts && lastResult.exitCode !== 0) {
-    console.error(
-      `Command failed on attempt ${attempt}/${params.maxAttempts}. Retrying in ${params.retryDelayMs}ms...`,
-    );
-    await sleep(params.retryDelayMs, params.signal);
-    attempt += 1;
-    lastResult = await runCommand(params);
+  if (result.exitCode !== 0) {
+    throw new Error(commandFailureMessage(result, "Failed to read preview app config."));
   }
 
-  return lastResult;
+  const parsed = z
+    .object({
+      baseUrl: z.string().trim().url(),
+    })
+    .parse(JSON.parse(result.stdout));
+  return parsed;
+}
+
+async function claimPreviewEnvironment(input: {
+  createPreviewSemaphoreResourceClient: (input: {
+    semaphoreApiToken: string;
+    semaphoreBaseUrl: string;
+  }) => PreviewSemaphoreResourceClient;
+  leaseMs: number;
+  previousEnvironment: CloudflarePreviewEnvironment | null;
+  semaphoreApiToken: string;
+  semaphoreBaseUrl: string;
+  waitMs?: number;
+}) {
+  const semaphore = input.createPreviewSemaphoreResourceClient({
+    semaphoreApiToken: input.semaphoreApiToken,
+    semaphoreBaseUrl: input.semaphoreBaseUrl,
+  });
+
+  const lease =
+    (input.previousEnvironment
+      ? await semaphore.renew({
+          type: input.previousEnvironment.type,
+          slug: input.previousEnvironment.slug,
+          leaseId: input.previousEnvironment.leaseId,
+          leaseMs: input.leaseMs,
+        })
+      : null) ??
+    (input.previousEnvironment
+      ? await semaphore.acquireSpecific({
+          type: input.previousEnvironment.type,
+          slug: input.previousEnvironment.slug,
+          leaseMs: input.leaseMs,
+        })
+      : null) ??
+    (await semaphore.acquire({
+      type: CLOUDFLARE_PREVIEW_RESOURCE_TYPE,
+      leaseMs: input.leaseMs,
+      waitMs: input.waitMs,
+    }));
+
+  const data = parsePreviewEnvironmentData(lease.data);
+  return {
+    dopplerConfig: data.dopplerConfig,
+    leasedUntil: lease.expiresAt,
+    leaseId: lease.leaseId,
+    slug: lease.slug,
+    type: lease.type,
+  } satisfies CloudflarePreviewEnvironment;
+}
+
+async function selectPreviewAppsForPullRequest(input: {
+  force: boolean;
+  githubToken: string;
+  previousState: CloudflarePreviewState;
+  pullRequestBaseSha: string;
+  pullRequestHeadSha: string;
+  pullRequestNumber: number;
+  repositoryFullName: string;
+}) {
+  if (input.force) {
+    return Object.values(cloudflarePreviewApps);
+  }
+
+  const compareBaseSha = await resolvePreviewCompareBaseSha(input);
+  if (!compareBaseSha || compareBaseSha === input.pullRequestHeadSha) {
+    return [];
+  }
+
+  const octokit = new Octokit({ auth: input.githubToken });
+  const [owner, repo] = splitRepositoryFullName(input.repositoryFullName);
+  const comparison = await octokit.rest.repos.compareCommitsWithBasehead({
+    owner,
+    repo,
+    basehead: `${compareBaseSha}...${input.pullRequestHeadSha}`,
+  });
+  const changedFiles =
+    comparison.data.files?.flatMap((file) => (file.filename ? [file.filename] : [])) ?? [];
+
+  if (changedFiles.some((filename) => matchesPreviewPath(filename, sharedPreviewDependencyPaths))) {
+    return Object.values(cloudflarePreviewApps);
+  }
+
+  const selectedSlugs = new Set<CloudflarePreviewAppSlug>();
+  for (const app of Object.values(cloudflarePreviewApps)) {
+    if (changedFiles.some((filename) => matchesPreviewPath(filename, app.paths))) {
+      selectedSlugs.add(app.slug);
+    }
+  }
+
+  return expandPreviewDependencies([...selectedSlugs]).map((slug) => cloudflarePreviewApps[slug]);
+}
+
+export function expandPreviewDependencies(appSlugs: readonly CloudflarePreviewAppSlug[]) {
+  const selected = new Set(appSlugs);
+  const visit = (appSlug: CloudflarePreviewAppSlug) => {
+    const app = cloudflarePreviewApps[appSlug];
+    for (const dependency of app.previewDependencies ?? []) {
+      if (selected.has(dependency)) {
+        continue;
+      }
+
+      selected.add(dependency);
+      visit(dependency);
+    }
+  };
+
+  for (const appSlug of appSlugs) {
+    visit(appSlug);
+  }
+
+  return Object.values(cloudflarePreviewApps)
+    .map((app) => app.slug)
+    .filter((appSlug) => selected.has(appSlug));
+}
+
+async function waitForPreviewAppReadiness(params: {
+  publicUrl: string;
+  signal?: AbortSignal;
+  timeoutMs: number;
+}) {
+  return await waitForHttpReadiness({
+    signal: params.signal,
+    timeoutMs: params.timeoutMs,
+    url: new URL(defaultPreviewReadyUrlPath, params.publicUrl),
+  });
 }
 
 async function waitForHttpReadiness(params: { signal?: AbortSignal; timeoutMs: number; url: URL }) {
@@ -990,30 +773,6 @@ async function waitForHttpReadiness(params: { signal?: AbortSignal; timeoutMs: n
     message: `Timed out waiting for preview readiness at ${params.url.toString()}. ${lastFailure}`,
     ok: false as const,
   };
-}
-
-async function waitForPreviewEnvironmentReadiness(params: {
-  previewEnvironment: ReturnType<typeof derivePreviewEnvironment>;
-  signal?: AbortSignal;
-  timeoutMs: number;
-}) {
-  const urls = [
-    new URL(defaultPreviewReadyUrlPath, params.previewEnvironment.publicUrl),
-    ...(params.previewEnvironment.projectSubdomainUrl
-      ? [new URL(defaultPreviewReadyUrlPath, params.previewEnvironment.projectSubdomainUrl)]
-      : []),
-  ];
-
-  for (const url of urls) {
-    const readiness = await waitForHttpReadiness({
-      signal: params.signal,
-      timeoutMs: params.timeoutMs,
-      url,
-    });
-    if (!readiness.ok) return readiness;
-  }
-
-  return { ok: true as const };
 }
 
 async function fetchReadinessStatus(url: URL, signal: AbortSignal | undefined): Promise<number> {
@@ -1080,45 +839,43 @@ function isDnsLookupError(error: unknown) {
   );
 }
 
-async function shouldSyncPreviewEnvironment(params: {
-  appPaths: readonly string[];
+async function resolvePullRequestPreviewContext(params: {
   githubToken: string;
+  isFork?: boolean;
+  pullRequestBaseSha?: string;
+  pullRequestHeadSha?: string;
   pullRequestNumber: number;
-  pullRequestBaseSha: string;
-  pullRequestHeadSha: string;
-  previousEntry: CloudflarePreviewEntryType | undefined;
   repositoryFullName: string;
 }) {
-  const compareBaseSha = await resolvePreviewCompareBaseSha(params);
-  if (!compareBaseSha || compareBaseSha === params.pullRequestHeadSha) {
-    return { shouldSync: false as const };
+  if (params.pullRequestHeadSha && params.pullRequestBaseSha && params.isFork !== undefined) {
+    return {
+      isFork: params.isFork,
+      pullRequestBaseSha: params.pullRequestBaseSha,
+      pullRequestHeadSha: params.pullRequestHeadSha,
+    };
   }
 
   const octokit = new Octokit({ auth: params.githubToken });
   const [owner, repo] = splitRepositoryFullName(params.repositoryFullName);
-  const comparison = await octokit.rest.repos.compareCommitsWithBasehead({
+  const pullRequest = await octokit.rest.pulls.get({
     owner,
     repo,
-    basehead: `${compareBaseSha}...${params.pullRequestHeadSha}`,
+    pull_number: params.pullRequestNumber,
   });
-  const changedFiles =
-    comparison.data.files?.flatMap((file) => (file.filename ? [file.filename] : [])) ?? [];
 
   return {
-    shouldSync: changedFiles.some(
-      (filename) =>
-        matchesPreviewPath(filename, params.appPaths) ||
-        matchesPreviewPath(filename, sharedPreviewDependencyPaths),
-    ),
+    isFork: pullRequest.data.head.repo?.fork ?? false,
+    pullRequestBaseSha: params.pullRequestBaseSha ?? pullRequest.data.base.sha,
+    pullRequestHeadSha: params.pullRequestHeadSha ?? pullRequest.data.head.sha,
   };
 }
 
 async function resolvePreviewCompareBaseSha(params: {
   githubToken: string;
+  previousState: CloudflarePreviewState;
   pullRequestNumber: number;
   pullRequestBaseSha: string;
   pullRequestHeadSha: string;
-  previousEntry: CloudflarePreviewEntryType | undefined;
   repositoryFullName: string;
 }) {
   const previousPullRequestHeadSha = await resolvePreviousPullRequestHeadSha(params);
@@ -1126,42 +883,10 @@ async function resolvePreviewCompareBaseSha(params: {
     return previousPullRequestHeadSha;
   }
 
-  if (params.previousEntry?.headSha) {
-    return params.previousEntry.headSha;
-  }
-
-  const octokit = new Octokit({ auth: params.githubToken });
-  const [owner, repo] = splitRepositoryFullName(params.repositoryFullName);
-  const workflowRunId = parseWorkflowRunId(params.previousEntry?.runUrl ?? null);
-  if (workflowRunId !== null) {
-    try {
-      const workflowRun = await octokit.rest.actions.getWorkflowRun({
-        owner,
-        repo,
-        run_id: workflowRunId,
-      });
-      const headSha = workflowRun.data.head_sha?.trim();
-      if (headSha) {
-        return headSha;
-      }
-    } catch {
-      // Fall back to commit-prefix lookup.
-    }
-  }
-
-  const shortSha = params.previousEntry?.shortSha?.trim();
-  if (!shortSha) {
-    return params.pullRequestBaseSha;
-  }
-
-  const commits = await octokit.paginate(octokit.rest.pulls.listCommits, {
-    owner,
-    pull_number: params.pullRequestNumber,
-    repo,
-    per_page: 100,
-  });
-  const matchingCommit = commits.find((commit) => commit.sha.startsWith(shortSha));
-  return matchingCommit?.sha ?? params.pullRequestBaseSha;
+  const previousHeadSha = Object.values(params.previousState.apps)
+    .map((entry) => entry.headSha)
+    .find((headSha): headSha is string => typeof headSha === "string" && headSha.length > 0);
+  return previousHeadSha ?? params.pullRequestBaseSha;
 }
 
 async function resolvePreviousPullRequestHeadSha(params: {
@@ -1186,15 +911,6 @@ async function resolvePreviousPullRequestHeadSha(params: {
   return commits[currentHeadIndex - 1]?.sha ?? null;
 }
 
-function parseWorkflowRunId(runUrl: string | null) {
-  if (!runUrl) {
-    return null;
-  }
-
-  const match = /\/actions\/runs\/(\d+)(?:\/|$)/.exec(runUrl);
-  return match ? Number(match[1]) : null;
-}
-
 function matchesPreviewPath(filename: string, patterns: readonly string[]) {
   return patterns.some((pattern) => {
     if (pattern.endsWith("/**")) {
@@ -1203,6 +919,90 @@ function matchesPreviewPath(filename: string, patterns: readonly string[]) {
 
     return filename === pattern;
   });
+}
+
+async function updatePreviewState(
+  params: {
+    githubToken: string;
+    pullRequestNumber: number;
+    repositoryFullName: string;
+  },
+  update: (state: CloudflarePreviewState) => CloudflarePreviewState,
+) {
+  return await updateCloudflarePreviewState({
+    githubToken: params.githubToken,
+    pullRequestNumber: params.pullRequestNumber,
+    repositoryFullName: params.repositoryFullName,
+    update,
+  });
+}
+
+function canRunPreviewTests(entry: CloudflarePreviewAppEntry | undefined) {
+  return Boolean(
+    entry?.publicUrl && ["awaiting-tests", "deployed", "tests-failed"].includes(entry.status),
+  );
+}
+
+async function runCommand(params: {
+  args: string[];
+  command: string;
+  echoOutput?: boolean;
+  environment: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
+  workingDirectory: string;
+}) {
+  return await new Promise<{
+    exitCode: number | null;
+    stderr: string;
+    stdout: string;
+  }>((resolve, reject) => {
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    const child = spawn(params.command, params.args, {
+      cwd: params.workingDirectory,
+      env: params.environment,
+      signal: params.signal,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdoutChunks.push(Buffer.from(chunk));
+      if (params.echoOutput !== false) process.stdout.write(chunk);
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderrChunks.push(Buffer.from(chunk));
+      if (params.echoOutput !== false) process.stderr.write(chunk);
+    });
+    child.on("error", reject);
+    child.on("close", (exitCode) => {
+      resolve({
+        exitCode,
+        stderr: Buffer.concat(stderrChunks).toString("utf8"),
+        stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+      });
+    });
+  });
+}
+
+async function runCommandWithRetries(
+  params: Parameters<typeof runCommand>[0] & {
+    maxAttempts: number;
+    retryDelayMs: number;
+  },
+) {
+  let attempt = 1;
+  let lastResult = await runCommand(params);
+
+  while (attempt < params.maxAttempts && lastResult.exitCode !== 0) {
+    console.error(
+      `Command failed on attempt ${attempt}/${params.maxAttempts}. Retrying in ${params.retryDelayMs}ms...`,
+    );
+    await sleep(params.retryDelayMs, params.signal);
+    attempt += 1;
+    lastResult = await runCommand(params);
+  }
+
+  return lastResult;
 }
 
 async function sleep(ms: number, signal?: AbortSignal) {
@@ -1248,11 +1048,7 @@ function commandFailureMessage(
     return text;
   }
 
-  return `…(truncated)\n${text.slice(-maxLength)}`;
-}
-
-function joinPreviewMessages(...parts: Array<string | null | undefined>) {
-  return parts.filter((part) => typeof part === "string" && part.trim().length > 0).join("\n");
+  return `...(truncated)\n${text.slice(-maxLength)}`;
 }
 
 function makeDefaultWorkflowRunUrl(env: NodeJS.ProcessEnv) {
@@ -1322,23 +1118,17 @@ function optionalNumberWithEnvDefault(env: NodeJS.ProcessEnv, key: string) {
 }
 
 function optionalBooleanWithEnvDefault(env: NodeJS.ProcessEnv, key: string) {
-  const schema = z.union([z.boolean(), z.stringbool()]).transform(Boolean);
+  const schema = z.stringbool();
   const rawDefaultValue = env[key]?.trim();
-  return rawDefaultValue
-    ? schema.default(z.stringbool().parse(rawDefaultValue))
-    : schema.optional();
-}
-
-function semaphoreApiTokenWithEnvDefault(env: NodeJS.ProcessEnv) {
-  return requiredStringWithEnvDefault(env, "SEMAPHORE_API_TOKEN");
+  return rawDefaultValue ? schema.default(schema.parse(rawDefaultValue)) : schema.optional();
 }
 
 function optionalSemaphoreApiTokenWithEnvDefault(env: NodeJS.ProcessEnv) {
   return optionalStringWithEnvDefault(env, "SEMAPHORE_API_TOKEN");
 }
 
-function requireValue<T>(value: T | undefined, message: string) {
-  if (value === undefined || value === null || value === "") {
+function requireValue<T>(value: T | null | undefined, message: string): T {
+  if (value === null || value === undefined || value === "") {
     throw new Error(message);
   }
 
@@ -1346,62 +1136,23 @@ function requireValue<T>(value: T | undefined, message: string) {
 }
 
 function formatPreviewErrorMessage(error: unknown) {
-  if (error instanceof z.ZodError) {
-    return sanitizePreviewOutput(`${error.message}: ${JSON.stringify(error.issues)}`);
+  if (error instanceof Error) {
+    return error.message;
   }
 
-  return sanitizePreviewOutput(error instanceof Error ? error.message : String(error));
+  return String(error);
 }
 
 function sanitizePreviewOutput(value: string) {
-  return stripAnsi(value)
-    .replaceAll("\r\n", "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
+  const text = stripAnsi(value);
+  const lines = text.split("\n");
+  const sanitizedLines = lines.map((line) => {
+    if (/^DOPPLER_TOKEN=/i.test(line)) {
+      return "DOPPLER_TOKEN=[redacted]";
+    }
 
-type PullRequestPreviewContext = {
-  isFork: boolean;
-  pullRequestBaseSha: string;
-  pullRequestHeadRefName: string;
-  pullRequestHeadSha: string;
-};
-
-async function resolvePullRequestPreviewContext(params: {
-  githubToken: string;
-  isFork?: boolean;
-  pullRequestBaseSha?: string;
-  pullRequestHeadRefName?: string;
-  pullRequestHeadSha?: string;
-  pullRequestNumber: number;
-  repositoryFullName: string;
-}): Promise<PullRequestPreviewContext> {
-  if (
-    params.pullRequestBaseSha &&
-    params.pullRequestHeadRefName &&
-    params.pullRequestHeadSha &&
-    params.isFork !== undefined
-  ) {
-    return {
-      isFork: params.isFork,
-      pullRequestBaseSha: params.pullRequestBaseSha,
-      pullRequestHeadRefName: params.pullRequestHeadRefName,
-      pullRequestHeadSha: params.pullRequestHeadSha,
-    };
-  }
-
-  const octokit = new Octokit({ auth: params.githubToken });
-  const [owner, repo] = splitRepositoryFullName(params.repositoryFullName);
-  const pullRequest = await octokit.rest.pulls.get({
-    owner,
-    repo,
-    pull_number: params.pullRequestNumber,
+    return line;
   });
 
-  return {
-    isFork: pullRequest.data.head.repo?.fork ?? false,
-    pullRequestBaseSha: pullRequest.data.base.sha,
-    pullRequestHeadRefName: pullRequest.data.head.ref,
-    pullRequestHeadSha: pullRequest.data.head.sha,
-  };
+  return sanitizedLines.join("\n");
 }

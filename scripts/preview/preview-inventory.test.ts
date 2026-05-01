@@ -1,102 +1,102 @@
 import { describe, expect, it, vi } from "vitest";
-import { ensurePreviewInventory } from "./preview-inventory.ts";
+import {
+  CLOUDFLARE_PREVIEW_RESOURCE_TYPE,
+  parsePreviewEnvironmentData,
+  syncPreviewInventory,
+} from "./preview-inventory.ts";
 
-describe("ensurePreviewInventory", () => {
-  it("adds missing preview slots for a new preview app type", async () => {
+describe("syncPreviewInventory", () => {
+  it("adds missing shared preview environment resources", async () => {
     const add = vi.fn(async () => undefined);
-    const list = vi.fn(async () => []);
+    const deleteResource = vi.fn(async () => undefined);
+    const list = vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([]);
 
-    await ensurePreviewInventory({
-      appSlug: "codemode",
-      client: { add, list },
-      count: 3,
-      type: "codemode-preview-environment",
+    await syncPreviewInventory({
+      client: { add, delete: deleteResource, list },
+      inventory: [
+        {
+          data: { dopplerConfig: "preview_1" },
+          slug: "preview-1",
+          type: CLOUDFLARE_PREVIEW_RESOURCE_TYPE,
+        },
+        {
+          data: { dopplerConfig: "preview_2" },
+          slug: "preview-2",
+          type: CLOUDFLARE_PREVIEW_RESOURCE_TYPE,
+        },
+      ],
     });
 
-    expect(list).toHaveBeenCalledWith({
-      type: "codemode-preview-environment",
-    });
+    expect(deleteResource).not.toHaveBeenCalled();
     expect(add.mock.calls).toEqual([
       [
         {
-          slug: "codemode-preview-1",
-          type: "codemode-preview-environment",
+          data: { dopplerConfig: "preview_1" },
+          slug: "preview-1",
+          type: CLOUDFLARE_PREVIEW_RESOURCE_TYPE,
         },
       ],
       [
         {
-          slug: "codemode-preview-2",
-          type: "codemode-preview-environment",
-        },
-      ],
-      [
-        {
-          slug: "codemode-preview-3",
-          type: "codemode-preview-environment",
+          data: { dopplerConfig: "preview_2" },
+          slug: "preview-2",
+          type: CLOUDFLARE_PREVIEW_RESOURCE_TYPE,
         },
       ],
     ]);
   });
 
-  it("skips existing slots and ignores duplicate add conflicts", async () => {
-    const add = vi.fn(async ({ slug }: { slug: string; type: string }) => {
-      if (slug === "codemode-preview-3") {
-        throw new Error("Resource already exists for this type and slug.");
-      }
+  it("deletes drifted resources before recreating expected resources", async () => {
+    const add = vi.fn(async () => undefined);
+    const deleteResource = vi.fn(async () => undefined);
+    const list = vi
+      .fn()
+      .mockResolvedValueOnce([
+        { data: {}, slug: "preview-1" },
+        { data: { dopplerConfig: "preview_2" }, slug: "preview-2" },
+        { data: { dopplerConfig: "preview_99" }, slug: "preview-99" },
+      ])
+      .mockResolvedValueOnce([{ data: { dopplerConfig: "preview_2" }, slug: "preview-2" }]);
+
+    await syncPreviewInventory({
+      client: { add, delete: deleteResource, list },
+      inventory: [
+        {
+          data: { dopplerConfig: "preview_1" },
+          slug: "preview-1",
+          type: CLOUDFLARE_PREVIEW_RESOURCE_TYPE,
+        },
+        {
+          data: { dopplerConfig: "preview_2" },
+          slug: "preview-2",
+          type: CLOUDFLARE_PREVIEW_RESOURCE_TYPE,
+        },
+      ],
     });
-    const list = vi.fn(async () => [
-      { slug: "codemode-preview-1" },
-      { slug: "codemode-preview-4" },
+
+    expect(deleteResource.mock.calls).toEqual([
+      [{ slug: "preview-1", type: CLOUDFLARE_PREVIEW_RESOURCE_TYPE }],
+      [{ slug: "preview-99", type: CLOUDFLARE_PREVIEW_RESOURCE_TYPE }],
     ]);
-
-    await ensurePreviewInventory({
-      appSlug: "codemode",
-      client: { add, list },
-      count: 4,
-      type: "codemode-preview-environment",
-    });
-
     expect(add.mock.calls).toEqual([
       [
         {
-          slug: "codemode-preview-2",
-          type: "codemode-preview-environment",
-        },
-      ],
-      [
-        {
-          slug: "codemode-preview-3",
-          type: "codemode-preview-environment",
+          data: { dopplerConfig: "preview_1" },
+          slug: "preview-1",
+          type: CLOUDFLARE_PREVIEW_RESOURCE_TYPE,
         },
       ],
     ]);
   });
+});
 
-  it("does not add excluded slots", async () => {
-    const add = vi.fn(async () => undefined);
-    const list = vi.fn(async () => []);
-
-    await ensurePreviewInventory({
-      appSlug: "os2",
-      client: { add, list },
-      count: 3,
-      excludedSlots: [1],
-      type: "os2-preview-environment",
+describe("parsePreviewEnvironmentData", () => {
+  it("requires a dopplerConfig string", () => {
+    expect(parsePreviewEnvironmentData({ dopplerConfig: " preview_1 " })).toEqual({
+      dopplerConfig: "preview_1",
     });
-
-    expect(add.mock.calls).toEqual([
-      [
-        {
-          slug: "os2-preview-2",
-          type: "os2-preview-environment",
-        },
-      ],
-      [
-        {
-          slug: "os2-preview-3",
-          type: "os2-preview-environment",
-        },
-      ],
-    ]);
+    expect(() => parsePreviewEnvironmentData({})).toThrow(
+      "Preview environment resource data must include dopplerConfig.",
+    );
   });
 });
