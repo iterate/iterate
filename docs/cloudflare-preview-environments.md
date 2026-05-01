@@ -21,7 +21,10 @@ For example, a PR that affects two new-style apps leases `preview-1`, reads
 app:
 
 ```bash
+cd apps/os2
 doppler run --project os2 --config preview_1 -- pnpm exec tsx ./alchemy.run.ts
+
+cd ../semaphore
 doppler run --project semaphore --config preview_1 -- pnpm exec tsx ./alchemy.run.ts
 ```
 
@@ -38,7 +41,7 @@ The same mechanism applies to local development and production:
 
 - Semaphore database state stores the environment config lease inventory for PR previews
 - the managed PR body preview section stores the current PR's lease and app statuses
-- Doppler stores each app project's config bag for the leased slot
+- Doppler stores each app project's config bag for the leased environment config
 - there is no app-specific resource inventory and no fallback state
 
 The seed for this Semaphore resource type lives in
@@ -58,7 +61,8 @@ Semaphore database exactly match that source-code inventory for
    `@iterate-com/shared/apps/new-style-cloudflare-apps`; it belongs in app
    manifests or contracts long-term.
 5. It deploys selected apps with the leased Doppler config. New-style apps run
-   `doppler run --project <app> --config <leased dopplerConfig> -- pnpm exec tsx ./alchemy.run.ts`.
+   `doppler run --project <app> --config <leased dopplerConfig> -- pnpm exec tsx ./alchemy.run.ts`
+   with the app directory as the working directory.
    Legacy preview-managed apps run their package `alchemy:up` / `alchemy:down`
    scripts for now.
 6. It records each app's result in the PR body. If any app fails, the overall
@@ -88,8 +92,10 @@ Do not paste the token into scripts or docs.
   with `pnpm --dir apps/semaphore seed:environment-config-leases`.
 - The seed is exact for `environment-config-lease`: drifted resources are
   deleted and missing resources are recreated with the source-code data.
-- Only preview domain pairs that are available in the right Cloudflare account
-  should have `preview_N` Doppler configs and Semaphore seed entries.
+- Only provision Semaphore seed entries when the matching `preview_N` Doppler
+  configs exist for the preview-managed apps and the app-specific Cloudflare
+  prerequisites are in the right accounts. For os2, that includes the
+  `iterate-preview-N.com` / `iterate-preview-N.app` zone pair.
 - CI workflows invoke one shared preview lifecycle. The lifecycle code, not the
   workflow matrix, decides which apps deploy.
 - Preview deploys do not override `ALCHEMY_STAGE`.

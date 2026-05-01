@@ -11,12 +11,12 @@ export type EnvironmentConfigLeaseInventoryItem = {
 };
 
 export const environmentConfigLeaseInventory = Array.from({ length: 10 }, (_, index) => {
-  const slot = index + 1;
+  const leaseNumber = index + 1;
   return {
     type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
-    slug: `preview-${slot}`,
+    slug: `preview-${leaseNumber}`,
     data: {
-      dopplerConfig: `preview_${slot}`,
+      dopplerConfig: `preview_${leaseNumber}`,
     },
   };
 }) satisfies EnvironmentConfigLeaseInventoryItem[];

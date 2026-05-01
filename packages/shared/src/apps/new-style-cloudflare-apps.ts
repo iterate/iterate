@@ -28,6 +28,11 @@ export type NewStyleCloudflareAppDeploymentManifest = {
   deploymentDependencies?: string[];
 };
 
+export const newStyleCloudflareAppSharedPaths = [
+  "packages/shared/src/alchemy/**",
+  "packages/shared/src/apps/**",
+] as const;
+
 export const newStyleCloudflareApps: Record<
   NewStyleCloudflareAppSlug,
   NewStyleCloudflareAppDeploymentManifest

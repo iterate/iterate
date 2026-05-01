@@ -14,6 +14,8 @@ on:
     paths:
       - apps/semaphore/**
       - apps/semaphore-contract/**
+      - packages/shared/src/alchemy/**
+      - packages/shared/src/apps/**
   workflow_dispatch:
     inputs:
       ref:

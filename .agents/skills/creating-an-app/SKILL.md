@@ -22,9 +22,10 @@ Cloudflare deploy workflows are generated from `.github/ts-workflows/`.
 
 The current pattern is:
 
-1. Add the app to `scripts/preview/apps.ts`.
-2. Add a thin workflow entry in `.github/ts-workflows/workflows/deploy-<app>.ts`.
-3. Regenerate YAML with `pnpm -C .github/ts-workflows generate`.
+1. Add a new-style app to `packages/shared/src/apps/new-style-cloudflare-apps.ts`.
+2. If it participates in PR previews, add preview test metadata in `scripts/preview/apps.ts`.
+3. Add a thin workflow entry in `.github/ts-workflows/workflows/deploy-<app>.ts`.
+4. Regenerate YAML with `pnpm -C .github/ts-workflows generate`.
 
 The shared app manifest is the source of truth for:
 
@@ -33,25 +34,28 @@ The shared app manifest is the source of truth for:
 - repo path
 - Doppler project
 - path filters
-- preview resource type
+- temporary deploy dependencies
+
+The preview registry adds:
+
 - preview test base URL env var
 - preview test command
 
 Preview deploys do not live in app-local routers anymore. They run through the repo preview router:
 
 ```bash
-doppler run --project os --config prd -- pnpm preview sync --app <slug>
-doppler run --project os --config prd -- pnpm preview cleanup --app <slug>
+doppler run --project os --config prd -- pnpm preview sync --pull-request-number 1234
+doppler run --project os --config prd -- pnpm preview cleanup --pull-request-number 1234
 ```
 
 Workflow rules:
 
 - PR pushes deploy `preview_N`
 - pushes to `main` deploy `prd`
-- PR deploys update the sticky PR comment
+- PR deploys update the managed preview section in the PR body
 - `main` deploy successes post to Slack
 - `main` deploy failures post to Slack
-- workflow `paths` should include only the app folder and its contract folder unless there is a deliberate reason to widen them
+- new-style workflow `paths` include the app folder, contract folder, and shared new-style deploy paths from `packages/shared/src/apps/new-style-cloudflare-apps.ts`
 
 Do not add preview logic back into `apps/<app>/scripts/router.ts` just to satisfy CI.
 
@@ -62,6 +66,6 @@ Use the `new-doppler-project` skill for the project/config setup.
 The app package should work with:
 
 ```bash
-doppler run --config preview_1 -- pnpm alchemy:up
-doppler run --config prd -- pnpm alchemy:up
+doppler run --project <app> --config preview_1 -- pnpm exec tsx ./alchemy.run.ts
+doppler run --project <app> --config prd -- pnpm exec tsx ./alchemy.run.ts
 ```

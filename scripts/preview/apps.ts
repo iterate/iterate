@@ -1,5 +1,8 @@
 import { z } from "zod";
-import { newStyleCloudflareApps } from "../../packages/shared/src/apps/new-style-cloudflare-apps.ts";
+import {
+  newStyleCloudflareApps,
+  newStyleCloudflareAppSharedPaths,
+} from "../../packages/shared/src/apps/new-style-cloudflare-apps.ts";
 
 export const CloudflarePreviewAppSlug = z.enum([
   "agents",
@@ -27,8 +30,7 @@ export type CloudflarePreviewApp = {
 export const cloudflarePreviewSharedPaths = [
   ".github/workflows/cloudflare-previews.yml",
   ".github/ts-workflows/workflows/cloudflare-previews.ts",
-  "packages/shared/src/alchemy/**",
-  "packages/shared/src/apps/**",
+  ...newStyleCloudflareAppSharedPaths,
   "scripts/preview/**",
 ] as const;
 
@@ -46,7 +48,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
   example: {
     ...newStyleCloudflareApps.example,
     previewTestBaseUrlEnvVar: "EXAMPLE_BASE_URL",
-    previewTestCommandArgs: ["pnpm", "test:e2e"],
+    previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
   },
   events: {
     slug: "events",

@@ -94,7 +94,7 @@ The Semaphore UI labels this as an operator token. It is the same shared API sec
 ## Failure modes / footguns
 
 - Deleting the managed preview section from the PR body is treated as state loss.
-- If the PR body state is lost, the next sync can create a fresh lease and an old preview may linger until later cleanup or slot reuse.
+- If the PR body state is lost, the next sync can create a fresh lease and an old preview may linger until later cleanup or lease reuse.
 - Preview jobs that mutate the PR body must stay serialized per PR.
 - Preview tests are intentionally narrower than the slowest full app e2e suites.
 - Preview deploys do not override `ALCHEMY_STAGE`; route-driven previews should be configured in the app's `preview_N` Doppler configs.

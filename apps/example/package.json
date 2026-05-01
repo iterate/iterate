@@ -23,6 +23,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "node -e \"if (!process.env.EXAMPLE_BASE_URL) { console.error('EXAMPLE_BASE_URL is required for example e2e tests'); process.exit(1); }\" && vitest run --config ./e2e/vitest.config.ts",
+    "test:e2e:preview": "pnpm test:e2e",
     "test:smoke": "RUNTIME_SMOKE_FULL=1 vitest run",
     "test:watch": "vitest"
   },

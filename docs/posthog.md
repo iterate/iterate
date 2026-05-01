@@ -89,12 +89,13 @@ Stripe customers are linked to PostHog persons via:
 
 ## Environment Variables
 
-Both apps use the same Doppler project (`os`) and share these env vars:
+The legacy product app in `apps/os` and the related marketing flow share these
+analytics env vars:
 
 - `POSTHOG_PUBLIC_KEY` - PostHog project API key (used for server-side tracking)
 - `VITE_POSTHOG_PUBLIC_KEY` - PostHog project API key for client (set as reference to `POSTHOG_PUBLIC_KEY` in Doppler)
 - `VITE_POSTHOG_PROXY_URL` - Proxy endpoint (defaults to `/api/integrations/posthog/proxy`)
-- `VITE_APP_STAGE` - Environment stage (dev, preview, prd) - automatically included as `$environment` in all events
+- `VITE_APP_STAGE` - Environment stage (`dev_*`, numbered `preview_N`, `prd`) - automatically included as `$environment` in all events
 
 ## Multi-Environment Setup
 

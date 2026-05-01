@@ -51,6 +51,7 @@ For new-style Cloudflare apps (`agents`, `codemode`, `example`,
 main/prod deploys all use the same primitive:
 
 ```bash
+cd apps/<app>
 doppler run --project <app> --config <environment-config> -- pnpm exec tsx ./alchemy.run.ts
 ```
 
@@ -70,7 +71,7 @@ To create or repair environment config leases for PR previews:
 
 1. Add or confirm the lease in `scripts/preview/preview-inventory.ts`.
 2. Ensure every preview-managed app that may use that lease has the matching
-   Doppler config, for example `preview_11`, plus any required Cloudflare
+   Doppler config, for example `preview_10`, plus any required Cloudflare
    route/domain config.
 3. Reconcile the live Semaphore inventory from source:
 
@@ -81,7 +82,9 @@ doppler run --project os --config prd -- pnpm preview status
 
 The seed is exact for `environment-config-lease`: missing resources are created
 and drifted resources are replaced. Only add leases whose Doppler configs and
-Cloudflare domains exist in the right accounts. See
+Cloudflare domains exist in the right accounts. To expand capacity to
+`preview_11`, first add it to the source inventory and provision matching
+Doppler configs and app-specific Cloudflare prerequisites. See
 `docs/cloudflare-preview-environments.md` for the full lifecycle.
 
 ## Cloudflare Tunnels

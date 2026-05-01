@@ -20,7 +20,8 @@ import {
 } from "./state.ts";
 import { splitRepositoryFullName } from "./repository-full-name.ts";
 import {
-  type CloudflarePreviewAppSlug,
+  CloudflarePreviewAppSlug,
+  type CloudflarePreviewAppSlug as CloudflarePreviewAppSlugType,
   cloudflarePreviewApps,
   cloudflarePreviewSharedPaths,
 } from "./apps.ts";
@@ -68,7 +69,7 @@ type PreviewLifecycleResult = {
   state: CloudflarePreviewState;
 };
 
-type PreviewAppRuntime = (typeof cloudflarePreviewApps)[CloudflarePreviewAppSlug];
+type PreviewAppRuntime = (typeof cloudflarePreviewApps)[CloudflarePreviewAppSlugType];
 
 export function createCloudflarePreviewSyncInputSchema(env: NodeJS.ProcessEnv) {
   return z.object({
@@ -162,7 +163,7 @@ export async function deployCloudflarePreviewForPullRequest(
   const pullRequest = await resolvePullRequestPreviewContext(params);
 
   if (pullRequest.isFork) {
-    const appSlugs = Object.keys(cloudflarePreviewApps) as CloudflarePreviewAppSlug[];
+    const appSlugs = Object.keys(cloudflarePreviewApps) as CloudflarePreviewAppSlugType[];
     const state = await recordForkUnavailable({
       appSlugs,
       params,
@@ -238,10 +239,6 @@ export async function deployCloudflarePreviewForPullRequest(
       },
     }));
     latestState = update.state;
-
-    if (!ok) {
-      break;
-    }
   }
 
   return {
@@ -274,7 +271,7 @@ export async function testCloudflarePreviewForPullRequest(
   const testableApps = Object.values(current.state.apps)
     .filter((entry) => canRunPreviewTests(entry))
     .filter((entry) => !params.pullRequestHeadSha || entry.headSha === params.pullRequestHeadSha)
-    .map((entry) => cloudflarePreviewApps[entry.appSlug as CloudflarePreviewAppSlug])
+    .map((entry) => cloudflarePreviewApps[entry.appSlug as CloudflarePreviewAppSlugType])
     .filter((app): app is PreviewAppRuntime => app != null);
 
   if (testableApps.length === 0) {
@@ -372,7 +369,7 @@ export async function cleanupCloudflarePreviewForPullRequest(
 
   let ok = true;
   let latestState = current.state;
-  for (const appSlug of Object.keys(current.state.apps) as CloudflarePreviewAppSlug[]) {
+  for (const appSlug of Object.keys(current.state.apps) as CloudflarePreviewAppSlugType[]) {
     const app = cloudflarePreviewApps[appSlug];
     if (!app) {
       continue;
@@ -445,7 +442,7 @@ export async function cleanupCloudflarePreviewForPullRequest(
 }
 
 async function recordForkUnavailable(input: {
-  appSlugs: CloudflarePreviewAppSlug[];
+  appSlugs: CloudflarePreviewAppSlugType[];
   params: {
     githubToken: string;
     pullRequestNumber: number;
@@ -717,8 +714,14 @@ async function selectPreviewAppsForPullRequest(input: {
   }
 
   const compareBaseSha = resolvePreviewCompareBaseSha(input);
-  if (!compareBaseSha || compareBaseSha === input.pullRequestHeadSha) {
+  if (!compareBaseSha) {
     return [];
+  }
+  if (compareBaseSha === input.pullRequestHeadSha) {
+    return selectPreviewAppsNeedingRetry({
+      previousState: input.previousState,
+      pullRequestHeadSha: input.pullRequestHeadSha,
+    });
   }
 
   const octokit = new Octokit({ auth: input.githubToken });
@@ -735,7 +738,7 @@ async function selectPreviewAppsForPullRequest(input: {
     return Object.values(cloudflarePreviewApps);
   }
 
-  const selectedSlugs = new Set<CloudflarePreviewAppSlug>();
+  const selectedSlugs = new Set<CloudflarePreviewAppSlugType>();
   for (const app of Object.values(cloudflarePreviewApps)) {
     if (changedFiles.some((filename) => matchesPreviewPath(filename, app.paths))) {
       selectedSlugs.add(app.slug);
@@ -745,9 +748,21 @@ async function selectPreviewAppsForPullRequest(input: {
   return expandPreviewDependencies([...selectedSlugs]).map((slug) => cloudflarePreviewApps[slug]);
 }
 
-export function expandPreviewDependencies(appSlugs: readonly CloudflarePreviewAppSlug[]) {
+export function selectPreviewAppsNeedingRetry(params: {
+  previousState: CloudflarePreviewState;
+  pullRequestHeadSha: string;
+}) {
+  const retrySlugs = Object.values(params.previousState.apps)
+    .filter((entry) => entry.headSha === params.pullRequestHeadSha)
+    .filter((entry) => ["awaiting-tests", "deploy-failed", "tests-failed"].includes(entry.status))
+    .map((entry) => CloudflarePreviewAppSlug.parse(entry.appSlug));
+
+  return expandPreviewDependencies(retrySlugs).map((slug) => cloudflarePreviewApps[slug]);
+}
+
+export function expandPreviewDependencies(appSlugs: readonly CloudflarePreviewAppSlugType[]) {
   const selected = new Set(appSlugs);
-  const visit = (appSlug: CloudflarePreviewAppSlug) => {
+  const visit = (appSlug: CloudflarePreviewAppSlugType) => {
     const app = cloudflarePreviewApps[appSlug];
     for (const dependency of app.previewDependencies ?? []) {
       if (selected.has(dependency)) {

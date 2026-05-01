@@ -12,7 +12,7 @@ Every environment serves two roles via two domains:
 | Project subdomains | `<proj>.<zone>` | `<proj>.iterate2.app` | `<proj>.iterate-dev-jonas.app` | `<proj>.iterate-preview-3.app` |
 
 The design principle: **dev must structurally mirror production.** Each environment
-gets one dashboard hostname and one project-hostname base. Preview slots use
+gets one dashboard hostname and one project-hostname base. Numbered previews use
 dedicated zone pairs: `iterate-preview-N.com` for the dashboard and
 `iterate-preview-N.app` for project/MCP hosts.
 
@@ -46,10 +46,10 @@ _shared          ← CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, ALCHEMY_STAGE=
 │   ├── dev_misha
 │   └── dev_rahul
 ├── preview      ← ALCHEMY_LOCAL=false, preview base
-│   ├── preview_1    ← preview slot 1: os2.iterate-preview-1.com / <project>.iterate-preview-1.app
-│   ├── preview_2    ← preview slot 2
+│   ├── preview_1    ← preview environment 1: os2.iterate-preview-1.com / <project>.iterate-preview-1.app
+│   ├── preview_2    ← preview environment 2
 │   ├── ...
-│   └── preview_10   ← preview slot 10
+│   └── preview_10   ← preview environment 10
 └── prd          ← os.iterate2.com / iterate2.app
 ```
 
@@ -103,7 +103,7 @@ inventory is `preview-1` through `preview-10`, each with
 ### How it works
 
 1. CI acquires a shared environment config lease from Semaphore (e.g. `preview-3`)
-2. The resource data maps the slot to Doppler config `preview_3`
+2. The resource data maps the lease to Doppler config `preview_3`
 3. `preview_3` has `APP_CONFIG_BASE_URL=https://os2.iterate-preview-3.com` and `APP_CONFIG_PROJECT_HOSTNAME_BASES=["iterate-preview-3.app"]`
 4. `doppler run --project os2 --config preview_3 -- pnpm exec tsx ./alchemy.run.ts` deploys the worker with correct routes. `ALCHEMY_STAGE` comes from `_shared` as `${DOPPLER_CONFIG}` and is slugified by the app into Cloudflare names like `os2-preview-3`.
 5. PR body is updated with the shared lease and per-app deployment status
@@ -111,23 +111,23 @@ inventory is `preview-1` through `preview-10`, each with
 
 ### Cloudflare zones for previews
 
-Each preview slot N uses two Cloudflare zones:
+Each numbered os2 preview config uses two Cloudflare zones:
 
 - `iterate-preview-N.com` for the dashboard host `os2.iterate-preview-N.com`
 - `iterate-preview-N.app` for project and MCP hosts like `<project>.iterate-preview-N.app`
 
-Both zones must exist in the `04b3` Cloudflare account before the preview slot
-can deploy routes and DNS records.
+Both zones must exist in the `04b3` Cloudflare account before that config can
+deploy routes and DNS records.
 
 ### Manual preview deploy
 
 The `pnpm preview` CLI (from repo root) manages the full lifecycle. It uses the `os` doppler project for semaphore credentials:
 
 ```bash
-# Check which slots are free
+# Check which environment config leases are free
 doppler run --project os --config prd -- pnpm preview status
 
-# Full lifecycle for a PR (acquire slot, deploy affected apps, test, update PR body)
+# Full lifecycle for a PR (acquire lease, deploy affected apps, test, update PR body)
 doppler run --project os --config prd -- pnpm preview sync --pull-request-number 1234
 
 # Or just deploy without tests

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { cloudflarePreviewSharedPaths } from "./apps.ts";
-import { expandPreviewDependencies, resolvePreviewCompareBaseSha } from "./preview.ts";
+import {
+  expandPreviewDependencies,
+  resolvePreviewCompareBaseSha,
+  selectPreviewAppsNeedingRetry,
+} from "./preview.ts";
 
 describe("preview app dependency expansion", () => {
   it("adds explicit dependencies for affected apps", () => {
@@ -57,5 +61,47 @@ describe("preview compare base", () => {
         pullRequestBaseSha: "base-sha",
       }),
     ).toBe("previous-preview-sha");
+  });
+});
+
+describe("preview retry selection", () => {
+  it("retries current-head failed apps and their dependencies", () => {
+    expect(
+      selectPreviewAppsNeedingRetry({
+        previousState: {
+          apps: {
+            os2: {
+              appDisplayName: "OS",
+              appSlug: "os2",
+              headSha: "current-head",
+              status: "tests-failed",
+              updatedAt: "2026-05-01T00:00:00.000Z",
+            },
+          },
+          environmentConfigLease: null,
+        },
+        pullRequestHeadSha: "current-head",
+      }).map((app) => app.slug),
+    ).toEqual(["events", "os2"]);
+  });
+
+  it("does not retry previously failed apps from older commits", () => {
+    expect(
+      selectPreviewAppsNeedingRetry({
+        previousState: {
+          apps: {
+            os2: {
+              appDisplayName: "OS",
+              appSlug: "os2",
+              headSha: "old-head",
+              status: "deploy-failed",
+              updatedAt: "2026-05-01T00:00:00.000Z",
+            },
+          },
+          environmentConfigLease: null,
+        },
+        pullRequestHeadSha: "current-head",
+      }),
+    ).toEqual([]);
   });
 });

@@ -14,6 +14,8 @@ on:
     paths:
       - apps/ingress-proxy/**
       - apps/ingress-proxy-contract/**
+      - packages/shared/src/alchemy/**
+      - packages/shared/src/apps/**
   workflow_dispatch:
     inputs:
       ref:

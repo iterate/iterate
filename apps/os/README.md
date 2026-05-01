@@ -77,14 +77,14 @@ PostHog is configured via environment variables (managed by Doppler). All are op
 
 ### Environments
 
-All environments use a single PostHog project with `$environment` property set via `VITE_APP_STAGE`:
+The legacy `apps/os` app uses a single PostHog project with `$environment`
+property set via `VITE_APP_STAGE`:
 
-| Stage     | Description                  |
-| --------- | ---------------------------- |
-| `local-*` | Developer local environments |
-| `preview` | Preview                      |
-| `prd`     | Production                   |
-| `pr-*`    | PR preview environments      |
+| Stage       | Description                           |
+| ----------- | ------------------------------------- |
+| `dev_*`     | Developer local/deployed dev configs  |
+| `preview_N` | Numbered repo-managed preview configs |
+| `prd`       | Production                            |
 
 Filter by `$environment` in PostHog to see data from specific environments.
 

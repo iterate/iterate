@@ -1,5 +1,8 @@
 import { workflow } from "@jlarky/gha-ts/workflow-types";
-import { isNewStyleCloudflareAppSlug } from "../../../packages/shared/src/apps/new-style-cloudflare-apps.ts";
+import {
+  isNewStyleCloudflareAppSlug,
+  newStyleCloudflareAppSharedPaths,
+} from "../../../packages/shared/src/apps/new-style-cloudflare-apps.ts";
 import type { CloudflarePreviewApp as CloudflareApp } from "../../../scripts/preview/apps.ts";
 import * as utils from "./index.ts";
 
@@ -25,7 +28,7 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
     on: {
       push: {
         branches: ["main"],
-        paths: app.paths,
+        paths: isNewStyleApp ? [...app.paths, ...newStyleCloudflareAppSharedPaths] : app.paths,
       },
       workflow_dispatch: {
         inputs: {

@@ -26,7 +26,8 @@ Cloudflare-only: TanStack Start + oRPC + raw D1 route registry, plus public-host
 # Normal preview lifecycle is managed from the repo root:
 # doppler run --project os --config prd -- pnpm preview sync --pull-request-number 1234
 #
-# Fixed-slot manual deploy:
+# Lease-bypassing manual deploy:
+# Check `pnpm preview status` first and use it only for emergency debugging.
 doppler run --project ingress-proxy --config preview_1 -- pnpm exec tsx ./alchemy.run.ts
 doppler run --project ingress-proxy --config preview_1 -- pnpm exec tsx ./alchemy.run.ts --destroy
 doppler run --project ingress-proxy --config prd -- pnpm exec tsx ./alchemy.run.ts
