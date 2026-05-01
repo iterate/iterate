@@ -39,18 +39,31 @@ describe("AppConfig", () => {
           APP_CONFIG: JSON.stringify(baseConfig),
           APP_CONFIG_CLERK__OAUTH_CLIENT_ID: "legacy-client-id",
           APP_CONFIG_CLERK__OAUTH_CLIENT_SECRET: "legacy-client-secret",
+          APP_CONFIG_CLERK__MCP_OAUTH_SCOPES: JSON.stringify(["openid", "email", "profile"]),
         },
       }).clerk.mcpOauthScopes,
     ).toEqual(["email", "profile"]);
   });
 
-  it("rejects openid as an MCP resource scope", () => {
-    expect(() =>
+  it("strips legacy openid from MCP resource scopes", () => {
+    expect(
       AppConfig.parse({
         ...baseConfig,
         clerk: {
           ...baseConfig.clerk,
           mcpOauthScopes: ["openid", "email", "profile"],
+        },
+      }).clerk.mcpOauthScopes,
+    ).toEqual(["email", "profile"]);
+  });
+
+  it("rejects unknown MCP resource scopes", () => {
+    expect(() =>
+      AppConfig.parse({
+        ...baseConfig,
+        clerk: {
+          ...baseConfig.clerk,
+          mcpOauthScopes: ["offline_access", "email", "profile"],
         },
       }),
     ).toThrow();

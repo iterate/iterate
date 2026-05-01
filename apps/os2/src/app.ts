@@ -3,6 +3,8 @@ import type { AppManifest } from "@iterate-com/shared/apps/types";
 import { z } from "zod";
 import packageJson from "../package.json" with { type: "json" };
 
+const ClerkMcpOauthScope = z.enum(["openid", "profile", "email"]);
+
 export const AppConfig = BaseAppConfig.extend({
   eventsBaseUrl: z.string().trim().url(),
   clerk: z.object({
@@ -17,7 +19,12 @@ export const AppConfig = BaseAppConfig.extend({
     signUpUrl: publicValue(z.string().trim().min(1).default("/sign-up")),
     afterSignInUrl: publicValue(z.string().trim().min(1).default("/")),
     afterSignUpUrl: publicValue(z.string().trim().min(1).default("/")),
-    mcpOauthScopes: z.array(z.enum(["profile", "email"])).default(["email", "profile"]),
+    mcpOauthScopes: z
+      .array(ClerkMcpOauthScope)
+      .default(["email", "profile"])
+      .transform((scopes) =>
+        scopes.filter((scope): scope is "email" | "profile" => scope !== "openid"),
+      ),
   }),
   mcpProofSecret: redacted(z.string().trim().min(1)),
   projectHostnameBases: publicValue(z.array(z.string().trim().min(1)).default([])),
