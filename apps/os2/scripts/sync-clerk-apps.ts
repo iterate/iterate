@@ -15,21 +15,7 @@ type ClerkInstance = {
   secret_key?: string;
 };
 
-type ClerkOAuthApplication = {
-  id: string;
-  name: string;
-  client_id: string;
-};
-
-const mcpOAuthScopes = ["openid", "email", "profile"];
-const mcpOAuthApplicationPatch = {
-  name: "OS2 MCP / CLI",
-  public: true,
-  pkce_required: true,
-  consent_screen_enabled: true,
-  scopes: [...mcpOAuthScopes, "offline_access"].join(" "),
-  redirect_uris: ["http://127.0.0.1/*"],
-};
+const mcpOAuthScopes = ["email", "profile"];
 
 type Target = {
   dopplerConfig: string;
@@ -101,10 +87,9 @@ async function main() {
 
     patchInstanceConfig(app.application_id, target);
     patchOAuthApplicationSettings(app.application_id, target);
-    const oauthApplication = findOrCreateOAuthApplication(app.application_id, target);
     const jwtKey = await getJwtPublicKey(instance.publishable_key);
 
-    setDopplerSecrets(target, instance, oauthApplication, jwtKey);
+    setDopplerSecrets(target, instance, jwtKey);
     console.log(`synced ${target.dopplerConfig} -> ${target.clerkAppName}`);
   }
 }
@@ -214,52 +199,6 @@ function patchOAuthApplicationSettings(applicationId: string, target: Target) {
   ]);
 }
 
-function findOrCreateOAuthApplication(applicationId: string, target: Target) {
-  const existing = JSON.parse(
-    exec("clerk", [
-      "api",
-      "/oauth_applications",
-      "--app",
-      applicationId,
-      "--instance",
-      target.clerkInstanceArg,
-    ]),
-  ) as { data: ClerkOAuthApplication[] };
-
-  const match = existing.data.find((app) => app.name === "OS2 MCP / CLI");
-  if (match) {
-    return JSON.parse(
-      exec("clerk", [
-        "api",
-        `/oauth_applications/${match.id}`,
-        "--app",
-        applicationId,
-        "--instance",
-        target.clerkInstanceArg,
-        "--method",
-        "PATCH",
-        "--data",
-        JSON.stringify(mcpOAuthApplicationPatch),
-        "--yes",
-      ]),
-    ) as ClerkOAuthApplication;
-  }
-
-  return JSON.parse(
-    exec("clerk", [
-      "api",
-      "/oauth_applications",
-      "--app",
-      applicationId,
-      "--instance",
-      target.clerkInstanceArg,
-      "--data",
-      JSON.stringify(mcpOAuthApplicationPatch),
-      "--yes",
-    ]),
-  ) as ClerkOAuthApplication;
-}
-
 async function getJwtPublicKey(publishableKey: string) {
   const frontendApiUrl = deriveClerkFrontendApiUrl(publishableKey);
   const response = await fetch(`${frontendApiUrl}/.well-known/jwks.json`);
@@ -281,12 +220,7 @@ async function getJwtPublicKey(publishableKey: string) {
   });
 }
 
-function setDopplerSecrets(
-  target: Target,
-  instance: ClerkInstance,
-  oauthApplication: ClerkOAuthApplication,
-  jwtKey: string | Buffer,
-) {
+function setDopplerSecrets(target: Target, instance: ClerkInstance, jwtKey: string | Buffer) {
   const secrets = new Map([
     ["APP_CONFIG_BASE_URL", target.baseUrl],
     // Codemode streams are written through the Events app. Keep this aligned
@@ -302,7 +236,6 @@ function setDopplerSecrets(
     ["APP_CONFIG_CLERK__PUBLISHABLE_KEY", instance.publishable_key],
     ["APP_CONFIG_CLERK__SECRET_KEY", instance.secret_key!],
     ["APP_CONFIG_CLERK__JWT_KEY", jwtKey.toString()],
-    ["APP_CONFIG_CLERK__OAUTH_CLIENT_ID", oauthApplication.client_id],
     ["APP_CONFIG_CLERK__MCP_OAUTH_SCOPES", JSON.stringify(mcpOAuthScopes)],
   ]);
 
