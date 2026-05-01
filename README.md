@@ -41,19 +41,23 @@ pnpm format       # Format code
 
 ## Cloudflare App Deployments
 
+Think of every new-style Cloudflare deploy as selecting two axes:
+
+- Doppler project: app/service dimension, such as `os2` or `semaphore`
+- Doppler config: environment config dimension, such as `dev_jonas_2`, `preview_1`, or `prd`
+
 For new-style Cloudflare apps (`agents`, `codemode`, `example`,
-`ingress-proxy`, `os2`, and `semaphore`), deployment is one operation:
+`ingress-proxy`, `os2`, and `semaphore`), local deployed dev, PR previews, and
+main/prod deploys all use the same primitive:
 
 ```bash
 doppler run --project <app> --config <environment-config> -- pnpm exec tsx ./alchemy.run.ts
 ```
 
-The Doppler project is the app/service dimension. The Doppler config is the
-environment config dimension: `prd`, `preview_1`, `dev_jonas_2`, and so on.
-`main` deploys use the `prd` config through generated per-app deploy workflows.
-PR previews are separate deploys: the `Cloudflare Previews` workflow leases a
-numbered config from Semaphore, deploys affected apps into that same config, and
-cleans those deploys up on PR close. PR previews are not promoted to production.
+The difference is orchestration. Local deployed dev selects a personal dev
+config. PR previews lease `data.dopplerConfig` from Semaphore and deploy
+affected apps plus dependencies. `main` deploys use generated per-app workflows
+with `prd`. PR previews are not promoted to production.
 
 Environment config leases for PR previews are source-code seeded from
 `scripts/preview/preview-inventory.ts`. Each live Semaphore resource has:
@@ -62,16 +66,23 @@ Environment config leases for PR previews are source-code seeded from
 - slug: `preview-1`, `preview-2`, etc.
 - data: `{ "dopplerConfig": "preview_1" }`, etc.
 
-To create or repair the live Semaphore inventory after adding an available
-preview config/domain pair:
+To create or repair environment config leases for PR previews:
+
+1. Add or confirm the lease in `scripts/preview/preview-inventory.ts`.
+2. Ensure every preview-managed app that may use that lease has the matching
+   Doppler config, for example `preview_11`, plus any required Cloudflare
+   route/domain config.
+3. Reconcile the live Semaphore inventory from source:
 
 ```bash
 doppler run --project semaphore --config prd -- pnpm --dir apps/semaphore seed:environment-config-leases
 doppler run --project os --config prd -- pnpm preview status
 ```
 
-Only add slots whose Doppler configs and Cloudflare domains exist in the right
-accounts. See `docs/cloudflare-preview-environments.md` for the full lifecycle.
+The seed is exact for `environment-config-lease`: missing resources are created
+and drifted resources are replaced. Only add leases whose Doppler configs and
+Cloudflare domains exist in the right accounts. See
+`docs/cloudflare-preview-environments.md` for the full lifecycle.
 
 ## Cloudflare Tunnels
 

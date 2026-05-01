@@ -16,13 +16,17 @@ affected app deploys into that same config.
 The Semaphore lease gives only the config dimension. The preview script chooses
 which Doppler projects to deploy.
 
-For example, a PR that affects `os2` leases `preview-1`, reads
-`data.dopplerConfig = preview_1`, then runs:
+For example, a PR that affects two new-style apps leases `preview-1`, reads
+`data.dopplerConfig = preview_1`, then runs the same primitive for each selected
+app:
 
 ```bash
-doppler run --project events --config preview_1 -- pnpm alchemy:up
 doppler run --project os2 --config preview_1 -- pnpm exec tsx ./alchemy.run.ts
+doppler run --project semaphore --config preview_1 -- pnpm exec tsx ./alchemy.run.ts
 ```
+
+Legacy preview-managed apps still use their package `alchemy:up` / `alchemy:down`
+scripts until migrated.
 
 The same mechanism applies to local development and production:
 
@@ -50,8 +54,9 @@ Semaphore database exactly match that source-code inventory for
    reacquire the same slug. If that fails, it acquires any available shared
    environment config lease.
 4. It compares the PR diff and selects affected apps plus explicit dependencies.
-   The temporary dependency graph is in `scripts/preview/apps.ts`; it belongs in
-   app manifests or contracts long-term.
+   The temporary dependency graph is in
+   `@iterate-com/shared/apps/new-style-cloudflare-apps`; it belongs in app
+   manifests or contracts long-term.
 5. It deploys selected apps with the leased Doppler config. New-style apps run
    `doppler run --project <app> --config <leased dopplerConfig> -- pnpm exec tsx ./alchemy.run.ts`.
    Legacy preview-managed apps run their package `alchemy:up` / `alchemy:down`

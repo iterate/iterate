@@ -13,6 +13,7 @@ on:
       - main
     paths:
       - apps/semaphore/**
+      - apps/semaphore-contract/**
   workflow_dispatch:
     inputs:
       ref:

@@ -716,7 +716,7 @@ async function selectPreviewAppsForPullRequest(input: {
     return Object.values(cloudflarePreviewApps);
   }
 
-  const compareBaseSha = await resolvePreviewCompareBaseSha(input);
+  const compareBaseSha = resolvePreviewCompareBaseSha(input);
   if (!compareBaseSha || compareBaseSha === input.pullRequestHeadSha) {
     return [];
   }
@@ -900,45 +900,14 @@ async function resolvePullRequestPreviewContext(params: {
   };
 }
 
-async function resolvePreviewCompareBaseSha(params: {
-  githubToken: string;
+export function resolvePreviewCompareBaseSha(params: {
   previousState: CloudflarePreviewState;
-  pullRequestNumber: number;
   pullRequestBaseSha: string;
-  pullRequestHeadSha: string;
-  repositoryFullName: string;
 }) {
-  const previousPullRequestHeadSha = await resolvePreviousPullRequestHeadSha(params);
-  if (previousPullRequestHeadSha) {
-    return previousPullRequestHeadSha;
-  }
-
   const previousHeadSha = Object.values(params.previousState.apps)
     .map((entry) => entry.headSha)
     .find((headSha): headSha is string => typeof headSha === "string" && headSha.length > 0);
   return previousHeadSha ?? params.pullRequestBaseSha;
-}
-
-async function resolvePreviousPullRequestHeadSha(params: {
-  githubToken: string;
-  pullRequestNumber: number;
-  pullRequestHeadSha: string;
-  repositoryFullName: string;
-}) {
-  const octokit = new Octokit({ auth: params.githubToken });
-  const [owner, repo] = splitRepositoryFullName(params.repositoryFullName);
-  const commits = await octokit.paginate(octokit.rest.pulls.listCommits, {
-    owner,
-    pull_number: params.pullRequestNumber,
-    repo,
-    per_page: 100,
-  });
-  const currentHeadIndex = commits.findIndex((commit) => commit.sha === params.pullRequestHeadSha);
-  if (currentHeadIndex <= 0) {
-    return null;
-  }
-
-  return commits[currentHeadIndex - 1]?.sha ?? null;
 }
 
 function matchesPreviewPath(filename: string, patterns: readonly string[]) {

@@ -51,7 +51,7 @@ export const newStyleCloudflareApps: Record<
     displayName: "Example",
     appPath: "apps/example",
     dopplerProject: "example",
-    paths: ["apps/example/**"],
+    paths: ["apps/example/**", "apps/example-contract/**"],
   },
   os2: {
     slug: "os2",
@@ -66,14 +66,14 @@ export const newStyleCloudflareApps: Record<
     displayName: "Semaphore",
     appPath: "apps/semaphore",
     dopplerProject: "semaphore",
-    paths: ["apps/semaphore/**"],
+    paths: ["apps/semaphore/**", "apps/semaphore-contract/**"],
   },
   "ingress-proxy": {
     slug: "ingress-proxy",
     displayName: "Ingress Proxy",
     appPath: "apps/ingress-proxy",
     dopplerProject: "ingress-proxy",
-    paths: ["apps/ingress-proxy/**"],
+    paths: ["apps/ingress-proxy/**", "apps/ingress-proxy-contract/**"],
   },
 };
 

@@ -100,11 +100,11 @@ Both apps use the same Doppler project (`os`) and share these env vars:
 
 We use separate PostHog projects for each environment to keep data isolated:
 
-| Environment | PostHog Project   | Doppler Config |
-| ----------- | ----------------- | -------------- |
-| Production  | `iterate-prd`     | `prd`          |
-| Preview     | `iterate-preview` | `preview`      |
-| Development | `iterate-dev`     | `dev`          |
+| Environment | PostHog Project   | Doppler Config                                    |
+| ----------- | ----------------- | ------------------------------------------------- |
+| Production  | `iterate-prd`     | `prd`                                             |
+| Preview     | `iterate-preview` | numbered `preview_N` configs leased via Semaphore |
+| Development | `iterate-dev`     | `dev`                                             |
 
 Each Doppler config has a different `POSTHOG_PUBLIC_KEY` pointing to its respective PostHog project.
 
