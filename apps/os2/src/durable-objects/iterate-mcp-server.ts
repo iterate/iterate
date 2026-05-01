@@ -43,7 +43,7 @@ export interface IterateMcpServerProps extends Record<string, unknown> {
   projectId: string | null;
   projectSlug: string | null;
   userId: string;
-  orgId: string;
+  orgId: string | null;
   orgRole: string | null;
   orgSlug: string | null;
   orgPermissions: string[];
