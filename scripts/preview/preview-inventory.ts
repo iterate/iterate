@@ -1,28 +1,28 @@
-export const CLOUDFLARE_PREVIEW_RESOURCE_TYPE = "cloudflare-preview-environment";
+export const ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE = "environment-config-lease";
 
-export type CloudflarePreviewEnvironmentResourceData = {
+export type EnvironmentConfigLeaseResourceData = {
   dopplerConfig: string;
 };
 
-export type CloudflarePreviewEnvironmentInventoryItem = {
-  type: typeof CLOUDFLARE_PREVIEW_RESOURCE_TYPE;
+export type EnvironmentConfigLeaseInventoryItem = {
+  type: typeof ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE;
   slug: string;
-  data: CloudflarePreviewEnvironmentResourceData;
+  data: EnvironmentConfigLeaseResourceData;
 };
 
-export const cloudflarePreviewEnvironmentInventory = Array.from({ length: 10 }, (_, index) => {
+export const environmentConfigLeaseInventory = Array.from({ length: 10 }, (_, index) => {
   const slot = index + 1;
   return {
-    type: CLOUDFLARE_PREVIEW_RESOURCE_TYPE,
+    type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
     slug: `preview-${slot}`,
     data: {
       dopplerConfig: `preview_${slot}`,
     },
   };
-}) satisfies CloudflarePreviewEnvironmentInventoryItem[];
+}) satisfies EnvironmentConfigLeaseInventoryItem[];
 
 export type PreviewInventoryClient = {
-  add: (input: CloudflarePreviewEnvironmentInventoryItem) => Promise<unknown>;
+  add: (input: EnvironmentConfigLeaseInventoryItem) => Promise<unknown>;
   delete: (input: { slug: string; type: string }) => Promise<unknown>;
   list: (input: {
     type: string;
@@ -31,11 +31,13 @@ export type PreviewInventoryClient = {
 
 export async function syncPreviewInventory(input: {
   client: PreviewInventoryClient;
-  inventory?: readonly CloudflarePreviewEnvironmentInventoryItem[];
+  inventory?: readonly EnvironmentConfigLeaseInventoryItem[];
 }) {
-  const inventory = input.inventory ?? cloudflarePreviewEnvironmentInventory;
+  const inventory = input.inventory ?? environmentConfigLeaseInventory;
   const expectedBySlug = new Map(inventory.map((resource) => [resource.slug, resource]));
-  const existingResources = await input.client.list({ type: CLOUDFLARE_PREVIEW_RESOURCE_TYPE });
+  const existingResources = await input.client.list({
+    type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+  });
 
   for (const existing of existingResources) {
     const expected = expectedBySlug.get(existing.slug);
@@ -44,12 +46,14 @@ export async function syncPreviewInventory(input: {
     }
 
     await input.client.delete({
-      type: CLOUDFLARE_PREVIEW_RESOURCE_TYPE,
+      type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
       slug: existing.slug,
     });
   }
 
-  const currentResources = await input.client.list({ type: CLOUDFLARE_PREVIEW_RESOURCE_TYPE });
+  const currentResources = await input.client.list({
+    type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+  });
   const currentSlugs = new Set(currentResources.map((resource) => resource.slug));
 
   for (const resource of inventory) {
@@ -61,16 +65,16 @@ export async function syncPreviewInventory(input: {
   }
 
   return {
-    type: CLOUDFLARE_PREVIEW_RESOURCE_TYPE,
+    type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
     total: inventory.length,
   };
 }
 
-export function parsePreviewEnvironmentData(
+export function parseEnvironmentConfigLeaseData(
   data: Record<string, unknown>,
-): CloudflarePreviewEnvironmentResourceData {
+): EnvironmentConfigLeaseResourceData {
   if (typeof data.dopplerConfig !== "string" || data.dopplerConfig.trim().length === 0) {
-    throw new Error("Preview environment resource data must include dopplerConfig.");
+    throw new Error("Environment config lease data must include dopplerConfig.");
   }
 
   return {
@@ -80,10 +84,10 @@ export function parsePreviewEnvironmentData(
 
 function isSameResourceData(
   left: Record<string, unknown>,
-  right: CloudflarePreviewEnvironmentResourceData,
+  right: EnvironmentConfigLeaseResourceData,
 ) {
   try {
-    const parsed = parsePreviewEnvironmentData(left);
+    const parsed = parseEnvironmentConfigLeaseData(left);
     return parsed.dopplerConfig === right.dopplerConfig && Object.keys(left).length === 1;
   } catch {
     return false;

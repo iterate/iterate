@@ -1,18 +1,18 @@
 import { os } from "@orpc/server";
 import {
-  SeedCloudflarePreviewEnvironmentPoolInput,
-  seedCloudflarePreviewEnvironmentPool,
-} from "./seed-cloudflare-preview-environment-pool.ts";
+  SeedEnvironmentConfigLeasesInput,
+  seedEnvironmentConfigLeases,
+} from "./seed-environment-config-leases.ts";
 import { SeedTunnelPoolInput, seedTunnelPool } from "./seed-cloudflare-tunnel-pool.ts";
 
 export const router = os.router({
-  "seed-cloudflare-preview-environment-pool": os
-    .input(SeedCloudflarePreviewEnvironmentPoolInput)
+  "seed-environment-config-leases": os
+    .input(SeedEnvironmentConfigLeasesInput)
     .meta({
-      description: "Seed Cloudflare preview environment resources into semaphore",
+      description: "Seed environment config lease resources into Semaphore for PR previews",
     })
     .handler(async ({ input }) => {
-      return await seedCloudflarePreviewEnvironmentPool(input);
+      return await seedEnvironmentConfigLeases(input);
     }),
   "seed-cloudflare-tunnel-pool": os
     .input(SeedTunnelPoolInput)

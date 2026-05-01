@@ -5,10 +5,15 @@ import { request as httpsRequest } from "node:https";
 import { resolve } from "node:path";
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
+import {
+  isNewStyleCloudflareAppSlug,
+  newStyleCloudflareApps,
+  runNewStyleCloudflareAppAlchemy,
+} from "../../packages/shared/src/apps/new-style-cloudflare-apps.ts";
 import { stripAnsi } from "../../packages/shared/src/jonasland/strip-ansi.ts";
 import {
   CloudflarePreviewAppEntry,
-  type CloudflarePreviewEnvironment,
+  type EnvironmentConfigLease,
   type CloudflarePreviewState,
   readCloudflarePreviewState,
   updateCloudflarePreviewState,
@@ -20,8 +25,8 @@ import {
   cloudflarePreviewSharedPaths,
 } from "./apps.ts";
 import {
-  CLOUDFLARE_PREVIEW_RESOURCE_TYPE,
-  parsePreviewEnvironmentData,
+  ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+  parseEnvironmentConfigLeaseData,
 } from "./preview-inventory.ts";
 
 const defaultSemaphoreBaseUrl = "https://semaphore.iterate.com";
@@ -164,7 +169,7 @@ export async function deployCloudflarePreviewForPullRequest(
       pullRequestHeadSha: pullRequest.pullRequestHeadSha,
     }).catch(() => ({
       apps: {},
-      environment: null,
+      environmentConfigLease: null,
     }));
     return { ok: true, state };
   }
@@ -192,10 +197,10 @@ export async function deployCloudflarePreviewForPullRequest(
     };
   }
 
-  const environment = await claimPreviewEnvironment({
+  const environmentConfigLease = await claimEnvironmentConfigLease({
     createPreviewSemaphoreResourceClient: params.createPreviewSemaphoreResourceClient,
     leaseMs: params.leaseMs,
-    previousEnvironment: current.state.environment,
+    previousEnvironmentConfigLease: current.state.environmentConfigLease,
     semaphoreApiToken: requireValue(
       params.semaphoreApiToken,
       "SEMAPHORE_API_TOKEN is required to create a preview.",
@@ -205,7 +210,7 @@ export async function deployCloudflarePreviewForPullRequest(
   });
   await updatePreviewState(params, (state) => ({
     ...state,
-    environment,
+    environmentConfigLease,
   }));
 
   let ok = true;
@@ -214,7 +219,7 @@ export async function deployCloudflarePreviewForPullRequest(
     const entry = await deployPreviewAppWithStatus({
       app,
       commandEnvironment: params.commandEnvironment,
-      dopplerConfig: environment.dopplerConfig,
+      dopplerConfig: environmentConfigLease.dopplerConfig,
       pullRequestHeadSha: pullRequest.pullRequestHeadSha,
       repositoryRoot: params.repositoryRoot,
       runUrl: params.workflowRunUrl ?? null,
@@ -226,7 +231,7 @@ export async function deployCloudflarePreviewForPullRequest(
 
     const update = await updatePreviewState(params, (state) => ({
       ...state,
-      environment,
+      environmentConfigLease,
       apps: {
         ...state.apps,
         [app.slug]: entry,
@@ -257,8 +262,8 @@ export async function testCloudflarePreviewForPullRequest(
     repositoryFullName: params.repositoryFullName,
     pullRequestNumber: params.pullRequestNumber,
   });
-  const environment = current.state.environment;
-  if (environment == null) {
+  const environmentConfigLease = current.state.environmentConfigLease;
+  if (environmentConfigLease == null) {
     return {
       ok: true,
       skipped: true,
@@ -294,7 +299,7 @@ export async function testCloudflarePreviewForPullRequest(
         "--project",
         app.dopplerProject,
         "--config",
-        environment.dopplerConfig,
+        environmentConfigLease.dopplerConfig,
         "--",
         "env",
         `${app.previewTestBaseUrlEnvVar}=${existingEntry.publicUrl}`,
@@ -356,8 +361,8 @@ export async function cleanupCloudflarePreviewForPullRequest(
     repositoryFullName: params.repositoryFullName,
     pullRequestNumber: params.pullRequestNumber,
   });
-  const environment = current.state.environment;
-  if (environment == null) {
+  const environmentConfigLease = current.state.environmentConfigLease;
+  if (environmentConfigLease == null) {
     return {
       ok: true,
       released: false,
@@ -373,21 +378,13 @@ export async function cleanupCloudflarePreviewForPullRequest(
       continue;
     }
 
-    const destroyResult = await runCommand({
-      args: [
-        "run",
-        "--project",
-        app.dopplerProject,
-        "--config",
-        environment.dopplerConfig,
-        "--",
-        "pnpm",
-        "alchemy:down",
-      ],
-      command: "doppler",
-      environment: params.commandEnvironment,
+    const destroyResult = await runPreviewAlchemyCommand({
+      app,
+      commandEnvironment: params.commandEnvironment,
+      dopplerConfig: environmentConfigLease.dopplerConfig,
+      operation: "down",
+      repositoryRoot: params.repositoryRoot,
       signal: params.signal,
-      workingDirectory: resolve(params.repositoryRoot, app.appPath),
     });
     const existingEntry = latestState.apps[app.slug];
     const entry = CloudflarePreviewAppEntry.parse({
@@ -431,13 +428,13 @@ export async function cleanupCloudflarePreviewForPullRequest(
     semaphoreBaseUrl: params.semaphoreBaseUrl ?? defaultSemaphoreBaseUrl,
   });
   const released = await semaphore.release({
-    type: environment.type,
-    slug: environment.slug,
-    leaseId: environment.leaseId,
+    type: environmentConfigLease.type,
+    slug: environmentConfigLease.slug,
+    leaseId: environmentConfigLease.leaseId,
   });
   const update = await updatePreviewState(params, (state) => ({
     ...state,
-    environment: null,
+    environmentConfigLease: null,
   }));
 
   return {
@@ -521,11 +518,11 @@ async function deployPreviewApp(input: {
   signal?: AbortSignal;
 }) {
   const appConfig = await readPreviewAppConfig({
+    app: input.app,
     commandEnvironment: input.commandEnvironment,
     dopplerConfig: input.dopplerConfig,
-    dopplerProject: input.app.dopplerProject,
     signal: input.signal,
-    workingDirectory: resolve(input.repositoryRoot, input.app.appPath),
+    repositoryRoot: input.repositoryRoot,
   });
   const baseEntry = {
     appDisplayName: input.app.displayName,
@@ -537,21 +534,13 @@ async function deployPreviewApp(input: {
     updatedAt: new Date().toISOString(),
   } as const;
 
-  const deployResult = await runCommand({
-    args: [
-      "run",
-      "--project",
-      input.app.dopplerProject,
-      "--config",
-      input.dopplerConfig,
-      "--",
-      "pnpm",
-      "alchemy:up",
-    ],
-    command: "doppler",
-    environment: input.commandEnvironment,
+  const deployResult = await runPreviewAlchemyCommand({
+    app: input.app,
+    commandEnvironment: input.commandEnvironment,
+    dopplerConfig: input.dopplerConfig,
+    operation: "up",
+    repositoryRoot: input.repositoryRoot,
     signal: input.signal,
-    workingDirectory: resolve(input.repositoryRoot, input.app.appPath),
   });
   if (deployResult.exitCode !== 0) {
     return CloudflarePreviewAppEntry.parse({
@@ -581,33 +570,41 @@ async function deployPreviewApp(input: {
 }
 
 async function readPreviewAppConfig(input: {
+  app: PreviewAppRuntime;
   commandEnvironment: NodeJS.ProcessEnv;
   dopplerConfig: string;
-  dopplerProject: string;
+  repositoryRoot: string;
   signal?: AbortSignal;
-  workingDirectory: string;
 }) {
-  const script = [
-    "const config = { baseUrl: process.env.APP_CONFIG_BASE_URL ?? null };",
-    "console.log(JSON.stringify(config));",
-  ].join("\n");
+  const isNewStyleApp = isNewStyleCloudflareAppSlug(input.app.slug);
+  const script = isNewStyleApp
+    ? [
+        'import { resolveNewStyleCloudflareAppBaseUrlFromEnv } from "@iterate-com/shared/apps/new-style-cloudflare-apps";',
+        "const config = { baseUrl: resolveNewStyleCloudflareAppBaseUrlFromEnv(process.env) ?? null };",
+        "console.log(JSON.stringify(config));",
+      ].join("\n")
+    : [
+        "const config = { baseUrl: process.env.APP_CONFIG_BASE_URL ?? null };",
+        "console.log(JSON.stringify(config));",
+      ].join("\n");
   const result = await runCommand({
     args: [
       "run",
       "--project",
-      input.dopplerProject,
+      input.app.dopplerProject,
       "--config",
       input.dopplerConfig,
       "--",
-      "node",
-      "-e",
+      isNewStyleApp ? "pnpm" : "node",
+      ...(isNewStyleApp ? ["exec", "tsx", "-e"] : []),
+      ...(!isNewStyleApp ? ["-e"] : []),
       script,
     ],
     command: "doppler",
     echoOutput: false,
     environment: input.commandEnvironment,
     signal: input.signal,
-    workingDirectory: input.workingDirectory,
+    workingDirectory: resolve(input.repositoryRoot, input.app.appPath),
   });
   if (result.exitCode !== 0) {
     throw new Error(commandFailureMessage(result, "Failed to read preview app config."));
@@ -621,13 +618,50 @@ async function readPreviewAppConfig(input: {
   return parsed;
 }
 
-async function claimPreviewEnvironment(input: {
+async function runPreviewAlchemyCommand(input: {
+  app: PreviewAppRuntime;
+  commandEnvironment: NodeJS.ProcessEnv;
+  dopplerConfig: string;
+  operation: "up" | "down";
+  repositoryRoot: string;
+  signal?: AbortSignal;
+}) {
+  if (isNewStyleCloudflareAppSlug(input.app.slug)) {
+    return await runNewStyleCloudflareAppAlchemy({
+      app: newStyleCloudflareApps[input.app.slug],
+      commandEnvironment: input.commandEnvironment,
+      dopplerConfig: input.dopplerConfig,
+      operation: input.operation,
+      repositoryRoot: input.repositoryRoot,
+      signal: input.signal,
+    });
+  }
+
+  return await runCommand({
+    args: [
+      "run",
+      "--project",
+      input.app.dopplerProject,
+      "--config",
+      input.dopplerConfig,
+      "--",
+      "pnpm",
+      input.operation === "up" ? "alchemy:up" : "alchemy:down",
+    ],
+    command: "doppler",
+    environment: input.commandEnvironment,
+    signal: input.signal,
+    workingDirectory: resolve(input.repositoryRoot, input.app.appPath),
+  });
+}
+
+async function claimEnvironmentConfigLease(input: {
   createPreviewSemaphoreResourceClient: (input: {
     semaphoreApiToken: string;
     semaphoreBaseUrl: string;
   }) => PreviewSemaphoreResourceClient;
   leaseMs: number;
-  previousEnvironment: CloudflarePreviewEnvironment | null;
+  previousEnvironmentConfigLease: EnvironmentConfigLease | null;
   semaphoreApiToken: string;
   semaphoreBaseUrl: string;
   waitMs?: number;
@@ -638,35 +672,35 @@ async function claimPreviewEnvironment(input: {
   });
 
   const lease =
-    (input.previousEnvironment
+    (input.previousEnvironmentConfigLease
       ? await semaphore.renew({
-          type: input.previousEnvironment.type,
-          slug: input.previousEnvironment.slug,
-          leaseId: input.previousEnvironment.leaseId,
+          type: input.previousEnvironmentConfigLease.type,
+          slug: input.previousEnvironmentConfigLease.slug,
+          leaseId: input.previousEnvironmentConfigLease.leaseId,
           leaseMs: input.leaseMs,
         })
       : null) ??
-    (input.previousEnvironment
+    (input.previousEnvironmentConfigLease
       ? await semaphore.acquireSpecific({
-          type: input.previousEnvironment.type,
-          slug: input.previousEnvironment.slug,
+          type: input.previousEnvironmentConfigLease.type,
+          slug: input.previousEnvironmentConfigLease.slug,
           leaseMs: input.leaseMs,
         })
       : null) ??
     (await semaphore.acquire({
-      type: CLOUDFLARE_PREVIEW_RESOURCE_TYPE,
+      type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
       leaseMs: input.leaseMs,
       waitMs: input.waitMs,
     }));
 
-  const data = parsePreviewEnvironmentData(lease.data);
+  const data = parseEnvironmentConfigLeaseData(lease.data);
   return {
     dopplerConfig: data.dopplerConfig,
     leasedUntil: lease.expiresAt,
     leaseId: lease.leaseId,
     slug: lease.slug,
     type: lease.type,
-  } satisfies CloudflarePreviewEnvironment;
+  } satisfies EnvironmentConfigLease;
 }
 
 async function selectPreviewAppsForPullRequest(input: {

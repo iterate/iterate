@@ -229,9 +229,9 @@ curl 'https://os.iterate-dev-jonas.com/api/codemode/execute' \
 ## Dev
 
 ```bash
-doppler run --config dev -- pnpm alchemy:up    # dev deploy
-doppler run --config prd -- pnpm alchemy:up    # production-style deploy
-doppler run --config dev -- pnpm alchemy:down  # destroy the dev stack
+doppler run --project os2 --config dev -- pnpm exec tsx ./alchemy.run.ts
+doppler run --project os2 --config prd -- pnpm exec tsx ./alchemy.run.ts
+doppler run --project os2 --config dev -- pnpm exec tsx ./alchemy.run.ts --destroy
 pnpm dev            # Cloudflare local dev
 pnpm cf:deploy      # Deploy to Cloudflare
 pnpm sqlfu:generate # Regenerate typed SQL wrappers and bundled migrations

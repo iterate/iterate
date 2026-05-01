@@ -5,7 +5,7 @@ Cloudflare app that runs user-provided TypeScript snippets inside Dynamic Worker
 ### Runtime
 
 - Doppler project: `codemode`
-- Deploy route(s): set `WORKER_ROUTES` in Doppler for non-local deploys
+- Deploy URL: set `APP_CONFIG_BASE_URL` in the selected Doppler config
 - Main app follows the same TanStack Start + Alchemy pattern as `apps/events`
 - Extra bindings:
   - `LOADER`: Dynamic Worker loader used by `@cloudflare/codemode`

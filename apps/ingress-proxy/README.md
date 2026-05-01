@@ -8,7 +8,7 @@ Cloudflare-only: TanStack Start + oRPC + raw D1 route registry, plus public-host
 - **Frontend:** TanStack Start + Router + Query
 - **Proxy:** requests on stored ingress hosts proxy through to the current upstream target
 - **DB:** raw D1 queries via generated TypeSQL helpers (`sql/queries.ts`)
-- **Secrets:** Doppler project `ingress-proxy` (see repo `doppler.yaml`). `DOPPLER_CONFIG` is injected by `doppler run`, and `_shared` defines `ALCHEMY_STAGE=${DOPPLER_CONFIG}`. App-local secrets live in root-level `APP_CONFIG.sharedApiSecret` and `APP_CONFIG.typeIdPrefix`. `WORKER_ROUTES` remains a top-level deploy-time env because Alchemy needs it before the worker boots.
+- **Secrets:** Doppler project `ingress-proxy` (see repo `doppler.yaml`). `DOPPLER_CONFIG` is injected by `doppler run`, and `_shared` defines `ALCHEMY_STAGE=${DOPPLER_CONFIG}`. App-local config lives under `APP_CONFIG`. `APP_CONFIG_BASE_URL` is the primary public URL; `WORKER_ROUTES` is only for extra proxy hostnames.
 
 ## Key files
 
@@ -27,10 +27,10 @@ Cloudflare-only: TanStack Start + oRPC + raw D1 route registry, plus public-host
 # doppler run --project os --config prd -- pnpm preview sync --pull-request-number 1234
 #
 # Fixed-slot manual deploy:
-doppler run --project ingress-proxy --config preview_1 -- pnpm alchemy:up
-doppler run --project ingress-proxy --config preview_1 -- pnpm alchemy:down
-doppler run --config prd -- pnpm alchemy:up
-doppler run --config prd -- pnpm alchemy:down
+doppler run --project ingress-proxy --config preview_1 -- pnpm exec tsx ./alchemy.run.ts
+doppler run --project ingress-proxy --config preview_1 -- pnpm exec tsx ./alchemy.run.ts --destroy
+doppler run --project ingress-proxy --config prd -- pnpm exec tsx ./alchemy.run.ts
+doppler run --project ingress-proxy --config prd -- pnpm exec tsx ./alchemy.run.ts --destroy
 ```
 
 ## Contract

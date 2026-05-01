@@ -1,4 +1,5 @@
 import { workflow } from "@jlarky/gha-ts/workflow-types";
+import { isNewStyleCloudflareAppSlug } from "../../../packages/shared/src/apps/new-style-cloudflare-apps.ts";
 import type { CloudflarePreviewApp as CloudflareApp } from "../../../scripts/preview/apps.ts";
 import * as utils from "./index.ts";
 
@@ -9,6 +10,8 @@ declare const shortSha: string;
 declare const stage: string;
 
 export async function createCloudflareAppWorkflow(meta: ImportMeta, app: CloudflareApp) {
+  const isNewStyleApp = isNewStyleCloudflareAppSlug(app.slug);
+
   return workflow({
     name: `Deploy ${app.displayName}`,
     permissions: {
@@ -85,14 +88,22 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
             env: {
               DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             },
-            run: [
-              "set -euo pipefail",
-              'routes="$(doppler secrets get WORKER_ROUTES --plain 2>/dev/null || true)"',
-              'first_route="$(printf "%s" "$routes" | tr "," "\\n" | awk \'{ gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0); if ($0 != "") { sub(/\\/\\*$/, "", $0); print; exit } }\')"',
-              'if [ -n "$first_route" ]; then',
-              '  echo "public_url=https://${first_route}" >> "$GITHUB_OUTPUT"',
-              "fi",
-            ].join("\n"),
+            run: isNewStyleApp
+              ? [
+                  "set -euo pipefail",
+                  'public_url="$(doppler run -- pnpm exec tsx -e \'import { resolveNewStyleCloudflareAppBaseUrlFromEnv } from "@iterate-com/shared/apps/new-style-cloudflare-apps"; console.log(resolveNewStyleCloudflareAppBaseUrlFromEnv(process.env) ?? "");\')"',
+                  'if [ -n "$public_url" ]; then',
+                  '  echo "public_url=${public_url}" >> "$GITHUB_OUTPUT"',
+                  "fi",
+                ].join("\n")
+              : [
+                  "set -euo pipefail",
+                  'routes="$(doppler secrets get WORKER_ROUTES --plain 2>/dev/null || true)"',
+                  'first_route="$(printf "%s" "$routes" | tr "," "\\n" | awk \'{ gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0); if ($0 != "") { sub(/\\/\\*$/, "", $0); print; exit } }\')"',
+                  'if [ -n "$first_route" ]; then',
+                  '  echo "public_url=https://${first_route}" >> "$GITHUB_OUTPUT"',
+                  "fi",
+                ].join("\n"),
           },
           {
             name: `Deploy ${app.appPath}`,
@@ -100,7 +111,9 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
             env: {
               DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             },
-            run: "doppler run -- pnpm alchemy:up",
+            run: isNewStyleApp
+              ? "doppler run -- pnpm exec tsx ./alchemy.run.ts"
+              : "doppler run -- pnpm alchemy:up",
           },
         ],
       },

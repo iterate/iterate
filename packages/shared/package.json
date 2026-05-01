@@ -17,6 +17,7 @@
     "./apps/logging/types": "./src/apps/logging/types.ts",
     "./apps/logging/orpc-plugin": "./src/apps/logging/orpc-plugin.ts",
     "./apps/logging/with-evlog": "./src/apps/logging/with-evlog.ts",
+    "./apps/new-style-cloudflare-apps": "./src/apps/new-style-cloudflare-apps.ts",
     "./apps/types": "./src/apps/types.ts",
     "./apps/internal-router": "./src/apps/internal-router.ts",
     "./apps/internal-router-contract": "./src/apps/internal-router-contract.ts",

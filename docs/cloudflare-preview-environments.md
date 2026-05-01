@@ -1,16 +1,16 @@
-# Cloudflare Preview Environments
+# Environment Config Leases For Cloudflare PR Previews
 
-Preview environments are shared Doppler config leases. A lease is not specific to
-one app. It points to one config bag, and every affected app deploys into that
-same config.
+Environment config leases for PR previews are shared Doppler config leases. A
+lease is not specific to one app. It points to one config bag, and every
+affected app deploys into that same config.
 
 ## Naming
 
-- Semaphore resource type: `cloudflare-preview-environment`
+- Semaphore resource type: `environment-config-lease`
 - Semaphore resource slug: `preview-1`, `preview-2`, etc.
 - Semaphore resource data: `{ "dopplerConfig": "preview_1" }`, etc.
 - Doppler project: app/service dimension, such as `events`, `os2`, or `semaphore`
-- Doppler config: environment slot dimension, such as `preview_1`, `prd`, or `dev_jonas_2`
+- Doppler config: environment config dimension, such as `preview_1`, `prd`, or `dev_jonas_2`
 - Alchemy stage: inherited from Doppler as `${DOPPLER_CONFIG}`
 
 The Semaphore lease gives only the config dimension. The preview script chooses
@@ -21,7 +21,7 @@ For example, a PR that affects `os2` leases `preview-1`, reads
 
 ```bash
 doppler run --project events --config preview_1 -- pnpm alchemy:up
-doppler run --project os2 --config preview_1 -- pnpm alchemy:up
+doppler run --project os2 --config preview_1 -- pnpm exec tsx ./alchemy.run.ts
 ```
 
 The same mechanism applies to local development and production:
@@ -32,15 +32,15 @@ The same mechanism applies to local development and production:
 
 ## Source Of Truth
 
-- Semaphore database state stores the preview environment inventory and leases
+- Semaphore database state stores the environment config lease inventory for PR previews
 - the managed PR body preview section stores the current PR's lease and app statuses
 - Doppler stores each app project's config bag for the leased slot
-- there is no app-specific preview pool and no fallback state
+- there is no app-specific resource inventory and no fallback state
 
 The seed for this Semaphore resource type lives in
 `scripts/preview/preview-inventory.ts`. Running the seed command makes the live
 Semaphore database exactly match that source-code inventory for
-`cloudflare-preview-environment`.
+`environment-config-lease`.
 
 ## Lifecycle
 
@@ -48,18 +48,20 @@ Semaphore database exactly match that source-code inventory for
 2. The router reads the managed PR body preview section.
 3. It tries to renew the existing shared lease. If that fails, it tries to
    reacquire the same slug. If that fails, it acquires any available shared
-   preview environment.
+   environment config lease.
 4. It compares the PR diff and selects affected apps plus explicit dependencies.
    The temporary dependency graph is in `scripts/preview/apps.ts`; it belongs in
    app manifests or contracts long-term.
-5. It deploys each selected app with
-   `doppler run --project <app> --config <leased dopplerConfig> -- pnpm alchemy:up`.
+5. It deploys selected apps with the leased Doppler config. New-style apps run
+   `doppler run --project <app> --config <leased dopplerConfig> -- pnpm exec tsx ./alchemy.run.ts`.
+   Legacy preview-managed apps run their package `alchemy:up` / `alchemy:down`
+   scripts for now.
 6. It records each app's result in the PR body. If any app fails, the overall
    preview is unhealthy and the lease is kept for debugging.
 7. The test phase runs preview e2e only for deployed apps recorded in the same PR
    body state.
-8. On PR close, cleanup runs `alchemy:down` for apps recorded in state. Only if
-   cleanup succeeds does it release the shared Semaphore lease.
+8. On PR close, cleanup destroys apps recorded in state. Only if cleanup
+   succeeds does it release the environment config lease.
 
 ## Semaphore Token
 
@@ -70,16 +72,16 @@ router reads `SEMAPHORE_API_TOKEN` when present and otherwise falls back to
 
 ```bash
 doppler run --project os --config prd -- pnpm preview status
-doppler run --project semaphore --config prd -- pnpm seed:preview-pool
+doppler run --project semaphore --config prd -- pnpm --dir apps/semaphore seed:environment-config-leases
 ```
 
 Do not paste the token into scripts or docs.
 
 ## Operational Notes
 
-- Preview inventory is provisioned explicitly with `apps/semaphore`
-  `seed-cloudflare-preview-environment-pool`.
-- The seed is exact for `cloudflare-preview-environment`: drifted resources are
+- Environment config lease inventory for PR previews is provisioned explicitly
+  with `pnpm --dir apps/semaphore seed:environment-config-leases`.
+- The seed is exact for `environment-config-lease`: drifted resources are
   deleted and missing resources are recreated with the source-code data.
 - Only preview domain pairs that are available in the right Cloudflare account
   should have `preview_N` Doppler configs and Semaphore seed entries.
@@ -87,7 +89,7 @@ Do not paste the token into scripts or docs.
   workflow matrix, decides which apps deploy.
 - Preview deploys do not override `ALCHEMY_STAGE`.
 - Deleting the managed PR body preview section is treated as state loss.
-- Preview leases are released explicitly on cleanup, not on deploy or test
+- Environment config leases are released explicitly on cleanup, not on deploy or test
   failure.
 - Manual lifecycle:
 

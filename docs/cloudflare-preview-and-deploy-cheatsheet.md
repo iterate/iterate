@@ -4,22 +4,17 @@
 
 - In scope apps: `agents`, `codemode`, `example`, `events`, `os2`, `semaphore`, `ingress-proxy`
 - PR previews are owned by one workflow: `Cloudflare Previews`
-- Production deploys are owned by per-app workflows:
-  - `Deploy Codemode`
-  - `Deploy Example`
-  - `Deploy Events`
-  - `Deploy Semaphore`
-  - `Deploy Ingress Proxy`
+- Production deploys are owned by generated per-app workflows in `.github/workflows/deploy-*.yml`
 - Preview state lives in the managed PR body section, not in PR comments
-- Semaphore stores shared preview environment inventory and leases
-- Doppler `preview_N` configs back preview slots
+- Semaphore stores environment config lease inventory and active leases for PR previews
+- Doppler `preview_N` configs are environment configs for PR previews
 - `_shared/preview` sets `ALCHEMY_STAGE=${DOPPLER_CONFIG}`, so the selected `preview_N` config determines the Alchemy stage
 - Doppler `prd` config backs real deploys
 
 ## Most useful commands
 
 ```bash
-# inspect preview environment state / leases
+# inspect environment config lease state for PR previews
 doppler run --project os --config prd -- pnpm preview status
 
 # create or refresh a PR preview; affected apps and dependencies are selected automatically
@@ -40,7 +35,7 @@ gh workflow run "Deploy Events" --ref main -f ref=main -f stage=prd
 ## Mental model
 
 - Previews are temporary deploys into a leased `preview_N` Doppler config.
-- The Semaphore lease gives the config dimension, not an app-specific pool.
+- The Semaphore environment config lease gives the config dimension, not app-specific resource state.
 - Production deploys are plain `prd` deploys for each app.
 - Previews and production are deliberately separate:
   - PRs never use the per-app prod deploy workflows
@@ -52,7 +47,7 @@ gh workflow run "Deploy Events" --ref main -f ref=main -f stage=prd
 2. It runs the repo-local preview CLI in `scripts/preview/router.ts`.
 3. The CLI reads the managed preview section from the PR body.
 4. It renews or reacquires the existing shared preview lease when possible.
-5. If reuse fails, it acquires any available `cloudflare-preview-environment`.
+5. If reuse fails, it acquires any available `environment-config-lease`.
 6. It reads `data.dopplerConfig` from the leased Semaphore resource.
 7. It deploys affected apps and explicit dependencies with that same Doppler config.
 8. It records each app result in the PR body. If one app fails, the overall preview is unhealthy and the lease is kept.
@@ -72,7 +67,7 @@ doppler run --project os --config prd -- pnpm preview sync --pull-request-number
 For Semaphore maintenance itself, use the `semaphore` production Doppler config:
 
 ```bash
-doppler run --project semaphore --config prd -- pnpm seed:preview-pool
+doppler run --project semaphore --config prd -- pnpm --dir apps/semaphore seed:environment-config-leases
 ```
 
 The Semaphore UI labels this as an operator token. It is the same shared API secret; never commit it or paste the value into a PR.
@@ -82,8 +77,8 @@ The Semaphore UI labels this as an operator token. It is the same shared API sec
 1. Each app has its own generated deploy workflow.
 2. `push` to `main` for that app’s paths deploys automatically to `prd`.
 3. `workflow_dispatch` can deploy `prd` manually from `main`.
-4. The workflow resolves the public URL from the app’s Doppler `WORKER_ROUTES` secret.
-5. The actual deploy happens in the app directory with `doppler run -- pnpm alchemy:up`.
+4. New-style app workflows resolve the public URL from `APP_CONFIG_BASE_URL`; legacy app workflows still use their existing metadata path.
+5. New-style app deploys run `doppler run -- pnpm exec tsx ./alchemy.run.ts` in the app directory.
 
 ## What to know before touching this
 
@@ -103,7 +98,7 @@ The Semaphore UI labels this as an operator token. It is the same shared API sec
 - Preview jobs that mutate the PR body must stay serialized per PR.
 - Preview tests are intentionally narrower than the slowest full app e2e suites.
 - Preview deploys do not override `ALCHEMY_STAGE`; route-driven previews should be configured in the app's `preview_N` Doppler configs.
-- The temporary dependency graph in `scripts/preview/apps.ts` exists only until app manifests or contracts can express cross-app deploy dependencies.
+- The temporary dependency graph in `@iterate-com/shared/apps/new-style-cloudflare-apps` exists only until app manifests or contracts can express cross-app deploy dependencies.
 - `example` currently has no real network e2e cases; its `test:e2e` command passes with no tests.
 
 ## Prod verification commands

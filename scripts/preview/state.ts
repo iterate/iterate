@@ -3,8 +3,8 @@ import { z } from "zod";
 import { markdownAnnotator } from "../../packages/shared/src/jonasland/markdown-annotator.ts";
 import { splitRepositoryFullName } from "./repository-full-name.ts";
 
-const cloudflarePreviewSectionLabel = "CLOUDFLARE_PREVIEW_ENVIRONMENTS";
-const cloudflarePreviewStateLabel = "CLOUDFLARE_PREVIEW_ENVIRONMENTS_STATE";
+const cloudflarePreviewSectionLabel = "CLOUDFLARE_PREVIEW";
+const cloudflarePreviewStateLabel = "CLOUDFLARE_PREVIEW_STATE";
 
 const CloudflarePreviewStatus = z.enum([
   "awaiting-tests",
@@ -17,7 +17,7 @@ const CloudflarePreviewStatus = z.enum([
   "tests-failed",
 ]);
 
-export const CloudflarePreviewEnvironment = z.object({
+export const EnvironmentConfigLease = z.object({
   dopplerConfig: z.string().trim().min(1),
   leasedUntil: z.number().int().positive(),
   leaseId: z.string().uuid(),
@@ -39,10 +39,10 @@ export const CloudflarePreviewAppEntry = z.object({
 
 export const CloudflarePreviewState = z.object({
   apps: z.record(z.string().trim().min(1), CloudflarePreviewAppEntry).default({}),
-  environment: CloudflarePreviewEnvironment.nullable().default(null),
+  environmentConfigLease: EnvironmentConfigLease.nullable().default(null),
 });
 
-export type CloudflarePreviewEnvironment = z.infer<typeof CloudflarePreviewEnvironment>;
+export type EnvironmentConfigLease = z.infer<typeof EnvironmentConfigLease>;
 export type CloudflarePreviewAppEntry = z.infer<typeof CloudflarePreviewAppEntry>;
 export type CloudflarePreviewState = z.infer<typeof CloudflarePreviewState>;
 
@@ -112,22 +112,24 @@ function renderCloudflarePreviewSection(state: CloudflarePreviewState) {
     .join("\n\n");
 
   return [
-    "## Preview Environment",
+    "## Environment Config Lease",
     "",
     markdownAnnotator("", cloudflarePreviewStateLabel).update(wrapHiddenStateBlock(state)),
-    state.environment ? renderPreviewEnvironment(state.environment) : "No active preview lease.",
+    state.environmentConfigLease
+      ? renderEnvironmentConfigLease(state.environmentConfigLease)
+      : "No active environment config lease.",
     rows ? `\n${rows}` : "",
   ]
     .filter(Boolean)
     .join("\n");
 }
 
-function renderPreviewEnvironment(environment: CloudflarePreviewEnvironment) {
+function renderEnvironmentConfigLease(lease: EnvironmentConfigLease) {
   return [
-    `Environment: \`${environment.slug}\``,
-    `Config: \`${environment.dopplerConfig}\``,
-    `Type: \`${environment.type}\``,
-    `Leased until: ${new Date(environment.leasedUntil).toISOString()}`,
+    `Lease: \`${lease.slug}\``,
+    `Doppler config: \`${lease.dopplerConfig}\``,
+    `Type: \`${lease.type}\``,
+    `Leased until: ${new Date(lease.leasedUntil).toISOString()}`,
   ].join("\n");
 }
 

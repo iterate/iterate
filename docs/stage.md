@@ -105,7 +105,7 @@ Use Doppler branch configs for isolation:
 | `preview_N`    | Preview slot N                       |
 | `prd`          | Production                           |
 
-Engineers should use `dev_{name}` configs. Repo-managed preview environments use numbered `preview_N` configs that correspond to Semaphore preview slots.
+Engineers should use `dev_{name}` configs. Repo-managed PR previews use numbered `preview_N` configs that correspond to Semaphore environment config leases.
 
 **Never use `dev_personal`**. It's a Doppler built-in that makes it impossible for others to fix secrets. We've banned it.
 

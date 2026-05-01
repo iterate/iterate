@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { newStyleCloudflareApps } from "../../packages/shared/src/apps/new-style-cloudflare-apps.ts";
 
 export const CloudflarePreviewAppSlug = z.enum([
   "agents",
@@ -18,11 +19,6 @@ export type CloudflarePreviewApp = {
   appPath: `apps/${string}`;
   dopplerProject: string;
   paths: string[];
-  /**
-   * Temporary preview orchestration dependency graph. This belongs in app
-   * manifests/contracts long-term; the preview script should not own product
-   * topology once manifests can express cross-app runtime dependencies.
-   */
   previewDependencies?: CloudflarePreviewAppSlug[];
   previewTestBaseUrlEnvVar: string;
   previewTestCommandArgs: readonly [string, ...string[]];
@@ -38,29 +34,17 @@ export const cloudflarePreviewSharedPaths = [
 
 export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflarePreviewApp> = {
   agents: {
-    slug: "agents",
-    displayName: "Agents",
-    appPath: "apps/agents",
-    dopplerProject: "agents",
-    paths: ["apps/agents/**", "apps/agents-contract/**"],
+    ...newStyleCloudflareApps.agents,
     previewTestBaseUrlEnvVar: "AGENTS_BASE_URL",
     previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
   },
   codemode: {
-    slug: "codemode",
-    displayName: "Codemode",
-    appPath: "apps/codemode",
-    dopplerProject: "codemode",
-    paths: ["apps/codemode/**", "apps/codemode-contract/**"],
+    ...newStyleCloudflareApps.codemode,
     previewTestBaseUrlEnvVar: "CODEMODE_BASE_URL",
     previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
   },
   example: {
-    slug: "example",
-    displayName: "Example",
-    appPath: "apps/example",
-    dopplerProject: "example",
-    paths: ["apps/example/**"],
+    ...newStyleCloudflareApps.example,
     previewTestBaseUrlEnvVar: "EXAMPLE_BASE_URL",
     previewTestCommandArgs: ["pnpm", "test:e2e"],
   },
@@ -74,30 +58,20 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
   },
   os2: {
-    slug: "os2",
-    displayName: "OS",
-    appPath: "apps/os2",
-    dopplerProject: "os2",
-    paths: ["apps/os2/**", "apps/os2-contract/**"],
-    previewDependencies: ["events"],
+    ...newStyleCloudflareApps.os2,
+    previewDependencies: newStyleCloudflareApps.os2.deploymentDependencies?.map((appSlug) =>
+      CloudflarePreviewAppSlug.parse(appSlug),
+    ),
     previewTestBaseUrlEnvVar: "OS2_BASE_URL",
     previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
   },
   semaphore: {
-    slug: "semaphore",
-    displayName: "Semaphore",
-    appPath: "apps/semaphore",
-    dopplerProject: "semaphore",
-    paths: ["apps/semaphore/**"],
+    ...newStyleCloudflareApps.semaphore,
     previewTestBaseUrlEnvVar: "SEMAPHORE_BASE_URL",
     previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
   },
   "ingress-proxy": {
-    slug: "ingress-proxy",
-    displayName: "Ingress Proxy",
-    appPath: "apps/ingress-proxy",
-    dopplerProject: "ingress-proxy",
-    paths: ["apps/ingress-proxy/**"],
+    ...newStyleCloudflareApps["ingress-proxy"],
     previewTestBaseUrlEnvVar: "INGRESS_PROXY_BASE_URL",
     previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
   },

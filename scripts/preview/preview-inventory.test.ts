@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  CLOUDFLARE_PREVIEW_RESOURCE_TYPE,
-  parsePreviewEnvironmentData,
+  ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+  parseEnvironmentConfigLeaseData,
   syncPreviewInventory,
 } from "./preview-inventory.ts";
 
 describe("syncPreviewInventory", () => {
-  it("adds missing shared preview environment resources", async () => {
+  it("adds missing shared environment config lease resources", async () => {
     const add = vi.fn(async () => undefined);
     const deleteResource = vi.fn(async () => undefined);
     const list = vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([]);
@@ -17,12 +17,12 @@ describe("syncPreviewInventory", () => {
         {
           data: { dopplerConfig: "preview_1" },
           slug: "preview-1",
-          type: CLOUDFLARE_PREVIEW_RESOURCE_TYPE,
+          type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
         },
         {
           data: { dopplerConfig: "preview_2" },
           slug: "preview-2",
-          type: CLOUDFLARE_PREVIEW_RESOURCE_TYPE,
+          type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
         },
       ],
     });
@@ -33,14 +33,14 @@ describe("syncPreviewInventory", () => {
         {
           data: { dopplerConfig: "preview_1" },
           slug: "preview-1",
-          type: CLOUDFLARE_PREVIEW_RESOURCE_TYPE,
+          type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
         },
       ],
       [
         {
           data: { dopplerConfig: "preview_2" },
           slug: "preview-2",
-          type: CLOUDFLARE_PREVIEW_RESOURCE_TYPE,
+          type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
         },
       ],
     ]);
@@ -64,39 +64,39 @@ describe("syncPreviewInventory", () => {
         {
           data: { dopplerConfig: "preview_1" },
           slug: "preview-1",
-          type: CLOUDFLARE_PREVIEW_RESOURCE_TYPE,
+          type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
         },
         {
           data: { dopplerConfig: "preview_2" },
           slug: "preview-2",
-          type: CLOUDFLARE_PREVIEW_RESOURCE_TYPE,
+          type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
         },
       ],
     });
 
     expect(deleteResource.mock.calls).toEqual([
-      [{ slug: "preview-1", type: CLOUDFLARE_PREVIEW_RESOURCE_TYPE }],
-      [{ slug: "preview-99", type: CLOUDFLARE_PREVIEW_RESOURCE_TYPE }],
+      [{ slug: "preview-1", type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE }],
+      [{ slug: "preview-99", type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE }],
     ]);
     expect(add.mock.calls).toEqual([
       [
         {
           data: { dopplerConfig: "preview_1" },
           slug: "preview-1",
-          type: CLOUDFLARE_PREVIEW_RESOURCE_TYPE,
+          type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
         },
       ],
     ]);
   });
 });
 
-describe("parsePreviewEnvironmentData", () => {
+describe("parseEnvironmentConfigLeaseData", () => {
   it("requires a dopplerConfig string", () => {
-    expect(parsePreviewEnvironmentData({ dopplerConfig: " preview_1 " })).toEqual({
+    expect(parseEnvironmentConfigLeaseData({ dopplerConfig: " preview_1 " })).toEqual({
       dopplerConfig: "preview_1",
     });
-    expect(() => parsePreviewEnvironmentData({})).toThrow(
-      "Preview environment resource data must include dopplerConfig.",
+    expect(() => parseEnvironmentConfigLeaseData({})).toThrow(
+      "Environment config lease data must include dopplerConfig.",
     );
   });
 });

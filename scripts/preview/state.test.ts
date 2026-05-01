@@ -1,19 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
   CloudflarePreviewAppEntry,
-  CloudflarePreviewEnvironment,
+  EnvironmentConfigLease,
   parseCloudflarePreviewState,
   renderCloudflarePreviewPullRequestBody,
 } from "./state.ts";
 
 describe("cloudflare preview state helpers", () => {
   it("round-trips rendered preview state from the managed PR body section", () => {
-    const environment = CloudflarePreviewEnvironment.parse({
+    const environmentConfigLease = EnvironmentConfigLease.parse({
       dopplerConfig: "preview_1",
       leasedUntil: 1_700_000_000_000,
       leaseId: "9d975621-72c8-459d-936d-e9b4335e0f5d",
       slug: "preview-1",
-      type: "cloudflare-preview-environment",
+      type: "environment-config-lease",
     });
     const entry = CloudflarePreviewAppEntry.parse({
       appDisplayName: "Example",
@@ -30,7 +30,7 @@ describe("cloudflare preview state helpers", () => {
       apps: {
         example: entry,
       },
-      environment,
+      environmentConfigLease,
     };
     const body = renderCloudflarePreviewPullRequestBody(
       "## Summary\n\nExisting user-authored description.",
@@ -39,12 +39,12 @@ describe("cloudflare preview state helpers", () => {
 
     expect(parseCloudflarePreviewState(body)).toEqual(state);
     expect(body).toContain("## Summary");
-    expect(body).toContain("## Preview Environment");
-    expect(body).toContain("Environment: `preview-1`");
-    expect(body).toContain("Config: `preview_1`");
-    expect(body).toContain("<!-- CLOUDFLARE_PREVIEW_ENVIRONMENTS_STATE -->");
+    expect(body).toContain("## Environment Config Lease");
+    expect(body).toContain("Lease: `preview-1`");
+    expect(body).toContain("Doppler config: `preview_1`");
+    expect(body).toContain("<!-- CLOUDFLARE_PREVIEW_STATE -->");
     expect(body).toContain("<!--\n{");
-    expect(body).toContain("\n-->\n<!-- /CLOUDFLARE_PREVIEW_ENVIRONMENTS_STATE -->");
+    expect(body).toContain("\n-->\n<!-- /CLOUDFLARE_PREVIEW_STATE -->");
     expect(body).toContain("Preview: https://example-preview-1.iterate.workers.dev");
   });
 
@@ -54,9 +54,9 @@ describe("cloudflare preview state helpers", () => {
       "",
       "Owned by humans.",
       "",
-      "<!-- CLOUDFLARE_PREVIEW_ENVIRONMENTS -->",
+      "<!-- CLOUDFLARE_PREVIEW -->",
       "old section",
-      "<!-- /CLOUDFLARE_PREVIEW_ENVIRONMENTS -->",
+      "<!-- /CLOUDFLARE_PREVIEW -->",
       "",
       "Footer",
     ].join("\n");
@@ -73,12 +73,12 @@ describe("cloudflare preview state helpers", () => {
           updatedAt: "2026-04-02T10:00:00.000Z",
         }),
       },
-      environment: null,
+      environmentConfigLease: null,
     });
 
     expect(body).toContain("# User content");
     expect(body).toContain("Footer");
-    expect(body).toContain("No active preview lease.");
+    expect(body).toContain("No active environment config lease.");
     expect(body).toContain("Summary: AssertionError: expected 2 to be +0");
     expect(body).toContain("<details>");
   });
@@ -86,24 +86,24 @@ describe("cloudflare preview state helpers", () => {
   it("returns empty state when the managed block is deleted", () => {
     expect(parseCloudflarePreviewState("## Summary\n\nNo preview block here.")).toEqual({
       apps: {},
-      environment: null,
+      environmentConfigLease: null,
     });
   });
 
   it("returns empty state when the managed state block is malformed", () => {
     const body = [
-      "## Preview Environment",
+      "## Environment Config Lease",
       "",
-      "<!-- CLOUDFLARE_PREVIEW_ENVIRONMENTS_STATE -->",
+      "<!-- CLOUDFLARE_PREVIEW_STATE -->",
       "<!--",
       "{ not json }",
       "-->",
-      "<!-- /CLOUDFLARE_PREVIEW_ENVIRONMENTS_STATE -->",
+      "<!-- /CLOUDFLARE_PREVIEW_STATE -->",
     ].join("\n");
 
     expect(parseCloudflarePreviewState(body)).toEqual({
       apps: {},
-      environment: null,
+      environmentConfigLease: null,
     });
   });
 });

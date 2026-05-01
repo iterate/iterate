@@ -77,16 +77,15 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |-
           set -euo pipefail
-          routes="$(doppler secrets get WORKER_ROUTES --plain 2>/dev/null || true)"
-          first_route="$(printf "%s" "$routes" | tr "," "\n" | awk '{ gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0); if ($0 != "") { sub(/\/\*$/, "", $0); print; exit } }')"
-          if [ -n "$first_route" ]; then
-            echo "public_url=https://${first_route}" >> "$GITHUB_OUTPUT"
+          public_url="$(doppler run -- pnpm exec tsx -e 'import { resolveNewStyleCloudflareAppBaseUrlFromEnv } from "@iterate-com/shared/apps/new-style-cloudflare-apps"; console.log(resolveNewStyleCloudflareAppBaseUrlFromEnv(process.env) ?? "");')"
+          if [ -n "$public_url" ]; then
+            echo "public_url=${public_url}" >> "$GITHUB_OUTPUT"
           fi
       - name: Deploy apps/agents
         working-directory: apps/agents
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run -- pnpm alchemy:up
+        run: doppler run -- pnpm exec tsx ./alchemy.run.ts
   slack-success:
     needs:
       - variables

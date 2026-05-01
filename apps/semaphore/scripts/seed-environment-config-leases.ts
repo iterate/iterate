@@ -4,26 +4,22 @@ import { syncPreviewInventory } from "../../../scripts/preview/preview-inventory
 
 const DEFAULT_SEMAPHORE_BASE_URL = "https://semaphore.iterate.com";
 
-export const SeedCloudflarePreviewEnvironmentPoolInput = z
+export const SeedEnvironmentConfigLeasesInput = z
   .object({
     semaphoreBaseUrl: z.string().trim().url().optional(),
   })
   .default({});
 
-export type SeedCloudflarePreviewEnvironmentPoolInput = z.infer<
-  typeof SeedCloudflarePreviewEnvironmentPoolInput
->;
+export type SeedEnvironmentConfigLeasesInput = z.infer<typeof SeedEnvironmentConfigLeasesInput>;
 
-export async function seedCloudflarePreviewEnvironmentPool(
-  input: SeedCloudflarePreviewEnvironmentPoolInput,
-) {
+export async function seedEnvironmentConfigLeases(input: SeedEnvironmentConfigLeasesInput) {
   const semaphoreBaseUrl =
     input.semaphoreBaseUrl ?? process.env.SEMAPHORE_BASE_URL?.trim() ?? DEFAULT_SEMAPHORE_BASE_URL;
   const semaphoreApiToken =
     process.env.SEMAPHORE_API_TOKEN?.trim() ?? process.env.APP_CONFIG_SHARED_API_SECRET?.trim();
   if (!semaphoreApiToken) {
     throw new Error(
-      "SEMAPHORE_API_TOKEN or APP_CONFIG_SHARED_API_SECRET is required to seed preview environments.",
+      "SEMAPHORE_API_TOKEN or APP_CONFIG_SHARED_API_SECRET is required to seed environment config leases.",
     );
   }
 

@@ -80,9 +80,9 @@ the shared `withEvlog()` wrapper in the runtime entrypoints rather than Nitro's
 # doppler run --project os --config prd -- pnpm preview sync --pull-request-number 1234
 #
 # Fixed-slot manual deploy:
-doppler run --project example --config preview_1 -- pnpm alchemy:up
-doppler run --project example --config preview_1 -- pnpm alchemy:down
-doppler run --config prd -- pnpm alchemy:up    # production-style deploy
+doppler run --project example --config preview_1 -- pnpm exec tsx ./alchemy.run.ts
+doppler run --project example --config preview_1 -- pnpm exec tsx ./alchemy.run.ts --destroy
+doppler run --project example --config prd -- pnpm exec tsx ./alchemy.run.ts
 pnpm dev          # Node dev server
 pnpm start        # Run the built server bundle and restart on rebuilds
 pnpm cf:dev       # Cloudflare local dev

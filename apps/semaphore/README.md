@@ -26,16 +26,16 @@ Cloudflare-only: TanStack Start + oRPC + raw D1 inventory storage, with a Durabl
 pnpm cli          # doppler + iterate local-router commands
 pnpm dev          # doppler + Alchemy local (Vite); optional PORT= for fixed port; Ctrl+C to stop
 pnpm build        # production client/server bundle
-pnpm deploy       # `doppler run --config prd` — `_shared` resolves `ALCHEMY_STAGE=prd`
+pnpm deploy       # deploy prd through Doppler and alchemy.run.ts
 pnpm seed:tunnel-pool
-pnpm seed:preview-pool
+pnpm seed:environment-config-leases
 pnpm test         # typecheck only
 pnpm test:e2e     # requires `SEMAPHORE_BASE_URL`
 ```
 
-## Preview pools and tokens
+## Environment config leases for PR previews
 
-Semaphore owns the shared preview slot inventory for Cloudflare preview environments. The preview router usually runs through the `os` production Doppler config:
+Semaphore owns the environment config lease inventory used by PR previews. The preview router usually runs through the `os` production Doppler config:
 
 ```bash
 doppler run --project os --config prd -- pnpm preview status
@@ -44,7 +44,7 @@ doppler run --project os --config prd -- pnpm preview status
 The router reads `SEMAPHORE_API_TOKEN` first and falls back to `APP_CONFIG_SHARED_API_SECRET`. To seed or repair the preview inventory from this package, run:
 
 ```bash
-doppler run --project semaphore --config prd -- pnpm seed:preview-pool
+doppler run --project semaphore --config prd -- pnpm --dir apps/semaphore seed:environment-config-leases
 ```
 
 The browser UI calls this value the operator token. Do not copy the token into source files, docs, or PR comments.
@@ -57,7 +57,7 @@ The browser UI calls this value the operator token. Do not copy the token into s
 
 Use the raw lifecycle scripts with Doppler outside the package script:
 
-- `doppler run --project semaphore --config preview_1 -- pnpm alchemy:up`
-- `doppler run --config prd -- pnpm alchemy:up`
-- `doppler run --project semaphore --config preview_1 -- pnpm alchemy:down`
-- `doppler run --config prd -- pnpm alchemy:down`
+- `doppler run --project semaphore --config preview_1 -- pnpm exec tsx ./alchemy.run.ts`
+- `doppler run --project semaphore --config prd -- pnpm exec tsx ./alchemy.run.ts`
+- `doppler run --project semaphore --config preview_1 -- pnpm exec tsx ./alchemy.run.ts --destroy`
+- `doppler run --project semaphore --config prd -- pnpm exec tsx ./alchemy.run.ts --destroy`

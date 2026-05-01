@@ -1,7 +1,7 @@
 import { os } from "@orpc/server";
 import { z } from "zod";
 import { createSemaphoreClient } from "../../apps/semaphore-contract/src/client.ts";
-import { CLOUDFLARE_PREVIEW_RESOURCE_TYPE } from "./preview-inventory.ts";
+import { ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE } from "./preview-inventory.ts";
 import {
   cleanupCloudflarePreviewForPullRequest,
   createCloudflarePreviewCleanupInputSchema,
@@ -90,7 +90,7 @@ export const router = os.router({
         });
 
         if (!result.ok) {
-          throw new Error("Failed to sync the Cloudflare preview environment.");
+          throw new Error("Failed to sync Cloudflare preview apps.");
         }
 
         return result;
@@ -109,7 +109,7 @@ export const router = os.router({
         });
 
         if (!result.ok) {
-          throw new Error("Failed to deploy the Cloudflare preview environment.");
+          throw new Error("Failed to deploy Cloudflare preview apps.");
         }
 
         return result;
@@ -138,7 +138,7 @@ export const router = os.router({
       .input(createCloudflarePreviewCleanupInputSchema(previewBoundaryEnv))
       .meta({
         description:
-          "Tear down deployed apps recorded in the managed PR preview section and release the shared preview lease",
+          "Tear down deployed apps recorded in the managed PR preview section and release the environment config lease",
       })
       .handler(async ({ input, signal }) => {
         const result = await cleanupCloudflarePreviewForPullRequest({
@@ -148,7 +148,7 @@ export const router = os.router({
         });
 
         if (!result.ok) {
-          throw new Error("Failed to clean up the Cloudflare preview environment.");
+          throw new Error("Failed to clean up Cloudflare preview apps.");
         }
 
         return result;
@@ -156,13 +156,13 @@ export const router = os.router({
     status: os
       .input(createPreviewStatusInputSchema(previewBoundaryEnv))
       .meta({
-        description: "Show the shared Cloudflare preview environment inventory and lease state",
+        description: "Show environment config lease inventory and active leases for PR previews",
       })
       .handler(async ({ input }) => {
         const semaphore = createPreviewSemaphoreClient(input);
         const now = Date.now();
         const resources = await semaphore.list({
-          type: CLOUDFLARE_PREVIEW_RESOURCE_TYPE,
+          type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
         });
         const available = resources
           .filter((resource) => resource.leaseState === "available")
@@ -196,7 +196,7 @@ export const router = os.router({
         return {
           checkedAt: new Date(now).toISOString(),
           semaphoreBaseUrl: input.semaphoreBaseUrl,
-          type: CLOUDFLARE_PREVIEW_RESOURCE_TYPE,
+          type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
           total: resources.length,
           availableCount: available.length,
           leasedCount: leased.length,

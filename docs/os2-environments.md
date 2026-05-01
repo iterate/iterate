@@ -96,16 +96,16 @@ Vite picks a free port automatically (defaults to 5173, increments if taken). Th
 
 ## Preview environments
 
-Preview environments use a shared Semaphore-controlled config pool. The
+Preview environments use a shared Semaphore-controlled environment config lease inventory. The
 inventory is `preview-1` through `preview-10`, each with
 `data.dopplerConfig` pointing at `preview_1` through `preview_10`.
 
 ### How it works
 
-1. CI acquires a shared config slot from Semaphore (e.g. `preview-3`)
+1. CI acquires a shared environment config lease from Semaphore (e.g. `preview-3`)
 2. The resource data maps the slot to Doppler config `preview_3`
 3. `preview_3` has `APP_CONFIG_BASE_URL=https://os2.iterate-preview-3.com` and `APP_CONFIG_PROJECT_HOSTNAME_BASES=["iterate-preview-3.app"]`
-4. `doppler run --project os2 --config preview_3 -- pnpm alchemy:up` deploys the worker with correct routes. `ALCHEMY_STAGE` comes from `_shared` as `${DOPPLER_CONFIG}` and is slugified by the app into Cloudflare names like `os2-preview-3`.
+4. `doppler run --project os2 --config preview_3 -- pnpm exec tsx ./alchemy.run.ts` deploys the worker with correct routes. `ALCHEMY_STAGE` comes from `_shared` as `${DOPPLER_CONFIG}` and is slugified by the app into Cloudflare names like `os2-preview-3`.
 5. PR body is updated with the shared lease and per-app deployment status
 6. On PR close, recorded apps are torn down and the shared slot is released back to Semaphore
 
@@ -141,14 +141,14 @@ For a quick manual deploy to a specific slot (bypassing semaphore):
 
 ```bash
 cd apps/os2
-doppler run --project os2 --config preview_3 -- pnpm alchemy:up
+doppler run --project os2 --config preview_3 -- pnpm exec tsx ./alchemy.run.ts
 
 # Hit it
 open https://os2.iterate-preview-3.com         # dashboard
 open https://myproject.iterate-preview-3.app   # project subdomain
 
 # Clean up
-doppler run --project os2 --config preview_3 -- pnpm alchemy:down
+doppler run --project os2 --config preview_3 -- pnpm exec tsx ./alchemy.run.ts --destroy
 ```
 
 ### Adding a new developer

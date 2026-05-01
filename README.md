@@ -39,6 +39,40 @@ pnpm lint         # Lint and fix
 pnpm format       # Format code
 ```
 
+## Cloudflare App Deployments
+
+For new-style Cloudflare apps (`agents`, `codemode`, `example`,
+`ingress-proxy`, `os2`, and `semaphore`), deployment is one operation:
+
+```bash
+doppler run --project <app> --config <environment-config> -- pnpm exec tsx ./alchemy.run.ts
+```
+
+The Doppler project is the app/service dimension. The Doppler config is the
+environment config dimension: `prd`, `preview_1`, `dev_jonas_2`, and so on.
+`main` deploys use the `prd` config through generated per-app deploy workflows.
+PR previews are separate deploys: the `Cloudflare Previews` workflow leases a
+numbered config from Semaphore, deploys affected apps into that same config, and
+cleans those deploys up on PR close. PR previews are not promoted to production.
+
+Environment config leases for PR previews are source-code seeded from
+`scripts/preview/preview-inventory.ts`. Each live Semaphore resource has:
+
+- type: `environment-config-lease`
+- slug: `preview-1`, `preview-2`, etc.
+- data: `{ "dopplerConfig": "preview_1" }`, etc.
+
+To create or repair the live Semaphore inventory after adding an available
+preview config/domain pair:
+
+```bash
+doppler run --project semaphore --config prd -- pnpm --dir apps/semaphore seed:environment-config-leases
+doppler run --project os --config prd -- pnpm preview status
+```
+
+Only add slots whose Doppler configs and Cloudflare domains exist in the right
+accounts. See `docs/cloudflare-preview-environments.md` for the full lifecycle.
+
 ## Cloudflare Tunnels
 
 Expose local dev servers via public URLs (useful for webhooks, OAuth callbacks):
