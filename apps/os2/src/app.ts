@@ -9,6 +9,10 @@ export const AppConfig = BaseAppConfig.extend({
     publishableKey: publicValue(z.string().trim().min(1)),
     secretKey: redacted(z.string().trim().min(1)),
     jwtKey: redacted(z.string().trim().min(1)),
+    // Deprecated static OAuth app config. MCP now uses Clerk dynamic client registration,
+    // but older CI/Doppler configs may still provide these keys.
+    oauthClientId: publicValue(z.string().trim().min(1)).optional(),
+    oauthClientSecret: redacted(z.string().trim().min(1)).optional(),
     signInUrl: publicValue(z.string().trim().min(1).default("/sign-in")),
     signUpUrl: publicValue(z.string().trim().min(1).default("/sign-up")),
     afterSignInUrl: publicValue(z.string().trim().min(1).default("/")),
