@@ -1,7 +1,6 @@
-import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 import { z } from "zod";
-import { BaseAppConfig, parseAppConfigFromEnv } from "./config.ts";
+import { runCommand } from "../node/run-command.ts";
 
 export const NewStyleCloudflareAppSlug = z.enum([
   "agents",
@@ -87,11 +86,22 @@ export function isNewStyleCloudflareAppSlug(value: string): value is NewStyleClo
 }
 
 export function resolveNewStyleCloudflareAppBaseUrlFromEnv(env: NodeJS.ProcessEnv) {
-  return parseAppConfigFromEnv({
-    configSchema: BaseAppConfig,
-    env,
-    prefix: "APP_CONFIG_",
-  }).baseUrl;
+  if (typeof env.APP_CONFIG_BASE_URL === "string" && env.APP_CONFIG_BASE_URL.trim() !== "") {
+    return z.url().parse(env.APP_CONFIG_BASE_URL);
+  }
+
+  if (typeof env.APP_CONFIG !== "string" || env.APP_CONFIG.trim() === "") {
+    return undefined;
+  }
+
+  const parsed = z
+    .object({
+      baseUrl: z.url().optional(),
+    })
+    .passthrough()
+    .parse(JSON.parse(env.APP_CONFIG));
+
+  return parsed.baseUrl;
 }
 
 export async function runNewStyleCloudflareAppAlchemy(input: {
@@ -120,45 +130,5 @@ export async function runNewStyleCloudflareAppAlchemy(input: {
     environment: input.commandEnvironment,
     signal: input.signal,
     workingDirectory: resolve(input.repositoryRoot, input.app.appPath),
-  });
-}
-
-async function runCommand(params: {
-  args: string[];
-  command: string;
-  environment: NodeJS.ProcessEnv;
-  signal?: AbortSignal;
-  workingDirectory: string;
-}) {
-  return await new Promise<{
-    exitCode: number | null;
-    stderr: string;
-    stdout: string;
-  }>((resolve, reject) => {
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
-    const child = spawn(params.command, params.args, {
-      cwd: params.workingDirectory,
-      env: params.environment,
-      signal: params.signal,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdoutChunks.push(Buffer.from(chunk));
-      process.stdout.write(chunk);
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderrChunks.push(Buffer.from(chunk));
-      process.stderr.write(chunk);
-    });
-    child.on("error", reject);
-    child.on("close", (exitCode) => {
-      resolve({
-        exitCode,
-        stderr: Buffer.concat(stderrChunks).toString("utf8"),
-        stdout: Buffer.concat(stdoutChunks).toString("utf8"),
-      });
-    });
   });
 }

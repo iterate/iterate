@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { promises as dns } from "node:dns";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -11,6 +10,7 @@ import {
   runNewStyleCloudflareAppAlchemy,
 } from "../../packages/shared/src/apps/new-style-cloudflare-apps.ts";
 import { stripAnsi } from "../../packages/shared/src/jonasland/strip-ansi.ts";
+import { runCommand } from "../../packages/shared/src/node/run-command.ts";
 import {
   CloudflarePreviewAppEntry,
   type EnvironmentConfigLease,
@@ -435,7 +435,7 @@ export async function cleanupCloudflarePreviewForPullRequest(
   }));
 
   return {
-    ok: released.released,
+    ok: true,
     released: released.released,
     state: update.state,
   };
@@ -670,19 +670,23 @@ async function claimEnvironmentConfigLease(input: {
 
   const lease =
     (input.previousEnvironmentConfigLease
-      ? await semaphore.renew({
-          type: input.previousEnvironmentConfigLease.type,
-          slug: input.previousEnvironmentConfigLease.slug,
-          leaseId: input.previousEnvironmentConfigLease.leaseId,
-          leaseMs: input.leaseMs,
-        })
+      ? await ignoreEnvironmentConfigLeaseReuseError(() =>
+          semaphore.renew({
+            type: input.previousEnvironmentConfigLease.type,
+            slug: input.previousEnvironmentConfigLease.slug,
+            leaseId: input.previousEnvironmentConfigLease.leaseId,
+            leaseMs: input.leaseMs,
+          }),
+        )
       : null) ??
     (input.previousEnvironmentConfigLease
-      ? await semaphore.acquireSpecific({
-          type: input.previousEnvironmentConfigLease.type,
-          slug: input.previousEnvironmentConfigLease.slug,
-          leaseMs: input.leaseMs,
-        })
+      ? await ignoreEnvironmentConfigLeaseReuseError(() =>
+          semaphore.acquireSpecific({
+            type: input.previousEnvironmentConfigLease.type,
+            slug: input.previousEnvironmentConfigLease.slug,
+            leaseMs: input.leaseMs,
+          }),
+        )
       : null) ??
     (await semaphore.acquire({
       type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
@@ -698,6 +702,14 @@ async function claimEnvironmentConfigLease(input: {
     slug: lease.slug,
     type: lease.type,
   } satisfies EnvironmentConfigLease;
+}
+
+async function ignoreEnvironmentConfigLeaseReuseError<T>(claim: () => Promise<T | null>) {
+  try {
+    return await claim();
+  } catch {
+    return null;
+  }
 }
 
 async function selectPreviewAppsForPullRequest(input: {
@@ -955,47 +967,6 @@ function canRunPreviewTests(entry: CloudflarePreviewAppEntry | undefined) {
   return Boolean(
     entry?.publicUrl && ["awaiting-tests", "deployed", "tests-failed"].includes(entry.status),
   );
-}
-
-async function runCommand(params: {
-  args: string[];
-  command: string;
-  echoOutput?: boolean;
-  environment: NodeJS.ProcessEnv;
-  signal?: AbortSignal;
-  workingDirectory: string;
-}) {
-  return await new Promise<{
-    exitCode: number | null;
-    stderr: string;
-    stdout: string;
-  }>((resolve, reject) => {
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
-    const child = spawn(params.command, params.args, {
-      cwd: params.workingDirectory,
-      env: params.environment,
-      signal: params.signal,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdoutChunks.push(Buffer.from(chunk));
-      if (params.echoOutput !== false) process.stdout.write(chunk);
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderrChunks.push(Buffer.from(chunk));
-      if (params.echoOutput !== false) process.stderr.write(chunk);
-    });
-    child.on("error", reject);
-    child.on("close", (exitCode) => {
-      resolve({
-        exitCode,
-        stderr: Buffer.concat(stderrChunks).toString("utf8"),
-        stdout: Buffer.concat(stdoutChunks).toString("utf8"),
-      });
-    });
-  });
 }
 
 async function runCommandWithRetries(

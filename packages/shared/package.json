@@ -101,7 +101,8 @@
     "./default-avatar": "./src/default-avatar.ts",
     "./signup-allowlist": "./src/signup-allowlist.ts",
     "./slug-maker": "./src/slug-maker.ts",
-    "./nitro-ws-response": "./src/nitro-ws-response.ts"
+    "./nitro-ws-response": "./src/nitro-ws-response.ts",
+    "./node/run-command": "./src/node/run-command.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit && pnpm typecheck:callable",
