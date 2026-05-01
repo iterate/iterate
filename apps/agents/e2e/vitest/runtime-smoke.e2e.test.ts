@@ -20,8 +20,9 @@ testFn(
     expect(homepage.ok).toBe(true);
 
     const homepageHtml = await homepage.text();
-    expect(homepageHtml).toContain("hello world");
-    expect(homepageHtml).toContain("Call sample procedure");
+    expect(homepageHtml).toContain("<title>Agents</title>");
+    expect(homepageHtml).toContain("Presets");
+    expect(homepageHtml).toContain("Save preset");
 
     const publicConfigResponse = await fetch(
       new URL("/api/__internal/public-config", agentsBaseUrl),

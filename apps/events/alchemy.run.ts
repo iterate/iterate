@@ -25,7 +25,9 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
   // Cloudflare gates `request.signal` behind this flag — needed by the oRPC
   // logging plugin to distinguish aborted client requests from real failures.
   // https://developers.cloudflare.com/workers/runtime-apis/request/
-  compatibilityFlags: ["enable_request_signal"],
+  // `global_fetch_strictly_public` lets this Worker call same-zone Worker routes
+  // such as agents.iterate.com via fetch instead of bypassing Workers to origin.
+  compatibilityFlags: ["enable_request_signal", "global_fetch_strictly_public"],
   extraRouteHostnames: projectRouteHostnamesForBaseUrl(ctx.compiledAppConfig.baseUrl),
 });
 
