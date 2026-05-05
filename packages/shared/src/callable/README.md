@@ -387,9 +387,9 @@ until code provenance, source-size limits, and outbound policy land.
 
 ## Loopback Bindings
 
-Loopback bindings resolve from `ctx.exports`, not `env`. Cloudflare requires
-the `enable_ctx_exports` compatibility flag for this API, and exposes the same
-loopback binding idea from Durable Object state as `this.ctx.exports`.
+Loopback bindings resolve from `ctx.exports`, not `env`. `ctx.exports` is
+enabled by default on current Cloudflare compatibility dates, and exposes the
+same loopback binding idea from Durable Object state as `this.ctx.exports`.
 
 ```ts
 const callable = {

@@ -72,7 +72,6 @@ const projectMcpServerConnectionWorker = await Worker("project-mcp-server-connec
 });
 
 const { worker, afterFinalize } = await IterateApp(ctx, {
-  compatibilityFlags: ["enable_ctx_exports"],
   bindings: {
     CLERK_JWT_KEY: ctx.compiledAppConfig.clerk.jwtKey.exposeSecret(),
     CLERK_PUBLISHABLE_KEY: ctx.compiledAppConfig.clerk.publishableKey,
