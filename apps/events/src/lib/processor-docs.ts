@@ -7,6 +7,7 @@ import { SchedulingProcessorContract } from "@iterate-com/shared/stream-processo
 import { SlackThreadProcessorContract } from "@iterate-com/shared/stream-processors/slack-thread/contract";
 import { SlackProcessorContract } from "@iterate-com/shared/stream-processors/slack/contract";
 import { WebchatProcessorContract } from "@iterate-com/shared/stream-processors/webchat/contract";
+import { addDiscriminatorTitlesToJsonSchema } from "~/lib/json-schema-docs.ts";
 import { CoreStreamProcessorContract } from "~/stream-processors/core/contract.ts";
 
 const processorContracts = [
@@ -194,12 +195,17 @@ function eventPayloadJsonSchema(args: {
   examples: readonly { payload: unknown }[];
   payloadSchema: z.ZodType;
 }) {
-  const jsonSchema = z.toJSONSchema(args.payloadSchema, {
-    io: "input",
-    unrepresentable: "any",
-  });
+  const jsonSchema = addDiscriminatorTitlesToJsonSchema(
+    z.toJSONSchema(args.payloadSchema, {
+      io: "input",
+      unrepresentable: "any",
+    }),
+  );
 
   if (args.examples.length === 0) return jsonSchema;
+  if (typeof jsonSchema !== "object" || jsonSchema === null || Array.isArray(jsonSchema)) {
+    return jsonSchema;
+  }
 
   return {
     ...jsonSchema,
