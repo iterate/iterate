@@ -1,5 +1,4 @@
 import { DurableObject } from "cloudflare:workers";
-import { withDurableObjectCore } from "@iterate-com/shared/durable-object-utils/mixins/with-durable-object-core";
 import { withKvInspector } from "@iterate-com/shared/durable-object-utils/mixins/with-kv-inspector";
 import { withOuterbase } from "@iterate-com/shared/durable-object-utils/mixins/with-outerbase";
 import {
@@ -40,7 +39,7 @@ const StreamDurableObjectBase = withKvInspector({
 })(
   withOuterbase({
     unsafe: "I_UNDERSTAND_THIS_EXPOSES_SQL",
-  })(withDurableObjectCore(DurableObject)),
+  })(DurableObject),
 );
 
 /**
@@ -90,7 +89,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<Env> {
     super(ctx, env);
     this.client = createDurableObjectClient(ctx.storage);
 
-    void this.blockDurableObjectConcurrencyWhile(async () => {
+    void this.ctx.blockConcurrencyWhile(async () => {
       migrate(this.client);
 
       const persistedStateRow = getReducedState(this.client);

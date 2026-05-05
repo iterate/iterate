@@ -59,6 +59,7 @@ export function withAppConfig<TSchema extends z.ZodTypeAny>(configSchema: TSchem
   return function <TBase extends DurableObjectClass>(
     Base: TBase,
   ): WithAppConfigResult<TBase, TSchema> {
+    // See RuntimeDurableObjectConstructor docs for why this cast is needed to access protected ctx/env.
     const BaseWithDurableObject = Base as unknown as RuntimeDurableObjectConstructor;
 
     abstract class AppConfigMixin extends BaseWithDurableObject {

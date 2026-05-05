@@ -7,7 +7,6 @@ import {
   type ProcessorStreamApi,
   type StreamEvent,
 } from "../../stream-processors/stream-processor.ts";
-import { withDurableObjectCore } from "./with-durable-object-core.ts";
 import { withLifecycleHooks } from "./with-lifecycle-hooks.ts";
 import {
   StreamProcessorRunnerProtected,
@@ -60,9 +59,7 @@ const counterRunnerMixin = withStreamProcessorRunner<
   typeof CounterContract
 >(counterRunnerOptions);
 
-const CounterRoomBase = counterRunnerMixin(
-  withLifecycleHooks<CounterInit>()(withDurableObjectCore(DurableObject)),
-);
+const CounterRoomBase = counterRunnerMixin(withLifecycleHooks<CounterInit>()(DurableObject));
 
 class CounterRoom extends CounterRoomBase<CounterEnv> {
   getStreamPathForTest() {
@@ -114,8 +111,8 @@ describe("withStreamProcessorRunner types", () => {
     expectTypeOf(room.initialize).parameter(0).toEqualTypeOf<CounterInit>();
   });
 
-  it("rejects bases that have not installed lifecycle and durable-object core capabilities", () => {
-    // @ts-expect-error the runner persists state through core KV and reads stream path through lifecycle init params.
+  it("rejects bases that have not installed lifecycle capabilities", () => {
+    // @ts-expect-error the runner persists state through KV and reads stream path through lifecycle init params.
     counterRunnerMixin(DurableObject);
   });
 });

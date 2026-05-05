@@ -6,8 +6,6 @@ import {
   type RuntimeDurableObjectConstructor,
   type WithFetchMixinResult,
 } from "./fetch-mixin-utils.ts";
-import type { Constructor } from "./mixin-types.ts";
-import type { DurableObjectCoreProtected } from "./with-durable-object-core.ts";
 
 type WithKvInspectorResult<TBase extends DurableObjectClass> = WithFetchMixinResult<TBase>;
 
@@ -27,13 +25,11 @@ type WithKvInspectorResult<TBase extends DurableObjectClass> = WithFetchMixinRes
 export function withKvInspector(options: { unsafe: "I_UNDERSTAND_THIS_EXPOSES_KV" }) {
   void options;
 
-  return function <TBase extends DurableObjectClass>(
-    Base: TBase & Constructor<DurableObjectCoreProtected>,
-  ): WithKvInspectorResult<TBase> {
-    const BaseWithCore = Base as unknown as RuntimeDurableObjectConstructor &
-      Constructor<DurableObjectCoreProtected>;
+  return function <TBase extends DurableObjectClass>(Base: TBase): WithKvInspectorResult<TBase> {
+    // See RuntimeDurableObjectConstructor docs for why this cast is needed to access protected ctx/env.
+    const BaseWithDurableObject = Base as unknown as RuntimeDurableObjectConstructor;
 
-    abstract class KvInspectorMixin extends BaseWithCore {
+    abstract class KvInspectorMixin extends BaseWithDurableObject {
       async fetch(request: Request) {
         const url = new URL(request.url);
 
@@ -41,11 +37,11 @@ export function withKvInspector(options: { unsafe: "I_UNDERSTAND_THIS_EXPOSES_KV
         // inspector under a prefix, it must strip that prefix before forwarding
         // the request to `stub.fetch()`.
         if (url.pathname === "/__kv" || url.pathname === "/__kv/") {
-          return this.useDurableObjectKv((kv) => renderKvPage(readKvEntries(kv)));
+          return renderKvPage(readKvEntries(this.ctx.storage.kv));
         }
 
         if (url.pathname === "/__kv/json") {
-          return this.useDurableObjectKv((kv) => Response.json(readKvEntries(kv)));
+          return Response.json(readKvEntries(this.ctx.storage.kv));
         }
 
         return await delegateToBaseFetch(Base, this, request);

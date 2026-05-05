@@ -3,7 +3,6 @@ import { describe, expectTypeOf, it } from "vitest";
 import { z } from "zod";
 import { withAppConfig as publicWithAppConfig } from "@iterate-com/shared/durable-object-utils/mixins/with-app-config";
 import { BaseAppConfig, redacted } from "../../apps/config.ts";
-import { withDurableObjectCore } from "./with-durable-object-core.ts";
 import { withLifecycleHooks } from "./with-lifecycle-hooks.ts";
 import { withAppConfig } from "./with-app-config.ts";
 
@@ -72,9 +71,7 @@ describe("withAppConfig types", () => {
       ownerUserId: string;
     };
 
-    const Base = withAppConfig(AppConfig)(
-      withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject)),
-    );
+    const Base = withAppConfig(AppConfig)(withLifecycleHooks<RoomInit>()(DurableObject));
 
     class Room extends Base<Env> {
       readBoth() {

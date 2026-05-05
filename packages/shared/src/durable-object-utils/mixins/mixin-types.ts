@@ -55,6 +55,16 @@ export type StaticSide<T> = {
 /**
  * Runtime constructor used inside mixin implementations.
  *
+ * Cloudflare exposes `ctx` and `env` as protected members on `DurableObject`.
+ * TypeScript cannot express "this arbitrary base has Cloudflare's protected
+ * ctx" structurally, because protected members are nominal. Implementation
+ * classes cast their generic mixin base to this constructor before extending
+ * it; that is what lets code inside the class use the real Cloudflare APIs:
+ *
+ *   this.ctx.storage.sql
+ *   this.ctx.storage.kv
+ *   this.ctx.acceptWebSocket(...)
+ *
  * Public result types should usually use `DurableObjectClass` so `Base<Env>`
  * survives composition. Implementation classes sometimes need this non-generic
  * constructor because TypeScript cannot extend arbitrary generic constructor
@@ -64,14 +74,3 @@ export type RuntimeDurableObjectConstructor = abstract new (
   ctx: DurableObjectState,
   env: unknown,
 ) => DurableObject;
-
-/**
- * Older/simple constructor for a Durable Object class with an optional required
- * Env shape and optional accumulated members.
- *
- * This is deliberately small and shared by mixins so the common "must wrap a
- * DurableObject" constraint has one explanation and one implementation.
- */
-export type DurableObjectConstructor<Env = unknown, Members = object> = abstract new (
-  ...args: any[]
-) => DurableObject<Env> & Members;

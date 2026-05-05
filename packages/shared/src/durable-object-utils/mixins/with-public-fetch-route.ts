@@ -14,7 +14,6 @@ import type {
   RuntimeDurableObjectConstructor,
   StaticSide,
 } from "./mixin-types.ts";
-import type { DurableObjectCoreProtected } from "./with-durable-object-core.ts";
 
 export const DURABLE_OBJECT_PUBLIC_ROUTE_PREFIX = "/durable-objects";
 
@@ -85,18 +84,21 @@ export function withPublicFetchRoute(options: {
   };
 
   return function <TBase extends DurableObjectClass>(
-    Base: TBase & Constructor<DurableObjectCoreProtected>,
+    Base: TBase,
   ): WithPublicFetchRouteResult<TBase> {
-    const BaseWithCore = Base as unknown as RuntimeDurableObjectConstructor &
-      Constructor<DurableObjectCoreProtected>;
+    // See RuntimeDurableObjectConstructor docs for why this cast is needed to access protected ctx/env.
+    const BaseWithDurableObject = Base as unknown as RuntimeDurableObjectConstructor;
 
-    abstract class PublicFetchRouteMixin extends BaseWithCore implements PublicFetchRouteMembers {
+    abstract class PublicFetchRouteMixin
+      extends BaseWithDurableObject
+      implements PublicFetchRouteMembers
+    {
       getPublicDurableObjectPath(options?: { mode?: PublicDurableObjectAddressingMode }): string {
         const mode = options?.mode ?? metadata.defaultAddressing;
 
         switch (mode) {
           case "by-name": {
-            const name = this.getDurableObjectName();
+            const name = this.ctx.id.name;
             if (name === undefined) {
               throw new Error(
                 'getPublicDurableObjectPath({ mode: "by-name" }) requires an object addressed by name.',
@@ -114,7 +116,7 @@ export function withPublicFetchRoute(options: {
             return buildPublicDurableObjectPath({
               namespaceSlug: metadata.namespaceSlug,
               mode,
-              payload: this.getDurableObjectId().toString(),
+              payload: this.ctx.id.toString(),
             });
 
           case "by-init-params": {

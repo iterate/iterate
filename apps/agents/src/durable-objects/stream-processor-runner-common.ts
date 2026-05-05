@@ -1,7 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { StreamSocketFrame, type StreamPath } from "@iterate-com/events-contract";
 import { withD1ObjectCatalog } from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
-import { withDurableObjectCore } from "@iterate-com/shared/durable-object-utils/mixins/with-durable-object-core";
 import { withKvInspector } from "@iterate-com/shared/durable-object-utils/mixins/with-kv-inspector";
 import { withLifecycleHooks } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { withOuterbase } from "@iterate-com/shared/durable-object-utils/mixins/with-outerbase";
@@ -65,7 +64,7 @@ export function createStreamProcessorRunnerDurableObject<
         return params.streamPath;
       },
     },
-  })(withLifecycleHooks<StreamProcessorRunnerInit>()(withDurableObjectCore(DurableObject)));
+  })(withLifecycleHooks<StreamProcessorRunnerInit>()(DurableObject));
 
   const ProcessorRunner = withStreamProcessorRunner<
     StreamProcessorRunnerInit,

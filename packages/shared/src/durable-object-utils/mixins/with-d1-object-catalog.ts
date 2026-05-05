@@ -8,12 +8,11 @@ import type {
 import type {
   Constructor,
   DurableObjectClass,
-  DurableObjectConstructor,
   MembersOf,
   ReqEnvOf,
+  RuntimeDurableObjectConstructor,
   StaticSide,
 } from "./mixin-types.ts";
-import type { DurableObjectCoreProtected } from "./with-durable-object-core.ts";
 
 export type D1ObjectCatalogRecord<InitParams extends LifecycleInit> = {
   class: string;
@@ -87,19 +86,16 @@ export function withD1ObjectCatalog<InitParams extends LifecycleInit, Env>(optio
   return function <TBase extends DurableObjectClass>(
     Base: TBase,
   ): WithD1ObjectCatalogResult<TBase, InitParams, Env> {
-    const BaseWithLifecycle = Base as unknown as DurableObjectConstructor<
-      Env,
-      DurableObjectCoreProtected &
-        LifecycleHooksMembers<InitParams> &
-        LifecycleHooksProtected<InitParams>
-    >;
+    // See RuntimeDurableObjectConstructor docs for why this cast is needed to access protected ctx/env.
+    const BaseWithLifecycle = Base as unknown as RuntimeDurableObjectConstructor &
+      Constructor<LifecycleHooksMembers<InitParams> & LifecycleHooksProtected<InitParams>>;
 
     abstract class D1ObjectCatalogMixin
       extends BaseWithLifecycle
       implements D1ObjectCatalogMembers<InitParams>
     {
-      constructor(...args: any[]) {
-        super(...args);
+      constructor(ctx: DurableObjectState, env: unknown) {
+        super(ctx, env);
 
         this.registerOnInstanceWake((params) => {
           this.scheduleD1ObjectCatalogUpsert(params);
@@ -115,7 +111,7 @@ export function withD1ObjectCatalog<InitParams extends LifecycleInit, Env>(optio
           return null;
         }
 
-        return await getD1ObjectCatalogRecord<InitParams>(options.getDatabase(this.env), {
+        return await getD1ObjectCatalogRecord<InitParams>(options.getDatabase(this.env as Env), {
           className: options.className,
           name: initialized.name,
         });
@@ -138,9 +134,9 @@ export function withD1ObjectCatalog<InitParams extends LifecycleInit, Env>(optio
         void Promise.resolve()
           .then(() =>
             upsertD1ObjectCatalog({
-              db: options.getDatabase(this.env),
+              db: options.getDatabase(this.env as Env),
               className: options.className,
-              id: this.getDurableObjectId().toString(),
+              id: this.ctx.id.toString(),
               indexes: options.indexes,
               params,
             }),

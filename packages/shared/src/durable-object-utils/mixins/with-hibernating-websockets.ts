@@ -12,7 +12,6 @@ import type {
   LifecycleHooksProtected,
   LifecycleInit,
 } from "./with-lifecycle-hooks.ts";
-import type { DurableObjectCoreProtected } from "./with-durable-object-core.ts";
 
 const HIBERNATING_WEBSOCKET_ATTACHMENT_KEY = "__iterateHibernatingWebSocket";
 const MAX_HIBERNATING_WEBSOCKET_TAGS = 10;
@@ -128,7 +127,6 @@ type WithHibernatingWebSocketsResult<
   DurableObjectClass<
     ReqEnvOf<TBase>,
     MembersOf<TBase> &
-      DurableObjectCoreProtected &
       LifecycleHooksMembers<InitParams> &
       LifecycleHooksProtected<InitParams> &
       HibernatingWebSocketsProtected &
@@ -178,9 +176,8 @@ const attachmentCache = new WeakMap<WebSocket, SerializedHibernatingWebSocketAtt
  * and sending frames from an async connect hook before the upgrade response
  * reaches the caller can drop those frames in workerd. Returning the accepted
  * socket first makes "send initial view after connect" behave like a normal
- * post-handshake server send. We still pass the promise through the core
- * `ctx.waitUntil()` adapter for symmetry with other runtime capabilities, but
- * Cloudflare documents that `waitUntil()` has no effect in Durable Objects
+ * post-handshake server send. We still pass the promise to `ctx.waitUntil()`,
+ * but Cloudflare documents that `waitUntil()` has no effect in Durable Objects
  * because pending work already keeps the object active:
  * https://developers.cloudflare.com/durable-objects/api/state/#waituntil
  *
@@ -201,18 +198,11 @@ const attachmentCache = new WeakMap<WebSocket, SerializedHibernatingWebSocketAtt
 export function withHibernatingWebSockets<InitParams extends LifecycleInit>() {
   return function <TBase extends DurableObjectClass>(
     Base: TBase &
-      Constructor<
-        DurableObjectCoreProtected &
-          LifecycleHooksMembers<InitParams> &
-          LifecycleHooksProtected<InitParams>
-      >,
+      Constructor<LifecycleHooksMembers<InitParams> & LifecycleHooksProtected<InitParams>>,
   ): WithHibernatingWebSocketsResult<TBase, InitParams> {
+    // See RuntimeDurableObjectConstructor docs for why this cast is needed to access protected ctx/env.
     const BaseWithLifecycle = Base as unknown as RuntimeDurableObjectConstructor &
-      Constructor<
-        DurableObjectCoreProtected &
-          LifecycleHooksMembers<InitParams> &
-          LifecycleHooksProtected<InitParams>
-      >;
+      Constructor<LifecycleHooksMembers<InitParams> & LifecycleHooksProtected<InitParams>>;
 
     abstract class HibernatingWebSocketsMixin extends BaseWithLifecycle {
       async fetch(request: Request): Promise<Response> {
@@ -265,7 +255,7 @@ export function withHibernatingWebSockets<InitParams extends LifecycleInit>() {
         // standard `server.accept()` path does not provide that hibernation
         // behavior.
         // https://developers.cloudflare.com/durable-objects/best-practices/websockets/#durable-objects-hibernation-websocket-api
-        this.acceptDurableObjectWebSocket(server, tags);
+        this.ctx.acceptWebSocket(server, tags);
 
         // Cloudflare calls this persisted per-WebSocket value an "attachment".
         // Keep our public method names aligned with that term. The attachment
@@ -279,7 +269,7 @@ export function withHibernatingWebSockets<InitParams extends LifecycleInit>() {
         writeSerializedAttachment(server, serializedAttachment);
 
         const response = new Response(null, { status: 101, webSocket: client });
-        this.waitUntilDurableObjectTask(
+        this.ctx.waitUntil(
           runAfterWebSocketUpgradeResponse(async () => {
             try {
               await this.onHibernatingWebSocketConnect(connection, context);
@@ -359,7 +349,8 @@ export function withHibernatingWebSockets<InitParams extends LifecycleInit>() {
       ): void | Promise<void> {}
 
       protected getHibernatingWebSocket(id: string): HibernatingWebSocketConnection | undefined {
-        const matches = this.getDurableObjectWebSockets(id)
+        const matches = this.ctx
+          .getWebSockets(id)
           .map((ws) => tryCreateHibernatingWebSocketConnection(ws))
           .filter((connection): connection is HibernatingWebSocketConnection => {
             return connection !== null && connection.id === id && isOpenWebSocket(connection);
@@ -373,7 +364,7 @@ export function withHibernatingWebSockets<InitParams extends LifecycleInit>() {
       }
 
       protected *getHibernatingWebSockets(tag?: string): Iterable<HibernatingWebSocketConnection> {
-        for (const ws of this.getDurableObjectWebSockets(tag)) {
+        for (const ws of this.ctx.getWebSockets(tag)) {
           const connection = tryCreateHibernatingWebSocketConnection(ws);
           if (connection !== null && isOpenWebSocket(connection)) {
             yield connection;

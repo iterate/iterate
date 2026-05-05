@@ -157,7 +157,7 @@ Working note for the `apps/agents` processor redesign discussion. This is not co
     streamApi({ ctx, initParams }) {
       return createStreamApi({ ctx, streamPath: initParams.streamPath });
     },
-  })(withLifecycleHooks<Init>()(withDurableObjectCore(DurableObject)));
+  })(withLifecycleHooks<Init>()(DurableObject));
   ```
 
 - Public schemas/reducers should be ordinary TypeScript imports, not runtime dependency injection.

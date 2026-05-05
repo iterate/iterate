@@ -28,7 +28,7 @@ type OptionalFetchBase = {
  *
  * Benefit:
  *
- *   const Base = withKvInspector(...)(withOuterbase(...)(withDurableObjectCore(DurableObject)));
+ *   const Base = withKvInspector(...)(withOuterbase(...)(DurableObject));
  *   class Room extends Base<Env> {}
  *
  * The composed class remains generic in Env, statics from the wrapped class are

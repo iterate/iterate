@@ -11,7 +11,6 @@ import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
 import type { CallableContext } from "@iterate-com/shared/callable/types.ts";
 import type { ToolProviderDescriptor } from "@iterate-com/shared/codemode/types";
 import { withD1ObjectCatalog } from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
-import { withDurableObjectCore } from "@iterate-com/shared/durable-object-utils/mixins/with-durable-object-core";
 import { withLifecycleHooks } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { withKvInspector } from "@iterate-com/shared/durable-object-utils/mixins/with-kv-inspector";
 import { withOuterbase } from "@iterate-com/shared/durable-object-utils/mixins/with-outerbase";
@@ -59,7 +58,7 @@ const CodemodeSessionBase = withKvInspector({
           return params.streamPath;
         },
       },
-    })(withLifecycleHooks<CodemodeSessionInitParams>()(withDurableObjectCore(DurableObject))),
+    })(withLifecycleHooks<CodemodeSessionInitParams>()(DurableObject)),
   ),
 );
 
@@ -212,14 +211,13 @@ export class CodemodeSession extends CodemodeSessionBase<Env> {
 
   private readRegistry(): Record<string, ToolProviderDescriptor> {
     return (
-      this.getDurableObjectKv().get<Record<string, ToolProviderDescriptor>>(
-        TOOL_PROVIDER_REGISTRY_KEY,
-      ) ?? {}
+      this.ctx.storage.kv.get<Record<string, ToolProviderDescriptor>>(TOOL_PROVIDER_REGISTRY_KEY) ??
+      {}
     );
   }
 
   private writeRegistry(value: Record<string, ToolProviderDescriptor>) {
-    this.getDurableObjectKv().put(TOOL_PROVIDER_REGISTRY_KEY, value);
+    this.ctx.storage.kv.put(TOOL_PROVIDER_REGISTRY_KEY, value);
   }
 }
 

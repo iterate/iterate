@@ -95,6 +95,7 @@ export function withDurableObjectViews<
   return function <TBase extends DurableObjectClass>(
     Base: TBase & Constructor<HibernatingWebSocketsProtected>,
   ): WithDurableObjectViewsResult<TBase, Views> {
+    // See RuntimeDurableObjectConstructor docs for why this cast is needed to access protected ctx/env.
     const BaseWithWebSockets = Base as unknown as RuntimeDurableObjectConstructor &
       Constructor<HibernatingWebSocketsProtected>;
 

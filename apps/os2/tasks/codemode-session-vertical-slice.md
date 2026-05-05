@@ -20,12 +20,12 @@ worker.
 - DO name: derived from `{ projectId, streamPath }` using the lifecycle mixin helper
 - D1 catalog: existing OS2 D1 bound as `DO_CATALOG`
 - event app access: call events service directly for now
+- storage: mixins and domain methods use Cloudflare `this.ctx` directly
 
 ## Mixin Stack
 
 Use the shared durable object utils:
 
-- `withDurableObjectCore`
 - `withLifecycleHooks<CodemodeSessionInitParams>`
 - `withD1ObjectCatalog<CodemodeSessionInitParams, { DO_CATALOG: D1Database }>`
 - `withOuterbase`

@@ -26,7 +26,6 @@ import type {
   LifecycleHooksProtected,
   LifecycleInit,
 } from "./with-lifecycle-hooks.ts";
-import type { DurableObjectCoreProtected } from "./with-durable-object-core.ts";
 
 type RunnerContract<Contract> = {
   slug: string;
@@ -110,7 +109,6 @@ type WithStreamProcessorRunnerResult<
     ReqEnvOf<TBase>,
     MembersOf<TBase> &
       StreamProcessorRunnerProtected<Contract> &
-      DurableObjectCoreProtected &
       LifecycleHooksMembers<InitParams> &
       LifecycleHooksProtected<InitParams>
   > &
@@ -134,20 +132,13 @@ export function withStreamProcessorRunner<
 >(options: StreamProcessorRunnerOptions<InitParams, Env, Contract>) {
   return function <TBase extends DurableObjectClass>(
     Base: TBase &
-      Constructor<
-        DurableObjectCoreProtected &
-          LifecycleHooksMembers<InitParams> &
-          LifecycleHooksProtected<InitParams>
-      >,
+      Constructor<LifecycleHooksMembers<InitParams> & LifecycleHooksProtected<InitParams>>,
   ): WithStreamProcessorRunnerResult<TBase, InitParams, Contract> {
-    const BaseWithCore = Base as unknown as RuntimeDurableObjectConstructor &
-      Constructor<
-        DurableObjectCoreProtected &
-          LifecycleHooksMembers<InitParams> &
-          LifecycleHooksProtected<InitParams>
-      >;
+    // See RuntimeDurableObjectConstructor docs for why this cast is needed to access protected ctx/env.
+    const BaseWithLifecycle = Base as unknown as RuntimeDurableObjectConstructor &
+      Constructor<LifecycleHooksMembers<InitParams> & LifecycleHooksProtected<InitParams>>;
 
-    abstract class StreamProcessorRunnerMixin extends BaseWithCore {
+    abstract class StreamProcessorRunnerMixin extends BaseWithLifecycle {
       #streamProcessorRunnerProcessor: Processor<Contract> | undefined;
 
       protected async catchUpStreamProcessor(args?: {
@@ -227,7 +218,7 @@ export function withStreamProcessorRunner<
       private loadStreamProcessorStoredState(
         processor: Processor<Contract>,
       ): StoredProcessorState<Contract> {
-        const stored = this.getDurableObjectKv().get<unknown>(storageKey(processor));
+        const stored = this.ctx.storage.kv.get<unknown>(storageKey(processor));
         if (stored == null) {
           return createStoredProcessorState({ contract: processor.contract });
         }
@@ -239,7 +230,7 @@ export function withStreamProcessorRunner<
         processor: Processor<Contract>;
         storedState: StoredProcessorState<Contract>;
       }): void {
-        this.getDurableObjectKv().put(storageKey(args.processor), args.storedState);
+        this.ctx.storage.kv.put(storageKey(args.processor), args.storedState);
       }
 
       private streamProcessorRunnerProcessor(): Processor<Contract> {

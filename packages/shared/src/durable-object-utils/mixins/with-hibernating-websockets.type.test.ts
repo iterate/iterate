@@ -1,6 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
 import { describe, expectTypeOf, it } from "vitest";
-import { withDurableObjectCore } from "./with-durable-object-core.ts";
 import { withDurableObjectViews } from "./with-durable-object-views.ts";
 import type { HibernatingWebSocketConnection } from "./with-hibernating-websockets.ts";
 import { withHibernatingWebSockets } from "./with-hibernating-websockets.ts";
@@ -16,7 +15,7 @@ type Env = {
 };
 
 const WebSocketRoomBase = withHibernatingWebSockets<RoomInit>()(
-  withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject)),
+  withLifecycleHooks<RoomInit>()(DurableObject),
 );
 
 class WebSocketRoom extends WebSocketRoomBase<Env> {
@@ -78,7 +77,7 @@ describe("withHibernatingWebSockets types", () => {
   });
 
   it("requires lifecycle hooks below the websocket mixin", () => {
-    // @ts-expect-error withHibernatingWebSockets requires withLifecycleHooks() and withDurableObjectCore() below it.
+    // @ts-expect-error withHibernatingWebSockets requires withLifecycleHooks() below it.
     withHibernatingWebSockets<RoomInit>()(DurableObject);
   });
 });

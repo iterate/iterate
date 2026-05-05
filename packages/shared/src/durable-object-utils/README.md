@@ -4,7 +4,6 @@ Utilities here are experimental helpers for composing Cloudflare Durable Object 
 
 ## Current Scope
 
-- `mixins/with-durable-object-core.ts` is the root adapter for mixins that need Cloudflare's protected Durable Object `ctx` APIs. It exposes small protected capabilities for local SQLite, synchronous KV, and the single platform alarm slot.
 - `mixins/with-app-config.ts` parses typed app runtime config from `APP_CONFIG` / `APP_CONFIG_*` Cloudflare env vars and exposes it as protected `this.config`.
 - `mixins/with-lifecycle-hooks.ts` adds named initialization state and tiny lifecycle hooks for SQLite-backed Durable Objects.
 - `mixins/with-d1-object-catalog.ts` best-effort mirrors initialized objects into D1 tables owned by the mixin, with optional secondary indexes derived from init params.
@@ -46,7 +45,7 @@ const RoomBase = withD1ObjectCatalog<RoomInit, NeedsCatalog>({
       return params.ownerUserId;
     },
   },
-})(withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject)));
+})(withLifecycleHooks<RoomInit>()(DurableObject));
 
 export class Room extends RoomBase<Env> {}
 ```
@@ -59,24 +58,31 @@ static members visible in the right places.
 
 ## Type Shapes
 
-The bottom of most stacks should be `withDurableObjectCore(DurableObject)`.
-That core layer is intentionally tiny: it is the one reusable place where our
-mixins adapt Cloudflare's protected `ctx.storage` and alarm APIs into protected
-capabilities. Higher mixins consume those capabilities, similar to how the
-Cloudflare Agents SDK exposes `Agent.sql()` and `withVoice()` consumes `sql`
-instead of reaching into `ctx.storage.sql` itself.
+Mixins in this package use Cloudflare's real Durable Object runtime APIs
+directly: `this.ctx.storage.sql`, `this.ctx.storage.kv`, `this.ctx.id`,
+`this.ctx.acceptWebSocket()`, and so on. This is intentional. These utilities
+are Durable Object mixins, so hiding Cloudflare's Durable Object model behind
+invented storage wrapper names makes examples harder to understand.
+Cloudflare documents `ctx` as a `DurableObjectState` property on the base
+class, and storage access through `ctx.storage`:
+https://developers.cloudflare.com/durable-objects/api/base/#properties
+https://developers.cloudflare.com/durable-objects/api/state/#storage
 
-Core exposes both scoped callback helpers and raw protected handles. Prefer the
-callback helpers for one-off access:
+The TypeScript wrinkle is only in the implementation class. `ctx` and `env` are
+protected members on Cloudflare's `DurableObject`, and TypeScript treats
+protected members nominally. Mixin implementations therefore cast their generic
+base to `RuntimeDurableObjectConstructor` before extending it. That local cast
+is documented in `mixins/mixin-types.ts`; public result types still use
+`DurableObjectClass` so `class Room extends Base<Env> {}` remains valid after
+composition.
 
-```ts
-return this.useDurableObjectKv((kv) => Response.json(readKvEntries(kv)));
-```
-
-That keeps storage access inside the mixin method and lets plain helper
-functions operate on plain data. Use the raw protected handles only when a mixin
-owns durable schema/state and needs several related storage operations in one
-method, such as the scheduler or multiplexed alarm dispatcher.
+Storage namespace ownership is by convention for now. If a mixin owns SQLite
+tables or KV keys, use explicit names prefixed with the mixin name, such as
+`mixin_scheduler_schedules` or `__mixin_lifecycle_hooks.params.v1`. Cloudflare
+gives each Durable Object one platform alarm slot, so platform alarm ownership
+is stricter: `withMultiplexedAlarms()` owns `this.ctx.storage.setAlarm()` /
+`deleteAlarm()`, and higher-level mixins like `withScheduler()` layer on top of
+the multiplexer instead of arming the platform alarm directly.
 
 Use `withAppConfig(AppConfig)` when a Durable Object needs the same app runtime
 config shape as the worker entrypoint:
@@ -118,7 +124,7 @@ type WithSomeMixinResult<TBase> = TBase & Constructor<MembersAddedByTheMixin>;
 `DurableObject` class, keeping `TBase` in the return type keeps this valid:
 
 ```ts
-const Base = withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject));
+const Base = withLifecycleHooks<RoomInit>()(DurableObject);
 
 export class Room extends Base<Env> {}
 ```
@@ -152,7 +158,7 @@ const Base = withD1ObjectCatalog<RoomInit, NeedsCatalog>({
   getDatabase(env) {
     return env.DO_CATALOG;
   },
-})(withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject)));
+})(withLifecycleHooks<RoomInit>()(DurableObject));
 
 class Room extends Base<Env> {} // ok: Env has DO_CATALOG
 
@@ -197,7 +203,7 @@ const AgentProcessorBase = withStreamProcessorRunner<
       props: { streamPath: args.initParams.streamPath },
     }) as ProcessorStreamApi<typeof AgentProcessorContract>;
   },
-})(withLifecycleHooks<AgentProcessorInit>()(withDurableObjectCore(DurableObject)));
+})(withLifecycleHooks<AgentProcessorInit>()(DurableObject));
 
 class AgentProcessorDO extends AgentProcessorBase<Env> {
   async catchUp() {
@@ -363,11 +369,7 @@ The public route proxy strips the Durable Object prefix and forwards
 ```ts
 const RoomBase = withPublicFetchRoute({
   namespaceSlug: "rooms",
-})(
-  withHibernatingWebSockets<RoomInit>()(
-    withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject)),
-  ),
-);
+})(withHibernatingWebSockets<RoomInit>()(withLifecycleHooks<RoomInit>()(DurableObject)));
 
 class Room extends RoomBase<Env> {
   protected getHibernatingWebSocketTags(
@@ -448,19 +450,15 @@ const RoomBase = withDurableObjectViews<{ room: RoomView }, RoomViewHost>({
       return room.getRoomView();
     },
   },
-})(
-  withHibernatingWebSockets<RoomInit>()(
-    withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject)),
-  ),
-);
+})(withHibernatingWebSockets<RoomInit>()(withLifecycleHooks<RoomInit>()(DurableObject)));
 
 class Room extends RoomBase<Env> implements RoomViewHost {
   getRoomView(): RoomView {
-    return this.useDurableObjectSql((sql) => readRoomView(sql));
+    return this.readRoomView();
   }
 
   async renameRoom(name: string) {
-    this.useDurableObjectSql((sql) => renameRoom(sql, name));
+    this.renameRoomInStorage(name);
     await this.broadcastDurableObjectView("room");
   }
 }
@@ -497,7 +495,7 @@ public Worker route while still owning its own internal `fetch()` paths:
 const ProjectBase = withPublicFetchRoute({
   namespaceSlug: "projects",
   defaultAddressing: "by-name",
-})(withLifecycleHooks<ProjectInit>()(withDurableObjectCore(DurableObject)));
+})(withLifecycleHooks<ProjectInit>()(DurableObject));
 
 export class Project extends ProjectBase<Env> {
   async fetch(request: Request) {
@@ -649,7 +647,7 @@ const CatalogedRoomBase = withD1ObjectCatalog<RoomInit, NeedsCatalog>({
       return params.ownerUserId;
     },
   },
-})(withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject)));
+})(withLifecycleHooks<RoomInit>()(DurableObject));
 ```
 
 The D1 write is best-effort and idempotent. The mixin sends
@@ -730,9 +728,7 @@ type RoomInit = {
   ownerUserId: string;
 };
 
-const RoomBase = withMultiplexedAlarms<RoomInit>()(
-  withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject)),
-);
+const RoomBase = withMultiplexedAlarms<RoomInit>()(withLifecycleHooks<RoomInit>()(DurableObject));
 
 class Room extends RoomBase<Env> {
   async scheduleSummary() {
@@ -793,9 +789,7 @@ retry metadata.
 
 ```ts
 const RoomBase = withScheduler<RoomInit>()(
-  withMultiplexedAlarms<RoomInit>()(
-    withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject)),
-  ),
+  withMultiplexedAlarms<RoomInit>()(withLifecycleHooks<RoomInit>()(DurableObject)),
 );
 
 class Room extends RoomBase<Env> {
@@ -929,9 +923,7 @@ type Env = {
 };
 
 const DiscordBase = withScheduler<DiscordInit>()(
-  withMultiplexedAlarms<DiscordInit>()(
-    withLifecycleHooks<DiscordInit>()(withDurableObjectCore(DurableObject)),
-  ),
+  withMultiplexedAlarms<DiscordInit>()(withLifecycleHooks<DiscordInit>()(DurableObject)),
 );
 
 export class DiscordConnection extends DiscordBase<Env> {
@@ -1052,7 +1044,7 @@ const InspectorBase = withKvInspector({
 })(
   withOuterbase({
     unsafe: "I_UNDERSTAND_THIS_EXPOSES_SQL",
-  })(withDurableObjectCore(DurableObject)),
+  })(DurableObject),
 );
 ```
 

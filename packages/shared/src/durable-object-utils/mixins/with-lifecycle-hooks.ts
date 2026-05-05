@@ -4,12 +4,11 @@ import { dequal } from "dequal/lite";
 import type {
   Constructor,
   DurableObjectClass,
-  DurableObjectConstructor,
   MembersOf,
   ReqEnvOf,
+  RuntimeDurableObjectConstructor,
   StaticSide,
 } from "./mixin-types.ts";
-import type { DurableObjectCoreProtected } from "./with-durable-object-core.ts";
 
 export type LifecycleInit = {
   /**
@@ -124,13 +123,8 @@ export abstract class LifecycleHooksProtected<InitParams extends LifecycleInit> 
 type WithLifecycleHooksResult<TBase extends DurableObjectClass, InitParams extends LifecycleInit> =
   // Preserve the generic Durable Object constructor so this remains legal:
   //
-  //   const RoomBase = withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject));
+  //   const RoomBase = withLifecycleHooks<RoomInit>()(DurableObject);
   //   class Room extends RoomBase<Env> {}
-  //
-  // The lifecycle mixin consumes the protected core capabilities instead of
-  // reaching into Cloudflare's `ctx` directly. That mirrors the Agents SDK
-  // layering where `Agent` adapts `ctx.storage.sql` and feature mixins consume
-  // the exposed capability.
   StaticSide<TBase> &
     DurableObjectClass<
       ReqEnvOf<TBase>,
@@ -142,7 +136,7 @@ type WithLifecycleHooksResult<TBase extends DurableObjectClass, InitParams exten
     //
     // Benefit:
     //
-    //   const RoomBase = withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject));
+    //   const RoomBase = withLifecycleHooks<RoomInit>()(DurableObject);
     //   class Room extends RoomBase<Env> {
     //     send() { return this.initParams.ownerUserId; } // typed
     //   }
@@ -192,15 +186,13 @@ export class InitializeParamsMismatchError extends Error {
  */
 export function withLifecycleHooks<InitParams extends LifecycleInit>() {
   return function <TBase extends DurableObjectClass>(
-    Base: TBase & Constructor<DurableObjectCoreProtected>,
+    Base: TBase,
   ): WithLifecycleHooksResult<TBase, InitParams> {
-    const BaseWithCore = Base as unknown as DurableObjectConstructor<
-      unknown,
-      DurableObjectCoreProtected
-    >;
+    // See RuntimeDurableObjectConstructor docs for why this cast is needed to access protected ctx/env.
+    const BaseWithDurableObject = Base as unknown as RuntimeDurableObjectConstructor;
 
     abstract class LifecycleHooksMixin
-      extends BaseWithCore
+      extends BaseWithDurableObject
       implements LifecycleHooksMembers<InitParams>
     {
       #initParams: InitParams | undefined;
@@ -210,15 +202,15 @@ export function withLifecycleHooks<InitParams extends LifecycleInit>() {
       #instanceWakePromise: Promise<InitParams> | undefined;
       #runningLifecycleHooks = false;
 
-      constructor(...args: any[]) {
-        super(...args);
+      constructor(ctx: DurableObjectState, env: unknown) {
+        super(ctx, env);
 
         // This utility is intentionally for SQLite-backed Durable Objects.
         // Their synchronous KV API lets us hydrate cached init params during
         // construction without `blockConcurrencyWhile`, because no async storage
         // call is needed before requests can run.
         // https://developers.cloudflare.com/durable-objects/api/storage-api/#synchronous-kv-api
-        this.#initParams = this.getDurableObjectKv().get<InitParams>(LIFECYCLE_PARAMS_STORAGE_KEY);
+        this.#initParams = this.ctx.storage.kv.get<InitParams>(LIFECYCLE_PARAMS_STORAGE_KEY);
       }
 
       /**
@@ -277,13 +269,13 @@ export function withLifecycleHooks<InitParams extends LifecycleInit>() {
         // Miniflare tests exercise this same path, including the mismatch
         // branch, so we keep the production invariant instead of accepting an
         // unverifiable name when the runtime does not provide one.
-        const objectName = this.getDurableObjectName();
+        const objectName = this.ctx.id.name;
 
         if (objectName !== params.name) {
           throw new InitializeNameMismatchError(params.name, objectName);
         }
 
-        const existing = this.getDurableObjectKv().get<InitParams>(LIFECYCLE_PARAMS_STORAGE_KEY);
+        const existing = this.ctx.storage.kv.get<InitParams>(LIFECYCLE_PARAMS_STORAGE_KEY);
 
         if (existing !== undefined) {
           // Repeated initialization is allowed only when the full params match.
@@ -298,7 +290,7 @@ export function withLifecycleHooks<InitParams extends LifecycleInit>() {
           return await this.ensureStarted();
         }
 
-        this.getDurableObjectKv().put(LIFECYCLE_PARAMS_STORAGE_KEY, params);
+        this.ctx.storage.kv.put(LIFECYCLE_PARAMS_STORAGE_KEY, params);
         this.#initParams = params;
 
         return await this.ensureStarted();
@@ -337,20 +329,20 @@ export function withLifecycleHooks<InitParams extends LifecycleInit>() {
           let hasStartupError = false;
           let startupError: unknown;
 
-          await this.blockDurableObjectConcurrencyWhile(async () => {
+          await this.ctx.blockConcurrencyWhile(async () => {
             try {
               this.#runningLifecycleHooks = true;
               initialized = this.assertInitialized();
 
               const firstInitializeDone =
-                this.getDurableObjectKv().get<boolean>(FIRST_INITIALIZE_DONE_STORAGE_KEY) ?? false;
+                this.ctx.storage.kv.get<boolean>(FIRST_INITIALIZE_DONE_STORAGE_KEY) ?? false;
 
               if (!firstInitializeDone) {
                 for (const fn of this.#firstInitializeHooks) {
                   await fn.call(this, initialized);
                 }
 
-                this.getDurableObjectKv().put(FIRST_INITIALIZE_DONE_STORAGE_KEY, true);
+                this.ctx.storage.kv.put(FIRST_INITIALIZE_DONE_STORAGE_KEY, true);
               }
 
               for (const fn of this.#instanceWakeHooks) {

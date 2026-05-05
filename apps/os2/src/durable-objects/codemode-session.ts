@@ -7,7 +7,6 @@ import {
 import type { CallableContext } from "@iterate-com/shared/callable/types.ts";
 import { ToolProviderDescriptor } from "@iterate-com/shared/codemode/types";
 import { withD1ObjectCatalog } from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
-import { withDurableObjectCore } from "@iterate-com/shared/durable-object-utils/mixins/with-durable-object-core";
 import { withKvInspector } from "@iterate-com/shared/durable-object-utils/mixins/with-kv-inspector";
 import { withLifecycleHooks } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { withOuterbase } from "@iterate-com/shared/durable-object-utils/mixins/with-outerbase";
@@ -64,7 +63,7 @@ const CodemodeSessionLifecycleBase = withD1ObjectCatalog<
     projectId: (params) => params.projectId,
     streamPath: (params) => params.streamPath,
   },
-})(withLifecycleHooks<CodemodeSessionInitParams>()(withDurableObjectCore(DurableObject)));
+})(withLifecycleHooks<CodemodeSessionInitParams>()(DurableObject));
 
 const CodemodeSessionWithOuterbase = withOuterbase({
   unsafe: "I_UNDERSTAND_THIS_EXPOSES_SQL",
@@ -294,14 +293,14 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
 
   private readToolProviderRegistry() {
     return (
-      this.getDurableObjectKv().get<Record<string, ToolProviderDescriptor>>(
+      this.ctx.storage.kv.get<Record<string, ToolProviderDescriptor>>(
         TOOL_PROVIDER_REGISTRY_STORAGE_KEY,
       ) ?? {}
     );
   }
 
   private writeToolProviderRegistry(registry: Record<string, ToolProviderDescriptor>) {
-    this.getDurableObjectKv().put(TOOL_PROVIDER_REGISTRY_STORAGE_KEY, registry);
+    this.ctx.storage.kv.put(TOOL_PROVIDER_REGISTRY_STORAGE_KEY, registry);
   }
 
   private applyAppendedEventToSessionState(input: EventInput) {

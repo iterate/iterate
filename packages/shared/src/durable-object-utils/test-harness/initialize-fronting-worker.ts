@@ -17,7 +17,6 @@ import {
   listD1ObjectCatalogRecordsByIndex,
   withD1ObjectCatalog,
 } from "../mixins/with-d1-object-catalog.ts";
-import { withDurableObjectCore } from "../mixins/with-durable-object-core.ts";
 import { withDurableObjectViews } from "../mixins/with-durable-object-views.ts";
 import type {
   HibernatingWebSocketConnection,
@@ -71,9 +70,7 @@ type Env = {
   APP_CONFIG_FEATURE__ENABLED?: string;
 };
 
-const DurableObjectCore = withDurableObjectCore(DurableObject);
-
-const RoomBase = withLifecycleHooks<RoomInit>()(DurableObjectCore);
+const RoomBase = withLifecycleHooks<RoomInit>()(DurableObject);
 
 export class InitializeTestRoom extends RoomBase<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
@@ -198,7 +195,7 @@ export class InitializeTestRoom extends RoomBase<Env> {
 const PublicRouteRoomBase = withPublicFetchRoute({
   namespaceSlug: "public-route-rooms",
   defaultAddressing: "by-init-params",
-})(withLifecycleHooks<RoomInit>()(DurableObjectCore));
+})(withLifecycleHooks<RoomInit>()(DurableObject));
 
 export class PublicRouteTestRoom extends PublicRouteRoomBase<Env> {
   async fetch(request: Request): Promise<Response> {
@@ -220,7 +217,7 @@ export class PublicRouteTestRoom extends PublicRouteRoomBase<Env> {
   }
 
   getIdStringForTest(): string {
-    return this.getDurableObjectId().toString();
+    return this.ctx.id.toString();
   }
 
   getInitParamsForTest(): RoomInit {
@@ -258,7 +255,7 @@ type HibernatingWebSocketHookState = {
 };
 
 const HibernatingWebSocketRoomBase = withHibernatingWebSockets<RoomInit>()(
-  withLifecycleHooks<RoomInit>()(DurableObjectCore),
+  withLifecycleHooks<RoomInit>()(DurableObject),
 );
 
 export class HibernatingWebSocketTestRoom extends HibernatingWebSocketRoomBase<Env> {
@@ -397,7 +394,7 @@ const DurableObjectViewRoomBase = withPublicFetchRoute({
         return room.getCounterViewForTest();
       },
     },
-  })(withHibernatingWebSockets<RoomInit>()(withLifecycleHooks<RoomInit>()(DurableObjectCore))),
+  })(withHibernatingWebSockets<RoomInit>()(withLifecycleHooks<RoomInit>()(DurableObject))),
 );
 
 export class DurableObjectViewTestRoom
@@ -439,7 +436,7 @@ const ListedRoomBase = withD1ObjectCatalog<RoomInit, Env>({
       return params.ownerUserId;
     },
   },
-})(withLifecycleHooks<RoomInit>()(DurableObjectCore));
+})(withLifecycleHooks<RoomInit>()(DurableObject));
 
 export class ListedRoom extends ListedRoomBase<Env> {
   getInitParams(): RoomInit {
@@ -448,7 +445,7 @@ export class ListedRoom extends ListedRoomBase<Env> {
 }
 
 const AlarmRoomBase = withMultiplexedAlarms<RoomInit>()(
-  withLifecycleHooks<RoomInit>()(DurableObjectCore),
+  withLifecycleHooks<RoomInit>()(DurableObject),
 );
 
 export class AlarmTestRoom extends AlarmRoomBase<Env> {
@@ -597,7 +594,7 @@ export class AlarmTestRoom extends AlarmRoomBase<Env> {
   }
 }
 
-const AlarmForwardingLifecycleBase = withLifecycleHooks<RoomInit>()(DurableObjectCore);
+const AlarmForwardingLifecycleBase = withLifecycleHooks<RoomInit>()(DurableObject);
 
 class AlarmForwardingRoot<FinalEnv> extends AlarmForwardingLifecycleBase<FinalEnv> {
   async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
@@ -628,7 +625,7 @@ export class AlarmForwardingTestRoom extends AlarmForwardingRoomBase<Env> {
 }
 
 const SchedulerRoomBase = withScheduler<RoomInit>()(
-  withMultiplexedAlarms<RoomInit>()(withLifecycleHooks<RoomInit>()(DurableObjectCore)),
+  withMultiplexedAlarms<RoomInit>()(withLifecycleHooks<RoomInit>()(DurableObject)),
 );
 
 export class SchedulerTestRoom extends SchedulerRoomBase<Env> {
@@ -861,7 +858,7 @@ const InspectorBase = withKvInspector({
 })(
   withOuterbase({
     unsafe: "I_UNDERSTAND_THIS_EXPOSES_SQL",
-  })(DurableObjectCore),
+  })(DurableObject),
 );
 
 export class InspectorTestRoom extends InspectorBase<Env> {
@@ -908,7 +905,7 @@ const TestAppConfig = z.object({
 
 type TestAppConfig = z.output<typeof TestAppConfig>;
 
-const AppConfigRoomBase = withAppConfig(TestAppConfig)(DurableObjectCore);
+const AppConfigRoomBase = withAppConfig(TestAppConfig)(DurableObject);
 
 export class AppConfigTestRoom extends AppConfigRoomBase<Env> {
   getConfigForTest(): TestAppConfig {

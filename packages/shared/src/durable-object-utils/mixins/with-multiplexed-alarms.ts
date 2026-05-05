@@ -9,12 +9,11 @@ import { stringifyJsonPayload } from "./json-payload.ts";
 import type {
   Constructor,
   DurableObjectClass,
-  DurableObjectConstructor,
   MembersOf,
   ReqEnvOf,
+  RuntimeDurableObjectConstructor,
   StaticSide,
 } from "./mixin-types.ts";
-import type { DurableObjectCoreProtected } from "./with-durable-object-core.ts";
 
 const MULTIPLEXED_ALARMS_TABLE = "mixin_multiplexed_alarms";
 const MAX_DUE_ALARMS_PER_TICK = 50;
@@ -155,31 +154,24 @@ export class MissingMultiplexedAlarmMethodError extends Error {
 export function withMultiplexedAlarms<InitParams extends LifecycleInit>() {
   return function <TBase extends DurableObjectClass>(
     Base: TBase &
-      Constructor<
-        DurableObjectCoreProtected &
-          LifecycleHooksMembers<InitParams> &
-          LifecycleHooksProtected<InitParams>
-      >,
+      Constructor<LifecycleHooksMembers<InitParams> & LifecycleHooksProtected<InitParams>>,
   ): WithMultiplexedAlarmsResult<TBase> {
-    const BaseWithCapabilities = Base as unknown as DurableObjectConstructor<
-      unknown,
-      DurableObjectCoreProtected &
-        LifecycleHooksMembers<InitParams> &
-        LifecycleHooksProtected<InitParams>
-    >;
+    // See RuntimeDurableObjectConstructor docs for why this cast is needed to access protected ctx/env.
+    const BaseWithCapabilities = Base as unknown as RuntimeDurableObjectConstructor &
+      Constructor<LifecycleHooksMembers<InitParams> & LifecycleHooksProtected<InitParams>>;
 
     abstract class MultiplexedAlarmsMixin
       extends BaseWithCapabilities
       implements MultiplexedAlarmsMembers
     {
-      constructor(...args: any[]) {
-        super(...args);
+      constructor(ctx: DurableObjectState, env: unknown) {
+        super(ctx, env);
 
         // This is local SQLite-backed Durable Object storage, not D1. These
         // schema calls are synchronous and do not yield the event loop, so the
         // constructor only creates the tiny local table needed to multiplex the
         // single Cloudflare alarm slot.
-        this.getDurableObjectSql().exec(`CREATE TABLE IF NOT EXISTS ${MULTIPLEXED_ALARMS_TABLE} (
+        this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS ${MULTIPLEXED_ALARMS_TABLE} (
           key TEXT PRIMARY KEY,
           method TEXT NOT NULL,
           payload_json TEXT NOT NULL,
@@ -187,14 +179,14 @@ export function withMultiplexedAlarms<InitParams extends LifecycleInit>() {
           created_at_ms INTEGER NOT NULL,
           updated_at_ms INTEGER NOT NULL
         )`);
-        this.getDurableObjectSql().exec(`CREATE INDEX IF NOT EXISTS mixin_multiplexed_alarms_run_at
+        this.ctx.storage.sql.exec(`CREATE INDEX IF NOT EXISTS mixin_multiplexed_alarms_run_at
           ON ${MULTIPLEXED_ALARMS_TABLE} (run_at_ms)`);
 
         this.registerOnInstanceWake(() => this.armNextMultiplexedAlarm());
       }
 
       getMultiplexedAlarms(): MultiplexedAlarmRecord[] {
-        return this.getDurableObjectSql()
+        return this.ctx.storage.sql
           .exec<MultiplexedAlarmRow>(
             `SELECT key, method, payload_json, run_at_ms, created_at_ms, updated_at_ms
              FROM ${MULTIPLEXED_ALARMS_TABLE}
@@ -222,7 +214,7 @@ export function withMultiplexedAlarms<InitParams extends LifecycleInit>() {
 
         this.getMultiplexedAlarmMethod(input.key, input.method);
 
-        this.getDurableObjectSql().exec(
+        this.ctx.storage.sql.exec(
           `INSERT INTO ${MULTIPLEXED_ALARMS_TABLE}
             (key, method, payload_json, run_at_ms, created_at_ms, updated_at_ms)
            VALUES (?, ?, ?, ?, ?, ?)
@@ -245,7 +237,7 @@ export function withMultiplexedAlarms<InitParams extends LifecycleInit>() {
       protected async cancelMultiplexedAlarm(key: string): Promise<boolean> {
         await this.ensureStarted();
 
-        const existing = this.getDurableObjectSql()
+        const existing = this.ctx.storage.sql
           .exec<{ key: string }>(
             `SELECT key FROM ${MULTIPLEXED_ALARMS_TABLE} WHERE key = ? LIMIT 1`,
             key,
@@ -256,10 +248,7 @@ export function withMultiplexedAlarms<InitParams extends LifecycleInit>() {
           return false;
         }
 
-        this.getDurableObjectSql().exec(
-          `DELETE FROM ${MULTIPLEXED_ALARMS_TABLE} WHERE key = ?`,
-          key,
-        );
+        this.ctx.storage.sql.exec(`DELETE FROM ${MULTIPLEXED_ALARMS_TABLE} WHERE key = ?`, key);
         await this.armNextMultiplexedAlarm();
 
         return true;
@@ -297,7 +286,7 @@ export function withMultiplexedAlarms<InitParams extends LifecycleInit>() {
 
       private async runDueMultiplexedAlarms(): Promise<void> {
         const nowMs = Date.now();
-        const rows = this.getDurableObjectSql()
+        const rows = this.ctx.storage.sql
           .exec<MultiplexedAlarmRow>(
             `SELECT key, method, payload_json, run_at_ms, created_at_ms, updated_at_ms
              FROM ${MULTIPLEXED_ALARMS_TABLE}
@@ -322,7 +311,7 @@ export function withMultiplexedAlarms<InitParams extends LifecycleInit>() {
           // the old callback returns. Match the full persisted snapshot we
           // dispatched instead. If the row changed, zero rows are deleted and the
           // replacement remains the owner of this key.
-          this.getDurableObjectSql().exec(
+          this.ctx.storage.sql.exec(
             `DELETE FROM ${MULTIPLEXED_ALARMS_TABLE}
              WHERE key = ?
                AND method = ?
@@ -353,7 +342,7 @@ export function withMultiplexedAlarms<InitParams extends LifecycleInit>() {
       }
 
       private async armNextMultiplexedAlarm(): Promise<void> {
-        const next = this.getDurableObjectSql()
+        const next = this.ctx.storage.sql
           .exec<{ run_at_ms: number }>(
             `SELECT run_at_ms FROM ${MULTIPLEXED_ALARMS_TABLE}
              ORDER BY run_at_ms ASC, key ASC
@@ -362,7 +351,7 @@ export function withMultiplexedAlarms<InitParams extends LifecycleInit>() {
           .toArray()[0];
 
         if (next === undefined) {
-          await this.deleteDurableObjectAlarm();
+          await this.ctx.storage.deleteAlarm();
           return;
         }
 
@@ -379,7 +368,7 @@ export function withMultiplexedAlarms<InitParams extends LifecycleInit>() {
         // this method re-arms another checkpoint until the real due time arrives.
         // Cloudflare Agents documents the same 30-day ceiling for schedules.
         // https://developers.cloudflare.com/agents/api-reference/schedule-tasks/
-        await this.setDurableObjectAlarm(
+        await this.ctx.storage.setAlarm(
           Math.min(Math.max(next.run_at_ms, nowMs), nowMs + MAX_PLATFORM_ALARM_DELAY_MS),
         );
       }

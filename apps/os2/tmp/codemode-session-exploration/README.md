@@ -11,7 +11,6 @@ specific enough to critique when Jonas is back.
 - `CodemodeSession` is a Durable Object in a tiny dedicated worker.
 - The main OS2 worker invokes it through a `CODEMODE_SESSION` namespace binding.
 - The Durable Object uses the shared mixin stack:
-  - `withDurableObjectCore`
   - `withLifecycleHooks`
   - `withD1ObjectCatalog`
   - `withOuterbase`

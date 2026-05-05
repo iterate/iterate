@@ -15,12 +15,11 @@ import { stringifyJsonPayload } from "./json-payload.ts";
 import type {
   Constructor,
   DurableObjectClass,
-  DurableObjectConstructor,
   MembersOf,
   ReqEnvOf,
+  RuntimeDurableObjectConstructor,
   StaticSide,
 } from "./mixin-types.ts";
-import type { DurableObjectCoreProtected } from "./with-durable-object-core.ts";
 
 const SCHEDULER_TABLE = "mixin_scheduler_schedules";
 const DEFAULT_HUNG_SCHEDULE_TIMEOUT_MS = 30_000;
@@ -236,32 +235,31 @@ export function withScheduler<InitParams extends LifecycleInit>(options?: {
   return function <TBase extends DurableObjectClass>(
     Base: TBase &
       Constructor<
-        DurableObjectCoreProtected &
-          LifecycleHooksMembers<InitParams> &
+        LifecycleHooksMembers<InitParams> &
           LifecycleHooksProtected<InitParams> &
           MultiplexedAlarmsMembers &
           MultiplexedAlarmsProtected
       >,
   ): WithSchedulerResult<TBase> {
-    const BaseWithCapabilities = Base as unknown as DurableObjectConstructor<
-      unknown,
-      DurableObjectCoreProtected &
+    // See RuntimeDurableObjectConstructor docs for why this cast is needed to access protected ctx/env.
+    const BaseWithCapabilities = Base as unknown as RuntimeDurableObjectConstructor &
+      Constructor<
         LifecycleHooksMembers<InitParams> &
-        LifecycleHooksProtected<InitParams> &
-        MultiplexedAlarmsMembers &
-        MultiplexedAlarmsProtected
-    >;
+          LifecycleHooksProtected<InitParams> &
+          MultiplexedAlarmsMembers &
+          MultiplexedAlarmsProtected
+      >;
 
     abstract class SchedulerMixin extends BaseWithCapabilities implements SchedulerMembers {
       readonly #hungScheduleTimeoutMs =
         options?.hungScheduleTimeoutMs ?? DEFAULT_HUNG_SCHEDULE_TIMEOUT_MS;
 
-      constructor(...args: any[]) {
-        super(...args);
+      constructor(ctx: DurableObjectState, env: unknown) {
+        super(ctx, env);
 
         // Local SQLite only. This table stores schedule metadata; the actual
         // wakeup row lives in `mixin_multiplexed_alarms`.
-        this.getDurableObjectSql().exec(`CREATE TABLE IF NOT EXISTS ${SCHEDULER_TABLE} (
+        this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS ${SCHEDULER_TABLE} (
           key TEXT PRIMARY KEY,
           method TEXT NOT NULL,
           payload_json TEXT NOT NULL,
@@ -272,15 +270,14 @@ export function withScheduler<InitParams extends LifecycleInit>(options?: {
           created_at_ms INTEGER NOT NULL,
           updated_at_ms INTEGER NOT NULL
         )`);
-        this.getDurableObjectSql()
-          .exec(`CREATE INDEX IF NOT EXISTS mixin_scheduler_schedules_next_run_at
+        this.ctx.storage.sql.exec(`CREATE INDEX IF NOT EXISTS mixin_scheduler_schedules_next_run_at
           ON ${SCHEDULER_TABLE} (next_run_at_ms)`);
 
         this.registerOnInstanceWake(() => this.armSchedulerRows());
       }
 
       getSchedule(key: string): SchedulerRecord | null {
-        const row = this.getDurableObjectSql()
+        const row = this.ctx.storage.sql
           .exec<SchedulerRow>(
             `SELECT key, method, payload_json, recurrence_json, next_run_at_ms,
                     running, execution_started_at_ms, created_at_ms, updated_at_ms
@@ -295,7 +292,7 @@ export function withScheduler<InitParams extends LifecycleInit>(options?: {
       }
 
       getSchedules(criteria: { type?: StoredSchedulerRecurrence["type"] } = {}): SchedulerRecord[] {
-        return this.getDurableObjectSql()
+        return this.ctx.storage.sql
           .exec<SchedulerRow>(
             `SELECT key, method, payload_json, recurrence_json, next_run_at_ms,
                     running, execution_started_at_ms, created_at_ms, updated_at_ms
@@ -337,7 +334,7 @@ export function withScheduler<InitParams extends LifecycleInit>(options?: {
           );
         }
 
-        this.getDurableObjectSql().exec(
+        this.ctx.storage.sql.exec(
           `INSERT INTO ${SCHEDULER_TABLE}
             (key, method, payload_json, recurrence_json, next_run_at_ms, running,
              execution_started_at_ms, created_at_ms, updated_at_ms)
@@ -387,7 +384,7 @@ export function withScheduler<InitParams extends LifecycleInit>(options?: {
           return false;
         }
 
-        this.getDurableObjectSql().exec(`DELETE FROM ${SCHEDULER_TABLE} WHERE key = ?`, key);
+        this.ctx.storage.sql.exec(`DELETE FROM ${SCHEDULER_TABLE} WHERE key = ?`, key);
         await this.cancelMultiplexedAlarm(schedulerAlarmKey(existing.key, existing.next_run_at_ms));
 
         return true;
@@ -422,7 +419,7 @@ export function withScheduler<InitParams extends LifecycleInit>(options?: {
         }
 
         if (isRecurring) {
-          this.getDurableObjectSql().exec(
+          this.ctx.storage.sql.exec(
             `UPDATE ${SCHEDULER_TABLE}
              SET running = 1, execution_started_at_ms = ?
              WHERE key = ?`,
@@ -460,7 +457,7 @@ export function withScheduler<InitParams extends LifecycleInit>(options?: {
         // callback completes. Match the exact row snapshot instead. If anything
         // about the row changed during the await, this delete affects zero rows
         // and the newer schedule remains intact.
-        this.getDurableObjectSql().exec(
+        this.ctx.storage.sql.exec(
           `DELETE FROM ${SCHEDULER_TABLE}
            WHERE key = ?
              AND method = ?
@@ -478,7 +475,7 @@ export function withScheduler<InitParams extends LifecycleInit>(options?: {
       }
 
       private getSchedulerRow(key: string): SchedulerRow | undefined {
-        return this.getDurableObjectSql()
+        return this.ctx.storage.sql
           .exec<SchedulerRow>(
             `SELECT key, method, payload_json, recurrence_json, next_run_at_ms,
                     running, execution_started_at_ms, created_at_ms, updated_at_ms
@@ -527,7 +524,7 @@ export function withScheduler<InitParams extends LifecycleInit>(options?: {
           // and already has its own backing multiplexed alarm. Match the exact
           // row snapshot we started from so final-occurrence cleanup only deletes
           // the old row, never the replacement.
-          const deleteCursor = this.getDurableObjectSql().exec(
+          const deleteCursor = this.ctx.storage.sql.exec(
             `DELETE FROM ${SCHEDULER_TABLE}
              WHERE key = ?
                AND method = ?
@@ -562,7 +559,7 @@ export function withScheduler<InitParams extends LifecycleInit>(options?: {
         // Match the exact row snapshot instead; zero rows written means the
         // callback deliberately changed the schedule and the replacement has
         // already armed its own multiplexed alarm.
-        const updateCursor = this.getDurableObjectSql().exec(
+        const updateCursor = this.ctx.storage.sql.exec(
           `UPDATE ${SCHEDULER_TABLE}
            SET next_run_at_ms = ?, running = 0, execution_started_at_ms = NULL, updated_at_ms = ?
            WHERE key = ?
@@ -608,7 +605,7 @@ export function withScheduler<InitParams extends LifecycleInit>(options?: {
         // recovery depend on the recurrence cadence. A daily schedule would wait
         // a day to notice that a 30-second timeout expired. The checkpoint keeps
         // overlap prevention and hung recovery separate.
-        this.getDurableObjectSql().exec(
+        this.ctx.storage.sql.exec(
           `UPDATE ${SCHEDULER_TABLE}
            SET next_run_at_ms = ?, updated_at_ms = ?
            WHERE key = ?`,
@@ -629,7 +626,7 @@ export function withScheduler<InitParams extends LifecycleInit>(options?: {
       }
 
       private async armSchedulerRows(): Promise<void> {
-        const rows = this.getDurableObjectSql()
+        const rows = this.ctx.storage.sql
           .exec<SchedulerRow>(
             `SELECT key, method, payload_json, recurrence_json, next_run_at_ms,
                     running, execution_started_at_ms, created_at_ms, updated_at_ms

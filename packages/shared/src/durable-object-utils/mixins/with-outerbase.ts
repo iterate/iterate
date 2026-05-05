@@ -6,8 +6,6 @@ import {
   type RuntimeDurableObjectConstructor,
   type WithFetchMixinResult,
 } from "./fetch-mixin-utils.ts";
-import type { Constructor } from "./mixin-types.ts";
-import type { DurableObjectCoreProtected } from "./with-durable-object-core.ts";
 
 type WithOuterbaseResult<TBase extends DurableObjectClass> = WithFetchMixinResult<TBase>;
 
@@ -30,13 +28,11 @@ type WithOuterbaseResult<TBase extends DurableObjectClass> = WithFetchMixinResul
 export function withOuterbase(options: { unsafe: "I_UNDERSTAND_THIS_EXPOSES_SQL" }) {
   void options;
 
-  return function <TBase extends DurableObjectClass>(
-    Base: TBase & Constructor<DurableObjectCoreProtected>,
-  ): WithOuterbaseResult<TBase> {
-    const BaseWithCore = Base as unknown as RuntimeDurableObjectConstructor &
-      Constructor<DurableObjectCoreProtected>;
+  return function <TBase extends DurableObjectClass>(Base: TBase): WithOuterbaseResult<TBase> {
+    // See RuntimeDurableObjectConstructor docs for why this cast is needed to access protected ctx/env.
+    const BaseWithDurableObject = Base as unknown as RuntimeDurableObjectConstructor;
 
-    abstract class OuterbaseMixin extends BaseWithCore {
+    abstract class OuterbaseMixin extends BaseWithDurableObject {
       async fetch(request: Request) {
         const url = new URL(request.url);
 
@@ -48,8 +44,10 @@ export function withOuterbase(options: { unsafe: "I_UNDERSTAND_THIS_EXPOSES_SQL"
         }
 
         if (url.pathname === "/__outerbase/sql") {
-          return this.useDurableObjectSql((sql) =>
-            handleOuterbaseSql(sql, (closure) => this.transactionSync(closure), request),
+          return await handleOuterbaseSql(
+            this.ctx.storage.sql,
+            (closure) => this.ctx.storage.transactionSync(closure),
+            request,
           );
         }
 
