@@ -69,6 +69,48 @@ export abstract class DurableObjectCoreProtected {
     throw new Error("DurableObjectCoreProtected is type-only and should never run.");
   }
 
+  /**
+   * Accept a WebSocket through Cloudflare's hibernation API.
+   *
+   * This intentionally exposes only the DurableObjectState variant, not the
+   * standard `WebSocket.accept()` path, because mixins above this layer use it
+   * specifically to allow hibernation.
+   *
+   * https://developers.cloudflare.com/durable-objects/api/state/#acceptwebsocket
+   */
+  protected acceptDurableObjectWebSocket(_webSocket: WebSocket, _tags?: string[]): void {
+    throw new Error("DurableObjectCoreProtected is type-only and should never run.");
+  }
+
+  /**
+   * Return WebSockets attached through Cloudflare's hibernation API.
+   *
+   * `tag` is the platform-level filter supplied to
+   * `DurableObjectState.getWebSockets(tag)`. The WebSocket mixin keeps its own
+   * metadata in attachments, but uses platform tags for efficient lookup after
+   * all in-memory maps have been discarded by hibernation.
+   *
+   * https://developers.cloudflare.com/durable-objects/api/state/#getwebsockets
+   */
+  protected getDurableObjectWebSockets(_tag?: string): WebSocket[] {
+    throw new Error("DurableObjectCoreProtected is type-only and should never run.");
+  }
+
+  /**
+   * Register a promise with Cloudflare's `ctx.waitUntil()` compatibility API.
+   *
+   * Feature mixins use this instead of reaching into `ctx.waitUntil()` directly
+   * so Cloudflare platform capabilities stay adapted in one core layer.
+   * Cloudflare documents that `waitUntil()` has no lifetime-extending effect in
+   * Durable Objects because pending work and I/O already keep the object active,
+   * so callers must not rely on this for Worker-style background execution.
+   *
+   * https://developers.cloudflare.com/durable-objects/api/state/#waituntil
+   */
+  protected waitUntilDurableObjectTask(_promise: Promise<unknown>): void {
+    throw new Error("DurableObjectCoreProtected is type-only and should never run.");
+  }
+
   protected getDurableObjectAlarm(): Promise<number | null> {
     throw new Error("DurableObjectCoreProtected is type-only and should never run.");
   }
@@ -137,6 +179,18 @@ export function withDurableObjectCore<TBase extends DurableObjectClass>(
 
     protected getDurableObjectName(): string | undefined {
       return this.ctx.id.name;
+    }
+
+    protected acceptDurableObjectWebSocket(webSocket: WebSocket, tags?: string[]): void {
+      this.ctx.acceptWebSocket(webSocket, tags);
+    }
+
+    protected getDurableObjectWebSockets(tag?: string): WebSocket[] {
+      return this.ctx.getWebSockets(tag);
+    }
+
+    protected waitUntilDurableObjectTask(promise: Promise<unknown>): void {
+      this.ctx.waitUntil(promise);
     }
 
     protected async getDurableObjectAlarm(): Promise<number | null> {

@@ -29,6 +29,18 @@
         "name": "LISTED_ROOMS",
         "class_name": "ListedRoom",
       },
+      {
+        "name": "PUBLIC_ROUTE_ROOMS",
+        "class_name": "PublicRouteTestRoom",
+      },
+      {
+        "name": "HIBERNATING_WEBSOCKET_ROOMS",
+        "class_name": "HibernatingWebSocketTestRoom",
+      },
+      {
+        "name": "DURABLE_OBJECT_VIEW_ROOMS",
+        "class_name": "DurableObjectViewTestRoom",
+      },
     ],
   },
   "d1_databases": [
@@ -49,6 +61,9 @@
         "SchedulerTestRoom",
         "InspectorTestRoom",
         "ListedRoom",
+        "PublicRouteTestRoom",
+        "HibernatingWebSocketTestRoom",
+        "DurableObjectViewTestRoom",
       ],
     },
   ],

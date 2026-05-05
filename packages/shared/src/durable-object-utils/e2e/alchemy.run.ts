@@ -7,6 +7,8 @@ import { slugify } from "../../slugify.ts";
 import type {
   AlarmTestRoom,
   AlarmForwardingTestRoom,
+  DurableObjectViewTestRoom,
+  HibernatingWebSocketTestRoom,
   InitializeTestRoom,
   InspectorTestRoom,
   ListedRoom,
@@ -103,6 +105,22 @@ const publicRouteRooms = DurableObjectNamespace<PublicRouteTestRoom>("public-rou
   // Public route tests exercise named/id/init-param addressing through stub.fetch().
   sqlite: true,
 });
+const hibernatingWebSocketRooms = DurableObjectNamespace<HibernatingWebSocketTestRoom>(
+  "hibernating-websocket-rooms",
+  {
+    className: "HibernatingWebSocketTestRoom",
+    // WebSocket tests rely on lifecycle init params and synchronous KV hook counters.
+    sqlite: true,
+  },
+);
+const durableObjectViewRooms = DurableObjectNamespace<DurableObjectViewTestRoom>(
+  "durable-object-view-rooms",
+  {
+    className: "DurableObjectViewTestRoom",
+    // View tests read from lifecycle params and synchronous KV-backed counters.
+    sqlite: true,
+  },
+);
 const catalog = await D1Database("catalog", {
   name: `${workerName}-catalog`,
   // E2E stages are intentionally reusable by name. `adopt` lets reruns cleanly
@@ -121,6 +139,8 @@ export const worker = await Worker(APP_NAME, {
     INSPECTORS: inspectors,
     LISTED_ROOMS: listedRooms,
     PUBLIC_ROUTE_ROOMS: publicRouteRooms,
+    HIBERNATING_WEBSOCKET_ROOMS: hibernatingWebSocketRooms,
+    DURABLE_OBJECT_VIEW_ROOMS: durableObjectViewRooms,
     DO_CATALOG: catalog,
   },
   entrypoint: "./src/durable-object-utils/test-harness/initialize-fronting-worker.ts",

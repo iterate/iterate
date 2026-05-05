@@ -32,6 +32,8 @@
     "./durable-object-utils/mixins/with-multiplexed-alarms": "./src/durable-object-utils/mixins/with-multiplexed-alarms.ts",
     "./durable-object-utils/mixins/with-scheduler": "./src/durable-object-utils/mixins/with-scheduler.ts",
     "./durable-object-utils/mixins/with-stream-processor-runner": "./src/durable-object-utils/mixins/with-stream-processor-runner.ts",
+    "./durable-object-utils/mixins/with-hibernating-websockets": "./src/durable-object-utils/mixins/with-hibernating-websockets.ts",
+    "./durable-object-utils/mixins/with-durable-object-views": "./src/durable-object-utils/mixins/with-durable-object-views.ts",
     "./durable-object-utils/mixins/with-kv-inspector": "./src/durable-object-utils/mixins/with-kv-inspector.ts",
     "./durable-object-utils/mixins/with-outerbase": "./src/durable-object-utils/mixins/with-outerbase.ts",
     "./durable-object-utils/mixins/with-public-fetch-route": "./src/durable-object-utils/mixins/with-public-fetch-route.ts",

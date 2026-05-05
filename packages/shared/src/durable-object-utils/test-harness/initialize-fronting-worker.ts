@@ -18,6 +18,13 @@ import {
   withD1ObjectCatalog,
 } from "../mixins/with-d1-object-catalog.ts";
 import { withDurableObjectCore } from "../mixins/with-durable-object-core.ts";
+import { withDurableObjectViews } from "../mixins/with-durable-object-views.ts";
+import type {
+  HibernatingWebSocketConnection,
+  HibernatingWebSocketConnectionContext,
+  HibernatingWebSocketMessage,
+} from "../mixins/with-hibernating-websockets.ts";
+import { withHibernatingWebSockets } from "../mixins/with-hibernating-websockets.ts";
 import { getOrInitializeDoStub, withLifecycleHooks } from "../mixins/with-lifecycle-hooks.ts";
 import { withKvInspector } from "../mixins/with-kv-inspector.ts";
 import { withMultiplexedAlarms } from "../mixins/with-multiplexed-alarms.ts";
@@ -56,6 +63,8 @@ type Env = {
   LISTED_ROOMS: DurableObjectNamespace<ListedRoom>;
   PUBLIC_ROUTE_ROOMS: DurableObjectNamespace<PublicRouteTestRoom>;
   APP_CONFIG_ROOMS: DurableObjectNamespace<AppConfigTestRoom>;
+  HIBERNATING_WEBSOCKET_ROOMS: DurableObjectNamespace<HibernatingWebSocketTestRoom>;
+  DURABLE_OBJECT_VIEW_ROOMS: DurableObjectNamespace<DurableObjectViewTestRoom>;
   DO_CATALOG: D1Database;
   APP_CONFIG?: string;
   APP_CONFIG_SERVICE_NAME?: string;
@@ -230,6 +239,193 @@ export class PublicRouteTestRoom extends PublicRouteRoomBase<Env> {
       byIdPath: this.getPublicDurableObjectPath({ mode: "by-id" }),
       byInitParamsPath: this.getPublicDurableObjectPath({ mode: "by-init-params" }),
     };
+  }
+}
+
+type HibernatingWebSocketAttachment = {
+  label: string;
+};
+
+type HibernatingWebSocketHookState = {
+  connected: number;
+  messages: number;
+  closed: number;
+  errors: number;
+  wakeRuns: number;
+  lastConnectionId: string | null;
+  lastOriginalUrl: string | null;
+  lastAttachment: HibernatingWebSocketAttachment | null;
+};
+
+const HibernatingWebSocketRoomBase = withHibernatingWebSockets<RoomInit>()(
+  withLifecycleHooks<RoomInit>()(DurableObjectCore),
+);
+
+export class HibernatingWebSocketTestRoom extends HibernatingWebSocketRoomBase<Env> {
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+
+    this.registerOnInstanceWake(() => {
+      this.ctx.storage.kv.put("wakeRuns", (this.ctx.storage.kv.get<number>("wakeRuns") ?? 0) + 1);
+    });
+  }
+
+  protected getHibernatingWebSocketTags(
+    connection: HibernatingWebSocketConnection,
+    context: HibernatingWebSocketConnectionContext,
+  ): string[] {
+    const tags = context.url.searchParams.getAll("tag");
+    const role = context.url.searchParams.get("role");
+    return role === null ? tags : [...tags, `role:${role}`, `connection:${connection.id}`];
+  }
+
+  protected onHibernatingWebSocketConnect(
+    connection: HibernatingWebSocketConnection<HibernatingWebSocketAttachment>,
+  ): void {
+    this.ctx.storage.kv.put("connected", (this.ctx.storage.kv.get<number>("connected") ?? 0) + 1);
+    connection.setHibernatingWebSocketAttachment({ label: `attachment:${connection.id}` });
+    this.recordConnection(connection);
+    connection.send(
+      JSON.stringify({
+        type: "connected",
+        id: connection.id,
+        tags: connection.tags,
+        originalUrl: connection.originalUrl,
+        attachment: connection.getHibernatingWebSocketAttachment(),
+      }),
+    );
+  }
+
+  protected onHibernatingWebSocketMessage(
+    connection: HibernatingWebSocketConnection<HibernatingWebSocketAttachment>,
+    message: HibernatingWebSocketMessage,
+  ): void {
+    this.ctx.storage.kv.put("messages", (this.ctx.storage.kv.get<number>("messages") ?? 0) + 1);
+    this.recordConnection(connection);
+
+    const text = hibernatingWebSocketMessageToString(message);
+    if (text === "attachment") {
+      connection.send(
+        JSON.stringify({
+          type: "attachment",
+          attachment: connection.getHibernatingWebSocketAttachment(),
+        }),
+      );
+      return;
+    }
+
+    const command = parseCommand(text);
+    if (command.type === "broadcast") {
+      this.broadcastHibernatingWebSocketMessage(
+        JSON.stringify({
+          type: "broadcast",
+          from: connection.id,
+          text: command.text,
+        }),
+        {
+          tag: command.tag,
+          except: command.exceptSelf ? connection.id : undefined,
+        },
+      );
+    }
+  }
+
+  protected onHibernatingWebSocketClose(
+    connection: HibernatingWebSocketConnection<HibernatingWebSocketAttachment>,
+  ): void {
+    this.ctx.storage.kv.put("closed", (this.ctx.storage.kv.get<number>("closed") ?? 0) + 1);
+    this.recordConnection(connection);
+  }
+
+  protected onHibernatingWebSocketError(
+    connection: HibernatingWebSocketConnection<HibernatingWebSocketAttachment>,
+  ): void {
+    this.ctx.storage.kv.put("errors", (this.ctx.storage.kv.get<number>("errors") ?? 0) + 1);
+    this.recordConnection(connection);
+  }
+
+  getHookState(): HibernatingWebSocketHookState {
+    return {
+      connected: this.ctx.storage.kv.get<number>("connected") ?? 0,
+      messages: this.ctx.storage.kv.get<number>("messages") ?? 0,
+      closed: this.ctx.storage.kv.get<number>("closed") ?? 0,
+      errors: this.ctx.storage.kv.get<number>("errors") ?? 0,
+      wakeRuns: this.ctx.storage.kv.get<number>("wakeRuns") ?? 0,
+      lastConnectionId: this.ctx.storage.kv.get<string>("lastConnectionId") ?? null,
+      lastOriginalUrl: this.ctx.storage.kv.get<string>("lastOriginalUrl") ?? null,
+      lastAttachment:
+        this.ctx.storage.kv.get<HibernatingWebSocketAttachment>("lastAttachment") ?? null,
+    };
+  }
+
+  getConnectionIdsForTag(tag: string): string[] {
+    return Array.from(this.getHibernatingWebSockets(tag)).map((connection) => connection.id);
+  }
+
+  broadcastForTest(args: { text: string; tag?: string; except?: string | string[] }): void {
+    this.broadcastHibernatingWebSocketMessage(JSON.stringify({ type: "rpc-broadcast", ...args }), {
+      tag: args.tag,
+      except: args.except,
+    });
+  }
+
+  private recordConnection(
+    connection: HibernatingWebSocketConnection<HibernatingWebSocketAttachment>,
+  ): void {
+    this.ctx.storage.kv.put("lastConnectionId", connection.id);
+    this.ctx.storage.kv.put("lastOriginalUrl", connection.originalUrl);
+    this.ctx.storage.kv.put("lastAttachment", connection.getHibernatingWebSocketAttachment());
+  }
+}
+
+type DurableObjectViewCounter = {
+  count: number;
+  ownerUserId: string;
+};
+
+type DurableObjectViewHost = {
+  getCounterViewForTest(): DurableObjectViewCounter;
+};
+
+const DurableObjectViewRoomBase = withPublicFetchRoute({
+  namespaceSlug: "durable-object-view-rooms",
+  defaultAddressing: "by-name",
+})(
+  withDurableObjectViews<{ counter: DurableObjectViewCounter }, DurableObjectViewHost>({
+    views: {
+      counter(room) {
+        return room.getCounterViewForTest();
+      },
+    },
+  })(withHibernatingWebSockets<RoomInit>()(withLifecycleHooks<RoomInit>()(DurableObjectCore))),
+);
+
+export class DurableObjectViewTestRoom
+  extends DurableObjectViewRoomBase<Env>
+  implements DurableObjectViewHost
+{
+  protected onHibernatingWebSocketMessage(
+    _connection: HibernatingWebSocketConnection,
+    message: HibernatingWebSocketMessage,
+  ): Promise<void> | void {
+    const text = hibernatingWebSocketMessageToString(message);
+    if (text === "increment") {
+      this.ctx.storage.kv.put("count", (this.ctx.storage.kv.get<number>("count") ?? 0) + 1);
+      return this.broadcastDurableObjectView("counter");
+    }
+  }
+
+  getCounterViewForTest(): DurableObjectViewCounter {
+    return {
+      count: this.ctx.storage.kv.get<number>("count") ?? 0,
+      ownerUserId: this.initParams.ownerUserId,
+    };
+  }
+
+  async incrementForTest(): Promise<void> {
+    await this.ensureStarted();
+    this.ctx.storage.kv.put("count", (this.ctx.storage.kv.get<number>("count") ?? 0) + 1);
+    await this.broadcastDurableObjectView("counter");
   }
 }
 
@@ -731,6 +927,10 @@ export default {
         namespace: env.PUBLIC_ROUTE_ROOMS,
         class: PublicRouteTestRoom,
       }),
+      registerDurableObjectPublicRoute({
+        namespace: env.DURABLE_OBJECT_VIEW_ROOMS,
+        class: DurableObjectViewTestRoom,
+      }),
     ]);
     if (routedDurableObjectResponse !== undefined) {
       return routedDurableObjectResponse;
@@ -760,6 +960,85 @@ export default {
       // exercises the fetch wrapper exactly as it runs in production.
       const proxiedUrl = new URL(inspectorPath, "https://durable-object.local");
       return await stub.fetch(new Request(proxiedUrl, request));
+    }
+
+    const hibernatingWebSocketMatch = url.pathname.match(
+      /^\/hibernating-websocket-rooms\/([^/]+)(\/.*)$/,
+    );
+
+    if (hibernatingWebSocketMatch !== null) {
+      const [, rawName, hibernatingWebSocketPath] = hibernatingWebSocketMatch;
+      const name = decodeURIComponent(rawName);
+      const stub = env.HIBERNATING_WEBSOCKET_ROOMS.getByName(name);
+
+      if (request.method === "POST" && hibernatingWebSocketPath === "/initialize") {
+        const body = await request.json<Partial<RoomInit>>();
+        return json(
+          await stub.initialize({
+            name,
+            ownerUserId: requireString(body.ownerUserId, "ownerUserId"),
+          }),
+        );
+      }
+
+      if (request.method === "GET" && hibernatingWebSocketPath === "/state") {
+        return json(await stub.getHookState());
+      }
+
+      if (request.method === "GET" && hibernatingWebSocketPath.startsWith("/connections/")) {
+        return json(
+          await stub.getConnectionIdsForTag(
+            decodeURIComponent(hibernatingWebSocketPath.slice("/connections/".length)),
+          ),
+        );
+      }
+
+      if (request.method === "POST" && hibernatingWebSocketPath === "/broadcast") {
+        const body = await request.json<{ text?: string; tag?: string; except?: string[] }>();
+        await stub.broadcastForTest({
+          text: requireString(body.text, "text"),
+          tag: body.tag,
+          except: body.except,
+        });
+        return json({ ok: true });
+      }
+
+      const proxiedUrl = new URL(
+        `${hibernatingWebSocketPath}${url.search}`,
+        "https://durable-object.local",
+      );
+      return await stub.fetch(new Request(proxiedUrl, request));
+    }
+
+    const durableObjectViewMatch = url.pathname.match(
+      /^\/durable-object-view-rooms\/([^/]+)\/([^/]+)$/,
+    );
+
+    if (durableObjectViewMatch !== null) {
+      const [, rawName, action] = durableObjectViewMatch;
+      const name = decodeURIComponent(rawName);
+      const stub = env.DURABLE_OBJECT_VIEW_ROOMS.getByName(name);
+
+      if (request.method === "POST" && action === "initialize") {
+        const body = await request.json<Partial<RoomInit>>();
+        return json(
+          await stub.initialize({
+            name,
+            ownerUserId: requireString(body.ownerUserId, "ownerUserId"),
+          }),
+        );
+      }
+
+      if (request.method === "POST" && action === "increment") {
+        await stub.incrementForTest();
+        return json({ ok: true });
+      }
+
+      if (request.method === "GET" && action === "counter") {
+        return json(await stub.getCounterViewForTest());
+      }
+
+      return json({ error: "Not found" }, { status: 404 });
     }
 
     const listedOwnerIndexMatch = url.pathname.match(/^\/listed-rooms\/by-owner-user-id\/([^/]+)$/);
@@ -1009,6 +1288,30 @@ function json(body: unknown, init?: ResponseInit): Response {
   return Response.json(body ?? null, init);
 }
 
+function hibernatingWebSocketMessageToString(message: HibernatingWebSocketMessage): string {
+  return typeof message === "string" ? message : new TextDecoder().decode(message);
+}
+
+function parseCommand(
+  raw: string,
+): { type: "broadcast"; text: string; tag?: string; exceptSelf?: boolean } | { type: "unknown" } {
+  try {
+    const value = JSON.parse(raw) as unknown;
+    if (!isRecord(value) || value.type !== "broadcast" || typeof value.text !== "string") {
+      return { type: "unknown" };
+    }
+
+    return {
+      type: "broadcast",
+      text: value.text,
+      tag: typeof value.tag === "string" ? value.tag : undefined,
+      exceptSelf: value.exceptSelf === true,
+    };
+  } catch {
+    return { type: "unknown" };
+  }
+}
+
 function serializeError(error: unknown): CaughtErrorResult {
   return {
     kind: "error",
@@ -1019,4 +1322,8 @@ function serializeError(error: unknown): CaughtErrorResult {
 
 function isCaughtErrorResult(value: unknown): value is CaughtErrorResult {
   return typeof value === "object" && value !== null && "kind" in value && value.kind === "error";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

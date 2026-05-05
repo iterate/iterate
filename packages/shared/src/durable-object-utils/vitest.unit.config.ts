@@ -54,6 +54,14 @@ writeFileSync(
             name: "APP_CONFIG_ROOMS",
             class_name: "AppConfigTestRoom",
           },
+          {
+            name: "HIBERNATING_WEBSOCKET_ROOMS",
+            class_name: "HibernatingWebSocketTestRoom",
+          },
+          {
+            name: "DURABLE_OBJECT_VIEW_ROOMS",
+            class_name: "DurableObjectViewTestRoom",
+          },
         ],
       },
       vars: {
@@ -112,6 +120,8 @@ writeFileSync(
             "ListedRoom",
             "PublicRouteTestRoom",
             "AppConfigTestRoom",
+            "HibernatingWebSocketTestRoom",
+            "DurableObjectViewTestRoom",
           ],
         },
       ],

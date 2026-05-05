@@ -11,6 +11,8 @@ Utilities here are experimental helpers for composing Cloudflare Durable Object 
 - `mixins/with-multiplexed-alarms.ts` stores many logical one-shot alarms behind Cloudflare's single Durable Object alarm slot.
 - `mixins/with-scheduler.ts` adds key-based one-shot, delayed, interval, cron, and RRULE scheduling on top of multiplexed alarms.
 - `mixins/with-stream-processor-runner.ts` stores stream processor reduced state/progress per processor slug and exposes protected catch-up / live-event / subscription runner methods. It assumes one stream path per Durable Object instance.
+- `mixins/with-hibernating-websockets.ts` adds a fixed `GET /__websocket` route, hibernation-safe connection metadata, tags, broadcasts, and protected connect/message/close/error hooks. It requires lifecycle hooks below it.
+- `mixins/with-durable-object-views.ts` builds on hibernating WebSockets to synchronize named server-computed views to connected clients with `durable-object-view` replacement messages.
 - `mixins/with-public-fetch-route.ts` adds instance helpers for stable public Durable Object paths and a worker-side fetcher that proxies `/durable-objects/:namespaceSlug/:mode/:payload/...` straight to `stub.fetch()`.
 - `mixins/with-outerbase.ts` and `mixins/with-kv-inspector.ts` are debug inspector mixins. Do not attach them to production-routed objects without an explicit auth/dev gating decision.
 - Avoid adding more mixins or composition helpers without speccing the API shape first.
@@ -336,6 +338,155 @@ async function handleRequest(this: Room) {
   return init.name;
 }
 ```
+
+## Hibernating WebSockets
+
+Use `withHibernatingWebSockets()` when a Durable Object should own browser or
+service WebSocket connections and still be allowed to hibernate. The mixin owns
+one fixed DO-local route:
+
+```txt
+GET /__websocket
+```
+
+This route uses the same double-underscore style as `__kv` and `__outerbase`.
+It composes with `withPublicFetchRoute()` without either mixin knowing about
+the other one:
+
+```txt
+/durable-objects/rooms/by-name/my-room/__websocket
+```
+
+The public route proxy strips the Durable Object prefix and forwards
+`/__websocket` to `stub.fetch()`, where the WebSocket mixin handles it.
+
+```ts
+const RoomBase = withPublicFetchRoute({
+  namespaceSlug: "rooms",
+})(
+  withHibernatingWebSockets<RoomInit>()(
+    withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject)),
+  ),
+);
+
+class Room extends RoomBase<Env> {
+  protected getHibernatingWebSocketTags(
+    connection: HibernatingWebSocketConnection,
+    context: HibernatingWebSocketConnectionContext,
+  ) {
+    return [
+      `user:${context.url.searchParams.get("userId") ?? "anonymous"}`,
+      `connection:${connection.id}`,
+    ];
+  }
+
+  protected onHibernatingWebSocketMessage(
+    connection: HibernatingWebSocketConnection,
+    message: string | ArrayBuffer,
+  ) {
+    this.broadcastHibernatingWebSocketMessage(message, {
+      except: connection.id,
+    });
+  }
+}
+```
+
+The mixin requires `withLifecycleHooks()` below it. Cloudflare can wake a
+hibernated Durable Object directly into `webSocketMessage`, `webSocketClose`,
+or `webSocketError`, so every entrypoint calls `ensureStarted()` before app
+hooks run.
+
+Cloudflare first-party docs behind this design:
+
+- Hibernation keeps WebSocket clients connected while the Durable Object is
+  removed from memory, then runs the constructor again on wake:
+  https://developers.cloudflare.com/durable-objects/best-practices/websockets/#how-hibernation-works
+- `DurableObjectState.acceptWebSocket()` is the hibernation API and supports
+  tags used by `getWebSockets(tag)`:
+  https://developers.cloudflare.com/durable-objects/api/state/#acceptwebsocket
+- WebSocket attachments persist small per-connection metadata across
+  hibernation and are limited to 2,048 serialized bytes:
+  https://developers.cloudflare.com/durable-objects/best-practices/websockets/#websocketserializeattachment
+
+The connection id comes from PartySocket's `_pk` query param when present,
+then `connectionId`, then `crypto.randomUUID()`. The id is always added as the
+first Cloudflare tag so `getHibernatingWebSocket(id)` can recover the one
+connection after hibernation without relying on an in-memory map.
+
+Attachments use Cloudflare's term intentionally:
+
+```ts
+connection.getHibernatingWebSocketAttachment();
+connection.setHibernatingWebSocketAttachment({ cursor: "logs" });
+```
+
+Do not put durable app data in that attachment. Store durable data in SQLite/KV
+and keep only small connection metadata in the WebSocket attachment.
+
+## Durable Object Views
+
+Use `withDurableObjectViews()` when React clients should subscribe to named
+server-computed values over the hibernating WebSocket route. The word "view"
+means "the complete value a UI component should render"; it is not the
+Durable Object's whole state and does not require one serialized state blob.
+Views can be derived from SQLite tables, KV rows, stream-processor reduced
+state, runtime state, or any method on the Durable Object.
+
+```ts
+type RoomView = {
+  name: string;
+  selectedMachineId: string | null;
+};
+
+type RoomViewHost = {
+  getRoomView(): RoomView;
+};
+
+const RoomBase = withDurableObjectViews<{ room: RoomView }, RoomViewHost>({
+  views: {
+    room(room) {
+      return room.getRoomView();
+    },
+  },
+})(
+  withHibernatingWebSockets<RoomInit>()(
+    withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject)),
+  ),
+);
+
+class Room extends RoomBase<Env> implements RoomViewHost {
+  getRoomView(): RoomView {
+    return this.useDurableObjectSql((sql) => readRoomView(sql));
+  }
+
+  async renameRoom(name: string) {
+    this.useDurableObjectSql((sql) => renameRoom(sql, name));
+    await this.broadcastDurableObjectView("room");
+  }
+}
+```
+
+Clients request views with repeated `view` query params:
+
+```txt
+/__websocket?view=room&view=presence
+```
+
+The wire message is a complete replacement value:
+
+```json
+{
+  "kind": "durable-object-view",
+  "view": "room",
+  "revision": "opaque-uuid",
+  "value": {}
+}
+```
+
+The `revision` is intentionally opaque. If a view needs ordered revisions,
+include the relevant table version, event offset, or logical clock in the view
+value itself. Future delta/patch messages can live beside this replacement
+message without changing `withHibernatingWebSockets()`.
 
 ## Public Fetch Routing
 
