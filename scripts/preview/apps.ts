@@ -6,7 +6,6 @@ import {
 
 export const CloudflarePreviewAppSlug = z.enum([
   "agents",
-  "codemode",
   "example",
   "events",
   "os2",
@@ -38,11 +37,6 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
   agents: {
     ...newStyleCloudflareApps.agents,
     previewTestBaseUrlEnvVar: "AGENTS_BASE_URL",
-    previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
-  },
-  codemode: {
-    ...newStyleCloudflareApps.codemode,
-    previewTestBaseUrlEnvVar: "CODEMODE_BASE_URL",
     previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
   },
   example: {

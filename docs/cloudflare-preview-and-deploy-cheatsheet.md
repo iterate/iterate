@@ -2,7 +2,7 @@
 
 ## Cheat sheet
 
-- In scope apps: `agents`, `codemode`, `example`, `events`, `os2`, `semaphore`, `ingress-proxy`
+- In scope apps: `agents`, `example`, `events`, `os2`, `semaphore`, `ingress-proxy`
 - PR previews are owned by one workflow: `Cloudflare Previews`
 - Production deploys are owned by generated per-app workflows in `.github/workflows/deploy-*.yml`
 - Preview state lives in the managed PR body section, not in PR comments

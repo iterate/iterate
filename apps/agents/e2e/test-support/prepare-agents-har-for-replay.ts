@@ -35,7 +35,7 @@ function rewriteUrlIfEventsProjectHost(urlString: string, targetEventsHostname: 
 }
 
 function shouldRewriteEventsProjectHostname(hostname: string): boolean {
-  if (hostname.endsWith(".events-preview-1.iterate.com")) {
+  if (hostname.endsWith(".events.iterate-preview-1.com")) {
     return true;
   }
   const labels = hostname.split(".");

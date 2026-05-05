@@ -66,7 +66,7 @@ _shared          ← CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, ALCHEMY_STAGE=
 | Var                                 | dev_jonas                              | preview_N                              | prd                              |
 | ----------------------------------- | -------------------------------------- | -------------------------------------- | -------------------------------- |
 | `APP_CONFIG_BASE_URL`               | `https://os.iterate-dev-jonas.com`     | `https://os2.iterate-preview-N.com`    | `https://os.iterate2.com`        |
-| `APP_CONFIG_EVENTS_BASE_URL`        | `https://events.iterate-dev-jonas.com` | `https://events-preview-N.iterate.com` | `https://events.iterate.com`     |
+| `APP_CONFIG_EVENTS_BASE_URL`        | `https://events.iterate-dev-jonas.com` | `https://events.iterate-preview-N.com` | `https://events.iterate.com`     |
 | `APP_CONFIG_PROJECT_HOSTNAME_BASES` | `["iterate-dev-jonas.app"]`            | `["iterate-preview-N.app"]`            | `["iterate2.app"]`               |
 | `ALCHEMY_LOCAL`                     | `true`                                 | `false`                                | `false`                          |
 | `ALCHEMY_STAGE`                     | inherited as `${DOPPLER_CONFIG}`       | inherited as `${DOPPLER_CONFIG}`       | inherited as `${DOPPLER_CONFIG}` |
@@ -132,7 +132,7 @@ Both zones must exist in the preview Cloudflare account configured by
 os2 and events are deployed as one connected preview group when either both are
 affected or os2 is selected. os2's preview config points
 `APP_CONFIG_EVENTS_BASE_URL` at the events deployment for the same numbered
-slot, such as `https://events-preview-3.iterate.com`.
+slot, such as `https://events.iterate-preview-3.com`.
 
 ### Manual preview deploy
 

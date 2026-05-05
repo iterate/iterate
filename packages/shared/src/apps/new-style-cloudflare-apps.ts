@@ -4,7 +4,6 @@ import { runCommand } from "../node/run-command.ts";
 
 export const NewStyleCloudflareAppSlug = z.enum([
   "agents",
-  "codemode",
   "example",
   "os2",
   "semaphore",
@@ -42,13 +41,6 @@ export const newStyleCloudflareApps: Record<
     appPath: "apps/agents",
     dopplerProject: "agents",
     paths: ["apps/agents/**", "apps/agents-contract/**"],
-  },
-  codemode: {
-    slug: "codemode",
-    displayName: "Codemode",
-    appPath: "apps/codemode",
-    dopplerProject: "codemode",
-    paths: ["apps/codemode/**", "apps/codemode-contract/**"],
   },
   example: {
     slug: "example",

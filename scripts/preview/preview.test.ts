@@ -34,9 +34,9 @@ describe("preview app dependency batches", () => {
     expect(
       batchPreviewAppsByDependencies([
         cloudflarePreviewApps.agents,
-        cloudflarePreviewApps.codemode,
+        cloudflarePreviewApps.example,
       ]).map((batch) => batch.map((app) => app.slug)),
-    ).toEqual([["agents", "codemode"]]);
+    ).toEqual([["agents", "example"]]);
   });
 });
 

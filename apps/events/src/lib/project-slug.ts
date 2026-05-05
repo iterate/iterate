@@ -1,26 +1,26 @@
 import { ProjectSlug, type ProjectSlug as ProjectSlugValue } from "@iterate-com/events-contract";
 
 export const defaultProjectSlug: ProjectSlugValue = "public";
-const iterateDomainLabels = ["iterate", "com"] as const;
-const eventsHostLabelPattern = /^events(?:-[a-z0-9-]+)*$/;
+const appHostLabel = "events";
+const iterateEnvironmentLabelPattern = /^iterate(?:-[a-z0-9-]+)?$/;
 
 function getEventsHostBase(hostname: string) {
   const labels = hostname.split(".");
 
   if (
     labels.length === 3 &&
-    labels[1] === iterateDomainLabels[0] &&
-    labels[2] === iterateDomainLabels[1] &&
-    eventsHostLabelPattern.test(labels[0])
+    labels[0] === appHostLabel &&
+    iterateEnvironmentLabelPattern.test(labels[1] ?? "") &&
+    labels[2] === "com"
   ) {
     return hostname;
   }
 
   if (
     labels.length === 4 &&
-    labels[2] === iterateDomainLabels[0] &&
-    labels[3] === iterateDomainLabels[1] &&
-    eventsHostLabelPattern.test(labels[1])
+    labels[1] === appHostLabel &&
+    iterateEnvironmentLabelPattern.test(labels[2] ?? "") &&
+    labels[3] === "com"
   ) {
     return labels.slice(1).join(".");
   }
@@ -37,9 +37,9 @@ export function resolveHostProjectSlug(hostname: string | null | undefined) {
   const labels = normalizedHostname.split(".");
   if (
     labels.length !== 4 ||
-    labels[2] !== iterateDomainLabels[0] ||
-    labels[3] !== iterateDomainLabels[1] ||
-    !eventsHostLabelPattern.test(labels[1])
+    labels[1] !== appHostLabel ||
+    !iterateEnvironmentLabelPattern.test(labels[2] ?? "") ||
+    labels[3] !== "com"
   ) {
     return undefined;
   }
