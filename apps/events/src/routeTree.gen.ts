@@ -13,6 +13,7 @@ import { Route as DocsRouteImport } from './routes/docs'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as ProcessorSlugRouteImport } from './routes/$processorSlug'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ProcessorSlugIndexRouteImport } from './routes/$processorSlug.index'
 import { Route as PosthogProxySplatRouteImport } from './routes/posthog-proxy.$'
 import { Route as ApiOrpcWsRouteImport } from './routes/api.orpc-ws'
 import { Route as ApiSplatRouteImport } from './routes/api.$'
@@ -42,6 +43,11 @@ const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
+} as any)
+const ProcessorSlugIndexRoute = ProcessorSlugIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => ProcessorSlugRoute,
 } as any)
 const PosthogProxySplatRoute = PosthogProxySplatRouteImport.update({
   id: '/posthog-proxy/$',
@@ -104,6 +110,7 @@ export interface FileRoutesByFullPath {
   '/api/$': typeof ApiSplatRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
+  '/$processorSlug/': typeof ProcessorSlugIndexRoute
   '/streams/$': typeof AppStreamsSplatRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/secrets/': typeof AppSecretsIndexRoute
@@ -111,12 +118,12 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/$processorSlug': typeof ProcessorSlugRouteWithChildren
   '/docs': typeof DocsRoute
   '/$processorSlug/$eventSlug': typeof ProcessorSlugEventSlugRoute
   '/api/$': typeof ApiSplatRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
+  '/$processorSlug': typeof ProcessorSlugIndexRoute
   '/streams/$': typeof AppStreamsSplatRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/secrets': typeof AppSecretsIndexRoute
@@ -134,6 +141,7 @@ export interface FileRoutesById {
   '/api/$': typeof ApiSplatRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
+  '/$processorSlug/': typeof ProcessorSlugIndexRoute
   '/_app/streams/$': typeof AppStreamsSplatRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/_app/secrets/': typeof AppSecretsIndexRoute
@@ -151,6 +159,7 @@ export interface FileRouteTypes {
     | '/api/$'
     | '/api/orpc-ws'
     | '/posthog-proxy/$'
+    | '/$processorSlug/'
     | '/streams/$'
     | '/api/orpc/$'
     | '/secrets/'
@@ -158,12 +167,12 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
-    | '/$processorSlug'
     | '/docs'
     | '/$processorSlug/$eventSlug'
     | '/api/$'
     | '/api/orpc-ws'
     | '/posthog-proxy/$'
+    | '/$processorSlug'
     | '/streams/$'
     | '/api/orpc/$'
     | '/secrets'
@@ -180,6 +189,7 @@ export interface FileRouteTypes {
     | '/api/$'
     | '/api/orpc-ws'
     | '/posthog-proxy/$'
+    | '/$processorSlug/'
     | '/_app/streams/$'
     | '/api/orpc/$'
     | '/_app/secrets/'
@@ -226,6 +236,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/$processorSlug/': {
+      id: '/$processorSlug/'
+      path: '/'
+      fullPath: '/$processorSlug/'
+      preLoaderRoute: typeof ProcessorSlugIndexRouteImport
+      parentRoute: typeof ProcessorSlugRoute
     }
     '/posthog-proxy/$': {
       id: '/posthog-proxy/$'
@@ -302,10 +319,12 @@ declare module '@tanstack/react-router' {
 
 interface ProcessorSlugRouteChildren {
   ProcessorSlugEventSlugRoute: typeof ProcessorSlugEventSlugRoute
+  ProcessorSlugIndexRoute: typeof ProcessorSlugIndexRoute
 }
 
 const ProcessorSlugRouteChildren: ProcessorSlugRouteChildren = {
   ProcessorSlugEventSlugRoute: ProcessorSlugEventSlugRoute,
+  ProcessorSlugIndexRoute: ProcessorSlugIndexRoute,
 }
 
 const ProcessorSlugRouteWithChildren = ProcessorSlugRoute._addFileChildren(

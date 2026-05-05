@@ -77,13 +77,14 @@ function ProcessorLinks({ processors, title }: { processors: ProcessorDoc[]; tit
       <p className="text-xs uppercase tracking-wide text-muted-foreground">{title}</p>
       <div className="flex flex-col gap-2">
         {processors.map((processor) => (
-          <Link
-            key={processor.contract.slug}
-            to={processor.href}
-            className="text-sm text-primary hover:underline"
-          >
-            {processor.contract.slug}
-          </Link>
+          <div key={processor.contract.slug} className="min-w-0 space-y-1">
+            <Link to={processor.href} className="text-sm text-primary hover:underline">
+              {processor.contract.slug}
+            </Link>
+            {processor.contract.description ? (
+              <p className="text-sm text-muted-foreground">{processor.contract.description}</p>
+            ) : null}
+          </div>
         ))}
       </div>
     </div>
@@ -99,13 +100,14 @@ function EventLinks({ events, title }: { events: ProcessorEventDoc[]; title: str
       ) : (
         <div className="flex flex-col gap-3">
           {events.map((event) => (
-            <Link
-              key={event.type}
-              to={event.href}
-              className="min-w-0 font-mono text-sm text-primary hover:underline"
-            >
-              <span className="block truncate">{event.type}</span>
-            </Link>
+            <div key={event.type} className="min-w-0 space-y-1">
+              <Link to={event.href} className="block text-sm text-primary hover:underline">
+                <span className="block font-mono wrap-break-word">{event.type}</span>
+              </Link>
+              {event.description ? (
+                <p className="text-sm text-muted-foreground">{event.description}</p>
+              ) : null}
+            </div>
           ))}
         </div>
       )}

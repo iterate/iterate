@@ -106,7 +106,7 @@ function buildBaseProcessorDoc(contract: ProcessorContractForDocs): ProcessorDoc
     type,
     eventSlug: eventSlugFromType({ processorSlug: contract.slug, type }),
     ...(event.description == null ? {} : { description: event.description }),
-    payloadJsonSchema: z.toJSONSchema(event.payloadSchema as z.ZodType),
+    payloadJsonSchema: eventPayloadJsonSchema(event.payloadSchema as z.ZodType),
     href: `${href}${eventSlugFromType({ processorSlug: contract.slug, type })}/`,
   }));
 
@@ -151,6 +151,13 @@ function hasProcessorSlug(value: unknown): value is { slug: string } {
   return (
     typeof value === "object" && value !== null && "slug" in value && typeof value.slug === "string"
   );
+}
+
+function eventPayloadJsonSchema(payloadSchema: z.ZodType) {
+  return z.toJSONSchema(payloadSchema, {
+    io: "input",
+    unrepresentable: "any",
+  });
 }
 
 function eventSlugFromType(args: { processorSlug: string; type: string }) {
