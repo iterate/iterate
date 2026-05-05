@@ -90,7 +90,9 @@ export async function IterateApp<B extends Bindings>(
     compatibilityFlags,
     bindings: {
       ...props.bindings,
-      APP_CONFIG: alchemy.secret(JSON.stringify(rawAppConfig, null, 2)),
+      APP_CONFIG: app.local
+        ? JSON.stringify(rawAppConfig, null, 2)
+        : alchemy.secret(JSON.stringify(rawAppConfig, null, 2)),
     },
     wrangler: { main: "./src/entry.workerd.ts" },
     // Full sampling with persistent logs/traces for all Iterate workers.

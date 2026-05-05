@@ -69,7 +69,7 @@ function RootComponent() {
   configureOrpcClient({ baseUrl: config.apiBaseUrl });
 
   return (
-    <AppProviders config={config} devtools={<EventsDevtools />}>
+    <AppProviders config={config} devtools={<EventsDevtools />} forcedTheme="light">
       <Outlet />
     </AppProviders>
   );

@@ -4,11 +4,12 @@ import {
   streamRendererModes,
   type StreamRendererMode,
 } from "~/lib/stream-feed-types.ts";
+import type { EventsStreamElementType } from "@iterate-com/ui/components/events/stream-feed";
 
 export const streamComposerModes = ["json", "yaml", "agent"] as const;
 const DEFAULT_STREAM_COMPOSER_MODE = "json" as const;
 export const streamFeedViewModes = ["current", "clean"] as const;
-const DEFAULT_STREAM_FEED_VIEW_MODE = "current" as const;
+const DEFAULT_STREAM_FEED_VIEW_MODE = "clean" as const;
 
 export type StreamComposerMode = (typeof streamComposerModes)[number];
 export type StreamFeedViewMode = (typeof streamFeedViewModes)[number];
@@ -25,6 +26,7 @@ const StreamViewSearch = z.object({
   composer: z.enum(streamComposerModes).optional(),
   view: z.enum(streamFeedViewModes).optional(),
   event: z.coerce.number().int().positive().optional(),
+  hiddenElements: z.union([z.string(), z.array(z.string())]).optional(),
 });
 
 type StreamViewSearch = {
@@ -32,6 +34,7 @@ type StreamViewSearch = {
   composer: StreamComposerMode;
   view: StreamFeedViewMode;
   event: number | undefined;
+  hiddenElements: EventsStreamElementType[];
 };
 
 export const defaultStreamViewSearch: StreamViewSearch = {
@@ -39,6 +42,7 @@ export const defaultStreamViewSearch: StreamViewSearch = {
   composer: DEFAULT_STREAM_COMPOSER_MODE,
   view: DEFAULT_STREAM_FEED_VIEW_MODE,
   event: undefined,
+  hiddenElements: [],
 };
 
 export function validateStreamViewSearch(search: unknown): StreamViewSearch {
@@ -57,5 +61,22 @@ export function validateStreamViewSearch(search: unknown): StreamViewSearch {
       ? (result.data.view ?? defaultStreamViewSearch.view)
       : defaultStreamViewSearch.view,
     event: result.success ? result.data.event : defaultStreamViewSearch.event,
+    hiddenElements: result.success
+      ? parseHiddenElementsParam(result.data.hiddenElements)
+      : defaultStreamViewSearch.hiddenElements,
   };
+}
+
+function parseHiddenElementsParam(
+  value: string | readonly string[] | undefined,
+): EventsStreamElementType[] {
+  if (value == null) {
+    return [];
+  }
+
+  const values = typeof value === "string" ? value.split(",") : value;
+
+  return [
+    ...new Set(values.map((type) => type.trim()).filter(Boolean)),
+  ] as EventsStreamElementType[];
 }

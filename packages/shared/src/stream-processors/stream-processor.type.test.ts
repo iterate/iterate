@@ -658,7 +658,7 @@ describe("stream processor contract types", () => {
 
   it("types implementation first-attach side-effect policy without putting it on the contract", () => {
     const processor = implementProcessor(codemodeProcessorContract, {
-      firstAttachAfterAppend: { mode: "lookback", milliseconds: 250 },
+      firstAttachAfterAppend: { mode: "none" },
     });
 
     expectTypeOf(processor.contract).not.toHaveProperty("firstAttachAfterAppend");

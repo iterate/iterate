@@ -11,13 +11,19 @@ import {
 import type {
   EventsStreamBuiltInElement,
   EventsStreamGroupedRawEventElement,
-  EventsStreamRawEventElement,
+  EventsStreamRawEventSummary,
   EventsStreamViewReducer,
   EventsStreamViewState,
 } from "@iterate-com/ui/components/events/feed-items";
 
 const MAX_SAME_TYPE_RAW_GROUP = 50_000;
+const AGENT_SYSTEM_PROMPT_UPDATED_TYPE = "events.iterate.com/agent/system-prompt-updated";
 const AGENT_INPUT_ADDED_TYPE = "events.iterate.com/agent/input-added";
+const AGENT_OUTPUT_ADDED_TYPE = "events.iterate.com/agent/output-added";
+const AGENT_LLM_REQUEST_STARTED_TYPE = "events.iterate.com/agent/llm-request-started";
+const AGENT_LLM_REQUEST_COMPLETED_TYPE = "events.iterate.com/agent/llm-request-completed";
+const AGENT_LLM_REQUEST_FAILED_TYPE = "events.iterate.com/agent/llm-request-failed";
+const AGENT_LLM_REQUEST_CANCELLED_TYPE = "events.iterate.com/agent/llm-request-cancelled";
 const CODEMODE_BLOCK_ADDED_TYPE = "events.iterate.com/codemode/block-added";
 const CODEMODE_RESULT_ADDED_TYPE = "events.iterate.com/codemode/result-added";
 
@@ -76,7 +82,7 @@ export const rawPrettyEventsStreamViewReducer = createEventsStreamViewReducer({
   groupConsecutiveRawEvents: true,
 });
 
-/** Raw mode is one feed item per wire event. */
+/** Raw mode is one grouped raw feed item per wire event. */
 export const rawEventsStreamViewReducer = createEventsStreamViewReducer({
   slug: "raw",
   reduceEventToFeedItems: (event) => [toRawEventFeedItem(event)],
@@ -173,11 +179,6 @@ function countRawEventsInFeed(elements: readonly EventsStreamBuiltInElement[]) {
   let count = 0;
 
   for (const element of elements) {
-    if (element.type === "raw-event") {
-      count += 1;
-      continue;
-    }
-
     if (element.type === "grouped-raw-event") {
       count += element.props.count;
       continue;
@@ -234,7 +235,7 @@ function appendFeedItems(args: {
   const canGroupNextItems =
     args.groupConsecutiveRawEvents &&
     args.nextItems.length === 1 &&
-    args.nextItems[0]?.type === "raw-event";
+    args.nextItems[0]?.type === "grouped-raw-event";
 
   for (const item of args.nextItems) {
     if (!canGroupNextItems) {
@@ -243,16 +244,9 @@ function appendFeedItems(args: {
     }
 
     const previousItem = feedItems[feedItems.length - 1];
-    if (previousItem?.type === "grouped-raw-event" && item.type === "raw-event") {
+    if (previousItem?.type === "grouped-raw-event" && item.type === "grouped-raw-event") {
       if (previousItem.props.eventType === item.props.eventType) {
-        feedItems[feedItems.length - 1] = addRawEventToGroup(previousItem, item);
-        continue;
-      }
-    }
-
-    if (previousItem?.type === "raw-event" && item.type === "raw-event") {
-      if (previousItem.props.eventType === item.props.eventType) {
-        feedItems[feedItems.length - 1] = createRawEventGroup([previousItem, item]);
+        feedItems[feedItems.length - 1] = mergeRawEventGroups(previousItem, item);
         continue;
       }
     }
@@ -285,15 +279,15 @@ function reduceActivityState(args: {
     return args.state.activity;
   }
 
-  if (args.event.type === "events.iterate.com/agent/llm-request-started") {
+  if (args.event.type === AGENT_LLM_REQUEST_STARTED_TYPE) {
     return { ...args.state.activity, currentLlmRequestId: requestId };
   }
 
   if (
     args.state.activity.currentLlmRequestId === requestId &&
-    (args.event.type === "events.iterate.com/agent/llm-request-completed" ||
-      args.event.type === "events.iterate.com/agent/llm-request-cancelled" ||
-      args.event.type === "events.iterate.com/agent/llm-request-failed")
+    (args.event.type === AGENT_LLM_REQUEST_COMPLETED_TYPE ||
+      args.event.type === AGENT_LLM_REQUEST_CANCELLED_TYPE ||
+      args.event.type === AGENT_LLM_REQUEST_FAILED_TYPE)
   ) {
     return { ...args.state.activity, currentLlmRequestId: null };
   }
@@ -306,16 +300,86 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
 
   if (event.type === AGENT_INPUT_ADDED_TYPE) {
     const content = readStringPayloadField(event, "content");
-    const role = readAgentMessageRole(event);
-    if (content == null || role == null) return [];
+    if (content == null) return [];
     return [
       {
-        type: "message",
-        id: `message-${role}-${event.offset}`,
+        type: "prompt-context",
+        id: `prompt-context-${event.offset}`,
         props: {
-          role,
+          source: readStringPayloadField(event, "source") ?? undefined,
           text: content,
-          format: "markdown",
+          triggerLlmRequest: readTriggerLlmRequest(event),
+          timestamp,
+          raw: event,
+        },
+      },
+    ];
+  }
+
+  if (event.type === AGENT_SYSTEM_PROMPT_UPDATED_TYPE) {
+    const systemPrompt = readStringPayloadField(event, "systemPrompt");
+    if (systemPrompt == null) return [];
+    return [
+      {
+        type: "system-prompt",
+        id: `system-prompt-${event.offset}`,
+        props: {
+          text: systemPrompt,
+          timestamp,
+          raw: event,
+        },
+      },
+    ];
+  }
+
+  if (event.type === AGENT_OUTPUT_ADDED_TYPE) {
+    const content = readStringPayloadField(event, "content");
+    if (content == null) return [];
+    return [
+      {
+        type: "agent-output",
+        id: `agent-output-${event.offset}`,
+        props: {
+          text: content,
+          timestamp,
+          raw: event,
+        },
+      },
+    ];
+  }
+
+  if (event.type === AGENT_LLM_REQUEST_STARTED_TYPE) {
+    const requestId = readStringPayloadField(event, "requestId");
+    if (requestId == null) return [];
+    return [
+      {
+        type: "llm-request-boundary",
+        id: `llm-request-started-${event.offset}`,
+        props: {
+          phase: "started",
+          requestId,
+          timestamp,
+          raw: event,
+        },
+      },
+    ];
+  }
+
+  if (
+    event.type === AGENT_LLM_REQUEST_COMPLETED_TYPE ||
+    event.type === AGENT_LLM_REQUEST_FAILED_TYPE ||
+    event.type === AGENT_LLM_REQUEST_CANCELLED_TYPE
+  ) {
+    const requestId = readStringPayloadField(event, "requestId");
+    if (requestId == null) return [];
+    return [
+      {
+        type: "llm-request-boundary",
+        id: `llm-request-ended-${event.offset}`,
+        props: {
+          phase: "ended",
+          outcome: readLlmRequestOutcome(event.type),
+          requestId,
           timestamp,
           raw: event,
         },
@@ -356,20 +420,6 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
         props: {
           role: "assistant",
           text: message,
-          timestamp,
-          raw: event,
-        },
-      },
-    ];
-  }
-
-  if (event.type === STREAM_FIRST_INITIALIZED_TYPE) {
-    return [
-      {
-        type: "lifecycle",
-        id: `lifecycle-initialized-${event.offset}`,
-        props: {
-          label: "Stream initialized",
           timestamp,
           raw: event,
         },
@@ -489,27 +539,33 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
   return [];
 }
 
-function toRawEventFeedItem(event: Event): EventsStreamRawEventElement {
+function readLlmRequestOutcome(eventType: string): "completed" | "failed" | "cancelled" {
+  if (eventType === AGENT_LLM_REQUEST_COMPLETED_TYPE) return "completed";
+  if (eventType === AGENT_LLM_REQUEST_FAILED_TYPE) return "failed";
+  return "cancelled";
+}
+
+function toRawEventFeedItem(event: Event): EventsStreamGroupedRawEventElement {
+  return createRawEventGroup([toRawEventSummary(event)]);
+}
+
+function toRawEventSummary(event: Event): EventsStreamRawEventSummary {
   return {
-    type: "raw-event",
-    id: `raw-event-${event.offset}`,
-    props: {
-      streamPath: event.streamPath,
-      offset: event.offset,
-      createdAt: event.createdAt,
-      eventType: event.type,
-      timestamp: getTimestamp(event.createdAt),
-      raw: event,
-    },
+    streamPath: event.streamPath,
+    offset: event.offset,
+    createdAt: event.createdAt,
+    eventType: event.type,
+    timestamp: getTimestamp(event.createdAt),
+    raw: event,
   };
 }
 
-function addRawEventToGroup(
+function mergeRawEventGroups(
   group: EventsStreamGroupedRawEventElement,
-  event: EventsStreamRawEventElement,
+  nextGroup: EventsStreamGroupedRawEventElement,
 ): EventsStreamGroupedRawEventElement {
-  const events = [...group.props.events, event];
-  const count = group.props.count + 1;
+  const events = [...group.props.events, ...nextGroup.props.events];
+  const count = group.props.count + nextGroup.props.count;
 
   if (events.length > MAX_SAME_TYPE_RAW_GROUP) {
     return createRawEventGroup(events.slice(-MAX_SAME_TYPE_RAW_GROUP), {
@@ -522,7 +578,7 @@ function addRawEventToGroup(
 }
 
 function createRawEventGroup(
-  events: readonly EventsStreamRawEventElement[],
+  events: readonly EventsStreamRawEventSummary[],
   state?: { count: number; firstTimestamp: number },
 ): EventsStreamGroupedRawEventElement {
   const firstEvent = events[0];
@@ -530,13 +586,13 @@ function createRawEventGroup(
 
   return {
     type: "grouped-raw-event",
-    id: `grouped-raw-event-${firstEvent.props.eventType}-${firstEvent.props.offset}-${lastEvent.props.offset}`,
+    id: `grouped-raw-event-${firstEvent.eventType}-${firstEvent.offset}-${lastEvent.offset}`,
     props: {
-      eventType: firstEvent.props.eventType,
+      eventType: firstEvent.eventType,
       count: state?.count ?? events.length,
       events: [...events],
-      firstTimestamp: state?.firstTimestamp ?? firstEvent.props.timestamp,
-      lastTimestamp: lastEvent.props.timestamp,
+      firstTimestamp: state?.firstTimestamp ?? firstEvent.timestamp,
+      lastTimestamp: lastEvent.timestamp,
     },
   };
 }
@@ -546,19 +602,28 @@ function readStringPayloadField(event: Event, key: string) {
   return typeof value === "string" ? value : null;
 }
 
-function readAgentMessageRole(event: Event) {
-  const role = readPayloadRecord(event)?.role;
-
-  if (role == null) {
-    return "user";
-  }
-
-  return role === "user" || role === "assistant" ? role : null;
-}
-
 function readRecordPayloadField(event: Event, key: string): Record<string, unknown> | null {
   const value = readPayloadRecord(event)?.[key];
   return isRecord(value) ? value : null;
+}
+
+function readTriggerLlmRequest(event: Event) {
+  const trigger = readRecordPayloadField(event, "triggerLlmRequest");
+  if (trigger == null) return { behaviour: "auto" as const };
+
+  switch (trigger.behaviour) {
+    case "auto":
+    case "dont-trigger-request":
+    case "interrupt-current-request":
+    case "after-current-request":
+      return { behaviour: trigger.behaviour };
+    case "trigger-request-within-time-period":
+      return typeof trigger.withinMs === "number"
+        ? { behaviour: trigger.behaviour, withinMs: trigger.withinMs }
+        : { behaviour: "auto" as const };
+    default:
+      return { behaviour: "auto" as const };
+  }
 }
 
 function readNumberPayloadField(event: Event, key: string) {

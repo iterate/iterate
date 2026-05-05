@@ -501,7 +501,7 @@ export async function catchUpProcessorFromStream<
   const firstAttachPolicy =
     args.firstAttachAfterAppend ??
     args.processor.implementation.firstAttachAfterAppend ??
-    ({ mode: "none" } satisfies FirstAttachAfterAppendPolicy);
+    ({ mode: "lookback", milliseconds: 1_000 } satisfies FirstAttachAfterAppendPolicy);
   const now = args.now ?? new Date();
 
   let storedState: StoredProcessorState<Contract> = {

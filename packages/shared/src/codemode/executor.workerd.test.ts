@@ -75,6 +75,23 @@ describe("CodemodeExecutor", () => {
     expect(add).toHaveBeenCalledWith({ a: 3, b: 4 });
   });
 
+  it("passes multiple tool call arguments through the proxy", async () => {
+    const apiCall = vi.fn(async (payload: unknown) => payload);
+    const executor = new CodemodeExecutor({ loader: env.LOADER });
+    const { events: _events, onEvent } = collectEvents();
+
+    const result = await executor.execute({
+      code: 'async () => await slack.apiCall("auth.test", {})',
+      providers: [{ path: ["slack"], provider: simpleProvider({ apiCall }) }],
+      blockId,
+      onEvent,
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.result).toEqual(["auth.test", {}]);
+    expect(apiCall).toHaveBeenCalledWith(["auth.test", {}]);
+  });
+
   it("emits tool-function-call events", async () => {
     const echo = vi.fn(async (payload: unknown) => payload);
     const executor = new CodemodeExecutor({ loader: env.LOADER });

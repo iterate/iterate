@@ -221,7 +221,7 @@ export type EventFromType<
  * await streamApi.append({
  *   event: {
  *     type: "events.iterate.com/agent/input-added",
- *     payload: { role: "user", content: "hello" },
+ *     payload: { content: "hello" },
  *   },
  * });
  * ```
@@ -470,12 +470,12 @@ export type StoredProcessorState<Contract> = {
  * Runner policy for the very first time a processor is attached to an existing
  * stream.
  *
- * Historical replay is normally reduce-only because `afterAppend` calls APIs
- * and appends derived events. A short lookback window is useful for processors
- * that are installed just after stream creation and still need to react to a
- * very recent event such as stream initialization. This policy is deliberately
- * backend-only: frontend projections import contracts/reducers and should never
- * decide when side effects run.
+ * Historical replay is reduce-only except for a short default lookback window.
+ * That default covers processors installed just after stream creation, where a
+ * very recent event such as stream initialization should still run side
+ * effects. Override this only when that default is confusing or unsafe for a
+ * processor. This policy is deliberately backend-only: frontend projections
+ * import contracts/reducers and should never decide when side effects run.
  */
 export type FirstAttachAfterAppendPolicy =
   | { mode: "none" }
@@ -484,9 +484,12 @@ export type FirstAttachAfterAppendPolicy =
 
 export type ProcessorImplementation<Contract> = {
   /**
-   * Default first-attach side-effect policy for runners. A specific runner
-   * deployment may override this. Keep this off the contract so frontend code
-   * can import contracts without learning backend lifecycle policy.
+   * First-attach side-effect policy for runners. Leave this unset for the
+   * standard short lookback default; set `{ mode: "none" }` only for processors
+   * where even recent first-attach side effects are surprising or unsafe. A
+   * specific runner deployment may override this. Keep this off the contract so
+   * frontend code can import contracts without learning backend lifecycle
+   * policy.
    */
   firstAttachAfterAppend?: FirstAttachAfterAppendPolicy;
   /**
@@ -501,8 +504,8 @@ export type ProcessorImplementation<Contract> = {
   }): Promise<void> | void;
   /**
    * Runs for live stream events after the runner has reduced and persisted the
-   * processor state for that event. Historical catch-up is reduce-only by
-   * default so side effects are not replayed accidentally.
+   * processor state for that event. Historical catch-up is otherwise
+   * reduce-only, except for the first-attach lookback policy.
    */
   afterAppend?(args: {
     event: ConsumedEvent<Contract>;

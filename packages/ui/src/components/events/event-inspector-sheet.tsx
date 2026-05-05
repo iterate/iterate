@@ -3,6 +3,7 @@ import type { Event } from "@iterate-com/events-contract";
 import { BookOpenIcon, ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 
 import { Button } from "@iterate-com/ui/components/button";
+import { StreamEventType } from "@iterate-com/ui/components/events/stream-event-type";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import {
   Sheet,
@@ -109,12 +110,22 @@ export function EventsStreamEventInspectorSheet({
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0 flex-1 space-y-1">
               <SheetTitle className="truncate font-mono text-sm">
-                {docsHref ? (
-                  <a
+                {selectedEvent == null ? (
+                  "Event"
+                ) : (
+                  <StreamEventType
+                    type={selectedEvent.type}
                     href={docsHref}
-                    className="inline-flex min-w-0 items-center gap-2 hover:text-primary hover:underline"
-                  >
-                    <span className="truncate">{selectedEvent?.type ?? "Event"}</span>
+                    renderLink={({ href, className, children }) => (
+                      <a href={href} className={className}>
+                        {children}
+                      </a>
+                    )}
+                    className="gap-2"
+                  />
+                )}
+                {docsHref ? (
+                  <span className="ml-1 inline-flex align-middle">
                     <Tooltip>
                       <TooltipTrigger
                         render={
@@ -127,10 +138,8 @@ export function EventsStreamEventInspectorSheet({
                         <p>Event docs</p>
                       </TooltipContent>
                     </Tooltip>
-                  </a>
-                ) : (
-                  (selectedEvent?.type ?? "Event")
-                )}
+                  </span>
+                ) : null}
               </SheetTitle>
               <SheetDescription>{selectedEvent?.createdAt ?? "No event selected"}</SheetDescription>
             </div>

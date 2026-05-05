@@ -70,23 +70,20 @@ describe("AgentProcessorContract", () => {
     ]);
   });
 
-  it("projects model-visible history from agent input events", () => {
+  it("projects model-visible history from agent input and output events", () => {
     expect(
       reduceAgentEvents({
         events: [
           committedEvent({
             type: "events.iterate.com/agent/input-added",
             payload: {
-              role: "user",
               content: "hello",
             },
           }),
           committedEvent({
-            type: "events.iterate.com/agent/input-added",
+            type: "events.iterate.com/agent/output-added",
             payload: {
-              role: "assistant",
               content: "working",
-              triggerLlmRequest: { behaviour: "dont-trigger-request" },
             },
           }),
         ],

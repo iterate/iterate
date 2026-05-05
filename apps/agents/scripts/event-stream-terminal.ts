@@ -15,7 +15,7 @@
 import { Event, ProjectSlug, StreamPath, type EventInput } from "@iterate-com/events-contract";
 import type {
   EventsStreamBuiltInElement,
-  EventsStreamRawEventElement,
+  EventsStreamRawEventSummary,
 } from "@iterate-com/ui/components/events/feed-items";
 import type { EventsStreamViewReducer } from "@iterate-com/ui/components/events/feed-items";
 import {
@@ -955,9 +955,9 @@ function getItemTimestamp(item: EventsStreamBuiltInElement): number | undefined 
 
 /** Route a feed element to its renderer, returning styled text chunks. */
 function renderFeedItem(item: EventsStreamBuiltInElement, elapsedByOffset: Map<number, string>) {
-  if (item.type === "raw-event")
-    return renderRawEventSummary(item, elapsedByOffset.get(item.props.offset));
   if (item.type === "message") return renderMessageItem(item.props);
+  if (item.type === "prompt-context") return renderPromptContextItem(item.props);
+  if (item.type === "agent-output") return renderAgentOutputItem(item.props);
   if (item.type === "lifecycle") return renderLifecycleItem(item.props);
   if (item.type === "error") return renderErrorItem(item.props);
   if (item.type === "child-stream-created") return renderChildStreamItem(item.props);
@@ -994,6 +994,37 @@ function renderMessageItem(props: { role: "user" | "assistant"; text: string; ti
     fg(P.bg)("\n"),
     bold(fg(labelColor)(`${label} · ${time}\n`)),
     ...wrappedLines.map((line) => fg(P.text)(`  ${line}\n`)),
+  ];
+}
+
+function renderPromptContextItem(props: { source?: string; text: string; timestamp: number }) {
+  const width = getFeedContentWidth();
+  const source = props.source == null ? "" : ` · from ${props.source}`;
+  const header = `Prompt context${source} · ${formatTime(props.timestamp)}`;
+  const wrappedLines = props.text.split("\n").flatMap((line) => wrapLine(line, width - 4));
+
+  return [
+    fg(P.bg)("\n"),
+    fg(P.textSubdued)(`${rightAlign(header, width)}\n`),
+    ...wrappedLines.slice(0, 12).map((line) => fg(P.textDim)(`${rightAlign(line, width)}\n`)),
+    ...(wrappedLines.length > 12
+      ? [fg(P.textDim)(`${rightAlign(`… ${wrappedLines.length - 12} more lines`, width)}\n`)]
+      : []),
+  ];
+}
+
+function renderAgentOutputItem(props: { text: string; timestamp: number }) {
+  const width = getFeedContentWidth();
+  const header = `Agent output · ${formatTime(props.timestamp)}`;
+  const wrappedLines = props.text.split("\n").flatMap((line) => wrapLine(line, width - 4));
+
+  return [
+    fg(P.bg)("\n"),
+    bold(fg(P.agent)(`${header}\n`)),
+    ...wrappedLines.slice(0, 12).map((line) => fg(P.text)(`  ${line}\n`)),
+    ...(wrappedLines.length > 12
+      ? [fg(P.textDim)(`  … ${wrappedLines.length - 12} more lines\n`)]
+      : []),
   ];
 }
 
@@ -1041,13 +1072,33 @@ function renderChildStreamItem(props: { childPath: string; timestamp: number }) 
 function renderGroupedRawItem(props: {
   eventType: string;
   count: number;
+  events: EventsStreamRawEventSummary[];
   firstTimestamp: number;
   lastTimestamp: number;
 }) {
   const width = getFeedContentWidth();
-  const elapsed = formatElapsedTime(props.lastTimestamp - props.firstTimestamp);
-  const summary = `${props.eventType} · ×${props.count} · ${elapsed} · ${formatTime(props.lastTimestamp)}`;
-  return [fg(P.textDim)(`${rightAlign(summary, width)}\n`)];
+  const firstEvent = props.events[0];
+  if (firstEvent == null) return [];
+  const elapsedByOffset = getElapsedByOffset(state.slots.feed);
+  const elapsedLabel = elapsedByOffset.get(firstEvent.offset);
+  const countLabel = props.count > 1 ? `×${props.count}` : undefined;
+  const rangeLabel =
+    props.count > 1 && props.firstTimestamp !== props.lastTimestamp
+      ? `to ${formatTime(props.lastTimestamp)}`
+      : undefined;
+  const summary = [
+    firstEvent.offset,
+    props.eventType,
+    countLabel,
+    elapsedLabel,
+    formatTime(props.firstTimestamp),
+    rangeLabel,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const isSelected = navigationState.focus === "feed" && firstEvent.offset === selectedOffset;
+  const line = `${rightAlign(summary, width)}\n`;
+  return [isSelected ? bg(P.surfaceSelected)(fg(P.text)(line)) : fg(P.textDim)(line)];
 }
 
 // ---------------------------------------------------------------------------
@@ -1060,9 +1111,9 @@ function renderGroupedRawItem(props: {
  * Shows: offset · event type · elapsed · timestamp
  * Highlighted when selected (feed focus mode).
  */
-function renderRawEventSummary(item: EventsStreamRawEventElement, elapsedLabel?: string) {
+function renderRawEventSummary(item: EventsStreamRawEventSummary, elapsedLabel?: string) {
   const width = getFeedContentWidth();
-  const isSelected = navigationState.focus === "feed" && item.props.offset === selectedOffset;
+  const isSelected = navigationState.focus === "feed" && item.offset === selectedOffset;
   const summary = `${rightAlign(formatEventSummary(item, elapsedLabel), width)}\n`;
   return [isSelected ? bg(P.surfaceSelected)(fg(P.text)(summary)) : fg(P.textDim)(summary)];
 }
@@ -1075,8 +1126,8 @@ function renderRawEventSummary(item: EventsStreamRawEventElement, elapsedLabel?:
 /** Render the full event detail view for detailEventOffset. */
 function renderEventDetailView(): TextRenderable[] {
   const rawEvents = getRawFeedItems();
-  const currentIndex = rawEvents.findIndex((item) => item.props.offset === detailEventOffset);
-  const event = rawEvents[currentIndex]?.props.raw;
+  const currentIndex = rawEvents.findIndex((item) => item.offset === detailEventOffset);
+  const event = rawEvents[currentIndex]?.raw;
 
   if (event == null) {
     detailEventOffset = undefined;
@@ -1084,8 +1135,8 @@ function renderEventDetailView(): TextRenderable[] {
   }
 
   const width = getFeedContentWidth();
-  const prevEvent = rawEvents[currentIndex - 1]?.props.raw;
-  const nextEvent = rawEvents[currentIndex + 1]?.props.raw;
+  const prevEvent = rawEvents[currentIndex - 1]?.raw;
+  const nextEvent = rawEvents[currentIndex + 1]?.raw;
   const sincePrev = prevEvent
     ? formatElapsedTime(Date.parse(event.createdAt) - Date.parse(prevEvent.createdAt))
     : undefined;
@@ -1130,13 +1181,13 @@ function renderEventDetailView(): TextRenderable[] {
 /** Navigate to the previous/next raw event in the detail view. */
 function navigateDetailEvent(direction: -1 | 1) {
   const rawEvents = getRawFeedItems();
-  const currentIndex = rawEvents.findIndex((item) => item.props.offset === detailEventOffset);
+  const currentIndex = rawEvents.findIndex((item) => item.offset === detailEventOffset);
   if (currentIndex === -1) return;
 
   const nextIndex = currentIndex + direction;
   if (nextIndex < 0 || nextIndex >= rawEvents.length) return;
 
-  detailEventOffset = rawEvents[nextIndex].props.offset;
+  detailEventOffset = rawEvents[nextIndex].offset;
   selectedOffset = detailEventOffset;
   updateFeed("keep");
 }
@@ -1155,7 +1206,7 @@ function focusFeed() {
     selectedStreamPath ??= currentStreamPath;
   } else {
     const rawItems = getRawFeedItems();
-    selectedOffset ??= rawItems[rawItems.length - 1]?.props.offset;
+    selectedOffset ??= rawItems[rawItems.length - 1]?.offset;
   }
   input.placeholder = "Tab to return to input";
   feed.focus();
@@ -1212,14 +1263,14 @@ function selectAdjacentFeedItem(direction: -1 | 1) {
   const rawItems = getRawFeedItems();
   if (rawItems.length === 0) return;
 
-  const currentIndex = rawItems.findIndex((item) => item.props.offset === selectedOffset);
+  const currentIndex = rawItems.findIndex((item) => item.offset === selectedOffset);
   const nextIndex =
     currentIndex === -1 ? (direction === 1 ? 0 : rawItems.length - 1) : currentIndex + direction;
 
   // Clamp to bounds — don't wrap around
   if (nextIndex < 0 || nextIndex >= rawItems.length) return;
 
-  selectedOffset = rawItems[nextIndex].props.offset;
+  selectedOffset = rawItems[nextIndex].offset;
   updateFeed("selected");
 }
 
@@ -1574,9 +1625,9 @@ function clearBoxChildren(box: BoxRenderable | ScrollBoxRenderable) {
 }
 
 function getRawFeedItems() {
-  return state.slots.feed.filter(
-    (item): item is EventsStreamRawEventElement => item.type === "raw-event",
-  );
+  return state.slots.feed
+    .flatMap((item) => (item.type === "grouped-raw-event" ? item.props.events : []))
+    .sort((a, b) => a.offset - b.offset);
 }
 
 function isFeedAtBottom() {
