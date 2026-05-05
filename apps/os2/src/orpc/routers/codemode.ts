@@ -168,6 +168,7 @@ export const codemodeRouter = {
 
       const callableCtx: CallableContext = {
         env: context.callableEnv ?? {},
+        exports: context.callableExports,
         fetch: globalThis.fetch,
       };
 
@@ -268,6 +269,7 @@ export const codemodeRouter = {
 
         const callableCtx: CallableContext = {
           env: context.callableEnv ?? {},
+          exports: context.callableExports,
           fetch: globalThis.fetch,
         };
         const typeBlocks: string[] = [];

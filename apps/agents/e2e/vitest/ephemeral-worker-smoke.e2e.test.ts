@@ -5,6 +5,7 @@ import {
 } from "../test-support/create-ephemeral-worker.ts";
 import { setupE2E } from "../test-support/e2e-test.ts";
 import { OPENAPI_TOOL_PROVIDER_PRESET_EVENT } from "~/lib/default-tool-provider-events.ts";
+import { buildWebSocketSubscriptionCallable } from "~/lib/events-urls.ts";
 import {
   buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl,
   streamPathToAgentInstance,
@@ -72,7 +73,7 @@ describeEphemeral("ephemeral worker", () => {
         payload: {
           slug: `iterate-agent-ws-${e2e.executionSuffix}`,
           type: "websocket",
-          callbackUrl,
+          callable: buildWebSocketSubscriptionCallable(callbackUrl),
         },
       });
 

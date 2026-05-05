@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { CircuitBreakerConfig, StreamPath } from "@iterate-com/events-contract";
+import { CircuitBreakerConfig, ExternalSubscriber, StreamPath } from "@iterate-com/events-contract";
 import { CoreProcessorContract } from "@iterate-com/shared/stream-processors/core/contract";
 import { defineProcessorContract } from "@iterate-com/shared/stream-processors";
 
@@ -44,22 +44,7 @@ export const CoreStreamProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/core/subscription-configured": {
       description: "A websocket or webhook subscriber was configured for this stream.",
-      payloadSchema: z.discriminatedUnion("type", [
-        z.object({
-          type: z.literal("websocket"),
-          slug: z.string().trim().min(1),
-          callbackUrl: z.url(),
-          jsonataFilter: z.string().trim().min(1).optional(),
-          jsonataTransform: z.string().trim().min(1).optional(),
-        }),
-        z.object({
-          type: z.literal("webhook"),
-          slug: z.string().trim().min(1),
-          callbackUrl: z.url(),
-          jsonataFilter: z.string().trim().min(1).optional(),
-          jsonataTransform: z.string().trim().min(1).optional(),
-        }),
-      ]),
+      payloadSchema: ExternalSubscriber,
     },
     "events.iterate.com/core/circuit-breaker-configured": {
       description: "The stream circuit breaker configuration was replaced.",

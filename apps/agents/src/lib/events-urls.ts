@@ -1,4 +1,5 @@
 import { ProjectSlug, type StreamPath } from "@iterate-com/events-contract";
+import type { FetchCallable } from "@iterate-com/shared/callable/types.ts";
 import { getProjectUrl } from "../../../events/src/lib/project-slug.ts";
 
 /**
@@ -151,6 +152,30 @@ export function buildWebchatStreamProcessorRunnerWebSocketCallbackUrl(args: {
     ...args,
     runnerSlug: "webchat-stream-processor-runner",
   });
+}
+
+/**
+ * Events subscriptions now persist Callable descriptors rather than callback
+ * URLs. Keep Agents' websocket URL builders as the routing source of truth, but
+ * store them as fetch callables because Cloudflare websocket upgrade is still a
+ * fetch request under the hood. The callable schema accepts only http(s) URLs;
+ * `connectCallableWebSocket()` adds the Upgrade header at dispatch time.
+ */
+export function buildWebSocketSubscriptionCallable(callbackUrl: string): FetchCallable {
+  const url = new URL(callbackUrl);
+  if (url.protocol === "ws:") {
+    url.protocol = "http:";
+  } else if (url.protocol === "wss:") {
+    url.protocol = "https:";
+  }
+
+  return {
+    type: "fetch",
+    via: {
+      type: "url",
+      url: url.toString(),
+    },
+  };
 }
 
 function buildStreamProcessorRunnerWebSocketCallbackUrl(args: {

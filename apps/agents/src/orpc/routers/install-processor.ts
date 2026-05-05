@@ -4,6 +4,7 @@ import {
   AUTO_SUBSCRIBER_INSTANCE,
   AUTO_SUBSCRIBER_PUBLIC_BASE_URL_QUERY_PARAM,
 } from "~/durable-objects/child-stream-auto-subscriber.ts";
+import { buildWebSocketSubscriptionCallable } from "~/lib/events-urls.ts";
 import {
   buildAgentWebSocketCallbackUrl,
   CHILD_STREAM_AUTO_SUBSCRIBER_CLASS,
@@ -17,8 +18,8 @@ export const installProcessorRouter = {
     const streamPath = context.config.streamPathPrefix;
     const publicOrigin = new URL(input.publicBaseUrl).origin;
 
-    // Encode `publicBaseUrl` into the callback URL so the DO can read it
-    // back off `connection.uri` when it fires `subscription/configured`
+    // Encode `publicBaseUrl` into the target URL so the DO can read it back off
+    // `connection.uri` when it fires `subscription-configured`
     // events to child streams. See child-stream-auto-subscriber.ts.
     const callbackUrlObj = new URL(
       buildAgentWebSocketCallbackUrl({
@@ -42,7 +43,7 @@ export const installProcessorRouter = {
         payload: {
           slug: CHILD_STREAM_AUTO_SUBSCRIBER_SUBSCRIPTION_SLUG,
           type: "websocket",
-          callbackUrl,
+          callable: buildWebSocketSubscriptionCallable(callbackUrl),
         },
       },
     });
