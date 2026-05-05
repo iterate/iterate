@@ -16,9 +16,36 @@ describe("processor docs", () => {
     expect(event?.payloadJsonSchema).toMatchObject({
       type: "object",
       properties: {
-        content: { type: "string" },
+        content: {
+          type: "string",
+          description: "Model-visible user context to append to agent history.",
+        },
       },
+      examples: [
+        {
+          content: "Summarize the deployment logs.",
+        },
+        {
+          content: "Actually, focus only on failed checks.",
+          triggerLlmRequest: { behaviour: "interrupt-current-request" },
+        },
+      ],
     });
+    expect(event?.examples).toEqual([
+      {
+        description: "User input that uses the default automatic LLM request behaviour.",
+        payload: {
+          content: "Summarize the deployment logs.",
+        },
+      },
+      {
+        description: "User input that interrupts the current request before starting a new one.",
+        payload: {
+          content: "Actually, focus only on failed checks.",
+          triggerLlmRequest: { behaviour: "interrupt-current-request" },
+        },
+      },
+    ]);
   });
 
   test("resolves descriptions for agent consumed dependency events", () => {

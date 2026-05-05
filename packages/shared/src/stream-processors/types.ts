@@ -34,12 +34,18 @@ export type DerivedIdempotencyKeyArgs = {
   event: Pick<StreamEvent, "streamPath" | "offset">;
 };
 
+export type EventExample<Payload = unknown> = {
+  description: string;
+  payload: Payload;
+};
+
 export type EventDefinition<
   _Type extends string = string,
   PayloadOutput = unknown,
   PayloadInput = PayloadOutput,
 > = {
   description?: string;
+  examples?: readonly EventExample<PayloadInput>[];
   payloadSchema: z.ZodType<PayloadOutput, PayloadInput>;
 };
 
@@ -47,6 +53,20 @@ export type EventCatalog = Record<string, EventDefinition<string, unknown, unkno
 
 export type NoInferValue<Value> = [Value][Value extends unknown ? 0 : never];
 export type ProcessorStateObject = Record<string, unknown>;
+
+type EventDefinitionWithPayloadExamples<Value> = Value extends {
+  payloadSchema: infer PayloadSchema extends z.ZodType;
+}
+  ? Value extends { examples: infer Examples }
+    ? Examples extends readonly EventExample<z.input<PayloadSchema>>[]
+      ? Value
+      : never
+    : Value
+  : never;
+
+export type EventCatalogWithPayloadExamples<Events extends EventCatalog> = {
+  [Key in keyof Events]: EventDefinitionWithPayloadExamples<Events[Key]>;
+};
 
 /**
  * Type-level event lookup for string-keyed processor contracts.
@@ -329,7 +349,7 @@ export type ProcessorContractInput<
   stateSchema: z.output<StateSchema> extends Record<string, unknown> ? StateSchema : never;
   initialState?: z.input<StateSchema>;
   processorDeps: ProcessorDeps;
-  events: Events;
+  events: Events & EventCatalogWithPayloadExamples<Events>;
   consumes: Consumes & ResolvedEventTypesOnly<Events, ProcessorDeps, Consumes>;
   emits: Emits & ResolvedEventTypesOnly<Events, ProcessorDeps, Emits>;
   reduce?: ProcessorContractShape<StateSchema, Events, ProcessorDeps, Consumes, Emits>["reduce"];
@@ -347,7 +367,7 @@ export type ProcessorContractInputWithoutDeps<
   stateSchema: z.output<StateSchema> extends Record<string, unknown> ? StateSchema : never;
   initialState?: z.input<StateSchema>;
   processorDeps?: never;
-  events: Events;
+  events: Events & EventCatalogWithPayloadExamples<Events>;
   consumes: Consumes & ResolvedEventTypesOnly<Events, readonly [], Consumes>;
   emits: Emits & ResolvedEventTypesOnly<Events, readonly [], Emits>;
   reduce?: ProcessorContractShape<StateSchema, Events, readonly [], Consumes, Emits>["reduce"];
