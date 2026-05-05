@@ -53,21 +53,43 @@ export const AgentProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/agent/input-added": {
       description: "A curated model-visible row of agent context.",
-      payloadSchema: z.object({
-        content: z.string(),
-        triggerLlmRequest: z
-          .discriminatedUnion("behaviour", [
-            z.object({ behaviour: z.literal("auto") }),
-            z.object({ behaviour: z.literal("dont-trigger-request") }),
-            z.object({ behaviour: z.literal("interrupt-current-request") }),
-            z.object({ behaviour: z.literal("after-current-request") }),
-            z.object({
-              behaviour: z.literal("trigger-request-within-time-period"),
-              withinMs: z.number().int().nonnegative(),
-            }),
-          ])
-          .default({ behaviour: "auto" }),
-      }),
+      examples: [
+        {
+          description: "User input that uses the default automatic LLM request behaviour.",
+          payload: {
+            content: "Summarize the deployment logs.",
+          },
+        },
+        {
+          description: "User input that interrupts the current request before starting a new one.",
+          payload: {
+            content: "Actually, focus only on failed checks.",
+            triggerLlmRequest: { behaviour: "interrupt-current-request" },
+          },
+        },
+      ],
+      payloadSchema: z
+        .object({
+          content: z.string().describe("Model-visible user context to append to agent history."),
+          triggerLlmRequest: z
+            .discriminatedUnion("behaviour", [
+              z.object({ behaviour: z.literal("auto") }),
+              z.object({ behaviour: z.literal("dont-trigger-request") }),
+              z.object({ behaviour: z.literal("interrupt-current-request") }),
+              z.object({ behaviour: z.literal("after-current-request") }),
+              z.object({
+                behaviour: z.literal("trigger-request-within-time-period"),
+                withinMs: z
+                  .number()
+                  .int()
+                  .nonnegative()
+                  .describe("Maximum delay before the queued LLM request should start."),
+              }),
+            ])
+            .describe("How this input should affect LLM request scheduling.")
+            .default({ behaviour: "auto" }),
+        })
+        .describe("Payload for an agent input row."),
     },
     "events.iterate.com/agent/output-added": {
       description: "A model-visible assistant output row.",

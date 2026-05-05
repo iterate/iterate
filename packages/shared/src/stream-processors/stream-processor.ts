@@ -6,6 +6,7 @@ import type {
   DerivedIdempotencyKeyArgs,
   EventCatalog,
   EventDefinition,
+  EventExample,
   FirstAttachAfterAppendPolicy,
   Processor,
   ProcessorContractInput,
@@ -37,6 +38,7 @@ export function createEvent<
 >(args: {
   type: Type;
   description?: string;
+  examples?: readonly EventExample<z.input<PayloadSchema>>[];
   payloadSchema: PayloadSchema;
 }): {
   [Key in Type]: EventDefinition<Type, z.output<PayloadSchema>, z.input<PayloadSchema>>;
@@ -44,6 +46,7 @@ export function createEvent<
   return {
     [args.type]: {
       ...(args.description == null ? {} : { description: args.description }),
+      ...(args.examples == null ? {} : { examples: args.examples }),
       payloadSchema: args.payloadSchema,
     },
   } as unknown as {
@@ -829,6 +832,7 @@ export type {
   EmittedInput,
   EventCatalog,
   EventDefinition,
+  EventExample,
   FirstAttachAfterAppendPolicy,
   Processor,
   ProcessorContractInput,
