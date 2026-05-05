@@ -15,13 +15,13 @@ describe("syncPreviewInventory", () => {
       client: { add, delete: deleteResource, list },
       inventory: [
         {
-          data: { dopplerConfig: "preview_1" },
-          slug: "preview-1",
+          data: { dopplerConfig: "preview_2" },
+          slug: "preview-2",
           type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
         },
         {
-          data: { dopplerConfig: "preview_2" },
-          slug: "preview-2",
+          data: { dopplerConfig: "preview_3" },
+          slug: "preview-3",
           type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
         },
       ],
@@ -31,15 +31,15 @@ describe("syncPreviewInventory", () => {
     expect(add.mock.calls).toEqual([
       [
         {
-          data: { dopplerConfig: "preview_1" },
-          slug: "preview-1",
+          data: { dopplerConfig: "preview_2" },
+          slug: "preview-2",
           type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
         },
       ],
       [
         {
-          data: { dopplerConfig: "preview_2" },
-          slug: "preview-2",
+          data: { dopplerConfig: "preview_3" },
+          slug: "preview-3",
           type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
         },
       ],
@@ -52,37 +52,37 @@ describe("syncPreviewInventory", () => {
     const list = vi
       .fn()
       .mockResolvedValueOnce([
-        { data: {}, slug: "preview-1" },
-        { data: { dopplerConfig: "preview_2" }, slug: "preview-2" },
+        { data: {}, slug: "preview-2" },
+        { data: { dopplerConfig: "preview_3" }, slug: "preview-3" },
         { data: { dopplerConfig: "preview_99" }, slug: "preview-99" },
       ])
-      .mockResolvedValueOnce([{ data: { dopplerConfig: "preview_2" }, slug: "preview-2" }]);
+      .mockResolvedValueOnce([{ data: { dopplerConfig: "preview_3" }, slug: "preview-3" }]);
 
     await syncPreviewInventory({
       client: { add, delete: deleteResource, list },
       inventory: [
         {
-          data: { dopplerConfig: "preview_1" },
-          slug: "preview-1",
+          data: { dopplerConfig: "preview_2" },
+          slug: "preview-2",
           type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
         },
         {
-          data: { dopplerConfig: "preview_2" },
-          slug: "preview-2",
+          data: { dopplerConfig: "preview_3" },
+          slug: "preview-3",
           type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
         },
       ],
     });
 
     expect(deleteResource.mock.calls).toEqual([
-      [{ slug: "preview-1", type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE }],
+      [{ slug: "preview-2", type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE }],
       [{ slug: "preview-99", type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE }],
     ]);
     expect(add.mock.calls).toEqual([
       [
         {
-          data: { dopplerConfig: "preview_1" },
-          slug: "preview-1",
+          data: { dopplerConfig: "preview_2" },
+          slug: "preview-2",
           type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
         },
       ],
@@ -92,8 +92,8 @@ describe("syncPreviewInventory", () => {
 
 describe("parseEnvironmentConfigLeaseData", () => {
   it("requires a dopplerConfig string", () => {
-    expect(parseEnvironmentConfigLeaseData({ dopplerConfig: " preview_1 " })).toEqual({
-      dopplerConfig: "preview_1",
+    expect(parseEnvironmentConfigLeaseData({ dopplerConfig: " preview_2 " })).toEqual({
+      dopplerConfig: "preview_2",
     });
     expect(() => parseEnvironmentConfigLeaseData({})).toThrow(
       "Environment config lease data must include dopplerConfig.",

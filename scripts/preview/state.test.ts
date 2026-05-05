@@ -9,17 +9,17 @@ import {
 describe("cloudflare preview state helpers", () => {
   it("round-trips rendered preview state from the managed PR body section", () => {
     const environmentConfigLease = EnvironmentConfigLease.parse({
-      dopplerConfig: "preview_1",
+      dopplerConfig: "preview_2",
       leasedUntil: 1_700_000_000_000,
       leaseId: "9d975621-72c8-459d-936d-e9b4335e0f5d",
-      slug: "preview-1",
+      slug: "preview-2",
       type: "environment-config-lease",
     });
     const entry = CloudflarePreviewAppEntry.parse({
       appDisplayName: "Example",
       appSlug: "example",
       headSha: "abcdef0123456789",
-      publicUrl: "https://example-preview-1.iterate.workers.dev",
+      publicUrl: "https://example-preview-2.iterate.workers.dev",
       runUrl: "https://github.com/iterate/iterate/actions/runs/123",
       shortSha: "abcdef0",
       status: "deployed",
@@ -40,12 +40,12 @@ describe("cloudflare preview state helpers", () => {
     expect(parseCloudflarePreviewState(body)).toEqual(state);
     expect(body).toContain("## Summary");
     expect(body).toContain("## Environment Config Lease");
-    expect(body).toContain("Lease: `preview-1`");
-    expect(body).toContain("Doppler config: `preview_1`");
+    expect(body).toContain("Lease: `preview-2`");
+    expect(body).toContain("Doppler config: `preview_2`");
     expect(body).toContain("<!-- CLOUDFLARE_PREVIEW_STATE -->");
     expect(body).toContain("<!--\n{");
     expect(body).toContain("\n-->\n<!-- /CLOUDFLARE_PREVIEW_STATE -->");
-    expect(body).toContain("Preview: https://example-preview-1.iterate.workers.dev");
+    expect(body).toContain("Preview: https://example-preview-2.iterate.workers.dev");
   });
 
   it("updates only the managed block and preserves surrounding PR body content", () => {

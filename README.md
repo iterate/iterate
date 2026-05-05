@@ -44,7 +44,7 @@ pnpm format       # Format code
 Think of every new-style Cloudflare deploy as selecting two axes:
 
 - Doppler project: app/service dimension, such as `os2` or `semaphore`
-- Doppler config: environment config dimension, such as `dev_jonas_2`, `preview_1`, or `prd`
+- Doppler config: environment config dimension, such as `dev_jonas_2`, `preview_2`, or `prd`
 
 For new-style Cloudflare apps (`agents`, `codemode`, `example`,
 `ingress-proxy`, `os2`, and `semaphore`), local deployed dev, PR previews, and
@@ -64,14 +64,14 @@ Environment config leases for PR previews are source-code seeded from
 `scripts/preview/preview-inventory.ts`. Each live Semaphore resource has:
 
 - type: `environment-config-lease`
-- slug: `preview-1`, `preview-2`, etc.
-- data: `{ "dopplerConfig": "preview_1" }`, etc.
+- slug: `preview-2`, `preview-3`, etc.
+- data: `{ "dopplerConfig": "preview_2" }`, etc.
 
 To create or repair environment config leases for PR previews:
 
 1. Add or confirm the lease in `scripts/preview/preview-inventory.ts`.
 2. Ensure every preview-managed app that may use that lease has the matching
-   Doppler config, for example `preview_10`, plus any required Cloudflare
+   Doppler config, for example `preview_9`, plus any required Cloudflare
    route/domain config.
 3. Reconcile the live Semaphore inventory from source:
 
@@ -82,9 +82,9 @@ doppler run --project os --config prd -- pnpm preview status
 
 The seed is exact for `environment-config-lease`: missing resources are created
 and drifted resources are replaced. Only add leases whose Doppler configs and
-Cloudflare domains exist in the right accounts. To expand capacity to
-`preview_11`, first add it to the source inventory and provision matching
-Doppler configs and app-specific Cloudflare prerequisites. See
+Cloudflare domains exist in the right accounts. To expand capacity, first add
+the slot to the source inventory and provision matching Doppler configs and
+app-specific Cloudflare prerequisites. See
 `docs/cloudflare-preview-environments.md` for the full lifecycle.
 
 ## Cloudflare Tunnels

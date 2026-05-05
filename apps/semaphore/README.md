@@ -57,7 +57,7 @@ The browser UI calls this value the operator token. Do not copy the token into s
 
 Use the raw lifecycle scripts with Doppler outside the package script:
 
-- `doppler run --project semaphore --config preview_1 -- pnpm exec tsx ./alchemy.run.ts`
+- `doppler run --project semaphore --config preview_2 -- pnpm exec tsx ./alchemy.run.ts`
 - `doppler run --project semaphore --config prd -- pnpm exec tsx ./alchemy.run.ts`
-- `doppler run --project semaphore --config preview_1 -- pnpm exec tsx ./alchemy.run.ts --destroy`
+- `doppler run --project semaphore --config preview_2 -- pnpm exec tsx ./alchemy.run.ts --destroy`
 - `doppler run --project semaphore --config prd -- pnpm exec tsx ./alchemy.run.ts --destroy`

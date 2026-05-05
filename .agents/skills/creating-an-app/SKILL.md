@@ -50,7 +50,7 @@ doppler run --project os --config prd -- pnpm preview cleanup --pull-request-num
 
 Workflow rules:
 
-- PR pushes deploy `preview_N`
+- PR pushes deploy a leased `preview_N`
 - pushes to `main` deploy `prd`
 - PR deploys update the managed preview section in the PR body
 - `main` deploy successes post to Slack
@@ -66,6 +66,6 @@ Use the `new-doppler-project` skill for the project/config setup.
 The app package should work with:
 
 ```bash
-doppler run --project <app> --config preview_1 -- pnpm exec tsx ./alchemy.run.ts
+doppler run --project <app> --config preview_2 -- pnpm exec tsx ./alchemy.run.ts
 doppler run --project <app> --config prd -- pnpm exec tsx ./alchemy.run.ts
 ```

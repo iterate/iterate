@@ -28,8 +28,8 @@ Cloudflare-only: TanStack Start + oRPC + raw D1 route registry, plus public-host
 #
 # Lease-bypassing manual deploy:
 # Check `pnpm preview status` first and use it only for emergency debugging.
-doppler run --project ingress-proxy --config preview_1 -- pnpm exec tsx ./alchemy.run.ts
-doppler run --project ingress-proxy --config preview_1 -- pnpm exec tsx ./alchemy.run.ts --destroy
+doppler run --project ingress-proxy --config preview_2 -- pnpm exec tsx ./alchemy.run.ts
+doppler run --project ingress-proxy --config preview_2 -- pnpm exec tsx ./alchemy.run.ts --destroy
 doppler run --project ingress-proxy --config prd -- pnpm exec tsx ./alchemy.run.ts
 doppler run --project ingress-proxy --config prd -- pnpm exec tsx ./alchemy.run.ts --destroy
 ```

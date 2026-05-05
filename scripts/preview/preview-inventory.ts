@@ -10,16 +10,20 @@ export type EnvironmentConfigLeaseInventoryItem = {
   data: EnvironmentConfigLeaseResourceData;
 };
 
-export const environmentConfigLeaseInventory = Array.from({ length: 10 }, (_, index) => {
-  const leaseNumber = index + 1;
-  return {
-    type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
-    slug: `preview-${leaseNumber}`,
-    data: {
-      dopplerConfig: `preview_${leaseNumber}`,
-    },
-  };
-}) satisfies EnvironmentConfigLeaseInventoryItem[];
+// Keep this list to slots whose Doppler configs and Cloudflare domain pairs are ready.
+const availablePreviewEnvironmentNumbers = [2, 3, 4, 5, 6, 7, 8, 9] as const;
+
+export const environmentConfigLeaseInventory = availablePreviewEnvironmentNumbers.map(
+  (leaseNumber) => {
+    return {
+      type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+      slug: `preview-${leaseNumber}`,
+      data: {
+        dopplerConfig: `preview_${leaseNumber}`,
+      },
+    };
+  },
+) satisfies EnvironmentConfigLeaseInventoryItem[];
 
 export type PreviewInventoryClient = {
   add: (input: EnvironmentConfigLeaseInventoryItem) => Promise<unknown>;

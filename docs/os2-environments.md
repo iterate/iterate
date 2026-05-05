@@ -46,10 +46,9 @@ _shared          ← CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, ALCHEMY_STAGE=
 │   ├── dev_misha
 │   └── dev_rahul
 ├── preview      ← ALCHEMY_LOCAL=false, preview base
-│   ├── preview_1    ← preview environment 1: os2.iterate-preview-1.com / <project>.iterate-preview-1.app
-│   ├── preview_2    ← preview environment 2
+│   ├── preview_2    ← preview environment 2: os2.iterate-preview-2.com / <project>.iterate-preview-2.app
 │   ├── ...
-│   └── preview_10   ← preview environment 10
+│   └── preview_9    ← preview environment 9
 └── prd          ← os.iterate2.com / iterate2.app
 ```
 
@@ -97,8 +96,10 @@ Vite picks a free port automatically (defaults to 5173, increments if taken). Th
 ## Preview environments
 
 Preview environments use a shared Semaphore-controlled environment config lease inventory. The
-inventory is `preview-1` through `preview-10`, each with
-`data.dopplerConfig` pointing at `preview_1` through `preview_10`.
+current inventory is `preview-2` through `preview-9`, each with
+`data.dopplerConfig` pointing at `preview_2` through `preview_9`. `preview_1`
+and `preview_10` are not leased because their os2 domain pairs are not fully
+configured in the right Cloudflare account.
 
 ### How it works
 

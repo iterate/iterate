@@ -7,25 +7,25 @@ affected app deploys into that same config.
 ## Naming
 
 - Semaphore resource type: `environment-config-lease`
-- Semaphore resource slug: `preview-1`, `preview-2`, etc.
-- Semaphore resource data: `{ "dopplerConfig": "preview_1" }`, etc.
+- Semaphore resource slug: `preview-2`, `preview-3`, etc.
+- Semaphore resource data: `{ "dopplerConfig": "preview_2" }`, etc.
 - Doppler project: app/service dimension, such as `events`, `os2`, or `semaphore`
-- Doppler config: environment config dimension, such as `preview_1`, `prd`, or `dev_jonas_2`
+- Doppler config: environment config dimension, such as `preview_2`, `prd`, or `dev_jonas_2`
 - Alchemy stage: inherited from Doppler as `${DOPPLER_CONFIG}`
 
 The Semaphore lease gives only the config dimension. The preview script chooses
 which Doppler projects to deploy.
 
-For example, a PR that affects two new-style apps leases `preview-1`, reads
-`data.dopplerConfig = preview_1`, then runs the same primitive for each selected
+For example, a PR that affects two new-style apps leases `preview-2`, reads
+`data.dopplerConfig = preview_2`, then runs the same primitive for each selected
 app:
 
 ```bash
 cd apps/os2
-doppler run --project os2 --config preview_1 -- pnpm exec tsx ./alchemy.run.ts
+doppler run --project os2 --config preview_2 -- pnpm exec tsx ./alchemy.run.ts
 
 cd ../semaphore
-doppler run --project semaphore --config preview_1 -- pnpm exec tsx ./alchemy.run.ts
+doppler run --project semaphore --config preview_2 -- pnpm exec tsx ./alchemy.run.ts
 ```
 
 Legacy preview-managed apps still use their package `alchemy:up` / `alchemy:down`
@@ -90,6 +90,9 @@ Do not paste the token into scripts or docs.
 
 - Environment config lease inventory for PR previews is provisioned explicitly
   with `pnpm --dir apps/semaphore seed:environment-config-leases`.
+- The current source-code seed contains `preview_2` through `preview_9`. Add
+  new entries only after the matching Doppler configs and app-specific
+  Cloudflare prerequisites exist.
 - The seed is exact for `environment-config-lease`: drifted resources are
   deleted and missing resources are recreated with the source-code data.
 - Only provision Semaphore seed entries when the matching `preview_N` Doppler
