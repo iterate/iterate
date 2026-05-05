@@ -13,6 +13,7 @@ import { defaultProjectSlug, getProjectUrl } from "../src/lib/project-slug.ts";
 export type Events2Client = ContractRouterClient<typeof eventsContract>;
 export const defaultE2EProjectSlug = defaultProjectSlug;
 export const scopedE2EProjectSlug = "test";
+const numberedEventsPreviewHostnamePattern = /^events\.iterate-preview-\d+\.com$/;
 
 export type Events2AppFixture = {
   baseURL: string;
@@ -74,6 +75,12 @@ export function createEvents2ProjectAppFixture(args: { baseURL: string; projectS
 
 export function supportsProjectHostRouting(baseURL: string) {
   const hostname = new URL(baseURL).hostname;
+
+  // Numbered preview zones currently have TLS for `*.iterate-preview-N.com`,
+  // not the nested `*.events.iterate-preview-N.com` project hosts.
+  if (numberedEventsPreviewHostnamePattern.test(hostname)) {
+    return false;
+  }
 
   return (
     new URL(getEventsProjectBaseUrl({ baseURL, projectSlug: scopedE2EProjectSlug })).hostname !==
