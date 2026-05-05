@@ -1,85 +1,72 @@
-import { z } from "zod";
 import {
   assertNever,
   buildDerivedIdempotencyKey,
   implementProcessor,
   type ConsumedEvent,
   type ProcessorStreamApi,
+  type StreamEvent,
+  type StreamEventInput,
 } from "../stream-processor.ts";
-import { dispatchCallable } from "../../callable/runtime.ts";
-import type { Callable } from "../../callable/types.ts";
+import { assertCallableDispatchContext, dispatchCallable } from "../../callable/runtime.ts";
+import type { CallableContext } from "../../callable/types.ts";
+import { resolveToolProviderDescriptor } from "../../codemode/resolve.ts";
+import type { ToolProviderDescriptor } from "../../codemode/types.ts";
 import { CoreProcessorRegisteredEventType } from "../core/contract.ts";
 import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
-import {
-  CODEMODE_PRIMER_IDEMPOTENCY_KEY,
-  CodemodeProcessorContract,
-  type CodemodeState,
-} from "./contract.ts";
-import type { CodemodeCodeExecutor } from "./code-executor.ts";
-
-const ProviderTypesResponse = z.object({
-  types: z.string(),
-});
-
-const WEBCHAT_PROVIDER_TYPES = `declare const webchat: {
-  sendMessage(args: { message: string }): Promise<{ ok: true }>;
-};`;
-
-const CODEMODE_PRIMER_TEXT = `Just FYI: codemode is how you use tools in this stream.
-
-When you want to run a tool, respond with exactly one fenced JavaScript block using \`\`\`js. The body should be a single async arrow function. For webchat replies, call \`webchat.sendMessage({ message })\`; do not rely on assistant prose being shown to the user.
-
-Built-in webchat API:
-
-\`\`\`ts
-${WEBCHAT_PROVIDER_TYPES}
-\`\`\``;
-
-const CODEMODE_FENCE_RE = /^```(?:js|javascript|codemode|ts|typescript)\s*\n([\s\S]*?)\n```\s*$/;
+import { CodemodeProcessorContract, type CodemodeState } from "./contract.ts";
+import type {
+  CodemodeEventInput,
+  CodemodeProcessorLogger,
+  CodemodeProcessorSession,
+  CodemodeScriptExecutor,
+} from "./code-executor.ts";
 
 type CodemodeStreamApi = ProcessorStreamApi<typeof CodemodeProcessorContract>;
 type CodemodeConsumedEvent = ConsumedEvent<typeof CodemodeProcessorContract>;
 
 export type CodemodeProcessorDeps = {
-  codeExecutor: CodemodeCodeExecutor;
-  env: Record<string, unknown>;
+  callableContext: CallableContext;
+  ensureLiveConsumer?: () => Promise<void> | void;
+  scriptExecutor: CodemodeScriptExecutor;
+  now?: () => Date;
 };
-
-type ToolProviderTypesResult =
-  | { kind: "ok"; types: string }
-  | { kind: "missing" }
-  | { kind: "error"; message: string };
 
 export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
   return implementProcessor(CodemodeProcessorContract, {
+    firstAttachAfterAppend: { mode: "lookback", milliseconds: 250 },
+
     async afterAppend({ event, state, streamApi, signal }) {
-      // Standard processor behavior is just another side effect Codemode wants
-      // to run before its event-specific side effects.
       await standardProcessorBehavior.afterAppend({
         contract: CodemodeProcessorContract,
         state,
         streamApi,
       });
 
-      // Codemode owns this one-time primer. The reducer observes the eventual
-      // appended event by idempotency key and records that the primer landed.
-      await appendCodemodePrimerIfNeeded({ state, streamApi });
-
       switch (event.type) {
         case CoreProcessorRegisteredEventType:
-        case "events.iterate.com/agent/system-prompt-updated":
-        case "events.iterate.com/agent/llm-config-updated":
-        case "events.iterate.com/agent/llm-request-scheduled":
-        case "events.iterate.com/agent/llm-request-started":
-        case "events.iterate.com/agent/llm-request-completed":
-        case "events.iterate.com/agent/llm-request-failed":
-        case "events.iterate.com/agent/llm-request-cancelled":
-        case "events.iterate.com/agent/llm-request-queued":
-        case "events.iterate.com/agent/status-updated":
-        case "events.iterate.com/agent/input-added":
+        case "events.iterate.com/codemode/tool-provider-described":
+        case "events.iterate.com/codemode/log-emitted":
+        case "events.iterate.com/codemode/tool-function-call-succeeded":
+        case "events.iterate.com/codemode/tool-function-call-failed":
+        case "events.iterate.com/codemode/script-execution-finished":
           return;
-        case "events.iterate.com/codemode/block-added":
-          await executeCodemodeBlock({
+        case "events.iterate.com/codemode/tool-provider-registered":
+          await appendToolProviderDescription({
+            deps,
+            event,
+            streamApi,
+          });
+          return;
+        case "events.iterate.com/codemode/tool-function-call-requested":
+          await dispatchRequestedToolFunction({
+            deps,
+            event,
+            state,
+            streamApi,
+          });
+          return;
+        case "events.iterate.com/codemode/script-execution-requested":
+          await executeRequestedScript({
             deps,
             event,
             signal,
@@ -87,51 +74,6 @@ export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
             streamApi,
           });
           return;
-        case "events.iterate.com/agent/output-added": {
-          const script = extractCodemodeScriptFromAssistantResponse(event.payload.content);
-          if (script == null) return;
-
-          await streamApi.append({
-            event: {
-              type: "events.iterate.com/codemode/block-added",
-              idempotencyKey: buildDerivedIdempotencyKey({
-                slug: CodemodeProcessorContract.slug,
-                purpose: "assistant-output-to-block",
-                event,
-              }),
-              payload: { script },
-            },
-          });
-          return;
-        }
-        case "events.iterate.com/codemode/result-added":
-          await appendCodemodeResultAsAgentInput({ event, streamApi });
-          await appendIdleStatusIfAgentHasNoQueuedTriggers({ event, state, streamApi });
-          return;
-        case "events.iterate.com/codemode/tool-provider-config-updated": {
-          const { executeCallable, getTypesCallable, slug } = event.payload;
-          if (executeCallable === null) return;
-          const types = await safeGetTypes({
-            env: deps.env,
-            getTypesCallable,
-            slug,
-          });
-          await streamApi.append({
-            event: {
-              type: "events.iterate.com/agent/input-added",
-              idempotencyKey: buildDerivedIdempotencyKey({
-                slug: CodemodeProcessorContract.slug,
-                purpose: "tool-provider-explainer",
-                event,
-              }),
-              payload: {
-                content: toolProviderExplainer({ slug, types }),
-                triggerLlmRequest: { behaviour: "dont-trigger-request" },
-              },
-            },
-          });
-          return;
-        }
         default:
           return assertNever(event);
       }
@@ -139,263 +81,366 @@ export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
   });
 }
 
-export function extractCodemodeScriptFromAssistantResponse(content: string): string | null {
-  const trimmed = content.trim();
-  if (trimmed.startsWith("async () => {") && trimmed.endsWith("}")) {
-    return trimmed;
-  }
-
-  const fenced = CODEMODE_FENCE_RE.exec(trimmed);
-  return fenced?.[1].trim() || null;
-}
-
-export function parseWebchatSendMessageArgs(rawArgs: unknown): { message: string } {
-  const firstArg = Array.isArray(rawArgs) ? rawArgs[0] : rawArgs;
-  return z.object({ message: z.string().min(1) }).parse(firstArg);
-}
-
-async function appendCodemodePrimerIfNeeded(args: {
-  state: CodemodeState;
+async function appendToolProviderDescription(args: {
+  deps: CodemodeProcessorDeps;
+  event: Extract<
+    CodemodeConsumedEvent,
+    { type: "events.iterate.com/codemode/tool-provider-registered" }
+  >;
   streamApi: CodemodeStreamApi;
 }) {
-  if (args.state.hasAppendedCodemodePrompt) return;
+  const { descriptor, path } = args.event.payload;
+
+  let typeDefinitions: string;
+  try {
+    assertCallableDispatchContext({
+      callable: descriptor.callable,
+      ctx: args.deps.callableContext,
+    });
+    const provider = resolveToolProviderDescriptor(descriptor, args.deps.callableContext);
+    typeDefinitions = (await provider.describeToolFunctions()).typeDefinitions;
+  } catch (error) {
+    typeDefinitions = `/** Error loading types for "${path.join(".")}": ${serializeErrorMessage(error)} */`;
+  }
 
   await args.streamApi.append({
     event: {
-      type: "events.iterate.com/agent/input-added",
-      idempotencyKey: CODEMODE_PRIMER_IDEMPOTENCY_KEY,
+      type: "events.iterate.com/codemode/tool-provider-described",
+      idempotencyKey: buildDerivedIdempotencyKey({
+        slug: CodemodeProcessorContract.slug,
+        purpose: "tool-provider-description",
+        event: args.event,
+      }),
       payload: {
-        content: CODEMODE_PRIMER_TEXT,
-        triggerLlmRequest: { behaviour: "dont-trigger-request" },
+        path,
+        typeDefinitions,
       },
     },
   });
 }
 
-async function executeCodemodeBlock(args: {
+async function executeRequestedScript(args: {
   deps: CodemodeProcessorDeps;
-  event: Extract<CodemodeConsumedEvent, { type: "events.iterate.com/codemode/block-added" }>;
+  event: Extract<
+    CodemodeConsumedEvent,
+    { type: "events.iterate.com/codemode/script-execution-requested" }
+  >;
   signal: AbortSignal;
   state: CodemodeState;
   streamApi: CodemodeStreamApi;
 }) {
-  const toolProviders = await Promise.all(
-    Object.entries(args.state.toolProviders).map(async ([slug, config]) => {
-      const typesResult = await safeGetTypes({
-        getTypesCallable: config.getTypesCallable,
-        slug,
-        env: args.deps.env,
-      });
-      return {
-        slug,
-        executeCallable: config.executeCallable,
-        ...(typesResult.kind === "ok" ? { types: typesResult.types } : {}),
-      };
-    }),
-  );
-
-  let webchatMessageSeq = 0;
-  const t0 = Date.now();
-  const result = await args.deps.codeExecutor({
-    script: args.event.payload.script,
-    env: args.deps.env,
-    signal: args.signal,
-    toolProviders,
-    webchat: {
-      types: WEBCHAT_PROVIDER_TYPES,
-      async callTool({ name, rawArgs }) {
-        if (name !== "sendMessage") {
-          throw new Error(`Unknown webchat tool: ${name}`);
-        }
-        webchatMessageSeq += 1;
-        const { message } = parseWebchatSendMessageArgs(rawArgs);
-        await args.streamApi.append({
-          event: {
-            type: "events.iterate.com/webchat/agent-response-added",
-            idempotencyKey: buildDerivedIdempotencyKey({
-              slug: CodemodeProcessorContract.slug,
-              purpose: `webchat-send-message:${webchatMessageSeq}`,
-              event: args.event,
-            }),
-            payload: { message },
-          },
-        });
-        return { ok: true };
-      },
-    },
+  const startedAt = (args.deps.now ?? (() => new Date()))();
+  await args.deps.ensureLiveConsumer?.();
+  const session = createProcessorSession({
+    callableContext: args.deps.callableContext,
+    ensureLiveConsumer: args.deps.ensureLiveConsumer,
+    scriptExecutionRequestedOffset: args.event.offset,
+    sourceEvent: args.event,
+    state: args.state,
+    streamApi: args.streamApi,
+  });
+  const logger = createProcessorLogger({
+    scriptExecutionRequestedOffset: args.event.offset,
+    sourceEvent: args.event,
+    streamApi: args.streamApi,
   });
 
+  let result: Awaited<ReturnType<CodemodeScriptExecutor>>;
+  try {
+    result = await args.deps.scriptExecutor({
+      code: args.event.payload.code,
+      logger,
+      scriptExecutionRequestedOffset: args.event.offset,
+      session,
+      signal: args.signal,
+    });
+  } catch (error) {
+    result = { result: undefined, error: serializeError(error) };
+  }
+
+  const finishedAt = (args.deps.now ?? (() => new Date()))();
   await args.streamApi.append({
     event: {
-      type: "events.iterate.com/codemode/result-added",
+      type: "events.iterate.com/codemode/script-execution-finished",
       idempotencyKey: buildDerivedIdempotencyKey({
         slug: CodemodeProcessorContract.slug,
-        purpose: "block-to-result",
+        purpose: "script-execution-finished",
         event: args.event,
       }),
       payload: {
         result: result.result,
-        durationMs: Date.now() - t0,
         ...(result.error == null ? {} : { error: result.error }),
-        ...(result.logs == null ? {} : { logs: result.logs }),
+        durationMs: Math.max(0, finishedAt.getTime() - startedAt.getTime()),
+        scriptExecutionRequestedOffset: args.event.offset,
       },
     },
   });
 }
 
-async function appendCodemodeResultAsAgentInput(args: {
-  event: Extract<CodemodeConsumedEvent, { type: "events.iterate.com/codemode/result-added" }>;
+function createProcessorSession(args: {
+  callableContext: CallableContext;
+  ensureLiveConsumer?: () => Promise<void> | void;
+  scriptExecutionRequestedOffset: number;
+  sourceEvent: StreamEvent;
+  state: CodemodeState;
   streamApi: CodemodeStreamApi;
-}) {
-  await args.streamApi.append({
-    event: {
-      type: "events.iterate.com/agent/input-added",
-      idempotencyKey: buildDerivedIdempotencyKey({
-        slug: CodemodeProcessorContract.slug,
-        purpose: "result-to-agent-input",
-        event: args.event,
-      }),
-      payload: {
-        content: eventBlock({
-          offset: args.event.offset,
-          type: args.event.type,
-          fields: {
-            success: args.event.payload.error == null,
-            durationMs: args.event.payload.durationMs,
+}): CodemodeProcessorSession {
+  let toolCallSequence = 0;
+  let nestedScriptSequence = 0;
+  const session: CodemodeProcessorSession = {
+    append: async (input) =>
+      await args.streamApi.append({ event: normalizeCodemodeEventInput(input) as never }),
+    callToolFunction: async (input) => {
+      toolCallSequence += 1;
+      const scriptExecutionRequestedOffset =
+        input.scriptExecutionRequestedOffset ?? args.scriptExecutionRequestedOffset;
+      const match = resolveToolProvider(args.state.toolProviders, input.path);
+      const requestedEvent = await args.streamApi.append({
+        event: {
+          type: "events.iterate.com/codemode/tool-function-call-requested",
+          idempotencyKey: buildDerivedIdempotencyKey({
+            slug: CodemodeProcessorContract.slug,
+            purpose: `tool-function-call-requested:${toolCallSequence}`,
+            event: args.sourceEvent,
+          }),
+          payload: {
+            path: input.path,
+            payload: input.payload,
+            providerPath: match.provider.path,
+            toolFunctionPath: match.toolFunctionPath,
+            scriptExecutionRequestedOffset,
           },
-          valueFields: {
-            result: args.event.payload.result,
-            ...(args.event.payload.error == null ? {} : { error: args.event.payload.error }),
-            ...(args.event.payload.logs == null || args.event.payload.logs.length === 0
-              ? {}
-              : { logs: args.event.payload.logs }),
-          },
-        }),
-        triggerLlmRequest: { behaviour: "dont-trigger-request" },
-      },
+        },
+      });
+
+      await args.ensureLiveConsumer?.();
+      return await waitForToolFunctionCallResult({
+        requestedEvent,
+        streamApi: args.streamApi,
+      });
     },
-  });
+    executeScript: async (input) => {
+      nestedScriptSequence += 1;
+      return await args.streamApi.append({
+        event: {
+          type: "events.iterate.com/codemode/script-execution-requested",
+          idempotencyKey: buildDerivedIdempotencyKey({
+            slug: CodemodeProcessorContract.slug,
+            purpose: `nested-script-execution-requested:${nestedScriptSequence}`,
+            event: args.sourceEvent,
+          }),
+          payload: { code: input.code },
+        },
+      });
+    },
+    getStreamPath: async () => args.sourceEvent.streamPath,
+  };
+
+  return session;
 }
 
-/**
- * Example of "peeking" another processor without coupling to its instance.
- *
- * Codemode does not get to read an in-memory AgentProcessor object. Its
- * contract reducer keeps `state.agentProcessor` current by running the
- * frontend-safe Agent reducer, and the hook makes a local decision from that
- * embedded state.
- */
-async function appendIdleStatusIfAgentHasNoQueuedTriggers(args: {
-  event: Extract<CodemodeConsumedEvent, { type: "events.iterate.com/codemode/result-added" }>;
+function normalizeCodemodeEventInput(input: CodemodeEventInput): StreamEventInput {
+  return {
+    ...input,
+    payload: input.payload ?? {},
+  };
+}
+
+function createProcessorLogger(args: {
+  scriptExecutionRequestedOffset: number;
+  sourceEvent: StreamEvent;
+  streamApi: CodemodeStreamApi;
+}): CodemodeProcessorLogger {
+  let logSequence = 0;
+  return {
+    async log(level, message) {
+      logSequence += 1;
+      await args.streamApi.append({
+        event: {
+          type: "events.iterate.com/codemode/log-emitted",
+          idempotencyKey: buildDerivedIdempotencyKey({
+            slug: CodemodeProcessorContract.slug,
+            purpose: `log-emitted:${logSequence}`,
+            event: args.sourceEvent,
+          }),
+          payload: {
+            level,
+            message,
+            scriptExecutionRequestedOffset: args.scriptExecutionRequestedOffset,
+          },
+        },
+      });
+    },
+  };
+}
+
+async function dispatchRequestedToolFunction(args: {
+  deps: CodemodeProcessorDeps;
+  event: Extract<
+    CodemodeConsumedEvent,
+    { type: "events.iterate.com/codemode/tool-function-call-requested" }
+  >;
   state: CodemodeState;
   streamApi: CodemodeStreamApi;
 }) {
-  if (args.state.agentProcessor.pendingTriggerCount > 0) return;
-
-  await args.streamApi.append({
-    event: {
-      type: "events.iterate.com/agent/status-updated",
-      idempotencyKey: buildDerivedIdempotencyKey({
-        slug: CodemodeProcessorContract.slug,
-        purpose: "codemode-result-to-idle-status",
-        event: args.event,
-      }),
-      payload: {
-        status: "idle",
-        reason: "codemode-result-added",
-      },
-    },
+  const match = resolveToolProvider(args.state.toolProviders, args.event.payload.path);
+  const session = createProcessorSession({
+    callableContext: args.deps.callableContext,
+    ensureLiveConsumer: args.deps.ensureLiveConsumer,
+    scriptExecutionRequestedOffset:
+      args.event.payload.scriptExecutionRequestedOffset ?? args.event.offset,
+    sourceEvent: args.event,
+    state: args.state,
+    streamApi: args.streamApi,
   });
-}
-
-async function safeGetTypes(args: {
-  getTypesCallable: Callable | null | undefined;
-  slug: string;
-  env: Record<string, unknown>;
-}): Promise<ToolProviderTypesResult> {
-  if (args.getTypesCallable == null) return { kind: "missing" };
 
   try {
-    const { types } = ProviderTypesResponse.parse(
-      await dispatchCallable({
-        callable: args.getTypesCallable,
-        payload: { namespace: args.slug },
-        ctx: { env: args.env },
-      }),
-    );
-    return { kind: "ok", types };
+    const result = await dispatchCallable({
+      callable: match.provider.callable,
+      payload: {
+        path: match.toolFunctionPath,
+        payload: args.event.payload.payload,
+        codemodeSessionCapability: session,
+      },
+      ctx: args.deps.callableContext,
+    });
+
+    await args.streamApi.append({
+      event: {
+        type: "events.iterate.com/codemode/tool-function-call-succeeded",
+        idempotencyKey: buildDerivedIdempotencyKey({
+          slug: CodemodeProcessorContract.slug,
+          purpose: "tool-function-call-succeeded",
+          event: args.event,
+        }),
+        payload: {
+          result,
+          toolFunctionCallRequestedOffset: args.event.offset,
+          ...(args.event.payload.scriptExecutionRequestedOffset == null
+            ? {}
+            : {
+                scriptExecutionRequestedOffset: args.event.payload.scriptExecutionRequestedOffset,
+              }),
+        },
+      },
+    });
+
+    return result;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(
-      JSON.stringify({
-        at: "codemode.safeGetTypes.failed",
-        slug: args.slug,
-        error: message,
-      }),
-    );
-    return { kind: "error", message };
+    await args.streamApi.append({
+      event: {
+        type: "events.iterate.com/codemode/tool-function-call-failed",
+        idempotencyKey: buildDerivedIdempotencyKey({
+          slug: CodemodeProcessorContract.slug,
+          purpose: "tool-function-call-failed",
+          event: args.event,
+        }),
+        payload: {
+          error: serializeError(error),
+          toolFunctionCallRequestedOffset: args.event.offset,
+          ...(args.event.payload.scriptExecutionRequestedOffset == null
+            ? {}
+            : {
+                scriptExecutionRequestedOffset: args.event.payload.scriptExecutionRequestedOffset,
+              }),
+        },
+      },
+    });
+    throw error;
   }
 }
 
-function toolProviderExplainer(args: { slug: string; types: ToolProviderTypesResult }) {
-  const intro = `Tool provider \`${args.slug}\` is now available. Use it only from a codemode response: emit one \`\`\`js block whose body is a single async arrow function, then call tools as \`${args.slug}.<tool>(...)\`.`;
+async function waitForToolFunctionCallResult(args: {
+  requestedEvent: StreamEvent;
+  streamApi: CodemodeStreamApi;
+}) {
+  const readEvents = await args.streamApi.read({
+    afterOffset: args.requestedEvent.offset,
+    beforeOffset: "end",
+  });
+  const readResult = findToolFunctionCallResult({
+    events: readEvents,
+    requestedOffset: args.requestedEvent.offset,
+  });
+  if (readResult.kind === "succeeded") return readResult.result;
+  if (readResult.kind === "failed") throw new Error(serializeErrorMessage(readResult.error));
 
-  if (args.types.kind === "ok") {
-    return `${intro}
-
-Complete generated API surface for \`${args.slug}\`:
-
-\`\`\`ts
-${args.types.types.trim()}
-\`\`\``;
+  for await (const event of args.streamApi.subscribe({ afterOffset: args.requestedEvent.offset })) {
+    const result = findToolFunctionCallResult({
+      events: [event],
+      requestedOffset: args.requestedEvent.offset,
+    });
+    if (result.kind === "succeeded") return result.result;
+    if (result.kind === "failed") throw new Error(serializeErrorMessage(result.error));
   }
 
-  if (args.types.kind === "missing") {
-    return `${intro}
+  throw new Error(
+    `Stream ended before tool function call ${args.requestedEvent.offset} completed.`,
+  );
+}
 
-No generated API surface was attached to this provider because the event did not include \`getTypesCallable\`.`;
+function findToolFunctionCallResult(args: {
+  events: readonly StreamEvent[];
+  requestedOffset: number;
+}):
+  | { kind: "missing" }
+  | { kind: "succeeded"; result: unknown }
+  | {
+      kind: "failed";
+      error: unknown;
+    } {
+  for (const event of args.events) {
+    const payload =
+      event.payload != null && typeof event.payload === "object"
+        ? (event.payload as Record<string, unknown>)
+        : {};
+    if (payload.toolFunctionCallRequestedOffset !== args.requestedOffset) continue;
+    if (event.type === "events.iterate.com/codemode/tool-function-call-succeeded") {
+      return { kind: "succeeded", result: payload.result };
+    }
+    if (event.type === "events.iterate.com/codemode/tool-function-call-failed") {
+      return { kind: "failed", error: payload.error };
+    }
   }
 
-  return `${intro}
-
-Failed to load the generated API surface for \`${args.slug}\`: ${args.types.message}`;
+  return { kind: "missing" };
 }
 
-function eventBlock(args: {
-  offset: number;
-  type: string;
-  fields?: Record<string, string | number | boolean>;
-  valueFields?: Record<string, unknown>;
-}): string {
-  const yamlLines = [
-    "event:",
-    `  offset: ${args.offset}`,
-    `  type: ${yamlScalar(args.type)}`,
-    ...Object.entries(args.fields ?? {}).map(([key, value]) => `  ${key}: ${yamlScalar(value)}`),
-    ...Object.entries(args.valueFields ?? {}).flatMap(([key, value]) =>
-      yamlBlockScalar(key, stringifyUnknown(value), 2),
-    ),
-  ];
-  return ["```yaml", ...yamlLines, "```"].join("\n");
-}
+function resolveToolProvider(
+  registry: Record<string, ToolProviderDescriptor>,
+  path: readonly string[],
+) {
+  const candidates = Object.values(registry)
+    .filter((provider) => isPathPrefix(provider.path, path))
+    .sort((a, b) => b.path.length - a.path.length);
+  const provider = candidates[0];
 
-function yamlScalar(value: string | number | boolean): string {
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  if (/^[a-zA-Z0-9._/@:-]+$/.test(value)) return value;
-  return JSON.stringify(value);
-}
-
-function yamlBlockScalar(key: string, value: string, indent: number): string[] {
-  const prefix = " ".repeat(indent);
-  return [`${prefix}${key}: |-`, ...value.split("\n").map((line) => `${prefix}  ${line}`)];
-}
-
-function stringifyUnknown(value: unknown): string {
-  if (typeof value === "undefined") return "undefined";
-  if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
+  if (!provider) {
+    throw new Error(`No tool provider registered for path "${path.join(".")}"`);
   }
+
+  return {
+    provider,
+    toolFunctionPath: path.slice(provider.path.length),
+  };
+}
+
+function isPathPrefix(prefix: readonly string[], path: readonly string[]) {
+  return prefix.every((segment, index) => path[index] === segment);
+}
+
+function serializeError(error: unknown) {
+  if (error instanceof Error) {
+    return {
+      message: error.message,
+      name: error.name,
+      stack: error.stack,
+    };
+  }
+
+  return { message: String(error) };
+}
+
+function serializeErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }

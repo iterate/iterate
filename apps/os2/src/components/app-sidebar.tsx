@@ -132,18 +132,37 @@ function ProjectSidebarGroup({
             <SidebarMenuSubButton
               render={
                 <Link
-                  to="/orgs/$organizationSlug/projects/$projectSlug/run-code"
+                  to="/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions"
                   params={{ organizationSlug, projectSlug }}
                 />
               }
               isActive={Boolean(
                 matchRoute({
-                  to: "/orgs/$organizationSlug/projects/$projectSlug/run-code",
+                  to: "/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions",
+                  params: { organizationSlug, projectSlug },
+                  fuzzy: true,
+                }),
+              )}
+            >
+              <span>Codemode Sessions</span>
+            </SidebarMenuSubButton>
+          </SidebarMenuSubItem>
+          <SidebarMenuSubItem>
+            <SidebarMenuSubButton
+              render={
+                <Link
+                  to="/orgs/$organizationSlug/projects/$projectSlug/examples"
+                  params={{ organizationSlug, projectSlug }}
+                />
+              }
+              isActive={Boolean(
+                matchRoute({
+                  to: "/orgs/$organizationSlug/projects/$projectSlug/examples",
                   params: { organizationSlug, projectSlug },
                 }),
               )}
             >
-              <span>Run code</span>
+              <span>Examples</span>
             </SidebarMenuSubButton>
           </SidebarMenuSubItem>
           {mcpUrl ? (

@@ -1,7 +1,6 @@
 import { fileURLToPath } from "node:url";
 import alchemy from "alchemy";
 import {
-  DnsRecords,
   Route,
   TanStackStart,
   Tunnel,
@@ -192,9 +191,6 @@ export async function IterateApp<B extends Bindings>(
       dnsRouteHosts.map(async (hostname) => {
         const zoneId =
           routeZoneIds.get(hostname) ?? (await findZoneForHostname(cloudflareApi, hostname)).zoneId;
-        const dnsResourceId = hostname.startsWith("*.")
-          ? `project-wildcard-dns-${slugify(hostname)}`
-          : `dns-${slugify(hostname)}`;
         const record = {
           type: "A" as const,
           name: hostname,
@@ -203,11 +199,6 @@ export async function IterateApp<B extends Bindings>(
           ttl: 1,
           comment: `Managed by ${manifest.slug} alchemy (${app.stage}).`,
         };
-
-        await DnsRecords(dnsResourceId, {
-          zoneId,
-          records: [record],
-        });
 
         await ensureCloudflareDnsRecord({
           cloudflareApi,
@@ -255,13 +246,13 @@ function shouldCreateDnsRecordForRouteHostname(hostname: string) {
 }
 
 /**
- * Verify the DNS record exists after Alchemy's DnsRecords resource runs.
+ * Verify the DNS record exists after Worker route creation.
  *
- * DnsRecords can believe an unchanged record still exists because its local
- * state says so. Preview environments are routinely cleaned up outside the
- * current Alchemy state lifetime, so a stale output record can leave the Worker
- * route created but the hostname unresolvable. This direct Cloudflare upsert is
- * intentionally idempotent and keeps preview readiness tied to real DNS.
+ * Worker routes only require a proxied DNS record for the hostname. Some zones
+ * already use a proxied CNAME to the worker's workers.dev hostname, while newer
+ * routes use an originless dummy A record. Keep either shape instead of trying
+ * to convert CNAMEs into A records and failing on Cloudflare's record conflict
+ * rules.
  */
 async function ensureCloudflareDnsRecord(input: {
   cloudflareApi: Awaited<ReturnType<typeof createCloudflareApi>>;
@@ -275,10 +266,7 @@ async function ensureCloudflareDnsRecord(input: {
   };
   zoneId: string;
 }) {
-  const params = new URLSearchParams({
-    name: input.record.name,
-    type: input.record.type,
-  });
+  const params = new URLSearchParams({ name: input.record.name });
   const listResponse = await input.cloudflareApi.get(
     `/zones/${input.zoneId}/dns_records?${params.toString()}`,
   );
@@ -289,9 +277,16 @@ async function ensureCloudflareDnsRecord(input: {
   }
 
   const listResult = (await listResponse.json()) as {
-    result?: Array<{ id: string }>;
+    result?: Array<{ id: string; name?: string; proxied?: boolean; type?: string }>;
   };
-  const existingRecordId = listResult.result?.[0]?.id;
+  const existingProxiedRecord = listResult.result?.find(
+    (record) => record.name === input.record.name && record.proxied,
+  );
+  if (existingProxiedRecord) return;
+
+  const existingRecordId = listResult.result?.find(
+    (record) => record.name === input.record.name && record.type === input.record.type,
+  )?.id;
   const response = existingRecordId
     ? await input.cloudflareApi.put(
         `/zones/${input.zoneId}/dns_records/${existingRecordId}`,

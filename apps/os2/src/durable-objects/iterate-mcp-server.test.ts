@@ -11,7 +11,7 @@ type TestEnv = {
   MOCK_PROVIDER_BASE_URL: string;
 };
 
-describe("IterateMcpServer inbound MCP", () => {
+describe("ProjectMcpServerConnection inbound MCP", () => {
   test("runs code through CodemodeSession and appends events to the MCP session stream", async () => {
     const transport = new StreamableHTTPClientTransport(
       new URL("https://mcp-project.iterate-preview-test.app/mcp"),

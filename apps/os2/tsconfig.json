@@ -4,6 +4,7 @@
     "alchemy.run.ts",
     "tmp/**",
     "**/*.workerd.test.ts",
+    "src/durable-objects/*.test.ts",
     "../../packages/shared/src/alchemy/**"
   ],
   "compilerOptions": {

@@ -87,6 +87,7 @@ type StreamProcessorRunnerOptions<
     ctx: DurableObjectState;
     env: Env;
     initParams: InitParams;
+    instance: unknown;
   }): Processor<Contract>;
   /**
    * Create the scoped stream API for this processor.
@@ -96,6 +97,7 @@ type StreamProcessorRunnerOptions<
    */
   streamApi(args: {
     ctx: DurableObjectState;
+    env: Env;
     initParams: InitParams;
     processor: Processor<Contract>;
   }): ProcessorStreamApi<Contract>;
@@ -247,6 +249,7 @@ export function withStreamProcessorRunner<
           ctx: this.ctx,
           env: this.env as Env,
           initParams: this.initParams,
+          instance: this,
         });
         return this.#streamProcessorRunnerProcessor;
       }
@@ -254,6 +257,7 @@ export function withStreamProcessorRunner<
       private streamProcessorRunnerStreamApi(): ProcessorStreamApi<Contract> {
         return options.streamApi({
           ctx: this.ctx,
+          env: this.env as Env,
           initParams: this.initParams,
           processor: this.streamProcessorRunnerProcessor(),
         });

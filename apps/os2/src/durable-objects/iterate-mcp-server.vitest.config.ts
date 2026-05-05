@@ -217,7 +217,7 @@ export default defineConfig({
   },
   plugins: [
     cloudflareVitest.cloudflareTest({
-      main: resolve(testRoot, "iterate-mcp-server-test-entry.workerd.ts"),
+      main: resolve(testRoot, "iterate-mcp-server-test-entry.ts"),
       miniflare: {
         bindings: {
           MOCK_PROVIDER_BASE_URL: mockProviderServer.url,
@@ -248,7 +248,7 @@ export default defineConfig({
   test: {
     exclude: defaultExclude,
     hookTimeout: 60_000,
-    include: [resolve(testRoot, "iterate-mcp-server.workerd.test.ts")],
+    include: [resolve(testRoot, "iterate-mcp-server.test.ts")],
     testTimeout: 90_000,
   },
 });
