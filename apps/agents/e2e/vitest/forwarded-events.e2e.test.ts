@@ -15,14 +15,20 @@ test(
       streamPath,
     });
 
-    const callbackUrl = new URL("/api/events-forwarded", server.publicUrl).toString();
+    const webhookUrl = new URL("/api/events-forwarded", server.publicUrl).toString();
 
     await e2e.events.append(streamPath, {
       type: "events.iterate.com/core/subscription-configured",
       payload: {
         slug: `agents-forwarded-${e2e.executionSuffix}`,
         type: "webhook",
-        callbackUrl,
+        callable: {
+          type: "fetch",
+          via: {
+            type: "url",
+            url: webhookUrl,
+          },
+        },
       },
     });
     await e2e.events.append(streamPath, {

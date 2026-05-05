@@ -89,7 +89,7 @@ type WireDiscoveredAgent = { streamPath: string; discoveredAt: number };
  * DO's own WebSocket upgrade URL as a query parameter. Using
  * `connection.uri` as the source of truth keeps the control plane
  * (`installProcessor`) coupled to the DO only through the subscription
- * `callbackUrl` that Events stores — nothing else.
+ * Callable that Events stores — nothing else.
  */
 export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
   async onMessage(connection: Connection, message: WSMessage) {
@@ -158,7 +158,7 @@ export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
     const runnerSubscriptions = [
       {
         slug: WEBCHAT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
-        callbackUrl: buildWebchatStreamProcessorRunnerWebSocketCallbackUrl({
+        websocketUrl: buildWebchatStreamProcessorRunnerWebSocketCallbackUrl({
           publicOrigin: publicBaseUrl,
           runnerInstance,
           streamPath: childPath,
@@ -166,7 +166,7 @@ export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
       },
       {
         slug: AGENT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
-        callbackUrl: buildAgentStreamProcessorRunnerWebSocketCallbackUrl({
+        websocketUrl: buildAgentStreamProcessorRunnerWebSocketCallbackUrl({
           publicOrigin: publicBaseUrl,
           runnerInstance,
           streamPath: childPath,
@@ -174,11 +174,11 @@ export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
       },
       {
         slug: "cloudflare-ai-stream-processor-runner",
-        callbackUrl: cloudflareAiCallbackUrl.toString(),
+        websocketUrl: cloudflareAiCallbackUrl.toString(),
       },
       {
         slug: CODEMODE_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
-        callbackUrl: buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
+        websocketUrl: buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
           publicOrigin: publicBaseUrl,
           runnerInstance,
           streamPath: childPath,
@@ -203,7 +203,7 @@ export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
             payload: {
               slug: subscription.slug,
               type: "websocket",
-              callbackUrl: subscription.callbackUrl,
+              callable: fetchCallableFromWebSocketUrl(subscription.websocketUrl),
             },
           },
         });
@@ -211,14 +211,14 @@ export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
           childPath,
           runnerInstance,
           slug: subscription.slug,
-          callbackUrl: subscription.callbackUrl,
+          websocketUrl: subscription.websocketUrl,
         });
       } catch (error) {
         this.#logError("onMessage.subscribeFailed", {
           childPath,
           runnerInstance,
           slug: subscription.slug,
-          callbackUrl: subscription.callbackUrl,
+          websocketUrl: subscription.websocketUrl,
           error: stringifyError(error),
         });
         continue;
@@ -457,4 +457,21 @@ function stringifyError(err: unknown): string {
   } catch {
     return String(err);
   }
+}
+
+function fetchCallableFromWebSocketUrl(websocketUrl: string) {
+  const url = new URL(websocketUrl);
+  if (url.protocol === "ws:") {
+    url.protocol = "http:";
+  } else if (url.protocol === "wss:") {
+    url.protocol = "https:";
+  }
+
+  return {
+    type: "fetch" as const,
+    via: {
+      type: "url" as const,
+      url: url.toString(),
+    },
+  };
 }

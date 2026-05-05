@@ -75,11 +75,13 @@ test(
       payload: {
         slug: `codemode-runner-ws-${e2e.executionSuffix}`,
         type: "websocket",
-        callbackUrl: buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
-          publicOrigin: server.publicUrl,
-          runnerInstance: streamPathToAgentInstance(streamPath),
-          streamPath,
-        }),
+        callable: fetchCallableFromWebSocketUrl(
+          buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
+            publicOrigin: server.publicUrl,
+            runnerInstance: streamPathToAgentInstance(streamPath),
+            streamPath,
+          }),
+        ),
       },
     });
 
@@ -145,6 +147,23 @@ function eventsApiUrlPattern(args: { e2e: Awaited<ReturnType<typeof setupE2E>> }
 
 function isLocalEventsUrl(url: URL) {
   return url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
+}
+
+function fetchCallableFromWebSocketUrl(websocketUrl: string) {
+  const url = new URL(websocketUrl);
+  if (url.protocol === "ws:") {
+    url.protocol = "http:";
+  } else if (url.protocol === "wss:") {
+    url.protocol = "https:";
+  }
+
+  return {
+    type: "fetch" as const,
+    via: {
+      type: "url" as const,
+      url: url.toString(),
+    },
+  };
 }
 
 function escapeRegExp(value: string) {

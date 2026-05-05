@@ -106,22 +106,7 @@ function buildBaseProcessorDoc(contract: ProcessorContractForDocs): ProcessorDoc
     type,
     eventSlug: eventSlugFromType({ processorSlug: contract.slug, type }),
     ...(event.description == null ? {} : { description: event.description }),
-    /**
-     * These schemas are docs/composer hints, not the runtime validator.
-     *
-     * Some runtime event payload schemas intentionally accept compatibility
-     * inputs and transform them into the canonical stored shape. For example,
-     * `core/subscription-configured` still accepts legacy `callbackUrl`
-     * subscriptions and transforms them into Callable-backed subscribers.
-     * JSON Schema has no way to represent that transform, and Zod throws by
-     * default. The docs page should not crash because one compatibility branch
-     * cannot be rendered perfectly, so unrepresentable branches degrade to
-     * `any` here while runtime parsing remains strict.
-     */
-    payloadJsonSchema: z.toJSONSchema(event.payloadSchema as z.ZodType, {
-      io: "input",
-      unrepresentable: "any",
-    }),
+    payloadJsonSchema: z.toJSONSchema(event.payloadSchema as z.ZodType),
     href: `${href}${eventSlugFromType({ processorSlug: contract.slug, type })}/`,
   }));
 

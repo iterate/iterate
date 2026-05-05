@@ -60,31 +60,37 @@ export const createAgentRouter = {
     for (const subscription of [
       {
         slug: WEBCHAT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
-        callbackUrl: buildWebchatStreamProcessorRunnerWebSocketCallbackUrl({
-          publicOrigin,
-          runnerInstance,
-          streamPath,
-        }),
+        callable: fetchCallableFromWebSocketUrl(
+          buildWebchatStreamProcessorRunnerWebSocketCallbackUrl({
+            publicOrigin,
+            runnerInstance,
+            streamPath,
+          }),
+        ),
       },
       {
         slug: AGENT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
-        callbackUrl: buildAgentStreamProcessorRunnerWebSocketCallbackUrl({
-          publicOrigin,
-          runnerInstance,
-          streamPath,
-        }),
+        callable: fetchCallableFromWebSocketUrl(
+          buildAgentStreamProcessorRunnerWebSocketCallbackUrl({
+            publicOrigin,
+            runnerInstance,
+            streamPath,
+          }),
+        ),
       },
       {
         slug: "cloudflare-ai-stream-processor-runner",
-        callbackUrl: cloudflareAiCallbackUrl.toString(),
+        callable: fetchCallableFromWebSocketUrl(cloudflareAiCallbackUrl.toString()),
       },
       {
         slug: CODEMODE_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
-        callbackUrl: buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
-          publicOrigin,
-          runnerInstance,
-          streamPath,
-        }),
+        callable: fetchCallableFromWebSocketUrl(
+          buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
+            publicOrigin,
+            runnerInstance,
+            streamPath,
+          }),
+        ),
       },
     ]) {
       await eventsClient.append({
@@ -94,7 +100,7 @@ export const createAgentRouter = {
           payload: {
             slug: subscription.slug,
             type: "websocket",
-            callbackUrl: subscription.callbackUrl,
+            callable: subscription.callable,
           },
           idempotencyKey: `create-agent:${streamPath}:subscription:${subscription.slug}`,
         },
@@ -132,4 +138,21 @@ function getPublicOrigin(request: Request | undefined) {
   }
 
   return new URL(request.url).origin;
+}
+
+function fetchCallableFromWebSocketUrl(websocketUrl: string) {
+  const url = new URL(websocketUrl);
+  if (url.protocol === "ws:") {
+    url.protocol = "http:";
+  } else if (url.protocol === "wss:") {
+    url.protocol = "https:";
+  }
+
+  return {
+    type: "fetch" as const,
+    via: {
+      type: "url" as const,
+      url: url.toString(),
+    },
+  };
 }

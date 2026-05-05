@@ -81,15 +81,21 @@ describe("projectWireToFeed", () => {
     });
   });
 
-  test("normalizes historical callbackUrl subscription events for the feed", () => {
+  test("projects callable subscription events for the feed", () => {
     const feed = projectWireToFeed([
       createEvent({
         offset: 1,
         type: "events.iterate.com/core/subscription-configured",
         payload: {
-          slug: "legacy-agent",
+          slug: "agent",
           type: "websocket",
-          callbackUrl: "wss://agents.example.com/socket",
+          callable: {
+            type: "fetch",
+            via: {
+              type: "url",
+              url: "https://agents.example.com/socket",
+            },
+          },
         },
       }),
     ]);
@@ -101,7 +107,7 @@ describe("projectWireToFeed", () => {
       {
         kind: "external-subscriber-configured",
         subscriber: {
-          slug: "legacy-agent",
+          slug: "agent",
           type: "websocket",
           callable: {
             type: "fetch",

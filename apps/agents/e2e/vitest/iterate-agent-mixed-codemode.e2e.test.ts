@@ -79,11 +79,13 @@ test.skip(
       payload: {
         slug: `codemode-runner-mixed-ws-${e2e.executionSuffix}`,
         type: "websocket",
-        callbackUrl: buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
-          publicOrigin: server.publicUrl,
-          runnerInstance: streamPathToAgentInstance(streamPath),
-          streamPath,
-        }),
+        callable: fetchCallableFromWebSocketUrl(
+          buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
+            publicOrigin: server.publicUrl,
+            runnerInstance: streamPathToAgentInstance(streamPath),
+            streamPath,
+          }),
+        ),
       },
     });
 
@@ -159,3 +161,20 @@ test.skip(
     expect(urls.some((url) => url.includes(eventsHost))).toBe(true);
   },
 );
+
+function fetchCallableFromWebSocketUrl(websocketUrl: string) {
+  const url = new URL(websocketUrl);
+  if (url.protocol === "ws:") {
+    url.protocol = "http:";
+  } else if (url.protocol === "wss:") {
+    url.protocol = "https:";
+  }
+
+  return {
+    type: "fetch" as const,
+    via: {
+      type: "url" as const,
+      url: url.toString(),
+    },
+  };
+}
