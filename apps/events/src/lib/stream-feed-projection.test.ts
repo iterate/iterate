@@ -81,6 +81,22 @@ describe("projectWireToFeed", () => {
     });
   });
 
+  test("keeps historical callbackUrl subscription events as raw feed rows", () => {
+    const feed = projectWireToFeed([
+      createEvent({
+        offset: 1,
+        type: "events.iterate.com/core/subscription-configured",
+        payload: {
+          slug: "legacy-agent",
+          type: "websocket",
+          callbackUrl: "wss://agents.example.com/socket",
+        },
+      }),
+    ]);
+
+    expect(feed.map((item) => item.kind)).toEqual(["event"]);
+  });
+
   test("projects canonical agent, webchat, and codemode events", () => {
     const feed = projectWireToFeed([
       createEvent({

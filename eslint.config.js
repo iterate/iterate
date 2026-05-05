@@ -413,8 +413,6 @@ const plugin = {
                 "@orpc/contract",
                 "@orpc/zod",
                 "@iterate-com/shared/apps",
-                // Zod-only Callable descriptor schemas used by contract payloads.
-                "@iterate-com/shared/callable/types.ts",
                 "@iterate-com/shared/jonasland",
                 "@orpc/client",
                 "@orpc/openapi-client",

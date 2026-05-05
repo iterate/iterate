@@ -236,9 +236,11 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
   }
 
   if (event.type === STREAM_SUBSCRIPTION_CONFIGURED_TYPE) {
+    const subscriber = getStreamSubscriptionConfiguredSubscriber(event);
+    if (subscriber == null) return null;
     return {
       kind: "external-subscriber-configured",
-      subscriber: getStreamSubscriptionConfiguredSubscriber(event),
+      subscriber,
       timestamp: getTimestamp(event.createdAt),
       raw: event,
     };
@@ -346,7 +348,8 @@ function getStreamMetadataUpdatedEventMetadata(event: Event) {
 }
 
 function getStreamSubscriptionConfiguredSubscriber(event: Event) {
-  return StreamSubscriptionConfiguredEvent.parse(event).payload;
+  const parsed = StreamSubscriptionConfiguredEvent.safeParse(event);
+  return parsed.success ? parsed.data.payload : null;
 }
 
 export function createGroupedOrSingleEvent(

@@ -1,10 +1,10 @@
 import { z } from "zod";
-import { Callable, FetchCallable } from "@iterate-com/shared/callable/types.ts";
 import {
   GenericEvent as GenericEventBase,
   GenericEventInput as GenericEventInputBase,
 } from "./event-base-types.ts";
 import { STREAM_SUBSCRIPTION_CONFIGURED_TYPE } from "./core-event-types.ts";
+import { Callable, FetchCallable } from "./callable-descriptor-types.ts";
 import { JsonataExpression } from "./jsonata-expression.ts";
 
 const ExternalSubscriberBase = {
