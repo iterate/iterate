@@ -1,0 +1,43 @@
+{
+  "name": "os2-project-ingress-vitest",
+  "main": "project-ingress-test-entry.ts",
+  "compatibility_date": "2026-04-27",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "APP_CONFIG": "{\"eventsBaseUrl\":\"https://events.iterate.com\",\"clerk\":{\"publishableKey\":\"pk_test_ZHVtbXkuY2xlcmsuYWNjb3VudHMuZGV2JA\",\"secretKey\":\"sk_test_project_ingress\",\"jwtKey\":\"project-ingress-jwt-key\"},\"mcpProofSecret\":\"project-ingress-proof-secret\",\"projectHostnameBases\":[\"iterate.localhost\"],\"typeIdPrefix\":\"os\",\"deployment\":{\"workerScriptName\":\"os2-project-ingress-vitest\"}}",
+    "EVENTS_BASE_URL": "https://events.iterate.com",
+    "MCP_PROOF_SECRET": "project-ingress-proof-secret",
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "PROJECT",
+        "class_name": "ProjectDurableObject",
+      },
+      {
+        "name": "PROJECT_MCP_SERVER_CONNECTION",
+        "class_name": "ProjectMcpServerConnection",
+      },
+    ],
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_id": "os2-project-ingress-vitest",
+      "database_name": "os2-project-ingress-vitest",
+      "preview_database_id": "os2-project-ingress-vitest",
+    },
+    {
+      "binding": "DO_CATALOG",
+      "database_id": "os2-project-ingress-catalog-vitest",
+      "database_name": "os2-project-ingress-catalog-vitest",
+      "preview_database_id": "os2-project-ingress-catalog-vitest",
+    },
+  ],
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["ProjectDurableObject", "ProjectMcpServerConnection"],
+    },
+  ],
+}

@@ -25,7 +25,7 @@ export default defineConfig({
   },
   plugins: [
     cloudflareVitest.cloudflareTest({
-      main: resolve(testRoot, "codemode-session-test-entry.workerd.ts"),
+      main: resolve(testRoot, "codemode-session-test-entry.ts"),
       miniflare: {
         serviceBindings: {
           PROVIDER_A: {
@@ -46,7 +46,7 @@ export default defineConfig({
   test: {
     exclude: defaultExclude,
     hookTimeout: 60_000,
-    include: [resolve(testRoot, "codemode-session.workerd.test.ts")],
+    include: [resolve(testRoot, "codemode-session.test.ts")],
     testTimeout: 60_000,
   },
 });

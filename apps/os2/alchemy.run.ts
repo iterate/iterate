@@ -4,7 +4,8 @@ import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
 import { selfToolProviderBindingName } from "@iterate-com/shared/codemode/self-callable";
 import manifest, { AppConfig } from "./src/app.ts";
 import type { CodemodeSession } from "./src/durable-objects/codemode-session.ts";
-import type { IterateMcpServer } from "./src/durable-objects/iterate-mcp-server.ts";
+import type { ProjectDurableObject } from "./src/durable-objects/project-durable-object.ts";
+import type { ProjectMcpServerConnection } from "./src/durable-objects/project-mcp-server-connection.ts";
 import type { McpClientBridge } from "./src/rpc-targets/mcp-client-bridge.ts";
 
 const ctx = await initAlchemy(manifest, AppConfig, process.env);
@@ -50,19 +51,23 @@ const codemodeSessionWorker = await Worker("codemode-session-do", {
 // The inbound MCP worker is declared after CodemodeSession because MCP tools run
 // code by calling the same project/stream-scoped CodemodeSession DO that powers
 // the web UI. This keeps the MCP and browser code paths behaviorally identical.
-const iterateMcpServer = await Worker("iterate-mcp-server-do", {
-  name: `${ctx.workerName}-iterate-mcp-server-do`,
-  entrypoint: "./src/durable-objects/iterate-mcp-server.ts",
+const projectMcpServerConnectionWorker = await Worker("project-mcp-server-connection-do", {
+  name: `${ctx.workerName}-project-mcp-server-connection-do`,
+  entrypoint: "./src/durable-objects/project-mcp-server-connection.ts",
   adopt: true,
   compatibilityFlags: ["nodejs_compat"],
   bindings: {
     CODEMODE_SESSION: codemodeSessionWorker.bindings.CODEMODE_SESSION,
     EVENTS_BASE_URL: ctx.compiledAppConfig.eventsBaseUrl,
     MCP_PROOF_SECRET: ctx.compiledAppConfig.mcpProofSecret.exposeSecret(),
-    ITERATE_MCP_SERVER: DurableObjectNamespace<IterateMcpServer>("iterate-mcp-server", {
-      className: "IterateMcpServer",
-      sqlite: true,
-    }),
+    PROJECT_MCP_SERVER_CONNECTION: DurableObjectNamespace<ProjectMcpServerConnection>(
+      "project-mcp-server-connection",
+      {
+        className: "ProjectMcpServerConnection",
+        sqlite: true,
+      },
+    ),
+    DO_CATALOG: db,
   },
 });
 
@@ -74,12 +79,17 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     CLERK_SIGN_IN_URL: ctx.compiledAppConfig.clerk.signInUrl,
     CLERK_SIGN_UP_URL: ctx.compiledAppConfig.clerk.signUpUrl,
     DB: db,
+    DO_CATALOG: db,
     LOADER: WorkerLoader(),
     CODEMODE_SESSION: codemodeSessionWorker.bindings.CODEMODE_SESSION,
+    PROJECT: DurableObjectNamespace<ProjectDurableObject>("project", {
+      className: "ProjectDurableObject",
+      sqlite: true,
+    }),
     [openApiBridgeBindingName]: Worker.experimentalEntrypoint(Self, "OpenApiBridge"),
-    ITERATE_MCP_SERVER: iterateMcpServer.bindings.ITERATE_MCP_SERVER,
+    PROJECT_MCP_SERVER_CONNECTION:
+      projectMcpServerConnectionWorker.bindings.PROJECT_MCP_SERVER_CONNECTION,
     MCP_CLIENT_BRIDGE: mcpClientBridge,
-    PROJECT_HOSTNAME_BASES: projectHostnameBases.join(","),
   },
   extraRouteHostnames: projectHostnameBases.flatMap(projectRouteHostnamesForBase),
 });

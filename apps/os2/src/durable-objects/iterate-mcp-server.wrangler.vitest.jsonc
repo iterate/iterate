@@ -1,6 +1,6 @@
 {
-  "name": "os2-iterate-mcp-server-vitest",
-  "main": "iterate-mcp-server-test-entry.workerd.ts",
+  "name": "os2-project-mcp-server-connection-vitest",
+  "main": "iterate-mcp-server-test-entry.ts",
   "compatibility_date": "2026-04-27",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
@@ -14,8 +14,8 @@
         "class_name": "CodemodeSession",
       },
       {
-        "name": "ITERATE_MCP_SERVER",
-        "class_name": "IterateMcpServer",
+        "name": "PROJECT_MCP_SERVER_CONNECTION",
+        "class_name": "ProjectMcpServerConnection",
       },
       {
         "name": "MCP_CLIENT_BRIDGE",
@@ -26,9 +26,9 @@
   "d1_databases": [
     {
       "binding": "DO_CATALOG",
-      "database_id": "os2-iterate-mcp-server-vitest",
-      "database_name": "os2-iterate-mcp-server-vitest",
-      "preview_database_id": "os2-iterate-mcp-server-vitest",
+      "database_id": "os2-project-mcp-server-connection-vitest",
+      "database_name": "os2-project-mcp-server-connection-vitest",
+      "preview_database_id": "os2-project-mcp-server-connection-vitest",
     },
   ],
   "worker_loaders": [
@@ -39,7 +39,7 @@
   "migrations": [
     {
       "tag": "v1",
-      "new_sqlite_classes": ["CodemodeSession", "IterateMcpServer", "McpClientBridge"],
+      "new_sqlite_classes": ["CodemodeSession", "ProjectMcpServerConnection", "McpClientBridge"],
     },
   ],
 }

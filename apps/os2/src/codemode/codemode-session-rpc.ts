@@ -11,10 +11,29 @@ export type CodemodeSessionNamespace = DurableObjectNamespace<CodemodeSession>;
  * Durable Object names for the same `{ projectId, streamPath }` pair.
  */
 export type CodemodeSessionRpcStub = {
-  append(input: EventInput): Promise<Event>;
+  createSession(input?: {
+    code?: string;
+    events?: EventInput[];
+    providers?: ToolProviderDescriptor[];
+  }): Promise<{
+    appendedEvents: Event[];
+    registeredProviderEvents: Event[];
+    scriptExecutionEvent: Event | null;
+    streamPath: StreamPath;
+  }>;
   executeScript(input: { code: string }): Promise<Event>;
   initialize(params: { name: string; projectId: string; streamPath: StreamPath }): Promise<unknown>;
   registerToolProvider(input: { provider: ToolProviderDescriptor }): Promise<Event>;
+  startScriptExecution(input: {
+    code: string;
+    events?: EventInput[];
+    providers?: ToolProviderDescriptor[];
+  }): Promise<{
+    appendedEvents: Event[];
+    event: Event;
+    registeredProviderEvents: Event[];
+    streamPath: StreamPath;
+  }>;
 };
 
 export async function getInitializedCodemodeSession(input: {
@@ -44,22 +63,25 @@ export async function startCodemodeScriptOnSession(input: {
   streamPath: StreamPath;
 }) {
   const session = await getInitializedCodemodeSession(input);
-  const appendedEvents: Event[] = [];
-  const registeredProviderEvents: Event[] = [];
+  return await session.startScriptExecution({
+    code: input.code,
+    events: input.events,
+    providers: input.providers,
+  });
+}
 
-  for (const event of input.events) {
-    appendedEvents.push(await session.append(event));
-  }
-
-  for (const provider of input.providers) {
-    registeredProviderEvents.push(await session.registerToolProvider({ provider }));
-  }
-
-  const event = await session.executeScript({ code: input.code });
-  return {
-    appendedEvents,
-    event,
-    registeredProviderEvents,
-    streamPath: input.streamPath,
-  };
+export async function createCodemodeSession(input: {
+  code?: string;
+  events: EventInput[];
+  namespace: CodemodeSessionNamespace;
+  projectId: string;
+  providers: ToolProviderDescriptor[];
+  streamPath: StreamPath;
+}) {
+  const session = await getInitializedCodemodeSession(input);
+  return await session.createSession({
+    ...(input.code == null ? {} : { code: input.code }),
+    events: input.events,
+    providers: input.providers,
+  });
 }
