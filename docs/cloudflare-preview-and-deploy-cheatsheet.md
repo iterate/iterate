@@ -71,6 +71,7 @@ For normal operator work, use the `os` production Doppler config:
 
 ```bash
 doppler run --project os --config prd -- pnpm preview status
+doppler run --project os --config prd -- pnpm preview reconcile
 doppler run --project os --config prd -- pnpm preview sync --pull-request-number 1234
 ```
 
@@ -79,6 +80,12 @@ For Semaphore maintenance itself, use the `semaphore` production Doppler config:
 ```bash
 doppler run --project semaphore --config prd -- pnpm --dir apps/semaphore seed:environment-config-leases
 ```
+
+The live Semaphore production database is the source of truth for which preview
+slots exist. `preview reconcile` is read-only and checks those live rows against
+Doppler configs plus the Cloudflare preview domain zones. If a slot is broken or
+not available in the right Cloudflare account, remove that Semaphore resource
+instead of adding deploy-script exceptions.
 
 The Semaphore UI labels this as an operator token. It is the same shared API secret; never commit it or paste the value into a PR.
 

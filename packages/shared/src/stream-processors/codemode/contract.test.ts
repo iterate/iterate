@@ -35,7 +35,6 @@ describe("CodemodeProcessorContract", () => {
         committedEvent({
           type: "events.iterate.com/agent/input-added",
           payload: {
-            role: "user",
             content: "ordinary row",
           },
         }),
@@ -43,7 +42,6 @@ describe("CodemodeProcessorContract", () => {
           type: "events.iterate.com/agent/input-added",
           idempotencyKey: CODEMODE_PRIMER_IDEMPOTENCY_KEY,
           payload: {
-            role: "user",
             content: "codemode primer",
           },
         }),

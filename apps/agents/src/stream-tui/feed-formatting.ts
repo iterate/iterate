@@ -1,29 +1,28 @@
 import type { Event } from "@iterate-com/events-contract";
 import type {
   EventsStreamBuiltInElement,
-  EventsStreamRawEventElement,
+  EventsStreamRawEventSummary,
 } from "@iterate-com/ui/components/events/feed-items";
 
 /** Build a map of offset → elapsed time label (e.g. "+2.3s") for consecutive events. */
 export function getElapsedByOffset(feedItems: readonly EventsStreamBuiltInElement[]) {
   const elapsedByOffset = new Map<number, string>();
-  const rawEvents = feedItems.filter((item) => item.type === "raw-event");
+  const rawEvents = feedItems
+    .flatMap((item) => (item.type === "grouped-raw-event" ? item.props.events : []))
+    .sort((a, b) => a.offset - b.offset);
 
   for (const [index, item] of rawEvents.entries()) {
     const previousItem = rawEvents[index - 1];
     if (previousItem == null) continue;
 
-    elapsedByOffset.set(
-      item.props.offset,
-      formatElapsedTime(item.props.timestamp - previousItem.props.timestamp),
-    );
+    elapsedByOffset.set(item.offset, formatElapsedTime(item.timestamp - previousItem.timestamp));
   }
 
   return elapsedByOffset;
 }
 
-export function formatEventSummary(item: EventsStreamRawEventElement, elapsedLabel?: string) {
-  return [item.props.offset, item.props.eventType, elapsedLabel, formatTime(item.props.timestamp)]
+export function formatEventSummary(item: EventsStreamRawEventSummary, elapsedLabel?: string) {
+  return [item.offset, item.eventType, elapsedLabel, formatTime(item.timestamp)]
     .filter(Boolean)
     .join(" · ");
 }

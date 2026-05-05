@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/events-contract";
+import type { EventsStreamElementType } from "@iterate-com/ui/components/events/stream-feed";
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -8,23 +9,22 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarSeparator,
 } from "@iterate-com/ui/components/sidebar";
 import { SidebarShell } from "@iterate-com/ui/components/sidebar-shell";
-import { SidebarThemeSwitcher } from "@iterate-com/ui/components/sidebar-theme-switcher";
 import { getOrpcClient } from "~/orpc/client.ts";
 
 const LIST_AGENTS_QUERY_KEY = ["listAgents"] as const;
 
 type AppSidebarProps = {
   selectedStreamPath: StreamPathType | undefined;
+  hiddenElementTypes: readonly EventsStreamElementType[];
 };
 
 /**
  * Sidebar listing every agent the auto-subscriber has discovered. Polls
  * every 5s so brand-new agents show up without a refresh; tab-out pauses.
  */
-export function AppSidebar({ selectedStreamPath }: AppSidebarProps) {
+export function AppSidebar({ selectedStreamPath, hiddenElementTypes }: AppSidebarProps) {
   const agentsQuery = useQuery({
     queryKey: LIST_AGENTS_QUERY_KEY,
     queryFn: () => getOrpcClient().listAgents({}),
@@ -35,15 +35,7 @@ export function AppSidebar({ selectedStreamPath }: AppSidebarProps) {
   const agents = agentsQuery.data?.agents ?? [];
 
   return (
-    <SidebarShell
-      header={<AppSidebarBrand />}
-      footer={
-        <>
-          <SidebarSeparator />
-          <SidebarThemeSwitcher />
-        </>
-      }
-    >
+    <SidebarShell header={<AppSidebarBrand />}>
       <SidebarGroup>
         <SidebarGroupLabel>Agents</SidebarGroupLabel>
         <SidebarGroupContent>
@@ -67,7 +59,7 @@ export function AppSidebar({ selectedStreamPath }: AppSidebarProps) {
                       render={
                         <Link
                           to="/"
-                          search={{ streamPath }}
+                          search={{ streamPath, hiddenElements: hiddenElementTypes }}
                           aria-label={`Open stream ${agent.streamPath}`}
                         />
                       }

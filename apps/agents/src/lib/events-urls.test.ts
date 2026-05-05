@@ -2,12 +2,12 @@ import { describe, expect, test } from "vitest";
 import { buildAgentWebSocketCallbackUrl, workerReachableLocalUrl } from "./events-urls.ts";
 
 describe("workerReachableLocalUrl", () => {
-  test("rewrites localhost HTTP URLs to IPv6 loopback for workerd fetches", () => {
+  test("rewrites localhost HTTP URLs to IPv4 loopback for worker fetches", () => {
     expect(workerReachableLocalUrl("http://localhost:5173/api/openapi.json")).toBe(
-      "http://[::1]:5173/api/openapi.json",
+      "http://127.0.0.1:5173/api/openapi.json",
     );
     expect(workerReachableLocalUrl("http://127.0.0.1:5173/api/openapi.json")).toBe(
-      "http://[::1]:5173/api/openapi.json",
+      "http://127.0.0.1:5173/api/openapi.json",
     );
   });
 
@@ -26,7 +26,7 @@ describe("buildAgentWebSocketCallbackUrl", () => {
         agentClass: "child-stream-auto-subscriber",
         agentInstance: "stream-demo",
       }),
-    ).toBe("ws://[::1]:5174/agents/child-stream-auto-subscriber/stream-demo");
+    ).toBe("ws://127.0.0.1:5174/agents/child-stream-auto-subscriber/stream-demo");
   });
 
   test("preserves explicit IPv4 loopback hosts", () => {

@@ -11,6 +11,7 @@ import {
   syncCloudflarePreviewForPullRequest,
   testCloudflarePreviewForPullRequest,
 } from "./preview.ts";
+import { reconcileEnvironmentConfigLeaseResources } from "./reconcile-environment-config-leases.ts";
 
 const env = process.env;
 const previewBoundaryEnv = createPreviewBoundaryEnv(env);
@@ -204,6 +205,22 @@ export const router = os.router({
           available,
           leased,
         };
+      }),
+    reconcile: os
+      .input(createPreviewStatusInputSchema(previewBoundaryEnv))
+      .meta({
+        description:
+          "Check live Semaphore environment config leases against Doppler configs and Cloudflare preview domain zones",
+      })
+      .handler(async ({ input, signal }) => {
+        const semaphore = createPreviewSemaphoreClient(input);
+        return await reconcileEnvironmentConfigLeaseResources({
+          client: semaphore,
+          commandEnvironment: env,
+          repositoryRoot: process.cwd(),
+          semaphoreBaseUrl: input.semaphoreBaseUrl,
+          signal,
+        });
       }),
   }),
 });

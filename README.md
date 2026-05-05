@@ -66,14 +66,25 @@ The shared PR preview lifecycle currently covers `agents`, `codemode`,
 preview-managed but has not yet moved to the new-style `alchemy.run.ts`
 primitive.
 
-Environment config leases for PR previews are source-code seeded from
-`scripts/preview/preview-inventory.ts`. Each live Semaphore resource has:
+The live Semaphore production database is the source of truth for which PR
+preview slots exist. Each live Semaphore resource has:
 
 - type: `environment-config-lease`
 - slug: `preview-2`, `preview-3`, etc.
 - data: `{ "dopplerConfig": "preview_2" }`, etc.
 
-To create or repair environment config leases for PR previews:
+To inspect and validate that live inventory:
+
+```bash
+doppler run --project os --config prd -- pnpm preview status
+doppler run --project os --config prd -- pnpm preview reconcile
+```
+
+`preview reconcile` checks every live `environment-config-lease` row against
+the preview-managed Doppler projects and the Cloudflare zone pair for that
+slot, for example `iterate-preview-9.com` and `iterate-preview-9.app`.
+
+To intentionally recreate the environment config lease inventory:
 
 1. Add or confirm the lease in `scripts/preview/preview-inventory.ts`.
 2. Ensure every preview-managed app that may use that lease has the matching
@@ -82,18 +93,17 @@ To create or repair environment config leases for PR previews:
 3. Keep Cloudflare credentials in `_shared` where possible. Preview app configs
    inherit `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` from
    `_shared/preview`; app configs should not override those values.
-4. Reconcile the live Semaphore inventory from source:
+4. Seed the live Semaphore inventory:
 
 ```bash
 doppler run --project semaphore --config prd -- pnpm --dir apps/semaphore seed:environment-config-leases
-doppler run --project os --config prd -- pnpm preview status
+doppler run --project os --config prd -- pnpm preview reconcile
 ```
 
 The seed is exact for `environment-config-lease`: missing resources are created
-and drifted resources are replaced. Only add leases whose Doppler configs and
-Cloudflare domains exist in the right accounts. To expand capacity, first add
-the slot to the source inventory and provision matching Doppler configs and
-app-specific Cloudflare prerequisites.
+and drifted resources are replaced. Only seed leases whose Doppler configs and
+Cloudflare domains exist in the right accounts. Do not encode broken or excluded
+preview slots in deploy logic; remove them from the Semaphore inventory instead.
 
 For the full model and operator commands, see
 `docs/cloudflare-preview-environments.md`. For day-to-day deploy commands, see

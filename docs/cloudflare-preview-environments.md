@@ -39,15 +39,34 @@ The same mechanism applies to local development and production:
 
 ## Source Of Truth
 
-- Semaphore database state stores the environment config lease inventory for PR previews
+- the live Semaphore production database stores the environment config lease inventory for PR previews
 - the managed PR body preview section stores the current PR's lease and app statuses
 - Doppler stores each app project's config bag for the leased environment config
 - there is no app-specific resource inventory and no fallback state
 
-The seed for this Semaphore resource type lives in
-`scripts/preview/preview-inventory.ts`. Running the seed command makes the live
-Semaphore database exactly match that source-code inventory for
-`environment-config-lease`.
+Deploy logic does not know about broken, excluded, or half-available preview
+slots. If a preview slot is not usable, it should not have an
+`environment-config-lease` resource in Semaphore.
+
+The source-code seed in `scripts/preview/preview-inventory.ts` exists so the
+inventory can be recreated deliberately. Running the seed command makes the live
+Semaphore database exactly match that seed for `environment-config-lease`, so
+review the live rows with `preview status` / `preview reconcile` before and
+after using it.
+
+As of 2026-05-05, `preview reconcile` against production Semaphore returned
+eight healthy resources:
+
+| Semaphore slug | Doppler config | Cloudflare zones checked                         |
+| -------------- | -------------- | ------------------------------------------------ |
+| `preview-2`    | `preview_2`    | `iterate-preview-2.com`, `iterate-preview-2.app` |
+| `preview-3`    | `preview_3`    | `iterate-preview-3.com`, `iterate-preview-3.app` |
+| `preview-4`    | `preview_4`    | `iterate-preview-4.com`, `iterate-preview-4.app` |
+| `preview-5`    | `preview_5`    | `iterate-preview-5.com`, `iterate-preview-5.app` |
+| `preview-6`    | `preview_6`    | `iterate-preview-6.com`, `iterate-preview-6.app` |
+| `preview-7`    | `preview_7`    | `iterate-preview-7.com`, `iterate-preview-7.app` |
+| `preview-8`    | `preview_8`    | `iterate-preview-8.com`, `iterate-preview-8.app` |
+| `preview-9`    | `preview_9`    | `iterate-preview-9.com`, `iterate-preview-9.app` |
 
 ## Lifecycle
 
@@ -81,6 +100,7 @@ router reads `SEMAPHORE_API_TOKEN` when present and otherwise falls back to
 
 ```bash
 doppler run --project os --config prd -- pnpm preview status
+doppler run --project os --config prd -- pnpm preview reconcile
 doppler run --project semaphore --config prd -- pnpm --dir apps/semaphore seed:environment-config-leases
 ```
 
@@ -88,14 +108,17 @@ Do not paste the token into scripts or docs.
 
 ## Operational Notes
 
-- Environment config lease inventory for PR previews is provisioned explicitly
-  with `pnpm --dir apps/semaphore seed:environment-config-leases`.
-- The current source-code seed contains `preview_2` through `preview_9`. Add
-  new entries only after the matching Doppler configs and app-specific
-  Cloudflare prerequisites exist.
+- Environment config lease inventory for PR previews is the live Semaphore
+  database. List it with `pnpm preview status`.
+- Reconcile the live rows with `pnpm preview reconcile`. It checks every live
+  `environment-config-lease` row against the preview-managed Doppler projects
+  and the Cloudflare zone pair for that slot, such as
+  `iterate-preview-N.com` / `iterate-preview-N.app`.
+- The current source-code seed contains `preview_2` through `preview_9`. Treat
+  it as a recreate script input, not as runtime deploy state.
 - The seed is exact for `environment-config-lease`: drifted resources are
   deleted and missing resources are recreated with the source-code data.
-- Only provision Semaphore seed entries when the matching `preview_N` Doppler
+- Only keep Semaphore resources when the matching `preview_N` Doppler
   configs exist for the preview-managed apps and the app-specific Cloudflare
   prerequisites are in the right accounts. For os2, that includes the
   `iterate-preview-N.com` / `iterate-preview-N.app` zone pair.

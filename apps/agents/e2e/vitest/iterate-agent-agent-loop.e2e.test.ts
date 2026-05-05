@@ -84,7 +84,7 @@ async function runScenario(args: {
 
   await e2e.events.append(streamPath, {
     type: "events.iterate.com/agent/input-added",
-    payload: { role: "user", content: AGENT_INPUT_CONTENT },
+    payload: { content: AGENT_INPUT_CONTENT },
   });
 
   const webchatEvent = await e2e.events.waitForEvent(

@@ -41,9 +41,88 @@ export type EventsStreamMessageElement = EventsStreamRenderedElement<
 >;
 
 /**
- * Props for a single raw event line in the feed slot.
+ * Props for agent prompt context supplied to the LLM.
  */
-export type EventsStreamRawEventElementProps = {
+export type EventsStreamPromptContextElementProps = {
+  source?: string;
+  text: string;
+  triggerLlmRequest: EventsStreamPromptContextTriggerLlmRequest;
+  timestamp: number;
+  raw: Event;
+};
+
+export type EventsStreamPromptContextTriggerLlmRequest =
+  | { behaviour: "auto" }
+  | { behaviour: "dont-trigger-request" }
+  | { behaviour: "interrupt-current-request" }
+  | { behaviour: "after-current-request" }
+  | { behaviour: "trigger-request-within-time-period"; withinMs: number };
+
+/**
+ * Agent prompt context element.
+ */
+export type EventsStreamPromptContextElement = EventsStreamRenderedElement<
+  "prompt-context",
+  EventsStreamPromptContextElementProps
+>;
+
+/**
+ * Props for agent output supplied by the LLM.
+ */
+export type EventsStreamAgentOutputElementProps = {
+  text: string;
+  timestamp: number;
+  raw: Event;
+};
+
+/**
+ * Agent output element.
+ */
+export type EventsStreamAgentOutputElement = EventsStreamRenderedElement<
+  "agent-output",
+  EventsStreamAgentOutputElementProps
+>;
+
+/**
+ * Props for the current system prompt supplied to the LLM.
+ */
+export type EventsStreamSystemPromptElementProps = {
+  text: string;
+  timestamp: number;
+  raw: Event;
+};
+
+/**
+ * System prompt element.
+ */
+export type EventsStreamSystemPromptElement = EventsStreamRenderedElement<
+  "system-prompt",
+  EventsStreamSystemPromptElementProps
+>;
+
+/**
+ * Props for LLM request boundary separators.
+ */
+export type EventsStreamLlmRequestBoundaryElementProps = {
+  phase: "started" | "ended";
+  outcome?: "completed" | "failed" | "cancelled";
+  requestId: string;
+  timestamp: number;
+  raw: Event;
+};
+
+/**
+ * Horizontal separator for LLM request start/end events.
+ */
+export type EventsStreamLlmRequestBoundaryElement = EventsStreamRenderedElement<
+  "llm-request-boundary",
+  EventsStreamLlmRequestBoundaryElementProps
+>;
+
+/**
+ * Raw wire event summary carried by grouped raw feed elements.
+ */
+export type EventsStreamRawEventSummary = {
   streamPath: StreamPath;
   offset: number;
   eventType: string;
@@ -53,21 +132,13 @@ export type EventsStreamRawEventElementProps = {
 };
 
 /**
- * Single raw event line element.
- */
-export type EventsStreamRawEventElement = EventsStreamRenderedElement<
-  "raw-event",
-  EventsStreamRawEventElementProps
->;
-
-/**
  * Props for a compressed run of consecutive raw event lines with the same event
  * type.
  */
 export type EventsStreamGroupedRawEventElementProps = {
   eventType: string;
   count: number;
-  events: EventsStreamRawEventElement[];
+  events: EventsStreamRawEventSummary[];
   firstTimestamp: number;
   lastTimestamp: number;
 };
@@ -276,7 +347,10 @@ export type EventsStreamComposerSuggestionElement = EventsStreamRenderedElement<
  */
 export type EventsStreamBuiltInElement =
   | EventsStreamMessageElement
-  | EventsStreamRawEventElement
+  | EventsStreamPromptContextElement
+  | EventsStreamAgentOutputElement
+  | EventsStreamSystemPromptElement
+  | EventsStreamLlmRequestBoundaryElement
   | EventsStreamGroupedRawEventElement
   | EventsStreamRawJsonDumpElement
   | EventsStreamLifecycleElement

@@ -640,7 +640,7 @@ describe("stream processor contracts", () => {
     });
   });
 
-  it("runs first attach catch-up as reduce-only before onStart", async () => {
+  it("runs first attach catch-up as reduce-only before onStart when lookback is disabled", async () => {
     const calls: unknown[] = [];
     const contract = defineProcessorContract({
       slug: "counter",
@@ -685,6 +685,7 @@ describe("stream processor contracts", () => {
         ],
       },
       signal: new AbortController().signal,
+      firstAttachAfterAppend: { mode: "none" },
     });
 
     expect(storedState).toEqual({
@@ -701,7 +702,7 @@ describe("stream processor contracts", () => {
     ]);
   });
 
-  it("runs first attach afterAppend only for events inside the lookback window", async () => {
+  it("runs first attach afterAppend only for events inside the default lookback window", async () => {
     const calls: unknown[] = [];
     const contract = defineProcessorContract({
       slug: "counter",
@@ -719,7 +720,6 @@ describe("stream processor contracts", () => {
       reduce: ({ state, event }) => ({ count: state.count + event.payload.by }),
     });
     const processor = implementProcessor(contract, {
-      firstAttachAfterAppend: { mode: "lookback", milliseconds: 250 },
       onStart: ({ state }) => {
         calls.push(["onStart", state.count]);
       },
@@ -757,7 +757,7 @@ describe("stream processor contracts", () => {
         ],
       },
       signal: new AbortController().signal,
-      now: new Date("2026-01-01T00:00:01.000Z"),
+      now: new Date("2026-01-01T00:00:01.001Z"),
     });
 
     expect(storedState).toEqual({

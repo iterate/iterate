@@ -10,10 +10,11 @@ export type EnvironmentConfigLeaseInventoryItem = {
   data: EnvironmentConfigLeaseResourceData;
 };
 
-// Keep this list to slots whose Doppler configs and Cloudflare domain pairs are ready.
-const availablePreviewEnvironmentNumbers = [2, 3, 4, 5, 6, 7, 8, 9] as const;
+// This is the deliberate seed used when recreating the Semaphore inventory.
+// The live Semaphore database remains the source of truth for deploys.
+const seededPreviewEnvironmentNumbers = [2, 3, 4, 5, 6, 7, 8, 9] as const;
 
-export const environmentConfigLeaseInventory = availablePreviewEnvironmentNumbers.map(
+export const environmentConfigLeaseInventory = seededPreviewEnvironmentNumbers.map(
   (leaseNumber) => {
     return {
       type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,

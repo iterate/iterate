@@ -25,7 +25,6 @@ describe("createAgentProcessor", () => {
       event: consumedAgentEvent({
         type: "events.iterate.com/agent/input-added",
         payload: {
-          role: "user",
           content: "hello",
           triggerLlmRequest: { behaviour: "dont-trigger-request" },
         },
@@ -38,6 +37,46 @@ describe("createAgentProcessor", () => {
     });
 
     expect(appended).toEqual([]);
+  });
+
+  it("does not transcribe LLM request started events into agent input", async () => {
+    const appended: StreamEventInput[] = [];
+    const processor = createAgentProcessor({
+      ai: {
+        run: async () => {
+          throw new Error("This test should not run an LLM request.");
+        },
+      },
+      waitUntil: () => undefined,
+    });
+
+    await processor.implementation.afterAppend?.({
+      event: consumedAgentEvent({
+        type: "events.iterate.com/agent/llm-request-started",
+        payload: {
+          requestId: "req_1",
+          model: "test-model",
+          body: { messages: [{ role: "user", content: "hello" }] },
+          runOpts: {},
+        },
+        offset: 43,
+      }),
+      previousState: registeredState(),
+      state: registeredState(),
+      streamApi: testStreamApi({ appended }),
+      signal: new AbortController().signal,
+    });
+
+    expect(appended).toEqual([
+      {
+        type: "events.iterate.com/agent/status-updated",
+        payload: {
+          status: "working",
+          reason: "llm-request-started",
+          requestId: "req_1",
+        },
+      },
+    ]);
   });
 });
 
