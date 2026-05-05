@@ -64,6 +64,7 @@ function RootComponent() {
     <AppProviders
       config={config}
       devtools={<AgentsDevtools />}
+      forcedTheme="light"
       posthog={{ apiKey: config.posthog?.apiKey ?? "" }}
     >
       <Outlet />

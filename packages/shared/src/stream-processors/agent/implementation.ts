@@ -103,8 +103,6 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
   let latestAgentState: AgentState | null = null;
 
   return implementProcessor(AgentProcessorContract, {
-    firstAttachAfterAppend: { mode: "lookback", milliseconds: 250 },
-
     onStart({ state }) {
       latestAgentState = state;
     },
@@ -121,6 +119,7 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
         case CoreProcessorRegisteredEventType:
         case "events.iterate.com/agent/system-prompt-updated":
         case "events.iterate.com/agent/llm-config-updated":
+        case "events.iterate.com/agent/output-added":
         case "events.iterate.com/agent/llm-request-scheduled":
         case "events.iterate.com/agent/status-updated":
           return;
@@ -132,24 +131,6 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
           });
           return;
         case "events.iterate.com/agent/llm-request-started":
-          await appendEventTypeExplanation({
-            eventType: event.type,
-            streamApi,
-          });
-          await appendRewrite({
-            streamApi,
-            event,
-            purpose: "render-llm-request-started",
-            content: eventBlock({
-              offset: event.offset,
-              type: event.type,
-              fields: {
-                requestId: event.payload.requestId,
-                model: event.payload.model,
-                messageCount: event.payload.body.messages.length,
-              },
-            }),
-          });
           await emitAgentStatus({
             streamApi,
             status: "working",
@@ -158,11 +139,7 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
           });
           return;
         case "events.iterate.com/agent/llm-request-queued":
-          await appendEventTypeExplanation({
-            eventType: event.type,
-            streamApi,
-          });
-          await appendRewrite({
+          await appendLlmEventContext({
             streamApi,
             event,
             purpose: "render-llm-request-queued",
@@ -170,11 +147,7 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
           });
           return;
         case "events.iterate.com/agent/llm-request-completed":
-          await appendEventTypeExplanation({
-            eventType: event.type,
-            streamApi,
-          });
-          await appendRewrite({
+          await appendLlmEventContext({
             streamApi,
             event,
             purpose: "render-llm-request-completed",
@@ -195,11 +168,7 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
           });
           return;
         case "events.iterate.com/agent/llm-request-failed":
-          await appendEventTypeExplanation({
-            eventType: event.type,
-            streamApi,
-          });
-          await appendRewrite({
+          await appendLlmEventContext({
             streamApi,
             event,
             purpose: "render-llm-request-failed",
@@ -221,11 +190,7 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
           });
           return;
         case "events.iterate.com/agent/llm-request-cancelled":
-          await appendEventTypeExplanation({
-            eventType: event.type,
-            streamApi,
-          });
-          await appendRewrite({
+          await appendLlmEventContext({
             streamApi,
             event,
             purpose: "render-llm-request-cancelled",
@@ -506,11 +471,9 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
     });
     await args.streamApi.append({
       event: {
-        type: "events.iterate.com/agent/input-added",
+        type: "events.iterate.com/agent/output-added",
         payload: {
-          role: "assistant",
           content: assistantText,
-          triggerLlmRequest: { behaviour: "dont-trigger-request" },
         },
       },
     });
@@ -521,9 +484,7 @@ function resolveTrigger(payload: AgentInputPayload): ConcreteTriggerLlm {
   if (payload.triggerLlmRequest.behaviour !== "auto") {
     return payload.triggerLlmRequest;
   }
-  return payload.role === "assistant"
-    ? { behaviour: "dont-trigger-request" }
-    : { behaviour: "interrupt-current-request" };
+  return { behaviour: "interrupt-current-request" };
 }
 
 async function emitQueued(args: { streamApi: AgentStreamApi }) {
@@ -573,6 +534,19 @@ async function emitAgentStatus(args: {
   });
 }
 
+async function appendLlmEventContext(args: {
+  streamApi: AgentStreamApi;
+  event: { streamPath: string; offset: number; type: string };
+  purpose: string;
+  content: string;
+}) {
+  await appendEventTypeExplanation({
+    streamApi: args.streamApi,
+    eventType: args.event.type,
+  });
+  await appendRewrite(args);
+}
+
 async function appendRewrite(args: {
   streamApi: AgentStreamApi;
   event: { streamPath: string; offset: number };
@@ -588,8 +562,7 @@ async function appendRewrite(args: {
         event: args.event,
       }),
       payload: {
-        role: "user",
-        content: args.content,
+        content: `An event has occurred: \n\n${args.content}`,
         triggerLlmRequest: { behaviour: "dont-trigger-request" },
       },
     },
@@ -605,7 +578,6 @@ async function appendEventTypeExplanation(args: { streamApi: AgentStreamApi; eve
       type: "events.iterate.com/agent/input-added",
       idempotencyKey: `stream-processor:${AgentProcessorContract.slug}:event-type-explainer:${args.eventType}`,
       payload: {
-        role: "user",
         content: explanation,
         triggerLlmRequest: { behaviour: "dont-trigger-request" },
       },
@@ -614,13 +586,6 @@ async function appendEventTypeExplanation(args: { streamApi: AgentStreamApi; eve
 }
 
 function eventTypeExplanation(eventType: string): string | null {
-  if (eventType === "events.iterate.com/agent/llm-request-started") {
-    return eventTypeExplanationBlock({
-      type: eventType,
-      meaning:
-        "An LLM request began. The requestId links later completion, cancellation, or failure events.",
-    });
-  }
   if (eventType === "events.iterate.com/agent/llm-request-queued") {
     return eventTypeExplanationBlock({
       type: eventType,

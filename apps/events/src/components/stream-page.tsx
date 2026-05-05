@@ -23,6 +23,7 @@ import type {
 import { EventsStreamEventInspectorSheet } from "@iterate-com/ui/components/events/event-inspector-sheet";
 import {
   EventsStreamFeed,
+  type EventsStreamElementType,
   EventsStreamHeader,
   EventsStreamInputSlot,
 } from "@iterate-com/ui/components/events/stream-feed";
@@ -77,21 +78,25 @@ export function StreamPage({
   rendererMode = DEFAULT_STREAM_RENDERER_MODE,
   composerMode = defaultStreamViewSearch.composer,
   feedViewMode = defaultStreamViewSearch.view,
+  hiddenElementTypes = defaultStreamViewSearch.hiddenElements,
   openEventOffset,
   onOpenEventOffsetChange,
   onRendererModeChange,
   onComposerModeChange,
   onFeedViewModeChange,
+  onHiddenElementTypesChange,
 }: {
   streamPath: StreamPath;
   rendererMode?: StreamRendererMode;
   composerMode?: StreamComposerMode;
   feedViewMode?: StreamFeedViewMode;
+  hiddenElementTypes?: readonly EventsStreamElementType[];
   openEventOffset?: number;
   onOpenEventOffsetChange?: (offset?: number) => void;
   onRendererModeChange?: (mode: StreamRendererMode) => void;
   onComposerModeChange?: (mode: StreamComposerMode) => void;
   onFeedViewModeChange?: (mode: StreamFeedViewMode) => void;
+  onHiddenElementTypesChange?: (types: EventsStreamElementType[]) => void;
 }) {
   const queryClient = useQueryClient();
   const { closeMetadata, metadataOpen, setHeaderControls } = useStreamsChrome();
@@ -368,16 +373,26 @@ export function StreamPage({
 
   return (
     <EventsStreamLayout>
-      {feedViewMode === "clean" && cleanViewState.slots.header.length > 0 ? (
+      {feedViewMode === "clean" &&
+      (cleanViewState.slots.header.length > 0 || cleanViewState.slots.feed.length > 0) ? (
         <EventsStreamLayoutHeader>
-          <EventsStreamHeader elements={cleanViewState.slots.header} />
+          <EventsStreamHeader
+            elements={cleanViewState.slots.header}
+            elementTypes={[
+              ...new Set(cleanViewState.slots.feed.map((element) => element.type)),
+            ].sort()}
+            hiddenElementTypes={hiddenElementTypes}
+            onHiddenElementTypesChange={onHiddenElementTypesChange}
+          />
         </EventsStreamLayoutHeader>
       ) : null}
 
       <EventsStreamLayoutMain>
         {feedViewMode === "clean" ? (
           <EventsStreamFeed
-            elements={cleanViewState.slots.feed}
+            elements={cleanViewState.slots.feed.filter(
+              (element) => !hiddenElementTypes.includes(element.type),
+            )}
             emptyLabel="No events received yet."
             isPending={isConnecting}
             errorLabel={liveStreamFailureLabel}
@@ -391,6 +406,7 @@ export function StreamPage({
                   composer: previous.composer ?? defaultStreamViewSearch.composer,
                   renderer: previous.renderer ?? defaultStreamViewSearch.renderer,
                   view: previous.view ?? defaultStreamViewSearch.view,
+                  hiddenElements: previous.hiddenElements ?? defaultStreamViewSearch.hiddenElements,
                 })}
                 className={className}
               >

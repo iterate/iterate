@@ -30,6 +30,10 @@ export const cloudflarePreviewApps = {
     displayName: "Agents",
     appPath: "apps/agents",
     dopplerProject: "agents",
+    // `agents-preview-1` exists in semaphore, but the Agents Doppler project
+    // starts at `preview_2`. If the allocator hands out slot 1, deploys fail
+    // before the Worker build even starts because Doppler cannot load secrets.
+    excludedPreviewSlots: [1],
     paths: ["apps/agents/**", "apps/agents-contract/**"],
     previewResourceType: "agents-preview-environment",
     previewTestBaseUrlEnvVar: "AGENTS_BASE_URL",

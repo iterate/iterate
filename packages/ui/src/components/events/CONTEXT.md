@@ -12,6 +12,10 @@ _Avoid_: View item, feed item as the generic term, React component, render paylo
 A flat string that selects a renderer for a **Rendered Element** without encoding slot placement.
 _Avoid_: Slot-prefixed type names
 
+**Element Type Filter**:
+User-controlled visibility selection over the **Element Types** in the feed slot. It hides or shows already-reduced **Rendered Elements** and does not change event reduction.
+_Avoid_: Event type filter, renderer mode
+
 **Feed Item**:
 A **Rendered Element** rendered in the feed slot.
 _Avoid_: Raw item
@@ -30,6 +34,7 @@ _Code_: Use `EventsStreamViewReducer` for the exported reducer contract.
 - A **Stream View Reducer** produces zero or more **Rendered Elements**
 - A **Rendered Element** belongs to exactly one **Slot**
 - A **Rendered Element** has exactly one **Element Type**
+- An **Element Type Filter** applies after the **Stream View Reducer** has produced feed-slot **Rendered Elements**
 - A **Feed Item** is a **Rendered Element** whose **Slot** is the feed
 - Exported stream view model types need docstrings because reducers and renderers meet at this boundary
 - Do not introduce reducer composition as a named abstraction yet. Prefer a small number of separate reducers with plain helper functions they can call when behavior is genuinely shared.

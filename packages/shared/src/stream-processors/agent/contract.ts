@@ -54,7 +54,6 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/input-added": {
       description: "A curated model-visible row of agent context.",
       payloadSchema: z.object({
-        role: z.enum(["user", "assistant"]),
         content: z.string(),
         triggerLlmRequest: z
           .discriminatedUnion("behaviour", [
@@ -68,6 +67,12 @@ export const AgentProcessorContract = defineProcessorContract({
             }),
           ])
           .default({ behaviour: "auto" }),
+      }),
+    },
+    "events.iterate.com/agent/output-added": {
+      description: "A model-visible assistant output row.",
+      payloadSchema: z.object({
+        content: z.string(),
       }),
     },
     "events.iterate.com/agent/llm-config-updated": {
@@ -148,6 +153,7 @@ export const AgentProcessorContract = defineProcessorContract({
     ...standardProcessorBehavior.consumes,
     "events.iterate.com/agent/system-prompt-updated",
     "events.iterate.com/agent/input-added",
+    "events.iterate.com/agent/output-added",
     "events.iterate.com/agent/llm-config-updated",
     "events.iterate.com/agent/llm-request-scheduled",
     "events.iterate.com/agent/llm-request-started",
@@ -160,6 +166,7 @@ export const AgentProcessorContract = defineProcessorContract({
   emits: [
     ...standardProcessorBehavior.emits,
     "events.iterate.com/agent/input-added",
+    "events.iterate.com/agent/output-added",
     "events.iterate.com/agent/llm-request-scheduled",
     "events.iterate.com/agent/llm-request-started",
     "events.iterate.com/agent/llm-request-completed",
@@ -185,7 +192,15 @@ export const AgentProcessorContract = defineProcessorContract({
           ...nextState,
           history: [
             ...nextState.history,
-            { role: event.payload.role, content: event.payload.content },
+            { role: "user" as const, content: event.payload.content },
+          ],
+        };
+      case "events.iterate.com/agent/output-added":
+        return {
+          ...nextState,
+          history: [
+            ...nextState.history,
+            { role: "assistant" as const, content: event.payload.content },
           ],
         };
       case "events.iterate.com/agent/llm-config-updated":

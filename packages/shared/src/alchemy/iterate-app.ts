@@ -90,7 +90,9 @@ export async function IterateApp<B extends Bindings>(
     compatibilityFlags,
     bindings: {
       ...props.bindings,
-      APP_CONFIG: alchemy.secret(JSON.stringify(rawAppConfig, null, 2)),
+      APP_CONFIG: app.local
+        ? JSON.stringify(rawAppConfig, null, 2)
+        : alchemy.secret(JSON.stringify(rawAppConfig, null, 2)),
     },
     wrangler: { main: "./src/entry.workerd.ts" },
     // Full sampling with persistent logs/traces for all Iterate workers.
@@ -322,8 +324,9 @@ function withSequentialCloudflareAssetPreupload(input: { command: string; worker
  * Alchemy's `TanStackStart` returns after the upload step, but in CI we have
  * seen the immediately-following Routes API call fail with Cloudflare error
  * 10019 ("Worker does not exist"). Polling the first-party script-read endpoint
- * keeps the dependency inside `IterateApp` instead of requiring each preview
- * job to retry the whole deployment command.
+ * catches the ordinary upload lag. Requiring a second successful read after a
+ * short pause also covers the awkward edge where the Scripts API can see the
+ * Worker but the Routes API has not accepted it yet.
  *
  * Cloudflare routes docs:
  * https://developers.cloudflare.com/workers/configuration/routing/routes/
@@ -336,6 +339,7 @@ async function waitForCloudflareWorkerScript(params: {
   workerName: string;
 }) {
   const deadline = Date.now() + 120_000;
+  let visibleChecks = 0;
   let lastStatus = 0;
   let lastBody = "";
 
@@ -344,7 +348,12 @@ async function waitForCloudflareWorkerScript(params: {
       `/accounts/${params.cloudflareApi.accountId}/workers/scripts/${encodeURIComponent(params.workerName)}`,
     );
 
-    if (response.ok) return;
+    if (response.ok) {
+      visibleChecks += 1;
+      if (visibleChecks >= 2) return;
+      await sleep(5_000);
+      continue;
+    }
 
     lastStatus = response.status;
     lastBody = await response.text();

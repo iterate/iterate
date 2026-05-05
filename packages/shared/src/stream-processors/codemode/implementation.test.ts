@@ -29,11 +29,9 @@ describe("createCodemodeProcessor", () => {
 
     await processor.implementation.afterAppend?.({
       event: consumedCodemodeEvent({
-        type: "events.iterate.com/agent/input-added",
+        type: "events.iterate.com/agent/output-added",
         payload: {
-          role: "assistant",
           content: "```js\nasync () => {\n  return 1;\n}\n```",
-          triggerLlmRequest: { behaviour: "auto" },
         },
         offset: 5,
       }),
@@ -48,14 +46,14 @@ describe("createCodemodeProcessor", () => {
         type: "events.iterate.com/agent/input-added",
         idempotencyKey: CODEMODE_PRIMER_IDEMPOTENCY_KEY,
         payload: {
-          role: "user",
           content: expect.stringContaining("codemode is how you use tools"),
           triggerLlmRequest: { behaviour: "dont-trigger-request" },
         },
       },
       {
         type: "events.iterate.com/codemode/block-added",
-        idempotencyKey: "stream-processor:codemode:derived:assistant-input-to-block:/agents/test:5",
+        idempotencyKey:
+          "stream-processor:codemode:derived:assistant-output-to-block:/agents/test:5",
         payload: {
           script: "async () => {\n  return 1;\n}",
         },

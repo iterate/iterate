@@ -3078,6 +3078,12 @@ importers:
       '@posthog/rollup-plugin':
         specifier: ^1.2.14
         version: 1.2.15(rollup@4.59.0)
+      '@slack/types':
+        specifier: ^2.20.0
+        version: 2.20.0
+      '@slack/web-api':
+        specifier: ^7.14.1
+        version: 7.14.1
       acorn:
         specifier: ^8.16.0
         version: 8.16.0

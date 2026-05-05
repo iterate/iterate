@@ -18,7 +18,7 @@ import { os } from "~/orpc/orpc.ts";
 
 /**
  * Thin wrapper around `events.append` that drops a single
- * `events.iterate.com/agent/input-added` (role: user) event onto a stream under the
+ * `events.iterate.com/agent/input-added` event onto a stream under the
  * auto-subscriber's prefix.
  *
  * `createAgent` explicitly subscribes the Webchat, Agent, and Codemode
@@ -84,10 +84,9 @@ export const createAgentRouter = {
       event: {
         type: "events.iterate.com/agent/input-added",
         payload: {
-          role: "user",
           content: input.initialPrompt,
           // Omitting `triggerLlmRequest` means it defaults to `auto`, which
-          // resolves to `interrupt-current-request` for the user role.
+          // resolves to `interrupt-current-request`.
         },
       },
     });

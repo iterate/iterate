@@ -19,8 +19,6 @@ type WebchatStreamApi = ProcessorStreamApi<typeof WebchatProcessorContract>;
  */
 export function createWebchatProcessor() {
   return implementProcessor(WebchatProcessorContract, {
-    firstAttachAfterAppend: { mode: "lookback", milliseconds: 250 },
-
     async afterAppend({ event, state, streamApi }) {
       await standardProcessorBehavior.afterAppend({
         contract: WebchatProcessorContract,
@@ -42,7 +40,6 @@ export function createWebchatProcessor() {
                 event,
               }),
               payload: {
-                role: "user",
                 content: eventBlock({
                   offset: event.offset,
                   type: event.type,
@@ -64,7 +61,6 @@ export function createWebchatProcessor() {
                 event,
               }),
               payload: {
-                role: "user",
                 content: eventBlock({
                   offset: event.offset,
                   type: event.type,
@@ -92,7 +88,6 @@ async function appendEventTypeExplanation(args: {
       type: "events.iterate.com/agent/input-added",
       idempotencyKey: `stream-processor:${WebchatProcessorContract.slug}:event-type-explainer:${args.eventType}`,
       payload: {
-        role: "user",
         content: eventTypeExplanation(args.eventType),
         triggerLlmRequest: { behaviour: "dont-trigger-request" },
       },

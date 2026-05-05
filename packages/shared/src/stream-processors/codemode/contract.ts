@@ -108,6 +108,7 @@ export const CodemodeProcessorContract = defineProcessorContract({
   emits: [
     ...standardProcessorBehavior.emits,
     "events.iterate.com/agent/input-added",
+    "events.iterate.com/agent/output-added",
     "events.iterate.com/agent/status-updated",
     "events.iterate.com/webchat/agent-response-added",
     "events.iterate.com/codemode/block-added",
@@ -137,6 +138,8 @@ export const CodemodeProcessorContract = defineProcessorContract({
         if (event.idempotencyKey === CODEMODE_PRIMER_IDEMPOTENCY_KEY) {
           return { ...nextState, hasAppendedCodemodePrompt: true };
         }
+        break;
+      case "events.iterate.com/agent/output-added":
         break;
       case "events.iterate.com/agent/system-prompt-updated":
       case "events.iterate.com/agent/llm-config-updated":

@@ -32,7 +32,6 @@ describe("createWebchatProcessor", () => {
         idempotencyKey:
           "stream-processor:webchat:event-type-explainer:events.iterate.com/webchat/user-message-added",
         payload: {
-          role: "user",
           content:
             "First `events.iterate.com/webchat/user-message-added` event. This represents a message received from the webchat user.",
           triggerLlmRequest: { behaviour: "dont-trigger-request" },
@@ -42,7 +41,6 @@ describe("createWebchatProcessor", () => {
         type: "events.iterate.com/agent/input-added",
         idempotencyKey: "stream-processor:webchat:derived:render-message:/agents/test:42",
         payload: {
-          role: "user",
           content:
             "```yaml\nevent:\n  offset: 42\n  type: events.iterate.com/webchat/user-message-added\n  content: |-\n    hello\n```",
         },
@@ -70,7 +68,6 @@ describe("createWebchatProcessor", () => {
       type: "events.iterate.com/agent/input-added",
       idempotencyKey: "stream-processor:webchat:derived:render-response:/agents/test:43",
       payload: {
-        role: "user",
         content:
           "```yaml\nevent:\n  offset: 43\n  type: events.iterate.com/webchat/agent-response-added\n  message: |-\n    hello back\n```",
         triggerLlmRequest: { behaviour: "dont-trigger-request" },

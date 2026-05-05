@@ -17,7 +17,10 @@ export function createEventsOrpcClient(options: {
   })
     .toString()
     .replace(/\/+$/, "");
-  const fetchOrigin = workerReachableLocalUrl(projectOrigin).replace(/\/+$/, "");
+  const fetchOrigin =
+    typeof window === "undefined"
+      ? workerReachableLocalUrl(projectOrigin).replace(/\/+$/, "")
+      : projectOrigin;
 
   return createORPCClient(
     new OpenAPILink(eventsContract, {
