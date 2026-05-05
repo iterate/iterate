@@ -6,9 +6,9 @@ import {
   type StreamEvent,
   type StreamEventInput,
 } from "../stream-processor.ts";
+import type { ToolProviderDescriptor } from "../../codemode/types.ts";
 import { CodemodeProcessorContract, type CodemodeState } from "./contract.ts";
 import { createCodemodeProcessor } from "./implementation.ts";
-import type { ToolProviderDescriptor } from "../../codemode/types.ts";
 
 describe("createCodemodeProcessor", () => {
   it("executes requested scripts through the injected executor and appends the durable result event", async () => {

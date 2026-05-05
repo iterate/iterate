@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { getInitialProcessorState, type StreamEvent } from "../stream-processor.ts";
+import type { ToolProviderDescriptor } from "../../codemode/types.ts";
 import {
   CodemodeProcessorContract,
   reduceCodemodeEvents,
   toolProviderRegistryKey,
 } from "./contract.ts";
-import type { ToolProviderDescriptor } from "../../codemode/types.ts";
 
 describe("CodemodeProcessorContract", () => {
   it("stores registered tool providers by path", () => {

@@ -18,8 +18,8 @@ const SearchSchema = z.object({
 export const Route = createFileRoute(
   "/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/$codemodeSessionName",
 )({
-  ssr: false,
   validateSearch: SearchSchema,
+  ssr: false,
   loader: async ({ context, location, params }) => {
     const search = SearchSchema.parse(location.search);
     const project = await context.queryClient.ensureQueryData({
