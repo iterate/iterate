@@ -13,10 +13,7 @@ import { withKvInspector } from "@iterate-com/shared/durable-object-utils/mixins
 import { withLifecycleHooks } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { withOuterbase } from "@iterate-com/shared/durable-object-utils/mixins/with-outerbase";
 import { withStreamProcessorRunner } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor-runner";
-import {
-  CodemodeProcessorContract,
-  type CodemodeState,
-} from "@iterate-com/shared/stream-processors/codemode/contract";
+import { CodemodeProcessorContract } from "@iterate-com/shared/stream-processors/codemode/contract";
 import type {
   CodemodeProcessorLogger,
   CodemodeProcessorSession,

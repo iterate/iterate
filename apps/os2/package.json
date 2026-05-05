@@ -23,7 +23,7 @@
     "sqlfu:migrate": "sqlfu migrate",
     "sqlfu:ui": "sqlfu",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --exclude 'src/durable-objects/*.test.ts'",
     "test:codemode-session": "OS2_CODEMODE_SESSION_TEST_APP_ROOT=$PWD pnpm --dir ../../packages/shared exec vitest run --config ../../apps/os2/src/durable-objects/codemode-session.vitest.config.ts",
     "test:project-ingress": "OS2_PROJECT_INGRESS_TEST_APP_ROOT=$PWD pnpm --dir ../../packages/shared exec vitest run --config ../../apps/os2/src/durable-objects/project-ingress.vitest.config.ts",
     "test:project-mcp-server-connection": "OS2_ITERATE_MCP_SERVER_TEST_APP_ROOT=$PWD pnpm --dir ../../packages/shared exec vitest run --config ../../apps/os2/src/durable-objects/iterate-mcp-server.vitest.config.ts",

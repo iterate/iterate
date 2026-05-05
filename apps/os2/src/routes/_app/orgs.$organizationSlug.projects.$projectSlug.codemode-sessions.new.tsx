@@ -13,16 +13,16 @@ import { z } from "zod";
 import { findCodemodeExample } from "~/codemode/examples.ts";
 import { createBrowserOpenApiClient, orpc } from "~/orpc/client.ts";
 
-const SearchSchema = z.object({
+const Search = z.object({
   example: z.string().optional(),
 });
 
 export const Route = createFileRoute(
   "/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/new",
 )({
-  validateSearch: SearchSchema,
+  validateSearch: Search,
   loader: async ({ context, location, params }) => {
-    const search = SearchSchema.parse(location.search);
+    const search = Search.parse(location.search);
     const project = await context.queryClient.ensureQueryData({
       ...orpc.projects.findBySlug.queryOptions({ input: { slug: params.projectSlug } }),
       staleTime: 30_000,

@@ -13,11 +13,7 @@ import { resolveToolProviderDescriptor } from "../../codemode/resolve.ts";
 import type { ToolProviderDescriptor } from "../../codemode/types.ts";
 import { CoreProcessorRegisteredEventType } from "../core/contract.ts";
 import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
-import {
-  CodemodeProcessorContract,
-  toolProviderRegistryKey,
-  type CodemodeState,
-} from "./contract.ts";
+import { CodemodeProcessorContract, type CodemodeState } from "./contract.ts";
 import type {
   CodemodeEventInput,
   CodemodeProcessorLogger,

@@ -11,17 +11,17 @@ import { EventsStreamView } from "@iterate-com/ui/components/events/stream-feed"
 import { z } from "zod";
 import { createBrowserWebSocketClient, orpc } from "~/orpc/client.ts";
 
-const SearchSchema = z.object({
+const Search = z.object({
   streamPath: StreamPath.optional(),
 });
 
 export const Route = createFileRoute(
   "/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/$codemodeSessionName",
 )({
+  validateSearch: Search,
   ssr: false,
-  validateSearch: SearchSchema,
   loader: async ({ context, location, params }) => {
-    const search = SearchSchema.parse(location.search);
+    const search = Search.parse(location.search);
     const project = await context.queryClient.ensureQueryData({
       ...orpc.projects.findBySlug.queryOptions({ input: { slug: params.projectSlug } }),
       staleTime: 30_000,

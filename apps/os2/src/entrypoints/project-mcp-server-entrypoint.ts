@@ -3,7 +3,7 @@ import { createClerkClient, verifyToken } from "@clerk/backend";
 import { generateProtectedResourceMetadata } from "@clerk/mcp-tools/server";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { McpAgent } from "agents/mcp";
-import manifest, { AppConfig } from "~/app.ts";
+import { AppConfig } from "~/app.ts";
 import type { ProjectDurableObject } from "~/durable-objects/project-durable-object.ts";
 import type { ProjectMcpServerConnectionProps } from "~/durable-objects/project-mcp-server-connection.ts";
 import { ingressUrlFromRequest } from "~/ingress/host-routing.ts";
