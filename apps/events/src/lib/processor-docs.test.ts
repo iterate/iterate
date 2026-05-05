@@ -20,6 +20,15 @@ describe("processor docs", () => {
           type: "string",
           description: "Model-visible user context to append to agent history.",
         },
+        triggerLlmRequest: {
+          oneOf: [
+            { title: "auto" },
+            { title: "dont-trigger-request" },
+            { title: "interrupt-current-request" },
+            { title: "after-current-request" },
+            { title: "trigger-request-within-time-period" },
+          ],
+        },
       },
       examples: [
         {
