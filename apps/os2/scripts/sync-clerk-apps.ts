@@ -55,8 +55,7 @@ const targets: Target[] = [
     eventsBaseUrl: "https://events.iterate-dev-rahul.com",
     projectHostnameBase: "iterate-dev-rahul.app",
   },
-  ...Array.from({ length: 10 }, (_, index) => {
-    const previewNumber = index + 1;
+  ...[2, 3, 4, 5, 6, 7, 8, 9].map((previewNumber) => {
     return {
       dopplerConfig: `preview_${previewNumber}`,
       clerkAppName: `OS2 preview ${previewNumber}`,

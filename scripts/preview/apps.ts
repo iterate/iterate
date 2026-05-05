@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  newStyleCloudflareApps,
+  newStyleCloudflareAppSharedPaths,
+} from "../../packages/shared/src/apps/new-style-cloudflare-apps.ts";
 
 export const CloudflarePreviewAppSlug = z.enum([
   "agents",
@@ -17,86 +21,60 @@ export type CloudflarePreviewApp = {
   displayName: string;
   appPath: `apps/${string}`;
   dopplerProject: string;
-  excludedPreviewSlots?: number[];
   paths: string[];
-  previewResourceType: string;
+  previewDependencies?: CloudflarePreviewAppSlug[];
   previewTestBaseUrlEnvVar: string;
   previewTestCommandArgs: readonly [string, ...string[]];
 };
 
-export const cloudflarePreviewApps = {
+export const cloudflarePreviewSharedPaths = [
+  ".github/workflows/cloudflare-previews.yml",
+  ".github/ts-workflows/workflows/cloudflare-previews.ts",
+  ...newStyleCloudflareAppSharedPaths,
+  "scripts/preview/**",
+] as const;
+
+export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflarePreviewApp> = {
   agents: {
-    slug: "agents",
-    displayName: "Agents",
-    appPath: "apps/agents",
-    dopplerProject: "agents",
-    // `agents-preview-1` exists in semaphore, but the Agents Doppler project
-    // starts at `preview_2`. If the allocator hands out slot 1, deploys fail
-    // before the Worker build even starts because Doppler cannot load secrets.
-    excludedPreviewSlots: [1],
-    paths: ["apps/agents/**", "apps/agents-contract/**"],
-    previewResourceType: "agents-preview-environment",
+    ...newStyleCloudflareApps.agents,
     previewTestBaseUrlEnvVar: "AGENTS_BASE_URL",
     previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
   },
   codemode: {
-    slug: "codemode",
-    displayName: "Codemode",
-    appPath: "apps/codemode",
-    dopplerProject: "codemode",
-    paths: ["apps/codemode/**", "apps/codemode-contract/**"],
-    previewResourceType: "codemode-preview-environment",
+    ...newStyleCloudflareApps.codemode,
     previewTestBaseUrlEnvVar: "CODEMODE_BASE_URL",
     previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
   },
   example: {
-    slug: "example",
-    displayName: "Example",
-    appPath: "apps/example",
-    dopplerProject: "example",
-    paths: ["apps/example/**"],
-    previewResourceType: "example-preview-environment",
+    ...newStyleCloudflareApps.example,
     previewTestBaseUrlEnvVar: "EXAMPLE_BASE_URL",
-    previewTestCommandArgs: ["pnpm", "test:e2e"],
+    previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
   },
   events: {
     slug: "events",
     displayName: "Events",
     appPath: "apps/events",
     dopplerProject: "events",
-    paths: ["apps/events/**"],
-    previewResourceType: "events-preview-environment",
+    paths: ["apps/events/**", "apps/events-contract/**"],
     previewTestBaseUrlEnvVar: "EVENTS_BASE_URL",
     previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
   },
   os2: {
-    slug: "os2",
-    displayName: "OS",
-    appPath: "apps/os2",
-    dopplerProject: "os2",
-    paths: ["apps/os2/**", "apps/os2-contract/**"],
-    previewResourceType: "os2-preview-environment",
+    ...newStyleCloudflareApps.os2,
+    previewDependencies: newStyleCloudflareApps.os2.deploymentDependencies?.map((appSlug) =>
+      CloudflarePreviewAppSlug.parse(appSlug),
+    ),
     previewTestBaseUrlEnvVar: "OS2_BASE_URL",
     previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
   },
   semaphore: {
-    slug: "semaphore",
-    displayName: "Semaphore",
-    appPath: "apps/semaphore",
-    dopplerProject: "semaphore",
-    paths: ["apps/semaphore/**"],
-    previewResourceType: "semaphore-preview-environment",
+    ...newStyleCloudflareApps.semaphore,
     previewTestBaseUrlEnvVar: "SEMAPHORE_BASE_URL",
     previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
   },
   "ingress-proxy": {
-    slug: "ingress-proxy",
-    displayName: "Ingress Proxy",
-    appPath: "apps/ingress-proxy",
-    dopplerProject: "ingress-proxy",
-    paths: ["apps/ingress-proxy/**"],
-    previewResourceType: "ingress-proxy-preview-environment",
+    ...newStyleCloudflareApps["ingress-proxy"],
     previewTestBaseUrlEnvVar: "INGRESS_PROXY_BASE_URL",
     previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
   },
-} satisfies Record<CloudflarePreviewAppSlug, CloudflarePreviewApp>;
+};

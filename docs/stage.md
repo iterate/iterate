@@ -1,6 +1,20 @@
 # Stage
 
-> **Note:** This document describes the generic stage naming rules used by Alchemy-based apps. For repo-managed PR previews, see `docs/cloudflare-preview-environments.md`. For `apps/os2`, see `docs/os2-environments.md` because os2 uses dedicated zone pairs per environment.
+> **Note:** This document describes generic and older Alchemy stage naming rules. For current new-style Cloudflare apps, do not pass stage separately: select the Doppler config, and `_shared` sets `ALCHEMY_STAGE=${DOPPLER_CONFIG}`. For repo-managed PR previews, see `docs/cloudflare-preview-environments.md`. For `apps/os2`, see `docs/os2-environments.md` because os2 uses dedicated zone pairs per environment.
+
+## Current New-Style Cloudflare Apps
+
+For `agents`, `codemode`, `example`, `ingress-proxy`, `os2`, and `semaphore`,
+stage is selected by choosing a Doppler config. Do not pass `--stage` to these
+deploys. `_shared` sets `ALCHEMY_STAGE=${DOPPLER_CONFIG}`, so `prd`,
+`preview_2`, and `dev_jonas_2` are just different bags of environment config
+for the same `alchemy.run.ts` primitive.
+
+Repo-managed PR previews lease numbered `preview_N` configs through Semaphore
+`environment-config-lease` resources. The rest of this document is legacy and
+background context for older stage naming patterns.
+
+## Legacy Stage Background
 
 Stage is an **input**, not something derived. The deployer decides what stage to deploy to.
 
@@ -12,7 +26,7 @@ Stage determines the URL namespace and identity of a deployment:
 | ----------- | ------------------------- |
 | `prd`       | app.iterate.com           |
 | `preview`   | app-preview.iterate.com   |
-| `preview_1` | app-preview-1.iterate.com |
+| `preview_2` | app-preview-2.iterate.com |
 | `dev-jonas` | app-dev-jonas.iterate.com |
 
 That's it. Stage is just "which URL". Everything else—secrets, database, OAuth clients, Slack tokens—are separate concerns configured via environment variables.
@@ -32,7 +46,7 @@ For `apps/iterate-com`, replace `os` with `www`.
 
 ```bash
 # Deploy to a numbered preview stage
-pnpm deploy --stage preview_1
+pnpm deploy --stage preview_2
 
 # Local dev with your stage
 pnpm dev --stage dev-jonas
@@ -100,12 +114,12 @@ Use Doppler branch configs for isolation:
 | `dev_jonas`    | Engineer-specific dev config         |
 | `dev_rahul`    | Engineer-specific dev config         |
 | `preview`      | Base preview config                  |
-| `preview_1`    | Preview slot 1                       |
-| `preview_2`    | Preview slot 2                       |
-| `preview_N`    | Preview slot N                       |
+| `preview_2`    | Repo-managed PR preview config 2     |
+| `preview_9`    | Repo-managed PR preview config 9     |
+| `preview_N`    | Repo-managed PR preview config N     |
 | `prd`          | Production                           |
 
-Engineers should use `dev_{name}` configs. Repo-managed preview environments use numbered `preview_N` configs that correspond to Semaphore preview slots.
+Engineers should use `dev_{name}` configs. Repo-managed PR previews use numbered `preview_N` configs that correspond to Semaphore environment config leases.
 
 **Never use `dev_personal`**. It's a Doppler built-in that makes it impossible for others to fix secrets. We've banned it.
 
@@ -148,7 +162,7 @@ CI sets up isolated branches automatically:
 
 ```bash
 DATABASE_URL=<dev-db-connection>
-DATABASE_BRANCH=preview_1  # isolated branch per preview env
+DATABASE_BRANCH=preview_2  # isolated branch per preview env
 ```
 
 Each preview env gets its own branch of the dev database—isolated from other preview envs but sharing the dev DB infrastructure.

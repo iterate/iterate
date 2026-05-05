@@ -77,12 +77,15 @@ the shared `withEvlog()` wrapper in the runtime entrypoints rather than Nitro's
 
 ```bash
 # Normal preview lifecycle is managed from the repo root:
-# doppler run --project os --config prd -- pnpm preview sync --app example
+# doppler run --project os --config prd -- pnpm preview sync --pull-request-number 1234
 #
-# Fixed-slot manual deploy:
-doppler run --project example --config preview_1 -- pnpm alchemy:up
-doppler run --project example --config preview_1 -- pnpm alchemy:down
-doppler run --config prd -- pnpm alchemy:up    # production-style deploy
+# A direct preview_N deploy bypasses Semaphore's environment config lease.
+# Check `pnpm preview status` first and use it only for emergency debugging.
+#
+# Lease-bypassing manual deploy:
+doppler run --project example --config preview_2 -- pnpm exec tsx ./alchemy.run.ts
+doppler run --project example --config preview_2 -- pnpm exec tsx ./alchemy.run.ts --destroy
+doppler run --project example --config prd -- pnpm exec tsx ./alchemy.run.ts
 pnpm dev          # Node dev server
 pnpm start        # Run the built server bundle and restart on rebuilds
 pnpm cf:dev       # Cloudflare local dev

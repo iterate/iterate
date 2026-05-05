@@ -99,12 +99,13 @@ function EventLinks({ events, title }: { events: ProcessorEventDoc[]; title: str
       ) : (
         <div className="flex flex-col gap-3">
           {events.map((event) => (
-            <div key={event.type} className="space-y-1">
-              <Link to={event.href} className="text-sm font-medium text-primary hover:underline">
-                {event.eventSlug}
-              </Link>
-              <EventType type={event.type} className="text-xs" />
-            </div>
+            <Link
+              key={event.type}
+              to={event.href}
+              className="min-w-0 font-mono text-sm text-primary hover:underline"
+            >
+              <span className="block truncate">{event.type}</span>
+            </Link>
           ))}
         </div>
       )}

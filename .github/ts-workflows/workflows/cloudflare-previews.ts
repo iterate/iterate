@@ -1,15 +1,18 @@
-import type { Workflow } from "@jlarky/gha-ts/workflow-types";
-import { cloudflarePreviewApps } from "../../../scripts/preview/apps.ts";
+import type { Step, Workflow } from "@jlarky/gha-ts/workflow-types";
+import {
+  cloudflarePreviewApps,
+  cloudflarePreviewSharedPaths,
+} from "../../../scripts/preview/apps.ts";
 import * as utils from "../utils/index.ts";
 
-const previewPaths = [...new Set(Object.values(cloudflarePreviewApps).flatMap((app) => app.paths))];
-const previewApps = Object.values(cloudflarePreviewApps);
-function previewLifecycleConcurrencyGroup(appSlug: string) {
-  return `cloudflare-preview-lifecycle-${appSlug}-\${{ github.event.pull_request.number }}`;
-}
+const previewPaths = [
+  ...new Set([
+    ...cloudflarePreviewSharedPaths,
+    ...Object.values(cloudflarePreviewApps).flatMap((app) => app.paths),
+  ]),
+];
 
 function createPreviewCommand(input: {
-  app?: string;
   command: string;
   includePullRequestBaseSha?: boolean;
   includePullRequestHeadRefName?: boolean;
@@ -19,9 +22,8 @@ function createPreviewCommand(input: {
   includeWorkflowRunUrl?: boolean;
   prefix?: string;
 }) {
-  const argumentsWithLineContinuations = addLineContinuations([
-    ...(input.app ? [`--app "${input.app}"`] : []),
-    ...createCommonPreviewArguments({
+  const argumentsWithLineContinuations = addLineContinuations(
+    createCommonPreviewArguments({
       includePullRequestBaseSha: input.includePullRequestBaseSha ?? false,
       includePullRequestHeadRefName: input.includePullRequestHeadRefName ?? false,
       includePullRequestHeadSha: input.includePullRequestHeadSha ?? false,
@@ -29,7 +31,7 @@ function createPreviewCommand(input: {
       includeSemaphoreBaseUrl: input.includeSemaphoreBaseUrl ?? false,
       includeWorkflowRunUrl: input.includeWorkflowRunUrl ?? false,
     }),
-  ]);
+  );
 
   return [
     "set -euo pipefail",
@@ -72,21 +74,59 @@ function createCommonPreviewArguments(input: {
 }
 
 function createPreviewLifecycleJob(input: {
-  appSlug: string;
   command: string;
+  if: string;
   name: string;
   needs: string[];
-  if: string;
   runsOnDoppler?: boolean;
   runsOnForks?: boolean;
 }) {
+  const forkStep: Step = {
+    if: "github.event.pull_request.head.repo.fork == true",
+    name: `${input.name} for forks`,
+    env: {
+      GITHUB_TOKEN: "${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}",
+      SEMAPHORE_BASE_URL: "https://semaphore.iterate.com",
+      WORKFLOW_RUN_URL:
+        "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+    },
+    run: createPreviewCommand({
+      command: input.command,
+      includePullRequestBaseSha: input.command === "deploy",
+      includePullRequestHeadRefName: input.command === "deploy",
+      includePullRequestHeadSha: input.command !== "cleanup",
+      includePullRequestIsFork: input.command === "deploy",
+      includeSemaphoreBaseUrl: true,
+      includeWorkflowRunUrl: true,
+    }),
+  };
+  const dopplerStep: Step = {
+    if: "github.event.pull_request.head.repo.fork != true",
+    name: input.name,
+    env: {
+      DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+      GITHUB_TOKEN: "${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}",
+      WORKFLOW_RUN_URL:
+        "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+    },
+    run: createPreviewCommand({
+      command: input.command,
+      includePullRequestBaseSha: input.command === "deploy",
+      includePullRequestHeadRefName: input.command === "deploy",
+      includePullRequestHeadSha: input.command !== "cleanup",
+      includePullRequestIsFork: input.command === "deploy",
+      includeWorkflowRunUrl: input.command !== "cleanup",
+      prefix: "doppler run --project os --config prd -- ",
+    }),
+  };
+
   return {
     needs: input.needs,
     if: input.if,
     name: input.name,
-    ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
+    ...utils.runsOnDepotUbuntu,
     concurrency: {
-      group: previewLifecycleConcurrencyGroup(input.appSlug),
+      group: `cloudflare-preview-lifecycle-\${{ github.event.pull_request.number }}`,
       "cancel-in-progress": false,
     },
     steps: [
@@ -97,97 +137,10 @@ function createPreviewLifecycleJob(input: {
         ...utils.installDopplerCli,
         if: "github.event.pull_request.head.repo.fork != true",
       },
-      ...(input.runsOnForks
-        ? [
-            {
-              if: "github.event.pull_request.head.repo.fork == true",
-              name: `${input.name} for forks`,
-              env: {
-                GITHUB_TOKEN: "${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}",
-                SEMAPHORE_BASE_URL: "https://semaphore.iterate.com",
-                WORKFLOW_RUN_URL:
-                  "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
-              },
-              run: createPreviewCommand({
-                app: input.appSlug,
-                command: input.command,
-                includePullRequestBaseSha: input.command === "deploy",
-                includePullRequestHeadRefName: input.command === "deploy",
-                includePullRequestHeadSha: input.command !== "cleanup",
-                includePullRequestIsFork: input.command === "deploy",
-                includeSemaphoreBaseUrl: true,
-                includeWorkflowRunUrl: true,
-              }),
-            },
-          ]
-        : []),
-      ...(input.runsOnDoppler
-        ? [
-            {
-              if: "github.event.pull_request.head.repo.fork != true",
-              name: input.name,
-              env: {
-                DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
-                GITHUB_TOKEN: "${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}",
-                WORKFLOW_RUN_URL:
-                  "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
-              },
-              run: createPreviewCommand({
-                app: input.appSlug,
-                command: input.command,
-                includePullRequestBaseSha: input.command === "deploy",
-                includePullRequestHeadRefName: input.command === "deploy",
-                includePullRequestHeadSha: input.command !== "cleanup",
-                includePullRequestIsFork: input.command === "deploy",
-                includeWorkflowRunUrl: input.command !== "cleanup",
-                prefix: "doppler run --project os --config prd -- ",
-              }),
-            },
-          ]
-        : []),
+      ...(input.runsOnForks ? [forkStep] : []),
+      ...(input.runsOnDoppler ? [dopplerStep] : []),
     ],
   } satisfies Workflow["jobs"][string];
-}
-
-function createPreviewJobs() {
-  return Object.fromEntries(
-    previewApps.flatMap((app) => [
-      [
-        `preview-${app.slug}`,
-        createPreviewLifecycleJob({
-          appSlug: app.slug,
-          command: "deploy",
-          if: "needs.scope.outputs.should_run == 'true' && github.event.action != 'closed'",
-          name: `Preview / ${app.slug} deploy`,
-          needs: ["scope"],
-          runsOnDoppler: true,
-          runsOnForks: true,
-        }),
-      ],
-      [
-        `e2e-${app.slug}`,
-        createPreviewLifecycleJob({
-          appSlug: app.slug,
-          command: "test",
-          if: "needs.scope.outputs.should_run == 'true' && github.event.action != 'closed' && github.event.pull_request.head.repo.fork != true",
-          name: `Preview / ${app.slug} e2e`,
-          needs: ["scope", `preview-${app.slug}`],
-          runsOnDoppler: true,
-        }),
-      ],
-      [
-        `cleanup-${app.slug}`,
-        createPreviewLifecycleJob({
-          appSlug: app.slug,
-          command: "cleanup",
-          if: "needs.scope.outputs.should_run == 'true' && github.event.action == 'closed' && github.event.pull_request.head.repo.fork != true",
-          name: `Preview / ${app.slug} cleanup`,
-          needs: ["scope"],
-          runsOnDoppler: true,
-        }),
-      ],
-    ]),
-  );
 }
 
 export default {
@@ -207,7 +160,7 @@ export default {
   },
   jobs: {
     scope: {
-      ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
+      ...utils.runsOnDepotUbuntu,
       outputs: {
         should_run: "${{ steps.should_run_preview.outputs.result }}",
       },
@@ -262,6 +215,27 @@ export default {
         ),
       ],
     },
-    ...createPreviewJobs(),
+    preview: createPreviewLifecycleJob({
+      command: "deploy",
+      if: "needs.scope.outputs.should_run == 'true' && github.event.action != 'closed'",
+      name: "Preview / deploy",
+      needs: ["scope"],
+      runsOnDoppler: true,
+      runsOnForks: true,
+    }),
+    e2e: createPreviewLifecycleJob({
+      command: "test",
+      if: "needs.scope.outputs.should_run == 'true' && github.event.action != 'closed' && github.event.pull_request.head.repo.fork != true",
+      name: "Preview / e2e",
+      needs: ["scope", "preview"],
+      runsOnDoppler: true,
+    }),
+    cleanup: createPreviewLifecycleJob({
+      command: "cleanup",
+      if: "needs.scope.outputs.should_run == 'true' && github.event.action == 'closed' && github.event.pull_request.head.repo.fork != true",
+      name: "Preview / cleanup",
+      needs: ["scope"],
+      runsOnDoppler: true,
+    }),
   },
 } satisfies Workflow;
