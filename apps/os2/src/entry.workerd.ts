@@ -23,6 +23,7 @@ export { McpClientBridge } from "~/rpc-targets/mcp-client-bridge.ts";
 export { ProjectDurableObject } from "~/durable-objects/project-durable-object.ts";
 export { ProjectIngressEntrypoint } from "~/entrypoints/project-ingress-entrypoint.ts";
 export { ProjectMcpServerEntrypoint } from "~/entrypoints/project-mcp-server-entrypoint.ts";
+export { ProjectStreamsEntrypoint } from "~/entrypoints/project-streams-entrypoint.ts";
 
 const config = parseAppConfigFromEnv({
   configSchema: AppConfig,
