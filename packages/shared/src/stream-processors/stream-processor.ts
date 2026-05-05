@@ -593,6 +593,24 @@ export async function catchUpProcessorFromStream<
  * The helper always advances runner progress for the event. If the processor
  * declares the event in `consumes`, it also reduces state, persists that state,
  * then runs `afterAppend`. If the event is not consumed, no hook runs.
+ *
+ * Important: "live" means "delivered through the runner's live transport", not
+ * "guaranteed to be the next stream offset". WebSocket push delivery can race
+ * with processor side effects that append new events. In the OpenAI WebSocket
+ * proof, Codemode appended a non-triggering Agent input row at offset 13 while
+ * Webchat appended the user-message rewrite at offset 14. The Agent runner saw
+ * 14 first, advanced its completion cursor through 14, then ignored 13 when it
+ * arrived later. That dropped the Codemode primer from Agent history, so the
+ * provider request looked valid but lacked the instruction telling the model to
+ * respond with executable codemode.
+ *
+ * This catch-up read is a conservative repair: before accepting an event at
+ * offset N, reduce and run hooks for any missing offsets between the stored
+ * cursor and N. It keeps stream order authoritative even when callback delivery
+ * is not ordered. This is not the final ideal shape. A better runner would have
+ * an ordered delivery contract, a pending-offset buffer, or a per-event
+ * completion set instead of using one contiguous
+ * `afterAppendCompletedThroughOffset` cursor for both ordering and retry.
  */
 export async function consumeLiveProcessorEvent<
   const Contract extends {

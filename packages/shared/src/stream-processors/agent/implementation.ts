@@ -345,6 +345,33 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
   async function requestScheduledLlmWork(args: { requestId: string; streamApi: AgentStreamApi }) {
     if (scheduledLlmRequest?.requestId !== args.requestId) return;
 
+    /**
+     * Rebuild the LLM handoff from durable stream history at the last possible
+     * moment.
+     *
+     * The obvious implementation is to use `latestAgentState`, which the runner
+     * updates as it consumes live events. That was too optimistic. The request
+     * debounce timer is independent from WebSocket event delivery, so it can fire
+     * after the user-triggering input has been reduced but before related
+     * non-triggering context rows have reached this runner. The concrete failure
+     * was:
+     *
+     * 1. Webchat appended the user event and its Agent input rewrite.
+     * 2. Codemode appended its one-time "respond with a fenced JS block" primer.
+     * 3. The Agent timer fired from the user input before the primer was present
+     *    in this runner's warm in-memory `latestAgentState`.
+     * 4. `agent/llm-request-requested` was appended without the primer, so
+     *    OpenAI quite reasonably returned plain assistant prose instead of a
+     *    codemode block. Codemode then had nothing to execute.
+     *
+     * Reading and reducing the stream here makes the provider request reflect
+     * the committed stream, not a potentially stale warm object. This is an
+     * intentionally small correctness guardrail for the current proof. It is
+     * also not where we want to end up: the better design is probably an
+     * explicit ordered processor runner, a first-class "request builder"
+     * phase, or a clearer event-level barrier that says "all context for this
+     * request has landed" before the LLM handoff can happen.
+     */
     const events = await args.streamApi.read({
       afterOffset: "start",
       beforeOffset: "end",
