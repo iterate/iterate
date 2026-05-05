@@ -17,7 +17,7 @@ describe("project host routing", () => {
       resolveProjectSlugFromHostname("my-project.os2.iterate.com", ["*.os2.iterate.com"]),
     ).toBe("my-project");
     expect(
-      resolveProjectSlugFromHostname("my-project.team-dev.iterate.app", ["team-dev.iterate.app"]),
+      resolveProjectSlugFromHostname("my-project.iterate-preview-3.app", ["iterate-preview-3.app"]),
     ).toBe("my-project");
   });
 
@@ -36,8 +36,8 @@ describe("project host routing", () => {
       resolveProjectSlugFromHostname("bad_slug.os2.iterate.com", ["os2.iterate.com"]),
     ).toBeUndefined();
     expect(
-      resolveProjectSlugFromHostname("api.my-project.team-dev.iterate.app", [
-        "team-dev.iterate.app",
+      resolveProjectSlugFromHostname("api.my-project.iterate-preview-3.app", [
+        "iterate-preview-3.app",
       ]),
     ).toBeUndefined();
   });
@@ -57,9 +57,9 @@ describe("project host routing", () => {
   it("detects hostnames reserved for project slug routing", () => {
     expect(isReservedProjectHostname("os2.iterate.com", ["os2.iterate.com"])).toBe(true);
     expect(isReservedProjectHostname("alpha.os2.iterate.com", ["os2.iterate.com"])).toBe(true);
-    expect(isReservedProjectHostname("alpha.team-dev.iterate.app", ["team-dev.iterate.app"])).toBe(
-      true,
-    );
+    expect(
+      isReservedProjectHostname("alpha.iterate-preview-3.app", ["iterate-preview-3.app"]),
+    ).toBe(true);
     expect(isReservedProjectHostname("alpha.example.com", ["os2.iterate.com"])).toBe(false);
   });
 
@@ -73,9 +73,9 @@ describe("project host routing", () => {
     expect(
       buildProjectMcpUrl({
         projectSlug: "demo",
-        projectHostnameBases: ["*.team-dev.iterate.app"],
+        projectHostnameBases: ["*.iterate-preview-3.app"],
       }),
-    ).toBe("https://demo.team-dev.iterate.app/mcp");
+    ).toBe("https://demo.iterate-preview-3.app/mcp");
   });
 
   it("prefers custom hostnames for MCP URLs", () => {

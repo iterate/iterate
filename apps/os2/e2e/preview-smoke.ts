@@ -25,15 +25,15 @@ async function expectStatus(input: { method?: string; status: number; url: URL }
 function projectHostnameFor(baseUrl: URL, projectBaseUrlOverride: URL | null) {
   if (projectBaseUrlOverride) return projectBaseUrlOverride.hostname;
 
-  const previewMatch = /^os2-preview-(\d+)\.iterate\.com$/.exec(baseUrl.hostname);
+  const previewMatch = /^os2\.iterate-preview-(\d+)\.com$/.exec(baseUrl.hostname);
   if (previewMatch) {
-    return null;
+    return `demo.iterate-preview-${previewMatch[1]}.app`;
   }
 
   const dashboardPrefix = "os.";
   if (!baseUrl.hostname.startsWith(dashboardPrefix)) {
     throw new Error(
-      `OS2 preview base URL must be os2-preview-N.iterate.com or start with os.; received ${baseUrl.hostname}.`,
+      `OS2 preview base URL must be os2.iterate-preview-N.com or start with os.; received ${baseUrl.hostname}.`,
     );
   }
   const projectHostnameBase = baseUrl.hostname
@@ -73,28 +73,25 @@ await expectStatus({
   status: 404,
 });
 
-const projectHostname = projectHostnameFor(baseUrl, projectBaseUrlOverride);
-if (projectHostname) {
-  const projectOrigin = `${projectBaseUrlOverride?.protocol ?? baseUrl.protocol}//${projectHostname}`;
-  const projectMcpUrl = new URL("/mcp", projectOrigin);
-  const projectMcpResponse = await expectStatus({
-    url: projectMcpUrl,
-    status: 401,
-  });
-  const wwwAuthenticate = projectMcpResponse.headers.get("www-authenticate") ?? "";
-  const metadataUrl = new URL("/.well-known/oauth-protected-resource/mcp", projectOrigin);
-  if (!wwwAuthenticate.includes(`resource_metadata="${metadataUrl.toString()}"`)) {
-    throw new Error(`Unexpected MCP WWW-Authenticate header: ${wwwAuthenticate}`);
-  }
+const projectOrigin = `${projectBaseUrlOverride?.protocol ?? baseUrl.protocol}//${projectHostnameFor(baseUrl, projectBaseUrlOverride)}`;
+const projectMcpUrl = new URL("/mcp", projectOrigin);
+const projectMcpResponse = await expectStatus({
+  url: projectMcpUrl,
+  status: 401,
+});
+const wwwAuthenticate = projectMcpResponse.headers.get("www-authenticate") ?? "";
+const metadataUrl = new URL("/.well-known/oauth-protected-resource/mcp", projectOrigin);
+if (!wwwAuthenticate.includes(`resource_metadata="${metadataUrl.toString()}"`)) {
+  throw new Error(`Unexpected MCP WWW-Authenticate header: ${wwwAuthenticate}`);
+}
 
-  const metadataResponse = await expectStatus({
-    url: metadataUrl,
-    status: 200,
-  });
-  const metadata = (await metadataResponse.json()) as { resource?: string };
-  if (metadata.resource !== projectMcpUrl.toString()) {
-    throw new Error(`Expected MCP metadata resource ${projectMcpUrl}; got ${metadata.resource}.`);
-  }
+const metadataResponse = await expectStatus({
+  url: metadataUrl,
+  status: 200,
+});
+const metadata = (await metadataResponse.json()) as { resource?: string };
+if (metadata.resource !== projectMcpUrl.toString()) {
+  throw new Error(`Expected MCP metadata resource ${projectMcpUrl}; got ${metadata.resource}.`);
 }
 
 console.log(`OS2 preview smoke passed for ${baseUrl.toString()}`);
