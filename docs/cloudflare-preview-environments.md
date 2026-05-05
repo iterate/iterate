@@ -22,10 +22,10 @@ app:
 
 ```bash
 cd apps/os2
-doppler run --project os2 --config preview_2 -- pnpm exec tsx ./alchemy.run.ts
+doppler run --project os2 --config preview_2 -- pnpm tsx ./alchemy.run.ts
 
 cd ../semaphore
-doppler run --project semaphore --config preview_2 -- pnpm exec tsx ./alchemy.run.ts
+doppler run --project semaphore --config preview_2 -- pnpm tsx ./alchemy.run.ts
 ```
 
 Legacy preview-managed apps still use their package `alchemy:up` / `alchemy:down`
@@ -61,7 +61,7 @@ Semaphore database exactly match that source-code inventory for
    `@iterate-com/shared/apps/new-style-cloudflare-apps`; it belongs in app
    manifests or contracts long-term.
 5. It deploys selected apps with the leased Doppler config. New-style apps run
-   `doppler run --project <app> --config <leased dopplerConfig> -- pnpm exec tsx ./alchemy.run.ts`
+   `doppler run --project <app> --config <leased dopplerConfig> -- pnpm tsx ./alchemy.run.ts`
    with the app directory as the working directory.
    Legacy preview-managed apps run their package `alchemy:up` / `alchemy:down`
    scripts for now.
@@ -135,8 +135,8 @@ but they bypass Semaphore ownership:
 
 ```bash
 cd apps/os2
-doppler run --project os2 --config preview_2 -- pnpm exec tsx ./alchemy.run.ts
+doppler run --project os2 --config preview_2 -- pnpm tsx ./alchemy.run.ts
 
 cd ../events
-doppler run --project events --config preview_2 -- pnpm exec tsx ./alchemy.run.ts
+doppler run --project events --config preview_2 -- pnpm tsx ./alchemy.run.ts
 ```

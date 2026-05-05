@@ -52,7 +52,7 @@ main/prod deploys all use the same primitive:
 
 ```bash
 cd apps/<app>
-doppler run --project <app> --config <environment-config> -- pnpm exec tsx ./alchemy.run.ts
+doppler run --project <app> --config <environment-config> -- pnpm tsx ./alchemy.run.ts
 ```
 
 The difference is orchestration. Local deployed dev selects a personal dev

@@ -88,7 +88,7 @@ The Semaphore UI labels this as an operator token. It is the same shared API sec
 2. `push` to `main` for that app’s paths deploys automatically to `prd`.
 3. `workflow_dispatch` can deploy `prd` manually from `main`.
 4. New-style app workflows resolve the public URL from `APP_CONFIG_BASE_URL`; legacy app workflows still use their existing metadata path.
-5. New-style app deploys run `doppler run -- pnpm exec tsx ./alchemy.run.ts` in the app directory.
+5. New-style app deploys run `doppler run -- pnpm tsx ./alchemy.run.ts` in the app directory.
 
 ## What to know before touching this
 

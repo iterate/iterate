@@ -22,26 +22,12 @@ export default {
     push: {
       branches: ["main"],
     },
-    workflow_dispatch: {
-      inputs: {
-        stage: {
-          description:
-            "The stage to deploy to. Must correspond to a Doppler config in the os project (prd, preview, dev, dev_bob etc.).",
-          required: false,
-          type: "string",
-        },
-      },
-    },
+    workflow_dispatch: {},
   },
   jobs: {
     variables: {
       ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       steps: [
-        {
-          id: "get_env",
-          name: "Get environment variables",
-          run: `echo stage=\${{ inputs.stage || 'prd' }} >> $GITHUB_OUTPUT`,
-        },
         {
           name: "Document rollout strategy",
           run: [
@@ -55,24 +41,18 @@ export default {
           ].join("\n"),
         },
       ],
-      outputs: {
-        stage: "${{ steps.get_env.outputs.stage }}",
-      },
     },
     "deploy-os-early": {
       uses: "./.github/workflows/deploy.yml",
       needs: ["variables"],
-      if: "needs.variables.outputs.stage == 'prd'",
       secrets: "inherit",
       with: {
-        stage: "${{ needs.variables.outputs.stage }}",
         deploy_iterate_com: false,
       },
     },
     "build-sandbox-image": {
       uses: "./.github/workflows/build-sandbox-image.yml",
       needs: ["variables", "deploy-os-early"],
-      if: "needs.variables.outputs.stage == 'prd'",
       secrets: "inherit",
       with: {
         doppler_config: "prd",
@@ -83,7 +63,6 @@ export default {
     },
     "test-sandbox-fly": {
       needs: ["variables", "build-sandbox-image"],
-      if: "needs.variables.outputs.stage == 'prd'",
       uses: "./.github/workflows/sandbox-test-fly.yml",
       secrets: "inherit",
       with: {
@@ -93,7 +72,6 @@ export default {
     },
     "promote-fly-default-image": {
       needs: ["variables", "build-sandbox-image", "test-sandbox-fly"],
-      if: "needs.variables.outputs.stage == 'prd'",
       ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
       steps: [
         ...utils.setupDoppler({ config: "prd" }),
@@ -122,11 +100,7 @@ export default {
         "test-sandbox-fly",
         "promote-fly-default-image",
       ],
-      if: "needs.variables.outputs.stage == 'prd'",
       secrets: "inherit",
-      with: {
-        stage: "${{ needs.variables.outputs.stage }}",
-      },
     },
     slack_failure: {
       needs: [

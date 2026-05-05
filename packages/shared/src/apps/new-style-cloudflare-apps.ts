@@ -121,7 +121,6 @@ export async function runNewStyleCloudflareAppAlchemy(input: {
       input.dopplerConfig,
       "--",
       "pnpm",
-      "exec",
       "tsx",
       "./alchemy.run.ts",
       ...(input.operation === "down" ? ["--destroy"] : []),

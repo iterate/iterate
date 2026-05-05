@@ -7,11 +7,6 @@ export default {
     // this should be called from ci.ts (/ci.yml)
     workflow_call: {
       inputs: {
-        stage: {
-          description: "The production stage to deploy. This workflow currently accepts only prd.",
-          required: true,
-          type: "string",
-        },
         deploy_iterate_com: {
           description: "Whether to deploy apps/iterate-com",
           required: false,
@@ -35,10 +30,9 @@ export default {
     "deploy-os": {
       "runs-on":
         "${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}",
-      if: "inputs.stage == 'prd'",
       steps: [
         ...utils.setupRepo,
-        ...utils.setupDoppler({ config: "${{ inputs.stage }}" }),
+        ...utils.setupDoppler({ config: "prd" }),
         {
           name: "Deploy apps/os",
           uses: "nick-fields/retry@v3",
@@ -58,10 +52,10 @@ export default {
     "deploy-iterate-com": {
       "runs-on":
         "${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}",
-      if: "inputs.stage == 'prd' && inputs.deploy_iterate_com",
+      if: "inputs.deploy_iterate_com",
       steps: [
         ...utils.setupRepo,
-        ...utils.setupDoppler({ config: "${{ inputs.stage }}" }),
+        ...utils.setupDoppler({ config: "prd" }),
         {
           name: "Deploy apps/iterate-com",
           env: {

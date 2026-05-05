@@ -115,7 +115,7 @@ configured in the right Cloudflare account.
 1. CI acquires a shared environment config lease from Semaphore (e.g. `preview-3`)
 2. The resource data maps the lease to Doppler config `preview_3`
 3. `preview_3` has `APP_CONFIG_BASE_URL=https://os2.iterate-preview-3.com` and `APP_CONFIG_PROJECT_HOSTNAME_BASES=["iterate-preview-3.app"]`
-4. `doppler run --project os2 --config preview_3 -- pnpm exec tsx ./alchemy.run.ts` deploys the worker with correct routes. `ALCHEMY_STAGE` comes from `_shared` as `${DOPPLER_CONFIG}` and is slugified by the app into Cloudflare names like `os2-preview-3`.
+4. `doppler run --project os2 --config preview_3 -- pnpm tsx ./alchemy.run.ts` deploys the worker with correct routes. `ALCHEMY_STAGE` comes from `_shared` as `${DOPPLER_CONFIG}` and is slugified by the app into Cloudflare names like `os2-preview-3`.
 5. PR body is updated with the shared lease and per-app deployment status
 6. On PR close, recorded apps are torn down and the environment config lease is released back to Semaphore
 
@@ -159,14 +159,14 @@ debugging after checking `pnpm preview status`.
 
 ```bash
 cd apps/os2
-doppler run --project os2 --config preview_3 -- pnpm exec tsx ./alchemy.run.ts
+doppler run --project os2 --config preview_3 -- pnpm tsx ./alchemy.run.ts
 
 # Hit it
 open https://os2.iterate-preview-3.com         # dashboard
 open https://myproject.iterate-preview-3.app   # project subdomain
 
 # Clean up
-doppler run --project os2 --config preview_3 -- pnpm exec tsx ./alchemy.run.ts --destroy
+doppler run --project os2 --config preview_3 -- pnpm tsx ./alchemy.run.ts --destroy
 ```
 
 ### Adding a new developer
