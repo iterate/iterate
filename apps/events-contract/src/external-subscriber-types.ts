@@ -1,13 +1,13 @@
 import { z } from "zod";
+import { Callable, FetchCallable } from "@iterate-com/shared/callable/descriptor-types.ts";
 import {
   GenericEvent as GenericEventBase,
   GenericEventInput as GenericEventInputBase,
 } from "./event-base-types.ts";
 import { STREAM_SUBSCRIPTION_CONFIGURED_TYPE } from "./core-event-types.ts";
-import { Callable, FetchCallable } from "./callable-descriptor-types.ts";
 import { JsonataExpression } from "./jsonata-expression.ts";
 
-const ExternalSubscriberBase = {
+const ExternalSubscriberBase = z.strictObject({
   slug: z.string().trim().min(1),
   /**
    * Subscription state stores a Callable instead of a URL so stream replay only
@@ -23,24 +23,48 @@ const ExternalSubscriberBase = {
    */
   jsonataFilter: JsonataExpression.optional(),
   jsonataTransform: JsonataExpression.optional(),
-};
+});
 
 export const ExternalWebsocketSubscriber = z.strictObject({
-  ...ExternalSubscriberBase,
+  ...ExternalSubscriberBase.shape,
   callable: FetchCallable,
   type: z.literal("websocket"),
 });
 export type ExternalWebsocketSubscriber = z.infer<typeof ExternalWebsocketSubscriber>;
 
 const ExternalWebhookSubscriber = z.strictObject({
-  ...ExternalSubscriberBase,
+  ...ExternalSubscriberBase.shape,
   type: z.literal("webhook"),
 });
 type ExternalWebhookSubscriber = z.infer<typeof ExternalWebhookSubscriber>;
 
-export const ExternalSubscriber = z.discriminatedUnion("type", [
+const LegacyExternalSubscriberBase = ExternalSubscriberBase.omit({ callable: true }).extend({
+  callbackUrl: z.url(),
+});
+
+const LegacyExternalWebsocketSubscriber = LegacyExternalSubscriberBase.extend({
+  type: z.literal("websocket"),
+}).transform(({ callbackUrl, ...subscriber }) =>
+  ExternalWebsocketSubscriber.parse({
+    ...subscriber,
+    callable: fetchCallableFromLegacyCallbackUrl(callbackUrl),
+  }),
+);
+
+const LegacyExternalWebhookSubscriber = LegacyExternalSubscriberBase.extend({
+  type: z.literal("webhook"),
+}).transform(({ callbackUrl, ...subscriber }) =>
+  ExternalWebhookSubscriber.parse({
+    ...subscriber,
+    callable: fetchCallableFromLegacyCallbackUrl(callbackUrl),
+  }),
+);
+
+export const ExternalSubscriber = z.union([
   ExternalWebsocketSubscriber,
   ExternalWebhookSubscriber,
+  LegacyExternalWebsocketSubscriber,
+  LegacyExternalWebhookSubscriber,
 ]);
 export type ExternalSubscriber = z.infer<typeof ExternalSubscriber>;
 
@@ -60,3 +84,26 @@ export const ExternalSubscriberState = z.object({
   subscribersBySlug: z.record(z.string(), ExternalSubscriber),
 });
 export type ExternalSubscriberState = z.infer<typeof ExternalSubscriberState>;
+
+function fetchCallableFromLegacyCallbackUrl(callbackUrl: string) {
+  /**
+   * Existing subscribers were persisted as raw callback URLs. Callable websocket
+   * dispatch uses fetch-with-upgrade, so stored `ws:` and `wss:` callback URLs
+   * must become the equivalent `http:` and `https:` FetchCallable target URLs
+   * before the strict Callable schema sees them.
+   */
+  const url = new URL(callbackUrl);
+  if (url.protocol === "ws:") {
+    url.protocol = "http:";
+  } else if (url.protocol === "wss:") {
+    url.protocol = "https:";
+  }
+
+  return {
+    type: "fetch" as const,
+    via: {
+      type: "url" as const,
+      url: url.toString(),
+    },
+  };
+}

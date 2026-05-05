@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-const CALLABLE_SCHEMA = "https://schemas.iterate.com/callable/v1";
+export const CALLABLE_SCHEMA = "https://schemas.iterate.com/callable/v1" as const;
 
 const CallableVersion = z.literal(CALLABLE_SCHEMA).optional();
 const PathMode = z.enum(["prefix", "replace"]);
@@ -247,11 +247,6 @@ const FetchRequest = z
   })
   .strict();
 
-/**
- * Contract-local callable descriptor schemas keep this package self-contained
- * and browser-safe. The shared callable runtime still performs the same
- * validation before dispatching; this copy exists only for Events wire payloads.
- */
 export const FetchCallable = z
   .object({
     type: z.literal("fetch"),
@@ -288,3 +283,8 @@ const WorkersRpcCallable = z
   });
 
 export const Callable = z.discriminatedUnion("type", [FetchCallable, WorkersRpcCallable]);
+
+export type Callable = z.infer<typeof Callable>;
+export type FetchCallable = z.infer<typeof FetchCallable>;
+export type WorkersRpcCallable = z.infer<typeof WorkersRpcCallable>;
+export type DurableObjectSelector = z.infer<typeof DurableObjectSelector>;

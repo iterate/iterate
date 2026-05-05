@@ -81,7 +81,7 @@ describe("projectWireToFeed", () => {
     });
   });
 
-  test("keeps historical callbackUrl subscription events as raw feed rows", () => {
+  test("normalizes historical callbackUrl subscription events for the feed", () => {
     const feed = projectWireToFeed([
       createEvent({
         offset: 1,
@@ -94,7 +94,25 @@ describe("projectWireToFeed", () => {
       }),
     ]);
 
-    expect(feed.map((item) => item.kind)).toEqual(["event"]);
+    expect(feed).toMatchObject([
+      {
+        kind: "event",
+      },
+      {
+        kind: "external-subscriber-configured",
+        subscriber: {
+          slug: "legacy-agent",
+          type: "websocket",
+          callable: {
+            type: "fetch",
+            via: {
+              type: "url",
+              url: "https://agents.example.com/socket",
+            },
+          },
+        },
+      },
+    ]);
   });
 
   test("projects canonical agent, webchat, and codemode events", () => {

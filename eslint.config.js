@@ -425,6 +425,10 @@ const plugin = {
                 // paths; do not broaden to the package prefixes without checking
                 // for Node/server transitive imports first.
                 "@iterate-com/events-contract",
+                // Events contract needs Callable payload schemas for browser-visible
+                // wire types. This exact module is descriptor-only: Zod plus local
+                // validation helpers, with no Worker/Node runtime authority.
+                "@iterate-com/shared/callable/descriptor-types\\.ts",
                 "@iterate-com/shared/codemode/types",
               ];
               const compiledRegex = ALLOWED_RUNTIME_IMPORT_REGEX.map(

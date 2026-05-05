@@ -1,5 +1,5 @@
 export * from "./core-event-types.ts";
-export * from "./callable-descriptor-types.ts";
+export * from "@iterate-com/shared/callable/descriptor-types.ts";
 export * from "./circuit-breaker-types.ts";
 export * from "./external-subscriber-types.ts";
 export * from "./html-renderer-types.ts";

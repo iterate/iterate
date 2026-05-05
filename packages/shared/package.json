@@ -87,6 +87,7 @@
       "default": "./src/posthog/sourcemaps-vite-plugin.ts"
     },
     "./callable/runtime.ts": "./src/callable/runtime.ts",
+    "./callable/descriptor-types.ts": "./src/callable/descriptor-types.ts",
     "./callable/types.ts": "./src/callable/types.ts",
     "./codemode/types": "./src/codemode/types.ts",
     "./codemode/validate": "./src/codemode/validate.ts",
