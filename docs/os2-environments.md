@@ -129,6 +129,11 @@ Each numbered os2 preview config uses two Cloudflare zones:
 Both zones must exist in the preview Cloudflare account configured by
 `_shared/preview` before that config can deploy routes and DNS records.
 
+os2 and events are deployed as one connected preview group when either both are
+affected or os2 is selected. os2's preview config points
+`APP_CONFIG_EVENTS_BASE_URL` at the events deployment for the same numbered
+slot, such as `https://events-preview-3.iterate.com`.
+
 ### Manual preview deploy
 
 The `pnpm preview` CLI (from repo root) manages the full lifecycle. It uses the `os` doppler project for semaphore credentials:
@@ -138,13 +143,13 @@ The `pnpm preview` CLI (from repo root) manages the full lifecycle. It uses the 
 doppler run --project os --config prd -- pnpm preview status
 
 # Full lifecycle for a PR (acquire lease, deploy affected apps, test, update PR body)
-doppler run --project os --config prd -- pnpm preview sync --pull-request-number 1234
+GITHUB_TOKEN="$(gh auth token)" doppler run --project os --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview sync --pull-request-number 1234
 
 # Or just deploy without tests
-doppler run --project os --config prd -- pnpm preview deploy --pull-request-number 1234
+GITHUB_TOKEN="$(gh auth token)" doppler run --project os --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview deploy --pull-request-number 1234
 
 # Clean up
-doppler run --project os --config prd -- pnpm preview cleanup --pull-request-number 1234
+GITHUB_TOKEN="$(gh auth token)" doppler run --project os --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview cleanup --pull-request-number 1234
 ```
 
 Prefer the repo-root `pnpm preview` CLI so Semaphore owns the environment config

@@ -57,8 +57,14 @@ doppler run --project <app> --config <environment-config> -- pnpm exec tsx ./alc
 
 The difference is orchestration. Local deployed dev selects a personal dev
 config. PR previews lease `data.dopplerConfig` from Semaphore and deploy
-affected apps plus dependencies. `main` deploys use generated per-app workflows
-with `prd`. PR previews are not promoted to production.
+affected apps plus dependencies into that same config. `main` deploys use
+generated per-app workflows with `prd`. PR previews are not promoted to
+production.
+
+The shared PR preview lifecycle currently covers `agents`, `codemode`,
+`example`, `events`, `ingress-proxy`, `os2`, and `semaphore`. `events` is
+preview-managed but has not yet moved to the new-style `alchemy.run.ts`
+primitive.
 
 Environment config leases for PR previews are source-code seeded from
 `scripts/preview/preview-inventory.ts`. Each live Semaphore resource has:
@@ -73,7 +79,10 @@ To create or repair environment config leases for PR previews:
 2. Ensure every preview-managed app that may use that lease has the matching
    Doppler config, for example `preview_9`, plus any required Cloudflare
    route/domain config.
-3. Reconcile the live Semaphore inventory from source:
+3. Keep Cloudflare credentials in `_shared` where possible. Preview app configs
+   inherit `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` from
+   `_shared/preview`; app configs should not override those values.
+4. Reconcile the live Semaphore inventory from source:
 
 ```bash
 doppler run --project semaphore --config prd -- pnpm --dir apps/semaphore seed:environment-config-leases
@@ -84,8 +93,12 @@ The seed is exact for `environment-config-lease`: missing resources are created
 and drifted resources are replaced. Only add leases whose Doppler configs and
 Cloudflare domains exist in the right accounts. To expand capacity, first add
 the slot to the source inventory and provision matching Doppler configs and
-app-specific Cloudflare prerequisites. See
-`docs/cloudflare-preview-environments.md` for the full lifecycle.
+app-specific Cloudflare prerequisites.
+
+For the full model and operator commands, see
+`docs/cloudflare-preview-environments.md`. For day-to-day deploy commands, see
+`docs/cloudflare-preview-and-deploy-cheatsheet.md`. For os2's preview domain
+pair shape, see `docs/os2-environments.md`.
 
 ## Cloudflare Tunnels
 

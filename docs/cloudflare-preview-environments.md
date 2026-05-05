@@ -103,6 +103,15 @@ Do not paste the token into scripts or docs.
   Do not set app-local `CLOUDFLARE_ACCOUNT_ID` or `CLOUDFLARE_API_TOKEN`
   overrides; the preview domain pairs live in account
   `cc7f6f461fbe823c199da2b27f9e0ff3`.
+- If two apps are affected by a PR, or one affected app has an explicit deploy
+  dependency, they are deployed together under the same environment config
+  lease. If one selected app fails, the overall preview is unhealthy and the
+  lease is kept.
+- Cross-app runtime references must be derived from the same config/stage. Today
+  os2 points at events with `APP_CONFIG_EVENTS_BASE_URL`, for example
+  `https://events-preview-N.iterate.com`. Future Cloudflare Service Bindings
+  must follow the same rule: derive the target from the leased `preview_N`
+  config rather than hardcoding another environment.
 - CI workflows invoke one shared preview lifecycle. The lifecycle code, not the
   workflow matrix, decides which apps deploy.
 - Preview deploys do not override `ALCHEMY_STAGE`.
@@ -111,9 +120,23 @@ Do not paste the token into scripts or docs.
   failure.
 - Manual lifecycle:
 
+In CI, `GITHUB_TOKEN`, `GITHUB_PR_NUMBER`, and `GITHUB_REPOSITORY` are set by
+the workflow. Locally, pass the PR number and preserve a GitHub token from `gh`:
+
 ```bash
-doppler run --project os --config prd -- pnpm preview sync --pull-request-number 1234
-doppler run --project os --config prd -- pnpm preview deploy --pull-request-number 1234
-doppler run --project os --config prd -- pnpm preview test --pull-request-number 1234
-doppler run --project os --config prd -- pnpm preview cleanup --pull-request-number 1234
+GITHUB_TOKEN="$(gh auth token)" doppler run --project os --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview sync --pull-request-number 1234
+GITHUB_TOKEN="$(gh auth token)" doppler run --project os --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview deploy --pull-request-number 1234
+GITHUB_TOKEN="$(gh auth token)" doppler run --project os --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview test --pull-request-number 1234
+GITHUB_TOKEN="$(gh auth token)" doppler run --project os --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview cleanup --pull-request-number 1234
+```
+
+Direct app deploys are useful to prove the primitive or debug a specific slot,
+but they bypass Semaphore ownership:
+
+```bash
+cd apps/os2
+doppler run --project os2 --config preview_2 -- pnpm exec tsx ./alchemy.run.ts
+
+cd ../events
+doppler run --project events --config preview_2 -- pnpm exec tsx ./alchemy.run.ts
 ```

@@ -9,6 +9,7 @@
 - Semaphore stores environment config lease inventory and active leases for PR previews
 - Doppler `preview_N` configs are environment configs for PR previews
 - `_shared/preview` sets `ALCHEMY_STAGE=${DOPPLER_CONFIG}`, so the selected `preview_N` config determines the Alchemy stage
+- `_shared/preview` owns preview Cloudflare credentials; app configs must not override `CLOUDFLARE_ACCOUNT_ID` or `CLOUDFLARE_API_TOKEN`
 - Doppler `prd` config backs real deploys
 
 ## Most useful commands
@@ -28,6 +29,9 @@ doppler run --project os --config prd -- pnpm preview deploy --pull-request-numb
 doppler run --project os --config prd -- pnpm preview test --pull-request-number 1234
 doppler run --project os --config prd -- pnpm preview cleanup --pull-request-number 1234
 
+# local PR commands need a GitHub token because they read and update PR body state
+GITHUB_TOKEN="$(gh auth token)" doppler run --project os --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview test --pull-request-number 1234
+
 # manual prod deploy from GitHub Actions
 gh workflow run "Deploy Events" --ref main -f ref=main -f stage=prd
 ```
@@ -36,6 +40,7 @@ gh workflow run "Deploy Events" --ref main -f ref=main -f stage=prd
 
 - Previews are temporary deploys into a leased `preview_N` Doppler config.
 - The Semaphore environment config lease gives the config dimension, not app-specific resource state.
+- A selected preview deploy is a group: affected apps and explicit dependencies deploy with the same leased config.
 - Production deploys are plain `prd` deploys for each app.
 - Previews and production are deliberately separate:
   - PRs never use the per-app prod deploy workflows
@@ -52,6 +57,11 @@ gh workflow run "Deploy Events" --ref main -f ref=main -f stage=prd
 7. It deploys affected apps and explicit dependencies with that same Doppler config.
 8. It records each app result in the PR body. If one app fails, the overall preview is unhealthy and the lease is kept.
 9. On PR close, cleanup tears down recorded apps and releases the shared lease only after successful teardown.
+
+Cross-app links and bindings must be derived from that same config. Today os2
+uses `APP_CONFIG_EVENTS_BASE_URL` to call the events preview for the same
+numbered slot; future Cloudflare Service Bindings should follow the same
+config-derived pattern.
 
 ## Semaphore token
 
