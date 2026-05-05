@@ -614,6 +614,49 @@ export async function consumeLiveProcessorEvent<
   streamApiForEvent?(event: ConsumedEvent<Contract>): ProcessorStreamApi<Contract>;
   signal: AbortSignal;
 }): Promise<StoredProcessorState<Contract>> {
+  let storedState = args.storedState;
+
+  if (args.event.offset > storedState.reducedThroughOffset + 1) {
+    const gapEvents = await args.streamApi.read({
+      afterOffset: storedState.reducedThroughOffset,
+      beforeOffset: args.event.offset,
+    });
+
+    for (const gapEvent of gapEvents) {
+      storedState = await consumeLiveProcessorEventWithoutGapCatchUp({
+        ...args,
+        storedState,
+        event: gapEvent,
+      });
+    }
+  }
+
+  return await consumeLiveProcessorEventWithoutGapCatchUp({
+    ...args,
+    storedState,
+  });
+}
+
+async function consumeLiveProcessorEventWithoutGapCatchUp<
+  const Contract extends {
+    events: EventCatalog;
+    processorDeps?: readonly unknown[];
+    consumes: readonly string[];
+    reduce?: (args: {
+      contract: Contract;
+      state: ProcessorState<Contract>;
+      event: ConsumedEvent<Contract>;
+    }) => ProcessorState<Contract> | null | undefined;
+  },
+>(args: {
+  processor: Processor<Contract>;
+  storedState: StoredProcessorState<Contract>;
+  event: StreamEvent;
+  saveStoredProcessorState(storedState: StoredProcessorState<Contract>): Promise<void>;
+  streamApi: ProcessorStreamApi<Contract>;
+  streamApiForEvent?(event: ConsumedEvent<Contract>): ProcessorStreamApi<Contract>;
+  signal: AbortSignal;
+}): Promise<StoredProcessorState<Contract>> {
   if (args.event.offset <= args.storedState.afterAppendCompletedThroughOffset) {
     return args.storedState;
   }

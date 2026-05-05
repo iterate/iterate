@@ -7,7 +7,7 @@ import {
 } from "../stream-processor.ts";
 import { CoreProcessorRegisteredEventType } from "../core/contract.ts";
 import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
-import { AgentProcessorContract, type AgentState } from "./contract.ts";
+import { AgentProcessorContract, reduceAgentEvents, type AgentState } from "./contract.ts";
 
 /**
  * Backend-only dependencies for the Agent processor implementation.
@@ -345,8 +345,12 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
   async function requestScheduledLlmWork(args: { requestId: string; streamApi: AgentStreamApi }) {
     if (scheduledLlmRequest?.requestId !== args.requestId) return;
 
-    const stateAtRequest = latestAgentState;
-    if (stateAtRequest == null) return;
+    const events = await args.streamApi.read({
+      afterOffset: "start",
+      beforeOffset: "end",
+    });
+    const stateAtRequest = reduceAgentEvents({ events });
+    latestAgentState = stateAtRequest;
 
     const scheduledEvent = scheduledLlmRequest.scheduledEvent;
     scheduledLlmRequest = null;
