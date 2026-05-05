@@ -75,11 +75,6 @@ export function createEvents2ProjectAppFixture(args: { baseURL: string; projectS
 export function supportsProjectHostRouting(baseURL: string) {
   const hostname = new URL(baseURL).hostname;
 
-  // Events previews are served from `events-preview-N.iterate.com`. Cloudflare's
-  // normal `*.iterate.com` edge certificate covers the bare preview host but not
-  // nested project hosts like `test.events-preview-N.iterate.com`.
-  if (/^events-preview-\d+\.iterate\.com$/.test(hostname)) return false;
-
   return (
     new URL(getEventsProjectBaseUrl({ baseURL, projectSlug: scopedE2EProjectSlug })).hostname !==
     hostname

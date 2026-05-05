@@ -5,8 +5,8 @@ describe("project slug host helpers", () => {
   test("resolveHostProjectSlug reads project subdomains on production and preview hosts", () => {
     expect(resolveHostProjectSlug("events.iterate.com")).toBeUndefined();
     expect(resolveHostProjectSlug("team-a.events.iterate.com")).toBe("team-a");
-    expect(resolveHostProjectSlug("events-preview-10.iterate.com")).toBeUndefined();
-    expect(resolveHostProjectSlug("team-a.events-preview-10.iterate.com")).toBe("team-a");
+    expect(resolveHostProjectSlug("events.iterate-preview-10.com")).toBeUndefined();
+    expect(resolveHostProjectSlug("team-a.events.iterate-preview-10.com")).toBe("team-a");
   });
 
   test("getProjectUrl switches between bare and scoped production hosts", () => {
@@ -28,17 +28,17 @@ describe("project slug host helpers", () => {
   test("getProjectUrl preserves preview host families", () => {
     expect(
       getProjectUrl({
-        currentUrl: "https://events-preview-10.iterate.com/streams/",
+        currentUrl: "https://events.iterate-preview-10.com/streams/",
         projectSlug: "team-a",
       }).toString(),
-    ).toBe("https://team-a.events-preview-10.iterate.com/streams/");
+    ).toBe("https://team-a.events.iterate-preview-10.com/streams/");
 
     expect(
       getProjectUrl({
-        currentUrl: "https://team-a.events-preview-10.iterate.com/streams/",
+        currentUrl: "https://team-a.events.iterate-preview-10.com/streams/",
         projectSlug: defaultProjectSlug,
       }).toString(),
-    ).toBe("https://events-preview-10.iterate.com/streams/");
+    ).toBe("https://events.iterate-preview-10.com/streams/");
   });
 
   test("getProjectUrl leaves unrelated hosts unchanged", () => {

@@ -1,6 +1,6 @@
 /**
  * Same curls as below, runnable in a terminal after:
- *   export BASE_URL="https://events-preview-1.iterate.com"
+ *   export BASE_URL="https://events.iterate-preview-1.com"
  *   export STREAM_CURL_PATH="e2e-curl/xxxxxxxx"
  *   export STREAM_RPATH="%2Fe2e-curl%2Fxxxxxxxx"   # same path URL-encoded
  *
@@ -22,7 +22,7 @@
  *   curl -sS "$BASE_URL/api/streams/__state/%2F" >/dev/null
  *
  * Test run: `EVENTS_BASE_URL` is the corresponding bare host (for example
- * `https://events-preview-1.iterate.com`).
+ * `https://events.iterate-preview-1.com`).
  */
 import { randomUUID } from "node:crypto";
 import { StreamPath } from "@iterate-com/events-contract";
