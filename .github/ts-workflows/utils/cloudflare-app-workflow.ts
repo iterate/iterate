@@ -42,7 +42,7 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
     },
     jobs: {
       variables: {
-        ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
+        ...utils.runsOnDepotUbuntu,
         outputs: {
           run_url: "${{ steps.vars.outputs.run_url }}",
           short_sha: "${{ steps.vars.outputs.short_sha }}",
@@ -64,7 +64,7 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
       deploy: {
         needs: ["variables"],
         if: "github.event_name == 'push' || github.event_name == 'workflow_dispatch'",
-        ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
+        ...utils.runsOnDepotUbuntu,
         outputs: {
           public_url: "${{ steps.metadata.outputs.public_url }}",
         },
@@ -114,7 +114,7 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
       "slack-success": {
         needs: ["variables", "deploy"],
         if: "github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.deploy.result == 'success'",
-        ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
+        ...utils.runsOnDepotUbuntu,
         steps: [
           ...utils.setupRepo,
           await utils.githubScript(
@@ -149,7 +149,7 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
       "slack-failure": {
         needs: ["variables", "deploy"],
         if: "always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.deploy.result == 'failure'",
-        ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
+        ...utils.runsOnDepotUbuntu,
         steps: [
           ...utils.setupRepo,
           await utils.githubScript(

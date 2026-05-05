@@ -5,13 +5,8 @@ export * from "./github-script.ts";
 export const prTriggerable = {
   on: {} satisfies Workflow["on"],
 };
-/** use this only for jobs that do not use containers at all */
-export const runsOnGithubUbuntuStartsFastButNoContainers = {
-  "runs-on": "depot-ubuntu-24.04-32",
-};
-
-/** use this for container-y jobs that should run on Depot builders */
-export const runsOnDepotUbuntuForContainerThings = {
+/** Use this for GitHub Actions jobs that should run on Depot's larger Linux runner. */
+export const runsOnDepotUbuntu = {
   "runs-on": "depot-ubuntu-24.04-32",
 };
 

@@ -53,7 +53,7 @@ export default workflow({
   },
   jobs: {
     "test-sandbox-fly": {
-      ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
+      ...utils.runsOnDepotUbuntu,
       steps: [
         ...utils.getSetupRepo({
           ref: "${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}",

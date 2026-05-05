@@ -31,7 +31,7 @@ export default workflow({
     },
     "e2e-specs": {
       needs: ["build-image"],
-      ...utils.runsOnDepotUbuntuForContainerThings,
+      ...utils.runsOnDepotUbuntu,
       "timeout-minutes": 45,
       steps: [
         ...setupRepoWithoutPnpmAction,

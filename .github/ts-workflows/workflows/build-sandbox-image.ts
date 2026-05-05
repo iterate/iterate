@@ -126,7 +126,7 @@ export default workflow({
   },
   jobs: {
     build: {
-      ...utils.runsOnDepotUbuntuForContainerThings,
+      ...utils.runsOnDepotUbuntu,
       outputs: {
         image_tag: "${{ steps.output.outputs.image_tag }}",
         fly_image_tag: "${{ steps.output.outputs.fly_image_tag }}",

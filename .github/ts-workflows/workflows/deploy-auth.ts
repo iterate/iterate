@@ -29,7 +29,7 @@ export default workflow({
   },
   jobs: {
     deploy: {
-      ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
+      ...utils.runsOnDepotUbuntu,
       steps: [
         ...utils.getSetupRepo({
           ref: "${{ inputs.ref || github.sha }}",

@@ -124,7 +124,7 @@ function createPreviewLifecycleJob(input: {
     needs: input.needs,
     if: input.if,
     name: input.name,
-    ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
+    ...utils.runsOnDepotUbuntu,
     concurrency: {
       group: `cloudflare-preview-lifecycle-\${{ github.event.pull_request.number }}`,
       "cancel-in-progress": false,
@@ -160,7 +160,7 @@ export default {
   },
   jobs: {
     scope: {
-      ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
+      ...utils.runsOnDepotUbuntu,
       outputs: {
         should_run: "${{ steps.should_run_preview.outputs.result }}",
       },

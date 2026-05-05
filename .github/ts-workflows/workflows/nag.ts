@@ -23,7 +23,7 @@ export default {
         group: "global-nag-concurrency-group",
         "cancel-in-progress": false,
       },
-      ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
+      ...utils.runsOnDepotUbuntu,
       steps: [
         ...utils.setupRepo,
         await utils.githubScript(

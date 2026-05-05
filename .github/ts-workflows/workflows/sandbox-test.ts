@@ -64,7 +64,7 @@ export default workflow({
   jobs: {
     // Build + Docker tests in one job — reuses loaded image on the same runner.
     "build-and-docker-tests": {
-      ...utils.runsOnDepotUbuntuForContainerThings,
+      ...utils.runsOnDepotUbuntu,
       outputs: {
         fly_image_tag: "${{ steps.metadata.outputs.fly_image_tag }}",
       },

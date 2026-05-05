@@ -26,7 +26,7 @@ export default {
   },
   jobs: {
     variables: {
-      ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
+      ...utils.runsOnDepotUbuntu,
       steps: [
         {
           name: "Document rollout strategy",
@@ -72,7 +72,7 @@ export default {
     },
     "promote-fly-default-image": {
       needs: ["variables", "build-sandbox-image", "test-sandbox-fly"],
-      ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
+      ...utils.runsOnDepotUbuntu,
       steps: [
         ...utils.setupDoppler({ config: "prd" }),
         {
@@ -112,7 +112,7 @@ export default {
         "deploy",
       ],
       if: `always() && contains(needs.*.result, 'failure')`,
-      ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
+      ...utils.runsOnDepotUbuntu,
       env: { NEEDS: "${{ toJson(needs) }}" },
       steps: [
         ...utils.setupRepo,
