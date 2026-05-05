@@ -1448,6 +1448,26 @@ describe("dispatchCallableFetch", () => {
     });
   });
 
+  test("calls URL fetch with the runtime global as this", async () => {
+    const response = await dispatchCallableFetch({
+      callable: {
+        type: "fetch",
+        via: { type: "url", url: "https://api.example.com/v1" },
+      },
+      request: new Request("https://router.local/users"),
+      ctx: {
+        fetch: function (this: unknown, request: Request) {
+          if (this !== globalThis) throw new TypeError("Illegal invocation");
+          return Response.json({ url: request.url });
+        } as typeof globalThis.fetch,
+      },
+    });
+
+    await expect(response.json()).resolves.toEqual({
+      url: "https://api.example.com/v1/users",
+    });
+  });
+
   test("uses fetch path replace when the base URL path is the complete target path", async () => {
     const response = await dispatchCallableFetch({
       callable: {
