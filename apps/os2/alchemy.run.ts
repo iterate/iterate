@@ -15,11 +15,8 @@ const db = await D1Database("os-db", {
   adopt: true,
 });
 
-// os2 serves project hosts at <slug>.iterate2.app (prod),
-// <slug>.iterate-dev-jonas.app (dev), and <slug>.iterate-preview-N.app
-// (preview). The preview app shell deliberately lives on the sibling
-// iterate-preview-N.com zone (`os2.iterate-preview-N.com`) so project/MCP hosts
-// can own the iterate-preview-N.app zone cleanly.
+// os2 serves project hosts through the configured APP_CONFIG_PROJECT_HOSTNAME_BASES.
+// Numbered previews currently leave this empty; only the dashboard is routed.
 const projectHostnameBases = ctx.compiledAppConfig.projectHostnameBases ?? [];
 const openApiBridgeBindingName = selfToolProviderBindingName({
   workerScriptName: ctx.workerName,
@@ -94,8 +91,7 @@ if (!ctx.app.local) process.exit(0);
 /**
  * Convert OS2 project-host bases into Cloudflare route host patterns.
  *
- * Normal bases use dotted project subdomains (`<slug>.<base>`). OS2 preview
- * project bases are normal bases too: `<slug>.iterate-preview-N.app`.
+ * Normal bases use dotted project subdomains (`<slug>.<base>`).
  */
 function projectRouteHostnamesForBase(base: string) {
   return [base, `*.${base}`];

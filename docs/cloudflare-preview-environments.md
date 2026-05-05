@@ -97,8 +97,9 @@ Do not paste the token into scripts or docs.
   deleted and missing resources are recreated with the source-code data.
 - Only provision Semaphore seed entries when the matching `preview_N` Doppler
   configs exist for the preview-managed apps and the app-specific Cloudflare
-  prerequisites are in the right accounts. For os2, that includes the
-  `iterate-preview-N.com` / `iterate-preview-N.app` zone pair.
+  prerequisites are in the right accounts. For os2, numbered previews currently
+  use `os2-preview-N.iterate.com` on the existing `iterate.com` zone and leave
+  project-host bases empty.
 - CI workflows invoke one shared preview lifecycle. The lifecycle code, not the
   workflow matrix, decides which apps deploy.
 - Preview deploys do not override `ALCHEMY_STAGE`.

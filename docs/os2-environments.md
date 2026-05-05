@@ -6,22 +6,23 @@ An os2 **environment** is a bag of env vars (a Doppler "config") plus some cloud
 
 Every environment serves two roles via two domains:
 
-| Role               | Pattern         | Example (prod)        | Example (dev-jonas)            | Example (preview-3)            |
-| ------------------ | --------------- | --------------------- | ------------------------------ | ------------------------------ |
-| Dashboard          | configured host | `os.iterate2.com`     | `os.iterate-dev-jonas.com`     | `os2.iterate-preview-3.com`    |
-| Project subdomains | `<proj>.<zone>` | `<proj>.iterate2.app` | `<proj>.iterate-dev-jonas.app` | `<proj>.iterate-preview-3.app` |
+| Role               | Pattern         | Example (prod)        | Example (dev-jonas)            | Example (preview-3)         |
+| ------------------ | --------------- | --------------------- | ------------------------------ | --------------------------- |
+| Dashboard          | configured host | `os.iterate2.com`     | `os.iterate-dev-jonas.com`     | `os2-preview-3.iterate.com` |
+| Project subdomains | `<proj>.<zone>` | `<proj>.iterate2.app` | `<proj>.iterate-dev-jonas.app` | not enabled                 |
 
-The design principle: **dev must structurally mirror production.** Each environment
-gets one dashboard hostname and one project-hostname base. Numbered previews use
-dedicated zone pairs: `iterate-preview-N.com` for the dashboard and
-`iterate-preview-N.app` for project/MCP hosts.
+The design principle: **dev must structurally mirror production.** Persistent dev
+and prod environments get one dashboard hostname and one project-hostname base.
+Numbered previews use the existing `iterate.com` zone for the dashboard:
+`os2-preview-N.iterate.com`. Project/MCP hosts are not enabled for numbered
+previews until we have a certificate-covered preview host shape for them.
 
 ## AppConfig
 
 Domain identity lives in `AppConfig` (runtime config available to the worker):
 
 - `baseUrl` — canonical dashboard URL (e.g. `https://os.iterate2.com`). Used for generating links in emails, redirects, etc. Optional — when absent (local dev without tunnel), the worker infers from the request.
-- `projectHostnameBases` — array of project host bases. Normal bases match `<project>.<base>` (e.g. `["iterate2.app"]`). Preview bases are normal bases too, e.g. `["iterate-preview-3.app"]`.
+- `projectHostnameBases` — array of project host bases. Normal bases match `<project>.<base>` (e.g. `["iterate2.app"]`). Numbered previews currently use `[]`.
 
 At deploy time, `alchemy.run.ts` reads AppConfig and derives Cloudflare worker routes from these two fields. No separate `WORKER_ROUTES` env var is needed for os2 route computation.
 
@@ -46,7 +47,7 @@ _shared          ← CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, ALCHEMY_STAGE=
 │   ├── dev_misha
 │   └── dev_rahul
 ├── preview      ← ALCHEMY_LOCAL=false, preview base
-│   ├── preview_2    ← preview environment 2: os2.iterate-preview-2.com / <project>.iterate-preview-2.app
+│   ├── preview_2    ← preview environment 2: os2-preview-2.iterate.com, no project-host base
 │   ├── ...
 │   └── preview_9    ← preview environment 9
 └── prd          ← os.iterate2.com / iterate2.app
@@ -56,9 +57,9 @@ _shared          ← CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, ALCHEMY_STAGE=
 
 | Var                                 | dev_jonas                              | preview_N                              | prd                              |
 | ----------------------------------- | -------------------------------------- | -------------------------------------- | -------------------------------- |
-| `APP_CONFIG_BASE_URL`               | `https://os.iterate-dev-jonas.com`     | `https://os2.iterate-preview-N.com`    | `https://os.iterate2.com`        |
+| `APP_CONFIG_BASE_URL`               | `https://os.iterate-dev-jonas.com`     | `https://os2-preview-N.iterate.com`    | `https://os.iterate2.com`        |
 | `APP_CONFIG_EVENTS_BASE_URL`        | `https://events.iterate-dev-jonas.com` | `https://events-preview-N.iterate.com` | `https://events.iterate.com`     |
-| `APP_CONFIG_PROJECT_HOSTNAME_BASES` | `["iterate-dev-jonas.app"]`            | `["iterate-preview-N.app"]`            | `["iterate2.app"]`               |
+| `APP_CONFIG_PROJECT_HOSTNAME_BASES` | `["iterate-dev-jonas.app"]`            | `[]`                                   | `["iterate2.app"]`               |
 | `ALCHEMY_LOCAL`                     | `true`                                 | `false`                                | `false`                          |
 | `ALCHEMY_STAGE`                     | inherited as `${DOPPLER_CONFIG}`       | inherited as `${DOPPLER_CONFIG}`       | inherited as `${DOPPLER_CONFIG}` |
 
@@ -105,20 +106,20 @@ configured in the right Cloudflare account.
 
 1. CI acquires a shared environment config lease from Semaphore (e.g. `preview-3`)
 2. The resource data maps the lease to Doppler config `preview_3`
-3. `preview_3` has `APP_CONFIG_BASE_URL=https://os2.iterate-preview-3.com` and `APP_CONFIG_PROJECT_HOSTNAME_BASES=["iterate-preview-3.app"]`
+3. `preview_3` has `APP_CONFIG_BASE_URL=https://os2-preview-3.iterate.com` and `APP_CONFIG_PROJECT_HOSTNAME_BASES=[]`
 4. `doppler run --project os2 --config preview_3 -- pnpm exec tsx ./alchemy.run.ts` deploys the worker with correct routes. `ALCHEMY_STAGE` comes from `_shared` as `${DOPPLER_CONFIG}` and is slugified by the app into Cloudflare names like `os2-preview-3`.
 5. PR body is updated with the shared lease and per-app deployment status
 6. On PR close, recorded apps are torn down and the environment config lease is released back to Semaphore
 
 ### Cloudflare zones for previews
 
-Each numbered os2 preview config uses two Cloudflare zones:
+Each numbered os2 preview config currently uses one Cloudflare zone:
 
-- `iterate-preview-N.com` for the dashboard host `os2.iterate-preview-N.com`
-- `iterate-preview-N.app` for project and MCP hosts like `<project>.iterate-preview-N.app`
+- `iterate.com` for the dashboard host `os2-preview-N.iterate.com`
 
-Both zones must exist in the `04b3` Cloudflare account before that config can
-deploy routes and DNS records.
+Project/MCP preview hosts should stay empty until the selected host shape has
+working Cloudflare route inference and edge certificates in the `04b3`
+Cloudflare account.
 
 ### Manual preview deploy
 
@@ -148,8 +149,7 @@ cd apps/os2
 doppler run --project os2 --config preview_3 -- pnpm exec tsx ./alchemy.run.ts
 
 # Hit it
-open https://os2.iterate-preview-3.com         # dashboard
-open https://myproject.iterate-preview-3.app   # project subdomain
+open https://os2-preview-3.iterate.com         # dashboard
 
 # Clean up
 doppler run --project os2 --config preview_3 -- pnpm exec tsx ./alchemy.run.ts --destroy

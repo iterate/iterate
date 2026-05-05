@@ -24,7 +24,7 @@ type Target = {
   clerkInstanceArg: "dev" | "prod";
   baseUrl: string;
   eventsBaseUrl: string;
-  projectHostnameBase: string;
+  projectHostnameBases: string[];
 };
 
 const targets: Target[] = [
@@ -35,7 +35,7 @@ const targets: Target[] = [
     clerkInstanceArg: "dev",
     baseUrl: "https://os.iterate-dev-jonas.com",
     eventsBaseUrl: "https://events.iterate-dev-jonas.com",
-    projectHostnameBase: "iterate-dev-jonas.app",
+    projectHostnameBases: ["iterate-dev-jonas.app"],
   },
   {
     dopplerConfig: "dev_misha",
@@ -44,7 +44,7 @@ const targets: Target[] = [
     clerkInstanceArg: "dev",
     baseUrl: "https://os.iterate-dev-misha.com",
     eventsBaseUrl: "https://events.iterate-dev-misha.com",
-    projectHostnameBase: "iterate-dev-misha.app",
+    projectHostnameBases: ["iterate-dev-misha.app"],
   },
   {
     dopplerConfig: "dev_rahul",
@@ -53,7 +53,7 @@ const targets: Target[] = [
     clerkInstanceArg: "dev",
     baseUrl: "https://os.iterate-dev-rahul.com",
     eventsBaseUrl: "https://events.iterate-dev-rahul.com",
-    projectHostnameBase: "iterate-dev-rahul.app",
+    projectHostnameBases: ["iterate-dev-rahul.app"],
   },
   ...[2, 3, 4, 5, 6, 7, 8, 9].map((previewNumber) => {
     return {
@@ -61,9 +61,9 @@ const targets: Target[] = [
       clerkAppName: `OS2 preview ${previewNumber}`,
       clerkEnvironmentType: "development",
       clerkInstanceArg: "dev",
-      baseUrl: `https://os2.iterate-preview-${previewNumber}.com`,
+      baseUrl: `https://os2-preview-${previewNumber}.iterate.com`,
       eventsBaseUrl: `https://events-preview-${previewNumber}.iterate.com`,
-      projectHostnameBase: `iterate-preview-${previewNumber}.app`,
+      projectHostnameBases: [],
     } satisfies Target;
   }),
   {
@@ -73,7 +73,7 @@ const targets: Target[] = [
     clerkInstanceArg: "prod",
     baseUrl: "https://os.iterate2.com",
     eventsBaseUrl: "https://events.iterate.com",
-    projectHostnameBase: "iterate2.app",
+    projectHostnameBases: ["iterate2.app"],
   },
 ];
 
@@ -231,7 +231,7 @@ function setDopplerSecrets(target: Target, instance: ClerkInstance, jwtKey: stri
       readExistingDopplerSecret(target.dopplerConfig, "APP_CONFIG_MCP_PROOF_SECRET") ??
         randomBytes(32).toString("base64url"),
     ],
-    ["APP_CONFIG_PROJECT_HOSTNAME_BASES", JSON.stringify([target.projectHostnameBase])],
+    ["APP_CONFIG_PROJECT_HOSTNAME_BASES", JSON.stringify(target.projectHostnameBases)],
     ["APP_CONFIG_CLERK__PUBLISHABLE_KEY", instance.publishable_key],
     ["APP_CONFIG_CLERK__SECRET_KEY", instance.secret_key!],
     ["APP_CONFIG_CLERK__JWT_KEY", jwtKey.toString()],
