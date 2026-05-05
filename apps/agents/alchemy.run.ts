@@ -1,3 +1,4 @@
+import alchemy from "alchemy";
 import {
   Ai,
   D1Database,
@@ -46,6 +47,7 @@ const slackApi = DurableObjectNamespace("slack-api", {
   className: "SlackApi",
   sqlite: true,
 });
+const slackBotToken = ctx.compiledAppConfig.slackBotToken?.exposeSecret();
 
 const { worker, afterFinalize } = await IterateApp(ctx, {
   bindings: {
@@ -57,6 +59,7 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     MCP_CLIENT: mcpClient,
     OPENAPI_TOOL_CLIENT: openApiToolClient,
     SLACK_API: slackApi,
+    ...(slackBotToken == null ? {} : { APP_CONFIG_SLACK_BOT_TOKEN: alchemy.secret(slackBotToken) }),
     LOADER: WorkerLoader(),
     AI: Ai(),
     // Nested codemode workers need a real `Fetcher` for `globalOutbound`,
@@ -66,7 +69,9 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
   // Cloudflare gates `request.signal` behind this flag — needed by the oRPC
   // logging plugin to distinguish aborted client requests from real failures.
   // https://developers.cloudflare.com/workers/runtime-apis/request/
-  compatibilityFlags: ["enable_request_signal"],
+  // `global_fetch_strictly_public` lets this Worker call same-zone Worker routes
+  // such as events.iterate.com via fetch instead of bypassing Workers to origin.
+  compatibilityFlags: ["enable_request_signal", "global_fetch_strictly_public"],
 });
 
 export { worker };

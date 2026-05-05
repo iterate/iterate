@@ -5,6 +5,7 @@ Utilities here are experimental helpers for composing Cloudflare Durable Object 
 ## Current Scope
 
 - `mixins/with-durable-object-core.ts` is the root adapter for mixins that need Cloudflare's protected Durable Object `ctx` APIs. It exposes small protected capabilities for local SQLite, synchronous KV, and the single platform alarm slot.
+- `mixins/with-app-config.ts` parses typed app runtime config from `APP_CONFIG` / `APP_CONFIG_*` Cloudflare env vars and exposes it as protected `this.config`.
 - `mixins/with-lifecycle-hooks.ts` adds named initialization state and tiny lifecycle hooks for SQLite-backed Durable Objects.
 - `mixins/with-d1-object-catalog.ts` best-effort mirrors initialized objects into D1 tables owned by the mixin, with optional secondary indexes derived from init params.
 - `mixins/with-multiplexed-alarms.ts` stores many logical one-shot alarms behind Cloudflare's single Durable Object alarm slot.
@@ -74,6 +75,36 @@ That keeps storage access inside the mixin method and lets plain helper
 functions operate on plain data. Use the raw protected handles only when a mixin
 owns durable schema/state and needs several related storage operations in one
 method, such as the scheduler or multiplexed alarm dispatcher.
+
+Use `withAppConfig(AppConfig)` when a Durable Object needs the same app runtime
+config shape as the worker entrypoint:
+
+```ts
+import { DurableObject } from "cloudflare:workers";
+import { z } from "zod";
+import { BaseAppConfig } from "@iterate-com/shared/apps/config";
+import { withAppConfig } from "@iterate-com/shared/durable-object-utils/mixins/with-app-config";
+
+const AppConfig = BaseAppConfig.extend({
+  apiBaseUrl: z.string().trim().min(1),
+});
+
+type AppConfig = z.output<typeof AppConfig>;
+
+const RoomBase = withAppConfig(AppConfig)(DurableObject);
+
+class Room extends RoomBase<Env> {
+  getApiBaseUrl() {
+    return this.config.apiBaseUrl;
+  }
+}
+```
+
+`this.config` is protected, not public, because app config can include redacted
+secrets or internal URLs. The mixin uses the shared `APP_CONFIG` parser and
+caches the parsed object for one Durable Object wake. `APP_CONFIG_FOO__BAR`
+overrides `foo.bar`, and unknown override keys fail schema validation instead
+of being silently ignored.
 
 Simple mixin return types mostly follow this pattern:
 

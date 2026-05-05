@@ -39,11 +39,12 @@ describe("clean stream view reducers", () => {
 
     expect(viewState.slots.feed).toMatchObject([
       {
-        type: "raw-event",
-        id: "raw-event-1",
+        type: "grouped-raw-event",
+        id: "grouped-raw-event-events.iterate.com/webchat/user-message-added-1-1",
         props: {
-          offset: 1,
           eventType: "events.iterate.com/webchat/user-message-added",
+          count: 1,
+          events: [{ offset: 1 }],
         },
       },
       {
@@ -79,9 +80,10 @@ describe("clean stream view reducers", () => {
 
     expect(viewState.slots.feed).toMatchObject([
       {
-        type: "raw-event",
+        type: "grouped-raw-event",
         props: {
           eventType: "events.iterate.com/webchat/agent-response-added",
+          count: 1,
         },
       },
       {
@@ -94,7 +96,7 @@ describe("clean stream view reducers", () => {
     ]);
   });
 
-  test("raw-pretty projects canonical agent input-added events as markdown messages", () => {
+  test("raw-pretty projects canonical agent input-added events as prompt context", () => {
     const viewState = processEventsWithViewReducer({
       reducer: rawPrettyEventsStreamViewReducer,
       events: [
@@ -102,7 +104,6 @@ describe("clean stream view reducers", () => {
           offset: 7,
           type: "events.iterate.com/agent/input-added",
           payload: {
-            role: "user",
             source: "slack",
             content: SLACK_AGENT_INPUT_CONTENT,
           },
@@ -112,23 +113,118 @@ describe("clean stream view reducers", () => {
 
     expect(viewState.slots.feed).toMatchObject([
       {
-        type: "raw-event",
-        id: "raw-event-7",
+        type: "grouped-raw-event",
+        id: "grouped-raw-event-events.iterate.com/agent/input-added-7-7",
         props: {
-          offset: 7,
           eventType: "events.iterate.com/agent/input-added",
+          count: 1,
+          events: [{ offset: 7 }],
         },
       },
       {
-        type: "message",
-        id: "message-user-7",
+        type: "prompt-context",
+        id: "prompt-context-7",
         props: {
-          role: "user",
+          source: "slack",
           text: SLACK_AGENT_INPUT_CONTENT,
-          format: "markdown",
         },
       },
     ]);
+  });
+
+  test("raw-pretty projects canonical system prompt updates", () => {
+    const viewState = processEventsWithViewReducer({
+      reducer: rawPrettyEventsStreamViewReducer,
+      events: [
+        event({
+          offset: 8,
+          type: "events.iterate.com/agent/system-prompt-updated",
+          payload: { systemPrompt: "You are careful and terse." },
+        }),
+      ],
+    });
+
+    expect(viewState.slots.feed).toMatchObject([
+      {
+        type: "grouped-raw-event",
+        id: "grouped-raw-event-events.iterate.com/agent/system-prompt-updated-8-8",
+        props: {
+          eventType: "events.iterate.com/agent/system-prompt-updated",
+          count: 1,
+          events: [{ offset: 8 }],
+        },
+      },
+      {
+        type: "system-prompt",
+        id: "system-prompt-8",
+        props: {
+          text: "You are careful and terse.",
+        },
+      },
+    ]);
+  });
+
+  test("raw-pretty projects LLM request start and end as boundary lines", () => {
+    const viewState = processEventsWithViewReducer({
+      reducer: rawPrettyEventsStreamViewReducer,
+      events: [
+        event({
+          offset: 9,
+          type: "events.iterate.com/agent/llm-request-started",
+          payload: {
+            requestId: "req_1",
+            model: "test-model",
+            runOpts: {},
+          },
+        }),
+        event({
+          offset: 10,
+          type: "events.iterate.com/agent/llm-request-completed",
+          payload: {
+            requestId: "req_1",
+            rawResponse: "ok",
+            durationMs: 123,
+          },
+        }),
+      ],
+    });
+
+    expect(viewState.slots.feed).toMatchObject([
+      {
+        type: "grouped-raw-event",
+        props: {
+          eventType: "events.iterate.com/agent/llm-request-started",
+          count: 1,
+        },
+      },
+      {
+        type: "llm-request-boundary",
+        id: "llm-request-started-9",
+        props: {
+          phase: "started",
+          requestId: "req_1",
+        },
+      },
+      {
+        type: "grouped-raw-event",
+        props: {
+          eventType: "events.iterate.com/agent/llm-request-completed",
+          count: 1,
+        },
+      },
+      {
+        type: "llm-request-boundary",
+        id: "llm-request-ended-10",
+        props: {
+          phase: "ended",
+          outcome: "completed",
+          requestId: "req_1",
+        },
+      },
+    ]);
+    expect(viewState.slots.feed).not.toContainEqual(
+      expect.objectContaining({ type: "prompt-context" }),
+    );
   });
 
   test("raw-pretty keeps semantic events adjacent to their raw summaries", () => {
@@ -141,9 +237,9 @@ describe("clean stream view reducers", () => {
     });
 
     expect(viewState.slots.feed.map((item) => item.type)).toEqual([
-      "raw-event",
+      "grouped-raw-event",
       "metadata-updated",
-      "raw-event",
+      "grouped-raw-event",
       "metadata-updated",
     ]);
   });
@@ -163,7 +259,7 @@ describe("clean stream view reducers", () => {
         props: {
           eventType: "events.iterate.com/example/no-renderer",
           count: 2,
-          events: [{ props: { offset: 1 } }, { props: { offset: 2 } }],
+          events: [{ offset: 1 }, { offset: 2 }],
         },
       },
     ]);
@@ -195,8 +291,8 @@ describe("clean stream view reducers", () => {
     });
 
     expect(viewState.slots.feed.map((item) => item.type)).toEqual([
-      "raw-event",
-      "raw-event",
+      "grouped-raw-event",
+      "grouped-raw-event",
       "message",
     ]);
   });
@@ -213,7 +309,7 @@ describe("clean stream view reducers", () => {
       ],
     });
 
-    expect(viewState.slots.feed.map((item) => item.type)).toEqual(["raw-event", "error"]);
+    expect(viewState.slots.feed.map((item) => item.type)).toEqual(["grouped-raw-event", "error"]);
     expect(viewState.slots.input).toMatchObject([
       {
         type: "composer-suggestion",
@@ -261,11 +357,11 @@ describe("clean stream view reducers", () => {
     });
 
     expect(viewState.slots.feed.map((item) => item.type)).toEqual([
-      "raw-event",
+      "grouped-raw-event",
       "codemode-block",
-      "raw-event",
+      "grouped-raw-event",
       "codemode-result",
-      "raw-event",
+      "grouped-raw-event",
     ]);
     expect(viewState.slots.feed).toMatchObject([
       {},
@@ -302,7 +398,7 @@ describe("clean stream view reducers", () => {
       ],
     });
 
-    expect(viewState.slots.feed.map((item) => item.type)).toEqual(["raw-event"]);
+    expect(viewState.slots.feed.map((item) => item.type)).toEqual(["grouped-raw-event"]);
   });
 
   test("raw single JSON keeps the full event array in one feed element", () => {

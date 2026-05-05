@@ -102,7 +102,7 @@ describe("projectWireToFeed", () => {
       createEvent({
         offset: 1,
         type: "events.iterate.com/agent/input-added",
-        payload: { role: "user", content: "Run code" },
+        payload: { content: "Run code" },
       }),
       createEvent({
         offset: 2,

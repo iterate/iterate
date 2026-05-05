@@ -24,9 +24,18 @@ dev_misha:
 
 dev_rahul:
 
+preview:
+
+preview_2:
+APP_CONFIG_BASE_URL=https://<app>-preview-2.iterate-dev-stg.workers.dev
+
+...
+
+preview_9:
+APP_CONFIG_BASE_URL=https://<app>-preview-9.iterate-dev-stg.workers.dev
+
 prd:
 APP_CONFIG={}
-ALCHEMY_PASSWORD=[generate this]
 ```
 
 Everything else should already be inherited from `_shared`, including:
@@ -49,23 +58,41 @@ doppler projects create <project-slug>
 doppler configs create dev_jonas -p <project-slug>
 doppler configs create dev_misha -p <project-slug>
 doppler configs create dev_rahul -p <project-slug>
+doppler configs create preview_2 -p <project-slug> -e preview
+doppler configs create preview_3 -p <project-slug> -e preview
+doppler configs create preview_4 -p <project-slug> -e preview
+doppler configs create preview_5 -p <project-slug> -e preview
+doppler configs create preview_6 -p <project-slug> -e preview
+doppler configs create preview_7 -p <project-slug> -e preview
+doppler configs create preview_8 -p <project-slug> -e preview
+doppler configs create preview_9 -p <project-slug> -e preview
 
 doppler configs update dev -p <project-slug> --inherits="_shared.dev" --yes
 doppler configs update dev_jonas -p <project-slug> --inherits="_shared.dev_jonas" --yes
 doppler configs update dev_misha -p <project-slug> --inherits="_shared.dev_misha" --yes
 doppler configs update dev_rahul -p <project-slug> --inherits="_shared.dev_rahul" --yes
+doppler configs update preview -p <project-slug> --inherits="_shared.preview" --yes
+doppler configs update preview_2 -p <project-slug> --inherits="_shared.preview" --yes
+doppler configs update preview_3 -p <project-slug> --inherits="_shared.preview" --yes
+doppler configs update preview_4 -p <project-slug> --inherits="_shared.preview" --yes
+doppler configs update preview_5 -p <project-slug> --inherits="_shared.preview" --yes
+doppler configs update preview_6 -p <project-slug> --inherits="_shared.preview" --yes
+doppler configs update preview_7 -p <project-slug> --inherits="_shared.preview" --yes
+doppler configs update preview_8 -p <project-slug> --inherits="_shared.preview" --yes
+doppler configs update preview_9 -p <project-slug> --inherits="_shared.preview" --yes
 doppler configs update prd -p <project-slug> --inherits="_shared.prd" --yes
 ```
 
-We only use `dev`, personal dev configs, and `prd`. Do not create `stg`.
+For preview-enabled new-style apps, use `preview` and numbered `preview_2` through
+`preview_9`. Do not create `preview_1`, `preview_10`, or `stg` unless the
+matching environment config lease and Cloudflare prerequisites are being added
+at the same time.
 
 3. Set the tiny app-local secrets:
 
 ```bash
 doppler secrets set APP_CONFIG="{}" -p <project-slug> -c dev --silent
 doppler secrets set APP_CONFIG="{}" -p <project-slug> -c prd --silent
-
-doppler secrets set ALCHEMY_PASSWORD="$(openssl rand -hex 32)" -p <project-slug> -c prd --silent
 ```
 
 That is all. Everything else should come from `_shared`.
@@ -121,12 +148,12 @@ doppler secrets -c dev_jonas
 
 - Never ask for or mention a Doppler token.
 - Always create exactly `dev_jonas`, `dev_misha`, and `dev_rahul`.
-- Always create only `dev`, `dev_jonas`, `dev_misha`, `dev_rahul`, and `prd` unless the user explicitly asks for more.
+- For preview-enabled new-style apps, create only `dev`, `dev_jonas`, `dev_misha`, `dev_rahul`, `preview`, `preview_2` through `preview_9`, and `prd` unless the user explicitly asks for more.
 - `DOPPLER_CONFIG` is the canonical per-config selector, but it is injected by Doppler itself. Never create it as a secret.
 - `ALCHEMY_STAGE` should be set to `${DOPPLER_CONFIG}` in `_shared` so `dev_jonas` resolves to `dev_jonas`, `prd` resolves to `prd`, etc.
-- For a new project, the app-local template is just `APP_CONFIG={}` in `dev` and `prd`, plus a fresh `ALCHEMY_PASSWORD` in `prd`.
+- For a new project, the app-local template is just `APP_CONFIG={}` in `dev` and `prd`, plus `APP_CONFIG_BASE_URL` in each leased preview config when the app has a public route.
 - Always set `APP_CONFIG` to `{}` in `dev` and `prd`.
-- Always set a fresh high-entropy `ALCHEMY_PASSWORD` in `prd`.
+- Do not set app-local `ALCHEMY_PASSWORD`, `ALCHEMY_STAGE`, or `ALCHEMY_STATE_TOKEN`. These come from `_shared`.
 - Do not add extra app-local secrets unless the app actually needs them.
 - If staging comes back later, give `stg` its own distinct password. Do not reuse `dev` or `prd`.
 - Personal Configs on the `dev` environment should always be off (dashboard **Development** → **⋮** → **Settings**, or `PUT` to `/v3/environments/environment` with `{"personal_configs":false}` as in step 4).

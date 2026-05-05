@@ -126,12 +126,22 @@ function flushCurrentGroup(displayFeed: StreamFeedItem[], currentGroup: readonly
 
 export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
   if (event.type === "events.iterate.com/agent/input-added") {
-    const payload = event.payload as { role?: unknown; content?: unknown };
-    if (payload.role !== "user" && payload.role !== "assistant") return null;
+    const payload = event.payload as { content?: unknown };
     if (typeof payload.content !== "string") return null;
     return {
       kind: "message",
-      role: payload.role,
+      role: "user",
+      content: [{ type: "markdown", text: payload.content }],
+      timestamp: getTimestamp(event.createdAt),
+    };
+  }
+
+  if (event.type === "events.iterate.com/agent/output-added") {
+    const payload = event.payload as { content?: unknown };
+    if (typeof payload.content !== "string") return null;
+    return {
+      kind: "message",
+      role: "assistant",
       content: [{ type: "markdown", text: payload.content }],
       timestamp: getTimestamp(event.createdAt),
     };

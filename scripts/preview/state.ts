@@ -3,8 +3,9 @@ import { z } from "zod";
 import { markdownAnnotator } from "../../packages/shared/src/jonasland/markdown-annotator.ts";
 import { splitRepositoryFullName } from "./repository-full-name.ts";
 
-const cloudflarePreviewSectionLabel = "CLOUDFLARE_PREVIEW_ENVIRONMENTS";
-const cloudflarePreviewStateLabel = "CLOUDFLARE_PREVIEW_ENVIRONMENTS_STATE";
+const cloudflarePreviewSectionLabel = "CLOUDFLARE_PREVIEW";
+const cloudflarePreviewStateLabel = "CLOUDFLARE_PREVIEW_STATE";
+
 const CloudflarePreviewStatus = z.enum([
   "awaiting-tests",
   "claim-failed",
@@ -16,28 +17,34 @@ const CloudflarePreviewStatus = z.enum([
   "tests-failed",
 ]);
 
-export const CloudflarePreviewEntry = z.object({
+export const EnvironmentConfigLease = z.object({
+  dopplerConfig: z.string().trim().min(1),
+  leasedUntil: z.number().int().positive(),
+  leaseId: z.string().uuid(),
+  slug: z.string().trim().min(1),
+  type: z.string().trim().min(1),
+});
+
+export const CloudflarePreviewAppEntry = z.object({
   appDisplayName: z.string().trim().min(1),
   appSlug: z.string().trim().min(1),
   status: CloudflarePreviewStatus,
   updatedAt: z.string().trim().min(1),
-  leasedUntil: z.number().int().positive().nullable().optional(),
   headSha: z.string().trim().min(1).nullable().optional(),
   message: z.string().trim().min(1).nullable().optional(),
-  previewEnvironmentAlchemyStageName: z.string().trim().min(1).nullable().optional(),
-  previewEnvironmentDopplerConfigName: z.string().trim().min(1).nullable().optional(),
-  previewEnvironmentIdentifier: z.string().trim().min(1).nullable().optional(),
-  previewEnvironmentSemaphoreLeaseId: z.string().uuid().nullable().optional(),
-  previewEnvironmentSlug: z.string().trim().min(1).nullable().optional(),
-  previewEnvironmentType: z.string().trim().min(1).nullable().optional(),
   publicUrl: z.string().trim().url().nullable().optional(),
-  projectSubdomainUrl: z.string().trim().url().nullable().optional(),
   runUrl: z.string().trim().url().nullable().optional(),
   shortSha: z.string().trim().min(1).nullable().optional(),
 });
 
-type CloudflarePreviewEntry = z.infer<typeof CloudflarePreviewEntry>;
-type CloudflarePreviewState = Record<string, CloudflarePreviewEntry>;
+export const CloudflarePreviewState = z.object({
+  apps: z.record(z.string().trim().min(1), CloudflarePreviewAppEntry).default({}),
+  environmentConfigLease: EnvironmentConfigLease.nullable().default(null),
+});
+
+export type EnvironmentConfigLease = z.infer<typeof EnvironmentConfigLease>;
+export type CloudflarePreviewAppEntry = z.infer<typeof CloudflarePreviewAppEntry>;
+export type CloudflarePreviewState = z.infer<typeof CloudflarePreviewState>;
 
 export async function readCloudflarePreviewState(params: {
   githubToken: string;
@@ -52,17 +59,14 @@ export async function readCloudflarePreviewState(params: {
   };
 }
 
-export async function upsertCloudflarePreviewStateEntry(params: {
-  entry: CloudflarePreviewEntry;
+export async function updateCloudflarePreviewState(params: {
   githubToken: string;
   repositoryFullName: string;
   pullRequestNumber: number;
+  update: (state: CloudflarePreviewState) => CloudflarePreviewState;
 }) {
   const current = await readCloudflarePreviewState(params);
-  const nextState = {
-    ...current.state,
-    [params.entry.appSlug]: params.entry,
-  } satisfies CloudflarePreviewState;
+  const nextState = CloudflarePreviewState.parse(params.update(current.state));
 
   await writePullRequestBody({
     ...params,
@@ -74,33 +78,18 @@ export async function upsertCloudflarePreviewStateEntry(params: {
   };
 }
 
-export function clearCloudflarePreviewDestroyPayload(
-  entry: CloudflarePreviewEntry,
-): CloudflarePreviewEntry {
-  return {
-    ...entry,
-    leasedUntil: null,
-    previewEnvironmentAlchemyStageName: null,
-    previewEnvironmentDopplerConfigName: null,
-    previewEnvironmentIdentifier: null,
-    previewEnvironmentSemaphoreLeaseId: null,
-    previewEnvironmentSlug: null,
-    previewEnvironmentType: null,
-  };
-}
-
-export function parseCloudflarePreviewState(body: string) {
+export function parseCloudflarePreviewState(body: string): CloudflarePreviewState {
   const current = markdownAnnotator(body, cloudflarePreviewStateLabel).current;
   if (!current) {
-    return {};
+    return CloudflarePreviewState.parse({});
   }
 
   try {
     const parsed = JSON.parse(unwrapHiddenStateBlock(current));
-    return z.record(z.string().trim().min(1), CloudflarePreviewEntry).parse(parsed);
+    return CloudflarePreviewState.parse(parsed);
   } catch (error) {
     if (error instanceof SyntaxError || error instanceof z.ZodError) {
-      return {};
+      return CloudflarePreviewState.parse({});
     }
 
     throw error;
@@ -112,27 +101,39 @@ export function renderCloudflarePreviewPullRequestBody(
   state: CloudflarePreviewState,
 ) {
   return markdownAnnotator(body, cloudflarePreviewSectionLabel).update(
-    renderCloudflarePreviewSection(state),
+    renderCloudflarePreviewSection(CloudflarePreviewState.parse(state)),
   );
 }
 
 function renderCloudflarePreviewSection(state: CloudflarePreviewState) {
-  const rows = Object.values(state)
+  const rows = Object.values(state.apps)
     .sort((left, right) => left.appDisplayName.localeCompare(right.appDisplayName))
-    .map(renderPreviewEntry)
+    .map(renderPreviewAppEntry)
     .join("\n\n");
 
   return [
-    "## Preview Environments",
+    "## Environment Config Lease",
     "",
     markdownAnnotator("", cloudflarePreviewStateLabel).update(wrapHiddenStateBlock(state)),
+    state.environmentConfigLease
+      ? renderEnvironmentConfigLease(state.environmentConfigLease)
+      : "No active environment config lease.",
     rows ? `\n${rows}` : "",
   ]
     .filter(Boolean)
     .join("\n");
 }
 
-function renderPreviewEntry(entry: CloudflarePreviewEntry) {
+function renderEnvironmentConfigLease(lease: EnvironmentConfigLease) {
+  return [
+    `Lease: \`${lease.slug}\``,
+    `Doppler config: \`${lease.dopplerConfig}\``,
+    `Type: \`${lease.type}\``,
+    `Leased until: ${new Date(lease.leasedUntil).toISOString()}`,
+  ].join("\n");
+}
+
+function renderPreviewAppEntry(entry: CloudflarePreviewAppEntry) {
   const summary = summarizePreviewMessage(entry.message);
   const details = readPreviewMessage(entry.message);
   const showFailureDetails = entry.status !== "deployed" && entry.status !== "released" && details;
@@ -143,17 +144,6 @@ function renderPreviewEntry(entry: CloudflarePreviewEntry) {
     `Status: ${renderStatusLabel(entry.status)}`,
     entry.shortSha ? `Commit: \`${entry.shortSha}\`` : null,
     entry.publicUrl ? `Preview: ${entry.publicUrl}` : null,
-    entry.projectSubdomainUrl ? `Projects: ${entry.projectSubdomainUrl}` : null,
-    entry.previewEnvironmentIdentifier
-      ? `Environment: \`${entry.previewEnvironmentIdentifier}\``
-      : null,
-    entry.previewEnvironmentDopplerConfigName
-      ? `Config: \`${entry.previewEnvironmentDopplerConfigName}\``
-      : null,
-    entry.previewEnvironmentAlchemyStageName
-      ? `Stage: \`${entry.previewEnvironmentAlchemyStageName}\``
-      : null,
-    entry.leasedUntil ? `Leased until: ${new Date(entry.leasedUntil).toISOString()}` : null,
     summary ? `Summary: ${summary}` : null,
     entry.runUrl ? `[Workflow run](${entry.runUrl})` : null,
     `Updated: ${entry.updatedAt}`,
@@ -198,10 +188,10 @@ function summarizePreviewMessage(message: string | null | undefined) {
       ),
     ) ?? lines[0];
 
-  return interestingLine.length <= 180 ? interestingLine : `${interestingLine.slice(0, 179)}…`;
+  return interestingLine.length <= 180 ? interestingLine : `${interestingLine.slice(0, 179)}...`;
 }
 
-function renderStatusLabel(status: CloudflarePreviewEntry["status"]) {
+function renderStatusLabel(status: CloudflarePreviewAppEntry["status"]) {
   switch (status) {
     case "awaiting-tests":
       return "awaiting tests";
@@ -267,11 +257,10 @@ async function writePullRequestBody(params: {
     auth: params.githubToken,
   });
   const [owner, repo] = splitRepositoryFullName(params.repositoryFullName);
-
   await octokit.rest.pulls.update({
+    body: params.body,
     owner,
     repo,
     pull_number: params.pullRequestNumber,
-    body: params.body,
   });
 }

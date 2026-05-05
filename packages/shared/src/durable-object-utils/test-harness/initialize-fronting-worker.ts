@@ -11,6 +11,8 @@
  */
 
 import { DurableObject } from "cloudflare:workers";
+import { z } from "zod";
+import { withAppConfig } from "../mixins/with-app-config.ts";
 import {
   listD1ObjectCatalogRecordsByIndex,
   withD1ObjectCatalog,
@@ -53,7 +55,11 @@ type Env = {
   INSPECTORS: DurableObjectNamespace<InspectorTestRoom>;
   LISTED_ROOMS: DurableObjectNamespace<ListedRoom>;
   PUBLIC_ROUTE_ROOMS: DurableObjectNamespace<PublicRouteTestRoom>;
+  APP_CONFIG_ROOMS: DurableObjectNamespace<AppConfigTestRoom>;
   DO_CATALOG: D1Database;
+  APP_CONFIG?: string;
+  APP_CONFIG_SERVICE_NAME?: string;
+  APP_CONFIG_FEATURE__ENABLED?: string;
 };
 
 const DurableObjectCore = withDurableObjectCore(DurableObject);
@@ -676,6 +682,45 @@ export class InspectorTestRoom extends InspectorBase<Env> {
       "msg_1",
       "hello",
     );
+  }
+}
+
+const TestAppConfig = z.object({
+  serviceName: z.string().trim().min(1),
+  feature: z.object({
+    enabled: z.boolean(),
+    limit: z.number(),
+  }),
+  integrations: z.object({
+    posthog: z.object({
+      projectApiKey: z.string().trim().min(1),
+      captureEndpoint: z.url(),
+      sampling: z.object({
+        enabled: z.boolean(),
+        rate: z.number(),
+      }),
+    }),
+  }),
+  limits: z.object({
+    queue: z.object({
+      maxBatchSize: z.number(),
+      tags: z.array(z.string()),
+    }),
+  }),
+  optionalText: z.string().default("default-text"),
+});
+
+type TestAppConfig = z.output<typeof TestAppConfig>;
+
+const AppConfigRoomBase = withAppConfig(TestAppConfig)(DurableObjectCore);
+
+export class AppConfigTestRoom extends AppConfigRoomBase<Env> {
+  getConfigForTest(): TestAppConfig {
+    return this.config;
+  }
+
+  getConfigReferenceStableForTest(): boolean {
+    return this.config === this.config;
   }
 }
 

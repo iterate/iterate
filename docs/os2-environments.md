@@ -1,6 +1,6 @@
 # os2 Environment Model
 
-An os2 **environment** is a bag of env vars (a Doppler "config") plus some cloud resources (Cloudflare worker, D1 database, DNS records). Preview environments also use Semaphore for slot management.
+An os2 **environment** is a bag of env vars (a Doppler "config") plus some cloud resources (Cloudflare worker, D1 database, DNS records). PR previews also use Semaphore for environment config leases.
 
 ## Domain structure
 
@@ -12,7 +12,7 @@ Every environment serves two roles via two domains:
 | Project subdomains | `<proj>.<zone>` | `<proj>.iterate2.app` | `<proj>.iterate-dev-jonas.app` | `<proj>.iterate-preview-3.app` |
 
 The design principle: **dev must structurally mirror production.** Each environment
-gets one dashboard hostname and one project-hostname base. Preview slots use
+gets one dashboard hostname and one project-hostname base. Numbered previews use
 dedicated zone pairs: `iterate-preview-N.com` for the dashboard and
 `iterate-preview-N.app` for project/MCP hosts.
 
@@ -27,7 +27,16 @@ At deploy time, `alchemy.run.ts` reads AppConfig and derives Cloudflare worker r
 
 ## Cloudflare accounts
 
-All os2 zones (dev, preview, prod) live in account `04b3b57291ef2626c6a8daa9d47065a7`. The API token (`cfut_...` user token) must have:
+os2 reads Cloudflare credentials from the `_shared` Doppler config inherited by
+the active app config. App configs must not define local
+`CLOUDFLARE_ACCOUNT_ID` or `CLOUDFLARE_API_TOKEN` overrides.
+
+The current account split is:
+
+- `_shared/dev`, `_shared/dev_*`, and `_shared/prd` use account `04b3b57291ef2626c6a8daa9d47065a7`
+- `_shared/preview` uses account `cc7f6f461fbe823c199da2b27f9e0ff3`
+
+The API token (`cfut_...` user token) must have:
 
 - Zone : DNS : Edit
 - Zone : Zone : Read
@@ -46,10 +55,9 @@ _shared          ← CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, ALCHEMY_STAGE=
 │   ├── dev_misha
 │   └── dev_rahul
 ├── preview      ← ALCHEMY_LOCAL=false, preview base
-│   ├── preview_1    ← preview slot 1: os2.iterate-preview-1.com / <project>.iterate-preview-1.app
-│   ├── preview_2    ← preview slot 2
+│   ├── preview_2    ← preview environment 2: os2.iterate-preview-2.com / <project>.iterate-preview-2.app
 │   ├── ...
-│   └── preview_10   ← preview slot 10
+│   └── preview_9    ← preview environment 9
 └── prd          ← os.iterate2.com / iterate2.app
 ```
 
@@ -96,58 +104,69 @@ Vite picks a free port automatically (defaults to 5173, increments if taken). Th
 
 ## Preview environments
 
-Preview environments use a semaphore-controlled pool. The inventory is
-`os2-preview-1` through `os2-preview-10`.
+Preview environments use a shared Semaphore-controlled environment config lease inventory. The
+current inventory is `preview-2` through `preview-9`, each with
+`data.dopplerConfig` pointing at `preview_2` through `preview_9`. `preview_1`
+and `preview_10` are not leased because their os2 domain pairs are not fully
+configured in the right Cloudflare account.
 
 ### How it works
 
-1. CI acquires a slot from Semaphore (e.g. `os2-preview-3`)
-2. `derivePreviewEnvironment` maps slot 3 → Doppler config `preview_3`
+1. CI acquires a shared environment config lease from Semaphore (e.g. `preview-3`)
+2. The resource data maps the lease to Doppler config `preview_3`
 3. `preview_3` has `APP_CONFIG_BASE_URL=https://os2.iterate-preview-3.com` and `APP_CONFIG_PROJECT_HOSTNAME_BASES=["iterate-preview-3.app"]`
-4. `doppler run --config preview_3 -- pnpm alchemy:up` deploys the worker with correct routes. `ALCHEMY_STAGE` comes from `_shared` as `${DOPPLER_CONFIG}` and is slugified by the app into Cloudflare names like `os2-preview-3`.
-5. PR body is updated with both `publicUrl` and `projectSubdomainUrl`
-6. On PR close, the slot is released back to Semaphore and the worker is destroyed
+4. `doppler run --project os2 --config preview_3 -- pnpm tsx ./alchemy.run.ts` deploys the worker with correct routes. `ALCHEMY_STAGE` comes from `_shared` as `${DOPPLER_CONFIG}` and is slugified by the app into Cloudflare names like `os2-preview-3`.
+5. PR body is updated with the shared lease and per-app deployment status
+6. On PR close, recorded apps are torn down and the environment config lease is released back to Semaphore
 
 ### Cloudflare zones for previews
 
-Each preview slot N uses two Cloudflare zones:
+Each numbered os2 preview config uses two Cloudflare zones:
 
 - `iterate-preview-N.com` for the dashboard host `os2.iterate-preview-N.com`
 - `iterate-preview-N.app` for project and MCP hosts like `<project>.iterate-preview-N.app`
 
-Both zones must exist in the `04b3` Cloudflare account before the preview slot
-can deploy routes and DNS records.
+Both zones must exist in the preview Cloudflare account configured by
+`_shared/preview` before that config can deploy routes and DNS records.
+
+os2 and events are deployed as one connected preview group when either both are
+affected or os2 is selected. os2's preview config points
+`APP_CONFIG_EVENTS_BASE_URL` at the events deployment for the same numbered
+slot, such as `https://events-preview-3.iterate.com`.
 
 ### Manual preview deploy
 
 The `pnpm preview` CLI (from repo root) manages the full lifecycle. It uses the `os` doppler project for semaphore credentials:
 
 ```bash
-# Check which slots are free
+# Check which environment config leases are free
 doppler run --project os --config prd -- pnpm preview status
 
-# Full lifecycle for a PR (acquire slot, deploy, test, update PR body)
-doppler run --project os --config prd -- pnpm preview sync --app os2
+# Full lifecycle for a PR (acquire lease, deploy affected apps, test, update PR body)
+GITHUB_TOKEN="$(gh auth token)" doppler run --project os --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview sync --pull-request-number 1234
 
 # Or just deploy without tests
-doppler run --project os --config prd -- pnpm preview deploy --app os2
+GITHUB_TOKEN="$(gh auth token)" doppler run --project os --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview deploy --pull-request-number 1234
 
 # Clean up
-doppler run --project os --config prd -- pnpm preview cleanup --app os2
+GITHUB_TOKEN="$(gh auth token)" doppler run --project os --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview cleanup --pull-request-number 1234
 ```
 
-For a quick manual deploy to a specific slot (bypassing semaphore):
+Prefer the repo-root `pnpm preview` CLI so Semaphore owns the environment config
+lease. A direct deploy to a specific `preview_N` config bypasses Semaphore and
+can collide with a PR that owns the same lease; use it only for emergency
+debugging after checking `pnpm preview status`.
 
 ```bash
 cd apps/os2
-doppler run --project os2 --config preview_3 -- pnpm alchemy:up
+doppler run --project os2 --config preview_3 -- pnpm tsx ./alchemy.run.ts
 
 # Hit it
 open https://os2.iterate-preview-3.com         # dashboard
 open https://myproject.iterate-preview-3.app   # project subdomain
 
 # Clean up
-doppler run --project os2 --config preview_3 -- pnpm alchemy:down
+doppler run --project os2 --config preview_3 -- pnpm tsx ./alchemy.run.ts --destroy
 ```
 
 ### Adding a new developer

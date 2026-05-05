@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { parseAppConfig } from "@iterate-com/shared/apps/config";
+import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { WebClient } from "@slack/web-api";
 import { AppConfig } from "~/app.ts";
 import type { CloudflareEnv } from "~/lib/worker-env.d.ts";
@@ -26,7 +26,11 @@ export class SlackApi extends DurableObject<CloudflareEnv> {
 
   constructor(state: DurableObjectState, env: CloudflareEnv) {
     super(state, env);
-    const config = parseAppConfig(AppConfig, env.APP_CONFIG);
+    const config = parseAppConfigFromEnv({
+      configSchema: AppConfig,
+      prefix: "APP_CONFIG_",
+      env,
+    });
     const token = config.slackBotToken?.exposeSecret();
     if (!token) {
       throw new Error("APP_CONFIG_SLACK_BOT_TOKEN is required to use SlackApi");

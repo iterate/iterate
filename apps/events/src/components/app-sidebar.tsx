@@ -9,10 +9,8 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarSeparator,
 } from "@iterate-com/ui/components/sidebar";
 import { SidebarShell } from "@iterate-com/ui/components/sidebar-shell";
-import { SidebarThemeSwitcher } from "@iterate-com/ui/components/sidebar-theme-switcher";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { StreamsSidebar } from "~/components/streams-sidebar.tsx";
 import { getProjectUrl } from "~/lib/project-slug.ts";
@@ -29,13 +27,7 @@ export function AppSidebar({ projectSlug }: { projectSlug: ProjectSlugValue }) {
   return (
     <SidebarShell
       header={<AppSidebarBrand />}
-      footer={
-        <>
-          <AppSidebarProjectSlugFooter projectSlug={projectSlug} />
-          <SidebarSeparator />
-          <SidebarThemeSwitcher />
-        </>
-      }
+      footer={<AppSidebarProjectSlugFooter projectSlug={projectSlug} />}
     >
       <AppSidebarNav />
       <StreamsSidebar />

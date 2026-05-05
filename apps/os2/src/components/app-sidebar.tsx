@@ -100,6 +100,7 @@ function AppSidebarNav({ organizationSlug }: AppSidebarProps) {
         <ProjectSidebarGroup
           key={project.id}
           organizationSlug={organizationSlug}
+          customHostname={project.customHostname}
           projectSlug={project.slug}
           projectHostnameBases={config.projectHostnameBases}
         />
@@ -109,16 +110,18 @@ function AppSidebarNav({ organizationSlug }: AppSidebarProps) {
 }
 
 function ProjectSidebarGroup({
+  customHostname,
   organizationSlug,
   projectHostnameBases,
   projectSlug,
 }: {
+  customHostname: string | null;
   organizationSlug: string;
   projectHostnameBases: readonly string[];
   projectSlug: string;
 }) {
   const matchRoute = useMatchRoute();
-  const mcpUrl = buildProjectMcpUrl({ projectSlug, projectHostnameBases });
+  const mcpUrl = buildProjectMcpUrl({ projectSlug, customHostname, projectHostnameBases });
 
   return (
     <SidebarGroup>

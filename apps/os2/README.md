@@ -146,13 +146,13 @@ Required Clerk setup:
    hides Clerk Personal Account mode in the sidebar with `hidePersonal`.
 3. Copy the Clerk publishable key, secret key, and JWT public key into OS2
    runtime config.
-4. Create/update a Clerk OAuth Application for OS2 MCP/CLI clients. Keep token
-   format as JWT, enable public/PKCE clients, require consent, add the loopback
-   redirect URI for CLI auth, and enable Dynamic Client Registration for MCP
-   clients that self-register.
-5. The MCP OAuth application only needs Clerk-supported data scopes such as
-   `openid`, `email`, and `profile`; OS2 authorization remains org/project
-   scoped in app code.
+4. Enable Dynamic Client Registration and OAuth JWT access tokens for MCP
+   clients. Do not require a static client ID in OS2 instructions; Claude and
+   other MCP clients should self-register through Clerk.
+5. The MCP resource metadata should advertise only Clerk-supported resource
+   data scopes such as `email` and `profile`. The Clerk OAuth application still
+   allows `openid` for clients that request an OIDC flow; OS2 authorization
+   remains org/project scoped in app code.
 6. Google social login is enabled for dev/preview apps through Clerk's shared
    development credentials. Production Clerk instances require custom Google
    OAuth credentials and the exact Clerk Authorized Redirect URI configured in
@@ -162,11 +162,11 @@ Required Clerk setup:
 `/.well-known/oauth-protected-resource` and
 `/.well-known/oauth-protected-resource/mcp`, pointing clients at Clerk as the
 authorization server. The Worker verifies Clerk-issued OAuth bearer tokens with
-Clerk's SDK using `acceptsToken: "oauth_token"`. If the token is JWT-formatted,
-OS2 also reads Clerk org claims with the configured JWT public key before
-passing identity props to the `IterateMcpServer` Durable Object. Opaque OAuth
-tokens are valid Clerk OAuth tokens but currently fail OS2's MCP org check
-unless the token can still be mapped to an active Clerk Organization.
+Clerk's SDK using `acceptsToken: "oauth_token"`. MCP OAuth access tokens are
+not session tokens, so OS2 authorizes them by resolving the project hostname to
+its owning Clerk Organization and checking the token user has membership in that
+Organization before passing identity props to the `IterateMcpServer` Durable
+Object.
 
 ## Routes
 
@@ -205,7 +205,7 @@ After the Clerk OAuth Application is configured with Dynamic Client
 Registration, add the OS2 remote MCP endpoint to the project:
 
 ```bash
-claude mcp add --transport http os2 https://os.iterate-dev-jonas.com/mcp --scope project
+claude mcp add --transport http <project-slug> https://<project-slug>.iterate-dev-jonas.app/mcp --scope project
 ```
 
 Then in any conversation: "Use run_code to compute the first 10 fibonacci
@@ -229,9 +229,9 @@ curl 'https://os.iterate-dev-jonas.com/api/codemode/execute' \
 ## Dev
 
 ```bash
-doppler run --config dev -- pnpm alchemy:up    # dev deploy
-doppler run --config prd -- pnpm alchemy:up    # production-style deploy
-doppler run --config dev -- pnpm alchemy:down  # destroy the dev stack
+doppler run --project os2 --config dev -- pnpm exec tsx ./alchemy.run.ts
+doppler run --project os2 --config prd -- pnpm exec tsx ./alchemy.run.ts
+doppler run --project os2 --config dev -- pnpm exec tsx ./alchemy.run.ts --destroy
 pnpm dev            # Cloudflare local dev
 pnpm cf:deploy      # Deploy to Cloudflare
 pnpm sqlfu:generate # Regenerate typed SQL wrappers and bundled migrations
@@ -256,9 +256,7 @@ schema's camelCase shape. For OS:
 - `APP_CONFIG_CLERK__PUBLISHABLE_KEY=pk_test_...` -> `clerk.publishableKey`
 - `APP_CONFIG_CLERK__SECRET_KEY=sk_test_...` -> `clerk.secretKey`
 - `APP_CONFIG_CLERK__JWT_KEY='-----BEGIN PUBLIC KEY-----...'` -> `clerk.jwtKey`
-- `APP_CONFIG_CLERK__OAUTH_CLIENT_ID=...` -> `clerk.oauthClientId`
-- `APP_CONFIG_CLERK__OAUTH_CLIENT_SECRET=...` -> `clerk.oauthClientSecret`
-- `APP_CONFIG_CLERK__MCP_OAUTH_SCOPES=["openid","email","profile"]` ->
+- `APP_CONFIG_CLERK__MCP_OAUTH_SCOPES=["email","profile"]` ->
   `clerk.mcpOauthScopes`
 - `APP_CONFIG_PROJECT_HOSTNAME_BASES=["iterate2.app"]` -> `projectHostnameBases`
 - `APP_CONFIG_TYPE_ID_PREFIX=os` -> `typeIdPrefix`
@@ -275,9 +273,7 @@ OS:
   "clerk": {
     "publishableKey": "pk_test_...",
     "secretKey": "sk_test_...",
-    "jwtKey": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----",
-    "oauthClientId": "...",
-    "oauthClientSecret": "..."
+    "jwtKey": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
   },
   "typeIdPrefix": "os",
   "logs": {

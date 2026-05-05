@@ -9,7 +9,12 @@ import {
   processEventsWithViewReducer,
   rawPrettyEventsStreamViewReducer,
 } from "@iterate-com/ui/components/events/feed-processors";
-import { EventsStreamView } from "@iterate-com/ui/components/events/stream-feed";
+import { EventsStreamComposer } from "@iterate-com/ui/components/events/stream-composer";
+import {
+  EventsStreamView,
+  type EventsStreamElementType,
+} from "@iterate-com/ui/components/events/stream-feed";
+import { EventsStreamLayoutMessageInput } from "@iterate-com/ui/components/events/stream-layout";
 import { Separator } from "@iterate-com/ui/components/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { AppSidebar } from "~/components/app-sidebar.tsx";
@@ -76,9 +81,12 @@ export const Route = createFileRoute("/")({
   component: PresetsPage,
 });
 
+type AgentRouteSearch = ReturnType<typeof Route.useSearch>;
+
 function PresetsPage() {
   const { sidebarDefaultOpen, appContext } = Route.useLoaderData();
-  const { streamPath: selectedStreamPath } = Route.useSearch();
+  const { hiddenElements, streamPath: selectedStreamPath } = Route.useSearch();
+  const navigate = Route.useNavigate();
 
   return (
     <SidebarProvider
@@ -86,7 +94,7 @@ function PresetsPage() {
       className="h-svh"
       style={{ "--sidebar-width": "22rem" } as CSSProperties}
     >
-      <AppSidebar selectedStreamPath={selectedStreamPath} />
+      <AppSidebar selectedStreamPath={selectedStreamPath} hiddenElementTypes={hiddenElements} />
       <SidebarInset className="min-w-0 overflow-hidden">
         <header className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
           <SidebarTrigger className="-ml-1" />
@@ -114,9 +122,20 @@ function PresetsPage() {
             </div>
           ) : (
             <SelectedAgentStreamView
+              key={selectedStreamPath}
               streamPath={selectedStreamPath}
               eventsBaseUrl={appContext.eventsBaseUrl}
               eventsProjectSlug={appContext.eventsProjectSlug}
+              hiddenElementTypes={hiddenElements}
+              onHiddenElementTypesChange={(nextHiddenElements) => {
+                void navigate({
+                  search: (previous: AgentRouteSearch) => ({
+                    ...previous,
+                    hiddenElements: nextHiddenElements,
+                  }),
+                  replace: true,
+                });
+              }}
             />
           )}
         </main>
@@ -133,11 +152,18 @@ function SelectedAgentStreamView({
   streamPath,
   eventsBaseUrl,
   eventsProjectSlug,
+  hiddenElementTypes,
+  onHiddenElementTypesChange,
 }: {
   streamPath: StreamPath;
   eventsBaseUrl: string;
   eventsProjectSlug: string;
+  hiddenElementTypes: readonly EventsStreamElementType[];
+  onHiddenElementTypesChange: (types: EventsStreamElementType[]) => void;
 }) {
+  const queryClient = useQueryClient();
+  const [composerText, setComposerText] = useState("");
+  const [openEventOffset, setOpenEventOffset] = useState<number | undefined>();
   const eventsQuery = useQuery({
     queryKey: ["agentStreamHistory", eventsBaseUrl, eventsProjectSlug, streamPath],
     queryFn: () =>
@@ -162,6 +188,33 @@ function SelectedAgentStreamView({
     projectSlug: eventsProjectSlug,
     streamPath,
   });
+  const appendMessage = useMutation({
+    mutationFn: async (content: string) => {
+      const client = createEventsOrpcClient({
+        baseUrl: eventsBaseUrl,
+        projectSlug: eventsProjectSlug,
+      });
+
+      await client.append({
+        path: streamPath,
+        event: {
+          type: "events.iterate.com/webchat/user-message-added",
+          payload: { content },
+        },
+      });
+    },
+    onSuccess: async () => {
+      setComposerText("");
+      await queryClient.invalidateQueries({
+        queryKey: ["agentStreamHistory", eventsBaseUrl, eventsProjectSlug, streamPath],
+      });
+    },
+  });
+  const submitComposer = () => {
+    const content = composerText.trim();
+    if (content.length === 0) return;
+    appendMessage.mutate(content);
+  };
 
   return (
     <section className="flex min-h-0 w-full flex-1 flex-col gap-3">
@@ -175,7 +228,7 @@ function SelectedAgentStreamView({
         <div className="flex items-center gap-2">
           <Link
             to="/"
-            search={{ streamPath: undefined }}
+            search={{ streamPath: undefined, hiddenElements: hiddenElementTypes }}
             className="inline-flex items-center rounded-md border border-input px-3 py-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
           >
             Back to presets
@@ -191,13 +244,28 @@ function SelectedAgentStreamView({
         </div>
       </div>
 
-      <div className="min-h-[420px] flex-1 overflow-hidden rounded-lg border bg-background">
+      <div className="flex min-h-[420px] flex-1 flex-col overflow-hidden rounded-lg border bg-background">
         <EventsStreamView
+          className="min-h-0 flex-1"
           viewState={viewState}
           emptyLabel="No events on this agent stream yet."
           isPending={eventsQuery.isPending}
           errorLabel={eventsQuery.error ? formatError(eventsQuery.error) : undefined}
+          openEventOffset={openEventOffset}
+          onOpenEventOffsetChange={setOpenEventOffset}
+          getEventTypeHref={(eventType) => buildEventsEventTypeHref({ eventsBaseUrl, eventType })}
+          hiddenElementTypes={hiddenElementTypes}
+          onHiddenElementTypesChange={onHiddenElementTypesChange}
         />
+        <EventsStreamLayoutMessageInput>
+          <EventsStreamComposer
+            value={composerText}
+            onValueChange={setComposerText}
+            onSubmit={submitComposer}
+            isSubmitting={appendMessage.isPending}
+            placeholder="Message this agent"
+          />
+        </EventsStreamLayoutMessageInput>
       </div>
     </section>
   );
@@ -732,6 +800,28 @@ function parseJsonObject(text: string): ParseResult<Record<string, unknown>> {
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function buildEventsEventTypeHref(args: { eventsBaseUrl: string; eventType: string }) {
+  const eventTypePrefix = "events.iterate.com/";
+  if (!args.eventType.startsWith(eventTypePrefix)) {
+    return undefined;
+  }
+
+  const [processorSlug, ...eventSlugParts] = args.eventType
+    .slice(eventTypePrefix.length)
+    .split("/");
+  if (processorSlug == null || eventSlugParts.length === 0) {
+    return undefined;
+  }
+
+  const url = new URL(args.eventsBaseUrl);
+  url.pathname = `/${encodeURIComponent(processorSlug)}/${eventSlugParts
+    .map(encodeURIComponent)
+    .join("/")}`;
+  url.search = "";
+  url.hash = "";
+  return url.toString();
 }
 
 function parseEventsArray(text: string): ParseResult<ContractEvent[]> {

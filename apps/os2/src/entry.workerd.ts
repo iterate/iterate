@@ -3,7 +3,7 @@ import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { withEvlog } from "@iterate-com/shared/apps/logging/with-evlog";
 import { NitroWebSocketResponse } from "@iterate-com/shared/nitro-ws-response";
 import handler from "@tanstack/react-start/server-entry";
-import { createClerkClient, verifyToken } from "@clerk/backend";
+import { createClerkClient, verifyToken, type ClerkClient } from "@clerk/backend";
 import { generateProtectedResourceMetadata } from "@clerk/mcp-tools/server";
 import { McpAgent } from "agents/mcp";
 import crossws from "crossws/adapters/cloudflare";
@@ -11,7 +11,10 @@ import { createD1Client } from "sqlfu";
 import manifest, { AppConfig } from "~/app.ts";
 import type { AppContext } from "~/context.ts";
 import type { IterateMcpServerProps } from "~/durable-objects/iterate-mcp-server.ts";
-import { getProjectBySlug } from "~/db/queries/.generated/index.ts";
+import {
+  getProjectByCustomHostnameAnyOrganization,
+  listProjectsBySlug,
+} from "~/db/queries/.generated/index.ts";
 import {
   normalizeRequestHostname,
   resolveProjectSlugFromHostname,
@@ -49,8 +52,9 @@ export default {
         const db = createD1Client(env.DB);
         const projectHostnameBases = parseProjectHostnameBases(env.PROJECT_HOSTNAME_BASES);
         if (isMcpProtectedResourceMetadataRequest(url)) {
-          return mcpProtectedResourceMetadataResponse({
+          return await mcpProtectedResourceMetadataResponse({
             appConfig: config,
+            db,
             projectHostnameBases,
             request,
           });
@@ -71,12 +75,16 @@ export default {
             return new Response(null, { headers: mcpCorsHeaders });
           }
 
-          const projectSlug = resolveProjectSlugForProjectHostname({
+          const project = await resolveProjectForMcpEndpoint({
             appConfig: config,
+            db,
             hostname: url.hostname,
             projectHostnameBases,
           });
-          if (!projectSlug) {
+          if (project instanceof Response) {
+            return project;
+          }
+          if (!project) {
             return new Response("MCP is only available at <project>.<project-host-base>/mcp.", {
               status: 404,
               headers: mcpCorsHeaders,
@@ -84,28 +92,29 @@ export default {
           }
 
           if (isBrowserMcpInstructionsRequest(request)) {
-            return mcpInstructionsPageResponse({ projectSlug, url });
+            return mcpInstructionsPageResponse({ projectSlug: project.slug, url });
           }
 
           const mcpAuth = await authenticateMcpRequest(request, config);
           if (mcpAuth instanceof Response) {
             return mcpAuth;
           }
-
-          const project = await getProjectBySlug(db, {
-            clerkOrgId: mcpAuth.orgId,
-            slug: projectSlug,
+          const membership = await requireMcpProjectMembership({
+            appConfig: config,
+            orgId: project.clerk_org_id,
+            userId: mcpAuth.userId,
           });
-          if (!project) {
-            return new Response("Project not found for MCP endpoint.", {
-              status: 404,
-              headers: mcpCorsHeaders,
-            });
+          if (membership instanceof Response) {
+            return membership;
           }
 
           const ctxWithProps = cfCtx as ExecutionContext & { props?: IterateMcpServerProps };
           ctxWithProps.props = {
             ...mcpAuth,
+            orgId: project.clerk_org_id,
+            orgPermissions: membership.permissions,
+            orgRole: membership.role,
+            orgSlug: membership.orgSlug,
             projectId: project.id,
             projectSlug: project.slug,
           };
@@ -189,11 +198,7 @@ async function redirectAuthenticatedProjectHostRoot(input: {
  */
 async function tryAuthenticateSessionRequest(request: Request, appConfig: AppConfig) {
   try {
-    const clerk = createClerkClient({
-      secretKey: appConfig.clerk.secretKey.exposeSecret(),
-      publishableKey: appConfig.clerk.publishableKey,
-      jwtKey: appConfig.clerk.jwtKey.exposeSecret(),
-    });
+    const clerk = createClerkClientForApp(appConfig);
     const requestState = await clerk.authenticateRequest(request);
     const sessionAuth = requestState.toAuth() as {
       isAuthenticated: boolean;
@@ -246,18 +251,23 @@ function isMcpProtectedResourceMetadataRequest(url: URL) {
   );
 }
 
-function mcpProtectedResourceMetadataResponse(input: {
+async function mcpProtectedResourceMetadataResponse(input: {
   appConfig: AppConfig;
+  db: ReturnType<typeof createD1Client>;
   projectHostnameBases: readonly string[];
   request: Request;
 }) {
   const url = new URL(input.request.url);
-  const projectSlug = resolveProjectSlugForProjectHostname({
+  const project = await resolveProjectForMcpEndpoint({
     appConfig: input.appConfig,
+    db: input.db,
     hostname: url.hostname,
     projectHostnameBases: input.projectHostnameBases,
   });
-  if (!projectSlug) {
+  if (project instanceof Response) {
+    return project;
+  }
+  if (!project) {
     return new Response("MCP OAuth metadata is only available on project hostnames.", {
       status: 404,
       headers: mcpCorsHeaders,
@@ -281,49 +291,71 @@ function mcpProtectedResourceMetadataResponse(input: {
   return Response.json(metadata, { headers: mcpCorsHeaders });
 }
 
+async function resolveProjectForMcpEndpoint(input: {
+  appConfig: AppConfig;
+  db: ReturnType<typeof createD1Client>;
+  hostname: string;
+  projectHostnameBases: readonly string[];
+}) {
+  const projectSlug = resolveProjectSlugForProjectHostname({
+    appConfig: input.appConfig,
+    hostname: input.hostname,
+    projectHostnameBases: input.projectHostnameBases,
+  });
+
+  if (!projectSlug) {
+    return await getProjectByCustomHostnameAnyOrganization(input.db, {
+      customHostname: normalizeRequestHostname(input.hostname),
+    });
+  }
+
+  const projects = await listProjectsBySlug(input.db, { slug: projectSlug });
+  const project = projects[0];
+  if (!project) {
+    return null;
+  }
+  if (projects.length > 1) {
+    return new Response("MCP OAuth metadata is only available on project hostnames.", {
+      status: 409,
+      headers: mcpCorsHeaders,
+    });
+  }
+
+  return project;
+}
+
 async function authenticateMcpRequest(request: Request, appConfig: AppConfig) {
   const token = readBearerToken(request);
   if (!token) {
-    return unauthorizedMcpResponse(request, "Missing bearer token");
+    return unauthorizedMcpResponse(request, appConfig, "Missing bearer token");
   }
 
   try {
-    const clerk = createClerkClient({
-      secretKey: appConfig.clerk.secretKey.exposeSecret(),
-      publishableKey: appConfig.clerk.publishableKey,
-      jwtKey: appConfig.clerk.jwtKey.exposeSecret(),
-    });
+    const clerk = createClerkClientForApp(appConfig);
     const requestState = await clerk.authenticateRequest(request, {
       acceptsToken: "oauth_token",
     });
     const oauthAuth = requestState.toAuth();
 
     if (!oauthAuth.isAuthenticated) {
-      return unauthorizedMcpResponse(request, "Invalid bearer token");
+      return unauthorizedMcpResponse(request, appConfig, "Invalid bearer token");
     }
 
     // `authenticateRequest({ acceptsToken: "oauth_token" })` is the Clerk-owned
-    // validation path for MCP bearer tokens. We read JWT claims only after that
-    // succeeds because OS2 still needs Clerk's org claim shape (`o.id`, `o.rol`,
-    // `o.per`) for local authorization and lifecycle event attribution.
+    // validation path for MCP bearer tokens. OAuth access tokens are not session
+    // tokens and do not always include an active-organization claim, so project
+    // authorization is checked separately against the project-owning Clerk
+    // Organization before dispatching to the MCP Durable Object.
     const claims = await tryReadJwtClaims(token, appConfig);
     const userId = oauthAuth.userId;
-    const orgId = readOrganizationIdClaim(claims);
 
     if (!userId) {
-      return unauthorizedMcpResponse(request, "MCP token is missing Clerk user subject");
-    }
-
-    if (!orgId) {
-      return new Response("MCP token is missing active Clerk Organization", {
-        status: 403,
-        headers: mcpCorsHeaders,
-      });
+      return unauthorizedMcpResponse(request, appConfig, "MCP token is missing Clerk user subject");
     }
 
     return {
       userId,
-      orgId,
+      orgId: readOrganizationIdClaim(claims),
       orgRole: readOrganizationRoleClaim(claims),
       orgSlug: readOrganizationSlugClaim(claims),
       orgPermissions: readOrganizationPermissionsClaim(claims),
@@ -333,8 +365,49 @@ async function authenticateMcpRequest(request: Request, appConfig: AppConfig) {
       projectSlug: null,
     } satisfies IterateMcpServerProps;
   } catch {
-    return unauthorizedMcpResponse(request, "Invalid bearer token");
+    return unauthorizedMcpResponse(request, appConfig, "Invalid bearer token");
   }
+}
+
+async function requireMcpProjectMembership(input: {
+  appConfig: AppConfig;
+  orgId: string;
+  userId: string;
+}) {
+  const clerk = createClerkClientForApp(input.appConfig);
+  try {
+    const memberships = await clerk.organizations.getOrganizationMembershipList({
+      organizationId: input.orgId,
+      userId: [input.userId],
+      limit: 1,
+    });
+    const membership = memberships.data[0];
+    if (!membership) {
+      return new Response("MCP user is not a member of the project organization", {
+        status: 403,
+        headers: mcpCorsHeaders,
+      });
+    }
+
+    return {
+      orgSlug: membership.organization.slug ?? null,
+      permissions: membership.permissions,
+      role: membership.role,
+    };
+  } catch {
+    return new Response("Unable to verify MCP project organization membership", {
+      status: 403,
+      headers: mcpCorsHeaders,
+    });
+  }
+}
+
+function createClerkClientForApp(appConfig: AppConfig): ClerkClient {
+  return createClerkClient({
+    secretKey: appConfig.clerk.secretKey.exposeSecret(),
+    publishableKey: appConfig.clerk.publishableKey,
+    jwtKey: appConfig.clerk.jwtKey.exposeSecret(),
+  });
 }
 
 async function tryReadJwtClaims(token: string, appConfig: AppConfig) {
@@ -353,13 +426,14 @@ function readBearerToken(request: Request) {
   return match?.[1]?.trim() || null;
 }
 
-function unauthorizedMcpResponse(request: Request, message: string) {
+function unauthorizedMcpResponse(request: Request, appConfig: AppConfig, message: string) {
   const metadataUrl = new URL("/.well-known/oauth-protected-resource/mcp", request.url);
+  const scopes = appConfig.clerk.mcpOauthScopes.join(" ");
   return new Response(message, {
     status: 401,
     headers: {
       ...mcpCorsHeaders,
-      "WWW-Authenticate": `Bearer resource_metadata="${metadataUrl.toString()}"`,
+      "WWW-Authenticate": `Bearer resource_metadata="${metadataUrl.toString()}", scope="${scopes}"`,
     },
   });
 }

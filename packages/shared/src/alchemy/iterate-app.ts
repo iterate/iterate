@@ -90,7 +90,9 @@ export async function IterateApp<B extends Bindings>(
     compatibilityFlags,
     bindings: {
       ...props.bindings,
-      APP_CONFIG: alchemy.secret(JSON.stringify(rawAppConfig, null, 2)),
+      APP_CONFIG: app.local
+        ? JSON.stringify(rawAppConfig, null, 2)
+        : alchemy.secret(JSON.stringify(rawAppConfig, null, 2)),
     },
     wrangler: { main: "./src/entry.workerd.ts" },
     // Full sampling with persistent logs/traces for all Iterate workers.
@@ -175,7 +177,7 @@ export async function IterateApp<B extends Bindings>(
       const { zoneId } = await findZoneForHostname(cloudflareApi, hostname);
       routeZoneIds.set(hostname, zoneId);
 
-      await retryCloudflareRouteCreation(() =>
+      await retryCloudflareWorkerRouteCreation(() =>
         Route(routeResourceIdForHostname(hostname), {
           pattern: `${hostname}/*`,
           script: worker,
@@ -328,8 +330,9 @@ function withSequentialCloudflareAssetPreupload(input: { command: string; worker
  * Alchemy's `TanStackStart` returns after the upload step, but in CI we have
  * seen the immediately-following Routes API call fail with Cloudflare error
  * 10019 ("Worker does not exist"). Polling the first-party script-read endpoint
- * keeps the dependency inside `IterateApp` instead of requiring each preview
- * job to retry the whole deployment command.
+ * catches the ordinary upload lag. Requiring a second successful read after a
+ * short pause also covers the awkward edge where the Scripts API can see the
+ * Worker but the Routes API has not accepted it yet.
  *
  * Cloudflare routes docs:
  * https://developers.cloudflare.com/workers/configuration/routing/routes/
@@ -342,6 +345,7 @@ async function waitForCloudflareWorkerScript(params: {
   workerName: string;
 }) {
   const deadline = Date.now() + 120_000;
+  let visibleChecks = 0;
   let lastStatus = 0;
   let lastBody = "";
 
@@ -350,7 +354,12 @@ async function waitForCloudflareWorkerScript(params: {
       `/accounts/${params.cloudflareApi.accountId}/workers/scripts/${encodeURIComponent(params.workerName)}`,
     );
 
-    if (response.ok) return;
+    if (response.ok) {
+      visibleChecks += 1;
+      if (visibleChecks >= 2) return;
+      await sleep(5_000);
+      continue;
+    }
 
     lastStatus = response.status;
     lastBody = await response.text();
@@ -369,13 +378,14 @@ async function waitForCloudflareWorkerScript(params: {
   );
 }
 
-async function retryCloudflareRouteCreation<T>(createRoute: () => Promise<T>) {
-  const maxAttempts = 6;
-  for (let attempt = 1; ; attempt += 1) {
+async function retryCloudflareWorkerRouteCreation(createRoute: () => Promise<unknown>) {
+  const maxAttempts = 12;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      return await createRoute();
+      await createRoute();
+      return;
     } catch (error) {
-      if (attempt >= maxAttempts || !isCloudflareRouteWorkerMissingError(error)) {
+      if (attempt === maxAttempts || !isCloudflareWorkerRouteMissingError(error)) {
         throw error;
       }
 
@@ -384,23 +394,15 @@ async function retryCloudflareRouteCreation<T>(createRoute: () => Promise<T>) {
   }
 }
 
-function isCloudflareRouteWorkerMissingError(error: unknown) {
+function isCloudflareWorkerRouteMissingError(error: unknown) {
   const maybeError = error as {
     errorData?: unknown;
     message?: unknown;
     status?: unknown;
   };
   const details = `${String(maybeError.message ?? "")}\n${JSON.stringify(maybeError.errorData ?? "")}`;
-  /**
-   * The Workers Scripts read API can return the script before the Routes API's
-   * backing lookup is caught up. In that small window Cloudflare returns 10019
-   * even though the upload has completed. Retrying only this exact condition
-   * keeps normal route/config errors loud while absorbing the propagation race.
-   */
-  return (
-    maybeError.status === 400 &&
-    details.includes("Cannot configure a route for a Worker which does not exist")
-  );
+
+  return details.includes("10019") && details.includes("Worker which does not exist");
 }
 
 async function sleep(ms: number) {

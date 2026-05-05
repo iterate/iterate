@@ -47,13 +47,16 @@ function projectHostnameFor(baseUrl: URL, projectBaseUrlOverride: URL | null) {
   return `demo.${projectHostnameBase}`;
 }
 
+function hasSeededProjectHost(projectBaseUrlOverride: URL | null) {
+  return projectBaseUrlOverride !== null;
+}
+
 const baseUrl = requireBaseUrl();
 const projectBaseUrlOverride = readProjectBaseUrlOverride();
 
 // This smoke test intentionally avoids authenticated application procedures.
 // Preview CI has no stable seeded Clerk user/project, so it proves the deployed
-// edge contract that must work before browser-led auth tests can run: health,
-// Clerk protection, and project-host MCP OAuth discovery.
+// edge contract that must work before browser-led auth tests can run.
 await expectStatus({
   url: new URL("/api/__internal/health", baseUrl),
   status: 200,
@@ -75,6 +78,16 @@ await expectStatus({
 
 const projectOrigin = `${projectBaseUrlOverride?.protocol ?? baseUrl.protocol}//${projectHostnameFor(baseUrl, projectBaseUrlOverride)}`;
 const projectMcpUrl = new URL("/mcp", projectOrigin);
+
+if (!hasSeededProjectHost(projectBaseUrlOverride)) {
+  await expectStatus({
+    url: projectMcpUrl,
+    status: 404,
+  });
+  console.log(`OS2 preview smoke passed for ${baseUrl.toString()}`);
+  process.exit(0);
+}
+
 const projectMcpResponse = await expectStatus({
   url: projectMcpUrl,
   status: 401,
