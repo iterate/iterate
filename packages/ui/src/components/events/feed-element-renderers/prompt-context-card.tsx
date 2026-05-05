@@ -24,6 +24,7 @@ export function PromptContextCard({ element }: { element: EventsStreamPromptCont
   const sourceLabel = element.props.source == null ? null : `from ${element.props.source}`;
   const triggerLabel = formatTriggerLlmRequest(element.props.triggerLlmRequest);
   const triggerDescription = describeTriggerLlmRequest(element.props.triggerLlmRequest);
+  const canTriggerLlmRequest = element.props.triggerLlmRequest.behaviour !== "dont-trigger-request";
 
   return (
     <Message from="user" className="max-w-3xl">
@@ -38,7 +39,12 @@ export function PromptContextCard({ element }: { element: EventsStreamPromptCont
             <TooltipTrigger render={<span className="inline-flex" />}>
               <Badge
                 variant="outline"
-                className="border-border/60 bg-muted/20 font-mono text-muted-foreground/75 shadow-none"
+                className={cn(
+                  "font-mono shadow-none",
+                  canTriggerLlmRequest
+                    ? "border-orange-300 bg-orange-50 text-orange-800 dark:border-orange-900/70 dark:bg-orange-950/40 dark:text-orange-300"
+                    : "border-border/60 bg-muted/20 text-muted-foreground/75",
+                )}
               >
                 triggerLlmRequest: {triggerLabel}
               </Badge>
@@ -104,7 +110,7 @@ function describeTriggerLlmRequest(
 ) {
   switch (trigger.behaviour) {
     case "auto":
-      return "Uses the agent processor default: this input interrupts any current request and schedules a fresh LLM request.";
+      return "auto means the agent processor resolves this to interrupt-current-request: it cancels any current LLM request and schedules a fresh one.";
     case "dont-trigger-request":
       return "Adds context for future LLM requests, but does not schedule a request by itself.";
     case "interrupt-current-request":

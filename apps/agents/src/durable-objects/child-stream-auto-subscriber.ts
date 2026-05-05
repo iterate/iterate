@@ -15,8 +15,11 @@ import {
   AGENT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
   buildAgentStreamProcessorRunnerWebSocketCallbackUrl,
   buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl,
+  buildOpenAiWsStreamProcessorRunnerWebSocketCallbackUrl,
   buildWebchatStreamProcessorRunnerWebSocketCallbackUrl,
+  CLOUDFLARE_AI_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
   CODEMODE_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
+  OPENAI_WS_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
   streamPathToAgentInstance,
   WEBCHAT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
 } from "~/lib/iterate-agent-addressing.ts";
@@ -137,6 +140,8 @@ export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
     const childPath = childCreated.data.payload.childPath;
     const projectSlug = ProjectSlug.parse(appConfig.eventsProjectSlug);
     const runnerInstance = streamPathToAgentInstance(childPath);
+    const matched = this.#lookupDefaultsForChildPath(childPath);
+    const llmProvider = inferLlmProviderFromDefaultEvents(matched?.events ?? []);
     const cloudflareAiCallbackUrl = new URL(publicBaseUrl);
     if (cloudflareAiCallbackUrl.hostname === "localhost") {
       cloudflareAiCallbackUrl.hostname = "127.0.0.1";
@@ -173,8 +178,18 @@ export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
         }),
       },
       {
-        slug: "cloudflare-ai-stream-processor-runner",
-        websocketUrl: cloudflareAiCallbackUrl.toString(),
+        slug:
+          llmProvider === "openai-ws"
+            ? OPENAI_WS_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG
+            : CLOUDFLARE_AI_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
+        websocketUrl:
+          llmProvider === "openai-ws"
+            ? buildOpenAiWsStreamProcessorRunnerWebSocketCallbackUrl({
+                publicOrigin: publicBaseUrl,
+                runnerInstance,
+                streamPath: childPath,
+              })
+            : cloudflareAiCallbackUrl.toString(),
       },
       {
         slug: CODEMODE_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
@@ -232,7 +247,6 @@ export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
       discoveredAt: Date.now(),
     });
 
-    const matched = this.#lookupDefaultsForChildPath(childPath);
     if (matched == null) {
       log("onMessage.noDefaults", { childPath });
       return;
@@ -457,6 +471,14 @@ function stringifyError(err: unknown): string {
   } catch {
     return String(err);
   }
+}
+
+function inferLlmProviderFromDefaultEvents(
+  events: readonly EventInput[],
+): "cloudflare-ai" | "openai-ws" {
+  return events.some((event) => event.type === "events.iterate.com/openai-ws/config-updated")
+    ? "openai-ws"
+    : "cloudflare-ai";
 }
 
 function fetchCallableFromWebSocketUrl(websocketUrl: string) {

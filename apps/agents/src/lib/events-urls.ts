@@ -141,6 +141,17 @@ export function buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl(args: {
   });
 }
 
+export function buildOpenAiWsStreamProcessorRunnerWebSocketCallbackUrl(args: {
+  publicOrigin: string;
+  runnerInstance: string;
+  streamPath: StreamPath;
+}): string {
+  return buildStreamProcessorRunnerWebSocketCallbackUrl({
+    ...args,
+    runnerSlug: "openai-ws-stream-processor-runner",
+  });
+}
+
 export function buildWebchatStreamProcessorRunnerWebSocketCallbackUrl(args: {
   publicOrigin: string;
   runnerInstance: string;
