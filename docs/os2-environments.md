@@ -27,7 +27,16 @@ At deploy time, `alchemy.run.ts` reads AppConfig and derives Cloudflare worker r
 
 ## Cloudflare accounts
 
-All os2 zones (dev, preview, prod) live in account `04b3b57291ef2626c6a8daa9d47065a7`. The API token (`cfut_...` user token) must have:
+os2 reads Cloudflare credentials from the `_shared` Doppler config inherited by
+the active app config. App configs must not define local
+`CLOUDFLARE_ACCOUNT_ID` or `CLOUDFLARE_API_TOKEN` overrides.
+
+The current account split is:
+
+- `_shared/dev`, `_shared/dev_*`, and `_shared/prd` use account `04b3b57291ef2626c6a8daa9d47065a7`
+- `_shared/preview` uses account `cc7f6f461fbe823c199da2b27f9e0ff3`
+
+The API token (`cfut_...` user token) must have:
 
 - Zone : DNS : Edit
 - Zone : Zone : Read
@@ -117,8 +126,8 @@ Each numbered os2 preview config uses two Cloudflare zones:
 - `iterate-preview-N.com` for the dashboard host `os2.iterate-preview-N.com`
 - `iterate-preview-N.app` for project and MCP hosts like `<project>.iterate-preview-N.app`
 
-Both zones must exist in the `04b3` Cloudflare account before that config can
-deploy routes and DNS records.
+Both zones must exist in the preview Cloudflare account configured by
+`_shared/preview` before that config can deploy routes and DNS records.
 
 ### Manual preview deploy
 

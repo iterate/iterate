@@ -99,6 +99,10 @@ Do not paste the token into scripts or docs.
   configs exist for the preview-managed apps and the app-specific Cloudflare
   prerequisites are in the right accounts. For os2, that includes the
   `iterate-preview-N.com` / `iterate-preview-N.app` zone pair.
+- Preview app configs inherit Cloudflare credentials from `_shared/preview`.
+  Do not set app-local `CLOUDFLARE_ACCOUNT_ID` or `CLOUDFLARE_API_TOKEN`
+  overrides; the preview domain pairs live in account
+  `cc7f6f461fbe823c199da2b27f9e0ff3`.
 - CI workflows invoke one shared preview lifecycle. The lifecycle code, not the
   workflow matrix, decides which apps deploy.
 - Preview deploys do not override `ALCHEMY_STAGE`.
