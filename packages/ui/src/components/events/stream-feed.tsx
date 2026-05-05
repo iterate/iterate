@@ -737,10 +737,6 @@ function FeedEvent({
   );
 }
 
-function formatTime(timestamp: number) {
-  return new Date(timestamp).toLocaleTimeString();
-}
-
 function formatElapsedTime(durationMs: number) {
   const normalizedDurationMs = Math.max(0, Math.floor(durationMs));
 

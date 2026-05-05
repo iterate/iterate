@@ -1,10 +1,10 @@
 import { z } from "zod";
+import type { EventsStreamElementType } from "@iterate-com/ui/components/events/stream-feed";
 import {
   DEFAULT_STREAM_RENDERER_MODE,
   streamRendererModes,
   type StreamRendererMode,
 } from "~/lib/stream-feed-types.ts";
-import type { EventsStreamElementType } from "@iterate-com/ui/components/events/stream-feed";
 
 export const streamComposerModes = ["json", "yaml", "agent"] as const;
 const DEFAULT_STREAM_COMPOSER_MODE = "json" as const;

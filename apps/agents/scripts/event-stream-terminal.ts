@@ -63,7 +63,6 @@ import {
 } from "../src/stream-tui/command-router.ts";
 import {
   formatElapsedTime,
-  formatEventSummary,
   formatTime,
   getElapsedByOffset,
   orderEventKeysForYamlDisplay,
@@ -783,7 +782,6 @@ function renderFeedChildren() {
     ];
   }
 
-  const elapsedByOffset = getElapsedByOffset(state.slots.feed);
   const children: TextRenderable[] = [];
   let lastDateStr: string | undefined;
 
@@ -816,7 +814,7 @@ function renderFeedChildren() {
       lastDateStr = dateStr;
     }
 
-    const chunks = renderFeedItem(item, elapsedByOffset);
+    const chunks = renderFeedItem(item);
     if (chunks.length === 0) continue;
     children.push(
       new TextRenderable(renderer, {
@@ -954,7 +952,7 @@ function getItemTimestamp(item: EventsStreamBuiltInElement): number | undefined 
 }
 
 /** Route a feed element to its renderer, returning styled text chunks. */
-function renderFeedItem(item: EventsStreamBuiltInElement, elapsedByOffset: Map<number, string>) {
+function renderFeedItem(item: EventsStreamBuiltInElement) {
   if (item.type === "message") return renderMessageItem(item.props);
   if (item.type === "prompt-context") return renderPromptContextItem(item.props);
   if (item.type === "agent-output") return renderAgentOutputItem(item.props);
@@ -1105,18 +1103,6 @@ function renderGroupedRawItem(props: {
 // Raw event summary row — compact right-aligned one-liner matching the web's
 // tiny muted justify-end style. Press Enter to open the detail view.
 // ---------------------------------------------------------------------------
-
-/**
- * Render a raw event as a compact right-aligned summary row.
- * Shows: offset · event type · elapsed · timestamp
- * Highlighted when selected (feed focus mode).
- */
-function renderRawEventSummary(item: EventsStreamRawEventSummary, elapsedLabel?: string) {
-  const width = getFeedContentWidth();
-  const isSelected = navigationState.focus === "feed" && item.offset === selectedOffset;
-  const summary = `${rightAlign(formatEventSummary(item, elapsedLabel), width)}\n`;
-  return [isSelected ? bg(P.surfaceSelected)(fg(P.text)(summary)) : fg(P.textDim)(summary)];
-}
 
 // ---------------------------------------------------------------------------
 // Event detail view — full YAML payload with left/right navigation.
