@@ -28,8 +28,7 @@ export default {
   },
   jobs: {
     "deploy-os": {
-      "runs-on":
-        "${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}",
+      "runs-on": "depot-ubuntu-24.04-arm-4",
       steps: [
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "prd" }),
@@ -50,8 +49,7 @@ export default {
       ],
     },
     "deploy-iterate-com": {
-      "runs-on":
-        "${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}",
+      "runs-on": "depot-ubuntu-24.04-arm-4",
       if: "inputs.deploy_iterate_com",
       steps: [
         ...utils.setupRepo,

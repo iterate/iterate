@@ -12,7 +12,7 @@ on:
   workflow_dispatch: {}
 jobs:
   variables:
-    runs-on: ubuntu-24.04
+    runs-on: depot-ubuntu-24.04
     steps:
       - name: Document rollout strategy
         run: |-
@@ -55,7 +55,7 @@ jobs:
       - variables
       - build-sandbox-image
       - test-sandbox-fly
-    runs-on: ubuntu-24.04
+    runs-on: depot-ubuntu-24.04
     steps:
       - name: Install Doppler CLI
         run: |-
@@ -93,7 +93,7 @@ jobs:
       - promote-fly-default-image
       - deploy
     if: always() && contains(needs.*.result, 'failure')
-    runs-on: ubuntu-24.04
+    runs-on: depot-ubuntu-24.04
     env:
       NEEDS: ${{ toJson(needs) }}
     steps:

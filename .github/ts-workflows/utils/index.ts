@@ -7,12 +7,12 @@ export const prTriggerable = {
 };
 /** use this only for jobs that do not use containers at all */
 export const runsOnGithubUbuntuStartsFastButNoContainers = {
-  "runs-on": "ubuntu-24.04",
+  "runs-on": "depot-ubuntu-24.04",
 };
 
 /** use this for container-y jobs that should run on Depot builders */
 export const runsOnDepotUbuntuForContainerThings = {
-  "runs-on": `\${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}`,
+  "runs-on": "depot-ubuntu-24.04-arm-4",
 };
 
 /** checkout, setup pnpm, setup node, install dependencies. Accepts an optional ref override (e.g. for workflow_dispatch inputs). */
