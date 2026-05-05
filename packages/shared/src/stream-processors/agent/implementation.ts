@@ -12,17 +12,15 @@ import { AgentProcessorContract, type AgentState } from "./contract.ts";
 /**
  * Backend-only dependencies for the Agent processor implementation.
  *
- * Keep this narrow. The processor owns scheduling, cancellation, request IDs,
- * and timers; callers only provide external capabilities that the processor
- * cannot create itself.
+ * The Agent processor owns scheduling and model-visible history. It does not
+ * call an LLM provider directly; it appends `agent/llm-request-requested` and a
+ * subscribed LLM request processor owes the stream `agent/output-added` plus a
+ * terminal `agent/llm-request-completed`.
  */
 export type AgentProcessorDeps = {
-  ai: {
-    run(model: string, body: unknown, runOpts?: unknown): Promise<unknown>;
-  };
   /**
-   * Lets timer-fired LLM work remain associated with the surrounding runner.
-   * Durable Object runners usually pass `ctx.waitUntil`.
+   * Lets timer-fired request handoff remain associated with the surrounding
+   * runner. Durable Object runners usually pass `ctx.waitUntil`.
    */
   waitUntil(promise: Promise<unknown>): void;
 };
@@ -32,30 +30,19 @@ type AgentInputPayload = z.infer<
   (typeof AgentProcessorContract.events)["events.iterate.com/agent/input-added"]["payloadSchema"]
 >;
 type ConcreteTriggerLlm = Exclude<AgentInputPayload["triggerLlmRequest"], { behaviour: "auto" }>;
-type JsonValue = z.infer<ReturnType<typeof z.json>>;
 
-type InflightLlmRequest =
-  | { kind: "scheduled"; requestId: string; timer: ReturnType<typeof setTimeout> }
-  | { kind: "running"; requestId: string; controller: AbortController };
-
-const OpenAiChatCompletionResponse = z.object({
-  choices: z.array(z.object({ message: z.object({ content: z.string() }) })).min(1),
-});
-
-const AnthropicAssistantMessage = z.object({
-  content: z.array(z.object({ type: z.string(), text: z.string().optional() })).min(1),
-});
-
-const WorkersAiChatResponse = z.object({
-  response: z.string(),
-});
+type ScheduledLlmRequest = {
+  requestId: string;
+  timer: ReturnType<typeof setTimeout>;
+  scheduledEvent: { streamPath: string; offset: number };
+};
 
 /**
- * Build the model request from reduced state only.
+ * Build the provider-agnostic chat request from reduced state only.
  *
  * Frontend code can compute this same state by importing the contract reducer;
- * backend processor implementations call this helper when their local debounce
- * timer fires.
+ * LLM request processors receive this rendered body through
+ * `agent/llm-request-requested`.
  */
 export function buildLlmChatRequest(state: AgentState) {
   return {
@@ -69,36 +56,12 @@ export function buildLlmChatRequest(state: AgentState) {
   };
 }
 
-export function extractLlmAssistantText(raw: unknown): string {
-  if (typeof raw === "string") return raw;
-
-  const openAI = OpenAiChatCompletionResponse.safeParse(raw);
-  if (openAI.success) return openAI.data.choices[0].message.content;
-
-  const anthropic = AnthropicAssistantMessage.safeParse(raw);
-  if (anthropic.success) {
-    return anthropic.data.content
-      .filter((block) => block.type === "text")
-      .map((block) => block.text ?? "")
-      .join("");
-  }
-
-  const workersAI = WorkersAiChatResponse.safeParse(raw);
-  if (workersAI.success) return workersAI.data.response;
-
-  throw new Error("LLM response did not contain assistant text.");
-}
-
 export function createAgentProcessor(deps: AgentProcessorDeps) {
   /**
-   * Warm-instance state owned by this processor instance.
-   *
-   * This is deliberately not reduced state: timers, abort controllers, and the
-   * current in-flight request cannot be serialized or replayed. Losing this on
-   * Durable Object eviction is acceptable because durable facts still live in
-   * the stream as `llm-request-*` events.
+   * Warm-instance scheduling state. The durable request facts still live in the
+   * stream, but timers cannot be serialized into reduced state.
    */
-  let inflightLlmRequest: InflightLlmRequest | null = null;
+  let scheduledLlmRequest: ScheduledLlmRequest | null = null;
   let llmRequestSeq = 0;
   let latestAgentState: AgentState | null = null;
 
@@ -125,17 +88,20 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
           return;
         case "events.iterate.com/agent/input-added":
           await handleAgentInputAddedForLlmRequest({
+            event,
             streamApi,
             state,
             trigger: resolveTrigger(event.payload),
           });
           return;
-        case "events.iterate.com/agent/llm-request-started":
+        case "events.iterate.com/agent/llm-request-requested":
           await emitAgentStatus({
+            sourceEvent: event,
             streamApi,
             status: "working",
-            reason: "llm-request-started",
+            reason: "llm-request-requested",
             requestId: event.payload.requestId,
+            llmRequestId: event.offset,
           });
           return;
         case "events.iterate.com/agent/llm-request-queued":
@@ -155,41 +121,23 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
               offset: event.offset,
               type: event.type,
               fields: {
-                requestId: event.payload.requestId,
+                llmRequestId: event.payload.llmRequestId,
+                provider: event.payload.provider,
+                status: event.payload.result.status,
                 durationMs: event.payload.durationMs,
               },
             }),
           });
           await handleTerminalLlmRequestEvent({
+            sourceEvent: event,
             streamApi,
             state,
             reason: "llm-request-completed",
-            requestId: event.payload.requestId,
-          });
-          return;
-        case "events.iterate.com/agent/llm-request-failed":
-          await appendLlmEventContext({
-            streamApi,
-            event,
-            purpose: "render-llm-request-failed",
-            content: eventBlock({
-              offset: event.offset,
-              type: event.type,
-              fields: {
-                requestId: event.payload.requestId,
-                durationMs: event.payload.durationMs,
-                error: event.payload.error.message,
-              },
-            }),
-          });
-          await handleTerminalLlmRequestEvent({
-            streamApi,
-            state,
-            reason: "llm-request-failed",
-            requestId: event.payload.requestId,
+            llmRequestId: event.payload.llmRequestId,
           });
           return;
         case "events.iterate.com/agent/llm-request-cancelled":
+          cancelScheduledLlmRequest({ requestId: event.payload.requestId });
           await appendLlmEventContext({
             streamApi,
             event,
@@ -204,6 +152,7 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
             }),
           });
           await handleTerminalLlmRequestEvent({
+            sourceEvent: event,
             streamApi,
             state,
             reason: "llm-request-cancelled",
@@ -218,37 +167,37 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
 
   /**
    * Applies the Agent processor's LLM scheduling policy for a model-visible
-   * input row. The durable facts are appended as `llm-request-*` events; the
-   * timers and abort controllers below are warm-instance state only.
+   * input row. The durable handoff is `llm-request-requested`; provider
+   * processors own the actual LLM side effect.
    */
   async function handleAgentInputAddedForLlmRequest(args: {
     streamApi: AgentStreamApi;
+    event: { streamPath: string; offset: number };
     state: AgentState;
     trigger: ConcreteTriggerLlm;
   }) {
-    const { streamApi, state, trigger } = args;
+    const { event, streamApi, state, trigger } = args;
     if (trigger.behaviour === "dont-trigger-request") return;
 
-    if (inflightLlmRequest === null) {
-      await appendLlmRequestScheduled({ streamApi, state });
+    if (state.currentRequest == null) {
+      await appendLlmRequestScheduled({ sourceEvent: event, streamApi, state });
       return;
     }
 
-    if (inflightLlmRequest.kind === "scheduled") {
+    if (state.currentRequest.phase === "scheduled") {
       if (trigger.behaviour === "interrupt-current-request") {
-        clearTimeout(inflightLlmRequest.timer);
-        armLlmRequestDebounceTimer({
-          requestId: inflightLlmRequest.requestId,
+        resetScheduledLlmRequestTimer({
+          requestId: state.currentRequest.requestId,
           debounceMs: state.llmConfig.debounceMs,
           streamApi,
         });
         return;
       }
 
-      await emitQueued({ streamApi });
+      await emitQueued({ sourceEvent: event, streamApi });
       if (trigger.behaviour === "trigger-request-within-time-period") {
-        armLlmRequestCancelDeadline({
-          requestId: inflightLlmRequest.requestId,
+        armScheduledLlmRequestCancelDeadline({
+          requestId: state.currentRequest.requestId,
           withinMs: trigger.withinMs,
           streamApi,
         });
@@ -256,72 +205,59 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
       return;
     }
 
-    if (trigger.behaviour === "after-current-request") {
-      await emitQueued({ streamApi });
-      return;
-    }
-
-    if (trigger.behaviour === "trigger-request-within-time-period") {
-      await emitQueued({ streamApi });
-      armLlmRequestCancelDeadline({
-        requestId: inflightLlmRequest.requestId,
-        withinMs: trigger.withinMs,
-        streamApi,
-      });
-      return;
-    }
-
-    const interruptedRequestId = inflightLlmRequest.requestId;
-    cancelInflightLlmRequest({ requestId: interruptedRequestId });
-    await streamApi.append({
-      event: {
-        type: "events.iterate.com/agent/llm-request-cancelled",
-        payload: {
-          requestId: interruptedRequestId,
-          reason: "interrupted-by-user-input",
-        },
-      },
-    });
-    await appendLlmRequestScheduled({ streamApi, state });
+    await emitQueued({ sourceEvent: event, streamApi });
   }
 
   /**
-   * Reacts to completed/failed/cancelled request events after the reducer has
-   * already cleared or retained `currentRequest`. Queued triggers become a new
+   * Reacts to completed/cancelled request events after the reducer has already
+   * cleared or retained `currentRequest`. Queued triggers become a new
    * scheduled request; otherwise the processor publishes an idle status.
    */
   async function handleTerminalLlmRequestEvent(args: {
+    sourceEvent: { streamPath: string; offset: number };
     streamApi: AgentStreamApi;
     state: AgentState;
-    reason: "llm-request-completed" | "llm-request-failed" | "llm-request-cancelled";
-    requestId: string;
+    reason: "llm-request-completed" | "llm-request-cancelled";
+    requestId?: string;
+    llmRequestId?: number;
   }) {
-    if (args.state.pendingTriggerCount > 0 && inflightLlmRequest === null) {
+    if (args.state.pendingTriggerCount > 0 && scheduledLlmRequest === null) {
       await appendLlmRequestScheduled({
+        sourceEvent: args.sourceEvent,
         streamApi: args.streamApi,
         state: args.state,
       });
       return;
     }
 
-    if (args.state.pendingTriggerCount === 0 && inflightLlmRequest === null) {
+    if (args.state.pendingTriggerCount === 0 && scheduledLlmRequest === null) {
       await emitAgentStatus({
+        sourceEvent: args.sourceEvent,
         streamApi: args.streamApi,
         status: "idle",
         reason: args.reason,
         requestId: args.requestId,
+        llmRequestId: args.llmRequestId,
       });
     }
   }
 
-  async function appendLlmRequestScheduled(args: { streamApi: AgentStreamApi; state: AgentState }) {
+  async function appendLlmRequestScheduled(args: {
+    sourceEvent: { streamPath: string; offset: number };
+    streamApi: AgentStreamApi;
+    state: AgentState;
+  }) {
     const debounceMs = args.state.llmConfig.debounceMs;
     llmRequestSeq += 1;
     const requestId = `req_${Date.now()}_${llmRequestSeq}`;
-    armLlmRequestDebounceTimer({ requestId, debounceMs, streamApi: args.streamApi });
-    await args.streamApi.append({
+    const scheduledEvent = await args.streamApi.append({
       event: {
         type: "events.iterate.com/agent/llm-request-scheduled",
+        idempotencyKey: buildDerivedIdempotencyKey({
+          slug: AgentProcessorContract.slug,
+          purpose: "llm-request-scheduled",
+          event: args.sourceEvent,
+        }),
         payload: {
           requestId,
           debounceMs,
@@ -329,45 +265,55 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
         },
       },
     });
+    armLlmRequestDebounceTimer({
+      requestId,
+      debounceMs,
+      scheduledEvent,
+      streamApi: args.streamApi,
+    });
   }
 
-  function cancelInflightLlmRequest(args: { requestId: string }) {
-    if (inflightLlmRequest?.requestId !== args.requestId) {
-      return;
-    }
+  function cancelScheduledLlmRequest(args: { requestId: string }) {
+    if (scheduledLlmRequest?.requestId !== args.requestId) return;
+    clearTimeout(scheduledLlmRequest.timer);
+    scheduledLlmRequest = null;
+  }
 
-    if (inflightLlmRequest.kind === "scheduled") {
-      clearTimeout(inflightLlmRequest.timer);
-    } else {
-      inflightLlmRequest.controller.abort();
-    }
-    inflightLlmRequest = null;
+  function resetScheduledLlmRequestTimer(args: {
+    requestId: string;
+    debounceMs: number;
+    streamApi: AgentStreamApi;
+  }) {
+    const scheduledEvent = scheduledLlmRequest?.scheduledEvent;
+    cancelScheduledLlmRequest({ requestId: args.requestId });
+    if (scheduledEvent == null) return;
+    armLlmRequestDebounceTimer({ ...args, scheduledEvent });
   }
 
   /**
-   * Arms a best-effort deadline for "finish within N ms" triggers. The request
-   * ID guard makes the timer harmless if the request finishes or is superseded
-   * before the deadline fires.
+   * Arms a best-effort deadline for "finish within N ms" triggers while a
+   * request is still only scheduled. Once handed to a provider, cancellation is
+   * a provider concern for a later slice.
    */
-  function armLlmRequestCancelDeadline(args: {
+  function armScheduledLlmRequestCancelDeadline(args: {
     requestId: string;
     withinMs: number;
     streamApi: AgentStreamApi;
   }) {
     setTimeout(() => {
-      if (
-        inflightLlmRequest?.requestId !== args.requestId ||
-        inflightLlmRequest.kind !== "running"
-      ) {
-        return;
-      }
+      if (scheduledLlmRequest?.requestId !== args.requestId) return;
 
-      inflightLlmRequest.controller.abort();
-      inflightLlmRequest = null;
+      const scheduledEvent = scheduledLlmRequest.scheduledEvent;
+      cancelScheduledLlmRequest({ requestId: args.requestId });
       deps.waitUntil(
         args.streamApi.append({
           event: {
             type: "events.iterate.com/agent/llm-request-cancelled",
+            idempotencyKey: buildDerivedIdempotencyKey({
+              slug: AgentProcessorContract.slug,
+              purpose: "llm-request-cancelled:deadline-exceeded",
+              event: scheduledEvent,
+            }),
             payload: { requestId: args.requestId, reason: "deadline-exceeded" },
           },
         }),
@@ -378,102 +324,45 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
   function armLlmRequestDebounceTimer(args: {
     requestId: string;
     debounceMs: number;
+    scheduledEvent: { streamPath: string; offset: number };
     streamApi: AgentStreamApi;
   }) {
     const timer = setTimeout(() => {
       deps.waitUntil(
-        runScheduledLlmRequest({
+        requestScheduledLlmWork({
           requestId: args.requestId,
           streamApi: args.streamApi,
         }),
       );
     }, args.debounceMs);
-    inflightLlmRequest = { kind: "scheduled", requestId: args.requestId, timer };
+    scheduledLlmRequest = {
+      requestId: args.requestId,
+      timer,
+      scheduledEvent: args.scheduledEvent,
+    };
   }
 
-  async function runScheduledLlmRequest(args: { requestId: string; streamApi: AgentStreamApi }) {
-    if (
-      inflightLlmRequest?.requestId !== args.requestId ||
-      inflightLlmRequest.kind !== "scheduled"
-    ) {
-      return;
-    }
+  async function requestScheduledLlmWork(args: { requestId: string; streamApi: AgentStreamApi }) {
+    if (scheduledLlmRequest?.requestId !== args.requestId) return;
 
-    const stateAtStart = latestAgentState;
-    if (stateAtStart == null) {
-      return;
-    }
+    const stateAtRequest = latestAgentState;
+    if (stateAtRequest == null) return;
 
-    const controller = new AbortController();
-    inflightLlmRequest = { kind: "running", requestId: args.requestId, controller };
-    const body = buildLlmChatRequest(stateAtStart);
-    const startedAt = Date.now();
-
+    const scheduledEvent = scheduledLlmRequest.scheduledEvent;
+    scheduledLlmRequest = null;
     await args.streamApi.append({
       event: {
-        type: "events.iterate.com/agent/llm-request-started",
+        type: "events.iterate.com/agent/llm-request-requested",
+        idempotencyKey: buildDerivedIdempotencyKey({
+          slug: AgentProcessorContract.slug,
+          purpose: "llm-request-requested",
+          event: scheduledEvent,
+        }),
         payload: {
           requestId: args.requestId,
-          model: stateAtStart.llmConfig.model,
-          body,
-          runOpts: stateAtStart.llmConfig.runOpts,
-        },
-      },
-    });
-
-    let raw: unknown;
-    try {
-      raw = await deps.ai.run(stateAtStart.llmConfig.model, body, stateAtStart.llmConfig.runOpts);
-    } catch (error) {
-      if (inflightLlmRequest?.requestId === args.requestId) {
-        inflightLlmRequest = null;
-      }
-      await appendLlmRequestFailed({
-        streamApi: args.streamApi,
-        requestId: args.requestId,
-        startedAt,
-        error,
-      });
-      return;
-    }
-
-    if (controller.signal.aborted || inflightLlmRequest?.requestId !== args.requestId) {
-      return;
-    }
-
-    let assistantText: string;
-    try {
-      assistantText = extractLlmAssistantText(raw);
-    } catch (error) {
-      if (inflightLlmRequest?.requestId === args.requestId) {
-        inflightLlmRequest = null;
-      }
-      await appendLlmRequestFailed({
-        streamApi: args.streamApi,
-        requestId: args.requestId,
-        rawResponse: toJsonValue(raw),
-        startedAt,
-        error,
-      });
-      return;
-    }
-
-    inflightLlmRequest = null;
-    await args.streamApi.append({
-      event: {
-        type: "events.iterate.com/agent/llm-request-completed",
-        payload: {
-          requestId: args.requestId,
-          rawResponse: toJsonValue(raw),
-          durationMs: Date.now() - startedAt,
-        },
-      },
-    });
-    await args.streamApi.append({
-      event: {
-        type: "events.iterate.com/agent/output-added",
-        payload: {
-          content: assistantText,
+          model: stateAtRequest.llmConfig.model,
+          body: buildLlmChatRequest(stateAtRequest),
+          runOpts: stateAtRequest.llmConfig.runOpts,
         },
       },
     });
@@ -487,48 +376,44 @@ function resolveTrigger(payload: AgentInputPayload): ConcreteTriggerLlm {
   return { behaviour: "interrupt-current-request" };
 }
 
-async function emitQueued(args: { streamApi: AgentStreamApi }) {
+async function emitQueued(args: {
+  sourceEvent: { streamPath: string; offset: number };
+  streamApi: AgentStreamApi;
+}) {
   await args.streamApi.append({
     event: {
       type: "events.iterate.com/agent/llm-request-queued",
+      idempotencyKey: buildDerivedIdempotencyKey({
+        slug: AgentProcessorContract.slug,
+        purpose: "llm-request-queued",
+        event: args.sourceEvent,
+      }),
       payload: {},
     },
   });
 }
 
-async function appendLlmRequestFailed(args: {
-  streamApi: AgentStreamApi;
-  requestId: string;
-  rawResponse?: JsonValue;
-  startedAt: number;
-  error: unknown;
-}) {
-  await args.streamApi.append({
-    event: {
-      type: "events.iterate.com/agent/llm-request-failed",
-      payload: {
-        requestId: args.requestId,
-        durationMs: Date.now() - args.startedAt,
-        error: { message: stringifyError(args.error) },
-        ...(args.rawResponse === undefined ? {} : { rawResponse: args.rawResponse }),
-      },
-    },
-  });
-}
-
 async function emitAgentStatus(args: {
+  sourceEvent: { streamPath: string; offset: number };
   streamApi: AgentStreamApi;
   status: "working" | "idle";
   reason: string;
   requestId?: string;
+  llmRequestId?: number;
 }) {
   await args.streamApi.append({
     event: {
       type: "events.iterate.com/agent/status-updated",
+      idempotencyKey: buildDerivedIdempotencyKey({
+        slug: AgentProcessorContract.slug,
+        purpose: `status-updated:${args.status}:${args.reason}`,
+        event: args.sourceEvent,
+      }),
       payload: {
         status: args.status,
         reason: args.reason,
         ...(args.requestId == null ? {} : { requestId: args.requestId }),
+        ...(args.llmRequestId == null ? {} : { llmRequestId: args.llmRequestId }),
       },
     },
   });
@@ -596,19 +481,13 @@ function eventTypeExplanation(eventType: string): string | null {
   if (eventType === "events.iterate.com/agent/llm-request-cancelled") {
     return eventTypeExplanationBlock({
       type: eventType,
-      meaning: "The current LLM request was interrupted or timed out before completion.",
-    });
-  }
-  if (eventType === "events.iterate.com/agent/llm-request-failed") {
-    return eventTypeExplanationBlock({
-      type: eventType,
-      meaning: "The current LLM request failed before producing a usable assistant turn.",
+      meaning: "The current scheduled LLM request was interrupted or timed out before handoff.",
     });
   }
   if (eventType === "events.iterate.com/agent/llm-request-completed") {
     return eventTypeExplanationBlock({
       type: eventType,
-      meaning: "The current LLM request produced a usable assistant turn.",
+      meaning: "The current LLM request reached a terminal success or failure result.",
     });
   }
   return null;
@@ -643,20 +522,4 @@ function yamlScalar(value: string | number): string {
 
 function yamlBlockScalar(key: string, value: string): string[] {
   return [`  ${key}: |-`, ...value.split("\n").map((line) => `    ${line}`)];
-}
-
-function stringifyError(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
-  }
-}
-
-function toJsonValue(value: unknown): JsonValue {
-  return z.json().parse(value);
 }

@@ -137,6 +137,24 @@ export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
     const childPath = childCreated.data.payload.childPath;
     const projectSlug = ProjectSlug.parse(appConfig.eventsProjectSlug);
     const runnerInstance = streamPathToAgentInstance(childPath);
+    const cloudflareAiCallbackUrl = new URL(publicBaseUrl);
+    if (cloudflareAiCallbackUrl.hostname === "localhost") {
+      cloudflareAiCallbackUrl.hostname = "127.0.0.1";
+    }
+    cloudflareAiCallbackUrl.protocol =
+      cloudflareAiCallbackUrl.protocol === "http:" ||
+      cloudflareAiCallbackUrl.hostname === "localhost" ||
+      cloudflareAiCallbackUrl.hostname === "127.0.0.1" ||
+      cloudflareAiCallbackUrl.hostname === "::1" ||
+      cloudflareAiCallbackUrl.hostname === "[::1]"
+        ? "ws:"
+        : "wss:";
+    cloudflareAiCallbackUrl.pathname = `/api/cloudflare-ai-stream-processor-runner/${encodeURIComponent(
+      runnerInstance,
+    )}/websocket`;
+    cloudflareAiCallbackUrl.search = "";
+    cloudflareAiCallbackUrl.searchParams.set("streamPath", childPath);
+    cloudflareAiCallbackUrl.hash = "";
     const runnerSubscriptions = [
       {
         slug: WEBCHAT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
@@ -153,6 +171,10 @@ export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
           runnerInstance,
           streamPath: childPath,
         }),
+      },
+      {
+        slug: "cloudflare-ai-stream-processor-runner",
+        callbackUrl: cloudflareAiCallbackUrl.toString(),
       },
       {
         slug: CODEMODE_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,

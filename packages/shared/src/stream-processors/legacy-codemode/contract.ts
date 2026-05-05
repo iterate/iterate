@@ -143,9 +143,8 @@ export const CodemodeProcessorContract = defineProcessorContract({
       case "events.iterate.com/agent/system-prompt-updated":
       case "events.iterate.com/agent/llm-config-updated":
       case "events.iterate.com/agent/llm-request-scheduled":
-      case "events.iterate.com/agent/llm-request-started":
+      case "events.iterate.com/agent/llm-request-requested":
       case "events.iterate.com/agent/llm-request-completed":
-      case "events.iterate.com/agent/llm-request-failed":
       case "events.iterate.com/agent/llm-request-cancelled":
       case "events.iterate.com/agent/llm-request-queued":
       case "events.iterate.com/agent/status-updated":

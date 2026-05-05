@@ -13,11 +13,6 @@ describe("createAgentProcessor", () => {
   it("does not schedule LLM work for explicitly non-triggering agent input", async () => {
     const appended: StreamEventInput[] = [];
     const processor = createAgentProcessor({
-      ai: {
-        run: async () => {
-          throw new Error("This test should not run an LLM request.");
-        },
-      },
       waitUntil: () => undefined,
     });
 
@@ -39,20 +34,15 @@ describe("createAgentProcessor", () => {
     expect(appended).toEqual([]);
   });
 
-  it("does not transcribe LLM request started events into agent input", async () => {
+  it("marks requested LLM work as a working status update", async () => {
     const appended: StreamEventInput[] = [];
     const processor = createAgentProcessor({
-      ai: {
-        run: async () => {
-          throw new Error("This test should not run an LLM request.");
-        },
-      },
       waitUntil: () => undefined,
     });
 
     await processor.implementation.afterAppend?.({
       event: consumedAgentEvent({
-        type: "events.iterate.com/agent/llm-request-started",
+        type: "events.iterate.com/agent/llm-request-requested",
         payload: {
           requestId: "req_1",
           model: "test-model",
@@ -70,10 +60,13 @@ describe("createAgentProcessor", () => {
     expect(appended).toEqual([
       {
         type: "events.iterate.com/agent/status-updated",
+        idempotencyKey:
+          "stream-processor:agent:derived:status-updated:working:llm-request-requested:/agents/test:43",
         payload: {
           status: "working",
-          reason: "llm-request-started",
+          reason: "llm-request-requested",
           requestId: "req_1",
+          llmRequestId: 43,
         },
       },
     ]);

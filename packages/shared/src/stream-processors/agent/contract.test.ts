@@ -136,20 +136,22 @@ describe("AgentProcessorContract", () => {
           payload: {},
         }),
         committedEvent({
-          type: "events.iterate.com/agent/llm-request-started",
+          type: "events.iterate.com/agent/llm-request-requested",
           payload: {
             requestId: "req_1",
             model: "test-model",
             body: { messages: [{ role: "user", content: "hello" }] },
             runOpts: {},
           },
+          offset: 7,
         }),
         committedEvent({
           type: "events.iterate.com/agent/llm-request-completed",
           payload: {
-            requestId: "req_1",
-            rawResponse: "ok",
+            llmRequestId: 7,
+            provider: "test-provider",
             durationMs: 42,
+            result: { status: "success", rawResponse: "ok" },
           },
         }),
       ],
@@ -177,9 +179,10 @@ describe("AgentProcessorContract", () => {
         committedEvent({
           type: "events.iterate.com/agent/llm-request-completed",
           payload: {
-            requestId: "req_1",
-            rawResponse: "ok",
+            llmRequestId: 7,
+            provider: "test-provider",
             durationMs: 42,
+            result: { status: "success", rawResponse: "ok" },
           },
         }),
         committedEvent({
@@ -193,7 +196,7 @@ describe("AgentProcessorContract", () => {
       ],
     });
 
-    expect(state.currentRequest).toEqual({ requestId: "req_2" });
+    expect(state.currentRequest).toEqual({ phase: "scheduled", requestId: "req_2" });
     expect(state.pendingTriggerCount).toBe(0);
   });
 
@@ -201,26 +204,28 @@ describe("AgentProcessorContract", () => {
     const state = reduceAgentEvents({
       events: [
         committedEvent({
-          type: "events.iterate.com/agent/llm-request-started",
+          type: "events.iterate.com/agent/llm-request-requested",
           payload: {
             requestId: "req_current",
             model: "test-model",
             body: { messages: [{ role: "user", content: "hello" }] },
             runOpts: {},
           },
+          offset: 12,
         }),
         committedEvent({
-          type: "events.iterate.com/agent/llm-request-failed",
+          type: "events.iterate.com/agent/llm-request-completed",
           payload: {
-            requestId: "req_old",
+            llmRequestId: 11,
+            provider: "test-provider",
             durationMs: 42,
-            error: { message: "late failure" },
+            result: { status: "failure", error: { message: "late failure" } },
           },
         }),
       ],
     });
 
-    expect(state.currentRequest).toEqual({ requestId: "req_current" });
+    expect(state.currentRequest).toEqual({ phase: "requested", llmRequestId: 12 });
   });
 });
 

@@ -30,6 +30,7 @@ import type { DurableObjectCoreProtected } from "./with-durable-object-core.ts";
 
 type RunnerContract<Contract> = {
   slug: string;
+  version: string;
   stateSchema: z.ZodType;
   events: EventCatalog;
   processorDeps?: readonly unknown[];
@@ -42,6 +43,59 @@ type RunnerContract<Contract> = {
 };
 
 export type StreamProcessorRunnerState<Contract> = StoredProcessorState<Contract>;
+
+export function wrapProcessorStreamApiWithProvenance<
+  Contract extends {
+    slug: string;
+    version: string;
+  },
+>(args: {
+  processor: { contract: Contract };
+  processingEvent?: StreamEvent;
+  streamApi: ProcessorStreamApi<Contract>;
+}): ProcessorStreamApi<Contract> {
+  const { processingEvent, processor, streamApi } = args;
+
+  return {
+    append: async (appendArgs) => {
+      const existingMetadata = appendArgs.event.metadata ?? {};
+      const existingProvenance =
+        typeof existingMetadata.provenance === "object" &&
+        existingMetadata.provenance !== null &&
+        !Array.isArray(existingMetadata.provenance)
+          ? existingMetadata.provenance
+          : {};
+
+      return await streamApi.append({
+        ...appendArgs,
+        event: {
+          ...appendArgs.event,
+          metadata: {
+            ...existingMetadata,
+            provenance: {
+              ...existingProvenance,
+              processor: {
+                slug: processor.contract.slug,
+                version: processor.contract.version,
+              },
+              ...(processingEvent == null
+                ? {}
+                : {
+                    whileProcessingEvent: {
+                      streamPath: processingEvent.streamPath,
+                      offset: processingEvent.offset,
+                      type: processingEvent.type,
+                    },
+                  }),
+            },
+          },
+        },
+      });
+    },
+    read: async (readArgs) => await streamApi.read(readArgs),
+    subscribe: (subscribeArgs) => streamApi.subscribe(subscribeArgs),
+  };
+}
 
 export abstract class StreamProcessorRunnerProtected<
   Contract extends RunnerContract<Contract> = RunnerContract<unknown>,
@@ -169,6 +223,8 @@ export function withStreamProcessorRunner<
             });
           },
           streamApi: this.streamProcessorRunnerStreamApi(),
+          streamApiForEvent: (event) =>
+            this.streamProcessorRunnerStreamApi({ processingEvent: event }),
           signal: args?.signal ?? new AbortController().signal,
         });
       }
@@ -192,6 +248,8 @@ export function withStreamProcessorRunner<
             });
           },
           streamApi: this.streamProcessorRunnerStreamApi(),
+          streamApiForEvent: (event) =>
+            this.streamProcessorRunnerStreamApi({ processingEvent: event }),
           signal: args.signal ?? new AbortController().signal,
         });
       }
@@ -254,12 +312,20 @@ export function withStreamProcessorRunner<
         return this.#streamProcessorRunnerProcessor;
       }
 
-      private streamProcessorRunnerStreamApi(): ProcessorStreamApi<Contract> {
-        return options.streamApi({
+      private streamProcessorRunnerStreamApi(args?: {
+        processingEvent?: StreamEvent;
+      }): ProcessorStreamApi<Contract> {
+        const processor = this.streamProcessorRunnerProcessor();
+        const streamApi = options.streamApi({
           ctx: this.ctx,
           env: this.env as Env,
           initParams: this.initParams,
-          processor: this.streamProcessorRunnerProcessor(),
+          processor,
+        });
+        return wrapProcessorStreamApiWithProvenance({
+          processingEvent: args?.processingEvent,
+          processor,
+          streamApi,
         });
       }
     }

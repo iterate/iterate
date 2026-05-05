@@ -11,15 +11,19 @@ import type { AppContext } from "~/context.ts";
 import * as schema from "~/db/schema.ts";
 import { AgentStreamProcessorRunner } from "~/durable-objects/agent-stream-processor-runner.ts";
 import { ChildStreamAutoSubscriber } from "~/durable-objects/child-stream-auto-subscriber.ts";
+import { CloudflareAiStreamProcessorRunner } from "~/durable-objects/cloudflare-ai-stream-processor-runner.ts";
 import { CodemodeStreamProcessorRunner } from "~/durable-objects/codemode-stream-processor-runner.ts";
 import { MCPClient } from "~/durable-objects/mcp-client.ts";
 import { OpenApiToolClient } from "~/durable-objects/openapi-tool-client.ts";
+import { OpenAiWsStreamProcessorRunner } from "~/durable-objects/openai-ws-stream-processor-runner.ts";
 import { SlackApi } from "~/durable-objects/slack-api.ts";
 import { WebchatStreamProcessorRunner } from "~/durable-objects/webchat-stream-processor-runner.ts";
 import { StreamApi } from "~/entrypoints/stream-api.ts";
 import {
   handleAgentStreamProcessorRunnerSocket,
+  handleCloudflareAiStreamProcessorRunnerSocket,
   handleCodemodeStreamProcessorRunnerSocket,
+  handleOpenAiWsStreamProcessorRunnerSocket,
   handleWebchatStreamProcessorRunnerSocket,
 } from "~/server/agent-stream-processor-runner-socket.ts";
 
@@ -67,6 +71,14 @@ export default {
             env,
             request,
           })) ??
+          (await handleCloudflareAiStreamProcessorRunnerSocket({
+            env,
+            request,
+          })) ??
+          (await handleOpenAiWsStreamProcessorRunnerSocket({
+            env,
+            request,
+          })) ??
           (await handleCodemodeStreamProcessorRunnerSocket({
             env,
             request,
@@ -103,9 +115,11 @@ export default {
 export {
   AgentStreamProcessorRunner,
   ChildStreamAutoSubscriber,
+  CloudflareAiStreamProcessorRunner,
   CodemodeStreamProcessorRunner,
   MCPClient,
   OpenApiToolClient,
+  OpenAiWsStreamProcessorRunner,
   SlackApi,
   StreamApi,
   WebchatStreamProcessorRunner,

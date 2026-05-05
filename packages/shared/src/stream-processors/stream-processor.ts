@@ -476,6 +476,7 @@ export async function catchUpProcessorFromStream<
   storedState: StoredProcessorState<Contract>;
   saveStoredProcessorState(storedState: StoredProcessorState<Contract>): Promise<void>;
   streamApi: ProcessorStreamApi<Contract>;
+  streamApiForEvent?(event: ConsumedEvent<Contract>): ProcessorStreamApi<Contract>;
   signal: AbortSignal;
   now?: Date;
   firstAttachAfterAppend?: FirstAttachAfterAppendPolicy;
@@ -556,7 +557,7 @@ export async function catchUpProcessorFromStream<
     await runProcessorAfterAppend({
       processor: args.processor,
       ...reduction,
-      streamApi: args.streamApi,
+      streamApi: args.streamApiForEvent?.(reduction.event) ?? args.streamApi,
       signal: args.signal,
     });
     storedState = {
@@ -610,6 +611,7 @@ export async function consumeLiveProcessorEvent<
   event: StreamEvent;
   saveStoredProcessorState(storedState: StoredProcessorState<Contract>): Promise<void>;
   streamApi: ProcessorStreamApi<Contract>;
+  streamApiForEvent?(event: ConsumedEvent<Contract>): ProcessorStreamApi<Contract>;
   signal: AbortSignal;
 }): Promise<StoredProcessorState<Contract>> {
   if (args.event.offset <= args.storedState.afterAppendCompletedThroughOffset) {
@@ -640,7 +642,7 @@ export async function consumeLiveProcessorEvent<
   await runProcessorAfterAppend({
     processor: args.processor,
     ...reduction,
-    streamApi: args.streamApi,
+    streamApi: args.streamApiForEvent?.(reduction.event) ?? args.streamApi,
     signal: args.signal,
   });
 

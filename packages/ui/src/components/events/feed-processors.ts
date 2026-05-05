@@ -19,9 +19,8 @@ const MAX_SAME_TYPE_RAW_GROUP = 50_000;
 const AGENT_SYSTEM_PROMPT_UPDATED_TYPE = "events.iterate.com/agent/system-prompt-updated";
 const AGENT_INPUT_ADDED_TYPE = "events.iterate.com/agent/input-added";
 const AGENT_OUTPUT_ADDED_TYPE = "events.iterate.com/agent/output-added";
-const AGENT_LLM_REQUEST_STARTED_TYPE = "events.iterate.com/agent/llm-request-started";
+const AGENT_LLM_REQUEST_REQUESTED_TYPE = "events.iterate.com/agent/llm-request-requested";
 const AGENT_LLM_REQUEST_COMPLETED_TYPE = "events.iterate.com/agent/llm-request-completed";
-const AGENT_LLM_REQUEST_FAILED_TYPE = "events.iterate.com/agent/llm-request-failed";
 const AGENT_LLM_REQUEST_CANCELLED_TYPE = "events.iterate.com/agent/llm-request-cancelled";
 const CODEMODE_BLOCK_ADDED_TYPE = "events.iterate.com/codemode/block-added";
 const CODEMODE_RESULT_ADDED_TYPE = "events.iterate.com/codemode/result-added";
@@ -273,20 +272,24 @@ function reduceActivityState(args: {
   }
 
   const requestId = readStringPayloadField(args.event, "requestId");
+  const llmRequestId = readNumberPayloadField(args.event, "llmRequestId");
 
-  if (requestId == null) {
+  if (args.event.type === AGENT_LLM_REQUEST_REQUESTED_TYPE) {
+    return {
+      ...args.state.activity,
+      currentLlmRequestId: String(llmRequestId ?? args.event.offset),
+    };
+  }
+
+  if (requestId == null && llmRequestId == null) {
     return args.state.activity;
   }
 
-  if (args.event.type === AGENT_LLM_REQUEST_STARTED_TYPE) {
-    return { ...args.state.activity, currentLlmRequestId: requestId };
-  }
-
+  const currentRequestId = requestId ?? String(llmRequestId);
   if (
-    args.state.activity.currentLlmRequestId === requestId &&
+    args.state.activity.currentLlmRequestId === currentRequestId &&
     (args.event.type === AGENT_LLM_REQUEST_COMPLETED_TYPE ||
-      args.event.type === AGENT_LLM_REQUEST_CANCELLED_TYPE ||
-      args.event.type === AGENT_LLM_REQUEST_FAILED_TYPE)
+      args.event.type === AGENT_LLM_REQUEST_CANCELLED_TYPE)
   ) {
     return { ...args.state.activity, currentLlmRequestId: null };
   }
@@ -347,13 +350,13 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
     ];
   }
 
-  if (event.type === AGENT_LLM_REQUEST_STARTED_TYPE) {
-    const requestId = readStringPayloadField(event, "requestId");
+  if (event.type === AGENT_LLM_REQUEST_REQUESTED_TYPE) {
+    const requestId = readStringPayloadField(event, "requestId") ?? String(event.offset);
     if (requestId == null) return [];
     return [
       {
         type: "llm-request-boundary",
-        id: `llm-request-started-${event.offset}`,
+        id: `llm-request-requested-${event.offset}`,
         props: {
           phase: "started",
           requestId,
@@ -366,10 +369,11 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
 
   if (
     event.type === AGENT_LLM_REQUEST_COMPLETED_TYPE ||
-    event.type === AGENT_LLM_REQUEST_FAILED_TYPE ||
     event.type === AGENT_LLM_REQUEST_CANCELLED_TYPE
   ) {
-    const requestId = readStringPayloadField(event, "requestId");
+    const requestId =
+      readStringPayloadField(event, "requestId") ??
+      readNumberPayloadField(event, "llmRequestId")?.toString();
     if (requestId == null) return [];
     return [
       {
@@ -540,7 +544,6 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
 
 function readLlmRequestOutcome(eventType: string): "completed" | "failed" | "cancelled" {
   if (eventType === AGENT_LLM_REQUEST_COMPLETED_TYPE) return "completed";
-  if (eventType === AGENT_LLM_REQUEST_FAILED_TYPE) return "failed";
   return "cancelled";
 }
 

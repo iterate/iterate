@@ -59,6 +59,8 @@ export async function IterateApp<B extends Bindings>(
      * https://developers.cloudflare.com/workers/runtime-apis/request/
      */
     compatibilityFlags?: string[];
+    /** Worker compatibility date. Defaults to Alchemy's current Workers runtime date. */
+    compatibilityDate?: string;
     /**
      * Additional hostnames to route to this worker beyond `baseUrl`.
      * Each hostname gets a worker route and (for non-local deploys) a DNS CNAME.
@@ -86,6 +88,7 @@ export async function IterateApp<B extends Bindings>(
     // Needed because dev/preview workers persist across alchemy runs.
     // See https://alchemy.run/concepts/resources/ (adopt section)
     adopt: true,
+    compatibilityDate: props.compatibilityDate,
     compatibilityFlags,
     bindings: {
       ...props.bindings,
