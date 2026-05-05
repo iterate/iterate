@@ -3,12 +3,16 @@ import type { AppManifest } from "@iterate-com/shared/apps/types";
 import { z } from "zod";
 import packageJson from "../package.json" with { type: "json" };
 
+const ClerkMcpOauthScope = z.enum(["openid", "profile", "email"]);
+
 export const AppConfig = BaseAppConfig.extend({
   eventsBaseUrl: z.string().trim().url(),
   clerk: z.object({
     publishableKey: publicValue(z.string().trim().min(1)),
     secretKey: redacted(z.string().trim().min(1)),
     jwtKey: redacted(z.string().trim().min(1)),
+    // Deprecated static OAuth app config. MCP now uses Clerk dynamic client registration,
+    // but older CI/Doppler configs may still provide these keys.
     oauthClientId: publicValue(z.string().trim().min(1)).optional(),
     oauthClientSecret: redacted(z.string().trim().min(1)).optional(),
     signInUrl: publicValue(z.string().trim().min(1).default("/sign-in")),
@@ -16,8 +20,11 @@ export const AppConfig = BaseAppConfig.extend({
     afterSignInUrl: publicValue(z.string().trim().min(1).default("/")),
     afterSignUpUrl: publicValue(z.string().trim().min(1).default("/")),
     mcpOauthScopes: z
-      .array(z.enum(["openid", "profile", "email"]))
-      .default(["openid", "profile", "email"]),
+      .array(ClerkMcpOauthScope)
+      .default(["email", "profile"])
+      .transform((scopes) =>
+        scopes.filter((scope): scope is "email" | "profile" => scope !== "openid"),
+      ),
   }),
   mcpProofSecret: redacted(z.string().trim().min(1)),
   projectHostnameBases: publicValue(z.array(z.string().trim().min(1)).default([])),

@@ -148,7 +148,7 @@ const CreateAgentInput = z.object({
     .string()
     .min(1)
     .describe(
-      "First user message. Appended as an `events.iterate.com/agent/input-added` event with role `user`, which kicks off the LLM via the processor's debounce timer.",
+      "First prompt context string. Appended as an `events.iterate.com/agent/input-added` event, which kicks off the LLM via the processor's debounce timer.",
     ),
 });
 

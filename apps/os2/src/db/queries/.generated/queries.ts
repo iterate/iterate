@@ -6,6 +6,7 @@ export * from "./delete-project.sql.ts";
 export * from "./delete-project-preset.sql.ts";
 export * from "./get-ingress-route-by-host.sql.ts";
 export * from "./get-project-by-custom-hostname.sql.ts";
+export * from "./get-project-by-custom-hostname-any-organization.sql.ts";
 export * from "./get-project-by-id.sql.ts";
 export * from "./get-project-by-slug.sql.ts";
 export * from "./get-project-preset-by-id.sql.ts";
@@ -14,6 +15,7 @@ export * from "./insert-project-preset.sql.ts";
 export * from "./list-ingress-routes-by-project.sql.ts";
 export * from "./list-project-presets.sql.ts";
 export * from "./list-projects.sql.ts";
+export * from "./list-projects-by-slug.sql.ts";
 export * from "./update-project-config.sql.ts";
 export * from "./update-project-preset.sql.ts";
 export * from "./upsert-ingress-route.sql.ts";
@@ -51,6 +53,12 @@ export const sqlfuQuerySources = [
     generatedFile: "get-project-by-custom-hostname.sql.ts",
     sourceSql:
       "select id, slug, clerk_org_id, created_by_clerk_user_id, custom_hostname, metadata, created_at, updated_at\nfrom projects\nwhere custom_hostname = :customHostname\n  and clerk_org_id = :clerkOrgId\nlimit 1;\n",
+  },
+  {
+    sqlFile: "get-project-by-custom-hostname-any-organization.sql",
+    generatedFile: "get-project-by-custom-hostname-any-organization.sql.ts",
+    sourceSql:
+      "select id, slug, clerk_org_id, created_by_clerk_user_id, custom_hostname, metadata, created_at, updated_at\nfrom projects\nwhere custom_hostname = :customHostname\nlimit 1;\n",
   },
   {
     sqlFile: "get-project-by-id.sql",
@@ -99,6 +107,12 @@ export const sqlfuQuerySources = [
     generatedFile: "list-projects.sql.ts",
     sourceSql:
       "select id, slug, clerk_org_id, created_by_clerk_user_id, custom_hostname, metadata, created_at, updated_at\nfrom projects\nwhere clerk_org_id = :clerkOrgId\norder by created_at desc\nlimit :limit\noffset :offset;\n",
+  },
+  {
+    sqlFile: "list-projects-by-slug.sql",
+    generatedFile: "list-projects-by-slug.sql.ts",
+    sourceSql:
+      "select id, slug, clerk_org_id, created_by_clerk_user_id, custom_hostname, metadata, created_at, updated_at\nfrom projects\nwhere slug = :slug\norder by created_at asc\nlimit 2;\n",
   },
   {
     sqlFile: "update-project-config.sql",

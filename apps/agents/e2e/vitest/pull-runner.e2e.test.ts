@@ -47,9 +47,8 @@ test(
     await e2e.events.client.append({
       path: streamPath,
       event: {
-        type: "events.iterate.com/agent/input-added",
+        type: "events.iterate.com/agent/output-added",
         payload: {
-          role: "assistant",
           content: "```js\nasync () => {\n  return 7;\n}\n```",
         },
       },
@@ -107,9 +106,8 @@ test(
     await e2e.events.client.append({
       path: streamPath,
       event: {
-        type: "events.iterate.com/agent/input-added",
+        type: "events.iterate.com/agent/output-added",
         payload: {
-          role: "assistant",
           content: "```js\nasync () => {\n  return 11;\n}\n```",
         },
       },

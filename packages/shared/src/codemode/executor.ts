@@ -88,7 +88,7 @@ export class ToolDispatcher extends RpcTarget {
     try {
       const path: string[] = pathJson ? JSON.parse(pathJson) : [];
       const parsed = argsJson ? JSON.parse(argsJson) : [];
-      const payload = Array.isArray(parsed) ? (parsed[0] ?? {}) : parsed;
+      const payload = Array.isArray(parsed) && parsed.length <= 1 ? (parsed[0] ?? {}) : parsed;
 
       this.#onToolCall?.(callId, path, payload);
 
@@ -166,7 +166,7 @@ export class CodemodeExecutor {
       const providerKey = safePath.join(".");
       const root = safePath[0]!;
       const setupLines = [
-        `    globalThis.${root} ??= {};`,
+        `    let ${root} = (globalThis.${root} ??= {});`,
         ...safePath.slice(1, -1).map((_, i) => {
           const child = safePath.slice(0, i + 2).join(".");
           return `    ${child} ??= {};`;

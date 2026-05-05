@@ -2,6 +2,11 @@
 
 This is the current concise authoring guide for the processor abstraction we are still proving out.
 
+This guide sits underneath [jonasland/RULES.md](../../../jonasland/RULES.md).
+Those repo-wide rules still apply here: put the most important thing at the top,
+write invisible TypeScript, do not declare infrequently used aliases, and only
+extract abstractions that are easy to explain.
+
 ## Split Contract And Implementation
 
 Put the frontend-safe public contract in one module:
@@ -11,6 +16,12 @@ Put the frontend-safe public contract in one module:
 - `stateSchema` and optional `initialState`
 - optional pure `reduce`
 - explicit `processorDeps`, `consumes`, and `emits`
+
+Prefer defining the processor state schema inline as `stateSchema: z.object(...)`
+inside the contract. Do not pull it up into `FooStateSchema` just to immediately
+write `export type FooState = z.infer<typeof FooStateSchema>`. The contract
+already carries the state type; use `ProcessorState<typeof FooProcessorContract>`
+in tests or integration code when a named state type is genuinely needed.
 
 Do not import Cloudflare bindings, Durable Objects, dynamic worker loaders, MCP clients, AI bindings, or third-party API clients from contract modules. Frontend code should be able to import the contract and replay events through the reducer to compute UI state.
 
@@ -28,6 +39,121 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
 ```
 
 Runtime dependencies belong in `deps`: AI bindings, code executors, HTTP clients, tool registries, timers, MCP connection clients, and test doubles.
+
+When a feature contains multiple processors, give each processor its own folder
+with its own `contract.ts`, `implementation.ts`, and one integrated test file
+named after the processor folder, for example `slack.test.ts` or
+`slack-thread.test.ts`. That test should cover reducer behavior and
+implementation `afterAppend` behavior together, because the contract and
+implementation are two halves of one stream processor.
+
+Keep the dependency direction explicit. A pure router should not import the
+interpreter or worker that consumes routed events. The downstream processor may
+depend on the router contract when it consumes router-owned events.
+
+For example, Slack is split into `slack` and `slack-thread`. The `slack`
+processor owns the raw `events.iterate.com/slack/webhook-received` event, keeps
+a reduced `channel:slack_ts -> streamPath` lookup table, and forwards raw
+webhooks when it can derive a lookup key. It does not know about the Agent
+processor and does not translate Slack into agent input. The `slack-thread`
+processor runs on the Slack-backed agent stream, consumes the forwarded raw
+webhooks, and is the only Slack processor that interprets Slack activity as
+agent events. In the current POC, it should only emit agent input. Slack writes
+such as reactions, status updates, or thread replies should be ordinary agent
+tool calls unless we later decide there is a durable processor-level side effect
+that truly belongs in the event model.
+
+## Keep TypeScript Boring
+
+Processor implementation files should read like ordinary event handlers. The
+same switch conventions apply in `afterAppend` hooks as in reducers: real work
+first, deliberately ignored consumed events stacked at the end, then a plain
+`default` that returns. We are not using exhaustive match guards here for now;
+the standard processor behavior splat makes that more awkward than useful.
+
+Prefer a slightly longer `afterAppend` switch over helper extraction that needs
+local type aliases just to recover the event narrowing you already had inside
+the case.
+
+Idiomatic:
+
+```ts
+async afterAppend({ event, state, streamApi }) {
+  await standardProcessorBehavior.afterAppend({ contract: ExampleContract, state, streamApi });
+
+  switch (event.type) {
+    case "events.iterate.com/example/commanded":
+      await streamApi.append({
+        event: {
+          type: "events.iterate.com/agent/input-added",
+          payload: { content: event.payload.text },
+          idempotencyKey: buildDerivedIdempotencyKey({
+            slug: ExampleContract.slug,
+            purpose: "commanded-to-agent-input",
+            event,
+          }),
+        },
+      });
+      return;
+    case "events.iterate.com/core/stream-processor-registered":
+    case "events.iterate.com/example/observed":
+    default:
+      return;
+  }
+}
+```
+
+Not idiomatic:
+
+```ts
+type ExampleApi = ProcessorStreamApi<typeof ExampleContract>;
+type CommandedEvent = Extract<
+  ConsumedEvent<typeof ExampleContract>,
+  { type: "events.iterate.com/example/commanded" }
+>;
+
+async function handleCommanded(args: { event: CommandedEvent; streamApi: ExampleApi }) {
+  // ...
+}
+```
+
+Names should earn their keep. `ExampleProcessorDeps` is useful because it names
+a public dependency contract. `CommandedEvent` and `ExampleApi` usually just
+rename framework machinery. If a helper needs twenty lines of TypeScript to
+exist, the helper probably made the file harder to read.
+
+Use helpers only when they remove real domain complexity. Keep framework
+plumbing in the visible `switch` until we have a well-motivated framework
+helper. Do not invent local middleware or wrapper abstractions just to hide
+standard processor behavior.
+
+When an event payload has its own discriminant and the processor is actually
+interpreting that discriminant, prefer a nested switch over a run of sibling
+`if` statements. The nested switch should follow the same order: handled cases
+first, ignored cases stacked at the end, then a plain `default`.
+
+```ts
+case "events.iterate.com/example/webhook-received": {
+  const webhook = event.payload.body;
+
+  switch (webhook.kind) {
+    case "command":
+      // append command-derived events
+      return;
+    case "status":
+      // append status-derived events
+      return;
+    case "ignored":
+    default:
+      return;
+  }
+}
+```
+
+Do not invent a discriminated wrapper just to get a switch. The Slack webhook
+router is intentionally structural: if a raw Slack webhook gives us a
+`channel:slack_ts` key that already exists in reduced state, the router forwards
+the raw webhook; otherwise it does nothing.
 
 ## Contract Shape
 
@@ -69,13 +195,134 @@ export const ExampleProcessorContract = defineProcessorContract({
       case "events.iterate.com/example/incremented":
         return { ...nextState, count: nextState.count + event.payload.by };
       default:
-        return assertNever(event);
+        return nextState;
     }
   },
 });
 ```
 
 `defineProcessorContract(...)` is a typed identity. It should not hide or rewrite your contract. Its job is to make bad strings, bad state shapes, and bad append types fail while preserving the object you wrote.
+
+## Reducer Shape
+
+Reducers and implementation hooks should branch on `event.type` with a
+top-level `switch`. Use nested `if` statements or nested switches inside a case
+when the payload needs more branching, but do not write a chain of top-level
+`if (event.type === ...)` checks.
+
+This is a convention, not just style preference. A switch keeps the consumed
+event surface visible and makes later additions easier to review. For now,
+finish switches with a plain `default` branch that returns unchanged state from
+reducers or returns from implementation hooks. Do not use exhaustive match
+guards until the standard processor behavior has better ergonomics.
+
+If a reducer or `afterAppend` hook intentionally ignores consumed events, put
+those cases at the end of the switch, immediately before `default`. It is fine
+to stack multiple ignored cases on top of each other. This is active
+documentation: the processor consumes those events, has considered them, and
+currently does not reduce state or run side effects from them.
+
+Idiomatic:
+
+```ts
+reduce({ contract, state, event }) {
+  const nextState = standardProcessorBehavior.reduce({ contract, state, event });
+
+  switch (event.type) {
+    case "events.iterate.com/example/incremented":
+      if (event.payload.by === 0) return nextState;
+      return { ...nextState, count: nextState.count + event.payload.by };
+    case "events.iterate.com/core/stream-processor-registered":
+    case "events.iterate.com/example/observed":
+    case "events.iterate.com/agent/status-updated":
+    default:
+      return nextState;
+  }
+}
+```
+
+`standardProcessorBehavior.consumes` means your reducer consumes the core
+registration event too. Handle it as a normal inline wire string:
+
+```ts
+case "events.iterate.com/core/stream-processor-registered":
+  return nextState;
+```
+
+Do not import `CoreProcessorRegisteredEventType` just to avoid writing this
+string in the switch. Core processor events are still stream event strings, so
+the same inline-string rule applies.
+
+Not idiomatic:
+
+```ts
+reduce({ state, event }) {
+  if (event.type === "events.iterate.com/example/incremented") {
+    return { ...state, count: state.count + event.payload.by };
+  }
+  return state;
+}
+```
+
+Also not idiomatic:
+
+```ts
+switch (event.type) {
+  case CoreProcessorRegisteredEventType:
+    return nextState;
+}
+```
+
+### Event Strings Are The Contract
+
+Use full event type strings inline in the contract and implementation. This is
+intentional duplication: the string is the durable wire API, and reviewers
+should be able to see it at every use site without jumping through an exported
+constant.
+
+Idiomatic:
+
+```ts
+events: {
+  "events.iterate.com/slack/webhook-received": {
+    payloadSchema: z.object({ body: z.record(z.string(), z.unknown()) }),
+  },
+},
+consumes: [
+  ...standardProcessorBehavior.consumes,
+  "events.iterate.com/slack/webhook-received",
+],
+reduce({ state, event }) {
+  switch (event.type) {
+    case "events.iterate.com/core/stream-processor-registered":
+      return state;
+    case "events.iterate.com/slack/webhook-received":
+      // event.payload is narrowed here
+    default:
+      return state;
+  }
+}
+```
+
+Not idiomatic:
+
+```ts
+export const slackWebhookReceivedEventType = "events.iterate.com/slack/webhook-received";
+
+events: {
+  [slackWebhookReceivedEventType]: { /* ... */ },
+},
+consumes: [slackWebhookReceivedEventType],
+```
+
+Do not export event-type constants just to avoid repeating strings. Exported
+constants make the public API larger, make contracts harder to scan, and hide
+the actual wire string from grep-oriented review. If an event string changes,
+that is a contract change; update each use site deliberately.
+
+Named helpers are still fine when they encode behavior rather than aliases.
+`slackWebhookReceivedEventType` is not useful because it only renames the wire
+string.
 
 ## Standard Processor Behavior
 
@@ -112,6 +359,45 @@ nextState = {
 This is just processor implementation code. We are deliberately not naming this
 as a separate abstraction yet.
 
+## First Attach Side Effects
+
+`afterAppend` usually runs only for live events. When a processor first attaches
+to an existing stream, the runner first catches up reduced state from historical
+events. To avoid missing the common race where a processor is subscribed just
+after a stream is created, the framework default also runs `afterAppend` for
+events from the last one second of first-attach history.
+
+Almost never set `firstAttachAfterAppend` on a processor. Leave it unset for the
+standard short lookback default:
+
+```ts
+export function createExampleProcessor() {
+  return implementProcessor(ExampleProcessorContract, {
+    async afterAppend({ event, state, streamApi }) {
+      // ...
+    },
+  });
+}
+```
+
+Set it explicitly only when the default would be surprising. Use `none` when
+even very recent first-attach side effects would be confusing or unsafe:
+
+```ts
+export function createExampleProcessor() {
+  return implementProcessor(ExampleProcessorContract, {
+    firstAttachAfterAppend: { mode: "none" },
+    async afterAppend({ event, state, streamApi }) {
+      // ...
+    },
+  });
+}
+```
+
+Do not set `{ mode: "lookback", milliseconds: 1_000 }` just to repeat the
+default. This is runner lifecycle policy, so it belongs in the implementation
+or runner override, not in the contract.
+
 ## Exactly Once Patterns
 
 If a processor should do a one-time append, use both reduced state and stream idempotency.
@@ -131,7 +417,7 @@ The idempotency key protects against retries, cold starts, and duplicate deliver
 await streamApi.append({
   event: {
     type: "events.iterate.com/agent/input-added",
-    payload: { role: "system", content },
+    payload: { content },
     idempotencyKey: CODEMODE_PRIMER_IDEMPOTENCY_KEY,
   },
 });

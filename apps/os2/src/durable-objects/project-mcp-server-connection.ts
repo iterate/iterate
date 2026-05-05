@@ -46,7 +46,7 @@ export interface ProjectMcpServerConnectionProps extends Record<string, unknown>
   projectId: string | null;
   projectSlug: string | null;
   userId: string;
-  orgId: string;
+  orgId: string | null;
   orgRole: string | null;
   orgSlug: string | null;
   orgPermissions: string[];
@@ -347,7 +347,7 @@ export class ProjectMcpServerConnection extends (ProjectMcpServerConnectionBase 
       throw new Error("MCP tools require a project-scoped MCP server host.");
     }
 
-    return auth as ProjectMcpServerConnectionProps & { projectId: string };
+    return auth as ProjectMcpServerConnectionProps & { orgId: string; projectId: string };
   }
 
   private requireScope(props: ProjectMcpServerConnectionProps, scope: string) {

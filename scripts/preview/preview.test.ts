@@ -1,33 +1,127 @@
 import { describe, expect, it } from "vitest";
-import { isSupportedPreviewEnvironmentSlug } from "./preview.ts";
+import { cloudflarePreviewApps, cloudflarePreviewSharedPaths } from "./apps.ts";
+import {
+  batchPreviewAppsByDependencies,
+  expandPreviewDependencies,
+  resolvePreviewCompareBaseSha,
+  selectPreviewAppsNeedingRetry,
+} from "./preview.ts";
 
-describe("preview environment selection", () => {
-  it("skips excluded preview slots", () => {
-    expect(
-      isSupportedPreviewEnvironmentSlug({
-        appSlug: "os2",
-        excludedPreviewSlots: [1],
-        slug: "os2-preview-1",
-      }),
-    ).toBe(false);
-    expect(
-      isSupportedPreviewEnvironmentSlug({
-        appSlug: "os2",
-        excludedPreviewSlots: [1],
-        slug: "os2-preview-2",
-      }),
-    ).toBe(true);
+describe("preview app dependency expansion", () => {
+  it("adds explicit dependencies for affected apps", () => {
+    expect(expandPreviewDependencies(["os2"])).toEqual(["events", "os2"]);
   });
 
-  it("does not exclude slots without app config", () => {
-    expect(isSupportedPreviewEnvironmentSlug({ appSlug: "events", slug: "events-preview-1" })).toBe(
-      true,
-    );
+  it("keeps independent apps as-is", () => {
+    expect(expandPreviewDependencies(["events"])).toEqual(["events"]);
   });
 
-  it("rejects slugs that do not belong to the app", () => {
-    expect(isSupportedPreviewEnvironmentSlug({ appSlug: "events", slug: "os2-preview-2" })).toBe(
-      false,
+  it("deduplicates dependencies", () => {
+    expect(expandPreviewDependencies(["events", "os2"])).toEqual(["events", "os2"]);
+  });
+});
+
+describe("preview app dependency batches", () => {
+  it("keeps dependent apps after their dependencies", () => {
+    expect(
+      batchPreviewAppsByDependencies([cloudflarePreviewApps.os2, cloudflarePreviewApps.events]).map(
+        (batch) => batch.map((app) => app.slug),
+      ),
+    ).toEqual([["events"], ["os2"]]);
+  });
+
+  it("keeps independent apps in the same batch", () => {
+    expect(
+      batchPreviewAppsByDependencies([
+        cloudflarePreviewApps.agents,
+        cloudflarePreviewApps.codemode,
+      ]).map((batch) => batch.map((app) => app.slug)),
+    ).toEqual([["agents", "codemode"]]);
+  });
+});
+
+describe("preview workflow scope", () => {
+  it("includes shared preview orchestration paths", () => {
+    expect(cloudflarePreviewSharedPaths).toContain("scripts/preview/**");
+    expect(cloudflarePreviewSharedPaths).toContain(
+      ".github/ts-workflows/workflows/cloudflare-previews.ts",
     );
+    expect(cloudflarePreviewSharedPaths).toContain(".github/workflows/cloudflare-previews.yml");
+  });
+});
+
+describe("preview compare base", () => {
+  it("uses the pull request base before any app has deployed", () => {
+    expect(
+      resolvePreviewCompareBaseSha({
+        previousState: {
+          apps: {},
+          environmentConfigLease: null,
+        },
+        pullRequestBaseSha: "base-sha",
+      }),
+    ).toBe("base-sha");
+  });
+
+  it("uses the previously deployed app commit after preview state exists", () => {
+    expect(
+      resolvePreviewCompareBaseSha({
+        previousState: {
+          apps: {
+            os2: {
+              appDisplayName: "OS",
+              appSlug: "os2",
+              headSha: "previous-preview-sha",
+              status: "deployed",
+              updatedAt: "2026-05-01T00:00:00.000Z",
+            },
+          },
+          environmentConfigLease: null,
+        },
+        pullRequestBaseSha: "base-sha",
+      }),
+    ).toBe("previous-preview-sha");
+  });
+});
+
+describe("preview retry selection", () => {
+  it("retries current-head failed apps and their dependencies", () => {
+    expect(
+      selectPreviewAppsNeedingRetry({
+        previousState: {
+          apps: {
+            os2: {
+              appDisplayName: "OS",
+              appSlug: "os2",
+              headSha: "current-head",
+              status: "tests-failed",
+              updatedAt: "2026-05-01T00:00:00.000Z",
+            },
+          },
+          environmentConfigLease: null,
+        },
+        pullRequestHeadSha: "current-head",
+      }).map((app) => app.slug),
+    ).toEqual(["events", "os2"]);
+  });
+
+  it("does not retry previously failed apps from older commits", () => {
+    expect(
+      selectPreviewAppsNeedingRetry({
+        previousState: {
+          apps: {
+            os2: {
+              appDisplayName: "OS",
+              appSlug: "os2",
+              headSha: "old-head",
+              status: "deploy-failed",
+              updatedAt: "2026-05-01T00:00:00.000Z",
+            },
+          },
+          environmentConfigLease: null,
+        },
+        pullRequestHeadSha: "current-head",
+      }),
+    ).toEqual([]);
   });
 });

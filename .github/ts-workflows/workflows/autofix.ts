@@ -11,7 +11,7 @@ export default workflow({
   },
   jobs: {
     autofix: {
-      ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
+      ...utils.runsOnDepotUbuntu,
       steps: [
         {
           name: "Checkout code",

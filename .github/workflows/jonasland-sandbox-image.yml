@@ -44,7 +44,7 @@ on:
         default: dev
 jobs:
   build:
-    runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
+    runs-on: depot-ubuntu-24.04-32
     outputs:
       image: ${{ steps.output.outputs.image }}
       fly_image_tag: ${{ steps.output.outputs.fly_image_tag }}

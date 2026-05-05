@@ -1,86 +1,165 @@
-# Cloudflare Preview Environments
+# Environment Config Leases For Cloudflare PR Previews
 
-Preview environments for `agents`, `codemode`, `example`, `events`, `os2`, `semaphore`, and `ingress-proxy` are ordinary Semaphore resource pools plus one repo-root preview router.
+Environment config leases for PR previews are shared Doppler config leases. A
+lease is not specific to one app. It points to one config bag, and every
+affected app deploys into that same config.
 
 ## Naming
 
-- resource type: app-specific pool name like `example-preview-environment`
-- resource slug: worker identity like `example-preview-1`
-- Alchemy stage: config-derived stage like `preview_1` (slugified by apps into resource names like `preview-1`)
-- Doppler config: branch config like `preview_1`
-- public URL: usually `https://<slug>.iterate.workers.dev`, unless that app's `preview_N` Doppler config sets routed host config
+- Semaphore resource type: `environment-config-lease`
+- Semaphore resource slug: `preview-2`, `preview-3`, etc.
+- Semaphore resource data: `{ "dopplerConfig": "preview_2" }`, etc.
+- Doppler project: app/service dimension, such as `events`, `os2`, or `semaphore`
+- Doppler config: environment config dimension, such as `preview_2`, `prd`, or `dev_jonas_2`
+- Alchemy stage: inherited from Doppler as `${DOPPLER_CONFIG}`
 
-The resource slug is the canonical preview environment identifier. Every other name is derived from it.
+The Semaphore lease gives only the config dimension. The preview script chooses
+which Doppler projects to deploy.
 
-Preview slot configs are named `preview_1`, `preview_2`, etc. `ALCHEMY_STAGE` is inherited from `_shared` as `${DOPPLER_CONFIG}`. Preview deploy commands do not set `ALCHEMY_STAGE` themselves; the selected Doppler config is the source of truth.
+For example, a PR that affects two new-style apps leases `preview-2`, reads
+`data.dopplerConfig = preview_2`, then runs the same primitive for each selected
+app:
 
-For `events`, preview slots use routed custom hosts from the slot Doppler config:
+```bash
+cd apps/os2
+doppler run --project os2 --config preview_2 -- pnpm tsx ./alchemy.run.ts
 
-- `events-preview-1.iterate.com`
-- `*.events-preview-1.iterate.com`
+cd ../semaphore
+doppler run --project semaphore --config preview_2 -- pnpm tsx ./alchemy.run.ts
+```
 
-For `os2`, each preview slot gets a dashboard host under
-`iterate-preview-N.com` and project/MCP hosts under `iterate-preview-N.app`
-(see `docs/os2-environments.md`):
+Legacy preview-managed apps still use their package `alchemy:up` / `alchemy:down`
+scripts until migrated.
 
-- `os2.iterate-preview-N.com` (dashboard)
-- `*.iterate-preview-N.app` (project subdomains and `/mcp`)
+The same mechanism applies to local development and production:
 
-For `agents`, `codemode`, `example`, `semaphore`, and `ingress-proxy`,
-preview slot `APP_CONFIG_BASE_URL` values use the Worker URL directly:
-
-- `https://<app>-preview-N.iterate-dev-stg.workers.dev`
-
-`workers.dev` routes are assigned automatically from the Worker name, so
-`IterateApp` deliberately does not create Cloudflare Route/DNS resources for
-those hostnames.
-
-That means host-sensitive preview features can behave like preview/production instead of being limited to a plain `workers.dev` host.
+- local dev: `alchemy up` with a personal config such as `dev_jonas_2`
+- preview: `alchemy up` with a leased `preview_N` config
+- production: `alchemy up` with `prd`
 
 ## Source Of Truth
 
-- Semaphore `resources` stores the static preview pool inventory and generic leases
-- the managed PR body preview section stores the current per-app preview entry for that PR
-- there is no preview-specific database state in Semaphore
-- Doppler stores per-slot deploy config and inherited `ALCHEMY_STAGE`
+- the live Semaphore production database stores the environment config lease inventory for PR previews
+- the managed PR body preview section stores the current PR's lease and app statuses
+- Doppler stores each app project's config bag for the leased environment config
+- there is no app-specific resource inventory and no fallback state
 
-## Semaphore Token
+Deploy logic does not know about broken, excluded, or half-available preview
+slots. If a preview slot is not usable, it should not have an
+`environment-config-lease` resource in Semaphore.
 
-The preview router talks to Semaphore with a bearer token. In normal CI and operator commands, run it through `doppler run --project os --config prd`; the router reads `SEMAPHORE_API_TOKEN` when present and otherwise falls back to `APP_CONFIG_SHARED_API_SECRET`.
+The source-code seed in `scripts/preview/preview-inventory.ts` exists so the
+inventory can be recreated deliberately. Running the seed command makes the live
+Semaphore database exactly match that seed for `environment-config-lease`, so
+review the live rows with `preview status` / `preview reconcile` before and
+after using it.
 
-To use Semaphore directly, export the same token as `SEMAPHORE_API_TOKEN` or run from a Doppler config that exposes `APP_CONFIG_SHARED_API_SECRET`:
+As of 2026-05-05, `preview reconcile` against production Semaphore returned
+eight healthy resources:
 
-```bash
-doppler run --project os --config prd -- pnpm preview status
-doppler run --project semaphore --config prd -- pnpm seed:preview-pool
-```
-
-Do not paste the token into scripts or docs. The Semaphore UI calls it the operator token; it is the same shared API secret used for authenticated resource mutations.
+| Semaphore slug | Doppler config | Cloudflare zones checked                         |
+| -------------- | -------------- | ------------------------------------------------ |
+| `preview-2`    | `preview_2`    | `iterate-preview-2.com`, `iterate-preview-2.app` |
+| `preview-3`    | `preview_3`    | `iterate-preview-3.com`, `iterate-preview-3.app` |
+| `preview-4`    | `preview_4`    | `iterate-preview-4.com`, `iterate-preview-4.app` |
+| `preview-5`    | `preview_5`    | `iterate-preview-5.com`, `iterate-preview-5.app` |
+| `preview-6`    | `preview_6`    | `iterate-preview-6.com`, `iterate-preview-6.app` |
+| `preview-7`    | `preview_7`    | `iterate-preview-7.com`, `iterate-preview-7.app` |
+| `preview-8`    | `preview_8`    | `iterate-preview-8.com`, `iterate-preview-8.app` |
+| `preview-9`    | `preview_9`    | `iterate-preview-9.com`, `iterate-preview-9.app` |
 
 ## Lifecycle
 
-1. A shared PR preview workflow runs the repo-local Iterate CLI against `./scripts/preview/router.ts`.
-2. The preview router reads the managed PR body preview section. If the app already has a recorded preview, it destroys it first.
-3. The preview procedures acquire a fresh generic Semaphore lease from the app-specific preview pool.
-4. It derives the Doppler config, Alchemy stage, and public URL from the leased slug.
-5. It deploys with `doppler run --project <app> --config preview_N -- pnpm alchemy:up`. If no routed host config is set, the preview stays `workers.dev`-only; if routed hosts are configured, Alchemy creates the matching Cloudflare worker routes for that preview slot. Then it runs the app's network preview tests against the live URL and updates the managed PR body preview section.
-6. On PR close, the same workflow runs `preview cleanup`.
-7. The preview router reads the same PR body entry, runs `pnpm alchemy:down`, releases the generic Semaphore lease, and updates the section.
+1. The `Cloudflare Previews` workflow runs the repo-local preview router.
+2. The router reads the managed PR body preview section.
+3. It tries to renew the existing shared lease. If that fails, it tries to
+   reacquire the same slug. If that fails, it acquires any available shared
+   environment config lease.
+4. It compares the PR diff and selects affected apps plus explicit dependencies.
+   The temporary dependency graph is in
+   `@iterate-com/shared/apps/new-style-cloudflare-apps`; it belongs in app
+   manifests or contracts long-term.
+5. It deploys selected apps with the leased Doppler config. New-style apps run
+   `doppler run --project <app> --config <leased dopplerConfig> -- pnpm tsx ./alchemy.run.ts`
+   with the app directory as the working directory.
+   Legacy preview-managed apps run their package `alchemy:up` / `alchemy:down`
+   scripts for now.
+6. It records each app's result in the PR body. If any app fails, the overall
+   preview is unhealthy and the lease is kept for debugging.
+7. The test phase runs preview e2e only for deployed apps recorded in the same PR
+   body state.
+8. On PR close, cleanup destroys apps recorded in state. Only if cleanup
+   succeeds does it release the environment config lease.
+
+## Semaphore Token
+
+The preview router talks to Semaphore with a bearer token. In normal CI and
+operator commands, run it through `doppler run --project os --config prd`; the
+router reads `SEMAPHORE_API_TOKEN` when present and otherwise falls back to
+`APP_CONFIG_SHARED_API_SECRET`.
+
+```bash
+doppler run --project os --config prd -- pnpm preview status
+doppler run --project os --config prd -- pnpm preview reconcile
+doppler run --project semaphore --config prd -- pnpm --dir apps/semaphore seed:environment-config-leases
+```
+
+Do not paste the token into scripts or docs.
 
 ## Operational Notes
 
-- Preview inventory is provisioned explicitly with `apps/semaphore` `seed-cloudflare-preview-environment-pool`.
-- Doppler `preview_N` configs are also an explicit rollout precondition.
-- New preview-enabled apps must be added to `scripts/preview/apps.ts`, seeded into Semaphore, and given `preview_1` through `preview_10` configs in their Doppler project.
-- CI workflows only invoke the shared preview local-router commands; they do not parse or render preview state directly.
-- The app manifest for paths, Doppler project names, preview pool types, and test commands lives in `scripts/preview/apps.ts`.
-- The preview router and procedures live in `scripts/preview/router.ts` and `scripts/preview/preview.ts`.
-- Preview leases are deliberately long-lived in v1 and are released explicitly on cleanup.
-- Deleting the managed PR body preview section is treated as state loss. A later sync can create a fresh preview while the previous environment may linger until cleanup or later slot reuse.
-- `events` preview runs the deployed-worker smoke suites rather than the slowest stream propagation suite, which remains available under the full app e2e command.
-- `events` preview slot configs currently use custom routed hosts under `iterate.com`, so keep the slot DNS + wildcard DNS records (`events-preview-N.iterate.com` and `*.events-preview-N.iterate.com`) in place before expecting preview sync to pass readiness on those hosts.
-- `semaphore` preview runs the deployed-worker auth, CRUD, and contract-client checks rather than the longest wait-path contention test, which remains available under the full app e2e command.
-- `ingress-proxy` preview runs the management API e2e suite only. The full custom-host proxy suite still needs a routed hostname topology rather than an isolated `workers.dev` preview URL.
+- Environment config lease inventory for PR previews is the live Semaphore
+  database. List it with `pnpm preview status`.
+- Reconcile the live rows with `pnpm preview reconcile`. It checks every live
+  `environment-config-lease` row against the preview-managed Doppler projects
+  and the Cloudflare zone pair for that slot, such as
+  `iterate-preview-N.com` / `iterate-preview-N.app`.
+- The current source-code seed contains `preview_2` through `preview_9`. Treat
+  it as a recreate script input, not as runtime deploy state.
+- The seed is exact for `environment-config-lease`: drifted resources are
+  deleted and missing resources are recreated with the source-code data.
+- Only keep Semaphore resources when the matching `preview_N` Doppler
+  configs exist for the preview-managed apps and the app-specific Cloudflare
+  prerequisites are in the right accounts. For os2, that includes the
+  `iterate-preview-N.com` / `iterate-preview-N.app` zone pair.
+- Preview app configs inherit Cloudflare credentials from `_shared/preview`.
+  Do not set app-local `CLOUDFLARE_ACCOUNT_ID` or `CLOUDFLARE_API_TOKEN`
+  overrides; the preview domain pairs live in account
+  `cc7f6f461fbe823c199da2b27f9e0ff3`.
+- If two apps are affected by a PR, or one affected app has an explicit deploy
+  dependency, they are deployed together under the same environment config
+  lease. If one selected app fails, the overall preview is unhealthy and the
+  lease is kept.
+- Cross-app runtime references must be derived from the same config/stage. Today
+  os2 points at events with `APP_CONFIG_EVENTS_BASE_URL`, for example
+  `https://events-preview-N.iterate.com`. Future Cloudflare Service Bindings
+  must follow the same rule: derive the target from the leased `preview_N`
+  config rather than hardcoding another environment.
+- CI workflows invoke one shared preview lifecycle. The lifecycle code, not the
+  workflow matrix, decides which apps deploy.
+- Preview deploys do not override `ALCHEMY_STAGE`.
+- Deleting the managed PR body preview section is treated as state loss.
+- Environment config leases are released explicitly on cleanup, not on deploy or test
+  failure.
 - Manual lifecycle:
-  `doppler run --project os --config prd -- pnpm preview sync --app example`
-  `doppler run --project os --config prd -- pnpm preview cleanup --app example`
+
+In CI, `GITHUB_TOKEN`, `GITHUB_PR_NUMBER`, and `GITHUB_REPOSITORY` are set by
+the workflow. Locally, pass the PR number and preserve a GitHub token from `gh`:
+
+```bash
+GITHUB_TOKEN="$(gh auth token)" doppler run --project os --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview sync --pull-request-number 1234
+GITHUB_TOKEN="$(gh auth token)" doppler run --project os --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview deploy --pull-request-number 1234
+GITHUB_TOKEN="$(gh auth token)" doppler run --project os --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview test --pull-request-number 1234
+GITHUB_TOKEN="$(gh auth token)" doppler run --project os --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview cleanup --pull-request-number 1234
+```
+
+Direct app deploys are useful to prove the primitive or debug a specific slot,
+but they bypass Semaphore ownership:
+
+```bash
+cd apps/os2
+doppler run --project os2 --config preview_2 -- pnpm tsx ./alchemy.run.ts
+
+cd ../events
+doppler run --project events --config preview_2 -- pnpm tsx ./alchemy.run.ts
+```

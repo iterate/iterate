@@ -77,14 +77,6 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     CLERK_JWT_KEY: ctx.compiledAppConfig.clerk.jwtKey.exposeSecret(),
     CLERK_PUBLISHABLE_KEY: ctx.compiledAppConfig.clerk.publishableKey,
     CLERK_SECRET_KEY: ctx.compiledAppConfig.clerk.secretKey.exposeSecret(),
-    ...(ctx.compiledAppConfig.clerk.oauthClientId
-      ? { CLERK_OAUTH_CLIENT_ID: ctx.compiledAppConfig.clerk.oauthClientId }
-      : {}),
-    ...(ctx.compiledAppConfig.clerk.oauthClientSecret
-      ? {
-          CLERK_OAUTH_CLIENT_SECRET: ctx.compiledAppConfig.clerk.oauthClientSecret.exposeSecret(),
-        }
-      : {}),
     CLERK_SIGN_IN_URL: ctx.compiledAppConfig.clerk.signInUrl,
     CLERK_SIGN_UP_URL: ctx.compiledAppConfig.clerk.signUpUrl,
     DB: db,

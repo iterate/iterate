@@ -22,9 +22,8 @@ describe("runPullProcessor", () => {
     const liveEvents = [
       event(
         {
-          type: "events.iterate.com/agent/input-added",
+          type: "events.iterate.com/agent/output-added",
           payload: {
-            role: "assistant",
             content: "```js\nasync () => {\n  return 1;\n}\n```",
           },
         },
@@ -67,14 +66,14 @@ describe("runPullProcessor", () => {
         type: "events.iterate.com/agent/input-added",
         idempotencyKey: CODEMODE_PRIMER_IDEMPOTENCY_KEY,
         payload: {
-          role: "user",
           content: expect.stringContaining("codemode is how you use tools"),
           triggerLlmRequest: { behaviour: "dont-trigger-request" },
         },
       },
       {
         type: "events.iterate.com/codemode/block-added",
-        idempotencyKey: "stream-processor:codemode:derived:assistant-input-to-block:/agents/test:2",
+        idempotencyKey:
+          "stream-processor:codemode:derived:assistant-output-to-block:/agents/test:2",
         payload: {
           script: "async () => {\n  return 1;\n}",
         },
@@ -105,7 +104,6 @@ describe("runPullProcessor", () => {
             {
               type: "events.iterate.com/agent/input-added",
               payload: {
-                role: "user",
                 content: "hello",
               },
             },
@@ -126,7 +124,6 @@ describe("runPullProcessor", () => {
         type: "events.iterate.com/agent/input-added",
         idempotencyKey: CODEMODE_PRIMER_IDEMPOTENCY_KEY,
         payload: {
-          role: "user",
           content: expect.stringContaining("codemode is how you use tools"),
           triggerLlmRequest: { behaviour: "dont-trigger-request" },
         },

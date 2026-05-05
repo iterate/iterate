@@ -39,6 +39,7 @@ function ProjectMcpPage() {
   });
   const mcpUrl = buildProjectMcpUrl({
     projectSlug: project.slug,
+    customHostname: project.customHostname,
     projectHostnameBases: config.projectHostnameBases,
   });
   const sessions = sessionsData?.sessions ?? [];

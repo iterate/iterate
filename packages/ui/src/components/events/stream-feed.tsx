@@ -1,9 +1,10 @@
 import { type ReactNode } from "react";
-import { getCoreEventTypeSlug, type Event, type StreamPath } from "@iterate-com/events-contract";
+import { type Event, type StreamPath } from "@iterate-com/events-contract";
 import {
   AlertTriangleIcon,
   BotIcon,
   CheckCircle2Icon,
+  ChevronDownIcon,
   CircleIcon,
   Code2Icon,
   FolderPlusIcon,
@@ -18,18 +19,27 @@ import {
   ConversationEmptyState,
   ConversationScrollButton,
 } from "@iterate-com/ui/components/ai-elements/conversation";
-import {
-  Message,
-  MessageContent,
-  MessageResponse,
-} from "@iterate-com/ui/components/ai-elements/message";
+import { Message, MessageContent } from "@iterate-com/ui/components/ai-elements/message";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
-import { IterateMark } from "@iterate-com/ui/components/iterate-mark";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@iterate-com/ui/components/dropdown-menu";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { EventsStreamEventInspectorSheet } from "@iterate-com/ui/components/events/event-inspector-sheet";
+import { AgentOutputCard } from "@iterate-com/ui/components/events/feed-element-renderers/agent-output-card";
+import { GroupedRawEventLine } from "@iterate-com/ui/components/events/feed-element-renderers/grouped-raw-event-line";
+import { MessageFeedItemCard } from "@iterate-com/ui/components/events/feed-element-renderers/message-card";
+import { PromptContextCard } from "@iterate-com/ui/components/events/feed-element-renderers/prompt-context-card";
+import { SystemPromptCard } from "@iterate-com/ui/components/events/feed-element-renderers/system-prompt-card";
 import type {
   EventsStreamActivityElement,
   EventsStreamBuiltInElement,
@@ -39,11 +49,10 @@ import type {
   EventsStreamComposerSuggestionElement,
   EventsStreamErrorElement,
   EventsStreamEventCounterElement,
-  EventsStreamGroupedRawEventElement,
   EventsStreamInputAction,
-  EventsStreamMessageElement,
+  EventsStreamLlmRequestBoundaryElement,
   EventsStreamMetadataUpdatedElement,
-  EventsStreamRawEventElement,
+  EventsStreamRawEventSummary,
   EventsStreamRawJsonDumpElement,
   EventsStreamViewState,
 } from "@iterate-com/ui/components/events/feed-items";
@@ -61,6 +70,8 @@ export type EventsStreamPathLinkRenderer = (args: {
   className?: string;
 }) => ReactNode;
 
+export type EventsStreamElementType = EventsStreamBuiltInElement["type"];
+
 /**
  * Renders a complete stream view snapshot for browser clients.
  *
@@ -74,6 +85,8 @@ export function EventsStreamView({
   onOpenEventOffsetChange,
   getEventTypeHref,
   renderStreamPathLink,
+  hiddenElementTypes = [],
+  onHiddenElementTypesChange,
   emptyLabel,
   isPending,
   errorLabel,
@@ -85,21 +98,34 @@ export function EventsStreamView({
   onOpenEventOffsetChange?: (offset?: number) => void;
   getEventTypeHref?: (eventType: string) => string | undefined;
   renderStreamPathLink?: EventsStreamPathLinkRenderer;
+  hiddenElementTypes?: readonly EventsStreamElementType[];
+  onHiddenElementTypesChange?: (types: EventsStreamElementType[]) => void;
   emptyLabel?: string;
   isPending?: boolean;
   errorLabel?: string;
   className?: string;
 }) {
+  const feedElementTypes = getElementTypes(viewState.slots.feed);
+  const visibleFeedElements = filterElementsByElementType({
+    elements: viewState.slots.feed,
+    hiddenElementTypes,
+  });
+
   return (
     <EventsStreamLayout className={className}>
-      {viewState.slots.header.length === 0 ? null : (
+      {viewState.slots.header.length === 0 && feedElementTypes.length === 0 ? null : (
         <EventsStreamLayoutHeader>
-          <EventsStreamHeader elements={viewState.slots.header} />
+          <EventsStreamHeader
+            elements={viewState.slots.header}
+            elementTypes={feedElementTypes}
+            hiddenElementTypes={hiddenElementTypes}
+            onHiddenElementTypesChange={onHiddenElementTypesChange}
+          />
         </EventsStreamLayoutHeader>
       )}
       <EventsStreamLayoutMain>
         <EventsStreamFeed
-          elements={viewState.slots.feed}
+          elements={visibleFeedElements}
           emptyLabel={emptyLabel}
           isPending={isPending}
           errorLabel={errorLabel}
@@ -122,18 +148,31 @@ export function EventsStreamView({
  */
 export function EventsStreamHeader({
   elements,
+  elementTypes = [],
+  hiddenElementTypes = [],
+  onHiddenElementTypesChange,
 }: {
   elements: readonly EventsStreamBuiltInElement[];
+  elementTypes?: readonly EventsStreamElementType[];
+  hiddenElementTypes?: readonly EventsStreamElementType[];
+  onHiddenElementTypesChange?: (types: EventsStreamElementType[]) => void;
 }) {
-  if (elements.length === 0) {
+  if (elements.length === 0 && elementTypes.length === 0) {
     return null;
   }
 
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground">
-      {elements.map((element) => (
-        <EventsStreamHeaderElementRenderer key={element.id} element={element} />
-      ))}
+    <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        {elements.map((element) => (
+          <EventsStreamHeaderElementRenderer key={element.id} element={element} />
+        ))}
+      </div>
+      <EventsStreamElementTypeFilter
+        elementTypes={elementTypes}
+        hiddenElementTypes={hiddenElementTypes}
+        onHiddenElementTypesChange={onHiddenElementTypesChange}
+      />
     </div>
   );
 }
@@ -147,6 +186,90 @@ function EventsStreamHeaderElementRenderer({ element }: { element: EventsStreamB
     default:
       return <UnknownStreamElement element={element} />;
   }
+}
+
+function EventsStreamElementTypeFilter({
+  elementTypes,
+  hiddenElementTypes,
+  onHiddenElementTypesChange,
+}: {
+  elementTypes: readonly EventsStreamElementType[];
+  hiddenElementTypes: readonly EventsStreamElementType[];
+  onHiddenElementTypesChange?: (types: EventsStreamElementType[]) => void;
+}) {
+  if (elementTypes.length === 0) {
+    return null;
+  }
+
+  const hiddenElementTypeSet = new Set(hiddenElementTypes);
+  const visibleCount = elementTypes.filter((type) => !hiddenElementTypeSet.has(type)).length;
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 shrink-0 gap-1.5 px-2 text-xs font-normal"
+          />
+        }
+      >
+        <span className="truncate">Filter feed items</span>
+        <ChevronDownIcon className="size-3.5 text-muted-foreground" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-[min(18rem,calc(100vw-1rem))]">
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>
+            Element types {visibleCount}/{elementTypes.length}
+          </DropdownMenuLabel>
+          <div className="flex gap-1 px-1.5 pb-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 flex-1 px-2 text-xs"
+              onClick={() => onHiddenElementTypesChange?.([])}
+            >
+              Show all
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 flex-1 px-2 text-xs"
+              onClick={() =>
+                onHiddenElementTypesChange?.(
+                  elementTypes.filter((type) => !hiddenElementTypeSet.has(type)),
+                )
+              }
+            >
+              Toggle all
+            </Button>
+          </div>
+          <DropdownMenuSeparator />
+          {elementTypes.map((type) => (
+            <DropdownMenuCheckboxItem
+              key={type}
+              checked={!hiddenElementTypeSet.has(type)}
+              onCheckedChange={(checked) => {
+                const nextHidden = checked
+                  ? hiddenElementTypes.filter((hiddenType) => hiddenType !== type)
+                  : [...hiddenElementTypes, type];
+
+                onHiddenElementTypesChange?.(
+                  nextHidden.filter((hiddenType) => elementTypes.includes(hiddenType)),
+                );
+              }}
+            >
+              <span className="truncate font-mono text-xs">{type}</span>
+            </DropdownMenuCheckboxItem>
+          ))}
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 }
 
 function EventCounterHeaderElement({ element }: { element: EventsStreamEventCounterElement }) {
@@ -259,6 +382,8 @@ export function EventsStreamFeed({
   errorLabel?: string;
   className?: string;
 }) {
+  const elapsedByOffset = getElapsedByOffset(elements);
+
   return (
     <div className={cn("flex h-full min-h-0 flex-col overflow-hidden", className)}>
       <Conversation className="min-h-0 flex-1" resize="smooth">
@@ -285,6 +410,7 @@ export function EventsStreamFeed({
             <EventsStreamFeedElementRenderer
               key={element.id}
               element={element}
+              elapsedByOffset={elapsedByOffset}
               onOpenEventOffsetChange={onOpenEventOffsetChange}
               renderStreamPathLink={renderStreamPathLink}
             />
@@ -298,10 +424,12 @@ export function EventsStreamFeed({
 
 function EventsStreamFeedElementRenderer({
   element,
+  elapsedByOffset,
   onOpenEventOffsetChange,
   renderStreamPathLink,
 }: {
   element: EventsStreamBuiltInElement;
+  elapsedByOffset: ReadonlyMap<number, string>;
   onOpenEventOffsetChange?: (offset?: number) => void;
   renderStreamPathLink?: EventsStreamPathLinkRenderer;
 }) {
@@ -312,11 +440,21 @@ function EventsStreamFeedElementRenderer({
   switch (element.type) {
     case "message":
       return <MessageFeedItemCard element={element} />;
-    case "raw-event":
-      return <RawEventLine element={element} onOpenEventOffsetChange={onOpenEventOffsetChange} />;
+    case "prompt-context":
+      return <PromptContextCard element={element} />;
+    case "agent-output":
+      return <AgentOutputCard element={element} />;
+    case "system-prompt":
+      return <SystemPromptCard element={element} />;
+    case "llm-request-boundary":
+      return <LlmRequestBoundaryLine element={element} />;
     case "grouped-raw-event":
       return (
-        <GroupedRawEventLine element={element} onOpenEventOffsetChange={onOpenEventOffsetChange} />
+        <GroupedRawEventLine
+          element={element}
+          elapsedLabel={elapsedByOffset.get(element.props.events[0]?.offset ?? -1)}
+          onOpenEventOffsetChange={onOpenEventOffsetChange}
+        />
       );
     case "raw-json-dump":
       return <RawJsonDump element={element} />;
@@ -367,99 +505,25 @@ function RawJsonDump({ element }: { element: EventsStreamRawJsonDumpElement }) {
   );
 }
 
-function MessageFeedItemCard({ element }: { element: EventsStreamMessageElement }) {
-  if (element.props.format === "markdown") {
-    return (
-      <Message from={element.props.role}>
-        <MessageContent>
-          <MessageResponse className="min-w-0 max-w-full overflow-hidden">
-            {element.props.text}
-          </MessageResponse>
-        </MessageContent>
-      </Message>
-    );
-  }
+function LlmRequestBoundaryLine({ element }: { element: EventsStreamLlmRequestBoundaryElement }) {
+  const label =
+    element.props.phase === "started"
+      ? "LLM request started"
+      : `LLM request ended${element.props.outcome ? `: ${element.props.outcome}` : ""}`;
 
   return (
-    <Message from={element.props.role}>
-      <MessageContent>
-        <div className="max-h-[40vh] max-w-full overflow-auto whitespace-pre-wrap wrap-break-word leading-6">
-          {element.props.text}
-        </div>
-      </MessageContent>
-    </Message>
-  );
-}
-
-function RawEventLine({
-  element,
-  onOpenEventOffsetChange,
-}: {
-  element: EventsStreamRawEventElement;
-  onOpenEventOffsetChange?: (offset?: number) => void;
-}) {
-  return (
-    <div className="flex justify-end">
-      <button
-        type="button"
-        className="flex min-w-0 max-w-full items-center justify-end gap-2 rounded-md px-1 py-0.5 text-[11px] text-muted-foreground hover:bg-muted/50 hover:text-foreground"
-        onClick={() => onOpenEventOffsetChange?.(element.props.offset)}
-      >
-        <span className="shrink-0 font-mono tabular-nums">{element.props.offset}</span>
-        <span className="shrink-0">·</span>
-        <CoreEventTypeLabel type={element.props.eventType} className="min-w-0 truncate" />
-        <span className="shrink-0">·</span>
-        <span className="shrink-0 tabular-nums">{formatTime(element.props.timestamp)}</span>
-      </button>
-    </div>
-  );
-}
-
-function GroupedRawEventLine({
-  element,
-  onOpenEventOffsetChange,
-}: {
-  element: EventsStreamGroupedRawEventElement;
-  onOpenEventOffsetChange?: (offset?: number) => void;
-}) {
-  const firstOffset = element.props.events[0]?.props.offset;
-  const lastOffset = element.props.events[element.props.events.length - 1]?.props.offset;
-
-  return (
-    <div className="flex justify-end">
-      <button
-        type="button"
-        className="flex min-w-0 max-w-full items-center justify-end gap-2 rounded-md px-1 py-0.5 text-[11px] text-muted-foreground hover:bg-muted/50 hover:text-foreground"
-        onClick={() => onOpenEventOffsetChange?.(firstOffset)}
-      >
-        <span className="shrink-0 font-mono tabular-nums">
-          {firstOffset}
-          {lastOffset !== firstOffset ? `-${lastOffset}` : ""}
-        </span>
-        <span className="shrink-0">·</span>
-        <CoreEventTypeLabel type={element.props.eventType} className="min-w-0 truncate" />
-        <Badge variant="secondary" className="shrink-0 px-1.5 py-0 text-[10px]">
-          x{element.props.count}
-        </Badge>
-        <span className="shrink-0">·</span>
-        <span className="shrink-0 tabular-nums">{formatTime(element.props.firstTimestamp)}</span>
-      </button>
-    </div>
-  );
-}
-
-function CoreEventTypeLabel({ type, className }: { type: string; className?: string }) {
-  const slug = getCoreEventTypeSlug(type);
-
-  if (slug == null) {
-    return <span className={cn("font-mono", className)}>{type}</span>;
-  }
-
-  return (
-    <span className={cn("inline-flex min-w-0 items-center gap-1 font-mono", className)}>
-      <IterateMark aria-hidden />
-      <span className="truncate">{`core/${slug}`}</span>
-    </span>
+    <TimelineLine
+      icon={
+        element.props.phase === "started" ? (
+          <CircleIcon className="size-2 fill-current text-amber-600" />
+        ) : element.props.outcome === "failed" ? (
+          <XCircleIcon className="size-3 text-destructive" />
+        ) : (
+          <CheckCircle2Icon className="size-3 text-muted-foreground" />
+        )
+      }
+      label={label}
+    />
   );
 }
 
@@ -673,8 +737,23 @@ function FeedEvent({
   );
 }
 
-function formatTime(timestamp: number) {
-  return new Date(timestamp).toLocaleTimeString();
+function formatElapsedTime(durationMs: number) {
+  const normalizedDurationMs = Math.max(0, Math.floor(durationMs));
+
+  if (normalizedDurationMs < 1_000) {
+    return `+${normalizedDurationMs}ms`;
+  }
+
+  if (normalizedDurationMs < 60_000) {
+    const seconds = Math.floor(normalizedDurationMs / 100) / 10;
+    return `+${seconds.toFixed(1).replace(/\.0$/, "")}s`;
+  }
+
+  const totalSeconds = Math.floor(normalizedDurationMs / 1_000);
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  return `+${totalMinutes}m${seconds}s`;
 }
 
 function formatDuration(durationMs: number) {
@@ -709,14 +788,9 @@ function collectRawEventsFromElements(elements: readonly EventsStreamBuiltInElem
   const rawEvents = new Map<number, Event>();
 
   for (const element of elements) {
-    if (element.type === "raw-event") {
-      rawEvents.set(element.props.raw.offset, element.props.raw);
-      continue;
-    }
-
     if (element.type === "grouped-raw-event") {
       for (const event of element.props.events) {
-        rawEvents.set(event.props.raw.offset, event.props.raw);
+        rawEvents.set(event.raw.offset, event.raw);
       }
       continue;
     }
@@ -729,4 +803,49 @@ function collectRawEventsFromElements(elements: readonly EventsStreamBuiltInElem
   }
 
   return [...rawEvents.values()].sort((a, b) => a.offset - b.offset);
+}
+
+function getElapsedByOffset(elements: readonly EventsStreamBuiltInElement[]) {
+  const rawEvents = getRawEventSummaries(elements);
+  const elapsedByOffset = new Map<number, string>();
+
+  for (const [index, event] of rawEvents.entries()) {
+    const previousEvent = rawEvents[index - 1];
+    if (previousEvent == null) {
+      continue;
+    }
+
+    elapsedByOffset.set(event.offset, formatElapsedTime(event.timestamp - previousEvent.timestamp));
+  }
+
+  return elapsedByOffset;
+}
+
+function getRawEventSummaries(
+  elements: readonly EventsStreamBuiltInElement[],
+): EventsStreamRawEventSummary[] {
+  return elements
+    .flatMap((element) => (element.type === "grouped-raw-event" ? element.props.events : []))
+    .sort((a, b) => a.offset - b.offset);
+}
+
+function getElementTypes(
+  elements: readonly EventsStreamBuiltInElement[],
+): EventsStreamElementType[] {
+  return [...new Set(elements.map((element) => element.type))].sort();
+}
+
+function filterElementsByElementType({
+  elements,
+  hiddenElementTypes,
+}: {
+  elements: readonly EventsStreamBuiltInElement[];
+  hiddenElementTypes: readonly EventsStreamElementType[];
+}) {
+  if (hiddenElementTypes.length === 0) {
+    return elements;
+  }
+
+  const hiddenElementTypeSet = new Set(hiddenElementTypes);
+  return elements.filter((element) => !hiddenElementTypeSet.has(element.type));
 }

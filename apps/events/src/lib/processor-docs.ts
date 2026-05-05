@@ -4,6 +4,8 @@ import { CodemodeProcessorContract } from "@iterate-com/shared/stream-processors
 import { DynamicWorkerProcessorContract } from "@iterate-com/shared/stream-processors/dynamic-worker/contract";
 import { JsonataTransformerProcessorContract } from "@iterate-com/shared/stream-processors/jsonata-transformer/contract";
 import { SchedulingProcessorContract } from "@iterate-com/shared/stream-processors/scheduling/contract";
+import { SlackThreadProcessorContract } from "@iterate-com/shared/stream-processors/slack-thread/contract";
+import { SlackProcessorContract } from "@iterate-com/shared/stream-processors/slack/contract";
 import { WebchatProcessorContract } from "@iterate-com/shared/stream-processors/webchat/contract";
 import { CoreStreamProcessorContract } from "~/stream-processors/core/contract.ts";
 
@@ -11,6 +13,8 @@ const processorContracts = [
   CoreStreamProcessorContract,
   AgentProcessorContract,
   WebchatProcessorContract,
+  SlackProcessorContract,
+  SlackThreadProcessorContract,
   CodemodeProcessorContract,
   SchedulingProcessorContract,
   JsonataTransformerProcessorContract,
@@ -151,5 +155,6 @@ function hasProcessorSlug(value: unknown): value is { slug: string } {
 
 function eventSlugFromType(args: { processorSlug: string; type: string }) {
   const prefix = `events.iterate.com/${args.processorSlug}/`;
-  return args.type.startsWith(prefix) ? args.type.slice(prefix.length) : args.type;
+  if (args.type.startsWith(prefix)) return args.type.slice(prefix.length);
+  return args.type.split("/").at(-1) ?? args.type;
 }

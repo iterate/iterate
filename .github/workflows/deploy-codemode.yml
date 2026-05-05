@@ -5,7 +5,7 @@ permissions:
   contents: read
   deployments: write
 concurrency:
-  group: codemode-${{ github.ref_name || inputs.stage || 'prd' }}
+  group: codemode-${{ github.ref_name || 'prd' }}
   cancel-in-progress: true
 on:
   push:
@@ -14,6 +14,8 @@ on:
     paths:
       - apps/codemode/**
       - apps/codemode-contract/**
+      - packages/shared/src/alchemy/**
+      - packages/shared/src/apps/**
   workflow_dispatch:
     inputs:
       ref:
@@ -21,32 +23,25 @@ on:
         required: false
         type: string
         default: ""
-      stage:
-        description: Doppler config to deploy for manual runs.
-        required: false
-        type: string
-        default: prd
 jobs:
   variables:
-    runs-on: ubuntu-24.04
+    runs-on: depot-ubuntu-24.04-32
     outputs:
       run_url: ${{ steps.vars.outputs.run_url }}
       short_sha: ${{ steps.vars.outputs.short_sha }}
-      stage: ${{ steps.vars.outputs.stage }}
     steps:
       - id: vars
         name: Resolve workflow variables
         env:
           GIT_SHA: ${{ github.sha }}
         run: |-
-          echo "stage=${{ github.event_name == 'push' && 'prd' || inputs.stage || 'prd' }}" >> "$GITHUB_OUTPUT"
           echo "short_sha=${GIT_SHA:0:7}" >> "$GITHUB_OUTPUT"
           echo "run_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> "$GITHUB_OUTPUT"
   deploy:
     needs:
       - variables
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-24.04
+    runs-on: depot-ubuntu-24.04-32
     outputs:
       public_url: ${{ steps.metadata.outputs.public_url }}
     steps:
@@ -68,7 +63,7 @@ jobs:
           for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
           doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
       - name: Setup Doppler
-        run: doppler setup --config ${{ needs.variables.outputs.stage }} --project codemode
+        run: doppler setup --config prd --project codemode
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - id: metadata
@@ -77,22 +72,21 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |-
           set -euo pipefail
-          routes="$(doppler secrets get WORKER_ROUTES --plain 2>/dev/null || true)"
-          first_route="$(printf "%s" "$routes" | tr "," "\n" | awk '{ gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0); if ($0 != "") { sub(/\/\*$/, "", $0); print; exit } }')"
-          if [ -n "$first_route" ]; then
-            echo "public_url=https://${first_route}" >> "$GITHUB_OUTPUT"
+          public_url="$(doppler run -- pnpm tsx -e 'import { resolveNewStyleCloudflareAppBaseUrlFromEnv } from "@iterate-com/shared/apps/new-style-cloudflare-apps"; console.log(resolveNewStyleCloudflareAppBaseUrlFromEnv(process.env) ?? "");')"
+          if [ -n "$public_url" ]; then
+            echo "public_url=${public_url}" >> "$GITHUB_OUTPUT"
           fi
       - name: Deploy apps/codemode
         working-directory: apps/codemode
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run -- pnpm alchemy:up
+        run: doppler run -- pnpm tsx ./alchemy.run.ts
   slack-success:
     needs:
       - variables
       - deploy
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.deploy.result == 'success'
-    runs-on: ubuntu-24.04
+    runs-on: depot-ubuntu-24.04-32
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -123,13 +117,12 @@ jobs:
             const publicUrl = "${{ needs.deploy.outputs.public_url }}";
             const runUrl = "${{ needs.variables.outputs.run_url }}";
             const shortSha = "${{ needs.variables.outputs.short_sha }}";
-            const stage = "${{ needs.variables.outputs.stage }}";
             const __handler = async function notify_slack_on_success() {
               const { getSlackClient, slackChannelIds } =
                 await require(".github/ts-workflows/workflows/deploy-codemode.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */).load();
               const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
               const message = [
-                `✅ ${appDisplayName} ${stage} deploy succeeded (${shortSha})`,
+                `✅ ${appDisplayName} prd deploy succeeded (${shortSha})`,
                 publicUrl ? `<${publicUrl}|Open app>` : null,
                 `<${runUrl}|View workflow run>`,
               ]
@@ -147,7 +140,7 @@ jobs:
       - variables
       - deploy
     if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.deploy.result == 'failure'
-    runs-on: ubuntu-24.04
+    runs-on: depot-ubuntu-24.04-32
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -177,13 +170,12 @@ jobs:
             const appDisplayName = "Codemode";
             const runUrl = "${{ needs.variables.outputs.run_url }}";
             const shortSha = "${{ needs.variables.outputs.short_sha }}";
-            const stage = "${{ needs.variables.outputs.stage }}";
             const __handler = async function notify_slack_on_failure() {
               const { getSlackClient, slackChannelIds } =
                 await require(".github/ts-workflows/workflows/deploy-codemode.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */).load();
               const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
               const message = [
-                `🚨 ${appDisplayName} ${stage} deploy failed (${shortSha}).`,
+                `🚨 ${appDisplayName} prd deploy failed (${shortSha}).`,
                 `<${runUrl}|View workflow run>`,
                 "@iterate please investigate",
               ].join(" ");

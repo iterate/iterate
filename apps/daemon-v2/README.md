@@ -27,7 +27,7 @@ Minimal full-stack app: TanStack Start + oRPC over OpenAPI/HTTP + Drizzle, dual-
 - `src/routes/__root.tsx` — root route with sidebar shell, SSR-loaded public config, shared app providers, and devtools
 - `vite.config.ts` — Node dev/build via Nitro
 - `vite.cf.config.ts` — Cloudflare dev/build (uses Alchemy plugin)
-- PostHog source maps: `vite.config.ts` / `vite.cf.config.ts` pass `apiKey`, `projectId`, `releaseName: manifest.slug`, and `releaseVersion: "latest"` into `posthogSourcemaps` from `@iterate-com/shared/posthog/vite-plugin` (Doppler example `dev` / `preview` / `prd`, not `APP_CONFIG`)
+- PostHog source maps: `vite.config.ts` / `vite.cf.config.ts` pass `apiKey`, `projectId`, `releaseName: manifest.slug`, and `releaseVersion: "latest"` into `posthogSourcemaps` from `@iterate-com/shared/posthog/vite-plugin` (Doppler configs such as `dev_jonas`, numbered `preview_N`, and `prd`, not `APP_CONFIG`)
 - `runtime-smoke.test.ts` — smoke matrix for dev, preview, start, and Cloudflare runtimes
 
 ## Runtime architecture
