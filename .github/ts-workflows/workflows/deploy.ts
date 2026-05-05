@@ -28,7 +28,7 @@ export default {
   },
   jobs: {
     "deploy-os": {
-      "runs-on": "depot-ubuntu-24.04-arm-4",
+      ...utils.runsOnDepotUbuntuForContainerThings,
       steps: [
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "prd" }),
@@ -49,7 +49,7 @@ export default {
       ],
     },
     "deploy-iterate-com": {
-      "runs-on": "depot-ubuntu-24.04-arm-4",
+      ...utils.runsOnDepotUbuntuForContainerThings,
       if: "inputs.deploy_iterate_com",
       steps: [
         ...utils.setupRepo,

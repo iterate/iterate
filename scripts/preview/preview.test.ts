@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { cloudflarePreviewSharedPaths } from "./apps.ts";
+import { cloudflarePreviewApps, cloudflarePreviewSharedPaths } from "./apps.ts";
 import {
+  batchPreviewAppsByDependencies,
   expandPreviewDependencies,
   resolvePreviewCompareBaseSha,
   selectPreviewAppsNeedingRetry,
@@ -17,6 +18,25 @@ describe("preview app dependency expansion", () => {
 
   it("deduplicates dependencies", () => {
     expect(expandPreviewDependencies(["events", "os2"])).toEqual(["events", "os2"]);
+  });
+});
+
+describe("preview app dependency batches", () => {
+  it("keeps dependent apps after their dependencies", () => {
+    expect(
+      batchPreviewAppsByDependencies([cloudflarePreviewApps.os2, cloudflarePreviewApps.events]).map(
+        (batch) => batch.map((app) => app.slug),
+      ),
+    ).toEqual([["events"], ["os2"]]);
+  });
+
+  it("keeps independent apps in the same batch", () => {
+    expect(
+      batchPreviewAppsByDependencies([
+        cloudflarePreviewApps.agents,
+        cloudflarePreviewApps.codemode,
+      ]).map((batch) => batch.map((app) => app.slug)),
+    ).toEqual([["agents", "codemode"]]);
   });
 });
 

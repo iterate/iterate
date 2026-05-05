@@ -16,7 +16,7 @@ on:
       - closed
 jobs:
   scope:
-    runs-on: depot-ubuntu-24.04
+    runs-on: depot-ubuntu-24.04-32
     outputs:
       should_run: ${{ steps.should_run_preview.outputs.result }}
     steps:
@@ -92,7 +92,7 @@ jobs:
       - scope
     if: needs.scope.outputs.should_run == 'true' && github.event.action != 'closed'
     name: Preview / deploy
-    runs-on: depot-ubuntu-24.04
+    runs-on: depot-ubuntu-24.04-32
     concurrency:
       group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number }}
       cancel-in-progress: false
@@ -156,7 +156,7 @@ jobs:
       - preview
     if: needs.scope.outputs.should_run == 'true' && github.event.action != 'closed' && github.event.pull_request.head.repo.fork != true
     name: Preview / e2e
-    runs-on: depot-ubuntu-24.04
+    runs-on: depot-ubuntu-24.04-32
     concurrency:
       group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number }}
       cancel-in-progress: false
@@ -198,7 +198,7 @@ jobs:
       - scope
     if: needs.scope.outputs.should_run == 'true' && github.event.action == 'closed' && github.event.pull_request.head.repo.fork != true
     name: Preview / cleanup
-    runs-on: depot-ubuntu-24.04
+    runs-on: depot-ubuntu-24.04-32
     concurrency:
       group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number }}
       cancel-in-progress: false

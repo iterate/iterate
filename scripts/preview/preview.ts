@@ -44,6 +44,7 @@ const defaultPreviewReadyTimeoutMs = 600_000;
 const defaultPreviewReadyUrlPath = "/api/__internal/health";
 const defaultPreviewTestMaxAttempts = 2;
 const defaultPreviewTestRetryDelayMs = 5_000;
+const defaultPreviewAppConcurrency = 5;
 export type PreviewSemaphoreResourceClient = {
   acquire: (input: { leaseMs: number; type: string; waitMs?: number }) => Promise<{
     data: Record<string, unknown>;
@@ -77,7 +78,7 @@ type PreviewLifecycleResult = {
   state: CloudflarePreviewState;
 };
 
-type PreviewAppRuntime = (typeof cloudflarePreviewApps)[CloudflarePreviewAppSlugType];
+export type PreviewAppRuntime = (typeof cloudflarePreviewApps)[CloudflarePreviewAppSlugType];
 
 export function createCloudflarePreviewSyncInputSchema(env: NodeJS.ProcessEnv) {
   return z.object({
@@ -224,17 +225,19 @@ export async function deployCloudflarePreviewForPullRequest(
 
   let ok = true;
   let latestState = current.state;
-  for (const app of selectedApps) {
-    const entry = await deployPreviewAppWithStatus({
-      app,
-      commandEnvironment: params.commandEnvironment,
-      dopplerConfig: environmentConfigLease.dopplerConfig,
-      pullRequestHeadSha: pullRequest.pullRequestHeadSha,
-      repositoryRoot: params.repositoryRoot,
-      runUrl: params.workflowRunUrl ?? null,
-      signal: params.signal,
+  for (const batch of batchPreviewAppsByDependencies(selectedApps)) {
+    const entries = await mapWithConcurrency(batch, defaultPreviewAppConcurrency, async (app) => {
+      return await deployPreviewAppWithStatus({
+        app,
+        commandEnvironment: params.commandEnvironment,
+        dopplerConfig: environmentConfigLease.dopplerConfig,
+        pullRequestHeadSha: pullRequest.pullRequestHeadSha,
+        repositoryRoot: params.repositoryRoot,
+        runUrl: params.workflowRunUrl ?? null,
+        signal: params.signal,
+      });
     });
-    if (entry.status === "deploy-failed") {
+    if (entries.some((entry) => entry.status === "deploy-failed")) {
       ok = false;
     }
 
@@ -243,7 +246,7 @@ export async function deployCloudflarePreviewForPullRequest(
       environmentConfigLease,
       apps: {
         ...state.apps,
-        [app.slug]: entry,
+        ...Object.fromEntries(entries.map((entry) => [entry.appSlug, entry])),
       },
     }));
     latestState = update.state;
@@ -292,53 +295,62 @@ export async function testCloudflarePreviewForPullRequest(
 
   let ok = true;
   let latestState = current.state;
-  for (const app of testableApps) {
-    const existingEntry = latestState.apps[app.slug];
-    if (!existingEntry?.publicUrl) {
-      continue;
+  for (const batch of batchPreviewAppsByDependencies(testableApps)) {
+    const entries = (
+      await mapWithConcurrency(batch, defaultPreviewAppConcurrency, async (app) => {
+        const existingEntry = latestState.apps[app.slug];
+        if (!existingEntry?.publicUrl) {
+          return null;
+        }
+
+        const testResult = await runCommandWithRetries({
+          args: [
+            "run",
+            "--project",
+            app.dopplerProject,
+            "--config",
+            environmentConfigLease.dopplerConfig,
+            "--",
+            "env",
+            `${app.previewTestBaseUrlEnvVar}=${existingEntry.publicUrl}`,
+            ...app.previewTestCommandArgs,
+          ],
+          command: "doppler",
+          environment: params.commandEnvironment,
+          maxAttempts: defaultPreviewTestMaxAttempts,
+          retryDelayMs: defaultPreviewTestRetryDelayMs,
+          signal: params.signal,
+          workingDirectory: resolve(params.repositoryRoot, app.appPath),
+        });
+
+        return CloudflarePreviewAppEntry.parse({
+          ...existingEntry,
+          appDisplayName: app.displayName,
+          appSlug: app.slug,
+          message:
+            testResult.exitCode === 0
+              ? null
+              : commandFailureMessage(testResult, "Preview tests failed after deploy."),
+          runUrl: params.workflowRunUrl ?? existingEntry.runUrl ?? null,
+          status: testResult.exitCode === 0 ? "deployed" : "tests-failed",
+          updatedAt: new Date().toISOString(),
+        });
+      })
+    ).filter((entry): entry is NonNullable<typeof entry> => entry != null);
+
+    if (entries.some((entry) => entry.status === "tests-failed")) {
+      ok = false;
     }
 
-    const testResult = await runCommandWithRetries({
-      args: [
-        "run",
-        "--project",
-        app.dopplerProject,
-        "--config",
-        environmentConfigLease.dopplerConfig,
-        "--",
-        "env",
-        `${app.previewTestBaseUrlEnvVar}=${existingEntry.publicUrl}`,
-        ...app.previewTestCommandArgs,
-      ],
-      command: "doppler",
-      environment: params.commandEnvironment,
-      maxAttempts: defaultPreviewTestMaxAttempts,
-      retryDelayMs: defaultPreviewTestRetryDelayMs,
-      signal: params.signal,
-      workingDirectory: resolve(params.repositoryRoot, app.appPath),
-    });
-
-    const entry = CloudflarePreviewAppEntry.parse({
-      ...existingEntry,
-      appDisplayName: app.displayName,
-      appSlug: app.slug,
-      message:
-        testResult.exitCode === 0
-          ? null
-          : commandFailureMessage(testResult, "Preview tests failed after deploy."),
-      runUrl: params.workflowRunUrl ?? existingEntry.runUrl ?? null,
-      status: testResult.exitCode === 0 ? "deployed" : "tests-failed",
-      updatedAt: new Date().toISOString(),
-    });
-    if (entry.status === "tests-failed") {
-      ok = false;
+    if (entries.length === 0) {
+      continue;
     }
 
     const update = await updatePreviewState(params, (state) => ({
       ...state,
       apps: {
         ...state.apps,
-        [app.slug]: entry,
+        ...Object.fromEntries(entries.map((entry) => [entry.appSlug, entry])),
       },
     }));
     latestState = update.state;
@@ -377,33 +389,34 @@ export async function cleanupCloudflarePreviewForPullRequest(
 
   let ok = true;
   let latestState = current.state;
-  for (const appSlug of Object.keys(current.state.apps) as CloudflarePreviewAppSlugType[]) {
-    const app = cloudflarePreviewApps[appSlug];
-    if (!app) {
-      continue;
-    }
-
-    const destroyResult = await runPreviewAlchemyCommand({
-      app,
-      commandEnvironment: params.commandEnvironment,
-      dopplerConfig: environmentConfigLease.dopplerConfig,
-      operation: "down",
-      repositoryRoot: params.repositoryRoot,
-      signal: params.signal,
+  const appsToCleanUp = (Object.keys(current.state.apps) as CloudflarePreviewAppSlugType[])
+    .map((appSlug) => cloudflarePreviewApps[appSlug])
+    .filter((app): app is PreviewAppRuntime => app != null);
+  const cleanupBatches = [...batchPreviewAppsByDependencies(appsToCleanUp)].reverse();
+  for (const batch of cleanupBatches) {
+    const entries = await mapWithConcurrency(batch, defaultPreviewAppConcurrency, async (app) => {
+      const destroyResult = await runPreviewAlchemyCommand({
+        app,
+        commandEnvironment: params.commandEnvironment,
+        dopplerConfig: environmentConfigLease.dopplerConfig,
+        operation: "down",
+        repositoryRoot: params.repositoryRoot,
+        signal: params.signal,
+      });
+      const existingEntry = latestState.apps[app.slug];
+      return CloudflarePreviewAppEntry.parse({
+        ...existingEntry,
+        appDisplayName: app.displayName,
+        appSlug: app.slug,
+        message:
+          destroyResult.exitCode === 0
+            ? "Preview app released."
+            : commandFailureMessage(destroyResult, "Preview teardown failed."),
+        status: destroyResult.exitCode === 0 ? "released" : "cleanup-failed",
+        updatedAt: new Date().toISOString(),
+      });
     });
-    const existingEntry = latestState.apps[app.slug];
-    const entry = CloudflarePreviewAppEntry.parse({
-      ...existingEntry,
-      appDisplayName: app.displayName,
-      appSlug: app.slug,
-      message:
-        destroyResult.exitCode === 0
-          ? "Preview app released."
-          : commandFailureMessage(destroyResult, "Preview teardown failed."),
-      status: destroyResult.exitCode === 0 ? "released" : "cleanup-failed",
-      updatedAt: new Date().toISOString(),
-    });
-    if (entry.status === "cleanup-failed") {
+    if (entries.some((entry) => entry.status === "cleanup-failed")) {
       ok = false;
     }
 
@@ -411,7 +424,7 @@ export async function cleanupCloudflarePreviewForPullRequest(
       ...state,
       apps: {
         ...state.apps,
-        [app.slug]: entry,
+        ...Object.fromEntries(entries.map((entry) => [entry.appSlug, entry])),
       },
     }));
     latestState = update.state;
@@ -819,6 +832,58 @@ export function expandPreviewDependencies(appSlugs: readonly CloudflarePreviewAp
   return Object.values(cloudflarePreviewApps)
     .map((app) => app.slug)
     .filter((appSlug) => selected.has(appSlug));
+}
+
+export function batchPreviewAppsByDependencies(apps: readonly PreviewAppRuntime[]) {
+  const appsBySlug = new Map(apps.map((app) => [app.slug, app]));
+  const remainingSlugs = new Set(appsBySlug.keys());
+  const batches: PreviewAppRuntime[][] = [];
+
+  while (remainingSlugs.size > 0) {
+    const batch = apps.filter((app) => {
+      if (!remainingSlugs.has(app.slug)) {
+        return false;
+      }
+
+      return (app.previewDependencies ?? []).every(
+        (dependency) => !appsBySlug.has(dependency) || !remainingSlugs.has(dependency),
+      );
+    });
+
+    if (batch.length === 0) {
+      throw new Error(
+        `Could not order preview apps by dependencies: ${[...remainingSlugs].join(", ")}`,
+      );
+    }
+
+    batches.push(batch);
+    for (const app of batch) {
+      remainingSlugs.delete(app.slug);
+    }
+  }
+
+  return batches;
+}
+
+async function mapWithConcurrency<T, Result>(
+  items: readonly T[],
+  concurrency: number,
+  mapItem: (item: T, index: number) => Promise<Result>,
+) {
+  const results = new Array<Result>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(items.length, concurrency);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        results[index] = await mapItem(items[index] as T, index);
+      }
+    }),
+  );
+
+  return results;
 }
 
 async function waitForPreviewAppReadiness(params: {

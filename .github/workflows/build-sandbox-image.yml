@@ -91,7 +91,7 @@ on:
         default: ""
 jobs:
   build:
-    runs-on: depot-ubuntu-24.04-arm-4
+    runs-on: depot-ubuntu-24.04-32
     outputs:
       image_tag: ${{ steps.output.outputs.image_tag }}
       fly_image_tag: ${{ steps.output.outputs.fly_image_tag }}

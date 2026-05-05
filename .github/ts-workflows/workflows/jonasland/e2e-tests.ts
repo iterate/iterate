@@ -31,7 +31,7 @@ export default workflow({
     },
     "e2e-tests": {
       needs: ["build-image"],
-      "runs-on": "depot-ubuntu-24.04-arm-4",
+      ...utils.runsOnDepotUbuntuForContainerThings,
       "timeout-minutes": 45,
       steps: [
         ...setupRepoWithoutPnpmAction,

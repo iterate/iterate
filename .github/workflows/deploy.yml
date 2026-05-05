@@ -18,7 +18,7 @@ permissions:
   deployments: write
 jobs:
   deploy-os:
-    runs-on: depot-ubuntu-24.04-arm-4
+    runs-on: depot-ubuntu-24.04-32
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -53,7 +53,7 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
   deploy-iterate-com:
-    runs-on: depot-ubuntu-24.04-arm-4
+    runs-on: depot-ubuntu-24.04-32
     if: inputs.deploy_iterate_com
     steps:
       - name: Checkout code

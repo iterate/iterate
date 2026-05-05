@@ -170,15 +170,15 @@ export async function IterateApp<B extends Bindings>(
       workerName: worker.name,
     });
 
-    await Promise.all(
-      routeHosts.map((hostname) =>
+    for (const hostname of routeHosts) {
+      await retryCloudflareWorkerRouteCreation(() =>
         Route(routeResourceIdForHostname(hostname), {
           pattern: `${hostname}/*`,
           script: worker,
           adopt: true,
         }),
-      ),
-    );
+      );
+    }
 
     const dnsRouteHosts = routeHosts.filter(shouldCreateDnsRecordForRouteHostname);
     await Promise.all(
@@ -360,6 +360,30 @@ async function waitForCloudflareWorkerScript(params: {
 
   throw new Error(
     `Cloudflare Worker script ${params.workerName} was not visible before route creation. Last status: ${lastStatus}. Last body: ${lastBody}`,
+  );
+}
+
+async function retryCloudflareWorkerRouteCreation(createRoute: () => Promise<unknown>) {
+  const maxAttempts = 12;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await createRoute();
+      return;
+    } catch (error) {
+      if (attempt === maxAttempts || !isCloudflareWorkerRouteMissingError(error)) {
+        throw error;
+      }
+
+      await sleep(5_000);
+    }
+  }
+}
+
+function isCloudflareWorkerRouteMissingError(error: unknown) {
+  return (
+    error instanceof Error &&
+    error.message.includes("10019") &&
+    error.message.includes("Worker which does not exist")
   );
 }
 

@@ -22,7 +22,7 @@ jobs:
   e2e-tests:
     needs:
       - build-image
-    runs-on: depot-ubuntu-24.04-arm-4
+    runs-on: depot-ubuntu-24.04-32
     timeout-minutes: 45
     steps:
       - name: Checkout code

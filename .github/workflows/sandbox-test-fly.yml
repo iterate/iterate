@@ -39,7 +39,7 @@ on:
         default: dev
 jobs:
   test-sandbox-fly:
-    runs-on: depot-ubuntu-24.04
+    runs-on: depot-ubuntu-24.04-32
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
