@@ -411,8 +411,8 @@ importers:
         specifier: ^2.0.7
         version: 2.0.7(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       sqlfu:
-        specifier: 0.0.3-11
-        version: 0.0.3-11(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0)
+        specifier: https://pkg.pr.new/sqlfu@9ff2913
+        version: https://pkg.pr.new/sqlfu@9ff2913(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0)
       tailwindcss:
         specifier: ^4.2.1
         version: 4.2.1
@@ -16829,20 +16829,21 @@ packages:
       '@sqlfu/ui':
         optional: true
 
-  sqlfu@0.0.3-11:
-    resolution: {integrity: sha512-xdRcS6FFbSLZiJ/2JL9NvL0ncD7Qh7GB25cOPiSXgwBT1ll09CyZJPIm44Zw1l9C+F5k1dqJcF6S9ThWQMZCgA==}
-    hasBin: true
-    peerDependencies:
-      '@sqlfu/ui': 0.0.3-11
-    peerDependenciesMeta:
-      '@sqlfu/ui':
-        optional: true
-
   sqlfu@0.0.3-12:
     resolution: {integrity: sha512-kArD0+zMhV+oeVdSj7rGez42F9VxZ41SRlRnAFEeYSfH8xdhXGjhNdSdOvZHW43nfhbXPgo6611RgBQaqGx0IA==}
     hasBin: true
     peerDependencies:
       '@sqlfu/ui': 0.0.3-12
+    peerDependenciesMeta:
+      '@sqlfu/ui':
+        optional: true
+
+  sqlfu@https://pkg.pr.new/sqlfu@9ff2913:
+    resolution: {tarball: https://pkg.pr.new/sqlfu@9ff2913}
+    version: 0.0.3-7
+    hasBin: true
+    peerDependencies:
+      '@sqlfu/ui': 0.0.3-7
     peerDependenciesMeta:
       '@sqlfu/ui':
         optional: true
@@ -28951,7 +28952,7 @@ snapshots:
       '@noble/ciphers': 2.1.1
       '@noble/hashes': 2.0.1
       better-call: 1.3.5(zod@4.3.6)
-      defu: 6.1.4
+      defu: 6.1.7
       jose: 6.2.2
       kysely: 0.28.16
       nanostores: 1.1.1
@@ -28975,7 +28976,7 @@ snapshots:
   better-call@1.1.0:
     dependencies:
       '@better-auth/utils': 0.3.0
-      '@better-fetch/fetch': 1.1.18
+      '@better-fetch/fetch': 1.1.21
       rou3: 0.5.1
       set-cookie-parser: 2.7.2
 
@@ -34478,7 +34479,7 @@ snapshots:
       '@vueuse/core': 10.11.1(vue@3.5.30(typescript@5.9.3))
       '@vueuse/shared': 10.11.1(vue@3.5.30(typescript@5.9.3))
       aria-hidden: 1.2.6
-      defu: 6.1.4
+      defu: 6.1.7
       fast-deep-equal: 3.1.3
       nanoid: 5.1.7
       vue: 3.5.30(typescript@5.9.3)
@@ -35477,7 +35478,7 @@ snapshots:
       - valibot
       - ws
 
-  sqlfu@0.0.3-11(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0):
+  sqlfu@0.0.3-12(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0):
     dependencies:
       '@clack/prompts': 1.2.0
       '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
@@ -35493,7 +35494,7 @@ snapshots:
       - valibot
       - ws
 
-  sqlfu@0.0.3-12(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0):
+  sqlfu@https://pkg.pr.new/sqlfu@9ff2913(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0):
     dependencies:
       '@clack/prompts': 1.2.0
       '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
@@ -36178,7 +36179,7 @@ snapshots:
 
   unenv@2.0.0-rc.21:
     dependencies:
-      defu: 6.1.4
+      defu: 6.1.7
       exsolve: 1.0.8
       ohash: 2.0.11
       pathe: 2.0.3

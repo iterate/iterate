@@ -187,7 +187,7 @@ create index "invitation_organizationId_idx" on "invitation" ("organizationId");
 create index "invitation_email_idx" on "invitation" ("email");
 -- better-auth-schema END
 
-CREATE TABLE project (
+CREATE TABLE "project" (
   id TEXT PRIMARY KEY NOT NULL,
   organization_id TEXT NOT NULL,
   name TEXT NOT NULL,

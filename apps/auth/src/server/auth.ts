@@ -1,4 +1,4 @@
-import { betterAuth } from "better-auth/minimal";
+import { betterAuth } from "better-auth";
 import { APIError } from "better-auth";
 import { signJWT, verifyJWT } from "better-auth/crypto";
 import { matchesSignupAllowlist, parseSignupAllowlist } from "@iterate-com/shared/signup-allowlist";
@@ -49,6 +49,10 @@ export const auth = betterAuth({
       maxAge: 5 * 60,
       strategy: "compact",
     },
+  },
+  emailAndPassword: {
+    enabled: true,
+    disableSignUp: true,
   },
   databaseHooks: {
     user: {

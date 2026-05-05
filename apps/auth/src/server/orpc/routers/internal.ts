@@ -27,6 +27,36 @@ import {
   toUserRecord,
 } from "./_shared.ts";
 
+const BOOTSTRAP_SUPERADMIN_EMAIL = "superadmin@nustom.com";
+
+function extractCookieHeader(setCookieHeader: string | null): string | null {
+  if (!setCookieHeader) return null;
+  const firstCookie = setCookieHeader.split(/,(?=[^;]+=[^;]+)/)[0]?.trim();
+  if (!firstCookie) return null;
+  return firstCookie.split(";")[0] ?? null;
+}
+
+async function getBootstrapSuperadminAuthHeaders(params: {
+  serviceAuthToken: string;
+}): Promise<Headers> {
+  const signInResult = await auth.api.signInEmail({
+    returnHeaders: true,
+    body: {
+      email: BOOTSTRAP_SUPERADMIN_EMAIL,
+      password: params.serviceAuthToken,
+    },
+  });
+
+  const cookie = extractCookieHeader(signInResult.headers.get("set-cookie"));
+  if (!cookie) {
+    throw new ORPCError("INTERNAL_SERVER_ERROR", {
+      message: "Failed to establish bootstrap superadmin auth session",
+    });
+  }
+
+  return new Headers({ cookie });
+}
+
 const upsertVerifiedEmail = os.internal.user.upsertVerifiedEmail
   .use(serviceMiddleware)
   .handler(async ({ context, input }) => {
@@ -237,7 +267,18 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
       );
     }
 
+    const serviceAuthToken = context.env.SERVICE_AUTH_TOKEN?.trim();
+    if (!serviceAuthToken) {
+      throw new ORPCError("INTERNAL_SERVER_ERROR", {
+        message: "SERVICE_AUTH_TOKEN is required for bootstrap OAuth client provisioning",
+      });
+    }
+
+    const headers = await getBootstrapSuperadminAuthHeaders({
+      serviceAuthToken,
+    });
     const created = await auth.api.adminCreateOAuthClient({
+      headers,
       body: {
         client_name: input.clientName,
         redirect_uris: redirectURIs,

@@ -42,7 +42,7 @@
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "sonner": "^2.0.7",
-    "sqlfu": "0.0.3-11",
+    "sqlfu": "https://pkg.pr.new/sqlfu@9ff2913",
     "tailwindcss": "^4.2.1",
     "zod": "^4.3.6"
   },
