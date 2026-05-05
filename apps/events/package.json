@@ -50,6 +50,7 @@
     "@tanstack/react-router-devtools": "1.166.11",
     "@tanstack/react-router-ssr-query": "^1.166.2",
     "@tanstack/react-start": "1.167.5",
+    "cf-json-schema-viz": "^0.3.0",
     "cron-schedule": "^5.0.4",
     "crossws": "^0.4.4",
     "jsonata": "^2.1.0",

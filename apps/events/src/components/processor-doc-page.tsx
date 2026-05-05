@@ -1,6 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { DocsChrome } from "~/components/docs-chrome.tsx";
 import { EventType } from "~/components/event-type.tsx";
+import { JsonSchemaDocViewer } from "~/components/json-schema-doc-viewer.tsx";
 import {
   getProcessorDocBySlug,
   type ProcessorDoc,
@@ -41,35 +42,19 @@ export function ProcessorEventPage({ event }: { event: ProcessorEventDoc }) {
       <section className="mx-auto flex w-full max-w-2xl flex-col gap-6 p-4">
         <div className="space-y-1">
           <p className="text-xs uppercase tracking-wide text-muted-foreground">Processor event</p>
-          <h2 className="text-lg font-semibold">{`${event.processor.slug}/${event.eventSlug}`}</h2>
+          <h2 className="text-lg font-semibold">
+            <EventType type={event.type} link={false} />
+          </h2>
           {event.description ? (
             <p className="text-sm text-muted-foreground">{event.description}</p>
           ) : null}
-        </div>
-
-        <div className="space-y-4 rounded-lg border bg-card p-4">
-          <div className="space-y-1">
-            <p className="text-xs uppercase tracking-wide text-muted-foreground">Type URL</p>
-            <div className="rounded-md bg-muted p-3 text-xs">
-              <EventType type={event.type} className="whitespace-pre-wrap wrap-break-word" />
-            </div>
-          </div>
-
-          <div className="space-y-1">
-            <p className="text-xs uppercase tracking-wide text-muted-foreground">Processor</p>
-            <Link to={`/${event.processor.slug}/`} className="text-sm text-primary hover:underline">
-              {event.processor.slug}
-            </Link>
-          </div>
         </div>
 
         <div className="space-y-2 rounded-lg border bg-card p-4">
           <p className="text-xs uppercase tracking-wide text-muted-foreground">
             Payload JSON schema
           </p>
-          <pre className="overflow-x-auto whitespace-pre-wrap wrap-break-word rounded-md bg-muted p-3 font-mono text-xs">
-            {JSON.stringify(event.payloadJsonSchema, null, 2)}
-          </pre>
+          <JsonSchemaDocViewer schema={event.payloadJsonSchema} />
         </div>
 
         <div className="space-y-2 rounded-lg border bg-card p-4">
@@ -115,9 +100,7 @@ function EventLinks({ events, title }: { events: ProcessorEventDoc[]; title: str
         <div className="flex flex-col gap-3">
           {events.map((event) => (
             <div key={event.type} className="min-w-0 space-y-1">
-              <Link to={event.href} className="block text-sm text-primary hover:underline">
-                <span className="block font-mono wrap-break-word">{event.type}</span>
-              </Link>
+              <EventType type={event.type} className="text-sm" />
               {event.description ? (
                 <p className="text-sm text-muted-foreground">{event.description}</p>
               ) : null}
