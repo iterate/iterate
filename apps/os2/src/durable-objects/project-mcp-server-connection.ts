@@ -2,11 +2,13 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpAgent } from "agents/mcp";
 import type { Connection } from "agents";
 import { z } from "zod";
+import { DurableObject } from "cloudflare:workers";
 import {
   EventInput as EventInputSchema,
   StreamPath,
   type EventInput,
 } from "@iterate-com/events-contract";
+import { withIterateDurableObjectStack } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import packageJson from "../../package.json" with { type: "json" };
 import {
   type CodemodeSessionNamespace,
@@ -16,9 +18,9 @@ import { readEventPayload, stringifyPayloadError } from "~/lib/codemode-event-pa
 import { createEventsClient } from "~/lib/events-client.ts";
 
 /**
- * MCP server for os2, exposed at `/mcp` on project hostnames only.
+ * Project-scoped MCP server connection for os2.
  *
- * Runs as a Durable Object in a separate Worker (`iterate-mcp-server-do`).
+ * Runs as a Durable Object in a separate Worker (`project-mcp-server-connection-do`).
  * `entry.workerd.ts` verifies Clerk OAuth, resolves the request hostname to a
  * project, and passes that identity into this Durable Object through McpAgent
  * props. That mirrors Cloudflare's documented OAuth integration point while
@@ -34,12 +36,13 @@ import { createEventsClient } from "~/lib/events-client.ts";
 
 interface McpServerEnv {
   CODEMODE_SESSION: CodemodeSessionNamespace;
+  DO_CATALOG: D1Database;
   EVENTS_BASE_URL: string;
   MCP_PROOF_SECRET: string;
-  ITERATE_MCP_SERVER: DurableObjectNamespace;
+  PROJECT_MCP_SERVER_CONNECTION: DurableObjectNamespace;
 }
 
-export interface IterateMcpServerProps extends Record<string, unknown> {
+export interface ProjectMcpServerConnectionProps extends Record<string, unknown> {
   projectId: string | null;
   projectSlug: string | null;
   userId: string;
@@ -50,6 +53,18 @@ export interface IterateMcpServerProps extends Record<string, unknown> {
   scopes: string[];
   clientId: string | null;
 }
+
+export type ProjectMcpServerConnectionInitParams = {
+  name: string;
+  projectId: string;
+  projectSlug: string | null;
+  orgId: string;
+  orgSlug: string | null;
+  userId: string;
+  clientId: string | null;
+  clientName: string | null;
+  streamPath: StreamPath;
+};
 
 const sessionSlugStorageKey = "mcpServerSessionSlug";
 const eventTypePrefix = "events.iterate.com/mcp-server";
@@ -64,7 +79,23 @@ const mcpEventInputSchema = z
   })
   .strict();
 
-export class IterateMcpServer extends McpAgent<McpServerEnv, unknown, IterateMcpServerProps> {
+const ProjectMcpServerConnectionBase = withIterateDurableObjectStack<
+  ProjectMcpServerConnectionInitParams,
+  Pick<McpServerEnv, "DO_CATALOG">
+>({
+  className: "ProjectMcpServerConnection",
+  getDatabase: (env) => env.DO_CATALOG,
+  indexes: {
+    orgId: (params) => params.orgId,
+    projectId: (params) => params.projectId,
+  },
+})(McpAgent as unknown as typeof DurableObject);
+
+export class ProjectMcpServerConnection extends (ProjectMcpServerConnectionBase as unknown as typeof McpAgent)<
+  McpServerEnv,
+  unknown,
+  ProjectMcpServerConnectionProps
+> {
   server = new McpServer({
     name: "os2",
     version: packageJson.version,
@@ -72,6 +103,7 @@ export class IterateMcpServer extends McpAgent<McpServerEnv, unknown, IterateMcp
 
   async setInitializeRequest(initializeRequest: Parameters<McpAgent["setInitializeRequest"]>[0]) {
     await super.setInitializeRequest(initializeRequest);
+    await this.initializeCatalogRecord();
     await this.emitLifecycleEvent("session-started", {
       transportType: this.getTransportType(),
       mcpSessionId: this.getSessionId(),
@@ -304,21 +336,21 @@ export class IterateMcpServer extends McpAgent<McpServerEnv, unknown, IterateMcp
   }
 
   /**
-   * MCP tools are project-scoped: clients connect to
-   * `<project>.<project-host-base>/mcp`, not a global OS2 MCP endpoint. Keeping
-   * this guard in the DO prevents future tools from accidentally running against
-   * only org-level auth if the Worker routing changes.
+   * MCP tools are project-scoped. The ProjectMcpServerEntrypoint verifies Clerk
+   * OAuth and asks the Project Durable Object for project access before this DO
+   * sees a request, but this guard keeps tools from accidentally running with
+   * only org-level auth if the routing layer changes.
    */
   private requireProjectAuthProps() {
     const auth = this.requireAuthProps();
-    if (!auth.projectId || !auth.projectSlug) {
-      throw new Error("MCP tools require a project hostname such as <project>.example.app.");
+    if (!auth.projectId) {
+      throw new Error("MCP tools require a project-scoped MCP server host.");
     }
 
-    return auth as IterateMcpServerProps & { projectId: string; projectSlug: string };
+    return auth as ProjectMcpServerConnectionProps & { projectId: string };
   }
 
-  private requireScope(props: IterateMcpServerProps, scope: string) {
+  private requireScope(props: ProjectMcpServerConnectionProps, scope: string) {
     if (!props.scopes.includes(scope)) {
       throw new Error(`MCP token is missing required scope: ${scope}`);
     }
@@ -364,6 +396,35 @@ export class IterateMcpServer extends McpAgent<McpServerEnv, unknown, IterateMcp
 
     return params.clientInfo;
   }
+
+  private async initializeCatalogRecord() {
+    const auth = this.requireProjectAuthProps();
+    const name = this.ctx.id.name;
+    if (!name) {
+      throw new Error("Inbound MCP server Durable Object must be addressed by name.");
+    }
+
+    const clientInfo = await this.getClientInfo();
+    const rawClientName = isRecord(clientInfo) ? clientInfo.name : undefined;
+
+    await (
+      this as unknown as {
+        initialize(
+          params: ProjectMcpServerConnectionInitParams,
+        ): Promise<ProjectMcpServerConnectionInitParams>;
+      }
+    ).initialize({
+      name,
+      projectId: auth.projectId,
+      projectSlug: auth.projectSlug,
+      orgId: auth.orgId,
+      orgSlug: auth.orgSlug,
+      userId: auth.userId,
+      clientId: auth.clientId,
+      clientName: typeof rawClientName === "string" ? rawClientName : null,
+      streamPath: await this.getSessionStreamPath(),
+    });
+  }
 }
 
 function summarizeRequest(request: Request) {
@@ -375,7 +436,7 @@ function summarizeRequest(request: Request) {
   };
 }
 
-function summarizeAuthProps(props: IterateMcpServerProps) {
+function summarizeAuthProps(props: ProjectMcpServerConnectionProps) {
   return {
     clientId: props.clientId,
     orgId: props.orgId,

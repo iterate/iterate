@@ -1,24 +1,32 @@
 import { DurableObject, RpcTarget } from "cloudflare:workers";
-import { type Event, type EventInput, type StreamPath } from "@iterate-com/events-contract";
 import {
-  assertCallableDispatchContext,
-  dispatchCallable,
-} from "@iterate-com/shared/callable/runtime.ts";
+  type Event,
+  type EventInput,
+  type StreamCursor,
+  type StreamPath,
+} from "@iterate-com/events-contract";
 import type { CallableContext } from "@iterate-com/shared/callable/types.ts";
-import { ToolProviderDescriptor } from "@iterate-com/shared/codemode/types";
+import type { ToolProviderDescriptor } from "@iterate-com/shared/codemode/types";
 import { withD1ObjectCatalog } from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
 import { withDurableObjectCore } from "@iterate-com/shared/durable-object-utils/mixins/with-durable-object-core";
 import { withKvInspector } from "@iterate-com/shared/durable-object-utils/mixins/with-kv-inspector";
 import { withLifecycleHooks } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { withOuterbase } from "@iterate-com/shared/durable-object-utils/mixins/with-outerbase";
+import { withStreamProcessorRunner } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor-runner";
+import {
+  CodemodeProcessorContract,
+  type CodemodeState,
+} from "@iterate-com/shared/stream-processors/codemode/contract";
+import type {
+  CodemodeProcessorLogger,
+  CodemodeProcessorSession,
+  CodemodeScriptExecutor,
+} from "@iterate-com/shared/stream-processors/codemode/code-executor";
+import { createCodemodeProcessor } from "@iterate-com/shared/stream-processors/codemode/implementation";
+import type { ProcessorStreamApi, StreamEvent } from "@iterate-com/shared/stream-processors";
 import { createEventsClient } from "~/lib/events-client.ts";
 
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
-// CodemodeSession dispatches stored MCP Provider Descriptors through an
-// MCP_CLIENT_BRIDGE Durable Object namespace binding. Cloudflare requires every
-// bound Durable Object class to be exported by the Worker module that owns the
-// binding, even when the class implementation lives in a shared rpc-target file.
-// https://developers.cloudflare.com/durable-objects/api/namespace/
 export { McpClientBridge } from "~/rpc-targets/mcp-client-bridge.ts";
 
 export type CodemodeSessionInitParams = {
@@ -27,12 +35,16 @@ export type CodemodeSessionInitParams = {
   streamPath: StreamPath;
 };
 
-export type RegisterToolProviderInput = {
-  provider: ToolProviderDescriptor;
+export type StartScriptExecutionInput = {
+  code: string;
+  events?: EventInput[];
+  providers?: ToolProviderDescriptor[];
 };
 
-export type ExecuteScriptInput = {
-  code: string;
+export type CreateCodemodeSessionInput = {
+  code?: string;
+  events?: EventInput[];
+  providers?: ToolProviderDescriptor[];
 };
 
 export type CallToolFunctionInput = {
@@ -41,18 +53,25 @@ export type CallToolFunctionInput = {
   scriptExecutionRequestedOffset?: number;
 };
 
-export type CodemodeSessionCapability = {
-  append(input: EventInput): Promise<Event>;
-  callToolFunction(input: CallToolFunctionInput): Promise<unknown>;
-  executeScript(input: ExecuteScriptInput): Promise<Event>;
-  getStreamPath(): Promise<StreamPath>;
-};
-
-type CodemodeSessionEnv = {
+export type CodemodeSessionEnv = {
   DO_CATALOG: D1Database;
   EVENTS_BASE_URL: string;
   LOADER?: WorkerLoader;
 } & Record<string, unknown>;
+
+type CodemodeSessionStreamApi = ProcessorStreamApi<typeof CodemodeProcessorContract> & {
+  append(args: { event: EventInput; streamPath?: string }): Promise<Event>;
+  read(args?: {
+    streamPath?: string;
+    afterOffset?: number | "start" | "end";
+    beforeOffset?: number | "start" | "end";
+  }): Promise<Event[]>;
+  subscribe(args?: {
+    streamPath?: string;
+    afterOffset?: number | "start" | "end";
+    signal?: AbortSignal;
+  }): AsyncIterable<Event>;
+};
 
 const CodemodeSessionLifecycleBase = withD1ObjectCatalog<
   CodemodeSessionInitParams,
@@ -66,274 +85,270 @@ const CodemodeSessionLifecycleBase = withD1ObjectCatalog<
   },
 })(withLifecycleHooks<CodemodeSessionInitParams>()(withDurableObjectCore(DurableObject)));
 
+const CodemodeSessionRunnerBase = withStreamProcessorRunner<
+  CodemodeSessionInitParams,
+  CodemodeSessionEnv,
+  typeof CodemodeProcessorContract
+>({
+  processor(args) {
+    return createCodemodeProcessor({
+      callableContext: createCallableContext(args.env),
+      ensureLiveConsumer: () => {
+        const session = args.instance as unknown as {
+          ensureLiveConsumer(): Promise<void>;
+        };
+        return session.ensureLiveConsumer();
+      },
+      scriptExecutor: createCloudflareCodemodeScriptExecutor({
+        loader: args.env.LOADER,
+      }),
+    });
+  },
+  streamApi(args) {
+    return createStreamApi({
+      env: args.env,
+      streamPath: args.initParams.streamPath,
+    });
+  },
+})(CodemodeSessionLifecycleBase);
+
 const CodemodeSessionWithOuterbase = withOuterbase({
   unsafe: "I_UNDERSTAND_THIS_EXPOSES_SQL",
-})(CodemodeSessionLifecycleBase) as unknown as typeof CodemodeSessionLifecycleBase;
+})(CodemodeSessionRunnerBase) as unknown as typeof CodemodeSessionRunnerBase;
 
 const CodemodeSessionBase = withKvInspector({
   unsafe: "I_UNDERSTAND_THIS_EXPOSES_KV",
-})(CodemodeSessionWithOuterbase) as unknown as typeof CodemodeSessionLifecycleBase;
-
-const TOOL_PROVIDER_REGISTRY_STORAGE_KEY = "codemode.tool-provider-registry.v1";
-const EVENT_TYPE_PREFIX = "events.iterate.com/codemode";
+})(CodemodeSessionWithOuterbase) as unknown as typeof CodemodeSessionRunnerBase;
 
 export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
+  #consumerCount = 0;
+
+  constructor(ctx: DurableObjectState, env: CodemodeSessionEnv) {
+    super(ctx, env);
+    this.registerOnInstanceWake(async () => {
+      await this.ensureLiveConsumer();
+    });
+  }
+
   async getStreamPath() {
     const params = await this.ensureStarted();
     return params.streamPath;
   }
 
-  async append(input: EventInput) {
+  async ensureLiveConsumer() {
     await this.ensureStarted();
-    this.applyAppendedEventToSessionState(input);
-    return await this.appendToStream(input);
+    this.#consumerCount += 1;
+    const signal = AbortSignal.timeout(5 * 60_000);
+    const task = this.startStreamProcessorSubscription({ signal })
+      .catch((error: unknown) => {
+        if (!isAbortError(error)) {
+          console.error("[codemode-session] stream processor consumer failed", error);
+        }
+      })
+      .finally(() => {
+        this.#consumerCount = Math.max(0, this.#consumerCount - 1);
+      });
+    this.ctx.waitUntil(task);
   }
 
-  async registerToolProvider(input: RegisterToolProviderInput) {
-    await this.ensureStarted();
-    validateToolProviderDispatchContext({
-      callableContext: this.createCallableContext(),
-      provider: input.provider,
-    });
+  async createSession(input: CreateCodemodeSessionInput = {}) {
+    const params = await this.ensureStarted();
+    await this.ensureLiveConsumer();
+    const streamApi = this.createStreamApi();
+    const appendedEvents: Event[] = [];
+    const registeredProviderEvents: Event[] = [];
 
-    const registry = this.readToolProviderRegistry();
-    const registryKey = toolProviderRegistryKey(input.provider.path);
-    registry[registryKey] = input.provider;
-    this.writeToolProviderRegistry(registry);
+    for (const event of input.events ?? []) {
+      appendedEvents.push(await streamApi.append({ event }));
+    }
 
-    return await this.appendToStream({
-      type: `${EVENT_TYPE_PREFIX}/tool-provider-registered`,
-      payload: {
-        descriptor: input.provider,
-        path: input.provider.path,
+    for (const provider of input.providers ?? []) {
+      registeredProviderEvents.push(await this.appendToolProviderRegisteredEvent({ provider }));
+    }
+
+    const scriptExecutionEvent =
+      input.code == null
+        ? null
+        : await streamApi.append({
+            event: {
+              type: "events.iterate.com/codemode/script-execution-requested",
+              payload: { code: input.code },
+            },
+          });
+
+    return {
+      appendedEvents,
+      registeredProviderEvents,
+      scriptExecutionEvent,
+      streamPath: params.streamPath,
+    };
+  }
+
+  private async appendToolProviderRegisteredEvent(input: { provider: ToolProviderDescriptor }) {
+    return await this.createStreamApi().append({
+      event: {
+        type: "events.iterate.com/codemode/tool-provider-registered",
+        idempotencyKey: `codemode:tool-provider-registered:${input.provider.path.join("/")}`,
+        payload: {
+          descriptor: input.provider,
+          path: input.provider.path,
+        },
       },
     });
   }
 
-  async executeScript(input: ExecuteScriptInput) {
-    // Keep the lifecycle read explicit before scheduling background execution.
-    // The follow-up outcome events are appended after this RPC returns, so we
-    // want startup failures to surface on the request RPC instead of being
-    // swallowed by the detached execution promise.
+  async startScriptExecution(input: StartScriptExecutionInput) {
+    const session = await this.createSession(input);
+    if (!session.scriptExecutionEvent) {
+      throw new Error("startScriptExecution requires code.");
+    }
+
+    return {
+      appendedEvents: session.appendedEvents,
+      event: session.scriptExecutionEvent,
+      registeredProviderEvents: session.registeredProviderEvents,
+      streamPath: session.streamPath,
+    };
+  }
+
+  async registerToolProvider(input: { provider: ToolProviderDescriptor }) {
     await this.ensureStarted();
-    const requestedEvent = await this.appendToStream({
-      type: `${EVENT_TYPE_PREFIX}/script-execution-requested`,
-      payload: {
-        code: input.code,
-      },
-    });
+    await this.ensureLiveConsumer();
+    const event = await this.appendToolProviderRegisteredEvent(input);
+    await this.consumeStreamProcessorEvent({ event: event as StreamEvent });
+    return event;
+  }
 
-    // Future version: this Durable Object becomes a real events-app stream processor.
-    // For now the request event is the durable handoff point and the worker appends
-    // follow-up outcome events directly to the same stream.
-    void this.runScriptExecution({
-      code: input.code,
-      scriptExecutionRequestedOffset: requestedEvent.offset,
-    }).catch((error: unknown) => {
-      console.error("[codemode-session] script execution failed", error);
-    });
-
-    return requestedEvent;
+  async executeScript(input: { code: string }) {
+    return (await this.startScriptExecution(input)).event;
   }
 
   async callToolFunction(input: CallToolFunctionInput) {
     await this.ensureStarted();
-    const match = this.resolveToolProvider(input.path);
-    const requestedEvent = await this.appendToStream({
-      type: `${EVENT_TYPE_PREFIX}/tool-function-call-requested`,
-      payload: {
-        path: input.path,
-        payload: input.payload,
-        providerPath: match.provider.path,
-        toolFunctionPath: match.toolFunctionPath,
-        scriptExecutionRequestedOffset: input.scriptExecutionRequestedOffset,
-      },
+    await this.ensureLiveConsumer();
+    return await this.appendAndConsume({
+      type: "events.iterate.com/codemode/tool-function-call-requested",
+      payload: input,
     });
-
-    try {
-      const result = await dispatchCallable({
-        callable: match.provider.callable,
-        payload: {
-          path: match.toolFunctionPath,
-          payload: input.payload,
-          codemodeSessionCapability: this.getScopedRpcTarget(),
-        },
-        ctx: this.createCallableContext(),
-      });
-
-      await this.appendToStream({
-        type: `${EVENT_TYPE_PREFIX}/tool-function-call-succeeded`,
-        payload: {
-          result,
-          toolFunctionCallRequestedOffset: requestedEvent.offset,
-          scriptExecutionRequestedOffset: input.scriptExecutionRequestedOffset,
-        },
-      });
-
-      return result;
-    } catch (error) {
-      await this.appendToStream({
-        type: `${EVENT_TYPE_PREFIX}/tool-function-call-failed`,
-        payload: {
-          error: serializeError(error),
-          toolFunctionCallRequestedOffset: requestedEvent.offset,
-          scriptExecutionRequestedOffset: input.scriptExecutionRequestedOffset,
-        },
-      });
-      throw error;
-    }
   }
 
-  getScopedRpcTarget(): CodemodeSessionCapability {
-    return new ScopedCodemodeSessionCapability(this);
+  getRunnerState() {
+    return this.getStreamProcessorRunnerState();
   }
 
-  private async runScriptExecution(input: {
-    code: string;
-    scriptExecutionRequestedOffset: number;
-  }) {
-    const loader = this.env.LOADER;
-    if (!loader) {
-      await this.appendToStream({
-        type: `${EVENT_TYPE_PREFIX}/script-execution-finished`,
-        payload: {
-          error: "LOADER binding not available",
-          scriptExecutionRequestedOffset: input.scriptExecutionRequestedOffset,
-        },
+  private createStreamApi() {
+    return createStreamApi({ env: this.env, streamPath: this.initParams.streamPath });
+  }
+
+  private async appendAndConsume(eventInput: EventInput) {
+    const event = await this.createStreamApi().append({ event: eventInput });
+    await this.consumeStreamProcessorEvent({ event: event as StreamEvent });
+    return event;
+  }
+}
+
+function createStreamApi(args: {
+  env: Pick<CodemodeSessionEnv, "EVENTS_BASE_URL">;
+  streamPath: StreamPath;
+}): CodemodeSessionStreamApi {
+  const resolveStreamPath = (path: string | undefined): StreamPath => {
+    return (path ?? args.streamPath) as StreamPath;
+  };
+
+  return {
+    async append(input) {
+      const { event } = await createEventsClient(args.env.EVENTS_BASE_URL).append({
+        path: resolveStreamPath(input.streamPath),
+        event: input.event as EventInput,
       });
-      return;
+      return event;
+    },
+    async read(input = {}) {
+      const events: Event[] = [];
+      const stream = await createEventsClient(args.env.EVENTS_BASE_URL).stream({
+        path: resolveStreamPath(input.streamPath),
+        afterOffset: toEventsCursor(input.afterOffset),
+        beforeOffset: toEventsCursor(input.beforeOffset ?? "end"),
+      });
+
+      for await (const event of stream) {
+        events.push(event);
+      }
+
+      return events;
+    },
+    async *subscribe(input = {}) {
+      const stream = await createEventsClient(args.env.EVENTS_BASE_URL).stream(
+        {
+          path: resolveStreamPath(input.streamPath),
+          afterOffset: toEventsCursor(input.afterOffset),
+        },
+        { signal: input.signal },
+      );
+
+      for await (const event of stream) {
+        yield event;
+      }
+    },
+  };
+}
+
+function createCallableContext(env: CodemodeSessionEnv): CallableContext {
+  return {
+    env,
+    fetch: globalThis.fetch,
+  };
+}
+
+function createCloudflareCodemodeScriptExecutor(input: {
+  loader: WorkerLoader | undefined;
+}): CodemodeScriptExecutor {
+  return async ({ code, logger, scriptExecutionRequestedOffset, session }) => {
+    if (!input.loader) {
+      return {
+        result: undefined,
+        error: "LOADER binding not available",
+      };
     }
 
     try {
-      const entrypoint = loader
+      const entrypoint = input.loader
         .load({
           compatibilityDate: "2025-06-01",
           compatibilityFlags: ["nodejs_compat"],
           mainModule: "executor.js",
           modules: {
             "executor.js": buildScriptExecutorModule(),
-            "user-code.js": buildUserCodeModule(input.code),
+            "user-code.js": buildUserCodeModule(code),
           },
           globalOutbound: null,
         })
         .getEntrypoint() as unknown as {
         evaluate(
-          capability: CodemodeSessionCapability,
-          logger: CodemodeSessionLogTarget,
+          capability: CodemodeSessionCapabilityTarget,
+          logger: CodemodeLoggerTarget,
           scriptExecutionRequestedOffset: number,
         ): Promise<{ error?: string; result: unknown }>;
       };
 
-      const result = await entrypoint.evaluate(
-        this.getScopedRpcTarget(),
-        new CodemodeSessionLogTarget({
-          log: (level, message) =>
-            this.appendToStream({
-              type: `${EVENT_TYPE_PREFIX}/log-emitted`,
-              payload: {
-                level,
-                message,
-                scriptExecutionRequestedOffset: input.scriptExecutionRequestedOffset,
-              },
-            }),
-        }),
-        input.scriptExecutionRequestedOffset,
+      return await entrypoint.evaluate(
+        new CodemodeSessionCapabilityTarget(session),
+        new CodemodeLoggerTarget(logger),
+        scriptExecutionRequestedOffset,
       );
-
-      await this.appendToStream({
-        type: `${EVENT_TYPE_PREFIX}/script-execution-finished`,
-        payload: {
-          ...result,
-          scriptExecutionRequestedOffset: input.scriptExecutionRequestedOffset,
-        },
-      });
     } catch (error) {
-      await this.appendToStream({
-        type: `${EVENT_TYPE_PREFIX}/script-execution-finished`,
-        payload: {
-          error: serializeError(error),
-          scriptExecutionRequestedOffset: input.scriptExecutionRequestedOffset,
-        },
-      });
+      return {
+        result: undefined,
+        error: serializeError(error),
+      };
     }
-  }
-
-  private async appendToStream(input: EventInput) {
-    const params = await this.ensureStarted();
-    const client = createEventsClient(this.env.EVENTS_BASE_URL);
-    const { event } = await client.append({
-      path: params.streamPath,
-      event: input,
-    });
-    return event;
-  }
-
-  private createCallableContext(): CallableContext {
-    return {
-      env: this.env,
-      fetch: globalThis.fetch,
-    };
-  }
-
-  private resolveToolProvider(path: string[]) {
-    const registry = this.readToolProviderRegistry();
-    const candidates = Object.values(registry)
-      .filter((provider) => isPathPrefix(provider.path, path))
-      .sort((a, b) => b.path.length - a.path.length);
-
-    const provider = candidates[0];
-    if (!provider) {
-      throw new Error(`No tool provider registered for path "${path.join(".")}"`);
-    }
-
-    return {
-      provider,
-      toolFunctionPath: path.slice(provider.path.length),
-    };
-  }
-
-  private readToolProviderRegistry() {
-    return (
-      this.getDurableObjectKv().get<Record<string, ToolProviderDescriptor>>(
-        TOOL_PROVIDER_REGISTRY_STORAGE_KEY,
-      ) ?? {}
-    );
-  }
-
-  private writeToolProviderRegistry(registry: Record<string, ToolProviderDescriptor>) {
-    this.getDurableObjectKv().put(TOOL_PROVIDER_REGISTRY_STORAGE_KEY, registry);
-  }
-
-  private applyAppendedEventToSessionState(input: EventInput) {
-    if (input.type !== `${EVENT_TYPE_PREFIX}/tool-provider-registered`) return;
-
-    const payload =
-      input.payload != null && typeof input.payload === "object"
-        ? (input.payload as Record<string, unknown>)
-        : {};
-    const descriptor = ToolProviderDescriptor.safeParse(payload.descriptor);
-    if (!descriptor.success) return;
-
-    try {
-      validateToolProviderDispatchContext({
-        callableContext: this.createCallableContext(),
-        provider: descriptor.data,
-      });
-    } catch (error) {
-      console.warn("[codemode-session] appended provider descriptor is not dispatchable", error);
-      return;
-    }
-
-    const registry = this.readToolProviderRegistry();
-    registry[toolProviderRegistryKey(descriptor.data.path)] = descriptor.data;
-    this.writeToolProviderRegistry(registry);
-  }
+  };
 }
 
-class ScopedCodemodeSessionCapability extends RpcTarget implements CodemodeSessionCapability {
-  readonly #session: CodemodeSession;
+class CodemodeSessionCapabilityTarget extends RpcTarget {
+  readonly #session: CodemodeProcessorSession;
 
-  constructor(session: CodemodeSession) {
+  constructor(session: CodemodeProcessorSession) {
     super();
     this.#session = session;
   }
@@ -346,7 +361,7 @@ class ScopedCodemodeSessionCapability extends RpcTarget implements CodemodeSessi
     return await this.#session.callToolFunction(input);
   }
 
-  async executeScript(input: ExecuteScriptInput) {
+  async executeScript(input: { code: string }) {
     return await this.#session.executeScript(input);
   }
 
@@ -355,66 +370,20 @@ class ScopedCodemodeSessionCapability extends RpcTarget implements CodemodeSessi
   }
 }
 
-class CodemodeSessionLogTarget extends RpcTarget {
-  readonly #log: (level: "error" | "log" | "warn", message: string) => Promise<unknown>;
+class CodemodeLoggerTarget extends RpcTarget {
+  readonly #logger: CodemodeProcessorLogger;
 
-  constructor(options: {
-    log: (level: "error" | "log" | "warn", message: string) => Promise<unknown>;
-  }) {
+  constructor(logger: CodemodeProcessorLogger) {
     super();
-    this.#log = options.log;
+    this.#logger = logger;
   }
 
   async log(level: string, message: string) {
-    await this.#log(level === "error" || level === "warn" ? level : "log", message);
-  }
-}
-
-function toolProviderRegistryKey(path: string[]) {
-  return JSON.stringify(path);
-}
-
-function isPathPrefix(prefix: string[], path: string[]) {
-  return prefix.every((segment, index) => path[index] === segment);
-}
-
-function serializeError(error: unknown) {
-  if (error instanceof Error) {
-    return {
-      message: error.message,
-      name: error.name,
-      stack: error.stack,
-    };
-  }
-
-  return { message: String(error) };
-}
-
-function validateToolProviderDispatchContext(input: {
-  callableContext: CallableContext;
-  provider: ToolProviderDescriptor;
-}) {
-  try {
-    assertCallableDispatchContext({
-      callable: input.provider.callable,
-      ctx: input.callableContext,
-    });
-  } catch (error) {
-    throw new Error(
-      `Tool provider "${input.provider.path.join(".")}" cannot be dispatched by this Codemode Session worker: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-      { cause: error },
-    );
+    await this.#logger.log(level === "error" || level === "warn" ? level : "log", message);
   }
 }
 
 function buildScriptExecutorModule() {
-  // The user's code is inserted as JavaScript source because Cloudflare's
-  // dynamically loaded Workers run with string eval disabled. WorkerLoader is
-  // the sandbox boundary here; the outer catch below reports module/evaluation
-  // errors back onto the CodemodeSession event stream.
-  // https://developers.cloudflare.com/workers/runtime-apis/bindings/worker-loader/
   return `
 import { WorkerEntrypoint } from "cloudflare:workers";
 import __userScript from "./user-code.js";
@@ -491,6 +460,26 @@ function buildUserCodeModule(code: string) {
   return `const __userScript = (${code});
 export default __userScript;
 `;
+}
+
+function toEventsCursor(value: number | "start" | "end" | undefined): StreamCursor | undefined {
+  return typeof value === "number" && value <= 0 ? "start" : value;
+}
+
+function serializeError(error: unknown) {
+  if (error instanceof Error) {
+    return {
+      message: error.message,
+      name: error.name,
+      stack: error.stack,
+    };
+  }
+
+  return { message: String(error) };
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof Error && error.name === "AbortError";
 }
 
 export default {

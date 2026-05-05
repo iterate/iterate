@@ -1,6 +1,6 @@
 {
   "name": "os2-codemode-session-vitest",
-  "main": "codemode-session-test-entry.workerd.ts",
+  "main": "codemode-session-test-entry.ts",
   "compatibility_date": "2026-04-27",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {

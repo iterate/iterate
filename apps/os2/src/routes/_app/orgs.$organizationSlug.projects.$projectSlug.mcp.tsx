@@ -1,6 +1,9 @@
 import type { PublicAppConfig } from "@iterate-com/shared/apps/config";
+import { useQuery } from "@tanstack/react-query";
 import { useConfig } from "@iterate-com/ui/apps/config";
 import { buttonVariants } from "@iterate-com/ui/components/button";
+import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
+import { Identifier } from "@iterate-com/ui/components/identifier";
 import { createFileRoute } from "@tanstack/react-router";
 import type { AppConfig } from "~/app.ts";
 import { buildProjectMcpUrl } from "~/lib/project-host-routing.ts";
@@ -14,6 +17,10 @@ export const Route = createFileRoute("/_app/orgs/$organizationSlug/projects/$pro
       ...orpc.projects.findBySlug.queryOptions({ input: { slug: params.projectSlug } }),
       staleTime: 30_000,
     });
+    await context.queryClient.ensureQueryData({
+      ...orpc.projects.mcpSessions.list.queryOptions({ input: { projectId: project.id } }),
+      staleTime: 10_000,
+    });
 
     return {
       breadcrumb: "MCP",
@@ -26,10 +33,15 @@ export const Route = createFileRoute("/_app/orgs/$organizationSlug/projects/$pro
 function ProjectMcpPage() {
   const { project } = Route.useLoaderData();
   const config = useConfig<PublicConfig>();
+  const { data: sessionsData } = useQuery({
+    ...orpc.projects.mcpSessions.list.queryOptions({ input: { projectId: project.id } }),
+    staleTime: 10_000,
+  });
   const mcpUrl = buildProjectMcpUrl({
     projectSlug: project.slug,
     projectHostnameBases: config.projectHostnameBases,
   });
+  const sessions = sessionsData?.sessions ?? [];
 
   if (!mcpUrl) {
     return (
@@ -92,6 +104,39 @@ function ProjectMcpPage() {
           Cursor MCP docs
         </a>
       </div>
+
+      <div className="space-y-3">
+        <div className="space-y-1">
+          <h2 className="text-sm font-semibold">Server Sessions</h2>
+          <p className="text-sm text-muted-foreground">
+            Inbound MCP connections for this project, cataloged by Durable Object name.
+          </p>
+        </div>
+        {sessions.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No MCP server sessions yet.</p>
+        ) : (
+          sessions.map((session) => (
+            <div key={session.name} className="space-y-2 rounded-lg border bg-card p-4">
+              <div className="space-y-1">
+                <Identifier value={session.name} textClassName="text-sm font-medium" />
+                <p className="text-sm text-muted-foreground">
+                  {session.clientName ?? "Unknown MCP client"} · {session.userId}
+                </p>
+              </div>
+              <p className="font-mono text-xs text-muted-foreground">
+                <EventsStreamPathLabel path={session.streamPath} />
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Created {formatDate(session.createdAt)} · Woke {formatDate(session.lastWokenAt)}
+              </p>
+            </div>
+          ))
+        )}
+      </div>
     </section>
   );
+}
+
+function formatDate(value: string) {
+  return new Date(value).toLocaleString();
 }

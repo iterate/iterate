@@ -1,6 +1,12 @@
 import { ORPCError } from "@orpc/server";
-import { EventInput } from "@iterate-com/events-contract";
+import { EventInput, StreamPath } from "@iterate-com/events-contract";
+import type { D1ObjectCatalogRecord } from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
+import {
+  getD1ObjectCatalogRecord,
+  listD1ObjectCatalogRecordsByIndex,
+} from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
 import { typeid } from "@iterate-com/shared/typeid";
+import type { AppContext } from "~/context.ts";
 import {
   countProjects,
   deleteProject,
@@ -9,17 +15,20 @@ import {
   getProjectById,
   getProjectBySlug,
   insertProjectPreset,
-  insertProject,
   listProjectPresets,
   listProjects,
   updateProjectPreset,
   updateProjectConfig,
 } from "~/db/queries/.generated/index.ts";
+import type { CodemodeSessionInitParams } from "~/durable-objects/codemode-session.ts";
+import type { ProjectDurableObject } from "~/durable-objects/project-durable-object.ts";
+import type { ProjectMcpServerConnectionInitParams } from "~/durable-objects/project-mcp-server-connection.ts";
 import {
   isReservedProjectHostname,
   isValidCustomHostname,
   normalizeCustomHostname,
 } from "~/lib/project-host-routing.ts";
+import type { ActiveOrganizationAuth } from "~/lib/auth.ts";
 import { activeOrganizationMiddleware, os } from "~/orpc/orpc.ts";
 
 type ProjectRow = {
@@ -42,6 +51,9 @@ type ProjectPresetRow = {
   created_at: string;
   updated_at: string;
 };
+
+type CodemodeSessionCatalogRecord = D1ObjectCatalogRecord<CodemodeSessionInitParams>;
+type InboundMcpSessionCatalogRecord = D1ObjectCatalogRecord<ProjectMcpServerConnectionInitParams>;
 
 function toProject(row: ProjectRow) {
   return {
@@ -69,6 +81,30 @@ function toProjectPreset(row: ProjectPresetRow) {
     events: EventInput.array().parse(JSON.parse(row.events_json)),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function toCodemodeSession(record: CodemodeSessionCatalogRecord) {
+  return {
+    name: record.name,
+    projectId: record.initParams.projectId,
+    streamPath: StreamPath.parse(record.initParams.streamPath),
+    createdAt: record.createdAt,
+    lastWokenAt: record.lastWokenAt,
+  };
+}
+
+function toInboundMcpSession(record: InboundMcpSessionCatalogRecord) {
+  return {
+    name: record.name,
+    projectId: record.initParams.projectId,
+    projectSlug: record.initParams.projectSlug,
+    streamPath: StreamPath.parse(record.initParams.streamPath),
+    clientId: record.initParams.clientId,
+    clientName: record.initParams.clientName,
+    userId: record.initParams.userId,
+    createdAt: record.createdAt,
+    lastWokenAt: record.lastWokenAt,
   };
 }
 
@@ -125,22 +161,16 @@ export const projectsRouter = {
           prefix: "proj",
         });
 
+        let project: Awaited<ReturnType<ProjectDurableObject["createProject"]>>;
+
         try {
-          const row = await insertProject(context.db, {
-            id,
+          project = await requireProjectNamespace(context).getByName(id).createProject({
+            projectId: id,
             slug: input.slug,
             clerkOrgId: auth.orgId,
             createdByClerkUserId: auth.userId,
-            metadata: JSON.stringify(input.metadata),
+            metadata: input.metadata,
           });
-
-          if (!row) {
-            throw new ORPCError("INTERNAL_SERVER_ERROR", {
-              message: `Project ${id} was not returned after insert`,
-            });
-          }
-
-          return toProject(row);
         } catch (error) {
           if (isUniqueConstraintError(error)) {
             throw new ORPCError("CONFLICT", {
@@ -150,6 +180,15 @@ export const projectsRouter = {
 
           throw error;
         }
+
+        const row = await getProjectById(context.db, { clerkOrgId: auth.orgId, id: project.id });
+        if (!row) {
+          throw new ORPCError("INTERNAL_SERVER_ERROR", {
+            message: `Project ${id} was not returned after createProject`,
+          });
+        }
+
+        return toProject(row);
       }),
     list: os.projects.list.use(activeOrganizationMiddleware).handler(async ({ context, input }) => {
       const auth = context.activeOrganization;
@@ -254,6 +293,73 @@ export const projectsRouter = {
         await deleteProject(context.db, { clerkOrgId: auth.orgId, id: input.id });
         return { ok: true as const, id: input.id, deleted: true };
       }),
+    codemodeSessions: {
+      list: os.projects.codemodeSessions.list
+        .use(activeOrganizationMiddleware)
+        .handler(async ({ context, input }) => {
+          await requireProject({
+            activeOrganization: context.activeOrganization,
+            context,
+            projectId: input.projectId,
+          });
+          const rows = await listD1ObjectCatalogRecordsByIndex<CodemodeSessionInitParams>(
+            requireD1ObjectCatalog(context),
+            {
+              className: "CodemodeSession",
+              indexName: "projectId",
+              indexValue: input.projectId,
+            },
+          );
+
+          return { sessions: rows.map(toCodemodeSession) };
+        }),
+      find: os.projects.codemodeSessions.find
+        .use(activeOrganizationMiddleware)
+        .handler(async ({ context, input }) => {
+          await requireProject({
+            activeOrganization: context.activeOrganization,
+            context,
+            projectId: input.projectId,
+          });
+          const record = await getD1ObjectCatalogRecord<CodemodeSessionInitParams>(
+            requireD1ObjectCatalog(context),
+            {
+              className: "CodemodeSession",
+              name: input.name,
+            },
+          );
+
+          if (!record || record.initParams.projectId !== input.projectId) {
+            throw new ORPCError("NOT_FOUND", {
+              message: `Codemode Session ${input.name} not found`,
+            });
+          }
+
+          return toCodemodeSession(record);
+        }),
+    },
+    mcpSessions: {
+      list: os.projects.mcpSessions.list
+        .use(activeOrganizationMiddleware)
+        .handler(async ({ context, input }) => {
+          await requireProject({
+            activeOrganization: context.activeOrganization,
+            context,
+            projectId: input.projectId,
+          });
+          const rows =
+            await listD1ObjectCatalogRecordsByIndex<ProjectMcpServerConnectionInitParams>(
+              requireD1ObjectCatalog(context),
+              {
+                className: "ProjectMcpServerConnection",
+                indexName: "projectId",
+                indexValue: input.projectId,
+              },
+            );
+
+          return { sessions: rows.map(toInboundMcpSession) };
+        }),
+    },
     presets: {
       list: os.projects.presets.list
         .use(activeOrganizationMiddleware)
@@ -386,3 +492,42 @@ export const projectsRouter = {
     },
   },
 };
+
+async function requireProject(input: {
+  activeOrganization: ActiveOrganizationAuth;
+  context: AppContext;
+  projectId: string;
+}) {
+  const project = await getProjectById(input.context.db, {
+    clerkOrgId: input.activeOrganization.orgId,
+    id: input.projectId,
+  });
+
+  if (!project) {
+    throw new ORPCError("NOT_FOUND", {
+      message: `Project ${input.projectId} not found`,
+    });
+  }
+
+  return project;
+}
+
+function requireD1ObjectCatalog(context: AppContext) {
+  if (!context.doCatalog) {
+    throw new ORPCError("INTERNAL_SERVER_ERROR", {
+      message: "DO_CATALOG binding not available.",
+    });
+  }
+
+  return context.doCatalog;
+}
+
+function requireProjectNamespace(context: AppContext) {
+  if (!context.project) {
+    throw new ORPCError("INTERNAL_SERVER_ERROR", {
+      message: "PROJECT binding not available.",
+    });
+  }
+
+  return context.project;
+}

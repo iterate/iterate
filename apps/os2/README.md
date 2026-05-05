@@ -11,6 +11,10 @@ Minimal full-stack app: TanStack Start + oRPC over OpenAPI/HTTP + sqlfu, running
 - **Observability:** Workers use the shared `withEvlog()` runtime wrapper; shared `useEvlog()` only enriches a request-scoped log
 - **Runtime config:** optional `APP_CONFIG` JSON env var plus `APP_CONFIG_*` nested overrides, with frontend-visible fields annotated in the schema and exposed through the typed `__internal.publicConfig` oRPC procedure
 
+## Local rules
+
+- Follow `jonasland/RULES.md` at all times when working in `apps/os2`.
+
 ## Key files
 
 - `src/app.ts` — app manifest plus app config schema
@@ -45,6 +49,29 @@ procedures. Runtime auth checks are implemented as oRPC middleware:
 `activeOrganizationMiddleware` rejects unauthenticated or personal-account
 requests and injects `context.activeOrganization` for handlers.
 
+Project-scoped oRPC procedures should stay thin. The TanStack Start app owns
+HTTP routing, Clerk organization context, form/API shape, and response mapping;
+the Project Durable Object owns project lifecycle behavior. When an operation
+changes project-owned ingress, destinations, MCP setup, or other project-owned
+runtime state, the oRPC handler should resolve the stable Project ID and call
+the Project Durable Object's control surface rather than duplicating lifecycle
+logic in the app worker.
+
+Project creation should use a domain command named `createProject`, not
+`initializeProject`. The app worker authenticates the caller, validates the
+requested slug, allocates the Project ID, gets the Project Durable Object by
+that Project ID, and calls `createProject(...)`. The Project Durable Object then
+writes local lifecycle state plus D1 projections before the RPC caller returns
+and redirects to the Project detail page. Follow-up work such as DNS,
+Cloudflare custom-hostname setup, and certificate provisioning can continue from
+the durable desired state.
+
+Project creation and lifecycle commands should also write the app-level D1
+`projects` row from the Project Durable Object. That row is a listing and route
+projection, not the lifecycle authority. It is separate from the shared
+Durable Object catalog tables created by `withD1ObjectCatalog`, which track
+initialized Durable Objects for discovery, inspection, and repair workflows.
+
 Cloudflare Workers wrap requests with the shared `withEvlog()` helper. The
 runtime entrypoint still assembles app-specific deps, but request logger
 creation, ALS scoping, pretty/raw formatting, filtering, and request-final flush
@@ -67,6 +94,295 @@ aware finalization is a follow-up improvement.
 Each request-final evlog event still adds a short summary `message` while
 keeping the structured wide event fields as the source of truth.
 
+## Project Ingress
+
+OS2 has two request-routing levels.
+
+Level 1 runs in the main OS2 Worker before TanStack Start and before dashboard
+authentication. It is an ingress route-table match:
+
+- if the request hostname is owned by a Project, the Worker delegates the
+  request to `ProjectIngressEntrypoint` with the Project ID in loopback props
+- if the request hostname is not owned by a Project, the Worker continues into
+  the current TanStack Start OS2 App
+
+Level 2 runs inside the Project Durable Object. The Project Durable Object owns
+the project-local ingress route table, including which hostnames and paths are
+public and which require project-scoped authentication. This is deliberately
+less efficient than routing everything in the horizontally-scaled Worker, but it
+keeps the Project Durable Object authoritative while the model settles. Later,
+the Worker can cache route projections derived from the Project Durable Object.
+
+Both levels should use the same conceptual route table:
+
+1. Match an HTTP request against ordered ingress routing rules.
+2. Resolve the match to a fetch-capable destination.
+3. Proxy the request to that destination with `fetch(request)`.
+
+The matcher should be packaged as a pure library. Its dependencies are:
+
+- an HTTP request, where matching only considers request URL host/path and
+  request headers
+- a route lookup abstraction, so the first implementation can use D1 and later
+  implementations can use KV or another cache without changing matching
+  semantics
+- caller-provided fallback rules, such as "route everything else to the OS2 App"
+
+Each stored ingress routing rule should have a stable TypeID-style ID, priority,
+optional notes/comments, match data, and a top-level `callable` target.
+Fallback rules are not seed data and do not need to be inserted into D1.
+
+The first stored rule shape should be intentionally SQL-friendly:
+
+```ts
+type ExactHostIngressRule = {
+  id: string;
+  priority: number;
+  host: string;
+  notes: string | null;
+  callable: FetchCallable;
+};
+```
+
+Matching this rule class should compile to a direct indexed lookup by normalized
+hostname. Richer matching over paths, headers, methods, or wildcard hostnames is
+future work.
+
+The route-table model should be capable of growing toward Caddy/nginx-style
+matching over hostnames, paths, methods, headers, and other request properties.
+The first implementation can stay much narrower, but it should not bake in a
+special one-off "hostname lookup means project" abstraction.
+
+### Worker Shape
+
+The preferred long-term shape is still a skinny public OS2 Ingress Worker in
+front of private implementation workers:
+
+- the OS2 Ingress Worker owns public routes and workers.dev exposure
+- the OS2 App Worker runs TanStack Start and oRPC but does not need a public
+  route
+- Codemode Session and Project MCP Server Connection Durable Object owners can
+  remain separate worker scripts behind bindings
+- public traffic enters through the OS2 Ingress Worker and is forwarded to a
+  fetch-capable destination
+
+This keeps the public entrypoint small and makes it explicit that project
+ingress is resolved before dashboard authentication.
+
+```text
+public hostname
+  -> OS2 Ingress Worker
+    -> ProjectIngressEntrypoint loopback entrypoint (Project Ingress Entry Point)
+      -> Project Durable Object ingress RPC
+    -> ProjectMcpServerEntrypoint loopback entrypoint (Project MCP Server Entry Point)
+    -> OS2 App Worker fetch destination
+    -> future fetch destinations
+```
+
+For now, the Project Durable Object should be exported from the main OS2 Worker,
+not from a separate worker script. That is a deliberate near-term exception to
+the usual Durable Object deployment boundary because Cloudflare loopback
+bindings (`ctx.exports`) are the mechanism that can pass dynamic `props` to
+named entrypoints. The entrypoints should live in `src/entrypoints/`, next to
+`src/durable-objects/`.
+
+The two first named Worker entry points are:
+
+- `ProjectIngressEntrypoint`, the Project Ingress Entry Point, a
+  `WorkerEntrypoint` with props `{ projectId: string }`. Its `fetch(request)`
+  method resolves the Project Durable Object stub using the Project ID as the
+  Durable Object name and returns `stub.ingressFetch(request)`.
+- `ProjectMcpServerEntrypoint`, the Project MCP Server Entry Point, a
+  `WorkerEntrypoint` with props `{ projectId: string }`. It is the
+  project-scoped MCP server fetch destination used by project-local MCP routes
+  such as `mcp.mycustomer.com`.
+
+The Durable Object behind MCP client connections is
+`ProjectMcpServerConnection`. It describes one external MCP client connected to
+OS2's project-scoped MCP server, and it stays distinct from Outbound MCP Client
+Connections where OS2 is the client of an external MCP server.
+
+Entrypoint props should use stable Project IDs only in v1. Project slugs are
+mutable route identity for the OS2 control plane; slug-to-ID resolution should
+happen before writing global ingress rules or before invoking a codemode/MCP
+control-plane command. Hot ingress should not perform a second slug lookup.
+
+For v1, global ingress rules should target the `ProjectIngressEntrypoint`
+loopback entry point. Project-local MCP rules should target the
+`ProjectMcpServerEntrypoint` loopback entry point:
+
+```ts
+type FetchCallable = Extract<Callable, { type: "fetch" }>;
+
+const projectIngressFetchCallable = {
+  type: "fetch",
+  via: {
+    type: "loopback-binding",
+    bindingType: "service",
+    exportName: "ProjectIngressEntrypoint",
+    props: { projectId },
+  },
+} satisfies FetchCallable;
+
+const projectStreamsFetchCallable = {
+  type: "fetch",
+  via: {
+    type: "url",
+    url: "https://events.iterate.com",
+  },
+  fetchRequest: {
+    headers: {
+      "x-iterate-project-id": projectId,
+    },
+  },
+} satisfies FetchCallable;
+```
+
+The existing experiment in `experiments/channel-agent-poc/nested-facets` is the
+rough prototype for this shape: its Worker parses the hostname, dispatches
+project/app traffic to a project Durable Object, and lets the project Durable
+Object route to editor/app facets.
+
+### Hostname Examples
+
+Each Project can have several rootable Project Ingress Hosts:
+
+- Slug Project Ingress Host: `<project-slug>.iterate.app`
+- Stable Project Ingress Host: `<project-id>.iterate.app`
+- Custom Project Ingress Host: an optional user-owned hostname such as
+  `mycustomer.com`
+
+The Default Project Ingress Host is the hostname OS2 uses when generating
+ordinary public URLs. It is the custom host when a Project has one; otherwise it
+is the slug platform host. The stable ID host should still work, but it is not
+the default user-facing URL.
+
+A Project Dashboard Host such as `iterate.<project-ingress-host>` can route a
+project-owned hostname back to the OS2 dashboard for that Project. This is a
+project-local route destination, not the global OS2 dashboard host. It is useful
+for future custom-host flows such as `iterate.mycustomer.com`.
+
+| Hostname                      | Level 1 result                                     | Level 2 owner | Example destination                        |
+| ----------------------------- | -------------------------------------------------- | ------------- | ------------------------------------------ |
+| `os.iterate2.com`             | OS2 App                                            | none          | Dashboard, oRPC, sign-in                   |
+| `os2-prd.iterate.workers.dev` | OS2 App                                            | none          | Deployment/debug entry                     |
+| `demo.iterate.app`            | Project Ingress by slug platform host              | Project DO    | Project default route                      |
+| `proj_01abc.iterate.app`      | Project Ingress by stable ID platform host         | Project DO    | Project default route                      |
+| `mycustomer.com`              | Project Ingress by custom hostname lookup          | Project DO    | Public website apex                        |
+| `mcp.mycustomer.com`          | Project Ingress by custom hostname lookup          | Project DO    | Project MCP Server Entry Point             |
+| `mcp__demo.iterate.app`       | Project Ingress by slug platform alias             | Project DO    | MCP fallback while deep DNS propagates     |
+| `streams.mycustomer.com`      | Project Ingress by custom hostname lookup          | Project DO    | Events app proxy with Project ID header    |
+| `streams__demo.iterate.app`   | Project Ingress by slug platform alias             | Project DO    | Streams fallback while deep DNS propagates |
+| `iterate.mycustomer.com`      | Project Ingress by custom hostname lookup          | Project DO    | Project dashboard destination              |
+| `unknown.example.com`         | OS2 App or 404, depending on Worker route coverage | none          | Not project-owned                          |
+
+Initially, only the hostname decides the first fork. Paths are interpreted after
+that by either the OS2 App or the Project Durable Object.
+
+MCP project routing should use project ingress routes, not a hard-coded `/mcp`
+path on the custom hostname apex. For a custom hostname, `mcp.mycustomer.com`
+can be a project-local route whose destination is the Project MCP Server Entry
+Point. `mycustomer.com/mcp` is just a path under the custom hostname apex and
+should be handled by the Project Durable Object's normal apex route.
+
+Project MCP routes are host-routed in v1. Once the Project Durable Object
+matches an MCP hostname, it should delegate every path on that hostname to
+`ProjectMcpServerEntrypoint`. That entry point owns MCP protocol paths, OAuth
+protected-resource metadata, browser setup instructions, and unsupported-path
+404s. The TanStack Start app does not need to render the MCP instructions page;
+the entry point can return static HTML directly for browser requests that are
+not MCP client connections.
+
+Project platform MCP routes also get single-label fallback aliases such as
+`mcp__demo.iterate.app` and `mcp__proj_01abc.iterate.app`. These are not the
+canonical URLs; they are there so `*.iterate.app` wildcard DNS can work while
+deeper hostnames such as `mcp.demo.iterate.app` are unavailable or propagating.
+
+Project stream routes are host-routed in v1. For a custom hostname,
+`streams.mycustomer.com` should route through the Project Durable Object to a
+shared fetch callable targeting `https://events.iterate.com`. The callable
+preserves the incoming path and query string and injects
+`x-iterate-project-id: <project-id>` before fetching the Events app.
+
+Project platform streams routes also get single-label fallback aliases such as
+`streams__demo.iterate.app` and `streams__proj_01abc.iterate.app` for the same
+wildcard-DNS propagation case.
+
+### Authentication Placement
+
+OS2 App authentication protects dashboard/control-plane routes after the
+hostname classifier has decided the request is not Project Ingress.
+
+Project Ingress authentication belongs to the Project Durable Object. A single
+Project can have both public and protected destinations:
+
+- `https://mycustomer.com/` can be a public website served by a runtime-loaded
+  fetch callable
+- `https://mcp.mycustomer.com` can require Clerk OAuth as a project MCP server
+  route
+- `https://demo.iterate.app/_admin` can require an OS2 user with access to the
+  owning Clerk Organization
+
+This means the main Worker must not require a Clerk session before the hostname
+fork, otherwise public custom-hostname traffic would be impossible.
+
+Do not add destination-specific authorization RPCs to the Project Durable
+Object, such as `authorizeMcpServerConnection(...)`. MCP is one Project Route
+Destination among many future project-local apps. The future Project DO auth
+surface should be generic, for example evaluating whether a principal may access
+a Project Route Destination. V1 can keep the MCP wrinkle simple:
+`ProjectMcpServerEntrypoint` owns Clerk OAuth protocol verification, then asks
+the Project Durable Object to perform a generic Project Access Check. That check
+can read the app-level D1 `projects` projection to verify that the verified
+Clerk Organization owns or can access the Project. Full destination-specific
+Project Route Authorization remains follow-up work.
+
+### Ingress Route Registry
+
+The first implementation should use D1 as the level-1 ingress lookup registry.
+A D1 lookup indexed by exact normalized hostname can resolve a Project-owned
+hostname to the Project Durable Object fetch destination. This avoids KV
+consistency concerns while the model is still changing, but D1 is still a
+projection of Project Durable Object desired state, not the lifecycle authority.
+
+The global D1 registry stores project-owned exact-host rules only. It should not
+store rows for `os.iterate2.com`, workers.dev, or other OS2 App entrypoints.
+Anything that does not match a stored global ingress rule falls through to the
+OS2 App Worker, which can then handle or reject the request however TanStack
+Start and the OS2 control plane decide.
+
+Project-owned global ingress rules should store `project_id` as a first-class
+column as well as inside the fetch callable props. The `callable`
+describes how to execute the route target; `project_id` describes the data
+scope and supports SQL queries such as listing every ingress hostname for a
+Project.
+
+Project-owned ingress mutations should go through the Project Durable Object.
+The Project Durable Object records desired state locally and writes global D1
+rows as queryable projections for the hot Worker path. V1 can write those
+projections synchronously for conceptual simplicity, but Durable Object SQLite
+and D1 are not one atomic transaction; reconciliation is explicit follow-up
+work rather than hidden complexity in the first implementation.
+
+Future versions can cache this registry in the main Worker or KV, but cache
+entries must be treated as projections of the Project Durable Object's desired
+state, not as the source of truth.
+
+Project Durable Objects should store their own project-local ingress route
+tables in Durable Object SQLite. These route tables can include runtime-loaded
+destinations, OS2-packaged destinations such as the MCP server, and public
+custom-hostname destinations such as a website served from the custom hostname
+apex.
+
+When a Project is created, OS2 should create both the slug and stable platform
+hosts, plus matching MCP hosts such as `mcp.<project-slug>.iterate.app` and
+`mcp.<project-id>.iterate.app`. When a custom host is added, OS2 should also add
+the custom host's MCP route. For example, a project with `mycustomer.com` should
+have `mcp.mycustomer.com` pointing at the `ProjectMcpServerEntrypoint` loopback
+fetch callable. Stream hosts such as `streams.mycustomer.com` should point at
+the Events app URL fetch callable. Slug changes should update slug-derived routes at the same
+time; alias lifecycle is future work.
+
 ## Contract
 
 `apps/os2-contract` owns the typed RPC surface. `src/orpc/orpc.ts` binds implementation to contract.
@@ -79,6 +395,49 @@ sqlfu is the database source of truth:
 - `src/db/migrations/*.sql` is the migration history
 - `src/db/queries/*.sql` contains checked-in application queries
 - `src/db/queries/.generated` and `src/db/migrations/.generated` are regenerated with `pnpm sqlfu:generate`
+
+OS2 data model design should make record scope explicit. Persisted records are
+scoped by one of:
+
+- Project
+- Clerk Organization
+- Clerk User
+- Global
+
+That scope should be represented by first-class queryable columns, not only
+inside JSON blobs, metadata, or callable props. For example, a global ingress
+rule that routes to a Project should store `project_id` as a column even though
+the executable `callable_json` also contains the Project ID. The column is
+what powers ownership checks, indexed listing, repair jobs, and "show me all
+routes for this Project" views.
+
+There are two different D1-backed tracking concepts:
+
+- App-level projection tables, such as `projects` and ingress rules, are product
+  query state derived from Project Durable Object lifecycle commands.
+- Shared Durable Object catalog tables, owned by the durable-object-utils
+  mixins, track initialized Durable Objects independently of product tables.
+
+Durable Objects should use the shared Iterate Durable Object base from
+`@iterate-com/shared/durable-object-utils/iterate-durable-object` unless they
+have a specific reason not to. That base stacks runtime core adapters,
+lifecycle hooks, D1 object catalog projection, the DO-local SQLite inspector,
+and the DO-local KV inspector.
+
+The OS2 Worker entrypoint should mount the shared Durable Object utility routes
+needed to initialize, inspect, list, or repair those objects. These are
+infrastructure routes, not TanStack product routes, and should stay distinct
+from the app-level project D1 table.
+
+For now the main worker exposes direct Durable Object debug fetch URLs:
+
+- `/__durable-objects/project/<name>/__outerbase`
+- `/__durable-objects/project/<name>/__kv`
+- `/__durable-objects/codemode-session/<name>/__outerbase`
+- `/__durable-objects/project-mcp-server-connection/<name>/__kv`
+
+The worker strips `/__durable-objects/<kind>/<name>` and forwards the remaining
+path to the named Durable Object stub's `fetch()`.
 
 The current domain table is `projects`: `id`, `slug`, `clerk_org_id`,
 `created_by_clerk_user_id`, `custom_hostname`, `metadata`, `created_at`, and
@@ -158,15 +517,23 @@ Required Clerk setup:
    OAuth credentials and the exact Clerk Authorized Redirect URI configured in
    Google Cloud.
 
-`/mcp` is a protected OAuth resource. OS2 publishes RFC 9728 metadata at
-`/.well-known/oauth-protected-resource` and
-`/.well-known/oauth-protected-resource/mcp`, pointing clients at Clerk as the
-authorization server. The Worker verifies Clerk-issued OAuth bearer tokens with
-Clerk's SDK using `acceptsToken: "oauth_token"`. If the token is JWT-formatted,
-OS2 also reads Clerk org claims with the configured JWT public key before
-passing identity props to the `IterateMcpServer` Durable Object. Opaque OAuth
-tokens are valid Clerk OAuth tokens but currently fail OS2's MCP org check
-unless the token can still be mapped to an active Clerk Organization.
+Project MCP routes expose a protected OAuth resource on a project-owned MCP
+hostname, such as `https://mcp.mycustomer.com`. OS2 publishes RFC 9728 metadata
+at `/.well-known/oauth-protected-resource` on that hostname, pointing clients at
+Clerk as the authorization server. The Project MCP Server Entry Point verifies
+Clerk-issued OAuth bearer tokens with Clerk's SDK using
+`acceptsToken: "oauth_token"`. If the token is JWT-formatted, OS2 also reads
+Clerk org claims with the configured JWT public key before passing identity
+props to the Project MCP Server Connection Durable Object. Opaque OAuth tokens
+are valid Clerk OAuth tokens but currently fail OS2's MCP org check unless the
+token can still be mapped to an active Clerk Organization.
+
+Project-owned MCP scopes and route-specific authorization belong to the generic
+Project Route Authorization model, not to an MCP-specific Project Durable Object
+method. Until that model exists, keep the entrypoint implementation small and
+explicit: verify Clerk OAuth in `ProjectMcpServerEntrypoint`, call the generic
+Project Access Check on the Project Durable Object, then pass verified identity
+props to `ProjectMcpServerConnection`.
 
 ## Routes
 
@@ -197,7 +564,8 @@ Execute JavaScript in isolated dynamic worker sandboxes via oRPC or MCP.
   committed request event; `codemode.streamEvents` reads events from the Event
   Stream Path; `codemode.execute` remains a compatibility iterator for older
   callers.
-- **MCP:** `run_code` tool on the MCP server at `/mcp`
+- **MCP:** `run_code` tool on the project MCP route, for example
+  `https://mcp.mycustomer.com`
 
 ### Using the MCP server with Claude CLI
 
@@ -205,7 +573,7 @@ After the Clerk OAuth Application is configured with Dynamic Client
 Registration, add the OS2 remote MCP endpoint to the project:
 
 ```bash
-claude mcp add --transport http os2 https://os.iterate-dev-jonas.com/mcp --scope project
+claude mcp add --transport http os2 https://mcp.demo.iterate-dev-jonas.app --scope project
 ```
 
 Then in any conversation: "Use run_code to compute the first 10 fibonacci
@@ -261,6 +629,8 @@ schema's camelCase shape. For OS:
 - `APP_CONFIG_CLERK__MCP_OAUTH_SCOPES=["openid","email","profile"]` ->
   `clerk.mcpOauthScopes`
 - `APP_CONFIG_PROJECT_HOSTNAME_BASES=["iterate2.app"]` -> `projectHostnameBases`
+- `APP_CONFIG_PROJECT_STREAMS_EVENTS_BASE_URL=https://events.iterate.com` ->
+  `projectStreamsEventsBaseUrl`
 - `APP_CONFIG_TYPE_ID_PREFIX=os` -> `typeIdPrefix`
 - `APP_CONFIG_LOGS__STDOUT_FORMAT=pretty` -> `logs.stdoutFormat`
 

@@ -29,6 +29,28 @@ export const ProjectPreset = z.object({
 });
 export type ProjectPreset = z.output<typeof ProjectPreset>;
 
+export const CodemodeSession = z.object({
+  name: z.string(),
+  projectId: z.string(),
+  streamPath: StreamPath,
+  createdAt: z.string(),
+  lastWokenAt: z.string(),
+});
+export type CodemodeSession = z.output<typeof CodemodeSession>;
+
+export const InboundMcpSession = z.object({
+  name: z.string(),
+  projectId: z.string(),
+  projectSlug: z.string().nullable(),
+  streamPath: StreamPath,
+  clientId: z.string().nullable(),
+  clientName: z.string().nullable(),
+  userId: z.string(),
+  createdAt: z.string(),
+  lastWokenAt: z.string(),
+});
+export type InboundMcpSession = z.output<typeof InboundMcpSession>;
+
 export const RandomLogStreamRequest = z
   .object({
     count: z
@@ -166,6 +188,31 @@ export const osContract = oc.router({
       .output(eventIterator(z.string())),
   },
   codemode: {
+    createSession: oc
+      .route({
+        method: "POST",
+        path: "/codemode/sessions",
+        description:
+          "Create or attach to a Codemode Session, append setup events, and optionally start a Script Execution",
+        tags: ["/codemode"],
+      })
+      .input(
+        z.object({
+          code: z.string().trim().min(1).optional(),
+          events: z.array(EventInput).default([]),
+          projectId: z.string(),
+          providers: z.array(ToolProviderDescriptor).default([]),
+          streamPath: StreamPath.optional(),
+        }),
+      )
+      .output(
+        z.object({
+          appendedEvents: z.array(Event),
+          registeredProviderEvents: z.array(Event),
+          scriptExecutionEvent: Event.nullable(),
+          session: CodemodeSession,
+        }),
+      ),
     executeScript: oc
       .route({
         method: "POST",
@@ -364,6 +411,37 @@ export const osContract = oc.router({
         })
         .input(z.object({ id: z.string(), projectId: z.string() }))
         .output(z.object({ ok: z.literal(true), id: z.string(), deleted: z.boolean() })),
+    },
+    codemodeSessions: {
+      list: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectId}/codemode-sessions",
+          description: "List Codemode Sessions for a project",
+          tags: ["/projects"],
+        })
+        .input(z.object({ projectId: z.string() }))
+        .output(z.object({ sessions: z.array(CodemodeSession) })),
+      find: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectId}/codemode-sessions/{name}",
+          description: "Get a Codemode Session by catalog name",
+          tags: ["/projects"],
+        })
+        .input(z.object({ name: z.string(), projectId: z.string() }))
+        .output(CodemodeSession),
+    },
+    mcpSessions: {
+      list: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectId}/mcp-sessions",
+          description: "List inbound MCP sessions for a project",
+          tags: ["/projects"],
+        })
+        .input(z.object({ projectId: z.string() }))
+        .output(z.object({ sessions: z.array(InboundMcpSession) })),
     },
   },
 });

@@ -4,8 +4,12 @@ import { CodemodeExecutor } from "@iterate-com/shared/codemode/executor";
 import { resolveToolProviderDescriptor } from "@iterate-com/shared/codemode/resolve";
 import { validateProviderPaths } from "@iterate-com/shared/codemode/validate";
 import type { CodemodeEvent, ToolProviderDescriptor } from "@iterate-com/shared/codemode/types";
+import { deriveDurableObjectNameFromInitParams } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import type { CallableContext } from "@iterate-com/shared/callable/types.ts";
-import { startCodemodeScriptOnSession } from "~/codemode/codemode-session-rpc.ts";
+import {
+  createCodemodeSession,
+  startCodemodeScriptOnSession,
+} from "~/codemode/codemode-session-rpc.ts";
 import type { AppContext } from "~/context.ts";
 import { getProjectById } from "~/db/queries/.generated/index.ts";
 import type { ActiveOrganizationAuth } from "~/lib/auth.ts";
@@ -15,6 +19,40 @@ import { activeOrganizationMiddleware, os } from "~/orpc/orpc.ts";
 
 export const codemodeRouter = {
   codemode: {
+    createSession: os.codemode.createSession
+      .use(activeOrganizationMiddleware)
+      .handler(async ({ input, context }) => {
+        const streamPath =
+          input.streamPath ??
+          defaultStreamPathForProjectSession(input.projectId, generateSessionSlug());
+        const result = await createSession({
+          activeOrganization: context.activeOrganization,
+          code: input.code,
+          context,
+          events: input.events,
+          projectId: input.projectId,
+          providers: input.providers,
+          streamPath,
+        });
+        const now = new Date().toISOString();
+
+        return {
+          appendedEvents: result.appendedEvents,
+          registeredProviderEvents: result.registeredProviderEvents,
+          scriptExecutionEvent: result.scriptExecutionEvent,
+          session: {
+            createdAt: now,
+            lastWokenAt: now,
+            name: codemodeSessionName({
+              projectId: input.projectId,
+              streamPath: StreamPath.parse(streamPath),
+            }),
+            projectId: input.projectId,
+            streamPath: StreamPath.parse(streamPath),
+          },
+        };
+      }),
+
     executeScript: os.codemode.executeScript
       .use(activeOrganizationMiddleware)
       .handler(async ({ input, context }) => {
@@ -332,6 +370,49 @@ async function executeScriptOnSession(input: {
   });
 }
 
+async function createSession(input: {
+  activeOrganization: ActiveOrganizationAuth;
+  code?: string;
+  context: AppContext;
+  events: EventInput[];
+  projectId: string;
+  providers: ToolProviderDescriptor[];
+  streamPath: string;
+}) {
+  const context = input.context;
+  if (!context.codemodeSession) {
+    throw new ORPCError("INTERNAL_SERVER_ERROR", {
+      message: "CODEMODE_SESSION binding not available.",
+    });
+  }
+
+  await requireCodemodeProject({
+    activeOrganization: input.activeOrganization,
+    context,
+    projectId: input.projectId,
+  });
+  requireCodemodeStreamPathProject({
+    projectId: input.projectId,
+    streamPath: input.streamPath,
+  });
+
+  const duplicateProviderPath = findDuplicateProviderPath(input.providers.map((p) => p.path));
+  if (duplicateProviderPath) {
+    throw new ORPCError("BAD_REQUEST", {
+      message: `Duplicate provider path: ${duplicateProviderPath}`,
+    });
+  }
+
+  return await createCodemodeSession({
+    code: input.code,
+    events: input.events,
+    namespace: context.codemodeSession,
+    projectId: input.projectId,
+    providers: input.providers,
+    streamPath: StreamPath.parse(input.streamPath),
+  });
+}
+
 /**
  * Adapts CodemodeSession's durable event stream back to the legacy
  * `codemode.execute` generator contract. `executeScriptOnSession()` only
@@ -537,6 +618,25 @@ function generateBlockId() {
     id += chars[Math.floor(Math.random() * chars.length)];
   }
   return id;
+}
+
+function generateSessionSlug() {
+  const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
+  let id = "csess_";
+  for (let i = 0; i < 16; i++) {
+    id += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return id;
+}
+
+function codemodeSessionName(input: { projectId: string; streamPath: StreamPath }) {
+  return deriveDurableObjectNameFromInitParams({
+    initParams: { projectId: input.projectId, streamPath: input.streamPath },
+  });
+}
+
+function defaultStreamPathForProjectSession(projectId: string, sessionSlug: string) {
+  return `/projects/${projectId}/codemode-sessions/${sessionSlug}`;
 }
 
 function defaultStreamPathForProjectBlock(projectId: string, blockId: string) {

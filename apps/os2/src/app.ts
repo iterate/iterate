@@ -21,6 +21,9 @@ export const AppConfig = BaseAppConfig.extend({
   }),
   mcpProofSecret: redacted(z.string().trim().min(1)),
   projectHostnameBases: publicValue(z.array(z.string().trim().min(1)).default([])),
+  projectStreamsEventsBaseUrl: publicValue(
+    z.string().trim().url().default("https://events.iterate.com"),
+  ),
   typeIdPrefix: redacted(
     z
       .string()

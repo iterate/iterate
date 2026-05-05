@@ -1,33 +1,40 @@
-import type { Callable } from "../../callable/types.ts";
+import type { StreamEvent, StreamEventInput } from "../stream-processor.ts";
 
-export type CodemodeCodeExecutorToolProvider = {
-  slug: string;
-  executeCallable: Callable;
-  types?: string;
+export type CodemodeEventInput = Omit<StreamEventInput, "payload"> & {
+  payload?: unknown;
 };
 
-export type CodemodeCodeExecutionResult = {
+export type CodemodeProcessorSession = {
+  append(input: CodemodeEventInput): Promise<StreamEvent>;
+  callToolFunction(input: {
+    path: string[];
+    payload: unknown;
+    scriptExecutionRequestedOffset?: number;
+  }): Promise<unknown>;
+  executeScript(input: { code: string }): Promise<StreamEvent>;
+  getStreamPath(): Promise<string>;
+};
+
+export type CodemodeProcessorLogger = {
+  log(level: "error" | "log" | "warn", message: string): Promise<void>;
+};
+
+export type CodemodeScriptExecutionResult = {
   result: unknown;
-  error?: string;
-  logs?: string[];
+  error?: unknown;
 };
 
 /**
- * Runtime dependency for executing codemode blocks.
+ * Runtime dependency for executing codemode scripts.
  *
- * Keep concrete runtimes, such as Cloudflare's `DynamicWorkerExecutor`, behind
- * this interface. The codemode processor should only orchestrate stream state
- * and events; importing a specific execution runtime in the processor makes it
- * hard to run the same processor from Node tests, pull runners, Durable Object
- * runners, or future non-Cloudflare deployments.
+ * The processor owns stream state and event orchestration. Concrete runtimes
+ * such as Cloudflare WorkerLoader adapters should live outside the contract and
+ * satisfy this small interface.
  */
-export type CodemodeCodeExecutor = (args: {
-  script: string;
-  env: Record<string, unknown>;
+export type CodemodeScriptExecutor = (args: {
+  code: string;
+  logger: CodemodeProcessorLogger;
+  scriptExecutionRequestedOffset: number;
+  session: CodemodeProcessorSession;
   signal: AbortSignal;
-  toolProviders: readonly CodemodeCodeExecutorToolProvider[];
-  webchat: {
-    types: string;
-    callTool(args: { name: string; rawArgs: unknown }): Promise<unknown>;
-  };
-}) => Promise<CodemodeCodeExecutionResult>;
+}) => Promise<CodemodeScriptExecutionResult>;

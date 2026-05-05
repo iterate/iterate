@@ -612,6 +612,10 @@ export async function consumeLiveProcessorEvent<
   streamApi: ProcessorStreamApi<Contract>;
   signal: AbortSignal;
 }): Promise<StoredProcessorState<Contract>> {
+  if (args.event.offset <= args.storedState.afterAppendCompletedThroughOffset) {
+    return args.storedState;
+  }
+
   const reduction = runProcessorReduce({
     processor: args.processor,
     event: args.event,

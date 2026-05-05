@@ -7,8 +7,8 @@ import {
 import {
   CODEMODE_PRIMER_IDEMPOTENCY_KEY,
   CodemodeProcessorContract,
-} from "@iterate-com/shared/stream-processors/codemode/contract";
-import { createCodemodeProcessor } from "@iterate-com/shared/stream-processors/codemode/implementation";
+} from "@iterate-com/shared/stream-processors/legacy-codemode/contract";
+import { createCodemodeProcessor } from "@iterate-com/shared/stream-processors/legacy-codemode/implementation";
 import { buildProcessorRegisteredEvent } from "@iterate-com/shared/stream-processors/core/contract";
 import { createMemoryPullProcessorStorage, runPullProcessor } from "./pull-runner.ts";
 

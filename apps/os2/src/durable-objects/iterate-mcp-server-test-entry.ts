@@ -2,14 +2,14 @@ import { McpAgent } from "agents/mcp";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { createCodemodeContext } from "@iterate-com/shared/codemode/context-proxy";
 import { DESCRIBE_TOOL_FUNCTION_NAME } from "@iterate-com/shared/codemode/types";
-import type { IterateMcpServerProps } from "./iterate-mcp-server.ts";
+import type { ProjectMcpServerConnectionProps } from "./project-mcp-server-connection.ts";
 
 export { CodemodeSession } from "./codemode-session.ts";
-export { IterateMcpServer } from "./iterate-mcp-server.ts";
+export { ProjectMcpServerConnection } from "./project-mcp-server-connection.ts";
 export { McpClientBridge } from "~/rpc-targets/mcp-client-bridge.ts";
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
 
-const mcpHandler = McpAgent.serve("/mcp", { binding: "ITERATE_MCP_SERVER" });
+const mcpHandler = McpAgent.serve("/mcp", { binding: "PROJECT_MCP_SERVER_CONNECTION" });
 
 type ToolFunctionInput = {
   codemodeSessionCapability: Parameters<
@@ -74,7 +74,7 @@ export class TestLeafProvider extends WorkerEntrypoint {
 
 export default {
   fetch(request, env, ctx) {
-    const ctxWithProps = ctx as ExecutionContext & { props?: IterateMcpServerProps };
+    const ctxWithProps = ctx as ExecutionContext & { props?: ProjectMcpServerConnectionProps };
     ctxWithProps.props = {
       clientId: "mcp-client-test",
       orgId: "org_test",

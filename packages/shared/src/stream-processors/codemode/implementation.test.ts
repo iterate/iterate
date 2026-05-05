@@ -6,166 +6,135 @@ import {
   type StreamEvent,
   type StreamEventInput,
 } from "../stream-processor.ts";
-import { AgentProcessorContract } from "../agent/contract.ts";
-import { buildProcessorRegisteredEvent } from "../core/contract.ts";
-import {
-  CODEMODE_PRIMER_IDEMPOTENCY_KEY,
-  CodemodeProcessorContract,
-  reduceCodemodeEvents,
-  type CodemodeState,
-} from "./contract.ts";
-import {
-  createCodemodeProcessor,
-  extractCodemodeScriptFromAssistantResponse,
-} from "./implementation.ts";
+import { CodemodeProcessorContract, type CodemodeState } from "./contract.ts";
+import { createCodemodeProcessor } from "./implementation.ts";
+import type { ToolProviderDescriptor } from "../../codemode/types.ts";
 
 describe("createCodemodeProcessor", () => {
-  it("appends the exactly-once primer and extracts assistant codemode blocks", async () => {
+  it("executes requested scripts through the injected executor and appends the durable result event", async () => {
     const appended: StreamEventInput[] = [];
     const processor = createCodemodeProcessor({
-      codeExecutor: async () => ({ result: { ok: true } }),
-      env: {},
+      callableContext: {},
+      now: fixedClock([new Date("2026-01-01T00:00:00.000Z"), new Date("2026-01-01T00:00:00.025Z")]),
+      scriptExecutor: async ({ code, logger }) => {
+        await logger.log("log", `running ${code.length} chars`);
+        return { result: { ok: true } };
+      },
     });
 
     await processor.implementation.afterAppend?.({
       event: consumedCodemodeEvent({
-        type: "events.iterate.com/agent/input-added",
-        payload: {
-          role: "assistant",
-          content: "```js\nasync () => {\n  return 1;\n}\n```",
-          triggerLlmRequest: { behaviour: "auto" },
-        },
-        offset: 5,
+        type: "events.iterate.com/codemode/script-execution-requested",
+        payload: { code: "async (ctx) => ({ ok: true })" },
+        offset: 7,
       }),
-      previousState: registeredState({ hasAppendedCodemodePrompt: false }),
-      state: registeredState({ hasAppendedCodemodePrompt: false }),
+      previousState: registeredState(),
+      state: registeredState(),
       streamApi: testStreamApi({ appended, storedEvents: [] }),
       signal: new AbortController().signal,
     });
 
     expect(appended).toEqual([
       {
-        type: "events.iterate.com/agent/input-added",
-        idempotencyKey: CODEMODE_PRIMER_IDEMPOTENCY_KEY,
+        type: "events.iterate.com/codemode/log-emitted",
+        idempotencyKey:
+          "stream-processor:codemode:derived:log-emitted:1:/projects/prj_test/codemode-sessions/cblk_test:7",
         payload: {
-          role: "user",
-          content: expect.stringContaining("codemode is how you use tools"),
-          triggerLlmRequest: { behaviour: "dont-trigger-request" },
+          level: "log",
+          message: "running 29 chars",
+          scriptExecutionRequestedOffset: 7,
         },
       },
       {
-        type: "events.iterate.com/codemode/block-added",
-        idempotencyKey: "stream-processor:codemode:derived:assistant-input-to-block:/agents/test:5",
-        payload: {
-          script: "async () => {\n  return 1;\n}",
-        },
-      },
-    ]);
-  });
-
-  it("uses embedded agent dependency state before appending idle status", async () => {
-    const appended: StreamEventInput[] = [];
-    const processor = createCodemodeProcessor({
-      codeExecutor: async () => ({ result: { ok: true } }),
-      env: {},
-    });
-
-    await processor.implementation.afterAppend?.({
-      event: consumedCodemodeEvent({
-        type: "events.iterate.com/codemode/result-added",
-        payload: { result: { ok: true }, durationMs: 10 },
-        offset: 9,
-      }),
-      previousState: registeredState({ hasAppendedCodemodePrompt: true }),
-      state: reduceCodemodeEvents({
-        state: registeredState({ hasAppendedCodemodePrompt: true }),
-        events: [
-          committedEvent(buildProcessorRegisteredEvent({ contract: AgentProcessorContract })),
-        ],
-      }),
-      streamApi: testStreamApi({
-        appended,
-        storedEvents: [],
-      }),
-      signal: new AbortController().signal,
-    });
-
-    expect(appended.at(-1)).toEqual({
-      type: "events.iterate.com/agent/status-updated",
-      idempotencyKey:
-        "stream-processor:codemode:derived:codemode-result-to-idle-status:/agents/test:9",
-      payload: {
-        status: "idle",
-        reason: "codemode-result-added",
-      },
-    });
-  });
-
-  it("executes codemode blocks through the injected executor dependency", async () => {
-    const appended: StreamEventInput[] = [];
-    const executorCalls: { script: string; toolProviderCount: number }[] = [];
-    const processor = createCodemodeProcessor({
-      codeExecutor: async ({ script, toolProviders, webchat }) => {
-        executorCalls.push({ script, toolProviderCount: toolProviders.length });
-        await webchat.callTool({
-          name: "sendMessage",
-          rawArgs: { message: "hello from fake executor" },
-        });
-        return { result: { ok: true }, logs: ["ran in fake executor"] };
-      },
-      env: {},
-    });
-
-    await processor.implementation.afterAppend?.({
-      event: consumedCodemodeEvent({
-        type: "events.iterate.com/codemode/block-added",
-        payload: {
-          script: "async () => ({ ok: true })",
-        },
-        offset: 12,
-      }),
-      previousState: registeredState({ hasAppendedCodemodePrompt: true }),
-      state: registeredState({ hasAppendedCodemodePrompt: true }),
-      streamApi: testStreamApi({ appended, storedEvents: [] }),
-      signal: new AbortController().signal,
-    });
-
-    expect(executorCalls).toEqual([
-      {
-        script: "async () => ({ ok: true })",
-        toolProviderCount: 0,
-      },
-    ]);
-    expect(appended).toEqual([
-      {
-        type: "events.iterate.com/webchat/agent-response-added",
-        idempotencyKey: "stream-processor:codemode:derived:webchat-send-message:1:/agents/test:12",
-        payload: { message: "hello from fake executor" },
-      },
-      {
-        type: "events.iterate.com/codemode/result-added",
-        idempotencyKey: "stream-processor:codemode:derived:block-to-result:/agents/test:12",
+        type: "events.iterate.com/codemode/script-execution-finished",
+        idempotencyKey:
+          "stream-processor:codemode:derived:script-execution-finished:/projects/prj_test/codemode-sessions/cblk_test:7",
         payload: {
           result: { ok: true },
-          durationMs: expect.any(Number),
-          logs: ["ran in fake executor"],
+          durationMs: 25,
+          scriptExecutionRequestedOffset: 7,
         },
       },
     ]);
   });
 
-  it("extracts codemode scripts from fenced assistant responses", () => {
-    expect(
-      extractCodemodeScriptFromAssistantResponse("```js\nasync () => {\n  return 1;\n}\n```"),
-    ).toBe("async () => {\n  return 1;\n}");
+  it("dispatches tool function request events through registered providers", async () => {
+    const appended: StreamEventInput[] = [];
+    const fetchCalls: unknown[] = [];
+    const descriptor = testToolProvider(["github"]);
+    const processor = createCodemodeProcessor({
+      callableContext: {
+        fetch: async (input) => {
+          const request = input instanceof Request ? input : new Request(input);
+          fetchCalls.push(JSON.parse(await request.text()));
+          return Response.json({ issue: 123 });
+        },
+      },
+      scriptExecutor: async () => ({ result: { ok: true } }),
+    });
+
+    await processor.implementation.afterAppend?.({
+      event: consumedCodemodeEvent({
+        type: "events.iterate.com/codemode/tool-function-call-requested",
+        payload: {
+          path: ["github", "issues", "create"],
+          payload: { title: "Bug" },
+          providerPath: ["github"],
+          toolFunctionPath: ["issues", "create"],
+          scriptExecutionRequestedOffset: 10,
+        },
+        offset: 10,
+      }),
+      previousState: registeredState({ toolProviders: [descriptor] }),
+      state: registeredState({ toolProviders: [descriptor] }),
+      streamApi: testStreamApi({ appended, storedEvents: [] }),
+      signal: new AbortController().signal,
+    });
+
+    expect(fetchCalls).toEqual([
+      {
+        path: ["issues", "create"],
+        payload: { title: "Bug" },
+        codemodeSessionCapability: expect.any(Object),
+      },
+    ]);
+    expect(appended.map((event) => event.type)).toEqual([
+      "events.iterate.com/codemode/tool-function-call-succeeded",
+    ]);
+    expect(appended[0]).toMatchObject({
+      payload: {
+        result: { issue: 123 },
+        toolFunctionCallRequestedOffset: 10,
+        scriptExecutionRequestedOffset: 10,
+      },
+    });
   });
 });
 
-function registeredState(args: { hasAppendedCodemodePrompt: boolean }): CodemodeState {
-  return {
+function registeredState(args: { toolProviders?: ToolProviderDescriptor[] } = {}): CodemodeState {
+  const state = {
     ...getInitialProcessorState(CodemodeProcessorContract),
     hasRegisteredCurrentVersion: true,
-    hasAppendedCodemodePrompt: args.hasAppendedCodemodePrompt,
+  };
+
+  return {
+    ...state,
+    toolProviders: Object.fromEntries(
+      (args.toolProviders ?? []).map((provider) => [JSON.stringify(provider.path), provider]),
+    ),
+  };
+}
+
+function testToolProvider(path: string[]): ToolProviderDescriptor {
+  return {
+    path,
+    callable: {
+      type: "fetch",
+      via: {
+        type: "url",
+        url: "https://example.com/tools",
+      },
+    },
   };
 }
 
@@ -176,7 +145,7 @@ function testStreamApi(args: {
   return {
     append: async ({ event }) => {
       args.appended.push(event);
-      return committedEvent(event);
+      return committedEvent({ ...event, offset: args.appended.length });
     },
     read: async () => args.storedEvents,
     subscribe: async function* () {},
@@ -201,7 +170,7 @@ function committedEvent(args: {
   offset?: number;
 }): StreamEvent {
   return {
-    streamPath: "/agents/test",
+    streamPath: "/projects/prj_test/codemode-sessions/cblk_test",
     type: args.type,
     payload: args.payload,
     metadata: args.metadata,
@@ -209,4 +178,9 @@ function committedEvent(args: {
     offset: args.offset ?? 1,
     createdAt: "2026-01-01T00:00:00.000Z",
   };
+}
+
+function fixedClock(values: Date[]) {
+  let index = 0;
+  return () => values[Math.min(index++, values.length - 1)]!;
 }

@@ -1,6 +1,6 @@
 import type { StreamProcessorRunnerState } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor-runner";
-import { CodemodeProcessorContract } from "@iterate-com/shared/stream-processors/codemode/contract";
-import { createCodemodeProcessor } from "@iterate-com/shared/stream-processors/codemode/implementation";
+import { CodemodeProcessorContract } from "@iterate-com/shared/stream-processors/legacy-codemode/contract";
+import { createCodemodeProcessor } from "@iterate-com/shared/stream-processors/legacy-codemode/implementation";
 import {
   createStreamProcessorRunnerDurableObject,
   type StreamProcessorRunnerInit,
