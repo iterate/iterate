@@ -78,7 +78,25 @@ export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
         case "events.iterate.com/agent/llm-request-cancelled":
         case "events.iterate.com/agent/llm-request-queued":
         case "events.iterate.com/agent/status-updated":
+        case "events.iterate.com/agent/input-added":
           return;
+        case "events.iterate.com/agent/output-added": {
+          const script = extractCodemodeScriptFromAssistantResponse(event.payload.content);
+          if (script == null) return;
+
+          await streamApi.append({
+            event: {
+              type: "events.iterate.com/codemode/block-added",
+              idempotencyKey: buildDerivedIdempotencyKey({
+                slug: CodemodeProcessorContract.slug,
+                purpose: "assistant-output-to-block",
+                event,
+              }),
+              payload: { script },
+            },
+          });
+          return;
+        }
         case "events.iterate.com/codemode/block-added":
           await executeCodemodeBlock({
             deps,
@@ -88,24 +106,6 @@ export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
             streamApi,
           });
           return;
-        case "events.iterate.com/agent/input-added": {
-          if (event.payload.role !== "assistant") return;
-          const script = extractCodemodeScriptFromAssistantResponse(event.payload.content);
-          if (script == null) return;
-
-          await streamApi.append({
-            event: {
-              type: "events.iterate.com/codemode/block-added",
-              idempotencyKey: buildDerivedIdempotencyKey({
-                slug: CodemodeProcessorContract.slug,
-                purpose: "assistant-input-to-block",
-                event,
-              }),
-              payload: { script },
-            },
-          });
-          return;
-        }
         case "events.iterate.com/codemode/result-added":
           await appendCodemodeResultAsAgentInput({ event, streamApi });
           await appendIdleStatusIfAgentHasNoQueuedTriggers({ event, state, streamApi });
@@ -127,7 +127,6 @@ export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
                 event,
               }),
               payload: {
-                role: "user",
                 content: toolProviderExplainer({ slug, types }),
                 triggerLlmRequest: { behaviour: "dont-trigger-request" },
               },
@@ -168,7 +167,6 @@ async function appendCodemodePrimerIfNeeded(args: {
       type: "events.iterate.com/agent/input-added",
       idempotencyKey: CODEMODE_PRIMER_IDEMPOTENCY_KEY,
       payload: {
-        role: "user",
         content: CODEMODE_PRIMER_TEXT,
         triggerLlmRequest: { behaviour: "dont-trigger-request" },
       },
@@ -260,7 +258,6 @@ async function appendCodemodeResultAsAgentInput(args: {
         event: args.event,
       }),
       payload: {
-        role: "user",
         content: eventBlock({
           offset: args.event.offset,
           type: args.event.type,

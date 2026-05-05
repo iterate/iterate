@@ -138,6 +138,8 @@ export const CodemodeProcessorContract = defineProcessorContract({
           return { ...nextState, hasAppendedCodemodePrompt: true };
         }
         break;
+      case "events.iterate.com/agent/output-added":
+        break;
       case "events.iterate.com/agent/system-prompt-updated":
       case "events.iterate.com/agent/llm-config-updated":
       case "events.iterate.com/agent/llm-request-scheduled":
