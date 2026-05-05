@@ -67,7 +67,7 @@ describeLocalExternalSubscriberWebsocket("events external subscriber websocket e
       );
 
       await configureWebsocketSubscriber({
-        callbackUrl: websocketCallbackUrl(peer.url, path),
+        callable: websocketCallable(peer.url, path),
         path,
         slug: "processor:ping-pong",
       });
@@ -133,7 +133,7 @@ describeLocalExternalSubscriberWebsocket("events external subscriber websocket e
       );
 
       await configureWebsocketSubscriber({
-        callbackUrl: websocketCallbackUrl(peer.url, path),
+        callable: websocketCallable(peer.url, path),
         path,
         slug: "processor:canonical",
         jsonataTransform: '{"kind":"transformed","copied":payload.message}',
@@ -184,7 +184,7 @@ function requireAppFixture() {
 }
 
 async function configureWebsocketSubscriber(args: {
-  callbackUrl: string;
+  callable: ReturnType<typeof websocketCallable>;
   path: StreamPath;
   slug: string;
   jsonataTransform?: string;
@@ -194,7 +194,7 @@ async function configureWebsocketSubscriber(args: {
     payload: {
       slug: args.slug,
       type: "websocket",
-      callbackUrl: args.callbackUrl,
+      callable: args.callable,
       ...(args.jsonataTransform == null ? {} : { jsonataTransform: args.jsonataTransform }),
     },
   });
@@ -255,11 +255,13 @@ function uniqueStreamPath() {
   return StreamPath.parse(`/e2e/${randomUUID().slice(0, 8)}/ws-subscriber`);
 }
 
-function websocketCallbackUrl(baseUrl: string, path: StreamPath) {
+function websocketCallable(baseUrl: string, path: StreamPath) {
   const url = new URL("/after-event-handler", baseUrl);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.searchParams.set("streamPath", path);
-  return url.toString();
+  return {
+    type: "fetch" as const,
+    via: { type: "url" as const, url: url.toString() },
+  };
 }
 
 function isLocalhostBaseUrl(baseUrl: string) {

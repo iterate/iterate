@@ -4,12 +4,17 @@ import type {
   ExternalSubscriber,
   StreamSubscriptionConfiguredEvent,
 } from "@iterate-com/events-contract";
+import type { FetchCallable } from "@iterate-com/shared/callable/types.ts";
 
-const { openOutboundWebSocketMock } = vi.hoisted(() => ({
-  openOutboundWebSocketMock: vi.fn<(callbackUrl: string) => Promise<WebSocket>>(),
+const { connectCallableWebSocketMock, dispatchCallableMock } = vi.hoisted(() => ({
+  connectCallableWebSocketMock:
+    vi.fn<(options: { callable: unknown; ctx: unknown }) => Promise<WebSocket>>(),
+  dispatchCallableMock:
+    vi.fn<(options: { callable: unknown; payload: unknown; ctx: unknown }) => Promise<unknown>>(),
 }));
-vi.mock("./outbound-websocket.ts", () => ({
-  openOutboundWebSocket: openOutboundWebSocketMock,
+vi.mock("@iterate-com/shared/callable/runtime.ts", () => ({
+  connectCallableWebSocket: connectCallableWebSocketMock,
+  dispatchCallable: dispatchCallableMock,
 }));
 
 import {
@@ -26,7 +31,7 @@ describe("externalSubscriber", () => {
       event: createConfiguredEvent({
         slug: "processor:ping-pong",
         type: "websocket",
-        callbackUrl: "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo",
+        callable: fetchCallable("http://localhost:8788/after-event-handler?streamPath=%2Fdemo"),
       }),
     });
     const state3 = externalSubscriberProcessor.reduce!({
@@ -34,7 +39,7 @@ describe("externalSubscriber", () => {
       event: createConfiguredEvent({
         slug: "audit",
         type: "webhook",
-        callbackUrl: "https://example.com/hook",
+        callable: fetchCallable("https://example.com/hook"),
         jsonataFilter: "type = 'source'",
       }),
     });
@@ -43,7 +48,7 @@ describe("externalSubscriber", () => {
       event: createConfiguredEvent({
         slug: "audit",
         type: "webhook",
-        callbackUrl: "https://example.com/hook-2",
+        callable: fetchCallable("https://example.com/hook-2"),
         jsonataTransform: '{"copied":payload.value}',
       }),
     });
@@ -53,12 +58,12 @@ describe("externalSubscriber", () => {
         "processor:ping-pong": {
           slug: "processor:ping-pong",
           type: "websocket",
-          callbackUrl: "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo",
+          callable: fetchCallable("http://localhost:8788/after-event-handler?streamPath=%2Fdemo"),
         },
         audit: {
           slug: "audit",
           type: "webhook",
-          callbackUrl: "https://example.com/hook-2",
+          callable: fetchCallable("https://example.com/hook-2"),
           jsonataTransform: '{"copied":payload.value}',
         },
       },
@@ -67,9 +72,9 @@ describe("externalSubscriber", () => {
 
   test("afterAppend sends framed event messages to websocket subscribers by default", async () => {
     const socket = new FakeWebSocket({
-      url: "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-raw",
+      url: "http://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-raw",
     });
-    openOutboundWebSocketMock.mockResolvedValueOnce(socket as unknown as WebSocket);
+    connectCallableWebSocketMock.mockResolvedValueOnce(socket as unknown as WebSocket);
 
     try {
       await externalSubscriberProcessor.afterAppend?.({
@@ -85,15 +90,20 @@ describe("externalSubscriber", () => {
             "processor:ping-pong": {
               slug: "processor:ping-pong",
               type: "websocket",
-              callbackUrl: "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-raw",
+              callable: fetchCallable(
+                "http://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-raw",
+              ),
             },
           },
         },
       });
 
-      expect(openOutboundWebSocketMock).toHaveBeenCalledWith(
-        "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-raw",
-      );
+      expect(connectCallableWebSocketMock).toHaveBeenCalledWith({
+        callable: fetchCallable(
+          "http://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-raw",
+        ),
+        ctx: expect.objectContaining({ fetch: expect.any(Function) }),
+      });
       expect(socket.sentMessages).toEqual([
         createEventFrame(
           createEvent({
@@ -105,16 +115,16 @@ describe("externalSubscriber", () => {
         ),
       ]);
     } finally {
-      openOutboundWebSocketMock.mockReset();
+      connectCallableWebSocketMock.mockReset();
       resetSubscriberSocketsForStream("/demo/ws-raw");
     }
   });
 
   test("afterAppend canonicalizes framed websocket events and ignores websocket transforms", async () => {
     const socket = new FakeWebSocket({
-      url: "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-canonical",
+      url: "http://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-canonical",
     });
-    openOutboundWebSocketMock.mockResolvedValueOnce(socket as unknown as WebSocket);
+    connectCallableWebSocketMock.mockResolvedValueOnce(socket as unknown as WebSocket);
     const eventWithUndefinedFields = {
       ...createEvent({
         streamPath: "/demo/ws-canonical",
@@ -135,17 +145,21 @@ describe("externalSubscriber", () => {
             "processor:ping-pong": {
               slug: "processor:ping-pong",
               type: "websocket",
-              callbackUrl:
-                "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-canonical",
+              callable: fetchCallable(
+                "http://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-canonical",
+              ),
               jsonataTransform: '{"kind":"transformed"}',
             },
           },
         },
       });
 
-      expect(openOutboundWebSocketMock).toHaveBeenCalledWith(
-        "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-canonical",
-      );
+      expect(connectCallableWebSocketMock).toHaveBeenCalledWith({
+        callable: fetchCallable(
+          "http://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-canonical",
+        ),
+        ctx: expect.objectContaining({ fetch: expect.any(Function) }),
+      });
       expect(socket.sentMessages).toEqual([
         createEventFrame(
           createEvent({
@@ -157,20 +171,20 @@ describe("externalSubscriber", () => {
         ),
       ]);
     } finally {
-      openOutboundWebSocketMock.mockReset();
+      connectCallableWebSocketMock.mockReset();
       resetSubscriberSocketsForStream("/demo/ws-canonical");
     }
   });
 
-  test("afterAppend reconnects when a subscriber callbackUrl changes", async () => {
+  test("afterAppend reconnects when a subscriber callable changes", async () => {
     const staleSocket = new FakeWebSocket({
       throwOnClose: true,
-      url: "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-reconnect",
+      url: "http://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-reconnect",
     });
     const nextSocket = new FakeWebSocket({
-      url: "ws://localhost:9898/after-event-handler?streamPath=%2Fdemo%2Fws-reconnect",
+      url: "http://localhost:9898/after-event-handler?streamPath=%2Fdemo%2Fws-reconnect",
     });
-    openOutboundWebSocketMock
+    connectCallableWebSocketMock
       .mockResolvedValueOnce(staleSocket as unknown as WebSocket)
       .mockResolvedValueOnce(nextSocket as unknown as WebSocket);
 
@@ -188,8 +202,9 @@ describe("externalSubscriber", () => {
             "processor:ping-pong": {
               slug: "processor:ping-pong",
               type: "websocket",
-              callbackUrl:
-                "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-reconnect",
+              callable: fetchCallable(
+                "http://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-reconnect",
+              ),
             },
           },
         },
@@ -208,16 +223,21 @@ describe("externalSubscriber", () => {
             "processor:ping-pong": {
               slug: "processor:ping-pong",
               type: "websocket",
-              callbackUrl:
-                "ws://localhost:9898/after-event-handler?streamPath=%2Fdemo%2Fws-reconnect",
+              callable: fetchCallable(
+                "http://localhost:9898/after-event-handler?streamPath=%2Fdemo%2Fws-reconnect",
+              ),
             },
           },
         },
       });
 
-      expect(openOutboundWebSocketMock.mock.calls).toEqual([
-        ["ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-reconnect"],
-        ["ws://localhost:9898/after-event-handler?streamPath=%2Fdemo%2Fws-reconnect"],
+      expect(connectCallableWebSocketMock.mock.calls.map(([options]) => options.callable)).toEqual([
+        fetchCallable(
+          "http://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-reconnect",
+        ),
+        fetchCallable(
+          "http://localhost:9898/after-event-handler?streamPath=%2Fdemo%2Fws-reconnect",
+        ),
       ]);
       expect(staleSocket.sentMessages).toEqual([
         createEventFrame(
@@ -240,15 +260,13 @@ describe("externalSubscriber", () => {
         ),
       ]);
     } finally {
-      openOutboundWebSocketMock.mockReset();
+      connectCallableWebSocketMock.mockReset();
       resetSubscriberSocketsForStream("/demo/ws-reconnect");
     }
   });
 
   test("afterAppend fire-and-forget posts transformed webhook payloads when filter matches", async () => {
-    const fetchMock = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(new Response(null, { status: 202 }));
+    dispatchCallableMock.mockResolvedValueOnce(null);
 
     try {
       await externalSubscriberProcessor.afterAppend?.({
@@ -263,7 +281,7 @@ describe("externalSubscriber", () => {
             audit: {
               slug: "audit",
               type: "webhook",
-              callbackUrl: "https://example.com/hook",
+              callable: fetchCallable("https://example.com/hook"),
               jsonataFilter: "type = 'source'",
               jsonataTransform: '{"kind":"hook","copied":payload.value}',
             },
@@ -271,56 +289,46 @@ describe("externalSubscriber", () => {
         },
       });
 
-      expect(fetchMock).toHaveBeenCalledWith("https://example.com/hook", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
+      expect(dispatchCallableMock).toHaveBeenCalledWith({
+        callable: fetchCallable("https://example.com/hook"),
+        payload: {
           kind: "hook",
           copied: 42,
-        }),
+        },
+        ctx: expect.objectContaining({ fetch: expect.any(Function) }),
       });
     } finally {
-      fetchMock.mockRestore();
+      dispatchCallableMock.mockReset();
     }
   });
 
   test("afterAppend does not deliver subscription-configured events to webhook subscribers by default", async () => {
-    const fetchMock = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(new Response(null, { status: 202 }));
-
     try {
       await externalSubscriberProcessor.afterAppend?.({
         append: () => createEvent(),
         event: createConfiguredEvent({
           slug: "audit",
           type: "webhook",
-          callbackUrl: "https://example.com/hook",
+          callable: fetchCallable("https://example.com/hook"),
         }),
         state: {
           subscribersBySlug: {
             audit: {
               slug: "audit",
               type: "webhook",
-              callbackUrl: "https://example.com/hook",
+              callable: fetchCallable("https://example.com/hook"),
             },
           },
         },
       });
 
-      expect(fetchMock).not.toHaveBeenCalled();
+      expect(dispatchCallableMock).not.toHaveBeenCalled();
     } finally {
-      fetchMock.mockRestore();
+      dispatchCallableMock.mockReset();
     }
   });
 
   test("afterAppend skips subscribers whose filter does not match", async () => {
-    const fetchMock = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(new Response(null, { status: 202 }));
-
     try {
       await externalSubscriberProcessor.afterAppend?.({
         append: () => createEvent(),
@@ -334,24 +342,21 @@ describe("externalSubscriber", () => {
             audit: {
               slug: "audit",
               type: "webhook",
-              callbackUrl: "https://example.com/hook",
+              callable: fetchCallable("https://example.com/hook"),
               jsonataFilter: "type = 'source'",
             },
           },
         },
       });
 
-      expect(fetchMock).not.toHaveBeenCalled();
+      expect(dispatchCallableMock).not.toHaveBeenCalled();
     } finally {
-      fetchMock.mockRestore();
+      dispatchCallableMock.mockReset();
     }
   });
 
   test("afterAppend logs and skips invalid transform output", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
-    const fetchMock = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(new Response(null, { status: 202 }));
 
     try {
       await externalSubscriberProcessor.afterAppend?.({
@@ -366,32 +371,32 @@ describe("externalSubscriber", () => {
             audit: {
               slug: "audit",
               type: "webhook",
-              callbackUrl: "https://example.com/hook",
+              callable: fetchCallable("https://example.com/hook"),
               jsonataTransform: "$nonexistent",
             },
           },
         },
       });
 
-      expect(fetchMock).not.toHaveBeenCalled();
+      expect(dispatchCallableMock).not.toHaveBeenCalled();
       expect(consoleError).toHaveBeenCalledWith(
         "[stream-do] external subscriber transform produced invalid JSON",
         expect.objectContaining({
           subscriberSlug: "audit",
-          callbackUrl: "https://example.com/hook",
+          subscriberCallable: JSON.stringify(fetchCallable("https://example.com/hook")),
         }),
       );
     } finally {
       consoleError.mockRestore();
-      fetchMock.mockRestore();
+      dispatchCallableMock.mockReset();
     }
   });
 
   test("websocket append frames append into the same stream", async () => {
     const socket = new FakeWebSocket({
-      url: "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-append",
+      url: "http://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-append",
     });
-    openOutboundWebSocketMock.mockResolvedValueOnce(socket as unknown as WebSocket);
+    connectCallableWebSocketMock.mockResolvedValueOnce(socket as unknown as WebSocket);
     const appendSpy = vi.fn((event) =>
       createEvent({
         streamPath: "/demo/ws-append",
@@ -414,7 +419,9 @@ describe("externalSubscriber", () => {
             "processor:ping-pong": {
               slug: "processor:ping-pong",
               type: "websocket",
-              callbackUrl: "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-append",
+              callable: fetchCallable(
+                "http://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-append",
+              ),
             },
           },
         },
@@ -435,16 +442,16 @@ describe("externalSubscriber", () => {
         payload: { value: 99 },
       });
     } finally {
-      openOutboundWebSocketMock.mockReset();
+      connectCallableWebSocketMock.mockReset();
       resetSubscriberSocketsForStream("/demo/ws-append");
     }
   });
 
   test("websocket append failures produce error frames", async () => {
     const socket = new FakeWebSocket({
-      url: "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-append-error",
+      url: "http://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-append-error",
     });
-    openOutboundWebSocketMock.mockResolvedValueOnce(socket as unknown as WebSocket);
+    connectCallableWebSocketMock.mockResolvedValueOnce(socket as unknown as WebSocket);
     const appendSpy = vi.fn(() => {
       throw new Error("append broke");
     });
@@ -463,8 +470,9 @@ describe("externalSubscriber", () => {
             "processor:ping-pong": {
               slug: "processor:ping-pong",
               type: "websocket",
-              callbackUrl:
-                "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-append-error",
+              callable: fetchCallable(
+                "http://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-append-error",
+              ),
             },
           },
         },
@@ -482,16 +490,16 @@ describe("externalSubscriber", () => {
 
       expect(socket.sentMessages.at(-1)).toEqual(createErrorFrame("append broke"));
     } finally {
-      openOutboundWebSocketMock.mockReset();
+      connectCallableWebSocketMock.mockReset();
       resetSubscriberSocketsForStream("/demo/ws-append-error");
     }
   });
 
   test("unknown websocket JSON shapes are ignored (no error frame)", async () => {
     const socket = new FakeWebSocket({
-      url: "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-invalid-frame",
+      url: "http://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-invalid-frame",
     });
-    openOutboundWebSocketMock.mockResolvedValueOnce(socket as unknown as WebSocket);
+    connectCallableWebSocketMock.mockResolvedValueOnce(socket as unknown as WebSocket);
 
     try {
       await externalSubscriberProcessor.afterAppend?.({
@@ -507,8 +515,9 @@ describe("externalSubscriber", () => {
             "processor:ping-pong": {
               slug: "processor:ping-pong",
               type: "websocket",
-              callbackUrl:
-                "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-invalid-frame",
+              callable: fetchCallable(
+                "http://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-invalid-frame",
+              ),
             },
           },
         },
@@ -519,19 +528,19 @@ describe("externalSubscriber", () => {
 
       expect(socket.sentMessages).toEqual(afterOutboundEvent);
     } finally {
-      openOutboundWebSocketMock.mockReset();
+      connectCallableWebSocketMock.mockReset();
       resetSubscriberSocketsForStream("/demo/ws-invalid-frame");
     }
   });
 
   test("resetSubscriberSocketsForStream clears cached websocket connections for the stream", async () => {
     const firstSocket = new FakeWebSocket({
-      url: "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-reset",
+      url: "http://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-reset",
     });
     const secondSocket = new FakeWebSocket({
-      url: "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-reset",
+      url: "http://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-reset",
     });
-    openOutboundWebSocketMock
+    connectCallableWebSocketMock
       .mockResolvedValueOnce(firstSocket as unknown as WebSocket)
       .mockResolvedValueOnce(secondSocket as unknown as WebSocket);
 
@@ -549,7 +558,9 @@ describe("externalSubscriber", () => {
             "processor:ping-pong": {
               slug: "processor:ping-pong",
               type: "websocket",
-              callbackUrl: "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-reset",
+              callable: fetchCallable(
+                "http://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-reset",
+              ),
             },
           },
         },
@@ -570,13 +581,15 @@ describe("externalSubscriber", () => {
             "processor:ping-pong": {
               slug: "processor:ping-pong",
               type: "websocket",
-              callbackUrl: "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-reset",
+              callable: fetchCallable(
+                "http://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-reset",
+              ),
             },
           },
         },
       });
 
-      expect(openOutboundWebSocketMock).toHaveBeenCalledTimes(2);
+      expect(connectCallableWebSocketMock).toHaveBeenCalledTimes(2);
       expect(firstSocket.readyState).toBe(3);
       expect(secondSocket.sentMessages).toEqual([
         createEventFrame(
@@ -589,20 +602,20 @@ describe("externalSubscriber", () => {
         ),
       ]);
     } finally {
-      openOutboundWebSocketMock.mockReset();
+      connectCallableWebSocketMock.mockReset();
       resetSubscriberSocketsForStream("/demo/ws-reset");
     }
   });
 
   test("resetSubscriberSocketsForStream invalidates in-flight websocket connects for the stream", async () => {
     const firstSocket = new FakeWebSocket({
-      url: "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-reset-pending",
+      url: "http://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-reset-pending",
     });
     const secondSocket = new FakeWebSocket({
-      url: "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-reset-pending",
+      url: "http://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-reset-pending",
     });
     const firstConnect = Promise.withResolvers<WebSocket>();
-    openOutboundWebSocketMock
+    connectCallableWebSocketMock
       .mockReturnValueOnce(firstConnect.promise)
       .mockResolvedValueOnce(secondSocket as unknown as WebSocket);
 
@@ -620,14 +633,15 @@ describe("externalSubscriber", () => {
             "processor:ping-pong": {
               slug: "processor:ping-pong",
               type: "websocket",
-              callbackUrl:
-                "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-reset-pending",
+              callable: fetchCallable(
+                "http://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-reset-pending",
+              ),
             },
           },
         },
       });
 
-      while (openOutboundWebSocketMock.mock.calls.length === 0) {
+      while (connectCallableWebSocketMock.mock.calls.length === 0) {
         await Promise.resolve();
       }
 
@@ -650,14 +664,15 @@ describe("externalSubscriber", () => {
             "processor:ping-pong": {
               slug: "processor:ping-pong",
               type: "websocket",
-              callbackUrl:
-                "ws://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-reset-pending",
+              callable: fetchCallable(
+                "http://localhost:8788/after-event-handler?streamPath=%2Fdemo%2Fws-reset-pending",
+              ),
             },
           },
         },
       });
 
-      expect(openOutboundWebSocketMock).toHaveBeenCalledTimes(2);
+      expect(connectCallableWebSocketMock).toHaveBeenCalledTimes(2);
       expect(secondSocket.sentMessages).toEqual([
         createEventFrame(
           createEvent({
@@ -677,7 +692,7 @@ describe("externalSubscriber", () => {
         ),
       ]);
     } finally {
-      openOutboundWebSocketMock.mockReset();
+      connectCallableWebSocketMock.mockReset();
       resetSubscriberSocketsForStream("/demo/ws-reset-pending");
     }
   });
@@ -713,6 +728,13 @@ function createErrorFrame(message: string) {
     type: "error",
     message,
   });
+}
+
+function fetchCallable(url: string): FetchCallable {
+  return {
+    type: "fetch",
+    via: { type: "url", url },
+  };
 }
 
 class FakeWebSocket {

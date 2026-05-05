@@ -1,4 +1,5 @@
 import type { Event, EventInput } from "@iterate-com/events-contract";
+import type { CallableContext } from "@iterate-com/shared/callable/types.ts";
 
 /**
  * In-process processor shape used by `StreamDurableObject`.
@@ -14,6 +15,7 @@ export type BuiltinProcessor<State extends object> = {
   reduce?(args: { event: Event; state: State }): State;
   afterAppend?(args: {
     append: (event: EventInput) => Event | Promise<Event>;
+    callableContext?: CallableContext;
     event: Event;
     state: State;
   }): Promise<void>;

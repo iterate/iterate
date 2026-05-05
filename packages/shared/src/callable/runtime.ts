@@ -306,9 +306,13 @@ export async function connectCallableWebSocket(options: {
     headers.set("Sec-WebSocket-Protocol", options.protocols.join(", "));
   }
 
+  const requestUrl = buildCallableWebSocketRequestUrl({
+    callable: options.callable,
+    url: options.url,
+  });
   const response = (await dispatchCallableFetch({
     callable: options.callable,
-    request: new Request(toSyntheticRequestUrl(options.url ?? "/"), {
+    request: new Request(requestUrl, {
       method: "GET",
       headers,
     }),
@@ -333,6 +337,24 @@ export async function connectCallableWebSocket(options: {
   if (options.binaryType) response.webSocket.binaryType = options.binaryType;
   response.webSocket.accept(options.accept);
   return response.webSocket;
+}
+
+function buildCallableWebSocketRequestUrl(options: { callable: FetchCallable; url?: string }) {
+  const requestUrl = new URL(toSyntheticRequestUrl(options.url ?? "/"));
+  /**
+   * `connectCallableWebSocket()` uses `dispatchCallableFetch()` so it can work
+   * for service bindings and Durable Objects, not just public URLs. That means
+   * websocket connects still pass through the same URL rewriter as fetch calls.
+   *
+   * When the caller does not provide an explicit source URL, copy query
+   * parameters from a public URL callable onto the synthetic request. Otherwise
+   * `buildCallableUrl()` would treat the empty synthetic query as intentional
+   * and replace the callable URL's query before making the upgrade request.
+   */
+  if (options.url == null && options.callable.via.type === "url") {
+    requestUrl.search = new URL(options.callable.via.url).search;
+  }
+  return requestUrl.toString();
 }
 
 async function transformCallableInput(options: {

@@ -172,12 +172,17 @@ export async function IterateApp<B extends Bindings>(
       workerName: worker.name,
     });
 
+    const routeZoneIds = new Map<string, string>();
     for (const hostname of routeHosts) {
+      const { zoneId } = await findZoneForHostname(cloudflareApi, hostname);
+      routeZoneIds.set(hostname, zoneId);
+
       await retryCloudflareWorkerRouteCreation(() =>
         Route(routeResourceIdForHostname(hostname), {
           pattern: `${hostname}/*`,
           script: worker,
           adopt: true,
+          zoneId,
         }),
       );
     }
@@ -185,7 +190,8 @@ export async function IterateApp<B extends Bindings>(
     const dnsRouteHosts = routeHosts.filter(shouldCreateDnsRecordForRouteHostname);
     await Promise.all(
       dnsRouteHosts.map(async (hostname) => {
-        const { zoneId } = await findZoneForHostname(cloudflareApi, hostname);
+        const zoneId =
+          routeZoneIds.get(hostname) ?? (await findZoneForHostname(cloudflareApi, hostname)).zoneId;
         const dnsResourceId = hostname.startsWith("*.")
           ? `project-wildcard-dns-${slugify(hostname)}`
           : `dns-${slugify(hostname)}`;
@@ -389,11 +395,14 @@ async function retryCloudflareWorkerRouteCreation(createRoute: () => Promise<unk
 }
 
 function isCloudflareWorkerRouteMissingError(error: unknown) {
-  return (
-    error instanceof Error &&
-    error.message.includes("10019") &&
-    error.message.includes("Worker which does not exist")
-  );
+  const maybeError = error as {
+    errorData?: unknown;
+    message?: unknown;
+    status?: unknown;
+  };
+  const details = `${String(maybeError.message ?? "")}\n${JSON.stringify(maybeError.errorData ?? "")}`;
+
+  return details.includes("10019") && details.includes("Worker which does not exist");
 }
 
 async function sleep(ms: number) {

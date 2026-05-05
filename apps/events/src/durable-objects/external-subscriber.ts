@@ -11,13 +11,17 @@ import {
   StreamSocketEventFrame,
   StreamSubscriptionConfiguredEvent,
 } from "@iterate-com/events-contract";
+import {
+  connectCallableWebSocket,
+  dispatchCallable,
+} from "@iterate-com/shared/callable/runtime.ts";
+import type { CallableContext, FetchCallable } from "@iterate-com/shared/callable/types.ts";
 import { match } from "schematch";
 import type { BuiltinProcessor } from "./builtin-processor.ts";
 import { getCompiledJsonata } from "./compiled-jsonata.ts";
-import { openOutboundWebSocket } from "./outbound-websocket.ts";
 
 type SubscriberConnection = {
-  callbackUrl: string;
+  targetKey: string;
   socket: WebSocket;
 };
 
@@ -46,11 +50,12 @@ export const externalSubscriberProcessor = {
     };
   },
 
-  async afterAppend({ append, event, state }) {
+  async afterAppend({ append, callableContext, event, state }) {
     await Promise.all(
       Object.values(state.subscribersBySlug).map((subscriber) =>
         publishToExternalSubscriber({
           append: (input) => Promise.resolve(append(input)),
+          callableContext: callableContext ?? { fetch: globalThis.fetch },
           event,
           subscriber,
         }),
@@ -61,6 +66,7 @@ export const externalSubscriberProcessor = {
 
 async function publishToExternalSubscriber(args: {
   append: (event: EventInput) => Promise<Event>;
+  callableContext: CallableContext;
   event: Event;
   subscriber: ExternalSubscriber;
 }) {
@@ -83,7 +89,8 @@ async function publishToExternalSubscriber(args: {
       }
 
       await postWebhook({
-        serializedPayload,
+        payload: JSON.parse(serializedPayload),
+        callableContext: args.callableContext,
         subscriber: args.subscriber,
       });
       return;
@@ -95,6 +102,7 @@ async function publishToExternalSubscriber(args: {
     await sendWebsocketMessage({
       append: args.append,
       event: args.event,
+      callableContext: args.callableContext,
       subscriber: args.subscriber,
       streamPath: args.event.streamPath,
     });
@@ -104,7 +112,7 @@ async function publishToExternalSubscriber(args: {
       offset: args.event.offset,
       eventType: args.event.type,
       subscriberSlug: args.subscriber.slug,
-      callbackUrl: args.subscriber.callbackUrl,
+      subscriberCallable: getSubscriberCallableKey(args.subscriber),
       error,
     });
   }
@@ -142,7 +150,7 @@ async function getWebhookPayload(args: {
       offset: args.event.offset,
       eventType: args.event.type,
       subscriberSlug: args.subscriber.slug,
-      callbackUrl: args.subscriber.callbackUrl,
+      subscriberCallable: getSubscriberCallableKey(args.subscriber),
       issues: serializedPayload.error.issues,
     });
     return null;
@@ -152,28 +160,22 @@ async function getWebhookPayload(args: {
 }
 
 async function postWebhook(args: {
-  serializedPayload: z.infer<typeof SerializedOutboundPayload>;
+  callableContext: CallableContext;
+  payload: unknown;
   subscriber: Extract<ExternalSubscriber, { type: "webhook" }>;
 }) {
-  const response = await fetch(args.subscriber.callbackUrl, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-    },
-    body: args.serializedPayload,
+  // Subscription JSONata controls the payload shape. Callable dispatch then
+  // owns only the invocation target and any target-local input transform.
+  await dispatchCallable({
+    callable: args.subscriber.callable,
+    payload: args.payload,
+    ctx: withDefaultFetch(args.callableContext),
   });
-
-  if (!response.ok) {
-    console.error("[stream-do] external webhook subscriber returned non-2xx", {
-      subscriberSlug: args.subscriber.slug,
-      callbackUrl: args.subscriber.callbackUrl,
-      status: response.status,
-    });
-  }
 }
 
 async function sendWebsocketMessage(args: {
   append: (event: EventInput) => Promise<Event>;
+  callableContext: CallableContext;
   event: Event;
   subscriber: ExternalWebsocketSubscriber;
   streamPath: string;
@@ -183,6 +185,7 @@ async function sendWebsocketMessage(args: {
   try {
     const socket = await getSubscriberSocket({
       append: args.append,
+      callableContext: args.callableContext,
       streamPath: args.streamPath,
       subscriber: args.subscriber,
     });
@@ -199,6 +202,7 @@ async function sendWebsocketMessage(args: {
     try {
       const socket = await getSubscriberSocket({
         append: args.append,
+        callableContext: args.callableContext,
         streamPath: args.streamPath,
         subscriber: args.subscriber,
       });
@@ -213,7 +217,7 @@ async function sendWebsocketMessage(args: {
       console.error("[stream-do] external websocket subscriber publish failed", {
         streamPath: args.streamPath,
         subscriberSlug: args.subscriber.slug,
-        callbackUrl: args.subscriber.callbackUrl,
+        subscriberCallable: getSubscriberCallableKey(args.subscriber),
         error,
         retryError,
       });
@@ -223,12 +227,14 @@ async function sendWebsocketMessage(args: {
 
 async function getSubscriberSocket(args: {
   append: (event: EventInput) => Promise<Event>;
+  callableContext: CallableContext;
   streamPath: string;
   subscriber: ExternalWebsocketSubscriber;
 }) {
   const subscriberKey = getSubscriberKey(args.streamPath, args.subscriber.slug);
+  const targetKey = getSubscriberCallableKey(args.subscriber);
   let cached = connectionsBySubscriberKey.get(subscriberKey);
-  if (cached != null && cached.callbackUrl !== args.subscriber.callbackUrl) {
+  if (cached != null && cached.targetKey !== targetKey) {
     resetSubscriberSocket(subscriberKey);
     cached = undefined;
   }
@@ -245,6 +251,7 @@ async function getSubscriberSocket(args: {
 
   const connectPromise = connectSubscriberSocket({
     append: args.append,
+    callableContext: args.callableContext,
     streamPath: args.streamPath,
     subscriber: args.subscriber,
     subscriberKey,
@@ -262,7 +269,7 @@ async function getSubscriberSocket(args: {
     }
 
     connectionsBySubscriberKey.set(subscriberKey, {
-      callbackUrl: args.subscriber.callbackUrl,
+      targetKey,
       socket,
     });
     return socket;
@@ -275,11 +282,19 @@ async function getSubscriberSocket(args: {
 
 async function connectSubscriberSocket(args: {
   append: (event: EventInput) => Promise<Event>;
+  callableContext: CallableContext;
   streamPath: string;
   subscriber: ExternalWebsocketSubscriber;
   subscriberKey: string;
 }) {
-  const socket = await openOutboundWebSocket(args.subscriber.callbackUrl);
+  // Websocket subscriptions still use the stream socket frame protocol. Callable
+  // only replaces how we open the underlying fetch-with-upgrade target, which
+  // can now be a URL, service binding, Durable Object, Dynamic Worker, or
+  // loopback export.
+  const socket = await connectCallableWebSocket({
+    callable: getSubscriberFetchCallable(args.subscriber),
+    ctx: withDefaultFetch(args.callableContext),
+  });
   socket.addEventListener("message", (event) => {
     void handleSubscriberSocketMessage({
       append: args.append,
@@ -305,7 +320,7 @@ async function connectSubscriberSocket(args: {
 }
 
 /**
- * Handles inbound text from the subscriber’s websocket (the URL we opened outbound to).
+ * Handles inbound text from the subscriber websocket opened through Callable.
  * Contract for *our* messages: `StreamSocketAppendFrame` (append into the stream) or
  * `StreamSocketErrorFrame` (peer-reported error). Non-text frames and invalid JSON are
  * errors we surface back to the peer.
@@ -327,7 +342,7 @@ async function handleSubscriberSocketMessage(args: {
     console.error("[stream-do] external websocket subscriber sent non-text frame", {
       streamPath: args.streamPath,
       subscriberSlug: args.subscriber.slug,
-      callbackUrl: args.subscriber.callbackUrl,
+      subscriberCallable: getSubscriberCallableKey(args.subscriber),
     });
     sendSocketFrame(
       args.socket,
@@ -346,7 +361,7 @@ async function handleSubscriberSocketMessage(args: {
     console.error("[stream-do] external websocket subscriber sent invalid JSON", {
       streamPath: args.streamPath,
       subscriberSlug: args.subscriber.slug,
-      callbackUrl: args.subscriber.callbackUrl,
+      subscriberCallable: getSubscriberCallableKey(args.subscriber),
       error,
     });
     sendSocketFrame(
@@ -367,7 +382,7 @@ async function handleSubscriberSocketMessage(args: {
         console.error("[stream-do] external websocket subscriber append failed", {
           streamPath: args.streamPath,
           subscriberSlug: args.subscriber.slug,
-          callbackUrl: args.subscriber.callbackUrl,
+          subscriberCallable: getSubscriberCallableKey(args.subscriber),
           error,
         });
         sendSocketFrame(
@@ -383,7 +398,7 @@ async function handleSubscriberSocketMessage(args: {
       console.error("[stream-do] external websocket subscriber reported error", {
         streamPath: args.streamPath,
         subscriberSlug: args.subscriber.slug,
-        callbackUrl: args.subscriber.callbackUrl,
+        subscriberCallable: getSubscriberCallableKey(args.subscriber),
         message,
       });
     })
@@ -427,6 +442,25 @@ function resetSubscriberSocket(subscriberKey: string) {
 
 function getSubscriberKey(streamPath: string, slug: string) {
   return JSON.stringify([streamPath, slug]);
+}
+
+function getSubscriberFetchCallable(subscriber: ExternalWebsocketSubscriber): FetchCallable {
+  if (subscriber.callable.type !== "fetch") {
+    throw new Error(`Websocket subscriber "${subscriber.slug}" must use a fetch callable`);
+  }
+
+  return subscriber.callable;
+}
+
+function getSubscriberCallableKey(subscriber: ExternalSubscriber) {
+  return JSON.stringify(subscriber.callable);
+}
+
+function withDefaultFetch(ctx: CallableContext): CallableContext {
+  return {
+    ...ctx,
+    fetch: ctx.fetch ?? globalThis.fetch,
+  };
 }
 
 export function resetSubscriberSocketsForStream(streamPath: string) {
