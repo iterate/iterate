@@ -245,8 +245,11 @@ export class ProjectMcpServerConnection extends (ProjectMcpServerConnectionBase 
             streamPath,
           });
           const output = await waitForScriptExecutionFinished({
+            afterOffset: started.event.offset,
             eventsBaseUrl: this.env.EVENTS_BASE_URL,
-            scriptExecutionRequestedOffset: started.event.offset,
+            scriptExecutionId: String(
+              (started.event.payload as { scriptExecutionId?: unknown }).scriptExecutionId,
+            ),
             streamPath,
           });
 
@@ -272,7 +275,8 @@ export class ProjectMcpServerConnection extends (ProjectMcpServerConnectionBase 
             projectId: auth.projectId,
             projectSlug: auth.projectSlug,
             result: output,
-            scriptExecutionRequestedOffset: started.event.offset,
+            scriptExecutionId: (started.event.payload as { scriptExecutionId?: unknown })
+              .scriptExecutionId,
             streamPath,
             toolName: "run_code",
           });
@@ -464,22 +468,20 @@ function serializeError(error: unknown) {
 /**
  * Bridges the request/response shape expected by MCP tools onto CodemodeSession's
  * event stream. Codemode execution is asynchronous and durable; the MCP tool
- * waits for the matching `script-execution-finished` event instead of calling a
+ * waits for the matching `script-execution-completed` event instead of calling a
  * separate in-memory executor, so web UI code mode and inbound MCP share one
  * execution path.
  */
 async function waitForScriptExecutionFinished(input: {
+  afterOffset: number;
   eventsBaseUrl: string;
-  scriptExecutionRequestedOffset: number;
+  scriptExecutionId: string;
   streamPath: StreamPath;
 }) {
   const client = createEventsClient(input.eventsBaseUrl);
   const stream = await client.stream(
     {
-      afterOffset:
-        input.scriptExecutionRequestedOffset > 1
-          ? input.scriptExecutionRequestedOffset - 1
-          : "start",
+      afterOffset: input.afterOffset,
       path: input.streamPath,
     },
     { signal: AbortSignal.timeout(60_000) },
@@ -490,7 +492,7 @@ async function waitForScriptExecutionFinished(input: {
     const payload = readEventPayload(event);
     if (
       event.type === "events.iterate.com/codemode/log-emitted" &&
-      payload.scriptExecutionRequestedOffset === input.scriptExecutionRequestedOffset
+      payload.scriptExecutionId === input.scriptExecutionId
     ) {
       const level = typeof payload.level === "string" ? payload.level : "log";
       const message = typeof payload.message === "string" ? payload.message : "";
@@ -498,13 +500,14 @@ async function waitForScriptExecutionFinished(input: {
     }
 
     if (
-      event.type === "events.iterate.com/codemode/script-execution-finished" &&
-      payload.scriptExecutionRequestedOffset === input.scriptExecutionRequestedOffset
+      event.type === "events.iterate.com/codemode/script-execution-completed" &&
+      payload.scriptExecutionId === input.scriptExecutionId
     ) {
+      const outcome = isRecord(payload.outcome) ? payload.outcome : {};
       return {
-        error: stringifyPayloadError(payload.error),
+        error: outcome.status === "failed" ? stringifyPayloadError(outcome.error) : undefined,
         logs,
-        result: payload.result,
+        result: outcome.status === "succeeded" ? outcome.output : undefined,
       };
     }
   }

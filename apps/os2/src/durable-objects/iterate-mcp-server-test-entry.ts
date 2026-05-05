@@ -16,7 +16,7 @@ type ToolFunctionInput = {
     typeof createCodemodeContext
   >[0]["codemodeSessionCapability"];
   path: string[];
-  payload: Record<string, unknown>;
+  input: Record<string, unknown>;
 };
 
 export class TestBuiltinMatrixProvider extends WorkerEntrypoint {
@@ -35,13 +35,13 @@ export class TestBuiltinMatrixProvider extends WorkerEntrypoint {
     });
     const pet = await ctx.integrations.http.catalog.getPet({
       include: "owner",
-      petId: input.payload.petId,
+      petId: input.input.petId,
     });
     const echo = await ctx.integrations.publicMcp["echo.text"]({
-      text: `provider saw ${String(input.payload.text)}`,
+      text: `provider saw ${String(input.input.text)}`,
     });
     const leaf = await ctx.leaf({
-      value: input.payload.value,
+      value: input.input.value,
     });
 
     return {
@@ -67,7 +67,7 @@ export class TestLeafProvider extends WorkerEntrypoint {
     return {
       provider: "leaf",
       toolFunctionPath: input.path,
-      value: Number(input.payload.value) * 2,
+      value: Number(input.input.value) * 2,
     };
   }
 }

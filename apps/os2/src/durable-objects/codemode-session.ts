@@ -5,15 +5,16 @@ import {
   type StreamCursor,
   type StreamPath,
 } from "@iterate-com/events-contract";
-import type { CallableContext } from "@iterate-com/shared/callable/types.ts";
-import type { ToolProviderDescriptor } from "@iterate-com/shared/codemode/types";
 import { withD1ObjectCatalog } from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
 import { withDurableObjectCore } from "@iterate-com/shared/durable-object-utils/mixins/with-durable-object-core";
 import { withKvInspector } from "@iterate-com/shared/durable-object-utils/mixins/with-kv-inspector";
 import { withLifecycleHooks } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { withOuterbase } from "@iterate-com/shared/durable-object-utils/mixins/with-outerbase";
 import { withStreamProcessorRunner } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor-runner";
-import { CodemodeProcessorContract } from "@iterate-com/shared/stream-processors/codemode/contract";
+import {
+  CodemodeProcessorContract,
+  type ToolProviderDocumentation,
+} from "@iterate-com/shared/stream-processors/codemode/contract";
 import type {
   CodemodeProcessorLogger,
   CodemodeProcessorSession,
@@ -35,19 +36,20 @@ export type CodemodeSessionInitParams = {
 export type StartScriptExecutionInput = {
   code: string;
   events?: EventInput[];
-  providers?: ToolProviderDescriptor[];
+  providers?: ToolProviderDocumentation[];
 };
 
 export type CreateCodemodeSessionInput = {
   code?: string;
   events?: EventInput[];
-  providers?: ToolProviderDescriptor[];
+  providers?: ToolProviderDocumentation[];
 };
 
-export type CallToolFunctionInput = {
+export type CallFunctionInput = {
+  functionCallId?: string;
+  input: unknown;
   path: string[];
-  payload: unknown;
-  scriptExecutionRequestedOffset?: number;
+  scriptExecutionId?: string;
 };
 
 export type CodemodeSessionEnv = {
@@ -89,13 +91,13 @@ const CodemodeSessionRunnerBase = withStreamProcessorRunner<
 >({
   processor(args) {
     return createCodemodeProcessor({
-      callableContext: createCallableContext(args.env),
       ensureLiveConsumer: () => {
         const session = args.instance as unknown as {
           ensureLiveConsumer(): Promise<void>;
         };
         return session.ensureLiveConsumer();
       },
+      newId: () => crypto.randomUUID(),
       scriptExecutor: createCloudflareCodemodeScriptExecutor({
         loader: args.env.LOADER,
       }),
@@ -169,7 +171,10 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
         : await streamApi.append({
             event: {
               type: "events.iterate.com/codemode/script-execution-requested",
-              payload: { code: input.code },
+              payload: {
+                code: input.code,
+                scriptExecutionId: crypto.randomUUID(),
+              },
             },
           });
 
@@ -181,15 +186,12 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
     };
   }
 
-  private async appendToolProviderRegisteredEvent(input: { provider: ToolProviderDescriptor }) {
+  private async appendToolProviderRegisteredEvent(input: { provider: ToolProviderDocumentation }) {
     return await this.createStreamApi().append({
       event: {
         type: "events.iterate.com/codemode/tool-provider-registered",
         idempotencyKey: `codemode:tool-provider-registered:${input.provider.path.join("/")}`,
-        payload: {
-          descriptor: input.provider,
-          path: input.provider.path,
-        },
+        payload: input.provider,
       },
     });
   }
@@ -208,7 +210,7 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
     };
   }
 
-  async registerToolProvider(input: { provider: ToolProviderDescriptor }) {
+  async registerToolProvider(input: { provider: ToolProviderDocumentation }) {
     await this.ensureStarted();
     await this.ensureLiveConsumer();
     const event = await this.appendToolProviderRegisteredEvent(input);
@@ -220,12 +222,17 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
     return (await this.startScriptExecution(input)).event;
   }
 
-  async callToolFunction(input: CallToolFunctionInput) {
+  async callFunction(input: CallFunctionInput) {
     await this.ensureStarted();
     await this.ensureLiveConsumer();
     return await this.appendAndConsume({
-      type: "events.iterate.com/codemode/tool-function-call-requested",
-      payload: input,
+      type: "events.iterate.com/codemode/function-call-requested",
+      payload: {
+        functionCallId: input.functionCallId ?? crypto.randomUUID(),
+        input: input.input,
+        path: input.path,
+        ...(input.scriptExecutionId == null ? {} : { scriptExecutionId: input.scriptExecutionId }),
+      },
     });
   }
 
@@ -290,17 +297,10 @@ function createStreamApi(args: {
   };
 }
 
-function createCallableContext(env: CodemodeSessionEnv): CallableContext {
-  return {
-    env,
-    fetch: globalThis.fetch,
-  };
-}
-
 function createCloudflareCodemodeScriptExecutor(input: {
   loader: WorkerLoader | undefined;
 }): CodemodeScriptExecutor {
-  return async ({ code, logger, scriptExecutionRequestedOffset, session }) => {
+  return async ({ code, logger, scriptExecutionId, session }) => {
     if (!input.loader) {
       return {
         result: undefined,
@@ -324,14 +324,14 @@ function createCloudflareCodemodeScriptExecutor(input: {
         evaluate(
           capability: CodemodeSessionCapabilityTarget,
           logger: CodemodeLoggerTarget,
-          scriptExecutionRequestedOffset: number,
+          scriptExecutionId: string,
         ): Promise<{ error?: string; result: unknown }>;
       };
 
       return await entrypoint.evaluate(
         new CodemodeSessionCapabilityTarget(session),
         new CodemodeLoggerTarget(logger),
-        scriptExecutionRequestedOffset,
+        scriptExecutionId,
       );
     } catch (error) {
       return {
@@ -350,20 +350,8 @@ class CodemodeSessionCapabilityTarget extends RpcTarget {
     this.#session = session;
   }
 
-  async append(input: EventInput) {
-    return await this.#session.append(input);
-  }
-
-  async callToolFunction(input: CallToolFunctionInput) {
-    return await this.#session.callToolFunction(input);
-  }
-
-  async executeScript(input: { code: string }) {
-    return await this.#session.executeScript(input);
-  }
-
-  async getStreamPath() {
-    return await this.#session.getStreamPath();
+  async callFunction(input: CallFunctionInput) {
+    return await this.#session.callFunction(input);
   }
 }
 
@@ -395,21 +383,15 @@ function __createCodemodeContext(options) {
   const make = (path = []) => new Proxy(async () => {}, {
     get: (_target, key) => {
       if (key === "then" || key === "catch" || key === "finally") return undefined;
-      if (key === "codemode" && path.length === 0) {
-        return {
-          append: (input) => options.codemodeSessionCapability.append(input),
-          executeScript: (input) => options.codemodeSessionCapability.executeScript(input),
-          getStreamPath: () => options.codemodeSessionCapability.getStreamPath(),
-        };
-      }
+      if (key === "abortSignal" && path.length === 0) return options.abortSignal;
       if (typeof key !== "string") return undefined;
       return make([...path, key]);
     },
     apply: async (_target, _thisArg, args) => {
-      return await options.codemodeSessionCapability.callToolFunction({
+      return await options.codemodeSessionCapability.callFunction({
+        input: args[0],
         path,
-        payload: args[0],
-        scriptExecutionRequestedOffset: options.scriptExecutionRequestedOffset,
+        scriptExecutionId: options.scriptExecutionId,
       });
     },
   });
@@ -418,7 +400,7 @@ function __createCodemodeContext(options) {
 }
 
 export default class CodeExecutor extends WorkerEntrypoint {
-  async evaluate(__codemodeSessionCapability, __logger, __scriptExecutionRequestedOffset) {
+  async evaluate(__codemodeSessionCapability, __logger, __scriptExecutionId) {
     console.log = (...args) => {
       const message = args.map(__stringify).join(" ");
       if (__logger) void __logger.log("log", message);
@@ -438,7 +420,7 @@ export default class CodeExecutor extends WorkerEntrypoint {
       }
       const ctx = __createCodemodeContext({
         codemodeSessionCapability: __codemodeSessionCapability,
-        scriptExecutionRequestedOffset: __scriptExecutionRequestedOffset,
+        scriptExecutionId: __scriptExecutionId,
       });
       const result = await __userScript(ctx);
       return { result };

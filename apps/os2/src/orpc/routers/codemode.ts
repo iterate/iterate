@@ -1,11 +1,11 @@
 import { ORPCError } from "@orpc/server";
 import { StreamPath, type Event, type EventInput } from "@iterate-com/events-contract";
-import { CodemodeExecutor } from "@iterate-com/shared/codemode/executor";
-import { resolveToolProviderDescriptor } from "@iterate-com/shared/codemode/resolve";
-import { validateProviderPaths } from "@iterate-com/shared/codemode/validate";
-import type { CodemodeEvent, ToolProviderDescriptor } from "@iterate-com/shared/codemode/types";
+import type { CodemodeEvent } from "@iterate-com/shared/codemode/types";
 import { deriveDurableObjectNameFromInitParams } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import type { CallableContext } from "@iterate-com/shared/callable/types.ts";
+import {
+  CodemodeProcessorContract,
+  type ToolProviderDocumentation,
+} from "@iterate-com/shared/stream-processors/codemode/contract";
 import {
   createCodemodeSession,
   startCodemodeScriptOnSession,
@@ -17,11 +17,16 @@ import { readEventPayload, stringifyPayloadError } from "~/lib/codemode-event-pa
 import { createEventsClient } from "~/lib/events-client.ts";
 import { activeOrganizationMiddleware, os } from "~/orpc/orpc.ts";
 
+const ToolProviderDocumentationPayload =
+  CodemodeProcessorContract.events["events.iterate.com/codemode/tool-provider-registered"]
+    .payloadSchema;
+
 export const codemodeRouter = {
   codemode: {
     createSession: os.codemode.createSession
       .use(activeOrganizationMiddleware)
       .handler(async ({ input, context }) => {
+        const providers = parseToolProviders(input.providers);
         const streamPath =
           input.streamPath ??
           defaultStreamPathForProjectSession(input.projectId, generateSessionSlug());
@@ -31,7 +36,7 @@ export const codemodeRouter = {
           context,
           events: input.events,
           projectId: input.projectId,
-          providers: input.providers,
+          providers,
           streamPath,
         });
         const now = new Date().toISOString();
@@ -56,13 +61,14 @@ export const codemodeRouter = {
     executeScript: os.codemode.executeScript
       .use(activeOrganizationMiddleware)
       .handler(async ({ input, context }) => {
+        const providers = parseToolProviders(input.providers);
         const result = await executeScriptOnSession({
           activeOrganization: context.activeOrganization,
           code: input.code,
           context,
           events: input.events,
           projectId: input.projectId,
-          providers: input.providers,
+          providers,
           streamPath:
             input.streamPath ??
             defaultStreamPathForProjectBlock(input.projectId, generateBlockId()),
@@ -105,227 +111,91 @@ export const codemodeRouter = {
     }) {
       const blockId = input.blockId || generateBlockId();
       const now = () => new Date().toISOString();
+      const providers = parseToolProviders(input.providers);
 
-      if (context.codemodeSession) {
-        const streamPath =
-          input.streamPath ?? defaultStreamPathForProjectBlock(input.projectId, blockId);
-
-        try {
-          const result = await executeScriptOnSession({
-            activeOrganization: context.activeOrganization,
-            code: input.code,
-            context,
-            events: input.events,
-            projectId: input.projectId,
-            providers: input.providers,
-            streamPath,
-          });
-          for (const provider of input.providers) {
-            if (signal?.aborted) return;
-            const registeredEvent = result.registeredProviderEvents.find(
-              (event) =>
-                Array.isArray((event.payload as { path?: unknown }).path) &&
-                JSON.stringify((event.payload as { path: string[] }).path) ===
-                  JSON.stringify(provider.path),
-            );
-            const eventOffset = registeredEvent?.offset;
-            yield {
-              blockId,
-              timestamp: now(),
-              type: "codemode-tool-provider-registered",
-              path: provider.path,
-            };
-            context.log.info("os.codemode.tool-provider-registered", {
-              eventOffset,
-              path: provider.path,
-              streamPath,
-            });
-          }
-
-          if (signal?.aborted) return;
-
-          yield { blockId, timestamp: now(), type: "codemode-block-added", code: input.code };
-          yield* streamSessionExecutionAsCodemodeEvents({
-            blockId,
-            context,
-            scriptExecutionRequestedOffset: result.event.offset,
-            signal,
-            streamPath,
-          });
-        } catch (error) {
-          if (error instanceof ORPCError) throw error;
-
-          yield {
-            blockId,
-            timestamp: now(),
-            type: "codemode-block-result-added",
-            result: undefined,
-            error: error instanceof Error ? error.message : String(error),
-          };
-        }
-        return;
-      }
-
-      if (!context.loader) {
-        yield {
-          blockId,
-          timestamp: now(),
-          type: "codemode-block-result-added",
-          result: undefined,
-          error:
-            "LOADER binding not available — codemode execution requires a WorkerLoader binding",
-        };
-        return;
-      }
-
-      const validationError = validateProviderPaths(input.providers);
-      if (validationError) {
-        yield {
-          blockId,
-          timestamp: now(),
-          type: "codemode-block-result-added",
-          result: undefined,
-          error: validationError,
-        };
-        return;
-      }
-
-      if (signal?.aborted) return;
-
-      await requireCodemodeProject({
-        activeOrganization: context.activeOrganization,
-        context,
-        projectId: input.projectId,
-      });
-      if (input.streamPath) {
-        requireCodemodeStreamPathProject({
-          projectId: input.projectId,
-          streamPath: input.streamPath,
-        });
-      }
-
-      const callableCtx: CallableContext = {
-        env: context.callableEnv ?? {},
-        fetch: globalThis.fetch,
-      };
-
-      for (const provider of input.providers) {
-        if (signal?.aborted) return;
-        yield {
-          blockId,
-          timestamp: now(),
-          type: "codemode-tool-provider-registered",
-          path: provider.path,
-        };
-      }
-
-      const resolvedProviders = [];
-      for (const descriptor of input.providers) {
-        if (signal?.aborted) return;
-        const resolved = resolveToolProviderDescriptor(descriptor, callableCtx);
-        resolvedProviders.push({ path: descriptor.path, provider: resolved });
-
-        try {
-          const description = await resolved.describeToolFunctions();
-          yield {
-            blockId,
-            timestamp: now(),
-            type: "codemode-tool-provider-described",
-            path: descriptor.path,
-            typeDefinitions: description.typeDefinitions,
-          };
-        } catch (err) {
-          yield {
-            blockId,
-            timestamp: now(),
-            type: "codemode-tool-provider-described",
-            path: descriptor.path,
-            typeDefinitions: `/** Error loading types for "${descriptor.path.join(".")}": ${err instanceof Error ? err.message : String(err)} */`,
-          };
-        }
-      }
-
-      if (signal?.aborted) return;
-
-      yield { blockId, timestamp: now(), type: "codemode-block-added", code: input.code };
-
-      const events = createAsyncEventQueue<CodemodeEvent>();
-      const executor = new CodemodeExecutor({ loader: context.loader });
-
-      const execution = executor.execute({
-        code: input.code,
-        providers: resolvedProviders,
-        blockId,
-        onEvent: (event) => events.push(event),
-        signal,
-      });
-
-      void execution.then(
-        () => events.close(),
-        () => events.close(),
-      );
-      for await (const event of events) {
-        yield event;
-      }
-
-      let result: Awaited<typeof execution>;
+      const streamPath =
+        input.streamPath ?? defaultStreamPathForProjectBlock(input.projectId, blockId);
       try {
-        result = await execution;
+        const result = await executeScriptOnSession({
+          activeOrganization: context.activeOrganization,
+          code: input.code,
+          context,
+          events: input.events,
+          projectId: input.projectId,
+          providers,
+          streamPath,
+        });
+
+        for (const provider of providers) {
+          if (signal?.aborted) return;
+          yield {
+            blockId,
+            timestamp: now(),
+            type: "codemode-tool-provider-registered",
+            path: provider.path,
+          };
+        }
+
+        if (signal?.aborted) return;
+
+        yield { blockId, timestamp: now(), type: "codemode-block-added", code: input.code };
+        yield* streamSessionExecutionAsCodemodeEvents({
+          afterOffset: result.event.offset,
+          blockId,
+          context,
+          scriptExecutionId: String(
+            (result.event.payload as { scriptExecutionId?: unknown }).scriptExecutionId,
+          ),
+          signal,
+          streamPath,
+        });
       } catch (error) {
+        if (error instanceof ORPCError) throw error;
+
         yield {
           blockId,
           timestamp: now(),
           type: "codemode-block-result-added",
           result: undefined,
-          error: stringifyPayloadError(error),
+          error: error instanceof Error ? error.message : String(error),
         };
-        return;
       }
-
-      yield {
-        blockId,
-        timestamp: now(),
-        type: "codemode-block-result-added",
-        result: result.result,
-        error: stringifyPayloadError(result.error),
-      };
     }),
 
     describe: os.codemode.describe
       .use(activeOrganizationMiddleware)
       .handler(async ({ input, context }) => {
-        // Describing providers can invoke caller-supplied Callable descriptors.
-        // Keep it project-scoped for the same reason execution is project-scoped:
-        // a Clerk org session must prove access to the project before any
-        // provider descriptor is resolved.
+        const providers = parseToolProviders(input.providers);
         await requireCodemodeProject({
           activeOrganization: context.activeOrganization,
           context,
           projectId: input.projectId,
         });
 
-        const callableCtx: CallableContext = {
-          env: context.callableEnv ?? {},
-          fetch: globalThis.fetch,
+        return {
+          typeDefinitions: providers
+            .flatMap((provider) =>
+              provider.typeDefinitions == null ? [] : [provider.typeDefinitions],
+            )
+            .join("\n\n"),
         };
-        const typeBlocks: string[] = [];
-
-        for (const descriptor of input.providers) {
-          const resolved = resolveToolProviderDescriptor(descriptor, callableCtx);
-          try {
-            const description = await resolved.describeToolFunctions();
-            typeBlocks.push(description.typeDefinitions);
-          } catch (err) {
-            typeBlocks.push(
-              `/** Error loading types for "${descriptor.path.join(".")}": ${err instanceof Error ? err.message : String(err)} */`,
-            );
-          }
-        }
-
-        return { typeDefinitions: typeBlocks.join("\n\n") };
       }),
   },
 };
+
+function parseToolProviders(providers: unknown[]): ToolProviderDocumentation[] {
+  const result = ToolProviderDocumentationPayload.array().safeParse(providers);
+  if (result.success) return result.data;
+
+  throw new ORPCError("BAD_REQUEST", {
+    message: `Invalid codemode provider documentation: ${result.error.issues
+      .map((issue) => {
+        const path = issue.path.length === 0 ? "providers" : `providers.${issue.path.join(".")}`;
+        return `${path}: ${issue.message}`;
+      })
+      .join("; ")}`,
+  });
+}
 
 async function executeScriptOnSession(input: {
   activeOrganization: ActiveOrganizationAuth;
@@ -333,7 +203,7 @@ async function executeScriptOnSession(input: {
   context: AppContext;
   events: EventInput[];
   projectId: string;
-  providers: ToolProviderDescriptor[];
+  providers: ToolProviderDocumentation[];
   streamPath: string;
 }) {
   const context = input.context;
@@ -376,7 +246,7 @@ async function createSession(input: {
   context: AppContext;
   events: EventInput[];
   projectId: string;
-  providers: ToolProviderDescriptor[];
+  providers: ToolProviderDocumentation[];
   streamPath: string;
 }) {
   const context = input.context;
@@ -422,19 +292,17 @@ async function createSession(input: {
  * the durable event stream directly.
  */
 async function* streamSessionExecutionAsCodemodeEvents(input: {
+  afterOffset: number;
   blockId: string;
   context: AppContext;
-  scriptExecutionRequestedOffset: number;
+  scriptExecutionId: string;
   signal?: AbortSignal;
   streamPath: string;
 }): AsyncGenerator<CodemodeEvent> {
   const client = createEventsClient(input.context.config.eventsBaseUrl);
   const stream = await client.stream(
     {
-      afterOffset:
-        input.scriptExecutionRequestedOffset > 1
-          ? input.scriptExecutionRequestedOffset - 1
-          : "start",
+      afterOffset: input.afterOffset,
       path: input.streamPath,
     },
     { signal: input.signal },
@@ -444,7 +312,7 @@ async function* streamSessionExecutionAsCodemodeEvents(input: {
     const codemodeEvent = toLegacyCodemodeEvent({
       blockId: input.blockId,
       event,
-      scriptExecutionRequestedOffset: input.scriptExecutionRequestedOffset,
+      scriptExecutionId: input.scriptExecutionId,
     });
     if (!codemodeEvent) continue;
 
@@ -460,12 +328,12 @@ async function* streamSessionExecutionAsCodemodeEvents(input: {
 function toLegacyCodemodeEvent(input: {
   blockId: string;
   event: Event;
-  scriptExecutionRequestedOffset: number;
+  scriptExecutionId: string;
 }): CodemodeEvent | null {
   const payload = readEventPayload(input.event);
   const timestamp = input.event.createdAt;
 
-  if (payload.scriptExecutionRequestedOffset !== input.scriptExecutionRequestedOffset) {
+  if (payload.scriptExecutionId !== input.scriptExecutionId) {
     return null;
   }
 
@@ -478,39 +346,44 @@ function toLegacyCodemodeEvent(input: {
         level: parseLogLevel(payload.level),
         message: typeof payload.message === "string" ? payload.message : "",
       };
-    case "events.iterate.com/codemode/tool-function-call-requested":
+    case "events.iterate.com/codemode/function-call-requested":
       return {
         blockId: input.blockId,
         timestamp,
         type: "codemode-tool-function-call-requested",
-        callId: callIdForEvent(input.blockId, input.event.offset),
+        callId: typeof payload.functionCallId === "string" ? payload.functionCallId : "unknown",
         path: parsePath(payload.path),
-        payload: payload.payload,
+        payload: payload.input,
       };
-    case "events.iterate.com/codemode/tool-function-call-succeeded":
-      return {
-        blockId: input.blockId,
-        timestamp,
-        type: "codemode-tool-function-call-succeeded",
-        callId: callIdForEvent(input.blockId, payload.toolFunctionCallRequestedOffset),
-        result: payload.result,
-      };
-    case "events.iterate.com/codemode/tool-function-call-failed":
+    case "events.iterate.com/codemode/function-call-completed": {
+      const outcome = isRecord(payload.outcome) ? payload.outcome : {};
+      if (outcome.status === "succeeded") {
+        return {
+          blockId: input.blockId,
+          timestamp,
+          type: "codemode-tool-function-call-succeeded",
+          callId: typeof payload.functionCallId === "string" ? payload.functionCallId : "unknown",
+          result: outcome.output,
+        };
+      }
       return {
         blockId: input.blockId,
         timestamp,
         type: "codemode-tool-function-call-failed",
-        callId: callIdForEvent(input.blockId, payload.toolFunctionCallRequestedOffset),
-        error: stringifyPayloadError(payload.error) ?? "Tool function call failed.",
+        callId: typeof payload.functionCallId === "string" ? payload.functionCallId : "unknown",
+        error: stringifyPayloadError(outcome.error) ?? "Function call failed.",
       };
-    case "events.iterate.com/codemode/script-execution-finished":
+    }
+    case "events.iterate.com/codemode/script-execution-completed": {
+      const outcome = isRecord(payload.outcome) ? payload.outcome : {};
       return {
         blockId: input.blockId,
         timestamp,
         type: "codemode-block-result-added",
-        result: payload.result,
-        error: stringifyPayloadError(payload.error),
+        result: outcome.status === "succeeded" ? outcome.output : undefined,
+        error: outcome.status === "failed" ? stringifyPayloadError(outcome.error) : undefined,
       };
+    }
     default:
       return null;
   }
@@ -524,8 +397,8 @@ function parsePath(value: unknown) {
   return Array.isArray(value) ? value.filter((segment) => typeof segment === "string") : [];
 }
 
-function callIdForEvent(blockId: string, offset: unknown) {
-  return `ccal_${blockId}_${typeof offset === "number" ? offset : "unknown"}`;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value != null && !Array.isArray(value);
 }
 
 /**
@@ -567,48 +440,6 @@ function requireCodemodeStreamPathProject(input: { projectId: string; streamPath
       message: "Codemode stream path project does not match the requested project.",
     });
   }
-}
-
-/**
- * Lets the legacy dynamic-worker executor emit generator events while the
- * script is still running. `CodemodeExecutor.execute()` reports logs/tool calls
- * through a callback but resolves only at the end; this queue bridges that
- * callback shape into the async-iterator shape expected by oRPC streaming.
- */
-function createAsyncEventQueue<T>() {
-  const values: T[] = [];
-  const waiters: Array<(value: IteratorResult<T>) => void> = [];
-  let closed = false;
-
-  return {
-    push(value: T) {
-      const waiter = waiters.shift();
-      if (waiter) {
-        waiter({ done: false, value });
-        return;
-      }
-      values.push(value);
-    },
-    close() {
-      closed = true;
-      for (const waiter of waiters.splice(0)) {
-        waiter({ done: true, value: undefined });
-      }
-    },
-    async *[Symbol.asyncIterator](): AsyncGenerator<T> {
-      while (true) {
-        const value = values.shift();
-        if (value) {
-          yield value;
-          continue;
-        }
-        if (closed) return;
-        const next = await new Promise<IteratorResult<T>>((resolve) => waiters.push(resolve));
-        if (next.done) return;
-        yield next.value;
-      }
-    },
-  };
 }
 
 function generateBlockId() {

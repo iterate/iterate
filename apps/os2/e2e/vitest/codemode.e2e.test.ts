@@ -103,6 +103,8 @@ describe("codemode.executeScript", () => {
 
       expect(started.event.type).toBe("events.iterate.com/codemode/script-execution-requested");
       expect(started.streamPath).toBeTruthy();
+      const scriptExecutionId = (started.event.payload as { scriptExecutionId: string })
+        .scriptExecutionId;
 
       const stream = await wsClient.client.codemode.streamEvents({
         afterOffset: started.event.offset > 1 ? started.event.offset - 1 : "start",
@@ -114,19 +116,19 @@ describe("codemode.executeScript", () => {
         events.push(event as Record<string, unknown>);
         const payload = event.payload as Record<string, unknown>;
         if (
-          event.type === "events.iterate.com/codemode/script-execution-finished" &&
-          payload.scriptExecutionRequestedOffset === started.event.offset
+          event.type === "events.iterate.com/codemode/script-execution-completed" &&
+          payload.scriptExecutionId === scriptExecutionId
         ) {
           break;
         }
       }
 
       const finished = events.find(
-        (event) => event.type === "events.iterate.com/codemode/script-execution-finished",
+        (event) => event.type === "events.iterate.com/codemode/script-execution-completed",
       );
       expect(finished?.payload).toMatchObject({
-        result: 2,
-        scriptExecutionRequestedOffset: started.event.offset,
+        outcome: { status: "succeeded", output: 2 },
+        scriptExecutionId,
       });
     } finally {
       wsClient.close();
@@ -257,7 +259,7 @@ describe("codemode.execute", () => {
 });
 
 describe("codemode.describe", () => {
-  it("returns type definitions placeholder when no providers have describe", async () => {
+  it("returns type definitions from provider documentation", async () => {
     const baseUrl = requireBaseUrl();
     const client = createClient(baseUrl);
     const projectId = requireProjectId();
@@ -266,16 +268,13 @@ describe("codemode.describe", () => {
       projectId,
       providers: [
         {
+          docs: "Test functions are available.",
           path: ["test"],
-          callable: {
-            type: "fetch",
-            via: { type: "url", url: "https://httpbin.org/post" },
-          },
+          typeDefinitions: "declare const test: { ping(): Promise<string> };",
         },
       ],
     });
 
-    expect(result.typeDefinitions).toContain("test");
-    expect(result.typeDefinitions).toContain("not provided type information");
+    expect(result.typeDefinitions).toBe("declare const test: { ping(): Promise<string> };");
   });
 });

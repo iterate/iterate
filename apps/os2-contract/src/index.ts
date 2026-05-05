@@ -1,10 +1,11 @@
 import { eventIterator, oc } from "@orpc/contract";
 import { Event, EventInput, StreamCursor, StreamPath } from "@iterate-com/events-contract";
 import { internalContract } from "@iterate-com/shared/apps/internal-router-contract";
-import { ToolProviderDescriptor, CodemodeEvent } from "@iterate-com/shared/codemode/types";
+import { CodemodeEvent } from "@iterate-com/shared/codemode/types";
 import { z } from "zod";
 
 const JSONObject = z.record(z.string(), z.unknown());
+const CodemodeProviderInput = z.array(z.unknown());
 
 export const Project = z.object({
   id: z.string(),
@@ -201,7 +202,7 @@ export const osContract = oc.router({
           code: z.string().trim().min(1).optional(),
           events: z.array(EventInput).default([]),
           projectId: z.string(),
-          providers: z.array(ToolProviderDescriptor).default([]),
+          providers: CodemodeProviderInput.default([]),
           streamPath: StreamPath.optional(),
         }),
       )
@@ -226,7 +227,7 @@ export const osContract = oc.router({
           code: z.string().min(1),
           events: z.array(EventInput).default([]),
           projectId: z.string(),
-          providers: z.array(ToolProviderDescriptor).default([]),
+          providers: CodemodeProviderInput.default([]),
           streamPath: StreamPath.optional(),
         }),
       )
@@ -264,7 +265,7 @@ export const osContract = oc.router({
           blockId: z.string().optional(),
           events: z.array(EventInput).default([]),
           projectId: z.string(),
-          providers: z.array(ToolProviderDescriptor).default([]),
+          providers: CodemodeProviderInput.default([]),
           streamPath: StreamPath.optional(),
         }),
       )
@@ -279,7 +280,7 @@ export const osContract = oc.router({
       .input(
         z.object({
           projectId: z.string(),
-          providers: z.array(ToolProviderDescriptor),
+          providers: CodemodeProviderInput,
         }),
       )
       .output(z.object({ typeDefinitions: z.string() })),

@@ -300,17 +300,17 @@ _Avoid_: Generic append API, stream API
 The local JavaScript object built from a Codemode Session Capability and passed to codemode scripts or provider implementations.
 _Avoid_: ExecutionContext, tools, ctx tools
 
-**Codemode Control Surface**:
-The built-in codemode operations grouped under `ctx.codemode`, such as appending events or checking cancellation state.
-_Avoid_: Tools, tool provider
-
 **Tool Provider**:
-An implementation that provides one or more tool functions to a Codemode Session.
+Model-visible documentation for one or more Tool Functions available in a Codemode Session.
 _Avoid_: Tool, bridge, runtime
 
 **Tool Function**:
 A callable function provided by a Tool Provider and addressed by a path on the Codemode Context.
 _Avoid_: Tool, session function, script
+
+**Tool Function Implementation**:
+The code that handles one Tool Function request and produces its result.
+_Avoid_: Function tool implementation, processor block
 
 **Leaf Tool Function**:
 A Tool Function whose provider path is directly callable without a nested function name.
@@ -319,6 +319,18 @@ _Avoid_: Root tool, direct provider
 **Tool Function Call**:
 A request from codemode to call a Tool Function.
 _Avoid_: Execution, append, script execution
+
+**Function Call**:
+A request from codemode to invoke a documented function path.
+_Avoid_: Context call, direct RPC call
+
+**Script Execution ID**:
+The Script Execution correlation ID stored in codemode events.
+_Avoid_: Script ID, requested offset field
+
+**Function Call ID**:
+The Function Call correlation ID stored in codemode events.
+_Avoid_: Tool call ID, requested offset field
 
 **Script**:
 User-authored TypeScript or JavaScript code that can be run by codemode.
@@ -340,17 +352,9 @@ _Avoid_: Iterate MCP server, MCP client provider, outbound MCP connection
 An OS2-owned connection to an external MCP server, represented by a Durable Object and usable as a Tool Provider.
 _Avoid_: Project MCP Server Connection, project MCP route
 
-**Provider Descriptor**:
-A serializable description of how to resolve a Tool Provider at runtime.
-_Avoid_: Provider, bridge
-
-**Self-Callable Provider Descriptor**:
-A Provider Descriptor minted by an app that points back to a named Worker entrypoint on that same app worker.
-_Avoid_: Loopback binding, local export
-
-**Tool Provider Descriptor**:
-The current TypeScript schema name for Provider Descriptor values passed through contracts.
-_Avoid_: CallableToolProvider
+**Tool Provider Documentation**:
+Serializable model-visible docs, instructions, and optional type definitions for a Tool Provider path.
+_Avoid_: Provider descriptor, callable provider
 
 ## Relationships
 
@@ -489,7 +493,7 @@ _Avoid_: CallableToolProvider
 - A **Codemode Session Name** is not the domain identity of the **Codemode Session**; domain identity remains **Project ID** plus **Event Stream Path**.
 - The **Codemode Session Control Plane** exposes explicit commands, not a generic append method.
 - The **Codemode Session Control Plane** commands append codemode request events to the **Event Stream Path**.
-- A **Codemode Session** may hand out a scoped stream capability for low-level stream operations when a caller needs one.
+- Low-level stream operations exposed to scripts are ordinary path-addressed **Tool Functions**.
 - A **Codemode Session** starts a **Script** by appending a script-execution-requested event and returning that committed event immediately.
 - Reading Script Execution output is a subscription to the **Event Stream Path**, not part of the start command.
 - A **Codemode Session** owns the Tool Provider registry for its **Event Stream Path**.
@@ -497,43 +501,44 @@ _Avoid_: CallableToolProvider
 - A **Codemode Session** exposes a **Codemode Session Capability**.
 - A **Codemode Context** is built locally from a **Codemode Session Capability**.
 - A **Script** receives a **Codemode Context**.
-- A **Script Execution** is identified by the script-execution-requested event on the **Event Stream Path**.
-- Events belonging to a **Script Execution** refer to the requested event by `scriptExecutionRequestedOffset`.
+- A **Script Execution** is identified by a **Script Execution ID** on the script-execution-requested event.
+- Events belonging to a **Script Execution** refer to the **Script Execution ID**.
+- Script Execution request events and completion events both include the **Script Execution ID**.
 - A **Codemode Session** may have multiple in-flight **Script Executions** on the same **Event Stream Path**.
 - The Codemode Session projection tracks in-flight and finished **Script Executions** from the event stream.
 - A **Tool Provider** may receive a **Codemode Session Capability** when executing a **Tool Function**.
 - A **Tool Provider** may use that **Codemode Session Capability** to make another **Tool Function Call**.
 - Provider-to-provider calls are still mediated by the **Codemode Session** and produce normal Tool Function lifecycle events.
-- A **Tool Function Call** starts by appending a tool-function-call-requested event.
-- A **Tool Function Call** completes when the Codemode Session projection appends a matching tool-function-call-succeeded or tool-function-call-failed event.
+- In the first processor-first redesign, provider-to-provider awaitability is a warm-memory convenience over events: a **Tool Function Implementation** appends a nested function-call-requested event, waits in memory for the matching function-call-completed event, then continues.
+- A **Function Call** starts by appending a function-call-requested event.
+- A **Function Call** completes when a matching function-call-completed event appears.
+- Function Call completion events reference the **Function Call ID**.
+- Function Call request events and completion events both include the **Function Call ID**.
+- Function Call completion events include the completed function path for readable event feeds and debugging.
 - A **Tool Provider** provides one or more **Tool Functions**.
 - A **Leaf Tool Function** is a **Tool Function** whose remaining path is empty after provider resolution.
-- A **Provider Bridge** adapts an external system into a **Tool Provider**.
-- A **Provider Descriptor** is stored or transmitted; a **Tool Provider** is the live runtime implementation.
-- A **Self-Callable Provider Descriptor** survives crossing into another worker because it names the source worker script and entrypoint, not the currently dispatching worker's exports.
-- A Provider Descriptor stored on a **Codemode Session** must resolve from the Codemode Session worker's dispatch context.
-- Codemode calls **Tool Functions** with `callToolFunction(...)`; **Tool Providers** execute Tool Functions with `executeToolFunction(...)`.
-- Tool Provider Descriptors contain exactly one `callable`.
-- Tool Providers describe their Tool Functions by executing the reserved provider-relative `__describe` Tool Function.
+- A **Provider Bridge** adapts an external system into Tool Provider documentation plus a **Tool Function Implementation**.
+- Codemode calls **Tool Functions** by appending function-call-requested events and waiting for matching function-call-completed events.
 - `ctx.<provider>.<toolFunction>(payload)` calls a **Tool Function**.
-- `ctx.codemode.*` uses the **Codemode Control Surface** and does not create Tool Function lifecycle events.
+- Built-in stream operations, such as append, are ordinary **Tool Functions** under paths like `ctx.streams.append(...)`.
+- **Tool Provider** registration is primarily documentation; runtime callability may be supplied by processor helpers but is not the primary meaning of registration.
 
 ## Example Dialogue
 
 > **Dev:** "When a script runs `ctx.linear.createIssue(...)`, is that a tool execution?"
 > **Domain expert:** "It is a **Tool Function Call**. The **Codemode Session** calls the **Tool Function**, and the **Tool Provider** executes it."
 
-> **Dev:** "Is `ctx.codemode.append(...)` also a Tool Function Call?"
-> **Domain expert:** "No. It uses the **Codemode Control Surface** to append an event directly, so it does not create Tool Function lifecycle events."
+> **Dev:** "Is `ctx.streams.append(...)` also a Tool Function Call?"
+> **Domain expert:** "Yes. Stream append is just another path-addressed function; the runtime appends function-call-requested and waits for the corresponding function-call-completed event."
 
 > **Dev:** "If Provider B calls Provider A while executing a Tool Function, is that a private provider call?"
 > **Domain expert:** "No. Provider B uses the **Codemode Session Capability** to make another **Tool Function Call**, so the **Codemode Session** records the same lifecycle events as any other Tool Function Call."
 
-> **Dev:** "Does `callToolFunction(...)` dispatch the Provider directly?"
-> **Domain expert:** "No. A **Tool Function Call** is event-driven: append the requested event, then wait for the matching succeeded or failed event."
+> **Dev:** "Does a Function Call dispatch the Provider directly?"
+> **Domain expert:** "No. A **Tool Function Call** is event-driven: append the requested event, then wait for the matching completed event."
 
-> **Dev:** "How does a Provider Descriptor describe its types if it only has one callable?"
-> **Domain expert:** "The provider handles the reserved provider-relative `__describe` Tool Function and returns `{ typeDefinitions: string }`."
+> **Dev:** "How does codemode learn provider types?"
+> **Domain expert:** "Tool Provider registration carries documentation and optional type definitions directly."
 
 > **Dev:** "Does creating a **Codemode Session** always create a new stream?"
 > **Domain expert:** "No. A **Codemode Session** is attached to an **Event Stream Path**, which may be newly chosen by OS2 or may already exist."
@@ -542,7 +547,7 @@ _Avoid_: CallableToolProvider
 > **Domain expert:** "Use the pair of **Project ID** and **Event Stream Path**. The Durable Object name is derived from those init params."
 
 > **Dev:** "Should we store an execution ID when a script starts?"
-> **Domain expert:** "Not yet. A **Script Execution** is the script-execution-requested event; use its offset for correlation."
+> **Domain expert:** "Yes. Store a **Script Execution ID** on the requested event and copy it to related events. It may be offset-derived if the caller can know the offset before append; otherwise the caller mints it before append."
 
 > **Dev:** "Should starting a Script stream all results back from the command?"
 > **Domain expert:** "No. Starting a **Script Execution** returns the committed request event immediately. Output is read from the **Event Stream Path**."
@@ -673,7 +678,7 @@ _Avoid_: CallableToolProvider
 - "script" and "execution" were conflated. Resolved: **Script** is code; **Script Execution** is one attempt to run it.
 - "execute" and "call" were used interchangeably. Resolved: codemode **calls** Tool Functions; Tool Providers **execute** Tool Functions.
 - "tools" was used for both the whole context and provider functions. Resolved: the local object is **Codemode Context**; provider callables are **Tool Functions**.
-- "describe callable" added a second Provider Descriptor execution path. Resolved: a Provider Descriptor has one `callable`; `__describe` is a reserved Tool Function handled by the Tool Provider.
+- "describe callable" added a second Tool Provider execution path. Resolved: Tool Provider registration carries docs and type definitions directly.
 - "ExecutionContext" conflicts with Cloudflare's Worker `ExecutionContext`. Resolved: use **Codemode Context** for codemode userland.
 - "session id" and "stream path" were conflated. Resolved: **Project ID** plus **Event Stream Path** is the **Codemode Session** identity.
 - "app" can mean the OS2 product or a managed project surface. Resolved: use **OS2 App** for this dashboard and **Project** for the managed app surface.
@@ -686,6 +691,7 @@ _Avoid_: CallableToolProvider
 - "route" can mean a TanStack route, a Worker hostname match, or a Project-local destination. Resolved: use **Ingress Hostname** for the Worker-level host classifier, **Project Route** for the authenticated OS2 dashboard URL, and **Project Route Destination** for a Project Durable Object target.
 - "authentication" can happen at the OS2 App layer or inside Project Ingress. Resolved: the OS2 App authenticates dashboard/control-plane routes; the **Project Durable Object** authenticates **Project Ingress**.
 - "fetch callable" overlaps with generic JavaScript functions and Tool Provider callables. Resolved: use **Fetch Destination** for an ingress target that can receive an HTTP request.
+- "context request" made codemode look like a generic invocation broker. Resolved: use **Function Call** only for path-addressed codemode functions, and keep **Tool Provider** registration as model-visible information first.
 - "Project DO worker" conflicted with loopback props. Resolved: use **Project Ingress Entry Point** and **Project MCP Server Entry Point** as same-worker loopback targets for now, while the **Project Durable Object** remains exported by the main OS2 Worker.
 - "project identity" in entrypoint props could mean slug or ID. Resolved: v1 ingress entrypoints accept **Project ID** only; **Project Slug** resolution happens in control-plane routes or route-registry writes.
 - "canonical project host" could mean the stable ID host or the user-facing default host. Resolved: use **Stable Project Ingress Host** for the ID-derived host and **Default Project Ingress Host** for generated public URLs.

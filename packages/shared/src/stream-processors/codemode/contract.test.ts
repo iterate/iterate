@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { getInitialProcessorState, type StreamEvent } from "../stream-processor.ts";
-import type { ToolProviderDescriptor } from "../../codemode/types.ts";
 import {
   CodemodeProcessorContract,
   reduceCodemodeEvents,
@@ -8,39 +7,61 @@ import {
 } from "./contract.ts";
 
 describe("CodemodeProcessorContract", () => {
-  it("stores registered tool providers by path", () => {
-    const descriptor = testToolProvider(["github"]);
+  it("stores registered tool provider documentation by path", () => {
+    const provider = {
+      docs: "GitHub issue functions are available.",
+      path: ["github"],
+      typeDefinitions: "declare const github: unknown;",
+    };
     const state = reduceCodemodeEvents({
       state: getInitialProcessorState(CodemodeProcessorContract),
       events: [
         committedEvent({
           type: "events.iterate.com/codemode/tool-provider-registered",
-          payload: {
-            descriptor,
-            path: descriptor.path,
-          },
+          payload: provider,
         }),
       ],
     });
 
     expect(state.toolProviders).toEqual({
-      [toolProviderRegistryKey(["github"])]: descriptor,
+      [toolProviderRegistryKey(["github"])]: provider,
+    });
+  });
+
+  it("tracks requested and completed function calls by functionCallId", () => {
+    const state = reduceCodemodeEvents({
+      state: getInitialProcessorState(CodemodeProcessorContract),
+      events: [
+        committedEvent({
+          type: "events.iterate.com/codemode/function-call-requested",
+          payload: {
+            functionCallId: "fn-1",
+            input: { title: "Bug" },
+            path: ["github", "issues", "create"],
+            scriptExecutionId: "scr-1",
+          },
+        }),
+        committedEvent({
+          type: "events.iterate.com/codemode/function-call-completed",
+          payload: {
+            functionCallId: "fn-1",
+            outcome: { status: "succeeded", output: { issue: 123 } },
+            path: ["github", "issues", "create"],
+            scriptExecutionId: "scr-1",
+          },
+        }),
+      ],
+    });
+
+    expect(state.functionCalls["fn-1"]).toEqual({
+      functionCallId: "fn-1",
+      outcome: { status: "succeeded", output: { issue: 123 } },
+      path: ["github", "issues", "create"],
+      scriptExecutionId: "scr-1",
+      status: "completed",
     });
   });
 });
-
-function testToolProvider(path: string[]): ToolProviderDescriptor {
-  return {
-    path,
-    callable: {
-      type: "fetch",
-      via: {
-        type: "url",
-        url: "https://example.com/tools",
-      },
-    },
-  };
-}
 
 function committedEvent(args: { type: string; payload: unknown; offset?: number }): StreamEvent {
   return {

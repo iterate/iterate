@@ -1,35 +1,16 @@
-type JSONValue = null | boolean | number | string | JSONValue[] | { [key: string]: JSONValue };
-type JSONObject = { [key: string]: JSONValue };
-
-export type CodemodeStreamPath = string;
-export type CodemodeEventInput = {
-  type: string;
-  payload?: object;
-  metadata?: JSONObject;
-  idempotencyKey?: string;
-  offset?: number;
-};
-export type CodemodeAppendedEvent = CodemodeEventInput & {
-  createdAt: string;
-  offset: number;
-  streamPath: CodemodeStreamPath;
-};
-
 export type CodemodeSessionCapability = {
-  append(input: CodemodeEventInput): Promise<CodemodeAppendedEvent>;
-  callToolFunction(input: {
+  callFunction(input: {
+    functionCallId?: string;
+    input: unknown;
     path: string[];
-    payload: unknown;
-    scriptExecutionRequestedOffset?: number;
+    scriptExecutionId?: string;
   }): Promise<unknown>;
-  executeScript(input: { code: string }): Promise<CodemodeAppendedEvent>;
-  getStreamPath(): Promise<CodemodeStreamPath>;
 };
 
 export type CreateCodemodeContextOptions = {
   abortSignal?: AbortSignal;
   codemodeSessionCapability: CodemodeSessionCapability;
-  scriptExecutionRequestedOffset?: number;
+  scriptExecutionId?: string;
 };
 
 /**
@@ -45,12 +26,7 @@ export function createCodemodeContext(options: CreateCodemodeContextOptions) {
 }
 
 export type CodemodeContext = {
-  codemode: {
-    readonly abortSignal: AbortSignal | undefined;
-    append(input: CodemodeEventInput): Promise<CodemodeAppendedEvent>;
-    executeScript(input: { code: string }): Promise<CodemodeAppendedEvent>;
-    getStreamPath(): Promise<CodemodeStreamPath>;
-  };
+  readonly abortSignal: AbortSignal | undefined;
 } & Record<string, ToolFunctionProxy>;
 
 export interface ToolFunctionProxy {
@@ -65,31 +41,17 @@ function createPathProxy(path: string[], options: CreateCodemodeContextOptions):
       // Tool provider paths are arbitrary, so returning a nested proxy here
       // would turn promise introspection into accidental tool calls.
       if (key === "then" || key === "catch" || key === "finally") return undefined;
-      if (key === "codemode" && path.length === 0) {
-        return createCodemodeControlSurface(options);
-      }
+      if (key === "abortSignal" && path.length === 0) return options.abortSignal;
       if (typeof key !== "string") return undefined;
 
       return createPathProxy([...path, key], options);
     },
     async apply(_target, _thisArg, args) {
-      return await options.codemodeSessionCapability.callToolFunction({
+      return await options.codemodeSessionCapability.callFunction({
+        input: args[0],
         path,
-        payload: args[0],
-        scriptExecutionRequestedOffset: options.scriptExecutionRequestedOffset,
+        scriptExecutionId: options.scriptExecutionId,
       });
     },
   }) as ToolFunctionProxy;
-}
-
-function createCodemodeControlSurface(options: CreateCodemodeContextOptions) {
-  return {
-    get abortSignal() {
-      return options.abortSignal;
-    },
-    append: (input: CodemodeEventInput) => options.codemodeSessionCapability.append(input),
-    executeScript: (input: { code: string }) =>
-      options.codemodeSessionCapability.executeScript(input),
-    getStreamPath: () => options.codemodeSessionCapability.getStreamPath(),
-  };
 }

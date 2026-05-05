@@ -1,18 +1,10 @@
-import type { StreamEvent, StreamEventInput } from "../stream-processor.ts";
-
-export type CodemodeEventInput = Omit<StreamEventInput, "payload"> & {
-  payload?: unknown;
-};
-
 export type CodemodeProcessorSession = {
-  append(input: CodemodeEventInput): Promise<StreamEvent>;
-  callToolFunction(input: {
+  callFunction(input: {
+    functionCallId?: string;
+    input: unknown;
     path: string[];
-    payload: unknown;
-    scriptExecutionRequestedOffset?: number;
+    scriptExecutionId?: string;
   }): Promise<unknown>;
-  executeScript(input: { code: string }): Promise<StreamEvent>;
-  getStreamPath(): Promise<string>;
 };
 
 export type CodemodeProcessorLogger = {
@@ -34,7 +26,7 @@ export type CodemodeScriptExecutionResult = {
 export type CodemodeScriptExecutor = (args: {
   code: string;
   logger: CodemodeProcessorLogger;
-  scriptExecutionRequestedOffset: number;
+  scriptExecutionId: string;
   session: CodemodeProcessorSession;
   signal: AbortSignal;
 }) => Promise<CodemodeScriptExecutionResult>;

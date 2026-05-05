@@ -9,7 +9,7 @@ type ToolFunctionInput = {
     typeof createCodemodeContext
   >[0]["codemodeSessionCapability"];
   path: string[];
-  payload: Record<string, unknown>;
+  input: Record<string, unknown>;
 };
 
 export class ProviderA extends WorkerEntrypoint {
@@ -25,7 +25,7 @@ export class ProviderA extends WorkerEntrypoint {
         codemodeSessionCapability: input.codemodeSessionCapability,
       });
       const result = (await ctx.providerB.text.exclaim({
-        value: input.payload.value,
+        value: input.input.value,
       })) as { value: string };
 
       return {
@@ -40,7 +40,7 @@ export class ProviderA extends WorkerEntrypoint {
       return {
         provider: "provider-a",
         toolFunction: "math.add",
-        value: Number(input.payload.left) + Number(input.payload.right),
+        value: Number(input.input.left) + Number(input.input.right),
       };
     }
 
@@ -48,7 +48,7 @@ export class ProviderA extends WorkerEntrypoint {
       return {
         provider: "provider-a",
         toolFunction: "text.upper",
-        value: String(input.payload.value).toUpperCase(),
+        value: String(input.input.value).toUpperCase(),
       };
     }
 
@@ -69,8 +69,8 @@ export class ProviderB extends WorkerEntrypoint {
         codemodeSessionCapability: input.codemodeSessionCapability,
       });
       const added = (await ctx.providerA.math.add({
-        left: input.payload.left,
-        right: input.payload.right,
+        left: input.input.left,
+        right: input.input.right,
       })) as { value: number };
       const upper = (await ctx.providerA.text.upper({
         value: `sum ${added.value}`,
@@ -88,7 +88,7 @@ export class ProviderB extends WorkerEntrypoint {
       return {
         provider: "provider-b",
         toolFunction: "text.exclaim",
-        value: `${String(input.payload.value).toUpperCase()}!`,
+        value: `${String(input.input.value).toUpperCase()}!`,
       };
     }
 
