@@ -33,11 +33,50 @@ const OpenAiResponsesStreamMessage = z
   .passthrough();
 
 export type OpenAiWsProcessorDeps = {
-  openWebSocket(args: { url: string }): Promise<WebSocket>;
+  openResponsesWebSocket(): Promise<OpenAiResponsesWebSocket>;
 };
+
+export type OpenAiResponsesWebSocket = {
+  readonly url: URL | string;
+  readonly socket: { readonly readyState: number };
+  send(event: JsonValue): void;
+  stream(): AsyncIterableIterator<OpenAiResponsesWebSocketStreamMessage>;
+  close(props?: { code: number; reason: string }): void;
+};
+
+export type OpenAiResponsesWebSocketStreamMessage =
+  | { type: "connecting" | "open" | "closing" | "reconnected" }
+  | { type: "close"; code: number; reason: string }
+  | { type: "reconnecting"; reconnect: JsonValue }
+  | { type: "message"; message: JsonValue }
+  | { type: "raw"; data: unknown }
+  | { type: "error"; error: unknown };
+
+type OpenAiWsConnection = {
+  id: string;
+  url: string;
+  client: OpenAiResponsesWebSocket;
+  iterator: AsyncIterableIterator<OpenAiResponsesWebSocketStreamMessage>;
+  receiveSequence: number;
+  sendSequence: number;
+};
+
+const OpenAiWebSocketReadyState = {
+  Open: 1,
+} as const;
 
 export function createOpenAiWsProcessor(deps: OpenAiWsProcessorDeps) {
   let connectionSeq = 0;
+  /**
+   * This is intentionally processor-runner instance state, not per-request
+   * state. Responses WebSocket mode is a transport that can carry many
+   * `response.create` requests. The previous proof opened the socket inside
+   * request execution and closed it after `response.completed`, which confused
+   * the lifetime of one LLM request with the lifetime of the WebSocket
+   * connection. Keeping this connection here means sequential agent requests
+   * reuse the same socket until OpenAI or the runtime actually closes it.
+   */
+  let connection: OpenAiWsConnection | null = null;
   let previousResponseId: string | null = null;
 
   return implementProcessor(OpenAiWsProcessorContract, {
@@ -56,11 +95,25 @@ export function createOpenAiWsProcessor(deps: OpenAiWsProcessorDeps) {
           return;
         case "events.iterate.com/agent/llm-request-requested":
           await executeOpenAiWsRequest({
-            deps,
             event,
             state,
             streamApi,
-            connectionId: `openai_ws_${Date.now()}_${++connectionSeq}`,
+            getConnection: async () => {
+              if (connection?.client.socket.readyState === OpenAiWebSocketReadyState.Open) {
+                return connection;
+              }
+
+              connection = await openOpenAiWsConnection({
+                deps,
+                streamApi,
+                sourceEvent: event,
+                connectionId: `openai_ws_${Date.now()}_${++connectionSeq}`,
+              });
+              return connection;
+            },
+            markConnectionClosed: (closedConnection) => {
+              if (connection?.id === closedConnection.id) connection = null;
+            },
             getPreviousResponseId: () => previousResponseId,
             setPreviousResponseId: (responseId) => {
               previousResponseId = responseId;
@@ -75,27 +128,22 @@ export function createOpenAiWsProcessor(deps: OpenAiWsProcessorDeps) {
 }
 
 async function executeOpenAiWsRequest(args: {
-  deps: OpenAiWsProcessorDeps;
   event: Extract<OpenAiWsConsumedEvent, { type: "events.iterate.com/agent/llm-request-requested" }>;
   state: OpenAiWsState;
   streamApi: OpenAiWsStreamApi;
-  connectionId: string;
+  getConnection(): Promise<OpenAiWsConnection>;
+  markConnectionClosed(connection: OpenAiWsConnection): void;
   getPreviousResponseId(): string | null;
   setPreviousResponseId(responseId: string): void;
 }) {
   const llmRequestId = args.event.offset;
   if (args.state.requests[String(llmRequestId)] != null) return;
 
-  const url = "wss://api.openai.com/v1/responses";
   const startedAt = Date.now();
-  let receiveSequence = 0;
 
-  let socket: WebSocket;
-  let receiver: WebSocketMessageReceiver | undefined;
+  let connection: OpenAiWsConnection;
   try {
-    socket = await args.deps.openWebSocket({ url });
-    await waitForSocketOpen(socket);
-    receiver = createWebSocketMessageReceiver(socket);
+    connection = await args.getConnection();
   } catch (error) {
     const durationMs = Date.now() - startedAt;
     const failure = {
@@ -111,7 +159,6 @@ async function executeOpenAiWsRequest(args: {
           event: args.event,
         }),
         payload: {
-          connectionId: args.connectionId,
           llmRequestId,
           durationMs,
           result: failure,
@@ -139,21 +186,6 @@ async function executeOpenAiWsRequest(args: {
 
   await args.streamApi.append({
     event: {
-      type: "events.iterate.com/openai-ws/websocket-connected",
-      idempotencyKey: buildDerivedIdempotencyKey({
-        slug: OpenAiWsProcessorContract.slug,
-        purpose: "websocket-connected",
-        event: args.event,
-      }),
-      payload: {
-        connectionId: args.connectionId,
-        url,
-      },
-    },
-  });
-
-  await args.streamApi.append({
-    event: {
       type: "events.iterate.com/openai-ws/llm-request-started",
       idempotencyKey: buildDerivedIdempotencyKey({
         slug: OpenAiWsProcessorContract.slug,
@@ -161,7 +193,7 @@ async function executeOpenAiWsRequest(args: {
         event: args.event,
       }),
       payload: {
-        connectionId: args.connectionId,
+        connectionId: connection.id,
         llmRequestId,
         model: args.state.model,
       },
@@ -175,7 +207,15 @@ async function executeOpenAiWsRequest(args: {
     (message) => message.role !== "system",
   );
   const previousResponseId = args.getPreviousResponseId();
-  const requestMessage = {
+  /**
+   * `store: false` keeps this proof out of OpenAI's stored response retention,
+   * but WebSocket mode can still chain the immediate conversation by carrying
+   * `previous_response_id` from the prior completed response. That is why this
+   * processor keeps `previousResponseId` separately from the stream state: it is
+   * transport/provider continuation data, not agent history. The agent request
+   * body remains the source of truth for what we explicitly send this turn.
+   */
+  const requestMessage = toJsonValue({
     type: "response.create",
     model: args.state.model,
     instructions:
@@ -193,8 +233,9 @@ async function executeOpenAiWsRequest(args: {
     })),
     store: false,
     ...(previousResponseId == null ? {} : { previous_response_id: previousResponseId }),
-  };
-  socket.send(JSON.stringify(requestMessage));
+  });
+  const sendSequence = connection.sendSequence++;
+  connection.client.send(requestMessage);
   await args.streamApi.append({
     event: {
       type: "events.iterate.com/openai-ws/websocket-message-sent",
@@ -204,9 +245,9 @@ async function executeOpenAiWsRequest(args: {
         event: args.event,
       }),
       payload: {
-        connectionId: args.connectionId,
+        connectionId: connection.id,
         llmRequestId,
-        sequence: 0,
+        sequence: sendSequence,
         message: requestMessage,
       },
     },
@@ -218,8 +259,9 @@ async function executeOpenAiWsRequest(args: {
   while (true) {
     let rawMessage: unknown;
     try {
-      rawMessage = await receiver.next();
+      rawMessage = await nextOpenAiResponsesMessage(connection);
     } catch (error) {
+      args.markConnectionClosed(connection);
       const durationMs = Date.now() - startedAt;
       const failure = {
         status: "failure" as const,
@@ -234,7 +276,7 @@ async function executeOpenAiWsRequest(args: {
             event: args.event,
           }),
           payload: {
-            connectionId: args.connectionId,
+            connectionId: connection.id,
           },
         },
       });
@@ -247,7 +289,7 @@ async function executeOpenAiWsRequest(args: {
             event: args.event,
           }),
           payload: {
-            connectionId: args.connectionId,
+            connectionId: connection.id,
             llmRequestId,
             durationMs,
             result: failure,
@@ -273,8 +315,8 @@ async function executeOpenAiWsRequest(args: {
       return;
     }
 
-    receiveSequence += 1;
-    const message = parseSocketJson(rawMessage);
+    const receiveSequence = connection.receiveSequence++;
+    const message = toJsonValue(rawMessage);
     await args.streamApi.append({
       event: {
         type: "events.iterate.com/openai-ws/websocket-message-received",
@@ -284,7 +326,7 @@ async function executeOpenAiWsRequest(args: {
           event: args.event,
         }),
         payload: {
-          connectionId: args.connectionId,
+          connectionId: connection.id,
           llmRequestId,
           sequence: receiveSequence,
           message,
@@ -326,7 +368,7 @@ async function executeOpenAiWsRequest(args: {
             event: args.event,
           }),
           payload: {
-            connectionId: args.connectionId,
+            connectionId: connection.id,
             llmRequestId,
             durationMs,
             ...(responseId == null ? {} : { responseId }),
@@ -359,28 +401,10 @@ async function executeOpenAiWsRequest(args: {
           },
         },
       });
-      socket.close(1000, "request completed");
-      await args.streamApi.append({
-        event: {
-          type: "events.iterate.com/openai-ws/websocket-disconnected",
-          idempotencyKey: buildDerivedIdempotencyKey({
-            slug: OpenAiWsProcessorContract.slug,
-            purpose: "websocket-disconnected",
-            event: args.event,
-          }),
-          payload: {
-            connectionId: args.connectionId,
-            code: 1000,
-            reason: "request completed",
-            wasClean: true,
-          },
-        },
-      });
       return;
     }
 
     if (parsed.data.type === "response.failed" || parsed.data.type === "error") {
-      socket.close(1011, "request failed");
       const rawResponse = toJsonValue(message);
       const durationMs = Date.now() - startedAt;
       const failure = {
@@ -392,22 +416,6 @@ async function executeOpenAiWsRequest(args: {
       };
       await args.streamApi.append({
         event: {
-          type: "events.iterate.com/openai-ws/websocket-disconnected",
-          idempotencyKey: buildDerivedIdempotencyKey({
-            slug: OpenAiWsProcessorContract.slug,
-            purpose: "websocket-disconnected",
-            event: args.event,
-          }),
-          payload: {
-            connectionId: args.connectionId,
-            code: 1011,
-            reason: "request failed",
-            wasClean: false,
-          },
-        },
-      });
-      await args.streamApi.append({
-        event: {
           type: "events.iterate.com/openai-ws/llm-request-completed",
           idempotencyKey: buildDerivedIdempotencyKey({
             slug: OpenAiWsProcessorContract.slug,
@@ -415,7 +423,7 @@ async function executeOpenAiWsRequest(args: {
             event: args.event,
           }),
           payload: {
-            connectionId: args.connectionId,
+            connectionId: connection.id,
             llmRequestId,
             durationMs,
             result: failure,
@@ -443,64 +451,103 @@ async function executeOpenAiWsRequest(args: {
   }
 }
 
-function waitForSocketOpen(socket: WebSocket) {
-  if (socket.readyState === WebSocket.OPEN) return Promise.resolve();
-  return new Promise<void>((resolve, reject) => {
-    socket.addEventListener("open", () => resolve(), { once: true });
-    socket.addEventListener("error", () => reject(new Error("OpenAI WebSocket failed to open.")), {
-      once: true,
-    });
-  });
-}
+async function openOpenAiWsConnection(args: {
+  deps: OpenAiWsProcessorDeps;
+  streamApi: OpenAiWsStreamApi;
+  sourceEvent: Extract<
+    OpenAiWsConsumedEvent,
+    { type: "events.iterate.com/agent/llm-request-requested" }
+  >;
+  connectionId: string;
+}): Promise<OpenAiWsConnection> {
+  const client = await args.deps.openResponsesWebSocket();
+  const iterator = client.stream();
+  await waitForOpenAiResponsesSocketOpen(iterator);
 
-type WebSocketMessageReceiver = {
-  next(): Promise<unknown>;
-};
-
-function createWebSocketMessageReceiver(socket: WebSocket): WebSocketMessageReceiver {
-  const messages: unknown[] = [];
-  const waiters: Array<{
-    resolve(value: unknown): void;
-    reject(error: Error): void;
-  }> = [];
-  let terminalError: Error | undefined;
-
-  const rejectWaiters = (error: Error) => {
-    terminalError = error;
-    while (waiters.length > 0) {
-      waiters.shift()?.reject(error);
-    }
+  const connection = {
+    id: args.connectionId,
+    url: String(client.url),
+    client,
+    iterator,
+    receiveSequence: 0,
+    sendSequence: 0,
   };
 
-  socket.addEventListener("message", (event) => {
-    const waiter = waiters.shift();
-    if (waiter == null) {
-      messages.push(event.data);
-      return;
-    }
-    waiter.resolve(event.data);
-  });
-  socket.addEventListener("close", () => rejectWaiters(new Error("OpenAI WebSocket closed.")), {
-    once: true,
-  });
-  socket.addEventListener("error", () => rejectWaiters(new Error("OpenAI WebSocket errored.")), {
-    once: true,
-  });
-
-  return {
-    async next() {
-      const message = messages.shift();
-      if (message !== undefined) return message;
-      if (terminalError != null) throw terminalError;
-
-      return await new Promise<unknown>((resolve, reject) => {
-        waiters.push({ resolve, reject });
-      });
+  await args.streamApi.append({
+    event: {
+      type: "events.iterate.com/openai-ws/websocket-connected",
+      idempotencyKey: buildDerivedIdempotencyKey({
+        slug: OpenAiWsProcessorContract.slug,
+        purpose: "websocket-connected",
+        event: args.sourceEvent,
+      }),
+      payload: {
+        connectionId: connection.id,
+        url: connection.url,
+      },
     },
-  };
+  });
+
+  return connection;
 }
 
-function parseSocketJson(message: unknown): JsonValue {
+async function waitForOpenAiResponsesSocketOpen(
+  iterator: AsyncIterableIterator<OpenAiResponsesWebSocketStreamMessage>,
+) {
+  while (true) {
+    const result = await iterator.next();
+    if (result.done === true) throw new Error("OpenAI WebSocket stream ended before opening.");
+
+    switch (result.value.type) {
+      case "connecting":
+        continue;
+      case "open":
+        return;
+      case "close":
+        throw new Error(
+          `OpenAI WebSocket closed before opening: ${result.value.code} ${result.value.reason}`,
+        );
+      case "error":
+        throw result.value.error;
+      case "message":
+      case "raw":
+      case "closing":
+      case "reconnecting":
+      case "reconnected":
+        continue;
+      default:
+        return assertNever(result.value);
+    }
+  }
+}
+
+async function nextOpenAiResponsesMessage(connection: OpenAiWsConnection): Promise<JsonValue> {
+  while (true) {
+    const result = await connection.iterator.next();
+    if (result.done === true) throw new Error("OpenAI WebSocket stream ended.");
+
+    switch (result.value.type) {
+      case "message":
+        return toJsonValue(result.value.message);
+      case "raw":
+        return parseRawSocketMessage(result.value.data);
+      case "close":
+        throw new Error(`OpenAI WebSocket closed: ${result.value.code} ${result.value.reason}`);
+      case "error":
+        throw result.value.error;
+      case "connecting":
+      case "open":
+      case "closing":
+      case "reconnecting":
+      case "reconnected":
+        continue;
+      default:
+        return assertNever(result.value);
+    }
+  }
+}
+
+function parseRawSocketMessage(message: unknown): JsonValue {
   const text =
     typeof message === "string"
       ? message

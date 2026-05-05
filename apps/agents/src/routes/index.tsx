@@ -44,9 +44,12 @@ const CLOUDFLARE_MODEL_PRESETS = [
 ] as const;
 
 const OPENAI_WS_MODEL_PRESETS = [
-  { value: "gpt-5.2", label: "gpt-5.2 (default)" },
-  { value: "gpt-5.1", label: "gpt-5.1" },
-  { value: "gpt-4.1-mini", label: "gpt-4.1-mini" },
+  { value: "gpt-5.5", label: "gpt-5.5 (default)" },
+  { value: "gpt-5.5-pro", label: "gpt-5.5 pro" },
+  { value: "gpt-5.4", label: "gpt-5.4" },
+  { value: "gpt-5.4-pro", label: "gpt-5.4 pro" },
+  { value: "gpt-5.4-mini", label: "gpt-5.4 mini" },
+  { value: "gpt-5.4-nano", label: "gpt-5.4 nano" },
 ] as const;
 
 const CUSTOM_MODEL_SENTINEL = "__custom__";

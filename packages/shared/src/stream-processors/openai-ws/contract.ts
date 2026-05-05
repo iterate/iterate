@@ -25,7 +25,7 @@ export const OpenAiWsProcessorContract = defineProcessorContract({
     "Executes agent LLM requests through OpenAI Responses WebSocket mode, recording raw socket transcript events and appending the agent-level output and terminal request event owed by the LLM request processor contract.",
   stateSchema: z.object({
     ...standardProcessorBehavior.stateShape,
-    model: z.string().min(1).default("gpt-4.1-mini"),
+    model: z.string().min(1).default("gpt-5.5"),
     requests: z
       .record(
         z.string(),
