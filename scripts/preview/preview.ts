@@ -32,6 +32,14 @@ import {
 
 const defaultSemaphoreBaseUrl = "https://semaphore.iterate.com";
 const defaultPreviewLeaseMs = 60 * 60 * 1000;
+// Routed previews can be healthy before Cloudflare has finished issuing edge
+// certificates for newly-created hostnames. Some apps record a separate
+// project-subdomain URL; wait on that URL only when it is expected to be
+// certificate-covered in the preview environment.
+// https://developers.cloudflare.com/ssl/edge-certificates/universal-ssl/limitations/#full-setup
+// https://developers.cloudflare.com/ssl/edge-certificates/additional-options/total-tls/
+// Keep this long enough for first issuance of supported hostnames while still
+// returning immediately once the health endpoint is reachable.
 const defaultPreviewReadyTimeoutMs = 600_000;
 const defaultPreviewReadyUrlPath = "/api/__internal/health";
 const defaultPreviewTestMaxAttempts = 2;
@@ -548,6 +556,7 @@ async function deployPreviewApp(input: {
   }
 
   const readiness = await waitForPreviewAppReadiness({
+    projectHostnameBases: appConfig.projectHostnameBases,
     publicUrl: appConfig.baseUrl,
     signal: input.signal,
     timeoutMs: defaultPreviewReadyTimeoutMs,
@@ -577,11 +586,27 @@ async function readPreviewAppConfig(input: {
   const script = isNewStyleApp
     ? [
         'import { resolveNewStyleCloudflareAppBaseUrlFromEnv } from "@iterate-com/shared/apps/new-style-cloudflare-apps";',
-        "const config = { baseUrl: resolveNewStyleCloudflareAppBaseUrlFromEnv(process.env) ?? null };",
+        "function parseStringArrayEnv(value) {",
+        "  if (!value?.trim()) return [];",
+        "  const parsed = JSON.parse(value);",
+        "  return Array.isArray(parsed) ? parsed.filter((entry) => typeof entry === 'string') : [];",
+        "}",
+        "function parseAppConfigProjectHostnameBases() {",
+        "  if (!process.env.APP_CONFIG?.trim()) return [];",
+        "  const parsed = JSON.parse(process.env.APP_CONFIG);",
+        "  return Array.isArray(parsed.projectHostnameBases) ? parsed.projectHostnameBases.filter((entry) => typeof entry === 'string') : [];",
+        "}",
+        "const config = {",
+        "  baseUrl: resolveNewStyleCloudflareAppBaseUrlFromEnv(process.env) ?? null,",
+        "  projectHostnameBases: (() => {",
+        "    const envBases = parseStringArrayEnv(process.env.APP_CONFIG_PROJECT_HOSTNAME_BASES);",
+        "    return envBases.length > 0 ? envBases : parseAppConfigProjectHostnameBases();",
+        "  })(),",
+        "};",
         "console.log(JSON.stringify(config));",
       ].join("\n")
     : [
-        "const config = { baseUrl: process.env.APP_CONFIG_BASE_URL ?? null };",
+        "const config = { baseUrl: process.env.APP_CONFIG_BASE_URL ?? null, projectHostnameBases: [] };",
         "console.log(JSON.stringify(config));",
       ].join("\n");
   const result = await runCommand({
@@ -610,6 +635,7 @@ async function readPreviewAppConfig(input: {
   const parsed = z
     .object({
       baseUrl: z.string().trim().url(),
+      projectHostnameBases: z.array(z.string().trim().min(1)).default([]),
     })
     .parse(JSON.parse(result.stdout));
   return parsed;
@@ -796,15 +822,33 @@ export function expandPreviewDependencies(appSlugs: readonly CloudflarePreviewAp
 }
 
 async function waitForPreviewAppReadiness(params: {
+  projectHostnameBases: readonly string[];
   publicUrl: string;
   signal?: AbortSignal;
   timeoutMs: number;
 }) {
-  return await waitForHttpReadiness({
-    signal: params.signal,
-    timeoutMs: params.timeoutMs,
-    url: new URL(defaultPreviewReadyUrlPath, params.publicUrl),
-  });
+  const urls = [
+    new URL(defaultPreviewReadyUrlPath, params.publicUrl),
+    ...params.projectHostnameBases.map(
+      (base) =>
+        new URL(defaultPreviewReadyUrlPath, `https://project.${normalizeHostnameBase(base)}`),
+    ),
+  ];
+
+  for (const url of urls) {
+    const readiness = await waitForHttpReadiness({
+      signal: params.signal,
+      timeoutMs: params.timeoutMs,
+      url,
+    });
+    if (!readiness.ok) return readiness;
+  }
+
+  return { ok: true as const };
+}
+
+function normalizeHostnameBase(base: string) {
+  return base.trim().replace(/^\*\./, "");
 }
 
 async function waitForHttpReadiness(params: { signal?: AbortSignal; timeoutMs: number; url: URL }) {

@@ -28,6 +28,7 @@ function ProjectMcpPage() {
   const config = useConfig<PublicConfig>();
   const mcpUrl = buildProjectMcpUrl({
     projectSlug: project.slug,
+    customHostname: project.customHostname,
     projectHostnameBases: config.projectHostnameBases,
   });
 
