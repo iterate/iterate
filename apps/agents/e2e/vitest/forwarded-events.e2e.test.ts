@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { fetchCallable, setupE2E } from "../test-support/e2e-test.ts";
+import { setupE2E } from "../test-support/e2e-test.ts";
 import { createLocalDevServer } from "../test-support/create-local-dev-server.ts";
 
 test(
@@ -15,12 +15,14 @@ test(
       streamPath,
     });
 
+    const callbackUrl = new URL("/api/events-forwarded", server.publicUrl).toString();
+
     await e2e.events.append(streamPath, {
       type: "events.iterate.com/core/subscription-configured",
       payload: {
         slug: `agents-forwarded-${e2e.executionSuffix}`,
         type: "webhook",
-        callable: fetchCallable(new URL("/api/events-forwarded", server.publicUrl).toString()),
+        callbackUrl,
       },
     });
     await e2e.events.append(streamPath, {

@@ -25,13 +25,6 @@ export interface E2EContext {
   createStreamPath(opts?: { suffix?: string }): StreamPath;
 }
 
-export function fetchCallable(url: string) {
-  return {
-    type: "fetch" as const,
-    via: { type: "url" as const, url },
-  };
-}
-
 export async function setupE2E(ctx: TestContext): Promise<E2EContext> {
   const { task, onTestFailed, onTestFinished } = ctx;
   const runRoot = inject(E2E_RUN_ROOT_KEY as never) as string;

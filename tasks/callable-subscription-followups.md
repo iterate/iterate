@@ -7,10 +7,10 @@ dependsOn: []
 
 # Callable subscription followups
 
-This branch moved Events external subscriptions from `callbackUrl` to stored
-`Callable` descriptors. The immediate compatibility fixes updated active Agents
-subscription producers and the Events processor docs, but OS2 and Agents still
-need a cleanup pass after this lands.
+This branch moves Events external subscriptions from `callbackUrl` to stored
+`Callable` descriptors without changing `apps/agents` or `apps/os2`. Those apps
+still need a coordinated follow-up once their owners are ready to adopt the new
+subscription payload shape.
 
 ## OS2
 
@@ -32,6 +32,18 @@ need a cleanup pass after this lands.
 
 ## Agents
 
+- Update active subscription producers to append `callable` instead of
+  `callbackUrl`:
+  - `apps/agents/src/orpc/routers/create-agent.ts`
+  - `apps/agents/src/orpc/routers/install-processor.ts`
+  - `apps/agents/src/durable-objects/child-stream-auto-subscriber.ts`
+  - `apps/agents/scripts/router.ts`
+- Add a small helper near the websocket URL builders that converts `ws:` /
+  `wss:` target URLs to fetch callables with `http:` / `https:` URLs. Events
+  opens websocket upgrades through `connectCallableWebSocket()`, so the stored
+  callable should be fetch-shaped.
+- Update Agents e2e setup that appends `subscription-configured` events to use
+  `callable`.
 - Rename user-facing/internal variables where `callbackUrl` now means "the URL
   used to build a subscription callable"; the persisted Events subscription no
   longer stores `callbackUrl`.

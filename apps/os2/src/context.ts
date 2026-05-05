@@ -17,7 +17,6 @@ export interface AppContext {
   loader?: WorkerLoader;
   codemodeSession?: DurableObjectNamespace<CodemodeSession>;
   callableEnv?: Record<string, unknown>;
-  callableExports?: Record<string, unknown>;
 }
 
 declare module "@tanstack/react-start" {

@@ -33,7 +33,7 @@ const codemodeSessionWorker = await Worker("codemode-session-do", {
   name: `${ctx.workerName}-codemode-session-do`,
   entrypoint: "./src/durable-objects/codemode-session.ts",
   adopt: true,
-  compatibilityFlags: ["nodejs_compat", "enable_ctx_exports"],
+  compatibilityFlags: ["nodejs_compat"],
   bindings: {
     CODEMODE_SESSION: DurableObjectNamespace<CodemodeSession>("codemode-session", {
       className: "CodemodeSession",
@@ -54,7 +54,7 @@ const iterateMcpServer = await Worker("iterate-mcp-server-do", {
   name: `${ctx.workerName}-iterate-mcp-server-do`,
   entrypoint: "./src/durable-objects/iterate-mcp-server.ts",
   adopt: true,
-  compatibilityFlags: ["nodejs_compat", "enable_ctx_exports"],
+  compatibilityFlags: ["nodejs_compat"],
   bindings: {
     CODEMODE_SESSION: codemodeSessionWorker.bindings.CODEMODE_SESSION,
     EVENTS_BASE_URL: ctx.compiledAppConfig.eventsBaseUrl,
@@ -67,7 +67,6 @@ const iterateMcpServer = await Worker("iterate-mcp-server-do", {
 });
 
 const { worker, afterFinalize } = await IterateApp(ctx, {
-  compatibilityFlags: ["enable_ctx_exports"],
   bindings: {
     CLERK_JWT_KEY: ctx.compiledAppConfig.clerk.jwtKey.exposeSecret(),
     CLERK_PUBLISHABLE_KEY: ctx.compiledAppConfig.clerk.publishableKey,

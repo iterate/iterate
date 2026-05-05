@@ -7,11 +7,7 @@ import { z } from "zod";
 import { useCloudflareTunnel, useCloudflareTunnelLease } from "@iterate-com/shared/test-helpers";
 import { ProjectSlug, StreamPath } from "@iterate-com/events-contract";
 import { createEventsOrpcClient } from "../src/lib/events-orpc-client.ts";
-import {
-  buildStreamAppendUrl,
-  buildStreamViewerUrl,
-  buildWebSocketSubscriptionCallable,
-} from "../src/lib/events-urls.ts";
+import { buildStreamAppendUrl, buildStreamViewerUrl } from "../src/lib/events-urls.ts";
 import {
   buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl,
   streamPathToAgentInstance,
@@ -196,7 +192,7 @@ export const router = {
         payload: {
           slug: subscriptionSlug,
           type: "websocket" as const,
-          callable: buildWebSocketSubscriptionCallable(callbackUrl),
+          callbackUrl,
         },
       };
 

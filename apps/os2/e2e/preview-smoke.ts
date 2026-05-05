@@ -73,31 +73,25 @@ await expectStatus({
   status: 404,
 });
 
-// Routed OS2 preview zones are provisioned before their registrar delegation is
-// always complete. In the workers.dev fallback topology there is no project
-// wildcard host to exercise, so the smoke test only checks the dashboard worker
-// and its authenticated MCP path boundary.
-if (!baseUrl.hostname.endsWith(".workers.dev")) {
-  const projectOrigin = `${projectBaseUrlOverride?.protocol ?? baseUrl.protocol}//${projectHostnameFor(baseUrl, projectBaseUrlOverride)}`;
-  const projectMcpUrl = new URL("/mcp", projectOrigin);
-  const projectMcpResponse = await expectStatus({
-    url: projectMcpUrl,
-    status: 401,
-  });
-  const wwwAuthenticate = projectMcpResponse.headers.get("www-authenticate") ?? "";
-  const metadataUrl = new URL("/.well-known/oauth-protected-resource/mcp", projectOrigin);
-  if (!wwwAuthenticate.includes(`resource_metadata="${metadataUrl.toString()}"`)) {
-    throw new Error(`Unexpected MCP WWW-Authenticate header: ${wwwAuthenticate}`);
-  }
+const projectOrigin = `${projectBaseUrlOverride?.protocol ?? baseUrl.protocol}//${projectHostnameFor(baseUrl, projectBaseUrlOverride)}`;
+const projectMcpUrl = new URL("/mcp", projectOrigin);
+const projectMcpResponse = await expectStatus({
+  url: projectMcpUrl,
+  status: 401,
+});
+const wwwAuthenticate = projectMcpResponse.headers.get("www-authenticate") ?? "";
+const metadataUrl = new URL("/.well-known/oauth-protected-resource/mcp", projectOrigin);
+if (!wwwAuthenticate.includes(`resource_metadata="${metadataUrl.toString()}"`)) {
+  throw new Error(`Unexpected MCP WWW-Authenticate header: ${wwwAuthenticate}`);
+}
 
-  const metadataResponse = await expectStatus({
-    url: metadataUrl,
-    status: 200,
-  });
-  const metadata = (await metadataResponse.json()) as { resource?: string };
-  if (metadata.resource !== projectMcpUrl.toString()) {
-    throw new Error(`Expected MCP metadata resource ${projectMcpUrl}; got ${metadata.resource}.`);
-  }
+const metadataResponse = await expectStatus({
+  url: metadataUrl,
+  status: 200,
+});
+const metadata = (await metadataResponse.json()) as { resource?: string };
+if (metadata.resource !== projectMcpUrl.toString()) {
+  throw new Error(`Expected MCP metadata resource ${projectMcpUrl}; got ${metadata.resource}.`);
 }
 
 console.log(`OS2 preview smoke passed for ${baseUrl.toString()}`);

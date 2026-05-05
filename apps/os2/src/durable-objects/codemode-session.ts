@@ -271,10 +271,6 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
   private createCallableContext(): CallableContext {
     return {
       env: this.env,
-      // Durable Object state exposes loopback exports when the worker has
-      // `enable_ctx_exports`; keep this optional so the same code still runs in
-      // test/runtime contexts that do not provide the extension.
-      exports: (this.ctx as DurableObjectState & { exports?: Record<string, unknown> }).exports,
       fetch: globalThis.fetch,
     };
   }

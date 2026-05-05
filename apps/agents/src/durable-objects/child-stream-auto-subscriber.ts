@@ -11,7 +11,6 @@ import { Agent, type Connection, type WSMessage } from "agents";
 import { z } from "zod";
 import { AppConfig } from "~/app.ts";
 import { createEventsOrpcClient } from "~/lib/events-orpc-client.ts";
-import { buildWebSocketSubscriptionCallable } from "~/lib/events-urls.ts";
 import {
   AGENT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
   buildAgentStreamProcessorRunnerWebSocketCallbackUrl,
@@ -85,12 +84,12 @@ type WireDiscoveredAgent = { streamPath: string; discoveredAt: number };
  * so subscribing this single processor to a single ancestor (the prefix) is
  * enough to see every descendant.
  *
- * The callable target it posts when subscribing the runner to the child stream
- * is derived from the `publicBaseUrl` that `installProcessor` encoded into the
- * callable target for this DO's own WebSocket upgrade URL. Using
+ * The callback URL it posts when subscribing the runner to the child stream is
+ * derived from the `publicBaseUrl` that `installProcessor` encoded into this
+ * DO's own WebSocket upgrade URL as a query parameter. Using
  * `connection.uri` as the source of truth keeps the control plane
  * (`installProcessor`) coupled to the DO only through the subscription
- * callable that Events stores — nothing else.
+ * `callbackUrl` that Events stores — nothing else.
  */
 export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
   async onMessage(connection: Connection, message: WSMessage) {
@@ -182,7 +181,7 @@ export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
             payload: {
               slug: subscription.slug,
               type: "websocket",
-              callable: buildWebSocketSubscriptionCallable(subscription.callbackUrl),
+              callbackUrl: subscription.callbackUrl,
             },
           },
         });

@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { ProjectSlug } from "@iterate-com/events-contract";
 import { expect, test } from "vitest";
 import { getProjectUrl } from "../../../events/src/lib/project-slug.ts";
-import { fetchCallable, setupE2E } from "../test-support/e2e-test.ts";
+import { setupE2E } from "../test-support/e2e-test.ts";
 import { createLocalDevServer } from "../test-support/create-local-dev-server.ts";
 import { createMockInternet } from "../test-support/create-mock-internet.ts";
 import {
@@ -79,13 +79,11 @@ test.skip(
       payload: {
         slug: `codemode-runner-mixed-ws-${e2e.executionSuffix}`,
         type: "websocket",
-        callable: fetchCallable(
-          buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
-            publicOrigin: server.publicUrl,
-            runnerInstance: streamPathToAgentInstance(streamPath),
-            streamPath,
-          }),
-        ),
+        callbackUrl: buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
+          publicOrigin: server.publicUrl,
+          runnerInstance: streamPathToAgentInstance(streamPath),
+          streamPath,
+        }),
       },
     });
 

@@ -122,10 +122,6 @@ export default {
           loader: env.LOADER,
           codemodeSession: env.CODEMODE_SESSION,
           callableEnv: env,
-          // Loopback callables resolve named WorkerEntrypoint exports from the
-          // dispatching worker's ExecutionContext, not from env bindings.
-          callableExports: (cfCtx as ExecutionContext & { exports?: Record<string, unknown> })
-            .exports,
         };
 
         const response = await handler.fetch(request, {

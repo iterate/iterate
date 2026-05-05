@@ -4,7 +4,7 @@ import {
   StreamPath,
 } from "@iterate-com/events-contract";
 import { createEventsOrpcClient } from "~/lib/events-orpc-client.ts";
-import { buildStreamViewerUrl, buildWebSocketSubscriptionCallable } from "~/lib/events-urls.ts";
+import { buildStreamViewerUrl } from "~/lib/events-urls.ts";
 import {
   AGENT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
   buildAgentStreamProcessorRunnerWebSocketCallbackUrl,
@@ -72,7 +72,7 @@ export const createAgentRouter = {
           payload: {
             slug: subscription.slug,
             type: "websocket",
-            callable: buildWebSocketSubscriptionCallable(subscription.callbackUrl),
+            callbackUrl: subscription.callbackUrl,
           },
           idempotencyKey: `create-agent:${streamPath}:subscription:${subscription.slug}`,
         },
