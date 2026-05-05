@@ -2,11 +2,11 @@ import { parseAppConfig } from "@iterate-com/shared/apps/config";
 import type { StreamProcessorRunnerState } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor-runner";
 import { OpenAiWsProcessorContract } from "@iterate-com/shared/stream-processors/openai-ws/contract";
 import { createOpenAiWsProcessor } from "@iterate-com/shared/stream-processors/openai-ws/implementation";
-import { AppConfig } from "~/app.ts";
 import {
   createStreamProcessorRunnerDurableObject,
   type StreamProcessorRunnerInit,
 } from "./stream-processor-runner-common.ts";
+import { AppConfig } from "~/app.ts";
 
 export type OpenAiWsStreamProcessorRunnerInit = StreamProcessorRunnerInit;
 
