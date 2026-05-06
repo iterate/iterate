@@ -1,7 +1,6 @@
 "use client";
 
-import { useState } from "react";
-import { ChevronDownIcon, CornerDownRightIcon } from "lucide-react";
+import { CornerDownRightIcon } from "lucide-react";
 
 import {
   Message,
@@ -9,18 +8,12 @@ import {
   MessageResponse,
 } from "@iterate-com/ui/components/ai-elements/message";
 import { Badge } from "@iterate-com/ui/components/badge";
-import { Button } from "@iterate-com/ui/components/button";
 import type { EventsStreamPromptContextElement } from "@iterate-com/ui/components/events/feed-items";
+import { ExpandableFeedText } from "@iterate-com/ui/components/events/feed-element-renderers/expandable-feed-text";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import { cn } from "@iterate-com/ui/lib/utils";
 
-const COLLAPSED_MAX_HEIGHT_CLASS = "max-h-44";
-const EXPAND_THRESHOLD_CHARS = 700;
-const EXPAND_THRESHOLD_LINES = 10;
-
 export function PromptContextCard({ element }: { element: EventsStreamPromptContextElement }) {
-  const [expanded, setExpanded] = useState(false);
-  const canExpand = shouldOfferExpansion(element.props.text);
   const sourceLabel = element.props.source == null ? null : `from ${element.props.source}`;
   const triggerLabel = formatTriggerLlmRequest(element.props.triggerLlmRequest);
   const triggerDescription = describeTriggerLlmRequest(element.props.triggerLlmRequest);
@@ -55,45 +48,14 @@ export function PromptContextCard({ element }: { element: EventsStreamPromptCont
           </Tooltip>
         </div>
 
-        <div className="relative min-w-0 overflow-hidden rounded-lg border bg-background shadow-xs">
-          <div
-            className={cn(
-              "overflow-hidden px-4 py-3",
-              canExpand && "pb-12",
-              canExpand && !expanded && COLLAPSED_MAX_HEIGHT_CLASS,
-            )}
-          >
-            <MessageResponse className="min-w-0 max-w-full text-sm leading-6 text-muted-foreground">
-              {element.props.text}
-            </MessageResponse>
-          </div>
-
-          {canExpand && !expanded ? (
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-linear-to-b from-transparent to-background" />
-          ) : null}
-
-          {canExpand ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="absolute right-2 bottom-2 z-10 h-7 gap-1.5 border bg-background/90 px-2 text-xs shadow-xs backdrop-blur-sm hover:bg-muted"
-              onClick={() => setExpanded((value) => !value)}
-            >
-              {expanded ? "Show less" : "Show full context"}
-              <ChevronDownIcon
-                className={cn("size-3.5 transition-transform", expanded && "rotate-180")}
-              />
-            </Button>
-          ) : null}
-        </div>
+        <ExpandableFeedText text={element.props.text} collapsedLabel="Show full context">
+          <MessageResponse className="min-w-0 max-w-full text-sm leading-6 text-muted-foreground">
+            {element.props.text}
+          </MessageResponse>
+        </ExpandableFeedText>
       </MessageContent>
     </Message>
   );
-}
-
-function shouldOfferExpansion(text: string) {
-  return text.length > EXPAND_THRESHOLD_CHARS || text.split("\n").length > EXPAND_THRESHOLD_LINES;
 }
 
 function formatTriggerLlmRequest(
