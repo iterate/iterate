@@ -45,6 +45,7 @@ import {
 import { TuiEventsStreamView } from "../src/stream-tui/react-stream-renderers.tsx";
 import {
   formatCommandDocsForTui,
+  getRawEventRowTargetsForTui,
   getRawEventSummariesForTui,
   type TuiSlashSuggestion,
 } from "../src/stream-tui/react-stream-view-model.ts";
@@ -229,8 +230,8 @@ function StreamTerminalApp() {
       setSelectedStreamPath((previous) => previous ?? currentStreamPath);
       return;
     }
-    const rawSummaries = getRawEventSummariesForTui(viewState.slots.feed);
-    setSelectedOffset((previous) => previous ?? rawSummaries[rawSummaries.length - 1]?.offset);
+    const rawRows = getRawEventRowTargetsForTui(viewState.slots.feed);
+    setSelectedOffset((previous) => previous ?? rawRows[rawRows.length - 1]?.offset);
   }, [currentStreamPath, navigationState.view, viewState.slots.feed]);
 
   const focusHeader = useCallback(() => {
@@ -427,17 +428,15 @@ function StreamTerminalApp() {
 
   const selectAdjacentFeedItem = useCallback(
     (direction: -1 | 1) => {
-      const rawSummaries = getRawEventSummariesForTui(viewState.slots.feed);
-      if (rawSummaries.length === 0) return;
-      const currentIndex = rawSummaries.findIndex((item) => item.offset === selectedOffset);
+      const rawRows = getRawEventRowTargetsForTui(viewState.slots.feed);
+      if (rawRows.length === 0) return;
+      const currentIndex = rawRows.findIndex((row) =>
+        selectedOffset == null ? false : row.offsets.has(selectedOffset),
+      );
       const nextIndex =
-        currentIndex === -1
-          ? direction === 1
-            ? 0
-            : rawSummaries.length - 1
-          : currentIndex + direction;
-      if (nextIndex < 0 || nextIndex >= rawSummaries.length) return;
-      setSelectedOffset(rawSummaries[nextIndex]?.offset);
+        currentIndex === -1 ? (direction === 1 ? 0 : rawRows.length - 1) : currentIndex + direction;
+      if (nextIndex < 0 || nextIndex >= rawRows.length) return;
+      setSelectedOffset(rawRows[nextIndex]?.offset);
     },
     [selectedOffset, viewState.slots.feed],
   );

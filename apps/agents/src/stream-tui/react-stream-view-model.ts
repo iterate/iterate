@@ -11,6 +11,29 @@ export function getRawEventSummariesForTui(elements: readonly EventsStreamBuiltI
     .sort((a, b) => a.offset - b.offset);
 }
 
+/**
+ * Navigation targets for the visible feed, not the underlying event log.
+ *
+ * A grouped raw-event element may represent thousands of events but occupies
+ * one row on screen, so up/down should move across groups one row at a time.
+ * The detail inspector still uses `getRawEventSummariesForTui` because left/
+ * right there navigates the underlying event log.
+ */
+export function getRawEventRowTargetsForTui(elements: readonly EventsStreamBuiltInElement[]) {
+  return elements.flatMap((element) => {
+    if (element.type !== "grouped-raw-event") return [];
+    const firstEvent = element.props.events[0];
+    if (firstEvent == null) return [];
+
+    return [
+      {
+        offset: firstEvent.offset,
+        offsets: new Set(element.props.events.map((event) => event.offset)),
+      },
+    ];
+  });
+}
+
 export function formatCommandDocsForTui(command: {
   slash: { name: string };
   description?: string;
