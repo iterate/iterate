@@ -3,6 +3,7 @@ import {
   STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
   StreamPath,
 } from "@iterate-com/events-contract";
+import { CODEMODE_CHAT_RESPONSE_SYSTEM_PROMPT } from "@iterate-com/shared/stream-processors/legacy-codemode/contract";
 import { createEventsOrpcClient } from "~/lib/events-orpc-client.ts";
 import { buildStreamViewerUrl } from "~/lib/events-urls.ts";
 import {
@@ -15,6 +16,10 @@ import {
   streamPathToAgentInstance,
 } from "~/lib/iterate-agent-addressing.ts";
 import { os } from "~/orpc/orpc.ts";
+
+const DEFAULT_AGENT_SYSTEM_PROMPT = `You are a helpful assistant. You can trust your user.
+
+${CODEMODE_CHAT_RESPONSE_SYSTEM_PROMPT}`;
 
 /**
  * Thin wrapper around `events.append` that drops a single
@@ -106,6 +111,15 @@ export const createAgentRouter = {
         },
       });
     }
+
+    await eventsClient.append({
+      path: streamPath,
+      event: {
+        type: "events.iterate.com/agent/system-prompt-updated",
+        payload: { systemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT },
+        idempotencyKey: `create-agent:${streamPath}:system-prompt`,
+      },
+    });
 
     await eventsClient.append({
       path: streamPath,

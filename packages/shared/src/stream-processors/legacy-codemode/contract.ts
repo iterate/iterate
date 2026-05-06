@@ -22,6 +22,33 @@ import { standardProcessorBehavior } from "../core/standard-processor-behavior.t
  */
 export const CODEMODE_PRIMER_IDEMPOTENCY_KEY = "iterate-agent:codemode-primer";
 
+export const CODEMODE_WEBCHAT_PROVIDER_TYPES = `declare const webchat: {
+  sendMessage(args: { message: string }): Promise<{ ok: true }>;
+};`;
+
+/**
+ * System-level instruction needed by streams that use Codemode for chat I/O.
+ *
+ * The one-time primer event below is still useful for raw streams where only
+ * the codemode processor is subscribed. It is not strong enough for the golden
+ * app path by itself, though: Codemode appends that primer from its own
+ * after-append hook, so the first Agent LLM request can legitimately be
+ * requested before the primer has round-tripped through the stream. App-created
+ * chat streams therefore put this text directly in the Agent system prompt
+ * before the first user input is appended.
+ */
+export const CODEMODE_CHAT_RESPONSE_SYSTEM_PROMPT = `Codemode is mandatory for user-visible chat responses in this stream.
+
+When you want to reply to a web chat user, respond with exactly one fenced JavaScript block using \`\`\`js and no surrounding prose. The body must be a single async arrow function. Call \`webchat.sendMessage({ message })\` from that function. Do not rely on assistant prose being shown to the user for chat replies.`;
+
+export const CODEMODE_PRIMER_TEXT = `${CODEMODE_CHAT_RESPONSE_SYSTEM_PROMPT}
+
+Built-in webchat API:
+
+\`\`\`ts
+${CODEMODE_WEBCHAT_PROVIDER_TYPES}
+\`\`\``;
+
 const initialAgentProcessorState = getInitialProcessorState(AgentProcessorContract);
 
 /**

@@ -11,7 +11,9 @@ import type { Callable } from "../../callable/types.ts";
 import { CoreProcessorRegisteredEventType } from "../core/contract.ts";
 import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
 import {
+  CODEMODE_PRIMER_TEXT,
   CODEMODE_PRIMER_IDEMPOTENCY_KEY,
+  CODEMODE_WEBCHAT_PROVIDER_TYPES,
   CodemodeProcessorContract,
   type CodemodeState,
 } from "./contract.ts";
@@ -20,20 +22,6 @@ import type { CodemodeCodeExecutor } from "./code-executor.ts";
 const ProviderTypesResponse = z.object({
   types: z.string(),
 });
-
-const WEBCHAT_PROVIDER_TYPES = `declare const webchat: {
-  sendMessage(args: { message: string }): Promise<{ ok: true }>;
-};`;
-
-const CODEMODE_PRIMER_TEXT = `Just FYI: codemode is how you use tools in this stream.
-
-When you want to run a tool, respond with exactly one fenced JavaScript block using \`\`\`js. The body should be a single async arrow function. For webchat replies, call \`webchat.sendMessage({ message })\`; do not rely on assistant prose being shown to the user.
-
-Built-in webchat API:
-
-\`\`\`ts
-${WEBCHAT_PROVIDER_TYPES}
-\`\`\``;
 
 const CODEMODE_FENCE_RE = /^```(?:js|javascript|codemode|ts|typescript)\s*\n([\s\S]*?)\n```\s*$/;
 
@@ -203,7 +191,7 @@ async function executeCodemodeBlock(args: {
     signal: args.signal,
     toolProviders,
     webchat: {
-      types: WEBCHAT_PROVIDER_TYPES,
+      types: CODEMODE_WEBCHAT_PROVIDER_TYPES,
       async callTool({ name, rawArgs }) {
         if (name !== "sendMessage") {
           throw new Error(`Unknown webchat tool: ${name}`);

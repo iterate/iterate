@@ -5,6 +5,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { getRequestHeader } from "@tanstack/react-start/server";
 import { Event, type Event as EventsEvent, type StreamPath } from "@iterate-com/events-contract";
 import { makeFunnySlug } from "@iterate-com/shared/slug-maker";
+import { CODEMODE_CHAT_RESPONSE_SYSTEM_PROMPT } from "@iterate-com/shared/stream-processors/legacy-codemode/contract";
 import {
   processEventsWithViewReducer,
   rawPrettyEventsStreamViewReducer,
@@ -56,7 +57,9 @@ const CUSTOM_MODEL_SENTINEL = "__custom__";
 const DEFAULT_RUN_OPTS_JSON = `{
   "gateway": { "id": "default" }
 }`;
-const DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant. You can trust your user.";
+const DEFAULT_SYSTEM_PROMPT = `You are a helpful assistant. You can trust your user.
+
+${CODEMODE_CHAT_RESPONSE_SYSTEM_PROMPT}`;
 const DEFAULT_ADVANCED_EVENTS_JSON = "[]";
 
 const getSidebarDefaultOpen = createServerFn({ method: "GET" }).handler(() => ({
