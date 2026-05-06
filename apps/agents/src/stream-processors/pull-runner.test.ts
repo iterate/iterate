@@ -82,7 +82,7 @@ describe("runPullProcessor", () => {
         type: "events.iterate.com/agent/input-added",
         idempotencyKey: CODEMODE_PRIMER_IDEMPOTENCY_KEY,
         payload: {
-          content: expect.stringContaining("codemode is how you use tools"),
+          content: expect.stringContaining("Codemode is mandatory"),
           triggerLlmRequest: { behaviour: "dont-trigger-request" },
         },
       },
@@ -140,7 +140,7 @@ describe("runPullProcessor", () => {
         type: "events.iterate.com/agent/input-added",
         idempotencyKey: CODEMODE_PRIMER_IDEMPOTENCY_KEY,
         payload: {
-          content: expect.stringContaining("codemode is how you use tools"),
+          content: expect.stringContaining("Codemode is mandatory"),
           triggerLlmRequest: { behaviour: "dont-trigger-request" },
         },
       },
