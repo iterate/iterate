@@ -99,6 +99,14 @@ const ErrorOccurredEventInput = GenericEventInputBase.extend({
   type: z.literal(STREAM_ERROR_OCCURRED_TYPE),
   payload: z.strictObject({
     message: z.string().trim().min(1),
+    error: z
+      .object({
+        name: z.string().trim().min(1).optional(),
+        message: z.string().trim().min(1),
+        code: z.string().trim().min(1).optional(),
+        stack: z.string().trim().min(1).optional(),
+      })
+      .optional(),
   }),
 });
 export const ErrorOccurredEvent = GenericEventBase.extend(

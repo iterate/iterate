@@ -147,7 +147,7 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     };
   }
 
-  if (event.type === "events.iterate.com/webchat/user-message-added") {
+  if (event.type === "events.iterate.com/agent-chat/user-message-added") {
     const payload = event.payload as { content?: unknown };
     const content = typeof payload.content === "string" ? payload.content : null;
     if (content == null) return null;
@@ -159,14 +159,14 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     };
   }
 
-  if (event.type === "events.iterate.com/webchat/agent-response-added") {
+  if (event.type === "events.iterate.com/agent-chat/assistant-response-added") {
     const payload = event.payload as { message?: unknown };
     const message = typeof payload.message === "string" ? payload.message : null;
     if (message == null) return null;
     return {
       kind: "message",
       role: "assistant",
-      content: [{ type: "text", text: message }],
+      content: [{ type: "markdown", text: message }],
       timestamp: getTimestamp(event.createdAt),
     };
   }

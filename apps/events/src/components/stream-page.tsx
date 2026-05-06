@@ -329,8 +329,9 @@ export function StreamPage({
 
     await submitAppendEvent({
       event: {
-        type: "events.iterate.com/webchat/user-message-added",
+        type: "events.iterate.com/agent-chat/user-message-added",
         payload: {
+          channel: "web",
           content,
         },
       },

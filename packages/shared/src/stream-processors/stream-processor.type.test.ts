@@ -258,6 +258,72 @@ describe("stream processor contract types", () => {
     >().toEqualTypeOf<{ value: number }>();
   });
 
+  it("types event examples as payload-schema inputs", () => {
+    const contract = defineProcessorContract({
+      slug: "examples",
+      version: "1.0.0",
+      description: "Validates authored examples against payload schemas.",
+      stateSchema: z.object({}).default({}),
+      events: {
+        "example-input": {
+          description: "Example input.",
+          examples: [
+            {
+              description: "Valid example",
+              payload: { content: "hello", trigger: { behaviour: "auto" } },
+            },
+          ],
+          payloadSchema: z.object({
+            content: z.string(),
+            trigger: z
+              .discriminatedUnion("behaviour", [
+                z.object({ behaviour: z.literal("auto") }),
+                z.object({
+                  behaviour: z.literal("within"),
+                  withinMs: z.number().int().nonnegative(),
+                }),
+              ])
+              .default({ behaviour: "auto" }),
+          }),
+        },
+      },
+      consumes: ["example-input"],
+      emits: ["example-input"],
+    });
+
+    type ExamplePayload = NonNullable<
+      (typeof contract.events)["example-input"]["examples"]
+    >[number]["payload"];
+    expectTypeOf<ExamplePayload>().toMatchTypeOf<{
+      content: string;
+      trigger?: { behaviour: "auto" } | { behaviour: "within"; withinMs: number } | undefined;
+    }>();
+
+    defineProcessorContract({
+      slug: "bad-examples",
+      version: "1.0.0",
+      description: "Rejects examples that do not match payload schema input.",
+      stateSchema: z.object({}).default({}),
+      events: {
+        // @ts-expect-error examples[].payload.content must be a string.
+        "bad-example-input": {
+          description: "Bad example input.",
+          examples: [
+            {
+              description: "Invalid example",
+              payload: { content: 123 },
+            },
+          ],
+          payloadSchema: z.object({
+            content: z.string(),
+          }),
+        },
+      },
+      consumes: ["bad-example-input"],
+      emits: ["bad-example-input"],
+    });
+  });
+
   it("fails closed for widened event catalogs and widened event arrays", () => {
     const widenedEvents: EventCatalog = {
       "widened-event": {

@@ -8,6 +8,7 @@ export const AppConfig = BaseAppConfig.extend({
   apiBaseUrl: publicValue(z.string().trim().default("")),
   eventsBaseUrl: z.string().trim().url().default("https://events.iterate.com"),
   eventsProjectSlug: z.string().trim().min(1).default("public"),
+  openAiApiKey: redacted(z.string().trim().min(1)).optional(),
   slackBotToken: redacted(z.string().trim().min(1)).optional(),
   /**
    * Parent stream path to attach the `child-stream-auto-subscriber` processor

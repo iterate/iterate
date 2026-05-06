@@ -35,12 +35,12 @@ Layer 2+: async disposable factories (composed in test body via `await using`)
   createLocalDevServer({ egressProxy?, eventsBaseUrl, ... })
     - Spins up alchemy.run.ts locally (ALCHEMY_LOCAL=true)
     - Acquires Semaphore tunnel + cloudflared so remote events can reach it
-    - Returns: { publicUrl, callbackUrl, ... } & AsyncDisposable
+    - Returns: { publicUrl, ... } & AsyncDisposable
 
   createEphemeralWorker({ egressProxy?, eventsBaseUrl, stage, ... })
     - Deploys a temporary CF worker via alchemy.run.ts (ALCHEMY_LOCAL=false)
     - Acquires Semaphore tunnel so deployed worker can reach local mock proxy
-    - Returns: { publicUrl, callbackUrl, ... } & AsyncDisposable
+    - Returns: { publicUrl, ... } & AsyncDisposable
 
   (deployed-live-worker tests use no server fixture — just e2e.events against AGENTS_BASE_URL)
 ```
@@ -193,11 +193,13 @@ test(
       payload: {
         slug: `sub-${e2e.executionSuffix}`,
         type: "websocket",
-        callbackUrl: buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
-          publicOrigin: server.publicUrl,
-          runnerInstance: streamPathToAgentInstance(streamPath),
-          streamPath,
-        }),
+        callable: {
+          type: "fetch",
+          via: {
+            type: "url",
+            url: "https://example.com/processor",
+          },
+        },
       },
     });
 

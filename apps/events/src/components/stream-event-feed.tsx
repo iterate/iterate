@@ -39,6 +39,7 @@ import {
   CollapsibleTrigger,
 } from "@iterate-com/ui/components/collapsible";
 import { EventsStreamEventInspectorSheet } from "@iterate-com/ui/components/events/event-inspector-sheet";
+import { ExpandableFeedText } from "@iterate-com/ui/components/events/feed-element-renderers/expandable-feed-text";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
@@ -575,10 +576,22 @@ function StreamErrorOccurredCard({ item }: { item: StreamErrorOccurredFeedItem }
     <AssistantArtifact
       eyebrow={<AlertTriangleIcon className="size-3.5" />}
       eyebrowLabel="Error occurred"
-      title={item.message}
+      title="Processor error"
       meta={[formatTime(item.timestamp)]}
       tone="danger"
-    />
+    >
+      <ArtifactSection>
+        <ExpandableFeedText
+          text={item.message}
+          collapsedLabel="Show full error"
+          className="border-destructive/20"
+        >
+          <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-5 text-destructive">
+            {item.message}
+          </pre>
+        </ExpandableFeedText>
+      </ArtifactSection>
+    </AssistantArtifact>
   );
 }
 

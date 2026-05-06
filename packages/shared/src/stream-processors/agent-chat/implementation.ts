@@ -6,22 +6,25 @@ import {
 } from "../stream-processor.ts";
 import { CoreProcessorRegisteredEventType } from "../core/contract.ts";
 import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
-import { WebchatProcessorContract } from "./contract.ts";
+import { AgentChatProcessorContract, type AgentChatChannel } from "./contract.ts";
 
-type WebchatStreamApi = ProcessorStreamApi<typeof WebchatProcessorContract>;
+type AgentChatStreamApi = ProcessorStreamApi<typeof AgentChatProcessorContract>;
 
 /**
- * Backend implementation for the webchat processor.
+ * Backend implementation for the agent-chat processor.
  *
- * This processor has no runtime dependencies today. It owns webchat-specific
- * raw events and renders them into ordinary Agent input rows. That keeps the
- * Agent processor focused on LLM scheduling over curated model context.
+ * The chat surfaces append raw chat-domain events; this processor transcribes
+ * them into Agent input rows. A future terminal app could itself run as a
+ * processor that watches stream state and appends `agent-chat` events, but the
+ * current TUI stays a direct event producer.
  */
-export function createWebchatProcessor() {
-  return implementProcessor(WebchatProcessorContract, {
+export function createAgentChatProcessor() {
+  return implementProcessor(AgentChatProcessorContract, {
+    firstAttachAfterAppend: { mode: "lookback", milliseconds: 60_000 },
+
     async afterAppend({ event, state, streamApi }) {
       await standardProcessorBehavior.afterAppend({
-        contract: WebchatProcessorContract,
+        contract: AgentChatProcessorContract,
         state,
         streamApi,
       });
@@ -29,13 +32,13 @@ export function createWebchatProcessor() {
       switch (event.type) {
         case CoreProcessorRegisteredEventType:
           return;
-        case "events.iterate.com/webchat/user-message-added":
+        case "events.iterate.com/agent-chat/user-message-added":
           await appendEventTypeExplanation({ eventType: event.type, streamApi });
           await streamApi.append({
             event: {
               type: "events.iterate.com/agent/input-added",
               idempotencyKey: buildDerivedIdempotencyKey({
-                slug: WebchatProcessorContract.slug,
+                slug: AgentChatProcessorContract.slug,
                 purpose: "render-message",
                 event,
               }),
@@ -43,6 +46,7 @@ export function createWebchatProcessor() {
                 content: eventBlock({
                   offset: event.offset,
                   type: event.type,
+                  channel: event.payload.channel,
                   bodyTag: "content",
                   body: event.payload.content,
                 }),
@@ -50,13 +54,13 @@ export function createWebchatProcessor() {
             },
           });
           return;
-        case "events.iterate.com/webchat/agent-response-added":
+        case "events.iterate.com/agent-chat/assistant-response-added":
           await appendEventTypeExplanation({ eventType: event.type, streamApi });
           await streamApi.append({
             event: {
               type: "events.iterate.com/agent/input-added",
               idempotencyKey: buildDerivedIdempotencyKey({
-                slug: WebchatProcessorContract.slug,
+                slug: AgentChatProcessorContract.slug,
                 purpose: "render-response",
                 event,
               }),
@@ -64,6 +68,7 @@ export function createWebchatProcessor() {
                 content: eventBlock({
                   offset: event.offset,
                   type: event.type,
+                  channel: event.payload.channel,
                   bodyTag: "message",
                   body: event.payload.message,
                 }),
@@ -80,13 +85,13 @@ export function createWebchatProcessor() {
 }
 
 async function appendEventTypeExplanation(args: {
-  streamApi: WebchatStreamApi;
+  streamApi: AgentChatStreamApi;
   eventType: string;
 }) {
   await args.streamApi.append({
     event: {
       type: "events.iterate.com/agent/input-added",
-      idempotencyKey: `stream-processor:${WebchatProcessorContract.slug}:event-type-explainer:${args.eventType}`,
+      idempotencyKey: `stream-processor:${AgentChatProcessorContract.slug}:event-type-explainer:${args.eventType}`,
       payload: {
         content: eventTypeExplanation(args.eventType),
         triggerLlmRequest: { behaviour: "dont-trigger-request" },
@@ -96,29 +101,25 @@ async function appendEventTypeExplanation(args: {
 }
 
 function eventTypeExplanation(eventType: string): string {
-  if (eventType === "events.iterate.com/webchat/user-message-added") {
-    return eventTypeExplanationBlock({
-      type: eventType,
-      meaning: "This represents a message received from the webchat user.",
-    });
+  if (eventType === "events.iterate.com/agent-chat/user-message-added") {
+    return "First `events.iterate.com/agent-chat/user-message-added` event. This represents a message received from a chat user.";
   }
 
-  return eventTypeExplanationBlock({
-    type: eventType,
-    meaning:
-      "This represents a message sent by codemode through `webchat.sendMessage({ message })`.",
-  });
+  return "First `events.iterate.com/agent-chat/assistant-response-added` event. This represents a message sent by codemode through a chat response tool.";
 }
 
-function eventTypeExplanationBlock(args: { type: string; meaning: string }): string {
-  return `First \`${args.type}\` event. ${args.meaning}`;
-}
-
-function eventBlock(args: { offset: number; type: string; bodyTag: string; body: string }): string {
+function eventBlock(args: {
+  offset: number;
+  type: string;
+  channel: AgentChatChannel;
+  bodyTag: string;
+  body: string;
+}): string {
   const yamlLines = [
     "event:",
     `  offset: ${args.offset}`,
     `  type: ${yamlScalar(args.type)}`,
+    `  channel: ${yamlScalar(args.channel)}`,
     ...yamlBlockScalar(args.bodyTag, args.body),
   ];
   return ["```yaml", ...yamlLines, "```"].join("\n");

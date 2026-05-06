@@ -32,10 +32,24 @@ export function ProcessorOverviewPage({ processor }: { processor: ProcessorDoc }
 
 export function ProcessorEventPage({ event }: { event: ProcessorEventDoc }) {
   const processor = getProcessorDocBySlug(event.processor.slug);
-  const defaultEventExample = {
-    type: event.type,
-    payload: {},
-  };
+  const eventExamples =
+    event.examples.length > 0
+      ? event.examples.map((example) => ({
+          description: example.description,
+          event: {
+            type: event.type,
+            payload: example.payload,
+          },
+        }))
+      : [
+          {
+            description: "Minimal event input",
+            event: {
+              type: event.type,
+              payload: {},
+            },
+          },
+        ];
 
   return (
     <DocsChrome event={event} processor={processor}>
@@ -50,20 +64,27 @@ export function ProcessorEventPage({ event }: { event: ProcessorEventDoc }) {
           ) : null}
         </div>
 
-        <div className="space-y-2 rounded-lg border bg-card p-4">
+        <div className="space-y-2">
           <p className="text-xs uppercase tracking-wide text-muted-foreground">
             Payload JSON schema
           </p>
           <JsonSchemaDocViewer schema={event.payloadJsonSchema} />
         </div>
 
-        <div className="space-y-2 rounded-lg border bg-card p-4">
+        <div className="space-y-2">
           <p className="text-xs uppercase tracking-wide text-muted-foreground">
-            Example event input
+            {eventExamples.length === 1 ? "Example event input" : "Example event inputs"}
           </p>
-          <pre className="overflow-x-auto whitespace-pre-wrap wrap-break-word rounded-md bg-muted p-3 font-mono text-xs">
-            {JSON.stringify(defaultEventExample, null, 2)}
-          </pre>
+          <div className="space-y-3">
+            {eventExamples.map((example) => (
+              <div key={example.description} className="space-y-2">
+                <p className="text-sm text-muted-foreground">{example.description}</p>
+                <pre className="overflow-x-auto whitespace-pre-wrap wrap-break-word rounded-md bg-muted p-3 font-mono text-xs">
+                  {JSON.stringify(example.event, null, 2)}
+                </pre>
+              </div>
+            ))}
+          </div>
         </div>
       </section>
     </DocsChrome>

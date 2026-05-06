@@ -19,6 +19,7 @@ export async function createLocalDevServer(opts: {
   egressProxy?: string;
   eventsBaseUrl: string;
   eventsProjectSlug: string;
+  openAiApiKey?: string;
   streamPath: StreamPath;
 }): Promise<LocalDevServerHandle & AsyncDisposable> {
   const disposables: AsyncDisposable[] = [];
@@ -51,6 +52,9 @@ export async function createLocalDevServer(opts: {
     };
     if (opts.egressProxy) {
       env.APP_CONFIG_EXTERNAL_EGRESS_PROXY = opts.egressProxy;
+    }
+    if (opts.openAiApiKey) {
+      env.APP_CONFIG_OPEN_AI_API_KEY = opts.openAiApiKey;
     }
 
     const devServer = await useDevServer({

@@ -6,19 +6,19 @@ import {
   type StreamEvent,
   type StreamEventInput,
 } from "../stream-processor.ts";
-import { WebchatProcessorContract, type WebchatState } from "./contract.ts";
-import { createWebchatProcessor } from "./implementation.ts";
+import { AgentChatProcessorContract, type AgentChatState } from "./contract.ts";
+import { createAgentChatProcessor } from "./implementation.ts";
 
-describe("createWebchatProcessor", () => {
-  it("renders webchat messages into derived agent input rows", async () => {
+describe("createAgentChatProcessor", () => {
+  it("renders chat messages into derived agent input rows", async () => {
     const appended: StreamEventInput[] = [];
-    const processor = createWebchatProcessor();
+    const processor = createAgentChatProcessor();
 
     await processor.implementation.afterAppend?.({
-      event: consumedWebchatEvent({
-        type: "events.iterate.com/webchat/user-message-added",
-        payload: { content: "hello" },
-        offset: 42,
+      event: consumedAgentChatEvent({
+        type: "events.iterate.com/agent-chat/user-message-added",
+        payload: { channel: "tui", content: "woah" },
+        offset: 74,
       }),
       previousState: registeredState(),
       state: registeredState(),
@@ -30,32 +30,32 @@ describe("createWebchatProcessor", () => {
       {
         type: "events.iterate.com/agent/input-added",
         idempotencyKey:
-          "stream-processor:webchat:event-type-explainer:events.iterate.com/webchat/user-message-added",
+          "stream-processor:agent-chat:event-type-explainer:events.iterate.com/agent-chat/user-message-added",
         payload: {
           content:
-            "First `events.iterate.com/webchat/user-message-added` event. This represents a message received from the webchat user.",
+            "First `events.iterate.com/agent-chat/user-message-added` event. This represents a message received from a chat user.",
           triggerLlmRequest: { behaviour: "dont-trigger-request" },
         },
       },
       {
         type: "events.iterate.com/agent/input-added",
-        idempotencyKey: "stream-processor:webchat:derived:render-message:/agents/test:42",
+        idempotencyKey: "stream-processor:agent-chat:derived:render-message:/agents/test:74",
         payload: {
           content:
-            "```yaml\nevent:\n  offset: 42\n  type: events.iterate.com/webchat/user-message-added\n  content: |-\n    hello\n```",
+            "```yaml\nevent:\n  offset: 74\n  type: events.iterate.com/agent-chat/user-message-added\n  channel: tui\n  content: |-\n    woah\n```",
         },
       },
     ]);
   });
 
-  it("renders webchat responses without triggering another LLM request", async () => {
+  it("renders chat responses without triggering another LLM request", async () => {
     const appended: StreamEventInput[] = [];
-    const processor = createWebchatProcessor();
+    const processor = createAgentChatProcessor();
 
     await processor.implementation.afterAppend?.({
-      event: consumedWebchatEvent({
-        type: "events.iterate.com/webchat/agent-response-added",
-        payload: { message: "hello back" },
+      event: consumedAgentChatEvent({
+        type: "events.iterate.com/agent-chat/assistant-response-added",
+        payload: { channel: "web", message: "hello back" },
         offset: 43,
       }),
       previousState: registeredState(),
@@ -66,26 +66,26 @@ describe("createWebchatProcessor", () => {
 
     expect(appended.at(-1)).toEqual({
       type: "events.iterate.com/agent/input-added",
-      idempotencyKey: "stream-processor:webchat:derived:render-response:/agents/test:43",
+      idempotencyKey: "stream-processor:agent-chat:derived:render-response:/agents/test:43",
       payload: {
         content:
-          "```yaml\nevent:\n  offset: 43\n  type: events.iterate.com/webchat/agent-response-added\n  message: |-\n    hello back\n```",
+          "```yaml\nevent:\n  offset: 43\n  type: events.iterate.com/agent-chat/assistant-response-added\n  channel: web\n  message: |-\n    hello back\n```",
         triggerLlmRequest: { behaviour: "dont-trigger-request" },
       },
     });
   });
 });
 
-function registeredState(): WebchatState {
+function registeredState(): AgentChatState {
   return {
-    ...getInitialProcessorState(WebchatProcessorContract),
+    ...getInitialProcessorState(AgentChatProcessorContract),
     hasRegisteredCurrentVersion: true,
   };
 }
 
 function testStreamApi(args: {
   appended: StreamEventInput[];
-}): ProcessorStreamApi<typeof WebchatProcessorContract> {
+}): ProcessorStreamApi<typeof AgentChatProcessorContract> {
   return {
     append: async ({ event }) => {
       args.appended.push(event);
@@ -96,7 +96,7 @@ function testStreamApi(args: {
   };
 }
 
-function consumedWebchatEvent<T extends ConsumedEvent<typeof WebchatProcessorContract>>(args: {
+function consumedAgentChatEvent<T extends ConsumedEvent<typeof AgentChatProcessorContract>>(args: {
   type: T["type"];
   payload: T["payload"];
   metadata?: Record<string, unknown>;

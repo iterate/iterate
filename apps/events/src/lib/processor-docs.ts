@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AgentChatProcessorContract } from "@iterate-com/shared/stream-processors/agent-chat/contract";
 import { AgentProcessorContract } from "@iterate-com/shared/stream-processors/agent/contract";
 import { CodemodeProcessorContract } from "@iterate-com/shared/stream-processors/codemode/contract";
 import { DynamicWorkerProcessorContract } from "@iterate-com/shared/stream-processors/dynamic-worker/contract";
@@ -6,13 +7,13 @@ import { JsonataTransformerProcessorContract } from "@iterate-com/shared/stream-
 import { SchedulingProcessorContract } from "@iterate-com/shared/stream-processors/scheduling/contract";
 import { SlackThreadProcessorContract } from "@iterate-com/shared/stream-processors/slack-thread/contract";
 import { SlackProcessorContract } from "@iterate-com/shared/stream-processors/slack/contract";
-import { WebchatProcessorContract } from "@iterate-com/shared/stream-processors/webchat/contract";
+import { addDiscriminatorTitlesToJsonSchema } from "~/lib/json-schema-docs.ts";
 import { CoreStreamProcessorContract } from "~/stream-processors/core/contract.ts";
 
 const processorContracts = [
   CoreStreamProcessorContract,
+  AgentChatProcessorContract,
   AgentProcessorContract,
-  WebchatProcessorContract,
   SlackProcessorContract,
   SlackThreadProcessorContract,
   CodemodeProcessorContract,
@@ -28,8 +29,14 @@ export type ProcessorEventDoc = {
   type: string;
   eventSlug: string;
   description?: string;
+  examples: ProcessorEventExampleDoc[];
   payloadJsonSchema: unknown;
   href: string;
+};
+
+export type ProcessorEventExampleDoc = {
+  description: string;
+  payload: unknown;
 };
 
 export type ProcessorDoc = {
@@ -101,14 +108,22 @@ function buildProcessorDocs(): ProcessorDoc[] {
 
 function buildBaseProcessorDoc(contract: ProcessorContractForDocs): ProcessorDoc {
   const href = `/${contract.slug}/`;
-  const events = Object.entries(contract.events).map(([type, event]) => ({
-    processor: contract,
-    type,
-    eventSlug: eventSlugFromType({ processorSlug: contract.slug, type }),
-    ...(event.description == null ? {} : { description: event.description }),
-    payloadJsonSchema: eventPayloadJsonSchema(event.payloadSchema as z.ZodType),
-    href: `${href}${eventSlugFromType({ processorSlug: contract.slug, type })}/`,
-  }));
+  const events = Object.entries(contract.events).map(([type, event]) => {
+    const examples = eventExamples(event.examples);
+
+    return {
+      processor: contract,
+      type,
+      eventSlug: eventSlugFromType({ processorSlug: contract.slug, type }),
+      ...(event.description == null ? {} : { description: event.description }),
+      examples,
+      payloadJsonSchema: eventPayloadJsonSchema({
+        examples,
+        payloadSchema: event.payloadSchema as z.ZodType,
+      }),
+      href: `${href}${eventSlugFromType({ processorSlug: contract.slug, type })}/`,
+    };
+  });
 
   return {
     contract,
@@ -153,11 +168,49 @@ function hasProcessorSlug(value: unknown): value is { slug: string } {
   );
 }
 
-function eventPayloadJsonSchema(payloadSchema: z.ZodType) {
-  return z.toJSONSchema(payloadSchema, {
-    io: "input",
-    unrepresentable: "any",
-  });
+function eventExamples(examples: unknown): ProcessorEventExampleDoc[] {
+  if (!Array.isArray(examples)) return [];
+
+  return examples
+    .map((example) => {
+      if (
+        typeof example === "object" &&
+        example !== null &&
+        "description" in example &&
+        "payload" in example &&
+        typeof example.description === "string"
+      ) {
+        return {
+          description: example.description,
+          payload: example.payload,
+        };
+      }
+
+      return null;
+    })
+    .filter((example): example is ProcessorEventExampleDoc => example != null);
+}
+
+function eventPayloadJsonSchema(args: {
+  examples: readonly { payload: unknown }[];
+  payloadSchema: z.ZodType;
+}) {
+  const jsonSchema = addDiscriminatorTitlesToJsonSchema(
+    z.toJSONSchema(args.payloadSchema, {
+      io: "input",
+      unrepresentable: "any",
+    }),
+  );
+
+  if (args.examples.length === 0) return jsonSchema;
+  if (typeof jsonSchema !== "object" || jsonSchema === null || Array.isArray(jsonSchema)) {
+    return jsonSchema;
+  }
+
+  return {
+    ...jsonSchema,
+    examples: args.examples.map((example) => example.payload),
+  };
 }
 
 function eventSlugFromType(args: { processorSlug: string; type: string }) {

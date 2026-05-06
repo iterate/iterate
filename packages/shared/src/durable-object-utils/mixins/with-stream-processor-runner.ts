@@ -13,6 +13,10 @@ import {
   type StoredProcessorState,
   type StreamEvent,
 } from "../../stream-processors/stream-processor.ts";
+import {
+  CoreProcessorContract,
+  CoreProcessorErrorOccurredEventType,
+} from "../../stream-processors/core/contract.ts";
 import type {
   Constructor,
   DurableObjectClass,
@@ -30,6 +34,7 @@ import type { DurableObjectCoreProtected } from "./with-durable-object-core.ts";
 
 type RunnerContract<Contract> = {
   slug: string;
+  version: string;
   stateSchema: z.ZodType;
   events: EventCatalog;
   processorDeps?: readonly unknown[];
@@ -42,6 +47,59 @@ type RunnerContract<Contract> = {
 };
 
 export type StreamProcessorRunnerState<Contract> = StoredProcessorState<Contract>;
+
+export function wrapProcessorStreamApiWithProvenance<
+  Contract extends {
+    slug: string;
+    version: string;
+  },
+>(args: {
+  processor: { contract: Contract };
+  processingEvent?: StreamEvent;
+  streamApi: ProcessorStreamApi<Contract>;
+}): ProcessorStreamApi<Contract> {
+  const { processingEvent, processor, streamApi } = args;
+
+  return {
+    append: async (appendArgs) => {
+      const existingMetadata = appendArgs.event.metadata ?? {};
+      const existingProvenance =
+        typeof existingMetadata.provenance === "object" &&
+        existingMetadata.provenance !== null &&
+        !Array.isArray(existingMetadata.provenance)
+          ? existingMetadata.provenance
+          : {};
+
+      return await streamApi.append({
+        ...appendArgs,
+        event: {
+          ...appendArgs.event,
+          metadata: {
+            ...existingMetadata,
+            provenance: {
+              ...existingProvenance,
+              processor: {
+                slug: processor.contract.slug,
+                version: processor.contract.version,
+              },
+              ...(processingEvent == null
+                ? {}
+                : {
+                    whileProcessingEvent: {
+                      streamPath: processingEvent.streamPath,
+                      offset: processingEvent.offset,
+                      type: processingEvent.type,
+                    },
+                  }),
+            },
+          },
+        },
+      });
+    },
+    read: async (readArgs) => await streamApi.read(readArgs),
+    subscribe: (subscribeArgs) => streamApi.subscribe(subscribeArgs),
+  };
+}
 
 export abstract class StreamProcessorRunnerProtected<
   Contract extends RunnerContract<Contract> = RunnerContract<unknown>,
@@ -169,6 +227,15 @@ export function withStreamProcessorRunner<
             });
           },
           streamApi: this.streamProcessorRunnerStreamApi(),
+          streamApiForEvent: (event) =>
+            this.streamProcessorRunnerStreamApi({ processingEvent: event }),
+          afterAppendError: async ({ error, reduction }) => {
+            await this.appendStreamProcessorAfterAppendError({
+              error,
+              event: reduction.event,
+              processor,
+            });
+          },
           signal: args?.signal ?? new AbortController().signal,
         });
       }
@@ -192,6 +259,15 @@ export function withStreamProcessorRunner<
             });
           },
           streamApi: this.streamProcessorRunnerStreamApi(),
+          streamApiForEvent: (event) =>
+            this.streamProcessorRunnerStreamApi({ processingEvent: event }),
+          afterAppendError: async ({ error, reduction }) => {
+            await this.appendStreamProcessorAfterAppendError({
+              error,
+              event: reduction.event,
+              processor,
+            });
+          },
           signal: args.signal ?? new AbortController().signal,
         });
       }
@@ -254,12 +330,61 @@ export function withStreamProcessorRunner<
         return this.#streamProcessorRunnerProcessor;
       }
 
-      private streamProcessorRunnerStreamApi(): ProcessorStreamApi<Contract> {
-        return options.streamApi({
+      private streamProcessorRunnerStreamApi(args?: {
+        processingEvent?: StreamEvent;
+      }): ProcessorStreamApi<Contract> {
+        const processor = this.streamProcessorRunnerProcessor();
+        const streamApi = options.streamApi({
           ctx: this.ctx,
           env: this.env as Env,
           initParams: this.initParams,
-          processor: this.streamProcessorRunnerProcessor(),
+          processor,
+        });
+        return wrapProcessorStreamApiWithProvenance({
+          processingEvent: args?.processingEvent,
+          processor,
+          streamApi,
+        });
+      }
+
+      private async appendStreamProcessorAfterAppendError(args: {
+        error: unknown;
+        event: StreamEvent;
+        processor: Processor<Contract>;
+      }): Promise<void> {
+        const serializedError = serializeError(args.error);
+        const streamApi = this.streamProcessorRunnerStreamApi({
+          processingEvent: args.event,
+        }) as unknown as ProcessorStreamApi<typeof CoreProcessorContract>;
+
+        await streamApi.append({
+          event: {
+            type: CoreProcessorErrorOccurredEventType,
+            idempotencyKey: [
+              "stream-processor-runner",
+              args.processor.contract.slug,
+              "after-append-error",
+              args.event.streamPath,
+              String(args.event.offset),
+            ].join(":"),
+            metadata: {
+              provenance: {
+                processor: {
+                  slug: args.processor.contract.slug,
+                  version: args.processor.contract.version,
+                },
+                whileProcessingEvent: {
+                  streamPath: args.event.streamPath,
+                  offset: args.event.offset,
+                  type: args.event.type,
+                },
+              },
+            },
+            payload: {
+              message: `Processor ${args.processor.contract.slug}@${args.processor.contract.version} afterAppend failed: ${serializedError.message}`,
+              error: serializedError,
+            },
+          },
         });
       }
     }
@@ -292,4 +417,23 @@ function getStoredProcessorStateSchema<Contract extends RunnerContract<Contract>
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
+}
+
+function serializeError(error: unknown): { name?: string; message: string; stack?: string } {
+  if (error instanceof Error) {
+    return {
+      ...(error.name.trim() === "" ? {} : { name: error.name }),
+      message: error.message || String(error),
+      ...(typeof error.stack === "string" && error.stack.trim() !== ""
+        ? { stack: error.stack }
+        : {}),
+    };
+  }
+
+  try {
+    const message = JSON.stringify(error);
+    return { message: message == null ? String(error) : message };
+  } catch {
+    return { message: String(error) };
+  }
 }

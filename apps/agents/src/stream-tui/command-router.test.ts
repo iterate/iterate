@@ -11,6 +11,7 @@ import type { StreamTuiView } from "./navigation-state.ts";
 
 function createTestAppContext() {
   let activeView: StreamTuiView = "feed";
+  let feedMode: "raw" | "mixed" | "pretty" = "mixed";
   let inputValue = "";
   let streams: StreamSummary[] = [];
   let toastMessage = "";
@@ -38,6 +39,9 @@ function createTestAppContext() {
     setActiveView(view) {
       activeView = view;
     },
+    switchFeedMode(mode) {
+      feedMode = mode;
+    },
     setStreamSummaries(nextStreams) {
       streams = nextStreams;
     },
@@ -56,6 +60,12 @@ function createTestAppContext() {
     expandVisibleFeedItems() {
       toastMessage = "expanded";
     },
+    openEventDetail() {
+      throw new Error("openEventDetail was not expected");
+    },
+    exit() {
+      throw new Error("exit was not expected");
+    },
     toast: {
       info(message) {
         toastMessage = message;
@@ -73,6 +83,9 @@ function createTestAppContext() {
     context,
     get activeView() {
       return activeView;
+    },
+    get feedMode() {
+      return feedMode;
     },
     get inputValue() {
       return inputValue;
@@ -93,6 +106,9 @@ describe("commandEntries", () => {
     expect(commandEntries.find((command) => command.path === "stream.reset")).toMatchObject({
       slash: { name: "stream.reset", aliases: ["reset"] },
       input: { flags: [{ name: "destroyChildren", flag: "--no-children", value: false }] },
+    });
+    expect(commandEntries.find((command) => command.path === "view.pretty")).toMatchObject({
+      slash: { name: "view.pretty", aliases: ["pretty"] },
     });
   });
 });
@@ -116,5 +132,25 @@ describe("runCommand", () => {
     await runCommand({ appContext: app.context, command: command!, inputValue: undefined });
 
     expect(app.inputValue).toBe("/");
+  });
+
+  test("switches to pretty-only feed mode", async () => {
+    const app = createTestAppContext();
+    const command = commandEntries.find((entry) => entry.path === "view.pretty");
+
+    expect(command).toBeDefined();
+    await runCommand({ appContext: app.context, command: command!, inputValue: undefined });
+
+    expect(app.feedMode).toBe("pretty");
+  });
+
+  test("keeps chat as an alias for pretty-only feed mode", async () => {
+    const app = createTestAppContext();
+    const command = commandEntries.find((entry) => entry.path === "view.chat");
+
+    expect(command).toBeDefined();
+    await runCommand({ appContext: app.context, command: command!, inputValue: undefined });
+
+    expect(app.feedMode).toBe("pretty");
   });
 });

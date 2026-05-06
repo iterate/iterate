@@ -186,14 +186,25 @@ export function buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl(args: {
   });
 }
 
-export function buildWebchatStreamProcessorRunnerWebSocketCallbackUrl(args: {
+export function buildOpenAiWsStreamProcessorRunnerWebSocketCallbackUrl(args: {
   publicOrigin: string;
   runnerInstance: string;
   streamPath: StreamPath;
 }): string {
   return buildStreamProcessorRunnerWebSocketCallbackUrl({
     ...args,
-    runnerSlug: "webchat-stream-processor-runner",
+    runnerSlug: "openai-ws-stream-processor-runner",
+  });
+}
+
+export function buildAgentChatStreamProcessorRunnerWebSocketCallbackUrl(args: {
+  publicOrigin: string;
+  runnerInstance: string;
+  streamPath: StreamPath;
+}): string {
+  return buildStreamProcessorRunnerWebSocketCallbackUrl({
+    ...args,
+    runnerSlug: "agent-chat-stream-processor-runner",
   });
 }
 

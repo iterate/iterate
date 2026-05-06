@@ -11,8 +11,12 @@ import type { Callable } from "../../callable/types.ts";
 import { CoreProcessorRegisteredEventType } from "../core/contract.ts";
 import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
 import {
+  CODEMODE_AUTOMATIC_CONTINUATION_LIMIT,
+  CODEMODE_PRIMER_TEXT,
   CODEMODE_PRIMER_IDEMPOTENCY_KEY,
+  CODEMODE_WEBCHAT_PROVIDER_TYPES,
   CodemodeProcessorContract,
+  codemodeResultNeedsAgentTurn,
   type CodemodeState,
 } from "./contract.ts";
 import type { CodemodeCodeExecutor } from "./code-executor.ts";
@@ -20,20 +24,6 @@ import type { CodemodeCodeExecutor } from "./code-executor.ts";
 const ProviderTypesResponse = z.object({
   types: z.string(),
 });
-
-const WEBCHAT_PROVIDER_TYPES = `declare const webchat: {
-  sendMessage(args: { message: string }): Promise<{ ok: true }>;
-};`;
-
-const CODEMODE_PRIMER_TEXT = `Just FYI: codemode is how you use tools in this stream.
-
-When you want to run a tool, respond with exactly one fenced JavaScript block using \`\`\`js. The body should be a single async arrow function. For webchat replies, call \`webchat.sendMessage({ message })\`; do not rely on assistant prose being shown to the user.
-
-Built-in webchat API:
-
-\`\`\`ts
-${WEBCHAT_PROVIDER_TYPES}
-\`\`\``;
 
 const CODEMODE_FENCE_RE = /^```(?:js|javascript|codemode|ts|typescript)\s*\n([\s\S]*?)\n```\s*$/;
 
@@ -54,7 +44,7 @@ export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
   return implementProcessor(CodemodeProcessorContract, {
     firstAttachAfterAppend: { mode: "lookback", milliseconds: 250 },
 
-    async afterAppend({ event, state, streamApi, signal }) {
+    async afterAppend({ event, previousState, state, streamApi, signal }) {
       // Standard processor behavior is just another side effect Codemode wants
       // to run before its event-specific side effects.
       await standardProcessorBehavior.afterAppend({
@@ -72,9 +62,8 @@ export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
         case "events.iterate.com/agent/system-prompt-updated":
         case "events.iterate.com/agent/llm-config-updated":
         case "events.iterate.com/agent/llm-request-scheduled":
-        case "events.iterate.com/agent/llm-request-started":
+        case "events.iterate.com/agent/llm-request-requested":
         case "events.iterate.com/agent/llm-request-completed":
-        case "events.iterate.com/agent/llm-request-failed":
         case "events.iterate.com/agent/llm-request-cancelled":
         case "events.iterate.com/agent/llm-request-queued":
         case "events.iterate.com/agent/status-updated":
@@ -107,8 +96,8 @@ export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
           });
           return;
         case "events.iterate.com/codemode/result-added":
-          await appendCodemodeResultAsAgentInput({ event, streamApi });
-          await appendIdleStatusIfAgentHasNoQueuedTriggers({ event, state, streamApi });
+          await appendCodemodeResultFollowUp({ event, previousState, streamApi });
+          await appendIdleStatusIfAgentIsQuiescent({ event, state, streamApi });
           return;
         case "events.iterate.com/codemode/tool-provider-config-updated": {
           const { executeCallable, getTypesCallable, slug } = event.payload;
@@ -204,7 +193,7 @@ async function executeCodemodeBlock(args: {
     signal: args.signal,
     toolProviders,
     webchat: {
-      types: WEBCHAT_PROVIDER_TYPES,
+      types: CODEMODE_WEBCHAT_PROVIDER_TYPES,
       async callTool({ name, rawArgs }) {
         if (name !== "sendMessage") {
           throw new Error(`Unknown webchat tool: ${name}`);
@@ -213,16 +202,16 @@ async function executeCodemodeBlock(args: {
         const { message } = parseWebchatSendMessageArgs(rawArgs);
         await args.streamApi.append({
           event: {
-            type: "events.iterate.com/webchat/agent-response-added",
+            type: "events.iterate.com/agent-chat/assistant-response-added",
             idempotencyKey: buildDerivedIdempotencyKey({
               slug: CodemodeProcessorContract.slug,
               purpose: `webchat-send-message:${webchatMessageSeq}`,
               event: args.event,
             }),
-            payload: { message },
+            payload: { channel: "web", message },
           },
         });
-        return { ok: true };
+        return undefined;
       },
     },
   });
@@ -248,34 +237,68 @@ async function executeCodemodeBlock(args: {
 async function appendCodemodeResultAsAgentInput(args: {
   event: Extract<CodemodeConsumedEvent, { type: "events.iterate.com/codemode/result-added" }>;
   streamApi: CodemodeStreamApi;
+  purpose: string;
+  intro?: string;
 }) {
   await args.streamApi.append({
     event: {
       type: "events.iterate.com/agent/input-added",
       idempotencyKey: buildDerivedIdempotencyKey({
         slug: CodemodeProcessorContract.slug,
-        purpose: "result-to-agent-input",
+        purpose: args.purpose,
         event: args.event,
       }),
       payload: {
-        content: eventBlock({
-          offset: args.event.offset,
-          type: args.event.type,
-          fields: {
-            success: args.event.payload.error == null,
-            durationMs: args.event.payload.durationMs,
-          },
-          valueFields: {
-            result: args.event.payload.result,
-            ...(args.event.payload.error == null ? {} : { error: args.event.payload.error }),
-            ...(args.event.payload.logs == null || args.event.payload.logs.length === 0
-              ? {}
-              : { logs: args.event.payload.logs }),
-          },
-        }),
-        triggerLlmRequest: { behaviour: "dont-trigger-request" },
+        content: [
+          args.intro,
+          eventBlock({
+            offset: args.event.offset,
+            type: args.event.type,
+            fields: {
+              success: args.event.payload.error == null,
+              durationMs: args.event.payload.durationMs,
+            },
+            valueFields: {
+              ...(args.event.payload.result === undefined
+                ? {}
+                : { result: args.event.payload.result }),
+              ...(args.event.payload.error == null ? {} : { error: args.event.payload.error }),
+              ...(args.event.payload.logs == null || args.event.payload.logs.length === 0
+                ? {}
+                : { logs: args.event.payload.logs }),
+            },
+          }),
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
+        triggerLlmRequest: { behaviour: "after-current-request" },
       },
     },
+  });
+}
+
+async function appendCodemodeResultFollowUp(args: {
+  event: Extract<CodemodeConsumedEvent, { type: "events.iterate.com/codemode/result-added" }>;
+  previousState: CodemodeState;
+  streamApi: CodemodeStreamApi;
+}) {
+  if (!codemodeResultNeedsAgentTurn(args.event.payload)) return;
+  // The reducer has already spent budget in `state`; previousState is the
+  // durable budget that was available before this result landed.
+  if (args.previousState.automaticContinuationsUsed < CODEMODE_AUTOMATIC_CONTINUATION_LIMIT) {
+    await appendCodemodeResultAsAgentInput({
+      event: args.event,
+      streamApi: args.streamApi,
+      purpose: "result-to-agent-input",
+    });
+    return;
+  }
+  if (args.previousState.finalWrapUpRequested) return;
+  await appendCodemodeResultAsAgentInput({
+    event: args.event,
+    streamApi: args.streamApi,
+    purpose: "result-to-final-wrap-up",
+    intro: `Automatic codemode continuation limit reached after ${CODEMODE_AUTOMATIC_CONTINUATION_LIMIT} turns. Use this final result to summarize current state and ask the user whether to continue.`,
   });
 }
 
@@ -287,11 +310,12 @@ async function appendCodemodeResultAsAgentInput(args: {
  * frontend-safe Agent reducer, and the hook makes a local decision from that
  * embedded state.
  */
-async function appendIdleStatusIfAgentHasNoQueuedTriggers(args: {
+async function appendIdleStatusIfAgentIsQuiescent(args: {
   event: Extract<CodemodeConsumedEvent, { type: "events.iterate.com/codemode/result-added" }>;
   state: CodemodeState;
   streamApi: CodemodeStreamApi;
 }) {
+  if (args.state.agentProcessor.currentRequest != null) return;
   if (args.state.agentProcessor.pendingTriggerCount > 0) return;
 
   await args.streamApi.append({

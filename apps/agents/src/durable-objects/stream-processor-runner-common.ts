@@ -27,6 +27,7 @@ type StreamProcessorRunnerCatalogEnv = Pick<CloudflareEnv, "DB">;
 
 type RunnerContract<Contract> = {
   slug: string;
+  version: string;
   stateSchema: z.ZodType;
   events: EventCatalog;
   processorDeps?: readonly unknown[];

@@ -31,8 +31,8 @@ describe("clean stream view reducers", () => {
       events: [
         event({
           offset: 1,
-          type: "events.iterate.com/webchat/user-message-added",
-          payload: { content: "hello" },
+          type: "events.iterate.com/agent-chat/user-message-added",
+          payload: { channel: "web", content: "hello" },
         }),
       ],
     });
@@ -40,9 +40,9 @@ describe("clean stream view reducers", () => {
     expect(viewState.slots.feed).toMatchObject([
       {
         type: "grouped-raw-event",
-        id: "grouped-raw-event-events.iterate.com/webchat/user-message-added-1-1",
+        id: "grouped-raw-event-events.iterate.com/agent-chat/user-message-added-1-1",
         props: {
-          eventType: "events.iterate.com/webchat/user-message-added",
+          eventType: "events.iterate.com/agent-chat/user-message-added",
           count: 1,
           events: [{ offset: 1 }],
         },
@@ -66,14 +66,17 @@ describe("clean stream view reducers", () => {
     ]);
   });
 
-  test("raw-pretty projects webchat responses as assistant messages", () => {
+  test("raw-pretty projects agent-chat responses as assistant messages", () => {
+    const message = ["Here is code:", "", "```typescript", "const ok: boolean = true;", "```"].join(
+      "\n",
+    );
     const viewState = processEventsWithViewReducer({
       reducer: rawPrettyEventsStreamViewReducer,
       events: [
         event({
           offset: 1,
-          type: "events.iterate.com/webchat/agent-response-added",
-          payload: { message: "hi from codemode" },
+          type: "events.iterate.com/agent-chat/assistant-response-added",
+          payload: { channel: "web", message },
         }),
       ],
     });
@@ -82,7 +85,7 @@ describe("clean stream view reducers", () => {
       {
         type: "grouped-raw-event",
         props: {
-          eventType: "events.iterate.com/webchat/agent-response-added",
+          eventType: "events.iterate.com/agent-chat/assistant-response-added",
           count: 1,
         },
       },
@@ -90,7 +93,8 @@ describe("clean stream view reducers", () => {
         type: "message",
         props: {
           role: "assistant",
-          text: "hi from codemode",
+          text: message,
+          format: "markdown",
         },
       },
     ]);
@@ -170,9 +174,8 @@ describe("clean stream view reducers", () => {
       events: [
         event({
           offset: 9,
-          type: "events.iterate.com/agent/llm-request-started",
+          type: "events.iterate.com/agent/llm-request-requested",
           payload: {
-            requestId: "req_1",
             model: "test-model",
             runOpts: {},
           },
@@ -181,9 +184,10 @@ describe("clean stream view reducers", () => {
           offset: 10,
           type: "events.iterate.com/agent/llm-request-completed",
           payload: {
-            requestId: "req_1",
-            rawResponse: "ok",
+            llmRequestId: 9,
+            provider: "test-provider",
             durationMs: 123,
+            result: { status: "success", rawResponse: "ok" },
           },
         }),
       ],
@@ -193,16 +197,16 @@ describe("clean stream view reducers", () => {
       {
         type: "grouped-raw-event",
         props: {
-          eventType: "events.iterate.com/agent/llm-request-started",
+          eventType: "events.iterate.com/agent/llm-request-requested",
           count: 1,
         },
       },
       {
         type: "llm-request-boundary",
-        id: "llm-request-started-9",
+        id: "llm-request-requested-9",
         props: {
           phase: "started",
-          requestId: "req_1",
+          requestId: "9",
         },
       },
       {
@@ -218,7 +222,7 @@ describe("clean stream view reducers", () => {
         props: {
           phase: "ended",
           outcome: "completed",
-          requestId: "req_1",
+          requestId: "9",
         },
       },
     ]);
@@ -279,13 +283,13 @@ describe("clean stream view reducers", () => {
       events: [
         event({
           offset: 1,
-          type: "events.iterate.com/webchat/user-message-added",
+          type: "events.iterate.com/agent-chat/user-message-added",
           payload: {},
         }),
         event({
           offset: 2,
-          type: "events.iterate.com/webchat/user-message-added",
-          payload: { content: "hello" },
+          type: "events.iterate.com/agent-chat/user-message-added",
+          payload: { channel: "web", content: "hello" },
         }),
       ],
     });
@@ -319,6 +323,44 @@ describe("clean stream view reducers", () => {
           action: {
             type: "prefill-agent-message",
             text: "Can you help debug this stream error?\n\nboom",
+          },
+          sourceOffset: 1,
+        },
+      },
+    ]);
+  });
+
+  test("raw-pretty projects structured core errors into feed and input slots", () => {
+    const viewState = processEventsWithViewReducer({
+      reducer: rawPrettyEventsStreamViewReducer,
+      events: [
+        event({
+          offset: 1,
+          type: STREAM_ERROR_OCCURRED_TYPE,
+          payload: {
+            message: "Processor openai-ws@0.1.0 afterAppend failed: missing key",
+            error: {
+              name: "Error",
+              message: "missing key",
+            },
+          },
+        }),
+      ],
+    });
+
+    expect(viewState.slots.feed.map((item) => item.type)).toEqual(["grouped-raw-event", "error"]);
+    expect(viewState.slots.input).toMatchObject([
+      {
+        type: "composer-suggestion",
+        id: "composer-suggestion-stream-error-1",
+        props: {
+          action: {
+            type: "prefill-agent-message",
+            text: [
+              "Can you help debug this stream error?",
+              "",
+              "Processor openai-ws@0.1.0 afterAppend failed: missing key",
+            ].join("\n"),
           },
           sourceOffset: 1,
         },

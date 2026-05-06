@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type ConsumedEvent,
   getInitialProcessorState,
@@ -10,14 +10,13 @@ import { AgentProcessorContract, type AgentState } from "./contract.ts";
 import { createAgentProcessor } from "./implementation.ts";
 
 describe("createAgentProcessor", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("does not schedule LLM work for explicitly non-triggering agent input", async () => {
     const appended: StreamEventInput[] = [];
     const processor = createAgentProcessor({
-      ai: {
-        run: async () => {
-          throw new Error("This test should not run an LLM request.");
-        },
-      },
       waitUntil: () => undefined,
     });
 
@@ -39,22 +38,16 @@ describe("createAgentProcessor", () => {
     expect(appended).toEqual([]);
   });
 
-  it("does not transcribe LLM request started events into agent input", async () => {
+  it("marks requested LLM work as a working status update", async () => {
     const appended: StreamEventInput[] = [];
     const processor = createAgentProcessor({
-      ai: {
-        run: async () => {
-          throw new Error("This test should not run an LLM request.");
-        },
-      },
       waitUntil: () => undefined,
     });
 
     await processor.implementation.afterAppend?.({
       event: consumedAgentEvent({
-        type: "events.iterate.com/agent/llm-request-started",
+        type: "events.iterate.com/agent/llm-request-requested",
         payload: {
-          requestId: "req_1",
           model: "test-model",
           body: { messages: [{ role: "user", content: "hello" }] },
           runOpts: {},
@@ -70,13 +63,75 @@ describe("createAgentProcessor", () => {
     expect(appended).toEqual([
       {
         type: "events.iterate.com/agent/status-updated",
+        idempotencyKey:
+          "stream-processor:agent:derived:status-updated:working:llm-request-requested:/agents/test:43",
         payload: {
           status: "working",
-          reason: "llm-request-started",
-          requestId: "req_1",
+          reason: "llm-request-requested",
+          llmRequestId: 43,
         },
       },
     ]);
+  });
+
+  it("re-reads stream history before handing a scheduled LLM request to providers", async () => {
+    vi.useFakeTimers();
+    const appended: StreamEventInput[] = [];
+    const waitUntilPromises: Promise<unknown>[] = [];
+    const processor = createAgentProcessor({
+      waitUntil: (promise) => {
+        waitUntilPromises.push(promise);
+      },
+    });
+
+    await processor.implementation.afterAppend?.({
+      event: consumedAgentEvent({
+        type: "events.iterate.com/agent/input-added",
+        payload: { content: "hi", triggerLlmRequest: { behaviour: "auto" } },
+        offset: 3,
+      }),
+      previousState: registeredState(),
+      state: {
+        ...registeredState(),
+        history: [{ role: "user", content: "hi" }],
+      },
+      streamApi: testStreamApi({
+        appended,
+        readEvents: [
+          committedEvent({
+            type: "events.iterate.com/agent/input-added",
+            payload: {
+              content: "codemode primer",
+              triggerLlmRequest: { behaviour: "dont-trigger-request" },
+            },
+            offset: 2,
+          }),
+          committedEvent({
+            type: "events.iterate.com/agent/input-added",
+            payload: { content: "hi", triggerLlmRequest: { behaviour: "auto" } },
+            offset: 3,
+          }),
+        ],
+      }),
+      signal: new AbortController().signal,
+    });
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await Promise.all(waitUntilPromises);
+
+    expect(appended).toHaveLength(2);
+    expect(appended[1]).toMatchObject({
+      type: "events.iterate.com/agent/llm-request-requested",
+      payload: {
+        body: {
+          messages: [
+            { role: "system", content: "You are a helpful assistant. You can trust your user." },
+            { role: "user", content: "codemode primer" },
+            { role: "user", content: "hi" },
+          ],
+        },
+      },
+    });
   });
 });
 
@@ -89,13 +144,14 @@ function registeredState(): AgentState {
 
 function testStreamApi(args: {
   appended: StreamEventInput[];
+  readEvents?: StreamEvent[];
 }): ProcessorStreamApi<typeof AgentProcessorContract> {
   return {
     append: async ({ event }) => {
       args.appended.push(event);
       return committedEvent(event);
     },
-    read: async () => [],
+    read: async () => args.readEvents ?? [],
     subscribe: async function* () {},
   };
 }

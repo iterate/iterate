@@ -18,7 +18,7 @@ const appRoot = fileURLToPath(new URL("..", import.meta.url));
 const e2eRoot = fileURLToPath(new URL(".", import.meta.url));
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
 
-const vitestRunSlug = createVitestRunSlug();
+const vitestRunSlug = process.env.EVENTS_PROJECT_SLUG?.trim() || createVitestRunSlug();
 const vitestRunRoot = createVitestRunRoot("agents-e2e-");
 
 const eventsBaseUrl =

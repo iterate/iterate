@@ -1,5 +1,6 @@
 import { oc } from "@orpc/contract";
 import { internalContract } from "@iterate-com/shared/apps/internal-router-contract";
+import { FetchCallable } from "@iterate-com/shared/callable/descriptor-types.ts";
 import { z } from "zod";
 
 const HelloInput = z.object({
@@ -58,11 +59,9 @@ const InstallProcessorResult = z.object({
     .describe(
       "Prefix stream (from `appConfig.streamPathPrefix`) that the auto-subscriber was attached to.",
     ),
-  callbackUrl: z
-    .string()
-    .describe(
-      "WebSocket callback URL stored on the subscription. Carries `publicBaseUrl` so the auto-subscriber can reconstruct child-stream callback URLs without extra config.",
-    ),
+  callable: FetchCallable.describe(
+    "Callable stored on the subscription. Its URL carries `publicBaseUrl` so the auto-subscriber can reconstruct child-stream processor URLs without extra config.",
+  ),
   subscriptionSlug: z.string(),
   projectSlug: z.string(),
 });

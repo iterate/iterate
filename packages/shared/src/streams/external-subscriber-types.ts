@@ -45,34 +45,10 @@ const ExternalCallableSubscriber = z.strictObject({
 });
 type ExternalCallableSubscriber = z.infer<typeof ExternalCallableSubscriber>;
 
-const LegacyExternalSubscriberBase = ExternalSubscriberBase.omit({ callable: true }).extend({
-  callbackUrl: z.url(),
-});
-
-const LegacyExternalWebsocketSubscriber = LegacyExternalSubscriberBase.extend({
-  type: z.literal("websocket"),
-}).transform(({ callbackUrl, ...subscriber }) =>
-  ExternalWebsocketSubscriber.parse({
-    ...subscriber,
-    callable: fetchCallableFromLegacyCallbackUrl(callbackUrl),
-  }),
-);
-
-const LegacyExternalWebhookSubscriber = LegacyExternalSubscriberBase.extend({
-  type: z.literal("webhook"),
-}).transform(({ callbackUrl, ...subscriber }) =>
-  ExternalWebhookSubscriber.parse({
-    ...subscriber,
-    callable: fetchCallableFromLegacyCallbackUrl(callbackUrl),
-  }),
-);
-
 export const ExternalSubscriber = z.union([
   ExternalWebsocketSubscriber,
   ExternalWebhookSubscriber,
   ExternalCallableSubscriber,
-  LegacyExternalWebsocketSubscriber,
-  LegacyExternalWebhookSubscriber,
 ]);
 export type ExternalSubscriber = z.infer<typeof ExternalSubscriber>;
 
@@ -92,26 +68,3 @@ export const ExternalSubscriberState = z.object({
   subscribersBySlug: z.record(z.string(), ExternalSubscriber),
 });
 export type ExternalSubscriberState = z.infer<typeof ExternalSubscriberState>;
-
-function fetchCallableFromLegacyCallbackUrl(callbackUrl: string) {
-  /**
-   * Existing subscribers were persisted as raw callback URLs. Callable websocket
-   * dispatch uses fetch-with-upgrade, so stored `ws:` and `wss:` callback URLs
-   * must become the equivalent `http:` and `https:` FetchCallable target URLs
-   * before the strict Callable schema sees them.
-   */
-  const url = new URL(callbackUrl);
-  if (url.protocol === "ws:") {
-    url.protocol = "http:";
-  } else if (url.protocol === "wss:") {
-    url.protocol = "https:";
-  }
-
-  return {
-    type: "fetch" as const,
-    via: {
-      type: "url" as const,
-      url: url.toString(),
-    },
-  };
-}

@@ -4,6 +4,7 @@ import type { EventCatalog, StreamEventInput } from "../stream-processor.ts";
 
 export const CoreProcessorRegisteredEventType =
   "events.iterate.com/core/stream-processor-registered";
+export const CoreProcessorErrorOccurredEventType = "events.iterate.com/core/error-occurred";
 
 /**
  * Minimal core processor contract for shared processor lifecycle events.
@@ -34,9 +35,27 @@ export const CoreProcessorContract = defineProcessorContract({
         ),
       }),
     },
+    "events.iterate.com/core/error-occurred": {
+      description:
+        "A stream processor runner or stream core component recorded a structured error event.",
+      payloadSchema: z.object({
+        message: z.string().trim().min(1),
+        error: z
+          .object({
+            name: z.string().trim().min(1).optional(),
+            message: z.string().trim().min(1),
+            code: z.string().trim().min(1).optional(),
+            stack: z.string().trim().min(1).optional(),
+          })
+          .optional(),
+      }),
+    },
   },
   consumes: [],
-  emits: ["events.iterate.com/core/stream-processor-registered"],
+  emits: [
+    "events.iterate.com/core/stream-processor-registered",
+    "events.iterate.com/core/error-occurred",
+  ],
 });
 
 /**

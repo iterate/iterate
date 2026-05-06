@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  defineProcessorContract,
+  implementProcessor,
   type ProcessorStreamApi,
   type StreamEvent,
   type StreamEventInput,
 } from "@iterate-com/shared/stream-processors";
+import { z } from "zod";
+import { AgentProcessorContract } from "@iterate-com/shared/stream-processors/agent/contract";
 import {
   CODEMODE_PRIMER_IDEMPOTENCY_KEY,
   CodemodeProcessorContract,
@@ -11,6 +15,18 @@ import {
 import { createCodemodeProcessor } from "@iterate-com/shared/stream-processors/legacy-codemode/implementation";
 import { buildProcessorRegisteredEvent } from "@iterate-com/shared/stream-processors/core/contract";
 import { createMemoryPullProcessorStorage, runPullProcessor } from "./pull-runner.ts";
+
+const ThrowingProcessorContract = defineProcessorContract({
+  slug: "throwaway-proof",
+  version: "0.0.0",
+  description: "Test processor that throws from afterAppend.",
+  stateSchema: z.object({}).default({}),
+  processorDeps: [AgentProcessorContract],
+  events: {},
+  consumes: ["events.iterate.com/agent/output-added"],
+  emits: ["events.iterate.com/core/error-occurred"],
+  reduce: ({ state }) => state,
+});
 
 describe("runPullProcessor", () => {
   it("catches up, subscribes from the reduced offset, and consumes live events", async () => {
@@ -66,7 +82,7 @@ describe("runPullProcessor", () => {
         type: "events.iterate.com/agent/input-added",
         idempotencyKey: CODEMODE_PRIMER_IDEMPOTENCY_KEY,
         payload: {
-          content: expect.stringContaining("codemode is how you use tools"),
+          content: expect.stringContaining("Codemode is mandatory"),
           triggerLlmRequest: { behaviour: "dont-trigger-request" },
         },
       },
@@ -124,7 +140,7 @@ describe("runPullProcessor", () => {
         type: "events.iterate.com/agent/input-added",
         idempotencyKey: CODEMODE_PRIMER_IDEMPOTENCY_KEY,
         payload: {
-          content: expect.stringContaining("codemode is how you use tools"),
+          content: expect.stringContaining("Codemode is mandatory"),
           triggerLlmRequest: { behaviour: "dont-trigger-request" },
         },
       },
@@ -166,6 +182,68 @@ describe("runPullProcessor", () => {
       reducedThroughOffset: 1,
       afterAppendCompletedThroughOffset: 1,
     });
+  });
+
+  it("appends a structured core error when a pull processor afterAppend throws", async () => {
+    const appended: StreamEventInput[] = [];
+    const processor = implementProcessor(ThrowingProcessorContract, {
+      afterAppend: () => {
+        throw new Error("throwaway pull subscriber boom");
+      },
+    });
+    const storage = createMemoryPullProcessorStorage({
+      contract: ThrowingProcessorContract,
+    });
+
+    await expect(
+      runPullProcessor({
+        processor,
+        storage,
+        streamApi: testStreamApi({
+          appended,
+          history: [],
+          liveEvents: [
+            event(
+              {
+                type: "events.iterate.com/agent/output-added",
+                payload: { content: "trigger" },
+              },
+              { offset: 7 },
+            ),
+          ],
+          subscribeAfterOffsets: [],
+        }) as unknown as ProcessorStreamApi<typeof ThrowingProcessorContract>,
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("throwaway pull subscriber boom");
+
+    expect(appended).toMatchObject([
+      {
+        type: "events.iterate.com/core/error-occurred",
+        idempotencyKey: "pull-processor-runner:throwaway-proof:after-append-error:/agents/test:7",
+        metadata: {
+          provenance: {
+            processor: {
+              slug: "throwaway-proof",
+              version: "0.0.0",
+            },
+            whileProcessingEvent: {
+              streamPath: "/agents/test",
+              offset: 7,
+              type: "events.iterate.com/agent/output-added",
+            },
+          },
+        },
+        payload: {
+          message:
+            "Processor throwaway-proof@0.0.0 afterAppend failed: throwaway pull subscriber boom",
+          error: {
+            name: "Error",
+            message: "throwaway pull subscriber boom",
+          },
+        },
+      },
+    ]);
   });
 });
 

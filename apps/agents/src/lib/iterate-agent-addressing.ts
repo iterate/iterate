@@ -1,16 +1,22 @@
 import type { StreamPath } from "@iterate-com/shared/streams/types";
 
 export {
+  buildAgentChatStreamProcessorRunnerWebSocketCallbackUrl,
   buildAgentStreamProcessorRunnerWebSocketCallbackUrl,
   buildAgentWebSocketCallbackUrl,
   buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl,
-  buildWebchatStreamProcessorRunnerWebSocketCallbackUrl,
+  buildOpenAiWsStreamProcessorRunnerWebSocketCallbackUrl,
 } from "~/lib/events-urls.ts";
 
+export const AGENT_CHAT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG =
+  "agent-chat-stream-processor-runner";
 export const AGENT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG = "agent-stream-processor-runner";
+export const CLOUDFLARE_AI_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG =
+  "cloudflare-ai-stream-processor-runner";
 export const CODEMODE_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG =
   "codemode-stream-processor-runner";
-export const WEBCHAT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG = "webchat-stream-processor-runner";
+export const OPENAI_WS_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG =
+  "openai-ws-stream-processor-runner";
 
 /**
  * Agents SDK kebab-case URL segment for the `ChildStreamAutoSubscriber` class.

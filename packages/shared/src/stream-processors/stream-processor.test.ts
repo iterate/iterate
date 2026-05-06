@@ -968,6 +968,71 @@ describe("stream processor contracts", () => {
     expect(calls).toEqual([["save", 1, 4]]);
   });
 
+  it("catches up lower-offset events before processing an out-of-order pushed event", async () => {
+    const calls: unknown[] = [];
+    const contract = defineProcessorContract({
+      slug: "counter",
+      version: "1.0.0",
+      description: "Counts committed increment events.",
+      stateSchema: z.object({ count: z.number().default(0) }).prefault({}),
+      events: {
+        ...createEvent({
+          type: "counter-incremented",
+          payloadSchema: z.object({ by: z.number() }),
+        }),
+      },
+      consumes: ["counter-incremented"],
+      emits: [],
+      reduce: ({ state, event }) => {
+        calls.push(["reduce", event.offset, event.type, state.count]);
+        return { count: state.count + event.payload.by };
+      },
+    });
+    const processor = implementProcessor(contract, {
+      afterAppend: (args) => {
+        calls.push(["afterAppend", args.event.offset, args.event.type]);
+      },
+    });
+
+    const storedState = await consumeLiveProcessorEvent<typeof contract>({
+      processor,
+      storedState: createStoredProcessorState({
+        contract,
+        state: { count: 1 },
+        reducedThroughOffset: 1,
+        afterAppendCompletedThroughOffset: 1,
+        hasCompletedFirstAttach: true,
+        liveAfterOffset: 1,
+      }),
+      event: committedEvent({ type: "counter-ignored", payload: {}, offset: 3 }),
+      saveStoredProcessorState: async (nextStoredState) => {
+        calls.push(["save", nextStoredState.state.count, nextStoredState.reducedThroughOffset]);
+      },
+      streamApi: {
+        ...createTestStreamApi<typeof contract>(),
+        read: async (args = {}) => {
+          calls.push(["read", args.afterOffset, args.beforeOffset]);
+          return [committedEvent({ type: "counter-incremented", payload: { by: 2 }, offset: 2 })];
+        },
+      },
+      signal: new AbortController().signal,
+    });
+
+    expect(storedState).toMatchObject({
+      state: { count: 3 },
+      reducedThroughOffset: 3,
+      afterAppendCompletedThroughOffset: 3,
+    });
+    expect(calls).toEqual([
+      ["read", 1, 3],
+      ["reduce", 2, "counter-incremented", 1],
+      ["save", 3, 2],
+      ["afterAppend", 2, "counter-incremented"],
+      ["save", 3, 2],
+      ["save", 3, 3],
+    ]);
+  });
+
   it("keeps reduced progress separate from afterAppend completion for runner retries", async () => {
     const contract = defineProcessorContract({
       slug: "counter",
@@ -1024,6 +1089,51 @@ describe("stream processor contracts", () => {
       reducedThroughOffset: 7,
       afterAppendCompletedThroughOffset: 0,
     });
+  });
+
+  it("reports live afterAppend errors before preserving retry semantics", async () => {
+    const contract = defineProcessorContract({
+      slug: "counter",
+      version: "1.0.0",
+      description: "Counts committed increment events.",
+      stateSchema: z.object({ count: z.number().default(0) }).prefault({}),
+      events: {
+        ...createEvent({
+          type: "counter-incremented",
+          payloadSchema: z.object({ by: z.number() }),
+        }),
+      },
+      consumes: ["counter-incremented"],
+      emits: [],
+      reduce: ({ state, event }) => ({ count: state.count + event.payload.by }),
+    });
+    const processor = implementProcessor(contract, {
+      afterAppend: () => {
+        throw new Error("transient side effect failure");
+      },
+    });
+    const errors: unknown[] = [];
+
+    await expect(
+      consumeLiveProcessorEvent<typeof contract>({
+        processor,
+        storedState: createStoredProcessorState({ contract, state: { count: 1 } }),
+        event: committedEvent({
+          type: "counter-incremented",
+          payload: { by: 2 },
+          offset: 7,
+        }),
+        saveStoredProcessorState: async () => {},
+        streamApi: createTestStreamApi<typeof contract>(),
+        afterAppendError: ({ error, reduction }) => {
+          errors.push({ error, offset: reduction.event.offset });
+        },
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("transient side effect failure");
+
+    expect(errors).toMatchObject([{ offset: 7 }]);
+    expect((errors[0] as { error: Error }).error.message).toBe("transient side effect failure");
   });
 
   it("marks afterAppend completion separately when live effects succeed", async () => {

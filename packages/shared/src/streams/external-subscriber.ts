@@ -526,7 +526,7 @@ function getSubscriberCallableKey(subscriber: ExternalSubscriber) {
 function withDefaultFetch(ctx: CallableContext): CallableContext {
   return {
     ...ctx,
-    fetch: ctx.fetch ?? globalThis.fetch,
+    fetch: ctx.fetch ?? globalThis.fetch.bind(globalThis),
   };
 }
 
