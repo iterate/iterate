@@ -46,15 +46,17 @@ describe("stream callable subscriber e2e", () => {
      * Object event, which should turn this from one deeply nested request chain
      * into a sequence of shallow calls.
      *
-     * The test uses a bounded chain (`max`) so success is deterministic and
-     * runaway loops are impossible. As of this repro, Miniflare/workerd's local
-     * vitest runner completes the chain even before the deployed-runtime alarm
-     * fix. That difference is important evidence: local Miniflare is useful for
-     * guarding the intended behavior after the fix, but the preview network e2e
-     * is the red test for Cloudflare's deployed subrequest-depth behavior.
+     * The test uses a bounded chain (`max`) so runaway loops are impossible.
+     * As of this repro, Miniflare/workerd's local vitest runner completes the
+     * chain even before the deployed-runtime alarm fix. That difference is
+     * important evidence: local Miniflare is useful for guarding the intended
+     * behavior after the fix, but the preview network e2e is the red test for
+     * Cloudflare's deployed subrequest-depth behavior. Keep this local max
+     * below the preview max so root `pnpm test` does not depend on a long alarm
+     * scheduling race while still exercising repeated alarm-delivered appends.
      */
     const chainId = randomUUID();
-    const max = 200;
+    const max = 100;
     const startUrl = new URL("https://example.com/__e2e/callable-subscriber-chain");
     startUrl.searchParams.set("action", "start");
     startUrl.searchParams.set("chainId", chainId);
