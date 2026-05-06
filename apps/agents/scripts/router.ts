@@ -100,6 +100,12 @@ const DeployEphemeralInput = z.object({
 const EventStreamTerminalInput = z.object({
   projectSlug: z.string().trim().min(1).describe("Events project slug"),
   streamPath: z.string().trim().min(1).describe("Events stream path, e.g. /agents/demo"),
+  eventsBaseUrl: z
+    .string()
+    .trim()
+    .url()
+    .default(DEFAULT_EVENTS_BASE_URL)
+    .describe("Events base URL"),
 });
 
 export const router = {
@@ -109,12 +115,12 @@ export const router = {
       description: "Open a minimal OpenTUI event stream viewer",
     })
     .handler(async ({ input }) => {
-      const scriptPath = join(scriptsDir, "event-stream-terminal.ts");
+      const scriptPath = join(scriptsDir, "event-stream-terminal.tsx");
       // OpenTUI is currently Bun-only: https://opentui.com/docs/getting-started/
       await runInheritedProcess("bun", [
         scriptPath,
         "--events-base-url",
-        DEFAULT_EVENTS_BASE_URL,
+        input.eventsBaseUrl,
         "--project-slug",
         input.projectSlug,
         "--stream-path",

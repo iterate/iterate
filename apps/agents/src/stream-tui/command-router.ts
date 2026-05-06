@@ -232,7 +232,7 @@ const commandRouter = {
           title: "Append error",
           description: "Append a built-in error event",
           category: "Append",
-          slash: { name: "append.error", aliases: ["error"] },
+          slash: { name: "append.error", aliases: ["error", "e"] },
           input: {
             positional: { name: "message", required: true },
             options: [{ name: "streamPath", flag: "--stream" }],
