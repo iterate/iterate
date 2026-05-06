@@ -39,7 +39,7 @@ export type AppContext = {
   get reducedState(): EventsStreamViewState;
   streamApi: StreamApi;
   setActiveView: (view: StreamTuiView) => void;
-  switchFeedMode: (mode: "raw" | "mixed" | "chat") => void;
+  switchFeedMode: (mode: "raw" | "mixed" | "pretty") => void;
   setStreamSummaries: (streams: StreamSummary[], filter?: string) => void;
   navigateToStream: (streamPath: StreamPath) => void;
   restartStream: () => void;
@@ -110,6 +110,18 @@ const commandRouter = {
       .handler(({ context }) => {
         context.switchFeedMode("mixed");
       }),
+    pretty: commandBase
+      .meta({
+        tui: {
+          title: "Pretty mode",
+          description: "Pretty renderers only; hide raw event rows",
+          category: "View",
+          slash: { name: "view.pretty", aliases: ["pretty"] },
+        },
+      })
+      .handler(({ context }) => {
+        context.switchFeedMode("pretty");
+      }),
     chat: commandBase
       .meta({
         tui: {
@@ -120,7 +132,7 @@ const commandRouter = {
         },
       })
       .handler(({ context }) => {
-        context.switchFeedMode("chat");
+        context.switchFeedMode("pretty");
       }),
     state: commandBase
       .meta({

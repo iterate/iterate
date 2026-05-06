@@ -150,12 +150,13 @@ const client = createEventsOrpcClient({
 
 /**
  * Available feed modes: raw (YAML per event), mixed (summary rows + pretty),
- * chat (pretty only, for conversational streams).
+ * pretty (semantic renderers only). `view.chat` is a slash-command alias that
+ * switches to pretty mode for conversational streams.
  */
 const feedModes = {
   raw: { label: "Raw", reducer: rawEventsStreamViewReducer },
   mixed: { label: "Mixed", reducer: rawPrettyEventsStreamViewReducer },
-  chat: { label: "Chat", reducer: prettyEventsStreamViewReducer },
+  pretty: { label: "Pretty", reducer: prettyEventsStreamViewReducer },
 } as const;
 type FeedMode = keyof typeof feedModes;
 
