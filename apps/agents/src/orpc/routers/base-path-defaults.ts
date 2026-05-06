@@ -48,16 +48,16 @@ export const basePathDefaultsRouter = {
   }),
   listAgents: os.listAgents.handler(async ({ input, context }) => {
     const stub = await getAutoSubscriberStub(context.env);
-    const projectSlug = ProjectId.parse(context.config.eventsProjectSlug);
+    const projectId = ProjectId.parse(context.config.eventsProjectSlug);
     const eventsBaseUrl = context.config.eventsBaseUrl;
     const records = await stub.listAgents({ prefix: input.prefix });
     // Build the viewer URL server-side so the client doesn't need to know
-    // about events-host construction (project-slug subdomain rewriting etc.).
+    // about events-host construction (project-id subdomain rewriting etc.).
     const agents = records.map((record) => ({
       streamPath: record.streamPath,
       streamViewerUrl: buildStreamComposerUrl({
         eventsBaseUrl,
-        projectSlug,
+        projectId,
         streamPath: StreamPath.parse(record.streamPath),
       }),
       discoveredAt: record.discoveredAt,

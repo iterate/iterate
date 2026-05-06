@@ -9,11 +9,11 @@ export type EventsOrpcClient = ContractRouterClient<typeof eventsContract>;
 
 export function createEventsOrpcClient(options: {
   baseUrl: string;
-  projectSlug: string;
+  projectId: string;
 }): EventsOrpcClient {
   const projectOrigin = getProjectUrl({
     currentUrl: options.baseUrl,
-    projectSlug: ProjectId.parse(options.projectSlug),
+    projectId: ProjectId.parse(options.projectId),
   })
     .toString()
     .replace(/\/+$/, "");

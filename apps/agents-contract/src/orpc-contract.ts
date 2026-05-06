@@ -63,7 +63,7 @@ const InstallProcessorResult = z.object({
     "Callable stored on the subscription. Its URL carries `publicBaseUrl` so the auto-subscriber can reconstruct child-stream processor URLs without extra config.",
   ),
   subscriptionSlug: z.string(),
-  projectSlug: z.string(),
+  projectId: z.string(),
 });
 
 const ConfigureBasePathDefaultsInput = z.object({

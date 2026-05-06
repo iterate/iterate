@@ -18,7 +18,7 @@ export async function handleEventsForwardedPost(args: {
 
   const eventsClient = createEventsOrpcClient({
     baseUrl: args.context.config.eventsBaseUrl,
-    projectSlug: args.context.config.eventsProjectSlug,
+    projectId: args.context.config.eventsProjectSlug,
   });
 
   await eventsClient.append({

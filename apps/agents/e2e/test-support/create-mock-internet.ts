@@ -47,7 +47,7 @@ export async function createMockInternet(opts: {
     const eventsProjectHostname = new URL(
       getProjectUrl({
         currentUrl: opts.eventsBaseUrl,
-        projectSlug: ProjectId.parse(opts.eventsProjectSlug),
+        projectId: ProjectId.parse(opts.eventsProjectSlug),
       }).toString(),
     ).hostname;
     const harRaw = JSON.parse(await readFile(opts.harPath, "utf8")) as HarWithExtensions;

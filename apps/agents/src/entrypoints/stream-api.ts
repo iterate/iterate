@@ -75,7 +75,7 @@ export class StreamApi extends WorkerEntrypoint<Env, StreamApiProps> {
 
     return createEventsOrpcClient({
       baseUrl: config.eventsBaseUrl,
-      projectSlug: config.eventsProjectSlug,
+      projectId: config.eventsProjectSlug,
     });
   }
 

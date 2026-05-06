@@ -14,7 +14,7 @@ import { os } from "~/orpc/orpc.ts";
 
 export const installProcessorRouter = {
   installProcessor: os.installProcessor.handler(async ({ input, context }) => {
-    const projectSlug = ProjectId.parse(context.config.eventsProjectSlug);
+    const projectId = ProjectId.parse(context.config.eventsProjectSlug);
     const streamPath = context.config.streamPathPrefix;
     const publicOrigin = new URL(input.publicBaseUrl).origin;
 
@@ -35,7 +35,7 @@ export const installProcessorRouter = {
 
     const eventsClient = createEventsOrpcClient({
       baseUrl: context.config.eventsBaseUrl,
-      projectSlug,
+      projectId,
     });
 
     await eventsClient.append({
@@ -54,7 +54,7 @@ export const installProcessorRouter = {
       streamPath,
       callable,
       subscriptionSlug: CHILD_STREAM_AUTO_SUBSCRIBER_SUBSCRIPTION_SLUG,
-      projectSlug,
+      projectId,
     };
   }),
 };

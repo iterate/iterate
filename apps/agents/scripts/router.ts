@@ -205,7 +205,7 @@ export const router = {
 
       const eventsClient = createEventsOrpcClient({
         baseUrl: eventsBaseUrl,
-        projectSlug,
+        projectId: projectSlug,
       });
       const appendResult = await eventsClient.append({
         path: streamPath,
@@ -214,12 +214,12 @@ export const router = {
 
       const streamViewerUrl = buildStreamViewerUrl({
         eventsBaseUrl,
-        projectSlug,
+        projectId: projectSlug,
         streamPath,
       });
       const appendUrl = buildStreamAppendUrl({
         eventsBaseUrl,
-        projectSlug,
+        projectId: projectSlug,
         streamPath,
       });
 

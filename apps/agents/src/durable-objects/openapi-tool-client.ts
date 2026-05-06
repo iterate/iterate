@@ -41,7 +41,7 @@ export class OpenApiToolClient extends DurableObject<CloudflareEnv> {
     const config = parseAppConfig(AppConfig, env.APP_CONFIG);
     const eventsOrigin = getProjectUrl({
       currentUrl: config.eventsBaseUrl,
-      projectSlug: ProjectId.parse(config.eventsProjectSlug),
+      projectId: ProjectId.parse(config.eventsProjectSlug),
     })
       .toString()
       .replace(/\/+$/, "");

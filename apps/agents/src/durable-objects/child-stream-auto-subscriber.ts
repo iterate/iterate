@@ -138,7 +138,7 @@ export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
 
     const appConfig = parseAppConfig(AppConfig, this.env.APP_CONFIG);
     const childPath = childCreated.data.payload.childPath;
-    const projectSlug = ProjectId.parse(appConfig.eventsProjectSlug);
+    const projectId = ProjectId.parse(appConfig.eventsProjectSlug);
     const runnerInstance = streamPathToAgentInstance(childPath);
     const matched = this.#lookupDefaultsForChildPath(childPath);
     const llmProvider = inferLlmProviderFromDefaultEvents(matched?.events ?? []);
@@ -203,7 +203,7 @@ export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
 
     const eventsClient = createEventsOrpcClient({
       baseUrl: appConfig.eventsBaseUrl,
-      projectSlug,
+      projectId,
     });
 
     // Subscribe processors before defaults so newly appended defaults can be

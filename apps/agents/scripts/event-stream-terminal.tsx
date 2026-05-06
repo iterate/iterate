@@ -76,7 +76,7 @@ type FeedMode = keyof typeof feedModes;
 function StreamTerminalApp() {
   const renderer = useRenderer();
   const client = useMemo(
-    () => createEventsOrpcClient({ baseUrl: args.eventsBaseUrl, projectSlug: args.projectSlug }),
+    () => createEventsOrpcClient({ baseUrl: args.eventsBaseUrl, projectId: args.projectSlug }),
     [],
   );
   const [currentStreamPath, setCurrentStreamPath] = useState(args.streamPath);

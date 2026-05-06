@@ -28,7 +28,7 @@ export function createEventsHelpers(params: {
 }): EventsHelpers {
   const client = createEventsOrpcClient({
     baseUrl: params.baseUrl,
-    projectSlug: params.projectSlug,
+    projectId: params.projectSlug,
   });
 
   return {
@@ -111,7 +111,7 @@ function eventsStreamViewerUrl(args: {
 }): string {
   const projectBase = getProjectUrl({
     currentUrl: args.eventsOrigin,
-    projectSlug: ProjectId.parse(args.projectSlug),
+    projectId: ProjectId.parse(args.projectSlug),
   })
     .toString()
     .replace(/\/+$/, "");

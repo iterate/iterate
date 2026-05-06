@@ -34,7 +34,7 @@ ${CODEMODE_CHAT_RESPONSE_SYSTEM_PROMPT}`;
  */
 export const createAgentRouter = {
   createAgent: os.createAgent.handler(async ({ input, context }) => {
-    const projectSlug = ProjectId.parse(context.config.eventsProjectSlug);
+    const projectId = ProjectId.parse(context.config.eventsProjectSlug);
     const streamPath = StreamPath.parse(input.streamPath);
     const publicOrigin = getPublicOrigin(context.rawRequest);
     const runnerInstance = streamPathToAgentInstance(streamPath);
@@ -59,7 +59,7 @@ export const createAgentRouter = {
 
     const eventsClient = createEventsOrpcClient({
       baseUrl: context.config.eventsBaseUrl,
-      projectSlug,
+      projectId,
     });
 
     for (const subscription of [
@@ -137,7 +137,7 @@ export const createAgentRouter = {
       streamPath,
       streamViewerUrl: buildStreamViewerUrl({
         eventsBaseUrl: context.config.eventsBaseUrl,
-        projectSlug,
+        projectId,
         streamPath,
       }),
     };

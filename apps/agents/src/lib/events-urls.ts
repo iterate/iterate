@@ -12,24 +12,24 @@ const iterateEnvironmentLabelPattern = /^iterate(?:-[a-z0-9-]+)?$/;
  * Project-scoped origin for events (e.g. `https://<project>.events.iterate.com`).
  * Default project (`public`) collapses to the base events host.
  */
-function projectOrigin(args: { eventsBaseUrl: string; projectSlug: ProjectIdValue }): string {
+function projectOrigin(args: { eventsBaseUrl: string; projectId: ProjectIdValue }): string {
   return getProjectUrl({
     currentUrl: args.eventsBaseUrl,
-    projectSlug: args.projectSlug,
+    projectId: args.projectId,
   })
     .toString()
     .replace(/\/+$/, "");
 }
 
-export function getProjectUrl(args: { currentUrl: string | URL; projectSlug: ProjectIdValue }) {
+export function getProjectUrl(args: { currentUrl: string | URL; projectId: ProjectIdValue }) {
   const url = new URL(args.currentUrl);
   const eventsHostBase = getEventsHostBase(url.hostname);
 
   if (eventsHostBase) {
     url.hostname =
-      args.projectSlug === defaultProjectId
+      args.projectId === defaultProjectId
         ? eventsHostBase
-        : `${ProjectId.parse(args.projectSlug)}.${eventsHostBase}`;
+        : `${ProjectId.parse(args.projectId)}.${eventsHostBase}`;
   }
 
   return url;
@@ -77,12 +77,12 @@ export function workerReachableLocalUrl(rawUrl: string): string {
 /** Human-readable stream viewer URL (matches the e2e helper in `test-support/events-stream-helpers`). */
 export function buildStreamViewerUrl(args: {
   eventsBaseUrl: string;
-  projectSlug: ProjectIdValue;
+  projectId: ProjectIdValue;
   streamPath: StreamPath;
 }): string {
   const base = projectOrigin({
     eventsBaseUrl: args.eventsBaseUrl,
-    projectSlug: args.projectSlug,
+    projectId: args.projectId,
   });
   const splat =
     args.streamPath === "/"
@@ -103,7 +103,7 @@ export function buildStreamViewerUrl(args: {
  */
 export function buildStreamComposerUrl(args: {
   eventsBaseUrl: string;
-  projectSlug: ProjectIdValue;
+  projectId: ProjectIdValue;
   streamPath: StreamPath;
 }): string {
   const url = new URL(buildStreamViewerUrl(args));
@@ -118,12 +118,12 @@ export function buildStreamComposerUrl(args: {
 /** POST endpoint the Events oRPC `append` procedure lives at. */
 export function buildStreamAppendUrl(args: {
   eventsBaseUrl: string;
-  projectSlug: ProjectIdValue;
+  projectId: ProjectIdValue;
   streamPath: StreamPath;
 }): string {
   const base = projectOrigin({
     eventsBaseUrl: args.eventsBaseUrl,
-    projectSlug: args.projectSlug,
+    projectId: args.projectId,
   });
   return `${base}/api/streams${args.streamPath}`;
 }
