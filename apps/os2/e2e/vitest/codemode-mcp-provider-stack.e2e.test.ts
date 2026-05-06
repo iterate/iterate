@@ -7,7 +7,7 @@
  *
  *   OS2_E2E_MCP_URL=https://mcp__demo.iterate-preview-2.app/ \
  *   OS2_E2E_MCP_BEARER_TOKEN=... \
- *   pnpm --dir apps/os2 test:e2e:codemode-mcp
+ *   pnpm test:e2e:codemode-mcp
  *
  * Optional:
  *   OS2_E2E_SLACK_CHANNEL_ID=C123  # proves real ctx.slack.chat.postMessage

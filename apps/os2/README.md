@@ -429,7 +429,7 @@ preview, or production:
 ```bash
 OS2_E2E_MCP_URL=https://mcp__demo.iterate-preview-2.app \
 OS2_E2E_MCP_BEARER_TOKEN="$ADMIN_OR_MCP_ACCESS_TOKEN" \
-pnpm --dir apps/os2 test:e2e:codemode-mcp
+pnpm test:e2e:codemode-mcp
 ```
 
 Set `OS2_E2E_SLACK_CHANNEL_ID=C123...` to include a real
@@ -449,19 +449,25 @@ path creates the same project rows, ingress rows, MCP host, presets, and
 Durable Object state that the UI would create without introducing a special
 seed API:
 
+For manual browser checks, preview uses a Clerk development instance (`pk_test`
+keys), so disposable test users with fake emails are fine.
+
 ```bash
 OS2_BASE_URL=https://os2.iterate-preview-2.com \
-doppler run --project os2 --config preview_2 -- pnpm --dir apps/os2 test:e2e:preview
+doppler run --project os2 --config preview_2 -- pnpm test:e2e:preview
 ```
 
-The same project can be created explicitly through the OS2 app CLI:
+The smoke project slug defaults to `preview-mcp-smoke-$GITHUB_SHA8`, or
+`preview-mcp-smoke-manual` outside GitHub Actions. Set
+`OS2_PREVIEW_SMOKE_PROJECT_SLUG` to pin a manual run. Create the same project
+explicitly through the OS2 app CLI:
 
 ```bash
 OS2_API_TOKEN="$APP_CONFIG_ADMIN_API_SECRET" \
-pnpm --dir apps/os2 cli rpc \
+pnpm cli rpc \
   --base-url "$OS2_BASE_URL" \
   projects create \
-  --slug preview-mcp-smoke \
+  --slug preview-mcp-smoke-manual \
   --metadata '{"seededBy":"manual-preview-mcp-smoke"}'
 ```
 
@@ -469,16 +475,16 @@ If it already exists, read it back with the ordinary slug lookup:
 
 ```bash
 OS2_API_TOKEN="$APP_CONFIG_ADMIN_API_SECRET" \
-pnpm --dir apps/os2 cli rpc \
+pnpm cli rpc \
   --base-url "$OS2_BASE_URL" \
   projects find-by-slug \
-  --slug preview-mcp-smoke
+  --slug preview-mcp-smoke-manual
 ```
 
 The preview project MCP URL is derived from the slug:
 
 ```txt
-https://mcp__preview-mcp-smoke.iterate-preview-2.app/
+https://mcp__preview-mcp-smoke-manual.iterate-preview-2.app/
 ```
 
 Use MCP Inspector to prove transport/auth and list tools:
@@ -504,7 +510,7 @@ The full codemode/provider proof is still:
 ```bash
 OS2_E2E_MCP_URL="$MCP_URL" \
 OS2_E2E_MCP_BEARER_TOKEN="$APP_CONFIG_ADMIN_API_SECRET" \
-pnpm --dir apps/os2 test:e2e:codemode-mcp
+pnpm test:e2e:codemode-mcp
 ```
 
 ### Using the MCP server with Claude CLI
@@ -523,13 +529,13 @@ the Clerk OAuth flow.
 ## Dev
 
 ```bash
-pnpm --dir apps/os2 dev            # Cloudflare local dev through Doppler
-pnpm --dir apps/os2 dev:localhost  # local-host config
-pnpm --dir apps/os2 cf:deploy      # production deploy
-pnpm --dir apps/os2 cf:destroy     # destroy production stack
-pnpm --dir apps/os2 sqlfu:generate # regenerate typed SQL wrappers and migrations
-pnpm --dir apps/os2 sqlfu:check    # check migration history against definitions.sql
-pnpm --dir apps/os2 sqlfu:ui       # start sqlfu UI bridge
+pnpm dev            # Cloudflare local dev through Doppler
+pnpm dev:localhost  # local-host config
+pnpm cf:deploy      # production deploy
+pnpm cf:destroy     # destroy production stack
+pnpm sqlfu:generate # regenerate typed SQL wrappers and migrations
+pnpm sqlfu:check    # check migration history against definitions.sql
+pnpm sqlfu:ui       # start sqlfu UI bridge
 ```
 
 ## Runtime config

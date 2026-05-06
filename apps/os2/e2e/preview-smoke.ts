@@ -19,6 +19,14 @@ function readAdminApiSecret() {
   );
 }
 
+function previewSmokeProjectSlug() {
+  const explicitSlug = process.env.OS2_PREVIEW_SMOKE_PROJECT_SLUG?.trim();
+  if (explicitSlug) return explicitSlug;
+
+  const commit = process.env.GITHUB_SHA?.trim().slice(0, 8) || "manual";
+  return `preview-mcp-smoke-${commit}`;
+}
+
 type Project = {
   id: string;
   slug: string;
@@ -52,7 +60,7 @@ async function fetchProjectBySlug(input: { adminApiSecret: string; baseUrl: URL;
 }
 
 async function seedProject(input: { adminApiSecret: string; baseUrl: URL }) {
-  const slug = "preview-mcp-smoke";
+  const slug = previewSmokeProjectSlug();
   const response = await fetch(new URL("/api/projects", input.baseUrl), {
     body: JSON.stringify({
       metadata: {
