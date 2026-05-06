@@ -101,7 +101,7 @@ describe("createSlackProcessor", () => {
         event: {
           type: "events.iterate.com/slack/webhook-received",
           payload: event.payload,
-          idempotencyKey: "stream-processor:slack:derived:forward-slack-webhook:/slack/webhooks:10",
+          idempotencyKey: "stream-processor:slack:derived:forward-slack-webhook:10",
         },
       },
     ]);

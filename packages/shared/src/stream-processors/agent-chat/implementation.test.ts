@@ -39,7 +39,7 @@ describe("createAgentChatProcessor", () => {
       },
       {
         type: "events.iterate.com/agent/input-added",
-        idempotencyKey: "stream-processor:agent-chat:derived:render-message:/agents/test:74",
+        idempotencyKey: "stream-processor:agent-chat:derived:render-message:74",
         payload: {
           content:
             "```yaml\nevent:\n  offset: 74\n  type: events.iterate.com/agent-chat/user-message-added\n  channel: tui\n  content: |-\n    woah\n```",
@@ -66,7 +66,7 @@ describe("createAgentChatProcessor", () => {
 
     expect(appended.at(-1)).toEqual({
       type: "events.iterate.com/agent/input-added",
-      idempotencyKey: "stream-processor:agent-chat:derived:render-response:/agents/test:43",
+      idempotencyKey: "stream-processor:agent-chat:derived:render-response:43",
       payload: {
         content:
           "```yaml\nevent:\n  offset: 43\n  type: events.iterate.com/agent-chat/assistant-response-added\n  channel: web\n  message: |-\n    hello back\n```",

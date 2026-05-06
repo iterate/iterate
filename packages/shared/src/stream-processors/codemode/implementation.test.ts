@@ -70,8 +70,7 @@ describe("createCodemodeProcessor", () => {
       },
       {
         type: "events.iterate.com/codemode/log-emitted",
-        idempotencyKey:
-          "stream-processor:codemode:derived:log-emitted:1:/projects/prj_test/codemode-sessions/cblk_test:7",
+        idempotencyKey: "stream-processor:codemode:derived:log-emitted:1:7",
         payload: {
           level: "log",
           message: "running scr-1: 29 chars",
@@ -80,8 +79,7 @@ describe("createCodemodeProcessor", () => {
       },
       {
         type: "events.iterate.com/codemode/script-execution-completed",
-        idempotencyKey:
-          "stream-processor:codemode:derived:script-execution-completed:/projects/prj_test/codemode-sessions/cblk_test:7",
+        idempotencyKey: "stream-processor:codemode:derived:script-execution-completed:7",
         payload: {
           durationMs: 25,
           outcome: { status: "succeeded", output: { ok: true } },
@@ -151,8 +149,7 @@ describe("createCodemodeProcessor", () => {
       },
       {
         type: "events.iterate.com/codemode/function-call-requested",
-        idempotencyKey:
-          "stream-processor:codemode:derived:function-call-requested:1:/projects/prj_test/codemode-sessions/cblk_test:7",
+        idempotencyKey: "stream-processor:codemode:derived:function-call-requested:1:7",
         payload: {
           args: [{ value: "hello" }],
           functionCallId: "fn-1",
@@ -165,8 +162,7 @@ describe("createCodemodeProcessor", () => {
       },
       {
         type: "events.iterate.com/codemode/script-execution-completed",
-        idempotencyKey:
-          "stream-processor:codemode:derived:script-execution-completed:/projects/prj_test/codemode-sessions/cblk_test:7",
+        idempotencyKey: "stream-processor:codemode:derived:script-execution-completed:7",
         payload: {
           durationMs: expect.any(Number),
           outcome: { status: "succeeded", output: { value: "HELLO!" } },

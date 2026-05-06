@@ -30,8 +30,11 @@ export type DerivedIdempotencyKeyArgs = {
   purpose: string;
   /**
    * Committed source event that caused the derived append.
+   *
+   * Idempotency is scoped to a single stream's event store, so the key only
+   * needs the source event offset, not the stream path.
    */
-  event: Pick<StreamEvent, "streamPath" | "offset">;
+  event: Pick<StreamEvent, "offset">;
 };
 
 export type EventExample<Payload = unknown> = {

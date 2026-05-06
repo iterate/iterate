@@ -364,7 +364,6 @@ export function withStreamProcessorRunner<
               "stream-processor-runner",
               args.processor.contract.slug,
               "after-append-error",
-              args.event.streamPath,
               String(args.event.offset),
             ].join(":"),
             metadata: {

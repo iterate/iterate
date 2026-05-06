@@ -245,16 +245,14 @@ export function assertNever(value: never): never {
  *
  * Include a stable `purpose` per derivation site. If one source event produces
  * two different derived events, each site should use a different purpose.
+ *
+ * The source event's stream path is deliberately omitted because idempotency
+ * keys only need to be unique within the stream being appended to.
  */
 export function buildDerivedIdempotencyKey(args: DerivedIdempotencyKeyArgs): string {
-  return [
-    "stream-processor",
-    args.slug,
-    "derived",
-    args.purpose,
-    args.event.streamPath,
-    String(args.event.offset),
-  ].join(":");
+  return ["stream-processor", args.slug, "derived", args.purpose, String(args.event.offset)].join(
+    ":",
+  );
 }
 
 export function validateProcessorContract(contract: {

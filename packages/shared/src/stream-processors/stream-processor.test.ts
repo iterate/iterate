@@ -76,11 +76,10 @@ describe("stream processor contracts", () => {
         slug: "codemode",
         purpose: "result-to-agent-input",
         event: {
-          streamPath: "/agents/test",
           offset: 42,
         },
       }),
-    ).toBe("stream-processor:codemode:derived:result-to-agent-input:/agents/test:42");
+    ).toBe("stream-processor:codemode:derived:result-to-agent-input:42");
   });
 
   it("parses event input and event output strictly", () => {
