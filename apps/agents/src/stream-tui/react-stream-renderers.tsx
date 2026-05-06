@@ -75,7 +75,9 @@ export function TuiEventsStreamView(props: {
   onComposerSubmit: (value: string) => void;
 }) {
   const { width } = useTerminalDimensions();
-  const contentWidth = Math.max(20, width - 4);
+  // Full terminal width minus scrollbox borders and content padding, with one
+  // extra right gutter so right-aligned feed rows do not touch the scrollbar.
+  const contentWidth = Math.max(20, width - 5);
   const rawSummaries = getRawSummaries(props.viewState.slots.feed);
   const detailEvent =
     props.detailEventOffset == null
