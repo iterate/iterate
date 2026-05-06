@@ -510,7 +510,14 @@ export function StreamPage({
                 variant="outline"
                 size="sm"
                 className="h-8 gap-2 px-3 text-xs"
-                render={<a href={debugLinks.kv} target="_blank" rel="noreferrer" />}
+                render={
+                  <a
+                    href={debugLinks.kv}
+                    target="_blank"
+                    rel="noreferrer"
+                    aria-label="Open KV inspector"
+                  />
+                }
               >
                 <BugIcon className="size-3.5" />
                 __kv
@@ -520,7 +527,14 @@ export function StreamPage({
                 variant="outline"
                 size="sm"
                 className="h-8 gap-2 px-3 text-xs"
-                render={<a href={debugLinks.outerbase} target="_blank" rel="noreferrer" />}
+                render={
+                  <a
+                    href={debugLinks.outerbase}
+                    target="_blank"
+                    rel="noreferrer"
+                    aria-label="Open Outerbase"
+                  />
+                }
               >
                 <DatabaseIcon className="size-3.5" />
                 Outerbase

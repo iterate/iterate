@@ -56,17 +56,6 @@ export function toEventFeedItem(event: Event): EventFeedItem {
   };
 }
 
-export function projectEventToFeed(event: Event): StreamFeedItem[] {
-  const eventFeedItem = toEventFeedItem(event);
-  const semanticItem = toSemanticFeedItem(event);
-
-  if (semanticItem == null) {
-    return [eventFeedItem];
-  }
-
-  return [eventFeedItem, semanticItem];
-}
-
 export function getEventFeedItems(feed: readonly StreamFeedItem[]): EventFeedItem[] {
   return feed.filter((item): item is EventFeedItem => item.kind === "event");
 }

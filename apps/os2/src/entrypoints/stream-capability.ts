@@ -265,10 +265,11 @@ function canAppend(input: { path: StreamPath; policy: StreamAppendPolicy; stream
       return false;
     case "stream":
       return input.streamPath != null && input.path === resolveProjectStreamPath(input.streamPath);
-    case "children":
+    case "children": {
       if (input.streamPath == null) return false;
       const streamPath = resolveProjectStreamPath(input.streamPath);
       return input.path === streamPath || input.path.startsWith(`${streamPath}/`);
+    }
     case "any":
       return true;
     case "pattern":

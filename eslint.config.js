@@ -430,6 +430,7 @@ const plugin = {
                 // validation helpers, with no Worker/Node runtime authority.
                 "@iterate-com/shared/callable/descriptor-types\\.ts",
                 "@iterate-com/shared/codemode/types",
+                "@iterate-com/shared/streams/types",
               ];
               const compiledRegex = ALLOWED_RUNTIME_IMPORT_REGEX.map(
                 (pattern) => new RegExp(`^${pattern}$`),

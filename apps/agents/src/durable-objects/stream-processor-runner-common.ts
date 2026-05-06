@@ -159,7 +159,7 @@ export function createStreamProcessorRunnerDurableObject<
  * lifecycle init params. Processor implementations receive only the scoped API,
  * not Cloudflare storage, Durable Object state, or raw events service bindings.
  */
-export function createStreamProcessorApi<Contract>(args: {
+function createStreamProcessorApi<Contract>(args: {
   ctx: DurableObjectState;
   streamPath: string;
 }): ProcessorStreamApi<Contract> {
@@ -174,9 +174,7 @@ export function createStreamProcessorApi<Contract>(args: {
   }) as unknown as ProcessorStreamApi<Contract>;
 }
 
-export function streamProcessorWebSocketMessageToString(
-  message: string | ArrayBuffer,
-): string | null {
+function streamProcessorWebSocketMessageToString(message: string | ArrayBuffer): string | null {
   if (typeof message === "string") return message;
   return new TextDecoder().decode(message);
 }

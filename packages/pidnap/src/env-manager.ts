@@ -118,7 +118,7 @@ export class EnvManager {
     };
   }
 
-  private loadEnvFilesFromCwd(): void {
+  private loadEnvFilesFromCwd(options: { notifyNew?: boolean } = {}): void {
     this.logger.debug(`Scanning for env files in: ${this.config.cwd}`);
     if (existsSync(this.globalEnvPath)) this.loadGlobalEnv(this.globalEnvPath);
 
@@ -129,7 +129,11 @@ export class EnvManager {
         const key = this.getEnvKeySuffix(basename(filePath));
         // Skip if key has a custom file registered
         if (key && !this.customKeys.has(key)) {
+          const wasLoaded = this.env.has(key);
           this.loadEnvFile(key, resolve(this.config.cwd, filePath));
+          if (options.notifyNew === true && !wasLoaded) {
+            this.notifyCallbacks({ type: "process", key });
+          }
         } else if (key && this.customKeys.has(key)) {
           this.logger.debug(
             `Skipping auto-discovered "${filePath}" (custom file registered for "${key}")`,
@@ -207,11 +211,28 @@ export class EnvManager {
   private watchCwdForNewFiles(): void {
     try {
       this.cwdWatcher = watch(this.config.cwd, {
+        // The cwd watcher exists specifically to discover newly-created
+        // `.env.<process>` files. On macOS, fs events do not reliably report
+        // new dotfiles from a directory watch, and Chokidar's non-polling path
+        // inherits that behavior. Polling this one shallow directory keeps the
+        // feature deterministic without putting every env file watch on a
+        // polling loop.
+        usePolling: true,
+        interval: 100,
         ignoreInitial: true,
         depth: 0,
-      }).on("add", (filePath) => {
-        this.handleNewFile(filePath);
-      });
+      })
+        .on("add", (filePath) => {
+          this.handleNewFile(filePath);
+        })
+        .on("ready", () => {
+          // Chokidar starts asynchronously. A file can be created after the
+          // constructor's initial scan but before the watcher is ready, which
+          // means no `add` event is guaranteed. Rescanning on ready closes that
+          // gap while still notifying callbacks for files that were genuinely
+          // new to this EnvManager instance.
+          this.loadEnvFilesFromCwd({ notifyNew: true });
+        });
     } catch (err) {
       this.logger.warn(`Failed to watch cwd for new env files:`, err);
     }

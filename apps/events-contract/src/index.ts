@@ -1,1 +1,1 @@
-export { AppendInput, eventsContract } from "./orpc-contract.ts";
+export { eventsContract } from "./orpc-contract.ts";

@@ -245,9 +245,7 @@ describe("CodemodeSession", () => {
   return { ai, repo, workspace, agent, procedures, orpc };
 }`,
     });
-    const scriptExecutionId = String(
-      (created.scriptExecutionEvent?.payload as { scriptExecutionId?: unknown }).scriptExecutionId,
-    );
+    const scriptExecutionId = scriptExecutionIdFromEvent(created.scriptExecutionEvent);
     const completed = await waitForScriptExecutionCompleted({ scriptExecutionId, streamPath });
 
     expect(completed.payload).toMatchObject({
@@ -305,9 +303,7 @@ describe("CodemodeSession", () => {
       providers: providersForCodemodeExample({ example, projectId }),
       code: example.code,
     });
-    const scriptExecutionId = String(
-      (created.scriptExecutionEvent?.payload as { scriptExecutionId?: unknown }).scriptExecutionId,
-    );
+    const scriptExecutionId = scriptExecutionIdFromEvent(created.scriptExecutionEvent);
     const completed = await waitForScriptExecutionCompleted({ scriptExecutionId, streamPath });
 
     expect(completed.payload).toMatchObject({
@@ -367,9 +363,7 @@ describe("CodemodeSession", () => {
   });
 }`,
     });
-    const scriptExecutionId = String(
-      (created.scriptExecutionEvent?.payload as { scriptExecutionId?: unknown }).scriptExecutionId,
-    );
+    const scriptExecutionId = scriptExecutionIdFromEvent(created.scriptExecutionEvent);
 
     const discordRequest = await waitForFunctionCallRequested({
       path: ["discord", "announceRelease"],
@@ -476,9 +470,7 @@ describe("CodemodeSession", () => {
   return { ping, navigation };
 }`,
     });
-    const scriptExecutionId = String(
-      (created.scriptExecutionEvent?.payload as { scriptExecutionId?: unknown }).scriptExecutionId,
-    );
+    const scriptExecutionId = scriptExecutionIdFromEvent(created.scriptExecutionEvent);
 
     const navigationRequest = await waitForFunctionCallRequested({
       path: ["iterateBrowserExtension", "navigateToPage"],
@@ -589,6 +581,17 @@ function providerRegistration(path: string[]): ToolProviderRegistration {
     invocation: { kind: "event" },
     path,
   };
+}
+
+function scriptExecutionIdFromEvent(event: Event | null) {
+  if (event == null) {
+    throw new Error("Expected createSession to append a script execution event.");
+  }
+  const scriptExecutionId = (event.payload as { scriptExecutionId?: unknown }).scriptExecutionId;
+  if (typeof scriptExecutionId !== "string") {
+    throw new Error("Script execution event is missing scriptExecutionId.");
+  }
+  return scriptExecutionId;
 }
 
 function exampleCapabilityProviders(): ToolProviderRegistration[] {

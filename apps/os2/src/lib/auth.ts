@@ -3,13 +3,14 @@ import { createServerFn, getGlobalStartContext } from "@tanstack/react-start";
 import { getRequestUrl } from "@tanstack/react-start/server";
 import { auth } from "@clerk/tanstack-react-start/server";
 import { z } from "zod";
-export type { ActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
-export { normalizeActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
 import { normalizeActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
 import {
   normalizeRequestHostname,
   resolveProjectSlugFromHostname,
 } from "~/lib/project-host-routing.ts";
+
+export type { ActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
+export { normalizeActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
 
 const RouteAuthInput = z
   .object({

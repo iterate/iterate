@@ -5,6 +5,7 @@ import type { Callable, CallableContext } from "../../callable/types.ts";
 import {
   type ConsumedEvent,
   defineProcessorContract,
+  type EmittedInput,
   getInitialProcessorState,
   implementProcessor,
   type ProcessorStreamApi,
@@ -743,7 +744,10 @@ function completedEventInput(args: {
     { type: "events.iterate.com/codemode/function-call-requested" }
   >;
   value: unknown;
-}): StreamEventInput {
+}): Extract<
+  EmittedInput<typeof CodemodeProcessorContract>,
+  { type: "events.iterate.com/codemode/function-call-completed" }
+> {
   return {
     type: "events.iterate.com/codemode/function-call-completed",
     payload: {
