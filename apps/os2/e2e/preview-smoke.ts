@@ -31,7 +31,7 @@ async function expectStatus(input: { method?: string; status: number; url: URL }
 }
 
 async function seedProjectMcpUrl(input: { adminApiSecret: string; baseUrl: URL }) {
-  const response = await fetch(new URL("/__debug/seed-mcp-project", input.baseUrl), {
+  const response = await fetch(new URL("/api/projects/seed-mcp-project", input.baseUrl), {
     body: JSON.stringify({
       projectId: "proj-preview-mcp-smoke",
       slug: "preview-mcp-smoke",

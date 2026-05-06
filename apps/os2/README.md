@@ -440,8 +440,8 @@ execution, and stream append/readback.
 ### Repeatable Preview MCP Smoke
 
 Preview CI and operator checks seed a deterministic project before connecting an
-MCP client. The seed endpoint is intentionally admin-only and exists so a fresh
-preview deployment can create project ingress rows without a human Clerk
+MCP client. The seed oRPC procedure is intentionally admin-only and exists so a
+fresh preview deployment can create project ingress rows without a human Clerk
 session:
 
 ```bash
@@ -449,13 +449,15 @@ OS2_BASE_URL=https://os2.iterate-preview-2.com \
 doppler run --project os2 --config preview_2 -- pnpm --dir apps/os2 test:e2e:preview
 ```
 
-That script calls:
+The same seed can be run explicitly through the OS2 app CLI:
 
 ```bash
-curl -sS -X POST "$OS2_BASE_URL/__debug/seed-mcp-project" \
-  -H "Authorization: Bearer $APP_CONFIG_ADMIN_API_SECRET" \
-  -H "Content-Type: application/json" \
-  --data '{"projectId":"proj-preview-mcp-smoke","slug":"preview-mcp-smoke"}'
+OS2_API_TOKEN="$APP_CONFIG_ADMIN_API_SECRET" \
+pnpm --dir apps/os2 cli rpc \
+  --base-url "$OS2_BASE_URL" \
+  projects seed-mcp-project \
+  --project-id proj-preview-mcp-smoke \
+  --slug preview-mcp-smoke
 ```
 
 The response includes `mcpUrl`, usually:

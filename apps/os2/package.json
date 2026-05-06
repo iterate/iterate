@@ -35,6 +35,7 @@
   },
   "iterateAppCli": {
     "remote": {
+      "auth": "shared-api-secret-bearer",
       "defaultBaseUrl": "https://os2.iterate.com"
     }
   },

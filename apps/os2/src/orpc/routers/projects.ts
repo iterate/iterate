@@ -55,6 +55,27 @@ type ProjectPresetRow = {
 type CodemodeSessionCatalogRecord = D1ObjectCatalogRecord<CodemodeSessionInitParams>;
 type InboundMcpSessionCatalogRecord = D1ObjectCatalogRecord<ProjectMcpServerConnectionInitParams>;
 
+function readBearerToken(headerValue: string | null): string | null {
+  if (!headerValue) return null;
+  const match = /^bearer\s+(.+)$/i.exec(headerValue);
+  if (!match) return null;
+  const token = match[1]?.trim() ?? "";
+  return token.length > 0 ? token : null;
+}
+
+const adminApiSecretMiddleware = os.middleware(async ({ context, next }) => {
+  const expectedToken = context.config.adminApiSecret?.exposeSecret();
+  const providedToken = readBearerToken(context.rawRequest?.headers.get("authorization") ?? null);
+
+  if (!expectedToken || !providedToken || providedToken !== expectedToken) {
+    throw new ORPCError("UNAUTHORIZED", {
+      message: "Missing or invalid Authorization header",
+    });
+  }
+
+  return next();
+});
+
 function toProject(row: ProjectRow) {
   return {
     id: row.id,
@@ -191,6 +212,52 @@ export const projectsRouter = {
         }
 
         return toProject(row);
+      }),
+    seedMcpProject: os.projects.seedMcpProject
+      .use(adminApiSecretMiddleware)
+      .handler(async ({ context, input }) => {
+        // Preview/operator seed path. This intentionally uses the same
+        // ProjectDurableObject creation path as the Clerk-authenticated
+        // `projects.create` procedure, so the global ingress rows, local MCP
+        // routes, presets, and DO catalog state are all produced by one codepath.
+        const project = await requireProjectDurableObjectNamespace(context)
+          .getByName(input.projectId)
+          .createProject({
+            clerkOrgId: input.clerkOrgId,
+            createdByClerkUserId: input.userId,
+            metadata: {
+              seededBy: "os2-preview-mcp-smoke",
+              seededAt: new Date().toISOString(),
+              ...input.metadata,
+            },
+            projectId: input.projectId,
+            slug: input.slug,
+          });
+
+        const row = await getProjectById(context.db, {
+          clerkOrgId: input.clerkOrgId,
+          id: project.id,
+        });
+        if (!row) {
+          throw new ORPCError("INTERNAL_SERVER_ERROR", {
+            message: `Project ${project.id} was not returned after seedMcpProject`,
+          });
+        }
+
+        const mcpHost =
+          project.hosts.find((host) => host.startsWith(`mcp__${project.slug}.`)) ??
+          project.hosts.find((host) => host.startsWith("mcp__"));
+
+        if (!mcpHost) {
+          throw new ORPCError("INTERNAL_SERVER_ERROR", {
+            message: `Project ${project.id} did not create an MCP host.`,
+          });
+        }
+
+        return {
+          mcpUrl: `https://${mcpHost}/`,
+          project: toProject(row),
+        };
       }),
     list: os.projects.list.use(activeOrganizationMiddleware).handler(async ({ context, input }) => {
       const auth = context.activeOrganization;

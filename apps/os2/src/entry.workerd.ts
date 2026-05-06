@@ -62,9 +62,6 @@ export default {
     const debugAppendChainResponse = await handleDebugAppendChainFetch({ request, env });
     if (debugAppendChainResponse) return debugAppendChainResponse;
 
-    const seedMcpProjectResponse = await handleSeedMcpProjectFetch({ request, env });
-    if (seedMcpProjectResponse) return seedMcpProjectResponse;
-
     return withEvlog(
       {
         request,
@@ -126,69 +123,6 @@ export default {
     );
   },
 };
-
-async function handleSeedMcpProjectFetch(input: { request: Request; env: Env }) {
-  const url = new URL(input.request.url);
-  if (url.pathname !== "/__debug/seed-mcp-project") return null;
-
-  const expectedToken = config.adminApiSecret?.exposeSecret();
-  if (expectedToken == null) {
-    return Response.json({ error: "Debug endpoint is disabled." }, { status: 404 });
-  }
-
-  if (input.request.headers.get("authorization") !== `Bearer ${expectedToken}`) {
-    return Response.json({ error: "Unauthorized." }, { status: 401 });
-  }
-
-  if (input.request.method !== "POST") {
-    return Response.json({ error: "Use POST to seed an MCP project." }, { status: 405 });
-  }
-
-  const body = await readSeedMcpProjectBody(input.request);
-  const projectId = normalizeSeedMcpProjectValue(body.projectId, "proj-preview-mcp-smoke");
-  const slug = normalizeSeedMcpProjectValue(body.slug, "preview-mcp-smoke");
-
-  // Admin-only preview/operator hook: normal project creation requires Clerk
-  // org auth, but preview CI and deployed MCP smoke tests need deterministic
-  // project ingress rows before connecting a real MCP client to the project host.
-  const project = await input.env.PROJECT.getByName(projectId).createProject({
-    clerkOrgId: normalizeSeedMcpProjectValue(body.clerkOrgId, "org_preview_smoke"),
-    createdByClerkUserId: normalizeSeedMcpProjectValue(body.userId, "user_preview_smoke"),
-    metadata: {
-      seededBy: "os2-preview-mcp-smoke",
-      seededAt: new Date().toISOString(),
-      ...(isJsonObject(body.metadata) ? body.metadata : {}),
-    },
-    projectId,
-    slug,
-  });
-
-  const mcpHost =
-    project.hosts.find((host) => host.startsWith(`mcp__${project.slug}.`)) ??
-    project.hosts.find((host) => host.startsWith("mcp__")) ??
-    null;
-
-  return Response.json({
-    project,
-    mcpUrl: mcpHost == null ? null : `https://${mcpHost}/`,
-  });
-}
-
-async function readSeedMcpProjectBody(request: Request) {
-  if (!request.headers.get("content-type")?.includes("application/json")) {
-    return {} as Record<string, unknown>;
-  }
-  const parsed = await request.json();
-  return isJsonObject(parsed) ? parsed : {};
-}
-
-function normalizeSeedMcpProjectValue(value: unknown, fallback: string) {
-  return typeof value === "string" && value.trim() !== "" ? value.trim() : fallback;
-}
-
-function isJsonObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 async function handleDebugAppendChainFetch(input: { request: Request; env: Env }) {
   const url = new URL(input.request.url);
