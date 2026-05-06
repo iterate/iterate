@@ -18,7 +18,6 @@ type CounterStateRow = {
 
 type ExampleCounterEnv = {
   DB: D1Database;
-  EXAMPLE_COUNTER: DurableObjectNamespace<ExampleCounter>;
 };
 
 const counterKey = "counter";
@@ -211,9 +210,3 @@ export class ExampleCounter extends ExampleCounterBase<ExampleCounterEnv> {
     return JSON.stringify(message);
   }
 }
-
-export default {
-  fetch() {
-    return Response.json({ ok: true });
-  },
-} satisfies ExportedHandler<ExampleCounterEnv>;
