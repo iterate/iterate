@@ -14,9 +14,9 @@ WHERE referenceId = ?
 LIMIT 1;
 `.trim();
 const getOAuthClientByReferenceIdQuery = (params: getOAuthClientByReferenceId.Params) => ({
+  name: "getOAuthClientByReferenceId",
   sql: getOAuthClientByReferenceIdSql,
   args: [params.referenceId],
-  name: "getOAuthClientByReferenceId",
 });
 
 export const getOAuthClientByReferenceId = Object.assign(
@@ -60,9 +60,9 @@ const updateOAuthClientByIdQuery = (
   data: updateOAuthClientById.Data,
   params: updateOAuthClientById.Params,
 ) => ({
+  name: "updateOAuthClientById",
   sql: updateOAuthClientByIdSql,
   args: [data.name, data.redirectUris, data.disabled, data.updatedAt, params.id],
-  name: "updateOAuthClientById",
 });
 
 export const updateOAuthClientById = Object.assign(
@@ -99,9 +99,9 @@ const disableOAuthClientByIdQuery = (
   data: disableOAuthClientById.Data,
   params: disableOAuthClientById.Params,
 ) => ({
+  name: "disableOAuthClientById",
   sql: disableOAuthClientByIdSql,
   args: [data.updatedAt, params.id],
-  name: "disableOAuthClientById",
 });
 
 export const disableOAuthClientById = Object.assign(
@@ -137,9 +137,9 @@ const updateOAuthClientReferenceByClientIdQuery = (
   data: updateOAuthClientReferenceByClientId.Data,
   params: updateOAuthClientReferenceByClientId.Params,
 ) => ({
+  name: "updateOAuthClientReferenceByClientId",
   sql: updateOAuthClientReferenceByClientIdSql,
   args: [data.referenceId, data.name, data.redirectUris, data.updatedAt, params.clientId],
-  name: "updateOAuthClientReferenceByClientId",
 });
 
 export const updateOAuthClientReferenceByClientId = Object.assign(
@@ -178,9 +178,9 @@ WHERE disabled = 0
 ORDER BY createdAt DESC;
 `.trim();
 const listSystemOAuthClientsQuery = {
+  name: "listSystemOAuthClients",
   sql: listSystemOAuthClientsSql,
   args: [],
-  name: "listSystemOAuthClients",
 };
 
 export const listSystemOAuthClients = Object.assign(

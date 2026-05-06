@@ -411,8 +411,8 @@ importers:
         specifier: ^2.0.7
         version: 2.0.7(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       sqlfu:
-        specifier: https://pkg.pr.new/sqlfu@9ff2913
-        version: https://pkg.pr.new/sqlfu@9ff2913(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0)
+        specifier: 0.0.3-14
+        version: 0.0.3-14(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(better-auth@1.6.9(f39c6072eae9a6fbe87ad150ca45e4e5))(crossws@0.4.4(srvx@0.11.12))(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0)
       tailwindcss:
         specifier: ^4.2.1
         version: 4.2.1
@@ -16838,14 +16838,22 @@ packages:
       '@sqlfu/ui':
         optional: true
 
-  sqlfu@https://pkg.pr.new/sqlfu@9ff2913:
-    resolution: {tarball: https://pkg.pr.new/sqlfu@9ff2913}
-    version: 0.0.3-7
+  sqlfu@0.0.3-14:
+    resolution: {integrity: sha512-0JHD+oksVx2OEbrgFjBmN+nB4Y1q7jkkbHhAVytG/ZzzOcHwmtbxB8Q8Iz7euJ2R28LSTNqS5VfuyBkdZQ8aYQ==}
     hasBin: true
     peerDependencies:
-      '@sqlfu/ui': 0.0.3-7
+      '@effect/sql': ^0.51.1
+      '@sqlfu/ui': 0.0.3-14
+      better-auth: ^1.6.9
+      effect: ^3.21.2 || ^4.0.0-beta.60
     peerDependenciesMeta:
+      '@effect/sql':
+        optional: true
       '@sqlfu/ui':
+        optional: true
+      better-auth:
+        optional: true
+      effect:
         optional: true
 
   srvx@0.11.12:
@@ -35494,18 +35502,19 @@ snapshots:
       - valibot
       - ws
 
-  sqlfu@https://pkg.pr.new/sqlfu@9ff2913(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0):
+  sqlfu@0.0.3-14(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(better-auth@1.6.9(f39c6072eae9a6fbe87ad150ca45e4e5))(crossws@0.4.4(srvx@0.11.12))(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0):
     dependencies:
       '@clack/prompts': 1.2.0
       '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
       trpc-cli: 0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(zod@4.3.6)
       zod: 4.3.6
+    optionalDependencies:
+      better-auth: 1.6.9(f39c6072eae9a6fbe87ad150ca45e4e5)
     transitivePeerDependencies:
       - '@opentelemetry/api'
       - '@trpc/server'
       - '@valibot/to-json-schema'
       - crossws
-      - effect
       - fastify
       - valibot
       - ws

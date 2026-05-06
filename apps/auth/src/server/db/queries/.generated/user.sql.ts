@@ -17,9 +17,9 @@ WHERE id = ?
 LIMIT 1;
 `.trim();
 const getUserByIdQuery = (params: getUserById.Params) => ({
+  name: "getUserById",
   sql: getUserByIdSql,
   args: [params.id],
-  name: "getUserById",
 });
 
 export const getUserById = Object.assign(
@@ -69,9 +69,9 @@ WHERE email = ?
 LIMIT 1;
 `.trim();
 const getUserByEmailQuery = (params: getUserByEmail.Params) => ({
+  name: "getUserByEmail",
   sql: getUserByEmailSql,
   args: [params.email],
-  name: "getUserByEmail",
 });
 
 export const getUserByEmail = Object.assign(
@@ -116,9 +116,9 @@ const updateVerifiedUserByIdQuery = (
   data: updateVerifiedUserById.Data,
   params: updateVerifiedUserById.Params,
 ) => ({
+  name: "updateVerifiedUserById",
   sql: updateVerifiedUserByIdSql,
   args: [data.name, data.image, data.updatedAt, params.id],
-  name: "updateVerifiedUserById",
 });
 
 export const updateVerifiedUserById = Object.assign(
@@ -166,6 +166,7 @@ VALUES (
 );
 `.trim();
 const insertUserQuery = (params: insertUser.Params) => ({
+  name: "insertUser",
   sql: insertUserSql,
   args: [
     params.id,
@@ -177,7 +178,6 @@ const insertUserQuery = (params: insertUser.Params) => ({
     params.createdAt,
     params.updatedAt,
   ],
-  name: "insertUser",
 });
 
 export const insertUser = Object.assign(
@@ -212,9 +212,9 @@ ORDER BY o.createdAt ASC,
   o.slug ASC;
 `.trim();
 const listOrganizationsForUserQuery = (params: listOrganizationsForUser.Params) => ({
+  name: "listOrganizationsForUser",
   sql: listOrganizationsForUserSql,
   args: [params.userId],
-  name: "listOrganizationsForUser",
 });
 
 export const listOrganizationsForUser = Object.assign(

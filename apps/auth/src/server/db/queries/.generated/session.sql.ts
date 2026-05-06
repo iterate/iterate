@@ -7,9 +7,9 @@ WHERE id = ?
 LIMIT 1;
 `.trim();
 const query = (params: getSessionActiveOrganizationIdById.Params) => ({
+  name: "getSessionActiveOrganizationIdById",
   sql,
   args: [params.id],
-  name: "getSessionActiveOrganizationIdById",
 });
 
 export const getSessionActiveOrganizationIdById = Object.assign(

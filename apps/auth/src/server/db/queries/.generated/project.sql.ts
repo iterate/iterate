@@ -12,9 +12,9 @@ WHERE slug = ?
 LIMIT 1;
 `.trim();
 const getProjectBySlugQuery = (params: getProjectBySlug.Params) => ({
+  name: "getProjectBySlug",
   sql: getProjectBySlugSql,
   args: [params.slug],
-  name: "getProjectBySlug",
 });
 
 export const getProjectBySlug = Object.assign(
@@ -60,9 +60,9 @@ LIMIT 1;
 const getProjectWithOrganizationBySlugQuery = (
   params: getProjectWithOrganizationBySlug.Params,
 ) => ({
+  name: "getProjectWithOrganizationBySlug",
   sql: getProjectWithOrganizationBySlugSql,
   args: [params.slug],
-  name: "getProjectWithOrganizationBySlug",
 });
 
 export const getProjectWithOrganizationBySlug = Object.assign(
@@ -108,9 +108,9 @@ ORDER BY created_at ASC,
   slug ASC;
 `.trim();
 const listProjectsByOrganizationIdQuery = (params: listProjectsByOrganizationId.Params) => ({
+  name: "listProjectsByOrganizationId",
   sql: listProjectsByOrganizationIdSql,
   args: [params.organizationId],
-  name: "listProjectsByOrganizationId",
 });
 
 export const listProjectsByOrganizationId = Object.assign(
@@ -168,6 +168,7 @@ RETURNING id,
   archived_at AS archivedAt;
 `.trim();
 const insertProjectReturningQuery = (params: insertProjectReturning.Params) => ({
+  name: "insertProjectReturning",
   sql: insertProjectReturningSql,
   args: [
     params.id,
@@ -179,7 +180,6 @@ const insertProjectReturningQuery = (params: insertProjectReturning.Params) => (
     params.createdAt,
     params.updatedAt,
   ],
-  name: "insertProjectReturning",
 });
 
 export const insertProjectReturning = Object.assign(
@@ -234,9 +234,9 @@ const updateProjectReturningQuery = (
   data: updateProjectReturning.Data,
   params: updateProjectReturning.Params,
 ) => ({
+  name: "updateProjectReturning",
   sql: updateProjectReturningSql,
   args: [data.name, data.slug, data.metadata, data.updatedAt, params.id],
-  name: "updateProjectReturning",
 });
 
 export const updateProjectReturning = Object.assign(
@@ -278,9 +278,9 @@ DELETE FROM project
 WHERE id = ?;
 `.trim();
 const deleteProjectByIdQuery = (params: deleteProjectById.Params) => ({
+  name: "deleteProjectById",
   sql: deleteProjectByIdSql,
   args: [params.id],
-  name: "deleteProjectById",
 });
 
 export const deleteProjectById = Object.assign(

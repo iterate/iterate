@@ -7,9 +7,9 @@ WHERE slug = ?
 LIMIT 1;
 `.trim();
 const getOrganizationBySlugQuery = (params: getOrganizationBySlug.Params) => ({
+  name: "getOrganizationBySlug",
   sql: getOrganizationBySlugSql,
   args: [params.slug],
-  name: "getOrganizationBySlug",
 });
 
 export const getOrganizationBySlug = Object.assign(
@@ -39,9 +39,9 @@ INSERT INTO organization (id, name, slug, logo, createdAt, metadata)
 VALUES (?, ?, ?, ?, ?, ?);
 `.trim();
 const insertOrganizationQuery = (params: insertOrganization.Params) => ({
+  name: "insertOrganization",
   sql: insertOrganizationSql,
   args: [params.id, params.name, params.slug, params.logo, params.createdAt, params.metadata],
-  name: "insertOrganization",
 });
 
 export const insertOrganization = Object.assign(
@@ -71,9 +71,9 @@ const updateOrganizationNameByIdQuery = (
   data: updateOrganizationNameById.Data,
   params: updateOrganizationNameById.Params,
 ) => ({
+  name: "updateOrganizationNameById",
   sql: updateOrganizationNameByIdSql,
   args: [data.name, params.id],
-  name: "updateOrganizationNameById",
 });
 
 export const updateOrganizationNameById = Object.assign(
@@ -101,9 +101,9 @@ DELETE FROM organization
 WHERE id = ?;
 `.trim();
 const deleteOrganizationByIdQuery = (params: deleteOrganizationById.Params) => ({
+  name: "deleteOrganizationById",
   sql: deleteOrganizationByIdSql,
   args: [params.id],
-  name: "deleteOrganizationById",
 });
 
 export const deleteOrganizationById = Object.assign(
@@ -129,9 +129,9 @@ LIMIT 1;
 const getMembershipByOrganizationAndUserIdQuery = (
   params: getMembershipByOrganizationAndUserId.Params,
 ) => ({
+  name: "getMembershipByOrganizationAndUserId",
   sql: getMembershipByOrganizationAndUserIdSql,
   args: [params.organizationId, params.userId],
-  name: "getMembershipByOrganizationAndUserId",
 });
 
 export const getMembershipByOrganizationAndUserId = Object.assign(
@@ -168,9 +168,9 @@ INSERT INTO member (id, organizationId, userId, role, createdAt)
 VALUES (?, ?, ?, ?, ?);
 `.trim();
 const insertMembershipQuery = (params: insertMembership.Params) => ({
+  name: "insertMembership",
   sql: insertMembershipSql,
   args: [params.id, params.organizationId, params.userId, params.role, params.createdAt],
-  name: "insertMembership",
 });
 
 export const insertMembership = Object.assign(
@@ -200,9 +200,9 @@ const updateMembershipRoleByOrganizationAndUserIdQuery = (
   data: updateMembershipRoleByOrganizationAndUserId.Data,
   params: updateMembershipRoleByOrganizationAndUserId.Params,
 ) => ({
+  name: "updateMembershipRoleByOrganizationAndUserId",
   sql: updateMembershipRoleByOrganizationAndUserIdSql,
   args: [data.role, params.organizationId, params.userId],
-  name: "updateMembershipRoleByOrganizationAndUserId",
 });
 
 export const updateMembershipRoleByOrganizationAndUserId = Object.assign(
@@ -237,9 +237,9 @@ WHERE organizationId = ?
 const deleteMembershipByOrganizationAndUserIdQuery = (
   params: deleteMembershipByOrganizationAndUserId.Params,
 ) => ({
+  name: "deleteMembershipByOrganizationAndUserId",
   sql: deleteMembershipByOrganizationAndUserIdSql,
   args: [params.organizationId, params.userId],
-  name: "deleteMembershipByOrganizationAndUserId",
 });
 
 export const deleteMembershipByOrganizationAndUserId = Object.assign(
@@ -277,9 +277,9 @@ ORDER BY m.createdAt ASC,
   u.email ASC;
 `.trim();
 const listMembersByOrganizationIdQuery = (params: listMembersByOrganizationId.Params) => ({
+  name: "listMembersByOrganizationId",
   sql: listMembersByOrganizationIdSql,
   args: [params.organizationId],
-  name: "listMembersByOrganizationId",
 });
 
 export const listMembersByOrganizationId = Object.assign(
@@ -318,9 +318,9 @@ LIMIT 1;
 const getOrganizationMemberPresenceByEmailQuery = (
   params: getOrganizationMemberPresenceByEmail.Params,
 ) => ({
+  name: "getOrganizationMemberPresenceByEmail",
   sql: getOrganizationMemberPresenceByEmailSql,
   args: [params.organizationId, params.email],
-  name: "getOrganizationMemberPresenceByEmail",
 });
 
 export const getOrganizationMemberPresenceByEmail = Object.assign(
@@ -357,9 +357,9 @@ WHERE organizationId = ?
 LIMIT 1;
 `.trim();
 const getInviteByOrganizationAndEmailQuery = (params: getInviteByOrganizationAndEmail.Params) => ({
+  name: "getInviteByOrganizationAndEmail",
   sql: getInviteByOrganizationAndEmailSql,
   args: [params.organizationId, params.email],
-  name: "getInviteByOrganizationAndEmail",
 });
 
 export const getInviteByOrganizationAndEmail = Object.assign(
@@ -408,6 +408,7 @@ VALUES (
 );
 `.trim();
 const insertInviteQuery = (params: insertInvite.Params) => ({
+  name: "insertInvite",
   sql: insertInviteSql,
   args: [
     params.id,
@@ -419,7 +420,6 @@ const insertInviteQuery = (params: insertInvite.Params) => ({
     params.createdAt,
     params.inviterId,
   ],
-  name: "insertInvite",
 });
 
 export const insertInvite = Object.assign(
@@ -460,9 +460,9 @@ ORDER BY i.createdAt DESC,
   i.email ASC;
 `.trim();
 const listInvitesByOrganizationIdQuery = (params: listInvitesByOrganizationId.Params) => ({
+  name: "listInvitesByOrganizationId",
   sql: listInvitesByOrganizationIdSql,
   args: [params.organizationId],
-  name: "listInvitesByOrganizationId",
 });
 
 export const listInvitesByOrganizationId = Object.assign(
@@ -500,9 +500,9 @@ WHERE id = ?
 const deleteInviteByIdAndOrganizationIdQuery = (
   params: deleteInviteByIdAndOrganizationId.Params,
 ) => ({
+  name: "deleteInviteByIdAndOrganizationId",
   sql: deleteInviteByIdAndOrganizationIdSql,
   args: [params.id, params.organizationId],
-  name: "deleteInviteByIdAndOrganizationId",
 });
 
 export const deleteInviteByIdAndOrganizationId = Object.assign(
@@ -541,9 +541,9 @@ ORDER BY i.createdAt DESC,
   i.id ASC;
 `.trim();
 const listPendingInvitesByEmailQuery = (params: listPendingInvitesByEmail.Params) => ({
+  name: "listPendingInvitesByEmail",
   sql: listPendingInvitesByEmailSql,
   args: [params.email],
-  name: "listPendingInvitesByEmail",
 });
 
 export const listPendingInvitesByEmail = Object.assign(
@@ -589,9 +589,9 @@ WHERE i.id = ?
 LIMIT 1;
 `.trim();
 const getPendingInviteByIdAndEmailQuery = (params: getPendingInviteByIdAndEmail.Params) => ({
+  name: "getPendingInviteByIdAndEmail",
   sql: getPendingInviteByIdAndEmailSql,
   args: [params.id, params.email],
-  name: "getPendingInviteByIdAndEmail",
 });
 
 export const getPendingInviteByIdAndEmail = Object.assign(
@@ -632,9 +632,9 @@ const updateInviteStatusByIdQuery = (
   data: updateInviteStatusById.Data,
   params: updateInviteStatusById.Params,
 ) => ({
+  name: "updateInviteStatusById",
   sql: updateInviteStatusByIdSql,
   args: [data.status, params.id],
-  name: "updateInviteStatusById",
 });
 
 export const updateInviteStatusById = Object.assign(
