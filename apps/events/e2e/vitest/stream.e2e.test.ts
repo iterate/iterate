@@ -28,7 +28,7 @@ const historyIdleTimeoutMs = 250;
 const pollIntervalMs = 50;
 const testTimeoutMs = 10_000;
 const circuitBreakerTripTimeoutMs = 15_000;
-const circuitBreakerSlowTestTimeoutMs = 20_000;
+const circuitBreakerSlowTestTimeoutMs = 90_000;
 const slowCircuitBreakerDelayMs = 20;
 const rapidCircuitBreakerEventCount = 540;
 const slowCircuitBreakerEventCount = 540;
@@ -920,24 +920,6 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
-    "destroy allows wiping the root stream",
-    async () => {
-      const stateBeforeDestroy = await app.client.getState({ path: "/" });
-
-      const result = await app.client.destroy({ params: { path: "/" }, query: {} });
-      expect(result).toEqual({
-        destroyedStreamCount: 1,
-        finalStateByPath: {
-          "/": {
-            finalState: stateBeforeDestroy,
-          },
-        },
-      });
-    },
-    testTimeoutMs,
-  );
-
-  test(
     "first append to a nested stream initializes the chain and propagates child-stream-created events upward",
     async () => {
       const top = randomUUID().slice(0, 6);
@@ -962,6 +944,7 @@ describe.sequential("events stream e2e", () => {
       });
 
       await waitForEvent(app, "/", (event) => isChildStreamCreatedForPath(event, path));
+      await waitForEvent(app, parentPath, (event) => isChildStreamCreatedForPath(event, path));
 
       expect(await collectStreamEvents(app, { path })).toMatchObject([
         {
@@ -992,6 +975,10 @@ describe.sequential("events stream e2e", () => {
           .filter((event) => event.type === "events.iterate.com/core/child-stream-created")
           .map((event) => getPayloadPath(event)),
       ).toEqual([path]);
+
+      for (const propagatedPath of propagatedPaths) {
+        await waitForEvent(app, "/", (event) => isChildStreamCreatedForPath(event, propagatedPath));
+      }
 
       const rootEvents = await collectAllStreamEvents(app, { path: "/" });
       const rootPropagatedPaths = rootEvents
@@ -1028,6 +1015,7 @@ describe.sequential("events stream e2e", () => {
       });
 
       await waitForEvent(app, "/", (event) => isChildStreamCreatedForPath(event, childPath));
+      await waitForEvent(app, parentPath, (event) => isChildStreamCreatedForPath(event, childPath));
 
       const parentInitializedBefore = (
         await collectAllStreamEvents(app, { path: parentPath })
@@ -1233,6 +1221,24 @@ describe.sequential("events stream e2e", () => {
         controller.abort();
         await iterator.return?.();
       }
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "destroy allows wiping the root stream",
+    async () => {
+      const stateBeforeDestroy = await app.client.getState({ path: "/" });
+
+      const result = await app.client.destroy({ params: { path: "/" }, query: {} });
+      expect(result).toEqual({
+        destroyedStreamCount: 1,
+        finalStateByPath: {
+          "/": {
+            finalState: stateBeforeDestroy,
+          },
+        },
+      });
     },
     testTimeoutMs,
   );

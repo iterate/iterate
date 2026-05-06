@@ -86,8 +86,13 @@ export class StreamCapability extends WorkerEntrypoint<StreamCapabilityEnv, Stre
   async append(input: StreamAppendInput): Promise<Event> {
     const path = this.resolveProjectPath(input);
     this.assertMayAppend(path);
+    debugCodemodeDepth("streamCapability.append.start", {
+      eventType: input.event.type,
+      path,
+      projectId: this.ctx.props.projectId,
+    });
 
-    return await appendProjectStreamEvent({
+    const event = await appendProjectStreamEvent({
       streamNamespace: this.env.STREAM,
       path,
       projectId: this.ctx.props.projectId,
@@ -99,6 +104,13 @@ export class StreamCapability extends WorkerEntrypoint<StreamCapabilityEnv, Stre
         },
       } as EventInput,
     });
+    debugCodemodeDepth("streamCapability.append.done", {
+      eventOffset: event.offset,
+      eventType: event.type,
+      path,
+      projectId: this.ctx.props.projectId,
+    });
+    return event;
   }
 
   async read(input: StreamReadInput = {}): Promise<Event[]> {
@@ -112,6 +124,12 @@ export class StreamCapability extends WorkerEntrypoint<StreamCapabilityEnv, Stre
   }
 
   async stream(input: StreamEventsInput = {}): Promise<Response> {
+    debugCodemodeDepth("streamCapability.stream.start", {
+      afterOffset: input.afterOffset,
+      beforeOffset: input.beforeOffset,
+      path: this.resolveProjectPath(input),
+      projectId: this.ctx.props.projectId,
+    });
     const events = streamProjectStreamEvents({
       streamNamespace: this.env.STREAM,
       path: this.resolveProjectPath(input),
@@ -264,6 +282,10 @@ function globMatchesPath(pattern: string, path: string) {
     .map((part) => part.replace(/[|\\{}()[\]^$+?.]/g, "\\$&").replace(/\*/g, "[^/]*"))
     .join(".*");
   return new RegExp(`^${source}$`).test(path);
+}
+
+function debugCodemodeDepth(message: string, payload: Record<string, unknown>) {
+  console.log("[DEBUG-cm-depth]", JSON.stringify({ message, ...payload }));
 }
 
 async function getInitializedProjectStreamStub(args: {

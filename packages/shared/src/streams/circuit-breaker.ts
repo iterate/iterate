@@ -3,6 +3,7 @@ import {
   CircuitBreakerConfiguredEvent,
   type CircuitBreakerState,
   STREAM_DURABLE_OBJECT_WOKE_UP_TYPE,
+  STREAM_ERROR_OCCURRED_TYPE,
   STREAM_PAUSED_TYPE,
   STREAM_RESUMED_TYPE,
   StreamPausedError,
@@ -64,6 +65,7 @@ export const circuitBreakerProcessor = {
   beforeAppend({ event, state }) {
     if (!state.paused) return;
     if (event.type === STREAM_RESUMED_TYPE) return;
+    if (event.type === STREAM_ERROR_OCCURRED_TYPE) return;
     if (event.type === STREAM_DURABLE_OBJECT_WOKE_UP_TYPE) {
       return;
     }

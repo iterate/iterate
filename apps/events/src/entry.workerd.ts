@@ -10,6 +10,7 @@ import handler from "@tanstack/react-start/server-entry";
 import { createD1Client } from "sqlfu";
 import manifest, { AppConfig } from "~/app.ts";
 import type { AppContext } from "~/context.ts";
+import { E2EAppendChainSubscriber } from "~/durable-objects/e2e-append-chain-subscriber.ts";
 
 const config = parseAppConfigFromEnv({
   configSchema: AppConfig,
@@ -19,6 +20,11 @@ const config = parseAppConfigFromEnv({
 
 export default {
   async fetch(request: Request, env: Env, cfCtx: ExecutionContext) {
+    const e2eSubscriberResponse = await routeE2EAppendChainSubscriberStatus(request, env);
+    if (e2eSubscriberResponse !== undefined) {
+      return e2eSubscriberResponse;
+    }
+
     const durableObjectResponse = await routeDurableObjectRequest(request, [
       registerDurableObjectPublicRoute({
         namespace: env.STREAM as never,
@@ -53,4 +59,22 @@ export default {
   },
 };
 
-export { StreamDurableObject };
+export { E2EAppendChainSubscriber, StreamDurableObject };
+
+async function routeE2EAppendChainSubscriberStatus(request: Request, env: Env) {
+  const url = new URL(request.url);
+  const prefix = "/__e2e/append-chain-subscriber/";
+  if (!url.pathname.startsWith(prefix) || !url.pathname.endsWith("/status")) {
+    return undefined;
+  }
+
+  const name = decodeURIComponent(url.pathname.slice(prefix.length, -"/status".length));
+  if (name.trim() === "") {
+    return Response.json({ error: "Missing subscriber name" }, { status: 400 });
+  }
+
+  const namespace =
+    env.E2E_APPEND_CHAIN_SUBSCRIBER as DurableObjectNamespace<E2EAppendChainSubscriber>;
+  const stub = namespace.get(namespace.idFromName(name));
+  return await stub.fetch(new Request("https://e2e-append-chain-subscriber.local/status", request));
+}

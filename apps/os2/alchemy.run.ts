@@ -5,6 +5,7 @@ import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
 import type { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
 import manifest, { AppConfig } from "./src/app.ts";
 import type { CodemodeSession } from "./src/durable-objects/codemode-session.ts";
+import type { DebugAppendChainSubscriber } from "./src/durable-objects/debug-append-chain-subscriber.ts";
 import type { ProjectDurableObject } from "./src/durable-objects/project-durable-object.ts";
 import type { ProjectMcpServerConnection } from "./src/durable-objects/project-mcp-server-connection.ts";
 import type {
@@ -67,6 +68,13 @@ const agent = DurableObjectNamespace<AgentDurableObject>("agent", {
   className: "AgentDurableObject",
   sqlite: true,
 });
+const debugAppendChainSubscriber = DurableObjectNamespace<DebugAppendChainSubscriber>(
+  "debug-append-chain-subscriber",
+  {
+    className: "DebugAppendChainSubscriber",
+    sqlite: true,
+  },
+);
 
 const { worker, afterFinalize } = await IterateApp(ctx, {
   bindings: {
@@ -80,6 +88,7 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     AI: Ai(),
     LOADER: WorkerLoader(),
     CODEMODE_SESSION: codemodeSession,
+    DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber,
     AGENT: agent,
     PROJECT: project,
     REPO: repo,

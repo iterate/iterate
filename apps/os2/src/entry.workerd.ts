@@ -2,7 +2,15 @@ import { env as workerEnv } from "cloudflare:workers";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { withEvlog } from "@iterate-com/shared/apps/logging/with-evlog";
 import { NitroWebSocketResponse } from "@iterate-com/shared/nitro-ws-response";
+import {
+  getInitializedStreamStub,
+  type StreamDurableObjectNamespace,
+} from "@iterate-com/shared/streams/helpers.ts";
 import { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
+import {
+  STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
+  StreamPath,
+} from "@iterate-com/shared/streams/types.ts";
 import handler from "@tanstack/react-start/server-entry";
 import crossws from "crossws/adapters/cloudflare";
 import { createD1Client } from "sqlfu";
@@ -16,6 +24,7 @@ import {
   parseIngressCallable,
 } from "~/ingress/host-routing.ts";
 import type { ExactHostIngressRule } from "~/ingress/types.ts";
+import { DEBUG_APPEND_CHAIN_EVENT_TYPE } from "~/durable-objects/debug-append-chain-subscriber.ts";
 
 // Re-export rpc-targets used by OS2's existing loopback callable paths.
 // Stream processor subscriptions do not use these exports; they target Durable
@@ -23,6 +32,7 @@ import type { ExactHostIngressRule } from "~/ingress/types.ts";
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
 export { OutboundMcpFromOurClientCapability } from "~/rpc-targets/outbound-mcp-from-our-client-capability.ts";
 export { CodemodeSession } from "~/durable-objects/codemode-session.ts";
+export { DebugAppendChainSubscriber } from "~/durable-objects/debug-append-chain-subscriber.ts";
 export { ProjectDurableObject } from "~/durable-objects/project-durable-object.ts";
 export { ProjectMcpServerConnection } from "~/durable-objects/project-mcp-server-connection.ts";
 export {
@@ -49,6 +59,9 @@ const config = parseAppConfigFromEnv({
 
 export default {
   async fetch(request: Request, env: Env, cfCtx: ExecutionContext) {
+    const debugAppendChainResponse = await handleDebugAppendChainFetch({ request, env });
+    if (debugAppendChainResponse) return debugAppendChainResponse;
+
     return withEvlog(
       {
         request,
@@ -110,6 +123,153 @@ export default {
     );
   },
 };
+
+async function handleDebugAppendChainFetch(input: { request: Request; env: Env }) {
+  const url = new URL(input.request.url);
+  if (url.pathname !== "/__debug/append-chain") return null;
+
+  const expectedToken = config.adminApiSecret?.exposeSecret();
+  if (expectedToken == null) {
+    return Response.json({ error: "Debug endpoint is disabled." }, { status: 404 });
+  }
+
+  if (input.request.headers.get("authorization") !== `Bearer ${expectedToken}`) {
+    return Response.json({ error: "Unauthorized." }, { status: 401 });
+  }
+
+  const action = parseDebugAppendChainAction(url.searchParams.get("action"));
+  const mode = parseDebugAppendChainMode(url.searchParams.get("mode"));
+  const chainId = normalizeDebugChainId(url.searchParams.get("chainId"));
+  const max = parseDebugPositiveInt(url.searchParams.get("max"), {
+    defaultValue: 4,
+    max: 200,
+    name: "max",
+  });
+  const projectId = `debug-append-chain-${chainId}`;
+  const streamPath = StreamPath.parse(`/debug/append-chain/${chainId}`);
+  const stream = await getInitializedStreamStub({
+    namespace: input.env.STREAM as unknown as StreamDurableObjectNamespace,
+    projectId,
+    path: streamPath,
+  });
+
+  const startedAt = Date.now();
+  if (action === "status") {
+    const history = await stream.history({ after: "start" });
+    const tickEvents = history.filter((event) => event.type === DEBUG_APPEND_CHAIN_EVENT_TYPE);
+    return Response.json({
+      chainId,
+      durationMs: Date.now() - startedAt,
+      eventCount: history.length,
+      max,
+      mode,
+      streamPath,
+      tickCount: tickEvents.length,
+      tickOffsets: tickEvents.map((event) => event.offset),
+      ticks: tickEvents.map((event) => ({
+        offset: event.offset,
+        payload: event.payload,
+      })),
+    });
+  }
+
+  try {
+    await stream.append({
+      type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
+      idempotencyKey: `debug-append-chain-subscription:${chainId}`,
+      payload: {
+        slug: `debug-append-chain:${chainId}`,
+        type: "callable",
+        callable: {
+          type: "workers-rpc",
+          via: {
+            type: "env-binding",
+            bindingType: "durable-object-namespace",
+            bindingName: "DEBUG_APPEND_CHAIN_SUBSCRIBER",
+            durableObject: { name: chainId },
+          },
+          rpcMethod: "afterAppend",
+          argsMode: "object",
+        },
+      },
+    });
+
+    const triggerEvent = await stream.append({
+      type: DEBUG_APPEND_CHAIN_EVENT_TYPE,
+      payload: {
+        chainId,
+        count: 1,
+        max,
+        mode,
+        projectId,
+        streamPath,
+      },
+    });
+
+    const responseBody = {
+      action,
+      chainId,
+      durationMs: Date.now() - startedAt,
+      max,
+      mode,
+      streamPath,
+      triggerOffset: triggerEvent.offset,
+    };
+
+    console.log("[DEBUG-append-chain] endpoint.started", responseBody);
+    return Response.json(responseBody);
+  } catch (error) {
+    return Response.json(
+      {
+        action,
+        chainId,
+        durationMs: Date.now() - startedAt,
+        error: {
+          name: error instanceof Error ? error.name : "Error",
+          message: error instanceof Error ? error.message : String(error),
+        },
+        max,
+        mode,
+        streamPath,
+      },
+      { status: 500 },
+    );
+  }
+}
+
+function parseDebugAppendChainAction(value: string | null): "start" | "status" {
+  if (value == null || value === "" || value === "start") return "start";
+  if (value === "status") return "status";
+  throw new Error('action must be "start" or "status".');
+}
+
+function parseDebugAppendChainMode(value: string | null): "alarm" | "sync" {
+  if (value == null || value === "" || value === "sync") return "sync";
+  if (value === "alarm") return "alarm";
+  throw new Error('mode must be "sync" or "alarm".');
+}
+
+function parseDebugPositiveInt(
+  value: string | null,
+  options: { defaultValue: number; max: number; name: string },
+) {
+  if (value == null || value === "") return options.defaultValue;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > options.max) {
+    throw new Error(`${options.name} must be an integer from 1 to ${options.max}.`);
+  }
+  return parsed;
+}
+
+function normalizeDebugChainId(value: string | null) {
+  const candidate = value ?? crypto.randomUUID().replaceAll("-", "");
+  const normalized = candidate
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "-")
+    .slice(0, 64);
+  if (!normalized) throw new Error("chainId must contain at least one URL-safe character.");
+  return normalized;
+}
 
 function ingressRouteRowToRule(row: {
   id: string;

@@ -1,15 +1,17 @@
 import { z } from "zod";
 import {
-  StreamSocketAppendFrame,
-  StreamSocketErrorFrame,
-  StreamSocketEventFrame,
-} from "./stream-socket-types.ts";
-import {
   connectCallableWebSocket,
   dispatchCallable,
 } from "@iterate-com/shared/callable/runtime.ts";
 import type { CallableContext, FetchCallable } from "@iterate-com/shared/callable/types.ts";
 import { match } from "schematch";
+import type { BuiltinProcessor } from "./builtin-processor.ts";
+import { getCompiledJsonata } from "./compiled-jsonata.ts";
+import {
+  StreamSocketAppendFrame,
+  StreamSocketErrorFrame,
+  StreamSocketEventFrame,
+} from "./stream-socket-types.ts";
 import {
   STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
   type Event,
@@ -19,8 +21,12 @@ import {
   type ExternalWebsocketSubscriber,
   StreamSubscriptionConfiguredEvent,
 } from "./types.ts";
-import type { BuiltinProcessor } from "./builtin-processor.ts";
-import { getCompiledJsonata } from "./compiled-jsonata.ts";
+
+export type ExternalSubscriberPublishFailure = {
+  error: unknown;
+  event: Event;
+  subscriber: ExternalSubscriber;
+};
 
 type SubscriberConnection = {
   targetKey: string;
@@ -53,23 +59,54 @@ export const externalSubscriberProcessor = {
   },
 
   async afterAppend({ append, callableContext, event, state }) {
-    await Promise.all(
-      Object.values(state.subscribersBySlug).map((subscriber) =>
+    await publishExternalSubscribers({
+      append: (input) => Promise.resolve(append(input)),
+      callableContext: callableContext ?? {},
+      event,
+      state,
+    });
+  },
+} satisfies BuiltinProcessor<ExternalSubscriberState>;
+
+export async function publishExternalSubscribers(args: {
+  append: (event: EventInput) => Promise<Event>;
+  callableContext: CallableContext;
+  event: Event;
+  onError?(failure: ExternalSubscriberPublishFailure): void | Promise<void>;
+  state: ExternalSubscriberState;
+  subscriberTypes?: ReadonlySet<ExternalSubscriber["type"]>;
+}) {
+  await Promise.all(
+    Object.values(args.state.subscribersBySlug)
+      .filter(
+        (subscriber) => args.subscriberTypes == null || args.subscriberTypes.has(subscriber.type),
+      )
+      .map((subscriber) =>
         publishToExternalSubscriber({
-          append: (input) => Promise.resolve(append(input)),
-          callableContext: callableContext ?? {},
-          event,
+          append: args.append,
+          callableContext: args.callableContext,
+          event: args.event,
+          onError: args.onError,
           subscriber,
         }),
       ),
-    );
-  },
-} satisfies BuiltinProcessor<ExternalSubscriberState>;
+  );
+}
+
+export function hasExternalSubscribersOfType(
+  state: ExternalSubscriberState,
+  subscriberType: ExternalSubscriber["type"],
+) {
+  return Object.values(state.subscribersBySlug).some(
+    (subscriber) => subscriber.type === subscriberType,
+  );
+}
 
 async function publishToExternalSubscriber(args: {
   append: (event: EventInput) => Promise<Event>;
   callableContext: CallableContext;
   event: Event;
+  onError?(failure: ExternalSubscriberPublishFailure): void | Promise<void>;
   subscriber: ExternalSubscriber;
 }) {
   try {
@@ -118,6 +155,11 @@ async function publishToExternalSubscriber(args: {
       streamPath: args.event.streamPath,
     });
   } catch (error) {
+    await args.onError?.({
+      error,
+      event: args.event,
+      subscriber: args.subscriber,
+    });
     console.error("[stream-do] external subscriber publish failed", {
       streamPath: args.event.streamPath,
       offset: args.event.offset,

@@ -4,6 +4,7 @@ import { initAlchemy } from "@iterate-com/shared/alchemy/init";
 import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
 import { z } from "zod";
 import manifest, { AppConfig } from "./src/app.ts";
+import type { E2EAppendChainSubscriber } from "~/entry.workerd.ts";
 import type { StreamDurableObject } from "~/entry.workerd.ts";
 
 const DeploymentConfig = z.object({
@@ -33,11 +34,19 @@ const stream =
         className: "StreamDurableObject",
         scriptName: deploymentConfig.streamDurableObjectBindingScriptName,
       });
+const e2eAppendChainSubscriber = DurableObjectNamespace<E2EAppendChainSubscriber>(
+  "e2e-append-chain-subscriber",
+  {
+    className: "E2EAppendChainSubscriber",
+    sqlite: true,
+  },
+);
 
 const { worker, afterFinalize } = await IterateApp(ctx, {
   bindings: {
     DB: db,
     DO_CATALOG: db,
+    E2E_APPEND_CHAIN_SUBSCRIBER: e2eAppendChainSubscriber,
     STREAM: stream,
   },
   // Cloudflare gates `request.signal` behind this flag — needed by the oRPC

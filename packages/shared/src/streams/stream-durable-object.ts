@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { createDurableObjectClient, type SyncClient } from "sqlfu";
 import type { CallableContext } from "@iterate-com/shared/callable/types.ts";
 import { withDurableObjectCore } from "@iterate-com/shared/durable-object-utils/mixins/with-durable-object-core";
 import { withD1ObjectCatalog } from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
@@ -15,6 +16,7 @@ import {
   ProjectId,
   STREAM_CHILD_STREAM_CREATED_TYPE,
   STREAM_DURABLE_OBJECT_WOKE_UP_TYPE,
+  STREAM_ERROR_OCCURRED_TYPE,
   STREAM_FIRST_INITIALIZED_TYPE,
   StreamInitializedEvent,
   STREAM_METADATA_UPDATED_TYPE,
@@ -34,7 +36,10 @@ import {
 } from "./db/queries/.generated/index.ts";
 import {
   externalSubscriberProcessor,
+  hasExternalSubscribersOfType,
+  publishExternalSubscribers,
   resetSubscriberSocketsForStream,
+  type ExternalSubscriberPublishFailure,
 } from "./external-subscriber.ts";
 import {
   getInitializedStreamStub,
@@ -53,6 +58,10 @@ type StreamDurableObjectEnv = {
   DO_CATALOG: D1Database;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
 } & Record<string, unknown>;
+
+const CALLABLE_SUBSCRIBER_ALARM_QUEUE_KEY = "stream-do:callable-subscriber-alarm-queue";
+const CALLABLE_SUBSCRIBERS = new Set(["callable"] as const);
+const NON_CALLABLE_SUBSCRIBERS = new Set(["webhook", "websocket"] as const);
 
 const StreamDurableObjectLifecycleBase = withD1ObjectCatalog<
   StreamDurableObjectInitParams,
@@ -210,6 +219,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
    */
   append(inputEvent: EventInput): Event {
     const input = EventInput.parse(inputEvent);
+    this.ensureInitializedStreamStorage();
 
     if (input.idempotencyKey != null) {
       const existingEvent = this.getEventByIdempotencyKey(input.idempotencyKey);
@@ -364,6 +374,10 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
       },
       event,
       processors: this.state.processors,
+      subscriberTypes: NON_CALLABLE_SUBSCRIBERS,
+      onExternalSubscriberError: (failure) => {
+        this.appendExternalSubscriberDeliveryError(failure);
+      },
       onError: ({ error, event, processorSlug }) => {
         console.error("[stream-do] processor afterAppend failed", {
           path: this.state.path,
@@ -373,6 +387,72 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
         });
       },
     });
+
+    if (this.shouldQueueCallableSubscriberDelivery(event)) {
+      void this.enqueueCallableSubscriberDelivery(event.offset).catch((error) => {
+        console.error("[stream-do] failed to enqueue callable subscriber delivery", {
+          path: this.state.path,
+          offset: event.offset,
+          eventType: event.type,
+          error,
+        });
+        this.appendProcessorErrorEvent({
+          event,
+          idempotencyKey: `stream-do:callable-subscriber-enqueue-error:${event.offset}`,
+          message: `Failed to enqueue callable subscriber delivery for ${event.type} at offset ${event.offset}: ${formatErrorMessage(error)}`,
+          metadata: {
+            source: "stream-do",
+            processor: "external-subscriber",
+            stage: "enqueue-callable-subscriber-delivery",
+            failedEventOffset: event.offset,
+            failedEventType: event.type,
+          },
+        });
+      });
+    }
+  }
+
+  async alarm() {
+    if (this._state == null && !this.hydratePersistedStreamState({ appendWakeEvent: false })) {
+      return;
+    }
+
+    const offset = await this.dequeueCallableSubscriberDelivery();
+    if (offset == null) {
+      return;
+    }
+
+    const event = this.getEventByOffset(offset);
+    if (event == null) {
+      this.appendProcessorErrorEvent({
+        event: null,
+        idempotencyKey: `stream-do:callable-subscriber-missing-event:${offset}`,
+        message: `Callable subscriber delivery could not find event at offset ${offset}.`,
+        metadata: {
+          source: "stream-do",
+          processor: "external-subscriber",
+          stage: "deliver-callable-subscriber",
+          missingEventOffset: offset,
+        },
+      });
+      await this.ensureCallableSubscriberAlarmIfQueued();
+      return;
+    }
+
+    await publishExternalSubscribers({
+      append: (nextEvent) => Promise.resolve(this.append(nextEvent)),
+      callableContext: {
+        env: this.env as Record<string, unknown>,
+      },
+      event,
+      onError: (failure) => {
+        this.appendExternalSubscriberDeliveryError(failure);
+      },
+      state: this.state.processors["external-subscriber"],
+      subscriberTypes: CALLABLE_SUBSCRIBERS,
+    });
+
+    await this.ensureCallableSubscriberAlarmIfQueued();
   }
 
   // ---------------------------------------------------------------------------
@@ -380,6 +460,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
   // ---------------------------------------------------------------------------
 
   getState(): StreamState {
+    this.ensureInitializedStreamStorage();
     return this.state;
   }
 
@@ -438,6 +519,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
   // ---------------------------------------------------------------------------
 
   history(args: { after?: StreamCursor; before?: StreamCursor } = {}): Event[] {
+    this.ensureInitializedStreamStorage();
     const range = resolveStreamRange({
       after: args.after,
       before: args.before ?? "end",
@@ -520,6 +602,115 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
   private getEventByIdempotencyKey(idempotencyKey: string) {
     const row = getEventByIdempotencyKey(this.client, { idempotencyKey });
     return this.parseEventRow(row);
+  }
+
+  private ensureInitializedStreamStorage() {
+    if (this._state != null || this.hydratePersistedStreamState({ appendWakeEvent: false })) {
+      return;
+    }
+
+    // `destroy()` intentionally deletes the stream's SQLite storage, but the
+    // lifecycle mixin may keep the same JavaScript DO instance marked as started.
+    // Rebuild the stream from its immutable init params so the next initialized
+    // call observes the same "untouched stream initializes itself" contract as a
+    // fresh object.
+    this.initializeFirstStream(this.initParams);
+  }
+
+  private getEventByOffset(offset: number) {
+    return (
+      selectHistory(this.client, {
+        afterOffset: offset - 1,
+        beforeOffset: offset + 1,
+      })
+        .map((row) => this.parseEventRow(row))
+        .find((event) => event?.offset === offset) ?? null
+    );
+  }
+
+  private shouldQueueCallableSubscriberDelivery(event: Event) {
+    if (isInternalExternalSubscriberErrorEvent(event)) {
+      return false;
+    }
+
+    return hasExternalSubscribersOfType(this.state.processors["external-subscriber"], "callable");
+  }
+
+  private async enqueueCallableSubscriberDelivery(offset: number) {
+    const queue = await this.readCallableSubscriberDeliveryQueue();
+    if (!queue.includes(offset)) {
+      queue.push(offset);
+      await this.ctx.storage.put(CALLABLE_SUBSCRIBER_ALARM_QUEUE_KEY, queue);
+    }
+
+    await this.ctx.storage.setAlarm(Date.now());
+  }
+
+  private async dequeueCallableSubscriberDelivery() {
+    const [offset, ...remaining] = await this.readCallableSubscriberDeliveryQueue();
+    await this.ctx.storage.put(CALLABLE_SUBSCRIBER_ALARM_QUEUE_KEY, remaining);
+
+    if (remaining.length > 0) {
+      await this.ctx.storage.setAlarm(Date.now());
+    }
+
+    return offset ?? null;
+  }
+
+  private async ensureCallableSubscriberAlarmIfQueued() {
+    if ((await this.readCallableSubscriberDeliveryQueue()).length > 0) {
+      await this.ctx.storage.setAlarm(Date.now());
+    }
+  }
+
+  private async readCallableSubscriberDeliveryQueue() {
+    return (await this.ctx.storage.get<number[]>(CALLABLE_SUBSCRIBER_ALARM_QUEUE_KEY)) ?? [];
+  }
+
+  private appendExternalSubscriberDeliveryError(failure: ExternalSubscriberPublishFailure) {
+    if (isInternalExternalSubscriberErrorEvent(failure.event)) {
+      return;
+    }
+
+    this.appendProcessorErrorEvent({
+      event: failure.event,
+      idempotencyKey: `stream-do:external-subscriber-error:${failure.event.offset}:${failure.subscriber.slug}`,
+      message: `External subscriber "${failure.subscriber.slug}" failed while handling ${failure.event.type} at offset ${failure.event.offset}: ${formatErrorMessage(failure.error)}`,
+      metadata: {
+        source: "stream-do",
+        processor: "external-subscriber",
+        subscriberSlug: failure.subscriber.slug,
+        subscriberType: failure.subscriber.type,
+        failedEventOffset: failure.event.offset,
+        failedEventType: failure.event.type,
+      },
+    });
+  }
+
+  private appendProcessorErrorEvent(args: {
+    event: Event | null;
+    idempotencyKey: string;
+    message: string;
+    metadata: Record<string, string | number>;
+  }) {
+    try {
+      this.append({
+        type: STREAM_ERROR_OCCURRED_TYPE,
+        idempotencyKey: args.idempotencyKey,
+        payload: {
+          message: args.message,
+        },
+        metadata: args.metadata,
+      });
+    } catch (error) {
+      console.error("[stream-do] failed to append processor error event", {
+        path: this.state.path,
+        eventOffset: args.event?.offset,
+        eventType: args.event?.type,
+        reportError: error,
+        originalMessage: args.message,
+      });
+    }
   }
 
   private parseEventRow(row: SqliteEventRow | null | undefined): Event | null {
@@ -622,8 +813,10 @@ function runBuiltinAfterAppend(args: {
   append: (event: EventInput) => Event;
   callableContext: CallableContext;
   event: Event;
+  onExternalSubscriberError?(failure: ExternalSubscriberPublishFailure): void | Promise<void>;
   processors: StreamState["processors"];
   onError(args: { error: unknown; event: Event; processorSlug: string }): void;
+  subscriberTypes?: ReadonlySet<"callable" | "webhook" | "websocket">;
 }) {
   const circuitBreakerPromise = circuitBreakerProcessor.afterAppend?.({
     append: args.append,
@@ -641,21 +834,33 @@ function runBuiltinAfterAppend(args: {
     });
   }
 
-  const externalSubscriberPromise = externalSubscriberProcessor.afterAppend?.({
-    append: args.append,
+  const externalSubscriberPromise = publishExternalSubscribers({
+    append: (event) => Promise.resolve(args.append(event)),
     callableContext: args.callableContext,
     event: args.event,
+    onError: args.onExternalSubscriberError,
     state: args.processors["external-subscriber"],
+    subscriberTypes: args.subscriberTypes,
   });
-  if (externalSubscriberPromise != null) {
-    void externalSubscriberPromise.catch((error) => {
-      args.onError({
-        error,
-        event: args.event,
-        processorSlug: externalSubscriberProcessor.slug,
-      });
+  void externalSubscriberPromise.catch((error) => {
+    args.onError({
+      error,
+      event: args.event,
+      processorSlug: externalSubscriberProcessor.slug,
     });
-  }
+  });
+}
+
+function isInternalExternalSubscriberErrorEvent(event: Event) {
+  return (
+    event.type === STREAM_ERROR_OCCURRED_TYPE &&
+    event.metadata?.source === "stream-do" &&
+    event.metadata.processor === "external-subscriber"
+  );
+}
+
+function formatErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function reduceStreamCore(args: { state: StreamState; event: Event }): StreamState {

@@ -191,21 +191,54 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
   }
 
   async ensureLiveConsumer() {
+    debugCodemodeDepth("session.ensureLiveConsumer.start", {
+      name: this.initParams.name,
+      streamPath: this.initParams.streamPath,
+    });
     await this.ensureStarted();
     await this.ensureCallableSubscription();
+    debugCodemodeDepth("session.ensureLiveConsumer.afterSubscription", {
+      name: this.initParams.name,
+      streamPath: this.initParams.streamPath,
+    });
     await this.catchUpStreamProcessor({ signal: AbortSignal.timeout(30_000) });
+    debugCodemodeDepth("session.ensureLiveConsumer.afterCatchUp", {
+      name: this.initParams.name,
+      streamPath: this.initParams.streamPath,
+      state: this.getStreamProcessorRunnerState(),
+    });
   }
 
   async afterAppend(input: { event: Event }) {
+    debugCodemodeDepth("session.afterAppend.start", {
+      eventOffset: input.event.offset,
+      eventType: input.event.type,
+      name: this.initParams.name,
+    });
     await this.ensureStarted();
     const state = await this.consumeStreamProcessorEvent({ event: input.event as StreamEvent });
     this.resolvePendingFunctionCallFromEvent(input.event as StreamEvent);
+    debugCodemodeDepth("session.afterAppend.done", {
+      eventOffset: input.event.offset,
+      eventType: input.event.type,
+      name: this.initParams.name,
+      afterAppendCompletedThroughOffset: state.afterAppendCompletedThroughOffset,
+      reducedThroughOffset: state.reducedThroughOffset,
+    });
     return state;
   }
 
   async createSession(input: CreateCodemodeSessionInput = {}) {
     const params = await this.ensureStarted();
+    debugCodemodeDepth("session.createSession.start", {
+      providerCount: input.providers?.length ?? 0,
+      streamPath: params.streamPath,
+      hasCode: input.code != null,
+    });
     await this.ensureLiveConsumer();
+    debugCodemodeDepth("session.createSession.afterEnsureLiveConsumer", {
+      streamPath: params.streamPath,
+    });
     const appendedEvents: Event[] = [];
     const registeredProviderEvents: Event[] = [];
 
@@ -222,6 +255,10 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
     ];
 
     for (const provider of providers) {
+      debugCodemodeDepth("session.createSession.registerProvider", {
+        path: provider.path,
+        streamPath: params.streamPath,
+      });
       const event = await this.appendToolProviderRegisteredEvent({ provider });
       // Session creation is allowed to enqueue code immediately after provider
       // registration. Reduce provider registrations synchronously so the first
@@ -243,6 +280,11 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
               },
             },
           });
+    debugCodemodeDepth("session.createSession.done", {
+      providerEvents: registeredProviderEvents.length,
+      scriptExecutionOffset: scriptExecutionEvent?.offset,
+      streamPath: params.streamPath,
+    });
 
     return {
       appendedEvents,
@@ -447,9 +489,23 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
   }
 
   private async appendAndConsume(eventInput: EventInput) {
+    debugCodemodeDepth("session.appendAndConsume.beforeAppend", {
+      eventType: eventInput.type,
+      streamPath: this.initParams.streamPath,
+    });
     const event = await this.streamsEntrypoint().append({ event: eventInput });
+    debugCodemodeDepth("session.appendAndConsume.afterAppend", {
+      eventOffset: event.offset,
+      eventType: event.type,
+      streamPath: this.initParams.streamPath,
+    });
     await this.consumeStreamProcessorEvent({ event: event as StreamEvent });
     this.resolvePendingFunctionCallFromEvent(event as StreamEvent);
+    debugCodemodeDepth("session.appendAndConsume.afterConsume", {
+      eventOffset: event.offset,
+      eventType: event.type,
+      streamPath: this.initParams.streamPath,
+    });
     return event;
   }
 
@@ -782,6 +838,10 @@ function serializeErrorMessage(error: unknown) {
     return String((error as { message: unknown }).message);
   }
   return String(error);
+}
+
+function debugCodemodeDepth(message: string, payload: Record<string, unknown>) {
+  console.log("[DEBUG-cm-depth]", JSON.stringify({ message, ...payload }));
 }
 
 function serializeFunctionCallOutcomeForEvent(input: ReceiveFunctionCallResultInput["outcome"]) {

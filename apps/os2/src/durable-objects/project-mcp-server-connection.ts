@@ -205,11 +205,20 @@ export class ProjectMcpServerConnection extends (ProjectMcpServerConnectionBase 
       async ({ code }) => {
         const auth = this.requireProjectAuthProps();
         this.requireScope(auth, requiredToolScope);
-        const staticProviders = this.createStaticCodemodeToolProviders(auth);
+        const staticProviders = this.createStaticCodemodeToolProviders(auth).slice(
+          0,
+          readDebugProviderLimit(code),
+        );
 
         const invocationId = `mcp_tool_${crypto.randomUUID()}`;
         const startedAt = Date.now();
         const streamPath = await this.getSessionStreamPath();
+        debugCodemodeDepth("mcp.run_code.start", {
+          invocationId,
+          providerCount: staticProviders.length,
+          sessionId: this.getSessionId(),
+          streamPath,
+        });
 
         await this.emitLifecycleEvent("tool-invocation-started", {
           auth: summarizeAuthProps(auth),
@@ -220,8 +229,16 @@ export class ProjectMcpServerConnection extends (ProjectMcpServerConnectionBase 
           streamPath,
           toolName: "run_code",
         });
+        debugCodemodeDepth("mcp.run_code.afterStartedLifecycle", {
+          invocationId,
+          elapsedMs: Date.now() - startedAt,
+        });
 
         try {
+          debugCodemodeDepth("mcp.run_code.beforeStartSession", {
+            invocationId,
+            elapsedMs: Date.now() - startedAt,
+          });
           const started = await startCodemodeScriptOnSession({
             code,
             events: [],
@@ -229,6 +246,11 @@ export class ProjectMcpServerConnection extends (ProjectMcpServerConnectionBase 
             projectId: auth.projectId,
             providers: staticProviders,
             streamPath,
+          });
+          debugCodemodeDepth("mcp.run_code.afterStartSession", {
+            invocationId,
+            elapsedMs: Date.now() - startedAt,
+            offset: started.event.offset,
           });
           const output = await waitForScriptExecutionFinished({
             afterOffset: started.event.offset,
@@ -273,6 +295,11 @@ export class ProjectMcpServerConnection extends (ProjectMcpServerConnectionBase 
 
           return response;
         } catch (error) {
+          debugCodemodeDepth("mcp.run_code.error", {
+            invocationId,
+            elapsedMs: Date.now() - startedAt,
+            error: serializeError(error),
+          });
           await this.emitLifecycleEvent("tool-invocation-finished", {
             auth: summarizeAuthProps(auth),
             durationMs: Date.now() - startedAt,
@@ -488,6 +515,15 @@ export class ProjectMcpServerConnection extends (ProjectMcpServerConnectionBase 
       streamPath: await this.getSessionStreamPath(),
     });
   }
+}
+
+function debugCodemodeDepth(message: string, payload: Record<string, unknown>) {
+  console.log("[DEBUG-cm-depth]", JSON.stringify({ message, ...payload }));
+}
+
+function readDebugProviderLimit(code: string) {
+  const match = code.match(/providerLimit:(\d+)/);
+  return match ? Number(match[1]) : Number.POSITIVE_INFINITY;
 }
 
 function summarizeRequest(request: Request) {
