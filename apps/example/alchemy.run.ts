@@ -1,8 +1,9 @@
-import { D1Database, DurableObjectNamespace, Worker } from "alchemy/cloudflare";
+import { Container, D1Database, DurableObjectNamespace, Worker } from "alchemy/cloudflare";
 import { initAlchemy } from "@iterate-com/shared/alchemy/init";
 import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
 import manifest, { AppConfig } from "./src/app.ts";
 import type { ExampleCounter } from "./src/durable-objects/example-counter.ts";
+import type { Sandbox } from "@cloudflare/sandbox";
 
 const ctx = await initAlchemy(manifest, AppConfig, process.env);
 
@@ -25,10 +26,25 @@ const exampleCounterWorker = await Worker("example-counter-do", {
   },
 });
 
+const sandbox = await Container<Sandbox>("sandbox", {
+  className: "Sandbox",
+  build: {
+    context: ".",
+    dockerfile: "Dockerfile.sandbox",
+  },
+  instanceType: "lite",
+  maxInstances: 1,
+  adopt: true,
+  dev: {
+    remote: false,
+  },
+});
+
 const { worker, afterFinalize } = await IterateApp(ctx, {
   bindings: {
     DB: db,
     EXAMPLE_COUNTER: exampleCounterWorker.bindings.EXAMPLE_COUNTER,
+    SANDBOX: sandbox,
   },
   build: "pnpm exec vite build --config vite.cf.config.ts",
   dev: { command: "pnpm exec vite dev --config vite.cf.config.ts" },

@@ -14,6 +14,7 @@ const items = [
   { to: "/confetti", label: "Confetti" },
   { to: "/durable-object", label: "Durable Object" },
   { to: "/log-stream", label: "Log Stream" },
+  { to: "/sandbox", label: "Sandbox" },
   { to: "/things", label: "Things" },
 ] as const;
 

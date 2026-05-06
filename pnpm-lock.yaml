@@ -1262,6 +1262,9 @@ importers:
 
   apps/example:
     dependencies:
+      '@cloudflare/sandbox':
+        specifier: 0.9.4
+        version: 0.9.4(@opencode-ai/sdk@1.2.16)
       '@iterate-com/example-contract':
         specifier: workspace:*
         version: link:../example-contract
@@ -3965,6 +3968,20 @@ packages:
 
   '@cloudflare/sandbox@0.8.14':
     resolution: {integrity: sha512-tIXw1jBJjNouN7NEIPQbmuwbe7p1ikhhV6D83Lkkxif5FKgflzDwXl4diu9yfrho8Lc16rBnJ+Ieb5nFbunSWg==}
+    peerDependencies:
+      '@openai/agents': ^0.3.3
+      '@opencode-ai/sdk': ^1.1.40
+      '@xterm/xterm': '>=5.0.0'
+    peerDependenciesMeta:
+      '@openai/agents':
+        optional: true
+      '@opencode-ai/sdk':
+        optional: true
+      '@xterm/xterm':
+        optional: true
+
+  '@cloudflare/sandbox@0.9.4':
+    resolution: {integrity: sha512-T7Z90ZlVaODyFJdwU7wxXN6ZWO9O9NEy95I45Uyliqjy5cGEsStJG1FNFhvIOJp+u0qFuN4/8b+StAiM78Lf3w==}
     peerDependencies:
       '@openai/agents': ^0.3.3
       '@opencode-ai/sdk': ^1.1.40
@@ -11558,6 +11575,9 @@ packages:
 
   caniuse-lite@1.0.30001776:
     resolution: {integrity: sha512-sg01JDPzZ9jGshqKSckOQthXnYwOEP50jeVFhaSFbZcOy05TiuuaffDOfcwtCisJ9kNQuLBFibYywv2Bgm9osw==}
+
+  capnweb@0.6.1:
+    resolution: {integrity: sha512-fmhV26QPd1ewf5R74h55oVZnGwIcSaRMzbfLQUy8+zOBjuTmT3KXoT8wxHvnp1m9Ht9BoUUS5ZwNLoVLfQTyBg==}
 
   ccount@2.0.1:
     resolution: {integrity: sha512-eyrF0jiFpY+3drT6383f1qhkbGsLSifNAjA61IUjZjmLCWjItY6LB9ft9YhoDgwfmclB2zhu51Lc7+95b8NRAg==}
@@ -19554,6 +19574,15 @@ snapshots:
     dependencies:
       '@cloudflare/containers': 0.3.3
       aws4fetch: 1.0.20
+      hono: 4.12.15
+    optionalDependencies:
+      '@opencode-ai/sdk': 1.2.16
+
+  '@cloudflare/sandbox@0.9.4(@opencode-ai/sdk@1.2.16)':
+    dependencies:
+      '@cloudflare/containers': 0.3.3
+      aws4fetch: 1.0.20
+      capnweb: 0.6.1
       hono: 4.12.15
     optionalDependencies:
       '@opencode-ai/sdk': 1.2.16
@@ -28896,6 +28925,8 @@ snapshots:
   camelcase@8.0.0: {}
 
   caniuse-lite@1.0.30001776: {}
+
+  capnweb@0.6.1: {}
 
   ccount@2.0.1: {}
 

@@ -7,6 +7,7 @@ Minimal full-stack app: TanStack Start + oRPC over OpenAPI/HTTP + Drizzle, dual-
 - **API:** oRPC over OpenAPI/HTTP at `/api`
 - **Confetti:** websocket at `/api/confetti`
 - **Durable Object:** counter demo at `/api/durable-counter` with WebSocket sync at `/api/durable-counter/websocket`
+- **Sandbox:** Cloudflare Sandbox SDK proof of concept at `/sandbox`, backed by a local Cloudflare Container in `pnpm cf:dev`
 - **Frontend:** TanStack Start in SPA mode + TanStack Router + TanStack Query
 - **DB:** Drizzle ORM — better-sqlite3 (Node), D1 (Workers). Shared `BaseSQLiteDatabase<"sync" | "async">` type.
 - **Observability:** Node and Workers both use the shared `withEvlog()` runtime wrapper; shared `useEvlog()` only enriches a request-scoped log
@@ -26,7 +27,9 @@ Minimal full-stack app: TanStack Start + oRPC over OpenAPI/HTTP + Drizzle, dual-
 - `src/router.tsx` — TanStack Router setup plus SSR Query integration
 - `src/routes/api.$.ts` — OpenAPI oRPC catch-all route mounted at `/api`
 - `src/routes/api.confetti.ts` — confetti websocket route
+- `src/routes/_app/sandbox.tsx` — Sandbox SDK UI for editing and running JavaScript inside the sandbox container
 - `src/routes/__root.tsx` — root route with sidebar shell, SSR-loaded public config, shared app providers, and devtools
+- `Dockerfile.sandbox` — local/prod Cloudflare Sandbox SDK container image definition
 - `vite.config.ts` — Node dev/build via Nitro
 - `vite.cf.config.ts` — Cloudflare dev/build (uses Alchemy plugin)
 - PostHog source maps: `vite.config.ts` / `vite.cf.config.ts` pass `apiKey`, `projectId`, `releaseName: manifest.slug`, and `releaseVersion: "latest"` into `posthogSourcemaps` from `@iterate-com/shared/posthog/vite-plugin` (Doppler example `dev`, personal dev configs like `dev_jonas`, and `prd`, not `APP_CONFIG`)
@@ -93,6 +96,68 @@ pnpm cf:deploy    # Deploy to Cloudflare
 ```
 
 Pin the port with `PORT` or `NITRO_PORT` (default **3000** when unset). The Node bundle uses **srvx**; it prints `➜ Listening on: …` unless `TEST` is set (then the banner is hidden). The `start` script unsets `TEST` so Doppler does not suppress it. Request **evlog** lines match `pnpm dev` once you send traffic.
+
+## Cloudflare Sandbox POC
+
+This app includes a deliberately small Cloudflare Sandbox SDK proof of concept.
+It exists to prove the app can:
+
+- start a Cloudflare Sandbox container through the Worker runtime
+- write a user-editable JavaScript file into `/workspace`
+- execute that file with `sandbox.exec()`
+- return stdout, stderr, exit code, and duration to the UI
+- make public internet requests from inside the sandbox
+
+Start it with Cloudflare local dev:
+
+```bash
+PORT=5174 pnpm --dir apps/example cf:dev
+```
+
+Open:
+
+```text
+http://127.0.0.1:5174/sandbox
+```
+
+The default sample writes `/workspace/user-code.mjs`, runs it with Node, and
+fetches `https://example.com`. A successful run shows `exit 0` and
+`egressStatus: 200`.
+
+API endpoints:
+
+- `GET /api/sandbox` writes and executes `/workspace/status.mjs`, then returns
+  the Node version, platform, arch, and cwd from inside the sandbox.
+- `POST /api/sandbox/run` accepts `{ "code": "..." }`, writes it to
+  `/workspace/user-code.mjs`, executes it with Node, and returns command output.
+- `POST /api/sandbox/destroy` destroys the named sandbox instance so the next
+  status/run call starts fresh.
+
+The sandbox binding is defined in `alchemy.run.ts` using Alchemy's
+`Container<Sandbox>` resource. The Worker entrypoint exports Cloudflare's
+`Sandbox` class and uses `getSandbox(env.SANDBOX, "example-poc", ...)`.
+
+### Apple Silicon / OrbStack Sidecar Override
+
+On Apple Silicon, `pnpm cf:dev` sets `MINIFLARE_CONTAINER_EGRESS_IMAGE` to the
+arm64 `cloudflare/proxy-everything` digest before starting Alchemy. This is a
+workaround for a known Cloudflare local-dev sidecar issue where the amd64 egress
+sidecar fails under OrbStack with:
+
+```text
+Fatal error:  setsockoptint: protocol not available
+```
+
+This is intentionally an environment variable in `cf:dev`, not a pre-dev patch
+script and not a mutation of `node_modules`.
+
+Deep-dive docs:
+
+- `docs/cloudflare-sandbox-sdk-local-dev.md`
+- Cloudflare outbound traffic docs: https://developers.cloudflare.com/containers/platform-details/outbound-traffic/
+- Cloudflare Sandbox SDK getting started: https://developers.cloudflare.com/sandbox/get-started/
+- Upstream issue: https://github.com/cloudflare/sandbox-sdk/issues/522
+- Related Workers SDK issue: https://github.com/cloudflare/workers-sdk/issues/12965
 
 ## Runtime config
 
