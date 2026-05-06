@@ -59,13 +59,13 @@ test("Stream TUI starts and accepts slash command input", async ({ terminal }) =
 
   terminal.submit("/streams");
 
-  await expect(terminal.getByText("current", { strict: false })).toBeVisible();
+  await expect(terminal.getByText("●", { strict: false })).toBeVisible();
 
   const view = terminal.serialize().view;
   expect(view).toContain(streamPath);
   expect(view).toContain("●");
   expect(view).toContain("Type a message or / for commands");
-  expect(view).toContain("current");
+  expect(view).toContain("●");
   expect(view).not.toContain("raw event");
 
   terminal.write("\t");

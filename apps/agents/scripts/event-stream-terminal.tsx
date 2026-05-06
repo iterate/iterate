@@ -87,6 +87,7 @@ function StreamTerminalApp() {
   );
   const [status, setStatus] = useState("connecting");
   const [appendStatus, setAppendStatus] = useState("");
+  const [pulseOn, setPulseOn] = useState(true);
   const [composerValue, setComposerValue] = useState("");
   const [composerRevision, setComposerRevision] = useState(0);
   const [selectedOffset, setSelectedOffset] = useState<number | undefined>();
@@ -106,6 +107,12 @@ function StreamTerminalApp() {
   const [streamRestartNonce, setStreamRestartNonce] = useState(0);
   const currentReducer = feedModes[currentFeedMode].reducer;
   const activeAbortController = useRef<AbortController | undefined>(undefined);
+
+  useEffect(() => {
+    const interval = setInterval(() => setPulseOn((previous) => !previous), 700);
+    interval.unref();
+    return () => clearInterval(interval);
+  }, []);
 
   const replaceComposerValue = useCallback((value: string) => {
     setComposerValue(value);
@@ -129,7 +136,6 @@ function StreamTerminalApp() {
     activeAbortController.current?.abort();
     activeAbortController.current = abortController;
     setRawEvents([]);
-    setViewState(currentReducer.createInitialState());
     setSelectedOffset(undefined);
     setDetailEventOffset(undefined);
     setStatus("connecting");
@@ -156,7 +162,7 @@ function StreamTerminalApp() {
     })();
 
     return () => abortController.abort();
-  }, [client, currentReducer, currentStreamPath, streamRestartNonce]);
+  }, [client, currentStreamPath, streamRestartNonce]);
 
   const resolveStreamPath = useCallback(
     (streamPath?: string) => resolveStreamPathForCurrent({ currentStreamPath, streamPath }),
@@ -728,6 +734,7 @@ function StreamTerminalApp() {
       modeLabel={feedModes[currentFeedMode].label}
       status={status}
       appendStatus={appendStatus}
+      pulseOn={pulseOn}
       focusedRegion={navigationState.focus}
       activeView={navigationState.view}
       detailEventOffset={detailEventOffset}

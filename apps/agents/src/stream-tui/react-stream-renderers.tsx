@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import type { StreamPath } from "@iterate-com/events-contract";
-import type { ScrollBoxRenderable } from "@opentui/core";
+import { StyledText, TextAttributes, bg, fg, type ScrollBoxRenderable } from "@opentui/core";
 import type {
   EventsStreamBuiltInElement,
   EventsStreamCodemodeBlockElement,
@@ -16,7 +16,7 @@ import type {
   EventsStreamViewState,
 } from "@iterate-com/ui/components/events/feed-items";
 import { useTerminalDimensions } from "@opentui/react";
-import { useEffect, useRef } from "react";
+import { Fragment, useEffect, useRef } from "react";
 import { stringify as stringifyYaml } from "yaml";
 import type { StreamTuiView } from "./navigation-state.ts";
 import {
@@ -32,7 +32,9 @@ import type { StreamTreeRow } from "./stream-tree.ts";
 
 const TUI_COLORS = {
   bg: "#0b0f14",
-  surface: "#18181b",
+  surface: "#27272a",
+  surfaceDark: "#111827",
+  surfaceCard: "#0f172a",
   surfaceMuted: "#27272a",
   selected: "#1f2937",
   border: "#3f3f46",
@@ -40,6 +42,7 @@ const TUI_COLORS = {
   accentDim: "#16a34a",
   warning: "#facc15",
   text: "#e5e7eb",
+  textSecondary: "#9ca3af",
   textBody: "#d1d5db",
   textMuted: "#6b7280",
   textDim: "#71717a",
@@ -54,6 +57,7 @@ export function TuiEventsStreamView(props: {
   modeLabel: string;
   status: string;
   appendStatus: string;
+  pulseOn: boolean;
   focusedRegion: "header" | "feed" | "composer";
   activeView: StreamTuiView;
   detailEventOffset?: number;
@@ -86,6 +90,7 @@ export function TuiEventsStreamView(props: {
         modeLabel={props.modeLabel}
         status={props.status}
         appendStatus={props.appendStatus}
+        pulseOn={props.pulseOn}
         focused={props.focusedRegion === "header"}
         activeView={props.activeView}
         detailEventOffset={props.detailEventOffset}
@@ -124,6 +129,7 @@ function TuiEventsStreamHeader(props: {
   modeLabel: string;
   status: string;
   appendStatus: string;
+  pulseOn: boolean;
   focused: boolean;
   activeView: StreamTuiView;
   detailEventOffset?: number;
@@ -137,7 +143,12 @@ function TuiEventsStreamHeader(props: {
           ? "State"
           : props.streamPath
       : `Event ${props.detailEventOffset}`;
-  const statusColor = props.status === "streaming" ? TUI_COLORS.accent : TUI_COLORS.warning;
+  const statusColor =
+    props.status === "streaming"
+      ? props.pulseOn
+        ? TUI_COLORS.accent
+        : TUI_COLORS.accentDim
+      : TUI_COLORS.warning;
   const parts = [
     props.modeLabel,
     `${eventCount} event${eventCount === 1 ? "" : "s"}`,
@@ -161,11 +172,9 @@ function TuiEventsStreamHeader(props: {
       gap={1}
       focused={props.focused}
     >
-      <text width={6} fg={TUI_COLORS.text}>
-        ▐ 𝑖 ▌
-      </text>
+      <text width={6} content={getBrandMarkText()} />
       <text flexGrow={1} fg={TUI_COLORS.text} content={title} />
-      <text fg={TUI_COLORS.textSubdued} content={parts.join(" · ")} />
+      <text fg={TUI_COLORS.textSecondary} content={parts.join(" · ")} />
       <text width={2} fg={statusColor}>
         ●
       </text>
@@ -259,6 +268,7 @@ function TuiEventsStreamFeedSlot(props: {
   contentWidth: number;
 }) {
   const elapsedByOffset = getElapsedByOffset(props.elements);
+  let lastDateStr: string | undefined;
 
   if (props.elements.length === 0) {
     return <text fg={TUI_COLORS.textBody}>Waiting for events...</text>;
@@ -266,15 +276,39 @@ function TuiEventsStreamFeedSlot(props: {
 
   return (
     <>
-      {props.elements.map((element) => (
-        <TuiEventsStreamFeedElementRenderer
-          key={element.id}
-          element={element}
-          selectedOffset={props.selectedOffset}
-          elapsedByOffset={elapsedByOffset}
-          contentWidth={props.contentWidth}
-        />
-      ))}
+      {props.elements.map((element) => {
+        const timestamp = getElementTimestamp(element);
+        const dateStr =
+          timestamp == null
+            ? undefined
+            : new Date(timestamp).toLocaleDateString(undefined, {
+                weekday: "long",
+                year: "numeric",
+                month: "long",
+                day: "numeric",
+              });
+        const boundary =
+          dateStr != null && lastDateStr != null && dateStr !== lastDateStr ? dateStr : undefined;
+        if (dateStr != null) lastDateStr = dateStr;
+
+        return (
+          <Fragment key={element.id}>
+            {boundary == null ? null : (
+              <TuiTimelineRule
+                label={boundary}
+                color={TUI_COLORS.textDim}
+                contentWidth={props.contentWidth}
+              />
+            )}
+            <TuiEventsStreamFeedElementRenderer
+              element={element}
+              selectedOffset={props.selectedOffset}
+              elapsedByOffset={elapsedByOffset}
+              contentWidth={props.contentWidth}
+            />
+          </Fragment>
+        );
+      })}
     </>
   );
 }
@@ -365,7 +399,9 @@ function TuiMessageItem(props: { element: EventsStreamMessageElement; contentWid
 
   return (
     <box width="100%" flexDirection="column" paddingTop={1}>
-      <text fg={color} content={isUser ? rightAlign(header, props.contentWidth) : header} />
+      <text fg={color}>
+        <b>{isUser ? rightAlign(header, props.contentWidth) : header}</b>
+      </text>
       {lines.map((line, index) => (
         <text
           key={`${props.element.id}-${index}`}
@@ -403,7 +439,7 @@ function TuiSystemPromptItem(props: {
 }) {
   return (
     <TuiSimpleBlock
-      label={`System prompt updated · ${formatTime(props.element.props.timestamp)}`}
+      label={`⚙ System prompt updated · ${formatTime(props.element.props.timestamp)}`}
       text={props.element.props.text}
       color={TUI_COLORS.textSubdued}
       contentWidth={props.contentWidth}
@@ -439,7 +475,7 @@ function TuiLlmRequestBoundaryItem(props: {
 function TuiErrorItem(props: { element: EventsStreamErrorElement; contentWidth: number }) {
   return (
     <TuiSimpleBlock
-      label={`Error · ${formatTime(props.element.props.timestamp)}`}
+      label={`⚠ Error · ${formatTime(props.element.props.timestamp)}`}
       text={props.element.props.message}
       color={TUI_COLORS.danger}
       contentWidth={props.contentWidth}
@@ -513,7 +549,7 @@ function TuiGroupedRawEventItem(props: {
   const firstEvent = props.element.props.events[0];
   if (firstEvent == null) return null;
 
-  const countLabel = props.element.props.count > 1 ? `x${props.element.props.count}` : undefined;
+  const countLabel = props.element.props.count > 1 ? `×${props.element.props.count}` : undefined;
   const selected =
     props.selectedOffset != null &&
     props.element.props.events.some((event) => event.offset === props.selectedOffset);
@@ -567,7 +603,9 @@ function TuiSimpleBlock(props: {
 
   return (
     <box width="100%" flexDirection="column" paddingTop={1}>
-      <text fg={props.color} content={align(props.label)} />
+      <text fg={props.color}>
+        <b>{align(props.label)}</b>
+      </text>
       {visibleLines.map((line, index) => (
         <text key={`${props.label}-${index}`} fg={props.color} content={align(`  ${line}`)} />
       ))}
@@ -628,24 +666,33 @@ function TuiStreamsView(props: {
 
 function TuiStreamRow(props: { row: StreamTreeRow; contentWidth: number }) {
   const prefix = `${"  ".repeat(props.row.depth)}${
-    props.row.hasChildren ? (props.row.expanded ? "v" : ">") : " "
+    props.row.hasChildren ? (props.row.expanded ? "▾" : "▸") : " "
   } `;
   const label = props.row.labelSegments.map((segment) => segment.text).join("");
   const suffix = [
-    props.row.current ? "current" : "",
+    props.row.current ? "●" : "",
     props.row.createdAt == null ? "" : formatTime(new Date(props.row.createdAt).getTime()),
   ]
     .filter(Boolean)
     .join("  ");
   const gap = Math.max(2, props.contentWidth - prefix.length - label.length - suffix.length);
-  const content = `${prefix}${label}${" ".repeat(gap)}${suffix}`;
 
   return (
     <text
       fg={props.row.current ? TUI_COLORS.text : TUI_COLORS.textSubdued}
       bg={props.row.selected ? TUI_COLORS.selected : undefined}
-      content={content}
-    />
+    >
+      <span>{prefix}</span>
+      {props.row.labelSegments.map((segment, index) =>
+        segment.matched ? (
+          <b key={index}>{segment.text}</b>
+        ) : (
+          <span key={index}>{segment.text}</span>
+        ),
+      )}
+      <span>{" ".repeat(gap)}</span>
+      <span>{suffix}</span>
+    </text>
   );
 }
 
@@ -685,7 +732,7 @@ function TuiEventDetailView(props: {
             <text
               key={`${index}-${wrappedIndex}`}
               fg={TUI_COLORS.textBody}
-              bg={TUI_COLORS.surface}
+              bg={TUI_COLORS.surfaceCard}
               content={` ${wrapped}`}
             />
           )),
@@ -709,23 +756,32 @@ function TuiSlashPanel(props: {
       flexDirection="column"
       paddingLeft={1}
       paddingRight={1}
-      backgroundColor={TUI_COLORS.surface}
+      backgroundColor={TUI_COLORS.surfaceDark}
     >
       {props.commandDocs.length > 0
         ? props.commandDocs.map((line, index) => (
             <text
               key={`${line}-${index}`}
               fg={index === 0 ? TUI_COLORS.text : TUI_COLORS.textSubdued}
-              content={line}
-            />
+            >
+              {index === 0 ? <b>{line}</b> : line}
+            </text>
           ))
         : props.suggestions.map((suggestion) => (
             <text
               key={suggestion.path}
               fg={suggestion.path === props.selectedPath ? TUI_COLORS.text : TUI_COLORS.textSubdued}
               bg={suggestion.path === props.selectedPath ? TUI_COLORS.selected : undefined}
-              content={suggestion.segments.map((segment) => segment.text).join("")}
-            />
+              attributes={suggestion.path === props.selectedPath ? TextAttributes.BOLD : undefined}
+            >
+              {suggestion.segments.map((segment, index) =>
+                segment.matched ? (
+                  <b key={index}>{segment.text}</b>
+                ) : (
+                  <span key={index}>{segment.text}</span>
+                ),
+              )}
+            </text>
           ))}
     </box>
   );
@@ -774,6 +830,20 @@ function TuiComposer(props: {
 }
 
 const getRawSummaries = getRawEventSummariesForTui;
+
+function getBrandMarkText() {
+  return new StyledText([
+    fg("#000000")(bg(TUI_COLORS.surface)("▐")),
+    bg("#000000")(fg("#ffffff")(" 𝑖 ")),
+    fg("#000000")(bg(TUI_COLORS.surface)("▌")),
+  ]);
+}
+
+function getElementTimestamp(element: EventsStreamBuiltInElement) {
+  if ("timestamp" in element.props) return element.props.timestamp as number;
+  if ("firstTimestamp" in element.props) return element.props.firstTimestamp as number;
+  return undefined;
+}
 
 function countRawEvents(elements: readonly EventsStreamBuiltInElement[]) {
   let count = 0;
