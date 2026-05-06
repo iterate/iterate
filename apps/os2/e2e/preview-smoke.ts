@@ -6,8 +6,8 @@ function requireBaseUrl() {
   return new URL(baseUrl);
 }
 
-function readProjectBaseUrlOverride() {
-  const url = process.env.OS2_PROJECT_BASE_URL?.trim();
+function readProjectMcpUrlOverride() {
+  const url = process.env.OS2_PROJECT_MCP_URL?.trim();
   return url ? new URL(url) : null;
 }
 
@@ -22,12 +22,12 @@ async function expectStatus(input: { method?: string; status: number; url: URL }
   return response;
 }
 
-function projectHostnameFor(baseUrl: URL, projectBaseUrlOverride: URL | null) {
-  if (projectBaseUrlOverride) return projectBaseUrlOverride.hostname;
+function projectMcpUrlFor(baseUrl: URL, projectMcpUrlOverride: URL | null) {
+  if (projectMcpUrlOverride) return projectMcpUrlOverride;
 
   const previewMatch = /^os2\.iterate-preview-(\d+)\.com$/.exec(baseUrl.hostname);
   if (previewMatch) {
-    return `demo.iterate-preview-${previewMatch[1]}.app`;
+    return new URL(`https://mcp__demo.iterate-preview-${previewMatch[1]}.app/`);
   }
 
   const dashboardPrefix = "os.";
@@ -40,19 +40,20 @@ function projectHostnameFor(baseUrl: URL, projectBaseUrlOverride: URL | null) {
     .slice(dashboardPrefix.length)
     // OS2 dashboard hosts use `.com` for the app shell while project/MCP hosts
     // use `.app` for user code and OAuth resource URLs. Keep the smoke test's
-    // fallback derivation aligned with the deployed dev/prod host contract, and
-    // allow OS2_PROJECT_BASE_URL above for any future topology that cannot be
+    // fallback derivation aligned with the deployed dev/prod host contract. Use
+    // the single-label MCP host because wildcard certificates cover it in
+    // preview, and allow OS2_PROJECT_MCP_URL above for any future topology that cannot be
     // inferred from OS2_BASE_URL alone.
     .replace(/\.com$/, ".app");
-  return `demo.${projectHostnameBase}`;
+  return new URL(`https://mcp__demo.${projectHostnameBase}/`);
 }
 
-function hasSeededProjectHost(projectBaseUrlOverride: URL | null) {
-  return projectBaseUrlOverride !== null;
+function hasSeededProjectHost(projectMcpUrlOverride: URL | null) {
+  return projectMcpUrlOverride !== null;
 }
 
 const baseUrl = requireBaseUrl();
-const projectBaseUrlOverride = readProjectBaseUrlOverride();
+const projectMcpUrlOverride = readProjectMcpUrlOverride();
 
 // This smoke test intentionally avoids authenticated application procedures.
 // Preview CI has no stable seeded Clerk user/project, so it proves the deployed
@@ -71,15 +72,9 @@ if (!rootLocation.startsWith("/sign-in?redirect_url=")) {
   throw new Error(`Expected unauthenticated root to redirect to sign-in; got ${rootLocation}.`);
 }
 
-await expectStatus({
-  url: new URL("/mcp", baseUrl),
-  status: 404,
-});
+const projectMcpUrl = projectMcpUrlFor(baseUrl, projectMcpUrlOverride);
 
-const projectOrigin = `${projectBaseUrlOverride?.protocol ?? baseUrl.protocol}//${projectHostnameFor(baseUrl, projectBaseUrlOverride)}`;
-const projectMcpUrl = new URL("/mcp", projectOrigin);
-
-if (!hasSeededProjectHost(projectBaseUrlOverride)) {
+if (!hasSeededProjectHost(projectMcpUrlOverride)) {
   await expectStatus({
     url: projectMcpUrl,
     status: 404,
@@ -93,7 +88,7 @@ const projectMcpResponse = await expectStatus({
   status: 401,
 });
 const wwwAuthenticate = projectMcpResponse.headers.get("www-authenticate") ?? "";
-const metadataUrl = new URL("/.well-known/oauth-protected-resource/mcp", projectOrigin);
+const metadataUrl = new URL("/.well-known/oauth-protected-resource", projectMcpUrl.origin);
 if (!wwwAuthenticate.includes(`resource_metadata="${metadataUrl.toString()}"`)) {
   throw new Error(`Unexpected MCP WWW-Authenticate header: ${wwwAuthenticate}`);
 }

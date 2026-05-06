@@ -5,7 +5,7 @@
  * it at any running OS2 project MCP endpoint and it uses the server's static
  * inbound-MCP provider stack through the public MCP tool shape:
  *
- *   OS2_E2E_MCP_URL=https://demo.iterate-preview-2.app/mcp \
+ *   OS2_E2E_MCP_URL=https://mcp__demo.iterate-preview-2.app/ \
  *   OS2_E2E_MCP_BEARER_TOKEN=... \
  *   pnpm --dir apps/os2 test:e2e:codemode-mcp
  *
@@ -107,6 +107,11 @@ describeIfMcpTarget("project MCP run_code static codemode provider stack", () =>
         expect(proof.slack).toEqual({ skipped: true });
       }
     } finally {
+      // Do not force MCP DELETE in the deployed preview proof. Cloudflare's
+      // agents package currently implements DELETE by calling Agent.destroy(),
+      // which intentionally aborts the Durable Object with "destroyed" after
+      // cleanup. That is valid session teardown, but Workers observability records
+      // it as an error-level span, which makes this smoke proof look unhealthy.
       await client.close();
     }
   });

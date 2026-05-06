@@ -97,7 +97,7 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
         ]),
       );
     } finally {
-      await client.close();
+      await closeMcpClient({ client, transport });
     }
   });
 
@@ -231,10 +231,19 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
         ]),
       );
     } finally {
-      await client.close();
+      await closeMcpClient({ client, transport });
     }
   });
 });
+
+async function closeMcpClient(input: { client: Client; transport: StreamableHTTPClientTransport }) {
+  // The MCP Streamable HTTP client separates "terminate the remote MCP session"
+  // from "close this local client transport". Terminating first sends DELETE
+  // with the session id, which lets the agents/mcp Durable Object bridge destroy
+  // its session before the worker-pool runtime starts tearing down.
+  await input.transport.terminateSession().catch(() => undefined);
+  await input.client.close();
+}
 
 function extractTextContent(content: unknown) {
   if (!Array.isArray(content)) return [];
@@ -257,7 +266,16 @@ async function readCurrentStreamEvents(streamPath: StreamPath) {
     projectId,
     path: streamPath,
   });
-  return await stream.history({ before: "end" });
+  const events = await stream.history({ before: "end" });
+  try {
+    // Worker-pool tests exercise real Cloudflare RPC semantics. Even plain
+    // object/array results can carry a client-side RPC disposer, so clone the
+    // serializable event list for assertions and then dispose the RPC result.
+    // Docs: https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/
+    return structuredClone(events);
+  } finally {
+    disposeRpcResult(events);
+  }
 }
 
 function mcpSessionStreamPath(clientName: string, sessionId: string) {
@@ -283,4 +301,14 @@ function slugifySegment(value: string) {
     .replace(/[^a-z0-9_-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 64);
+}
+
+function disposeRpcResult(value: unknown) {
+  if (
+    value != null &&
+    (typeof value === "object" || typeof value === "function") &&
+    typeof value[Symbol.dispose] === "function"
+  ) {
+    value[Symbol.dispose]();
+  }
 }

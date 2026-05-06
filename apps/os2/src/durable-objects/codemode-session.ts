@@ -98,6 +98,16 @@ type CodemodeSessionStreamApi = ProcessorStreamApi<typeof CodemodeProcessorContr
     signal?: AbortSignal;
   }): AsyncIterable<Event>;
 };
+type CodemodeExecutorEntrypoint = {
+  evaluate(
+    capability: CodemodeSessionCapabilityTarget,
+    logger: CodemodeLoggerTarget,
+    scriptExecutionId: string,
+  ): Promise<{ error?: string; result: unknown }>;
+};
+type DisposableRpcValue = {
+  [Symbol.dispose](): void;
+};
 
 const CodemodeSessionLifecycleBase = withD1ObjectCatalog<
   CodemodeSessionInitParams,
@@ -260,11 +270,6 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
         streamPath: params.streamPath,
       });
       const event = await this.appendToolProviderRegisteredEvent({ provider });
-      // Session creation is allowed to enqueue code immediately after provider
-      // registration. Reduce provider registrations synchronously so the first
-      // script block does not race the live stream subscription that will also
-      // observe the same events.
-      await this.consumeStreamProcessorEvent({ event: event as StreamEvent });
       registeredProviderEvents.push(event);
     }
 
@@ -321,9 +326,7 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
   async registerToolProvider(input: { provider: ToolProviderRegistration }) {
     await this.ensureStarted();
     await this.ensureLiveConsumer();
-    const event = await this.appendToolProviderRegisteredEvent(input);
-    await this.consumeStreamProcessorEvent({ event: event as StreamEvent });
-    return event;
+    return await this.appendToolProviderRegisteredEvent(input);
   }
 
   async executeScript(input: { code: string }) {
@@ -625,6 +628,7 @@ function processorStreamApiFromNamespace(args: {
     },
     async *subscribe(input = {}) {
       void input;
+      yield* [];
       throw new Error("CodemodeSession processors receive live events through afterAppend RPC.");
     },
   };
@@ -662,8 +666,10 @@ function createCloudflareCodemodeScriptExecutor(input: {
       };
     }
 
+    let entrypoint: CodemodeExecutorEntrypoint | undefined;
+
     try {
-      const entrypoint = input.loader
+      entrypoint = input.loader
         .load({
           compatibilityDate: "2026-04-27",
           compatibilityFlags: ["nodejs_compat"],
@@ -674,29 +680,35 @@ function createCloudflareCodemodeScriptExecutor(input: {
           },
           globalOutbound: null,
         })
-        .getEntrypoint() as unknown as {
-        evaluate(
-          capability: CodemodeSessionCapabilityTarget,
-          logger: CodemodeLoggerTarget,
-          scriptExecutionId: string,
-        ): Promise<{ error?: string; result: unknown }>;
-      };
+        .getEntrypoint() as unknown as CodemodeExecutorEntrypoint;
 
       // The generic shared processor session waits for event-provider results
       // by subscribing to the stream. In OS2 this host receives live
       // completions through `afterAppend` and a pending-promise map, so dynamic
       // worker scripts must call back through the Durable Object session
       // capability instead of the generic processor facade.
-      return await entrypoint.evaluate(
+      const evaluation = await entrypoint.evaluate(
         new CodemodeSessionCapabilityTarget(input.getSessionCapability?.() ?? session),
         new CodemodeLoggerTarget(logger),
         scriptExecutionId,
       );
+      try {
+        // `evaluate()` is itself a Workers RPC call into the dynamic executor.
+        // Clone the request-shaped result into this Durable Object before
+        // disposing the RPC result object. If we later intentionally support
+        // returning live handles from a codemode script, this is one of the
+        // boundaries that must become an explicit ownership transfer instead.
+        return structuredClone(evaluation);
+      } finally {
+        disposeRpcResult(evaluation);
+      }
     } catch (error) {
       return {
         result: undefined,
         error: serializeError(error),
       };
+    } finally {
+      disposeRpcResult(entrypoint);
     }
   };
 }
@@ -727,6 +739,47 @@ class CodemodeLoggerTarget extends RpcTarget {
   }
 }
 
+/**
+ * Builds the tiny WorkerEntrypoint module that runs user-authored codemode.
+ *
+ * The executor deliberately lives in a dynamically-loaded Worker rather than in
+ * this Durable Object. That gives every script a fresh global scope and lets us
+ * pass Cloudflare RPC objects, functions, streams, and Durable Object stubs
+ * through native Workers RPC instead of flattening everything to JSON.
+ *
+ * Two first-party Cloudflare RPC rules drive the shape below:
+ *
+ * 1. Promise pipelining:
+ *    https://developers.cloudflare.com/workers/runtime-apis/rpc/#promise-pipelining
+ *
+ *    Cloudflare RPC calls return custom thenables, not ordinary Promises. Those
+ *    thenables are also speculative stubs, so code can do:
+ *
+ *      await ctx.makeSubagent().doThing({ value: 21 })
+ *
+ *    without first awaiting `ctx.makeSubagent()`. Returning the original RPC
+ *    thenable from the context proxy is therefore not an optimization detail; it
+ *    is the API contract we need for codemode providers that expose handle-like
+ *    objects such as sandboxes, repos, browser pages, or agents.
+ *
+ * 2. RPC lifecycle and explicit disposal:
+ *    https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/#disposers-and-rpctarget-classes
+ *
+ *    A client-side stub keeps the server-side RpcTarget alive. Cloudflare can
+ *    sometimes dispose stubs automatically, but their docs recommend explicit
+ *    disposal for performance and correctness. LLM-authored codemode cannot be
+ *    expected to write `using` or call `[Symbol.dispose]()` reliably, especially
+ *    when a provider returns a handle only as an intermediate step in a
+ *    pipelined expression. The generated context below therefore tracks every
+ *    provider call result it observes, waits for those calls to settle, and
+ *    disposes any returned RPC stubs at the end of script evaluation.
+ *
+ * Important limitation: this automatic ownership model assumes codemode scripts
+ * are request-shaped. If we later let a script intentionally return a live RPC
+ * handle to its caller, this cleanup boundary must become explicit: the returned
+ * handle would need to be removed from the executor-owned disposal set, or
+ * duplicated/leased to the caller with a documented lifetime.
+ */
 function buildScriptExecutorModule() {
   return `
 import { WorkerEntrypoint } from "cloudflare:workers";
@@ -738,75 +791,144 @@ function __stringify(value) {
   try { return JSON.stringify(value, null, 2); } catch { return String(value); }
 }
 
-function __createCodemodeContext(options) {
-  const make = (path = []) => new Proxy(async () => {}, {
-    get: (_target, key) => {
-      if (key === "then" || key === "catch" || key === "finally") return undefined;
-      if (key === "abortSignal" && path.length === 0) return options.abortSignal;
-      if (key === "console" && path.length === 0) {
-        return {
-          log: (...args) => console.log(...args),
-          warn: (...args) => console.warn(...args),
+	function __createCodemodeContext(options) {
+	  // These sets are executor-local. They are intentionally not part of the
+	  // durable codemode event stream: they manage live Cloudflare RPC resources,
+	  // while the stream records serializable traces of requested/completed calls.
+	  const trackedDisposables = new Set();
+	  const pendingTrackers = [];
+
+	  function trackDisposable(value) {
+	    // Cloudflare RPC stubs expose Symbol.dispose on the caller side. Calling it
+	    // tells the remote isolate that the server-side RpcTarget can eventually be
+	    // collected. This includes objects returned directly from providers and
+	    // intermediate handles returned only to support promise-pipelined calls.
+	    if (
+	      value != null &&
+	      (typeof value === "object" || typeof value === "function") &&
+	      typeof value[Symbol.dispose] === "function"
+	    ) {
+	      trackedDisposables.add(value);
+	    }
+	    return value;
+	  }
+
+	  function trackCallResult(result) {
+      // Keep returning Cloudflare's original RPC thenable so promise pipelining
+      // still works. Wrapping this in a native Promise before returning would
+      // erase the speculative-stub behavior that makes expressions like
+      // "ctx.makeSubagent().doThing()" a single pipelined RPC chain.
+      //
+      // The thenable itself can also be disposable. Cloudflare's own promise
+      // pipelining examples use "using promiseForCounter = service.getCounter()",
+      // which disposes the promise/stub object, not merely the awaited value.
+      // Track both the original thenable and the eventual resolved value.
+      trackDisposable(result);
+      //
+      // We attach a side observer with Promise.resolve(...).then(...) only for
+      // lifetime tracking. The user still receives the original thenable, while
+	    // the executor remembers the eventual stub and disposes it in evaluate's
+	    // finally block.
+	    pendingTrackers.push(Promise.resolve(result).then(trackDisposable, () => undefined));
+	    return result;
+	  }
+
+	  const make = (path = []) => new Proxy(async () => {}, {
+	    get: (_target, key) => {
+	      if (key === "then" || key === "catch" || key === "finally") return undefined;
+	      if (key === "abortSignal" && path.length === 0) return options.abortSignal;
+	      if (key === "__disposeTrackedRpcStubs" && path.length === 0) {
+	        return async () => {
+	          // Wait for all provider-call observations before disposing. Without
+	          // this, a pipelined call could still be resolving to its intermediate
+	          // handle while the script has already returned its final value.
+	          await Promise.allSettled(pendingTrackers);
+	          for (const disposable of trackedDisposables) {
+	            try {
+	              disposable[Symbol.dispose]();
+	            } catch {}
+	          }
+	          trackedDisposables.clear();
+	        };
+	      }
+	      if (key === "console" && path.length === 0) {
+	        return {
+	          log: (...args) => console.log(...args),
+	          warn: (...args) => console.warn(...args),
           error: (...args) => console.error(...args),
         };
       }
       if (typeof key !== "string") return undefined;
       return make([...path, key]);
-    },
-    apply: (_target, _thisArg, args) => {
-      return options.codemodeSessionCapability.callFunction({
-        args,
-        path,
-        scriptExecutionId: options.scriptExecutionId,
-      });
-    },
-  });
+	    },
+	    apply: (_target, _thisArg, args) => {
+	      return trackCallResult(options.codemodeSessionCapability.callFunction({
+	        args,
+	        path,
+	        scriptExecutionId: options.scriptExecutionId,
+	      }));
+	    },
+	  });
 
   return make();
 }
 
-export default class CodeExecutor extends WorkerEntrypoint {
-  async evaluate(__codemodeSessionCapability, __logger, __scriptExecutionId) {
-    const __codemodeFetch = (...args) => {
-      return __codemodeSessionCapability.callFunction({
-        args,
+	export default class CodeExecutor extends WorkerEntrypoint {
+	  async evaluate(__codemodeSessionCapability, __logger, __scriptExecutionId) {
+	    const __pendingLogs = [];
+	    const __emitLog = (level, args) => {
+	      const message = args.map(__stringify).join(" ");
+	      // Console output is also RPC back to the host Durable Object. If we
+	      // fire-and-forget these calls, the worker test runtime can tear down
+	      // while the log RPC is still pending, and real callers can observe a
+	      // completed script before its log-emitted events have landed.
+	      if (__logger) __pendingLogs.push(__logger.log(level, message).catch(() => undefined));
+	    };
+	    const __codemodeFetch = (...args) => {
+	      return __codemodeSessionCapability.callFunction({
+	        args,
         path: ["fetch"],
         scriptExecutionId: __scriptExecutionId,
       });
     };
-    globalThis.fetch = __codemodeFetch;
+	    globalThis.fetch = __codemodeFetch;
 
-    console.log = (...args) => {
-      const message = args.map(__stringify).join(" ");
-      if (__logger) void __logger.log("log", message);
-    };
-    console.warn = (...args) => {
-      const message = args.map(__stringify).join(" ");
-      if (__logger) void __logger.log("warn", message);
-    };
-    console.error = (...args) => {
-      const message = args.map(__stringify).join(" ");
-      if (__logger) void __logger.log("error", message);
-    };
+	    console.log = (...args) => {
+	      __emitLog("log", args);
+	    };
+	    console.warn = (...args) => {
+	      __emitLog("warn", args);
+	    };
+	    console.error = (...args) => {
+	      __emitLog("error", args);
+	    };
+	    const ctx = __createCodemodeContext({
+	      codemodeSessionCapability: __codemodeSessionCapability,
+	      scriptExecutionId: __scriptExecutionId,
+	    });
 
-    try {
-      if (typeof __userScript !== "function") {
-        throw new Error("Codemode script must evaluate to a function.");
-      }
-      const ctx = __createCodemodeContext({
-        codemodeSessionCapability: __codemodeSessionCapability,
-        scriptExecutionId: __scriptExecutionId,
-      });
-      const result = await __userScript(ctx);
-      return { result };
-    } catch (error) {
-      return {
-        error: error instanceof Error ? error.message : String(error),
-        result: undefined,
-      };
-    }
-  }
-}
+	    try {
+	      if (typeof __userScript !== "function") {
+	        throw new Error("Codemode script must evaluate to a function.");
+	      }
+	      const result = await __userScript(ctx);
+	      await Promise.allSettled(__pendingLogs);
+	      return { result };
+	    } catch (error) {
+	      await Promise.allSettled(__pendingLogs);
+	      return {
+	        error: error instanceof Error ? error.message : String(error),
+	        result: undefined,
+	      };
+	    } finally {
+	      // This is the codemode execution ownership boundary. The script has
+	      // produced its serializable result, all log RPCs have been awaited, and
+	      // any provider handles created along the way are no longer meant to
+	      // escape this dynamic Worker invocation.
+	      await ctx.__disposeTrackedRpcStubs();
+	    }
+	  }
+	}
 `;
 }
 
@@ -832,12 +954,18 @@ function serializeError(error: unknown) {
   return { message: String(error) };
 }
 
-function serializeErrorMessage(error: unknown) {
-  if (error instanceof Error) return error.message;
-  if (error != null && typeof error === "object" && "message" in error) {
-    return String((error as { message: unknown }).message);
+function disposeRpcResult(value: unknown) {
+  if (isDisposableRpcValue(value)) {
+    value[Symbol.dispose]();
   }
-  return String(error);
+}
+
+function isDisposableRpcValue(value: unknown): value is DisposableRpcValue {
+  return (
+    value != null &&
+    (typeof value === "object" || typeof value === "function") &&
+    typeof (value as Partial<DisposableRpcValue>)[Symbol.dispose] === "function"
+  );
 }
 
 function debugCodemodeDepth(message: string, payload: Record<string, unknown>) {
