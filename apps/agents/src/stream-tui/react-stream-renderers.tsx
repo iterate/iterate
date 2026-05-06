@@ -192,16 +192,24 @@ function TuiEventsStreamFeed(props: {
     const scrollbox = scrollRef.current;
     if (scrollbox == null) return;
 
-    const frame = setTimeout(() => {
+    const scrollIntoPosition = () => {
       if (props.focused && props.selectedOffset != null) {
         scrollbox.scrollChildIntoView(`raw-event-${props.selectedOffset}`);
         return;
       }
 
       scrollbox.scrollTo(scrollbox.scrollHeight);
-    }, 0);
+    };
 
-    return () => clearTimeout(frame);
+    const frames = [
+      setTimeout(scrollIntoPosition, 0),
+      setTimeout(scrollIntoPosition, 16),
+      setTimeout(scrollIntoPosition, 33),
+    ];
+
+    return () => {
+      for (const frame of frames) clearTimeout(frame);
+    };
   }, [feedItemCount, props.activeView, props.detailEvent, props.focused, props.selectedOffset]);
 
   return (
@@ -506,6 +514,10 @@ function TuiGroupedRawEventItem(props: {
   if (firstEvent == null) return null;
 
   const countLabel = props.element.props.count > 1 ? `x${props.element.props.count}` : undefined;
+  const selected =
+    props.selectedOffset != null &&
+    props.element.props.events.some((event) => event.offset === props.selectedOffset);
+  const renderableId = `raw-event-${selected ? props.selectedOffset : firstEvent.offset}`;
   const rangeLabel =
     props.element.props.count > 1 &&
     props.element.props.firstTimestamp !== props.element.props.lastTimestamp
@@ -521,11 +533,9 @@ function TuiGroupedRawEventItem(props: {
   ]
     .filter(Boolean)
     .join(" · ");
-  const selected = firstEvent.offset === props.selectedOffset;
-
   return (
     <text
-      id={`raw-event-${firstEvent.offset}`}
+      id={renderableId}
       fg={selected ? TUI_COLORS.text : TUI_COLORS.textDim}
       bg={selected ? TUI_COLORS.selected : undefined}
       content={rightAlign(summary, props.contentWidth)}
