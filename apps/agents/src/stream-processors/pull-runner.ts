@@ -8,10 +8,17 @@ import {
   type ProcessorState,
   type ProcessorStreamApi,
   type StoredProcessorState,
+  type StreamEvent,
 } from "@iterate-com/shared/stream-processors";
+import {
+  CoreProcessorContract,
+  CoreProcessorLogAddedEventType,
+} from "@iterate-com/shared/stream-processors/core/contract";
 import type { z } from "zod";
 
 type PullRunnerContract<Contract> = {
+  slug: string;
+  version: string;
   stateSchema: z.ZodType;
   events: EventCatalog;
   processorDeps?: readonly unknown[];
@@ -51,6 +58,14 @@ export async function runPullProcessor<Contract extends PullRunnerContract<Contr
     storedState,
     saveStoredProcessorState: args.storage.save,
     streamApi: args.streamApi,
+    afterAppendError: async ({ error, reduction }) => {
+      await appendAfterAppendErrorLog({
+        error,
+        event: reduction.event,
+        processor: args.processor,
+        streamApi: args.streamApi,
+      });
+    },
     signal: args.signal,
   });
 
@@ -69,6 +84,14 @@ export async function runPullProcessor<Contract extends PullRunnerContract<Contr
         event,
         saveStoredProcessorState: args.storage.save,
         streamApi: args.streamApi,
+        afterAppendError: async ({ error, reduction }) => {
+          await appendAfterAppendErrorLog({
+            error,
+            event: reduction.event,
+            processor: args.processor,
+            streamApi: args.streamApi,
+          });
+        },
         signal: args.signal,
       });
     }
@@ -107,6 +130,62 @@ export function createMemoryPullProcessorStorage<
       return storedState;
     },
   };
+}
+
+async function appendAfterAppendErrorLog<Contract extends PullRunnerContract<Contract>>(args: {
+  error: unknown;
+  event: StreamEvent;
+  processor: Processor<Contract>;
+  streamApi: ProcessorStreamApi<Contract>;
+}) {
+  const serializedError = serializeError(args.error);
+  const streamApi = args.streamApi as unknown as ProcessorStreamApi<typeof CoreProcessorContract>;
+
+  await streamApi.append({
+    event: {
+      type: CoreProcessorLogAddedEventType,
+      idempotencyKey: [
+        "pull-processor-runner",
+        args.processor.contract.slug,
+        "after-append-error",
+        args.event.streamPath,
+        String(args.event.offset),
+      ].join(":"),
+      payload: {
+        level: "error",
+        message: `Processor ${args.processor.contract.slug}@${args.processor.contract.version} afterAppend failed: ${serializedError.message}`,
+        processor: {
+          slug: args.processor.contract.slug,
+          version: args.processor.contract.version,
+        },
+        whileProcessingEvent: {
+          streamPath: args.event.streamPath,
+          offset: args.event.offset,
+          type: args.event.type,
+        },
+        error: serializedError,
+      },
+    },
+  });
+}
+
+function serializeError(error: unknown): { name?: string; message: string; stack?: string } {
+  if (error instanceof Error) {
+    return {
+      ...(error.name.trim() === "" ? {} : { name: error.name }),
+      message: error.message || String(error),
+      ...(typeof error.stack === "string" && error.stack.trim() !== ""
+        ? { stack: error.stack }
+        : {}),
+    };
+  }
+
+  try {
+    const message = JSON.stringify(error);
+    return { message: message == null ? String(error) : message };
+  } catch {
+    return { message: String(error) };
+  }
 }
 
 function isAbortError(error: unknown) {
