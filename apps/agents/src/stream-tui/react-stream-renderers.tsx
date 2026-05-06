@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import type { StreamPath } from "@iterate-com/events-contract";
+import type { ScrollBoxRenderable } from "@opentui/core";
 import type {
   EventsStreamBuiltInElement,
   EventsStreamCodemodeBlockElement,
@@ -15,6 +16,7 @@ import type {
   EventsStreamViewState,
 } from "@iterate-com/ui/components/events/feed-items";
 import { useTerminalDimensions } from "@opentui/react";
+import { useEffect, useRef } from "react";
 import { stringify as stringifyYaml } from "yaml";
 import type { StreamTuiView } from "./navigation-state.ts";
 import {
@@ -151,6 +153,7 @@ function TuiEventsStreamHeader(props: {
       border
       borderStyle="single"
       borderColor={props.focused ? TUI_COLORS.accent : TUI_COLORS.border}
+      focusedBorderColor={TUI_COLORS.accent}
       backgroundColor={TUI_COLORS.surface}
       flexDirection="row"
       paddingLeft={1}
@@ -181,13 +184,35 @@ function TuiEventsStreamFeed(props: {
   focused: boolean;
   contentWidth: number;
 }) {
+  const scrollRef = useRef<ScrollBoxRenderable>(null);
+  const feedItemCount = props.viewState.slots.feed.length;
+
+  useEffect(() => {
+    if (props.activeView !== "feed" || props.detailEvent != null) return;
+    const scrollbox = scrollRef.current;
+    if (scrollbox == null) return;
+
+    const frame = setTimeout(() => {
+      if (props.focused && props.selectedOffset != null) {
+        scrollbox.scrollChildIntoView(`raw-event-${props.selectedOffset}`);
+        return;
+      }
+
+      scrollbox.scrollTo(scrollbox.scrollHeight);
+    }, 0);
+
+    return () => clearTimeout(frame);
+  }, [feedItemCount, props.activeView, props.detailEvent, props.focused, props.selectedOffset]);
+
   return (
     <scrollbox
+      ref={scrollRef}
       width="100%"
       flexGrow={1}
       border
       borderStyle="single"
       borderColor={props.focused ? TUI_COLORS.accent : TUI_COLORS.surfaceMuted}
+      focusedBorderColor={TUI_COLORS.accent}
       backgroundColor={TUI_COLORS.bg}
       stickyScroll={props.activeView === "feed" && props.detailEvent == null}
       stickyStart="bottom"
@@ -500,6 +525,7 @@ function TuiGroupedRawEventItem(props: {
 
   return (
     <text
+      id={`raw-event-${firstEvent.offset}`}
       fg={selected ? TUI_COLORS.text : TUI_COLORS.textDim}
       bg={selected ? TUI_COLORS.selected : undefined}
       content={rightAlign(summary, props.contentWidth)}
@@ -510,8 +536,8 @@ function TuiGroupedRawEventItem(props: {
 function TuiTimelineRule(props: { label: string; contentWidth: number; color?: string }) {
   const label = ` ${props.label} `;
   const lineLen = Math.max(0, props.contentWidth - label.length);
-  const left = "-".repeat(Math.floor(lineLen / 2));
-  const right = "-".repeat(Math.ceil(lineLen / 2));
+  const left = "─".repeat(Math.floor(lineLen / 2));
+  const right = "─".repeat(Math.ceil(lineLen / 2));
   return <text fg={props.color ?? TUI_COLORS.textDim} content={`${left}${label}${right}`} />;
 }
 
@@ -710,6 +736,7 @@ function TuiComposer(props: {
       border
       borderStyle="single"
       borderColor={props.focused ? TUI_COLORS.accent : TUI_COLORS.surfaceMuted}
+      focusedBorderColor={TUI_COLORS.accent}
       backgroundColor={TUI_COLORS.bg}
       paddingLeft={1}
       paddingRight={1}
