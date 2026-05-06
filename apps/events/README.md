@@ -30,3 +30,23 @@ pnpm alchemy:down  # run `alchemy.run.ts --destroy`; caller supplies env
 ## Contract
 
 [`apps/events-contract`](../events-contract) — `src/orpc/orpc.ts` implements it.
+
+## Stream Durable Object binding
+
+`packages/shared/src/streams` is the source of truth for stream event shapes and
+the `StreamDurableObject` implementation. `apps/events-contract` only describes
+the Events app oRPC surface.
+
+Deployed Events Workers should not create an independent production stream
+namespace. They bind `STREAM` to the OS2 Worker script's exported
+`StreamDurableObject` with:
+
+```bash
+DEPLOYMENT_CONFIG_STREAM_DURABLE_OBJECT_BINDING_SCRIPT_NAME=os2-prd
+```
+
+Preview configs use the matching OS2 preview script name, for example
+`os2-preview-2`. Local and isolated runtime tests may omit the setting; in that
+case `alchemy.run.ts` creates a local namespace from the same shared
+`StreamDurableObject` class so the app can still run without a deployed OS2
+Worker.
