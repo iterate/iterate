@@ -51,16 +51,12 @@ The organization-scoped URL for a Project, identified by Clerk Organization slug
 _Avoid_: Global project URL, project ID URL
 
 **Project Route Context**:
-The TanStack Router context resolved by a Project Route and inherited by Project child routes.
-_Avoid_: Repeated project lookup, page-local project state
+The TanStack Router route context for a Project Route. Today it carries route UI context; child routes still resolve the Project with `projects.findBySlug` and pass stable Project IDs to mutations.
+_Avoid_: Assuming inherited project data, page-local project state
 
 **Project-Scoped Procedure**:
-An OS2 oRPC procedure that first resolves and authorizes exactly one Project before running its handler.
+An OS2 oRPC procedure whose handler is scoped to exactly one Project, usually by explicit stable Project ID after the route has resolved a slug.
 _Avoid_: Raw projectId handler, unchecked project route
-
-**Project Selector**:
-The exactly-one `projectId` or `projectSlug` input used by Project-Scoped Procedures to identify a Project.
-_Avoid_: projectIdOrSlug, parallel unchecked IDs
 
 **Project Durable Object Namespace**:
 The Worker environment binding used by server code to obtain Project Durable Object stubs.
@@ -83,24 +79,12 @@ A rootable Project-Owned Hostname that sends requests to one Project's Project I
 _Avoid_: Project URL, route path
 
 **Slug Project Ingress Host**:
-The human-readable platform Project Ingress Host derived from the Project Slug, such as `<project-slug>.iterate.app`.
+The human-readable platform Project Ingress Host derived from the Project Slug, such as `<project-slug>.<project-host-base>`.
 _Avoid_: Stable project host
 
 **Stable Project Ingress Host**:
-The immutable platform Project Ingress Host derived from the Project ID, such as `<project-id>.iterate.app`.
+The immutable platform Project Ingress Host derived from the Project ID, such as `<project-id>.<project-host-base>`.
 _Avoid_: Slug project host, canonical host
-
-**Custom Project Ingress Host**:
-A user-owned Project Ingress Host assigned to one Project, such as `mycustomer.com`.
-_Avoid_: Platform host
-
-**Default Project Ingress Host**:
-The Project Ingress Host OS2 uses when generating ordinary public URLs for a Project.
-_Avoid_: Stable project host, all project hosts
-
-**Project Dashboard Host**:
-A project-owned host such as `iterate.<project-ingress-host>` that routes to the OS2 dashboard for that Project.
-_Avoid_: Project app host, MCP host
 
 **Project Ingress**:
 Traffic for a Project-Owned Hostname after the OS2 Worker has classified it.
@@ -143,28 +127,12 @@ A named WorkerEntrypoint exported as `ProjectIngressEntrypoint` that receives Pr
 _Avoid_: Project app worker, project service
 
 **Project Egress**:
-Outbound HTTP/S traffic made from a Project-owned execution context and governed by that Project's outbound policy.
-_Avoid_: Project Ingress, generic fetch, external calls
-
-**Project Egress Entry Point**:
-A named WorkerEntrypoint exported as `ProjectEgressEntrypoint` that receives Project identity as props, resolves the Project Durable Object, and delegates Project Egress to it.
-_Avoid_: Egress gateway, egress proxy, outbound worker
+Future outbound HTTP/S policy work for Project-owned execution. Current codemode `fetch(...)` is traceable through the default Codemode Fetch Capability; full egress policy and secret injection live in `tasks/project-egress-secrets-mvp.md`.
+_Avoid_: Project Ingress, implemented gateway, implemented secret system
 
 **Codemode Fetch Capability**:
 The default RPC Tool Provider used by codemode for ordinary Script `fetch(...)` and `ctx.fetch(...)` calls.
 _Avoid_: Raw Dynamic Worker fetch, untraced public fetch
-
-**Dynamic Worker Egress Gateway**:
-The future `globalOutbound` binding or fetch-shaped capability that enforces Project Egress policy for Dynamic Worker outbound calls.
-_Avoid_: Raw internet access
-
-**Project Egress Policy**:
-Project-owned rules that decide whether a Project Egress request is allowed, denied, or held for human review.
-_Avoid_: Secret rule, firewall rule
-
-**Project Egress Approval**:
-A human decision that releases or rejects a Project Egress request held by Project Egress Policy.
-_Avoid_: Approval event, policy override
 
 **Project MCP Server Entry Point**:
 A named WorkerEntrypoint exported as `ProjectMcpServerEntrypoint` that receives Project identity as props and exposes that Project's MCP server as a fetch destination.
@@ -210,73 +178,13 @@ _Avoid_: Product route, TanStack route
 A project-local target that a Project Durable Object can route Project Ingress to.
 _Avoid_: App, service, endpoint
 
-**Public Project Route**:
-A Project Route Destination that does not require the caller to be authenticated.
-_Avoid_: Anonymous OS2 route, public dashboard route
-
-**Protected Project Route**:
-A Project Route Destination that requires the Project Durable Object to authenticate and authorize the caller.
-_Avoid_: OS2 app auth, Clerk route
-
 **Project Route Authorization**:
-A Project Durable Object-owned policy decision for whether a principal may access a Project Route Destination.
+A future Project Durable Object-owned policy decision for whether a principal may access a Project Route Destination.
 _Avoid_: MCP authorization, app-specific auth method
 
 **Project Access Check**:
 A generic Project Durable Object-owned check that decides whether a Clerk principal can access one Project.
 _Avoid_: MCP authorization, route-specific permission
-
-**Secret**:
-A scoped value in OS2's secrets system that can resolve from a Secret Reference into request material without exposing raw material to Project-owned execution.
-_Avoid_: Egress secret, env var, token, managed value
-
-**Iterate-Provided Secret**:
-A Global Secret owned by Iterate and made available to Projects under product-defined usage and pricing rules.
-_Avoid_: Built-in key, shared key
-
-**Secret Durable Object**:
-The lifecycle authority for one Secret.
-_Avoid_: Secret table row, secret subclass
-
-**Secret Stack**:
-The ordered set of Secrets considered when resolving a Secret Reference in a Project context.
-_Avoid_: Secret hierarchy, fallback chain
-
-**Secret Override**:
-A more specific Secret in a Secret Stack that takes precedence over a less specific Secret for the same intended use.
-_Avoid_: Replacement key, shadow secret
-
-**Secret Reference**:
-A placeholder such as `getSecret({ id: "..." })` or `getSecret({ key: "..." })` carried in request material and resolved to a Secret only inside a trusted OS2 boundary.
-_Avoid_: Magic string, sentinel string, raw secret
-
-**Secret Locator**:
-The identifier inside a Secret Reference that tells OS2 which Secret is being requested.
-_Avoid_: Secret selector, secret slug
-
-**Secret Injection**:
-The act of resolving Secret References and inserting Secret values into a Project Egress request.
-_Avoid_: Env injection, prompt injection
-
-**Derived Secret**:
-A Secret whose current value is produced from one or more other Secrets.
-_Avoid_: Cached token, generated env var
-
-**Refreshable Secret**:
-A Secret that can update its own current value by using its dependencies.
-_Avoid_: OAuth-only token, derived token
-
-**Secret Dependency**:
-A Secret or value that another Secret needs in order to produce or refresh its own value.
-_Avoid_: Parent secret, source env var
-
-**Value Provisioning Request**:
-A request for a human or OAuth flow to supply missing Secrets needed to satisfy a Secret Reference.
-_Avoid_: Missing secret error, setup prompt
-
-**Project Environment Variable**:
-A shell or operating-system process environment variable projected from lower-level OS2 values and Secret References.
-_Avoid_: Secret, raw env, nvar
 
 **Codemode Preset**:
 A Project-owned named list of Event Inputs that can be appended to a Codemode Session before a Script Execution starts.
@@ -316,9 +224,9 @@ _Avoid_: Session ID, stream path
 A scoped RPC capability handed to script executors and tool providers so they can interact with a Codemode Session.
 _Avoid_: RpcTarget, session stub, callback bundle
 
-**StreamsCapability**:
+**StreamCapability**:
 A Project ID-scoped RPC capability for stream operations, optionally narrowed to one Event Stream Path.
-_Avoid_: StreamCapability, generic stream client
+_Avoid_: Generic stream client, Events app stream client
 
 **Codemode Session Control Plane**:
 The explicit command surface for starting codemode work on a Codemode Session.
@@ -482,21 +390,17 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - The **Project Listing Projection** is derived query state and should be written by the **Project Durable Object** as part of Project lifecycle commands.
 - A **Project Route** includes both the owning **Clerk Organization** slug and the **Project** slug.
 - A **Project Slug** is route identity and may change; a **Project ID** is stable identity.
-- A **Project Route** resolves its **Project Slug** once and exposes the Project through **Project Route Context** to child routes.
+- A **Project Route** resolves its **Project Slug** before making Project-scoped mutations with stable **Project ID** inputs.
 - The **Project Slug** used in the **Project Route** corresponds to the project slug used by the events app.
-- A **Project-Scoped Procedure** accepts either a stable **Project ID** or a **Project Slug** for manual API ergonomics, then resolves and authorizes the Project before handler code runs.
-- A **Project Selector** must contain exactly one of `projectId` or `projectSlug`; providing both or neither is invalid.
-- A **Project-Scoped Procedure** resolves its **Project Selector** before its handler code runs.
+- Most **Project-Scoped Procedures** accept stable **Project ID**. Slug lookup is a separate route/read operation.
 - A **Project Durable Object Namespace** is infrastructure context; a resolved and authorized **Project** is domain context.
-- Browser routes should use **Project Route Context** to resolve pretty route slugs before calling project-scoped procedures, but the oRPC surface may still accept Project Slugs for curl-able/manual calls.
+- Browser routes resolve pretty route slugs with `projects.findBySlug` before calling Project-scoped procedures.
 - Every Project has a **Stable Project Ingress Host** derived from the **Project ID**.
 - Every Project has a **Slug Project Ingress Host** derived from the current **Project Slug**.
-- A Project may have a **Custom Project Ingress Host**.
-- The **Default Project Ingress Host** is the **Custom Project Ingress Host** when one exists; otherwise it is the **Slug Project Ingress Host**.
-- The **Stable Project Ingress Host** remains routable even when it is not the **Default Project Ingress Host**.
-- A **Project Dashboard Host** may be created from a Project Ingress Host by prefixing it with `iterate.` so a user can reach that Project's OS2 dashboard from a project-owned hostname.
+- The **Stable Project Ingress Host** remains routable even when the slug-derived host changes.
+- Custom hostname, default-host, dashboard-host, and stream-host lifecycle are future ingress work, not current routing behavior.
 - A **Project MCP Route** identifies exactly one **Project**.
-- A **Project MCP Route** is selected by project ingress, typically through a project-owned MCP hostname such as `mcp.<project>.<project-host-base>` or `mcp.<custom-hostname>`.
+- A **Project MCP Route** is selected by project ingress, currently through platform hosts such as `mcp__<project-slug>.<project-host-base>`.
 - OS2 does not expose a normal global MCP endpoint.
 - The OS2 Worker classifies every request by **Ingress Hostname** before invoking the **OS2 App**.
 - The OS2 Worker uses a global **Ingress Route Table** to decide whether a request becomes **Project Ingress** or continues to the **OS2 App**.
@@ -517,30 +421,7 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - The **Project Ingress Entry Point** class/export name is `ProjectIngressEntrypoint`.
 - The **Project Ingress Entry Point** takes only a stable **Project ID** prop in v1, resolves the Project Durable Object stub by using that **Project ID** as the Durable Object name, and delegates the request to the Project Durable Object's ingress RPC.
 - The **Project Ingress Entry Point** does not accept **Project Slug** props in v1; slug-to-ID resolution happens before a request reaches hot ingress.
-- **Project Egress** is distinct from **Project Ingress**: ingress classifies inbound public requests, while egress governs outbound HTTP/S requests from Project-owned execution.
-- The **Project Egress Entry Point** should take only a stable **Project ID** prop in v1, resolve the Project Durable Object by that **Project ID**, and delegate outbound request handling to the Project Durable Object.
-- The **ProjectDurableObject** method for Project Egress should be named `egressFetch`.
-- Codemode Dynamic Workers should receive a **Dynamic Worker Egress Gateway** that targets the **Project Egress Entry Point** for their Project.
-- Until that gateway is wired, codemode Script `fetch(...)` calls go through the default **Codemode Fetch Capability** so they are still traceable as Function Calls.
-- The **Project Durable Object** is the authority for **Project Egress Policy** and **Project Egress Approval** for one Project.
-- A **Project Egress Policy** decision may hold a **Project Egress** request until a **Project Egress Approval** releases or rejects it.
-- **Secret** is a separate domain concept from **Project Egress**; Project Egress may perform **Secret Injection**, but a Secret can exist independently of an outbound request.
-- Every **Secret** should have a **Secret Durable Object** as its lifecycle authority.
-- A **Secret** should have an explicit **Data Scope** such as Global, Clerk Organization, Clerk User, or Project.
-- An **Iterate-Provided Secret** is a Global Secret.
-- A **Secret Stack** should allow more specific customer-owned Secrets to override **Iterate-Provided Secrets** for the same intended use.
-- A **Derived Secret** depends on one or more other **Secrets** and should not obscure those dependencies.
-- A **Refreshable Secret** is not a separate kind of domain object from **Secret**; it is a Secret with refresh behavior.
-- A **Refreshable Secret** may use **Secret Dependencies** to produce a new current value before participating in **Secret Injection**.
-- If required **Secret Dependencies** are missing, OS2 may create a **Value Provisioning Request** rather than treating the request as an unrecoverable error.
-- **Secret References** should be safe to expose to Project-owned execution because they do not contain raw Secret values.
-- A **Secret Reference** may identify a Secret by stable ID or by key, but the chosen **Secret Locator** rules must be explicit.
-- **Project Environment Variables** are out of scope for the current Project Egress and Secret Reference design pass.
-- The current scope is resolving **Secret References** into values and substituting those values into HTTP requests.
-- A request with one or more **Secret References** should pass through a clear **Secret Injection** pipeline before leaving Project Egress.
-- Multiple **Secrets** may participate in one **Project Egress** request when multiple **Secret References** are present.
-- V1 **Secret Injection** may be limited to HTTP headers.
-- **Project Egress Approval** must not expose raw Secret values after **Secret Injection**.
+- **Project Egress** is future work. Until it is implemented, codemode Script `fetch(...)` calls go through the default **Codemode Fetch Capability** so they are traceable as Function Calls.
 - The **Project MCP Server Entry Point** class/export name is `ProjectMcpServerEntrypoint`.
 - The **Project MCP Server Entry Point** is a fetch-based Worker entrypoint, not a Tool Provider or Capability wrapper.
 - The **Project MCP Server Entry Point** takes only a stable **Project ID** prop in v1 and is the default project-local MCP server fetch destination.
@@ -563,19 +444,17 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - The **Create Project Command** writes the Project Durable Object's local lifecycle state and all v1 D1 projections before returning to the RPC caller.
 - Asynchronous provisioning work, such as Cloudflare DNS/custom-hostname/certificate lifecycle, may continue after the **Create Project Command** has written durable desired state.
 - TanStack/oRPC project routes should thinly proxy project lifecycle commands to the **Project Control Surface** instead of reimplementing project lifecycle logic in the app worker.
-- The **Project Durable Object** is responsible for authentication and authorization after a request becomes **Project Ingress**.
+- The **Project Durable Object** owns project ingress routing. MCP auth currently lives in `ProjectMcpServerEntrypoint`, which calls a generic **Project Access Check**.
 - The **Project Durable Object** is the authority for desired project-owned ingress state.
 - Global **Ingress Routing Rules** for project-owned hostnames are **Project Projections** written for fast indexed lookup by the OS2 Worker.
 - V1 may synchronously write **Project Projections** from **Project Control Surface** commands even though Durable Object SQLite and D1 are not one atomic transaction.
-- **Project Ingress** may include **Public Project Routes** and **Protected Project Routes** for the same **Project-Owned Hostname**.
-- A **Project-Owned Hostname** may be a **Slug Project Ingress Host**, a **Stable Project Ingress Host**, or a **Custom Project Ingress Host**.
+- **Project Ingress** currently includes platform slug/stable hosts and platform MCP aliases. Custom hosts and per-destination auth are future work.
 - A **Project Durable Object** owns a project-local **Ingress Route Table** that maps **Project Ingress** to **Project Route Destinations**.
 - A **Project Route Destination** is a kind of **Fetch Destination**.
 - A **Fetch Destination** may be backed by OS2-packaged source code, runtime-loaded code, or another project-owned capability.
 - Global and project-local ingress use the same **Ingress Route Table** concept even though their first concrete destinations differ.
 - Projects are born with **Slug Project Ingress Host** and **Stable Project Ingress Host** routes.
-- Projects are born with MCP hostname routes for their slug and stable hosts, such as `mcp.<project-slug>.iterate.app` and `mcp.<project-id>.iterate.app`, that resolve to the **Project MCP Server Entry Point**.
-- Adding a **Custom Project Ingress Host** should also add its matching MCP hostname route, such as `mcp.<custom-hostname>`.
+- Projects are born with MCP hostname aliases for their slug and stable hosts, such as `mcp__<project-slug>.<project-host-base>` and `mcp__<project-id>.<project-host-base>`, that resolve to the **Project MCP Server Entry Point**.
 - Slug changes should update slug-derived ingress routes at the same time; alias lifecycle is future work.
 - A **Codemode Preset** belongs to exactly one **Project**.
 - A **Codemode Preset** stores Event Inputs without interpreting their event types.
@@ -600,7 +479,7 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - A remote MCP client calls OS2 with a **Clerk OAuth Token**, not a Clerk session token.
 - OS2 accepts Clerk's OAuth token contract for MCP; JWT token format is the preferred Clerk environment setting, not the domain boundary.
 - The browser UI explicitly creates and selects **Codemode Sessions** for a **Project**.
-- Browser oRPC calls identify the **Project** through the **Project Route** and **Project Route Context**.
+- Browser oRPC calls identify the **Project** by resolving the **Project Route** slug and passing a stable **Project ID** to Project-scoped procedures.
 - Browser oRPC may pass an **Event Stream Path** when creating a **Codemode Session**; if it does not, OS2 generates one for the Project.
 - The **Codemode Session Creation Form** may include an optional **Event Stream Path** so users can attach the codemode processor to an existing stream.
 - Creating a **Codemode Session** is attach-or-create for the pair of **Project ID** and **Event Stream Path**.
@@ -645,7 +524,7 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - Function Call request events include the full Function Call path, the matched **Provider Path**, and the provider-relative **Function Path**.
 - Tool Function Implementations should normally switch on **Function Path**, not the full Function Call path, so they do not depend on their mount depth.
 - Function Call request events use an `args` field for both Event-Mediated and RPC Tool Providers.
-- RPC Function Call request `args` are best-effort serialized for traceability; Cloudflare live values such as callback functions, streams, or Durable Object stubs may be represented as summaries such as `[Function]` while the real live values travel only through Workers RPC.
+- RPC Function Call request `args` are best-effort serialized for traceability; Cloudflare live values such as callback functions, streams, or Durable Object stubs are represented as summaries while the real live values travel only through Workers RPC.
 - Function Call completion events include the completed function path for readable event feeds and debugging.
 - Function Call completion outcomes use JavaScript terms: a Function Call either `returned` a value or `threw` an error.
 - The canonical durable Function Call protocol is a requested/completed event pair.
@@ -653,7 +532,7 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - Function Call result delivery has separate dimensions: how a Tool Function Implementation observes requests, what kind of result value it returns, and how long the call takes.
 - A Tool Function Implementation may observe Function Call requests by direct stream processing, queue subscription, pull-based polling, or another event delivery mechanism.
 - HTTP/fetch result delivery can report only serialized return values and serialized exceptions.
-- Workers RPC result delivery can report serialized values and Cloudflare live values such as functions, streams, `RpcTarget`s, or Durable Object stubs.
+- Workers RPC result delivery can report serialized values and Cloudflare live values such as functions, streams, `RpcTarget`s, or Durable Object stubs inside the active script/provider call chain.
 - Long-running Function Calls must remain valid when their eventual result is serialized, even if no warm in-memory RPC channel remains.
 - An **Event-Mediated Tool Function** can be implemented by a Tool Function Implementation that is not directly reachable when the Function Call is requested.
 - A **Stateful Tool Provider Endpoint** may expose Tool Functions backed by a singleton connection, such as a Discord WebSocket held by one Durable Object.
@@ -672,9 +551,9 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - For an **Event-Mediated Tool Provider**, the **Codemode Processor** appends the function-call-requested event, but the Tool Function Implementation owns appending the matching function-call-completed event.
 - `ctx.<provider>.<toolFunction>(payload)` calls a **Tool Function**.
 - Built-in stream operations, such as append, are ordinary **Tool Functions** under paths like `ctx.streams.append(...)`.
-- A **StreamsCapability** defaults operations to its narrowed **Event Stream Path** when the caller omits a path.
-- In a narrowed **StreamsCapability**, stream paths without a leading slash, including `./` paths, resolve relative to the narrowed **Event Stream Path**.
-- In a narrowed **StreamsCapability**, stream paths with a leading slash resolve as absolute project-scoped **Event Stream Paths** and remain subject to capability policy.
+- A **StreamCapability** defaults operations to its narrowed **Event Stream Path** when the caller omits a path.
+- In a narrowed **StreamCapability**, stream paths without a leading slash, including `./` paths, resolve relative to the narrowed **Event Stream Path**.
+- In a narrowed **StreamCapability**, stream paths with a leading slash resolve as absolute project-scoped **Event Stream Paths** and remain subject to capability policy.
 - Navigating to an **Event Stream Path** in the Project Stream Explorer may initialize that stream; users do not need a separate create-stream command.
 - The **Project Stream Explorer** lists every initialized **Event Stream Path**, including `/`, as a flat list rather than a tree.
 - For the **Project Stream Explorer**, an Event Stream Path exists in reality when its Stream Durable Object is initialized and cataloged for the Project.
@@ -683,7 +562,7 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - Codemode supports two principal Tool Provider mechanisms: **Event-Mediated Tool Providers** and **RPC Tool Providers**.
 - An **Event-Mediated Tool Provider** is the default for stream processors, long-running processors, pull-based actors, and SDK-backed processors that can work from the event log.
 - An **RPC Tool Provider** is required when a Script must pass or receive Cloudflare live values, preserve Workers RPC promise pipelining, or call a platform binding through a small policy-enforcing capability.
-- An **RPC Tool Provider** receives an `executeCodemodeFunctionCall({ path, args, scriptExecutionId, functionCallId })` call so one thin wrapper can proxy a whole SDK, binding surface, or Live Tool Handle lookup.
+- An **RPC Tool Provider** receives `executeCodemodeFunctionCall(...)` input with the full path, matched **Provider Path**, provider-relative **Function Path**, args, invocation kind, IDs, and **Codemode Session Capability** so one thin wrapper can proxy a whole SDK, binding surface, or Live Tool Handle lookup.
 - Capability modules may expose a **Callable Builder** so registration code can construct the relevant Callable descriptor without hand-writing callable JSON.
 - A **Live Tool Handle** returned by an **RPC Tool Provider** is not itself a Codemode Context path proxy.
 - Codemode records the Function Call that returns a **Live Tool Handle**; methods later called on that handle belong to the handle's own Workers RPC surface unless that provider adds its own tracing.
@@ -977,11 +856,8 @@ The provider composition case targets provider-to-provider Tool Function Calls: 
 > **Dev:** "Does the MCP server require a Clerk JWT?"
 > **Domain expert:** "No. The MCP server requires a valid **Clerk OAuth Token**. JWT is the preferred Clerk token format for cheaper verification, but OS2 should not model MCP auth as JWT-only."
 
-> **Dev:** "Should a request for `mycustomer.com` hit the OS2 App auth middleware before project routing?"
-> **Domain expert:** "No. The OS2 Worker first classifies the **Ingress Hostname**. If it is a **Project-Owned Hostname**, the request becomes **Project Ingress** and the **Project Durable Object** decides whether the matching route is public or protected."
-
-> **Dev:** "Can a Project serve the apex of a custom hostname as a public website?"
-> **Domain expert:** "Yes. The custom hostname is a **Project-Owned Hostname**, and the Project Durable Object may map its apex route to a **Public Project Route**."
+> **Dev:** "Should a request for a Project-owned hostname hit the OS2 App auth middleware before project routing?"
+> **Domain expert:** "No. The OS2 Worker first classifies the **Ingress Hostname**. If it is a **Project-Owned Hostname**, the request becomes **Project Ingress** before OS2 App auth runs."
 
 > **Dev:** "Is the global hostname lookup a special project-hostname table?"
 > **Domain expert:** "No. Model it as an **Ingress Route Table**. Matching an HTTP request yields a **Fetch Destination**; one such destination is the Project Durable Object."
@@ -1001,8 +877,8 @@ The provider composition case targets provider-to-provider Tool Function Calls: 
 > **Dev:** "Should the Project Durable Object be deployed in a separate worker script immediately?"
 > **Domain expert:** "Not yet. Keep it exported from the main OS2 Worker while Project ingress depends on **Loopback Fetch Callables** with dynamic props."
 
-> **Dev:** "Does `mycustomer.com/mcp` route to the Project MCP server?"
-> **Domain expert:** "No. MCP uses a project-local ingress route such as `mcp.mycustomer.com`; the MCP server is selected by the route, not by hard-coding a `/mcp` path on the custom hostname apex."
+> **Dev:** "Does `/mcp` on a Project-owned hostname route to the Project MCP server?"
+> **Domain expert:** "No. MCP uses host-routed project ingress. Current platform aliases use the single-label `mcp__<project>.<project-host-base>` shape."
 
 > **Dev:** "Does the Project Durable Object need to understand MCP protocol paths?"
 > **Domain expert:** "No. It routes the MCP hostname to the **Project MCP Server Entry Point**. That entry point owns protocol paths, OAuth metadata, browser setup instructions, and unsupported-path responses."
@@ -1017,28 +893,13 @@ The provider composition case targets provider-to-provider Tool Function Calls: 
 > **Domain expert:** "Point it at `ProjectIngressEntrypoint`, the **Project Ingress Entry Point**, with the stable **Project ID** in props. That entry point resolves the Project Durable Object and delegates to its ingress RPC."
 
 > **Dev:** "Is Project Egress just another Project Ingress route?"
-> **Domain expert:** "No. **Project Ingress** handles inbound public requests to Project-owned hostnames; **Project Egress** handles outbound HTTP/S requests from Project-owned execution."
-
-> **Dev:** "Should secrets be called Egress Secrets?"
-> **Domain expert:** "No. A **Secret** is independent of egress. **Project Egress** may use **Secret Injection**, but secrets also cover credentials, refresh tokens, derived tokens, and future environment roles."
-
-> **Dev:** "Are Project Environment Variables part of this design?"
-> **Domain expert:** "No. This pass is about resolving **Secret References** into values and substituting them into HTTP requests. Environment variables are a later projection."
-
-> **Dev:** "If Waitrose gives us a 15-minute access token from a username and password, is that different from OAuth?"
-> **Domain expert:** "No. It is a **Refreshable Secret**: it can use **Secret Dependencies** to refresh its current value before it injects into **Project Egress**."
-
-> **Dev:** "What happens if the Waitrose username and password are missing?"
-> **Domain expert:** "OS2 should create a **Value Provisioning Request** for the missing dependencies, then retry or resume once the required **Secrets** exist."
-
-> **Dev:** "If Iterate provides an OpenAI key, can a customer bring their own key for the same role?"
-> **Domain expert:** "Yes. The customer-owned Secret should be a **Secret Override** in the **Secret Stack**, taking precedence over the **Iterate-Provided Secret** for that Project context."
+> **Domain expert:** "No. **Project Ingress** handles inbound public requests to Project-owned hostnames. **Project Egress** is future outbound policy work; see `tasks/project-egress-secrets-mvp.md`."
 
 > **Dev:** "Can `ProjectIngressEntrypoint` props identify a Project by slug?"
 > **Domain expert:** "Not in v1. Slugs are mutable and belong to control-plane routing. Hot ingress uses the stable **Project ID** already resolved by the exact-host route lookup."
 
 > **Dev:** "Which public host should OS2 use when linking to a Project?"
-> **Domain expert:** "Use the **Default Project Ingress Host**: the custom host if present, otherwise the slug platform host. The stable ID platform host remains routable but is not the ordinary user-facing URL."
+> **Domain expert:** "Use the slug platform host for now. The stable ID platform host remains routable; custom/default host selection is future work."
 
 > **Dev:** "Should the Project Durable Object command be named `initializeProject`?"
 > **Domain expert:** "No. Use **Create Project Command** / `createProject`. `initialize` is infrastructure lifecycle language, not the Project domain command."
@@ -1078,7 +939,7 @@ The provider composition case targets provider-to-provider Tool Function Calls: 
 - "`IterateMcpServer`" names the product, not the domain concept. Resolved: use `ProjectMcpServerConnection` for the Durable Object class/catalog name.
 - "Project Run Code Session" added an unnecessary layer. Resolved: use **Codemode Session** directly.
 - "route" can mean a TanStack route, a Worker hostname match, or a Project-local destination. Resolved: use **Ingress Hostname** for the Worker-level host classifier, **Project Route** for the authenticated OS2 dashboard URL, and **Project Route Destination** for a Project Durable Object target.
-- "authentication" can happen at the OS2 App layer or inside Project Ingress. Resolved: the OS2 App authenticates dashboard/control-plane routes; the **Project Durable Object** authenticates **Project Ingress**.
+- "authentication" can happen at the OS2 App layer or inside Project Ingress. Resolved: the OS2 App authenticates dashboard/control-plane routes; MCP auth currently lives in the **Project MCP Server Entry Point**.
 - "fetch callable" overlaps with generic JavaScript functions and Tool Provider callables. Resolved: use **Fetch Destination** for an ingress target that can receive an HTTP request.
 - "context request" made codemode look like a generic invocation broker. Resolved: use **Function Call** only for path-addressed codemode functions, and keep **Tool Provider** registration as model-visible information first.
 - "documentation" sounded like a generated API schema or external docs page. Resolved: use **Tool Provider Instructions** for the string-form guidance registered with a Tool Provider.
@@ -1092,19 +953,11 @@ The provider composition case targets provider-to-provider Tool Function Calls: 
 - "codemode-session-capability callable" was too noun-heavy and unclear about the value kind. Resolved: use **Session Capability Callable** for the Callable carried by `events.iterate.com/codemode/session-started`.
 - "Project DO worker" conflicted with loopback props. Resolved: use **Project Ingress Entry Point** and **Project MCP Server Entry Point** as same-worker loopback targets for now, while the **Project Durable Object** remains exported by the main OS2 Worker.
 - "project identity" in entrypoint props could mean slug or ID. Resolved: v1 ingress entrypoints accept **Project ID** only; **Project Slug** resolution happens in control-plane routes or route-registry writes.
-- "canonical project host" could mean the stable ID host or the user-facing default host. Resolved: use **Stable Project Ingress Host** for the ID-derived host and **Default Project Ingress Host** for generated public URLs.
+- "canonical project host" could mean stable ID host, slug host, or future custom host. Resolved for current code: use **Stable Project Ingress Host** for the ID-derived host and **Slug Project Ingress Host** for the slug-derived host.
 - "initialize project" conflates infrastructure lifecycle with domain creation. Resolved: use **Create Project Command** for the Project Durable Object domain command.
 - "scope" could be hidden inside payload JSON. Resolved: OS2 persisted records should expose their **Data Scope** through queryable columns.
 - "source of truth" for project ingress could mean the global D1 lookup table. Resolved: the **Project Durable Object** owns desired ingress state; D1 rows are **Project Projections**.
 - "project table" could mean app-level listing state or mixin-owned Durable Object tracking. Resolved: use **Project Listing Projection** for the app D1 row and **Durable Object Catalog** for shared DO tracking tables.
 - "MCP authorization" could become a one-off Project Durable Object method. Resolved: avoid MCP-specific Project DO auth methods; model future auth as generic **Project Route Authorization**.
 - "project access" and "route authorization" are different depths of policy. Resolved: v1 can use a generic **Project Access Check**; richer destination-specific policy belongs to future **Project Route Authorization**.
-- "egress proxy", "egress gateway", and **Project Ingress** were used around outbound traffic. Resolved: use **Project Egress** for outbound HTTP/S traffic from Project-owned execution and reserve **Project Ingress** for inbound public requests.
-- "magic string" and "sentinel string" were used for secret placeholders. Resolved: use **Secret Reference**, with `getSecret(...)` as the placeholder shape.
-- "egress secret" conflated two domains. Resolved: use **Secret** for sensitive values and **Secret Injection** for the egress-time act of inserting them into outbound requests.
-- "nvar" / environment variable was used near Secret. Resolved: use **Project Environment Variable** for named runtime configuration values, which may contain **Secret References** but are not themselves **Secrets**.
-- "secret locator" is unresolved between stable ID, key, slug, or scoped name. Keep the term **Secret Locator** until the identity rules are settled.
-- "global key" was used for Iterate-owned credentials. Resolved: use **Iterate-Provided Secret** for a Global Secret made available to Projects under product-defined pricing and usage rules.
-- "override" and "stack" need precise ordering. Partially resolved: use **Secret Stack** and **Secret Override**; exact precedence across Project, Clerk Organization, Clerk User, and Global remains open.
-- "derived secret" and "refreshable secret" may be implementation variants of one concept. Partially resolved: use **Refreshable Secret** when the important behavior is updating the current value through **Secret Dependencies**.
-- "non-secret secret" was awkward but the broader umbrella term made the model less clear. Resolved: use **Secret** for values in OS2's secrets system, even when an individual supporting value such as an OAuth client ID is not itself highly sensitive.
+- "egress proxy", "egress gateway", and **Project Ingress** were used around outbound traffic. Resolved for current code: use **Project Egress** only as a pointer to future outbound policy work.
