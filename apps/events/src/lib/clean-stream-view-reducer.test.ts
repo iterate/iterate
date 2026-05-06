@@ -176,7 +176,6 @@ describe("clean stream view reducers", () => {
           offset: 9,
           type: "events.iterate.com/agent/llm-request-requested",
           payload: {
-            requestId: "req_1",
             model: "test-model",
             runOpts: {},
           },
@@ -185,9 +184,10 @@ describe("clean stream view reducers", () => {
           offset: 10,
           type: "events.iterate.com/agent/llm-request-completed",
           payload: {
-            requestId: "req_1",
-            rawResponse: "ok",
+            llmRequestId: 9,
+            provider: "test-provider",
             durationMs: 123,
+            result: { status: "success", rawResponse: "ok" },
           },
         }),
       ],
@@ -206,7 +206,7 @@ describe("clean stream view reducers", () => {
         id: "llm-request-requested-9",
         props: {
           phase: "started",
-          requestId: "req_1",
+          requestId: "9",
         },
       },
       {
@@ -222,7 +222,7 @@ describe("clean stream view reducers", () => {
         props: {
           phase: "ended",
           outcome: "completed",
-          requestId: "req_1",
+          requestId: "9",
         },
       },
     ]);
