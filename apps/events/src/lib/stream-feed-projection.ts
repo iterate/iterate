@@ -166,7 +166,7 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     return {
       kind: "message",
       role: "assistant",
-      content: [{ type: "text", text: message }],
+      content: [{ type: "markdown", text: message }],
       timestamp: getTimestamp(event.createdAt),
     };
   }

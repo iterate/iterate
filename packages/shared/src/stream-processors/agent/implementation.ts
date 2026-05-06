@@ -63,15 +63,9 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
    */
   let scheduledLlmRequest: ScheduledLlmRequest | null = null;
   let llmRequestSeq = 0;
-  let latestAgentState: AgentState | null = null;
 
   return implementProcessor(AgentProcessorContract, {
-    onStart({ state }) {
-      latestAgentState = state;
-    },
-
     async afterAppend({ event, state, streamApi }) {
-      latestAgentState = state;
       await standardProcessorBehavior.afterAppend({
         contract: AgentProcessorContract,
         state,
@@ -377,7 +371,6 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
       beforeOffset: "end",
     });
     const stateAtRequest = reduceAgentEvents({ events });
-    latestAgentState = stateAtRequest;
 
     const scheduledEvent = scheduledLlmRequest.scheduledEvent;
     scheduledLlmRequest = null;

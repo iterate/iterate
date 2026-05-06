@@ -122,6 +122,13 @@ describe("projectWireToFeed", () => {
   });
 
   test("projects canonical agent, webchat, and codemode events", () => {
+    const assistantMessage = [
+      "Working on it.",
+      "",
+      "```typescript",
+      "const ok: boolean = true;",
+      "```",
+    ].join("\n");
     const feed = projectWireToFeed([
       createEvent({
         offset: 1,
@@ -131,7 +138,7 @@ describe("projectWireToFeed", () => {
       createEvent({
         offset: 2,
         type: "events.iterate.com/webchat/agent-response-added",
-        payload: { message: "Working on it." },
+        payload: { message: assistantMessage },
       }),
       createEvent({
         offset: 3,
@@ -163,7 +170,11 @@ describe("projectWireToFeed", () => {
       "codemode-result",
     ]);
     expect(feed[1]).toMatchObject({ kind: "message", role: "user" });
-    expect(feed[3]).toMatchObject({ kind: "message", role: "assistant" });
+    expect(feed[3]).toMatchObject({
+      kind: "message",
+      role: "assistant",
+      content: [{ type: "markdown", text: assistantMessage }],
+    });
     expect(feed[5]).toMatchObject({ kind: "agent-status", requestId: "req_1" });
     expect(feed[7]).toMatchObject({
       kind: "codemode-block",

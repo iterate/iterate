@@ -1010,7 +1010,7 @@ describe("stream processor contracts", () => {
       },
       streamApi: {
         ...createTestStreamApi<typeof contract>(),
-        read: async (args) => {
+        read: async (args = {}) => {
           calls.push(["read", args.afterOffset, args.beforeOffset]);
           return [committedEvent({ type: "counter-incremented", payload: { by: 2 }, offset: 2 })];
         },

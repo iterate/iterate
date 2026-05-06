@@ -423,6 +423,7 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
         props: {
           role: "assistant",
           text: message,
+          format: "markdown",
           timestamp,
           raw: event,
         },
