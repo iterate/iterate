@@ -61,7 +61,7 @@ describeEphemeral("ephemeral worker", () => {
       const e2e = await setupE2E(ctx);
       const streamPath = e2e.createStreamPath();
 
-      const callbackUrl = buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
+      const websocketUrl = buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
         publicOrigin: worker!.url,
         runnerInstance: streamPathToAgentInstance(streamPath),
         streamPath,
@@ -72,7 +72,7 @@ describeEphemeral("ephemeral worker", () => {
         payload: {
           slug: `iterate-agent-ws-${e2e.executionSuffix}`,
           type: "websocket",
-          callbackUrl,
+          callable: fetchCallableFromWebSocketUrl(websocketUrl),
         },
       });
 
@@ -128,3 +128,20 @@ async () => {
   };
 }
 `.trim();
+
+function fetchCallableFromWebSocketUrl(websocketUrl: string) {
+  const url = new URL(websocketUrl);
+  if (url.protocol === "ws:") {
+    url.protocol = "http:";
+  } else if (url.protocol === "wss:") {
+    url.protocol = "https:";
+  }
+
+  return {
+    type: "fetch" as const,
+    via: {
+      type: "url" as const,
+      url: url.toString(),
+    },
+  };
+}

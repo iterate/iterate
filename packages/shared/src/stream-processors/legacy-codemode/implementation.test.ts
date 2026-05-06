@@ -46,7 +46,7 @@ describe("createCodemodeProcessor", () => {
         type: "events.iterate.com/agent/input-added",
         idempotencyKey: CODEMODE_PRIMER_IDEMPOTENCY_KEY,
         payload: {
-          content: expect.stringContaining("codemode is how you use tools"),
+          content: expect.stringContaining("Codemode is mandatory"),
           triggerLlmRequest: { behaviour: "dont-trigger-request" },
         },
       },
@@ -102,10 +102,11 @@ describe("createCodemodeProcessor", () => {
   it("executes codemode blocks through the injected executor dependency", async () => {
     const appended: StreamEventInput[] = [];
     const executorCalls: { script: string; toolProviderCount: number }[] = [];
+    let webchatResult: unknown = "unset";
     const processor = createCodemodeProcessor({
       codeExecutor: async ({ script, toolProviders, webchat }) => {
         executorCalls.push({ script, toolProviderCount: toolProviders.length });
-        await webchat.callTool({
+        webchatResult = await webchat.callTool({
           name: "sendMessage",
           rawArgs: { message: "hello from fake executor" },
         });
@@ -134,11 +135,12 @@ describe("createCodemodeProcessor", () => {
         toolProviderCount: 0,
       },
     ]);
+    expect(webchatResult).toBeUndefined();
     expect(appended).toEqual([
       {
-        type: "events.iterate.com/webchat/agent-response-added",
+        type: "events.iterate.com/agent-chat/assistant-response-added",
         idempotencyKey: "stream-processor:codemode:derived:webchat-send-message:1:/agents/test:12",
-        payload: { message: "hello from fake executor" },
+        payload: { channel: "web", message: "hello from fake executor" },
       },
       {
         type: "events.iterate.com/codemode/result-added",
@@ -157,13 +159,109 @@ describe("createCodemodeProcessor", () => {
       extractCodemodeScriptFromAssistantResponse("```js\nasync () => {\n  return 1;\n}\n```"),
     ).toBe("async () => {\n  return 1;\n}");
   });
+
+  it("does not show successful undefined results to the agent", async () => {
+    const appended: StreamEventInput[] = [];
+    const processor = createCodemodeProcessor({
+      codeExecutor: async () => ({ result: undefined }),
+      env: {},
+    });
+
+    await processor.implementation.afterAppend?.({
+      event: consumedCodemodeEvent({
+        type: "events.iterate.com/codemode/result-added",
+        payload: { result: undefined, durationMs: 10 },
+        offset: 20,
+      }),
+      previousState: registeredState({ hasAppendedCodemodePrompt: true }),
+      state: registeredState({ hasAppendedCodemodePrompt: true }),
+      streamApi: testStreamApi({ appended, storedEvents: [] }),
+      signal: new AbortController().signal,
+    });
+
+    expect(appended.some((event) => event.type === "events.iterate.com/agent/input-added")).toBe(
+      false,
+    );
+  });
+
+  it.each([null, false, 0, ""])("continues for explicit falsy result %j", async (result) => {
+    const appended: StreamEventInput[] = [];
+    const processor = createCodemodeProcessor({
+      codeExecutor: async () => ({ result }),
+      env: {},
+    });
+
+    await processor.implementation.afterAppend?.({
+      event: consumedCodemodeEvent({
+        type: "events.iterate.com/codemode/result-added",
+        payload: { result, durationMs: 10 },
+        offset: 21,
+      }),
+      previousState: registeredState({ hasAppendedCodemodePrompt: true }),
+      state: registeredState({ hasAppendedCodemodePrompt: true, automaticContinuationsUsed: 1 }),
+      streamApi: testStreamApi({ appended, storedEvents: [] }),
+      signal: new AbortController().signal,
+    });
+
+    expect(appended).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/agent/input-added",
+        payload: expect.objectContaining({
+          triggerLlmRequest: { behaviour: "after-current-request" },
+        }),
+      }),
+    );
+  });
+
+  it("requests one final wrap-up when continuation budget is exhausted", async () => {
+    const appended: StreamEventInput[] = [];
+    const processor = createCodemodeProcessor({
+      codeExecutor: async () => ({ result: "done" }),
+      env: {},
+    });
+
+    await processor.implementation.afterAppend?.({
+      event: consumedCodemodeEvent({
+        type: "events.iterate.com/codemode/result-added",
+        payload: { result: "done", durationMs: 10 },
+        offset: 22,
+      }),
+      previousState: registeredState({
+        hasAppendedCodemodePrompt: true,
+        automaticContinuationsUsed: 10,
+      }),
+      state: registeredState({
+        hasAppendedCodemodePrompt: true,
+        automaticContinuationsUsed: 10,
+        finalWrapUpRequested: true,
+      }),
+      streamApi: testStreamApi({ appended, storedEvents: [] }),
+      signal: new AbortController().signal,
+    });
+
+    expect(appended).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/agent/input-added",
+        payload: expect.objectContaining({
+          content: expect.stringContaining("Automatic codemode continuation limit reached"),
+          triggerLlmRequest: { behaviour: "after-current-request" },
+        }),
+      }),
+    );
+  });
 });
 
-function registeredState(args: { hasAppendedCodemodePrompt: boolean }): CodemodeState {
+function registeredState(args: {
+  hasAppendedCodemodePrompt: boolean;
+  automaticContinuationsUsed?: number;
+  finalWrapUpRequested?: boolean;
+}): CodemodeState {
   return {
     ...getInitialProcessorState(CodemodeProcessorContract),
     hasRegisteredCurrentVersion: true,
     hasAppendedCodemodePrompt: args.hasAppendedCodemodePrompt,
+    automaticContinuationsUsed: args.automaticContinuationsUsed ?? 0,
+    finalWrapUpRequested: args.finalWrapUpRequested ?? false,
   };
 }
 

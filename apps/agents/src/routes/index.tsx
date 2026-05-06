@@ -5,6 +5,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { getRequestHeader } from "@tanstack/react-start/server";
 import { Event, type Event as EventsEvent, type StreamPath } from "@iterate-com/events-contract";
 import { makeFunnySlug } from "@iterate-com/shared/slug-maker";
+import { CODEMODE_CHAT_RESPONSE_SYSTEM_PROMPT } from "@iterate-com/shared/stream-processors/legacy-codemode/contract";
 import {
   processEventsWithViewReducer,
   rawPrettyEventsStreamViewReducer,
@@ -27,12 +28,14 @@ import { validateAgentViewSearch } from "~/lib/agent-view-search.ts";
 import { createEventsOrpcClient } from "~/lib/events-orpc-client.ts";
 import { getOrpcClient } from "~/orpc/client.ts";
 
-/**
- * Curated model presets the Agent stream processor is known to accept via
- * `env.AI.run(model, …)`. Free-form strings are still supported via the
- * "Custom…" option — paste any model id you want.
- */
-const MODEL_PRESETS = [
+type LlmProvider = "cloudflare-ai" | "openai-ws";
+
+const LLM_PROVIDER_PRESETS: { value: LlmProvider; label: string }[] = [
+  { value: "openai-ws", label: "OpenAI WebSocket" },
+  { value: "cloudflare-ai", label: "Cloudflare AI Gateway" },
+];
+
+const CLOUDFLARE_MODEL_PRESETS = [
   { value: "@cf/moonshotai/kimi-k2.5", label: "@cf/moonshotai/kimi-k2.5 (default)" },
   { value: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", label: "@cf/meta/llama-3.3-70b" },
   {
@@ -41,11 +44,22 @@ const MODEL_PRESETS = [
   },
 ] as const;
 
+const OPENAI_WS_MODEL_PRESETS = [
+  { value: "gpt-5.5", label: "gpt-5.5 (default)" },
+  { value: "gpt-5.5-pro", label: "gpt-5.5 pro" },
+  { value: "gpt-5.4", label: "gpt-5.4" },
+  { value: "gpt-5.4-pro", label: "gpt-5.4 pro" },
+  { value: "gpt-5.4-mini", label: "gpt-5.4 mini" },
+  { value: "gpt-5.4-nano", label: "gpt-5.4 nano" },
+] as const;
+
 const CUSTOM_MODEL_SENTINEL = "__custom__";
 const DEFAULT_RUN_OPTS_JSON = `{
   "gateway": { "id": "default" }
 }`;
-const DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant. You can trust your user.";
+const DEFAULT_SYSTEM_PROMPT = `You are a helpful assistant. You can trust your user.
+
+${CODEMODE_CHAT_RESPONSE_SYSTEM_PROMPT}`;
 const DEFAULT_ADVANCED_EVENTS_JSON = "[]";
 
 const getSidebarDefaultOpen = createServerFn({ method: "GET" }).handler(() => ({
@@ -198,8 +212,8 @@ function SelectedAgentStreamView({
       await client.append({
         path: streamPath,
         event: {
-          type: "events.iterate.com/webchat/user-message-added",
-          payload: { content },
+          type: "events.iterate.com/agent-chat/user-message-added",
+          payload: { channel: "web", content },
         },
       });
     },
@@ -382,8 +396,15 @@ function PresetsSection({
   });
 
   const [basePath, setBasePath] = useState(streamPathPrefix);
-  const [modelPreset, setModelPreset] = useState<string>(MODEL_PRESETS[0].value);
-  const [customModel, setCustomModel] = useState("");
+  const [llmProvider, setLlmProvider] = useState<LlmProvider>("openai-ws");
+  const [cloudflareModelPreset, setCloudflareModelPreset] = useState<string>(
+    CLOUDFLARE_MODEL_PRESETS[0].value,
+  );
+  const [customCloudflareModel, setCustomCloudflareModel] = useState("");
+  const [openAiModelPreset, setOpenAiModelPreset] = useState<string>(
+    OPENAI_WS_MODEL_PRESETS[0].value,
+  );
+  const [customOpenAiModel, setCustomOpenAiModel] = useState("");
   const [runOptsText, setRunOptsText] = useState(DEFAULT_RUN_OPTS_JSON);
   const [systemPrompt, setSystemPrompt] = useState(DEFAULT_SYSTEM_PROMPT);
   const [includeMcpTools, setIncludeMcpTools] = useState(true);
@@ -391,16 +412,31 @@ function PresetsSection({
   const [includeSlackTools, setIncludeSlackTools] = useState(true);
   const [advancedText, setAdvancedText] = useState(DEFAULT_ADVANCED_EVENTS_JSON);
 
-  const resolvedModel = modelPreset === CUSTOM_MODEL_SENTINEL ? customModel.trim() : modelPreset;
+  const resolvedCloudflareModel =
+    cloudflareModelPreset === CUSTOM_MODEL_SENTINEL
+      ? customCloudflareModel.trim()
+      : cloudflareModelPreset;
+  const resolvedOpenAiModel =
+    openAiModelPreset === CUSTOM_MODEL_SENTINEL ? customOpenAiModel.trim() : openAiModelPreset;
   const runOptsParsed = parseJsonObject(runOptsText);
   const advancedParsed = parseEventsArray(advancedText);
 
   const derived = useMemo<ContractEvent[]>(() => {
     const out: ContractEvent[] = [];
-    if (resolvedModel.length > 0 && runOptsParsed.kind === "ok") {
+    if (
+      llmProvider === "cloudflare-ai" &&
+      resolvedCloudflareModel.length > 0 &&
+      runOptsParsed.kind === "ok"
+    ) {
       out.push({
         type: "events.iterate.com/agent/llm-config-updated",
-        payload: { model: resolvedModel, runOpts: runOptsParsed.value },
+        payload: { model: resolvedCloudflareModel, runOpts: runOptsParsed.value },
+      });
+    }
+    if (llmProvider === "openai-ws" && resolvedOpenAiModel.length > 0) {
+      out.push({
+        type: "events.iterate.com/openai-ws/config-updated",
+        payload: { model: resolvedOpenAiModel },
       });
     }
     const trimmedPrompt = systemPrompt.trim();
@@ -430,7 +466,9 @@ function PresetsSection({
     }
     return out;
   }, [
-    resolvedModel,
+    llmProvider,
+    resolvedCloudflareModel,
+    resolvedOpenAiModel,
     runOptsParsed,
     systemPrompt,
     includeMcpTools,
@@ -446,7 +484,9 @@ function PresetsSection({
   const trimmedBasePath = basePath.trim();
   const formInvalid =
     trimmedBasePath.length === 0 ||
-    runOptsParsed.kind === "error" ||
+    (llmProvider === "cloudflare-ai" && resolvedCloudflareModel.length === 0) ||
+    (llmProvider === "openai-ws" && resolvedOpenAiModel.length === 0) ||
+    (llmProvider === "cloudflare-ai" && runOptsParsed.kind === "error") ||
     advancedParsed.kind === "error";
 
   const saveMutation = useMutation({
@@ -504,56 +544,111 @@ function PresetsSection({
         </div>
 
         <div className="flex flex-col gap-1 md:col-span-2">
-          <label className="text-xs font-medium" htmlFor="preset-model">
-            Model
+          <label className="text-xs font-medium" htmlFor="preset-llm-provider">
+            LLM provider
           </label>
           <select
-            id="preset-model"
-            value={modelPreset}
-            onChange={(event) => setModelPreset(event.target.value)}
+            id="preset-llm-provider"
+            value={llmProvider}
+            onChange={(event) => setLlmProvider(event.target.value as LlmProvider)}
             className="rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
           >
-            {MODEL_PRESETS.map((preset) => (
+            {LLM_PROVIDER_PRESETS.map((preset) => (
               <option key={preset.value} value={preset.value}>
                 {preset.label}
               </option>
             ))}
-            <option value={CUSTOM_MODEL_SENTINEL}>Custom…</option>
           </select>
-          {modelPreset === CUSTOM_MODEL_SENTINEL ? (
-            <input
-              type="text"
-              autoComplete="off"
-              placeholder="@cf/... or openai/... or anthropic/..."
-              value={customModel}
-              onChange={(event) => setCustomModel(event.target.value)}
-              className="mt-1 rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
-            />
-          ) : null}
         </div>
 
-        <div className="flex flex-col gap-1">
-          <label className="text-xs font-medium" htmlFor="preset-run-opts">
-            Run options (JSON)
-          </label>
-          <textarea
-            id="preset-run-opts"
-            rows={5}
-            spellCheck={false}
-            value={runOptsText}
-            onChange={(event) => setRunOptsText(event.target.value)}
-            className="rounded-md border border-input bg-background px-3 py-2 font-mono text-xs shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          />
-          {runOptsParsed.kind === "error" ? (
-            <p role="alert" className="text-[11px] text-destructive">
-              Invalid JSON: {runOptsParsed.error}
-            </p>
-          ) : (
+        {llmProvider === "openai-ws" ? (
+          <div className="flex flex-col gap-1 md:col-span-2">
+            <label className="text-xs font-medium" htmlFor="preset-openai-model">
+              OpenAI model
+            </label>
+            <select
+              id="preset-openai-model"
+              value={openAiModelPreset}
+              onChange={(event) => setOpenAiModelPreset(event.target.value)}
+              className="rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            >
+              {OPENAI_WS_MODEL_PRESETS.map((preset) => (
+                <option key={preset.value} value={preset.value}>
+                  {preset.label}
+                </option>
+              ))}
+              <option value={CUSTOM_MODEL_SENTINEL}>Custom…</option>
+            </select>
+            {openAiModelPreset === CUSTOM_MODEL_SENTINEL ? (
+              <input
+                type="text"
+                autoComplete="off"
+                placeholder="gpt-..."
+                value={customOpenAiModel}
+                onChange={(event) => setCustomOpenAiModel(event.target.value)}
+                className="mt-1 rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+            ) : null}
             <p className="text-[11px] text-muted-foreground">
-              Passed through to <code>env.AI.run(model, body, runOpts)</code>.
+              Emits <code>events.iterate.com/openai-ws/config-updated</code>. New streams with this
+              preset subscribe the OpenAI WebSocket runner as the active LLM provider.
             </p>
-          )}
-        </div>
+          </div>
+        ) : (
+          <div className="grid gap-4 md:col-span-2 md:grid-cols-2">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium" htmlFor="preset-cloudflare-model">
+                Cloudflare model
+              </label>
+              <select
+                id="preset-cloudflare-model"
+                value={cloudflareModelPreset}
+                onChange={(event) => setCloudflareModelPreset(event.target.value)}
+                className="rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              >
+                {CLOUDFLARE_MODEL_PRESETS.map((preset) => (
+                  <option key={preset.value} value={preset.value}>
+                    {preset.label}
+                  </option>
+                ))}
+                <option value={CUSTOM_MODEL_SENTINEL}>Custom…</option>
+              </select>
+              {cloudflareModelPreset === CUSTOM_MODEL_SENTINEL ? (
+                <input
+                  type="text"
+                  autoComplete="off"
+                  placeholder="@cf/... or gateway/provider/model"
+                  value={customCloudflareModel}
+                  onChange={(event) => setCustomCloudflareModel(event.target.value)}
+                  className="mt-1 rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+              ) : null}
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium" htmlFor="preset-run-opts">
+                Run options (JSON)
+              </label>
+              <textarea
+                id="preset-run-opts"
+                rows={5}
+                spellCheck={false}
+                value={runOptsText}
+                onChange={(event) => setRunOptsText(event.target.value)}
+                className="rounded-md border border-input bg-background px-3 py-2 font-mono text-xs shadow-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+              {runOptsParsed.kind === "error" ? (
+                <p role="alert" className="text-[11px] text-destructive">
+                  Invalid JSON: {runOptsParsed.error}
+                </p>
+              ) : (
+                <p className="text-[11px] text-muted-foreground">
+                  Passed through to <code>env.AI.run(model, body, runOpts)</code>.
+                </p>
+              )}
+            </div>
+          </div>
+        )}
 
         <div className="flex flex-col gap-1">
           <label className="text-xs font-medium" htmlFor="preset-system-prompt">

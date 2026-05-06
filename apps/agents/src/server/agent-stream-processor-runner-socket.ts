@@ -1,8 +1,10 @@
 import { StreamPath } from "@iterate-com/events-contract";
 import { getOrInitializeDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import type { AgentChatStreamProcessorRunner } from "~/durable-objects/agent-chat-stream-processor-runner.ts";
 import type { AgentStreamProcessorRunner } from "~/durable-objects/agent-stream-processor-runner.ts";
+import type { CloudflareAiStreamProcessorRunner } from "~/durable-objects/cloudflare-ai-stream-processor-runner.ts";
 import type { CodemodeStreamProcessorRunner } from "~/durable-objects/codemode-stream-processor-runner.ts";
-import type { WebchatStreamProcessorRunner } from "~/durable-objects/webchat-stream-processor-runner.ts";
+import type { OpenAiWsStreamProcessorRunner } from "~/durable-objects/openai-ws-stream-processor-runner.ts";
 
 const RUNNER_SOCKET_SUFFIX = "/websocket";
 
@@ -54,18 +56,58 @@ export async function handleCodemodeStreamProcessorRunnerSocket(args: {
   return await runner.fetch(args.request);
 }
 
-export async function handleWebchatStreamProcessorRunnerSocket(args: {
+export async function handleCloudflareAiStreamProcessorRunnerSocket(args: {
   env: Env;
   request: Request;
 }): Promise<Response | null> {
   const parsed = parseRunnerRequest({
     request: args.request,
-    pathPrefix: "/api/webchat-stream-processor-runner/",
+    pathPrefix: "/api/cloudflare-ai-stream-processor-runner/",
   });
   if (parsed instanceof Response || parsed == null) return parsed;
 
-  const runner = await getOrInitializeDoStub<WebchatStreamProcessorRunner>({
-    namespace: args.env.WEBCHAT_STREAM_PROCESSOR_RUNNER,
+  const runner = await getOrInitializeDoStub<CloudflareAiStreamProcessorRunner>({
+    namespace: args.env.CLOUDFLARE_AI_STREAM_PROCESSOR_RUNNER,
+    name: parsed.runnerName,
+    initParams: {
+      streamPath: parsed.streamPath,
+    },
+  });
+  return await runner.fetch(args.request);
+}
+
+export async function handleAgentChatStreamProcessorRunnerSocket(args: {
+  env: Env;
+  request: Request;
+}): Promise<Response | null> {
+  const parsed = parseRunnerRequest({
+    request: args.request,
+    pathPrefix: "/api/agent-chat-stream-processor-runner/",
+  });
+  if (parsed instanceof Response || parsed == null) return parsed;
+
+  const runner = await getOrInitializeDoStub<AgentChatStreamProcessorRunner>({
+    namespace: args.env.AGENT_CHAT_STREAM_PROCESSOR_RUNNER,
+    name: parsed.runnerName,
+    initParams: {
+      streamPath: parsed.streamPath,
+    },
+  });
+  return await runner.fetch(args.request);
+}
+
+export async function handleOpenAiWsStreamProcessorRunnerSocket(args: {
+  env: Env;
+  request: Request;
+}): Promise<Response | null> {
+  const parsed = parseRunnerRequest({
+    request: args.request,
+    pathPrefix: "/api/openai-ws-stream-processor-runner/",
+  });
+  if (parsed instanceof Response || parsed == null) return parsed;
+
+  const runner = await getOrInitializeDoStub<OpenAiWsStreamProcessorRunner>({
+    namespace: args.env.OPENAI_WS_STREAM_PROCESSOR_RUNNER,
     name: parsed.runnerName,
     initParams: {
       streamPath: parsed.streamPath,

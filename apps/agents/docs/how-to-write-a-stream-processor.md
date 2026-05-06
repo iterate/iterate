@@ -203,6 +203,102 @@ export const ExampleProcessorContract = defineProcessorContract({
 
 `defineProcessorContract(...)` is a typed identity. It should not hide or rewrite your contract. Its job is to make bad strings, bad state shapes, and bad append types fail while preserving the object you wrote.
 
+### Event Lifecycle Naming
+
+Use event suffixes to say what the processor knows at the time it appends the
+event.
+
+Use `requested` when a processor records intent for another processor or
+runtime to act later. For example, an agent processor should append
+`events.iterate.com/agent/llm-request-requested` when it has prepared the LLM
+input and is handing the request to whichever LLM processor is subscribed. The
+agent has not started the provider call, so `started` would overclaim.
+
+Use `started` when the processor that owns the side effect has actually begun
+executing it. For example, a Cloudflare AI processor may append
+`events.iterate.com/cloudflare-ai/llm-request-started` immediately before it
+calls the Cloudflare binding or Gateway endpoint.
+
+Use one terminal `completed` event for both success and failure. Put the outcome
+in the payload instead of splitting terminal events into `completed` and
+`failed` siblings:
+
+```ts
+"events.iterate.com/example/llm-request-completed": {
+  payloadSchema: z.object({
+    llmRequestId: z.number().int(),
+    durationMs: z.number().int(),
+    result: z.discriminatedUnion("status", [
+      z.object({
+        status: z.literal("success"),
+        output: z.string(),
+      }),
+      z.object({
+        status: z.literal("failure"),
+        error: z.object({ message: z.string() }),
+      }),
+    ]),
+  }),
+},
+```
+
+This keeps subscribers simple: they watch one terminal event and switch on the
+payload when they need to distinguish success from failure. Use separate
+streaming or transport events only for facts that happen before the terminal
+event, such as `sse-event-received`, `websocket-message-received`, or
+`http-response-received`.
+
+### Cross-Processor Request Contracts
+
+Processors coordinate by appending stream events into the ether. A processor
+that appends a request event is declaring work it wants done; it is not calling
+a specific processor directly. A subscribed processor that understands that
+request event may later append response events that satisfy the request.
+
+Document this ownership in the contract description and event descriptions for
+both sides. A reader should be able to answer:
+
+- which processor appends the request event
+- which processor family is expected to consume it
+- which events the consumer must append in response
+- which event id or offset correlates the response back to the request
+
+For LLM requests, the agent processor owns the request intent:
+
+```ts
+events.iterate.com / agent / llm - request - requested;
+// appended by: agent
+// consumed by: one subscribed LLM request processor, such as openai-ws or cloudflare-ai
+// correlation: llmRequestId is the offset of this requested event
+```
+
+The subscribed LLM request processor owns provider execution and must append
+the agent-level response events directly. The agent processor should not
+translate provider-specific completions into agent output; that would make the
+agent processor know every provider's response shape.
+
+```ts
+events.iterate.com / agent / output - added;
+// appended by: subscribed LLM request processor
+// consumed by: agent, codemode, webchat, and other output-aware processors
+
+events.iterate.com / agent / llm - request - completed;
+// appended by: subscribed LLM request processor
+// consumed by: agent and other lifecycle-aware processors
+// payload result.status is "success" or "failure"
+```
+
+Provider processors may also append provider-owned trace events, such as
+`events.iterate.com/openai-ws/websocket-message-received` or
+`events.iterate.com/cloudflare-ai/sse-event-received`. Those events are for raw
+transcript, replay, and debugging. They do not replace the agent-level response
+events the provider owes back to the stream.
+
+Runner-owned failures use `events.iterate.com/core/error-occurred`. Keep that
+payload small: a human-readable `message` and, when available, a serialized
+`error`. Processor identity, triggering event, and similar provenance belongs in
+event metadata, not in the error event schema.
+
 ## Reducer Shape
 
 Reducers and implementation hooks should branch on `event.type` with a

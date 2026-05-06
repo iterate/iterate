@@ -12,13 +12,16 @@ import { z } from "zod";
 import { AppConfig } from "~/app.ts";
 import { createEventsOrpcClient } from "~/lib/events-orpc-client.ts";
 import {
+  AGENT_CHAT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
   AGENT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
+  buildAgentChatStreamProcessorRunnerWebSocketCallbackUrl,
   buildAgentStreamProcessorRunnerWebSocketCallbackUrl,
   buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl,
-  buildWebchatStreamProcessorRunnerWebSocketCallbackUrl,
+  buildOpenAiWsStreamProcessorRunnerWebSocketCallbackUrl,
+  CLOUDFLARE_AI_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
   CODEMODE_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
+  OPENAI_WS_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
   streamPathToAgentInstance,
-  WEBCHAT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
 } from "~/lib/iterate-agent-addressing.ts";
 import type { CloudflareEnv } from "~/lib/worker-env.d.ts";
 
@@ -89,7 +92,7 @@ type WireDiscoveredAgent = { streamPath: string; discoveredAt: number };
  * DO's own WebSocket upgrade URL as a query parameter. Using
  * `connection.uri` as the source of truth keeps the control plane
  * (`installProcessor`) coupled to the DO only through the subscription
- * `callbackUrl` that Events stores — nothing else.
+ * Callable that Events stores — nothing else.
  */
 export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
   async onMessage(connection: Connection, message: WSMessage) {
@@ -137,10 +140,30 @@ export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
     const childPath = childCreated.data.payload.childPath;
     const projectSlug = ProjectSlug.parse(appConfig.eventsProjectSlug);
     const runnerInstance = streamPathToAgentInstance(childPath);
+    const matched = this.#lookupDefaultsForChildPath(childPath);
+    const llmProvider = inferLlmProviderFromDefaultEvents(matched?.events ?? []);
+    const cloudflareAiCallbackUrl = new URL(publicBaseUrl);
+    if (cloudflareAiCallbackUrl.hostname === "localhost") {
+      cloudflareAiCallbackUrl.hostname = "127.0.0.1";
+    }
+    cloudflareAiCallbackUrl.protocol =
+      cloudflareAiCallbackUrl.protocol === "http:" ||
+      cloudflareAiCallbackUrl.hostname === "localhost" ||
+      cloudflareAiCallbackUrl.hostname === "127.0.0.1" ||
+      cloudflareAiCallbackUrl.hostname === "::1" ||
+      cloudflareAiCallbackUrl.hostname === "[::1]"
+        ? "ws:"
+        : "wss:";
+    cloudflareAiCallbackUrl.pathname = `/api/cloudflare-ai-stream-processor-runner/${encodeURIComponent(
+      runnerInstance,
+    )}/websocket`;
+    cloudflareAiCallbackUrl.search = "";
+    cloudflareAiCallbackUrl.searchParams.set("streamPath", childPath);
+    cloudflareAiCallbackUrl.hash = "";
     const runnerSubscriptions = [
       {
-        slug: WEBCHAT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
-        callbackUrl: buildWebchatStreamProcessorRunnerWebSocketCallbackUrl({
+        slug: AGENT_CHAT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
+        websocketUrl: buildAgentChatStreamProcessorRunnerWebSocketCallbackUrl({
           publicOrigin: publicBaseUrl,
           runnerInstance,
           streamPath: childPath,
@@ -148,15 +171,29 @@ export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
       },
       {
         slug: AGENT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
-        callbackUrl: buildAgentStreamProcessorRunnerWebSocketCallbackUrl({
+        websocketUrl: buildAgentStreamProcessorRunnerWebSocketCallbackUrl({
           publicOrigin: publicBaseUrl,
           runnerInstance,
           streamPath: childPath,
         }),
       },
       {
+        slug:
+          llmProvider === "openai-ws"
+            ? OPENAI_WS_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG
+            : CLOUDFLARE_AI_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
+        websocketUrl:
+          llmProvider === "openai-ws"
+            ? buildOpenAiWsStreamProcessorRunnerWebSocketCallbackUrl({
+                publicOrigin: publicBaseUrl,
+                runnerInstance,
+                streamPath: childPath,
+              })
+            : cloudflareAiCallbackUrl.toString(),
+      },
+      {
         slug: CODEMODE_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
-        callbackUrl: buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
+        websocketUrl: buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
           publicOrigin: publicBaseUrl,
           runnerInstance,
           streamPath: childPath,
@@ -181,7 +218,7 @@ export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
             payload: {
               slug: subscription.slug,
               type: "websocket",
-              callbackUrl: subscription.callbackUrl,
+              callable: fetchCallableFromWebSocketUrl(subscription.websocketUrl),
             },
           },
         });
@@ -189,14 +226,14 @@ export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
           childPath,
           runnerInstance,
           slug: subscription.slug,
-          callbackUrl: subscription.callbackUrl,
+          websocketUrl: subscription.websocketUrl,
         });
       } catch (error) {
         this.#logError("onMessage.subscribeFailed", {
           childPath,
           runnerInstance,
           slug: subscription.slug,
-          callbackUrl: subscription.callbackUrl,
+          websocketUrl: subscription.websocketUrl,
           error: stringifyError(error),
         });
         continue;
@@ -210,7 +247,6 @@ export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
       discoveredAt: Date.now(),
     });
 
-    const matched = this.#lookupDefaultsForChildPath(childPath);
     if (matched == null) {
       log("onMessage.noDefaults", { childPath });
       return;
@@ -435,4 +471,29 @@ function stringifyError(err: unknown): string {
   } catch {
     return String(err);
   }
+}
+
+function inferLlmProviderFromDefaultEvents(
+  events: readonly EventInput[],
+): "cloudflare-ai" | "openai-ws" {
+  return events.some((event) => event.type === "events.iterate.com/openai-ws/config-updated")
+    ? "openai-ws"
+    : "cloudflare-ai";
+}
+
+function fetchCallableFromWebSocketUrl(websocketUrl: string) {
+  const url = new URL(websocketUrl);
+  if (url.protocol === "ws:") {
+    url.protocol = "http:";
+  } else if (url.protocol === "wss:") {
+    url.protocol = "https:";
+  }
+
+  return {
+    type: "fetch" as const,
+    via: {
+      type: "url" as const,
+      url: url.toString(),
+    },
+  };
 }

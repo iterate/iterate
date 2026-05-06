@@ -81,15 +81,21 @@ describe("projectWireToFeed", () => {
     });
   });
 
-  test("normalizes historical callbackUrl subscription events for the feed", () => {
+  test("projects callable subscription events for the feed", () => {
     const feed = projectWireToFeed([
       createEvent({
         offset: 1,
         type: "events.iterate.com/core/subscription-configured",
         payload: {
-          slug: "legacy-agent",
+          slug: "agent",
           type: "websocket",
-          callbackUrl: "wss://agents.example.com/socket",
+          callable: {
+            type: "fetch",
+            via: {
+              type: "url",
+              url: "https://agents.example.com/socket",
+            },
+          },
         },
       }),
     ]);
@@ -101,7 +107,7 @@ describe("projectWireToFeed", () => {
       {
         kind: "external-subscriber-configured",
         subscriber: {
-          slug: "legacy-agent",
+          slug: "agent",
           type: "websocket",
           callable: {
             type: "fetch",
@@ -115,7 +121,14 @@ describe("projectWireToFeed", () => {
     ]);
   });
 
-  test("projects canonical agent, webchat, and codemode events", () => {
+  test("projects canonical agent, agent-chat, and codemode events", () => {
+    const assistantMessage = [
+      "Working on it.",
+      "",
+      "```typescript",
+      "const ok: boolean = true;",
+      "```",
+    ].join("\n");
     const feed = projectWireToFeed([
       createEvent({
         offset: 1,
@@ -124,8 +137,8 @@ describe("projectWireToFeed", () => {
       }),
       createEvent({
         offset: 2,
-        type: "events.iterate.com/webchat/agent-response-added",
-        payload: { message: "Working on it." },
+        type: "events.iterate.com/agent-chat/assistant-response-added",
+        payload: { channel: "web", message: assistantMessage },
       }),
       createEvent({
         offset: 3,
@@ -157,7 +170,11 @@ describe("projectWireToFeed", () => {
       "codemode-result",
     ]);
     expect(feed[1]).toMatchObject({ kind: "message", role: "user" });
-    expect(feed[3]).toMatchObject({ kind: "message", role: "assistant" });
+    expect(feed[3]).toMatchObject({
+      kind: "message",
+      role: "assistant",
+      content: [{ type: "markdown", text: assistantMessage }],
+    });
     expect(feed[5]).toMatchObject({ kind: "agent-status", requestId: "req_1" });
     expect(feed[7]).toMatchObject({
       kind: "codemode-block",

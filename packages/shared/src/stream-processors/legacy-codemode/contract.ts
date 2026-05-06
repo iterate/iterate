@@ -7,10 +7,10 @@ import {
   type StreamEvent,
 } from "../stream-processor.ts";
 import { Callable } from "../../callable/types.ts";
+import { AgentChatProcessorContract } from "../agent-chat/contract.ts";
 import { AgentProcessorContract, reduceAgentEvents } from "../agent/contract.ts";
 import { CoreProcessorRegisteredEventType } from "../core/contract.ts";
 import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
-import { WebchatProcessorContract } from "../webchat/contract.ts";
 
 /**
  * Idempotency key used for the one-time codemode primer row.
@@ -21,6 +21,34 @@ import { WebchatProcessorContract } from "../webchat/contract.ts";
  * what keeps the wire log single-copy.
  */
 export const CODEMODE_PRIMER_IDEMPOTENCY_KEY = "iterate-agent:codemode-primer";
+export const CODEMODE_AUTOMATIC_CONTINUATION_LIMIT = 10;
+
+export const CODEMODE_WEBCHAT_PROVIDER_TYPES = `declare const webchat: {
+  sendMessage(args: { message: string }): Promise<void>;
+};`;
+
+/**
+ * System-level instruction needed by streams that use Codemode for chat I/O.
+ *
+ * The one-time primer event below is still useful for raw streams where only
+ * the codemode processor is subscribed. It is not strong enough for the golden
+ * app path by itself, though: Codemode appends that primer from its own
+ * after-append hook, so the first Agent LLM request can legitimately be
+ * requested before the primer has round-tripped through the stream. App-created
+ * chat streams therefore put this text directly in the Agent system prompt
+ * before the first user input is appended.
+ */
+export const CODEMODE_CHAT_RESPONSE_SYSTEM_PROMPT = `Codemode is mandatory for user-visible chat responses in this stream.
+
+When you want to reply to a web chat user, respond with exactly one fenced JavaScript block using \`\`\`js and no surrounding prose. The body must be a single async arrow function. Call \`webchat.sendMessage({ message })\` for user-visible replies; it returns void, so omit \`return\` to stop after side effects. Return any non-\`undefined\` value only when you want the result shown back to you and another LLM turn triggered. Use \`Promise.all\` for independent concurrent tool calls. Use \`fetch\` when you need internet access.`;
+
+export const CODEMODE_PRIMER_TEXT = `${CODEMODE_CHAT_RESPONSE_SYSTEM_PROMPT}
+
+Built-in webchat API:
+
+\`\`\`ts
+${CODEMODE_WEBCHAT_PROVIDER_TYPES}
+\`\`\``;
 
 const initialAgentProcessorState = getInitialProcessorState(AgentProcessorContract);
 
@@ -52,6 +80,8 @@ export const CodemodeProcessorContract = defineProcessorContract({
      */
     agentProcessor: AgentProcessorContract.stateSchema.default(initialAgentProcessorState),
     hasAppendedCodemodePrompt: z.boolean().default(false),
+    automaticContinuationsUsed: z.number().int().nonnegative().default(0),
+    finalWrapUpRequested: z.boolean().default(false),
     toolProviders: z
       .record(
         z.string(),
@@ -69,7 +99,7 @@ export const CodemodeProcessorContract = defineProcessorContract({
   processorDeps: [
     ...standardProcessorBehavior.processorDeps,
     AgentProcessorContract,
-    WebchatProcessorContract,
+    AgentChatProcessorContract,
   ],
   events: {
     "events.iterate.com/codemode/block-added": {
@@ -109,7 +139,7 @@ export const CodemodeProcessorContract = defineProcessorContract({
     ...standardProcessorBehavior.emits,
     "events.iterate.com/agent/input-added",
     "events.iterate.com/agent/status-updated",
-    "events.iterate.com/webchat/agent-response-added",
+    "events.iterate.com/agent-chat/assistant-response-added",
     "events.iterate.com/codemode/block-added",
     "events.iterate.com/codemode/result-added",
   ],
@@ -137,22 +167,25 @@ export const CodemodeProcessorContract = defineProcessorContract({
         if (event.idempotencyKey === CODEMODE_PRIMER_IDEMPOTENCY_KEY) {
           return { ...nextState, hasAppendedCodemodePrompt: true };
         }
+        if (isExternalAgentTurn(event)) {
+          return { ...nextState, automaticContinuationsUsed: 0, finalWrapUpRequested: false };
+        }
         break;
       case "events.iterate.com/agent/output-added":
         break;
       case "events.iterate.com/agent/system-prompt-updated":
       case "events.iterate.com/agent/llm-config-updated":
       case "events.iterate.com/agent/llm-request-scheduled":
-      case "events.iterate.com/agent/llm-request-started":
+      case "events.iterate.com/agent/llm-request-requested":
       case "events.iterate.com/agent/llm-request-completed":
-      case "events.iterate.com/agent/llm-request-failed":
       case "events.iterate.com/agent/llm-request-cancelled":
       case "events.iterate.com/agent/llm-request-queued":
       case "events.iterate.com/agent/status-updated":
         break;
       case "events.iterate.com/codemode/block-added":
-      case "events.iterate.com/codemode/result-added":
         break;
+      case "events.iterate.com/codemode/result-added":
+        return advanceContinuationBudget(nextState, event.payload);
       case "events.iterate.com/codemode/tool-provider-config-updated": {
         const { slug, executeCallable, getTypesCallable } = event.payload;
         if (executeCallable === null) {
@@ -191,3 +224,30 @@ export function reduceCodemodeEvents(args: {
 }
 
 export type CodemodeState = z.infer<typeof CodemodeProcessorContract.stateSchema>;
+
+export function codemodeResultNeedsAgentTurn(payload: { result: unknown; error?: string }) {
+  return payload.error != null || payload.result !== undefined;
+}
+
+function isExternalAgentTurn(event: {
+  payload: { triggerLlmRequest?: { behaviour: string } };
+  idempotencyKey?: string;
+}) {
+  return (
+    event.payload.triggerLlmRequest?.behaviour !== "dont-trigger-request" &&
+    !event.idempotencyKey?.startsWith("stream-processor:codemode:derived:")
+  );
+}
+
+function advanceContinuationBudget<
+  State extends {
+    automaticContinuationsUsed: number;
+    finalWrapUpRequested: boolean;
+  },
+>(state: State, payload: { result: unknown; error?: string }): State {
+  if (!codemodeResultNeedsAgentTurn(payload)) return state;
+  if (state.automaticContinuationsUsed < CODEMODE_AUTOMATIC_CONTINUATION_LIMIT) {
+    return { ...state, automaticContinuationsUsed: state.automaticContinuationsUsed + 1 };
+  }
+  return state.finalWrapUpRequested ? state : { ...state, finalWrapUpRequested: true };
+}

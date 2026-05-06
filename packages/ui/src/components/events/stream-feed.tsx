@@ -36,6 +36,7 @@ import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { EventsStreamEventInspectorSheet } from "@iterate-com/ui/components/events/event-inspector-sheet";
 import { AgentOutputCard } from "@iterate-com/ui/components/events/feed-element-renderers/agent-output-card";
+import { ExpandableFeedText } from "@iterate-com/ui/components/events/feed-element-renderers/expandable-feed-text";
 import { GroupedRawEventLine } from "@iterate-com/ui/components/events/feed-element-renderers/grouped-raw-event-line";
 import { MessageFeedItemCard } from "@iterate-com/ui/components/events/feed-element-renderers/message-card";
 import { PromptContextCard } from "@iterate-com/ui/components/events/feed-element-renderers/prompt-context-card";
@@ -586,12 +587,17 @@ function MetadataUpdatedBlock({ element }: { element: EventsStreamMetadataUpdate
 
 function ErrorEventLine({ element }: { element: EventsStreamErrorElement }) {
   return (
-    <FeedEvent
-      icon={<AlertTriangleIcon className="size-3.5" />}
-      label="Error"
-      value={element.props.message}
-      tone="danger"
-    />
+    <FeedEvent icon={<AlertTriangleIcon className="size-3.5" />} label="Error" tone="danger">
+      <ExpandableFeedText
+        text={element.props.message}
+        collapsedLabel="Show full error"
+        className="border-destructive/20"
+      >
+        <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-5 text-destructive">
+          {element.props.message}
+        </pre>
+      </ExpandableFeedText>
+    </FeedEvent>
   );
 }
 

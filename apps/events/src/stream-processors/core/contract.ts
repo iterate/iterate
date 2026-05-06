@@ -62,12 +62,6 @@ export const CoreStreamProcessorContract = defineProcessorContract({
         reason: z.string().trim().min(1).optional(),
       }),
     },
-    "events.iterate.com/core/error-occurred": {
-      description: "A stream-level error was recorded as an event.",
-      payloadSchema: z.object({
-        message: z.string().trim().min(1),
-      }),
-    },
     "events.iterate.com/core/invalid-event-appended": {
       description: "An invalid append input was preserved as a core diagnostic event.",
       payloadSchema: z.object({
@@ -79,6 +73,7 @@ export const CoreStreamProcessorContract = defineProcessorContract({
   consumes: [],
   emits: [
     "events.iterate.com/core/stream-processor-registered",
+    "events.iterate.com/core/error-occurred",
     "events.iterate.com/core/stream-initialized",
     "events.iterate.com/core/durable-object-woke-up",
     "events.iterate.com/core/child-stream-created",

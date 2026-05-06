@@ -15,6 +15,8 @@ describe("CodemodeProcessorContract", () => {
       hasRegisteredCurrentVersion: false,
       agentProcessor: getInitialProcessorState(AgentProcessorContract),
       hasAppendedCodemodePrompt: false,
+      automaticContinuationsUsed: 0,
+      finalWrapUpRequested: false,
       toolProviders: {},
     });
   });
@@ -123,24 +125,58 @@ describe("CodemodeProcessorContract", () => {
     expect(deleted.toolProviders).toEqual({});
   });
 
-  it("leaves execution events unchanged in reduced state", () => {
+  it("tracks continuation budget from codemode results and external turns", () => {
     const state = getInitialProcessorState(CodemodeProcessorContract);
+
+    const spent = reduceCodemodeEvents({
+      state,
+      events: [
+        committedEvent({
+          type: "events.iterate.com/codemode/result-added",
+          payload: { result: null, durationMs: 10 },
+        }),
+      ],
+    });
+    expect(spent.automaticContinuationsUsed).toBe(1);
+
+    const exhausted = reduceCodemodeEvents({
+      state: { ...spent, automaticContinuationsUsed: 10 },
+      events: [
+        committedEvent({
+          type: "events.iterate.com/codemode/result-added",
+          payload: { error: "boom", durationMs: 10 },
+        }),
+      ],
+    });
+    expect(exhausted).toMatchObject({
+      automaticContinuationsUsed: 10,
+      finalWrapUpRequested: true,
+    });
 
     expect(
       reduceCodemodeEvents({
-        state,
+        state: exhausted,
         events: [
           committedEvent({
-            type: "events.iterate.com/codemode/block-added",
-            payload: { script: "async () => 1" },
-          }),
-          committedEvent({
-            type: "events.iterate.com/codemode/result-added",
-            payload: { result: 1, durationMs: 10 },
+            type: "events.iterate.com/agent/input-added",
+            payload: { content: "new user turn" },
           }),
         ],
-      }),
-    ).toEqual(state);
+      }).automaticContinuationsUsed,
+    ).toBe(0);
+  });
+
+  it("does not spend continuation budget for undefined codemode results", () => {
+    expect(
+      reduceCodemodeEvents({
+        events: [
+          committedEvent({
+            type: "events.iterate.com/codemode/result-added",
+            payload: { durationMs: 10 },
+          }),
+        ],
+      }).automaticContinuationsUsed,
+    ).toBe(0);
   });
 });
 

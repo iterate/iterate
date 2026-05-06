@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AgentChatProcessorContract } from "@iterate-com/shared/stream-processors/agent-chat/contract";
 import { AgentProcessorContract } from "@iterate-com/shared/stream-processors/agent/contract";
 import { CodemodeProcessorContract } from "@iterate-com/shared/stream-processors/codemode/contract";
 import { DynamicWorkerProcessorContract } from "@iterate-com/shared/stream-processors/dynamic-worker/contract";
@@ -6,14 +7,13 @@ import { JsonataTransformerProcessorContract } from "@iterate-com/shared/stream-
 import { SchedulingProcessorContract } from "@iterate-com/shared/stream-processors/scheduling/contract";
 import { SlackThreadProcessorContract } from "@iterate-com/shared/stream-processors/slack-thread/contract";
 import { SlackProcessorContract } from "@iterate-com/shared/stream-processors/slack/contract";
-import { WebchatProcessorContract } from "@iterate-com/shared/stream-processors/webchat/contract";
 import { addDiscriminatorTitlesToJsonSchema } from "~/lib/json-schema-docs.ts";
 import { CoreStreamProcessorContract } from "~/stream-processors/core/contract.ts";
 
 const processorContracts = [
   CoreStreamProcessorContract,
+  AgentChatProcessorContract,
   AgentProcessorContract,
-  WebchatProcessorContract,
   SlackProcessorContract,
   SlackThreadProcessorContract,
   CodemodeProcessorContract,

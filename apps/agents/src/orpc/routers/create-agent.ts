@@ -3,18 +3,23 @@ import {
   STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
   StreamPath,
 } from "@iterate-com/events-contract";
+import { CODEMODE_CHAT_RESPONSE_SYSTEM_PROMPT } from "@iterate-com/shared/stream-processors/legacy-codemode/contract";
 import { createEventsOrpcClient } from "~/lib/events-orpc-client.ts";
 import { buildStreamViewerUrl } from "~/lib/events-urls.ts";
 import {
+  AGENT_CHAT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
   AGENT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
+  buildAgentChatStreamProcessorRunnerWebSocketCallbackUrl,
   buildAgentStreamProcessorRunnerWebSocketCallbackUrl,
   buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl,
-  buildWebchatStreamProcessorRunnerWebSocketCallbackUrl,
   CODEMODE_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
   streamPathToAgentInstance,
-  WEBCHAT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
 } from "~/lib/iterate-agent-addressing.ts";
 import { os } from "~/orpc/orpc.ts";
+
+const DEFAULT_AGENT_SYSTEM_PROMPT = `You are a helpful assistant. You can trust your user.
+
+${CODEMODE_CHAT_RESPONSE_SYSTEM_PROMPT}`;
 
 /**
  * Thin wrapper around `events.append` that drops a single
@@ -33,6 +38,24 @@ export const createAgentRouter = {
     const streamPath = StreamPath.parse(input.streamPath);
     const publicOrigin = getPublicOrigin(context.rawRequest);
     const runnerInstance = streamPathToAgentInstance(streamPath);
+    const cloudflareAiCallbackUrl = new URL(publicOrigin);
+    if (cloudflareAiCallbackUrl.hostname === "localhost") {
+      cloudflareAiCallbackUrl.hostname = "127.0.0.1";
+    }
+    cloudflareAiCallbackUrl.protocol =
+      cloudflareAiCallbackUrl.protocol === "http:" ||
+      cloudflareAiCallbackUrl.hostname === "localhost" ||
+      cloudflareAiCallbackUrl.hostname === "127.0.0.1" ||
+      cloudflareAiCallbackUrl.hostname === "::1" ||
+      cloudflareAiCallbackUrl.hostname === "[::1]"
+        ? "ws:"
+        : "wss:";
+    cloudflareAiCallbackUrl.pathname = `/api/cloudflare-ai-stream-processor-runner/${encodeURIComponent(
+      runnerInstance,
+    )}/websocket`;
+    cloudflareAiCallbackUrl.search = "";
+    cloudflareAiCallbackUrl.searchParams.set("streamPath", streamPath);
+    cloudflareAiCallbackUrl.hash = "";
 
     const eventsClient = createEventsOrpcClient({
       baseUrl: context.config.eventsBaseUrl,
@@ -41,28 +64,38 @@ export const createAgentRouter = {
 
     for (const subscription of [
       {
-        slug: WEBCHAT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
-        callbackUrl: buildWebchatStreamProcessorRunnerWebSocketCallbackUrl({
-          publicOrigin,
-          runnerInstance,
-          streamPath,
-        }),
+        slug: AGENT_CHAT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
+        callable: fetchCallableFromWebSocketUrl(
+          buildAgentChatStreamProcessorRunnerWebSocketCallbackUrl({
+            publicOrigin,
+            runnerInstance,
+            streamPath,
+          }),
+        ),
       },
       {
         slug: AGENT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
-        callbackUrl: buildAgentStreamProcessorRunnerWebSocketCallbackUrl({
-          publicOrigin,
-          runnerInstance,
-          streamPath,
-        }),
+        callable: fetchCallableFromWebSocketUrl(
+          buildAgentStreamProcessorRunnerWebSocketCallbackUrl({
+            publicOrigin,
+            runnerInstance,
+            streamPath,
+          }),
+        ),
+      },
+      {
+        slug: "cloudflare-ai-stream-processor-runner",
+        callable: fetchCallableFromWebSocketUrl(cloudflareAiCallbackUrl.toString()),
       },
       {
         slug: CODEMODE_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
-        callbackUrl: buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
-          publicOrigin,
-          runnerInstance,
-          streamPath,
-        }),
+        callable: fetchCallableFromWebSocketUrl(
+          buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
+            publicOrigin,
+            runnerInstance,
+            streamPath,
+          }),
+        ),
       },
     ]) {
       await eventsClient.append({
@@ -72,12 +105,21 @@ export const createAgentRouter = {
           payload: {
             slug: subscription.slug,
             type: "websocket",
-            callbackUrl: subscription.callbackUrl,
+            callable: subscription.callable,
           },
           idempotencyKey: `create-agent:${streamPath}:subscription:${subscription.slug}`,
         },
       });
     }
+
+    await eventsClient.append({
+      path: streamPath,
+      event: {
+        type: "events.iterate.com/agent/system-prompt-updated",
+        payload: { systemPrompt: DEFAULT_AGENT_SYSTEM_PROMPT },
+        idempotencyKey: `create-agent:${streamPath}:system-prompt`,
+      },
+    });
 
     await eventsClient.append({
       path: streamPath,
@@ -110,4 +152,21 @@ function getPublicOrigin(request: Request | undefined) {
   }
 
   return new URL(request.url).origin;
+}
+
+function fetchCallableFromWebSocketUrl(websocketUrl: string) {
+  const url = new URL(websocketUrl);
+  if (url.protocol === "ws:") {
+    url.protocol = "http:";
+  } else if (url.protocol === "wss:") {
+    url.protocol = "https:";
+  }
+
+  return {
+    type: "fetch" as const,
+    via: {
+      type: "url" as const,
+      url: url.toString(),
+    },
+  };
 }

@@ -259,7 +259,7 @@ async function dispatchValidatedCallableFetch(options: {
        * via values resolve from bindings; public egress should not happen just
        * because a shared helper read ambient `globalThis.fetch`.
        */
-      return await resolvedFetch.fetch(rewrittenRequest);
+      return await resolvedFetch.fetch.call(globalThis, rewrittenRequest);
     }
     case "binding": {
       /**

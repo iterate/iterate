@@ -57,7 +57,7 @@ async function runScenario(args: {
   const viewerUrl = e2e.events.streamViewerUrl(streamPath);
   console.info(`[iterate-agent agent-loop e2e] ${scenario.label} stream: ${viewerUrl}`);
 
-  const callbackUrl = buildAgentStreamProcessorRunnerWebSocketCallbackUrl({
+  const websocketUrl = buildAgentStreamProcessorRunnerWebSocketCallbackUrl({
     publicOrigin: tunnelPublicUrl,
     runnerInstance: streamPathToAgentInstance(streamPath),
     streamPath,
@@ -68,7 +68,7 @@ async function runScenario(args: {
     payload: {
       slug: `iterate-agent-agent-loop-ws-${e2e.executionSuffix}`,
       type: "websocket",
-      callbackUrl,
+      callable: fetchCallableFromWebSocketUrl(websocketUrl),
     },
   });
 
@@ -90,7 +90,7 @@ async function runScenario(args: {
   const webchatEvent = await e2e.events.waitForEvent(
     streamPath,
     (event) => {
-      if (event.type !== "events.iterate.com/webchat/agent-response-added") return false;
+      if (event.type !== "events.iterate.com/agent-chat/assistant-response-added") return false;
       const payload = event.payload as { message?: string };
       return typeof payload.message === "string" && payload.message.trim().length > 0;
     },
@@ -110,5 +110,22 @@ async function runScenario(args: {
     model: scenario.model,
     content: payload.message ?? "",
     llmMs,
+  };
+}
+
+function fetchCallableFromWebSocketUrl(websocketUrl: string) {
+  const url = new URL(websocketUrl);
+  if (url.protocol === "ws:") {
+    url.protocol = "http:";
+  } else if (url.protocol === "wss:") {
+    url.protocol = "https:";
+  }
+
+  return {
+    type: "fetch" as const,
+    via: {
+      type: "url" as const,
+      url: url.toString(),
+    },
   };
 }

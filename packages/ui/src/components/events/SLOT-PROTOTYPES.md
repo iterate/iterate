@@ -124,7 +124,7 @@ Input events:
 [
   {
     offset: 10,
-    type: "events.iterate.com/agent/llm-request-started",
+    type: "events.iterate.com/agent/llm-request-requested",
     payload: { requestId: "req_1" },
   },
   {
@@ -179,7 +179,12 @@ Then completion:
   {
     offset: 13,
     type: "events.iterate.com/agent/llm-request-completed",
-    payload: { requestId: "req_1" },
+    payload: {
+      llmRequestId: 10,
+      provider: "cloudflare-ai",
+      durationMs: 1000,
+      result: { status: "success" },
+    },
   },
 ];
 ```
