@@ -1,5 +1,5 @@
-import type { Event, EventInput } from "./types.ts";
 import type { CallableContext } from "@iterate-com/shared/callable/types.ts";
+import type { Event, EventInput } from "./types.ts";
 
 /**
  * In-process processor shape used by `StreamDurableObject`.

@@ -7,12 +7,12 @@ import { deriveDurableObjectNameFromInitParams } from "@iterate-com/shared/durab
 import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
 import type { StreamProcessorRunnerState } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor-runner";
 import { describe, expect, test } from "vitest";
+import type { CodemodeSession } from "./codemode-session.ts";
 import {
   createExampleRpcProviderRegistration,
   createWorkspaceProviderRegistration,
 } from "~/codemode/example-capabilities.ts";
 import { findCodemodeExample, providersForCodemodeExample } from "~/codemode/examples.ts";
-import type { CodemodeSession } from "./codemode-session.ts";
 
 type CodemodeSessionStub = DurableObjectStub<CodemodeSession> & {
   callFunction(input: {

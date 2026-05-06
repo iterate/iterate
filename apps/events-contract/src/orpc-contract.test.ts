@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import type { ContractRouterClient } from "@orpc/contract";
 import { z } from "zod";
-import { AppendInput, eventsContract } from "./orpc-contract.ts";
 import {
   EventInput,
   InvalidEventAppendedEventInput,
@@ -9,6 +8,7 @@ import {
   StreamMetadataUpdatedEventInput,
   StreamPath,
 } from "@iterate-com/shared/streams/types";
+import { AppendInput, eventsContract } from "./orpc-contract.ts";
 
 type EventsContractClient = ContractRouterClient<typeof eventsContract>;
 type ClientAppendArgs = Parameters<EventsContractClient["append"]>[0];

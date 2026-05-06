@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
-import type { Event, ExternalSubscriber, StreamSubscriptionConfiguredEvent } from "./types.ts";
 import type { FetchCallable } from "@iterate-com/shared/callable/types.ts";
+import type { Event, ExternalSubscriber, StreamSubscriptionConfiguredEvent } from "./types.ts";
 
 const { connectCallableWebSocketMock, dispatchCallableMock } = vi.hoisted(() => ({
   connectCallableWebSocketMock:
