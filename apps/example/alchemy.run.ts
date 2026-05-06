@@ -15,7 +15,7 @@ const db = await D1Database("example-db", {
 const { worker, afterFinalize } = await IterateApp(ctx, {
   bindings: {
     DB: db,
-    EXAMPLE_COUNTER: DurableObjectNamespace<ExampleCounter>("example-counter", {
+    EXAMPLE_COUNTER: DurableObjectNamespace<ExampleCounter>("example-counter-app", {
       className: "ExampleCounter",
       sqlite: true,
     }),
