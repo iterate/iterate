@@ -19,6 +19,8 @@ type WebchatStreamApi = ProcessorStreamApi<typeof WebchatProcessorContract>;
  */
 export function createWebchatProcessor() {
   return implementProcessor(WebchatProcessorContract, {
+    firstAttachAfterAppend: { mode: "lookback", milliseconds: 60_000 },
+
     async afterAppend({ event, state, streamApi }) {
       await standardProcessorBehavior.afterAppend({
         contract: WebchatProcessorContract,

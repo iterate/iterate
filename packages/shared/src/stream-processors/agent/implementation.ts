@@ -65,6 +65,8 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
   let llmRequestSeq = 0;
 
   return implementProcessor(AgentProcessorContract, {
+    firstAttachAfterAppend: { mode: "lookback", milliseconds: 60_000 },
+
     async afterAppend({ event, state, streamApi }) {
       await standardProcessorBehavior.afterAppend({
         contract: AgentProcessorContract,
