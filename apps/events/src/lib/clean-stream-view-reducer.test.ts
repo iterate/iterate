@@ -330,6 +330,41 @@ describe("clean stream view reducers", () => {
     ]);
   });
 
+  test("raw-pretty projects error-level core logs into feed and input slots", () => {
+    const viewState = processEventsWithViewReducer({
+      reducer: rawPrettyEventsStreamViewReducer,
+      events: [
+        event({
+          offset: 1,
+          type: "events.iterate.com/core/log-added",
+          payload: {
+            level: "error",
+            message: "Processor openai-ws@0.1.0 afterAppend failed: missing key",
+          },
+        }),
+      ],
+    });
+
+    expect(viewState.slots.feed.map((item) => item.type)).toEqual(["grouped-raw-event", "error"]);
+    expect(viewState.slots.input).toMatchObject([
+      {
+        type: "composer-suggestion",
+        id: "composer-suggestion-stream-error-1",
+        props: {
+          action: {
+            type: "prefill-agent-message",
+            text: [
+              "Can you help debug this stream error?",
+              "",
+              "Processor openai-ws@0.1.0 afterAppend failed: missing key",
+            ].join("\n"),
+          },
+          sourceOffset: 1,
+        },
+      },
+    ]);
+  });
+
   test("raw-pretty projects canonical codemode execution events into dedicated renderers", () => {
     const viewState = processEventsWithViewReducer({
       reducer: rawPrettyEventsStreamViewReducer,

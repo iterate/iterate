@@ -24,6 +24,7 @@ const AGENT_LLM_REQUEST_COMPLETED_TYPE = "events.iterate.com/agent/llm-request-c
 const AGENT_LLM_REQUEST_CANCELLED_TYPE = "events.iterate.com/agent/llm-request-cancelled";
 const CODEMODE_BLOCK_ADDED_TYPE = "events.iterate.com/codemode/block-added";
 const CODEMODE_RESULT_ADDED_TYPE = "events.iterate.com/codemode/result-added";
+const CORE_LOG_ADDED_TYPE = "events.iterate.com/core/log-added";
 
 function createInitialEventsStreamViewState(): EventsStreamViewState {
   return createEventsStreamViewState({
@@ -259,7 +260,11 @@ function reduceActivityState(args: {
   event: Event;
   state: EventsStreamViewState;
 }): EventsStreamViewState["activity"] {
-  if (args.event.type === STREAM_ERROR_OCCURRED_TYPE) {
+  if (
+    args.event.type === STREAM_ERROR_OCCURRED_TYPE ||
+    (args.event.type === CORE_LOG_ADDED_TYPE &&
+      readStringPayloadField(args.event, "level") === "error")
+  ) {
     const message = readStringPayloadField(args.event, "message") ?? "Stream error";
 
     return {
@@ -481,7 +486,10 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
     ];
   }
 
-  if (event.type === STREAM_ERROR_OCCURRED_TYPE) {
+  if (
+    event.type === STREAM_ERROR_OCCURRED_TYPE ||
+    (event.type === CORE_LOG_ADDED_TYPE && readStringPayloadField(event, "level") === "error")
+  ) {
     const message = readStringPayloadField(event, "message") ?? "Stream error";
     return [
       {

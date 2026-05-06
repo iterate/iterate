@@ -79,6 +79,7 @@ export const CoreStreamProcessorContract = defineProcessorContract({
   consumes: [],
   emits: [
     "events.iterate.com/core/stream-processor-registered",
+    "events.iterate.com/core/log-added",
     "events.iterate.com/core/stream-initialized",
     "events.iterate.com/core/durable-object-woke-up",
     "events.iterate.com/core/child-stream-created",

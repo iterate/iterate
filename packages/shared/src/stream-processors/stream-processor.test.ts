@@ -1091,6 +1091,51 @@ describe("stream processor contracts", () => {
     });
   });
 
+  it("reports live afterAppend errors before preserving retry semantics", async () => {
+    const contract = defineProcessorContract({
+      slug: "counter",
+      version: "1.0.0",
+      description: "Counts committed increment events.",
+      stateSchema: z.object({ count: z.number().default(0) }).prefault({}),
+      events: {
+        ...createEvent({
+          type: "counter-incremented",
+          payloadSchema: z.object({ by: z.number() }),
+        }),
+      },
+      consumes: ["counter-incremented"],
+      emits: [],
+      reduce: ({ state, event }) => ({ count: state.count + event.payload.by }),
+    });
+    const processor = implementProcessor(contract, {
+      afterAppend: () => {
+        throw new Error("transient side effect failure");
+      },
+    });
+    const errors: unknown[] = [];
+
+    await expect(
+      consumeLiveProcessorEvent<typeof contract>({
+        processor,
+        storedState: createStoredProcessorState({ contract, state: { count: 1 } }),
+        event: committedEvent({
+          type: "counter-incremented",
+          payload: { by: 2 },
+          offset: 7,
+        }),
+        saveStoredProcessorState: async () => {},
+        streamApi: createTestStreamApi<typeof contract>(),
+        afterAppendError: ({ error, reduction }) => {
+          errors.push({ error, offset: reduction.event.offset });
+        },
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("transient side effect failure");
+
+    expect(errors).toMatchObject([{ offset: 7 }]);
+    expect((errors[0] as { error: Error }).error.message).toBe("transient side effect failure");
+  });
+
   it("marks afterAppend completion separately when live effects succeed", async () => {
     const contract = defineProcessorContract({
       slug: "counter",

@@ -13,6 +13,10 @@ import {
   type StoredProcessorState,
   type StreamEvent,
 } from "../../stream-processors/stream-processor.ts";
+import {
+  CoreProcessorContract,
+  CoreProcessorLogAddedEventType,
+} from "../../stream-processors/core/contract.ts";
 import type {
   Constructor,
   DurableObjectClass,
@@ -225,6 +229,13 @@ export function withStreamProcessorRunner<
           streamApi: this.streamProcessorRunnerStreamApi(),
           streamApiForEvent: (event) =>
             this.streamProcessorRunnerStreamApi({ processingEvent: event }),
+          afterAppendError: async ({ error, reduction }) => {
+            await this.appendStreamProcessorAfterAppendErrorLog({
+              error,
+              event: reduction.event,
+              processor,
+            });
+          },
           signal: args?.signal ?? new AbortController().signal,
         });
       }
@@ -250,6 +261,13 @@ export function withStreamProcessorRunner<
           streamApi: this.streamProcessorRunnerStreamApi(),
           streamApiForEvent: (event) =>
             this.streamProcessorRunnerStreamApi({ processingEvent: event }),
+          afterAppendError: async ({ error, reduction }) => {
+            await this.appendStreamProcessorAfterAppendErrorLog({
+              error,
+              event: reduction.event,
+              processor,
+            });
+          },
           signal: args.signal ?? new AbortController().signal,
         });
       }
@@ -328,6 +346,44 @@ export function withStreamProcessorRunner<
           streamApi,
         });
       }
+
+      private async appendStreamProcessorAfterAppendErrorLog(args: {
+        error: unknown;
+        event: StreamEvent;
+        processor: Processor<Contract>;
+      }): Promise<void> {
+        const serializedError = serializeError(args.error);
+        const streamApi = this.streamProcessorRunnerStreamApi({
+          processingEvent: args.event,
+        }) as unknown as ProcessorStreamApi<typeof CoreProcessorContract>;
+
+        await streamApi.append({
+          event: {
+            type: CoreProcessorLogAddedEventType,
+            idempotencyKey: [
+              "stream-processor-runner",
+              args.processor.contract.slug,
+              "after-append-error",
+              args.event.streamPath,
+              String(args.event.offset),
+            ].join(":"),
+            payload: {
+              level: "error",
+              message: `Processor ${args.processor.contract.slug}@${args.processor.contract.version} afterAppend failed: ${serializedError.message}`,
+              processor: {
+                slug: args.processor.contract.slug,
+                version: args.processor.contract.version,
+              },
+              whileProcessingEvent: {
+                streamPath: args.event.streamPath,
+                offset: args.event.offset,
+                type: args.event.type,
+              },
+              error: serializedError,
+            },
+          },
+        });
+      }
     }
 
     // Preserve Base<Env> so this remains legal after composition:
@@ -358,4 +414,23 @@ function getStoredProcessorStateSchema<Contract extends RunnerContract<Contract>
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
+}
+
+function serializeError(error: unknown): { name?: string; message: string; stack?: string } {
+  if (error instanceof Error) {
+    return {
+      ...(error.name.trim() === "" ? {} : { name: error.name }),
+      message: error.message || String(error),
+      ...(typeof error.stack === "string" && error.stack.trim() !== ""
+        ? { stack: error.stack }
+        : {}),
+    };
+  }
+
+  try {
+    const message = JSON.stringify(error);
+    return { message: message == null ? String(error) : message };
+  } catch {
+    return { message: String(error) };
+  }
 }
