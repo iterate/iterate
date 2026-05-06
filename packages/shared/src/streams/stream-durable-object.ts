@@ -7,7 +7,6 @@ import { withKvInspector } from "@iterate-com/shared/durable-object-utils/mixins
 import { withLifecycleHooks } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { withOuterbase } from "@iterate-com/shared/durable-object-utils/mixins/with-outerbase";
 import { withPublicFetchRoute } from "@iterate-com/shared/durable-object-utils/mixins/with-public-fetch-route";
-import { createDurableObjectClient, type SyncClient } from "sqlfu";
 import {
   ChildStreamCreatedEvent,
   type DestroyStreamResult,
