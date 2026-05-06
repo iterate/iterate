@@ -243,15 +243,22 @@ export const codemodeExamples = [
   {
     slug: "slack-post-message",
     name: "Slack Web API postMessage",
-    description:
-      "Use the Slack Web API capability. It expects a bot token binding on the worker and a real channel id.",
+    description: "Use the Slack Web API capability to list channels, pick one, and post a message.",
     providerSet: "example-capabilities",
     code: `async (ctx) => {
   const { console, slack } = ctx;
-  const channel = "REPLACE_WITH_CHANNEL_ID";
 
-  if (channel === "REPLACE_WITH_CHANNEL_ID") {
-    throw new Error("Set channel to a Slack channel id before running this example.");
+  const channels = await slack.conversations.list({
+    exclude_archived: true,
+    limit: 50,
+    types: "public_channel,private_channel",
+  });
+  const channel =
+    channels.channels.find((item) => item.is_member)?.id ??
+    channels.channels[0]?.id;
+
+  if (!channel) {
+    throw new Error("Slack conversations.list returned no channels.");
   }
 
   const message = await slack.chat.postMessage({
