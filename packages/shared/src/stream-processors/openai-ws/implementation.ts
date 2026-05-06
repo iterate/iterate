@@ -66,7 +66,6 @@ const OpenAiWebSocketReadyState = {
 } as const;
 
 export function createOpenAiWsProcessor(deps: OpenAiWsProcessorDeps) {
-  let connectionSeq = 0;
   /**
    * This is intentionally processor-runner instance state, not per-request
    * state. Responses WebSocket mode is a transport that can carry many
@@ -107,7 +106,7 @@ export function createOpenAiWsProcessor(deps: OpenAiWsProcessorDeps) {
                 deps,
                 streamApi,
                 sourceEvent: event,
-                connectionId: `openai_ws_${Date.now()}_${++connectionSeq}`,
+                connectionId: createConnectionId({ llmRequestId: event.offset }),
               });
               return connection;
             },
@@ -137,7 +136,7 @@ async function executeOpenAiWsRequest(args: {
   setPreviousResponseId(responseId: string): void;
 }) {
   const llmRequestId = args.event.offset;
-  if (args.state.requests[String(llmRequestId)] != null) return;
+  if (args.state.requests[String(llmRequestId)]?.status === "completed") return;
 
   const startedAt = Date.now();
 
@@ -241,7 +240,7 @@ async function executeOpenAiWsRequest(args: {
       type: "events.iterate.com/openai-ws/websocket-message-sent",
       idempotencyKey: buildDerivedIdempotencyKey({
         slug: OpenAiWsProcessorContract.slug,
-        purpose: "websocket-message-sent",
+        purpose: `websocket-message-sent:${connection.id}:${sendSequence}`,
         event: args.event,
       }),
       payload: {
@@ -272,7 +271,7 @@ async function executeOpenAiWsRequest(args: {
           type: "events.iterate.com/openai-ws/websocket-disconnected",
           idempotencyKey: buildDerivedIdempotencyKey({
             slug: OpenAiWsProcessorContract.slug,
-            purpose: "websocket-disconnected",
+            purpose: `websocket-disconnected:${connection.id}`,
             event: args.event,
           }),
           payload: {
@@ -322,7 +321,7 @@ async function executeOpenAiWsRequest(args: {
         type: "events.iterate.com/openai-ws/websocket-message-received",
         idempotencyKey: buildDerivedIdempotencyKey({
           slug: OpenAiWsProcessorContract.slug,
-          purpose: `websocket-message-received:${receiveSequence}`,
+          purpose: `websocket-message-received:${connection.id}:${receiveSequence}`,
           event: args.event,
         }),
         payload: {
@@ -478,7 +477,7 @@ async function openOpenAiWsConnection(args: {
       type: "events.iterate.com/openai-ws/websocket-connected",
       idempotencyKey: buildDerivedIdempotencyKey({
         slug: OpenAiWsProcessorContract.slug,
-        purpose: "websocket-connected",
+        purpose: `websocket-connected:${connection.id}`,
         event: args.sourceEvent,
       }),
       payload: {
@@ -489,6 +488,10 @@ async function openOpenAiWsConnection(args: {
   });
 
   return connection;
+}
+
+function createConnectionId(args: { llmRequestId: number }) {
+  return `openai_ws_${args.llmRequestId}_${crypto.randomUUID()}`;
 }
 
 async function waitForOpenAiResponsesSocketOpen(

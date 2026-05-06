@@ -94,6 +94,107 @@ describe("createOpenAiWsProcessor", () => {
       previous_response_id: "resp_first",
     });
   });
+
+  it("opens a fresh Responses WebSocket after the runner instance wakes without closure state", async () => {
+    const appended: StreamEventInput[] = [];
+    const sockets: FakeOpenAiResponsesWebSocket[] = [];
+    const deps = {
+      openResponsesWebSocket: async () => {
+        const socket = new FakeOpenAiResponsesWebSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    };
+
+    const firstProcessor = createOpenAiWsProcessor(deps);
+    const firstRequest = firstProcessor.implementation.afterAppend?.({
+      event: consumedOpenAiEvent({
+        type: "events.iterate.com/agent/llm-request-requested",
+        payload: llmRequestPayload("first"),
+        offset: 11,
+      }),
+      previousState: registeredState(),
+      state: registeredState(),
+      streamApi: testStreamApi({ appended }),
+      signal: new AbortController().signal,
+    });
+
+    await waitFor(() => sockets.length === 1);
+    sockets[0]?.open();
+    await waitFor(() => sockets[0]?.sent.length === 1);
+    completeResponse(sockets[0], {
+      delta: "FIRST",
+      responseId: "resp_first",
+    });
+    await firstRequest;
+
+    const secondProcessorAfterWake = createOpenAiWsProcessor(deps);
+    const secondRequest = secondProcessorAfterWake.implementation.afterAppend?.({
+      event: consumedOpenAiEvent({
+        type: "events.iterate.com/agent/llm-request-requested",
+        payload: llmRequestPayload("second"),
+        offset: 22,
+      }),
+      previousState: stateWithRequest({ llmRequestId: 11, status: "completed" }),
+      state: stateWithRequest({ llmRequestId: 11, status: "completed" }),
+      streamApi: testStreamApi({ appended }),
+      signal: new AbortController().signal,
+    });
+
+    await waitFor(() => sockets.length === 2);
+    sockets[1]?.open();
+    await waitFor(() => sockets[1]?.sent.length === 1);
+    completeResponse(sockets[1], {
+      delta: "SECOND",
+      responseId: "resp_second",
+    });
+    await secondRequest;
+
+    const connectedEvents = appended.filter(
+      (event) => event.type === "events.iterate.com/openai-ws/websocket-connected",
+    );
+    expect(sockets).toHaveLength(2);
+    expect(connectedEvents).toHaveLength(2);
+    expect(connectionIds(connectedEvents)).toHaveLength(2);
+    expect(new Set(connectionIds(connectedEvents)).size).toBe(2);
+  });
+
+  it("retries a started request after wake and emits a distinct physical connection event", async () => {
+    const appended: StreamEventInput[] = [];
+    const sockets: FakeOpenAiResponsesWebSocket[] = [];
+    const processorAfterWake = createOpenAiWsProcessor({
+      openResponsesWebSocket: async () => {
+        const socket = new FakeOpenAiResponsesWebSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+
+    const request = processorAfterWake.implementation.afterAppend?.({
+      event: consumedOpenAiEvent({
+        type: "events.iterate.com/agent/llm-request-requested",
+        payload: llmRequestPayload("retry me"),
+        offset: 33,
+      }),
+      previousState: stateWithRequest({ llmRequestId: 33, status: "started" }),
+      state: stateWithRequest({ llmRequestId: 33, status: "started" }),
+      streamApi: testStreamApi({ appended }),
+      signal: new AbortController().signal,
+    });
+
+    await waitFor(() => sockets.length === 1);
+    sockets[0]?.open();
+    await waitFor(() => sockets[0]?.sent.length === 1);
+    completeResponse(sockets[0], {
+      delta: "RETRIED",
+      responseId: "resp_retried",
+    });
+    await request;
+
+    expect(eventTypes(appended)).toContain("events.iterate.com/openai-ws/websocket-connected");
+    expect(eventTypes(appended)).toContain("events.iterate.com/openai-ws/llm-request-started");
+    expect(eventTypes(appended)).toContain("events.iterate.com/agent/llm-request-completed");
+  });
 });
 
 function registeredState(): OpenAiWsState {
@@ -101,6 +202,18 @@ function registeredState(): OpenAiWsState {
     ...getInitialProcessorState(OpenAiWsProcessorContract),
     hasRegisteredCurrentVersion: true,
     model: "gpt-test",
+  };
+}
+
+function stateWithRequest(args: {
+  llmRequestId: number;
+  status: "started" | "completed";
+}): OpenAiWsState {
+  return {
+    ...registeredState(),
+    requests: {
+      [String(args.llmRequestId)]: { status: args.status },
+    },
   };
 }
 
@@ -161,6 +274,27 @@ function committedEvent(args: {
 
 function eventTypes(events: StreamEventInput[]): string[] {
   return events.map((event) => event.type);
+}
+
+function connectionIds(events: StreamEventInput[]) {
+  return events.map((event) => {
+    const payload = event.payload as { connectionId: string };
+    return payload.connectionId;
+  });
+}
+
+function completeResponse(
+  socket: FakeOpenAiResponsesWebSocket | undefined,
+  args: { delta: string; responseId: string },
+) {
+  socket?.receive({
+    type: "response.output_text.delta",
+    delta: args.delta,
+  });
+  socket?.receive({
+    type: "response.completed",
+    response: { id: args.responseId, usage: { input_tokens: 1, output_tokens: 1 } },
+  });
 }
 
 async function waitFor(condition: () => boolean) {
