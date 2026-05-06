@@ -67,7 +67,6 @@ export class ProjectMcpServerEntrypoint extends WorkerEntrypoint<
     const ctxWithProps = this.ctx as ExecutionContext & { props?: ProjectMcpServerConnectionProps };
     ctxWithProps.props = {
       ...mcpAuth,
-      orgId: mcpAuth.orgId ?? project.clerkOrgId,
       projectId: project.id,
       projectSlug: project.slug,
     };
@@ -171,7 +170,7 @@ function authenticateSharedSecret(token: string): ProjectMcpServerConnectionProp
   // props, but it skips per-user Clerk membership checks.
   return {
     clientId: "admin-api-secret",
-    orgId: null,
+    orgId: "admin-api",
     orgPermissions: ["admin:api"],
     orgRole: "admin",
     orgSlug: null,

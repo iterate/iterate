@@ -12,6 +12,15 @@ export type IngressRoutesRow = {
   updated_at: string;
 };
 
+export type ProjectPermissionsRow = {
+  project_id: string;
+  principal_type: string;
+  principal_id: string;
+  role: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type ProjectPresetsRow = {
   id: string;
   project_id: string;
@@ -25,8 +34,6 @@ export type ProjectPresetsRow = {
 export type ProjectsRow = {
   id: string;
   slug: string;
-  clerk_org_id: string;
-  created_by_clerk_user_id: string;
   custom_hostname: string | null;
   metadata: string;
   created_at: string;

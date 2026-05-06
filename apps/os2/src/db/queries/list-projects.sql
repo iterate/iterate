@@ -1,6 +1,8 @@
-select id, slug, clerk_org_id, created_by_clerk_user_id, custom_hostname, metadata, created_at, updated_at
-from projects
-where clerk_org_id = :clerkOrgId
-order by created_at desc
+select distinct p.id, p.slug, p.custom_hostname, p.metadata, p.created_at, p.updated_at
+from projects p
+join project_permissions pp on pp.project_id = p.id
+where pp.principal_type = :principalType
+  and pp.principal_id = :principalId
+order by p.created_at desc
 limit :limit
 offset :offset;

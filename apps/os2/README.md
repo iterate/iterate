@@ -208,11 +208,13 @@ For now the main worker exposes direct Durable Object debug fetch URLs:
 The worker strips `/__durable-objects/<kind>/<name>` and forwards the remaining
 path to the named Durable Object stub's `fetch()`.
 
-The current domain table is `projects`: `id`, `slug`, `clerk_org_id`,
-`created_by_clerk_user_id`, `custom_hostname`, `metadata`, `created_at`, and
-`updated_at`. A project belongs to exactly one Clerk Organization. Project IDs
-are generated in TypeScript with the shared TypeID helper using local prefix
-`proj` and app config `typeIdPrefix`.
+The current domain table is `projects`: `id`, `slug`, `custom_hostname`,
+`metadata`, `created_at`, and `updated_at`. Projects are intentionally
+ownerless at the domain level; `project_permissions` maps Clerk organizations
+to projects for current UI access. Admin bearer-token requests bypass that
+permission table so operator tooling can access every project. Project IDs are
+generated in TypeScript with the shared TypeID helper using local prefix `proj`
+and app config `typeIdPrefix`.
 
 `created_at` defaults in SQL. `updated_at` is set by the app's update queries
 instead of a SQLite trigger because the Cloudflare D1 migration API rejected the
@@ -439,28 +441,41 @@ execution, and stream append/readback.
 
 ### Repeatable Preview MCP Smoke
 
-Preview CI and operator checks seed a deterministic project before connecting an
-MCP client. The seed oRPC procedure is intentionally admin-only and exists so a
-fresh preview deployment can create project ingress rows without a human Clerk
-session:
+Preview CI and operator checks create a deterministic project before connecting
+an MCP client. They use the normal `projects.create` and `projects.findBySlug`
+oRPC procedures with the preview admin bearer token. The token is mapped to a
+synthetic active organization by `activeOrganizationMiddleware`, so the preview
+path creates the same project rows, ingress rows, MCP host, presets, and
+Durable Object state that the UI would create without introducing a special
+seed API:
 
 ```bash
 OS2_BASE_URL=https://os2.iterate-preview-2.com \
 doppler run --project os2 --config preview_2 -- pnpm --dir apps/os2 test:e2e:preview
 ```
 
-The same seed can be run explicitly through the OS2 app CLI:
+The same project can be created explicitly through the OS2 app CLI:
 
 ```bash
 OS2_API_TOKEN="$APP_CONFIG_ADMIN_API_SECRET" \
 pnpm --dir apps/os2 cli rpc \
   --base-url "$OS2_BASE_URL" \
-  projects seed-mcp-project \
-  --project-id proj-preview-mcp-smoke \
+  projects create \
+  --slug preview-mcp-smoke \
+  --metadata '{"seededBy":"manual-preview-mcp-smoke"}'
+```
+
+If it already exists, read it back with the ordinary slug lookup:
+
+```bash
+OS2_API_TOKEN="$APP_CONFIG_ADMIN_API_SECRET" \
+pnpm --dir apps/os2 cli rpc \
+  --base-url "$OS2_BASE_URL" \
+  projects find-by-slug \
   --slug preview-mcp-smoke
 ```
 
-The response includes `mcpUrl`, usually:
+The preview project MCP URL is derived from the slug:
 
 ```txt
 https://mcp__preview-mcp-smoke.iterate-preview-2.app/

@@ -1,6 +1,7 @@
 import type { ClerkAuth } from "~/context.ts";
 
 export interface ActiveOrganizationAuth {
+  isAdminApi?: boolean;
   userId: string;
   sessionId: string;
   orgId: string;

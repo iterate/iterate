@@ -3,18 +3,12 @@ import type { Client } from "sqlfu";
 const sql = `
 delete from project_presets
 where id = ?
-  and project_id = ?
-  and exists (
-    select 1
-    from projects p
-    where p.id = project_presets.project_id
-      and p.clerk_org_id = ?
-  );
+  and project_id = ?;
 `.trim();
 const query = (params: deleteProjectPreset.Params) => ({
-  sql,
-  args: [params.id, params.projectId, params.clerkOrgId],
   name: "deleteProjectPreset",
+  sql,
+  args: [params.id, params.projectId],
 });
 
 export const deleteProjectPreset = Object.assign(
@@ -28,6 +22,5 @@ export namespace deleteProjectPreset {
   export type Params = {
     id: string;
     projectId: string;
-    clerkOrgId: string;
   };
 }

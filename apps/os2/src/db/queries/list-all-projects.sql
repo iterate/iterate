@@ -1,5 +1,5 @@
 select id, slug, custom_hostname, metadata, created_at, updated_at
 from projects
-where slug = :slug
-order by created_at asc
-limit 2;
+order by created_at desc
+limit :limit
+offset :offset;

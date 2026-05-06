@@ -15,20 +15,12 @@ const CodemodeProviderInput = z.array(z.unknown());
 export const Project = z.object({
   id: z.string(),
   slug: z.string(),
-  clerkOrgId: z.string(),
-  createdByClerkUserId: z.string(),
   customHostname: z.string().nullable(),
   metadata: JSONObject,
   createdAt: z.string(),
   updatedAt: z.string(),
 });
 export type Project = z.output<typeof Project>;
-
-export const SeedMcpProjectResult = z.object({
-  mcpUrl: z.string().url(),
-  project: Project,
-});
-export type SeedMcpProjectResult = z.output<typeof SeedMcpProjectResult>;
 
 export const ProjectPreset = z.object({
   id: z.string(),
@@ -339,29 +331,6 @@ export const osContract = oc.router({
         }),
       )
       .output(Project),
-    seedMcpProject: oc
-      .route({
-        method: "POST",
-        path: "/projects/seed-mcp-project",
-        description:
-          "Admin-only preview/operator helper that creates a project and returns its project MCP URL.",
-        tags: ["/projects", "/debug"],
-      })
-      .input(
-        z.object({
-          clerkOrgId: z.string().trim().min(1).default("org_preview_smoke"),
-          metadata: JSONObject.default({}),
-          projectId: z.string().trim().min(1).default("proj-preview-mcp-smoke"),
-          slug: z
-            .string()
-            .trim()
-            .min(1)
-            .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Slug must be lowercase kebab-case")
-            .default("preview-mcp-smoke"),
-          userId: z.string().trim().min(1).default("user_preview_smoke"),
-        }),
-      )
-      .output(SeedMcpProjectResult),
     list: oc
       .route({
         method: "GET",

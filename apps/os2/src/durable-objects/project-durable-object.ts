@@ -18,15 +18,11 @@ import type { ExactHostIngressRule } from "~/ingress/types.ts";
 export type ProjectInitParams = {
   name: string;
   projectId: string;
-  clerkOrgId: string;
-  createdByClerkUserId: string;
 };
 
 export type ProjectSummary = {
   id: string;
   slug: string;
-  clerkOrgId: string;
-  createdByClerkUserId: string;
   defaultHost: string;
   hosts: string[];
 };
@@ -34,8 +30,6 @@ export type ProjectSummary = {
 export type CreateProjectInput = {
   projectId: string;
   slug: string;
-  clerkOrgId: string;
-  createdByClerkUserId: string;
   metadata: Record<string, unknown>;
 };
 
@@ -53,8 +47,6 @@ type ProjectEnv = {
 type ProjectStateRow = {
   id: string;
   slug: string;
-  clerk_org_id: string;
-  created_by_clerk_user_id: string;
   default_host: string;
   hosts_json: string;
   metadata_json: string;
@@ -80,7 +72,6 @@ const ProjectBase = createIterateDurableObjectBase<
   className: "ProjectDurableObject",
   getDatabase: (env) => env.DO_CATALOG,
   indexes: {
-    clerkOrgId: (params) => params.clerkOrgId,
     projectId: (params) => params.projectId,
   },
 });
@@ -89,11 +80,13 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
   constructor(ctx: DurableObjectState, env: ProjectEnv) {
     super(ctx, env);
     const sql = this.getDurableObjectSql();
+    // Projects are intentionally ownerless at their core. Clerk org membership
+    // is an access grant in D1, not a property of the Project Durable Object,
+    // because we want agents to be able to create unclaimed projects and let a
+    // user or organization claim them later, similar to Stripe sandboxes.
     sql.exec(`CREATE TABLE IF NOT EXISTS project_state (
       id TEXT PRIMARY KEY,
       slug TEXT NOT NULL,
-      clerk_org_id TEXT NOT NULL,
-      created_by_clerk_user_id TEXT NOT NULL,
       default_host TEXT NOT NULL,
       hosts_json TEXT NOT NULL,
       metadata_json TEXT NOT NULL,
@@ -118,8 +111,6 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     await this.initialize({
       name: input.projectId,
       projectId: input.projectId,
-      clerkOrgId: input.clerkOrgId,
-      createdByClerkUserId: input.createdByClerkUserId,
     });
     await this.ensureStarted();
 
@@ -134,20 +125,16 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
 
     this.getDurableObjectSql().exec(
       `INSERT INTO project_state
-        (id, slug, clerk_org_id, created_by_clerk_user_id, default_host, hosts_json, metadata_json, created_at_ms, updated_at_ms)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, slug, default_host, hosts_json, metadata_json, created_at_ms, updated_at_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
         slug = excluded.slug,
-        clerk_org_id = excluded.clerk_org_id,
-        created_by_clerk_user_id = excluded.created_by_clerk_user_id,
         default_host = excluded.default_host,
         hosts_json = excluded.hosts_json,
         metadata_json = excluded.metadata_json,
         updated_at_ms = excluded.updated_at_ms`,
       input.projectId,
       input.slug,
-      input.clerkOrgId,
-      input.createdByClerkUserId,
       defaultHost,
       JSON.stringify(hosts.allHosts),
       JSON.stringify(input.metadata),
@@ -169,10 +156,14 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     await this.ensureStarted();
     const summary = this.requireSummary();
     const row = await this.env.DB.prepare(
-      `SELECT id FROM projects WHERE id = ? AND clerk_org_id = ? LIMIT 1`,
+      `SELECT project_id FROM project_permissions
+       WHERE project_id = ?
+         AND principal_type = 'clerk_organization'
+         AND principal_id = ?
+       LIMIT 1`,
     )
       .bind(summary.id, input.principal.orgId)
-      .first<{ id: string }>();
+      .first<{ project_id: string }>();
 
     if (!row) {
       throw new Error(`Project ${summary.id} is not available to this principal.`);
@@ -342,7 +333,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
   private requireSummary(): ProjectSummary {
     const row = this.getDurableObjectSql()
       .exec<ProjectStateRow>(
-        `SELECT id, slug, clerk_org_id, created_by_clerk_user_id, default_host, hosts_json, metadata_json, created_at_ms, updated_at_ms
+        `SELECT id, slug, default_host, hosts_json, metadata_json, created_at_ms, updated_at_ms
          FROM project_state
          LIMIT 1`,
       )
@@ -353,8 +344,6 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     return {
       id: row.id,
       slug: row.slug,
-      clerkOrgId: row.clerk_org_id,
-      createdByClerkUserId: row.created_by_clerk_user_id,
       defaultHost: row.default_host,
       hosts: JSON.parse(row.hosts_json) as string[],
     };
@@ -379,23 +368,15 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
 async function upsertProjectProjection(input: { db: D1Database; input: CreateProjectInput }) {
   const row = await input.db
     .prepare(
-      `INSERT INTO projects (id, slug, clerk_org_id, created_by_clerk_user_id, metadata, updated_at)
-       VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', 'now'))
+      `INSERT INTO projects (id, slug, metadata, updated_at)
+       VALUES (?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', 'now'))
        ON CONFLICT(id) DO UPDATE SET
         slug = excluded.slug,
-        clerk_org_id = excluded.clerk_org_id,
-        created_by_clerk_user_id = excluded.created_by_clerk_user_id,
         metadata = excluded.metadata,
         updated_at = excluded.updated_at
        RETURNING id`,
     )
-    .bind(
-      input.input.projectId,
-      input.input.slug,
-      input.input.clerkOrgId,
-      input.input.createdByClerkUserId,
-      JSON.stringify(input.input.metadata),
-    )
+    .bind(input.input.projectId, input.input.slug, JSON.stringify(input.input.metadata))
     .first<{ id: string }>();
 
   if (!row) throw new Error(`Project ${input.input.projectId} projection was not written.`);

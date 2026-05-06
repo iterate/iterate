@@ -19,6 +19,11 @@ function readAdminApiSecret() {
   );
 }
 
+type Project = {
+  id: string;
+  slug: string;
+};
+
 async function expectStatus(input: { method?: string; status: number; url: URL }) {
   const response = await fetch(input.url, {
     method: input.method ?? "GET",
@@ -30,11 +35,31 @@ async function expectStatus(input: { method?: string; status: number; url: URL }
   return response;
 }
 
-async function seedProjectMcpUrl(input: { adminApiSecret: string; baseUrl: URL }) {
-  const response = await fetch(new URL("/api/projects/seed-mcp-project", input.baseUrl), {
+async function fetchProjectBySlug(input: { adminApiSecret: string; baseUrl: URL; slug: string }) {
+  const response = await fetch(new URL(`/api/projects/by-slug/${input.slug}`, input.baseUrl), {
+    headers: {
+      authorization: `Bearer ${input.adminApiSecret}`,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Failed to find MCP smoke project ${input.slug}: ${response.status} ${await response.text()}`,
+    );
+  }
+
+  return (await response.json()) as Project;
+}
+
+async function seedProject(input: { adminApiSecret: string; baseUrl: URL }) {
+  const slug = "preview-mcp-smoke";
+  const response = await fetch(new URL("/api/projects", input.baseUrl), {
     body: JSON.stringify({
-      projectId: "proj-preview-mcp-smoke",
-      slug: "preview-mcp-smoke",
+      metadata: {
+        seededAt: new Date().toISOString(),
+        seededBy: "os2-preview-mcp-smoke",
+      },
+      slug,
     }),
     headers: {
       authorization: `Bearer ${input.adminApiSecret}`,
@@ -43,17 +68,41 @@ async function seedProjectMcpUrl(input: { adminApiSecret: string; baseUrl: URL }
     method: "POST",
   });
 
+  if (response.status === 409) {
+    return await fetchProjectBySlug({ ...input, slug });
+  }
+
   if (!response.ok) {
     throw new Error(
-      `Failed to seed MCP smoke project at ${input.baseUrl}: ${response.status} ${await response.text()}`,
+      `Failed to create MCP smoke project at ${input.baseUrl}: ${response.status} ${await response.text()}`,
     );
   }
 
-  const body = (await response.json()) as { mcpUrl?: string };
-  if (!body.mcpUrl) {
-    throw new Error(`Seed MCP response did not include mcpUrl: ${JSON.stringify(body)}`);
+  return (await response.json()) as Project;
+}
+
+function projectMcpUrlFor(input: { baseUrl: URL; project: Project }) {
+  const previewMatch = /^os2\.iterate-preview-(\d+)\.com$/.exec(input.baseUrl.hostname);
+  if (previewMatch) {
+    return new URL(`https://mcp__${input.project.slug}.iterate-preview-${previewMatch[1]}.app/`);
   }
-  return new URL(body.mcpUrl);
+
+  if (input.baseUrl.hostname === "os2.iterate.com") {
+    return new URL(`https://mcp__${input.project.slug}.iterate.app/`);
+  }
+
+  throw new Error(
+    `Cannot derive project MCP URL for ${input.project.slug} from OS2 base ${input.baseUrl}. Set OS2_PROJECT_MCP_URL explicitly.`,
+  );
+}
+
+async function seedProjectMcpUrl(input: { adminApiSecret: string; baseUrl: URL }) {
+  // The preview smoke deliberately uses the normal `projects.create` and
+  // `projects.findBySlug` procedures. `activeOrganizationMiddleware` maps the
+  // admin bearer token to a tiny synthetic organization, keeping this path close
+  // to the UI while still making preview checks repeatable without Clerk.
+  const project = await seedProject(input);
+  return projectMcpUrlFor({ baseUrl: input.baseUrl, project });
 }
 
 const baseUrl = requireBaseUrl();

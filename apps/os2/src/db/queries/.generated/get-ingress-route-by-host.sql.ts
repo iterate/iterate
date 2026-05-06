@@ -8,9 +8,9 @@ order by priority desc, created_at asc
 limit 1;
 `.trim();
 const query = (params: getIngressRouteByHost.Params) => ({
+  name: "getIngressRouteByHost",
   sql,
   args: [params.host],
-  name: "getIngressRouteByHost",
 });
 
 export const getIngressRouteByHost = Object.assign(

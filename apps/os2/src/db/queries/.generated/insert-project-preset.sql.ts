@@ -6,9 +6,9 @@ values (?, ?, ?, ?, ?)
 returning id, project_id, name, description, events_json, created_at, updated_at;
 `.trim();
 const query = (params: insertProjectPreset.Params) => ({
+  name: "insertProjectPreset",
   sql,
   args: [params.id, params.projectId, params.name, params.description, params.eventsJson],
-  name: "insertProjectPreset",
 });
 
 export const insertProjectPreset = Object.assign(

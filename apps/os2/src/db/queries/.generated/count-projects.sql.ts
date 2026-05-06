@@ -1,14 +1,16 @@
 import type { Client } from "sqlfu";
 
 const sql = `
-select count(*) as total
-from projects
-where clerk_org_id = ?;
+select count(distinct p.id) as total
+from projects p
+join project_permissions pp on pp.project_id = p.id
+where pp.principal_type = ?
+  and pp.principal_id = ?;
 `.trim();
 const query = (params: countProjects.Params) => ({
-  sql,
-  args: [params.clerkOrgId],
   name: "countProjects",
+  sql,
+  args: [params.principalType, params.principalId],
 });
 
 export const countProjects = Object.assign(
@@ -24,7 +26,8 @@ export const countProjects = Object.assign(
 
 export namespace countProjects {
   export type Params = {
-    clerkOrgId: string;
+    principalType: "clerk_organization";
+    principalId: string;
   };
   export type Result = {
     total: number;
