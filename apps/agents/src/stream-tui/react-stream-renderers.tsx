@@ -162,7 +162,7 @@ function TuiEventsStreamHeader(props: {
       focused={props.focused}
     >
       <text width={6} fg={TUI_COLORS.text}>
-        [i]
+        ▐ 𝑖 ▌
       </text>
       <text flexGrow={1} fg={TUI_COLORS.text} content={title} />
       <text fg={TUI_COLORS.textSubdued} content={parts.join(" · ")} />
