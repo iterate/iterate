@@ -139,6 +139,7 @@ class CloudflareResponsesWebSocket extends ResponsesWSBase<CloudflareFetchWebSoc
 
 class CloudflareFetchWebSocket {
   #listeners = new Map<CloudflareSocketEventName, Set<unknown>>();
+  #onceListeners = new Map<CloudflareSocketEventName, Map<unknown, unknown>>();
   #readyState = 0;
   #socket: WebSocket | undefined;
 
@@ -184,7 +185,7 @@ class CloudflareFetchWebSocket {
   off(event: "error", listener: (error: Error) => void): void;
   off(event: CloudflareSocketEventName, listener: (...args: never[]) => void): void;
   off(event: CloudflareSocketEventName, listener: unknown): void {
-    this.#listeners.get(event)?.delete(listener);
+    this.#removeListener(event, listener);
   }
 
   once(event: "open", listener: () => void): void;
@@ -197,9 +198,10 @@ class CloudflareFetchWebSocket {
   once(event: CloudflareSocketEventName, listener: (...args: never[]) => void): void;
   once(event: CloudflareSocketEventName, listener: unknown): void {
     const onceListener = (...args: never[]) => {
-      this.off(event, onceListener);
+      this.#removeListener(event, listener);
       (listener as (...args: never[]) => void)(...args);
     };
+    this.#onceListenersFor(event).set(listener, onceListener);
     this.on(event, onceListener);
   }
 
@@ -248,6 +250,24 @@ class CloudflareFetchWebSocket {
     const listeners = new Set<unknown>();
     this.#listeners.set(event, listeners);
     return listeners;
+  }
+
+  #onceListenersFor(event: CloudflareSocketEventName): Map<unknown, unknown> {
+    const existing = this.#onceListeners.get(event);
+    if (existing != null) return existing;
+
+    const listeners = new Map<unknown, unknown>();
+    this.#onceListeners.set(event, listeners);
+    return listeners;
+  }
+
+  #removeListener(event: CloudflareSocketEventName, listener: unknown) {
+    const listeners = this.#listeners.get(event);
+    listeners?.delete(listener);
+    const onceListener = this.#onceListeners.get(event)?.get(listener);
+    if (onceListener == null) return;
+    listeners?.delete(onceListener);
+    this.#onceListeners.get(event)?.delete(listener);
   }
 
   #emit(event: CloudflareSocketEventName, ...args: unknown[]) {
