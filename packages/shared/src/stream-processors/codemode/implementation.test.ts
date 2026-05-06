@@ -278,6 +278,100 @@ describe("createCodemodeProcessor", () => {
     ]);
   });
 
+  it("serves __codemode builtins without a registered provider", async () => {
+    const appended: StreamEventInput[] = [];
+    const processor = createCodemodeProcessor({
+      ...baseDeps(),
+      newId: fixedIds(["fn-debug"]),
+      scriptExecutor: async ({ session }) => {
+        const output = await session.callFunction({
+          args: [{ source: "test" }],
+          path: ["__codemode", "debugInfo"],
+        });
+        return { result: output };
+      },
+    });
+
+    await processor.implementation.afterAppend?.({
+      event: consumedCodemodeEvent({
+        type: "events.iterate.com/codemode/script-execution-requested",
+        payload: {
+          code: "async (ctx) => ctx.__codemode.debugInfo({ source: 'test' })",
+          scriptExecutionId: "scr-debug",
+        },
+        offset: 17,
+      }),
+      previousState: registeredState(),
+      state: registeredState(),
+      streamApi: testStreamApi({ appended, storedEvents: [] }),
+      signal: new AbortController().signal,
+    });
+
+    expect(appended.map(({ payload, type }) => ({ payload, type }))).toEqual([
+      {
+        type: "events.iterate.com/codemode/session-started",
+        payload: { sessionCapabilityCallable },
+      },
+      {
+        type: "events.iterate.com/codemode/function-call-requested",
+        payload: {
+          args: [{ source: "test" }],
+          functionCallId: "fn-debug",
+          functionPath: ["debugInfo"],
+          invocationKind: "rpc",
+          path: ["__codemode", "debugInfo"],
+          providerPath: ["__codemode"],
+          scriptExecutionId: "scr-debug",
+        },
+      },
+      {
+        type: "events.iterate.com/codemode/function-call-completed",
+        payload: {
+          durationMs: 0,
+          functionCallId: "fn-debug",
+          functionPath: ["debugInfo"],
+          invocationKind: "rpc",
+          outcome: {
+            status: "returned",
+            value: {
+              args: [{ source: "test" }],
+              functionCallId: "fn-debug",
+              functionPath: ["debugInfo"],
+              invocationKind: "rpc",
+              path: ["__codemode", "debugInfo"],
+              providerPath: ["__codemode"],
+              scriptExecutionId: "scr-debug",
+              streamPath: "/projects/prj_test/codemode-sessions/cblk_test",
+            },
+          },
+          path: ["__codemode", "debugInfo"],
+          providerPath: ["__codemode"],
+          scriptExecutionId: "scr-debug",
+        },
+      },
+      {
+        type: "events.iterate.com/codemode/script-execution-completed",
+        payload: {
+          durationMs: expect.any(Number),
+          outcome: {
+            status: "succeeded",
+            output: {
+              args: [{ source: "test" }],
+              functionCallId: "fn-debug",
+              functionPath: ["debugInfo"],
+              invocationKind: "rpc",
+              path: ["__codemode", "debugInfo"],
+              providerPath: ["__codemode"],
+              scriptExecutionId: "scr-debug",
+              streamPath: "/projects/prj_test/codemode-sessions/cblk_test",
+            },
+          },
+          scriptExecutionId: "scr-debug",
+        },
+      },
+    ]);
+  });
+
   it("serializes callback args for rpc trace events while passing live callbacks to the provider", async () => {
     const appended: StreamEventInput[] = [];
     const executeCodemodeFunctionCall = vi.fn(

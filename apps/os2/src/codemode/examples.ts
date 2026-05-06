@@ -9,7 +9,7 @@ export type CodemodeExample = {
   description: string;
   code: string;
   events: EventInput[];
-  providerSet?: "example-capabilities" | "openapi-petstore";
+  providerSet?: "example-capabilities" | "iterate-browser-extension" | "openapi-petstore";
 };
 
 export const codemodeExamples = [
@@ -104,6 +104,49 @@ export const codemodeExamples = [
       {
         type: "events.iterate.com/codemode/example-note",
         payload: { message: "streams is a default codemode provider" },
+      },
+    ],
+  },
+  {
+    slug: "iterate-browser-extension-event-provider",
+    name: "Outbound browser extension provider",
+    description:
+      "Sketch an event-based provider for a browser extension, OpenClaw plugin, or tab runner that can only make outbound requests.",
+    providerSet: "iterate-browser-extension",
+    code: `async (ctx) => {
+  const debug = await ctx.__codemode.debugInfo({
+    source: "codemode script before browser-extension call",
+  });
+  console.log("session debug", debug);
+
+  const navigation = await ctx.iterateBrowserExtension.navigateToPage({
+    url: "https://example.com",
+    reason: "prove outbound-only providers can complete codemode function calls",
+  });
+
+  return navigation;
+}`,
+    events: [
+      {
+        type: "events.iterate.com/codemode/example-note",
+        payload: {
+          message:
+            "ctx.__codemode.* is always available on the session and does not require provider registration.",
+        },
+      },
+      {
+        type: "events.iterate.com/codemode/example-note",
+        payload: {
+          message:
+            "ctx.iterateBrowserExtension.navigateToPage is intentionally event-based: a browser extension/OpenClaw-style runner would poll or subscribe, perform local browser work, and append function-call-completed over an outbound fetch.",
+        },
+      },
+      {
+        type: "events.iterate.com/codemode/example-note",
+        payload: {
+          message:
+            "A Worker-side bridge for that outbound provider can reduce session-started, invoke sessionCapabilityCallable, build a codemode ctx, and call ctx.__codemode.debugInfo() or any other session tool while handling the request.",
+        },
       },
     ],
   },
@@ -412,6 +455,15 @@ export function providersForCodemodeExample(input: {
   switch (input.example?.providerSet) {
     case "example-capabilities":
       return createExampleCapabilityProviders({ projectId: input.projectId });
+    case "iterate-browser-extension":
+      return [
+        {
+          path: ["iterateBrowserExtension"],
+          instructions:
+            "Hypothetical event-based provider for outbound-only browser automation clients such as a browser extension, OpenClaw plugin, or Chrome tab runner. Use ctx.iterateBrowserExtension.navigateToPage({ url, reason? }). The provider is expected to observe function-call-requested events, perform browser-local work, and append the matching function-call-completed event.",
+          invocation: { kind: "event" },
+        },
+      ];
     case "openapi-petstore":
       return [
         createOpenApiProviderRegistration({

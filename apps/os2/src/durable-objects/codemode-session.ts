@@ -337,6 +337,69 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
     await this.ensureStarted();
     await this.ensureLiveConsumer();
     const functionCallId = input.functionCallId ?? crypto.randomUUID();
+    const builtin = this.resolveCodemodeBuiltin(input.path);
+    if (builtin != null) {
+      // Temporary duplication with the shared codemode processor. This is not
+      // the design we want long-term: `__codemode` should be owned by exactly
+      // one session capability implementation. For now the OS2 host and the
+      // portable processor both need this branch so the internal path is always
+      // available, still records a normal requested/completed event pair, and
+      // does not require a tool-provider-registered event.
+      const requestedEvent = await this.appendAndConsume({
+        type: "events.iterate.com/codemode/function-call-requested",
+        payload: {
+          args: serializeFunctionCallArgsForEvent(input.args),
+          functionCallId,
+          functionPath: builtin.functionPath,
+          invocationKind: "rpc",
+          path: input.path,
+          providerPath: builtin.providerPath,
+          ...(input.scriptExecutionId == null
+            ? {}
+            : { scriptExecutionId: input.scriptExecutionId }),
+        },
+      });
+      const startedAt = Date.now();
+      try {
+        const result = this.runCodemodeBuiltin({
+          args: input.args,
+          functionCallId,
+          functionPath: builtin.functionPath,
+          path: input.path,
+          providerPath: builtin.providerPath,
+          requestedEvent,
+          scriptExecutionId: input.scriptExecutionId,
+        });
+        await this.receiveFunctionCallResult({
+          durationMs: Math.max(0, Date.now() - startedAt),
+          functionCallId,
+          functionPath: builtin.functionPath,
+          invocationKind: "rpc",
+          outcome: { status: "returned", value: result },
+          path: input.path,
+          providerPath: builtin.providerPath,
+          ...(input.scriptExecutionId == null
+            ? {}
+            : { scriptExecutionId: input.scriptExecutionId }),
+        });
+        return result;
+      } catch (error) {
+        await this.receiveFunctionCallResult({
+          durationMs: Math.max(0, Date.now() - startedAt),
+          functionCallId,
+          functionPath: builtin.functionPath,
+          invocationKind: "rpc",
+          outcome: { status: "threw", error },
+          path: input.path,
+          providerPath: builtin.providerPath,
+          ...(input.scriptExecutionId == null
+            ? {}
+            : { scriptExecutionId: input.scriptExecutionId }),
+        });
+        throw error;
+      }
+    }
+
     const provider = this.resolveRegisteredProvider(input.path);
     const pending =
       provider.invocation.kind === "event"
@@ -592,6 +655,42 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
       invocationKind: provider.invocation.kind,
       providerPath: provider.path,
     };
+  }
+
+  private resolveCodemodeBuiltin(path: string[]) {
+    if (path[0] !== "__codemode") return null;
+    return {
+      functionPath: path.slice(1),
+      providerPath: ["__codemode"],
+    };
+  }
+
+  private runCodemodeBuiltin(input: {
+    args: unknown[];
+    functionCallId: string;
+    functionPath: string[];
+    path: string[];
+    providerPath: string[];
+    requestedEvent: Event;
+    scriptExecutionId?: string;
+  }) {
+    const name = input.functionPath.join(".");
+    if (name === "ping") return "pong";
+    if (name === "debugInfo") {
+      return {
+        args: serializeFunctionCallArgsForEvent(input.args),
+        functionCallId: input.functionCallId,
+        functionPath: input.functionPath,
+        invocationKind: "rpc" as const,
+        path: input.path,
+        providerPath: input.providerPath,
+        requestedOffset: input.requestedEvent.offset,
+        ...(input.scriptExecutionId == null ? {} : { scriptExecutionId: input.scriptExecutionId }),
+        streamPath: this.initParams.streamPath,
+      };
+    }
+
+    throw new Error(`Unknown codemode builtin __codemode.${name}`);
   }
 }
 

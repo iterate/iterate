@@ -206,6 +206,72 @@ async function callFunction(args: {
   state: CodemodeState;
   streamApi: CodemodeStreamApi;
 }) {
+  const builtin = resolveCodemodeBuiltin(args.path);
+  if (builtin != null) {
+    // Temporary duplication with the OS2 CodemodeSession host. The cleaner
+    // design is for every script and provider call to go through one session
+    // capability implementation. Keeping this local branch is awkward, but it
+    // makes `ctx.__codemode.*` truly always available in the portable processor
+    // while the host/session split is still settling.
+    const requestedEvent = await args.streamApi.append({
+      event: {
+        type: "events.iterate.com/codemode/function-call-requested",
+        idempotencyKey: buildDerivedIdempotencyKey({
+          slug: CodemodeProcessorContract.slug,
+          purpose: `function-call-requested:${args.sequence}`,
+          event: args.sourceEvent,
+        }),
+        payload: {
+          args: serializeTraceArgs(args.args),
+          functionCallId: args.functionCallId,
+          functionPath: builtin.functionPath,
+          invocationKind: "rpc",
+          path: args.path,
+          providerPath: builtin.providerPath,
+          scriptExecutionId: args.scriptExecutionId,
+        },
+      },
+    });
+    try {
+      const result = runCodemodeBuiltin({
+        args: args.args,
+        functionCallId: args.functionCallId,
+        functionPath: builtin.functionPath,
+        path: args.path,
+        providerPath: builtin.providerPath,
+        scriptExecutionId: args.scriptExecutionId,
+        streamPath: args.sourceEvent.streamPath,
+      });
+      await appendFunctionCallCompleted({
+        durationMs: 0,
+        functionCallId: args.functionCallId,
+        functionPath: builtin.functionPath,
+        invocationKind: "rpc",
+        outcome: { status: "returned", value: serializeTraceValue(result) },
+        path: args.path,
+        providerPath: builtin.providerPath,
+        requestedEvent,
+        scriptExecutionId: args.scriptExecutionId,
+        streamApi: args.streamApi,
+      });
+      return result;
+    } catch (error) {
+      await appendFunctionCallCompleted({
+        durationMs: 0,
+        functionCallId: args.functionCallId,
+        functionPath: builtin.functionPath,
+        invocationKind: "rpc",
+        outcome: { status: "threw", error: serializeError(error) },
+        path: args.path,
+        providerPath: builtin.providerPath,
+        requestedEvent,
+        scriptExecutionId: args.scriptExecutionId,
+        streamApi: args.streamApi,
+      });
+      throw error;
+    }
+  }
+
   const match = resolveToolProvider(args.state.toolProviders, args.path);
   const requestedEvent = await args.streamApi.append({
     event: {
@@ -441,6 +507,41 @@ function resolveToolProvider(registry: CodemodeState["toolProviders"], path: rea
 
 function isPathPrefix(prefix: readonly string[], path: readonly string[]) {
   return prefix.every((segment, index) => path[index] === segment);
+}
+
+function resolveCodemodeBuiltin(path: readonly string[]) {
+  if (path[0] !== "__codemode") return null;
+  return {
+    functionPath: path.slice(1),
+    providerPath: ["__codemode"],
+  };
+}
+
+function runCodemodeBuiltin(args: {
+  args: unknown[];
+  functionCallId: string;
+  functionPath: string[];
+  path: string[];
+  providerPath: string[];
+  scriptExecutionId: string;
+  streamPath: string;
+}) {
+  const name = args.functionPath.join(".");
+  if (name === "ping") return "pong";
+  if (name === "debugInfo") {
+    return {
+      args: serializeTraceArgs(args.args),
+      functionCallId: args.functionCallId,
+      functionPath: args.functionPath,
+      invocationKind: "rpc" as const,
+      path: args.path,
+      providerPath: args.providerPath,
+      scriptExecutionId: args.scriptExecutionId,
+      streamPath: args.streamPath,
+    };
+  }
+
+  throw new Error(`Unknown codemode builtin __codemode.${name}`);
 }
 
 function serializeTraceValue(value: unknown): unknown {

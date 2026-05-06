@@ -461,6 +461,110 @@ describe("CodemodeSession", () => {
       ]),
     );
   });
+
+  test("lets an outbound-only browser extension provider call builtin session debug tools", async () => {
+    const streamPath = `/codemode-session-tests/${crypto.randomUUID()}` as StreamPath;
+    const session = await initializeSession(streamPath);
+
+    const created = await session.createSession({
+      providers: [providerRegistration(["iterateBrowserExtension"])],
+      code: `async (ctx) => {
+  const ping = await ctx.__codemode.ping();
+  const navigation = await ctx.iterateBrowserExtension.navigateToPage({
+    url: "https://example.com",
+  });
+  return { ping, navigation };
+}`,
+    });
+    const scriptExecutionId = String(
+      (created.scriptExecutionEvent?.payload as { scriptExecutionId?: unknown }).scriptExecutionId,
+    );
+
+    const navigationRequest = await waitForFunctionCallRequested({
+      path: ["iterateBrowserExtension", "navigateToPage"],
+      streamPath,
+    });
+    const sessionStarted = (await readCurrentStreamEvents(streamPath)).find(
+      (event) => event.type === "events.iterate.com/codemode/session-started",
+    );
+
+    // This models an outbound-only provider such as a browser extension,
+    // OpenClaw plugin, or Chrome tab automation runner. The provider can poll
+    // the stream and append completion events over fetch. If there is a
+    // Worker-side bridge available, it can also reduce session-started, invoke
+    // the Session Capability Callable, and build a Codemode Context for calling
+    // other session functions. The actual pure-fetch bridge is future work; the
+    // event pair and session capability are the contract being proved here.
+    const codemodeSessionCapability = await dispatchCallable({
+      callable: (sessionStarted!.payload as { sessionCapabilityCallable: unknown })
+        .sessionCapabilityCallable,
+      ctx: { env: env as unknown as Record<string, unknown> },
+      payload: {},
+    });
+    const providerCtx = createCodemodeContext({
+      codemodeSessionCapability: codemodeSessionCapability as Parameters<
+        typeof createCodemodeContext
+      >[0]["codemodeSessionCapability"],
+      scriptExecutionId,
+    });
+    const debugInfo = await providerCtx.__codemode.debugInfo({
+      provider: "iterateBrowserExtension",
+      reason: "navigateToPage completed from outbound-only provider",
+    });
+    expect(debugInfo).toMatchObject({
+      functionPath: ["debugInfo"],
+      invocationKind: "rpc",
+      path: ["__codemode", "debugInfo"],
+      providerPath: ["__codemode"],
+      scriptExecutionId,
+      streamPath,
+    });
+
+    await session.receiveFunctionCallResult({
+      functionCallId: String(navigationRequest.payload.functionCallId),
+      functionPath: ["navigateToPage"],
+      invocationKind: "event",
+      outcome: {
+        status: "returned",
+        value: {
+          debugInfo,
+          navigatedTo: "https://example.com",
+          provider: "iterateBrowserExtension",
+        },
+      },
+      path: ["iterateBrowserExtension", "navigateToPage"],
+      providerPath: ["iterateBrowserExtension"],
+      scriptExecutionId,
+    });
+
+    const completed = await waitForScriptExecutionCompleted({ scriptExecutionId, streamPath });
+    expect(completed.payload).toMatchObject({
+      outcome: {
+        status: "succeeded",
+        output: {
+          ping: "pong",
+          navigation: {
+            navigatedTo: "https://example.com",
+            provider: "iterateBrowserExtension",
+          },
+        },
+      },
+    });
+    expect(await readCurrentStreamEvents(streamPath)).toEqual(
+      expect.arrayContaining([
+        functionCallRequested(["__codemode", "ping"], ["__codemode"], ["ping"]),
+        functionCallCompleted(["__codemode", "ping"], ["__codemode"], ["ping"]),
+        functionCallRequestedWithKind(
+          ["iterateBrowserExtension", "navigateToPage"],
+          ["iterateBrowserExtension"],
+          ["navigateToPage"],
+          "event",
+        ),
+        functionCallRequested(["__codemode", "debugInfo"], ["__codemode"], ["debugInfo"]),
+        functionCallCompleted(["__codemode", "debugInfo"], ["__codemode"], ["debugInfo"]),
+      ]),
+    );
+  });
 });
 
 async function initializeSession(streamPath: StreamPath) {
