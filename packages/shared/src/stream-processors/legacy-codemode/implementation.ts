@@ -11,10 +11,12 @@ import type { Callable } from "../../callable/types.ts";
 import { CoreProcessorRegisteredEventType } from "../core/contract.ts";
 import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
 import {
+  CODEMODE_AUTOMATIC_CONTINUATION_LIMIT,
   CODEMODE_PRIMER_TEXT,
   CODEMODE_PRIMER_IDEMPOTENCY_KEY,
   CODEMODE_WEBCHAT_PROVIDER_TYPES,
   CodemodeProcessorContract,
+  codemodeResultNeedsAgentTurn,
   type CodemodeState,
 } from "./contract.ts";
 import type { CodemodeCodeExecutor } from "./code-executor.ts";
@@ -42,7 +44,7 @@ export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
   return implementProcessor(CodemodeProcessorContract, {
     firstAttachAfterAppend: { mode: "lookback", milliseconds: 250 },
 
-    async afterAppend({ event, state, streamApi, signal }) {
+    async afterAppend({ event, previousState, state, streamApi, signal }) {
       // Standard processor behavior is just another side effect Codemode wants
       // to run before its event-specific side effects.
       await standardProcessorBehavior.afterAppend({
@@ -94,8 +96,8 @@ export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
           });
           return;
         case "events.iterate.com/codemode/result-added":
-          await appendCodemodeResultAsAgentInput({ event, streamApi });
-          await appendIdleStatusIfAgentHasNoQueuedTriggers({ event, state, streamApi });
+          await appendCodemodeResultFollowUp({ event, previousState, streamApi });
+          await appendIdleStatusIfAgentIsQuiescent({ event, state, streamApi });
           return;
         case "events.iterate.com/codemode/tool-provider-config-updated": {
           const { executeCallable, getTypesCallable, slug } = event.payload;
@@ -209,7 +211,7 @@ async function executeCodemodeBlock(args: {
             payload: { channel: "web", message },
           },
         });
-        return { ok: true };
+        return undefined;
       },
     },
   });
@@ -235,34 +237,68 @@ async function executeCodemodeBlock(args: {
 async function appendCodemodeResultAsAgentInput(args: {
   event: Extract<CodemodeConsumedEvent, { type: "events.iterate.com/codemode/result-added" }>;
   streamApi: CodemodeStreamApi;
+  purpose: string;
+  intro?: string;
 }) {
   await args.streamApi.append({
     event: {
       type: "events.iterate.com/agent/input-added",
       idempotencyKey: buildDerivedIdempotencyKey({
         slug: CodemodeProcessorContract.slug,
-        purpose: "result-to-agent-input",
+        purpose: args.purpose,
         event: args.event,
       }),
       payload: {
-        content: eventBlock({
-          offset: args.event.offset,
-          type: args.event.type,
-          fields: {
-            success: args.event.payload.error == null,
-            durationMs: args.event.payload.durationMs,
-          },
-          valueFields: {
-            result: args.event.payload.result,
-            ...(args.event.payload.error == null ? {} : { error: args.event.payload.error }),
-            ...(args.event.payload.logs == null || args.event.payload.logs.length === 0
-              ? {}
-              : { logs: args.event.payload.logs }),
-          },
-        }),
-        triggerLlmRequest: { behaviour: "dont-trigger-request" },
+        content: [
+          args.intro,
+          eventBlock({
+            offset: args.event.offset,
+            type: args.event.type,
+            fields: {
+              success: args.event.payload.error == null,
+              durationMs: args.event.payload.durationMs,
+            },
+            valueFields: {
+              ...(args.event.payload.result === undefined
+                ? {}
+                : { result: args.event.payload.result }),
+              ...(args.event.payload.error == null ? {} : { error: args.event.payload.error }),
+              ...(args.event.payload.logs == null || args.event.payload.logs.length === 0
+                ? {}
+                : { logs: args.event.payload.logs }),
+            },
+          }),
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
+        triggerLlmRequest: { behaviour: "after-current-request" },
       },
     },
+  });
+}
+
+async function appendCodemodeResultFollowUp(args: {
+  event: Extract<CodemodeConsumedEvent, { type: "events.iterate.com/codemode/result-added" }>;
+  previousState: CodemodeState;
+  streamApi: CodemodeStreamApi;
+}) {
+  if (!codemodeResultNeedsAgentTurn(args.event.payload)) return;
+  // The reducer has already spent budget in `state`; previousState is the
+  // durable budget that was available before this result landed.
+  if (args.previousState.automaticContinuationsUsed < CODEMODE_AUTOMATIC_CONTINUATION_LIMIT) {
+    await appendCodemodeResultAsAgentInput({
+      event: args.event,
+      streamApi: args.streamApi,
+      purpose: "result-to-agent-input",
+    });
+    return;
+  }
+  if (args.previousState.finalWrapUpRequested) return;
+  await appendCodemodeResultAsAgentInput({
+    event: args.event,
+    streamApi: args.streamApi,
+    purpose: "result-to-final-wrap-up",
+    intro: `Automatic codemode continuation limit reached after ${CODEMODE_AUTOMATIC_CONTINUATION_LIMIT} turns. Use this final result to summarize current state and ask the user whether to continue.`,
   });
 }
 
@@ -274,11 +310,12 @@ async function appendCodemodeResultAsAgentInput(args: {
  * frontend-safe Agent reducer, and the hook makes a local decision from that
  * embedded state.
  */
-async function appendIdleStatusIfAgentHasNoQueuedTriggers(args: {
+async function appendIdleStatusIfAgentIsQuiescent(args: {
   event: Extract<CodemodeConsumedEvent, { type: "events.iterate.com/codemode/result-added" }>;
   state: CodemodeState;
   streamApi: CodemodeStreamApi;
 }) {
+  if (args.state.agentProcessor.currentRequest != null) return;
   if (args.state.agentProcessor.pendingTriggerCount > 0) return;
 
   await args.streamApi.append({

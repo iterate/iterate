@@ -21,9 +21,10 @@ import { standardProcessorBehavior } from "../core/standard-processor-behavior.t
  * what keeps the wire log single-copy.
  */
 export const CODEMODE_PRIMER_IDEMPOTENCY_KEY = "iterate-agent:codemode-primer";
+export const CODEMODE_AUTOMATIC_CONTINUATION_LIMIT = 10;
 
 export const CODEMODE_WEBCHAT_PROVIDER_TYPES = `declare const webchat: {
-  sendMessage(args: { message: string }): Promise<{ ok: true }>;
+  sendMessage(args: { message: string }): Promise<void>;
 };`;
 
 /**
@@ -39,7 +40,7 @@ export const CODEMODE_WEBCHAT_PROVIDER_TYPES = `declare const webchat: {
  */
 export const CODEMODE_CHAT_RESPONSE_SYSTEM_PROMPT = `Codemode is mandatory for user-visible chat responses in this stream.
 
-When you want to reply to a web chat user, respond with exactly one fenced JavaScript block using \`\`\`js and no surrounding prose. The body must be a single async arrow function. Call \`webchat.sendMessage({ message })\` from that function. Do not rely on assistant prose being shown to the user for chat replies.`;
+When you want to reply to a web chat user, respond with exactly one fenced JavaScript block using \`\`\`js and no surrounding prose. The body must be a single async arrow function. Call \`webchat.sendMessage({ message })\` for user-visible replies; it returns void, so omit \`return\` to stop after side effects. Return any non-\`undefined\` value only when you want the result shown back to you and another LLM turn triggered. Use \`Promise.all\` for independent concurrent tool calls. Use \`fetch\` when you need internet access.`;
 
 export const CODEMODE_PRIMER_TEXT = `${CODEMODE_CHAT_RESPONSE_SYSTEM_PROMPT}
 
@@ -79,6 +80,8 @@ export const CodemodeProcessorContract = defineProcessorContract({
      */
     agentProcessor: AgentProcessorContract.stateSchema.default(initialAgentProcessorState),
     hasAppendedCodemodePrompt: z.boolean().default(false),
+    automaticContinuationsUsed: z.number().int().nonnegative().default(0),
+    finalWrapUpRequested: z.boolean().default(false),
     toolProviders: z
       .record(
         z.string(),
@@ -164,6 +167,9 @@ export const CodemodeProcessorContract = defineProcessorContract({
         if (event.idempotencyKey === CODEMODE_PRIMER_IDEMPOTENCY_KEY) {
           return { ...nextState, hasAppendedCodemodePrompt: true };
         }
+        if (isExternalAgentTurn(event)) {
+          return { ...nextState, automaticContinuationsUsed: 0, finalWrapUpRequested: false };
+        }
         break;
       case "events.iterate.com/agent/output-added":
         break;
@@ -177,8 +183,9 @@ export const CodemodeProcessorContract = defineProcessorContract({
       case "events.iterate.com/agent/status-updated":
         break;
       case "events.iterate.com/codemode/block-added":
-      case "events.iterate.com/codemode/result-added":
         break;
+      case "events.iterate.com/codemode/result-added":
+        return advanceContinuationBudget(nextState, event.payload);
       case "events.iterate.com/codemode/tool-provider-config-updated": {
         const { slug, executeCallable, getTypesCallable } = event.payload;
         if (executeCallable === null) {
@@ -217,3 +224,30 @@ export function reduceCodemodeEvents(args: {
 }
 
 export type CodemodeState = z.infer<typeof CodemodeProcessorContract.stateSchema>;
+
+export function codemodeResultNeedsAgentTurn(payload: { result: unknown; error?: string }) {
+  return payload.error != null || payload.result !== undefined;
+}
+
+function isExternalAgentTurn(event: {
+  payload: { triggerLlmRequest?: { behaviour: string } };
+  idempotencyKey?: string;
+}) {
+  return (
+    event.payload.triggerLlmRequest?.behaviour !== "dont-trigger-request" &&
+    !event.idempotencyKey?.startsWith("stream-processor:codemode:derived:")
+  );
+}
+
+function advanceContinuationBudget<
+  State extends {
+    automaticContinuationsUsed: number;
+    finalWrapUpRequested: boolean;
+  },
+>(state: State, payload: { result: unknown; error?: string }): State {
+  if (!codemodeResultNeedsAgentTurn(payload)) return state;
+  if (state.automaticContinuationsUsed < CODEMODE_AUTOMATIC_CONTINUATION_LIMIT) {
+    return { ...state, automaticContinuationsUsed: state.automaticContinuationsUsed + 1 };
+  }
+  return state.finalWrapUpRequested ? state : { ...state, finalWrapUpRequested: true };
+}
