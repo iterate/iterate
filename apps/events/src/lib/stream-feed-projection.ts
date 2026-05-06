@@ -28,7 +28,6 @@ import { buildAgentSemanticInsertions } from "~/lib/agent-stream-reducer.ts";
  * cap so normal streams stay one group per run; only pathological runs flush early.
  */
 const MAX_SAME_TYPE_RAW_GROUP = 50_000;
-const CORE_LOG_ADDED_TYPE = "events.iterate.com/core/log-added";
 
 export function projectWireToFeed(
   events: readonly Event[],
@@ -295,16 +294,10 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     };
   }
 
-  if (
-    event.type === STREAM_ERROR_OCCURRED_TYPE ||
-    (event.type === CORE_LOG_ADDED_TYPE && readStringPayloadField(event, "level") === "error")
-  ) {
+  if (event.type === STREAM_ERROR_OCCURRED_TYPE) {
     return {
       kind: "stream-error-occurred",
-      message:
-        event.type === STREAM_ERROR_OCCURRED_TYPE
-          ? ErrorOccurredEvent.parse(event).payload.message
-          : (readStringPayloadField(event, "message") ?? "Stream error"),
+      message: ErrorOccurredEvent.parse(event).payload.message,
       timestamp: getTimestamp(event.createdAt),
       raw: event,
     };
@@ -367,17 +360,6 @@ function getStreamMetadataUpdatedEventMetadata(event: Event) {
 function getStreamSubscriptionConfiguredSubscriber(event: Event) {
   const parsed = StreamSubscriptionConfiguredEvent.safeParse(event);
   return parsed.success ? parsed.data.payload : null;
-}
-
-function readStringPayloadField(event: Event, key: string) {
-  const value = readPayloadRecord(event)?.[key];
-  return typeof value === "string" ? value : null;
-}
-
-function readPayloadRecord(event: Event) {
-  return event.payload != null && typeof event.payload === "object" && !Array.isArray(event.payload)
-    ? (event.payload as Record<string, unknown>)
-    : null;
 }
 
 export function createGroupedOrSingleEvent(

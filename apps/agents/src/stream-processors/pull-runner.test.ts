@@ -24,7 +24,7 @@ const ThrowingProcessorContract = defineProcessorContract({
   processorDeps: [AgentProcessorContract],
   events: {},
   consumes: ["events.iterate.com/agent/output-added"],
-  emits: ["events.iterate.com/core/log-added"],
+  emits: ["events.iterate.com/core/error-occurred"],
   reduce: ({ state }) => state,
 });
 
@@ -184,7 +184,7 @@ describe("runPullProcessor", () => {
     });
   });
 
-  it("appends a core error log when a pull processor afterAppend throws", async () => {
+  it("appends a structured core error when a pull processor afterAppend throws", async () => {
     const appended: StreamEventInput[] = [];
     const processor = implementProcessor(ThrowingProcessorContract, {
       afterAppend: () => {
@@ -219,21 +219,24 @@ describe("runPullProcessor", () => {
 
     expect(appended).toMatchObject([
       {
-        type: "events.iterate.com/core/log-added",
+        type: "events.iterate.com/core/error-occurred",
         idempotencyKey: "pull-processor-runner:throwaway-proof:after-append-error:/agents/test:7",
+        metadata: {
+          provenance: {
+            processor: {
+              slug: "throwaway-proof",
+              version: "0.0.0",
+            },
+            whileProcessingEvent: {
+              streamPath: "/agents/test",
+              offset: 7,
+              type: "events.iterate.com/agent/output-added",
+            },
+          },
+        },
         payload: {
-          level: "error",
           message:
             "Processor throwaway-proof@0.0.0 afterAppend failed: throwaway pull subscriber boom",
-          processor: {
-            slug: "throwaway-proof",
-            version: "0.0.0",
-          },
-          whileProcessingEvent: {
-            streamPath: "/agents/test",
-            offset: 7,
-            type: "events.iterate.com/agent/output-added",
-          },
           error: {
             name: "Error",
             message: "throwaway pull subscriber boom",

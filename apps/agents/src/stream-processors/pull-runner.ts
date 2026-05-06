@@ -12,7 +12,7 @@ import {
 } from "@iterate-com/shared/stream-processors";
 import {
   CoreProcessorContract,
-  CoreProcessorLogAddedEventType,
+  CoreProcessorErrorOccurredEventType,
 } from "@iterate-com/shared/stream-processors/core/contract";
 import type { z } from "zod";
 
@@ -59,7 +59,7 @@ export async function runPullProcessor<Contract extends PullRunnerContract<Contr
     saveStoredProcessorState: args.storage.save,
     streamApi: args.streamApi,
     afterAppendError: async ({ error, reduction }) => {
-      await appendAfterAppendErrorLog({
+      await appendAfterAppendError({
         error,
         event: reduction.event,
         processor: args.processor,
@@ -85,7 +85,7 @@ export async function runPullProcessor<Contract extends PullRunnerContract<Contr
         saveStoredProcessorState: args.storage.save,
         streamApi: args.streamApi,
         afterAppendError: async ({ error, reduction }) => {
-          await appendAfterAppendErrorLog({
+          await appendAfterAppendError({
             error,
             event: reduction.event,
             processor: args.processor,
@@ -132,7 +132,7 @@ export function createMemoryPullProcessorStorage<
   };
 }
 
-async function appendAfterAppendErrorLog<Contract extends PullRunnerContract<Contract>>(args: {
+async function appendAfterAppendError<Contract extends PullRunnerContract<Contract>>(args: {
   error: unknown;
   event: StreamEvent;
   processor: Processor<Contract>;
@@ -143,7 +143,7 @@ async function appendAfterAppendErrorLog<Contract extends PullRunnerContract<Con
 
   await streamApi.append({
     event: {
-      type: CoreProcessorLogAddedEventType,
+      type: CoreProcessorErrorOccurredEventType,
       idempotencyKey: [
         "pull-processor-runner",
         args.processor.contract.slug,
@@ -151,18 +151,21 @@ async function appendAfterAppendErrorLog<Contract extends PullRunnerContract<Con
         args.event.streamPath,
         String(args.event.offset),
       ].join(":"),
+      metadata: {
+        provenance: {
+          processor: {
+            slug: args.processor.contract.slug,
+            version: args.processor.contract.version,
+          },
+          whileProcessingEvent: {
+            streamPath: args.event.streamPath,
+            offset: args.event.offset,
+            type: args.event.type,
+          },
+        },
+      },
       payload: {
-        level: "error",
         message: `Processor ${args.processor.contract.slug}@${args.processor.contract.version} afterAppend failed: ${serializedError.message}`,
-        processor: {
-          slug: args.processor.contract.slug,
-          version: args.processor.contract.version,
-        },
-        whileProcessingEvent: {
-          streamPath: args.event.streamPath,
-          offset: args.event.offset,
-          type: args.event.type,
-        },
         error: serializedError,
       },
     },

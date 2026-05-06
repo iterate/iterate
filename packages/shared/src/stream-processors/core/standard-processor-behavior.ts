@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { EventCatalog, StreamEventInput } from "../stream-processor.ts";
 import {
   buildProcessorRegisteredEvent,
-  CoreProcessorLogAddedEventType,
+  CoreProcessorErrorOccurredEventType,
   CoreProcessorContract,
   CoreProcessorRegisteredEventType,
 } from "./contract.ts";
@@ -65,7 +65,10 @@ export const standardProcessorBehavior = {
   initialState: {},
   processorDeps: [CoreProcessorContract],
   consumes: ["events.iterate.com/core/stream-processor-registered"],
-  emits: ["events.iterate.com/core/stream-processor-registered", CoreProcessorLogAddedEventType],
+  emits: [
+    "events.iterate.com/core/stream-processor-registered",
+    CoreProcessorErrorOccurredEventType,
+  ],
 
   reduce<const State extends { hasRegisteredCurrentVersion: boolean }>(args: {
     state: State;

@@ -330,16 +330,19 @@ describe("clean stream view reducers", () => {
     ]);
   });
 
-  test("raw-pretty projects error-level core logs into feed and input slots", () => {
+  test("raw-pretty projects structured core errors into feed and input slots", () => {
     const viewState = processEventsWithViewReducer({
       reducer: rawPrettyEventsStreamViewReducer,
       events: [
         event({
           offset: 1,
-          type: "events.iterate.com/core/log-added",
+          type: STREAM_ERROR_OCCURRED_TYPE,
           payload: {
-            level: "error",
             message: "Processor openai-ws@0.1.0 afterAppend failed: missing key",
+            error: {
+              name: "Error",
+              message: "missing key",
+            },
           },
         }),
       ],

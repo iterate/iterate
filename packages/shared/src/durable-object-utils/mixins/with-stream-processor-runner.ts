@@ -15,7 +15,7 @@ import {
 } from "../../stream-processors/stream-processor.ts";
 import {
   CoreProcessorContract,
-  CoreProcessorLogAddedEventType,
+  CoreProcessorErrorOccurredEventType,
 } from "../../stream-processors/core/contract.ts";
 import type {
   Constructor,
@@ -230,7 +230,7 @@ export function withStreamProcessorRunner<
           streamApiForEvent: (event) =>
             this.streamProcessorRunnerStreamApi({ processingEvent: event }),
           afterAppendError: async ({ error, reduction }) => {
-            await this.appendStreamProcessorAfterAppendErrorLog({
+            await this.appendStreamProcessorAfterAppendError({
               error,
               event: reduction.event,
               processor,
@@ -262,7 +262,7 @@ export function withStreamProcessorRunner<
           streamApiForEvent: (event) =>
             this.streamProcessorRunnerStreamApi({ processingEvent: event }),
           afterAppendError: async ({ error, reduction }) => {
-            await this.appendStreamProcessorAfterAppendErrorLog({
+            await this.appendStreamProcessorAfterAppendError({
               error,
               event: reduction.event,
               processor,
@@ -347,7 +347,7 @@ export function withStreamProcessorRunner<
         });
       }
 
-      private async appendStreamProcessorAfterAppendErrorLog(args: {
+      private async appendStreamProcessorAfterAppendError(args: {
         error: unknown;
         event: StreamEvent;
         processor: Processor<Contract>;
@@ -359,7 +359,7 @@ export function withStreamProcessorRunner<
 
         await streamApi.append({
           event: {
-            type: CoreProcessorLogAddedEventType,
+            type: CoreProcessorErrorOccurredEventType,
             idempotencyKey: [
               "stream-processor-runner",
               args.processor.contract.slug,
@@ -367,18 +367,21 @@ export function withStreamProcessorRunner<
               args.event.streamPath,
               String(args.event.offset),
             ].join(":"),
+            metadata: {
+              provenance: {
+                processor: {
+                  slug: args.processor.contract.slug,
+                  version: args.processor.contract.version,
+                },
+                whileProcessingEvent: {
+                  streamPath: args.event.streamPath,
+                  offset: args.event.offset,
+                  type: args.event.type,
+                },
+              },
+            },
             payload: {
-              level: "error",
               message: `Processor ${args.processor.contract.slug}@${args.processor.contract.version} afterAppend failed: ${serializedError.message}`,
-              processor: {
-                slug: args.processor.contract.slug,
-                version: args.processor.contract.version,
-              },
-              whileProcessingEvent: {
-                streamPath: args.event.streamPath,
-                offset: args.event.offset,
-                type: args.event.type,
-              },
               error: serializedError,
             },
           },

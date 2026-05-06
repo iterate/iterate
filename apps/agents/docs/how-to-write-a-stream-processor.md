@@ -294,6 +294,11 @@ Provider processors may also append provider-owned trace events, such as
 transcript, replay, and debugging. They do not replace the agent-level response
 events the provider owes back to the stream.
 
+Runner-owned failures use `events.iterate.com/core/error-occurred`. Keep that
+payload small: a human-readable `message` and, when available, a serialized
+`error`. Processor identity, triggering event, and similar provenance belongs in
+event metadata, not in the error event schema.
+
 ## Reducer Shape
 
 Reducers and implementation hooks should branch on `event.type` with a
