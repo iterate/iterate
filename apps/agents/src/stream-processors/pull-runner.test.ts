@@ -88,8 +88,7 @@ describe("runPullProcessor", () => {
       },
       {
         type: "events.iterate.com/codemode/block-added",
-        idempotencyKey:
-          "stream-processor:codemode:derived:assistant-output-to-block:/agents/test:2",
+        idempotencyKey: "stream-processor:codemode:derived:assistant-output-to-block:2",
         payload: {
           script: "async () => {\n  return 1;\n}",
         },
