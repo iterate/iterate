@@ -957,9 +957,14 @@ function renderFeedItem(item: EventsStreamBuiltInElement) {
   if (item.type === "message") return renderMessageItem(item.props);
   if (item.type === "prompt-context") return renderPromptContextItem(item.props);
   if (item.type === "agent-output") return renderAgentOutputItem(item.props);
+  if (item.type === "system-prompt") return renderSystemPromptItem(item.props);
+  if (item.type === "llm-request-boundary") return renderLlmRequestBoundaryItem(item.props);
   if (item.type === "lifecycle") return renderLifecycleItem(item.props);
   if (item.type === "error") return renderErrorItem(item.props);
   if (item.type === "child-stream-created") return renderChildStreamItem(item.props);
+  if (item.type === "metadata-updated") return renderMetadataUpdatedItem(item.props);
+  if (item.type === "codemode-block") return renderCodemodeBlockItem(item.props);
+  if (item.type === "codemode-result") return renderCodemodeResultItem(item.props);
   if (item.type === "grouped-raw-event") return renderGroupedRawItem(item.props);
   return [];
 }
@@ -1027,17 +1032,59 @@ function renderAgentOutputItem(props: { text: string; timestamp: number }) {
   ];
 }
 
+function renderSystemPromptItem(props: { text: string; timestamp: number }) {
+  return renderSimpleBlock({
+    label: `⚙ System prompt updated · ${formatTime(props.timestamp)}`,
+    text: props.text,
+    color: P.textSubdued,
+    maxLines: 12,
+  });
+}
+
+function renderLlmRequestBoundaryItem(props: {
+  phase: "started" | "ended";
+  outcome?: "completed" | "failed" | "cancelled";
+  requestId: string;
+  timestamp: number;
+}) {
+  const phaseLabel =
+    props.phase === "started"
+      ? "LLM request started"
+      : props.outcome === "cancelled"
+        ? "LLM request cancelled"
+        : props.outcome === "failed"
+          ? "LLM request failed"
+          : "LLM request completed";
+  const color =
+    props.phase === "started"
+      ? P.warning
+      : props.outcome === "failed" || props.outcome === "cancelled"
+        ? P.danger
+        : P.textDim;
+  return renderTimelineRule({
+    label: `${phaseLabel} · ${props.requestId} · ${formatTime(props.timestamp)}`,
+    color,
+  });
+}
+
 /**
  * Render a lifecycle event as a centered horizontal rule with label pill.
  * Matches the web renderer's TimelineLine: ──── label ────
  */
 function renderLifecycleItem(props: { label: string; timestamp: number }) {
+  return renderTimelineRule({
+    label: `${props.label} · ${formatTime(props.timestamp)}`,
+    color: P.textDim,
+  });
+}
+
+function renderTimelineRule(args: { label: string; color: string }) {
   const width = getFeedContentWidth();
-  const label = ` ${props.label} · ${formatTime(props.timestamp)} `;
+  const label = ` ${args.label} `;
   const lineLen = Math.max(0, width - label.length);
   const left = "─".repeat(Math.floor(lineLen / 2));
   const right = "─".repeat(Math.ceil(lineLen / 2));
-  return [fg(P.textDim)(`${left}${label}${right}\n`)];
+  return [fg(args.color)(`${left}${label}${right}\n`)];
 }
 
 /**
@@ -1045,11 +1092,11 @@ function renderLifecycleItem(props: { label: string; timestamp: number }) {
  * ⚠ Error: message · timestamp
  */
 function renderErrorItem(props: { message: string; timestamp: number }) {
-  const width = getFeedContentWidth();
-  const text = `⚠ Error: ${props.message}`;
-  const time = formatTime(props.timestamp);
-  const padded = `${text}${" ".repeat(Math.max(1, width - text.length - time.length))}${time}`;
-  return [fg(P.bg)("\n"), fg(P.danger)(`${padded}\n`)];
+  return renderSimpleBlock({
+    label: `⚠ Error · ${formatTime(props.timestamp)}`,
+    text: props.message,
+    color: P.danger,
+  });
 }
 
 /**
@@ -1062,6 +1109,70 @@ function renderChildStreamItem(props: { childPath: string; timestamp: number }) 
   const time = formatTime(props.timestamp);
   const padded = `${text}${" ".repeat(Math.max(1, width - text.length - time.length))}${time}`;
   return [fg(P.textSubdued)(`${padded}\n`)];
+}
+
+function renderMetadataUpdatedItem(props: {
+  path: string;
+  metadata: Record<string, unknown>;
+  timestamp: number;
+}) {
+  return renderSimpleBlock({
+    label: `Metadata updated · ${props.path} · ${formatTime(props.timestamp)}`,
+    text: stringifyYaml(props.metadata).trimEnd(),
+    color: P.textSubdued,
+    maxLines: 12,
+  });
+}
+
+function renderCodemodeBlockItem(props: { script: string; timestamp: number }) {
+  return renderSimpleBlock({
+    label: `Codemode block · ${formatTime(props.timestamp)}`,
+    text: props.script,
+    color: P.textSubdued,
+    maxLines: 18,
+  });
+}
+
+function renderCodemodeResultItem(props: {
+  success: boolean;
+  result: unknown;
+  error?: string;
+  logs: string[];
+  durationMs: number;
+  timestamp: number;
+}) {
+  const details = [
+    stringifyYaml(props.result).trimEnd(),
+    props.error == null ? undefined : `error:\n${props.error}`,
+    props.logs.length === 0 ? undefined : `logs:\n${props.logs.join("\n")}`,
+  ].filter(Boolean);
+  return renderSimpleBlock({
+    label: `Codemode ${props.success ? "succeeded" : "failed"} · ${props.durationMs}ms · ${formatTime(
+      props.timestamp,
+    )}`,
+    text: details.join("\n\n"),
+    color: props.success ? P.textSubdued : P.danger,
+    maxLines: 18,
+  });
+}
+
+function renderSimpleBlock(args: {
+  label: string;
+  text: string;
+  color: string;
+  maxLines?: number;
+}) {
+  const width = getFeedContentWidth();
+  const lines = args.text.split("\n").flatMap((line) => wrapLine(line, width - 2));
+  const visibleLines = args.maxLines == null ? lines : lines.slice(0, args.maxLines);
+  const hiddenCount = lines.length - visibleLines.length;
+
+  return [
+    fg(P.bg)("\n"),
+    bold(fg(args.color)(`${args.label}\n`)),
+    ...visibleLines.map((line) => fg(args.color)(`  ${line}\n`)),
+    ...(hiddenCount > 0 ? [fg(P.textDim)(`  … ${hiddenCount} more lines\n`)] : []),
+  ];
 }
 
 /**
