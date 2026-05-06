@@ -37,7 +37,7 @@ export const AgentChatProcessorContract = defineProcessorContract({
         content: z.string(),
       }),
     },
-    "events.iterate.com/agent-chat/agent-response-added": {
+    "events.iterate.com/agent-chat/assistant-response-added": {
       description: "User-visible chat response emitted by a tool call.",
       payloadSchema: z.object({
         channel: AgentChatChannel,
@@ -48,7 +48,7 @@ export const AgentChatProcessorContract = defineProcessorContract({
   consumes: [
     ...standardProcessorBehavior.consumes,
     "events.iterate.com/agent-chat/user-message-added",
-    "events.iterate.com/agent-chat/agent-response-added",
+    "events.iterate.com/agent-chat/assistant-response-added",
   ],
   emits: [...standardProcessorBehavior.emits, "events.iterate.com/agent/input-added"],
   reduce({ contract, state, event }) {
@@ -61,7 +61,7 @@ export const AgentChatProcessorContract = defineProcessorContract({
     switch (event.type) {
       case CoreProcessorRegisteredEventType:
       case "events.iterate.com/agent-chat/user-message-added":
-      case "events.iterate.com/agent-chat/agent-response-added":
+      case "events.iterate.com/agent-chat/assistant-response-added":
         return nextState;
       default:
         return assertNever(event);

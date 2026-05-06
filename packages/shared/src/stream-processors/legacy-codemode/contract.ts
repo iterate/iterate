@@ -109,7 +109,7 @@ export const CodemodeProcessorContract = defineProcessorContract({
     ...standardProcessorBehavior.emits,
     "events.iterate.com/agent/input-added",
     "events.iterate.com/agent/status-updated",
-    "events.iterate.com/agent-chat/agent-response-added",
+    "events.iterate.com/agent-chat/assistant-response-added",
     "events.iterate.com/codemode/block-added",
     "events.iterate.com/codemode/result-added",
   ],

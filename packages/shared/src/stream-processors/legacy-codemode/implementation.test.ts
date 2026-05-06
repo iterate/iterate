@@ -136,7 +136,7 @@ describe("createCodemodeProcessor", () => {
     ]);
     expect(appended).toEqual([
       {
-        type: "events.iterate.com/agent-chat/agent-response-added",
+        type: "events.iterate.com/agent-chat/assistant-response-added",
         idempotencyKey: "stream-processor:codemode:derived:webchat-send-message:1:/agents/test:12",
         payload: { channel: "web", message: "hello from fake executor" },
       },

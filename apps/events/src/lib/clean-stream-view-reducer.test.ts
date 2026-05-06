@@ -75,7 +75,7 @@ describe("clean stream view reducers", () => {
       events: [
         event({
           offset: 1,
-          type: "events.iterate.com/agent-chat/agent-response-added",
+          type: "events.iterate.com/agent-chat/assistant-response-added",
           payload: { channel: "web", message },
         }),
       ],
@@ -85,7 +85,7 @@ describe("clean stream view reducers", () => {
       {
         type: "grouped-raw-event",
         props: {
-          eventType: "events.iterate.com/agent-chat/agent-response-added",
+          eventType: "events.iterate.com/agent-chat/assistant-response-added",
           count: 1,
         },
       },

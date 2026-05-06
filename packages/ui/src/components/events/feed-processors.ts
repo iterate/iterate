@@ -407,7 +407,7 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
     ];
   }
 
-  if (event.type === "events.iterate.com/agent-chat/agent-response-added") {
+  if (event.type === "events.iterate.com/agent-chat/assistant-response-added") {
     const message = readStringPayloadField(event, "message");
     if (message == null) return [];
     return [

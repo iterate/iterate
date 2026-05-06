@@ -90,7 +90,7 @@ async function runScenario(args: {
   const webchatEvent = await e2e.events.waitForEvent(
     streamPath,
     (event) => {
-      if (event.type !== "events.iterate.com/agent-chat/agent-response-added") return false;
+      if (event.type !== "events.iterate.com/agent-chat/assistant-response-added") return false;
       const payload = event.payload as { message?: string };
       return typeof payload.message === "string" && payload.message.trim().length > 0;
     },

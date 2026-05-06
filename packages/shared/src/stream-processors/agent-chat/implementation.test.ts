@@ -54,7 +54,7 @@ describe("createAgentChatProcessor", () => {
 
     await processor.implementation.afterAppend?.({
       event: consumedAgentChatEvent({
-        type: "events.iterate.com/agent-chat/agent-response-added",
+        type: "events.iterate.com/agent-chat/assistant-response-added",
         payload: { channel: "web", message: "hello back" },
         offset: 43,
       }),
@@ -69,7 +69,7 @@ describe("createAgentChatProcessor", () => {
       idempotencyKey: "stream-processor:agent-chat:derived:render-response:/agents/test:43",
       payload: {
         content:
-          "```yaml\nevent:\n  offset: 43\n  type: events.iterate.com/agent-chat/agent-response-added\n  channel: web\n  message: |-\n    hello back\n```",
+          "```yaml\nevent:\n  offset: 43\n  type: events.iterate.com/agent-chat/assistant-response-added\n  channel: web\n  message: |-\n    hello back\n```",
         triggerLlmRequest: { behaviour: "dont-trigger-request" },
       },
     });

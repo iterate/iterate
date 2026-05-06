@@ -44,7 +44,7 @@ async function main(): Promise<void> {
     });
 
     const matchingResponse = lastEvents.find((event) => {
-      if (event.type !== "events.iterate.com/agent-chat/agent-response-added") return false;
+      if (event.type !== "events.iterate.com/agent-chat/assistant-response-added") return false;
       if (!isRecord(event.payload)) return false;
       return event.payload.message === options.expected;
     });
@@ -71,7 +71,7 @@ async function main(): Promise<void> {
 
   throw new Error(
     [
-      `Timed out after ${options.timeoutMs}ms waiting for events.iterate.com/agent-chat/agent-response-added with payload.message=${JSON.stringify(options.expected)}.`,
+      `Timed out after ${options.timeoutMs}ms waiting for events.iterate.com/agent-chat/assistant-response-added with payload.message=${JSON.stringify(options.expected)}.`,
       `Stream path: ${options.streamPath}`,
       `Last event types: ${lastEvents.map((event) => event.type).join(", ") || "(none)"}`,
     ].join("\n"),

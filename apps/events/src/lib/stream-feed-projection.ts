@@ -159,7 +159,7 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     };
   }
 
-  if (event.type === "events.iterate.com/agent-chat/agent-response-added") {
+  if (event.type === "events.iterate.com/agent-chat/assistant-response-added") {
     const payload = event.payload as { message?: unknown };
     const message = typeof payload.message === "string" ? payload.message : null;
     if (message == null) return null;

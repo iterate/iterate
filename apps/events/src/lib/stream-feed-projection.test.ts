@@ -137,7 +137,7 @@ describe("projectWireToFeed", () => {
       }),
       createEvent({
         offset: 2,
-        type: "events.iterate.com/agent-chat/agent-response-added",
+        type: "events.iterate.com/agent-chat/assistant-response-added",
         payload: { channel: "web", message: assistantMessage },
       }),
       createEvent({

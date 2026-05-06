@@ -212,7 +212,7 @@ async function executeCodemodeBlock(args: {
         const { message } = parseWebchatSendMessageArgs(rawArgs);
         await args.streamApi.append({
           event: {
-            type: "events.iterate.com/agent-chat/agent-response-added",
+            type: "events.iterate.com/agent-chat/assistant-response-added",
             idempotencyKey: buildDerivedIdempotencyKey({
               slug: CodemodeProcessorContract.slug,
               purpose: `webchat-send-message:${webchatMessageSeq}`,

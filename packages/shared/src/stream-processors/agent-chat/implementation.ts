@@ -54,7 +54,7 @@ export function createAgentChatProcessor() {
             },
           });
           return;
-        case "events.iterate.com/agent-chat/agent-response-added":
+        case "events.iterate.com/agent-chat/assistant-response-added":
           await appendEventTypeExplanation({ eventType: event.type, streamApi });
           await streamApi.append({
             event: {
@@ -105,7 +105,7 @@ function eventTypeExplanation(eventType: string): string {
     return "First `events.iterate.com/agent-chat/user-message-added` event. This represents a message received from a chat user.";
   }
 
-  return "First `events.iterate.com/agent-chat/agent-response-added` event. This represents a message sent by codemode through a chat response tool.";
+  return "First `events.iterate.com/agent-chat/assistant-response-added` event. This represents a message sent by codemode through a chat response tool.";
 }
 
 function eventBlock(args: {
