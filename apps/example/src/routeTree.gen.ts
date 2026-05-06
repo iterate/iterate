@@ -17,12 +17,14 @@ import { Route as ApiConfettiRouteImport } from './routes/api.confetti'
 import { Route as ApiSplatRouteImport } from './routes/api.$'
 import { Route as AppThingsRouteImport } from './routes/_app/things'
 import { Route as AppLogStreamRouteImport } from './routes/_app/log-stream'
-import { Route as AppDurableObjectRouteImport } from './routes/_app/durable-object'
+import { Route as AppDurableObjectsRouteImport } from './routes/_app/durable-objects'
 import { Route as AppDebugRouteImport } from './routes/_app/debug'
+import { Route as AppCountersRouteImport } from './routes/_app/counters'
 import { Route as AppConfettiRouteImport } from './routes/_app/confetti'
 import { Route as AppThingsIndexRouteImport } from './routes/_app/things.index'
 import { Route as ApiOrpcSplatRouteImport } from './routes/api.orpc.$'
 import { Route as AppThingsThingIdRouteImport } from './routes/_app/things.$thingId'
+import { Route as AppCountersNameRouteImport } from './routes/_app/counters.$name'
 
 const AppRoute = AppRouteImport.update({
   id: '/_app',
@@ -63,14 +65,19 @@ const AppLogStreamRoute = AppLogStreamRouteImport.update({
   path: '/log-stream',
   getParentRoute: () => AppRoute,
 } as any)
-const AppDurableObjectRoute = AppDurableObjectRouteImport.update({
-  id: '/durable-object',
-  path: '/durable-object',
+const AppDurableObjectsRoute = AppDurableObjectsRouteImport.update({
+  id: '/durable-objects',
+  path: '/durable-objects',
   getParentRoute: () => AppRoute,
 } as any)
 const AppDebugRoute = AppDebugRouteImport.update({
   id: '/debug',
   path: '/debug',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppCountersRoute = AppCountersRouteImport.update({
+  id: '/counters',
+  path: '/counters',
   getParentRoute: () => AppRoute,
 } as any)
 const AppConfettiRoute = AppConfettiRouteImport.update({
@@ -93,18 +100,25 @@ const AppThingsThingIdRoute = AppThingsThingIdRouteImport.update({
   path: '/$thingId',
   getParentRoute: () => AppThingsRoute,
 } as any)
+const AppCountersNameRoute = AppCountersNameRouteImport.update({
+  id: '/$name',
+  path: '/$name',
+  getParentRoute: () => AppCountersRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/confetti': typeof AppConfettiRoute
+  '/counters': typeof AppCountersRouteWithChildren
   '/debug': typeof AppDebugRoute
-  '/durable-object': typeof AppDurableObjectRoute
+  '/durable-objects': typeof AppDurableObjectsRoute
   '/log-stream': typeof AppLogStreamRoute
   '/things': typeof AppThingsRouteWithChildren
   '/api/$': typeof ApiSplatRoute
   '/api/confetti': typeof ApiConfettiRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
+  '/counters/$name': typeof AppCountersNameRoute
   '/things/$thingId': typeof AppThingsThingIdRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/things/': typeof AppThingsIndexRoute
@@ -112,13 +126,15 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/confetti': typeof AppConfettiRoute
+  '/counters': typeof AppCountersRouteWithChildren
   '/debug': typeof AppDebugRoute
-  '/durable-object': typeof AppDurableObjectRoute
+  '/durable-objects': typeof AppDurableObjectsRoute
   '/log-stream': typeof AppLogStreamRoute
   '/api/$': typeof ApiSplatRoute
   '/api/confetti': typeof ApiConfettiRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
+  '/counters/$name': typeof AppCountersNameRoute
   '/things/$thingId': typeof AppThingsThingIdRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/things': typeof AppThingsIndexRoute
@@ -128,14 +144,16 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/_app': typeof AppRouteWithChildren
   '/_app/confetti': typeof AppConfettiRoute
+  '/_app/counters': typeof AppCountersRouteWithChildren
   '/_app/debug': typeof AppDebugRoute
-  '/_app/durable-object': typeof AppDurableObjectRoute
+  '/_app/durable-objects': typeof AppDurableObjectsRoute
   '/_app/log-stream': typeof AppLogStreamRoute
   '/_app/things': typeof AppThingsRouteWithChildren
   '/api/$': typeof ApiSplatRoute
   '/api/confetti': typeof ApiConfettiRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
+  '/_app/counters/$name': typeof AppCountersNameRoute
   '/_app/things/$thingId': typeof AppThingsThingIdRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/_app/things/': typeof AppThingsIndexRoute
@@ -145,14 +163,16 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/confetti'
+    | '/counters'
     | '/debug'
-    | '/durable-object'
+    | '/durable-objects'
     | '/log-stream'
     | '/things'
     | '/api/$'
     | '/api/confetti'
     | '/api/orpc-ws'
     | '/posthog-proxy/$'
+    | '/counters/$name'
     | '/things/$thingId'
     | '/api/orpc/$'
     | '/things/'
@@ -160,13 +180,15 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/confetti'
+    | '/counters'
     | '/debug'
-    | '/durable-object'
+    | '/durable-objects'
     | '/log-stream'
     | '/api/$'
     | '/api/confetti'
     | '/api/orpc-ws'
     | '/posthog-proxy/$'
+    | '/counters/$name'
     | '/things/$thingId'
     | '/api/orpc/$'
     | '/things'
@@ -175,14 +197,16 @@ export interface FileRouteTypes {
     | '/'
     | '/_app'
     | '/_app/confetti'
+    | '/_app/counters'
     | '/_app/debug'
-    | '/_app/durable-object'
+    | '/_app/durable-objects'
     | '/_app/log-stream'
     | '/_app/things'
     | '/api/$'
     | '/api/confetti'
     | '/api/orpc-ws'
     | '/posthog-proxy/$'
+    | '/_app/counters/$name'
     | '/_app/things/$thingId'
     | '/api/orpc/$'
     | '/_app/things/'
@@ -256,11 +280,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppLogStreamRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/durable-object': {
-      id: '/_app/durable-object'
-      path: '/durable-object'
-      fullPath: '/durable-object'
-      preLoaderRoute: typeof AppDurableObjectRouteImport
+    '/_app/durable-objects': {
+      id: '/_app/durable-objects'
+      path: '/durable-objects'
+      fullPath: '/durable-objects'
+      preLoaderRoute: typeof AppDurableObjectsRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/debug': {
@@ -268,6 +292,13 @@ declare module '@tanstack/react-router' {
       path: '/debug'
       fullPath: '/debug'
       preLoaderRoute: typeof AppDebugRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/counters': {
+      id: '/_app/counters'
+      path: '/counters'
+      fullPath: '/counters'
+      preLoaderRoute: typeof AppCountersRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/confetti': {
@@ -298,8 +329,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppThingsThingIdRouteImport
       parentRoute: typeof AppThingsRoute
     }
+    '/_app/counters/$name': {
+      id: '/_app/counters/$name'
+      path: '/$name'
+      fullPath: '/counters/$name'
+      preLoaderRoute: typeof AppCountersNameRouteImport
+      parentRoute: typeof AppCountersRoute
+    }
   }
 }
+
+interface AppCountersRouteChildren {
+  AppCountersNameRoute: typeof AppCountersNameRoute
+}
+
+const AppCountersRouteChildren: AppCountersRouteChildren = {
+  AppCountersNameRoute: AppCountersNameRoute,
+}
+
+const AppCountersRouteWithChildren = AppCountersRoute._addFileChildren(
+  AppCountersRouteChildren,
+)
 
 interface AppThingsRouteChildren {
   AppThingsThingIdRoute: typeof AppThingsThingIdRoute
@@ -317,16 +367,18 @@ const AppThingsRouteWithChildren = AppThingsRoute._addFileChildren(
 
 interface AppRouteChildren {
   AppConfettiRoute: typeof AppConfettiRoute
+  AppCountersRoute: typeof AppCountersRouteWithChildren
   AppDebugRoute: typeof AppDebugRoute
-  AppDurableObjectRoute: typeof AppDurableObjectRoute
+  AppDurableObjectsRoute: typeof AppDurableObjectsRoute
   AppLogStreamRoute: typeof AppLogStreamRoute
   AppThingsRoute: typeof AppThingsRouteWithChildren
 }
 
 const AppRouteChildren: AppRouteChildren = {
   AppConfettiRoute: AppConfettiRoute,
+  AppCountersRoute: AppCountersRouteWithChildren,
   AppDebugRoute: AppDebugRoute,
-  AppDurableObjectRoute: AppDurableObjectRoute,
+  AppDurableObjectsRoute: AppDurableObjectsRoute,
   AppLogStreamRoute: AppLogStreamRoute,
   AppThingsRoute: AppThingsRouteWithChildren,
 }

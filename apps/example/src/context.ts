@@ -9,6 +9,7 @@ export interface AppContext {
   db: BaseSQLiteDatabase<"sync" | "async", unknown, typeof schema>;
   log: SharedRequestLogger;
   rawRequest?: Request;
+  workerEnv?: Env;
 }
 
 declare module "@tanstack/react-start" {
