@@ -62,6 +62,13 @@ export default {
 export { E2EAppendChainSubscriber, StreamDurableObject };
 
 async function routeE2EAppendChainSubscriberStatus(request: Request, env: Env) {
+  // This route is test-only infrastructure for deployed preview e2e coverage.
+  // Production alchemy deploys omit the binding, which also keeps the
+  // unauthenticated status endpoint out of the production worker surface.
+  if (!("E2E_APPEND_CHAIN_SUBSCRIBER" in env)) {
+    return undefined;
+  }
+
   const url = new URL(request.url);
   const prefix = "/__e2e/append-chain-subscriber/";
   if (!url.pathname.startsWith(prefix) || !url.pathname.endsWith("/status")) {

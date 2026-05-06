@@ -38,20 +38,22 @@ const stream =
         className: "StreamDurableObject",
         scriptName: deploymentConfig.streamDurableObjectBindingScriptName,
       });
-const e2eAppendChainSubscriber = DurableObjectNamespace<E2EAppendChainSubscriber>(
-  "e2e-append-chain-subscriber",
-  {
-    className: "E2EAppendChainSubscriber",
-    sqlite: true,
-  },
-);
+const enableE2EAppendChainSubscriber = ctx.app.local || ctx.app.stage.startsWith("preview_");
+const e2eAppendChainSubscriber = enableE2EAppendChainSubscriber
+  ? DurableObjectNamespace<E2EAppendChainSubscriber>("e2e-append-chain-subscriber", {
+      className: "E2EAppendChainSubscriber",
+      sqlite: true,
+    })
+  : undefined;
 
 const { worker, afterFinalize } = await IterateApp(ctx, {
   bindings: {
     DB: db,
     DO_CATALOG: db,
-    E2E_APPEND_CHAIN_SUBSCRIBER: e2eAppendChainSubscriber,
     STREAM: stream,
+    ...(e2eAppendChainSubscriber == null
+      ? {}
+      : { E2E_APPEND_CHAIN_SUBSCRIBER: e2eAppendChainSubscriber }),
   },
   // Cloudflare gates `request.signal` behind this flag — needed by the oRPC
   // logging plugin to distinguish aborted client requests from real failures.
