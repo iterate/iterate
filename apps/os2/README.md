@@ -437,6 +437,59 @@ static Petstore OpenAPI provider, Workers AI capability path, repo/workspace
 callbacks, explicit and promise-pipelined subagent handles, oRPC discovery and
 execution, and stream append/readback.
 
+### Repeatable Preview MCP Smoke
+
+Preview CI and operator checks seed a deterministic project before connecting an
+MCP client. The seed endpoint is intentionally admin-only and exists so a fresh
+preview deployment can create project ingress rows without a human Clerk
+session:
+
+```bash
+OS2_BASE_URL=https://os2.iterate-preview-2.com \
+doppler run --project os2 --config preview_2 -- pnpm --dir apps/os2 test:e2e:preview
+```
+
+That script calls:
+
+```bash
+curl -sS -X POST "$OS2_BASE_URL/__debug/seed-mcp-project" \
+  -H "Authorization: Bearer $APP_CONFIG_ADMIN_API_SECRET" \
+  -H "Content-Type: application/json" \
+  --data '{"projectId":"proj-preview-mcp-smoke","slug":"preview-mcp-smoke"}'
+```
+
+The response includes `mcpUrl`, usually:
+
+```txt
+https://mcp__preview-mcp-smoke.iterate-preview-2.app/
+```
+
+Use MCP Inspector to prove transport/auth and list tools:
+
+```bash
+npx -y @modelcontextprotocol/inspector --cli \
+  "$MCP_URL" \
+  --transport http \
+  --header "Authorization: Bearer $APP_CONFIG_ADMIN_API_SECRET" \
+  --method tools/list
+```
+
+Claude Code can use an inline MCP config for a one-off run:
+
+```bash
+claude --strict-mcp-config \
+  --mcp-config '{"mcpServers":{"os2-preview":{"type":"http","url":"'"$MCP_URL"'","headers":{"Authorization":"Bearer '"$APP_CONFIG_ADMIN_API_SECRET"'"}}}}' \
+  -p 'Use the os2-preview MCP server to call run_code with code that returns 1 + 1.'
+```
+
+The full codemode/provider proof is still:
+
+```bash
+OS2_E2E_MCP_URL="$MCP_URL" \
+OS2_E2E_MCP_BEARER_TOKEN="$APP_CONFIG_ADMIN_API_SECRET" \
+pnpm --dir apps/os2 test:e2e:codemode-mcp
+```
+
 ### Using the MCP server with Claude CLI
 
 After the Clerk OAuth Application is configured with Dynamic Client

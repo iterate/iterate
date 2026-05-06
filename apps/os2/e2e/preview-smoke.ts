@@ -11,6 +11,14 @@ function readProjectMcpUrlOverride() {
   return url ? new URL(url) : null;
 }
 
+function readAdminApiSecret() {
+  return (
+    process.env.OS2_ADMIN_API_SECRET?.trim() ||
+    process.env.APP_CONFIG_ADMIN_API_SECRET?.trim() ||
+    null
+  );
+}
+
 async function expectStatus(input: { method?: string; status: number; url: URL }) {
   const response = await fetch(input.url, {
     method: input.method ?? "GET",
@@ -22,42 +30,39 @@ async function expectStatus(input: { method?: string; status: number; url: URL }
   return response;
 }
 
-function projectMcpUrlFor(baseUrl: URL, projectMcpUrlOverride: URL | null) {
-  if (projectMcpUrlOverride) return projectMcpUrlOverride;
+async function seedProjectMcpUrl(input: { adminApiSecret: string; baseUrl: URL }) {
+  const response = await fetch(new URL("/__debug/seed-mcp-project", input.baseUrl), {
+    body: JSON.stringify({
+      projectId: "proj-preview-mcp-smoke",
+      slug: "preview-mcp-smoke",
+    }),
+    headers: {
+      authorization: `Bearer ${input.adminApiSecret}`,
+      "content-type": "application/json",
+    },
+    method: "POST",
+  });
 
-  const previewMatch = /^os2\.iterate-preview-(\d+)\.com$/.exec(baseUrl.hostname);
-  if (previewMatch) {
-    return new URL(`https://mcp__demo.iterate-preview-${previewMatch[1]}.app/`);
-  }
-
-  const dashboardPrefix = "os.";
-  if (!baseUrl.hostname.startsWith(dashboardPrefix)) {
+  if (!response.ok) {
     throw new Error(
-      `OS2 preview base URL must be os2.iterate-preview-N.com or start with os.; received ${baseUrl.hostname}.`,
+      `Failed to seed MCP smoke project at ${input.baseUrl}: ${response.status} ${await response.text()}`,
     );
   }
-  const projectHostnameBase = baseUrl.hostname
-    .slice(dashboardPrefix.length)
-    // OS2 dashboard hosts use `.com` for the app shell while project/MCP hosts
-    // use `.app` for user code and OAuth resource URLs. Keep the smoke test's
-    // fallback derivation aligned with the deployed dev/prod host contract. Use
-    // the single-label MCP host because wildcard certificates cover it in
-    // preview, and allow OS2_PROJECT_MCP_URL above for any future topology that cannot be
-    // inferred from OS2_BASE_URL alone.
-    .replace(/\.com$/, ".app");
-  return new URL(`https://mcp__demo.${projectHostnameBase}/`);
-}
 
-function hasSeededProjectHost(projectMcpUrlOverride: URL | null) {
-  return projectMcpUrlOverride !== null;
+  const body = (await response.json()) as { mcpUrl?: string };
+  if (!body.mcpUrl) {
+    throw new Error(`Seed MCP response did not include mcpUrl: ${JSON.stringify(body)}`);
+  }
+  return new URL(body.mcpUrl);
 }
 
 const baseUrl = requireBaseUrl();
 const projectMcpUrlOverride = readProjectMcpUrlOverride();
+const adminApiSecret = readAdminApiSecret();
 
-// This smoke test intentionally avoids authenticated application procedures.
-// Preview CI has no stable seeded Clerk user/project, so it proves the deployed
-// edge contract that must work before browser-led auth tests can run.
+// Keep the dashboard checks unauthenticated, then use the admin preview hook to
+// seed one deterministic project/MCP hostname. That makes the preview proof
+// repeatable without relying on a human Clerk session.
 await expectStatus({
   url: new URL("/api/__internal/health", baseUrl),
   status: 200,
@@ -72,15 +77,27 @@ if (!rootLocation.startsWith("/sign-in?redirect_url=")) {
   throw new Error(`Expected unauthenticated root to redirect to sign-in; got ${rootLocation}.`);
 }
 
-const projectMcpUrl = projectMcpUrlFor(baseUrl, projectMcpUrlOverride);
+const projectMcpUrl =
+  projectMcpUrlOverride ??
+  (adminApiSecret ? await seedProjectMcpUrl({ adminApiSecret, baseUrl }) : null);
 
-if (!hasSeededProjectHost(projectMcpUrlOverride)) {
-  await expectStatus({
-    url: projectMcpUrl,
-    status: 404,
-  });
-  console.log(`OS2 preview smoke passed for ${baseUrl.toString()}`);
+if (!projectMcpUrl) {
+  console.log(`OS2 preview smoke passed for ${baseUrl.toString()} (MCP project seed skipped)`);
   process.exit(0);
+}
+
+const instructionsResponse = await fetch(projectMcpUrl, {
+  headers: { accept: "text/html" },
+  redirect: "manual",
+});
+if (!instructionsResponse.ok) {
+  throw new Error(
+    `Expected MCP instructions page from ${projectMcpUrl}; received ${instructionsResponse.status}.`,
+  );
+}
+const instructionsHtml = await instructionsResponse.text();
+if (!instructionsHtml.includes("Connect an MCP client to this project endpoint")) {
+  throw new Error(`MCP instructions page did not contain setup text: ${instructionsHtml}`);
 }
 
 const projectMcpResponse = await expectStatus({
