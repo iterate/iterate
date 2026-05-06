@@ -38,10 +38,13 @@ const codemodeStreamProcessorRunner = DurableObjectNamespace("codemode-stream-pr
   className: "CodemodeStreamProcessorRunner",
   sqlite: true,
 });
-const webchatStreamProcessorRunner = DurableObjectNamespace("webchat-stream-processor-runner", {
-  className: "WebchatStreamProcessorRunner",
-  sqlite: true,
-});
+const agentChatStreamProcessorRunner = DurableObjectNamespace(
+  "agent-chat-stream-processor-runner",
+  {
+    className: "AgentChatStreamProcessorRunner",
+    sqlite: true,
+  },
+);
 const childStreamAutoSubscriber = DurableObjectNamespace("child-stream-auto-subscriber", {
   className: "ChildStreamAutoSubscriber",
   sqlite: true,
@@ -68,7 +71,7 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     CLOUDFLARE_AI_STREAM_PROCESSOR_RUNNER: cloudflareAiStreamProcessorRunner,
     OPENAI_WS_STREAM_PROCESSOR_RUNNER: openAiWsStreamProcessorRunner,
     CODEMODE_STREAM_PROCESSOR_RUNNER: codemodeStreamProcessorRunner,
-    WEBCHAT_STREAM_PROCESSOR_RUNNER: webchatStreamProcessorRunner,
+    AGENT_CHAT_STREAM_PROCESSOR_RUNNER: agentChatStreamProcessorRunner,
     CHILD_STREAM_AUTO_SUBSCRIBER: childStreamAutoSubscriber,
     MCP_CLIENT: mcpClient,
     OPENAPI_TOOL_CLIENT: openApiToolClient,

@@ -390,10 +390,7 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
     ];
   }
 
-  if (
-    event.type === "events.iterate.com/webchat/user-message-added" ||
-    event.type === "events.iterate.com/tui/user-message-added"
-  ) {
+  if (event.type === "events.iterate.com/agent-chat/user-message-added") {
     const content = readStringPayloadField(event, "content");
     if (content == null) return [];
     return [
@@ -410,10 +407,7 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
     ];
   }
 
-  if (
-    event.type === "events.iterate.com/webchat/agent-response-added" ||
-    event.type === "events.iterate.com/tui/agent-response-added"
-  ) {
+  if (event.type === "events.iterate.com/agent-chat/agent-response-added") {
     const message = readStringPayloadField(event, "message");
     if (message == null) return [];
     return [

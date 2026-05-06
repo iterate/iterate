@@ -6,13 +6,13 @@ import {
 import { createEventsOrpcClient } from "~/lib/events-orpc-client.ts";
 import { buildStreamViewerUrl } from "~/lib/events-urls.ts";
 import {
+  AGENT_CHAT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
   AGENT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
+  buildAgentChatStreamProcessorRunnerWebSocketCallbackUrl,
   buildAgentStreamProcessorRunnerWebSocketCallbackUrl,
   buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl,
-  buildWebchatStreamProcessorRunnerWebSocketCallbackUrl,
   CODEMODE_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
   streamPathToAgentInstance,
-  WEBCHAT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
 } from "~/lib/iterate-agent-addressing.ts";
 import { os } from "~/orpc/orpc.ts";
 
@@ -59,9 +59,9 @@ export const createAgentRouter = {
 
     for (const subscription of [
       {
-        slug: WEBCHAT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
+        slug: AGENT_CHAT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
         callable: fetchCallableFromWebSocketUrl(
-          buildWebchatStreamProcessorRunnerWebSocketCallbackUrl({
+          buildAgentChatStreamProcessorRunnerWebSocketCallbackUrl({
             publicOrigin,
             runnerInstance,
             streamPath,

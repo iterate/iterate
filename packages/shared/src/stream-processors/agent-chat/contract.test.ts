@@ -1,20 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { getInitialProcessorState, type StreamEvent } from "../stream-processor.ts";
 import { buildProcessorRegisteredEvent } from "../core/contract.ts";
-import { WebchatProcessorContract, reduceWebchatEvents } from "./contract.ts";
+import { AgentChatProcessorContract, reduceAgentChatEvents } from "./contract.ts";
 
-describe("WebchatProcessorContract", () => {
+describe("AgentChatProcessorContract", () => {
   it("initializes its own reduced state", () => {
-    expect(getInitialProcessorState(WebchatProcessorContract)).toEqual({
+    expect(getInitialProcessorState(AgentChatProcessorContract)).toEqual({
       hasRegisteredCurrentVersion: false,
     });
   });
 
   it("projects current-version processor registration from the core event", () => {
     expect(
-      reduceWebchatEvents({
+      reduceAgentChatEvents({
         events: [
-          committedEvent(buildProcessorRegisteredEvent({ contract: WebchatProcessorContract })),
+          committedEvent(buildProcessorRegisteredEvent({ contract: AgentChatProcessorContract })),
         ],
       }).hasRegisteredCurrentVersion,
     ).toBe(true);

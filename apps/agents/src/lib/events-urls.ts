@@ -152,14 +152,14 @@ export function buildOpenAiWsStreamProcessorRunnerWebSocketCallbackUrl(args: {
   });
 }
 
-export function buildWebchatStreamProcessorRunnerWebSocketCallbackUrl(args: {
+export function buildAgentChatStreamProcessorRunnerWebSocketCallbackUrl(args: {
   publicOrigin: string;
   runnerInstance: string;
   streamPath: StreamPath;
 }): string {
   return buildStreamProcessorRunnerWebSocketCallbackUrl({
     ...args,
-    runnerSlug: "webchat-stream-processor-runner",
+    runnerSlug: "agent-chat-stream-processor-runner",
   });
 }
 

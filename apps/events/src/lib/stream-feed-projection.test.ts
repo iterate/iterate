@@ -121,7 +121,7 @@ describe("projectWireToFeed", () => {
     ]);
   });
 
-  test("projects canonical agent, webchat, and codemode events", () => {
+  test("projects canonical agent, agent-chat, and codemode events", () => {
     const assistantMessage = [
       "Working on it.",
       "",
@@ -137,8 +137,8 @@ describe("projectWireToFeed", () => {
       }),
       createEvent({
         offset: 2,
-        type: "events.iterate.com/webchat/agent-response-added",
-        payload: { message: assistantMessage },
+        type: "events.iterate.com/agent-chat/agent-response-added",
+        payload: { channel: "web", message: assistantMessage },
       }),
       createEvent({
         offset: 3,

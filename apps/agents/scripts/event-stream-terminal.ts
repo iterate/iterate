@@ -516,8 +516,8 @@ async function appendInput() {
   updateHeader();
 
   const event: EventInput = {
-    type: "events.iterate.com/tui/user-message-added",
-    payload: { content },
+    type: "events.iterate.com/agent-chat/user-message-added",
+    payload: { channel: "tui", content },
   };
   try {
     const appendedEvent = await streamApi.append({ event });

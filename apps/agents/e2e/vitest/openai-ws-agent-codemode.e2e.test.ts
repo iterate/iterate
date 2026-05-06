@@ -143,7 +143,7 @@ async function pumpRunnerSocketsUntil(args: {
     webchatEvent =
       webchatEvent ??
       events.find((event) => {
-        if (event.type !== "events.iterate.com/webchat/agent-response-added") return false;
+        if (event.type !== "events.iterate.com/agent-chat/agent-response-added") return false;
         const payload = event.payload as { message?: string };
         return payload.message === EXPECTED_WEBCHAT_MESSAGE;
       }) ??

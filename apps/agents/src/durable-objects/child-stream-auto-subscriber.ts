@@ -12,16 +12,16 @@ import { z } from "zod";
 import { AppConfig } from "~/app.ts";
 import { createEventsOrpcClient } from "~/lib/events-orpc-client.ts";
 import {
+  AGENT_CHAT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
   AGENT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
+  buildAgentChatStreamProcessorRunnerWebSocketCallbackUrl,
   buildAgentStreamProcessorRunnerWebSocketCallbackUrl,
   buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl,
   buildOpenAiWsStreamProcessorRunnerWebSocketCallbackUrl,
-  buildWebchatStreamProcessorRunnerWebSocketCallbackUrl,
   CLOUDFLARE_AI_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
   CODEMODE_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
   OPENAI_WS_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
   streamPathToAgentInstance,
-  WEBCHAT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
 } from "~/lib/iterate-agent-addressing.ts";
 import type { CloudflareEnv } from "~/lib/worker-env.d.ts";
 
@@ -162,8 +162,8 @@ export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
     cloudflareAiCallbackUrl.hash = "";
     const runnerSubscriptions = [
       {
-        slug: WEBCHAT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
-        websocketUrl: buildWebchatStreamProcessorRunnerWebSocketCallbackUrl({
+        slug: AGENT_CHAT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
+        websocketUrl: buildAgentChatStreamProcessorRunnerWebSocketCallbackUrl({
           publicOrigin: publicBaseUrl,
           runnerInstance,
           streamPath: childPath,

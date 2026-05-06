@@ -209,8 +209,8 @@ function SelectedAgentStreamView({
       await client.append({
         path: streamPath,
         event: {
-          type: "events.iterate.com/webchat/user-message-added",
-          payload: { content },
+          type: "events.iterate.com/agent-chat/user-message-added",
+          payload: { channel: "web", content },
         },
       });
     },

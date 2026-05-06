@@ -31,8 +31,8 @@ describe("clean stream view reducers", () => {
       events: [
         event({
           offset: 1,
-          type: "events.iterate.com/webchat/user-message-added",
-          payload: { content: "hello" },
+          type: "events.iterate.com/agent-chat/user-message-added",
+          payload: { channel: "web", content: "hello" },
         }),
       ],
     });
@@ -40,9 +40,9 @@ describe("clean stream view reducers", () => {
     expect(viewState.slots.feed).toMatchObject([
       {
         type: "grouped-raw-event",
-        id: "grouped-raw-event-events.iterate.com/webchat/user-message-added-1-1",
+        id: "grouped-raw-event-events.iterate.com/agent-chat/user-message-added-1-1",
         props: {
-          eventType: "events.iterate.com/webchat/user-message-added",
+          eventType: "events.iterate.com/agent-chat/user-message-added",
           count: 1,
           events: [{ offset: 1 }],
         },
@@ -66,7 +66,7 @@ describe("clean stream view reducers", () => {
     ]);
   });
 
-  test("raw-pretty projects webchat responses as assistant messages", () => {
+  test("raw-pretty projects agent-chat responses as assistant messages", () => {
     const message = ["Here is code:", "", "```typescript", "const ok: boolean = true;", "```"].join(
       "\n",
     );
@@ -75,8 +75,8 @@ describe("clean stream view reducers", () => {
       events: [
         event({
           offset: 1,
-          type: "events.iterate.com/webchat/agent-response-added",
-          payload: { message },
+          type: "events.iterate.com/agent-chat/agent-response-added",
+          payload: { channel: "web", message },
         }),
       ],
     });
@@ -85,7 +85,7 @@ describe("clean stream view reducers", () => {
       {
         type: "grouped-raw-event",
         props: {
-          eventType: "events.iterate.com/webchat/agent-response-added",
+          eventType: "events.iterate.com/agent-chat/agent-response-added",
           count: 1,
         },
       },
@@ -283,13 +283,13 @@ describe("clean stream view reducers", () => {
       events: [
         event({
           offset: 1,
-          type: "events.iterate.com/webchat/user-message-added",
+          type: "events.iterate.com/agent-chat/user-message-added",
           payload: {},
         }),
         event({
           offset: 2,
-          type: "events.iterate.com/webchat/user-message-added",
-          payload: { content: "hello" },
+          type: "events.iterate.com/agent-chat/user-message-added",
+          payload: { channel: "web", content: "hello" },
         }),
       ],
     });

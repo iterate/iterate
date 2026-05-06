@@ -7,10 +7,10 @@ import {
   type StreamEvent,
 } from "../stream-processor.ts";
 import { Callable } from "../../callable/types.ts";
+import { AgentChatProcessorContract } from "../agent-chat/contract.ts";
 import { AgentProcessorContract, reduceAgentEvents } from "../agent/contract.ts";
 import { CoreProcessorRegisteredEventType } from "../core/contract.ts";
 import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
-import { WebchatProcessorContract } from "../webchat/contract.ts";
 
 /**
  * Idempotency key used for the one-time codemode primer row.
@@ -69,7 +69,7 @@ export const CodemodeProcessorContract = defineProcessorContract({
   processorDeps: [
     ...standardProcessorBehavior.processorDeps,
     AgentProcessorContract,
-    WebchatProcessorContract,
+    AgentChatProcessorContract,
   ],
   events: {
     "events.iterate.com/codemode/block-added": {
@@ -109,7 +109,7 @@ export const CodemodeProcessorContract = defineProcessorContract({
     ...standardProcessorBehavior.emits,
     "events.iterate.com/agent/input-added",
     "events.iterate.com/agent/status-updated",
-    "events.iterate.com/webchat/agent-response-added",
+    "events.iterate.com/agent-chat/agent-response-added",
     "events.iterate.com/codemode/block-added",
     "events.iterate.com/codemode/result-added",
   ],

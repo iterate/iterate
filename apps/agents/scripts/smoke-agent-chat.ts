@@ -44,7 +44,7 @@ async function main(): Promise<void> {
     });
 
     const matchingResponse = lastEvents.find((event) => {
-      if (event.type !== "events.iterate.com/webchat/agent-response-added") return false;
+      if (event.type !== "events.iterate.com/agent-chat/agent-response-added") return false;
       if (!isRecord(event.payload)) return false;
       return event.payload.message === options.expected;
     });
@@ -71,7 +71,7 @@ async function main(): Promise<void> {
 
   throw new Error(
     [
-      `Timed out after ${options.timeoutMs}ms waiting for events.iterate.com/webchat/agent-response-added with payload.message=${JSON.stringify(options.expected)}.`,
+      `Timed out after ${options.timeoutMs}ms waiting for events.iterate.com/agent-chat/agent-response-added with payload.message=${JSON.stringify(options.expected)}.`,
       `Stream path: ${options.streamPath}`,
       `Last event types: ${lastEvents.map((event) => event.type).join(", ") || "(none)"}`,
     ].join("\n"),
@@ -86,7 +86,7 @@ Options:
   --agents-base-url <url>  Agents app origin. Defaults to AGENTS_BASE_URL or http://localhost:5174
   --events-base-url <url>  Events app origin. Defaults to EVENTS_BASE_URL or http://localhost:5173
   --stream-path <path>     Stream path to create. Defaults to /agents/smoke-<timestamp>
-  --expected <text>        Expected webchat response. Defaults to "hello from smoke test"
+  --expected <text>        Expected chat response. Defaults to "hello from smoke test"
   --timeout-ms <ms>        Poll timeout. Defaults to 60000
 `);
     process.exit(0);
