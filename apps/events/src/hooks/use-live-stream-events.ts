@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { Event, StreamPath } from "@iterate-com/events-contract";
+import type { Event, StreamPath } from "@iterate-com/shared/streams/types";
 
 /** Client-side cap for live stream events; older rows are dropped to bound memory and projection work. */
 const LIVE_STREAM_MAX_EVENTS = 50_000;

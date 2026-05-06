@@ -1,4 +1,4 @@
-import { StreamPath } from "@iterate-com/events-contract";
+import { StreamPath } from "@iterate-com/shared/streams/types";
 import { rawEventsStreamViewReducer } from "@iterate-com/ui/components/events/feed-processors";
 import { describe, expect, test } from "vitest";
 import {

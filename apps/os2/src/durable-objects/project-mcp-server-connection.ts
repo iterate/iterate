@@ -3,19 +3,24 @@ import { McpAgent } from "agents/mcp";
 import type { Connection } from "agents";
 import { z } from "zod";
 import { DurableObject } from "cloudflare:workers";
-import {
-  EventInput as EventInputSchema,
-  StreamPath,
-  type EventInput,
-} from "@iterate-com/events-contract";
+import { StreamPath, type Event, type EventInput } from "@iterate-com/shared/streams/types";
+import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
 import { withIterateDurableObjectStack } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import packageJson from "../../package.json" with { type: "json" };
+import { createExampleCapabilityProviders } from "~/codemode/example-provider-registrations.ts";
 import {
   type CodemodeSessionNamespace,
   startCodemodeScriptOnSession,
 } from "~/codemode/codemode-session-rpc.ts";
+import {
+  getStreamCapability,
+  type StreamCapabilityProps,
+} from "~/entrypoints/stream-capability.ts";
 import { readEventPayload, stringifyPayloadError } from "~/lib/codemode-event-payload.ts";
-import { createEventsClient } from "~/lib/events-client.ts";
+import { createOpenApiProviderRegistration } from "~/rpc-targets/openapi-provider-registration.ts";
+import { createOutboundMcpFromOurClientToolProviderRegistration } from "~/rpc-targets/outbound-mcp-from-our-client-capability.ts";
+
+export { StreamCapability } from "~/entrypoints/stream-capability.ts";
 
 /**
  * Project-scoped MCP server connection for os2.
@@ -37,8 +42,8 @@ import { createEventsClient } from "~/lib/events-client.ts";
 interface McpServerEnv {
   CODEMODE_SESSION: CodemodeSessionNamespace;
   DO_CATALOG: D1Database;
-  EVENTS_BASE_URL: string;
   MCP_PROOF_SECRET: string;
+  MOCK_PROVIDER_BASE_URL?: string;
   PROJECT_MCP_SERVER_CONNECTION: DurableObjectNamespace;
 }
 
@@ -69,16 +74,6 @@ export type ProjectMcpServerConnectionInitParams = {
 const sessionSlugStorageKey = "mcpServerSessionSlug";
 const eventTypePrefix = "events.iterate.com/mcp-server";
 const requiredToolScope = "profile";
-const mcpEventInputSchema = z
-  .object({
-    idempotencyKey: z.string().optional(),
-    metadata: z.record(z.string(), z.unknown()).optional(),
-    offset: z.number().int().positive().optional(),
-    payload: z.record(z.string(), z.unknown()).optional(),
-    type: z.string(),
-  })
-  .strict();
-
 const ProjectMcpServerConnectionBase = withIterateDurableObjectStack<
   ProjectMcpServerConnectionInitParams,
   Pick<McpServerEnv, "DO_CATALOG">
@@ -205,21 +200,12 @@ export class ProjectMcpServerConnection extends (ProjectMcpServerConnectionBase 
           'Example: console.log("hello"); 1 + 1',
         inputSchema: z.object({
           code: z.string().describe("JavaScript code to execute"),
-          events: z
-            .array(mcpEventInputSchema)
-            .optional()
-            .describe("Event inputs to append to the Codemode Session before executing code."),
         }),
       },
-      async ({ code, events = [] }) => {
+      async ({ code }) => {
         const auth = this.requireProjectAuthProps();
         this.requireScope(auth, requiredToolScope);
-        // Cloudflare's MCP SDK validates tool input before invoking handlers,
-        // but this is the trust boundary before OS2 appends caller-provided
-        // events to the durable CodemodeSession stream. Parse again here so
-        // future SDK or test harness changes cannot bypass EventInput shape
-        // validation with a cast.
-        const parsedEvents = z.array(EventInputSchema).parse(events);
+        const staticProviders = this.createStaticCodemodeToolProviders(auth);
 
         const invocationId = `mcp_tool_${crypto.randomUUID()}`;
         const startedAt = Date.now();
@@ -227,7 +213,7 @@ export class ProjectMcpServerConnection extends (ProjectMcpServerConnectionBase 
 
         await this.emitLifecycleEvent("tool-invocation-started", {
           auth: summarizeAuthProps(auth),
-          input: { code, eventCount: events.length },
+          input: { code, providerCount: staticProviders.length },
           invocationId,
           projectId: auth.projectId,
           projectSlug: auth.projectSlug,
@@ -238,15 +224,16 @@ export class ProjectMcpServerConnection extends (ProjectMcpServerConnectionBase 
         try {
           const started = await startCodemodeScriptOnSession({
             code,
-            events: parsedEvents,
+            events: [],
             namespace: this.env.CODEMODE_SESSION,
             projectId: auth.projectId,
-            providers: [],
+            providers: staticProviders,
             streamPath,
           });
           const output = await waitForScriptExecutionFinished({
             afterOffset: started.event.offset,
-            eventsBaseUrl: this.env.EVENTS_BASE_URL,
+            exports: this.workerExports(),
+            projectId: auth.projectId,
             scriptExecutionId: String(
               (started.event.payload as { scriptExecutionId?: unknown }).scriptExecutionId,
             ),
@@ -269,7 +256,10 @@ export class ProjectMcpServerConnection extends (ProjectMcpServerConnectionBase 
           await this.emitLifecycleEvent("tool-invocation-finished", {
             auth: summarizeAuthProps(auth),
             durationMs: Date.now() - startedAt,
-            input: { code, eventCount: events.length },
+            input: {
+              code,
+              providerCount: staticProviders.length,
+            },
             invocationId,
             output: response,
             projectId: auth.projectId,
@@ -287,7 +277,10 @@ export class ProjectMcpServerConnection extends (ProjectMcpServerConnectionBase 
             auth: summarizeAuthProps(auth),
             durationMs: Date.now() - startedAt,
             error: serializeError(error),
-            input: { code, eventCount: events.length },
+            input: {
+              code,
+              providerCount: staticProviders.length,
+            },
             invocationId,
             isError: true,
             projectId: auth.projectId,
@@ -302,12 +295,74 @@ export class ProjectMcpServerConnection extends (ProjectMcpServerConnectionBase 
     );
   }
 
+  private createStaticCodemodeToolProviders(
+    auth: ProjectMcpServerConnectionProps & { orgId: string; projectId: string },
+  ): ToolProviderRegistration[] {
+    const providers = createExampleCapabilityProviders({
+      activeOrganization: {
+        orgId: auth.orgId,
+        orgPermissions: auth.orgPermissions,
+        orgRole: auth.orgRole,
+        orgSlug: auth.orgSlug ?? auth.orgId,
+        sessionId: this.getSessionId(),
+        userId: auth.userId,
+      },
+      projectId: auth.projectId,
+    });
+
+    const providerMatrixBaseUrl = this.env.MOCK_PROVIDER_BASE_URL?.replace(/\/+$/, "");
+    providers.push(
+      createOpenApiProviderRegistration({
+        baseUrl: providerMatrixBaseUrl ?? "https://petstore.swagger.io/v2",
+        instructions:
+          "Use ctx.integrations.http.catalog for the static inbound MCP OpenAPI example. Call listOperations() before operation calls.",
+        path: ["integrations", "http", "catalog"],
+        specUrl: providerMatrixBaseUrl
+          ? `${providerMatrixBaseUrl}/openapi.json`
+          : "https://petstore.swagger.io/v2/swagger.json",
+      }),
+    );
+
+    if (providerMatrixBaseUrl) {
+      providers.push(
+        createOutboundMcpFromOurClientToolProviderRegistration({
+          instructions:
+            "Use ctx.integrations.publicMcp for the static inbound MCP outbound-MCP example. Call listTools() first.",
+          path: ["integrations", "publicMcp"],
+          serverUrl: `${providerMatrixBaseUrl}/mcp`,
+        }),
+        createLoopbackServiceProviderRegistration({
+          exportName: "TestBuiltinMatrixProvider",
+          instructions:
+            "Test-only provider that composes OpenAPI, outbound MCP, and a unary leaf provider through codemode context calls.",
+          path: ["integrations", "builtinMatrix"],
+        }),
+        createLoopbackServiceProviderRegistration({
+          exportName: "TestLeafProvider",
+          instructions: "Test-only unary provider for inbound MCP provider composition proofs.",
+          path: ["leaf"],
+        }),
+      );
+    }
+
+    return providers;
+  }
+
   private async emitLifecycleEvent(slug: string, payload: Record<string, unknown>) {
     try {
       const streamPath = await this.getSessionStreamPath();
-      const client = createEventsClient(this.env.EVENTS_BASE_URL);
-      await client.append({
-        path: streamPath,
+      const auth = this.requireAuthProps();
+      if (!auth.projectId) {
+        return;
+      }
+
+      await getStreamCapability({
+        exports: this.workerExports(),
+        props: streamCapabilityProps({
+          projectId: auth.projectId,
+          streamPath,
+        }),
+      }).append({
         event: {
           type: `${eventTypePrefix}/${slug}`,
           idempotencyKey:
@@ -358,6 +413,10 @@ export class ProjectMcpServerConnection extends (ProjectMcpServerConnectionBase 
     if (!props.scopes.includes(scope)) {
       throw new Error(`MCP token is missing required scope: ${scope}`);
     }
+  }
+
+  private workerExports() {
+    return (this.ctx as DurableObjectState & { exports?: Record<string, unknown> }).exports;
   }
 
   /** Stable event stream for lifecycle and codemode events emitted by one MCP session. */
@@ -465,6 +524,75 @@ function serializeError(error: unknown) {
   return { message: String(error) };
 }
 
+function streamCapabilityProps(input: {
+  projectId: string;
+  streamPath: StreamPath;
+}): StreamCapabilityProps {
+  return {
+    appendPolicy: { mode: "stream" },
+    projectId: input.projectId,
+    streamPath: input.streamPath,
+  };
+}
+
+function createLoopbackServiceProviderRegistration(input: {
+  exportName: string;
+  instructions: string;
+  path: string[];
+}): ToolProviderRegistration {
+  return {
+    instructions: input.instructions,
+    invocation: {
+      kind: "rpc",
+      callable: {
+        type: "workers-rpc",
+        via: {
+          type: "loopback-binding",
+          bindingType: "service",
+          exportName: input.exportName,
+          props: {},
+        },
+        rpcMethod: "executeCodemodeFunctionCall",
+        argsMode: "object",
+      },
+    },
+    path: input.path,
+  };
+}
+
+async function* decodeStreamEventLines(stream: ReadableStream<Uint8Array>, signal?: AbortSignal) {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const onAbort = () => {
+    void reader.cancel();
+  };
+
+  try {
+    if (signal?.aborted) return;
+    signal?.addEventListener("abort", onAbort, { once: true });
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      while (true) {
+        const newlineIndex = buffer.indexOf("\n");
+        if (newlineIndex === -1) break;
+        const line = buffer.slice(0, newlineIndex);
+        buffer = buffer.slice(newlineIndex + 1);
+        if (line.trim()) yield JSON.parse(line) as Event;
+      }
+    }
+
+    buffer += decoder.decode();
+    if (buffer.trim()) yield JSON.parse(buffer) as Event;
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+    reader.releaseLock();
+  }
+}
+
 /**
  * Bridges the request/response shape expected by MCP tools onto CodemodeSession's
  * event stream. Codemode execution is asynchronous and durable; the MCP tool
@@ -474,21 +602,27 @@ function serializeError(error: unknown) {
  */
 async function waitForScriptExecutionFinished(input: {
   afterOffset: number;
-  eventsBaseUrl: string;
+  exports: Record<string, unknown> | undefined;
+  projectId: string;
   scriptExecutionId: string;
   streamPath: StreamPath;
 }) {
-  const client = createEventsClient(input.eventsBaseUrl);
-  const stream = await client.stream(
-    {
-      afterOffset: input.afterOffset,
-      path: input.streamPath,
-    },
-    { signal: AbortSignal.timeout(60_000) },
-  );
   const logs: string[] = [];
+  const response = await getStreamCapability({
+    exports: input.exports,
+    props: streamCapabilityProps({
+      projectId: input.projectId,
+      streamPath: input.streamPath,
+    }),
+  }).stream({
+    afterOffset: input.afterOffset,
+  });
 
-  for await (const event of stream) {
+  if (!response.body) {
+    throw new Error("Codemode Script Execution stream response did not include a body.");
+  }
+
+  for await (const event of decodeStreamEventLines(response.body, AbortSignal.timeout(60_000))) {
     const payload = readEventPayload(event);
     if (
       event.type === "events.iterate.com/codemode/log-emitted" &&

@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import { EventInput, StreamPath } from "@iterate-com/events-contract";
+import { EventInput, StreamPath } from "@iterate-com/shared/streams/types";
 import type { D1ObjectCatalogRecord } from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
 import {
   getD1ObjectCatalogRecord,
@@ -28,7 +28,7 @@ import {
   isValidCustomHostname,
   normalizeCustomHostname,
 } from "~/lib/project-host-routing.ts";
-import type { ActiveOrganizationAuth } from "~/lib/auth.ts";
+import type { ActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
 import { activeOrganizationMiddleware, os } from "~/orpc/orpc.ts";
 
 type ProjectRow = {
@@ -164,13 +164,15 @@ export const projectsRouter = {
         let project: Awaited<ReturnType<ProjectDurableObject["createProject"]>>;
 
         try {
-          project = await requireProjectNamespace(context).getByName(id).createProject({
-            projectId: id,
-            slug: input.slug,
-            clerkOrgId: auth.orgId,
-            createdByClerkUserId: auth.userId,
-            metadata: input.metadata,
-          });
+          project = await requireProjectDurableObjectNamespace(context)
+            .getByName(id)
+            .createProject({
+              projectId: id,
+              slug: input.slug,
+              clerkOrgId: auth.orgId,
+              createdByClerkUserId: auth.userId,
+              metadata: input.metadata,
+            });
         } catch (error) {
           if (isUniqueConstraintError(error)) {
             throw new ORPCError("CONFLICT", {
@@ -522,12 +524,12 @@ function requireD1ObjectCatalog(context: AppContext) {
   return context.doCatalog;
 }
 
-function requireProjectNamespace(context: AppContext) {
-  if (!context.project) {
+function requireProjectDurableObjectNamespace(context: AppContext) {
+  if (!context.projectDurableObjectNamespace) {
     throw new ORPCError("INTERNAL_SERVER_ERROR", {
       message: "PROJECT binding not available.",
     });
   }
 
-  return context.project;
+  return context.projectDurableObjectNamespace;
 }

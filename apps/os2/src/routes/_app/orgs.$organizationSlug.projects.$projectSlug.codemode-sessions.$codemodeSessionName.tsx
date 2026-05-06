@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import type { Event } from "@iterate-com/events-contract";
-import { StreamPath } from "@iterate-com/events-contract";
+import type { Event } from "@iterate-com/shared/streams/types";
+import { StreamPath } from "@iterate-com/shared/streams/types";
 import {
   processEventsWithViewReducer,
   rawPrettyEventsStreamViewReducer,

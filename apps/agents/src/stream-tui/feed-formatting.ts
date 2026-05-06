@@ -1,4 +1,4 @@
-import type { Event } from "@iterate-com/events-contract";
+import type { Event } from "@iterate-com/shared/streams/types";
 import type {
   EventsStreamBuiltInElement,
   EventsStreamRawEventSummary,

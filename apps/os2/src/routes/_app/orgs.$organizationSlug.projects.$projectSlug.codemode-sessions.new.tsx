@@ -1,8 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { EventInput, StreamPath } from "@iterate-com/events-contract";
-import type { ProjectPreset } from "@iterate-com/os2-contract";
+import { EventInput, StreamPath } from "@iterate-com/shared/streams/types";
 import { Button } from "@iterate-com/ui/components/button";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
@@ -10,7 +9,7 @@ import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/nat
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 import { z } from "zod";
-import { findCodemodeExample } from "~/codemode/examples.ts";
+import { findCodemodeExample, providersForCodemodeExample } from "~/codemode/examples.ts";
 import { createBrowserOpenApiClient, orpc } from "~/orpc/client.ts";
 
 const Search = z.object({
@@ -58,9 +57,7 @@ function NewCodemodeSessionPage() {
     [example?.events],
   );
   const [code, setCode] = useState(defaultCode);
-  const [selectedPresetId, setSelectedPresetId] = useState(
-    defaultPresetId({ exampleSlug: example?.slug, presets }),
-  );
+  const [selectedPresetId, setSelectedPresetId] = useState("");
   const [eventsJson, setEventsJson] = useState(defaultEventsJson);
   const [streamPath, setStreamPath] = useState("");
 
@@ -75,7 +72,7 @@ function NewCodemodeSessionPage() {
         code: code.trim() === "" ? undefined : code,
         events: [...(selectedPreset?.events ?? []), ...parsedCustomEvents],
         projectId: project.id,
-        providers: [],
+        providers: providersForCodemodeExample({ example, projectId: project.id }),
         ...(parsedStreamPath ? { streamPath: parsedStreamPath } : {}),
       });
     },
@@ -170,14 +167,6 @@ function NewCodemodeSessionPage() {
       </div>
     </section>
   );
-}
-
-function defaultPresetId(input: {
-  exampleSlug: string | undefined;
-  presets: readonly ProjectPreset[];
-}) {
-  if (input.exampleSlug !== "public-api-preset") return "";
-  return input.presets.find((preset) => preset.name === "Public APIs")?.id ?? "";
 }
 
 function parseCustomEvents(value: string) {

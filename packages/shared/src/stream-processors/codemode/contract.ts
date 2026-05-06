@@ -5,19 +5,29 @@ import {
   reduceProcessorEvents,
   type StreamEvent,
 } from "../stream-processor.ts";
+import { Callable } from "../../callable/types.ts";
 import { CoreProcessorRegisteredEventType } from "../core/contract.ts";
 import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
 
 const CodemodeId = z.string().trim().min(1);
 const CodemodePath = z.array(z.string().min(1)).min(1);
-const ToolProviderDocumentation = z.object({
-  docs: z.string().trim().min(1),
-  instructions: z.string().trim().min(1).optional(),
+const CodemodeFunctionPath = z.array(z.string().min(1));
+const ToolProviderInvocation = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("event"),
+  }),
+  z.object({
+    callable: Callable,
+    kind: z.literal("rpc"),
+  }),
+]);
+const ToolProviderRegistration = z.object({
+  instructions: z.string().trim().min(1),
+  invocation: ToolProviderInvocation,
   path: CodemodePath,
-  typeDefinitions: z.string().trim().min(1).optional(),
 });
 const CodemodeError = z.unknown();
-const CodemodeOutcome = z.discriminatedUnion("status", [
+const ScriptExecutionOutcome = z.discriminatedUnion("status", [
   z.object({
     status: z.literal("succeeded"),
     output: z.unknown(),
@@ -27,17 +37,30 @@ const CodemodeOutcome = z.discriminatedUnion("status", [
     error: CodemodeError,
   }),
 ]);
+const FunctionCallOutcome = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("returned"),
+    value: z.unknown(),
+  }),
+  z.object({
+    status: z.literal("threw"),
+    error: CodemodeError,
+  }),
+]);
+const InvocationKind = z.enum(["event", "rpc"]);
 
-export type ToolProviderDocumentation = z.output<typeof ToolProviderDocumentation>;
+export type ToolProviderRegistration = z.output<typeof ToolProviderRegistration>;
 
 export const CodemodeProcessorContract = defineProcessorContract({
   slug: "codemode",
-  version: "0.3.0",
+  version: "0.4.0",
   description:
     "Runs project-scoped codemode scripts from durable stream events and records minimal script/function-call telemetry.",
   stateSchema: z.object({
     ...standardProcessorBehavior.stateShape,
-    toolProviders: z.record(z.string(), ToolProviderDocumentation).default({}),
+    sessionStarted: z.boolean().default(false),
+    sessionCapabilityCallable: Callable.optional(),
+    toolProviders: z.record(z.string(), ToolProviderRegistration).default({}),
     scriptExecutions: z
       .record(
         z.string(),
@@ -50,7 +73,7 @@ export const CodemodeProcessorContract = defineProcessorContract({
           z.object({
             status: z.literal("completed"),
             durationMs: z.number().int().nonnegative().optional(),
-            outcome: CodemodeOutcome,
+            outcome: ScriptExecutionOutcome,
             scriptExecutionId: CodemodeId,
           }),
         ]),
@@ -62,17 +85,23 @@ export const CodemodeProcessorContract = defineProcessorContract({
         z.discriminatedUnion("status", [
           z.object({
             status: z.literal("requested"),
+            args: z.array(z.unknown()),
             functionCallId: CodemodeId,
-            input: z.unknown(),
+            functionPath: CodemodeFunctionPath,
+            invocationKind: InvocationKind,
             path: CodemodePath,
+            providerPath: CodemodePath,
             scriptExecutionId: CodemodeId.optional(),
           }),
           z.object({
             status: z.literal("completed"),
             durationMs: z.number().int().nonnegative().optional(),
             functionCallId: CodemodeId,
-            outcome: CodemodeOutcome,
+            functionPath: CodemodeFunctionPath,
+            invocationKind: InvocationKind,
+            outcome: FunctionCallOutcome,
             path: CodemodePath,
+            providerPath: CodemodePath,
             scriptExecutionId: CodemodeId.optional(),
           }),
         ]),
@@ -84,9 +113,16 @@ export const CodemodeProcessorContract = defineProcessorContract({
   },
   processorDeps: [...standardProcessorBehavior.processorDeps],
   events: {
+    "events.iterate.com/codemode/session-started": {
+      description:
+        "The codemode processor initialized this stream and published the session capability callable.",
+      payloadSchema: z.object({
+        sessionCapabilityCallable: Callable,
+      }),
+    },
     "events.iterate.com/codemode/tool-provider-registered": {
-      description: "Model-visible documentation for functions available to codemode scripts.",
-      payloadSchema: ToolProviderDocumentation,
+      description: "Model-visible instructions and invocation mode for codemode tool functions.",
+      payloadSchema: ToolProviderRegistration,
     },
     "events.iterate.com/codemode/script-execution-requested": {
       description: "A codemode script should run against the stream's documented functions.",
@@ -99,7 +135,7 @@ export const CodemodeProcessorContract = defineProcessorContract({
       description: "A codemode script completed with either an output or a serialized error.",
       payloadSchema: z.object({
         durationMs: z.number().int().nonnegative().optional(),
-        outcome: CodemodeOutcome,
+        outcome: ScriptExecutionOutcome,
         scriptExecutionId: CodemodeId,
       }),
     },
@@ -107,9 +143,12 @@ export const CodemodeProcessorContract = defineProcessorContract({
       description:
         "A codemode script or function implementation requested a documented function path.",
       payloadSchema: z.object({
+        args: z.array(z.unknown()),
         functionCallId: CodemodeId,
-        input: z.unknown(),
+        functionPath: CodemodeFunctionPath,
+        invocationKind: InvocationKind,
         path: CodemodePath,
+        providerPath: CodemodePath,
         scriptExecutionId: CodemodeId.optional(),
       }),
     },
@@ -119,8 +158,11 @@ export const CodemodeProcessorContract = defineProcessorContract({
       payloadSchema: z.object({
         durationMs: z.number().int().nonnegative().optional(),
         functionCallId: CodemodeId,
-        outcome: CodemodeOutcome,
+        functionPath: CodemodeFunctionPath,
+        invocationKind: InvocationKind,
+        outcome: FunctionCallOutcome,
         path: CodemodePath,
+        providerPath: CodemodePath,
         scriptExecutionId: CodemodeId.optional(),
       }),
     },
@@ -135,6 +177,7 @@ export const CodemodeProcessorContract = defineProcessorContract({
   },
   consumes: [
     ...standardProcessorBehavior.consumes,
+    "events.iterate.com/codemode/session-started",
     "events.iterate.com/codemode/tool-provider-registered",
     "events.iterate.com/codemode/script-execution-requested",
     "events.iterate.com/codemode/script-execution-completed",
@@ -144,6 +187,7 @@ export const CodemodeProcessorContract = defineProcessorContract({
   ],
   emits: [
     ...standardProcessorBehavior.emits,
+    "events.iterate.com/codemode/session-started",
     "events.iterate.com/codemode/script-execution-requested",
     "events.iterate.com/codemode/script-execution-completed",
     "events.iterate.com/codemode/function-call-requested",
@@ -157,6 +201,12 @@ export const CodemodeProcessorContract = defineProcessorContract({
       case CoreProcessorRegisteredEventType:
       case "events.iterate.com/codemode/log-emitted":
         return nextState;
+      case "events.iterate.com/codemode/session-started":
+        return {
+          ...nextState,
+          sessionCapabilityCallable: event.payload.sessionCapabilityCallable,
+          sessionStarted: true,
+        };
       case "events.iterate.com/codemode/tool-provider-registered":
         return {
           ...nextState,
@@ -197,9 +247,12 @@ export const CodemodeProcessorContract = defineProcessorContract({
             ...nextState.functionCalls,
             [event.payload.functionCallId]: {
               status: "requested" as const,
+              args: event.payload.args,
               functionCallId: event.payload.functionCallId,
-              input: event.payload.input,
+              functionPath: event.payload.functionPath,
+              invocationKind: event.payload.invocationKind,
               path: event.payload.path,
+              providerPath: event.payload.providerPath,
               ...(event.payload.scriptExecutionId == null
                 ? {}
                 : { scriptExecutionId: event.payload.scriptExecutionId }),
@@ -215,8 +268,11 @@ export const CodemodeProcessorContract = defineProcessorContract({
               status: "completed" as const,
               ...(event.payload.durationMs == null ? {} : { durationMs: event.payload.durationMs }),
               functionCallId: event.payload.functionCallId,
+              functionPath: event.payload.functionPath,
+              invocationKind: event.payload.invocationKind,
               outcome: event.payload.outcome,
               path: event.payload.path,
+              providerPath: event.payload.providerPath,
               ...(event.payload.scriptExecutionId == null
                 ? {}
                 : { scriptExecutionId: event.payload.scriptExecutionId }),

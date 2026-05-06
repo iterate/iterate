@@ -216,7 +216,7 @@ describe("codemode RPC provider PoC", () => {
     });
   });
 
-  test("append accepts events-contract EventInput and stream returns committed session events", async () => {
+  test("append accepts shared EventInput and stream returns committed session events", async () => {
     const session = (env as Env).CODEMODE_SESSION.getByName("session");
     const appended = await session.append({
       type: CodemodeEventType.toolProviderRegistered,

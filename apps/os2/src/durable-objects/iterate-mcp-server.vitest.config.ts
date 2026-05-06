@@ -247,6 +247,11 @@ export default defineConfig({
   ],
   test: {
     exclude: defaultExclude,
+    experimental: {
+      importDurations: {
+        limit: 0,
+      },
+    } as never,
     hookTimeout: 60_000,
     include: [resolve(testRoot, "iterate-mcp-server.test.ts")],
     testTimeout: 90_000,

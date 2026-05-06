@@ -1,7 +1,7 @@
 import { Fragment, useMemo, useState } from "react";
 import { Link, useMatches, useNavigate, useSearch } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/events-contract";
+import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import {
   Breadcrumb,
   BreadcrumbEllipsis,

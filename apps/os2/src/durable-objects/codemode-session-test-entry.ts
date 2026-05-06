@@ -1,31 +1,40 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { createCodemodeContext } from "@iterate-com/shared/codemode/context-proxy";
-import { DESCRIBE_TOOL_FUNCTION_NAME } from "@iterate-com/shared/codemode/types";
 
 export { CodemodeSession } from "./codemode-session.ts";
+export {
+  AgentCapability,
+  AgentDurableObject,
+  AiCapability,
+  OrpcCapability,
+  RepoCapability,
+  RepoDurableObject,
+  SlackCapability,
+  WorkspaceDurableObject,
+} from "~/codemode/example-capabilities.ts";
+export { FetchCapability } from "~/codemode/fetch-capability.ts";
+export { StreamCapability } from "~/entrypoints/stream-capability.ts";
+export { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
 
 type ToolFunctionInput = {
   codemodeSessionCapability: Parameters<
     typeof createCodemodeContext
   >[0]["codemodeSessionCapability"];
   path: string[];
-  input: Record<string, unknown>;
+  args: Record<string, unknown>[];
 };
 
 export class ProviderA extends WorkerEntrypoint {
-  async executeToolFunction(input: ToolFunctionInput) {
+  async executeCodemodeFunctionCall(input: ToolFunctionInput) {
     const path = input.path.join(".");
-
-    if (path === DESCRIBE_TOOL_FUNCTION_NAME) {
-      return providerATypeDefinitions();
-    }
 
     if (path === "compose.exclaimViaB") {
       const ctx = createCodemodeContext({
         codemodeSessionCapability: input.codemodeSessionCapability,
       });
+      const [request] = input.args;
       const result = (await ctx.providerB.text.exclaim({
-        value: input.input.value,
+        value: request?.value,
       })) as { value: string };
 
       return {
@@ -37,18 +46,20 @@ export class ProviderA extends WorkerEntrypoint {
     }
 
     if (path === "math.add") {
+      const [request] = input.args;
       return {
         provider: "provider-a",
         toolFunction: "math.add",
-        value: Number(input.input.left) + Number(input.input.right),
+        value: Number(request?.left) + Number(request?.right),
       };
     }
 
     if (path === "text.upper") {
+      const [request] = input.args;
       return {
         provider: "provider-a",
         toolFunction: "text.upper",
-        value: String(input.input.value).toUpperCase(),
+        value: String(request?.value).toUpperCase(),
       };
     }
 
@@ -57,20 +68,17 @@ export class ProviderA extends WorkerEntrypoint {
 }
 
 export class ProviderB extends WorkerEntrypoint {
-  async executeToolFunction(input: ToolFunctionInput) {
+  async executeCodemodeFunctionCall(input: ToolFunctionInput) {
     const path = input.path.join(".");
-
-    if (path === DESCRIBE_TOOL_FUNCTION_NAME) {
-      return providerBTypeDefinitions();
-    }
 
     if (path === "compose.addThenUpper") {
       const ctx = createCodemodeContext({
         codemodeSessionCapability: input.codemodeSessionCapability,
       });
+      const [request] = input.args;
       const added = (await ctx.providerA.math.add({
-        left: input.input.left,
-        right: input.input.right,
+        left: request?.left,
+        right: request?.right,
       })) as { value: number };
       const upper = (await ctx.providerA.text.upper({
         value: `sum ${added.value}`,
@@ -85,44 +93,16 @@ export class ProviderB extends WorkerEntrypoint {
     }
 
     if (path === "text.exclaim") {
+      const [request] = input.args;
       return {
         provider: "provider-b",
         toolFunction: "text.exclaim",
-        value: `${String(input.input.value).toUpperCase()}!`,
+        value: `${String(request?.value).toUpperCase()}!`,
       };
     }
 
     throw new Error(`Provider B does not implement ${path}`);
   }
-}
-
-function providerATypeDefinitions() {
-  return {
-    typeDefinitions: `{
-  compose: {
-    exclaimViaB(input: { value: string }): Promise<{ value: string }>;
-  };
-  math: {
-    add(input: { left: number; right: number }): Promise<{ value: number }>;
-  };
-  text: {
-    upper(input: { value: string }): Promise<{ value: string }>;
-  };
-}`,
-  };
-}
-
-function providerBTypeDefinitions() {
-  return {
-    typeDefinitions: `{
-  compose: {
-    addThenUpper(input: { left: number; right: number }): Promise<{ value: string }>;
-  };
-  text: {
-    exclaim(input: { value: string }): Promise<{ value: string }>;
-  };
-}`,
-  };
 }
 
 export default {

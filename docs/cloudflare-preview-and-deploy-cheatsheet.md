@@ -58,10 +58,11 @@ gh workflow run "Deploy Events" --ref main -f ref=main -f stage=prd
 8. It records each app result in the PR body. If one app fails, the overall preview is unhealthy and the lease is kept.
 9. On PR close, cleanup tears down recorded apps and releases the shared lease only after successful teardown.
 
-Cross-app links and bindings must be derived from that same config. Today os2
-uses `APP_CONFIG_EVENTS_BASE_URL` to call the events preview for the same
-numbered slot; future Cloudflare Service Bindings should follow the same
-config-derived pattern.
+Cross-app links and bindings must be derived from that same config. OS2 exports
+its own `StreamDurableObject` from the main Worker script. Events can use
+`DEPLOYMENT_CONFIG_STREAM_DURABLE_OBJECT_BINDING_SCRIPT_NAME` to bind `STREAM`
+to the OS2 preview Worker script for the same numbered slot. This is deployment
+config, not runtime `APP_CONFIG`.
 
 ## Semaphore token
 

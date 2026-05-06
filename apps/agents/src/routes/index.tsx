@@ -3,7 +3,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { getRequestHeader } from "@tanstack/react-start/server";
-import { Event, type Event as EventsEvent, type StreamPath } from "@iterate-com/events-contract";
+import {
+  Event,
+  type Event as EventsEvent,
+  type StreamPath,
+} from "@iterate-com/shared/streams/types";
 import { makeFunnySlug } from "@iterate-com/shared/slug-maker";
 import {
   processEventsWithViewReducer,

@@ -1,9 +1,9 @@
 import type { ContractRouterClient } from "@orpc/contract";
 import { createORPCClient } from "@orpc/client";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
-import { ProjectSlug, eventsContract } from "@iterate-com/events-contract";
-import { getProjectUrl } from "../../../events/src/lib/project-slug.ts";
-import { workerReachableLocalUrl } from "~/lib/events-urls.ts";
+import { eventsContract } from "@iterate-com/events-contract";
+import { ProjectId } from "@iterate-com/shared/streams/types";
+import { getProjectUrl, workerReachableLocalUrl } from "~/lib/events-urls.ts";
 
 export type EventsOrpcClient = ContractRouterClient<typeof eventsContract>;
 
@@ -13,7 +13,7 @@ export function createEventsOrpcClient(options: {
 }): EventsOrpcClient {
   const projectOrigin = getProjectUrl({
     currentUrl: options.baseUrl,
-    projectSlug: ProjectSlug.parse(options.projectSlug),
+    projectSlug: ProjectId.parse(options.projectSlug),
   })
     .toString()
     .replace(/\/+$/, "");

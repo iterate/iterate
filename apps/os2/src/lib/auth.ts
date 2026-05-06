@@ -3,20 +3,13 @@ import { createServerFn, getGlobalStartContext } from "@tanstack/react-start";
 import { getRequestUrl } from "@tanstack/react-start/server";
 import { auth } from "@clerk/tanstack-react-start/server";
 import { z } from "zod";
-import type { ClerkAuth } from "~/context.ts";
+export type { ActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
+export { normalizeActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
+import { normalizeActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
 import {
   normalizeRequestHostname,
   resolveProjectSlugFromHostname,
 } from "~/lib/project-host-routing.ts";
-
-export interface ActiveOrganizationAuth {
-  userId: string;
-  sessionId: string;
-  orgId: string;
-  orgRole: string | null;
-  orgSlug: string;
-  orgPermissions: string[];
-}
 
 const RouteAuthInput = z
   .object({
@@ -116,21 +109,6 @@ export const requireAuthenticatedRootRedirectTarget = createServerFn({ method: "
     };
   },
 );
-
-export function normalizeActiveOrganizationAuth(session: ClerkAuth): ActiveOrganizationAuth {
-  if (!session.isAuthenticated || !session.orgId || !session.orgSlug) {
-    throw new Error("Expected authenticated Clerk session with active organization.");
-  }
-
-  return {
-    userId: session.userId,
-    sessionId: session.sessionId,
-    orgId: session.orgId,
-    orgRole: session.orgRole ?? null,
-    orgSlug: session.orgSlug,
-    orgPermissions: session.orgPermissions ?? [],
-  };
-}
 
 function redirectToSignIn(): never {
   const request = getRequestUrl();

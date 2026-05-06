@@ -1,31 +1,66 @@
 import { env } from "cloudflare:test";
-import { type Event, type StreamPath } from "@iterate-com/events-contract";
+import { createCodemodeContext } from "@iterate-com/shared/codemode/context-proxy";
+import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
+import { type Event, type StreamPath } from "@iterate-com/shared/streams/types";
+import { getInitializedStreamStub } from "@iterate-com/shared/streams/helpers";
 import { deriveDurableObjectNameFromInitParams } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import type { ToolProviderDocumentation } from "@iterate-com/shared/stream-processors/codemode/contract";
+import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
+import type { StreamProcessorRunnerState } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor-runner";
 import { describe, expect, test } from "vitest";
+import {
+  createExampleRpcProviderRegistration,
+  createWorkspaceProviderRegistration,
+} from "~/codemode/example-capabilities.ts";
+import { findCodemodeExample, providersForCodemodeExample } from "~/codemode/examples.ts";
 import type { CodemodeSession } from "./codemode-session.ts";
-import { createEventsClient } from "~/lib/events-client.ts";
 
 type CodemodeSessionStub = DurableObjectStub<CodemodeSession> & {
   callFunction(input: {
+    args: unknown[];
     functionCallId?: string;
-    input: unknown;
     path: string[];
     scriptExecutionId?: string;
-  }): Promise<Event>;
-  createSession(input?: { code?: string; providers?: ToolProviderDocumentation[] }): Promise<{
+  }): Promise<unknown>;
+  receiveFunctionCallResult(input: {
+    functionCallId: string;
+    outcome:
+      | { status: "returned"; value: unknown }
+      | {
+          status: "threw";
+          error: unknown;
+        };
+    functionPath: string[];
+    invocationKind: "event" | "rpc";
+    path: string[];
+    providerPath: string[];
+    scriptExecutionId?: string;
+  }): Promise<{ event: Event }>;
+  createSession(input?: { code?: string; providers?: ToolProviderRegistration[] }): Promise<{
     appendedEvents: Event[];
     registeredProviderEvents: Event[];
     scriptExecutionEvent: Event | null;
     streamPath: StreamPath;
   }>;
+  afterAppend(input: { event: Event }): Promise<StreamProcessorRunnerState<unknown>>;
+  ensureLiveConsumer(): Promise<void>;
+  getRunnerState(): Promise<StreamProcessorRunnerState<unknown>>;
   initialize(params: { name: string; projectId: string; streamPath: StreamPath }): Promise<unknown>;
-  registerToolProvider(input: { provider: ToolProviderDocumentation }): Promise<Event>;
+  registerToolProvider(input: { provider: ToolProviderRegistration }): Promise<Event>;
 };
 
 type TestEnv = {
   CODEMODE_SESSION: DurableObjectNamespace<CodemodeSession>;
-  EVENTS_BASE_URL: string;
+  STREAM: Env["STREAM"];
+};
+
+const projectId = "proj__test__codemodesession";
+const activeOrganization = {
+  orgId: "org__codemode_session_test",
+  orgPermissions: [],
+  orgRole: "admin",
+  orgSlug: "codemode-session-test",
+  sessionId: "sess__codemode_session_test",
+  userId: "user__codemode_session_test",
 };
 
 describe("CodemodeSession", () => {
@@ -54,7 +89,7 @@ describe("CodemodeSession", () => {
   test("registerToolProvider appends model-visible provider documentation", async () => {
     const streamPath = `/codemode-session-tests/${crypto.randomUUID()}` as StreamPath;
     const session = await initializeSession(streamPath);
-    const provider = providerDocumentation(["providerA"]);
+    const provider = providerRegistration(["providerA"]);
 
     const event = await session.registerToolProvider({ provider });
 
@@ -67,43 +102,369 @@ describe("CodemodeSession", () => {
   test("callFunction appends a function-call-requested event", async () => {
     const streamPath = `/codemode-session-tests/${crypto.randomUUID()}` as StreamPath;
     const session = await initializeSession(streamPath);
+    await session.registerToolProvider({ provider: providerRegistration(["providerA"]) });
 
-    const requestedEvent = await session.callFunction({
+    const call = session.callFunction({
+      args: [{ value: "provider a called provider b" }],
       functionCallId: "fn-test",
-      input: { value: "provider a called provider b" },
       path: ["providerA", "compose", "exclaimViaB"],
       scriptExecutionId: "scr-test",
     });
 
-    expect(requestedEvent).toMatchObject({
-      payload: {
-        functionCallId: "fn-test",
-        input: { value: "provider a called provider b" },
-        path: ["providerA", "compose", "exclaimViaB"],
-        scriptExecutionId: "scr-test",
-      },
-      type: "events.iterate.com/codemode/function-call-requested",
-    });
-
-    await expect(readCurrentStreamEvents(streamPath)).resolves.toEqual(
+    await waitFor(async () =>
+      (await readCurrentStreamEvents(streamPath)).some(
+        (event) =>
+          event.type === "events.iterate.com/codemode/function-call-requested" &&
+          event.payload.functionCallId === "fn-test",
+      ),
+    );
+    expect(await readCurrentStreamEvents(streamPath)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           type: "events.iterate.com/codemode/function-call-requested",
           payload: expect.objectContaining({
+            args: [{ value: "provider a called provider b" }],
             functionCallId: "fn-test",
+            functionPath: ["compose", "exclaimViaB"],
+            invocationKind: "event",
             path: ["providerA", "compose", "exclaimViaB"],
+            providerPath: ["providerA"],
           }),
         }),
+      ]),
+    );
+
+    await session.receiveFunctionCallResult({
+      functionCallId: "fn-test",
+      functionPath: ["compose", "exclaimViaB"],
+      invocationKind: "event",
+      outcome: { status: "returned", value: { ok: true } },
+      path: ["providerA", "compose", "exclaimViaB"],
+      providerPath: ["providerA"],
+      scriptExecutionId: "scr-test",
+    });
+    await expect(call).resolves.toEqual({ ok: true });
+  });
+
+  test("receiveFunctionCallResult appends a serialized function-call-completed event", async () => {
+    const streamPath = `/codemode-session-tests/${crypto.randomUUID()}` as StreamPath;
+    const session = await initializeSession(streamPath);
+
+    const result = await session.receiveFunctionCallResult({
+      functionCallId: "fn-test",
+      outcome: {
+        status: "returned",
+        value: () => "live callback",
+      },
+      functionPath: ["callbacks", "make"],
+      invocationKind: "event",
+      path: ["providerA", "callbacks", "make"],
+      providerPath: ["providerA"],
+      scriptExecutionId: "scr-test",
+    });
+
+    expect(result.event).toMatchObject({
+      payload: {
+        functionCallId: "fn-test",
+        functionPath: ["callbacks", "make"],
+        invocationKind: "event",
+        outcome: {
+          status: "returned",
+          value: {
+            kind: "live-value",
+            type: "function",
+          },
+        },
+        path: ["providerA", "callbacks", "make"],
+        providerPath: ["providerA"],
+        scriptExecutionId: "scr-test",
+      },
+      type: "events.iterate.com/codemode/function-call-completed",
+    });
+  });
+
+  test("callable stream subscription delivers direct appends to afterAppend", async () => {
+    const streamPath = `/codemode-session-tests/${crypto.randomUUID()}` as StreamPath;
+    const session = await initializeSession(streamPath);
+    await session.ensureLiveConsumer();
+    const stream = await getInitializedStreamStub({
+      namespace: (env as TestEnv).STREAM,
+      projectId,
+      path: streamPath,
+    });
+    expect(await stream.getState()).toMatchObject({
+      processors: {
+        "external-subscriber": {
+          subscribersBySlug: expect.objectContaining({
+            [`codemode-session:${sessionName({ projectId, streamPath })}`]: expect.objectContaining(
+              {
+                type: "callable",
+              },
+            ),
+          }),
+        },
+      },
+    });
+
+    const event = await stream.append({
+      type: "events.iterate.com/codemode/tool-provider-registered",
+      payload: providerRegistration(["providerA"]),
+    });
+
+    await waitFor(async () => {
+      const state = await session.getRunnerState();
+      return state.afterAppendCompletedThroughOffset >= event.offset;
+    });
+
+    const runnerState = await session.getRunnerState();
+    expect(runnerState.afterAppendCompletedThroughOffset).toBeGreaterThanOrEqual(event.offset);
+    expect(runnerState.reducedThroughOffset).toBeGreaterThanOrEqual(event.offset);
+  });
+
+  test("runs loopback RPC capability examples with live handles and callbacks", async () => {
+    const streamPath = `/codemode-session-tests/${crypto.randomUUID()}` as StreamPath;
+    const session = await initializeSession(streamPath);
+
+    const created = await session.createSession({
+      providers: exampleCapabilityProviders(),
+      code: `async (ctx) => {
+  const ai = await ctx.ai.run("test-model", { prompt: "hello" });
+  const repo = await ctx.repos.get({ slug: "web" }).proofOfConcept({
+    callback: async (args) => console.log("repo callback", args.repoName),
+  });
+  const workspace = await ctx.workspace.proofOfConcept({
+    callback: async (args) => console.log("workspace callback", args.workspaceName),
+  });
+  const agent = await ctx.createSubagent().sendMessage({
+    message: "hi",
+    subPath: "bob",
+  });
+  const procedures = await ctx.os.listProcedures();
+  const orpc = await ctx.os.test.logDemo({ label: "codemode" });
+
+  return { ai, repo, workspace, agent, procedures, orpc };
+}`,
+    });
+    const scriptExecutionId = String(
+      (created.scriptExecutionEvent?.payload as { scriptExecutionId?: unknown }).scriptExecutionId,
+    );
+    const completed = await waitForScriptExecutionCompleted({ scriptExecutionId, streamPath });
+
+    expect(completed.payload).toMatchObject({
+      outcome: {
+        status: "succeeded",
+        output: {
+          ai: expect.objectContaining({ model: "test-model" }),
+          agent: expect.objectContaining({ message: "hi", subPath: "bob" }),
+          orpc: expect.objectContaining({ label: "codemode" }),
+          procedures: expect.objectContaining({
+            procedures: expect.arrayContaining([
+              expect.objectContaining({
+                path: "test.logDemo",
+                signature: "(input: TestLogDemoInput) => Promise<TestLogDemoOutput>",
+              }),
+              expect.objectContaining({ path: "test.randomLogStream" }),
+              expect.objectContaining({ path: "test.serverThrow" }),
+            ]),
+            typeDefinitions: expect.stringContaining("interface CodemodeExecutionContext"),
+          }),
+          repo: expect.objectContaining({ message: "repo proof of concept" }),
+          workspace: expect.objectContaining({ message: "workspace proof of concept" }),
+        },
+      },
+    });
+    expect(await readCurrentStreamEvents(streamPath)).toEqual(
+      expect.arrayContaining([
+        functionCallRequested(["ai", "run"], ["ai"], ["run"]),
+        functionCallRequested(["repos", "get"], ["repos"], ["get"]),
+        functionCallCompleted(["repos", "get"], ["repos"], ["get"]),
+        functionCallRequested(["workspace", "proofOfConcept"], ["workspace"], ["proofOfConcept"]),
+        functionCallRequested(["createSubagent"], ["createSubagent"], []),
+        functionCallRequested(["os", "test", "logDemo"], ["os"], ["test", "logDemo"]),
+        expect.objectContaining({
+          type: "events.iterate.com/codemode/log-emitted",
+          payload: expect.objectContaining({ message: expect.stringContaining("repo callback") }),
+        }),
+        expect.objectContaining({
+          type: "events.iterate.com/codemode/log-emitted",
+          payload: expect.objectContaining({
+            message: expect.stringContaining("workspace callback"),
+          }),
+        }),
+      ]),
+    );
+  });
+
+  test("runs ordinary JavaScript control flow while mixing codemode providers", async () => {
+    const streamPath = `/codemode-session-tests/${crypto.randomUUID()}` as StreamPath;
+    const session = await initializeSession(streamPath);
+    const example = findCodemodeExample("javascript-control-flow-mix");
+    if (!example) throw new Error("Expected javascript-control-flow-mix codemode example.");
+
+    const created = await session.createSession({
+      providers: providersForCodemodeExample({ example, projectId }),
+      code: example.code,
+    });
+    const scriptExecutionId = String(
+      (created.scriptExecutionEvent?.payload as { scriptExecutionId?: unknown }).scriptExecutionId,
+    );
+    const completed = await waitForScriptExecutionCompleted({ scriptExecutionId, streamPath });
+
+    expect(completed.payload).toMatchObject({
+      outcome: {
+        status: "succeeded",
+        output: {
+          body: { hello: "codemode" },
+          caughtMessage: "expected example failure",
+          procedureCount: expect.any(Number),
+          raced: "fast",
+          ticks: ["tick-1", "tick-2", "tick-3"],
+        },
+      },
+    });
+    expect(await readCurrentStreamEvents(streamPath)).toEqual(
+      expect.arrayContaining([
+        functionCallRequested(["fetch"], ["fetch"], []),
+        functionCallRequested(["os", "listProcedures"], ["os"], ["listProcedures"]),
+        functionCallRequested(["streams", "append"], ["streams"], ["append"]),
+        expect.objectContaining({
+          type: "events.iterate.com/codemode/example-note",
+          payload: { message: "appended from javascript-control-flow-mix" },
+        }),
+        expect.objectContaining({
+          type: "events.iterate.com/codemode/log-emitted",
+          payload: expect.objectContaining({ level: "log", message: "interval tick 1" }),
+        }),
+        expect.objectContaining({
+          type: "events.iterate.com/codemode/log-emitted",
+          payload: expect.objectContaining({
+            level: "warn",
+            message: "caught and kept going expected example failure",
+          }),
+        }),
+        expect.objectContaining({
+          type: "events.iterate.com/codemode/log-emitted",
+          payload: expect.objectContaining({
+            level: "error",
+            message: "error log channel still does not fail the script",
+          }),
+        }),
+      ]),
+    );
+  });
+
+  test("lets an event-mediated provider use session-started to call another provider", async () => {
+    const streamPath = `/codemode-session-tests/${crypto.randomUUID()}` as StreamPath;
+    const session = await initializeSession(streamPath);
+
+    const created = await session.createSession({
+      providers: [providerRegistration(["discord"]), providerRegistration(["slack"])],
+      code: `async (ctx) => {
+  return await ctx.discord.announceRelease({
+    discordChannelId: "D123",
+    slackChannel: "C123",
+    version: "v1.2.3",
+  });
+}`,
+    });
+    const scriptExecutionId = String(
+      (created.scriptExecutionEvent?.payload as { scriptExecutionId?: unknown }).scriptExecutionId,
+    );
+
+    const discordRequest = await waitForFunctionCallRequested({
+      path: ["discord", "announceRelease"],
+      streamPath,
+    });
+    const sessionStarted = (await readCurrentStreamEvents(streamPath)).find(
+      (event) => event.type === "events.iterate.com/codemode/session-started",
+    );
+    expect(sessionStarted?.payload).toMatchObject({
+      sessionCapabilityCallable: expect.any(Object),
+    });
+
+    // This block is the event-provider proof: a Discord-style stream processor
+    // reduces session-started, invokes the Session Capability Callable, builds a
+    // Codemode Context, and then calls a Slack Tool Function without becoming an
+    // RPC provider itself.
+    const codemodeSessionCapability = await dispatchCallable({
+      callable: (sessionStarted!.payload as { sessionCapabilityCallable: unknown })
+        .sessionCapabilityCallable,
+      ctx: { env: env as unknown as Record<string, unknown> },
+      payload: {},
+    });
+    const providerCtx = createCodemodeContext({
+      codemodeSessionCapability: codemodeSessionCapability as Parameters<
+        typeof createCodemodeContext
+      >[0]["codemodeSessionCapability"],
+      scriptExecutionId,
+    });
+    const slackCall = providerCtx.slack.chat.postMessage({
+      channel: "C123",
+      text: "Released v1.2.3 to Discord message discord-msg-1",
+    });
+
+    const slackRequest = await waitForFunctionCallRequested({
+      path: ["slack", "chat", "postMessage"],
+      streamPath,
+    });
+    await session.receiveFunctionCallResult({
+      functionCallId: String(slackRequest.payload.functionCallId),
+      functionPath: ["chat", "postMessage"],
+      invocationKind: "event",
+      outcome: { status: "returned", value: { ok: true, ts: "123.456" } },
+      path: ["slack", "chat", "postMessage"],
+      providerPath: ["slack"],
+      scriptExecutionId,
+    });
+    await expect(slackCall).resolves.toEqual({ ok: true, ts: "123.456" });
+
+    await session.receiveFunctionCallResult({
+      functionCallId: String(discordRequest.payload.functionCallId),
+      functionPath: ["announceRelease"],
+      invocationKind: "event",
+      outcome: {
+        status: "returned",
+        value: {
+          discordMessageId: "discord-msg-1",
+          mirroredToSlack: true,
+        },
+      },
+      path: ["discord", "announceRelease"],
+      providerPath: ["discord"],
+      scriptExecutionId,
+    });
+
+    const completed = await waitForScriptExecutionCompleted({ scriptExecutionId, streamPath });
+    expect(completed.payload).toMatchObject({
+      outcome: {
+        status: "succeeded",
+        output: {
+          discordMessageId: "discord-msg-1",
+          mirroredToSlack: true,
+        },
+      },
+    });
+    expect(await readCurrentStreamEvents(streamPath)).toEqual(
+      expect.arrayContaining([
+        functionCallRequestedWithKind(
+          ["discord", "announceRelease"],
+          ["discord"],
+          ["announceRelease"],
+          "event",
+        ),
+        functionCallRequestedWithKind(
+          ["slack", "chat", "postMessage"],
+          ["slack"],
+          ["chat", "postMessage"],
+          "event",
+        ),
       ]),
     );
   });
 });
 
 async function initializeSession(streamPath: StreamPath) {
-  const projectId = "proj__test__codemodesession";
-  const name = deriveDurableObjectNameFromInitParams({
-    initParams: { projectId, streamPath },
-  });
+  const name = sessionName({ projectId, streamPath });
   const session = (env as TestEnv).CODEMODE_SESSION.getByName(
     name,
   ) as unknown as CodemodeSessionStub;
@@ -112,30 +473,137 @@ async function initializeSession(streamPath: StreamPath) {
   return session;
 }
 
-function providerDocumentation(path: string[]): ToolProviderDocumentation {
+function sessionName(input: { projectId: string; streamPath: StreamPath }) {
+  return deriveDurableObjectNameFromInitParams({
+    initParams: { projectId: input.projectId, streamPath: input.streamPath },
+  });
+}
+
+function providerRegistration(path: string[]): ToolProviderRegistration {
   return {
-    docs: `Provider ${path.join(".")} is available for codemode scripts.`,
+    instructions: `Provider ${path.join(".")} is available for codemode scripts.`,
+    invocation: { kind: "event" },
     path,
-    typeDefinitions: `declare const ${path[0]}: unknown;`,
   };
 }
 
-async function readCurrentStreamEvents(streamPath: StreamPath) {
-  const client = createEventsClient((env as TestEnv).EVENTS_BASE_URL);
-  const stream = await client.stream(
-    {
-      beforeOffset: "end",
-      path: streamPath,
-    },
-    {
-      signal: AbortSignal.timeout(10_000),
-    },
-  );
+function exampleCapabilityProviders(): ToolProviderRegistration[] {
+  return [
+    createExampleRpcProviderRegistration({
+      exportName: "AiCapability",
+      instructions: "Use ctx.ai.run(model, input) to call the Workers AI binding.",
+      path: ["ai"],
+      projectId,
+    }),
+    createExampleRpcProviderRegistration({
+      exportName: "RepoCapability",
+      instructions: "Use ctx.repos.get({ slug }) to get a repo handle.",
+      path: ["repos"],
+      projectId,
+    }),
+    createWorkspaceProviderRegistration({
+      instructions: "Use ctx.workspace.proofOfConcept(args) for the current workspace.",
+      name: projectId,
+      path: ["workspace"],
+    }),
+    createExampleRpcProviderRegistration({
+      exportName: "AgentCapability",
+      instructions: "Use ctx.createSubagent() to get a subagent handle.",
+      path: ["createSubagent"],
+      projectId,
+    }),
+    createExampleRpcProviderRegistration({
+      exportName: "OrpcCapability",
+      activeOrganization,
+      instructions: "Use ctx.os.listProcedures() and ctx.os.test.logDemo(args).",
+      path: ["os"],
+      projectId,
+    }),
+  ];
+}
 
-  const events: Event[] = [];
-  for await (const event of stream) {
-    events.push(event);
+function functionCallRequested(path: string[], providerPath: string[], functionPath: string[]) {
+  return functionCallRequestedWithKind(path, providerPath, functionPath, "rpc");
+}
+
+function functionCallRequestedWithKind(
+  path: string[],
+  providerPath: string[],
+  functionPath: string[],
+  invocationKind: "event" | "rpc",
+) {
+  return expect.objectContaining({
+    type: "events.iterate.com/codemode/function-call-requested",
+    payload: expect.objectContaining({
+      functionPath,
+      invocationKind,
+      path,
+      providerPath,
+    }),
+  });
+}
+
+function functionCallCompleted(path: string[], providerPath: string[], functionPath: string[]) {
+  return expect.objectContaining({
+    type: "events.iterate.com/codemode/function-call-completed",
+    payload: expect.objectContaining({
+      functionPath,
+      invocationKind: "rpc",
+      outcome: expect.objectContaining({ status: "returned" }),
+      path,
+      providerPath,
+    }),
+  });
+}
+
+async function waitForScriptExecutionCompleted(input: {
+  scriptExecutionId: string;
+  streamPath: StreamPath;
+}) {
+  let completed: Event | undefined;
+  await waitFor(async () => {
+    completed = (await readCurrentStreamEvents(input.streamPath)).find(
+      (event) =>
+        event.type === "events.iterate.com/codemode/script-execution-completed" &&
+        event.payload.scriptExecutionId === input.scriptExecutionId,
+    );
+    return completed != null;
+  });
+  return completed!;
+}
+
+async function waitForFunctionCallRequested(input: { path: string[]; streamPath: StreamPath }) {
+  let requested: Event | undefined;
+  await waitFor(async () => {
+    requested = (await readCurrentStreamEvents(input.streamPath)).find(
+      (event) =>
+        event.type === "events.iterate.com/codemode/function-call-requested" &&
+        JSON.stringify(event.payload.path) === JSON.stringify(input.path),
+    );
+    return requested != null;
+  });
+  return requested!;
+}
+
+async function readCurrentStreamEvents(streamPath: StreamPath) {
+  const stream = await getInitializedStreamStub({
+    namespace: (env as TestEnv).STREAM,
+    projectId,
+    path: streamPath,
+  });
+  const events = await stream.history({ before: "end" });
+  return events.filter((event) => event.type.startsWith("events.iterate.com/codemode/"));
+}
+
+async function waitFor(predicate: () => boolean | Promise<boolean>) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if (await predicate()) {
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
   }
 
-  return events.filter((event) => event.type.startsWith("events.iterate.com/codemode/"));
+  throw new Error("Timed out waiting for condition.");
 }

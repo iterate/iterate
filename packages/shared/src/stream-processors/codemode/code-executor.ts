@@ -1,7 +1,7 @@
 export type CodemodeProcessorSession = {
   callFunction(input: {
+    args: unknown[];
     functionCallId?: string;
-    input: unknown;
     path: string[];
     scriptExecutionId?: string;
   }): Promise<unknown>;

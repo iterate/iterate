@@ -4,7 +4,6 @@
   "compatibility_date": "2026-04-27",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
-    "EVENTS_BASE_URL": "https://events.iterate.com",
     "MCP_PROOF_SECRET": "mcp-proof-secret-test",
   },
   "durable_objects": {
@@ -18,8 +17,24 @@
         "class_name": "ProjectMcpServerConnection",
       },
       {
-        "name": "MCP_CLIENT_BRIDGE",
-        "class_name": "McpClientBridge",
+        "name": "OUTBOUND_MCP_FROM_OUR_CLIENT_CAPABILITY",
+        "class_name": "OutboundMcpFromOurClientCapability",
+      },
+      {
+        "name": "REPO",
+        "class_name": "RepoDurableObject",
+      },
+      {
+        "name": "WORKSPACE",
+        "class_name": "WorkspaceDurableObject",
+      },
+      {
+        "name": "AGENT",
+        "class_name": "AgentDurableObject",
+      },
+      {
+        "name": "STREAM",
+        "class_name": "StreamDurableObject",
       },
     ],
   },
@@ -39,7 +54,19 @@
   "migrations": [
     {
       "tag": "v1",
-      "new_sqlite_classes": ["CodemodeSession", "ProjectMcpServerConnection", "McpClientBridge"],
+      "new_sqlite_classes": [
+        "CodemodeSession",
+        "ProjectMcpServerConnection",
+        "OutboundMcpFromOurClientCapability",
+      ],
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["StreamDurableObject"],
+    },
+    {
+      "tag": "v3",
+      "new_sqlite_classes": ["RepoDurableObject", "WorkspaceDurableObject", "AgentDurableObject"],
     },
   ],
 }

@@ -5,7 +5,7 @@ import {
   type EventInput,
   type Event as EventsEvent,
   type StreamPath,
-} from "@iterate-com/events-contract";
+} from "@iterate-com/shared/streams/types";
 import type { ProcessorStreamApi } from "@iterate-com/shared/stream-processors";
 import { CodemodeProcessorContract } from "@iterate-com/shared/stream-processors/legacy-codemode/contract";
 import { createCodemodeProcessor } from "@iterate-com/shared/stream-processors/legacy-codemode/implementation";

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { StreamPath } from "@iterate-com/events-contract";
+import { StreamPath } from "@iterate-com/shared/streams/types";
 import { getStreamsSidebarState } from "./streams-sidebar-tree.ts";
 
 describe("getStreamsSidebarState", () => {

@@ -1,7 +1,7 @@
 import { DurableObject, RpcTarget } from "cloudflare:workers";
-import { EventInput } from "@iterate-com/events-contract";
 import { CodemodeExecutor } from "@iterate-com/shared/codemode/executor";
 import type { ToolProvider } from "@iterate-com/shared/codemode/types";
+import { EventInput } from "@iterate-com/shared/streams/types";
 import { CodemodeEventType, createCallId } from "./codemode-events.ts";
 
 type Env = {

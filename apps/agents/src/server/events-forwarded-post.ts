@@ -1,4 +1,4 @@
-import { Event } from "@iterate-com/events-contract";
+import { Event } from "@iterate-com/shared/streams/types";
 import { createEventsOrpcClient } from "~/lib/events-orpc-client.ts";
 import type { AppContext } from "~/context.ts";
 

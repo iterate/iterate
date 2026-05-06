@@ -1,4 +1,4 @@
-import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/events-contract";
+import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 
 export function getAncestorStreamPaths(path: StreamPathType): StreamPathType[] {
   if (path === "/") {

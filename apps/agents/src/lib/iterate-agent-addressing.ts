@@ -1,4 +1,4 @@
-import type { StreamPath } from "@iterate-com/events-contract";
+import type { StreamPath } from "@iterate-com/shared/streams/types";
 
 export {
   buildAgentStreamProcessorRunnerWebSocketCallbackUrl,

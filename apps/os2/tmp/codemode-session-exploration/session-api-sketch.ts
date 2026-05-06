@@ -6,7 +6,6 @@
  */
 
 import { DurableObject, RpcTarget } from "cloudflare:workers";
-import { createEventsClient, EventInput, StreamPath } from "@iterate-com/events-contract";
 import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
 import type { CallableContext } from "@iterate-com/shared/callable/types.ts";
 import type { ToolProviderDescriptor } from "@iterate-com/shared/codemode/types";
@@ -15,16 +14,23 @@ import { withDurableObjectCore } from "@iterate-com/shared/durable-object-utils/
 import { withLifecycleHooks } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { withKvInspector } from "@iterate-com/shared/durable-object-utils/mixins/with-kv-inspector";
 import { withOuterbase } from "@iterate-com/shared/durable-object-utils/mixins/with-outerbase";
+import { EventInput, StreamPath } from "@iterate-com/shared/streams/types";
 
 export type CodemodeSessionInitParams = {
   name: string;
+  projectId: string;
   streamPath: StreamPath;
 };
 
 type Env = {
   DO_CATALOG: D1Database;
-  EVENTS_BASE_URL: string;
   LOADER: WorkerLoader;
+  STREAM: {
+    getByName(name: string): {
+      append(input: EventInput): Promise<unknown>;
+      initialize(input: CodemodeSessionInitParams): Promise<unknown>;
+    };
+  };
   // Main os2 worker should pass ctx.exports when using loopback callables.
   // The tiny worker can also export provider bridge classes itself later.
   exports?: Record<string, unknown>;
@@ -72,10 +78,12 @@ export class CodemodeSession extends CodemodeSessionBase<Env> {
 
   async append(input: EventInput) {
     const event = EventInput.parse(input);
-    return await createEventsClient(this.env.EVENTS_BASE_URL).append({
-      path: this.getStreamPath(),
-      event,
-    });
+    const params = this.assertInitialized();
+    const stub = this.env.STREAM.getByName(`${params.projectId}::${params.streamPath}`);
+    await stub.initialize(params);
+    return {
+      event: await stub.append(event),
+    };
   }
 
   async registerToolProvider(descriptor: ToolProviderDescriptor) {

@@ -1,12 +1,12 @@
 import {
   ChildStreamCreatedEvent,
   EventInput,
-  ProjectSlug,
+  ProjectId,
   STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
   StreamPath,
-  StreamSocketFrame,
-} from "@iterate-com/events-contract";
+} from "@iterate-com/shared/streams/types";
 import { parseAppConfig } from "@iterate-com/shared/apps/config";
+import { StreamSocketFrame } from "@iterate-com/shared/streams/stream-socket-types";
 import { Agent, type Connection, type WSMessage } from "agents";
 import { z } from "zod";
 import { AppConfig } from "~/app.ts";
@@ -135,7 +135,7 @@ export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
 
     const appConfig = parseAppConfig(AppConfig, this.env.APP_CONFIG);
     const childPath = childCreated.data.payload.childPath;
-    const projectSlug = ProjectSlug.parse(appConfig.eventsProjectSlug);
+    const projectSlug = ProjectId.parse(appConfig.eventsProjectSlug);
     const runnerInstance = streamPathToAgentInstance(childPath);
     const runnerSubscriptions = [
       {

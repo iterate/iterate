@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
+import { BugIcon, DatabaseIcon, ExternalLinkIcon } from "lucide-react";
 import {
   type Event,
   type EventInput,
@@ -8,7 +9,7 @@ import {
   STREAM_CHILD_STREAM_CREATED_TYPE,
   type StreamPath,
   type StreamState,
-} from "@iterate-com/events-contract";
+} from "@iterate-com/shared/streams/types";
 import { Button } from "@iterate-com/ui/components/button";
 import { Checkbox } from "@iterate-com/ui/components/checkbox";
 import {
@@ -62,6 +63,7 @@ import {
   type StreamRendererMode,
 } from "~/lib/stream-feed-types.ts";
 import { formatClientError } from "~/lib/format-client-error.ts";
+import { defaultProjectId, resolveHostProjectId } from "~/lib/project-id.ts";
 import {
   defaultStreamViewSearch,
   type StreamComposerMode,
@@ -370,6 +372,7 @@ export function StreamPage({
     isPending: isConnecting,
     liveStreamStatus,
   });
+  const debugLinks = getStreamDebugLinks(streamPath);
 
   return (
     <EventsStreamLayout>
@@ -501,6 +504,29 @@ export function StreamPage({
 
             <Separator className="my-4" />
 
+            <div className="mb-4 flex flex-wrap items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 gap-2 px-3 text-xs"
+                render={<a href={debugLinks.kv} target="_blank" rel="noreferrer" />}
+              >
+                <BugIcon className="size-3.5" />
+                __kv
+                <ExternalLinkIcon className="size-3.5 text-muted-foreground" />
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 gap-2 px-3 text-xs"
+                render={<a href={debugLinks.outerbase} target="_blank" rel="noreferrer" />}
+              >
+                <DatabaseIcon className="size-3.5" />
+                Outerbase
+                <ExternalLinkIcon className="size-3.5 text-muted-foreground" />
+              </Button>
+            </div>
+
             <SerializedObjectCodeBlock
               data={streamStateQuery.data ?? null}
               className="min-h-80"
@@ -571,6 +597,19 @@ function getLiveStreamFailureLabel({
   return liveStreamStatus.startsWith("Error:") || liveStreamStatus.startsWith("Timed out")
     ? liveStreamStatus
     : undefined;
+}
+
+function getStreamDebugLinks(streamPath: StreamPath) {
+  const origin = typeof window === "undefined" ? "" : window.location.origin;
+  const hostname = typeof window === "undefined" ? null : window.location.hostname;
+  const projectId = resolveHostProjectId(hostname) ?? defaultProjectId;
+  const initParams = encodeURIComponent(JSON.stringify({ projectId, path: streamPath }));
+  const base = `${origin}/durable-objects/stream/by-init-params/${initParams}`;
+
+  return {
+    kv: `${base}/__kv`,
+    outerbase: `${base}/__outerbase`,
+  };
 }
 
 function reduceCleanViewState(args: { events: readonly Event[]; mode: StreamRendererMode }) {

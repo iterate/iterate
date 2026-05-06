@@ -1,5 +1,5 @@
-import type { EventInput } from "@iterate-com/events-contract";
-import type { ToolProviderDocumentation } from "@iterate-com/shared/stream-processors/codemode/contract";
+import type { EventInput } from "@iterate-com/shared/streams/types";
+import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
 
 export type CodemodePresetSeed = {
   name: string;
@@ -7,22 +7,18 @@ export type CodemodePresetSeed = {
   events: EventInput[];
 };
 
-export function createCodemodePresetSeeds(_input: {
-  workerScriptName: string;
-}): CodemodePresetSeed[] {
-  const petstore: ToolProviderDocumentation = {
-    docs: "Swagger Petstore OpenAPI documentation. This preset is model-visible context only in the current codemode event model.",
+export function createCodemodePresetSeeds(): CodemodePresetSeed[] {
+  const petstore: ToolProviderRegistration = {
+    instructions:
+      "Swagger Petstore OpenAPI reference material. Runtime API execution is intentionally event-based and not wired by this preset.",
+    invocation: { kind: "event" },
     path: ["petstore"],
-    instructions:
-      "Use this as reference material; runtime API execution is not wired by this preset.",
-    typeDefinitions: "declare const petstore: unknown;",
   };
-  const apisGuru: ToolProviderDocumentation = {
-    docs: "APIs.guru OpenAPI documentation. This preset is model-visible context only in the current codemode event model.",
-    path: ["apis"],
+  const apisGuru: ToolProviderRegistration = {
     instructions:
-      "Use this as reference material; runtime API execution is not wired by this preset.",
-    typeDefinitions: "declare const apis: unknown;",
+      "APIs.guru OpenAPI reference material. Runtime API execution is intentionally event-based and not wired by this preset.",
+    invocation: { kind: "event" },
+    path: ["apis"],
   };
 
   return [
@@ -39,7 +35,7 @@ export function createCodemodePresetSeeds(_input: {
   ];
 }
 
-function toolProviderRegisteredEvent(provider: ToolProviderDocumentation): EventInput {
+function toolProviderRegisteredEvent(provider: ToolProviderRegistration): EventInput {
   return {
     type: "events.iterate.com/codemode/tool-provider-registered",
     idempotencyKey: `seed:tool-provider:${provider.path.join("/")}`,

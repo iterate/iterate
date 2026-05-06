@@ -1,11 +1,7 @@
 import alchemy, { type Scope } from "alchemy";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { z } from "zod";
-import {
-  compileRawAppConfigFromEnv,
-  parseAppConfigFromEnv,
-  type BaseAppConfig,
-} from "../apps/config.ts";
+import { compileRawAppConfigFromEnv, parseAppConfigFromEnv } from "../apps/config.ts";
 import type { AppManifest } from "../apps/types.ts";
 import { slugify } from "../slugify.ts";
 
@@ -50,13 +46,13 @@ export async function initAlchemy<TSchema extends z.ZodTypeAny>(
   const alchemyEnv = AlchemyEnv.parse(env);
   if (alchemyEnv.ALCHEMY_LOCAL) delete env.CI;
 
-  const compiledAppConfig = parseAppConfigFromEnv({
+  const runtimeConfig = parseAppConfigFromEnv({
     configSchema,
     prefix: "APP_CONFIG_",
     env,
-  }) as BaseAppConfig & z.output<TSchema>;
+  }) as z.output<TSchema>;
 
-  const rawAppConfig = compileRawAppConfigFromEnv({
+  const rawRuntimeConfig = compileRawAppConfigFromEnv({
     configSchema,
     prefix: "APP_CONFIG_",
     env,
@@ -75,38 +71,12 @@ export async function initAlchemy<TSchema extends z.ZodTypeAny>(
   });
 
   const workerName = slugify(`${manifest.slug}-${app.stage}`);
-  const compiledAppConfigWithDeployment = withDeploymentConfig(compiledAppConfig, {
-    workerScriptName: workerName,
-  });
-  const rawAppConfigWithDeployment = withDeploymentConfig(rawAppConfig, {
-    workerScriptName: workerName,
-  });
 
   return {
     app,
     manifest,
     workerName,
-    compiledAppConfig: compiledAppConfigWithDeployment,
-    rawAppConfig: rawAppConfigWithDeployment,
-  };
-}
-
-function withDeploymentConfig<TConfig extends Record<string, unknown>>(
-  config: TConfig,
-  deployment: NonNullable<BaseAppConfig["deployment"]>,
-) {
-  const existingDeployment =
-    typeof config.deployment === "object" &&
-    config.deployment !== null &&
-    !Array.isArray(config.deployment)
-      ? config.deployment
-      : {};
-
-  return {
-    ...config,
-    deployment: {
-      ...existingDeployment,
-      ...deployment,
-    },
+    runtimeConfig,
+    rawRuntimeConfig,
   };
 }

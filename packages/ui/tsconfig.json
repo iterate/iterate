@@ -12,7 +12,7 @@
     "moduleResolution": "bundler",
     "skipLibCheck": true,
     "paths": {
-      "@iterate-com/events-contract": ["../../apps/events-contract/src/index.ts"],
+      "@iterate-com/shared/*": ["../../packages/shared/src/*"],
       "@iterate-com/ui/*": ["./src/*"]
     }
   },

@@ -50,6 +50,22 @@ _Avoid_: Project ID
 The organization-scoped URL for a Project, identified by Clerk Organization slug and Project slug.
 _Avoid_: Global project URL, project ID URL
 
+**Project Route Context**:
+The TanStack Router context resolved by a Project Route and inherited by Project child routes.
+_Avoid_: Repeated project lookup, page-local project state
+
+**Project-Scoped Procedure**:
+An OS2 oRPC procedure that first resolves and authorizes exactly one Project before running its handler.
+_Avoid_: Raw projectId handler, unchecked project route
+
+**Project Selector**:
+The exactly-one `projectId` or `projectSlug` input used by Project-Scoped Procedures to identify a Project.
+_Avoid_: projectIdOrSlug, parallel unchecked IDs
+
+**Project Durable Object Namespace**:
+The Worker environment binding used by server code to obtain Project Durable Object stubs.
+_Avoid_: project context, resolved project
+
 **Project MCP Route**:
 The project-scoped MCP server route for one Project, served from a project-owned MCP hostname and resolved through Project ingress.
 _Avoid_: Global MCP endpoint, MCP project selector, `/mcp` path
@@ -134,9 +150,13 @@ _Avoid_: Project Ingress, generic fetch, external calls
 A named WorkerEntrypoint exported as `ProjectEgressEntrypoint` that receives Project identity as props, resolves the Project Durable Object, and delegates Project Egress to it.
 _Avoid_: Egress gateway, egress proxy, outbound worker
 
+**Codemode Fetch Capability**:
+The default RPC Tool Provider used by codemode for ordinary Script `fetch(...)` and `ctx.fetch(...)` calls.
+_Avoid_: Raw Dynamic Worker fetch, untraced public fetch
+
 **Dynamic Worker Egress Gateway**:
-The `globalOutbound` binding given to a Dynamic Worker so the worker's outbound `fetch()` calls become Project Egress.
-_Avoid_: External fetch gateway, raw internet access
+The future `globalOutbound` binding or fetch-shaped capability that enforces Project Egress policy for Dynamic Worker outbound calls.
+_Avoid_: Raw internet access
 
 **Project Egress Policy**:
 Project-owned rules that decide whether a Project Egress request is allowed, denied, or held for human review.
@@ -148,7 +168,7 @@ _Avoid_: Approval event, policy override
 
 **Project MCP Server Entry Point**:
 A named WorkerEntrypoint exported as `ProjectMcpServerEntrypoint` that receives Project identity as props and exposes that Project's MCP server as a fetch destination.
-_Avoid_: Global MCP server, MCP route, Iterate MCP server
+_Avoid_: Global MCP server, MCP route, Iterate MCP server, Tool Provider, Capability wrapper
 
 **Loopback Fetch Callable**:
 A Fetch Callable that targets a named entrypoint exported by the same Worker and passes dynamic props through Cloudflare loopback bindings.
@@ -274,6 +294,10 @@ _Avoid_: Project preset, saved session, fixture
 The project-scoped form used to create or attach to a Codemode Session, optionally prefilled from a Codemode Example.
 _Avoid_: Example runner, run page, execution form
 
+**Project Stream Explorer**:
+The OS2 project-bound UI for discovering and inspecting every initialized Event Stream Path for one Project.
+_Avoid_: Events app stream explorer, stream tree
+
 ### Codemode
 
 **Codemode Session**:
@@ -281,7 +305,7 @@ A durable codemode execution context initialized for one Project ID and one Even
 _Avoid_: Runtime, worker, conversation
 
 **Event Stream Path**:
-The events app stream address that a Codemode Session reads from and appends to.
+The project-scoped stream address that a Codemode Session reads from and appends to.
 _Avoid_: Session ID, Durable Object name
 
 **Codemode Session Name**:
@@ -292,9 +316,21 @@ _Avoid_: Session ID, stream path
 A scoped RPC capability handed to script executors and tool providers so they can interact with a Codemode Session.
 _Avoid_: RpcTarget, session stub, callback bundle
 
+**StreamsCapability**:
+A Project ID-scoped RPC capability for stream operations, optionally narrowed to one Event Stream Path.
+_Avoid_: StreamCapability, generic stream client
+
 **Codemode Session Control Plane**:
 The explicit command surface for starting codemode work on a Codemode Session.
 _Avoid_: Generic append API, stream API
+
+**Codemode Session Started Event**:
+The codemode event that records a Codemode Session's stream-level runtime capability.
+_Avoid_: Capability registration, provider registration, session metadata
+
+**Session Capability Callable**:
+The Callable on a Codemode Session Started Event that lets processors call back into the Codemode Session.
+_Avoid_: Codemode session capability callable, session capability, provider callable
 
 **Codemode Context**:
 The local JavaScript object built from a Codemode Session Capability and passed to codemode scripts or provider implementations.
@@ -303,6 +339,14 @@ _Avoid_: ExecutionContext, tools, ctx tools
 **Tool Provider**:
 Model-visible documentation for one or more Tool Functions available in a Codemode Session.
 _Avoid_: Tool, bridge, runtime
+
+**Tool Provider Instructions**:
+String-form guidance registered for a Tool Provider path that tells Script authors how to use that Tool Provider.
+_Avoid_: Documentation field, function registry, route manifest
+
+**Callable Builder**:
+A helper function that constructs a Callable descriptor for one Capability invocation shape.
+_Avoid_: Static callable, callable JSON helper, descriptor factory
 
 **Tool Function**:
 A callable function provided by a Tool Provider and addressed by a path on the Codemode Context.
@@ -332,6 +376,78 @@ _Avoid_: Script ID, requested offset field
 The Function Call correlation ID stored in codemode events.
 _Avoid_: Tool call ID, requested offset field
 
+**Provider Path**:
+The registered Codemode Context path at which a Tool Provider is mounted.
+_Avoid_: Root path, namespace, provider slug
+
+**Function Path**:
+The Codemode Context path remaining after the Provider Path has been matched.
+_Avoid_: Relative path, method path, route
+
+**Unary Tool Provider**:
+A Tool Provider whose Provider Path is itself callable and whose Function Path is empty when called.
+_Avoid_: Root tool, special function, direct callable
+
+**Event-Mediated Tool Function**:
+A Tool Function whose request and completion are mediated through Codemode Session events.
+_Avoid_: Offline tool, queue tool
+
+**RPC Tool Function**:
+A Tool Function whose request is traced by Codemode Session events but whose live invocation uses Workers RPC so request arguments and return values may include Cloudflare live values.
+_Avoid_: Direct tool, non-event tool
+
+**Stateful Tool Provider Endpoint**:
+A directly addressable Durable Object or Worker endpoint that executes Tool Functions while owning long-lived connection state.
+_Avoid_: Singleton tool, direct service, provider runtime
+
+**Outbound Tool Provider Actor**:
+A Tool Function Implementation that is not externally addressable and can only observe requests or report results through outbound communication.
+_Avoid_: Offline tool, browser tool, poll provider
+
+**SDK-backed Tool Provider**:
+A Tool Provider whose Tool Function paths are mapped to calls on an underlying SDK rather than enumerated as separate OS2-owned function definitions.
+_Avoid_: Generated tool registry, SDK route table
+
+**Event-Mediated Tool Provider**:
+A Tool Provider whose Tool Function Implementations observe Function Call request events and append matching Function Call completion events.
+_Avoid_: Callback provider, offline provider
+
+**RPC Tool Provider**:
+A Tool Provider whose Tool Function Implementations are reached through an RPC capability registered for a Codemode Context path.
+_Avoid_: Direct tool, live provider
+
+**Live Tool Handle**:
+A Cloudflare RPC value returned by an RPC Tool Provider that exposes its own method surface after the Codemode Function Call returns.
+_Avoid_: Tool Function, nested codemode path, provider proxy
+
+**Repo Durable Object**:
+A project-scoped Durable Object selected by Project ID and repo slug and exposed to codemode as a Live Tool Handle.
+_Avoid_: Repository row, repo provider, GitHub repo
+
+**Workspace Durable Object**:
+A project-scoped Durable Object selected by Project ID and workspace slug and exposed to codemode as a Live Tool Handle.
+_Avoid_: Clerk Organization, Project, workspace alias
+
+**Workspace**:
+A project-scoped live work surface exposed to codemode through `ctx.workspace`.
+_Avoid_: Clerk Organization, Project, workspace alias
+
+**Agent Durable Object**:
+A project-scoped Durable Object representing a subagent that can be created from codemode and returned as a Live Tool Handle.
+_Avoid_: Script Execution, Tool Provider, assistant message
+
+**Outbound MCP From Our Client Capability**:
+A Durable Object-backed codemode Tool Provider capability that connects from OS2 to one external MCP server using our MCP client connection and exposes that remote server as codemode Tool Functions through `executeCodemodeFunctionCall`.
+_Avoid_: Project MCP Server Connection, inbound MCP server, MCP metadata provider, describe callable, MCP registry
+
+**OpenAPI Client Capability**:
+A capability that exposes one OpenAPI specification as codemode Tool Functions.
+_Avoid_: OpenAPI metadata provider, describe callable, OpenAPI registry
+
+**oRPC Capability**:
+A capability that exposes an oRPC router or contract subtree as codemode Tool Functions using a server-side caller context.
+_Avoid_: HTTP oRPC client, oRPC metadata provider, router registry
+
 **Script**:
 User-authored TypeScript or JavaScript code that can be run by codemode.
 _Avoid_: Function, tool, provider, execution
@@ -348,13 +464,9 @@ _Avoid_: Tool provider descriptor, session capability
 A Durable Object-backed connection from an external MCP client into OS2's project-scoped MCP server, implemented by the `ProjectMcpServerConnection` Durable Object.
 _Avoid_: Iterate MCP server, MCP client provider, outbound MCP connection
 
-**Outbound MCP Client Connection**:
-An OS2-owned connection to an external MCP server, represented by a Durable Object and usable as a Tool Provider.
-_Avoid_: Project MCP Server Connection, project MCP route
-
-**Tool Provider Documentation**:
-Serializable model-visible docs, instructions, and optional type definitions for a Tool Provider path.
-_Avoid_: Provider descriptor, callable provider
+**Outbound MCP From Our Client Tool Provider**:
+A Tool Provider registration whose RPC Callable targets an **Outbound MCP From Our Client Capability**.
+_Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 
 ## Relationships
 
@@ -370,7 +482,13 @@ _Avoid_: Provider descriptor, callable provider
 - The **Project Listing Projection** is derived query state and should be written by the **Project Durable Object** as part of Project lifecycle commands.
 - A **Project Route** includes both the owning **Clerk Organization** slug and the **Project** slug.
 - A **Project Slug** is route identity and may change; a **Project ID** is stable identity.
+- A **Project Route** resolves its **Project Slug** once and exposes the Project through **Project Route Context** to child routes.
 - The **Project Slug** used in the **Project Route** corresponds to the project slug used by the events app.
+- A **Project-Scoped Procedure** accepts either a stable **Project ID** or a **Project Slug** for manual API ergonomics, then resolves and authorizes the Project before handler code runs.
+- A **Project Selector** must contain exactly one of `projectId` or `projectSlug`; providing both or neither is invalid.
+- A **Project-Scoped Procedure** resolves its **Project Selector** before its handler code runs.
+- A **Project Durable Object Namespace** is infrastructure context; a resolved and authorized **Project** is domain context.
+- Browser routes should use **Project Route Context** to resolve pretty route slugs before calling project-scoped procedures, but the oRPC surface may still accept Project Slugs for curl-able/manual calls.
 - Every Project has a **Stable Project Ingress Host** derived from the **Project ID**.
 - Every Project has a **Slug Project Ingress Host** derived from the current **Project Slug**.
 - A Project may have a **Custom Project Ingress Host**.
@@ -403,6 +521,7 @@ _Avoid_: Provider descriptor, callable provider
 - The **Project Egress Entry Point** should take only a stable **Project ID** prop in v1, resolve the Project Durable Object by that **Project ID**, and delegate outbound request handling to the Project Durable Object.
 - The **ProjectDurableObject** method for Project Egress should be named `egressFetch`.
 - Codemode Dynamic Workers should receive a **Dynamic Worker Egress Gateway** that targets the **Project Egress Entry Point** for their Project.
+- Until that gateway is wired, codemode Script `fetch(...)` calls go through the default **Codemode Fetch Capability** so they are still traceable as Function Calls.
 - The **Project Durable Object** is the authority for **Project Egress Policy** and **Project Egress Approval** for one Project.
 - A **Project Egress Policy** decision may hold a **Project Egress** request until a **Project Egress Approval** releases or rejects it.
 - **Secret** is a separate domain concept from **Project Egress**; Project Egress may perform **Secret Injection**, but a Secret can exist independently of an outbound request.
@@ -423,11 +542,14 @@ _Avoid_: Provider descriptor, callable provider
 - V1 **Secret Injection** may be limited to HTTP headers.
 - **Project Egress Approval** must not expose raw Secret values after **Secret Injection**.
 - The **Project MCP Server Entry Point** class/export name is `ProjectMcpServerEntrypoint`.
+- The **Project MCP Server Entry Point** is a fetch-based Worker entrypoint, not a Tool Provider or Capability wrapper.
 - The **Project MCP Server Entry Point** takes only a stable **Project ID** prop in v1 and is the default project-local MCP server fetch destination.
 - A **Project MCP Route** is host-routed in v1; every path on that MCP hostname is delegated to the **Project MCP Server Entry Point**.
 - The **Project MCP Server Entry Point** owns MCP protocol paths, OAuth protected-resource metadata paths, browser instructions, and 404s for unsupported paths on that MCP hostname.
 - A browser request to a **Project MCP Route** that is not an MCP client connection may return a static HTML instructions page.
 - The **Project MCP Server Connection** Durable Object class/catalog name is `ProjectMcpServerConnection`.
+- The **Outbound MCP From Our Client Capability** Durable Object class name is `OutboundMcpFromOurClientCapability`.
+- The **Outbound MCP From Our Client Capability** uses the `OUTBOUND_MCP_FROM_OUR_CLIENT_CAPABILITY` namespace binding.
 - The **Project MCP Server Entry Point** owns MCP OAuth protocol verification in v1.
 - The **Project Durable Object** must not grow MCP-specific authorization methods such as `authorizeMcpServerConnection`.
 - The **Project Durable Object** may expose a generic **Project Access Check** in v1 for entrypoints that have already verified a principal.
@@ -478,13 +600,13 @@ _Avoid_: Provider descriptor, callable provider
 - A remote MCP client calls OS2 with a **Clerk OAuth Token**, not a Clerk session token.
 - OS2 accepts Clerk's OAuth token contract for MCP; JWT token format is the preferred Clerk environment setting, not the domain boundary.
 - The browser UI explicitly creates and selects **Codemode Sessions** for a **Project**.
-- Browser oRPC calls identify the **Project** through the **Project Route** and frontend route context, then pass the stable **Project ID** to codemode.
+- Browser oRPC calls identify the **Project** through the **Project Route** and **Project Route Context**.
 - Browser oRPC may pass an **Event Stream Path** when creating a **Codemode Session**; if it does not, OS2 generates one for the Project.
 - The **Codemode Session Creation Form** may include an optional **Event Stream Path** so users can attach the codemode processor to an existing stream.
 - Creating a **Codemode Session** is attach-or-create for the pair of **Project ID** and **Event Stream Path**.
 - A **Project MCP Server Connection** already has an **Event Stream Path**; when it runs codemode, the **Codemode Session** uses that same Event Stream Path.
 - Project MCP server `run_code` may include Event Inputs, such as Tool Provider registration events, which are appended to the **Codemode Session** before the **Script Execution** starts.
-- An **Outbound MCP Client Connection** is a Tool Provider; it is unrelated to **Project MCP Server Connection** identity.
+- An **Outbound MCP From Our Client Capability** can be registered as a Tool Provider; it is unrelated to **Project MCP Server Connection** identity.
 - A **Codemode Session** is initialized with exactly one stable **Project ID** and exactly one **Event Stream Path**.
 - An **Event Stream Path** may exist before a **Codemode Session** is attached to it.
 - For any given pair of **Project ID** and **Event Stream Path**, there is at most one **Codemode Session**.
@@ -495,6 +617,12 @@ _Avoid_: Provider descriptor, callable provider
 - The **Codemode Session Control Plane** commands append codemode request events to the **Event Stream Path**.
 - Low-level stream operations exposed to scripts are ordinary path-addressed **Tool Functions**.
 - A **Codemode Session** starts a **Script** by appending a script-execution-requested event and returning that committed event immediately.
+- The codemode processor should append exactly one **Codemode Session Started Event** as its user-space initialization event for a Codemode Session stream.
+- The **Codemode Session Started Event** type is `events.iterate.com/codemode/session-started`.
+- A **Codemode Session Started Event** carries only a **Session Capability Callable**.
+- A singleton event for one stream may use its event type as its idempotency key.
+- The codemode processor tracks whether it has emitted the **Codemode Session Started Event** in reduced state, similar to processor registration but specific to codemode's domain events.
+- The **Session Capability Callable** is supplied to the codemode processor as a Runtime dependency; the shared processor does not construct OS2-specific callables itself.
 - Reading Script Execution output is a subscription to the **Event Stream Path**, not part of the start command.
 - A **Codemode Session** owns the Tool Provider registry for its **Event Stream Path**.
 - One-shot adapters may register Tool Providers immediately before starting a **Script Execution**.
@@ -514,14 +642,233 @@ _Avoid_: Provider descriptor, callable provider
 - A **Function Call** completes when a matching function-call-completed event appears.
 - Function Call completion events reference the **Function Call ID**.
 - Function Call request events and completion events both include the **Function Call ID**.
+- Function Call request events include the full Function Call path, the matched **Provider Path**, and the provider-relative **Function Path**.
+- Tool Function Implementations should normally switch on **Function Path**, not the full Function Call path, so they do not depend on their mount depth.
+- Function Call request events use an `args` field for both Event-Mediated and RPC Tool Providers.
+- RPC Function Call request `args` are best-effort serialized for traceability; Cloudflare live values such as callback functions, streams, or Durable Object stubs may be represented as summaries such as `[Function]` while the real live values travel only through Workers RPC.
 - Function Call completion events include the completed function path for readable event feeds and debugging.
+- Function Call completion outcomes use JavaScript terms: a Function Call either `returned` a value or `threw` an error.
+- The canonical durable Function Call protocol is a requested/completed event pair.
+- A Tool Function Implementation completes an Event-Mediated Tool Function by appending a matching function-call-completed event.
+- Function Call result delivery has separate dimensions: how a Tool Function Implementation observes requests, what kind of result value it returns, and how long the call takes.
+- A Tool Function Implementation may observe Function Call requests by direct stream processing, queue subscription, pull-based polling, or another event delivery mechanism.
+- HTTP/fetch result delivery can report only serialized return values and serialized exceptions.
+- Workers RPC result delivery can report serialized values and Cloudflare live values such as functions, streams, `RpcTarget`s, or Durable Object stubs.
+- Long-running Function Calls must remain valid when their eventual result is serialized, even if no warm in-memory RPC channel remains.
+- An **Event-Mediated Tool Function** can be implemented by a Tool Function Implementation that is not directly reachable when the Function Call is requested.
+- A **Stateful Tool Provider Endpoint** may expose Tool Functions backed by a singleton connection, such as a Discord WebSocket held by one Durable Object.
+- An **Outbound Tool Provider Actor** may execute Tool Functions from a browser extension, browser tab, or pull-based processor runner that cannot be called directly by codemode.
+- An **RPC Tool Function** can receive live request arguments from a **Script**, including callback functions, streams, or Durable Object stubs.
+- An **RPC Tool Function** can return live Cloudflare values to a **Script**.
+- Codemode must support promise-pipelined Workers RPC call style for RPC Tool Functions, such as `await ctx.sandbox.get({ name }).exec({ cmd })`.
 - A **Tool Provider** provides one or more **Tool Functions**.
+- A **Tool Provider** may document its Tool Functions with **Tool Provider Instructions** instead of enumerating the full API surface as structured data.
 - A **Leaf Tool Function** is a **Tool Function** whose remaining path is empty after provider resolution.
 - A **Provider Bridge** adapts an external system into Tool Provider documentation plus a **Tool Function Implementation**.
+- An **SDK-backed Tool Provider** resolves the Function Call path at execution time and delegates to the matching SDK member.
 - Codemode calls **Tool Functions** by appending function-call-requested events and waiting for matching function-call-completed events.
+- Every **Tool Function Call** has the same durable requested/completed event pair, regardless of provider mechanism.
+- For an **RPC Tool Provider**, the **Codemode Processor** appends both the function-call-requested event and the function-call-completed event around `executeCodemodeFunctionCall(...)`.
+- For an **Event-Mediated Tool Provider**, the **Codemode Processor** appends the function-call-requested event, but the Tool Function Implementation owns appending the matching function-call-completed event.
 - `ctx.<provider>.<toolFunction>(payload)` calls a **Tool Function**.
 - Built-in stream operations, such as append, are ordinary **Tool Functions** under paths like `ctx.streams.append(...)`.
+- A **StreamsCapability** defaults operations to its narrowed **Event Stream Path** when the caller omits a path.
+- In a narrowed **StreamsCapability**, stream paths without a leading slash, including `./` paths, resolve relative to the narrowed **Event Stream Path**.
+- In a narrowed **StreamsCapability**, stream paths with a leading slash resolve as absolute project-scoped **Event Stream Paths** and remain subject to capability policy.
+- Navigating to an **Event Stream Path** in the Project Stream Explorer may initialize that stream; users do not need a separate create-stream command.
+- The **Project Stream Explorer** lists every initialized **Event Stream Path**, including `/`, as a flat list rather than a tree.
+- For the **Project Stream Explorer**, an Event Stream Path exists in reality when its Stream Durable Object is initialized and cataloged for the Project.
+- Child stream paths observed from a parent stream are navigation hints, not main-list entries, until their own Stream Durable Object is initialized.
 - **Tool Provider** registration is primarily documentation; runtime callability may be supplied by processor helpers but is not the primary meaning of registration.
+- Codemode supports two principal Tool Provider mechanisms: **Event-Mediated Tool Providers** and **RPC Tool Providers**.
+- An **Event-Mediated Tool Provider** is the default for stream processors, long-running processors, pull-based actors, and SDK-backed processors that can work from the event log.
+- An **RPC Tool Provider** is required when a Script must pass or receive Cloudflare live values, preserve Workers RPC promise pipelining, or call a platform binding through a small policy-enforcing capability.
+- An **RPC Tool Provider** receives an `executeCodemodeFunctionCall({ path, args, scriptExecutionId, functionCallId })` call so one thin wrapper can proxy a whole SDK, binding surface, or Live Tool Handle lookup.
+- Capability modules may expose a **Callable Builder** so registration code can construct the relevant Callable descriptor without hand-writing callable JSON.
+- A **Live Tool Handle** returned by an **RPC Tool Provider** is not itself a Codemode Context path proxy.
+- Codemode records the Function Call that returns a **Live Tool Handle**; methods later called on that handle belong to the handle's own Workers RPC surface unless that provider adds its own tracing.
+- Provider-to-provider composition uses a **Codemode Context** or **Codemode Session Capability** inside the Tool Function Implementation and records nested Function Call lifecycle events.
+- Event-Mediated Tool Providers may reduce over the **Codemode Session Started Event**, store its **Session Capability Callable**, and use that callable to build a **Codemode Context**.
+- The Repo example uses a WorkerEntrypoint **RPC Tool Provider** that returns a **Live Tool Handle** for a **Repo Durable Object** selected by Project ID from provider props and the requested slug.
+- The **Workspace** example uses a **Workspace Durable Object** as the **RPC Tool Provider** itself, with `executeCodemodeFunctionCall` implemented on the Durable Object.
+- `ctx.workspace` is an implicit current **Workspace**; its Durable Object identity is selected by the registered RPC callable, not by a selector passed in the Script.
+- `ctx.createSubagent()` is a root-level **RPC Tool Function** that returns a **Live Tool Handle** for an **Agent Durable Object**.
+- `ctx.createSubagent().sendMessage(...)` is the explicit **Live Tool Handle** case and must stay supported.
+- `ctx.makeSubagent().doThing(...)` is the root-level promise-pipelined **Live Tool Handle** case and must stay supported alongside `ctx.createSubagent().sendMessage(...)`.
+- A **Unary Tool Provider** uses an empty **Function Path** to mean the provider itself is the called function.
+- Dynamic MCP and OpenAPI discovery should be exposed as ordinary Tool Functions such as `listTools` and `listOperations`, not as a separate provider-description protocol.
+- An **Outbound MCP From Our Client Capability** owns one MCP client connection to one external MCP server in v1.
+- An **oRPC Capability** may expose nested oRPC routers as nested Codemode Context paths.
+- An **oRPC Capability** should call OS2 oRPC handlers in-process with a server-side caller context when the implementation is available in the same Worker.
+- An **oRPC Capability** should expose generated TypeScript signatures through ordinary discovery Tool Functions, not by embedding the full API surface in Tool Provider registration.
+- External MCP tool names and OpenAPI operation IDs are treated as exact Function Path segments, even when they contain dots.
+- OS2 should register codemode examples for each supported Tool Provider topology so users can run real Scripts against the examples.
+
+## Target Codemode Blocks
+
+```ts
+await ctx.slack.chat.postMessage({ channel: "C123", text: "hello" });
+```
+
+The Slack case targets an **Event-Mediated Tool Provider** and **SDK-backed Tool Provider**: the registered documentation can say that `ctx.slack` delegates to the Slack SDK, while the Slack processor maps the remaining path to the SDK member at execution time.
+
+```ts
+await ctx.discord.sendMessage({ channelId: "123", content: "hello" });
+```
+
+The Discord case targets an **Event-Mediated Tool Provider** backed by a long-running processor or Durable Object that owns a singleton Discord WebSocket connection and appends completion events after Discord responds.
+
+```ts
+await ctx.browserExtension.click({ selector: "button[type=submit]" });
+const title = await ctx.browserExtension.textContent({ selector: "h1" });
+```
+
+The browser case targets an **Outbound Tool Provider Actor**: a browser extension, browser tab, or pull-based processor runner may observe Function Call requests and report completion through outbound communication.
+
+```ts
+const result = await ctx.sandbox.get({ name: "build" }).exec("pnpm test");
+```
+
+The sandbox case targets an **RPC Tool Function** that returns a **Live Tool Handle** and preserves Workers RPC promise pipelining, so codemode must not eagerly await the intermediate sandbox handle before returning it to the Script.
+
+```ts
+await ctx.repos.get({ slug: "web" }).proofOfConcept({
+  callback: async (args) => {
+    console.log("callback called", args);
+  },
+});
+```
+
+The Repo case targets an **RPC Tool Provider** whose `repos.get` Function Call returns a **Live Tool Handle** for a Repo Durable Object initialized by Project ID and slug; `proofOfConcept` is a method on that returned handle, not a separate Codemode Function Call.
+
+```ts
+await ctx.workspace.proofOfConcept({
+  callback: async (args) => {
+    console.log("workspace callback called", args);
+  },
+});
+```
+
+The Workspace case targets a singular **Workspace** surface: `ctx.workspace` is backed directly by a **Workspace Durable Object** RPC Tool Provider that implements `executeCodemodeFunctionCall`.
+
+```ts
+const result = await ctx.createSubagent().sendMessage({
+  message: "hi",
+  subPath: "bob",
+});
+```
+
+The Agent case targets a root-level **Unary Tool Provider**: `createSubagent()` is the Codemode Function Call with an empty **Function Path**, it returns a **Live Tool Handle** for an **Agent Durable Object**, and `sendMessage` is a Workers RPC method on that returned handle.
+
+```ts
+const result = await ctx.makeSubagent().doThing({
+  label: "promise-pipeline",
+  value: 21,
+});
+```
+
+The promise-pipelined Agent case targets the same root-level **Unary Tool Provider** shape, but proves that codemode can preserve Workers RPC promise pipelining when a **Live Tool Handle** is returned and immediately called.
+
+```ts
+const tools = await ctx.cloudflareDocs.listTools();
+console.log("Cloudflare Docs MCP tools", tools);
+
+const answer = await ctx.cloudflareDocs.search({
+  query: "Workers RPC promise pipelining",
+});
+```
+
+The MCP case targets an **Outbound MCP From Our Client Capability**: `ctx.cloudflareDocs.listTools()` is an ordinary Tool Function that returns the live MCP tool listing, and listed tools are called through the same provider namespace.
+
+```ts
+const operations = await ctx.petstore.listOperations();
+console.log("Petstore operations", operations);
+
+const pet = await ctx.petstore.getPetById({ petId: 123 });
+```
+
+The OpenAPI case targets an **OpenAPI Client Capability**: `ctx.petstore.listOperations()` is an ordinary Tool Function that explains the spec-derived operation surface, and operation IDs are called through the same provider namespace.
+
+```ts
+const result = await ctx.os.test.helloWorld({
+  name: "codemode",
+});
+```
+
+The oRPC case targets an **oRPC Capability**: nested oRPC router paths become nested Codemode Context paths, and the capability supplies the server-side caller context needed to run the handler in-process.
+
+```ts
+const procedures = await ctx.os.listProcedures();
+console.log("OS2 oRPC procedures", procedures);
+
+const result = await ctx.os.test.logDemo({
+  label: "codemode",
+});
+```
+
+The oRPC discovery case mirrors MCP and OpenAPI: `ctx.os.listProcedures()` is an ordinary Tool Function that walks the exposed oRPC contract/router metadata and returns generated TypeScript signatures plus procedure metadata for the exposed oRPC subtree. Provider-generated type definitions should declare a full **Codemode Context** root named `ctx`, including `ctx.fetch`, `ctx.console`, and the provider's own methods nested under its mounted **Provider Path** such as `ctx.os` or `ctx.builtin.slack`.
+
+```ts
+const response = await fetch("https://api.example.com/data");
+```
+
+The fetch case targets the **Codemode Fetch Capability** first: ordinary Script `fetch` is a default Tool Function so it is traceable in codemode events. Project-owned outbound policy and egress proxy enforcement belong inside that capability as it hardens.
+
+```ts
+console.log("deployed", { version: "abc123" });
+```
+
+The console case targets codemode telemetry: ordinary Script console calls should produce codemode log events without requiring explicit `ctx.log` calls.
+
+```ts
+const answer = await ctx.ai.run("@cf/meta/llama-3.1-8b-instruct", {
+  prompt: "Summarize the latest deployment log.",
+});
+```
+
+The AI case targets a minimal wrapper around the Workers AI binding: codemode should make `env.AI.run(model, options)` available without forcing OS2 to enumerate every model-specific argument shape.
+
+```ts
+const stream = await ctx.ai.run("@cf/meta/llama-3.1-8b-instruct", {
+  prompt: "Stream a release note.",
+  stream: true,
+});
+```
+
+The streaming AI case targets an **RPC Tool Provider** because Workers AI can return streamed results that should remain live when the underlying Workers RPC transport supports them.
+
+```ts
+const screenshot = await ctx.browserRendering.screenshot("https://example.com", {
+  viewport: { width: 1280, height: 720 },
+});
+```
+
+The browser rendering case targets Cloudflare Browser Run: simple browser actions should be available with low boilerplate, while richer sessions may delegate to the underlying Puppeteer, Playwright, or CDP APIs.
+
+```ts
+await ctx.browserRun.page({ session: "checkout" }).goto("https://example.com");
+const png = await ctx.browserRun.page({ session: "checkout" }).screenshot();
+```
+
+The Browser Run session case targets an **RPC Tool Provider** backed by a Durable Object that owns or reuses a live browser session and returns promise-pipelineable **Live Tool Handles**.
+
+```ts
+await ctx.streams.append({
+  path: "/projects/proj_123/audit",
+  event: {
+    type: "events.example.com/audit/note-added",
+    payload: { message: "hello" },
+  },
+});
+```
+
+The streams case targets low-level stream operations as Tool Functions: codemode may append to the current Event Stream Path by default, and may append to another allowed Event Stream Path when a path is provided.
+
+```ts
+await ctx.providerA.composeFromProviderB({ value: "hello" });
+```
+
+The provider composition case targets provider-to-provider Tool Function Calls: a Tool Function Implementation should be able to receive a **Codemode Context** or **Codemode Session Capability** and call other Tool Functions while codemode records the nested Function Call lifecycle.
 
 ## Example Dialogue
 
@@ -537,8 +884,47 @@ _Avoid_: Provider descriptor, callable provider
 > **Dev:** "Does a Function Call dispatch the Provider directly?"
 > **Domain expert:** "No. A **Tool Function Call** is event-driven: append the requested event, then wait for the matching completed event."
 
-> **Dev:** "How does codemode learn provider types?"
-> **Domain expert:** "Tool Provider registration carries documentation and optional type definitions directly."
+> **Dev:** "Is `ctx.repos.get({ slug }).proofOfConcept(...)` two Codemode Function Calls?"
+> **Domain expert:** "No. `repos.get` is the Codemode Function Call. It returns a **Live Tool Handle**, and `proofOfConcept` is a Workers RPC method on that returned handle."
+
+> **Dev:** "Does `ctx.createSubagent().sendMessage(...)` have a provider namespace?"
+> **Domain expert:** "No. `createSubagent` is a root-level **Unary Tool Provider** whose returned **Live Tool Handle** exposes `sendMessage`."
+
+> **Dev:** "Can we replace `ctx.createSubagent().sendMessage(...)` with only `ctx.makeSubagent().doThing(...)`?"
+> **Domain expert:** "No. Keep both: `createSubagent()` proves explicit handle use, while `makeSubagent().doThing(...)` proves promise-pipelined handle use."
+
+> **Dev:** "Should a provider switch on the full path where it was mounted?"
+> **Domain expert:** "No. Codemode passes both **Provider Path** and **Function Path**; providers should usually switch on **Function Path**."
+
+> **Dev:** "Do RPC Function Call request events use `argsSummary`?"
+> **Domain expert:** "No. Use `args` for the event field and serialize live values as well as possible for traceability."
+
+> **Dev:** "Should Function Call completion say succeeded or failed?"
+> **Domain expert:** "No. Use JavaScript semantics: a Function Call `returned` or `threw`."
+
+> **Dev:** "Should an RPC Tool Provider implement `executeFunctionCall`?"
+> **Domain expert:** "Use `executeCodemodeFunctionCall` so the method name is explicit about codemode's Function Call protocol."
+
+> **Dev:** "How can an Event-Mediated Tool Provider call another Tool Function?"
+> **Domain expert:** "Reduce over the **Codemode Session Started Event**, store its **Session Capability Callable**, and build a **Codemode Context** when handling a Function Call."
+
+> **Dev:** "Should every registration hand-write Callable JSON?"
+> **Domain expert:** "No. Capability modules may expose a **Callable Builder** for the callable shape they support."
+
+> **Dev:** "Should MCP provider registration dynamically append detailed tool instructions?"
+> **Domain expert:** "No. Register stable **Tool Provider Instructions** that tell the Script to call `listTools`; dynamic discovery is an ordinary Tool Function."
+
+> **Dev:** "Should `docs.search` from an MCP server become `ctx.docs.search(...)`?"
+> **Domain expert:** "No. External tool names and OpenAPI operation IDs are exact **Function Path** segments, so use bracket syntax such as `ctx.cloudflareDocs['docs.search'](...)` when needed."
+
+> **Dev:** "Should codemode call OS2 oRPC handlers over HTTP?"
+> **Domain expert:** "No. An **oRPC Capability** should use a server-side caller context and call in-process when the router implementation is in the same Worker."
+
+> **Dev:** "Should oRPC provider registration include the full TypeScript router surface?"
+> **Domain expert:** "No. Keep registration instructions short and expose generated signatures through an ordinary discovery Tool Function such as `ctx.os.listProcedures()`."
+
+> **Dev:** "How does codemode learn how to use a provider?"
+> **Domain expert:** "Tool Provider registration carries **Tool Provider Instructions** directly."
 
 > **Dev:** "Does creating a **Codemode Session** always create a new stream?"
 > **Domain expert:** "No. A **Codemode Session** is attached to an **Event Stream Path**, which may be newly chosen by OS2 or may already exist."
@@ -568,7 +954,10 @@ _Avoid_: Provider descriptor, callable provider
 > **Domain expert:** "Treat creation as attach-or-create. Return the existing Codemode Session for that identity, or initialize it if it does not exist."
 
 > **Dev:** "Is an MCP Tool Provider the same thing as OS2's MCP server connection?"
-> **Domain expert:** "No. An **Outbound MCP Client Connection** can be a Tool Provider. A **Project MCP Server Connection** is an external client connected to OS2's project-scoped MCP server."
+> **Domain expert:** "No. An **Outbound MCP From Our Client Tool Provider** can be a Tool Provider. A **Project MCP Server Connection** is an external client connected to OS2's project-scoped MCP server."
+
+> **Dev:** "What are the two MCP directions in OS2?"
+> **Domain expert:** "Inbound MCP is OS2 acting as the MCP server via the fetch-based `ProjectMcpServerEntrypoint` and `ProjectMcpServerConnection`. Outbound MCP is OS2 acting as an MCP client via `OutboundMcpFromOurClientCapability`, which can be registered as a codemode Tool Provider."
 
 > **Dev:** "Should the Durable Object behind OS2's project-scoped MCP server be called `IterateMcpServer`?"
 > **Domain expert:** "No. Use `ProjectMcpServerConnection`: it describes one external MCP client connection and avoids confusing OS2-as-server with OS2-as-client."
@@ -678,20 +1067,29 @@ _Avoid_: Provider descriptor, callable provider
 - "script" and "execution" were conflated. Resolved: **Script** is code; **Script Execution** is one attempt to run it.
 - "execute" and "call" were used interchangeably. Resolved: codemode **calls** Tool Functions; Tool Providers **execute** Tool Functions.
 - "tools" was used for both the whole context and provider functions. Resolved: the local object is **Codemode Context**; provider callables are **Tool Functions**.
-- "describe callable" added a second Tool Provider execution path. Resolved: Tool Provider registration carries docs and type definitions directly.
+- "describe callable" added a second Tool Provider execution path. Resolved: Tool Provider registration carries short **Tool Provider Instructions**; richer discovery is exposed as ordinary Tool Functions such as `listTools`, `listOperations`, or `listProcedures`.
 - "ExecutionContext" conflicts with Cloudflare's Worker `ExecutionContext`. Resolved: use **Codemode Context** for codemode userland.
 - "session id" and "stream path" were conflated. Resolved: **Project ID** plus **Event Stream Path** is the **Codemode Session** identity.
 - "app" can mean the OS2 product or a managed project surface. Resolved: use **OS2 App** for this dashboard and **Project** for the managed app surface.
 - "personal organization" is misleading because Clerk treats personal accounts separately from organizations. Resolved: use **Personal Account** for Clerk's non-organization user context.
 - "MCP JWT" is too narrow for Clerk OAuth Applications. Resolved: use **Clerk OAuth Token** for MCP bearer tokens, regardless of Clerk's token format setting.
 - "project URL" was ambiguous between stable IDs and slugs. Resolved: use **Project Route** for the user-facing organization-slug/project-slug URL.
-- "MCP" can mean OS2 as an MCP server or OS2 as a client of another MCP server. Resolved: use **Project MCP Server Connection** for external clients connected to OS2, and **Outbound MCP Client Connection** for OS2 connecting to external MCP servers as Tool Providers.
+- "MCP" can mean OS2 as an MCP server or OS2 as a client of another MCP server. Resolved: use **Project MCP Server Entry Point** plus **Project MCP Server Connection** for external clients connected to OS2, and **Outbound MCP From Our Client Capability** for OS2 connecting to external MCP servers as codemode Tool Providers.
 - "`IterateMcpServer`" names the product, not the domain concept. Resolved: use `ProjectMcpServerConnection` for the Durable Object class/catalog name.
 - "Project Run Code Session" added an unnecessary layer. Resolved: use **Codemode Session** directly.
 - "route" can mean a TanStack route, a Worker hostname match, or a Project-local destination. Resolved: use **Ingress Hostname** for the Worker-level host classifier, **Project Route** for the authenticated OS2 dashboard URL, and **Project Route Destination** for a Project Durable Object target.
 - "authentication" can happen at the OS2 App layer or inside Project Ingress. Resolved: the OS2 App authenticates dashboard/control-plane routes; the **Project Durable Object** authenticates **Project Ingress**.
 - "fetch callable" overlaps with generic JavaScript functions and Tool Provider callables. Resolved: use **Fetch Destination** for an ingress target that can receive an HTTP request.
 - "context request" made codemode look like a generic invocation broker. Resolved: use **Function Call** only for path-addressed codemode functions, and keep **Tool Provider** registration as model-visible information first.
+- "documentation" sounded like a generated API schema or external docs page. Resolved: use **Tool Provider Instructions** for the string-form guidance registered with a Tool Provider.
+- "executeFunctionCall" was clear but too generic for Worker and Durable Object classes. Resolved: use `executeCodemodeFunctionCall` for the RPC Tool Provider entry method.
+- "Workspace" is usually avoided for Clerk Organization or Project. Resolved: **Workspace Durable Object** is a separate codemode live-resource concept selected by Project ID and workspace slug.
+- "`ctx.workspaces.get`" made Workspace look like a repo-style collection lookup. Resolved: use singular `ctx.workspace` for the codemode Workspace surface.
+- "root tool" could imply a special non-provider mechanism. Resolved: `ctx.createSubagent()` is a root-level **RPC Tool Function** registered at path `["createSubagent"]`.
+- "path" was doing two jobs: identifying the full Codemode Context call and identifying the function relative to the provider. Resolved: use **Provider Path** for the registered mount path and **Function Path** for the provider-relative call path.
+- "argsSummary" made RPC Function Calls look like a separate event family. Resolved: Function Call request events keep an `args` field and serialize live values best-effort.
+- "static callable" sounded like one fixed descriptor. Resolved: use **Callable Builder** for helpers that construct different Callable descriptors for one Capability.
+- "codemode-session-capability callable" was too noun-heavy and unclear about the value kind. Resolved: use **Session Capability Callable** for the Callable carried by `events.iterate.com/codemode/session-started`.
 - "Project DO worker" conflicted with loopback props. Resolved: use **Project Ingress Entry Point** and **Project MCP Server Entry Point** as same-worker loopback targets for now, while the **Project Durable Object** remains exported by the main OS2 Worker.
 - "project identity" in entrypoint props could mean slug or ID. Resolved: v1 ingress entrypoints accept **Project ID** only; **Project Slug** resolution happens in control-plane routes or route-registry writes.
 - "canonical project host" could mean the stable ID host or the user-facing default host. Resolved: use **Stable Project Ingress Host** for the ID-derived host and **Default Project Ingress Host** for generated public URLs.

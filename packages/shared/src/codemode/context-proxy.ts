@@ -1,7 +1,7 @@
 export type CodemodeSessionCapability = {
   callFunction(input: {
+    args: unknown[];
     functionCallId?: string;
-    input: unknown;
     path: string[];
     scriptExecutionId?: string;
   }): Promise<unknown>;
@@ -30,7 +30,7 @@ export type CodemodeContext = {
 } & Record<string, ToolFunctionProxy>;
 
 export interface ToolFunctionProxy {
-  (payload?: unknown): Promise<unknown>;
+  (...args: unknown[]): Promise<unknown>;
   [key: string]: ToolFunctionProxy;
 }
 
@@ -46,9 +46,9 @@ function createPathProxy(path: string[], options: CreateCodemodeContextOptions):
 
       return createPathProxy([...path, key], options);
     },
-    async apply(_target, _thisArg, args) {
-      return await options.codemodeSessionCapability.callFunction({
-        input: args[0],
+    apply(_target, _thisArg, args) {
+      return options.codemodeSessionCapability.callFunction({
+        args,
         path,
         scriptExecutionId: options.scriptExecutionId,
       });

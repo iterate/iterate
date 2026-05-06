@@ -4,6 +4,7 @@ import type { auth } from "@clerk/tanstack-react-start/server";
 import manifest, { type AppConfig } from "~/app.ts";
 import type { CodemodeSession } from "~/durable-objects/codemode-session.ts";
 import type { ProjectDurableObject } from "~/durable-objects/project-durable-object.ts";
+import type { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
 
 export type ClerkAuth = Awaited<ReturnType<typeof auth>>;
 
@@ -19,7 +20,9 @@ export interface AppContext {
   rawRequest?: Request;
   loader?: WorkerLoader;
   codemodeSession?: DurableObjectNamespace<CodemodeSession>;
-  project?: DurableObjectNamespace<ProjectDurableObject>;
+  projectDurableObjectNamespace?: DurableObjectNamespace<ProjectDurableObject>;
+  stream?: DurableObjectNamespace<StreamDurableObject>;
+  workerExports?: Record<string, unknown>;
   callableEnv?: Record<string, unknown>;
 }
 

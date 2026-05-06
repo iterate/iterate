@@ -9,8 +9,27 @@ import type { CodemodeSession } from "./session-api-sketch.ts";
 
 declare const ctx: {
   workerName: string;
-  compiledAppConfig: {
-    eventsBaseUrl: string;
+};
+
+declare const deploymentConfig: {
+  streamDurableObjectBindingScriptName: string;
+};
+
+declare class StreamDurableObject {
+  initialize(input: { name: string; projectId: string; streamPath: string }): Promise<unknown>;
+}
+
+const stream = DurableObjectNamespace<StreamDurableObject>("stream", {
+  className: "StreamDurableObject",
+  scriptName: deploymentConfig.streamDurableObjectBindingScriptName,
+});
+
+type Env = {
+  STREAM: {
+    getByName(name: string): {
+      append(input: unknown): Promise<unknown>;
+      initialize(input: { name: string; projectId: string; streamPath: string }): Promise<unknown>;
+    };
   };
 };
 
@@ -27,8 +46,8 @@ const codemodeSessionWorker = await Worker("codemode-session-do", {
   compatibilityFlags: ["nodejs_compat"],
   bindings: {
     DO_CATALOG: db,
-    EVENTS_BASE_URL: ctx.compiledAppConfig.eventsBaseUrl,
     LOADER: WorkerLoader(),
+    STREAM: stream,
     CODEMODE_SESSION: DurableObjectNamespace<CodemodeSession>("codemode-session", {
       className: "CodemodeSession",
       sqlite: true,
@@ -40,7 +59,9 @@ const codemodeSessionWorker = await Worker("codemode-session-do", {
 const mainWorkerBindings = {
   DB: db,
   LOADER: WorkerLoader(),
+  STREAM: stream,
   CODEMODE_SESSION: codemodeSessionWorker.bindings.CODEMODE_SESSION,
 };
 
+void ({} as Env);
 void mainWorkerBindings;

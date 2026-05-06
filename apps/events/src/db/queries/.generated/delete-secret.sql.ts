@@ -2,11 +2,11 @@ import type { Client } from "sqlfu";
 
 const sql = `
 delete from secrets
-where id = ? and project_slug = ?;
+where id = ? and project_id = ?;
 `.trim();
 const query = (params: deleteSecret.Params) => ({
   sql,
-  args: [params.id, params.projectSlug],
+  args: [params.id, params.projectId],
   name: "deleteSecret",
 });
 
@@ -20,6 +20,6 @@ export const deleteSecret = Object.assign(
 export namespace deleteSecret {
   export type Params = {
     id: string;
-    projectSlug: string;
+    projectId: string;
   };
 }

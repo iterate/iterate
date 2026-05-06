@@ -181,6 +181,11 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     return summary;
   }
 
+  async getSummary(): Promise<ProjectSummary> {
+    await this.ensureStarted();
+    return this.requireSummary();
+  }
+
   async ingressFetch(request: Request): Promise<Response> {
     await this.ensureStarted();
     const summary = this.requireSummary();
@@ -232,7 +237,6 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     projectId: string;
   }) {
     const db = createD1Client(this.env.DB);
-    const config = this.getAppConfig();
     await deleteIngressRoutesByProject(db, { projectId: input.projectId });
     this.getDurableObjectSql().exec(`DELETE FROM project_ingress_routes`);
 
@@ -268,27 +272,6 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
         callable,
         host,
         notes: "Project MCP server host",
-        projectId: input.projectId,
-      });
-    }
-
-    for (const host of input.hosts.streamsHosts) {
-      const callable = {
-        type: "fetch",
-        via: {
-          type: "url",
-          url: config.projectStreamsEventsBaseUrl,
-        },
-        fetchRequest: {
-          headers: {
-            "x-iterate-project-id": input.projectId,
-          },
-        },
-      } satisfies FetchCallable;
-      this.writeLocalRoute({
-        callable,
-        host,
-        notes: "Project events stream host",
         projectId: input.projectId,
       });
     }
@@ -339,10 +322,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
   }
 
   private async seedPresets(projectId: string) {
-    const workerScriptName = this.getAppConfig().deployment?.workerScriptName;
-    if (!workerScriptName) throw new Error("AppConfig deployment.workerScriptName is required.");
-
-    for (const seed of createCodemodePresetSeeds({ workerScriptName })) {
+    for (const seed of createCodemodePresetSeeds()) {
       await this.env.DB.prepare(
         `INSERT INTO project_presets (id, project_id, name, description, events_json)
          VALUES (?, ?, ?, ?, ?)
@@ -432,20 +412,13 @@ function projectHosts(input: { bases: readonly string[]; projectId: string; slug
     normalizeIngressHost(`mcp__${input.slug}.${base}`),
     normalizeIngressHost(`mcp__${input.projectId}.${base}`),
   ]);
-  const streamsHosts = input.bases.flatMap((base) => [
-    normalizeIngressHost(`streams.${input.slug}.${base}`),
-    normalizeIngressHost(`streams.${input.projectId}.${base}`),
-    normalizeIngressHost(`streams__${input.slug}.${base}`),
-    normalizeIngressHost(`streams__${input.projectId}.${base}`),
-  ]);
-  const allHosts = [...projectHosts, ...mcpHosts, ...streamsHosts];
+  const allHosts = [...projectHosts, ...mcpHosts];
 
   return {
     allHosts,
     defaultHost: normalizeIngressHost(`${input.slug}.${input.bases[0] ?? "iterate.localhost"}`),
     mcpHosts,
     projectHosts,
-    streamsHosts,
   };
 }
 

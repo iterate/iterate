@@ -22,7 +22,7 @@ export const secretsRouter = {
       try {
         await insertSecret(context.db, {
           id,
-          projectSlug: context.projectSlug,
+          projectId: context.projectId,
           name,
           value: input.value,
           description: input.description ?? null,
@@ -32,7 +32,7 @@ export const secretsRouter = {
       } catch (error) {
         if (isUniqueConstraintError(error)) {
           throw new ORPCError("CONFLICT", {
-            message: `Secret name "${name}" already exists in project "${context.projectSlug}"`,
+            message: `Secret name "${name}" already exists in project "${context.projectId}"`,
           });
         }
         throw error;
@@ -48,9 +48,9 @@ export const secretsRouter = {
     }),
     list: os.secrets.list.use(withProject).handler(async ({ context, input }) => {
       const [totalRow, rows] = await Promise.all([
-        countSecrets(context.db, { projectSlug: context.projectSlug }),
+        countSecrets(context.db, { projectId: context.projectId }),
         listSecrets(context.db, {
-          projectSlug: context.projectSlug,
+          projectId: context.projectId,
           limit: input.limit,
           offset: input.offset,
         }),
@@ -70,14 +70,14 @@ export const secretsRouter = {
     remove: os.secrets.remove.use(withProject).handler(async ({ context, input }) => {
       const existing = await getSecretById(context.db, {
         id: input.id,
-        projectSlug: context.projectSlug,
+        projectId: context.projectId,
       });
 
       if (!existing) {
         return { ok: true as const, id: input.id, deleted: false };
       }
 
-      await deleteSecret(context.db, { id: input.id, projectSlug: context.projectSlug });
+      await deleteSecret(context.db, { id: input.id, projectId: context.projectId });
       return { ok: true as const, id: input.id, deleted: true };
     }),
   },

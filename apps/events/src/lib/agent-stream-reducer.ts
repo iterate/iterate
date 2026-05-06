@@ -3,7 +3,7 @@
  * Maps `input-item-added` / `output-item-added` into semantic feed items keyed by event offset.
  */
 import type { ModelMessage, StreamChunk } from "@tanstack/ai";
-import type { Event } from "@iterate-com/events-contract";
+import type { Event } from "@iterate-com/shared/streams/types";
 import type { StreamFeedItem } from "~/lib/stream-feed-types.ts";
 
 const INPUT_ITEM_ADDED_TYPE = "https://events.iterate.com/agent/input-item-added" as const;

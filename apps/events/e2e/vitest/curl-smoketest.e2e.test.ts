@@ -25,26 +25,26 @@
  * `https://events.iterate-preview-1.com`).
  */
 import { randomUUID } from "node:crypto";
-import { StreamPath } from "@iterate-com/events-contract";
+import { StreamPath } from "@iterate-com/shared/streams/types";
 import { x } from "tinyexec";
 import { describe, expect, test } from "vitest";
 import {
-  defaultE2EProjectSlug,
+  defaultE2EProjectId,
   getEventsProjectBaseUrl,
   requireEventsBaseUrl,
-  scopedE2EProjectSlug,
+  scopedE2EProjectId,
   supportsProjectHostRouting,
 } from "../helpers.ts";
 
 describe("events curl smoke", () => {
   test("append, state, history stream, and root endpoints (shell + snapshot)", async () => {
     const bareBaseUrl = requireEventsBaseUrl();
-    const projectSlug = supportsProjectHostRouting(bareBaseUrl)
-      ? scopedE2EProjectSlug
-      : defaultE2EProjectSlug;
+    const projectId = supportsProjectHostRouting(bareBaseUrl)
+      ? scopedE2EProjectId
+      : defaultE2EProjectId;
     const baseURL = getEventsProjectBaseUrl({
       baseURL: bareBaseUrl,
-      projectSlug,
+      projectId,
     });
 
     const streamPath = StreamPath.parse(`/e2e-curl/${randomUUID().slice(0, 8)}`);
@@ -155,7 +155,7 @@ retry_curl "$BASE_URL/api/streams/__state/%2F" >/dev/null
       },
     });
     expect(JSON.parse(encodedStateJson)).toMatchObject({
-      projectSlug,
+      projectId,
       path: "<streamPath>",
       eventCount: 2,
       childPaths: [],
@@ -178,7 +178,7 @@ retry_curl "$BASE_URL/api/streams/__state/%2F" >/dev/null
       },
     });
     expect(JSON.parse(slashEscapedStateJson)).toMatchObject({
-      projectSlug,
+      projectId,
       path: "<streamPath>",
       eventCount: 2,
       childPaths: [],
@@ -210,7 +210,7 @@ retry_curl "$BASE_URL/api/streams/__state/%2F" >/dev/null
       offset: 1,
       payload: {
         path: "<streamPath>",
-        projectSlug,
+        projectId,
       },
       streamPath: "<streamPath>",
       type: "events.iterate.com/core/stream-first-initialized",

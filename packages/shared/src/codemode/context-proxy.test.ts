@@ -12,7 +12,7 @@ describe("createCodemodeContext", () => {
     await ctx.linear.issues.create({ title: "hello" });
 
     expect(capability.callFunction).toHaveBeenCalledWith({
-      input: { title: "hello" },
+      args: [{ title: "hello" }],
       path: ["linear", "issues", "create"],
       scriptExecutionId: "script-42",
     });
@@ -25,8 +25,21 @@ describe("createCodemodeContext", () => {
     await ctx.rollDice({ sides: 20 });
 
     expect(capability.callFunction).toHaveBeenCalledWith({
-      input: { sides: 20 },
+      args: [{ sides: 20 }],
       path: ["rollDice"],
+      scriptExecutionId: undefined,
+    });
+  });
+
+  test("forwards positional arguments", async () => {
+    const capability = fakeCapability();
+    const ctx = createCodemodeContext({ codemodeSessionCapability: capability });
+
+    await ctx.ai.run("@cf/model", { prompt: "hello" });
+
+    expect(capability.callFunction).toHaveBeenCalledWith({
+      args: ["@cf/model", { prompt: "hello" }],
+      path: ["ai", "run"],
       scriptExecutionId: undefined,
     });
   });

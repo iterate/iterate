@@ -12,7 +12,8 @@
  *   pnpm --dir apps/agents cli stream-tui \
  *     --project-slug <slug> --stream-path <path>
  */
-import { Event, ProjectSlug, StreamPath, type EventInput } from "@iterate-com/events-contract";
+import { Event, StreamPath, type EventInput } from "@iterate-com/shared/streams/types";
+import { ProjectId } from "@iterate-com/shared/streams/types";
 import type {
   EventsStreamBuiltInElement,
   EventsStreamRawEventSummary,
@@ -1653,7 +1654,7 @@ function parseArgs(argv: string[]) {
 
   return {
     eventsBaseUrl,
-    projectSlug: ProjectSlug.parse(projectSlug),
+    projectSlug: ProjectId.parse(projectSlug),
     streamPath: StreamPath.parse(streamPath),
   };
 }

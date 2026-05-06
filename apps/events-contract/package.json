@@ -8,7 +8,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "pnpm exec tsx src/orpc-contract.test.ts && pnpm exec tsx src/external-subscriber-types.test.ts"
+    "test": "pnpm exec tsx src/orpc-contract.test.ts"
   },
   "dependencies": {
     "@iterate-com/shared": "workspace:*",

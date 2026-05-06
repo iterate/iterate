@@ -1,5 +1,5 @@
 import type { worker } from "../../alchemy.run.ts";
-import type { StreamDurableObject } from "~/durable-objects/stream.ts";
+import type { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
 
 // Reuse the Durable Object's own method signatures rather than re-declaring
 // them by hand here. `Pick` projects only the RPC methods we call, which keeps

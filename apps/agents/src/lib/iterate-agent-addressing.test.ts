@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import type { StreamPath } from "@iterate-com/events-contract";
+import type { StreamPath } from "@iterate-com/shared/streams/types";
 import { streamPathToAgentInstance } from "./iterate-agent-addressing.ts";
 
 describe("streamPathToAgentInstance", () => {

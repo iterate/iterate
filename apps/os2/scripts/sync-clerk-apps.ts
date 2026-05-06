@@ -23,7 +23,6 @@ type Target = {
   clerkEnvironmentType: "development" | "production";
   clerkInstanceArg: "dev" | "prod";
   baseUrl: string;
-  eventsBaseUrl: string;
   projectHostnameBase: string;
 };
 
@@ -34,7 +33,6 @@ const targets: Target[] = [
     clerkEnvironmentType: "development",
     clerkInstanceArg: "dev",
     baseUrl: "https://os.iterate-dev-jonas.com",
-    eventsBaseUrl: "https://events.iterate-dev-jonas.com",
     projectHostnameBase: "iterate-dev-jonas.app",
   },
   {
@@ -43,7 +41,6 @@ const targets: Target[] = [
     clerkEnvironmentType: "development",
     clerkInstanceArg: "dev",
     baseUrl: "https://os.iterate-dev-misha.com",
-    eventsBaseUrl: "https://events.iterate-dev-misha.com",
     projectHostnameBase: "iterate-dev-misha.app",
   },
   {
@@ -52,7 +49,6 @@ const targets: Target[] = [
     clerkEnvironmentType: "development",
     clerkInstanceArg: "dev",
     baseUrl: "https://os.iterate-dev-rahul.com",
-    eventsBaseUrl: "https://events.iterate-dev-rahul.com",
     projectHostnameBase: "iterate-dev-rahul.app",
   },
   ...[2, 3, 4, 5, 6, 7, 8, 9].map((previewNumber) => {
@@ -62,7 +58,6 @@ const targets: Target[] = [
       clerkEnvironmentType: "development",
       clerkInstanceArg: "dev",
       baseUrl: `https://os2.iterate-preview-${previewNumber}.com`,
-      eventsBaseUrl: `https://events-preview-${previewNumber}.iterate.com`,
       projectHostnameBase: `iterate-preview-${previewNumber}.app`,
     } satisfies Target;
   }),
@@ -72,7 +67,6 @@ const targets: Target[] = [
     clerkEnvironmentType: "production",
     clerkInstanceArg: "prod",
     baseUrl: "https://os.iterate2.com",
-    eventsBaseUrl: "https://events.iterate.com",
     projectHostnameBase: "iterate2.app",
   },
 ];
@@ -222,10 +216,6 @@ async function getJwtPublicKey(publishableKey: string) {
 function setDopplerSecrets(target: Target, instance: ClerkInstance, jwtKey: string | Buffer) {
   const secrets = new Map([
     ["APP_CONFIG_BASE_URL", target.baseUrl],
-    // Codemode streams are written through the Events app. Keep this aligned
-    // per Doppler config so dev and preview OS2 sessions do not write into
-    // production event streams.
-    ["APP_CONFIG_EVENTS_BASE_URL", target.eventsBaseUrl],
     [
       "APP_CONFIG_MCP_PROOF_SECRET",
       readExistingDopplerSecret(target.dopplerConfig, "APP_CONFIG_MCP_PROOF_SECRET") ??

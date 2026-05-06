@@ -3,12 +3,12 @@ import type { Client } from "sqlfu";
 const sql = `
 select id
 from secrets
-where id = ? and project_slug = ?
+where id = ? and project_id = ?
 limit 1;
 `.trim();
 const query = (params: getSecretById.Params) => ({
   sql,
-  args: [params.id, params.projectSlug],
+  args: [params.id, params.projectId],
   name: "getSecretById",
 });
 
@@ -26,7 +26,7 @@ export const getSecretById = Object.assign(
 export namespace getSecretById {
   export type Params = {
     id: string;
-    projectSlug: string;
+    projectId: string;
   };
   export type Result = {
     id: string;

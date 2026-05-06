@@ -246,12 +246,54 @@ export function generateTypesFromJsonSchema(
   tools: JsonSchemaToolDescriptors,
   namespace = "codemode",
 ): string {
+  const { availableTypes, rootName, rootTree } = buildTypesFromJsonSchema({
+    tools,
+    namespace,
+  });
+  const availableTools = `\ndeclare const ${rootName}: {${countDeclNodes(rootTree) ? `\n${emitDeclTree(rootTree)}\n` : ""}}`;
+
+  return `
+${availableTypes}
+${availableTools}
+  `.trim();
+}
+
+export function generateCodemodeContextTypesFromJsonSchema(input: {
+  namespace: string[] | string;
+  tools: JsonSchemaToolDescriptors;
+}): string {
+  const { availableTypes, rootTree } = buildTypesFromJsonSchema({
+    tools: input.tools,
+    namespace: Array.isArray(input.namespace)
+      ? ["ctx", ...input.namespace].join(".")
+      : input.namespace,
+  });
+  const providerTypes = countDeclNodes(rootTree) ? emitDeclTree(rootTree) : "";
+
+  return `
+${availableTypes}
+interface CodemodeConsole {
+    log: (...args: unknown[]) => void;
+    warn: (...args: unknown[]) => void;
+    error: (...args: unknown[]) => void;
+}
+interface CodemodeExecutionContext {
+    fetch: typeof fetch;
+    console: CodemodeConsole;
+}
+${providerTypes ? `interface CodemodeExecutionContext {\n${providerTypes}\n}` : ""}
+declare const ctx: CodemodeExecutionContext
+  `.trim();
+}
+
+function buildTypesFromJsonSchema(input: { namespace: string; tools: JsonSchemaToolDescriptors }) {
+  const namespace = input.namespace;
   const namespacePath = sanitizeToolPath(namespace).split(".");
   const declTree = createDeclTree();
   const rootTree = createDeclTree();
   let availableTypes = "";
 
-  for (const [toolName, tool] of Object.entries(tools)) {
+  for (const [toolName, tool] of Object.entries(input.tools)) {
     const safePath = sanitizeToolPath(toolName);
     const pathParts = safePath.split(".");
     const flatSafeName = pathParts.join("_");
@@ -313,10 +355,10 @@ export function generateTypesFromJsonSchema(
   }
 
   insertDeclTree(rootTree, namespacePath.slice(1), declTree);
-  const availableTools = `\ndeclare const ${namespacePath[0]}: {${countDeclNodes(rootTree) ? `\n${emitDeclTree(rootTree)}\n` : ""}}`;
 
-  return `
-${availableTypes}
-${availableTools}
-  `.trim();
+  return {
+    availableTypes: availableTypes.trim(),
+    rootName: namespacePath[0] ?? "codemode",
+    rootTree,
+  };
 }

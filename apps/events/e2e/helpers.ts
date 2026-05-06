@@ -2,17 +2,13 @@ import { setTimeout as delay } from "node:timers/promises";
 import { createORPCClient } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
-import {
-  ProjectSlug,
-  eventsContract,
-  type EventInput,
-  type StreamPath,
-} from "@iterate-com/events-contract";
-import { defaultProjectSlug, getProjectUrl } from "../src/lib/project-slug.ts";
+import { eventsContract } from "@iterate-com/events-contract";
+import { ProjectId, type EventInput, type StreamPath } from "@iterate-com/shared/streams/types";
+import { defaultProjectId, getProjectUrl } from "../src/lib/project-id.ts";
 
 export type Events2Client = ContractRouterClient<typeof eventsContract>;
-export const defaultE2EProjectSlug = defaultProjectSlug;
-export const scopedE2EProjectSlug = "test";
+export const defaultE2EProjectId = defaultProjectId;
+export const scopedE2EProjectId = "test";
 const numberedEventsPreviewHostnamePattern = /^events\.iterate-preview-\d+\.com$/;
 
 export type Events2AppFixture = {
@@ -58,16 +54,16 @@ export function createEvents2AppFixture(args: { baseURL: string }): Events2AppFi
   };
 }
 
-export function getEventsProjectBaseUrl(args: { baseURL: string; projectSlug: string }) {
+export function getEventsProjectBaseUrl(args: { baseURL: string; projectId: string }) {
   return getProjectUrl({
     currentUrl: args.baseURL,
-    projectSlug: ProjectSlug.parse(args.projectSlug),
+    projectId: ProjectId.parse(args.projectId),
   })
     .toString()
     .replace(/\/+$/, "");
 }
 
-export function createEvents2ProjectAppFixture(args: { baseURL: string; projectSlug: string }) {
+export function createEvents2ProjectAppFixture(args: { baseURL: string; projectId: string }) {
   return createEvents2AppFixture({
     baseURL: getEventsProjectBaseUrl(args),
   });
@@ -83,7 +79,7 @@ export function supportsProjectHostRouting(baseURL: string) {
   }
 
   return (
-    new URL(getEventsProjectBaseUrl({ baseURL, projectSlug: scopedE2EProjectSlug })).hostname !==
+    new URL(getEventsProjectBaseUrl({ baseURL, projectId: scopedE2EProjectId })).hostname !==
     hostname
   );
 }

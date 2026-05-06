@@ -9,7 +9,7 @@ import {
   StreamSocketErrorFrame,
   StreamSocketEventFrame,
   type StreamSocketEventFrame as StreamSocketEventFrameValue,
-} from "@iterate-com/events-contract";
+} from "@iterate-com/shared/streams/types";
 import { collectAsyncIterableUntilIdle, createEvents2AppFixture } from "../helpers.ts";
 
 const rawEventsBaseUrl = process.env.EVENTS_BASE_URL?.trim().replace(/\/+$/, "") ?? null;

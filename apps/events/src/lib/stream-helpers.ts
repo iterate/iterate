@@ -1,22 +1,19 @@
 import { env as workerEnv } from "cloudflare:workers";
-import type { ProjectSlug, StreamPath } from "@iterate-com/events-contract";
+import {
+  getInitializedStreamStub as getSharedInitializedStreamStub,
+  getStreamDurableObjectName,
+  getStreamStub as getSharedStreamStub,
+  StreamOffsetPreconditionError,
+  type StreamDurableObjectInitInput,
+} from "@iterate-com/shared/streams/helpers";
 
-export class StreamOffsetPreconditionError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "StreamOffsetPreconditionError";
-  }
-}
+export { getStreamDurableObjectName, StreamOffsetPreconditionError };
 
-// Durable Object names define global identity. Keep this explicit and stable
-// rather than relying on object key order in JSON.stringify():
-// https://developers.cloudflare.com/durable-objects/api/namespace/
-function getStreamDurableObjectName(args: { projectSlug: ProjectSlug; path: StreamPath }) {
-  return `${args.projectSlug}::${args.path}`;
-}
-
-export function getStreamStub(args: { projectSlug: ProjectSlug; path: StreamPath }) {
-  return workerEnv.STREAM.getByName(getStreamDurableObjectName(args));
+export function getStreamStub(args: StreamDurableObjectInitInput) {
+  return getSharedStreamStub({
+    namespace: workerEnv.STREAM as never,
+    ...args,
+  });
 }
 
 /**
@@ -25,11 +22,9 @@ export function getStreamStub(args: { projectSlug: ProjectSlug; path: StreamPath
  * has already happened; calling them without going through this helper will
  * throw from the `state` getter inside the durable object.
  */
-export async function getInitializedStreamStub(args: {
-  projectSlug: ProjectSlug;
-  path: StreamPath;
-}) {
-  const streamStub = getStreamStub(args);
-  await streamStub.initialize(args);
-  return streamStub;
+export async function getInitializedStreamStub(args: StreamDurableObjectInitInput) {
+  return await getSharedInitializedStreamStub({
+    namespace: workerEnv.STREAM as never,
+    ...args,
+  });
 }

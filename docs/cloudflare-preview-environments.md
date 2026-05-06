@@ -130,11 +130,11 @@ Do not paste the token into scripts or docs.
   dependency, they are deployed together under the same environment config
   lease. If one selected app fails, the overall preview is unhealthy and the
   lease is kept.
-- Cross-app runtime references must be derived from the same config/stage. Today
-  os2 points at events with `APP_CONFIG_EVENTS_BASE_URL`, for example
-  `https://events.iterate-preview-N.com`. Future Cloudflare Service Bindings
-  must follow the same rule: derive the target from the leased `preview_N`
-  config rather than hardcoding another environment.
+- Cross-app deployment references must be derived from the same config/stage.
+  OS2 exports `StreamDurableObject` from its main Worker script. Events may set
+  `DEPLOYMENT_CONFIG_STREAM_DURABLE_OBJECT_BINDING_SCRIPT_NAME` to the OS2
+  Worker script for the same leased `preview_N` config. Keep this
+  deployment-only value out of runtime `APP_CONFIG`.
 - CI workflows invoke one shared preview lifecycle. The lifecycle code, not the
   workflow matrix, decides which apps deploy.
 - Preview deploys do not override `ALCHEMY_STAGE`.

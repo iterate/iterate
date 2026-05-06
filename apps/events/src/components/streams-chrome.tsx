@@ -1,7 +1,7 @@
 import { createContext, useContext, useMemo, useState, type PropsWithChildren } from "react";
 import { ChevronDownIcon, InfoIcon } from "lucide-react";
 import { useLocation } from "@tanstack/react-router";
-import { type StreamPath } from "@iterate-com/events-contract";
+import { type StreamPath } from "@iterate-com/shared/streams/types";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   DropdownMenu,

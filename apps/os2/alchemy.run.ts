@@ -1,14 +1,21 @@
-import { D1Database, DurableObjectNamespace, Self, Worker, WorkerLoader } from "alchemy/cloudflare";
+import alchemy from "alchemy";
+import { Ai, D1Database, DurableObjectNamespace, WorkerLoader } from "alchemy/cloudflare";
 import { initAlchemy } from "@iterate-com/shared/alchemy/init";
 import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
-import { selfToolProviderBindingName } from "@iterate-com/shared/codemode/self-callable";
+import type { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
 import manifest, { AppConfig } from "./src/app.ts";
 import type { CodemodeSession } from "./src/durable-objects/codemode-session.ts";
 import type { ProjectDurableObject } from "./src/durable-objects/project-durable-object.ts";
 import type { ProjectMcpServerConnection } from "./src/durable-objects/project-mcp-server-connection.ts";
-import type { McpClientBridge } from "./src/rpc-targets/mcp-client-bridge.ts";
+import type {
+  AgentDurableObject,
+  RepoDurableObject,
+  WorkspaceDurableObject,
+} from "./src/codemode/example-capabilities.ts";
+import type { OutboundMcpFromOurClientCapability } from "./src/rpc-targets/outbound-mcp-from-our-client-capability.ts";
 
 const ctx = await initAlchemy(manifest, AppConfig, process.env);
+const slackBotToken = ctx.runtimeConfig.slackBotToken?.exposeSecret();
 
 const db = await D1Database("os-db", {
   name: `${ctx.workerName}-db`,
@@ -21,75 +28,66 @@ const db = await D1Database("os-db", {
 // (preview). The preview app shell deliberately lives on the sibling
 // iterate-preview-N.com zone (`os2.iterate-preview-N.com`) so project/MCP hosts
 // can own the iterate-preview-N.app zone cleanly.
-const projectHostnameBases = ctx.compiledAppConfig.projectHostnameBases ?? [];
-const openApiBridgeBindingName = selfToolProviderBindingName({
-  workerScriptName: ctx.workerName,
-  entrypoint: "OpenApiBridge",
+const projectHostnameBases = ctx.runtimeConfig.projectHostnameBases ?? [];
+const outboundMcpFromOurClientCapability =
+  DurableObjectNamespace<OutboundMcpFromOurClientCapability>(
+    "outbound-mcp-from-our-client-capability",
+    {
+      className: "OutboundMcpFromOurClientCapability",
+    },
+  );
+const stream = DurableObjectNamespace<StreamDurableObject>("stream", {
+  className: "StreamDurableObject",
+  sqlite: true,
 });
-const mcpClientBridge = DurableObjectNamespace<McpClientBridge>("mcp-client-bridge", {
-  className: "McpClientBridge",
+const codemodeSession = DurableObjectNamespace<CodemodeSession>("codemode-session-local", {
+  className: "CodemodeSession",
+  sqlite: true,
 });
-
-const codemodeSessionWorker = await Worker("codemode-session-do", {
-  name: `${ctx.workerName}-codemode-session-do`,
-  entrypoint: "./src/durable-objects/codemode-session.ts",
-  adopt: true,
-  compatibilityFlags: ["nodejs_compat"],
-  bindings: {
-    CODEMODE_SESSION: DurableObjectNamespace<CodemodeSession>("codemode-session", {
-      className: "CodemodeSession",
-      sqlite: true,
-    }),
-    DO_CATALOG: db,
-    EVENTS_BASE_URL: ctx.compiledAppConfig.eventsBaseUrl,
-    LOADER: WorkerLoader(),
-    MCP_CLIENT_BRIDGE: mcpClientBridge,
-    [openApiBridgeBindingName]: Worker.experimentalEntrypoint(Self, "OpenApiBridge"),
+const projectMcpServerConnection = DurableObjectNamespace<ProjectMcpServerConnection>(
+  "project-mcp-server-connection-local",
+  {
+    className: "ProjectMcpServerConnection",
+    sqlite: true,
   },
+);
+const project = DurableObjectNamespace<ProjectDurableObject>("project", {
+  className: "ProjectDurableObject",
+  sqlite: true,
 });
-
-// The inbound MCP worker is declared after CodemodeSession because MCP tools run
-// code by calling the same project/stream-scoped CodemodeSession DO that powers
-// the web UI. This keeps the MCP and browser code paths behaviorally identical.
-const projectMcpServerConnectionWorker = await Worker("project-mcp-server-connection-do", {
-  name: `${ctx.workerName}-project-mcp-server-connection-do`,
-  entrypoint: "./src/durable-objects/project-mcp-server-connection.ts",
-  adopt: true,
-  compatibilityFlags: ["nodejs_compat"],
-  bindings: {
-    CODEMODE_SESSION: codemodeSessionWorker.bindings.CODEMODE_SESSION,
-    EVENTS_BASE_URL: ctx.compiledAppConfig.eventsBaseUrl,
-    MCP_PROOF_SECRET: ctx.compiledAppConfig.mcpProofSecret.exposeSecret(),
-    PROJECT_MCP_SERVER_CONNECTION: DurableObjectNamespace<ProjectMcpServerConnection>(
-      "project-mcp-server-connection",
-      {
-        className: "ProjectMcpServerConnection",
-        sqlite: true,
-      },
-    ),
-    DO_CATALOG: db,
-  },
+const repo = DurableObjectNamespace<RepoDurableObject>("repo", {
+  className: "RepoDurableObject",
+  sqlite: true,
+});
+const workspace = DurableObjectNamespace<WorkspaceDurableObject>("workspace", {
+  className: "WorkspaceDurableObject",
+  sqlite: true,
+});
+const agent = DurableObjectNamespace<AgentDurableObject>("agent", {
+  className: "AgentDurableObject",
+  sqlite: true,
 });
 
 const { worker, afterFinalize } = await IterateApp(ctx, {
   bindings: {
-    CLERK_JWT_KEY: ctx.compiledAppConfig.clerk.jwtKey.exposeSecret(),
-    CLERK_PUBLISHABLE_KEY: ctx.compiledAppConfig.clerk.publishableKey,
-    CLERK_SECRET_KEY: ctx.compiledAppConfig.clerk.secretKey.exposeSecret(),
-    CLERK_SIGN_IN_URL: ctx.compiledAppConfig.clerk.signInUrl,
-    CLERK_SIGN_UP_URL: ctx.compiledAppConfig.clerk.signUpUrl,
+    CLERK_JWT_KEY: ctx.runtimeConfig.clerk.jwtKey.exposeSecret(),
+    CLERK_PUBLISHABLE_KEY: ctx.runtimeConfig.clerk.publishableKey,
+    CLERK_SECRET_KEY: ctx.runtimeConfig.clerk.secretKey.exposeSecret(),
+    CLERK_SIGN_IN_URL: ctx.runtimeConfig.clerk.signInUrl,
+    CLERK_SIGN_UP_URL: ctx.runtimeConfig.clerk.signUpUrl,
     DB: db,
     DO_CATALOG: db,
+    AI: Ai(),
     LOADER: WorkerLoader(),
-    CODEMODE_SESSION: codemodeSessionWorker.bindings.CODEMODE_SESSION,
-    PROJECT: DurableObjectNamespace<ProjectDurableObject>("project", {
-      className: "ProjectDurableObject",
-      sqlite: true,
-    }),
-    [openApiBridgeBindingName]: Worker.experimentalEntrypoint(Self, "OpenApiBridge"),
-    PROJECT_MCP_SERVER_CONNECTION:
-      projectMcpServerConnectionWorker.bindings.PROJECT_MCP_SERVER_CONNECTION,
-    MCP_CLIENT_BRIDGE: mcpClientBridge,
+    CODEMODE_SESSION: codemodeSession,
+    AGENT: agent,
+    PROJECT: project,
+    REPO: repo,
+    PROJECT_MCP_SERVER_CONNECTION: projectMcpServerConnection,
+    OUTBOUND_MCP_FROM_OUR_CLIENT_CAPABILITY: outboundMcpFromOurClientCapability,
+    STREAM: stream,
+    WORKSPACE: workspace,
+    ...(slackBotToken == null ? {} : { APP_CONFIG_SLACK_BOT_TOKEN: alchemy.secret(slackBotToken) }),
   },
   extraRouteHostnames: projectHostnameBases.flatMap(projectRouteHostnamesForBase),
 });

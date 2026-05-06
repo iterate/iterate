@@ -83,6 +83,22 @@ long-lived streamed responses such as SSE can have later request-scoped
 `log.info()` calls omitted from the final emitted request event. Stream-close
 aware finalization is a follow-up improvement.
 
+## MCP Directionality
+
+OS2 has two MCP flows that must stay separate in naming and code:
+
+- **Inbound MCP:** external MCP clients connect to a project MCP hostname. The
+  request enters `ProjectMcpServerEntrypoint`, which authenticates the MCP
+  request and delegates session state to `ProjectMcpServerConnection`. This is a
+  real fetch-based Worker entrypoint for project ingress. It may execute
+  codemode, but it is not itself a codemode Tool Provider.
+- **Outbound MCP:** a codemode session uses an external MCP server as a Tool
+  Provider. `OutboundMcpFromOurClientCapability` is the Durable Object wrapper
+  that opens and caches our MCP client connection, and it exposes
+  `executeCodemodeFunctionCall(...)` for codemode RPC provider calls. Remote
+  tool discovery should be a normal codemode call such as
+  `ctx.cloudflareDocs.listTools()`, not a special provider-description protocol.
+
 `config.logs` is consumed by the shared runtime logging wrapper:
 
 - `stdoutFormat` chooses between shared pretty stdout rendering and shared raw
@@ -199,8 +215,9 @@ The two first named Worker entry points are:
 
 The Durable Object behind MCP client connections is
 `ProjectMcpServerConnection`. It describes one external MCP client connected to
-OS2's project-scoped MCP server, and it stays distinct from Outbound MCP Client
-Connections where OS2 is the client of an external MCP server.
+OS2's project-scoped MCP server, and it stays distinct from
+`OutboundMcpFromOurClientCapability`, where OS2 is the client of an external MCP
+server and the Durable Object is used as a codemode Tool Provider.
 
 Entrypoint props should use stable Project IDs only in v1. Project slugs are
 mutable route identity for the OS2 control plane; slug-to-ID resolution should
@@ -559,13 +576,109 @@ entrypoint.
 
 Execute JavaScript in isolated dynamic worker sandboxes via oRPC or MCP.
 
-- **UI:** `/orgs/$organizationSlug/projects/$projectSlug/run-code` — code editor with streaming event log
-- **oRPC:** `codemode.executeScript` starts a Script Execution and returns the
-  committed request event; `codemode.streamEvents` reads events from the Event
-  Stream Path; `codemode.execute` remains a compatibility iterator for older
-  callers.
+- **UI:** `/orgs/$organizationSlug/projects/$projectSlug/examples` and
+  `/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/new` create
+  project-scoped Codemode Sessions with a streaming event log.
+- **oRPC:** `codemode.createSession` creates or attaches to a Codemode Session;
+  `codemode.executeScript` starts another Script Execution on a stream; and
+  `codemode.streamEvents` reads the session Event Stream Path.
 - **MCP:** `run_code` tool on the project MCP route, for example
   `https://mcp.mycustomer.com`
+
+Codemode Tool Providers have one durable registration event:
+
+```ts
+{
+  type: "events.iterate.com/codemode/tool-provider-registered",
+  payload: {
+    path: ["petstore"],
+    instructions: "Call listOperations() before calling operation IDs.",
+    invocation: { kind: "rpc", callable },
+    // or: invocation: { kind: "event" },
+  },
+}
+```
+
+Every Tool Function uses the same trace events:
+
+```ts
+ctx.petstore.findPetsByStatus({ status: "available" });
+
+// events.iterate.com/codemode/function-call-requested
+// events.iterate.com/codemode/function-call-completed
+```
+
+That requested/completed pair is invariant. The difference is who appends the
+completion:
+
+- For an RPC Tool Provider, the Codemode Processor appends
+  `function-call-requested`, invokes `executeCodemodeFunctionCall(...)`, and
+  appends `function-call-completed` with `returned` or `threw`.
+- For an Event-Mediated Tool Provider, the Codemode Processor appends
+  `function-call-requested` and waits; the provider implementation, such as a
+  Slack processor or browser extension runner, owns appending the matching
+  `function-call-completed` event when it returns or throws.
+
+RPC providers can pass Cloudflare live values such as callback functions and
+returned `RpcTarget` handles. A `session-started` singleton event carries the
+Session Capability Callable so event-based providers can build a Codemode
+Context and call other providers.
+
+Default providers are registered for every session:
+
+- `fetch(...)` / `ctx.fetch(...)` routes through `FetchCapability` and is logged
+  as a normal Function Call. Project egress policy belongs inside this
+  capability.
+- `ctx.streams.append(...)`, `ctx.streams.read(...)`, `ctx.streams.getState(...)`,
+  and `ctx.streams.listChildren(...)` route through `StreamCapability`.
+
+The current built-in examples cover Workers AI, OpenAPI, stream append, repo
+and workspace live handles, both `ctx.createSubagent().sendMessage(...)` and
+`ctx.makeSubagent().doThing(...)`, oRPC discovery generated from contract
+schemas, and ordinary `fetch`/`console.log` traces.
+Provider-generated type definitions target a shared `CodemodeExecutionContext`
+root named `ctx`, so discovery output can include core functions such as
+`ctx.fetch` and `ctx.console` while each provider contributes methods nested
+under its mounted path, for example `ctx.os` or `ctx.builtin.slack`.
+
+The inbound MCP server deliberately keeps `run_code` small:
+
+```ts
+run_code({
+  code: `async (ctx) => {
+    const agent = await ctx.createSubagent();
+    const sent = await agent.sendMessage({ message: "hi", subPath: "bob" });
+    const pipelined = await ctx.makeSubagent().doThing({ label: "demo", value: 21 });
+    return { sent, pipelined };
+  }`,
+});
+```
+
+The project MCP route auto-loads the static proof provider stack for now; MCP
+clients should not pass provider registrations into `run_code`. The explicit
+`createSubagent()` handle remains part of the proof surface because it exercises
+normal Workers RPC live values. `makeSubagent().doThing(...)` separately proves
+that a root unary Tool Provider can return a promise-pipelineable handle.
+
+### Codemode MCP E2E
+
+`apps/os2/e2e/vitest/codemode-mcp-provider-stack.e2e.test.ts` is the
+deployment-targeted proof that the static inbound MCP codemode stack works
+without mocked internet. Point it at a project MCP route from local Miniflare,
+preview, or production:
+
+```bash
+OS2_E2E_MCP_URL=https://mcp__demo.iterate-preview-2.app \
+OS2_E2E_MCP_BEARER_TOKEN="$ADMIN_OR_MCP_ACCESS_TOKEN" \
+pnpm --dir apps/os2 test:e2e:codemode-mcp
+```
+
+Set `OS2_E2E_SLACK_CHANNEL_ID=C123...` to include a real
+`ctx.slack.chat.postMessage(...)` call. Without that variable, the test still
+proves the real project MCP `run_code({ code })` surface, external `fetch`, the
+static Petstore OpenAPI provider, Workers AI capability path, repo/workspace
+callbacks, explicit and promise-pipelined subagent handles, oRPC discovery and
+execution, and stream append/readback.
 
 ### Using the MCP server with Claude CLI
 
@@ -628,15 +741,22 @@ schema's camelCase shape. For OS:
 - `APP_CONFIG_CLERK__OAUTH_CLIENT_SECRET=...` -> `clerk.oauthClientSecret`
 - `APP_CONFIG_CLERK__MCP_OAUTH_SCOPES=["openid","email","profile"]` ->
   `clerk.mcpOauthScopes`
+- `APP_CONFIG_OPEN_AI_API_KEY=sk-...` -> `openAiApiKey`
 - `APP_CONFIG_PROJECT_HOSTNAME_BASES=["iterate2.app"]` -> `projectHostnameBases`
-- `APP_CONFIG_PROJECT_STREAMS_EVENTS_BASE_URL=https://events.iterate.com` ->
-  `projectStreamsEventsBaseUrl`
 - `APP_CONFIG_TYPE_ID_PREFIX=os` -> `typeIdPrefix`
 - `APP_CONFIG_LOGS__STDOUT_FORMAT=pretty` -> `logs.stdoutFormat`
 
 The root route loads the typed `__internal.publicConfig` procedure over `/api`
 during SSR. The app keeps the built-in PostHog proxy route from the source
 template, but it does not enable PostHog by default.
+
+## Deployment config
+
+OS2 should stay vanilla for stream deployment: `alchemy.run.ts` exports
+`StreamDurableObject` from the main Worker script and binds `STREAM` to that
+local namespace. Do not set a stream Durable Object script-name override on OS2.
+Other apps, such as Events, may use their own deployment config to bind to the
+OS2 Worker script's `StreamDurableObject` export.
 
 OS:
 

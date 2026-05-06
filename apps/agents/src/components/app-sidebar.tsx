@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/events-contract";
+import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import type { EventsStreamElementType } from "@iterate-com/ui/components/events/stream-feed";
 import {
   SidebarGroup,

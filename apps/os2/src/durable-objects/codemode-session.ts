@@ -2,9 +2,15 @@ import { DurableObject, RpcTarget } from "cloudflare:workers";
 import {
   type Event,
   type EventInput,
+  STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
   type StreamCursor,
-  type StreamPath,
-} from "@iterate-com/events-contract";
+  StreamPath,
+} from "@iterate-com/shared/streams/types";
+import {
+  getInitializedStreamStub,
+  type StreamDurableObjectNamespace,
+} from "@iterate-com/shared/streams/helpers";
+import type { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
 import { withD1ObjectCatalog } from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
 import { withDurableObjectCore } from "@iterate-com/shared/durable-object-utils/mixins/with-durable-object-core";
 import { withKvInspector } from "@iterate-com/shared/durable-object-utils/mixins/with-kv-inspector";
@@ -13,7 +19,7 @@ import { withOuterbase } from "@iterate-com/shared/durable-object-utils/mixins/w
 import { withStreamProcessorRunner } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor-runner";
 import {
   CodemodeProcessorContract,
-  type ToolProviderDocumentation,
+  type ToolProviderRegistration,
 } from "@iterate-com/shared/stream-processors/codemode/contract";
 import type {
   CodemodeProcessorLogger,
@@ -22,10 +28,14 @@ import type {
 } from "@iterate-com/shared/stream-processors/codemode/code-executor";
 import { createCodemodeProcessor } from "@iterate-com/shared/stream-processors/codemode/implementation";
 import type { ProcessorStreamApi, StreamEvent } from "@iterate-com/shared/stream-processors";
-import { createEventsClient } from "~/lib/events-client.ts";
+import type { Callable } from "@iterate-com/shared/callable/types.ts";
+import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
+import { createDefaultCodemodeProviderRegistrations } from "~/codemode/default-provider-registrations.ts";
+import { resolveProjectStreamPath } from "~/entrypoints/stream-capability.ts";
 
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
-export { McpClientBridge } from "~/rpc-targets/mcp-client-bridge.ts";
+export { OutboundMcpFromOurClientCapability } from "~/rpc-targets/outbound-mcp-from-our-client-capability.ts";
+export { StreamCapability } from "~/entrypoints/stream-capability.ts";
 
 export type CodemodeSessionInitParams = {
   name: string;
@@ -36,26 +46,43 @@ export type CodemodeSessionInitParams = {
 export type StartScriptExecutionInput = {
   code: string;
   events?: EventInput[];
-  providers?: ToolProviderDocumentation[];
+  providers?: ToolProviderRegistration[];
 };
 
 export type CreateCodemodeSessionInput = {
   code?: string;
   events?: EventInput[];
-  providers?: ToolProviderDocumentation[];
+  providers?: ToolProviderRegistration[];
 };
 
 export type CallFunctionInput = {
+  args: unknown[];
   functionCallId?: string;
-  input: unknown;
   path: string[];
   scriptExecutionId?: string;
 };
 
+export type ReceiveFunctionCallResultInput = {
+  durationMs?: number;
+  functionCallId: string;
+  outcome:
+    | { status: "returned"; value: unknown }
+    | {
+        status: "threw";
+        error: unknown;
+      };
+  functionPath: string[];
+  invocationKind: "event" | "rpc";
+  path: string[];
+  providerPath: string[];
+  scriptExecutionId?: string;
+};
+
 export type CodemodeSessionEnv = {
+  CODEMODE_SESSION: DurableObjectNamespace<CodemodeSession>;
   DO_CATALOG: D1Database;
-  EVENTS_BASE_URL: string;
   LOADER?: WorkerLoader;
+  STREAM: DurableObjectNamespace<StreamDurableObject>;
 } & Record<string, unknown>;
 
 type CodemodeSessionStreamApi = ProcessorStreamApi<typeof CodemodeProcessorContract> & {
@@ -91,6 +118,21 @@ const CodemodeSessionRunnerBase = withStreamProcessorRunner<
 >({
   processor(args) {
     return createCodemodeProcessor({
+      buildSessionCapabilityCallable: () => {
+        const session = args.instance as unknown as {
+          createSessionCapabilityCallable(): Callable;
+        };
+        return session.createSessionCapabilityCallable();
+      },
+      callableContext: {
+        env: args.env as Record<string, unknown>,
+        // Stored codemode provider callables are often dispatched after the
+        // request that created them has ended. A CodemodeSession is a Durable
+        // Object, so its `ctx.exports` is the durable-time source of loopback
+        // WorkerEntrypoint factories with per-call props.
+        exports: (args.ctx as DurableObjectState & { exports?: Record<string, unknown> }).exports,
+        fetch,
+      },
       ensureLiveConsumer: () => {
         const session = args.instance as unknown as {
           ensureLiveConsumer(): Promise<void>;
@@ -99,13 +141,20 @@ const CodemodeSessionRunnerBase = withStreamProcessorRunner<
       },
       newId: () => crypto.randomUUID(),
       scriptExecutor: createCloudflareCodemodeScriptExecutor({
+        getSessionCapability: () => {
+          const session = args.instance as unknown as {
+            getCodemodeSessionCapability(): CodemodeProcessorSession;
+          };
+          return session.getCodemodeSessionCapability();
+        },
         loader: args.env.LOADER,
       }),
     });
   },
   streamApi(args) {
-    return createStreamApi({
-      env: args.env,
+    return processorStreamApiFromNamespace({
+      projectId: args.initParams.projectId,
+      streamNamespace: args.env.STREAM as unknown as StreamDurableObjectNamespace,
       streamPath: args.initParams.streamPath,
     });
   },
@@ -120,7 +169,14 @@ const CodemodeSessionBase = withKvInspector({
 })(CodemodeSessionWithOuterbase) as unknown as typeof CodemodeSessionRunnerBase;
 
 export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
-  #consumerCount = 0;
+  readonly #pendingFunctionCallResults = new Map<
+    string,
+    {
+      promise: Promise<unknown>;
+      reject(error: unknown): void;
+      resolve(value: unknown): void;
+    }
+  >();
 
   constructor(ctx: DurableObjectState, env: CodemodeSessionEnv) {
     super(ctx, env);
@@ -136,39 +192,49 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
 
   async ensureLiveConsumer() {
     await this.ensureStarted();
-    this.#consumerCount += 1;
-    const signal = AbortSignal.timeout(5 * 60_000);
-    const task = this.startStreamProcessorSubscription({ signal })
-      .catch((error: unknown) => {
-        if (!isAbortError(error)) {
-          console.error("[codemode-session] stream processor consumer failed", error);
-        }
-      })
-      .finally(() => {
-        this.#consumerCount = Math.max(0, this.#consumerCount - 1);
-      });
-    this.ctx.waitUntil(task);
+    await this.ensureCallableSubscription();
+    await this.catchUpStreamProcessor({ signal: AbortSignal.timeout(30_000) });
+  }
+
+  async afterAppend(input: { event: Event }) {
+    await this.ensureStarted();
+    const state = await this.consumeStreamProcessorEvent({ event: input.event as StreamEvent });
+    this.resolvePendingFunctionCallFromEvent(input.event as StreamEvent);
+    return state;
   }
 
   async createSession(input: CreateCodemodeSessionInput = {}) {
     const params = await this.ensureStarted();
     await this.ensureLiveConsumer();
-    const streamApi = this.createStreamApi();
     const appendedEvents: Event[] = [];
     const registeredProviderEvents: Event[] = [];
 
     for (const event of input.events ?? []) {
-      appendedEvents.push(await streamApi.append({ event }));
+      appendedEvents.push(await this.streamsEntrypoint().append({ event }));
     }
 
-    for (const provider of input.providers ?? []) {
-      registeredProviderEvents.push(await this.appendToolProviderRegisteredEvent({ provider }));
+    const providers = [
+      ...createDefaultCodemodeProviderRegistrations({
+        projectId: params.projectId,
+        streamPath: params.streamPath,
+      }),
+      ...(input.providers ?? []),
+    ];
+
+    for (const provider of providers) {
+      const event = await this.appendToolProviderRegisteredEvent({ provider });
+      // Session creation is allowed to enqueue code immediately after provider
+      // registration. Reduce provider registrations synchronously so the first
+      // script block does not race the live stream subscription that will also
+      // observe the same events.
+      await this.consumeStreamProcessorEvent({ event: event as StreamEvent });
+      registeredProviderEvents.push(event);
     }
 
     const scriptExecutionEvent =
       input.code == null
         ? null
-        : await streamApi.append({
+        : await this.streamsEntrypoint().append({
             event: {
               type: "events.iterate.com/codemode/script-execution-requested",
               payload: {
@@ -186,8 +252,8 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
     };
   }
 
-  private async appendToolProviderRegisteredEvent(input: { provider: ToolProviderDocumentation }) {
-    return await this.createStreamApi().append({
+  private async appendToolProviderRegisteredEvent(input: { provider: ToolProviderRegistration }) {
+    return await this.streamsEntrypoint().append({
       event: {
         type: "events.iterate.com/codemode/tool-provider-registered",
         idempotencyKey: `codemode:tool-provider-registered:${input.provider.path.join("/")}`,
@@ -210,7 +276,7 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
     };
   }
 
-  async registerToolProvider(input: { provider: ToolProviderDocumentation }) {
+  async registerToolProvider(input: { provider: ToolProviderRegistration }) {
     await this.ensureStarted();
     await this.ensureLiveConsumer();
     const event = await this.appendToolProviderRegisteredEvent(input);
@@ -225,79 +291,311 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
   async callFunction(input: CallFunctionInput) {
     await this.ensureStarted();
     await this.ensureLiveConsumer();
-    return await this.appendAndConsume({
+    const functionCallId = input.functionCallId ?? crypto.randomUUID();
+    const provider = this.resolveRegisteredProvider(input.path);
+    const pending =
+      provider.invocation.kind === "event"
+        ? this.ensurePendingFunctionCallResult(functionCallId)
+        : null;
+
+    const requestedEvent = await this.appendAndConsume({
       type: "events.iterate.com/codemode/function-call-requested",
       payload: {
-        functionCallId: input.functionCallId ?? crypto.randomUUID(),
-        input: input.input,
+        args: serializeFunctionCallArgsForEvent(input.args),
+        functionCallId,
+        functionPath: provider.functionPath,
+        invocationKind: provider.invocationKind,
         path: input.path,
+        providerPath: provider.providerPath,
         ...(input.scriptExecutionId == null ? {} : { scriptExecutionId: input.scriptExecutionId }),
       },
     });
+
+    if (provider.invocation.kind === "rpc") {
+      const startedAt = Date.now();
+      try {
+        const result = await dispatchCallable({
+          callable: provider.invocation.callable,
+          ctx: {
+            env: this.env as Record<string, unknown>,
+            exports: (this.ctx as DurableObjectState & { exports?: Record<string, unknown> })
+              .exports,
+            fetch,
+          },
+          payload: {
+            args: input.args,
+            codemodeSessionCapability: this.getCodemodeSessionCapability(),
+            functionCallId,
+            functionPath: provider.functionPath,
+            invocationKind: "rpc" as const,
+            path: input.path,
+            providerPath: provider.providerPath,
+            ...(input.scriptExecutionId == null
+              ? {}
+              : { scriptExecutionId: input.scriptExecutionId }),
+          },
+        });
+
+        await this.receiveFunctionCallResult({
+          durationMs: Math.max(0, Date.now() - startedAt),
+          functionCallId,
+          functionPath: provider.functionPath,
+          invocationKind: "rpc",
+          outcome: { status: "returned", value: result },
+          path: input.path,
+          providerPath: provider.providerPath,
+          ...(input.scriptExecutionId == null
+            ? {}
+            : { scriptExecutionId: input.scriptExecutionId }),
+        });
+        return result;
+      } catch (error) {
+        await this.receiveFunctionCallResult({
+          durationMs: Math.max(0, Date.now() - startedAt),
+          functionCallId,
+          functionPath: provider.functionPath,
+          invocationKind: "rpc",
+          outcome: { status: "threw", error },
+          path: input.path,
+          providerPath: provider.providerPath,
+          ...(input.scriptExecutionId == null
+            ? {}
+            : { scriptExecutionId: input.scriptExecutionId }),
+        });
+        throw error;
+      }
+    }
+
+    this.resolvePendingFunctionCallFromEvent(requestedEvent as StreamEvent);
+
+    try {
+      return await pending!.promise;
+    } finally {
+      this.#pendingFunctionCallResults.delete(functionCallId);
+    }
+  }
+
+  async receiveFunctionCallResult(input: ReceiveFunctionCallResultInput) {
+    await this.ensureStarted();
+    const event = await this.appendAndConsume({
+      type: "events.iterate.com/codemode/function-call-completed",
+      idempotencyKey: `codemode:function-call-completed:${input.functionCallId}`,
+      payload: {
+        ...(input.durationMs == null ? {} : { durationMs: input.durationMs }),
+        functionCallId: input.functionCallId,
+        functionPath: input.functionPath,
+        invocationKind: input.invocationKind,
+        outcome: serializeFunctionCallOutcomeForEvent(input.outcome),
+        path: input.path,
+        providerPath: input.providerPath,
+        ...(input.scriptExecutionId == null ? {} : { scriptExecutionId: input.scriptExecutionId }),
+      },
+    });
+
+    const pending = this.#pendingFunctionCallResults.get(input.functionCallId);
+    if (pending != null) {
+      if (input.outcome.status === "threw") {
+        pending.reject(input.outcome.error);
+      } else {
+        pending.resolve(input.outcome.value);
+      }
+    }
+
+    return { event };
   }
 
   getRunnerState() {
     return this.getStreamProcessorRunnerState();
   }
 
-  private createStreamApi() {
-    return createStreamApi({ env: this.env, streamPath: this.initParams.streamPath });
+  private streamsEntrypoint() {
+    return processorStreamApiFromNamespace({
+      projectId: this.initParams.projectId,
+      streamNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+      streamPath: this.initParams.streamPath,
+    });
+  }
+
+  private async ensureCallableSubscription() {
+    const stream = await getInitializedStreamStub({
+      namespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+      projectId: this.initParams.projectId,
+      path: this.initParams.streamPath,
+    });
+
+    await stream.append({
+      type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
+      idempotencyKey: `codemode-session-callable-subscription:${this.initParams.name}`,
+      payload: {
+        slug: `codemode-session:${this.initParams.name}`,
+        type: "callable",
+        callable: {
+          type: "workers-rpc",
+          via: {
+            type: "env-binding",
+            bindingType: "durable-object-namespace",
+            bindingName: "CODEMODE_SESSION",
+            durableObject: {
+              name: this.initParams.name,
+            },
+          },
+          rpcMethod: "afterAppend",
+          argsMode: "object",
+        },
+      },
+    });
   }
 
   private async appendAndConsume(eventInput: EventInput) {
-    const event = await this.createStreamApi().append({ event: eventInput });
+    const event = await this.streamsEntrypoint().append({ event: eventInput });
     await this.consumeStreamProcessorEvent({ event: event as StreamEvent });
+    this.resolvePendingFunctionCallFromEvent(event as StreamEvent);
     return event;
+  }
+
+  createSessionCapabilityCallable(): Callable {
+    return {
+      type: "workers-rpc",
+      via: {
+        type: "env-binding",
+        bindingType: "durable-object-namespace",
+        bindingName: "CODEMODE_SESSION",
+        durableObject: {
+          name: this.initParams.name,
+        },
+      },
+      rpcMethod: "getCodemodeSessionCapability",
+      argsMode: "object",
+    };
+  }
+
+  getCodemodeSessionCapability() {
+    // Event-based providers reduce the session-started event and invoke this
+    // callable when they need the same ergonomic context object as codemode
+    // scripts. The returned target is tiny on purpose: it exposes only the
+    // function-call protocol, while stream append/read stay ordinary tools.
+    return new CodemodeSessionCapabilityTarget({
+      callFunction: async (input) => await this.callFunction(input),
+    });
+  }
+
+  private ensurePendingFunctionCallResult(functionCallId: string) {
+    const existing = this.#pendingFunctionCallResults.get(functionCallId);
+    if (existing != null) return existing;
+
+    let resolveResult!: (value: unknown) => void;
+    let rejectResult!: (error: unknown) => void;
+    const promise = new Promise<unknown>((resolve, reject) => {
+      resolveResult = resolve;
+      rejectResult = reject;
+    });
+    const pending = {
+      promise,
+      reject: rejectResult,
+      resolve: resolveResult,
+    };
+    this.#pendingFunctionCallResults.set(functionCallId, pending);
+    return pending;
+  }
+
+  private resolvePendingFunctionCallFromEvent(event: StreamEvent) {
+    if (event.type !== "events.iterate.com/codemode/function-call-completed") return;
+    const payload = event.payload as {
+      functionCallId: string;
+      outcome: { status: "returned"; value: unknown } | { status: "threw"; error: unknown };
+    };
+    const pending = this.#pendingFunctionCallResults.get(payload.functionCallId);
+    if (pending == null) return;
+
+    if (payload.outcome.status === "threw") {
+      pending.reject(payload.outcome.error);
+    } else {
+      pending.resolve(payload.outcome.value);
+    }
+  }
+
+  private resolveRegisteredProvider(path: string[]) {
+    const state = this.getStreamProcessorRunnerState().state;
+    const candidates = Object.values(state.toolProviders)
+      .filter((provider) => provider.path.every((segment, index) => path[index] === segment))
+      .sort((left, right) => right.path.length - left.path.length);
+    const provider = candidates[0];
+    if (provider == null) {
+      throw new Error(`No codemode provider registered for ${path.join(".")}.`);
+    }
+
+    // Keeping providerPath and functionPath separate makes providers
+    // mount-depth agnostic: the same Slack capability can be mounted at
+    // `slack`, `team.slack`, or a future tenant-specific prefix.
+    return {
+      functionPath: path.slice(provider.path.length),
+      invocation: provider.invocation,
+      invocationKind: provider.invocation.kind,
+      providerPath: provider.path,
+    };
   }
 }
 
-function createStreamApi(args: {
-  env: Pick<CodemodeSessionEnv, "EVENTS_BASE_URL">;
+function processorStreamApiFromNamespace(args: {
+  projectId: string;
+  streamNamespace: StreamDurableObjectNamespace;
   streamPath: StreamPath;
 }): CodemodeSessionStreamApi {
-  const resolveStreamPath = (path: string | undefined): StreamPath => {
-    return (path ?? args.streamPath) as StreamPath;
-  };
-
   return {
     async append(input) {
-      const { event } = await createEventsClient(args.env.EVENTS_BASE_URL).append({
-        path: resolveStreamPath(input.streamPath),
-        event: input.event as EventInput,
+      const stream = await getInitializedStreamStub({
+        namespace: args.streamNamespace,
+        projectId: args.projectId,
+        path: resolveProcessorStreamPath({
+          basePath: args.streamPath,
+          pathInput: input.streamPath,
+        }),
       });
-      return event;
+      return await stream.append(input.event as EventInput);
     },
     async read(input = {}) {
-      const events: Event[] = [];
-      const stream = await createEventsClient(args.env.EVENTS_BASE_URL).stream({
-        path: resolveStreamPath(input.streamPath),
-        afterOffset: toEventsCursor(input.afterOffset),
-        beforeOffset: toEventsCursor(input.beforeOffset ?? "end"),
+      const stream = await getInitializedStreamStub({
+        namespace: args.streamNamespace,
+        projectId: args.projectId,
+        path: resolveProcessorStreamPath({
+          basePath: args.streamPath,
+          pathInput: input.streamPath,
+        }),
       });
-
-      for await (const event of stream) {
-        events.push(event);
-      }
-
-      return events;
+      return await stream.history({
+        after: toEventsCursor(input.afterOffset),
+        before: toEventsCursor(input.beforeOffset ?? "end"),
+      });
     },
     async *subscribe(input = {}) {
-      const stream = await createEventsClient(args.env.EVENTS_BASE_URL).stream(
-        {
-          path: resolveStreamPath(input.streamPath),
-          afterOffset: toEventsCursor(input.afterOffset),
-        },
-        { signal: input.signal },
-      );
-
-      for await (const event of stream) {
-        yield event;
-      }
+      void input;
+      throw new Error("CodemodeSession processors receive live events through afterAppend RPC.");
     },
   };
 }
 
+function resolveProcessorStreamPath(input: { basePath: StreamPath; pathInput?: string }) {
+  if (input.pathInput == null) {
+    return input.basePath;
+  }
+
+  const trimmedPath = input.pathInput.trim();
+  if (!trimmedPath) {
+    throw new Error("Stream path is required.");
+  }
+
+  if (trimmedPath.startsWith("/")) {
+    return resolveProjectStreamPath(trimmedPath);
+  }
+
+  const relativePath = trimmedPath.replace(/^\.\//, "").replace(/^\/+/, "");
+  return StreamPath.parse(
+    input.basePath === "/" ? `/${relativePath}` : `${input.basePath}/${relativePath}`,
+  );
+}
+
 function createCloudflareCodemodeScriptExecutor(input: {
+  getSessionCapability?: () => CodemodeProcessorSession;
   loader: WorkerLoader | undefined;
 }): CodemodeScriptExecutor {
   return async ({ code, logger, scriptExecutionId, session }) => {
@@ -311,7 +609,7 @@ function createCloudflareCodemodeScriptExecutor(input: {
     try {
       const entrypoint = input.loader
         .load({
-          compatibilityDate: "2025-06-01",
+          compatibilityDate: "2026-04-27",
           compatibilityFlags: ["nodejs_compat"],
           mainModule: "executor.js",
           modules: {
@@ -328,8 +626,13 @@ function createCloudflareCodemodeScriptExecutor(input: {
         ): Promise<{ error?: string; result: unknown }>;
       };
 
+      // The generic shared processor session waits for event-provider results
+      // by subscribing to the stream. In OS2 this host receives live
+      // completions through `afterAppend` and a pending-promise map, so dynamic
+      // worker scripts must call back through the Durable Object session
+      // capability instead of the generic processor facade.
       return await entrypoint.evaluate(
-        new CodemodeSessionCapabilityTarget(session),
+        new CodemodeSessionCapabilityTarget(input.getSessionCapability?.() ?? session),
         new CodemodeLoggerTarget(logger),
         scriptExecutionId,
       );
@@ -350,8 +653,8 @@ class CodemodeSessionCapabilityTarget extends RpcTarget {
     this.#session = session;
   }
 
-  async callFunction(input: CallFunctionInput) {
-    return await this.#session.callFunction(input);
+  callFunction(input: CallFunctionInput) {
+    return this.#session.callFunction(input);
   }
 }
 
@@ -384,12 +687,19 @@ function __createCodemodeContext(options) {
     get: (_target, key) => {
       if (key === "then" || key === "catch" || key === "finally") return undefined;
       if (key === "abortSignal" && path.length === 0) return options.abortSignal;
+      if (key === "console" && path.length === 0) {
+        return {
+          log: (...args) => console.log(...args),
+          warn: (...args) => console.warn(...args),
+          error: (...args) => console.error(...args),
+        };
+      }
       if (typeof key !== "string") return undefined;
       return make([...path, key]);
     },
-    apply: async (_target, _thisArg, args) => {
-      return await options.codemodeSessionCapability.callFunction({
-        input: args[0],
+    apply: (_target, _thisArg, args) => {
+      return options.codemodeSessionCapability.callFunction({
+        args,
         path,
         scriptExecutionId: options.scriptExecutionId,
       });
@@ -401,6 +711,15 @@ function __createCodemodeContext(options) {
 
 export default class CodeExecutor extends WorkerEntrypoint {
   async evaluate(__codemodeSessionCapability, __logger, __scriptExecutionId) {
+    const __codemodeFetch = (...args) => {
+      return __codemodeSessionCapability.callFunction({
+        args,
+        path: ["fetch"],
+        scriptExecutionId: __scriptExecutionId,
+      });
+    };
+    globalThis.fetch = __codemodeFetch;
+
     console.log = (...args) => {
       const message = args.map(__stringify).join(" ");
       if (__logger) void __logger.log("log", message);
@@ -457,8 +776,98 @@ function serializeError(error: unknown) {
   return { message: String(error) };
 }
 
-function isAbortError(error: unknown) {
-  return error instanceof Error && error.name === "AbortError";
+function serializeErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  if (error != null && typeof error === "object" && "message" in error) {
+    return String((error as { message: unknown }).message);
+  }
+  return String(error);
+}
+
+function serializeFunctionCallOutcomeForEvent(input: ReceiveFunctionCallResultInput["outcome"]) {
+  if (input.status === "threw") {
+    return {
+      status: "threw" as const,
+      error: serializeFunctionCallValueForEvent(input.error),
+    };
+  }
+
+  return {
+    status: "returned" as const,
+    value: serializeFunctionCallValueForEvent(input.value),
+  };
+}
+
+function serializeFunctionCallArgsForEvent(args: unknown[]) {
+  return args.map((arg) => serializeFunctionCallValueForEvent(arg));
+}
+
+function serializeFunctionCallValueForEvent(value: unknown): unknown {
+  if (typeof value === "function") {
+    return {
+      kind: "live-value",
+      type: "function",
+    };
+  }
+  if (typeof value === "bigint") {
+    return {
+      kind: "non-json-value",
+      type: "bigint",
+      value: value.toString(),
+    };
+  }
+  if (typeof value === "symbol" || typeof value === "undefined") {
+    return {
+      kind: "non-json-value",
+      type: typeof value,
+    };
+  }
+  if (value instanceof Error) return serializeError(value);
+  if (value instanceof Response) {
+    return {
+      kind: "live-value",
+      status: value.status,
+      statusText: value.statusText,
+      type: "response",
+    };
+  }
+  if (typeof ReadableStream !== "undefined" && value instanceof ReadableStream) {
+    return {
+      kind: "live-value",
+      type: "readable-stream",
+    };
+  }
+  if (
+    value != null &&
+    typeof value === "object" &&
+    value.constructor != null &&
+    value.constructor !== Object &&
+    !Array.isArray(value)
+  ) {
+    return {
+      kind: "live-value",
+      type: value.constructor.name,
+    };
+  }
+
+  try {
+    const json = JSON.stringify(value);
+    if (json === undefined) {
+      return {
+        kind: "non-json-value",
+        type: typeof value,
+      };
+    }
+    return JSON.parse(json) as unknown;
+  } catch {
+    return {
+      kind: "non-json-value",
+      type:
+        value != null && typeof value === "object" && value.constructor != null
+          ? value.constructor.name
+          : typeof value,
+    };
+  }
 }
 
 export default {

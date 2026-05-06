@@ -1,1 +1,1 @@
-select count(*) as total from secrets where project_slug = :projectSlug;
+select count(*) as total from secrets where project_id = :projectId;

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useMatchRoute, useSearch } from "@tanstack/react-router";
-import { ProjectSlug, type ProjectSlug as ProjectSlugValue } from "@iterate-com/events-contract";
+import { ProjectId, type ProjectId as ProjectIdValue } from "@iterate-com/shared/streams/types";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   SidebarGroup,
@@ -13,7 +13,7 @@ import {
 import { SidebarShell } from "@iterate-com/ui/components/sidebar-shell";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { StreamsSidebar } from "~/components/streams-sidebar.tsx";
-import { getProjectUrl } from "~/lib/project-slug.ts";
+import { getProjectUrl } from "~/lib/project-id.ts";
 import { defaultStreamViewSearch } from "~/lib/stream-view-search.ts";
 
 type StreamLinkSearch = {
@@ -23,11 +23,11 @@ type StreamLinkSearch = {
   [key: string]: unknown;
 };
 
-export function AppSidebar({ projectSlug }: { projectSlug: ProjectSlugValue }) {
+export function AppSidebar({ projectId }: { projectId: ProjectIdValue }) {
   return (
     <SidebarShell
       header={<AppSidebarBrand />}
-      footer={<AppSidebarProjectSlugFooter projectSlug={projectSlug} />}
+      footer={<AppSidebarProjectIdFooter projectId={projectId} />}
     >
       <AppSidebarNav />
       <StreamsSidebar />
@@ -127,23 +127,23 @@ function AppSidebarNav() {
   );
 }
 
-function AppSidebarProjectSlugFooter({ projectSlug }: { projectSlug: ProjectSlugValue }) {
-  const [value, setValue] = useState(projectSlug);
+function AppSidebarProjectIdFooter({ projectId }: { projectId: ProjectIdValue }) {
+  const [value, setValue] = useState(projectId);
 
   useEffect(() => {
-    setValue(projectSlug);
-  }, [projectSlug]);
+    setValue(projectId);
+  }, [projectId]);
 
-  function submitProjectSlug() {
-    const parsed = ProjectSlug.safeParse(value.trim());
+  function submitProjectId() {
+    const parsed = ProjectId.safeParse(value.trim());
     if (!parsed.success) {
-      toast.error("Project slug must be a non-empty string up to 255 characters.");
+      toast.error("Project ID must be a non-empty string up to 255 characters.");
       return;
     }
 
     const nextUrl = getProjectUrl({
       currentUrl: window.location.href,
-      projectSlug: parsed.data,
+      projectId: parsed.data,
     });
     window.location.assign(nextUrl.toString());
   }
@@ -153,11 +153,11 @@ function AppSidebarProjectSlugFooter({ projectSlug }: { projectSlug: ProjectSlug
       className="flex flex-col gap-2 p-2"
       onSubmit={(event) => {
         event.preventDefault();
-        submitProjectSlug();
+        submitProjectId();
       }}
     >
       <div className="px-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-        Project slug
+        Project ID
       </div>
       <SidebarInput
         value={value}

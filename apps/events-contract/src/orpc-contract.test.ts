@@ -8,7 +8,7 @@ import {
   StreamQuery,
   StreamMetadataUpdatedEventInput,
   StreamPath,
-} from "./types.ts";
+} from "@iterate-com/shared/streams/types";
 
 type EventsContractClient = ContractRouterClient<typeof eventsContract>;
 type ClientAppendArgs = Parameters<EventsContractClient["append"]>[0];
@@ -271,12 +271,12 @@ const streamInitializedEvent = AppendInput.parse({
   path: examplePath,
   event: {
     type: "events.iterate.com/core/stream-first-initialized",
-    payload: { projectSlug: "public", path: examplePath },
+    payload: { projectId: "public", path: examplePath },
   },
 });
 
 assert.deepEqual(streamInitializedEvent.event.payload, {
-  projectSlug: "public",
+  projectId: "public",
   path: examplePath,
 });
 

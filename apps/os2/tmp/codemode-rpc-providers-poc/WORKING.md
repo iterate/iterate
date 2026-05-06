@@ -184,7 +184,7 @@ export default async (ctx: CodemodeContext) => {
 - Should cancellation append a request event first, then produce a terminal
   `execution-cancelled` event?
 - Does the oRPC adapter return only legacy `CodemodeEvent` shapes, or should the
-  UI move straight to events-contract `Event` envelopes?
+  UI move straight to shared stream `Event` envelopes?
 
 ## Next Implementation Steps
 

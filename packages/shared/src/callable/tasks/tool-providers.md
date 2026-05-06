@@ -21,9 +21,10 @@ type ToolProvider = {
 
 The point is that code mode can store, transmit, and dispatch a tool provider
 without knowing whether it is backed by a public HTTP server, a service binding,
-a Durable Object, a Dynamic Worker, or a loopback binding. A provider describes
-its tool functions by handling the reserved provider-relative tool function path
-`["__describe"]` and returning `{ typeDefinitions: string }`.
+a Durable Object, a Dynamic Worker, or a loopback binding. Current codemode v1
+does not use a reserved `__describe` path. Tool provider registration carries
+short instructions, and richer discovery is exposed as ordinary tool functions
+such as `listTools`, `listOperations`, or `listProcedures`.
 
 Do not add `type: "tool-provider"` to `Callable` unless a later design finds a
 real reason. The callable kernel should stay focused: one callable invokes one

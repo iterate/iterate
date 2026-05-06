@@ -1,4 +1,4 @@
-import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/events-contract";
+import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 
 export function streamPathToSplat(path: StreamPathType): string {
   return path === "/" ? "" : path.slice(1);

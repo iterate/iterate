@@ -1,7 +1,12 @@
 import { eventIterator, oc } from "@orpc/contract";
-import { Event, EventInput, StreamCursor, StreamPath } from "@iterate-com/events-contract";
+import {
+  Event,
+  EventInput,
+  StreamCursor,
+  StreamPath,
+  StreamState,
+} from "@iterate-com/shared/streams/types";
 import { internalContract } from "@iterate-com/shared/apps/internal-router-contract";
-import { CodemodeEvent } from "@iterate-com/shared/codemode/types";
 import { z } from "zod";
 
 const JSONObject = z.record(z.string(), z.unknown());
@@ -252,29 +257,11 @@ export const osContract = oc.router({
         }),
       )
       .output(eventIterator(Event)),
-    execute: oc
-      .route({
-        method: "POST",
-        path: "/codemode/execute",
-        description: "Execute code in a sandboxed dynamic worker with tool providers",
-        tags: ["/codemode"],
-      })
-      .input(
-        z.object({
-          code: z.string().min(1),
-          blockId: z.string().optional(),
-          events: z.array(EventInput).default([]),
-          projectId: z.string(),
-          providers: CodemodeProviderInput.default([]),
-          streamPath: StreamPath.optional(),
-        }),
-      )
-      .output(eventIterator(CodemodeEvent)),
     describe: oc
       .route({
         method: "POST",
         path: "/codemode/describe",
-        description: "Fetch type descriptions from tool providers",
+        description: "Render short instructions from tool provider registrations",
         tags: ["/codemode"],
       })
       .input(
@@ -283,7 +270,49 @@ export const osContract = oc.router({
           providers: CodemodeProviderInput,
         }),
       )
-      .output(z.object({ typeDefinitions: z.string() })),
+      .output(z.object({ instructions: z.string() })),
+  },
+  streams: {
+    append: oc
+      .route({
+        method: "POST",
+        path: "/streams/{projectId}/{+streamPath}",
+        description: "Append an event to an OS2 project stream",
+        tags: ["/streams"],
+      })
+      .input(
+        z.object({
+          projectId: z.string(),
+          streamPath: StreamPath,
+          event: EventInput,
+        }),
+      )
+      .output(z.object({ event: Event })),
+    read: oc
+      .route({
+        method: "GET",
+        path: "/streams/{projectId}/{+streamPath}",
+        description: "Read committed events from an OS2 project stream",
+        tags: ["/streams"],
+      })
+      .input(
+        z.object({
+          afterOffset: StreamCursor.optional(),
+          beforeOffset: StreamCursor.optional(),
+          projectId: z.string(),
+          streamPath: StreamPath,
+        }),
+      )
+      .output(z.object({ events: z.array(Event) })),
+    getState: oc
+      .route({
+        method: "GET",
+        path: "/streams/{projectId}/__state/{+streamPath}",
+        description: "Read the reduced state for an OS2 project stream",
+        tags: ["/streams"],
+      })
+      .input(z.object({ projectId: z.string(), streamPath: StreamPath }))
+      .output(StreamState),
   },
   projects: {
     create: oc

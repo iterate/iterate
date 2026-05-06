@@ -1,10 +1,21 @@
 import { D1Database, DurableObjectNamespace } from "alchemy/cloudflare";
+import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { initAlchemy } from "@iterate-com/shared/alchemy/init";
 import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
+import { z } from "zod";
 import manifest, { AppConfig } from "./src/app.ts";
 import type { StreamDurableObject } from "~/entry.workerd.ts";
 
+const DeploymentConfig = z.object({
+  streamDurableObjectBindingScriptName: z.string().trim().min(1).optional(),
+});
+
 const ctx = await initAlchemy(manifest, AppConfig, process.env);
+const deploymentConfig = parseAppConfigFromEnv({
+  configSchema: DeploymentConfig,
+  prefix: "DEPLOYMENT_CONFIG_",
+  env: process.env,
+});
 
 const db = await D1Database("events-db", {
   name: `${ctx.workerName}-db`,
@@ -12,14 +23,21 @@ const db = await D1Database("events-db", {
   adopt: true,
 });
 
-const stream = DurableObjectNamespace<StreamDurableObject>("stream", {
-  className: "StreamDurableObject",
-  sqlite: true,
-});
+const stream =
+  deploymentConfig.streamDurableObjectBindingScriptName == null
+    ? DurableObjectNamespace<StreamDurableObject>("stream", {
+        className: "StreamDurableObject",
+        sqlite: true,
+      })
+    : DurableObjectNamespace<StreamDurableObject>("stream", {
+        className: "StreamDurableObject",
+        scriptName: deploymentConfig.streamDurableObjectBindingScriptName,
+      });
 
 const { worker, afterFinalize } = await IterateApp(ctx, {
   bindings: {
     DB: db,
+    DO_CATALOG: db,
     STREAM: stream,
   },
   // Cloudflare gates `request.signal` behind this flag — needed by the oRPC
@@ -28,7 +46,7 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
   // `global_fetch_strictly_public` lets this Worker call same-zone Worker routes
   // such as agents.iterate.com via fetch instead of bypassing Workers to origin.
   compatibilityFlags: ["enable_request_signal", "global_fetch_strictly_public"],
-  extraRouteHostnames: projectRouteHostnamesForBaseUrl(ctx.compiledAppConfig.baseUrl),
+  extraRouteHostnames: projectRouteHostnamesForBaseUrl(ctx.runtimeConfig.baseUrl),
 });
 
 export { worker };

@@ -4,7 +4,10 @@ import { generateProtectedResourceMetadata } from "@clerk/mcp-tools/server";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { McpAgent } from "agents/mcp";
 import { AppConfig } from "~/app.ts";
-import type { ProjectDurableObject } from "~/durable-objects/project-durable-object.ts";
+import type {
+  ProjectDurableObject,
+  ProjectSummary,
+} from "~/durable-objects/project-durable-object.ts";
 import type { ProjectMcpServerConnectionProps } from "~/durable-objects/project-mcp-server-connection.ts";
 import { ingressUrlFromRequest } from "~/ingress/host-routing.ts";
 import { deriveClerkFrontendApiUrl } from "~/lib/clerk-frontend-api.ts";
@@ -21,7 +24,7 @@ type ProjectMcpServerEntrypointProps = {
 const config = parseAppConfigFromEnv({
   configSchema: AppConfig,
   prefix: "APP_CONFIG_",
-  env: workerEnv,
+  env: workerEnv as unknown as Record<string, unknown>,
 });
 const mcpHandler = McpAgent.serve("/", { binding: "PROJECT_MCP_SERVER_CONNECTION" });
 
@@ -56,16 +59,15 @@ export class ProjectMcpServerEntrypoint extends WorkerEntrypoint<
       return mcpAuth;
     }
 
-    const project = await this.env.PROJECT.getByName(this.ctx.props.projectId).checkAccess({
-      principal: {
-        orgId: mcpAuth.orgId,
-        userId: mcpAuth.userId,
-      },
+    const project = await resolveMcpProject({
+      auth: mcpAuth,
+      project: this.env.PROJECT.getByName(this.ctx.props.projectId),
     });
 
     const ctxWithProps = this.ctx as ExecutionContext & { props?: ProjectMcpServerConnectionProps };
     ctxWithProps.props = {
       ...mcpAuth,
+      orgId: mcpAuth.orgId ?? project.clerkOrgId,
       projectId: project.id,
       projectSlug: project.slug,
     };
@@ -104,6 +106,11 @@ async function authenticateMcpRequest(request: Request) {
   const token = readBearerToken(request);
   if (!token) {
     return unauthorizedMcpResponse(request, "Missing bearer token");
+  }
+
+  const sharedSecretAuth = authenticateSharedSecret(token);
+  if (sharedSecretAuth) {
+    return sharedSecretAuth;
   }
 
   try {
@@ -150,6 +157,49 @@ async function authenticateMcpRequest(request: Request) {
   } catch {
     return unauthorizedMcpResponse(request, "Invalid bearer token");
   }
+}
+
+function authenticateSharedSecret(token: string): ProjectMcpServerConnectionProps | null {
+  const adminApiSecret = config.adminApiSecret?.exposeSecret();
+  if (!adminApiSecret || token !== adminApiSecret) {
+    return null;
+  }
+
+  // This path is intentionally narrower than Clerk OAuth: it is for preview
+  // proofs and automation clients that already know the project MCP hostname.
+  // The Project Durable Object still resolves the project summary by route
+  // props, but it skips per-user Clerk membership checks.
+  return {
+    clientId: "admin-api-secret",
+    orgId: null,
+    orgPermissions: ["admin:api"],
+    orgRole: "admin",
+    orgSlug: null,
+    projectId: null,
+    projectSlug: null,
+    scopes: ["profile"],
+    userId: "admin-api-secret",
+  };
+}
+
+async function resolveMcpProject(input: {
+  auth: ProjectMcpServerConnectionProps;
+  project: DurableObjectStub<ProjectDurableObject>;
+}): Promise<ProjectSummary> {
+  if (input.auth.clientId === "admin-api-secret") {
+    return await input.project.getSummary();
+  }
+
+  if (!input.auth.orgId) {
+    throw new Error("MCP OAuth auth is missing an organization id.");
+  }
+
+  return await input.project.checkAccess({
+    principal: {
+      orgId: input.auth.orgId,
+      userId: input.auth.userId,
+    },
+  });
 }
 
 async function tryReadJwtClaims(token: string) {

@@ -4,7 +4,8 @@ import type { ContractRouterClient } from "@orpc/contract";
 import { createORPCClient } from "@orpc/client";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { os } from "@orpc/server";
-import { eventsContract, type StreamPath } from "@iterate-com/events-contract";
+import { eventsContract } from "@iterate-com/events-contract";
+import type { StreamPath } from "@iterate-com/shared/streams/types";
 import { z } from "zod";
 
 const DEFAULT_BASE_URL = "https://prd-events.iterate.workers.dev";

@@ -2,6 +2,7 @@ import { env as workerEnv } from "cloudflare:workers";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { withEvlog } from "@iterate-com/shared/apps/logging/with-evlog";
 import { NitroWebSocketResponse } from "@iterate-com/shared/nitro-ws-response";
+import { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
 import handler from "@tanstack/react-start/server-entry";
 import crossws from "crossws/adapters/cloudflare";
 import { createD1Client } from "sqlfu";
@@ -16,19 +17,34 @@ import {
 } from "~/ingress/host-routing.ts";
 import type { ExactHostIngressRule } from "~/ingress/types.ts";
 
-// Re-export rpc-targets so loopback-binding callables can resolve them from ctx.exports.
-// https://developers.cloudflare.com/workers/runtime-apis/context/#exports
+// Re-export rpc-targets used by OS2's existing loopback callable paths.
+// Stream processor subscriptions do not use these exports; they target Durable
+// Object namespace env bindings directly.
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
-export { McpClientBridge } from "~/rpc-targets/mcp-client-bridge.ts";
+export { OutboundMcpFromOurClientCapability } from "~/rpc-targets/outbound-mcp-from-our-client-capability.ts";
+export { CodemodeSession } from "~/durable-objects/codemode-session.ts";
 export { ProjectDurableObject } from "~/durable-objects/project-durable-object.ts";
+export { ProjectMcpServerConnection } from "~/durable-objects/project-mcp-server-connection.ts";
+export {
+  AgentCapability,
+  AgentDurableObject,
+  AiCapability,
+  OrpcCapability,
+  RepoCapability,
+  RepoDurableObject,
+  SlackCapability,
+  WorkspaceDurableObject,
+} from "~/codemode/example-capabilities.ts";
+export { FetchCapability } from "~/codemode/fetch-capability.ts";
 export { ProjectIngressEntrypoint } from "~/entrypoints/project-ingress-entrypoint.ts";
 export { ProjectMcpServerEntrypoint } from "~/entrypoints/project-mcp-server-entrypoint.ts";
-export { ProjectStreamsEntrypoint } from "~/entrypoints/project-streams-entrypoint.ts";
+export { StreamCapability } from "~/entrypoints/stream-capability.ts";
+export { StreamDurableObject };
 
 const config = parseAppConfigFromEnv({
   configSchema: AppConfig,
   prefix: "APP_CONFIG_",
-  env: workerEnv,
+  env: workerEnv as unknown as Record<string, unknown>,
 });
 
 export default {
@@ -76,7 +92,10 @@ export default {
           loader: env.LOADER,
           codemodeSession: env.CODEMODE_SESSION,
           callableEnv: env,
-          project: env.PROJECT,
+          projectDurableObjectNamespace: env.PROJECT,
+          stream: env.STREAM,
+          workerExports: (cfCtx as ExecutionContext & { exports?: Record<string, unknown> })
+            .exports,
         };
 
         const response = await handler.fetch(request, {
@@ -150,6 +169,8 @@ function readDebugDurableObjectNamespace(
       return env.PROJECT as unknown as DebugDurableObjectNamespace;
     case "project-mcp-server-connection":
       return env.PROJECT_MCP_SERVER_CONNECTION as unknown as DebugDurableObjectNamespace;
+    case "stream":
+      return env.STREAM as unknown as DebugDurableObjectNamespace;
     default:
       return null;
   }

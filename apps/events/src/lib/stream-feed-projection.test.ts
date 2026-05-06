@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { type Event } from "@iterate-com/events-contract";
+import { type Event } from "@iterate-com/shared/streams/types";
 import {
   buildDisplayFeed,
   createGroupedOrSingleEvent,

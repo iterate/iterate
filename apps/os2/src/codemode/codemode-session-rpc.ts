@@ -1,6 +1,6 @@
-import { type Event, type EventInput, type StreamPath } from "@iterate-com/events-contract";
+import { type Event, type EventInput, type StreamPath } from "@iterate-com/shared/streams/types";
 import { deriveDurableObjectNameFromInitParams } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import type { ToolProviderDocumentation } from "@iterate-com/shared/stream-processors/codemode/contract";
+import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
 import type { CodemodeSession } from "~/durable-objects/codemode-session.ts";
 
 export type CodemodeSessionNamespace = DurableObjectNamespace<CodemodeSession>;
@@ -14,7 +14,7 @@ export type CodemodeSessionRpcStub = {
   createSession(input?: {
     code?: string;
     events?: EventInput[];
-    providers?: ToolProviderDocumentation[];
+    providers?: ToolProviderRegistration[];
   }): Promise<{
     appendedEvents: Event[];
     registeredProviderEvents: Event[];
@@ -23,11 +23,11 @@ export type CodemodeSessionRpcStub = {
   }>;
   executeScript(input: { code: string }): Promise<Event>;
   initialize(params: { name: string; projectId: string; streamPath: StreamPath }): Promise<unknown>;
-  registerToolProvider(input: { provider: ToolProviderDocumentation }): Promise<Event>;
+  registerToolProvider(input: { provider: ToolProviderRegistration }): Promise<Event>;
   startScriptExecution(input: {
     code: string;
     events?: EventInput[];
-    providers?: ToolProviderDocumentation[];
+    providers?: ToolProviderRegistration[];
   }): Promise<{
     appendedEvents: Event[];
     event: Event;
@@ -59,7 +59,7 @@ export async function startCodemodeScriptOnSession(input: {
   events: EventInput[];
   namespace: CodemodeSessionNamespace;
   projectId: string;
-  providers: ToolProviderDocumentation[];
+  providers: ToolProviderRegistration[];
   streamPath: StreamPath;
 }) {
   const session = await getInitializedCodemodeSession(input);
@@ -75,7 +75,7 @@ export async function createCodemodeSession(input: {
   events: EventInput[];
   namespace: CodemodeSessionNamespace;
   projectId: string;
-  providers: ToolProviderDocumentation[];
+  providers: ToolProviderRegistration[];
   streamPath: StreamPath;
 }) {
   const session = await getInitializedCodemodeSession(input);

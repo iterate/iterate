@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { dispatchCallable } from "../../callable/runtime.ts";
+import type { Callable, CallableContext } from "../../callable/types.ts";
 import {
   type ConsumedEvent,
   defineProcessorContract,
@@ -13,10 +15,33 @@ import {
 import { CodemodeProcessorContract, type CodemodeState } from "./contract.ts";
 import { createCodemodeProcessor } from "./implementation.ts";
 
+const sessionCapabilityCallable = {
+  type: "workers-rpc",
+  via: {
+    type: "env-binding",
+    bindingType: "service",
+    bindingName: "CODEMODE_SESSION_CAPABILITY",
+  },
+  rpcMethod: "getCodemodeSessionCapability",
+  argsMode: "object",
+} satisfies Callable;
+
+const aiCapabilityCallable = {
+  type: "workers-rpc",
+  via: {
+    type: "env-binding",
+    bindingType: "service",
+    bindingName: "AI_CAPABILITY",
+  },
+  rpcMethod: "executeCodemodeFunctionCall",
+  argsMode: "object",
+} satisfies Callable;
+
 describe("createCodemodeProcessor", () => {
-  it("executes requested scripts through the injected executor and appends the completed event", async () => {
+  it("emits the codemode session-started singleton before doing script work", async () => {
     const appended: StreamEventInput[] = [];
     const processor = createCodemodeProcessor({
+      ...baseDeps(),
       now: fixedClock([new Date("2026-01-01T00:00:00.000Z"), new Date("2026-01-01T00:00:00.025Z")]),
       scriptExecutor: async ({ code, logger, scriptExecutionId }) => {
         await logger.log("log", `running ${scriptExecutionId}: ${code.length} chars`);
@@ -37,6 +62,11 @@ describe("createCodemodeProcessor", () => {
     });
 
     expect(appended).toEqual([
+      {
+        type: "events.iterate.com/codemode/session-started",
+        idempotencyKey: "events.iterate.com/codemode/session-started",
+        payload: { sessionCapabilityCallable },
+      },
       {
         type: "events.iterate.com/codemode/log-emitted",
         idempotencyKey:
@@ -60,13 +90,14 @@ describe("createCodemodeProcessor", () => {
     ]);
   });
 
-  it("lets script execution await a function call completed later in the stream", async () => {
+  it("requests event-mediated function calls and waits for matching completion events", async () => {
     const appended: StreamEventInput[] = [];
     const processor = createCodemodeProcessor({
+      ...baseDeps(),
       newId: fixedIds(["fn-1"]),
       scriptExecutor: async ({ session }) => {
         const output = await session.callFunction({
-          input: { value: "hello" },
+          args: [{ value: "hello" }],
           path: ["providerB", "text", "exclaim"],
         });
         return { result: output };
@@ -83,7 +114,13 @@ describe("createCodemodeProcessor", () => {
         offset: 7,
       }),
       previousState: registeredState(),
-      state: registeredState(),
+      state: registeredStateWithProviders([
+        {
+          instructions: "Provider B text functions.",
+          invocation: { kind: "event" },
+          path: ["providerB"],
+        },
+      ]),
       streamApi: testStreamApi({
         appended,
         storedEvents: [
@@ -91,8 +128,11 @@ describe("createCodemodeProcessor", () => {
             type: "events.iterate.com/codemode/function-call-completed",
             payload: {
               functionCallId: "fn-1",
-              outcome: { status: "succeeded", output: { value: "HELLO!" } },
+              functionPath: ["text", "exclaim"],
+              invocationKind: "event",
+              outcome: { status: "returned", value: { value: "HELLO!" } },
               path: ["providerB", "text", "exclaim"],
+              providerPath: ["providerB"],
               scriptExecutionId: "scr-1",
             },
             offset: 9,
@@ -104,13 +144,21 @@ describe("createCodemodeProcessor", () => {
 
     expect(appended).toEqual([
       {
+        type: "events.iterate.com/codemode/session-started",
+        idempotencyKey: "events.iterate.com/codemode/session-started",
+        payload: { sessionCapabilityCallable },
+      },
+      {
         type: "events.iterate.com/codemode/function-call-requested",
         idempotencyKey:
           "stream-processor:codemode:derived:function-call-requested:1:/projects/prj_test/codemode-sessions/cblk_test:7",
         payload: {
+          args: [{ value: "hello" }],
           functionCallId: "fn-1",
-          input: { value: "hello" },
+          functionPath: ["text", "exclaim"],
+          invocationKind: "event",
           path: ["providerB", "text", "exclaim"],
+          providerPath: ["providerB"],
           scriptExecutionId: "scr-1",
         },
       },
@@ -127,26 +175,31 @@ describe("createCodemodeProcessor", () => {
     ]);
   });
 
-  it("waits on the committed function call id when request append is deduplicated", async () => {
+  it("dispatches rpc providers, appends returned completion, and keeps live result identity", async () => {
     const appended: StreamEventInput[] = [];
-    const requestedEvent = committedEvent({
-      type: "events.iterate.com/codemode/function-call-requested",
-      payload: {
-        functionCallId: "fn-original",
-        input: { value: "hello" },
-        path: ["providerB", "text", "exclaim"],
-        scriptExecutionId: "scr-1",
+    const liveHandle = {
+      async exec(input: { cmd: string }) {
+        return { stdout: `ran ${input.cmd}` };
       },
-      offset: 8,
-    });
+    };
+    const executeCodemodeFunctionCall = vi.fn(async () => liveHandle);
     const processor = createCodemodeProcessor({
-      newId: fixedIds(["fn-replay"]),
+      ...baseDeps({
+        callableContext: {
+          env: {
+            AI_CAPABILITY: {
+              executeCodemodeFunctionCall,
+            },
+          },
+        },
+      }),
+      newId: fixedIds(["fn-rpc"]),
       scriptExecutor: async ({ session }) => {
-        const output = await session.callFunction({
-          input: { value: "hello" },
-          path: ["providerB", "text", "exclaim"],
-        });
-        return { result: output };
+        const handle = (await session.callFunction({
+          args: [{ name: "build" }],
+          path: ["sandbox", "get"],
+        })) as typeof liveHandle;
+        return { result: await handle.exec({ cmd: "pnpm test" }) };
       },
     });
 
@@ -154,206 +207,263 @@ describe("createCodemodeProcessor", () => {
       event: consumedCodemodeEvent({
         type: "events.iterate.com/codemode/script-execution-requested",
         payload: {
-          code: "async (ctx) => ctx.providerB.text.exclaim()",
-          scriptExecutionId: "scr-1",
+          code: "async (ctx) => ctx.sandbox.get({ name: 'build' }).exec({ cmd: 'pnpm test' })",
+          scriptExecutionId: "scr-rpc",
         },
-        offset: 7,
+        offset: 11,
       }),
       previousState: registeredState(),
-      state: registeredState(),
-      streamApi: {
-        append: async ({ event }) => {
-          if (event.type === "events.iterate.com/codemode/function-call-requested") {
-            return requestedEvent;
-          }
-          appended.push(event);
-          return committedEvent({ ...event, offset: 10 + appended.length });
+      state: registeredStateWithProviders([
+        {
+          instructions: "Sandbox handles.",
+          invocation: { kind: "rpc", callable: aiCapabilityCallable },
+          path: ["sandbox"],
         },
-        read: async () => [
-          committedEvent({
-            type: "events.iterate.com/codemode/function-call-completed",
-            payload: {
-              functionCallId: "fn-original",
-              outcome: { status: "succeeded", output: { value: "HELLO!" } },
-              path: ["providerB", "text", "exclaim"],
-              scriptExecutionId: "scr-1",
-            },
-            offset: 9,
-          }),
-        ],
-        subscribe: async function* () {},
-      },
+      ]),
+      streamApi: testStreamApi({ appended, storedEvents: [] }),
       signal: new AbortController().signal,
     });
 
-    expect(appended).toEqual([
+    expect(executeCodemodeFunctionCall).toHaveBeenCalledWith({
+      args: [{ name: "build" }],
+      codemodeSessionCapability: expect.objectContaining({ callFunction: expect.any(Function) }),
+      functionCallId: "fn-rpc",
+      functionPath: ["get"],
+      invocationKind: "rpc",
+      path: ["sandbox", "get"],
+      providerPath: ["sandbox"],
+      scriptExecutionId: "scr-rpc",
+    });
+    expect(appended.map(({ type, payload }) => ({ payload, type }))).toEqual([
       {
-        type: "events.iterate.com/codemode/script-execution-completed",
-        idempotencyKey:
-          "stream-processor:codemode:derived:script-execution-completed:/projects/prj_test/codemode-sessions/cblk_test:7",
+        type: "events.iterate.com/codemode/session-started",
+        payload: { sessionCapabilityCallable },
+      },
+      {
+        type: "events.iterate.com/codemode/function-call-requested",
+        payload: {
+          args: [{ name: "build" }],
+          functionCallId: "fn-rpc",
+          functionPath: ["get"],
+          invocationKind: "rpc",
+          path: ["sandbox", "get"],
+          providerPath: ["sandbox"],
+          scriptExecutionId: "scr-rpc",
+        },
+      },
+      {
+        type: "events.iterate.com/codemode/function-call-completed",
         payload: {
           durationMs: expect.any(Number),
-          outcome: { status: "succeeded", output: { value: "HELLO!" } },
-          scriptExecutionId: "scr-1",
+          functionCallId: "fn-rpc",
+          functionPath: ["get"],
+          invocationKind: "rpc",
+          outcome: {
+            status: "returned",
+            value: { exec: "[Function exec]" },
+          },
+          path: ["sandbox", "get"],
+          providerPath: ["sandbox"],
+          scriptExecutionId: "scr-rpc",
+        },
+      },
+      {
+        type: "events.iterate.com/codemode/script-execution-completed",
+        payload: {
+          durationMs: expect.any(Number),
+          outcome: { status: "succeeded", output: { stdout: "ran pnpm test" } },
+          scriptExecutionId: "scr-rpc",
         },
       },
     ]);
   });
 
-  it("lets stream processor providers complete function calls and call each other via events", async () => {
+  it("serializes callback args for rpc trace events while passing live callbacks to the provider", async () => {
+    const appended: StreamEventInput[] = [];
+    const executeCodemodeFunctionCall = vi.fn(
+      async (input: { args: Array<{ callback: (value: unknown) => Promise<void> }> }) => {
+        await input.args[0]!.callback({ ok: true });
+        return { ok: true };
+      },
+    );
+    const processor = createCodemodeProcessor({
+      ...baseDeps({
+        callableContext: {
+          env: {
+            AI_CAPABILITY: {
+              executeCodemodeFunctionCall,
+            },
+          },
+        },
+      }),
+      newId: fixedIds(["fn-callback"]),
+      scriptExecutor: async ({ session }) => {
+        const calls: unknown[] = [];
+        await session.callFunction({
+          args: [
+            {
+              callback: async (value: unknown) => {
+                calls.push(value);
+              },
+            },
+          ],
+          path: ["workspace", "proofOfConcept"],
+        });
+        return { result: calls };
+      },
+    });
+
+    await processor.implementation.afterAppend?.({
+      event: consumedCodemodeEvent({
+        type: "events.iterate.com/codemode/script-execution-requested",
+        payload: {
+          code: "async (ctx) => ctx.workspace.proofOfConcept({ callback })",
+          scriptExecutionId: "scr-callback",
+        },
+        offset: 19,
+      }),
+      previousState: registeredState(),
+      state: registeredStateWithProviders([
+        {
+          instructions: "Workspace proof of concept.",
+          invocation: { kind: "rpc", callable: aiCapabilityCallable },
+          path: ["workspace"],
+        },
+      ]),
+      streamApi: testStreamApi({ appended, storedEvents: [] }),
+      signal: new AbortController().signal,
+    });
+
+    expect(executeCodemodeFunctionCall.mock.calls[0]?.[0].args[0].callback).toEqual(
+      expect.any(Function),
+    );
+    expect(
+      appended.find((event) => event.type === "events.iterate.com/codemode/function-call-requested")
+        ?.payload,
+    ).toMatchObject({
+      args: [{ callback: "[Function callback]" }],
+      functionPath: ["proofOfConcept"],
+      path: ["workspace", "proofOfConcept"],
+      providerPath: ["workspace"],
+    });
+  });
+
+  it("lets event-mediated providers use session-started to call another provider through a Codemode Context", async () => {
     const providerProcessorContract = defineProcessorContract({
       slug: "test-function-provider",
       version: "0.0.0-test",
-      description: "Test provider processor that handles codemode function call events.",
-      stateSchema: z.object({}),
+      description: "Test provider processor that composes codemode providers.",
+      stateSchema: z.object({ sessionCapabilityCallable: z.unknown().optional() }),
       initialState: {},
       processorDeps: [CodemodeProcessorContract],
       events: {},
       consumes: [
+        "events.iterate.com/codemode/session-started",
         "events.iterate.com/codemode/function-call-requested",
         "events.iterate.com/codemode/function-call-completed",
       ],
-      emits: [
-        "events.iterate.com/codemode/function-call-requested",
-        "events.iterate.com/codemode/function-call-completed",
-      ],
+      emits: ["events.iterate.com/codemode/function-call-completed"],
+      reduce({ event, state }) {
+        if (event.type !== "events.iterate.com/codemode/session-started") return state;
+        return {
+          ...state,
+          sessionCapabilityCallable: event.payload.sessionCapabilityCallable,
+        };
+      },
     });
-    type FunctionCallRequestedPayload = Extract<
-      ConsumedEvent<typeof providerProcessorContract>,
-      { type: "events.iterate.com/codemode/function-call-requested" }
-    >["payload"];
-    const parentRequestsByChildCallId = new Map<string, FunctionCallRequestedPayload>();
-
     const appended: StreamEvent[] = [];
     const waiters: Array<(event: StreamEvent) => void> = [];
     const processor = createCodemodeProcessor({
-      newId: fixedIds(["fn-a"]),
+      ...baseDeps({
+        callableContext: {
+          env: {
+            CODEMODE_SESSION_CAPABILITY: {
+              getCodemodeSessionCapability: async () => sessionCapability,
+            },
+          },
+        },
+      }),
+      newId: fixedIds(["fn-discord", "fn-slack"]),
       scriptExecutor: async ({ session }) => {
         const output = await session.callFunction({
-          input: { value: "hello" },
-          path: ["providerA", "compose", "exclaimViaB"],
+          args: [{ slackChannel: "C123", version: "v1.2.3" }],
+          path: ["discord", "announceRelease"],
         });
         return { result: output };
       },
     });
-    let nextOffset = 20;
-
-    const providerA = implementProcessor(providerProcessorContract, {
-      afterAppend: async ({ event, streamApi }) => {
-        if (
-          event.type === "events.iterate.com/codemode/function-call-requested" &&
-          event.payload.path.join(".") === "providerA.compose.exclaimViaB"
-        ) {
-          const childFunctionCallId = "fn-b";
-          parentRequestsByChildCallId.set(childFunctionCallId, event.payload);
-          await streamApi.append({
-            event: {
-              type: "events.iterate.com/codemode/function-call-requested",
-              payload: {
-                functionCallId: childFunctionCallId,
-                input: event.payload.input,
-                path: ["providerB", "text", "exclaim"],
-                scriptExecutionId: event.payload.scriptExecutionId,
-              },
-            },
-          });
-          return;
-        }
-
-        if (
-          event.type === "events.iterate.com/codemode/function-call-completed" &&
-          event.payload.functionCallId === "fn-b"
-        ) {
-          const parentRequest = parentRequestsByChildCallId.get(event.payload.functionCallId);
-          if (parentRequest == null) return;
-          parentRequestsByChildCallId.delete(event.payload.functionCallId);
-
-          if (event.payload.outcome.status === "failed") {
-            await streamApi.append({
-              event: {
-                type: "events.iterate.com/codemode/function-call-completed",
-                payload: {
-                  functionCallId: parentRequest.functionCallId,
-                  outcome: event.payload.outcome,
-                  path: parentRequest.path,
-                  scriptExecutionId: parentRequest.scriptExecutionId,
-                },
-              },
-            });
-            return;
-          }
-
-          const childOutput =
-            event.payload.outcome.output != null && typeof event.payload.outcome.output === "object"
-              ? (event.payload.outcome.output as Record<string, unknown>)
-              : {};
-          const childValue = childOutput.value;
-          if (typeof childValue !== "string") {
-            throw new Error("providerB completed without a string value");
-          }
-
-          await streamApi.append({
-            event: {
-              type: "events.iterate.com/codemode/function-call-completed",
-              payload: {
-                functionCallId: parentRequest.functionCallId,
-                outcome: {
-                  status: "succeeded",
-                  output: {
-                    provider: "provider-a",
-                    value: childValue,
-                  },
-                },
-                path: parentRequest.path,
-                scriptExecutionId: parentRequest.scriptExecutionId,
-              },
-            },
-          });
-        }
-      },
-    });
-    const providerB = implementProcessor(providerProcessorContract, {
-      afterAppend: async ({ event, streamApi }) => {
+    const sessionCapability = {
+      callFunction: async (input: {
+        args: unknown[];
+        path: string[];
+        scriptExecutionId?: string;
+      }) =>
+        await processorSessionCall({
+          input,
+          streamApi,
+        }),
+    };
+    const provider = implementProcessor(providerProcessorContract, {
+      afterAppend: async ({ event, state, streamApi }) => {
         if (
           event.type !== "events.iterate.com/codemode/function-call-requested" ||
-          event.payload.path.join(".") !== "providerB.text.exclaim"
+          event.payload.providerPath.join(".") !== "discord" ||
+          event.payload.functionPath.join(".") !== "announceRelease"
         ) {
           return;
         }
 
-        await streamApi.append({
-          event: {
-            type: "events.iterate.com/codemode/function-call-completed",
-            payload: {
-              functionCallId: event.payload.functionCallId,
-              outcome: {
-                status: "succeeded",
-                output: { provider: "provider-b", value: "HELLO!" },
+        // Event-mediated providers are not directly called by codemode, so they
+        // learn how to compose other tools by reducing the session-started
+        // singleton and explicitly invoking its Session Capability Callable.
+        // This is the smallest proof that a pull/browser/Discord-style provider
+        // can still call Slack-style tools without becoming an RPC provider.
+        const codemodeSessionCapability = await dispatchCallable({
+          callable: state.sessionCapabilityCallable,
+          ctx: {
+            env: {
+              CODEMODE_SESSION_CAPABILITY: {
+                getCodemodeSessionCapability: async () => sessionCapability,
               },
-              path: event.payload.path,
-              scriptExecutionId: event.payload.scriptExecutionId,
             },
           },
+          payload: {},
+        });
+        const [request] = event.payload.args as [{ slackChannel: string; version: string }];
+        await (codemodeSessionCapability as typeof sessionCapability).callFunction({
+          args: [
+            {
+              channel: request.slackChannel,
+              text: `Released ${request.version}`,
+            },
+          ],
+          path: ["slack", "chat", "postMessage"],
+          scriptExecutionId: event.payload.scriptExecutionId,
+        });
+        await streamApi.append({
+          event: completedEventInput({
+            event,
+            value: { mirroredToSlack: true },
+          }),
         });
       },
     });
-    const providerRecords = [
-      { processor: providerA, state: getInitialProcessorState(providerProcessorContract) },
-      { processor: providerB, state: getInitialProcessorState(providerProcessorContract) },
-    ];
+    const providerRecord = {
+      processor: provider,
+      state: getInitialProcessorState(providerProcessorContract),
+    };
 
     const appendToStream = async ({ event }: { event: StreamEventInput }) => {
-      const committed = committedEvent({ ...event, offset: nextOffset++ });
+      const committed = committedEvent({ ...event, offset: 30 + appended.length });
       appended.push(committed);
       for (const resolve of waiters.splice(0)) resolve(committed);
 
-      for (const providerRecord of providerRecords) {
-        const reduction = runProcessorReduce({
-          event: committed,
-          processor: providerRecord.processor,
-          state: providerRecord.state,
-        });
-        if (reduction == null) continue;
+      const reduction = runProcessorReduce({
+        event: committed,
+        processor: providerRecord.processor,
+        state: providerRecord.state,
+      });
+      if (reduction != null) {
         providerRecord.state = reduction.state;
         await providerRecord.processor.implementation.afterAppend?.({
           event: reduction.event,
@@ -389,68 +499,125 @@ describe("createCodemodeProcessor", () => {
       read: readFromStream,
       subscribe: subscribeToStream,
     };
+    const processorSessionCall = async (args: {
+      input: { args: unknown[]; path: string[]; scriptExecutionId?: string };
+      streamApi: ProcessorStreamApi<typeof CodemodeProcessorContract>;
+    }) => {
+      if (args.input.path.join(".") !== "slack.chat.postMessage") {
+        throw new Error(`Unexpected nested path ${args.input.path.join(".")}`);
+      }
+      // This deliberately appends the same event pair an external pull-based
+      // Slack processor would append. The session capability gives provider
+      // code a normal call-shaped interface, but the trace remains plain
+      // function-call-requested/function-call-completed events.
+      const requested = await args.streamApi.append({
+        event: {
+          type: "events.iterate.com/codemode/function-call-requested",
+          payload: {
+            args: args.input.args,
+            functionCallId: "fn-slack",
+            functionPath: ["chat", "postMessage"],
+            invocationKind: "event",
+            path: args.input.path,
+            providerPath: ["slack"],
+            scriptExecutionId: args.input.scriptExecutionId,
+          },
+        },
+      });
+      await args.streamApi.append({
+        event: {
+          type: "events.iterate.com/codemode/function-call-completed",
+          payload: {
+            functionCallId: "fn-slack",
+            functionPath: ["chat", "postMessage"],
+            invocationKind: "event",
+            outcome: { status: "returned", value: { ts: "123.456" } },
+            path: args.input.path,
+            providerPath: ["slack"],
+            scriptExecutionId: args.input.scriptExecutionId,
+          },
+        },
+      });
+      return { requested };
+    };
 
     await processor.implementation.afterAppend?.({
       event: consumedCodemodeEvent({
         type: "events.iterate.com/codemode/script-execution-requested",
         payload: {
-          code: "async (ctx) => ctx.providerA.compose.exclaimViaB()",
-          scriptExecutionId: "scr-1",
+          code: "async (ctx) => ctx.discord.announceRelease()",
+          scriptExecutionId: "scr-compose",
         },
-        offset: 7,
+        offset: 29,
       }),
       previousState: registeredState(),
-      state: registeredState(),
+      state: registeredStateWithProviders([
+        {
+          instructions: "Discord functions.",
+          invocation: { kind: "event" },
+          path: ["discord"],
+        },
+        {
+          instructions: "Slack functions.",
+          invocation: { kind: "event" },
+          path: ["slack"],
+        },
+      ]),
       streamApi,
       signal: new AbortController().signal,
     });
 
-    expect(
-      appended.map((event) => ({
-        payload: event.payload,
-        type: event.type,
-      })),
-    ).toEqual([
+    expect(appended.map(({ payload, type }) => ({ payload, type }))).toEqual([
+      {
+        type: "events.iterate.com/codemode/session-started",
+        payload: { sessionCapabilityCallable },
+      },
       {
         type: "events.iterate.com/codemode/function-call-requested",
         payload: {
-          functionCallId: "fn-a",
-          input: { value: "hello" },
-          path: ["providerA", "compose", "exclaimViaB"],
-          scriptExecutionId: "scr-1",
+          args: [{ slackChannel: "C123", version: "v1.2.3" }],
+          functionCallId: "fn-discord",
+          functionPath: ["announceRelease"],
+          invocationKind: "event",
+          path: ["discord", "announceRelease"],
+          providerPath: ["discord"],
+          scriptExecutionId: "scr-compose",
         },
       },
       {
         type: "events.iterate.com/codemode/function-call-requested",
         payload: {
-          functionCallId: "fn-b",
-          input: { value: "hello" },
-          path: ["providerB", "text", "exclaim"],
-          scriptExecutionId: "scr-1",
+          args: [{ channel: "C123", text: "Released v1.2.3" }],
+          functionCallId: "fn-slack",
+          functionPath: ["chat", "postMessage"],
+          invocationKind: "event",
+          path: ["slack", "chat", "postMessage"],
+          providerPath: ["slack"],
+          scriptExecutionId: "scr-compose",
         },
       },
       {
         type: "events.iterate.com/codemode/function-call-completed",
         payload: {
-          functionCallId: "fn-b",
-          outcome: {
-            status: "succeeded",
-            output: { provider: "provider-b", value: "HELLO!" },
-          },
-          path: ["providerB", "text", "exclaim"],
-          scriptExecutionId: "scr-1",
+          functionCallId: "fn-slack",
+          functionPath: ["chat", "postMessage"],
+          invocationKind: "event",
+          outcome: { status: "returned", value: { ts: "123.456" } },
+          path: ["slack", "chat", "postMessage"],
+          providerPath: ["slack"],
+          scriptExecutionId: "scr-compose",
         },
       },
       {
         type: "events.iterate.com/codemode/function-call-completed",
         payload: {
-          functionCallId: "fn-a",
-          outcome: {
-            status: "succeeded",
-            output: { provider: "provider-a", value: "HELLO!" },
-          },
-          path: ["providerA", "compose", "exclaimViaB"],
-          scriptExecutionId: "scr-1",
+          functionCallId: "fn-discord",
+          functionPath: ["announceRelease"],
+          invocationKind: "event",
+          outcome: { status: "returned", value: { mirroredToSlack: true } },
+          path: ["discord", "announceRelease"],
+          providerPath: ["discord"],
+          scriptExecutionId: "scr-compose",
         },
       },
       {
@@ -459,19 +626,60 @@ describe("createCodemodeProcessor", () => {
           durationMs: expect.any(Number),
           outcome: {
             status: "succeeded",
-            output: { provider: "provider-a", value: "HELLO!" },
+            output: { mirroredToSlack: true },
           },
-          scriptExecutionId: "scr-1",
+          scriptExecutionId: "scr-compose",
         },
       },
     ]);
   });
 });
 
+function baseDeps(options: { callableContext?: CallableContext } = {}) {
+  return {
+    buildSessionCapabilityCallable: () => sessionCapabilityCallable,
+    callableContext: options.callableContext ?? {},
+    scriptExecutor: async () => ({ result: undefined }),
+  };
+}
+
+function completedEventInput(args: {
+  event: Extract<
+    ConsumedEvent<typeof CodemodeProcessorContract>,
+    { type: "events.iterate.com/codemode/function-call-requested" }
+  >;
+  value: unknown;
+}): StreamEventInput {
+  return {
+    type: "events.iterate.com/codemode/function-call-completed",
+    payload: {
+      functionCallId: args.event.payload.functionCallId,
+      functionPath: args.event.payload.functionPath,
+      invocationKind: args.event.payload.invocationKind,
+      outcome: { status: "returned", value: args.value },
+      path: args.event.payload.path,
+      providerPath: args.event.payload.providerPath,
+      scriptExecutionId: args.event.payload.scriptExecutionId,
+    },
+  };
+}
+
 function registeredState(): CodemodeState {
   return {
     ...getInitialProcessorState(CodemodeProcessorContract),
     hasRegisteredCurrentVersion: true,
+  };
+}
+
+function registeredStateWithProviders(
+  providers: Array<CodemodeState["toolProviders"][string]>,
+): CodemodeState {
+  const state = registeredState();
+  return {
+    ...state,
+    toolProviders: Object.fromEntries(
+      providers.map((provider) => [JSON.stringify(provider.path), provider]),
+    ),
   };
 }
 

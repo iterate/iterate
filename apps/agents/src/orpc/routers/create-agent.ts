@@ -1,8 +1,5 @@
-import {
-  ProjectSlug,
-  STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-  StreamPath,
-} from "@iterate-com/events-contract";
+import { STREAM_SUBSCRIPTION_CONFIGURED_TYPE, StreamPath } from "@iterate-com/shared/streams/types";
+import { ProjectId } from "@iterate-com/shared/streams/types";
 import { createEventsOrpcClient } from "~/lib/events-orpc-client.ts";
 import { buildStreamViewerUrl } from "~/lib/events-urls.ts";
 import {
@@ -29,7 +26,7 @@ import { os } from "~/orpc/orpc.ts";
  */
 export const createAgentRouter = {
   createAgent: os.createAgent.handler(async ({ input, context }) => {
-    const projectSlug = ProjectSlug.parse(context.config.eventsProjectSlug);
+    const projectSlug = ProjectId.parse(context.config.eventsProjectSlug);
     const streamPath = StreamPath.parse(input.streamPath);
     const publicOrigin = getPublicOrigin(context.rawRequest);
     const runnerInstance = streamPathToAgentInstance(streamPath);

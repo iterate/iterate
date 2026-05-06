@@ -1,4 +1,4 @@
-import type { Event } from "@iterate-com/events-contract";
+import type { Event } from "@iterate-com/shared/streams/types";
 import { describe, expect, test } from "vitest";
 import { orderEventKeysForYamlDisplay } from "~/lib/order-event-keys-for-yaml-display.ts";
 

@@ -6,9 +6,9 @@
  */
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ProjectSlug } from "@iterate-com/events-contract";
+import { ProjectId } from "@iterate-com/shared/streams/types";
 import { expect, test } from "vitest";
-import { getProjectUrl } from "../../../events/src/lib/project-slug.ts";
+import { getProjectUrl } from "../../src/lib/events-urls.ts";
 import { setupE2E } from "../test-support/e2e-test.ts";
 import { createLocalDevServer } from "../test-support/create-local-dev-server.ts";
 import { createMockInternet } from "../test-support/create-mock-internet.ts";
@@ -153,7 +153,7 @@ test.skip(
     const eventsHost = new URL(
       getProjectUrl({
         currentUrl: e2e.eventsBaseUrl,
-        projectSlug: ProjectSlug.parse(e2e.runSlug),
+        projectSlug: ProjectId.parse(e2e.runSlug),
       }).toString(),
     ).hostname;
     expect(urls.some((url) => url.includes(eventsHost))).toBe(true);

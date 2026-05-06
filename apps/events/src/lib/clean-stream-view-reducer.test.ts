@@ -3,7 +3,7 @@ import {
   STREAM_METADATA_UPDATED_TYPE,
   type Event,
   type StreamPath,
-} from "@iterate-com/events-contract";
+} from "@iterate-com/shared/streams/types";
 import { getAdjacentEventOffset } from "@iterate-com/ui/components/events/event-inspector-sheet";
 import {
   processEventsWithViewReducer,

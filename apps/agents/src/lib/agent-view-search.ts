@@ -1,4 +1,4 @@
-import { StreamPath } from "@iterate-com/events-contract";
+import { StreamPath } from "@iterate-com/shared/streams/types";
 import type { EventsStreamElementType } from "@iterate-com/ui/components/events/stream-feed";
 import { z } from "zod";
 

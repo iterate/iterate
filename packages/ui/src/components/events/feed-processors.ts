@@ -5,7 +5,7 @@ import {
   STREAM_METADATA_UPDATED_TYPE,
   StreamPath,
   type Event,
-} from "@iterate-com/events-contract";
+} from "@iterate-com/shared/streams/types";
 
 import type {
   EventsStreamBuiltInElement,

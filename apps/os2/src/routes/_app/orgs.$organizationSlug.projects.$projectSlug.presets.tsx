@@ -1,7 +1,7 @@
 import { useCallback, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { EventInput } from "@iterate-com/events-contract";
+import { EventInput } from "@iterate-com/shared/streams/types";
 import type { ProjectPreset } from "@iterate-com/os2-contract";
 import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";

@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { CircuitBreakerConfig, ExternalSubscriber, StreamPath } from "@iterate-com/events-contract";
+import {
+  CircuitBreakerConfig,
+  ExternalSubscriber,
+  StreamPath,
+} from "@iterate-com/shared/streams/types";
 import { CoreProcessorContract } from "@iterate-com/shared/stream-processors/core/contract";
 import { defineProcessorContract } from "@iterate-com/shared/stream-processors";
 
@@ -22,7 +26,7 @@ export const CoreStreamProcessorContract = defineProcessorContract({
     "events.iterate.com/core/stream-initialized": {
       description: "The stream durable object was initialized for a project and path.",
       payloadSchema: z.object({
-        projectSlug: z.string().trim().min(1).max(255),
+        projectId: z.string().trim().min(1).max(255),
         path: StreamPath,
       }),
     },

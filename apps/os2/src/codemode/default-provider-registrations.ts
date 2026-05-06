@@ -1,0 +1,51 @@
+import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
+
+export function createDefaultCodemodeProviderRegistrations(input: {
+  projectId: string;
+  streamPath: string;
+}): ToolProviderRegistration[] {
+  return [
+    {
+      path: ["fetch"],
+      instructions:
+        "Use fetch(input, init) or ctx.fetch(input, init) for HTTP requests. Codemode records the request as a normal function call.",
+      invocation: {
+        kind: "rpc",
+        callable: {
+          type: "workers-rpc",
+          via: {
+            type: "loopback-binding",
+            bindingType: "service",
+            exportName: "FetchCapability",
+            props: { projectId: input.projectId },
+          },
+          rpcMethod: "executeCodemodeFunctionCall",
+          argsMode: "object",
+        },
+      },
+    },
+    {
+      path: ["streams"],
+      instructions:
+        "Use ctx.streams.append({ event, streamPath? }) and ctx.streams.read({ streamPath?, afterOffset?, beforeOffset? }) for project event streams.",
+      invocation: {
+        kind: "rpc",
+        callable: {
+          type: "workers-rpc",
+          via: {
+            type: "loopback-binding",
+            bindingType: "service",
+            exportName: "StreamCapability",
+            props: {
+              projectId: input.projectId,
+              streamPath: input.streamPath,
+              appendPolicy: { mode: "any" },
+            },
+          },
+          rpcMethod: "executeCodemodeFunctionCall",
+          argsMode: "object",
+        },
+      },
+    },
+  ];
+}

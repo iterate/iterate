@@ -1,4 +1,4 @@
-import { StreamPath } from "@iterate-com/events-contract";
+import { StreamPath } from "@iterate-com/shared/streams/types";
 import { describe, expect, test } from "vitest";
 import { formatRelativeStreamPath, resolveStreamPath } from "./stream-paths.ts";
 

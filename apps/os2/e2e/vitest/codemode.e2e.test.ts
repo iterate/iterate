@@ -136,130 +136,8 @@ describe("codemode.executeScript", () => {
   });
 });
 
-describe("codemode.execute", () => {
-  it("executes simple code and returns a result event stream", async () => {
-    const baseUrl = requireBaseUrl();
-    const client = createClient(baseUrl);
-    const projectId = requireProjectId();
-
-    const stream = await client.codemode.execute({
-      code: "async () => 1 + 1",
-      projectId,
-      providers: [],
-    });
-
-    const events: Array<Record<string, unknown>> = [];
-    for await (const event of stream) {
-      events.push(event as Record<string, unknown>);
-    }
-
-    // Should have at least block-added and block-result-added
-    const blockAdded = events.find((e) => e.type === "codemode-block-added");
-    expect(blockAdded).toBeDefined();
-    expect(blockAdded?.code).toBe("async () => 1 + 1");
-
-    const result = events.find((e) => e.type === "codemode-block-result-added");
-    expect(result).toBeDefined();
-    expect(result?.result).toBe(2);
-    expect(result?.error).toBeUndefined();
-  });
-
-  it("returns log events from console.log", async () => {
-    const baseUrl = requireBaseUrl();
-    const client = createClient(baseUrl);
-    const projectId = requireProjectId();
-
-    const stream = await client.codemode.execute({
-      code: 'async () => { console.log("hello from sandbox"); return "done"; }',
-      projectId,
-      providers: [],
-    });
-
-    const events: Array<Record<string, unknown>> = [];
-    for await (const event of stream) {
-      events.push(event as Record<string, unknown>);
-    }
-
-    const result = events.find((e) => e.type === "codemode-block-result-added");
-    expect(result?.result).toBe("done");
-
-    // At minimum, the result should have logs in the response
-    expect(result?.error).toBeUndefined();
-  });
-
-  it("generates a blockId when not provided", async () => {
-    const baseUrl = requireBaseUrl();
-    const client = createClient(baseUrl);
-    const projectId = requireProjectId();
-
-    const stream = await client.codemode.execute({
-      code: "async () => 42",
-      projectId,
-      providers: [],
-    });
-
-    const events: Array<Record<string, unknown>> = [];
-    for await (const event of stream) {
-      events.push(event as Record<string, unknown>);
-    }
-
-    expect(events.length).toBeGreaterThan(0);
-    const blockId = events[0]?.blockId;
-    expect(typeof blockId).toBe("string");
-    expect((blockId as string).startsWith("cblk_")).toBe(true);
-
-    // All events share the same blockId
-    for (const event of events) {
-      expect(event.blockId).toBe(blockId);
-    }
-  });
-
-  it("uses caller-provided blockId", async () => {
-    const baseUrl = requireBaseUrl();
-    const client = createClient(baseUrl);
-    const projectId = requireProjectId();
-
-    const stream = await client.codemode.execute({
-      code: "async () => 42",
-      blockId: "cblk_custom_test_123",
-      projectId,
-      providers: [],
-    });
-
-    const events: Array<Record<string, unknown>> = [];
-    for await (const event of stream) {
-      events.push(event as Record<string, unknown>);
-    }
-
-    for (const event of events) {
-      expect(event.blockId).toBe("cblk_custom_test_123");
-    }
-  });
-
-  it("returns error for code that throws", async () => {
-    const baseUrl = requireBaseUrl();
-    const client = createClient(baseUrl);
-    const projectId = requireProjectId();
-
-    const stream = await client.codemode.execute({
-      code: 'async () => { throw new Error("test error"); }',
-      projectId,
-      providers: [],
-    });
-
-    const events: Array<Record<string, unknown>> = [];
-    for await (const event of stream) {
-      events.push(event as Record<string, unknown>);
-    }
-
-    const result = events.find((e) => e.type === "codemode-block-result-added");
-    expect(result).toBeDefined();
-    expect(result?.error).toBe("test error");
-  });
-});
-
 describe("codemode.describe", () => {
-  it("returns type definitions from provider documentation", async () => {
+  it("returns short provider instructions", async () => {
     const baseUrl = requireBaseUrl();
     const client = createClient(baseUrl);
     const projectId = requireProjectId();
@@ -268,13 +146,13 @@ describe("codemode.describe", () => {
       projectId,
       providers: [
         {
-          docs: "Test functions are available.",
+          instructions: "Test functions are available.",
+          invocation: { kind: "event" },
           path: ["test"],
-          typeDefinitions: "declare const test: { ping(): Promise<string> };",
         },
       ],
     });
 
-    expect(result.typeDefinitions).toBe("declare const test: { ping(): Promise<string> };");
+    expect(result.instructions).toBe("test: Test functions are available.");
   });
 });

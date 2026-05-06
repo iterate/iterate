@@ -1,4 +1,4 @@
-import { Event, StreamPath } from "@iterate-com/events-contract";
+import { Event, StreamPath } from "@iterate-com/shared/streams/types";
 import { describe, expect, test } from "vitest";
 import {
   formatElapsedTime,

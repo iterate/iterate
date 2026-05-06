@@ -14,7 +14,7 @@ import {
   StreamPausedEvent,
   StreamResumedEvent,
   type Event,
-} from "@iterate-com/events-contract";
+} from "@iterate-com/shared/streams/types";
 import type {
   EventFeedItem,
   GroupedEventFeedItem,

@@ -1,4 +1,4 @@
-import type { Event } from "@iterate-com/events-contract";
+import type { Event } from "@iterate-com/shared/streams/types";
 
 /**
  * Decode the DO's newline-delimited JSON event stream.

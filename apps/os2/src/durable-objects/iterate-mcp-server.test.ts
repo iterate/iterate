@@ -1,14 +1,15 @@
 import { SELF, env } from "cloudflare:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { StreamPath } from "@iterate-com/events-contract";
-import { type Event, type EventInput } from "@iterate-com/events-contract";
+import { StreamPath } from "@iterate-com/shared/streams/types";
+import { getInitializedStreamStub } from "@iterate-com/shared/streams/helpers";
 import { describe, expect, test } from "vitest";
-import { createEventsClient } from "~/lib/events-client.ts";
 
 type TestEnv = {
-  EVENTS_BASE_URL: string;
+  STREAM: Env["STREAM"];
 };
+
+const projectId = "proj__test__inboundmcp";
 
 describe("ProjectMcpServerConnection inbound MCP", () => {
   test("runs code through CodemodeSession and appends events to the MCP session stream", async () => {
@@ -52,7 +53,7 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
       expect(sessionId).toBeTruthy();
 
       const streamPath = StreamPath.parse(
-        `/projects/proj__test__inboundmcp/mcp-server-sessions/mcp-client-e2e-${slugifySegment(
+        `/projects/${projectId}/mcp-server-sessions/mcp-client-e2e-${slugifySegment(
           sessionId ?? "",
         ).slice(-12)}`,
       );
@@ -100,7 +101,7 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
     }
   });
 
-  test("registers tool provider documentation supplied to run_code", async () => {
+  test("auto-loads static codemode tool providers for run_code", async () => {
     const transport = new StreamableHTTPClientTransport(
       new URL("https://mcp-project.iterate-preview-test.app/mcp"),
       {
@@ -116,14 +117,54 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
         name: "run_code",
         arguments: {
           code: `async (ctx) => {
-  return { providersAreDocumentation: true };
+  const operations = await ctx.integrations.http.catalog.listOperations();
+  const mcpTools = await ctx.integrations.publicMcp.listTools();
+  const echo = await ctx.integrations.publicMcp["echo.text"]({ text: "hello static MCP" });
+  const agentHandle = await ctx.createSubagent();
+
+  const [pet, workspace, agent, pipelinedAgent, composed] = await Promise.all([
+    ctx.integrations.http.catalog.getPet({ petId: "fido", include: "owner" }),
+    ctx.workspace.proofOfConcept({ message: "workspace from inbound MCP" }),
+    agentHandle.sendMessage({ message: "hi", subPath: "mcp" }),
+    ctx.makeSubagent().doThing({ label: "promise-pipeline", value: 21 }),
+    ctx.integrations.builtinMatrix.compose({
+      petId: "otto",
+      text: "composition",
+      value: 21,
+    }),
+  ]);
+  agentHandle[Symbol.dispose]?.();
+
+  return {
+    agent,
+    composed,
+    echo,
+    mcpToolNames: mcpTools.tools.map((tool) => tool.name),
+    operationIds: operations.map((operation) => operation.operationId),
+    pet,
+    pipelinedAgent,
+    workspace,
+  };
 }`,
-          events: providerDocumentationEvents(),
         },
       });
 
       expect(result.isError).not.toBe(true);
-      expect(parseRunCodeResult(result.content)).toEqual({ providersAreDocumentation: true });
+      expect(parseRunCodeResult(result.content)).toMatchObject({
+        agent: { message: "hi", subPath: "mcp" },
+        composed: {
+          echo: { echoed: "provider saw composition", provider: "public-mcp" },
+          leaf: { provider: "leaf", value: 42 },
+          pet: { include: "owner", name: "Pet OTTO", petId: "otto", provider: "openapi" },
+          provider: "builtin-matrix",
+        },
+        echo: { echoed: "hello static MCP", provider: "public-mcp" },
+        mcpToolNames: ["echo.text"],
+        operationIds: ["getPet"],
+        pet: { include: "owner", name: "Pet FIDO", petId: "fido", provider: "openapi" },
+        pipelinedAgent: { doubled: 42, label: "promise-pipeline", value: 21 },
+        workspace: { message: "workspace from inbound MCP" },
+      });
 
       const sessionId = transport.sessionId;
       expect(sessionId).toBeTruthy();
@@ -135,14 +176,56 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
           expect.objectContaining({
             type: "events.iterate.com/codemode/tool-provider-registered",
             payload: expect.objectContaining({
-              docs: expect.stringContaining("Slack"),
-              path: ["slack"],
+              path: ["integrations", "http", "catalog"],
+            }),
+          }),
+          expect.objectContaining({
+            type: "events.iterate.com/codemode/tool-provider-registered",
+            payload: expect.objectContaining({
+              path: ["integrations", "publicMcp"],
+            }),
+          }),
+          expect.objectContaining({
+            type: "events.iterate.com/codemode/function-call-requested",
+            payload: expect.objectContaining({
+              invocationKind: "rpc",
+              path: ["integrations", "builtinMatrix", "compose"],
+            }),
+          }),
+          expect.objectContaining({
+            type: "events.iterate.com/codemode/function-call-requested",
+            payload: expect.objectContaining({
+              invocationKind: "rpc",
+              path: ["makeSubagent"],
+              providerPath: ["makeSubagent"],
+            }),
+          }),
+          expect.objectContaining({
+            type: "events.iterate.com/codemode/function-call-completed",
+            payload: expect.objectContaining({
+              invocationKind: "rpc",
+              outcome: expect.objectContaining({
+                status: "returned",
+                value: { kind: "live-value", type: "function" },
+              }),
+              path: ["makeSubagent"],
+              providerPath: ["makeSubagent"],
             }),
           }),
           expect.objectContaining({
             type: "events.iterate.com/codemode/script-execution-completed",
             payload: expect.objectContaining({
-              outcome: { status: "succeeded", output: { providersAreDocumentation: true } },
+              outcome: expect.objectContaining({
+                output: expect.objectContaining({
+                  agent: expect.objectContaining({ message: "hi", subPath: "mcp" }),
+                  pet: expect.objectContaining({ petId: "fido", provider: "openapi" }),
+                  pipelinedAgent: expect.objectContaining({
+                    doubled: 42,
+                    label: "promise-pipeline",
+                  }),
+                }),
+                status: "succeeded",
+              }),
             }),
           }),
         ]),
@@ -169,28 +252,17 @@ function extractTextContent(content: unknown) {
 }
 
 async function readCurrentStreamEvents(streamPath: StreamPath) {
-  const client = createEventsClient((env as TestEnv).EVENTS_BASE_URL);
-  const stream = await client.stream(
-    {
-      beforeOffset: "end",
-      path: streamPath,
-    },
-    {
-      signal: AbortSignal.timeout(10_000),
-    },
-  );
-
-  const events: Event[] = [];
-  for await (const event of stream) {
-    events.push(event);
-  }
-
-  return events;
+  const stream = await getInitializedStreamStub({
+    namespace: (env as TestEnv).STREAM,
+    projectId,
+    path: streamPath,
+  });
+  return await stream.history({ before: "end" });
 }
 
 function mcpSessionStreamPath(clientName: string, sessionId: string) {
   return StreamPath.parse(
-    `/projects/proj__test__inboundmcp/mcp-server-sessions/${slugifySegment(
+    `/projects/${projectId}/mcp-server-sessions/${slugifySegment(
       clientName,
     )}-${slugifySegment(sessionId).slice(-12)}`,
   );
@@ -202,20 +274,6 @@ function parseRunCodeResult(content: unknown) {
   const index = text.indexOf(marker);
   if (index === -1) throw new Error(`run_code result did not contain "${marker}": ${text}`);
   return JSON.parse(text.slice(index + marker.length));
-}
-
-function providerDocumentationEvents(): EventInput[] {
-  return [
-    {
-      type: "events.iterate.com/codemode/tool-provider-registered",
-      payload: {
-        docs: "Slack functions are available under ctx.slack.",
-        path: ["slack"],
-        typeDefinitions:
-          "declare const slack: { messages: { send(input: { text: string }): Promise<void> } };",
-      },
-    },
-  ];
 }
 
 function slugifySegment(value: string) {

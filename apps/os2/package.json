@@ -28,6 +28,7 @@
     "test:project-ingress": "OS2_PROJECT_INGRESS_TEST_APP_ROOT=$PWD pnpm --dir ../../packages/shared exec vitest run --config ../../apps/os2/src/durable-objects/project-ingress.vitest.config.ts",
     "test:project-mcp-server-connection": "OS2_ITERATE_MCP_SERVER_TEST_APP_ROOT=$PWD pnpm --dir ../../packages/shared exec vitest run --config ../../apps/os2/src/durable-objects/iterate-mcp-server.vitest.config.ts",
     "test:e2e": "node -e \"if (!process.env.OS2_BASE_URL) { console.error('OS2_BASE_URL is required for OS e2e tests'); process.exit(1); }\" && vitest run --config ./e2e/vitest.config.ts",
+    "test:e2e:codemode-mcp": "node -e \"if (!process.env.OS2_E2E_MCP_URL) { console.error('OS2_E2E_MCP_URL is required for codemode MCP e2e tests'); process.exit(1); }\" && vitest run --config ./e2e/vitest.config.ts ./e2e/vitest/codemode-mcp-provider-stack.e2e.test.ts",
     "test:e2e:preview": "tsx ./e2e/preview-smoke.ts",
     "test:smoke": "RUNTIME_SMOKE_FULL=1 vitest run",
     "test:watch": "vitest"
@@ -41,7 +42,6 @@
     "@clerk/backend": "^3.4.1",
     "@clerk/mcp-tools": "^0.5.0",
     "@clerk/tanstack-react-start": "^1.1.7",
-    "@iterate-com/events-contract": "workspace:*",
     "@iterate-com/os2-contract": "workspace:*",
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",

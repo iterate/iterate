@@ -1,4 +1,4 @@
-import { StreamDurableObject } from "~/durable-objects/stream.ts";
+import { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
 
 export default {
   fetch() {

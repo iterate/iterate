@@ -4,8 +4,8 @@ export interface OpenApiBridgeProps {
 }
 
 export type OpenApiBridgeInput = {
-  path: string[];
-  payload: unknown;
+  args: unknown[];
+  functionPath: string[];
   providerProps?: OpenApiBridgeProps;
 };
 
@@ -33,25 +33,29 @@ export async function executeOpenApiToolFunction(input: OpenApiBridgeInput) {
   if (!providerProps) throw new Error("OpenAPI provider props are required");
 
   const spec = await fetchOpenApiSpec(providerProps);
-  const operationId = input.path[0];
+  const operationId = input.functionPath[0];
   if (!operationId)
-    throw new Error("executeToolFunction requires a path with at least one segment (operationId)");
+    throw new Error(
+      "executeCodemodeFunctionCall requires a path with at least one segment (operationId)",
+    );
+  if (operationId === "listOperations") {
+    return listOpenApiOperations(spec).map((operation) => ({
+      operationId: operation.operationId,
+      method: operation.method,
+      path: operation.path,
+      summary: operation.summary ?? operation.description ?? null,
+    }));
+  }
 
   const operation = findOpenApiOperation(spec, operationId);
   if (!operation) throw new Error(`Operation "${operationId}" not found in spec`);
+  const [payload] = input.args;
 
-  const url = buildOpenApiRequestUrl(
-    operation,
-    input.payload as Record<string, unknown>,
-    providerProps,
-  );
+  const url = buildOpenApiRequestUrl(operation, payload as Record<string, unknown>, providerProps);
   const response = await fetch(url, {
     method: operation.method.toUpperCase(),
     headers: operation.method !== "get" ? { "content-type": "application/json" } : undefined,
-    body:
-      operation.method !== "get" && input.payload != null
-        ? JSON.stringify(input.payload)
-        : undefined,
+    body: operation.method !== "get" && payload != null ? JSON.stringify(payload) : undefined,
   });
 
   if (!response.ok) {
@@ -62,24 +66,6 @@ export async function executeOpenApiToolFunction(input: OpenApiBridgeInput) {
 
   const contentType = response.headers.get("content-type") ?? "";
   return contentType.includes("json") ? response.json() : response.text();
-}
-
-export async function describeOpenApiToolFunctions(input: { providerProps: OpenApiBridgeProps }) {
-  const spec = await fetchOpenApiSpec(input.providerProps);
-  const operations = listOpenApiOperations(spec);
-
-  if (operations.length === 0) {
-    return { typeDefinitions: "/** No operations found in OpenAPI spec */" };
-  }
-
-  const lines = operations.map((op) => {
-    const desc = op.summary || op.description || `${op.method.toUpperCase()} ${op.path}`;
-    return `  /** ${desc} */\n  ${op.operationId}(input: Record<string, unknown>): Promise<unknown>;`;
-  });
-
-  return {
-    typeDefinitions: `{\n${lines.join("\n")}\n}`,
-  };
 }
 
 async function fetchOpenApiSpec(providerProps: OpenApiBridgeProps) {

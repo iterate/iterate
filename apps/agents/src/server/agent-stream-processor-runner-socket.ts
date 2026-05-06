@@ -1,4 +1,4 @@
-import { StreamPath } from "@iterate-com/events-contract";
+import { StreamPath } from "@iterate-com/shared/streams/types";
 import { getOrInitializeDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import type { AgentStreamProcessorRunner } from "~/durable-objects/agent-stream-processor-runner.ts";
 import type { CodemodeStreamProcessorRunner } from "~/durable-objects/codemode-stream-processor-runner.ts";

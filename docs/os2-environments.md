@@ -63,13 +63,12 @@ _shared          ← CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, ALCHEMY_STAGE=
 
 ### Key env vars per config type
 
-| Var                                 | dev_jonas                              | preview_N                              | prd                              |
-| ----------------------------------- | -------------------------------------- | -------------------------------------- | -------------------------------- |
-| `APP_CONFIG_BASE_URL`               | `https://os.iterate-dev-jonas.com`     | `https://os2.iterate-preview-N.com`    | `https://os.iterate2.com`        |
-| `APP_CONFIG_EVENTS_BASE_URL`        | `https://events.iterate-dev-jonas.com` | `https://events.iterate-preview-N.com` | `https://events.iterate.com`     |
-| `APP_CONFIG_PROJECT_HOSTNAME_BASES` | `["iterate-dev-jonas.app"]`            | `["iterate-preview-N.app"]`            | `["iterate2.app"]`               |
-| `ALCHEMY_LOCAL`                     | `true`                                 | `false`                                | `false`                          |
-| `ALCHEMY_STAGE`                     | inherited as `${DOPPLER_CONFIG}`       | inherited as `${DOPPLER_CONFIG}`       | inherited as `${DOPPLER_CONFIG}` |
+| Var                                 | dev_jonas                          | preview_N                           | prd                              |
+| ----------------------------------- | ---------------------------------- | ----------------------------------- | -------------------------------- |
+| `APP_CONFIG_BASE_URL`               | `https://os.iterate-dev-jonas.com` | `https://os2.iterate-preview-N.com` | `https://os.iterate2.com`        |
+| `APP_CONFIG_PROJECT_HOSTNAME_BASES` | `["iterate-dev-jonas.app"]`        | `["iterate-preview-N.app"]`         | `["iterate2.app"]`               |
+| `ALCHEMY_LOCAL`                     | `true`                             | `false`                             | `false`                          |
+| `ALCHEMY_STAGE`                     | inherited as `${DOPPLER_CONFIG}`   | inherited as `${DOPPLER_CONFIG}`    | inherited as `${DOPPLER_CONFIG}` |
 
 ## Local development
 
@@ -130,9 +129,9 @@ Both zones must exist in the preview Cloudflare account configured by
 `_shared/preview` before that config can deploy routes and DNS records.
 
 os2 and events are deployed as one connected preview group when either both are
-affected or os2 is selected. os2's preview config points
-`APP_CONFIG_EVENTS_BASE_URL` at the events deployment for the same numbered
-slot, such as `https://events.iterate-preview-3.com`.
+affected or os2 is selected. os2 owns its stream Durable Object namespace.
+Events may point `DEPLOYMENT_CONFIG_STREAM_DURABLE_OBJECT_BINDING_SCRIPT_NAME`
+at the os2 Worker script for the same numbered slot.
 
 ### Manual preview deploy
 
@@ -173,11 +172,15 @@ doppler run --project os2 --config preview_3 -- pnpm tsx ./alchemy.run.ts --dest
 
 1. Buy/register `iterate-dev-<name>.com` and `iterate-dev-<name>.app` in the `04b3` account
 2. Create doppler config: `doppler configs create dev_<name> --project os2`
-3. Set the domain vars:
+3. Set the OS2 domain vars. OS2 deploys its own stream Durable Object namespace
+   from the main Worker script; do not set a stream binding override on OS2.
    ```bash
    doppler secrets set \
      APP_CONFIG_BASE_URL="https://os.iterate-dev-<name>.com" \
      'APP_CONFIG_PROJECT_HOSTNAME_BASES=["iterate-dev-<name>.app"]' \
      --project os2 --config dev_<name>
    ```
-4. Run `pnpm dev` — the tunnel and DNS are created automatically on first run
+4. If the Events app should inspect the same stream namespace, set
+   `DEPLOYMENT_CONFIG_STREAM_DURABLE_OBJECT_BINDING_SCRIPT_NAME` on the matching
+   Events dev config to the OS2 Worker script name.
+5. Run `pnpm dev` — the tunnel and DNS are created automatically on first run

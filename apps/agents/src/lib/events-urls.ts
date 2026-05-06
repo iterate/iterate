@@ -1,17 +1,62 @@
-import { ProjectSlug, type StreamPath } from "@iterate-com/events-contract";
-import { getProjectUrl } from "../../../events/src/lib/project-slug.ts";
+import {
+  ProjectId,
+  type ProjectId as ProjectIdValue,
+  type StreamPath,
+} from "@iterate-com/shared/streams/types";
+
+const defaultProjectId = "public";
+const appHostLabel = "events";
+const iterateEnvironmentLabelPattern = /^iterate(?:-[a-z0-9-]+)?$/;
 
 /**
  * Project-scoped origin for events (e.g. `https://<project>.events.iterate.com`).
  * Default project (`public`) collapses to the base events host.
  */
-function projectOrigin(args: { eventsBaseUrl: string; projectSlug: ProjectSlug }): string {
+function projectOrigin(args: { eventsBaseUrl: string; projectSlug: ProjectIdValue }): string {
   return getProjectUrl({
     currentUrl: args.eventsBaseUrl,
     projectSlug: args.projectSlug,
   })
     .toString()
     .replace(/\/+$/, "");
+}
+
+export function getProjectUrl(args: { currentUrl: string | URL; projectSlug: ProjectIdValue }) {
+  const url = new URL(args.currentUrl);
+  const eventsHostBase = getEventsHostBase(url.hostname);
+
+  if (eventsHostBase) {
+    url.hostname =
+      args.projectSlug === defaultProjectId
+        ? eventsHostBase
+        : `${ProjectId.parse(args.projectSlug)}.${eventsHostBase}`;
+  }
+
+  return url;
+}
+
+function getEventsHostBase(hostname: string) {
+  const labels = hostname.split(".");
+
+  if (
+    labels.length === 3 &&
+    labels[0] === appHostLabel &&
+    iterateEnvironmentLabelPattern.test(labels[1] ?? "") &&
+    labels[2] === "com"
+  ) {
+    return hostname;
+  }
+
+  if (
+    labels.length === 4 &&
+    labels[1] === appHostLabel &&
+    iterateEnvironmentLabelPattern.test(labels[2] ?? "") &&
+    labels[3] === "com"
+  ) {
+    return labels.slice(1).join(".");
+  }
+
+  return undefined;
 }
 
 /**
@@ -32,7 +77,7 @@ export function workerReachableLocalUrl(rawUrl: string): string {
 /** Human-readable stream viewer URL (matches the e2e helper in `test-support/events-stream-helpers`). */
 export function buildStreamViewerUrl(args: {
   eventsBaseUrl: string;
-  projectSlug: ProjectSlug;
+  projectSlug: ProjectIdValue;
   streamPath: StreamPath;
 }): string {
   const base = projectOrigin({
@@ -58,7 +103,7 @@ export function buildStreamViewerUrl(args: {
  */
 export function buildStreamComposerUrl(args: {
   eventsBaseUrl: string;
-  projectSlug: ProjectSlug;
+  projectSlug: ProjectIdValue;
   streamPath: StreamPath;
 }): string {
   const url = new URL(buildStreamViewerUrl(args));
@@ -73,7 +118,7 @@ export function buildStreamComposerUrl(args: {
 /** POST endpoint the Events oRPC `append` procedure lives at. */
 export function buildStreamAppendUrl(args: {
   eventsBaseUrl: string;
-  projectSlug: ProjectSlug;
+  projectSlug: ProjectIdValue;
   streamPath: StreamPath;
 }): string {
   const base = projectOrigin({

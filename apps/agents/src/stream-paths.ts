@@ -1,4 +1,4 @@
-import { StreamPath } from "@iterate-com/events-contract";
+import { StreamPath } from "@iterate-com/shared/streams/types";
 
 export function resolveStreamPath(args: { currentStreamPath?: StreamPath; streamPath?: string }) {
   const pathText = args.streamPath?.trim();

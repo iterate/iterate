@@ -1,12 +1,25 @@
 import { McpAgent } from "agents/mcp";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { createCodemodeContext } from "@iterate-com/shared/codemode/context-proxy";
-import { DESCRIBE_TOOL_FUNCTION_NAME } from "@iterate-com/shared/codemode/types";
+import type { ExecuteCodemodeFunctionCallInput } from "@iterate-com/shared/stream-processors/codemode/implementation";
 import type { ProjectMcpServerConnectionProps } from "./project-mcp-server-connection.ts";
 
 export { CodemodeSession } from "./codemode-session.ts";
 export { ProjectMcpServerConnection } from "./project-mcp-server-connection.ts";
-export { McpClientBridge } from "~/rpc-targets/mcp-client-bridge.ts";
+export {
+  AgentCapability,
+  AgentDurableObject,
+  AiCapability,
+  OrpcCapability,
+  RepoCapability,
+  RepoDurableObject,
+  SlackCapability,
+  WorkspaceDurableObject,
+} from "~/codemode/example-capabilities.ts";
+export { FetchCapability } from "~/codemode/fetch-capability.ts";
+export { StreamCapability } from "~/entrypoints/stream-capability.ts";
+export { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
+export { OutboundMcpFromOurClientCapability } from "~/rpc-targets/outbound-mcp-from-our-client-capability.ts";
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
 
 const mcpHandler = McpAgent.serve("/mcp", { binding: "PROJECT_MCP_SERVER_CONNECTION" });
@@ -15,17 +28,13 @@ type ToolFunctionInput = {
   codemodeSessionCapability: Parameters<
     typeof createCodemodeContext
   >[0]["codemodeSessionCapability"];
-  path: string[];
-  input: Record<string, unknown>;
+  args: Record<string, unknown>[];
+  functionPath: string[];
 };
 
 export class TestBuiltinMatrixProvider extends WorkerEntrypoint {
-  async executeToolFunction(input: ToolFunctionInput) {
-    const path = input.path.join(".");
-    if (path === DESCRIBE_TOOL_FUNCTION_NAME) {
-      return { typeDefinitions: "{ compose(input: Record<string, unknown>): Promise<unknown>; }" };
-    }
-
+  async executeCodemodeFunctionCall(input: ToolFunctionInput & ExecuteCodemodeFunctionCallInput) {
+    const path = input.functionPath.join(".");
     if (path !== "compose") {
       throw new Error(`TestBuiltinMatrixProvider does not implement ${path}`);
     }
@@ -33,15 +42,16 @@ export class TestBuiltinMatrixProvider extends WorkerEntrypoint {
     const ctx = createCodemodeContext({
       codemodeSessionCapability: input.codemodeSessionCapability,
     });
+    const [request] = input.args;
     const pet = await ctx.integrations.http.catalog.getPet({
       include: "owner",
-      petId: input.input.petId,
+      petId: request?.petId,
     });
     const echo = await ctx.integrations.publicMcp["echo.text"]({
-      text: `provider saw ${String(input.input.text)}`,
+      text: `provider saw ${String(request?.text)}`,
     });
     const leaf = await ctx.leaf({
-      value: input.input.value,
+      value: request?.value,
     });
 
     return {
@@ -55,19 +65,16 @@ export class TestBuiltinMatrixProvider extends WorkerEntrypoint {
 }
 
 export class TestLeafProvider extends WorkerEntrypoint {
-  async executeToolFunction(input: ToolFunctionInput) {
-    if (input.path.length === 1 && input.path[0] === DESCRIBE_TOOL_FUNCTION_NAME) {
-      return { typeDefinitions: "(input: { value: number }): Promise<{ value: number }>" };
+  async executeCodemodeFunctionCall(input: ToolFunctionInput & ExecuteCodemodeFunctionCallInput) {
+    if (input.functionPath.length > 0) {
+      throw new Error(`TestLeafProvider expected leaf call, got ${input.functionPath.join(".")}`);
     }
 
-    if (input.path.length > 0) {
-      throw new Error(`TestLeafProvider expected leaf call, got ${input.path.join(".")}`);
-    }
-
+    const [request] = input.args;
     return {
       provider: "leaf",
-      toolFunctionPath: input.path,
-      value: Number(input.input.value) * 2,
+      toolFunctionPath: input.functionPath,
+      value: Number(request?.value) * 2,
     };
   }
 }

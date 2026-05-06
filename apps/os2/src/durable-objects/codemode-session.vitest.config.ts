@@ -45,6 +45,11 @@ export default defineConfig({
   ],
   test: {
     exclude: defaultExclude,
+    experimental: {
+      importDurations: {
+        limit: 0,
+      },
+    } as never,
     hookTimeout: 60_000,
     include: [resolve(testRoot, "codemode-session.test.ts")],
     testTimeout: 60_000,

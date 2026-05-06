@@ -1,14 +1,14 @@
 import type { Client } from "sqlfu";
 
 const sql = `
-insert into secrets (id, project_slug, name, value, description, created_at, updated_at)
+insert into secrets (id, project_id, name, value, description, created_at, updated_at)
 values (?, ?, ?, ?, ?, ?, ?);
 `.trim();
 const query = (params: insertSecret.Params) => ({
   sql,
   args: [
     params.id,
-    params.projectSlug,
+    params.projectId,
     params.name,
     params.value,
     params.description,
@@ -28,7 +28,7 @@ export const insertSecret = Object.assign(
 export namespace insertSecret {
   export type Params = {
     id: string;
-    projectSlug: string;
+    projectId: string;
     name: string;
     value: string;
     description: string | null;

@@ -273,13 +273,16 @@ export function withLifecycleHooks<InitParams extends LifecycleInit>() {
         }
 
         // Cloudflare exposes `ctx.id.name` for objects addressed by
-        // `namespace.getByName(name)` / `idFromName(name)`. The worker-pool
-        // Miniflare tests exercise this same path, including the mismatch
-        // branch, so we keep the production invariant instead of accepting an
-        // unverifiable name when the runtime does not provide one.
+        // `namespace.getByName(name)` / `idFromName(name)`, and the worker-pool
+        // Miniflare tests exercise that path. Some local cross-script Durable
+        // Object bindings currently omit the name even when the caller used a
+        // named ID. In that case there is no runtime name to verify, so we still
+        // persist `params.name` and rely on repeated initialization checks below.
+        // Real mismatches are still rejected whenever the runtime supplies a
+        // name.
         const objectName = this.getDurableObjectName();
 
-        if (objectName !== params.name) {
+        if (objectName !== undefined && objectName !== params.name) {
           throw new InitializeNameMismatchError(params.name, objectName);
         }
 

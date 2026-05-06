@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
-import { ProjectSlug } from "@iterate-com/events-contract";
+import { ProjectId } from "@iterate-com/shared/streams/types";
 import {
   fromTrafficWithWebSocket,
   HttpResponse,
@@ -9,7 +9,7 @@ import {
   useMockHttpServer,
   type MockHttpServerFixture,
 } from "@iterate-com/mock-http-proxy";
-import { getProjectUrl } from "../../../events/src/lib/project-slug.ts";
+import { getProjectUrl } from "../../src/lib/events-urls.ts";
 import { mcpStreamableHttpGetStubHandlers } from "./mcp-streamable-http-get-stub-handlers.ts";
 import {
   mcpStreamableHttpPostHarHandlers,
@@ -47,7 +47,7 @@ export async function createMockInternet(opts: {
     const eventsProjectHostname = new URL(
       getProjectUrl({
         currentUrl: opts.eventsBaseUrl,
-        projectSlug: ProjectSlug.parse(opts.eventsProjectSlug),
+        projectSlug: ProjectId.parse(opts.eventsProjectSlug),
       }).toString(),
     ).hostname;
     const harRaw = JSON.parse(await readFile(opts.harPath, "utf8")) as HarWithExtensions;
