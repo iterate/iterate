@@ -132,7 +132,7 @@ Do not paste the token into scripts or docs.
   lease is kept.
 - Cross-app runtime references must be derived from the same config/stage. Today
   os2 points at events with `APP_CONFIG_EVENTS_BASE_URL`, for example
-  `https://events-preview-N.iterate.com`. Future Cloudflare Service Bindings
+  `https://events.iterate-preview-N.com`. Future Cloudflare Service Bindings
   must follow the same rule: derive the target from the leased `preview_N`
   config rather than hardcoding another environment.
 - CI workflows invoke one shared preview lifecycle. The lifecycle code, not the

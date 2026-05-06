@@ -7,7 +7,7 @@
 - `@cloudflare/vite-plugin: 1.15.3` (transitively pulls `miniflare@4.20251125.0`)
 - `@cloudflare/workers-types: ^4.20251128.0`
 
-Every other app (`apps/agents`, `apps/events`, `apps/codemode`, …) uses
+Every other app (`apps/agents`, `apps/events`, `apps/os2`, …) uses
 `catalog:cloudflare`, pinned to the day‑20 release (`@cloudflare/vite-plugin
 1.33.0`, `miniflare 4.20260420.0`, `workerd 1.20260420.1`, `wrangler 4.84.0`).
 These versions are pinned exactly rather than as caret ranges because `pnpm`'s

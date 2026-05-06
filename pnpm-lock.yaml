@@ -15,9 +15,6 @@ catalogs:
     '@cloudflare/vitest-pool-workers':
       specifier: ^0.14.9
       version: 0.14.9
-    '@cloudflare/worker-bundler':
-      specifier: ^0.1.2
-      version: 0.1.2
     '@cloudflare/workers-types':
       specifier: ^4.20260426.1
       version: 4.20260426.1
@@ -509,179 +506,6 @@ importers:
       wrangler:
         specifier: 4.85.0
         version: 4.85.0(@cloudflare/workers-types@4.20260426.1)
-
-  apps/codemode:
-    dependencies:
-      '@cloudflare/codemode':
-        specifier: catalog:cloudflare
-        version: https://pkg.pr.new/iterate/agents/@cloudflare/codemode@7c0735e(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(@tanstack/ai@0.10.2)(ai@6.0.159(zod@4.3.6))(zod@4.3.6)
-      '@cloudflare/worker-bundler':
-        specifier: catalog:cloudflare
-        version: 0.1.2
-      '@iterate-com/codemode-contract':
-        specifier: workspace:*
-        version: link:../codemode-contract
-      '@iterate-com/events-contract':
-        specifier: workspace:*
-        version: link:../events-contract
-      '@iterate-com/example-contract':
-        specifier: workspace:*
-        version: link:../example-contract
-      '@iterate-com/ingress-proxy-contract':
-        specifier: workspace:*
-        version: link:../ingress-proxy-contract
-      '@iterate-com/semaphore-contract':
-        specifier: workspace:*
-        version: link:../semaphore-contract
-      '@iterate-com/shared':
-        specifier: workspace:*
-        version: link:../../packages/shared
-      '@iterate-com/ui':
-        specifier: workspace:*
-        version: link:../../packages/ui
-      '@orpc/client':
-        specifier: 1.13.14
-        version: 1.13.14(@opentelemetry/api@1.9.0)
-      '@orpc/contract':
-        specifier: 1.13.14
-        version: 1.13.14(@opentelemetry/api@1.9.0)
-      '@orpc/openapi':
-        specifier: 1.13.14
-        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
-      '@orpc/openapi-client':
-        specifier: 1.13.14
-        version: 1.13.14(@opentelemetry/api@1.9.0)
-      '@orpc/server':
-        specifier: 1.13.14
-        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
-      '@orpc/tanstack-query':
-        specifier: 1.13.14
-        version: 1.13.14(@opentelemetry/api@1.9.0)(@orpc/client@1.13.14(@opentelemetry/api@1.9.0))(@tanstack/query-core@5.91.0)
-      '@tanstack/react-devtools':
-        specifier: 0.10.0
-        version: 0.10.0(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(csstype@3.2.3)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(solid-js@1.9.11)
-      '@tanstack/react-form':
-        specifier: ^1.28.4
-        version: 1.28.4(@tanstack/react-start@1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      '@tanstack/react-form-devtools':
-        specifier: ^0.2.19
-        version: 0.2.19(@types/react@19.2.14)(csstype@3.2.3)(preact@10.28.4)(react@19.2.4)(solid-js@1.9.11)(vue@3.5.30(typescript@5.9.3))
-      '@tanstack/react-query':
-        specifier: ^5.91.0
-        version: 5.91.0(react@19.2.4)
-      '@tanstack/react-query-devtools':
-        specifier: ^5.91.3
-        version: 5.91.3(@tanstack/react-query@5.91.0(react@19.2.4))(react@19.2.4)
-      '@tanstack/react-router':
-        specifier: 1.168.3
-        version: 1.168.3(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      '@tanstack/react-router-devtools':
-        specifier: 1.166.11
-        version: 1.166.11(@tanstack/react-router@1.168.3(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(@tanstack/router-core@1.168.3)(csstype@3.2.3)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      '@tanstack/react-router-ssr-query':
-        specifier: ^1.166.2
-        version: 1.166.2(@tanstack/query-core@5.91.0)(@tanstack/react-query@5.91.0(react@19.2.4))(@tanstack/react-router@1.168.3(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(@tanstack/router-core@1.168.3)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      '@tanstack/react-start':
-        specifier: 1.167.5
-        version: 1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
-      drizzle-orm:
-        specifier: ^0.45.1
-        version: 0.45.1(@cloudflare/workers-types@4.20260426.1)(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.16)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)
-      json5:
-        specifier: ^2.2.3
-        version: 2.2.3
-      lucide-react:
-        specifier: ^1.7.0
-        version: 1.7.0(react@19.2.4)
-      react:
-        specifier: ^19.2.0
-        version: 19.2.4
-      react-dom:
-        specifier: ^19.2.0
-        version: 19.2.4(react@19.2.4)
-      sonner:
-        specifier: ^2.0.7
-        version: 2.0.7(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      tailwindcss:
-        specifier: ^4.1.18
-        version: 4.2.1
-      yaml:
-        specifier: ^2.8.3
-        version: 2.8.3
-      zod:
-        specifier: ^4.3.6
-        version: 4.3.6
-    devDependencies:
-      '@cloudflare/vite-plugin':
-        specifier: catalog:cloudflare
-        version: 1.33.2(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260424.1)(wrangler@4.85.0(@cloudflare/workers-types@4.20260426.1))
-      '@cloudflare/workers-types':
-        specifier: catalog:cloudflare
-        version: 4.20260426.1
-      '@tailwindcss/vite':
-        specifier: ^4.1.18
-        version: 4.2.1(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
-      '@tanstack/devtools-vite':
-        specifier: ^0.6.0
-        version: 0.6.0(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
-      '@types/node':
-        specifier: ^25.0.10
-        version: 25.3.3
-      '@types/react':
-        specifier: ^19.2.0
-        version: 19.2.14
-      '@types/react-dom':
-        specifier: ^19.2.0
-        version: 19.2.3(@types/react@19.2.14)
-      '@vitejs/plugin-react':
-        specifier: ^6.0.1
-        version: 6.0.1(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.0)(@babel/runtime@7.28.6)(rolldown@1.0.0-rc.16)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)))(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
-      alchemy:
-        specifier: ^0.83.3
-        version: 0.83.3(@aws-sdk/client-s3@3.1002.0)(@cloudflare/vite-plugin@1.33.2(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260424.1)(wrangler@4.85.0(@cloudflare/workers-types@4.20260426.1)))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.16)(mysql2@3.18.2(@types/node@25.3.3))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260424.1)(wrangler@4.85.0(@cloudflare/workers-types@4.20260426.1))
-      drizzle-kit:
-        specifier: ^0.31.1
-        version: 0.31.9
-      esbuild:
-        specifier: ^0.27.4
-        version: 0.27.4
-      iterate:
-        specifier: workspace:*
-        version: link:../../packages/iterate
-      tsx:
-        specifier: ^4.20.3
-        version: 4.21.0
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-      vite:
-        specifier: ^8.0.0
-        version: 8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
-      vitest:
-        specifier: 4.0.15
-        version: 4.0.15(@opentelemetry/api@1.9.0)(@types/node@25.3.3)(@vitest/ui@4.0.15)(jiti@2.6.1)(jsdom@27.4.0(@noble/hashes@2.0.1))(lightningcss@1.32.0)(msw@2.13.3(@types/node@25.3.3)(typescript@5.9.3))(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3)
-      wrangler:
-        specifier: 4.85.0
-        version: 4.85.0(@cloudflare/workers-types@4.20260426.1)
-
-  apps/codemode-contract:
-    dependencies:
-      '@iterate-com/shared':
-        specifier: workspace:*
-        version: link:../../packages/shared
-      '@orpc/contract':
-        specifier: 1.13.14
-        version: 1.13.14(@opentelemetry/api@1.9.0)
-      zod:
-        specifier: ^4.3.6
-        version: 4.3.6
-    devDependencies:
-      '@types/node':
-        specifier: ^25.0.10
-        version: 25.3.3
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
 
   apps/daemon:
     dependencies:
@@ -1310,6 +1134,9 @@ importers:
       '@tanstack/react-start':
         specifier: 1.167.5
         version: 1.167.5(crossws@0.4.4(srvx@0.11.12))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vite@8.0.0(@types/node@25.3.3)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))
+      cf-json-schema-viz:
+        specifier: ^0.3.0
+        version: 0.3.0(@babel/core@7.29.0)(@babel/template@7.28.6)(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       cron-schedule:
         specifier: ^5.0.4
         version: 5.0.4
@@ -7810,6 +7637,13 @@ packages:
   '@phosphor-icons/core@2.1.1':
     resolution: {integrity: sha512-v4ARvrip4qBCImOE5rmPUylOEK4iiED9ZyKjcvzuezqMaiRASCHKcRIuvvxL/twvLpkfnEODCOJp5dM4eZilxQ==}
 
+  '@phosphor-icons/react@2.1.10':
+    resolution: {integrity: sha512-vt8Tvq8GLjheAZZYa+YG/pW7HDbov8El/MANW8pOAz4eGxrwhnbfrQZq0Cp4q8zBEu8NIhHdnr+r8thnfRSNYA==}
+    engines: {node: '>=10'}
+    peerDependencies:
+      react: '>= 16.8'
+      react-dom: '>= 16.8'
+
   '@pkgjs/parseargs@0.11.0':
     resolution: {integrity: sha512-+1VkjdD0QBLPodGrJUeqarH8VAIvQODIbwh9XpP5Syisf7YoQgsJKPNFoqqLQlu+VQ/tVSshMR6loPMn8U+dPg==}
     engines: {node: '>=14'}
@@ -9544,8 +9378,19 @@ packages:
   '@standard-schema/utils@0.3.0':
     resolution: {integrity: sha512-e7Mew686owMaPJVNNLs55PUvgz371nKgwsc4vxE49zsODpJEnxgxRo2y/OKrqueavXgZNMDVj3DdHFlaSAeU8g==}
 
+  '@stoplight/json-schema-merge-allof@0.8.0':
+    resolution: {integrity: sha512-g8e0s43v96Xbzvd8d6KKUuJTO16CS2oJglJrviUi8ASIUxzFvAJqTHWLtGmpTryisQopqg1evXGJfi0+164+Qw==}
+
+  '@stoplight/json-schema-tree@4.0.0':
+    resolution: {integrity: sha512-SAGtof+ihIdPqETR+7XXOaqZJcrbSih/xEahaw5t1nXk5sVW6ss2l5A1WCIuvtvnQiUKnBfanmZU4eoM1ZvItg==}
+    engines: {node: '>=10.18'}
+
   '@stoplight/json@3.21.7':
     resolution: {integrity: sha512-xcJXgKFqv/uCEgtGlPxy3tPA+4I+ZI4vAuMJ885+ThkTHFVkC+0Fm58lA9NlsyjnkpxFh4YiQWpH+KefHdbA0A==}
+    engines: {node: '>=8.3.0'}
+
+  '@stoplight/lifecycle@2.3.3':
+    resolution: {integrity: sha512-JbPRTIzPZabeYPAk5+gdsnfwAxqW35G9e0ZjOG3toUmNViLOsEzuK4vpWd+Prv2Mw8HRmu+haiYizteZp6mk0w==}
     engines: {node: '>=8.3.0'}
 
   '@stoplight/ordered-object-literal@1.0.5':
@@ -11720,6 +11565,12 @@ packages:
   ccount@2.0.1:
     resolution: {integrity: sha512-eyrF0jiFpY+3drT6383f1qhkbGsLSifNAjA61IUjZjmLCWjItY6LB9ft9YhoDgwfmclB2zhu51Lc7+95b8NRAg==}
 
+  cf-json-schema-viz@0.3.0:
+    resolution: {integrity: sha512-abWFhQ/5m08sSqO5XFwF9vh49An2cxrfr1/MnF88Qdo7AXFOWEB3dFJ7MN74ASIKegwK7AemxNPGVkQjzNCujQ==}
+    peerDependencies:
+      react: ^18.0.0 || ^19.0.0
+      react-dom: ^18.0.0 || ^19.0.0
+
   chai@5.3.3:
     resolution: {integrity: sha512-4zNhdJD/iOjSH0A05ea+Ke6MU5mmpQcbQsSOkgdaUMJ9zTlDTD/GYlwohmIE2u0gaxHYiVHEn1Fw9mZ/ktJWgw==}
     engines: {node: '>=18'}
@@ -11928,6 +11779,12 @@ packages:
   common-tags@1.8.2:
     resolution: {integrity: sha512-gk/Z852D2Wtb//0I+kRFNKKE9dIIVirjoqPoA1wJU+XePVXZfGeBpk45+A1rKO4Q43prqWBNY/MiIeRLbPWUaA==}
     engines: {node: '>=4.0.0'}
+
+  compute-gcd@1.2.1:
+    resolution: {integrity: sha512-TwMbxBNz0l71+8Sc4czv13h4kEqnchV9igQZBi6QUaz09dnz13juGnnaWWJTRsP3brxOoxeB4SA2WELLw1hCtg==}
+
+  compute-lcm@1.1.2:
+    resolution: {integrity: sha512-OFNPdQAXnQhDSKioX8/XYT6sdUlXwpeMjfd6ApxMJfyZ4GxmLR1xvMERctlYhlHwIiz6CSpBc2+qYKjHGZw4TQ==}
 
   concat-map@0.0.1:
     resolution: {integrity: sha512-/Srv4dswyQNBfohGpz9o6Yb3Gz3SrUDqBH5rTuhGR7ahtlbYKnVxw2bCFMRljaA7EXHaXZ8wsHdodFvbkhKmqg==}
@@ -14262,6 +14119,24 @@ packages:
   jose@6.2.2:
     resolution: {integrity: sha512-d7kPDd34KO/YnzaDOlikGpOurfF0ByC2sEV4cANCtdqLlTfBlw2p14O/5d/zv40gJPbIQxfES3nSx1/oYNyuZQ==}
 
+  jotai@2.19.1:
+    resolution: {integrity: sha512-sqm9lVZiqBHZH8aSRk32DSiZDHY3yUIlulXYn9GQj7/LvoUdYXSMti7ZPJGo+6zjzKFt5a25k/I6iBCi43PJcw==}
+    engines: {node: '>=12.20.0'}
+    peerDependencies:
+      '@babel/core': '>=7.0.0'
+      '@babel/template': '>=7.0.0'
+      '@types/react': '>=17.0.0'
+      react: '>=17.0.0'
+    peerDependenciesMeta:
+      '@babel/core':
+        optional: true
+      '@babel/template':
+        optional: true
+      '@types/react':
+        optional: true
+      react:
+        optional: true
+
   jpeg-js@0.4.4:
     resolution: {integrity: sha512-WZzeDOEtTOBK4Mdsar0IqEU5sMr3vSV2RqkAIzUEV2BHnUfKGyswWFPFwK5EeDo93K3FohSHbLAjj0s1Wzd+dg==}
 
@@ -14317,6 +14192,9 @@ packages:
   json-parse-even-better-errors@3.0.2:
     resolution: {integrity: sha512-fi0NG4bPjCHunUJffmLd0gxssIgkNmArMvis4iNah6Owg1MCJjWhEcDLmsK6iGkJq3tHwbDkTlce70/tmXN4cQ==}
     engines: {node: ^14.17.0 || ^16.13.0 || >=18.0.0}
+
+  json-schema-compare@0.2.2:
+    resolution: {integrity: sha512-c4WYmDKyJXhs7WWvAWm3uIYnfyWFoIp+JEoX34rctVvEkMYCPGhXtvmFFXiffBbxfZsvQ0RNnV5H7GvDF5HCqQ==}
 
   json-schema-to-ts@3.1.1:
     resolution: {integrity: sha512-+DWg8jCJG2TEnpy7kOm/7/AxaYoaRbjVB4LFZLySZlWn8exGs3A4OLJR966cVvU26N7X9TWxl+Jsw7dzAqKT6g==}
@@ -14726,6 +14604,10 @@ packages:
 
   magic-bytes.js@1.13.0:
     resolution: {integrity: sha512-afO2mnxW7GDTXMm5/AoN1WuOcdoKhtgXjIvHmobqTD1grNplhGdv3PFOyjCVmrnOZBIT/gD/koDKpYG+0mvHcg==}
+
+  magic-error@0.0.1:
+    resolution: {integrity: sha512-1+N1ET8cbC5bfLQZcRojClzgK2gbUt9keTMr9OJeuXnQKWsfwRRRICuMA3HKaCIXFEgKzxivuMGCNKD7cdU5pg==}
+    engines: {node: '>=10'}
 
   magic-string@0.30.21:
     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
@@ -17700,6 +17582,21 @@ packages:
     resolution: {integrity: sha512-OljLrQ9SQdOUqTaQxqL5dEfZWrXExyyWsozYlAWFawPVNuD83igl7uJD2RTkNMbniIYgt8l81eCJGIdQF7avLQ==}
     engines: {node: ^14.17.0 || ^16.13.0 || >=18.0.0}
 
+  validate.io-array@1.0.6:
+    resolution: {integrity: sha512-DeOy7CnPEziggrOO5CZhVKJw6S3Yi7e9e65R1Nl/RTN1vTQKnzjfvks0/8kQ40FP/dsjRAOd4hxmJ7uLa6vxkg==}
+
+  validate.io-function@1.0.2:
+    resolution: {integrity: sha512-LlFybRJEriSuBnUhQyG5bwglhh50EpTL2ul23MPIuR1odjO7XaMLFV8vHGwp7AZciFxtYOeiSCT5st+XSPONiQ==}
+
+  validate.io-integer-array@1.0.0:
+    resolution: {integrity: sha512-mTrMk/1ytQHtCY0oNO3dztafHYyGU88KL+jRxWuzfOmQb+4qqnWmI+gykvGp8usKZOM0H7keJHEbRaFiYA0VrA==}
+
+  validate.io-integer@1.0.5:
+    resolution: {integrity: sha512-22izsYSLojN/P6bppBqhgUDjCkr5RY2jd+N2a3DCAUey8ydvrZ/OkGvFPR7qfOpwR2LC5p4Ngzxz36g5Vgr/hQ==}
+
+  validate.io-number@1.0.3:
+    resolution: {integrity: sha512-kRAyotcbNaSYoDnXvb4MHg/0a1egJdLwS6oJ38TJY7aw9n93Fl/3blIXdyYvPOp55CNxywooG/3BcrwNrBpcSg==}
+
   value-or-promise@1.0.11:
     resolution: {integrity: sha512-41BrgH+dIbCFXClcSapVs5M6GkENd3gQOJpEfPDNa71LsUGMXDL0jMWpI/Rh7WhX+Aalfz2TTS3Zt5pUsbnhLg==}
     engines: {node: '>=12'}
@@ -18280,6 +18177,9 @@ packages:
 
   wildcard-match@5.1.4:
     resolution: {integrity: sha512-wldeCaczs8XXq7hj+5d/F38JE2r7EXgb6WQDM84RVwxy81T/sxB5e9+uZLK9Q9oNz1mlvjut+QtvgaOQFPVq/g==}
+
+  wolfy87-eventemitter@5.2.9:
+    resolution: {integrity: sha512-P+6vtWyuDw+MB01X7UeF8TaHBvbCovf4HPEMF/SV7BdDc1SMTiBy13SRD71lQh4ExFTG1d/WNzDGDCyOKSMblw==}
 
   word-wrap@1.2.5:
     resolution: {integrity: sha512-BN22B5eaMMI9UMtjrGd5g5eCYPpCPDUy0FJXbYsaT5zYxjFOckS53SQDE3pWkVoWpHXVb3BrYcEN4Twa55B5cA==}
@@ -23588,6 +23488,11 @@ snapshots:
 
   '@phosphor-icons/core@2.1.1': {}
 
+  '@phosphor-icons/react@2.1.10(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
+    dependencies:
+      react: 19.2.4
+      react-dom: 19.2.4(react@19.2.4)
+
   '@pkgjs/parseargs@0.11.0':
     optional: true
 
@@ -25857,6 +25762,20 @@ snapshots:
 
   '@standard-schema/utils@0.3.0': {}
 
+  '@stoplight/json-schema-merge-allof@0.8.0':
+    dependencies:
+      compute-lcm: 1.1.2
+      json-schema-compare: 0.2.2
+      lodash: 4.17.23
+
+  '@stoplight/json-schema-tree@4.0.0':
+    dependencies:
+      '@stoplight/json': 3.21.7
+      '@stoplight/json-schema-merge-allof': 0.8.0
+      '@stoplight/lifecycle': 2.3.3
+      '@types/json-schema': 7.0.15
+      magic-error: 0.0.1
+
   '@stoplight/json@3.21.7':
     dependencies:
       '@stoplight/ordered-object-literal': 1.0.5
@@ -25865,6 +25784,11 @@ snapshots:
       jsonc-parser: 2.2.1
       lodash: 4.17.23
       safe-stable-stringify: 1.1.1
+
+  '@stoplight/lifecycle@2.3.3':
+    dependencies:
+      tslib: 2.8.1
+      wolfy87-eventemitter: 5.2.9
 
   '@stoplight/ordered-object-literal@1.0.5': {}
 
@@ -28990,6 +28914,22 @@ snapshots:
 
   ccount@2.0.1: {}
 
+  cf-json-schema-viz@0.3.0(@babel/core@7.29.0)(@babel/template@7.28.6)(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4):
+    dependencies:
+      '@base-ui/react': 1.2.0(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      '@phosphor-icons/react': 2.1.10(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      '@stoplight/json': 3.21.7
+      '@stoplight/json-schema-tree': 4.0.0
+      '@types/json-schema': 7.0.15
+      clsx: 2.1.1
+      jotai: 2.19.1(@babel/core@7.29.0)(@babel/template@7.28.6)(@types/react@19.2.14)(react@19.2.4)
+      react: 19.2.4
+      react-dom: 19.2.4(react@19.2.4)
+    transitivePeerDependencies:
+      - '@babel/core'
+      - '@babel/template'
+      - '@types/react'
+
   chai@5.3.3:
     dependencies:
       assertion-error: 2.0.1
@@ -29216,6 +29156,19 @@ snapshots:
   commander@8.3.0: {}
 
   common-tags@1.8.2: {}
+
+  compute-gcd@1.2.1:
+    dependencies:
+      validate.io-array: 1.0.6
+      validate.io-function: 1.0.2
+      validate.io-integer-array: 1.0.0
+
+  compute-lcm@1.1.2:
+    dependencies:
+      compute-gcd: 1.2.1
+      validate.io-array: 1.0.6
+      validate.io-function: 1.0.2
+      validate.io-integer-array: 1.0.0
 
   concat-map@0.0.1: {}
 
@@ -31745,6 +31698,13 @@ snapshots:
 
   jose@6.2.2: {}
 
+  jotai@2.19.1(@babel/core@7.29.0)(@babel/template@7.28.6)(@types/react@19.2.14)(react@19.2.4):
+    optionalDependencies:
+      '@babel/core': 7.29.0
+      '@babel/template': 7.28.6
+      '@types/react': 19.2.14
+      react: 19.2.4
+
   jpeg-js@0.4.4: {}
 
   js-base64@3.7.8: {}
@@ -31805,6 +31765,10 @@ snapshots:
   json-parse-even-better-errors@2.3.1: {}
 
   json-parse-even-better-errors@3.0.2: {}
+
+  json-schema-compare@0.2.2:
+    dependencies:
+      lodash: 4.17.23
 
   json-schema-to-ts@3.1.1:
     dependencies:
@@ -32183,6 +32147,8 @@ snapshots:
   lz-string@1.5.0: {}
 
   magic-bytes.js@1.13.0: {}
+
+  magic-error@0.0.1: {}
 
   magic-string@0.30.21:
     dependencies:
@@ -36059,6 +36025,21 @@ snapshots:
 
   validate-npm-package-name@5.0.1: {}
 
+  validate.io-array@1.0.6: {}
+
+  validate.io-function@1.0.2: {}
+
+  validate.io-integer-array@1.0.0:
+    dependencies:
+      validate.io-array: 1.0.6
+      validate.io-integer: 1.0.5
+
+  validate.io-integer@1.0.5:
+    dependencies:
+      validate.io-number: 1.0.3
+
+  validate.io-number@1.0.3: {}
+
   value-or-promise@1.0.11: {}
 
   vary@1.1.2: {}
@@ -36985,6 +36966,8 @@ snapshots:
       stackback: 0.0.2
 
   wildcard-match@5.1.4: {}
+
+  wolfy87-eventemitter@5.2.9: {}
 
   word-wrap@1.2.5: {}
 

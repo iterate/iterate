@@ -24,8 +24,6 @@ setup:
     path: apps/events/
   - project: semaphore
     path: apps/semaphore/
-  - project: codemode
-    path: apps/codemode/
   - project: test
     path: apps/test/
   - project: agents

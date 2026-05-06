@@ -26,8 +26,6 @@ packages:
   - apps/events-contract
   - apps/agents
   - apps/agents-contract
-  - apps/codemode
-  - apps/codemode-contract
   - apps/*
   - sandbox
   - jonasland/sandbox

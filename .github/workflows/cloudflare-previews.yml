@@ -36,8 +36,6 @@ jobs:
               "scripts/preview/**",
               "apps/agents/**",
               "apps/agents-contract/**",
-              "apps/codemode/**",
-              "apps/codemode-contract/**",
               "apps/example/**",
               "apps/example-contract/**",
               "apps/events/**",
