@@ -123,7 +123,6 @@ export const AgentProcessorContract = defineProcessorContract({
       description:
         "The agent has prepared an LLM request. A subscribed LLM request processor must execute it and respond with agent output and a terminal llm-request-completed event. The llmRequestId used by response events is this event's stream offset.",
       payloadSchema: z.object({
-        requestId: z.string(),
         model: z.string().min(1),
         body: z.object({
           messages: z

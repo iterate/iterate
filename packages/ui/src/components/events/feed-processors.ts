@@ -351,15 +351,13 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
   }
 
   if (event.type === AGENT_LLM_REQUEST_REQUESTED_TYPE) {
-    const requestId = readStringPayloadField(event, "requestId") ?? String(event.offset);
-    if (requestId == null) return [];
     return [
       {
         type: "llm-request-boundary",
         id: `llm-request-requested-${event.offset}`,
         props: {
           phase: "started",
-          requestId,
+          requestId: String(event.offset),
           timestamp,
           raw: event,
         },

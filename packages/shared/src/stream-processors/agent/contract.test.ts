@@ -138,7 +138,6 @@ describe("AgentProcessorContract", () => {
         committedEvent({
           type: "events.iterate.com/agent/llm-request-requested",
           payload: {
-            requestId: "req_1",
             model: "test-model",
             body: { messages: [{ role: "user", content: "hello" }] },
             runOpts: {},
@@ -206,7 +205,6 @@ describe("AgentProcessorContract", () => {
         committedEvent({
           type: "events.iterate.com/agent/llm-request-requested",
           payload: {
-            requestId: "req_current",
             model: "test-model",
             body: { messages: [{ role: "user", content: "hello" }] },
             runOpts: {},

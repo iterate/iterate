@@ -1055,15 +1055,9 @@ function renderLlmRequestBoundaryItem(props: {
         : props.outcome === "failed"
           ? "LLM request failed"
           : "LLM request completed";
-  const color =
-    props.phase === "started"
-      ? P.warning
-      : props.outcome === "failed" || props.outcome === "cancelled"
-        ? P.danger
-        : P.textDim;
   return renderTimelineRule({
     label: `${phaseLabel} · ${props.requestId} · ${formatTime(props.timestamp)}`,
-    color,
+    color: P.textDim,
   });
 }
 

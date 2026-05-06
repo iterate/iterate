@@ -219,7 +219,6 @@ function stateWithRequest(args: {
 
 function llmRequestPayload(content: string) {
   return {
-    requestId: `req_${content}`,
     model: "ignored-provider-owned-model",
     body: {
       messages: [

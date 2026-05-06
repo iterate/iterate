@@ -96,7 +96,6 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
             streamApi,
             status: "working",
             reason: "llm-request-requested",
-            requestId: event.payload.requestId,
             llmRequestId: event.offset,
           });
           return;
@@ -385,7 +384,6 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
           event: scheduledEvent,
         }),
         payload: {
-          requestId: args.requestId,
           model: stateAtRequest.llmConfig.model,
           body: buildLlmChatRequest(stateAtRequest),
           runOpts: stateAtRequest.llmConfig.runOpts,
