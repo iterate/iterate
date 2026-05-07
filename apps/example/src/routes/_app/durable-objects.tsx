@@ -64,7 +64,7 @@ const createCounterDurableObject = createServerFn({ method: "POST" })
   .inputValidator(CreateCounterFormValues)
   .handler(async ({ context, data }) => {
     if (!context.workerEnv) {
-      throw new Error("Counter Durable Objects are available in the Cloudflare runtime.");
+      throw new Error("Counter Durable Objects are only available in the Cloudflare runtime.");
     }
 
     const initParams = buildCounterInitParams(data);
@@ -121,7 +121,7 @@ function DurableObjectsPage() {
 
       {!available && (
         <p className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">
-          Counter Durable Objects are available in the Cloudflare runtime.
+          Counter Durable Objects are only available in the Cloudflare runtime.
         </p>
       )}
 

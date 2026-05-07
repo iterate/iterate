@@ -95,11 +95,12 @@ export class ExampleCounter extends ExampleCounterBase<ExampleCounterEnv> {
       return new Response("Expected WebSocket", { status: 400 });
     }
 
+    const state = await this.readState();
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
 
     this.ctx.acceptWebSocket(server);
-    server.send(this.createStateMessage(await this.readState()));
+    server.send(this.createStateMessage(state));
 
     return new Response(null, { status: 101, webSocket: client });
   }
