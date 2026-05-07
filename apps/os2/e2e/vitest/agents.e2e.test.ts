@@ -40,7 +40,7 @@ describe("project agents codemode", () => {
       projectSlugOrId: project.id,
     });
 
-    const output = await client.project.streams.append({
+    await client.project.streams.append({
       projectSlugOrId: project.id,
       streamPath: agentPath,
       event: {
@@ -59,7 +59,7 @@ async (ctx) => {
       agentPath,
       client,
       projectId: project.id,
-      afterOffset: output.event.offset - 1,
+      afterOffset: "start",
       predicate: (event) =>
         event.type === "events.iterate.com/agent-chat/assistant-response-added" &&
         (event.payload as { message?: unknown }).message === message,
@@ -212,7 +212,7 @@ async function createProject(client: OrpcClient, slugPrefix: string) {
 }
 
 async function readUntil(input: {
-  afterOffset: number;
+  afterOffset: number | "start";
   agentPath: string;
   client: OrpcClient;
   predicate(event: Event): boolean;
