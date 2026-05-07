@@ -5,6 +5,10 @@ import * as utils from "../utils/index.ts";
 export default workflow({
   name: "specs",
   on: {
+    push: {
+      branches: ["main"],
+    },
+    pull_request: {},
     workflow_dispatch: {},
   },
   env: {
