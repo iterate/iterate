@@ -2,7 +2,6 @@ import OpenAI from "openai";
 import type { ResponsesClientEvent } from "openai/resources/responses/responses";
 import { ResponsesWSBase } from "openai/resources/responses/ws-base";
 import { z } from "zod";
-import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { withStreamProcessor } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor";
@@ -12,6 +11,8 @@ import {
   type CloudflareAiProcessorDeps,
   createCloudflareAiProcessor,
 } from "@iterate-com/shared/stream-processors/cloudflare-ai/implementation";
+import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
+import type { ExecuteCodemodeFunctionCallInput } from "@iterate-com/shared/stream-processors/codemode/implementation";
 import {
   createOpenAiWsProcessor,
   type OpenAiResponsesWebSocket,
@@ -27,7 +28,6 @@ import type { StreamDurableObject } from "@iterate-com/shared/streams/stream-dur
 import { STREAM_CHILD_STREAM_CREATED_TYPE } from "@iterate-com/shared/streams/core-event-types";
 import type { Event, EventInput, StreamCursor } from "@iterate-com/shared/streams/types";
 import { StreamPath } from "@iterate-com/shared/streams/types";
-import { AppConfig } from "~/app.ts";
 import {
   createCodemodeSession,
   startCodemodeScriptOnSession,
@@ -161,6 +161,21 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     };
   }
 
+  async executeCodemodeFunctionCall(input: ExecuteCodemodeFunctionCallInput) {
+    await this.ensureStarted();
+    const functionName = input.functionPath.join(".");
+    if (functionName !== "sendMessage") {
+      throw new Error(`Unknown agent chat tool function chat.${functionName}`);
+    }
+
+    const message = parseChatToolMessage(input.args[0]);
+    const event = await this.appendAssistantResponse({
+      idempotencyKey: `agent-chat-tool:send-message:${input.functionCallId}`,
+      message,
+    });
+    return { event };
+  }
+
   private async ensureAgentSubscription(params: AgentDurableObjectStructuredName) {
     await this.ensureStreamProcessorCallableSubscription({
       bindingName: "AGENT",
@@ -191,7 +206,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       events: [],
       namespace: this.env.CODEMODE_SESSION,
       projectId: params.projectId,
-      providers: [],
+      providers: [this.createAgentChatToolProvider()],
       streamPath: params.agentPath,
     });
   }
@@ -211,7 +226,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       events: [],
       namespace: this.env.CODEMODE_SESSION,
       projectId: this.structuredName.projectId,
-      providers: [],
+      providers: [this.createAgentChatToolProvider()],
       streamPath: this.structuredName.agentPath,
     });
   }
@@ -247,22 +262,49 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     }
   }
 
-  private async appendAssistantResponse(input: { idempotencyKey: string; message: string }) {
-    await this.streamsEntrypoint(this.structuredName.agentPath).append({
+  private async appendAssistantResponse(input: {
+    channel?: string;
+    idempotencyKey: string;
+    message: string;
+  }) {
+    return await this.streamsEntrypoint(this.structuredName.agentPath).append({
       event: {
         type: "events.iterate.com/agent-chat/assistant-response-added",
         idempotencyKey: input.idempotencyKey,
         payload: {
-          channel: "web",
+          channel: parseAgentChatChannel(input.channel),
           message: input.message,
         },
       },
     });
   }
 
+  private createAgentChatToolProvider(): ToolProviderRegistration {
+    return {
+      path: ["chat"],
+      instructions:
+        "Use ctx.chat.sendMessage({ message }) to send a visible response to the user. Prefer this over appending chat events manually.",
+      invocation: {
+        kind: "rpc",
+        callable: {
+          type: "workers-rpc",
+          via: {
+            type: "env-binding",
+            bindingType: "durable-object-namespace",
+            bindingName: "AGENT",
+            durableObject: {
+              name: this.name,
+            },
+          },
+          rpcMethod: "executeCodemodeFunctionCall",
+          argsMode: "object",
+        },
+      },
+    };
+  }
+
   private createDefaultLlmProcessor() {
-    const config = this.getAppConfig();
-    const apiKey = config.openAiApiKey.exposeSecret();
+    const apiKey = readOpenAiApiKey(this.env as Record<string, unknown>);
     if (apiKey.trim() !== "") {
       return createOpenAiWsProcessor({
         openResponsesWebSocket: async () =>
@@ -282,13 +324,20 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       streamPath,
     });
   }
+}
 
-  private getAppConfig() {
-    return parseAppConfigFromEnv({
-      configSchema: AppConfig,
-      prefix: "APP_CONFIG_",
-      env: this.env as unknown as Record<string, unknown>,
-    });
+function readOpenAiApiKey(env: Record<string, unknown>) {
+  const override = env.APP_CONFIG_OPEN_AI_API_KEY;
+  if (typeof override === "string") return override;
+
+  const rawConfig = env.APP_CONFIG;
+  if (typeof rawConfig !== "string" || rawConfig.trim() === "") return "";
+
+  try {
+    const parsed = JSON.parse(rawConfig) as { openAiApiKey?: unknown };
+    return typeof parsed.openAiApiKey === "string" ? parsed.openAiApiKey : "";
+  } catch {
+    return "";
   }
 }
 
@@ -378,6 +427,17 @@ function formatCodemodeOutput(output: unknown) {
 
 function parseAgentChatChannel(channel: string | undefined) {
   return channel === "tui" ? "tui" : "web";
+}
+
+function parseChatToolMessage(value: unknown) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("ctx.chat.sendMessage requires an object argument.");
+  }
+  const message = (value as { message?: unknown }).message;
+  if (typeof message !== "string" || message.trim() === "") {
+    throw new Error("ctx.chat.sendMessage requires a non-empty message string.");
+  }
+  return message;
 }
 
 type CloudflareSocketEventName = "open" | "message" | "close" | "error" | string;

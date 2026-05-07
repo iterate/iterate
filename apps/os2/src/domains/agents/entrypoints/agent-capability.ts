@@ -55,12 +55,16 @@ class AgentHandle extends RpcTarget {
     message: string;
     subPath?: string;
   }) {
-    return await (
+    await (
       await this.getAgent(input.agentPath ?? agentPathFromSubPath(input.subPath))
     ).sendMessage({
       channel: input.channel,
       message: input.message,
     });
+    return {
+      message: input.message,
+      ...(input.subPath == null ? {} : { subPath: input.subPath }),
+    };
   }
 
   async doThing(input: { agentPath?: string; label: string; value: number }) {

@@ -304,6 +304,10 @@ export function withStreamProcessor<
           streamPath: args.event.streamPath,
         });
 
+        if (args.event.offset <= storedState.afterAppendCompletedThroughOffset) {
+          return;
+        }
+
         if (args.event.offset < storedState.reducedThroughOffset) {
           await this.appendProcessorError({
             error: new Error(
