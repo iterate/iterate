@@ -34,6 +34,7 @@ import type { ActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
 import { activeOrganizationMiddleware, os, projectScopeMiddleware } from "~/orpc/orpc.ts";
 import { requireProjectScope } from "~/orpc/project-access.ts";
 import { projectCodemodeRouter } from "~/orpc/routers/codemode.ts";
+import { projectAgentsRouter } from "~/orpc/routers/agents.ts";
 import { projectStreamsRouter } from "~/orpc/routers/streams.ts";
 
 type ProjectRow = {
@@ -320,6 +321,7 @@ export const projectsRouter = {
           return toCodemodeSession(record);
         }),
     },
+    agents: projectAgentsRouter,
     inboundMcpServer: {
       listSessions: os.project.inboundMcpServer.listSessions
         .use(projectScopeMiddleware)

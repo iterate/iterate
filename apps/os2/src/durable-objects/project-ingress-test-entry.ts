@@ -16,6 +16,8 @@ import type { ExactHostIngressRule } from "~/ingress/types.ts";
 
 export { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
 export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
+export { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
+export { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
 export { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
 export { PROJECT_LIFECYCLE_STREAM_PATH } from "~/domains/projects/stream-processors/project-lifecycle.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";

@@ -14,6 +14,14 @@
         "class_name": "ProjectDurableObject",
       },
       {
+        "name": "AGENT",
+        "class_name": "AgentDurableObject",
+      },
+      {
+        "name": "CODEMODE_SESSION",
+        "class_name": "CodemodeSession",
+      },
+      {
         "name": "PROJECT_MCP_SERVER_CONNECTION",
         "class_name": "ProjectMcpServerConnection",
       },
@@ -45,6 +53,10 @@
     {
       "tag": "v2",
       "new_sqlite_classes": ["StreamDurableObject"],
+    },
+    {
+      "tag": "v3",
+      "new_sqlite_classes": ["AgentDurableObject", "CodemodeSession"],
     },
   ],
 }

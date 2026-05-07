@@ -56,6 +56,15 @@ export const StreamCatalogRecord = z.object({
 });
 export type StreamCatalogRecord = z.output<typeof StreamCatalogRecord>;
 
+export const AgentRecord = z.object({
+  agentPath: StreamPath,
+  name: z.string(),
+  projectId: z.string(),
+  createdAt: z.string(),
+  lastWokenAt: z.string(),
+});
+export type AgentRecord = z.output<typeof AgentRecord>;
+
 export const RandomLogStreamRequest = z
   .object({
     count: z
@@ -372,6 +381,41 @@ export const osContract = oc.router({
         )
         .output(z.object({ instructions: z.string() })),
     },
+    agents: {
+      list: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectSlugOrId}/agents",
+          description: "List agents for a project",
+          tags: ["/project", "/agents"],
+        })
+        .input(ProjectScopedInput)
+        .output(z.object({ agents: z.array(AgentRecord) })),
+      sendMessage: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectSlugOrId}/agents/messages/{+agentPath}",
+          description: "Append a chat message to an agent stream",
+          tags: ["/project", "/agents"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            agentPath: StreamPath,
+            channel: z.string().trim().min(1).optional(),
+            message: z.string().trim().min(1),
+          }),
+        )
+        .output(z.object({ event: Event })),
+      runtimeState: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectSlugOrId}/agents/runtime-state/{+agentPath}",
+          description: "Read Agent Durable Object stream processor runtime state",
+          tags: ["/project", "/agents"],
+        })
+        .input(ProjectScopedInput.extend({ agentPath: StreamPath }))
+        .output(z.unknown()),
+    },
     inboundMcpServer: {
       listSessions: oc
         .route({
@@ -431,6 +475,21 @@ export const osContract = oc.router({
           }),
         )
         .output(z.object({ events: z.array(Event) })),
+      streamEvents: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectSlugOrId}/streams/event-stream/{+streamPath}",
+          description: "Stream committed and live events from a project stream",
+          tags: ["/project", "/streams"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            afterOffset: StreamCursor.optional(),
+            beforeOffset: StreamCursor.optional(),
+            streamPath: StreamPath,
+          }),
+        )
+        .output(eventIterator(Event)),
       getState: oc
         .route({
           method: "GET",

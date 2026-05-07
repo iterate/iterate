@@ -278,6 +278,13 @@ export type ProcessorContractShape<
   processorDeps?: ProcessorDeps;
   events: Events;
   consumes: Consumes;
+  /**
+   * Explicit runner escape hatch for processors that must observe every
+   * committed event on a stream and decide at runtime whether it matters.
+   *
+   * Most processors should leave this unset and declare concrete `consumes`.
+   */
+  consumesAllEvents?: true;
   emits: Emits;
   /**
    * Optional pure projection from current state + consumed event to next state.
@@ -515,6 +522,7 @@ export type ProcessorImplementation<Contract> = {
     state: ProcessorState<Contract>;
     streamApi: ProcessorStreamApi<Contract>;
     signal: AbortSignal;
+    waitUntil?: (promise: Promise<unknown>) => void;
   }): Promise<void> | void;
   /**
    * Runs for live stream events after the runner has reduced and persisted the
@@ -527,6 +535,7 @@ export type ProcessorImplementation<Contract> = {
     state: ProcessorState<Contract>;
     streamApi: ProcessorStreamApi<Contract>;
     signal: AbortSignal;
+    waitUntil?: (promise: Promise<unknown>) => void;
   }): Promise<void> | void;
 };
 

@@ -414,11 +414,13 @@ export async function runProcessorOnStart<const Contract>(args: {
   state: ProcessorState<Contract>;
   streamApi: ProcessorStreamApi<Contract>;
   signal: AbortSignal;
+  waitUntil?: (promise: Promise<unknown>) => void;
 }): Promise<void> {
   await args.processor.implementation.onStart?.({
     state: args.state,
     streamApi: args.streamApi,
     signal: args.signal,
+    waitUntil: args.waitUntil,
   });
 }
 
@@ -429,6 +431,7 @@ export async function runProcessorAfterAppend<const Contract>(args: {
   state: ProcessorState<Contract>;
   streamApi: ProcessorStreamApi<Contract>;
   signal: AbortSignal;
+  waitUntil?: (promise: Promise<unknown>) => void;
 }): Promise<void> {
   await args.processor.implementation.afterAppend?.({
     event: args.event,
@@ -436,6 +439,7 @@ export async function runProcessorAfterAppend<const Contract>(args: {
     state: args.state,
     streamApi: args.streamApi,
     signal: args.signal,
+    waitUntil: args.waitUntil,
   });
 }
 
@@ -765,10 +769,16 @@ function getConsumedEventDefinition(args: {
     events: EventCatalog;
     processorDeps?: readonly unknown[];
     consumes: readonly string[];
+    consumesAllEvents?: true;
   };
   eventType: string;
 }): EventDefinition | undefined {
   if (!args.contract.consumes.includes(args.eventType)) {
+    if (args.contract.consumesAllEvents === true) {
+      return {
+        payloadSchema: z.unknown(),
+      };
+    }
     return undefined;
   }
 

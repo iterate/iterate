@@ -111,6 +111,7 @@ export default {
           doCatalog: env.DB,
           log,
           projectHostnameBases,
+          agent: env.AGENT,
           loader: env.LOADER,
           codemodeSession: env.CODEMODE_SESSION,
           callableEnv: env,

@@ -1,6 +1,11 @@
 import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
+import { getOrInitializeDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import type { ExecuteCodemodeFunctionCallInput } from "@iterate-com/shared/stream-processors/codemode/implementation";
-import type { AgentDurableObject } from "../durable-objects/agent-durable-object.ts";
+import { StreamPath } from "@iterate-com/shared/streams/types";
+import {
+  type AgentDurableObject,
+  getAgentDurableObjectName,
+} from "../durable-objects/agent-durable-object.ts";
 
 type AgentCapabilityEnv = {
   AGENT?: DurableObjectNamespace<AgentDurableObject>;
@@ -8,6 +13,12 @@ type AgentCapabilityEnv = {
 
 type AgentCapabilityProps = {
   projectId?: string;
+};
+
+type AgentRpcStub = {
+  doThing(input: { label: string; value: number }): Promise<unknown>;
+  getRuntimeState(): Promise<unknown>;
+  sendMessage(input: { channel?: string; message: string }): Promise<unknown>;
 };
 
 export class AgentCapability extends WorkerEntrypoint<AgentCapabilityEnv, AgentCapabilityProps> {
@@ -21,25 +32,61 @@ export class AgentCapability extends WorkerEntrypoint<AgentCapabilityEnv, AgentC
       throw new Error("AGENT Durable Object namespace is not configured.");
     }
 
-    return new AgentHandle(this.env.AGENT.getByName(requireProjectId(this.ctx.props)));
+    return new AgentHandle({
+      namespace: this.env.AGENT,
+      projectId: requireProjectId(this.ctx.props),
+    });
   }
 }
 
 class AgentHandle extends RpcTarget {
-  readonly #agent: DurableObjectStub<AgentDurableObject>;
+  readonly #namespace: DurableObjectNamespace<AgentDurableObject>;
+  readonly #projectId: string;
 
-  constructor(agent: DurableObjectStub<AgentDurableObject>) {
+  constructor(input: { namespace: DurableObjectNamespace<AgentDurableObject>; projectId: string }) {
     super();
-    this.#agent = agent;
+    this.#namespace = input.namespace;
+    this.#projectId = input.projectId;
   }
 
-  async sendMessage(input: { message: string; subPath?: string }) {
-    return await this.#agent.sendMessage(input);
+  async sendMessage(input: {
+    agentPath?: string;
+    channel?: string;
+    message: string;
+    subPath?: string;
+  }) {
+    return await (
+      await this.getAgent(input.agentPath ?? agentPathFromSubPath(input.subPath))
+    ).sendMessage({
+      channel: input.channel,
+      message: input.message,
+    });
   }
 
-  async doThing(input: { label: string; value: number }) {
-    return await this.#agent.doThing(input);
+  async doThing(input: { agentPath?: string; label: string; value: number }) {
+    return await (await this.getAgent(input.agentPath ?? "/agents/default")).doThing(input);
   }
+
+  async getRuntimeState(input: { agentPath?: string } = {}) {
+    return await (await this.getAgent(input.agentPath ?? "/agents/default")).getRuntimeState();
+  }
+
+  private async getAgent(agentPathInput: string): Promise<AgentRpcStub> {
+    const name = {
+      agentPath: StreamPath.parse(agentPathInput),
+      projectId: this.#projectId,
+    };
+    return (await getOrInitializeDoStub({
+      namespace: this.#namespace,
+      name: getAgentDurableObjectName(name),
+    })) as unknown as AgentRpcStub;
+  }
+}
+
+function agentPathFromSubPath(subPath: string | undefined) {
+  if (subPath == null || subPath.trim() === "") return "/agents/default";
+  if (subPath.startsWith("/")) return subPath;
+  return `/agents/${subPath}`;
 }
 
 function requireProjectId(props: AgentCapabilityProps | undefined) {

@@ -6,11 +6,9 @@ import type {
   LifecycleStructuredName,
 } from "./with-lifecycle-hooks.ts";
 import type {
-  Constructor,
   DurableObjectClass,
   DurableObjectConstructor,
   DurableObjectMixinResult,
-  MembersOf,
   ReqEnvOf,
 } from "./mixin-types.ts";
 import type { DurableObjectCoreProtected } from "./with-durable-object-core.ts";

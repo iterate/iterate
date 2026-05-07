@@ -4,7 +4,9 @@ import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import type { Callable, FetchCallable } from "@iterate-com/shared/callable/types.ts";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import { getOrInitializeDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { withStreamProcessorRunner } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor-runner";
+import { jsonataReactorEventTypes } from "@iterate-com/shared/stream-processors/jsonata-reactor/contract";
 import type { ProcessorStreamApi, StreamEvent } from "@iterate-com/shared/stream-processors";
 import {
   getInitializedStreamStub,
@@ -20,6 +22,11 @@ import {
 } from "@iterate-com/shared/streams/types";
 import { typeid } from "@iterate-com/shared/typeid";
 import { AppConfig } from "~/app.ts";
+import {
+  AGENTS_STREAM_PATH,
+  type AgentDurableObject,
+  getAgentDurableObjectName,
+} from "~/domains/agents/durable-objects/agent-durable-object.ts";
 import { deleteIngressRoutesByProject, upsertIngressRoute } from "~/db/queries/.generated/index.ts";
 import {
   dispatchFetchCallable,
@@ -69,6 +76,7 @@ export type ProjectAccessPrincipal = {
 };
 
 type ProjectEnv = {
+  AGENT: DurableObjectNamespace<AgentDurableObject>;
   APP_CONFIG: string;
   DB: D1Database;
   DO_CATALOG: D1Database;
@@ -159,6 +167,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
 
     this.registerOnFirstInitialize(async (params) => {
       await this.ensureProjectLifecycleSubscription(params.projectId);
+      await this.ensureAgentsRoot(params.projectId);
       await this.catchUpStreamProcessor({ signal: AbortSignal.timeout(30_000) });
     });
   }
@@ -204,6 +213,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     await this.writeIngressRoutes({ hosts, projectId: input.projectId });
     const summary = this.requireSummary();
     await this.writeProjectCreatedLifecycleEvent(summary);
+    await this.writeAgentsRootRule(summary);
 
     return summary;
   }
@@ -427,6 +437,50 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
         hosts: summary.hosts,
         projectId: summary.id,
         slug: summary.slug,
+      },
+    });
+  }
+
+  private async ensureAgentsRoot(projectId: string) {
+    await getOrInitializeDoStub({
+      namespace: this.env.AGENT,
+      name: getAgentDurableObjectName({
+        agentPath: AGENTS_STREAM_PATH,
+        projectId,
+      }),
+    });
+  }
+
+  private async writeAgentsRootRule(summary: ProjectSummary) {
+    const stream = await getInitializedStreamStub({
+      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+      namespace: summary.id,
+      path: AGENTS_STREAM_PATH,
+    });
+
+    await stream.append({
+      type: jsonataReactorEventTypes.ruleConfigured,
+      idempotencyKey: `agents-child-stream-setup:${summary.id}`,
+      payload: {
+        slug: "agents-child-stream-setup",
+        matcher: "type = 'events.iterate.com/core/child-stream-created'",
+        reactions: [
+          {
+            type: "append-events",
+            events: `[
+              {
+                "streamPath": payload.childPath,
+                "event": {
+                  "type": "events.iterate.com/agent/system-prompt-updated",
+                  "payload": {
+                    "systemPrompt": "You are an agent inside this Iterate OS2 project. Codemode is available and should be used for user-visible answers. Reply with exactly one fenced JavaScript code block and no surrounding prose. The block must evaluate to an async function, usually async (ctx) => { ... }. Use ctx.streams.append({ event: { type: 'events.iterate.com/agent-chat/assistant-response-added', payload: { channel: 'web', message: 'your message' } } }) to send visible chat replies. Return a non-undefined value only when the code result itself should be shown to the user. Use fetch for HTTP requests and ctx.streams for project-local streams."
+                  },
+                  "idempotencyKey": "agent-default-system-prompt"
+                }
+              }
+            ]`,
+          },
+        ],
       },
     });
   }
