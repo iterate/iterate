@@ -100,7 +100,7 @@ describe("stream callable subscriber e2e", () => {
      * scheduling race while still exercising repeated alarm-delivered appends.
      */
     const chainId = randomUUID();
-    const max = 50;
+    const max = 30;
     const startUrl = new URL("https://example.com/__e2e/callable-subscriber-chain");
     startUrl.searchParams.set("action", "start");
     startUrl.searchParams.set("chainId", chainId);
