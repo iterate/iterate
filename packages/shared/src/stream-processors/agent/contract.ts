@@ -53,6 +53,14 @@ export const AgentProcessorContract = defineProcessorContract({
   },
   processorDeps: [...standardProcessorBehavior.processorDeps],
   events: {
+    "events.iterate.com/codemode/tool-provider-registered": {
+      description: "Model-visible instructions and invocation mode for codemode tool functions.",
+      payloadSchema: z.object({
+        instructions: z.string().trim().min(1),
+        invocation: z.unknown(),
+        path: z.array(z.string().min(1)).min(1),
+      }),
+    },
     "events.iterate.com/agent/system-prompt-updated": {
       description: "Updates the system prompt used for future LLM requests.",
       payloadSchema: z.object({ systemPrompt: z.string() }),
@@ -186,6 +194,7 @@ export const AgentProcessorContract = defineProcessorContract({
   },
   consumes: [
     ...standardProcessorBehavior.consumes,
+    "events.iterate.com/codemode/tool-provider-registered",
     "events.iterate.com/agent/system-prompt-updated",
     "events.iterate.com/agent/input-added",
     "events.iterate.com/agent/output-added",
@@ -215,6 +224,7 @@ export const AgentProcessorContract = defineProcessorContract({
 
     switch (event.type) {
       case CoreProcessorRegisteredEventType:
+      case "events.iterate.com/codemode/tool-provider-registered":
         return nextState;
       case "events.iterate.com/agent/system-prompt-updated":
         return { ...nextState, systemPrompt: event.payload.systemPrompt };

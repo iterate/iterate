@@ -27,6 +27,7 @@ import {
   type AgentDurableObject,
   getAgentDurableObjectName,
 } from "~/domains/agents/durable-objects/agent-durable-object.ts";
+import { defaultAgentSystemPrompt } from "~/domains/agents/agent-presets.ts";
 import { deleteIngressRoutesByProject, upsertIngressRoute } from "~/db/queries/.generated/index.ts";
 import {
   dispatchFetchCallable,
@@ -473,9 +474,9 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
                 "event": {
                   "type": "events.iterate.com/agent/system-prompt-updated",
                   "payload": {
-                    "systemPrompt": "You are an agent inside this Iterate OS2 project. Codemode is available and should be used for user-visible answers. Reply with exactly one fenced JavaScript code block and no surrounding prose. The block must evaluate to an async function, usually async (ctx) => { ... }. Use ctx.chat.sendMessage({ message: 'your message' }) to send visible chat replies. Return a non-undefined value only when the code result itself should be shown to the user. Use fetch for HTTP requests and ctx.streams for project-local streams."
+                    "systemPrompt": ${JSON.stringify(defaultAgentSystemPrompt())}
                   },
-                  "idempotencyKey": "agent-default-system-prompt"
+                  "idempotencyKey": "agent-default-system-prompt-v2"
                 }
               }
             ]`,

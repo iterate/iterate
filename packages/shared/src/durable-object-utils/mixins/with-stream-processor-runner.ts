@@ -37,6 +37,7 @@ type RunnerContract<Contract> = {
   events: EventCatalog;
   processorDeps?: readonly unknown[];
   consumes: readonly string[];
+  consumesAllEvents?: true;
   reduce?: (args: {
     contract: Contract;
     state: ProcessorState<Contract>;
@@ -243,6 +244,9 @@ export function withStreamProcessorRunner<
       }): Promise<StreamProcessorRunnerState<Contract>> {
         await this.ensureStarted();
         const processor = this.streamProcessorRunnerProcessor();
+        if (!processorConsumesEvent({ processor, eventType: args.event.type })) {
+          return this.loadStreamProcessorStoredState(processor);
+        }
         const storedState = this.loadStreamProcessorStoredState(processor);
 
         return await consumeLiveProcessorEvent({
@@ -398,6 +402,16 @@ export function withStreamProcessorRunner<
 
 function storageKey(processor: { contract: { slug: string } }): string {
   return `stream-processor:${processor.contract.slug}:stored-state`;
+}
+
+function processorConsumesEvent<Contract extends RunnerContract<Contract>>(args: {
+  processor: Processor<Contract>;
+  eventType: string;
+}): boolean {
+  return (
+    args.processor.contract.consumesAllEvents === true ||
+    args.processor.contract.consumes.includes(args.eventType)
+  );
 }
 
 function getStoredProcessorStateSchema<Contract extends RunnerContract<Contract>>(

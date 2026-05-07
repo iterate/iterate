@@ -163,6 +163,8 @@ export const CodemodeProcessorContract = defineProcessorContract({
     switch (event.type) {
       case CoreProcessorRegisteredEventType:
         return nextState;
+      case "events.iterate.com/codemode/tool-provider-registered":
+        break;
       case "events.iterate.com/agent/input-added":
         if (event.idempotencyKey === CODEMODE_PRIMER_IDEMPOTENCY_KEY) {
           return { ...nextState, hasAppendedCodemodePrompt: true };

@@ -275,6 +275,7 @@ export function withStreamProcessor<
         const signal = args.signal ?? new AbortController().signal;
         await Promise.all(
           [...this.#processors.values()].map(async (processor) => {
+            if (!processorConsumesEvent({ processor, eventType: args.event.type })) return;
             await this.consumeForProcessor({
               event: args.event,
               processor,
@@ -566,6 +567,16 @@ function parseStorageKey(key: string): { processorSlug: string; streamPath: stri
     streamPath: decodeURIComponent(match[1] ?? ""),
     processorSlug: match[2] ?? "",
   };
+}
+
+function processorConsumesEvent(args: {
+  processor: RegisteredProcessor;
+  eventType: string;
+}): boolean {
+  return (
+    args.processor.contract.consumesAllEvents === true ||
+    args.processor.contract.consumes.includes(args.eventType)
+  );
 }
 
 function localAppendKey(event: Pick<StreamEvent, "offset" | "streamPath">) {

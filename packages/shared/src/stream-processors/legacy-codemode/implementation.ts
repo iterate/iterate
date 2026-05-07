@@ -68,6 +68,7 @@ export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
         case "events.iterate.com/agent/llm-request-queued":
         case "events.iterate.com/agent/status-updated":
         case "events.iterate.com/agent/input-added":
+        case "events.iterate.com/codemode/tool-provider-registered":
           return;
         case "events.iterate.com/agent/output-added": {
           const script = extractCodemodeScriptFromAssistantResponse(event.payload.content);

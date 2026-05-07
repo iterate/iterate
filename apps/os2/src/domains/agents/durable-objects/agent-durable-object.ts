@@ -34,6 +34,14 @@ import {
 } from "~/domains/codemode/codemode-session-rpc.ts";
 import type { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
+import {
+  defaultAgentSetupEvents,
+  defaultAgentSystemPrompt,
+  OS2_AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE,
+  readAgentPathPrefixPresets,
+  selectAgentPathPrefixPreset,
+  type AgentLlmProvider,
+} from "~/domains/agents/agent-presets.ts";
 
 export const AGENTS_STREAM_PATH = StreamPath.parse("/agents");
 
@@ -106,13 +114,15 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       if (params.agentPath === AGENTS_STREAM_PATH) {
         this.registerStreamProcessor(createJsonataReactorProcessor());
       } else {
+        await this.ensureAgentSetupEvents(params);
+        const llmProvider = await this.resolveLlmProvider(params);
         this.registerStreamProcessor(createAgentChatProcessor());
         this.registerStreamProcessor(
           createAgentProcessor({
             waitUntil: (promise) => this.waitUntilStreamProcessor(promise),
           }),
         );
-        this.registerStreamProcessor(this.createDefaultLlmProcessor());
+        this.registerStreamProcessor(this.createLlmProcessor(llmProvider));
         await this.ensureCodemodeSession(params);
       }
       await this.ensureAgentSubscription(params);
@@ -211,6 +221,66 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     });
   }
 
+  private async ensureAgentSetupEvents(params: AgentDurableObjectStructuredName) {
+    const streamApi = this.streamsEntrypoint(params.agentPath);
+    const events = await streamApi.read({ afterOffset: "start", beforeOffset: "end" });
+    const rootEvents = await this.streamsEntrypoint(AGENTS_STREAM_PATH).read({
+      afterOffset: "start",
+      beforeOffset: "end",
+    });
+    const preset = selectAgentPathPrefixPreset({
+      agentPath: params.agentPath,
+      presets: readAgentPathPrefixPresets(rootEvents),
+    });
+    const defaultProvider = readOpenAiApiKey(this.env as Record<string, unknown>).trim()
+      ? "openai-ws"
+      : "cloudflare-ai";
+    const setupEvents = preset?.events ?? defaultAgentSetupEvents(defaultProvider);
+    const hasSetupPrompt = setupEvents.some(
+      (event) => event.type === "events.iterate.com/agent/system-prompt-updated",
+    );
+
+    for (const [index, event] of setupEvents.entries()) {
+      const idempotencyKey = `os2-agent-setup:${normalizeIdempotencyKeyPart(
+        preset?.basePath ?? "default",
+      )}:${index}:${event.type}`;
+      if (events.some((existingEvent) => existingEvent.idempotencyKey === idempotencyKey)) {
+        continue;
+      }
+      if (preset == null && hasEquivalentDefaultSetupEvent({ event, existingEvents: events })) {
+        continue;
+      }
+      await streamApi.append({
+        event: {
+          idempotencyKey,
+          payload: event.payload,
+          type: event.type,
+        },
+      });
+    }
+
+    const lastPrompt = [...events]
+      .reverse()
+      .find((event) => event.type === "events.iterate.com/agent/system-prompt-updated");
+    const systemPromptPayload = lastPrompt?.payload as { systemPrompt?: unknown } | undefined;
+    const systemPrompt =
+      typeof systemPromptPayload?.systemPrompt === "string" ? systemPromptPayload.systemPrompt : "";
+    if (
+      !hasSetupPrompt &&
+      (!systemPrompt || systemPrompt.includes("ctx.streams.append({ event:"))
+    ) {
+      await streamApi.append({
+        event: {
+          type: "events.iterate.com/agent/system-prompt-updated",
+          idempotencyKey: "agent-default-system-prompt-v2",
+          payload: {
+            systemPrompt: defaultAgentSystemPrompt(),
+          },
+        },
+      });
+    }
+  }
+
   private async handleAgentOutputAddedForCodemode(event: Event) {
     if (this.structuredName.agentPath === AGENTS_STREAM_PATH) return;
     if (event.type !== "events.iterate.com/agent/output-added") return;
@@ -302,7 +372,44 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     };
   }
 
-  private createDefaultLlmProcessor() {
+  private async resolveLlmProvider(
+    params: AgentDurableObjectStructuredName,
+  ): Promise<AgentLlmProvider> {
+    const rootEvents = await this.streamsEntrypoint(AGENTS_STREAM_PATH).read({
+      afterOffset: "start",
+      beforeOffset: "end",
+    });
+    const preset = selectAgentPathPrefixPreset({
+      agentPath: params.agentPath,
+      presets: readAgentPathPrefixPresets(rootEvents),
+    });
+    const presetProvider = preset?.events
+      .toReversed()
+      .map((event) => (event.payload as { provider?: unknown }).provider)
+      .find((provider) => provider === "cloudflare-ai" || provider === "openai-ws");
+    if (presetProvider === "cloudflare-ai" || presetProvider === "openai-ws") {
+      return presetProvider;
+    }
+
+    const events = await this.streamsEntrypoint(params.agentPath).read({
+      afterOffset: "start",
+      beforeOffset: "end",
+    });
+    for (const event of events.toReversed()) {
+      if (event.type !== OS2_AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE) continue;
+      const provider = (event.payload as { provider?: unknown }).provider;
+      if (provider === "cloudflare-ai" || provider === "openai-ws") return provider;
+    }
+    return readOpenAiApiKey(this.env as Record<string, unknown>) ? "openai-ws" : "cloudflare-ai";
+  }
+
+  private createLlmProcessor(provider: AgentLlmProvider) {
+    if (provider === "cloudflare-ai") {
+      return createCloudflareAiProcessor({
+        ai: this.env.AI,
+      });
+    }
+
     const apiKey = readOpenAiApiKey(this.env as Record<string, unknown>);
     if (apiKey.trim() !== "") {
       return createOpenAiWsProcessor({
@@ -323,6 +430,26 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       streamPath,
     });
   }
+}
+
+function normalizeIdempotencyKeyPart(value: string) {
+  return value.replace(/[^a-zA-Z0-9._/-]+/g, "-");
+}
+
+function hasEquivalentDefaultSetupEvent(input: {
+  event: { type: string };
+  existingEvents: readonly { payload: unknown; type: string }[];
+}) {
+  if (input.event.type === "events.iterate.com/agent/system-prompt-updated") {
+    return input.existingEvents.some((event) => {
+      if (event.type !== input.event.type) return false;
+      const systemPrompt = (event.payload as { systemPrompt?: unknown }).systemPrompt;
+      return (
+        typeof systemPrompt === "string" && !systemPrompt.includes("ctx.streams.append({ event:")
+      );
+    });
+  }
+  return input.existingEvents.some((event) => event.type === input.event.type);
 }
 
 function readOpenAiApiKey(env: Record<string, unknown>) {

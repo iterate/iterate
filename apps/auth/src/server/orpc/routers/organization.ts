@@ -1,5 +1,4 @@
 import { ORPCError } from "@orpc/server";
-import { and, eq } from "drizzle-orm";
 import { slugify } from "@iterate-com/shared/slug";
 import {
   organizationAdminMiddleware,
@@ -7,36 +6,55 @@ import {
   os,
   protectedMiddleware,
 } from "../orpc.ts";
-import { schema } from "../../db/index.ts";
+import {
+  deleteInviteByIdAndOrganizationId,
+  deleteMembershipByOrganizationAndUserId,
+  deleteOrganizationById,
+  getInviteByOrganizationAndEmail,
+  getMembershipByOrganizationAndUserId,
+  getOrganizationBySlug,
+  getOrganizationMemberPresenceByEmail,
+  getPendingInviteByIdAndEmail,
+  insertInvite,
+  insertMembership,
+  insertOrganization,
+  listInvitesByOrganizationId,
+  listMembersByOrganizationId,
+  listPendingInvitesByEmail,
+  updateInviteStatusById,
+  updateMembershipRoleByOrganizationAndUserId,
+  updateOrganizationNameById,
+} from "../../db/queries/index.ts";
 import { generateId, toMembershipRole, toOrganizationRecord, toUserRecord } from "./_shared.ts";
 
 const create = os.organization.create
   .use(protectedMiddleware)
   .handler(async ({ context, input }) => {
     const baseSlug = slugify(input.name);
-    const existing = await context.db.query.organization.findFirst({
-      where: eq(schema.organization.slug, baseSlug),
-    });
+    const existing = await getOrganizationBySlug(context.db, { slug: baseSlug });
     if (existing) {
       throw new ORPCError("CONFLICT", { message: "An organization with this slug already exists" });
     }
 
     const organizationId = generateId("org");
-    await context.db.insert(schema.organization).values({
-      id: organizationId,
-      name: input.name,
-      slug: baseSlug,
-      createdAt: new Date(),
-      metadata: null,
-      logo: null,
-    });
+    const now = Date.now();
+    await context.db.transaction(async (tx) => {
+      await insertOrganization(tx, {
+        id: organizationId,
+        name: input.name,
+        slug: baseSlug,
+        createdAt: now,
+        metadata: null,
+        logo: null,
+      });
 
-    await context.db.insert(schema.member).values({
-      id: generateId("member"),
-      organizationId,
-      userId: context.user.id,
-      role: "owner",
-      createdAt: new Date(),
+      await insertMembership(tx, {
+        id: generateId("member"),
+        organizationId,
+        userId: context.user.id,
+        role: "owner",
+        createdAt: now,
+      });
     });
 
     return {
@@ -65,12 +83,15 @@ const bySlug = os.organization.bySlug
 const update = os.organization.update
   .use(organizationAdminMiddleware)
   .handler(async ({ context, input }) => {
-    await context.db
-      .update(schema.organization)
-      .set({
+    await updateOrganizationNameById(
+      context.db,
+      {
         name: input.name,
-      })
-      .where(eq(schema.organization.id, context.organization.id));
+      },
+      {
+        id: context.organization.id,
+      },
+    );
 
     return {
       id: context.organization.id,
@@ -88,9 +109,7 @@ const remove = os.organization.delete
       throw new ORPCError("FORBIDDEN", { message: "Only owners can delete organizations" });
     }
 
-    await context.db
-      .delete(schema.organization)
-      .where(eq(schema.organization.id, context.organization.id));
+    await deleteOrganizationById(context.db, { id: context.organization.id });
 
     return { success: true as const };
   });
@@ -98,18 +117,21 @@ const remove = os.organization.delete
 const members = os.organization.members
   .use(organizationScopedMiddleware)
   .handler(async ({ context }) => {
-    const members = await context.db.query.member.findMany({
-      where: eq(schema.member.organizationId, context.organization.id),
-      with: {
-        user: true,
-      },
+    const members = await listMembersByOrganizationId(context.db, {
+      organizationId: context.organization.id,
     });
 
     return members.map((member) => ({
       id: member.id,
       userId: member.userId,
       role: toMembershipRole(member.role),
-      user: toUserRecord(member.user),
+      user: toUserRecord({
+        id: member.userId,
+        name: member.userName,
+        email: member.userEmail,
+        image: member.userImage ?? null,
+        role: member.userRole ?? null,
+      }),
     }));
   });
 
@@ -128,17 +150,16 @@ const updateMemberRole = os.organization.updateMemberRole
       throw new ORPCError("FORBIDDEN", { message: "Only owners can promote to owner" });
     }
 
-    await context.db
-      .update(schema.member)
-      .set({
+    await updateMembershipRoleByOrganizationAndUserId(
+      context.db,
+      {
         role: input.role,
-      })
-      .where(
-        and(
-          eq(schema.member.organizationId, context.organization.id),
-          eq(schema.member.userId, input.userId),
-        ),
-      );
+      },
+      {
+        organizationId: context.organization.id,
+        userId: input.userId,
+      },
+    );
 
     return { success: true as const };
   });
@@ -150,11 +171,9 @@ const removeMember = os.organization.removeMember
       throw new ORPCError("FORBIDDEN", { message: "Cannot remove yourself" });
     }
 
-    const targetMembership = await context.db.query.member.findFirst({
-      where: and(
-        eq(schema.member.organizationId, context.organization.id),
-        eq(schema.member.userId, input.userId),
-      ),
+    const targetMembership = await getMembershipByOrganizationAndUserId(context.db, {
+      organizationId: context.organization.id,
+      userId: input.userId,
     });
 
     if (
@@ -165,14 +184,10 @@ const removeMember = os.organization.removeMember
       throw new ORPCError("FORBIDDEN", { message: "Only owners can remove other owners" });
     }
 
-    await context.db
-      .delete(schema.member)
-      .where(
-        and(
-          eq(schema.member.organizationId, context.organization.id),
-          eq(schema.member.userId, input.userId),
-        ),
-      );
+    await deleteMembershipByOrganizationAndUserId(context.db, {
+      organizationId: context.organization.id,
+      userId: input.userId,
+    });
 
     return { success: true as const };
   });
@@ -180,37 +195,32 @@ const removeMember = os.organization.removeMember
 const createInvite = os.organization.createInvite
   .use(organizationAdminMiddleware)
   .handler(async ({ context, input }) => {
-    const existingInvite = await context.db.query.invitation.findFirst({
-      where: and(
-        eq(schema.invitation.organizationId, context.organization.id),
-        eq(schema.invitation.email, input.email),
-      ),
+    const existingInvite = await getInviteByOrganizationAndEmail(context.db, {
+      organizationId: context.organization.id,
+      email: input.email,
     });
     if (existingInvite) {
       throw new ORPCError("CONFLICT", { message: "Invite already exists" });
     }
 
-    const existingMember = await context.db.query.user.findFirst({
-      where: eq(schema.user.email, input.email),
-      with: {
-        members: true,
-      },
+    const existingMember = await getOrganizationMemberPresenceByEmail(context.db, {
+      organizationId: context.organization.id,
+      email: input.email,
     });
-    if (
-      existingMember?.members.some((member) => member.organizationId === context.organization.id)
-    ) {
+    if (existingMember) {
       throw new ORPCError("CONFLICT", { message: "User is already a member" });
     }
 
     const inviteId = generateId("inv");
     const role = input.role ?? "member";
-    await context.db.insert(schema.invitation).values({
+    await insertInvite(context.db, {
       id: inviteId,
       organizationId: context.organization.id,
       email: input.email,
       role,
       status: "pending",
-      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
+      createdAt: Date.now(),
       inviterId: context.user.id,
     });
 
@@ -229,23 +239,23 @@ const createInvite = os.organization.createInvite
 const listInvites = os.organization.listInvites
   .use(organizationScopedMiddleware)
   .handler(async ({ context }) => {
-    const invites = await context.db.query.invitation.findMany({
-      where: eq(schema.invitation.organizationId, context.organization.id),
-      with: {
-        organization: true,
-        user: true,
-      },
+    const invites = await listInvitesByOrganizationId(context.db, {
+      organizationId: context.organization.id,
     });
 
     return invites.map((invite) => ({
       id: invite.id,
       email: invite.email,
       role: toMembershipRole(invite.role),
-      organization: toOrganizationRecord(invite.organization),
+      organization: toOrganizationRecord({
+        id: invite.organizationRecordId,
+        name: invite.organizationName,
+        slug: invite.organizationSlug,
+      }),
       invitedBy: {
-        id: invite.user.id,
-        name: invite.user.name,
-        email: invite.user.email,
+        id: invite.inviterId,
+        name: invite.inviterName,
+        email: invite.inviterEmail,
       },
     }));
   });
@@ -253,14 +263,10 @@ const listInvites = os.organization.listInvites
 const cancelInvite = os.organization.cancelInvite
   .use(organizationAdminMiddleware)
   .handler(async ({ context, input }) => {
-    await context.db
-      .delete(schema.invitation)
-      .where(
-        and(
-          eq(schema.invitation.id, input.inviteId),
-          eq(schema.invitation.organizationId, context.organization.id),
-        ),
-      );
+    await deleteInviteByIdAndOrganizationId(context.db, {
+      id: input.inviteId,
+      organizationId: context.organization.id,
+    });
 
     return { success: true as const };
   });
@@ -268,25 +274,22 @@ const cancelInvite = os.organization.cancelInvite
 const myPendingInvites = os.organization.myPendingInvites
   .use(protectedMiddleware)
   .handler(async ({ context }) => {
-    const invites = await context.db.query.invitation.findMany({
-      where: and(
-        eq(schema.invitation.email, context.user.email),
-        eq(schema.invitation.status, "pending"),
-      ),
-      with: {
-        organization: true,
-        user: true,
-      },
+    const invites = await listPendingInvitesByEmail(context.db, {
+      email: context.user.email,
     });
 
     return invites.map((invite) => ({
       id: invite.id,
       email: invite.email,
       role: toMembershipRole(invite.role),
-      organization: toOrganizationRecord(invite.organization),
+      organization: toOrganizationRecord({
+        id: invite.organizationRecordId,
+        name: invite.organizationName,
+        slug: invite.organizationSlug,
+      }),
       invitedBy: {
-        id: invite.user.id,
-        name: invite.user.name,
+        id: invite.inviterId,
+        name: invite.inviterName,
       },
     }));
   });
@@ -294,62 +297,67 @@ const myPendingInvites = os.organization.myPendingInvites
 const acceptInvite = os.organization.acceptInvite
   .use(protectedMiddleware)
   .handler(async ({ context, input }) => {
-    const invite = await context.db.query.invitation.findFirst({
-      where: and(
-        eq(schema.invitation.id, input.inviteId),
-        eq(schema.invitation.email, context.user.email),
-        eq(schema.invitation.status, "pending"),
-      ),
-      with: {
-        organization: true,
-      },
+    const invite = await getPendingInviteByIdAndEmail(context.db, {
+      id: input.inviteId,
+      email: context.user.email,
     });
     if (!invite) {
       throw new ORPCError("NOT_FOUND", { message: "Invite not found" });
     }
 
-    const existingMembership = await context.db.query.member.findFirst({
-      where: and(
-        eq(schema.member.organizationId, invite.organizationId),
-        eq(schema.member.userId, context.user.id),
-      ),
+    const existingMembership = await getMembershipByOrganizationAndUserId(context.db, {
+      organizationId: invite.organizationId,
+      userId: context.user.id,
     });
-    if (!existingMembership) {
-      await context.db.insert(schema.member).values({
-        id: generateId("member"),
-        organizationId: invite.organizationId,
-        userId: context.user.id,
-        role: invite.role ?? "member",
-        createdAt: new Date(),
-      });
-    }
+    await context.db.transaction(async (tx) => {
+      if (!existingMembership) {
+        await insertMembership(tx, {
+          id: generateId("member"),
+          organizationId: invite.organizationId,
+          userId: context.user.id,
+          role: invite.role ?? "member",
+          createdAt: Date.now(),
+        });
+      }
 
-    await context.db
-      .update(schema.invitation)
-      .set({ status: "accepted" })
-      .where(eq(schema.invitation.id, invite.id));
+      await updateInviteStatusById(
+        tx,
+        {
+          status: "accepted",
+        },
+        {
+          id: invite.id,
+        },
+      );
+    });
 
-    return toOrganizationRecord(invite.organization);
+    return toOrganizationRecord({
+      id: invite.organizationRecordId,
+      name: invite.organizationName,
+      slug: invite.organizationSlug,
+    });
   });
 
 const declineInvite = os.organization.declineInvite
   .use(protectedMiddleware)
   .handler(async ({ context, input }) => {
-    const invite = await context.db.query.invitation.findFirst({
-      where: and(
-        eq(schema.invitation.id, input.inviteId),
-        eq(schema.invitation.email, context.user.email),
-        eq(schema.invitation.status, "pending"),
-      ),
+    const invite = await getPendingInviteByIdAndEmail(context.db, {
+      id: input.inviteId,
+      email: context.user.email,
     });
     if (!invite) {
       throw new ORPCError("NOT_FOUND", { message: "Invite not found" });
     }
 
-    await context.db
-      .update(schema.invitation)
-      .set({ status: "declined" })
-      .where(eq(schema.invitation.id, invite.id));
+    await updateInviteStatusById(
+      context.db,
+      {
+        status: "declined",
+      },
+      {
+        id: invite.id,
+      },
+    );
 
     return { success: true as const };
   });
@@ -357,14 +365,10 @@ const declineInvite = os.organization.declineInvite
 const leave = os.organization.leave
   .use(organizationScopedMiddleware)
   .handler(async ({ context }) => {
-    await context.db
-      .delete(schema.member)
-      .where(
-        and(
-          eq(schema.member.organizationId, context.organization.id),
-          eq(schema.member.userId, context.user.id),
-        ),
-      );
+    await deleteMembershipByOrganizationAndUserId(context.db, {
+      organizationId: context.organization.id,
+      userId: context.user.id,
+    });
 
     return { success: true as const };
   });

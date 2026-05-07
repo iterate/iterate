@@ -82,6 +82,19 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
         case "events.iterate.com/agent/llm-request-scheduled":
         case "events.iterate.com/agent/status-updated":
           return;
+        case "events.iterate.com/codemode/tool-provider-registered":
+          await appendLlmEventContext({
+            streamApi,
+            event,
+            key: "render-codemode-tool-provider-registered",
+            content: toolProviderRegisteredEventBlock({
+              instructions: event.payload.instructions,
+              offset: event.offset,
+              path: event.payload.path,
+              type: event.type,
+            }),
+          });
+          return;
         case "events.iterate.com/agent/input-added":
           await handleAgentInputAddedForLlmRequest({
             event,
@@ -517,6 +530,13 @@ function eventTypeExplanation(eventType: string): string | null {
       meaning: "The current LLM request reached a terminal success or failure result.",
     });
   }
+  if (eventType === "events.iterate.com/codemode/tool-provider-registered") {
+    return eventTypeExplanationBlock({
+      type: eventType,
+      meaning:
+        "A codemode tool provider became available. Its path and instructions should be used when writing codemode scripts.",
+    });
+  }
   return null;
 }
 
@@ -549,4 +569,22 @@ function yamlScalar(value: string | number): string {
 
 function yamlBlockScalar(key: string, value: string): string[] {
   return [`  ${key}: |-`, ...value.split("\n").map((line) => `    ${line}`)];
+}
+
+function toolProviderRegisteredEventBlock(args: {
+  instructions: string;
+  offset: number;
+  path: readonly string[];
+  type: string;
+}): string {
+  const yamlLines = [
+    "event:",
+    `  offset: ${args.offset}`,
+    `  type: ${yamlScalar(args.type)}`,
+    "  payload:",
+    "    path:",
+    ...args.path.map((segment) => `      - ${yamlScalar(segment)}`),
+    ...yamlBlockScalar("instructions", args.instructions).map((line) => `  ${line}`),
+  ];
+  return ["```yaml", ...yamlLines, "```"].join("\n");
 }

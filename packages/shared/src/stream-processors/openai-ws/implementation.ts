@@ -79,7 +79,7 @@ export function createOpenAiWsProcessor(deps: OpenAiWsProcessorDeps) {
   let previousResponseId: string | null = null;
 
   return implementProcessor(OpenAiWsProcessorContract, {
-    async afterAppend({ event, state, streamApi }) {
+    async afterAppend({ event, state, streamApi, waitUntil }) {
       await standardProcessorBehavior.afterAppend({
         contract: OpenAiWsProcessorContract,
         state,
@@ -92,8 +92,8 @@ export function createOpenAiWsProcessor(deps: OpenAiWsProcessorDeps) {
         case "events.iterate.com/openai-ws/llm-request-started":
         case "events.iterate.com/openai-ws/llm-request-completed":
           return;
-        case "events.iterate.com/agent/llm-request-requested":
-          await executeOpenAiWsRequest({
+        case "events.iterate.com/agent/llm-request-requested": {
+          const request = executeOpenAiWsRequest({
             event,
             state,
             streamApi,
@@ -118,7 +118,13 @@ export function createOpenAiWsProcessor(deps: OpenAiWsProcessorDeps) {
               previousResponseId = responseId;
             },
           });
+          if (waitUntil == null) {
+            await request;
+          } else {
+            waitUntil(request);
+          }
           return;
+        }
         default:
           return assertNever(event);
       }

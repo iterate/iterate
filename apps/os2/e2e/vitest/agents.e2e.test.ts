@@ -27,6 +27,67 @@ afterEach(async () => {
 });
 
 describe("project agents codemode", () => {
+  it("can configure Cloudflare AI Gateway as the provider for an agent path prefix", async () => {
+    const baseUrl = requireBaseUrl();
+    const client = createClient(baseUrl);
+    const project = await createProject(client, "agent-cloudflare-preset");
+    const suffix = uniqueSuffix();
+    const basePath = `/agents/cloudflare-preset-${suffix}`;
+    const agentPath = `${basePath}/child`;
+
+    await client.project.agents.configurePreset({
+      basePath,
+      events: [],
+      model: "@cf/meta/llama-3.1-8b-instruct",
+      projectSlugOrId: project.id,
+      provider: "cloudflare-ai",
+      runOpts: { gateway: { id: "default" } },
+      systemPrompt: "Reply tersely. If you use codemode, call ctx.chat.sendMessage({ message }).",
+    });
+
+    const presets = await client.project.agents.listPresets({
+      projectSlugOrId: project.id,
+    });
+    expect(presets.presets).toContainEqual(
+      expect.objectContaining({
+        basePath,
+      }),
+    );
+
+    await client.project.agents.runtimeState({
+      agentPath,
+      projectSlugOrId: project.id,
+    });
+    await client.project.agents.sendMessage({
+      agentPath,
+      message: `cloudflare provider preset proof ${suffix}`,
+      projectSlugOrId: project.id,
+    });
+
+    const events = await readUntil({
+      agentPath,
+      client,
+      projectId: project.id,
+      afterOffset: "start",
+      predicate: (event) => event.type === "events.iterate.com/cloudflare-ai/llm-request-started",
+    });
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/os2-agent/llm-provider-selected",
+        payload: { provider: "cloudflare-ai" },
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/cloudflare-ai/llm-request-started",
+      }),
+    );
+    expect(
+      events.some((event) => event.type === "events.iterate.com/openai-ws/llm-request-started"),
+    ).toBe(false);
+  });
+
   it("lets codemode send visible agent responses through ctx.chat.sendMessage", async () => {
     const baseUrl = requireBaseUrl();
     const client = createClient(baseUrl);
