@@ -20,6 +20,7 @@ import {
   updateOAuthClientReferenceByClientId,
   updateVerifiedUserById,
 } from "../../db/queries/index.ts";
+import { BOOTSTRAP_SUPERADMIN_EMAIL } from "../../bootstrap-superadmin.ts";
 import {
   generateId,
   toMembershipRole,
@@ -27,7 +28,6 @@ import {
   toProjectRecord,
   toUserRecord,
 } from "./_shared.ts";
-import { BOOTSTRAP_SUPERADMIN_EMAIL } from "../../bootstrap-superadmin.ts";
 
 function extractCookieHeader(setCookieHeader: string | null): string | null {
   if (!setCookieHeader) return null;
