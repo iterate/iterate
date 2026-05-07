@@ -36,6 +36,7 @@ export const test = base.extend({
 });
 
 export async function login(page: Page, email: string) {
+  await page.context().clearCookies();
   await page.goto("/login");
   await page.getByText("Sign in with Iterate").click();
 
@@ -57,34 +58,12 @@ export async function login(page: Page, email: string) {
   await page.keyboard.type(TEST_OTP);
   await page.getByTestId("email-verify-button").click();
 
-  await Promise.race([
-    page.waitForURL((url) => url.pathname.endsWith("/consent"), { timeout: 10_000 }),
-    page.waitForURL(
-      (url) => !url.pathname.endsWith("/login") && !url.pathname.endsWith("/consent"),
-      {
-        timeout: 10_000,
-      },
-    ),
-  ]);
+  const postOtpDestination = await Promise.any([waitForConsent(page), waitForSignedInPage(page)]);
 
-  if (new URL(page.url()).pathname.endsWith("/consent")) {
-    const allowButton = page.getByRole("button", { name: "Allow" });
-    await allowButton.waitFor();
-    await allowButton.click();
+  if (postOtpDestination === "consent") {
+    await page.getByRole("button", { name: "Allow" }).click();
+    await waitForSignedInPage(page);
   }
-
-  await page.waitForURL(
-    (url) => !url.pathname.endsWith("/login") && !url.pathname.endsWith("/consent"),
-    {
-      timeout: 30_000,
-    },
-  );
-  await Promise.any([
-    page.getByRole("heading", { name: "Welcome to Iterate" }).waitFor(),
-    page.locator("[data-component='OrgSwitcher']").waitFor(),
-    page.getByLabel("Project name").waitFor(),
-    page.getByRole("heading", { name: "Pending invites" }).waitFor(),
-  ]);
 }
 
 export async function createOrganization(page: Page, orgName = `E2E Org ${Date.now()}`) {
@@ -138,4 +117,19 @@ async function waitForEnabledTestId(page: Page, testId: string) {
     const element = document.querySelector(`[data-testid="${value}"]`);
     return element instanceof HTMLButtonElement ? !element.disabled : element !== null;
   }, testId);
+}
+
+async function waitForConsent(page: Page) {
+  await page.getByRole("button", { name: "Allow" }).waitFor();
+  return "consent" as const;
+}
+
+async function waitForSignedInPage(page: Page) {
+  await Promise.any([
+    page.getByRole("heading", { name: "Welcome to Iterate" }).waitFor(),
+    page.locator("[data-component='OrgSwitcher']").waitFor(),
+    page.getByLabel("Project name").waitFor(),
+    page.getByRole("heading", { name: "Pending invites" }).waitFor(),
+  ]);
+  return "signed-in" as const;
 }

@@ -86,6 +86,9 @@ function IndexPage() {
       return orpcClient.organization.acceptInvite({ inviteId });
     },
     onSuccess: (org) => {
+      queryClient.invalidateQueries({
+        queryKey: orpc.organization.myPendingInvites.queryOptions().queryKey,
+      });
       toast.success(`Joined ${org.name}!`);
       navigate({ to: "/orgs/$organizationSlug", params: { organizationSlug: org.slug } });
     },
@@ -99,6 +102,9 @@ function IndexPage() {
       return orpcClient.organization.declineInvite({ inviteId });
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: orpc.organization.myPendingInvites.queryOptions().queryKey,
+      });
       toast.success("Invite declined");
     },
     onError: (error: Error) => {

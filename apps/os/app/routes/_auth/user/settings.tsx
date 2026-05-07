@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
+import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import { Mail, LogOut, Check, X } from "lucide-react";
@@ -36,6 +36,7 @@ export const Route = createFileRoute("/_auth/user/settings")({
 });
 
 function UserSettingsPage() {
+  const queryClient = useQueryClient();
   const { data: user } = useSuspenseQuery(orpc.user.me.queryOptions());
   const { data: memberships } = useSuspenseQuery(orpc.user.memberships.queryOptions());
   const { data: pendingInvites } = useSuspenseQuery(
@@ -60,6 +61,9 @@ function UserSettingsPage() {
       return orpcClient.organization.acceptInvite({ inviteId });
     },
     onSuccess: (org) => {
+      queryClient.invalidateQueries({
+        queryKey: orpc.organization.myPendingInvites.queryOptions().queryKey,
+      });
       toast.success(`Joined ${org.name}!`);
       navigate({ to: "/orgs/$organizationSlug", params: { organizationSlug: org.slug } });
     },
@@ -73,6 +77,9 @@ function UserSettingsPage() {
       return orpcClient.organization.declineInvite({ inviteId });
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: orpc.organization.myPendingInvites.queryOptions().queryKey,
+      });
       toast.success("Invite declined");
     },
     onError: (error) => {
