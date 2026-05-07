@@ -65,11 +65,11 @@ const create = os.project.create
 
     return toProjectRecord({
       id: created.id,
-      organizationId: created.organizationId,
+      organizationId: created.organization_id,
       name: created.name,
       slug: created.slug,
       metadata: parseProjectMetadata(created.metadata),
-      archivedAt: parseTimestampMs(created.archivedAt),
+      archivedAt: parseTimestampMs(created.archived_at),
     });
   });
 
@@ -93,11 +93,11 @@ const update = os.project.update.use(projectAdminMiddleware).handler(async ({ co
 
   return toProjectRecord({
     id: updated.id,
-    organizationId: updated.organizationId,
+    organizationId: updated.organization_id,
     name: updated.name,
     slug: updated.slug,
     metadata: parseProjectMetadata(updated.metadata),
-    archivedAt: parseTimestampMs(updated.archivedAt),
+    archivedAt: parseTimestampMs(updated.archived_at),
   });
 });
 

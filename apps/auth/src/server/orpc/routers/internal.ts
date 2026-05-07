@@ -208,7 +208,7 @@ const createForOrganization = os.internal.project.createForOrganization
 
     return toProjectRecord({
       id: created.id,
-      organizationId: created.organizationId,
+      organizationId: created.organization_id,
       name: created.name,
       slug: created.slug,
       metadata: parseProjectMetadata(created.metadata),
