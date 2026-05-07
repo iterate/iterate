@@ -26,6 +26,14 @@ const Search = z.object({
 export const Route = createFileRoute(
   "/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/$codemodeSessionName",
 )({
+  params: {
+    parse: (raw) => ({
+      codemodeSessionName: safeDecodeBase64Url(raw.codemodeSessionName),
+    }),
+    stringify: (parsed) => ({
+      codemodeSessionName: encodeBase64Url(parsed.codemodeSessionName),
+    }),
+  },
   validateSearch: Search,
   ssr: false,
   loader: async ({ context, location, params }) => {
@@ -277,4 +285,25 @@ function parseCodemodeEventFrame(frame: string): Event | null {
   if (!data) return null;
 
   return JSON.parse(data) as Event;
+}
+
+function encodeBase64Url(value: string): string {
+  return btoa(unescape(encodeURIComponent(value)))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+
+function decodeBase64Url(value: string): string {
+  const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+  return decodeURIComponent(escape(atob(base64)));
+}
+
+/** Decode base64url, falling back to the raw value for old-style URLs. */
+function safeDecodeBase64Url(value: string): string {
+  try {
+    return decodeBase64Url(value);
+  } catch {
+    return value;
+  }
 }
