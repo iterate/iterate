@@ -134,13 +134,15 @@ function EmailOtpSignIn({
   });
 
   const signInWithOtp = useMutation({
-    mutationFn: ({ address, code }: { address: string; code: string }) =>
-      authClient.signIn.emailOtp({
+    mutationFn: async ({ address, code }: { address: string; code: string }) => {
+      await authClient.signIn.emailOtp({
         email: address,
         otp: code,
-      }),
-    onSuccess: async () => {
-      const nextUrl = await getPostLoginRedirectUrl(redirectTo);
+      });
+
+      return getPostLoginRedirectUrl(redirectTo);
+    },
+    onSuccess: (nextUrl) => {
       window.location.assign(nextUrl);
     },
     onError: (error: Error) => {
@@ -269,6 +271,10 @@ async function getPostLoginRedirectUrl(fallbackRedirect: string) {
   const result = await authClient.oauth2.continue({
     postLogin: true,
   });
+
+  if (!result.url) {
+    throw new Error("Signed in, but couldn't finish the OAuth redirect");
+  }
 
   return result.url;
 }

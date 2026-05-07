@@ -176,5 +176,4 @@ create index "member_userId_idx" on member ("userId");
 create index "session_userId_idx" on session ("userId");
 create index "project_organizationId_idx" on project(organization_id);
 create unique index project_slug_uidx on project(slug);
-create unique index project_slug_unique on project(slug);
 create index verification_identifier_idx on verification (identifier);

@@ -57,4 +57,3 @@ CREATE TABLE "project" (
 
 CREATE UNIQUE INDEX project_slug_unique ON project(slug);
 CREATE INDEX project_organizationId_idx ON project(organization_id);
-CREATE UNIQUE INDEX project_slug_uidx ON project(slug);
