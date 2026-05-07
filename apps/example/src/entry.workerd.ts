@@ -30,7 +30,7 @@ export default {
       },
       async ({ log }) => {
         const url = new URL(request.url);
-        if (url.pathname.startsWith("/durable-objects/")) {
+        if (isCounterDurableObjectPublicPath(url.pathname)) {
           const durableObjectResponse = await routeDurableObjectRequest(request, [
             {
               namespaceSlug: COUNTER_DURABLE_OBJECT_NAMESPACE_SLUG,
@@ -65,3 +65,13 @@ export default {
 };
 
 export { ExampleCounter };
+
+function isCounterDurableObjectPublicPath(pathname: string) {
+  const namespacePrefix = `/durable-objects/${COUNTER_DURABLE_OBJECT_NAMESPACE_SLUG}/`;
+
+  return (
+    pathname.startsWith(`${namespacePrefix}by-name/`) ||
+    pathname.startsWith(`${namespacePrefix}by-id/`) ||
+    pathname.startsWith(`${namespacePrefix}by-init-params/`)
+  );
+}
