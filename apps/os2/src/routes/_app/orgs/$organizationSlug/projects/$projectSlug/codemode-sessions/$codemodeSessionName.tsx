@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
+import { ChevronRight } from "lucide-react";
 import type { Event } from "@iterate-com/shared/streams/types";
 import { StreamPath } from "@iterate-com/shared/streams/types";
+import { Button } from "@iterate-com/ui/components/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@iterate-com/ui/components/collapsible";
 import {
   processEventsWithViewReducer,
   rawPrettyEventsStreamViewReducer,
@@ -112,17 +119,29 @@ function CodemodeSessionPage() {
 
   return (
     <section className="flex min-h-0 flex-1 flex-col">
-      <div className="border-b p-4">
-        <div className="w-full max-w-7xl space-y-4">
-          <p className="font-mono text-xs text-muted-foreground">
+      <Collapsible defaultOpen={false} className="border-b">
+        <div className="flex items-center gap-2 p-4">
+          <p className="min-w-0 flex-1 font-mono text-xs text-muted-foreground">
             <EventsStreamPathLabel path={session.streamPath} />
           </p>
-          <ExistingCodemodeSessionControls
-            projectId={session.projectId}
-            streamPath={session.streamPath}
+          <CollapsibleTrigger
+            render={
+              <Button variant="ghost" size="sm">
+                <ChevronRight className="size-4 transition-transform [[data-panel-open]_&]:rotate-90" />
+                Append event
+              </Button>
+            }
           />
         </div>
-      </div>
+        <CollapsibleContent>
+          <div className="w-full max-w-7xl space-y-4 px-4 pb-4">
+            <ExistingCodemodeSessionControls
+              projectId={session.projectId}
+              streamPath={session.streamPath}
+            />
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
       <EventsStreamView
         className="min-h-0 flex-1"
         viewState={viewState}
