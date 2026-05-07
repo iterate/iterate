@@ -55,5 +55,5 @@ CREATE TABLE "project" (
   FOREIGN KEY (organization_id) REFERENCES organization(id) ON DELETE cascade
 );
 
-CREATE UNIQUE INDEX project_slug_unique ON project(slug);
+CREATE UNIQUE INDEX project_slug_uidx ON project(slug);
 CREATE INDEX project_organizationId_idx ON project(organization_id);
