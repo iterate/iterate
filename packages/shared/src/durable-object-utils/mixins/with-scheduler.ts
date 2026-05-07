@@ -16,9 +16,7 @@ import type {
   Constructor,
   DurableObjectClass,
   DurableObjectConstructor,
-  MembersOf,
-  ReqEnvOf,
-  StaticSide,
+  DurableObjectMixinResult,
 } from "./mixin-types.ts";
 import type { DurableObjectCoreProtected } from "./with-durable-object-core.ts";
 
@@ -160,10 +158,7 @@ type WithSchedulerResult<TBase extends DurableObjectClass> =
   //
   //   const Base = withScheduler<Init>()(withMultiplexedAlarms<Init>()(...));
   //   class Room extends Base<Env> {}
-  StaticSide<TBase> &
-    DurableObjectClass<ReqEnvOf<TBase>, MembersOf<TBase> & SchedulerMembers & SchedulerProtected> &
-    Constructor<SchedulerMembers> &
-    Constructor<SchedulerProtected>;
+  DurableObjectMixinResult<TBase, SchedulerMembers & SchedulerProtected>;
 
 type SchedulerRow = {
   key: string;

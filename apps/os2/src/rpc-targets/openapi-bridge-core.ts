@@ -1,6 +1,7 @@
 export interface OpenApiBridgeProps {
   specUrl: string;
   baseUrl: string;
+  headers?: Record<string, string>;
 }
 
 export type OpenApiBridgeInput = {
@@ -54,7 +55,10 @@ export async function executeOpenApiToolFunction(input: OpenApiBridgeInput) {
   const url = buildOpenApiRequestUrl(operation, payload as Record<string, unknown>, providerProps);
   const response = await fetch(url, {
     method: operation.method.toUpperCase(),
-    headers: operation.method !== "get" ? { "content-type": "application/json" } : undefined,
+    headers:
+      operation.method !== "get"
+        ? { ...providerProps.headers, "content-type": "application/json" }
+        : providerProps.headers,
     body: operation.method !== "get" && payload != null ? JSON.stringify(payload) : undefined,
   });
 
@@ -69,7 +73,7 @@ export async function executeOpenApiToolFunction(input: OpenApiBridgeInput) {
 }
 
 async function fetchOpenApiSpec(providerProps: OpenApiBridgeProps) {
-  const response = await fetch(providerProps.specUrl);
+  const response = await fetch(providerProps.specUrl, { headers: providerProps.headers });
   if (!response.ok) throw new Error(`Failed to fetch OpenAPI spec: ${response.status}`);
   return (await response.json()) as Record<string, unknown>;
 }

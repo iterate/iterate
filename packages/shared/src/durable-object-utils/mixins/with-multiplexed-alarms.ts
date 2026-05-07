@@ -10,9 +10,7 @@ import type {
   Constructor,
   DurableObjectClass,
   DurableObjectConstructor,
-  MembersOf,
-  ReqEnvOf,
-  StaticSide,
+  DurableObjectMixinResult,
 } from "./mixin-types.ts";
 import type { DurableObjectCoreProtected } from "./with-durable-object-core.ts";
 
@@ -106,13 +104,7 @@ type WithMultiplexedAlarmsResult<TBase extends DurableObjectClass> =
   // `withVoice()` return type, but our stack has multiple wrappers and env
   // lower-bounds, so the shared DurableObjectClass helper carries those through
   // without each mixin hand-writing a bespoke constructor.
-  StaticSide<TBase> &
-    DurableObjectClass<
-      ReqEnvOf<TBase>,
-      MembersOf<TBase> & MultiplexedAlarmsMembers & MultiplexedAlarmsProtected
-    > &
-    Constructor<MultiplexedAlarmsMembers> &
-    Constructor<MultiplexedAlarmsProtected>;
+  DurableObjectMixinResult<TBase, MultiplexedAlarmsMembers & MultiplexedAlarmsProtected>;
 
 type MultiplexedAlarmRow = {
   key: string;

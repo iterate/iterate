@@ -167,8 +167,8 @@ function StreamChildrenBreadcrumb({
   const [open, setOpen] = useState(false);
   const [newChildSegment, setNewChildSegment] = useState("");
   const streamsQuery = useQuery({
-    ...orpc.projects.streams.list.queryOptions({
-      input: { projectId: streamBreadcrumb.projectId },
+    ...orpc.project.streams.list.queryOptions({
+      input: { projectSlugOrId: streamBreadcrumb.projectId },
     }),
     staleTime: 10_000,
   });

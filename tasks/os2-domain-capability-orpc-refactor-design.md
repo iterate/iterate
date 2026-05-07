@@ -1,5 +1,5 @@
 ---
-state: open
+state: planned
 priority: high
 size: large
 dependsOn:
@@ -13,6 +13,10 @@ dependsOn:
 This is a collaborative design document for turning OS2 inside out around domain
 modules, project-bound capabilities, and a cleaner oRPC surface.
 
+This document is finalized enough to implement. There are no blocking design
+questions left; the remaining questions are small ownership/product follow-ups
+that should not stop the refactor.
+
 The target architecture is:
 
 1. A domain runtime owns durable state and core behavior.
@@ -21,7 +25,7 @@ The target architecture is:
 3. The oRPC layer validates untrusted user input, performs auth checks, resolves
    pretty route identifiers, and mostly proxies to project-bound capabilities.
 4. The codemode oRPC capability wraps the project-scoped oRPC layer back into a
-   project-bound Tool Provider by injecting the Project ID.
+   project-bound Tool Provider by injecting only the stable Project ID.
 5. Browser routes stay in TanStack route files. Domain modules may own reusable
    components, but not route files or page modules in this refactor.
 
@@ -53,7 +57,9 @@ The target architecture is:
   Project ID.
 - Codemode gets a project-bound view of `os.project.*` as `ctx.os.*`.
 - Codemode does not see or pass `projectSlugOrId`; the codemode oRPC capability
-  injects it from the current Project.
+  injects only the current Codemode Session's stable Project ID.
+- Codemode must not inject a Project Slug, even if the browser route used a
+  slug to reach the Project.
 - Codemode can call everything in the normal `os.project` router, not a special
   codemode-only router.
 - Codemode exposes all of `os.project.*`, not an allowlisted subset.
@@ -66,7 +72,7 @@ The target architecture is:
   other domain runtimes.
 - The codemode oRPC capability is intentionally a wrapper around the outer oRPC
   layer: it exposes the project-scoped oRPC subtree as a Tool Provider and
-  injects the bound Project ID.
+  injects only the bound stable Project ID.
 - Domain modules own Durable Object classes and WorkerEntrypoint capability
   classes.
 - `entry.workerd.ts` should only re-export domain-owned runtime classes and wire
@@ -530,7 +536,7 @@ Browser:
 
 Codemode:
   ctx.os.codemode.executeScript({ ... })
-    -> OrpcCapability injects projectSlugOrId = bound Project ID
+    -> OrpcCapability injects projectSlugOrId = bound stable Project ID
     -> same orpc.project.codemode.executeScript implementation
     -> Codemode Session Capability
     -> Codemode Session Durable Object
@@ -582,8 +588,7 @@ Codemode implementation rules:
 - The oRPC capability wraps project oRPC procedures; those procedures should
   still call their own domain capabilities after resolving untrusted input.
 - Inject `projectSlugOrId` into the input object before invoking the oRPC
-  handler.
-- The injected value should be the stable Project ID from the codemode session
+  handler, and inject only the stable Project ID from the codemode session
   props.
 - Caller-supplied `projectSlugOrId` must never override the bound Project ID.
 - Assume oRPC procedure inputs are objects, not positional args.
@@ -887,10 +892,8 @@ Manual smoke coverage:
 - Events preview can still append/read streams through its configured Stream
   Durable Object namespace.
 
-## Open Questions
+## Non-Blocking Follow-Ups
 
-- Should `os.projects.find` remain collection-level, or should a resolved
-  project details call also exist as `os.project.get({ projectSlugOrId })`?
 - Should project deletion/config update live on `os.projects` as lifecycle
   commands, or under `os.project` as project-scoped commands?
 - Should `ingress` be a `projects` subdomain for now, or a first-class
@@ -898,8 +901,6 @@ Manual smoke coverage:
 - When Slack becomes real product functionality in OS2, should it be
   `domains/slack` or remain under `domains/codemode` until it has installation
   and webhook config?
-- Should codemode reject user-supplied `projectSlugOrId` in `ctx.os.*` calls, or
-  silently overwrite it with the bound Project ID?
 
 ## Documentation
 
@@ -972,9 +973,10 @@ Codemode receives a project-bound view of the same router. Inside a codemode
 script, the model calls `ctx.os.streams.list({})` or
 `ctx.os.codemode.listSessions({})`. The codemode oRPC capability invokes the
 real `os.project` router underneath, but injects `projectSlugOrId` from the
-current Codemode Session's stable Project ID. The generated codemode schemas,
-types, and instructions hide `projectSlugOrId` because the script is already
-bound to one Project.
+current Codemode Session's stable Project ID. It never injects a slug and never
+allows caller-supplied `projectSlugOrId` to override the bound Project ID. The
+generated codemode schemas, types, and instructions hide `projectSlugOrId`
+because the script is already bound to one Project.
 
 Outbound MCP providers are exposed from the codemode point of view under
 `ctx.mcp.<serverName>`. The default provider set should include

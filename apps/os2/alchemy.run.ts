@@ -4,16 +4,14 @@ import { initAlchemy } from "@iterate-com/shared/alchemy/init";
 import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
 import type { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
 import manifest, { AppConfig } from "./src/app.ts";
-import type { CodemodeSession } from "./src/durable-objects/codemode-session.ts";
+import type { CodemodeSession } from "./src/domains/codemode/durable-objects/codemode-session.ts";
 import type { DebugAppendChainSubscriber } from "./src/durable-objects/debug-append-chain-subscriber.ts";
-import type { ProjectDurableObject } from "./src/durable-objects/project-durable-object.ts";
-import type { ProjectMcpServerConnection } from "./src/durable-objects/project-mcp-server-connection.ts";
-import type {
-  AgentDurableObject,
-  RepoDurableObject,
-  WorkspaceDurableObject,
-} from "./src/codemode/example-capabilities.ts";
-import type { OutboundMcpFromOurClientCapability } from "./src/rpc-targets/outbound-mcp-from-our-client-capability.ts";
+import type { ProjectDurableObject } from "./src/domains/projects/durable-objects/project-durable-object.ts";
+import type { ProjectMcpServerConnection } from "./src/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
+import type { AgentDurableObject } from "./src/domains/agents/durable-objects/agent-durable-object.ts";
+import type { RepoDurableObject } from "./src/domains/repos/durable-objects/repo-durable-object.ts";
+import type { WorkspaceDurableObject } from "./src/domains/workspaces/durable-objects/workspace-durable-object.ts";
+import type { OutboundMcpFromOurClientCapability } from "./src/domains/outbound-mcp-client/entrypoints/outbound-mcp-from-our-client-capability.ts";
 
 const ctx = await initAlchemy(manifest, AppConfig, process.env);
 const slackBotToken = ctx.runtimeConfig.slackBotToken?.exposeSecret();

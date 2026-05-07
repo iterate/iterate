@@ -1,18 +1,19 @@
 import { env } from "cloudflare:test";
 import { createCodemodeContext } from "@iterate-com/shared/codemode/context-proxy";
 import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
-import { type Event, type StreamPath } from "@iterate-com/shared/streams/types";
+import { type Event, type EventInput, type StreamPath } from "@iterate-com/shared/streams/types";
 import { getInitializedStreamStub } from "@iterate-com/shared/streams/helpers";
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
 import type { StreamProcessorRunnerState } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor-runner";
 import { describe, expect, test } from "vitest";
-import type { CodemodeSession } from "./codemode-session.ts";
+import type { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
+import { createCodemodeSessionStartupEvents } from "~/domains/codemode/codemode-session-rpc.ts";
 import {
   createExampleRpcProviderRegistration,
   createWorkspaceProviderRegistration,
-} from "~/codemode/example-capabilities.ts";
-import { findCodemodeExample, providersForCodemodeExample } from "~/codemode/examples.ts";
+} from "~/domains/codemode/example-capabilities.ts";
+import { findCodemodeExample, providersForCodemodeExample } from "~/domains/codemode/examples.ts";
 
 type CodemodeSessionStub = DurableObjectStub<CodemodeSession> & {
   callFunction(input: {
@@ -35,7 +36,7 @@ type CodemodeSessionStub = DurableObjectStub<CodemodeSession> & {
     providerPath: string[];
     scriptExecutionId?: string;
   }): Promise<{ event: Event }>;
-  createSession(input?: { code?: string; providers?: ToolProviderRegistration[] }): Promise<{
+  createSession(input?: { code?: string; events?: EventInput[] }): Promise<{
     appendedEvents: Event[];
     registeredProviderEvents: Event[];
     scriptExecutionEvent: Event | null;
@@ -226,7 +227,7 @@ describe("CodemodeSession", () => {
     const session = await initializeSession(streamPath);
 
     const created = await session.createSession({
-      providers: exampleCapabilityProviders(),
+      events: codemodeSessionStartupEvents({ providers: exampleCapabilityProviders(), streamPath }),
       code: `async (ctx) => {
   const ai = await ctx.ai.run("test-model", { prompt: "hello" });
   const repo = await ctx.repos.get({ slug: "web" }).proofOfConcept({
@@ -235,15 +236,16 @@ describe("CodemodeSession", () => {
   const workspace = await ctx.workspace.proofOfConcept({
     callback: async (args) => console.log("workspace callback", args.workspaceName),
   });
-  const agent = await ctx.createSubagent().sendMessage({
+  const agent = await ctx.agents.create().sendMessage({
     message: "hi",
     subPath: "bob",
-  });
-  const procedures = await ctx.os.listProcedures();
-  const orpc = await ctx.os.test.logDemo({ label: "codemode" });
+	  });
+	  const procedures = await ctx.os.listProcedures();
+	  const streams = await ctx.os.streams.list({});
+	  const sessions = await ctx.os.codemode.listSessions({});
 
-  return { ai, repo, workspace, agent, procedures, orpc };
-}`,
+	  return { ai, repo, workspace, agent, procedures, sessions, streams };
+	}`,
     });
     const scriptExecutionId = scriptExecutionIdFromEvent(created.scriptExecutionEvent);
     const completed = await waitForScriptExecutionCompleted({ scriptExecutionId, streamPath });
@@ -254,19 +256,10 @@ describe("CodemodeSession", () => {
         output: {
           ai: expect.objectContaining({ model: "test-model" }),
           agent: expect.objectContaining({ message: "hi", subPath: "bob" }),
-          orpc: expect.objectContaining({ label: "codemode" }),
-          procedures: expect.objectContaining({
-            procedures: expect.arrayContaining([
-              expect.objectContaining({
-                path: "test.logDemo",
-                signature: "(input: TestLogDemoInput) => Promise<TestLogDemoOutput>",
-              }),
-              expect.objectContaining({ path: "test.randomLogStream" }),
-              expect.objectContaining({ path: "test.serverThrow" }),
-            ]),
-            typeDefinitions: expect.stringContaining("interface CodemodeExecutionContext"),
-          }),
+          procedures: expect.stringContaining("interface CodemodeExecutionContext"),
           repo: expect.objectContaining({ message: "repo proof of concept" }),
+          sessions: expect.objectContaining({ sessions: expect.any(Array) }),
+          streams: expect.objectContaining({ streams: expect.any(Array) }),
           workspace: expect.objectContaining({ message: "workspace proof of concept" }),
         },
       },
@@ -277,8 +270,13 @@ describe("CodemodeSession", () => {
         functionCallRequested(["repos", "get"], ["repos"], ["get"]),
         functionCallCompleted(["repos", "get"], ["repos"], ["get"]),
         functionCallRequested(["workspace", "proofOfConcept"], ["workspace"], ["proofOfConcept"]),
-        functionCallRequested(["createSubagent"], ["createSubagent"], []),
-        functionCallRequested(["os", "test", "logDemo"], ["os"], ["test", "logDemo"]),
+        functionCallRequested(["agents", "create"], ["agents", "create"], []),
+        functionCallRequested(["os", "streams", "list"], ["os"], ["streams", "list"]),
+        functionCallRequested(
+          ["os", "codemode", "listSessions"],
+          ["os"],
+          ["codemode", "listSessions"],
+        ),
         expect.objectContaining({
           type: "events.iterate.com/codemode/log-emitted",
           payload: expect.objectContaining({ message: expect.stringContaining("repo callback") }),
@@ -291,6 +289,30 @@ describe("CodemodeSession", () => {
         }),
       ]),
     );
+    const procedures = completed.payload.outcome.output.procedures;
+    expect(procedures).toContain("listSessions");
+    expect(procedures).not.toContain("projectSlugOrId");
+  });
+
+  test("rejects caller supplied project identity in codemode ctx.os calls", async () => {
+    const streamPath = `/codemode-session-tests/${crypto.randomUUID()}` as StreamPath;
+    const session = await initializeSession(streamPath);
+
+    const created = await session.createSession({
+      events: codemodeSessionStartupEvents({ providers: exampleCapabilityProviders(), streamPath }),
+      code: `async (ctx) => {
+  return await ctx.os.streams.list({ projectSlugOrId: "proj__other" });
+}`,
+    });
+    const scriptExecutionId = scriptExecutionIdFromEvent(created.scriptExecutionEvent);
+    const completed = await waitForScriptExecutionCompleted({ scriptExecutionId, streamPath });
+
+    expect(completed.payload).toMatchObject({
+      outcome: {
+        error: expect.stringContaining("projectSlugOrId"),
+        status: "failed",
+      },
+    });
   });
 
   test("runs ordinary JavaScript control flow while mixing codemode providers", async () => {
@@ -298,10 +320,15 @@ describe("CodemodeSession", () => {
     const session = await initializeSession(streamPath);
     const example = findCodemodeExample("javascript-control-flow-mix");
     if (!example) throw new Error("Expected javascript-control-flow-mix codemode example.");
+    const script = example.scripts[0];
+    if (!script) throw new Error("Expected javascript-control-flow-mix to have a script.");
 
     const created = await session.createSession({
-      providers: providersForCodemodeExample({ example, projectId }),
-      code: example.code,
+      events: codemodeSessionStartupEvents({
+        providers: providersForCodemodeExample({ example, projectId }),
+        streamPath,
+      }),
+      code: script.code,
     });
     const scriptExecutionId = scriptExecutionIdFromEvent(created.scriptExecutionEvent);
     const completed = await waitForScriptExecutionCompleted({ scriptExecutionId, streamPath });
@@ -312,7 +339,7 @@ describe("CodemodeSession", () => {
         output: {
           body: { hello: "codemode" },
           caughtMessage: "expected example failure",
-          procedureCount: expect.any(Number),
+          hasStreamsListProcedure: true,
           raced: "fast",
           ticks: ["tick-1", "tick-2", "tick-3"],
         },
@@ -354,7 +381,10 @@ describe("CodemodeSession", () => {
     const session = await initializeSession(streamPath);
 
     const created = await session.createSession({
-      providers: [providerRegistration(["discord"]), providerRegistration(["slack"])],
+      events: codemodeSessionStartupEvents({
+        providers: [providerRegistration(["discord"]), providerRegistration(["slack"])],
+        streamPath,
+      }),
       code: `async (ctx) => {
   return await ctx.discord.announceRelease({
     discordChannelId: "D123",
@@ -461,7 +491,10 @@ describe("CodemodeSession", () => {
     const session = await initializeSession(streamPath);
 
     const created = await session.createSession({
-      providers: [providerRegistration(["iterateBrowserExtension"])],
+      events: codemodeSessionStartupEvents({
+        providers: [providerRegistration(["iterateBrowserExtension"])],
+        streamPath,
+      }),
       code: `async (ctx) => {
   const ping = await ctx.__codemode.ping();
   const navigation = await ctx.iterateBrowserExtension.navigateToPage({
@@ -617,18 +650,31 @@ function exampleCapabilityProviders(): ToolProviderRegistration[] {
     }),
     createExampleRpcProviderRegistration({
       exportName: "AgentCapability",
-      instructions: "Use ctx.createSubagent() to get a subagent handle.",
-      path: ["createSubagent"],
+      instructions: "Use ctx.agents.create() to get a subagent handle.",
+      path: ["agents", "create"],
       projectId,
     }),
     createExampleRpcProviderRegistration({
       exportName: "OrpcCapability",
       activeOrganization,
-      instructions: "Use ctx.os.listProcedures() and ctx.os.test.logDemo(args).",
+      instructions: "Use ctx.os.listProcedures() and ctx.os.streams.list({}).",
       path: ["os"],
       projectId,
     }),
   ];
+}
+
+function codemodeSessionStartupEvents(input: {
+  events?: EventInput[];
+  providers: ToolProviderRegistration[];
+  streamPath: StreamPath;
+}) {
+  return createCodemodeSessionStartupEvents({
+    events: input.events ?? [],
+    projectId,
+    providers: input.providers,
+    streamPath: input.streamPath,
+  });
 }
 
 function functionCallRequested(path: string[], providerPath: string[], functionPath: string[]) {

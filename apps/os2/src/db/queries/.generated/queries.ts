@@ -4,24 +4,19 @@ export * from "./count-all-projects.sql.ts";
 export * from "./count-projects.sql.ts";
 export * from "./delete-ingress-routes-by-project.sql.ts";
 export * from "./delete-project.sql.ts";
-export * from "./delete-project-preset.sql.ts";
 export * from "./get-ingress-route-by-host.sql.ts";
 export * from "./get-project-by-custom-hostname.sql.ts";
 export * from "./get-project-by-custom-hostname-any-organization.sql.ts";
 export * from "./get-project-by-id.sql.ts";
 export * from "./get-project-by-slug.sql.ts";
 export * from "./get-project-permission.sql.ts";
-export * from "./get-project-preset-by-id.sql.ts";
 export * from "./insert-project.sql.ts";
 export * from "./insert-project-permission.sql.ts";
-export * from "./insert-project-preset.sql.ts";
 export * from "./list-all-projects.sql.ts";
 export * from "./list-ingress-routes-by-project.sql.ts";
-export * from "./list-project-presets.sql.ts";
 export * from "./list-projects.sql.ts";
 export * from "./list-projects-by-slug.sql.ts";
 export * from "./update-project-config.sql.ts";
-export * from "./update-project-preset.sql.ts";
 export * from "./upsert-ingress-route.sql.ts";
 
 export const sqlfuQuerySources = [
@@ -45,11 +40,6 @@ export const sqlfuQuerySources = [
     sqlFile: "delete-project.sql",
     generatedFile: "delete-project.sql.ts",
     sourceSql: "delete from projects\nwhere id = :id;\n",
-  },
-  {
-    sqlFile: "delete-project-preset.sql",
-    generatedFile: "delete-project-preset.sql.ts",
-    sourceSql: "delete from project_presets\nwhere id = :id\n  and project_id = :projectId;\n",
   },
   {
     sqlFile: "get-ingress-route-by-host.sql",
@@ -88,12 +78,6 @@ export const sqlfuQuerySources = [
       "select project_id, principal_type, principal_id, role, created_at, updated_at\nfrom project_permissions\nwhere project_id = :projectId\n  and principal_type = :principalType\n  and principal_id = :principalId\nlimit 1;\n",
   },
   {
-    sqlFile: "get-project-preset-by-id.sql",
-    generatedFile: "get-project-preset-by-id.sql.ts",
-    sourceSql:
-      "select pp.id, pp.project_id, pp.name, pp.description, pp.events_json, pp.created_at, pp.updated_at\nfrom project_presets pp\nwhere pp.id = :id\n  and pp.project_id = :projectId\nlimit 1;\n",
-  },
-  {
     sqlFile: "insert-project.sql",
     generatedFile: "insert-project.sql.ts",
     sourceSql:
@@ -106,12 +90,6 @@ export const sqlfuQuerySources = [
       "insert into project_permissions (project_id, principal_type, principal_id, role)\nvalues (:projectId, :principalType, :principalId, :role)\non conflict(project_id, principal_type, principal_id) do update set\n  role = excluded.role,\n  updated_at = strftime('%Y-%m-%d %H:%M:%S', 'now')\nreturning project_id, principal_type, principal_id, role, created_at, updated_at;\n",
   },
   {
-    sqlFile: "insert-project-preset.sql",
-    generatedFile: "insert-project-preset.sql.ts",
-    sourceSql:
-      "insert into project_presets (id, project_id, name, description, events_json)\nvalues (:id, :projectId, :name, :description, :eventsJson)\nreturning id, project_id, name, description, events_json, created_at, updated_at;\n",
-  },
-  {
     sqlFile: "list-all-projects.sql",
     generatedFile: "list-all-projects.sql.ts",
     sourceSql:
@@ -122,12 +100,6 @@ export const sqlfuQuerySources = [
     generatedFile: "list-ingress-routes-by-project.sql.ts",
     sourceSql:
       "select id, host, project_id, priority, notes, callable_json, created_at, updated_at\nfrom ingress_routes\nwhere project_id = :projectId\norder by priority desc, host asc;\n",
-  },
-  {
-    sqlFile: "list-project-presets.sql",
-    generatedFile: "list-project-presets.sql.ts",
-    sourceSql:
-      "select pp.id, pp.project_id, pp.name, pp.description, pp.events_json, pp.created_at, pp.updated_at\nfrom project_presets pp\nwhere pp.project_id = :projectId\norder by pp.created_at desc;\n",
   },
   {
     sqlFile: "list-projects.sql",
@@ -146,12 +118,6 @@ export const sqlfuQuerySources = [
     generatedFile: "update-project-config.sql.ts",
     sourceSql:
       "update projects\nset custom_hostname = :customHostname,\n    metadata = :metadata,\n    updated_at = strftime('%Y-%m-%d %H:%M:%S', 'now')\nwhere id = :id;\n",
-  },
-  {
-    sqlFile: "update-project-preset.sql",
-    generatedFile: "update-project-preset.sql.ts",
-    sourceSql:
-      "update project_presets\nset name = :name,\n    description = :description,\n    events_json = :eventsJson,\n    updated_at = strftime('%Y-%m-%d %H:%M:%S', 'now')\nwhere id = :id\n  and project_id = :projectId;\n",
   },
   {
     sqlFile: "upsert-ingress-route.sql",

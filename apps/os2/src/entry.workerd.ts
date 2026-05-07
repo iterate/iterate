@@ -34,26 +34,23 @@ import { DEBUG_APPEND_CHAIN_EVENT_TYPE } from "~/durable-objects/debug-append-ch
 // Stream processor subscriptions do not use these exports; they target Durable
 // Object namespace env bindings directly.
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
-export { OutboundMcpFromOurClientCapability } from "~/rpc-targets/outbound-mcp-from-our-client-capability.ts";
-export { CodemodeSession } from "~/durable-objects/codemode-session.ts";
+export { OutboundMcpFromOurClientCapability } from "~/domains/outbound-mcp-client/entrypoints/outbound-mcp-from-our-client-capability.ts";
+export { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
+export { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
 export { DebugAppendChainSubscriber } from "~/durable-objects/debug-append-chain-subscriber.ts";
-export { ProjectDurableObject } from "~/durable-objects/project-durable-object.ts";
-export { ProjectMcpServerConnection } from "~/durable-objects/project-mcp-server-connection.ts";
-export {
-  AgentCapability,
-  AgentDurableObject,
-  AiCapability,
-  OrpcCapability,
-  RepoCapability,
-  RepoDurableObject,
-  SlackCapability,
-  WorkspaceDurableObject,
-} from "~/codemode/example-capabilities.ts";
-export { FetchCapability } from "~/codemode/fetch-capability.ts";
-export { ProjectIngressEntrypoint } from "~/entrypoints/project-ingress-entrypoint.ts";
-export { ProjectMcpServerEntrypoint } from "~/entrypoints/project-mcp-server-entrypoint.ts";
-export { StreamsCapability } from "~/entrypoints/stream-capability.ts";
+export { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
+export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
+export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.ts";
+export { AiCapability, OrpcCapability } from "~/domains/codemode/example-capabilities.ts";
+export { FetchCapability } from "~/domains/codemode/fetch-capability.ts";
+export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
+export { ProjectMcpServerEntrypoint } from "~/domains/inbound-mcp-server/entrypoints/project-mcp-server-entrypoint.ts";
+export { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
+export { RepoCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
+export { SlackCapability } from "~/domains/slack/entrypoints/slack-capability.ts";
+export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 export { StreamDurableObject };
+export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 
 const config = parseAppConfigFromEnv({
   configSchema: AppConfig,
@@ -100,7 +97,7 @@ export default {
             callable: ingressMatch.rule.callable,
             context: {
               env: env as unknown as Record<string, unknown>,
-              exports: (cfCtx as ExecutionContext & { exports?: Record<string, unknown> }).exports,
+              exports: cfCtx.exports,
             },
             request,
           });
@@ -119,8 +116,7 @@ export default {
           callableEnv: env,
           projectDurableObjectNamespace: env.PROJECT,
           stream: env.STREAM,
-          workerExports: (cfCtx as ExecutionContext & { exports?: Record<string, unknown> })
-            .exports,
+          workerExports: cfCtx.exports,
         };
 
         const response = await handler.fetch(request, {

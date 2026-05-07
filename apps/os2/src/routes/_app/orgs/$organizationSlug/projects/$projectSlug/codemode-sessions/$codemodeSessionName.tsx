@@ -29,8 +29,8 @@ export const Route = createFileRoute(
 
     try {
       const session = await context.queryClient.ensureQueryData({
-        ...orpc.projects.codemodeSessions.find.queryOptions({
-          input: { name: params.codemodeSessionName, projectId: project.id },
+        ...orpc.project.codemode.findSession.queryOptions({
+          input: { name: params.codemodeSessionName, projectSlugOrId: project.id },
         }),
         staleTime: 10_000,
       });
@@ -138,7 +138,7 @@ async function* streamCodemodeEvents(input: {
   streamPath: StreamPath;
 }): AsyncGenerator<Event> {
   const url = new URL(
-    `/api/codemode/${encodeURIComponent(input.projectId)}/events/${encodeURIComponent(
+    `/api/projects/${encodeURIComponent(input.projectId)}/codemode-events/${encodeURIComponent(
       input.streamPath,
     )}`,
     window.location.origin,

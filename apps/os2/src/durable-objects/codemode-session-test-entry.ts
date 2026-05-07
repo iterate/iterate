@@ -1,20 +1,17 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { createCodemodeContext } from "@iterate-com/shared/codemode/context-proxy";
 
-export { CodemodeSession } from "./codemode-session.ts";
-export {
-  AgentCapability,
-  AgentDurableObject,
-  AiCapability,
-  OrpcCapability,
-  RepoCapability,
-  RepoDurableObject,
-  SlackCapability,
-  WorkspaceDurableObject,
-} from "~/codemode/example-capabilities.ts";
-export { FetchCapability } from "~/codemode/fetch-capability.ts";
-export { StreamsCapability } from "~/entrypoints/stream-capability.ts";
+export { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
+export { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
+export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.ts";
+export { AiCapability, OrpcCapability } from "~/domains/codemode/example-capabilities.ts";
+export { FetchCapability } from "~/domains/codemode/fetch-capability.ts";
+export { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
+export { RepoCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
+export { SlackCapability } from "~/domains/slack/entrypoints/slack-capability.ts";
+export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 export { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
+export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 
 type ToolFunctionInput = {
   codemodeSessionCapability: Parameters<

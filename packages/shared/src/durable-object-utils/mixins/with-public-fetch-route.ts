@@ -9,10 +9,8 @@ import {
 import type {
   Constructor,
   DurableObjectClass,
-  MembersOf,
-  ReqEnvOf,
+  DurableObjectMixinResult,
   RuntimeDurableObjectConstructor,
-  StaticSide,
 } from "./mixin-types.ts";
 import type { DurableObjectCoreProtected } from "./with-durable-object-core.ts";
 
@@ -47,9 +45,10 @@ type PublicFetchRouteStatic = {
   [PUBLIC_FETCH_ROUTE_METADATA]: PublicFetchRouteMetadata;
 };
 
-type WithPublicFetchRouteResult<TBase extends DurableObjectClass> = StaticSide<TBase> &
-  DurableObjectClass<ReqEnvOf<TBase>, MembersOf<TBase> & PublicFetchRouteMembers> &
-  Constructor<PublicFetchRouteMembers> &
+type WithPublicFetchRouteResult<TBase extends DurableObjectClass> = DurableObjectMixinResult<
+  TBase,
+  PublicFetchRouteMembers
+> &
   PublicFetchRouteStatic;
 
 /**

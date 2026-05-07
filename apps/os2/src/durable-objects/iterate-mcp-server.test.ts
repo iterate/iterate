@@ -116,15 +116,15 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
         arguments: {
           code: `async (ctx) => {
   const operations = await ctx.integrations.http.catalog.listOperations();
-  const mcpTools = await ctx.integrations.publicMcp.listTools();
-  const echo = await ctx.integrations.publicMcp["echo.text"]({ text: "hello static MCP" });
-  const agentHandle = await ctx.createSubagent();
+  const mcpTools = await ctx.mcp.cloudflareDocs.listTools();
+  const echo = await ctx.mcp.cloudflareDocs["echo.text"]({ text: "hello static MCP" });
+  const agentHandle = await ctx.agents.create();
 
   const [pet, workspace, agent, pipelinedAgent, composed] = await Promise.all([
     ctx.integrations.http.catalog.getPet({ petId: "fido", include: "owner" }),
     ctx.workspace.proofOfConcept({ message: "workspace from inbound MCP" }),
     agentHandle.sendMessage({ message: "hi", subPath: "mcp" }),
-    ctx.makeSubagent().doThing({ label: "promise-pipeline", value: 21 }),
+    ctx.agents.create().doThing({ label: "promise-pipeline", value: 21 }),
     ctx.integrations.builtinMatrix.compose({
       petId: "otto",
       text: "composition",
@@ -180,7 +180,7 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
           expect.objectContaining({
             type: "events.iterate.com/codemode/tool-provider-registered",
             payload: expect.objectContaining({
-              path: ["integrations", "publicMcp"],
+              path: ["mcp", "cloudflareDocs"],
             }),
           }),
           expect.objectContaining({
@@ -194,8 +194,8 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
             type: "events.iterate.com/codemode/function-call-requested",
             payload: expect.objectContaining({
               invocationKind: "rpc",
-              path: ["makeSubagent"],
-              providerPath: ["makeSubagent"],
+              path: ["agents", "create"],
+              providerPath: ["agents", "create"],
             }),
           }),
           expect.objectContaining({
@@ -206,8 +206,8 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
                 status: "returned",
                 value: { kind: "live-value", type: "function" },
               }),
-              path: ["makeSubagent"],
-              providerPath: ["makeSubagent"],
+              path: ["agents", "create"],
+              providerPath: ["agents", "create"],
             }),
           }),
           expect.objectContaining({

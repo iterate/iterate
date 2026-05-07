@@ -51,11 +51,11 @@ The organization-scoped URL for a Project, identified by Clerk Organization slug
 _Avoid_: Global project URL, project ID URL
 
 **Project Route Context**:
-The TanStack Router route context for a Project Route. Today it carries route UI context; child routes still resolve the Project with `projects.findBySlug` and pass stable Project IDs to mutations.
+The TanStack Router route context for a Project Route. It should resolve the pretty Project Slug into the Project row once so child routes can render with Project details and call project-scoped APIs with either slug or ID.
 _Avoid_: Assuming inherited project data, page-local project state
 
 **Project-Scoped Procedure**:
-An OS2 oRPC procedure whose handler is scoped to exactly one Project, usually by explicit stable Project ID after the route has resolved a slug.
+An OS2 oRPC procedure under the singular `os.project.*` router. External callers pass `projectSlugOrId`; project-scope middleware resolves and authorizes it, and handlers use the stable Project ID after that point.
 _Avoid_: Raw projectId handler, unchecked project route
 
 **Project Durable Object Namespace**:
@@ -186,17 +186,9 @@ _Avoid_: MCP authorization, app-specific auth method
 A generic Project Durable Object-owned check that decides whether a Clerk principal can access one Project.
 _Avoid_: MCP authorization, route-specific permission
 
-**Codemode Preset**:
-A Project-owned named list of Event Inputs that can be appended to a Codemode Session before a Script Execution starts.
-_Avoid_: Tool preset, provider config, session template
-
-**Codemode Preset Seed**:
-A product-defined preset template copied into a Project as ordinary Codemode Presets when the Project is created.
-_Avoid_: Built-in preset, global preset, default preset row
-
-**Codemode Example**:
-A global static product-authored template containing a Script and Event Inputs that can prefill a new Codemode Session form.
-_Avoid_: Project preset, saved session, fixture
+**Codemode Example Stack**:
+A global static product-authored stack containing Event Inputs, provider inputs, and one or more Scripts that can prefill a new Codemode Session form.
+_Avoid_: Project preset, saved session, fixture, default preset row
 
 **Codemode Session Creation Form**:
 The project-scoped form used to create or attach to a Codemode Session, optionally prefilled from a Codemode Example.
@@ -205,6 +197,32 @@ _Avoid_: Example runner, run page, execution form
 **Project Stream Explorer**:
 The OS2 project-bound UI for discovering and inspecting every initialized Event Stream Path for one Project.
 _Avoid_: Events app stream explorer, stream tree
+
+### Agents
+
+**Agent**:
+A project-scoped assistant work surface that users can list, open, and chat with. An Agent is identified inside one Project by an Agent Path.
+_Avoid_: Project Agent, Codemode Session, raw stream
+
+**Agent Path**:
+The project-local Event Stream Path that identifies one Agent within a Project.
+_Avoid_: Agent ID, Project Agent path, global path
+
+**Agent Durable Object**:
+A project-scoped Durable Object representing one Agent.
+_Avoid_: Script Execution, Tool Provider, assistant message
+
+**AgentDurableObject**:
+The TypeScript class/export name for the Agent Durable Object.
+_Avoid_: Subagent class, Agent DO class
+
+**withStreamProcessor**:
+The Durable Object mixin API that lets a StreamProcessorRunner register one or more processor instances for one or more Event Stream Paths during lifecycle startup.
+_Avoid_: withStreamProcessorHost, host mixin, dynamic processor registry
+
+**Stream Processor waitUntil**:
+A StreamProcessorRunner-provided best-effort in-memory function that lets processor hooks keep async work alive until a promise settles.
+_Avoid_: Durable Object `ctx.waitUntil`, durable scheduler, alarm-backed task
 
 **Stream Namespace**:
 The shared stream runtime's stable owner key for a group of Event Stream Paths. OS2 uses the stable Project ID as the namespace; future runtime users may use non-project namespaces such as `platform`.
@@ -360,10 +378,6 @@ _Avoid_: Clerk Organization, Project, workspace alias
 A project-scoped live work surface exposed to codemode through `ctx.workspace`.
 _Avoid_: Clerk Organization, Project, workspace alias
 
-**Agent Durable Object**:
-A project-scoped Durable Object representing a subagent that can be created from codemode and returned as a Live Tool Handle.
-_Avoid_: Script Execution, Tool Provider, assistant message
-
 **Outbound MCP From Our Client Capability**:
 A Durable Object-backed codemode Tool Provider capability that connects from OS2 to one external MCP server using our MCP client connection and exposes that remote server as codemode Tool Functions through `executeCodemodeFunctionCall`.
 _Avoid_: Project MCP Server Connection, inbound MCP server, MCP metadata provider, describe callable, MCP registry
@@ -414,11 +428,11 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - The **Project Listing Projection** is derived query state and should be written by the **Project Durable Object** as part of Project lifecycle commands.
 - A **Project Route** includes both the owning **Clerk Organization** slug and the **Project** slug.
 - A **Project Slug** is route identity and may change; a **Project ID** is stable identity.
-- A **Project Route** resolves its **Project Slug** before making Project-scoped mutations with stable **Project ID** inputs.
+- A **Project Route** resolves its **Project Slug** before rendering Project-local UI. Project-scoped oRPC procedures still accept `projectSlugOrId` so the same API remains curlable by slug or callable by stable Project ID.
 - The **Project Slug** used in the **Project Route** corresponds to the project slug used by the events app.
-- Most **Project-Scoped Procedures** accept stable **Project ID**. Slug lookup is a separate route/read operation.
+- Every external **Project-Scoped Procedure** accepts `projectSlugOrId`, resolving globally unique Project Slugs and stable Project IDs through the same project-scope access path.
 - A **Project Durable Object Namespace** is infrastructure context; a resolved and authorized **Project** is domain context.
-- Browser routes resolve pretty route slugs with `projects.findBySlug` before calling Project-scoped procedures.
+- Browser routes use pretty Project Slugs in URLs and may pass either the slug or resolved stable Project ID to Project-scoped procedures.
 - Every Project has a **Stable Project Ingress Host** derived from the **Project ID**.
 - Every Project has a **Slug Project Ingress Host** derived from the current **Project Slug**.
 - The **Stable Project Ingress Host** remains routable even when the slug-derived host changes.
@@ -480,19 +494,14 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - Projects are born with **Slug Project Ingress Host** and **Stable Project Ingress Host** routes.
 - Projects are born with MCP hostname aliases for their slug and stable hosts, such as `mcp__<project-slug>.<project-host-base>` and `mcp__<project-id>.<project-host-base>`, that resolve to the **Project MCP Server Entry Point**.
 - Slug changes should update slug-derived ingress routes at the same time; alias lifecycle is future work.
-- A **Codemode Preset** belongs to exactly one **Project**.
-- A **Codemode Preset** stores Event Inputs without interpreting their event types.
-- A **Codemode Preset Seed** is copied into ordinary Project-owned **Codemode Presets** when a **Project** is created.
-- After creation, seeded **Codemode Presets** behave like any other **Codemode Preset** for that **Project**.
-- Applying a **Codemode Preset** appends each stored Event Input to the Codemode Session's Event Stream Path.
-- A **Codemode Example** is global static product data, not owned by a **Project**.
-- **Codemode Examples** are listed inside a **Project Route** because running an example requires a **Project**.
-- Selecting a **Codemode Example** pre-populates the **Codemode Session Creation Form**.
-- Editing a pre-populated form from a **Codemode Example** does not mutate the **Codemode Example**.
+- A **Codemode Example Stack** is global static product data, not owned by a **Project**.
+- **Codemode Example Stacks** are listed inside a **Project Route** because running an example requires a **Project**.
+- Selecting a **Codemode Example Stack** pre-populates the **Codemode Session Creation Form** with authored provider inputs, Event Inputs, and one default Script.
+- Editing a pre-populated form from a **Codemode Example Stack** does not mutate the **Codemode Example Stack**.
 - Browser ad-hoc codemode runs are created through **Codemode Sessions**, not through a separate run-code concept.
 - The **Codemode Session Control Plane** is domain-driven: callers provide **Scripts**, Event Inputs, Tool Providers, and an optional **Event Stream Path** rather than constructing the complete wire event sequence themselves.
 - The **Codemode Session Control Plane** compiles a requested **Script Execution** into a script-execution-requested Event Input internally.
-- When a **Codemode Example**, **Codemode Preset**, custom Event Inputs, and a **Script** are combined, OS2 appends example Event Inputs, preset Event Inputs, custom Event Inputs, then the script-execution-requested event.
+- When a **Codemode Example Stack**, custom Event Inputs, and a **Script** are combined, OS2 appends example Event Inputs, custom Event Inputs, then the script-execution-requested event.
 - Browser UI creates **Codemode Sessions** through a session-first command where the **Script** is optional.
 - Project MCP server `run_code` starts a **Script Execution** and therefore requires a **Script**.
 - Browser session creation and Project MCP server `run_code` share the same internal attach-or-create and stream append behavior.
@@ -503,7 +512,7 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - A remote MCP client calls OS2 with a **Clerk OAuth Token**, not a Clerk session token.
 - OS2 accepts Clerk's OAuth token contract for MCP; JWT token format is the preferred Clerk environment setting, not the domain boundary.
 - The browser UI explicitly creates and selects **Codemode Sessions** for a **Project**.
-- Browser oRPC calls identify the **Project** by resolving the **Project Route** slug and passing a stable **Project ID** to Project-scoped procedures.
+- Browser oRPC calls identify the **Project** with `projectSlugOrId`; handlers resolve that value to the stable Project ID before touching capabilities or Durable Objects.
 - Browser oRPC may pass an **Event Stream Path** when creating a **Codemode Session**; if it does not, OS2 generates one for the Project.
 - The **Codemode Session Creation Form** may include an optional **Event Stream Path** so users can attach the codemode processor to an existing stream.
 - Creating a **Codemode Session** is attach-or-create for the pair of **Project ID** and **Event Stream Path**.
@@ -582,6 +591,42 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - The **Project Stream Explorer** lists every initialized **Event Stream Path**, including `/`, as a flat list rather than a tree.
 - For the **Project Stream Explorer**, an Event Stream Path exists in reality when its Stream Durable Object is initialized and cataloged for the Project.
 - Child stream paths observed from a parent stream are navigation hints, not main-list entries, until their own Stream Durable Object is initialized.
+- Agents exist within **Projects**.
+- Agent work should be project-scoped and should not introduce new Clerk, organization, or auth concepts.
+- An **Agent** is not a **Codemode Session**.
+- An **Agent** may use the shared Agent processor and other shared stream processors almost verbatim.
+- An **Agent Path** is project-local because the **Project ID** is already the **Stream Namespace**.
+- The durable identity of an **Agent Durable Object** is derived from `{ projectId, agentPath }`.
+- An **Agent Durable Object** may be the **StreamProcessorRunner** for its **Agent Path**.
+- The `withStreamProcessor` API should let a Durable Object register multiple processors, and should namespace stored processor state by both **Event Stream Path** and processor identity.
+- `withStreamProcessor` should not have a local stream path admission policy; subscription setup decides which Event Stream Paths deliver events to a Durable Object.
+- When `withStreamProcessor` receives an event for an Event Stream Path it has not seen for a registered processor, it creates that processor's state container for that Event Stream Path and catches up from the stream as needed.
+- If one Durable Object is subscribed to multiple Event Stream Paths, `withStreamProcessor` should process events for all of them using independent processor state per Event Stream Path.
+- `withStreamProcessor` maintains a cursor and reduced state for each combination of registered processor and observed Event Stream Path.
+- A new processor/path cursor starts at offset zero.
+- The callable event delivery method exposed by `withStreamProcessor` should hide catch-up and consume boilerplate from Durable Object classes.
+- The callable event delivery method exposed by `withStreamProcessor` is `afterAppend({ event })`.
+- For one inbound event, `withStreamProcessor` runs all registered processors concurrently.
+- Processors hosted by the same Durable Object must still coordinate through appended stream events, not through in-memory ordering between processors.
+- `withStreamProcessor` treats each processor/path cursor independently; one processor failure should not stop successful sibling processors from advancing.
+- In v1, processor failures should append loud processor error events to the stream instead of relying on callable delivery retry.
+- In v1, `afterAppend({ event })` does not need to throw an aggregate error after appending processor error events, because stream subscription delivery does not currently retry usefully.
+- Receiving an event whose offset is behind a processor/path cursor is a loud ordering/corruption error, not a silent no-op.
+- Events appended by a processor are committed to the stream and later delivered back through stream subscription or caught by cursor catch-up; processors hosted by the same Durable Object should not invoke sibling processors directly in memory for newly appended events.
+- `withStreamProcessor` should expose inspectable runtime state, optionally through a fetch/debug path.
+- To measure local append-to-delivery delay, `withStreamProcessor` should keep an in-memory log of local append timestamps keyed by returned stream offset, then compare that timestamp when the same offset is later received through subscription delivery.
+- Local append-to-delivery delay should not be derived from the event's `createdAt`, because that measures stream commit timestamp rather than this runner's local append call.
+- `withStreamProcessor` should provide **Stream Processor waitUntil** to stream processor hooks such as `afterAppend`.
+- **Stream Processor waitUntil** is a default runner capability available to ordinary stream processors; processors should not need an app-specific Runtime dependency just to keep a promise alive.
+- **Stream Processor waitUntil** is best-effort in-memory liveness; it is not durable alarm-backed recovery.
+- **Stream Processor waitUntil** should be implemented through the repo's keep-alive primitive if one exists, or introduced deliberately before relying on opaque long-running promises.
+- Processor Runtime dependencies that need `waitUntil`-style behavior should use **Stream Processor waitUntil**, not raw Durable Object `ctx.waitUntil`.
+- In v1, `withStreamProcessor` registrations happen during `registerOnInstanceWake(...)`; post-startup dynamic processor registration is not supported.
+- Public callable stream processor delivery methods should call `ensureStarted()` before consuming an event, so processor registration has completed before inbound event delivery runs.
+- `withStreamProcessor` should use callable stream subscriptions for processor delivery.
+- `withStreamProcessor` should expose an explicit helper for installing callable stream subscriptions; registering a processor should not automatically write subscription events.
+- The canonical pattern is to install callable stream subscriptions in `registerOnFirstInitialize(...)`, because subscription configuration is durable stream setup that should run once for the Durable Object lifetime.
+- The canonical pattern is to register processor instances in `registerOnInstanceWake(...)`, because processor instances and Runtime dependencies are per-JavaScript-instance state.
 - **Tool Provider** registration is primarily documentation; runtime callability may be supplied by processor helpers but is not the primary meaning of registration.
 - Codemode supports two principal Tool Provider mechanisms: **Event-Mediated Tool Providers** and **RPC Tool Providers**.
 - An **Event-Mediated Tool Provider** is the default for stream processors, long-running processors, pull-based actors, and SDK-backed processors that can work from the event log.
@@ -595,9 +640,9 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - The Repo example uses a WorkerEntrypoint **RPC Tool Provider** that returns a **Live Tool Handle** for a **Repo Durable Object** selected by Project ID from provider props and the requested slug.
 - The **Workspace** example uses a **Workspace Durable Object** as the **RPC Tool Provider** itself, with `executeCodemodeFunctionCall` implemented on the Durable Object.
 - `ctx.workspace` is an implicit current **Workspace**; its Durable Object identity is selected by the registered RPC callable, not by a selector passed in the Script.
-- `ctx.createSubagent()` is a root-level **RPC Tool Function** that returns a **Live Tool Handle** for an **Agent Durable Object**.
-- `ctx.createSubagent().sendMessage(...)` is the explicit **Live Tool Handle** case and must stay supported.
-- `ctx.makeSubagent().doThing(...)` is the root-level promise-pipelined **Live Tool Handle** case and must stay supported alongside `ctx.createSubagent().sendMessage(...)`.
+- `ctx.agents.create()` is a namespaced **RPC Tool Function** that returns a **Live Tool Handle** for an **Agent Durable Object**.
+- `ctx.agents.create().sendMessage(...)` is the explicit **Live Tool Handle** case.
+- `ctx.agents.create().doThing(...)` is the promise-pipelined **Live Tool Handle** case.
 - A **Unary Tool Provider** uses an empty **Function Path** to mean the provider itself is the called function.
 - Dynamic MCP and OpenAPI discovery should be exposed as ordinary Tool Functions such as `listTools` and `listOperations`, not as a separate provider-description protocol.
 - An **Outbound MCP From Our Client Capability** owns one MCP client connection to one external MCP server in v1.
@@ -655,16 +700,16 @@ await ctx.workspace.proofOfConcept({
 The Workspace case targets a singular **Workspace** surface: `ctx.workspace` is backed directly by a **Workspace Durable Object** RPC Tool Provider that implements `executeCodemodeFunctionCall`.
 
 ```ts
-const result = await ctx.createSubagent().sendMessage({
+const result = await ctx.agents.create().sendMessage({
   message: "hi",
   subPath: "bob",
 });
 ```
 
-The Agent case targets a root-level **Unary Tool Provider**: `createSubagent()` is the Codemode Function Call with an empty **Function Path**, it returns a **Live Tool Handle** for an **Agent Durable Object**, and `sendMessage` is a Workers RPC method on that returned handle.
+The Agent case targets a namespaced **Unary Tool Provider**: `agents.create()` is the Codemode Function Call with an empty provider-relative **Function Path**, it returns a **Live Tool Handle** for an **Agent Durable Object**, and `sendMessage` is a Workers RPC method on that returned handle.
 
 ```ts
-const result = await ctx.makeSubagent().doThing({
+const result = await ctx.agents.create().doThing({
   label: "promise-pipeline",
   value: 21,
 });
@@ -673,15 +718,15 @@ const result = await ctx.makeSubagent().doThing({
 The promise-pipelined Agent case targets the same root-level **Unary Tool Provider** shape, but proves that codemode can preserve Workers RPC promise pipelining when a **Live Tool Handle** is returned and immediately called.
 
 ```ts
-const tools = await ctx.cloudflareDocs.listTools();
+const tools = await ctx.mcp.cloudflareDocs.listTools();
 console.log("Cloudflare Docs MCP tools", tools);
 
-const answer = await ctx.cloudflareDocs.search({
+const answer = await ctx.mcp.cloudflareDocs.search({
   query: "Workers RPC promise pipelining",
 });
 ```
 
-The MCP case targets an **Outbound MCP From Our Client Capability**: `ctx.cloudflareDocs.listTools()` is an ordinary Tool Function that returns the live MCP tool listing, and listed tools are called through the same provider namespace.
+The MCP case targets an **Outbound MCP From Our Client Capability**: `ctx.mcp.cloudflareDocs.listTools()` is an ordinary Tool Function that returns the live MCP tool listing, and listed tools are called through the same provider namespace.
 
 ```ts
 const operations = await ctx.petstore.listOperations();
@@ -693,23 +738,20 @@ const pet = await ctx.petstore.getPetById({ petId: 123 });
 The OpenAPI case targets an **OpenAPI Client Capability**: `ctx.petstore.listOperations()` is an ordinary Tool Function that explains the spec-derived operation surface, and operation IDs are called through the same provider namespace.
 
 ```ts
-const result = await ctx.os.test.helloWorld({
-  name: "codemode",
-});
+const streams = await ctx.os.streams.list({});
+console.log("Project streams", streams);
 ```
 
-The oRPC case targets an **oRPC Capability**: nested oRPC router paths become nested Codemode Context paths, and the capability supplies the server-side caller context needed to run the handler in-process.
+The oRPC case targets an **oRPC Capability**: the real `os.project.*` router is exposed as project-bound `ctx.os.*`, and the capability supplies the server-side caller context needed to run the handler in-process.
 
 ```ts
 const procedures = await ctx.os.listProcedures();
 console.log("OS2 oRPC procedures", procedures);
 
-const result = await ctx.os.test.logDemo({
-  label: "codemode",
-});
+const sessions = await ctx.os.codemode.listSessions({});
 ```
 
-The oRPC discovery case mirrors MCP and OpenAPI: `ctx.os.listProcedures()` is an ordinary Tool Function that walks the exposed oRPC contract/router metadata and returns generated TypeScript signatures plus procedure metadata for the exposed oRPC subtree. Provider-generated type definitions should declare a full **Codemode Context** root named `ctx`, including `ctx.fetch`, `ctx.console`, and the provider's own methods nested under its mounted **Provider Path** such as `ctx.os` or `ctx.builtin.slack`.
+The oRPC discovery case mirrors MCP and OpenAPI: `ctx.os.listProcedures()` is an ordinary Tool Function that walks the exposed oRPC contract/router metadata and returns generated TypeScript signatures for the exposed project-bound subtree. Provider-generated type definitions should declare a full **Codemode Context** root named `ctx`, including `ctx.fetch`, `ctx.console`, and the provider's own methods nested under its mounted **Provider Path** such as `ctx.os` or `ctx.builtin.slack`. The generated `ctx.os` surface strips `projectSlugOrId`; if a script supplies `projectSlugOrId`, the oRPC capability throws instead of merging it.
 
 ```ts
 const response = await fetch("https://api.example.com/data");
@@ -790,11 +832,11 @@ The provider composition case targets provider-to-provider Tool Function Calls: 
 > **Dev:** "Is `ctx.repos.get({ slug }).proofOfConcept(...)` two Codemode Function Calls?"
 > **Domain expert:** "No. `repos.get` is the Codemode Function Call. It returns a **Live Tool Handle**, and `proofOfConcept` is a Workers RPC method on that returned handle."
 
-> **Dev:** "Does `ctx.createSubagent().sendMessage(...)` have a provider namespace?"
-> **Domain expert:** "No. `createSubagent` is a root-level **Unary Tool Provider** whose returned **Live Tool Handle** exposes `sendMessage`."
+> **Dev:** "Does `ctx.agents.create().sendMessage(...)` have a provider namespace?"
+> **Domain expert:** "Yes. Use `ctx.agents.create()` so agent creation is grouped under the agents provider namespace while still returning a **Live Tool Handle**."
 
-> **Dev:** "Can we replace `ctx.createSubagent().sendMessage(...)` with only `ctx.makeSubagent().doThing(...)`?"
-> **Domain expert:** "No. Keep both: `createSubagent()` proves explicit handle use, while `makeSubagent().doThing(...)` proves promise-pipelined handle use."
+> **Dev:** "Do we need two separate subagent creation functions?"
+> **Domain expert:** "No. `ctx.agents.create()` covers explicit handle use and promise-pipelined handle use."
 
 > **Dev:** "Should a provider switch on the full path where it was mounted?"
 > **Domain expert:** "No. Codemode passes both **Provider Path** and **Function Path**; providers should usually switch on **Function Path**."
@@ -818,7 +860,7 @@ The provider composition case targets provider-to-provider Tool Function Calls: 
 > **Domain expert:** "No. Register stable **Tool Provider Instructions** that tell the Script to call `listTools`; dynamic discovery is an ordinary Tool Function."
 
 > **Dev:** "Should `docs.search` from an MCP server become `ctx.docs.search(...)`?"
-> **Domain expert:** "No. External tool names and OpenAPI operation IDs are exact **Function Path** segments, so use bracket syntax such as `ctx.cloudflareDocs['docs.search'](...)` when needed."
+> **Domain expert:** "No. External tool names and OpenAPI operation IDs are exact **Function Path** segments, so use bracket syntax such as `ctx.mcp.cloudflareDocs['docs.search'](...)` when needed."
 
 > **Dev:** "Should codemode call OS2 oRPC handlers over HTTP?"
 > **Domain expert:** "No. An **oRPC Capability** should use a server-side caller context and call in-process when the router implementation is in the same Worker."
@@ -970,7 +1012,7 @@ The provider composition case targets provider-to-provider Tool Function Calls: 
 - "executeFunctionCall" was clear but too generic for Worker and Durable Object classes. Resolved: use `executeCodemodeFunctionCall` for the RPC Tool Provider entry method.
 - "Workspace" is usually avoided for Clerk Organization or Project. Resolved: **Workspace Durable Object** is a separate codemode live-resource concept selected by Project ID and workspace slug.
 - "`ctx.workspaces.get`" made Workspace look like a repo-style collection lookup. Resolved: use singular `ctx.workspace` for the codemode Workspace surface.
-- "root tool" could imply a special non-provider mechanism. Resolved: `ctx.createSubagent()` is a root-level **RPC Tool Function** registered at path `["createSubagent"]`.
+- "root tool" could imply a special non-provider mechanism. Resolved: subagent creation is the namespaced **RPC Tool Function** `ctx.agents.create()` registered at path `["agents", "create"]`.
 - "path" was doing two jobs: identifying the full Codemode Context call and identifying the function relative to the provider. Resolved: use **Provider Path** for the registered mount path and **Function Path** for the provider-relative call path.
 - "argsSummary" made RPC Function Calls look like a separate event family. Resolved: Function Call request events keep an `args` field and serialize live values best-effort.
 - "static callable" sounded like one fixed descriptor. Resolved: use **Callable Builder** for helpers that construct different Callable descriptors for one Capability.

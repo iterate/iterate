@@ -8,12 +8,11 @@ import {
 import {
   createCodemodeSession,
   startCodemodeScriptOnSession,
-} from "~/codemode/codemode-session-rpc.ts";
+} from "~/domains/codemode/codemode-session-rpc.ts";
 import type { AppContext } from "~/context.ts";
-import { getStreamsCapability } from "~/entrypoints/stream-capability.ts";
-import type { ActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
-import { activeOrganizationMiddleware, os } from "~/orpc/orpc.ts";
-import { requireActiveOrganizationProject } from "~/orpc/project-access.ts";
+import { getStreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
+import { os, projectScopeMiddleware } from "~/orpc/orpc.ts";
+import { requireProjectScope } from "~/orpc/project-access.ts";
 
 const ToolProviderRegistrationPayload =
   CodemodeProcessorContract.events["events.iterate.com/codemode/tool-provider-registered"]
@@ -27,118 +26,108 @@ type SerializableValue =
   | SerializableValue[]
   | { [key: string]: SerializableValue };
 
-export const codemodeRouter = {
-  codemode: {
-    createSession: os.codemode.createSession
-      .use(activeOrganizationMiddleware)
-      .handler(async ({ input, context }) => {
-        const providers = attachRequestScopedProviderProps({
-          activeOrganization: context.activeOrganization,
-          providers: parseToolProviders(input.providers),
-        });
-        const streamPath =
-          input.streamPath ?? defaultStreamPathForProjectSession(generateSessionSlug());
-        const result = await createSession({
-          activeOrganization: context.activeOrganization,
-          code: input.code,
-          context,
-          events: input.events,
-          projectId: input.projectId,
-          providers,
-          streamPath,
-        });
-        const now = new Date().toISOString();
+export const projectCodemodeRouter = {
+  createSession: os.project.codemode.createSession
+    .use(projectScopeMiddleware)
+    .handler(async ({ input, context }) => {
+      const project = requireProjectScope(context);
+      const providers = attachRequestScopedProviderProps({
+        projectId: project.id,
+        providers: parseToolProviders(input.providers),
+      });
+      const streamPath =
+        input.streamPath ?? defaultStreamPathForProjectSession(generateSessionSlug());
+      const result = await createSession({
+        code: input.code,
+        context,
+        events: input.events,
+        projectId: project.id,
+        providers,
+        streamPath,
+      });
+      const now = new Date().toISOString();
 
-        return {
-          appendedEvents: result.appendedEvents,
-          registeredProviderEvents: result.registeredProviderEvents,
-          scriptExecutionEvent: result.scriptExecutionEvent,
-          session: {
-            createdAt: now,
-            lastWokenAt: now,
-            name: codemodeSessionName({
-              projectId: input.projectId,
-              streamPath: StreamPath.parse(streamPath),
-            }),
-            projectId: input.projectId,
+      return {
+        appendedEvents: result.appendedEvents,
+        registeredProviderEvents: result.registeredProviderEvents,
+        scriptExecutionEvent: result.scriptExecutionEvent,
+        session: {
+          createdAt: now,
+          lastWokenAt: now,
+          name: codemodeSessionName({
+            projectId: project.id,
             streamPath: StreamPath.parse(streamPath),
-          },
-        };
-      }),
+          }),
+          projectId: project.id,
+          streamPath: StreamPath.parse(streamPath),
+        },
+      };
+    }),
 
-    executeScript: os.codemode.executeScript
-      .use(activeOrganizationMiddleware)
-      .handler(async ({ input, context }) => {
-        const providers = attachRequestScopedProviderProps({
-          activeOrganization: context.activeOrganization,
-          providers: parseToolProviders(input.providers),
-        });
-        const result = await executeScriptOnSession({
-          activeOrganization: context.activeOrganization,
-          code: input.code,
-          context,
-          events: input.events,
-          projectId: input.projectId,
-          providers,
-          streamPath: input.streamPath ?? defaultStreamPathForProjectBlock(generateBlockId()),
-        });
-        return {
-          event: result.event,
-          streamPath: result.streamPath,
-        };
-      }),
+  executeScript: os.project.codemode.executeScript
+    .use(projectScopeMiddleware)
+    .handler(async ({ input, context }) => {
+      const project = requireProjectScope(context);
+      const providers = attachRequestScopedProviderProps({
+        projectId: project.id,
+        providers: parseToolProviders(input.providers),
+      });
+      const result = await executeScriptOnSession({
+        code: input.code,
+        context,
+        events: input.events,
+        projectId: project.id,
+        providers,
+        streamPath: input.streamPath ?? defaultStreamPathForProjectBlock(generateBlockId()),
+      });
+      return {
+        event: result.event,
+        streamPath: result.streamPath,
+      };
+    }),
 
-    streamEvents: os.codemode.streamEvents
-      .use(activeOrganizationMiddleware)
-      .handler(async function* ({ input, context, signal }) {
-        await requireActiveOrganizationProject({
-          activeOrganization: context.activeOrganization,
-          context,
-          projectId: input.projectId,
-        });
+  streamEvents: os.project.codemode.streamEvents
+    .use(projectScopeMiddleware)
+    .handler(async function* ({ input, context, signal }) {
+      const project = requireProjectScope(context);
 
-        const response = await getStreamsCapability({
-          exports: context.workerExports,
-          props: {
-            appendPolicy: { mode: "stream" },
-            namespace: input.projectId,
-            streamPath: input.streamPath,
-          },
-        }).stream({
-          afterOffset: input.afterOffset,
-          beforeOffset: input.beforeOffset,
-        });
-        if (!response.body) return;
+      const response = await getStreamsCapability({
+        exports: context.workerExports,
+        props: {
+          appendPolicy: { mode: "stream" },
+          namespace: project.id,
+          streamPath: input.streamPath,
+        },
+      }).stream({
+        afterOffset: input.afterOffset,
+        beforeOffset: input.beforeOffset,
+      });
+      if (!response.body) return;
 
-        for await (const event of decodeStreamEventLines(response.body, signal)) {
-          yield event;
-        }
-      }),
+      for await (const event of decodeStreamEventLines(response.body, signal)) {
+        yield event;
+      }
+    }),
 
-    describe: os.codemode.describe
-      .use(activeOrganizationMiddleware)
-      .handler(async ({ input, context }) => {
-        const providers = attachRequestScopedProviderProps({
-          activeOrganization: context.activeOrganization,
-          providers: parseToolProviders(input.providers),
-        });
-        await requireActiveOrganizationProject({
-          activeOrganization: context.activeOrganization,
-          context,
-          projectId: input.projectId,
-        });
+  describe: os.project.codemode.describe
+    .use(projectScopeMiddleware)
+    .handler(async ({ input, context }) => {
+      const project = requireProjectScope(context);
+      const providers = attachRequestScopedProviderProps({
+        projectId: project.id,
+        providers: parseToolProviders(input.providers),
+      });
 
-        return {
-          // Tool providers now keep the model-visible surface intentionally
-          // compact. Richer MCP/OpenAPI/oRPC descriptions should be exposed as
-          // ordinary codemode functions such as `ctx.cloudflareDocs.listTools()`,
-          // so this endpoint returns the short instructions only.
-          instructions: providers
-            .map((provider) => `${provider.path.join(".")}: ${provider.instructions}`)
-            .join("\n\n"),
-        };
-      }),
-  },
+      return {
+        // Tool providers now keep the model-visible surface intentionally
+        // compact. Richer MCP/OpenAPI/oRPC descriptions should be exposed as
+        // ordinary codemode functions such as `ctx.mcp.cloudflareDocs.listTools()`,
+        // so this endpoint returns the short instructions only.
+        instructions: providers
+          .map((provider) => `${provider.path.join(".")}: ${provider.instructions}`)
+          .join("\n\n"),
+      };
+    }),
 };
 
 function parseToolProviders(providers: unknown[]): ToolProviderRegistration[] {
@@ -156,20 +145,20 @@ function parseToolProviders(providers: unknown[]): ToolProviderRegistration[] {
 }
 
 function attachRequestScopedProviderProps(input: {
-  activeOrganization: ActiveOrganizationAuth;
+  projectId: string;
   providers: ToolProviderRegistration[];
 }): ToolProviderRegistration[] {
   return input.providers.map((provider) =>
     attachOrpcCapabilityProps({
-      activeOrganization: input.activeOrganization,
       provider,
+      projectId: input.projectId,
     }),
   );
 }
 
 function attachOrpcCapabilityProps(input: {
-  activeOrganization: ActiveOrganizationAuth;
   provider: ToolProviderRegistration;
+  projectId: string;
 }): ToolProviderRegistration {
   const invocation = input.provider.invocation;
   if (invocation.kind !== "rpc") return input.provider;
@@ -196,11 +185,10 @@ function attachOrpcCapabilityProps(input: {
           ...via,
           // `ctx.exports` service bindings lock props when the loopback
           // binding is constructed. The browser can declare the provider, but
-          // only this authenticated server route has the real active org to
-          // capture for later Durable Object execution.
+          // only this server route knows the resolved stable Project ID.
           props: {
             ...readRecordProps(via.props),
-            activeOrganization: activeOrganizationToSerializable(input.activeOrganization),
+            projectId: input.projectId,
           },
         },
       },
@@ -215,21 +203,7 @@ function readRecordProps(props: unknown) {
   return {};
 }
 
-function activeOrganizationToSerializable(activeOrganization: ActiveOrganizationAuth): {
-  [key: string]: SerializableValue;
-} {
-  return {
-    orgId: activeOrganization.orgId,
-    orgPermissions: activeOrganization.orgPermissions,
-    orgRole: activeOrganization.orgRole,
-    orgSlug: activeOrganization.orgSlug,
-    sessionId: activeOrganization.sessionId,
-    userId: activeOrganization.userId,
-  };
-}
-
 async function executeScriptOnSession(input: {
-  activeOrganization: ActiveOrganizationAuth;
   code: string;
   context: AppContext;
   events: EventInput[];
@@ -244,11 +218,6 @@ async function executeScriptOnSession(input: {
     });
   }
 
-  await requireActiveOrganizationProject({
-    activeOrganization: input.activeOrganization,
-    context,
-    projectId: input.projectId,
-  });
   requireCodemodeStreamPathProject({
     projectId: input.projectId,
     streamPath: input.streamPath,
@@ -272,7 +241,6 @@ async function executeScriptOnSession(input: {
 }
 
 async function createSession(input: {
-  activeOrganization: ActiveOrganizationAuth;
   code?: string;
   context: AppContext;
   events: EventInput[];
@@ -287,11 +255,6 @@ async function createSession(input: {
     });
   }
 
-  await requireActiveOrganizationProject({
-    activeOrganization: input.activeOrganization,
-    context,
-    projectId: input.projectId,
-  });
   requireCodemodeStreamPathProject({
     projectId: input.projectId,
     streamPath: input.streamPath,

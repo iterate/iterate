@@ -34,12 +34,27 @@ The main app routes are:
 /orgs/:organizationSlug/projects/:projectSlug/settings
 ```
 
-The project root redirects to `codemode-sessions`. Older `run-code` links should
-redirect to `codemode-sessions/new`.
+The project root redirects to `codemode-sessions`. The authenticated app root
+redirects to `codemode-sessions/new` for the user's first available project.
 
-Project-scoped oRPC procedures live under the `projects` router. For example,
-streams are exposed as `projects.streams` and the REST/OpenAPI paths are nested
-under `/projects/{projectId}/streams`.
+Project-scoped oRPC procedures live under the singular `project` router. The
+plural `projects` router is for collection operations such as listing and
+creating projects. Project-scoped procedures accept `projectSlugOrId`; callers
+may pass a globally unique slug for curlable requests or a stable Project ID.
+
+Examples:
+
+```text
+os.projects.list()
+os.projects.create(...)
+os.project.get({ projectSlugOrId })
+os.project.streams.list({ projectSlugOrId })
+os.project.codemode.listSessions({ projectSlugOrId })
+os.project.inboundMcpServer.listSessions({ projectSlugOrId })
+```
+
+REST/OpenAPI paths mirror the same project scope, for example
+`/projects/{projectSlugOrId}/streams`.
 
 ## Project Ingress
 
@@ -135,13 +150,20 @@ or MCP.
 Primary surfaces:
 
 - UI: project codemode session pages.
-- oRPC: `codemode.createSession`, `codemode.executeScript`, and stream reads.
+- oRPC: `project.codemode.createSession`,
+  `project.codemode.executeScript`, and `project.streams` reads.
 - MCP: `run_code` on a project MCP route, such as
   `https://mcp__demo.iterate2.app`.
 
 Default providers are registered for every session. The important built-ins are
 `ctx.fetch`, `ctx.console`, `ctx.streams`, worker AI examples, OpenAPI examples,
-repo/workspace handles, subagent handles, and oRPC discovery/execution examples.
+repo/workspace handles, `ctx.agents.create()` subagent handles, Slack Web API
+calls, and oRPC discovery/execution examples.
+
+The codemode oRPC provider exposes the real `os.project.*` subtree as
+project-bound `ctx.os.*`. It injects only the stable Project ID as
+`projectSlugOrId`, rejects caller-supplied `projectSlugOrId`, and strips that
+field from generated codemode types/listings.
 
 Slack and other event-mediated providers can append function-call completions
 from outside the codemode processor. RPC providers return through

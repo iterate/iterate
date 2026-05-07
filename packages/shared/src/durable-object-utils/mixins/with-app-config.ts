@@ -3,12 +3,9 @@
 import { z } from "zod";
 import { parseAppConfigFromEnv } from "../../apps/config.ts";
 import type {
-  Constructor,
   DurableObjectClass,
-  MembersOf,
-  ReqEnvOf,
+  DurableObjectMixinResult,
   RuntimeDurableObjectConstructor,
-  StaticSide,
 } from "./mixin-types.ts";
 
 const APP_CONFIG_ENV_PREFIX = "APP_CONFIG_";
@@ -34,11 +31,11 @@ type WithAppConfigResult<TBase extends DurableObjectClass, TSchema extends z.Zod
   //   const Base = withAppConfig(AppConfig)(DurableObject);
   //   class Room extends Base<Env> {}
   //
-  // `ReqEnvOf<TBase>` keeps env requirements from earlier mixins, and
-  // `MembersOf<TBase>` keeps their instance surface available after this mixin.
-  StaticSide<TBase> &
-    DurableObjectClass<ReqEnvOf<TBase>, MembersOf<TBase> & AppConfigProtected<z.output<TSchema>>> &
-    Constructor<AppConfigProtected<z.output<TSchema>>>;
+  // DurableObjectMixinResult keeps env requirements from earlier mixins,
+  // preserves Cloudflare's DurableObject brand for `ctx.exports` typing, and
+  // accumulates the protected `config` getter without adding a member-only
+  // constructor signature.
+  DurableObjectMixinResult<TBase, AppConfigProtected<z.output<TSchema>>>;
 
 /**
  * Adds protected typed app config to a Durable Object.

@@ -52,9 +52,12 @@ needs deployed secrets or preview/prd app config.
 
 - `src/app.ts` defines the app manifest and runtime config schema.
 - `src/entry.workerd.ts` is the Cloudflare Worker entrypoint.
+- `src/domains` contains domain-local Durable Objects, WorkerEntrypoints, tool
+  providers, and focused README/AGENTS notes.
 - `src/start.ts` installs Clerk's TanStack Start middleware.
 - `src/orpc/root.ts` composes the server router.
-- `src/orpc/routers/projects.ts` owns project-scoped API routing.
+- `src/orpc/routers/projects.ts` owns `os.projects` collection APIs and the
+  singular `os.project.*` project-scoped router.
 - `src/db/definitions.sql` is the sqlfu schema source of truth.
 - `src/routes/_app` contains authenticated app routes.
 - `alchemy.run.ts` defines Cloudflare deployment resources.

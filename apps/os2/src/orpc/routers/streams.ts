@@ -1,129 +1,64 @@
 import { ORPCError } from "@orpc/server";
-import { listD1ObjectCatalogRecordsByIndex } from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
-import {
-  getInitializedStreamStub,
-  type StreamDurableObjectNamespace,
-  type StreamDurableObjectStub,
-} from "@iterate-com/shared/streams/helpers";
-import type { Event, EventInput, StreamPath } from "@iterate-com/shared/streams/types";
-import type { StreamDurableObjectStructuredName } from "@iterate-com/shared/streams/stream-durable-object";
 import type { AppContext } from "~/context.ts";
-import { activeOrganizationMiddleware, os } from "~/orpc/orpc.ts";
-import { requireActiveOrganizationProject } from "~/orpc/project-access.ts";
+import { getStreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
+import { os, projectScopeMiddleware } from "~/orpc/orpc.ts";
+import { requireProjectScope } from "~/orpc/project-access.ts";
 
 export const projectStreamsRouter = {
-  list: os.projects.streams.list
-    .use(activeOrganizationMiddleware)
+  list: os.project.streams.list.use(projectScopeMiddleware).handler(async ({ context }) => {
+    const project = requireProjectScope(context);
+    const streams = await getProjectStreamsCapability(context, project.id).list();
+    return { streams };
+  }),
+  create: os.project.streams.create
+    .use(projectScopeMiddleware)
     .handler(async ({ context, input }) => {
-      await requireActiveOrganizationProject({
-        activeOrganization: context.activeOrganization,
-        context,
-        projectId: input.projectId,
-      });
-      const rows = await listD1ObjectCatalogRecordsByIndex<StreamDurableObjectStructuredName>(
-        requireD1ObjectCatalog(context),
-        {
-          className: "StreamDurableObject",
-          indexName: "namespace",
-          indexValue: input.projectId,
-        },
-      );
-
-      return {
-        streams: rows.map((record) => ({
-          name: record.name,
-          namespace: record.structuredName.namespace,
-          streamPath: record.structuredName.path,
-          createdAt: record.createdAt,
-          lastWokenAt: record.lastWokenAt,
-        })),
-      };
-    }),
-  create: os.projects.streams.create
-    .use(activeOrganizationMiddleware)
-    .handler(async ({ context, input }) => {
-      await requireActiveOrganizationProject({
-        activeOrganization: context.activeOrganization,
-        context,
-        projectId: input.projectId,
-      });
-      const stream = await getStream(context.stream as StreamDurableObjectNamespace | undefined, {
-        projectId: input.projectId,
+      const project = requireProjectScope(context);
+      return await getProjectStreamsCapability(context, project.id).create({
         streamPath: input.streamPath,
       });
-      return await stream.getState();
     }),
-  append: os.projects.streams.append
-    .use(activeOrganizationMiddleware)
+  append: os.project.streams.append
+    .use(projectScopeMiddleware)
     .handler(async ({ context, input }) => {
-      await requireActiveOrganizationProject({
-        activeOrganization: context.activeOrganization,
-        context,
-        projectId: input.projectId,
-      });
-      const stream = await getStream(context.stream as StreamDurableObjectNamespace | undefined, {
-        projectId: input.projectId,
+      const project = requireProjectScope(context);
+      const event = await getProjectStreamsCapability(context, project.id).append({
+        event: input.event,
         streamPath: input.streamPath,
       });
-      const append = stream.append as (event: EventInput) => Promise<Event>;
-      return { event: await append(input.event) };
+      return { event };
     }),
-  read: os.projects.streams.read
-    .use(activeOrganizationMiddleware)
+  read: os.project.streams.read.use(projectScopeMiddleware).handler(async ({ context, input }) => {
+    const project = requireProjectScope(context);
+    const events = await getProjectStreamsCapability(context, project.id).read({
+      afterOffset: input.afterOffset,
+      beforeOffset: input.beforeOffset,
+      streamPath: input.streamPath,
+    });
+    return { events };
+  }),
+  getState: os.project.streams.getState
+    .use(projectScopeMiddleware)
     .handler(async ({ context, input }) => {
-      await requireActiveOrganizationProject({
-        activeOrganization: context.activeOrganization,
-        context,
-        projectId: input.projectId,
-      });
-      const stream = await getStream(context.stream as StreamDurableObjectNamespace | undefined, {
-        projectId: input.projectId,
+      const project = requireProjectScope(context);
+      return await getProjectStreamsCapability(context, project.id).getState({
         streamPath: input.streamPath,
       });
-      return {
-        events: await stream.history({
-          after: input.afterOffset,
-          before: input.beforeOffset ?? "end",
-        }),
-      };
-    }),
-  getState: os.projects.streams.getState
-    .use(activeOrganizationMiddleware)
-    .handler(async ({ context, input }) => {
-      await requireActiveOrganizationProject({
-        activeOrganization: context.activeOrganization,
-        context,
-        projectId: input.projectId,
-      });
-      const stream = await getStream(context.stream as StreamDurableObjectNamespace | undefined, {
-        projectId: input.projectId,
-        streamPath: input.streamPath,
-      });
-      return await stream.getState();
     }),
 };
 
-async function getStream(
-  durableObjectNamespace: StreamDurableObjectNamespace | undefined,
-  input: { projectId: string; streamPath: StreamPath },
-): Promise<StreamDurableObjectStub> {
-  if (!durableObjectNamespace) {
-    throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "STREAM binding is not configured." });
-  }
-
-  return await getInitializedStreamStub({
-    durableObjectNamespace,
-    namespace: input.projectId,
-    path: input.streamPath,
-  });
-}
-
-function requireD1ObjectCatalog(context: AppContext) {
-  if (!context.doCatalog) {
+function getProjectStreamsCapability(context: AppContext, projectId: string) {
+  if (!context.workerExports) {
     throw new ORPCError("INTERNAL_SERVER_ERROR", {
-      message: "DO_CATALOG binding not available.",
+      message: "Worker exports are not available.",
     });
   }
 
-  return context.doCatalog;
+  return getStreamsCapability({
+    exports: context.workerExports,
+    props: {
+      appendPolicy: { mode: "any" },
+      namespace: projectId,
+    },
+  });
 }

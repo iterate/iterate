@@ -6,9 +6,7 @@ import type {
   Constructor,
   DurableObjectClass,
   DurableObjectConstructor,
-  MembersOf,
-  ReqEnvOf,
-  StaticSide,
+  DurableObjectMixinResult,
 } from "./mixin-types.ts";
 import type { DurableObjectCoreProtected } from "./with-durable-object-core.ts";
 
@@ -127,20 +125,14 @@ type WithLifecycleHooksResult<
   //
   //   const RoomBase = withLifecycleHooks({ nameSchema: RoomName })(withDurableObjectCore(DurableObject));
   //   class Room extends RoomBase<Env> {}
-  StaticSide<TBase> &
-    DurableObjectClass<
-      ReqEnvOf<TBase>,
-      MembersOf<TBase> &
-        LifecycleHooksMembers<StructuredName, InitialState> &
-        LifecycleHooksProtected<StructuredName, InitialState>
-    > &
-    // Add the instance members introduced by this mixin. The protected getters
-    // have to come from `LifecycleHooksProtected` because protected members
-    // cannot be expressed with an interface.
-    Constructor<
-      LifecycleHooksMembers<StructuredName, InitialState> &
-        LifecycleHooksProtected<StructuredName, InitialState>
-    >;
+  // Add the instance members introduced by this mixin. The protected getters
+  // have to come from `LifecycleHooksProtected` because protected members
+  // cannot be expressed with an interface.
+  DurableObjectMixinResult<
+    TBase,
+    LifecycleHooksMembers<StructuredName, InitialState> &
+      LifecycleHooksProtected<StructuredName, InitialState>
+  >;
 
 const LIFECYCLE_NAME_STORAGE_KEY = "__mixin_lifecycle_hooks.name.v1";
 const LIFECYCLE_INITIAL_STATE_STORAGE_KEY = "__mixin_lifecycle_hooks.initial_state.v1";

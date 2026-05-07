@@ -95,9 +95,9 @@ describe("codemode.executeScript", () => {
     const projectId = requireProjectId();
 
     try {
-      const started = await client.codemode.executeScript({
+      const started = await client.project.codemode.executeScript({
         code: "async () => 1 + 1",
-        projectId,
+        projectSlugOrId: projectId,
         providers: [],
       });
 
@@ -106,9 +106,9 @@ describe("codemode.executeScript", () => {
       const scriptExecutionId = (started.event.payload as { scriptExecutionId: string })
         .scriptExecutionId;
 
-      const stream = await wsClient.client.codemode.streamEvents({
+      const stream = await wsClient.client.project.codemode.streamEvents({
         afterOffset: started.event.offset > 1 ? started.event.offset - 1 : "start",
-        projectId,
+        projectSlugOrId: projectId,
         streamPath: started.streamPath,
       });
 
@@ -143,8 +143,8 @@ describe("codemode.describe", () => {
     const client = createClient(baseUrl);
     const projectId = requireProjectId();
 
-    const result = await client.codemode.describe({
-      projectId,
+    const result = await client.project.codemode.describe({
+      projectSlugOrId: projectId,
       providers: [
         {
           instructions: "Test functions are available.",

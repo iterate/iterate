@@ -20,7 +20,9 @@ export const Route = createFileRoute(
       staleTime: 30_000,
     });
     await context.queryClient.ensureQueryData({
-      ...orpc.projects.codemodeSessions.list.queryOptions({ input: { projectId: project.id } }),
+      ...orpc.project.codemode.listSessions.queryOptions({
+        input: { projectSlugOrId: project.id },
+      }),
       staleTime: 10_000,
     });
 
@@ -36,7 +38,9 @@ function CodemodeSessionsPage() {
   const params = Route.useParams();
   const { project } = Route.useLoaderData();
   const { data } = useQuery({
-    ...orpc.projects.codemodeSessions.list.queryOptions({ input: { projectId: project.id } }),
+    ...orpc.project.codemode.listSessions.queryOptions({
+      input: { projectSlugOrId: project.id },
+    }),
     staleTime: 10_000,
   });
   const sessions = data?.sessions ?? [];

@@ -2,24 +2,21 @@ import { McpAgent } from "agents/mcp";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { createCodemodeContext } from "@iterate-com/shared/codemode/context-proxy";
 import type { ExecuteCodemodeFunctionCallInput } from "@iterate-com/shared/stream-processors/codemode/implementation";
-import type { ProjectMcpServerConnectionProps } from "./project-mcp-server-connection.ts";
+import type { ProjectMcpServerConnectionProps } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 
-export { CodemodeSession } from "./codemode-session.ts";
-export { ProjectMcpServerConnection } from "./project-mcp-server-connection.ts";
-export {
-  AgentCapability,
-  AgentDurableObject,
-  AiCapability,
-  OrpcCapability,
-  RepoCapability,
-  RepoDurableObject,
-  SlackCapability,
-  WorkspaceDurableObject,
-} from "~/codemode/example-capabilities.ts";
-export { FetchCapability } from "~/codemode/fetch-capability.ts";
-export { StreamsCapability } from "~/entrypoints/stream-capability.ts";
+export { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
+export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
+export { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
+export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.ts";
+export { AiCapability, OrpcCapability } from "~/domains/codemode/example-capabilities.ts";
+export { FetchCapability } from "~/domains/codemode/fetch-capability.ts";
+export { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
+export { RepoCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
+export { SlackCapability } from "~/domains/slack/entrypoints/slack-capability.ts";
+export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 export { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
-export { OutboundMcpFromOurClientCapability } from "~/rpc-targets/outbound-mcp-from-our-client-capability.ts";
+export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
+export { OutboundMcpFromOurClientCapability } from "~/domains/outbound-mcp-client/entrypoints/outbound-mcp-from-our-client-capability.ts";
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
 
 const mcpHandler = McpAgent.serve("/mcp", { binding: "PROJECT_MCP_SERVER_CONNECTION" });
@@ -47,7 +44,7 @@ export class TestBuiltinMatrixProvider extends WorkerEntrypoint {
       include: "owner",
       petId: request?.petId,
     });
-    const echo = await ctx.integrations.publicMcp["echo.text"]({
+    const echo = await ctx.mcp.cloudflareDocs["echo.text"]({
       text: `provider saw ${String(request?.text)}`,
     });
     const leaf = await ctx.leaf({

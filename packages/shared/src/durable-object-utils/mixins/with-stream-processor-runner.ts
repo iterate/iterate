@@ -20,10 +20,8 @@ import {
 import type {
   Constructor,
   DurableObjectClass,
-  MembersOf,
-  ReqEnvOf,
+  DurableObjectMixinResult,
   RuntimeDurableObjectConstructor,
-  StaticSide,
 } from "./mixin-types.ts";
 import type {
   LifecycleHooksMembers,
@@ -166,16 +164,13 @@ type WithStreamProcessorRunnerResult<
   StructuredName extends LifecycleStructuredName,
   InitialState,
   Contract extends RunnerContract<Contract>,
-> = StaticSide<TBase> &
-  DurableObjectClass<
-    ReqEnvOf<TBase>,
-    MembersOf<TBase> &
-      StreamProcessorRunnerProtected<Contract> &
-      DurableObjectCoreProtected &
-      LifecycleHooksMembers<StructuredName, InitialState> &
-      LifecycleHooksProtected<StructuredName, InitialState>
-  > &
-  Constructor<StreamProcessorRunnerProtected<Contract>>;
+> = DurableObjectMixinResult<
+  TBase,
+  StreamProcessorRunnerProtected<Contract> &
+    DurableObjectCoreProtected &
+    LifecycleHooksMembers<StructuredName, InitialState> &
+    LifecycleHooksProtected<StructuredName, InitialState>
+>;
 
 /**
  * Adds protected Durable Object runner methods for one stream processor.

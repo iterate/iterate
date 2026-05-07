@@ -19,8 +19,9 @@ it will not catch missing Slack runtime config such as
 ## Authenticated Browser Smoke
 
 Preview uses a Clerk development instance. Create a disposable Clerk user, add it
-to the target organization, mint a Clerk testing token, mint a short-lived
-sign-in token, and drive the deployed app with `agent-browser`.
+to the target organization, seed a disposable project, grant that Clerk
+organization access to the project, mint a Clerk testing token, mint a
+short-lived sign-in token, and drive the deployed app with `agent-browser`.
 
 Keep all generated credentials in `/tmp`, do not print token values, and delete
 the Clerk user when finished.
@@ -39,6 +40,7 @@ async function main() {
   const email = `agent-browser+${suffix}@iterate.com`;
   const password = `AgentBrowser-${suffix}!Aa1`;
   const organizationSlug = "iterate-1778011847733685074";
+  const projectSlug = `agent-browser-ui-smoke-${Date.now()}`;
 
   const user = await clerk.users.createUser({
     emailAddress: [email],
@@ -60,6 +62,30 @@ async function main() {
     role: "org:admin",
   });
 
+  const createProjectResponse = await fetch(
+    "https://os2.iterate-preview-2.com/api/projects",
+    {
+      body: JSON.stringify({
+        metadata: { seededBy: "os2-agent-browser-smoke" },
+        slug: projectSlug,
+      }),
+      headers: {
+        authorization: `Bearer ${process.env.APP_CONFIG_ADMIN_API_SECRET}`,
+        "content-type": "application/json",
+      },
+      method: "POST",
+    },
+  );
+  if (!createProjectResponse.ok) {
+    throw new Error(
+      `Project create failed: ${createProjectResponse.status} ${await createProjectResponse.text()}`,
+    );
+  }
+  const project = await createProjectResponse.json() as {
+    id: string;
+    slug: string;
+  };
+
   const testingToken = await clerk.testingTokens.createTestingToken();
   const signInToken = await clerk.signInTokens.createSignInToken({
     userId: user.id,
@@ -73,6 +99,8 @@ async function main() {
         userId: user.id,
         organizationId: org.id,
         organizationSlug,
+        projectId: project.id,
+        projectSlug: project.slug,
         testingToken: testingToken.token,
         signInToken: signInToken.token,
       },
@@ -82,11 +110,43 @@ async function main() {
     { mode: 0o600 },
   );
 
-  console.log(JSON.stringify({ userId: user.id, organizationSlug }));
+  console.log(
+    JSON.stringify({
+      userId: user.id,
+      organizationId: org.id,
+      organizationSlug,
+      projectId: project.id,
+      projectSlug: project.slug,
+    }),
+  );
 }
 
 main();
 '
+```
+
+Grant the Clerk organization access to the seeded project. Admin-created
+projects intentionally do not assign Clerk ownership, so this smoke inserts the
+permission explicitly.
+
+```bash
+node > /tmp/os2-agent-browser-permission.sql <<'NODE'
+const fs = require("node:fs");
+const data = JSON.parse(
+  fs.readFileSync("/tmp/os2-agent-browser-clerk-smoke.json", "utf8"),
+);
+function sqlString(value) {
+  return "'" + String(value).replaceAll("'", "''") + "'";
+}
+console.log(
+  `insert or ignore into project_permissions (project_id, principal_type, principal_id, role) values (${sqlString(data.projectId)}, 'clerk_organization', ${sqlString(data.organizationId)}, 'owner');`,
+);
+NODE
+
+doppler run --project os2 --config preview_2 -- \
+  pnpm exec wrangler d1 execute os2-preview-2-db \
+  --remote \
+  --file /tmp/os2-agent-browser-permission.sql
 ```
 
 Open the preview with the one-time sign-in token. This logs into Clerk without
@@ -104,7 +164,7 @@ url.searchParams.set("__clerk_ticket", data.signInToken);
 url.searchParams.set("__clerk_testing_token", data.testingToken);
 url.searchParams.set(
   "redirect_url",
-  "/orgs/iterate-1778011847733685074/projects/yoooo/streams",
+  `/orgs/${data.organizationSlug}/projects/${data.projectSlug}/streams`,
 );
 
 for (const args of [
@@ -137,7 +197,7 @@ agent-browser get url
 The final URL should be:
 
 ```text
-https://os2.iterate-preview-2.com/orgs/iterate-1778011847733685074/projects/yoooo/streams/agent-browser-ui-smoke
+https://os2.iterate-preview-2.com/orgs/<organizationSlug>/projects/<projectSlug>/streams/agent-browser-ui-smoke
 ```
 
 ## Cleanup
@@ -158,6 +218,7 @@ async function main() {
   });
   await clerk.users.deleteUser(data.userId);
   rmSync("/tmp/os2-agent-browser-clerk-smoke.json", { force: true });
+  rmSync("/tmp/os2-agent-browser-permission.sql", { force: true });
   console.log(JSON.stringify({ deletedUserId: data.userId }));
 }
 

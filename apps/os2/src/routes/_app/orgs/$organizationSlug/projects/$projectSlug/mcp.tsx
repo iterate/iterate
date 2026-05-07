@@ -18,7 +18,9 @@ export const Route = createFileRoute("/_app/orgs/$organizationSlug/projects/$pro
       staleTime: 30_000,
     });
     await context.queryClient.ensureQueryData({
-      ...orpc.projects.mcpSessions.list.queryOptions({ input: { projectId: project.id } }),
+      ...orpc.project.inboundMcpServer.listSessions.queryOptions({
+        input: { projectSlugOrId: project.id },
+      }),
       staleTime: 10_000,
     });
 
@@ -34,7 +36,9 @@ function ProjectMcpPage() {
   const { project } = Route.useLoaderData();
   const config = useConfig<PublicConfig>();
   const { data: sessionsData } = useQuery({
-    ...orpc.projects.mcpSessions.list.queryOptions({ input: { projectId: project.id } }),
+    ...orpc.project.inboundMcpServer.listSessions.queryOptions({
+      input: { projectSlugOrId: project.id },
+    }),
     staleTime: 10_000,
   });
   const mcpUrl = buildProjectMcpUrl({

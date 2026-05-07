@@ -3,8 +3,8 @@ import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
 } from "@iterate-com/shared/streams/helpers";
-import { getProjectDurableObjectName } from "./project-durable-object.ts";
-import { PROJECT_LIFECYCLE_STREAM_PATH } from "~/stream-processors/project-lifecycle.ts";
+import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
+import { PROJECT_LIFECYCLE_STREAM_PATH } from "~/domains/projects/stream-processors/project-lifecycle.ts";
 import { getIngressRouteByHost } from "~/db/queries/.generated/index.ts";
 import {
   dispatchFetchCallable,
@@ -14,12 +14,12 @@ import {
 } from "~/ingress/host-routing.ts";
 import type { ExactHostIngressRule } from "~/ingress/types.ts";
 
-export { ProjectDurableObject } from "./project-durable-object.ts";
-export { ProjectMcpServerConnection } from "./project-mcp-server-connection.ts";
+export { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
+export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 export { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
-export { PROJECT_LIFECYCLE_STREAM_PATH } from "~/stream-processors/project-lifecycle.ts";
-export { ProjectIngressEntrypoint } from "~/entrypoints/project-ingress-entrypoint.ts";
-export { ProjectMcpServerEntrypoint } from "~/entrypoints/project-mcp-server-entrypoint.ts";
+export { PROJECT_LIFECYCLE_STREAM_PATH } from "~/domains/projects/stream-processors/project-lifecycle.ts";
+export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
+export { ProjectMcpServerEntrypoint } from "~/domains/inbound-mcp-server/entrypoints/project-mcp-server-entrypoint.ts";
 
 export default {
   async fetch(request, env, ctx) {
@@ -72,7 +72,7 @@ export default {
       callable: ingressMatch.rule.callable,
       context: {
         env: env as unknown as Record<string, unknown>,
-        exports: (ctx as ExecutionContext & { exports?: Record<string, unknown> }).exports,
+        exports: ctx.exports,
       },
       request,
     });
@@ -104,16 +104,6 @@ async function ensureD1Schema(db: D1Database) {
     db.prepare(
       `CREATE INDEX IF NOT EXISTS idx_project_permissions_principal ON project_permissions (principal_type, principal_id)`,
     ),
-    db.prepare(`CREATE TABLE IF NOT EXISTS project_presets (
-      id text primary key not null,
-      project_id text not null references projects (id) on delete cascade,
-      name text not null,
-      description text,
-      events_json text not null check (json_valid(events_json)),
-      created_at text not null default current_timestamp,
-      updated_at text not null default current_timestamp,
-      unique (project_id, name)
-    )`),
     db.prepare(`CREATE TABLE IF NOT EXISTS ingress_routes (
       id text primary key not null,
       host text not null unique,

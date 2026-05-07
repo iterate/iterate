@@ -15,14 +15,14 @@ export const Route = createFileRoute(
       staleTime: 30_000,
     });
     await context.queryClient.ensureQueryData({
-      ...orpc.projects.streams.getState.queryOptions({
-        input: { projectId: project.id, streamPath },
+      ...orpc.project.streams.getState.queryOptions({
+        input: { projectSlugOrId: project.id, streamPath },
       }),
       staleTime: 10_000,
     });
     await context.queryClient.ensureQueryData({
-      ...orpc.projects.streams.read.queryOptions({
-        input: { projectId: project.id, streamPath, beforeOffset: "end" },
+      ...orpc.project.streams.read.queryOptions({
+        input: { projectSlugOrId: project.id, streamPath, beforeOffset: "end" },
       }),
       staleTime: 5_000,
     });
@@ -45,14 +45,14 @@ export const Route = createFileRoute(
 function ProjectStreamDetailPage() {
   const { project, streamPath } = Route.useLoaderData();
   const { data: state } = useQuery({
-    ...orpc.projects.streams.getState.queryOptions({
-      input: { projectId: project.id, streamPath },
+    ...orpc.project.streams.getState.queryOptions({
+      input: { projectSlugOrId: project.id, streamPath },
     }),
     staleTime: 10_000,
   });
   const { data: history } = useQuery({
-    ...orpc.projects.streams.read.queryOptions({
-      input: { projectId: project.id, streamPath, beforeOffset: "end" },
+    ...orpc.project.streams.read.queryOptions({
+      input: { projectSlugOrId: project.id, streamPath, beforeOffset: "end" },
     }),
     staleTime: 5_000,
   });

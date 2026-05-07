@@ -32,7 +32,7 @@ export const Route = createFileRoute("/_app/orgs/$organizationSlug/projects/$pro
         staleTime: 30_000,
       });
       await context.queryClient.ensureQueryData({
-        ...orpc.projects.streams.list.queryOptions({ input: { projectId: project.id } }),
+        ...orpc.project.streams.list.queryOptions({ input: { projectSlugOrId: project.id } }),
         staleTime: 10_000,
       });
 
@@ -58,15 +58,15 @@ function ProjectStreamsIndexPage() {
     key: "lastWokenAt",
     direction: "desc",
   });
-  const streamsQueryOptions = orpc.projects.streams.list.queryOptions({
-    input: { projectId: project.id },
+  const streamsQueryOptions = orpc.project.streams.list.queryOptions({
+    input: { projectSlugOrId: project.id },
   });
   const { data } = useQuery({
     ...streamsQueryOptions,
     staleTime: 10_000,
   });
   const createStream = useMutation(
-    orpc.projects.streams.create.mutationOptions({
+    orpc.project.streams.create.mutationOptions({
       onSuccess: async (_state, input) => {
         await queryClient.invalidateQueries({ queryKey: streamsQueryOptions.queryKey });
         setFilter("");
@@ -105,7 +105,7 @@ function ProjectStreamsIndexPage() {
   function submitCreateStream() {
     try {
       createStream.mutate({
-        projectId: project.id,
+        projectSlugOrId: project.id,
         streamPath: streamPathFromInput(filter),
       });
     } catch (error) {

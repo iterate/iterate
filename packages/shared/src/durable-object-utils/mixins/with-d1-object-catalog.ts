@@ -9,9 +9,9 @@ import type {
   Constructor,
   DurableObjectClass,
   DurableObjectConstructor,
+  DurableObjectMixinResult,
   MembersOf,
   ReqEnvOf,
-  StaticSide,
 } from "./mixin-types.ts";
 import type { DurableObjectCoreProtected } from "./with-durable-object-core.ts";
 
@@ -45,7 +45,7 @@ type WithD1ObjectCatalogResult<
   TBase extends DurableObjectClass,
   StructuredName extends LifecycleStructuredName,
   Env,
-> = StaticSide<TBase> &
+> =
   // Preserve the Cloudflare-style `class Room extends Base<Env>` ergonomics
   // while carrying the D1 requirement forward.
   //
@@ -63,11 +63,7 @@ type WithD1ObjectCatalogResult<
   // And this fails because MissingEnv does not satisfy the lower bound:
   //
   //   class Broken extends Base<{ OTHER: string }> {}
-  DurableObjectClass<
-    ReqEnvOf<TBase> & Env,
-    MembersOf<TBase> & D1ObjectCatalogMembers<StructuredName>
-  > &
-  Constructor<D1ObjectCatalogMembers<StructuredName>>;
+  DurableObjectMixinResult<TBase, D1ObjectCatalogMembers<StructuredName>, ReqEnvOf<TBase> & Env>;
 
 /**
  * Best-effort D1 catalog for initialized Durable Objects.

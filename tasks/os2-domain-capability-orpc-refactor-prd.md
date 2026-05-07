@@ -1,5 +1,5 @@
 ---
-state: open
+state: planned
 priority: high
 size: large
 dependsOn:
@@ -26,7 +26,8 @@ project-scoped OS2 API surface.
 For this refactor, production-grade polish and backwards compatibility are not
 requirements. The goal is a clean POC architecture that is easier to reason
 about, easier to test, and strong enough to prove Code Mode working in local
-development and a deployed OS2 preview environment.
+development and a deployed OS2 preview environment. Old paths and old persisted
+POC concepts should be replaced directly rather than kept as aliases.
 
 ## Solution
 
@@ -37,12 +38,14 @@ The public OS2 API should keep collection-oriented project operations under
 `os.projects`, and move project-scoped functionality under `os.project`. Every
 external `os.project` procedure should accept an explicit `projectSlugOrId`.
 The slug is globally unique and curl-friendly; the stable Project ID is used
-internally after resolution.
+internally after resolution. Values that look like Project IDs resolve as IDs
+first; all other values resolve as global slugs.
 
 Codemode should receive a project-bound view of that same `os.project` router as
 `ctx.os`. Codemode callers should not see or pass `projectSlugOrId`. The
-codemode oRPC tool provider should inject the bound stable Project ID, strip
-that field from generated tool types, and reject caller attempts to supply it.
+codemode oRPC tool provider should inject only the bound stable Project ID,
+strip that field from generated tool types, and reject caller attempts to supply
+it.
 
 Persisted Project Presets should be deleted entirely. Static Codemode Example
 Stacks in source should replace them. Example Stacks should describe provider
@@ -54,7 +57,9 @@ Streams should be namespace-based at the shared runtime boundary. OS2 happens
 to use the Project ID as the stream namespace for project-owned streams, but the
 shared Stream Durable Object should know only about namespaces and paths. OS2
 stream oRPC handlers should validate project access and then call
-`StreamsCapability` for listing, creation, append, read, and state.
+`StreamsCapability` for listing, creation, append, read, and state. Project
+stream listing means all initialized streams that actually exist in the bound
+namespace.
 
 The physical OS2 tree should start moving to `domains/*` without moving TanStack
 routes, global oRPC wiring, app-level SQL/sqlfu files, or the existing contract
@@ -190,11 +195,20 @@ package structure into domains yet.
 - Resolve `projectSlugOrId` once in project scope middleware. Downstream
   handlers should operate on the resolved Project and its stable ID.
 
+- Resolve ID-shaped inputs as stable Project IDs first. Resolve all other inputs
+  as globally unique Project Slugs. If an unlikely collision exists, Project ID
+  wins.
+
 - Return 404 for a project that does not exist. Return 403 for a project that
   exists but the authenticated Clerk user cannot access.
 
 - Keep Clerk's current organization/session integration for now. Do not attempt
   a broader Clerk auth rewrite in this PRD.
+
+- Project-scoped auth should be context-based rather than hardwired directly to
+  browser Clerk objects. Browser/API requests populate context from Clerk and
+  the database. Codemode builds an internal project-bound context so the same
+  router can be called in-process.
 
 - Keep the contract package structurally as-is. Modify it only enough to expose
   the new `os.project` API shape and remove Project Presets.
@@ -253,6 +267,10 @@ package structure into domains yet.
 
 - Reject caller-supplied `projectSlugOrId` before injection.
 
+- Codemode's internal project access context should accept only the injected
+  stable Project ID. If any other project identity reaches that internal access
+  path, throw.
+
 - Assume oRPC procedure inputs are object-shaped. Treat omitted input as an
   empty object. Throw for positional or non-object input.
 
@@ -272,7 +290,8 @@ package structure into domains yet.
 
 - Add catalog-backed stream listing to `StreamsCapability` if needed. For this
   POC, `streams.list` means all initialized streams that actually exist in the
-  current project namespace.
+  current project namespace. Future filtering or limiting can be added through
+  capability props rather than changing the basic API meaning.
 
 - Hide project identity from project-bound codemode stream inputs. Decide during
   implementation whether project namespace should also be hidden from
@@ -387,6 +406,10 @@ expected work, not surprises:
 
 - Current project access code resolves stable Project IDs, not global slugs, and
   currently hides unauthorized projects as not found.
+
+- The target project middleware should use a context-level project access
+  service/capability so browser callers and codemode's internal server-side
+  caller can share the same `os.project` router.
 
 - Current stream project routers still bypass `StreamsCapability` for catalog
   and direct stream operations. The capability needs a namespace-wide list path.

@@ -63,8 +63,7 @@ describeIfMcpTarget("project MCP run_code static codemode provider stack", () =>
           hasFindPetsByStatus: true,
         },
         orpc: {
-          logDemoOk: true,
-          sawLogDemoProcedure: true,
+          sawStreamsList: true,
         },
         repo: {
           callbackCalled: true,
@@ -186,18 +185,18 @@ function buildCodemodeProofScript(input: { slackChannelId: string | null }) {
     },
   });
 
-  const explicitAgentHandle = await ctx.createSubagent();
+  const explicitAgentHandle = await ctx.agents.create();
   const explicitAgent = await explicitAgentHandle.sendMessage({
     message: "hello explicit handle",
     subPath: "mcp-e2e",
   });
-  const pipelinedAgent = await ctx.makeSubagent().doThing({
+  const pipelinedAgent = await ctx.agents.create().doThing({
     label: "promise-pipeline",
     value: 21,
   });
 
   const procedures = await os.listProcedures();
-  const logDemo = await os.test.logDemo({ label: "mcp-provider-stack-e2e" });
+  const streamList = await os.streams.list({});
 
   const appended = await streams.append({
     event: {
@@ -235,9 +234,9 @@ function buildCodemodeProofScript(input: { slackChannelId: string | null }) {
       petCount: Array.isArray(pets) ? pets.length : 0,
     },
     orpc: {
-      logDemoOk: logDemo.ok,
-      sawLogDemoProcedure: procedures.procedures.some((procedure) => procedure.path === "test.logDemo"),
-      typeDefinitionsContainCtxOs: procedures.typeDefinitions.includes("ctx") && procedures.typeDefinitions.includes("os"),
+      sawStreamsList: procedures.includes("streams") && procedures.includes("list"),
+      streamCount: streamList.streams.length,
+      typeDefinitionsContainCtxOs: procedures.includes("ctx") && procedures.includes("os"),
     },
     raced,
     repo: {
@@ -296,7 +295,7 @@ function parseRunCodeResult(text: string) {
     caughtMessage: string;
     fetchedRepo: string;
     openApi: { hasFindPetsByStatus: boolean; petCount: number };
-    orpc: { logDemoOk: boolean; sawLogDemoProcedure: boolean };
+    orpc: { sawStreamsList: boolean; streamCount: number };
     raced: string;
     repo: { callbackCalled: boolean; message: string };
     slack: { skipped: true } | { channel: string; ok: boolean; skipped: false; ts: string };
