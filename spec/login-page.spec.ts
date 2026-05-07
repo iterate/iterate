@@ -1,4 +1,4 @@
-import { login, test } from "./test-helpers.ts";
+import { login, test, waitForEnabledTestId } from "./test-helpers.ts";
 
 test.describe("login page", () => {
   test("loads wrapper login, then shows email and google options", async ({ page }) => {
@@ -42,11 +42,3 @@ test.describe("login page", () => {
     await page.getByText(`Enter the 6-digit code sent to ${email}`).waitFor();
   });
 });
-
-async function waitForEnabledTestId(page: Parameters<typeof login>[0], testId: string) {
-  await page.getByTestId(testId).waitFor();
-  await page.waitForFunction((value) => {
-    const element = document.querySelector(`[data-testid="${value}"]`);
-    return element instanceof HTMLButtonElement ? !element.disabled : element !== null;
-  }, testId);
-}

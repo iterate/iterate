@@ -1,13 +1,14 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { hashPassword } from "better-auth/crypto";
-
-const BOOTSTRAP_SUPERADMIN_EMAIL = "superadmin@nustom.com";
-const BOOTSTRAP_SUPERADMIN_NAME = "Super Admin";
-const BOOTSTRAP_SUPERADMIN_ROLE = "admin";
-const BOOTSTRAP_SUPERADMIN_ACCOUNT_ID = "superadmin";
-const BOOTSTRAP_SUPERADMIN_ACCOUNT_ROW_ID = "acc_bootstrap_superadmin";
-const BOOTSTRAP_SUPERADMIN_USER_ID = "usr_bootstrap_superadmin";
+import {
+  BOOTSTRAP_SUPERADMIN_ACCOUNT_ID,
+  BOOTSTRAP_SUPERADMIN_ACCOUNT_ROW_ID,
+  BOOTSTRAP_SUPERADMIN_EMAIL,
+  BOOTSTRAP_SUPERADMIN_NAME,
+  BOOTSTRAP_SUPERADMIN_ROLE,
+  BOOTSTRAP_SUPERADMIN_USER_ID,
+} from "../src/server/bootstrap-superadmin.ts";
 
 function escapeSqlString(value: string) {
   return value.replaceAll("'", "''");

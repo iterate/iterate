@@ -92,7 +92,7 @@ export function getAuthPlugins(env: Record<string, unknown>) {
       loginPage: "/login",
       consentPage: "/consent",
       silenceWarnings: { openidConfig: true, oauthAuthServerConfig: true },
-      accessTokenExpiresIn: 5 * 60, // 5 minutes in seconds, since we are using jwt tokens
+      accessTokenExpiresIn: 5 * 60,
       customIdTokenClaims: ({ user }) => buildIterateTokenClaims(user),
       customAccessTokenClaims: ({ user }) => buildIterateTokenClaims(user),
       customUserInfoClaims: async ({ user, jwt }) => ({

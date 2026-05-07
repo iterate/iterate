@@ -1,6 +1,7 @@
 import { execSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import { join } from "node:path";
+import { parseEnv } from "node:util";
 import { CronExpressionParser } from "cron-parser";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
@@ -75,17 +76,7 @@ const AUTH_EXAMPLE_REDIRECT_URI = "http://localhost:7201/api/iterate-auth/callba
 
 function readEnvFileValue(params: { filePath: string; key: string }): string | undefined {
   if (!fs.existsSync(params.filePath)) return undefined;
-
-  const lines = fs.readFileSync(params.filePath, "utf8").split("\n");
-  for (const line of lines) {
-    const trimmedLine = line.trim();
-    if (!trimmedLine || trimmedLine.startsWith("#")) continue;
-    const prefix = `${params.key}=`;
-    if (!trimmedLine.startsWith(prefix)) continue;
-    return trimmedLine.slice(prefix.length).trim() || undefined;
-  }
-
-  return undefined;
+  return parseEnv(fs.readFileSync(params.filePath, "utf8"))[params.key] || undefined;
 }
 
 async function ensureDevTunnelWildcardDns(tunnelId: string) {

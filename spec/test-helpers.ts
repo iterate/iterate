@@ -111,7 +111,7 @@ export const toast = {
   success: (page: Page, text?: string | RegExp) => toastLocator(page, "success", text),
 };
 
-async function waitForEnabledTestId(page: Page, testId: string) {
+export async function waitForEnabledTestId(page: Page, testId: string) {
   await page.getByTestId(testId).waitFor();
   await page.waitForFunction((value) => {
     const element = document.querySelector(`[data-testid="${value}"]`);

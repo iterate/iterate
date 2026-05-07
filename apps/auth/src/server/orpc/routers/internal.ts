@@ -27,8 +27,7 @@ import {
   toProjectRecord,
   toUserRecord,
 } from "./_shared.ts";
-
-const BOOTSTRAP_SUPERADMIN_EMAIL = "superadmin@nustom.com";
+import { BOOTSTRAP_SUPERADMIN_EMAIL } from "../../bootstrap-superadmin.ts";
 
 function extractCookieHeader(setCookieHeader: string | null): string | null {
   if (!setCookieHeader) return null;
