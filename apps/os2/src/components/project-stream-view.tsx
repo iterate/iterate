@@ -14,6 +14,7 @@ import {
 } from "@iterate-com/ui/components/events/stream-feed";
 import { EventsStreamLayoutMessageInput } from "@iterate-com/ui/components/events/stream-layout";
 import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
+import { EventsDebugLink } from "~/components/events-debug-link.tsx";
 import { createBrowserOpenApiClient } from "~/orpc/client.ts";
 import { streamPathToSplat } from "~/lib/stream-links.ts";
 
@@ -121,8 +122,13 @@ export function ProjectStreamView({
 
   return (
     <section className="flex min-h-0 flex-1 flex-col">
-      <div className="shrink-0 border-b p-4">
-        <EventsStreamPathLabel path={streamPath} className="text-sm font-medium" />
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b p-4">
+        <EventsStreamPathLabel path={streamPath} className="min-w-0 text-sm font-medium" />
+        <EventsDebugLink
+          className="md:shrink-0"
+          namespace={projectSlugOrId}
+          streamPath={streamPath}
+        />
       </div>
 
       <EventsStreamView

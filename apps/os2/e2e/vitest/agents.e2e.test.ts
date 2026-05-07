@@ -40,7 +40,7 @@ describe("project agents codemode", () => {
       projectSlugOrId: project.id,
     });
 
-    await client.project.streams.append({
+    const output = await client.project.streams.append({
       projectSlugOrId: project.id,
       streamPath: agentPath,
       event: {
@@ -82,6 +82,15 @@ async (ctx) => {
         }),
       }),
     );
+    const scriptRequested = events.find(
+      (event) => event.type === "events.iterate.com/codemode/script-execution-requested",
+    );
+    if (!scriptRequested) {
+      throw new Error("Expected codemode/script-execution-requested after agent output.");
+    }
+    const scriptRequestDelayMs =
+      new Date(scriptRequested.createdAt).getTime() - new Date(output.event.createdAt).getTime();
+    expect(scriptRequestDelayMs).toBeLessThan(1_000);
     expect(events).toContainEqual(
       expect.objectContaining({
         type: "events.iterate.com/agent-chat/assistant-response-added",

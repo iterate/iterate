@@ -14,6 +14,7 @@ import {
   TableHeader,
   TableRow,
 } from "@iterate-com/ui/components/table";
+import { EventsDebugLink } from "~/components/events-debug-link.tsx";
 import { agentPathFromInput, agentPathToSplat } from "~/lib/agent-links.ts";
 import { orpc, orpcClient } from "~/orpc/client.ts";
 
@@ -105,6 +106,9 @@ function ProjectAgentsIndexPage() {
 
   return (
     <section className="w-full space-y-4 p-4">
+      <div className="flex justify-end">
+        <EventsDebugLink label="Open namespace in Events" namespace={project.id} streamPath="/" />
+      </div>
       <form
         className="flex w-full flex-col gap-2 md:flex-row"
         onSubmit={(event) => {
@@ -165,12 +169,13 @@ function ProjectAgentsIndexPage() {
                   label="Woke"
                   onClick={() => setSort(nextSort(sort, "lastWokenAt"))}
                 />
+                <TableHead className="w-28 text-right">Events</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {visibleAgents.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={3} className="h-24 text-center text-muted-foreground">
+                  <TableCell colSpan={4} className="h-24 text-center text-muted-foreground">
                     No agents match.
                   </TableCell>
                 </TableRow>
@@ -195,6 +200,13 @@ function ProjectAgentsIndexPage() {
                     </TableCell>
                     <TableCell className="w-40 text-muted-foreground">
                       {formatRelativeTime(agent.lastWokenAt)}
+                    </TableCell>
+                    <TableCell className="w-28 text-right">
+                      <EventsDebugLink
+                        label="Open"
+                        namespace={project.id}
+                        streamPath={agent.agentPath}
+                      />
                     </TableCell>
                   </TableRow>
                 ))

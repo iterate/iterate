@@ -60,6 +60,20 @@ export async function startCodemodeScriptOnSession(input: {
   });
 }
 
+export async function startCodemodeScriptOnExistingSession(input: {
+  code: string;
+  events?: EventInput[];
+  namespace: CodemodeSessionNamespace;
+  projectId: string;
+  streamPath: StreamPath;
+}) {
+  const session = await getInitializedCodemodeSession(input);
+  return await session.startScriptExecution({
+    code: input.code,
+    events: input.events ?? [],
+  });
+}
+
 export async function createCodemodeSession(input: {
   code?: string;
   events: EventInput[];

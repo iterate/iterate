@@ -30,7 +30,7 @@ import type { Event, EventInput, StreamCursor } from "@iterate-com/shared/stream
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import {
   createCodemodeSession,
-  startCodemodeScriptOnSession,
+  startCodemodeScriptOnExistingSession,
 } from "~/domains/codemode/codemode-session-rpc.ts";
 import type { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
@@ -221,12 +221,11 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     const code = extractCodemodeScript(payload.content);
     if (code == null) return;
 
-    await startCodemodeScriptOnSession({
+    await startCodemodeScriptOnExistingSession({
       code,
       events: [],
       namespace: this.env.CODEMODE_SESSION,
       projectId: this.structuredName.projectId,
-      providers: [this.createAgentChatToolProvider()],
       streamPath: this.structuredName.agentPath,
     });
   }

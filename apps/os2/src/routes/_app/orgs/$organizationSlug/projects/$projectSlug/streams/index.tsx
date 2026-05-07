@@ -21,6 +21,7 @@ import {
   TableRow,
 } from "@iterate-com/ui/components/table";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { EventsDebugLink } from "~/components/events-debug-link.tsx";
 import { orpc } from "~/orpc/client.ts";
 import { streamPathFromInput, streamPathToSplat } from "~/lib/stream-links.ts";
 
@@ -115,6 +116,9 @@ function ProjectStreamsIndexPage() {
 
   return (
     <section className="w-full space-y-4 p-4">
+      <div className="flex justify-end">
+        <EventsDebugLink label="Open namespace in Events" namespace={project.id} streamPath="/" />
+      </div>
       <form
         className="flex w-full flex-col gap-2 md:flex-row"
         onSubmit={(event) => {
@@ -192,12 +196,13 @@ function ProjectStreamsIndexPage() {
                   label="Woke"
                   onClick={() => setSort(nextSort(sort, "lastWokenAt"))}
                 />
+                <TableHead className="w-28 text-right">Events</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {visibleStreams.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={3} className="h-24 text-center text-muted-foreground">
+                  <TableCell colSpan={4} className="h-24 text-center text-muted-foreground">
                     No streams match.
                   </TableCell>
                 </TableRow>
@@ -222,6 +227,13 @@ function ProjectStreamsIndexPage() {
                     </TableCell>
                     <TableCell className="w-40 text-muted-foreground">
                       {formatRelativeTime(stream.lastWokenAt)}
+                    </TableCell>
+                    <TableCell className="w-28 text-right">
+                      <EventsDebugLink
+                        label="Open"
+                        namespace={project.id}
+                        streamPath={stream.streamPath}
+                      />
                     </TableCell>
                   </TableRow>
                 ))
