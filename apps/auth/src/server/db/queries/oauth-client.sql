@@ -11,6 +11,19 @@ FROM oauthClient
 WHERE referenceId = :referenceId
 LIMIT 1;
 
+/** @name getOAuthClientByClientId */
+SELECT id,
+  clientId,
+  clientSecret,
+  disabled,
+  userId,
+  name,
+  redirectUris AS redirectUrisJson,
+  referenceId
+FROM oauthClient
+WHERE clientId = :clientId
+LIMIT 1;
+
 /** @name updateOAuthClientById */
 UPDATE oauthClient
 SET name = :name,

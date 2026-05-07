@@ -5,6 +5,7 @@ import { auth, createProjectIngressToken as createSignedProjectIngressToken } fr
 import { parseProjectMetadata, parseStringArray } from "../../db/helpers.ts";
 import {
   disableOAuthClientById,
+  getOAuthClientByClientId,
   getOAuthClientByReferenceId,
   getOrganizationBySlug,
   getProjectBySlug,
@@ -220,10 +221,20 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
   .use(serviceMiddleware)
   .handler(async ({ context, input }) => {
     const redirectURIs = [...new Set(input.redirectURIs.map((uri) => uri.trim()))].sort();
-    const existing = await getOAuthClientByReferenceId(context.db, {
+    const existingByReferenceId = await getOAuthClientByReferenceId(context.db, {
       referenceId: input.referenceId,
     });
+    const existingByClientId = input.existingClientId
+      ? await getOAuthClientByClientId(context.db, {
+          clientId: input.existingClientId,
+        })
+      : null;
     const shouldRotateDevClient = input.referenceId.startsWith("dev:");
+
+    const existing =
+      shouldRotateDevClient && existingByClientId?.clientSecret
+        ? existingByClientId
+        : existingByReferenceId;
 
     if (existing?.clientSecret && !shouldRotateDevClient) {
       const existingSorted = parseStringArray(existing.redirectUrisJson).sort();
@@ -255,14 +266,62 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
       };
     }
 
-    if (existing && shouldRotateDevClient) {
+    if (
+      shouldRotateDevClient &&
+      existingByClientId?.clientSecret &&
+      existingByReferenceId &&
+      existingByReferenceId.id !== existingByClientId.id
+    ) {
       await disableOAuthClientById(
         context.db,
         {
           updatedAt: Date.now(),
         },
         {
-          id: existing.id,
+          id: existingByReferenceId.id,
+        },
+      );
+    }
+
+    if (shouldRotateDevClient && existingByClientId?.clientSecret) {
+      const existingSorted = parseStringArray(existingByClientId.redirectUrisJson).sort();
+      const needsUpdate =
+        existingByClientId.name !== input.clientName ||
+        existingByClientId.disabled !== 0 ||
+        existingByClientId.referenceId !== input.referenceId ||
+        JSON.stringify(existingSorted) !== JSON.stringify(redirectURIs);
+
+      if (needsUpdate) {
+        await updateOAuthClientReferenceByClientId(
+          context.db,
+          {
+            referenceId: input.referenceId,
+            name: input.clientName,
+            redirectUris: JSON.stringify(redirectURIs),
+            updatedAt: Date.now(),
+          },
+          {
+            clientId: existingByClientId.clientId,
+          },
+        );
+      }
+
+      return {
+        clientId: existingByClientId.clientId,
+        clientName: input.clientName,
+        clientSecret: existingByClientId.clientSecret,
+        redirectURIs,
+      };
+    }
+
+    if (existingByReferenceId && shouldRotateDevClient) {
+      await disableOAuthClientById(
+        context.db,
+        {
+          updatedAt: Date.now(),
+        },
+        {
+          id: existingByReferenceId.id,
         },
       );
     }

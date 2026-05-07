@@ -1,7 +1,7 @@
 import { createAuthClient } from "better-auth/react";
 import { oauthProviderClient } from "@better-auth/oauth-provider/client";
 import { organizationClient } from "better-auth/client/plugins";
-import { adminClient, deviceAuthorizationClient } from "better-auth/client/plugins";
+import { adminClient, deviceAuthorizationClient, emailOTPClient } from "better-auth/client/plugins";
 import { useRouteContext } from "@tanstack/react-router";
 
 export const authClient = createAuthClient({
@@ -11,6 +11,7 @@ export const authClient = createAuthClient({
     organizationClient(),
     adminClient(),
     deviceAuthorizationClient(),
+    emailOTPClient(),
   ],
   fetchOptions: { throw: true },
 });

@@ -1,3 +1,7 @@
+import { useEffect, useState, type ChangeEvent } from "react";
+import { createFileRoute, redirect } from "@tanstack/react-router";
+import { useMutation } from "@tanstack/react-query";
+import { z } from "zod/v4";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   Card,
@@ -6,10 +10,14 @@ import {
   CardHeader,
   CardTitle,
 } from "@iterate-com/ui/components/card";
-import { createFileRoute, redirect } from "@tanstack/react-router";
-import { useMutation } from "@tanstack/react-query";
-import { z } from "zod/v4";
+import { Input } from "@iterate-com/ui/components/input";
+import { InputOTP, InputOTPGroup, InputOTPSlot } from "@iterate-com/ui/components/input-otp";
+import { Label } from "@iterate-com/ui/components/label";
+import { Separator } from "@iterate-com/ui/components/separator";
+import { toast } from "sonner";
 import { authClient } from "../utils/auth-client.ts";
+
+const emailOtpEnabled = import.meta.env.VITE_ENABLE_EMAIL_OTP_SIGNIN === "true";
 
 export const Route = createFileRoute("/login")({
   component: RouteComponent,
@@ -25,14 +33,6 @@ export const Route = createFileRoute("/login")({
 function RouteComponent() {
   const { redirect } = Route.useSearch();
 
-  const signIn = useMutation({
-    mutationFn: () =>
-      authClient.signIn.social({
-        provider: "google",
-        callbackURL: redirect ?? "/",
-      }),
-  });
-
   return (
     <div className="flex min-h-screen items-center justify-center p-4">
       <Card className="w-full max-w-sm">
@@ -40,21 +40,242 @@ function RouteComponent() {
           <CardTitle className="text-xl">Sign in</CardTitle>
           <CardDescription>Sign in to your Iterate account</CardDescription>
         </CardHeader>
-        <CardContent>
-          <Button
-            className="w-full"
-            variant="outline"
-            size="lg"
-            disabled={signIn.isPending}
-            onClick={() => signIn.mutate()}
-          >
-            <GoogleIcon />
-            {signIn.isPending ? "Redirecting..." : "Continue with Google"}
-          </Button>
+        <Separator />
+        <CardContent className="pt-6">
+          <LoginActions redirectTo={redirect ?? "/"} />
         </CardContent>
       </Card>
     </div>
   );
+}
+
+function LoginActions({ redirectTo }: { redirectTo: string }) {
+  const [emailMode, setEmailMode] = useState(false);
+  const [isHydrated, setIsHydrated] = useState(false);
+  const googleSignIn = useMutation({
+    mutationFn: () =>
+      authClient.signIn.social({
+        provider: "google",
+        callbackURL: redirectTo,
+      }),
+  });
+
+  useEffect(() => {
+    setIsHydrated(true);
+  }, []);
+
+  return (
+    <div className="space-y-4">
+      {emailOtpEnabled ? (
+        <EmailOtpSignIn
+          redirectTo={redirectTo}
+          isExpanded={emailMode}
+          isHydrated={isHydrated}
+          onExpandedChange={setEmailMode}
+        />
+      ) : null}
+
+      {!emailMode ? (
+        <>
+          {emailOtpEnabled ? (
+            <div className="relative">
+              <Separator />
+              <span className="bg-card text-muted-foreground absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 px-2 text-xs uppercase tracking-[0.2em]">
+                Or
+              </span>
+            </div>
+          ) : null}
+          <Button
+            className="w-full"
+            variant="outline"
+            size="lg"
+            disabled={googleSignIn.isPending || !isHydrated}
+            data-testid="google-login-button"
+            onClick={() => googleSignIn.mutate()}
+          >
+            <GoogleIcon />
+            {googleSignIn.isPending ? "Redirecting..." : "Continue with Google"}
+          </Button>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function EmailOtpSignIn({
+  redirectTo,
+  isExpanded,
+  isHydrated,
+  onExpandedChange,
+}: {
+  redirectTo: string;
+  isExpanded: boolean;
+  isHydrated: boolean;
+  onExpandedChange: (expanded: boolean) => void;
+}) {
+  const [email, setEmail] = useState("");
+  const [submittedEmail, setSubmittedEmail] = useState("");
+  const [otp, setOtp] = useState("");
+
+  const sendOtp = useMutation({
+    mutationFn: (address: string) =>
+      authClient.emailOtp.sendVerificationOtp({
+        email: address,
+        type: "sign-in",
+      }),
+    onSuccess: (_, address) => {
+      setSubmittedEmail(address);
+      setOtp("");
+      toast.success(`Verification code sent to ${address}`);
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Failed to send verification code");
+    },
+  });
+
+  const signInWithOtp = useMutation({
+    mutationFn: ({ address, code }: { address: string; code: string }) =>
+      authClient.signIn.emailOtp({
+        email: address,
+        otp: code,
+      }),
+    onSuccess: async () => {
+      const nextUrl = await getPostLoginRedirectUrl(redirectTo);
+      window.location.assign(nextUrl);
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Failed to sign in with email");
+    },
+  });
+
+  const normalizedEmail = email.trim().toLowerCase();
+  const canSendOtp = normalizedEmail.length > 0;
+  const canSignIn = otp.length === 6 && submittedEmail.length > 0;
+  const showExpandedForm = isExpanded || submittedEmail.length > 0;
+
+  return (
+    <div className="space-y-3">
+      {!showExpandedForm ? (
+        <Button
+          className="w-full border-border bg-background text-foreground shadow-sm transition-colors hover:bg-muted"
+          variant="outline"
+          size="lg"
+          data-testid="email-login-button"
+          aria-disabled={!isHydrated}
+          disabled={!isHydrated}
+          onClick={() => onExpandedChange(true)}
+        >
+          Continue with email
+        </Button>
+      ) : (
+        <div className="space-y-4 rounded-xl border bg-muted/30 p-4">
+          <div className="space-y-1">
+            <p className="text-sm font-medium text-foreground">Continue with email</p>
+            <p className="text-xs text-muted-foreground">
+              We&apos;ll send a one-time code to your email.
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="email">Email</Label>
+            <Input
+              id="email"
+              data-testid="email-input"
+              type="email"
+              autoComplete="email"
+              placeholder="you@company.com"
+              value={email}
+              onChange={(event: ChangeEvent<HTMLInputElement>) => setEmail(event.target.value)}
+              disabled={sendOtp.isPending || signInWithOtp.isPending}
+            />
+          </div>
+
+          {submittedEmail ? (
+            <div className="space-y-1.5">
+              <Label htmlFor="email-otp">Verification code</Label>
+              <div className="space-y-2">
+                <InputOTP
+                  id="email-otp"
+                  data-testid="email-otp-input"
+                  maxLength={6}
+                  value={otp}
+                  onChange={setOtp}
+                  disabled={signInWithOtp.isPending}
+                  containerClassName="justify-center"
+                >
+                  <InputOTPGroup>
+                    <InputOTPSlot index={0} />
+                    <InputOTPSlot index={1} />
+                    <InputOTPSlot index={2} />
+                    <InputOTPSlot index={3} />
+                    <InputOTPSlot index={4} />
+                    <InputOTPSlot index={5} />
+                  </InputOTPGroup>
+                </InputOTP>
+                <p className="text-center text-xs text-muted-foreground">
+                  Enter the 6-digit code sent to {submittedEmail}
+                </p>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="space-y-2">
+            {submittedEmail ? (
+              <Button
+                className="w-full bg-foreground text-background hover:bg-foreground/90"
+                data-testid="email-verify-button"
+                disabled={signInWithOtp.isPending || !canSignIn}
+                onClick={() => signInWithOtp.mutate({ address: submittedEmail, code: otp })}
+              >
+                {signInWithOtp.isPending ? "Signing in..." : "Continue with email"}
+              </Button>
+            ) : null}
+
+            <Button
+              className="w-full bg-foreground text-background hover:bg-foreground/90"
+              data-testid="email-submit-button"
+              disabled={sendOtp.isPending || signInWithOtp.isPending || !canSendOtp}
+              onClick={() => sendOtp.mutate(normalizedEmail)}
+            >
+              {sendOtp.isPending
+                ? "Sending code..."
+                : submittedEmail
+                  ? "Resend code"
+                  : "Send verification code"}
+            </Button>
+
+            {!submittedEmail ? (
+              <Button
+                className="w-full"
+                variant="ghost"
+                disabled={sendOtp.isPending || signInWithOtp.isPending}
+                onClick={() => onExpandedChange(false)}
+              >
+                Back
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+async function getPostLoginRedirectUrl(fallbackRedirect: string) {
+  if (!isOAuthProviderFlow()) {
+    return fallbackRedirect;
+  }
+
+  const result = await authClient.oauth2.continue({
+    postLogin: true,
+  });
+
+  return result.url;
+}
+
+function isOAuthProviderFlow() {
+  const searchParams = new URLSearchParams(window.location.search);
+  return searchParams.has("sig");
 }
 
 function GoogleIcon() {

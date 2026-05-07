@@ -73,6 +73,21 @@ const DEV_MACHINE_DOMAIN = "iterate-dev.app";
 const AUTH_EXAMPLE_DEV_VARS_PATH = join(repoRoot, "apps", "auth-example", ".dev.vars");
 const AUTH_EXAMPLE_REDIRECT_URI = "http://localhost:7201/api/iterate-auth/callback";
 
+function readEnvFileValue(params: { filePath: string; key: string }): string | undefined {
+  if (!fs.existsSync(params.filePath)) return undefined;
+
+  const lines = fs.readFileSync(params.filePath, "utf8").split("\n");
+  for (const line of lines) {
+    const trimmedLine = line.trim();
+    if (!trimmedLine || trimmedLine.startsWith("#")) continue;
+    const prefix = `${params.key}=`;
+    if (!trimmedLine.startsWith(prefix)) continue;
+    return trimmedLine.slice(prefix.length).trim() || undefined;
+  }
+
+  return undefined;
+}
+
 async function ensureDevTunnelWildcardDns(tunnelId: string) {
   if (!DEV_TUNNEL) return;
 
@@ -354,6 +369,11 @@ async function ensureLocalDevOAuthClients(params: {
   );
 
   const osRedirectUri = new URL("/api/iterate-auth/callback", params.osPublicUrl).toString();
+  const existingAuthExampleClientId = readEnvFileValue({
+    filePath: AUTH_EXAMPLE_DEV_VARS_PATH,
+    key: "ITERATE_OAUTH_CLIENT_ID",
+  });
+  const existingOsClientId = process.env.ITERATE_OAUTH_CLIENT_ID?.trim() || undefined;
 
   const startedAt = Date.now();
   let authExampleClient: Awaited<ReturnType<typeof client.internal.oauth.ensureClient>>;
@@ -366,11 +386,13 @@ async function ensureLocalDevOAuthClients(params: {
           referenceId: "dev:auth-example",
           clientName: "Iterate Auth Example (Local Dev)",
           redirectURIs: [AUTH_EXAMPLE_REDIRECT_URI],
+          existingClientId: existingAuthExampleClientId,
         }),
         client.internal.oauth.ensureClient({
           referenceId: "dev:os",
           clientName: "Iterate OS (Local Dev)",
           redirectURIs: [osRedirectUri],
+          existingClientId: existingOsClientId,
         }),
       ]);
       break;

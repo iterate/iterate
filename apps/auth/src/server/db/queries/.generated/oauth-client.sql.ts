@@ -48,6 +48,54 @@ export namespace getOAuthClientByReferenceId {
   };
 }
 
+const getOAuthClientByClientIdSql = `
+SELECT id,
+  clientId,
+  clientSecret,
+  disabled,
+  userId,
+  name,
+  redirectUris AS redirectUrisJson,
+  referenceId
+FROM oauthClient
+WHERE clientId = ?
+LIMIT 1;
+`.trim();
+const getOAuthClientByClientIdQuery = (params: getOAuthClientByClientId.Params) => ({
+  name: "getOAuthClientByClientId",
+  sql: getOAuthClientByClientIdSql,
+  args: [params.clientId],
+});
+
+export const getOAuthClientByClientId = Object.assign(
+  async function getOAuthClientByClientId(
+    client: Client,
+    params: getOAuthClientByClientId.Params,
+  ): Promise<getOAuthClientByClientId.Result | null> {
+    const rows = await client.all<getOAuthClientByClientId.Result>(
+      getOAuthClientByClientIdQuery(params),
+    );
+    return rows.length > 0 ? rows[0] : null;
+  },
+  { sql: getOAuthClientByClientIdSql, query: getOAuthClientByClientIdQuery },
+);
+
+export namespace getOAuthClientByClientId {
+  export type Params = {
+    clientId: string;
+  };
+  export type Result = {
+    id: string;
+    clientId: string;
+    clientSecret?: string;
+    disabled?: number;
+    userId?: string;
+    name?: string;
+    redirectUrisJson: string;
+    referenceId?: string;
+  };
+}
+
 const updateOAuthClientByIdSql = `
 UPDATE oauthClient
 SET name = ?,
