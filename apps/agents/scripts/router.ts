@@ -6,17 +6,14 @@ import { os } from "@orpc/server";
 import { z } from "zod";
 import { useCloudflareTunnel, useCloudflareTunnelLease } from "@iterate-com/shared/test-helpers";
 import { StreamPath } from "@iterate-com/shared/streams/types";
-import { ProjectId } from "@iterate-com/shared/streams/types";
+import { StreamNamespace } from "@iterate-com/shared/streams/types";
 import { createEventsOrpcClient } from "../src/lib/events-orpc-client.ts";
 import { buildStreamAppendUrl, buildStreamViewerUrl } from "../src/lib/events-urls.ts";
-import {
-  buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl,
-  streamPathToAgentInstance,
-} from "../src/lib/iterate-agent-addressing.ts";
+import { buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl } from "../src/lib/iterate-agent-addressing.ts";
 import { createEphemeralWorker } from "../e2e/test-support/create-ephemeral-worker.ts";
 
 const DEFAULT_EVENTS_BASE_URL = "https://events.iterate.com";
-const DEFAULT_PROJECT_ID: ProjectId = "public";
+const DEFAULT_PROJECT_ID: StreamNamespace = "public";
 const TUNNEL_READY_TIMEOUT_MS = 120_000;
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 
@@ -66,14 +63,6 @@ const TunnelInput = z.object({
     .url()
     .default(DEFAULT_EVENTS_BASE_URL)
     .describe("Events base URL"),
-  runnerInstance: z
-    .string()
-    .trim()
-    .min(1)
-    .optional()
-    .describe(
-      "Codemode runner Durable Object instance name (defaults to the stream path instance)",
-    ),
   subscriptionSlug: z
     .string()
     .trim()
@@ -165,9 +154,8 @@ export const router = {
     .handler(async ({ input, signal }) => {
       const slug = randomBytes(4).toString("hex");
       const streamPath = StreamPath.parse(input.streamPath ?? `/dev/${slug}`);
-      const projectSlug = ProjectId.parse(input.projectSlug);
+      const projectSlug = StreamNamespace.parse(input.projectSlug);
       const eventsBaseUrl = input.eventsBaseUrl.replace(/\/+$/, "");
-      const runnerInstance = input.runnerInstance ?? streamPathToAgentInstance(streamPath);
       const subscriptionSlug = input.subscriptionSlug ?? `dev-${slug}`;
 
       console.info("[tunnel] Acquiring Cloudflare tunnel lease from Semaphore…");
@@ -190,7 +178,6 @@ export const router = {
 
       const websocketUrl = buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
         publicOrigin: tunnel.publicUrl,
-        runnerInstance,
         streamPath,
       });
 

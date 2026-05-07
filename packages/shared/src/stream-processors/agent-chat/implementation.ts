@@ -1,6 +1,6 @@
 import {
   assertNever,
-  buildDerivedIdempotencyKey,
+  buildProcessorIdempotencyKey,
   implementProcessor,
   type ProcessorStreamApi,
 } from "../stream-processor.ts";
@@ -37,10 +37,10 @@ export function createAgentChatProcessor() {
           await streamApi.append({
             event: {
               type: "events.iterate.com/agent/input-added",
-              idempotencyKey: buildDerivedIdempotencyKey({
-                slug: AgentChatProcessorContract.slug,
-                purpose: "render-message",
-                event,
+              idempotencyKey: buildProcessorIdempotencyKey({
+                processor: AgentChatProcessorContract,
+                key: "render-message",
+                sourceEvent: event,
               }),
               payload: {
                 content: eventBlock({
@@ -59,10 +59,10 @@ export function createAgentChatProcessor() {
           await streamApi.append({
             event: {
               type: "events.iterate.com/agent/input-added",
-              idempotencyKey: buildDerivedIdempotencyKey({
-                slug: AgentChatProcessorContract.slug,
-                purpose: "render-response",
-                event,
+              idempotencyKey: buildProcessorIdempotencyKey({
+                processor: AgentChatProcessorContract,
+                key: "render-response",
+                sourceEvent: event,
               }),
               payload: {
                 content: eventBlock({
@@ -91,7 +91,10 @@ async function appendEventTypeExplanation(args: {
   await args.streamApi.append({
     event: {
       type: "events.iterate.com/agent/input-added",
-      idempotencyKey: `stream-processor:${AgentChatProcessorContract.slug}:event-type-explainer:${args.eventType}`,
+      idempotencyKey: buildProcessorIdempotencyKey({
+        processor: AgentChatProcessorContract,
+        key: `event-type-explainer/${args.eventType}`,
+      }),
       payload: {
         content: eventTypeExplanation(args.eventType),
         triggerLlmRequest: { behaviour: "dont-trigger-request" },

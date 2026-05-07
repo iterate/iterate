@@ -108,6 +108,7 @@ describe("codemode.executeScript", () => {
 
       const stream = await wsClient.client.codemode.streamEvents({
         afterOffset: started.event.offset > 1 ? started.event.offset - 1 : "start",
+        projectId,
         streamPath: started.streamPath,
       });
 

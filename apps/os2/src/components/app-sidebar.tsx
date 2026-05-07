@@ -207,6 +207,25 @@ function ProjectSidebarGroup({
             <SidebarMenuSubButton
               render={
                 <Link
+                  to="/orgs/$organizationSlug/projects/$projectSlug/streams"
+                  params={{ organizationSlug, projectSlug }}
+                />
+              }
+              isActive={Boolean(
+                matchRoute({
+                  to: "/orgs/$organizationSlug/projects/$projectSlug/streams",
+                  params: { organizationSlug, projectSlug },
+                  fuzzy: true,
+                }),
+              )}
+            >
+              <span>Streams</span>
+            </SidebarMenuSubButton>
+          </SidebarMenuSubItem>
+          <SidebarMenuSubItem>
+            <SidebarMenuSubButton
+              render={
+                <Link
                   to="/orgs/$organizationSlug/projects/$projectSlug/settings"
                   params={{ organizationSlug, projectSlug }}
                 />

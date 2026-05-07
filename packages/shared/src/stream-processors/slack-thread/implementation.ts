@@ -1,6 +1,6 @@
 import type { SlackEvent } from "@slack/types";
 import { z } from "zod";
-import { buildDerivedIdempotencyKey, implementProcessor } from "../stream-processor.ts";
+import { buildProcessorIdempotencyKey, implementProcessor } from "../stream-processor.ts";
 import { SlackThreadProcessorContract } from "./contract.ts";
 
 export function createSlackThreadProcessor() {
@@ -46,10 +46,10 @@ export function createSlackThreadProcessor() {
           await streamApi.append({
             event: {
               type: "events.iterate.com/agent/input-added",
-              idempotencyKey: buildDerivedIdempotencyKey({
-                slug: SlackThreadProcessorContract.slug,
-                purpose: "slack-webhook-to-agent-input",
-                event,
+              idempotencyKey: buildProcessorIdempotencyKey({
+                processor: SlackThreadProcessorContract,
+                key: "slack-webhook-to-agent-input",
+                sourceEvent: event,
               }),
               payload: {
                 content: `Slack webhook received:\n\`\`\`json\n${JSON.stringify(slackEvent, null, 2)}\n\`\`\``,

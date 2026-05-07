@@ -1,5 +1,5 @@
 import { StreamPath } from "@iterate-com/shared/streams/types";
-import { ProjectId } from "@iterate-com/shared/streams/types";
+import { StreamNamespace } from "@iterate-com/shared/streams/types";
 import { getAgentByName } from "agents";
 import type { ChildStreamAutoSubscriber } from "~/durable-objects/child-stream-auto-subscriber.ts";
 import { AUTO_SUBSCRIBER_INSTANCE } from "~/durable-objects/child-stream-auto-subscriber.ts";
@@ -48,7 +48,7 @@ export const basePathDefaultsRouter = {
   }),
   listAgents: os.listAgents.handler(async ({ input, context }) => {
     const stub = await getAutoSubscriberStub(context.env);
-    const projectId = ProjectId.parse(context.config.eventsProjectSlug);
+    const projectId = StreamNamespace.parse(context.config.eventsProjectSlug);
     const eventsBaseUrl = context.config.eventsBaseUrl;
     const records = await stub.listAgents({ prefix: input.prefix });
     // Build the viewer URL server-side so the client doesn't need to know

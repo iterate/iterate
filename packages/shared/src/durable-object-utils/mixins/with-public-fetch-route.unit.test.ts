@@ -1,6 +1,7 @@
 import { SELF, env } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 import type { PublicRouteTestRoom } from "../test-harness/initialize-fronting-worker.ts";
+import { deriveDurableObjectNameFromStructuredName } from "./with-lifecycle-hooks.ts";
 import { routeDurableObjectRequest } from "./with-public-fetch-route.ts";
 
 const testEnv = env as {
@@ -8,17 +9,15 @@ const testEnv = env as {
 };
 
 describe("withPublicFetchRoute", () => {
-  it("initializes and proxies requests by init params", async () => {
-    const roomName = `public-route-${crypto.randomUUID()}`;
-    const encodedInitParams = encodeURIComponent(
-      JSON.stringify({
-        name: roomName,
-        ownerUserId: "user-init",
-      }),
-    );
+  it("initializes and proxies requests by structured name", async () => {
+    const structuredName = {
+      ownerUserId: "user-init",
+    };
+    const roomName = deriveDurableObjectNameFromStructuredName({ structuredName });
+    const encodedStructuredName = encodeURIComponent(JSON.stringify(structuredName));
 
     const response = await SELF.fetch(
-      `https://example.com/durable-objects/public-route-rooms/by-init-params/${encodedInitParams}/messages/hello?via=init`,
+      `https://example.com/durable-objects/public-route-rooms/by-structured-name/${encodedStructuredName}/messages/hello?via=init`,
       {
         method: "POST",
         body: "payload-init",
@@ -36,26 +35,27 @@ describe("withPublicFetchRoute", () => {
     });
 
     await expect(
-      testEnv.PUBLIC_ROUTE_ROOMS.getByName(roomName).getInitParamsForTest(),
+      testEnv.PUBLIC_ROUTE_ROOMS.getByName(roomName).getStructuredNameForTest(),
     ).resolves.toEqual({
-      name: roomName,
       ownerUserId: "user-init",
     });
   });
 
   it("builds default and explicit public paths from the instance helper", async () => {
-    const roomName = `public-paths-${crypto.randomUUID()}`;
+    const structuredName = {
+      ownerUserId: `user-paths-${crypto.randomUUID()}`,
+    };
+    const roomName = deriveDurableObjectNameFromStructuredName({ structuredName });
     const room = testEnv.PUBLIC_ROUTE_ROOMS.getByName(roomName);
 
     await room.initialize({
       name: roomName,
-      ownerUserId: "user-paths",
     });
 
     const id = await room.getIdStringForTest();
     const paths = await room.getPublicPathsForTest();
 
-    expect(paths.defaultPath).toBe(paths.byInitParamsPath);
+    expect(paths.defaultPath).toBe(paths.byStructuredNamePath);
     expect(paths.byNamePath).toBe(
       `/durable-objects/public-route-rooms/by-name/${encodeURIComponent(roomName)}`,
     );
@@ -69,7 +69,7 @@ describe("withPublicFetchRoute", () => {
     expect(defaultResponse.status).toBe(200);
     expect(await defaultResponse.json()).toMatchObject({
       durableObjectName: roomName,
-      ownerUserId: "user-paths",
+      ownerUserId: structuredName.ownerUserId,
       pathname: "/state",
       search: "?mode=default",
       method: "GET",
@@ -77,12 +77,14 @@ describe("withPublicFetchRoute", () => {
   });
 
   it("routes the same object by name and by id", async () => {
-    const roomName = `public-route-shared-${crypto.randomUUID()}`;
+    const structuredName = {
+      ownerUserId: `user-shared-${crypto.randomUUID()}`,
+    };
+    const roomName = deriveDurableObjectNameFromStructuredName({ structuredName });
     const room = testEnv.PUBLIC_ROUTE_ROOMS.getByName(roomName);
 
     await room.initialize({
       name: roomName,
-      ownerUserId: "user-shared",
     });
 
     const id = await room.getIdStringForTest();
@@ -93,7 +95,7 @@ describe("withPublicFetchRoute", () => {
     expect(byNameResponse.status).toBe(200);
     expect(await byNameResponse.json()).toMatchObject({
       durableObjectName: roomName,
-      ownerUserId: "user-shared",
+      ownerUserId: structuredName.ownerUserId,
       pathname: "/by-name",
     });
 
@@ -103,7 +105,7 @@ describe("withPublicFetchRoute", () => {
     expect(byIdResponse.status).toBe(200);
     expect(await byIdResponse.json()).toMatchObject({
       durableObjectName: roomName,
-      ownerUserId: "user-shared",
+      ownerUserId: structuredName.ownerUserId,
       pathname: "/by-id",
     });
   });
@@ -128,7 +130,7 @@ describe("routeDurableObjectRequest", () => {
     });
   });
 
-  it("returns 400 for malformed init params payloads", async () => {
+  it("returns 400 for malformed structured name payloads", async () => {
     const getByName = vi.fn();
     const get = vi.fn();
     const idFromString = vi.fn();
@@ -144,21 +146,21 @@ describe("routeDurableObjectRequest", () => {
     ];
 
     const malformedJson = await routeDurableObjectRequest(
-      new Request("https://example.com/durable-objects/rooms/by-init-params/%7Bbad-json%7D"),
+      new Request("https://example.com/durable-objects/rooms/by-structured-name/%7Bbad-json%7D"),
       registrations,
     );
     expect(malformedJson?.status).toBe(400);
     await expect(malformedJson?.json()).resolves.toEqual({
-      error: "Invalid init params JSON.",
+      error: "Invalid structured name JSON.",
     });
 
     const primitiveJson = await routeDurableObjectRequest(
-      new Request("https://example.com/durable-objects/rooms/by-init-params/123"),
+      new Request("https://example.com/durable-objects/rooms/by-structured-name/123"),
       registrations,
     );
     expect(primitiveJson?.status).toBe(400);
     await expect(primitiveJson?.json()).resolves.toEqual({
-      error: "Init params must decode to a plain object.",
+      error: "Structured name must decode to a plain object.",
     });
 
     expect(getByName).not.toHaveBeenCalled();

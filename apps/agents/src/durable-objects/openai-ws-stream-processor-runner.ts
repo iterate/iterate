@@ -12,11 +12,11 @@ import {
 } from "@iterate-com/shared/stream-processors/openai-ws/implementation";
 import {
   createStreamProcessorRunnerDurableObject,
-  type StreamProcessorRunnerInit,
+  type StreamProcessorRunnerName,
 } from "./stream-processor-runner-common.ts";
 import { AppConfig } from "~/app.ts";
 
-export type OpenAiWsStreamProcessorRunnerInit = StreamProcessorRunnerInit;
+export type OpenAiWsStreamProcessorRunnerName = StreamProcessorRunnerName;
 
 const OpenAiWsStreamProcessorRunnerBase = createStreamProcessorRunnerDurableObject({
   className: "OpenAiWsStreamProcessorRunner",

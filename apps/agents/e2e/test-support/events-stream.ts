@@ -2,7 +2,7 @@ import type { ContractRouterClient } from "@orpc/contract";
 import { eventsContract } from "@iterate-com/events-contract";
 import {
   Event,
-  ProjectId,
+  StreamNamespace,
   type Event as EventsEvent,
   type StreamPath,
 } from "@iterate-com/shared/streams/types";
@@ -111,7 +111,7 @@ function eventsStreamViewerUrl(args: {
 }): string {
   const projectBase = getProjectUrl({
     currentUrl: args.eventsOrigin,
-    projectId: ProjectId.parse(args.projectSlug),
+    projectId: StreamNamespace.parse(args.projectSlug),
   })
     .toString()
     .replace(/\/+$/, "");

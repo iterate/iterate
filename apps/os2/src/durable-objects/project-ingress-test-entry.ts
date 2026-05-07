@@ -1,4 +1,10 @@
 import { createD1Client } from "sqlfu";
+import {
+  getInitializedStreamStub,
+  type StreamDurableObjectNamespace,
+} from "@iterate-com/shared/streams/helpers";
+import { getProjectDurableObjectName } from "./project-durable-object.ts";
+import { PROJECT_LIFECYCLE_STREAM_PATH } from "~/stream-processors/project-lifecycle.ts";
 import { getIngressRouteByHost } from "~/db/queries/.generated/index.ts";
 import {
   dispatchFetchCallable,
@@ -10,6 +16,8 @@ import type { ExactHostIngressRule } from "~/ingress/types.ts";
 
 export { ProjectDurableObject } from "./project-durable-object.ts";
 export { ProjectMcpServerConnection } from "./project-mcp-server-connection.ts";
+export { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
+export { PROJECT_LIFECYCLE_STREAM_PATH } from "~/stream-processors/project-lifecycle.ts";
 export { ProjectIngressEntrypoint } from "~/entrypoints/project-ingress-entrypoint.ts";
 export { ProjectMcpServerEntrypoint } from "~/entrypoints/project-mcp-server-entrypoint.ts";
 
@@ -19,13 +27,32 @@ export default {
 
     const url = new URL(request.url);
     if (url.pathname === "/__test/create-project") {
-      const project = await env.PROJECT.getByName("proj_local_test").createProject({
+      const project = await env.PROJECT.getByName(
+        getProjectDurableObjectName("proj_local_test"),
+      ).createProject({
         metadata: {},
         projectId: "proj_local_test",
         slug: "demo",
       });
 
       return Response.json(project);
+    }
+
+    if (url.pathname === "/__test/project-stream") {
+      const stream = await getInitializedStreamStub({
+        durableObjectNamespace: env.STREAM as unknown as StreamDurableObjectNamespace,
+        namespace: "proj_local_test",
+        path: PROJECT_LIFECYCLE_STREAM_PATH,
+      });
+
+      return Response.json({ events: await stream.history({ before: "end" }) });
+    }
+
+    if (url.pathname === "/__test/project-lifecycle-state") {
+      const state = await env.PROJECT.getByName(
+        getProjectDurableObjectName("proj_local_test"),
+      ).getProjectLifecycleRunnerState();
+      return Response.json(state);
     }
 
     const db = createD1Client(env.DB);

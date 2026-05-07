@@ -1,1 +1,1 @@
-select count(*) as total from secrets where project_id = :projectId;
+select count(*) as total from secrets where namespace = :namespace;

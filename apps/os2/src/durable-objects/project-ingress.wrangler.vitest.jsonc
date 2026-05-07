@@ -17,6 +17,10 @@
         "name": "PROJECT_MCP_SERVER_CONNECTION",
         "class_name": "ProjectMcpServerConnection",
       },
+      {
+        "name": "STREAM",
+        "class_name": "StreamDurableObject",
+      },
     ],
   },
   "d1_databases": [
@@ -37,6 +41,10 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["ProjectDurableObject", "ProjectMcpServerConnection"],
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["StreamDurableObject"],
     },
   ],
 }

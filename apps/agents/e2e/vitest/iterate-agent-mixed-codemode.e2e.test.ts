@@ -6,7 +6,7 @@
  */
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ProjectId } from "@iterate-com/shared/streams/types";
+import { StreamNamespace } from "@iterate-com/shared/streams/types";
 import { expect, test } from "vitest";
 import { getProjectUrl } from "../../src/lib/events-urls.ts";
 import { setupE2E } from "../test-support/e2e-test.ts";
@@ -16,10 +16,7 @@ import {
   MCP_TOOL_PROVIDER_PRESET_EVENT,
   OPENAPI_TOOL_PROVIDER_PRESET_EVENT,
 } from "~/lib/default-tool-provider-events.ts";
-import {
-  buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl,
-  streamPathToAgentInstance,
-} from "~/lib/iterate-agent-addressing.ts";
+import { buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl } from "~/lib/iterate-agent-addressing.ts";
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 const harFixturePath = join(appRoot, "e2e/vitest/__snapshots__/iterate-agent-mixed-codemode.har");
@@ -82,7 +79,6 @@ test.skip(
         callable: fetchCallableFromWebSocketUrl(
           buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
             publicOrigin: server.publicUrl,
-            runnerInstance: streamPathToAgentInstance(streamPath),
             streamPath,
           }),
         ),
@@ -155,7 +151,7 @@ test.skip(
     const eventsHost = new URL(
       getProjectUrl({
         currentUrl: e2e.eventsBaseUrl,
-        projectSlug: ProjectId.parse(e2e.runSlug),
+        projectSlug: StreamNamespace.parse(e2e.runSlug),
       }).toString(),
     ).hostname;
     expect(urls.some((url) => url.includes(eventsHost))).toBe(true);

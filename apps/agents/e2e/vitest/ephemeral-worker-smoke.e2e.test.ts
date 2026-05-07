@@ -5,10 +5,7 @@ import {
 } from "../test-support/create-ephemeral-worker.ts";
 import { setupE2E } from "../test-support/e2e-test.ts";
 import { OPENAPI_TOOL_PROVIDER_PRESET_EVENT } from "~/lib/default-tool-provider-events.ts";
-import {
-  buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl,
-  streamPathToAgentInstance,
-} from "~/lib/iterate-agent-addressing.ts";
+import { buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl } from "~/lib/iterate-agent-addressing.ts";
 
 const hasAlchemyStateToken = Boolean(process.env.ALCHEMY_STATE_TOKEN?.trim());
 
@@ -63,7 +60,6 @@ describeEphemeral("ephemeral worker", () => {
 
       const websocketUrl = buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
         publicOrigin: worker!.url,
-        runnerInstance: streamPathToAgentInstance(streamPath),
         streamPath,
       });
 

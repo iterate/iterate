@@ -29,22 +29,22 @@ import { StreamPath } from "@iterate-com/shared/streams/types";
 import { x } from "tinyexec";
 import { describe, expect, test } from "vitest";
 import {
-  defaultE2EProjectId,
+  defaultE2ENamespace,
   getEventsProjectBaseUrl,
   requireEventsBaseUrl,
-  scopedE2EProjectId,
+  scopedE2ENamespace,
   supportsProjectHostRouting,
 } from "../helpers.ts";
 
 describe("events curl smoke", () => {
   test("append, state, history stream, and root endpoints (shell + snapshot)", async () => {
     const bareBaseUrl = requireEventsBaseUrl();
-    const projectId = supportsProjectHostRouting(bareBaseUrl)
-      ? scopedE2EProjectId
-      : defaultE2EProjectId;
+    const namespace = supportsProjectHostRouting(bareBaseUrl)
+      ? scopedE2ENamespace
+      : defaultE2ENamespace;
     const baseURL = getEventsProjectBaseUrl({
       baseURL: bareBaseUrl,
-      projectId,
+      namespace,
     });
 
     const streamPath = StreamPath.parse(`/e2e-curl/${randomUUID().slice(0, 8)}`);
@@ -155,7 +155,7 @@ retry_curl "$BASE_URL/api/streams/__state/%2F" >/dev/null
       },
     });
     expect(JSON.parse(encodedStateJson)).toMatchObject({
-      projectId,
+      namespace: namespace,
       path: "<streamPath>",
       eventCount: 2,
       childPaths: [],
@@ -178,7 +178,7 @@ retry_curl "$BASE_URL/api/streams/__state/%2F" >/dev/null
       },
     });
     expect(JSON.parse(slashEscapedStateJson)).toMatchObject({
-      projectId,
+      namespace: namespace,
       path: "<streamPath>",
       eventCount: 2,
       childPaths: [],
@@ -209,8 +209,8 @@ retry_curl "$BASE_URL/api/streams/__state/%2F" >/dev/null
       createdAt: "<ts>",
       offset: 1,
       payload: {
+        namespace: namespace,
         path: "<streamPath>",
-        projectId,
       },
       streamPath: "<streamPath>",
       type: "events.iterate.com/core/stream-first-initialized",

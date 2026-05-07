@@ -3,14 +3,14 @@ import type { Client } from "sqlfu";
 const sql = `
 select id, name, description, created_at, updated_at
 from secrets
-where project_id = ?
+where namespace = ?
 order by created_at desc
 limit ?
 offset ?;
 `.trim();
 const query = (params: listSecrets.Params) => ({
   sql,
-  args: [params.projectId, params.limit, params.offset],
+  args: [params.namespace, params.limit, params.offset],
   name: "listSecrets",
 });
 
@@ -26,7 +26,7 @@ export const listSecrets = Object.assign(
 
 export namespace listSecrets {
   export type Params = {
-    projectId: string;
+    namespace: string;
     limit: number;
     offset: number;
   };

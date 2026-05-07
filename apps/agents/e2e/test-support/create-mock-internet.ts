@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
-import { ProjectId } from "@iterate-com/shared/streams/types";
+import { StreamNamespace } from "@iterate-com/shared/streams/types";
 import {
   fromTrafficWithWebSocket,
   HttpResponse,
@@ -47,7 +47,7 @@ export async function createMockInternet(opts: {
     const eventsProjectHostname = new URL(
       getProjectUrl({
         currentUrl: opts.eventsBaseUrl,
-        projectId: ProjectId.parse(opts.eventsProjectSlug),
+        projectId: StreamNamespace.parse(opts.eventsProjectSlug),
       }).toString(),
     ).hostname;
     const harRaw = JSON.parse(await readFile(opts.harPath, "utf8")) as HarWithExtensions;

@@ -7,7 +7,12 @@
  * `EventsStreamViewReducer`; this file only owns terminal runtime state,
  * keyboard routing, and stream-scoped side effects.
  */
-import { Event, ProjectId, StreamPath, type EventInput } from "@iterate-com/shared/streams/types";
+import {
+  Event,
+  StreamNamespace,
+  StreamPath,
+  type EventInput,
+} from "@iterate-com/shared/streams/types";
 import type {
   EventsStreamViewReducer,
   EventsStreamViewState,
@@ -791,7 +796,7 @@ function parseArgs(argv: string[]) {
 
   return {
     eventsBaseUrl,
-    projectSlug: ProjectId.parse(projectSlug),
+    projectSlug: StreamNamespace.parse(projectSlug),
     streamPath: StreamPath.parse(streamPath),
   };
 }

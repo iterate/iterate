@@ -41,7 +41,7 @@ export const Route = createFileRoute(
       };
     } catch (error) {
       if (!search.streamPath) throw error;
-      if (!search.streamPath.startsWith(`/projects/${project.id}/`)) throw error;
+      if (search.streamPath.startsWith("/projects/")) throw error;
 
       return {
         breadcrumb: "Session",
@@ -76,6 +76,7 @@ function CodemodeSessionPage() {
     void (async () => {
       try {
         for await (const event of streamCodemodeEvents({
+          projectId: session.projectId,
           signal: controller.signal,
           streamPath: session.streamPath,
         })) {
@@ -97,7 +98,7 @@ function CodemodeSessionPage() {
       isCurrent = false;
       controller.abort();
     };
-  }, [session.streamPath]);
+  }, [session.projectId, session.streamPath]);
 
   const viewState = useMemo(
     () =>
@@ -132,11 +133,14 @@ function CodemodeSessionPage() {
 }
 
 async function* streamCodemodeEvents(input: {
+  projectId: string;
   signal: AbortSignal;
   streamPath: StreamPath;
 }): AsyncGenerator<Event> {
   const url = new URL(
-    `/api/codemode/events/${encodeURIComponent(input.streamPath)}`,
+    `/api/codemode/${encodeURIComponent(input.projectId)}/events/${encodeURIComponent(
+      input.streamPath,
+    )}`,
     window.location.origin,
   );
   url.searchParams.set("afterOffset", "start");

@@ -11,7 +11,7 @@ import { AppConfig } from "../../src/app.ts";
 import {
   collectAsyncIterableUntilIdle,
   createEvents2AppFixture,
-  defaultE2EProjectId,
+  defaultE2ENamespace,
   requireEventsBaseUrl,
 } from "../helpers.ts";
 
@@ -22,7 +22,7 @@ const app = createEvents2AppFixture({
 const postBootTimeoutMs = 2_000;
 const historyIdleTimeoutMs = 250;
 const rootHistoryIdleTimeoutMs = 1_000;
-const defaultProjectId = defaultE2EProjectId;
+const defaultNamespace = defaultE2ENamespace;
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
 const testTimeoutMs = 10_000;
 const describeRuntimeSmoke = process.env.CI ? describe.skip : describe;
@@ -113,7 +113,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
         type: "events.iterate.com/core/stream-first-initialized",
       });
       expect(await app.client.getState({ path: "/" })).toMatchObject({
-        projectId: defaultProjectId,
+        namespace: defaultNamespace,
         path: "/",
         metadata: {},
       });
@@ -131,7 +131,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
         streamPath: path,
         type: "events.iterate.com/core/stream-first-initialized",
         offset: expectedStoredOffset(0),
-        payload: { projectId: defaultProjectId, path },
+        payload: { namespace: defaultNamespace, path },
       });
       expect(events[1]).toMatchObject({
         streamPath: path,
@@ -140,7 +140,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
       });
 
       expect(await app.client.getState({ path })).toEqual({
-        projectId: defaultProjectId,
+        namespace: defaultNamespace,
         path,
         eventCount: 2,
         childPaths: [],
@@ -157,7 +157,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
       const rootStateResponse = await app.fetch("/api/streams/__state/%2F");
       expect(rootStateResponse.status).toBe(200);
       expect(await rootStateResponse.json()).toMatchObject({
-        projectId: defaultProjectId,
+        namespace: defaultNamespace,
         path: "/",
       });
 

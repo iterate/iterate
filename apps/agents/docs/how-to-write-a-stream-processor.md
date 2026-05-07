@@ -87,10 +87,10 @@ async afterAppend({ event, state, streamApi }) {
         event: {
           type: "events.iterate.com/agent/input-added",
           payload: { content: event.payload.text },
-          idempotencyKey: buildDerivedIdempotencyKey({
-            slug: ExampleContract.slug,
-            purpose: "commanded-to-agent-input",
-            event,
+          idempotencyKey: buildProcessorIdempotencyKey({
+            processor: ExampleContract,
+            key: "commanded-to-agent-input",
+            sourceEvent: event,
           }),
         },
       });
@@ -519,36 +519,41 @@ await streamApi.append({
 });
 ```
 
-For derived events, use `buildDerivedIdempotencyKey(...)` and still call plain `streamApi.append(...)`. Do not add a special `appendDerived` wrapper:
+For processor-owned idempotency keys, use `buildProcessorIdempotencyKey(...)` and still call plain `streamApi.append(...)`. Do not add a special append wrapper:
 
 ```ts
 await streamApi.append({
   event: {
     type: "events.iterate.com/agent/input-added",
     payload,
-    idempotencyKey: buildDerivedIdempotencyKey({
-      slug: CodemodeProcessorContract.slug,
-      purpose: "codemode-result-to-agent-input",
-      event,
+    idempotencyKey: buildProcessorIdempotencyKey({
+      processor: CodemodeProcessorContract,
+      key: "codemode-result-to-agent-input",
+      sourceEvent: event,
     }),
   },
 });
 ```
 
-Use a distinct `purpose` for each derivation site.
+Use a distinct `key` for each append site. If one source event emits multiple
+events from the same site, include that dimension in `key`.
 
 ## StreamProcessorRunners
 
 A StreamProcessorRunner owns deployment mechanics: creating processor instances, injecting backend-only dependencies, storing reduced state, creating a scoped `streamApi`, catching up, and consuming pushed or subscribed events.
 
-The current Durable Object StreamProcessorRunner pattern binds one runner instance to one stream path through lifecycle init params:
+The current Durable Object StreamProcessorRunner pattern uses the stream path as
+the Durable Object name:
 
 ```ts
-await runner.initialize({ name, streamPath });
+await runner.initialize({ name: streamPath });
 await runner.consumeEvent({ event });
 ```
 
-For push subscriptions, the worker websocket route initializes the StreamProcessorRunner with `{ name, streamPath }` and forwards frames into the Durable Object. The StreamProcessorRunner then catches up before it processes the first pushed event.
+For push subscriptions, the worker websocket route parses the URL path as the
+stream path, initializes the StreamProcessorRunner by that name, and forwards
+frames into the Durable Object. The StreamProcessorRunner then catches up before
+it processes the first pushed event.
 
 `apps/agents` currently uses three independent runners for one chat stream:
 

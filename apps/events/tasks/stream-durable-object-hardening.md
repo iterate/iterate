@@ -13,7 +13,7 @@ Follow-up from the stream processor refactor and Cloudflare Durable Object criti
 
 ## Risks to resolve
 
-- Durable Object identity now derives from `projectId` + stream path in the shared stream helpers. Keep future stream identity work on stable IDs, not mutable slugs.
+- Durable Object identity now derives from `namespace` + stream path in the shared stream helpers. Keep future stream identity work on stable IDs, not mutable slugs.
 - D1 object cataloging now uses the existing `withD1ObjectCatalog()` mixin through the shared `StreamDurableObject` lifecycle shape.
 - There is no current `withKeepAlive()` mixin despite earlier design discussion. `packages/shared/src/durable-object-utils/README.md` describes `keepAliveWhile({ promise })` as future work. Add it deliberately before using opaque long-running promises as a liveness primitive.
 - Constructor startup currently does more than local storage hydration under `blockConcurrencyWhile()`: it reconnects dynamic workers and appends a wake-up event. Cloudflare's Durable Object guidance prefers keeping constructor gates fast and local.

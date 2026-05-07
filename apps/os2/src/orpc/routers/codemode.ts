@@ -1,6 +1,6 @@
 import { ORPCError } from "@orpc/server";
 import { StreamPath, type Event, type EventInput } from "@iterate-com/shared/streams/types";
-import { deriveDurableObjectNameFromInitParams } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import {
   CodemodeProcessorContract,
   type ToolProviderRegistration,
@@ -10,7 +10,7 @@ import {
   startCodemodeScriptOnSession,
 } from "~/codemode/codemode-session-rpc.ts";
 import type { AppContext } from "~/context.ts";
-import { getStreamCapability } from "~/entrypoints/stream-capability.ts";
+import { getStreamsCapability } from "~/entrypoints/stream-capability.ts";
 import type { ActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
 import { activeOrganizationMiddleware, os } from "~/orpc/orpc.ts";
 import { requireActiveOrganizationProject } from "~/orpc/project-access.ts";
@@ -37,8 +37,7 @@ export const codemodeRouter = {
           providers: parseToolProviders(input.providers),
         });
         const streamPath =
-          input.streamPath ??
-          defaultStreamPathForProjectSession(input.projectId, generateSessionSlug());
+          input.streamPath ?? defaultStreamPathForProjectSession(generateSessionSlug());
         const result = await createSession({
           activeOrganization: context.activeOrganization,
           code: input.code,
@@ -81,9 +80,7 @@ export const codemodeRouter = {
           events: input.events,
           projectId: input.projectId,
           providers,
-          streamPath:
-            input.streamPath ??
-            defaultStreamPathForProjectBlock(input.projectId, generateBlockId()),
+          streamPath: input.streamPath ?? defaultStreamPathForProjectBlock(generateBlockId()),
         });
         return {
           event: result.event,
@@ -94,18 +91,17 @@ export const codemodeRouter = {
     streamEvents: os.codemode.streamEvents
       .use(activeOrganizationMiddleware)
       .handler(async function* ({ input, context, signal }) {
-        const projectId = projectIdFromCodemodeStreamPath(input.streamPath);
         await requireActiveOrganizationProject({
           activeOrganization: context.activeOrganization,
           context,
-          projectId,
+          projectId: input.projectId,
         });
 
-        const response = await getStreamCapability({
+        const response = await getStreamsCapability({
           exports: context.workerExports,
           props: {
             appendPolicy: { mode: "stream" },
-            projectId,
+            namespace: input.projectId,
             streamPath: input.streamPath,
           },
         }).stream({
@@ -352,20 +348,21 @@ async function* decodeStreamEventLines(stream: ReadableStream<Uint8Array>, signa
 }
 
 /**
- * Confirms codemode execution is project-scoped before any code runs. The
- * durable CodemodeSession path needs this lookup to find the stream owner.
- */
-/**
  * The durable CodemodeSession writes to the shared Events service at a caller
  * supplied path. Keep that path bound to the same project ID we just authorized
- * through Clerk org membership; otherwise a caller could authorize one project
- * and append events into another project's guessed stream path.
+ * through Clerk org membership; the path itself is intentionally project-local
+ * and must not redundantly encode `/projects/:projectId`.
  */
 function requireCodemodeStreamPathProject(input: { projectId: string; streamPath: string }) {
-  const streamProjectId = projectIdFromCodemodeStreamPath(input.streamPath);
-  if (streamProjectId !== input.projectId) {
+  const path = StreamPath.parse(input.streamPath);
+  if (path === "/") {
     throw new ORPCError("BAD_REQUEST", {
-      message: "Codemode stream path project does not match the requested project.",
+      message: "Codemode stream path must not be the project root stream.",
+    });
+  }
+  if (path.startsWith("/projects/")) {
+    throw new ORPCError("BAD_REQUEST", {
+      message: "Codemode stream paths are project-local and must not start with /projects/.",
     });
   }
 }
@@ -389,37 +386,17 @@ function generateSessionSlug() {
 }
 
 function codemodeSessionName(input: { projectId: string; streamPath: StreamPath }) {
-  return deriveDurableObjectNameFromInitParams({
-    initParams: { projectId: input.projectId, streamPath: input.streamPath },
+  return deriveDurableObjectNameFromStructuredName({
+    structuredName: { projectId: input.projectId, streamPath: input.streamPath },
   });
 }
 
-function defaultStreamPathForProjectSession(projectId: string, sessionSlug: string) {
-  return `/projects/${projectId}/codemode-sessions/${sessionSlug}`;
+function defaultStreamPathForProjectSession(sessionSlug: string) {
+  return `/codemode-sessions/${sessionSlug}`;
 }
 
-function defaultStreamPathForProjectBlock(projectId: string, blockId: string) {
-  return `/projects/${projectId}/codemode-sessions/${blockId}`;
-}
-
-/**
- * Codemode event streams are path-addressed in the shared Events service, so
- * the read endpoint has to recover the project owner from the stream path
- * before proxying the subscription. Without this guard, any signed-in org could
- * subscribe to another org's stream if it guessed the durable path.
- */
-function projectIdFromCodemodeStreamPath(streamPath: string) {
-  const match = streamPath.match(
-    /^\/projects\/([^/]+)\/(?:codemode-sessions|mcp-server-sessions)(?:\/|$)/,
-  );
-  if (!match?.[1]) {
-    throw new ORPCError("BAD_REQUEST", {
-      message:
-        "Codemode event streams must be scoped to /projects/:projectId/codemode-sessions/... or /projects/:projectId/mcp-server-sessions/...",
-    });
-  }
-
-  return match[1];
+function defaultStreamPathForProjectBlock(blockId: string) {
+  return `/codemode-sessions/${blockId}`;
 }
 
 function findDuplicateProviderPath(paths: string[][]) {

@@ -118,7 +118,7 @@ Create a full OS2 preview deployment and prove:
 - `StreamDurableObject` uses the standard Durable Object mixins for durable
   object core, lifecycle hooks, D1 object catalog, KV inspector, Outerbase, and
   public fetch routes.
-- The stream init params use `projectId` and `path`; project slug based stream
+- The stream structured name uses `projectId` and `path`; project slug based stream
   identity was removed for this slice.
 - OS2 exports `StreamDurableObject`, `CodemodeSession`,
   `ProjectMcpServerConnection`, `ProjectDurableObject`, and the other OS2
@@ -196,8 +196,8 @@ Events local public debug route proof:
 
 ```sh
 ENC='%7B%22projectId%22%3A%22local-proof%22%2C%22path%22%3A%22%2Flocal-proof%22%7D'
-curl -i "http://127.0.0.1:5184/durable-objects/stream/by-init-params/$ENC/__kv"
-curl -i "http://127.0.0.1:5184/durable-objects/stream/by-init-params/$ENC/__outerbase"
+curl -i "http://127.0.0.1:5184/durable-objects/stream/by-structured-name/$ENC/__kv"
+curl -i "http://127.0.0.1:5184/durable-objects/stream/by-structured-name/$ENC/__outerbase"
 ```
 
 Both local debug routes returned HTTP 200. The KV inspector response showed the
@@ -227,8 +227,8 @@ bound cross-script to OS2's `StreamDurableObject` namespace:
 
 ```sh
 ENC='%7B%22projectId%22%3A%22preview-proof-final%22%2C%22path%22%3A%22%2Fpreview-proof-final%22%7D'
-curl -i "https://events.iterate-preview-2.com/durable-objects/stream/by-init-params/$ENC/__kv"
-curl -i "https://events.iterate-preview-2.com/durable-objects/stream/by-init-params/$ENC/__outerbase"
+curl -i "https://events.iterate-preview-2.com/durable-objects/stream/by-structured-name/$ENC/__kv"
+curl -i "https://events.iterate-preview-2.com/durable-objects/stream/by-structured-name/$ENC/__outerbase"
 ```
 
 Both debug routes returned HTTP 200. The KV inspector response showed the

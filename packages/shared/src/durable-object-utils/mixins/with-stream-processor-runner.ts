@@ -28,7 +28,7 @@ import type {
 import type {
   LifecycleHooksMembers,
   LifecycleHooksProtected,
-  LifecycleInit,
+  LifecycleStructuredName,
 } from "./with-lifecycle-hooks.ts";
 import type { DurableObjectCoreProtected } from "./with-durable-object-core.ts";
 
@@ -129,7 +129,7 @@ export abstract class StreamProcessorRunnerProtected<
 }
 
 type StreamProcessorRunnerOptions<
-  InitParams extends LifecycleInit,
+  StructuredName extends LifecycleStructuredName,
   Env,
   Contract extends RunnerContract<Contract>,
 > = {
@@ -144,26 +144,27 @@ type StreamProcessorRunnerOptions<
   processor(args: {
     ctx: DurableObjectState;
     env: Env;
-    initParams: InitParams;
+    structuredName: StructuredName;
     instance: unknown;
   }): Processor<Contract>;
   /**
    * Create the scoped stream API for this processor.
    *
    * In Cloudflare Workers this is usually a named WorkerEntrypoint from
-   * `ctx.exports` with `props: { streamPath: initParams.streamPath }`.
+   * `ctx.exports` with `props: { streamPath: structuredName.streamPath }`.
    */
   streamApi(args: {
     ctx: DurableObjectState;
     env: Env;
-    initParams: InitParams;
+    structuredName: StructuredName;
     processor: Processor<Contract>;
   }): ProcessorStreamApi<Contract>;
 };
 
 type WithStreamProcessorRunnerResult<
   TBase extends DurableObjectClass,
-  InitParams extends LifecycleInit,
+  StructuredName extends LifecycleStructuredName,
+  InitialState,
   Contract extends RunnerContract<Contract>,
 > = StaticSide<TBase> &
   DurableObjectClass<
@@ -171,8 +172,8 @@ type WithStreamProcessorRunnerResult<
     MembersOf<TBase> &
       StreamProcessorRunnerProtected<Contract> &
       DurableObjectCoreProtected &
-      LifecycleHooksMembers<InitParams> &
-      LifecycleHooksProtected<InitParams>
+      LifecycleHooksMembers<StructuredName, InitialState> &
+      LifecycleHooksProtected<StructuredName, InitialState>
   > &
   Constructor<StreamProcessorRunnerProtected<Contract>>;
 
@@ -188,23 +189,24 @@ type WithStreamProcessorRunnerResult<
  * This assumes one processor instance is bound to one stream path for now.
  */
 export function withStreamProcessorRunner<
-  InitParams extends LifecycleInit,
+  StructuredName extends LifecycleStructuredName,
   Env,
   Contract extends RunnerContract<Contract>,
->(options: StreamProcessorRunnerOptions<InitParams, Env, Contract>) {
+  InitialState = undefined,
+>(options: StreamProcessorRunnerOptions<StructuredName, Env, Contract>) {
   return function <TBase extends DurableObjectClass>(
     Base: TBase &
       Constructor<
         DurableObjectCoreProtected &
-          LifecycleHooksMembers<InitParams> &
-          LifecycleHooksProtected<InitParams>
+          LifecycleHooksMembers<StructuredName, InitialState> &
+          LifecycleHooksProtected<StructuredName, InitialState>
       >,
-  ): WithStreamProcessorRunnerResult<TBase, InitParams, Contract> {
+  ): WithStreamProcessorRunnerResult<TBase, StructuredName, InitialState, Contract> {
     const BaseWithCore = Base as unknown as RuntimeDurableObjectConstructor &
       Constructor<
         DurableObjectCoreProtected &
-          LifecycleHooksMembers<InitParams> &
-          LifecycleHooksProtected<InitParams>
+          LifecycleHooksMembers<StructuredName, InitialState> &
+          LifecycleHooksProtected<StructuredName, InitialState>
       >;
 
     abstract class StreamProcessorRunnerMixin extends BaseWithCore {
@@ -324,7 +326,7 @@ export function withStreamProcessorRunner<
         this.#streamProcessorRunnerProcessor ??= options.processor({
           ctx: this.ctx,
           env: this.env as Env,
-          initParams: this.initParams,
+          structuredName: this.structuredName,
           instance: this,
         });
         return this.#streamProcessorRunnerProcessor;
@@ -337,7 +339,7 @@ export function withStreamProcessorRunner<
         const streamApi = options.streamApi({
           ctx: this.ctx,
           env: this.env as Env,
-          initParams: this.initParams,
+          structuredName: this.structuredName,
           processor,
         });
         return wrapProcessorStreamApiWithProvenance({
@@ -392,7 +394,8 @@ export function withStreamProcessorRunner<
     // class AgentProcessorDO extends withStreamProcessorRunner(options)(Base)<Env> {}
     return StreamProcessorRunnerMixin as unknown as WithStreamProcessorRunnerResult<
       TBase,
-      InitParams,
+      StructuredName,
+      InitialState,
       Contract
     >;
   };

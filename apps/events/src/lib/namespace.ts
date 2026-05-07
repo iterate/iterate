@@ -1,6 +1,12 @@
-import { ProjectId, type ProjectId as ProjectIdValue } from "@iterate-com/shared/streams/types";
+import {
+  StreamNamespace,
+  type StreamNamespace as NamespaceValue,
+} from "@iterate-com/shared/streams/types";
 
-export const defaultProjectId: ProjectIdValue = "public";
+export const Namespace = StreamNamespace;
+export type { NamespaceValue };
+
+export const defaultNamespace: NamespaceValue = "public";
 const appHostLabel = "events";
 const iterateEnvironmentLabelPattern = /^iterate(?:-[a-z0-9-]+)?$/;
 
@@ -28,7 +34,7 @@ function getEventsHostBase(hostname: string) {
   return undefined;
 }
 
-export function resolveHostProjectId(hostname: string | null | undefined) {
+export function resolveHostNamespace(hostname: string | null | undefined) {
   const normalizedHostname = hostname?.trim().toLowerCase();
   if (!normalizedHostname) {
     return undefined;
@@ -44,18 +50,18 @@ export function resolveHostProjectId(hostname: string | null | undefined) {
     return undefined;
   }
 
-  const maybeProjectId = labels[0];
-  const parsedHostProjectId = ProjectId.safeParse(maybeProjectId);
-  return parsedHostProjectId.success ? parsedHostProjectId.data : undefined;
+  const maybeNamespace = labels[0];
+  const parsedHostNamespace = Namespace.safeParse(maybeNamespace);
+  return parsedHostNamespace.success ? parsedHostNamespace.data : undefined;
 }
 
-export function getProjectUrl(args: { currentUrl: string | URL; projectId: ProjectIdValue }) {
+export function getNamespaceUrl(args: { currentUrl: string | URL; namespace: NamespaceValue }) {
   const url = new URL(args.currentUrl);
   const eventsHostBase = getEventsHostBase(url.hostname);
 
   if (eventsHostBase) {
     url.hostname =
-      args.projectId === defaultProjectId ? eventsHostBase : `${args.projectId}.${eventsHostBase}`;
+      args.namespace === defaultNamespace ? eventsHostBase : `${args.namespace}.${eventsHostBase}`;
   }
 
   return url;

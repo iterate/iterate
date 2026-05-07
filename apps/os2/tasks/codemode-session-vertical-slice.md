@@ -15,7 +15,7 @@ worker.
 - tiny worker: `codemode-session-do`
 - Durable Object class: `CodemodeSession`
 - main OS2 worker binding: `CODEMODE_SESSION`
-- init params: `{ projectId: string; streamPath: StreamPath }`
+- structured name: `{ projectId: string; streamPath: StreamPath }`
 - identity: `{ projectId, streamPath }`
 - DO name: derived from `{ projectId, streamPath }` using the lifecycle mixin helper
 - D1 catalog: existing OS2 D1 bound as `DO_CATALOG`
@@ -26,8 +26,8 @@ worker.
 Use the shared durable object utils:
 
 - `withDurableObjectCore`
-- `withLifecycleHooks<CodemodeSessionInitParams>`
-- `withD1ObjectCatalog<CodemodeSessionInitParams, { DO_CATALOG: D1Database }>`
+- `withLifecycleHooks<CodemodeSessionStructuredName>`
+- `withD1ObjectCatalog<CodemodeSessionStructuredName, { DO_CATALOG: D1Database }>`
 - `withOuterbase`
 - `withKvInspector`
 
@@ -41,9 +41,9 @@ Use the shared durable object utils:
 - `getScopedRpcTarget()`
 
 Inherited lifecycle API is not domain API. Callers should use
-`deriveDurableObjectNameFromInitParams()` and `initialize()` until the typed
+`deriveDurableObjectNameFromStructuredName()` and `initialize()` until the typed
 helper stops tripping deep TypeScript instantiation in OS2. The lifecycle
-`name` is derived from the Codemode Session domain init params: stable
+`name` is derived from the Codemode Session structured name: stable
 `projectId` and `streamPath`.
 
 ## Current Slice

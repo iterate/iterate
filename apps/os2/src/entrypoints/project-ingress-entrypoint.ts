@@ -1,5 +1,8 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
-import type { ProjectDurableObject } from "~/durable-objects/project-durable-object.ts";
+import {
+  getProjectDurableObjectName,
+  type ProjectDurableObject,
+} from "~/durable-objects/project-durable-object.ts";
 
 type ProjectIngressEntrypointEnv = {
   PROJECT: DurableObjectNamespace<ProjectDurableObject>;
@@ -14,7 +17,7 @@ export class ProjectIngressEntrypoint extends WorkerEntrypoint<
   ProjectIngressEntrypointProps
 > {
   async fetch(request: Request) {
-    const stub = this.env.PROJECT.getByName(this.ctx.props.projectId);
+    const stub = this.env.PROJECT.getByName(getProjectDurableObjectName(this.ctx.props.projectId));
     return await stub.ingressFetch(request);
   }
 }

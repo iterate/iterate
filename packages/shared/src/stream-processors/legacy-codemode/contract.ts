@@ -235,6 +235,7 @@ function isExternalAgentTurn(event: {
 }) {
   return (
     event.payload.triggerLlmRequest?.behaviour !== "dont-trigger-request" &&
+    !event.idempotencyKey?.startsWith("codemode/") &&
     !event.idempotencyKey?.startsWith("stream-processor:codemode:derived:")
   );
 }

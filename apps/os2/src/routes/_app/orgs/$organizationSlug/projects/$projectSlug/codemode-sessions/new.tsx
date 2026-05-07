@@ -154,7 +154,7 @@ function NewCodemodeSessionPage() {
             id="codemode-stream-path"
             value={streamPath}
             onChange={(event) => setStreamPath(event.target.value)}
-            placeholder={`/projects/${project.id}/codemode-sessions/my-session`}
+            placeholder="/codemode-sessions/my-session"
           />
           <FieldDescription>Leave empty to create a new session stream.</FieldDescription>
         </Field>

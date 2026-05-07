@@ -1,7 +1,7 @@
 import { z } from "zod";
 import {
   assertNever,
-  buildDerivedIdempotencyKey,
+  buildProcessorIdempotencyKey,
   implementProcessor,
   type ProcessorStreamApi,
 } from "../stream-processor.ts";
@@ -103,7 +103,7 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
           await appendLlmEventContext({
             streamApi,
             event,
-            purpose: "render-llm-request-queued",
+            key: "render-llm-request-queued",
             content: eventBlock({ offset: event.offset, type: event.type }),
           });
           return;
@@ -111,7 +111,7 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
           await appendLlmEventContext({
             streamApi,
             event,
-            purpose: "render-llm-request-completed",
+            key: "render-llm-request-completed",
             content: eventBlock({
               offset: event.offset,
               type: event.type,
@@ -136,7 +136,7 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
           await appendLlmEventContext({
             streamApi,
             event,
-            purpose: "render-llm-request-cancelled",
+            key: "render-llm-request-cancelled",
             content: eventBlock({
               offset: event.offset,
               type: event.type,
@@ -248,10 +248,10 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
     const scheduledEvent = await args.streamApi.append({
       event: {
         type: "events.iterate.com/agent/llm-request-scheduled",
-        idempotencyKey: buildDerivedIdempotencyKey({
-          slug: AgentProcessorContract.slug,
-          purpose: "llm-request-scheduled",
-          event: args.sourceEvent,
+        idempotencyKey: buildProcessorIdempotencyKey({
+          processor: AgentProcessorContract,
+          key: "llm-request-scheduled",
+          sourceEvent: args.sourceEvent,
         }),
         payload: {
           requestId,
@@ -304,10 +304,10 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
         args.streamApi.append({
           event: {
             type: "events.iterate.com/agent/llm-request-cancelled",
-            idempotencyKey: buildDerivedIdempotencyKey({
-              slug: AgentProcessorContract.slug,
-              purpose: "llm-request-cancelled:deadline-exceeded",
-              event: scheduledEvent,
+            idempotencyKey: buildProcessorIdempotencyKey({
+              processor: AgentProcessorContract,
+              key: "llm-request-cancelled/deadline-exceeded",
+              sourceEvent: scheduledEvent,
             }),
             payload: { requestId: args.requestId, reason: "deadline-exceeded" },
           },
@@ -378,10 +378,10 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
     await args.streamApi.append({
       event: {
         type: "events.iterate.com/agent/llm-request-requested",
-        idempotencyKey: buildDerivedIdempotencyKey({
-          slug: AgentProcessorContract.slug,
-          purpose: "llm-request-requested",
-          event: scheduledEvent,
+        idempotencyKey: buildProcessorIdempotencyKey({
+          processor: AgentProcessorContract,
+          key: "llm-request-requested",
+          sourceEvent: scheduledEvent,
         }),
         payload: {
           model: stateAtRequest.llmConfig.model,
@@ -407,10 +407,10 @@ async function emitQueued(args: {
   await args.streamApi.append({
     event: {
       type: "events.iterate.com/agent/llm-request-queued",
-      idempotencyKey: buildDerivedIdempotencyKey({
-        slug: AgentProcessorContract.slug,
-        purpose: "llm-request-queued",
-        event: args.sourceEvent,
+      idempotencyKey: buildProcessorIdempotencyKey({
+        processor: AgentProcessorContract,
+        key: "llm-request-queued",
+        sourceEvent: args.sourceEvent,
       }),
       payload: {},
     },
@@ -428,10 +428,10 @@ async function emitAgentStatus(args: {
   await args.streamApi.append({
     event: {
       type: "events.iterate.com/agent/status-updated",
-      idempotencyKey: buildDerivedIdempotencyKey({
-        slug: AgentProcessorContract.slug,
-        purpose: `status-updated:${args.status}:${args.reason}`,
-        event: args.sourceEvent,
+      idempotencyKey: buildProcessorIdempotencyKey({
+        processor: AgentProcessorContract,
+        key: `status-updated/${args.status}/${args.reason}`,
+        sourceEvent: args.sourceEvent,
       }),
       payload: {
         status: args.status,
@@ -446,7 +446,7 @@ async function emitAgentStatus(args: {
 async function appendLlmEventContext(args: {
   streamApi: AgentStreamApi;
   event: { streamPath: string; offset: number; type: string };
-  purpose: string;
+  key: string;
   content: string;
 }) {
   await appendEventTypeExplanation({
@@ -459,16 +459,16 @@ async function appendLlmEventContext(args: {
 async function appendRewrite(args: {
   streamApi: AgentStreamApi;
   event: { streamPath: string; offset: number };
-  purpose: string;
+  key: string;
   content: string;
 }) {
   await args.streamApi.append({
     event: {
       type: "events.iterate.com/agent/input-added",
-      idempotencyKey: buildDerivedIdempotencyKey({
-        slug: AgentProcessorContract.slug,
-        purpose: args.purpose,
-        event: args.event,
+      idempotencyKey: buildProcessorIdempotencyKey({
+        processor: AgentProcessorContract,
+        key: args.key,
+        sourceEvent: args.event,
       }),
       payload: {
         content: `An event has occurred: \n\n${args.content}`,
@@ -485,7 +485,10 @@ async function appendEventTypeExplanation(args: { streamApi: AgentStreamApi; eve
   await args.streamApi.append({
     event: {
       type: "events.iterate.com/agent/input-added",
-      idempotencyKey: `stream-processor:${AgentProcessorContract.slug}:event-type-explainer:${args.eventType}`,
+      idempotencyKey: buildProcessorIdempotencyKey({
+        processor: AgentProcessorContract,
+        key: `event-type-explainer/${args.eventType}`,
+      }),
       payload: {
         content: explanation,
         triggerLlmRequest: { behaviour: "dont-trigger-request" },

@@ -1,6 +1,6 @@
 /// <reference types="@cloudflare/workers-types" />
 
-import { deriveDurableObjectNameFromInitParams } from "../durable-object-utils/mixins/with-lifecycle-hooks.ts";
+import { deriveDurableObjectNameFromStructuredName } from "../durable-object-utils/mixins/with-lifecycle-hooks.ts";
 import type { StreamDurableObject } from "./stream-durable-object.ts";
 import type {
   DestroyStreamResult,
@@ -19,12 +19,17 @@ export class StreamOffsetPreconditionError extends Error {
 }
 
 export type StreamDurableObjectInitInput = {
-  projectId: string;
+  namespace: string;
   path: StreamPath;
 };
 
+export type StreamDurableObjectName = {
+  namespace: string;
+  path: string;
+};
+
 export type StreamDurableObjectStub = {
-  initialize(params: { name: string; projectId: string; path: StreamPath }): Promise<unknown>;
+  initialize(params: { name: string }): Promise<unknown>;
   append(event: EventInput): Promise<Event>;
   destroy(args?: { destroyChildren?: boolean }): Promise<DestroyStreamResult>;
   history(args?: { after?: StreamCursor; before?: StreamCursor }): Promise<Event[]>;
@@ -51,9 +56,9 @@ export type StreamDurableObjectNamespace = Omit<
 };
 
 export function getStreamDurableObjectName(args: StreamDurableObjectInitInput) {
-  return deriveDurableObjectNameFromInitParams({
-    initParams: {
-      projectId: args.projectId,
+  return deriveDurableObjectNameFromStructuredName({
+    structuredName: {
+      namespace: args.namespace,
       path: args.path,
     },
   });
@@ -61,29 +66,27 @@ export function getStreamDurableObjectName(args: StreamDurableObjectInitInput) {
 
 export function getStreamStub(
   args: StreamDurableObjectInitInput & {
-    namespace: StreamDurableObjectNamespace;
+    durableObjectNamespace: StreamDurableObjectNamespace;
   },
 ) {
   return getStreamStubByName({
-    namespace: args.namespace,
+    namespace: args.durableObjectNamespace,
     name: getStreamDurableObjectName(args),
   });
 }
 
 export async function getInitializedStreamStub(
   args: StreamDurableObjectInitInput & {
-    namespace: StreamDurableObjectNamespace;
+    durableObjectNamespace: StreamDurableObjectNamespace;
   },
 ) {
   const name = getStreamDurableObjectName(args);
   const stream = getStreamStubByName({
-    namespace: args.namespace,
+    namespace: args.durableObjectNamespace,
     name,
   });
   await stream.initialize({
     name,
-    projectId: args.projectId,
-    path: args.path,
   });
   return stream;
 }

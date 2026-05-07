@@ -9,7 +9,7 @@ import {
 import {
   collectAsyncIterableUntilIdle,
   createEvents2AppFixture,
-  defaultE2EProjectId,
+  defaultE2ENamespace,
   requireEventsBaseUrl,
 } from "../helpers.ts";
 import { E2E_APPEND_CHAIN_TICK_TYPE } from "../../src/durable-objects/e2e-append-chain-types.ts";
@@ -101,7 +101,7 @@ describe.sequential("events callable subscriber e2e", () => {
             count: 1,
             max,
             mode: "timeout",
-            projectId: defaultE2EProjectId,
+            namespace: defaultE2ENamespace,
             streamPath: path,
           },
         },
@@ -159,7 +159,7 @@ describe.sequential("events callable subscriber e2e", () => {
             count: 1,
             max,
             mode: "record-error",
-            projectId: defaultE2EProjectId,
+            namespace: defaultE2ENamespace,
             streamPath: path,
           },
         },

@@ -63,8 +63,8 @@ tests against both `apps/os2` and `apps/events` continue working.
 ### Shared stream runtime
 
 - Keep the shared stream runtime in `packages/shared/src/streams`.
-- Refactor `StreamDurableObject` init params, helper APIs, catalog indexes, and
-  public init-param addressing from `projectId` to `namespace`.
+- Refactor `StreamDurableObject` structured name, helper APIs, catalog indexes, and
+  public structured-name addressing from `projectId` to `namespace`.
 - Keep `path` as the Event Stream Path within that namespace.
 - Test that the same runtime works with OS2 Project ID namespaces, Events POC
   namespaces, and a non-project namespace such as `platform`.
@@ -145,6 +145,9 @@ tests against both `apps/os2` and `apps/events` continue working.
 - Events can run with its own Stream Durable Object.
 - Events can run with `streamDurableObjectBindingScriptName` pointing at OS2.
 - Code Mode processing uses callable Durable Object subscription delivery.
+- Deployed preview verification passes against the real preview URLs, including
+  API smoke coverage and browser checks through Agent Browser. Authenticated
+  browser checks should use Clerk testing-token support where Clerk requires it.
 
 ## Verification Commands
 

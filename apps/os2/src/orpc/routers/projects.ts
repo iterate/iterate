@@ -24,9 +24,12 @@ import {
   updateProjectConfig,
   updateProjectPreset,
 } from "~/db/queries/.generated/index.ts";
-import type { CodemodeSessionInitParams } from "~/durable-objects/codemode-session.ts";
-import type { ProjectDurableObject } from "~/durable-objects/project-durable-object.ts";
-import type { ProjectMcpServerConnectionInitParams } from "~/durable-objects/project-mcp-server-connection.ts";
+import type { CodemodeSessionStructuredName } from "~/durable-objects/codemode-session.ts";
+import {
+  getProjectDurableObjectName,
+  type ProjectDurableObject,
+} from "~/durable-objects/project-durable-object.ts";
+import type { ProjectMcpServerConnectionStructuredName } from "~/durable-objects/project-mcp-server-connection.ts";
 import {
   isReservedProjectHostname,
   isValidCustomHostname,
@@ -34,6 +37,7 @@ import {
 } from "~/lib/project-host-routing.ts";
 import type { ActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
 import { activeOrganizationMiddleware, os } from "~/orpc/orpc.ts";
+import { projectStreamsRouter } from "~/orpc/routers/streams.ts";
 
 type ProjectRow = {
   id: string;
@@ -54,8 +58,9 @@ type ProjectPresetRow = {
   updated_at: string;
 };
 
-type CodemodeSessionCatalogRecord = D1ObjectCatalogRecord<CodemodeSessionInitParams>;
-type InboundMcpSessionCatalogRecord = D1ObjectCatalogRecord<ProjectMcpServerConnectionInitParams>;
+type CodemodeSessionCatalogRecord = D1ObjectCatalogRecord<CodemodeSessionStructuredName>;
+type InboundMcpSessionCatalogRecord =
+  D1ObjectCatalogRecord<ProjectMcpServerConnectionStructuredName>;
 
 function toProject(row: ProjectRow) {
   return {
@@ -83,8 +88,8 @@ function toProjectPreset(row: ProjectPresetRow) {
 function toCodemodeSession(record: CodemodeSessionCatalogRecord) {
   return {
     name: record.name,
-    projectId: record.initParams.projectId,
-    streamPath: StreamPath.parse(record.initParams.streamPath),
+    projectId: record.structuredName.projectId,
+    streamPath: StreamPath.parse(record.structuredName.streamPath),
     createdAt: record.createdAt,
     lastWokenAt: record.lastWokenAt,
   };
@@ -93,12 +98,12 @@ function toCodemodeSession(record: CodemodeSessionCatalogRecord) {
 function toInboundMcpSession(record: InboundMcpSessionCatalogRecord) {
   return {
     name: record.name,
-    projectId: record.initParams.projectId,
-    projectSlug: record.initParams.projectSlug,
-    streamPath: StreamPath.parse(record.initParams.streamPath),
-    clientId: record.initParams.clientId,
-    clientName: record.initParams.clientName,
-    userId: record.initParams.userId,
+    projectId: record.structuredName.projectId,
+    projectSlug: record.structuredName.projectSlug,
+    streamPath: StreamPath.parse(record.structuredName.streamPath),
+    clientId: record.structuredName.clientId,
+    clientName: record.structuredName.clientName,
+    userId: record.structuredName.userId,
     createdAt: record.createdAt,
     lastWokenAt: record.lastWokenAt,
   };
@@ -147,7 +152,7 @@ export const projectsRouter = {
 
         try {
           project = await requireProjectDurableObjectNamespace(context)
-            .getByName(id)
+            .getByName(getProjectDurableObjectName(id))
             .createProject({
               metadata: input.metadata,
               projectId: id,
@@ -305,7 +310,7 @@ export const projectsRouter = {
             context,
             projectId: input.projectId,
           });
-          const rows = await listD1ObjectCatalogRecordsByIndex<CodemodeSessionInitParams>(
+          const rows = await listD1ObjectCatalogRecordsByIndex<CodemodeSessionStructuredName>(
             requireD1ObjectCatalog(context),
             {
               className: "CodemodeSession",
@@ -324,7 +329,7 @@ export const projectsRouter = {
             context,
             projectId: input.projectId,
           });
-          const record = await getD1ObjectCatalogRecord<CodemodeSessionInitParams>(
+          const record = await getD1ObjectCatalogRecord<CodemodeSessionStructuredName>(
             requireD1ObjectCatalog(context),
             {
               className: "CodemodeSession",
@@ -332,7 +337,7 @@ export const projectsRouter = {
             },
           );
 
-          if (!record || record.initParams.projectId !== input.projectId) {
+          if (!record || record.structuredName.projectId !== input.projectId) {
             throw new ORPCError("NOT_FOUND", {
               message: `Codemode Session ${input.name} not found`,
             });
@@ -351,7 +356,7 @@ export const projectsRouter = {
             projectId: input.projectId,
           });
           const rows =
-            await listD1ObjectCatalogRecordsByIndex<ProjectMcpServerConnectionInitParams>(
+            await listD1ObjectCatalogRecordsByIndex<ProjectMcpServerConnectionStructuredName>(
               requireD1ObjectCatalog(context),
               {
                 className: "ProjectMcpServerConnection",
@@ -363,6 +368,7 @@ export const projectsRouter = {
           return { sessions: rows.map(toInboundMcpSession) };
         }),
     },
+    streams: projectStreamsRouter,
     presets: {
       list: os.projects.presets.list
         .use(activeOrganizationMiddleware)

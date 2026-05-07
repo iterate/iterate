@@ -1,7 +1,23 @@
 import { createD1Client } from "sqlfu";
+import { z } from "zod";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
-import type { FetchCallable } from "@iterate-com/shared/callable/types.ts";
+import type { Callable, FetchCallable } from "@iterate-com/shared/callable/types.ts";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
+import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import { withStreamProcessorRunner } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor-runner";
+import type { ProcessorStreamApi, StreamEvent } from "@iterate-com/shared/stream-processors";
+import {
+  getInitializedStreamStub,
+  type StreamDurableObjectNamespace,
+} from "@iterate-com/shared/streams/helpers";
+import type { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
+import {
+  type Event,
+  type EventInput,
+  STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
+  type StreamCursor,
+  StreamPath,
+} from "@iterate-com/shared/streams/types";
 import { typeid } from "@iterate-com/shared/typeid";
 import { createCodemodePresetSeeds } from "~/codemode/preset-seeds.ts";
 import { AppConfig } from "~/app.ts";
@@ -14,11 +30,26 @@ import {
   parseIngressCallable,
 } from "~/ingress/host-routing.ts";
 import type { ExactHostIngressRule } from "~/ingress/types.ts";
+import {
+  createProjectLifecycleProcessor,
+  PROJECT_LIFECYCLE_STREAM_PATH,
+  ProjectLifecycleProcessorContract,
+  projectLifecycleEventTypes,
+} from "~/stream-processors/project-lifecycle.ts";
 
-export type ProjectInitParams = {
-  name: string;
+export type ProjectStructuredName = {
   projectId: string;
 };
+
+const ProjectStructuredName = z.object({
+  projectId: z.string(),
+});
+
+export function getProjectDurableObjectName(projectId: string) {
+  return deriveDurableObjectNameFromStructuredName({
+    structuredName: { projectId },
+  });
+}
 
 export type ProjectSummary = {
   id: string;
@@ -42,6 +73,7 @@ type ProjectEnv = {
   APP_CONFIG: string;
   DB: D1Database;
   DO_CATALOG: D1Database;
+  STREAM: DurableObjectNamespace<StreamDurableObject>;
 };
 
 type ProjectStateRow = {
@@ -65,8 +97,8 @@ type ProjectIngressRouteRow = {
   updated_at_ms: number;
 };
 
-const ProjectBase = createIterateDurableObjectBase<
-  ProjectInitParams,
+const ProjectLifecycleBase = createIterateDurableObjectBase<
+  typeof ProjectStructuredName,
   Pick<ProjectEnv, "DO_CATALOG">
 >({
   className: "ProjectDurableObject",
@@ -74,7 +106,27 @@ const ProjectBase = createIterateDurableObjectBase<
   indexes: {
     projectId: (params) => params.projectId,
   },
+  nameSchema: ProjectStructuredName,
 });
+
+const ProjectBase = withStreamProcessorRunner<
+  ProjectStructuredName,
+  ProjectEnv,
+  typeof ProjectLifecycleProcessorContract
+>({
+  processor() {
+    return createProjectLifecycleProcessor();
+  },
+  streamApi(args) {
+    return projectLifecycleStreamApiFromNamespace({
+      durableObjectNamespace: args.env.STREAM as unknown as StreamDurableObjectNamespace,
+      namespace: args.structuredName.projectId,
+      streamPath: PROJECT_LIFECYCLE_STREAM_PATH,
+    });
+  },
+})(ProjectLifecycleBase);
+
+export const PROJECT_CREATED_EVENT_TYPE = projectLifecycleEventTypes.projectCreated;
 
 export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
   constructor(ctx: DurableObjectState, env: ProjectEnv) {
@@ -105,12 +157,16 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     )`);
     sql.exec(`CREATE INDEX IF NOT EXISTS idx_project_ingress_routes_host
       ON project_ingress_routes (host)`);
+
+    this.registerOnFirstInitialize(async (params) => {
+      await this.ensureProjectLifecycleSubscription(params.projectId);
+      await this.catchUpStreamProcessor({ signal: AbortSignal.timeout(30_000) });
+    });
   }
 
   async createProject(input: CreateProjectInput): Promise<ProjectSummary> {
     await this.initialize({
-      name: input.projectId,
-      projectId: input.projectId,
+      name: getProjectDurableObjectName(input.projectId),
     });
     await this.ensureStarted();
 
@@ -149,7 +205,10 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     await this.writeIngressRoutes({ hosts, projectId: input.projectId });
     await this.seedPresets(input.projectId);
 
-    return this.requireSummary();
+    const summary = this.requireSummary();
+    await this.writeProjectCreatedLifecycleEvent(summary);
+
+    return summary;
   }
 
   async checkAccess(input: { principal: ProjectAccessPrincipal }): Promise<ProjectSummary> {
@@ -175,6 +234,16 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
   async getSummary(): Promise<ProjectSummary> {
     await this.ensureStarted();
     return this.requireSummary();
+  }
+
+  async getProjectLifecycleRunnerState() {
+    await this.ensureStarted();
+    return this.getStreamProcessorRunnerState();
+  }
+
+  async afterAppend(input: { event: Event }) {
+    await this.ensureStarted();
+    return await this.consumeStreamProcessorEvent({ event: input.event as StreamEvent });
   }
 
   async ingressFetch(request: Request): Promise<Response> {
@@ -363,6 +432,127 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
       env: this.env as unknown as Record<string, unknown>,
     });
   }
+
+  private async writeProjectCreatedLifecycleEvent(summary: ProjectSummary) {
+    const stream = await getInitializedStreamStub({
+      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+      namespace: summary.id,
+      path: PROJECT_LIFECYCLE_STREAM_PATH,
+    });
+
+    await stream.append({
+      type: PROJECT_CREATED_EVENT_TYPE,
+      idempotencyKey: `project-created:${summary.id}`,
+      payload: {
+        defaultHost: summary.defaultHost,
+        hosts: summary.hosts,
+        projectId: summary.id,
+        slug: summary.slug,
+      },
+    });
+  }
+
+  private async ensureProjectLifecycleSubscription(projectId: string) {
+    const stream = await getInitializedStreamStub({
+      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+      namespace: projectId,
+      path: PROJECT_LIFECYCLE_STREAM_PATH,
+    });
+
+    await stream.append({
+      type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
+      idempotencyKey: `project-lifecycle-subscription:${projectId}`,
+      payload: {
+        slug: `project-lifecycle:${projectId}`,
+        type: "callable",
+        callable: this.createSelfCallable("afterAppend"),
+      },
+    });
+  }
+
+  private createSelfCallable(rpcMethod: string): Callable {
+    return {
+      type: "workers-rpc",
+      via: {
+        type: "env-binding",
+        bindingType: "durable-object-namespace",
+        bindingName: "PROJECT",
+        durableObject: {
+          name: this.name,
+        },
+      },
+      rpcMethod,
+      argsMode: "object",
+    };
+  }
+}
+
+type ProjectLifecycleStreamApi = ProcessorStreamApi<typeof ProjectLifecycleProcessorContract> & {
+  append(args: { event: EventInput; streamPath?: string }): Promise<Event>;
+  read(args?: {
+    streamPath?: string;
+    afterOffset?: StreamCursor;
+    beforeOffset?: StreamCursor;
+  }): Promise<Event[]>;
+};
+
+function projectLifecycleStreamApiFromNamespace(args: {
+  durableObjectNamespace: StreamDurableObjectNamespace;
+  namespace: string;
+  streamPath: StreamPath;
+}): ProjectLifecycleStreamApi {
+  return {
+    async append(input) {
+      const stream = await getInitializedStreamStub({
+        durableObjectNamespace: args.durableObjectNamespace,
+        namespace: args.namespace,
+        path: resolveProcessorStreamPath({
+          basePath: args.streamPath,
+          pathInput: input.streamPath,
+        }),
+      });
+      return await stream.append(input.event);
+    },
+    async read(input = {}) {
+      const stream = await getInitializedStreamStub({
+        durableObjectNamespace: args.durableObjectNamespace,
+        namespace: args.namespace,
+        path: resolveProcessorStreamPath({
+          basePath: args.streamPath,
+          pathInput: input.streamPath,
+        }),
+      });
+      return await stream.history({
+        after: input.afterOffset,
+        before: input.beforeOffset ?? "end",
+      });
+    },
+    async *subscribe(input = {}) {
+      void input;
+      yield* [];
+      throw new Error("Project lifecycle processors receive live events through afterAppend RPC.");
+    },
+  };
+}
+
+function resolveProcessorStreamPath(input: { basePath: StreamPath; pathInput?: string }) {
+  if (input.pathInput == null) {
+    return input.basePath;
+  }
+
+  const trimmedPath = input.pathInput.trim();
+  if (!trimmedPath) {
+    throw new Error("Stream path is required.");
+  }
+
+  if (trimmedPath.startsWith("/")) {
+    return StreamPath.parse(trimmedPath);
+  }
+
+  const relativePath = trimmedPath.replace(/^\.\//, "").replace(/^\/+/, "");
+  return StreamPath.parse(
+    input.basePath === "/" ? `/${relativePath}` : `${input.basePath}/${relativePath}`,
+  );
 }
 
 async function upsertProjectProjection(input: { db: D1Database; input: CreateProjectInput }) {

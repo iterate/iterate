@@ -11,7 +11,7 @@ import {
   collectAsyncIterableUntilIdle,
   createEvents2AppFixture,
   createEvents2ProjectAppFixture,
-  defaultE2EProjectId,
+  defaultE2ENamespace,
   requireEventsBaseUrl,
   supportsProjectHostRouting,
   type Events2AppFixture,
@@ -21,7 +21,7 @@ const eventsBaseUrl = requireEventsBaseUrl();
 const app = createEvents2AppFixture({
   baseURL: eventsBaseUrl,
 });
-const defaultProjectId = defaultE2EProjectId;
+const defaultNamespace = defaultE2ENamespace;
 const projectHostTest = supportsProjectHostRouting(eventsBaseUrl) ? test : test.skip;
 const postBootTimeoutMs = 2_000;
 const historyIdleTimeoutMs = 250;
@@ -68,7 +68,7 @@ describe.sequential("events stream e2e", () => {
           streamPath: path,
           offset: expectedStoredOffset(0),
           type: "events.iterate.com/core/stream-first-initialized",
-          payload: { projectId: defaultProjectId, path },
+          payload: { namespace: defaultNamespace, path },
         },
         {
           streamPath: path,
@@ -296,7 +296,7 @@ describe.sequential("events stream e2e", () => {
         },
         body: JSON.stringify({
           type: "events.iterate.com/core/stream-first-initialized",
-          payload: { projectId: defaultProjectId, path },
+          payload: { namespace: defaultNamespace, path },
         }),
       });
 
@@ -509,7 +509,7 @@ describe.sequential("events stream e2e", () => {
       ).rejects.toThrow(/next generated offset/i);
 
       expect(await app.client.getState({ path })).toEqual({
-        projectId: defaultProjectId,
+        namespace: defaultNamespace,
         path,
         eventCount: 1,
         childPaths: [],
@@ -522,7 +522,7 @@ describe.sequential("events stream e2e", () => {
           streamPath: path,
           offset: expectedStoredOffset(0),
           type: "events.iterate.com/core/stream-first-initialized",
-          payload: { projectId: defaultProjectId, path },
+          payload: { namespace: defaultNamespace, path },
         },
       ]);
     },
@@ -617,7 +617,7 @@ describe.sequential("events stream e2e", () => {
       const path = uniqueStreamPath();
 
       expect(await app.client.getState({ path })).toEqual({
-        projectId: defaultProjectId,
+        namespace: defaultNamespace,
         path,
         eventCount: 1,
         childPaths: [],
@@ -637,7 +637,7 @@ describe.sequential("events stream e2e", () => {
       });
 
       expect(await app.client.getState({ path: "/" })).toMatchObject({
-        projectId: defaultProjectId,
+        namespace: defaultNamespace,
         path: "/",
         metadata: {},
       });
@@ -696,7 +696,7 @@ describe.sequential("events stream e2e", () => {
       });
 
       expect(await app.client.getState({ path })).toEqual({
-        projectId: defaultProjectId,
+        namespace: defaultNamespace,
         path,
         eventCount: 4,
         childPaths: [],
@@ -782,10 +782,10 @@ describe.sequential("events stream e2e", () => {
   projectHostTest(
     "listChildren includes / for a fresh project host before root initialization",
     async () => {
-      const projectId = `test-${randomUUID().slice(0, 8)}`;
+      const namespace = `test-${randomUUID().slice(0, 8)}`;
       const projectApp = createEvents2ProjectAppFixture({
         baseURL: eventsBaseUrl,
-        projectId,
+        namespace,
       });
       const response = await projectApp.fetch("/api/streams/__children/%2F");
 
@@ -959,7 +959,7 @@ describe.sequential("events stream e2e", () => {
           streamPath: path,
           offset: expectedStoredOffset(0),
           type: "events.iterate.com/core/stream-first-initialized",
-          payload: { projectId: defaultProjectId, path },
+          payload: { namespace: defaultNamespace, path },
         },
         {
           streamPath: path,
@@ -1208,7 +1208,7 @@ describe.sequential("events stream e2e", () => {
           streamPath: path,
           offset: expectedStoredOffset(0),
           type: "events.iterate.com/core/stream-first-initialized",
-          payload: { projectId: defaultProjectId, path },
+          payload: { namespace: defaultNamespace, path },
         });
 
         expect(second.done).toBe(false);

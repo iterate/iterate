@@ -55,6 +55,15 @@ export const InboundMcpSession = z.object({
 });
 export type InboundMcpSession = z.output<typeof InboundMcpSession>;
 
+export const StreamCatalogRecord = z.object({
+  name: z.string(),
+  namespace: z.string(),
+  streamPath: StreamPath,
+  createdAt: z.string(),
+  lastWokenAt: z.string(),
+});
+export type StreamCatalogRecord = z.output<typeof StreamCatalogRecord>;
+
 export const RandomLogStreamRequest = z
   .object({
     count: z
@@ -243,7 +252,7 @@ export const osContract = oc.router({
     streamEvents: oc
       .route({
         method: "GET",
-        path: "/codemode/events/{+streamPath}",
+        path: "/codemode/{projectId}/events/{+streamPath}",
         description: "Read events from a Codemode Session's Event Stream Path",
         tags: ["/codemode"],
       })
@@ -251,6 +260,7 @@ export const osContract = oc.router({
         z.object({
           afterOffset: StreamCursor.optional(),
           beforeOffset: StreamCursor.optional(),
+          projectId: z.string(),
           streamPath: StreamPath,
         }),
       )
@@ -269,48 +279,6 @@ export const osContract = oc.router({
         }),
       )
       .output(z.object({ instructions: z.string() })),
-  },
-  streams: {
-    append: oc
-      .route({
-        method: "POST",
-        path: "/streams/{projectId}/{+streamPath}",
-        description: "Append an event to an OS2 project stream",
-        tags: ["/streams"],
-      })
-      .input(
-        z.object({
-          projectId: z.string(),
-          streamPath: StreamPath,
-          event: EventInput,
-        }),
-      )
-      .output(z.object({ event: Event })),
-    read: oc
-      .route({
-        method: "GET",
-        path: "/streams/{projectId}/{+streamPath}",
-        description: "Read committed events from an OS2 project stream",
-        tags: ["/streams"],
-      })
-      .input(
-        z.object({
-          afterOffset: StreamCursor.optional(),
-          beforeOffset: StreamCursor.optional(),
-          projectId: z.string(),
-          streamPath: StreamPath,
-        }),
-      )
-      .output(z.object({ events: z.array(Event) })),
-    getState: oc
-      .route({
-        method: "GET",
-        path: "/streams/{projectId}/__state/{+streamPath}",
-        description: "Read the reduced state for an OS2 project stream",
-        tags: ["/streams"],
-      })
-      .input(z.object({ projectId: z.string(), streamPath: StreamPath }))
-      .output(StreamState),
   },
   projects: {
     create: oc
@@ -470,6 +438,66 @@ export const osContract = oc.router({
         })
         .input(z.object({ projectId: z.string() }))
         .output(z.object({ sessions: z.array(InboundMcpSession) })),
+    },
+    streams: {
+      list: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectId}/streams",
+          description: "List initialized streams for a project",
+          tags: ["/projects", "/streams"],
+        })
+        .input(z.object({ projectId: z.string() }))
+        .output(z.object({ streams: z.array(StreamCatalogRecord) })),
+      create: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectId}/streams",
+          description: "Initialize a project stream",
+          tags: ["/projects", "/streams"],
+        })
+        .input(z.object({ projectId: z.string(), streamPath: StreamPath }))
+        .output(StreamState),
+      append: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectId}/streams/events/{+streamPath}",
+          description: "Append an event to a project stream",
+          tags: ["/projects", "/streams"],
+        })
+        .input(
+          z.object({
+            projectId: z.string(),
+            streamPath: StreamPath,
+            event: EventInput,
+          }),
+        )
+        .output(z.object({ event: Event })),
+      read: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectId}/streams/events/{+streamPath}",
+          description: "Read committed events from a project stream",
+          tags: ["/projects", "/streams"],
+        })
+        .input(
+          z.object({
+            afterOffset: StreamCursor.optional(),
+            beforeOffset: StreamCursor.optional(),
+            projectId: z.string(),
+            streamPath: StreamPath,
+          }),
+        )
+        .output(z.object({ events: z.array(Event) })),
+      getState: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectId}/streams/__state/{+streamPath}",
+          description: "Read the reduced state for a project stream",
+          tags: ["/projects", "/streams"],
+        })
+        .input(z.object({ projectId: z.string(), streamPath: StreamPath }))
+        .output(StreamState),
     },
   },
 });

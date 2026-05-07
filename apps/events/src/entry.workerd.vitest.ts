@@ -29,11 +29,11 @@ async function handleCallableSubscriberChainE2E(request: Request, env: Env) {
   const chainId = requireQueryParam(url, "chainId");
   const max = Number.parseInt(requireQueryParam(url, "max"), 10);
   const action = requireQueryParam(url, "action");
-  const projectId = "public";
+  const namespace = "public";
   const path = StreamPath.parse(`/e2e/miniflare-callable-chain/${chainId}`);
   const stream = await getInitializedStreamStub({
-    namespace: env.STREAM as unknown as StreamDurableObjectNamespace,
-    projectId,
+    durableObjectNamespace: env.STREAM as unknown as StreamDurableObjectNamespace,
+    namespace,
     path,
   });
 
@@ -89,7 +89,7 @@ async function handleCallableSubscriberChainE2E(request: Request, env: Env) {
       count: 1,
       max,
       mode: "timeout",
-      projectId,
+      namespace,
       streamPath: path,
     },
   });

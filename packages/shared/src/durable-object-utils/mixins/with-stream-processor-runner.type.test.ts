@@ -9,16 +9,20 @@ import {
 } from "../../stream-processors/stream-processor.ts";
 import { withDurableObjectCore } from "./with-durable-object-core.ts";
 import { withLifecycleHooks } from "./with-lifecycle-hooks.ts";
+import type { LifecycleInitializeInput } from "./with-lifecycle-hooks.ts";
 import {
   StreamProcessorRunnerProtected,
   withStreamProcessorRunner,
   type StreamProcessorRunnerState,
 } from "./with-stream-processor-runner.ts";
 
-type CounterInit = {
-  name: string;
+type CounterStructuredName = {
   streamPath: string;
 };
+
+const CounterStructuredName = z.object({
+  streamPath: z.string(),
+});
 
 type CounterEnv = {
   EXAMPLE: string;
@@ -55,18 +59,18 @@ const counterRunnerOptions = {
 };
 
 const counterRunnerMixin = withStreamProcessorRunner<
-  CounterInit,
+  CounterStructuredName,
   CounterEnv,
   typeof CounterContract
 >(counterRunnerOptions);
 
 const CounterRoomBase = counterRunnerMixin(
-  withLifecycleHooks<CounterInit>()(withDurableObjectCore(DurableObject)),
+  withLifecycleHooks({ nameSchema: CounterStructuredName })(withDurableObjectCore(DurableObject)),
 );
 
 class CounterRoom extends CounterRoomBase<CounterEnv> {
   getStreamPathForTest() {
-    return this.initParams.streamPath;
+    return this.structuredName.streamPath;
   }
 
   async catchUpForTest() {
@@ -107,15 +111,15 @@ describe("withStreamProcessorRunner types", () => {
     expectTypeOf(room).toMatchTypeOf<StreamProcessorRunnerProtected<typeof CounterContract>>();
   });
 
-  it("composes with lifecycle init params for stream-bound runners", () => {
+  it("composes with lifecycle structured names for stream-bound runners", () => {
     const room = {} as CounterRoom;
 
     expectTypeOf(room.getStreamPathForTest()).toEqualTypeOf<string>();
-    expectTypeOf(room.initialize).parameter(0).toEqualTypeOf<CounterInit>();
+    expectTypeOf(room.initialize).parameter(0).toEqualTypeOf<LifecycleInitializeInput>();
   });
 
   it("rejects bases that have not installed lifecycle and durable-object core capabilities", () => {
-    // @ts-expect-error the runner persists state through core KV and reads stream path through lifecycle init params.
+    // @ts-expect-error the runner persists state through core KV and reads stream path through lifecycle structured names.
     counterRunnerMixin(DurableObject);
   });
 });

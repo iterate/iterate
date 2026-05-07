@@ -1,6 +1,6 @@
 import {
   assertNever,
-  buildDerivedIdempotencyKey,
+  buildProcessorIdempotencyKey,
   implementProcessor,
   type ConsumedEvent,
   type ProcessorStreamApi,
@@ -140,10 +140,10 @@ async function executeRequestedScript(args: {
   await args.streamApi.append({
     event: {
       type: "events.iterate.com/codemode/script-execution-completed",
-      idempotencyKey: buildDerivedIdempotencyKey({
-        slug: CodemodeProcessorContract.slug,
-        purpose: "script-execution-completed",
-        event: args.event,
+      idempotencyKey: buildProcessorIdempotencyKey({
+        processor: CodemodeProcessorContract,
+        key: "script-execution-completed",
+        sourceEvent: args.event,
       }),
       payload: {
         durationMs: Math.max(0, finishedAt.getTime() - startedAt.getTime()),
@@ -216,10 +216,10 @@ async function callFunction(args: {
     const requestedEvent = await args.streamApi.append({
       event: {
         type: "events.iterate.com/codemode/function-call-requested",
-        idempotencyKey: buildDerivedIdempotencyKey({
-          slug: CodemodeProcessorContract.slug,
-          purpose: `function-call-requested:${args.sequence}`,
-          event: args.sourceEvent,
+        idempotencyKey: buildProcessorIdempotencyKey({
+          processor: CodemodeProcessorContract,
+          key: `function-call-requested/${args.sequence}`,
+          sourceEvent: args.sourceEvent,
         }),
         payload: {
           args: serializeTraceArgs(args.args),
@@ -276,10 +276,10 @@ async function callFunction(args: {
   const requestedEvent = await args.streamApi.append({
     event: {
       type: "events.iterate.com/codemode/function-call-requested",
-      idempotencyKey: buildDerivedIdempotencyKey({
-        slug: CodemodeProcessorContract.slug,
-        purpose: `function-call-requested:${args.sequence}`,
-        event: args.sourceEvent,
+      idempotencyKey: buildProcessorIdempotencyKey({
+        processor: CodemodeProcessorContract,
+        key: `function-call-requested/${args.sequence}`,
+        sourceEvent: args.sourceEvent,
       }),
       payload: {
         args: serializeTraceArgs(args.args),
@@ -380,10 +380,10 @@ function createProcessorLogger(args: {
       await args.streamApi.append({
         event: {
           type: "events.iterate.com/codemode/log-emitted",
-          idempotencyKey: buildDerivedIdempotencyKey({
-            slug: CodemodeProcessorContract.slug,
-            purpose: `log-emitted:${logSequence}`,
-            event: args.sourceEvent,
+          idempotencyKey: buildProcessorIdempotencyKey({
+            processor: CodemodeProcessorContract,
+            key: `log-emitted/${logSequence}`,
+            sourceEvent: args.sourceEvent,
           }),
           payload: {
             level,
@@ -470,10 +470,10 @@ async function appendFunctionCallCompleted(args: {
   await args.streamApi.append({
     event: {
       type: "events.iterate.com/codemode/function-call-completed",
-      idempotencyKey: buildDerivedIdempotencyKey({
-        slug: CodemodeProcessorContract.slug,
-        purpose: "function-call-completed",
-        event: args.requestedEvent,
+      idempotencyKey: buildProcessorIdempotencyKey({
+        processor: CodemodeProcessorContract,
+        key: "function-call-completed",
+        sourceEvent: args.requestedEvent,
       }),
       payload: {
         durationMs: args.durationMs,

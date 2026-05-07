@@ -3,12 +3,12 @@ import { createORPCClient } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { eventsContract } from "@iterate-com/events-contract";
-import { ProjectId, type EventInput, type StreamPath } from "@iterate-com/shared/streams/types";
-import { defaultProjectId, getProjectUrl } from "../src/lib/project-id.ts";
+import { type EventInput, type StreamPath } from "@iterate-com/shared/streams/types";
+import { defaultNamespace, getNamespaceUrl, Namespace } from "../src/lib/namespace.ts";
 
 export type Events2Client = ContractRouterClient<typeof eventsContract>;
-export const defaultE2EProjectId = defaultProjectId;
-export const scopedE2EProjectId = "test";
+export const defaultE2ENamespace = defaultNamespace;
+export const scopedE2ENamespace = "test";
 const numberedEventsPreviewHostnamePattern = /^events\.iterate-preview-\d+\.com$/;
 
 export type Events2AppFixture = {
@@ -54,16 +54,16 @@ export function createEvents2AppFixture(args: { baseURL: string }): Events2AppFi
   };
 }
 
-export function getEventsProjectBaseUrl(args: { baseURL: string; projectId: string }) {
-  return getProjectUrl({
+export function getEventsProjectBaseUrl(args: { baseURL: string; namespace: string }) {
+  return getNamespaceUrl({
     currentUrl: args.baseURL,
-    projectId: ProjectId.parse(args.projectId),
+    namespace: Namespace.parse(args.namespace),
   })
     .toString()
     .replace(/\/+$/, "");
 }
 
-export function createEvents2ProjectAppFixture(args: { baseURL: string; projectId: string }) {
+export function createEvents2ProjectAppFixture(args: { baseURL: string; namespace: string }) {
   return createEvents2AppFixture({
     baseURL: getEventsProjectBaseUrl(args),
   });
@@ -79,7 +79,7 @@ export function supportsProjectHostRouting(baseURL: string) {
   }
 
   return (
-    new URL(getEventsProjectBaseUrl({ baseURL, projectId: scopedE2EProjectId })).hostname !==
+    new URL(getEventsProjectBaseUrl({ baseURL, namespace: scopedE2ENamespace })).hostname !==
     hostname
   );
 }

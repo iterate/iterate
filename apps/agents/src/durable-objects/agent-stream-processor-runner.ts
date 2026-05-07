@@ -3,10 +3,10 @@ import { AgentProcessorContract } from "@iterate-com/shared/stream-processors/ag
 import { createAgentProcessor } from "@iterate-com/shared/stream-processors/agent/implementation";
 import {
   createStreamProcessorRunnerDurableObject,
-  type StreamProcessorRunnerInit,
+  type StreamProcessorRunnerName,
 } from "./stream-processor-runner-common.ts";
 
-export type AgentStreamProcessorRunnerInit = StreamProcessorRunnerInit;
+export type AgentStreamProcessorRunnerName = StreamProcessorRunnerName;
 
 const AgentStreamProcessorRunnerBase = createStreamProcessorRunnerDurableObject({
   className: "AgentStreamProcessorRunner",

@@ -80,8 +80,8 @@ export class DebugAppendChainSubscriber extends DurableObject<DebugAppendChainSu
     });
 
     const stream = await getInitializedStreamStub({
-      namespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-      projectId: payload.projectId,
+      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+      namespace: payload.projectId,
       path: payload.streamPath,
     });
     const appended = await stream
@@ -133,8 +133,8 @@ export class DebugAppendChainSubscriber extends DurableObject<DebugAppendChainSu
     });
 
     const stream = await getInitializedStreamStub({
-      namespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-      projectId: next.projectId,
+      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+      namespace: next.projectId,
       path: next.streamPath,
     });
     await stream.append({

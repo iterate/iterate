@@ -1,5 +1,5 @@
 import { STREAM_SUBSCRIPTION_CONFIGURED_TYPE } from "@iterate-com/shared/streams/types";
-import { ProjectId } from "@iterate-com/shared/streams/types";
+import { StreamNamespace } from "@iterate-com/shared/streams/types";
 import { createEventsOrpcClient } from "~/lib/events-orpc-client.ts";
 import {
   AUTO_SUBSCRIBER_INSTANCE,
@@ -14,7 +14,7 @@ import { os } from "~/orpc/orpc.ts";
 
 export const installProcessorRouter = {
   installProcessor: os.installProcessor.handler(async ({ input, context }) => {
-    const projectId = ProjectId.parse(context.config.eventsProjectSlug);
+    const projectId = StreamNamespace.parse(context.config.eventsProjectSlug);
     const streamPath = context.config.streamPathPrefix;
     const publicOrigin = new URL(input.publicBaseUrl).origin;
 

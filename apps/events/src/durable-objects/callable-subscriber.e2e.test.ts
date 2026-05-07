@@ -1,8 +1,52 @@
 import { randomUUID } from "node:crypto";
-import { SELF } from "cloudflare:test";
+import { SELF, env } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
+import {
+  getInitializedStreamStub,
+  type StreamDurableObjectNamespace,
+} from "@iterate-com/shared/streams/helpers";
+import { STREAM_FIRST_INITIALIZED_TYPE, StreamPath } from "@iterate-com/shared/streams/types";
 
 describe("stream callable subscriber e2e", () => {
+  it("isolates the same stream path across project and non-project namespaces", async () => {
+    const path = StreamPath.parse(`/e2e/namespaces/${randomUUID().slice(0, 8)}`);
+    const namespaces = ["public", "proj_test_namespace", "platform"] as const;
+
+    for (const namespace of namespaces) {
+      const stream = await getInitializedStreamStub({
+        durableObjectNamespace: env.STREAM as unknown as StreamDurableObjectNamespace,
+        namespace,
+        path,
+      });
+      await stream.append({
+        type: "events.iterate.com/e2e/namespace-marker",
+        payload: { namespace },
+      });
+    }
+
+    for (const namespace of namespaces) {
+      const stream = await getInitializedStreamStub({
+        durableObjectNamespace: env.STREAM as unknown as StreamDurableObjectNamespace,
+        namespace,
+        path,
+      });
+      const state = await stream.getState();
+      const history = await stream.history({ before: "end" });
+
+      expect(state.namespace).toBe(namespace);
+      expect(state.path).toBe(path);
+      expect(history).toHaveLength(2);
+      expect(history[0]).toMatchObject({
+        type: STREAM_FIRST_INITIALIZED_TYPE,
+        payload: { namespace, path },
+      });
+      expect(history[1]).toMatchObject({
+        type: "events.iterate.com/e2e/namespace-marker",
+        payload: { namespace },
+      });
+    }
+  });
+
   it("lets a callable subscriber append a bounded event chain back into the same stream", async () => {
     /**
      * This is intentionally a Miniflare/workerd e2e test rather than a mocked

@@ -24,9 +24,9 @@ export const CoreStreamProcessorContract = defineProcessorContract({
   events: {
     ...CoreProcessorContract.events,
     "events.iterate.com/core/stream-initialized": {
-      description: "The stream durable object was initialized for a project and path.",
+      description: "The stream durable object was initialized for a namespace and path.",
       payloadSchema: z.object({
-        projectId: z.string().trim().min(1).max(255),
+        namespace: z.string().trim().min(1).max(255),
         path: StreamPath,
       }),
     },

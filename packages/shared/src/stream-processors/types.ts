@@ -17,24 +17,15 @@ export type StreamEvent<Type extends string = string, Payload = unknown> = Strea
   createdAt: string;
 };
 
-export type DerivedIdempotencyKeyArgs = {
-  /**
-   * Processor or helper that owns the derived append. This should usually be
-   * the processor contract's `slug`.
-   */
-  slug: string;
-  /**
-   * Human-readable name for the derivation, for example
-   * `render-webchat-message` or `codemode-result-to-agent-input`.
-   */
-  purpose: string;
-  /**
-   * Committed source event that caused the derived append.
-   *
-   * Idempotency is scoped to a single stream's event store, so the key only
-   * needs the source event offset, not the stream path.
-   */
-  event: Pick<StreamEvent, "offset">;
+export type ProcessorIdempotencyKeyProcessor =
+  | string
+  | { slug: string }
+  | { contract: { slug: string } };
+
+export type ProcessorIdempotencyKeyArgs = {
+  processor: ProcessorIdempotencyKeyProcessor;
+  key: string;
+  sourceEvent?: Pick<StreamEvent, "offset">;
 };
 
 export type EventExample<Payload = unknown> = {

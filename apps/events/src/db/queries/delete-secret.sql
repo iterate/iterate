@@ -1,2 +1,2 @@
 delete from secrets
-where id = :id and project_id = :projectId;
+where id = :id and namespace = :namespace;

@@ -1,10 +1,10 @@
 import {
-  ProjectId,
-  type ProjectId as ProjectIdValue,
+  StreamNamespace,
+  type StreamNamespace as StreamNamespaceValue,
   type StreamPath,
 } from "@iterate-com/shared/streams/types";
 
-const defaultProjectId = "public";
+const defaultStreamNamespace = "public";
 const appHostLabel = "events";
 const iterateEnvironmentLabelPattern = /^iterate(?:-[a-z0-9-]+)?$/;
 
@@ -12,7 +12,7 @@ const iterateEnvironmentLabelPattern = /^iterate(?:-[a-z0-9-]+)?$/;
  * Project-scoped origin for events (e.g. `https://<project>.events.iterate.com`).
  * Default project (`public`) collapses to the base events host.
  */
-function projectOrigin(args: { eventsBaseUrl: string; projectId: ProjectIdValue }): string {
+function projectOrigin(args: { eventsBaseUrl: string; projectId: StreamNamespaceValue }): string {
   return getProjectUrl({
     currentUrl: args.eventsBaseUrl,
     projectId: args.projectId,
@@ -21,15 +21,15 @@ function projectOrigin(args: { eventsBaseUrl: string; projectId: ProjectIdValue 
     .replace(/\/+$/, "");
 }
 
-export function getProjectUrl(args: { currentUrl: string | URL; projectId: ProjectIdValue }) {
+export function getProjectUrl(args: { currentUrl: string | URL; projectId: StreamNamespaceValue }) {
   const url = new URL(args.currentUrl);
   const eventsHostBase = getEventsHostBase(url.hostname);
 
   if (eventsHostBase) {
     url.hostname =
-      args.projectId === defaultProjectId
+      args.projectId === defaultStreamNamespace
         ? eventsHostBase
-        : `${ProjectId.parse(args.projectId)}.${eventsHostBase}`;
+        : `${StreamNamespace.parse(args.projectId)}.${eventsHostBase}`;
   }
 
   return url;
@@ -77,7 +77,7 @@ export function workerReachableLocalUrl(rawUrl: string): string {
 /** Human-readable stream viewer URL (matches the e2e helper in `test-support/events-stream-helpers`). */
 export function buildStreamViewerUrl(args: {
   eventsBaseUrl: string;
-  projectId: ProjectIdValue;
+  projectId: StreamNamespaceValue;
   streamPath: StreamPath;
 }): string {
   const base = projectOrigin({
@@ -103,7 +103,7 @@ export function buildStreamViewerUrl(args: {
  */
 export function buildStreamComposerUrl(args: {
   eventsBaseUrl: string;
-  projectId: ProjectIdValue;
+  projectId: StreamNamespaceValue;
   streamPath: StreamPath;
 }): string {
   const url = new URL(buildStreamViewerUrl(args));
@@ -118,7 +118,7 @@ export function buildStreamComposerUrl(args: {
 /** POST endpoint the Events oRPC `append` procedure lives at. */
 export function buildStreamAppendUrl(args: {
   eventsBaseUrl: string;
-  projectId: ProjectIdValue;
+  projectId: StreamNamespaceValue;
   streamPath: StreamPath;
 }): string {
   const base = projectOrigin({
@@ -160,13 +160,11 @@ export function buildAgentWebSocketCallbackUrl(args: {
  * explicit because `AgentStreamProcessorRunner` is a normal Durable Object, not
  * an `agents` package subclass that receives `/agents/...` routing for free.
  *
- * The runner name addresses the Durable Object instance. The stream path is
- * also included because runner lifecycle init params bake in the stream binding
- * before any pushed event is consumed.
+ * The runner Durable Object name is the stream path. That keeps the object
+ * identity and the processor's stream binding as one lifecycle-validated value.
  */
 export function buildAgentStreamProcessorRunnerWebSocketCallbackUrl(args: {
   publicOrigin: string;
-  runnerInstance: string;
   streamPath: StreamPath;
 }): string {
   return buildStreamProcessorRunnerWebSocketCallbackUrl({
@@ -177,7 +175,6 @@ export function buildAgentStreamProcessorRunnerWebSocketCallbackUrl(args: {
 
 export function buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl(args: {
   publicOrigin: string;
-  runnerInstance: string;
   streamPath: StreamPath;
 }): string {
   return buildStreamProcessorRunnerWebSocketCallbackUrl({
@@ -188,7 +185,6 @@ export function buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl(args: {
 
 export function buildOpenAiWsStreamProcessorRunnerWebSocketCallbackUrl(args: {
   publicOrigin: string;
-  runnerInstance: string;
   streamPath: StreamPath;
 }): string {
   return buildStreamProcessorRunnerWebSocketCallbackUrl({
@@ -197,9 +193,18 @@ export function buildOpenAiWsStreamProcessorRunnerWebSocketCallbackUrl(args: {
   });
 }
 
+export function buildCloudflareAiStreamProcessorRunnerWebSocketCallbackUrl(args: {
+  publicOrigin: string;
+  streamPath: StreamPath;
+}): string {
+  return buildStreamProcessorRunnerWebSocketCallbackUrl({
+    ...args,
+    runnerSlug: "cloudflare-ai-stream-processor-runner",
+  });
+}
+
 export function buildAgentChatStreamProcessorRunnerWebSocketCallbackUrl(args: {
   publicOrigin: string;
-  runnerInstance: string;
   streamPath: StreamPath;
 }): string {
   return buildStreamProcessorRunnerWebSocketCallbackUrl({
@@ -211,7 +216,6 @@ export function buildAgentChatStreamProcessorRunnerWebSocketCallbackUrl(args: {
 function buildStreamProcessorRunnerWebSocketCallbackUrl(args: {
   publicOrigin: string;
   runnerSlug: string;
-  runnerInstance: string;
   streamPath: StreamPath;
 }): string {
   const url = new URL(args.publicOrigin);
@@ -219,9 +223,8 @@ function buildStreamProcessorRunnerWebSocketCallbackUrl(args: {
     url.hostname = "127.0.0.1";
   }
   url.protocol = url.protocol === "http:" || isLocalhost(url.hostname) ? "ws:" : "wss:";
-  url.pathname = `/api/${args.runnerSlug}/${encodeURIComponent(args.runnerInstance)}/websocket`;
+  url.pathname = `/api/${args.runnerSlug}/${encodeURIComponent(args.streamPath)}/websocket`;
   url.search = "";
-  url.searchParams.set("streamPath", args.streamPath);
   url.hash = "";
   return url.toString();
 }

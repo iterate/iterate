@@ -68,18 +68,21 @@ describe("withAppConfig types", () => {
 
   it("preserves members from lower mixins", () => {
     type RoomInit = {
-      name: string;
       ownerUserId: string;
     };
 
+    const RoomInit = z.object({
+      ownerUserId: z.string(),
+    });
+
     const Base = withAppConfig(AppConfig)(
-      withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject)),
+      withLifecycleHooks({ nameSchema: RoomInit })(withDurableObjectCore(DurableObject)),
     );
 
     class Room extends Base<Env> {
       readBoth() {
         return {
-          ownerUserId: this.initParams.ownerUserId,
+          ownerUserId: this.structuredName.ownerUserId,
           apiBaseUrl: this.config.apiBaseUrl,
         };
       }

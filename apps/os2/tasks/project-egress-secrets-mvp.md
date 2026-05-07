@@ -73,7 +73,7 @@ getSecret({ slug: "..." });
 ```
 
 - Resolve each matched Secret using `getOrInitializeDoStub({ namespace,
-initParams })`, not a hand-rolled Durable Object name.
+structuredName })`, not a hand-rolled Durable Object name.
 - Forward the final request with substituted headers using ordinary `fetch()`.
 - For MVP, no egress policy enforcement is required beyond routing through this
   method.
@@ -86,22 +86,22 @@ initParams })`, not a hand-rolled Durable Object name.
 - Add `apps/os2/src/durable-objects/secret-durable-object.ts`.
 - Class/export name: `SecretDurableObject`.
 - Binding name: `SECRET`.
-- Lifecycle init params:
+- Lifecycle structured name:
 
 ```ts
-type SecretInitParams = {
+type SecretStructuredName = {
   name: string;
   projectId: string;
   slug: string;
 };
 ```
 
-- Callers should pass `initParams: { projectId, slug }` to
+- Callers should pass `structuredName: { projectId, slug }` to
   `getOrInitializeDoStub`; the helper derives `name` and calls `initialize()`.
-- Do not store Secret value in init params.
+- Do not store Secret value in lifecycle initial state.
 - Use the base durable-object-utils stack:
   - `withDurableObjectCore`
-  - `withLifecycleHooks<SecretInitParams>`
+  - `withLifecycleHooks<SecretStructuredName>`
   - `withD1ObjectCatalog`
   - `withPublicFetchRoute`
 - Use catalog class name `SecretDurableObject`.
@@ -181,7 +181,7 @@ globalOutbound: ctx.exports.ProjectEgressEntrypoint({
 });
 ```
 
-- Thread `projectId` from `CodemodeSessionInitParams` into the script executor.
+- Thread `projectId` from `CodemodeSessionStructuredName` into the script executor.
 - Keep the Dynamic Worker user API unchanged: user code should call normal
   `fetch()`.
 - If `ProjectEgressEntrypoint` is unavailable from `ctx.exports`, return a clear
@@ -233,7 +233,7 @@ Behavior:
   not a dedicated app-level D1 projection.
 - Query `className: "SecretDurableObject"`, `indexName: "projectId"`,
   `indexValue: projectId`.
-- Return each record's init params and timestamps.
+- Return each record's structured name and timestamps.
 - Do not wake every Secret Durable Object just to list raw values.
 - Do not return raw Secret values.
 

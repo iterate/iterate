@@ -32,8 +32,8 @@ export * from "./core-event-types.ts";
 export * from "./external-subscriber-types.ts";
 export * from "./html-renderer-types.ts";
 
-export const ProjectId = z.string().trim().min(1).max(255);
-export type ProjectId = z.infer<typeof ProjectId>;
+export const StreamNamespace = z.string().trim().min(1).max(255);
+export type StreamNamespace = z.infer<typeof StreamNamespace>;
 
 export const StreamCursor = z.union([
   z.coerce.number<number>().int().positive(),
@@ -53,7 +53,7 @@ export type StreamQuery = z.infer<typeof StreamQuery>;
 const StreamInitializedEventInput = GenericEventInputBase.extend({
   type: z.literal(STREAM_FIRST_INITIALIZED_TYPE),
   payload: z.strictObject({
-    projectId: ProjectId,
+    namespace: StreamNamespace,
     path: StreamPath,
   }),
 });
@@ -166,7 +166,7 @@ const ProcessorsState = z.object({
 });
 
 export const StreamState = z.object({
-  projectId: ProjectId,
+  namespace: StreamNamespace,
   path: StreamPath,
   eventCount: z.number().int().nonnegative(),
   childPaths: z.array(StreamPath),

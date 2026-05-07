@@ -63,7 +63,7 @@ import {
   type StreamRendererMode,
 } from "~/lib/stream-feed-types.ts";
 import { formatClientError } from "~/lib/format-client-error.ts";
-import { defaultProjectId, resolveHostProjectId } from "~/lib/project-id.ts";
+import { defaultNamespace, resolveHostNamespace } from "~/lib/namespace.ts";
 import {
   defaultStreamViewSearch,
   type StreamComposerMode,
@@ -617,9 +617,9 @@ function getLiveStreamFailureLabel({
 function getStreamDebugLinks(streamPath: StreamPath) {
   const origin = typeof window === "undefined" ? "" : window.location.origin;
   const hostname = typeof window === "undefined" ? null : window.location.hostname;
-  const projectId = resolveHostProjectId(hostname) ?? defaultProjectId;
-  const initParams = encodeURIComponent(JSON.stringify({ projectId, path: streamPath }));
-  const base = `${origin}/durable-objects/stream/by-init-params/${initParams}`;
+  const namespace = resolveHostNamespace(hostname) ?? defaultNamespace;
+  const structuredName = encodeURIComponent(JSON.stringify({ namespace, path: streamPath }));
+  const base = `${origin}/durable-objects/stream/by-structured-name/${structuredName}`;
 
   return {
     kv: `${base}/__kv`,

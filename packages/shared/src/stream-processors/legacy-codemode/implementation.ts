@@ -1,7 +1,7 @@
 import { z } from "zod";
 import {
   assertNever,
-  buildDerivedIdempotencyKey,
+  buildProcessorIdempotencyKey,
   implementProcessor,
   type ConsumedEvent,
   type ProcessorStreamApi,
@@ -76,10 +76,10 @@ export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
           await streamApi.append({
             event: {
               type: "events.iterate.com/codemode/block-added",
-              idempotencyKey: buildDerivedIdempotencyKey({
-                slug: CodemodeProcessorContract.slug,
-                purpose: "assistant-output-to-block",
-                event,
+              idempotencyKey: buildProcessorIdempotencyKey({
+                processor: CodemodeProcessorContract,
+                key: "assistant-output-to-block",
+                sourceEvent: event,
               }),
               payload: { script },
             },
@@ -110,10 +110,10 @@ export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
           await streamApi.append({
             event: {
               type: "events.iterate.com/agent/input-added",
-              idempotencyKey: buildDerivedIdempotencyKey({
-                slug: CodemodeProcessorContract.slug,
-                purpose: "tool-provider-explainer",
-                event,
+              idempotencyKey: buildProcessorIdempotencyKey({
+                processor: CodemodeProcessorContract,
+                key: "tool-provider-explainer",
+                sourceEvent: event,
               }),
               payload: {
                 content: toolProviderExplainer({ slug, types }),
@@ -203,10 +203,10 @@ async function executeCodemodeBlock(args: {
         await args.streamApi.append({
           event: {
             type: "events.iterate.com/agent-chat/assistant-response-added",
-            idempotencyKey: buildDerivedIdempotencyKey({
-              slug: CodemodeProcessorContract.slug,
-              purpose: `webchat-send-message:${webchatMessageSeq}`,
-              event: args.event,
+            idempotencyKey: buildProcessorIdempotencyKey({
+              processor: CodemodeProcessorContract,
+              key: `webchat-send-message/${webchatMessageSeq}`,
+              sourceEvent: args.event,
             }),
             payload: { channel: "web", message },
           },
@@ -219,10 +219,10 @@ async function executeCodemodeBlock(args: {
   await args.streamApi.append({
     event: {
       type: "events.iterate.com/codemode/result-added",
-      idempotencyKey: buildDerivedIdempotencyKey({
-        slug: CodemodeProcessorContract.slug,
-        purpose: "block-to-result",
-        event: args.event,
+      idempotencyKey: buildProcessorIdempotencyKey({
+        processor: CodemodeProcessorContract,
+        key: "block-to-result",
+        sourceEvent: args.event,
       }),
       payload: {
         result: result.result,
@@ -237,16 +237,16 @@ async function executeCodemodeBlock(args: {
 async function appendCodemodeResultAsAgentInput(args: {
   event: Extract<CodemodeConsumedEvent, { type: "events.iterate.com/codemode/result-added" }>;
   streamApi: CodemodeStreamApi;
-  purpose: string;
+  key: string;
   intro?: string;
 }) {
   await args.streamApi.append({
     event: {
       type: "events.iterate.com/agent/input-added",
-      idempotencyKey: buildDerivedIdempotencyKey({
-        slug: CodemodeProcessorContract.slug,
-        purpose: args.purpose,
-        event: args.event,
+      idempotencyKey: buildProcessorIdempotencyKey({
+        processor: CodemodeProcessorContract,
+        key: args.key,
+        sourceEvent: args.event,
       }),
       payload: {
         content: [
@@ -289,7 +289,7 @@ async function appendCodemodeResultFollowUp(args: {
     await appendCodemodeResultAsAgentInput({
       event: args.event,
       streamApi: args.streamApi,
-      purpose: "result-to-agent-input",
+      key: "result-to-agent-input",
     });
     return;
   }
@@ -297,7 +297,7 @@ async function appendCodemodeResultFollowUp(args: {
   await appendCodemodeResultAsAgentInput({
     event: args.event,
     streamApi: args.streamApi,
-    purpose: "result-to-final-wrap-up",
+    key: "result-to-final-wrap-up",
     intro: `Automatic codemode continuation limit reached after ${CODEMODE_AUTOMATIC_CONTINUATION_LIMIT} turns. Use this final result to summarize current state and ask the user whether to continue.`,
   });
 }
@@ -321,10 +321,10 @@ async function appendIdleStatusIfAgentIsQuiescent(args: {
   await args.streamApi.append({
     event: {
       type: "events.iterate.com/agent/status-updated",
-      idempotencyKey: buildDerivedIdempotencyKey({
-        slug: CodemodeProcessorContract.slug,
-        purpose: "codemode-result-to-idle-status",
-        event: args.event,
+      idempotencyKey: buildProcessorIdempotencyKey({
+        processor: CodemodeProcessorContract,
+        key: "codemode-result-to-idle-status",
+        sourceEvent: args.event,
       }),
       payload: {
         status: "idle",

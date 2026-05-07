@@ -8,6 +8,7 @@ import type {
   ProjectDurableObject,
   ProjectSummary,
 } from "~/durable-objects/project-durable-object.ts";
+import { getProjectDurableObjectName } from "~/durable-objects/project-durable-object.ts";
 import type { ProjectMcpServerConnectionProps } from "~/durable-objects/project-mcp-server-connection.ts";
 import { ingressUrlFromRequest } from "~/ingress/host-routing.ts";
 import { deriveClerkFrontendApiUrl } from "~/lib/clerk-frontend-api.ts";
@@ -61,7 +62,7 @@ export class ProjectMcpServerEntrypoint extends WorkerEntrypoint<
 
     const project = await resolveMcpProject({
       auth: mcpAuth,
-      project: this.env.PROJECT.getByName(this.ctx.props.projectId),
+      project: this.env.PROJECT.getByName(getProjectDurableObjectName(this.ctx.props.projectId)),
     });
 
     const ctxWithProps = this.ctx as ExecutionContext & { props?: ProjectMcpServerConnectionProps };

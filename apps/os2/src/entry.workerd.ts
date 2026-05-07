@@ -1,6 +1,10 @@
 import { env as workerEnv } from "cloudflare:workers";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { withEvlog } from "@iterate-com/shared/apps/logging/with-evlog";
+import {
+  registerDurableObjectPublicRoute,
+  routeDurableObjectRequest,
+} from "@iterate-com/shared/durable-object-utils/mixins/with-public-fetch-route";
 import { NitroWebSocketResponse } from "@iterate-com/shared/nitro-ws-response";
 import {
   getInitializedStreamStub,
@@ -48,7 +52,7 @@ export {
 export { FetchCapability } from "~/codemode/fetch-capability.ts";
 export { ProjectIngressEntrypoint } from "~/entrypoints/project-ingress-entrypoint.ts";
 export { ProjectMcpServerEntrypoint } from "~/entrypoints/project-mcp-server-entrypoint.ts";
-export { StreamCapability } from "~/entrypoints/stream-capability.ts";
+export { StreamsCapability } from "~/entrypoints/stream-capability.ts";
 export { StreamDurableObject };
 
 const config = parseAppConfigFromEnv({
@@ -59,6 +63,14 @@ const config = parseAppConfigFromEnv({
 
 export default {
   async fetch(request: Request, env: Env, cfCtx: ExecutionContext) {
+    const durableObjectPublicRouteResponse = await routeDurableObjectRequest(request, [
+      registerDurableObjectPublicRoute({
+        namespace: env.STREAM as never,
+        class: StreamDurableObject as never,
+      }),
+    ]);
+    if (durableObjectPublicRouteResponse) return durableObjectPublicRouteResponse;
+
     const debugAppendChainResponse = await handleDebugAppendChainFetch({ request, env });
     if (debugAppendChainResponse) return debugAppendChainResponse;
 
@@ -148,8 +160,8 @@ async function handleDebugAppendChainFetch(input: { request: Request; env: Env }
   const projectId = `debug-append-chain-${chainId}`;
   const streamPath = StreamPath.parse(`/debug/append-chain/${chainId}`);
   const stream = await getInitializedStreamStub({
-    namespace: input.env.STREAM as unknown as StreamDurableObjectNamespace,
-    projectId,
+    durableObjectNamespace: input.env.STREAM as unknown as StreamDurableObjectNamespace,
+    namespace: projectId,
     path: streamPath,
   });
 

@@ -3,7 +3,7 @@ import { createCodemodeContext } from "@iterate-com/shared/codemode/context-prox
 import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
 import { type Event, type StreamPath } from "@iterate-com/shared/streams/types";
 import { getInitializedStreamStub } from "@iterate-com/shared/streams/helpers";
-import { deriveDurableObjectNameFromInitParams } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
 import type { StreamProcessorRunnerState } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor-runner";
 import { describe, expect, test } from "vitest";
@@ -44,7 +44,7 @@ type CodemodeSessionStub = DurableObjectStub<CodemodeSession> & {
   afterAppend(input: { event: Event }): Promise<StreamProcessorRunnerState<unknown>>;
   ensureLiveConsumer(): Promise<void>;
   getRunnerState(): Promise<StreamProcessorRunnerState<unknown>>;
-  initialize(params: { name: string; projectId: string; streamPath: StreamPath }): Promise<unknown>;
+  initialize(params: { name: string }): Promise<unknown>;
   registerToolProvider(input: { provider: ToolProviderRegistration }): Promise<Event>;
 };
 
@@ -188,8 +188,8 @@ describe("CodemodeSession", () => {
     const session = await initializeSession(streamPath);
     await session.ensureLiveConsumer();
     const stream = await getInitializedStreamStub({
-      namespace: (env as TestEnv).STREAM,
-      projectId,
+      durableObjectNamespace: (env as TestEnv).STREAM,
+      namespace: projectId,
       path: streamPath,
     });
     expect(await stream.getState()).toMatchObject({
@@ -565,13 +565,15 @@ async function initializeSession(streamPath: StreamPath) {
     name,
   ) as unknown as CodemodeSessionStub;
 
-  await session.initialize({ name, projectId, streamPath });
+  await session.initialize({
+    name,
+  });
   return session;
 }
 
 function sessionName(input: { projectId: string; streamPath: StreamPath }) {
-  return deriveDurableObjectNameFromInitParams({
-    initParams: { projectId: input.projectId, streamPath: input.streamPath },
+  return deriveDurableObjectNameFromStructuredName({
+    structuredName: { projectId: input.projectId, streamPath: input.streamPath },
   });
 }
 
@@ -694,8 +696,8 @@ async function waitForFunctionCallRequested(input: { path: string[]; streamPath:
 
 async function readCurrentStreamEvents(streamPath: StreamPath) {
   const stream = await getInitializedStreamStub({
-    namespace: (env as TestEnv).STREAM,
-    projectId,
+    durableObjectNamespace: (env as TestEnv).STREAM,
+    namespace: projectId,
     path: streamPath,
   });
   const events = await stream.history({ before: "end" });

@@ -11,7 +11,7 @@ export { getStreamDurableObjectName, StreamOffsetPreconditionError };
 
 export function getStreamStub(args: StreamDurableObjectInitInput) {
   return getSharedStreamStub({
-    namespace: workerEnv.STREAM as never,
+    durableObjectNamespace: workerEnv.STREAM as never,
     ...args,
   });
 }
@@ -24,7 +24,7 @@ export function getStreamStub(args: StreamDurableObjectInitInput) {
  */
 export async function getInitializedStreamStub(args: StreamDurableObjectInitInput) {
   return await getSharedInitializedStreamStub({
-    namespace: workerEnv.STREAM as never,
+    durableObjectNamespace: workerEnv.STREAM as never,
     ...args,
   });
 }

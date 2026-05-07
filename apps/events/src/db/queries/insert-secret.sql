@@ -1,2 +1,2 @@
-insert into secrets (id, project_id, name, value, description, created_at, updated_at)
-values (:id, :projectId, :name, :value, :description, :createdAt, :updatedAt);
+insert into secrets (id, namespace, name, value, description, created_at, updated_at)
+values (:id, :namespace, :name, :value, :description, :createdAt, :updatedAt);

@@ -8,5 +8,5 @@ export type SecretsRow = {
   description: string | null;
   created_at: string;
   updated_at: string;
-  project_id: string;
+  namespace: string;
 };

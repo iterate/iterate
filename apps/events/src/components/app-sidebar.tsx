@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { Link, useMatchRoute, useSearch } from "@tanstack/react-router";
-import { ProjectId, type ProjectId as ProjectIdValue } from "@iterate-com/shared/streams/types";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   SidebarGroup,
@@ -13,7 +12,8 @@ import {
 import { SidebarShell } from "@iterate-com/ui/components/sidebar-shell";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { StreamsSidebar } from "~/components/streams-sidebar.tsx";
-import { getProjectUrl } from "~/lib/project-id.ts";
+import { Namespace, type NamespaceValue } from "~/lib/namespace.ts";
+import { getNamespaceUrl } from "~/lib/namespace.ts";
 import { defaultStreamViewSearch } from "~/lib/stream-view-search.ts";
 
 type StreamLinkSearch = {
@@ -23,11 +23,11 @@ type StreamLinkSearch = {
   [key: string]: unknown;
 };
 
-export function AppSidebar({ projectId }: { projectId: ProjectIdValue }) {
+export function AppSidebar({ namespace }: { namespace: NamespaceValue }) {
   return (
     <SidebarShell
       header={<AppSidebarBrand />}
-      footer={<AppSidebarProjectIdFooter projectId={projectId} />}
+      footer={<AppSidebarNamespaceFooter namespace={namespace} />}
     >
       <AppSidebarNav />
       <StreamsSidebar />
@@ -127,23 +127,23 @@ function AppSidebarNav() {
   );
 }
 
-function AppSidebarProjectIdFooter({ projectId }: { projectId: ProjectIdValue }) {
-  const [value, setValue] = useState(projectId);
+function AppSidebarNamespaceFooter({ namespace }: { namespace: NamespaceValue }) {
+  const [value, setValue] = useState(namespace);
 
   useEffect(() => {
-    setValue(projectId);
-  }, [projectId]);
+    setValue(namespace);
+  }, [namespace]);
 
-  function submitProjectId() {
-    const parsed = ProjectId.safeParse(value.trim());
+  function submitNamespace() {
+    const parsed = Namespace.safeParse(value.trim());
     if (!parsed.success) {
-      toast.error("Project ID must be a non-empty string up to 255 characters.");
+      toast.error("Namespace must be a non-empty string up to 255 characters.");
       return;
     }
 
-    const nextUrl = getProjectUrl({
+    const nextUrl = getNamespaceUrl({
       currentUrl: window.location.href,
-      projectId: parsed.data,
+      namespace: parsed.data,
     });
     window.location.assign(nextUrl.toString());
   }
@@ -153,11 +153,11 @@ function AppSidebarProjectIdFooter({ projectId }: { projectId: ProjectIdValue })
       className="flex flex-col gap-2 p-2"
       onSubmit={(event) => {
         event.preventDefault();
-        submitProjectId();
+        submitNamespace();
       }}
     >
       <div className="px-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-        Project ID
+        Namespace
       </div>
       <SidebarInput
         value={value}

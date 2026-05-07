@@ -1,9 +1,9 @@
 import { ORPCError } from "@orpc/server";
 import {
   type ChildStreamCreatedEvent,
-  type ProjectId,
   STREAM_CHILD_STREAM_CREATED_TYPE,
   STREAM_FIRST_INITIALIZED_TYPE,
+  type StreamNamespace,
   type StreamPath,
   StreamPausedError,
 } from "@iterate-com/shared/streams/types";
@@ -13,12 +13,12 @@ import {
   StreamOffsetPreconditionError,
 } from "~/lib/stream-helpers.ts";
 import { decodeEventStream } from "~/lib/utils.ts";
-import { os, withProject } from "~/orpc/orpc.ts";
+import { os, withNamespace } from "~/orpc/orpc.ts";
 
 export const streamsRouter = {
-  append: os.append.use(withProject).handler(async ({ input, context }) => {
+  append: os.append.use(withNamespace).handler(async ({ input, context }) => {
     const streamStub = await getInitializedStreamStub({
-      projectId: context.projectId,
+      namespace: context.namespace,
       path: input.path,
     });
 
@@ -29,18 +29,18 @@ export const streamsRouter = {
     }
   }),
 
-  destroy: os.destroy.use(withProject).handler(async ({ input, context }) => {
+  destroy: os.destroy.use(withNamespace).handler(async ({ input, context }) => {
     return getStreamStub({
-      projectId: context.projectId,
+      namespace: context.namespace,
       path: input.params.path,
     }).destroy({
       destroyChildren: input.query.destroyChildren,
     });
   }),
 
-  stream: os.stream.use(withProject).handler(async function* ({ input, signal, context }) {
+  stream: os.stream.use(withNamespace).handler(async function* ({ input, signal, context }) {
     const streamStub = await getInitializedStreamStub({
-      projectId: context.projectId,
+      namespace: context.namespace,
       path: input.path,
     });
 
@@ -54,20 +54,20 @@ export const streamsRouter = {
     }
   }),
 
-  getState: os.getState.use(withProject).handler(async ({ input, context }) => {
+  getState: os.getState.use(withNamespace).handler(async ({ input, context }) => {
     const streamStub = await getInitializedStreamStub({
-      projectId: context.projectId,
+      namespace: context.namespace,
       path: input.path,
     });
     return streamStub.getState();
   }),
 
-  listChildren: os.listChildren.use(withProject).handler(async ({ input, context }) => {
+  listChildren: os.listChildren.use(withNamespace).handler(async ({ input, context }) => {
     const events =
       input.path === "/"
-        ? await getRootStreamHistory({ projectId: context.projectId, path: input.path })
+        ? await getRootStreamHistory({ namespace: context.namespace, path: input.path })
         : await getStreamStub({
-            projectId: context.projectId,
+            namespace: context.namespace,
             path: input.path,
           }).historyIfInitialized();
     const discovered: Record<StreamPath, string> = {};
@@ -90,9 +90,9 @@ export const streamsRouter = {
   }),
 };
 
-async function getRootStreamHistory(args: { projectId: ProjectId; path: "/" }) {
+async function getRootStreamHistory(args: { namespace: StreamNamespace; path: "/" }) {
   const streamStub = await getInitializedStreamStub({
-    projectId: args.projectId,
+    namespace: args.namespace,
     path: args.path,
   });
   return streamStub.history();

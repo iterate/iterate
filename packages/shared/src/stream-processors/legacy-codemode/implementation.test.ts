@@ -52,7 +52,7 @@ describe("createCodemodeProcessor", () => {
       },
       {
         type: "events.iterate.com/codemode/block-added",
-        idempotencyKey: "stream-processor:codemode:derived:assistant-output-to-block:5",
+        idempotencyKey: "codemode/assistant-output-to-block@5",
         payload: {
           script: "async () => {\n  return 1;\n}",
         },
@@ -89,7 +89,7 @@ describe("createCodemodeProcessor", () => {
 
     expect(appended.at(-1)).toEqual({
       type: "events.iterate.com/agent/status-updated",
-      idempotencyKey: "stream-processor:codemode:derived:codemode-result-to-idle-status:9",
+      idempotencyKey: "codemode/codemode-result-to-idle-status@9",
       payload: {
         status: "idle",
         reason: "codemode-result-added",
@@ -137,12 +137,12 @@ describe("createCodemodeProcessor", () => {
     expect(appended).toEqual([
       {
         type: "events.iterate.com/agent-chat/assistant-response-added",
-        idempotencyKey: "stream-processor:codemode:derived:webchat-send-message:1:12",
+        idempotencyKey: "codemode/webchat-send-message/1@12",
         payload: { channel: "web", message: "hello from fake executor" },
       },
       {
         type: "events.iterate.com/codemode/result-added",
-        idempotencyKey: "stream-processor:codemode:derived:block-to-result:12",
+        idempotencyKey: "codemode/block-to-result@12",
         payload: {
           result: { ok: true },
           durationMs: expect.any(Number),

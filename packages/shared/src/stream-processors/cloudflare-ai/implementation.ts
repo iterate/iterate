@@ -1,7 +1,7 @@
 import { z } from "zod";
 import {
   assertNever,
-  buildDerivedIdempotencyKey,
+  buildProcessorIdempotencyKey,
   implementProcessor,
   type ConsumedEvent,
   type ProcessorStreamApi,
@@ -89,10 +89,10 @@ async function executeCloudflareAiRequest(args: {
   await args.streamApi.append({
     event: {
       type: "events.iterate.com/cloudflare-ai/llm-request-started",
-      idempotencyKey: buildDerivedIdempotencyKey({
-        slug: CloudflareAiProcessorContract.slug,
-        purpose: "llm-request-started",
-        event: args.event,
+      idempotencyKey: buildProcessorIdempotencyKey({
+        processor: CloudflareAiProcessorContract,
+        key: "llm-request-started",
+        sourceEvent: args.event,
       }),
       payload: {
         llmRequestId,
@@ -122,10 +122,10 @@ async function executeCloudflareAiRequest(args: {
     await args.streamApi.append({
       event: {
         type: "events.iterate.com/cloudflare-ai/llm-request-completed",
-        idempotencyKey: buildDerivedIdempotencyKey({
-          slug: CloudflareAiProcessorContract.slug,
-          purpose: "provider-llm-request-completed",
-          event: args.event,
+        idempotencyKey: buildProcessorIdempotencyKey({
+          processor: CloudflareAiProcessorContract,
+          key: "provider-llm-request-completed",
+          sourceEvent: args.event,
         }),
         payload: {
           llmRequestId,
@@ -137,10 +137,10 @@ async function executeCloudflareAiRequest(args: {
     await args.streamApi.append({
       event: {
         type: "events.iterate.com/agent/llm-request-completed",
-        idempotencyKey: buildDerivedIdempotencyKey({
-          slug: CloudflareAiProcessorContract.slug,
-          purpose: "agent-llm-request-completed",
-          event: args.event,
+        idempotencyKey: buildProcessorIdempotencyKey({
+          processor: CloudflareAiProcessorContract,
+          key: "agent-llm-request-completed",
+          sourceEvent: args.event,
         }),
         payload: {
           llmRequestId,
@@ -173,10 +173,10 @@ async function executeCloudflareAiRequest(args: {
     await args.streamApi.append({
       event: {
         type: "events.iterate.com/cloudflare-ai/llm-request-completed",
-        idempotencyKey: buildDerivedIdempotencyKey({
-          slug: CloudflareAiProcessorContract.slug,
-          purpose: "provider-llm-request-completed",
-          event: args.event,
+        idempotencyKey: buildProcessorIdempotencyKey({
+          processor: CloudflareAiProcessorContract,
+          key: "provider-llm-request-completed",
+          sourceEvent: args.event,
         }),
         payload: {
           llmRequestId,
@@ -188,10 +188,10 @@ async function executeCloudflareAiRequest(args: {
     await args.streamApi.append({
       event: {
         type: "events.iterate.com/agent/llm-request-completed",
-        idempotencyKey: buildDerivedIdempotencyKey({
-          slug: CloudflareAiProcessorContract.slug,
-          purpose: "agent-llm-request-completed",
-          event: args.event,
+        idempotencyKey: buildProcessorIdempotencyKey({
+          processor: CloudflareAiProcessorContract,
+          key: "agent-llm-request-completed",
+          sourceEvent: args.event,
         }),
         payload: {
           llmRequestId,
@@ -215,10 +215,10 @@ async function executeCloudflareAiRequest(args: {
   await args.streamApi.append({
     event: {
       type: "events.iterate.com/agent/output-added",
-      idempotencyKey: buildDerivedIdempotencyKey({
-        slug: CloudflareAiProcessorContract.slug,
-        purpose: "agent-output-added",
-        event: args.event,
+      idempotencyKey: buildProcessorIdempotencyKey({
+        processor: CloudflareAiProcessorContract,
+        key: "agent-output-added",
+        sourceEvent: args.event,
       }),
       payload: { content: assistantText },
     },
@@ -226,10 +226,10 @@ async function executeCloudflareAiRequest(args: {
   await args.streamApi.append({
     event: {
       type: "events.iterate.com/cloudflare-ai/llm-request-completed",
-      idempotencyKey: buildDerivedIdempotencyKey({
-        slug: CloudflareAiProcessorContract.slug,
-        purpose: "provider-llm-request-completed",
-        event: args.event,
+      idempotencyKey: buildProcessorIdempotencyKey({
+        processor: CloudflareAiProcessorContract,
+        key: "provider-llm-request-completed",
+        sourceEvent: args.event,
       }),
       payload: {
         llmRequestId,
@@ -248,10 +248,10 @@ async function executeCloudflareAiRequest(args: {
   await args.streamApi.append({
     event: {
       type: "events.iterate.com/agent/llm-request-completed",
-      idempotencyKey: buildDerivedIdempotencyKey({
-        slug: CloudflareAiProcessorContract.slug,
-        purpose: "agent-llm-request-completed",
-        event: args.event,
+      idempotencyKey: buildProcessorIdempotencyKey({
+        processor: CloudflareAiProcessorContract,
+        key: "agent-llm-request-completed",
+        sourceEvent: args.event,
       }),
       payload: {
         llmRequestId,

@@ -15,7 +15,7 @@ import {
 import type { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
 import type { ExecuteCodemodeFunctionCallInput } from "@iterate-com/shared/stream-processors/codemode/implementation";
 
-type StreamCapabilityEnv = {
+type StreamsCapabilityEnv = {
   STREAM: DurableObjectNamespace<StreamDurableObject>;
 };
 
@@ -26,10 +26,10 @@ export type StreamAppendPolicy =
   | { mode: "any" }
   | { mode: "pattern"; pattern: string };
 
-export type StreamCapabilityProps = {
+export type StreamsCapabilityProps = {
   appendMetadata?: Record<string, unknown>;
   appendPolicy?: StreamAppendPolicy;
-  projectId: string;
+  namespace: string;
   streamPath?: string;
 };
 
@@ -55,16 +55,19 @@ type StreamListChildrenInput = StreamPathInput;
 
 /**
  * Capability-based stream access for OS2 code that needs to read or append
- * project-owned events. The only ambient authority is the `STREAM` namespace
+ * namespace-owned events. The only ambient authority is the `STREAM` namespace
  * binding; callers receive a narrowed Cloudflare WorkerEntrypoint binding with
- * props such as `projectId` and optional `streamPath`.
+ * props such as `namespace` and optional `streamPath`.
  *
  * This is an example of Cloudflare Workers capability-based security: instead
  * of passing a global Events URL/client around, OS2 passes a capability whose
  * props determine what the holder can do. In future, read and write policy for
  * streams will be expressed in these props.
  */
-export class StreamCapability extends WorkerEntrypoint<StreamCapabilityEnv, StreamCapabilityProps> {
+export class StreamsCapability extends WorkerEntrypoint<
+  StreamsCapabilityEnv,
+  StreamsCapabilityProps
+> {
   async executeCodemodeFunctionCall(input: ExecuteCodemodeFunctionCallInput) {
     const [request] = input.args;
     const options =
@@ -79,23 +82,23 @@ export class StreamCapability extends WorkerEntrypoint<StreamCapabilityEnv, Stre
       case "listChildren":
         return await this.listChildren(options as StreamListChildrenInput);
       default:
-        throw new Error(`StreamCapability does not implement ${input.functionPath.join(".")}`);
+        throw new Error(`StreamsCapability does not implement ${input.functionPath.join(".")}`);
     }
   }
 
   async append(input: StreamAppendInput): Promise<Event> {
-    const path = this.resolveProjectPath(input);
+    const path = this.resolveNamespacePath(input);
     this.assertMayAppend(path);
     debugCodemodeDepth("streamCapability.append.start", {
       eventType: input.event.type,
       path,
-      projectId: this.ctx.props.projectId,
+      namespace: this.ctx.props.namespace,
     });
 
-    const event = await appendProjectStreamEvent({
-      streamNamespace: this.env.STREAM,
+    const event = await appendNamespaceStreamEvent({
+      durableObjectNamespace: this.env.STREAM,
       path,
-      projectId: this.ctx.props.projectId,
+      namespace: this.ctx.props.namespace,
       event: {
         ...input.event,
         metadata: {
@@ -108,16 +111,16 @@ export class StreamCapability extends WorkerEntrypoint<StreamCapabilityEnv, Stre
       eventOffset: event.offset,
       eventType: event.type,
       path,
-      projectId: this.ctx.props.projectId,
+      namespace: this.ctx.props.namespace,
     });
     return event;
   }
 
   async read(input: StreamReadInput = {}): Promise<Event[]> {
-    return await readProjectStreamEvents({
-      streamNamespace: this.env.STREAM,
-      path: this.resolveProjectPath(input),
-      projectId: this.ctx.props.projectId,
+    return await readNamespaceStreamEvents({
+      durableObjectNamespace: this.env.STREAM,
+      path: this.resolveNamespacePath(input),
+      namespace: this.ctx.props.namespace,
       afterOffset: input.afterOffset,
       beforeOffset: input.beforeOffset ?? "end",
     });
@@ -127,13 +130,13 @@ export class StreamCapability extends WorkerEntrypoint<StreamCapabilityEnv, Stre
     debugCodemodeDepth("streamCapability.stream.start", {
       afterOffset: input.afterOffset,
       beforeOffset: input.beforeOffset,
-      path: this.resolveProjectPath(input),
-      projectId: this.ctx.props.projectId,
+      path: this.resolveNamespacePath(input),
+      namespace: this.ctx.props.namespace,
     });
-    const events = streamProjectStreamEvents({
-      streamNamespace: this.env.STREAM,
-      path: this.resolveProjectPath(input),
-      projectId: this.ctx.props.projectId,
+    const events = streamNamespaceStreamEvents({
+      durableObjectNamespace: this.env.STREAM,
+      path: this.resolveNamespacePath(input),
+      namespace: this.ctx.props.namespace,
       afterOffset: input.afterOffset,
       beforeOffset: input.beforeOffset,
     });
@@ -158,19 +161,19 @@ export class StreamCapability extends WorkerEntrypoint<StreamCapabilityEnv, Stre
   }
 
   async getState(input: StreamPathInput = {}) {
-    return await getProjectStreamState({
-      streamNamespace: this.env.STREAM,
-      path: this.resolveProjectPath(input),
-      projectId: this.ctx.props.projectId,
+    return await getNamespaceStreamState({
+      durableObjectNamespace: this.env.STREAM,
+      path: this.resolveNamespacePath(input),
+      namespace: this.ctx.props.namespace,
     });
   }
 
   async listChildren(input: StreamListChildrenInput = {}) {
-    const path = this.resolveProjectPath(input);
-    const events = await readProjectStreamEvents({
-      streamNamespace: this.env.STREAM,
+    const path = this.resolveNamespacePath(input);
+    const events = await readNamespaceStreamEvents({
+      durableObjectNamespace: this.env.STREAM,
       path,
-      projectId: this.ctx.props.projectId,
+      namespace: this.ctx.props.namespace,
     });
     const discovered: Record<StreamPath, string> = {};
 
@@ -187,7 +190,7 @@ export class StreamCapability extends WorkerEntrypoint<StreamCapabilityEnv, Stre
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }
 
-  private resolveProjectPath(input: StreamPathInput): StreamPath {
+  private resolveNamespacePath(input: StreamPathInput): StreamPath {
     return resolveCapabilityStreamPath({
       basePath: this.ctx.props.streamPath,
       pathInput: input.streamPath,
@@ -202,27 +205,27 @@ export class StreamCapability extends WorkerEntrypoint<StreamCapabilityEnv, Stre
       return;
     }
 
-    throw new Error(`Project stream append policy rejected append to ${path}.`);
+    throw new Error(`Stream append policy rejected append to ${path}.`);
   }
 }
 
-export type StreamCapabilityBinding = (options: {
-  props: StreamCapabilityProps;
-}) => StreamCapability;
+export type StreamsCapabilityBinding = (options: {
+  props: StreamsCapabilityProps;
+}) => StreamsCapability;
 
-export function getStreamCapability(input: {
+export function getStreamsCapability(input: {
   exports: Record<string, unknown> | undefined;
-  props: StreamCapabilityProps;
+  props: StreamsCapabilityProps;
 }) {
-  const binding = input.exports?.StreamCapability;
+  const binding = input.exports?.StreamsCapability;
   if (typeof binding !== "function") {
-    throw new Error("StreamCapability export is not available.");
+    throw new Error("StreamsCapability export is not available.");
   }
 
-  return (binding as StreamCapabilityBinding)({ props: input.props });
+  return (binding as StreamsCapabilityBinding)({ props: input.props });
 }
 
-export function resolveProjectStreamPath(pathInput: string): StreamPath {
+export function resolveStreamPath(pathInput: string): StreamPath {
   const trimmedPath = pathInput.trim();
   if (!trimmedPath) {
     throw new Error("Stream path is required.");
@@ -238,7 +241,7 @@ function resolveCapabilityStreamPath(input: { basePath?: string; pathInput?: str
       throw new Error("Stream path is required.");
     }
 
-    return resolveProjectStreamPath(input.basePath);
+    return resolveStreamPath(input.basePath);
   }
 
   const trimmedPath = input.pathInput.trim();
@@ -247,14 +250,14 @@ function resolveCapabilityStreamPath(input: { basePath?: string; pathInput?: str
   }
 
   if (trimmedPath.startsWith("/")) {
-    return resolveProjectStreamPath(trimmedPath);
+    return resolveStreamPath(trimmedPath);
   }
 
   if (input.basePath == null) {
-    return resolveProjectStreamPath(trimmedPath);
+    return resolveStreamPath(trimmedPath);
   }
 
-  const basePath = resolveProjectStreamPath(input.basePath);
+  const basePath = resolveStreamPath(input.basePath);
   const relativePath = trimmedPath.replace(/^\.\//, "").replace(/^\/+/, "");
   return StreamPath.parse(basePath === "/" ? `/${relativePath}` : `${basePath}/${relativePath}`);
 }
@@ -264,10 +267,10 @@ function canAppend(input: { path: StreamPath; policy: StreamAppendPolicy; stream
     case "none":
       return false;
     case "stream":
-      return input.streamPath != null && input.path === resolveProjectStreamPath(input.streamPath);
+      return input.streamPath != null && input.path === resolveStreamPath(input.streamPath);
     case "children": {
       if (input.streamPath == null) return false;
-      const streamPath = resolveProjectStreamPath(input.streamPath);
+      const streamPath = resolveStreamPath(input.streamPath);
       return input.path === streamPath || input.path.startsWith(`${streamPath}/`);
     }
     case "any":
@@ -289,59 +292,59 @@ function debugCodemodeDepth(message: string, payload: Record<string, unknown>) {
   console.log("[DEBUG-cm-depth]", JSON.stringify({ message, ...payload }));
 }
 
-async function getInitializedProjectStreamStub(args: {
-  streamNamespace: DurableObjectNamespace<StreamDurableObject>;
-  projectId: string;
+async function getInitializedNamespaceStreamStub(args: {
+  durableObjectNamespace: DurableObjectNamespace<StreamDurableObject>;
+  namespace: string;
   path: StreamPath;
 }) {
   return await getInitializedStreamStub({
-    namespace: args.streamNamespace as unknown as StreamDurableObjectNamespace,
-    projectId: args.projectId,
+    durableObjectNamespace: args.durableObjectNamespace as unknown as StreamDurableObjectNamespace,
+    namespace: args.namespace,
     path: args.path,
   });
 }
 
-async function appendProjectStreamEvent(args: {
-  streamNamespace: DurableObjectNamespace<StreamDurableObject>;
-  projectId: string;
+async function appendNamespaceStreamEvent(args: {
+  durableObjectNamespace: DurableObjectNamespace<StreamDurableObject>;
+  namespace: string;
   path: StreamPath;
   event: EventInput;
 }) {
-  const stub = await getInitializedProjectStreamStub(args);
+  const stub = await getInitializedNamespaceStreamStub(args);
   return await stub.append(args.event);
 }
 
-async function readProjectStreamEvents(args: {
-  streamNamespace: DurableObjectNamespace<StreamDurableObject>;
-  projectId: string;
+async function readNamespaceStreamEvents(args: {
+  durableObjectNamespace: DurableObjectNamespace<StreamDurableObject>;
+  namespace: string;
   path: StreamPath;
   afterOffset?: StreamCursor;
   beforeOffset?: StreamCursor;
 }) {
-  const stub = await getInitializedProjectStreamStub(args);
+  const stub = await getInitializedNamespaceStreamStub(args);
   return await stub.history({
     after: args.afterOffset,
     before: args.beforeOffset ?? "end",
   });
 }
 
-async function getProjectStreamState(args: {
-  streamNamespace: DurableObjectNamespace<StreamDurableObject>;
-  projectId: string;
+async function getNamespaceStreamState(args: {
+  durableObjectNamespace: DurableObjectNamespace<StreamDurableObject>;
+  namespace: string;
   path: StreamPath;
 }) {
-  const stub = await getInitializedProjectStreamStub(args);
+  const stub = await getInitializedNamespaceStreamStub(args);
   return await stub.getState();
 }
 
-async function* streamProjectStreamEvents(args: {
-  streamNamespace: DurableObjectNamespace<StreamDurableObject>;
-  projectId: string;
+async function* streamNamespaceStreamEvents(args: {
+  durableObjectNamespace: DurableObjectNamespace<StreamDurableObject>;
+  namespace: string;
   path: StreamPath;
   afterOffset?: StreamCursor;
   beforeOffset?: StreamCursor;
 }) {
-  const stub = await getInitializedProjectStreamStub(args);
+  const stub = await getInitializedNamespaceStreamStub(args);
   const stream = await stub.stream({
     after: args.afterOffset,
     before: args.beforeOffset,

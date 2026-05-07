@@ -3,13 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 import {
   type AlarmForwardingTestRoom,
   type AlarmTestRoom,
+  type InitialStateTestRoom,
   type InspectorTestRoom,
   type InitializeTestRoom as InitializeTestRoomInstance,
   type ListedRoom,
   type SchedulerTestRoom,
 } from "../test-harness/initialize-fronting-worker.ts";
 import {
-  deriveDurableObjectNameFromInitParams,
+  deriveDurableObjectNameFromStructuredName,
   getOrInitializeDoStub,
 } from "./with-lifecycle-hooks.ts";
 
@@ -17,33 +18,57 @@ const testEnv = env as {
   ALARM_FORWARDING_ROOMS: DurableObjectNamespace<AlarmForwardingTestRoom>;
   ALARM_ROOMS: DurableObjectNamespace<AlarmTestRoom>;
   DO_CATALOG: D1Database;
+  INITIAL_STATE_ROOMS: DurableObjectNamespace<InitialStateTestRoom>;
   INSPECTORS: DurableObjectNamespace<InspectorTestRoom>;
   LISTED_ROOMS: DurableObjectNamespace<ListedRoom>;
   ROOMS: DurableObjectNamespace<InitializeTestRoomInstance>;
   SCHEDULE_ROOMS: DurableObjectNamespace<SchedulerTestRoom>;
 };
 
+function roomInit(name: string, ownerUserId: string) {
+  return {
+    name: roomName(name, ownerUserId),
+  };
+}
+
+function roomName(name: string, ownerUserId: string) {
+  return deriveDurableObjectNameFromStructuredName({
+    structuredName: {
+      ownerUserId,
+      testName: name,
+    },
+  });
+}
+
+function getRoom<TStub>(
+  namespace: {
+    getByName(name: string): TStub;
+  },
+  name: string,
+  ownerUserId: string,
+) {
+  return namespace.getByName(roomName(name, ownerUserId));
+}
+
 describe("withLifecycleHooks", () => {
   it("initializes by name and exposes params through assertInitialized", async () => {
-    const room = testEnv.ROOMS.getByName("unit-room-a");
+    const room = getRoom(testEnv.ROOMS, "unit-room-a", "user-a");
 
-    await expect(room.initialize({ name: "unit-room-a", ownerUserId: "user-a" })).resolves.toEqual({
-      name: "unit-room-a",
+    await expect(room.initialize(roomInit("unit-room-a", "user-a"))).resolves.toEqual({
       ownerUserId: "user-a",
     });
-    await expect(room.getInitParams()).resolves.toEqual({
-      name: "unit-room-a",
+    await expect(room.getStructuredName()).resolves.toEqual({
       ownerUserId: "user-a",
     });
   });
 
-  it("supports the protected initParams convenience in subclasses", async () => {
-    const room = testEnv.ROOMS.getByName("unit-room-message");
+  it("supports the protected structuredName convenience in subclasses", async () => {
+    const room = getRoom(testEnv.ROOMS, "unit-room-message", "user-message");
 
-    await room.initialize({ name: "unit-room-message", ownerUserId: "user-message" });
+    await room.initialize(roomInit("unit-room-message", "user-message"));
 
     await expect(room.sendMessage("hello")).resolves.toEqual({
-      room: "unit-room-message",
+      room: roomName("unit-room-message", "user-message"),
       ownerUserId: "user-message",
       text: "hello",
     });
@@ -58,37 +83,33 @@ describe("withLifecycleHooks", () => {
   });
 
   it("keeps initialization idempotent for identical params", async () => {
-    const room = testEnv.ROOMS.getByName("unit-room-idempotent");
+    const room = getRoom(testEnv.ROOMS, "unit-room-idempotent", "user-original");
 
-    await room.initialize({ name: "unit-room-idempotent", ownerUserId: "user-original" });
+    await room.initialize(roomInit("unit-room-idempotent", "user-original"));
 
     await expect(
-      room.initialize({ name: "unit-room-idempotent", ownerUserId: "user-original" }),
+      room.initialize(roomInit("unit-room-idempotent", "user-original")),
     ).resolves.toEqual({
-      name: "unit-room-idempotent",
       ownerUserId: "user-original",
     });
   });
 
-  it("rejects conflicting params for an already initialized object", async () => {
-    const room = testEnv.ROOMS.getByName("unit-room-conflict");
+  it("rejects a structured name that would address a different object", async () => {
+    const room = getRoom(testEnv.ROOMS, "unit-room-conflict", "user-original");
 
-    await room.initialize({ name: "unit-room-conflict", ownerUserId: "user-original" });
+    await room.initialize(roomInit("unit-room-conflict", "user-original"));
 
     await expect(
-      room.tryInitialize({ name: "unit-room-conflict", ownerUserId: "user-replacement" }),
-    ).resolves.toMatchObject({
-      name: "InitializeParamsMismatchError",
-    });
+      room.tryInitializeName(roomInit("unit-room-conflict", "user-replacement")),
+    ).resolves.toMatchObject({ name: "InitializeNameMismatchError" });
   });
 
   it("rejects mismatched names", async () => {
     const room = testEnv.ROOMS.getByName("unit-room-mismatch");
 
     await expect(
-      room.tryInitialize({ name: "different-room", ownerUserId: "user-a" }),
+      room.tryInitializeName(roomInit("different-room-name", "user-a")),
     ).resolves.toMatchObject({
-      kind: "error",
       name: "InitializeNameMismatchError",
     });
   });
@@ -96,14 +117,12 @@ describe("withLifecycleHooks", () => {
   it("initializes through the free getOrInitializeDoStub helper", async () => {
     const room = await getOrInitializeDoStub({
       namespace: testEnv.ROOMS,
-      name: "unit-room-helper",
-      initParams: {
+      name: {
         ownerUserId: "user-static",
       },
     });
 
-    await expect(room.getInitParams()).resolves.toEqual({
-      name: "unit-room-helper",
+    await expect(room.getStructuredName()).resolves.toEqual({
       ownerUserId: "user-static",
     });
   });
@@ -111,67 +130,60 @@ describe("withLifecycleHooks", () => {
   it("initializes from a deterministic name when callers omit the name", async () => {
     const room = await getOrInitializeDoStub({
       namespace: testEnv.ROOMS,
-      initParams: {
+      name: {
         ownerUserId: "user-derived",
       },
     });
 
-    const expectedName = deriveDurableObjectNameFromInitParams({
-      initParams: { ownerUserId: "user-derived" },
-    });
-
-    await expect(room.getInitParams()).resolves.toEqual({
-      name: expectedName,
+    await expect(room.getStructuredName()).resolves.toEqual({
       ownerUserId: "user-derived",
     });
   });
 
   it("derives the same name regardless of init param object key order", () => {
     expect(
-      deriveDurableObjectNameFromInitParams({
-        initParams: { ownerUserId: "user-derived", projectId: "project-a" },
+      deriveDurableObjectNameFromStructuredName({
+        structuredName: { ownerUserId: "user-derived", projectId: "project-a" },
       }),
     ).toBe(
-      deriveDurableObjectNameFromInitParams({
-        initParams: { projectId: "project-a", ownerUserId: "user-derived" },
+      deriveDurableObjectNameFromStructuredName({
+        structuredName: { projectId: "project-a", ownerUserId: "user-derived" },
       }),
     );
   });
 
-  it("rejects helper calls with neither name nor init params", async () => {
+  it("rejects helper calls without a name", async () => {
     await expect(
       getOrInitializeDoStub({
         namespace: testEnv.ROOMS,
       } as never),
-    ).rejects.toThrow("requires either name or initParams");
+    ).rejects.toThrow("requires name");
   });
 
   it("keeps initialization idempotent across direct and helper initialization", async () => {
-    const room = testEnv.ROOMS.getByName("unit-room-order");
+    const name = deriveDurableObjectNameFromStructuredName({
+      structuredName: { ownerUserId: "user-order" },
+    });
+    const room = testEnv.ROOMS.getByName(name);
 
-    await room.initialize({ name: "unit-room-order", ownerUserId: "user-order" });
+    await room.initialize({ name });
 
     await expect(
       getOrInitializeDoStub({
         namespace: testEnv.ROOMS,
-        name: "unit-room-order",
-        initParams: {
+        name: {
           ownerUserId: "user-order",
         },
-      }).then((stub) => stub.getInitParams()),
+      }).then((stub) => stub.getStructuredName()),
     ).resolves.toEqual({
-      name: "unit-room-order",
       ownerUserId: "user-order",
     });
   });
 
   it("waits for registered lifecycle hooks before initialize returns", async () => {
-    const room = testEnv.ROOMS.getByName("unit-room-hook-waits");
+    const room = getRoom(testEnv.ROOMS, "unit-room-hook-waits", "user-hook");
 
-    await expect(
-      room.initialize({ name: "unit-room-hook-waits", ownerUserId: "user-hook" }),
-    ).resolves.toEqual({
-      name: "unit-room-hook-waits",
+    await expect(room.initialize(roomInit("unit-room-hook-waits", "user-hook"))).resolves.toEqual({
       ownerUserId: "user-hook",
     });
 
@@ -195,21 +207,18 @@ describe("withLifecycleHooks", () => {
   });
 
   it("runs lifecycle hooks once for concurrent initialization attempts", async () => {
-    const room = testEnv.ROOMS.getByName("unit-room-concurrent-init");
+    const room = getRoom(testEnv.ROOMS, "unit-room-concurrent-init", "user-concurrent");
 
     await expect(
       room.initializeTwiceConcurrently({
-        name: "unit-room-concurrent-init",
         ownerUserId: "user-concurrent",
       }),
     ).resolves.toEqual({
       results: [
         {
-          name: "unit-room-concurrent-init",
           ownerUserId: "user-concurrent",
         },
         {
-          name: "unit-room-concurrent-init",
           ownerUserId: "user-concurrent",
         },
       ],
@@ -223,11 +232,10 @@ describe("withLifecycleHooks", () => {
   });
 
   it("retries instance wake hooks after a startup failure", async () => {
-    const room = testEnv.ROOMS.getByName("unit-room-hook-fails-once");
+    const room = getRoom(testEnv.ROOMS, "unit-room-hook-fails-once", "user-fails-once");
 
     await expect(
       room.tryInitialize({
-        name: "unit-room-hook-fails-once",
         ownerUserId: "user-fails-once",
       }),
     ).resolves.toMatchObject({
@@ -245,12 +253,8 @@ describe("withLifecycleHooks", () => {
     });
 
     await expect(
-      room.initialize({
-        name: "unit-room-hook-fails-once",
-        ownerUserId: "user-fails-once",
-      }),
+      room.initialize(roomInit("unit-room-hook-fails-once", "user-fails-once")),
     ).resolves.toEqual({
-      name: "unit-room-hook-fails-once",
       ownerUserId: "user-fails-once",
     });
 
@@ -265,11 +269,10 @@ describe("withLifecycleHooks", () => {
   });
 
   it("treats throw undefined from an instance wake hook as a real startup failure", async () => {
-    const room = testEnv.ROOMS.getByName("unit-room-hook-throws-undefined");
+    const room = getRoom(testEnv.ROOMS, "unit-room-hook-throws-undefined", "user-throws-undefined");
 
     await expect(
       room.tryInitialize({
-        name: "unit-room-hook-throws-undefined",
         ownerUserId: "user-throws-undefined",
       }),
     ).resolves.toEqual({
@@ -296,6 +299,64 @@ describe("withLifecycleHooks", () => {
       instanceWakeRuns: 2,
       instanceWakeStarted: true,
       instanceWakeFinished: false,
+    });
+  });
+
+  it("supports immutable initial state separate from the Durable Object name", async () => {
+    const name = `initial-state-${crypto.randomUUID()}`;
+    const room = await getOrInitializeDoStub({
+      namespace: testEnv.INITIAL_STATE_ROOMS,
+      name,
+      initialState: {
+        projectId: "project-initial",
+        plan: "pro",
+      },
+    });
+
+    await expect(room.getNameForTest()).resolves.toBe(name);
+    await expect(room.getInitialStateForTest()).resolves.toEqual({
+      projectId: "project-initial",
+      plan: "pro",
+    });
+
+    await expect(room.initialize({ name })).resolves.toBe(name);
+    await expect(room.getInitialStateForTest()).resolves.toEqual({
+      projectId: "project-initial",
+      plan: "pro",
+    });
+  });
+
+  it("requires initial state the first time a stateful object is initialized", async () => {
+    const name = `initial-state-required-${crypto.randomUUID()}`;
+    const room = testEnv.INITIAL_STATE_ROOMS.getByName(name);
+
+    await expect(room.tryInitialize({ name })).resolves.toMatchObject({
+      name: "InitializeInitialStateRequiredError",
+    });
+  });
+
+  it("rejects conflicting initial state for an already initialized object", async () => {
+    const name = `initial-state-conflict-${crypto.randomUUID()}`;
+    const room = testEnv.INITIAL_STATE_ROOMS.getByName(name);
+
+    await room.initialize({
+      name,
+      initialState: {
+        projectId: "project-original",
+        plan: "free",
+      },
+    });
+
+    await expect(
+      room.tryInitialize({
+        name,
+        initialState: {
+          projectId: "project-replacement",
+          plan: "free",
+        },
+      }),
+    ).resolves.toMatchObject({
+      name: "InitializeInitialStateMismatchError",
     });
   });
 });
@@ -378,16 +439,14 @@ describe("withD1ObjectCatalog", () => {
   });
 
   it("best-effort writes initialized objects into D1", async () => {
-    const room = testEnv.LISTED_ROOMS.getByName("listed-unit");
+    const room = getRoom(testEnv.LISTED_ROOMS, "listed-unit", "user-listed");
 
-    await room.initialize({ name: "listed-unit", ownerUserId: "user-listed" });
+    await room.initialize(roomInit("listed-unit", "user-listed"));
 
     await vi.waitFor(async () => {
       await expect(room.getD1ObjectCatalogRecord()).resolves.toMatchObject({
         class: "ListedRoom",
-        name: "listed-unit",
-        initParams: {
-          name: "listed-unit",
+        structuredName: {
           ownerUserId: "user-listed",
         },
       });
@@ -395,12 +454,9 @@ describe("withD1ObjectCatalog", () => {
   });
 
   it("creates the catalog table on first write", async () => {
-    const room = testEnv.LISTED_ROOMS.getByName("listed-creates-table");
+    const room = getRoom(testEnv.LISTED_ROOMS, "listed-creates-table", "user-listed");
 
-    await room.initialize({
-      name: "listed-creates-table",
-      ownerUserId: "user-listed",
-    });
+    await room.initialize(roomInit("listed-creates-table", "user-listed"));
 
     await vi.waitFor(async () => {
       await expect(
@@ -413,13 +469,10 @@ describe("withD1ObjectCatalog", () => {
     });
   });
 
-  it("indexes initialized objects by configured init params", async () => {
-    const room = testEnv.LISTED_ROOMS.getByName("listed-owner-index-unit");
+  it("indexes initialized objects by configured structured names", async () => {
+    const room = getRoom(testEnv.LISTED_ROOMS, "listed-owner-index-unit", "user-indexed");
 
-    await room.initialize({
-      name: "listed-owner-index-unit",
-      ownerUserId: "user-indexed",
-    });
+    await room.initialize(roomInit("listed-owner-index-unit", "user-indexed"));
 
     await vi.waitFor(async () => {
       const response = await SELF.fetch(
@@ -429,9 +482,7 @@ describe("withD1ObjectCatalog", () => {
       await expect(response.json()).resolves.toMatchObject([
         {
           class: "ListedRoom",
-          name: "listed-owner-index-unit",
-          initParams: {
-            name: "listed-owner-index-unit",
+          structuredName: {
             ownerUserId: "user-indexed",
           },
         },
@@ -442,12 +493,9 @@ describe("withD1ObjectCatalog", () => {
 
 describe("withMultiplexedAlarms", () => {
   it("schedules, lists, arms, dispatches, and deletes a logical alarm", async () => {
-    const room = testEnv.ALARM_ROOMS.getByName("alarm-unit-dispatch");
+    const room = getRoom(testEnv.ALARM_ROOMS, "alarm-unit-dispatch", "user-alarm");
 
-    await room.initialize({
-      name: "alarm-unit-dispatch",
-      ownerUserId: "user-alarm",
-    });
+    await room.initialize(roomInit("alarm-unit-dispatch", "user-alarm"));
     await room.scheduleRecordAlarm({
       key: "record",
       runAt: Date.now() + 60_000,
@@ -474,12 +522,9 @@ describe("withMultiplexedAlarms", () => {
   });
 
   it("replaces existing logical alarm rows by stable key", async () => {
-    const room = testEnv.ALARM_ROOMS.getByName("alarm-unit-replace");
+    const room = getRoom(testEnv.ALARM_ROOMS, "alarm-unit-replace", "user-alarm");
 
-    await room.initialize({
-      name: "alarm-unit-replace",
-      ownerUserId: "user-alarm",
-    });
+    await room.initialize(roomInit("alarm-unit-replace", "user-alarm"));
     await room.scheduleRecordAlarm({
       key: "replace-me",
       runAt: Date.now() + 60_000,
@@ -501,12 +546,9 @@ describe("withMultiplexedAlarms", () => {
   });
 
   it("does not delete a replacement row created while a logical alarm callback is running", async () => {
-    const room = testEnv.ALARM_ROOMS.getByName("alarm-unit-replace-during-dispatch");
+    const room = getRoom(testEnv.ALARM_ROOMS, "alarm-unit-replace-during-dispatch", "user-alarm");
 
-    await room.initialize({
-      name: "alarm-unit-replace-during-dispatch",
-      ownerUserId: "user-alarm",
-    });
+    await room.initialize(roomInit("alarm-unit-replace-during-dispatch", "user-alarm"));
     await room.scheduleSelfReplacingAlarm({
       key: "replace-while-running",
       runAt: Date.now() + 60_000,
@@ -524,12 +566,9 @@ describe("withMultiplexedAlarms", () => {
   });
 
   it("cancels logical alarms and re-arms the platform alarm", async () => {
-    const room = testEnv.ALARM_ROOMS.getByName("alarm-unit-cancel");
+    const room = getRoom(testEnv.ALARM_ROOMS, "alarm-unit-cancel", "user-alarm");
 
-    await room.initialize({
-      name: "alarm-unit-cancel",
-      ownerUserId: "user-alarm",
-    });
+    await room.initialize(roomInit("alarm-unit-cancel", "user-alarm"));
     await room.scheduleRecordAlarm({
       key: "cancel-me",
       runAt: Date.now() + 60_000,
@@ -542,15 +581,12 @@ describe("withMultiplexedAlarms", () => {
   });
 
   it("clamps the platform alarm while keeping long-future logical rows intact", async () => {
-    const room = testEnv.ALARM_ROOMS.getByName("alarm-unit-long-future");
+    const room = getRoom(testEnv.ALARM_ROOMS, "alarm-unit-long-future", "user-alarm");
     const nowMs = Date.now();
     const oneYearMs = 365 * 24 * 60 * 60 * 1_000;
     const thirtyDaysMs = 30 * 24 * 60 * 60 * 1_000;
 
-    await room.initialize({
-      name: "alarm-unit-long-future",
-      ownerUserId: "user-alarm",
-    });
+    await room.initialize(roomInit("alarm-unit-long-future", "user-alarm"));
     await room.scheduleRecordAlarm({
       key: "long-future",
       runAt: nowMs + oneYearMs,
@@ -581,12 +617,9 @@ describe("withMultiplexedAlarms", () => {
   });
 
   it("rejects missing methods at schedule time", async () => {
-    const room = testEnv.ALARM_ROOMS.getByName("alarm-unit-missing-method");
+    const room = getRoom(testEnv.ALARM_ROOMS, "alarm-unit-missing-method", "user-alarm");
 
-    await room.initialize({
-      name: "alarm-unit-missing-method",
-      ownerUserId: "user-alarm",
-    });
+    await room.initialize(roomInit("alarm-unit-missing-method", "user-alarm"));
 
     await expect(
       room.scheduleMissingMethodAlarm({
@@ -600,12 +633,9 @@ describe("withMultiplexedAlarms", () => {
   });
 
   it("keeps rows and logs when a persisted method is missing at dispatch time", async () => {
-    const room = testEnv.ALARM_ROOMS.getByName("alarm-unit-missing-dispatch");
+    const room = getRoom(testEnv.ALARM_ROOMS, "alarm-unit-missing-dispatch", "user-alarm");
 
-    await room.initialize({
-      name: "alarm-unit-missing-dispatch",
-      ownerUserId: "user-alarm",
-    });
+    await room.initialize(roomInit("alarm-unit-missing-dispatch", "user-alarm"));
     await room.seedMissingMethodAlarmRow("missing-after-deploy");
 
     await expect(room.runAlarmNow()).resolves.toMatchObject({
@@ -620,12 +650,9 @@ describe("withMultiplexedAlarms", () => {
   });
 
   it("rejects non-JSON-serializable payloads at schedule time", async () => {
-    const room = testEnv.ALARM_ROOMS.getByName("alarm-unit-bad-payload");
+    const room = getRoom(testEnv.ALARM_ROOMS, "alarm-unit-bad-payload", "user-alarm");
 
-    await room.initialize({
-      name: "alarm-unit-bad-payload",
-      ownerUserId: "user-alarm",
-    });
+    await room.initialize(roomInit("alarm-unit-bad-payload", "user-alarm"));
 
     await expect(room.scheduleUnserializableAlarm()).resolves.toMatchObject({
       name: "MultiplexedAlarmPayloadSerializationError",
@@ -634,12 +661,9 @@ describe("withMultiplexedAlarms", () => {
   });
 
   it("processes at most fifty due rows per alarm tick", async () => {
-    const room = testEnv.ALARM_ROOMS.getByName("alarm-unit-drain-limit");
+    const room = getRoom(testEnv.ALARM_ROOMS, "alarm-unit-drain-limit", "user-alarm");
 
-    await room.initialize({
-      name: "alarm-unit-drain-limit",
-      ownerUserId: "user-alarm",
-    });
+    await room.initialize(roomInit("alarm-unit-drain-limit", "user-alarm"));
 
     for (let index = 0; index < 55; index += 1) {
       await room.scheduleRecordAlarm({
@@ -657,12 +681,9 @@ describe("withMultiplexedAlarms", () => {
   });
 
   it("forwards Cloudflare alarm retry metadata to lower alarm implementations", async () => {
-    const room = testEnv.ALARM_FORWARDING_ROOMS.getByName("alarm-unit-forward-info");
+    const room = getRoom(testEnv.ALARM_FORWARDING_ROOMS, "alarm-unit-forward-info", "user-alarm");
 
-    await room.initialize({
-      name: "alarm-unit-forward-info",
-      ownerUserId: "user-alarm",
-    });
+    await room.initialize(roomInit("alarm-unit-forward-info", "user-alarm"));
 
     await expect(
       room.runAlarmNow({
@@ -681,12 +702,9 @@ describe("withMultiplexedAlarms", () => {
 
 describe("withScheduler", () => {
   it("schedules, dispatches, and deletes a one-shot task", async () => {
-    const room = testEnv.SCHEDULE_ROOMS.getByName("scheduler-unit-once");
+    const room = getRoom(testEnv.SCHEDULE_ROOMS, "scheduler-unit-once", "user-scheduler");
 
-    await room.initialize({
-      name: "scheduler-unit-once",
-      ownerUserId: "user-scheduler",
-    });
+    await room.initialize(roomInit("scheduler-unit-once", "user-scheduler"));
     await room.scheduleTask({
       key: "once",
       recurrence: {
@@ -716,17 +734,18 @@ describe("withScheduler", () => {
   });
 
   it("can start when schedule rows already exist before lifecycle startup", async () => {
-    const room = testEnv.SCHEDULE_ROOMS.getByName("scheduler-unit-startup-existing-row");
+    const room = getRoom(
+      testEnv.SCHEDULE_ROOMS,
+      "scheduler-unit-startup-existing-row",
+      "user-scheduler",
+    );
 
     await room.seedScheduleRowBeforeStartup("existing");
 
     await expect(
       Promise.race([
         room
-          .initialize({
-            name: "scheduler-unit-startup-existing-row",
-            ownerUserId: "user-scheduler",
-          })
+          .initialize(roomInit("scheduler-unit-startup-existing-row", "user-scheduler"))
           .then(() => "started"),
         new Promise<"timed-out">((resolve) => {
           setTimeout(() => resolve("timed-out"), 100);
@@ -742,12 +761,9 @@ describe("withScheduler", () => {
   });
 
   it("replaces schedules by required stable key", async () => {
-    const room = testEnv.SCHEDULE_ROOMS.getByName("scheduler-unit-replace");
+    const room = getRoom(testEnv.SCHEDULE_ROOMS, "scheduler-unit-replace", "user-scheduler");
 
-    await room.initialize({
-      name: "scheduler-unit-replace",
-      ownerUserId: "user-scheduler",
-    });
+    await room.initialize(roomInit("scheduler-unit-replace", "user-scheduler"));
     await room.scheduleTask({
       key: "poll",
       recurrence: {
@@ -778,12 +794,13 @@ describe("withScheduler", () => {
   });
 
   it("does not delete a replacement schedule created while a one-shot task is running", async () => {
-    const room = testEnv.SCHEDULE_ROOMS.getByName("scheduler-unit-replace-during-run");
+    const room = getRoom(
+      testEnv.SCHEDULE_ROOMS,
+      "scheduler-unit-replace-during-run",
+      "user-scheduler",
+    );
 
-    await room.initialize({
-      name: "scheduler-unit-replace-during-run",
-      ownerUserId: "user-scheduler",
-    });
+    await room.initialize(roomInit("scheduler-unit-replace-during-run", "user-scheduler"));
     await room.scheduleSelfReplacingTask({
       key: "replace-while-running",
       recurrence: {
@@ -808,13 +825,16 @@ describe("withScheduler", () => {
   });
 
   it("does not advance over a replacement schedule created while a recurring task is running", async () => {
-    const room = testEnv.SCHEDULE_ROOMS.getByName("scheduler-unit-replace-during-recurring-run");
+    const room = getRoom(
+      testEnv.SCHEDULE_ROOMS,
+      "scheduler-unit-replace-during-recurring-run",
+      "user-scheduler",
+    );
     const beforeRunMs = Date.now();
 
-    await room.initialize({
-      name: "scheduler-unit-replace-during-recurring-run",
-      ownerUserId: "user-scheduler",
-    });
+    await room.initialize(
+      roomInit("scheduler-unit-replace-during-recurring-run", "user-scheduler"),
+    );
     await room.scheduleSelfReplacingTask({
       key: "replace-recurring-while-running",
       recurrence: {
@@ -843,12 +863,13 @@ describe("withScheduler", () => {
   });
 
   it("does not delete a replacement schedule created by a final finite RRULE run", async () => {
-    const room = testEnv.SCHEDULE_ROOMS.getByName("scheduler-unit-replace-final-rrule");
+    const room = getRoom(
+      testEnv.SCHEDULE_ROOMS,
+      "scheduler-unit-replace-final-rrule",
+      "user-scheduler",
+    );
 
-    await room.initialize({
-      name: "scheduler-unit-replace-final-rrule",
-      ownerUserId: "user-scheduler",
-    });
+    await room.initialize(roomInit("scheduler-unit-replace-final-rrule", "user-scheduler"));
     await room.scheduleSelfReplacingTask({
       key: "replace-final-rrule",
       recurrence: {
@@ -873,12 +894,9 @@ describe("withScheduler", () => {
   });
 
   it("cancels schedules and their backing multiplexed alarm", async () => {
-    const room = testEnv.SCHEDULE_ROOMS.getByName("scheduler-unit-cancel");
+    const room = getRoom(testEnv.SCHEDULE_ROOMS, "scheduler-unit-cancel", "user-scheduler");
 
-    await room.initialize({
-      name: "scheduler-unit-cancel",
-      ownerUserId: "user-scheduler",
-    });
+    await room.initialize(roomInit("scheduler-unit-cancel", "user-scheduler"));
     await room.scheduleTask({
       key: "cancel-me",
       recurrence: {
@@ -894,12 +912,9 @@ describe("withScheduler", () => {
   });
 
   it("reschedules interval tasks after successful execution", async () => {
-    const room = testEnv.SCHEDULE_ROOMS.getByName("scheduler-unit-interval");
+    const room = getRoom(testEnv.SCHEDULE_ROOMS, "scheduler-unit-interval", "user-scheduler");
 
-    await room.initialize({
-      name: "scheduler-unit-interval",
-      ownerUserId: "user-scheduler",
-    });
+    await room.initialize(roomInit("scheduler-unit-interval", "user-scheduler"));
     await room.scheduleTask({
       key: "interval",
       recurrence: {
@@ -928,12 +943,9 @@ describe("withScheduler", () => {
   });
 
   it("keeps one-shot schedules due when execution fails", async () => {
-    const room = testEnv.SCHEDULE_ROOMS.getByName("scheduler-unit-once-fails");
+    const room = getRoom(testEnv.SCHEDULE_ROOMS, "scheduler-unit-once-fails", "user-scheduler");
 
-    await room.initialize({
-      name: "scheduler-unit-once-fails",
-      ownerUserId: "user-scheduler",
-    });
+    await room.initialize(roomInit("scheduler-unit-once-fails", "user-scheduler"));
     await room.scheduleFailingTask({
       key: "failing-once",
       recurrence: {
@@ -959,12 +971,13 @@ describe("withScheduler", () => {
   });
 
   it("advances recurring schedules when execution fails", async () => {
-    const room = testEnv.SCHEDULE_ROOMS.getByName("scheduler-unit-recurring-fails");
+    const room = getRoom(
+      testEnv.SCHEDULE_ROOMS,
+      "scheduler-unit-recurring-fails",
+      "user-scheduler",
+    );
 
-    await room.initialize({
-      name: "scheduler-unit-recurring-fails",
-      ownerUserId: "user-scheduler",
-    });
+    await room.initialize(roomInit("scheduler-unit-recurring-fails", "user-scheduler"));
     await room.scheduleFailingTask({
       key: "failing-interval",
       recurrence: {
@@ -988,12 +1001,13 @@ describe("withScheduler", () => {
   });
 
   it("deletes finite RRULE schedules after their final occurrence", async () => {
-    const room = testEnv.SCHEDULE_ROOMS.getByName("scheduler-unit-finite-rrule-done");
+    const room = getRoom(
+      testEnv.SCHEDULE_ROOMS,
+      "scheduler-unit-finite-rrule-done",
+      "user-scheduler",
+    );
 
-    await room.initialize({
-      name: "scheduler-unit-finite-rrule-done",
-      ownerUserId: "user-scheduler",
-    });
+    await room.initialize(roomInit("scheduler-unit-finite-rrule-done", "user-scheduler"));
     await room.seedExhaustedFiniteRruleScheduleForTest("finite-rrule");
 
     await expect(room.runAlarmNow()).resolves.toBeUndefined();
@@ -1006,12 +1020,13 @@ describe("withScheduler", () => {
   });
 
   it("does not skip the first RRULE occurrence at dtstart", async () => {
-    const room = testEnv.SCHEDULE_ROOMS.getByName("scheduler-unit-rrule-first-occurrence");
+    const room = getRoom(
+      testEnv.SCHEDULE_ROOMS,
+      "scheduler-unit-rrule-first-occurrence",
+      "user-scheduler",
+    );
 
-    await room.initialize({
-      name: "scheduler-unit-rrule-first-occurrence",
-      ownerUserId: "user-scheduler",
-    });
+    await room.initialize(roomInit("scheduler-unit-rrule-first-occurrence", "user-scheduler"));
 
     await expect(
       room.scheduleTask({
@@ -1039,13 +1054,10 @@ describe("withScheduler", () => {
   });
 
   it("skips overlapping interval schedules while they are recently running", async () => {
-    const room = testEnv.SCHEDULE_ROOMS.getByName("scheduler-unit-overlap");
+    const room = getRoom(testEnv.SCHEDULE_ROOMS, "scheduler-unit-overlap", "user-scheduler");
     const startedAtMs = Date.now() - 1_000;
 
-    await room.initialize({
-      name: "scheduler-unit-overlap",
-      ownerUserId: "user-scheduler",
-    });
+    await room.initialize(roomInit("scheduler-unit-overlap", "user-scheduler"));
     await room.scheduleTask({
       key: "overlap",
       recurrence: {
@@ -1071,12 +1083,9 @@ describe("withScheduler", () => {
   });
 
   it("retries interval schedules that look hung", async () => {
-    const room = testEnv.SCHEDULE_ROOMS.getByName("scheduler-unit-hung");
+    const room = getRoom(testEnv.SCHEDULE_ROOMS, "scheduler-unit-hung", "user-scheduler");
 
-    await room.initialize({
-      name: "scheduler-unit-hung",
-      ownerUserId: "user-scheduler",
-    });
+    await room.initialize(roomInit("scheduler-unit-hung", "user-scheduler"));
     await room.scheduleTask({
       key: "hung",
       recurrence: {
@@ -1097,12 +1106,9 @@ describe("withScheduler", () => {
   });
 
   it("stores cron and rrule recurrence as tagged rows", async () => {
-    const room = testEnv.SCHEDULE_ROOMS.getByName("scheduler-unit-calendar");
+    const room = getRoom(testEnv.SCHEDULE_ROOMS, "scheduler-unit-calendar", "user-scheduler");
 
-    await room.initialize({
-      name: "scheduler-unit-calendar",
-      ownerUserId: "user-scheduler",
-    });
+    await room.initialize(roomInit("scheduler-unit-calendar", "user-scheduler"));
     await room.scheduleTask({
       key: "cron",
       recurrence: {
@@ -1139,12 +1145,9 @@ describe("withScheduler", () => {
   });
 
   it("rejects full iCalendar RRULE strings with embedded DTSTART", async () => {
-    const room = testEnv.SCHEDULE_ROOMS.getByName("scheduler-unit-full-rrule");
+    const room = getRoom(testEnv.SCHEDULE_ROOMS, "scheduler-unit-full-rrule", "user-scheduler");
 
-    await room.initialize({
-      name: "scheduler-unit-full-rrule",
-      ownerUserId: "user-scheduler",
-    });
+    await room.initialize(roomInit("scheduler-unit-full-rrule", "user-scheduler"));
 
     await expect(
       room.scheduleTask({

@@ -12,9 +12,8 @@ const RUNNER_SOCKET_SUFFIX = "/websocket";
  * Handles the websocket callback URL used by Events push subscriptions for the
  * plain Durable Object stream processor runner.
  *
- * Parse the runner instance name, initialize that Durable Object with its
- * immutable stream path, then forward the websocket upgrade to the Durable
- * Object's `fetch()` method.
+ * Parse the runner name as a stream path, initialize that Durable Object by
+ * name, then forward the websocket upgrade to the Durable Object's `fetch()`.
  */
 export async function handleAgentStreamProcessorRunnerSocket(args: {
   env: Env;
@@ -28,10 +27,7 @@ export async function handleAgentStreamProcessorRunnerSocket(args: {
 
   const runner = await getOrInitializeDoStub<AgentStreamProcessorRunner>({
     namespace: args.env.AGENT_STREAM_PROCESSOR_RUNNER,
-    name: parsed.runnerName,
-    initParams: {
-      streamPath: parsed.streamPath,
-    },
+    name: parsed.streamPath,
   });
   return await runner.fetch(args.request);
 }
@@ -48,10 +44,7 @@ export async function handleCodemodeStreamProcessorRunnerSocket(args: {
 
   const runner = await getOrInitializeDoStub<CodemodeStreamProcessorRunner>({
     namespace: args.env.CODEMODE_STREAM_PROCESSOR_RUNNER,
-    name: parsed.runnerName,
-    initParams: {
-      streamPath: parsed.streamPath,
-    },
+    name: parsed.streamPath,
   });
   return await runner.fetch(args.request);
 }
@@ -68,10 +61,7 @@ export async function handleCloudflareAiStreamProcessorRunnerSocket(args: {
 
   const runner = await getOrInitializeDoStub<CloudflareAiStreamProcessorRunner>({
     namespace: args.env.CLOUDFLARE_AI_STREAM_PROCESSOR_RUNNER,
-    name: parsed.runnerName,
-    initParams: {
-      streamPath: parsed.streamPath,
-    },
+    name: parsed.streamPath,
   });
   return await runner.fetch(args.request);
 }
@@ -88,10 +78,7 @@ export async function handleAgentChatStreamProcessorRunnerSocket(args: {
 
   const runner = await getOrInitializeDoStub<AgentChatStreamProcessorRunner>({
     namespace: args.env.AGENT_CHAT_STREAM_PROCESSOR_RUNNER,
-    name: parsed.runnerName,
-    initParams: {
-      streamPath: parsed.streamPath,
-    },
+    name: parsed.streamPath,
   });
   return await runner.fetch(args.request);
 }
@@ -108,10 +95,7 @@ export async function handleOpenAiWsStreamProcessorRunnerSocket(args: {
 
   const runner = await getOrInitializeDoStub<OpenAiWsStreamProcessorRunner>({
     namespace: args.env.OPENAI_WS_STREAM_PROCESSOR_RUNNER,
-    name: parsed.runnerName,
-    initParams: {
-      streamPath: parsed.streamPath,
-    },
+    name: parsed.streamPath,
   });
   return await runner.fetch(args.request);
 }
@@ -119,7 +103,7 @@ export async function handleOpenAiWsStreamProcessorRunnerSocket(args: {
 function parseRunnerRequest(args: {
   request: Request;
   pathPrefix: string;
-}): { runnerName: string; streamPath: StreamPath } | Response | null {
+}): { streamPath: StreamPath } | Response | null {
   const url = new URL(args.request.url);
   const runnerName = parseRunnerName({
     pathname: url.pathname,
@@ -133,14 +117,8 @@ function parseRunnerRequest(args: {
     return new Response("Expected WebSocket upgrade", { status: 426 });
   }
 
-  const streamPathParam = url.searchParams.get("streamPath");
-  if (streamPathParam == null) {
-    return Response.json({ error: "streamPath_required" }, { status: 400 });
-  }
-
   return {
-    runnerName,
-    streamPath: StreamPath.parse(streamPathParam),
+    streamPath: StreamPath.parse(runnerName),
   };
 }
 

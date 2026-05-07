@@ -2,6 +2,7 @@ import { SELF, env } from "cloudflare:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { describe, expect, test } from "vitest";
+import { PROJECT_CREATED_EVENT_TYPE } from "./project-durable-object.ts";
 
 describe("Project ingress routing", () => {
   test("routes iterate.localhost project hosts through the Project Durable Object", async () => {
@@ -54,6 +55,33 @@ describe("Project ingress routing", () => {
       { host: "mcp__proj_local_test.iterate.localhost", exportName: "ProjectIngressEntrypoint" },
       { host: "proj_local_test.iterate.localhost", exportName: "ProjectIngressEntrypoint" },
     ]);
+
+    const streamResponse = await SELF.fetch("https://os.iterate.localhost/__test/project-stream");
+    expect(streamResponse.ok).toBe(true);
+    const streamBody = (await streamResponse.json()) as {
+      events: Array<{ type: string; payload: Record<string, unknown> }>;
+    };
+    expect(streamBody.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: PROJECT_CREATED_EVENT_TYPE,
+          payload: expect.objectContaining({
+            defaultHost: "demo.iterate.localhost",
+            projectId: "proj_local_test",
+            slug: "demo",
+          }),
+        }),
+      ]),
+    );
+
+    const lifecycleState = await waitForProjectLifecycleState();
+    expect(lifecycleState.state.project).toMatchObject({
+      defaultHost: "demo.iterate.localhost",
+      projectId: "proj_local_test",
+      slug: "demo",
+    });
+    expect(lifecycleState.reducedThroughOffset).toBeGreaterThanOrEqual(3);
+    expect(lifecycleState.afterAppendCompletedThroughOffset).toBeGreaterThanOrEqual(3);
 
     const projectResponse = await SELF.fetch("https://demo.iterate.localhost/", {
       headers: { accept: "text/html" },
@@ -109,3 +137,29 @@ describe("Project ingress routing", () => {
     expect(await streamsResponse.text()).toBe("No ingress route matched.");
   });
 });
+
+async function waitForProjectLifecycleState() {
+  const deadline = Date.now() + 5_000;
+  let latest: unknown;
+
+  while (Date.now() < deadline) {
+    const response = await SELF.fetch(
+      "https://os.iterate.localhost/__test/project-lifecycle-state",
+    );
+    latest = await response.json();
+    const state = latest as {
+      afterAppendCompletedThroughOffset: number;
+      reducedThroughOffset: number;
+      state: {
+        project: { projectId: string } | null;
+      };
+    };
+    if (state.state.project?.projectId === "proj_local_test") {
+      return state;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+
+  throw new Error(`Timed out waiting for project lifecycle state: ${JSON.stringify(latest)}`);
+}

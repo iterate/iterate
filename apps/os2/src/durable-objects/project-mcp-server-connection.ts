@@ -2,10 +2,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpAgent } from "agents/mcp";
 import type { Connection } from "agents";
 import { z } from "zod";
-import { DurableObject } from "cloudflare:workers";
 import { StreamPath, type Event, type EventInput } from "@iterate-com/shared/streams/types";
 import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
-import { withIterateDurableObjectStack } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
+import { upsertD1ObjectCatalog } from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
 import packageJson from "../../package.json" with { type: "json" };
 import { createExampleCapabilityProviders } from "~/codemode/example-provider-registrations.ts";
 import {
@@ -13,14 +12,14 @@ import {
   startCodemodeScriptOnSession,
 } from "~/codemode/codemode-session-rpc.ts";
 import {
-  getStreamCapability,
-  type StreamCapabilityProps,
+  getStreamsCapability,
+  type StreamsCapabilityProps,
 } from "~/entrypoints/stream-capability.ts";
 import { readEventPayload, stringifyPayloadError } from "~/lib/codemode-event-payload.ts";
 import { createOpenApiProviderRegistration } from "~/rpc-targets/openapi-provider-registration.ts";
 import { createOutboundMcpFromOurClientToolProviderRegistration } from "~/rpc-targets/outbound-mcp-from-our-client-capability.ts";
 
-export { StreamCapability } from "~/entrypoints/stream-capability.ts";
+export { StreamsCapability } from "~/entrypoints/stream-capability.ts";
 
 /**
  * Project-scoped MCP server connection for os2.
@@ -59,8 +58,7 @@ export interface ProjectMcpServerConnectionProps extends Record<string, unknown>
   clientId: string | null;
 }
 
-export type ProjectMcpServerConnectionInitParams = {
-  name: string;
+export type ProjectMcpServerConnectionStructuredName = {
   projectId: string;
   projectSlug: string | null;
   orgId: string;
@@ -71,22 +69,22 @@ export type ProjectMcpServerConnectionInitParams = {
   streamPath: StreamPath;
 };
 
+const ProjectMcpServerConnectionStructuredName = z.object({
+  projectId: z.string(),
+  projectSlug: z.string().nullable(),
+  orgId: z.string(),
+  orgSlug: z.string().nullable(),
+  userId: z.string(),
+  clientId: z.string().nullable(),
+  clientName: z.string().nullable(),
+  streamPath: StreamPath,
+});
+
 const sessionSlugStorageKey = "mcpServerSessionSlug";
 const eventTypePrefix = "events.iterate.com/mcp-server";
 const requiredToolScope = "profile";
-const ProjectMcpServerConnectionBase = withIterateDurableObjectStack<
-  ProjectMcpServerConnectionInitParams,
-  Pick<McpServerEnv, "DO_CATALOG">
->({
-  className: "ProjectMcpServerConnection",
-  getDatabase: (env) => env.DO_CATALOG,
-  indexes: {
-    orgId: (params) => params.orgId,
-    projectId: (params) => params.projectId,
-  },
-})(McpAgent as unknown as typeof DurableObject);
 
-export class ProjectMcpServerConnection extends (ProjectMcpServerConnectionBase as unknown as typeof McpAgent)<
+export class ProjectMcpServerConnection extends McpAgent<
   McpServerEnv,
   unknown,
   ProjectMcpServerConnectionProps
@@ -383,7 +381,7 @@ export class ProjectMcpServerConnection extends (ProjectMcpServerConnectionBase 
         return;
       }
 
-      await getStreamCapability({
+      await getStreamsCapability({
         exports: this.workerExports(),
         props: streamCapabilityProps({
           projectId: auth.projectId,
@@ -448,9 +446,7 @@ export class ProjectMcpServerConnection extends (ProjectMcpServerConnectionBase 
 
   /** Stable event stream for lifecycle and codemode events emitted by one MCP session. */
   private async getSessionStreamPath() {
-    const auth = this.requireAuthProps();
-    const ownerPath = auth.projectId ? `/projects/${auth.projectId}` : `/orgs/${auth.orgId}`;
-    return StreamPath.parse(`${ownerPath}/mcp-server-sessions/${await this.getSessionSlug()}`);
+    return StreamPath.parse(`/mcp-server-sessions/${await this.getSessionSlug()}`);
   }
 
   private async getSessionSlug() {
@@ -496,15 +492,7 @@ export class ProjectMcpServerConnection extends (ProjectMcpServerConnectionBase 
 
     const clientInfo = await this.getClientInfo();
     const rawClientName = isRecord(clientInfo) ? clientInfo.name : undefined;
-
-    await (
-      this as unknown as {
-        initialize(
-          params: ProjectMcpServerConnectionInitParams,
-        ): Promise<ProjectMcpServerConnectionInitParams>;
-      }
-    ).initialize({
-      name,
+    const structuredName = ProjectMcpServerConnectionStructuredName.parse({
       projectId: auth.projectId,
       projectSlug: auth.projectSlug,
       orgId: auth.orgId,
@@ -513,6 +501,18 @@ export class ProjectMcpServerConnection extends (ProjectMcpServerConnectionBase 
       clientId: auth.clientId,
       clientName: typeof rawClientName === "string" ? rawClientName : null,
       streamPath: await this.getSessionStreamPath(),
+    });
+
+    await upsertD1ObjectCatalog({
+      db: this.env.DO_CATALOG,
+      className: "ProjectMcpServerConnection",
+      id: this.ctx.id.toString(),
+      indexes: {
+        orgId: (params) => params.orgId,
+        projectId: (params) => params.projectId,
+      },
+      name,
+      structuredName,
     });
   }
 }
@@ -563,10 +563,10 @@ function serializeError(error: unknown) {
 function streamCapabilityProps(input: {
   projectId: string;
   streamPath: StreamPath;
-}): StreamCapabilityProps {
+}): StreamsCapabilityProps {
   return {
     appendPolicy: { mode: "stream" },
-    projectId: input.projectId,
+    namespace: input.projectId,
     streamPath: input.streamPath,
   };
 }
@@ -644,7 +644,7 @@ async function waitForScriptExecutionFinished(input: {
   streamPath: StreamPath;
 }) {
   const logs: string[] = [];
-  const response = await getStreamCapability({
+  const response = await getStreamsCapability({
     exports: input.exports,
     props: streamCapabilityProps({
       projectId: input.projectId,

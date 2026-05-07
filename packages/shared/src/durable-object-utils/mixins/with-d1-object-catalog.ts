@@ -3,7 +3,7 @@
 import type {
   LifecycleHooksMembers,
   LifecycleHooksProtected,
-  LifecycleInit,
+  LifecycleStructuredName,
 } from "./with-lifecycle-hooks.ts";
 import type {
   Constructor,
@@ -15,23 +15,21 @@ import type {
 } from "./mixin-types.ts";
 import type { DurableObjectCoreProtected } from "./with-durable-object-core.ts";
 
-export type D1ObjectCatalogRecord<InitParams extends LifecycleInit> = {
+export type D1ObjectCatalogRecord<StructuredName extends LifecycleStructuredName> = {
   class: string;
   name: string;
   id: string;
-  initParams: InitParams;
+  structuredName: StructuredName;
   createdAt: string;
   lastWokenAt: string;
 };
 
 export type D1ObjectCatalogIndexValue = string | number | readonly (string | number)[];
 
-export type D1ObjectCatalogIndexDefinitions<InitParams extends LifecycleInit> = Record<
-  string,
-  (params: InitParams) => D1ObjectCatalogIndexValue
->;
+export type D1ObjectCatalogIndexDefinitions<StructuredName extends LifecycleStructuredName> =
+  Record<string, (structuredName: StructuredName) => D1ObjectCatalogIndexValue>;
 
-export type D1ObjectCatalogMembers<InitParams extends LifecycleInit> = {
+export type D1ObjectCatalogMembers<StructuredName extends LifecycleStructuredName> = {
   /**
    * Returns this Durable Object's D1 catalog row, or `null` when no row is
    * available yet.
@@ -40,12 +38,12 @@ export type D1ObjectCatalogMembers<InitParams extends LifecycleInit> = {
    * initialized, the background D1 write has not run yet, or the mixin-owned
    * tables have not been created yet.
    */
-  getD1ObjectCatalogRecord(): Promise<D1ObjectCatalogRecord<InitParams> | null>;
+  getD1ObjectCatalogRecord(): Promise<D1ObjectCatalogRecord<StructuredName> | null>;
 };
 
 type WithD1ObjectCatalogResult<
   TBase extends DurableObjectClass,
-  InitParams extends LifecycleInit,
+  StructuredName extends LifecycleStructuredName,
   Env,
 > = StaticSide<TBase> &
   // Preserve the Cloudflare-style `class Room extends Base<Env>` ergonomics
@@ -65,8 +63,11 @@ type WithD1ObjectCatalogResult<
   // And this fails because MissingEnv does not satisfy the lower bound:
   //
   //   class Broken extends Base<{ OTHER: string }> {}
-  DurableObjectClass<ReqEnvOf<TBase> & Env, MembersOf<TBase> & D1ObjectCatalogMembers<InitParams>> &
-  Constructor<D1ObjectCatalogMembers<InitParams>>;
+  DurableObjectClass<
+    ReqEnvOf<TBase> & Env,
+    MembersOf<TBase> & D1ObjectCatalogMembers<StructuredName>
+  > &
+  Constructor<D1ObjectCatalogMembers<StructuredName>>;
 
 /**
  * Best-effort D1 catalog for initialized Durable Objects.
@@ -76,33 +77,33 @@ type WithD1ObjectCatalogResult<
  * not depend on an external database. Local Durable Object storage remains the
  * source of truth; D1 is only for discovery and cross-object lookup.
  *
- * `indexes` derives secondary lookup rows from init params. Use it for stable
+ * `indexes` derives secondary lookup rows from structured names. Use it for stable
  * identity fields such as `ownerUserId` or `projectId`, not for mutable state.
  */
-export function withD1ObjectCatalog<InitParams extends LifecycleInit, Env>(options: {
+export function withD1ObjectCatalog<StructuredName extends LifecycleStructuredName, Env>(options: {
   className: string;
   getDatabase(env: Env): D1Database;
-  indexes?: D1ObjectCatalogIndexDefinitions<InitParams>;
+  indexes?: D1ObjectCatalogIndexDefinitions<StructuredName>;
 }) {
   return function <TBase extends DurableObjectClass>(
     Base: TBase,
-  ): WithD1ObjectCatalogResult<TBase, InitParams, Env> {
+  ): WithD1ObjectCatalogResult<TBase, StructuredName, Env> {
     const BaseWithLifecycle = Base as unknown as DurableObjectConstructor<
       Env,
       DurableObjectCoreProtected &
-        LifecycleHooksMembers<InitParams> &
-        LifecycleHooksProtected<InitParams>
+        LifecycleHooksMembers<StructuredName> &
+        LifecycleHooksProtected<StructuredName>
     >;
 
     abstract class D1ObjectCatalogMixin
       extends BaseWithLifecycle
-      implements D1ObjectCatalogMembers<InitParams>
+      implements D1ObjectCatalogMembers<StructuredName>
     {
       constructor(...args: any[]) {
         super(...args);
 
-        this.registerOnInstanceWake((params) => {
-          this.scheduleD1ObjectCatalogUpsert(params);
+        this.registerOnInstanceWake((structuredName) => {
+          this.scheduleD1ObjectCatalogUpsert(structuredName);
         });
       }
 
@@ -110,14 +111,14 @@ export function withD1ObjectCatalog<InitParams extends LifecycleInit, Env>(optio
        * Reads the external D1 catalog without initializing the object.
        */
       async getD1ObjectCatalogRecord() {
-        const initialized = tryGetInitializedParams(this);
-        if (initialized === undefined) {
+        const initialized = tryGetInitialized(this);
+        if (!initialized) {
           return null;
         }
 
-        return await getD1ObjectCatalogRecord<InitParams>(options.getDatabase(this.env), {
+        return await getD1ObjectCatalogRecord<StructuredName>(options.getDatabase(this.env), {
           className: options.className,
-          name: initialized.name,
+          name: this.name,
         });
       }
 
@@ -134,7 +135,7 @@ export function withD1ObjectCatalog<InitParams extends LifecycleInit, Env>(optio
        * handling its rejection.
        * https://developers.cloudflare.com/durable-objects/api/state/#waituntil
        */
-      private scheduleD1ObjectCatalogUpsert(params: InitParams) {
+      private scheduleD1ObjectCatalogUpsert(structuredName: StructuredName) {
         void Promise.resolve()
           .then(() =>
             upsertD1ObjectCatalog({
@@ -142,7 +143,8 @@ export function withD1ObjectCatalog<InitParams extends LifecycleInit, Env>(optio
               className: options.className,
               id: this.getDurableObjectId().toString(),
               indexes: options.indexes,
-              params,
+              name: this.name,
+              structuredName,
             }),
           )
           .catch((error: unknown) => {
@@ -155,21 +157,21 @@ export function withD1ObjectCatalog<InitParams extends LifecycleInit, Env>(optio
     // static/protected side while adding the D1 env lower-bound. The result type
     // above publishes that composed class shape and keeps `class Room extends
     // Base<FullEnv>` working when FullEnv includes the D1 binding fragment.
-    return D1ObjectCatalogMixin as unknown as WithD1ObjectCatalogResult<TBase, InitParams, Env>;
+    return D1ObjectCatalogMixin as unknown as WithD1ObjectCatalogResult<TBase, StructuredName, Env>;
   };
 }
 
-export async function getD1ObjectCatalogRecord<InitParams extends LifecycleInit>(
+export async function getD1ObjectCatalogRecord<StructuredName extends LifecycleStructuredName>(
   db: D1Database,
   input: {
     className: string;
     name: string;
   },
-): Promise<D1ObjectCatalogRecord<InitParams> | null> {
+): Promise<D1ObjectCatalogRecord<StructuredName> | null> {
   try {
     const row = await db
       .prepare(
-        `SELECT class, name, id, init_params_json, created_at, last_woken_at
+        `SELECT class, name, id, structured_name_json, created_at, last_woken_at
          FROM mixin_d1_object_catalog_objects
          WHERE class = ? AND name = ?
          LIMIT 1`,
@@ -177,7 +179,7 @@ export async function getD1ObjectCatalogRecord<InitParams extends LifecycleInit>
       .bind(input.className, input.name)
       .first<D1ObjectCatalogRow>();
 
-    return row === null ? null : parseD1ObjectCatalogRow<InitParams>(row);
+    return row === null ? null : parseD1ObjectCatalogRow<StructuredName>(row);
   } catch (error) {
     if (isMissingD1ObjectCatalogTableError(error)) {
       return null;
@@ -187,18 +189,20 @@ export async function getD1ObjectCatalogRecord<InitParams extends LifecycleInit>
   }
 }
 
-export async function listD1ObjectCatalogRecordsByIndex<InitParams extends LifecycleInit>(
+export async function listD1ObjectCatalogRecordsByIndex<
+  StructuredName extends LifecycleStructuredName,
+>(
   db: D1Database,
   input: {
     className: string;
     indexName: string;
     indexValue: string | number;
   },
-): Promise<D1ObjectCatalogRecord<InitParams>[]> {
+): Promise<D1ObjectCatalogRecord<StructuredName>[]> {
   try {
     const { results } = await db
       .prepare(
-        `SELECT o.class, o.name, o.id, o.init_params_json, o.created_at, o.last_woken_at
+        `SELECT o.class, o.name, o.id, o.structured_name_json, o.created_at, o.last_woken_at
          FROM mixin_d1_object_catalog_indexes i
          JOIN mixin_d1_object_catalog_objects o
            ON o.class = i.class AND o.name = i.name
@@ -208,7 +212,7 @@ export async function listD1ObjectCatalogRecordsByIndex<InitParams extends Lifec
       .bind(input.className, input.indexName, String(input.indexValue))
       .all<D1ObjectCatalogRow>();
 
-    return results.map((row) => parseD1ObjectCatalogRow<InitParams>(row));
+    return results.map((row) => parseD1ObjectCatalogRow<StructuredName>(row));
   } catch (error) {
     if (isMissingD1ObjectCatalogTableError(error)) {
       return [];
@@ -218,16 +222,16 @@ export async function listD1ObjectCatalogRecordsByIndex<InitParams extends Lifec
   }
 }
 
-export async function listD1ObjectCatalogRecords<InitParams extends LifecycleInit>(
+export async function listD1ObjectCatalogRecords<StructuredName extends LifecycleStructuredName>(
   db: D1Database,
   input: {
     className: string;
   },
-): Promise<D1ObjectCatalogRecord<InitParams>[]> {
+): Promise<D1ObjectCatalogRecord<StructuredName>[]> {
   try {
     const { results } = await db
       .prepare(
-        `SELECT class, name, id, init_params_json, created_at, last_woken_at
+        `SELECT class, name, id, structured_name_json, created_at, last_woken_at
          FROM mixin_d1_object_catalog_objects
          WHERE class = ?
          ORDER BY created_at ASC, name ASC`,
@@ -235,7 +239,7 @@ export async function listD1ObjectCatalogRecords<InitParams extends LifecycleIni
       .bind(input.className)
       .all<D1ObjectCatalogRow>();
 
-    return results.map((row) => parseD1ObjectCatalogRow<InitParams>(row));
+    return results.map((row) => parseD1ObjectCatalogRow<StructuredName>(row));
   } catch (error) {
     if (isMissingD1ObjectCatalogTableError(error)) {
       return [];
@@ -245,15 +249,16 @@ export async function listD1ObjectCatalogRecords<InitParams extends LifecycleIni
   }
 }
 
-async function upsertD1ObjectCatalog<InitParams extends LifecycleInit>(input: {
+export async function upsertD1ObjectCatalog<StructuredName extends LifecycleStructuredName>(input: {
   db: D1Database;
   className: string;
   id: string;
-  indexes: D1ObjectCatalogIndexDefinitions<InitParams> | undefined;
-  params: InitParams;
+  indexes: D1ObjectCatalogIndexDefinitions<StructuredName> | undefined;
+  name: string;
+  structuredName: StructuredName;
 }) {
   const now = new Date().toISOString();
-  const indexEntries = getIndexEntries(input.indexes, input.params);
+  const indexEntries = getIndexEntries(input.indexes, input.structuredName);
 
   // Idempotent bootstrap + upsert: every write can create both mixin-owned
   // tables, then replace the `(class, name)` row and the derived index rows.
@@ -269,26 +274,25 @@ async function upsertD1ObjectCatalog<InitParams extends LifecycleInit>(input: {
           class,
           name,
           id,
-          init_params_json,
+          structured_name_json,
           created_at,
           last_woken_at
         )
         VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(class, name) DO UPDATE SET
           id = excluded.id,
-          init_params_json = excluded.init_params_json,
+          structured_name_json = excluded.structured_name_json,
           last_woken_at = excluded.last_woken_at`,
       )
       .bind(
         input.className,
-        input.params.name,
+        input.name,
         input.id,
-        // The catalog is intentionally a simple external index. Init params
+        // The catalog is intentionally a simple external index. Structured names
         // used with this mixin must be JSON-compatible by convention. JSON.stringify
         // catches some failures, like BigInt and circular references, but it can
-        // silently coerce or drop functions, Maps, and class instances. Use plain
-        // records/arrays/primitives for cataloged init params.
-        JSON.stringify(input.params),
+        // silently coerce or drop functions, Maps, and class instances.
+        JSON.stringify(input.structuredName),
         now,
         now,
       ),
@@ -297,7 +301,7 @@ async function upsertD1ObjectCatalog<InitParams extends LifecycleInit>(input: {
         `DELETE FROM mixin_d1_object_catalog_indexes
          WHERE class = ? AND name = ?`,
       )
-      .bind(input.className, input.params.name),
+      .bind(input.className, input.name),
     ...indexEntries.map((entry) =>
       input.db
         .prepare(
@@ -309,7 +313,7 @@ async function upsertD1ObjectCatalog<InitParams extends LifecycleInit>(input: {
           )
           VALUES (?, ?, ?, ?)`,
         )
-        .bind(input.className, entry.indexName, entry.indexValue, input.params.name),
+        .bind(input.className, entry.indexName, entry.indexValue, input.name),
     ),
   ]);
 }
@@ -318,7 +322,7 @@ const CREATE_D1_OBJECT_CATALOG_OBJECTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS m
       class TEXT NOT NULL,
       name TEXT NOT NULL,
       id TEXT NOT NULL,
-      init_params_json TEXT NOT NULL,
+      structured_name_json TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
       last_woken_at TEXT NOT NULL,
       PRIMARY KEY (class, name)
@@ -336,30 +340,30 @@ type D1ObjectCatalogRow = {
   class: string;
   name: string;
   id: string;
-  init_params_json: string;
+  structured_name_json: string;
   created_at: string;
   last_woken_at: string;
 };
 
-function parseD1ObjectCatalogRow<InitParams extends LifecycleInit>(
+function parseD1ObjectCatalogRow<StructuredName extends LifecycleStructuredName>(
   row: D1ObjectCatalogRow,
-): D1ObjectCatalogRecord<InitParams> {
+): D1ObjectCatalogRecord<StructuredName> {
   return {
     class: row.class,
     name: row.name,
     id: row.id,
-    initParams: JSON.parse(row.init_params_json) as InitParams,
+    structuredName: JSON.parse(row.structured_name_json) as StructuredName,
     createdAt: row.created_at,
     lastWokenAt: row.last_woken_at,
   };
 }
 
-function getIndexEntries<InitParams extends LifecycleInit>(
-  indexes: D1ObjectCatalogIndexDefinitions<InitParams> | undefined,
-  params: InitParams,
+function getIndexEntries<StructuredName extends LifecycleStructuredName>(
+  indexes: D1ObjectCatalogIndexDefinitions<StructuredName> | undefined,
+  structuredName: StructuredName,
 ) {
   return Object.entries(indexes ?? {}).flatMap(([indexName, getValue]) => {
-    const value = getValue(params);
+    const value = getValue(structuredName);
     const values = Array.isArray(value) ? value : [value];
 
     return values.map((indexValue) => ({
@@ -369,17 +373,18 @@ function getIndexEntries<InitParams extends LifecycleInit>(
   });
 }
 
-function tryGetInitializedParams<InitParams extends LifecycleInit>(
-  instance: LifecycleHooksMembers<InitParams>,
+function tryGetInitialized<StructuredName extends LifecycleStructuredName>(
+  instance: LifecycleHooksMembers<StructuredName>,
 ) {
   try {
-    return instance.assertInitialized();
+    instance.assertInitialized();
+    return true;
   } catch (error) {
     // Avoid importing the concrete error class just for an instanceof check
     // across Worker module boundaries. The public error name is stable enough
     // for this internal "initialized or not" probe.
     if (error instanceof Error && error.name === "NotInitializedError") {
-      return undefined;
+      return false;
     }
 
     throw error;

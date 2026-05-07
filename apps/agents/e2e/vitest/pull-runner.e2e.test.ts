@@ -63,7 +63,7 @@ test(
     expect(block.payload).toEqual({
       script: "async () => {\n  return 7;\n}",
     });
-    expect(block.idempotencyKey).toContain("stream-processor:codemode:derived:");
+    expect(block.idempotencyKey).toContain("codemode/assistant-output-to-block@");
 
     abortController.abort();
     await expect(resolveWithin(runnerPromise, 5_000)).resolves.toBeDefined();

@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { z } from "zod";
 import { createDurableObjectClient, type SyncClient } from "sqlfu";
 import type { CallableContext } from "@iterate-com/shared/callable/types.ts";
 import { withDurableObjectCore } from "@iterate-com/shared/durable-object-utils/mixins/with-durable-object-core";
@@ -12,11 +13,11 @@ import {
   type DestroyStreamResult,
   Event,
   EventInput,
-  ProjectId,
   STREAM_CHILD_STREAM_CREATED_TYPE,
   STREAM_DURABLE_OBJECT_WOKE_UP_TYPE,
   STREAM_ERROR_OCCURRED_TYPE,
   STREAM_FIRST_INITIALIZED_TYPE,
+  StreamNamespace,
   StreamInitializedEvent,
   STREAM_METADATA_UPDATED_TYPE,
   type StreamCursor,
@@ -47,9 +48,8 @@ import {
 } from "./helpers.ts";
 import { getAncestorStreamPaths } from "./stream-path-ancestors.ts";
 
-export type StreamDurableObjectInitParams = {
-  name: string;
-  projectId: string;
+export type StreamDurableObjectStructuredName = {
+  namespace: string;
   path: StreamPath;
 };
 
@@ -63,16 +63,23 @@ const CALLABLE_SUBSCRIBERS = new Set(["callable"] as const);
 const NON_CALLABLE_SUBSCRIBERS = new Set(["webhook", "websocket"] as const);
 
 const StreamDurableObjectLifecycleBase = withD1ObjectCatalog<
-  StreamDurableObjectInitParams,
+  StreamDurableObjectStructuredName,
   Pick<StreamDurableObjectEnv, "DO_CATALOG">
 >({
   className: "StreamDurableObject",
   getDatabase: (env) => env.DO_CATALOG,
   indexes: {
-    projectId: (params) => params.projectId,
+    namespace: (params) => params.namespace,
     path: (params) => params.path,
   },
-})(withLifecycleHooks<StreamDurableObjectInitParams>()(withDurableObjectCore(DurableObject)));
+})(
+  withLifecycleHooks({
+    nameSchema: z.object({
+      namespace: z.string(),
+      path: StreamPath,
+    }),
+  })(withDurableObjectCore(DurableObject)),
+);
 
 const StreamDurableObjectInspectorBase = withKvInspector({
   unsafe: "I_UNDERSTAND_THIS_EXPOSES_KV",
@@ -84,7 +91,7 @@ const StreamDurableObjectInspectorBase = withKvInspector({
 
 const StreamDurableObjectBase = withPublicFetchRoute({
   namespaceSlug: "stream",
-  defaultAddressing: "by-init-params",
+  defaultAddressing: "by-structured-name",
 })(StreamDurableObjectInspectorBase as never) as typeof StreamDurableObjectLifecycleBase;
 
 /**
@@ -109,7 +116,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
   private get state(): StreamState {
     if (this._state == null) {
       throw new Error(
-        "Stream durable object state was accessed before initialize({ name, projectId, path }) completed. Callers must use getInitializedStreamStub().",
+        "Stream durable object state was accessed before initialize({ name }) completed. Callers must use getInitializedStreamStub().",
       );
     }
 
@@ -135,23 +142,24 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
     });
   }
 
-  private initializeFirstStream(params: StreamDurableObjectInitParams) {
+  private initializeFirstStream(params: StreamDurableObjectStructuredName) {
     migrate(this.client);
 
     if (this.hydratePersistedStreamState({ appendWakeEvent: false })) {
       return;
     }
 
-    const projectId = ProjectId.parse(params.projectId);
+    const namespace = StreamNamespace.parse(params.namespace);
+    const path = StreamPath.parse(params.path);
     this._state = createInitialStreamState({
-      projectId,
-      path: params.path,
+      namespace,
+      path,
     });
 
     try {
       this.append({
         type: STREAM_FIRST_INITIALIZED_TYPE,
-        payload: { projectId, path: params.path },
+        payload: { namespace, path },
       });
     } catch (error) {
       this._state = null;
@@ -354,7 +362,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
       void propagateInitializedStreamToAncestors({
         childInitializedEvent: event,
         namespace: this.env.STREAM,
-        projectId: this.initParams.projectId,
+        streamNamespace: this.structuredName.namespace,
       }).catch((error) => {
         console.error("[stream-do] failed to propagate initialized stream to ancestors", {
           path: event.streamPath,
@@ -477,8 +485,8 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
       ? await Promise.all(
           [...this.state.childPaths].sort().map(async (path) => {
             const stub = await getInitializedStreamStub({
-              namespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-              projectId: this.initParams.projectId,
+              durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+              namespace: this.structuredName.namespace,
               path,
             });
             return stub.destroy({ destroyChildren: true });
@@ -610,10 +618,10 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
 
     // `destroy()` intentionally deletes the stream's SQLite storage, but the
     // lifecycle mixin may keep the same JavaScript DO instance marked as started.
-    // Rebuild the stream from its immutable init params so the next initialized
+    // Rebuild the stream from its immutable structured name so the next initialized
     // call observes the same "untouched stream initializes itself" contract as a
     // fresh object.
-    this.initializeFirstStream(this.initParams);
+    this.initializeFirstStream(this.structuredName);
   }
 
   private getEventByOffset(offset: number) {
@@ -761,9 +769,12 @@ function assertValidCoreEventInput(args: {
   );
 }
 
-function createInitialStreamState(args: { projectId: ProjectId; path: StreamPath }): StreamState {
+function createInitialStreamState(args: {
+  namespace: StreamNamespace;
+  path: StreamPath;
+}): StreamState {
   return {
-    projectId: args.projectId,
+    namespace: args.namespace,
     path: args.path,
     eventCount: 0,
     childPaths: [],
@@ -922,7 +933,7 @@ function getImmediateChildPath(args: {
 async function propagateInitializedStreamToAncestors(args: {
   childInitializedEvent: Event;
   namespace: StreamDurableObjectEnv["STREAM"];
-  projectId: string;
+  streamNamespace: string;
 }) {
   const childPath = StreamPath.parse(args.childInitializedEvent.streamPath);
   const ancestorPaths = getAncestorStreamPaths(childPath);
@@ -930,8 +941,8 @@ async function propagateInitializedStreamToAncestors(args: {
   await Promise.all(
     ancestorPaths.map(async (path) => {
       const stream = await getInitializedStreamStub({
-        namespace: args.namespace as unknown as StreamDurableObjectNamespace,
-        projectId: args.projectId,
+        durableObjectNamespace: args.namespace as unknown as StreamDurableObjectNamespace,
+        namespace: args.streamNamespace,
         path,
       });
       await stream.append({

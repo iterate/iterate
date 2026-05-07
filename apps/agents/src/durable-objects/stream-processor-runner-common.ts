@@ -1,6 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { StreamSocketFrame } from "@iterate-com/shared/streams/stream-socket-types";
-import type { StreamPath } from "@iterate-com/shared/streams/types";
+import { StreamPath } from "@iterate-com/shared/streams/types";
 import { withD1ObjectCatalog } from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
 import { withDurableObjectCore } from "@iterate-com/shared/durable-object-utils/mixins/with-durable-object-core";
 import { withKvInspector } from "@iterate-com/shared/durable-object-utils/mixins/with-kv-inspector";
@@ -18,10 +18,7 @@ import type {
 import type { ProcessorStreamApi } from "@iterate-com/shared/stream-processors";
 import type { CloudflareEnv } from "~/lib/worker-env.d.ts";
 
-export type StreamProcessorRunnerInit = {
-  name: string;
-  streamPath: StreamPath;
-};
+export type StreamProcessorRunnerName = StreamPath;
 
 type StreamProcessorRunnerCatalogEnv = Pick<CloudflareEnv, "DB">;
 
@@ -54,23 +51,22 @@ export function createStreamProcessorRunnerDurableObject<
   processor(args: {
     ctx: DurableObjectState;
     env: CloudflareEnv;
-    initParams: StreamProcessorRunnerInit;
+    structuredName: StreamProcessorRunnerName;
   }): Processor<Contract>;
 }) {
-  const Core = withD1ObjectCatalog<StreamProcessorRunnerInit, StreamProcessorRunnerCatalogEnv>({
+  const Core = withD1ObjectCatalog<StreamProcessorRunnerName, StreamProcessorRunnerCatalogEnv>({
     className: options.className,
     getDatabase(env) {
       return env.DB;
     },
-    indexes: {
-      streamPath(params) {
-        return params.streamPath;
-      },
-    },
-  })(withLifecycleHooks<StreamProcessorRunnerInit>()(withDurableObjectCore(DurableObject)));
+  })(
+    withLifecycleHooks({
+      nameSchema: StreamPath,
+    })(withDurableObjectCore(DurableObject)),
+  );
 
   const ProcessorRunner = withStreamProcessorRunner<
-    StreamProcessorRunnerInit,
+    StreamProcessorRunnerName,
     CloudflareEnv,
     Contract
   >({
@@ -78,7 +74,7 @@ export function createStreamProcessorRunnerDurableObject<
     streamApi(args) {
       return createStreamProcessorApi({
         ctx: args.ctx,
-        streamPath: args.initParams.streamPath,
+        streamPath: args.structuredName,
       });
     },
   })(Core);
@@ -156,7 +152,7 @@ export function createStreamProcessorRunnerDurableObject<
  * Creates the scoped stream API WorkerEntrypoint that processor implementations use.
  *
  * The Durable Object runner binds this to its immutable stream path from
- * lifecycle init params. Processor implementations receive only the scoped API,
+ * its lifecycle-validated name. Processor implementations receive only the scoped API,
  * not Cloudflare storage, Durable Object state, or raw events service bindings.
  */
 function createStreamProcessorApi<Contract>(args: {

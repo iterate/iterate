@@ -3,7 +3,6 @@ import type {
   BuiltinProcessor,
   BuiltinProcessorImplementation,
   ConsumedEvent,
-  DerivedIdempotencyKeyArgs,
   EventCatalog,
   EventDefinition,
   EventExample,
@@ -14,6 +13,8 @@ import type {
   ProcessorContractShape,
   StoredProcessorState,
   ProcessorImplementation,
+  ProcessorIdempotencyKeyArgs,
+  ProcessorIdempotencyKeyProcessor,
   ProcessorReduction,
   ProcessorState,
   ProcessorStreamApi,
@@ -235,24 +236,10 @@ export function assertNever(value: never): never {
   throw new Error(`Unhandled discriminated union member: ${JSON.stringify(value)}`);
 }
 
-/**
- * Build an idempotency key for an event derived from one source event.
- *
- * This is intentionally only a string helper, not an `appendDerived(...)`
- * wrapper. Processor implementations should still call `streamApi.append(...)`
- * directly so the emitted event stays visible and typechecked against
- * `contract.emits`.
- *
- * Include a stable `purpose` per derivation site. If one source event produces
- * two different derived events, each site should use a different purpose.
- *
- * The source event's stream path is deliberately omitted because idempotency
- * keys only need to be unique within the stream being appended to.
- */
-export function buildDerivedIdempotencyKey(args: DerivedIdempotencyKeyArgs): string {
-  return ["stream-processor", args.slug, "derived", args.purpose, String(args.event.offset)].join(
-    ":",
-  );
+export function buildProcessorIdempotencyKey(args: ProcessorIdempotencyKeyArgs): string {
+  const key = `${getProcessorIdempotencySlug(args.processor)}/${args.key}`;
+  if (args.sourceEvent == null) return key;
+  return `${key}@${args.sourceEvent.offset}`;
 }
 
 export function validateProcessorContract(contract: {
@@ -907,11 +894,16 @@ function getProcessorSlug(contract: unknown): string {
   return "unknown";
 }
 
+function getProcessorIdempotencySlug(processor: ProcessorIdempotencyKeyProcessor): string {
+  if (typeof processor === "string") return processor;
+  if ("contract" in processor) return processor.contract.slug;
+  return processor.slug;
+}
+
 export type {
   BuiltinProcessor,
   BuiltinProcessorImplementation,
   ConsumedEvent,
-  DerivedIdempotencyKeyArgs,
   EmittedInput,
   EventCatalog,
   EventDefinition,
@@ -923,6 +915,8 @@ export type {
   ProcessorContractShape,
   StoredProcessorState,
   ProcessorImplementation,
+  ProcessorIdempotencyKeyArgs,
+  ProcessorIdempotencyKeyProcessor,
   ProcessorReduction,
   ProcessorState,
   ProcessorStateObject,

@@ -34,7 +34,10 @@ import { Route as AppOrgsOrganizationSlugProjectsProjectSlugRunCodeRouteImport }
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugPresetsRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/presets'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugMcpRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/mcp'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugExamplesRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/examples'
+import { Route as AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/streams/route'
+import { Route as AppOrgsOrganizationSlugProjectsProjectSlugStreamsIndexRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/streams/index'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsIndexRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/index'
+import { Route as AppOrgsOrganizationSlugProjectsProjectSlugStreamsSplatRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/streams/$'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsNewRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/new'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/$codemodeSessionName'
 
@@ -176,6 +179,19 @@ const AppOrgsOrganizationSlugProjectsProjectSlugExamplesRoute =
     path: '/examples',
     getParentRoute: () => AppOrgsOrganizationSlugProjectsProjectSlugRouteRoute,
   } as any)
+const AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRoute =
+  AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRouteImport.update({
+    id: '/streams',
+    path: '/streams',
+    getParentRoute: () => AppOrgsOrganizationSlugProjectsProjectSlugRouteRoute,
+  } as any)
+const AppOrgsOrganizationSlugProjectsProjectSlugStreamsIndexRoute =
+  AppOrgsOrganizationSlugProjectsProjectSlugStreamsIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () =>
+      AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRoute,
+  } as any)
 const AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsIndexRoute =
   AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsIndexRouteImport.update(
     {
@@ -185,6 +201,13 @@ const AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsIndexRoute =
         AppOrgsOrganizationSlugProjectsProjectSlugRouteRoute,
     } as any,
   )
+const AppOrgsOrganizationSlugProjectsProjectSlugStreamsSplatRoute =
+  AppOrgsOrganizationSlugProjectsProjectSlugStreamsSplatRouteImport.update({
+    id: '/$',
+    path: '/$',
+    getParentRoute: () =>
+      AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRoute,
+  } as any)
 const AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsNewRoute =
   AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsNewRouteImport.update(
     {
@@ -223,6 +246,7 @@ export interface FileRoutesByFullPath {
   '/orgs/$organizationSlug/': typeof AppOrgsOrganizationSlugIndexRoute
   '/orgs/$organizationSlug/projects/$projectSlug': typeof AppOrgsOrganizationSlugProjectsProjectSlugRouteRouteWithChildren
   '/orgs/$organizationSlug/projects/': typeof AppOrgsOrganizationSlugProjectsIndexRoute
+  '/orgs/$organizationSlug/projects/$projectSlug/streams': typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRouteWithChildren
   '/orgs/$organizationSlug/projects/$projectSlug/examples': typeof AppOrgsOrganizationSlugProjectsProjectSlugExamplesRoute
   '/orgs/$organizationSlug/projects/$projectSlug/mcp': typeof AppOrgsOrganizationSlugProjectsProjectSlugMcpRoute
   '/orgs/$organizationSlug/projects/$projectSlug/presets': typeof AppOrgsOrganizationSlugProjectsProjectSlugPresetsRoute
@@ -231,7 +255,9 @@ export interface FileRoutesByFullPath {
   '/orgs/$organizationSlug/projects/$projectSlug/': typeof AppOrgsOrganizationSlugProjectsProjectSlugIndexRoute
   '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/$codemodeSessionName': typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute
   '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/new': typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsNewRoute
+  '/orgs/$organizationSlug/projects/$projectSlug/streams/$': typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsSplatRoute
   '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/': typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsIndexRoute
+  '/orgs/$organizationSlug/projects/$projectSlug/streams/': typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -257,7 +283,9 @@ export interface FileRoutesByTo {
   '/orgs/$organizationSlug/projects/$projectSlug': typeof AppOrgsOrganizationSlugProjectsProjectSlugIndexRoute
   '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/$codemodeSessionName': typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute
   '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/new': typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsNewRoute
+  '/orgs/$organizationSlug/projects/$projectSlug/streams/$': typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsSplatRoute
   '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions': typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsIndexRoute
+  '/orgs/$organizationSlug/projects/$projectSlug/streams': typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -280,6 +308,7 @@ export interface FileRoutesById {
   '/_app/orgs/$organizationSlug/': typeof AppOrgsOrganizationSlugIndexRoute
   '/_app/orgs/$organizationSlug/projects/$projectSlug': typeof AppOrgsOrganizationSlugProjectsProjectSlugRouteRouteWithChildren
   '/_app/orgs/$organizationSlug/projects/': typeof AppOrgsOrganizationSlugProjectsIndexRoute
+  '/_app/orgs/$organizationSlug/projects/$projectSlug/streams': typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRouteWithChildren
   '/_app/orgs/$organizationSlug/projects/$projectSlug/examples': typeof AppOrgsOrganizationSlugProjectsProjectSlugExamplesRoute
   '/_app/orgs/$organizationSlug/projects/$projectSlug/mcp': typeof AppOrgsOrganizationSlugProjectsProjectSlugMcpRoute
   '/_app/orgs/$organizationSlug/projects/$projectSlug/presets': typeof AppOrgsOrganizationSlugProjectsProjectSlugPresetsRoute
@@ -288,7 +317,9 @@ export interface FileRoutesById {
   '/_app/orgs/$organizationSlug/projects/$projectSlug/': typeof AppOrgsOrganizationSlugProjectsProjectSlugIndexRoute
   '/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/$codemodeSessionName': typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute
   '/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/new': typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsNewRoute
+  '/_app/orgs/$organizationSlug/projects/$projectSlug/streams/$': typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsSplatRoute
   '/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/': typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsIndexRoute
+  '/_app/orgs/$organizationSlug/projects/$projectSlug/streams/': typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -311,6 +342,7 @@ export interface FileRouteTypes {
     | '/orgs/$organizationSlug/'
     | '/orgs/$organizationSlug/projects/$projectSlug'
     | '/orgs/$organizationSlug/projects/'
+    | '/orgs/$organizationSlug/projects/$projectSlug/streams'
     | '/orgs/$organizationSlug/projects/$projectSlug/examples'
     | '/orgs/$organizationSlug/projects/$projectSlug/mcp'
     | '/orgs/$organizationSlug/projects/$projectSlug/presets'
@@ -319,7 +351,9 @@ export interface FileRouteTypes {
     | '/orgs/$organizationSlug/projects/$projectSlug/'
     | '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/$codemodeSessionName'
     | '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/new'
+    | '/orgs/$organizationSlug/projects/$projectSlug/streams/$'
     | '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/'
+    | '/orgs/$organizationSlug/projects/$projectSlug/streams/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -345,7 +379,9 @@ export interface FileRouteTypes {
     | '/orgs/$organizationSlug/projects/$projectSlug'
     | '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/$codemodeSessionName'
     | '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/new'
+    | '/orgs/$organizationSlug/projects/$projectSlug/streams/$'
     | '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions'
+    | '/orgs/$organizationSlug/projects/$projectSlug/streams'
   id:
     | '__root__'
     | '/'
@@ -367,6 +403,7 @@ export interface FileRouteTypes {
     | '/_app/orgs/$organizationSlug/'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug'
     | '/_app/orgs/$organizationSlug/projects/'
+    | '/_app/orgs/$organizationSlug/projects/$projectSlug/streams'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/examples'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/mcp'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/presets'
@@ -375,7 +412,9 @@ export interface FileRouteTypes {
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/$codemodeSessionName'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/new'
+    | '/_app/orgs/$organizationSlug/projects/$projectSlug/streams/$'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/'
+    | '/_app/orgs/$organizationSlug/projects/$projectSlug/streams/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -570,12 +609,33 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugExamplesRouteImport
       parentRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugRouteRoute
     }
+    '/_app/orgs/$organizationSlug/projects/$projectSlug/streams': {
+      id: '/_app/orgs/$organizationSlug/projects/$projectSlug/streams'
+      path: '/streams'
+      fullPath: '/orgs/$organizationSlug/projects/$projectSlug/streams'
+      preLoaderRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRouteImport
+      parentRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugRouteRoute
+    }
+    '/_app/orgs/$organizationSlug/projects/$projectSlug/streams/': {
+      id: '/_app/orgs/$organizationSlug/projects/$projectSlug/streams/'
+      path: '/'
+      fullPath: '/orgs/$organizationSlug/projects/$projectSlug/streams/'
+      preLoaderRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsIndexRouteImport
+      parentRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRoute
+    }
     '/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/': {
       id: '/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/'
       path: '/codemode-sessions'
       fullPath: '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/'
       preLoaderRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsIndexRouteImport
       parentRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugRouteRoute
+    }
+    '/_app/orgs/$organizationSlug/projects/$projectSlug/streams/$': {
+      id: '/_app/orgs/$organizationSlug/projects/$projectSlug/streams/$'
+      path: '/$'
+      fullPath: '/orgs/$organizationSlug/projects/$projectSlug/streams/$'
+      preLoaderRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsSplatRouteImport
+      parentRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRoute
     }
     '/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/new': {
       id: '/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/new'
@@ -594,7 +654,26 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRouteChildren {
+  AppOrgsOrganizationSlugProjectsProjectSlugStreamsSplatRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsSplatRoute
+  AppOrgsOrganizationSlugProjectsProjectSlugStreamsIndexRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsIndexRoute
+}
+
+const AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRouteChildren: AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRouteChildren =
+  {
+    AppOrgsOrganizationSlugProjectsProjectSlugStreamsSplatRoute:
+      AppOrgsOrganizationSlugProjectsProjectSlugStreamsSplatRoute,
+    AppOrgsOrganizationSlugProjectsProjectSlugStreamsIndexRoute:
+      AppOrgsOrganizationSlugProjectsProjectSlugStreamsIndexRoute,
+  }
+
+const AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRouteWithChildren =
+  AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRoute._addFileChildren(
+    AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRouteChildren,
+  )
+
 interface AppOrgsOrganizationSlugProjectsProjectSlugRouteRouteChildren {
+  AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRouteWithChildren
   AppOrgsOrganizationSlugProjectsProjectSlugExamplesRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugExamplesRoute
   AppOrgsOrganizationSlugProjectsProjectSlugMcpRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugMcpRoute
   AppOrgsOrganizationSlugProjectsProjectSlugPresetsRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugPresetsRoute
@@ -608,6 +687,8 @@ interface AppOrgsOrganizationSlugProjectsProjectSlugRouteRouteChildren {
 
 const AppOrgsOrganizationSlugProjectsProjectSlugRouteRouteChildren: AppOrgsOrganizationSlugProjectsProjectSlugRouteRouteChildren =
   {
+    AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRoute:
+      AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRouteWithChildren,
     AppOrgsOrganizationSlugProjectsProjectSlugExamplesRoute:
       AppOrgsOrganizationSlugProjectsProjectSlugExamplesRoute,
     AppOrgsOrganizationSlugProjectsProjectSlugMcpRoute:
@@ -700,3 +781,13 @@ const rootRouteChildren: RootRouteChildren = {
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
+
+import type { getRouter } from './router.tsx'
+import type { startInstance } from './start.ts'
+declare module '@tanstack/react-start' {
+  interface Register {
+    ssr: true
+    router: Awaited<ReturnType<typeof getRouter>>
+    config: Awaited<ReturnType<typeof startInstance.getOptions>>
+  }
+}

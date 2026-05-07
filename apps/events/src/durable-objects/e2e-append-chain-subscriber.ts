@@ -19,7 +19,7 @@ const AppendChainPayload = z.strictObject({
   count: z.number().int().min(1),
   max: z.number().int().min(1).max(300),
   mode: z.enum(["record-error", "timeout"]),
-  projectId: z.literal("public"),
+  namespace: z.literal("public"),
   streamPath: StreamPath,
 });
 type AppendChainPayload = z.infer<typeof AppendChainPayload>;
@@ -82,8 +82,8 @@ export class E2EAppendChainSubscriber extends DurableObject<E2EAppendChainSubscr
 
   private async appendNext(payload: AppendChainPayload) {
     const stream = await getInitializedStreamStub({
-      namespace: this.env.STREAM,
-      projectId: payload.projectId,
+      durableObjectNamespace: this.env.STREAM,
+      namespace: payload.namespace,
       path: StreamPath.parse(payload.streamPath),
     });
     const nextCount = payload.count + 1;

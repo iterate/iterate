@@ -1,5 +1,5 @@
 import { type Event, type EventInput, type StreamPath } from "@iterate-com/shared/streams/types";
-import { deriveDurableObjectNameFromInitParams } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
 import type { CodemodeSession } from "~/durable-objects/codemode-session.ts";
 
@@ -22,7 +22,7 @@ export type CodemodeSessionRpcStub = {
     streamPath: StreamPath;
   }>;
   executeScript(input: { code: string }): Promise<Event>;
-  initialize(params: { name: string; projectId: string; streamPath: StreamPath }): Promise<unknown>;
+  initialize(params: { name: string }): Promise<unknown>;
   registerToolProvider(input: { provider: ToolProviderRegistration }): Promise<Event>;
   startScriptExecution(input: {
     code: string;
@@ -41,14 +41,12 @@ export async function getInitializedCodemodeSession(input: {
   projectId: string;
   streamPath: StreamPath;
 }) {
-  const name = deriveDurableObjectNameFromInitParams({
-    initParams: { projectId: input.projectId, streamPath: input.streamPath },
+  const name = deriveDurableObjectNameFromStructuredName({
+    structuredName: { projectId: input.projectId, streamPath: input.streamPath },
   });
   const session = input.namespace.getByName(name) as unknown as CodemodeSessionRpcStub;
   await session.initialize({
     name,
-    projectId: input.projectId,
-    streamPath: input.streamPath,
   });
 
   return session;

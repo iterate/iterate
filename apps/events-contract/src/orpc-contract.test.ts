@@ -271,12 +271,12 @@ const streamInitializedEvent = AppendInput.parse({
   path: examplePath,
   event: {
     type: "events.iterate.com/core/stream-first-initialized",
-    payload: { projectId: "public", path: examplePath },
+    payload: { namespace: "public", path: examplePath },
   },
 });
 
 assert.deepEqual(streamInitializedEvent.event.payload, {
-  projectId: "public",
+  namespace: "public",
   path: examplePath,
 });
 

@@ -329,7 +329,7 @@ These are intentionally ordered so each answer narrows later work.
     inbound MCP session attach to exactly one Codemode Session?
 12. How should browser UI-created Codemode Sessions be named/listed for a
     Project?
-13. Should CodemodeSession init params be exactly `{ projectId, streamPath }`,
+13. Should CodemodeSession structured name be exactly `{ projectId, streamPath }`,
     or do we keep a lifecycle `name` field as infrastructure-only input?
     Resolved: identity and DO name are derived from `{ projectId, streamPath }`.
 

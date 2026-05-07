@@ -4,27 +4,36 @@ import {
   EventInput,
   STREAM_FIRST_INITIALIZED_TYPE,
   type StreamCursor,
-  type StreamPath,
+  StreamPath,
   type StreamState,
 } from "@iterate-com/shared/streams/types";
 
 export class StreamDurableObject extends DurableObject {
   #subscribers = new Set<ReadableStreamDefaultController<Uint8Array>>();
 
-  async initialize(args: { name: string; projectId: string; path: StreamPath }) {
+  async initialize(args: { name: string }) {
     if (await this.getState()) return;
+
+    const parsedName = JSON.parse(args.name) as { namespace?: unknown; path?: unknown };
+    if (typeof parsedName.namespace !== "string") {
+      throw new Error("Stream Durable Object name must include a string namespace.");
+    }
+    const structuredName = {
+      namespace: parsedName.namespace,
+      path: StreamPath.parse(parsedName.path),
+    };
 
     await this.ctx.storage.put("state", {
       childPaths: [],
       eventCount: 0,
       metadata: {},
-      path: args.path,
+      namespace: structuredName.namespace,
+      path: structuredName.path,
       processors: {},
-      projectId: args.projectId,
     } as unknown as StreamState);
     await this.append({
       type: STREAM_FIRST_INITIALIZED_TYPE,
-      payload: { projectId: args.projectId, path: args.path },
+      payload: { namespace: structuredName.namespace, path: structuredName.path },
     });
   }
 

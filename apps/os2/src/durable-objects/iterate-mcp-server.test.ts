@@ -53,9 +53,7 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
       expect(sessionId).toBeTruthy();
 
       const streamPath = StreamPath.parse(
-        `/projects/${projectId}/mcp-server-sessions/mcp-client-e2e-${slugifySegment(
-          sessionId ?? "",
-        ).slice(-12)}`,
+        `/mcp-server-sessions/mcp-client-e2e-${slugifySegment(sessionId ?? "").slice(-12)}`,
       );
       const events = await readCurrentStreamEvents(streamPath);
       expect(events).toEqual(
@@ -262,8 +260,8 @@ function extractTextContent(content: unknown) {
 
 async function readCurrentStreamEvents(streamPath: StreamPath) {
   const stream = await getInitializedStreamStub({
-    namespace: (env as TestEnv).STREAM,
-    projectId,
+    durableObjectNamespace: (env as TestEnv).STREAM,
+    namespace: projectId,
     path: streamPath,
   });
   const events = await stream.history({ before: "end" });
@@ -280,9 +278,7 @@ async function readCurrentStreamEvents(streamPath: StreamPath) {
 
 function mcpSessionStreamPath(clientName: string, sessionId: string) {
   return StreamPath.parse(
-    `/projects/${projectId}/mcp-server-sessions/${slugifySegment(
-      clientName,
-    )}-${slugifySegment(sessionId).slice(-12)}`,
+    `/mcp-server-sessions/${slugifySegment(clientName)}-${slugifySegment(sessionId).slice(-12)}`,
   );
 }
 

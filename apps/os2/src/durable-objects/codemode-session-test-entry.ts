@@ -13,7 +13,7 @@ export {
   WorkspaceDurableObject,
 } from "~/codemode/example-capabilities.ts";
 export { FetchCapability } from "~/codemode/fetch-capability.ts";
-export { StreamCapability } from "~/entrypoints/stream-capability.ts";
+export { StreamsCapability } from "~/entrypoints/stream-capability.ts";
 export { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
 
 type ToolFunctionInput = {

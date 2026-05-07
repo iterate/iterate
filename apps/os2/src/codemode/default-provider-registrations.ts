@@ -27,7 +27,7 @@ export function createDefaultCodemodeProviderRegistrations(input: {
     {
       path: ["streams"],
       instructions:
-        "Use ctx.streams.append({ event, streamPath? }) and ctx.streams.read({ streamPath?, afterOffset?, beforeOffset? }) for project event streams.",
+        "Use ctx.streams.append({ event, streamPath? }) and ctx.streams.read({ streamPath?, afterOffset?, beforeOffset? }) for namespace event streams.",
       invocation: {
         kind: "rpc",
         callable: {
@@ -35,9 +35,9 @@ export function createDefaultCodemodeProviderRegistrations(input: {
           via: {
             type: "loopback-binding",
             bindingType: "service",
-            exportName: "StreamCapability",
+            exportName: "StreamsCapability",
             props: {
-              projectId: input.projectId,
+              namespace: input.projectId,
               streamPath: input.streamPath,
               appendPolicy: { mode: "any" },
             },

@@ -54,6 +54,10 @@ writeFileSync(
             name: "APP_CONFIG_ROOMS",
             class_name: "AppConfigTestRoom",
           },
+          {
+            name: "INITIAL_STATE_ROOMS",
+            class_name: "InitialStateTestRoom",
+          },
         ],
       },
       vars: {
@@ -112,6 +116,7 @@ writeFileSync(
             "ListedRoom",
             "PublicRouteTestRoom",
             "AppConfigTestRoom",
+            "InitialStateTestRoom",
           ],
         },
       ],

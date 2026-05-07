@@ -3,7 +3,7 @@
 import type {
   LifecycleHooksMembers,
   LifecycleHooksProtected,
-  LifecycleInit,
+  LifecycleStructuredName,
 } from "./with-lifecycle-hooks.ts";
 import { stringifyJsonPayload } from "./json-payload.ts";
 import type {
@@ -28,7 +28,7 @@ const MAX_PLATFORM_ALARM_DELAY_MS = 30 * 24 * 60 * 60 * 1_000;
  * public diagnostic read (`getMultiplexedAlarms()`), and gives subclasses or
  * later mixins protected mutation methods. It requires `withLifecycleHooks()`
  * below it so alarms cannot be scheduled or dispatched before the object has
- * durable init params and startup hooks have run.
+ * durable lifecycle name state and startup hooks have run.
  */
 export type ScheduleMultiplexedAlarmInput = {
   /**
@@ -152,20 +152,20 @@ export class MissingMultiplexedAlarmMethodError extends Error {
  * Cloudflare alarm behavior this mixin is built around:
  * https://developers.cloudflare.com/durable-objects/api/alarms/
  */
-export function withMultiplexedAlarms<InitParams extends LifecycleInit>() {
+export function withMultiplexedAlarms<StructuredName extends LifecycleStructuredName>() {
   return function <TBase extends DurableObjectClass>(
     Base: TBase &
       Constructor<
         DurableObjectCoreProtected &
-          LifecycleHooksMembers<InitParams> &
-          LifecycleHooksProtected<InitParams>
+          LifecycleHooksMembers<StructuredName> &
+          LifecycleHooksProtected<StructuredName>
       >,
   ): WithMultiplexedAlarmsResult<TBase> {
     const BaseWithCapabilities = Base as unknown as DurableObjectConstructor<
       unknown,
       DurableObjectCoreProtected &
-        LifecycleHooksMembers<InitParams> &
-        LifecycleHooksProtected<InitParams>
+        LifecycleHooksMembers<StructuredName> &
+        LifecycleHooksProtected<StructuredName>
     >;
 
     abstract class MultiplexedAlarmsMixin

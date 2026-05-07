@@ -100,7 +100,7 @@ const listedRooms = DurableObjectNamespace<ListedRoom>("listed-rooms", {
 });
 const publicRouteRooms = DurableObjectNamespace<PublicRouteTestRoom>("public-route-rooms", {
   className: "PublicRouteTestRoom",
-  // Public route tests exercise named/id/init-param addressing through stub.fetch().
+  // Public route tests exercise named/id/structured-name addressing through stub.fetch().
   sqlite: true,
 });
 const catalog = await D1Database("catalog", {

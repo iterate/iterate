@@ -63,8 +63,7 @@ describe("createAgentProcessor", () => {
     expect(appended).toEqual([
       {
         type: "events.iterate.com/agent/status-updated",
-        idempotencyKey:
-          "stream-processor:agent:derived:status-updated:working:llm-request-requested:43",
+        idempotencyKey: "agent/status-updated/working/llm-request-requested@43",
         payload: {
           status: "working",
           reason: "llm-request-requested",

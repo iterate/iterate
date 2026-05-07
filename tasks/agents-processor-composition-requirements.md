@@ -85,7 +85,7 @@ Working note for the `apps/agents` processor redesign discussion. This is not co
 - If `afterAppend` fails after state is reduced, the StreamProcessorRunner must be able to see that `afterAppendCompletedThroughOffset < reducedThroughOffset` and retry live effects without re-reducing from scratch.
 - Durable Object StreamProcessorRunners must serialize processor delivery and avoid reentrant processor delivery when processors append during event handling.
 - Pull/replay StreamProcessorRunners must make replay/live behavior explicit. Historical catch-up should not run side-effect hooks by default.
-- Durable Object StreamProcessorRunners should bind their stream path through durable lifecycle init params, not as a loose argument on every runner method.
+- Durable Object StreamProcessorRunners should bind their stream path through durable lifecycle initial state, not as a loose argument on every runner method.
 - A stream-bound Durable Object StreamProcessorRunner should be initialized once with `{ name, streamPath }`, then consume pushed events with an API shaped like `consumeEvent({ event })`.
 - The `apps/agents` replacement for `IterateAgent` should support the old push-subscription deployment shape. Because the new StreamProcessorRunner is a plain Durable Object rather than an Agents SDK subclass, websocket routing must be explicit in the Worker instead of relying on `/agents/...`.
 - Cutover direction: the old `IterateAgent` class has been removed. Keep legacy tests skipped while their coverage is rebuilt around the Webchat, Agent, and Codemode StreamProcessorRunner callbacks.
@@ -154,8 +154,8 @@ Working note for the `apps/agents` processor redesign discussion. This is not co
         env,
       });
     },
-    streamApi({ ctx, initParams }) {
-      return createStreamApi({ ctx, streamPath: initParams.streamPath });
+    streamApi({ ctx, structuredName }) {
+      return createStreamApi({ ctx, streamPath: structuredName.streamPath });
     },
   })(withLifecycleHooks<Init>()(withDurableObjectCore(DurableObject)));
   ```

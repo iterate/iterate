@@ -1,4 +1,5 @@
 import { DurableObject, RpcTarget } from "cloudflare:workers";
+import { z } from "zod";
 import {
   type Event,
   type EventInput,
@@ -31,17 +32,21 @@ import type { ProcessorStreamApi, StreamEvent } from "@iterate-com/shared/stream
 import type { Callable } from "@iterate-com/shared/callable/types.ts";
 import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
 import { createDefaultCodemodeProviderRegistrations } from "~/codemode/default-provider-registrations.ts";
-import { resolveProjectStreamPath } from "~/entrypoints/stream-capability.ts";
+import { resolveStreamPath } from "~/entrypoints/stream-capability.ts";
 
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
 export { OutboundMcpFromOurClientCapability } from "~/rpc-targets/outbound-mcp-from-our-client-capability.ts";
-export { StreamCapability } from "~/entrypoints/stream-capability.ts";
+export { StreamsCapability } from "~/entrypoints/stream-capability.ts";
 
-export type CodemodeSessionInitParams = {
-  name: string;
+export type CodemodeSessionStructuredName = {
   projectId: string;
   streamPath: StreamPath;
 };
+
+const CodemodeSessionStructuredName = z.object({
+  projectId: z.string(),
+  streamPath: StreamPath,
+});
 
 export type StartScriptExecutionInput = {
   code: string;
@@ -110,7 +115,7 @@ type DisposableRpcValue = {
 };
 
 const CodemodeSessionLifecycleBase = withD1ObjectCatalog<
-  CodemodeSessionInitParams,
+  CodemodeSessionStructuredName,
   Pick<CodemodeSessionEnv, "DO_CATALOG">
 >({
   className: "CodemodeSession",
@@ -119,10 +124,14 @@ const CodemodeSessionLifecycleBase = withD1ObjectCatalog<
     projectId: (params) => params.projectId,
     streamPath: (params) => params.streamPath,
   },
-})(withLifecycleHooks<CodemodeSessionInitParams>()(withDurableObjectCore(DurableObject)));
+})(
+  withLifecycleHooks({
+    nameSchema: CodemodeSessionStructuredName,
+  })(withDurableObjectCore(DurableObject)),
+);
 
 const CodemodeSessionRunnerBase = withStreamProcessorRunner<
-  CodemodeSessionInitParams,
+  CodemodeSessionStructuredName,
   CodemodeSessionEnv,
   typeof CodemodeProcessorContract
 >({
@@ -163,9 +172,9 @@ const CodemodeSessionRunnerBase = withStreamProcessorRunner<
   },
   streamApi(args) {
     return processorStreamApiFromNamespace({
-      projectId: args.initParams.projectId,
-      streamNamespace: args.env.STREAM as unknown as StreamDurableObjectNamespace,
-      streamPath: args.initParams.streamPath,
+      namespace: args.structuredName.projectId,
+      durableObjectNamespace: args.env.STREAM as unknown as StreamDurableObjectNamespace,
+      streamPath: args.structuredName.streamPath,
     });
   },
 })(CodemodeSessionLifecycleBase);
@@ -202,19 +211,19 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
 
   async ensureLiveConsumer() {
     debugCodemodeDepth("session.ensureLiveConsumer.start", {
-      name: this.initParams.name,
-      streamPath: this.initParams.streamPath,
+      name: this.name,
+      streamPath: this.structuredName.streamPath,
     });
     await this.ensureStarted();
     await this.ensureCallableSubscription();
     debugCodemodeDepth("session.ensureLiveConsumer.afterSubscription", {
-      name: this.initParams.name,
-      streamPath: this.initParams.streamPath,
+      name: this.name,
+      streamPath: this.structuredName.streamPath,
     });
     await this.catchUpStreamProcessor({ signal: AbortSignal.timeout(30_000) });
     debugCodemodeDepth("session.ensureLiveConsumer.afterCatchUp", {
-      name: this.initParams.name,
-      streamPath: this.initParams.streamPath,
+      name: this.name,
+      streamPath: this.structuredName.streamPath,
       state: this.getStreamProcessorRunnerState(),
     });
   }
@@ -223,7 +232,7 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
     debugCodemodeDepth("session.afterAppend.start", {
       eventOffset: input.event.offset,
       eventType: input.event.type,
-      name: this.initParams.name,
+      name: this.name,
     });
     await this.ensureStarted();
     const state = await this.consumeStreamProcessorEvent({ event: input.event as StreamEvent });
@@ -231,7 +240,7 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
     debugCodemodeDepth("session.afterAppend.done", {
       eventOffset: input.event.offset,
       eventType: input.event.type,
-      name: this.initParams.name,
+      name: this.name,
       afterAppendCompletedThroughOffset: state.afterAppendCompletedThroughOffset,
       reducedThroughOffset: state.reducedThroughOffset,
     });
@@ -518,24 +527,24 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
 
   private streamsEntrypoint() {
     return processorStreamApiFromNamespace({
-      projectId: this.initParams.projectId,
-      streamNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-      streamPath: this.initParams.streamPath,
+      namespace: this.structuredName.projectId,
+      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+      streamPath: this.structuredName.streamPath,
     });
   }
 
   private async ensureCallableSubscription() {
     const stream = await getInitializedStreamStub({
-      namespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-      projectId: this.initParams.projectId,
-      path: this.initParams.streamPath,
+      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+      namespace: this.structuredName.projectId,
+      path: this.structuredName.streamPath,
     });
 
     await stream.append({
       type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      idempotencyKey: `codemode-session-callable-subscription:${this.initParams.name}`,
+      idempotencyKey: `codemode-session-callable-subscription:${this.name}`,
       payload: {
-        slug: `codemode-session:${this.initParams.name}`,
+        slug: `codemode-session:${this.name}`,
         type: "callable",
         callable: {
           type: "workers-rpc",
@@ -544,7 +553,7 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
             bindingType: "durable-object-namespace",
             bindingName: "CODEMODE_SESSION",
             durableObject: {
-              name: this.initParams.name,
+              name: this.name,
             },
           },
           rpcMethod: "afterAppend",
@@ -557,20 +566,20 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
   private async appendAndConsume(eventInput: EventInput) {
     debugCodemodeDepth("session.appendAndConsume.beforeAppend", {
       eventType: eventInput.type,
-      streamPath: this.initParams.streamPath,
+      streamPath: this.structuredName.streamPath,
     });
     const event = await this.streamsEntrypoint().append({ event: eventInput });
     debugCodemodeDepth("session.appendAndConsume.afterAppend", {
       eventOffset: event.offset,
       eventType: event.type,
-      streamPath: this.initParams.streamPath,
+      streamPath: this.structuredName.streamPath,
     });
     await this.consumeStreamProcessorEvent({ event: event as StreamEvent });
     this.resolvePendingFunctionCallFromEvent(event as StreamEvent);
     debugCodemodeDepth("session.appendAndConsume.afterConsume", {
       eventOffset: event.offset,
       eventType: event.type,
-      streamPath: this.initParams.streamPath,
+      streamPath: this.structuredName.streamPath,
     });
     return event;
   }
@@ -583,7 +592,7 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
         bindingType: "durable-object-namespace",
         bindingName: "CODEMODE_SESSION",
         durableObject: {
-          name: this.initParams.name,
+          name: this.name,
         },
       },
       rpcMethod: "getCodemodeSessionCapability",
@@ -686,7 +695,7 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
         providerPath: input.providerPath,
         requestedOffset: input.requestedEvent.offset,
         ...(input.scriptExecutionId == null ? {} : { scriptExecutionId: input.scriptExecutionId }),
-        streamPath: this.initParams.streamPath,
+        streamPath: this.structuredName.streamPath,
       };
     }
 
@@ -695,15 +704,15 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
 }
 
 function processorStreamApiFromNamespace(args: {
-  projectId: string;
-  streamNamespace: StreamDurableObjectNamespace;
+  namespace: string;
+  durableObjectNamespace: StreamDurableObjectNamespace;
   streamPath: StreamPath;
 }): CodemodeSessionStreamApi {
   return {
     async append(input) {
       const stream = await getInitializedStreamStub({
-        namespace: args.streamNamespace,
-        projectId: args.projectId,
+        durableObjectNamespace: args.durableObjectNamespace,
+        namespace: args.namespace,
         path: resolveProcessorStreamPath({
           basePath: args.streamPath,
           pathInput: input.streamPath,
@@ -713,8 +722,8 @@ function processorStreamApiFromNamespace(args: {
     },
     async read(input = {}) {
       const stream = await getInitializedStreamStub({
-        namespace: args.streamNamespace,
-        projectId: args.projectId,
+        durableObjectNamespace: args.durableObjectNamespace,
+        namespace: args.namespace,
         path: resolveProcessorStreamPath({
           basePath: args.streamPath,
           pathInput: input.streamPath,
@@ -744,7 +753,7 @@ function resolveProcessorStreamPath(input: { basePath: StreamPath; pathInput?: s
   }
 
   if (trimmedPath.startsWith("/")) {
-    return resolveProjectStreamPath(trimmedPath);
+    return resolveStreamPath(trimmedPath);
   }
 
   const relativePath = trimmedPath.replace(/^\.\//, "").replace(/^\/+/, "");

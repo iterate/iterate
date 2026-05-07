@@ -35,7 +35,10 @@ pnpm alchemy:down  # run `alchemy.run.ts --destroy`; caller supplies env
 
 `packages/shared/src/streams` is the source of truth for stream event shapes and
 the `StreamDurableObject` implementation. `apps/events-contract` only describes
-the Events app oRPC surface.
+the Events app oRPC surface. The shared durable object is initialized with
+`{ namespace, path }`; Events keeps its POC project host routing as an
+app-level namespace choice rather than making the shared runtime know about
+Projects.
 
 Deployed Events Workers should not create an independent production stream
 namespace. They bind `STREAM` to the OS2 Worker script's exported

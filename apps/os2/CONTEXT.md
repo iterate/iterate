@@ -43,7 +43,7 @@ The stable OS2 identifier for a Project.
 _Avoid_: Project slug, Project Route
 
 **Project Slug**:
-The mutable slug used in Project Routes and mirrored into the events app project slug.
+The globally unique human-readable slug used in Project Routes.
 _Avoid_: Project ID
 
 **Project Route**:
@@ -206,6 +206,26 @@ _Avoid_: Example runner, run page, execution form
 The OS2 project-bound UI for discovering and inspecting every initialized Event Stream Path for one Project.
 _Avoid_: Events app stream explorer, stream tree
 
+**Stream Namespace**:
+The shared stream runtime's stable owner key for a group of Event Stream Paths. OS2 uses the stable Project ID as the namespace; future runtime users may use non-project namespaces such as `platform`.
+_Avoid_: Project ID inside shared stream runtime, tenant path prefix
+
+**Project Lifecycle Stream**:
+The Project-owned Event Stream Path `/project` that records durable Project lifecycle facts.
+_Avoid_: Project UI state stream, project activity log
+
+**Project Lifecycle Event**:
+A fact appended to the Project Lifecycle Stream about Project creation, ingress, provisioning, or repair.
+_Avoid_: UI event, lifecycle command, log line
+
+**Project Lifecycle Processor**:
+The stream processor that interprets Project Lifecycle Events and performs Project provisioning work.
+_Avoid_: Project UI reducer, project service, background job
+
+**Project Lifecycle Reduced State**:
+The derived Project lifecycle status produced by reducing Project Lifecycle Events.
+_Avoid_: Project source of truth, frontend state, Project Projection
+
 ### Codemode
 
 **Codemode Session**:
@@ -213,7 +233,7 @@ A durable codemode execution context initialized for one Project ID and one Even
 _Avoid_: Runtime, worker, conversation
 
 **Event Stream Path**:
-The project-scoped stream address that a Codemode Session reads from and appends to.
+The namespace-local stream address that a Codemode Session reads from and appends to. In OS2 these paths are project-local because the Project ID is already the Stream Namespace; they must not start with `/projects/{projectId}`.
 _Avoid_: Session ID, Durable Object name
 
 **Codemode Session Name**:
@@ -224,8 +244,8 @@ _Avoid_: Session ID, stream path
 A scoped RPC capability handed to script executors and tool providers so they can interact with a Codemode Session.
 _Avoid_: RpcTarget, session stub, callback bundle
 
-**StreamCapability**:
-A Project ID-scoped RPC capability for stream operations, optionally narrowed to one Event Stream Path.
+**StreamsCapability**:
+A Project ID-backed RPC capability for stream operations. Its props bind the shared stream namespace to the Project ID, and optional `streamPath` props narrow calls to one namespace-local Event Stream Path.
 _Avoid_: Generic stream client, Events app stream client
 
 **Codemode Session Control Plane**:
@@ -387,6 +407,10 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - A **Clerk Organization** owns zero or more **Projects**.
 - A **Project** belongs to exactly one **Clerk Organization**.
 - The **Project Durable Object** is the lifecycle authority for a **Project**.
+- Every **Project** has one **Project Lifecycle Stream** at Event Stream Path `/project` in that Project's **Stream Namespace**.
+- The **Project Lifecycle Stream** records **Project Lifecycle Events** as facts, not frontend view state.
+- The **Project Lifecycle Processor** may use **Project Lifecycle Reduced State** to decide follow-up work, but **Project Lifecycle Events** remain the shared durable facts.
+- The OS2 frontend may reduce **Project Lifecycle Events** with the same reducer as the **Project Lifecycle Processor**, but it does not own the Project lifecycle model.
 - The **Project Listing Projection** is derived query state and should be written by the **Project Durable Object** as part of Project lifecycle commands.
 - A **Project Route** includes both the owning **Clerk Organization** slug and the **Project** slug.
 - A **Project Slug** is route identity and may change; a **Project ID** is stable identity.
@@ -489,7 +513,7 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - A **Codemode Session** is initialized with exactly one stable **Project ID** and exactly one **Event Stream Path**.
 - An **Event Stream Path** may exist before a **Codemode Session** is attached to it.
 - For any given pair of **Project ID** and **Event Stream Path**, there is at most one **Codemode Session**.
-- The **Project ID** and **Event Stream Path** together are the identity of a **Codemode Session**; the Durable Object name is derived from those init params.
+- The **Project ID** and **Event Stream Path** together are the identity of a **Codemode Session**; the Durable Object name is derived from that structured name.
 - A **Codemode Session Name** is the route identifier for a listed **Codemode Session**.
 - A **Codemode Session Name** is not the domain identity of the **Codemode Session**; domain identity remains **Project ID** plus **Event Stream Path**.
 - The **Codemode Session Control Plane** exposes explicit commands, not a generic append method.
@@ -551,9 +575,9 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - For an **Event-Mediated Tool Provider**, the **Codemode Processor** appends the function-call-requested event, but the Tool Function Implementation owns appending the matching function-call-completed event.
 - `ctx.<provider>.<toolFunction>(payload)` calls a **Tool Function**.
 - Built-in stream operations, such as append, are ordinary **Tool Functions** under paths like `ctx.streams.append(...)`.
-- A **StreamCapability** defaults operations to its narrowed **Event Stream Path** when the caller omits a path.
-- In a narrowed **StreamCapability**, stream paths without a leading slash, including `./` paths, resolve relative to the narrowed **Event Stream Path**.
-- In a narrowed **StreamCapability**, stream paths with a leading slash resolve as absolute project-scoped **Event Stream Paths** and remain subject to capability policy.
+- A **StreamsCapability** defaults operations to its narrowed **Event Stream Path** when the caller omits a path.
+- In a narrowed **StreamsCapability**, stream paths without a leading slash, including `./` paths, resolve relative to the narrowed **Event Stream Path**.
+- In a narrowed **StreamsCapability**, stream paths with a leading slash resolve as absolute project-scoped **Event Stream Paths** and remain subject to capability policy.
 - Navigating to an **Event Stream Path** in the Project Stream Explorer may initialize that stream; users do not need a separate create-stream command.
 - The **Project Stream Explorer** lists every initialized **Event Stream Path**, including `/`, as a flat list rather than a tree.
 - For the **Project Stream Explorer**, an Event Stream Path exists in reality when its Stream Durable Object is initialized and cataloged for the Project.
@@ -809,7 +833,7 @@ The provider composition case targets provider-to-provider Tool Function Calls: 
 > **Domain expert:** "No. A **Codemode Session** is attached to an **Event Stream Path**, which may be newly chosen by OS2 or may already exist."
 
 > **Dev:** "What is the ID of a **Codemode Session**?"
-> **Domain expert:** "Use the pair of **Project ID** and **Event Stream Path**. The Durable Object name is derived from those init params."
+> **Domain expert:** "Use the pair of **Project ID** and **Event Stream Path**. The Durable Object name is derived from that structured name."
 
 > **Dev:** "Should we store an execution ID when a script starts?"
 > **Domain expert:** "Yes. Store a **Script Execution ID** on the requested event and copy it to related events. It may be offset-derived if the caller can know the offset before append; otherwise the caller mints it before append."
@@ -952,6 +976,7 @@ The provider composition case targets provider-to-provider Tool Function Calls: 
 - "static callable" sounded like one fixed descriptor. Resolved: use **Callable Builder** for helpers that construct different Callable descriptors for one Capability.
 - "codemode-session-capability callable" was too noun-heavy and unclear about the value kind. Resolved: use **Session Capability Callable** for the Callable carried by `events.iterate.com/codemode/session-started`.
 - "Project DO worker" conflicted with loopback props. Resolved: use **Project Ingress Entry Point** and **Project MCP Server Entry Point** as same-worker loopback targets for now, while the **Project Durable Object** remains exported by the main OS2 Worker.
+- "project UI state" and lifecycle status could make the frontend look authoritative. Resolved: **Project Lifecycle Events** are durable facts, and UI can reduce them without owning the lifecycle model.
 - "project identity" in entrypoint props could mean slug or ID. Resolved: v1 ingress entrypoints accept **Project ID** only; **Project Slug** resolution happens in control-plane routes or route-registry writes.
 - "canonical project host" could mean stable ID host, slug host, or future custom host. Resolved for current code: use **Stable Project Ingress Host** for the ID-derived host and **Slug Project Ingress Host** for the slug-derived host.
 - "initialize project" conflates infrastructure lifecycle with domain creation. Resolved: use **Create Project Command** for the Project Durable Object domain command.

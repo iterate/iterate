@@ -6,7 +6,7 @@ import {
   insertSecret,
   listSecrets,
 } from "~/db/queries/.generated/index.ts";
-import { os, withProject } from "~/orpc/orpc.ts";
+import { os, withNamespace } from "~/orpc/orpc.ts";
 
 function isUniqueConstraintError(error: unknown): boolean {
   return error instanceof Error && /unique|UNIQUE constraint/i.test(error.message);
@@ -14,7 +14,7 @@ function isUniqueConstraintError(error: unknown): boolean {
 
 export const secretsRouter = {
   secrets: {
-    create: os.secrets.create.use(withProject).handler(async ({ context, input }) => {
+    create: os.secrets.create.use(withNamespace).handler(async ({ context, input }) => {
       const now = new Date().toISOString();
       const id = crypto.randomUUID();
       const name = input.name.trim();
@@ -22,7 +22,7 @@ export const secretsRouter = {
       try {
         await insertSecret(context.db, {
           id,
-          projectId: context.projectId,
+          namespace: context.namespace,
           name,
           value: input.value,
           description: input.description ?? null,
@@ -32,7 +32,7 @@ export const secretsRouter = {
       } catch (error) {
         if (isUniqueConstraintError(error)) {
           throw new ORPCError("CONFLICT", {
-            message: `Secret name "${name}" already exists in project "${context.projectId}"`,
+            message: `Secret name "${name}" already exists in namespace "${context.namespace}"`,
           });
         }
         throw error;
@@ -46,11 +46,11 @@ export const secretsRouter = {
         updatedAt: now,
       };
     }),
-    list: os.secrets.list.use(withProject).handler(async ({ context, input }) => {
+    list: os.secrets.list.use(withNamespace).handler(async ({ context, input }) => {
       const [totalRow, rows] = await Promise.all([
-        countSecrets(context.db, { projectId: context.projectId }),
+        countSecrets(context.db, { namespace: context.namespace }),
         listSecrets(context.db, {
-          projectId: context.projectId,
+          namespace: context.namespace,
           limit: input.limit,
           offset: input.offset,
         }),
@@ -67,17 +67,17 @@ export const secretsRouter = {
         total: totalRow?.total ?? 0,
       };
     }),
-    remove: os.secrets.remove.use(withProject).handler(async ({ context, input }) => {
+    remove: os.secrets.remove.use(withNamespace).handler(async ({ context, input }) => {
       const existing = await getSecretById(context.db, {
         id: input.id,
-        projectId: context.projectId,
+        namespace: context.namespace,
       });
 
       if (!existing) {
         return { ok: true as const, id: input.id, deleted: false };
       }
 
-      await deleteSecret(context.db, { id: input.id, projectId: context.projectId });
+      await deleteSecret(context.db, { id: input.id, namespace: context.namespace });
       return { ok: true as const, id: input.id, deleted: true };
     }),
   },

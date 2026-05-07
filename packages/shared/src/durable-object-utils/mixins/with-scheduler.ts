@@ -5,7 +5,7 @@ import { rrulestr } from "rrule";
 import type {
   LifecycleHooksMembers,
   LifecycleHooksProtected,
-  LifecycleInit,
+  LifecycleStructuredName,
 } from "./with-lifecycle-hooks.ts";
 import type {
   MultiplexedAlarmsProtected,
@@ -224,7 +224,7 @@ export class NoNextScheduleOccurrenceError extends Error {
  * `enableKeepAlive({ key, method, everyMs })` API for that shape; it would be
  * another scheduler with a less precise name.
  */
-export function withScheduler<InitParams extends LifecycleInit>(options?: {
+export function withScheduler<StructuredName extends LifecycleStructuredName>(options?: {
   /**
    * Overlap recovery threshold for recurring schedules.
    *
@@ -237,8 +237,8 @@ export function withScheduler<InitParams extends LifecycleInit>(options?: {
     Base: TBase &
       Constructor<
         DurableObjectCoreProtected &
-          LifecycleHooksMembers<InitParams> &
-          LifecycleHooksProtected<InitParams> &
+          LifecycleHooksMembers<StructuredName> &
+          LifecycleHooksProtected<StructuredName> &
           MultiplexedAlarmsMembers &
           MultiplexedAlarmsProtected
       >,
@@ -246,8 +246,8 @@ export function withScheduler<InitParams extends LifecycleInit>(options?: {
     const BaseWithCapabilities = Base as unknown as DurableObjectConstructor<
       unknown,
       DurableObjectCoreProtected &
-        LifecycleHooksMembers<InitParams> &
-        LifecycleHooksProtected<InitParams> &
+        LifecycleHooksMembers<StructuredName> &
+        LifecycleHooksProtected<StructuredName> &
         MultiplexedAlarmsMembers &
         MultiplexedAlarmsProtected
     >;

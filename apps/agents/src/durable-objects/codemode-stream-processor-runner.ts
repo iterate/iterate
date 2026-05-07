@@ -3,11 +3,11 @@ import { CodemodeProcessorContract } from "@iterate-com/shared/stream-processors
 import { createCodemodeProcessor } from "@iterate-com/shared/stream-processors/legacy-codemode/implementation";
 import {
   createStreamProcessorRunnerDurableObject,
-  type StreamProcessorRunnerInit,
+  type StreamProcessorRunnerName,
 } from "./stream-processor-runner-common.ts";
 import { createCloudflareCodemodeCodeExecutor } from "~/stream-processors/codemode/cloudflare-code-executor.ts";
 
-export type CodemodeStreamProcessorRunnerInit = StreamProcessorRunnerInit;
+export type CodemodeStreamProcessorRunnerName = StreamProcessorRunnerName;
 
 const CodemodeStreamProcessorRunnerBase = createStreamProcessorRunnerDurableObject({
   className: "CodemodeStreamProcessorRunner",
