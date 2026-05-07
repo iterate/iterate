@@ -79,11 +79,8 @@ export class ExampleCounter extends ExampleCounterBase<ExampleCounterEnv> {
     try {
       return Response.json(await read());
     } catch (error) {
-      if (error instanceof Error && error.name === "NotInitializedError") {
-        return Response.json(
-          { error: "counter_not_initialized", message: error.message },
-          { status: 409 },
-        );
+      if (isNotInitializedError(error)) {
+        return counterNotInitializedResponse(error);
       }
 
       throw error;
@@ -95,7 +92,17 @@ export class ExampleCounter extends ExampleCounterBase<ExampleCounterEnv> {
       return new Response("Expected WebSocket", { status: 400 });
     }
 
-    const state = await this.readState();
+    let state: CounterState;
+    try {
+      state = await this.readState();
+    } catch (error) {
+      if (isNotInitializedError(error)) {
+        return counterNotInitializedResponse(error);
+      }
+
+      throw error;
+    }
+
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
 
@@ -111,7 +118,16 @@ export class ExampleCounter extends ExampleCounterBase<ExampleCounterEnv> {
       return;
     }
 
-    ws.send(this.createStateMessage(await this.readState()));
+    try {
+      ws.send(this.createStateMessage(await this.readState()));
+    } catch (error) {
+      if (isNotInitializedError(error)) {
+        ws.close(1011, "Counter not initialized");
+        return;
+      }
+
+      throw error;
+    }
   }
 
   private async readState(): Promise<CounterState> {
@@ -210,4 +226,15 @@ export class ExampleCounter extends ExampleCounterBase<ExampleCounterEnv> {
 
     return JSON.stringify(message);
   }
+}
+
+function isNotInitializedError(error: unknown): error is Error {
+  return error instanceof Error && error.name === "NotInitializedError";
+}
+
+function counterNotInitializedResponse(error: Error) {
+  return Response.json(
+    { error: "counter_not_initialized", message: error.message },
+    { status: 409 },
+  );
 }
