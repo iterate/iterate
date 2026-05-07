@@ -61,6 +61,10 @@ type StreamEventsInput = StreamPathInput & {
 
 type StreamListChildrenInput = StreamPathInput;
 type StreamCatalogRecord = D1ObjectCatalogRecord<StreamDurableObjectStructuredName>;
+type StreamsCapabilityClient = Pick<
+  StreamsCapability,
+  "append" | "create" | "getState" | "list" | "listChildren" | "read" | "stream"
+>;
 
 /**
  * Capability-based stream access for OS2 code that needs to read or append
@@ -247,20 +251,26 @@ export class StreamsCapability extends WorkerEntrypoint<
   }
 }
 
-export type StreamsCapabilityBinding = (options: {
-  props: StreamsCapabilityProps;
-}) => StreamsCapability;
-
 export function getStreamsCapability(input: {
-  exports: Record<string, unknown> | undefined;
+  exports: Pick<Cloudflare.Exports, "StreamsCapability"> | undefined;
   props: StreamsCapabilityProps;
-}) {
-  const binding = input.exports?.StreamsCapability;
-  if (typeof binding !== "function") {
+}): StreamsCapabilityClient {
+  if (!input.exports) {
     throw new Error("StreamsCapability export is not available.");
   }
 
-  return (binding as StreamsCapabilityBinding)({ props: input.props });
+  // Keep this as the only narrowing point for StreamsCapability loopback use.
+  // `input.exports` is still Cloudflare.Exports, so export-name drift is caught
+  // at this property access. Assigning Cloudflare's full RPC loopback stub type
+  // directly to a local function currently makes TypeScript expand the whole
+  // Worker export graph and fail with TS2589. The public surface we need here is
+  // intentionally smaller than the full Fetcher/RPC stub: construct the
+  // capability with props, then call its stream methods.
+  const streamsCapability = input.exports.StreamsCapability as unknown as (options: {
+    props: StreamsCapabilityProps;
+  }) => StreamsCapabilityClient;
+
+  return streamsCapability({ props: input.props });
 }
 
 export function resolveStreamPath(pathInput: string): StreamPath {

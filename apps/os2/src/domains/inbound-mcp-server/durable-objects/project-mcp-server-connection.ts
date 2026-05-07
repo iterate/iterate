@@ -638,7 +638,7 @@ async function* decodeStreamEventLines(stream: ReadableStream<Uint8Array>, signa
  */
 async function waitForScriptExecutionFinished(input: {
   afterOffset: number;
-  exports: Record<string, unknown> | undefined;
+  exports: Cloudflare.Exports | undefined;
   projectId: string;
   scriptExecutionId: string;
   streamPath: StreamPath;
