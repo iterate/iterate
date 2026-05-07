@@ -18,6 +18,7 @@ import type { appRouter } from "~/orpc/root.ts";
 type OrpcClient = RouterClient<typeof appRouter>;
 
 const createdProjectIds: string[] = [];
+const itIfSlackChannel = process.env.OS2_E2E_SLACK_CHANNEL_ID?.trim() ? it : it.skip;
 
 afterEach(async () => {
   const client = createClient(requireBaseUrl());
@@ -163,6 +164,113 @@ async (ctx) => {
     );
   });
 
+  itIfSlackChannel(
+    "lets a real agent conversation post to Slack through codemode",
+    async () => {
+      const baseUrl = requireBaseUrl();
+      const client = createClient(baseUrl);
+      const project = await createProject(client, "agent-slack");
+      const suffix = uniqueSuffix();
+      const agentPath = `/agents/slack-${suffix}`;
+      const slackChannelId = requireSlackChannelId();
+      const slackText = `OS2 agent Slack proof ${suffix}`;
+
+      await client.project.agents.configurePreset({
+        basePath: agentPath,
+        events: [],
+        model: "gpt-5.5",
+        projectSlugOrId: project.id,
+        provider: "openai-ws",
+        runOpts: {},
+        systemPrompt: [
+          "For every user message, reply with exactly one fenced JavaScript code block and no surrounding prose.",
+          "The block must evaluate to an async function.",
+          "Use this exact code body:",
+          `async (ctx) => {
+  const slack = await ctx.slack.chat.postMessage({
+    channel: ${JSON.stringify(slackChannelId)},
+    text: ${JSON.stringify(slackText)}
+  });
+  await ctx.chat.sendMessage({
+    message: "posted slack " + slack.channel + " " + slack.ts
+  });
+}`,
+        ].join("\n"),
+      });
+
+      await client.project.agents.runtimeState({
+        agentPath,
+        projectSlugOrId: project.id,
+      });
+      await client.project.agents.sendMessage({
+        agentPath,
+        message: "post the Slack proof now",
+        projectSlugOrId: project.id,
+      });
+
+      const events = await readUntil({
+        agentPath,
+        client,
+        projectId: project.id,
+        afterOffset: "start",
+        predicate: (event) =>
+          event.type === "events.iterate.com/agent-chat/assistant-response-added" &&
+          typeof (event.payload as { message?: unknown }).message === "string" &&
+          (event.payload as { message: string }).message.startsWith("posted slack "),
+      });
+      const output = requiredEvent(events, "events.iterate.com/agent/output-added");
+      const scriptRequested = requiredEvent(
+        events,
+        "events.iterate.com/codemode/script-execution-requested",
+      );
+      const slackCallCompleted = events.find(
+        (event) =>
+          event.type === "events.iterate.com/codemode/function-call-completed" &&
+          (event.payload as { path?: unknown }).path instanceof Array &&
+          (event.payload as { path: string[] }).path.join(".") === "slack.chat.postMessage",
+      );
+      if (!slackCallCompleted) {
+        throw new Error("Expected codemode/function-call-completed for slack.chat.postMessage.");
+      }
+
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "events.iterate.com/codemode/tool-provider-registered",
+          payload: expect.objectContaining({
+            path: ["slack"],
+          }),
+        }),
+      );
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "events.iterate.com/agent/input-added",
+          payload: expect.objectContaining({
+            content: expect.stringContaining("ctx.slack.chat.postMessage"),
+          }),
+        }),
+      );
+      expect(
+        new Date(scriptRequested.createdAt).getTime() - new Date(output.createdAt).getTime(),
+      ).toBeLessThan(1_000);
+      expect(maxGapAfter(events, output.offset)).toBeLessThan(3_000);
+      expect(slackCallCompleted).toMatchObject({
+        payload: expect.objectContaining({
+          outcome: expect.objectContaining({
+            status: "returned",
+            value: expect.objectContaining({
+              channel: slackChannelId,
+              ok: true,
+            }),
+          }),
+        }),
+      });
+      expect(
+        events.filter((event) => event.type === "events.iterate.com/core/error-occurred"),
+      ).toEqual([]);
+    },
+    90_000,
+  );
+
   it("does not append normal out-of-order reducer errors during an agent codemode turn", async () => {
     const baseUrl = requireBaseUrl();
     const client = createClient(baseUrl);
@@ -226,6 +334,12 @@ function requireBaseUrl() {
     throw new Error("OS2_BASE_URL is required for os2 agents e2e tests.");
   }
   return baseUrl;
+}
+
+function requireSlackChannelId() {
+  const channelId = process.env.OS2_E2E_SLACK_CHANNEL_ID?.trim();
+  if (!channelId) throw new Error("OS2_E2E_SLACK_CHANNEL_ID is required.");
+  return channelId;
 }
 
 function requireAuthHeaders() {
@@ -307,6 +421,28 @@ async function readUntil(input: {
   throw new Error(
     `Timed out waiting for agent stream event. Saw: ${JSON.stringify(result.events)}`,
   );
+}
+
+function requiredEvent(events: readonly Event[], type: string) {
+  const event = events.find((item) => item.type === type);
+  if (!event) throw new Error(`Expected ${type}.`);
+  return event;
+}
+
+function maxGapAfter(events: readonly Event[], afterOffset: number) {
+  const tail = events
+    .filter((event) => event.offset >= afterOffset)
+    .toSorted((left, right) => left.offset - right.offset);
+  let maxGapMs = 0;
+  for (let index = 1; index < tail.length; index += 1) {
+    const previous = tail[index - 1];
+    const current = tail[index];
+    maxGapMs = Math.max(
+      maxGapMs,
+      new Date(current.createdAt).getTime() - new Date(previous.createdAt).getTime(),
+    );
+  }
+  return maxGapMs;
 }
 
 function uniqueSuffix() {

@@ -47,5 +47,24 @@ export function createDefaultCodemodeProviderRegistrations(input: {
         },
       },
     },
+    {
+      path: ["slack"],
+      instructions:
+        "Use ctx.slack.<Slack Web API method path>(args), for example ctx.slack.chat.postMessage({ channel, text }).",
+      invocation: {
+        kind: "rpc",
+        callable: {
+          type: "workers-rpc",
+          via: {
+            type: "loopback-binding",
+            bindingType: "service",
+            exportName: "SlackCapability",
+            props: { projectId: input.projectId },
+          },
+          rpcMethod: "executeCodemodeFunctionCall",
+          argsMode: "object",
+        },
+      },
+    },
   ];
 }
