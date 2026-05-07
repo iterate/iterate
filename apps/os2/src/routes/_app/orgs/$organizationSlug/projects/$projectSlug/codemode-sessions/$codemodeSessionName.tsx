@@ -9,6 +9,7 @@ import {
 import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
 import { EventsStreamView } from "@iterate-com/ui/components/events/stream-feed";
 import { z } from "zod";
+import { ExistingCodemodeSessionControls } from "~/components/codemode-session-controls.tsx";
 import { orpc } from "~/orpc/client.ts";
 
 const Search = z.object({
@@ -112,10 +113,14 @@ function CodemodeSessionPage() {
   return (
     <section className="flex min-h-0 flex-1 flex-col">
       <div className="border-b p-4">
-        <div className="max-w-md space-y-1">
+        <div className="w-full max-w-7xl space-y-4">
           <p className="font-mono text-xs text-muted-foreground">
             <EventsStreamPathLabel path={session.streamPath} />
           </p>
+          <ExistingCodemodeSessionControls
+            projectId={session.projectId}
+            streamPath={session.streamPath}
+          />
         </div>
       </div>
       <EventsStreamView

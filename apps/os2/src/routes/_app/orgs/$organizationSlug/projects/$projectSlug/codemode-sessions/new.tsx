@@ -12,9 +12,15 @@ import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized
 import { toast } from "@iterate-com/ui/components/sonner";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { z } from "zod";
+import { CodemodeAdHocProviderFields } from "~/components/codemode-session-controls.tsx";
+import {
+  type CodemodeAdHocProviderFieldsValue,
+  buildAdHocProviderInputs,
+  createEmptyAdHocProviderFields,
+  defaultCodemodeCode,
+} from "~/domains/codemode/ad-hoc-provider-inputs.ts";
 import {
   type CodemodeExampleStack,
-  type CodemodeProviderInput,
   codemodeExamples,
   codemodeProviderRegistrationEvents,
   defaultCodemodeProviderRegistrationEvents,
@@ -30,8 +36,6 @@ const Search = z.object({
 });
 
 const emptyEventsYaml = "[]\n";
-const emptyHeadersYaml = "{}\n";
-const defaultCode = 'async (ctx) => {\n  console.log("hello");\n  return 1 + 1;\n}';
 
 export const Route = createFileRoute(
   "/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/new",
@@ -67,16 +71,10 @@ function NewCodemodeSessionPage() {
   const selectedScript =
     selectedExample?.scripts.find((script) => script.slug === selectedScriptSlug) ??
     selectedExample?.scripts[0];
-  const [code, setCode] = useState(selectedScript?.code ?? defaultCode);
+  const [code, setCode] = useState(selectedScript?.code ?? defaultCodemodeCode);
   const [customEventsYaml, setCustomEventsYaml] = useState(emptyEventsYaml);
   const [streamPath, setStreamPath] = useState("");
-  const [mcpPath, setMcpPath] = useState("mcp.custom");
-  const [mcpServerUrl, setMcpServerUrl] = useState("");
-  const [mcpHeadersYaml, setMcpHeadersYaml] = useState(emptyHeadersYaml);
-  const [openApiPath, setOpenApiPath] = useState("api.custom");
-  const [openApiSpecUrl, setOpenApiSpecUrl] = useState("");
-  const [openApiBaseUrl, setOpenApiBaseUrl] = useState("");
-  const [openApiHeadersYaml, setOpenApiHeadersYaml] = useState(emptyHeadersYaml);
+  const [adHocProviderFields, setAdHocProviderFields] = useState(createEmptyAdHocProviderFields);
 
   const preview = useMemo(
     () =>
@@ -84,45 +82,18 @@ function NewCodemodeSessionPage() {
         code,
         customEventsYaml,
         example: selectedExample,
-        mcpHeadersYaml,
-        mcpPath,
-        mcpServerUrl,
-        openApiBaseUrl,
-        openApiHeadersYaml,
-        openApiPath,
-        openApiSpecUrl,
+        providerFields: adHocProviderFields,
         projectId: project.id,
         streamPath: parseOptionalStreamPathForPreview(streamPath) ?? "/codemode-sessions/<new>",
       }),
-    [
-      code,
-      customEventsYaml,
-      mcpHeadersYaml,
-      mcpPath,
-      mcpServerUrl,
-      openApiBaseUrl,
-      openApiHeadersYaml,
-      openApiPath,
-      openApiSpecUrl,
-      project.id,
-      selectedExample,
-      streamPath,
-    ],
+    [adHocProviderFields, code, customEventsYaml, project.id, selectedExample, streamPath],
   );
 
   const createSession = useMutation({
     mutationFn: async () => {
       const parsedCustomEvents = parseCustomEvents(customEventsYaml);
       const parsedStreamPath = parseOptionalStreamPath(streamPath);
-      const adHocProviders = buildAdHocProviderInputs({
-        mcpHeadersYaml,
-        mcpPath,
-        mcpServerUrl,
-        openApiBaseUrl,
-        openApiHeadersYaml,
-        openApiPath,
-        openApiSpecUrl,
-      });
+      const adHocProviders = buildAdHocProviderInputs(adHocProviderFields);
       const client = createBrowserOpenApiClient();
 
       return await client.project.codemode.createSession({
@@ -164,7 +135,7 @@ function NewCodemodeSessionPage() {
     const nextScript = nextExample?.scripts[0];
     setSelectedExampleSlug(slug);
     setSelectedScriptSlug(nextScript?.slug ?? "");
-    setCode(nextScript?.code ?? defaultCode);
+    setCode(nextScript?.code ?? defaultCodemodeCode);
     void navigate({
       to: "/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/new",
       params,
@@ -180,13 +151,7 @@ function NewCodemodeSessionPage() {
   };
 
   const resetAdHocProviders = () => {
-    setMcpPath("mcp.custom");
-    setMcpServerUrl("");
-    setMcpHeadersYaml(emptyHeadersYaml);
-    setOpenApiPath("api.custom");
-    setOpenApiSpecUrl("");
-    setOpenApiBaseUrl("");
-    setOpenApiHeadersYaml(emptyHeadersYaml);
+    setAdHocProviderFields(createEmptyAdHocProviderFields());
   };
 
   return (
@@ -293,80 +258,10 @@ function NewCodemodeSessionPage() {
               </Button>
             </div>
 
-            <div className="grid gap-3 lg:grid-cols-2">
-              <div className="space-y-3 rounded-md border p-3">
-                <p className="text-sm font-medium">Outbound MCP</p>
-                <Field>
-                  <FieldLabel htmlFor="codemode-mcp-path">Context path</FieldLabel>
-                  <Input
-                    id="codemode-mcp-path"
-                    value={mcpPath}
-                    onChange={(event) => setMcpPath(event.target.value)}
-                    placeholder="mcp.cloudflareDocs"
-                  />
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="codemode-mcp-url">Server URL</FieldLabel>
-                  <Input
-                    id="codemode-mcp-url"
-                    value={mcpServerUrl}
-                    onChange={(event) => setMcpServerUrl(event.target.value)}
-                    placeholder="https://docs.mcp.cloudflare.com/mcp"
-                  />
-                </Field>
-                <Field>
-                  <FieldLabel>Headers</FieldLabel>
-                  <SourceCodeBlock
-                    code={mcpHeadersYaml}
-                    className="min-h-28"
-                    editable
-                    language="yaml"
-                    onChange={setMcpHeadersYaml}
-                  />
-                </Field>
-              </div>
-
-              <div className="space-y-3 rounded-md border p-3">
-                <p className="text-sm font-medium">OpenAPI</p>
-                <Field>
-                  <FieldLabel htmlFor="codemode-openapi-path">Context path</FieldLabel>
-                  <Input
-                    id="codemode-openapi-path"
-                    value={openApiPath}
-                    onChange={(event) => setOpenApiPath(event.target.value)}
-                    placeholder="api.petstore"
-                  />
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="codemode-openapi-spec">Spec URL</FieldLabel>
-                  <Input
-                    id="codemode-openapi-spec"
-                    value={openApiSpecUrl}
-                    onChange={(event) => setOpenApiSpecUrl(event.target.value)}
-                    placeholder="https://petstore.swagger.io/v2/swagger.json"
-                  />
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="codemode-openapi-base">Base URL</FieldLabel>
-                  <Input
-                    id="codemode-openapi-base"
-                    value={openApiBaseUrl}
-                    onChange={(event) => setOpenApiBaseUrl(event.target.value)}
-                    placeholder="https://petstore.swagger.io/v2"
-                  />
-                </Field>
-                <Field>
-                  <FieldLabel>Headers</FieldLabel>
-                  <SourceCodeBlock
-                    code={openApiHeadersYaml}
-                    className="min-h-28"
-                    editable
-                    language="yaml"
-                    onChange={setOpenApiHeadersYaml}
-                  />
-                </Field>
-              </div>
-            </div>
+            <CodemodeAdHocProviderFields
+              value={adHocProviderFields}
+              onChange={setAdHocProviderFields}
+            />
           </div>
         </div>
 
@@ -406,19 +301,13 @@ function buildPreviewEvents(input: {
   code: string;
   customEventsYaml: string;
   example: CodemodeExampleStack | undefined;
-  mcpHeadersYaml: string;
-  mcpPath: string;
-  mcpServerUrl: string;
-  openApiBaseUrl: string;
-  openApiHeadersYaml: string;
-  openApiPath: string;
-  openApiSpecUrl: string;
+  providerFields: CodemodeAdHocProviderFieldsValue;
   projectId: string;
   streamPath: string;
 }): { error?: string; events: EventInput[] } {
   try {
     const customEvents = parseCustomEvents(input.customEventsYaml);
-    const adHocProviders = buildAdHocProviderInputs(input);
+    const adHocProviders = buildAdHocProviderInputs(input.providerFields);
     const providers = [
       ...providersForCodemodeExample({ example: input.example, projectId: input.projectId }),
       ...providersForCodemodeProviderInputs({
@@ -447,79 +336,9 @@ function buildPreviewEvents(input: {
   }
 }
 
-function buildAdHocProviderInputs(input: {
-  mcpHeadersYaml: string;
-  mcpPath: string;
-  mcpServerUrl: string;
-  openApiBaseUrl: string;
-  openApiHeadersYaml: string;
-  openApiPath: string;
-  openApiSpecUrl: string;
-}): CodemodeProviderInput[] {
-  const providers: CodemodeProviderInput[] = [];
-  const trimmedMcpUrl = input.mcpServerUrl.trim();
-  if (trimmedMcpUrl !== "") {
-    providers.push({
-      type: "outbound-mcp",
-      path: parseContextPath(input.mcpPath),
-      serverUrl: trimmedMcpUrl,
-      headers: parseHeaders(input.mcpHeadersYaml),
-    });
-  }
-
-  const trimmedSpecUrl = input.openApiSpecUrl.trim();
-  const trimmedBaseUrl = input.openApiBaseUrl.trim();
-  if (trimmedSpecUrl !== "" || trimmedBaseUrl !== "") {
-    if (trimmedSpecUrl === "" || trimmedBaseUrl === "") {
-      throw new Error("OpenAPI providers require both a spec URL and a base URL.");
-    }
-    providers.push({
-      type: "openapi",
-      path: parseContextPath(input.openApiPath),
-      specUrl: trimmedSpecUrl,
-      baseUrl: trimmedBaseUrl,
-      headers: parseHeaders(input.openApiHeadersYaml),
-    });
-  }
-
-  return providers;
-}
-
 function parseCustomEvents(value: string) {
   const parsed = parseYaml(value.trim() || "[]") as unknown;
   return EventInput.array().parse(parsed);
-}
-
-function parseHeaders(value: string) {
-  const parsed = parseYaml(value.trim() || "{}") as unknown;
-  if (parsed == null) return {};
-  if (typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Headers must be a YAML object.");
-  }
-
-  return Object.fromEntries(
-    Object.entries(parsed).map(([key, headerValue]) => {
-      if (typeof headerValue !== "string") {
-        throw new Error(`Header ${key} must be a string.`);
-      }
-      return [key, headerValue];
-    }),
-  );
-}
-
-function parseContextPath(value: string) {
-  const path = value
-    .trim()
-    .replace(/^ctx\./, "")
-    .split(".")
-    .map((segment) => segment.trim())
-    .filter(Boolean);
-
-  if (path.length === 0) {
-    throw new Error("Provider context path is required.");
-  }
-
-  return path;
 }
 
 function parseOptionalStreamPath(value: string) {

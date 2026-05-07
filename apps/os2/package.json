@@ -30,6 +30,7 @@
     "test:e2e": "node -e \"if (!process.env.OS2_BASE_URL) { console.error('OS2_BASE_URL is required for OS e2e tests'); process.exit(1); }\" && vitest run --config ./e2e/vitest.config.ts",
     "test:e2e:codemode-mcp": "node -e \"if (!process.env.OS2_E2E_MCP_URL) { console.error('OS2_E2E_MCP_URL is required for codemode MCP e2e tests'); process.exit(1); }\" && vitest run --config ./e2e/vitest.config.ts ./e2e/vitest/codemode-mcp-provider-stack.e2e.test.ts",
     "test:e2e:preview": "tsx ./e2e/preview-smoke.ts",
+    "benchmark:agent-stream": "tsx ./scripts/benchmark-agent-stream.ts",
     "test:smoke": "RUNTIME_SMOKE_FULL=1 vitest run",
     "test:watch": "vitest"
   },
