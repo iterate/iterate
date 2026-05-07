@@ -1,12 +1,26 @@
-import { expect } from "@playwright/test"; // eslint-disable-line no-restricted-imports -- need expect
-import { login, test } from "./test-helpers.ts";
+import { login, test, waitForEnabledTestId } from "./test-helpers.ts";
 
 test.describe("login page", () => {
-  test("loads and shows email input", async ({ page }) => {
+  test("loads wrapper login, then shows email and google options", async ({ page }) => {
     await page.goto("/login");
+    await page.getByText("Sign in with Iterate").waitFor();
+
+    await page.getByText("Sign in with Iterate").click();
+
+    await waitForEnabledTestId(page, "email-login-button");
+    await waitForEnabledTestId(page, "google-login-button");
+  });
+
+  test("clicking email expands the otp form and hides google", async ({ page }) => {
+    await page.goto("/login");
+    await page.getByText("Sign in with Iterate").click();
+
+    await waitForEnabledTestId(page, "email-login-button");
+    await page.getByTestId("email-login-button").click();
+
     await page.getByTestId("email-input").waitFor();
     await page.getByTestId("email-submit-button").waitFor();
-    await page.getByText("Continue with Google").waitFor();
+    await page.getByTestId("google-login-button").waitFor({ state: "hidden" });
   });
 
   test("can log in with email OTP", async ({ page }) => {
@@ -14,34 +28,17 @@ test.describe("login page", () => {
     await login(page, email);
   });
 
-  test("OTP step survives page reload", async ({ page }) => {
-    const email = `otp-reload-${Date.now()}+test@nustom.com`;
+  test("sending a test OTP reveals the verification inputs", async ({ page }) => {
+    const email = `otp-reveal-${Date.now()}+test@nustom.com`;
 
-    // Submit email to get to OTP step
     await page.goto("/login");
+    await page.getByText("Sign in with Iterate").click();
+    await waitForEnabledTestId(page, "email-login-button");
+    await page.getByTestId("email-login-button").click();
     await page.getByTestId("email-input").fill(email);
     await page.getByTestId("email-submit-button").click();
-    await page.getByText("Enter verification code").waitFor();
 
-    // URL should now contain step=otp and the email
-    await expect.poll(() => page.url()).toContain("step=otp");
-    await expect.poll(() => page.url()).toContain(encodeURIComponent(email));
-
-    // Reload the page
-    await page.reload();
-
-    // OTP screen should still be showing after reload
-    await page.getByText("Enter verification code").waitFor();
-    await page.getByText(email).waitFor();
-  });
-
-  test("navigating directly to OTP step shows OTP screen", async ({ page }) => {
-    const email = `otp-direct-${Date.now()}+test@nustom.com`;
-
-    await page.goto(`/login?step=otp&email=${encodeURIComponent(email)}`);
-
-    // Should render the OTP screen directly
-    await page.getByText("Enter verification code").waitFor();
-    await page.getByText(email).waitFor();
+    await page.locator('input[inputmode="numeric"]').first().waitFor();
+    await page.getByText(`Enter the 6-digit code sent to ${email}`).waitFor();
   });
 });

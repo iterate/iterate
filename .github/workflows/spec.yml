@@ -2,6 +2,10 @@
 
 name: specs
 on:
+  push:
+    branches:
+      - main
+  pull_request: {}
   workflow_dispatch: {}
 env:
   SLACK_CLIENT_ID: fake123

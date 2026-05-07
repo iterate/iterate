@@ -1,10 +1,12 @@
 import alchemy, { type Scope } from "alchemy";
 import { D1Database, TanStackStart } from "alchemy/cloudflare";
+import { Exec } from "alchemy/os";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { slugify } from "@iterate-com/shared/slugify";
 import { z } from "zod/v4";
 
 const APP_NAME = "auth";
+const SUPERADMIN_SEED_SQL_PATH = "./.alchemy/generated/auth-superadmin-seed.sql";
 
 const AlchemyEnv = z.object({
   ALCHEMY_PASSWORD: z.string().trim().min(1, "ALCHEMY_PASSWORD is required"),
@@ -69,9 +71,18 @@ const app = await alchemy(APP_NAME, {
 
 const workerName = slugify(`${APP_NAME}-${app.stage}`);
 
+await Exec("render-superadmin-seed", {
+  command: `tsx ./scripts/render-superadmin-seed.ts ${SUPERADMIN_SEED_SQL_PATH}`,
+  env: {
+    SERVICE_AUTH_TOKEN: alchemy.secret(alchemyEnv.SERVICE_AUTH_TOKEN),
+  },
+  cwd: import.meta.dirname,
+});
+
 const DB = await D1Database("auth-db", {
   name: `${workerName}-auth-db`,
   migrationsDir: "./src/server/db/migrations",
+  importFiles: [SUPERADMIN_SEED_SQL_PATH],
 });
 
 const worker = await TanStackStart(APP_NAME, {

@@ -144,15 +144,7 @@ test.describe("organization invites", () => {
     await logout(page);
 
     // User logs back in - go directly to user settings
-    await page.goto("/login");
-    await page.getByTestId("email-input").fill(userEmail);
-    await page.getByTestId("email-submit-button").click();
-    await page.getByText("Enter verification code").waitFor();
-    await page.locator('input[inputmode="numeric"]').first().focus();
-    await page.keyboard.type("424242");
-
-    // Wait for redirect to org, then navigate to settings
-    await page.locator("[data-component='OrgSwitcher']").waitFor();
+    await login(page, userEmail);
     await page.goto("/user/settings");
 
     await page.getByRole("heading", { name: "Pending invites" }).waitFor();
