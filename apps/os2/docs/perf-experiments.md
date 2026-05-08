@@ -4486,3 +4486,46 @@ Next instrumentation to add:
 - Fail benchmark invariants when duplicate attempt ratio exceeds a small
   expected allowance, and separately fail on any same-key/different-payload
   duplicate.
+
+Preview smoke after adding metadata-derived source counters:
+
+- Deployed commit: `51e9343d2`
+- Command:
+
+```sh
+OS2_BASE_URL=https://os2.iterate-preview-2.com \
+doppler run --project os2 --config preview_2 -- \
+pnpm --dir apps/os2 benchmark:agent-stream:server -- \
+  --traffic agent-chat-responses \
+  --count 30 \
+  --rate 30 \
+  --concurrency 5 \
+  --subscriber-mode agent-only \
+  --subscription-transport rpc
+```
+
+- File: `/tmp/os2-bench-duplicate-sources-smoke.json`
+- Benchmark id: `agent-server-bench-1778219955174-3b02aa6d`
+- Result:
+  - duplicate invariant: passed
+  - committed idempotent events: `52`
+  - duplicate attempts: `12`
+  - logical append attempts: `64`
+  - duplicate attempt ratio: `0.23`
+  - unexpected duplicate attempts: `0`
+- Top metadata-derived duplicate sources:
+  - `processor:agent`: `6` attempts for
+    `processor-registered:agent:0.1.0`
+  - `processor:openai-ws`: `3` attempts for
+    `processor-registered:openai-ws:0.1.0`
+  - `processor:codemode`: `2` attempts for
+    `events.iterate.com/codemode/session-started`
+
+Interpretation:
+
+- This answers the hidden-idempotency concern for same-key duplicate storms:
+  they now show up in stream diagnostics by total attempt count, key, and
+  metadata-derived source.
+- The smoke run already shows some expected idempotent setup churn. That is not
+  invisible anymore, but it is still worth tightening once the larger
+  performance bottleneck is clearer.
