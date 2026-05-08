@@ -3233,6 +3233,108 @@ Next instrumentation:
   which is not enough to distinguish cheap reduce from expensive state
   serialization/storage.
 
+### 2026-05-08: processor state-save diagnostics
+
+Change:
+
+- Added per-batch processor state-save diagnostics:
+  - `stateSaveCallCount`;
+  - `stateSaveDurationMs`;
+  - `stateSaveJsonBytes`;
+  - `maxStateJsonBytes`.
+- Deployed to `os2-preview-2`.
+
+Important caveat:
+
+- `stateSaveDurationMs` still reports `0ms` in these sync Durable Object paths.
+  This matches earlier `performance.now()` problems: the runtime does not give
+  useful sub-millisecond timing for the synchronous storage/serialization path.
+- The byte counts are still useful because they show how much state each batch
+  is serializing and writing.
+
+Benchmark A: `agent-inputs`
+
+- Benchmark: `agent-server-bench-1778213749613-406f55f5`
+- Traffic: `1000` `agent/input-added` events at `1000/s`
+- Result:
+  - publish duration: `1108ms`
+  - source subscriber wait: `273ms`
+  - final subscriber wait: `11ms`
+  - processor wait: `6ms`
+  - append p50/p90/p99: `51/98/126ms`
+  - duplicate invariant: passed, `19` duplicate attempts, `0` unexpected
+- Processor state diagnostics:
+  - `agent`:
+    - batches: `8`
+    - save calls: `14`
+    - cumulative saved JSON bytes: `845273`
+    - max state JSON bytes: `121398`
+  - `agent-chat`:
+    - cumulative saved JSON bytes: `2260`
+    - max state JSON bytes: `248`
+  - `openai-ws`:
+    - cumulative saved JSON bytes: `2165`
+    - max state JSON bytes: `199`
+- Slowest Agent subscriber dispatches:
+  - `227` events: `352ms`
+  - setup `17` events: `323ms`
+  - `301` events: `228ms`
+  - `286` events: `192ms`
+
+Benchmark B: `agent-chat-responses`
+
+- Benchmark: `agent-server-bench-1778213767408-12548c41`
+- Traffic: `1000` `agent-chat/assistant-response-added` events at `1000/s`
+- Result:
+  - publish duration: `1409ms`
+  - source subscriber wait: `946ms`
+  - final subscriber wait: `3ms`
+  - processor wait: `5ms`
+  - append p50/p90/p99: `89/231/246ms`
+  - duplicate invariant: passed, `13` duplicate attempts, `0` unexpected
+- Processor state diagnostics:
+  - `agent`:
+    - batches: `12`
+    - save calls: `15`
+    - cumulative saved JSON bytes: `1637965`
+    - max state JSON bytes: `254567`
+  - `agent-chat`:
+    - cumulative saved JSON bytes: `3584`
+    - max state JSON bytes: `248`
+    - afterAppend/append duration total: `1196ms`
+  - `openai-ws`:
+    - cumulative saved JSON bytes: `1974`
+    - max state JSON bytes: `199`
+- Slowest Agent subscriber dispatches:
+  - `486` events: `470ms`
+  - `477` events: `414ms`
+  - `500` events: `385ms`
+  - `202` events: `385ms`
+
+Interpretation:
+
+- The Agent processor is the only processor with large reduced state. At 1000
+  model-visible rows it is already writing `~121KB-255KB` state snapshots.
+- The cost of a single Agent subscriber dispatch tracks both:
+  - how many events the Agent processor reduces; and
+  - how large the Agent history state has become by the save point.
+- `agent-chat-responses` is worse than direct `agent-inputs` because it has both
+  costs:
+  - `agent-chat` appends derived `agent/input-added` rows;
+  - `agent` then persists a growing full-history state snapshot.
+- This strongly suggests the Agent processor state shape is not suitable for
+  very high velocity streams if every input row is retained in one reduced-state
+  JSON blob.
+
+Possible next experiments:
+
+- Cap or window Agent reduced-state history and reconstruct full model context
+  from stream history only when preparing an LLM request.
+- Split Agent model-visible history into append-only events plus a compact
+  reducer state containing cursors/counts/current request config.
+- Add a benchmark mode with fixed-size Agent state to isolate storage size from
+  event count.
+
 ### 2026-05-08: WebSocket subscription transport comparison
 
 Hypothesis:
