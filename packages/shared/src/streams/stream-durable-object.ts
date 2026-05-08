@@ -46,6 +46,7 @@ import {
   publishExternalSubscriberBatch,
   publishExternalSubscribers,
   resetSubscriberSocketsForStream,
+  type ExternalSubscriberAck,
   type ExternalSubscriberPublishFailure,
 } from "./external-subscriber.ts";
 import {
@@ -207,6 +208,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
   private readonly callableSubscriberDeliveries: CallableSubscriberDeliveryDiagnostic[] = [];
   private readonly idempotencyDuplicates = new Map<string, IdempotencyDuplicateDiagnostic>();
   private readonly subscribers = new Set<ReadableStreamDefaultController<Uint8Array>>();
+  private readonly websocketSubscriberPendingThroughOffset = new Map<string, number>();
 
   private get state(): StreamState {
     if (this._state == null) {
@@ -976,16 +978,23 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
         }
 
         const cursorEntries = await Promise.all(
-          subscribers.map(async (subscriber) => ({
-            cursor: await this.readCallableSubscriberCursor(subscriber.slug),
-            subscriber,
-          })),
+          subscribers.map(async (subscriber) => {
+            const ackedCursor = await this.readCallableSubscriberCursor(subscriber.slug);
+            return {
+              ackedCursor,
+              cursor: Math.max(
+                ackedCursor,
+                this.websocketSubscriberPendingThroughOffset.get(subscriber.slug) ?? 0,
+              ),
+              subscriber,
+            };
+          }),
         );
         diagnostic.cursorReadCount += cursorEntries.length;
         const eventWindows = new Map<string, readonly Event[]>();
 
         const results = await Promise.all(
-          cursorEntries.map(async ({ cursor, subscriber }) => {
+          cursorEntries.map(async ({ ackedCursor, cursor, subscriber }) => {
             if (cursor >= targetEventCount) {
               return { hasRemainingWork: false, shouldYield: false };
             }
@@ -1039,6 +1048,9 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
                 env: this.env as Record<string, unknown>,
               },
               events,
+              onAck: async (ack) => {
+                await this.handleExternalSubscriberAck(ack);
+              },
               onError: (failure) => {
                 this.appendExternalSubscriberDeliveryError(failure);
               },
@@ -1063,13 +1075,21 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
               return { hasRemainingWork: true, shouldYield: true };
             }
 
-            await this.writeCallableSubscriberCursor(
-              subscriber.slug,
-              events.at(-1)?.offset ?? cursor,
-            );
-            diagnostic.cursorWriteCount += 1;
+            const deliveredThroughOffset = events.at(-1)?.offset ?? cursor;
+            if (result.cursorAdvance === "acked") {
+              this.websocketSubscriberPendingThroughOffset.set(
+                subscriber.slug,
+                Math.max(
+                  this.websocketSubscriberPendingThroughOffset.get(subscriber.slug) ?? ackedCursor,
+                  deliveredThroughOffset,
+                ),
+              );
+            } else {
+              await this.writeCallableSubscriberCursor(subscriber.slug, deliveredThroughOffset);
+              diagnostic.cursorWriteCount += 1;
+            }
             return {
-              hasRemainingWork: events.at(-1)!.offset < targetEventCount,
+              hasRemainingWork: deliveredThroughOffset < targetEventCount,
               shouldYield: false,
             };
           }),
@@ -1132,6 +1152,22 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
 
   private async writeCallableSubscriberCursor(slug: string, offset: number) {
     await this.ctx.storage.put(callableSubscriberCursorKey(slug), offset);
+  }
+
+  private async handleExternalSubscriberAck(ack: ExternalSubscriberAck) {
+    const current = await this.readCallableSubscriberCursor(ack.subscriber.slug);
+    if (ack.offset <= current) {
+      return;
+    }
+
+    await this.writeCallableSubscriberCursor(ack.subscriber.slug, ack.offset);
+    const pendingThrough = this.websocketSubscriberPendingThroughOffset.get(ack.subscriber.slug);
+    if (pendingThrough != null && ack.offset >= pendingThrough) {
+      this.websocketSubscriberPendingThroughOffset.delete(ack.subscriber.slug);
+    }
+    if (this.state.eventCount > ack.offset) {
+      await this.scheduleCallableSubscriberDelivery();
+    }
   }
 
   private appendExternalSubscriberDeliveryError(failure: ExternalSubscriberPublishFailure) {

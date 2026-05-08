@@ -31,7 +31,18 @@ import { createCodemodeProcessor } from "@iterate-com/shared/stream-processors/c
 import type { ProcessorStreamApi, StreamEvent } from "@iterate-com/shared/stream-processors";
 import type { Callable } from "@iterate-com/shared/callable/types.ts";
 import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
+import {
+  StreamSocketErrorFrame,
+  StreamSocketFrame,
+} from "@iterate-com/shared/streams/stream-socket-types";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
+import {
+  activateStreamSubscriptionSocket,
+  ackStreamSubscriptionSocket,
+  appendThroughStreamSubscriptionSocket,
+  handleStreamSubscriptionAppendResponse,
+  streamSubscriptionSocketKey,
+} from "~/domains/streams/stream-subscription-socket.ts";
 
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
 export { OutboundMcpFromOurClientCapability } from "~/domains/outbound-mcp-client/entrypoints/outbound-mcp-from-our-client-capability.ts";
@@ -251,6 +262,95 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
   async afterAppendBatch(input: { events: Event[] }) {
     for (const event of input.events) {
       await this.afterAppend({ event });
+    }
+  }
+
+  async fetch(request: Request): Promise<Response> {
+    if (new URL(request.url).pathname !== "/stream-subscription") {
+      return new Response("Not found", { status: 404 });
+    }
+    if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+      return new Response("Expected WebSocket upgrade", { status: 426 });
+    }
+
+    await this.ensureStarted();
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
+    server.accept();
+    const socketKey = streamSubscriptionSocketKey({
+      projectId: this.structuredName.projectId,
+      streamPath: this.structuredName.streamPath,
+    });
+    const deactivateSocket = activateStreamSubscriptionSocket({ key: socketKey, socket: server });
+
+    let processing = Promise.resolve();
+    server.addEventListener("message", (messageEvent) => {
+      processing = processing
+        .then(() =>
+          this.handleStreamSubscriptionSocketMessage({
+            messageEvent,
+            socket: server,
+            socketKey,
+          }),
+        )
+        .catch((error) => {
+          sendSocketError(server, error instanceof Error ? error.message : String(error));
+        });
+    });
+    server.addEventListener("close", deactivateSocket);
+    server.addEventListener("error", deactivateSocket);
+
+    return new Response(null, {
+      status: 101,
+      webSocket: client,
+    } as ResponseInit & { webSocket: WebSocket });
+  }
+
+  private async handleStreamSubscriptionSocketMessage(input: {
+    messageEvent: MessageEvent;
+    socket: WebSocket;
+    socketKey: string;
+  }) {
+    if (typeof input.messageEvent.data !== "string") {
+      sendSocketError(input.socket, "Expected text WebSocket frame.");
+      return;
+    }
+
+    let raw: unknown;
+    try {
+      raw = JSON.parse(input.messageEvent.data);
+    } catch {
+      sendSocketError(input.socket, "Expected JSON WebSocket frame.");
+      return;
+    }
+
+    const frame = StreamSocketFrame.safeParse(raw);
+    if (!frame.success) {
+      sendSocketError(input.socket, "Expected stream event WebSocket frame.");
+      return;
+    }
+    if (handleStreamSubscriptionAppendResponse({ frame: frame.data, key: input.socketKey })) {
+      return;
+    }
+
+    switch (frame.data.type) {
+      case "event":
+        await this.afterAppend({ event: frame.data.event });
+        ackStreamSubscriptionSocket({ offset: frame.data.event.offset, socket: input.socket });
+        return;
+      case "events":
+        await this.afterAppendBatch({ events: frame.data.events });
+        ackStreamSubscriptionSocket({
+          offset: frame.data.events.at(-1)?.offset ?? 0,
+          socket: input.socket,
+        });
+        return;
+      case "append":
+      case "append-result":
+      case "append-error":
+      case "ack":
+      case "error":
+        return;
     }
   }
 
@@ -534,13 +634,13 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
 
     await stream.append({
       type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      idempotencyKey: `codemode-session-callable-subscription:${this.name}:afterAppendBatch`,
+      idempotencyKey: `codemode-session-websocket-subscription:${this.name}:stream-subscription`,
       payload: {
         slug: `codemode-session:${this.name}`,
-        type: "callable",
+        type: "websocket",
         jsonataFilter: CODEMODE_SUBSCRIPTION_JSONATA_FILTER,
         callable: {
-          type: "workers-rpc",
+          type: "fetch",
           via: {
             type: "env-binding",
             bindingType: "durable-object-namespace",
@@ -549,8 +649,12 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
               name: this.name,
             },
           },
-          rpcMethod: "afterAppendBatch",
-          argsMode: "object",
+          fetchRequest: {
+            path: {
+              base: "/stream-subscription",
+              mode: "replace",
+            },
+          },
         },
       },
     });
@@ -703,24 +807,57 @@ function processorStreamApiFromNamespace(args: {
 }): CodemodeSessionStreamApi {
   return {
     async append(input) {
+      const streamPath = resolveProcessorStreamPath({
+        basePath: args.streamPath,
+        pathInput: input.streamPath,
+      });
+      const socketEvent = await appendThroughStreamSubscriptionSocket({
+        event: input.event as EventInput,
+        key: streamSubscriptionSocketKey({
+          projectId: args.namespace,
+          streamPath,
+        }),
+      });
+      if (socketEvent != null) {
+        return socketEvent;
+      }
       const stream = await getInitializedStreamStub({
         durableObjectNamespace: args.durableObjectNamespace,
         namespace: args.namespace,
-        path: resolveProcessorStreamPath({
-          basePath: args.streamPath,
-          pathInput: input.streamPath,
-        }),
+        path: streamPath,
       });
       return await stream.append(input.event as EventInput);
     },
     async appendBatch(input) {
+      const streamPath = resolveProcessorStreamPath({
+        basePath: args.streamPath,
+        pathInput: input.streamPath,
+      });
+      const socketKey = streamSubscriptionSocketKey({
+        projectId: args.namespace,
+        streamPath,
+      });
+      const socketEvents: Event[] = [];
+      for (const event of input.events) {
+        const socketEvent = await appendThroughStreamSubscriptionSocket({
+          event: event as EventInput,
+          key: socketKey,
+        });
+        if (socketEvent == null) {
+          if (socketEvents.length === 0) {
+            break;
+          }
+          throw new Error("Stream subscription socket closed during appendBatch.");
+        }
+        socketEvents.push(socketEvent);
+      }
+      if (socketEvents.length === input.events.length) {
+        return socketEvents;
+      }
       const stream = await getInitializedStreamStub({
         durableObjectNamespace: args.durableObjectNamespace,
         namespace: args.namespace,
-        path: resolveProcessorStreamPath({
-          basePath: args.streamPath,
-          pathInput: input.streamPath,
-        }),
+        path: streamPath,
       });
       return await stream.appendBatch(input.events as EventInput[]);
     },
@@ -1168,6 +1305,17 @@ function serializeFunctionCallValueForEvent(value: unknown): unknown {
           : typeof value,
     };
   }
+}
+
+function sendSocketError(socket: WebSocket, message: string) {
+  socket.send(
+    JSON.stringify(
+      StreamSocketErrorFrame.parse({
+        type: "error",
+        message,
+      }),
+    ),
+  );
 }
 
 export default {

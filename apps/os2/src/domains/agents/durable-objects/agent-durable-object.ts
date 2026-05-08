@@ -39,6 +39,13 @@ import {
 import type { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
 import {
+  activateStreamSubscriptionSocket,
+  ackStreamSubscriptionSocket,
+  appendThroughStreamSubscriptionSocket,
+  handleStreamSubscriptionAppendResponse,
+  streamSubscriptionSocketKey,
+} from "~/domains/streams/stream-subscription-socket.ts";
+import {
   defaultAgentSetupEvents,
   defaultAgentSystemPrompt,
   OS2_AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE,
@@ -272,15 +279,28 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
     server.accept();
+    const socketKey = streamSubscriptionSocketKey({
+      projectId: this.structuredName.projectId,
+      streamPath: this.structuredName.agentPath,
+    });
+    const deactivateSocket = activateStreamSubscriptionSocket({ key: socketKey, socket: server });
 
     let processing = Promise.resolve();
     server.addEventListener("message", (messageEvent) => {
       processing = processing
-        .then(() => this.handleStreamSubscriptionSocketMessage({ messageEvent, socket: server }))
+        .then(() =>
+          this.handleStreamSubscriptionSocketMessage({
+            messageEvent,
+            socket: server,
+            socketKey,
+          }),
+        )
         .catch((error) => {
           sendSocketError(server, error instanceof Error ? error.message : String(error));
         });
     });
+    server.addEventListener("close", deactivateSocket);
+    server.addEventListener("error", deactivateSocket);
 
     return new Response(null, {
       status: 101,
@@ -407,6 +427,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
   private async handleStreamSubscriptionSocketMessage(input: {
     messageEvent: MessageEvent;
     socket: WebSocket;
+    socketKey: string;
   }) {
     if (typeof input.messageEvent.data !== "string") {
       sendSocketError(input.socket, "Expected text WebSocket frame.");
@@ -426,25 +447,35 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       sendSocketError(input.socket, "Expected stream event WebSocket frame.");
       return;
     }
+    if (handleStreamSubscriptionAppendResponse({ frame: frame.data, key: input.socketKey })) {
+      return;
+    }
 
     switch (frame.data.type) {
       case "event":
         await this.processAppendedStreamEvent(frame.data.event, "websocket");
+        ackStreamSubscriptionSocket({ offset: frame.data.event.offset, socket: input.socket });
         return;
       case "events":
         await this.processAppendedStreamEvents(frame.data.events, "websocket");
+        ackStreamSubscriptionSocket({
+          offset: frame.data.events.at(-1)?.offset ?? 0,
+          socket: input.socket,
+        });
         return;
       case "append":
+      case "append-result":
+      case "append-error":
+      case "ack":
       case "error":
         return;
     }
   }
 
   private async ensureAgentSubscription(params: AgentDurableObjectStructuredName) {
-    await this.ensureStreamProcessorCallableSubscription({
+    await this.ensureStreamProcessorWebSocketSubscription({
       bindingName: "AGENT",
       durableObjectName: this.name,
-      rpcMethod: "afterAppendBatch",
       slug: `agent:${params.projectId}:${params.agentPath}`,
       streamPath: params.agentPath,
     });
@@ -749,24 +780,57 @@ function agentStreamApiFromNamespace(args: {
 }): AgentStreamApi {
   return {
     async append(input) {
+      const streamPath = resolveProcessorStreamPath({
+        basePath: args.streamPath,
+        pathInput: input.streamPath,
+      });
+      const socketEvent = await appendThroughStreamSubscriptionSocket({
+        event: input.event,
+        key: streamSubscriptionSocketKey({
+          projectId: args.namespace,
+          streamPath,
+        }),
+      });
+      if (socketEvent != null) {
+        return socketEvent;
+      }
       const stream = await getInitializedStreamStub({
         durableObjectNamespace: args.durableObjectNamespace,
         namespace: args.namespace,
-        path: resolveProcessorStreamPath({
-          basePath: args.streamPath,
-          pathInput: input.streamPath,
-        }),
+        path: streamPath,
       });
       return await stream.append(input.event);
     },
     async appendBatch(input) {
+      const streamPath = resolveProcessorStreamPath({
+        basePath: args.streamPath,
+        pathInput: input.streamPath,
+      });
+      const socketKey = streamSubscriptionSocketKey({
+        projectId: args.namespace,
+        streamPath,
+      });
+      const socketEvents: Event[] = [];
+      for (const event of input.events) {
+        const socketEvent = await appendThroughStreamSubscriptionSocket({
+          event,
+          key: socketKey,
+        });
+        if (socketEvent == null) {
+          if (socketEvents.length === 0) {
+            break;
+          }
+          throw new Error("Stream subscription socket closed during appendBatch.");
+        }
+        socketEvents.push(socketEvent);
+      }
+      if (socketEvents.length === input.events.length) {
+        return socketEvents;
+      }
       const stream = await getInitializedStreamStub({
         durableObjectNamespace: args.durableObjectNamespace,
         namespace: args.namespace,
-        path: resolveProcessorStreamPath({
-          basePath: args.streamPath,
-          pathInput: input.streamPath,
-        }),
+        path: streamPath,
       });
       return await stream.appendBatch(input.events);
     },

@@ -8,7 +8,10 @@ import { match } from "schematch";
 import type { BuiltinProcessor } from "./builtin-processor.ts";
 import { getCompiledJsonata } from "./compiled-jsonata.ts";
 import {
+  StreamSocketAckFrame,
+  StreamSocketAppendErrorFrame,
   StreamSocketAppendFrame,
+  StreamSocketAppendResultFrame,
   StreamSocketErrorFrame,
   StreamSocketEventFrame,
   StreamSocketEventsFrame,
@@ -28,6 +31,12 @@ export type ExternalSubscriberPublishFailure = {
   error: unknown;
   event: Event;
   subscriber: ExternalSubscriber;
+};
+
+export type ExternalSubscriberAck = {
+  offset: number;
+  streamPath: string;
+  subscriber: ExternalWebsocketSubscriber;
 };
 
 type SubscriberConnection = {
@@ -99,9 +108,11 @@ export async function publishExternalSubscriberBatch(args: {
   append: (event: EventInput) => Promise<Event>;
   callableContext: CallableContext;
   events: readonly Event[];
+  onAck?(ack: ExternalSubscriberAck): void | Promise<void>;
   onError?(failure: ExternalSubscriberPublishFailure): void | Promise<void>;
   subscriber: ExternalSubscriber;
 }): Promise<{
+  cursorAdvance: "delivered" | "acked";
   deliveredEventCount: number;
   dispatchDurationMs: number;
   failedEventCount: number;
@@ -131,7 +142,13 @@ export async function publishExternalSubscriberBatch(args: {
     }
     const filterDurationMs = Math.round(performance.now() - filterStartedAt);
     if (events.length === 0) {
-      return { deliveredEventCount: 0, dispatchDurationMs: 0, failedEventCount, filterDurationMs };
+      return {
+        cursorAdvance: "delivered",
+        deliveredEventCount: 0,
+        dispatchDurationMs: 0,
+        failedEventCount,
+        filterDurationMs,
+      };
     }
 
     const dispatchStartedAt = performance.now();
@@ -143,6 +160,7 @@ export async function publishExternalSubscriberBatch(args: {
         ctx: args.callableContext,
       });
       return {
+        cursorAdvance: "delivered",
         deliveredEventCount: events.length,
         dispatchDurationMs: Math.round(performance.now() - dispatchStartedAt),
         failedEventCount,
@@ -168,6 +186,7 @@ export async function publishExternalSubscriberBatch(args: {
         error,
       });
       return {
+        cursorAdvance: "delivered",
         deliveredEventCount: 0,
         dispatchDurationMs: Math.round(performance.now() - dispatchStartedAt),
         failedEventCount: failedEventCount + events.length,
@@ -196,7 +215,13 @@ export async function publishExternalSubscriberBatch(args: {
     }
     const filterDurationMs = Math.round(performance.now() - filterStartedAt);
     if (events.length === 0) {
-      return { deliveredEventCount: 0, dispatchDurationMs: 0, failedEventCount, filterDurationMs };
+      return {
+        cursorAdvance: "delivered",
+        deliveredEventCount: 0,
+        dispatchDurationMs: 0,
+        failedEventCount,
+        filterDurationMs,
+      };
     }
 
     const dispatchStartedAt = performance.now();
@@ -205,10 +230,12 @@ export async function publishExternalSubscriberBatch(args: {
         append: args.append,
         callableContext: args.callableContext,
         events,
+        onAck: args.onAck,
         streamPath: events[0]!.streamPath,
         subscriber: args.subscriber,
       });
       return {
+        cursorAdvance: "acked",
         deliveredEventCount: events.length,
         dispatchDurationMs: Math.round(performance.now() - dispatchStartedAt),
         failedEventCount,
@@ -225,6 +252,7 @@ export async function publishExternalSubscriberBatch(args: {
         ),
       );
       return {
+        cursorAdvance: "acked",
         deliveredEventCount: 0,
         dispatchDurationMs: Math.round(performance.now() - dispatchStartedAt),
         failedEventCount: failedEventCount + events.length,
@@ -249,7 +277,13 @@ export async function publishExternalSubscriberBatch(args: {
       failedEventCount += 1;
     }
   }
-  return { deliveredEventCount, dispatchDurationMs: 0, failedEventCount, filterDurationMs: 0 };
+  return {
+    cursorAdvance: "delivered",
+    deliveredEventCount,
+    dispatchDurationMs: 0,
+    failedEventCount,
+    filterDurationMs: 0,
+  };
 }
 
 export function hasExternalSubscribersOfType(
@@ -403,6 +437,7 @@ async function sendWebsocketMessage(args: {
   append: (event: EventInput) => Promise<Event>;
   callableContext: CallableContext;
   event: Event;
+  onAck?(ack: ExternalSubscriberAck): void | Promise<void>;
   subscriber: ExternalWebsocketSubscriber;
   streamPath: string;
 }) {
@@ -412,6 +447,7 @@ async function sendWebsocketMessage(args: {
     const socket = await getSubscriberSocket({
       append: args.append,
       callableContext: args.callableContext,
+      onAck: args.onAck,
       streamPath: args.streamPath,
       subscriber: args.subscriber,
     });
@@ -429,6 +465,7 @@ async function sendWebsocketMessage(args: {
       const socket = await getSubscriberSocket({
         append: args.append,
         callableContext: args.callableContext,
+        onAck: args.onAck,
         streamPath: args.streamPath,
         subscriber: args.subscriber,
       });
@@ -455,6 +492,7 @@ async function sendWebsocketEventsMessage(args: {
   append: (event: EventInput) => Promise<Event>;
   callableContext: CallableContext;
   events: Event[];
+  onAck?(ack: ExternalSubscriberAck): void | Promise<void>;
   subscriber: ExternalWebsocketSubscriber;
   streamPath: string;
 }) {
@@ -464,6 +502,7 @@ async function sendWebsocketEventsMessage(args: {
     const socket = await getSubscriberSocket({
       append: args.append,
       callableContext: args.callableContext,
+      onAck: args.onAck,
       streamPath: args.streamPath,
       subscriber: args.subscriber,
     });
@@ -480,6 +519,7 @@ async function sendWebsocketEventsMessage(args: {
     const socket = await getSubscriberSocket({
       append: args.append,
       callableContext: args.callableContext,
+      onAck: args.onAck,
       streamPath: args.streamPath,
       subscriber: args.subscriber,
     });
@@ -496,6 +536,7 @@ async function sendWebsocketEventsMessage(args: {
 async function getSubscriberSocket(args: {
   append: (event: EventInput) => Promise<Event>;
   callableContext: CallableContext;
+  onAck?(ack: ExternalSubscriberAck): void | Promise<void>;
   streamPath: string;
   subscriber: ExternalWebsocketSubscriber;
 }) {
@@ -520,6 +561,7 @@ async function getSubscriberSocket(args: {
   const connectPromise = connectSubscriberSocket({
     append: args.append,
     callableContext: args.callableContext,
+    onAck: args.onAck,
     streamPath: args.streamPath,
     subscriber: args.subscriber,
     subscriberKey,
@@ -551,6 +593,7 @@ async function getSubscriberSocket(args: {
 async function connectSubscriberSocket(args: {
   append: (event: EventInput) => Promise<Event>;
   callableContext: CallableContext;
+  onAck?(ack: ExternalSubscriberAck): void | Promise<void>;
   streamPath: string;
   subscriber: ExternalWebsocketSubscriber;
   subscriberKey: string;
@@ -567,6 +610,7 @@ async function connectSubscriberSocket(args: {
     void handleSubscriberSocketMessage({
       append: args.append,
       event,
+      onAck: args.onAck,
       socket,
       streamPath: args.streamPath,
       subscriber: args.subscriber,
@@ -601,6 +645,7 @@ async function connectSubscriberSocket(args: {
 async function handleSubscriberSocketMessage(args: {
   append: (event: EventInput) => Promise<Event>;
   event: unknown;
+  onAck?(ack: ExternalSubscriberAck): void | Promise<void>;
   socket: WebSocket;
   streamPath: string;
   subscriber: ExternalWebsocketSubscriber;
@@ -643,9 +688,19 @@ async function handleSubscriberSocketMessage(args: {
   }
 
   await match(parsed)
-    .case(StreamSocketAppendFrame, async ({ event }) => {
+    .case(StreamSocketAppendFrame, async ({ event, requestId }) => {
       try {
-        await args.append(event);
+        const appended = await args.append(event);
+        if (requestId != null) {
+          sendSocketFrame(
+            args.socket,
+            StreamSocketAppendResultFrame.parse({
+              type: "append-result",
+              requestId,
+              event: appended,
+            }),
+          );
+        }
       } catch (error) {
         console.error("[stream-do] external websocket subscriber append failed", {
           streamPath: args.streamPath,
@@ -660,7 +715,24 @@ async function handleSubscriberSocketMessage(args: {
             message: error instanceof Error ? error.message : "Failed to append websocket event.",
           }),
         );
+        if (requestId != null) {
+          sendSocketFrame(
+            args.socket,
+            StreamSocketAppendErrorFrame.parse({
+              type: "append-error",
+              requestId,
+              message: error instanceof Error ? error.message : "Failed to append websocket event.",
+            }),
+          );
+        }
       }
+    })
+    .case(StreamSocketAckFrame, async ({ offset }) => {
+      await args.onAck?.({
+        offset,
+        streamPath: args.streamPath,
+        subscriber: args.subscriber,
+      });
     })
     .case(StreamSocketErrorFrame, async ({ message }) => {
       console.error("[stream-do] external websocket subscriber reported error", {

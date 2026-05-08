@@ -147,6 +147,16 @@ export abstract class StreamProcessorProtected {
     throw new Error("StreamProcessorProtected is type-only and should never run.");
   }
 
+  protected ensureStreamProcessorWebSocketSubscription(_args: {
+    bindingName: string;
+    durableObjectName: string;
+    path?: string;
+    slug: string;
+    streamPath: StreamPath | string;
+  }): Promise<StreamEvent> {
+    throw new Error("StreamProcessorProtected is type-only and should never run.");
+  }
+
   protected catchUpStreamProcessors(_args: {
     signal?: AbortSignal;
     streamPath: StreamPath | string;
@@ -264,6 +274,44 @@ export function withStreamProcessor<
                 },
                 rpcMethod,
                 argsMode: "object",
+              } satisfies Callable,
+            },
+          },
+        });
+      }
+
+      protected async ensureStreamProcessorWebSocketSubscription(args: {
+        bindingName: string;
+        durableObjectName: string;
+        path?: string;
+        slug: string;
+        streamPath: StreamPath | string;
+      }): Promise<StreamEvent> {
+        await this.ensureStarted();
+        const path = args.path ?? "/stream-subscription";
+        return await this.streamApiForPath(args.streamPath).append({
+          event: {
+            type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
+            idempotencyKey: `stream-processor-websocket-subscription:${args.bindingName}:${args.durableObjectName}:${args.streamPath}:${args.slug}:${path}`,
+            payload: {
+              slug: args.slug,
+              type: "websocket",
+              callable: {
+                type: "fetch",
+                via: {
+                  type: "env-binding",
+                  bindingType: "durable-object-namespace",
+                  bindingName: args.bindingName,
+                  durableObject: {
+                    name: args.durableObjectName,
+                  },
+                },
+                fetchRequest: {
+                  path: {
+                    base: path,
+                    mode: "replace",
+                  },
+                },
               } satisfies Callable,
             },
           },

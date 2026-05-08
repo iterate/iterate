@@ -54,14 +54,6 @@ export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
       await ensureSessionStarted({ deps, state, streamApi });
 
       switch (event.type) {
-        case CoreProcessorRegisteredEventType:
-        case "events.iterate.com/codemode/session-started":
-        case "events.iterate.com/codemode/tool-provider-registered":
-        case "events.iterate.com/codemode/script-execution-completed":
-        case "events.iterate.com/codemode/function-call-requested":
-        case "events.iterate.com/codemode/function-call-completed":
-        case "events.iterate.com/codemode/log-emitted":
-          return;
         case "events.iterate.com/codemode/script-execution-requested":
           await executeRequestedScript({
             deps,
@@ -70,6 +62,14 @@ export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
             state,
             streamApi,
           });
+          return;
+        case "events.iterate.com/core/stream-processor-registered":
+        case "events.iterate.com/codemode/session-started":
+        case "events.iterate.com/codemode/tool-provider-registered":
+        case "events.iterate.com/codemode/script-execution-completed":
+        case "events.iterate.com/codemode/function-call-requested":
+        case "events.iterate.com/codemode/function-call-completed":
+        case "events.iterate.com/codemode/log-emitted":
           return;
         default:
           return assertNever(event);
