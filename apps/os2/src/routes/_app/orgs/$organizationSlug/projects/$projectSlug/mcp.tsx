@@ -4,9 +4,10 @@ import { useConfig } from "@iterate-com/ui/apps/config";
 import { buttonVariants } from "@iterate-com/ui/components/button";
 import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
 import { Identifier } from "@iterate-com/ui/components/identifier";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import type { AppConfig } from "~/app.ts";
 import { buildProjectMcpUrl } from "~/lib/project-host-routing.ts";
+import { streamPathToSplat } from "~/lib/stream-links.ts";
 import { orpc } from "~/orpc/client.ts";
 
 type PublicConfig = PublicAppConfig<AppConfig>;
@@ -33,6 +34,7 @@ export const Route = createFileRoute("/_app/orgs/$organizationSlug/projects/$pro
 });
 
 function ProjectMcpPage() {
+  const params = Route.useParams();
   const { project } = Route.useLoaderData();
   const config = useConfig<PublicConfig>();
   const { data: sessionsData } = useQuery({
@@ -129,7 +131,17 @@ function ProjectMcpPage() {
                 </p>
               </div>
               <p className="font-mono text-xs text-muted-foreground">
-                <EventsStreamPathLabel path={session.streamPath} />
+                <Link
+                  className="hover:text-foreground hover:underline"
+                  to="/orgs/$organizationSlug/projects/$projectSlug/streams/$"
+                  params={{
+                    organizationSlug: params.organizationSlug,
+                    projectSlug: params.projectSlug,
+                    _splat: streamPathToSplat(session.streamPath),
+                  }}
+                >
+                  <EventsStreamPathLabel path={session.streamPath} />
+                </Link>
               </p>
               <p className="text-xs text-muted-foreground">
                 Created {formatDate(session.createdAt)} · Woke {formatDate(session.lastWokenAt)}

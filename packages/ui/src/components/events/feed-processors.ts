@@ -577,19 +577,18 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
   }
 
   if (event.type === CODEMODE_SCRIPT_EXECUTION_COMPLETED_TYPE) {
-    const durationMs = readNumberPayloadField(event, "durationMs");
-    if (durationMs == null) return [];
+    const durationMs = readNumberPayloadField(event, "durationMs") ?? 0;
     const outcome = readRecordPayloadField(event, "outcome");
     const status = outcome?.status;
-    const success = status === "succeeded";
-    const error = typeof outcome?.error === "string" ? outcome.error : undefined;
+    const success = status === "succeeded" || status === "returned";
+    const error = readCodemodeOutcomeError(outcome);
     return [
       {
         type: "codemode-result",
         id: `codemode-result-${event.offset}`,
         props: {
           success,
-          result: outcome ?? {},
+          result: readCodemodeOutcomeResult(outcome),
           ...(error == null ? {} : { error }),
           logs: readStringArrayPayloadField(event, "logs"),
           durationMs,
@@ -606,6 +605,29 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
    * vague catch-all card that hides product decisions behind generic UI.
    */
   return [];
+}
+
+function readCodemodeOutcomeResult(outcome: Record<string, unknown> | null): unknown {
+  if (outcome == null) return {};
+  if (outcome.status === "succeeded" && "output" in outcome) return outcome.output;
+  if (outcome.status === "returned" && "value" in outcome) return outcome.value;
+  return outcome;
+}
+
+function readCodemodeOutcomeError(outcome: Record<string, unknown> | null) {
+  if (outcome == null) return undefined;
+  if (outcome.status !== "failed" && outcome.status !== "threw") return undefined;
+  if (!("error" in outcome)) return undefined;
+  return stringifyCodemodeError(outcome.error);
+}
+
+function stringifyCodemodeError(error: unknown) {
+  if (typeof error === "string") return error;
+  try {
+    return JSON.stringify(error, null, 2);
+  } catch {
+    return String(error);
+  }
 }
 
 function readLlmRequestOutcome(eventType: string): "completed" | "failed" | "cancelled" {

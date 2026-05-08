@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { Event, type StreamPath } from "@iterate-com/shared/streams/types";
 import {
@@ -26,6 +26,7 @@ type ProjectStreamMessageComposer = {
 
 export function ProjectStreamView({
   emptyLabel = "No events in this stream yet.",
+  headerAccessory,
   messageComposer,
   organizationSlug,
   projectSlug,
@@ -33,6 +34,7 @@ export function ProjectStreamView({
   streamPath,
 }: {
   emptyLabel?: string;
+  headerAccessory?: ReactNode;
   messageComposer?: ProjectStreamMessageComposer;
   organizationSlug: string;
   projectSlug: string;
@@ -132,6 +134,7 @@ export function ProjectStreamView({
           streamPath={streamPath}
         />
       </div>
+      {headerAccessory == null ? null : <div className="shrink-0 border-b">{headerAccessory}</div>}
 
       <EventsStreamView
         className="min-h-0 flex-1"
