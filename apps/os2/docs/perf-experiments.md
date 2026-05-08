@@ -2949,3 +2949,42 @@ Interpretation:
 - Naive in-memory coalescing is unsafe. The next viable design needs a durable
   wake/work marker or per-subscriber queued work model that does not rely on an
   active in-memory drain seeing all later commits.
+
+### 2026-05-08: scheduled-only alarm coalescing with diagnostics
+
+Reference notes:
+
+- Cloudflare Durable Object alarms are persisted storage-backed timers and each
+  Durable Object instance has only one scheduled alarm slot at a time.
+  <https://developers.cloudflare.com/durable-objects/api/alarms/>
+- Kenton Varda's Durable Objects correctness writeup explains why input/output
+  gates make storage and concurrent event delivery less intuitive than ordinary
+  JavaScript async interleaving.
+  <https://blog.cloudflare.com/durable-objects-easy-fast-correct-choose-three/>
+
+Hypothesis:
+
+- Active-drain coalescing is unsafe because the active drain may not observe
+  later commits and therefore may not reschedule.
+- Scheduled-only coalescing should be safer: suppress duplicate `setAlarm()`
+  calls only while an alarm is scheduled but has not fired yet.
+- Once the alarm starts, clear the scheduled flag immediately, so appends during
+  the active drain can still schedule another alarm if needed.
+- This was tried earlier with batch size `1000` and unclear/worse results. The
+  current retest keeps batch size `500` and adds exact schedule/setAlarm counters.
+
+Change under test:
+
+- Reintroduce only `callableSubscriberDeliveryAlarmScheduled`.
+- `scheduleCallableSubscriberDelivery()` now skips `setAlarm()` only when this
+  scheduled flag is true.
+- `alarm()` clears the scheduled flag before draining.
+- No active-drain coalescing.
+
+Validation plan:
+
+- Run the same 1000-event `agent-chat-responses` server benchmark.
+- Require source/final/processor waits to complete.
+- Compare `scheduleRequestCount` to `setAlarmCount`.
+- Compare append latency and subscriber wait against baseline
+  `agent-server-bench-1778212001534-9ff754ff`.
