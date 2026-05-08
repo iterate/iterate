@@ -21,12 +21,19 @@ type BenchmarkResult = {
     idempotencyDuplicateAttemptCount: number;
     idempotencyLogicalAppendAttemptCount: number;
     idempotencyDuplicateTopKeys: IdempotencyDuplicateKey[];
+    idempotencyDuplicateTopSources: IdempotencyDuplicateSource[];
   };
 };
 
 type IdempotencyDuplicateKey = {
   duplicateAttempts: number;
   idempotencyKey: string;
+};
+
+type IdempotencyDuplicateSource = {
+  duplicateAttempts: number;
+  idempotencyKey: string;
+  sourceLabel: string;
 };
 
 type Options = {
@@ -323,6 +330,7 @@ function evaluateIdempotencyDuplicateInvariant(input: {
     logicalAppendAttempts,
     duplicateAttemptRatio:
       committedIdempotentEvents === 0 ? null : round(duplicateAttempts / committedIdempotentEvents),
+    topSources: input.result.streamDiagnostics.idempotencyDuplicateTopSources,
     unexpectedDuplicateAttempts,
     unexpectedKeys,
   };

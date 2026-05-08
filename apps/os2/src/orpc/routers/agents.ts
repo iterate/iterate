@@ -454,12 +454,20 @@ type BenchmarkStreamStub = {
       streamPath: string;
       targetOffset: number;
     }>;
+    idempotencyDuplicateTopSources: Array<{
+      duplicateAttempts: number;
+      firstDuplicateAtMs: number;
+      idempotencyKey: string;
+      lastDuplicateAtMs: number;
+      sourceLabel: string;
+    }>;
     idempotencyDuplicates: Array<{
       duplicateAttempts: number;
       eventType: string;
       firstDuplicateAtMs: number;
       idempotencyKey: string;
       lastDuplicateAtMs: number;
+      sourceLabels: string[];
       streamPath: string;
       targetOffset: number;
     }>;

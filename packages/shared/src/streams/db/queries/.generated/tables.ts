@@ -10,6 +10,14 @@ export type EventsRow = {
   created_at: string;
 };
 
+export type IdempotencyDuplicateAttemptSourcesRow = {
+  idempotency_key: string;
+  source_label: string;
+  duplicate_attempts: number;
+  first_duplicate_at_ms: number;
+  last_duplicate_at_ms: number;
+};
+
 export type IdempotencyDuplicateAttemptsRow = {
   idempotency_key: string;
   event_type: string;

@@ -17,6 +17,15 @@ create table idempotency_duplicate_attempts (
   last_duplicate_at_ms integer not null
 );
 
+create table idempotency_duplicate_attempt_sources (
+  idempotency_key text not null,
+  source_label text not null,
+  duplicate_attempts integer not null,
+  first_duplicate_at_ms integer not null,
+  last_duplicate_at_ms integer not null,
+  primary key (idempotency_key, source_label)
+);
+
 create table reduced_state (
   singleton integer primary key check (singleton = 1),
   json text not null check (json_valid(json))

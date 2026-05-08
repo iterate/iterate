@@ -5,9 +5,11 @@ export * from "./get-event-by-idempotency-key.sql.ts";
 export * from "./get-reduced-state.sql.ts";
 export * from "./history.sql.ts";
 export * from "./insert-event.sql.ts";
+export * from "./list-idempotency-duplicate-attempt-sources.sql.ts";
 export * from "./list-idempotency-duplicate-attempts.sql.ts";
 export * from "./summarize-idempotency-duplicate-attempts.sql.ts";
 export * from "./upsert-idempotency-duplicate-attempt.sql.ts";
+export * from "./upsert-idempotency-duplicate-attempt-source.sql.ts";
 export * from "./upsert-reduced-state.sql.ts";
 
 export const sqlfuQuerySources = [
@@ -41,6 +43,12 @@ export const sqlfuQuerySources = [
       "insert into events (offset, type, payload, metadata, idempotency_key, created_at)\nvalues (:offset, :type, json(:payload), :metadata, :idempotencyKey, :createdAt);\n",
   },
   {
+    sqlFile: "list-idempotency-duplicate-attempt-sources.sql",
+    generatedFile: "list-idempotency-duplicate-attempt-sources.sql.ts",
+    sourceSql:
+      "select\n  duplicate_attempts,\n  first_duplicate_at_ms,\n  idempotency_key,\n  last_duplicate_at_ms,\n  source_label\nfrom idempotency_duplicate_attempt_sources\norder by duplicate_attempts desc, last_duplicate_at_ms desc\nlimit :limit;\n",
+  },
+  {
     sqlFile: "list-idempotency-duplicate-attempts.sql",
     generatedFile: "list-idempotency-duplicate-attempts.sql.ts",
     sourceSql:
@@ -57,6 +65,12 @@ export const sqlfuQuerySources = [
     generatedFile: "upsert-idempotency-duplicate-attempt.sql.ts",
     sourceSql:
       "insert into idempotency_duplicate_attempts (\n  idempotency_key,\n  event_type,\n  stream_path,\n  target_offset,\n  duplicate_attempts,\n  first_duplicate_at_ms,\n  last_duplicate_at_ms\n)\nvalues (\n  :idempotencyKey,\n  :eventType,\n  :streamPath,\n  :targetOffset,\n  1,\n  :firstDuplicateAtMs,\n  :lastDuplicateAtMs\n)\non conflict (idempotency_key) do update set\n  event_type = excluded.event_type,\n  stream_path = excluded.stream_path,\n  target_offset = excluded.target_offset,\n  duplicate_attempts = idempotency_duplicate_attempts.duplicate_attempts + 1,\n  last_duplicate_at_ms = excluded.last_duplicate_at_ms;\n",
+  },
+  {
+    sqlFile: "upsert-idempotency-duplicate-attempt-source.sql",
+    generatedFile: "upsert-idempotency-duplicate-attempt-source.sql.ts",
+    sourceSql:
+      "insert into idempotency_duplicate_attempt_sources (\n  idempotency_key,\n  source_label,\n  duplicate_attempts,\n  first_duplicate_at_ms,\n  last_duplicate_at_ms\n)\nvalues (\n  :idempotencyKey,\n  :sourceLabel,\n  1,\n  :firstDuplicateAtMs,\n  :lastDuplicateAtMs\n)\non conflict (idempotency_key, source_label) do update set\n  duplicate_attempts = idempotency_duplicate_attempt_sources.duplicate_attempts + 1,\n  last_duplicate_at_ms = excluded.last_duplicate_at_ms;\n",
   },
   {
     sqlFile: "upsert-reduced-state.sql",

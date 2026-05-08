@@ -33,8 +33,10 @@ import {
   getReducedState,
   history as selectHistory,
   insertEvent,
+  listIdempotencyDuplicateAttemptSources,
   listIdempotencyDuplicateAttempts,
   summarizeIdempotencyDuplicateAttempts,
+  upsertIdempotencyDuplicateAttemptSource,
   upsertIdempotencyDuplicateAttempt,
   upsertReducedState,
 } from "./db/queries/.generated/index.ts";
@@ -77,6 +79,7 @@ type IdempotencyDuplicateDiagnostic = {
   firstDuplicateAtMs: number;
   idempotencyKey: string;
   lastDuplicateAtMs: number;
+  sourceLabels: string[];
   streamPath: string;
   targetOffset: number;
 };
@@ -667,6 +670,15 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
         streamPath: row.stream_path,
         targetOffset: row.target_offset,
       })),
+      idempotencyDuplicateTopSources: listIdempotencyDuplicateAttemptSources(this.client, {
+        limit: IDEMPOTENCY_DIAGNOSTIC_LIMIT,
+      }).map((row) => ({
+        duplicateAttempts: row.duplicate_attempts,
+        firstDuplicateAtMs: row.first_duplicate_at_ms,
+        idempotencyKey: row.idempotency_key,
+        lastDuplicateAtMs: row.last_duplicate_at_ms,
+        sourceLabel: row.source_label,
+      })),
       idempotencyDuplicates: [...this.idempotencyDuplicates.values()].sort(
         (left, right) => right.lastDuplicateAtMs - left.lastDuplicateAtMs,
       ),
@@ -843,6 +855,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
     idempotencyKey: string;
   }) {
     const now = Date.now();
+    const sourceLabel = resolveAppendSourceLabel(args.attemptedEvent);
     upsertIdempotencyDuplicateAttempt(this.client, {
       eventType: args.attemptedEvent.type,
       firstDuplicateAtMs: now,
@@ -851,14 +864,27 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
       streamPath: args.existingEvent.streamPath,
       targetOffset: args.existingEvent.offset,
     });
+    if (sourceLabel != null) {
+      upsertIdempotencyDuplicateAttemptSource(this.client, {
+        firstDuplicateAtMs: now,
+        idempotencyKey: args.idempotencyKey,
+        lastDuplicateAtMs: now,
+        sourceLabel,
+      });
+    }
 
     const existing = this.idempotencyDuplicates.get(args.idempotencyKey);
+    const sourceLabels = new Set(existing?.sourceLabels ?? []);
+    if (sourceLabel != null) {
+      sourceLabels.add(sourceLabel);
+    }
     this.idempotencyDuplicates.set(args.idempotencyKey, {
       duplicateAttempts: (existing?.duplicateAttempts ?? 0) + 1,
       eventType: args.attemptedEvent.type,
       firstDuplicateAtMs: existing?.firstDuplicateAtMs ?? now,
       idempotencyKey: args.idempotencyKey,
       lastDuplicateAtMs: now,
+      sourceLabels: [...sourceLabels].sort(),
       streamPath: args.existingEvent.streamPath,
       targetOffset: args.existingEvent.offset,
     });
@@ -1218,6 +1244,45 @@ function createInitialBuiltinProcessorState(): StreamState["processors"] {
 
 function callableSubscriberCursorKey(slug: string) {
   return `${CALLABLE_SUBSCRIBER_CURSOR_KEY_PREFIX}:${slug}`;
+}
+
+function resolveAppendSourceLabel(event: EventInput): string | null {
+  const metadata = event.metadata;
+  if (metadata == null) return null;
+
+  const provenance =
+    typeof metadata.provenance === "object" &&
+    metadata.provenance !== null &&
+    !Array.isArray(metadata.provenance)
+      ? metadata.provenance
+      : null;
+  const processor =
+    provenance != null &&
+    "processor" in provenance &&
+    typeof provenance.processor === "object" &&
+    provenance.processor !== null &&
+    !Array.isArray(provenance.processor)
+      ? provenance.processor
+      : null;
+  if (processor != null && "slug" in processor && typeof processor.slug === "string") {
+    return `processor:${processor.slug}`;
+  }
+
+  const benchmark =
+    typeof metadata.benchmark === "object" &&
+    metadata.benchmark !== null &&
+    !Array.isArray(metadata.benchmark)
+      ? metadata.benchmark
+      : null;
+  if (benchmark != null && "id" in benchmark && typeof benchmark.id === "string") {
+    return "benchmark-publisher";
+  }
+
+  if (typeof metadata.source === "string" && metadata.source.trim()) {
+    return metadata.source.trim();
+  }
+
+  return null;
 }
 
 function roundDiagnosticDurationMs(durationMs: number) {

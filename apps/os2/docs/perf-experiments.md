@@ -4423,3 +4423,66 @@ Current conclusion:
 - The next broader performance experiment should focus on the StreamDO/AgentDO
   derived append path and/or keeping callable RPC while reducing Stream DO
   queue pressure.
+
+## Idempotency Duplicate Attempt Detection
+
+Hypothesis:
+
+- We may have bugs where processors repeatedly append the same logical event
+  with the same idempotency key.
+- The stream hides the duplicate commit, so the visible event log can look
+  correct even if the runtime attempted the append many times.
+- Example failure shape: every visible committed event has actually been
+  attempted 10 times, but nine attempts per key returned the existing committed
+  event.
+
+Current detection:
+
+- `StreamDurableObject.append()` and `appendBatch()` call
+  `recordIdempotencyDuplicate()` whenever an input has an `idempotencyKey` that
+  already exists.
+- The duplicate path records into the DO-local SQLite table
+  `idempotency_duplicate_attempts` before returning the existing event.
+- `getDiagnostics()` exposes:
+  - `idempotencyCommittedEventCount`;
+  - `idempotencyDuplicateAttemptCount`;
+  - `idempotencyDuplicateKeyCount`;
+  - `idempotencyLogicalAppendAttemptCount`;
+  - `idempotencyDuplicateTopKeys`;
+  - `idempotencyDuplicateTopSources`;
+  - recent in-memory `idempotencyDuplicates`.
+- The server benchmark script evaluates a duplicate invariant from those
+  diagnostics. If 1000 committed idempotent events were each attempted 10 times,
+  we should see roughly 9000 duplicate attempts and a duplicate attempt ratio of
+  about `9.0`.
+
+What this already answers:
+
+- A same-key append storm should not be invisible.
+- It should appear as a high
+  `idempotencyDuplicateAttemptCount / idempotencyCommittedEventCount` ratio.
+- The top-key diagnostics should show specific idempotency keys with high
+  `duplicateAttempts`.
+- The source diagnostics should show metadata-derived culprit labels such as
+  `processor:agent-chat`, `processor:agent`, `benchmark-publisher`, or
+  `metadata.source`.
+
+Remaining diagnostic gaps:
+
+- The table does not currently record whether the duplicate attempt had the same
+  payload/metadata as the committed event. A same-key/different-payload bug
+  would be counted but not made loud enough.
+- `idempotencyDuplicateTopKeys` is bounded, so it is good for benchmark
+  invariant checks and recent debugging, but not a full forensic ledger.
+
+Next instrumentation to add:
+
+- Do not add new event fields or append API diagnostics for this.
+- Use only the existing event `metadata` object to identify append origin.
+- Read source labels from `metadata.provenance.processor.slug`,
+  `metadata.benchmark`, or `metadata.source`.
+- Store a compact attempted payload/metadata hash and record
+  `mismatchedDuplicateAttempts`.
+- Fail benchmark invariants when duplicate attempt ratio exceeds a small
+  expected allowance, and separately fail on any same-key/different-payload
+  duplicate.
