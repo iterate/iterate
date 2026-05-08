@@ -2988,3 +2988,50 @@ Validation plan:
 - Compare `scheduleRequestCount` to `setAlarmCount`.
 - Compare append latency and subscriber wait against baseline
   `agent-server-bench-1778212001534-9ff754ff`.
+
+Result:
+
+- Benchmark: `agent-server-bench-1778212312773-0ab36bd9`
+- Traffic: `1000` `agent-chat/assistant-response-added` events at `1000/s`
+- Subscriber mode: `both`
+- Duplicate invariant: passed
+  - committed idempotent events: `1023`
+  - duplicate attempts: `13`
+  - logical append attempts: `1036`
+  - unexpected duplicate attempts: `0`
+- Publish duration: `1320ms`
+- Source subscriber wait: completed in `798ms`
+- Final wait: completed in `3ms`
+- Processor wait: completed in `6ms`
+- Append latency:
+  - p50 `102ms`
+  - p90 `158ms`
+  - p99 `180ms`
+  - max `190ms`
+- Alarm diagnostics:
+  - schedule requests: `2028`
+  - `setAlarm()` calls: `10`
+  - coalesced while scheduled: `2018`
+  - coalesced while active: `0`
+  - setAlarm errors: `0`
+
+Comparison with no-coalescing baseline
+`agent-server-bench-1778212001534-9ff754ff`:
+
+- `setAlarm()` calls dropped from `2029` to `10`.
+- Source subscriber wait improved from `1057ms` to `798ms`.
+- Processor wait improved from `62ms` to `6ms`.
+- Append p50/p90/p99 improved from `131/172/285ms` to `102/158/180ms`.
+- The benchmark did not starve, unlike active-drain coalescing.
+
+Interpretation:
+
+- Scheduled-only alarm coalescing is the first alarm experiment that looks both
+  safe and beneficial under the `500` event batch-size baseline.
+- The important distinction is that it only suppresses duplicate alarms before
+  the alarm has fired. Once the alarm handler starts, new appends can schedule a
+  follow-up alarm, so later committed events are not stranded behind stale
+  in-memory assumptions.
+- This does not get self-delivery lag near zero yet. The slowest deliveries are
+  still dominated by callable subscriber dispatch time, with `500` event agent
+  batches taking `435-518ms`.
