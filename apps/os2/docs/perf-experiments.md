@@ -3484,3 +3484,171 @@ Interpretation:
 - The stream delivery path is still not at the desired `~0ms` self-delivery lag,
   but the huge delay cases are now much more strongly tied to processor work and
   state shape than to the scheduled-alarm delivery loop alone.
+
+### 2026-05-08: Compact-state stress above 1000/s
+
+Change:
+
+- Raised the debug-only `project.agents.benchmarkStream` input caps:
+  - `count`: `2000` -> `10000`
+  - `ratePerSecond`: `2000` -> `10000`
+  - `concurrency`: `100` -> `500`
+
+Blocked attempt before cap raise:
+
+- `5000` events at `5000/s`, `concurrency=500` failed request validation because
+  the previous debug benchmark caps were too low.
+
+Benchmark A:
+
+- Benchmark: `agent-server-bench-1778214198910-9f099224`
+- Traffic: `2000` `agent/status-updated` events at `2000/s`
+- Subscriber mode: `both`
+- Publisher: app worker
+
+Result:
+
+- Publish duration: `2346ms`
+- Source subscriber wait: `142ms`
+- Final subscriber wait: `4ms`
+- Processor wait: `4ms`
+- Append p50/p90/p99: `107/137/239ms`
+- Agent state stayed compact:
+  - max state JSON bytes: `2509`
+  - max input batch: `200`
+
+Benchmark B:
+
+- Benchmark: `agent-server-bench-1778214387794-9581eabc`
+- Traffic: `5000` `agent/status-updated` events at `5000/s`
+- Subscriber mode: `both`
+- Publisher: app worker
+
+Result:
+
+- Publish duration: `5803ms`
+- Source subscriber wait: `229ms`
+- Final subscriber wait: `9ms`
+- Processor wait: `5ms`
+- Append p50/p90/p99: `567/636/672ms`
+- Agent state stayed compact:
+  - max state JSON bytes: `2508`
+  - max input batch: `500`
+- Slowest Agent subscriber deliveries were large batches:
+  - `500` events: `624ms`
+  - `500` events: `588ms`
+  - `500` events: `538ms`
+  - `500` events: `514ms`
+
+Benchmark C:
+
+- Benchmark: `agent-server-bench-1778214430596-ca9726f1`
+- Traffic: `5000` `agent/status-updated` events at `5000/s`
+- Subscriber mode: `agent-only`
+- Publisher: app worker
+
+Result:
+
+- Publish duration: `6141ms`
+- Source subscriber wait: `956ms`
+- Final subscriber wait: `10ms`
+- Processor wait: `5ms`
+- Append p50/p90/p99: `589/667/726ms`
+- Slowest Agent subscriber deliveries:
+  - `500` events: `801ms`
+  - `500` events: `785ms`
+  - `500` events: `606ms`
+  - `500` events: `603ms`
+
+Benchmark D:
+
+- Benchmark: `agent-server-bench-1778214475517-3a83581f`
+- Traffic: `5000` `agent/status-updated` events at `5000/s`
+- Subscriber mode: `agent-only`
+- Publisher: AgentDurableObject
+
+Result:
+
+- Publish duration: `9006ms`
+- Source subscriber wait: `9ms`
+- Final subscriber wait: `3ms`
+- Processor wait: `3ms`
+- Append p50/p90/p99: `848/1157/1500ms`
+- Slowest Agent subscriber deliveries:
+  - `161` events: `1041ms`
+  - `448` events: `632ms`
+  - `470` events: `560ms`
+  - `482` events: `516ms`
+
+Interpretation:
+
+- Compact Agent state can keep processor cursor catch-up fast even at 5000
+  events, but publish latency climbs sharply under high concurrency to one
+  Stream DO.
+- AgentDurableObject publishing makes post-publish source wait almost disappear,
+  but publish itself becomes slower. That means the measurement is partly
+  "how much work was already processed before the publisher returned."
+- For compact-state traffic, the visible bottleneck is now large batch dispatch
+  from Stream DO to Agent DO, not Agent state size.
+- However, the Agent processor timing currently rounds many batches to `0ms`,
+  while Stream DO measures hundreds of ms for the subscriber RPC call. That gap
+  needs a no-op subscriber control.
+
+### 2026-05-08: No-op Agent subscriber isolates batch RPC cost
+
+Hypothesis:
+
+- If hundreds of milliseconds per `500` event Agent batch are mostly Workers RPC
+  serialization/scheduling, then a no-op Agent subscriber receiving the same
+  batch payload should show similar dispatch times.
+- If no-op is much faster, the overhead is inside AgentDurableObject
+  `afterAppendBatch` / stream processor hosting, even for compact-state traffic.
+
+Harness:
+
+- Added debug subscriber mode: `agent-noop-only`.
+- First implementation used RPC method `benchmarkNoopAfterAppendBatch`.
+- That was a bad harness because `external-subscriber` only uses the batch fast
+  path when `rpcMethod === "afterAppendBatch"`. The first no-op run fell back to
+  per-event delivery, timed out waiting for cursors, and was discarded except as
+  a harness lesson.
+- Fixed by passing `subscriberSlug` in the `afterAppendBatch` payload and making
+  AgentDurableObject short-circuit when the subscriber slug starts with
+  `agent-noop:`.
+
+Corrected benchmark:
+
+- Benchmark: `agent-server-bench-1778215030303-a9f3787e`
+- Traffic: `5000` `agent/status-updated` events at `5000/s`
+- Subscriber mode: `agent-noop-only`
+- Publisher: app worker
+
+Result:
+
+- Publish duration: `6433ms`
+- Source subscriber wait: `37ms`
+- Final subscriber wait: `2ms`
+- Append p50/p90/p99: `587/678/901ms`
+- No-op subscriber deliveries:
+  - delivered events: `5028`
+  - delivery calls: `14`
+  - max no-op batch dispatch: `96ms`
+  - total no-op batch dispatch: `447ms`
+  - representative `500` event batches: `30-96ms`
+
+Interpretation:
+
+- Pure Stream DO -> Agent DO batched Workers RPC with `500` small events costs
+  tens of ms, not hundreds.
+- The hundreds-of-ms real Agent subscriber deliveries are therefore not just
+  payload transfer. They are in AgentDurableObject `afterAppendBatch` or the
+  stream processor host path around it.
+- The next instrumentation should split Agent `afterAppendBatch` into:
+  - time before method body starts, if measurable from `deliveryStartedAtMs`;
+  - `ensureStarted`;
+  - filter/consume loop;
+  - cursor/state reads and writes;
+  - processor state JSON serialization and storage.
+- The no-op run also confirms that the alarm/cursor loop can catch up quickly
+  when subscriber work is truly tiny: `5000` events delivered with `37ms` source
+  wait after publish.
