@@ -2107,3 +2107,44 @@ Follow-up change:
   - `dispatchDurationMs`;
   - Agent receiver `deliveryLagMs`;
   - Agent receiver `totalDurationMs`.
+
+### 2026-05-08: dispatch split result and batch-size hypothesis
+
+Run:
+
+- Project: `proj__os__01kr2qacrgfk3rjsc1pcsqe44c`
+- Benchmark: `agent-server-bench-1778208031827-5750556c`
+- Mode: `agent-only`
+- Traffic: `1000` `agent-chat/assistant-response-added` events at `1000/s`
+- Duplicate invariant: passed
+- Duplicate attempts: `15`
+- Source subscriber wait: `1194ms`
+- Final subscriber wait: `413ms`
+- Processor wait: `74ms`
+- Append latency: p50 `73ms`, p90 `109ms`, p99 `136ms`
+
+Key delivery split:
+
+- Slowest Stream DO subscriber attempts:
+  - offset window ending `19`: `durationMs=257`,
+    `dispatchDurationMs=257`, `filterDurationMs=0`
+  - offset window ending `425`: `durationMs=203`,
+    `dispatchDurationMs=203`, `filterDurationMs=0`
+  - offset window ending `525`: `durationMs=161`,
+    `dispatchDurationMs=161`, `filterDurationMs=0`
+- Slowest retained Agent receiver timings:
+  - max `deliveryLagMs`: `466ms`
+  - max `totalDurationMs`: `206ms`
+
+Interpretation:
+
+- On the Stream DO side, JSONata/filtering is not the hot path for this run.
+- The sender-side subscriber time is essentially Worker RPC / Durable Object
+  dispatch time.
+- Current callable delivery uses `CALLABLE_SUBSCRIBER_ALARM_BATCH_SIZE = 100`.
+  At `1000` source events plus derived events, that creates many serialized
+  RPC batches even when each receiver batch is mostly cheap.
+- Next experiment: raise callable subscriber batch size from `100` to `1000`.
+  Hypothesis: fewer Worker RPC calls should reduce source subscriber wait
+  materially. Risk: a too-large batch can make one receiver invocation too
+  chunky and worsen tail latency or CPU time.
