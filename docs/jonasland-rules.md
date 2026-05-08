@@ -43,7 +43,7 @@ It's okay for errors to escape! That's what they are for if something is wrong.
 E.g.: DO NOT guess at which of several env vars you've found in the codebase is correct. DO NOT write stuff like this. Instead, ask the human which they want!
 
 ```ts
-process.env.JONASLAND_E2E_INGRESS_PROXY_DOMAIN ??
+process.env.FEATURE_SPECIFIC_INGRESS_PROXY_DOMAIN ??
   process.env.INGRESS_PROXY_DOMAIN ??
   DEFAULT_INGRESS_PROXY_DOMAIN;
 ```

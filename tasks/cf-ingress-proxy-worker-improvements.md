@@ -99,7 +99,7 @@ This passes the entire request (including upgrade headers, body stream, etc.) tr
 
 **Strategy:** All tests are E2E tests against the live worker, except unit tests for route matching logic (exact vs wildcard priority, suffix sorting, etc.).
 
-Model after the JonasLand E2E test suite.
+Keep the tests readable and focused on product behavior rather than worker internals.
 
 ### 4a. Unit tests (route matching only)
 

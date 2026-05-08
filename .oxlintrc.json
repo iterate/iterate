@@ -37,8 +37,7 @@
     "test-results/**",
     "**/evalite-export/**",
     ".tmp-ci-build*",
-    "**/*ignoreme*",
-    "**/jonasland/**"
+    "**/*ignoreme*"
   ],
   "jsPlugins": [
     "./eslint.config.js",

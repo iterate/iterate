@@ -1,6 +1,6 @@
 ---
 name: better-drizzle-migrations
-description: How we use Drizzle migrations in local SQLite apps/services like fake-os and registry. Use when changing schema.ts, generating migrations, reviewing SQL, refreshing cached schema.sql, or adding migration guardrails.
+description: How we use Drizzle migrations in local SQLite apps/services like registry. Use when changing schema.ts, generating migrations, reviewing SQL, refreshing cached schema.sql, or adding migration guardrails.
 ---
 
 # Better Drizzle Migrations
@@ -16,7 +16,6 @@ description: How we use Drizzle migrations in local SQLite apps/services like fa
 
 ## Projects using this workflow
 
-- `apps/fake-os`
 - `services/registry`
 
 These projects keep the same basic layout:

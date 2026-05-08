@@ -22,7 +22,6 @@ apps/ingress-proxy-worker/wrangler.json
 .env*
 !.env.example
 !apps/os/sandbox/home-skeleton/.iterate/.env
-!jonasland/sandbox/home-skeleton/.iterate/.env
 
 .cursor/rules
 .rules
