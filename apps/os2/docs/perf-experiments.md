@@ -2576,3 +2576,49 @@ Hypothesis:
 - Coalescing pending alarm scheduling in memory should reduce Stream DO storage
   work and append-side contention without changing ordering or delivery
   semantics.
+
+Results after deploying commit `b738ffed6` to preview slot 2 with batch size
+`1000`:
+
+`both`, `1000/s`, app-worker publisher, run 1:
+
+- Benchmark: `agent-server-bench-1778210100657-daca8323`
+- Duplicate invariant: passed
+- Duplicate attempts: `19`
+- Publish duration: `1257ms`
+- Source subscriber wait: `1839ms`
+- Final subscriber wait: `8ms`
+- Processor wait: `25ms`
+- Append latency: p50 `103ms`, p90 `144ms`, p99 `145ms`
+- Slowest deliveries:
+  - Codemode, `7` delivered events from a `12`-event window: `1061ms`
+  - Agent, `1000` delivered events: `941ms`
+  - Agent, `1000` delivered events: `849ms`
+- Alarm runs became very chunky:
+  - `1098ms` alarm run delivered `1003` events
+  - `904ms` alarm run delivered `1004` events
+  - `1061ms` alarm run delivered only `25` events
+
+`both`, `1000/s`, app-worker publisher, run 2:
+
+- Benchmark: `agent-server-bench-1778210140896-228786f2`
+- Duplicate invariant: passed
+- Duplicate attempts: `19`
+- Publish duration: `1411ms`
+- Source subscriber wait: `704ms`
+- Final subscriber wait: `8ms`
+- Processor wait: `7ms`
+- Append latency: p50 `107ms`, p90 `215ms`, p99 `225ms`
+- Slowest deliveries:
+  - Agent, `799` delivered events: `611ms`
+  - Agent, `582` delivered events: `512ms`
+  - Codemode, `1` delivered event: `329ms`
+
+Interpretation:
+
+- Coalescing alarm scheduling did not produce a clear win.
+- Run 1 was substantially worse than the non-coalesced batch-`1000` runs, and
+  run 2 was only roughly comparable.
+- The change made delivery chunkier and did not reduce Agent dispatch cost.
+- Reverted this experiment and restored batch size `500`, which is still the
+  best static baseline tested after true batch commit.
