@@ -49,6 +49,7 @@ import {
 import {
   appendAgentStreamBenchmarkTerminalEvents,
   appendAgentStreamBenchmarkTraffic,
+  isAgentStreamBenchmarkPath,
   type AgentStreamBenchmarkOptions,
 } from "~/domains/agents/agent-stream-benchmark.ts";
 
@@ -177,9 +178,11 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
             await this.ensureCodemodeSession(params);
           });
         }
-        await recordStartupStep(stepTimings, "ensure-agent-subscription", async () => {
-          await this.ensureAgentSubscription(params);
-        });
+        if (!isAgentStreamBenchmarkPath(params.agentPath)) {
+          await recordStartupStep(stepTimings, "ensure-agent-subscription", async () => {
+            await this.ensureAgentSubscription(params);
+          });
+        }
         await recordStartupStep(stepTimings, "catch-up-stream-processors", async () => {
           await this.catchUpStreamProcessors({
             signal: AbortSignal.timeout(30_000),

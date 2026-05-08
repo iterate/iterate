@@ -14,7 +14,7 @@ type TrafficKind =
   | "agent-chat-responses"
   | "agent-inputs"
   | "agent-status-updates";
-type SubscriptionTransport = "rpc" | "websocket";
+type SubscriptionTransport = "rpc" | "websocket" | "websocket-only";
 
 type Options = {
   agentPath: string;
@@ -60,7 +60,10 @@ async function main() {
     agentPath: options.agentPath,
     projectSlugOrId,
   });
-  if (options.subscriptionTransport === "websocket") {
+  if (
+    options.subscriptionTransport === "websocket" ||
+    options.subscriptionTransport === "websocket-only"
+  ) {
     await configureWebSocketSubscription({
       agentPath: options.agentPath,
       client,
@@ -604,8 +607,8 @@ function subscriptionTransportOption(
   fallback: SubscriptionTransport,
 ) {
   const value = values.get(key) ?? fallback;
-  if (value === "rpc" || value === "websocket") return value;
-  throw new Error(`--${key} must be rpc or websocket.`);
+  if (value === "rpc" || value === "websocket" || value === "websocket-only") return value;
+  throw new Error(`--${key} must be rpc, websocket, or websocket-only.`);
 }
 
 function requireProjectSlugOrId(value: string | null) {

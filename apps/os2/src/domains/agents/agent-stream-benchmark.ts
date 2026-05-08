@@ -50,6 +50,10 @@ export type AgentStreamBenchmarkSummary = {
   p99: number;
 } | null;
 
+export function isAgentStreamBenchmarkPath(agentPath: string) {
+  return agentPath.startsWith("/agents/server-bench-") || agentPath.startsWith("/agents/bench-");
+}
+
 export async function appendAgentStreamBenchmarkTraffic(input: {
   append(event: EventInput): Promise<Event>;
   options: AgentStreamBenchmarkOptions;
@@ -166,6 +170,36 @@ export function agentStreamBenchmarkWebSocketSubscriptionEvent(input: {
             mode: "replace",
           },
         },
+      },
+    },
+  } satisfies EventInput;
+}
+
+export function agentStreamBenchmarkCallableSubscriptionEvent(input: {
+  agentDurableObjectName: string;
+  agentPath: string;
+  projectId: string;
+}) {
+  const rpcMethod = "afterAppendBatch";
+  const slug = agentStreamBenchmarkSubscriptionSlug(input);
+  return {
+    type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
+    idempotencyKey: `stream-processor-callable-subscription:AGENT:${input.agentDurableObjectName}:${input.agentPath}:${slug}:${rpcMethod}`,
+    payload: {
+      slug,
+      type: "callable",
+      callable: {
+        type: "workers-rpc",
+        via: {
+          type: "env-binding",
+          bindingType: "durable-object-namespace",
+          bindingName: "AGENT",
+          durableObject: {
+            name: input.agentDurableObjectName,
+          },
+        },
+        rpcMethod,
+        argsMode: "object",
       },
     },
   } satisfies EventInput;

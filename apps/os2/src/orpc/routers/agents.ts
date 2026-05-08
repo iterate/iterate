@@ -10,12 +10,14 @@ import {
 import type { Event, EventInput, StreamPath } from "@iterate-com/shared/streams/types";
 import type { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
 import {
+  agentStreamBenchmarkCallableSubscriptionEvent,
   agentStreamBenchmarkCreatedAtGaps,
   agentStreamBenchmarkTargetOffsetByProcessor,
   agentStreamBenchmarkWebSocketSubscriptionEvent,
   appendAgentStreamBenchmarkTerminalEvents,
   appendAgentStreamBenchmarkTraffic,
   isAgentStreamBenchmarkEvent,
+  isAgentStreamBenchmarkPath,
   summarizeAgentStreamBenchmark,
   type AgentStreamBenchmarkAppendResult,
   type AgentStreamBenchmarkOptions,
@@ -144,15 +146,6 @@ export const projectAgentsRouter = {
     .handler(async ({ context, input }) => {
       const project = requireProjectScope(context);
       const benchmarkId = `agent-server-bench-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
-      const agent = await getAgentStub({
-        context,
-        agentPath: input.agentPath,
-        projectId: project.id,
-      });
-      const agentWarmupStartedAt = performance.now();
-      const initialRuntimeState = await agent.getRuntimeState();
-      const agentWarmupDurationMs = performance.now() - agentWarmupStartedAt;
-
       const stream = await getInitializedStreamStub({
         durableObjectNamespace: requireStreamNamespace(context),
         namespace: project.id,
@@ -164,7 +157,43 @@ export const projectAgentsRouter = {
         projectId: project.id,
       });
 
-      if (input.subscriptionTransport === "websocket") {
+      if (
+        input.subscriptionTransport === "websocket-only" &&
+        !isAgentStreamBenchmarkPath(input.agentPath)
+      ) {
+        throw new ORPCError("BAD_REQUEST", {
+          message:
+            "subscriptionTransport=websocket-only requires a benchmark agent path under /agents/server-bench-* or /agents/bench-*.",
+        });
+      }
+
+      const agent = await getAgentStub({
+        context,
+        agentPath: input.agentPath,
+        projectId: project.id,
+      });
+      const agentWarmupStartedAt = performance.now();
+      const initialRuntimeState = await agent.getRuntimeState();
+      const agentWarmupDurationMs = performance.now() - agentWarmupStartedAt;
+
+      if (isAgentStreamBenchmarkPath(input.agentPath)) {
+        await stream.append(
+          input.subscriptionTransport === "rpc"
+            ? agentStreamBenchmarkCallableSubscriptionEvent({
+                agentDurableObjectName,
+                agentPath: input.agentPath,
+                projectId: project.id,
+              })
+            : agentStreamBenchmarkWebSocketSubscriptionEvent({
+                agentDurableObjectName,
+                agentPath: input.agentPath,
+                projectId: project.id,
+              }),
+        );
+      } else if (
+        input.subscriptionTransport === "websocket" ||
+        input.subscriptionTransport === "websocket-only"
+      ) {
         await stream.append(
           agentStreamBenchmarkWebSocketSubscriptionEvent({
             agentDurableObjectName,
@@ -576,6 +605,13 @@ async function waitForCallableSubscriberCursors(input: {
   while (performance.now() - startedAt < 30_000) {
     lastDiagnostics = await input.stream.getDiagnostics();
     const cursors = lastDiagnostics.callableSubscriberCursors;
+    if (cursors.length === 0) {
+      return {
+        completed: false,
+        reason: "no callable subscribers",
+        waitMs: round(performance.now() - startedAt),
+      };
+    }
     if (cursors.length > 0 && cursors.every((cursor) => cursor.cursor >= input.targetOffset)) {
       return {
         completed: true,

@@ -12,7 +12,7 @@ type TrafficKind =
   | "agent-status-updates";
 type Publisher = "app-worker" | "agent-durable-object";
 type SubscriberMode = "both" | "agent-only" | "agent-noop-only" | "codemode-only";
-type SubscriptionTransport = "rpc" | "websocket";
+type SubscriptionTransport = "rpc" | "websocket" | "websocket-only";
 type OrpcClient = RouterClient<typeof appRouter>;
 
 type BenchmarkResult = {
@@ -291,8 +291,8 @@ function subscriptionTransportOption(
   fallback: SubscriptionTransport,
 ) {
   const value = values.get(key) ?? fallback;
-  if (value === "rpc" || value === "websocket") return value;
-  throw new Error(`--${key} must be rpc or websocket`);
+  if (value === "rpc" || value === "websocket" || value === "websocket-only") return value;
+  throw new Error(`--${key} must be rpc, websocket, or websocket-only`);
 }
 
 function evaluateIdempotencyDuplicateInvariant(input: {
