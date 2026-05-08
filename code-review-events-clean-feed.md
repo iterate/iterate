@@ -5,7 +5,7 @@
 ### 1. High: the reducer is crossing an unconfirmed package boundary
 
 `packages/ui/src/components/events/stream-feed.tsx` imports `@iterate-com/events-contract`, and
-`packages/ui/package.json` now depends on the events contract. Per `jonasland/RULES.md`, package
+`packages/ui/package.json` now depends on the events contract. Per `docs/jonasland-rules.md`, package
 API shape and high-level architecture should be explicitly confirmed.
 
 The reducer is domain logic: it understands event types, payload fields, stream paths, and feed item

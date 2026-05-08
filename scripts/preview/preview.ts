@@ -9,7 +9,7 @@ import {
   newStyleCloudflareApps,
   runNewStyleCloudflareAppAlchemy,
 } from "../../packages/shared/src/apps/new-style-cloudflare-apps.ts";
-import { stripAnsi } from "../../packages/shared/src/jonasland/strip-ansi.ts";
+import { stripAnsi } from "../../packages/shared/src/dev/strip-ansi.ts";
 import { runCommand } from "../../packages/shared/src/node/run-command.ts";
 import {
   CloudflarePreviewAppEntry,

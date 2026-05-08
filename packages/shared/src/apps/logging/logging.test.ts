@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { stripAnsi } from "../../jonasland/strip-ansi.ts";
+import { stripAnsi } from "../../dev/strip-ansi.ts";
 import {
   withEvlog,
   createPrettyStdoutDrain,

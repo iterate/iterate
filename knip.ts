@@ -119,23 +119,6 @@ function makeEventsCloudflareWorkspace(workerEnvShim: string): WorkspaceConfig {
   };
 }
 
-function makeNodeOnlyAppWorkspace(): WorkspaceConfig {
-  return {
-    entry: ["vite.config.ts", "scripts/start.ts", "scripts/router.ts", "src/entry.node.ts!"],
-    project: [
-      "*.test.ts",
-      "scripts/**/*.ts",
-      "src/**/*.{ts,tsx}!",
-      "!drizzle/**!",
-      "!.output/**!",
-      "!dist/**!",
-    ],
-    vite: false,
-    ignoreBinaries: ["doppler"],
-    ignoreDependencies: ["nodemon", "tailwindcss"],
-  };
-}
-
 function makePrivateContractWorkspace(): WorkspaceConfig {
   return {
     // These contract packages are private, tiny, and self-contained, so report
@@ -181,21 +164,15 @@ const config: KnipConfig = {
     "!apps/ingress-proxy-contract",
     "!apps/semaphore",
     "!apps/semaphore-contract",
-    "!apps/daemon-v2",
-    "!apps/daemon-v2-contract",
     "packages/*",
     "!packages/shared",
   ],
   ignoreIssues: {
-    // This file is generated from Fly's OpenAPI schema and intentionally emits
-    // a couple of placeholder exported types that are never imported directly.
-    "packages/shared/src/jonasland/deployment/fly-api/generated/openapi.gen.ts": ["types"],
     // TanStack Start resolves these router factories by convention from the
     // entrypoint, so there is no direct import Knip can follow.
-    "apps/daemon-v2/src/router.tsx": ["exports"],
     "apps/agents/src/router.tsx": ["exports"],
     "apps/example/src/router.tsx": ["exports"],
-    "apps/ingress-proxy-contract/src/client.ts": ["types"],
+    "apps/ingress-proxy-contract/src/client.ts": ["exports", "types"],
     "apps/semaphore-contract/src/client.ts": ["types"],
     "apps/semaphore/src/router.tsx": ["exports"],
     "apps/semaphore/scripts/seed-cloudflare-tunnel-pool.ts": ["exports"],
@@ -235,6 +212,7 @@ const config: KnipConfig = {
       "exports",
       "types",
     ],
+    "packages/shared/src/durable-object-utils/mixins/fetch-mixin-utils.ts": ["types"],
   },
   workspaces: {
     "apps/agents": makeAgentsTanStackAppWorkspace("./src/lib/worker-env.d.ts"),
@@ -247,8 +225,6 @@ const config: KnipConfig = {
     "apps/ingress-proxy-contract": makePrivateContractWorkspace(),
     "apps/semaphore": makeCloudflareTanStackAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/semaphore-contract": makePrivateContractWorkspace(),
-    "apps/daemon-v2": makeNodeOnlyAppWorkspace(),
-    "apps/daemon-v2-contract": makePrivateContractWorkspace(),
     "packages/shared": makeSharedWorkspace(),
   },
 };

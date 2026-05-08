@@ -1,6 +1,6 @@
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
-import { markdownAnnotator } from "../../packages/shared/src/jonasland/markdown-annotator.ts";
+import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annotator.ts";
 import { splitRepositoryFullName } from "./repository-full-name.ts";
 
 const cloudflarePreviewSectionLabel = "CLOUDFLARE_PREVIEW";

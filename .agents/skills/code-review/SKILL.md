@@ -8,7 +8,7 @@ publish: false
 
 You need to 1) check the compliance of a set of code changes with the given rules and 2) propose refactors and solutions for them.
 
-The rules are in jonasland/RULES.md
+The rules are in docs/jonasland-rules.md
 
 ## Workflow
 

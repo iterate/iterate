@@ -2,8 +2,8 @@
 
 This is the current concise authoring guide for the processor abstraction we are still proving out.
 
-This guide sits underneath [jonasland/RULES.md](../../../jonasland/RULES.md).
-Those repo-wide rules still apply here: put the most important thing at the top,
+Read this alongside [repo-wide review rules](../../../docs/jonasland-rules.md).
+Those rules still apply here: put the most important thing at the top,
 write invisible TypeScript, do not declare infrequently used aliases, and only
 extract abstractions that are easy to explain.
 
