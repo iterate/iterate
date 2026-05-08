@@ -249,9 +249,10 @@ export const projectAgentsRouter = {
           : await waitForProcessorCursors({
               agent,
               agentPath: input.agentPath,
-              targetOffsetByProcessor: agentStreamBenchmarkTargetOffsetByProcessor(
-                published.terminal,
-              ),
+              targetOffsetByProcessor: agentStreamBenchmarkTargetOffsetByProcessor([
+                ...published.appended,
+                ...published.terminal,
+              ]),
             });
       const history = await stream.history({ after: "start" });
       const benchmarkEvents = history.filter((event) =>
