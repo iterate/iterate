@@ -10,19 +10,19 @@ import { AgentProcessorContract } from "../agent/contract.ts";
 import { buildProcessorRegisteredEvent } from "../core/contract.ts";
 import {
   CODEMODE_PRIMER_IDEMPOTENCY_KEY,
-  CodemodeProcessorContract,
+  LegacyCodemodeProcessorContract,
   reduceCodemodeEvents,
-  type CodemodeState,
+  type LegacyCodemodeState,
 } from "./contract.ts";
 import {
-  createCodemodeProcessor,
+  createLegacyCodemodeProcessor,
   extractCodemodeScriptFromAssistantResponse,
 } from "./implementation.ts";
 
-describe("createCodemodeProcessor", () => {
+describe("createLegacyCodemodeProcessor", () => {
   it("appends the exactly-once primer and extracts assistant codemode blocks", async () => {
     const appended: StreamEventInput[] = [];
-    const processor = createCodemodeProcessor({
+    const processor = createLegacyCodemodeProcessor({
       codeExecutor: async () => ({ result: { ok: true } }),
       env: {},
     });
@@ -52,7 +52,7 @@ describe("createCodemodeProcessor", () => {
       },
       {
         type: "events.iterate.com/codemode/block-added",
-        idempotencyKey: "codemode/assistant-output-to-block@5",
+        idempotencyKey: "legacy-codemode/assistant-output-to-block@5",
         payload: {
           script: "async () => {\n  return 1;\n}",
         },
@@ -62,7 +62,7 @@ describe("createCodemodeProcessor", () => {
 
   it("uses embedded agent dependency state before appending idle status", async () => {
     const appended: StreamEventInput[] = [];
-    const processor = createCodemodeProcessor({
+    const processor = createLegacyCodemodeProcessor({
       codeExecutor: async () => ({ result: { ok: true } }),
       env: {},
     });
@@ -89,7 +89,7 @@ describe("createCodemodeProcessor", () => {
 
     expect(appended.at(-1)).toEqual({
       type: "events.iterate.com/agent/status-updated",
-      idempotencyKey: "codemode/codemode-result-to-idle-status@9",
+      idempotencyKey: "legacy-codemode/codemode-result-to-idle-status@9",
       payload: {
         status: "idle",
         reason: "codemode-result-added",
@@ -101,7 +101,7 @@ describe("createCodemodeProcessor", () => {
     const appended: StreamEventInput[] = [];
     const executorCalls: { script: string; toolProviderCount: number }[] = [];
     let webchatResult: unknown = "unset";
-    const processor = createCodemodeProcessor({
+    const processor = createLegacyCodemodeProcessor({
       codeExecutor: async ({ script, toolProviders, webchat }) => {
         executorCalls.push({ script, toolProviderCount: toolProviders.length });
         webchatResult = await webchat.callTool({
@@ -137,12 +137,12 @@ describe("createCodemodeProcessor", () => {
     expect(appended).toEqual([
       {
         type: "events.iterate.com/agent-chat/assistant-response-added",
-        idempotencyKey: "codemode/webchat-send-message/1@12",
+        idempotencyKey: "legacy-codemode/webchat-send-message/1@12",
         payload: { channel: "web", message: "hello from fake executor" },
       },
       {
         type: "events.iterate.com/codemode/result-added",
-        idempotencyKey: "codemode/block-to-result@12",
+        idempotencyKey: "legacy-codemode/block-to-result@12",
         payload: {
           result: { ok: true },
           durationMs: expect.any(Number),
@@ -160,7 +160,7 @@ describe("createCodemodeProcessor", () => {
 
   it("does not show successful undefined results to the agent", async () => {
     const appended: StreamEventInput[] = [];
-    const processor = createCodemodeProcessor({
+    const processor = createLegacyCodemodeProcessor({
       codeExecutor: async () => ({ result: undefined }),
       env: {},
     });
@@ -184,7 +184,7 @@ describe("createCodemodeProcessor", () => {
 
   it.each([null, false, 0, ""])("continues for explicit falsy result %j", async (result) => {
     const appended: StreamEventInput[] = [];
-    const processor = createCodemodeProcessor({
+    const processor = createLegacyCodemodeProcessor({
       codeExecutor: async () => ({ result }),
       env: {},
     });
@@ -213,7 +213,7 @@ describe("createCodemodeProcessor", () => {
 
   it("requests one final wrap-up when continuation budget is exhausted", async () => {
     const appended: StreamEventInput[] = [];
-    const processor = createCodemodeProcessor({
+    const processor = createLegacyCodemodeProcessor({
       codeExecutor: async () => ({ result: "done" }),
       env: {},
     });
@@ -253,9 +253,9 @@ function registeredState(args: {
   hasAppendedCodemodePrompt: boolean;
   automaticContinuationsUsed?: number;
   finalWrapUpRequested?: boolean;
-}): CodemodeState {
+}): LegacyCodemodeState {
   return {
-    ...getInitialProcessorState(CodemodeProcessorContract),
+    ...getInitialProcessorState(LegacyCodemodeProcessorContract),
     hasRegisteredCurrentVersion: true,
     hasAppendedCodemodePrompt: args.hasAppendedCodemodePrompt,
     automaticContinuationsUsed: args.automaticContinuationsUsed ?? 0,
@@ -266,7 +266,7 @@ function registeredState(args: {
 function testStreamApi(args: {
   appended: StreamEventInput[];
   storedEvents: StreamEvent[];
-}): ProcessorStreamApi<typeof CodemodeProcessorContract> {
+}): ProcessorStreamApi<typeof LegacyCodemodeProcessorContract> {
   return {
     append: async ({ event }) => {
       args.appended.push(event);
@@ -277,7 +277,9 @@ function testStreamApi(args: {
   };
 }
 
-function consumedCodemodeEvent<T extends ConsumedEvent<typeof CodemodeProcessorContract>>(args: {
+function consumedCodemodeEvent<
+  T extends ConsumedEvent<typeof LegacyCodemodeProcessorContract>,
+>(args: {
   type: T["type"];
   payload: T["payload"];
   metadata?: Record<string, unknown>;

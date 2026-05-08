@@ -5,13 +5,13 @@ import { AgentProcessorContract } from "../agent/contract.ts";
 import { buildProcessorRegisteredEvent } from "../core/contract.ts";
 import {
   CODEMODE_PRIMER_IDEMPOTENCY_KEY,
-  CodemodeProcessorContract,
+  LegacyCodemodeProcessorContract,
   reduceCodemodeEvents,
 } from "./contract.ts";
 
-describe("CodemodeProcessorContract", () => {
+describe("LegacyCodemodeProcessorContract", () => {
   it("initializes separate frontend-safe reduced state", () => {
-    expect(getInitialProcessorState(CodemodeProcessorContract)).toEqual({
+    expect(getInitialProcessorState(LegacyCodemodeProcessorContract)).toEqual({
       hasRegisteredCurrentVersion: false,
       agentProcessor: getInitialProcessorState(AgentProcessorContract),
       hasAppendedCodemodePrompt: false,
@@ -25,7 +25,9 @@ describe("CodemodeProcessorContract", () => {
     expect(
       reduceCodemodeEvents({
         events: [
-          committedEvent(buildProcessorRegisteredEvent({ contract: CodemodeProcessorContract })),
+          committedEvent(
+            buildProcessorRegisteredEvent({ contract: LegacyCodemodeProcessorContract }),
+          ),
         ],
       }).hasRegisteredCurrentVersion,
     ).toBe(true);
@@ -126,7 +128,7 @@ describe("CodemodeProcessorContract", () => {
   });
 
   it("tracks continuation budget from codemode results and external turns", () => {
-    const state = getInitialProcessorState(CodemodeProcessorContract);
+    const state = getInitialProcessorState(LegacyCodemodeProcessorContract);
 
     const spent = reduceCodemodeEvents({
       state,

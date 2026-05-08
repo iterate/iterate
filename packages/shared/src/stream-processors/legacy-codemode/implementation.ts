@@ -15,9 +15,9 @@ import {
   CODEMODE_PRIMER_TEXT,
   CODEMODE_PRIMER_IDEMPOTENCY_KEY,
   CODEMODE_WEBCHAT_PROVIDER_TYPES,
-  CodemodeProcessorContract,
+  LegacyCodemodeProcessorContract,
   codemodeResultNeedsAgentTurn,
-  type CodemodeState,
+  type LegacyCodemodeState,
 } from "./contract.ts";
 import type { CodemodeCodeExecutor } from "./code-executor.ts";
 
@@ -27,10 +27,10 @@ const ProviderTypesResponse = z.object({
 
 const CODEMODE_FENCE_RE = /^```(?:js|javascript|codemode|ts|typescript)\s*\n([\s\S]*?)\n```\s*$/;
 
-type CodemodeStreamApi = ProcessorStreamApi<typeof CodemodeProcessorContract>;
-type CodemodeConsumedEvent = ConsumedEvent<typeof CodemodeProcessorContract>;
+type LegacyCodemodeStreamApi = ProcessorStreamApi<typeof LegacyCodemodeProcessorContract>;
+type LegacyCodemodeConsumedEvent = ConsumedEvent<typeof LegacyCodemodeProcessorContract>;
 
-export type CodemodeProcessorDeps = {
+export type LegacyCodemodeProcessorDeps = {
   codeExecutor: CodemodeCodeExecutor;
   env: Record<string, unknown>;
 };
@@ -40,15 +40,15 @@ type ToolProviderTypesResult =
   | { kind: "missing" }
   | { kind: "error"; message: string };
 
-export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
-  return implementProcessor(CodemodeProcessorContract, {
+export function createLegacyCodemodeProcessor(deps: LegacyCodemodeProcessorDeps) {
+  return implementProcessor(LegacyCodemodeProcessorContract, {
     firstAttachAfterAppend: { mode: "lookback", milliseconds: 250 },
 
     async afterAppend({ event, previousState, state, streamApi, signal }) {
       // Standard processor behavior is just another side effect Codemode wants
       // to run before its event-specific side effects.
       await standardProcessorBehavior.afterAppend({
-        contract: CodemodeProcessorContract,
+        contract: LegacyCodemodeProcessorContract,
         state,
         streamApi,
       });
@@ -78,7 +78,7 @@ export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
             event: {
               type: "events.iterate.com/codemode/block-added",
               idempotencyKey: buildProcessorIdempotencyKey({
-                processor: CodemodeProcessorContract,
+                processor: LegacyCodemodeProcessorContract,
                 key: "assistant-output-to-block",
                 sourceEvent: event,
               }),
@@ -112,7 +112,7 @@ export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
             event: {
               type: "events.iterate.com/agent/input-added",
               idempotencyKey: buildProcessorIdempotencyKey({
-                processor: CodemodeProcessorContract,
+                processor: LegacyCodemodeProcessorContract,
                 key: "tool-provider-explainer",
                 sourceEvent: event,
               }),
@@ -147,8 +147,8 @@ export function parseWebchatSendMessageArgs(rawArgs: unknown): { message: string
 }
 
 async function appendCodemodePrimerIfNeeded(args: {
-  state: CodemodeState;
-  streamApi: CodemodeStreamApi;
+  state: LegacyCodemodeState;
+  streamApi: LegacyCodemodeStreamApi;
 }) {
   if (args.state.hasAppendedCodemodePrompt) return;
 
@@ -165,11 +165,11 @@ async function appendCodemodePrimerIfNeeded(args: {
 }
 
 async function executeCodemodeBlock(args: {
-  deps: CodemodeProcessorDeps;
-  event: Extract<CodemodeConsumedEvent, { type: "events.iterate.com/codemode/block-added" }>;
+  deps: LegacyCodemodeProcessorDeps;
+  event: Extract<LegacyCodemodeConsumedEvent, { type: "events.iterate.com/codemode/block-added" }>;
   signal: AbortSignal;
-  state: CodemodeState;
-  streamApi: CodemodeStreamApi;
+  state: LegacyCodemodeState;
+  streamApi: LegacyCodemodeStreamApi;
 }) {
   const toolProviders = await Promise.all(
     Object.entries(args.state.toolProviders).map(async ([slug, config]) => {
@@ -205,7 +205,7 @@ async function executeCodemodeBlock(args: {
           event: {
             type: "events.iterate.com/agent-chat/assistant-response-added",
             idempotencyKey: buildProcessorIdempotencyKey({
-              processor: CodemodeProcessorContract,
+              processor: LegacyCodemodeProcessorContract,
               key: `webchat-send-message/${webchatMessageSeq}`,
               sourceEvent: args.event,
             }),
@@ -221,7 +221,7 @@ async function executeCodemodeBlock(args: {
     event: {
       type: "events.iterate.com/codemode/result-added",
       idempotencyKey: buildProcessorIdempotencyKey({
-        processor: CodemodeProcessorContract,
+        processor: LegacyCodemodeProcessorContract,
         key: "block-to-result",
         sourceEvent: args.event,
       }),
@@ -236,8 +236,8 @@ async function executeCodemodeBlock(args: {
 }
 
 async function appendCodemodeResultAsAgentInput(args: {
-  event: Extract<CodemodeConsumedEvent, { type: "events.iterate.com/codemode/result-added" }>;
-  streamApi: CodemodeStreamApi;
+  event: Extract<LegacyCodemodeConsumedEvent, { type: "events.iterate.com/codemode/result-added" }>;
+  streamApi: LegacyCodemodeStreamApi;
   key: string;
   intro?: string;
 }) {
@@ -245,7 +245,7 @@ async function appendCodemodeResultAsAgentInput(args: {
     event: {
       type: "events.iterate.com/agent/input-added",
       idempotencyKey: buildProcessorIdempotencyKey({
-        processor: CodemodeProcessorContract,
+        processor: LegacyCodemodeProcessorContract,
         key: args.key,
         sourceEvent: args.event,
       }),
@@ -279,9 +279,9 @@ async function appendCodemodeResultAsAgentInput(args: {
 }
 
 async function appendCodemodeResultFollowUp(args: {
-  event: Extract<CodemodeConsumedEvent, { type: "events.iterate.com/codemode/result-added" }>;
-  previousState: CodemodeState;
-  streamApi: CodemodeStreamApi;
+  event: Extract<LegacyCodemodeConsumedEvent, { type: "events.iterate.com/codemode/result-added" }>;
+  previousState: LegacyCodemodeState;
+  streamApi: LegacyCodemodeStreamApi;
 }) {
   if (!codemodeResultNeedsAgentTurn(args.event.payload)) return;
   // The reducer has already spent budget in `state`; previousState is the
@@ -312,9 +312,9 @@ async function appendCodemodeResultFollowUp(args: {
  * embedded state.
  */
 async function appendIdleStatusIfAgentIsQuiescent(args: {
-  event: Extract<CodemodeConsumedEvent, { type: "events.iterate.com/codemode/result-added" }>;
-  state: CodemodeState;
-  streamApi: CodemodeStreamApi;
+  event: Extract<LegacyCodemodeConsumedEvent, { type: "events.iterate.com/codemode/result-added" }>;
+  state: LegacyCodemodeState;
+  streamApi: LegacyCodemodeStreamApi;
 }) {
   if (args.state.agentProcessor.currentRequest != null) return;
   if (args.state.agentProcessor.pendingTriggerCount > 0) return;
@@ -323,7 +323,7 @@ async function appendIdleStatusIfAgentIsQuiescent(args: {
     event: {
       type: "events.iterate.com/agent/status-updated",
       idempotencyKey: buildProcessorIdempotencyKey({
-        processor: CodemodeProcessorContract,
+        processor: LegacyCodemodeProcessorContract,
         key: "codemode-result-to-idle-status",
         sourceEvent: args.event,
       }),

@@ -1,6 +1,6 @@
 import type { StreamProcessorRunnerState } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor-runner";
-import { CodemodeProcessorContract } from "@iterate-com/shared/stream-processors/legacy-codemode/contract";
-import { createCodemodeProcessor } from "@iterate-com/shared/stream-processors/legacy-codemode/implementation";
+import { LegacyCodemodeProcessorContract } from "@iterate-com/shared/stream-processors/legacy-codemode/contract";
+import { createLegacyCodemodeProcessor } from "@iterate-com/shared/stream-processors/legacy-codemode/implementation";
 import {
   createStreamProcessorRunnerDurableObject,
   type StreamProcessorRunnerName,
@@ -12,7 +12,7 @@ export type CodemodeStreamProcessorRunnerName = StreamProcessorRunnerName;
 const CodemodeStreamProcessorRunnerBase = createStreamProcessorRunnerDurableObject({
   className: "CodemodeStreamProcessorRunner",
   processor(args) {
-    return createCodemodeProcessor({
+    return createLegacyCodemodeProcessor({
       codeExecutor: createCloudflareCodemodeCodeExecutor({
         loader: args.env.LOADER,
         outboundFetch: args.env.CODEMODE_OUTBOUND_FETCH,
@@ -23,7 +23,7 @@ const CodemodeStreamProcessorRunnerBase = createStreamProcessorRunnerDurableObje
 });
 
 export type CodemodeStreamProcessorRunnerState = StreamProcessorRunnerState<
-  typeof CodemodeProcessorContract
+  typeof LegacyCodemodeProcessorContract
 >;
 
 export class CodemodeStreamProcessorRunner extends CodemodeStreamProcessorRunnerBase {}
