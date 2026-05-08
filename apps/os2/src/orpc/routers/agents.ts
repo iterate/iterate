@@ -361,6 +361,13 @@ type BenchmarkStreamStub = {
       parseDurationMs: number;
       totalDurationMs: number;
     }>;
+    callableSubscriberAlarmDiagnostic: {
+      coalescedWhileActiveCount: number;
+      coalescedWhileScheduledCount: number;
+      scheduleRequestCount: number;
+      setAlarmCount: number;
+      setAlarmErrorCount: number;
+    };
     callableSubscriberDeliveries: Array<{
       batchIterations: number;
       completedAtMs: number;

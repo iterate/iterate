@@ -2798,3 +2798,53 @@ Updated interpretation:
   operations under high-rate individual appends. This supports the hypothesis
   that we need a single ongoing alarm-originated delivery loop with per-subscriber
   queues, rather than treating alarm scheduling as a cheap per-append action.
+
+### 2026-05-08: suppress callable delivery alarms while a drain is active
+
+Hypothesis:
+
+- The earlier coalescing experiment only skipped duplicate `setAlarm()` calls
+  while an alarm had been scheduled but had not fired yet.
+- It did not skip `setAlarm()` calls made while an alarm-originated callable
+  subscriber drain was already active.
+- Under high-rate individual appends, appends can race with an active drain and
+  schedule more alarms even though the active drain already has the
+  `this.state.eventCount > targetEventCount` reschedule check.
+- If this is part of the bottleneck, suppressing schedules while active should
+  reduce `durable_object_storage_setAlarm` spans and should not hurt ordering,
+  because the drain loop still uses persistent subscriber cursors and reschedules
+  if new events are committed after its initial target.
+
+Change under test:
+
+- Add two in-memory Stream DO booleans:
+  - `callableSubscriberDeliveryAlarmScheduled`
+  - `callableSubscriberDeliveryActive`
+- `scheduleCallableSubscriberDelivery()` now:
+  - records every scheduling request;
+  - coalesces if an alarm is already scheduled;
+  - coalesces if a callable delivery drain is already active;
+  - otherwise calls `ctx.storage.setAlarm(Date.now())`.
+- `alarm()` clears the scheduled flag, marks delivery active around
+  `drainCallableSubscriberDelivery()`, then clears the active flag in `finally`.
+- `getDiagnostics()` now exposes:
+  - `scheduleRequestCount`
+  - `setAlarmCount`
+  - `setAlarmErrorCount`
+  - `coalescedWhileScheduledCount`
+  - `coalescedWhileActiveCount`
+
+Validation plan:
+
+- Run the same server benchmark:
+  `agent-chat-responses`, `count=1000`, `rate=1000`, `concurrency=100`,
+  `subscriber-mode=both`.
+- Compare:
+  - source subscriber wait;
+  - final subscriber wait;
+  - append p50/p90/p99;
+  - Agent dispatch batches;
+  - duplicate invariant;
+  - callable alarm diagnostic counters;
+  - Cloudflare trace span count and sampled `durable_object_storage_setAlarm`
+    count.

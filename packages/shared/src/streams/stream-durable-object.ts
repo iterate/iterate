@@ -129,6 +129,14 @@ type AppendBatchDiagnostic = {
   totalDurationMs: number;
 };
 
+type CallableSubscriberAlarmDiagnostic = {
+  coalescedWhileActiveCount: number;
+  coalescedWhileScheduledCount: number;
+  setAlarmCount: number;
+  setAlarmErrorCount: number;
+  scheduleRequestCount: number;
+};
+
 const StreamDurableObjectLifecycleBase = withD1ObjectCatalog<
   StreamDurableObjectStructuredName,
   Pick<StreamDurableObjectEnv, "DO_CATALOG">
@@ -177,8 +185,17 @@ const StreamDurableObjectBase = withPublicFetchRoute({
  */
 export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableObjectEnv> {
   private _state: StreamState | null = null;
+  private callableSubscriberDeliveryActive = false;
+  private callableSubscriberDeliveryAlarmScheduled = false;
   private readonly client: SyncClient;
   private readonly appendBatchDiagnostics: AppendBatchDiagnostic[] = [];
+  private readonly callableSubscriberAlarmDiagnostic: CallableSubscriberAlarmDiagnostic = {
+    coalescedWhileActiveCount: 0,
+    coalescedWhileScheduledCount: 0,
+    setAlarmCount: 0,
+    setAlarmErrorCount: 0,
+    scheduleRequestCount: 0,
+  };
   private readonly callableSubscriberDeliveries: CallableSubscriberDeliveryDiagnostic[] = [];
   private readonly idempotencyDuplicates = new Map<string, IdempotencyDuplicateDiagnostic>();
   private readonly subscribers = new Set<ReadableStreamDefaultController<Uint8Array>>();
@@ -598,11 +615,17 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
   }
 
   async alarm() {
+    this.callableSubscriberDeliveryAlarmScheduled = false;
     if (this._state == null && !this.hydratePersistedStreamState({ appendWakeEvent: false })) {
       return;
     }
 
-    await this.drainCallableSubscriberDelivery();
+    this.callableSubscriberDeliveryActive = true;
+    try {
+      await this.drainCallableSubscriberDelivery();
+    } finally {
+      this.callableSubscriberDeliveryActive = false;
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -654,6 +677,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
         (left, right) => right.lastDuplicateAtMs - left.lastDuplicateAtMs,
       ),
       appendBatchDiagnostics: this.appendBatchDiagnostics.toReversed(),
+      callableSubscriberAlarmDiagnostic: this.callableSubscriberAlarmDiagnostic,
       callableSubscriberDeliveries: this.callableSubscriberDeliveries.toReversed(),
     };
   }
@@ -858,7 +882,27 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
   }
 
   private async scheduleCallableSubscriberDelivery() {
-    await this.ctx.storage.setAlarm(Date.now());
+    this.callableSubscriberAlarmDiagnostic.scheduleRequestCount += 1;
+
+    if (this.callableSubscriberDeliveryActive) {
+      this.callableSubscriberAlarmDiagnostic.coalescedWhileActiveCount += 1;
+      return;
+    }
+
+    if (this.callableSubscriberDeliveryAlarmScheduled) {
+      this.callableSubscriberAlarmDiagnostic.coalescedWhileScheduledCount += 1;
+      return;
+    }
+
+    this.callableSubscriberDeliveryAlarmScheduled = true;
+    try {
+      await this.ctx.storage.setAlarm(Date.now());
+      this.callableSubscriberAlarmDiagnostic.setAlarmCount += 1;
+    } catch (error) {
+      this.callableSubscriberDeliveryAlarmScheduled = false;
+      this.callableSubscriberAlarmDiagnostic.setAlarmErrorCount += 1;
+      throw error;
+    }
   }
 
   private async drainCallableSubscriberDelivery() {
