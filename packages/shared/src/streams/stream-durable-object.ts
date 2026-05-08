@@ -13,6 +13,7 @@ import {
   type DestroyStreamResult,
   Event,
   EventInput,
+  type ExternalSubscriber,
   STREAM_CHILD_STREAM_CREATED_TYPE,
   STREAM_DURABLE_OBJECT_WOKE_UP_TYPE,
   STREAM_ERROR_OCCURRED_TYPE,
@@ -42,7 +43,6 @@ import {
 } from "./db/queries/.generated/index.ts";
 import {
   externalSubscriberProcessor,
-  hasExternalSubscribersOfType,
   publishExternalSubscriberBatch,
   publishExternalSubscribers,
   resetSubscriberSocketsForStream,
@@ -66,11 +66,17 @@ type StreamDurableObjectEnv = {
 } & Record<string, unknown>;
 
 const CALLABLE_SUBSCRIBER_CURSOR_KEY_PREFIX = "stream-do:callable-subscriber-cursor";
-const CALLABLE_SUBSCRIBER_ALARM_BATCH_SIZE = 250;
+const CALLABLE_SUBSCRIBER_ALARM_BATCH_SIZE = 500;
 const CALLABLE_SUBSCRIBER_ALARM_MAX_BATCHES = 50;
 const CALLABLE_SUBSCRIBER_DIAGNOSTIC_LIMIT = 20;
 const APPEND_BATCH_DIAGNOSTIC_LIMIT = 20;
-const NON_CALLABLE_SUBSCRIBERS = new Set(["webhook", "websocket"] as const);
+const IMMEDIATE_EXTERNAL_SUBSCRIBERS: ReadonlySet<ExternalSubscriber["type"]> = new Set([
+  "webhook",
+]);
+const ALARM_DELIVERED_EXTERNAL_SUBSCRIBERS: ReadonlySet<ExternalSubscriber["type"]> = new Set([
+  "callable",
+  "websocket",
+]);
 const IDEMPOTENCY_DIAGNOSTIC_LIMIT = 50;
 
 type IdempotencyDuplicateDiagnostic = {
@@ -578,7 +584,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
       },
       event,
       processors: this.state.processors,
-      subscriberTypes: NON_CALLABLE_SUBSCRIBERS,
+      subscriberTypes: IMMEDIATE_EXTERNAL_SUBSCRIBERS,
       onExternalSubscriberError: (failure) => {
         this.appendExternalSubscriberDeliveryError(failure);
       },
@@ -642,13 +648,13 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
       duplicate_attempt_count: 0,
       duplicate_key_count: 0,
     };
-    const callableSubscribers = Object.values(
+    const alarmDeliveredSubscribers = Object.values(
       this.state.processors["external-subscriber"].subscribersBySlug,
-    ).filter((subscriber) => subscriber.type === "callable");
+    ).filter((subscriber) => ALARM_DELIVERED_EXTERNAL_SUBSCRIBERS.has(subscriber.type));
 
     return {
       callableSubscriberCursors: await Promise.all(
-        callableSubscribers.map(async (subscriber) => ({
+        alarmDeliveredSubscribers.map(async (subscriber) => ({
           cursor: await this.readCallableSubscriberCursor(subscriber.slug),
           subscriberSlug: subscriber.slug,
         })),
@@ -846,7 +852,9 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
       return false;
     }
 
-    return hasExternalSubscribersOfType(this.state.processors["external-subscriber"], "callable");
+    return Object.values(this.state.processors["external-subscriber"].subscribersBySlug).some(
+      (subscriber) => ALARM_DELIVERED_EXTERNAL_SUBSCRIBERS.has(subscriber.type),
+    );
   }
 
   private recordIdempotencyDuplicate(args: {
@@ -960,7 +968,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
         diagnostic.batchIterations += 1;
         const subscribers = Object.values(
           this.state.processors["external-subscriber"].subscribersBySlug,
-        ).filter((subscriber) => subscriber.type === "callable");
+        ).filter((subscriber) => ALARM_DELIVERED_EXTERNAL_SUBSCRIBERS.has(subscriber.type));
         diagnostic.subscriberCheckCount += subscribers.length;
         if (subscribers.length === 0) {
           finish();
