@@ -149,7 +149,9 @@ export const projectAgentsRouter = {
         agentPath: input.agentPath,
         projectId: project.id,
       });
-      await agent.getRuntimeState();
+      const agentWarmupStartedAt = performance.now();
+      const initialRuntimeState = await agent.getRuntimeState();
+      const agentWarmupDurationMs = performance.now() - agentWarmupStartedAt;
 
       const stream = await getInitializedStreamStub({
         durableObjectNamespace: requireStreamNamespace(context),
@@ -238,6 +240,8 @@ export const projectAgentsRouter = {
 
       return {
         benchmarkId,
+        agentWarmupDurationMs: round(agentWarmupDurationMs),
+        initialRuntimeState,
         publisher: input.publisher,
         subscriberMode: input.subscriberMode,
         subscriptionTransport: input.subscriptionTransport,

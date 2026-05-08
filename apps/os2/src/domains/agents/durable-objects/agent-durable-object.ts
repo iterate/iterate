@@ -104,6 +104,18 @@ type AgentAfterAppendBatchTiming = {
   totalDurationMs: number;
 };
 
+type AgentStartupTiming = {
+  completedAtMs: number;
+  errorMessage?: string;
+  startedAtMs: number;
+  stepTimings: Array<{
+    durationMs: number;
+    step: string;
+  }>;
+  streamPath: StreamPath;
+  totalDurationMs: number;
+};
+
 const AgentLifecycleBase = createIterateDurableObjectBase<
   typeof AgentDurableObjectStructuredName,
   Pick<AgentDurableObjectEnv, "DO_CATALOG">
@@ -129,30 +141,69 @@ const AgentBase = withStreamProcessor<AgentDurableObjectStructuredName, AgentDur
 
 export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
   private readonly afterAppendBatchTimings: AgentAfterAppendBatchTiming[] = [];
+  private lastStartupTiming: AgentStartupTiming | undefined;
 
   constructor(ctx: DurableObjectState, env: AgentDurableObjectEnv) {
     super(ctx, env);
 
     this.registerOnInstanceWake(async (params) => {
-      if (params.agentPath === AGENTS_STREAM_PATH) {
-        this.registerStreamProcessor(createJsonataReactorProcessor());
-      } else {
-        await this.ensureAgentSetupEvents(params);
-        const llmProvider = await this.resolveLlmProvider(params);
-        this.registerStreamProcessor(createAgentChatProcessor());
-        this.registerStreamProcessor(
-          createAgentProcessor({
-            waitUntil: (promise) => this.waitUntilStreamProcessor(promise),
-          }),
-        );
-        this.registerStreamProcessor(this.createLlmProcessor(llmProvider));
-        await this.ensureCodemodeSession(params);
+      const startedAt = performance.now();
+      const startedAtMs = Date.now();
+      const stepTimings: AgentStartupTiming["stepTimings"] = [];
+      try {
+        if (params.agentPath === AGENTS_STREAM_PATH) {
+          await recordStartupStep(stepTimings, "register-jsonata-reactor", () => {
+            this.registerStreamProcessor(createJsonataReactorProcessor());
+          });
+        } else {
+          await recordStartupStep(stepTimings, "ensure-agent-setup-events", async () => {
+            await this.ensureAgentSetupEvents(params);
+          });
+          const llmProvider = await recordStartupStep(
+            stepTimings,
+            "resolve-llm-provider",
+            async () => await this.resolveLlmProvider(params),
+          );
+          await recordStartupStep(stepTimings, "register-agent-processors", () => {
+            this.registerStreamProcessor(createAgentChatProcessor());
+            this.registerStreamProcessor(
+              createAgentProcessor({
+                waitUntil: (promise) => this.waitUntilStreamProcessor(promise),
+              }),
+            );
+            this.registerStreamProcessor(this.createLlmProcessor(llmProvider));
+          });
+          await recordStartupStep(stepTimings, "ensure-codemode-session", async () => {
+            await this.ensureCodemodeSession(params);
+          });
+        }
+        await recordStartupStep(stepTimings, "ensure-agent-subscription", async () => {
+          await this.ensureAgentSubscription(params);
+        });
+        await recordStartupStep(stepTimings, "catch-up-stream-processors", async () => {
+          await this.catchUpStreamProcessors({
+            signal: AbortSignal.timeout(30_000),
+            streamPath: params.agentPath,
+          });
+        });
+      } catch (error) {
+        this.lastStartupTiming = {
+          completedAtMs: Date.now(),
+          errorMessage: error instanceof Error ? error.message : String(error),
+          startedAtMs,
+          stepTimings,
+          streamPath: params.agentPath,
+          totalDurationMs: roundDurationMs(performance.now() - startedAt),
+        };
+        throw error;
       }
-      await this.ensureAgentSubscription(params);
-      await this.catchUpStreamProcessors({
-        signal: AbortSignal.timeout(30_000),
+      this.lastStartupTiming = {
+        completedAtMs: Date.now(),
+        startedAtMs,
+        stepTimings,
         streamPath: params.agentPath,
-      });
+        totalDurationMs: roundDurationMs(performance.now() - startedAt),
+      };
     });
   }
 
@@ -218,6 +269,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     await this.ensureStarted();
     return {
       ...this.getStreamProcessorRuntimeState(),
+      lastStartupTiming: this.lastStartupTiming,
       lastAfterAppendBatchTimings: [...this.afterAppendBatchTimings],
     };
   }
@@ -573,6 +625,26 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
 
 function normalizeIdempotencyKeyPart(value: string) {
   return value.replace(/[^a-zA-Z0-9._/-]+/g, "-");
+}
+
+async function recordStartupStep<T>(
+  timings: AgentStartupTiming["stepTimings"],
+  step: string,
+  task: () => Promise<T> | T,
+): Promise<T> {
+  const startedAt = performance.now();
+  try {
+    return await task();
+  } finally {
+    timings.push({
+      durationMs: roundDurationMs(performance.now() - startedAt),
+      step,
+    });
+  }
+}
+
+function roundDurationMs(value: number) {
+  return Math.round(value * 100) / 100;
 }
 
 function hasEquivalentDefaultSetupEvent(input: {

@@ -3035,3 +3035,33 @@ Interpretation:
 - This does not get self-delivery lag near zero yet. The slowest deliveries are
   still dominated by callable subscriber dispatch time, with `500` event agent
   batches taking `435-518ms`.
+
+Cloudflare trace check:
+
+- Trace id: `9deeb205408b61e2d689721b4de04d58`
+- Worker: `os2-preview-2`
+- Timeframe: `2026-05-08T03:51:45Z` to `2026-05-08T03:52:20Z`
+- Root request:
+  `POST /api/projects/proj__os__01kr2vd1s7e059akbsg9331dmj/agents/benchmark-stream/%2Fagents%2Fserver-bench-1778212307017`
+- Trace duration: `33536ms`
+- Span count: `4508`
+- Error spans: `0`
+
+Unexpected finding:
+
+- The slowest sampled span was not append/reduce/delivery. It was an
+  `AgentDurableObject.getRuntimeState` JS RPC span:
+  - duration: `27642ms`
+  - CPU: `3ms`
+  - wall time: `27049ms`
+  - method: `getRuntimeState`
+- The benchmark endpoint calls `agent.getRuntimeState()` as a warmup before it
+  starts measuring publish duration. That means the JSON result can say publish
+  and delivery completed quickly while the full request still spent tens of
+  seconds waking/starting the Agent Durable Object.
+
+Follow-up instrumentation:
+
+- Add Agent Durable Object startup step timing to runtime state.
+- Add `agentWarmupDurationMs` and `initialRuntimeState` to the server benchmark
+  response so cold-start/wake cost is visible in every benchmark JSON result.
