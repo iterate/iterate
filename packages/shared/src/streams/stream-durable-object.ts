@@ -64,7 +64,7 @@ type StreamDurableObjectEnv = {
 } & Record<string, unknown>;
 
 const CALLABLE_SUBSCRIBER_CURSOR_KEY_PREFIX = "stream-do:callable-subscriber-cursor";
-const CALLABLE_SUBSCRIBER_ALARM_BATCH_SIZE = 500;
+const CALLABLE_SUBSCRIBER_ALARM_BATCH_SIZE = 1000;
 const CALLABLE_SUBSCRIBER_ALARM_MAX_BATCHES = 50;
 const CALLABLE_SUBSCRIBER_DIAGNOSTIC_LIMIT = 20;
 const NON_CALLABLE_SUBSCRIBERS = new Set(["webhook", "websocket"] as const);

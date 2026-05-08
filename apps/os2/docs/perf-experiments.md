@@ -2436,3 +2436,84 @@ Change under test:
 - Replay `afterAppend` in event order, temporarily setting the in-memory state to
   the reduced state after that event so builtin afterAppend sees the same
   per-event state shape as the old append loop.
+
+Results after deploying commit `02f526270` to preview slot 2:
+
+`both`, `1000/s`, app-worker publisher, run 1:
+
+- Benchmark: `agent-server-bench-1778209510324-d1be7adc`
+- Duplicate invariant: passed
+- Duplicate attempts: `14`
+- Publish duration: `1115ms`
+- Source subscriber wait: `683ms`
+- Final subscriber wait: `3ms`
+- Processor wait: `176ms`
+- Append latency: p50 `34ms`, p90 `101ms`, p99 `136ms`
+- Agent subscriber totals:
+  - delivered events: `2025`
+  - dispatch duration: `1760ms`
+  - max dispatch: `325ms`
+- Slowest AgentChat derived append batches:
+  - `268` appended events: `229ms`
+  - `232` appended events: `208ms`
+  - `290` appended events: `204ms`
+
+`both`, `1000/s`, app-worker publisher, run 2:
+
+- Benchmark: `agent-server-bench-1778209544769-9cd32f42`
+- Duplicate invariant: passed
+- Duplicate attempts: `13`
+- Publish duration: `1457ms`
+- Source subscriber wait: `645ms`
+- Final subscriber wait: `10ms`
+- Processor wait: `180ms`
+- Append latency: p50 `126ms`, p90 `182ms`, p99 `200ms`
+- Agent subscriber totals:
+  - delivered events: `2025`
+  - dispatch duration: `2241ms`
+  - max dispatch: `412ms`
+- Slowest AgentChat derived append batches:
+  - `291` appended events: `398ms`
+  - `209` appended events: `254ms`
+  - `60` appended events: `247ms`
+
+`agent-only`, `1000/s`, app-worker publisher, two runs:
+
+- Run 1 benchmark: `agent-server-bench-1778209579739-cda23f7d`
+  - Duplicate invariant: passed
+  - Source subscriber wait: `657ms`
+  - Final subscriber wait: `9ms`
+  - Processor wait: `18ms`
+  - Append latency: p50 `120ms`, p90 `260ms`, p99 `927ms`
+  - One tiny `12`-event AgentChat append batch took `988ms`, likely cold/wake or
+    platform noise.
+- Run 2 benchmark: `agent-server-bench-1778209614824-9fc7724c`
+  - Duplicate invariant: passed
+  - Source subscriber wait: `764ms`
+  - Final subscriber wait: `11ms`
+  - Processor wait: `56ms`
+  - Append latency: p50 `90ms`, p90 `121ms`, p99 `212ms`
+
+Interpretation:
+
+- True batch commit is a real improvement, especially in the best `both` run:
+  append p50/p90/p99 improved from `91/170/198ms` to `34/101/136ms`.
+- It did not collapse source subscriber wait to zero. The Stream DO still makes
+  around nine Worker RPC dispatches to AgentDurableObject, and Agent still spends
+  `~1.7-2.2s` total across those dispatches.
+- AgentChat derived append batches are cheaper than before but still not cheap
+  enough. A few hundred derived events still cost `~200-400ms` to append back to
+  the Stream DO.
+- Since append p99 no longer consistently explodes, retest larger callable
+  subscriber batches. The earlier `1000` batch result may have been unfairly
+  penalized by the old `appendBatch = map(append)` implementation.
+
+### 2026-05-08: retest subscriber batch size 1000 after true batch commit
+
+Hypothesis:
+
+- The earlier `1000` subscriber batch improved final subscriber wait but badly
+  regressed append p99.
+- Now that processor-derived `appendBatch` uses one Stream DO transaction, a
+  larger subscriber delivery batch may reduce Worker RPC dispatch count without
+  causing the same append p99 regression.
