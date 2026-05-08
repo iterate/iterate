@@ -3873,3 +3873,127 @@ Design implications for this stream processor system:
 - Avoid observer methods like `getRuntimeState()` participating in hot traces
   unless necessary; they can queue behind delivery work and then look like
   product latency.
+
+### 2026-05-08: processor append-call timing diagnostic
+
+Change:
+
+- Added `appendCallTimings` to `withStreamProcessor` runtime batch timings.
+- Each processor batch timing now records each processor-originated `append` or
+  `appendBatch` call with:
+  - kind: `append` or `appendBatch`;
+  - event count requested by the processor;
+  - duration of the call back into the Stream DO.
+- Commit: `6613f66ea` (`Trace processor append call timings`).
+
+Reason:
+
+- Prior `agent-chat-responses` runs showed almost all `agent-chat` time under
+  `afterAppend`, but that did not separate CPU work from waiting on the Stream
+  DO append RPC.
+- The new field lets us distinguish:
+  - local processor/reducer work;
+  - processor-originated append wait;
+  - downstream subscription/cursor wait.
+
+RPC subscriber benchmark:
+
+- File: `/tmp/os2-bench-agent-chat-both-1000-append-call-timings.json`
+- Benchmark id: `agent-server-bench-1778216282947-0fcae9cb`
+- Traffic: `agent-chat-responses`
+- Count/rate/concurrency: `1000`, `1000/s`, `100`
+- Subscriber mode: `both`
+- Subscription transport: `rpc`
+- Result:
+  - publish duration: `1048ms`
+  - source subscriber wait: `791ms`
+  - processor wait: `92ms`
+  - final subscriber wait: `3ms`
+  - append p50/p90/p99: `27/81/110ms`
+  - idempotency duplicate invariant: passed
+  - duplicate attempts: `15`
+
+Processor timings:
+
+- `agent-chat`:
+  - total retained processor time: `978ms`
+  - `appendDurationMs`: `978ms`
+  - append calls: `6`
+  - derived appended events: `1002`
+  - largest append calls:
+    - `269` events in `274ms`
+    - `315` events in `198ms`
+    - `102` events in `161ms`
+    - `101` events in `159ms`
+    - `196` events in `128ms`
+- `agent`:
+  - retained total: `22ms`
+  - one append call: `22ms`
+  - max state JSON bytes: `254590`
+- `openai-ws`:
+  - retained total: `41ms`
+  - two append calls: `21ms` and `20ms`
+
+Interpretation:
+
+- For this benchmark, `agent-chat` is not CPU-bound. Its retained
+  `afterAppendBatch` time is effectively all time spent awaiting derived
+  `appendBatch` calls back into the same hot Stream DO.
+- The likely architectural shape is:
+  - Stream DO alarm drains original events;
+  - Stream DO calls Agent DO `afterAppendBatch`;
+  - `agent-chat` inside Agent DO awaits `appendBatch` back into the same Stream
+    DO;
+  - that Stream DO is also the alarm runner that is waiting for the Agent DO
+    call to return.
+- Cloudflare DO reentrancy means this does not deadlock, but it creates exactly
+  the kind of serialized queueing we are seeing.
+- This supports experimenting with one or more of:
+  - not awaiting processor-derived appends from subscriber delivery;
+  - a same-runner local feed-through path that can continue processing committed
+    returned events without waiting for subscription redelivery;
+  - separating subscriber dispatch from derived append acknowledgement;
+  - a clean WebSocket replacement path that actually batches.
+
+WebSocket subscriber benchmark:
+
+- File: `/tmp/os2-bench-agent-chat-both-websocket-1000-append-call-timings.json`
+- Benchmark id: `agent-server-bench-1778216449034-f7cb624d`
+- Same traffic/count/rate/concurrency.
+- Subscription transport: `websocket`
+- Important caveat:
+  - this is not a clean replacement benchmark because Agent startup still
+    installs the callable `afterAppendBatch` subscription; the WebSocket
+    subscription is additive in the current harness.
+- Result:
+  - publish duration: `1103ms`
+  - source subscriber wait: `7ms`
+  - processor wait: timed out after `30088ms`
+  - last processor cursor: around offset `522`
+  - final subscriber wait: `4ms`
+  - append p50/p90/p99: `22/65/108ms`
+  - idempotency duplicate invariant: passed
+
+WebSocket interpretation:
+
+- Existing WebSocket delivery is much worse for this workload.
+- The Agent DO receives/processes WebSocket frames one at a time, so retained
+  timings show many single-event processor batches.
+- `agent-chat` retained timing window showed `16` one-event `appendBatch` calls,
+  around `56-75ms` each, and the run failed to drain within the `30s` processor
+  wait.
+- WebSocket cannot be judged as a replacement until it has a batched frame
+  protocol or a coalescing layer at the subscriber boundary.
+
+Current conclusion:
+
+- Callable RPC `afterAppendBatch` remains the best current transport for
+  high-rate agent stream delivery.
+- The next performance experiment should target the StreamDO -> AgentDO ->
+  StreamDO loop, not raw reducer speed.
+- A good next minimal experiment is to make `agent-chat` derived append delivery
+  return quickly while preserving error visibility, then compare:
+  - processor wait;
+  - final subscriber wait;
+  - local append delivery delays;
+  - missing/skipped event counts.
