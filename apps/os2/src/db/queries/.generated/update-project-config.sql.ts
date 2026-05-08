@@ -5,13 +5,12 @@ update projects
 set custom_hostname = ?,
     metadata = ?,
     updated_at = strftime('%Y-%m-%d %H:%M:%S', 'now')
-where id = ?
-  and clerk_org_id = ?;
+where id = ?;
 `.trim();
 const query = (data: updateProjectConfig.Data, params: updateProjectConfig.Params) => ({
-  sql,
-  args: [data.customHostname, data.metadata, params.id, params.clerkOrgId],
   name: "updateProjectConfig",
+  sql,
+  args: [data.customHostname, data.metadata, params.id],
 });
 
 export const updateProjectConfig = Object.assign(
@@ -32,6 +31,5 @@ export namespace updateProjectConfig {
   };
   export type Params = {
     id: string;
-    clerkOrgId: string;
   };
 }

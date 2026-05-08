@@ -1,5 +1,5 @@
 import { type ReactNode } from "react";
-import { type Event, type StreamPath } from "@iterate-com/events-contract";
+import { type Event, type StreamPath } from "@iterate-com/shared/streams/types";
 import {
   AlertTriangleIcon,
   BotIcon,
@@ -7,6 +7,7 @@ import {
   ChevronDownIcon,
   CircleIcon,
   Code2Icon,
+  FileJsonIcon,
   FolderPlusIcon,
   SparklesIcon,
   TerminalSquareIcon,
@@ -28,6 +29,8 @@ import {
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@iterate-com/ui/components/dropdown-menu";
@@ -63,7 +66,13 @@ import {
   EventsStreamLayoutMain,
 } from "@iterate-com/ui/components/events/stream-layout";
 import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
+import {
+  eventsStreamRendererModeOptions,
+  type EventsStreamRendererMode,
+} from "@iterate-com/ui/components/events/feed-processors";
 import { cn } from "@iterate-com/ui/lib/utils";
+
+export type { EventsStreamRendererMode } from "@iterate-com/ui/components/events/feed-processors";
 
 export type EventsStreamPathLinkRenderer = (args: {
   path: StreamPath;
@@ -88,6 +97,8 @@ export function EventsStreamView({
   renderStreamPathLink,
   hiddenElementTypes = [],
   onHiddenElementTypesChange,
+  rendererMode,
+  onRendererModeChange,
   emptyLabel,
   isPending,
   errorLabel,
@@ -101,6 +112,8 @@ export function EventsStreamView({
   renderStreamPathLink?: EventsStreamPathLinkRenderer;
   hiddenElementTypes?: readonly EventsStreamElementType[];
   onHiddenElementTypesChange?: (types: EventsStreamElementType[]) => void;
+  rendererMode?: EventsStreamRendererMode;
+  onRendererModeChange?: (mode: EventsStreamRendererMode) => void;
   emptyLabel?: string;
   isPending?: boolean;
   errorLabel?: string;
@@ -121,6 +134,8 @@ export function EventsStreamView({
             elementTypes={feedElementTypes}
             hiddenElementTypes={hiddenElementTypes}
             onHiddenElementTypesChange={onHiddenElementTypesChange}
+            rendererMode={rendererMode}
+            onRendererModeChange={onRendererModeChange}
           />
         </EventsStreamLayoutHeader>
       )}
@@ -152,11 +167,15 @@ export function EventsStreamHeader({
   elementTypes = [],
   hiddenElementTypes = [],
   onHiddenElementTypesChange,
+  rendererMode,
+  onRendererModeChange,
 }: {
   elements: readonly EventsStreamBuiltInElement[];
   elementTypes?: readonly EventsStreamElementType[];
   hiddenElementTypes?: readonly EventsStreamElementType[];
   onHiddenElementTypesChange?: (types: EventsStreamElementType[]) => void;
+  rendererMode?: EventsStreamRendererMode;
+  onRendererModeChange?: (mode: EventsStreamRendererMode) => void;
 }) {
   if (elements.length === 0 && elementTypes.length === 0) {
     return null;
@@ -169,11 +188,17 @@ export function EventsStreamHeader({
           <EventsStreamHeaderElementRenderer key={element.id} element={element} />
         ))}
       </div>
-      <EventsStreamElementTypeFilter
-        elementTypes={elementTypes}
-        hiddenElementTypes={hiddenElementTypes}
-        onHiddenElementTypesChange={onHiddenElementTypesChange}
-      />
+      <div className="flex shrink-0 items-center gap-1.5">
+        <EventsStreamRendererModeDropdown
+          rendererMode={rendererMode}
+          onRendererModeChange={onRendererModeChange}
+        />
+        <EventsStreamElementTypeFilter
+          elementTypes={elementTypes}
+          hiddenElementTypes={hiddenElementTypes}
+          onHiddenElementTypesChange={onHiddenElementTypesChange}
+        />
+      </div>
     </div>
   );
 }
@@ -267,6 +292,56 @@ function EventsStreamElementTypeFilter({
               <span className="truncate font-mono text-xs">{type}</span>
             </DropdownMenuCheckboxItem>
           ))}
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function EventsStreamRendererModeDropdown({
+  rendererMode,
+  onRendererModeChange,
+}: {
+  rendererMode?: EventsStreamRendererMode;
+  onRendererModeChange?: (mode: EventsStreamRendererMode) => void;
+}) {
+  if (rendererMode == null || onRendererModeChange == null) {
+    return null;
+  }
+
+  const selectedOption =
+    eventsStreamRendererModeOptions.find((option) => option.value === rendererMode) ??
+    eventsStreamRendererModeOptions[0];
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 shrink-0 gap-1.5 px-2 text-xs font-normal"
+          />
+        }
+      >
+        <FileJsonIcon className="size-3.5 text-muted-foreground" />
+        <span className="truncate">{selectedOption.label}</span>
+        <ChevronDownIcon className="size-3.5 text-muted-foreground" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-[min(14rem,calc(100vw-1rem))]">
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Renderer mode</DropdownMenuLabel>
+          <DropdownMenuRadioGroup
+            value={rendererMode}
+            onValueChange={(value) => onRendererModeChange(value as EventsStreamRendererMode)}
+          >
+            {eventsStreamRendererModeOptions.map((option) => (
+              <DropdownMenuRadioItem key={option.value} value={option.value}>
+                {option.label}
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
         </DropdownMenuGroup>
       </DropdownMenuContent>
     </DropdownMenu>

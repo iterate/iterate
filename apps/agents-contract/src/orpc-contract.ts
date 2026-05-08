@@ -23,7 +23,7 @@ const FetchExampleResult = z.object({
 /**
  * Minimal `EventInput` shape used in the agents-contract for `default events`
  * configuration. The strict event-input union lives in
- * `@iterate-com/events-contract`; we don't import it here because the contract
+ * `@iterate-com/shared/streams/types`; we don't import it here because the contract
  * is a leaf package that the events service itself does not depend on, and
  * because the events HTTP API will reject anything malformed at append time
  * anyway. Treating events as `{ type, payload }` here keeps the contract
@@ -31,7 +31,7 @@ const FetchExampleResult = z.object({
  *
  * `payload` is typed as `object` (not `Record<string, unknown>`) on purpose so
  * the shape lines up with the looser `GenericEventPayload` used in
- * `@iterate-com/events-contract`. Using `Record<...>` here would make the DO
+ * `@iterate-com/shared/streams/types`. Using `Record<...>` here would make the DO
  * stub method's return type incompatible with this contract's output schema,
  * because `object` (which the strict event variants infer to) is not assignable
  * to `Record<string, unknown>` in TS.
@@ -63,7 +63,7 @@ const InstallProcessorResult = z.object({
     "Callable stored on the subscription. Its URL carries `publicBaseUrl` so the auto-subscriber can reconstruct child-stream processor URLs without extra config.",
   ),
   subscriptionSlug: z.string(),
-  projectSlug: z.string(),
+  projectId: z.string(),
 });
 
 const ConfigureBasePathDefaultsInput = z.object({

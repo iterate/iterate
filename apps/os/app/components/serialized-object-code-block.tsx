@@ -7,8 +7,7 @@ import { json } from "@codemirror/lang-json";
 import { yaml } from "@codemirror/lang-yaml";
 import { search, searchKeymap } from "@codemirror/search";
 import { keymap } from "@codemirror/view";
-import { vsCodeDark, vsCodeLight } from "@fsegurai/codemirror-theme-bundle";
-import { useTheme } from "next-themes";
+import { vsCodeLight } from "@fsegurai/codemirror-theme-bundle";
 import { foldService } from "@codemirror/language";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.tsx";
 import { cn } from "@/lib/utils.ts";
@@ -60,7 +59,6 @@ export function SerializedObjectCodeBlock({
   showCopyButton = true,
 }: SerializedObjectCodeBlockProps) {
   const [currentFormat, setCurrentFormat] = useState<"yaml" | "json">(initialFormat);
-  const { resolvedTheme } = useTheme();
 
   let code: string;
   try {
@@ -130,10 +128,9 @@ export function SerializedObjectCodeBlock({
   };
 
   const lang = currentFormat === "yaml" ? yaml : json;
-  const codeMirrorTheme = resolvedTheme === "dark" ? vsCodeDark : vsCodeLight;
   const extensions: CodeMirrorProps["extensions"] = [
     basicSetup,
-    codeMirrorTheme,
+    vsCodeLight,
     lang(),
     search({ top: true }),
     foldPromptBlocks(),

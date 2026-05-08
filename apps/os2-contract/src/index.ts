@@ -1,33 +1,34 @@
 import { eventIterator, oc } from "@orpc/contract";
-import { Event, EventInput, StreamCursor, StreamPath } from "@iterate-com/events-contract";
+import {
+  Event,
+  EventInput,
+  StreamCursor,
+  StreamPath,
+  StreamState,
+} from "@iterate-com/shared/streams/types";
 import { internalContract } from "@iterate-com/shared/apps/internal-router-contract";
-import { ToolProviderDescriptor, CodemodeEvent } from "@iterate-com/shared/codemode/types";
 import { z } from "zod";
 
 const JSONObject = z.record(z.string(), z.unknown());
+const CodemodeProviderInput = z.array(z.unknown());
+const ProjectScopedInput = z.object({
+  projectSlugOrId: z.string(),
+});
+const AgentLlmProvider = z.enum(["openai-ws", "cloudflare-ai"]);
+const AgentPresetEvent = z.object({
+  type: z.string().trim().min(1),
+  payload: z.record(z.string(), z.unknown()),
+});
 
 export const Project = z.object({
   id: z.string(),
   slug: z.string(),
-  clerkOrgId: z.string(),
-  createdByClerkUserId: z.string(),
   customHostname: z.string().nullable(),
   metadata: JSONObject,
   createdAt: z.string(),
   updatedAt: z.string(),
 });
 export type Project = z.output<typeof Project>;
-
-export const ProjectPreset = z.object({
-  id: z.string(),
-  projectId: z.string(),
-  name: z.string(),
-  description: z.string().nullable(),
-  events: z.array(EventInput),
-  createdAt: z.string(),
-  updatedAt: z.string(),
-});
-export type ProjectPreset = z.output<typeof ProjectPreset>;
 
 export const CodemodeSession = z.object({
   name: z.string(),
@@ -50,6 +51,24 @@ export const InboundMcpSession = z.object({
   lastWokenAt: z.string(),
 });
 export type InboundMcpSession = z.output<typeof InboundMcpSession>;
+
+export const StreamCatalogRecord = z.object({
+  name: z.string(),
+  namespace: z.string(),
+  streamPath: StreamPath,
+  createdAt: z.string(),
+  lastWokenAt: z.string(),
+});
+export type StreamCatalogRecord = z.output<typeof StreamCatalogRecord>;
+
+export const AgentRecord = z.object({
+  agentPath: StreamPath,
+  name: z.string(),
+  projectId: z.string(),
+  createdAt: z.string(),
+  lastWokenAt: z.string(),
+});
+export type AgentRecord = z.output<typeof AgentRecord>;
 
 export const RandomLogStreamRequest = z
   .object({
@@ -187,103 +206,6 @@ export const osContract = oc.router({
       // https://orpc.dev/docs/client/event-iterator
       .output(eventIterator(z.string())),
   },
-  codemode: {
-    createSession: oc
-      .route({
-        method: "POST",
-        path: "/codemode/sessions",
-        description:
-          "Create or attach to a Codemode Session, append setup events, and optionally start a Script Execution",
-        tags: ["/codemode"],
-      })
-      .input(
-        z.object({
-          code: z.string().trim().min(1).optional(),
-          events: z.array(EventInput).default([]),
-          projectId: z.string(),
-          providers: z.array(ToolProviderDescriptor).default([]),
-          streamPath: StreamPath.optional(),
-        }),
-      )
-      .output(
-        z.object({
-          appendedEvents: z.array(Event),
-          registeredProviderEvents: z.array(Event),
-          scriptExecutionEvent: Event.nullable(),
-          session: CodemodeSession,
-        }),
-      ),
-    executeScript: oc
-      .route({
-        method: "POST",
-        path: "/codemode/scripts",
-        description:
-          "Append a Script Execution request to a Codemode Session and return the committed event",
-        tags: ["/codemode"],
-      })
-      .input(
-        z.object({
-          code: z.string().min(1),
-          events: z.array(EventInput).default([]),
-          projectId: z.string(),
-          providers: z.array(ToolProviderDescriptor).default([]),
-          streamPath: StreamPath.optional(),
-        }),
-      )
-      .output(
-        z.object({
-          event: Event,
-          streamPath: StreamPath,
-        }),
-      ),
-    streamEvents: oc
-      .route({
-        method: "GET",
-        path: "/codemode/events/{+streamPath}",
-        description: "Read events from a Codemode Session's Event Stream Path",
-        tags: ["/codemode"],
-      })
-      .input(
-        z.object({
-          afterOffset: StreamCursor.optional(),
-          beforeOffset: StreamCursor.optional(),
-          streamPath: StreamPath,
-        }),
-      )
-      .output(eventIterator(Event)),
-    execute: oc
-      .route({
-        method: "POST",
-        path: "/codemode/execute",
-        description: "Execute code in a sandboxed dynamic worker with tool providers",
-        tags: ["/codemode"],
-      })
-      .input(
-        z.object({
-          code: z.string().min(1),
-          blockId: z.string().optional(),
-          events: z.array(EventInput).default([]),
-          projectId: z.string(),
-          providers: z.array(ToolProviderDescriptor).default([]),
-          streamPath: StreamPath.optional(),
-        }),
-      )
-      .output(eventIterator(CodemodeEvent)),
-    describe: oc
-      .route({
-        method: "POST",
-        path: "/codemode/describe",
-        description: "Fetch type descriptions from tool providers",
-        tags: ["/codemode"],
-      })
-      .input(
-        z.object({
-          projectId: z.string(),
-          providers: z.array(ToolProviderDescriptor),
-        }),
-      )
-      .output(z.object({ typeDefinitions: z.string() })),
-  },
   projects: {
     create: oc
       .route({
@@ -359,89 +281,270 @@ export const osContract = oc.router({
       })
       .input(z.object({ id: z.string() }))
       .output(z.object({ ok: z.literal(true), id: z.string(), deleted: z.boolean() })),
-    presets: {
+  },
+  project: {
+    get: oc
+      .route({
+        method: "GET",
+        path: "/project/{projectSlugOrId}",
+        description: "Get a project by globally unique slug or stable ID",
+        tags: ["/project"],
+      })
+      .input(ProjectScopedInput)
+      .output(Project),
+    codemode: {
+      listSessions: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectSlugOrId}/codemode-sessions",
+          description: "List Codemode Sessions for a project",
+          tags: ["/project", "/codemode"],
+        })
+        .input(ProjectScopedInput)
+        .output(z.object({ sessions: z.array(CodemodeSession) })),
+      findSession: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectSlugOrId}/codemode-sessions/{name}",
+          description: "Get a Codemode Session by catalog name",
+          tags: ["/project", "/codemode"],
+        })
+        .input(ProjectScopedInput.extend({ name: z.string() }))
+        .output(CodemodeSession),
+      createSession: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectSlugOrId}/codemode-sessions",
+          description:
+            "Create or attach to a Codemode Session, append setup events, and optionally start a Script Execution",
+          tags: ["/project", "/codemode"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            code: z.string().trim().min(1).optional(),
+            events: z.array(EventInput).default([]),
+            providers: CodemodeProviderInput.default([]),
+            streamPath: StreamPath.optional(),
+          }),
+        )
+        .output(
+          z.object({
+            appendedEvents: z.array(Event),
+            registeredProviderEvents: z.array(Event),
+            scriptExecutionEvent: Event.nullable(),
+            session: CodemodeSession,
+          }),
+        ),
+      executeScript: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectSlugOrId}/codemode-scripts",
+          description:
+            "Append a Script Execution request to a Codemode Session and return the committed event",
+          tags: ["/project", "/codemode"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            code: z.string().min(1),
+            events: z.array(EventInput).default([]),
+            providers: CodemodeProviderInput.default([]),
+            streamPath: StreamPath.optional(),
+          }),
+        )
+        .output(
+          z.object({
+            event: Event,
+            streamPath: StreamPath,
+          }),
+        ),
+      streamEvents: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectSlugOrId}/codemode-events/{+streamPath}",
+          description: "Read events from a Codemode Session's Event Stream Path",
+          tags: ["/project", "/codemode"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            afterOffset: StreamCursor.optional(),
+            beforeOffset: StreamCursor.optional(),
+            streamPath: StreamPath,
+          }),
+        )
+        .output(eventIterator(Event)),
+      describe: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectSlugOrId}/codemode-description",
+          description: "Render short instructions from tool provider registrations",
+          tags: ["/project", "/codemode"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            providers: CodemodeProviderInput,
+          }),
+        )
+        .output(z.object({ instructions: z.string() })),
+    },
+    agents: {
       list: oc
         .route({
           method: "GET",
-          path: "/projects/{projectId}/presets",
-          description: "List project presets",
-          tags: ["/projects"],
+          path: "/projects/{projectSlugOrId}/agents",
+          description: "List agents for a project",
+          tags: ["/project", "/agents"],
         })
-        .input(z.object({ projectId: z.string() }))
-        .output(z.object({ presets: z.array(ProjectPreset) })),
+        .input(ProjectScopedInput)
+        .output(z.object({ agents: z.array(AgentRecord) })),
+      listPresets: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectSlugOrId}/agents/presets",
+          description: "List path-prefix presets for project agents",
+          tags: ["/project", "/agents"],
+        })
+        .input(ProjectScopedInput)
+        .output(
+          z.object({
+            presets: z.array(
+              z.object({
+                basePath: StreamPath,
+                events: z.array(AgentPresetEvent),
+              }),
+            ),
+          }),
+        ),
+      configurePreset: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectSlugOrId}/agents/presets",
+          description: "Configure a path-prefix preset for project agents",
+          tags: ["/project", "/agents"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            basePath: StreamPath,
+            events: z.array(AgentPresetEvent).default([]),
+            model: z.string().trim().min(1),
+            provider: AgentLlmProvider,
+            runOpts: z.record(z.string(), z.unknown()).default({}),
+            systemPrompt: z.string().trim().min(1),
+          }),
+        )
+        .output(
+          z.object({
+            basePath: StreamPath,
+            eventCount: z.number().int().nonnegative(),
+          }),
+        ),
+      sendMessage: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectSlugOrId}/agents/messages/{+agentPath}",
+          description: "Append a chat message to an agent stream",
+          tags: ["/project", "/agents"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            agentPath: StreamPath,
+            channel: z.string().trim().min(1).optional(),
+            message: z.string().trim().min(1),
+          }),
+        )
+        .output(z.object({ event: Event })),
+      runtimeState: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectSlugOrId}/agents/runtime-state/{+agentPath}",
+          description: "Read Agent Durable Object stream processor runtime state",
+          tags: ["/project", "/agents"],
+        })
+        .input(ProjectScopedInput.extend({ agentPath: StreamPath }))
+        .output(z.unknown()),
+    },
+    inboundMcpServer: {
+      listSessions: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectSlugOrId}/mcp-sessions",
+          description: "List inbound MCP sessions for a project",
+          tags: ["/project", "/mcp"],
+        })
+        .input(ProjectScopedInput)
+        .output(z.object({ sessions: z.array(InboundMcpSession) })),
+    },
+    streams: {
+      list: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectSlugOrId}/streams",
+          description: "List initialized streams for a project",
+          tags: ["/project", "/streams"],
+        })
+        .input(ProjectScopedInput)
+        .output(z.object({ streams: z.array(StreamCatalogRecord) })),
       create: oc
         .route({
           method: "POST",
-          path: "/projects/{projectId}/presets",
-          description: "Create a project preset",
-          tags: ["/projects"],
+          path: "/projects/{projectSlugOrId}/streams",
+          description: "Initialize a project stream",
+          tags: ["/project", "/streams"],
+        })
+        .input(ProjectScopedInput.extend({ streamPath: StreamPath }))
+        .output(StreamState),
+      append: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectSlugOrId}/streams/events/{+streamPath}",
+          description: "Append an event to a project stream",
+          tags: ["/project", "/streams"],
         })
         .input(
-          z.object({
-            projectId: z.string(),
-            name: z.string().trim().min(1),
-            description: z.string().trim().nullable().optional(),
-            events: z.array(EventInput),
+          ProjectScopedInput.extend({
+            streamPath: StreamPath,
+            event: EventInput,
           }),
         )
-        .output(ProjectPreset),
-      update: oc
+        .output(z.object({ event: Event })),
+      read: oc
         .route({
-          method: "PATCH",
-          path: "/projects/{projectId}/presets/{id}",
-          description: "Update a project preset",
-          tags: ["/projects"],
+          method: "GET",
+          path: "/projects/{projectSlugOrId}/streams/events/{+streamPath}",
+          description: "Read committed events from a project stream",
+          tags: ["/project", "/streams"],
         })
         .input(
-          z.object({
-            id: z.string(),
-            projectId: z.string(),
-            name: z.string().trim().min(1),
-            description: z.string().trim().nullable().optional(),
-            events: z.array(EventInput),
+          ProjectScopedInput.extend({
+            afterOffset: StreamCursor.optional(),
+            beforeOffset: StreamCursor.optional(),
+            streamPath: StreamPath,
           }),
         )
-        .output(ProjectPreset),
-      remove: oc
-        .route({
-          method: "DELETE",
-          path: "/projects/{projectId}/presets/{id}",
-          description: "Delete a project preset",
-          tags: ["/projects"],
-        })
-        .input(z.object({ id: z.string(), projectId: z.string() }))
-        .output(z.object({ ok: z.literal(true), id: z.string(), deleted: z.boolean() })),
-    },
-    codemodeSessions: {
-      list: oc
+        .output(z.object({ events: z.array(Event) })),
+      streamEvents: oc
         .route({
           method: "GET",
-          path: "/projects/{projectId}/codemode-sessions",
-          description: "List Codemode Sessions for a project",
-          tags: ["/projects"],
+          path: "/projects/{projectSlugOrId}/streams/event-stream/{+streamPath}",
+          description: "Stream committed and live events from a project stream",
+          tags: ["/project", "/streams"],
         })
-        .input(z.object({ projectId: z.string() }))
-        .output(z.object({ sessions: z.array(CodemodeSession) })),
-      find: oc
+        .input(
+          ProjectScopedInput.extend({
+            afterOffset: StreamCursor.optional(),
+            beforeOffset: StreamCursor.optional(),
+            streamPath: StreamPath,
+          }),
+        )
+        .output(eventIterator(Event)),
+      getState: oc
         .route({
           method: "GET",
-          path: "/projects/{projectId}/codemode-sessions/{name}",
-          description: "Get a Codemode Session by catalog name",
-          tags: ["/projects"],
+          path: "/projects/{projectSlugOrId}/streams/__state/{+streamPath}",
+          description: "Read the reduced state for a project stream",
+          tags: ["/project", "/streams"],
         })
-        .input(z.object({ name: z.string(), projectId: z.string() }))
-        .output(CodemodeSession),
-    },
-    mcpSessions: {
-      list: oc
-        .route({
-          method: "GET",
-          path: "/projects/{projectId}/mcp-sessions",
-          description: "List inbound MCP sessions for a project",
-          tags: ["/projects"],
-        })
-        .input(z.object({ projectId: z.string() }))
-        .output(z.object({ sessions: z.array(InboundMcpSession) })),
+        .input(ProjectScopedInput.extend({ streamPath: StreamPath }))
+        .output(StreamState),
     },
   },
 });

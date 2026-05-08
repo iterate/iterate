@@ -6,7 +6,7 @@ import { Separator } from "@iterate-com/ui/components/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { AppSidebar } from "~/components/app-sidebar.tsx";
 import { PathBreadcrumbs } from "~/components/path-breadcrumbs.tsx";
-import { defaultProjectSlug, resolveHostProjectSlug } from "~/lib/project-slug.ts";
+import { defaultNamespace, resolveHostNamespace } from "~/lib/namespace.ts";
 import { StreamsChromeProvider, StreamsHeaderAction } from "~/components/streams-chrome.tsx";
 
 // First-party refs:
@@ -16,21 +16,21 @@ const getSidebarDefaultOpen = createServerFn({ method: "GET" }).handler(() => ({
   defaultOpen: !/(?:^|;\s*)sidebar_state=false(?:;|$)/.test(getRequestHeader("cookie") ?? ""),
 }));
 
-const getProjectSlug = createServerFn({ method: "GET" }).handler(() => {
+const getNamespace = createServerFn({ method: "GET" }).handler(() => {
   const request = getRequest();
-  return resolveHostProjectSlug(new URL(request.url).hostname) ?? defaultProjectSlug;
+  return resolveHostNamespace(new URL(request.url).hostname) ?? defaultNamespace;
 });
 
 export const Route = createFileRoute("/_app")({
   loader: async () => ({
     sidebarDefaultOpen: (await getSidebarDefaultOpen()).defaultOpen,
-    projectSlug: await getProjectSlug(),
+    namespace: await getNamespace(),
   }),
   component: AppLayout,
 });
 
 function AppLayout() {
-  const { projectSlug, sidebarDefaultOpen } = Route.useLoaderData();
+  const { namespace, sidebarDefaultOpen } = Route.useLoaderData();
 
   return (
     <SidebarProvider
@@ -39,7 +39,7 @@ function AppLayout() {
       style={{ "--sidebar-width": "24rem" } as CSSProperties}
     >
       <StreamsChromeProvider>
-        <AppSidebar projectSlug={projectSlug} />
+        <AppSidebar namespace={namespace} />
         <SidebarInset className="min-w-0 overflow-hidden">
           <header className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
             <SidebarTrigger className="-ml-1" />

@@ -5,9 +5,9 @@ delete from ingress_routes
 where project_id = ?;
 `.trim();
 const query = (params: deleteIngressRoutesByProject.Params) => ({
+  name: "deleteIngressRoutesByProject",
   sql,
   args: [params.projectId],
-  name: "deleteIngressRoutesByProject",
 });
 
 export const deleteIngressRoutesByProject = Object.assign(

@@ -3,7 +3,7 @@ import {
   buildCounterExplorerLinks,
   buildCounterPublicPath,
   COUNTER_DURABLE_OBJECT_CLASS_NAME,
-  type CounterInitParams,
+  CounterInitParams,
   type CounterState,
 } from "~/lib/counter-durable-objects.ts";
 
@@ -23,11 +23,12 @@ type ExampleCounterEnv = {
 const counterKey = "counter";
 
 const ExampleCounterBase = createIterateDurableObjectBase<
-  CounterInitParams,
+  typeof CounterInitParams,
   Pick<ExampleCounterEnv, "DB">
 >({
   className: COUNTER_DURABLE_OBJECT_CLASS_NAME,
   getDatabase: (env) => env.DB,
+  nameSchema: CounterInitParams,
   indexes: {
     scope: (params) => params.scope,
     variant: (params) => params.variant,
@@ -136,7 +137,9 @@ export class ExampleCounter extends ExampleCounterBase<ExampleCounterEnv> {
     const publicPath = buildCounterPublicPath(initParams.name);
 
     return {
-      ...initParams,
+      name: initParams.name,
+      scope: initParams.scope,
+      variant: initParams.variant,
       count: row?.count ?? 0,
       updatedAt: row?.updated_at ?? null,
       publicPath,

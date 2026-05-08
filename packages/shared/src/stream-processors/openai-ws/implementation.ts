@@ -1,7 +1,7 @@
 import { z } from "zod";
 import {
   assertNever,
-  buildDerivedIdempotencyKey,
+  buildProcessorIdempotencyKey,
   implementProcessor,
   type ConsumedEvent,
   type ProcessorStreamApi,
@@ -79,7 +79,7 @@ export function createOpenAiWsProcessor(deps: OpenAiWsProcessorDeps) {
   let previousResponseId: string | null = null;
 
   return implementProcessor(OpenAiWsProcessorContract, {
-    async afterAppend({ event, state, streamApi }) {
+    async afterAppend({ event, state, streamApi, waitUntil }) {
       await standardProcessorBehavior.afterAppend({
         contract: OpenAiWsProcessorContract,
         state,
@@ -92,8 +92,8 @@ export function createOpenAiWsProcessor(deps: OpenAiWsProcessorDeps) {
         case "events.iterate.com/openai-ws/llm-request-started":
         case "events.iterate.com/openai-ws/llm-request-completed":
           return;
-        case "events.iterate.com/agent/llm-request-requested":
-          await executeOpenAiWsRequest({
+        case "events.iterate.com/agent/llm-request-requested": {
+          const request = executeOpenAiWsRequest({
             event,
             state,
             streamApi,
@@ -118,7 +118,13 @@ export function createOpenAiWsProcessor(deps: OpenAiWsProcessorDeps) {
               previousResponseId = responseId;
             },
           });
+          if (waitUntil == null) {
+            await request;
+          } else {
+            waitUntil(request);
+          }
           return;
+        }
         default:
           return assertNever(event);
       }
@@ -152,10 +158,10 @@ async function executeOpenAiWsRequest(args: {
     await args.streamApi.append({
       event: {
         type: "events.iterate.com/openai-ws/llm-request-completed",
-        idempotencyKey: buildDerivedIdempotencyKey({
-          slug: OpenAiWsProcessorContract.slug,
-          purpose: "provider-llm-request-completed",
-          event: args.event,
+        idempotencyKey: buildProcessorIdempotencyKey({
+          processor: OpenAiWsProcessorContract,
+          key: "provider-llm-request-completed",
+          sourceEvent: args.event,
         }),
         payload: {
           llmRequestId,
@@ -167,10 +173,10 @@ async function executeOpenAiWsRequest(args: {
     await args.streamApi.append({
       event: {
         type: "events.iterate.com/agent/llm-request-completed",
-        idempotencyKey: buildDerivedIdempotencyKey({
-          slug: OpenAiWsProcessorContract.slug,
-          purpose: "agent-llm-request-completed",
-          event: args.event,
+        idempotencyKey: buildProcessorIdempotencyKey({
+          processor: OpenAiWsProcessorContract,
+          key: "agent-llm-request-completed",
+          sourceEvent: args.event,
         }),
         payload: {
           llmRequestId,
@@ -186,10 +192,10 @@ async function executeOpenAiWsRequest(args: {
   await args.streamApi.append({
     event: {
       type: "events.iterate.com/openai-ws/llm-request-started",
-      idempotencyKey: buildDerivedIdempotencyKey({
-        slug: OpenAiWsProcessorContract.slug,
-        purpose: "llm-request-started",
-        event: args.event,
+      idempotencyKey: buildProcessorIdempotencyKey({
+        processor: OpenAiWsProcessorContract,
+        key: "llm-request-started",
+        sourceEvent: args.event,
       }),
       payload: {
         connectionId: connection.id,
@@ -238,10 +244,10 @@ async function executeOpenAiWsRequest(args: {
   await args.streamApi.append({
     event: {
       type: "events.iterate.com/openai-ws/websocket-message-sent",
-      idempotencyKey: buildDerivedIdempotencyKey({
-        slug: OpenAiWsProcessorContract.slug,
-        purpose: `websocket-message-sent:${connection.id}:${sendSequence}`,
-        event: args.event,
+      idempotencyKey: buildProcessorIdempotencyKey({
+        processor: OpenAiWsProcessorContract,
+        key: `websocket-message-sent/${connection.id}/${sendSequence}`,
+        sourceEvent: args.event,
       }),
       payload: {
         connectionId: connection.id,
@@ -269,10 +275,10 @@ async function executeOpenAiWsRequest(args: {
       await args.streamApi.append({
         event: {
           type: "events.iterate.com/openai-ws/websocket-disconnected",
-          idempotencyKey: buildDerivedIdempotencyKey({
-            slug: OpenAiWsProcessorContract.slug,
-            purpose: `websocket-disconnected:${connection.id}`,
-            event: args.event,
+          idempotencyKey: buildProcessorIdempotencyKey({
+            processor: OpenAiWsProcessorContract,
+            key: `websocket-disconnected/${connection.id}`,
+            sourceEvent: args.event,
           }),
           payload: {
             connectionId: connection.id,
@@ -282,10 +288,10 @@ async function executeOpenAiWsRequest(args: {
       await args.streamApi.append({
         event: {
           type: "events.iterate.com/openai-ws/llm-request-completed",
-          idempotencyKey: buildDerivedIdempotencyKey({
-            slug: OpenAiWsProcessorContract.slug,
-            purpose: "provider-llm-request-completed",
-            event: args.event,
+          idempotencyKey: buildProcessorIdempotencyKey({
+            processor: OpenAiWsProcessorContract,
+            key: "provider-llm-request-completed",
+            sourceEvent: args.event,
           }),
           payload: {
             connectionId: connection.id,
@@ -298,10 +304,10 @@ async function executeOpenAiWsRequest(args: {
       await args.streamApi.append({
         event: {
           type: "events.iterate.com/agent/llm-request-completed",
-          idempotencyKey: buildDerivedIdempotencyKey({
-            slug: OpenAiWsProcessorContract.slug,
-            purpose: "agent-llm-request-completed",
-            event: args.event,
+          idempotencyKey: buildProcessorIdempotencyKey({
+            processor: OpenAiWsProcessorContract,
+            key: "agent-llm-request-completed",
+            sourceEvent: args.event,
           }),
           payload: {
             llmRequestId,
@@ -319,10 +325,10 @@ async function executeOpenAiWsRequest(args: {
     await args.streamApi.append({
       event: {
         type: "events.iterate.com/openai-ws/websocket-message-received",
-        idempotencyKey: buildDerivedIdempotencyKey({
-          slug: OpenAiWsProcessorContract.slug,
-          purpose: `websocket-message-received:${connection.id}:${receiveSequence}`,
-          event: args.event,
+        idempotencyKey: buildProcessorIdempotencyKey({
+          processor: OpenAiWsProcessorContract,
+          key: `websocket-message-received/${connection.id}/${receiveSequence}`,
+          sourceEvent: args.event,
         }),
         payload: {
           connectionId: connection.id,
@@ -350,10 +356,10 @@ async function executeOpenAiWsRequest(args: {
       await args.streamApi.append({
         event: {
           type: "events.iterate.com/agent/output-added",
-          idempotencyKey: buildDerivedIdempotencyKey({
-            slug: OpenAiWsProcessorContract.slug,
-            purpose: "agent-output-added",
-            event: args.event,
+          idempotencyKey: buildProcessorIdempotencyKey({
+            processor: OpenAiWsProcessorContract,
+            key: "agent-output-added",
+            sourceEvent: args.event,
           }),
           payload: { content: outputText },
         },
@@ -361,10 +367,10 @@ async function executeOpenAiWsRequest(args: {
       await args.streamApi.append({
         event: {
           type: "events.iterate.com/openai-ws/llm-request-completed",
-          idempotencyKey: buildDerivedIdempotencyKey({
-            slug: OpenAiWsProcessorContract.slug,
-            purpose: "provider-llm-request-completed",
-            event: args.event,
+          idempotencyKey: buildProcessorIdempotencyKey({
+            processor: OpenAiWsProcessorContract,
+            key: "provider-llm-request-completed",
+            sourceEvent: args.event,
           }),
           payload: {
             connectionId: connection.id,
@@ -382,10 +388,10 @@ async function executeOpenAiWsRequest(args: {
       await args.streamApi.append({
         event: {
           type: "events.iterate.com/agent/llm-request-completed",
-          idempotencyKey: buildDerivedIdempotencyKey({
-            slug: OpenAiWsProcessorContract.slug,
-            purpose: "agent-llm-request-completed",
-            event: args.event,
+          idempotencyKey: buildProcessorIdempotencyKey({
+            processor: OpenAiWsProcessorContract,
+            key: "agent-llm-request-completed",
+            sourceEvent: args.event,
           }),
           payload: {
             llmRequestId,
@@ -416,10 +422,10 @@ async function executeOpenAiWsRequest(args: {
       await args.streamApi.append({
         event: {
           type: "events.iterate.com/openai-ws/llm-request-completed",
-          idempotencyKey: buildDerivedIdempotencyKey({
-            slug: OpenAiWsProcessorContract.slug,
-            purpose: "provider-llm-request-completed",
-            event: args.event,
+          idempotencyKey: buildProcessorIdempotencyKey({
+            processor: OpenAiWsProcessorContract,
+            key: "provider-llm-request-completed",
+            sourceEvent: args.event,
           }),
           payload: {
             connectionId: connection.id,
@@ -432,10 +438,10 @@ async function executeOpenAiWsRequest(args: {
       await args.streamApi.append({
         event: {
           type: "events.iterate.com/agent/llm-request-completed",
-          idempotencyKey: buildDerivedIdempotencyKey({
-            slug: OpenAiWsProcessorContract.slug,
-            purpose: "agent-llm-request-completed",
-            event: args.event,
+          idempotencyKey: buildProcessorIdempotencyKey({
+            processor: OpenAiWsProcessorContract,
+            key: "agent-llm-request-completed",
+            sourceEvent: args.event,
           }),
           payload: {
             llmRequestId,
@@ -475,10 +481,10 @@ async function openOpenAiWsConnection(args: {
   await args.streamApi.append({
     event: {
       type: "events.iterate.com/openai-ws/websocket-connected",
-      idempotencyKey: buildDerivedIdempotencyKey({
-        slug: OpenAiWsProcessorContract.slug,
-        purpose: `websocket-connected:${connection.id}`,
-        event: args.sourceEvent,
+      idempotencyKey: buildProcessorIdempotencyKey({
+        processor: OpenAiWsProcessorContract,
+        key: `websocket-connected/${connection.id}`,
+        sourceEvent: args.sourceEvent,
       }),
       payload: {
         connectionId: connection.id,

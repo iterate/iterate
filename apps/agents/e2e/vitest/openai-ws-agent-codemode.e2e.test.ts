@@ -1,8 +1,11 @@
-import { Event, type Event as EventsEvent, type StreamPath } from "@iterate-com/events-contract";
+import {
+  Event,
+  type Event as EventsEvent,
+  type StreamPath,
+} from "@iterate-com/shared/streams/types";
 import { expect, test } from "vitest";
 import { setupE2E } from "../test-support/e2e-test.ts";
 import { createLocalDevServer } from "../test-support/create-local-dev-server.ts";
-import { streamPathToAgentInstance } from "~/lib/iterate-agent-addressing.ts";
 
 const EXPECTED_WEBCHAT_MESSAGE = "OPENAI_WS_CODEMODE_OK";
 
@@ -17,7 +20,6 @@ test(
 
     const e2e = await setupE2E(ctx);
     const streamPath = e2e.createStreamPath();
-    const runnerInstance = streamPathToAgentInstance(streamPath);
 
     await using server = await createLocalDevServer({
       eventsBaseUrl: e2e.eventsBaseUrl,
@@ -35,7 +37,6 @@ test(
         async (runnerSlug) =>
           await connectRunnerSocket({
             baseUrl: server.baseUrl,
-            runnerInstance,
             runnerSlug,
             streamPath,
           }),
@@ -79,15 +80,13 @@ async () => {
 
 async function connectRunnerSocket(args: {
   baseUrl: string;
-  runnerInstance: string;
   runnerSlug: string;
   streamPath: StreamPath;
 }): Promise<WebSocket> {
   const url = new URL(args.baseUrl);
   url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
-  url.pathname = `/api/${args.runnerSlug}/${encodeURIComponent(args.runnerInstance)}/websocket`;
+  url.pathname = `/api/${args.runnerSlug}/${encodeURIComponent(args.streamPath)}/websocket`;
   url.search = "";
-  url.searchParams.set("streamPath", args.streamPath);
 
   const socket = new WebSocket(url);
   await new Promise<void>((resolve, reject) => {

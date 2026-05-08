@@ -1,14 +1,14 @@
 import type { Client } from "sqlfu";
 
 const sql = `
-insert into projects (id, slug, clerk_org_id, created_by_clerk_user_id, metadata)
-values (?, ?, ?, ?, ?)
-returning id, slug, clerk_org_id, created_by_clerk_user_id, custom_hostname, metadata, created_at, updated_at;
+insert into projects (id, slug, metadata)
+values (?, ?, ?)
+returning id, slug, custom_hostname, metadata, created_at, updated_at;
 `.trim();
 const query = (params: insertProject.Params) => ({
-  sql,
-  args: [params.id, params.slug, params.clerkOrgId, params.createdByClerkUserId, params.metadata],
   name: "insertProject",
+  sql,
+  args: [params.id, params.slug, params.metadata],
 });
 
 export const insertProject = Object.assign(
@@ -26,15 +26,11 @@ export namespace insertProject {
   export type Params = {
     id: string;
     slug: string;
-    clerkOrgId: string;
-    createdByClerkUserId: string;
     metadata: string;
   };
   export type Result = {
     id: string;
     slug: string;
-    clerk_org_id: string;
-    created_by_clerk_user_id: string;
     custom_hostname?: string;
     metadata: string;
     created_at: string;

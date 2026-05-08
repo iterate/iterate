@@ -5,67 +5,104 @@ import {
   reduceProcessorEvents,
   type StreamEvent,
 } from "../stream-processor.ts";
-import { ToolProviderDescriptor } from "../../codemode/types.ts";
+import { Callable } from "../../callable/types.ts";
 import { CoreProcessorRegisteredEventType } from "../core/contract.ts";
 import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
 
-const CodemodeEventOffset = z.number().int().positive();
-const CodemodeProviderPath = z.array(z.string().min(1)).min(1);
-const CodemodeToolFunctionPath = z.array(z.string().min(1));
-const CodemodeSerializedError = z.unknown();
+const CodemodeId = z.string().trim().min(1);
+const CodemodePath = z.array(z.string().min(1)).min(1);
+const CodemodeFunctionPath = z.array(z.string().min(1));
+const ToolProviderInvocation = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("event"),
+  }),
+  z.object({
+    callable: Callable,
+    kind: z.literal("rpc"),
+  }),
+]);
+const ToolProviderRegistration = z.object({
+  instructions: z.string().trim().min(1),
+  invocation: ToolProviderInvocation,
+  path: CodemodePath,
+});
+const CodemodeError = z.unknown();
+const ScriptExecutionOutcome = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("succeeded"),
+    output: z.unknown(),
+  }),
+  z.object({
+    status: z.literal("failed"),
+    error: CodemodeError,
+  }),
+]);
+const FunctionCallOutcome = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("returned"),
+    value: z.unknown(),
+  }),
+  z.object({
+    status: z.literal("threw"),
+    error: CodemodeError,
+  }),
+]);
+const InvocationKind = z.enum(["event", "rpc"]);
+
+export type ToolProviderRegistration = z.output<typeof ToolProviderRegistration>;
 
 export const CodemodeProcessorContract = defineProcessorContract({
   slug: "codemode",
-  version: "0.2.0",
+  version: "0.4.0",
   description:
-    "Runs project-scoped codemode scripts from durable stream events and records execution telemetry.",
+    "Runs project-scoped codemode scripts from durable stream events and records minimal script/function-call telemetry.",
   stateSchema: z.object({
     ...standardProcessorBehavior.stateShape,
-    toolProviders: z.record(z.string(), ToolProviderDescriptor).default({}),
+    sessionStarted: z.boolean().default(false),
+    sessionCapabilityCallable: Callable.optional(),
+    toolProviders: z.record(z.string(), ToolProviderRegistration).default({}),
     scriptExecutions: z
       .record(
         z.string(),
         z.discriminatedUnion("status", [
           z.object({
-            status: z.literal("in-flight"),
+            status: z.literal("requested"),
             code: z.string(),
-            requestedOffset: CodemodeEventOffset,
+            scriptExecutionId: CodemodeId,
           }),
           z.object({
-            status: z.literal("finished"),
-            code: z.string(),
-            requestedOffset: CodemodeEventOffset,
-            result: z.unknown(),
-            error: CodemodeSerializedError.optional(),
+            status: z.literal("completed"),
             durationMs: z.number().int().nonnegative().optional(),
+            outcome: ScriptExecutionOutcome,
+            scriptExecutionId: CodemodeId,
           }),
         ]),
       )
       .default({}),
-    toolFunctionCalls: z
+    functionCalls: z
       .record(
         z.string(),
         z.discriminatedUnion("status", [
           z.object({
-            status: z.literal("in-flight"),
-            requestedOffset: CodemodeEventOffset,
-            path: CodemodeProviderPath,
-            payload: z.unknown(),
-            providerPath: CodemodeProviderPath.optional(),
-            toolFunctionPath: CodemodeToolFunctionPath.optional(),
-            scriptExecutionRequestedOffset: CodemodeEventOffset.optional(),
+            status: z.literal("requested"),
+            args: z.array(z.unknown()),
+            functionCallId: CodemodeId,
+            functionPath: CodemodeFunctionPath,
+            invocationKind: InvocationKind,
+            path: CodemodePath,
+            providerPath: CodemodePath,
+            scriptExecutionId: CodemodeId.optional(),
           }),
           z.object({
-            status: z.literal("succeeded"),
-            requestedOffset: CodemodeEventOffset,
-            result: z.unknown(),
-            scriptExecutionRequestedOffset: CodemodeEventOffset.optional(),
-          }),
-          z.object({
-            status: z.literal("failed"),
-            requestedOffset: CodemodeEventOffset,
-            error: CodemodeSerializedError,
-            scriptExecutionRequestedOffset: CodemodeEventOffset.optional(),
+            status: z.literal("completed"),
+            durationMs: z.number().int().nonnegative().optional(),
+            functionCallId: CodemodeId,
+            functionPath: CodemodeFunctionPath,
+            invocationKind: InvocationKind,
+            outcome: FunctionCallOutcome,
+            path: CodemodePath,
+            providerPath: CodemodePath,
+            scriptExecutionId: CodemodeId.optional(),
           }),
         ]),
       )
@@ -76,109 +113,106 @@ export const CodemodeProcessorContract = defineProcessorContract({
   },
   processorDeps: [...standardProcessorBehavior.processorDeps],
   events: {
-    "events.iterate.com/codemode/tool-provider-registered": {
-      description: "A callable tool provider is available to future codemode scripts.",
+    "events.iterate.com/codemode/session-started": {
+      description:
+        "The codemode processor initialized this stream and published the session capability callable.",
       payloadSchema: z.object({
-        descriptor: ToolProviderDescriptor,
-        path: CodemodeProviderPath,
+        sessionCapabilityCallable: Callable,
       }),
     },
-    "events.iterate.com/codemode/tool-provider-described": {
-      description: "A tool provider's generated TypeScript surface was loaded.",
-      payloadSchema: z.object({
-        path: CodemodeProviderPath,
-        typeDefinitions: z.string(),
-      }),
+    "events.iterate.com/codemode/tool-provider-registered": {
+      description: "Model-visible instructions and invocation mode for codemode tool functions.",
+      payloadSchema: ToolProviderRegistration,
     },
     "events.iterate.com/codemode/script-execution-requested": {
-      description: "A codemode script should run against the stream's registered providers.",
+      description: "A codemode script should run against the stream's documented functions.",
       payloadSchema: z.object({
         code: z.string().min(1),
+        scriptExecutionId: CodemodeId,
+      }),
+    },
+    "events.iterate.com/codemode/script-execution-completed": {
+      description: "A codemode script completed with either an output or a serialized error.",
+      payloadSchema: z.object({
+        durationMs: z.number().int().nonnegative().optional(),
+        outcome: ScriptExecutionOutcome,
+        scriptExecutionId: CodemodeId,
+      }),
+    },
+    "events.iterate.com/codemode/function-call-requested": {
+      description:
+        "A codemode script or function implementation requested a documented function path.",
+      payloadSchema: z.object({
+        args: z.array(z.unknown()),
+        functionCallId: CodemodeId,
+        functionPath: CodemodeFunctionPath,
+        invocationKind: InvocationKind,
+        path: CodemodePath,
+        providerPath: CodemodePath,
+        scriptExecutionId: CodemodeId.optional(),
+      }),
+    },
+    "events.iterate.com/codemode/function-call-completed": {
+      description:
+        "A requested function call completed with either an output or a serialized error.",
+      payloadSchema: z.object({
+        durationMs: z.number().int().nonnegative().optional(),
+        functionCallId: CodemodeId,
+        functionPath: CodemodeFunctionPath,
+        invocationKind: InvocationKind,
+        outcome: FunctionCallOutcome,
+        path: CodemodePath,
+        providerPath: CodemodePath,
+        scriptExecutionId: CodemodeId.optional(),
       }),
     },
     "events.iterate.com/codemode/log-emitted": {
-      description: "A codemode script emitted a console log line.",
+      description: "A codemode script emitted a log line.",
       payloadSchema: z.object({
         level: z.enum(["log", "warn", "error"]),
         message: z.string(),
-        scriptExecutionRequestedOffset: CodemodeEventOffset.optional(),
-      }),
-    },
-    "events.iterate.com/codemode/tool-function-call-requested": {
-      description: "A codemode script requested a provider tool function call.",
-      payloadSchema: z.object({
-        path: CodemodeProviderPath,
-        payload: z.unknown(),
-        providerPath: CodemodeProviderPath.optional(),
-        toolFunctionPath: CodemodeToolFunctionPath.optional(),
-        scriptExecutionRequestedOffset: CodemodeEventOffset.optional(),
-      }),
-    },
-    "events.iterate.com/codemode/tool-function-call-succeeded": {
-      description: "A provider tool function call returned successfully.",
-      payloadSchema: z.object({
-        result: z.unknown(),
-        toolFunctionCallRequestedOffset: CodemodeEventOffset,
-        scriptExecutionRequestedOffset: CodemodeEventOffset.optional(),
-      }),
-    },
-    "events.iterate.com/codemode/tool-function-call-failed": {
-      description: "A provider tool function call failed.",
-      payloadSchema: z.object({
-        error: CodemodeSerializedError,
-        toolFunctionCallRequestedOffset: CodemodeEventOffset,
-        scriptExecutionRequestedOffset: CodemodeEventOffset.optional(),
-      }),
-    },
-    "events.iterate.com/codemode/script-execution-finished": {
-      description: "A codemode script completed with either a result or a serialized error.",
-      payloadSchema: z.object({
-        result: z.unknown(),
-        error: CodemodeSerializedError.optional(),
-        durationMs: z.number().int().nonnegative().optional(),
-        scriptExecutionRequestedOffset: CodemodeEventOffset,
+        scriptExecutionId: CodemodeId.optional(),
       }),
     },
   },
   consumes: [
     ...standardProcessorBehavior.consumes,
+    "events.iterate.com/codemode/session-started",
     "events.iterate.com/codemode/tool-provider-registered",
-    "events.iterate.com/codemode/tool-provider-described",
     "events.iterate.com/codemode/script-execution-requested",
+    "events.iterate.com/codemode/script-execution-completed",
+    "events.iterate.com/codemode/function-call-requested",
+    "events.iterate.com/codemode/function-call-completed",
     "events.iterate.com/codemode/log-emitted",
-    "events.iterate.com/codemode/tool-function-call-requested",
-    "events.iterate.com/codemode/tool-function-call-succeeded",
-    "events.iterate.com/codemode/tool-function-call-failed",
-    "events.iterate.com/codemode/script-execution-finished",
   ],
   emits: [
     ...standardProcessorBehavior.emits,
-    "events.iterate.com/codemode/tool-provider-described",
+    "events.iterate.com/codemode/session-started",
     "events.iterate.com/codemode/script-execution-requested",
+    "events.iterate.com/codemode/script-execution-completed",
+    "events.iterate.com/codemode/function-call-requested",
+    "events.iterate.com/codemode/function-call-completed",
     "events.iterate.com/codemode/log-emitted",
-    "events.iterate.com/codemode/tool-function-call-requested",
-    "events.iterate.com/codemode/tool-function-call-succeeded",
-    "events.iterate.com/codemode/tool-function-call-failed",
-    "events.iterate.com/codemode/script-execution-finished",
   ],
   reduce({ contract, state, event }) {
-    const nextState = standardProcessorBehavior.reduce({
-      state,
-      event,
-      contract,
-    });
+    const nextState = standardProcessorBehavior.reduce({ state, event, contract });
 
     switch (event.type) {
       case CoreProcessorRegisteredEventType:
       case "events.iterate.com/codemode/log-emitted":
-      case "events.iterate.com/codemode/tool-provider-described":
         return nextState;
+      case "events.iterate.com/codemode/session-started":
+        return {
+          ...nextState,
+          sessionCapabilityCallable: event.payload.sessionCapabilityCallable,
+          sessionStarted: true,
+        };
       case "events.iterate.com/codemode/tool-provider-registered":
         return {
           ...nextState,
           toolProviders: {
             ...nextState.toolProviders,
-            [toolProviderRegistryKey(event.payload.path)]: event.payload.descriptor,
+            [toolProviderRegistryKey(event.payload.path)]: event.payload,
           },
         };
       case "events.iterate.com/codemode/script-execution-requested":
@@ -186,86 +220,62 @@ export const CodemodeProcessorContract = defineProcessorContract({
           ...nextState,
           scriptExecutions: {
             ...nextState.scriptExecutions,
-            [String(event.offset)]: {
-              status: "in-flight" as const,
+            [event.payload.scriptExecutionId]: {
+              status: "requested" as const,
               code: event.payload.code,
-              requestedOffset: event.offset,
+              scriptExecutionId: event.payload.scriptExecutionId,
             },
           },
         };
-      case "events.iterate.com/codemode/script-execution-finished": {
-        const existing =
-          nextState.scriptExecutions[String(event.payload.scriptExecutionRequestedOffset)];
+      case "events.iterate.com/codemode/script-execution-completed":
         return {
           ...nextState,
           scriptExecutions: {
             ...nextState.scriptExecutions,
-            [String(event.payload.scriptExecutionRequestedOffset)]: {
-              status: "finished" as const,
-              code: existing?.code ?? "",
-              requestedOffset: event.payload.scriptExecutionRequestedOffset,
-              result: event.payload.result,
-              ...(event.payload.error == null ? {} : { error: event.payload.error }),
+            [event.payload.scriptExecutionId]: {
+              status: "completed" as const,
               ...(event.payload.durationMs == null ? {} : { durationMs: event.payload.durationMs }),
+              outcome: event.payload.outcome,
+              scriptExecutionId: event.payload.scriptExecutionId,
             },
           },
         };
-      }
-      case "events.iterate.com/codemode/tool-function-call-requested":
+      case "events.iterate.com/codemode/function-call-requested":
         return {
           ...nextState,
-          toolFunctionCalls: {
-            ...nextState.toolFunctionCalls,
-            [String(event.offset)]: {
-              status: "in-flight" as const,
-              requestedOffset: event.offset,
+          functionCalls: {
+            ...nextState.functionCalls,
+            [event.payload.functionCallId]: {
+              status: "requested" as const,
+              args: event.payload.args,
+              functionCallId: event.payload.functionCallId,
+              functionPath: event.payload.functionPath,
+              invocationKind: event.payload.invocationKind,
               path: event.payload.path,
-              payload: event.payload.payload,
-              ...(event.payload.providerPath == null
+              providerPath: event.payload.providerPath,
+              ...(event.payload.scriptExecutionId == null
                 ? {}
-                : { providerPath: event.payload.providerPath }),
-              ...(event.payload.toolFunctionPath == null
-                ? {}
-                : { toolFunctionPath: event.payload.toolFunctionPath }),
-              ...(event.payload.scriptExecutionRequestedOffset == null
-                ? {}
-                : {
-                    scriptExecutionRequestedOffset: event.payload.scriptExecutionRequestedOffset,
-                  }),
+                : { scriptExecutionId: event.payload.scriptExecutionId }),
             },
           },
         };
-      case "events.iterate.com/codemode/tool-function-call-succeeded":
+      case "events.iterate.com/codemode/function-call-completed":
         return {
           ...nextState,
-          toolFunctionCalls: {
-            ...nextState.toolFunctionCalls,
-            [String(event.payload.toolFunctionCallRequestedOffset)]: {
-              status: "succeeded" as const,
-              requestedOffset: event.payload.toolFunctionCallRequestedOffset,
-              result: event.payload.result,
-              ...(event.payload.scriptExecutionRequestedOffset == null
+          functionCalls: {
+            ...nextState.functionCalls,
+            [event.payload.functionCallId]: {
+              status: "completed" as const,
+              ...(event.payload.durationMs == null ? {} : { durationMs: event.payload.durationMs }),
+              functionCallId: event.payload.functionCallId,
+              functionPath: event.payload.functionPath,
+              invocationKind: event.payload.invocationKind,
+              outcome: event.payload.outcome,
+              path: event.payload.path,
+              providerPath: event.payload.providerPath,
+              ...(event.payload.scriptExecutionId == null
                 ? {}
-                : {
-                    scriptExecutionRequestedOffset: event.payload.scriptExecutionRequestedOffset,
-                  }),
-            },
-          },
-        };
-      case "events.iterate.com/codemode/tool-function-call-failed":
-        return {
-          ...nextState,
-          toolFunctionCalls: {
-            ...nextState.toolFunctionCalls,
-            [String(event.payload.toolFunctionCallRequestedOffset)]: {
-              status: "failed" as const,
-              requestedOffset: event.payload.toolFunctionCallRequestedOffset,
-              error: event.payload.error,
-              ...(event.payload.scriptExecutionRequestedOffset == null
-                ? {}
-                : {
-                    scriptExecutionRequestedOffset: event.payload.scriptExecutionRequestedOffset,
-                  }),
+                : { scriptExecutionId: event.payload.scriptExecutionId }),
             },
           },
         };

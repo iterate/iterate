@@ -4,8 +4,7 @@
   "compatibility_date": "2026-04-27",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
-    "APP_CONFIG": "{\"eventsBaseUrl\":\"https://events.iterate.com\",\"clerk\":{\"publishableKey\":\"pk_test_ZHVtbXkuY2xlcmsuYWNjb3VudHMuZGV2JA\",\"secretKey\":\"sk_test_project_ingress\",\"jwtKey\":\"project-ingress-jwt-key\"},\"mcpProofSecret\":\"project-ingress-proof-secret\",\"projectHostnameBases\":[\"iterate.localhost\"],\"typeIdPrefix\":\"os\",\"deployment\":{\"workerScriptName\":\"os2-project-ingress-vitest\"}}",
-    "EVENTS_BASE_URL": "https://events.iterate.com",
+    "APP_CONFIG": "{\"adminApiSecret\":\"project-ingress-admin-secret\",\"clerk\":{\"publishableKey\":\"pk_test_ZHVtbXkuY2xlcmsuYWNjb3VudHMuZGV2JA\",\"secretKey\":\"sk_test_project_ingress\",\"jwtKey\":\"project-ingress-jwt-key\"},\"mcpProofSecret\":\"project-ingress-proof-secret\",\"openAiApiKey\":\"openai-test-key\",\"projectHostnameBases\":[\"iterate.localhost\"],\"typeIdPrefix\":\"os\"}",
     "MCP_PROOF_SECRET": "project-ingress-proof-secret",
   },
   "durable_objects": {
@@ -15,8 +14,20 @@
         "class_name": "ProjectDurableObject",
       },
       {
+        "name": "AGENT",
+        "class_name": "AgentDurableObject",
+      },
+      {
+        "name": "CODEMODE_SESSION",
+        "class_name": "CodemodeSession",
+      },
+      {
         "name": "PROJECT_MCP_SERVER_CONNECTION",
         "class_name": "ProjectMcpServerConnection",
+      },
+      {
+        "name": "STREAM",
+        "class_name": "StreamDurableObject",
       },
     ],
   },
@@ -38,6 +49,14 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["ProjectDurableObject", "ProjectMcpServerConnection"],
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["StreamDurableObject"],
+    },
+    {
+      "tag": "v3",
+      "new_sqlite_classes": ["AgentDurableObject", "CodemodeSession"],
     },
   ],
 }

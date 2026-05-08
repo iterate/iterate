@@ -1,15 +1,15 @@
 import { SELF, env } from "cloudflare:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { StreamPath } from "@iterate-com/events-contract";
-import { type Event, type EventInput } from "@iterate-com/events-contract";
+import { StreamPath } from "@iterate-com/shared/streams/types";
+import { getInitializedStreamStub } from "@iterate-com/shared/streams/helpers";
 import { describe, expect, test } from "vitest";
-import { createEventsClient } from "~/lib/events-client.ts";
 
 type TestEnv = {
-  EVENTS_BASE_URL: string;
-  MOCK_PROVIDER_BASE_URL: string;
+  STREAM: Env["STREAM"];
 };
+
+const projectId = "proj__test__inboundmcp";
 
 describe("ProjectMcpServerConnection inbound MCP", () => {
   test("runs code through CodemodeSession and appends events to the MCP session stream", async () => {
@@ -37,10 +37,6 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
           code: `async (ctx) => {
   const message = \`hello from \${"inbound mcp"}\`;
   console.log(message);
-  await ctx.codemode.append({
-    type: "events.iterate.com/codemode/test-note",
-    payload: { source: "inbound-mcp-e2e" },
-  });
   return { message, value: 6 * 7 };
 }`,
         },
@@ -57,9 +53,7 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
       expect(sessionId).toBeTruthy();
 
       const streamPath = StreamPath.parse(
-        `/projects/proj__test__inboundmcp/mcp-server-sessions/mcp-client-e2e-${slugifySegment(
-          sessionId ?? "",
-        ).slice(-12)}`,
+        `/mcp-server-sessions/mcp-client-e2e-${slugifySegment(sessionId ?? "").slice(-12)}`,
       );
       const events = await readCurrentStreamEvents(streamPath);
       expect(events).toEqual(
@@ -76,13 +70,18 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
             type: "events.iterate.com/codemode/script-execution-requested",
           }),
           expect.objectContaining({
-            type: "events.iterate.com/codemode/test-note",
-            payload: { source: "inbound-mcp-e2e" },
+            type: "events.iterate.com/codemode/log-emitted",
+            payload: expect.objectContaining({
+              message: "hello from inbound mcp",
+            }),
           }),
           expect.objectContaining({
-            type: "events.iterate.com/codemode/script-execution-finished",
+            type: "events.iterate.com/codemode/script-execution-completed",
             payload: expect.objectContaining({
-              result: { message: "hello from inbound mcp", value: 42 },
+              outcome: {
+                status: "succeeded",
+                output: { message: "hello from inbound mcp", value: 42 },
+              },
             }),
           }),
           expect.objectContaining({
@@ -96,13 +95,11 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
         ]),
       );
     } finally {
-      await client.close();
+      await closeMcpClient({ client, transport });
     }
   });
 
-  test("runs code through builtin, OpenAPI, MCP-client, nested, and leaf providers", async () => {
-    const baseUrl = (env as TestEnv).MOCK_PROVIDER_BASE_URL;
-
+  test("auto-loads static codemode tool providers for run_code", async () => {
     const transport = new StreamableHTTPClientTransport(
       new URL("https://mcp-project.iterate-preview-test.app/mcp"),
       {
@@ -118,95 +115,62 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
         name: "run_code",
         arguments: {
           code: `async (ctx) => {
-  const directOpenApi = await ctx.integrations.http.catalog.getPet({
-    include: "owner",
-    petId: "pet-7",
-  });
-  const directMcp = await ctx.integrations.publicMcp["echo.text"]({
-    text: "hello from script",
-  });
-  const leaf = await ctx.leaf({ value: 21 });
-  const composed = await ctx.builtin.matrix.compose({
-    petId: "pet-9",
-    text: "hello from provider",
-    value: 11,
-  });
+  const operations = await ctx.integrations.http.catalog.listOperations();
+  const mcpTools = await ctx.mcp.cloudflareDocs.listTools();
+  const echo = await ctx.mcp.cloudflareDocs["echo.text"]({ text: "hello static MCP" });
+  const agentHandle = await ctx.agents.create();
+
+  const [pet, workspace, agent, pipelinedAgent, composed] = await Promise.all([
+    ctx.integrations.http.catalog.getPet({ petId: "fido", include: "owner" }),
+    ctx.workspace.proofOfConcept({ message: "workspace from inbound MCP" }),
+    agentHandle.sendMessage({ message: "hi", subPath: "mcp" }),
+    ctx.agents.create().doThing({ label: "promise-pipeline", value: 21 }),
+    ctx.integrations.builtinMatrix.compose({
+      petId: "otto",
+      text: "composition",
+      value: 21,
+    }),
+  ]);
+  agentHandle[Symbol.dispose]?.();
 
   return {
+    agent,
     composed,
-    directMcp,
-    directOpenApi,
-    leaf,
-    streamPath: await ctx.codemode.getStreamPath(),
+    echo,
+    mcpToolNames: mcpTools.tools.map((tool) => tool.name),
+    operationIds: operations.map((operation) => operation.operationId),
+    pet,
+    pipelinedAgent,
+    workspace,
   };
 }`,
-          events: providerMatrixEvents({
-            baseUrl,
-            mcpServerUrl: `${baseUrl}/mcp`,
-          }),
         },
       });
 
       expect(result.isError).not.toBe(true);
-      const output = parseRunCodeResult(result.content) as {
+      expect(parseRunCodeResult(result.content)).toMatchObject({
+        agent: { message: "hi", subPath: "mcp" },
         composed: {
-          echo: { echoed: string; provider: string };
-          leaf: { value: number };
-          pet: { name: string; petId: string; provider: string };
-          provider: string;
-          route: string;
-        };
-        directMcp: { echoed: string; provider: string };
-        directOpenApi: { name: string; petId: string; provider: string };
-        leaf: { provider: string; toolFunctionPath: string[]; value: number };
-        streamPath: string;
-      };
-
-      expect(output).toMatchObject({
-        composed: {
-          echo: {
-            echoed: "provider saw hello from provider",
-            provider: "public-mcp",
-          },
-          leaf: { value: 22 },
-          pet: {
-            name: "Pet PET-9",
-            petId: "pet-9",
-            provider: "openapi",
-          },
+          echo: { echoed: "provider saw composition", provider: "public-mcp" },
+          leaf: { provider: "leaf", value: 42 },
+          pet: { include: "owner", name: "Pet OTTO", petId: "otto", provider: "openapi" },
           provider: "builtin-matrix",
-          route: "codemode-session-capability",
         },
-        directMcp: {
-          echoed: "hello from script",
-          provider: "public-mcp",
-        },
-        directOpenApi: {
-          name: "Pet PET-7",
-          petId: "pet-7",
-          provider: "openapi",
-        },
-        leaf: {
-          provider: "leaf",
-          toolFunctionPath: [],
-          value: 42,
-        },
+        echo: { echoed: "hello static MCP", provider: "public-mcp" },
+        mcpToolNames: ["echo.text"],
+        operationIds: ["getPet"],
+        pet: { include: "owner", name: "Pet FIDO", petId: "fido", provider: "openapi" },
+        pipelinedAgent: { doubled: 42, label: "promise-pipeline", value: 21 },
+        workspace: { message: "workspace from inbound MCP" },
       });
 
       const sessionId = transport.sessionId;
       expect(sessionId).toBeTruthy();
       const streamPath = mcpSessionStreamPath("mcp-provider-matrix-e2e", sessionId ?? "");
-      expect(output.streamPath).toBe(streamPath);
 
       const events = await readCurrentStreamEvents(streamPath);
       expect(events).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({
-            type: "events.iterate.com/codemode/tool-provider-registered",
-            payload: expect.objectContaining({
-              path: ["builtin", "matrix"],
-            }),
-          }),
           expect.objectContaining({
             type: "events.iterate.com/codemode/tool-provider-registered",
             payload: expect.objectContaining({
@@ -216,64 +180,68 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
           expect.objectContaining({
             type: "events.iterate.com/codemode/tool-provider-registered",
             payload: expect.objectContaining({
-              path: ["integrations", "publicMcp"],
+              path: ["mcp", "cloudflareDocs"],
             }),
           }),
           expect.objectContaining({
-            type: "events.iterate.com/codemode/tool-provider-registered",
+            type: "events.iterate.com/codemode/function-call-requested",
             payload: expect.objectContaining({
-              path: ["leaf"],
+              invocationKind: "rpc",
+              path: ["integrations", "builtinMatrix", "compose"],
             }),
           }),
           expect.objectContaining({
-            type: "events.iterate.com/codemode/tool-function-call-requested",
+            type: "events.iterate.com/codemode/function-call-requested",
             payload: expect.objectContaining({
-              path: ["leaf"],
-              providerPath: ["leaf"],
-              toolFunctionPath: [],
+              invocationKind: "rpc",
+              path: ["agents", "create"],
+              providerPath: ["agents", "create"],
             }),
           }),
           expect.objectContaining({
-            type: "events.iterate.com/codemode/tool-function-call-requested",
+            type: "events.iterate.com/codemode/function-call-completed",
             payload: expect.objectContaining({
-              path: ["integrations", "publicMcp", "echo.text"],
-              providerPath: ["integrations", "publicMcp"],
-              toolFunctionPath: ["echo.text"],
+              invocationKind: "rpc",
+              outcome: expect.objectContaining({
+                status: "returned",
+                value: { kind: "live-value", type: "function" },
+              }),
+              path: ["agents", "create"],
+              providerPath: ["agents", "create"],
             }),
           }),
           expect.objectContaining({
-            type: "events.iterate.com/codemode/script-execution-finished",
+            type: "events.iterate.com/codemode/script-execution-completed",
             payload: expect.objectContaining({
-              result: expect.objectContaining({
-                leaf: expect.objectContaining({ value: 42 }),
+              outcome: expect.objectContaining({
+                output: expect.objectContaining({
+                  agent: expect.objectContaining({ message: "hi", subPath: "mcp" }),
+                  pet: expect.objectContaining({ petId: "fido", provider: "openapi" }),
+                  pipelinedAgent: expect.objectContaining({
+                    doubled: 42,
+                    label: "promise-pipeline",
+                  }),
+                }),
+                status: "succeeded",
               }),
             }),
           }),
         ]),
       );
-
-      const har = (await fetch(`${baseUrl}/__har`).then((response) => response.json())) as {
-        log: {
-          entries: Array<{
-            request: { postData?: { text?: string }; url: string };
-          }>;
-        };
-      };
-      expect(har.log.entries.map((entry) => new URL(entry.request.url).pathname)).toEqual(
-        expect.arrayContaining(["/openapi.json", "/pets/pet-7", "/pets/pet-9", "/mcp"]),
-      );
-      expect(
-        har.log.entries.some(
-          (entry) =>
-            new URL(entry.request.url).pathname === "/mcp" &&
-            entry.request.postData?.text?.includes("tools/call"),
-        ),
-      ).toBe(true);
     } finally {
-      await client.close();
+      await closeMcpClient({ client, transport });
     }
   });
 });
+
+async function closeMcpClient(input: { client: Client; transport: StreamableHTTPClientTransport }) {
+  // The MCP Streamable HTTP client separates "terminate the remote MCP session"
+  // from "close this local client transport". Terminating first sends DELETE
+  // with the session id, which lets the agents/mcp Durable Object bridge destroy
+  // its session before the worker-pool runtime starts tearing down.
+  await input.transport.terminateSession().catch(() => undefined);
+  await input.client.close();
+}
 
 function extractTextContent(content: unknown) {
   if (!Array.isArray(content)) return [];
@@ -291,30 +259,26 @@ function extractTextContent(content: unknown) {
 }
 
 async function readCurrentStreamEvents(streamPath: StreamPath) {
-  const client = createEventsClient((env as TestEnv).EVENTS_BASE_URL);
-  const stream = await client.stream(
-    {
-      beforeOffset: "end",
-      path: streamPath,
-    },
-    {
-      signal: AbortSignal.timeout(10_000),
-    },
-  );
-
-  const events: Event[] = [];
-  for await (const event of stream) {
-    events.push(event);
+  const stream = await getInitializedStreamStub({
+    durableObjectNamespace: (env as TestEnv).STREAM,
+    namespace: projectId,
+    path: streamPath,
+  });
+  const events = await stream.history({ before: "end" });
+  try {
+    // Worker-pool tests exercise real Cloudflare RPC semantics. Even plain
+    // object/array results can carry a client-side RPC disposer, so clone the
+    // serializable event list for assertions and then dispose the RPC result.
+    // Docs: https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/
+    return structuredClone(events);
+  } finally {
+    disposeRpcResult(events);
   }
-
-  return events;
 }
 
 function mcpSessionStreamPath(clientName: string, sessionId: string) {
   return StreamPath.parse(
-    `/projects/proj__test__inboundmcp/mcp-server-sessions/${slugifySegment(
-      clientName,
-    )}-${slugifySegment(sessionId).slice(-12)}`,
+    `/mcp-server-sessions/${slugifySegment(clientName)}-${slugifySegment(sessionId).slice(-12)}`,
   );
 }
 
@@ -326,84 +290,6 @@ function parseRunCodeResult(content: unknown) {
   return JSON.parse(text.slice(index + marker.length));
 }
 
-function providerMatrixEvents(input: { baseUrl: string; mcpServerUrl: string }): EventInput[] {
-  return [
-    toolProviderRegisteredEvent({
-      path: ["builtin", "matrix"],
-      callable: workersRpcCallable({
-        bindingName: "BUILTIN_MATRIX_PROVIDER",
-        bindingType: "service",
-      }),
-    }),
-    toolProviderRegisteredEvent({
-      path: ["integrations", "http", "catalog"],
-      callable: workersRpcCallable({
-        bindingName: "OPENAPI_BRIDGE",
-        bindingType: "service",
-        providerProps: {
-          baseUrl: input.baseUrl,
-          specUrl: `${input.baseUrl}/openapi.json`,
-        },
-      }),
-    }),
-    toolProviderRegisteredEvent({
-      path: ["integrations", "publicMcp"],
-      callable: {
-        rpcMethod: "executeToolFunction",
-        type: "workers-rpc",
-        via: {
-          bindingName: "MCP_CLIENT_BRIDGE",
-          bindingType: "durable-object-namespace",
-          durableObject: { name: input.mcpServerUrl },
-          type: "env-binding",
-        },
-      },
-    }),
-    toolProviderRegisteredEvent({
-      path: ["leaf"],
-      callable: workersRpcCallable({
-        bindingName: "LEAF_PROVIDER",
-        bindingType: "service",
-      }),
-    }),
-  ];
-}
-
-function toolProviderRegisteredEvent(provider: Record<string, unknown>): EventInput {
-  return {
-    type: "events.iterate.com/codemode/tool-provider-registered",
-    payload: {
-      descriptor: provider,
-      path: provider.path,
-    },
-  };
-}
-
-function workersRpcCallable(input: {
-  bindingName: string;
-  bindingType: "service";
-  providerProps?: Record<string, unknown>;
-}) {
-  return {
-    rpcMethod: "executeToolFunction",
-    type: "workers-rpc",
-    via: {
-      bindingName: input.bindingName,
-      bindingType: input.bindingType,
-      type: "env-binding",
-    },
-    ...(input.providerProps
-      ? {
-          transformInput: {
-            shallowMerge: {
-              providerProps: input.providerProps,
-            },
-          },
-        }
-      : {}),
-  };
-}
-
 function slugifySegment(value: string) {
   return value
     .trim()
@@ -411,4 +297,14 @@ function slugifySegment(value: string) {
     .replace(/[^a-z0-9_-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 64);
+}
+
+function disposeRpcResult(value: unknown) {
+  if (
+    value != null &&
+    (typeof value === "object" || typeof value === "function") &&
+    typeof value[Symbol.dispose] === "function"
+  ) {
+    value[Symbol.dispose]();
+  }
 }

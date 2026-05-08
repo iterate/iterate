@@ -9,6 +9,7 @@ import {
 import { Callable } from "../../callable/types.ts";
 import { AgentChatProcessorContract } from "../agent-chat/contract.ts";
 import { AgentProcessorContract, reduceAgentEvents } from "../agent/contract.ts";
+import { CodemodeProcessorContract } from "../codemode/contract.ts";
 import { CoreProcessorRegisteredEventType } from "../core/contract.ts";
 import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
 
@@ -60,8 +61,8 @@ const initialAgentProcessorState = getInitialProcessorState(AgentProcessorContra
  * callable tool providers, and appends derived events belongs in a separate
  * file.
  */
-export const CodemodeProcessorContract = defineProcessorContract({
-  slug: "codemode",
+export const LegacyCodemodeProcessorContract = defineProcessorContract({
+  slug: "legacy-codemode",
   version: "0.1.0",
   description: "Turns assistant codemode blocks into tool execution results.",
   stateSchema: z.object({
@@ -100,6 +101,7 @@ export const CodemodeProcessorContract = defineProcessorContract({
     ...standardProcessorBehavior.processorDeps,
     AgentProcessorContract,
     AgentChatProcessorContract,
+    CodemodeProcessorContract,
   ],
   events: {
     "events.iterate.com/codemode/block-added": {
@@ -163,6 +165,8 @@ export const CodemodeProcessorContract = defineProcessorContract({
     switch (event.type) {
       case CoreProcessorRegisteredEventType:
         return nextState;
+      case "events.iterate.com/codemode/tool-provider-registered":
+        break;
       case "events.iterate.com/agent/input-added":
         if (event.idempotencyKey === CODEMODE_PRIMER_IDEMPOTENCY_KEY) {
           return { ...nextState, hasAppendedCodemodePrompt: true };
@@ -214,16 +218,16 @@ export const CodemodeProcessorContract = defineProcessorContract({
 
 export function reduceCodemodeEvents(args: {
   events: readonly StreamEvent[];
-  state?: CodemodeState;
-}): CodemodeState {
+  state?: LegacyCodemodeState;
+}): LegacyCodemodeState {
   return reduceProcessorEvents({
-    contract: CodemodeProcessorContract,
+    contract: LegacyCodemodeProcessorContract,
     events: args.events,
     state: args.state,
   });
 }
 
-export type CodemodeState = z.infer<typeof CodemodeProcessorContract.stateSchema>;
+export type LegacyCodemodeState = z.infer<typeof LegacyCodemodeProcessorContract.stateSchema>;
 
 export function codemodeResultNeedsAgentTurn(payload: { result: unknown; error?: string }) {
   return payload.error != null || payload.result !== undefined;
@@ -235,7 +239,8 @@ function isExternalAgentTurn(event: {
 }) {
   return (
     event.payload.triggerLlmRequest?.behaviour !== "dont-trigger-request" &&
-    !event.idempotencyKey?.startsWith("stream-processor:codemode:derived:")
+    !event.idempotencyKey?.startsWith("legacy-codemode/") &&
+    !event.idempotencyKey?.startsWith("stream-processor:legacy-codemode:derived:")
   );
 }
 

@@ -1,4 +1,4 @@
-import type { Event, ExternalSubscriber, StreamPath } from "@iterate-com/events-contract";
+import type { Event, ExternalSubscriber, StreamPath } from "@iterate-com/shared/streams/types";
 
 export const streamRendererModes = ["pretty", "raw-pretty", "raw", "raw-single-json"] as const;
 export type StreamRendererMode = (typeof streamRendererModes)[number];

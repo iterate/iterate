@@ -1,16 +1,16 @@
 import type { Client } from "sqlfu";
 
 const sql = `
-select id, slug, clerk_org_id, created_by_clerk_user_id, custom_hostname, metadata, created_at, updated_at
+select id, slug, custom_hostname, metadata, created_at, updated_at
 from projects
 where slug = ?
 order by created_at asc
 limit 2;
 `.trim();
 const query = (params: listProjectsBySlug.Params) => ({
+  name: "listProjectsBySlug",
   sql,
   args: [params.slug],
-  name: "listProjectsBySlug",
 });
 
 export const listProjectsBySlug = Object.assign(
@@ -30,8 +30,6 @@ export namespace listProjectsBySlug {
   export type Result = {
     id: string;
     slug: string;
-    clerk_org_id: string;
-    created_by_clerk_user_id: string;
     custom_hostname?: string;
     metadata: string;
     created_at: string;

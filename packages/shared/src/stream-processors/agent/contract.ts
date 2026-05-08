@@ -7,6 +7,7 @@ import {
 } from "../stream-processor.ts";
 import { CoreProcessorRegisteredEventType } from "../core/contract.ts";
 import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
+import { CodemodeProcessorContract } from "../codemode/contract.ts";
 
 /**
  * Frontend-safe public contract for the agent processor.
@@ -51,7 +52,7 @@ export const AgentProcessorContract = defineProcessorContract({
   initialState: {
     ...standardProcessorBehavior.initialState,
   },
-  processorDeps: [...standardProcessorBehavior.processorDeps],
+  processorDeps: [...standardProcessorBehavior.processorDeps, CodemodeProcessorContract],
   events: {
     "events.iterate.com/agent/system-prompt-updated": {
       description: "Updates the system prompt used for future LLM requests.",
@@ -186,6 +187,7 @@ export const AgentProcessorContract = defineProcessorContract({
   },
   consumes: [
     ...standardProcessorBehavior.consumes,
+    "events.iterate.com/codemode/tool-provider-registered",
     "events.iterate.com/agent/system-prompt-updated",
     "events.iterate.com/agent/input-added",
     "events.iterate.com/agent/output-added",
@@ -215,6 +217,7 @@ export const AgentProcessorContract = defineProcessorContract({
 
     switch (event.type) {
       case CoreProcessorRegisteredEventType:
+      case "events.iterate.com/codemode/tool-provider-registered":
         return nextState;
       case "events.iterate.com/agent/system-prompt-updated":
         return { ...nextState, systemPrompt: event.payload.systemPrompt };

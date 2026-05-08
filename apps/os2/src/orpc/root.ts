@@ -1,7 +1,6 @@
 import { createAppRouterWithInternal } from "@iterate-com/shared/apps/internal-router";
 import { AppConfig } from "~/app.ts";
 import { activeOrganizationMiddleware, os } from "~/orpc/orpc.ts";
-import { codemodeRouter } from "~/orpc/routers/codemode.ts";
 import { projectsRouter } from "~/orpc/routers/projects.ts";
 import { testRouter } from "~/orpc/routers/test.ts";
 
@@ -12,7 +11,6 @@ export const appRouter = createAppRouterWithInternal({
     os.router({
       ...testRouter,
       ...projectsRouter,
-      ...codemodeRouter,
       __internal: os.__internal.router(internalRouter),
       ping: os.ping.use(activeOrganizationMiddleware).handler(async () => ({
         message: "pong",

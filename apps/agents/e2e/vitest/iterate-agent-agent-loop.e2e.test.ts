@@ -9,10 +9,7 @@
 import { expect, test } from "vitest";
 import { setupE2E, type E2EContext } from "../test-support/e2e-test.ts";
 import { createLocalDevServer } from "../test-support/create-local-dev-server.ts";
-import {
-  buildAgentStreamProcessorRunnerWebSocketCallbackUrl,
-  streamPathToAgentInstance,
-} from "~/lib/iterate-agent-addressing.ts";
+import { buildAgentStreamProcessorRunnerWebSocketCallbackUrl } from "~/lib/iterate-agent-addressing.ts";
 
 const GATEWAY_ID = "e2e";
 const AGENT_INPUT_CONTENT = "What is the capital of France? Answer with one word.";
@@ -59,7 +56,6 @@ async function runScenario(args: {
 
   const websocketUrl = buildAgentStreamProcessorRunnerWebSocketCallbackUrl({
     publicOrigin: tunnelPublicUrl,
-    runnerInstance: streamPathToAgentInstance(streamPath),
     streamPath,
   });
 

@@ -6,12 +6,12 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { extractPublicConfigSchema } from "@iterate-com/shared/apps/config";
 import { describe, expect, test } from "vitest";
-import { type StreamPath } from "@iterate-com/events-contract";
+import { type StreamPath } from "@iterate-com/shared/streams/types";
 import { AppConfig } from "../../src/app.ts";
 import {
   collectAsyncIterableUntilIdle,
   createEvents2AppFixture,
-  defaultE2EProjectSlug,
+  defaultE2ENamespace,
   requireEventsBaseUrl,
 } from "../helpers.ts";
 
@@ -22,7 +22,7 @@ const app = createEvents2AppFixture({
 const postBootTimeoutMs = 2_000;
 const historyIdleTimeoutMs = 250;
 const rootHistoryIdleTimeoutMs = 1_000;
-const defaultProjectSlug = defaultE2EProjectSlug;
+const defaultNamespace = defaultE2ENamespace;
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
 const testTimeoutMs = 10_000;
 const describeRuntimeSmoke = process.env.CI ? describe.skip : describe;
@@ -113,7 +113,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
         type: "events.iterate.com/core/stream-first-initialized",
       });
       expect(await app.client.getState({ path: "/" })).toMatchObject({
-        projectSlug: defaultProjectSlug,
+        namespace: defaultNamespace,
         path: "/",
         metadata: {},
       });
@@ -131,7 +131,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
         streamPath: path,
         type: "events.iterate.com/core/stream-first-initialized",
         offset: expectedStoredOffset(0),
-        payload: { projectSlug: defaultProjectSlug, path },
+        payload: { namespace: defaultNamespace, path },
       });
       expect(events[1]).toMatchObject({
         streamPath: path,
@@ -140,7 +140,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
       });
 
       expect(await app.client.getState({ path })).toEqual({
-        projectSlug: defaultProjectSlug,
+        namespace: defaultNamespace,
         path,
         eventCount: 2,
         childPaths: [],
@@ -157,7 +157,7 @@ describeRuntimeSmoke("events runtime smoke", () => {
       const rootStateResponse = await app.fetch("/api/streams/__state/%2F");
       expect(rootStateResponse.status).toBe(200);
       expect(await rootStateResponse.json()).toMatchObject({
-        projectSlug: defaultProjectSlug,
+        namespace: defaultNamespace,
         path: "/",
       });
 

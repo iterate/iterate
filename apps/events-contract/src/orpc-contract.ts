@@ -7,11 +7,11 @@ import {
   Event,
   EventInput,
   InvalidEventAppendedEventInput,
+  STREAM_INVALID_EVENT_APPENDED_TYPE,
   StreamPath,
   StreamQuery,
   StreamState,
-} from "./types.ts";
-import { STREAM_INVALID_EVENT_APPENDED_TYPE } from "./core-event-types.ts";
+} from "@iterate-com/shared/streams/types";
 
 const PathMungingDescription =
   "For curl ergonomics, nested stream paths accept either raw nested segments or percent-escaped slash forms. Both resolve to the same canonical stream path.";

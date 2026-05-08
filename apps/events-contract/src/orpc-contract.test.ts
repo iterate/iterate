@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import type { ContractRouterClient } from "@orpc/contract";
 import { z } from "zod";
-import { AppendInput, eventsContract } from "./orpc-contract.ts";
 import {
   EventInput,
   InvalidEventAppendedEventInput,
   StreamQuery,
   StreamMetadataUpdatedEventInput,
   StreamPath,
-} from "./types.ts";
+} from "@iterate-com/shared/streams/types";
+import { AppendInput, eventsContract } from "./orpc-contract.ts";
 
 type EventsContractClient = ContractRouterClient<typeof eventsContract>;
 type ClientAppendArgs = Parameters<EventsContractClient["append"]>[0];
@@ -271,12 +271,12 @@ const streamInitializedEvent = AppendInput.parse({
   path: examplePath,
   event: {
     type: "events.iterate.com/core/stream-first-initialized",
-    payload: { projectSlug: "public", path: examplePath },
+    payload: { namespace: "public", path: examplePath },
   },
 });
 
 assert.deepEqual(streamInitializedEvent.event.payload, {
-  projectSlug: "public",
+  namespace: "public",
   path: examplePath,
 });
 

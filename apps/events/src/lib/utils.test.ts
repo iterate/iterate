@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
-import type { Event } from "@iterate-com/events-contract";
+import type { Event } from "@iterate-com/shared/streams/types";
 import { decodeEventStream } from "~/lib/utils.ts";
 
 describe("decodeEventStream", () => {

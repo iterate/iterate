@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import { EventInput, StreamPath } from "@iterate-com/events-contract";
+import { StreamPath } from "@iterate-com/shared/streams/types";
 import type { D1ObjectCatalogRecord } from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
 import {
   getD1ObjectCatalogRecord,
@@ -8,77 +8,54 @@ import {
 import { typeid } from "@iterate-com/shared/typeid";
 import type { AppContext } from "~/context.ts";
 import {
+  countAllProjects,
   countProjects,
   deleteProject,
-  deleteProjectPreset,
-  getProjectPresetById,
   getProjectById,
+  getProjectPermission,
   getProjectBySlug,
-  insertProjectPreset,
-  listProjectPresets,
+  insertProjectPermission,
+  listAllProjects,
   listProjects,
-  updateProjectPreset,
   updateProjectConfig,
 } from "~/db/queries/.generated/index.ts";
-import type { CodemodeSessionInitParams } from "~/durable-objects/codemode-session.ts";
-import type { ProjectDurableObject } from "~/durable-objects/project-durable-object.ts";
-import type { ProjectMcpServerConnectionInitParams } from "~/durable-objects/project-mcp-server-connection.ts";
+import type { CodemodeSessionStructuredName } from "~/domains/codemode/durable-objects/codemode-session.ts";
+import {
+  getProjectDurableObjectName,
+  type ProjectDurableObject,
+} from "~/domains/projects/durable-objects/project-durable-object.ts";
+import type { ProjectMcpServerConnectionStructuredName } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 import {
   isReservedProjectHostname,
   isValidCustomHostname,
   normalizeCustomHostname,
 } from "~/lib/project-host-routing.ts";
-import type { ActiveOrganizationAuth } from "~/lib/auth.ts";
-import { activeOrganizationMiddleware, os } from "~/orpc/orpc.ts";
+import type { ActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
+import { activeOrganizationMiddleware, os, projectScopeMiddleware } from "~/orpc/orpc.ts";
+import { requireProjectScope } from "~/orpc/project-access.ts";
+import { projectCodemodeRouter } from "~/orpc/routers/codemode.ts";
+import { projectAgentsRouter } from "~/orpc/routers/agents.ts";
+import { projectStreamsRouter } from "~/orpc/routers/streams.ts";
 
 type ProjectRow = {
   id: string;
   slug: string;
-  clerk_org_id?: string | null;
-  created_by_clerk_user_id?: string | null;
   custom_hostname?: string | null;
   metadata: string;
   created_at: string;
   updated_at: string;
 };
 
-type ProjectPresetRow = {
-  id: string;
-  project_id: string;
-  name: string;
-  description?: string | null;
-  events_json: string;
-  created_at: string;
-  updated_at: string;
-};
-
-type CodemodeSessionCatalogRecord = D1ObjectCatalogRecord<CodemodeSessionInitParams>;
-type InboundMcpSessionCatalogRecord = D1ObjectCatalogRecord<ProjectMcpServerConnectionInitParams>;
+type CodemodeSessionCatalogRecord = D1ObjectCatalogRecord<CodemodeSessionStructuredName>;
+type InboundMcpSessionCatalogRecord =
+  D1ObjectCatalogRecord<ProjectMcpServerConnectionStructuredName>;
 
 function toProject(row: ProjectRow) {
   return {
     id: row.id,
     slug: row.slug,
-    clerkOrgId: requireProjectOwnerField(row.clerk_org_id, row.id, "clerk_org_id"),
-    createdByClerkUserId: requireProjectOwnerField(
-      row.created_by_clerk_user_id,
-      row.id,
-      "created_by_clerk_user_id",
-    ),
     customHostname: row.custom_hostname ?? null,
     metadata: JSON.parse(row.metadata) as Record<string, unknown>,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-function toProjectPreset(row: ProjectPresetRow) {
-  return {
-    id: row.id,
-    projectId: row.project_id,
-    name: row.name,
-    description: row.description ?? null,
-    events: EventInput.array().parse(JSON.parse(row.events_json)),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -87,8 +64,8 @@ function toProjectPreset(row: ProjectPresetRow) {
 function toCodemodeSession(record: CodemodeSessionCatalogRecord) {
   return {
     name: record.name,
-    projectId: record.initParams.projectId,
-    streamPath: StreamPath.parse(record.initParams.streamPath),
+    projectId: record.structuredName.projectId,
+    streamPath: StreamPath.parse(record.structuredName.streamPath),
     createdAt: record.createdAt,
     lastWokenAt: record.lastWokenAt,
   };
@@ -97,29 +74,15 @@ function toCodemodeSession(record: CodemodeSessionCatalogRecord) {
 function toInboundMcpSession(record: InboundMcpSessionCatalogRecord) {
   return {
     name: record.name,
-    projectId: record.initParams.projectId,
-    projectSlug: record.initParams.projectSlug,
-    streamPath: StreamPath.parse(record.initParams.streamPath),
-    clientId: record.initParams.clientId,
-    clientName: record.initParams.clientName,
-    userId: record.initParams.userId,
+    projectId: record.structuredName.projectId,
+    projectSlug: record.structuredName.projectSlug,
+    streamPath: StreamPath.parse(record.structuredName.streamPath),
+    clientId: record.structuredName.clientId,
+    clientName: record.structuredName.clientName,
+    userId: record.structuredName.userId,
     createdAt: record.createdAt,
     lastWokenAt: record.lastWokenAt,
   };
-}
-
-function requireProjectOwnerField(
-  value: string | null | undefined,
-  projectId: string,
-  field: string,
-) {
-  if (!value) {
-    throw new ORPCError("INTERNAL_SERVER_ERROR", {
-      message: `Project ${projectId} is missing ${field}`,
-    });
-  }
-
-  return value;
 }
 
 function normalizeConfigCustomHostname(
@@ -164,13 +127,21 @@ export const projectsRouter = {
         let project: Awaited<ReturnType<ProjectDurableObject["createProject"]>>;
 
         try {
-          project = await requireProjectNamespace(context).getByName(id).createProject({
-            projectId: id,
-            slug: input.slug,
-            clerkOrgId: auth.orgId,
-            createdByClerkUserId: auth.userId,
-            metadata: input.metadata,
-          });
+          project = await requireProjectDurableObjectNamespace(context)
+            .getByName(getProjectDurableObjectName(id))
+            .createProject({
+              metadata: input.metadata,
+              projectId: id,
+              slug: input.slug,
+            });
+          if (!auth.isAdminApi) {
+            await insertProjectPermission(context.db, {
+              principalId: auth.orgId,
+              principalType: "clerk_organization",
+              projectId: id,
+              role: "owner",
+            });
+          }
         } catch (error) {
           if (isUniqueConstraintError(error)) {
             throw new ORPCError("CONFLICT", {
@@ -181,7 +152,7 @@ export const projectsRouter = {
           throw error;
         }
 
-        const row = await getProjectById(context.db, { clerkOrgId: auth.orgId, id: project.id });
+        const row = await getProjectById(context.db, { id: project.id });
         if (!row) {
           throw new ORPCError("INTERNAL_SERVER_ERROR", {
             message: `Project ${id} was not returned after createProject`,
@@ -193,53 +164,56 @@ export const projectsRouter = {
     list: os.projects.list.use(activeOrganizationMiddleware).handler(async ({ context, input }) => {
       const auth = context.activeOrganization;
       const [totalRow, rows] = await Promise.all([
-        countProjects(context.db, { clerkOrgId: auth.orgId }),
-        listProjects(context.db, {
-          clerkOrgId: auth.orgId,
-          limit: input.limit,
-          offset: input.offset,
-        }),
+        auth.isAdminApi
+          ? countAllProjects(context.db)
+          : countProjects(context.db, {
+              principalId: auth.orgId,
+              principalType: "clerk_organization",
+            }),
+        auth.isAdminApi
+          ? listAllProjects(context.db, { limit: input.limit, offset: input.offset })
+          : listProjects(context.db, {
+              limit: input.limit,
+              offset: input.offset,
+              principalId: auth.orgId,
+              principalType: "clerk_organization",
+            }),
       ]);
 
       return { projects: rows.map(toProject), total: totalRow?.total ?? 0 };
     }),
     find: os.projects.find.use(activeOrganizationMiddleware).handler(async ({ context, input }) => {
-      const auth = context.activeOrganization;
-      const row = await getProjectById(context.db, { clerkOrgId: auth.orgId, id: input.id });
-
-      if (!row) {
-        throw new ORPCError("NOT_FOUND", { message: `Project ${input.id} not found` });
-      }
-
+      const row = await requireProject({
+        activeOrganization: context.activeOrganization,
+        context,
+        projectId: input.id,
+      });
       return toProject(row);
     }),
     findBySlug: os.projects.findBySlug
       .use(activeOrganizationMiddleware)
       .handler(async ({ context, input }) => {
-        const auth = context.activeOrganization;
-        const row = await getProjectBySlug(context.db, {
-          clerkOrgId: auth.orgId,
-          slug: input.slug,
-        });
+        const row = await getProjectBySlug(context.db, { slug: input.slug });
 
         if (!row) {
           throw new ORPCError("NOT_FOUND", { message: `Project ${input.slug} not found` });
         }
 
+        await requireProject({
+          activeOrganization: context.activeOrganization,
+          context,
+          projectId: row.id,
+        });
         return toProject(row);
       }),
     updateConfig: os.projects.updateConfig
       .use(activeOrganizationMiddleware)
       .handler(async ({ context, input }) => {
-        const auth = context.activeOrganization;
-        const existing = await getProjectById(context.db, {
-          clerkOrgId: auth.orgId,
-          id: input.id,
+        const existing = await requireProject({
+          activeOrganization: context.activeOrganization,
+          context,
+          projectId: input.id,
         });
-
-        if (!existing) {
-          throw new ORPCError("NOT_FOUND", { message: `Project ${input.id} not found` });
-        }
 
         const normalizedCustomHostname = normalizeConfigCustomHostname(
           input.customHostname,
@@ -259,7 +233,7 @@ export const projectsRouter = {
               customHostname: nextCustomHostname,
               metadata: JSON.stringify(nextMetadata),
             },
-            { clerkOrgId: auth.orgId, id: input.id },
+            { id: input.id },
           );
         } catch (error) {
           if (isUniqueConstraintError(error)) {
@@ -271,7 +245,7 @@ export const projectsRouter = {
           throw error;
         }
 
-        const row = await getProjectById(context.db, { clerkOrgId: auth.orgId, id: input.id });
+        const row = await getProjectById(context.db, { id: input.id });
         if (!row) {
           throw new ORPCError("INTERNAL_SERVER_ERROR", {
             message: `Project ${input.id} was not returned after update`,
@@ -283,45 +257,54 @@ export const projectsRouter = {
     remove: os.projects.remove
       .use(activeOrganizationMiddleware)
       .handler(async ({ context, input }) => {
-        const auth = context.activeOrganization;
-        const existing = await getProjectById(context.db, { clerkOrgId: auth.orgId, id: input.id });
-
-        if (!existing) {
-          return { ok: true as const, id: input.id, deleted: false };
-        }
-
-        await deleteProject(context.db, { clerkOrgId: auth.orgId, id: input.id });
-        return { ok: true as const, id: input.id, deleted: true };
-      }),
-    codemodeSessions: {
-      list: os.projects.codemodeSessions.list
-        .use(activeOrganizationMiddleware)
-        .handler(async ({ context, input }) => {
+        try {
           await requireProject({
             activeOrganization: context.activeOrganization,
             context,
-            projectId: input.projectId,
+            projectId: input.id,
           });
-          const rows = await listD1ObjectCatalogRecordsByIndex<CodemodeSessionInitParams>(
+        } catch (error) {
+          if (error instanceof ORPCError && error.code === "NOT_FOUND") {
+            return { ok: true as const, id: input.id, deleted: false };
+          }
+          throw error;
+        }
+
+        await deleteProject(context.db, { id: input.id });
+        const existing = await getProjectById(context.db, { id: input.id });
+        if (existing) {
+          return { ok: true as const, id: input.id, deleted: false };
+        }
+        return { ok: true as const, id: input.id, deleted: true };
+      }),
+  },
+  project: {
+    get: os.project.get.use(projectScopeMiddleware).handler(async ({ context }) => {
+      const row = requireProjectScope(context);
+      return toProject(row);
+    }),
+    codemode: {
+      ...projectCodemodeRouter,
+      listSessions: os.project.codemode.listSessions
+        .use(projectScopeMiddleware)
+        .handler(async ({ context }) => {
+          const project = requireProjectScope(context);
+          const rows = await listD1ObjectCatalogRecordsByIndex<CodemodeSessionStructuredName>(
             requireD1ObjectCatalog(context),
             {
               className: "CodemodeSession",
               indexName: "projectId",
-              indexValue: input.projectId,
+              indexValue: project.id,
             },
           );
 
           return { sessions: rows.map(toCodemodeSession) };
         }),
-      find: os.projects.codemodeSessions.find
-        .use(activeOrganizationMiddleware)
+      findSession: os.project.codemode.findSession
+        .use(projectScopeMiddleware)
         .handler(async ({ context, input }) => {
-          await requireProject({
-            activeOrganization: context.activeOrganization,
-            context,
-            projectId: input.projectId,
-          });
-          const record = await getD1ObjectCatalogRecord<CodemodeSessionInitParams>(
+          const project = requireProjectScope(context);
+          const record = await getD1ObjectCatalogRecord<CodemodeSessionStructuredName>(
             requireD1ObjectCatalog(context),
             {
               className: "CodemodeSession",
@@ -329,7 +312,7 @@ export const projectsRouter = {
             },
           );
 
-          if (!record || record.initParams.projectId !== input.projectId) {
+          if (!record || record.structuredName.projectId !== project.id) {
             throw new ORPCError("NOT_FOUND", {
               message: `Codemode Session ${input.name} not found`,
             });
@@ -338,158 +321,26 @@ export const projectsRouter = {
           return toCodemodeSession(record);
         }),
     },
-    mcpSessions: {
-      list: os.projects.mcpSessions.list
-        .use(activeOrganizationMiddleware)
-        .handler(async ({ context, input }) => {
-          await requireProject({
-            activeOrganization: context.activeOrganization,
-            context,
-            projectId: input.projectId,
-          });
+    agents: projectAgentsRouter,
+    inboundMcpServer: {
+      listSessions: os.project.inboundMcpServer.listSessions
+        .use(projectScopeMiddleware)
+        .handler(async ({ context }) => {
+          const project = requireProjectScope(context);
           const rows =
-            await listD1ObjectCatalogRecordsByIndex<ProjectMcpServerConnectionInitParams>(
+            await listD1ObjectCatalogRecordsByIndex<ProjectMcpServerConnectionStructuredName>(
               requireD1ObjectCatalog(context),
               {
                 className: "ProjectMcpServerConnection",
                 indexName: "projectId",
-                indexValue: input.projectId,
+                indexValue: project.id,
               },
             );
 
           return { sessions: rows.map(toInboundMcpSession) };
         }),
     },
-    presets: {
-      list: os.projects.presets.list
-        .use(activeOrganizationMiddleware)
-        .handler(async ({ context, input }) => {
-          const auth = context.activeOrganization;
-          const rows = await listProjectPresets(context.db, {
-            clerkOrgId: auth.orgId,
-            projectId: input.projectId,
-          });
-
-          return { presets: rows.map(toProjectPreset) };
-        }),
-      create: os.projects.presets.create
-        .use(activeOrganizationMiddleware)
-        .handler(async ({ context, input }) => {
-          const auth = context.activeOrganization;
-          const project = await getProjectById(context.db, {
-            clerkOrgId: auth.orgId,
-            id: input.projectId,
-          });
-
-          if (!project) {
-            throw new ORPCError("NOT_FOUND", {
-              message: `Project ${input.projectId} not found`,
-            });
-          }
-
-          const id = typeid({
-            env: { TYPEID_PREFIX: context.config.typeIdPrefix.exposeSecret() },
-            prefix: "preset",
-          });
-
-          try {
-            const row = await insertProjectPreset(context.db, {
-              id,
-              projectId: input.projectId,
-              name: input.name,
-              description: input.description ?? null,
-              eventsJson: JSON.stringify(input.events),
-            });
-
-            if (!row) {
-              throw new ORPCError("INTERNAL_SERVER_ERROR", {
-                message: `Preset ${id} was not returned after insert`,
-              });
-            }
-
-            return toProjectPreset(row);
-          } catch (error) {
-            if (isUniqueConstraintError(error)) {
-              throw new ORPCError("CONFLICT", {
-                message: `A preset named ${input.name} already exists.`,
-              });
-            }
-
-            throw error;
-          }
-        }),
-      update: os.projects.presets.update
-        .use(activeOrganizationMiddleware)
-        .handler(async ({ context, input }) => {
-          const auth = context.activeOrganization;
-          const existing = await getProjectPresetById(context.db, {
-            clerkOrgId: auth.orgId,
-            id: input.id,
-            projectId: input.projectId,
-          });
-
-          if (!existing) {
-            throw new ORPCError("NOT_FOUND", {
-              message: `Preset ${input.id} not found`,
-            });
-          }
-
-          try {
-            await updateProjectPreset(
-              context.db,
-              {
-                name: input.name,
-                description: input.description ?? null,
-                eventsJson: JSON.stringify(input.events),
-              },
-              { clerkOrgId: auth.orgId, id: input.id, projectId: input.projectId },
-            );
-          } catch (error) {
-            if (isUniqueConstraintError(error)) {
-              throw new ORPCError("CONFLICT", {
-                message: `A preset named ${input.name} already exists.`,
-              });
-            }
-
-            throw error;
-          }
-
-          const row = await getProjectPresetById(context.db, {
-            clerkOrgId: auth.orgId,
-            id: input.id,
-            projectId: input.projectId,
-          });
-          if (!row) {
-            throw new ORPCError("INTERNAL_SERVER_ERROR", {
-              message: `Preset ${input.id} was not returned after update`,
-            });
-          }
-
-          return toProjectPreset(row);
-        }),
-      remove: os.projects.presets.remove
-        .use(activeOrganizationMiddleware)
-        .handler(async ({ context, input }) => {
-          const auth = context.activeOrganization;
-          const existing = await getProjectPresetById(context.db, {
-            clerkOrgId: auth.orgId,
-            id: input.id,
-            projectId: input.projectId,
-          });
-
-          if (!existing) {
-            return { ok: true as const, id: input.id, deleted: false };
-          }
-
-          await deleteProjectPreset(context.db, {
-            clerkOrgId: auth.orgId,
-            id: input.id,
-            projectId: input.projectId,
-          });
-
-          return { ok: true as const, id: input.id, deleted: true };
-        }),
-    },
+    streams: projectStreamsRouter,
   },
 };
 
@@ -498,13 +349,25 @@ async function requireProject(input: {
   context: AppContext;
   projectId: string;
 }) {
-  const project = await getProjectById(input.context.db, {
-    clerkOrgId: input.activeOrganization.orgId,
-    id: input.projectId,
-  });
+  const project = await getProjectById(input.context.db, { id: input.projectId });
 
   if (!project) {
     throw new ORPCError("NOT_FOUND", {
+      message: `Project ${input.projectId} not found`,
+    });
+  }
+
+  if (input.activeOrganization.isAdminApi) {
+    return project;
+  }
+
+  const permission = await getProjectPermission(input.context.db, {
+    principalId: input.activeOrganization.orgId,
+    principalType: "clerk_organization",
+    projectId: input.projectId,
+  });
+  if (!permission) {
+    throw new ORPCError("FORBIDDEN", {
       message: `Project ${input.projectId} not found`,
     });
   }
@@ -522,12 +385,12 @@ function requireD1ObjectCatalog(context: AppContext) {
   return context.doCatalog;
 }
 
-function requireProjectNamespace(context: AppContext) {
-  if (!context.project) {
+function requireProjectDurableObjectNamespace(context: AppContext) {
+  if (!context.projectDurableObjectNamespace) {
     throw new ORPCError("INTERNAL_SERVER_ERROR", {
       message: "PROJECT binding not available.",
     });
   }
 
-  return context.project;
+  return context.projectDurableObjectNamespace;
 }

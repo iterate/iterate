@@ -6,7 +6,7 @@ import packageJson from "../package.json" with { type: "json" };
 const ClerkMcpOauthScope = z.enum(["openid", "profile", "email"]);
 
 export const AppConfig = BaseAppConfig.extend({
-  eventsBaseUrl: z.string().trim().url(),
+  adminApiSecret: redacted(z.string().trim().min(1)).optional(),
   clerk: z.object({
     publishableKey: publicValue(z.string().trim().min(1)),
     secretKey: redacted(z.string().trim().min(1)),
@@ -27,10 +27,9 @@ export const AppConfig = BaseAppConfig.extend({
       ),
   }),
   mcpProofSecret: redacted(z.string().trim().min(1)),
+  openAiApiKey: redacted(z.string().trim().min(1)),
   projectHostnameBases: publicValue(z.array(z.string().trim().min(1)).default([])),
-  projectStreamsEventsBaseUrl: publicValue(
-    z.string().trim().url().default("https://events.iterate.com"),
-  ),
+  slackBotToken: redacted(z.string().trim().min(1)).optional(),
   typeIdPrefix: redacted(
     z
       .string()

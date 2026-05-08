@@ -4,14 +4,13 @@ const baseUrl = new URL(process.env.DURABLE_OBJECT_UTILS_E2E_BASE_URL ?? "");
 
 describe("withLifecycleHooks fronting worker", () => {
   it("initializes a room and sends a message through the fronting worker", async () => {
-    const roomName = `e2e-room-${crypto.randomUUID()}`;
+    const roomName = testRoomName(`e2e-room-${crypto.randomUUID()}`, "user-e2e");
 
     const initialized = await postJson(`/rooms/${roomName}/initialize`, {
       ownerUserId: "user-e2e",
     });
     expect(initialized.status).toBe(200);
     expect(await initialized.json()).toEqual({
-      name: roomName,
       ownerUserId: "user-e2e",
     });
 
@@ -20,7 +19,7 @@ describe("withLifecycleHooks fronting worker", () => {
     });
     expect(message.status).toBe(200);
     expect(await message.json()).toEqual({
-      room: roomName,
+      room: decodeURIComponent(roomName),
       ownerUserId: "user-e2e",
       text: "hello",
     });
@@ -82,9 +81,9 @@ describe("withD1ObjectCatalog fronting worker", () => {
     expect(await response.json()).toBeNull();
   });
 
-  it("creates the D1 tables, mirrors initialized objects, and indexes init params", async () => {
-    const roomName = `e2e-listed-${crypto.randomUUID()}`;
+  it("creates the D1 tables, mirrors initialized objects, and indexes structured names", async () => {
     const ownerUserId = `user-listed-e2e-${crypto.randomUUID()}`;
+    const roomName = testRoomName(`e2e-listed-${crypto.randomUUID()}`, ownerUserId);
 
     const initialized = await postJson(`/listed-rooms/${roomName}/initialize`, {
       ownerUserId,
@@ -94,9 +93,8 @@ describe("withD1ObjectCatalog fronting worker", () => {
     const record = await waitForJson(`/listed-rooms/${roomName}/catalog`);
     expect(record).toMatchObject({
       class: "ListedRoom",
-      name: roomName,
-      initParams: {
-        name: roomName,
+      name: decodeURIComponent(roomName),
+      structuredName: {
         ownerUserId,
       },
     });
@@ -105,9 +103,8 @@ describe("withD1ObjectCatalog fronting worker", () => {
     expect(indexed).toMatchObject([
       {
         class: "ListedRoom",
-        name: roomName,
-        initParams: {
-          name: roomName,
+        name: decodeURIComponent(roomName),
+        structuredName: {
           ownerUserId,
         },
       },
@@ -117,7 +114,7 @@ describe("withD1ObjectCatalog fronting worker", () => {
 
 describe("withMultiplexedAlarms fronting worker", () => {
   it("persists, lists, dispatches, and deletes logical alarm rows", async () => {
-    const roomName = `e2e-alarm-${crypto.randomUUID()}`;
+    const roomName = testRoomName(`e2e-alarm-${crypto.randomUUID()}`, "user-alarm-e2e");
 
     const initialized = await postJson(`/alarm-rooms/${roomName}/initialize`, {
       ownerUserId: "user-alarm-e2e",
@@ -159,7 +156,7 @@ describe("withMultiplexedAlarms fronting worker", () => {
   });
 
   it("dispatches logical alarm rows through Cloudflare's natural alarm delivery", async () => {
-    const roomName = `e2e-alarm-natural-${crypto.randomUUID()}`;
+    const roomName = testRoomName(`e2e-alarm-natural-${crypto.randomUUID()}`, "user-alarm-e2e");
     const message = "hello from natural Cloudflare alarm delivery";
 
     const initialized = await postJson(`/alarm-rooms/${roomName}/initialize`, {
@@ -187,7 +184,7 @@ describe("withMultiplexedAlarms fronting worker", () => {
 
 describe("withScheduler fronting worker", () => {
   it("runs a recurring schedule through the deployed worker", async () => {
-    const roomName = `e2e-schedule-${crypto.randomUUID()}`;
+    const roomName = testRoomName(`e2e-schedule-${crypto.randomUUID()}`, "user-scheduler-e2e");
 
     const initialized = await postJson(`/schedule-rooms/${roomName}/initialize`, {
       ownerUserId: "user-scheduler-e2e",
@@ -238,7 +235,10 @@ describe("withScheduler fronting worker", () => {
   });
 
   it("runs a delayed schedule through Cloudflare's natural alarm delivery", async () => {
-    const roomName = `e2e-schedule-natural-${crypto.randomUUID()}`;
+    const roomName = testRoomName(
+      `e2e-schedule-natural-${crypto.randomUUID()}`,
+      "user-scheduler-e2e",
+    );
     const message = "hello scheduler natural alarm";
 
     const initialized = await postJson(`/schedule-rooms/${roomName}/initialize`, {
@@ -276,6 +276,10 @@ async function postJson(path: string, body: unknown): Promise<Response> {
     },
     body: JSON.stringify(body),
   });
+}
+
+function testRoomName(testName: string, ownerUserId: string) {
+  return encodeURIComponent(JSON.stringify({ ownerUserId, testName }));
 }
 
 async function getWithRouteRetry(path: string): Promise<Response> {

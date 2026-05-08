@@ -132,6 +132,25 @@ function ProjectSidebarGroup({
             <SidebarMenuSubButton
               render={
                 <Link
+                  to="/orgs/$organizationSlug/projects/$projectSlug/agents"
+                  params={{ organizationSlug, projectSlug }}
+                />
+              }
+              isActive={Boolean(
+                matchRoute({
+                  to: "/orgs/$organizationSlug/projects/$projectSlug/agents",
+                  params: { organizationSlug, projectSlug },
+                  fuzzy: true,
+                }),
+              )}
+            >
+              <span>Agents</span>
+            </SidebarMenuSubButton>
+          </SidebarMenuSubItem>
+          <SidebarMenuSubItem>
+            <SidebarMenuSubButton
+              render={
+                <Link
                   to="/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions"
                   params={{ organizationSlug, projectSlug }}
                 />
@@ -189,18 +208,19 @@ function ProjectSidebarGroup({
             <SidebarMenuSubButton
               render={
                 <Link
-                  to="/orgs/$organizationSlug/projects/$projectSlug/presets"
+                  to="/orgs/$organizationSlug/projects/$projectSlug/streams"
                   params={{ organizationSlug, projectSlug }}
                 />
               }
               isActive={Boolean(
                 matchRoute({
-                  to: "/orgs/$organizationSlug/projects/$projectSlug/presets",
+                  to: "/orgs/$organizationSlug/projects/$projectSlug/streams",
                   params: { organizationSlug, projectSlug },
+                  fuzzy: true,
                 }),
               )}
             >
-              <span>Presets</span>
+              <span>Streams</span>
             </SidebarMenuSubButton>
           </SidebarMenuSubItem>
           <SidebarMenuSubItem>

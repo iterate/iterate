@@ -8,8 +8,7 @@ import { yaml } from "@codemirror/lang-yaml";
 import { foldService } from "@codemirror/language";
 import { search, searchKeymap } from "@codemirror/search";
 import { keymap } from "@codemirror/view";
-import { vsCodeDark, vsCodeLight } from "@fsegurai/codemirror-theme-bundle";
-import { useTheme } from "next-themes";
+import { vsCodeLight } from "@fsegurai/codemirror-theme-bundle";
 import { toast } from "sonner";
 import { stringify as stringifyYaml } from "yaml";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
@@ -73,7 +72,6 @@ export function SerializedObjectCodeBlock({
 }: SerializedObjectCodeBlockProps) {
   const [currentFormat, setCurrentFormat] = useState<SerializedFormat>(initialFormat);
   const [copiedFormat, setCopiedFormat] = useState<SerializedFormat | null>(null);
-  const { resolvedTheme } = useTheme();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   const code = useMemo(() => serializeData(data, currentFormat), [currentFormat, data]);
@@ -81,7 +79,7 @@ export function SerializedObjectCodeBlock({
   const extensions = useMemo<CodeMirrorProps["extensions"]>(
     () => [
       basicSetup,
-      resolvedTheme === "dark" ? vsCodeDark : vsCodeLight,
+      vsCodeLight,
       (currentFormat === "yaml" ? yaml : json)(),
       search({ top: true }),
       foldPromptBlocks(),
@@ -97,7 +95,7 @@ export function SerializedObjectCodeBlock({
           })
         : [],
     ],
-    [currentFormat, resolvedTheme, showLineNumbers],
+    [currentFormat, showLineNumbers],
   );
 
   const handleCopy = async (format: SerializedFormat) => {

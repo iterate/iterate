@@ -46,8 +46,8 @@ agent console.
 - MCP/OpenAPI tool calling exists in both apps, but agents uses `MCPClient` and
   `OpenApiToolClient` Durable Objects while OS2 uses `McpClientBridge` and
   `OpenApiBridge`.
-- Events client code exists in both apps, but OS2 only has a small
-  `createEventsClient(baseUrl)` wrapper.
+- OS2 project stream code talks to the Events stream Durable Object through the
+  `STREAM` namespace binding instead of an Events URL client.
 - OS2 uses `McpAgent.serve("/mcp")` with Clerk/project auth; agents uses agent
   request routing and stream callbacks.
 

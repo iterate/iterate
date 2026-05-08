@@ -1,9 +1,8 @@
-import type { StreamPath } from "@iterate-com/events-contract";
-
 export {
   buildAgentChatStreamProcessorRunnerWebSocketCallbackUrl,
   buildAgentStreamProcessorRunnerWebSocketCallbackUrl,
   buildAgentWebSocketCallbackUrl,
+  buildCloudflareAiStreamProcessorRunnerWebSocketCallbackUrl,
   buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl,
   buildOpenAiWsStreamProcessorRunnerWebSocketCallbackUrl,
 } from "~/lib/events-urls.ts";
@@ -30,19 +29,3 @@ export const CHILD_STREAM_AUTO_SUBSCRIBER_CLASS = "child-stream-auto-subscriber"
  * of stacking duplicate websocket subscriptions.
  */
 export const CHILD_STREAM_AUTO_SUBSCRIBER_SUBSCRIPTION_SLUG = "child-stream-auto-subscriber";
-
-/**
- * Derive a deterministic Durable Object instance name from a stream path so
- * re-creating an agent at the same path always hits the same DO (and different
- * paths always hit different DOs). Must be URL-path-safe because it's
- * interpolated into `/agents/<class>/<instance>`.
- *
- * Uses a hex encoding of the full path instead of a slug so hierarchy
- * separators and literal punctuation cannot collapse into the same instance.
- */
-export function streamPathToAgentInstance(streamPath: StreamPath): string {
-  const encodedPath = [...new TextEncoder().encode(streamPath)]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-  return `stream-${encodedPath}`;
-}

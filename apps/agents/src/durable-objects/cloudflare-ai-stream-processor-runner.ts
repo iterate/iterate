@@ -3,10 +3,10 @@ import { CloudflareAiProcessorContract } from "@iterate-com/shared/stream-proces
 import { createCloudflareAiProcessor } from "@iterate-com/shared/stream-processors/cloudflare-ai/implementation";
 import {
   createStreamProcessorRunnerDurableObject,
-  type StreamProcessorRunnerInit,
+  type StreamProcessorRunnerName,
 } from "./stream-processor-runner-common.ts";
 
-export type CloudflareAiStreamProcessorRunnerInit = StreamProcessorRunnerInit;
+export type CloudflareAiStreamProcessorRunnerName = StreamProcessorRunnerName;
 
 const CloudflareAiStreamProcessorRunnerBase = createStreamProcessorRunnerDurableObject({
   className: "CloudflareAiStreamProcessorRunner",

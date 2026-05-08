@@ -1,4 +1,4 @@
-import { StreamPath } from "@iterate-com/events-contract";
+import { StreamPath } from "@iterate-com/shared/streams/types";
 import type { EventsStreamElementType } from "@iterate-com/ui/components/events/stream-feed";
 import { z } from "zod";
 
@@ -7,12 +7,12 @@ const AgentViewSearch = z.object({
   hiddenElements: z.union([z.string(), z.array(z.string())]).optional(),
 });
 
-export type AgentViewSearch = {
+type AgentViewSearch = {
   streamPath: StreamPath | undefined;
   hiddenElements: EventsStreamElementType[];
 };
 
-export const defaultAgentViewSearch: AgentViewSearch = {
+const defaultAgentViewSearch: AgentViewSearch = {
   streamPath: undefined,
   hiddenElements: [],
 };

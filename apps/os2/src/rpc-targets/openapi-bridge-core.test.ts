@@ -1,13 +1,14 @@
 import { describe, expect, test } from "vitest";
 import { HttpResponse, http, useMockHttpServer } from "@iterate-com/mock-http-proxy";
-import { describeOpenApiToolFunctions, executeOpenApiToolFunction } from "./openapi-bridge-core.ts";
+import { executeOpenApiToolFunction } from "./openapi-bridge-core.ts";
 
 describe("OpenAPI bridge core", () => {
   test("executes an operation against a mocked OpenAPI server", async () => {
     await using server = await useMockHttpServer({ transformRequest: false });
     server.use(
-      http.get(`${server.url}/openapi.json`, () =>
-        HttpResponse.json({
+      http.get(`${server.url}/openapi.json`, ({ request }) => {
+        expect(request.headers.get("authorization")).toBe("Bearer openapi-token");
+        return HttpResponse.json({
           openapi: "3.1.0",
           info: { title: "Mock Petstore", version: "1.0.0" },
           paths: {
@@ -22,9 +23,10 @@ describe("OpenAPI bridge core", () => {
               },
             },
           },
-        }),
-      ),
+        });
+      }),
       http.get(`${server.url}/pets/:petId`, ({ params, request }) => {
+        expect(request.headers.get("authorization")).toBe("Bearer openapi-token");
         const url = new URL(request.url);
         return HttpResponse.json({
           include: url.searchParams.get("include"),
@@ -36,10 +38,11 @@ describe("OpenAPI bridge core", () => {
 
     await expect(
       executeOpenApiToolFunction({
-        path: ["getPet"],
-        payload: { include: "owner", petId: "pet-123" },
+        args: [{ include: "owner", petId: "pet-123" }],
+        functionPath: ["getPet"],
         providerProps: {
           baseUrl: server.url,
+          headers: { authorization: "Bearer openapi-token" },
           specUrl: `${server.url}/openapi.json`,
         },
       }),
@@ -50,7 +53,7 @@ describe("OpenAPI bridge core", () => {
     });
   });
 
-  test("describes mocked OpenAPI operations as tool functions", async () => {
+  test("lists mocked OpenAPI operations as a normal codemode function", async () => {
     await using server = await useMockHttpServer({ transformRequest: false });
     server.use(
       http.get(`${server.url}/openapi.json`, () =>
@@ -70,15 +73,21 @@ describe("OpenAPI bridge core", () => {
     );
 
     await expect(
-      describeOpenApiToolFunctions({
+      executeOpenApiToolFunction({
+        args: [],
+        functionPath: ["listOperations"],
         providerProps: {
           baseUrl: server.url,
           specUrl: `${server.url}/openapi.json`,
         },
       }),
-    ).resolves.toEqual({
-      typeDefinitions:
-        "{\n  /** Create pet */\n  createPet(input: Record<string, unknown>): Promise<unknown>;\n}",
-    });
+    ).resolves.toEqual([
+      {
+        operationId: "createPet",
+        method: "post",
+        path: "/pets",
+        summary: "Create pet",
+      },
+    ]);
   });
 });

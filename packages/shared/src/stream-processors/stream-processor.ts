@@ -3,7 +3,6 @@ import type {
   BuiltinProcessor,
   BuiltinProcessorImplementation,
   ConsumedEvent,
-  DerivedIdempotencyKeyArgs,
   EventCatalog,
   EventDefinition,
   EventExample,
@@ -14,6 +13,8 @@ import type {
   ProcessorContractShape,
   StoredProcessorState,
   ProcessorImplementation,
+  ProcessorIdempotencyKeyArgs,
+  ProcessorIdempotencyKeyProcessor,
   ProcessorReduction,
   ProcessorState,
   ProcessorStreamApi,
@@ -235,26 +236,10 @@ export function assertNever(value: never): never {
   throw new Error(`Unhandled discriminated union member: ${JSON.stringify(value)}`);
 }
 
-/**
- * Build an idempotency key for an event derived from one source event.
- *
- * This is intentionally only a string helper, not an `appendDerived(...)`
- * wrapper. Processor implementations should still call `streamApi.append(...)`
- * directly so the emitted event stays visible and typechecked against
- * `contract.emits`.
- *
- * Include a stable `purpose` per derivation site. If one source event produces
- * two different derived events, each site should use a different purpose.
- */
-export function buildDerivedIdempotencyKey(args: DerivedIdempotencyKeyArgs): string {
-  return [
-    "stream-processor",
-    args.slug,
-    "derived",
-    args.purpose,
-    args.event.streamPath,
-    String(args.event.offset),
-  ].join(":");
+export function buildProcessorIdempotencyKey(args: ProcessorIdempotencyKeyArgs): string {
+  const key = `${getProcessorIdempotencySlug(args.processor)}/${args.key}`;
+  if (args.sourceEvent == null) return key;
+  return `${key}@${args.sourceEvent.offset}`;
 }
 
 export function validateProcessorContract(contract: {
@@ -429,11 +414,13 @@ export async function runProcessorOnStart<const Contract>(args: {
   state: ProcessorState<Contract>;
   streamApi: ProcessorStreamApi<Contract>;
   signal: AbortSignal;
+  waitUntil?: (promise: Promise<unknown>) => void;
 }): Promise<void> {
   await args.processor.implementation.onStart?.({
     state: args.state,
     streamApi: args.streamApi,
     signal: args.signal,
+    waitUntil: args.waitUntil,
   });
 }
 
@@ -444,6 +431,7 @@ export async function runProcessorAfterAppend<const Contract>(args: {
   state: ProcessorState<Contract>;
   streamApi: ProcessorStreamApi<Contract>;
   signal: AbortSignal;
+  waitUntil?: (promise: Promise<unknown>) => void;
 }): Promise<void> {
   await args.processor.implementation.afterAppend?.({
     event: args.event,
@@ -451,6 +439,7 @@ export async function runProcessorAfterAppend<const Contract>(args: {
     state: args.state,
     streamApi: args.streamApi,
     signal: args.signal,
+    waitUntil: args.waitUntil,
   });
 }
 
@@ -780,10 +769,16 @@ function getConsumedEventDefinition(args: {
     events: EventCatalog;
     processorDeps?: readonly unknown[];
     consumes: readonly string[];
+    consumesAllEvents?: true;
   };
   eventType: string;
 }): EventDefinition | undefined {
   if (!args.contract.consumes.includes(args.eventType)) {
+    if (args.contract.consumesAllEvents === true) {
+      return {
+        payloadSchema: z.unknown(),
+      };
+    }
     return undefined;
   }
 
@@ -909,11 +904,16 @@ function getProcessorSlug(contract: unknown): string {
   return "unknown";
 }
 
+function getProcessorIdempotencySlug(processor: ProcessorIdempotencyKeyProcessor): string {
+  if (typeof processor === "string") return processor;
+  if ("contract" in processor) return processor.contract.slug;
+  return processor.slug;
+}
+
 export type {
   BuiltinProcessor,
   BuiltinProcessorImplementation,
   ConsumedEvent,
-  DerivedIdempotencyKeyArgs,
   EmittedInput,
   EventCatalog,
   EventDefinition,
@@ -925,6 +925,8 @@ export type {
   ProcessorContractShape,
   StoredProcessorState,
   ProcessorImplementation,
+  ProcessorIdempotencyKeyArgs,
+  ProcessorIdempotencyKeyProcessor,
   ProcessorReduction,
   ProcessorState,
   ProcessorStateObject,

@@ -3,16 +3,14 @@
 import type {
   LifecycleHooksMembers,
   LifecycleHooksProtected,
-  LifecycleInit,
+  LifecycleStructuredName,
 } from "./with-lifecycle-hooks.ts";
 import { stringifyJsonPayload } from "./json-payload.ts";
 import type {
   Constructor,
   DurableObjectClass,
   DurableObjectConstructor,
-  MembersOf,
-  ReqEnvOf,
-  StaticSide,
+  DurableObjectMixinResult,
 } from "./mixin-types.ts";
 import type { DurableObjectCoreProtected } from "./with-durable-object-core.ts";
 
@@ -28,7 +26,7 @@ const MAX_PLATFORM_ALARM_DELAY_MS = 30 * 24 * 60 * 60 * 1_000;
  * public diagnostic read (`getMultiplexedAlarms()`), and gives subclasses or
  * later mixins protected mutation methods. It requires `withLifecycleHooks()`
  * below it so alarms cannot be scheduled or dispatched before the object has
- * durable init params and startup hooks have run.
+ * durable lifecycle name state and startup hooks have run.
  */
 export type ScheduleMultiplexedAlarmInput = {
   /**
@@ -106,13 +104,7 @@ type WithMultiplexedAlarmsResult<TBase extends DurableObjectClass> =
   // `withVoice()` return type, but our stack has multiple wrappers and env
   // lower-bounds, so the shared DurableObjectClass helper carries those through
   // without each mixin hand-writing a bespoke constructor.
-  StaticSide<TBase> &
-    DurableObjectClass<
-      ReqEnvOf<TBase>,
-      MembersOf<TBase> & MultiplexedAlarmsMembers & MultiplexedAlarmsProtected
-    > &
-    Constructor<MultiplexedAlarmsMembers> &
-    Constructor<MultiplexedAlarmsProtected>;
+  DurableObjectMixinResult<TBase, MultiplexedAlarmsMembers & MultiplexedAlarmsProtected>;
 
 type MultiplexedAlarmRow = {
   key: string;
@@ -152,20 +144,20 @@ export class MissingMultiplexedAlarmMethodError extends Error {
  * Cloudflare alarm behavior this mixin is built around:
  * https://developers.cloudflare.com/durable-objects/api/alarms/
  */
-export function withMultiplexedAlarms<InitParams extends LifecycleInit>() {
+export function withMultiplexedAlarms<StructuredName extends LifecycleStructuredName>() {
   return function <TBase extends DurableObjectClass>(
     Base: TBase &
       Constructor<
         DurableObjectCoreProtected &
-          LifecycleHooksMembers<InitParams> &
-          LifecycleHooksProtected<InitParams>
+          LifecycleHooksMembers<StructuredName> &
+          LifecycleHooksProtected<StructuredName>
       >,
   ): WithMultiplexedAlarmsResult<TBase> {
     const BaseWithCapabilities = Base as unknown as DurableObjectConstructor<
       unknown,
       DurableObjectCoreProtected &
-        LifecycleHooksMembers<InitParams> &
-        LifecycleHooksProtected<InitParams>
+        LifecycleHooksMembers<StructuredName> &
+        LifecycleHooksProtected<StructuredName>
     >;
 
     abstract class MultiplexedAlarmsMixin

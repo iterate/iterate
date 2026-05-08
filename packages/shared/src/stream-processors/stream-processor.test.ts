@@ -3,7 +3,7 @@ import { z } from "zod";
 import {
   createStoredProcessorState,
   createEvent,
-  buildDerivedIdempotencyKey,
+  buildProcessorIdempotencyKey,
   defineProcessorContract,
   getEventInputSchema,
   getEventSchema,
@@ -70,17 +70,16 @@ describe("stream processor contracts", () => {
     });
   });
 
-  it("builds stable idempotency keys for derived appends", () => {
+  it("builds stable processor idempotency keys", () => {
     expect(
-      buildDerivedIdempotencyKey({
-        slug: "codemode",
-        purpose: "result-to-agent-input",
-        event: {
-          streamPath: "/agents/test",
+      buildProcessorIdempotencyKey({
+        processor: "codemode",
+        key: "result-to-agent-input",
+        sourceEvent: {
           offset: 42,
         },
       }),
-    ).toBe("stream-processor:codemode:derived:result-to-agent-input:/agents/test:42");
+    ).toBe("codemode/result-to-agent-input@42");
   });
 
   it("parses event input and event output strictly", () => {

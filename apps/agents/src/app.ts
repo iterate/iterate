@@ -1,6 +1,6 @@
 import { BaseAppConfig, publicValue, redacted } from "@iterate-com/shared/apps/config";
 import type { AppManifest } from "@iterate-com/shared/apps/types";
-import { StreamPath } from "@iterate-com/events-contract";
+import { StreamPath } from "@iterate-com/shared/streams/types";
 import { z } from "zod";
 import packageJson from "../package.json" with { type: "json" };
 

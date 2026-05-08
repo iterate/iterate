@@ -23,7 +23,7 @@ describe("dispatchFetchCallable", () => {
         },
       },
       context: {},
-      request: new Request("https://streams.demo.iterate.localhost/api/streams/foo?after=1", {
+      request: new Request("https://api.demo.iterate.localhost/api/streams/foo?after=1", {
         headers: {
           accept: "application/json",
         },

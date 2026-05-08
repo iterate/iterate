@@ -1,4 +1,4 @@
-import type { Event, StreamPath } from "@iterate-com/events-contract";
+import type { Event, StreamPath } from "@iterate-com/shared/streams/types";
 
 /**
  * Serializable data that selects a known stream UI renderer and passes props to

@@ -10,9 +10,9 @@ import { z } from "zod";
 import { AgentProcessorContract } from "@iterate-com/shared/stream-processors/agent/contract";
 import {
   CODEMODE_PRIMER_IDEMPOTENCY_KEY,
-  CodemodeProcessorContract,
+  LegacyCodemodeProcessorContract,
 } from "@iterate-com/shared/stream-processors/legacy-codemode/contract";
-import { createCodemodeProcessor } from "@iterate-com/shared/stream-processors/legacy-codemode/implementation";
+import { createLegacyCodemodeProcessor } from "@iterate-com/shared/stream-processors/legacy-codemode/implementation";
 import { buildProcessorRegisteredEvent } from "@iterate-com/shared/stream-processors/core/contract";
 import { createMemoryPullProcessorStorage, runPullProcessor } from "./pull-runner.ts";
 
@@ -33,7 +33,9 @@ describe("runPullProcessor", () => {
     const appended: StreamEventInput[] = [];
     const subscribeAfterOffsets: unknown[] = [];
     const history = [
-      event(buildProcessorRegisteredEvent({ contract: CodemodeProcessorContract }), { offset: 1 }),
+      event(buildProcessorRegisteredEvent({ contract: LegacyCodemodeProcessorContract }), {
+        offset: 1,
+      }),
     ];
     const liveEvents = [
       event(
@@ -47,9 +49,9 @@ describe("runPullProcessor", () => {
       ),
     ];
     const storage = createMemoryPullProcessorStorage({
-      contract: CodemodeProcessorContract,
+      contract: LegacyCodemodeProcessorContract,
     });
-    const processor = createCodemodeProcessor({
+    const processor = createLegacyCodemodeProcessor({
       codeExecutor: async () => ({ result: { ok: true } }),
       env: {},
     });
@@ -88,8 +90,7 @@ describe("runPullProcessor", () => {
       },
       {
         type: "events.iterate.com/codemode/block-added",
-        idempotencyKey:
-          "stream-processor:codemode:derived:assistant-output-to-block:/agents/test:2",
+        idempotencyKey: "legacy-codemode/assistant-output-to-block@2",
         payload: {
           script: "async () => {\n  return 1;\n}",
         },
@@ -100,9 +101,9 @@ describe("runPullProcessor", () => {
   it("uses first-attach lookback for recent historical events", async () => {
     const appended: StreamEventInput[] = [];
     const storage = createMemoryPullProcessorStorage({
-      contract: CodemodeProcessorContract,
+      contract: LegacyCodemodeProcessorContract,
     });
-    const processor = createCodemodeProcessor({
+    const processor = createLegacyCodemodeProcessor({
       codeExecutor: async () => ({ result: { ok: true } }),
       env: {},
     });
@@ -113,7 +114,7 @@ describe("runPullProcessor", () => {
       streamApi: testStreamApi({
         appended,
         history: [
-          event(buildProcessorRegisteredEvent({ contract: CodemodeProcessorContract }), {
+          event(buildProcessorRegisteredEvent({ contract: LegacyCodemodeProcessorContract }), {
             offset: 1,
           }),
           event(
@@ -150,9 +151,9 @@ describe("runPullProcessor", () => {
   it("treats subscription abort as normal shutdown", async () => {
     const abortController = new AbortController();
     const storage = createMemoryPullProcessorStorage({
-      contract: CodemodeProcessorContract,
+      contract: LegacyCodemodeProcessorContract,
     });
-    const processor = createCodemodeProcessor({
+    const processor = createLegacyCodemodeProcessor({
       codeExecutor: async () => ({ result: { ok: true } }),
       env: {},
     });
@@ -163,7 +164,7 @@ describe("runPullProcessor", () => {
       streamApi: {
         append: async ({ event: input }) => event(input, { offset: 100 }),
         read: async () => [
-          event(buildProcessorRegisteredEvent({ contract: CodemodeProcessorContract }), {
+          event(buildProcessorRegisteredEvent({ contract: LegacyCodemodeProcessorContract }), {
             offset: 1,
           }),
         ],
@@ -252,7 +253,7 @@ function testStreamApi(args: {
   history: StreamEvent[];
   liveEvents: StreamEvent[];
   subscribeAfterOffsets: unknown[];
-}): ProcessorStreamApi<typeof CodemodeProcessorContract> {
+}): ProcessorStreamApi<typeof LegacyCodemodeProcessorContract> {
   return {
     append: async ({ event: input }) => {
       args.appended.push(input);

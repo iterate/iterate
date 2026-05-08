@@ -5,10 +5,10 @@ import {
   type EventInput,
   type Event as EventsEvent,
   type StreamPath,
-} from "@iterate-com/events-contract";
+} from "@iterate-com/shared/streams/types";
 import type { ProcessorStreamApi } from "@iterate-com/shared/stream-processors";
-import { CodemodeProcessorContract } from "@iterate-com/shared/stream-processors/legacy-codemode/contract";
-import { createCodemodeProcessor } from "@iterate-com/shared/stream-processors/legacy-codemode/implementation";
+import { LegacyCodemodeProcessorContract } from "@iterate-com/shared/stream-processors/legacy-codemode/contract";
+import { createLegacyCodemodeProcessor } from "@iterate-com/shared/stream-processors/legacy-codemode/implementation";
 import { setupE2E, type E2EContext } from "../test-support/e2e-test.ts";
 import {
   createMemoryPullProcessorStorage,
@@ -24,9 +24,9 @@ test(
     const abortController = new AbortController();
     const subscriptionStarted = createDeferred<void>();
     const storage = createMemoryPullProcessorStorage({
-      contract: CodemodeProcessorContract,
+      contract: LegacyCodemodeProcessorContract,
     });
-    const processor = createCodemodeProcessor({
+    const processor = createLegacyCodemodeProcessor({
       codeExecutor: async () => ({ result: { ok: true } }),
       env: {},
     });
@@ -63,7 +63,7 @@ test(
     expect(block.payload).toEqual({
       script: "async () => {\n  return 7;\n}",
     });
-    expect(block.idempotencyKey).toContain("stream-processor:codemode:derived:");
+    expect(block.idempotencyKey).toContain("legacy-codemode/assistant-output-to-block@");
 
     abortController.abort();
     await expect(resolveWithin(runnerPromise, 5_000)).resolves.toBeDefined();
@@ -83,9 +83,9 @@ test(
     const abortController = new AbortController();
     const subscriptionStarted = createDeferred<void>();
     const storage = createMemoryPullProcessorStorage({
-      contract: CodemodeProcessorContract,
+      contract: LegacyCodemodeProcessorContract,
     });
-    const processor = createCodemodeProcessor({
+    const processor = createLegacyCodemodeProcessor({
       codeExecutor: async () => ({ result: { from: "orpc-stream-fake-executor" } }),
       env: {},
     });
@@ -136,7 +136,7 @@ function createPollingEventsStreamApi(args: {
   e2e: E2EContext;
   streamPath: StreamPath;
   onSubscribeStarted(): void;
-}): ProcessorStreamApi<typeof CodemodeProcessorContract> {
+}): ProcessorStreamApi<typeof LegacyCodemodeProcessorContract> {
   return {
     async append({ event, streamPath }) {
       const result = await args.e2e.events.client.append({
@@ -198,7 +198,7 @@ function createOrpcStreamEventsStreamApi(args: {
   e2e: E2EContext;
   streamPath: StreamPath;
   onSubscribeStarted(): void;
-}): ProcessorStreamApi<typeof CodemodeProcessorContract> {
+}): ProcessorStreamApi<typeof LegacyCodemodeProcessorContract> {
   return {
     async append({ event, streamPath }) {
       const result = await args.e2e.events.client.append({

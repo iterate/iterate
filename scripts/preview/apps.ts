@@ -50,6 +50,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     appPath: "apps/events",
     dopplerProject: "events",
     paths: ["apps/events/**", "apps/events-contract/**"],
+    previewDependencies: ["os2"],
     previewTestBaseUrlEnvVar: "EVENTS_BASE_URL",
     previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
   },

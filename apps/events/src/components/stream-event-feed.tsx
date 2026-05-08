@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
-import type { Event, EventInput, StreamPath, StreamState } from "@iterate-com/events-contract";
+import type { Event, EventInput, StreamPath, StreamState } from "@iterate-com/shared/streams/types";
 import {
   AlertTriangleIcon,
   BracesIcon,

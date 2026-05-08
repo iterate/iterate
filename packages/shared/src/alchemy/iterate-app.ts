@@ -8,6 +8,7 @@ import {
   findZoneForHostname,
 } from "alchemy/cloudflare";
 import type { Bindings } from "alchemy/cloudflare";
+import type { BaseAppConfig } from "../apps/config.ts";
 import { slugify } from "../slugify.ts";
 import type { initAlchemy } from "./init.ts";
 import { startCloudflared } from "./start-cloudflared.ts";
@@ -74,8 +75,9 @@ export async function IterateApp<B extends Bindings>(
     dev?: { command: string };
   },
 ) {
-  const { app, workerName, rawAppConfig, compiledAppConfig, manifest } = ctx;
-  const routeHosts = deriveWorkerRouteHosts(compiledAppConfig.baseUrl, props.extraRouteHostnames);
+  const { app, workerName, rawRuntimeConfig, manifest } = ctx;
+  const runtimeConfig = ctx.runtimeConfig as BaseAppConfig;
+  const routeHosts = deriveWorkerRouteHosts(runtimeConfig.baseUrl, props.extraRouteHostnames);
   const compatibilityFlags = [...new Set(["nodejs_compat", ...(props.compatibilityFlags ?? [])])];
   const buildCommand = withSequentialCloudflareAssetPreupload({
     command: props.build ?? "pnpm exec vite build --config vite.config.ts",
@@ -93,8 +95,8 @@ export async function IterateApp<B extends Bindings>(
     bindings: {
       ...props.bindings,
       APP_CONFIG: app.local
-        ? JSON.stringify(rawAppConfig, null, 2)
-        : alchemy.secret(JSON.stringify(rawAppConfig, null, 2)),
+        ? JSON.stringify(rawRuntimeConfig, null, 2)
+        : alchemy.secret(JSON.stringify(rawRuntimeConfig, null, 2)),
     },
     wrangler: { main: "./src/entry.workerd.ts" },
     // Full sampling with persistent logs/traces for all Iterate workers.
@@ -121,8 +123,8 @@ export async function IterateApp<B extends Bindings>(
   let tunnelToken: string | undefined;
   let tunnelVitePort: number | undefined;
 
-  const baseUrlHostname = compiledAppConfig.baseUrl
-    ? new URL(compiledAppConfig.baseUrl).hostname
+  const baseUrlHostname = runtimeConfig.baseUrl
+    ? new URL(runtimeConfig.baseUrl).hostname
     : undefined;
 
   if (app.local && baseUrlHostname && !baseUrlHostname.startsWith("localhost") && worker.url) {
@@ -214,8 +216,8 @@ export async function IterateApp<B extends Bindings>(
 
   console.dir(
     {
-      config: compiledAppConfig,
-      url: compiledAppConfig.baseUrl ?? worker.url,
+      config: runtimeConfig,
+      url: runtimeConfig.baseUrl ?? worker.url,
       workersDevUrl: worker.url,
     },
     { depth: null },
@@ -227,7 +229,7 @@ export async function IterateApp<B extends Bindings>(
     await startCloudflared({
       tunnelToken,
       vitePort: tunnelVitePort,
-      displayUrl: compiledAppConfig.baseUrl ?? `localhost:${tunnelVitePort}`,
+      displayUrl: runtimeConfig.baseUrl ?? `localhost:${tunnelVitePort}`,
     });
   }
 

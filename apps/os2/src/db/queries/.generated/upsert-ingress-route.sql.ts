@@ -12,6 +12,7 @@ on conflict(host) do update set
 returning id, host, project_id, priority, notes, callable_json, created_at, updated_at;
 `.trim();
 const query = (params: upsertIngressRoute.Params) => ({
+  name: "upsertIngressRoute",
   sql,
   args: [
     params.id,
@@ -21,7 +22,6 @@ const query = (params: upsertIngressRoute.Params) => ({
     params.notes,
     params.callableJson,
   ],
-  name: "upsertIngressRoute",
 });
 
 export const upsertIngressRoute = Object.assign(

@@ -17,21 +17,15 @@ export type StreamEvent<Type extends string = string, Payload = unknown> = Strea
   createdAt: string;
 };
 
-export type DerivedIdempotencyKeyArgs = {
-  /**
-   * Processor or helper that owns the derived append. This should usually be
-   * the processor contract's `slug`.
-   */
-  slug: string;
-  /**
-   * Human-readable name for the derivation, for example
-   * `render-webchat-message` or `codemode-result-to-agent-input`.
-   */
-  purpose: string;
-  /**
-   * Committed source event that caused the derived append.
-   */
-  event: Pick<StreamEvent, "streamPath" | "offset">;
+export type ProcessorIdempotencyKeyProcessor =
+  | string
+  | { slug: string }
+  | { contract: { slug: string } };
+
+export type ProcessorIdempotencyKeyArgs = {
+  processor: ProcessorIdempotencyKeyProcessor;
+  key: string;
+  sourceEvent?: Pick<StreamEvent, "offset">;
 };
 
 export type EventExample<Payload = unknown> = {
@@ -284,6 +278,13 @@ export type ProcessorContractShape<
   processorDeps?: ProcessorDeps;
   events: Events;
   consumes: Consumes;
+  /**
+   * Explicit runner escape hatch for processors that must observe every
+   * committed event on a stream and decide at runtime whether it matters.
+   *
+   * Most processors should leave this unset and declare concrete `consumes`.
+   */
+  consumesAllEvents?: true;
   emits: Emits;
   /**
    * Optional pure projection from current state + consumed event to next state.
@@ -521,6 +522,7 @@ export type ProcessorImplementation<Contract> = {
     state: ProcessorState<Contract>;
     streamApi: ProcessorStreamApi<Contract>;
     signal: AbortSignal;
+    waitUntil?: (promise: Promise<unknown>) => void;
   }): Promise<void> | void;
   /**
    * Runs for live stream events after the runner has reduced and persisted the
@@ -533,6 +535,7 @@ export type ProcessorImplementation<Contract> = {
     state: ProcessorState<Contract>;
     streamApi: ProcessorStreamApi<Contract>;
     signal: AbortSignal;
+    waitUntil?: (promise: Promise<unknown>) => void;
   }): Promise<void> | void;
 };
 

@@ -14,6 +14,7 @@
     "paths": {
       "~/*": ["./src/*"],
       "@iterate-com/ui/*": ["../../packages/ui/src/*"],
+      "@iterate-com/shared/*": ["../../packages/shared/src/*"],
       "@iterate-com/shared/posthog/vite-plugin": [
         "../../packages/shared/src/posthog/sourcemaps-vite-plugin.ts"
       ]

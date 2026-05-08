@@ -3,7 +3,7 @@ import {
   STREAM_METADATA_UPDATED_TYPE,
   type Event,
   type StreamPath,
-} from "@iterate-com/events-contract";
+} from "@iterate-com/shared/streams/types";
 import { getAdjacentEventOffset } from "@iterate-com/ui/components/events/event-inspector-sheet";
 import {
   processEventsWithViewReducer,
@@ -374,16 +374,20 @@ describe("clean stream view reducers", () => {
       events: [
         event({
           offset: 1,
-          type: "events.iterate.com/codemode/block-added",
-          payload: { script: "async () => ({ ok: true })" },
+          type: "events.iterate.com/codemode/script-execution-requested",
+          payload: {
+            code: "async () => ({ ok: true })",
+            scriptExecutionId: "script-1",
+          },
         }),
         event({
           offset: 2,
-          type: "events.iterate.com/codemode/result-added",
+          type: "events.iterate.com/codemode/script-execution-completed",
           payload: {
-            result: { ok: true },
             durationMs: 17,
             logs: ["ran"],
+            outcome: { status: "succeeded", output: { ok: true } },
+            scriptExecutionId: "script-1",
           },
         }),
         event({
@@ -425,6 +429,61 @@ describe("clean stream view reducers", () => {
         },
       },
       {},
+    ]);
+  });
+
+  test("raw-pretty projects OS2 codemode session completion outcomes", () => {
+    const returned = processEventsWithViewReducer({
+      reducer: rawPrettyEventsStreamViewReducer,
+      events: [
+        event({
+          offset: 1,
+          type: "events.iterate.com/codemode/script-execution-completed",
+          payload: {
+            outcome: { status: "returned", value: { value: 42 } },
+            scriptExecutionId: "script-1",
+          },
+        }),
+      ],
+    });
+
+    expect(returned.slots.feed).toMatchObject([
+      {},
+      {
+        type: "codemode-result",
+        props: {
+          success: true,
+          result: { value: 42 },
+          durationMs: 0,
+        },
+      },
+    ]);
+
+    const threw = processEventsWithViewReducer({
+      reducer: rawPrettyEventsStreamViewReducer,
+      events: [
+        event({
+          offset: 1,
+          type: "events.iterate.com/codemode/script-execution-completed",
+          payload: {
+            durationMs: 9,
+            outcome: { status: "threw", error: { message: "boom" } },
+            scriptExecutionId: "script-1",
+          },
+        }),
+      ],
+    });
+
+    expect(threw.slots.feed).toMatchObject([
+      {},
+      {
+        type: "codemode-result",
+        props: {
+          success: false,
+          error: '{\n  "message": "boom"\n}',
+          durationMs: 9,
+        },
+      },
     ]);
   });
 

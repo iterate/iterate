@@ -1,4 +1,10 @@
 import { createD1Client } from "sqlfu";
+import {
+  getInitializedStreamStub,
+  type StreamDurableObjectNamespace,
+} from "@iterate-com/shared/streams/helpers";
+import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
+import { PROJECT_LIFECYCLE_STREAM_PATH } from "~/domains/projects/stream-processors/project-lifecycle.ts";
 import { getIngressRouteByHost } from "~/db/queries/.generated/index.ts";
 import {
   dispatchFetchCallable,
@@ -8,10 +14,14 @@ import {
 } from "~/ingress/host-routing.ts";
 import type { ExactHostIngressRule } from "~/ingress/types.ts";
 
-export { ProjectDurableObject } from "./project-durable-object.ts";
-export { ProjectMcpServerConnection } from "./project-mcp-server-connection.ts";
-export { ProjectIngressEntrypoint } from "~/entrypoints/project-ingress-entrypoint.ts";
-export { ProjectMcpServerEntrypoint } from "~/entrypoints/project-mcp-server-entrypoint.ts";
+export { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
+export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
+export { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
+export { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
+export { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
+export { PROJECT_LIFECYCLE_STREAM_PATH } from "~/domains/projects/stream-processors/project-lifecycle.ts";
+export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
+export { ProjectMcpServerEntrypoint } from "~/domains/inbound-mcp-server/entrypoints/project-mcp-server-entrypoint.ts";
 
 export default {
   async fetch(request, env, ctx) {
@@ -19,15 +29,32 @@ export default {
 
     const url = new URL(request.url);
     if (url.pathname === "/__test/create-project") {
-      const project = await env.PROJECT.getByName("proj_local_test").createProject({
-        clerkOrgId: "org_test",
-        createdByClerkUserId: "user_test",
+      const project = await env.PROJECT.getByName(
+        getProjectDurableObjectName("proj_local_test"),
+      ).createProject({
         metadata: {},
         projectId: "proj_local_test",
         slug: "demo",
       });
 
       return Response.json(project);
+    }
+
+    if (url.pathname === "/__test/project-stream") {
+      const stream = await getInitializedStreamStub({
+        durableObjectNamespace: env.STREAM as unknown as StreamDurableObjectNamespace,
+        namespace: "proj_local_test",
+        path: PROJECT_LIFECYCLE_STREAM_PATH,
+      });
+
+      return Response.json({ events: await stream.history({ before: "end" }) });
+    }
+
+    if (url.pathname === "/__test/project-lifecycle-state") {
+      const state = await env.PROJECT.getByName(
+        getProjectDurableObjectName("proj_local_test"),
+      ).getProjectLifecycleRunnerState();
+      return Response.json(state);
     }
 
     const db = createD1Client(env.DB);
@@ -47,7 +74,7 @@ export default {
       callable: ingressMatch.rule.callable,
       context: {
         env: env as unknown as Record<string, unknown>,
-        exports: (ctx as ExecutionContext & { exports?: Record<string, unknown> }).exports,
+        exports: ctx.exports,
       },
       request,
     });
@@ -57,26 +84,28 @@ export default {
 async function ensureD1Schema(db: D1Database) {
   await db.batch([
     db.prepare(`CREATE TABLE IF NOT EXISTS projects (
-      id text primary key not null,
-      slug text not null,
-      clerk_org_id text not null,
-      created_by_clerk_user_id text not null,
-      custom_hostname text unique,
-      metadata text not null check (json_valid(metadata)),
-      created_at text not null default current_timestamp,
-      updated_at text not null default current_timestamp,
-      unique (clerk_org_id, slug)
-    )`),
-    db.prepare(`CREATE TABLE IF NOT EXISTS project_presets (
-      id text primary key not null,
-      project_id text not null references projects (id) on delete cascade,
-      name text not null,
-      description text,
-      events_json text not null check (json_valid(events_json)),
-      created_at text not null default current_timestamp,
-      updated_at text not null default current_timestamp,
-      unique (project_id, name)
-    )`),
+        id text primary key not null,
+        slug text not null unique,
+        custom_hostname text unique,
+        metadata text not null check (json_valid(metadata)),
+        created_at text not null default current_timestamp,
+        updated_at text not null default current_timestamp
+      )`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS project_permissions (
+        project_id text not null references projects (id) on delete cascade,
+        principal_type text not null check (principal_type in ('clerk_organization')),
+        principal_id text not null,
+        role text not null check (role in ('owner')),
+        created_at text not null default current_timestamp,
+        updated_at text not null default current_timestamp,
+        primary key (project_id, principal_type, principal_id)
+      )`),
+    db.prepare(
+      `CREATE INDEX IF NOT EXISTS idx_project_permissions_project_id ON project_permissions (project_id)`,
+    ),
+    db.prepare(
+      `CREATE INDEX IF NOT EXISTS idx_project_permissions_principal ON project_permissions (principal_type, principal_id)`,
+    ),
     db.prepare(`CREATE TABLE IF NOT EXISTS ingress_routes (
       id text primary key not null,
       host text not null unique,

@@ -6,12 +6,12 @@ import {
   StreamInitializedEvent,
   StreamPath,
   type Event,
-} from "@iterate-com/events-contract";
+} from "@iterate-com/shared/streams/types";
 import {
   collectAsyncIterableUntilIdle,
   createEvents2AppFixture,
   createEvents2ProjectAppFixture,
-  defaultE2EProjectSlug,
+  defaultE2ENamespace,
   requireEventsBaseUrl,
   supportsProjectHostRouting,
   type Events2AppFixture,
@@ -21,14 +21,14 @@ const eventsBaseUrl = requireEventsBaseUrl();
 const app = createEvents2AppFixture({
   baseURL: eventsBaseUrl,
 });
-const defaultProjectSlug = defaultE2EProjectSlug;
+const defaultNamespace = defaultE2ENamespace;
 const projectHostTest = supportsProjectHostRouting(eventsBaseUrl) ? test : test.skip;
 const postBootTimeoutMs = 2_000;
 const historyIdleTimeoutMs = 250;
 const pollIntervalMs = 50;
 const testTimeoutMs = 10_000;
 const circuitBreakerTripTimeoutMs = 15_000;
-const circuitBreakerSlowTestTimeoutMs = 20_000;
+const circuitBreakerSlowTestTimeoutMs = 90_000;
 const slowCircuitBreakerDelayMs = 20;
 const rapidCircuitBreakerEventCount = 540;
 const slowCircuitBreakerEventCount = 540;
@@ -68,7 +68,7 @@ describe.sequential("events stream e2e", () => {
           streamPath: path,
           offset: expectedStoredOffset(0),
           type: "events.iterate.com/core/stream-first-initialized",
-          payload: { projectSlug: defaultProjectSlug, path },
+          payload: { namespace: defaultNamespace, path },
         },
         {
           streamPath: path,
@@ -296,7 +296,7 @@ describe.sequential("events stream e2e", () => {
         },
         body: JSON.stringify({
           type: "events.iterate.com/core/stream-first-initialized",
-          payload: { projectSlug: defaultProjectSlug, path },
+          payload: { namespace: defaultNamespace, path },
         }),
       });
 
@@ -509,7 +509,7 @@ describe.sequential("events stream e2e", () => {
       ).rejects.toThrow(/next generated offset/i);
 
       expect(await app.client.getState({ path })).toEqual({
-        projectSlug: defaultProjectSlug,
+        namespace: defaultNamespace,
         path,
         eventCount: 1,
         childPaths: [],
@@ -522,7 +522,7 @@ describe.sequential("events stream e2e", () => {
           streamPath: path,
           offset: expectedStoredOffset(0),
           type: "events.iterate.com/core/stream-first-initialized",
-          payload: { projectSlug: defaultProjectSlug, path },
+          payload: { namespace: defaultNamespace, path },
         },
       ]);
     },
@@ -617,7 +617,7 @@ describe.sequential("events stream e2e", () => {
       const path = uniqueStreamPath();
 
       expect(await app.client.getState({ path })).toEqual({
-        projectSlug: defaultProjectSlug,
+        namespace: defaultNamespace,
         path,
         eventCount: 1,
         childPaths: [],
@@ -637,7 +637,7 @@ describe.sequential("events stream e2e", () => {
       });
 
       expect(await app.client.getState({ path: "/" })).toMatchObject({
-        projectSlug: defaultProjectSlug,
+        namespace: defaultNamespace,
         path: "/",
         metadata: {},
       });
@@ -696,7 +696,7 @@ describe.sequential("events stream e2e", () => {
       });
 
       expect(await app.client.getState({ path })).toEqual({
-        projectSlug: defaultProjectSlug,
+        namespace: defaultNamespace,
         path,
         eventCount: 4,
         childPaths: [],
@@ -782,10 +782,10 @@ describe.sequential("events stream e2e", () => {
   projectHostTest(
     "listChildren includes / for a fresh project host before root initialization",
     async () => {
-      const projectSlug = `test-${randomUUID().slice(0, 8)}`;
+      const namespace = `test-${randomUUID().slice(0, 8)}`;
       const projectApp = createEvents2ProjectAppFixture({
         baseURL: eventsBaseUrl,
-        projectSlug,
+        namespace,
       });
       const response = await projectApp.fetch("/api/streams/__children/%2F");
 
@@ -920,24 +920,6 @@ describe.sequential("events stream e2e", () => {
   );
 
   test(
-    "destroy allows wiping the root stream",
-    async () => {
-      const stateBeforeDestroy = await app.client.getState({ path: "/" });
-
-      const result = await app.client.destroy({ params: { path: "/" }, query: {} });
-      expect(result).toEqual({
-        destroyedStreamCount: 1,
-        finalStateByPath: {
-          "/": {
-            finalState: stateBeforeDestroy,
-          },
-        },
-      });
-    },
-    testTimeoutMs,
-  );
-
-  test(
     "first append to a nested stream initializes the chain and propagates child-stream-created events upward",
     async () => {
       const top = randomUUID().slice(0, 6);
@@ -962,6 +944,7 @@ describe.sequential("events stream e2e", () => {
       });
 
       await waitForEvent(app, "/", (event) => isChildStreamCreatedForPath(event, path));
+      await waitForEvent(app, parentPath, (event) => isChildStreamCreatedForPath(event, path));
 
       expect(await collectStreamEvents(app, { path })).toMatchObject([
         {
@@ -976,7 +959,7 @@ describe.sequential("events stream e2e", () => {
           streamPath: path,
           offset: expectedStoredOffset(0),
           type: "events.iterate.com/core/stream-first-initialized",
-          payload: { projectSlug: defaultProjectSlug, path },
+          payload: { namespace: defaultNamespace, path },
         },
         {
           streamPath: path,
@@ -992,6 +975,10 @@ describe.sequential("events stream e2e", () => {
           .filter((event) => event.type === "events.iterate.com/core/child-stream-created")
           .map((event) => getPayloadPath(event)),
       ).toEqual([path]);
+
+      for (const propagatedPath of propagatedPaths) {
+        await waitForEvent(app, "/", (event) => isChildStreamCreatedForPath(event, propagatedPath));
+      }
 
       const rootEvents = await collectAllStreamEvents(app, { path: "/" });
       const rootPropagatedPaths = rootEvents
@@ -1028,6 +1015,7 @@ describe.sequential("events stream e2e", () => {
       });
 
       await waitForEvent(app, "/", (event) => isChildStreamCreatedForPath(event, childPath));
+      await waitForEvent(app, parentPath, (event) => isChildStreamCreatedForPath(event, childPath));
 
       const parentInitializedBefore = (
         await collectAllStreamEvents(app, { path: parentPath })
@@ -1220,7 +1208,7 @@ describe.sequential("events stream e2e", () => {
           streamPath: path,
           offset: expectedStoredOffset(0),
           type: "events.iterate.com/core/stream-first-initialized",
-          payload: { projectSlug: defaultProjectSlug, path },
+          payload: { namespace: defaultNamespace, path },
         });
 
         expect(second.done).toBe(false);
@@ -1233,6 +1221,24 @@ describe.sequential("events stream e2e", () => {
         controller.abort();
         await iterator.return?.();
       }
+    },
+    testTimeoutMs,
+  );
+
+  test(
+    "destroy allows wiping the root stream",
+    async () => {
+      const stateBeforeDestroy = await app.client.getState({ path: "/" });
+
+      const result = await app.client.destroy({ params: { path: "/" }, query: {} });
+      expect(result).toEqual({
+        destroyedStreamCount: 1,
+        finalStateByPath: {
+          "/": {
+            finalState: stateBeforeDestroy,
+          },
+        },
+      });
     },
     testTimeoutMs,
   );

@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { relative } from "node:path";
-import type { StreamPath } from "@iterate-com/events-contract";
+import type { StreamPath } from "@iterate-com/shared/streams/types";
 import { slugify } from "@iterate-com/shared/slugify";
 import {
   appendResultFooter,

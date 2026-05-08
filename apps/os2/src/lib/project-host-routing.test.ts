@@ -69,13 +69,13 @@ describe("project host routing", () => {
         projectSlug: "demo",
         projectHostnameBases: ["iterate2.app"],
       }),
-    ).toBe("https://demo.iterate2.app/mcp");
+    ).toBe("https://mcp__demo.iterate2.app");
     expect(
       buildProjectMcpUrl({
         projectSlug: "demo",
         projectHostnameBases: ["*.iterate-preview-3.app"],
       }),
-    ).toBe("https://demo.iterate-preview-3.app/mcp");
+    ).toBe("https://mcp__demo.iterate-preview-3.app");
   });
 
   it("prefers custom hostnames for MCP URLs", () => {
@@ -85,7 +85,7 @@ describe("project host routing", () => {
         customHostname: "mcp-demo.iterate.app",
         projectHostnameBases: ["os2-mcp.iterate.app"],
       }),
-    ).toBe("https://mcp-demo.iterate.app/mcp");
+    ).toBe("https://mcp-demo.iterate.app");
   });
 
   it("does not invent MCP URLs without a valid project slug and project host base", () => {

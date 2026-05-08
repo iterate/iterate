@@ -12,6 +12,7 @@
 
 import { describe, it, expect } from "vitest";
 import {
+  generateCodemodeContextTypesFromJsonSchema,
   generateTypesFromJsonSchema,
   jsonSchemaToType,
   jsonSchemaToTypeString,
@@ -877,5 +878,42 @@ describe("generateTypesFromJsonSchema", () => {
     expect(result).toContain("\tfiles: {");
     expect(result).toContain("$call: (input: FilesInput) => Promise<FilesOutput>;");
     expect(result).toContain("read: (input: FilesReadInput) => Promise<FilesReadOutput>;");
+  });
+
+  it("generates codemode ctx declarations with core built-ins and nested provider paths", () => {
+    const result = generateCodemodeContextTypesFromJsonSchema({
+      namespace: ["builtin", "slack"],
+      tools: {
+        "chat.postMessage": {
+          description: "Post a Slack message",
+          inputSchema: {
+            type: "object",
+            properties: {
+              channel: { type: "string" },
+              text: { type: "string" },
+            },
+            required: ["channel", "text"],
+          },
+          outputSchema: {
+            type: "object",
+            properties: {
+              ok: { type: "boolean" },
+            },
+            required: ["ok"],
+          },
+        },
+      },
+    });
+
+    expect(result).toContain("interface CodemodeExecutionContext {");
+    expect(result).toContain("fetch: typeof fetch;");
+    expect(result).toContain("console: CodemodeConsole;");
+    expect(result).toContain("builtin: {");
+    expect(result).toContain("slack: {");
+    expect(result).toContain("chat: {");
+    expect(result).toContain(
+      "postMessage: (input: ChatPostMessageInput) => Promise<ChatPostMessageOutput>;",
+    );
+    expect(result).toContain("declare const ctx: CodemodeExecutionContext");
   });
 });

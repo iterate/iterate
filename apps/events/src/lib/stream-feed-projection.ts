@@ -14,7 +14,7 @@ import {
   StreamPausedEvent,
   StreamResumedEvent,
   type Event,
-} from "@iterate-com/events-contract";
+} from "@iterate-com/shared/streams/types";
 import type {
   EventFeedItem,
   GroupedEventFeedItem,
@@ -54,17 +54,6 @@ export function toEventFeedItem(event: Event): EventFeedItem {
     timestamp: getTimestamp(event.createdAt),
     raw: event,
   };
-}
-
-export function projectEventToFeed(event: Event): StreamFeedItem[] {
-  const eventFeedItem = toEventFeedItem(event);
-  const semanticItem = toSemanticFeedItem(event);
-
-  if (semanticItem == null) {
-    return [eventFeedItem];
-  }
-
-  return [eventFeedItem, semanticItem];
 }
 
 export function getEventFeedItems(feed: readonly StreamFeedItem[]): EventFeedItem[] {

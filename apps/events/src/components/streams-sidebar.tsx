@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/events-contract";
+import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import {

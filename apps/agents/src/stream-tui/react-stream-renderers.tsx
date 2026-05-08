@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/react */
-import type { StreamPath } from "@iterate-com/events-contract";
+import type { StreamPath } from "@iterate-com/shared/streams/types";
 import { StyledText, TextAttributes, bg, fg, type ScrollBoxRenderable } from "@opentui/core";
 import type {
   EventsStreamBuiltInElement,

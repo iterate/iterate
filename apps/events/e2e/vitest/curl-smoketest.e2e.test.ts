@@ -25,26 +25,26 @@
  * `https://events.iterate-preview-1.com`).
  */
 import { randomUUID } from "node:crypto";
-import { StreamPath } from "@iterate-com/events-contract";
+import { StreamPath } from "@iterate-com/shared/streams/types";
 import { x } from "tinyexec";
 import { describe, expect, test } from "vitest";
 import {
-  defaultE2EProjectSlug,
+  defaultE2ENamespace,
   getEventsProjectBaseUrl,
   requireEventsBaseUrl,
-  scopedE2EProjectSlug,
+  scopedE2ENamespace,
   supportsProjectHostRouting,
 } from "../helpers.ts";
 
 describe("events curl smoke", () => {
   test("append, state, history stream, and root endpoints (shell + snapshot)", async () => {
     const bareBaseUrl = requireEventsBaseUrl();
-    const projectSlug = supportsProjectHostRouting(bareBaseUrl)
-      ? scopedE2EProjectSlug
-      : defaultE2EProjectSlug;
+    const namespace = supportsProjectHostRouting(bareBaseUrl)
+      ? scopedE2ENamespace
+      : defaultE2ENamespace;
     const baseURL = getEventsProjectBaseUrl({
       baseURL: bareBaseUrl,
-      projectSlug,
+      namespace,
     });
 
     const streamPath = StreamPath.parse(`/e2e-curl/${randomUUID().slice(0, 8)}`);
@@ -155,7 +155,7 @@ retry_curl "$BASE_URL/api/streams/__state/%2F" >/dev/null
       },
     });
     expect(JSON.parse(encodedStateJson)).toMatchObject({
-      projectSlug,
+      namespace: namespace,
       path: "<streamPath>",
       eventCount: 2,
       childPaths: [],
@@ -178,7 +178,7 @@ retry_curl "$BASE_URL/api/streams/__state/%2F" >/dev/null
       },
     });
     expect(JSON.parse(slashEscapedStateJson)).toMatchObject({
-      projectSlug,
+      namespace: namespace,
       path: "<streamPath>",
       eventCount: 2,
       childPaths: [],
@@ -209,8 +209,8 @@ retry_curl "$BASE_URL/api/streams/__state/%2F" >/dev/null
       createdAt: "<ts>",
       offset: 1,
       payload: {
+        namespace: namespace,
         path: "<streamPath>",
-        projectSlug,
       },
       streamPath: "<streamPath>",
       type: "events.iterate.com/core/stream-first-initialized",

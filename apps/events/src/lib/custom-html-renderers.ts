@@ -2,7 +2,7 @@ import {
   HTML_RENDERER_CONFIGURED_TYPE,
   HtmlRendererConfiguredEvent,
   type Event,
-} from "@iterate-com/events-contract";
+} from "@iterate-com/shared/streams/types";
 import jsonata from "jsonata";
 import Mustache from "mustache";
 import type {

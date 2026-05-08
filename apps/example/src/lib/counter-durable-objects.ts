@@ -17,9 +17,11 @@ export const CreateCounterFormValues = z.object({
 
 export type CreateCounterFormValues = z.infer<typeof CreateCounterFormValues>;
 
-export type CounterInitParams = CreateCounterFormValues & {
-  name: string;
-};
+export const CounterInitParams = CreateCounterFormValues.extend({
+  name: CounterDimensionSchema,
+});
+
+export type CounterInitParams = z.infer<typeof CounterInitParams>;
 
 export type CounterExplorerLinks = {
   kv: string;

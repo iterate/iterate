@@ -17,6 +17,51 @@ import {
 type JsonValue = z.infer<ReturnType<typeof z.json>>;
 
 describe("createOpenAiWsProcessor", () => {
+  it("continues WebSocket request work through waitUntil when a runner provides it", async () => {
+    const appended: StreamEventInput[] = [];
+    const waitUntilPromises: Promise<unknown>[] = [];
+    let resolveSocket: ((socket: FakeOpenAiResponsesWebSocket) => void) | undefined;
+    const socketPromise = new Promise<FakeOpenAiResponsesWebSocket>((resolve) => {
+      resolveSocket = resolve;
+    });
+    const processor = createOpenAiWsProcessor({
+      openResponsesWebSocket: async () => await socketPromise,
+    });
+
+    const afterAppend = processor.implementation.afterAppend?.({
+      event: consumedOpenAiEvent({
+        type: "events.iterate.com/agent/llm-request-requested",
+        payload: llmRequestPayload("background"),
+        offset: 7,
+      }),
+      previousState: registeredState(),
+      state: registeredState(),
+      streamApi: testStreamApi({ appended }),
+      signal: new AbortController().signal,
+      waitUntil: (promise) => {
+        waitUntilPromises.push(promise);
+      },
+    });
+
+    await afterAppend;
+    expect(waitUntilPromises).toHaveLength(1);
+    expect(appended).toEqual([]);
+
+    const socket = new FakeOpenAiResponsesWebSocket();
+    resolveSocket?.(socket);
+    await waitFor(() => socket.sent.length === 0);
+    socket.open();
+    await waitFor(() => socket.sent.length === 1);
+    completeResponse(socket, {
+      delta: "BACKGROUND",
+      responseId: "resp_background",
+    });
+    await Promise.all(waitUntilPromises);
+
+    expect(eventTypes(appended)).toContain("events.iterate.com/agent/output-added");
+    expect(eventTypes(appended)).toContain("events.iterate.com/agent/llm-request-completed");
+  });
+
   it("keeps the official Responses WebSocket client open across sequential requests", async () => {
     const appended: StreamEventInput[] = [];
     const sockets: FakeOpenAiResponsesWebSocket[] = [];

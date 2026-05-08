@@ -1,6 +1,6 @@
 import type { SlackEvent } from "@slack/types";
 import { z } from "zod";
-import { buildDerivedIdempotencyKey, implementProcessor } from "../stream-processor.ts";
+import { buildProcessorIdempotencyKey, implementProcessor } from "../stream-processor.ts";
 import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
 import { SlackProcessorContract } from "./contract.ts";
 
@@ -173,10 +173,10 @@ export function createSlackProcessor() {
             streamPath,
             event: {
               type: "events.iterate.com/slack/webhook-received",
-              idempotencyKey: buildDerivedIdempotencyKey({
-                slug: SlackProcessorContract.slug,
-                purpose: "forward-slack-webhook",
-                event,
+              idempotencyKey: buildProcessorIdempotencyKey({
+                processor: SlackProcessorContract,
+                key: "forward-slack-webhook",
+                sourceEvent: event,
               }),
               payload: event.payload,
             },

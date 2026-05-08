@@ -55,7 +55,6 @@ export const newStyleCloudflareApps: Record<
     appPath: "apps/os2",
     dopplerProject: "os2",
     paths: ["apps/os2/**", "apps/os2-contract/**"],
-    deploymentDependencies: ["events"],
   },
   semaphore: {
     slug: "semaphore",

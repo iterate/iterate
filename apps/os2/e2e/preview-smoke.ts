@@ -6,10 +6,31 @@ function requireBaseUrl() {
   return new URL(baseUrl);
 }
 
-function readProjectBaseUrlOverride() {
-  const url = process.env.OS2_PROJECT_BASE_URL?.trim();
+function readProjectMcpUrlOverride() {
+  const url = process.env.OS2_PROJECT_MCP_URL?.trim();
   return url ? new URL(url) : null;
 }
+
+function readAdminApiSecret() {
+  return (
+    process.env.OS2_ADMIN_API_SECRET?.trim() ||
+    process.env.APP_CONFIG_ADMIN_API_SECRET?.trim() ||
+    null
+  );
+}
+
+function previewSmokeProjectSlug() {
+  const explicitSlug = process.env.OS2_PREVIEW_SMOKE_PROJECT_SLUG?.trim();
+  if (explicitSlug) return explicitSlug;
+
+  const commit = process.env.GITHUB_SHA?.trim().slice(0, 8) || "manual";
+  return `preview-mcp-smoke-${commit}`;
+}
+
+type Project = {
+  id: string;
+  slug: string;
+};
 
 async function expectStatus(input: { method?: string; status: number; url: URL }) {
   const response = await fetch(input.url, {
@@ -22,41 +43,83 @@ async function expectStatus(input: { method?: string; status: number; url: URL }
   return response;
 }
 
-function projectHostnameFor(baseUrl: URL, projectBaseUrlOverride: URL | null) {
-  if (projectBaseUrlOverride) return projectBaseUrlOverride.hostname;
+async function fetchProjectBySlug(input: { adminApiSecret: string; baseUrl: URL; slug: string }) {
+  const response = await fetch(new URL(`/api/projects/by-slug/${input.slug}`, input.baseUrl), {
+    headers: {
+      authorization: `Bearer ${input.adminApiSecret}`,
+    },
+  });
 
-  const previewMatch = /^os2\.iterate-preview-(\d+)\.com$/.exec(baseUrl.hostname);
-  if (previewMatch) {
-    return `demo.iterate-preview-${previewMatch[1]}.app`;
-  }
-
-  const dashboardPrefix = "os.";
-  if (!baseUrl.hostname.startsWith(dashboardPrefix)) {
+  if (!response.ok) {
     throw new Error(
-      `OS2 preview base URL must be os2.iterate-preview-N.com or start with os.; received ${baseUrl.hostname}.`,
+      `Failed to find MCP smoke project ${input.slug}: ${response.status} ${await response.text()}`,
     );
   }
-  const projectHostnameBase = baseUrl.hostname
-    .slice(dashboardPrefix.length)
-    // OS2 dashboard hosts use `.com` for the app shell while project/MCP hosts
-    // use `.app` for user code and OAuth resource URLs. Keep the smoke test's
-    // fallback derivation aligned with the deployed dev/prod host contract, and
-    // allow OS2_PROJECT_BASE_URL above for any future topology that cannot be
-    // inferred from OS2_BASE_URL alone.
-    .replace(/\.com$/, ".app");
-  return `demo.${projectHostnameBase}`;
+
+  return (await response.json()) as Project;
 }
 
-function hasSeededProjectHost(projectBaseUrlOverride: URL | null) {
-  return projectBaseUrlOverride !== null;
+async function seedProject(input: { adminApiSecret: string; baseUrl: URL }) {
+  const slug = previewSmokeProjectSlug();
+  const response = await fetch(new URL("/api/projects", input.baseUrl), {
+    body: JSON.stringify({
+      metadata: {
+        seededAt: new Date().toISOString(),
+        seededBy: "os2-preview-mcp-smoke",
+      },
+      slug,
+    }),
+    headers: {
+      authorization: `Bearer ${input.adminApiSecret}`,
+      "content-type": "application/json",
+    },
+    method: "POST",
+  });
+
+  if (response.status === 409) {
+    return await fetchProjectBySlug({ ...input, slug });
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      `Failed to create MCP smoke project at ${input.baseUrl}: ${response.status} ${await response.text()}`,
+    );
+  }
+
+  return (await response.json()) as Project;
+}
+
+function projectMcpUrlFor(input: { baseUrl: URL; project: Project }) {
+  const previewMatch = /^os2\.iterate-preview-(\d+)\.com$/.exec(input.baseUrl.hostname);
+  if (previewMatch) {
+    return new URL(`https://mcp__${input.project.slug}.iterate-preview-${previewMatch[1]}.app/`);
+  }
+
+  if (input.baseUrl.hostname === "os2.iterate.com") {
+    return new URL(`https://mcp__${input.project.slug}.iterate.app/`);
+  }
+
+  throw new Error(
+    `Cannot derive project MCP URL for ${input.project.slug} from OS2 base ${input.baseUrl}. Set OS2_PROJECT_MCP_URL explicitly.`,
+  );
+}
+
+async function seedProjectMcpUrl(input: { adminApiSecret: string; baseUrl: URL }) {
+  // The preview smoke deliberately uses the normal `projects.create` and
+  // `projects.findBySlug` procedures. `activeOrganizationMiddleware` maps the
+  // admin bearer token to a tiny synthetic organization, keeping this path close
+  // to the UI while still making preview checks repeatable without Clerk.
+  const project = await seedProject(input);
+  return projectMcpUrlFor({ baseUrl: input.baseUrl, project });
 }
 
 const baseUrl = requireBaseUrl();
-const projectBaseUrlOverride = readProjectBaseUrlOverride();
+const projectMcpUrlOverride = readProjectMcpUrlOverride();
+const adminApiSecret = readAdminApiSecret();
 
-// This smoke test intentionally avoids authenticated application procedures.
-// Preview CI has no stable seeded Clerk user/project, so it proves the deployed
-// edge contract that must work before browser-led auth tests can run.
+// Keep the dashboard checks unauthenticated, then use the admin preview hook to
+// seed one deterministic project/MCP hostname. That makes the preview proof
+// repeatable without relying on a human Clerk session.
 await expectStatus({
   url: new URL("/api/__internal/health", baseUrl),
   status: 200,
@@ -71,21 +134,27 @@ if (!rootLocation.startsWith("/sign-in?redirect_url=")) {
   throw new Error(`Expected unauthenticated root to redirect to sign-in; got ${rootLocation}.`);
 }
 
-await expectStatus({
-  url: new URL("/mcp", baseUrl),
-  status: 404,
-});
+const projectMcpUrl =
+  projectMcpUrlOverride ??
+  (adminApiSecret ? await seedProjectMcpUrl({ adminApiSecret, baseUrl }) : null);
 
-const projectOrigin = `${projectBaseUrlOverride?.protocol ?? baseUrl.protocol}//${projectHostnameFor(baseUrl, projectBaseUrlOverride)}`;
-const projectMcpUrl = new URL("/mcp", projectOrigin);
-
-if (!hasSeededProjectHost(projectBaseUrlOverride)) {
-  await expectStatus({
-    url: projectMcpUrl,
-    status: 404,
-  });
-  console.log(`OS2 preview smoke passed for ${baseUrl.toString()}`);
+if (!projectMcpUrl) {
+  console.log(`OS2 preview smoke passed for ${baseUrl.toString()} (MCP project seed skipped)`);
   process.exit(0);
+}
+
+const instructionsResponse = await fetch(projectMcpUrl, {
+  headers: { accept: "text/html" },
+  redirect: "manual",
+});
+if (!instructionsResponse.ok) {
+  throw new Error(
+    `Expected MCP instructions page from ${projectMcpUrl}; received ${instructionsResponse.status}.`,
+  );
+}
+const instructionsHtml = await instructionsResponse.text();
+if (!instructionsHtml.includes("Connect an MCP client to this project endpoint")) {
+  throw new Error(`MCP instructions page did not contain setup text: ${instructionsHtml}`);
 }
 
 const projectMcpResponse = await expectStatus({
@@ -93,7 +162,7 @@ const projectMcpResponse = await expectStatus({
   status: 401,
 });
 const wwwAuthenticate = projectMcpResponse.headers.get("www-authenticate") ?? "";
-const metadataUrl = new URL("/.well-known/oauth-protected-resource/mcp", projectOrigin);
+const metadataUrl = new URL("/.well-known/oauth-protected-resource", projectMcpUrl.origin);
 if (!wwwAuthenticate.includes(`resource_metadata="${metadataUrl.toString()}"`)) {
   throw new Error(`Unexpected MCP WWW-Authenticate header: ${wwwAuthenticate}`);
 }

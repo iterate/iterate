@@ -13,10 +13,7 @@ import { setupE2E } from "../test-support/e2e-test.ts";
 import { createLocalDevServer } from "../test-support/create-local-dev-server.ts";
 import { createMockInternet } from "../test-support/create-mock-internet.ts";
 import { MCP_TOOL_PROVIDER_PRESET_EVENT } from "~/lib/default-tool-provider-events.ts";
-import {
-  buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl,
-  streamPathToAgentInstance,
-} from "~/lib/iterate-agent-addressing.ts";
+import { buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl } from "~/lib/iterate-agent-addressing.ts";
 
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 const harFixturePath = join(appRoot, "e2e/vitest/__snapshots__/iterate-agent-mcp.har");
@@ -65,7 +62,6 @@ test.skip(
         callable: fetchCallableFromWebSocketUrl(
           buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
             publicOrigin: server.publicUrl,
-            runnerInstance: streamPathToAgentInstance(streamPath),
             streamPath,
           }),
         ),

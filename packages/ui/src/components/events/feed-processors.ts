@@ -5,7 +5,7 @@ import {
   STREAM_METADATA_UPDATED_TYPE,
   StreamPath,
   type Event,
-} from "@iterate-com/events-contract";
+} from "@iterate-com/shared/streams/types";
 
 import type {
   EventsStreamBuiltInElement,
@@ -24,6 +24,38 @@ const AGENT_LLM_REQUEST_COMPLETED_TYPE = "events.iterate.com/agent/llm-request-c
 const AGENT_LLM_REQUEST_CANCELLED_TYPE = "events.iterate.com/agent/llm-request-cancelled";
 const CODEMODE_BLOCK_ADDED_TYPE = "events.iterate.com/codemode/block-added";
 const CODEMODE_RESULT_ADDED_TYPE = "events.iterate.com/codemode/result-added";
+const CODEMODE_SCRIPT_EXECUTION_REQUESTED_TYPE =
+  "events.iterate.com/codemode/script-execution-requested";
+const CODEMODE_SCRIPT_EXECUTION_COMPLETED_TYPE =
+  "events.iterate.com/codemode/script-execution-completed";
+
+/**
+ * Renderer modes available in the shared stream view component.
+ *
+ * "raw-pretty" is the default interleaved view; "raw-single-json" dumps every
+ * event as a single YAML/JSON block.
+ */
+export const eventsStreamRendererModes = ["raw-pretty", "raw-single-json"] as const;
+export type EventsStreamRendererMode = (typeof eventsStreamRendererModes)[number];
+
+export const eventsStreamRendererModeOptions: ReadonlyArray<{
+  value: EventsStreamRendererMode;
+  label: string;
+}> = [
+  { value: "raw-pretty", label: "Raw + Pretty" },
+  { value: "raw-single-json", label: "Raw YAML" },
+];
+
+export function selectEventsStreamViewReducer(
+  mode: EventsStreamRendererMode,
+): EventsStreamViewReducer {
+  switch (mode) {
+    case "raw-pretty":
+      return rawPrettyEventsStreamViewReducer;
+    case "raw-single-json":
+      return rawJsonDumpEventsStreamViewReducer;
+  }
+}
 
 function createInitialEventsStreamViewState(): EventsStreamViewState {
   return createEventsStreamViewState({
@@ -527,12 +559,75 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
     ];
   }
 
+  if (event.type === CODEMODE_SCRIPT_EXECUTION_REQUESTED_TYPE) {
+    const code = readStringPayloadField(event, "code");
+    if (code == null) return [];
+    return [
+      {
+        type: "codemode-block",
+        id: `codemode-block-${event.offset}`,
+        props: {
+          script: code,
+          language: "javascript",
+          timestamp,
+          raw: event,
+        },
+      },
+    ];
+  }
+
+  if (event.type === CODEMODE_SCRIPT_EXECUTION_COMPLETED_TYPE) {
+    const durationMs = readNumberPayloadField(event, "durationMs") ?? 0;
+    const outcome = readRecordPayloadField(event, "outcome");
+    const status = outcome?.status;
+    const success = status === "succeeded" || status === "returned";
+    const error = readCodemodeOutcomeError(outcome);
+    return [
+      {
+        type: "codemode-result",
+        id: `codemode-result-${event.offset}`,
+        props: {
+          success,
+          result: readCodemodeOutcomeResult(outcome),
+          ...(error == null ? {} : { error }),
+          logs: readStringArrayPayloadField(event, "logs"),
+          durationMs,
+          timestamp,
+          raw: event,
+        },
+      },
+    ];
+  }
+
   /*
    * Keep unsupported semantic events as raw summaries for now. Add a dedicated
    * Rendered Element type when an event family earns a real renderer; avoid a
    * vague catch-all card that hides product decisions behind generic UI.
    */
   return [];
+}
+
+function readCodemodeOutcomeResult(outcome: Record<string, unknown> | null): unknown {
+  if (outcome == null) return {};
+  if (outcome.status === "succeeded" && "output" in outcome) return outcome.output;
+  if (outcome.status === "returned" && "value" in outcome) return outcome.value;
+  return outcome;
+}
+
+function readCodemodeOutcomeError(outcome: Record<string, unknown> | null) {
+  if (outcome == null) return undefined;
+  if (outcome.status !== "failed" && outcome.status !== "threw") return undefined;
+  if (!("error" in outcome)) return undefined;
+  return stringifyCodemodeError(outcome.error);
+}
+
+function stringifyCodemodeError(error: unknown) {
+  if (typeof error === "string") return error;
+  try {
+    return JSON.stringify(error, null, 2);
+  } catch {
+    return String(error);
+  }
 }
 
 function readLlmRequestOutcome(eventType: string): "completed" | "failed" | "cancelled" {

@@ -1,13 +1,13 @@
 import type { ContractRouterClient } from "@orpc/contract";
+import { eventsContract } from "@iterate-com/events-contract";
 import {
   Event,
-  ProjectSlug,
+  StreamNamespace,
   type Event as EventsEvent,
-  eventsContract,
   type StreamPath,
-} from "@iterate-com/events-contract";
+} from "@iterate-com/shared/streams/types";
 import { createEventsOrpcClient } from "../../src/lib/events-orpc-client.ts";
-import { getProjectUrl } from "../../../events/src/lib/project-slug.ts";
+import { getProjectUrl } from "../../src/lib/events-urls.ts";
 
 export type EventsClient = ContractRouterClient<typeof eventsContract>;
 
@@ -28,7 +28,7 @@ export function createEventsHelpers(params: {
 }): EventsHelpers {
   const client = createEventsOrpcClient({
     baseUrl: params.baseUrl,
-    projectSlug: params.projectSlug,
+    projectId: params.projectSlug,
   });
 
   return {
@@ -111,7 +111,7 @@ function eventsStreamViewerUrl(args: {
 }): string {
   const projectBase = getProjectUrl({
     currentUrl: args.eventsOrigin,
-    projectSlug: ProjectSlug.parse(args.projectSlug),
+    projectId: StreamNamespace.parse(args.projectSlug),
   })
     .toString()
     .replace(/\/+$/, "");

@@ -1,4 +1,4 @@
-import type { Event, EventInput, StreamPath } from "@iterate-com/events-contract";
+import type { Event, EventInput, StreamPath } from "@iterate-com/shared/streams/types";
 import type { EventsStreamViewState } from "@iterate-com/ui/components/events/feed-items";
 import { call, isProcedure, os, type AnyProcedure } from "@orpc/server";
 import { z } from "zod";

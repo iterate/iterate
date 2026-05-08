@@ -20,15 +20,13 @@ import {
 import type {
   Constructor,
   DurableObjectClass,
-  MembersOf,
-  ReqEnvOf,
+  DurableObjectMixinResult,
   RuntimeDurableObjectConstructor,
-  StaticSide,
 } from "./mixin-types.ts";
 import type {
   LifecycleHooksMembers,
   LifecycleHooksProtected,
-  LifecycleInit,
+  LifecycleStructuredName,
 } from "./with-lifecycle-hooks.ts";
 import type { DurableObjectCoreProtected } from "./with-durable-object-core.ts";
 
@@ -39,6 +37,7 @@ type RunnerContract<Contract> = {
   events: EventCatalog;
   processorDeps?: readonly unknown[];
   consumes: readonly string[];
+  consumesAllEvents?: true;
   reduce?: (args: {
     contract: Contract;
     state: ProcessorState<Contract>;
@@ -129,7 +128,7 @@ export abstract class StreamProcessorRunnerProtected<
 }
 
 type StreamProcessorRunnerOptions<
-  InitParams extends LifecycleInit,
+  StructuredName extends LifecycleStructuredName,
   Env,
   Contract extends RunnerContract<Contract>,
 > = {
@@ -144,37 +143,35 @@ type StreamProcessorRunnerOptions<
   processor(args: {
     ctx: DurableObjectState;
     env: Env;
-    initParams: InitParams;
+    structuredName: StructuredName;
     instance: unknown;
   }): Processor<Contract>;
   /**
    * Create the scoped stream API for this processor.
    *
    * In Cloudflare Workers this is usually a named WorkerEntrypoint from
-   * `ctx.exports` with `props: { streamPath: initParams.streamPath }`.
+   * `ctx.exports` with `props: { streamPath: structuredName.streamPath }`.
    */
   streamApi(args: {
     ctx: DurableObjectState;
     env: Env;
-    initParams: InitParams;
+    structuredName: StructuredName;
     processor: Processor<Contract>;
   }): ProcessorStreamApi<Contract>;
 };
 
 type WithStreamProcessorRunnerResult<
   TBase extends DurableObjectClass,
-  InitParams extends LifecycleInit,
+  StructuredName extends LifecycleStructuredName,
+  InitialState,
   Contract extends RunnerContract<Contract>,
-> = StaticSide<TBase> &
-  DurableObjectClass<
-    ReqEnvOf<TBase>,
-    MembersOf<TBase> &
-      StreamProcessorRunnerProtected<Contract> &
-      DurableObjectCoreProtected &
-      LifecycleHooksMembers<InitParams> &
-      LifecycleHooksProtected<InitParams>
-  > &
-  Constructor<StreamProcessorRunnerProtected<Contract>>;
+> = DurableObjectMixinResult<
+  TBase,
+  StreamProcessorRunnerProtected<Contract> &
+    DurableObjectCoreProtected &
+    LifecycleHooksMembers<StructuredName, InitialState> &
+    LifecycleHooksProtected<StructuredName, InitialState>
+>;
 
 /**
  * Adds protected Durable Object runner methods for one stream processor.
@@ -188,23 +185,24 @@ type WithStreamProcessorRunnerResult<
  * This assumes one processor instance is bound to one stream path for now.
  */
 export function withStreamProcessorRunner<
-  InitParams extends LifecycleInit,
+  StructuredName extends LifecycleStructuredName,
   Env,
   Contract extends RunnerContract<Contract>,
->(options: StreamProcessorRunnerOptions<InitParams, Env, Contract>) {
+  InitialState = undefined,
+>(options: StreamProcessorRunnerOptions<StructuredName, Env, Contract>) {
   return function <TBase extends DurableObjectClass>(
     Base: TBase &
       Constructor<
         DurableObjectCoreProtected &
-          LifecycleHooksMembers<InitParams> &
-          LifecycleHooksProtected<InitParams>
+          LifecycleHooksMembers<StructuredName, InitialState> &
+          LifecycleHooksProtected<StructuredName, InitialState>
       >,
-  ): WithStreamProcessorRunnerResult<TBase, InitParams, Contract> {
+  ): WithStreamProcessorRunnerResult<TBase, StructuredName, InitialState, Contract> {
     const BaseWithCore = Base as unknown as RuntimeDurableObjectConstructor &
       Constructor<
         DurableObjectCoreProtected &
-          LifecycleHooksMembers<InitParams> &
-          LifecycleHooksProtected<InitParams>
+          LifecycleHooksMembers<StructuredName, InitialState> &
+          LifecycleHooksProtected<StructuredName, InitialState>
       >;
 
     abstract class StreamProcessorRunnerMixin extends BaseWithCore {
@@ -246,6 +244,9 @@ export function withStreamProcessorRunner<
       }): Promise<StreamProcessorRunnerState<Contract>> {
         await this.ensureStarted();
         const processor = this.streamProcessorRunnerProcessor();
+        if (!processorConsumesEvent({ processor, eventType: args.event.type })) {
+          return this.loadStreamProcessorStoredState(processor);
+        }
         const storedState = this.loadStreamProcessorStoredState(processor);
 
         return await consumeLiveProcessorEvent({
@@ -324,7 +325,7 @@ export function withStreamProcessorRunner<
         this.#streamProcessorRunnerProcessor ??= options.processor({
           ctx: this.ctx,
           env: this.env as Env,
-          initParams: this.initParams,
+          structuredName: this.structuredName,
           instance: this,
         });
         return this.#streamProcessorRunnerProcessor;
@@ -337,7 +338,7 @@ export function withStreamProcessorRunner<
         const streamApi = options.streamApi({
           ctx: this.ctx,
           env: this.env as Env,
-          initParams: this.initParams,
+          structuredName: this.structuredName,
           processor,
         });
         return wrapProcessorStreamApiWithProvenance({
@@ -364,7 +365,6 @@ export function withStreamProcessorRunner<
               "stream-processor-runner",
               args.processor.contract.slug,
               "after-append-error",
-              args.event.streamPath,
               String(args.event.offset),
             ].join(":"),
             metadata: {
@@ -393,7 +393,8 @@ export function withStreamProcessorRunner<
     // class AgentProcessorDO extends withStreamProcessorRunner(options)(Base)<Env> {}
     return StreamProcessorRunnerMixin as unknown as WithStreamProcessorRunnerResult<
       TBase,
-      InitParams,
+      StructuredName,
+      InitialState,
       Contract
     >;
   };
@@ -401,6 +402,16 @@ export function withStreamProcessorRunner<
 
 function storageKey(processor: { contract: { slug: string } }): string {
   return `stream-processor:${processor.contract.slug}:stored-state`;
+}
+
+function processorConsumesEvent<Contract extends RunnerContract<Contract>>(args: {
+  processor: Processor<Contract>;
+  eventType: string;
+}): boolean {
+  return (
+    args.processor.contract.consumesAllEvents === true ||
+    args.processor.contract.consumes.includes(args.eventType)
+  );
 }
 
 function getStoredProcessorStateSchema<Contract extends RunnerContract<Contract>>(

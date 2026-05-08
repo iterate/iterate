@@ -1,4 +1,4 @@
-import type { StreamPath as StreamPathType } from "@iterate-com/events-contract";
+import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 
 export function getRelativeStreamPath({
   basePath,

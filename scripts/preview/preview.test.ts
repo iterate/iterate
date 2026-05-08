@@ -9,11 +9,11 @@ import {
 
 describe("preview app dependency expansion", () => {
   it("adds explicit dependencies for affected apps", () => {
-    expect(expandPreviewDependencies(["os2"])).toEqual(["events", "os2"]);
+    expect(expandPreviewDependencies(["events"])).toEqual(["events", "os2"]);
   });
 
   it("keeps independent apps as-is", () => {
-    expect(expandPreviewDependencies(["events"])).toEqual(["events"]);
+    expect(expandPreviewDependencies(["os2"])).toEqual(["os2"]);
   });
 
   it("deduplicates dependencies", () => {
@@ -27,7 +27,7 @@ describe("preview app dependency batches", () => {
       batchPreviewAppsByDependencies([cloudflarePreviewApps.os2, cloudflarePreviewApps.events]).map(
         (batch) => batch.map((app) => app.slug),
       ),
-    ).toEqual([["events"], ["os2"]]);
+    ).toEqual([["os2"], ["events"]]);
   });
 
   it("keeps independent apps in the same batch", () => {
@@ -90,9 +90,9 @@ describe("preview retry selection", () => {
       selectPreviewAppsNeedingRetry({
         previousState: {
           apps: {
-            os2: {
-              appDisplayName: "OS",
-              appSlug: "os2",
+            events: {
+              appDisplayName: "Events",
+              appSlug: "events",
               headSha: "current-head",
               status: "tests-failed",
               updatedAt: "2026-05-01T00:00:00.000Z",

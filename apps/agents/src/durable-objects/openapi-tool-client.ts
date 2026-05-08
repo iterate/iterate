@@ -1,9 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
-import { ProjectSlug } from "@iterate-com/events-contract";
 import { parseAppConfig } from "@iterate-com/shared/apps/config";
-import { getProjectUrl } from "../../../events/src/lib/project-slug.ts";
+import { StreamNamespace } from "@iterate-com/shared/streams/types";
 import { AppConfig } from "~/app.ts";
-import { workerReachableLocalUrl } from "~/lib/events-urls.ts";
+import { getProjectUrl, workerReachableLocalUrl } from "~/lib/events-urls.ts";
 import type { CloudflareEnv } from "~/lib/worker-env.d.ts";
 import { createOpenApiToolProvider } from "~/lib/openapi-tool-provider.ts";
 
@@ -42,7 +41,7 @@ export class OpenApiToolClient extends DurableObject<CloudflareEnv> {
     const config = parseAppConfig(AppConfig, env.APP_CONFIG);
     const eventsOrigin = getProjectUrl({
       currentUrl: config.eventsBaseUrl,
-      projectSlug: ProjectSlug.parse(config.eventsProjectSlug),
+      projectId: StreamNamespace.parse(config.eventsProjectSlug),
     })
       .toString()
       .replace(/\/+$/, "");

@@ -31,8 +31,8 @@ const smokeEnv = {
       secretKey: "sk_test_runtime_smoke",
       jwtKey: "runtime-smoke-jwt-key",
     },
-    eventsBaseUrl: "https://events.iterate.com",
     mcpProofSecret: "runtime-smoke-proof-secret",
+    openAiApiKey: "runtime-smoke-openai-key",
   }),
 };
 

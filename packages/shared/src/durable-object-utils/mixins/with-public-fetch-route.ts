@@ -1,24 +1,22 @@
 /// <reference types="@cloudflare/workers-types" />
 
 import {
-  getOrInitializeDoStub,
-  serializeDurableObjectInitParams,
+  deriveDurableObjectNameFromStructuredName,
+  serializeDurableObjectStructuredName,
   type LifecycleHooksMembers,
-  type LifecycleInit,
+  type LifecycleStructuredName,
 } from "./with-lifecycle-hooks.ts";
 import type {
   Constructor,
   DurableObjectClass,
-  MembersOf,
-  ReqEnvOf,
+  DurableObjectMixinResult,
   RuntimeDurableObjectConstructor,
-  StaticSide,
 } from "./mixin-types.ts";
 import type { DurableObjectCoreProtected } from "./with-durable-object-core.ts";
 
 export const DURABLE_OBJECT_PUBLIC_ROUTE_PREFIX = "/durable-objects";
 
-export type PublicDurableObjectAddressingMode = "by-name" | "by-id" | "by-init-params";
+export type PublicDurableObjectAddressingMode = "by-name" | "by-id" | "by-structured-name";
 
 export type PublicFetchRouteMembers = {
   /**
@@ -30,7 +28,7 @@ export type PublicFetchRouteMembers = {
    *   room.getPublicDurableObjectPath({ mode: "by-id" });
    *
    * The default mode comes from `withPublicFetchRoute({ defaultAddressing })`.
-   * `by-init-params` requires `withLifecycleHooks()` below this mixin and an
+   * `by-structured-name` requires `withLifecycleHooks()` below this mixin and an
    * already-initialized object.
    */
   getPublicDurableObjectPath(options?: { mode?: PublicDurableObjectAddressingMode }): string;
@@ -47,9 +45,10 @@ type PublicFetchRouteStatic = {
   [PUBLIC_FETCH_ROUTE_METADATA]: PublicFetchRouteMetadata;
 };
 
-type WithPublicFetchRouteResult<TBase extends DurableObjectClass> = StaticSide<TBase> &
-  DurableObjectClass<ReqEnvOf<TBase>, MembersOf<TBase> & PublicFetchRouteMembers> &
-  Constructor<PublicFetchRouteMembers> &
+type WithPublicFetchRouteResult<TBase extends DurableObjectClass> = DurableObjectMixinResult<
+  TBase,
+  PublicFetchRouteMembers
+> &
   PublicFetchRouteStatic;
 
 /**
@@ -60,7 +59,7 @@ type WithPublicFetchRouteResult<TBase extends DurableObjectClass> = StaticSide<T
  *
  * - `/durable-objects/:namespaceSlug/by-name/:name`
  * - `/durable-objects/:namespaceSlug/by-id/:id`
- * - `/durable-objects/:namespaceSlug/by-init-params/:encodedInitParams`
+ * - `/durable-objects/:namespaceSlug/by-structured-name/:encodedStructuredName`
  *
  * The mixin does not wrap `fetch()`. It only adds instance path generation and
  * the hidden metadata that `routeDurableObjectRequest()` consumes. The
@@ -117,19 +116,21 @@ export function withPublicFetchRoute(options: {
               payload: this.getDurableObjectId().toString(),
             });
 
-          case "by-init-params": {
-            const lifecycle = this as unknown as Partial<LifecycleHooksMembers<LifecycleInit>>;
+          case "by-structured-name": {
+            const lifecycle = this as unknown as Partial<
+              LifecycleHooksMembers<LifecycleStructuredName>
+            >;
             if (typeof lifecycle.assertInitialized !== "function") {
               throw new Error(
-                'getPublicDurableObjectPath({ mode: "by-init-params" }) requires withLifecycleHooks() below withPublicFetchRoute().',
+                'getPublicDurableObjectPath({ mode: "by-structured-name" }) requires withLifecycleHooks() below withPublicFetchRoute().',
               );
             }
 
             return buildPublicDurableObjectPath({
               namespaceSlug: metadata.namespaceSlug,
               mode,
-              payload: serializeDurableObjectInitParams({
-                initParams: lifecycle.assertInitialized(),
+              payload: serializeDurableObjectStructuredName({
+                structuredName: lifecycle.assertInitialized(),
               }),
             });
           }
@@ -282,7 +283,7 @@ function matchPublicDurableObjectPath(pathname: string): MatchedPublicDurableObj
   }
 
   const match = pathname.match(
-    /^\/durable-objects\/([^/]+)\/(by-name|by-id|by-init-params)\/([^/]+)(\/.*)?$/,
+    /^\/durable-objects\/([^/]+)\/(by-name|by-id|by-structured-name)\/([^/]+)(\/.*)?$/,
   );
 
   if (match === null) {
@@ -323,19 +324,24 @@ async function resolveDurableObjectStub(
       return namespace.get(id) as FetchableDurableObjectStub;
     }
 
-    case "by-init-params": {
-      const initParams = parseInitParamsPathPayload(matched.payload);
+    case "by-structured-name": {
+      const structuredName = parseStructuredNamePathPayload(matched.payload);
 
       try {
-        return await getOrInitializeDoStub({
-          namespace: registration.namespace as never,
-          initParams,
+        const lifecycleStructuredName = structuredName as LifecycleStructuredName;
+        const name = deriveDurableObjectNameFromStructuredName({
+          structuredName: lifecycleStructuredName,
         });
+        const stub = namespace.getByName(name);
+        await (stub as unknown as LifecycleHooksMembers<LifecycleStructuredName>).initialize({
+          name,
+        });
+        return stub;
       } catch (error) {
         if (error instanceof Error && error.message.includes("initialize is not a function")) {
           throw new PublicDurableObjectRouteError(
             500,
-            "by-init-params requires a Durable Object with withLifecycleHooks().",
+            "by-structured-name requires a Durable Object with withLifecycleHooks().",
           );
         }
 
@@ -345,16 +351,16 @@ async function resolveDurableObjectStub(
   }
 }
 
-function parseInitParamsPathPayload(payload: string): Record<string, unknown> {
+function parseStructuredNamePathPayload(payload: string): Record<string, unknown> {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(decodePathSegment(payload, "init params"));
+    parsed = JSON.parse(decodePathSegment(payload, "structured name"));
   } catch {
-    throw new PublicDurableObjectRouteError(400, "Invalid init params JSON.");
+    throw new PublicDurableObjectRouteError(400, "Invalid structured name JSON.");
   }
 
   if (parsed === null || Array.isArray(parsed) || typeof parsed !== "object") {
-    throw new PublicDurableObjectRouteError(400, "Init params must decode to a plain object.");
+    throw new PublicDurableObjectRouteError(400, "Structured name must decode to a plain object.");
   }
 
   return parsed as Record<string, unknown>;

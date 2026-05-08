@@ -1,6 +1,6 @@
 import {
   assertNever,
-  buildDerivedIdempotencyKey,
+  buildProcessorIdempotencyKey,
   implementProcessor,
   type ProcessorStreamApi,
 } from "../stream-processor.ts";
@@ -46,10 +46,10 @@ export function createSchedulingProcessor() {
           await streamApi.append({
             event: {
               type: schedulingEventTypes.scheduleConfigured,
-              idempotencyKey: buildDerivedIdempotencyKey({
-                slug: SchedulingProcessorContract.slug,
-                purpose: "append-scheduled-to-configured",
-                event,
+              idempotencyKey: buildProcessorIdempotencyKey({
+                processor: SchedulingProcessorContract,
+                key: "append-scheduled-to-configured",
+                sourceEvent: event,
               }),
               payload: buildScheduleConfiguredPayloadFromAppendScheduledEvent(event),
             },

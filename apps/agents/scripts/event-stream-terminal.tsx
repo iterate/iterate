@@ -7,7 +7,12 @@
  * `EventsStreamViewReducer`; this file only owns terminal runtime state,
  * keyboard routing, and stream-scoped side effects.
  */
-import { Event, ProjectSlug, StreamPath, type EventInput } from "@iterate-com/events-contract";
+import {
+  Event,
+  StreamNamespace,
+  StreamPath,
+  type EventInput,
+} from "@iterate-com/shared/streams/types";
 import type {
   EventsStreamViewReducer,
   EventsStreamViewState,
@@ -76,7 +81,7 @@ type FeedMode = keyof typeof feedModes;
 function StreamTerminalApp() {
   const renderer = useRenderer();
   const client = useMemo(
-    () => createEventsOrpcClient({ baseUrl: args.eventsBaseUrl, projectSlug: args.projectSlug }),
+    () => createEventsOrpcClient({ baseUrl: args.eventsBaseUrl, projectId: args.projectSlug }),
     [],
   );
   const [currentStreamPath, setCurrentStreamPath] = useState(args.streamPath);
@@ -791,7 +796,7 @@ function parseArgs(argv: string[]) {
 
   return {
     eventsBaseUrl,
-    projectSlug: ProjectSlug.parse(projectSlug),
+    projectSlug: StreamNamespace.parse(projectSlug),
     streamPath: StreamPath.parse(streamPath),
   };
 }

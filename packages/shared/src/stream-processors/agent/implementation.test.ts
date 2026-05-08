@@ -63,8 +63,7 @@ describe("createAgentProcessor", () => {
     expect(appended).toEqual([
       {
         type: "events.iterate.com/agent/status-updated",
-        idempotencyKey:
-          "stream-processor:agent:derived:status-updated:working:llm-request-requested:/agents/test:43",
+        idempotencyKey: "agent/status-updated/working/llm-request-requested@43",
         payload: {
           status: "working",
           reason: "llm-request-requested",
@@ -72,6 +71,43 @@ describe("createAgentProcessor", () => {
         },
       },
     ]);
+  });
+
+  it("renders codemode tool-provider registrations into model-visible instructions", async () => {
+    const appended: StreamEventInput[] = [];
+    const processor = createAgentProcessor({
+      waitUntil: () => undefined,
+    });
+
+    await processor.implementation.afterAppend?.({
+      event: consumedAgentEvent({
+        type: "events.iterate.com/codemode/tool-provider-registered",
+        payload: {
+          instructions: "Use ctx.chat.sendMessage({ message }) for chat output.",
+          invocation: { kind: "event" },
+          path: ["chat"],
+        },
+        offset: 44,
+      }),
+      previousState: registeredState(),
+      state: registeredState(),
+      streamApi: testStreamApi({ appended }),
+      signal: new AbortController().signal,
+    });
+
+    expect(appended).toHaveLength(2);
+    expect(appended[1]).toMatchObject({
+      type: "events.iterate.com/agent/input-added",
+      idempotencyKey: "agent/render-codemode-tool-provider-registered@44",
+      payload: {
+        triggerLlmRequest: { behaviour: "dont-trigger-request" },
+      },
+    });
+    const payload = appended[1]?.payload as { content: string };
+    expect(payload.content).toContain("path:");
+    expect(payload.content).toContain("instructions: |-");
+    expect(payload.content).toContain("ctx.chat.sendMessage({ message })");
+    expect(payload.content).not.toContain("invocation");
   });
 
   it("re-reads stream history before handing a scheduled LLM request to providers", async () => {

@@ -3,10 +3,10 @@ import { AgentChatProcessorContract } from "@iterate-com/shared/stream-processor
 import { createAgentChatProcessor } from "@iterate-com/shared/stream-processors/agent-chat/implementation";
 import {
   createStreamProcessorRunnerDurableObject,
-  type StreamProcessorRunnerInit,
+  type StreamProcessorRunnerName,
 } from "./stream-processor-runner-common.ts";
 
-export type AgentChatStreamProcessorRunnerInit = StreamProcessorRunnerInit;
+export type AgentChatStreamProcessorRunnerName = StreamProcessorRunnerName;
 
 const AgentChatStreamProcessorRunnerBase = createStreamProcessorRunnerDurableObject({
   className: "AgentChatStreamProcessorRunner",

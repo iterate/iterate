@@ -1,12 +1,12 @@
 import {
   ChildStreamCreatedEvent,
   EventInput,
-  ProjectSlug,
+  StreamNamespace,
   STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
   StreamPath,
-  StreamSocketFrame,
-} from "@iterate-com/events-contract";
+} from "@iterate-com/shared/streams/types";
 import { parseAppConfig } from "@iterate-com/shared/apps/config";
+import { StreamSocketFrame } from "@iterate-com/shared/streams/stream-socket-types";
 import { Agent, type Connection, type WSMessage } from "agents";
 import { z } from "zod";
 import { AppConfig } from "~/app.ts";
@@ -16,12 +16,12 @@ import {
   AGENT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
   buildAgentChatStreamProcessorRunnerWebSocketCallbackUrl,
   buildAgentStreamProcessorRunnerWebSocketCallbackUrl,
+  buildCloudflareAiStreamProcessorRunnerWebSocketCallbackUrl,
   buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl,
   buildOpenAiWsStreamProcessorRunnerWebSocketCallbackUrl,
   CLOUDFLARE_AI_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
   CODEMODE_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
   OPENAI_WS_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
-  streamPathToAgentInstance,
 } from "~/lib/iterate-agent-addressing.ts";
 import type { CloudflareEnv } from "~/lib/worker-env.d.ts";
 
@@ -138,34 +138,14 @@ export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
 
     const appConfig = parseAppConfig(AppConfig, this.env.APP_CONFIG);
     const childPath = childCreated.data.payload.childPath;
-    const projectSlug = ProjectSlug.parse(appConfig.eventsProjectSlug);
-    const runnerInstance = streamPathToAgentInstance(childPath);
+    const projectId = StreamNamespace.parse(appConfig.eventsProjectSlug);
     const matched = this.#lookupDefaultsForChildPath(childPath);
     const llmProvider = inferLlmProviderFromDefaultEvents(matched?.events ?? []);
-    const cloudflareAiCallbackUrl = new URL(publicBaseUrl);
-    if (cloudflareAiCallbackUrl.hostname === "localhost") {
-      cloudflareAiCallbackUrl.hostname = "127.0.0.1";
-    }
-    cloudflareAiCallbackUrl.protocol =
-      cloudflareAiCallbackUrl.protocol === "http:" ||
-      cloudflareAiCallbackUrl.hostname === "localhost" ||
-      cloudflareAiCallbackUrl.hostname === "127.0.0.1" ||
-      cloudflareAiCallbackUrl.hostname === "::1" ||
-      cloudflareAiCallbackUrl.hostname === "[::1]"
-        ? "ws:"
-        : "wss:";
-    cloudflareAiCallbackUrl.pathname = `/api/cloudflare-ai-stream-processor-runner/${encodeURIComponent(
-      runnerInstance,
-    )}/websocket`;
-    cloudflareAiCallbackUrl.search = "";
-    cloudflareAiCallbackUrl.searchParams.set("streamPath", childPath);
-    cloudflareAiCallbackUrl.hash = "";
     const runnerSubscriptions = [
       {
         slug: AGENT_CHAT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
         websocketUrl: buildAgentChatStreamProcessorRunnerWebSocketCallbackUrl({
           publicOrigin: publicBaseUrl,
-          runnerInstance,
           streamPath: childPath,
         }),
       },
@@ -173,7 +153,6 @@ export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
         slug: AGENT_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
         websocketUrl: buildAgentStreamProcessorRunnerWebSocketCallbackUrl({
           publicOrigin: publicBaseUrl,
-          runnerInstance,
           streamPath: childPath,
         }),
       },
@@ -186,16 +165,17 @@ export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
           llmProvider === "openai-ws"
             ? buildOpenAiWsStreamProcessorRunnerWebSocketCallbackUrl({
                 publicOrigin: publicBaseUrl,
-                runnerInstance,
                 streamPath: childPath,
               })
-            : cloudflareAiCallbackUrl.toString(),
+            : buildCloudflareAiStreamProcessorRunnerWebSocketCallbackUrl({
+                publicOrigin: publicBaseUrl,
+                streamPath: childPath,
+              }),
       },
       {
         slug: CODEMODE_STREAM_PROCESSOR_RUNNER_SUBSCRIPTION_SLUG,
         websocketUrl: buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
           publicOrigin: publicBaseUrl,
-          runnerInstance,
           streamPath: childPath,
         }),
       },
@@ -203,7 +183,7 @@ export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
 
     const eventsClient = createEventsOrpcClient({
       baseUrl: appConfig.eventsBaseUrl,
-      projectSlug,
+      projectId,
     });
 
     // Subscribe processors before defaults so newly appended defaults can be
@@ -224,14 +204,14 @@ export class ChildStreamAutoSubscriber extends Agent<CloudflareEnv> {
         });
         log("onMessage.subscribed", {
           childPath,
-          runnerInstance,
+          runnerName: childPath,
           slug: subscription.slug,
           websocketUrl: subscription.websocketUrl,
         });
       } catch (error) {
         this.#logError("onMessage.subscribeFailed", {
           childPath,
-          runnerInstance,
+          runnerName: childPath,
           slug: subscription.slug,
           websocketUrl: subscription.websocketUrl,
           error: stringifyError(error),

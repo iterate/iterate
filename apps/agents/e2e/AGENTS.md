@@ -170,10 +170,7 @@ Both use Semaphore tunnel lease + cloudflared. Never need both simultaneously.
 import { test } from "../test-support/e2e-test.ts";
 import { createMockInternet } from "../test-support/create-mock-internet.ts";
 import { createLocalDevServer } from "../test-support/create-local-dev-server.ts";
-import {
-  buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl,
-  streamPathToAgentInstance,
-} from "~/lib/iterate-agent-addressing.ts";
+import { buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl } from "~/lib/iterate-agent-addressing.ts";
 
 test(
   "codemode runs builtin + OpenAPI + fetch",

@@ -7,9 +7,9 @@ where project_id = ?
 order by priority desc, host asc;
 `.trim();
 const query = (params: listIngressRoutesByProject.Params) => ({
+  name: "listIngressRoutesByProject",
   sql,
   args: [params.projectId],
-  name: "listIngressRoutesByProject",
 });
 
 export const listIngressRoutesByProject = Object.assign(

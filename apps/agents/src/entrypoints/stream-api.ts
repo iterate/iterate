@@ -4,7 +4,7 @@ import {
   type Event,
   type EventInput,
   type StreamCursor,
-} from "@iterate-com/events-contract";
+} from "@iterate-com/shared/streams/types";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { AppConfig } from "~/app.ts";
 import { createEventsOrpcClient } from "~/lib/events-orpc-client.ts";
@@ -75,7 +75,7 @@ export class StreamApi extends WorkerEntrypoint<Env, StreamApiProps> {
 
     return createEventsOrpcClient({
       baseUrl: config.eventsBaseUrl,
-      projectSlug: config.eventsProjectSlug,
+      projectId: config.eventsProjectSlug,
     });
   }
 

@@ -3,7 +3,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { getRequestHeader } from "@tanstack/react-start/server";
-import { Event, type Event as EventsEvent, type StreamPath } from "@iterate-com/events-contract";
+import {
+  Event,
+  type Event as EventsEvent,
+  type StreamPath,
+} from "@iterate-com/shared/streams/types";
 import { makeFunnySlug } from "@iterate-com/shared/slug-maker";
 import { CODEMODE_CHAT_RESPONSE_SYSTEM_PROMPT } from "@iterate-com/shared/stream-processors/legacy-codemode/contract";
 import {
@@ -199,14 +203,14 @@ function SelectedAgentStreamView({
   );
   const viewerUrl = buildStreamComposerUrl({
     eventsBaseUrl,
-    projectSlug: eventsProjectSlug,
+    projectId: eventsProjectSlug,
     streamPath,
   });
   const appendMessage = useMutation({
     mutationFn: async (content: string) => {
       const client = createEventsOrpcClient({
         baseUrl: eventsBaseUrl,
-        projectSlug: eventsProjectSlug,
+        projectId: eventsProjectSlug,
       });
 
       await client.append({
@@ -292,7 +296,7 @@ async function readAgentStreamHistory(args: {
 }): Promise<EventsEvent[]> {
   const client = createEventsOrpcClient({
     baseUrl: args.eventsBaseUrl,
-    projectSlug: args.eventsProjectSlug,
+    projectId: args.eventsProjectSlug,
   });
   const stream = await client.stream({
     path: args.streamPath,
@@ -832,7 +836,7 @@ function PresetRow({
     const childPath = `${basePath.replace(/\/+$/, "")}/${slug}`;
     const viewerUrl = buildStreamComposerUrl({
       eventsBaseUrl,
-      projectSlug: eventsProjectSlug,
+      projectId: eventsProjectSlug,
       streamPath: childPath,
     });
     window.open(viewerUrl, "_blank", "noopener,noreferrer");
@@ -954,12 +958,12 @@ function parseEventsArray(text: string): ParseResult<ContractEvent[]> {
  * Build an events-viewer URL with the agent composer pre-selected. Mirrors
  * `buildStreamViewerUrl` from `lib/events-urls.ts` but stays self-contained
  * so it can run in the browser without pulling in events-side helpers
- * (which import zod schemas etc.). Project-slug subdomain rewriting uses
+ * (which import zod schemas etc.). Project-id subdomain rewriting uses
  * the same `events[-…].iterate.com` convention the events service does.
  */
 function buildStreamComposerUrl(args: {
   eventsBaseUrl: string;
-  projectSlug: string;
+  projectId: string;
   streamPath: string;
 }): string {
   const url = new URL(args.eventsBaseUrl);
@@ -973,9 +977,9 @@ function buildStreamComposerUrl(args: {
       labels[2] === "iterate" &&
       labels[3] === "com" &&
       /^events(?:-[a-z0-9-]+)*$/.test(labels[1]));
-  if (isEventsHost && args.projectSlug !== "public") {
+  if (isEventsHost && args.projectId !== "public") {
     const base = labels.length === 4 ? labels.slice(1).join(".") : url.hostname;
-    url.hostname = `${args.projectSlug}.${base}`;
+    url.hostname = `${args.projectId}.${base}`;
   }
   const trimmed = args.streamPath.replace(/^\/+/, "");
   const segments = trimmed.length === 0 ? [] : trimmed.split("/").map(encodeURIComponent);

@@ -3,7 +3,7 @@ import {
   type Event,
   StreamPath,
   type StreamPath as StreamPathType,
-} from "@iterate-com/events-contract";
+} from "@iterate-com/shared/streams/types";
 import { getAncestorStreamPaths } from "~/lib/stream-path-ancestors.ts";
 
 export type StreamsSidebarTreeNode = {

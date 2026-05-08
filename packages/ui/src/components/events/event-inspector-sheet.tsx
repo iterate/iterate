@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from "react";
-import type { Event } from "@iterate-com/events-contract";
+import type { Event } from "@iterate-com/shared/streams/types";
 import { BookOpenIcon, ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 
 import { Button } from "@iterate-com/ui/components/button";

@@ -176,7 +176,7 @@ Candidate event types:
 Questions to resolve:
 
 - Should event schemas live in `apps/os2-contract`,
-  `@iterate-com/events-contract`, or a new codemode contract package?
+  `@iterate-com/shared/streams`, or a new codemode contract package?
 - Should canonical lifecycle events be appendable only by the Codemode Session?
 - Should provider/domain progress events use a codemode prefix or provider-owned
   event types?
@@ -315,7 +315,7 @@ These are intentionally ordered so each answer narrows later work.
    Session worker, or can some descriptors be one-shot only?
 3. Should self-callable first-party bridge descriptors become the default for
    OpenAPI and MCP bridges?
-4. Should canonical codemode event schemas live in OS2, events-contract, or a
+4. Should canonical codemode event schemas live in OS2, shared streams, or a
    new package?
 5. Are event offsets enough identity for Script Executions and Tool Function
    Calls?
@@ -329,7 +329,7 @@ These are intentionally ordered so each answer narrows later work.
     inbound MCP session attach to exactly one Codemode Session?
 12. How should browser UI-created Codemode Sessions be named/listed for a
     Project?
-13. Should CodemodeSession init params be exactly `{ projectId, streamPath }`,
+13. Should CodemodeSession structured name be exactly `{ projectId, streamPath }`,
     or do we keep a lifecycle `name` field as infrastructure-only input?
     Resolved: identity and DO name are derived from `{ projectId, streamPath }`.
 

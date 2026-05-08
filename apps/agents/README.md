@@ -22,9 +22,8 @@ Objects to each new descendant stream.
 Runner WebSocket callbacks are explicit app routes:
 
 ```text
-ws://127.0.0.1:<PORT>/api/webchat-stream-processor-runner/<instance>/websocket?streamPath=/agents/demo
-ws://127.0.0.1:<PORT>/api/agent-stream-processor-runner/<instance>/websocket?streamPath=/agents/demo
-ws://127.0.0.1:<PORT>/api/codemode-stream-processor-runner/<instance>/websocket?streamPath=/agents/demo
+ws://127.0.0.1:<PORT>/api/agent-stream-processor-runner/%2Fagents%2Fdemo/websocket
+ws://127.0.0.1:<PORT>/api/codemode-stream-processor-runner/%2Fagents%2Fdemo/websocket
 ```
 
 Inbound frames use the events stream socket protocol

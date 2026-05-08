@@ -59,12 +59,12 @@ brief yet.
   `withLifecycleHooks`, `withD1ObjectCatalog`, and public/rootable routing
   where appropriate.
 - Secret Durable Objects should be resolved with
-  `getOrInitializeDoStub({ namespace, initParams })`, using lifecycle init
-  params as identity/config rather than hand-rolled Durable Object names.
-- The PoC Secret init params should include `{ projectId, slug }`; the helper
-  derives the stable Durable Object name from those params and calls
+  `getOrInitializeDoStub({ namespace, name: { projectId, slug } })`, using the
+  lifecycle structured name rather than hand-rolled Durable Object names.
+- The PoC Secret structured name should include `{ projectId, slug }`; the helper
+  derives the stable Durable Object name from that value and calls
   `initialize()`.
-- Secret values must not be stored in lifecycle init params. Initialize by
+- Secret values must not be stored in lifecycle initial state. Initialize by
   identity/config, then set mutable Secret material with `setValue({ value })`.
 - Durable Objects in this design should be rootable from the main OS2 Worker
   entrypoint through the shared public Durable Object route helper, rather than
@@ -228,7 +228,7 @@ brief yet.
 
 - Add `ProjectEgressEntrypoint`.
 - Add `ProjectDurableObject.egressFetch(request)`.
-- Add a Secret Durable Object with init params `{ projectId, slug }`, a
+- Add a Secret Durable Object with structured name `{ projectId, slug }`, a
   `setValue({ value })` method, and usage accounting.
 - Do not add a dedicated app-level D1 secrets projection for the PoC.
 - Implement `secrets.list` as a temporary procedure over the

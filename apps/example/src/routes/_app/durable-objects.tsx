@@ -2,6 +2,7 @@ import { useForm } from "@tanstack/react-form";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { createServerFn, useServerFn } from "@tanstack/react-start";
 import { getOrInitializeDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { listD1ObjectCatalogRecords } from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
 import type { D1ObjectCatalogRecord } from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
 import { Button } from "@iterate-com/ui/components/button";
@@ -68,14 +69,16 @@ const createCounterDurableObject = createServerFn({ method: "POST" })
     }
 
     const initParams = buildCounterInitParams(data);
+    const name = deriveDurableObjectNameFromStructuredName({
+      structuredName: initParams,
+    });
     await getOrInitializeDoStub<ExampleCounter>({
       namespace: context.workerEnv.EXAMPLE_COUNTER,
-      name: initParams.name,
-      initParams,
+      name: initParams,
     });
 
     return {
-      name: initParams.name,
+      name,
     };
   });
 
@@ -204,7 +207,7 @@ function DurableObjectsPage() {
                 {counter.name}
               </Link>
               <p className="text-muted-foreground">
-                {counter.initParams.scope} · {counter.initParams.variant} · last woken{" "}
+                {counter.structuredName.scope} · {counter.structuredName.variant} · last woken{" "}
                 {new Date(counter.lastWokenAt).toLocaleString()}
               </p>
               <CounterInspectorLinks links={counter.explorerLinks} />

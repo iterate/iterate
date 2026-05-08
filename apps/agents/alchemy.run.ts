@@ -61,8 +61,8 @@ const slackApi = DurableObjectNamespace("slack-api", {
   className: "SlackApi",
   sqlite: true,
 });
-const openAiApiKey = ctx.compiledAppConfig.openAiApiKey?.exposeSecret();
-const slackBotToken = ctx.compiledAppConfig.slackBotToken?.exposeSecret();
+const openAiApiKey = ctx.runtimeConfig.openAiApiKey?.exposeSecret();
+const slackBotToken = ctx.runtimeConfig.slackBotToken?.exposeSecret();
 
 const { worker, afterFinalize } = await IterateApp(ctx, {
   bindings: {

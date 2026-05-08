@@ -95,17 +95,20 @@ describe("codemode.executeScript", () => {
     const projectId = requireProjectId();
 
     try {
-      const started = await client.codemode.executeScript({
+      const started = await client.project.codemode.executeScript({
         code: "async () => 1 + 1",
-        projectId,
+        projectSlugOrId: projectId,
         providers: [],
       });
 
       expect(started.event.type).toBe("events.iterate.com/codemode/script-execution-requested");
       expect(started.streamPath).toBeTruthy();
+      const scriptExecutionId = (started.event.payload as { scriptExecutionId: string })
+        .scriptExecutionId;
 
-      const stream = await wsClient.client.codemode.streamEvents({
+      const stream = await wsClient.client.project.codemode.streamEvents({
         afterOffset: started.event.offset > 1 ? started.event.offset - 1 : "start",
+        projectSlugOrId: projectId,
         streamPath: started.streamPath,
       });
 
@@ -114,19 +117,19 @@ describe("codemode.executeScript", () => {
         events.push(event as Record<string, unknown>);
         const payload = event.payload as Record<string, unknown>;
         if (
-          event.type === "events.iterate.com/codemode/script-execution-finished" &&
-          payload.scriptExecutionRequestedOffset === started.event.offset
+          event.type === "events.iterate.com/codemode/script-execution-completed" &&
+          payload.scriptExecutionId === scriptExecutionId
         ) {
           break;
         }
       }
 
       const finished = events.find(
-        (event) => event.type === "events.iterate.com/codemode/script-execution-finished",
+        (event) => event.type === "events.iterate.com/codemode/script-execution-completed",
       );
       expect(finished?.payload).toMatchObject({
-        result: 2,
-        scriptExecutionRequestedOffset: started.event.offset,
+        outcome: { status: "succeeded", output: 2 },
+        scriptExecutionId,
       });
     } finally {
       wsClient.close();
@@ -134,148 +137,23 @@ describe("codemode.executeScript", () => {
   });
 });
 
-describe("codemode.execute", () => {
-  it("executes simple code and returns a result event stream", async () => {
-    const baseUrl = requireBaseUrl();
-    const client = createClient(baseUrl);
-    const projectId = requireProjectId();
-
-    const stream = await client.codemode.execute({
-      code: "async () => 1 + 1",
-      projectId,
-      providers: [],
-    });
-
-    const events: Array<Record<string, unknown>> = [];
-    for await (const event of stream) {
-      events.push(event as Record<string, unknown>);
-    }
-
-    // Should have at least block-added and block-result-added
-    const blockAdded = events.find((e) => e.type === "codemode-block-added");
-    expect(blockAdded).toBeDefined();
-    expect(blockAdded?.code).toBe("async () => 1 + 1");
-
-    const result = events.find((e) => e.type === "codemode-block-result-added");
-    expect(result).toBeDefined();
-    expect(result?.result).toBe(2);
-    expect(result?.error).toBeUndefined();
-  });
-
-  it("returns log events from console.log", async () => {
-    const baseUrl = requireBaseUrl();
-    const client = createClient(baseUrl);
-    const projectId = requireProjectId();
-
-    const stream = await client.codemode.execute({
-      code: 'async () => { console.log("hello from sandbox"); return "done"; }',
-      projectId,
-      providers: [],
-    });
-
-    const events: Array<Record<string, unknown>> = [];
-    for await (const event of stream) {
-      events.push(event as Record<string, unknown>);
-    }
-
-    const result = events.find((e) => e.type === "codemode-block-result-added");
-    expect(result?.result).toBe("done");
-
-    // At minimum, the result should have logs in the response
-    expect(result?.error).toBeUndefined();
-  });
-
-  it("generates a blockId when not provided", async () => {
-    const baseUrl = requireBaseUrl();
-    const client = createClient(baseUrl);
-    const projectId = requireProjectId();
-
-    const stream = await client.codemode.execute({
-      code: "async () => 42",
-      projectId,
-      providers: [],
-    });
-
-    const events: Array<Record<string, unknown>> = [];
-    for await (const event of stream) {
-      events.push(event as Record<string, unknown>);
-    }
-
-    expect(events.length).toBeGreaterThan(0);
-    const blockId = events[0]?.blockId;
-    expect(typeof blockId).toBe("string");
-    expect((blockId as string).startsWith("cblk_")).toBe(true);
-
-    // All events share the same blockId
-    for (const event of events) {
-      expect(event.blockId).toBe(blockId);
-    }
-  });
-
-  it("uses caller-provided blockId", async () => {
-    const baseUrl = requireBaseUrl();
-    const client = createClient(baseUrl);
-    const projectId = requireProjectId();
-
-    const stream = await client.codemode.execute({
-      code: "async () => 42",
-      blockId: "cblk_custom_test_123",
-      projectId,
-      providers: [],
-    });
-
-    const events: Array<Record<string, unknown>> = [];
-    for await (const event of stream) {
-      events.push(event as Record<string, unknown>);
-    }
-
-    for (const event of events) {
-      expect(event.blockId).toBe("cblk_custom_test_123");
-    }
-  });
-
-  it("returns error for code that throws", async () => {
-    const baseUrl = requireBaseUrl();
-    const client = createClient(baseUrl);
-    const projectId = requireProjectId();
-
-    const stream = await client.codemode.execute({
-      code: 'async () => { throw new Error("test error"); }',
-      projectId,
-      providers: [],
-    });
-
-    const events: Array<Record<string, unknown>> = [];
-    for await (const event of stream) {
-      events.push(event as Record<string, unknown>);
-    }
-
-    const result = events.find((e) => e.type === "codemode-block-result-added");
-    expect(result).toBeDefined();
-    expect(result?.error).toBe("test error");
-  });
-});
-
 describe("codemode.describe", () => {
-  it("returns type definitions placeholder when no providers have describe", async () => {
+  it("returns short provider instructions", async () => {
     const baseUrl = requireBaseUrl();
     const client = createClient(baseUrl);
     const projectId = requireProjectId();
 
-    const result = await client.codemode.describe({
-      projectId,
+    const result = await client.project.codemode.describe({
+      projectSlugOrId: projectId,
       providers: [
         {
+          instructions: "Test functions are available.",
+          invocation: { kind: "event" },
           path: ["test"],
-          callable: {
-            type: "fetch",
-            via: { type: "url", url: "https://httpbin.org/post" },
-          },
         },
       ],
     });
 
-    expect(result.typeDefinitions).toContain("test");
-    expect(result.typeDefinitions).toContain("not provided type information");
+    expect(result.instructions).toBe("test: Test functions are available.");
   });
 });

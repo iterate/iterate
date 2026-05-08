@@ -1,9 +1,9 @@
 import type { Client } from "sqlfu";
 
-const sql = `select count(*) as total from secrets where project_slug = ?;`;
+const sql = `select count(*) as total from secrets where namespace = ?;`;
 const query = (params: countSecrets.Params) => ({
   sql,
-  args: [params.projectSlug],
+  args: [params.namespace],
   name: "countSecrets",
 });
 
@@ -20,7 +20,7 @@ export const countSecrets = Object.assign(
 
 export namespace countSecrets {
   export type Params = {
-    projectSlug: string;
+    namespace: string;
   };
   export type Result = {
     total: number;
