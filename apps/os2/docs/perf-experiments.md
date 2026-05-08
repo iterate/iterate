@@ -3144,6 +3144,95 @@ Interpretation:
 - Reducing and no-op afterAppend are effectively instant in these runs. The
   remaining hot cost is cross-DO derived appends from processor afterAppend.
 
+### 2026-05-08: already-rendered Agent input traffic
+
+Question:
+
+- How much of the `agent-chat-responses` cost is caused by `agent-chat`
+  transcribing chat events into derived `agent/input-added` events, versus the
+  Agent processor reducing model-visible input rows?
+
+Change:
+
+- Added a new benchmark traffic shape: `agent-inputs`.
+- It appends `events.iterate.com/agent/input-added` directly with
+  `triggerLlmRequest: { behaviour: "dont-trigger-request" }`.
+- This bypasses `agent-chat` transcription and avoids LLM scheduling, while
+  still exercising the Agent processor's history reducer.
+
+Validation:
+
+- One-event smoke benchmark succeeded:
+  `agent-server-bench-1778213465946-8531f942`
+- First 1000-event attempt returned a 500 immediately after deploy, but the same
+  command succeeded on retry. Treat that failed attempt as likely preview edge
+  propagation unless it recurs.
+
+Benchmark:
+
+- Benchmark: `agent-server-bench-1778213484278-c993723c`
+- Traffic: `1000` `agent/input-added` events at `1000/s`
+- Subscriber mode: `both`
+- Subscription transport: `rpc`
+
+Result:
+
+- Startup timing:
+  - total: `2736ms`
+- Hot path:
+  - publish duration: `1267ms`
+  - source subscriber wait: `350ms`
+  - final subscriber wait: `8ms`
+  - processor wait: `13ms`
+  - append p50/p90/p99: `112/134/166ms`
+  - duplicate invariant: passed, `14` duplicate attempts, `0` unexpected
+- Alarm diagnostics:
+  - schedule requests: `1034`
+  - `setAlarm()` calls: `16`
+  - coalesced while scheduled: `1018`
+- Slowest Agent subscriber dispatches:
+  - setup batch `18` events: `273ms`
+  - tail batch `28` events: `267ms`
+  - `100` input events: `246ms`
+  - `40` input events: `125ms`
+  - `200` input events: `100ms`
+
+Comparison:
+
+- `raw-openai-ws` both subscribers:
+  - source wait `71ms`
+  - processor wait `5ms`
+  - no meaningful Agent history growth
+- `agent-inputs` both subscribers:
+  - source wait `350ms`
+  - processor wait `13ms`
+  - Agent history grows by `1000` model-visible rows
+- `agent-chat-responses` both subscribers:
+  - source wait `916ms`
+  - processor wait `56ms`
+  - Agent history grows and `agent-chat` also appends derived
+    `agent/input-added` events
+
+Interpretation:
+
+- There are at least two hot costs:
+  - reducing/persisting large Agent history state;
+  - cross-DO derived append batches from `agent-chat`.
+- The `agent-inputs` result suggests the Agent processor's reduced state shape is
+  itself expensive under high-volume input streams. The state stores full
+  model-visible history, so every persisted processor state write serializes a
+  growing history array.
+- The `agent-chat-responses` result adds derived append cost on top of that
+  state-growth cost.
+
+Next instrumentation:
+
+- Add processor-state save diagnostics: serialized JSON byte length and save
+  duration per processor/stream batch.
+- The existing processor timing reports `reduceDurationMs: 0` for these cases,
+  which is not enough to distinguish cheap reduce from expensive state
+  serialization/storage.
+
 ### 2026-05-08: WebSocket subscription transport comparison
 
 Hypothesis:
