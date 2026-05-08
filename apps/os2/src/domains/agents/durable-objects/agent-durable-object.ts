@@ -211,7 +211,23 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     return await this.processAppendedStreamEvent(input.event);
   }
 
-  async afterAppendBatch(input: { deliveryStartedAtMs?: number; events: Event[] }) {
+  async afterAppendBatch(input: {
+    deliveryStartedAtMs?: number;
+    events: Event[];
+    subscriberSlug?: string;
+  }) {
+    if (input.subscriberSlug?.startsWith("agent-noop:")) {
+      return {
+        deliveryLagMs:
+          input.deliveryStartedAtMs == null
+            ? null
+            : Math.max(0, Date.now() - input.deliveryStartedAtMs),
+        eventCount: input.events.length,
+        firstOffset: input.events[0]?.offset ?? null,
+        lastOffset: input.events.at(-1)?.offset ?? null,
+      };
+    }
+
     const startedAt = performance.now();
     const ensureStartedAt = performance.now();
     await this.ensureStarted();
@@ -235,18 +251,6 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       totalDurationMs: Math.round(performance.now() - startedAt),
     });
     return state;
-  }
-
-  async benchmarkNoopAfterAppendBatch(input: { deliveryStartedAtMs?: number; events: Event[] }) {
-    return {
-      deliveryLagMs:
-        input.deliveryStartedAtMs == null
-          ? null
-          : Math.max(0, Date.now() - input.deliveryStartedAtMs),
-      eventCount: input.events.length,
-      firstOffset: input.events[0]?.offset ?? null,
-      lastOffset: input.events.at(-1)?.offset ?? null,
-    };
   }
 
   async fetch(request: Request): Promise<Response> {

@@ -137,7 +137,7 @@ export async function publishExternalSubscriberBatch(args: {
       const deliveryStartedAtMs = Date.now();
       await dispatchCallable({
         callable: args.subscriber.callable,
-        payload: { deliveryStartedAtMs, events },
+        payload: { deliveryStartedAtMs, events, subscriberSlug: args.subscriber.slug },
         ctx: args.callableContext,
       });
       return {

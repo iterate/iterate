@@ -544,7 +544,7 @@ function noopAgentSubscriberEvent(input: {
             name: input.agentDurableObjectName,
           },
         },
-        rpcMethod: "benchmarkNoopAfterAppendBatch",
+        rpcMethod: "afterAppendBatch",
         argsMode: "object",
       },
     },
