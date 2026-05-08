@@ -2884,3 +2884,68 @@ Interpretation:
 - Reverted the behavioral coalescing immediately. Kept the diagnostic counters
   only, so the next baseline run can measure `setAlarm()` pressure without
   changing delivery behavior.
+
+### 2026-05-08: baseline alarm diagnostics after reverting active coalescing
+
+Change under test:
+
+- Commit `1e5e7e88e` restores the pre-coalescing delivery behavior.
+- It keeps only the in-memory diagnostic counters for:
+  - schedule requests;
+  - successful `setAlarm()` calls;
+  - setAlarm errors;
+  - coalesced-while-scheduled;
+  - coalesced-while-active.
+
+Validation:
+
+- Benchmark: `agent-server-bench-1778212001534-9ff754ff`
+- Duplicate invariant: passed
+- Logical append attempts: `1036`
+- Committed idempotent events: `1023`
+- Duplicate attempts: `13`
+- Unexpected duplicate attempts: `0`
+- Publish duration: `1533ms`
+- Source subscriber wait: `1057ms`
+- Final subscriber wait: `3ms`
+- Processor wait: `62ms`
+- Append latency: p50 `131ms`, p90 `172ms`, p99 `285ms`
+- Alarm diagnostics:
+  - `scheduleRequestCount`: `2029`
+  - `setAlarmCount`: `2029`
+  - `setAlarmErrorCount`: `0`
+  - `coalescedWhileScheduledCount`: `0`
+  - `coalescedWhileActiveCount`: `0`
+- Delivery runs:
+  - target `2027`, delivered `100`, duration `197ms`
+  - target `1927`, delivered `602`, duration `569ms`, rescheduled
+  - target `1325`, delivered `801`, duration `842ms`, rescheduled
+  - target `524`, delivered `402`, duration `503ms`, rescheduled
+  - target `122`, delivered `100`, duration `243ms`, rescheduled
+- Slowest subscriber deliveries:
+  - Agent, `500` delivered events: `561ms`
+  - Agent, `402` delivered events: `503ms`
+  - Agent, `500` delivered events: `451ms`
+  - Agent, `17` delivered events: `373ms`
+  - Agent, `301` delivered events: `281ms`
+- Cloudflare trace: `6a86605a25103f5eb72cabd32dabf0af`
+  - Trace start: `2026-05-08T03:46:41.534Z`
+  - Trace duration: `6494ms`
+  - Trace spans: `422` in summary, first telemetry page returned `1000`
+    events for the trace
+  - First `1000` trace events:
+    - `durable_object_subrequest`: `435` events, summed duration `123201ms`,
+      max `432ms`
+    - `durable_object_storage_exec`: `274` events
+    - `jsrpc`: `129` events, summed duration `2425ms`, max `124ms`
+    - `durable_object_storage_setAlarm`: `102` events in the sampled page
+
+Interpretation:
+
+- The safe baseline does not starve, but it schedules one alarm per callable
+  delivery scheduling request. In this benchmark that is `2029` calls to
+  `ctx.storage.setAlarm()` for roughly `1000` source events plus derived events.
+- The trace again points at Durable Object subrequest pressure, not reducer CPU.
+- Naive in-memory coalescing is unsafe. The next viable design needs a durable
+  wake/work marker or per-subscriber queued work model that does not rely on an
+  active in-memory drain seeing all later commits.
