@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ctxKeySchema } from "@accelerated-software-development/caddy-api-client/caddy-types";
 import {
   assertNever,
   defineProcessorContract,
@@ -17,8 +18,8 @@ const ToolProviderInvocation = z.discriminatedUnion("kind", [
     kind: z.literal("event"),
   }),
   z.object({
-    callable: Callable,
     kind: z.literal("rpc"),
+    callable: Callable,
   }),
 ]);
 const ToolProviderRegistration = z.object({

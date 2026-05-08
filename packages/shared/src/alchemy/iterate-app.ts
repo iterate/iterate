@@ -1,12 +1,6 @@
 import { fileURLToPath } from "node:url";
 import alchemy from "alchemy";
-import {
-  Route,
-  TanStackStart,
-  Tunnel,
-  createCloudflareApi,
-  findZoneForHostname,
-} from "alchemy/cloudflare";
+import { Route, TanStackStart, Tunnel, createCloudflareApi } from "alchemy/cloudflare";
 import type { Bindings } from "alchemy/cloudflare";
 import type { BaseAppConfig } from "../apps/config.ts";
 import { slugify } from "../slugify.ts";
@@ -178,7 +172,7 @@ export async function IterateApp<B extends Bindings>(
 
     const routeZoneIds = new Map<string, string>();
     for (const hostname of routeHosts) {
-      const { zoneId } = await findZoneForHostname(cloudflareApi, hostname);
+      const { zoneId } = await findActiveZoneForHostname(cloudflareApi, hostname);
       routeZoneIds.set(hostname, zoneId);
 
       await retryCloudflareWorkerRouteCreation(() =>
@@ -195,7 +189,8 @@ export async function IterateApp<B extends Bindings>(
     await Promise.all(
       dnsRouteHosts.map(async (hostname) => {
         const zoneId =
-          routeZoneIds.get(hostname) ?? (await findZoneForHostname(cloudflareApi, hostname)).zoneId;
+          routeZoneIds.get(hostname) ??
+          (await findActiveZoneForHostname(cloudflareApi, hostname)).zoneId;
         const record = {
           type: "A" as const,
           name: hostname,
@@ -392,6 +387,48 @@ async function retryCloudflareWorkerRouteCreation(createRoute: () => Promise<unk
       await sleep(5_000);
     }
   }
+}
+
+async function findActiveZoneForHostname(
+  cloudflareApi: Awaited<ReturnType<typeof createCloudflareApi>>,
+  hostname: string,
+) {
+  const normalizedHostname = hostname.replace(/^\*\./, "").toLowerCase();
+  const labels = normalizedHostname.split(".");
+
+  for (let index = 0; index < labels.length - 1; index += 1) {
+    const zoneName = labels.slice(index).join(".");
+    const response = await cloudflareApi.get(
+      `/zones?${new URLSearchParams({ name: zoneName }).toString()}`,
+    );
+    if (!response.ok) {
+      throw new Error(
+        `Failed to find Cloudflare zone for ${hostname}: ${response.status} ${await response.text()}`,
+      );
+    }
+
+    const body = (await response.json()) as {
+      result?: Array<{
+        account?: { id?: string };
+        id: string;
+        name: string;
+        status?: string;
+      }>;
+    };
+    const zones = body.result ?? [];
+    const zone =
+      zones.find(
+        (candidate) =>
+          candidate.status === "active" && candidate.account?.id === cloudflareApi.accountId,
+      ) ??
+      zones.find((candidate) => candidate.status === "active") ??
+      zones.find((candidate) => candidate.account?.id === cloudflareApi.accountId) ??
+      zones[0];
+
+    if (zone) return { zoneId: zone.id, zoneName: zone.name };
+  }
+
+  throw new Error(`Could not infer active Cloudflare zone for route hostname ${hostname}.`);
 }
 
 function isCloudflareWorkerRouteMissingError(error: unknown) {
