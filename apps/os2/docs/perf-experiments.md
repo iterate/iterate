@@ -1958,3 +1958,83 @@ Interpretation:
     visible directly;
   - consider event-type/subscriber filters so Codemode does less work on
     AgentChat-derived traffic.
+
+### 2026-05-08: duplicate invariant plus 1000/s subscriber isolation
+
+Change deployed:
+
+- Deployed commit `1581eff0d` to preview slot 2.
+- Benchmark CLI now fails when duplicate attempts exceed the default budget or
+  when duplicate keys fall outside the setup allowlist.
+- Stream diagnostics now include committed idempotent event count and logical
+  idempotent append attempts.
+
+`both` subscribers, `1000/s`:
+
+- Project: `proj__os__01kr2pn7m7endvxy4c8a550rzc`
+- Benchmark: `agent-server-bench-1778207338305-0735b44c`
+- Traffic: `1000` `agent-chat/assistant-response-added` events at `1000/s`
+- Duplicate invariant: passed
+- Committed idempotent events: `1023`
+- Duplicate attempts: `13`
+- Logical idempotent append attempts: `1036`
+- Duplicate-attempt ratio: `0.01`
+- Unexpected duplicate attempts: `0`
+- Source subscriber wait: `2419ms`
+- Final subscriber wait: `612ms`
+- Processor wait: `29ms`
+- Append latency: p50 `103ms`, p90 `135ms`, p99 `153ms`
+- Slow delivery windows:
+  - `1992` delivered events took `2446ms`
+  - one Codemode subscriber delivery inside that drain took `1367ms`
+  - same-window Agent delivery took `129ms`
+
+`agent-only`, `1000/s`:
+
+- Project: `proj__os__01kr2ppd3ce48v4wa2pdwynmj0`
+- Benchmark: `agent-server-bench-1778207378824-24290dd1`
+- Duplicate invariant: passed
+- Duplicate attempts: `17`
+- Source subscriber wait: `1831ms`
+- Final subscriber wait: `2937ms`
+- Processor wait: `11ms`
+- Append latency: p50 `102ms`, p90 `152ms`, p99 `169ms`
+- Slow delivery windows:
+  - `838` delivered events took `3314ms`
+  - one Agent subscriber delivery inside that drain took `2268ms`
+
+`codemode-only`, `1000/s`:
+
+- Project: `proj__os__01kr2pr52ne8n9nwgre05xg190`
+- Benchmark: `agent-server-bench-1778207434059-a72801f8`
+- Duplicate invariant: passed
+- Duplicate attempts: `14`
+- Source subscriber wait: `279ms`
+- Final subscriber wait: `4ms`
+- Append latency: p50 `14ms`, p90 `30ms`, p99 `48ms`
+- Delivery windows were `134-287ms`.
+
+Interpretation:
+
+- The hidden idempotency storm is not the remaining high-rate bottleneck in
+  these runs. Duplicate attempts are small, known setup keys, and the invariant
+  passes.
+- `codemode-only` is now much faster than `both` or `agent-only`; the current
+  hot path is more strongly tied to Agent/AgentChat same-stream derived appends
+  and/or Agent DO scheduling than to Codemode's reducer.
+- Stream DO delivery duration and Agent DO method timings disagree in an
+  important way: the Stream DO can spend seconds awaiting an Agent subscriber
+  call, while the Agent runtime often records `consumeDurationMs` near zero once
+  the method body runs.
+- That suggests a missing queue/transit measurement: Worker RPC or Durable
+  Object input-queue wait before `AgentDurableObject.afterAppendBatch()` starts.
+
+Follow-up instrumentation:
+
+- Added `deliveryStartedAtMs` to callable `afterAppendBatch` payloads.
+- Agent subscriber timings now record `deliveryLagMs`, measured as local
+  receive time minus Stream DO send time.
+- This should separate:
+  - time waiting to enter the Agent DO;
+  - `ensureStarted`;
+  - actual stream processor consumption.

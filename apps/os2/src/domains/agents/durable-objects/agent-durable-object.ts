@@ -96,6 +96,7 @@ type AgentStreamApi = ProcessorStreamApi<{
 type AgentAfterAppendBatchTiming = {
   completedAtMs: number;
   consumeDurationMs: number;
+  deliveryLagMs: number | null;
   ensureStartedDurationMs: number;
   eventCount: number;
   firstOffset: number | null;
@@ -159,7 +160,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     return await this.processAppendedStreamEvent(input.event);
   }
 
-  async afterAppendBatch(input: { events: Event[] }) {
+  async afterAppendBatch(input: { deliveryStartedAtMs?: number; events: Event[] }) {
     const startedAt = performance.now();
     const ensureStartedAt = performance.now();
     await this.ensureStarted();
@@ -172,6 +173,10 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     this.recordAfterAppendBatchTiming({
       completedAtMs: Date.now(),
       consumeDurationMs,
+      deliveryLagMs:
+        input.deliveryStartedAtMs == null
+          ? null
+          : Math.max(0, Date.now() - input.deliveryStartedAtMs),
       ensureStartedDurationMs,
       eventCount: input.events.length,
       firstOffset: input.events[0]?.offset ?? null,

@@ -126,9 +126,10 @@ export async function publishExternalSubscriberBatch(args: {
     }
 
     try {
+      const deliveryStartedAtMs = Date.now();
       await dispatchCallable({
         callable: args.subscriber.callable,
-        payload: { events },
+        payload: { deliveryStartedAtMs, events },
         ctx: args.callableContext,
       });
       return { deliveredEventCount: events.length, failedEventCount };
