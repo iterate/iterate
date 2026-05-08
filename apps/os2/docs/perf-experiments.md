@@ -3652,3 +3652,179 @@ Interpretation:
 - The no-op run also confirms that the alarm/cursor loop can catch up quickly
   when subscriber work is truly tiny: `5000` events delivered with `37ms` source
   wait after publish.
+
+### 2026-05-08: Cloudflare traces and unused batch return values
+
+Trace check:
+
+- Used Cloudflare Workers observability for account
+  `cc7f6f461fbe823c199da2b27f9e0ff3`, worker `os2-preview-2`.
+- Corrected no-op benchmark timeframe:
+  - `2026-05-08T04:36:30Z` to `2026-05-08T04:38:30Z`
+  - Benchmark: `agent-server-bench-1778215030303-a9f3787e`
+- Trace summary included many alarm traces and one long trace:
+  - trace id: `df06c8919fa46b3388c78ab0c8026eaa`
+  - duration: `12089ms`
+  - spans: `20310`
+  - errors: `0`
+- A sampled event query on that trace showed:
+  - `jsrpc` spans dominated sampled non-storage duration;
+  - most durable object storage spans were reported as `0ms`.
+
+Real Agent benchmark trace:
+
+- Timeframe:
+  - `2026-05-08T04:26:10Z` to `2026-05-08T04:27:50Z`
+  - Benchmarks around `agent-server-bench-1778214387794-9581eabc` and
+    `agent-server-bench-1778214430596-ca9726f1`
+- Long trace:
+  - trace id: `fd1a0f81834a6be943ea90063969ca08`
+  - duration: `33817ms`
+  - spans: `20589`
+  - errors: `0`
+- Sampled summary from that trace:
+  - `durable_object_subrequest`: `297` sampled spans, total sampled duration
+    `215325ms`, max `725ms`
+  - `jsrpc`: `38` sampled spans, total sampled duration `25103ms`, max
+    `22483ms`
+- The longest sampled `jsrpc` span was:
+  - entrypoint: `AgentDurableObject`
+  - method: `getRuntimeState`
+  - duration: `22483ms`
+  - wall time: `22234ms`
+  - CPU time: `1ms`
+
+Interpretation:
+
+- Long wall-time/low-CPU `getRuntimeState` strongly suggests Durable Object
+  queueing/backpressure, not CPU-bound reducer work.
+- Several trace-level long spans are benchmark observer calls, not necessarily
+  the actual event delivery call. Benchmark diagnostics still need to be read
+  together with traces.
+- One concrete waste became obvious while comparing no-op and real Agent
+  batches: Agent and Codemode batch subscriber methods returned their reduced
+  runtime state to Stream DO, but Stream DO ignores subscriber return values.
+- Returning full state is especially bad for Agent because the returned object
+  can include growing reduced history state.
+
+Change:
+
+- AgentDurableObject `afterAppendBatch` now consumes events and returns nothing.
+- CodemodeSession `afterAppendBatch` now consumes events and returns nothing.
+- No-op Agent benchmark subscriber also returns nothing.
+
+Validation:
+
+- Typechecks:
+  - `pnpm --dir apps/os2 typecheck`
+  - `pnpm --dir packages/shared typecheck`
+- Deployed to preview slot 2.
+
+Post-change benchmark A:
+
+- Benchmark: `agent-server-bench-1778215568324-b1dae036`
+- Traffic: `2000` `agent/status-updated` events at `2000/s`
+- Subscriber mode: `both`
+- Publisher: app worker
+- Result:
+  - publish duration: `2103ms`
+  - source subscriber wait: `225ms`
+  - processor wait: `6ms`
+  - final subscriber wait: `4ms`
+  - append p50/p90/p99: `99/120/141ms`
+  - largest post-startup Agent batches:
+    - `177` events: `249ms`
+    - `200` events: `196ms`
+    - `216` events: `172ms`
+
+Post-change benchmark B:
+
+- Benchmark: `agent-server-bench-1778215604848-2fb44df9`
+- Traffic: `5000` `agent/status-updated` events at `5000/s`
+- Subscriber mode: `both`
+- Publisher: app worker
+- Concurrency: `100`
+- Result:
+  - publish duration: `5468ms`
+  - source subscriber wait: `93ms`
+  - processor wait: `6ms`
+  - final subscriber wait: `3ms`
+  - append p50/p90/p99: `106/121/144ms`
+  - slowest Agent batches were `100-101` events and `81-109ms`
+
+Post-change benchmark C:
+
+- Benchmark: `agent-server-bench-1778215641364-083115d6`
+- Traffic: `5000` `agent/status-updated` events at `5000/s`
+- Subscriber mode: `both`
+- Publisher: app worker
+- Concurrency: `200`
+- Result:
+  - publish duration: `5077ms`
+  - source subscriber wait: `93ms`
+  - processor wait: `12ms`
+  - final subscriber wait: `4ms`
+  - append p50/p90/p99: `193/228/288ms`
+  - slowest Agent batches were `200-223` events and `159-298ms`
+
+Post-change benchmark D:
+
+- Benchmark: `agent-server-bench-1778215678575-66387c3f`
+- Traffic: `1000` `agent/input-added` events at `1000/s`
+- Subscriber mode: `both`
+- Publisher: app worker
+- Result:
+  - publish duration: `1072ms`
+  - source subscriber wait: `186ms`
+  - processor wait: `6ms`
+  - final subscriber wait: `3ms`
+  - append p50/p90/p99: `39/90/112ms`
+  - Agent max state JSON bytes: `121362`
+  - largest post-startup Agent batches:
+    - `194` events: `196ms`
+    - `259` events: `116ms`
+- Compared with the prior direct `agent-inputs` run:
+  - source subscriber wait improved `273ms -> 186ms`
+  - append p99 improved `126ms -> 112ms`
+  - largest post-startup Agent dispatch improved from about `352ms` to `196ms`
+
+Post-change benchmark E:
+
+- Benchmark: `agent-server-bench-1778215708597-3eba6253`
+- Traffic: `1000` `agent-chat/assistant-response-added` events at `1000/s`
+- Subscriber mode: `both`
+- Publisher: app worker
+- Result:
+  - publish duration: `1558ms`
+  - source subscriber wait: `663ms`
+  - processor wait: `4ms`
+  - final subscriber wait: `4ms`
+  - append p50/p90/p99: `120/209/258ms`
+  - Agent max state JSON bytes: `254525`
+  - `agent-chat` afterAppend/append duration: `1182ms`
+- Compared with the prior `agent-chat-responses` run:
+  - source subscriber wait improved `946ms -> 663ms`
+  - the dominant remaining cost is still derived appends from `agent-chat`
+    into `agent/input-added`.
+
+Important failed/unstable run:
+
+- `5000` status events at `5000/s` with `concurrency=500` failed once with a
+  generic oRPC `500` after this change.
+- Lower concurrency runs succeeded:
+  - `concurrency=100`: p99 `144ms`
+  - `concurrency=200`: p99 `288ms`
+- Current operating hypothesis:
+  - high publish concurrency to one Stream DO creates queueing/tail latency and
+    can trip generic worker errors;
+  - the benchmark should model realistic upstream backpressure rather than
+    treating very high client-side concurrency as a free throughput knob.
+
+Current conclusions:
+
+- Removing unused batch return values is a real improvement and should stay.
+- For compact-state traffic, 5000/s is achievable with low post-publish source
+  wait when publish concurrency is bounded around `100`.
+- For full Agent history traffic, returning less helps, but the state shape is
+  still too large.
+- For `agent-chat`, derived append volume is now the main visible bottleneck.
