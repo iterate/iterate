@@ -6,6 +6,7 @@ import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { EventsDebugLink } from "~/components/events-debug-link.tsx";
 import { orpc } from "~/orpc/client.ts";
 
 export const Route = createFileRoute("/_app/orgs/$organizationSlug/projects/$projectSlug/settings")(
@@ -82,8 +83,13 @@ function ProjectDetailContent({
         </div>
 
         <div className="space-y-1">
-          <p className="text-xs uppercase tracking-wide text-muted-foreground">Identifier</p>
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">Project ID</p>
           <Identifier value={project.id} />
+        </div>
+
+        <div className="space-y-2">
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">Events namespace</p>
+          <EventsDebugLink label="Open project in Events" namespace={project.id} streamPath="/" />
         </div>
 
         <div className="space-y-2">
