@@ -254,6 +254,13 @@ export const projectAgentsRouter = {
                 ...published.terminal,
               ]),
             });
+      const derivedEventWait =
+        input.traffic === "agent-chat-responses"
+          ? await waitForAgentChatDerivedInputEvents({
+              sourceEvents: published.appended.map((item) => item.event),
+              stream: benchmarkStream,
+            })
+          : { completed: false, reason: `no derived-event wait for ${input.traffic}` };
       const history = await stream.history({ after: "start" });
       const benchmarkEvents = history.filter((event) =>
         isAgentStreamBenchmarkEvent({ benchmarkId, event }),
@@ -301,6 +308,7 @@ export const projectAgentsRouter = {
         sourceSubscriberWait,
         finalSubscriberWait,
         processorWait,
+        derivedEventWait,
         runtimeState,
         streamDiagnostics,
         streamSubscribers: streamState.processors["external-subscriber"].subscribersBySlug,
@@ -376,6 +384,7 @@ function requireStreamNamespace(context: { stream?: DurableObjectNamespace<Strea
 
 type BenchmarkStreamStub = {
   append(event: EventInput): Promise<Event>;
+  history(args: { after: "start" | number; before?: "end" | number }): Promise<Event[]>;
   getDiagnostics(): Promise<{
     callableSubscriberCursors: Array<{
       cursor: number;
@@ -669,6 +678,57 @@ async function waitForProcessorCursors(input: {
     waitMs: round(performance.now() - startedAt),
     lastState,
   };
+}
+
+async function waitForAgentChatDerivedInputEvents(input: {
+  sourceEvents: Event[];
+  stream: BenchmarkStreamStub;
+}) {
+  const sourceOffsets = new Set(
+    input.sourceEvents
+      .filter((event) => event.type === "events.iterate.com/agent-chat/assistant-response-added")
+      .map((event) => event.offset),
+  );
+  if (sourceOffsets.size === 0) {
+    return { completed: false, reason: "no agent-chat source events" };
+  }
+
+  const startedAt = performance.now();
+  let observedCount = 0;
+  while (performance.now() - startedAt < 30_000) {
+    const history = await input.stream.history({ after: "start" });
+    observedCount = countAgentChatDerivedInputEvents({ history, sourceOffsets });
+    if (observedCount >= sourceOffsets.size) {
+      return {
+        completed: true,
+        expectedCount: sourceOffsets.size,
+        observedCount,
+        waitMs: round(performance.now() - startedAt),
+      };
+    }
+    await delay(25);
+  }
+
+  return {
+    completed: false,
+    expectedCount: sourceOffsets.size,
+    observedCount,
+    reason: "timed out waiting for agent-chat derived agent/input-added events",
+    waitMs: round(performance.now() - startedAt),
+  };
+}
+
+function countAgentChatDerivedInputEvents(input: {
+  history: readonly Event[];
+  sourceOffsets: ReadonlySet<number>;
+}) {
+  return input.history.filter((event) => {
+    if (event.type !== "events.iterate.com/agent/input-added") return false;
+    if (typeof event.idempotencyKey !== "string") return false;
+    if (!event.idempotencyKey.startsWith("agent-chat/render-response@")) return false;
+    const sourceOffset = Number(event.idempotencyKey.split("@").at(-1));
+    return input.sourceOffsets.has(sourceOffset);
+  }).length;
 }
 
 function round(value: number) {
