@@ -29,7 +29,7 @@ import {
   StreamPath,
   type JSONObject,
   type StreamPath as StreamPathType,
-} from "@iterate-com/events-contract";
+} from "@iterate-com/shared/streams/types";
 import { createEvents2AppFixture, requireEventsBaseUrl } from "../helpers.ts";
 
 const app = createEvents2AppFixture({
@@ -173,7 +173,7 @@ const payloadCases = [
     expectedResponse: (canonicalPath) => ({
       event: {
         streamPath: canonicalPath,
-        type: "https://events.iterate.com/events/stream/invalid-event-appended",
+        type: "events.iterate.com/core/invalid-event-appended",
         payload: {
           rawInput: invalidEvent,
           error: expect.stringContaining("payload"),
@@ -188,7 +188,7 @@ const payloadCases = [
     expectedResponse: (canonicalPath) => ({
       event: {
         streamPath: canonicalPath,
-        type: "https://events.iterate.com/events/stream/invalid-event-appended",
+        type: "events.iterate.com/core/invalid-event-appended",
         payload: {
           rawInput: invalidEvent,
           error: expect.stringContaining("payload"),

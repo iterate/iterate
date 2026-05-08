@@ -1,6 +1,7 @@
 import { execSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import { join } from "node:path";
+import { parseEnv } from "node:util";
 import { CronExpressionParser } from "cron-parser";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
@@ -52,7 +53,7 @@ if (!/^[\w-]+$/.test(app.stage)) {
 }
 
 const isProduction = app.stage === "prd";
-const isStaging = app.stage === "stg";
+const isPreviewStage = app.stage === "preview";
 const isDevelopment = app.local;
 const isPreview =
   app.stage === "dev" ||
@@ -72,6 +73,11 @@ const DEV_OS_DOMAIN = "iterate-dev.com";
 const DEV_MACHINE_DOMAIN = "iterate-dev.app";
 const AUTH_EXAMPLE_DEV_VARS_PATH = join(repoRoot, "apps", "auth-example", ".dev.vars");
 const AUTH_EXAMPLE_REDIRECT_URI = "http://localhost:7201/api/iterate-auth/callback";
+
+function readEnvFileValue(params: { filePath: string; key: string }): string | undefined {
+  if (!fs.existsSync(params.filePath)) return undefined;
+  return parseEnv(fs.readFileSync(params.filePath, "utf8"))[params.key] || undefined;
+}
 
 async function ensureDevTunnelWildcardDns(tunnelId: string) {
   if (!DEV_TUNNEL) return;
@@ -354,6 +360,11 @@ async function ensureLocalDevOAuthClients(params: {
   );
 
   const osRedirectUri = new URL("/api/iterate-auth/callback", params.osPublicUrl).toString();
+  const existingAuthExampleClientId = readEnvFileValue({
+    filePath: AUTH_EXAMPLE_DEV_VARS_PATH,
+    key: "ITERATE_OAUTH_CLIENT_ID",
+  });
+  const existingOsClientId = process.env.ITERATE_OAUTH_CLIENT_ID?.trim() || undefined;
 
   const startedAt = Date.now();
   let authExampleClient: Awaited<ReturnType<typeof client.internal.oauth.ensureClient>>;
@@ -366,11 +377,13 @@ async function ensureLocalDevOAuthClients(params: {
           referenceId: "dev:auth-example",
           clientName: "Iterate Auth Example (Local Dev)",
           redirectURIs: [AUTH_EXAMPLE_REDIRECT_URI],
+          existingClientId: existingAuthExampleClientId,
         }),
         client.internal.oauth.ensureClient({
           referenceId: "dev:os",
           clientName: "Iterate OS (Local Dev)",
           redirectURIs: [osRedirectUri],
+          existingClientId: existingOsClientId,
         }),
       ]);
       break;
@@ -428,9 +441,9 @@ async function verifyDopplerEnvironment() {
     );
   }
 
-  if (isStaging && !dopplerConfig.environment.startsWith("stg")) {
+  if (isPreviewStage && !dopplerConfig.environment.startsWith("preview")) {
     throw new Error(
-      `You are trying to deploy to staging, but the doppler environment is set to ${dopplerConfig.environment}, exiting...`,
+      `You are trying to deploy to preview, but the doppler environment is set to ${dopplerConfig.environment}, exiting...`,
     );
   }
 
@@ -460,7 +473,7 @@ const Env = z.object({
   SANDBOX_DAYTONA_ENABLED: BoolyString,
   SANDBOX_DOCKER_ENABLED: BoolyString,
   SANDBOX_FLY_ENABLED: BoolyString,
-  SANDBOX_NAME_PREFIX: z.enum(["dev", "stg", "prd"]),
+  SANDBOX_NAME_PREFIX: z.enum(["dev", "preview", "prd"]),
   SANDBOX_PROVIDER_PREFERENCE: Optional, // comma-separated list of providers in order of preference
   FLY_API_TOKEN: Optional,
   FLY_ORG: Optional,
@@ -649,8 +662,12 @@ async function setupDatabase() {
     };
   }
 
-  if (isStaging) {
+  if (isPreviewStage) {
     const planetscaleDb = await Database("planetscale-db", {
+      // Keep the existing PlanetScale database name while the public stage name
+      // changes from stg to preview. Renaming this field would make Alchemy
+      // adopt/create a different empty database even though the resource ID is
+      // unchanged.
       name: "os-staging",
       clusterSize: "PS_10",
       adopt: true,
@@ -810,7 +827,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
 
   const osWorkerRoutes = parseCsv(process.env.OS_WORKER_ROUTES);
   if (osWorkerRoutes.length === 0) {
-    throw new Error("OS_WORKER_ROUTES is required. Set it in Doppler for dev/stg/prd.");
+    throw new Error("OS_WORKER_ROUTES is required. Set it in Doppler for dev/preview/prd.");
   }
   const routeHosts = [...new Set([...osWorkerRoutes, ...domains, `*.${projectIngressDomain}`])];
   const allowedDomains = [
@@ -872,7 +889,11 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       // Use empty defaults outside dev so worker.Env contains these bindings for typing.
       ...dockerBindings,
     },
-    name: isProduction ? "os" : isStaging ? "os-staging" : undefined,
+    // Public environment names moved from staging/stg to preview, but this is
+    // the Cloudflare Worker script name Alchemy adopts. Keeping the historical
+    // os-staging resource avoids orphaning the existing preview worker while
+    // Doppler, URLs, and Alchemy stages use preview terminology.
+    name: isProduction ? "os" : isPreviewStage ? "os-staging" : undefined,
     // Place the worker near the PlanetScale Postgres primary
     // to minimise round-trip latency on DB-heavy pages.
     placement: { region: regionConfig.workerPlacementRegion },

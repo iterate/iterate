@@ -52,7 +52,9 @@ test.describe("naming defaults", () => {
     await page.getByLabel("Organization name").fill(sharedName);
     await page.getByRole("button", { name: "Create organization" }).click();
 
-    await toast.error(page, "organization with this name already exists").waitFor();
+    await toast
+      .error(page, "Failed to create organization: An organization with this slug already exists")
+      .waitFor();
   });
 
   test("first project slug matches org slug", async ({ page }) => {

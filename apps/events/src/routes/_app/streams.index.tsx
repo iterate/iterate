@@ -1,5 +1,6 @@
 import { useCallback } from "react";
 import { createFileRoute } from "@tanstack/react-router";
+import type { EventsStreamElementType } from "@iterate-com/ui/components/events/stream-feed";
 import { StreamPage } from "~/components/stream-page.tsx";
 import { validateStreamViewSearch } from "~/lib/stream-view-search.ts";
 
@@ -16,7 +17,7 @@ export const Route = createFileRoute("/_app/streams/")({
 type StreamRouteSearch = ReturnType<typeof Route.useSearch>;
 
 function StreamsIndexPage() {
-  const { composer, event, renderer } = Route.useSearch();
+  const { composer, event, hiddenElements, renderer, view } = Route.useSearch();
   const navigate = Route.useNavigate();
   const updateEventOffset = useCallback(
     (nextEventOffset?: number) => {
@@ -58,16 +59,44 @@ function StreamsIndexPage() {
     },
     [navigate],
   );
+  const updateFeedView = useCallback(
+    (nextView: typeof view) => {
+      void navigate({
+        search: (previous: StreamRouteSearch) => ({
+          ...previous,
+          view: nextView,
+        }),
+        replace: true,
+      });
+    },
+    [navigate],
+  );
+  const updateHiddenElements = useCallback(
+    (nextHiddenElements: EventsStreamElementType[]) => {
+      void navigate({
+        search: (previous: StreamRouteSearch) => ({
+          ...previous,
+          hiddenElements: nextHiddenElements,
+        }),
+        replace: true,
+      });
+    },
+    [navigate],
+  );
 
   return (
     <StreamPage
       streamPath="/"
       rendererMode={renderer}
       composerMode={composer}
+      feedViewMode={view}
+      hiddenElementTypes={hiddenElements}
       openEventOffset={event}
       onOpenEventOffsetChange={updateEventOffset}
       onRendererModeChange={updateRenderer}
       onComposerModeChange={updateComposer}
+      onFeedViewModeChange={updateFeedView}
+      onHiddenElementTypesChange={updateHiddenElements}
     />
   );
 }

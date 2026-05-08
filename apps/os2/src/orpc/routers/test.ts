@@ -1,145 +1,172 @@
-import { os } from "~/orpc/orpc.ts";
+import { ORPCError } from "@orpc/server";
+import { activeOrganizationMiddleware, os } from "~/orpc/orpc.ts";
 
 export const testRouter = {
   test: {
-    logDemo: os.test.logDemo.handler(async ({ context, input }) => {
-      const requestId = readRequestIdFromLog(context.log);
-      const steps = [
-        "request-received",
-        "parsed-input",
-        "dependency-slow-warning",
-        "dependency-error",
-        "recovered",
-        "completed",
-      ] as const;
-      const startedAt = new Date().toISOString();
-      const job = {
-        label: input.label,
-        requestId,
-        jobId: `log-demo:${requestId.slice(0, 8)}`,
-        source: "debug-page-button",
-      };
+    logDemo: os.test.logDemo
+      .use(activeOrganizationMiddleware)
+      .handler(async ({ context, input }) => {
+        const requestId = readRequestIdFromLog(context.log);
+        const steps = [
+          "request-received",
+          "parsed-input",
+          "dependency-slow-warning",
+          "dependency-error",
+          "recovered",
+          "completed",
+        ] as const;
+        const startedAt = new Date().toISOString();
+        const job = {
+          label: input.label,
+          requestId,
+          jobId: `log-demo:${requestId.slice(0, 8)}`,
+          source: "debug-page-button",
+        };
 
-      context.log.set({
-        logDemo: {
-          ...job,
-          startedAt,
-          steps,
-        },
-      });
-      context.log.info("os.test.log-demo.received", {
-        logDemo: {
-          phase: "request-received",
-          browserInput: input,
-        },
-      });
-
-      await sleep(120);
-
-      context.log.info("os.test.log-demo.parsed-input", {
-        logDemo: {
-          phase: "parsed-input",
-          parsedConfig: {
-            shouldEmitWarning: true,
-            shouldEmitError: true,
-            simulatedDelayMs: 120,
+        context.log.set({
+          logDemo: {
+            ...job,
+            startedAt,
+            steps,
           },
-        },
-      });
-
-      await sleep(180);
-
-      context.log.warn("os.test.log-demo.dependency-slow", {
-        logDemo: {
-          phase: "dependency-slow-warning",
-          dependency: {
-            name: "pirate-weather-api",
-            region: "us-east-1",
-            latencyMs: 742,
+        });
+        context.log.info("os.test.log-demo.received", {
+          logDemo: {
+            phase: "request-received",
+            browserInput: input,
           },
-          retriesRemaining: 1,
-        },
-      });
+        });
 
-      await sleep(240);
+        await sleep(120);
 
-      const downstreamError = new Error(
-        "Simulated downstream timeout while fetching pirate weather",
-      );
-      context.log.error(downstreamError, {
-        logDemo: {
-          phase: "dependency-error",
-          dependency: {
-            name: "pirate-weather-api",
-            operation: "fetch-forecast",
+        context.log.info("os.test.log-demo.parsed-input", {
+          logDemo: {
+            phase: "parsed-input",
+            parsedConfig: {
+              shouldEmitWarning: true,
+              shouldEmitError: true,
+              simulatedDelayMs: 120,
+            },
           },
-          attempt: 2,
-          fallback: "stale-cache",
-        },
-      });
+        });
 
-      await sleep(150);
+        await sleep(180);
 
-      context.log.info("os.test.log-demo.recovered", {
-        logDemo: {
-          phase: "recovered",
-          responseSource: "stale-cache",
-          cacheAgeMs: 2_400,
-        },
-      });
+        context.log.warn("os.test.log-demo.dependency-slow", {
+          logDemo: {
+            phase: "dependency-slow-warning",
+            dependency: {
+              name: "pirate-weather-api",
+              region: "us-east-1",
+              latencyMs: 742,
+            },
+            retriesRemaining: 1,
+          },
+        });
 
-      await sleep(90);
+        await sleep(240);
 
-      context.log.info("os.test.log-demo.completed", {
-        logDemo: {
-          phase: "completed",
-          totalSteps: steps.length,
-          endedAt: new Date().toISOString(),
-        },
-      });
+        const downstreamError = new Error(
+          "Simulated downstream timeout while fetching pirate weather",
+        );
+        context.log.error(downstreamError, {
+          logDemo: {
+            phase: "dependency-error",
+            dependency: {
+              name: "pirate-weather-api",
+              operation: "fetch-forecast",
+            },
+            attempt: 2,
+            fallback: "stale-cache",
+          },
+        });
 
-      return {
-        ok: true as const,
-        label: input.label,
-        requestId,
-        steps: [...steps],
-      };
-    }),
-    serverThrow: os.test.serverThrow.handler(async ({ input }): Promise<never> => {
+        await sleep(150);
+
+        context.log.info("os.test.log-demo.recovered", {
+          logDemo: {
+            phase: "recovered",
+            responseSource: "stale-cache",
+            cacheAgeMs: 2_400,
+          },
+        });
+
+        await sleep(90);
+
+        context.log.info("os.test.log-demo.completed", {
+          logDemo: {
+            phase: "completed",
+            totalSteps: steps.length,
+            endedAt: new Date().toISOString(),
+          },
+        });
+
+        return {
+          ok: true as const,
+          label: input.label,
+          requestId,
+          steps: [...steps],
+        };
+      }),
+    serverThrow: os.test.serverThrow.handler(async ({ context, input }): Promise<never> => {
+      requireActiveOrganizationForNeverEndpoint(context);
       await new Promise((resolve) => setTimeout(resolve, 50));
       throw new Error(input.message);
     }),
-    randomLogStream: os.test.randomLogStream.handler(async function* ({ input, context, signal }) {
-      context.log.set({
-        randomLogStream: {
-          count: input.count,
-          minDelayMs: input.minDelayMs,
-          maxDelayMs: input.maxDelayMs,
-        },
-      });
-      context.log.info("os.test.random-log-stream.started");
+    randomLogStream: os.test.randomLogStream
+      .use(activeOrganizationMiddleware)
+      .handler(async function* ({ input, context, signal }) {
+        context.log.set({
+          randomLogStream: {
+            count: input.count,
+            minDelayMs: input.minDelayMs,
+            maxDelayMs: input.maxDelayMs,
+          },
+        });
+        context.log.info("os.test.random-log-stream.started");
 
-      try {
-        for (let index = 0; index < input.count; index += 1) {
-          if (signal?.aborted) {
-            return;
+        try {
+          for (let index = 0; index < input.count; index += 1) {
+            if (signal?.aborted) {
+              return;
+            }
+
+            const delayMs = randomIntBetween(input.minDelayMs, input.maxDelayMs);
+            await sleep(delayMs, signal);
+            if (signal?.aborted) {
+              return;
+            }
+
+            const value = Math.random().toFixed(6);
+            yield `${new Date().toISOString()} random[${index + 1}/${input.count}] delay=${delayMs}ms value=${value}`;
           }
-
-          const delayMs = randomIntBetween(input.minDelayMs, input.maxDelayMs);
-          await sleep(delayMs, signal);
-          if (signal?.aborted) {
-            return;
-          }
-
-          const value = Math.random().toFixed(6);
-          yield `${new Date().toISOString()} random[${index + 1}/${input.count}] delay=${delayMs}ms value=${value}`;
+        } finally {
+          context.log.info("os.test.random-log-stream.closed");
         }
-      } finally {
-        context.log.info("os.test.random-log-stream.closed");
-      }
-    }),
+      }),
   },
 };
+
+/**
+ * `serverThrow` intentionally has a `z.never()` output contract so OpenAPI and
+ * clients know it only exercises the server error path. oRPC's middleware
+ * generics currently infer a concrete middleware output and cannot compose that
+ * with `never`, so this debug-only route performs the same active-organization
+ * gate inline while keeping the public contract precise.
+ */
+function requireActiveOrganizationForNeverEndpoint(context: {
+  auth?: { isAuthenticated: boolean; orgId?: string | null; orgSlug?: string | null };
+}) {
+  if (!context.auth?.isAuthenticated) {
+    throw new ORPCError("UNAUTHORIZED");
+  }
+
+  if (!context.auth.orgId || !context.auth.orgSlug) {
+    throw new ORPCError("FORBIDDEN", {
+      message: "OS2 requires an active Clerk Organization.",
+    });
+  }
+}
 
 function randomIntBetween(min: number, max: number) {
   return Math.floor(Math.random() * (max - min + 1)) + min;

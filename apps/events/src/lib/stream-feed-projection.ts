@@ -1,27 +1,27 @@
 import {
   ChildStreamCreatedEvent,
-  DynamicWorkerConfiguredEvent,
-  DynamicWorkerEnvVarSetEvent,
   ErrorOccurredEvent,
-  JsonataTransformerConfiguredEvent,
+  STREAM_CHILD_STREAM_CREATED_TYPE,
+  STREAM_DURABLE_OBJECT_WOKE_UP_TYPE,
+  STREAM_ERROR_OCCURRED_TYPE,
+  STREAM_FIRST_INITIALIZED_TYPE,
+  STREAM_METADATA_UPDATED_TYPE,
+  STREAM_PAUSED_TYPE,
+  STREAM_RESUMED_TYPE,
+  STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
   StreamSubscriptionConfiguredEvent,
-  SCHEDULE_CANCELLED_TYPE,
-  SCHEDULE_CONFIGURED_TYPE,
-  ScheduleConfiguredPayload,
   StreamMetadataUpdatedEvent,
   StreamPausedEvent,
   StreamResumedEvent,
   type Event,
-} from "@iterate-com/events-contract";
+} from "@iterate-com/shared/streams/types";
 import type {
   EventFeedItem,
   GroupedEventFeedItem,
   StreamFeedItem,
   StreamRendererMode,
 } from "~/lib/stream-feed-types.ts";
-import { findIterateSecretReferences } from "~/lib/iterate-secret-references.ts";
 import { buildAgentSemanticInsertions } from "~/lib/agent-stream-reducer.ts";
-import { buildWorkshopSemanticInsertions } from "~/lib/workshop-stream-reducer.ts";
 
 /**
  * Raw + Pretty groups consecutive wire rows of the same `eventType`. Very large
@@ -54,17 +54,6 @@ export function toEventFeedItem(event: Event): EventFeedItem {
     timestamp: getTimestamp(event.createdAt),
     raw: event,
   };
-}
-
-export function projectEventToFeed(event: Event): StreamFeedItem[] {
-  const eventFeedItem = toEventFeedItem(event);
-  const semanticItem = toSemanticFeedItem(event);
-
-  if (semanticItem == null) {
-    return [eventFeedItem];
-  }
-
-  return [eventFeedItem, semanticItem];
 }
 
 export function getEventFeedItems(feed: readonly StreamFeedItem[]): EventFeedItem[] {
@@ -125,7 +114,107 @@ function flushCurrentGroup(displayFeed: StreamFeedItem[], currentGroup: readonly
 }
 
 export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
-  if (event.type === "https://events.iterate.com/events/stream/child-stream-created") {
+  if (event.type === "events.iterate.com/agent/input-added") {
+    const payload = event.payload as { content?: unknown };
+    if (typeof payload.content !== "string") return null;
+    return {
+      kind: "message",
+      role: "user",
+      content: [{ type: "markdown", text: payload.content }],
+      timestamp: getTimestamp(event.createdAt),
+    };
+  }
+
+  if (event.type === "events.iterate.com/agent/output-added") {
+    const payload = event.payload as { content?: unknown };
+    if (typeof payload.content !== "string") return null;
+    return {
+      kind: "message",
+      role: "assistant",
+      content: [{ type: "markdown", text: payload.content }],
+      timestamp: getTimestamp(event.createdAt),
+    };
+  }
+
+  if (event.type === "events.iterate.com/agent-chat/user-message-added") {
+    const payload = event.payload as { content?: unknown };
+    const content = typeof payload.content === "string" ? payload.content : null;
+    if (content == null) return null;
+    return {
+      kind: "message",
+      role: "user",
+      content: [{ type: "text", text: content }],
+      timestamp: getTimestamp(event.createdAt),
+    };
+  }
+
+  if (event.type === "events.iterate.com/agent-chat/assistant-response-added") {
+    const payload = event.payload as { message?: unknown };
+    const message = typeof payload.message === "string" ? payload.message : null;
+    if (message == null) return null;
+    return {
+      kind: "message",
+      role: "assistant",
+      content: [{ type: "markdown", text: message }],
+      timestamp: getTimestamp(event.createdAt),
+    };
+  }
+
+  if (event.type === "events.iterate.com/agent/status-updated") {
+    const payload = event.payload as {
+      status?: unknown;
+      reason?: unknown;
+      requestId?: unknown;
+    };
+    if (payload.status !== "working" && payload.status !== "idle") return null;
+    if (typeof payload.reason !== "string") return null;
+    return {
+      kind: "agent-status",
+      status: payload.status,
+      reason: payload.reason,
+      ...(typeof payload.requestId === "string" ? { requestId: payload.requestId } : {}),
+      timestamp: getTimestamp(event.createdAt),
+      raw: event,
+    };
+  }
+
+  if (event.type === "events.iterate.com/codemode/block-added") {
+    const payload = event.payload as { script?: unknown };
+    if (typeof payload.script !== "string") return null;
+    return {
+      kind: "codemode-block",
+      blockId: "codemode",
+      language: "js",
+      code: payload.script,
+      timestamp: getTimestamp(event.createdAt),
+      raw: event,
+    };
+  }
+
+  if (event.type === "events.iterate.com/codemode/result-added") {
+    const payload = event.payload as {
+      result?: unknown;
+      error?: unknown;
+      logs?: unknown;
+      durationMs?: unknown;
+    };
+    const logs = Array.isArray(payload.logs)
+      ? payload.logs.filter((log): log is string => typeof log === "string")
+      : [];
+    const error = typeof payload.error === "string" ? payload.error : "";
+    return {
+      kind: "codemode-result",
+      blockId: "codemode",
+      success: error.length === 0,
+      stdout: [...logs, JSON.stringify(payload.result, null, 2)].filter(Boolean).join("\n"),
+      stderr: error,
+      ...(typeof payload.durationMs === "number" ? { durationMs: payload.durationMs } : {}),
+      timestamp: getTimestamp(event.createdAt),
+      raw: event,
+    };
+  }
+
+  if (event.type === STREAM_CHILD_STREAM_CREATED_TYPE) {
     return {
       kind: "child-stream-created",
       parentPath: event.streamPath,
@@ -135,7 +224,7 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     };
   }
 
-  if (event.type === "https://events.iterate.com/events/stream/metadata-updated") {
+  if (event.type === STREAM_METADATA_UPDATED_TYPE) {
     return {
       kind: "stream-metadata-updated",
       path: event.streamPath,
@@ -145,25 +234,18 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     };
   }
 
-  if (event.type === "https://events.iterate.com/events/stream/subscription/configured") {
+  if (event.type === STREAM_SUBSCRIPTION_CONFIGURED_TYPE) {
+    const subscriber = getStreamSubscriptionConfiguredSubscriber(event);
+    if (subscriber == null) return null;
     return {
       kind: "external-subscriber-configured",
-      subscriber: getStreamSubscriptionConfiguredSubscriber(event),
+      subscriber,
       timestamp: getTimestamp(event.createdAt),
       raw: event,
     };
   }
 
-  if (event.type === "https://events.iterate.com/events/stream/jsonata-transformer-configured") {
-    return {
-      kind: "jsonata-transformer-configured",
-      transformer: getJsonataTransformerConfiguredTransformer(event),
-      timestamp: getTimestamp(event.createdAt),
-      raw: event,
-    };
-  }
-
-  if (event.type === "https://events.iterate.com/events/stream/initialized") {
+  if (event.type === STREAM_FIRST_INITIALIZED_TYPE) {
     return {
       kind: "stream-lifecycle",
       label: "Durable object initialized",
@@ -172,7 +254,7 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     };
   }
 
-  if (event.type === "https://events.iterate.com/events/stream/durable-object-constructed") {
+  if (event.type === STREAM_DURABLE_OBJECT_WOKE_UP_TYPE) {
     return {
       kind: "stream-lifecycle",
       label: "Durable object woke up",
@@ -181,46 +263,7 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     };
   }
 
-  if (event.type === "https://events.iterate.com/events/stream/dynamic-worker/configured") {
-    const configured = DynamicWorkerConfiguredEvent.parse(event);
-    const sourceCode =
-      configured.payload.script ??
-      configured.payload.modules?.["processor.ts"] ??
-      Object.values(configured.payload.modules ?? {})[0] ??
-      "";
-
-    return {
-      kind: "dynamic-worker-configured",
-      slug: configured.payload.slug,
-      sourceCode,
-      compatibilityDate: configured.payload.compatibilityDate,
-      compatibilityFlags: configured.payload.compatibilityFlags ?? [],
-      outboundGateway:
-        configured.payload.outboundGateway == null
-          ? undefined
-          : {
-              entrypoint: configured.payload.outboundGateway.entrypoint,
-              secretHeaderName: configured.payload.outboundGateway.props?.secretHeaderName,
-              secretHeaderValue: configured.payload.outboundGateway.props?.secretHeaderValue,
-            },
-      timestamp: getTimestamp(event.createdAt),
-      raw: event,
-    };
-  }
-
-  if (event.type === "https://events.iterate.com/events/stream/dynamic-worker/env-var-set") {
-    const envVarSet = DynamicWorkerEnvVarSetEvent.parse(event);
-
-    return {
-      kind: "dynamic-worker-env-var-set",
-      key: envVarSet.payload.key,
-      usesIterateSecret: findIterateSecretReferences(envVarSet.payload.value).length > 0,
-      timestamp: getTimestamp(event.createdAt),
-      raw: event,
-    };
-  }
-
-  if (event.type === "https://events.iterate.com/events/stream/paused") {
+  if (event.type === STREAM_PAUSED_TYPE) {
     const paused = StreamPausedEvent.parse(event);
     return {
       kind: "stream-paused",
@@ -230,7 +273,7 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     };
   }
 
-  if (event.type === "https://events.iterate.com/events/stream/resumed") {
+  if (event.type === STREAM_RESUMED_TYPE) {
     const resumed = StreamResumedEvent.parse(event);
     return {
       kind: "stream-resumed",
@@ -240,36 +283,10 @@ export function toSemanticFeedItem(event: Event): StreamFeedItem | null {
     };
   }
 
-  if (event.type === "https://events.iterate.com/events/stream/error-occurred") {
+  if (event.type === STREAM_ERROR_OCCURRED_TYPE) {
     return {
       kind: "stream-error-occurred",
       message: ErrorOccurredEvent.parse(event).payload.message,
-      timestamp: getTimestamp(event.createdAt),
-      raw: event,
-    };
-  }
-
-  if (event.type === SCHEDULE_CONFIGURED_TYPE) {
-    const payload = ScheduleConfiguredPayload.parse(event.payload);
-    return {
-      kind: "scheduler-control",
-      action: "configured",
-      slug: payload.slug,
-      callback: payload.callback,
-      payloadJson: payload.payloadJson ?? null,
-      schedule: payload.schedule,
-      nextRunAt: payload.nextRunAt,
-      timestamp: getTimestamp(event.createdAt),
-      raw: event,
-    };
-  }
-
-  if (event.type === SCHEDULE_CANCELLED_TYPE) {
-    const payload = { slug: (event.payload as { slug: string }).slug };
-    return {
-      kind: "scheduler-control",
-      action: "cancelled",
-      slug: payload.slug,
       timestamp: getTimestamp(event.createdAt),
       raw: event,
     };
@@ -303,7 +320,6 @@ function buildSemanticInsertions(events: readonly Event[]) {
   }
 
   mergeInsertions(insertionsByOffset, buildAgentSemanticInsertions(events));
-  mergeInsertions(insertionsByOffset, buildWorkshopSemanticInsertions(events));
 
   return insertionsByOffset;
 }
@@ -331,11 +347,8 @@ function getStreamMetadataUpdatedEventMetadata(event: Event) {
 }
 
 function getStreamSubscriptionConfiguredSubscriber(event: Event) {
-  return StreamSubscriptionConfiguredEvent.parse(event).payload;
-}
-
-function getJsonataTransformerConfiguredTransformer(event: Event) {
-  return JsonataTransformerConfiguredEvent.parse(event).payload;
+  const parsed = StreamSubscriptionConfiguredEvent.safeParse(event);
+  return parsed.success ? parsed.data.payload : null;
 }
 
 export function createGroupedOrSingleEvent(

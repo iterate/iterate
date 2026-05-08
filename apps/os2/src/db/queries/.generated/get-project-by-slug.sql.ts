@@ -7,9 +7,9 @@ where slug = ?
 limit 1;
 `.trim();
 const query = (params: getProjectBySlug.Params) => ({
+  name: "getProjectBySlug",
   sql,
   args: [params.slug],
-  name: "getProjectBySlug",
 });
 
 export const getProjectBySlug = Object.assign(

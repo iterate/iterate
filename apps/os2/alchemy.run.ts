@@ -1,198 +1,117 @@
-import alchemy, { type Scope } from "alchemy";
-import {
-  D1Database,
-  DnsRecords,
-  DurableObjectNamespace,
-  TanStackStart,
-  Worker,
-  createCloudflareApi,
-  findZoneForHostname,
-} from "alchemy/cloudflare";
-import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
-import { compileRawAppConfigFromEnv, parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
-import { slugify } from "@iterate-com/shared/slugify";
-import { z } from "zod";
-import { AppConfig } from "./src/app.ts";
-import type { IterateMcpServer } from "./src/durable-objects/iterate-mcp-server.ts";
+import alchemy from "alchemy";
+import { Ai, D1Database, DurableObjectNamespace, WorkerLoader } from "alchemy/cloudflare";
+import { initAlchemy } from "@iterate-com/shared/alchemy/init";
+import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
+import type { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
+import manifest, { AppConfig } from "./src/app.ts";
+import type { CodemodeSession } from "./src/domains/codemode/durable-objects/codemode-session.ts";
+import type { DebugAppendChainSubscriber } from "./src/durable-objects/debug-append-chain-subscriber.ts";
+import type { ProjectDurableObject } from "./src/domains/projects/durable-objects/project-durable-object.ts";
+import type { ProjectMcpServerConnection } from "./src/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
+import type { AgentDurableObject } from "./src/domains/agents/durable-objects/agent-durable-object.ts";
+import type { RepoDurableObject } from "./src/domains/repos/durable-objects/repo-durable-object.ts";
+import type { WorkspaceDurableObject } from "./src/domains/workspaces/durable-objects/workspace-durable-object.ts";
+import type { OutboundMcpFromOurClientCapability } from "./src/domains/outbound-mcp-client/entrypoints/outbound-mcp-from-our-client-capability.ts";
 
-const APP_NAME = "os2";
-
-const AlchemyEnv = z.object({
-  ALCHEMY_PASSWORD: z.string().trim().min(1, "ALCHEMY_PASSWORD is required"),
-  ALCHEMY_LOCAL: z.stringbool(),
-  ALCHEMY_STAGE: z
-    .string()
-    .trim()
-    .min(1, "ALCHEMY_STAGE is required")
-    .regex(/^[\w-]+$/, "ALCHEMY_STAGE must contain only letters, numbers, underscores, or hyphens"),
-  CLOUDFLARE_API_TOKEN: z.string().trim().min(1, "CLOUDFLARE_API_TOKEN is required"),
-  CLOUDFLARE_ACCOUNT_ID: z.string().trim().min(1, "CLOUDFLARE_ACCOUNT_ID is required"),
-  WORKER_ROUTES: z
-    .string()
-    .optional()
-    .transform((value) =>
-      (value ?? "")
-        .split(",")
-        .map((entry) => entry.trim())
-        .filter(Boolean),
-    )
-    .pipe(
-      z.array(
-        z
-          .string()
-          .min(1)
-          .refine(
-            (hostname) => !hostname.includes("/") && !hostname.includes("://"),
-            "WORKER_ROUTES entries must be hostnames without scheme or path",
-          ),
-      ),
-    ),
-});
-
-const env = AlchemyEnv.parse(process.env);
-const stateStore = (scope: Scope) =>
-  scope.local ? new SQLiteStateStore(scope, { engine: "libsql" }) : new CloudflareStateStore(scope);
-const compiledAppConfig = parseAppConfigFromEnv({
-  configSchema: AppConfig,
-  prefix: "APP_CONFIG_",
-  env: process.env,
-});
-const rawAppConfig = compileRawAppConfigFromEnv({
-  configSchema: AppConfig,
-  prefix: "APP_CONFIG_",
-  env: process.env,
-});
-
-if (env.ALCHEMY_LOCAL) delete process.env.CI;
-
-const app = await alchemy(APP_NAME, {
-  stage: env.ALCHEMY_STAGE,
-  local: env.ALCHEMY_LOCAL,
-  password: env.ALCHEMY_PASSWORD,
-  stateStore,
-});
-
-const workerName = slugify(`${APP_NAME}-${app.stage}`);
-const primaryUrl = env.WORKER_ROUTES[0] ? `https://${env.WORKER_ROUTES[0]}` : undefined;
-const compatibilityFlags = ["nodejs_compat"];
-const projectHostnameBases = [
-  ...new Set(env.WORKER_ROUTES.map((hostname) => hostname.replace(/^\*\./, ""))),
-];
-const workerRouteHosts = [
-  ...new Set([
-    ...env.WORKER_ROUTES,
-    ...projectHostnameBases
-      .filter((hostname) => !hostname.endsWith(".workers.dev"))
-      .map((hostname) => `*.${hostname}`),
-  ]),
-];
-const projectWildcardHosts = projectHostnameBases
-  .filter((hostname) => !hostname.endsWith(".workers.dev"))
-  .map((hostname) => `*.${hostname}`);
+const ctx = await initAlchemy(manifest, AppConfig, process.env);
+const slackBotToken = ctx.runtimeConfig.slackBotToken?.exposeSecret();
 
 const db = await D1Database("os-db", {
-  name: `${workerName}-db`,
+  name: `${ctx.workerName}-db`,
   migrationsDir: "./src/db/migrations",
   adopt: true,
 });
 
-const iterateMcpServer = await Worker("iterate-mcp-server-do", {
-  name: `${workerName}-iterate-mcp-server-do`,
-  entrypoint: "./src/durable-objects/iterate-mcp-server.ts",
-  adopt: true,
-  compatibilityFlags,
-  bindings: {
-    ITERATE_MCP_SERVER: DurableObjectNamespace<IterateMcpServer>("iterate-mcp-server", {
-      className: "IterateMcpServer",
-      sqlite: true,
-    }),
-  },
-  observability: {
-    enabled: true,
-    headSamplingRate: 1,
-    logs: {
-      enabled: true,
-      headSamplingRate: 1,
-      persist: true,
-      invocationLogs: true,
+// os2 serves project hosts at <slug>.iterate2.app (prod),
+// <slug>.iterate-dev-jonas.app (dev), and <slug>.iterate-preview-N.app
+// (preview). The preview app shell deliberately lives on the sibling
+// iterate-preview-N.com zone (`os2.iterate-preview-N.com`) so project/MCP hosts
+// can own the iterate-preview-N.app zone cleanly.
+const projectHostnameBases = ctx.runtimeConfig.projectHostnameBases ?? [];
+const outboundMcpFromOurClientCapability =
+  DurableObjectNamespace<OutboundMcpFromOurClientCapability>(
+    "outbound-mcp-from-our-client-capability",
+    {
+      className: "OutboundMcpFromOurClientCapability",
     },
-    traces: {
-      enabled: true,
-      persist: true,
-      headSamplingRate: 1,
-    },
-  },
+  );
+const stream = DurableObjectNamespace<StreamDurableObject>("stream", {
+  className: "StreamDurableObject",
+  sqlite: true,
 });
-
-export const worker = await TanStackStart(APP_NAME, {
-  name: workerName,
-  adopt: true,
-  compatibilityFlags,
-  bindings: {
-    DB: db,
-    ITERATE_MCP_SERVER: iterateMcpServer.bindings.ITERATE_MCP_SERVER,
-    PROJECT_HOSTNAME_BASES: projectHostnameBases.join(","),
-    APP_CONFIG: alchemy.secret(JSON.stringify(rawAppConfig, null, 2)),
-  },
-  wrangler: {
-    main: "./src/entry.workerd.ts",
-  },
-  routes: workerRouteHosts.map((hostname) => ({
-    pattern: `${hostname}/*`,
-    adopt: true,
-  })),
-  observability: {
-    enabled: true,
-    headSamplingRate: 1,
-    logs: {
-      enabled: true,
-      headSamplingRate: 1,
-      persist: true,
-      invocationLogs: true,
-    },
-    traces: {
-      enabled: true,
-      persist: true,
-      headSamplingRate: 1,
-    },
-  },
-  build: "pnpm exec vite build --config vite.config.ts",
-  dev: {
-    command: "pnpm exec vite dev --config vite.config.ts",
-  },
+const codemodeSession = DurableObjectNamespace<CodemodeSession>("codemode-session-local", {
+  className: "CodemodeSession",
+  sqlite: true,
 });
-
-const cloudflareApi = await createCloudflareApi({});
-if (!worker.url) {
-  throw new Error("Worker URL is required to create project wildcard DNS records.");
-}
-const workerHostname = new URL(worker.url).hostname;
-await Promise.all(
-  projectWildcardHosts.map(async (hostname) => {
-    const { zoneId } = await findZoneForHostname(cloudflareApi, hostname);
-    return DnsRecords(`project-wildcard-dns-${slugify(hostname)}`, {
-      zoneId,
-      records: [
-        {
-          type: "CNAME",
-          name: hostname,
-          content: workerHostname,
-          proxied: true,
-          ttl: 1,
-          comment: `Managed by ${APP_NAME} Alchemy for project hostname routing.`,
-        },
-      ],
-    });
-  }),
-);
-
-console.dir(
+const projectMcpServerConnection = DurableObjectNamespace<ProjectMcpServerConnection>(
+  "project-mcp-server-connection-local",
   {
-    config: compiledAppConfig,
-    url: primaryUrl ?? worker.url,
-    workersDevUrl: worker.url,
+    className: "ProjectMcpServerConnection",
+    sqlite: true,
   },
-  { depth: null },
+);
+const project = DurableObjectNamespace<ProjectDurableObject>("project", {
+  className: "ProjectDurableObject",
+  sqlite: true,
+});
+const repo = DurableObjectNamespace<RepoDurableObject>("repo", {
+  className: "RepoDurableObject",
+  sqlite: true,
+});
+const workspace = DurableObjectNamespace<WorkspaceDurableObject>("workspace", {
+  className: "WorkspaceDurableObject",
+  sqlite: true,
+});
+const agent = DurableObjectNamespace<AgentDurableObject>("agent", {
+  className: "AgentDurableObject",
+  sqlite: true,
+});
+const debugAppendChainSubscriber = DurableObjectNamespace<DebugAppendChainSubscriber>(
+  "debug-append-chain-subscriber",
+  {
+    className: "DebugAppendChainSubscriber",
+    sqlite: true,
+  },
 );
 
-await app.finalize();
+const { worker, afterFinalize } = await IterateApp(ctx, {
+  bindings: {
+    CLERK_JWT_KEY: ctx.runtimeConfig.clerk.jwtKey.exposeSecret(),
+    CLERK_PUBLISHABLE_KEY: ctx.runtimeConfig.clerk.publishableKey,
+    CLERK_SECRET_KEY: ctx.runtimeConfig.clerk.secretKey.exposeSecret(),
+    CLERK_SIGN_IN_URL: ctx.runtimeConfig.clerk.signInUrl,
+    CLERK_SIGN_UP_URL: ctx.runtimeConfig.clerk.signUpUrl,
+    DB: db,
+    DO_CATALOG: db,
+    AI: Ai(),
+    LOADER: WorkerLoader(),
+    CODEMODE_SESSION: codemodeSession,
+    DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber,
+    AGENT: agent,
+    PROJECT: project,
+    REPO: repo,
+    PROJECT_MCP_SERVER_CONNECTION: projectMcpServerConnection,
+    OUTBOUND_MCP_FROM_OUR_CLIENT_CAPABILITY: outboundMcpFromOurClientCapability,
+    STREAM: stream,
+    WORKSPACE: workspace,
+    ...(slackBotToken == null ? {} : { APP_CONFIG_SLACK_BOT_TOKEN: alchemy.secret(slackBotToken) }),
+  },
+  extraRouteHostnames: projectHostnameBases.flatMap(projectRouteHostnamesForBase),
+});
+
+export { worker };
+
+await ctx.app.finalize();
+await afterFinalize();
+
+if (!ctx.app.local) process.exit(0);
+
+/**
+ * Convert OS2 project-host bases into Cloudflare route host patterns.
+ *
+ * Normal bases use dotted project subdomains (`<slug>.<base>`). OS2 preview
+ * project bases are normal bases too: `<slug>.iterate-preview-N.app`.
+ */
+function projectRouteHostnamesForBase(base: string) {
+  return [base, `*.${base}`];
+}

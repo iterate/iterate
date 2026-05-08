@@ -62,6 +62,7 @@ export interface CreateOpenApiToolProviderOptions {
   spec: string | Record<string, unknown>;
   baseUrl: string;
   fetch?: FetchLike;
+  operationIds?: readonly string[];
 }
 
 export async function createOpenApiToolProvider(
@@ -76,11 +77,14 @@ export async function createOpenApiToolProvider(
   > = {};
   const descriptors: JsonSchemaToolDescriptors = {};
   const usedToolKeys = new Set<string>();
+  const operationIdFilter =
+    options.operationIds == null ? null : new Set<string>(options.operationIds);
 
   for (const [path, pathItem] of Object.entries(spec.paths ?? {})) {
     for (const method of OPENAPI_METHODS) {
       const operation = pathItem[method];
       if (!operation?.operationId) continue;
+      if (operationIdFilter != null && !operationIdFilter.has(operation.operationId)) continue;
 
       const toolName = uniqueSanitizedToolKey(operation.operationId, usedToolKeys);
       const parameters = mergeParameters(pathItem.parameters, operation.parameters);

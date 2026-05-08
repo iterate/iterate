@@ -26,7 +26,7 @@ Can we make an agent that
 - path can be relative
 - sends a message to an agent on that path
 - path must be under `/agents`
-- appends a `agent-input-added` event to the agent's stream - includes the message content
+- appends an `events.iterate.com/agent/input-added` event to the agent's stream - includes the message content
 
 `sendSlackMessage({ channel, thread_ts, message })`
 

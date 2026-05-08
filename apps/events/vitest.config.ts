@@ -23,6 +23,10 @@ writeFileSync(
             class_name: "StreamDurableObject",
           },
           {
+            name: "E2E_APPEND_CHAIN_SUBSCRIBER",
+            class_name: "E2EAppendChainSubscriber",
+          },
+          {
             name: "TEST_SCHEDULE_STREAM",
             class_name: "TestScheduleStreamDurableObject",
           },
@@ -36,11 +40,22 @@ writeFileSync(
           migrations_dir: "./drizzle",
           preview_database_id: "f55d561e-3d7f-4e2a-91d8-9b8d6a1f5a41",
         },
+        {
+          binding: "DO_CATALOG",
+          database_id: "f55d561e-3d7f-4e2a-91d8-9b8d6a1f5a41",
+          database_name: "events-test-db",
+          migrations_dir: "./drizzle",
+          preview_database_id: "f55d561e-3d7f-4e2a-91d8-9b8d6a1f5a41",
+        },
       ],
       migrations: [
         {
           tag: "v1",
-          new_sqlite_classes: ["StreamDurableObject", "TestScheduleStreamDurableObject"],
+          new_sqlite_classes: [
+            "StreamDurableObject",
+            "E2EAppendChainSubscriber",
+            "TestScheduleStreamDurableObject",
+          ],
           new_classes: [],
         },
       ],

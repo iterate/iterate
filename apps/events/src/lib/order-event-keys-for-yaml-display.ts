@@ -1,4 +1,4 @@
-import type { Event } from "@iterate-com/events-contract";
+import type { Event } from "@iterate-com/shared/streams/types";
 
 const EVENT_YAML_DISPLAY_KEY_ORDER = [
   "type",

@@ -1,16 +1,19 @@
 import type { Client } from "sqlfu";
 
 const sql = `
-select id, slug, custom_hostname, metadata, created_at, updated_at
-from projects
-order by created_at desc
+select distinct p.id, p.slug, p.custom_hostname, p.metadata, p.created_at, p.updated_at
+from projects p
+join project_permissions pp on pp.project_id = p.id
+where pp.principal_type = ?
+  and pp.principal_id = ?
+order by p.created_at desc
 limit ?
 offset ?;
 `.trim();
 const query = (params: listProjects.Params) => ({
-  sql,
-  args: [params.limit, params.offset],
   name: "listProjects",
+  sql,
+  args: [params.principalType, params.principalId, params.limit, params.offset],
 });
 
 export const listProjects = Object.assign(
@@ -25,6 +28,8 @@ export const listProjects = Object.assign(
 
 export namespace listProjects {
   export type Params = {
+    principalType: "clerk_organization";
+    principalId: string;
     limit: number;
     offset: number;
   };

@@ -9,151 +9,45 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as StreamSubscriptionConfiguredRouteImport } from './routes/stream-subscription-configured'
-import { Route as StreamResumedRouteImport } from './routes/stream-resumed'
-import { Route as StreamPausedRouteImport } from './routes/stream-paused'
-import { Route as StreamMetadataUpdatedRouteImport } from './routes/stream-metadata-updated'
-import { Route as StreamInitializedRouteImport } from './routes/stream-initialized'
-import { Route as StreamDurableObjectConstructedRouteImport } from './routes/stream-durable-object-constructed'
-import { Route as StreamAppendScheduledRouteImport } from './routes/stream-append-scheduled'
-import { Route as ScheduleExecutionStartedRouteImport } from './routes/schedule-execution-started'
-import { Route as ScheduleExecutionFinishedRouteImport } from './routes/schedule-execution-finished'
-import { Route as ScheduleConfiguredRouteImport } from './routes/schedule-configured'
-import { Route as ScheduleCancelledRouteImport } from './routes/schedule-cancelled'
-import { Route as ManualEventAppendedRouteImport } from './routes/manual-event-appended'
-import { Route as JsonataTransformerConfiguredRouteImport } from './routes/jsonata-transformer-configured'
-import { Route as HtmlRendererConfiguredRouteImport } from './routes/html-renderer-configured'
-import { Route as ErrorOccurredRouteImport } from './routes/error-occurred'
-import { Route as DynamicWorkerConfiguredRouteImport } from './routes/dynamic-worker-configured'
 import { Route as DocsRouteImport } from './routes/docs'
-import { Route as ChildStreamCreatedRouteImport } from './routes/child-stream-created'
-import { Route as BashmodeBlockAddedRouteImport } from './routes/bashmode-block-added'
-import { Route as AgentInputAddedRouteImport } from './routes/agent-input-added'
 import { Route as AppRouteImport } from './routes/_app'
+import { Route as ProcessorSlugRouteImport } from './routes/$processorSlug'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ProcessorSlugIndexRouteImport } from './routes/$processorSlug.index'
 import { Route as PosthogProxySplatRouteImport } from './routes/posthog-proxy.$'
 import { Route as ApiOrpcWsRouteImport } from './routes/api.orpc-ws'
 import { Route as ApiSplatRouteImport } from './routes/api.$'
 import { Route as AppStreamsRouteImport } from './routes/_app/streams'
 import { Route as AppSecretsRouteImport } from './routes/_app/secrets'
+import { Route as ProcessorSlugEventSlugRouteImport } from './routes/$processorSlug.$eventSlug'
 import { Route as AppStreamsIndexRouteImport } from './routes/_app/streams.index'
 import { Route as AppSecretsIndexRouteImport } from './routes/_app/secrets.index'
 import { Route as ApiOrpcSplatRouteImport } from './routes/api.orpc.$'
 import { Route as AppStreamsSplatRouteImport } from './routes/_app/streams.$'
 
-const StreamSubscriptionConfiguredRoute =
-  StreamSubscriptionConfiguredRouteImport.update({
-    id: '/stream-subscription-configured',
-    path: '/stream-subscription-configured',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const StreamResumedRoute = StreamResumedRouteImport.update({
-  id: '/stream-resumed',
-  path: '/stream-resumed',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const StreamPausedRoute = StreamPausedRouteImport.update({
-  id: '/stream-paused',
-  path: '/stream-paused',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const StreamMetadataUpdatedRoute = StreamMetadataUpdatedRouteImport.update({
-  id: '/stream-metadata-updated',
-  path: '/stream-metadata-updated',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const StreamInitializedRoute = StreamInitializedRouteImport.update({
-  id: '/stream-initialized',
-  path: '/stream-initialized',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const StreamDurableObjectConstructedRoute =
-  StreamDurableObjectConstructedRouteImport.update({
-    id: '/stream-durable-object-constructed',
-    path: '/stream-durable-object-constructed',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const StreamAppendScheduledRoute = StreamAppendScheduledRouteImport.update({
-  id: '/stream-append-scheduled',
-  path: '/stream-append-scheduled',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ScheduleExecutionStartedRoute =
-  ScheduleExecutionStartedRouteImport.update({
-    id: '/schedule-execution-started',
-    path: '/schedule-execution-started',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ScheduleExecutionFinishedRoute =
-  ScheduleExecutionFinishedRouteImport.update({
-    id: '/schedule-execution-finished',
-    path: '/schedule-execution-finished',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ScheduleConfiguredRoute = ScheduleConfiguredRouteImport.update({
-  id: '/schedule-configured',
-  path: '/schedule-configured',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ScheduleCancelledRoute = ScheduleCancelledRouteImport.update({
-  id: '/schedule-cancelled',
-  path: '/schedule-cancelled',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ManualEventAppendedRoute = ManualEventAppendedRouteImport.update({
-  id: '/manual-event-appended',
-  path: '/manual-event-appended',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const JsonataTransformerConfiguredRoute =
-  JsonataTransformerConfiguredRouteImport.update({
-    id: '/jsonata-transformer-configured',
-    path: '/jsonata-transformer-configured',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const HtmlRendererConfiguredRoute = HtmlRendererConfiguredRouteImport.update({
-  id: '/html-renderer-configured',
-  path: '/html-renderer-configured',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ErrorOccurredRoute = ErrorOccurredRouteImport.update({
-  id: '/error-occurred',
-  path: '/error-occurred',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const DynamicWorkerConfiguredRoute = DynamicWorkerConfiguredRouteImport.update({
-  id: '/dynamic-worker-configured',
-  path: '/dynamic-worker-configured',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const DocsRoute = DocsRouteImport.update({
   id: '/docs',
   path: '/docs',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ChildStreamCreatedRoute = ChildStreamCreatedRouteImport.update({
-  id: '/child-stream-created',
-  path: '/child-stream-created',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const BashmodeBlockAddedRoute = BashmodeBlockAddedRouteImport.update({
-  id: '/bashmode-block-added',
-  path: '/bashmode-block-added',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AgentInputAddedRoute = AgentInputAddedRouteImport.update({
-  id: '/agent-input-added',
-  path: '/agent-input-added',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppRoute = AppRouteImport.update({
   id: '/_app',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ProcessorSlugRoute = ProcessorSlugRouteImport.update({
+  id: '/$processorSlug',
+  path: '/$processorSlug',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
+} as any)
+const ProcessorSlugIndexRoute = ProcessorSlugIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => ProcessorSlugRoute,
 } as any)
 const PosthogProxySplatRoute = PosthogProxySplatRouteImport.update({
   id: '/posthog-proxy/$',
@@ -180,6 +74,11 @@ const AppSecretsRoute = AppSecretsRouteImport.update({
   path: '/secrets',
   getParentRoute: () => AppRoute,
 } as any)
+const ProcessorSlugEventSlugRoute = ProcessorSlugEventSlugRouteImport.update({
+  id: '/$eventSlug',
+  path: '/$eventSlug',
+  getParentRoute: () => ProcessorSlugRoute,
+} as any)
 const AppStreamsIndexRoute = AppStreamsIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -203,31 +102,15 @@ const AppStreamsSplatRoute = AppStreamsSplatRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/agent-input-added': typeof AgentInputAddedRoute
-  '/bashmode-block-added': typeof BashmodeBlockAddedRoute
-  '/child-stream-created': typeof ChildStreamCreatedRoute
+  '/$processorSlug': typeof ProcessorSlugRouteWithChildren
   '/docs': typeof DocsRoute
-  '/dynamic-worker-configured': typeof DynamicWorkerConfiguredRoute
-  '/error-occurred': typeof ErrorOccurredRoute
-  '/html-renderer-configured': typeof HtmlRendererConfiguredRoute
-  '/jsonata-transformer-configured': typeof JsonataTransformerConfiguredRoute
-  '/manual-event-appended': typeof ManualEventAppendedRoute
-  '/schedule-cancelled': typeof ScheduleCancelledRoute
-  '/schedule-configured': typeof ScheduleConfiguredRoute
-  '/schedule-execution-finished': typeof ScheduleExecutionFinishedRoute
-  '/schedule-execution-started': typeof ScheduleExecutionStartedRoute
-  '/stream-append-scheduled': typeof StreamAppendScheduledRoute
-  '/stream-durable-object-constructed': typeof StreamDurableObjectConstructedRoute
-  '/stream-initialized': typeof StreamInitializedRoute
-  '/stream-metadata-updated': typeof StreamMetadataUpdatedRoute
-  '/stream-paused': typeof StreamPausedRoute
-  '/stream-resumed': typeof StreamResumedRoute
-  '/stream-subscription-configured': typeof StreamSubscriptionConfiguredRoute
+  '/$processorSlug/$eventSlug': typeof ProcessorSlugEventSlugRoute
   '/secrets': typeof AppSecretsRouteWithChildren
   '/streams': typeof AppStreamsRouteWithChildren
   '/api/$': typeof ApiSplatRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
+  '/$processorSlug/': typeof ProcessorSlugIndexRoute
   '/streams/$': typeof AppStreamsSplatRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/secrets/': typeof AppSecretsIndexRoute
@@ -235,29 +118,12 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/agent-input-added': typeof AgentInputAddedRoute
-  '/bashmode-block-added': typeof BashmodeBlockAddedRoute
-  '/child-stream-created': typeof ChildStreamCreatedRoute
   '/docs': typeof DocsRoute
-  '/dynamic-worker-configured': typeof DynamicWorkerConfiguredRoute
-  '/error-occurred': typeof ErrorOccurredRoute
-  '/html-renderer-configured': typeof HtmlRendererConfiguredRoute
-  '/jsonata-transformer-configured': typeof JsonataTransformerConfiguredRoute
-  '/manual-event-appended': typeof ManualEventAppendedRoute
-  '/schedule-cancelled': typeof ScheduleCancelledRoute
-  '/schedule-configured': typeof ScheduleConfiguredRoute
-  '/schedule-execution-finished': typeof ScheduleExecutionFinishedRoute
-  '/schedule-execution-started': typeof ScheduleExecutionStartedRoute
-  '/stream-append-scheduled': typeof StreamAppendScheduledRoute
-  '/stream-durable-object-constructed': typeof StreamDurableObjectConstructedRoute
-  '/stream-initialized': typeof StreamInitializedRoute
-  '/stream-metadata-updated': typeof StreamMetadataUpdatedRoute
-  '/stream-paused': typeof StreamPausedRoute
-  '/stream-resumed': typeof StreamResumedRoute
-  '/stream-subscription-configured': typeof StreamSubscriptionConfiguredRoute
+  '/$processorSlug/$eventSlug': typeof ProcessorSlugEventSlugRoute
   '/api/$': typeof ApiSplatRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
+  '/$processorSlug': typeof ProcessorSlugIndexRoute
   '/streams/$': typeof AppStreamsSplatRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/secrets': typeof AppSecretsIndexRoute
@@ -266,32 +132,16 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/$processorSlug': typeof ProcessorSlugRouteWithChildren
   '/_app': typeof AppRouteWithChildren
-  '/agent-input-added': typeof AgentInputAddedRoute
-  '/bashmode-block-added': typeof BashmodeBlockAddedRoute
-  '/child-stream-created': typeof ChildStreamCreatedRoute
   '/docs': typeof DocsRoute
-  '/dynamic-worker-configured': typeof DynamicWorkerConfiguredRoute
-  '/error-occurred': typeof ErrorOccurredRoute
-  '/html-renderer-configured': typeof HtmlRendererConfiguredRoute
-  '/jsonata-transformer-configured': typeof JsonataTransformerConfiguredRoute
-  '/manual-event-appended': typeof ManualEventAppendedRoute
-  '/schedule-cancelled': typeof ScheduleCancelledRoute
-  '/schedule-configured': typeof ScheduleConfiguredRoute
-  '/schedule-execution-finished': typeof ScheduleExecutionFinishedRoute
-  '/schedule-execution-started': typeof ScheduleExecutionStartedRoute
-  '/stream-append-scheduled': typeof StreamAppendScheduledRoute
-  '/stream-durable-object-constructed': typeof StreamDurableObjectConstructedRoute
-  '/stream-initialized': typeof StreamInitializedRoute
-  '/stream-metadata-updated': typeof StreamMetadataUpdatedRoute
-  '/stream-paused': typeof StreamPausedRoute
-  '/stream-resumed': typeof StreamResumedRoute
-  '/stream-subscription-configured': typeof StreamSubscriptionConfiguredRoute
+  '/$processorSlug/$eventSlug': typeof ProcessorSlugEventSlugRoute
   '/_app/secrets': typeof AppSecretsRouteWithChildren
   '/_app/streams': typeof AppStreamsRouteWithChildren
   '/api/$': typeof ApiSplatRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
+  '/$processorSlug/': typeof ProcessorSlugIndexRoute
   '/_app/streams/$': typeof AppStreamsSplatRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/_app/secrets/': typeof AppSecretsIndexRoute
@@ -301,31 +151,15 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
-    | '/agent-input-added'
-    | '/bashmode-block-added'
-    | '/child-stream-created'
+    | '/$processorSlug'
     | '/docs'
-    | '/dynamic-worker-configured'
-    | '/error-occurred'
-    | '/html-renderer-configured'
-    | '/jsonata-transformer-configured'
-    | '/manual-event-appended'
-    | '/schedule-cancelled'
-    | '/schedule-configured'
-    | '/schedule-execution-finished'
-    | '/schedule-execution-started'
-    | '/stream-append-scheduled'
-    | '/stream-durable-object-constructed'
-    | '/stream-initialized'
-    | '/stream-metadata-updated'
-    | '/stream-paused'
-    | '/stream-resumed'
-    | '/stream-subscription-configured'
+    | '/$processorSlug/$eventSlug'
     | '/secrets'
     | '/streams'
     | '/api/$'
     | '/api/orpc-ws'
     | '/posthog-proxy/$'
+    | '/$processorSlug/'
     | '/streams/$'
     | '/api/orpc/$'
     | '/secrets/'
@@ -333,29 +167,12 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
-    | '/agent-input-added'
-    | '/bashmode-block-added'
-    | '/child-stream-created'
     | '/docs'
-    | '/dynamic-worker-configured'
-    | '/error-occurred'
-    | '/html-renderer-configured'
-    | '/jsonata-transformer-configured'
-    | '/manual-event-appended'
-    | '/schedule-cancelled'
-    | '/schedule-configured'
-    | '/schedule-execution-finished'
-    | '/schedule-execution-started'
-    | '/stream-append-scheduled'
-    | '/stream-durable-object-constructed'
-    | '/stream-initialized'
-    | '/stream-metadata-updated'
-    | '/stream-paused'
-    | '/stream-resumed'
-    | '/stream-subscription-configured'
+    | '/$processorSlug/$eventSlug'
     | '/api/$'
     | '/api/orpc-ws'
     | '/posthog-proxy/$'
+    | '/$processorSlug'
     | '/streams/$'
     | '/api/orpc/$'
     | '/secrets'
@@ -363,32 +180,16 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/$processorSlug'
     | '/_app'
-    | '/agent-input-added'
-    | '/bashmode-block-added'
-    | '/child-stream-created'
     | '/docs'
-    | '/dynamic-worker-configured'
-    | '/error-occurred'
-    | '/html-renderer-configured'
-    | '/jsonata-transformer-configured'
-    | '/manual-event-appended'
-    | '/schedule-cancelled'
-    | '/schedule-configured'
-    | '/schedule-execution-finished'
-    | '/schedule-execution-started'
-    | '/stream-append-scheduled'
-    | '/stream-durable-object-constructed'
-    | '/stream-initialized'
-    | '/stream-metadata-updated'
-    | '/stream-paused'
-    | '/stream-resumed'
-    | '/stream-subscription-configured'
+    | '/$processorSlug/$eventSlug'
     | '/_app/secrets'
     | '/_app/streams'
     | '/api/$'
     | '/api/orpc-ws'
     | '/posthog-proxy/$'
+    | '/$processorSlug/'
     | '/_app/streams/$'
     | '/api/orpc/$'
     | '/_app/secrets/'
@@ -397,27 +198,9 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ProcessorSlugRoute: typeof ProcessorSlugRouteWithChildren
   AppRoute: typeof AppRouteWithChildren
-  AgentInputAddedRoute: typeof AgentInputAddedRoute
-  BashmodeBlockAddedRoute: typeof BashmodeBlockAddedRoute
-  ChildStreamCreatedRoute: typeof ChildStreamCreatedRoute
   DocsRoute: typeof DocsRoute
-  DynamicWorkerConfiguredRoute: typeof DynamicWorkerConfiguredRoute
-  ErrorOccurredRoute: typeof ErrorOccurredRoute
-  HtmlRendererConfiguredRoute: typeof HtmlRendererConfiguredRoute
-  JsonataTransformerConfiguredRoute: typeof JsonataTransformerConfiguredRoute
-  ManualEventAppendedRoute: typeof ManualEventAppendedRoute
-  ScheduleCancelledRoute: typeof ScheduleCancelledRoute
-  ScheduleConfiguredRoute: typeof ScheduleConfiguredRoute
-  ScheduleExecutionFinishedRoute: typeof ScheduleExecutionFinishedRoute
-  ScheduleExecutionStartedRoute: typeof ScheduleExecutionStartedRoute
-  StreamAppendScheduledRoute: typeof StreamAppendScheduledRoute
-  StreamDurableObjectConstructedRoute: typeof StreamDurableObjectConstructedRoute
-  StreamInitializedRoute: typeof StreamInitializedRoute
-  StreamMetadataUpdatedRoute: typeof StreamMetadataUpdatedRoute
-  StreamPausedRoute: typeof StreamPausedRoute
-  StreamResumedRoute: typeof StreamResumedRoute
-  StreamSubscriptionConfiguredRoute: typeof StreamSubscriptionConfiguredRoute
   ApiSplatRoute: typeof ApiSplatRoute
   ApiOrpcWsRoute: typeof ApiOrpcWsRoute
   PosthogProxySplatRoute: typeof PosthogProxySplatRoute
@@ -426,144 +209,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/stream-subscription-configured': {
-      id: '/stream-subscription-configured'
-      path: '/stream-subscription-configured'
-      fullPath: '/stream-subscription-configured'
-      preLoaderRoute: typeof StreamSubscriptionConfiguredRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/stream-resumed': {
-      id: '/stream-resumed'
-      path: '/stream-resumed'
-      fullPath: '/stream-resumed'
-      preLoaderRoute: typeof StreamResumedRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/stream-paused': {
-      id: '/stream-paused'
-      path: '/stream-paused'
-      fullPath: '/stream-paused'
-      preLoaderRoute: typeof StreamPausedRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/stream-metadata-updated': {
-      id: '/stream-metadata-updated'
-      path: '/stream-metadata-updated'
-      fullPath: '/stream-metadata-updated'
-      preLoaderRoute: typeof StreamMetadataUpdatedRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/stream-initialized': {
-      id: '/stream-initialized'
-      path: '/stream-initialized'
-      fullPath: '/stream-initialized'
-      preLoaderRoute: typeof StreamInitializedRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/stream-durable-object-constructed': {
-      id: '/stream-durable-object-constructed'
-      path: '/stream-durable-object-constructed'
-      fullPath: '/stream-durable-object-constructed'
-      preLoaderRoute: typeof StreamDurableObjectConstructedRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/stream-append-scheduled': {
-      id: '/stream-append-scheduled'
-      path: '/stream-append-scheduled'
-      fullPath: '/stream-append-scheduled'
-      preLoaderRoute: typeof StreamAppendScheduledRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/schedule-execution-started': {
-      id: '/schedule-execution-started'
-      path: '/schedule-execution-started'
-      fullPath: '/schedule-execution-started'
-      preLoaderRoute: typeof ScheduleExecutionStartedRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/schedule-execution-finished': {
-      id: '/schedule-execution-finished'
-      path: '/schedule-execution-finished'
-      fullPath: '/schedule-execution-finished'
-      preLoaderRoute: typeof ScheduleExecutionFinishedRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/schedule-configured': {
-      id: '/schedule-configured'
-      path: '/schedule-configured'
-      fullPath: '/schedule-configured'
-      preLoaderRoute: typeof ScheduleConfiguredRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/schedule-cancelled': {
-      id: '/schedule-cancelled'
-      path: '/schedule-cancelled'
-      fullPath: '/schedule-cancelled'
-      preLoaderRoute: typeof ScheduleCancelledRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/manual-event-appended': {
-      id: '/manual-event-appended'
-      path: '/manual-event-appended'
-      fullPath: '/manual-event-appended'
-      preLoaderRoute: typeof ManualEventAppendedRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/jsonata-transformer-configured': {
-      id: '/jsonata-transformer-configured'
-      path: '/jsonata-transformer-configured'
-      fullPath: '/jsonata-transformer-configured'
-      preLoaderRoute: typeof JsonataTransformerConfiguredRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/html-renderer-configured': {
-      id: '/html-renderer-configured'
-      path: '/html-renderer-configured'
-      fullPath: '/html-renderer-configured'
-      preLoaderRoute: typeof HtmlRendererConfiguredRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/error-occurred': {
-      id: '/error-occurred'
-      path: '/error-occurred'
-      fullPath: '/error-occurred'
-      preLoaderRoute: typeof ErrorOccurredRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/dynamic-worker-configured': {
-      id: '/dynamic-worker-configured'
-      path: '/dynamic-worker-configured'
-      fullPath: '/dynamic-worker-configured'
-      preLoaderRoute: typeof DynamicWorkerConfiguredRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/docs': {
       id: '/docs'
       path: '/docs'
       fullPath: '/docs'
       preLoaderRoute: typeof DocsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/child-stream-created': {
-      id: '/child-stream-created'
-      path: '/child-stream-created'
-      fullPath: '/child-stream-created'
-      preLoaderRoute: typeof ChildStreamCreatedRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/bashmode-block-added': {
-      id: '/bashmode-block-added'
-      path: '/bashmode-block-added'
-      fullPath: '/bashmode-block-added'
-      preLoaderRoute: typeof BashmodeBlockAddedRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/agent-input-added': {
-      id: '/agent-input-added'
-      path: '/agent-input-added'
-      fullPath: '/agent-input-added'
-      preLoaderRoute: typeof AgentInputAddedRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_app': {
@@ -573,12 +223,26 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/$processorSlug': {
+      id: '/$processorSlug'
+      path: '/$processorSlug'
+      fullPath: '/$processorSlug'
+      preLoaderRoute: typeof ProcessorSlugRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/$processorSlug/': {
+      id: '/$processorSlug/'
+      path: '/'
+      fullPath: '/$processorSlug/'
+      preLoaderRoute: typeof ProcessorSlugIndexRouteImport
+      parentRoute: typeof ProcessorSlugRoute
     }
     '/posthog-proxy/$': {
       id: '/posthog-proxy/$'
@@ -615,6 +279,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSecretsRouteImport
       parentRoute: typeof AppRoute
     }
+    '/$processorSlug/$eventSlug': {
+      id: '/$processorSlug/$eventSlug'
+      path: '/$eventSlug'
+      fullPath: '/$processorSlug/$eventSlug'
+      preLoaderRoute: typeof ProcessorSlugEventSlugRouteImport
+      parentRoute: typeof ProcessorSlugRoute
+    }
     '/_app/streams/': {
       id: '/_app/streams/'
       path: '/'
@@ -645,6 +316,20 @@ declare module '@tanstack/react-router' {
     }
   }
 }
+
+interface ProcessorSlugRouteChildren {
+  ProcessorSlugEventSlugRoute: typeof ProcessorSlugEventSlugRoute
+  ProcessorSlugIndexRoute: typeof ProcessorSlugIndexRoute
+}
+
+const ProcessorSlugRouteChildren: ProcessorSlugRouteChildren = {
+  ProcessorSlugEventSlugRoute: ProcessorSlugEventSlugRoute,
+  ProcessorSlugIndexRoute: ProcessorSlugIndexRoute,
+}
+
+const ProcessorSlugRouteWithChildren = ProcessorSlugRoute._addFileChildren(
+  ProcessorSlugRouteChildren,
+)
 
 interface AppSecretsRouteChildren {
   AppSecretsIndexRoute: typeof AppSecretsIndexRoute
@@ -686,27 +371,9 @@ const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ProcessorSlugRoute: ProcessorSlugRouteWithChildren,
   AppRoute: AppRouteWithChildren,
-  AgentInputAddedRoute: AgentInputAddedRoute,
-  BashmodeBlockAddedRoute: BashmodeBlockAddedRoute,
-  ChildStreamCreatedRoute: ChildStreamCreatedRoute,
   DocsRoute: DocsRoute,
-  DynamicWorkerConfiguredRoute: DynamicWorkerConfiguredRoute,
-  ErrorOccurredRoute: ErrorOccurredRoute,
-  HtmlRendererConfiguredRoute: HtmlRendererConfiguredRoute,
-  JsonataTransformerConfiguredRoute: JsonataTransformerConfiguredRoute,
-  ManualEventAppendedRoute: ManualEventAppendedRoute,
-  ScheduleCancelledRoute: ScheduleCancelledRoute,
-  ScheduleConfiguredRoute: ScheduleConfiguredRoute,
-  ScheduleExecutionFinishedRoute: ScheduleExecutionFinishedRoute,
-  ScheduleExecutionStartedRoute: ScheduleExecutionStartedRoute,
-  StreamAppendScheduledRoute: StreamAppendScheduledRoute,
-  StreamDurableObjectConstructedRoute: StreamDurableObjectConstructedRoute,
-  StreamInitializedRoute: StreamInitializedRoute,
-  StreamMetadataUpdatedRoute: StreamMetadataUpdatedRoute,
-  StreamPausedRoute: StreamPausedRoute,
-  StreamResumedRoute: StreamResumedRoute,
-  StreamSubscriptionConfiguredRoute: StreamSubscriptionConfiguredRoute,
   ApiSplatRoute: ApiSplatRoute,
   ApiOrpcWsRoute: ApiOrpcWsRoute,
   PosthogProxySplatRoute: PosthogProxySplatRoute,

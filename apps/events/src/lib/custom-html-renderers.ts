@@ -2,7 +2,7 @@ import {
   HTML_RENDERER_CONFIGURED_TYPE,
   HtmlRendererConfiguredEvent,
   type Event,
-} from "@iterate-com/events-contract";
+} from "@iterate-com/shared/streams/types";
 import jsonata from "jsonata";
 import Mustache from "mustache";
 import type {
@@ -27,7 +27,7 @@ export type CustomHtmlRendererProjection = {
 const MAX_MATCHER_EXPRESSIONS = 100;
 const matcherExpressions = new Map<string, ReturnType<typeof jsonata>>();
 
-export function isHtmlRendererConfiguredEvent(event: Event) {
+function isHtmlRendererConfiguredEvent(event: Event) {
   return event.type === HTML_RENDERER_CONFIGURED_TYPE;
 }
 

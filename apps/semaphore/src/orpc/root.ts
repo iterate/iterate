@@ -175,6 +175,46 @@ const acquireResourceProcedure = os.resources.acquire
     }
   });
 
+const acquireSpecificResourceProcedure = os.resources.acquireSpecific
+  .use(authProcedure)
+  .handler(async ({ context, input }) => {
+    try {
+      const { type, slug, leaseMs } = input;
+      const hasInventory = await hasInventoryForType(context.db, type);
+      if (!hasInventory) {
+        throw new ORPCError("NOT_FOUND", {
+          message: "No resources are configured for this type.",
+        });
+      }
+
+      const coordinator = getCoordinator(context.env, type);
+      return await coordinator.acquireSpecific({
+        type,
+        slug,
+        leaseMs,
+      });
+    } catch (error) {
+      return mapResourceError(error);
+    }
+  });
+
+const renewResourceLeaseProcedure = os.resources.renew
+  .use(authProcedure)
+  .handler(async ({ context, input }) => {
+    try {
+      const { type, slug, leaseId, leaseMs } = input;
+      const coordinator = getCoordinator(context.env, type);
+      return await coordinator.renew({
+        type,
+        slug,
+        leaseId,
+        leaseMs,
+      });
+    } catch (error) {
+      return mapResourceError(error);
+    }
+  });
+
 const releaseResourceProcedure = os.resources.release
   .use(authProcedure)
   .handler(async ({ context, input }) => {
@@ -203,6 +243,8 @@ export const appRouter = createAppRouterWithInternal({
         list: listResourcesProcedure,
         find: findResourceProcedure,
         acquire: acquireResourceProcedure,
+        acquireSpecific: acquireSpecificResourceProcedure,
+        renew: renewResourceLeaseProcedure,
         release: releaseResourceProcedure,
       }),
     }),

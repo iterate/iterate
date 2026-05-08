@@ -7,12 +7,6 @@ export default {
     // this should be called from ci.ts (/ci.yml)
     workflow_call: {
       inputs: {
-        stage: {
-          description:
-            "The stage to deploy to. Must correspond to a Doppler config in the os project (prd, stg, dev, dev_bob etc.).",
-          required: true,
-          type: "string",
-        },
         deploy_iterate_com: {
           description: "Whether to deploy apps/iterate-com",
           required: false,
@@ -34,12 +28,10 @@ export default {
   },
   jobs: {
     "deploy-os": {
-      "runs-on":
-        "${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}",
-      if: "inputs.stage == 'prd'",
+      ...utils.runsOnDepotUbuntu,
       steps: [
         ...utils.setupRepo,
-        ...utils.setupDoppler({ config: "${{ inputs.stage }}" }),
+        ...utils.setupDoppler({ config: "prd" }),
         {
           name: "Deploy apps/os",
           uses: "nick-fields/retry@v3",
@@ -57,12 +49,11 @@ export default {
       ],
     },
     "deploy-iterate-com": {
-      "runs-on":
-        "${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}",
-      if: "inputs.stage == 'prd' && inputs.deploy_iterate_com",
+      ...utils.runsOnDepotUbuntu,
+      if: "inputs.deploy_iterate_com",
       steps: [
         ...utils.setupRepo,
-        ...utils.setupDoppler({ config: "${{ inputs.stage }}" }),
+        ...utils.setupDoppler({ config: "prd" }),
         {
           name: "Deploy apps/iterate-com",
           env: {

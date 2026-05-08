@@ -8,7 +8,7 @@ export default workflow({
     deployments: "write",
   },
   concurrency: {
-    group: "auth-${{ github.ref_name || inputs.stage || 'prd' }}",
+    group: "auth-${{ github.ref_name || 'prd' }}",
     "cancel-in-progress": true,
   },
   on: {
@@ -24,38 +24,18 @@ export default workflow({
           type: "string",
           default: "",
         },
-        stage: {
-          description: "Doppler config to deploy for manual runs.",
-          required: false,
-          type: "string",
-          default: "prd",
-        },
       },
     },
   },
   jobs: {
-    variables: {
-      ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
-      outputs: {
-        stage: "${{ steps.vars.outputs.stage }}",
-      },
-      steps: [
-        {
-          id: "vars",
-          name: "Resolve workflow variables",
-          run: "echo \"stage=${{ github.event_name == 'push' && 'prd' || inputs.stage || 'prd' }}\" >> \"$GITHUB_OUTPUT\"",
-        },
-      ],
-    },
     deploy: {
-      needs: ["variables"],
-      ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
+      ...utils.runsOnDepotUbuntu,
       steps: [
         ...utils.getSetupRepo({
           ref: "${{ inputs.ref || github.sha }}",
         }),
         ...utils.setupDoppler({
-          config: "${{ needs.variables.outputs.stage }}",
+          config: "prd",
           project: "auth",
         }),
         {

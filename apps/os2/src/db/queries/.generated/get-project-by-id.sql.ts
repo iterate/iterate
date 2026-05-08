@@ -7,9 +7,9 @@ where id = ?
 limit 1;
 `.trim();
 const query = (params: getProjectById.Params) => ({
+  name: "getProjectById",
   sql,
   args: [params.id],
-  name: "getProjectById",
 });
 
 export const getProjectById = Object.assign(

@@ -77,14 +77,14 @@ PostHog is configured via environment variables (managed by Doppler). All are op
 
 ### Environments
 
-All environments use a single PostHog project with `$environment` property set via `VITE_APP_STAGE`:
+The legacy `apps/os` app uses a single PostHog project with `$environment`
+property set via `VITE_APP_STAGE`:
 
-| Stage     | Description                  |
-| --------- | ---------------------------- |
-| `local-*` | Developer local environments |
-| `stg`     | Staging                      |
-| `prd`     | Production                   |
-| `pr-*`    | PR preview environments      |
+| Stage       | Description                           |
+| ----------- | ------------------------------------- |
+| `dev_*`     | Developer local/deployed dev configs  |
+| `preview_N` | Numbered repo-managed preview configs |
+| `prd`       | Production                            |
 
 Filter by `$environment` in PostHog to see data from specific environments.
 
@@ -117,7 +117,7 @@ registerTrackedMutation("router.mutationName", {
 2. Create a single project named "OS"
 3. Get API key from Settings > Project API Key
 4. Enable Session Replay in settings
-5. Add environment variables to Doppler for each environment (dev, stg, prd)
+5. Add environment variables to Doppler for each environment (dev, preview, prd)
 
 **Note:** Group types (`organization` and `project`) are automatically created when the first event with a group is sent. You'll see them appear in Settings > Group Analytics after deploying and using the app.
 

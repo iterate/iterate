@@ -1,0 +1,545 @@
+/**
+ * Deployment-targeted tests for OS2 project agents.
+ *
+ * These run through public oRPC/OpenAPI routes against a live OS2 deployment:
+ *
+ *   OS2_BASE_URL=https://os2.iterate-preview-2.com \
+ *   doppler run --project os2 --config preview_2 -- \
+ *   pnpm --dir apps/os2 test:e2e ./e2e/vitest/agents.e2e.test.ts
+ */
+import { createORPCClient } from "@orpc/client";
+import { OpenAPILink } from "@orpc/openapi-client/fetch";
+import type { RouterClient } from "@orpc/server";
+import { afterEach, describe, expect, it } from "vitest";
+import { osContract } from "@iterate-com/os2-contract";
+import type { Event } from "@iterate-com/shared/streams/types";
+import type { appRouter } from "~/orpc/root.ts";
+
+type OrpcClient = RouterClient<typeof appRouter>;
+
+type SlackChannel = {
+  id: string;
+  is_member?: boolean;
+  name: string;
+};
+
+type SlackConversationsListResponse =
+  | {
+      channels: SlackChannel[];
+      ok: true;
+      response_metadata?: { next_cursor?: string };
+    }
+  | {
+      error?: string;
+      ok: false;
+    };
+
+const createdProjectIds: string[] = [];
+const itIfSlackBotToken = process.env.APP_CONFIG_SLACK_BOT_TOKEN?.trim() ? it : it.skip;
+
+afterEach(async () => {
+  const client = createClient(requireBaseUrl());
+  for (const id of createdProjectIds.splice(0)) {
+    await client.projects.remove({ id }).catch(() => undefined);
+  }
+});
+
+describe("project agents codemode", () => {
+  it("can configure Cloudflare AI Gateway as the provider for an agent path prefix", async () => {
+    const baseUrl = requireBaseUrl();
+    const client = createClient(baseUrl);
+    const project = await createProject(client, "agent-cloudflare-preset");
+    const suffix = uniqueSuffix();
+    const basePath = `/agents/cloudflare-preset-${suffix}`;
+    const agentPath = `${basePath}/child`;
+    const assistantMessage = `cloudflare ai gateway chat proof ${suffix}`;
+
+    await client.project.agents.configurePreset({
+      basePath,
+      events: [],
+      model: "@cf/meta/llama-3.1-8b-instruct",
+      projectSlugOrId: project.id,
+      provider: "cloudflare-ai",
+      runOpts: { gateway: { id: "default" } },
+      systemPrompt: [
+        "For every user message, reply with exactly one fenced JavaScript code block and no surrounding prose.",
+        "The block must evaluate to an async function.",
+        "Use this exact code body:",
+        `async (ctx) => {
+  await ctx.chat.sendMessage({ message: ${JSON.stringify(assistantMessage)} });
+}`,
+      ].join("\n"),
+    });
+
+    const presets = await client.project.agents.listPresets({
+      projectSlugOrId: project.id,
+    });
+    expect(presets.presets).toContainEqual(
+      expect.objectContaining({
+        basePath,
+      }),
+    );
+
+    await client.project.agents.runtimeState({
+      agentPath,
+      projectSlugOrId: project.id,
+    });
+    await client.project.agents.sendMessage({
+      agentPath,
+      message: `cloudflare provider preset proof ${suffix}`,
+      projectSlugOrId: project.id,
+    });
+
+    const events = await readUntil({
+      agentPath,
+      client,
+      projectId: project.id,
+      afterOffset: "start",
+      predicate: (event) =>
+        event.type === "events.iterate.com/agent-chat/assistant-response-added" &&
+        (event.payload as { message?: unknown }).message === assistantMessage,
+    });
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/os2-agent/llm-provider-selected",
+        payload: { provider: "cloudflare-ai" },
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/cloudflare-ai/llm-request-started",
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/cloudflare-ai/llm-request-completed",
+        payload: expect.objectContaining({
+          result: expect.objectContaining({
+            status: "success",
+          }),
+        }),
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/agent/output-added",
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/codemode/script-execution-requested",
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/agent-chat/assistant-response-added",
+        payload: expect.objectContaining({
+          message: assistantMessage,
+        }),
+      }),
+    );
+    expect(
+      events.some((event) => event.type === "events.iterate.com/openai-ws/llm-request-started"),
+    ).toBe(false);
+    expect(
+      events.filter((event) => event.type === "events.iterate.com/core/error-occurred"),
+    ).toEqual([]);
+  });
+
+  it("lets codemode send visible agent responses through ctx.chat.sendMessage", async () => {
+    const baseUrl = requireBaseUrl();
+    const client = createClient(baseUrl);
+    const project = await createProject(client, "agent-chat-tool");
+    const suffix = uniqueSuffix();
+    const agentPath = `/agents/chat-tool-${suffix}`;
+    const message = `agent chat tool provider proof ${suffix}`;
+
+    await client.project.agents.runtimeState({
+      agentPath,
+      projectSlugOrId: project.id,
+    });
+
+    const output = await client.project.streams.append({
+      projectSlugOrId: project.id,
+      streamPath: agentPath,
+      event: {
+        type: "events.iterate.com/agent/output-added",
+        payload: {
+          content: `\`\`\`js
+async (ctx) => {
+  await ctx.chat.sendMessage({ message: ${JSON.stringify(message)} });
+}
+\`\`\``,
+        },
+      },
+    });
+
+    const events = await readUntil({
+      agentPath,
+      client,
+      projectId: project.id,
+      afterOffset: "start",
+      predicate: (event) =>
+        event.type === "events.iterate.com/agent-chat/assistant-response-added" &&
+        (event.payload as { message?: unknown }).message === message,
+    });
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/codemode/tool-provider-registered",
+        payload: expect.objectContaining({
+          path: ["chat"],
+        }),
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/codemode/function-call-requested",
+        payload: expect.objectContaining({
+          path: ["chat", "sendMessage"],
+          providerPath: ["chat"],
+        }),
+      }),
+    );
+    const scriptRequested = events.find(
+      (event) => event.type === "events.iterate.com/codemode/script-execution-requested",
+    );
+    if (!scriptRequested) {
+      throw new Error("Expected codemode/script-execution-requested after agent output.");
+    }
+    const scriptRequestDelayMs =
+      new Date(scriptRequested.createdAt).getTime() - new Date(output.event.createdAt).getTime();
+    expect(scriptRequestDelayMs).toBeLessThan(1_000);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/agent-chat/assistant-response-added",
+        payload: expect.objectContaining({
+          channel: "web",
+          message,
+        }),
+      }),
+    );
+  });
+
+  itIfSlackBotToken(
+    "lets a real agent conversation post to Slack through codemode",
+    async () => {
+      const baseUrl = requireBaseUrl();
+      const client = createClient(baseUrl);
+      const project = await createProject(client, "agent-slack");
+      const suffix = uniqueSuffix();
+      const agentPath = `/agents/slack-${suffix}`;
+      const slackChannelId = await requireSlackChannelId();
+      const slackText = `OS2 agent Slack proof ${suffix}`;
+
+      await client.project.agents.configurePreset({
+        basePath: agentPath,
+        events: [],
+        model: "gpt-5.5",
+        projectSlugOrId: project.id,
+        provider: "openai-ws",
+        runOpts: {},
+        systemPrompt: [
+          "For every user message, reply with exactly one fenced JavaScript code block and no surrounding prose.",
+          "The block must evaluate to an async function.",
+          "Use this exact code body:",
+          `async (ctx) => {
+  const slack = await ctx.slack.chat.postMessage({
+    channel: ${JSON.stringify(slackChannelId)},
+    text: ${JSON.stringify(slackText)}
+  });
+  await ctx.chat.sendMessage({
+    message: "posted slack " + slack.channel + " " + slack.ts
+  });
+}`,
+        ].join("\n"),
+      });
+
+      await client.project.agents.runtimeState({
+        agentPath,
+        projectSlugOrId: project.id,
+      });
+      await client.project.agents.sendMessage({
+        agentPath,
+        message: "post the Slack proof now",
+        projectSlugOrId: project.id,
+      });
+
+      const events = await readUntil({
+        agentPath,
+        client,
+        projectId: project.id,
+        afterOffset: "start",
+        predicate: (event) =>
+          event.type === "events.iterate.com/agent-chat/assistant-response-added" &&
+          typeof (event.payload as { message?: unknown }).message === "string" &&
+          (event.payload as { message: string }).message.startsWith("posted slack "),
+      });
+      const output = requiredEvent(events, "events.iterate.com/agent/output-added");
+      const scriptRequested = requiredEvent(
+        events,
+        "events.iterate.com/codemode/script-execution-requested",
+      );
+      const slackCallCompleted = events.find(
+        (event) =>
+          event.type === "events.iterate.com/codemode/function-call-completed" &&
+          (event.payload as { path?: unknown }).path instanceof Array &&
+          (event.payload as { path: string[] }).path.join(".") === "slack.chat.postMessage",
+      );
+      if (!slackCallCompleted) {
+        throw new Error("Expected codemode/function-call-completed for slack.chat.postMessage.");
+      }
+
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "events.iterate.com/codemode/tool-provider-registered",
+          payload: expect.objectContaining({
+            path: ["slack"],
+          }),
+        }),
+      );
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "events.iterate.com/agent/input-added",
+          payload: expect.objectContaining({
+            content: expect.stringContaining("ctx.slack.chat.postMessage"),
+          }),
+        }),
+      );
+      expect(
+        new Date(scriptRequested.createdAt).getTime() - new Date(output.createdAt).getTime(),
+      ).toBeLessThan(1_000);
+      expect(maxGapAfter(events, output.offset)).toBeLessThan(3_000);
+      expect(slackCallCompleted).toMatchObject({
+        payload: expect.objectContaining({
+          outcome: expect.objectContaining({
+            status: "returned",
+            value: expect.objectContaining({
+              channel: slackChannelId,
+              ok: true,
+            }),
+          }),
+        }),
+      });
+      expect(
+        events.filter((event) => event.type === "events.iterate.com/core/error-occurred"),
+      ).toEqual([]);
+    },
+    90_000,
+  );
+
+  it("does not append normal out-of-order reducer errors during an agent codemode turn", async () => {
+    const baseUrl = requireBaseUrl();
+    const client = createClient(baseUrl);
+    const project = await createProject(client, "agent-ordering");
+    const suffix = uniqueSuffix();
+    const agentPath = `/agents/ordering-${suffix}`;
+    const message = `agent ordering proof ${suffix}`;
+
+    await client.project.agents.runtimeState({
+      agentPath,
+      projectSlugOrId: project.id,
+    });
+
+    const output = await client.project.streams.append({
+      projectSlugOrId: project.id,
+      streamPath: agentPath,
+      event: {
+        type: "events.iterate.com/agent/output-added",
+        payload: {
+          content: `\`\`\`js
+async (ctx) => {
+  await ctx.chat.sendMessage({ message: ${JSON.stringify(message)} });
+}
+\`\`\``,
+        },
+      },
+    });
+
+    const events = await readUntil({
+      agentPath,
+      client,
+      projectId: project.id,
+      afterOffset: output.event.offset - 1,
+      predicate: (event) => event.type === "events.iterate.com/codemode/script-execution-completed",
+    });
+    await delay(1_000);
+    const settled = await client.project.streams.read({
+      afterOffset: output.event.offset - 1,
+      projectSlugOrId: project.id,
+      streamPath: agentPath,
+    });
+    const processorErrors = settled.events.filter(
+      (event) => event.type === "events.iterate.com/core/error-occurred",
+    );
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/codemode/function-call-requested",
+        payload: expect.objectContaining({
+          path: ["chat", "sendMessage"],
+        }),
+      }),
+    );
+    expect(processorErrors).toEqual([]);
+  });
+});
+
+function requireBaseUrl() {
+  const baseUrl = process.env.OS2_BASE_URL?.trim().replace(/\/+$/, "");
+  if (!baseUrl) {
+    throw new Error("OS2_BASE_URL is required for os2 agents e2e tests.");
+  }
+  return baseUrl;
+}
+
+async function requireSlackChannelId() {
+  const token = process.env.APP_CONFIG_SLACK_BOT_TOKEN?.trim();
+  if (!token) throw new Error("APP_CONFIG_SLACK_BOT_TOKEN is required for Slack e2e tests.");
+
+  const channels = await listSlackChannels(token);
+  const channel = channels.find(
+    (candidate) => candidate.name === "slack-agent-e2e-test" && candidate.is_member === true,
+  );
+  if (!channel) {
+    throw new Error(
+      "APP_CONFIG_SLACK_BOT_TOKEN is set, but the bot is not a member of #slack-agent-e2e-test.",
+    );
+  }
+  return channel.id;
+}
+
+async function listSlackChannels(token: string) {
+  const channels: SlackChannel[] = [];
+  let cursor: string | undefined;
+  do {
+    const url = new URL("https://slack.com/api/conversations.list");
+    url.searchParams.set("exclude_archived", "true");
+    url.searchParams.set("limit", "200");
+    url.searchParams.set("types", "public_channel,private_channel");
+    if (cursor) url.searchParams.set("cursor", cursor);
+
+    const response = await fetch(url, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const result = (await response.json()) as SlackConversationsListResponse;
+    if (!result.ok) {
+      throw new Error(`Slack conversations.list failed: ${result.error ?? response.status}`);
+    }
+    channels.push(...result.channels);
+    cursor = result.response_metadata?.next_cursor || undefined;
+  } while (cursor);
+  return channels;
+}
+
+function requireAuthHeaders() {
+  const bearerToken =
+    process.env.OS2_E2E_ADMIN_API_SECRET?.trim() ||
+    process.env.OS2_ADMIN_API_SECRET?.trim() ||
+    process.env.APP_CONFIG_ADMIN_API_SECRET?.trim() ||
+    process.env.OS2_E2E_BEARER_TOKEN?.trim();
+  const cookie = process.env.OS2_E2E_COOKIE?.trim();
+  if (!bearerToken && !cookie) {
+    throw new Error(
+      "OS2_E2E_ADMIN_API_SECRET, OS2_ADMIN_API_SECRET, APP_CONFIG_ADMIN_API_SECRET, OS2_E2E_BEARER_TOKEN, or OS2_E2E_COOKIE is required for os2 agents e2e tests.",
+    );
+  }
+
+  return {
+    ...(bearerToken ? { Authorization: `Bearer ${bearerToken}` } : {}),
+    ...(cookie ? { Cookie: cookie } : {}),
+  };
+}
+
+function createClient(baseUrl: string) {
+  const authHeaders = requireAuthHeaders();
+  return createORPCClient(
+    new OpenAPILink(osContract, {
+      url: `${baseUrl}/api`,
+      fetch: (input, init) => {
+        const requestInit: RequestInit = init ?? {};
+        const headers = new Headers(input instanceof Request ? input.headers : undefined);
+        for (const [key, value] of new Headers(requestInit.headers)) {
+          headers.set(key, value);
+        }
+        for (const [key, value] of Object.entries(authHeaders)) {
+          headers.set(key, value);
+        }
+        if (input instanceof Request) {
+          return fetch(new Request(input, { ...requestInit, headers }));
+        }
+        return fetch(input, { ...requestInit, headers });
+      },
+    }),
+  ) as OrpcClient;
+}
+
+async function createProject(client: OrpcClient, slugPrefix: string) {
+  const project = await client.projects.create({
+    metadata: {
+      seededBy: "os2-agents-e2e",
+    },
+    slug: `${slugPrefix}-${uniqueSuffix()}`,
+  });
+  createdProjectIds.push(project.id);
+  return project;
+}
+
+async function readUntil(input: {
+  afterOffset: number | "start";
+  agentPath: string;
+  client: OrpcClient;
+  predicate(event: Event): boolean;
+  projectId: string;
+}) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 60_000) {
+    const result = await input.client.project.streams.read({
+      afterOffset: input.afterOffset,
+      projectSlugOrId: input.projectId,
+      streamPath: input.agentPath,
+    });
+    if (result.events.some(input.predicate)) return result.events;
+    await delay(1_000);
+  }
+
+  const result = await input.client.project.streams.read({
+    afterOffset: input.afterOffset,
+    projectSlugOrId: input.projectId,
+    streamPath: input.agentPath,
+  });
+  throw new Error(
+    `Timed out waiting for agent stream event. Saw: ${JSON.stringify(result.events)}`,
+  );
+}
+
+function requiredEvent(events: readonly Event[], type: string) {
+  const event = events.find((item) => item.type === type);
+  if (!event) throw new Error(`Expected ${type}.`);
+  return event;
+}
+
+function maxGapAfter(events: readonly Event[], afterOffset: number) {
+  const tail = events
+    .filter((event) => event.offset >= afterOffset)
+    .toSorted((left, right) => left.offset - right.offset);
+  let maxGapMs = 0;
+  for (let index = 1; index < tail.length; index += 1) {
+    const previous = tail[index - 1];
+    const current = tail[index];
+    maxGapMs = Math.max(
+      maxGapMs,
+      new Date(current.createdAt).getTime() - new Date(previous.createdAt).getTime(),
+    );
+  }
+  return maxGapMs;
+}
+
+function uniqueSuffix() {
+  return `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+}
+
+async function delay(ms: number) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}

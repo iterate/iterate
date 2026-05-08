@@ -53,6 +53,27 @@ export function validateCallable(options: { callable: unknown }): Callable {
 }
 
 /**
+ * Validates that a Callable can resolve its named platform capabilities from
+ * the concrete dispatch context the caller is about to use.
+ *
+ * This is intentionally context-aware. For example, `loopback-binding` is valid
+ * when the dispatching Worker passes matching `ctx.exports`, but invalid when a
+ * different Worker or Durable Object dispatches without those exports.
+ */
+export function assertCallableDispatchContext(options: {
+  callable: unknown;
+  ctx: CallableContext;
+}): Callable {
+  const callable = validateCallable({ callable: options.callable });
+  if (callable.type === "fetch") {
+    assertFetchCallableContext({ callable, ctx: options.ctx });
+  } else {
+    assertRpcCallableContext({ callable, ctx: options.ctx });
+  }
+  return callable;
+}
+
+/**
  * Builds the source Request used by value dispatch before the shared Fetch
  * dispatcher applies URL/path metadata.
  *
@@ -238,7 +259,7 @@ async function dispatchValidatedCallableFetch(options: {
        * via values resolve from bindings; public egress should not happen just
        * because a shared helper read ambient `globalThis.fetch`.
        */
-      return await resolvedFetch.fetch(rewrittenRequest);
+      return await resolvedFetch.fetch.call(globalThis, rewrittenRequest);
     }
     case "binding": {
       /**
@@ -285,9 +306,13 @@ export async function connectCallableWebSocket(options: {
     headers.set("Sec-WebSocket-Protocol", options.protocols.join(", "));
   }
 
+  const requestUrl = buildCallableWebSocketRequestUrl({
+    callable: options.callable,
+    url: options.url,
+  });
   const response = (await dispatchCallableFetch({
     callable: options.callable,
-    request: new Request(toSyntheticRequestUrl(options.url ?? "/"), {
+    request: new Request(requestUrl, {
       method: "GET",
       headers,
     }),
@@ -312,6 +337,24 @@ export async function connectCallableWebSocket(options: {
   if (options.binaryType) response.webSocket.binaryType = options.binaryType;
   response.webSocket.accept(options.accept);
   return response.webSocket;
+}
+
+function buildCallableWebSocketRequestUrl(options: { callable: FetchCallable; url?: string }) {
+  const requestUrl = new URL(toSyntheticRequestUrl(options.url ?? "/"));
+  /**
+   * `connectCallableWebSocket()` uses `dispatchCallableFetch()` so it can work
+   * for service bindings and Durable Objects, not just public URLs. That means
+   * websocket connects still pass through the same URL rewriter as fetch calls.
+   *
+   * When the caller does not provide an explicit source URL, copy query
+   * parameters from a public URL callable onto the synthetic request. Otherwise
+   * `buildCallableUrl()` would treat the empty synthetic query as intentional
+   * and replace the callable URL's query before making the upgrade request.
+   */
+  if (options.url == null && options.callable.via.type === "url") {
+    requestUrl.search = new URL(options.callable.via.url).search;
+  }
+  return requestUrl.toString();
 }
 
 async function transformCallableInput(options: {
@@ -563,6 +606,154 @@ function assertRpcMethodResolvable(options: { resolvedRpc: unknown; methodName: 
     throw new CallableError(
       "RESOLUTION_FAILED",
       `RPC method "${options.methodName}" was not found on the resolved RPC object`,
+    );
+  }
+}
+
+function assertFetchCallableContext(options: { callable: FetchCallable; ctx: CallableContext }) {
+  switch (options.callable.via.type) {
+    case "url": {
+      if (!options.ctx.fetch) {
+        throw new CallableError(
+          "RESOLUTION_FAILED",
+          "URL callables require ctx.fetch; pass fetch explicitly at the Worker boundary",
+        );
+      }
+      return;
+    }
+    case "env-binding": {
+      switch (options.callable.via.bindingType) {
+        case "service":
+          resolveServiceBinding({
+            bindingName: options.callable.via.bindingName,
+            env: options.ctx.env,
+          });
+          return;
+        case "durable-object-namespace":
+          resolveDurableObjectFetchStub({
+            via: options.callable.via,
+            source: "env",
+            env: options.ctx.env,
+          });
+          return;
+        case "dynamic-worker":
+          assertDynamicWorkerLoaderBinding({
+            via: options.callable.via,
+            env: options.ctx.env,
+          });
+          return;
+      }
+      return;
+    }
+    case "loopback-binding": {
+      switch (options.callable.via.bindingType) {
+        case "service": {
+          const binding = resolveLoopbackServiceBinding({
+            via: options.callable.via,
+            exports: options.ctx.exports,
+          });
+          if (!isFetchableBinding(binding)) {
+            throw new CallableError(
+              "RESOLUTION_FAILED",
+              `Loopback export "${options.callable.via.exportName}" does not expose fetch(request)`,
+            );
+          }
+          return;
+        }
+        case "durable-object-namespace":
+          resolveDurableObjectFetchStub({
+            via: options.callable.via,
+            source: "loopback",
+            exports: options.ctx.exports,
+          });
+          return;
+      }
+    }
+  }
+}
+
+function assertRpcCallableContext(options: { callable: WorkersRpcCallable; ctx: CallableContext }) {
+  switch (options.callable.via.type) {
+    case "env-binding": {
+      switch (options.callable.via.bindingType) {
+        case "service": {
+          const resolvedRpc = resolveBinding({
+            bindingName: options.callable.via.bindingName,
+            env: options.ctx.env,
+          });
+          assertRpcMethodResolvable({
+            resolvedRpc,
+            methodName: options.callable.rpcMethod,
+          });
+          return;
+        }
+        case "durable-object-namespace": {
+          const resolvedRpc = resolveDurableObjectStub({
+            bindingName: options.callable.via.bindingName,
+            durableObject: options.callable.via.durableObject,
+            env: options.ctx.env,
+          });
+          assertRpcMethodResolvable({
+            resolvedRpc,
+            methodName: options.callable.rpcMethod,
+          });
+          return;
+        }
+        case "dynamic-worker":
+          assertDynamicWorkerLoaderBinding({
+            via: options.callable.via,
+            env: options.ctx.env,
+          });
+          return;
+      }
+      return;
+    }
+    case "loopback-binding": {
+      switch (options.callable.via.bindingType) {
+        case "service": {
+          const resolvedRpc = resolveLoopbackServiceBinding({
+            via: options.callable.via,
+            exports: options.ctx.exports,
+          });
+          assertRpcMethodResolvable({
+            resolvedRpc,
+            methodName: options.callable.rpcMethod,
+          });
+          return;
+        }
+        case "durable-object-namespace": {
+          const resolvedRpc = resolveDurableObjectStubFromNamespace({
+            namespace: resolveLoopbackExport({
+              exportName: options.callable.via.exportName,
+              exports: options.ctx.exports,
+            }),
+            durableObject: options.callable.via.durableObject,
+            description: `Loopback Durable Object export "${options.callable.via.exportName}"`,
+          });
+          assertRpcMethodResolvable({
+            resolvedRpc,
+            methodName: options.callable.rpcMethod,
+          });
+          return;
+        }
+      }
+    }
+  }
+}
+
+function assertDynamicWorkerLoaderBinding(options: {
+  via: DynamicWorkerVia;
+  env: Record<string, unknown> | undefined;
+}) {
+  const workerLoaderBindingName = options.via.workerLoaderBindingName ?? "LOADER";
+  const loader = resolveBinding({
+    bindingName: workerLoaderBindingName,
+    env: options.env,
+  });
+  if (!isDynamicWorkerLoader(loader)) {
+    throw new CallableError(
+      "RESOLUTION_FAILED",
+      `Binding "${workerLoaderBindingName}" is not a Worker Loader`,
     );
   }
 }

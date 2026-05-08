@@ -5,9 +5,9 @@ DELETE FROM leases
 WHERE slug = ?;
 `.trim();
 const deleteLeaseBySlugQuery = (params: deleteLeaseBySlug.Params) => ({
+  name: "deleteLeaseBySlug",
   sql: deleteLeaseBySlugSql,
   args: [params.slug],
-  name: "deleteLeaseBySlug",
 });
 
 export const deleteLeaseBySlug = Object.assign(
@@ -28,9 +28,9 @@ DELETE FROM leases
 WHERE slug = ? AND lease_id = ?;
 `.trim();
 const deleteLeaseBySlugAndLeaseIdQuery = (params: deleteLeaseBySlugAndLeaseId.Params) => ({
+  name: "deleteLeaseBySlugAndLeaseId",
   sql: deleteLeaseBySlugAndLeaseIdSql,
   args: [params.slug, params.leaseId],
-  name: "deleteLeaseBySlugAndLeaseId",
 });
 
 export const deleteLeaseBySlugAndLeaseId = Object.assign(
@@ -55,9 +55,9 @@ INSERT OR REPLACE INTO metadata (key, value)
 VALUES ('type', ?);
 `.trim();
 const insertCoordinatorTypeQuery = (params: insertCoordinatorType.Params) => ({
+  name: "insertCoordinatorType",
   sql: insertCoordinatorTypeSql,
   args: [params.type],
-  name: "insertCoordinatorType",
 });
 
 export const insertCoordinatorType = Object.assign(
@@ -78,9 +78,9 @@ INSERT INTO events (occurred_at, event, slug, payload)
 VALUES (?, ?, ?, ?);
 `.trim();
 const insertEventQuery = (params: insertEvent.Params) => ({
+  name: "insertEvent",
   sql: insertEventSql,
   args: [params.occurredAt, params.event, params.slug, params.payload],
-  name: "insertEvent",
 });
 
 export const insertEvent = Object.assign(
@@ -104,9 +104,9 @@ INSERT INTO leases (slug, lease_id, expires_at, created_at)
 VALUES (?, ?, ?, ?);
 `.trim();
 const insertLeaseQuery = (params: insertLease.Params) => ({
+  name: "insertLease",
   sql: insertLeaseSql,
   args: [params.slug, params.leaseId, params.expiresAt, params.createdAt],
-  name: "insertLease",
 });
 
 export const insertLease = Object.assign(
@@ -130,9 +130,9 @@ SELECT slug
 FROM leases;
 `.trim();
 const selectActiveLeaseSlugsQuery = {
+  name: "selectActiveLeaseSlugs",
   sql: selectActiveLeaseSlugsSql,
   args: [],
-  name: "selectActiveLeaseSlugs",
 };
 
 export const selectActiveLeaseSlugs = Object.assign(
@@ -154,9 +154,9 @@ FROM metadata
 WHERE key = 'type';
 `.trim();
 const selectCoordinatorTypeQuery = {
+  name: "selectCoordinatorType",
   sql: selectCoordinatorTypeSql,
   args: [],
-  name: "selectCoordinatorType",
 };
 
 export const selectCoordinatorType = Object.assign(
@@ -180,9 +180,9 @@ WHERE expires_at <= ?
 ORDER BY expires_at ASC;
 `.trim();
 const selectExpiredLeasesQuery = (params: selectExpiredLeases.Params) => ({
+  name: "selectExpiredLeases",
   sql: selectExpiredLeasesSql,
   args: [params.now],
-  name: "selectExpiredLeases",
 });
 
 export const selectExpiredLeases = Object.assign(
@@ -212,9 +212,9 @@ FROM leases
 WHERE slug = ?;
 `.trim();
 const selectLeaseCountBySlugQuery = (params: selectLeaseCountBySlug.Params) => ({
+  name: "selectLeaseCountBySlug",
   sql: selectLeaseCountBySlugSql,
   args: [params.slug],
-  name: "selectLeaseCountBySlug",
 });
 
 export const selectLeaseCountBySlug = Object.assign(
@@ -243,9 +243,9 @@ FROM leases
 WHERE slug = ?;
 `.trim();
 const selectLeaseIdBySlugQuery = (params: selectLeaseIdBySlug.Params) => ({
+  name: "selectLeaseIdBySlug",
   sql: selectLeaseIdBySlugSql,
   args: [params.slug],
-  name: "selectLeaseIdBySlug",
 });
 
 export const selectLeaseIdBySlug = Object.assign(
@@ -274,9 +274,9 @@ FROM leases
 WHERE slug = ?;
 `.trim();
 const selectLeaseBySlugQuery = (params: selectLeaseBySlug.Params) => ({
+  name: "selectLeaseBySlug",
   sql: selectLeaseBySlugSql,
   args: [params.slug],
-  name: "selectLeaseBySlug",
 });
 
 export const selectLeaseBySlug = Object.assign(
@@ -306,7 +306,7 @@ FROM leases
 ORDER BY expires_at ASC
 LIMIT 1;
 `.trim();
-const selectNextLeaseQuery = { sql: selectNextLeaseSql, args: [], name: "selectNextLease" };
+const selectNextLeaseQuery = { name: "selectNextLease", sql: selectNextLeaseSql, args: [] };
 
 export const selectNextLease = Object.assign(
   function selectNextLease(client: SyncClient): selectNextLease.Result | null {
@@ -331,9 +331,9 @@ const updateLeaseExpiresQuery = (
   data: updateLeaseExpires.Data,
   params: updateLeaseExpires.Params,
 ) => ({
+  name: "updateLeaseExpires",
   sql: updateLeaseExpiresSql,
   args: [data.expiresAt, params.slug, params.leaseId],
-  name: "updateLeaseExpires",
 });
 
 export const updateLeaseExpires = Object.assign(

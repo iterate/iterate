@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { Link, useMatchRoute, useSearch } from "@tanstack/react-router";
-import { ProjectSlug, type ProjectSlug as ProjectSlugValue } from "@iterate-com/events-contract";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   SidebarGroup,
@@ -9,13 +8,12 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarSeparator,
 } from "@iterate-com/ui/components/sidebar";
 import { SidebarShell } from "@iterate-com/ui/components/sidebar-shell";
-import { SidebarThemeSwitcher } from "@iterate-com/ui/components/sidebar-theme-switcher";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { StreamsSidebar } from "~/components/streams-sidebar.tsx";
-import { getProjectUrl } from "~/lib/project-slug.ts";
+import { Namespace, type NamespaceValue } from "~/lib/namespace.ts";
+import { getNamespaceUrl } from "~/lib/namespace.ts";
 import { defaultStreamViewSearch } from "~/lib/stream-view-search.ts";
 
 type StreamLinkSearch = {
@@ -25,17 +23,11 @@ type StreamLinkSearch = {
   [key: string]: unknown;
 };
 
-export function AppSidebar({ projectSlug }: { projectSlug: ProjectSlugValue }) {
+export function AppSidebar({ namespace }: { namespace: NamespaceValue }) {
   return (
     <SidebarShell
       header={<AppSidebarBrand />}
-      footer={
-        <>
-          <AppSidebarProjectSlugFooter projectSlug={projectSlug} />
-          <SidebarSeparator />
-          <SidebarThemeSwitcher />
-        </>
-      }
+      footer={<AppSidebarNamespaceFooter namespace={namespace} />}
     >
       <AppSidebarNav />
       <StreamsSidebar />
@@ -135,23 +127,23 @@ function AppSidebarNav() {
   );
 }
 
-function AppSidebarProjectSlugFooter({ projectSlug }: { projectSlug: ProjectSlugValue }) {
-  const [value, setValue] = useState(projectSlug);
+function AppSidebarNamespaceFooter({ namespace }: { namespace: NamespaceValue }) {
+  const [value, setValue] = useState(namespace);
 
   useEffect(() => {
-    setValue(projectSlug);
-  }, [projectSlug]);
+    setValue(namespace);
+  }, [namespace]);
 
-  function submitProjectSlug() {
-    const parsed = ProjectSlug.safeParse(value.trim());
+  function submitNamespace() {
+    const parsed = Namespace.safeParse(value.trim());
     if (!parsed.success) {
-      toast.error("Project slug must be a non-empty string up to 255 characters.");
+      toast.error("Namespace must be a non-empty string up to 255 characters.");
       return;
     }
 
-    const nextUrl = getProjectUrl({
+    const nextUrl = getNamespaceUrl({
       currentUrl: window.location.href,
-      projectSlug: parsed.data,
+      namespace: parsed.data,
     });
     window.location.assign(nextUrl.toString());
   }
@@ -161,11 +153,11 @@ function AppSidebarProjectSlugFooter({ projectSlug }: { projectSlug: ProjectSlug
       className="flex flex-col gap-2 p-2"
       onSubmit={(event) => {
         event.preventDefault();
-        submitProjectSlug();
+        submitNamespace();
       }}
     >
       <div className="px-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-        Project slug
+        Namespace
       </div>
       <SidebarInput
         value={value}

@@ -1,12 +1,11 @@
 import { useCallback, useState } from "react";
 import type { PublicAppConfig } from "@iterate-com/shared/apps/config";
 import { useConfig } from "@iterate-com/ui/apps/config";
-import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { Button } from "@iterate-com/ui/components/button";
 import { toast } from "@iterate-com/ui/components/sonner";
 import type { AppConfig } from "~/app.ts";
-import { orpc, orpcClient } from "~/orpc/client.ts";
+import { orpcClient } from "~/orpc/client.ts";
 
 type PublicConfig = PublicAppConfig<AppConfig>;
 
@@ -23,11 +22,6 @@ export const Route = createFileRoute("/_app/debug")({
 function DebugPage() {
   const publicConfig = useConfig<PublicConfig>();
   const { ping } = Route.useLoaderData();
-  const [showPirateSecret, setShowPirateSecret] = useState(false);
-  const { data: pirateSecretData, isPending: pirateSecretPending } = useQuery({
-    ...orpc.pirateSecret.queryOptions({ input: {} }),
-    enabled: showPirateSecret,
-  });
   const [demoBusy, setDemoBusy] = useState(false);
   const [lastLogDemo, setLastLogDemo] = useState<{
     label: string;
@@ -99,24 +93,6 @@ function DebugPage() {
         <pre className="overflow-x-auto rounded-md border p-3 font-mono text-sm">
           {JSON.stringify(publicConfig, null, 2)}
         </pre>
-      </section>
-
-      <section className="space-y-3">
-        <div className="space-y-1">
-          <h2 className="text-sm font-semibold">Pirate Secret</h2>
-          <p className="text-sm text-muted-foreground">
-            Fetch a secret from the server-side env contract.
-          </p>
-        </div>
-        {!showPirateSecret ? (
-          <Button size="sm" onClick={() => setShowPirateSecret(true)}>
-            Reveal Pirate Secret
-          </Button>
-        ) : pirateSecretPending ? (
-          <p className="text-sm text-muted-foreground">Loading secret...</p>
-        ) : (
-          <p className="rounded-md border p-3 font-mono text-sm">{pirateSecretData?.secret}</p>
-        )}
       </section>
 
       <section className="space-y-3">

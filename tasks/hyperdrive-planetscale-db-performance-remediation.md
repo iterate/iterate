@@ -27,7 +27,7 @@ Frame this work as database performance remediation:
 
 ## Scope
 
-1. Provision Hyperdrive for staging + production
+1. Provision Hyperdrive for preview + production
 
 - Configure PlanetScale origin.
 - Set `caching.disabled = true` (explicitly no query caching for now).
@@ -64,7 +64,7 @@ Frame this work as database performance remediation:
 
 7. Rollout and validation
 
-- Staging first, then production.
+- Preview first, then production.
 - Validate:
   - Hyperdrive binding active
   - runtime uses Hyperdrive path

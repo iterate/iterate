@@ -29,13 +29,13 @@ describe("parseObjectFromComposerText", () => {
   test("parses quoted shell commands in yaml mode", () => {
     expect(
       parseObjectFromComposerText(
-        `type: bashmode-block-added
+        `type: events.iterate.com/codemode/block-added
 payload:
   script: "curl --json '{\\"type\\": \\"hi\\"}' https://events.iterate.com/api/streams/jonas/bla/new/new/new"`,
         "yaml",
       ),
     ).toEqual({
-      type: "bashmode-block-added",
+      type: "events.iterate.com/codemode/block-added",
       payload: {
         script: `curl --json '{"type": "hi"}' https://events.iterate.com/api/streams/jonas/bla/new/new/new`,
       },
@@ -45,7 +45,7 @@ payload:
   test("adds a helpful hint for yaml strings containing colons", () => {
     expect(() =>
       parseObjectFromComposerText(
-        `type: bashmode-block-added
+        `type: events.iterate.com/codemode/block-added
 payload:
   script: curl --json '{"type": "hi"}' https://events.iterate.com/api/streams/jonas/bla/new/new/new`,
         "yaml",

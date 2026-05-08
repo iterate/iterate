@@ -2,13 +2,17 @@
 
 name: specs
 on:
+  push:
+    branches:
+      - main
+  pull_request: {}
   workflow_dispatch: {}
 env:
   SLACK_CLIENT_ID: fake123
   DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
 jobs:
   specs:
-    runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
+    runs-on: depot-ubuntu-24.04-32
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

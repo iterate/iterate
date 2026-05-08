@@ -1,4 +1,4 @@
-import type { JSONObject } from "@iterate-com/events-contract";
+import type { JSONObject } from "@iterate-com/shared/streams/types";
 import { parse as parseYaml } from "yaml";
 
 type StreamComposerDataFormat = "json" | "yaml";

@@ -5,7 +5,7 @@ SELECT type, slug, data, lease_state, leased_until, last_acquired_at, last_relea
 FROM resources
 ORDER BY type ASC, created_at ASC, slug ASC;
 `.trim();
-const selectResourcesQuery = { sql: selectResourcesSql, args: [], name: "selectResources" };
+const selectResourcesQuery = { name: "selectResources", sql: selectResourcesSql, args: [] };
 
 export const selectResources = Object.assign(
   async function selectResources(client: Client): Promise<selectResources.Result[]> {
@@ -35,9 +35,9 @@ WHERE type = ?
 ORDER BY created_at ASC, slug ASC;
 `.trim();
 const selectResourcesByTypeQuery = (params: selectResourcesByType.Params) => ({
+  name: "selectResourcesByType",
   sql: selectResourcesByTypeSql,
   args: [params.type],
-  name: "selectResourcesByType",
 });
 
 export const selectResourcesByType = Object.assign(
@@ -72,9 +72,9 @@ INSERT INTO resources (type, slug, data)
 VALUES (?, ?, ?);
 `.trim();
 const insertResourceRowQuery = (params: insertResourceRow.Params) => ({
+  name: "insertResourceRow",
   sql: insertResourceRowSql,
   args: [params.type, params.slug, params.data],
-  name: "insertResourceRow",
 });
 
 export const insertResourceRow = Object.assign(
@@ -98,9 +98,9 @@ FROM resources
 WHERE type = ? AND slug = ?;
 `.trim();
 const selectResourceByTypeAndSlugQuery = (params: selectResourceByTypeAndSlug.Params) => ({
+  name: "selectResourceByTypeAndSlug",
   sql: selectResourceByTypeAndSlugSql,
   args: [params.type, params.slug],
-  name: "selectResourceByTypeAndSlug",
 });
 
 export const selectResourceByTypeAndSlug = Object.assign(
@@ -139,9 +139,9 @@ DELETE FROM resources
 WHERE type = ? AND slug = ?;
 `.trim();
 const deleteResourceByTypeAndSlugQuery = (params: deleteResourceByTypeAndSlug.Params) => ({
+  name: "deleteResourceByTypeAndSlug",
   sql: deleteResourceByTypeAndSlugSql,
   args: [params.type, params.slug],
-  name: "deleteResourceByTypeAndSlug",
 });
 
 export const deleteResourceByTypeAndSlug = Object.assign(
@@ -168,9 +168,9 @@ WHERE type = ?
 LIMIT 1;
 `.trim();
 const selectResourcePresenceByTypeQuery = (params: selectResourcePresenceByType.Params) => ({
+  name: "selectResourcePresenceByType",
   sql: selectResourcePresenceByTypeSql,
   args: [params.type],
-  name: "selectResourcePresenceByType",
 });
 
 export const selectResourcePresenceByType = Object.assign(
@@ -207,6 +207,7 @@ const updateResourceLeasedQuery = (
   data: updateResourceLeased.Data,
   params: updateResourceLeased.Params,
 ) => ({
+  name: "updateResourceLeased",
   sql: updateResourceLeasedSql,
   args: [
     data.leaseState,
@@ -216,7 +217,6 @@ const updateResourceLeasedQuery = (
     params.type,
     params.slug,
   ],
-  name: "updateResourceLeased",
 });
 
 export const updateResourceLeased = Object.assign(
@@ -255,6 +255,7 @@ const updateResourceAvailableQuery = (
   data: updateResourceAvailable.Data,
   params: updateResourceAvailable.Params,
 ) => ({
+  name: "updateResourceAvailable",
   sql: updateResourceAvailableSql,
   args: [
     data.leaseState,
@@ -264,7 +265,6 @@ const updateResourceAvailableQuery = (
     params.type,
     params.slug,
   ],
-  name: "updateResourceAvailable",
 });
 
 export const updateResourceAvailable = Object.assign(

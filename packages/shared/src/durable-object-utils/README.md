@@ -5,10 +5,13 @@ Utilities here are experimental helpers for composing Cloudflare Durable Object 
 ## Current Scope
 
 - `mixins/with-durable-object-core.ts` is the root adapter for mixins that need Cloudflare's protected Durable Object `ctx` APIs. It exposes small protected capabilities for local SQLite, synchronous KV, and the single platform alarm slot.
-- `mixins/with-lifecycle-hooks.ts` adds named initialization state and tiny lifecycle hooks for SQLite-backed Durable Objects.
-- `mixins/with-d1-object-catalog.ts` best-effort mirrors initialized objects into D1 tables owned by the mixin, with optional secondary indexes derived from init params.
+- `mixins/with-app-config.ts` parses typed app runtime config from `APP_CONFIG` / `APP_CONFIG_*` Cloudflare env vars and exposes it as protected `this.config`.
+- `mixins/with-lifecycle-hooks.ts` adds reliable named initialization state and tiny lifecycle hooks for SQLite-backed Durable Objects.
+- `mixins/with-d1-object-catalog.ts` best-effort mirrors initialized objects into D1 tables owned by the mixin, with optional secondary indexes derived from structured names.
 - `mixins/with-multiplexed-alarms.ts` stores many logical one-shot alarms behind Cloudflare's single Durable Object alarm slot.
 - `mixins/with-scheduler.ts` adds key-based one-shot, delayed, interval, cron, and RRULE scheduling on top of multiplexed alarms.
+- `mixins/with-stream-processor-runner.ts` stores stream processor reduced state/progress per processor slug and exposes protected catch-up / live-event / subscription runner methods. It assumes one stream path per Durable Object instance.
+- `mixins/with-public-fetch-route.ts` adds instance helpers for stable public Durable Object paths and a worker-side fetcher that proxies `/durable-objects/:namespaceSlug/:mode/:payload/...` straight to `stub.fetch()`.
 - `mixins/with-outerbase.ts` and `mixins/with-kv-inspector.ts` are debug inspector mixins. Do not attach them to production-routed objects without an explicit auth/dev gating decision.
 - Avoid adding more mixins or composition helpers without speccing the API shape first.
 
@@ -18,10 +21,11 @@ Compose mixins by wrapping the base class, then extend the composed class with
 the final worker `Env`:
 
 ```ts
-type RoomInit = {
-  name: string;
-  ownerUserId: string;
-};
+const RoomStructuredName = z.object({
+  ownerUserId: z.string(),
+});
+
+type RoomStructuredName = z.infer<typeof RoomStructuredName>;
 
 type NeedsCatalog = {
   DO_CATALOG: D1Database;
@@ -31,7 +35,7 @@ type Env = NeedsCatalog & {
   OTHER_BINDING: Fetcher;
 };
 
-const RoomBase = withD1ObjectCatalog<RoomInit, NeedsCatalog>({
+const RoomBase = withD1ObjectCatalog<RoomStructuredName, NeedsCatalog>({
   className: "Room",
   getDatabase(env) {
     return env.DO_CATALOG;
@@ -41,7 +45,7 @@ const RoomBase = withD1ObjectCatalog<RoomInit, NeedsCatalog>({
       return params.ownerUserId;
     },
   },
-})(withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject)));
+})(withLifecycleHooks({ nameSchema: RoomStructuredName })(withDurableObjectCore(DurableObject)));
 
 export class Room extends RoomBase<Env> {}
 ```
@@ -73,6 +77,36 @@ functions operate on plain data. Use the raw protected handles only when a mixin
 owns durable schema/state and needs several related storage operations in one
 method, such as the scheduler or multiplexed alarm dispatcher.
 
+Use `withAppConfig(AppConfig)` when a Durable Object needs the same app runtime
+config shape as the worker entrypoint:
+
+```ts
+import { DurableObject } from "cloudflare:workers";
+import { z } from "zod";
+import { BaseAppConfig } from "@iterate-com/shared/apps/config";
+import { withAppConfig } from "@iterate-com/shared/durable-object-utils/mixins/with-app-config";
+
+const AppConfig = BaseAppConfig.extend({
+  apiBaseUrl: z.string().trim().min(1),
+});
+
+type AppConfig = z.output<typeof AppConfig>;
+
+const RoomBase = withAppConfig(AppConfig)(DurableObject);
+
+class Room extends RoomBase<Env> {
+  getApiBaseUrl() {
+    return this.config.apiBaseUrl;
+  }
+}
+```
+
+`this.config` is protected, not public, because app config can include redacted
+secrets or internal URLs. The mixin uses the shared `APP_CONFIG` parser and
+caches the parsed object for one Durable Object wake. `APP_CONFIG_FOO__BAR`
+overrides `foo.bar`, and unknown override keys fail schema validation instead
+of being silently ignored.
+
 Simple mixin return types mostly follow this pattern:
 
 ```ts
@@ -83,7 +117,7 @@ type WithSomeMixinResult<TBase> = TBase & Constructor<MembersAddedByTheMixin>;
 `DurableObject` class, keeping `TBase` in the return type keeps this valid:
 
 ```ts
-const Base = withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject));
+const Base = withLifecycleHooks({ nameSchema: RoomInit })(withDurableObjectCore(DurableObject));
 
 export class Room extends Base<Env> {}
 ```
@@ -117,7 +151,7 @@ const Base = withD1ObjectCatalog<RoomInit, NeedsCatalog>({
   getDatabase(env) {
     return env.DO_CATALOG;
   },
-})(withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject)));
+})(withLifecycleHooks({ nameSchema: RoomInit })(withDurableObjectCore(DurableObject)));
 
 class Room extends Base<Env> {} // ok: Env has DO_CATALOG
 
@@ -125,13 +159,89 @@ class Broken extends Base<{ OTHER_BINDING: Fetcher }> {}
 // TypeScript error: missing DO_CATALOG
 ```
 
-The protected `initParams` type uses an abstract class instead of an interface
+## Stream Processor Runner
+
+Use `withStreamProcessorRunner(...)` when a Durable Object should persist
+reduced state for stream processors and apply the shared processor lifecycle
+helpers. The mixin is configured with one processor and scoped stream API, so
+the subclass can stay focused on Durable Object entrypoints such as `fetch()` or
+`webSocketMessage()`.
+
+For the current one-stream-per-runner model, put the stream path in the
+lifecycle structured name. That makes the Durable Object instance itself the
+stream-bound processor runner; pushed/subscribed event methods then receive
+events, not another loose `streamPath` argument:
+
+```ts
+type AgentProcessorStructuredName = {
+  streamPath: string;
+};
+
+function createProcessor(args: { ctx: DurableObjectState; env: Env }) {
+  return createAgentProcessor({
+    ai: args.env.AI,
+    waitUntil: (promise) => args.ctx.waitUntil(promise),
+  });
+}
+
+const AgentProcessorBase = withStreamProcessorRunner<
+  AgentProcessorStructuredName,
+  Env,
+  typeof AgentProcessorContract
+>({
+  processor: createProcessor,
+  streamApi(args) {
+    return args.ctx.exports.StreamApi({
+      props: { streamPath: args.structuredName.streamPath },
+    }) as ProcessorStreamApi<typeof AgentProcessorContract>;
+  },
+})(
+  withLifecycleHooks({ nameSchema: AgentProcessorStructuredName })(
+    withDurableObjectCore(DurableObject),
+  ),
+);
+
+class AgentProcessorDO extends AgentProcessorBase<Env> {
+  async catchUp() {
+    return await this.catchUpStreamProcessor();
+  }
+
+  async consumeEvent(args: { event: StreamEvent }) {
+    return await this.consumeStreamProcessorEvent(args);
+  }
+}
+```
+
+Callers should initialize the object once with the immutable stream binding:
+
+```ts
+const runner = await getOrInitializeDoStub({
+  namespace: env.AGENT_PROCESSORS,
+  name: { streamPath },
+});
+
+await runner.consumeEvent({ event });
+```
+
+The mixin stores its processor state at
+`stream-processor:<processor-slug>:stored-state`. That is deliberately simple:
+it is for the current "one processor instance is bound to one stream path"
+model. If you need Agent + Codemode in one Durable Object, compose them into one
+processor first and pass that composed processor to the mixin.
+
+The configured `processor(...)` callback runs once per Durable Object wake and
+the result is cached. That is deliberate: processor implementations may keep
+runtime-only closure state such as timers, abort controllers, HTTP connections,
+or request sequence counters. Reduced state is still stored through the mixin;
+the cached processor object only preserves warm-instance state.
+
+The protected `structuredName` type uses an abstract class instead of an interface
 because TypeScript interfaces cannot add protected members to a class returned
 from a mixin:
 
 ```ts
-abstract class LifecycleHooksProtected<InitParams> {
-  protected abstract get initParams(): InitParams;
+abstract class LifecycleHooksProtected<StructuredName> {
+  protected abstract get structuredName(): StructuredName;
 }
 ```
 
@@ -140,115 +250,228 @@ That gives subclasses the nice API:
 ```ts
 class Room extends Base<Env> {
   send() {
-    return this.initParams.ownerUserId;
+    return this.structuredName.ownerUserId;
   }
 }
 ```
 
 But callers outside the class still get a TypeScript error for
-`room.initParams`, so the public API stays explicit:
+`room.structuredName`, so the public API stays explicit:
 
 ```ts
-await room.initialize(params);
+await room.initialize({ name: '{"ownerUserId":"user-a"}' });
 await room.ensureStarted();
 room.assertInitialized();
 ```
 
-## Initialization Shape
+## Lifecycle Names
 
-Use the free helper as the default way to get a named stub, initializing it if
-needed:
+Cloudflare Durable Objects are primarily named by strings. That remains the
+base model here: use `namespace.getByName(name)` when you only need a stub, and
+use `getOrInitializeDoStub({ name })` when the object also uses lifecycle hooks:
 
 ```ts
 const stub = await getOrInitializeDoStub({
   namespace: env.ROOMS,
   name: "room-a",
-  initParams: {
-    ownerUserId: "user-a",
-  },
 });
 ```
 
-`getOrInitializeDoStub()` always calls `initialize()`, and `initialize()` waits
-for `ensureStarted()` before returning. If the init shape is only
-`{ name: string }`, `initParams` may be omitted and the helper initializes with
-`{ name }`. If the init shape has any other fields, TypeScript requires
-`initParams` so the helper cannot return an uninitialized or unstarted stub by
-accident.
+Inside our mixin-based Durable Objects, `this.name` is the reliable string name.
+It is populated from `initialize({ name })`, stored in Durable Object storage,
+and rehydrated synchronously during construction. This exists because
+`ctx.id.name` is not reliable in Miniflare, and alarm wakes do not pass through
+a caller-side wrapper. If initialization has not happened yet, `this.name`
+throws `NotInitializedError` instead of returning a vague fallback.
 
 Names are Durable Object identity, so build them from stable identifiers. Prefer
 database IDs, project IDs, user IDs, or another immutable key. Avoid slugs,
 titles, and other mutable labels unless changing that label should intentionally
 create a different Durable Object.
 
-If `name` is omitted, the helper derives a deterministic Durable Object name
-from `initParams`:
+Some Durable Object names are really a stable tuple, such as
+`{ projectId, streamPath }`. In that case configure `withLifecycleHooks()` with
+a Zod `nameSchema`, then pass the tuple as the helper's `name`; the helper
+derives the deterministic string name and initializes the object with that raw
+name:
 
 ```ts
 const stub = await getOrInitializeDoStub({
-  namespace: env.PROJECT_ROOMS,
-  initParams: {
+  namespace: env.CODEMODE_SESSIONS,
+  name: {
     projectId: "proj_123",
-    roomId: "room_456",
+    streamPath: "/codemode/session-a",
   },
 });
 ```
 
-Durable Object names remain the Cloudflare-native identity primitive. The
-library only needs one initialization helper; app code can pass `name`
-explicitly when it has a human-readable or externally defined name, or omit it
-when the whole init-param object should define identity. Use
-`deriveDurableObjectNameFromInitParams({ initParams })` directly when other code
-needs the same generated name, for example before storing a callable with
-`durableObject: { name }`.
+The generated name is still the Cloudflare identity:
+
+```ts
+const name = deriveDurableObjectNameFromStructuredName({
+  structuredName: { projectId: "proj_123", streamPath: "/codemode/session-a" },
+});
+
+const stub = env.CODEMODE_SESSIONS.getByName(name);
+await stub.initialize({
+  name,
+});
+```
+
+If a name starts with `{`, the mixin tries to JSON-parse it and then feeds the
+result to the configured Zod schema. If JSON parsing fails, or the name does not
+start with `{`, the raw string is passed to the schema. With no schema,
+`withLifecycleHooks()` defaults to `z.string()`, so ordinary string-name Durable
+Objects stay simple.
+
+When a Durable Object also needs immutable creation-time data that should not be
+part of its name, configure `initialStateSchema`. This is deliberately separate
+from `nameSchema`: a structured name means the name itself contains the typed
+identity, while initial state means the first valid initialization must provide
+extra immutable data.
+
+```ts
+const SessionInitialState = z.object({
+  projectId: z.string(),
+  userId: z.string(),
+  streamPath: StreamPath,
+});
+
+const SessionBase = withLifecycleHooks({
+  initialStateSchema: SessionInitialState,
+})(withDurableObjectCore(DurableObject));
+
+const session = await getOrInitializeDoStub({
+  namespace: env.SESSIONS,
+  name: sessionId,
+  initialState: {
+    projectId,
+    userId,
+    streamPath,
+  },
+});
+```
+
+After first initialization, the object hydrates `this.initialState` from Durable
+Object storage. Later callers may initialize by name alone, but if they provide
+initial state again it must match the stored value exactly.
 
 Inside subclasses, use the protected getter:
 
 ```ts
 class Room extends RoomBase<Env> {
   sendMessage(text: string) {
-    const { name, ownerUserId } = this.initParams;
-    return { room: name, ownerUserId, text };
+    return {
+      room: this.name,
+      ownerUserId: this.structuredName.ownerUserId,
+      text,
+    };
   }
 }
 ```
 
-`this.initParams` throws `NotInitializedError` synchronously if initialization
-has not happened. External callers cannot access it because it is protected;
-their public API is `initialize(params)`, `ensureStarted()`, and
-`assertInitialized()`.
+`this.name`, `this.structuredName`, and `assertInitialized()` throw
+`NotInitializedError` synchronously if initialization has not happened. External
+callers cannot access the protected getters; their public API is
+`initialize({ name })`, `ensureStarted()`, and `assertInitialized()`.
 
-`assertInitialized()` and `this.initParams` are synchronous reads of already
-cached init params. They deliberately do not run startup work. Use
-`ensureStarted()` when a public method needs the asynchronous readiness
-boundary:
+`assertInitialized()` and `this.structuredName` are synchronous reads of already
+cached name state. They deliberately do not run startup work. Use
+`ensureStarted()` when a public method needs the asynchronous readiness boundary:
 
 ```ts
-async function handleRequest(this: Room) {
-  const init = await this.ensureStarted();
-  return init.name;
+class Room extends RoomBase<Env> {
+  async fetch(request: Request) {
+    await this.ensureStarted();
+    return Response.json({ name: this.name, ownerUserId: this.structuredName.ownerUserId });
+  }
 }
 ```
 
-Init params are persistent identity/config, not dependency injection. They must
-be values that can cross Durable Object RPC and be stored in Durable Object
+## Public Fetch Routing
+
+Use `withPublicFetchRoute()` when a Durable Object should advertise a stable
+public Worker route while still owning its own internal `fetch()` paths:
+
+```ts
+const ProjectBase = withPublicFetchRoute({
+  namespaceSlug: "projects",
+  defaultAddressing: "by-name",
+})(withLifecycleHooks({ nameSchema: ProjectInit })(withDurableObjectCore(DurableObject)));
+
+export class Project extends ProjectBase<Env> {
+  async fetch(request: Request) {
+    await this.ensureStarted();
+    return new Response(new URL(request.url).pathname);
+  }
+}
+```
+
+Instances can generate their own public path:
+
+```ts
+project.getPublicDurableObjectPath();
+project.getPublicDurableObjectPath({ mode: "by-id" });
+project.getPublicDurableObjectPath({ mode: "by-structured-name" });
+```
+
+The worker entrypoint mounts the proxy once near the top of `fetch()`, similar
+to Cloudflare Agents' `routeAgentRequest()` pattern:
+
+```ts
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const durableObjectResponse = await routeDurableObjectRequest(request, [
+      registerDurableObjectPublicRoute({
+        namespace: env.PROJECTS,
+        class: Project,
+      }),
+    ]);
+    if (durableObjectResponse) {
+      return durableObjectResponse;
+    }
+
+    return new Response("not a durable object route", { status: 404 });
+  },
+};
+```
+
+Public URLs always use one of these explicit address forms:
+
+- `/durable-objects/:namespaceSlug/by-name/:name/...`
+- `/durable-objects/:namespaceSlug/by-id/:durableObjectId/...`
+- `/durable-objects/:namespaceSlug/by-structured-name/:encodedCanonicalJson/...`
+
+The fetcher returns `undefined` when the request is outside the
+`/durable-objects` prefix, so the worker can continue with its normal routing.
+When it does match, the fetcher strips the public prefix, preserves the
+remaining path/query/method/headers/body, and forwards the rewritten request to
+`stub.fetch()`.
+
+Structured names are persistent identity, not dependency injection. They must be
+values that can cross Durable Object RPC and be stored in Durable Object
 storage. Do not put API clients, database handles, functions, sockets, or other
-runtime objects in init params. When the object later starts because of an alarm
-or hibernation wake, the runtime gives it only `ctx`, `env`, and local storage;
-anything non-serializable would be gone. Store identifiers and configuration in
-init params, then rebuild clients from `env` inside the object.
+runtime objects in a structured name. When the object later starts because of an
+alarm or hibernation wake, the runtime gives it only `ctx`, `env`, and local
+storage; anything non-serializable would be gone. Store identifiers in the name,
+then rebuild clients from `env` inside the object.
 
-For the base lifecycle mixin, primitives, arrays, and plain records are safest.
-Mixins that mirror data to D1 or alarm/scheduler SQLite rows are stricter: their
-init params or payloads must also round-trip through JSON.
+`LifecycleStructuredName` is intentionally small: either a string, or a flat
+record whose values are `string | number | boolean | null`. Do not nest objects,
+arrays, or hashed blobs. If a value is immutable identity for the object, prefer
+putting it directly in the structured name; if it is not identity, it belongs in
+normal storage/config instead.
 
-`withLifecycleHooks()` intentionally owns two lifecycle moments:
+`withLifecycleHooks()` intentionally owns two lifecycle moments. Subclasses
+should register work for these moments instead of overriding the mixin's public
+`initialize()` RPC method:
 
-- `registerOnFirstInitialize(fn)` runs after params are created for the first
+- `registerOnFirstInitialize(fn)` runs after name state is created for the first
   time. Completion is marked in the Durable Object's own storage. Hooks can
   retry after failure, so external side effects must still be idempotent.
-- `registerOnStart(fn)` runs once per Durable Object activation, after params
-  exist and after first-initialize hooks have completed.
+- `registerOnInstanceWake(fn)` runs once for each successful JavaScript
+  Durable Object instance wake, after name state exists and after first-initialize
+  hooks have completed.
 
 Both hook types are protected so only subclasses and later mixins can register
 them. They should be registered in constructors so the full hook list exists
@@ -259,25 +482,26 @@ class Room extends RoomBase<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
 
-    this.registerOnFirstInitialize(async (params) => {
-      await this.createInitialIndexes(params);
+    this.registerOnFirstInitialize(async (structuredName) => {
+      await this.createInitialIndexes(structuredName);
     });
 
-    this.registerOnStart((params) => {
-      this.ctx.storage.kv.put("last-started-room", params.name);
+    this.registerOnInstanceWake(() => {
+      this.ctx.storage.kv.put("last-woken-room", this.name);
     });
   }
 }
 ```
 
 Hooks are awaited by `initialize()` and `ensureStarted()` by default. That makes
-`ensureStarted()` an honest readiness boundary: after it resolves, params exist,
-first-initialize hooks have completed, and start hooks have completed. If work
-is only a best-effort mirror or log, start a separate caught promise and return
-quickly:
+`ensureStarted()` an honest readiness boundary: after it resolves, name state
+exists, first-initialize hooks have completed, and instance wake hooks have
+completed.
+If work is only a best-effort mirror or log, start a separate caught promise and
+return quickly:
 
 ```ts
-this.registerOnStart((params) => {
+this.registerOnInstanceWake((params) => {
   void this.updateExternalIndex(params).catch((error) => {
     console.error("failed to update external index", error);
   });
@@ -289,11 +513,11 @@ that it has no effect in Durable Objects; DOs remain active while there is
 ongoing work or pending I/O. The important part is catching the detached promise
 so best-effort work cannot become an unhandled rejection.
 
-Start hooks are retryable until the whole startup gate succeeds. If one start
-hook writes to an external system and a later start hook fails, the earlier hook
-may run again on the next `ensureStarted()` attempt. Treat start hooks as
-at-least-once work unless they only mutate local Durable Object storage inside
-the same startup gate.
+Instance wake hooks are retryable until the whole startup gate succeeds. If one
+instance wake hook writes to an external system and a later instance wake hook
+fails, the earlier hook may run again on the next `ensureStarted()` attempt.
+Treat instance wake hooks as at-least-once work unless they only mutate local
+Durable Object storage inside the same startup gate.
 
 `registerOnFirstInitialize()` is not a distributed exactly-once guarantee. It
 marks completion in the Durable Object after the hook succeeds. If the hook
@@ -301,12 +525,12 @@ writes to D1 and then crashes before the local completion marker is written, the
 hook may run again. That is why first-initialize hooks that touch external
 systems must use idempotent writes such as `INSERT ... ON CONFLICT`.
 
-Initialization is idempotent for the same object name and same parameter shape.
-If a Durable Object already has stored init params, `initialize()` returns those
-existing params instead of overwriting them. A different `name`, or different
-params for the same name, is treated as a programming error because otherwise
-different callers could silently disagree about the identity of the same named
-object.
+Initialization is idempotent for the same object name and same structured name.
+If a Durable Object already has stored lifecycle name state, `initialize()`
+returns that existing structured name instead of overwriting it. A different
+`name`, a different parsed structured name, or different provided initial state
+is treated as a programming error because otherwise callers could silently
+disagree about the identity or immutable setup of the same named object.
 
 ## D1 Object Catalog
 
@@ -330,7 +554,7 @@ const CatalogedRoomBase = withD1ObjectCatalog<RoomInit, NeedsCatalog>({
       return params.ownerUserId;
     },
   },
-})(withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject)));
+})(withLifecycleHooks({ nameSchema: RoomInit })(withDurableObjectCore(DurableObject)));
 ```
 
 The D1 write is best-effort and idempotent. The mixin sends
@@ -338,7 +562,7 @@ The D1 write is best-effort and idempotent. The mixin sends
 batch as each upsert, so object construction does not block on catalog-table
 setup.
 
-Catalog writes happen from the lifecycle start hook as a detached, caught
+Catalog writes happen from the lifecycle instance wake hook as a detached, caught
 promise. That is deliberate: this mixin is just a consumer of
 `withLifecycleHooks()`, not a separate lifecycle system. The Durable Object's
 local initialization remains the source of truth, and D1 is only a
@@ -350,13 +574,9 @@ tables do not exist yet. It never uses
 throws in Worker runtimes.
 
 The object row is keyed by `(class, name)`. `created_at` is the first insert
-time, while `last_started_at` is updated whenever the start hook runs. Init
-params used with this mixin must be JSON-compatible by convention because the D1
-mirror stores them as JSON text. `JSON.stringify()` catches some failures, such
-as circular references and `BigInt`, but it can silently drop or coerce nested
-functions, `Map`, and class instances. Use plain records/arrays/primitives. This
-is stricter than the base lifecycle hooks mixin, which only requires values that
-can be persisted in Durable Object storage.
+time, while `last_woken_at` is updated whenever the instance wake hook runs. The
+D1 mirror stores `structuredName` as JSON text, so only use the flat
+JSON-compatible structured-name shape supported by `withLifecycleHooks()`.
 
 Secondary indexes are stored in a separate table:
 
@@ -365,7 +585,7 @@ PRIMARY KEY (class, index_name, index_value, name)
 ```
 
 That avoids dynamic D1 columns and migrations for every new lookup dimension.
-Index functions should derive stable values from init params, for example
+Index functions should derive stable values from structured names, for example
 `ownerUserId`, `projectId`, or a list of member IDs:
 
 ```ts
@@ -401,7 +621,7 @@ platform alarm is always armed for the earliest row.
 
 This mixin requires `withLifecycleHooks()` below it. Scheduling and dispatch
 call `ensureStarted()`, so logical alarms only run after initialization,
-first-initialize hooks, and start hooks have completed. The diagnostic read
+first-initialize hooks, and instance wake hooks have completed. The diagnostic read
 `getMultiplexedAlarms()` intentionally does not require initialization because
 seeing alarm rows on an uninitialized object is useful debugging evidence.
 
@@ -412,7 +632,7 @@ type RoomInit = {
 };
 
 const RoomBase = withMultiplexedAlarms<RoomInit>()(
-  withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject)),
+  withLifecycleHooks({ nameSchema: RoomInit })(withDurableObjectCore(DurableObject)),
 );
 
 class Room extends RoomBase<Env> {
@@ -421,7 +641,7 @@ class Room extends RoomBase<Env> {
       key: "daily-summary",
       runAt: Date.now() + 60_000,
       method: "sendDailySummary",
-      payload: { room: this.initParams.name },
+      payload: { room: this.name },
     });
   }
 
@@ -437,8 +657,8 @@ cancel rows; external callers can only inspect rows through
 `getMultiplexedAlarms()` unless the object exposes its own public method.
 
 `key` is a stable idempotency key. Scheduling the same key again replaces the
-existing row, which makes it safe to call from `registerOnStart()` without
-creating duplicates on every Durable Object activation.
+existing row, which makes it safe to call from `registerOnInstanceWake()` without
+creating duplicates on every JavaScript Durable Object instance wake.
 
 `method` is a string on purpose. TypeScript cannot reflect protected instance
 methods into a clean payload-safe scheduler API without making the mixin much
@@ -452,8 +672,8 @@ Payloads are `unknown` and persisted through JSON text at schedule time.
 `BigInt`, but it can silently drop or coerce nested functions, `Map`, and class
 instances. Do not pass clients, handles, functions, sockets, or class instances.
 Alarm rows must survive eviction, hibernation, and deploys, so the method should
-rebuild dependencies from `env` and use init params only for persisted identity
-or configuration.
+rebuild dependencies from `env` and use structured names only for persisted
+identity.
 
 Logical alarm rows are one-shot in this first version. Rows are deleted only
 after the target method succeeds. If a target method throws, the row remains
@@ -475,7 +695,7 @@ retry metadata.
 ```ts
 const RoomBase = withScheduler<RoomInit>()(
   withMultiplexedAlarms<RoomInit>()(
-    withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject)),
+    withLifecycleHooks({ nameSchema: RoomInit })(withDurableObjectCore(DurableObject)),
   ),
 );
 
@@ -484,7 +704,7 @@ class Room extends RoomBase<Env> {
     await this.schedule({
       key: "daily-summary",
       method: "sendDailySummary",
-      payload: { room: this.initParams.name },
+      payload: { room: this.name },
       recurrence: {
         type: "cron",
         expression: "0 9 * * *",
@@ -504,10 +724,10 @@ verbose, but it keeps the recurrence semantics explicit and follows this repo's
 rule to prefer options bags when positional parameters are easy to confuse.
 
 Every schedule has a required `key`. Reusing the same key replaces the existing
-schedule, so calls from `registerOnStart()` are idempotent by default:
+schedule, so calls from `registerOnInstanceWake()` are idempotent by default:
 
 ```ts
-this.registerOnStart(() =>
+this.registerOnInstanceWake(() =>
   this.schedule({
     key: "poll-api",
     method: "pollAPI",
@@ -611,7 +831,7 @@ type Env = {
 
 const DiscordBase = withScheduler<DiscordInit>()(
   withMultiplexedAlarms<DiscordInit>()(
-    withLifecycleHooks<DiscordInit>()(withDurableObjectCore(DurableObject)),
+    withLifecycleHooks({ nameSchema: DiscordInit })(withDurableObjectCore(DurableObject)),
   ),
 );
 
@@ -632,7 +852,7 @@ export class DiscordConnection extends DiscordBase<Env> {
 
     // Do not wait for the first interval tick. The scheduled row is what
     // brings the object back after restart; this immediate call gives the
-    // current activation a chance to connect now.
+    // current JavaScript instance a chance to connect now.
     await this.ensureDiscordConnected();
   }
 
@@ -673,7 +893,7 @@ export class DiscordConnection extends DiscordBase<Env> {
       // This is deliberately not a complete Discord gateway implementation.
       // Real code should send a valid Identify or Resume payload and persist
       // enough sequence/session state in DO storage to resume after restart.
-      console.log("connected Discord gateway for guild", this.initParams.guildId);
+      console.log("connected Discord gateway for guild", this.structuredName.guildId);
       socket.send(
         JSON.stringify({
           token: this.env.DISCORD_TOKEN,
@@ -719,9 +939,9 @@ metadata.
 
 For an opaque long-running promise, use a future `keepAliveWhile({ promise })`
 style helper only as best-effort in-memory liveness. It can reduce the chance
-that a current activation goes idle while the promise is pending, but it cannot
-recover the promise, local variables, sockets, or partially completed external
-side effects after a restart.
+that a current JavaScript instance goes idle while the promise is pending, but it
+cannot recover the promise, local variables, sockets, or partially completed
+external side effects after a restart.
 
 ## Debug Inspectors
 

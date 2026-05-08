@@ -36,28 +36,34 @@ export const test = base.extend({
 });
 
 export async function login(page: Page, email: string) {
+  await page.context().clearCookies();
   await page.goto("/login");
+  await page.getByText("Sign in with Iterate").click();
+
+  await waitForEnabledTestId(page, "email-login-button");
+  const emailLoginButton = page.getByTestId("email-login-button");
+  await emailLoginButton.click();
 
   const emailInput = page.getByTestId("email-input");
   await emailInput.waitFor();
-  // Wait for hydration to complete - input is disabled until then
   await emailInput.fill(email);
 
   const submitButton = page.getByTestId("email-submit-button");
   await submitButton.waitFor();
   await submitButton.click();
 
-  await page.getByText("Enter verification code").waitFor();
-
   const firstOtpInput = page.locator('input[inputmode="numeric"]').first();
+  await firstOtpInput.waitFor();
   await firstOtpInput.focus();
   await page.keyboard.type(TEST_OTP);
+  await page.getByTestId("email-verify-button").click();
 
-  await page
-    .locator("h1")
-    .filter({ hasText: /Welcome to Iterate|Create organization|Dashboard|Projects/ })
-    .first()
-    .waitFor();
+  const postOtpDestination = await Promise.any([waitForConsent(page), waitForSignedInPage(page)]);
+
+  if (postOtpDestination === "consent") {
+    await page.getByRole("button", { name: "Allow" }).click();
+    await waitForSignedInPage(page);
+  }
 }
 
 export async function createOrganization(page: Page, orgName = `E2E Org ${Date.now()}`) {
@@ -93,7 +99,7 @@ export function sidebarButton(page: Page, text: string | RegExp) {
 export async function logout(page: Page) {
   await page.locator(`[data-slot="sidebar-footer"] button`).click();
   await page.getByRole("menuitem", { name: "Log out" }).click();
-  await page.getByTestId("email-input").waitFor();
+  await page.getByText("Sign in with Iterate").waitFor();
 }
 
 function toastLocator(page: Page, type: "error" | "success", text?: string | RegExp) {
@@ -104,3 +110,26 @@ export const toast = {
   error: (page: Page, text?: string | RegExp) => toastLocator(page, "error", text),
   success: (page: Page, text?: string | RegExp) => toastLocator(page, "success", text),
 };
+
+export async function waitForEnabledTestId(page: Page, testId: string) {
+  await page.getByTestId(testId).waitFor();
+  await page.waitForFunction((value) => {
+    const element = document.querySelector(`[data-testid="${value}"]`);
+    return element instanceof HTMLButtonElement ? !element.disabled : element !== null;
+  }, testId);
+}
+
+async function waitForConsent(page: Page) {
+  await page.getByRole("button", { name: "Allow" }).waitFor();
+  return "consent" as const;
+}
+
+async function waitForSignedInPage(page: Page) {
+  await Promise.any([
+    page.getByRole("heading", { name: "Welcome to Iterate" }).waitFor(),
+    page.locator("[data-component='OrgSwitcher']").waitFor(),
+    page.getByLabel("Project name").waitFor(),
+    page.getByRole("heading", { name: "Pending invites" }).waitFor(),
+  ]);
+  return "signed-in" as const;
+}

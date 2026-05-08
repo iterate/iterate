@@ -1,17 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
-import type { Event, EventInput, StreamPath, StreamState } from "@iterate-com/events-contract";
+import type { Event, EventInput, StreamPath, StreamState } from "@iterate-com/shared/streams/types";
 import {
   AlertTriangleIcon,
-  BotIcon,
-  Clock3Icon,
-  BookOpenIcon,
   BracesIcon,
   CableIcon,
   CheckCircle2Icon,
-  ChevronDownIcon,
-  ChevronLeftIcon,
-  ChevronRightIcon,
   CircleIcon,
   Code2Icon,
   CopyIcon,
@@ -44,44 +38,36 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@iterate-com/ui/components/collapsible";
+import { EventsStreamEventInspectorSheet } from "@iterate-com/ui/components/events/event-inspector-sheet";
+import { ExpandableFeedText } from "@iterate-com/ui/components/events/feed-element-renderers/expandable-feed-text";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Spinner } from "@iterate-com/ui/components/spinner";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@iterate-com/ui/components/sheet";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { StreamErrorAlert } from "~/components/stream-error-alert.tsx";
+import { CoreEventTypeLabel } from "~/components/event-type.tsx";
 import { StreamPathLabel } from "~/components/stream-path-label.tsx";
 import { StreamToolCard } from "~/components/stream-tool-card.tsx";
-import { getEventTypePageByType } from "~/lib/event-type-pages.ts";
+import { getProcessorEventDocByType } from "~/lib/processor-docs.ts";
 import { orderEventKeysForYamlDisplay } from "~/lib/order-event-keys-for-yaml-display.ts";
 import { formatElapsedTime } from "~/lib/stream-feed-time.ts";
-import { getAdjacentEventOffset, getEventFeedItems } from "~/lib/stream-feed-projection.ts";
+import { getEventFeedItems } from "~/lib/stream-feed-projection.ts";
 import { getRelativeStreamPath } from "~/lib/stream-path-relative.ts";
 import { summarizeStreamFeed } from "~/lib/stream-feed-summary.ts";
 import { streamPathToSplat } from "~/lib/stream-links.ts";
 import { defaultStreamViewSearch } from "~/lib/stream-view-search.ts";
 import type {
-  BashmodeBlockFeedItem,
+  AgentStatusFeedItem,
   CodemodeBlockFeedItem,
   CodemodeResultFeedItem,
   CustomHtmlRenderErrorFeedItem,
   CustomHtmlRenderedEventFeedItem,
-  DynamicWorkerConfiguredFeedItem,
-  DynamicWorkerEnvVarSetFeedItem,
   ChildStreamCreatedFeedItem,
   EventFeedItem,
   ExternalSubscriberConfiguredFeedItem,
   GroupedEventFeedItem,
-  JsonataTransformerConfiguredFeedItem,
-  SchedulerControlFeedItem,
   StreamErrorOccurredFeedItem,
   StreamFeedItem,
   StreamLifecycleFeedItem,
@@ -95,8 +81,14 @@ type StreamLinkSearch = {
   composer?: string;
   event?: number;
   renderer?: string;
+  view?: string;
   [key: string]: unknown;
 };
+
+function isLiveStreamFailureStatus(status: string | undefined) {
+  if (status == null) return false;
+  return status.startsWith("Error:") || status.startsWith("Timed out");
+}
 
 export type CustomHtmlRendererApi = {
   streamPath: StreamPath;
@@ -118,6 +110,7 @@ export function StreamEventFeed({
   rendererMode,
   emptyLabel,
   isPending = false,
+  liveStreamStatus,
   openEventOffset,
   onOpenEventOffsetChange,
   rendererApi,
@@ -127,6 +120,8 @@ export function StreamEventFeed({
   rendererMode: StreamRendererMode;
   emptyLabel: string;
   isPending?: boolean;
+  /** From `useLiveStreamEvents` — oRPC connect errors / timeouts, independent of the event log. */
+  liveStreamStatus?: string;
   openEventOffset?: number;
   onOpenEventOffsetChange?: (offset?: number) => void;
   rendererApi?: CustomHtmlRendererApi;
@@ -157,6 +152,7 @@ export function StreamEventFeed({
   const feedSummary = useMemo(() => summarizeStreamFeed(feed), [feed]);
 
   const items = displayFeed ?? [];
+  const liveStreamFailed = !isPending && isLiveStreamFailureStatus(liveStreamStatus);
 
   useEffect(() => {
     if (rendererApi == null) {
@@ -180,9 +176,21 @@ export function StreamEventFeed({
           {rawEvents.length === 0 ? (
             <ConversationEmptyState
               className="h-full min-h-[240px] rounded-lg border bg-card text-sm text-muted-foreground"
-              description={isPending ? "Connecting to the stream." : emptyLabel}
+              description={
+                isPending
+                  ? "Connecting to the stream."
+                  : liveStreamFailed
+                    ? (liveStreamStatus ?? "")
+                    : emptyLabel
+              }
               icon={isPending ? <Spinner className="size-4" /> : undefined}
-              title={isPending ? "Loading events" : "No events yet"}
+              title={
+                isPending
+                  ? "Loading events"
+                  : liveStreamFailed
+                    ? "Could not open live stream"
+                    : "No events yet"
+              }
             />
           ) : (
             <SerializedObjectCodeBlock
@@ -205,6 +213,12 @@ export function StreamEventFeed({
                   icon={<Spinner className="size-4" />}
                   title="Loading events"
                   description="Connecting to the stream."
+                />
+              ) : liveStreamFailed ? (
+                <ConversationEmptyState
+                  className="min-h-[240px] rounded-lg border border-destructive/30 bg-destructive/5 text-sm text-muted-foreground"
+                  title="Could not open live stream"
+                  description={liveStreamStatus ?? "Unknown error"}
                 />
               ) : rendererMode === "pretty" && feed.length > 0 ? (
                 <ConversationEmptyState
@@ -235,10 +249,11 @@ export function StreamEventFeed({
         </Conversation>
       )}
 
-      <EventInspectorSheet
-        events={eventFeedItems}
+      <EventsStreamEventInspectorSheet
+        events={eventFeedItems.map((item) => item.raw)}
         openEventOffset={openEventOffset}
         onOpenEventOffsetChange={onOpenEventOffsetChange}
+        getEventTypeHref={(eventType) => getProcessorEventDocByType(eventType)?.href}
       />
     </div>
   );
@@ -290,30 +305,22 @@ function StreamFeedItemRenderer({
       return <StreamMetadataUpdatedCard item={item} />;
     case "external-subscriber-configured":
       return <ExternalSubscriberConfiguredCard item={item} />;
-    case "jsonata-transformer-configured":
-      return <JsonataTransformerConfiguredCard item={item} />;
     case "custom-html-rendered-event":
       return <CustomHtmlRenderedEventCard item={item} />;
     case "custom-html-render-error":
       return <CustomHtmlRenderErrorCard item={item} />;
     case "stream-lifecycle":
       return <StreamLifecycleLine item={item} />;
-    case "dynamic-worker-configured":
-      return <DynamicWorkerConfiguredCard item={item} />;
-    case "dynamic-worker-env-var-set":
-      return <DynamicWorkerEnvVarSetCard item={item} />;
     case "stream-paused":
       return <StreamPausedCard item={item} />;
     case "stream-resumed":
       return <StreamResumedCard item={item} />;
     case "stream-error-occurred":
       return <StreamErrorOccurredCard item={item} />;
-    case "scheduler-control":
-      return <SchedulerControlCard item={item} />;
+    case "agent-status":
+      return <AgentStatusLine item={item} />;
     case "codemode-block":
       return <CodemodeBlockCard item={item} />;
-    case "bashmode-block":
-      return <BashmodeBlockCard item={item} />;
     case "codemode-result":
       return <CodemodeResultCard item={item} />;
     default:
@@ -343,6 +350,7 @@ function ChildStreamCreatedCard({ item }: { item: ChildStreamCreatedFeedItem }) 
             event: undefined,
             composer: previous.composer ?? defaultStreamViewSearch.composer,
             renderer: previous.renderer ?? defaultStreamViewSearch.renderer,
+            view: previous.view ?? defaultStreamViewSearch.view,
           })}
           className="block min-w-0 max-w-full text-foreground hover:text-primary hover:underline"
         >
@@ -361,13 +369,24 @@ function ChildStreamCreatedCard({ item }: { item: ChildStreamCreatedFeedItem }) 
 
 function ChatMessageCard({ item }: { item: Extract<StreamFeedItem, { kind: "message" }> }) {
   const content = item.content.map((block) => block.text).join("");
+  const isMarkdownMessage = item.content.every((block) => block.type === "markdown");
   const showStreaming = item.role === "assistant" && item.streamStatus === "streaming";
   const showCopyToolbar = item.role === "assistant" && content.length > 0;
 
   return (
     <Message from={item.role}>
       <MessageContent>
-        <MessageResponse>{content.length > 0 ? content : showStreaming ? "…" : ""}</MessageResponse>
+        {isMarkdownMessage ? (
+          <MessageResponse className="min-w-0 max-w-full overflow-hidden">
+            {content.length > 0 ? content : showStreaming ? "…" : ""}
+          </MessageResponse>
+        ) : item.role === "user" ? (
+          <UserMessageText>{content}</UserMessageText>
+        ) : (
+          <MessageResponse className="min-w-0 max-w-full overflow-hidden">
+            {content.length > 0 ? content : showStreaming ? "…" : ""}
+          </MessageResponse>
+        )}
       </MessageContent>
       {showCopyToolbar ? (
         <MessageToolbar className="mt-1.5 w-fit max-w-full justify-start gap-2">
@@ -386,6 +405,14 @@ function ChatMessageCard({ item }: { item: Extract<StreamFeedItem, { kind: "mess
         </MessageToolbar>
       ) : null}
     </Message>
+  );
+}
+
+function UserMessageText({ children }: { children: string }) {
+  return (
+    <div className="max-h-[40vh] max-w-full overflow-auto whitespace-pre-wrap wrap-break-word leading-6">
+      {children}
+    </div>
   );
 }
 
@@ -430,31 +457,6 @@ function ExternalSubscriberConfiguredCard({
       <ArtifactSection>
         <SerializedObjectCodeBlock
           data={item.subscriber}
-          className="min-h-24 max-h-56"
-          initialFormat="json"
-          showToggle
-          showCopyButton
-        />
-      </ArtifactSection>
-    </AssistantArtifact>
-  );
-}
-
-function JsonataTransformerConfiguredCard({
-  item,
-}: {
-  item: JsonataTransformerConfiguredFeedItem;
-}) {
-  return (
-    <AssistantArtifact
-      eyebrow={<Settings2Icon className="size-3.5" />}
-      eyebrowLabel="JSONata transformer configured"
-      title={item.transformer.slug}
-      meta={[formatTime(item.timestamp)]}
-    >
-      <ArtifactSection>
-        <SerializedObjectCodeBlock
-          data={item.transformer}
           className="min-h-24 max-h-56"
           initialFormat="json"
           showToggle
@@ -524,100 +526,24 @@ function StreamLifecycleLine({ item }: { item: StreamLifecycleFeedItem }) {
   );
 }
 
-function DynamicWorkerConfiguredCard({ item }: { item: DynamicWorkerConfiguredFeedItem }) {
-  const [open, setOpen] = useState(false);
-  const previewCode = getSourceCodePreview(item.sourceCode, 10);
-  const hasMoreCode = previewCode !== item.sourceCode;
-  const gatewaySummary = item.outboundGateway
-    ? item.outboundGateway.secretHeaderName
-      ? `${item.outboundGateway.entrypoint} · injects ${item.outboundGateway.secretHeaderName}`
-      : item.outboundGateway.entrypoint
-    : undefined;
-
+function AgentStatusLine({ item }: { item: AgentStatusFeedItem }) {
+  const working = item.status === "working";
+  const label = working ? "Agent working" : "Agent idle";
   return (
-    <AssistantArtifact
-      eyebrow={<BotIcon className="size-3.5" />}
-      eyebrowLabel="Dynamic worker configured"
-      title={item.slug}
-      meta={[
-        ...(item.compatibilityDate ? [item.compatibilityDate] : []),
-        ...(item.compatibilityFlags.length > 0
-          ? [
-              `${item.compatibilityFlags.length} compatibility flag${item.compatibilityFlags.length === 1 ? "" : "s"}`,
-            ]
-          : []),
-        ...(gatewaySummary ? [gatewaySummary] : []),
-        formatTime(item.timestamp),
-      ]}
-    >
-      <ArtifactSection>
-        <div className="rounded-md border bg-muted/30 p-3">
-          <div className="flex items-center justify-between gap-3">
-            <div className="space-y-0.5">
-              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Processor source
-              </div>
-              <div className="text-xs text-muted-foreground">
-                {hasMoreCode ? "Showing first 10 lines" : "Full source"}
-              </div>
-            </div>
-            {hasMoreCode ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 gap-1.5 px-2 text-xs"
-                onClick={() => setOpen((value) => !value)}
-              >
-                {open ? "Collapse" : "Expand"}
-                <ChevronDownIcon
-                  className={cn("size-3.5 transition-transform duration-200", open && "rotate-180")}
-                />
-              </Button>
-            ) : null}
-          </div>
-
-          <div
-            className={cn(
-              "grid transition-all duration-300 ease-in-out",
-              open || !hasMoreCode ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-100",
-            )}
-          >
-            <div className="overflow-hidden pt-3">
-              <SourceCodeBlock
-                code={open || !hasMoreCode ? item.sourceCode : previewCode}
-                language="typescript"
-                className={cn("min-h-32", open ? "max-h-144" : "max-h-72")}
-                showCopyButton
-              />
-            </div>
-          </div>
-        </div>
-      </ArtifactSection>
-    </AssistantArtifact>
-  );
-}
-
-function DynamicWorkerEnvVarSetCard({ item }: { item: DynamicWorkerEnvVarSetFeedItem }) {
-  return (
-    <AssistantArtifact
-      eyebrow={<Settings2Icon className="size-3.5" />}
-      eyebrowLabel="Dynamic worker env var set"
-      title={item.key}
-      meta={[
-        item.usesIterateSecret ? "Uses getIterateSecret placeholder" : "Literal string value",
-        formatTime(item.timestamp),
-      ]}
-    >
-      <ArtifactSection>
-        <p className="text-sm text-muted-foreground">
-          Available to dynamic workers as <code>{`process.env.${item.key}`}</code>.
-        </p>
-        <p className="text-sm text-muted-foreground">
-          Pretty view hides the raw value; inspect the raw event payload if you need the exact
-          stored string.
-        </p>
-      </ArtifactSection>
-    </AssistantArtifact>
+    <div className="flex items-center gap-3 py-2">
+      <div className="h-px flex-1 bg-border" />
+      <div
+        className={cn(
+          "inline-flex items-center gap-2 rounded-full border bg-background px-3 py-1 text-[11px] font-medium uppercase tracking-[0.14em] shadow-sm",
+          working ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground",
+        )}
+      >
+        <CircleIcon className={`size-2 fill-current ${working ? "animate-pulse" : ""}`} />
+        <span>{label}</span>
+        <span className="normal-case tracking-normal text-muted-foreground">{item.reason}</span>
+      </div>
+      <div className="h-px flex-1 bg-border" />
+    </div>
   );
 }
 
@@ -650,82 +576,42 @@ function StreamErrorOccurredCard({ item }: { item: StreamErrorOccurredFeedItem }
     <AssistantArtifact
       eyebrow={<AlertTriangleIcon className="size-3.5" />}
       eyebrowLabel="Error occurred"
-      title={item.message}
+      title="Processor error"
       meta={[formatTime(item.timestamp)]}
       tone="danger"
-    />
-  );
-}
-
-function SchedulerControlCard({ item }: { item: SchedulerControlFeedItem }) {
-  const eyebrowLabel = item.action === "configured" ? "Schedule configured" : "Schedule cancelled";
-  const title = item.slug;
-  const data =
-    item.action === "configured"
-      ? {
-          slug: item.slug,
-          callback: item.callback,
-          schedule: item.schedule,
-          nextRunAt: item.nextRunAt,
-          payload: tryParseJson(item.payloadJson),
-        }
-      : { slug: item.slug };
-
-  return (
-    <AssistantArtifact
-      eyebrow={<Clock3Icon className="size-3.5" />}
-      eyebrowLabel={eyebrowLabel}
-      title={title}
-      meta={buildSchedulerControlMeta(item)}
-      tone={item.action === "cancelled" ? "warning" : "default"}
     >
       <ArtifactSection>
-        <SerializedObjectCodeBlock
-          data={data}
-          className="min-h-20 max-h-64"
-          initialFormat="yaml"
-          showToggle
-          showCopyButton
-        />
+        <ExpandableFeedText
+          text={item.message}
+          collapsedLabel="Show full error"
+          className="border-destructive/20"
+        >
+          <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-5 text-destructive">
+            {item.message}
+          </pre>
+        </ExpandableFeedText>
       </ArtifactSection>
     </AssistantArtifact>
   );
 }
 
 function CodemodeBlockCard({ item }: { item: CodemodeBlockFeedItem }) {
+  const languageLabel = item.language.toUpperCase();
+  const sourceLanguage = item.language === "ts" || item.language === "js" ? "typescript" : "text";
+
   return (
     <AssistantArtifact
       eyebrow={<Code2Icon className="size-3.5" />}
       eyebrowLabel="Codemode block"
       title={item.blockId}
       badge={item.requestId}
-      meta={[item.language.toUpperCase(), formatTime(item.timestamp)]}
+      meta={[languageLabel, formatTime(item.timestamp)]}
     >
       <ArtifactSection>
         <SourceCodeBlock
           code={item.code}
-          language={item.language === "ts" ? "typescript" : "text"}
+          language={sourceLanguage}
           className="min-h-40 max-h-128"
-          showCopyButton
-        />
-      </ArtifactSection>
-    </AssistantArtifact>
-  );
-}
-
-function BashmodeBlockCard({ item }: { item: BashmodeBlockFeedItem }) {
-  return (
-    <AssistantArtifact
-      eyebrow={<TerminalSquareIcon className="size-3.5" />}
-      eyebrowLabel="Bash block"
-      title="shell"
-      meta={[formatTime(item.timestamp)]}
-    >
-      <ArtifactSection>
-        <SourceCodeBlock
-          code={item.content}
-          language="text"
-          className="min-h-32 max-h-128"
           showCopyButton
         />
       </ArtifactSection>
@@ -738,6 +624,13 @@ function CodemodeResultCard({ item }: { item: CodemodeResultFeedItem }) {
   const [stderrOpen, setStderrOpen] = useState(item.stderr.length > 0 && !item.success);
   const StatusIcon = item.success ? CheckCircle2Icon : XCircleIcon;
   const statusLabel = item.success ? "Succeeded" : "Failed";
+  const meta = [
+    item.blockCount == null ? null : `Block #${item.blockCount}`,
+    item.exitCode == null ? null : `Exit ${item.exitCode}`,
+    item.durationMs == null ? null : formatDuration(item.durationMs),
+    formatTime(item.timestamp),
+  ].filter((value): value is string => value != null);
+  const hasArtifacts = item.codePath != null || item.outputPath != null;
 
   return (
     <AssistantArtifact
@@ -745,12 +638,7 @@ function CodemodeResultCard({ item }: { item: CodemodeResultFeedItem }) {
       eyebrowLabel="Codemode result"
       title={item.blockId}
       badge={item.requestId}
-      meta={[
-        `Block #${item.blockCount}`,
-        `Exit ${item.exitCode}`,
-        formatDuration(item.durationMs),
-        formatTime(item.timestamp),
-      ]}
+      meta={meta}
       headerExtra={
         <span
           className={cn(
@@ -766,18 +654,20 @@ function CodemodeResultCard({ item }: { item: CodemodeResultFeedItem }) {
       }
       tone={item.success ? "success" : "danger"}
     >
-      <ArtifactSection>
-        <div className="rounded-md border bg-muted/40 p-3 text-xs text-muted-foreground">
-          <div className="flex items-center gap-2">
-            <BracesIcon className="size-3.5" />
-            <span className="font-medium text-foreground">Artifacts</span>
+      {hasArtifacts ? (
+        <ArtifactSection>
+          <div className="rounded-md border bg-muted/40 p-3 text-xs text-muted-foreground">
+            <div className="flex items-center gap-2">
+              <BracesIcon className="size-3.5" />
+              <span className="font-medium text-foreground">Artifacts</span>
+            </div>
+            <div className="mt-2 space-y-1 font-mono">
+              {item.codePath == null ? null : <div>{item.codePath}</div>}
+              {item.outputPath == null ? null : <div>{item.outputPath}</div>}
+            </div>
           </div>
-          <div className="mt-2 space-y-1 font-mono">
-            <div>{item.codePath}</div>
-            <div>{item.outputPath}</div>
-          </div>
-        </div>
-      </ArtifactSection>
+        </ArtifactSection>
+      ) : null}
 
       <ArtifactSection>
         <Collapsible open={stdoutOpen} onOpenChange={setStdoutOpen}>
@@ -922,54 +812,6 @@ function ArtifactSection({ children }: { children: ReactNode }) {
   return <div className="space-y-2">{children}</div>;
 }
 
-function getSourceCodePreview(sourceCode: string, lineCount: number) {
-  const lines = sourceCode.split("\n");
-  if (lines.length <= lineCount) {
-    return sourceCode;
-  }
-
-  return `${lines.slice(0, lineCount).join("\n")}\n...`;
-}
-
-function buildSchedulerControlMeta(item: SchedulerControlFeedItem) {
-  const meta = [formatTime(item.timestamp)];
-
-  if (item.schedule != null) {
-    meta.unshift(describeSchedule(item.schedule));
-  }
-
-  if (item.action === "configured" && item.nextRunAt != null) {
-    meta.push(`Next run ${formatTime(item.nextRunAt * 1000)}`);
-  }
-
-  return meta;
-}
-
-function describeSchedule(schedule: NonNullable<SchedulerControlFeedItem["schedule"]>) {
-  switch (schedule.kind) {
-    case "once-at":
-      return `Once at ${schedule.at}`;
-    case "once-in":
-      return `Once in ${schedule.delaySeconds}s`;
-    case "every":
-      return `Every ${schedule.intervalSeconds}s`;
-    case "cron":
-      return `Cron ${schedule.cron}`;
-  }
-}
-
-function tryParseJson(payloadJson: string | null | undefined) {
-  if (payloadJson == null) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(payloadJson);
-  } catch {
-    return payloadJson;
-  }
-}
-
 function EventLine({
   event,
   elapsedLabel,
@@ -1040,7 +882,7 @@ function GroupedEventLine({
               : ""}
           </span>
           <span>·</span>
-          <span className="truncate font-mono">{group.eventType}</span>
+          <CoreEventTypeLabel type={group.eventType} className="truncate" />
           <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
             x{group.count}
           </Badge>
@@ -1074,7 +916,7 @@ function renderEventSummary({
     <>
       <span className="font-mono">{event.offset}</span>
       <span>·</span>
-      <span className="truncate font-mono">{event.eventType}</span>
+      <CoreEventTypeLabel type={event.eventType} className="truncate" />
       {elapsedLabel ? (
         <>
           <span>·</span>
@@ -1122,177 +964,6 @@ function RawEventLineButton({
   );
 }
 
-function EventInspectorSheet({
-  events,
-  openEventOffset,
-  onOpenEventOffsetChange,
-}: {
-  events: readonly EventFeedItem[];
-  openEventOffset?: number;
-  onOpenEventOffsetChange?: (offset?: number) => void;
-}) {
-  const selectedEvent = useMemo(
-    () => events.find((event) => event.offset === openEventOffset),
-    [events, openEventOffset],
-  );
-  const previousOffset = useMemo(
-    () => getAdjacentEventOffset(events, openEventOffset, "previous"),
-    [events, openEventOffset],
-  );
-  const nextOffset = useMemo(
-    () => getAdjacentEventOffset(events, openEventOffset, "next"),
-    [events, openEventOffset],
-  );
-  const previousEvent = useMemo(
-    () => events.find((event) => event.offset === previousOffset),
-    [events, previousOffset],
-  );
-  const nextEvent = useMemo(
-    () => events.find((event) => event.offset === nextOffset),
-    [events, nextOffset],
-  );
-  const docsHref = selectedEvent
-    ? getEventTypePageByType(selectedEvent.eventType)?.href
-    : undefined;
-  const timeSincePreviousEvent =
-    selectedEvent && previousEvent
-      ? formatElapsedTime(selectedEvent.timestamp - previousEvent.timestamp)
-      : undefined;
-  const timeToNextEvent =
-    selectedEvent && nextEvent
-      ? formatElapsedTime(nextEvent.timestamp - selectedEvent.timestamp)
-      : undefined;
-
-  useEffect(() => {
-    if (selectedEvent == null) {
-      return;
-    }
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
-        return;
-      }
-
-      if (event.key === "ArrowLeft" && previousOffset) {
-        event.preventDefault();
-        onOpenEventOffsetChange?.(previousOffset);
-      }
-
-      if (event.key === "ArrowRight" && nextOffset) {
-        event.preventDefault();
-        onOpenEventOffsetChange?.(nextOffset);
-      }
-    };
-
-    // Route search state owns the currently selected event, so keyboard
-    // navigation updates `?event=<offset>` instead of mutating local state.
-    // TanStack Router docs:
-    // https://github.com/tanstack/router/blob/main/docs/router/guide/search-params.md
-    // https://github.com/tanstack/router/blob/main/docs/router/how-to/navigate-with-search-params.md
-    //
-    window.addEventListener("keydown", handleKeyDown, { capture: true });
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown, { capture: true });
-    };
-  }, [nextOffset, onOpenEventOffsetChange, previousOffset, selectedEvent]);
-
-  return (
-    <Sheet
-      open={selectedEvent != null}
-      onOpenChange={(open) => {
-        if (!open) {
-          onOpenEventOffsetChange?.(undefined);
-        }
-      }}
-    >
-      <SheetContent className="w-full gap-0 data-[side=right]:sm:w-[min(96vw,120rem)] data-[side=right]:sm:max-w-[min(96vw,120rem)]">
-        <SheetHeader className="space-y-2 border-b px-4 py-3 pr-14">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0 flex-1 space-y-1">
-              <SheetTitle className="truncate font-mono text-sm">
-                {docsHref ? (
-                  <a
-                    href={docsHref}
-                    className="inline-flex items-center gap-2 hover:text-primary hover:underline"
-                  >
-                    <span className="truncate">{selectedEvent?.eventType ?? "Event"}</span>
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <span className="inline-flex items-center text-muted-foreground hover:text-primary" />
-                        }
-                      >
-                        <BookOpenIcon className="size-3.5" />
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>RTFM</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </a>
-                ) : (
-                  (selectedEvent?.eventType ?? "Event")
-                )}
-              </SheetTitle>
-              <SheetDescription>{selectedEvent?.createdAt ?? "No event selected"}</SheetDescription>
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={!previousOffset}
-                onClick={() => onOpenEventOffsetChange?.(previousOffset)}
-              >
-                <ChevronLeftIcon />
-                Prev
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={!nextOffset}
-                onClick={() => onOpenEventOffsetChange?.(nextOffset)}
-              >
-                Next
-                <ChevronRightIcon />
-              </Button>
-            </div>
-          </div>
-          {selectedEvent ? (
-            <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center">
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <span>Event {selectedEvent.offset}</span>
-                <span className="text-muted-foreground/70">Use left and right arrow keys.</span>
-              </div>
-              <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-2.5 py-1">
-                <span className="text-muted-foreground/70">Since previous</span>
-                <span className="font-mono text-foreground">
-                  {timeSincePreviousEvent ?? "No previous event"}
-                </span>
-              </div>
-              <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-2.5 py-1">
-                <span className="text-muted-foreground/70">Until next</span>
-                <span className="font-mono text-foreground">
-                  {timeToNextEvent ?? "No next event"}
-                </span>
-              </div>
-            </div>
-          ) : null}
-        </SheetHeader>
-
-        <div className="min-h-0 flex-1 overflow-hidden px-4 py-3">
-          <div className="pb-2 text-xs text-muted-foreground">Raw event payload</div>
-          <SerializedObjectCodeBlock
-            data={selectedEvent == null ? null : orderEventKeysForYamlDisplay(selectedEvent.raw)}
-            className="h-full min-h-[68vh]"
-            initialFormat="yaml"
-            showToggle
-            showCopyButton
-          />
-        </div>
-      </SheetContent>
-    </Sheet>
-  );
-}
-
 function formatTime(timestamp: number) {
   return new Date(timestamp).toLocaleTimeString();
 }
@@ -1328,32 +999,24 @@ function getFeedItemKey(item: StreamFeedItem, index: number) {
       return `stream-metadata-${item.path}-${item.timestamp}-${index}`;
     case "external-subscriber-configured":
       return `external-subscriber-${item.subscriber.slug}-${item.timestamp}-${index}`;
-    case "jsonata-transformer-configured":
-      return `jsonata-transformer-${item.transformer.slug}-${item.timestamp}-${index}`;
     case "custom-html-rendered-event":
       return `custom-html-rendered-${item.slug}-${item.raw.offset}-${index}`;
     case "custom-html-render-error":
       return `custom-html-render-error-${item.slug}-${item.raw.offset}-${index}`;
     case "stream-lifecycle":
       return `lifecycle-${item.label}-${item.timestamp}-${index}`;
-    case "dynamic-worker-configured":
-      return `dynamic-worker-configured-${item.slug}-${item.raw.offset}`;
-    case "dynamic-worker-env-var-set":
-      return `dynamic-worker-env-var-set-${item.key}-${item.raw.offset}`;
     case "stream-paused":
       return `stream-paused-${item.timestamp}-${index}`;
     case "stream-resumed":
       return `stream-resumed-${item.timestamp}-${index}`;
     case "stream-error-occurred":
       return `stream-error-occurred-${item.timestamp}-${index}`;
+    case "agent-status":
+      return `agent-status-${item.status}-${item.reason}-${item.raw.offset}`;
     case "codemode-block":
       return `codemode-block-${item.blockId}-${item.timestamp}-${index}`;
-    case "bashmode-block":
-      return `bashmode-block-${item.timestamp}-${index}`;
     case "codemode-result":
       return `codemode-result-${item.blockId}-${item.blockCount}-${item.timestamp}-${index}`;
-    case "scheduler-control":
-      return `scheduler-control-${item.action}-${item.slug}-${item.raw.offset}`;
     default:
       return `feed-item-${index}`;
   }

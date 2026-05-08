@@ -16,7 +16,7 @@ on:
       - closed
 jobs:
   scope:
-    runs-on: ubuntu-24.04
+    runs-on: depot-ubuntu-24.04-32
     outputs:
       should_run: ${{ steps.should_run_preview.outputs.result }}
     steps:
@@ -29,16 +29,23 @@ jobs:
             github.log = { ...console, debug: () => {} };
             const vars = { github, context, core, glob, io, require };
             const previewPaths = [
+              ".github/workflows/cloudflare-previews.yml",
+              ".github/ts-workflows/workflows/cloudflare-previews.ts",
+              "packages/shared/src/alchemy/**",
+              "packages/shared/src/apps/**",
+              "scripts/preview/**",
               "apps/agents/**",
               "apps/agents-contract/**",
-              "apps/codemode/**",
-              "apps/codemode-contract/**",
               "apps/example/**",
+              "apps/example-contract/**",
               "apps/events/**",
+              "apps/events-contract/**",
               "apps/os2/**",
               "apps/os2-contract/**",
               "apps/semaphore/**",
+              "apps/semaphore-contract/**",
               "apps/ingress-proxy/**",
+              "apps/ingress-proxy-contract/**",
             ];
             const __handler = async function should_run_preview({ context, github }) {
               const pullRequest = context.payload.pull_request;
@@ -78,14 +85,14 @@ jobs:
               return files.some((file) => matchesPreviewPath(file.filename)) ? "true" : "false";
             };
             return __handler(vars);
-  preview-agents:
+  preview:
     needs:
       - scope
     if: needs.scope.outputs.should_run == 'true' && github.event.action != 'closed'
-    name: Preview / agents deploy
-    runs-on: ubuntu-24.04
+    name: Preview / deploy
+    runs-on: depot-ubuntu-24.04-32
     concurrency:
-      group: cloudflare-preview-lifecycle-agents-${{ github.event.pull_request.number }}
+      group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number }}
       cancel-in-progress: false
     steps:
       - name: Checkout code
@@ -107,7 +114,7 @@ jobs:
           doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
         if: github.event.pull_request.head.repo.fork != true
       - if: github.event.pull_request.head.repo.fork == true
-        name: Preview / agents deploy for forks
+        name: Preview / deploy for forks
         env:
           GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
           SEMAPHORE_BASE_URL: https://semaphore.iterate.com
@@ -115,7 +122,6 @@ jobs:
         run: |-
           set -euo pipefail
           pnpm preview deploy \
-            --app "agents" \
             --github-token "$GITHUB_TOKEN" \
             --pull-request-head-ref-name "${{ github.event.pull_request.head.ref }}" \
             --pull-request-head-sha "${{ github.event.pull_request.head.sha }}" \
@@ -126,7 +132,7 @@ jobs:
             --workflow-run-url "$WORKFLOW_RUN_URL" \
             --semaphore-base-url "$SEMAPHORE_BASE_URL"
       - if: github.event.pull_request.head.repo.fork != true
-        name: Preview / agents deploy
+        name: Preview / deploy
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
@@ -134,7 +140,6 @@ jobs:
         run: |-
           set -euo pipefail
           doppler run --project os --config prd -- pnpm preview deploy \
-            --app "agents" \
             --github-token "$GITHUB_TOKEN" \
             --pull-request-head-ref-name "${{ github.event.pull_request.head.ref }}" \
             --pull-request-head-sha "${{ github.event.pull_request.head.sha }}" \
@@ -143,15 +148,15 @@ jobs:
             --repository-full-name "${{ github.repository }}" \
             --is-fork "${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}" \
             --workflow-run-url "$WORKFLOW_RUN_URL"
-  e2e-agents:
+  e2e:
     needs:
       - scope
-      - preview-agents
+      - preview
     if: needs.scope.outputs.should_run == 'true' && github.event.action != 'closed' && github.event.pull_request.head.repo.fork != true
-    name: Preview / agents e2e
-    runs-on: ubuntu-24.04
+    name: Preview / e2e
+    runs-on: depot-ubuntu-24.04-32
     concurrency:
-      group: cloudflare-preview-lifecycle-agents-${{ github.event.pull_request.number }}
+      group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number }}
       cancel-in-progress: false
     steps:
       - name: Checkout code
@@ -173,7 +178,7 @@ jobs:
           doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
         if: github.event.pull_request.head.repo.fork != true
       - if: github.event.pull_request.head.repo.fork != true
-        name: Preview / agents e2e
+        name: Preview / e2e
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
@@ -181,20 +186,19 @@ jobs:
         run: |-
           set -euo pipefail
           doppler run --project os --config prd -- pnpm preview test \
-            --app "agents" \
             --github-token "$GITHUB_TOKEN" \
             --pull-request-head-sha "${{ github.event.pull_request.head.sha }}" \
             --pull-request-number "${{ github.event.pull_request.number }}" \
             --repository-full-name "${{ github.repository }}" \
             --workflow-run-url "$WORKFLOW_RUN_URL"
-  cleanup-agents:
+  cleanup:
     needs:
       - scope
     if: needs.scope.outputs.should_run == 'true' && github.event.action == 'closed' && github.event.pull_request.head.repo.fork != true
-    name: Preview / agents cleanup
-    runs-on: ubuntu-24.04
+    name: Preview / cleanup
+    runs-on: depot-ubuntu-24.04-32
     concurrency:
-      group: cloudflare-preview-lifecycle-agents-${{ github.event.pull_request.number }}
+      group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number }}
       cancel-in-progress: false
     steps:
       - name: Checkout code
@@ -216,7 +220,7 @@ jobs:
           doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
         if: github.event.pull_request.head.repo.fork != true
       - if: github.event.pull_request.head.repo.fork != true
-        name: Preview / agents cleanup
+        name: Preview / cleanup
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
@@ -224,907 +228,6 @@ jobs:
         run: |-
           set -euo pipefail
           doppler run --project os --config prd -- pnpm preview cleanup \
-            --app "agents" \
-            --github-token "$GITHUB_TOKEN" \
-            --pull-request-number "${{ github.event.pull_request.number }}" \
-            --repository-full-name "${{ github.repository }}"
-  preview-codemode:
-    needs:
-      - scope
-    if: needs.scope.outputs.should_run == 'true' && github.event.action != 'closed'
-    name: Preview / codemode deploy
-    runs-on: ubuntu-24.04
-    concurrency:
-      group: cloudflare-preview-lifecycle-codemode-${{ github.event.pull_request.number }}
-      cancel-in-progress: false
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install
-      - name: Install Doppler CLI
-        run: |-
-          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
-          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
-        if: github.event.pull_request.head.repo.fork != true
-      - if: github.event.pull_request.head.repo.fork == true
-        name: Preview / codemode deploy for forks
-        env:
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          SEMAPHORE_BASE_URL: https://semaphore.iterate.com
-          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |-
-          set -euo pipefail
-          pnpm preview deploy \
-            --app "codemode" \
-            --github-token "$GITHUB_TOKEN" \
-            --pull-request-head-ref-name "${{ github.event.pull_request.head.ref }}" \
-            --pull-request-head-sha "${{ github.event.pull_request.head.sha }}" \
-            --pull-request-base-sha "${{ github.event.pull_request.base.sha }}" \
-            --pull-request-number "${{ github.event.pull_request.number }}" \
-            --repository-full-name "${{ github.repository }}" \
-            --is-fork "${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}" \
-            --workflow-run-url "$WORKFLOW_RUN_URL" \
-            --semaphore-base-url "$SEMAPHORE_BASE_URL"
-      - if: github.event.pull_request.head.repo.fork != true
-        name: Preview / codemode deploy
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |-
-          set -euo pipefail
-          doppler run --project os --config prd -- pnpm preview deploy \
-            --app "codemode" \
-            --github-token "$GITHUB_TOKEN" \
-            --pull-request-head-ref-name "${{ github.event.pull_request.head.ref }}" \
-            --pull-request-head-sha "${{ github.event.pull_request.head.sha }}" \
-            --pull-request-base-sha "${{ github.event.pull_request.base.sha }}" \
-            --pull-request-number "${{ github.event.pull_request.number }}" \
-            --repository-full-name "${{ github.repository }}" \
-            --is-fork "${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}" \
-            --workflow-run-url "$WORKFLOW_RUN_URL"
-  e2e-codemode:
-    needs:
-      - scope
-      - preview-codemode
-    if: needs.scope.outputs.should_run == 'true' && github.event.action != 'closed' && github.event.pull_request.head.repo.fork != true
-    name: Preview / codemode e2e
-    runs-on: ubuntu-24.04
-    concurrency:
-      group: cloudflare-preview-lifecycle-codemode-${{ github.event.pull_request.number }}
-      cancel-in-progress: false
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install
-      - name: Install Doppler CLI
-        run: |-
-          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
-          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
-        if: github.event.pull_request.head.repo.fork != true
-      - if: github.event.pull_request.head.repo.fork != true
-        name: Preview / codemode e2e
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |-
-          set -euo pipefail
-          doppler run --project os --config prd -- pnpm preview test \
-            --app "codemode" \
-            --github-token "$GITHUB_TOKEN" \
-            --pull-request-head-sha "${{ github.event.pull_request.head.sha }}" \
-            --pull-request-number "${{ github.event.pull_request.number }}" \
-            --repository-full-name "${{ github.repository }}" \
-            --workflow-run-url "$WORKFLOW_RUN_URL"
-  cleanup-codemode:
-    needs:
-      - scope
-    if: needs.scope.outputs.should_run == 'true' && github.event.action == 'closed' && github.event.pull_request.head.repo.fork != true
-    name: Preview / codemode cleanup
-    runs-on: ubuntu-24.04
-    concurrency:
-      group: cloudflare-preview-lifecycle-codemode-${{ github.event.pull_request.number }}
-      cancel-in-progress: false
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install
-      - name: Install Doppler CLI
-        run: |-
-          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
-          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
-        if: github.event.pull_request.head.repo.fork != true
-      - if: github.event.pull_request.head.repo.fork != true
-        name: Preview / codemode cleanup
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |-
-          set -euo pipefail
-          doppler run --project os --config prd -- pnpm preview cleanup \
-            --app "codemode" \
-            --github-token "$GITHUB_TOKEN" \
-            --pull-request-number "${{ github.event.pull_request.number }}" \
-            --repository-full-name "${{ github.repository }}"
-  preview-example:
-    needs:
-      - scope
-    if: needs.scope.outputs.should_run == 'true' && github.event.action != 'closed'
-    name: Preview / example deploy
-    runs-on: ubuntu-24.04
-    concurrency:
-      group: cloudflare-preview-lifecycle-example-${{ github.event.pull_request.number }}
-      cancel-in-progress: false
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install
-      - name: Install Doppler CLI
-        run: |-
-          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
-          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
-        if: github.event.pull_request.head.repo.fork != true
-      - if: github.event.pull_request.head.repo.fork == true
-        name: Preview / example deploy for forks
-        env:
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          SEMAPHORE_BASE_URL: https://semaphore.iterate.com
-          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |-
-          set -euo pipefail
-          pnpm preview deploy \
-            --app "example" \
-            --github-token "$GITHUB_TOKEN" \
-            --pull-request-head-ref-name "${{ github.event.pull_request.head.ref }}" \
-            --pull-request-head-sha "${{ github.event.pull_request.head.sha }}" \
-            --pull-request-base-sha "${{ github.event.pull_request.base.sha }}" \
-            --pull-request-number "${{ github.event.pull_request.number }}" \
-            --repository-full-name "${{ github.repository }}" \
-            --is-fork "${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}" \
-            --workflow-run-url "$WORKFLOW_RUN_URL" \
-            --semaphore-base-url "$SEMAPHORE_BASE_URL"
-      - if: github.event.pull_request.head.repo.fork != true
-        name: Preview / example deploy
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |-
-          set -euo pipefail
-          doppler run --project os --config prd -- pnpm preview deploy \
-            --app "example" \
-            --github-token "$GITHUB_TOKEN" \
-            --pull-request-head-ref-name "${{ github.event.pull_request.head.ref }}" \
-            --pull-request-head-sha "${{ github.event.pull_request.head.sha }}" \
-            --pull-request-base-sha "${{ github.event.pull_request.base.sha }}" \
-            --pull-request-number "${{ github.event.pull_request.number }}" \
-            --repository-full-name "${{ github.repository }}" \
-            --is-fork "${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}" \
-            --workflow-run-url "$WORKFLOW_RUN_URL"
-  e2e-example:
-    needs:
-      - scope
-      - preview-example
-    if: needs.scope.outputs.should_run == 'true' && github.event.action != 'closed' && github.event.pull_request.head.repo.fork != true
-    name: Preview / example e2e
-    runs-on: ubuntu-24.04
-    concurrency:
-      group: cloudflare-preview-lifecycle-example-${{ github.event.pull_request.number }}
-      cancel-in-progress: false
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install
-      - name: Install Doppler CLI
-        run: |-
-          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
-          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
-        if: github.event.pull_request.head.repo.fork != true
-      - if: github.event.pull_request.head.repo.fork != true
-        name: Preview / example e2e
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |-
-          set -euo pipefail
-          doppler run --project os --config prd -- pnpm preview test \
-            --app "example" \
-            --github-token "$GITHUB_TOKEN" \
-            --pull-request-head-sha "${{ github.event.pull_request.head.sha }}" \
-            --pull-request-number "${{ github.event.pull_request.number }}" \
-            --repository-full-name "${{ github.repository }}" \
-            --workflow-run-url "$WORKFLOW_RUN_URL"
-  cleanup-example:
-    needs:
-      - scope
-    if: needs.scope.outputs.should_run == 'true' && github.event.action == 'closed' && github.event.pull_request.head.repo.fork != true
-    name: Preview / example cleanup
-    runs-on: ubuntu-24.04
-    concurrency:
-      group: cloudflare-preview-lifecycle-example-${{ github.event.pull_request.number }}
-      cancel-in-progress: false
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install
-      - name: Install Doppler CLI
-        run: |-
-          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
-          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
-        if: github.event.pull_request.head.repo.fork != true
-      - if: github.event.pull_request.head.repo.fork != true
-        name: Preview / example cleanup
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |-
-          set -euo pipefail
-          doppler run --project os --config prd -- pnpm preview cleanup \
-            --app "example" \
-            --github-token "$GITHUB_TOKEN" \
-            --pull-request-number "${{ github.event.pull_request.number }}" \
-            --repository-full-name "${{ github.repository }}"
-  preview-events:
-    needs:
-      - scope
-    if: needs.scope.outputs.should_run == 'true' && github.event.action != 'closed'
-    name: Preview / events deploy
-    runs-on: ubuntu-24.04
-    concurrency:
-      group: cloudflare-preview-lifecycle-events-${{ github.event.pull_request.number }}
-      cancel-in-progress: false
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install
-      - name: Install Doppler CLI
-        run: |-
-          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
-          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
-        if: github.event.pull_request.head.repo.fork != true
-      - if: github.event.pull_request.head.repo.fork == true
-        name: Preview / events deploy for forks
-        env:
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          SEMAPHORE_BASE_URL: https://semaphore.iterate.com
-          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |-
-          set -euo pipefail
-          pnpm preview deploy \
-            --app "events" \
-            --github-token "$GITHUB_TOKEN" \
-            --pull-request-head-ref-name "${{ github.event.pull_request.head.ref }}" \
-            --pull-request-head-sha "${{ github.event.pull_request.head.sha }}" \
-            --pull-request-base-sha "${{ github.event.pull_request.base.sha }}" \
-            --pull-request-number "${{ github.event.pull_request.number }}" \
-            --repository-full-name "${{ github.repository }}" \
-            --is-fork "${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}" \
-            --workflow-run-url "$WORKFLOW_RUN_URL" \
-            --semaphore-base-url "$SEMAPHORE_BASE_URL"
-      - if: github.event.pull_request.head.repo.fork != true
-        name: Preview / events deploy
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |-
-          set -euo pipefail
-          doppler run --project os --config prd -- pnpm preview deploy \
-            --app "events" \
-            --github-token "$GITHUB_TOKEN" \
-            --pull-request-head-ref-name "${{ github.event.pull_request.head.ref }}" \
-            --pull-request-head-sha "${{ github.event.pull_request.head.sha }}" \
-            --pull-request-base-sha "${{ github.event.pull_request.base.sha }}" \
-            --pull-request-number "${{ github.event.pull_request.number }}" \
-            --repository-full-name "${{ github.repository }}" \
-            --is-fork "${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}" \
-            --workflow-run-url "$WORKFLOW_RUN_URL"
-  e2e-events:
-    needs:
-      - scope
-      - preview-events
-    if: needs.scope.outputs.should_run == 'true' && github.event.action != 'closed' && github.event.pull_request.head.repo.fork != true
-    name: Preview / events e2e
-    runs-on: ubuntu-24.04
-    concurrency:
-      group: cloudflare-preview-lifecycle-events-${{ github.event.pull_request.number }}
-      cancel-in-progress: false
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install
-      - name: Install Doppler CLI
-        run: |-
-          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
-          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
-        if: github.event.pull_request.head.repo.fork != true
-      - if: github.event.pull_request.head.repo.fork != true
-        name: Preview / events e2e
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |-
-          set -euo pipefail
-          doppler run --project os --config prd -- pnpm preview test \
-            --app "events" \
-            --github-token "$GITHUB_TOKEN" \
-            --pull-request-head-sha "${{ github.event.pull_request.head.sha }}" \
-            --pull-request-number "${{ github.event.pull_request.number }}" \
-            --repository-full-name "${{ github.repository }}" \
-            --workflow-run-url "$WORKFLOW_RUN_URL"
-  cleanup-events:
-    needs:
-      - scope
-    if: needs.scope.outputs.should_run == 'true' && github.event.action == 'closed' && github.event.pull_request.head.repo.fork != true
-    name: Preview / events cleanup
-    runs-on: ubuntu-24.04
-    concurrency:
-      group: cloudflare-preview-lifecycle-events-${{ github.event.pull_request.number }}
-      cancel-in-progress: false
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install
-      - name: Install Doppler CLI
-        run: |-
-          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
-          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
-        if: github.event.pull_request.head.repo.fork != true
-      - if: github.event.pull_request.head.repo.fork != true
-        name: Preview / events cleanup
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |-
-          set -euo pipefail
-          doppler run --project os --config prd -- pnpm preview cleanup \
-            --app "events" \
-            --github-token "$GITHUB_TOKEN" \
-            --pull-request-number "${{ github.event.pull_request.number }}" \
-            --repository-full-name "${{ github.repository }}"
-  preview-os2:
-    needs:
-      - scope
-    if: needs.scope.outputs.should_run == 'true' && github.event.action != 'closed'
-    name: Preview / os2 deploy
-    runs-on: ubuntu-24.04
-    concurrency:
-      group: cloudflare-preview-lifecycle-os2-${{ github.event.pull_request.number }}
-      cancel-in-progress: false
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install
-      - name: Install Doppler CLI
-        run: |-
-          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
-          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
-        if: github.event.pull_request.head.repo.fork != true
-      - if: github.event.pull_request.head.repo.fork == true
-        name: Preview / os2 deploy for forks
-        env:
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          SEMAPHORE_BASE_URL: https://semaphore.iterate.com
-          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |-
-          set -euo pipefail
-          pnpm preview deploy \
-            --app "os2" \
-            --github-token "$GITHUB_TOKEN" \
-            --pull-request-head-ref-name "${{ github.event.pull_request.head.ref }}" \
-            --pull-request-head-sha "${{ github.event.pull_request.head.sha }}" \
-            --pull-request-base-sha "${{ github.event.pull_request.base.sha }}" \
-            --pull-request-number "${{ github.event.pull_request.number }}" \
-            --repository-full-name "${{ github.repository }}" \
-            --is-fork "${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}" \
-            --workflow-run-url "$WORKFLOW_RUN_URL" \
-            --semaphore-base-url "$SEMAPHORE_BASE_URL"
-      - if: github.event.pull_request.head.repo.fork != true
-        name: Preview / os2 deploy
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |-
-          set -euo pipefail
-          doppler run --project os --config prd -- pnpm preview deploy \
-            --app "os2" \
-            --github-token "$GITHUB_TOKEN" \
-            --pull-request-head-ref-name "${{ github.event.pull_request.head.ref }}" \
-            --pull-request-head-sha "${{ github.event.pull_request.head.sha }}" \
-            --pull-request-base-sha "${{ github.event.pull_request.base.sha }}" \
-            --pull-request-number "${{ github.event.pull_request.number }}" \
-            --repository-full-name "${{ github.repository }}" \
-            --is-fork "${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}" \
-            --workflow-run-url "$WORKFLOW_RUN_URL"
-  e2e-os2:
-    needs:
-      - scope
-      - preview-os2
-    if: needs.scope.outputs.should_run == 'true' && github.event.action != 'closed' && github.event.pull_request.head.repo.fork != true
-    name: Preview / os2 e2e
-    runs-on: ubuntu-24.04
-    concurrency:
-      group: cloudflare-preview-lifecycle-os2-${{ github.event.pull_request.number }}
-      cancel-in-progress: false
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install
-      - name: Install Doppler CLI
-        run: |-
-          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
-          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
-        if: github.event.pull_request.head.repo.fork != true
-      - if: github.event.pull_request.head.repo.fork != true
-        name: Preview / os2 e2e
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |-
-          set -euo pipefail
-          doppler run --project os --config prd -- pnpm preview test \
-            --app "os2" \
-            --github-token "$GITHUB_TOKEN" \
-            --pull-request-head-sha "${{ github.event.pull_request.head.sha }}" \
-            --pull-request-number "${{ github.event.pull_request.number }}" \
-            --repository-full-name "${{ github.repository }}" \
-            --workflow-run-url "$WORKFLOW_RUN_URL"
-  cleanup-os2:
-    needs:
-      - scope
-    if: needs.scope.outputs.should_run == 'true' && github.event.action == 'closed' && github.event.pull_request.head.repo.fork != true
-    name: Preview / os2 cleanup
-    runs-on: ubuntu-24.04
-    concurrency:
-      group: cloudflare-preview-lifecycle-os2-${{ github.event.pull_request.number }}
-      cancel-in-progress: false
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install
-      - name: Install Doppler CLI
-        run: |-
-          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
-          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
-        if: github.event.pull_request.head.repo.fork != true
-      - if: github.event.pull_request.head.repo.fork != true
-        name: Preview / os2 cleanup
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |-
-          set -euo pipefail
-          doppler run --project os --config prd -- pnpm preview cleanup \
-            --app "os2" \
-            --github-token "$GITHUB_TOKEN" \
-            --pull-request-number "${{ github.event.pull_request.number }}" \
-            --repository-full-name "${{ github.repository }}"
-  preview-semaphore:
-    needs:
-      - scope
-    if: needs.scope.outputs.should_run == 'true' && github.event.action != 'closed'
-    name: Preview / semaphore deploy
-    runs-on: ubuntu-24.04
-    concurrency:
-      group: cloudflare-preview-lifecycle-semaphore-${{ github.event.pull_request.number }}
-      cancel-in-progress: false
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install
-      - name: Install Doppler CLI
-        run: |-
-          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
-          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
-        if: github.event.pull_request.head.repo.fork != true
-      - if: github.event.pull_request.head.repo.fork == true
-        name: Preview / semaphore deploy for forks
-        env:
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          SEMAPHORE_BASE_URL: https://semaphore.iterate.com
-          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |-
-          set -euo pipefail
-          pnpm preview deploy \
-            --app "semaphore" \
-            --github-token "$GITHUB_TOKEN" \
-            --pull-request-head-ref-name "${{ github.event.pull_request.head.ref }}" \
-            --pull-request-head-sha "${{ github.event.pull_request.head.sha }}" \
-            --pull-request-base-sha "${{ github.event.pull_request.base.sha }}" \
-            --pull-request-number "${{ github.event.pull_request.number }}" \
-            --repository-full-name "${{ github.repository }}" \
-            --is-fork "${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}" \
-            --workflow-run-url "$WORKFLOW_RUN_URL" \
-            --semaphore-base-url "$SEMAPHORE_BASE_URL"
-      - if: github.event.pull_request.head.repo.fork != true
-        name: Preview / semaphore deploy
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |-
-          set -euo pipefail
-          doppler run --project os --config prd -- pnpm preview deploy \
-            --app "semaphore" \
-            --github-token "$GITHUB_TOKEN" \
-            --pull-request-head-ref-name "${{ github.event.pull_request.head.ref }}" \
-            --pull-request-head-sha "${{ github.event.pull_request.head.sha }}" \
-            --pull-request-base-sha "${{ github.event.pull_request.base.sha }}" \
-            --pull-request-number "${{ github.event.pull_request.number }}" \
-            --repository-full-name "${{ github.repository }}" \
-            --is-fork "${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}" \
-            --workflow-run-url "$WORKFLOW_RUN_URL"
-  e2e-semaphore:
-    needs:
-      - scope
-      - preview-semaphore
-    if: needs.scope.outputs.should_run == 'true' && github.event.action != 'closed' && github.event.pull_request.head.repo.fork != true
-    name: Preview / semaphore e2e
-    runs-on: ubuntu-24.04
-    concurrency:
-      group: cloudflare-preview-lifecycle-semaphore-${{ github.event.pull_request.number }}
-      cancel-in-progress: false
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install
-      - name: Install Doppler CLI
-        run: |-
-          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
-          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
-        if: github.event.pull_request.head.repo.fork != true
-      - if: github.event.pull_request.head.repo.fork != true
-        name: Preview / semaphore e2e
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |-
-          set -euo pipefail
-          doppler run --project os --config prd -- pnpm preview test \
-            --app "semaphore" \
-            --github-token "$GITHUB_TOKEN" \
-            --pull-request-head-sha "${{ github.event.pull_request.head.sha }}" \
-            --pull-request-number "${{ github.event.pull_request.number }}" \
-            --repository-full-name "${{ github.repository }}" \
-            --workflow-run-url "$WORKFLOW_RUN_URL"
-  cleanup-semaphore:
-    needs:
-      - scope
-    if: needs.scope.outputs.should_run == 'true' && github.event.action == 'closed' && github.event.pull_request.head.repo.fork != true
-    name: Preview / semaphore cleanup
-    runs-on: ubuntu-24.04
-    concurrency:
-      group: cloudflare-preview-lifecycle-semaphore-${{ github.event.pull_request.number }}
-      cancel-in-progress: false
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install
-      - name: Install Doppler CLI
-        run: |-
-          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
-          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
-        if: github.event.pull_request.head.repo.fork != true
-      - if: github.event.pull_request.head.repo.fork != true
-        name: Preview / semaphore cleanup
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |-
-          set -euo pipefail
-          doppler run --project os --config prd -- pnpm preview cleanup \
-            --app "semaphore" \
-            --github-token "$GITHUB_TOKEN" \
-            --pull-request-number "${{ github.event.pull_request.number }}" \
-            --repository-full-name "${{ github.repository }}"
-  preview-ingress-proxy:
-    needs:
-      - scope
-    if: needs.scope.outputs.should_run == 'true' && github.event.action != 'closed'
-    name: Preview / ingress-proxy deploy
-    runs-on: ubuntu-24.04
-    concurrency:
-      group: cloudflare-preview-lifecycle-ingress-proxy-${{ github.event.pull_request.number }}
-      cancel-in-progress: false
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install
-      - name: Install Doppler CLI
-        run: |-
-          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
-          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
-        if: github.event.pull_request.head.repo.fork != true
-      - if: github.event.pull_request.head.repo.fork == true
-        name: Preview / ingress-proxy deploy for forks
-        env:
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          SEMAPHORE_BASE_URL: https://semaphore.iterate.com
-          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |-
-          set -euo pipefail
-          pnpm preview deploy \
-            --app "ingress-proxy" \
-            --github-token "$GITHUB_TOKEN" \
-            --pull-request-head-ref-name "${{ github.event.pull_request.head.ref }}" \
-            --pull-request-head-sha "${{ github.event.pull_request.head.sha }}" \
-            --pull-request-base-sha "${{ github.event.pull_request.base.sha }}" \
-            --pull-request-number "${{ github.event.pull_request.number }}" \
-            --repository-full-name "${{ github.repository }}" \
-            --is-fork "${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}" \
-            --workflow-run-url "$WORKFLOW_RUN_URL" \
-            --semaphore-base-url "$SEMAPHORE_BASE_URL"
-      - if: github.event.pull_request.head.repo.fork != true
-        name: Preview / ingress-proxy deploy
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |-
-          set -euo pipefail
-          doppler run --project os --config prd -- pnpm preview deploy \
-            --app "ingress-proxy" \
-            --github-token "$GITHUB_TOKEN" \
-            --pull-request-head-ref-name "${{ github.event.pull_request.head.ref }}" \
-            --pull-request-head-sha "${{ github.event.pull_request.head.sha }}" \
-            --pull-request-base-sha "${{ github.event.pull_request.base.sha }}" \
-            --pull-request-number "${{ github.event.pull_request.number }}" \
-            --repository-full-name "${{ github.repository }}" \
-            --is-fork "${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}" \
-            --workflow-run-url "$WORKFLOW_RUN_URL"
-  e2e-ingress-proxy:
-    needs:
-      - scope
-      - preview-ingress-proxy
-    if: needs.scope.outputs.should_run == 'true' && github.event.action != 'closed' && github.event.pull_request.head.repo.fork != true
-    name: Preview / ingress-proxy e2e
-    runs-on: ubuntu-24.04
-    concurrency:
-      group: cloudflare-preview-lifecycle-ingress-proxy-${{ github.event.pull_request.number }}
-      cancel-in-progress: false
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install
-      - name: Install Doppler CLI
-        run: |-
-          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
-          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
-        if: github.event.pull_request.head.repo.fork != true
-      - if: github.event.pull_request.head.repo.fork != true
-        name: Preview / ingress-proxy e2e
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |-
-          set -euo pipefail
-          doppler run --project os --config prd -- pnpm preview test \
-            --app "ingress-proxy" \
-            --github-token "$GITHUB_TOKEN" \
-            --pull-request-head-sha "${{ github.event.pull_request.head.sha }}" \
-            --pull-request-number "${{ github.event.pull_request.number }}" \
-            --repository-full-name "${{ github.repository }}" \
-            --workflow-run-url "$WORKFLOW_RUN_URL"
-  cleanup-ingress-proxy:
-    needs:
-      - scope
-    if: needs.scope.outputs.should_run == 'true' && github.event.action == 'closed' && github.event.pull_request.head.repo.fork != true
-    name: Preview / ingress-proxy cleanup
-    runs-on: ubuntu-24.04
-    concurrency:
-      group: cloudflare-preview-lifecycle-ingress-proxy-${{ github.event.pull_request.number }}
-      cancel-in-progress: false
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install
-      - name: Install Doppler CLI
-        run: |-
-          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
-          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
-        if: github.event.pull_request.head.repo.fork != true
-      - if: github.event.pull_request.head.repo.fork != true
-        name: Preview / ingress-proxy cleanup
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}
-          WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |-
-          set -euo pipefail
-          doppler run --project os --config prd -- pnpm preview cleanup \
-            --app "ingress-proxy" \
             --github-token "$GITHUB_TOKEN" \
             --pull-request-number "${{ github.event.pull_request.number }}" \
             --repository-full-name "${{ github.repository }}"

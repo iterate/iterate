@@ -18,9 +18,13 @@ export const orpcOpenApiHandler = new OpenAPIHandler(appRouter, {
   adapterInterceptors: [prettyJsonInterceptor],
   plugins: [
     ...plugins,
-    createOpenApiReferencePluginForApp(manifest, ["/debug", "/test", "/projects"], {
-      defaultOpenFirstTag: true,
-    }),
+    createOpenApiReferencePluginForApp(
+      manifest,
+      ["/debug", "/test", "/projects", "/streams", "/codemode", "/agents"],
+      {
+        defaultOpenFirstTag: true,
+      },
+    ),
   ],
   interceptors: [
     onError((error) => {

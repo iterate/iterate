@@ -1,0 +1,57 @@
+{
+  "name": "os2-codemode-session-vitest",
+  "main": "codemode-session-test-entry.ts",
+  "compatibility_date": "2026-04-27",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "CODEMODE_SESSION",
+        "class_name": "CodemodeSession",
+      },
+      {
+        "name": "STREAM",
+        "class_name": "StreamDurableObject",
+      },
+      {
+        "name": "REPO",
+        "class_name": "RepoDurableObject",
+      },
+      {
+        "name": "WORKSPACE",
+        "class_name": "WorkspaceDurableObject",
+      },
+      {
+        "name": "AGENT",
+        "class_name": "AgentDurableObject",
+      },
+    ],
+  },
+  "d1_databases": [
+    {
+      "binding": "DO_CATALOG",
+      "database_id": "os2-codemode-session-vitest",
+      "database_name": "os2-codemode-session-vitest",
+      "preview_database_id": "os2-codemode-session-vitest",
+    },
+  ],
+  "worker_loaders": [
+    {
+      "binding": "LOADER",
+    },
+  ],
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["CodemodeSession"],
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["StreamDurableObject"],
+    },
+    {
+      "tag": "v3",
+      "new_sqlite_classes": ["RepoDurableObject", "WorkspaceDurableObject", "AgentDurableObject"],
+    },
+  ],
+}

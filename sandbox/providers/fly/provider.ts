@@ -37,7 +37,7 @@ const FlyEnv = z.object({
     ),
   FLY_DEFAULT_CPUS: z.coerce.number().int().positive().default(DEFAULT_FLY_MACHINE_CPUS),
   FLY_DEFAULT_MEMORY_MB: z.coerce.number().int().positive().default(DEFAULT_FLY_MACHINE_MEMORY_MB),
-  SANDBOX_NAME_PREFIX: z.enum(["dev", "stg", "prd"]),
+  SANDBOX_NAME_PREFIX: z.enum(["dev", "preview", "prd"]),
   FLY_NETWORK: z.string().optional(),
   FLY_BASE_DOMAIN: z.string().default("fly.dev"),
 });

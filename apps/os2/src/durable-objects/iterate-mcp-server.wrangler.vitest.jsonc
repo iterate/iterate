@@ -1,0 +1,72 @@
+{
+  "name": "os2-project-mcp-server-connection-vitest",
+  "main": "iterate-mcp-server-test-entry.ts",
+  "compatibility_date": "2026-04-27",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "MCP_PROOF_SECRET": "mcp-proof-secret-test",
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "CODEMODE_SESSION",
+        "class_name": "CodemodeSession",
+      },
+      {
+        "name": "PROJECT_MCP_SERVER_CONNECTION",
+        "class_name": "ProjectMcpServerConnection",
+      },
+      {
+        "name": "OUTBOUND_MCP_FROM_OUR_CLIENT_CAPABILITY",
+        "class_name": "OutboundMcpFromOurClientCapability",
+      },
+      {
+        "name": "REPO",
+        "class_name": "RepoDurableObject",
+      },
+      {
+        "name": "WORKSPACE",
+        "class_name": "WorkspaceDurableObject",
+      },
+      {
+        "name": "AGENT",
+        "class_name": "AgentDurableObject",
+      },
+      {
+        "name": "STREAM",
+        "class_name": "StreamDurableObject",
+      },
+    ],
+  },
+  "d1_databases": [
+    {
+      "binding": "DO_CATALOG",
+      "database_id": "os2-project-mcp-server-connection-vitest",
+      "database_name": "os2-project-mcp-server-connection-vitest",
+      "preview_database_id": "os2-project-mcp-server-connection-vitest",
+    },
+  ],
+  "worker_loaders": [
+    {
+      "binding": "LOADER",
+    },
+  ],
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "CodemodeSession",
+        "ProjectMcpServerConnection",
+        "OutboundMcpFromOurClientCapability",
+      ],
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["StreamDurableObject"],
+    },
+    {
+      "tag": "v3",
+      "new_sqlite_classes": ["RepoDurableObject", "WorkspaceDurableObject", "AgentDurableObject"],
+    },
+  ],
+}

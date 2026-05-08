@@ -71,7 +71,12 @@ function makeAgentsTanStackAppWorkspace(workerEnvShim: string): WorkspaceConfig 
   const base = makeCloudflareTanStackAppWorkspace(workerEnvShim);
   return {
     ...base,
-    entry: [...(base.entry ?? []), "e2e/vitest.config.ts"],
+    entry: [
+      ...(base.entry ?? []),
+      "e2e/vitest.config.ts",
+      "e2e/tui-test/tui-test.config.ts",
+      "scripts/event-stream-terminal.tsx",
+    ],
   };
 }
 
@@ -102,7 +107,15 @@ function makeEventsCloudflareWorkspace(workerEnvShim: string): WorkspaceConfig {
 
   return {
     ...workspace,
-    entry: [...(workspace.entry ?? []), "scripts/demo/router.ts"],
+    entry: [
+      ...(workspace.entry ?? []),
+      "scripts/demo/router.ts",
+      "sqlfu.config.ts",
+      "src/entry.workerd.vitest.ts",
+    ],
+    ignore: ["src/db/migrations/.generated/migrations.ts", "src/durable-objects/sqlfu.config.ts"],
+    ignoreBinaries: [...(workspace.ignoreBinaries ?? []), "sqlfu"],
+    ignoreDependencies: [...(workspace.ignoreDependencies ?? []), "miniflare"],
   };
 }
 
@@ -138,8 +151,14 @@ function makeSharedWorkspace(): WorkspaceConfig {
     // This package exposes many subpath exports from package.json rather than a
     // single `src/index.ts`, so keep the workspace config minimal and let Knip
     // use the declared export map as the public entry surface.
-    entry: ["bin/iterate-app-cli.js", "src/apps/cli-entry.ts"],
+    entry: [
+      "bin/iterate-app-cli.js",
+      "src/apps/cli-entry.ts",
+      "src/durable-object-utils/e2e/alchemy.run.ts",
+      "src/streams/sqlfu.config.ts",
+    ],
     project: ["src/**/*.ts"],
+    ignoreDependencies: ["alchemy", "cloudflare", "wrangler"],
   };
 }
 
@@ -171,9 +190,6 @@ const config: KnipConfig = {
     // This file is generated from Fly's OpenAPI schema and intentionally emits
     // a couple of placeholder exported types that are never imported directly.
     "packages/shared/src/jonasland/deployment/fly-api/generated/openapi.gen.ts": ["types"],
-    // This SDK is intentionally re-exported by ai-engineer-workshop, which is
-    // outside the scoped root Knip command on purpose.
-    "apps/events-contract/src/sdk.ts": ["exports", "types"],
     // TanStack Start resolves these router factories by convention from the
     // entrypoint, so there is no direct import Knip can follow.
     "apps/daemon-v2/src/router.tsx": ["exports"],
@@ -186,6 +202,39 @@ const config: KnipConfig = {
     "apps/agents/src/lib/events-orpc-client.ts": ["exports", "types"],
     "apps/agents/src/lib/mcp-tool-providers.ts": ["types"],
     "apps/agents/src/lib/openapi-tool-provider.ts": ["types"],
+    "apps/agents/src/lib/llm-normalization.ts": ["exports"],
+    "apps/agents/src/durable-objects/agent-chat-stream-processor-runner.ts": ["types"],
+    "apps/agents/src/durable-objects/agent-stream-processor-runner.ts": ["types"],
+    "apps/agents/src/durable-objects/cloudflare-ai-stream-processor-runner.ts": ["types"],
+    "apps/agents/src/durable-objects/codemode-stream-processor-runner.ts": ["types"],
+    "apps/agents/src/durable-objects/openai-ws-stream-processor-runner.ts": ["types"],
+    "apps/agents/src/entrypoints/stream-api.ts": ["types"],
+    "apps/agents/src/stream-processors/codemode/cloudflare-code-executor.ts": ["types"],
+    "apps/agents/src/stream-processors/pull-runner.ts": ["types"],
+    "apps/agents/src/stream-tui/command-invocation.ts": ["types"],
+    "apps/agents/src/stream-tui/command-router.ts": ["types"],
+    "apps/agents/src/stream-tui/feed-formatting.ts": ["exports"],
+    "apps/agents/src/stream-tui/navigation-state.ts": ["types"],
+    "apps/agents/src/stream-tui/pilotty-command.ts": ["types"],
+    "apps/agents/src/stream-tui/stream-tree.ts": ["types"],
+    // Generated SQLFU bundles/configs are loaded by scripts/runtime conventions.
+    "apps/events/src/db/migrations/.generated/migrations.ts": ["files", "exports", "types"],
+    "apps/events/src/durable-objects/db/migrations/.generated/migrations.ts": ["exports", "types"],
+    "apps/events/src/durable-objects/db/queries/.generated/tables.ts": ["types"],
+    "apps/events/src/db/queries/.generated/tables.ts": ["types"],
+    "apps/events/src/durable-objects/sqlfu.config.ts": ["files"],
+    "apps/events/src/lib/custom-html-renderers.ts": ["exports"],
+    "apps/events/src/lib/stream-feed-summary.ts": ["types"],
+    "apps/events/src/lib/stream-helpers.ts": ["exports"],
+    "packages/shared/src/streams/db/migrations/.generated/migrations.ts": ["exports", "types"],
+    "packages/shared/src/streams/db/queries/.generated/tables.ts": ["types"],
+    // Cloudflare discovers DO default exports through Worker bindings.
+    "apps/example/src/durable-objects/example-counter.ts": ["exports"],
+    "packages/shared/src/callable/entry.workerd.vitest.ts": ["exports"],
+    "packages/shared/src/durable-object-utils/test-harness/initialize-fronting-worker.ts": [
+      "exports",
+      "types",
+    ],
   },
   workspaces: {
     "apps/agents": makeAgentsTanStackAppWorkspace("./src/lib/worker-env.d.ts"),

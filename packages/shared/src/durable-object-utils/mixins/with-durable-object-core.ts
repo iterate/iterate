@@ -1,12 +1,9 @@
 /// <reference types="@cloudflare/workers-types" />
 
 import type {
-  Constructor,
   DurableObjectClass,
-  MembersOf,
-  ReqEnvOf,
+  DurableObjectMixinResult,
   RuntimeDurableObjectConstructor,
-  StaticSide,
 } from "./mixin-types.ts";
 
 /**
@@ -87,9 +84,10 @@ export abstract class DurableObjectCoreProtected {
   }
 }
 
-type WithDurableObjectCoreResult<TBase extends DurableObjectClass> = StaticSide<TBase> &
-  DurableObjectClass<ReqEnvOf<TBase>, MembersOf<TBase> & DurableObjectCoreProtected> &
-  Constructor<DurableObjectCoreProtected>;
+type WithDurableObjectCoreResult<TBase extends DurableObjectClass> = DurableObjectMixinResult<
+  TBase,
+  DurableObjectCoreProtected
+>;
 
 /**
  * Adapts Cloudflare's protected Durable Object runtime APIs into protected

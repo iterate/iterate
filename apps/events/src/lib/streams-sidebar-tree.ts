@@ -1,5 +1,9 @@
-import type { Event, StreamPath as StreamPathType } from "@iterate-com/events-contract";
-import { StreamPath } from "@iterate-com/events-contract";
+import {
+  STREAM_CHILD_STREAM_CREATED_TYPE,
+  type Event,
+  StreamPath,
+  type StreamPath as StreamPathType,
+} from "@iterate-com/shared/streams/types";
 import { getAncestorStreamPaths } from "~/lib/stream-path-ancestors.ts";
 
 export type StreamsSidebarTreeNode = {
@@ -48,7 +52,7 @@ export function discoverStreamPaths(events: readonly Event[]) {
   const streamPaths = new Set<StreamPathType>(["/"]);
 
   for (const event of events) {
-    if (event.type === "https://events.iterate.com/events/stream/child-stream-created") {
+    if (event.type === STREAM_CHILD_STREAM_CREATED_TYPE) {
       streamPaths.add(
         (event as Event & { payload: { childPath: StreamPathType } }).payload.childPath,
       );

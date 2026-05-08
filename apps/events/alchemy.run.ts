@@ -1,140 +1,81 @@
-import alchemy, { type Scope } from "alchemy";
-import {
-  D1Database,
-  DurableObjectNamespace,
-  Self,
-  TanStackStart,
-  Worker,
-  WorkerLoader,
-} from "alchemy/cloudflare";
-import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
-import { compileRawAppConfigFromEnv, parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
-import { slugify } from "@iterate-com/shared/slugify";
+import { D1Database, DurableObjectNamespace } from "alchemy/cloudflare";
+import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
+import { initAlchemy } from "@iterate-com/shared/alchemy/init";
+import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
 import { z } from "zod";
-import { AppConfig } from "./src/app.ts";
+import manifest, { AppConfig } from "./src/app.ts";
+import type { E2EAppendChainSubscriber } from "~/entry.workerd.ts";
 import type { StreamDurableObject } from "~/entry.workerd.ts";
 
-const APP_NAME = "events";
-
-const AlchemyEnv = z.object({
-  ALCHEMY_PASSWORD: z.string().trim().min(1, "ALCHEMY_PASSWORD is required"),
-  ALCHEMY_LOCAL: z.stringbool(),
-  ALCHEMY_STAGE: z
-    .string()
-    .trim()
-    .min(1, "ALCHEMY_STAGE is required")
-    .regex(/^[\w-]+$/, "ALCHEMY_STAGE must contain only letters, numbers, underscores, or hyphens"),
-  CLOUDFLARE_API_TOKEN: z.string().trim().min(1, "CLOUDFLARE_API_TOKEN is required"),
-  CLOUDFLARE_ACCOUNT_ID: z.string().trim().min(1, "CLOUDFLARE_ACCOUNT_ID is required"),
-  WORKER_ROUTES: z
-    .string()
-    .optional()
-    .transform((value) =>
-      (value ?? "")
-        .split(",")
-        .map((entry) => entry.trim())
-        .filter(Boolean),
-    )
-    .pipe(
-      z.array(
-        z
-          .string()
-          .min(1)
-          .refine(
-            (hostname) => !hostname.includes("/") && !hostname.includes("://"),
-            "WORKER_ROUTES entries must be hostnames without scheme or path",
-          ),
-      ),
-    ),
+const DeploymentConfig = z.object({
+  streamDurableObjectBindingScriptName: z.string().trim().min(1).optional(),
 });
 
-const env = AlchemyEnv.parse(process.env);
-const stateStore = (scope: Scope) =>
-  scope.local ? new SQLiteStateStore(scope, { engine: "libsql" }) : new CloudflareStateStore(scope);
-const primaryUrl = env.WORKER_ROUTES[0] ? `https://${env.WORKER_ROUTES[0]}` : undefined;
-const compiledAppConfig = parseAppConfigFromEnv({
-  configSchema: AppConfig,
-  prefix: "APP_CONFIG_",
+const ctx = await initAlchemy(manifest, AppConfig, process.env);
+const deploymentConfig = parseAppConfigFromEnv({
+  configSchema: DeploymentConfig,
+  prefix: "DEPLOYMENT_CONFIG_",
   env: process.env,
 });
-const rawAppConfig = compileRawAppConfigFromEnv({
-  configSchema: AppConfig,
-  prefix: "APP_CONFIG_",
-  env: process.env,
-});
-
-if (env.ALCHEMY_LOCAL) delete process.env.CI;
-
-const app = await alchemy(APP_NAME, {
-  stage: env.ALCHEMY_STAGE,
-  local: env.ALCHEMY_LOCAL,
-  password: env.ALCHEMY_PASSWORD,
-  stateStore,
-});
-
-const workerName = slugify(`${APP_NAME}-${app.stage}`);
 
 const db = await D1Database("events-db", {
-  name: `${workerName}-db`,
+  name: `${ctx.workerName}-db`,
   migrationsDir: "./src/db/migrations",
   adopt: true,
 });
 
-const stream = DurableObjectNamespace<StreamDurableObject>("stream", {
-  className: "StreamDurableObject",
-  sqlite: true,
-});
+const stream =
+  deploymentConfig.streamDurableObjectBindingScriptName == null
+    ? DurableObjectNamespace<StreamDurableObject>("stream", {
+        className: "StreamDurableObject",
+        sqlite: true,
+      })
+    : DurableObjectNamespace<StreamDurableObject>("stream", {
+        // Deployed Events should use OS2's Stream Durable Object script so all
+        // stream state and callable subscription delivery share one deployment
+        // boundary. The Events app remains a UI/oRPC debugging surface; shared
+        // stream schemas and the DO implementation live in `packages/shared`.
+        className: "StreamDurableObject",
+        scriptName: deploymentConfig.streamDurableObjectBindingScriptName,
+      });
+const enableE2EAppendChainSubscriber = ctx.app.local || ctx.app.stage.startsWith("preview_");
+const e2eAppendChainSubscriber = enableE2EAppendChainSubscriber
+  ? DurableObjectNamespace<E2EAppendChainSubscriber>("e2e-append-chain-subscriber", {
+      className: "E2EAppendChainSubscriber",
+      sqlite: true,
+    })
+  : undefined;
 
-export const worker = await TanStackStart(APP_NAME, {
-  name: workerName,
-  adopt: true,
+const { worker, afterFinalize } = await IterateApp(ctx, {
   bindings: {
     DB: db,
+    DO_CATALOG: db,
     STREAM: stream,
-    SELF: Self,
-    DYNAMIC_WORKER_EGRESS_GATEWAY: Worker.experimentalEntrypoint(
-      Self,
-      "DynamicWorkerEgressGateway",
-    ),
-    LOADER: WorkerLoader(),
-    APP_CONFIG: alchemy.secret(JSON.stringify(rawAppConfig, null, 2)),
+    ...(e2eAppendChainSubscriber == null
+      ? {}
+      : { E2E_APPEND_CHAIN_SUBSCRIBER: e2eAppendChainSubscriber }),
   },
-  // `packages/shared/src/apps/logging/orpc-plugin.ts` inspects `request.signal`
-  // so aborted client requests do not log as real handler failures. Cloudflare
-  // gates that API behind this compatibility flag:
+  // Cloudflare gates `request.signal` behind this flag — needed by the oRPC
+  // logging plugin to distinguish aborted client requests from real failures.
   // https://developers.cloudflare.com/workers/runtime-apis/request/
-  compatibilityFlags: ["enable_request_signal"],
-  wrangler: {
-    main: "./src/entry.workerd.ts",
-  },
-  routes: env.WORKER_ROUTES.map((hostname) => ({
-    pattern: `${hostname}/*`,
-    adopt: true,
-  })),
-  observability: {
-    enabled: true,
-    headSamplingRate: 1,
-    logs: {
-      enabled: true,
-      headSamplingRate: 1,
-      persist: true,
-      invocationLogs: true,
-    },
-    traces: {
-      enabled: true,
-      persist: true,
-      headSamplingRate: 1,
-    },
-  },
+  // `global_fetch_strictly_public` lets this Worker call same-zone Worker routes
+  // such as agents.iterate.com via fetch instead of bypassing Workers to origin.
+  compatibilityFlags: ["enable_request_signal", "global_fetch_strictly_public"],
+  extraRouteHostnames: projectRouteHostnamesForBaseUrl(ctx.runtimeConfig.baseUrl),
 });
 
-console.dir(
-  {
-    config: compiledAppConfig,
-    url: primaryUrl ?? worker.url,
-    workersDevUrl: worker.url,
-  },
-  { depth: null },
-);
+export { worker };
 
-await app.finalize();
+await ctx.app.finalize();
+await afterFinalize();
+
+if (!ctx.app.local) process.exit(0);
+
+function projectRouteHostnamesForBaseUrl(baseUrl: string | undefined) {
+  if (!baseUrl) return [];
+
+  const hostname = new URL(baseUrl).hostname;
+  if (hostname === "localhost" || hostname.endsWith(".workers.dev")) return [];
+
+  return [`*.${hostname}`];
+}

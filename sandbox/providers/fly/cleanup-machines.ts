@@ -5,7 +5,7 @@ import { z } from "zod/v4";
 const FLY_API_BASE = "https://api.machines.dev";
 const FLY_GRAPHQL_BASE = "https://api.fly.io/graphql";
 /** Prefixes allowed by default. Use --prefix to bypass this restriction. */
-const ALLOWED_PREFIXES = new Set(["dev", "stg"]);
+const ALLOWED_PREFIXES = new Set(["dev", "preview"]);
 const LIST_APPS_PAGE_SIZE = 100;
 
 const FLY_ORG_APPS_QUERY = `
@@ -232,7 +232,7 @@ const router = {
       if (!ALLOWED_PREFIXES.has(prefix) && !input.iAmTotallySure) {
         if (!prefix.startsWith("test-")) {
           throw new Error(
-            `Prefix '${prefix}' is not allowed. Only dev/stg or test-* prefixes are permitted. Use --i-am-totally-sure to bypass this restriction.`,
+            `Prefix '${prefix}' is not allowed. Only dev/preview or test-* prefixes are permitted. Use --i-am-totally-sure to bypass this restriction.`,
           );
         }
       }

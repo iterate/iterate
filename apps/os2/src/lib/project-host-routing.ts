@@ -49,3 +49,30 @@ export function resolveProjectSlugFromHostname(
 
   return undefined;
 }
+
+export function buildProjectMcpUrl(input: {
+  projectSlug: string;
+  customHostname?: string | null;
+  projectHostnameBases: readonly string[];
+}) {
+  if (!projectSlugPattern.test(input.projectSlug)) return null;
+  const customHostname = normalizeCustomHostname(input.customHostname);
+  if (customHostname) {
+    if (!hostnamePattern.test(customHostname)) return null;
+    return `https://${customHostname}`;
+  }
+
+  const projectHostnameBase = input.projectHostnameBases[0];
+  if (!projectHostnameBase) return null;
+
+  // The first configured project host base is the canonical environment URL for
+  // human-facing links. Project MCP is hosted at the root of a dedicated MCP
+  // hostname, not under a `/mcp` path on the project app host. Use the single
+  // label fallback form as canonical because preview/prod certificates can cover
+  // `mcp__demo.example.app` with an ordinary wildcard, while
+  // `mcp.demo.example.app` needs a deeper wildcard certificate.
+  const normalizedBase = normalizeProjectHostnameBase(projectHostnameBase);
+  if (!hostnamePattern.test(normalizedBase)) return null;
+
+  return `https://mcp__${input.projectSlug}.${normalizedBase}`;
+}

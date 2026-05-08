@@ -1,58 +1,55 @@
 /// <reference types="@cloudflare/workers-types" />
 
 import { dequal } from "dequal/lite";
+import { z } from "zod";
 import type {
   Constructor,
   DurableObjectClass,
   DurableObjectConstructor,
-  MembersOf,
-  ReqEnvOf,
-  StaticSide,
+  DurableObjectMixinResult,
 } from "./mixin-types.ts";
 import type { DurableObjectCoreProtected } from "./with-durable-object-core.ts";
 
-export type LifecycleInit = {
+export type LifecycleStructuredNamePrimitive = string | number | boolean | null;
+export type LifecycleStructuredName = string | Record<string, LifecycleStructuredNamePrimitive>;
+export type LifecycleInitialStatePrimitive = string | number | boolean | null;
+export type LifecycleInitialState =
+  | LifecycleInitialStatePrimitive
+  | readonly LifecycleInitialState[]
+  | {
+      readonly [key: string]: LifecycleInitialState;
+    };
+
+export type LifecycleInitializeInput<InitialState = undefined> = {
   /**
-   * Durable Object names come from `namespace.getByName(name)`.
-   *
-   * The lifecycle hooks mixin stores the name alongside the rest of the init
-   * params and verifies it against `ctx.id.name`, so a stub for one name cannot
-   * initialize storage for another name by mistake.
+   * The actual Cloudflare Durable Object string name used with
+   * `namespace.getByName(name)`.
    */
   name: string;
-};
+} & ([InitialState] extends [undefined]
+  ? {
+      initialState?: never;
+    }
+  : {
+      /**
+       * Optional on repeat calls, but required the first time a Durable Object
+       * with an initialStateSchema is initialized.
+       */
+      initialState?: InitialState;
+    });
 
-/**
- * Callers usually already passed `name` to `getOrInitializeDoStub()`, so the
- * helper accepts init params without `name` and fills it in itself.
- *
- * The `BaseInitParams extends unknown ? ... : never` wrapper makes this work for
- * unions one variant at a time instead of flattening the union first.
- *
- * Example:
- *
- *   type Init =
- *     | { name: string; kind: "team"; teamId: string }
- *     | { name: string; kind: "user"; userId: string };
- *
- *   { kind: "team", teamId: "team-a" } satisfies LifecycleInitInput<Init>;
- *   { kind: "user", userId: "user-a" } satisfies LifecycleInitInput<Init>;
- *
- * Without the distributive wrapper, the variant-specific fields are much
- * easier to accidentally weaken when `name` is omitted.
- */
-export type LifecycleInitInput<BaseInitParams extends LifecycleInit> =
-  BaseInitParams extends unknown
-    ? Omit<BaseInitParams, "name"> & Partial<Pick<BaseInitParams, "name">>
-    : never;
-
-export interface LifecycleHooksMembers<InitParams extends LifecycleInit> {
-  initialize(params: InitParams): Promise<InitParams>;
-  assertInitialized(): InitParams;
-  ensureStarted(): Promise<InitParams>;
+export interface LifecycleHooksMembers<
+  StructuredName extends LifecycleStructuredName = string,
+  InitialState = undefined,
+> {
+  initialize(input: LifecycleInitializeInput<InitialState>): Promise<StructuredName>;
+  assertInitialized(): StructuredName;
+  ensureStarted(): Promise<StructuredName>;
 }
 
-type LifecycleHook<InitParams extends LifecycleInit> = (params: InitParams) => void | Promise<void>;
+type LifecycleHook<StructuredName extends LifecycleStructuredName> = (
+  structuredName: StructuredName,
+) => void | Promise<void>;
 
 type DurableObjectBranded = {
   /**
@@ -65,97 +62,85 @@ type DurableObjectBranded = {
   __DURABLE_OBJECT_BRAND: never;
 };
 
-type InitParamsOf<TInstance> =
-  TInstance extends LifecycleHooksMembers<infer InitParams> ? InitParams : never;
+type StructuredNameOf<TInstance> =
+  TInstance extends LifecycleHooksMembers<infer StructuredName> ? StructuredName : never;
 
-type HasOnlyName<InitParams extends LifecycleInit> = keyof Omit<InitParams, "name"> extends never
-  ? true
-  : false;
+type InitialStateOf<TInstance> =
+  TInstance extends LifecycleHooksMembers<LifecycleStructuredName, infer InitialState>
+    ? InitialState
+    : undefined;
 
-type GetOrInitializeDoStubOptions<
-  TInstance extends DurableObjectBranded & LifecycleHooksMembers<LifecycleInit>,
-> =
-  | ({
-      namespace: DurableObjectNamespace<TInstance>;
-      name: string;
-    } & (HasOnlyName<InitParamsOf<TInstance>> extends true
-      ? { initParams?: LifecycleInitInput<InitParamsOf<TInstance>> }
-      : { initParams: LifecycleInitInput<InitParamsOf<TInstance>> }))
-  | {
-      namespace: DurableObjectNamespace<TInstance>;
-      name?: never;
-      initParams: LifecycleInitInput<InitParamsOf<TInstance>>;
-    };
+type GetOrInitializeDoStubOptions<TInstance extends DurableObjectBranded> = {
+  namespace: DurableObjectNamespace<TInstance>;
+  name: string | StructuredNameOf<TInstance>;
+} & ([InitialStateOf<TInstance>] extends [undefined]
+  ? {
+      initialState?: never;
+    }
+  : {
+      initialState: InitialStateOf<TInstance>;
+    });
 
 /**
  * Type-only protected surface.
  *
  * Mixins cannot add protected members through an interface, so this abstract
  * class is only used in the returned constructor type. It lets subclasses see
- * `this.initParams`, while external callers cannot.
+ * `this.name` and `this.structuredName`, while external callers cannot.
  *
- * Example:
- *
- *   class Room extends RoomBase<Env> {
- *     owner() {
- *       return this.initParams.ownerUserId;
- *     }
- *   }
- *
- *   room.initParams; // TypeScript error outside the subclass.
- *
- * The getter body should never run. The real runtime getter is implemented by
- * `LifecycleHooksMixin` below.
+ * `this.name` is the Cloudflare Durable Object string name. `this.structuredName`
+ * is the typed value the app treats as the name's structure.
  */
-export abstract class LifecycleHooksProtected<InitParams extends LifecycleInit> {
-  protected get initParams(): InitParams {
+export abstract class LifecycleHooksProtected<
+  StructuredName extends LifecycleStructuredName = string,
+  InitialState = undefined,
+> {
+  protected get name(): string {
     throw new Error("LifecycleHooksProtected is type-only and should never run.");
   }
 
-  protected registerOnFirstInitialize(_fn: LifecycleHook<InitParams>): void {
+  protected get structuredName(): StructuredName {
     throw new Error("LifecycleHooksProtected is type-only and should never run.");
   }
 
-  protected registerOnStart(_fn: LifecycleHook<InitParams>): void {
+  protected get initialState(): InitialState {
+    throw new Error("LifecycleHooksProtected is type-only and should never run.");
+  }
+
+  protected registerOnFirstInitialize(_fn: LifecycleHook<StructuredName>): void {
+    throw new Error("LifecycleHooksProtected is type-only and should never run.");
+  }
+
+  protected registerOnInstanceWake(_fn: LifecycleHook<StructuredName>): void {
     throw new Error("LifecycleHooksProtected is type-only and should never run.");
   }
 }
 
-type WithLifecycleHooksResult<TBase extends DurableObjectClass, InitParams extends LifecycleInit> =
+type WithLifecycleHooksResult<
+  TBase extends DurableObjectClass,
+  StructuredName extends LifecycleStructuredName,
+  InitialState,
+> =
   // Preserve the generic Durable Object constructor so this remains legal:
   //
-  //   const RoomBase = withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject));
+  //   const RoomBase = withLifecycleHooks({ nameSchema: RoomName })(withDurableObjectCore(DurableObject));
   //   class Room extends RoomBase<Env> {}
-  //
-  // The lifecycle mixin consumes the protected core capabilities instead of
-  // reaching into Cloudflare's `ctx` directly. That mirrors the Agents SDK
-  // layering where `Agent` adapts `ctx.storage.sql` and feature mixins consume
-  // the exposed capability.
-  StaticSide<TBase> &
-    DurableObjectClass<
-      ReqEnvOf<TBase>,
-      MembersOf<TBase> & LifecycleHooksMembers<InitParams> & LifecycleHooksProtected<InitParams>
-    > &
-    // Add the instance members introduced by this mixin. The protected getter
-    // has to come from `LifecycleHooksProtected` because protected members cannot
-    // be expressed with an interface.
-    //
-    // Benefit:
-    //
-    //   const RoomBase = withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject));
-    //   class Room extends RoomBase<Env> {
-    //     send() { return this.initParams.ownerUserId; } // typed
-    //   }
-    //
-    // But outside the subclass, `room.initParams` is still a TS error.
-    Constructor<LifecycleHooksMembers<InitParams> & LifecycleHooksProtected<InitParams>>;
+  // Add the instance members introduced by this mixin. The protected getters
+  // have to come from `LifecycleHooksProtected` because protected members
+  // cannot be expressed with an interface.
+  DurableObjectMixinResult<
+    TBase,
+    LifecycleHooksMembers<StructuredName, InitialState> &
+      LifecycleHooksProtected<StructuredName, InitialState>
+  >;
 
-const LIFECYCLE_PARAMS_STORAGE_KEY = "__mixin_lifecycle_hooks.params.v1";
+const LIFECYCLE_NAME_STORAGE_KEY = "__mixin_lifecycle_hooks.name.v1";
+const LIFECYCLE_INITIAL_STATE_STORAGE_KEY = "__mixin_lifecycle_hooks.initial_state.v1";
 const FIRST_INITIALIZE_DONE_STORAGE_KEY = "__mixin_lifecycle_hooks.first_initialize_done.v1";
 
 export class NotInitializedError extends Error {
   constructor() {
-    super("Durable Object has not been initialized. Call initialize(params) first.");
+    super("Durable Object has not been initialized. Call initialize({ name }) first.");
     this.name = "NotInitializedError";
   }
 }
@@ -164,17 +149,33 @@ export class InitializeNameMismatchError extends Error {
   constructor(expected: string, actual: string | undefined) {
     super(
       actual === undefined
-        ? `Cannot initialize object named "${expected}" because ctx.id.name is undefined. Use namespace.getByName(name) or namespace.idFromName(name).`
-        : `Cannot initialize object named "${actual}" with params.name="${expected}".`,
+        ? `Cannot verify Durable Object runtime name while initializing "${expected}" because ctx.id.name is undefined.`
+        : `Cannot initialize object named "${actual}" with initialize({ name: "${expected}" }).`,
     );
     this.name = "InitializeNameMismatchError";
   }
 }
 
-export class InitializeParamsMismatchError extends Error {
+export class InitializeStoredNameMismatchError extends Error {
   constructor(name: string) {
-    super(`Durable Object named "${name}" has already been initialized with different params.`);
-    this.name = "InitializeParamsMismatchError";
+    super(`Durable Object named "${name}" has already been initialized with a different name.`);
+    this.name = "InitializeStoredNameMismatchError";
+  }
+}
+
+export class InitializeInitialStateRequiredError extends Error {
+  constructor(name: string) {
+    super(`Durable Object named "${name}" requires initialState the first time it is initialized.`);
+    this.name = "InitializeInitialStateRequiredError";
+  }
+}
+
+export class InitializeInitialStateMismatchError extends Error {
+  constructor(name: string) {
+    super(
+      `Durable Object named "${name}" has already been initialized with different initialState.`,
+    );
+    this.name = "InitializeInitialStateMismatchError";
   }
 }
 
@@ -182,18 +183,53 @@ export class InitializeParamsMismatchError extends Error {
  * Adds named initialization and lifecycle hooks to a SQLite-backed Durable Object.
  *
  * Public methods: `initialize()`, `ensureStarted()`, and `assertInitialized()`.
- * Protected subclass/mixin surface: `initParams`, `registerOnFirstInitialize()`,
- * and `registerOnStart()`.
+ * Protected subclass/mixin surface: `name`, `structuredName`,
+ * `registerOnFirstInitialize()`, and `registerOnInstanceWake()`.
  *
- * Init params are persisted in local Durable Object storage, so they must be
- * values that can cross Durable Object RPC and survive storage serialization.
- * Store IDs/config here, then rebuild clients and other runtime objects from
- * `env` when the Durable Object starts.
+ * Cloudflare Durable Objects are addressed by a string name. This mixin stores
+ * that string as `this.name` and parses it through a Zod schema to expose
+ * `this.structuredName`.
+ *
+ * `initialStateSchema` is a separate optional lane for immutable data that a
+ * Durable Object needs before it can work, but that should not be encoded into
+ * the Durable Object name. Supplying it means a name alone is not enough to
+ * create a valid object: the first initialize call must also include
+ * `initialState`, which is persisted and hydrated on later wakes.
+ *
+ * Some local Miniflare paths do not reliably expose the name from `ctx.id.name`,
+ * so callers pass `initialize({ name })` and the mixin persists that string.
+ * Persisting matters because alarms and other platform wakes do not go through
+ * the caller-side initialization wrapper.
+ *
+ * Subclasses should not override `initialize()`. Put first-creation work in
+ * `registerOnFirstInitialize()`, put per-JavaScript-instance wake work in
+ * `registerOnInstanceWake()`, and call `ensureStarted()` before public methods
+ * touch initialized state.
  */
-export function withLifecycleHooks<InitParams extends LifecycleInit>() {
+export function withLifecycleHooks<
+  StructuredName extends LifecycleStructuredName = string,
+  InitialState = undefined,
+>(options?: {
+  /**
+   * Parses the Durable Object string name after a tiny convenience step:
+   * names starting with "{" are JSON-parsed if possible before being passed
+   * to this schema. Invalid JSON falls through as the original string, so the
+   * schema remains the single validation authority.
+   */
+  nameSchema?: z.ZodType<StructuredName>;
+  /**
+   * Validates immutable creation-time data that should not be part of the
+   * Durable Object name. The first initialize call must provide this state;
+   * later calls may omit it, or may provide the exact same value.
+   */
+  initialStateSchema?: z.ZodType<InitialState>;
+}) {
+  const nameSchema = (options?.nameSchema ?? z.string()) as z.ZodType<StructuredName>;
+  const initialStateSchema = options?.initialStateSchema as z.ZodType<InitialState> | undefined;
+
   return function <TBase extends DurableObjectClass>(
     Base: TBase & Constructor<DurableObjectCoreProtected>,
-  ): WithLifecycleHooksResult<TBase, InitParams> {
+  ): WithLifecycleHooksResult<TBase, StructuredName, InitialState> {
     const BaseWithCore = Base as unknown as DurableObjectConstructor<
       unknown,
       DurableObjectCoreProtected
@@ -201,46 +237,57 @@ export function withLifecycleHooks<InitParams extends LifecycleInit>() {
 
     abstract class LifecycleHooksMixin
       extends BaseWithCore
-      implements LifecycleHooksMembers<InitParams>
+      implements LifecycleHooksMembers<StructuredName, InitialState>
     {
-      #initParams: InitParams | undefined;
-      #firstInitializeHooks: Array<LifecycleHook<InitParams>> = [];
-      #startHooks: Array<LifecycleHook<InitParams>> = [];
+      #name: string | undefined;
+      #structuredName: StructuredName | undefined;
+      #initialState: InitialState | undefined;
+      #firstInitializeHooks: Array<LifecycleHook<StructuredName>> = [];
+      #instanceWakeHooks: Array<LifecycleHook<StructuredName>> = [];
       #started = false;
-      #startPromise: Promise<InitParams> | undefined;
+      #instanceWakePromise: Promise<StructuredName> | undefined;
       #runningLifecycleHooks = false;
 
       constructor(...args: any[]) {
         super(...args);
 
-        // This utility is intentionally for SQLite-backed Durable Objects.
-        // Their synchronous KV API lets us hydrate cached init params during
-        // construction without `blockConcurrencyWhile`, because no async storage
-        // call is needed before requests can run.
-        // https://developers.cloudflare.com/durable-objects/api/storage-api/#synchronous-kv-api
-        this.#initParams = this.getDurableObjectKv().get<InitParams>(LIFECYCLE_PARAMS_STORAGE_KEY);
+        // Synchronous KV lets us hydrate name state during construction. We keep
+        // this persisted primarily because alarms can wake an object without the
+        // caller-side initialize wrapper running first.
+        const name = this.getDurableObjectKv().get<string>(LIFECYCLE_NAME_STORAGE_KEY);
+        if (name !== undefined) {
+          this.#name = name;
+          this.#structuredName = this.parseName(name);
+        }
+
+        const initialState = this.getDurableObjectKv().get<InitialState>(
+          LIFECYCLE_INITIAL_STATE_STORAGE_KEY,
+        );
+        if (initialState !== undefined) {
+          this.#initialState = this.parseInitialState(initialState);
+        }
       }
 
-      /**
-       * Protected subclass convenience.
-       *
-       * Throws synchronously if initialize() has not run.
-       */
-      protected get initParams(): InitParams {
+      protected get name(): string {
+        this.assertInitialized();
+        return this.#name!;
+      }
+
+      protected get structuredName(): StructuredName {
         return this.assertInitialized();
+      }
+
+      protected get initialState(): InitialState {
+        this.assertInitialized();
+        return this.#initialState!;
       }
 
       /**
        * Register short work that should run after this Durable Object receives
-       * init params for the first time.
-       *
-       * The "first" marker is persisted in the Durable Object's local storage,
-       * not in external systems. A hook that writes to D1, R2, or another
-       * service must still be idempotent because there is no transaction across
-       * the DO's SQLite storage and that external service.
+       * its structured name for the first time.
        */
-      protected registerOnFirstInitialize(fn: LifecycleHook<InitParams>): void {
-        if (this.#started || this.#startPromise !== undefined) {
+      protected registerOnFirstInitialize(fn: LifecycleHook<StructuredName>): void {
+        if (this.#started || this.#instanceWakePromise !== undefined) {
           throw new Error(
             "registerOnFirstInitialize() must be called before lifecycle hooks start.",
           );
@@ -250,89 +297,89 @@ export function withLifecycleHooks<InitParams extends LifecycleInit>() {
       }
 
       /**
-       * Register work that should run once per Durable Object activation, after
-       * init params exist and after first-initialize hooks have completed.
-       *
-       * Hooks are awaited by `ensureStarted()`. If the work is best-effort, start
-       * a separately caught promise and return quickly so the hook does not become
-       * part of the object's readiness boundary. Cloudflare's Durable Object
-       * `ctx.waitUntil()` exists for Worker API compatibility but does not extend
-       * lifetime in Durable Objects.
+       * Register work that should run once per JavaScript Durable Object instance
+       * wake, after the structured name exists and first-initialize hooks complete.
        */
-      protected registerOnStart(fn: LifecycleHook<InitParams>): void {
-        if (this.#started || this.#startPromise !== undefined) {
-          throw new Error("registerOnStart() must be called before lifecycle hooks start.");
+      protected registerOnInstanceWake(fn: LifecycleHook<StructuredName>): void {
+        if (this.#started || this.#instanceWakePromise !== undefined) {
+          throw new Error("registerOnInstanceWake() must be called before lifecycle hooks start.");
         }
 
-        this.#startHooks.push(fn);
+        this.#instanceWakeHooks.push(fn);
       }
 
-      async initialize(params: InitParams): Promise<InitParams> {
-        if (!params.name) {
-          throw new Error("initialize(params) requires a non-empty params.name.");
+      async initialize(input: LifecycleInitializeInput<InitialState>): Promise<StructuredName> {
+        const runtimeName = this.getDurableObjectName();
+
+        if (runtimeName !== undefined && runtimeName !== input.name) {
+          throw new InitializeNameMismatchError(input.name, runtimeName);
         }
 
-        // Cloudflare exposes `ctx.id.name` for objects addressed by
-        // `namespace.getByName(name)` / `idFromName(name)`. The worker-pool
-        // Miniflare tests exercise this same path, including the mismatch
-        // branch, so we keep the production invariant instead of accepting an
-        // unverifiable name when the runtime does not provide one.
-        const objectName = this.getDurableObjectName();
-
-        if (objectName !== params.name) {
-          throw new InitializeNameMismatchError(params.name, objectName);
-        }
-
-        const existing = this.getDurableObjectKv().get<InitParams>(LIFECYCLE_PARAMS_STORAGE_KEY);
+        const structuredName = this.parseName(input.name);
+        const existing = this.getDurableObjectKv().get<string>(LIFECYCLE_NAME_STORAGE_KEY);
+        const storedInitialState = this.getDurableObjectKv().get<InitialState>(
+          LIFECYCLE_INITIAL_STATE_STORAGE_KEY,
+        );
 
         if (existing !== undefined) {
-          // Repeated initialization is allowed only when the full params match.
-          // This makes the helper idempotent across cold starts and retrying
-          // callers, while still rejecting attempts to mutate immutable init
-          // state after the object exists.
-          if (!dequal(existing, params)) {
-            throw new InitializeParamsMismatchError(params.name);
+          if (existing !== input.name) {
+            throw new InitializeStoredNameMismatchError(existing);
           }
 
-          this.#initParams = existing;
+          this.#initialState = this.reconcileInitialState({
+            name: input.name,
+            inputInitialState: input.initialState,
+            storedInitialState,
+          });
+          this.#name = existing;
+          this.#structuredName = structuredName;
           return await this.ensureStarted();
         }
 
-        this.getDurableObjectKv().put(LIFECYCLE_PARAMS_STORAGE_KEY, params);
-        this.#initParams = params;
+        this.#initialState = this.reconcileInitialState({
+          name: input.name,
+          inputInitialState: input.initialState,
+          storedInitialState,
+        });
+        this.getDurableObjectKv().put(LIFECYCLE_NAME_STORAGE_KEY, input.name);
+        if (this.#initialState !== undefined) {
+          this.getDurableObjectKv().put(LIFECYCLE_INITIAL_STATE_STORAGE_KEY, this.#initialState);
+        }
+        this.#name = input.name;
+        this.#structuredName = structuredName;
 
         return await this.ensureStarted();
       }
 
-      assertInitialized(): InitParams {
-        if (this.#initParams === undefined) {
+      assertInitialized(): StructuredName {
+        if (this.#structuredName === undefined) {
           throw new NotInitializedError();
         }
 
-        return this.#initParams;
+        if (initialStateSchema !== undefined && this.#initialState === undefined) {
+          throw new NotInitializedError();
+        }
+
+        return this.#structuredName;
       }
 
-      async ensureStarted(): Promise<InitParams> {
-        const params = this.assertInitialized();
+      async ensureStarted(): Promise<StructuredName> {
+        const structuredName = this.assertInitialized();
 
         if (this.#started) {
-          return params;
+          return structuredName;
         }
 
-        // Start hooks can legitimately call protected APIs from later mixins.
-        // Those APIs usually call ensureStarted() because normal public/RPC calls
-        // must not mutate scheduler/alarm state before lifecycle startup is done.
-        //
-        // During this exact window we are already inside the startup gate, so
-        // waiting on #startPromise would deadlock: the hook waits for startup, and
-        // startup waits for the hook. Returning the initialized params is safe
-        // because blockConcurrencyWhile keeps external calls behind the gate.
+        // Instance wake hooks can legitimately call protected APIs from later
+        // mixins. During startup we are already inside the gate, so re-entering
+        // ensureStarted() should return the known structured name instead of
+        // waiting on itself.
         if (this.#runningLifecycleHooks) {
-          return params;
+          return structuredName;
         }
 
-        this.#startPromise ??= (async () => {
-          let initialized = params;
+        this.#instanceWakePromise ??= (async () => {
+          let initialized = structuredName;
           let hasStartupError = false;
           let startupError: unknown;
 
@@ -352,16 +399,12 @@ export function withLifecycleHooks<InitParams extends LifecycleInit>() {
                 this.getDurableObjectKv().put(FIRST_INITIALIZE_DONE_STORAGE_KEY, true);
               }
 
-              for (const fn of this.#startHooks) {
+              for (const fn of this.#instanceWakeHooks) {
                 await fn.call(this, initialized);
               }
 
               this.#started = true;
             } catch (error) {
-              // JavaScript can throw any value, including `undefined`.
-              // Keep an explicit boolean so `throw undefined` is still treated
-              // as a real startup failure rather than the "no error captured"
-              // sentinel.
               hasStartupError = true;
               startupError = error;
             } finally {
@@ -370,12 +413,8 @@ export function withLifecycleHooks<InitParams extends LifecycleInit>() {
           });
 
           // Do not throw from inside blockConcurrencyWhile. Cloudflare documents
-          // that thrown errors reset the Durable Object, which is correct for
-          // fatal constructor setup but too harsh for retryable lifecycle hooks.
-          //
-          // Capture and re-throw after the gate so initialize()/ensureStarted()
-          // callers can catch and retry normally.
-          // https://developers.cloudflare.com/durable-objects/api/state/#blockconcurrencywhile
+          // that thrown errors reset the Durable Object, which is too harsh for
+          // retryable lifecycle hooks.
           if (hasStartupError) {
             throw startupError;
           }
@@ -384,137 +423,159 @@ export function withLifecycleHooks<InitParams extends LifecycleInit>() {
         })();
 
         try {
-          return await this.#startPromise;
+          return await this.#instanceWakePromise;
         } catch (error) {
-          // Failed startup should be retryable. Without clearing the shared
-          // promise, every later ensureStarted() would observe the same
-          // rejected promise and the Durable Object would stay stuck until
-          // eviction.
-          this.#startPromise = undefined;
+          this.#instanceWakePromise = undefined;
           throw error;
         }
+      }
+
+      private parseName(name: string): StructuredName {
+        let valueForSchema: unknown = name;
+
+        // Structured names are just bare canonical JSON object strings. When a
+        // name looks like one, try to parse it before handing it to the schema.
+        // If parsing fails, keep the raw string and let the schema produce the
+        // validation error; there is no separate "decoded name" abstraction.
+        if (name.startsWith("{")) {
+          try {
+            valueForSchema = JSON.parse(name);
+          } catch {
+            valueForSchema = name;
+          }
+        }
+
+        return nameSchema.parse(valueForSchema);
+      }
+
+      private parseInitialState(value: unknown): InitialState {
+        if (initialStateSchema === undefined) {
+          return value as InitialState;
+        }
+
+        return initialStateSchema.parse(value);
+      }
+
+      private reconcileInitialState(input: {
+        name: string;
+        inputInitialState: InitialState | undefined;
+        storedInitialState: InitialState | undefined;
+      }): InitialState | undefined {
+        if (initialStateSchema === undefined) {
+          return undefined;
+        }
+
+        if (input.storedInitialState !== undefined) {
+          const stored = this.parseInitialState(input.storedInitialState);
+          if (
+            input.inputInitialState !== undefined &&
+            !dequal(stored, this.parseInitialState(input.inputInitialState))
+          ) {
+            throw new InitializeInitialStateMismatchError(input.name);
+          }
+
+          return stored;
+        }
+
+        if (input.inputInitialState === undefined) {
+          throw new InitializeInitialStateRequiredError(input.name);
+        }
+
+        return this.parseInitialState(input.inputInitialState);
       }
     }
 
     // TypeScript cannot prove that a generic class-expression mixin preserves
-    // both Base's static side and the protected `initParams` surface. The cast
-    // is the boundary where we state the runtime shape implemented above.
-    return LifecycleHooksMixin as unknown as WithLifecycleHooksResult<TBase, InitParams>;
+    // both Base's static side and the protected name surface. The cast is the
+    // boundary where we state the runtime shape implemented above.
+    return LifecycleHooksMixin as unknown as WithLifecycleHooksResult<
+      TBase,
+      StructuredName,
+      InitialState
+    >;
   };
 }
 
 /**
- * Returns a named Durable Object stub after calling `initialize()`.
+ * Returns a named Durable Object stub after calling `initialize({ name })`.
  *
- * `initialize()` waits for `ensureStarted()`, so the returned stub has already
- * passed the lifecycle readiness boundary. The helper name stays focused on
- * caller intent: get this named object, initializing it if this is the first
- * call.
- *
- * If the init shape is only `{ name: string }`, callers can omit `initParams`:
- *
- *   getOrInitializeDoStub({ namespace, name: "room-a" });
- *
- * Durable Object names are durable identity, not display labels. Prefer stable
- * identifiers in names, such as database IDs, project IDs, or user IDs. Avoid
- * mutable slugs/titles unless changing the slug should deliberately create a
- * different Durable Object.
- *
- * If the init shape has required fields beyond `name`, callers must pass them:
- *
- *   getOrInitializeDoStub({
- *     namespace,
- *     name: "room-a",
- *     initParams: { ownerUserId: "user-a" },
- *   });
- *
- * This keeps the helper honest: it cannot return a stub without the data
- * required to initialize it.
- *
- * If `name` is omitted, the helper derives a stable name from `initParams`.
- * That keeps simple call sites concise while still storing the derived name
- * inside the Durable Object's persisted init params:
- *
- *   getOrInitializeDoStub({
- *     namespace,
- *     initParams: {
- *       projectId,
- *       roomSlug,
- *     },
- *   });
- *
- * Use `deriveDurableObjectNameFromInitParams()` directly when other code needs
- * the same generated name, for example before storing a callable that addresses
- * the object by `{ name }`.
+ * `name` may be either a raw string Durable Object name or the structured-name
+ * object accepted by the target Durable Object's lifecycle schema. Object names
+ * are serialized as bare canonical JSON before `namespace.getByName(name)`.
  */
-export async function getOrInitializeDoStub<
-  TInstance extends DurableObjectBranded & LifecycleHooksMembers<LifecycleInit>,
->(options: GetOrInitializeDoStubOptions<TInstance>) {
-  const { namespace } = options;
-  const hasName = "name" in options && options.name !== undefined;
-  const hasInitParams = "initParams" in options && options.initParams !== undefined;
-
-  if (!hasName && !hasInitParams) {
-    throw new Error("getOrInitializeDoStub() requires either name or initParams.");
+export async function getOrInitializeDoStub<TInstance extends DurableObjectBranded>(
+  options: GetOrInitializeDoStubOptions<TInstance>,
+): Promise<DurableObjectStub<TInstance>> {
+  if (options.name === undefined) {
+    throw new Error("getOrInitializeDoStub() requires name.");
   }
 
-  const initParams = hasInitParams ? options.initParams : undefined;
+  const name = deriveDurableObjectNameFromStructuredName({
+    structuredName: options.name,
+  });
+  const stub = options.namespace.getByName(name);
 
-  // The options type only permits omitted initParams for name-only init shapes.
-  // After destructuring, TypeScript no longer carries that conditional fact, so
-  // `{}` is the runtime default and `name` is added before initialize() runs.
-  const input = (initParams ?? {}) as LifecycleInitInput<InitParamsOf<TInstance>>;
-  const name =
-    (hasName ? options.name : input.name) ??
-    deriveDurableObjectNameFromInitParams({ initParams: input });
-  const stub = namespace.getByName(name);
-
-  if (input.name !== undefined && input.name !== name) {
-    throw new Error(`initParams.name must match name: expected "${name}", got "${input.name}".`);
-  }
-
-  // Durable Object RPC methods are exposed on the stub, but the stub type
-  // cannot infer the exact InitParams from the options object after the
-  // conditional `initParams` handling above. Keep the cast local and immediately
-  // call the public `initialize()` RPC with the name-filled params.
-  await (stub as unknown as LifecycleHooksMembers<InitParamsOf<TInstance>>).initialize({
-    ...input,
+  // Durable Object RPC methods are exposed on the stub, but the local variable
+  // cannot carry the exact structured-name generic after Cloudflare's namespace
+  // wrapper. Keep the cast local to the lifecycle method and return the original
+  // typed stub.
+  await (
+    stub as unknown as LifecycleHooksMembers<StructuredNameOf<TInstance>, InitialStateOf<TInstance>>
+  ).initialize({
     name,
-  } as unknown as InitParamsOf<TInstance>);
+    initialState: options.initialState,
+  });
 
   return stub;
 }
 
 /**
- * Deterministically derives a Durable Object name from init params.
- *
- * This is intentionally boring and local: sort object keys, omit `undefined`
- * object fields, preserve array order, then prefix the canonical JSON. It is
- * not an index or lookup layer. It is just the default name used when
- * `getOrInitializeDoStub()` receives init params without an explicit name.
+ * Deterministically derives a Durable Object string name from a structured name.
  */
-export function deriveDurableObjectNameFromInitParams(options: { initParams: unknown }): string {
-  return `init:${canonicalJson(options.initParams)}`;
-}
-
-function canonicalJson(value: unknown): string {
-  return JSON.stringify(canonicalizeJsonValue(value));
-}
-
-function canonicalizeJsonValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((item) => canonicalizeJsonValue(item));
+export function deriveDurableObjectNameFromStructuredName(options: {
+  structuredName: LifecycleStructuredName;
+}): string {
+  if (typeof options.structuredName === "string") {
+    return options.structuredName;
   }
 
-  if (value === null || typeof value !== "object") {
-    return value;
+  return serializeDurableObjectStructuredName(options);
+}
+
+/**
+ * Canonical JSON representation used for object structured-name identity.
+ */
+export function serializeDurableObjectStructuredName(options: {
+  structuredName: LifecycleStructuredName;
+}): string {
+  if (typeof options.structuredName === "string") {
+    return options.structuredName;
   }
 
-  const entries = Object.entries(value)
-    .filter(([, entryValue]) => entryValue !== undefined)
-    .sort(([left], [right]) => left.localeCompare(right));
+  return canonicalFlatNameJson(options.structuredName);
+}
 
-  return Object.fromEntries(
-    entries.map(([key, entryValue]) => [key, canonicalizeJsonValue(entryValue)]),
-  );
+function canonicalFlatNameJson(value: Record<string, LifecycleStructuredNamePrimitive>): string {
+  return JSON.stringify(canonicalizeStructuredNameRecord(value));
+}
+
+function canonicalizeStructuredNameRecord(
+  value: Record<string, unknown>,
+): Record<string, LifecycleStructuredNamePrimitive> {
+  const entries = Object.entries(value).sort(([left], [right]) => left.localeCompare(right));
+
+  for (const [key, entryValue] of entries) {
+    if (
+      entryValue !== null &&
+      typeof entryValue !== "string" &&
+      typeof entryValue !== "number" &&
+      typeof entryValue !== "boolean"
+    ) {
+      throw new Error(
+        `Durable Object structured name field "${key}" must be a string, number, boolean, or null.`,
+      );
+    }
+  }
+
+  return Object.fromEntries(entries) as Record<string, LifecycleStructuredNamePrimitive>;
 }

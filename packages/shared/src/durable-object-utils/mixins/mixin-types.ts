@@ -53,6 +53,36 @@ export type StaticSide<T> = {
 };
 
 /**
+ * Standard public result shape for Durable Object mixins.
+ *
+ * Cloudflare types `ctx.exports` from `Cloudflare.GlobalProps.mainModule` by
+ * walking the Worker's top-level exports and checking whether each exported
+ * class constructs an instance with Cloudflare's private Durable Object brand.
+ * That machinery is documented in the Workers Context API docs:
+ *
+ * https://developers.cloudflare.com/workers/runtime-apis/context/#exports
+ * https://developers.cloudflare.com/workers/runtime-apis/context/#typescript-types-for-ctxexports-and-ctxprops
+ *
+ * A mixin result must therefore publish exactly one Durable Object constructor
+ * shape: `new <Env>(ctx, env) => DurableObject<Env> & accumulatedMembers`.
+ * Returning a plain `Constructor<AddedMembers>` as part of the public result can
+ * make downstream classes look like "constructs only AddedMembers" to generic
+ * mappers such as `Cloudflare.Exports`, which loses both protected `ctx` and
+ * Cloudflare's `DurableObjectBranded` instance type.
+ *
+ * `StaticSide<TBase>` keeps class statics such as public route metadata.
+ * `DurableObjectClass<...>` keeps the branded DO instance and the `Base<Env>`
+ * subclassing style. Put all protected/public mixin members into
+ * `AddedMembers`; do not add a separate member-only constructor to result
+ * types.
+ */
+export type DurableObjectMixinResult<
+  TBase extends DurableObjectClass,
+  AddedMembers,
+  ReqEnv = ReqEnvOf<TBase>,
+> = StaticSide<TBase> & DurableObjectClass<ReqEnv, MembersOf<TBase> & AddedMembers>;
+
+/**
  * Runtime constructor used inside mixin implementations.
  *
  * Public result types should usually use `DurableObjectClass` so `Base<Env>`

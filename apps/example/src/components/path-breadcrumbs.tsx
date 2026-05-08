@@ -12,10 +12,12 @@ import {
 
 type BreadcrumbStaticData = {
   breadcrumb?: string;
+  breadcrumbTo?: string;
 };
 
 type BreadcrumbLoaderData = {
   breadcrumb?: string;
+  breadcrumbTo?: string;
 };
 
 export function PathBreadcrumbs() {
@@ -28,6 +30,9 @@ export function PathBreadcrumbs() {
   const crumbs = matches.flatMap((match) => {
     const staticBreadcrumb = (match.staticData as BreadcrumbStaticData | undefined)?.breadcrumb;
     const dynamicBreadcrumb = (match.loaderData as BreadcrumbLoaderData | undefined)?.breadcrumb;
+    const staticBreadcrumbTo = (match.staticData as BreadcrumbStaticData | undefined)?.breadcrumbTo;
+    const dynamicBreadcrumbTo = (match.loaderData as BreadcrumbLoaderData | undefined)
+      ?.breadcrumbTo;
     const label = dynamicBreadcrumb ?? staticBreadcrumb;
 
     if (!label) {
@@ -38,7 +43,7 @@ export function PathBreadcrumbs() {
       {
         id: match.id,
         label,
-        to: match.pathname,
+        to: dynamicBreadcrumbTo ?? staticBreadcrumbTo ?? match.pathname,
       },
     ];
   });

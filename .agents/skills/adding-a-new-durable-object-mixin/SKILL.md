@@ -17,6 +17,13 @@ The default is **do not code immediately**. First spec the API with the user. If
 - Preserve Cloudflare-style ergonomics: `const Base = withX(...)(withDurableObjectCore(DurableObject)); class Room extends Base<Env> {}`.
 - Keep env requirements and capability requirements separate.
 - Use the smallest public API that solves the problem. Do not add optional knobs for hypothetical users.
+- If a mixin can own a generic loop, configure the mixin with the concrete
+  pieces instead of pushing the loop into every subclass. A subclass should not
+  contain domain-specific copy/paste just because the mixin only exposed
+  low-level protected helpers.
+- Avoid inventing extra nouns. If the user has settled on "runner", don't
+  introduce "adapter", "mount", "runtime", "slot", or similar names unless
+  there is a separately explainable concept.
 - Document every non-obvious type expression with the call-site benefit it protects.
 - Add examples to `README.md`; `AGENTS.md` in this folder is a symlink to that README, so agents and humans share the same guidance.
 
@@ -40,10 +47,22 @@ Before editing, write down:
 - What route/RPC/method/state does the mixin add?
 - Does it wrap `fetch`, override/extend an existing method, or only add new methods?
 - If it overrides `alarm`, `fetch`, or another runtime hook, does it call the inherited implementation and document what subclasses above it must do?
+- Is the mixin a low-level capability provider, or should it be configured with
+  concrete callbacks and own a complete generic operation? Prefer the latter
+  when otherwise every subclass would write the same loop.
+- If the mixin is configured, which configured values are created once per
+  Durable Object wake and cached? Document why cached closure state is safe and
+  what durable state still belongs in storage.
+- Does the mixin need to support multiple configured items at once, or should it
+  be stackable? Don't assume either shape. Compare the call sites:
+  `withX({ items: { a, b } })(Base)` vs `withX({ item: a })(withX({ item: b })(Base))`.
 - Does it require env bindings? If yes, what is the minimum env shape?
 - Does it require members from earlier mixins? If yes, what exact capability interface should the base satisfy?
 - Does it need local SQLite, synchronous KV, or platform alarms? If yes, depend on `DurableObjectCoreProtected` from `withDurableObjectCore()` instead of reaching into `ctx` directly.
-- Is any work best-effort? If yes, start a detached promise, catch/log failures, and document that Cloudflare's Durable Object `ctx.waitUntil()` has no Worker-style lifetime effect.
+- Is any work intentionally allowed to continue after the triggering method returns?
+  If yes, pass a narrow `waitUntil(promise)` capability or use `ctx.waitUntil`
+  at the Durable Object boundary, and document what observable event records the
+  eventual result.
 - What should happen if a caller uses the mixin in production by accident?
 
 If any answer is fuzzy, stop and grill the user. Do not encode uncertainty as optional config.
@@ -81,6 +100,20 @@ instead of touching Cloudflare `ctx` directly. For example, `withScheduler()`
 uses `withMultiplexedAlarms()` and `withDurableObjectCore()`, while
 `withDurableObjectCore()` is the only reusable layer that adapts
 `ctx.storage.sql`, `ctx.storage.kv`, and platform alarms.
+
+When the mixin itself owns the operation, put the important call-site API at the
+top of the file. Keep the lower-level protected helpers below it or private. For
+example, `withStreamProcessorRunner(...)` is configured with one processor
+instance and a scoped stream API factory, then exposes `catchUpStreamProcessor()` and
+`consumeStreamProcessorEvent()`. The app Durable Object should not also contain
+the processor catch-up loop.
+
+Configured mixins often need cached values. Store them under explicit private
+fields with names scoped to the mixin, such as `#streamProcessorRunnerProcessor`.
+This avoids accidental collisions and makes future stackability easier to reason
+about. If a mixin may be applied more than once, use unique method names or a
+single configured-map shape; don't rely on vague `super` chaining without a
+documented call order.
 
 When a mixin needs one storage operation, prefer the scoped callback helpers:
 
@@ -149,6 +182,10 @@ Type tests should read as examples:
 - env lower-bounds reject missing bindings;
 - protected members are visible in subclasses and hidden from callers;
 - helper options are required/optional exactly when intended.
+- configured callbacks infer the intended init params, env lower-bound, and
+  returned state shape;
+- if a mixin requires lifecycle/core capabilities, applying it directly to
+  `DurableObject` should be a type error.
 
 Run before handing off:
 

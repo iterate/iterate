@@ -13,6 +13,9 @@ export function prepareAgentsHarForReplay(
 
   for (const entry of clone.log.entries) {
     entry.request.url = rewriteUrlIfEventsProjectHost(entry.request.url, targetEventsHostname);
+    entry.response.headers = entry.response.headers.filter(
+      (header) => header.name.toLowerCase() !== "content-length",
+    );
   }
 
   return clone;
@@ -32,7 +35,7 @@ function rewriteUrlIfEventsProjectHost(urlString: string, targetEventsHostname: 
 }
 
 function shouldRewriteEventsProjectHostname(hostname: string): boolean {
-  if (hostname.endsWith(".events-preview-1.iterate.com")) {
+  if (hostname.endsWith(".events.iterate-preview-1.com")) {
     return true;
   }
   const labels = hostname.split(".");

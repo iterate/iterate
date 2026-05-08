@@ -12,6 +12,7 @@
     "moduleResolution": "bundler",
     "skipLibCheck": true,
     "paths": {
+      "@iterate-com/shared/*": ["../../packages/shared/src/*"],
       "@iterate-com/ui/*": ["./src/*"]
     }
   },
