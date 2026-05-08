@@ -353,7 +353,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
     try {
       const parseStartedAt = performance.now();
       inputs = inputEvents.map((inputEvent) => EventInput.parse(inputEvent));
-      parseDurationMs = Math.round(performance.now() - parseStartedAt);
+      parseDurationMs = roundDiagnosticDurationMs(performance.now() - parseStartedAt);
       this.ensureInitializedStreamStorage();
 
       let nextState = this.state;
@@ -390,7 +390,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
         results.push(event);
         committedEvents.push({ event, stateAfterEvent: nextState });
       }
-      buildReduceDurationMs = Math.round(performance.now() - buildReduceStartedAt);
+      buildReduceDurationMs = roundDiagnosticDurationMs(performance.now() - buildReduceStartedAt);
 
       if (committedEvents.length === 0) {
         return results;
@@ -410,7 +410,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
         }
         upsertReducedState(tx, { json: JSON.stringify(nextState) });
       });
-      commitDurationMs = Math.round(performance.now() - commitStartedAt);
+      commitDurationMs = roundDiagnosticDurationMs(performance.now() - commitStartedAt);
 
       const afterAppendStartedAt = performance.now();
       for (const { event, stateAfterEvent } of committedEvents) {
@@ -418,7 +418,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
         this.afterAppend(event);
       }
       this._state = nextState;
-      afterAppendDurationMs = Math.round(performance.now() - afterAppendStartedAt);
+      afterAppendDurationMs = roundDiagnosticDurationMs(performance.now() - afterAppendStartedAt);
 
       return results;
     } catch (error) {
@@ -437,7 +437,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
         inputEventCount: inputEvents.length,
         lastCommittedOffset: committedEvents.at(-1)?.event.offset ?? null,
         parseDurationMs,
-        totalDurationMs: Math.round(performance.now() - startedAt),
+        totalDurationMs: roundDiagnosticDurationMs(performance.now() - startedAt),
       });
     }
   }
@@ -1185,6 +1185,10 @@ function createInitialBuiltinProcessorState(): StreamState["processors"] {
 
 function callableSubscriberCursorKey(slug: string) {
   return `${CALLABLE_SUBSCRIBER_CURSOR_KEY_PREFIX}:${slug}`;
+}
+
+function roundDiagnosticDurationMs(durationMs: number) {
+  return Math.round(durationMs * 1000) / 1000;
 }
 
 function runBuiltinBeforeAppend(args: {

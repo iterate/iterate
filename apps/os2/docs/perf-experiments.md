@@ -2682,3 +2682,68 @@ Change under test:
 - The diagnostics are returned from `StreamDurableObject.getDiagnostics()`, so
   they appear in the existing server benchmark JSON under
   `result.streamDiagnostics.appendBatchDiagnostics`.
+- First deployed implementation rounded diagnostic phase timings to integer
+  milliseconds. On successful 1000-event runs this reported all appendBatch
+  phase durations as `0ms`, which is useful as a coarse signal but too lossy for
+  reducer/commit profiling. Updated the diagnostic rounding to preserve
+  microsecond-scale decimals in milliseconds.
+
+Validation:
+
+- Commit under test: `e70be2410`
+- Preview: `https://os2.iterate-preview-2.com`
+- Shared typecheck: passed
+- OS2 typecheck: passed
+- First 1000-event run returned a client-visible oRPC 500, but Cloudflare trace
+  `0d185c2496e2d5f989d5c988636e8b68` showed the benchmark request itself as
+  `POST OK`, `237` spans, no error events. A rerun succeeded, so this currently
+  looks transient rather than a deterministic appendBatch diagnostics failure.
+- Small sanity benchmark:
+  - Benchmark: `agent-server-bench-1778210863474-66a7b124`
+  - Count/rate/concurrency: `10` / `10/s` / `1`
+  - Duplicate invariant: passed
+  - Logical append attempts: `52`
+  - Committed idempotent events: `33`
+  - Duplicate attempts: `19`
+  - Unexpected duplicate attempts: `0`
+  - Source subscriber wait: `125ms`
+  - Processor wait: `5ms`
+  - Append latency: p50 `17ms`, p90 `55ms`, p99 `63ms`
+- 1000-event benchmark:
+  - Benchmark: `agent-server-bench-1778210915514-5e6f032e`
+  - Count/rate/concurrency: `1000` / `1000/s` / `100`
+  - Duplicate invariant: passed
+  - Logical append attempts: `1038`
+  - Committed idempotent events: `1023`
+  - Duplicate attempts: `15`
+  - Unexpected duplicate attempts: `0`
+  - Publish duration: `1078ms`
+  - Source subscriber wait: `1089ms`
+  - Final subscriber wait: `331ms`
+  - Processor wait: `14ms`
+  - Append latency: p50 `21ms`, p90 `60ms`, p99 `107ms`
+  - Slowest Agent deliveries:
+    - `15` delivered events: `1199ms`
+    - `500` delivered events: `449ms`
+    - `500` delivered events: `396ms`
+    - `500` delivered events: `351ms`
+    - `500` delivered events: `316ms`
+  - Slowest Codemode deliveries:
+    - `5` delivered events: `104ms`
+    - `1` delivered event: `74ms`
+  - AppendBatch diagnostics captured `496`, `500`, and `6` committed event
+    batches, but integer rounding reported all phases as `0ms`.
+
+Interpretation:
+
+- The hidden-idempotency-storm concern is valid and now measurable: compare
+  logical append attempts against committed idempotent events, and fail if any
+  duplicate key outside the setup allowlist appears.
+- This benchmark did not show a 10x hidden application-event append storm. The
+  duplicates were setup/lifecycle keys:
+  `processor-registered:*`, `events.iterate.com/codemode/session-started`, and
+  the Codemode callable subscription key.
+- The main latency is still subscriber dispatch, especially the Agent runner.
+  The Stream DO appendBatch path appears below integer-millisecond resolution in
+  this run, so the next run with decimal timings should confirm whether
+  appendBatch is genuinely negligible or merely hidden by rounding.
