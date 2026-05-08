@@ -99,6 +99,11 @@ export type StreamProcessorRuntimeState = {
 
 export type StreamProcessorRuntimeBatchTiming = {
   afterAppendDurationMs: number;
+  appendCallTimings: {
+    durationMs: number;
+    eventCount: number;
+    kind: "append" | "appendBatch";
+  }[];
   appendCallCount: number;
   appendDurationMs: number;
   appendedEventCount: number;
@@ -493,6 +498,7 @@ export function withStreamProcessor<
         const streamPath = args.events[0]?.streamPath ?? "";
         const timing: RuntimeProcessorTimingDraft = {
           afterAppendDurationMs: 0,
+          appendCallTimings: [],
           appendCallCount: 0,
           appendDurationMs: 0,
           appendedEventCount: 0,
@@ -808,9 +814,15 @@ export function withStreamProcessor<
               } as EventInput,
             });
             if (args.timing != null) {
+              const durationMs = Math.round(performance.now() - appendStartedAt);
               args.timing.appendCallCount += 1;
-              args.timing.appendDurationMs += Math.round(performance.now() - appendStartedAt);
+              args.timing.appendDurationMs += durationMs;
               args.timing.appendedEventCount += 1;
+              args.timing.appendCallTimings.push({
+                durationMs,
+                eventCount: 1,
+                kind: "append",
+              });
             }
             this.#localAppendTimes.set(localAppendKey(event), {
               appendedAtMs: Date.now(),
@@ -836,9 +848,15 @@ export function withStreamProcessor<
               })) as EventInput[],
             });
             if (args.timing != null) {
+              const durationMs = Math.round(performance.now() - appendStartedAt);
               args.timing.appendCallCount += 1;
-              args.timing.appendDurationMs += Math.round(performance.now() - appendStartedAt);
+              args.timing.appendDurationMs += durationMs;
               args.timing.appendedEventCount += events.length;
+              args.timing.appendCallTimings.push({
+                durationMs,
+                eventCount: appendArgs.events.length,
+                kind: "appendBatch",
+              });
             }
             for (const event of events) {
               this.#localAppendTimes.set(localAppendKey(event), {
