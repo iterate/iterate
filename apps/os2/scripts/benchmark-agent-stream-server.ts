@@ -38,6 +38,7 @@ type IdempotencyDuplicateSource = {
 
 type Options = {
   agentPath: string;
+  appendBatchSize: number;
   baseUrl: string;
   concurrency: number;
   count: number;
@@ -79,6 +80,7 @@ async function main() {
 
   const result = (await client.project.agents.benchmarkStream({
     agentPath: options.agentPath,
+    appendBatchSize: options.appendBatchSize,
     concurrency: options.concurrency,
     count: options.count,
     payloadBytes: options.payloadBytes,
@@ -158,6 +160,7 @@ function parseOptions(args: readonly string[]): Options {
   const traffic = trafficOption(values, "traffic", "raw-openai-ws");
   return {
     agentPath: stringOption(values, "agent-path", `/agents/server-bench-${Date.now()}`),
+    appendBatchSize: numberOption(values, "append-batch-size", 1),
     baseUrl: stringOption(values, "base-url", process.env.OS2_BASE_URL ?? ""),
     concurrency: numberOption(values, "concurrency", 100),
     count: numberOption(values, "count", 1000),

@@ -214,6 +214,7 @@ export const projectAgentsRouter = {
       });
 
       const options: AgentStreamBenchmarkOptions = {
+        appendBatchSize: input.appendBatchSize,
         benchmarkId,
         concurrency: input.concurrency,
         count: input.count,
@@ -384,6 +385,7 @@ function requireStreamNamespace(context: { stream?: DurableObjectNamespace<Strea
 
 type BenchmarkStreamStub = {
   append(event: EventInput): Promise<Event>;
+  appendBatch(events: EventInput[]): Promise<Event[]>;
   history(args: { after: "start" | number; before?: "end" | number }): Promise<Event[]>;
   getDiagnostics(): Promise<{
     callableSubscriberCursors: Array<{
@@ -481,6 +483,7 @@ async function runAppWorkerBenchmarkPublisher(input: {
 }) {
   const traffic = await appendAgentStreamBenchmarkTraffic({
     append: async (event) => await input.stream.append(event),
+    appendBatch: async (events) => await input.stream.appendBatch(events),
     options: input.options,
   });
   const terminal = input.terminalEvents

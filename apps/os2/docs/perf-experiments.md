@@ -4529,3 +4529,121 @@ Interpretation:
 - The smoke run already shows some expected idempotent setup churn. That is not
   invisible anymore, but it is still worth tightening once the larger
   performance bottleneck is clearer.
+
+## 2026-05-08: high-rate RPC after duplicate-source diagnostics
+
+All runs below used preview slot 2 after deploying `51e9343d2`.
+
+### Agent-chat source events, app-worker publisher
+
+`1000` events requested at `1000/s`, concurrency `100`:
+
+- File: `/tmp/os2-bench-agent-chat-rpc-source-diagnostics-1000.json`
+- Benchmark id: `agent-server-bench-1778220042615-2975e4f3`
+- Publish duration: `1557ms`
+- Append latency p50/p90/p99: `134/174/179ms`
+- Source subscriber wait: `1017ms`
+- Processor wait: `17ms`
+- Derived `agent/input-added` wait: `46ms` for `1000/1000`
+- Final subscriber wait: `45ms`
+- Duplicate attempts: `17` over `1022` idempotent commits, ratio `0.02`
+- Unexpected duplicate attempts: `0`
+
+`3000` events requested at `1500/s`, concurrency `150`:
+
+- File: `/tmp/os2-bench-agent-chat-rpc-source-diagnostics-3000-rate1500.json`
+- Benchmark id: `agent-server-bench-1778220277702-68abda7a`
+- Publish duration: `5189ms`
+- Append latency p50/p90/p99: `237/336/354ms`
+- Source subscriber wait: `3019ms`
+- Processor wait: `103ms`
+- Derived wait: `73ms` for `3000/3000`
+- Final subscriber wait: `5ms`
+- Duplicate attempts: `17` over `3022` idempotent commits, ratio `0.01`
+
+`5000` events requested at `1000/s`, concurrency `100`:
+
+- File: `/tmp/os2-bench-agent-chat-rpc-source-diagnostics-5000-rate1000.json`
+- Benchmark id: `agent-server-bench-1778220316330-0fbb79f2`
+- Publish duration: `9491ms`
+- Append latency p50/p90/p99: `169/292/448ms`
+- Source subscriber wait: `1398ms`
+- Processor wait: `546ms`
+- Derived wait: `372ms` for `5000/5000`
+- Final subscriber wait: `12ms`
+- Duplicate attempts: `17` over `5022` idempotent commits
+
+`5000` events requested at `2000/s`, concurrency `200`:
+
+- First attempt failed with a generic oRPC `500`.
+- Cloudflare telemetry query for `2026-05-08T06:01:20Z` to
+  `2026-05-08T06:02:40Z` found no `$metadata.level = error` rows and no
+  `http.response.status_code >= 500` rows for `os2-preview-2`; several
+  `span-not-ended` durable-object subrequest spans existed but did not explain
+  the app-level failure.
+- Retry file:
+  `/tmp/os2-bench-agent-chat-rpc-source-diagnostics-5000-rate2000-retry.json`
+- Retry benchmark id: `agent-server-bench-1778220458016-4a337a38`
+- Retry publish duration: `8084ms`
+- Append latency p50/p90/p99: `295/432/456ms`
+- Source subscriber wait: `2310ms`
+- Processor wait: `15ms`
+- Derived wait: `170ms` for `5000/5000`
+- Final subscriber wait: `562ms`
+- Duplicate attempts: `12` over `5022` idempotent commits
+
+Interpretation:
+
+- The current RPC processor path is no longer showing the old multi-second
+  derived-event delay once source publishing finishes.
+- The weak point is append throughput into the Stream DO from the benchmark
+  publisher. Requested `1000-2000/s` rates are not actually achieved; observed
+  publish throughput is roughly `500-650/s` in these app-worker publisher runs.
+- Duplicate idempotency attempts are not the explanation for the current
+  throughput ceiling. They remain low and are dominated by setup events.
+
+### Agent Durable Object publisher
+
+`3000` agent-chat events requested at `1500/s`, concurrency `150`,
+publisher `agent-durable-object`:
+
+- File: `/tmp/os2-bench-agent-chat-agent-publisher-rpc-3000-rate1500.json`
+- Benchmark id: `agent-server-bench-1778220362264-e53860c5`
+- Publish duration: `10001ms`
+- Append latency p50/p90/p99: `447/614/871ms`
+- Source subscriber wait: `57ms`
+- Processor wait: `11ms`
+- Derived wait: `110ms` for `3000/3000`
+
+Interpretation:
+
+- Publishing from the Agent DO was slower than the app-worker publisher for
+  this workload.
+- That suggests the Agent DO should not become the high-throughput event
+  publisher path unless it batches appends or otherwise decouples producer work
+  from processor work.
+
+### Raw OpenAI websocket-like source events
+
+`5000` raw OpenAI websocket events requested at `2000/s`, concurrency `200`:
+
+- File: `/tmp/os2-bench-raw-openai-rpc-5000-rate2000.json`
+- Benchmark id: `agent-server-bench-1778220405853-0a6c7158`
+- Publish duration: `8623ms`
+- Append latency p50/p90/p99: `339/398/441ms`
+- Source subscriber wait: `46ms`
+- Processor wait: `17ms`
+- Final subscriber wait: `10ms`
+
+Interpretation:
+
+- Removing `agent-chat` derived appends does not materially improve source
+  append throughput; publishing still lands around `580/s`.
+- Processor delivery is not the bottleneck for raw non-consuming-ish traffic.
+
+Next experiment:
+
+- Add an append-batch benchmark option and compare single-event append with
+  `appendBatch` sizes such as `10`, `50`, and `100`.
+- This matches Cloudflare's guidance that batching `10-100` logical messages
+  per transport/frame can reduce per-message context-switch overhead.

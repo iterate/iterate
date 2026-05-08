@@ -333,6 +333,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     const stream = this.streamsEntrypoint(params.agentPath);
     const traffic = await appendAgentStreamBenchmarkTraffic({
       append: async (event) => await stream.append({ event }),
+      appendBatch: async (events) => await stream.appendBatch({ events }),
       options: input.options,
     });
     const terminal = input.terminalEvents

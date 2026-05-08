@@ -486,6 +486,7 @@ export const osContract = oc.router({
         .input(
           ProjectScopedInput.extend({
             agentPath: StreamPath,
+            appendBatchSize: z.number().int().positive().max(500).default(1),
             concurrency: z.number().int().positive().max(500).default(10),
             count: z.number().int().positive().max(10_000).default(200),
             payloadBytes: z.number().int().nonnegative().max(32_000).default(64),

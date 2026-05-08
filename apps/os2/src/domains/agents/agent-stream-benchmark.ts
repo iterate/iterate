@@ -9,6 +9,7 @@ export type AgentStreamBenchmarkTraffic =
   | "agent-status-updates";
 
 export type AgentStreamBenchmarkOptions = {
+  appendBatchSize: number;
   benchmarkId: string;
   concurrency: number;
   count: number;
@@ -56,8 +57,16 @@ export function isAgentStreamBenchmarkPath(agentPath: string) {
 
 export async function appendAgentStreamBenchmarkTraffic(input: {
   append(event: EventInput): Promise<Event>;
+  appendBatch?(events: EventInput[]): Promise<Event[]>;
   options: AgentStreamBenchmarkOptions;
 }): Promise<AgentStreamBenchmarkAppendTrafficResult> {
+  if (input.options.appendBatchSize > 1 && input.appendBatch != null) {
+    return await appendAgentStreamBenchmarkTrafficBatches({
+      appendBatch: input.appendBatch,
+      options: input.options,
+    });
+  }
+
   const intervalMs = 1000 / input.options.ratePerSecond;
   const startedAt = performance.now();
   const inFlight = new Set<Promise<AgentStreamBenchmarkAppendAttempt>>();
@@ -83,6 +92,60 @@ export async function appendAgentStreamBenchmarkTraffic(input: {
         appended.push(attempt.result);
       } else {
         failures.push(attempt.failure);
+      }
+    });
+
+    if (inFlight.size >= input.options.concurrency) {
+      await Promise.race(inFlight);
+    }
+  }
+
+  while (inFlight.size > 0) {
+    await Promise.race(inFlight);
+  }
+
+  return {
+    appended: appended.toSorted((left, right) => left.event.offset - right.event.offset),
+    failures,
+  };
+}
+
+async function appendAgentStreamBenchmarkTrafficBatches(input: {
+  appendBatch(events: EventInput[]): Promise<Event[]>;
+  options: AgentStreamBenchmarkOptions;
+}): Promise<AgentStreamBenchmarkAppendTrafficResult> {
+  const batchSize = Math.max(1, input.options.appendBatchSize);
+  const batchIntervalMs = (1000 * batchSize) / input.options.ratePerSecond;
+  const startedAt = performance.now();
+  const inFlight = new Set<Promise<AgentStreamBenchmarkAppendBatchAttempt>>();
+  const appended: AgentStreamBenchmarkAppendResult[] = [];
+  const failures: AgentStreamBenchmarkAppendFailure[] = [];
+
+  for (let index = 0; index < input.options.count; index += batchSize) {
+    const batchIndex = Math.floor(index / batchSize);
+    const dueAt = startedAt + batchIndex * batchIntervalMs;
+    await delay(Math.max(0, dueAt - performance.now()));
+    const events = Array.from(
+      { length: Math.min(batchSize, input.options.count - index) },
+      (_, offset) =>
+        agentStreamBenchmarkEvent({
+          index: index + offset,
+          options: input.options,
+        }),
+    );
+
+    const promise = appendBatchAttempt({
+      appendBatch: input.appendBatch,
+      events,
+    }).finally(() => {
+      inFlight.delete(promise);
+    });
+    inFlight.add(promise);
+    promise.then((attempt) => {
+      if (attempt.status === "fulfilled") {
+        appended.push(...attempt.results);
+      } else {
+        failures.push(...attempt.failures);
       }
     });
 
@@ -363,6 +426,16 @@ type AgentStreamBenchmarkAppendAttempt =
       status: "rejected";
     };
 
+type AgentStreamBenchmarkAppendBatchAttempt =
+  | {
+      results: AgentStreamBenchmarkAppendResult[];
+      status: "fulfilled";
+    }
+  | {
+      failures: AgentStreamBenchmarkAppendFailure[];
+      status: "rejected";
+    };
+
 async function appendOneAttempt(input: {
   append(event: EventInput): Promise<Event>;
   event: EventInput;
@@ -383,6 +456,37 @@ async function appendOneAttempt(input: {
           type: input.event.type,
         },
       },
+      status: "rejected",
+    };
+  }
+}
+
+async function appendBatchAttempt(input: {
+  appendBatch(events: EventInput[]): Promise<Event[]>;
+  events: EventInput[];
+}): Promise<AgentStreamBenchmarkAppendBatchAttempt> {
+  const startedAt = performance.now();
+  try {
+    const events = await input.appendBatch(input.events);
+    const appendLatencyMs = performance.now() - startedAt;
+    return {
+      results: events.map((event) => ({
+        appendLatencyMs,
+        event,
+      })),
+      status: "fulfilled",
+    };
+  } catch (error) {
+    const appendLatencyMs = performance.now() - startedAt;
+    return {
+      failures: input.events.map((event) => ({
+        appendLatencyMs,
+        error: serializeError(error),
+        event: {
+          benchmarkIndex: readBenchmarkIndex(event),
+          type: event.type,
+        },
+      })),
       status: "rejected",
     };
   }
