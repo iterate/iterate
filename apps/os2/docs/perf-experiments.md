@@ -2747,3 +2747,54 @@ Interpretation:
   The Stream DO appendBatch path appears below integer-millisecond resolution in
   this run, so the next run with decimal timings should confirm whether
   appendBatch is genuinely negligible or merely hidden by rounding.
+
+Decimal timing rerun after deploying commit `966c24881`:
+
+- Benchmark: `agent-server-bench-1778211142191-bb1b667f`
+- Duplicate invariant: passed
+- Logical append attempts: `1036`
+- Committed idempotent events: `1023`
+- Duplicate attempts: `13`
+- Unexpected duplicate attempts: `0`
+- Publish duration: `1157ms`
+- Source subscriber wait: `1108ms`
+- Final subscriber wait: `3ms`
+- Processor wait: `60ms`
+- Append latency: p50 `77ms`, p90 `123ms`, p99 `196ms`
+- AppendBatch diagnostics still reported `0ms` for parse/build-reduce/commit
+  and `afterAppend`, even with decimal millisecond rounding, for batches of
+  `408`, `311`, `189`, `72`, and `22` events.
+- Slowest deliveries:
+  - Agent, `500` delivered events: `476ms`
+  - Agent, `408` delivered events: `428ms`
+  - Agent, `500` delivered events: `413ms`
+  - Agent, `430` delivered events: `372ms`
+  - Agent, `17` delivered events: `264ms`
+  - Codemode, `5` delivered events: `140ms`
+- Cloudflare trace: `f1bdf68f02893f1fc62d8895b380d8f7`
+  - Root request: benchmark-stream POST
+  - Trace duration: `6098ms`
+  - Trace spans: `4370`
+  - Errors: none
+  - Sampled first `1000` span events:
+    - `jsrpc`: `32` spans, `29457ms` summed duration, max `27697ms`
+    - `durable_object_subrequest`: `43` spans, `1611ms` summed duration,
+      max `128ms`
+    - `durable_object_storage_exec`: `548` spans, `0ms` reported duration
+    - `durable_object_storage_setAlarm`: `311` spans, `0ms` reported duration
+    - `insert into events ...`: `311` sampled calls
+    - idempotency lookup query: `154` sampled calls
+
+Updated interpretation:
+
+- `performance.now()` does not appear usable for measuring synchronous work
+  inside this Durable Object path. It still works for request-level waits and
+  async subscriber dispatch, but synchronous appendBatch phases remain pinned at
+  `0ms`. Use Cloudflare spans and structural counters for this part.
+- AppendBatch itself is probably not the source of the second-scale lag in this
+  benchmark. The trace shows the expensive work around Worker RPC / Durable
+  Object subrequests and many alarm scheduling/storage spans.
+- The source Stream DO still schedules a very high number of alarms/storage
+  operations under high-rate individual appends. This supports the hypothesis
+  that we need a single ongoing alarm-originated delivery loop with per-subscriber
+  queues, rather than treating alarm scheduling as a cheap per-append action.
