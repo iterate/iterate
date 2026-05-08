@@ -1804,3 +1804,67 @@ Interpretation:
   - `agent` reduce/afterAppendBatch;
   - `openai-ws` reduce/afterAppendBatch;
   - stream append/appendBatch time inside processor APIs.
+
+### 2026-05-08: rejected legacy runner local feed-through
+
+Question:
+
+- Would adding same-stream local feed-through to the legacy
+  `withStreamProcessorRunner` reduce Codemode duplicate idempotency attempts and
+  improve Codemode subscriber latency?
+
+Change tested on preview slot 2, then reverted:
+
+- Wrapped `withStreamProcessorRunner`'s processor stream API so events appended
+  back to the same stream were queued locally.
+- After `consumeStreamProcessorEvent()` or `catchUpStreamProcessor()` returned,
+  the runner drained that local queue by consuming those returned events without
+  waiting for Stream DO subscription redelivery.
+
+Fresh `both` run after the patch:
+
+- Project: `proj__os__01kr2nbmhzexzrav9ckp02qsrn`
+- Benchmark: `agent-server-bench-1778205975566-b7458867`
+- Traffic: `300` `agent-chat/assistant-response-added` events at `300/s`
+- Source subscriber wait: `1174ms`
+- Final subscriber wait: `3ms`
+- Processor wait: `6ms`
+- Append latency: p50 `13ms`, p90 `39ms`, p99 `115ms`
+- Duplicate attempts: `11` across `4` keys
+- Top duplicates:
+  - `processor-registered:agent:0.1.0`: `7`
+  - `events.iterate.com/codemode/session-started`: `2`
+  - `processor-registered:openai-ws:0.1.0`: `1`
+  - Codemode callable subscription: `1`
+- Slow early Agent subscriber batch:
+  - `23` delivered events took `1098ms`
+  - Agent `afterAppendBatch` timing for offsets `23-45`: `1134ms`
+- Bulk Codemode windows were `137-223ms` per about `100` events.
+
+Fresh `codemode-only` run after the patch:
+
+- Project: `proj__os__01kr2nckw4e49sqsh6zfw51jgx`
+- Benchmark: `agent-server-bench-1778206007279-56dff8cc`
+- Traffic: `300` `agent-chat/assistant-response-added` events at `300/s`
+- Source subscriber wait: `257ms`
+- Final subscriber wait: `2ms`
+- Append latency: p50 `10ms`, p90 `16ms`, p99 `52ms`
+- Duplicate attempts: `15` across `5` keys
+- Bulk Codemode windows were `149-187ms` per about `100` events.
+
+Interpretation:
+
+- The patch was not a performance improvement.
+- It reduced duplicate attempts in the `both` run compared with the cumulative
+  earlier same-stream run, but did not eliminate the core duplicate pattern.
+- It made `codemode-only` slower than the previous `107ms` source-wait shape and
+  still produced similar duplicate setup keys.
+- This suggests naive local feed-through in the legacy runner adds work to the
+  hot subscriber call without fixing the main ordering/setup issue.
+- Reverted locally. The next better direction is not "consume all local appends
+  immediately inside the legacy runner"; it is either:
+  - make setup/registration helpers avoid repeated idempotent appends directly;
+  - move CodemodeSession onto the newer batched `withStreamProcessor` model; or
+  - make processor registration/session-started an explicit runner-level
+    invariant instead of emitted opportunistically from every early
+    `afterAppend`.
