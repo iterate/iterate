@@ -4963,3 +4963,127 @@ Next experiments:
 - Evaluate whether Agent history needs to be a processor state at all for
   high-velocity streams, or whether the LLM request renderer should query the
   stream when a request is actually needed.
+
+## 2026-05-08: traffic isolation and timing precision
+
+### Direct Agent traffic vs agent-chat derived traffic
+
+Current-build RPC runs with `appendBatchSize=50`, `5000` events requested at
+`2000/s`, concurrency `5`:
+
+`agent-inputs`:
+
+- File: `/tmp/os2-bench-agent-inputs-rpc-batch50-5000-rate2000-current.json`
+- Benchmark id: `agent-server-bench-1778222685477-ec54ff3d`
+- Publish duration: `2540ms`
+- Append latency p50/p90/p99: `25/44/128ms`
+- Source subscriber wait: `1033ms`
+- Processor wait: `81ms`
+- Final subscriber wait: `5ms`
+- Agent dispatch: `17` batches, `5024` delivered events, max `466ms`, mean
+  `196ms`
+- Agent state bytes reached `~1.2MB` of JSON save accounting by the end of the
+  run.
+
+`agent-status-updates`:
+
+- File: `/tmp/os2-bench-agent-status-rpc-batch50-5000-rate2000-current.json`
+- Benchmark id: `agent-server-bench-1778222684987-53493d45`
+- Publish duration: `2550ms`
+- Append latency p50/p90/p99: `26/49/129ms`
+- Source subscriber wait: `1518ms`
+- Processor wait: `18ms`
+- Final subscriber wait: `5ms`
+- Agent dispatch: `14` batches, `5024` delivered events, max `545ms`, mean
+  `276ms`
+- Agent state stayed tiny: roughly `5KB` of JSON save accounting.
+
+Comparison to `agent-chat-responses`:
+
+- Current-500 RPC file:
+  `/tmp/os2-bench-agent-chat-rpc-batch50-5000-rate2000-concurrency5-current500.json`
+- Source subscriber wait: `2612ms`
+- Derived wait: `134ms`
+- Final subscriber wait: `968ms`
+- Agent dispatch: max `474ms`, mean `252ms`, but over `10025` delivered events
+  because source chat events create a second wave of `agent/input-added` events.
+
+Interpretation:
+
+- Direct Agent input traffic is faster than `agent-chat` because it avoids the
+  derived-event second wave.
+- Tiny-state `agent/status-updated` traffic still has second-scale source wait
+  at 5000 events, so Agent state size is not the only issue.
+- The delivery window/RPC scheduling cost itself is material.
+
+### More precise processor timing
+
+Fix:
+
+- Commit `90db31fc4`: changed processor and Agent runtime diagnostics from
+  whole-millisecond rounding to fractional millisecond rounding, and changed
+  state-save timing to use `performance.now()`.
+- This is diagnostics-only. It does not change event schema.
+
+Deploy confounder:
+
+- The first post-deploy precision run hit a generic oRPC `500`.
+- Cloudflare traces showed the familiar `Durable Object reset because its code
+was updated` during `StreamDurableObject.history`, so the failed attempt was
+  treated as deploy noise rather than an instrumentation bug.
+
+Precision sample, `agent-inputs`, `1000` events at `1000/s`:
+
+- File:
+  `/tmp/os2-bench-agent-inputs-rpc-batch50-1000-rate1000-precision-retry.json`
+- Benchmark id: `agent-server-bench-1778223036893-c8253d02`
+- Publish duration: `1118ms`
+- Append latency p50/p90/p99: `36/213/299ms`
+- Source subscriber wait: `984ms`
+- Processor wait: `7ms`
+- Final subscriber wait: `12ms`
+- Stream DO Agent dispatch: `4` batches, `1024` delivered events, max
+  `1413ms`, mean `509ms`
+- Agent-side `afterAppendBatch` timings:
+  - first batch: `69` events, `totalDurationMs=30`, `deliveryLagMs=1531`
+  - next batch: `500` events, `totalDurationMs=0`, `deliveryLagMs=163`
+  - next batch: `453` events, `totalDurationMs=0`, `deliveryLagMs=0`
+- Processor timings still show many large batches as `0ms` inside Agent, even
+  when Stream DO observed hundreds of milliseconds of RPC dispatch.
+
+Precision sample, `agent-status-updates`, `1000` events at `1000/s`:
+
+- File:
+  `/tmp/os2-bench-agent-status-rpc-batch50-1000-rate1000-precision.json`
+- Benchmark id: `agent-server-bench-1778223084844-7c00b46a`
+- Publish duration: `1014ms`
+- Source subscriber wait: `106ms`
+- Processor wait: `15ms`
+- Final subscriber wait: `4ms`
+- Stream DO Agent dispatch: `14` batches, `1024` delivered events, max `119ms`,
+  mean `53ms`
+- Agent-side batch timings remained `0ms` for consume/afterAppend/state saves.
+
+Interpretation:
+
+- For no-op/tiny-state Agent traffic, reducer and `afterAppend` work is
+  effectively instant inside the Agent DO.
+- Stream DO still waits tens to hundreds of milliseconds per Agent RPC dispatch,
+  and occasionally over a second for direct Agent input traffic.
+- This points at cross-DO RPC dispatch/scheduling/input-gate queueing as a
+  current bottleneck, more than reducer CPU.
+- Websocket delivery avoids this wait only because `socket.send()` does not wait
+  for the Agent DO to reduce the events; that is why websocket needs explicit
+  acknowledgements before it can replace RPC for processor correctness.
+
+Next refined experiments:
+
+- Add `deliveryStartedAtMs`, Agent handler start time, and handler completion
+  time to Agent diagnostics so we can split RPC latency into queue-before-JS vs
+  handler-runtime vs response-return latency.
+- Build a websocket-ack subscriber mode and compare it with RPC:
+  source cursor should advance only after acked `reducedThroughOffset`, making
+  the comparison correctness-equivalent.
+- Try reducing concurrent publisher pressure while keeping append batches to
+  see whether Stream DO alarm/RPC dispatch contention improves when publishing
+  has finished before delivery drains.
