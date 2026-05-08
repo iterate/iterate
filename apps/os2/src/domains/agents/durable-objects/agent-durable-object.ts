@@ -237,6 +237,18 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     return state;
   }
 
+  async benchmarkNoopAfterAppendBatch(input: { deliveryStartedAtMs?: number; events: Event[] }) {
+    return {
+      deliveryLagMs:
+        input.deliveryStartedAtMs == null
+          ? null
+          : Math.max(0, Date.now() - input.deliveryStartedAtMs),
+      eventCount: input.events.length,
+      firstOffset: input.events[0]?.offset ?? null,
+      lastOffset: input.events.at(-1)?.offset ?? null,
+    };
+  }
+
   async fetch(request: Request): Promise<Response> {
     if (new URL(request.url).pathname !== "/stream-subscription") {
       return new Response("Not found", { status: 404 });

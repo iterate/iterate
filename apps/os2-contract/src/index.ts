@@ -24,7 +24,12 @@ const AgentStreamBenchmarkTraffic = z.enum([
 ]);
 const AgentStreamBenchmarkSubscriptionTransport = z.enum(["rpc", "websocket"]);
 const AgentStreamBenchmarkPublisher = z.enum(["app-worker", "agent-durable-object"]);
-const AgentStreamBenchmarkSubscriberMode = z.enum(["both", "agent-only", "codemode-only"]);
+const AgentStreamBenchmarkSubscriberMode = z.enum([
+  "both",
+  "agent-only",
+  "agent-noop-only",
+  "codemode-only",
+]);
 const AgentPresetEvent = z.object({
   type: z.string().trim().min(1),
   payload: z.record(z.string(), z.unknown()),

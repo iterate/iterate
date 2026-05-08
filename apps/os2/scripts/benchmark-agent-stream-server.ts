@@ -11,7 +11,7 @@ type TrafficKind =
   | "agent-inputs"
   | "agent-status-updates";
 type Publisher = "app-worker" | "agent-durable-object";
-type SubscriberMode = "both" | "agent-only" | "codemode-only";
+type SubscriberMode = "both" | "agent-only" | "agent-noop-only" | "codemode-only";
 type SubscriptionTransport = "rpc" | "websocket";
 type OrpcClient = RouterClient<typeof appRouter>;
 
@@ -274,8 +274,15 @@ function publisherOption(values: Map<string, string>, key: string, fallback: Pub
 
 function subscriberModeOption(values: Map<string, string>, key: string, fallback: SubscriberMode) {
   const value = values.get(key) ?? fallback;
-  if (value === "both" || value === "agent-only" || value === "codemode-only") return value;
-  throw new Error(`--${key} must be both, agent-only, or codemode-only`);
+  if (
+    value === "both" ||
+    value === "agent-only" ||
+    value === "agent-noop-only" ||
+    value === "codemode-only"
+  ) {
+    return value;
+  }
+  throw new Error(`--${key} must be both, agent-only, agent-noop-only, or codemode-only`);
 }
 
 function subscriptionTransportOption(

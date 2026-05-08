@@ -212,10 +212,10 @@ export const projectAgentsRouter = {
       });
 
       const processorWait =
-        input.subscriberMode === "codemode-only"
+        input.subscriberMode === "codemode-only" || input.subscriberMode === "agent-noop-only"
           ? {
               completed: false,
-              reason: "skipped because Agent subscriber is disabled for codemode-only benchmark",
+              reason: `skipped because Agent processors are disabled for ${input.subscriberMode} benchmark`,
             }
           : await waitForProcessorCursors({
               agent,
@@ -453,18 +453,22 @@ async function configureBenchmarkSubscriberMode(input: {
   agentDurableObjectName: string;
   agentPath: StreamPath;
   codemodeSessionName: string;
-  mode: "both" | "agent-only" | "codemode-only";
+  mode: "both" | "agent-only" | "agent-noop-only" | "codemode-only";
   projectId: string;
   stream: BenchmarkStreamStub;
 }) {
   if (input.mode === "both") return;
 
-  if (input.mode === "codemode-only") {
+  if (input.mode === "codemode-only" || input.mode === "agent-noop-only") {
     await input.stream.append(disabledAgentSubscriberEvent(input));
   }
 
-  if (input.mode === "agent-only") {
+  if (input.mode === "agent-only" || input.mode === "agent-noop-only") {
     await input.stream.append(disabledCodemodeSubscriberEvent(input));
+  }
+
+  if (input.mode === "agent-noop-only") {
+    await input.stream.append(noopAgentSubscriberEvent(input));
   }
 }
 
@@ -513,6 +517,34 @@ function disabledCodemodeSubscriberEvent(input: { codemodeSessionName: string })
           },
         },
         rpcMethod: "afterAppendBatch",
+        argsMode: "object",
+      },
+    },
+    type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
+  };
+}
+
+function noopAgentSubscriberEvent(input: {
+  agentDurableObjectName: string;
+  agentPath: StreamPath;
+  projectId: string;
+}): EventInput {
+  return {
+    payload: {
+      slug: `agent-noop:${input.projectId}:${input.agentPath}`,
+      type: "callable",
+      jsonataFilter: "true",
+      callable: {
+        type: "workers-rpc",
+        via: {
+          type: "env-binding",
+          bindingType: "durable-object-namespace",
+          bindingName: "AGENT",
+          durableObject: {
+            name: input.agentDurableObjectName,
+          },
+        },
+        rpcMethod: "benchmarkNoopAfterAppendBatch",
         argsMode: "object",
       },
     },
