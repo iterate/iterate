@@ -5087,3 +5087,72 @@ Next refined experiments:
 - Try reducing concurrent publisher pressure while keeping append batches to
   see whether Stream DO alarm/RPC dispatch contention improves when publishing
   has finished before delivery drains.
+
+### Delivery lag split
+
+Fix:
+
+- Commit `5c24bda3d`: Agent runtime diagnostics now record:
+  - `deliveryStartLagMs`: Stream DO delivery start to Agent handler start;
+  - `deliveryCompletionLagMs`: Stream DO delivery start to Agent handler
+    completion;
+  - existing `deliveryLagMs` remains for compatibility and currently equals
+    completion lag.
+- This is diagnostics-only and does not change stream event schema.
+
+Lag split sample, `agent-status-updates`, `1000` events at `1000/s`:
+
+- File:
+  `/tmp/os2-bench-agent-status-rpc-batch50-1000-rate1000-lagsplit.json`
+- Benchmark id: `agent-server-bench-1778223348725-4b52ab3b`
+- Publish duration: `1060ms`
+- Append latency p50/p90/p99: `40/51/64ms`
+- Source subscriber wait: `281ms`
+- Processor wait: `10ms`
+- Final subscriber wait: `4ms`
+- Stream DO Agent dispatch: `5` batches, `1024` delivered events, max `356ms`,
+  mean `162ms`
+- Agent timing samples:
+  - `497` events: `deliveryStartLagMs=167`,
+    `deliveryCompletionLagMs=337`, `consumeDurationMs=170`
+  - `22` events: `deliveryStartLagMs=24`, `consumeDurationMs=0`
+  - `500` events: `deliveryStartLagMs=50`, `consumeDurationMs=0`
+
+Lag split sample, `agent-inputs`, `1000` events at `1000/s`:
+
+- File:
+  `/tmp/os2-bench-agent-inputs-rpc-batch50-1000-rate1000-lagsplit.json`
+- Benchmark id: `agent-server-bench-1778223395708-9416d7c4`
+- Publish duration: `1014ms`
+- Append latency p50/p90/p99: `27/41/89ms`
+- Source subscriber wait: `147ms`
+- Processor wait: `25ms`
+- Final subscriber wait: `3ms`
+- Stream DO Agent dispatch: `11` batches, `1024` delivered events, max
+  `215ms`, mean `85ms`
+- Agent timing samples were mostly `0ms` handler time with `0-6ms` delivery
+  start lag for later batches.
+
+Interpretation:
+
+- There is high run-to-run variance. A previous `agent-inputs` precision sample
+  had source wait `984ms`; the lag-split sample had `147ms`.
+- The split proves the expensive part is not always the same:
+  - sometimes Agent JS starts late (`deliveryStartLagMs` high);
+  - sometimes Agent reduction itself costs visible time (`consumeDurationMs`
+    high, even for tiny-state status events);
+  - many later batches are effectively instant inside the Agent DO.
+- The first large delivery after setup/wake often looks worse than subsequent
+  batches. This suggests cold/wake/input-gate effects and/or contention with
+  setup/idempotent registration work.
+
+Next experiments from this:
+
+- Separate warmup/setup from measured traffic more aggressively: wait until all
+  setup duplicate churn and initial subscriptions are quiet before starting the
+  timed publish phase.
+- Run repeated identical samples and report distributions rather than single
+  benchmark ids; one run is too noisy for small changes.
+- Add an optional benchmark mode that publishes all source events first and only
+  then enables/subscribes the Agent runner, to separate append pressure from
+  delivery drain pressure.
