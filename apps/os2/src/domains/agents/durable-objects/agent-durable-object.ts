@@ -217,15 +217,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     subscriberSlug?: string;
   }) {
     if (input.subscriberSlug?.startsWith("agent-noop:")) {
-      return {
-        deliveryLagMs:
-          input.deliveryStartedAtMs == null
-            ? null
-            : Math.max(0, Date.now() - input.deliveryStartedAtMs),
-        eventCount: input.events.length,
-        firstOffset: input.events[0]?.offset ?? null,
-        lastOffset: input.events.at(-1)?.offset ?? null,
-      };
+      return;
     }
 
     const startedAt = performance.now();
@@ -233,7 +225,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     await this.ensureStarted();
     const ensureStartedDurationMs = Math.round(performance.now() - ensureStartedAt);
     const consumeStartedAt = performance.now();
-    const state = await this.consumeStreamProcessorEvents({
+    await this.consumeStreamProcessorEvents({
       events: input.events as StreamEvent[],
     });
     const consumeDurationMs = Math.round(performance.now() - consumeStartedAt);
@@ -250,7 +242,6 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       lastOffset: input.events.at(-1)?.offset ?? null,
       totalDurationMs: Math.round(performance.now() - startedAt),
     });
-    return state;
   }
 
   async fetch(request: Request): Promise<Response> {

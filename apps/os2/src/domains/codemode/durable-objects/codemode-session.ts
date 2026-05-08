@@ -249,11 +249,9 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
   }
 
   async afterAppendBatch(input: { events: Event[] }) {
-    let state = this.getStreamProcessorRunnerState();
     for (const event of input.events) {
-      state = await this.afterAppend({ event });
+      await this.afterAppend({ event });
     }
-    return state;
   }
 
   async createSession(input: CreateCodemodeSessionInput = {}) {
