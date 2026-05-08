@@ -4,7 +4,12 @@ import type { RouterClient } from "@orpc/server";
 import { osContract } from "@iterate-com/os2-contract";
 import type { appRouter } from "~/orpc/root.ts";
 
-type TrafficKind = "raw-openai-ws" | "mixed-control" | "agent-chat-responses" | "agent-inputs";
+type TrafficKind =
+  | "raw-openai-ws"
+  | "mixed-control"
+  | "agent-chat-responses"
+  | "agent-inputs"
+  | "agent-status-updates";
 type Publisher = "app-worker" | "agent-durable-object";
 type SubscriberMode = "both" | "agent-only" | "codemode-only";
 type SubscriptionTransport = "rpc" | "websocket";
@@ -251,12 +256,13 @@ function trafficOption(values: Map<string, string>, key: string, fallback: Traff
     value === "raw-openai-ws" ||
     value === "mixed-control" ||
     value === "agent-chat-responses" ||
-    value === "agent-inputs"
+    value === "agent-inputs" ||
+    value === "agent-status-updates"
   ) {
     return value;
   }
   throw new Error(
-    `--${key} must be raw-openai-ws, mixed-control, agent-chat-responses, or agent-inputs`,
+    `--${key} must be raw-openai-ws, mixed-control, agent-chat-responses, agent-inputs, or agent-status-updates`,
   );
 }
 

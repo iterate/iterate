@@ -20,6 +20,7 @@ const AgentStreamBenchmarkTraffic = z.enum([
   "mixed-control",
   "agent-chat-responses",
   "agent-inputs",
+  "agent-status-updates",
 ]);
 const AgentStreamBenchmarkSubscriptionTransport = z.enum(["rpc", "websocket"]);
 const AgentStreamBenchmarkPublisher = z.enum(["app-worker", "agent-durable-object"]);

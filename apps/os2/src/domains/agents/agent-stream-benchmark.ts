@@ -5,7 +5,8 @@ export type AgentStreamBenchmarkTraffic =
   | "raw-openai-ws"
   | "mixed-control"
   | "agent-chat-responses"
-  | "agent-inputs";
+  | "agent-inputs"
+  | "agent-status-updates";
 
 export type AgentStreamBenchmarkOptions = {
   benchmarkId: string;
@@ -241,6 +242,17 @@ function agentStreamBenchmarkEvent(input: {
       payload: {
         content: `benchmark agent input ${input.index} ${padding}`,
         triggerLlmRequest: { behaviour: "dont-trigger-request" },
+      },
+      metadata: agentStreamBenchmarkMetadata(input.options.benchmarkId, input.index),
+    };
+  }
+
+  if (input.options.traffic === "agent-status-updates") {
+    return {
+      type: "events.iterate.com/agent/status-updated",
+      payload: {
+        reason: `benchmark status ${input.index} ${padding}`,
+        status: input.index % 2 === 0 ? "working" : "idle",
       },
       metadata: agentStreamBenchmarkMetadata(input.options.benchmarkId, input.index),
     };
