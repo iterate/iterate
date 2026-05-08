@@ -104,9 +104,13 @@ export type StreamProcessorRuntimeBatchTiming = {
   appendedEventCount: number;
   completedAtMs: number;
   inputEventCount: number;
+  maxStateJsonBytes: number;
   processorSlug: string;
   reduceDurationMs: number;
   reductionCount: number;
+  stateSaveCallCount: number;
+  stateSaveDurationMs: number;
+  stateSaveJsonBytes: number;
   streamPath: string;
   totalDurationMs: number;
 };
@@ -494,9 +498,13 @@ export function withStreamProcessor<
           appendedEventCount: 0,
           completedAtMs: 0,
           inputEventCount: args.events.length,
+          maxStateJsonBytes: 0,
           processorSlug: args.processor.contract.slug,
           reduceDurationMs: 0,
           reductionCount: 0,
+          stateSaveCallCount: 0,
+          stateSaveDurationMs: 0,
+          stateSaveJsonBytes: 0,
           streamPath,
           totalDurationMs: 0,
         };
@@ -566,6 +574,7 @@ export function withStreamProcessor<
               processor: args.processor,
               storedState,
               streamPath: args.events[0]!.streamPath,
+              timing,
             });
           }
 
@@ -625,6 +634,7 @@ export function withStreamProcessor<
             processor: args.processor,
             storedState,
             streamPath: args.events[0]!.streamPath,
+            timing,
           });
         } finally {
           timing.completedAtMs = Date.now();
@@ -751,11 +761,20 @@ export function withStreamProcessor<
         processor: RegisteredProcessor;
         storedState: RuntimeStoredProcessorState;
         streamPath: StreamPath | string;
+        timing?: RuntimeProcessorTimingDraft;
       }): void {
+        const startedAt = Date.now();
+        const stateJsonBytes = JSON.stringify(args.storedState).length;
         this.getDurableObjectKv().put(
           storageKey({ processor: args.processor, streamPath: args.streamPath }),
           args.storedState,
         );
+        if (args.timing != null) {
+          args.timing.stateSaveCallCount += 1;
+          args.timing.stateSaveDurationMs += Date.now() - startedAt;
+          args.timing.stateSaveJsonBytes += stateJsonBytes;
+          args.timing.maxStateJsonBytes = Math.max(args.timing.maxStateJsonBytes, stateJsonBytes);
+        }
       }
 
       private streamApiForPath(streamPath: StreamPath | string) {
