@@ -191,6 +191,10 @@ export const projectAgentsRouter = {
               terminalEvents: input.terminalEvents,
             });
       const publishDurationMs = performance.now() - startedAt;
+      const sourceSubscriberWait = await waitForCallableSubscriberCursors({
+        stream: benchmarkStream,
+        targetOffset: agentStreamBenchmarkTargetOffset(published),
+      });
 
       const processorWait = await waitForProcessorCursors({
         agent,
@@ -201,8 +205,14 @@ export const projectAgentsRouter = {
       const benchmarkEvents = history.filter((event) =>
         isAgentStreamBenchmarkEvent({ benchmarkId, event }),
       );
-      const runtimeState = await agent.getRuntimeState();
-      const streamState = await stream.getState();
+      let runtimeState = await agent.getRuntimeState();
+      let streamState = await stream.getState();
+      const finalSubscriberWait = await waitForCallableSubscriberCursors({
+        stream: benchmarkStream,
+        targetOffset: streamState.eventCount,
+      });
+      runtimeState = await agent.getRuntimeState();
+      streamState = await stream.getState();
       const streamDiagnostics = await benchmarkStream.getDiagnostics();
 
       return {
@@ -229,6 +239,8 @@ export const projectAgentsRouter = {
         committedCreatedAtGapMs: summarizeAgentStreamBenchmark(
           agentStreamBenchmarkCreatedAtGaps(benchmarkEvents),
         ),
+        sourceSubscriberWait,
+        finalSubscriberWait,
         processorWait,
         runtimeState,
         streamDiagnostics,
@@ -306,6 +318,28 @@ function requireStreamNamespace(context: { stream?: DurableObjectNamespace<Strea
 type BenchmarkStreamStub = {
   append(event: EventInput): Promise<Event>;
   getDiagnostics(): Promise<{
+    callableSubscriberCursors: Array<{
+      cursor: number;
+      subscriberSlug: string;
+    }>;
+    callableSubscriberDeliveries: Array<{
+      batchIterations: number;
+      completedAtMs: number;
+      cursorReadCount: number;
+      cursorWriteCount: number;
+      deliveredEventCount: number;
+      durationMs: number;
+      emptyWindowCount: number;
+      error?: string;
+      failedEventCount: number;
+      historyReadCount: number;
+      rescheduled: boolean;
+      startedAtMs: number;
+      subscriberCheckCount: number;
+      targetEventCount: number;
+      uniqueHistoryWindowCount: number;
+      yielded: boolean;
+    }>;
     idempotencyDuplicateAttemptCount: number;
     idempotencyDuplicateKeyCount: number;
     idempotencyDuplicateTopKeys: Array<{
@@ -348,6 +382,48 @@ async function runAppWorkerBenchmarkPublisher(input: {
     appended: traffic.appended,
     failures: [...traffic.failures, ...terminal.failures],
     terminal: terminal.appended,
+  };
+}
+
+function agentStreamBenchmarkTargetOffset(input: {
+  appended: AgentStreamBenchmarkAppendResult[];
+  terminal: AgentStreamBenchmarkAppendResult[];
+}) {
+  return Math.max(
+    0,
+    ...input.appended.map((item) => item.event.offset),
+    ...input.terminal.map((item) => item.event.offset),
+  );
+}
+
+async function waitForCallableSubscriberCursors(input: {
+  stream: BenchmarkStreamStub;
+  targetOffset: number;
+}) {
+  if (input.targetOffset === 0) {
+    return { completed: false, reason: "no appended events" };
+  }
+
+  const startedAt = performance.now();
+  let lastDiagnostics: Awaited<ReturnType<BenchmarkStreamStub["getDiagnostics"]>> | undefined;
+  while (performance.now() - startedAt < 30_000) {
+    lastDiagnostics = await input.stream.getDiagnostics();
+    const cursors = lastDiagnostics.callableSubscriberCursors;
+    if (cursors.length > 0 && cursors.every((cursor) => cursor.cursor >= input.targetOffset)) {
+      return {
+        completed: true,
+        waitMs: round(performance.now() - startedAt),
+      };
+    }
+    await delay(25);
+  }
+
+  return {
+    completed: false,
+    reason: "timed out waiting for callable subscriber cursor targets",
+    targetOffset: input.targetOffset,
+    waitMs: round(performance.now() - startedAt),
+    lastCursors: lastDiagnostics?.callableSubscriberCursors ?? [],
   };
 }
 

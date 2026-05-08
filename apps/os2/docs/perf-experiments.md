@@ -1446,3 +1446,128 @@ Next experiments:
   count, and drain duration.
 - Do not pursue the current websocket subscription path as a primary fix until
   it has batched frames and lower storage churn.
+
+### 2026-05-08: corrected subscriber delivery wait
+
+Benchmark flaw found:
+
+- The previous `processorWait` measurement polled `AgentDurableObject.getRuntimeState()`.
+- `getRuntimeState()` can wake the Agent DO and run processor catch-up from stream
+  history.
+- That means the benchmark could accidentally measure "Agent caught itself up
+  by reading history" instead of "Stream DO delivered subscription events
+  promptly."
+
+Change:
+
+- `StreamDurableObject.getDiagnostics()` now exposes durable callable
+  subscriber cursors, keyed by subscriber slug.
+- The server-side benchmark now waits for callable subscriber cursors before
+  polling processor runtime state.
+- It reports:
+  - `sourceSubscriberWait`: time for subscribers to receive all source traffic
+    appends;
+  - `processorWait`: time for processor cursors to reach their expected source
+    offsets after subscriber delivery;
+  - `finalSubscriberWait`: time for subscribers to receive final derived events
+    appended by processors.
+- `getDiagnostics()` also returns an in-memory ring of recent callable delivery
+  drains with batch count, history read count, cursor reads/writes, delivered
+  events, duration, reschedule/yield flags, and errors.
+
+Corrected preview run:
+
+- Project: `proj__os__01kr2kcbshfk6tq0xq5fdvfg0f`
+- Benchmark: `agent-server-bench-1778203902264-0b5ae775`
+- Traffic: `300` `agent-chat/assistant-response-added` events at `300/s`
+- Publisher: app-worker
+- Transport: callable RPC
+- Append failures: `0`
+- Append latency: p50 `21ms`, p90 `83ms`, p99 `169ms`
+- `sourceSubscriberWait`: `1037ms`
+- `processorWait`: `10ms`
+- `finalSubscriberWait`: `10ms`
+- Final stream offset: `627`
+- Final callable subscriber cursors: both `627`
+
+Main delivery drain sample:
+
+- `batchIterations`: `6`
+- `historyReadCount`: `6`
+- `uniqueHistoryWindowCount`: `6`
+- `cursorReadCount`: `12`
+- `cursorWriteCount`: `12`
+- `deliveredEventCount`: `1200`
+- `targetEventCount`: `627`
+- `durationMs`: `922`
+
+Interpretation:
+
+- The current main tail is Stream DO subscription delivery, not reducer compute
+  after delivery.
+- Once source events reach the Agent/Codemode subscribers, the processors are
+  already close to caught up and final derived-event delivery can be nearly
+  immediate.
+- The in-memory delivery drain ring is useful for a hot object, but it can reset
+  on a new DO instance. Durable callable subscriber cursors are the trustworthy
+  completion signal.
+
+Corrected high-rate source wait run:
+
+- Project: `proj__os__01kr2k79vrf22bn9terjmsmj39`
+- Benchmark: `agent-server-bench-1778203736304-a2b8e2b5`
+- Traffic: `1000` `agent-chat/assistant-response-added` events at `1000/s`
+- Append failures: `0`
+- Append latency: p50 `101ms`, p90 `143ms`, p99 `232ms`
+- Source subscriber wait: `2247ms`
+- Processor wait after source delivery: `8ms`
+- Final stream offset: `2027`
+
+Interpretation:
+
+- At `1000/s`, source subscriber delivery is still multiple seconds behind the
+  append workload.
+- The corrected benchmark also shows why earlier green-looking processor waits
+  were incomplete: they did not prove that Stream DO subscriber delivery itself
+  was prompt.
+
+### 2026-05-08: idempotency duplicate attempts as a benchmark invariant
+
+Suspicion:
+
+- The stream can look logically clean even if the system tries to append every
+  idempotent event many times, because duplicate attempts return the existing
+  committed event.
+
+How we detect it:
+
+- `StreamDurableObject.append()` records a duplicate attempt at the idempotency
+  check boundary, before returning the existing event.
+- The duplicate-attempt aggregate is durable SQLite state, keyed by
+  `idempotency_key`.
+- Benchmark responses expose:
+  - total duplicate append attempts;
+  - distinct duplicate key count;
+  - top duplicate keys with attempted event type, target committed offset, and
+    first/last duplicate timestamps.
+
+Invariant:
+
+- For a benchmark with `N` unique idempotent events, a bug that attempts each
+  event ten times should produce roughly `9N` duplicate attempts even though the
+  committed event log contains only `N` events.
+- A clean stream is therefore not enough. We should treat unexpected duplicate
+  attempts as failures, or at least as a separate red metric, because idempotency
+  is retry protection rather than normal control flow.
+
+Current known duplicate classes:
+
+- Fixed: per-event `agent-chat` explainer duplicates.
+- Still present in small counts: startup/setup races such as
+  `processor-registered:*`, `codemode/session-started`, and codemode callable
+  subscription setup.
+
+Next check:
+
+- Add expected-duplicate thresholds to benchmark scripts so traffic tests fail
+  when duplicate attempts exceed a small allowlist of known startup/setup keys.

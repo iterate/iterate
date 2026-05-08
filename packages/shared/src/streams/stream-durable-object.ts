@@ -65,6 +65,7 @@ type StreamDurableObjectEnv = {
 const CALLABLE_SUBSCRIBER_CURSOR_KEY_PREFIX = "stream-do:callable-subscriber-cursor";
 const CALLABLE_SUBSCRIBER_ALARM_BATCH_SIZE = 100;
 const CALLABLE_SUBSCRIBER_ALARM_MAX_BATCHES = 50;
+const CALLABLE_SUBSCRIBER_DIAGNOSTIC_LIMIT = 20;
 const NON_CALLABLE_SUBSCRIBERS = new Set(["webhook", "websocket"] as const);
 const IDEMPOTENCY_DIAGNOSTIC_LIMIT = 50;
 
@@ -76,6 +77,25 @@ type IdempotencyDuplicateDiagnostic = {
   lastDuplicateAtMs: number;
   streamPath: string;
   targetOffset: number;
+};
+
+type CallableSubscriberDeliveryDiagnostic = {
+  batchIterations: number;
+  completedAtMs: number;
+  cursorReadCount: number;
+  cursorWriteCount: number;
+  deliveredEventCount: number;
+  durationMs: number;
+  emptyWindowCount: number;
+  error?: string;
+  failedEventCount: number;
+  historyReadCount: number;
+  rescheduled: boolean;
+  startedAtMs: number;
+  subscriberCheckCount: number;
+  targetEventCount: number;
+  uniqueHistoryWindowCount: number;
+  yielded: boolean;
 };
 
 const StreamDurableObjectLifecycleBase = withD1ObjectCatalog<
@@ -127,6 +147,7 @@ const StreamDurableObjectBase = withPublicFetchRoute({
 export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableObjectEnv> {
   private _state: StreamState | null = null;
   private readonly client: SyncClient;
+  private readonly callableSubscriberDeliveries: CallableSubscriberDeliveryDiagnostic[] = [];
   private readonly idempotencyDuplicates = new Map<string, IdempotencyDuplicateDiagnostic>();
   private readonly subscribers = new Set<ReadableStreamDefaultController<Uint8Array>>();
 
@@ -462,13 +483,22 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
     return this.state;
   }
 
-  getDiagnostics() {
+  async getDiagnostics() {
     const duplicateSummary = summarizeIdempotencyDuplicateAttempts(this.client) ?? {
       duplicate_attempt_count: 0,
       duplicate_key_count: 0,
     };
+    const callableSubscribers = Object.values(
+      this.state.processors["external-subscriber"].subscribersBySlug,
+    ).filter((subscriber) => subscriber.type === "callable");
 
     return {
+      callableSubscriberCursors: await Promise.all(
+        callableSubscribers.map(async (subscriber) => ({
+          cursor: await this.readCallableSubscriberCursor(subscriber.slug),
+          subscriberSlug: subscriber.slug,
+        })),
+      ),
       idempotencyDuplicateAttemptCount: duplicateSummary.duplicate_attempt_count,
       idempotencyDuplicateKeyCount: duplicateSummary.duplicate_key_count,
       idempotencyDuplicateTopKeys: listIdempotencyDuplicateAttempts(this.client, {
@@ -485,6 +515,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
       idempotencyDuplicates: [...this.idempotencyDuplicates.values()].sort(
         (left, right) => right.lastDuplicateAtMs - left.lastDuplicateAtMs,
       ),
+      callableSubscriberDeliveries: this.callableSubscriberDeliveries.toReversed(),
     };
   }
 
@@ -693,94 +724,163 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
 
   private async drainCallableSubscriberDelivery() {
     const targetEventCount = this.state.eventCount;
+    const startedAt = performance.now();
+    const diagnostic: Omit<CallableSubscriberDeliveryDiagnostic, "completedAtMs" | "durationMs"> = {
+      batchIterations: 0,
+      cursorReadCount: 0,
+      cursorWriteCount: 0,
+      deliveredEventCount: 0,
+      emptyWindowCount: 0,
+      failedEventCount: 0,
+      historyReadCount: 0,
+      rescheduled: false,
+      startedAtMs: Date.now(),
+      subscriberCheckCount: 0,
+      targetEventCount,
+      uniqueHistoryWindowCount: 0,
+      yielded: false,
+    };
+    let finished = false;
+    const finish = (updates?: Partial<typeof diagnostic>) => {
+      if (finished) return;
+      finished = true;
+      Object.assign(diagnostic, updates);
+      this.recordCallableSubscriberDeliveryDiagnostic({
+        ...diagnostic,
+        completedAtMs: Date.now(),
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+    };
 
-    for (let batchIndex = 0; batchIndex < CALLABLE_SUBSCRIBER_ALARM_MAX_BATCHES; batchIndex += 1) {
-      const subscribers = Object.values(
-        this.state.processors["external-subscriber"].subscribersBySlug,
-      ).filter((subscriber) => subscriber.type === "callable");
-      if (subscribers.length === 0) {
-        return;
-      }
-
-      const cursorEntries = await Promise.all(
-        subscribers.map(async (subscriber) => ({
-          cursor: await this.readCallableSubscriberCursor(subscriber.slug),
-          subscriber,
-        })),
-      );
-      const eventWindows = new Map<string, readonly Event[]>();
-
-      const results = await Promise.all(
-        cursorEntries.map(async ({ cursor, subscriber }) => {
-          if (cursor >= targetEventCount) {
-            return { hasRemainingWork: false, shouldYield: false };
-          }
-
-          const before = Math.min(
-            cursor + CALLABLE_SUBSCRIBER_ALARM_BATCH_SIZE + 1,
-            targetEventCount + 1,
-          );
-          const windowKey = `${cursor}:${before}`;
-          let events = eventWindows.get(windowKey);
-          if (events == null) {
-            events = this.history({ after: cursor, before });
-            eventWindows.set(windowKey, events);
-          }
-          if (events.length === 0) {
-            this.appendProcessorErrorEvent({
-              event: null,
-              idempotencyKey: `stream-do:callable-subscriber-empty-batch:${subscriber.slug}:${cursor}:${this.state.eventCount}`,
-              message: `Callable subscriber "${subscriber.slug}" had cursor ${cursor} behind stream event count ${this.state.eventCount}, but no events were found to deliver.`,
-              metadata: {
-                source: "stream-do",
-                processor: "external-subscriber",
-                stage: "deliver-callable-subscriber",
-                subscriberSlug: subscriber.slug,
-                cursor,
-                eventCount: this.state.eventCount,
-              },
-            });
-            return { hasRemainingWork: false, shouldYield: false };
-          }
-
-          const result = await publishExternalSubscriberBatch({
-            append: (nextEvent) => Promise.resolve(this.append(nextEvent)),
-            callableContext: {
-              env: this.env as Record<string, unknown>,
-            },
-            events,
-            onError: (failure) => {
-              this.appendExternalSubscriberDeliveryError(failure);
-            },
-            subscriber,
-          });
-
-          if (result.failedEventCount > 0 && result.deliveredEventCount === 0) {
-            return { hasRemainingWork: true, shouldYield: true };
-          }
-
-          await this.writeCallableSubscriberCursor(
-            subscriber.slug,
-            events.at(-1)?.offset ?? cursor,
-          );
-          return { hasRemainingWork: events.at(-1)!.offset < targetEventCount, shouldYield: false };
-        }),
-      );
-
-      if (results.some((result) => result.shouldYield)) {
-        await this.scheduleCallableSubscriberDelivery();
-        return;
-      }
-
-      if (!results.some((result) => result.hasRemainingWork)) {
-        if (this.state.eventCount > targetEventCount) {
-          await this.scheduleCallableSubscriberDelivery();
+    try {
+      for (
+        let batchIndex = 0;
+        batchIndex < CALLABLE_SUBSCRIBER_ALARM_MAX_BATCHES;
+        batchIndex += 1
+      ) {
+        diagnostic.batchIterations += 1;
+        const subscribers = Object.values(
+          this.state.processors["external-subscriber"].subscribersBySlug,
+        ).filter((subscriber) => subscriber.type === "callable");
+        diagnostic.subscriberCheckCount += subscribers.length;
+        if (subscribers.length === 0) {
+          finish();
+          return;
         }
-        return;
-      }
-    }
 
-    await this.scheduleCallableSubscriberDelivery();
+        const cursorEntries = await Promise.all(
+          subscribers.map(async (subscriber) => ({
+            cursor: await this.readCallableSubscriberCursor(subscriber.slug),
+            subscriber,
+          })),
+        );
+        diagnostic.cursorReadCount += cursorEntries.length;
+        const eventWindows = new Map<string, readonly Event[]>();
+
+        const results = await Promise.all(
+          cursorEntries.map(async ({ cursor, subscriber }) => {
+            if (cursor >= targetEventCount) {
+              return { hasRemainingWork: false, shouldYield: false };
+            }
+
+            const before = Math.min(
+              cursor + CALLABLE_SUBSCRIBER_ALARM_BATCH_SIZE + 1,
+              targetEventCount + 1,
+            );
+            const windowKey = `${cursor}:${before}`;
+            let events = eventWindows.get(windowKey);
+            if (events == null) {
+              events = this.history({ after: cursor, before });
+              eventWindows.set(windowKey, events);
+              diagnostic.historyReadCount += 1;
+              diagnostic.uniqueHistoryWindowCount += 1;
+            }
+            if (events.length === 0) {
+              diagnostic.emptyWindowCount += 1;
+              this.appendProcessorErrorEvent({
+                event: null,
+                idempotencyKey: `stream-do:callable-subscriber-empty-batch:${subscriber.slug}:${cursor}:${this.state.eventCount}`,
+                message: `Callable subscriber "${subscriber.slug}" had cursor ${cursor} behind stream event count ${this.state.eventCount}, but no events were found to deliver.`,
+                metadata: {
+                  source: "stream-do",
+                  processor: "external-subscriber",
+                  stage: "deliver-callable-subscriber",
+                  subscriberSlug: subscriber.slug,
+                  cursor,
+                  eventCount: this.state.eventCount,
+                },
+              });
+              return { hasRemainingWork: false, shouldYield: false };
+            }
+
+            const result = await publishExternalSubscriberBatch({
+              append: (nextEvent) => Promise.resolve(this.append(nextEvent)),
+              callableContext: {
+                env: this.env as Record<string, unknown>,
+              },
+              events,
+              onError: (failure) => {
+                this.appendExternalSubscriberDeliveryError(failure);
+              },
+              subscriber,
+            });
+            diagnostic.deliveredEventCount += result.deliveredEventCount;
+            diagnostic.failedEventCount += result.failedEventCount;
+
+            if (result.failedEventCount > 0 && result.deliveredEventCount === 0) {
+              return { hasRemainingWork: true, shouldYield: true };
+            }
+
+            await this.writeCallableSubscriberCursor(
+              subscriber.slug,
+              events.at(-1)?.offset ?? cursor,
+            );
+            diagnostic.cursorWriteCount += 1;
+            return {
+              hasRemainingWork: events.at(-1)!.offset < targetEventCount,
+              shouldYield: false,
+            };
+          }),
+        );
+
+        if (results.some((result) => result.shouldYield)) {
+          diagnostic.rescheduled = true;
+          diagnostic.yielded = true;
+          await this.scheduleCallableSubscriberDelivery();
+          finish();
+          return;
+        }
+
+        if (!results.some((result) => result.hasRemainingWork)) {
+          if (this.state.eventCount > targetEventCount) {
+            diagnostic.rescheduled = true;
+            await this.scheduleCallableSubscriberDelivery();
+          }
+          finish();
+          return;
+        }
+      }
+
+      diagnostic.rescheduled = true;
+      await this.scheduleCallableSubscriberDelivery();
+      finish();
+    } catch (error) {
+      finish({ error: formatErrorMessage(error) });
+      throw error;
+    }
+  }
+
+  private recordCallableSubscriberDeliveryDiagnostic(
+    diagnostic: CallableSubscriberDeliveryDiagnostic,
+  ) {
+    this.callableSubscriberDeliveries.push(diagnostic);
+    if (this.callableSubscriberDeliveries.length <= CALLABLE_SUBSCRIBER_DIAGNOSTIC_LIMIT) {
+      return;
+    }
+    this.callableSubscriberDeliveries.splice(
+      0,
+      this.callableSubscriberDeliveries.length - CALLABLE_SUBSCRIBER_DIAGNOSTIC_LIMIT,
+    );
   }
 
   private async readCallableSubscriberCursor(slug: string) {
