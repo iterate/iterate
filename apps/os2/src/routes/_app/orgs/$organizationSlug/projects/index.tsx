@@ -123,7 +123,7 @@ function ProjectsIndexPage() {
       <div className="space-y-1">
         <h2 className="text-sm font-semibold">Projects</h2>
         <p className="text-sm text-muted-foreground">
-          CRUD backed by sqlfu + D1, with type IDs and JSON metadata.
+          Create projects and manage their routing metadata.
         </p>
       </div>
 
