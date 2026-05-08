@@ -3,7 +3,7 @@ import { Link } from "@tanstack/react-router";
 import { Event, type StreamPath } from "@iterate-com/shared/streams/types";
 import {
   processEventsWithViewReducer,
-  rawPrettyEventsStreamViewReducer,
+  selectEventsStreamViewReducer,
 } from "@iterate-com/ui/components/events/feed-processors";
 import type { EventsStreamInputAction } from "@iterate-com/ui/components/events/feed-items";
 import { EventsStreamComposer } from "@iterate-com/ui/components/events/stream-composer";
@@ -11,6 +11,7 @@ import {
   EventsStreamInputSlot,
   EventsStreamView,
   type EventsStreamElementType,
+  type EventsStreamRendererMode,
 } from "@iterate-com/ui/components/events/stream-feed";
 import { EventsStreamLayoutMessageInput } from "@iterate-com/ui/components/events/stream-layout";
 import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
@@ -42,6 +43,7 @@ export function ProjectStreamView({
   const [events, setEvents] = useState<Event[]>([]);
   const [errorLabel, setErrorLabel] = useState<string | undefined>();
   const [hiddenElementTypes, setHiddenElementTypes] = useState<EventsStreamElementType[]>([]);
+  const [rendererMode, setRendererMode] = useState<EventsStreamRendererMode>("raw-pretty");
   const [isPending, setIsPending] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [openEventOffset, setOpenEventOffset] = useState<number | undefined>();
@@ -93,9 +95,9 @@ export function ProjectStreamView({
     () =>
       processEventsWithViewReducer({
         events,
-        reducer: rawPrettyEventsStreamViewReducer,
+        reducer: selectEventsStreamViewReducer(rendererMode),
       }),
-    [events],
+    [events, rendererMode],
   );
 
   async function submitMessage() {
@@ -155,6 +157,8 @@ export function ProjectStreamView({
         errorLabel={errorLabel}
         hiddenElementTypes={hiddenElementTypes}
         onHiddenElementTypesChange={setHiddenElementTypes}
+        rendererMode={rendererMode}
+        onRendererModeChange={setRendererMode}
       />
 
       {messageComposer ? (

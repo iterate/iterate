@@ -24,6 +24,38 @@ const AGENT_LLM_REQUEST_COMPLETED_TYPE = "events.iterate.com/agent/llm-request-c
 const AGENT_LLM_REQUEST_CANCELLED_TYPE = "events.iterate.com/agent/llm-request-cancelled";
 const CODEMODE_BLOCK_ADDED_TYPE = "events.iterate.com/codemode/block-added";
 const CODEMODE_RESULT_ADDED_TYPE = "events.iterate.com/codemode/result-added";
+const CODEMODE_SCRIPT_EXECUTION_REQUESTED_TYPE =
+  "events.iterate.com/codemode/script-execution-requested";
+const CODEMODE_SCRIPT_EXECUTION_COMPLETED_TYPE =
+  "events.iterate.com/codemode/script-execution-completed";
+
+/**
+ * Renderer modes available in the shared stream view component.
+ *
+ * "raw-pretty" is the default interleaved view; "raw-single-json" dumps every
+ * event as a single YAML/JSON block.
+ */
+export const eventsStreamRendererModes = ["raw-pretty", "raw-single-json"] as const;
+export type EventsStreamRendererMode = (typeof eventsStreamRendererModes)[number];
+
+export const eventsStreamRendererModeOptions: ReadonlyArray<{
+  value: EventsStreamRendererMode;
+  label: string;
+}> = [
+  { value: "raw-pretty", label: "Raw + Pretty" },
+  { value: "raw-single-json", label: "Raw YAML" },
+];
+
+export function selectEventsStreamViewReducer(
+  mode: EventsStreamRendererMode,
+): EventsStreamViewReducer {
+  switch (mode) {
+    case "raw-pretty":
+      return rawPrettyEventsStreamViewReducer;
+    case "raw-single-json":
+      return rawJsonDumpEventsStreamViewReducer;
+  }
+}
 
 function createInitialEventsStreamViewState(): EventsStreamViewState {
   return createEventsStreamViewState({
@@ -517,6 +549,47 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
         props: {
           success: error == null,
           result: payload.result,
+          ...(error == null ? {} : { error }),
+          logs: readStringArrayPayloadField(event, "logs"),
+          durationMs,
+          timestamp,
+          raw: event,
+        },
+      },
+    ];
+  }
+
+  if (event.type === CODEMODE_SCRIPT_EXECUTION_REQUESTED_TYPE) {
+    const code = readStringPayloadField(event, "code");
+    if (code == null) return [];
+    return [
+      {
+        type: "codemode-block",
+        id: `codemode-block-${event.offset}`,
+        props: {
+          script: code,
+          language: "javascript",
+          timestamp,
+          raw: event,
+        },
+      },
+    ];
+  }
+
+  if (event.type === CODEMODE_SCRIPT_EXECUTION_COMPLETED_TYPE) {
+    const durationMs = readNumberPayloadField(event, "durationMs");
+    if (durationMs == null) return [];
+    const outcome = readRecordPayloadField(event, "outcome");
+    const status = outcome?.status;
+    const success = status === "succeeded";
+    const error = typeof outcome?.error === "string" ? outcome.error : undefined;
+    return [
+      {
+        type: "codemode-result",
+        id: `codemode-result-${event.offset}`,
+        props: {
+          success,
+          result: outcome ?? {},
           ...(error == null ? {} : { error }),
           logs: readStringArrayPayloadField(event, "logs"),
           durationMs,

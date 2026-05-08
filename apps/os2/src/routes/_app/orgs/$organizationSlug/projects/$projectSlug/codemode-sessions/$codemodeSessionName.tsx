@@ -11,10 +11,14 @@ import {
 } from "@iterate-com/ui/components/collapsible";
 import {
   processEventsWithViewReducer,
-  rawPrettyEventsStreamViewReducer,
+  selectEventsStreamViewReducer,
 } from "@iterate-com/ui/components/events/feed-processors";
 import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
-import { EventsStreamView } from "@iterate-com/ui/components/events/stream-feed";
+import {
+  EventsStreamView,
+  type EventsStreamElementType,
+  type EventsStreamRendererMode,
+} from "@iterate-com/ui/components/events/stream-feed";
 import { z } from "zod";
 import { ExistingCodemodeSessionControls } from "~/components/codemode-session-controls.tsx";
 import { orpc } from "~/orpc/client.ts";
@@ -80,6 +84,8 @@ function CodemodeSessionPage() {
   const [openEventOffset, setOpenEventOffset] = useState<number | undefined>();
   const [isPending, setIsPending] = useState(true);
   const [errorLabel, setErrorLabel] = useState<string | undefined>();
+  const [hiddenElementTypes, setHiddenElementTypes] = useState<EventsStreamElementType[]>([]);
+  const [rendererMode, setRendererMode] = useState<EventsStreamRendererMode>("raw-pretty");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -120,9 +126,9 @@ function CodemodeSessionPage() {
     () =>
       processEventsWithViewReducer({
         events,
-        reducer: rawPrettyEventsStreamViewReducer,
+        reducer: selectEventsStreamViewReducer(rendererMode),
       }),
-    [events],
+    [events, rendererMode],
   );
 
   return (
@@ -159,6 +165,10 @@ function CodemodeSessionPage() {
         emptyLabel="No events in this codemode session yet"
         isPending={isPending}
         errorLabel={errorLabel}
+        hiddenElementTypes={hiddenElementTypes}
+        onHiddenElementTypesChange={setHiddenElementTypes}
+        rendererMode={rendererMode}
+        onRendererModeChange={setRendererMode}
       />
     </section>
   );
