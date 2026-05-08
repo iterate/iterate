@@ -2333,3 +2333,106 @@ Change:
   `CodemodeProcessorContract.consumes`.
 - This keeps the filter tied to the processor contract instead of maintaining a
   separate hard-coded event list.
+
+Results after deploying commit `15ce22f6b` to preview slot 2:
+
+`both`, `1000/s`, app-worker publisher, run 1:
+
+- Benchmark: `agent-server-bench-1778209092887-dd98cfb8`
+- Duplicate invariant: passed
+- Duplicate attempts: `14`
+- Publish duration: `1217ms`
+- Source subscriber wait: `723ms`
+- Final subscriber wait: `2ms`
+- Processor wait: `192ms`
+- Append latency: p50 `91ms`, p90 `170ms`, p99 `198ms`
+- Codemode totals:
+  - delivered events: `9`
+  - dispatch duration: `226ms`
+  - attempts: `12`
+  - max dispatch: `129ms`
+- Agent totals:
+  - delivered events: `2025`
+  - dispatch duration: `2040ms`
+  - attempts: `9`
+  - max dispatch: `371ms`
+
+`both`, `1000/s`, app-worker publisher, run 2:
+
+- Benchmark: `agent-server-bench-1778209138636-62eddb73`
+- Duplicate invariant: passed
+- Duplicate attempts: `15`
+- Publish duration: `1655ms`
+- Source subscriber wait: `988ms`
+- Final subscriber wait: `2ms`
+- Processor wait: `31ms`
+- Append latency: p50 `126ms`, p90 `184ms`, p99 `354ms`
+- Codemode totals:
+  - delivered events: `9`
+  - dispatch duration: `248ms`
+  - attempts: `12`
+  - max dispatch: `133ms`
+- Agent totals:
+  - delivered events: `2025`
+  - dispatch duration: `2270ms`
+  - attempts: `9`
+  - max dispatch: `496ms`
+
+Comparison with previous unfiltered `both`, `1000/s`, batch `500`:
+
+- Before filtering, the slow delivery list included Codemode `500`-event source
+  windows at `393ms` and `295ms`.
+- After filtering, Codemode no longer receives high-volume AgentChat/source-only
+  windows. It delivered only startup/codemode-relevant events.
+- Source subscriber wait moved from `889ms` to `723ms` in one run and `988ms` in
+  the replicate. That is in the same broad range, not a decisive system-level
+  improvement.
+- The hot path is now explicitly AgentDurableObject dispatch and receiver work:
+  Agent delivered `2025` events over `9` calls and spent `2040-2270ms` in
+  dispatch.
+
+Interpretation:
+
+- The Codemode filter is still a good correctness and efficiency change: it
+  prevents unnecessary receiver invocations and avoids wasting Codemode CPU on
+  source traffic it cannot consume.
+- It does not solve overall self-delivery lag because AgentDurableObject must
+  still process nearly every event in this traffic shape.
+- Next experiments should focus on reducing AgentDurableObject receiver cost and
+  Stream DO dispatch shape, not Codemode.
+
+### 2026-05-08: true Stream DO batch commit for `appendBatch`
+
+Observation from the filtered Codemode runs:
+
+- AgentDurableObject receiver work is dominated by AgentChat derived appends.
+- `lastProcessorBatchTimings` showed AgentChat `afterAppendBatch` spending most
+  of its time inside `streamApi.appendBatch`:
+  - run 1: `264` derived appends took `348ms`; `236` took `290ms`; `300` took
+    `227ms`.
+  - run 2: `381` derived appends took `570ms`; `101` took `277ms`; `300` took
+    `268ms`; `200` took `264ms`.
+- The Stream DO implementation of `appendBatch` was just
+  `inputEvents.map((inputEvent) => this.append(inputEvent))`.
+- That means one parse/idempotency/reduce/SQLite transaction/afterAppend path
+  per event, even though AgentChat already hands us a batch.
+
+Hypothesis:
+
+- A true Stream DO batch commit should reduce AgentChat derived append time by
+  removing hundreds of separate SQLite transactions per batch.
+- The implementation must still:
+  - assign offsets sequentially;
+  - reduce state in event order;
+  - preserve idempotency behavior, including duplicate attempts inside a batch;
+  - run `afterAppend` in order after commit;
+  - expose each raw event in the stream.
+
+Change under test:
+
+- Parse all batch inputs.
+- Build new events and reduce the stream state sequentially in memory.
+- Insert all new events and the final reduced state in one SQLite transaction.
+- Replay `afterAppend` in event order, temporarily setting the in-memory state to
+  the reduced state after that event so builtin afterAppend sees the same
+  per-event state shape as the old append loop.
