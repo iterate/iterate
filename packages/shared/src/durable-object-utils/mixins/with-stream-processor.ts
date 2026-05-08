@@ -1,7 +1,7 @@
 /// <reference types="@cloudflare/workers-types" />
 
 import { z } from "zod";
-import type { Callable } from "../../callable/types.ts";
+import type { Callable, FetchCallable } from "../../callable/types.ts";
 import { CoreProcessorErrorOccurredEventType } from "../../stream-processors/core/contract.ts";
 import {
   getEventSchema,
@@ -102,6 +102,16 @@ export abstract class StreamProcessorProtected {
   protected ensureStreamProcessorCallableSubscription(_args: {
     bindingName: string;
     durableObjectName: string;
+    slug: string;
+    streamPath: StreamPath | string;
+  }): Promise<StreamEvent> {
+    throw new Error("StreamProcessorProtected is type-only and should never run.");
+  }
+
+  protected ensureStreamProcessorWebSocketSubscription(_args: {
+    bindingName: string;
+    durableObjectName: string;
+    fetchPath: string;
     slug: string;
     streamPath: StreamPath | string;
   }): Promise<StreamEvent> {
@@ -209,6 +219,43 @@ export function withStreamProcessor<
                 rpcMethod: "afterAppend",
                 argsMode: "object",
               } satisfies Callable,
+            },
+          },
+        });
+      }
+
+      protected async ensureStreamProcessorWebSocketSubscription(args: {
+        bindingName: string;
+        durableObjectName: string;
+        fetchPath: string;
+        slug: string;
+        streamPath: StreamPath | string;
+      }): Promise<StreamEvent> {
+        await this.ensureStarted();
+        return await this.streamApiForPath(args.streamPath).append({
+          event: {
+            type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
+            idempotencyKey: `stream-processor-websocket-subscription:${args.bindingName}:${args.durableObjectName}:${args.streamPath}:${args.slug}`,
+            payload: {
+              slug: args.slug,
+              type: "websocket",
+              callable: {
+                type: "fetch",
+                via: {
+                  type: "env-binding",
+                  bindingType: "durable-object-namespace",
+                  bindingName: args.bindingName,
+                  durableObject: {
+                    name: args.durableObjectName,
+                  },
+                },
+                fetchRequest: {
+                  path: {
+                    base: args.fetchPath,
+                    mode: "replace",
+                  },
+                },
+              } satisfies FetchCallable,
             },
           },
         });

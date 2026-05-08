@@ -25,6 +25,7 @@ import {
   type StreamDurableObjectNamespace,
 } from "@iterate-com/shared/streams/helpers";
 import type { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
+import { StreamSocketFrame } from "@iterate-com/shared/streams/stream-socket-types";
 import { STREAM_CHILD_STREAM_CREATED_TYPE } from "@iterate-com/shared/streams/core-event-types";
 import type { Event, EventInput, StreamCursor } from "@iterate-com/shared/streams/types";
 import { StreamPath } from "@iterate-com/shared/streams/types";
@@ -107,6 +108,8 @@ const AgentBase = withStreamProcessor<AgentDurableObjectStructuredName, AgentDur
 })(AgentLifecycleBase);
 
 export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
+  #streamSocketMessageQueue = Promise.resolve();
+
   constructor(ctx: DurableObjectState, env: AgentDurableObjectEnv) {
     super(ctx, env);
 
@@ -131,6 +134,71 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
         streamPath: params.agentPath,
       });
     });
+  }
+
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (url.pathname !== "/stream-subscription") {
+      const inheritedFetch = super.fetch;
+      if (inheritedFetch == null) {
+        return new Response("Not found", { status: 404 });
+      }
+      return await inheritedFetch.call(this, request);
+    }
+
+    if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
+      return new Response("Expected WebSocket upgrade", { status: 426 });
+    }
+
+    await this.ensureStarted();
+
+    const pair = new WebSocketPair();
+    const client = pair[0];
+    const server = pair[1];
+    this.ctx.acceptWebSocket(server);
+
+    return new Response(null, {
+      status: 101,
+      webSocket: client,
+    });
+  }
+
+  async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    const text = streamProcessorWebSocketMessageToString(message);
+    if (text == null) return;
+
+    let json: unknown;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      return;
+    }
+
+    const frame = StreamSocketFrame.safeParse(json);
+    if (!frame.success || frame.data.type !== "event") return;
+    const event = frame.data.event;
+
+    const next = this.#streamSocketMessageQueue.then(async () => {
+      try {
+        await this.afterAppend({ event });
+      } catch (error) {
+        console.error("[os2-agent] stream websocket event processing failed", {
+          agentName: this.name,
+          error,
+          offset: event.offset,
+          streamPath: event.streamPath,
+          type: event.type,
+        });
+        socket.send(
+          JSON.stringify({
+            type: "error",
+            message: error instanceof Error ? error.message : "Failed to process stream event.",
+          }),
+        );
+      }
+    });
+    this.#streamSocketMessageQueue = next.catch(() => {});
+    await next;
   }
 
   async afterAppend(input: { event: Event }) {
@@ -187,9 +255,10 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
   }
 
   private async ensureAgentSubscription(params: AgentDurableObjectStructuredName) {
-    await this.ensureStreamProcessorCallableSubscription({
+    await this.ensureStreamProcessorWebSocketSubscription({
       bindingName: "AGENT",
       durableObjectName: this.name,
+      fetchPath: "/stream-subscription",
       slug: `agent:${params.projectId}:${params.agentPath}`,
       streamPath: params.agentPath,
     });
@@ -430,6 +499,11 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       streamPath,
     });
   }
+}
+
+function streamProcessorWebSocketMessageToString(message: string | ArrayBuffer): string | null {
+  if (typeof message === "string") return message;
+  return new TextDecoder().decode(message);
 }
 
 function normalizeIdempotencyKeyPart(value: string) {
