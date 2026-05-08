@@ -97,7 +97,9 @@ type AgentStreamApi = ProcessorStreamApi<{
 type AgentAfterAppendBatchTiming = {
   completedAtMs: number;
   consumeDurationMs: number;
+  deliveryCompletionLagMs: number | null;
   deliveryLagMs: number | null;
+  deliveryStartLagMs: number | null;
   ensureStartedDurationMs: number;
   eventCount: number;
   firstOffset: number | null;
@@ -224,6 +226,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       return;
     }
 
+    const handlerStartedAtMs = Date.now();
     const startedAt = performance.now();
     const ensureStartedAt = performance.now();
     await this.ensureStarted();
@@ -236,10 +239,18 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     this.recordAfterAppendBatchTiming({
       completedAtMs: Date.now(),
       consumeDurationMs,
+      deliveryCompletionLagMs:
+        input.deliveryStartedAtMs == null
+          ? null
+          : Math.max(0, Date.now() - input.deliveryStartedAtMs),
       deliveryLagMs:
         input.deliveryStartedAtMs == null
           ? null
           : Math.max(0, Date.now() - input.deliveryStartedAtMs),
+      deliveryStartLagMs:
+        input.deliveryStartedAtMs == null
+          ? null
+          : Math.max(0, handlerStartedAtMs - input.deliveryStartedAtMs),
       ensureStartedDurationMs,
       eventCount: input.events.length,
       firstOffset: input.events[0]?.offset ?? null,
@@ -380,7 +391,9 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     this.recordAfterAppendBatchTiming({
       completedAtMs: Date.now(),
       consumeDurationMs,
+      deliveryCompletionLagMs: null,
       deliveryLagMs: null,
+      deliveryStartLagMs: null,
       ensureStartedDurationMs,
       eventCount: events.length,
       firstOffset: events[0]?.offset ?? null,
