@@ -4,7 +4,8 @@ import type { Event, EventInput } from "@iterate-com/shared/streams/types";
 export type AgentStreamBenchmarkTraffic =
   | "raw-openai-ws"
   | "mixed-control"
-  | "agent-chat-responses";
+  | "agent-chat-responses"
+  | "agent-inputs";
 
 export type AgentStreamBenchmarkOptions = {
   benchmarkId: string;
@@ -229,6 +230,17 @@ function agentStreamBenchmarkEvent(input: {
       payload: {
         channel: "web",
         message: `benchmark response ${input.index} ${padding}`,
+      },
+      metadata: agentStreamBenchmarkMetadata(input.options.benchmarkId, input.index),
+    };
+  }
+
+  if (input.options.traffic === "agent-inputs") {
+    return {
+      type: "events.iterate.com/agent/input-added",
+      payload: {
+        content: `benchmark agent input ${input.index} ${padding}`,
+        triggerLlmRequest: { behaviour: "dont-trigger-request" },
       },
       metadata: agentStreamBenchmarkMetadata(input.options.benchmarkId, input.index),
     };

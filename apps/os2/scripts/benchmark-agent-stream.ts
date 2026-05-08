@@ -8,7 +8,7 @@ import type { appRouter } from "~/orpc/root.ts";
 
 type OrpcClient = RouterClient<typeof appRouter>;
 
-type TrafficKind = "raw-openai-ws" | "mixed-control" | "agent-chat-responses";
+type TrafficKind = "raw-openai-ws" | "mixed-control" | "agent-chat-responses" | "agent-inputs";
 type SubscriptionTransport = "rpc" | "websocket";
 
 type Options = {
@@ -261,6 +261,17 @@ function benchmarkEvent(input: {
       payload: {
         channel: "web",
         message: `benchmark response ${input.index} ${padding}`,
+      },
+      metadata: benchmarkMetadata(input.benchmarkId, input.index),
+    };
+  }
+
+  if (input.options.traffic === "agent-inputs") {
+    return {
+      type: "events.iterate.com/agent/input-added",
+      payload: {
+        content: `benchmark agent input ${input.index} ${padding}`,
+        triggerLlmRequest: { behaviour: "dont-trigger-request" },
       },
       metadata: benchmarkMetadata(input.benchmarkId, input.index),
     };
@@ -557,10 +568,17 @@ function booleanOption(values: Map<string, string>, key: string, fallback: boole
 
 function trafficOption(values: Map<string, string>, key: string, fallback: TrafficKind) {
   const value = values.get(key) ?? fallback;
-  if (value === "raw-openai-ws" || value === "mixed-control" || value === "agent-chat-responses") {
+  if (
+    value === "raw-openai-ws" ||
+    value === "mixed-control" ||
+    value === "agent-chat-responses" ||
+    value === "agent-inputs"
+  ) {
     return value;
   }
-  throw new Error(`--${key} must be raw-openai-ws, mixed-control, or agent-chat-responses.`);
+  throw new Error(
+    `--${key} must be raw-openai-ws, mixed-control, agent-chat-responses, or agent-inputs.`,
+  );
 }
 
 function subscriptionTransportOption(
