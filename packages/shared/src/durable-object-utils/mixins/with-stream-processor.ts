@@ -224,6 +224,7 @@ export function withStreamProcessor<
         [];
       readonly #localFeedThroughQueue: StreamEvent[] = [];
       #deliveryLane: Promise<void> = Promise.resolve();
+      #hasScheduledLocalFeedThroughDrain = false;
       #isDrainingLocalFeedThrough = false;
 
       protected registerStreamProcessor(processor: Processor<unknown>): void {
@@ -832,6 +833,7 @@ export function withStreamProcessor<
               events: [event],
               streamPath: args.streamPath,
             });
+            this.scheduleLocalFeedThroughDrain();
             return event;
           },
           appendBatch: async (appendArgs) => {
@@ -868,6 +870,7 @@ export function withStreamProcessor<
               events,
               streamPath: args.streamPath,
             });
+            this.scheduleLocalFeedThroughDrain();
             return events;
           },
           read: async (readArgs) => await streamApi.read(readArgs),
@@ -921,6 +924,21 @@ export function withStreamProcessor<
         } finally {
           this.#isDrainingLocalFeedThrough = false;
         }
+      }
+
+      private scheduleLocalFeedThroughDrain() {
+        if (this.#hasScheduledLocalFeedThroughDrain) {
+          return;
+        }
+
+        this.#hasScheduledLocalFeedThroughDrain = true;
+        void this.runInDeliveryLane(async () => {
+          this.#hasScheduledLocalFeedThroughDrain = false;
+          await this.drainLocalFeedThrough(new AbortController().signal);
+        }).catch((error) => {
+          this.#hasScheduledLocalFeedThroughDrain = false;
+          console.error("[stream-processor] local feed-through drain failed", { error });
+        });
       }
 
       private localFeedThroughReadyPrefix(events: StreamEvent[]): StreamEvent[] {

@@ -4,7 +4,10 @@ import {
   implementProcessor,
   type ProcessorStreamApi,
 } from "../stream-processor.ts";
-import { CoreProcessorRegisteredEventType } from "../core/contract.ts";
+import {
+  CoreProcessorErrorOccurredEventType,
+  CoreProcessorRegisteredEventType,
+} from "../core/contract.ts";
 import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
 import { AgentChatProcessorContract, type AgentChatChannel } from "./contract.ts";
 
@@ -25,7 +28,7 @@ export function createAgentChatProcessor() {
   return implementProcessor(AgentChatProcessorContract, {
     firstAttachAfterAppend: { mode: "lookback", milliseconds: 60_000 },
 
-    async afterAppend({ event, previousState, state, streamApi }) {
+    async afterAppend({ event, previousState, state, streamApi, waitUntil }) {
       await standardProcessorBehavior.afterAppend({
         contract: AgentChatProcessorContract,
         state,
@@ -36,21 +39,25 @@ export function createAgentChatProcessor() {
         case CoreProcessorRegisteredEventType:
           return;
         case "events.iterate.com/agent-chat/user-message-added":
-          await appendAgentInputEvents({
+          await scheduleAgentInputEvents({
             streamApi,
             events: buildAgentInputEventsForChatEvent({
               event,
               hasAlreadyExplained: previousState.explainedEventTypes.includes(event.type),
             }),
+            sourceOffset: event.offset,
+            waitUntil,
           });
           return;
         case "events.iterate.com/agent-chat/assistant-response-added":
-          await appendAgentInputEvents({
+          await scheduleAgentInputEvents({
             streamApi,
             events: buildAgentInputEventsForChatEvent({
               event,
               hasAlreadyExplained: previousState.explainedEventTypes.includes(event.type),
             }),
+            sourceOffset: event.offset,
+            waitUntil,
           });
           return;
         default:
@@ -58,7 +65,7 @@ export function createAgentChatProcessor() {
       }
     },
 
-    async afterAppendBatch({ reductions, streamApi }) {
+    async afterAppendBatch({ reductions, streamApi, waitUntil }) {
       const state = reductions.at(-1)?.state;
       if (state != null) {
         await standardProcessorBehavior.afterAppend({
@@ -85,10 +92,41 @@ export function createAgentChatProcessor() {
         }
       });
       if (events.length > 0) {
-        await appendAgentInputEvents({ streamApi, events });
+        await scheduleAgentInputEvents({
+          streamApi,
+          events,
+          sourceOffset: reductions.at(-1)!.event.offset,
+          waitUntil,
+        });
       }
     },
   });
+}
+
+async function scheduleAgentInputEvents(args: {
+  streamApi: AgentChatStreamApi;
+  events: AgentChatAppendInput[];
+  sourceOffset: number;
+  waitUntil?: (promise: Promise<unknown>) => void;
+}) {
+  const promise = appendAgentInputEvents({
+    events: args.events,
+    streamApi: args.streamApi,
+  }).catch(
+    async (error) =>
+      await appendAgentChatTranscriptionError({
+        error,
+        sourceOffset: args.sourceOffset,
+        streamApi: args.streamApi,
+      }),
+  );
+
+  if (args.waitUntil == null) {
+    await promise;
+    return;
+  }
+
+  args.waitUntil(promise);
 }
 
 async function appendAgentInputEvents(args: {
@@ -103,6 +141,38 @@ async function appendAgentInputEvents(args: {
   for (const event of args.events) {
     await args.streamApi.append({ event });
   }
+}
+
+async function appendAgentChatTranscriptionError(args: {
+  error: unknown;
+  sourceOffset: number;
+  streamApi: AgentChatStreamApi;
+}) {
+  await args.streamApi.append({
+    event: {
+      type: CoreProcessorErrorOccurredEventType,
+      idempotencyKey: `agent-chat/transcription-error@${args.sourceOffset}`,
+      payload: {
+        message: `agent-chat failed to append derived agent input events for offset ${args.sourceOffset}: ${errorMessage(args.error)}`,
+        error: serializeError(args.error),
+      },
+    },
+  });
+}
+
+function serializeError(error: unknown): { message: string; name?: string; stack?: string } {
+  if (error instanceof Error) {
+    return {
+      message: error.message,
+      name: error.name,
+      stack: error.stack,
+    };
+  }
+  return { message: String(error) };
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function buildAgentInputEventsForChatEvent(args: {
