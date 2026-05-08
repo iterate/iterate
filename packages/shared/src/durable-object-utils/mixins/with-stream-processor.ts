@@ -92,6 +92,7 @@ export type StreamProcessorRuntimeState = {
     streamPath: string;
   }[];
   lastProcessorBatchTimings: StreamProcessorRuntimeBatchTiming[];
+  lastSharedGapCatchUpTimings: StreamProcessorRuntimeSharedGapCatchUpTiming[];
   pendingWaitUntilCount: number;
   registeredProcessors: string[];
 };
@@ -108,6 +109,16 @@ export type StreamProcessorRuntimeBatchTiming = {
   reductionCount: number;
   streamPath: string;
   totalDurationMs: number;
+};
+
+export type StreamProcessorRuntimeSharedGapCatchUpTiming = {
+  afterOffset: number;
+  beforeOffset: number;
+  completedAtMs: number;
+  durationMs: number;
+  gapEventCount: number;
+  inputEventCount: number;
+  streamPath: string;
 };
 
 type RuntimeProcessorTimingDraft = StreamProcessorRuntimeBatchTiming;
@@ -199,6 +210,8 @@ export function withStreamProcessor<
       readonly #lastAppendDeliveryDelays: StreamProcessorRuntimeState["lastAppendDeliveryDelays"] =
         [];
       readonly #lastProcessorBatchTimings: StreamProcessorRuntimeState["lastProcessorBatchTimings"] =
+        [];
+      readonly #lastSharedGapCatchUpTimings: StreamProcessorRuntimeState["lastSharedGapCatchUpTimings"] =
         [];
       readonly #localFeedThroughQueue: StreamEvent[] = [];
       #deliveryLane: Promise<void> = Promise.resolve();
@@ -354,10 +367,11 @@ export function withStreamProcessor<
         for (const event of args.events) {
           this.recordLocalDelivery(event);
         }
+        const events = await this.withSharedProcessorGapCatchUp(args.events);
         await Promise.all(
           [...this.#processors.values()].map(async (processor) => {
             await this.consumeBatchForProcessor({
-              events: args.events,
+              events,
               processor,
               signal: args.signal,
             });
@@ -365,11 +379,55 @@ export function withStreamProcessor<
         );
       }
 
+      private async withSharedProcessorGapCatchUp(events: StreamEvent[]): Promise<StreamEvent[]> {
+        const firstEvent = events[0];
+        if (firstEvent == null) {
+          return events;
+        }
+        if (!events.every((event) => event.streamPath === firstEvent.streamPath)) {
+          return events;
+        }
+
+        const earliestReducedThroughOffset = Math.min(
+          ...[...this.#processors.values()].map(
+            (processor) =>
+              this.loadStoredState({
+                processor,
+                streamPath: firstEvent.streamPath,
+              }).reducedThroughOffset,
+          ),
+        );
+        if (firstEvent.offset <= earliestReducedThroughOffset + 1) {
+          return events;
+        }
+
+        const startedAt = performance.now();
+        const gapEvents = await this.streamApiForPath(firstEvent.streamPath).read({
+          afterOffset: earliestReducedThroughOffset,
+          beforeOffset: firstEvent.offset,
+        });
+        this.recordSharedGapCatchUpTiming({
+          afterOffset: earliestReducedThroughOffset,
+          beforeOffset: firstEvent.offset,
+          completedAtMs: Date.now(),
+          durationMs: Math.round(performance.now() - startedAt),
+          gapEventCount: gapEvents.length,
+          inputEventCount: events.length,
+          streamPath: firstEvent.streamPath,
+        });
+        if (gapEvents.length === 0) {
+          return events;
+        }
+
+        return [...gapEvents, ...events].toSorted((left, right) => left.offset - right.offset);
+      }
+
       getStreamProcessorRuntimeState(): StreamProcessorRuntimeState {
         return {
           entries: this.runtimeEntries(),
           lastAppendDeliveryDelays: [...this.#lastAppendDeliveryDelays],
           lastProcessorBatchTimings: [...this.#lastProcessorBatchTimings],
+          lastSharedGapCatchUpTimings: [...this.#lastSharedGapCatchUpTimings],
           pendingWaitUntilCount: this.#pendingWaitUntil.size,
           registeredProcessors: [...this.#processors.keys()],
         };
@@ -811,8 +869,14 @@ export function withStreamProcessor<
             }
 
             for (const events of eventsByStreamPath.values()) {
+              const readyEvents = this.localFeedThroughReadyPrefix(
+                events.toSorted((left, right) => left.offset - right.offset),
+              );
+              if (readyEvents.length === 0) {
+                continue;
+              }
               await this.consumeStreamProcessorEventsWithoutLocalDrain({
-                events: events.toSorted((left, right) => left.offset - right.offset),
+                events: readyEvents,
                 signal,
               });
             }
@@ -820,6 +884,32 @@ export function withStreamProcessor<
         } finally {
           this.#isDrainingLocalFeedThrough = false;
         }
+      }
+
+      private localFeedThroughReadyPrefix(events: StreamEvent[]): StreamEvent[] {
+        const firstEvent = events[0];
+        if (firstEvent == null) {
+          return [];
+        }
+
+        let earliestReducedThroughOffset = Math.min(
+          ...[...this.#processors.values()].map(
+            (processor) =>
+              this.loadStoredState({
+                processor,
+                streamPath: firstEvent.streamPath,
+              }).reducedThroughOffset,
+          ),
+        );
+        const readyEvents: StreamEvent[] = [];
+        for (const event of events) {
+          if (event.offset > earliestReducedThroughOffset + 1) {
+            break;
+          }
+          readyEvents.push(event);
+          earliestReducedThroughOffset = Math.max(earliestReducedThroughOffset, event.offset);
+        }
+        return readyEvents;
       }
 
       private async appendProcessorError(args: {
@@ -859,6 +949,11 @@ export function withStreamProcessor<
       private recordProcessorBatchTiming(timing: StreamProcessorRuntimeBatchTiming) {
         this.#lastProcessorBatchTimings.unshift(timing);
         this.#lastProcessorBatchTimings.splice(50);
+      }
+
+      private recordSharedGapCatchUpTiming(timing: StreamProcessorRuntimeSharedGapCatchUpTiming) {
+        this.#lastSharedGapCatchUpTimings.unshift(timing);
+        this.#lastSharedGapCatchUpTimings.splice(50);
       }
 
       private recordLocalDelivery(event: StreamEvent) {

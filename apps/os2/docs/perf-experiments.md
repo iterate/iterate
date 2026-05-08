@@ -1868,3 +1868,79 @@ Interpretation:
   - make processor registration/session-started an explicit runner-level
     invariant instead of emitted opportunistically from every early
     `afterAppend`.
+
+### 2026-05-08: contiguous-only local feed-through
+
+Question:
+
+- Is the second-scale early Agent subscriber stall caused by local feed-through
+  trying to consume processor-emitted events whose offsets are far ahead of the
+  Agent runner's current contiguous cursor?
+
+Background:
+
+- The first shared-gap experiment changed `withStreamProcessor` so all
+  processors shared one history read when a delivered batch started after the
+  earliest processor cursor.
+- That removed per-processor "reduce nothing" costs, but a fresh run showed the
+  shared history read itself could take `998ms`.
+- The bad shape was: AgentChat appends derived `agent/input-added` events while
+  source traffic is still being appended concurrently. Those derived events get
+  higher offsets than not-yet-processed source events. Local feed-through then
+  tries to consume the derived events immediately and has to synchronously read
+  the missing source gap from the Stream DO.
+
+Change:
+
+- Keep shared gap timing diagnostics.
+- Change local feed-through so it only consumes locally appended events when
+  they are already contiguous with the earliest hosted processor cursor.
+- If a local appended event is ahead of a gap, do not process it locally; let the
+  normal ordered Stream DO subscription deliver it later.
+
+Validation:
+
+- `pnpm --filter @iterate-com/shared exec vitest run
+src/durable-object-utils/mixins/with-stream-processor-runner.unit.test.ts
+src/stream-processors/stream-processor.test.ts`: passed, `33` tests.
+- `pnpm --filter @iterate-com/shared typecheck`: passed.
+- `pnpm --dir apps/os2 typecheck`: passed.
+- Deployed to preview slot 2.
+
+Fresh preview run:
+
+- Project: `proj__os__01kr2p4a55enabtbg5ebbs7frk`
+- Benchmark: `agent-server-bench-1778206784414-c6f5b39b`
+- Traffic: `300` `agent-chat/assistant-response-added` events at `300/s`
+- Source subscriber wait: `869ms`
+- Final subscriber wait: `226ms`
+- Processor wait: `4ms`
+- Append latency: p50 `27ms`, p90 `40ms`, p99 `77ms`
+- Duplicate attempts: `18` across `5` keys
+- Shared gap catch-up timings: none
+- Early Agent delivery:
+  - offsets `23-37`: `15` events in `94ms`
+  - offsets `38-137`: `100` events in `229ms`
+  - offsets `138-237`: `100` events in `187ms`
+  - offsets `238-337`: `100` events in `290ms`
+- Previous bad runs saw tiny/early Agent batches in roughly `900-1500ms`.
+- Local append delivery delays for late AgentChat-derived events were
+  `331-424ms`, because non-contiguous local feed-through now waits for normal
+  subscription delivery instead of forcing synchronous gap catch-up.
+
+Interpretation:
+
+- This confirms the big early stalls were self-inflicted by eager local
+  feed-through under concurrent source append pressure.
+- Local feed-through is good only when the appended event is contiguous. If it
+  is ahead of the current source cursor, trying to force zero self-delivery lag
+  is worse than waiting for ordered subscription delivery.
+- This is still not the final target. We removed the second-scale stall, but
+  self-delivery lag is still hundreds of milliseconds under this workload.
+- Next directions:
+  - make Stream DO delivery drain faster so the ordered path approaches zero;
+  - benchmark `1000/s` with contiguous-only feed-through;
+  - add metrics for skipped local feed-through events so this tradeoff is
+    visible directly;
+  - consider event-type/subscriber filters so Codemode does less work on
+    AgentChat-derived traffic.
