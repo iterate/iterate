@@ -4647,3 +4647,319 @@ Next experiment:
   `appendBatch` sizes such as `10`, `50`, and `100`.
 - This matches Cloudflare's guidance that batching `10-100` logical messages
   per transport/frame can reduce per-message context-switch overhead.
+
+## 2026-05-08: append batching and subscriber delivery experiments
+
+Constraint reminder from the investigation:
+
+- Do not modify the core event data schema for benchmark/perf diagnostics.
+- Event-origin hints must come from the existing `event.metadata` object.
+- Durable diagnostics tables are acceptable for runtime counters, but visible
+  stream events must stay compatible with the existing event envelope.
+
+### Batched benchmark publisher
+
+Implemented and deployed:
+
+- Commit `d61eb503c`: added `--append-batch-size` to the server benchmark and
+  routed benchmark publishing through `stream.appendBatch({ events })`.
+- This changes benchmark traffic generation only; raw stream events are still
+  written individually in the stream history.
+
+Best batch result with the then-current `500` event callable subscriber alarm
+window:
+
+```sh
+OS2_BASE_URL=https://os2.iterate-preview-2.com \
+doppler run --project os2 --config preview_2 -- \
+pnpm --dir apps/os2 benchmark:agent-stream:server -- \
+  --traffic agent-chat-responses \
+  --count 5000 \
+  --rate 2000 \
+  --concurrency 5 \
+  --append-batch-size 50 \
+  --subscriber-mode agent-only \
+  --subscription-transport rpc
+```
+
+- File: `/tmp/os2-bench-agent-chat-rpc-batch50-5000-rate2000-concurrency5.json`
+- Benchmark id: `agent-server-bench-1778220854604-fe4cc8ac`.
+- Publish duration: `2630ms`, roughly `1900/s` effective source publishing.
+- Append latency p50/p90/p99: `46/169/265ms`.
+- Source subscriber wait: `2341ms`.
+- Processor wait: `354ms`.
+- Derived `agent/input-added` wait: `125ms` for `5000/5000`.
+- Final subscriber wait: `876ms`.
+
+Batch-size comparison for `5000` events at requested `2000/s`, concurrency `5`:
+
+- `appendBatchSize=25`: publish `2690ms`, source wait `3526ms`, derived wait
+  `120ms`, final wait `1216ms`.
+- `appendBatchSize=50`: publish `2630ms`, source wait `2341ms`, derived wait
+  `125ms`, final wait `876ms`.
+- `appendBatchSize=100`: publish `2524ms`, source wait `3027ms`, derived wait
+  `225ms`, final wait `2100ms`.
+
+Interpretation:
+
+- Batched append is the first major improvement. It moves 5000 source events
+  from `~8-9.5s` single-event publishing down to `~2.5-2.7s`.
+- Batch size `50` is the best point observed so far. `100` improves publisher
+  duration slightly but worsens subscriber/final lag.
+- This strongly suggests the source append bottleneck is per-call/transport
+  overhead, not event serialization alone.
+
+### Callable subscriber alarm window
+
+Experiments:
+
+- Commit `29e915a78`: increased
+  `CALLABLE_SUBSCRIBER_ALARM_BATCH_SIZE` from `500` to `1000`.
+- Commit `aa9553617`: decreased it from `1000` to `250`.
+- Commit `164923d94`: restored it to `500` while adding websocket alarm
+  delivery.
+
+Comparable `5000` event, requested `2000/s`, `appendBatchSize=50`,
+concurrency `5`, RPC subscriber runs:
+
+- Window `500`: publish `2630ms`, source wait `2341ms`, derived wait `125ms`,
+  final wait `876ms`.
+- Window `1000`: publish `3641ms`, source wait `3335ms`, derived wait `381ms`,
+  final wait `2363ms`.
+- Window `250`: publish `2578ms`, source wait `3927ms`, derived wait `143ms`,
+  final wait `2761ms`.
+- Restored/current window `500` after websocket batching:
+  - File:
+    `/tmp/os2-bench-agent-chat-rpc-batch50-5000-rate2000-concurrency5-current500.json`
+  - Benchmark id: `agent-server-bench-1778222096695-b632f48c`
+  - Publish duration: `2539ms`
+  - Append latency p50/p90/p99: `50/165/215ms`
+  - Source subscriber wait: `2612ms`
+  - Processor wait: `7ms`
+  - Derived wait: `134ms`
+  - Final subscriber wait: `968ms`
+
+Interpretation:
+
+- Bigger subscriber delivery batches are not automatically better. At `1000`,
+  individual Agent RPC dispatches took up to `~1.4s`, and total lag worsened.
+- Smaller `250` event batches reduce the size of each RPC dispatch but create
+  too many drain iterations/cursor writes; total lag also worsened.
+- `500` remains the least bad tested alarm window for the RPC path.
+
+### Noop subscriber isolation
+
+Command shape:
+
+```sh
+OS2_BASE_URL=https://os2.iterate-preview-2.com \
+doppler run --project os2 --config preview_2 -- \
+pnpm --dir apps/os2 benchmark:agent-stream:server -- \
+  --traffic agent-chat-responses \
+  --count 5000 \
+  --rate 2000 \
+  --concurrency 5 \
+  --append-batch-size 50 \
+  --subscriber-mode agent-noop-only \
+  --subscription-transport rpc
+```
+
+Result:
+
+- File:
+  `/tmp/os2-bench-agent-chat-rpc-batch50-5000-rate2000-concurrency5-noop-callable250.json`
+- Benchmark id: `agent-server-bench-1778221471605-99b165d9`
+- Publish duration: `2532ms`.
+- Append latency p50/p90/p99: `24/43/96ms`.
+- Source subscriber wait: `38ms`.
+- Final subscriber wait: `6ms`.
+- No derived `agent/input-added` events were expected because Agent processors
+  were disabled; the benchmark timed out its derived-event wait as designed.
+- Noop dispatch averaged `14ms` per batch, max `21ms`.
+
+Interpretation:
+
+- Stream DO delivery to a subscriber is not inherently multi-second at this
+  volume.
+- The seconds of lag are introduced by real Agent processor work/state handling
+  and by derived appends, not by the alarm loop alone.
+
+### Raw OpenAI-like traffic isolation
+
+With batch publisher and `250` event alarm window:
+
+- File:
+  `/tmp/os2-bench-raw-openai-rpc-batch50-5000-rate2000-concurrency5-callable250.json`
+- Benchmark id: `agent-server-bench-1778221424137-bfbb4cb0`
+- Publish duration: `2537ms`.
+- Append latency p50/p90/p99: `27/52/104ms`.
+- Source subscriber wait: `121ms`.
+- Processor wait: `5ms`.
+- Final subscriber wait: `4ms`.
+- Agent dispatch averaged `28ms`, max `53ms`.
+
+Interpretation:
+
+- High-volume raw `openai-ws/websocket-message-received` events are fine when
+  they do not create a large Agent history or a second wave of derived appends.
+- The problem workload is specifically `agent-chat` -> `agent/input-added` ->
+  Agent history growth / subscriber replay.
+
+### WebSocket subscriber transport
+
+Initial websocket result before batching websocket delivery:
+
+- `1000` agent-chat events at `1000/s`, `appendBatchSize=50`.
+- File:
+  `/tmp/os2-bench-agent-chat-websocket-batch50-1000-rate1000-concurrency5-callable250-retry.json`
+- Benchmark id: `agent-server-bench-1778221569565-c9b7ea33`
+- Source subscriber wait: `6ms`, but processor wait `3649ms` and derived wait
+  `18257ms`.
+- Runtime samples showed websocket processing as many one-event batches.
+
+Root cause found:
+
+- Websocket subscribers were still delivered by Stream DO immediate
+  `afterAppend`, one committed event at a time.
+- The alarm/cursor batch delivery path only selected `callable` subscribers,
+  even though `publishExternalSubscriberBatch()` already had a websocket batch
+  branch.
+
+Fix:
+
+- Commit `164923d94`: moved websocket subscribers onto the same alarm/cursor
+  delivery path as callable subscribers, leaving webhooks as immediate
+  subscribers.
+- This did not change event schema or payloads.
+
+Post-fix websocket results:
+
+`1000` events at `1000/s`:
+
+- File:
+  `/tmp/os2-bench-agent-chat-websocket-batch50-1000-rate1000-concurrency5-alarmwebsocket.json`
+- Benchmark id: `agent-server-bench-1778221886864-ce55f4f0`
+- Publish duration: `1249ms`.
+- Source subscriber wait: `52ms`.
+- Processor wait: `571ms`.
+- Derived wait: `632ms`.
+- Final subscriber wait: `11ms`.
+- Runtime samples now show websocket batches of `~200-301` events instead of
+  one-event frames.
+
+`5000` events at `2000/s`:
+
+- First attempt hit a generic oRPC `500`; Cloudflare traces around the window
+  showed `Durable Object reset because its code was updated` during long
+  `StreamDurableObject.history` RPCs. This is a deploy confounder from
+  repeatedly updating preview while benchmarks were active.
+- Retry file:
+  `/tmp/os2-bench-agent-chat-websocket-batch50-5000-rate2000-concurrency5-alarmwebsocket-retry.json`
+- Benchmark id: `agent-server-bench-1778222046678-c18858f7`
+- Publish duration: `2562ms`.
+- Append latency p50/p90/p99: `48/95/162ms`.
+- Source subscriber wait: `34ms`.
+- Processor wait: `966ms`.
+- Derived wait: `2121ms`.
+- Final subscriber wait: `4ms`.
+
+Interpretation:
+
+- Websocket alarm batching fixed the catastrophic `18s` derived wait.
+- Websocket source delivery is now effectively immediate from the Stream DO's
+  perspective because `socket.send()` does not await Agent processing.
+- That makes websocket delivery look excellent for source cursor lag, but it is
+  not equivalent to RPC delivery. The Stream DO advances the subscriber cursor
+  after sending frames, not after the Agent DO has durably reduced the events.
+- For correctness-sensitive processors, RPC remains the stricter transport
+  unless we add websocket acknowledgements.
+- A future websocket transport should include explicit ack frames carrying the
+  reduced-through offset before the Stream DO advances the subscriber cursor.
+
+### Processor fast-forward for unconsumed batches
+
+Hypothesis:
+
+- `withStreamProcessor` loops every delivered event through every registered
+  processor, even when the processor contract cannot consume any event in the
+  batch.
+- For an `agent-chat` source batch, `agent` and `openai-ws` do unnecessary
+  event-type checks just to advance cursors.
+
+Fix under test:
+
+- Commit `07482468c`: if a delivered batch is contiguous and contains no event
+  type consumed by a processor, fast-forward that processor's
+  `reducedThroughOffset` and `afterAppendCompletedThroughOffset` with one state
+  save.
+
+Result:
+
+- File:
+  `/tmp/os2-bench-agent-chat-rpc-batch50-5000-rate2000-concurrency5-fastforward.json`
+- Benchmark id: `agent-server-bench-1778222454135-9ffe41c2`
+- Publish duration: `2911ms`.
+- Append latency p50/p90/p99: `71/258/279ms`.
+- Source subscriber wait: `3363ms`.
+- Processor wait: `16ms`.
+- Derived wait: `168ms`.
+- Final subscriber wait: `1657ms`.
+
+Interpretation:
+
+- This did not improve the main benchmark; the run was worse than the prior
+  current-500 RPC run.
+- The dominant path is not unconsumed event looping. It is likely:
+  - RPC delivery waiting for Agent processor work;
+  - Agent state/history growth (`stateSaveJsonBytes` reaches `~2.5MB` by the
+    end of 5000 chat events);
+  - second-wave derived appends from `agent-chat` back into the same stream.
+- The fast-forward remains conceptually correct for cursor advancement, but it
+  is not the main performance unlock.
+
+## Current Working Model
+
+What seems solid now:
+
+- Source publishing needs batching. Single-event public append calls top out at
+  roughly `500-650/s`; batched append can get close to `1900/s` for this test.
+- Hidden idempotency storms are not explaining the current lag. Duplicate
+  attempts are visible and low in these runs.
+- Stream delivery without real processors is fast: noop catch-up was `38ms`.
+- Raw event traffic without derived Agent history is fast: raw OpenAI-like
+  catch-up was `121ms`.
+- RPC delivery gives stronger cursor correctness because the Stream DO waits
+  for `afterAppendBatch` to return before writing the subscriber cursor.
+- Websocket delivery can make source cursor lag nearly zero, but without an ack
+  protocol it only proves frames were sent, not that the Agent processor reduced
+  them.
+
+Main remaining bottlenecks/hypotheses:
+
+- Agent state shape is too large for high-velocity streams. Full model-visible
+  history in reduced state reaches multi-megabyte JSON quickly.
+- `agent-chat` derived appends create a second event wave. Source event delivery
+  can complete while derived `agent/input-added` events still need to be
+  appended, delivered, and reduced by `agent`.
+- The Stream DO alarm delivery loop is still serial per subscriber window: read
+  history, dispatch subscriber, write cursor, repeat. At high volume, a few
+  hundred milliseconds per Agent RPC window compounds into seconds.
+- Current timing diagnostics round most processor internals to `0ms`, which is
+  too coarse. We need sub-millisecond or aggregate CPU/serialization counters
+  to separate JSON serialization, storage put, zod parsing, and processor
+  reducer cost.
+
+Next experiments:
+
+- Add websocket ack frames and only advance websocket subscriber cursors after
+  Agent confirms `reducedThroughOffset`.
+- Add an Agent-state compaction experiment: store only bounded history in
+  reduced state or store history in a separate append-only/queryable projection.
+- Add finer processor timing diagnostics with fractional milliseconds and
+  cumulative `JSON.stringify` cost.
+- Test an `agent-chat` processor variant that appends derived events in larger
+  batches and/or yields faster while making the derived append lifecycle
+  explicit in diagnostics.
+- Evaluate whether Agent history needs to be a processor state at all for
+  high-velocity streams, or whether the LLM request renderer should query the
+  stream when a request is actually needed.
