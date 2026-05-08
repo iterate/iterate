@@ -32,6 +32,7 @@
     "test:e2e:preview": "tsx ./e2e/preview-smoke.ts",
     "benchmark:agent-stream": "tsx ./scripts/benchmark-agent-stream.ts",
     "benchmark:agent-stream:server": "tsx ./scripts/benchmark-agent-stream-server.ts",
+    "benchmark:agent-stream:server:repeat": "tsx ./scripts/benchmark-agent-stream-server-repeat.ts",
     "test:smoke": "RUNTIME_SMOKE_FULL=1 vitest run",
     "test:watch": "vitest"
   },
