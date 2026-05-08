@@ -3383,3 +3383,104 @@ Interpretation:
 5ms` is misleading.
 - Do not pursue WebSocket transport as a performance fix until it supports
   batch frames and has a real cursor/progress diagnostic.
+
+### 2026-05-08: Idempotency-key duplicate append suspicion
+
+Question:
+
+- Could a processor bug be hidden because it appends the same logical event many
+  times with the same idempotency key, so the stream only commits one event?
+
+Current answer:
+
+- Yes, this is a real failure mode to guard against, but the Stream DO now has a
+  direct diagnostic for it.
+- Stream storage has an `idempotency_duplicate_attempts` table keyed by
+  `idempotency_key`.
+- `StreamDurableObject.getDiagnostics()` reports:
+  - `idempotencyCommittedEventCount`
+  - `idempotencyDuplicateAttemptCount`
+  - `idempotencyDuplicateKeyCount`
+  - `idempotencyLogicalAppendAttemptCount`
+  - `idempotencyDuplicateTopKeys`
+- The server benchmark evaluates this invariant and fails when:
+  - total duplicate attempts exceed the configured maximum; or
+  - duplicate attempts appear for unexpected key prefixes.
+
+Implication:
+
+- If every committed idempotent event had actually been attempted 10 times with
+  the same key, the diagnostic should show roughly:
+  - `idempotencyDuplicateAttemptCount ~= committedIdempotentEvents * 9`
+  - `idempotencyLogicalAppendAttemptCount ~= committedIdempotentEvents * 10`
+  - top duplicate keys with `duplicateAttempts: 9`
+- The default benchmark threshold is intentionally low
+  (`--max-idempotency-duplicate-attempts 25`), so a broad 10x append loop should
+  fail even if the key prefix is in the allowed list.
+
+Remaining gap:
+
+- The current duplicate table tells us which idempotency key duplicated, event
+  type, stream path, target offset, and first/last duplicate time.
+- It does not yet attribute duplicate attempts to a specific append source or
+  stack/caller. If this counter starts rising, the next instrumentation should
+  add a lightweight append-source label at central append call sites rather than
+  logging every event.
+
+### 2026-05-08: Agent status updates isolate small Agent state
+
+Hypothesis:
+
+- If the stream path and subscriber delivery are basically healthy, then traffic
+  that is consumed by Agent but does not grow full model-visible history should
+  process much faster than `agent-chat` or `agent/input-added` traffic.
+
+Benchmark:
+
+- Benchmark: `agent-server-bench-1778214089673-9ef385d9`
+- Traffic: `1000` `agent/status-updated` events at `1000/s`
+- Subscriber mode: `both`
+- Subscription transport: RPC
+
+Result:
+
+- Publish duration: `1090ms`
+- Source subscriber wait: `130ms`
+- Final subscriber wait: `11ms`
+- Processor wait: `12ms`
+- Append p50/p90/p99: `30/72/92ms`
+- Duplicate invariant: passed, `15` duplicate attempts, `0` unexpected
+- Alarm diagnostics:
+  - schedule requests: `1030`
+  - `setAlarm()` calls: `11`
+  - coalesced while scheduled: `1019`
+
+Processor state diagnostics:
+
+- `agent`:
+  - batches: `11`
+  - save calls: `16`
+  - cumulative saved JSON bytes: `39131`
+  - max state JSON bytes: `2506`
+  - total afterAppend/append duration: `29ms`
+- `agent-chat`:
+  - batches: `11`
+  - max state JSON bytes: `248`
+  - total afterAppend/append duration: `60ms`
+- `openai-ws`:
+  - batches: `11`
+  - max state JSON bytes: `199`
+  - total afterAppend/append duration: `18ms`
+
+Interpretation:
+
+- The same stream and subscriber machinery can process 1000 events at 1000/s
+  with low processor lag when Agent reduced state stays compact.
+- This reinforces the current bottleneck ranking:
+  1. Agent full-history reduced state growth.
+  2. `agent-chat` derived appends when every visible chat event becomes an
+     `agent/input-added` event.
+  3. Stream alarm/cursor delivery mechanics.
+- The stream delivery path is still not at the desired `~0ms` self-delivery lag,
+  but the huge delay cases are now much more strongly tied to processor work and
+  state shape than to the scheduled-alarm delivery loop alone.
