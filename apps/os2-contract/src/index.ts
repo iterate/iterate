@@ -481,11 +481,11 @@ export const osContract = oc.router({
         .input(
           ProjectScopedInput.extend({
             agentPath: StreamPath,
-            concurrency: z.number().int().positive().max(100).default(10),
-            count: z.number().int().positive().max(2_000).default(200),
+            concurrency: z.number().int().positive().max(500).default(10),
+            count: z.number().int().positive().max(10_000).default(200),
             payloadBytes: z.number().int().nonnegative().max(32_000).default(64),
             publisher: AgentStreamBenchmarkPublisher.default("app-worker"),
-            ratePerSecond: z.number().positive().max(2_000).default(50),
+            ratePerSecond: z.number().positive().max(10_000).default(50),
             subscriberMode: AgentStreamBenchmarkSubscriberMode.default("both"),
             subscriptionTransport: AgentStreamBenchmarkSubscriptionTransport.default("rpc"),
             terminalEvents: z.boolean().default(true),
