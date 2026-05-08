@@ -2848,3 +2848,39 @@ Validation plan:
   - callable alarm diagnostic counters;
   - Cloudflare trace span count and sampled `durable_object_storage_setAlarm`
     count.
+
+Result:
+
+- Commit under test: `61bc3011b`
+- Benchmark: `agent-server-bench-1778211589084-06f0fa2d`
+- Duplicate invariant: passed
+- Publish duration: `2044ms`
+- Source subscriber wait: timed out after `30005ms`
+  - Target offset: `1626`
+  - Codemode cursor: `1223`
+  - Agent cursor: `1223`
+- Final subscriber wait: timed out after `30022ms`
+  - Target offset: `1826`
+  - Codemode cursor: `1223`
+  - Agent cursor: `1223`
+- Processor wait: timed out after `30080ms`
+  - Agent / AgentChat / OpenAI processors were all only through offset `1223`
+- Append latency: p50 `190ms`, p90 `238ms`, p99 `302ms`
+- Alarm diagnostics:
+  - `scheduleRequestCount`: `201`
+  - `setAlarmCount`: `1`
+  - `coalescedWhileActiveCount`: `200`
+  - `coalescedWhileScheduledCount`: `0`
+  - `setAlarmErrorCount`: `0`
+
+Interpretation:
+
+- This was a correctness failure, not just a slower run.
+- Suppressing schedules while a drain is active can lose wakeups. The active
+  drain did not reliably observe later committed stream state and therefore did
+  not reschedule for the remaining events.
+- The persistent subscriber cursors protected ordering and made the stall
+  visible, but they did not make active in-memory coalescing safe.
+- Reverted the behavioral coalescing immediately. Kept the diagnostic counters
+  only, so the next baseline run can measure `setAlarm()` pressure without
+  changing delivery behavior.

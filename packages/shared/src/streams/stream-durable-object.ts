@@ -185,8 +185,6 @@ const StreamDurableObjectBase = withPublicFetchRoute({
  */
 export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableObjectEnv> {
   private _state: StreamState | null = null;
-  private callableSubscriberDeliveryActive = false;
-  private callableSubscriberDeliveryAlarmScheduled = false;
   private readonly client: SyncClient;
   private readonly appendBatchDiagnostics: AppendBatchDiagnostic[] = [];
   private readonly callableSubscriberAlarmDiagnostic: CallableSubscriberAlarmDiagnostic = {
@@ -615,17 +613,11 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
   }
 
   async alarm() {
-    this.callableSubscriberDeliveryAlarmScheduled = false;
     if (this._state == null && !this.hydratePersistedStreamState({ appendWakeEvent: false })) {
       return;
     }
 
-    this.callableSubscriberDeliveryActive = true;
-    try {
-      await this.drainCallableSubscriberDelivery();
-    } finally {
-      this.callableSubscriberDeliveryActive = false;
-    }
+    await this.drainCallableSubscriberDelivery();
   }
 
   // ---------------------------------------------------------------------------
@@ -884,22 +876,10 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
   private async scheduleCallableSubscriberDelivery() {
     this.callableSubscriberAlarmDiagnostic.scheduleRequestCount += 1;
 
-    if (this.callableSubscriberDeliveryActive) {
-      this.callableSubscriberAlarmDiagnostic.coalescedWhileActiveCount += 1;
-      return;
-    }
-
-    if (this.callableSubscriberDeliveryAlarmScheduled) {
-      this.callableSubscriberAlarmDiagnostic.coalescedWhileScheduledCount += 1;
-      return;
-    }
-
-    this.callableSubscriberDeliveryAlarmScheduled = true;
     try {
       await this.ctx.storage.setAlarm(Date.now());
       this.callableSubscriberAlarmDiagnostic.setAlarmCount += 1;
     } catch (error) {
-      this.callableSubscriberDeliveryAlarmScheduled = false;
       this.callableSubscriberAlarmDiagnostic.setAlarmErrorCount += 1;
       throw error;
     }
