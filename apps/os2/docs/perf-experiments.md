@@ -2312,3 +2312,24 @@ Interpretation:
   producer backpressure is explicitly desired.
 - The app-worker publisher remains the better benchmark for detecting subscriber
   delivery lag because it can outrun subscriber dispatch and expose backlog.
+
+### 2026-05-08: filter Codemode callable subscription by consumed event type
+
+Hypothesis:
+
+- In `both` mode, CodemodeSession receives the same high-volume AgentChat source
+  traffic as AgentDurableObject even though the Codemode processor only consumes
+  core processor registration and `events.iterate.com/codemode/*` events.
+- With batch size `500`, the previous `both` run showed Codemode dispatches for
+  `500`-event windows taking `393ms` and `295ms`.
+- Adding a `jsonataFilter` to the Codemode callable subscription should avoid
+  dispatching AgentChat/source-event-only batches to Codemode.
+- This should reduce `both` mode subscriber delivery lag without changing
+  committed stream contents or processor ordering.
+
+Change:
+
+- Set the Codemode callable subscription `jsonataFilter` from
+  `CodemodeProcessorContract.consumes`.
+- This keeps the filter tied to the processor contract instead of maintaining a
+  separate hard-coded event list.

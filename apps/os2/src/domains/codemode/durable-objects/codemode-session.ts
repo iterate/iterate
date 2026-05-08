@@ -46,6 +46,9 @@ const CodemodeSessionStructuredName = z.object({
   projectId: z.string(),
   streamPath: StreamPath,
 });
+const CODEMODE_SUBSCRIPTION_JSONATA_FILTER = CodemodeProcessorContract.consumes
+  .map((type) => `type = ${JSON.stringify(type)}`)
+  .join(" or ");
 
 export type StartScriptExecutionInput = {
   code: string;
@@ -537,6 +540,7 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
       payload: {
         slug: `codemode-session:${this.name}`,
         type: "callable",
+        jsonataFilter: CODEMODE_SUBSCRIPTION_JSONATA_FILTER,
         callable: {
           type: "workers-rpc",
           via: {
