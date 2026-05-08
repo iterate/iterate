@@ -3997,3 +3997,124 @@ Current conclusion:
   - final subscriber wait;
   - local append delivery delays;
   - missing/skipped event counts.
+
+### 2026-05-08: async agent-chat derived append experiment
+
+Change:
+
+- `agent-chat` now schedules derived `agent/input-added` appends through
+  processor `waitUntil` when the runner provides it.
+- If the derived append fails, `agent-chat` attempts to append a
+  `core/error-occurred` event with idempotency key
+  `agent-chat/transcription-error@<sourceOffset>`.
+- `withStreamProcessor` now schedules a local feed-through drain after
+  processor-originated `append`/`appendBatch` completes. This matters when the
+  append completes after the original delivery lane has already returned.
+- Commit: `19974a366` (`Schedule agent chat derived appends asynchronously`).
+
+Verification before deploy:
+
+- `pnpm --dir packages/shared typecheck`
+- `pnpm --dir apps/os2 typecheck`
+- `pnpm --dir packages/shared test -- agent-chat/implementation.test.ts`
+  - Note: this package script runs the broader shared test groups before the
+    specific stream-processor test filter.
+  - Passed.
+  - Existing noisy warnings:
+    - WebSocket peer disconnected warnings from callable tests;
+    - `rrule` sourcemap warnings from durable-object-utils tests.
+
+Preview deploy:
+
+- Deployed to preview slot 2 with:
+  - `doppler run --project os2 --config preview_2 -- pnpm --dir apps/os2 alchemy:up`
+
+Benchmark:
+
+- File: `/tmp/os2-bench-agent-chat-both-1000-async-derived.json`
+- Benchmark id: `agent-server-bench-1778216847721-cd1e9a6d`
+- Traffic: `agent-chat-responses`
+- Count/rate/concurrency: `1000`, `1000/s`, `100`
+- Subscriber mode: `both`
+- Subscription transport: `rpc`
+
+Comparison against the previous RPC run:
+
+| Metric                 | Awaited derived append | Async derived append |
+| ---------------------- | ---------------------: | -------------------: |
+| publish duration       |               `1048ms` |             `1272ms` |
+| source subscriber wait |                `791ms` |              `842ms` |
+| processor wait         |                 `92ms` |               `12ms` |
+| final subscriber wait  |                  `3ms` |               `11ms` |
+| append p50/p90/p99     |          `27/81/110ms` |       `89/124/144ms` |
+| duplicate attempts     |                   `15` |                 `13` |
+| duplicate invariant    |                 passed |               passed |
+
+Processor timing comparison:
+
+- Awaited run:
+  - `agent-chat` retained total: `978ms`
+  - `agent-chat.appendDurationMs`: `978ms`
+  - derived append calls: `6`
+  - derived appended events: `1002`
+  - retained local append delivery delay sample: `84ms`
+- Async run:
+  - `agent-chat` retained total: `0ms`
+  - `agent-chat.appendDurationMs`: `1226ms`
+  - derived append calls: `6`
+  - derived appended events: `1002`
+  - retained local append delivery delay sample: `0ms`
+
+Important interpretation:
+
+- This is a mixed result, not a solution.
+- Returning from `agent-chat.afterAppendBatch` quickly does reduce processor
+  cursor wait and makes same-runner local derived-event delivery effectively
+  immediate in the retained samples.
+- It does not reduce the underlying Stream DO append work. The derived
+  `appendBatch` calls still take about as long in aggregate, now outside the
+  awaited `afterAppendBatch` path.
+- Publish latency and source subscriber wait got slightly worse. That suggests
+  the work was moved out of the critical processor cursor path, not removed
+  from the hot Stream DO.
+- This may still help user-visible follow-up processing because derived events
+  are locally fed through with near-zero delay, but it is not enough for the
+  whole stream system target.
+
+Cloudflare trace:
+
+- Account: iterate dev/stg (`cc7f6f461fbe823c199da2b27f9e0ff3`)
+- Worker: `os2-preview-2`
+- Timeframe queried: `2026-05-08T05:06:30Z` to `2026-05-08T05:09:30Z`
+- Main benchmark trace:
+  - trace id: `41e063c8f5b5a3908d78f71467f2ec10`
+  - root: `POST .../agents/benchmark-stream/%2Fagents%2Fserver-bench-1778216841774`
+  - trace duration: `7969ms`
+  - sampled spans in trace summary: `2936`
+  - errors: none
+- Sampled events summary from first `1000` trace events:
+  - `durable_object_subrequest`: `418` spans, total sampled duration `73984ms`,
+    max `294ms`
+  - `jsrpc`: `170` spans, total sampled duration `39435ms`, max `27944ms`
+  - storage spans sampled as `0ms` duration
+
+Trace interpretation:
+
+- This continues to point at DO/RPC queueing, not reducer CPU or SQLite.
+- The very long `jsrpc` span is likely an observer/benchmark call queued behind
+  stream work, consistent with the earlier `getRuntimeState()` trace finding.
+- The large count of `durable_object_subrequest` spans around `200-300ms`
+  aligns with the processor append-call timings and hot Stream DO queueing.
+
+Current conclusion:
+
+- Async derived appends are useful as a narrow latency tool for local derived
+  event feed-through, but not sufficient as the main throughput fix.
+- The next architectural experiment should reduce the Stream DO subrequest/RPC
+  queue itself:
+  - cleanly replace callable delivery with batched WebSocket delivery, not an
+    additive single-event WebSocket path;
+  - or add first-class event-type routing so processors are not invoked for
+    irrelevant event classes;
+  - or split processor cursor/state storage so ignored events do not rewrite
+    full processor state.
