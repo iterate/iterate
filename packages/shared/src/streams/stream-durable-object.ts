@@ -93,9 +93,21 @@ type CallableSubscriberDeliveryDiagnostic = {
   rescheduled: boolean;
   startedAtMs: number;
   subscriberCheckCount: number;
+  subscriberDeliveries: CallableSubscriberDeliveryAttemptDiagnostic[];
   targetEventCount: number;
   uniqueHistoryWindowCount: number;
   yielded: boolean;
+};
+
+type CallableSubscriberDeliveryAttemptDiagnostic = {
+  beforeOffset: number;
+  completedAtMs: number;
+  cursor: number;
+  deliveredEventCount: number;
+  durationMs: number;
+  failedEventCount: number;
+  historyEventCount: number;
+  subscriberSlug: string;
 };
 
 const StreamDurableObjectLifecycleBase = withD1ObjectCatalog<
@@ -736,6 +748,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
       rescheduled: false,
       startedAtMs: Date.now(),
       subscriberCheckCount: 0,
+      subscriberDeliveries: [],
       targetEventCount,
       uniqueHistoryWindowCount: 0,
       yielded: false,
@@ -797,6 +810,16 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
             }
             if (events.length === 0) {
               diagnostic.emptyWindowCount += 1;
+              diagnostic.subscriberDeliveries.push({
+                beforeOffset: before,
+                completedAtMs: Date.now(),
+                cursor,
+                deliveredEventCount: 0,
+                durationMs: 0,
+                failedEventCount: 0,
+                historyEventCount: 0,
+                subscriberSlug: subscriber.slug,
+              });
               this.appendProcessorErrorEvent({
                 event: null,
                 idempotencyKey: `stream-do:callable-subscriber-empty-batch:${subscriber.slug}:${cursor}:${this.state.eventCount}`,
@@ -813,6 +836,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
               return { hasRemainingWork: false, shouldYield: false };
             }
 
+            const subscriberDeliveryStartedAt = performance.now();
             const result = await publishExternalSubscriberBatch({
               append: (nextEvent) => Promise.resolve(this.append(nextEvent)),
               callableContext: {
@@ -823,6 +847,16 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
                 this.appendExternalSubscriberDeliveryError(failure);
               },
               subscriber,
+            });
+            diagnostic.subscriberDeliveries.push({
+              beforeOffset: before,
+              completedAtMs: Date.now(),
+              cursor,
+              deliveredEventCount: result.deliveredEventCount,
+              durationMs: Math.round(performance.now() - subscriberDeliveryStartedAt),
+              failedEventCount: result.failedEventCount,
+              historyEventCount: events.length,
+              subscriberSlug: subscriber.slug,
             });
             diagnostic.deliveredEventCount += result.deliveredEventCount;
             diagnostic.failedEventCount += result.failedEventCount;

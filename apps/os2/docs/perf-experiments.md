@@ -1668,3 +1668,108 @@ Next experiments:
   for Agent/OpenAI events it does not consume.
 - Re-run the same three-mode comparison at `1000/s` after per-subscriber timing
   is available.
+
+### 2026-05-08: per-subscriber drain timing
+
+Change:
+
+- Added per-subscriber attempt timings inside each
+  `StreamDurableObject.drainCallableSubscriberDelivery()` diagnostic.
+- Each drain now records, per subscriber/window:
+  - subscriber slug;
+  - starting cursor and `beforeOffset`;
+  - history event count;
+  - delivered/failed event counts;
+  - duration.
+
+Validation:
+
+- Focused shared tests passed: `4` files, `56` tests.
+- `pnpm --filter @iterate-com/shared typecheck`: passed.
+- `pnpm --dir apps/os2 typecheck`: passed.
+- Deployed to preview slot 2.
+
+Cold-ish `both` run:
+
+- Project: `proj__os__01kr2may2hf26vhtc4dkywd5xs`
+- Benchmark: `agent-server-bench-1778204903801-01d95396`
+- Traffic: `300` `agent-chat/assistant-response-added` events at `300/s`
+- Source subscriber wait: `781ms`
+- Final subscriber wait: `8ms`
+- Processor wait: `5ms`
+- Append latency: p50 `16ms`, p90 `31ms`, p99 `79ms`
+- Duplicate attempts: `18` across `4` setup keys
+
+Notable drain timings:
+
+- Early drain to offset `12`:
+  - Agent: `10` delivered from `12` history events in `442ms`
+  - Codemode: `4` delivered from `5` history events in `146ms`
+- Early drain to offset `62`:
+  - Agent: `40` delivered in `1009ms`
+  - Codemode: `40` delivered in `46ms`
+- Bulk drain to offset `627`:
+  - Total: `587ms`
+  - Agent windows: mostly `25-57ms` per `100` events
+  - Codemode windows: mostly `55-152ms` per `100` events
+
+Warm `agent-only` run:
+
+- Project: `proj__os__01kr2mc4psesqvn1xa16619ra4`
+- Benchmark: `agent-server-bench-1778204942985-55f55189`
+- Source subscriber wait: `292ms`
+- Final subscriber wait: `4ms`
+- Processor wait: `5ms`
+- Append latency: p50 `10ms`, p90 `26ms`, p99 `53ms`
+
+Notable drain timings:
+
+- Early drain to offset `40`:
+  - Agent: `17` delivered from `18` history events in `980ms`
+  - Disabled Codemode lane: `0ms`
+- Bulk drain to offset `628`:
+  - Total: `115ms`
+  - Agent windows: `16-29ms` per `100` events
+  - Disabled Codemode lane: `0ms`
+
+Warm `both` rerun on the same stream as the cold-ish `both` run:
+
+- Project: `proj__os__01kr2may2hf26vhtc4dkywd5xs`
+- Benchmark: `agent-server-bench-1778204966862-e62bf963`
+- Source subscriber wait: `712ms`
+- Final subscriber wait: `10ms`
+- Processor wait: `63ms`
+- Append latency: p50 `17ms`, p90 `31ms`, p99 `55ms`
+
+Notable drain timings:
+
+- Early drain to offset `628`:
+  - Agent: `1` delivered in `657ms`
+  - Codemode: `1` delivered in `31ms`
+- Early drain to offset `634`:
+  - Agent: `6` delivered in `1098ms`
+  - Codemode: `6` delivered in `20ms`
+- Bulk drain to offset `1232`:
+  - Total: `560ms`
+  - Agent windows: usually `24-38ms` per `100` events, one `86ms` window
+  - Codemode windows: `70-125ms` per `100` events
+
+Interpretation:
+
+- The second-scale tail is not primarily Stream DO history reads or cursor
+  writes.
+- It is also not simply "Codemode is slow." Codemode is slower than Agent in the
+  steady bulk windows, but the largest tail samples are tiny Agent subscriber
+  batches.
+- The suspicious shape is inside `AgentDurableObject.afterAppendBatch` /
+  `withStreamProcessor`: small early batches that include Agent/AgentChat setup
+  or derived-event production can take `650-1100ms`.
+- Once the system is in the bulk catch-up section, Agent handles `100` event
+  windows in roughly `20-40ms`; Codemode handles them in roughly `70-150ms`.
+- Next instrumentation needs to break the Agent subscriber RPC into per-processor
+  timings:
+  - `agent-chat` reduce/afterAppendBatch;
+  - local feed-through of processor-appended events;
+  - `agent` reduce/afterAppendBatch;
+  - `openai-ws` reduce/afterAppendBatch;
+  - stream append/appendBatch time inside processor APIs.

@@ -358,6 +358,16 @@ type BenchmarkStreamStub = {
       rescheduled: boolean;
       startedAtMs: number;
       subscriberCheckCount: number;
+      subscriberDeliveries: Array<{
+        beforeOffset: number;
+        completedAtMs: number;
+        cursor: number;
+        deliveredEventCount: number;
+        durationMs: number;
+        failedEventCount: number;
+        historyEventCount: number;
+        subscriberSlug: string;
+      }>;
       targetEventCount: number;
       uniqueHistoryWindowCount: number;
       yielded: boolean;
