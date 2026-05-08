@@ -525,6 +525,40 @@ export function withStreamProcessor<
         let hasStoredStateChanges = false;
 
         try {
+          const unreducedEvents = args.events.filter(
+            (event) => event.offset > storedState.afterAppendCompletedThroughOffset,
+          );
+          const firstUnreducedEvent = unreducedEvents[0];
+          if (
+            firstUnreducedEvent != null &&
+            firstUnreducedEvent.offset === storedState.reducedThroughOffset + 1 &&
+            unreducedEvents.every(
+              (event) =>
+                getConsumedEventDefinition({
+                  contract: args.processor.contract,
+                  eventType: event.type,
+                }) == null,
+            )
+          ) {
+            const lastOffset = unreducedEvents.at(-1)!.offset;
+            storedState = {
+              ...storedState,
+              afterAppendCompletedThroughOffset: Math.max(
+                storedState.afterAppendCompletedThroughOffset,
+                lastOffset,
+              ),
+              reducedThroughOffset: Math.max(storedState.reducedThroughOffset, lastOffset),
+            };
+            timing.reduceDurationMs = Math.round(performance.now() - reduceStartedAt);
+            this.saveStoredState({
+              processor: args.processor,
+              storedState,
+              streamPath: args.events[0]!.streamPath,
+              timing,
+            });
+            return;
+          }
+
           for (const event of args.events) {
             if (event.offset <= storedState.afterAppendCompletedThroughOffset) {
               continue;
