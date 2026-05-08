@@ -702,20 +702,30 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
         return;
       }
 
+      const cursorEntries = await Promise.all(
+        subscribers.map(async (subscriber) => ({
+          cursor: await this.readCallableSubscriberCursor(subscriber.slug),
+          subscriber,
+        })),
+      );
+      const eventWindows = new Map<string, readonly Event[]>();
+
       const results = await Promise.all(
-        subscribers.map(async (subscriber) => {
-          const cursor = await this.readCallableSubscriberCursor(subscriber.slug);
+        cursorEntries.map(async ({ cursor, subscriber }) => {
           if (cursor >= targetEventCount) {
             return { hasRemainingWork: false, shouldYield: false };
           }
 
-          const events = this.history({
-            after: cursor,
-            before: Math.min(
-              cursor + CALLABLE_SUBSCRIBER_ALARM_BATCH_SIZE + 1,
-              targetEventCount + 1,
-            ),
-          });
+          const before = Math.min(
+            cursor + CALLABLE_SUBSCRIBER_ALARM_BATCH_SIZE + 1,
+            targetEventCount + 1,
+          );
+          const windowKey = `${cursor}:${before}`;
+          let events = eventWindows.get(windowKey);
+          if (events == null) {
+            events = this.history({ after: cursor, before });
+            eventWindows.set(windowKey, events);
+          }
           if (events.length === 0) {
             this.appendProcessorErrorEvent({
               event: null,

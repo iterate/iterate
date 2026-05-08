@@ -1312,3 +1312,137 @@ Interpretation:
    overhead.
 6. Implement local feed-through if self-published events remain non-zero after
    batching.
+
+### 2026-05-08: shared callable-subscriber history windows
+
+Hypothesis:
+
+- Every agent stream currently has both the Agent subscriber and the
+  CodemodeSession subscriber.
+- In the Stream DO alarm drain, each callable subscriber independently read
+  `history({ after: cursor, before })`.
+- Those subscribers are usually at the same cursor, so the Stream DO was doing
+  duplicate SQLite reads and event JSON parsing for the same event window.
+
+Change:
+
+- In `StreamDurableObject.drainCallableSubscriberDelivery`, read all callable
+  subscriber cursors first.
+- Cache each history window by `{cursor, before}` for one drain batch.
+- Reuse the same immutable event array for subscribers aligned on that window.
+- Keep per-subscriber delivery, failure handling, and cursor writes independent.
+- Ordering semantics are unchanged: each subscriber still receives a contiguous
+  ordered window, and the cursor only advances after that subscriber's publish
+  attempt succeeds enough to avoid a full-batch yield.
+
+Validation:
+
+- `pnpm exec vitest run src/streams/*.test.ts src/durable-object-utils/mixins/with-stream-processor-runner.unit.test.ts src/stream-processors/stream-processor.test.ts`
+  from `packages/shared`: passed.
+- `pnpm --filter @iterate-com/shared typecheck`: passed.
+- Deployed to preview slot 2 with `doppler run --project os2 --config preview_2 -- pnpm tsx ./alchemy.run.ts`.
+
+Preview benchmarks, RPC subscription:
+
+- Agent-chat response traffic:
+  - project: `proj__os__01kr2jb64yfvmvcg331dc6p0cx`
+  - benchmark: `agent-server-bench-1778202814459-da7ffbb1`
+  - traffic: `1000` `agent-chat/assistant-response-added` at `1000/s`
+  - append failures: `0`
+  - duplicate attempts: `13` across `5` startup/setup keys
+  - append latency: p50 `53ms`, p90 `101ms`, p99 `155ms`
+  - processor wait: `574ms`
+  - self-delivery tail samples: `0ms`
+- Raw OpenAI websocket-shaped traffic, first sample:
+  - project: `proj__os__01kr2jbqbpf6fv2nwgm6e35mr9`
+  - benchmark: `agent-server-bench-1778202832894-7c83b634`
+  - traffic: `1000` raw events at `1000/s`
+  - append failures: `0`
+  - duplicate attempts: `13` across `4` startup/setup keys
+  - append latency: p50 `20ms`, p90 `77ms`, p99 `119ms`
+  - processor wait: `1510ms`
+- Raw OpenAI websocket-shaped traffic, repeat sample:
+  - project: `proj__os__01kr2jcbmxenfvamq4dkwj7v65`
+  - benchmark: `agent-server-bench-1778202853939-2272e562`
+  - traffic: `1000` raw events at `1000/s`
+  - append failures: `0`
+  - duplicate attempts: `12` across `4` startup/setup keys
+  - append latency: p50 `116ms`, p90 `152ms`, p99 `168ms`
+  - processor wait: `323ms`
+
+Interpretation:
+
+- Agent-chat improved from the prior conservative baseline of `834ms` wait to
+  `574ms`, with self-delivery still `0ms`.
+- Raw traffic remained noisy. One run was bad and one was good. The change is
+  likely neutral-to-positive, not a proven raw regression.
+- The remaining duplicate attempts are still startup/setup races
+  (`processor-registered:*`, `codemode/session-started`, codemode subscription),
+  not per-traffic-event duplicate storms.
+
+WebSocket transport comparison:
+
+- Agent-chat response traffic with Agent subscriber over websocket:
+  - project: `proj__os__01kr2jcyqnecr8s6ef0fhvxq4y`
+  - benchmark: `agent-server-bench-1778202873102-733e00dc`
+  - append latency: p50 `77ms`, p90 `111ms`, p99 `148ms`
+  - processor wait: `711ms`
+- Raw traffic with Agent subscriber over websocket:
+  - project: `proj__os__01kr2jdvtje4bsqj6w7msp3r59`
+  - benchmark: `agent-server-bench-1778202905330-26b5cb56`
+  - append latency: p50 `20ms`, p90 `69ms`, p99 `103ms`
+  - processor wait: `1706ms`
+- Current result: the existing websocket subscription path is not better for
+  this benchmark shape. It is also not a clean apples-to-apples transport test
+  because CodemodeSession still remains a callable RPC subscriber on the same
+  stream.
+
+Cloudflare trace sample:
+
+- Queried Cloudflare Workers telemetry in account
+  `cc7f6f461fbe823c199da2b27f9e0ff3` for `os2-preview-2` around
+  `2026-05-08T01:13:00Z` to `2026-05-08T01:16:00Z`.
+- RPC agent-chat benchmark trace:
+  - trace id: `9a56f33987cf6944fb0575b064e18ac9`
+  - request:
+    `POST https://os2.iterate-preview-2.com/api/projects/proj__os__01kr2jb64yfvmvcg331dc6p0cx/agents/benchmark-stream/%2Fagents%2Fserver-bench-1778202809609`
+  - trace duration: `6074ms`
+  - spans: `9811`
+  - sampled first `1000` spans: `676` SQL exec spans, `224` alarm writes,
+    `40` KV gets, `20` DO subrequests, `18` KV puts, `14` JS RPC spans,
+    `5` KV lists.
+  - The sampled SQL was dominated by append/idempotency/reduced-state writes;
+    only `5` sampled history reads appeared, consistent with the shared-window
+    cache.
+- Websocket agent-chat benchmark trace:
+  - trace id: `46c86d6baaba772b29616594b6760833`
+  - trace duration: `15286ms`
+  - spans: `7996`
+  - sampled first `1000` spans: `849` KV gets, `141` KV lists, `7` DO
+    subrequests, `2` SQL exec spans, `1` JS RPC span.
+  - This points at the existing websocket runner/subscription path doing a lot
+    of Durable Object storage work, not obviously reducing overhead.
+
+Cloudflare docs and Kenton notes read for this pass:
+
+- Durable Object rules:
+  <https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/>
+- Workers RPC:
+  <https://developers.cloudflare.com/workers/runtime-apis/rpc/>
+- Zero-latency SQLite storage in Durable Objects:
+  <https://blog.cloudflare.com/sqlite-in-durable-objects/>
+- Durable Objects: Easy, Fast, Correct - Choose three:
+  <https://blog.cloudflare.com/durable-objects-easy-fast-correct-choose-three/>
+
+Next experiments:
+
+- Isolate CodemodeSession subscriber cost with a benchmark path that can run
+  Agent-only, Codemode-only, and Agent+Codemode subscriptions against identical
+  traffic.
+- Reduce startup/setup duplicate attempts with explicit state-backed guards for
+  processor registration and codemode session start.
+- Add a Stream DO delivery trace/debug endpoint that returns per-drain counts:
+  subscriber count, unique history windows, cursor reads/writes, delivered event
+  count, and drain duration.
+- Do not pursue the current websocket subscription path as a primary fix until
+  it has batched frames and lower storage churn.
