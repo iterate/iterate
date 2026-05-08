@@ -420,7 +420,7 @@ export function withStreamProcessor<
           afterOffset: earliestReducedThroughOffset,
           beforeOffset: firstEvent.offset,
           completedAtMs: Date.now(),
-          durationMs: Math.round(performance.now() - startedAt),
+          durationMs: roundDiagnosticDurationMs(performance.now() - startedAt),
           gapEventCount: gapEvents.length,
           inputEventCount: events.length,
           streamPath: firstEvent.streamPath,
@@ -549,7 +549,9 @@ export function withStreamProcessor<
               ),
               reducedThroughOffset: Math.max(storedState.reducedThroughOffset, lastOffset),
             };
-            timing.reduceDurationMs = Math.round(performance.now() - reduceStartedAt);
+            timing.reduceDurationMs = roundDiagnosticDurationMs(
+              performance.now() - reduceStartedAt,
+            );
             this.saveStoredState({
               processor: args.processor,
               storedState,
@@ -607,7 +609,7 @@ export function withStreamProcessor<
               reductions.push(consumed.reduction);
             }
           }
-          timing.reduceDurationMs = Math.round(performance.now() - reduceStartedAt);
+          timing.reduceDurationMs = roundDiagnosticDurationMs(performance.now() - reduceStartedAt);
           timing.reductionCount = reductions.length;
 
           if (hasStoredStateChanges) {
@@ -661,7 +663,9 @@ export function withStreamProcessor<
               processor: args.processor,
             });
           } finally {
-            timing.afterAppendDurationMs = Math.round(performance.now() - afterAppendStartedAt);
+            timing.afterAppendDurationMs = roundDiagnosticDurationMs(
+              performance.now() - afterAppendStartedAt,
+            );
           }
 
           storedState = {
@@ -679,7 +683,7 @@ export function withStreamProcessor<
           });
         } finally {
           timing.completedAtMs = Date.now();
-          timing.totalDurationMs = Math.round(performance.now() - startedAt);
+          timing.totalDurationMs = roundDiagnosticDurationMs(performance.now() - startedAt);
           this.recordProcessorBatchTiming(timing);
         }
       }
@@ -804,7 +808,7 @@ export function withStreamProcessor<
         streamPath: StreamPath | string;
         timing?: RuntimeProcessorTimingDraft;
       }): void {
-        const startedAt = Date.now();
+        const startedAt = performance.now();
         const stateJsonBytes = JSON.stringify(args.storedState).length;
         this.getDurableObjectKv().put(
           storageKey({ processor: args.processor, streamPath: args.streamPath }),
@@ -812,7 +816,9 @@ export function withStreamProcessor<
         );
         if (args.timing != null) {
           args.timing.stateSaveCallCount += 1;
-          args.timing.stateSaveDurationMs += Date.now() - startedAt;
+          args.timing.stateSaveDurationMs += roundDiagnosticDurationMs(
+            performance.now() - startedAt,
+          );
           args.timing.stateSaveJsonBytes += stateJsonBytes;
           args.timing.maxStateJsonBytes = Math.max(args.timing.maxStateJsonBytes, stateJsonBytes);
         }
@@ -849,7 +855,7 @@ export function withStreamProcessor<
               } as EventInput,
             });
             if (args.timing != null) {
-              const durationMs = Math.round(performance.now() - appendStartedAt);
+              const durationMs = roundDiagnosticDurationMs(performance.now() - appendStartedAt);
               args.timing.appendCallCount += 1;
               args.timing.appendDurationMs += durationMs;
               args.timing.appendedEventCount += 1;
@@ -884,7 +890,7 @@ export function withStreamProcessor<
               })) as EventInput[],
             });
             if (args.timing != null) {
-              const durationMs = Math.round(performance.now() - appendStartedAt);
+              const durationMs = roundDiagnosticDurationMs(performance.now() - appendStartedAt);
               args.timing.appendCallCount += 1;
               args.timing.appendDurationMs += durationMs;
               args.timing.appendedEventCount += events.length;
@@ -1243,6 +1249,10 @@ function reduceProcessorRuntime(args: {
     previousState,
     state: nextState,
   };
+}
+
+function roundDiagnosticDurationMs(durationMs: number) {
+  return Math.round(durationMs * 1000) / 1000;
 }
 
 function getConsumedEventDefinition(args: {

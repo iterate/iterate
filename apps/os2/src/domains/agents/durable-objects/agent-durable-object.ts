@@ -227,12 +227,12 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     const startedAt = performance.now();
     const ensureStartedAt = performance.now();
     await this.ensureStarted();
-    const ensureStartedDurationMs = Math.round(performance.now() - ensureStartedAt);
+    const ensureStartedDurationMs = roundDurationMs(performance.now() - ensureStartedAt);
     const consumeStartedAt = performance.now();
     await this.consumeStreamProcessorEvents({
       events: input.events as StreamEvent[],
     });
-    const consumeDurationMs = Math.round(performance.now() - consumeStartedAt);
+    const consumeDurationMs = roundDurationMs(performance.now() - consumeStartedAt);
     this.recordAfterAppendBatchTiming({
       completedAtMs: Date.now(),
       consumeDurationMs,
@@ -245,7 +245,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       firstOffset: input.events[0]?.offset ?? null,
       lastOffset: input.events.at(-1)?.offset ?? null,
       source: "callable",
-      totalDurationMs: Math.round(performance.now() - startedAt),
+      totalDurationMs: roundDurationMs(performance.now() - startedAt),
     });
   }
 
@@ -368,10 +368,10 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     const startedAt = performance.now();
     const ensureStartedAt = performance.now();
     await this.ensureStarted();
-    const ensureStartedDurationMs = Math.round(performance.now() - ensureStartedAt);
+    const ensureStartedDurationMs = roundDurationMs(performance.now() - ensureStartedAt);
     const consumeStartedAt = performance.now();
     const state = await this.consumeStreamProcessorEvents({ events: events as StreamEvent[] });
-    const consumeDurationMs = Math.round(performance.now() - consumeStartedAt);
+    const consumeDurationMs = roundDurationMs(performance.now() - consumeStartedAt);
     for (const event of events) {
       await this.ensureChildAgentRunner(event);
       await this.handleAgentOutputAddedForCodemode(event);
@@ -386,7 +386,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       firstOffset: events[0]?.offset ?? null,
       lastOffset: events.at(-1)?.offset ?? null,
       source,
-      totalDurationMs: Math.round(performance.now() - startedAt),
+      totalDurationMs: roundDurationMs(performance.now() - startedAt),
     });
     return state;
   }
