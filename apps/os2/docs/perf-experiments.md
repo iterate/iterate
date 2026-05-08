@@ -2622,3 +2622,32 @@ Interpretation:
 - The change made delivery chunkier and did not reduce Agent dispatch cost.
 - Reverted this experiment and restored batch size `500`, which is still the
   best static baseline tested after true batch commit.
+
+Restore confirmation after deploying commit `48319d29a`:
+
+- Benchmark: `agent-server-bench-1778210339977-1d17ebfa`
+- Duplicate invariant: passed
+- Duplicate attempts: `19`
+- Publish duration: `1596ms`
+- Source subscriber wait: `989ms`
+- Final subscriber wait: `10ms`
+- Processor wait: `56ms`
+- Append latency: p50 `104ms`, p90 `167ms`, p99 `413ms`
+- Agent subscriber totals:
+  - delivered events: `2025`
+  - dispatch duration: `2570ms`
+  - max dispatch: `715ms`
+- Codemode subscriber totals:
+  - delivered events: `9`
+  - dispatch duration: `792ms`
+  - max dispatch: `426ms`
+
+Interpretation:
+
+- The restored baseline deployment worked and passed duplicate invariants, but
+  this confirmation run was slower than the earlier best batch-`500` runs.
+- There is significant run-to-run variance, especially in early tiny Codemode
+  deliveries and Agent dispatch max latency.
+- Current evidence says static batch-size tuning alone is not enough. We need
+  deeper instrumentation around receiver dispatch time, cold/wake effects, and
+  Stream DO appendBatch internals.
