@@ -3065,3 +3065,130 @@ Follow-up instrumentation:
 - Add Agent Durable Object startup step timing to runtime state.
 - Add `agentWarmupDurationMs` and `initialRuntimeState` to the server benchmark
   response so cold-start/wake cost is visible in every benchmark JSON result.
+
+### 2026-05-08: Agent startup and traffic-shape isolation
+
+Change:
+
+- Deployed Agent Durable Object startup step timing to `os2-preview-2`.
+- Server benchmark response now includes:
+  - `agentWarmupDurationMs`;
+  - `initialRuntimeState.lastStartupTiming`;
+  - final `runtimeState.lastStartupTiming`.
+
+Benchmark A: `agent-chat-responses`, both subscribers, RPC subscription
+
+- Benchmark: `agent-server-bench-1778212881051-339e79e2`
+- Startup timing:
+  - total: `2993ms`
+  - `ensure-agent-setup-events`: `1243ms`
+  - `ensure-codemode-session`: `1436ms`
+  - `catch-up-stream-processors`: `275ms`
+  - measured request warmup after startup: `6ms`
+- Hot path:
+  - publish duration: `1159ms`
+  - source subscriber wait: `916ms`
+  - final subscriber wait: `4ms`
+  - processor wait: `56ms`
+  - append p50/p90/p99: `32/112/181ms`
+  - duplicate invariant: passed, `15` duplicate attempts, `0` unexpected
+- Slowest Agent subscriber dispatches:
+  - `500` events: `519ms`
+  - `500` events: `460ms`
+  - `399` events: `331ms`
+- Agent runtime timings show those dispatches are real processor work:
+  - `agent-chat` batch append `217` derived events: `248ms`
+  - `agent-chat` batch append `100` derived events: `128ms`
+  - `agent-chat` batch append `282` derived events: `216ms`
+  - `agent-chat` batch append `399` derived events: `310ms`
+
+Benchmark B: same traffic, `codemode-only`
+
+- Benchmark: `agent-server-bench-1778212956718-ff7724e0`
+- Startup timing:
+  - total: `3119ms`
+  - `ensure-agent-setup-events`: `1214ms`
+  - `ensure-codemode-session`: `1388ms`
+  - `catch-up-stream-processors`: `450ms`
+- Hot path:
+  - publish duration: `1142ms`
+  - source subscriber wait: `17ms`
+  - final subscriber wait: `9ms`
+  - append p50/p90/p99: `50/95/111ms`
+  - duplicate invariant: passed, `19` duplicate attempts, `0` unexpected
+
+Benchmark C: `raw-openai-ws`, both subscribers, RPC subscription
+
+- Benchmark: `agent-server-bench-1778212993274-b9b9ea2a`
+- Startup timing:
+  - total: `3106ms`
+- Hot path:
+  - publish duration: `1267ms`
+  - source subscriber wait: `71ms`
+  - final subscriber wait: `3ms`
+  - processor wait: `5ms`
+  - append p50/p90/p99: `110/124/168ms`
+  - duplicate invariant: passed, `13` duplicate attempts, `0` unexpected
+
+Interpretation:
+
+- Cold Agent startup is a separate, real `~3s` problem. It is mostly setup-event
+  reconciliation plus Codemode session creation. The previous benchmark JSON hid
+  this because it timed publish after the Agent DO had already started.
+- Hot stream fanout is not uniformly bad at `1000/s`: `codemode-only` catches up
+  in `17ms`, and `raw-openai-ws` with both subscribers catches up in `71ms`.
+- The bad `agent-chat-responses` case is dominated by Agent processor side
+  effects. `agent-chat` transcribes visible chat events into
+  `agent/input-added` events, and those derived append batches cost hundreds of
+  milliseconds.
+- Reducing and no-op afterAppend are effectively instant in these runs. The
+  remaining hot cost is cross-DO derived appends from processor afterAppend.
+
+### 2026-05-08: WebSocket subscription transport comparison
+
+Hypothesis:
+
+- A WebSocket subscription from Stream DO to Agent DO might be faster than
+  Workers RPC callable delivery for high-rate processor streams.
+
+Benchmark:
+
+- Benchmark: `agent-server-bench-1778213057056-078b74fd`
+- Traffic: `1000` `agent-chat/assistant-response-added` events at `1000/s`
+- Subscriber mode: `both`
+- Subscription transport: `websocket`
+
+Result:
+
+- Publish duration: `1044ms`
+- Append p50/p90/p99: `18/40/70ms`
+- Callable source wait: `5ms`, but this is not a valid success signal because
+  the Agent subscriber is no longer represented by callable subscriber cursors.
+- Processor wait: timed out after `30062ms`
+- Agent processor state at timeout:
+  - `agent` reduced through offset `494`;
+  - `agent-chat` reduced through offset `494`;
+  - stream had `1000+` benchmark events.
+- Agent local delivery delays showed severe backlog:
+  - offset `101`: `4880ms`
+  - offset `151`: `8022ms`
+  - offset `231`: `12695ms`
+  - offset `286`: `15767ms`
+  - offset `385`: `23230ms`
+  - offset `461`: `28530ms`
+- Processor timings show tiny batches:
+  - repeated `agent-chat` batches with `inputEventCount: 1`;
+  - each derived append took roughly `53-84ms`.
+
+Interpretation:
+
+- The current WebSocket subscription path is much worse for processor delivery
+  than batched Workers RPC.
+- It appears to deliver effectively one event at a time to the Agent DO, which
+  destroys batching and turns `agent-chat` derived appends into a serial
+  per-event cost.
+- The WebSocket benchmark currently also exposes a measurement bug: callable
+  cursor waits do not measure WebSocket subscriber catch-up, so `source wait:
+5ms` is misleading.
+- Do not pursue WebSocket transport as a performance fix until it supports
+  batch frames and has a real cursor/progress diagnostic.
