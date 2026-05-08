@@ -102,6 +102,7 @@ type AgentAfterAppendBatchTiming = {
   eventCount: number;
   firstOffset: number | null;
   lastOffset: number | null;
+  source: "callable" | "websocket";
   totalDurationMs: number;
 };
 
@@ -211,7 +212,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
   }
 
   async afterAppend(input: { event: Event }) {
-    return await this.processAppendedStreamEvent(input.event);
+    return await this.processAppendedStreamEvent(input.event, "callable");
   }
 
   async afterAppendBatch(input: {
@@ -243,6 +244,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       eventCount: input.events.length,
       firstOffset: input.events[0]?.offset ?? null,
       lastOffset: input.events.at(-1)?.offset ?? null,
+      source: "callable",
       totalDurationMs: Math.round(performance.now() - startedAt),
     });
   }
@@ -351,23 +353,40 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     this.afterAppendBatchTimings.splice(50);
   }
 
-  private async processAppendedStreamEvent(event: Event) {
-    await this.ensureStarted();
-    const state = await this.consumeStreamProcessorEvent({ event: event as StreamEvent });
-    await this.ensureChildAgentRunner(event);
-    await this.handleAgentOutputAddedForCodemode(event);
-    await this.handleCodemodeScriptExecutionCompleted(event);
-    return state;
+  private async processAppendedStreamEvent(
+    event: Event,
+    source: AgentAfterAppendBatchTiming["source"],
+  ) {
+    return await this.processAppendedStreamEvents([event], source);
   }
 
-  private async processAppendedStreamEvents(events: Event[]) {
+  private async processAppendedStreamEvents(
+    events: Event[],
+    source: AgentAfterAppendBatchTiming["source"],
+  ) {
+    const startedAt = performance.now();
+    const ensureStartedAt = performance.now();
     await this.ensureStarted();
+    const ensureStartedDurationMs = Math.round(performance.now() - ensureStartedAt);
+    const consumeStartedAt = performance.now();
     const state = await this.consumeStreamProcessorEvents({ events: events as StreamEvent[] });
+    const consumeDurationMs = Math.round(performance.now() - consumeStartedAt);
     for (const event of events) {
       await this.ensureChildAgentRunner(event);
       await this.handleAgentOutputAddedForCodemode(event);
       await this.handleCodemodeScriptExecutionCompleted(event);
     }
+    this.recordAfterAppendBatchTiming({
+      completedAtMs: Date.now(),
+      consumeDurationMs,
+      deliveryLagMs: null,
+      ensureStartedDurationMs,
+      eventCount: events.length,
+      firstOffset: events[0]?.offset ?? null,
+      lastOffset: events.at(-1)?.offset ?? null,
+      source,
+      totalDurationMs: Math.round(performance.now() - startedAt),
+    });
     return state;
   }
 
@@ -396,10 +415,10 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
 
     switch (frame.data.type) {
       case "event":
-        await this.processAppendedStreamEvent(frame.data.event);
+        await this.processAppendedStreamEvent(frame.data.event, "websocket");
         return;
       case "events":
-        await this.processAppendedStreamEvents(frame.data.events);
+        await this.processAppendedStreamEvents(frame.data.events, "websocket");
         return;
       case "append":
       case "error":
