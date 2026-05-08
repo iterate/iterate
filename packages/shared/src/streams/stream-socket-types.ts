@@ -7,6 +7,12 @@ export const StreamSocketEventFrame = z.strictObject({
 });
 export type StreamSocketEventFrame = z.infer<typeof StreamSocketEventFrame>;
 
+export const StreamSocketEventsFrame = z.strictObject({
+  type: z.literal("events"),
+  events: z.array(Event).min(1),
+});
+export type StreamSocketEventsFrame = z.infer<typeof StreamSocketEventsFrame>;
+
 export const StreamSocketAppendFrame = z.strictObject({
   type: z.literal("append"),
   event: EventInput,
@@ -21,6 +27,7 @@ export type StreamSocketErrorFrame = z.infer<typeof StreamSocketErrorFrame>;
 
 export const StreamSocketFrame = z.discriminatedUnion("type", [
   StreamSocketEventFrame,
+  StreamSocketEventsFrame,
   StreamSocketAppendFrame,
   StreamSocketErrorFrame,
 ]);

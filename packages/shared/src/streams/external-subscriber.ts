@@ -11,6 +11,8 @@ import {
   StreamSocketAppendFrame,
   StreamSocketErrorFrame,
   StreamSocketEventFrame,
+  StreamSocketEventsFrame,
+  StreamSocketFrame,
 } from "./stream-socket-types.ts";
 import {
   STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
@@ -165,6 +167,63 @@ export async function publishExternalSubscriberBatch(args: {
         lastOffset: events.at(-1)?.offset,
         error,
       });
+      return {
+        deliveredEventCount: 0,
+        dispatchDurationMs: Math.round(performance.now() - dispatchStartedAt),
+        failedEventCount: failedEventCount + events.length,
+        filterDurationMs,
+      };
+    }
+  }
+
+  if (args.subscriber.type === "websocket") {
+    const events: Event[] = [];
+    let failedEventCount = 0;
+    const filterStartedAt = performance.now();
+    for (const event of args.events) {
+      try {
+        if (await evaluateFilter({ event, subscriber: args.subscriber })) {
+          events.push(event);
+        }
+      } catch (error) {
+        failedEventCount += 1;
+        await args.onError?.({
+          error,
+          event,
+          subscriber: args.subscriber,
+        });
+      }
+    }
+    const filterDurationMs = Math.round(performance.now() - filterStartedAt);
+    if (events.length === 0) {
+      return { deliveredEventCount: 0, dispatchDurationMs: 0, failedEventCount, filterDurationMs };
+    }
+
+    const dispatchStartedAt = performance.now();
+    try {
+      await sendWebsocketEventsMessage({
+        append: args.append,
+        callableContext: args.callableContext,
+        events,
+        streamPath: events[0]!.streamPath,
+        subscriber: args.subscriber,
+      });
+      return {
+        deliveredEventCount: events.length,
+        dispatchDurationMs: Math.round(performance.now() - dispatchStartedAt),
+        failedEventCount,
+        filterDurationMs,
+      };
+    } catch (error) {
+      await Promise.all(
+        events.map((event) =>
+          args.onError?.({
+            error,
+            event,
+            subscriber: args.subscriber,
+          }),
+        ),
+      );
       return {
         deliveredEventCount: 0,
         dispatchDurationMs: Math.round(performance.now() - dispatchStartedAt),
@@ -392,6 +451,48 @@ async function sendWebsocketMessage(args: {
   }
 }
 
+async function sendWebsocketEventsMessage(args: {
+  append: (event: EventInput) => Promise<Event>;
+  callableContext: CallableContext;
+  events: Event[];
+  subscriber: ExternalWebsocketSubscriber;
+  streamPath: string;
+}) {
+  const subscriberKey = getSubscriberKey(args.streamPath, args.subscriber.slug);
+
+  try {
+    const socket = await getSubscriberSocket({
+      append: args.append,
+      callableContext: args.callableContext,
+      streamPath: args.streamPath,
+      subscriber: args.subscriber,
+    });
+    sendSocketFrame(
+      socket,
+      StreamSocketEventsFrame.parse({
+        type: "events",
+        events: args.events,
+      }),
+    );
+  } catch (error) {
+    resetSubscriberSocket(subscriberKey);
+
+    const socket = await getSubscriberSocket({
+      append: args.append,
+      callableContext: args.callableContext,
+      streamPath: args.streamPath,
+      subscriber: args.subscriber,
+    });
+    sendSocketFrame(
+      socket,
+      StreamSocketEventsFrame.parse({
+        type: "events",
+        events: args.events,
+      }),
+    );
+  }
+}
+
 async function getSubscriberSocket(args: {
   append: (event: EventInput) => Promise<Event>;
   callableContext: CallableContext;
@@ -582,10 +683,7 @@ function getSocketMessageData(event: unknown) {
   return undefined;
 }
 
-function sendSocketFrame(
-  socket: WebSocket,
-  frame: z.infer<typeof StreamSocketEventFrame> | z.infer<typeof StreamSocketErrorFrame>,
-) {
+function sendSocketFrame(socket: WebSocket, frame: z.infer<typeof StreamSocketFrame>) {
   socket.send(JSON.stringify(frame));
 }
 

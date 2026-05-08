@@ -13,7 +13,7 @@ import {
 } from "@iterate-com/shared/stream-processors/cloudflare-ai/implementation";
 import {
   StreamSocketErrorFrame,
-  StreamSocketEventFrame,
+  StreamSocketFrame,
 } from "@iterate-com/shared/streams/stream-socket-types";
 import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
 import type { ExecuteCodemodeFunctionCallInput } from "@iterate-com/shared/stream-processors/codemode/implementation";
@@ -357,6 +357,17 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     return state;
   }
 
+  private async processAppendedStreamEvents(events: Event[]) {
+    await this.ensureStarted();
+    const state = await this.consumeStreamProcessorEvents({ events: events as StreamEvent[] });
+    for (const event of events) {
+      await this.ensureChildAgentRunner(event);
+      await this.handleAgentOutputAddedForCodemode(event);
+      await this.handleCodemodeScriptExecutionCompleted(event);
+    }
+    return state;
+  }
+
   private async handleStreamSubscriptionSocketMessage(input: {
     messageEvent: MessageEvent;
     socket: WebSocket;
@@ -374,13 +385,23 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       return;
     }
 
-    const frame = StreamSocketEventFrame.safeParse(raw);
+    const frame = StreamSocketFrame.safeParse(raw);
     if (!frame.success) {
       sendSocketError(input.socket, "Expected stream event WebSocket frame.");
       return;
     }
 
-    await this.processAppendedStreamEvent(frame.data.event);
+    switch (frame.data.type) {
+      case "event":
+        await this.processAppendedStreamEvent(frame.data.event);
+        return;
+      case "events":
+        await this.processAppendedStreamEvents(frame.data.events);
+        return;
+      case "append":
+      case "error":
+        return;
+    }
   }
 
   private async ensureAgentSubscription(params: AgentDurableObjectStructuredName) {
