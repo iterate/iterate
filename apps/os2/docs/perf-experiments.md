@@ -4118,3 +4118,145 @@ Current conclusion:
     irrelevant event classes;
   - or split processor cursor/state storage so ignored events do not rewrite
     full processor state.
+
+### 2026-05-08: batched WebSocket subscriber delivery
+
+Change:
+
+- Stream WebSocket subscriber delivery can now send one `events` frame carrying
+  a batch of committed stream events.
+- `AgentDurableObject` accepts both legacy single-event `event` frames and new
+  batched `events` frames, then calls the same batch processor path used by
+  callable delivery.
+- Commit: `807aac78d` (`Batch stream websocket subscriber delivery`).
+
+Benchmark:
+
+- File: `/tmp/os2-bench-agent-chat-both-websocket-batched-1000.json`
+- Benchmark id: `agent-server-bench-1778217316807-fc715a55`
+- Traffic: `agent-chat-responses`
+- Count/rate/concurrency: `1000`, `1000/s`, `100`
+- Subscriber mode: `both`
+- Subscription transport: `websocket`
+- Important caveat:
+  - this is still not a clean replacement benchmark because Agent startup also
+    installs the normal callable subscription; the WebSocket subscription is
+    additive in the current benchmark harness.
+
+Result:
+
+- publish duration: `1617ms`
+- source subscriber wait: `5ms`
+- processor wait: `2900ms`
+- final subscriber wait: `7ms`
+- append p50/p90/p99: `137/162/167ms`
+- terminal p50/p90/p99: `68/68/68ms`
+- duplicate invariant: passed
+- committed idempotent events: `241`
+- duplicate attempts: `12`
+- logical idempotent append attempts: `253`
+- duplicate attempt ratio: `0.05`
+- alarm diagnostic:
+  - schedule requests: `1243`
+  - actual `setAlarm()` calls: `23`
+  - coalesced while scheduled: `1220`
+
+Comparison:
+
+| Metric              | Unbatched WebSocket | Batched WebSocket |
+| ------------------- | ------------------: | ----------------: |
+| publish duration    |            `1103ms` |          `1617ms` |
+| source wait         |               `7ms` |             `5ms` |
+| processor wait      |          `30088ms+` |          `2900ms` |
+| append p50/p90/p99  |       `22/65/108ms` |   `137/162/167ms` |
+| duplicate attempts  |                `13` |              `12` |
+| duplicate invariant |              passed |            passed |
+
+Interpretation:
+
+- Batching WebSocket frames fixes the catastrophic single-frame backlog: the
+  previous run failed to drain after `30s`; this run drained in `2.9s`.
+- It is still much worse than the best RPC + async-derived run for processor
+  wait, and append latency got worse.
+- Because the WebSocket subscription is additive, this result does not prove
+  WebSocket is worse as a replacement transport. It only proves that batched
+  frames are necessary and that the current mixed transport is not sufficient.
+- The retained runtime timing window still showed mostly `inputEventCount: 1`
+  batches. That may be because the last retained timings are callable/default
+  or terminal traffic rather than the WebSocket batch frames. We need either a
+  larger timing window or per-transport aggregate counters before drawing a
+  stronger conclusion.
+
+Next experiment:
+
+- Add a clean benchmark mode that disables the default callable subscription
+  for the agent path and measures WebSocket as a replacement, not an additive
+  subscriber.
+- Add aggregate subscriber-delivery counters by transport:
+  - delivered event count;
+  - batch count;
+  - max/p50/p90 batch size;
+  - delivery duration.
+
+### 2026-05-08: how to detect idempotency masking repeated appends
+
+Concern:
+
+- A processor could append the same logical event repeatedly with the same
+  idempotency key.
+- The visible stream would look correct because only the first append commits
+  an event; later attempts return the existing event.
+- This can hide severe bugs and create large hidden load.
+
+How we know today:
+
+- `StreamDurableObject.append()` and `appendBatch()` record a duplicate attempt
+  before returning an existing idempotent event.
+- The duplicate attempt is durable SQLite state, not just in-memory debug state:
+  `idempotency_duplicate_attempts`.
+- `StreamDurableObject.getDiagnostics()` reports:
+  - `idempotencyCommittedEventCount`
+  - `idempotencyDuplicateAttemptCount`
+  - `idempotencyDuplicateKeyCount`
+  - `idempotencyLogicalAppendAttemptCount`
+  - `idempotencyDuplicateTopKeys`
+- The server benchmark fails the run when duplicate attempts exceed the budget
+  or when duplicate attempts appear outside the allowlisted setup prefixes.
+
+The exact `10x` case:
+
+- Suppose a stream commits `1000` unique idempotent events.
+- If every event was actually attempted `10` times with the same key, the
+  stream would still show only `1000` committed events.
+- Diagnostics should show roughly:
+  - committed idempotent events: `1000`
+  - duplicate attempts: `9000`
+  - logical idempotent append attempts: `10000`
+  - duplicate attempt ratio: `9`
+- The current default benchmark budget is `25` duplicate attempts, so this
+  would fail immediately even if all duplicate keys had an allowed setup prefix.
+
+Current limitation:
+
+- The aggregate duplicate count is authoritative for storm detection.
+- The unexpected-prefix check currently examines the top duplicate keys returned
+  by diagnostics, limited to `50`. A broad small duplicate class below that
+  top-N window could be missed by prefix attribution if the total duplicate
+  count stayed under the global budget.
+- The diagnostics identify key, event type, stream path, target committed
+  offset, and first/last duplicate timestamps. They do not yet identify the
+  append caller or processor instance that made the duplicate attempt.
+
+Next instrumentation if this counter rises:
+
+- Add an append-source label at central stream API call sites, for example:
+  - app route / benchmark publisher;
+  - `withStreamProcessor` processor append;
+  - JSONata reactor append;
+  - stream topology/internal append;
+  - external subscriber error append.
+- Store source-label aggregates alongside duplicate attempts so we can answer:
+  "which caller repeatedly attempted this idempotency key?"
+- Consider returning all duplicate-key rows, or separate prefix aggregate counts,
+  for benchmark invariant checks so unexpected low-count duplicate classes are
+  not limited by top-N diagnostics.
