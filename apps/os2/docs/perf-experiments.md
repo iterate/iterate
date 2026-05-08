@@ -939,6 +939,108 @@ Interpretation:
   - larger alarm batch sizes with strict snapshot boundaries;
   - reducing per-batch/per-subscriber RPC and cursor persistence overhead.
 
+### 2026-05-08: local ordered feed-through experiment
+
+Goal:
+
+- Remove the same-runner subscription round trip for events that a processor
+  just appended itself.
+- Keep every raw event written into the stream.
+- Preserve the stream subscription as the canonical cross-runner delivery
+  mechanism.
+- Make later subscription delivery of locally-fed events a no-op by advancing
+  each processor's durable cursor through the same normal reduction path.
+
+Implementation:
+
+- Added local feed-through in `withStreamProcessor`.
+- `streamApiForProcessor().append()` and `.appendBatch()` still append to the
+  Stream DO first and only enqueue the committed returned events.
+- Feed-through is same-stream only: if a processor appends to another
+  `streamPath`, the current Durable Object runner does not process it locally.
+- Feed-through events are sorted by committed offset before local processing.
+- Added a single in-memory delivery lane in the mixin so external subscription
+  delivery and local feed-through cannot mutate the same processor/runtime state
+  concurrently.
+- Local feed-through drains after the currently delivered batch finishes. Nested
+  processor appends enqueue more committed events and the active drain continues;
+  it does not recursively call the public subscription entrypoint.
+
+Ordering model:
+
+- External subscription delivery enters the ordered lane.
+- Processors reduce the delivered source batch in order.
+- Processor `afterAppend` / `afterAppendBatch` may append derived events.
+- Returned committed derived events are queued.
+- The lane drains those returned events through the same processor consumption
+  machinery.
+- When the Stream DO later delivers the same derived events through the
+  subscription, processors skip them because
+  `afterAppendCompletedThroughOffset` has already advanced.
+
+First deployed run, before adding the explicit delivery lane:
+
+- Project: `proj__os__01kr2gb3zhesqt5pjyv4qp4tb6`
+- Benchmark: `agent-server-bench-1778200716466-f79ef31e`
+- Traffic: `1000` `agent-chat/assistant-response-added` events at `1000/s`
+- Appends: `1000`
+- Append failures: `0`
+- Duplicate attempts: `23` across `5` startup/setup keys
+- Processor wait: `755ms`
+- Tail self-delivery samples: `0ms`
+
+After adding the ordered delivery lane:
+
+- Project: `proj__os__01kr2ggffffzs8z2xfzvetkxy9`
+- Benchmark: `agent-server-bench-1778200895339-f1a77aa9`
+- Traffic: `1000` `agent-chat/assistant-response-added` events at `1000/s`
+- Appends: `1000`
+- Append failures: `0`
+- Duplicate attempts: `21` across `5` startup/setup keys
+- Processor wait: `1136ms`
+- Tail self-delivery samples: `0ms`
+- Stream history check:
+  - final event count: `2029`;
+  - `events.iterate.com/core/error-occurred` count: `0`.
+
+Raw source-event comparison after ordered feed-through:
+
+- Project: `proj__os__01kr2gkc4ze059dytcppmfws3s`
+- Benchmark: `agent-server-bench-1778200986895-4ec2c3a7`
+- Traffic: `1000` `openai-ws/websocket-message-received` events at `1000/s`
+- Appends: `1000`
+- Append failures: `0`
+- Duplicate attempts: `19` across `5` startup/setup keys
+- Append latency: p50 `19ms`, p90 `45ms`, p99 `86ms`, max `96ms`
+- Committed `createdAt` gaps: p50 `0ms`, p90 `1ms`, p99 `15ms`, max
+  `42ms`
+- Processor wait: `222ms`
+- Runtime entries reached offset `1027`
+- Tail self-delivery samples for processor-emitted terminal/setup events:
+  `0ms`
+
+Interpretation:
+
+- Local feed-through achieved the main target for processor-emitted events:
+  measured self-delivery is now effectively `0ms` instead of `~1.6-2.3s`.
+- Raw source-event delivery at `1000/s` now settles in hundreds of milliseconds,
+  not seconds.
+- The ordered lane costs some total settle time compared with the first
+  un-serialized feed-through experiment, but it removes the race where
+  concurrent subscription RPCs and local feed-through could mutate the same
+  processor cursors in parallel.
+- Remaining wait at `1000/s` is no longer self-delivery of processor-emitted
+  events. It is likely now dominated by:
+  - app-worker publisher append latency;
+  - Stream DO alarm delivery of external source events;
+  - CodemodeSession subscriber delivery;
+  - per-batch cursor/state persistence.
+- Next experiments should compare:
+  - `1000/s` raw traffic vs agent-chat fanout after feed-through;
+  - app-worker publisher vs Agent DO publisher after feed-through;
+  - callable RPC delivery vs WebSocket batch delivery now that local derived
+    event feed-through removes the largest same-runner round trip.
+
 ### E3: Batching WebSocket stream event frames
 
 Goal:

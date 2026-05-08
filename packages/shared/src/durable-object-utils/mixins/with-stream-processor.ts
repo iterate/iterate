@@ -181,6 +181,9 @@ export function withStreamProcessor<
       >();
       readonly #lastAppendDeliveryDelays: StreamProcessorRuntimeState["lastAppendDeliveryDelays"] =
         [];
+      readonly #localFeedThroughQueue: StreamEvent[] = [];
+      #deliveryLane: Promise<void> = Promise.resolve();
+      #isDrainingLocalFeedThrough = false;
 
       protected registerStreamProcessor(processor: Processor<unknown>): void {
         const registered = processor as unknown as RegisteredProcessor;
@@ -231,50 +234,56 @@ export function withStreamProcessor<
       }): Promise<StreamProcessorRuntimeEntry[]> {
         await this.ensureStarted();
         const signal = args.signal ?? new AbortController().signal;
-        await Promise.all(
-          [...this.#processors.values()].map(async (processor) => {
-            let storedState = this.loadStoredState({ processor, streamPath: args.streamPath });
-            const events = await this.streamApiForPath(args.streamPath).read({
-              afterOffset: storedState.reducedThroughOffset,
-              beforeOffset: "end",
-            });
-            const readThroughOffset = events.at(-1)?.offset ?? storedState.reducedThroughOffset;
-            for (const event of events) {
-              storedState = await this.consumeOneEvent({
-                event,
-                processor,
-                signal,
-                storedState,
+        return await this.runInDeliveryLane(async () => {
+          await Promise.all(
+            [...this.#processors.values()].map(async (processor) => {
+              let storedState = this.loadStoredState({ processor, streamPath: args.streamPath });
+              const events = await this.streamApiForPath(args.streamPath).read({
+                afterOffset: storedState.reducedThroughOffset,
+                beforeOffset: "end",
               });
-            }
-            if (
-              !storedState.hasCompletedFirstAttach ||
-              readThroughOffset > storedState.reducedThroughOffset
-            ) {
-              storedState = {
-                ...storedState,
-                hasCompletedFirstAttach: true,
-                liveAfterOffset: storedState.hasCompletedFirstAttach
-                  ? storedState.liveAfterOffset
-                  : readThroughOffset,
-                reducedThroughOffset: Math.max(storedState.reducedThroughOffset, readThroughOffset),
-                afterAppendCompletedThroughOffset: Math.max(
-                  storedState.afterAppendCompletedThroughOffset,
-                  readThroughOffset,
-                ),
-              };
-              this.saveStoredState({ processor, storedState, streamPath: args.streamPath });
-            }
-            await runProcessorOnStartRuntime({
-              processor,
-              state: storedState.state,
-              streamApi: this.streamApiForProcessor({ processor, streamPath: args.streamPath }),
-              signal,
-              waitUntil: (promise) => this.waitUntilStreamProcessor(promise),
-            });
-          }),
-        );
-        return this.runtimeEntries();
+              const readThroughOffset = events.at(-1)?.offset ?? storedState.reducedThroughOffset;
+              for (const event of events) {
+                storedState = await this.consumeOneEvent({
+                  event,
+                  processor,
+                  signal,
+                  storedState,
+                });
+              }
+              if (
+                !storedState.hasCompletedFirstAttach ||
+                readThroughOffset > storedState.reducedThroughOffset
+              ) {
+                storedState = {
+                  ...storedState,
+                  hasCompletedFirstAttach: true,
+                  liveAfterOffset: storedState.hasCompletedFirstAttach
+                    ? storedState.liveAfterOffset
+                    : readThroughOffset,
+                  reducedThroughOffset: Math.max(
+                    storedState.reducedThroughOffset,
+                    readThroughOffset,
+                  ),
+                  afterAppendCompletedThroughOffset: Math.max(
+                    storedState.afterAppendCompletedThroughOffset,
+                    readThroughOffset,
+                  ),
+                };
+                this.saveStoredState({ processor, storedState, streamPath: args.streamPath });
+              }
+              await runProcessorOnStartRuntime({
+                processor,
+                state: storedState.state,
+                streamApi: this.streamApiForProcessor({ processor, streamPath: args.streamPath }),
+                signal,
+                waitUntil: (promise) => this.waitUntilStreamProcessor(promise),
+              });
+            }),
+          );
+          await this.drainLocalFeedThrough(signal);
+          return this.runtimeEntries();
+        });
       }
 
       protected async consumeStreamProcessorEvent(args: {
@@ -282,18 +291,15 @@ export function withStreamProcessor<
         signal?: AbortSignal;
       }): Promise<StreamProcessorRuntimeEntry[]> {
         await this.ensureStarted();
-        this.recordLocalDelivery(args.event);
         const signal = args.signal ?? new AbortController().signal;
-        await Promise.all(
-          [...this.#processors.values()].map(async (processor) => {
-            await this.consumeForProcessor({
-              event: args.event,
-              processor,
-              signal,
-            });
-          }),
-        );
-        return this.runtimeEntries();
+        return await this.runInDeliveryLane(async () => {
+          await this.consumeStreamProcessorEventsWithoutLocalDrain({
+            events: [args.event],
+            signal,
+          });
+          await this.drainLocalFeedThrough(signal);
+          return this.runtimeEntries();
+        });
       }
 
       protected async consumeStreamProcessorEvents(args: {
@@ -301,20 +307,43 @@ export function withStreamProcessor<
         signal?: AbortSignal;
       }): Promise<StreamProcessorRuntimeEntry[]> {
         await this.ensureStarted();
+        const signal = args.signal ?? new AbortController().signal;
+        return await this.runInDeliveryLane(async () => {
+          await this.consumeStreamProcessorEventsWithoutLocalDrain({
+            events: args.events,
+            signal,
+          });
+          await this.drainLocalFeedThrough(signal);
+          return this.runtimeEntries();
+        });
+      }
+
+      private async runInDeliveryLane<T>(task: () => Promise<T>): Promise<T> {
+        const previous = this.#deliveryLane.catch(() => undefined);
+        const result = previous.then(task);
+        this.#deliveryLane = result.then(
+          () => undefined,
+          () => undefined,
+        );
+        return await result;
+      }
+
+      private async consumeStreamProcessorEventsWithoutLocalDrain(args: {
+        events: StreamEvent[];
+        signal: AbortSignal;
+      }) {
         for (const event of args.events) {
           this.recordLocalDelivery(event);
         }
-        const signal = args.signal ?? new AbortController().signal;
         await Promise.all(
           [...this.#processors.values()].map(async (processor) => {
             await this.consumeBatchForProcessor({
               events: args.events,
               processor,
-              signal,
+              signal: args.signal,
             });
           }),
         );
-        return this.runtimeEntries();
       }
 
       getStreamProcessorRuntimeState(): StreamProcessorRuntimeState {
@@ -638,6 +667,10 @@ export function withStreamProcessor<
               appendedAtMs: Date.now(),
               processorSlug: args.processor.contract.slug,
             });
+            this.queueLocalFeedThroughEvents({
+              events: [event],
+              streamPath: args.streamPath,
+            });
             return event;
           },
           appendBatch: async (appendArgs) => {
@@ -658,11 +691,57 @@ export function withStreamProcessor<
                 processorSlug: args.processor.contract.slug,
               });
             }
+            this.queueLocalFeedThroughEvents({
+              events,
+              streamPath: args.streamPath,
+            });
             return events;
           },
           read: async (readArgs) => await streamApi.read(readArgs),
           subscribe: (subscribeArgs) => streamApi.subscribe(subscribeArgs),
         };
+      }
+
+      private queueLocalFeedThroughEvents(args: {
+        events: StreamEvent[];
+        streamPath: StreamPath | string;
+      }) {
+        for (const event of args.events) {
+          if (event.streamPath !== args.streamPath) continue;
+          this.#localFeedThroughQueue.push(event);
+        }
+      }
+
+      private async drainLocalFeedThrough(signal: AbortSignal) {
+        if (this.#isDrainingLocalFeedThrough) {
+          return;
+        }
+
+        this.#isDrainingLocalFeedThrough = true;
+        try {
+          while (this.#localFeedThroughQueue.length > 0) {
+            const queuedEvents = this.#localFeedThroughQueue.splice(0);
+            const eventsByStreamPath = new Map<string, StreamEvent[]>();
+            const seenEvents = new Set<string>();
+            for (const event of queuedEvents) {
+              const eventKey = `${event.streamPath}:${event.offset}`;
+              if (seenEvents.has(eventKey)) continue;
+              seenEvents.add(eventKey);
+              const events = eventsByStreamPath.get(event.streamPath) ?? [];
+              events.push(event);
+              eventsByStreamPath.set(event.streamPath, events);
+            }
+
+            for (const events of eventsByStreamPath.values()) {
+              await this.consumeStreamProcessorEventsWithoutLocalDrain({
+                events: events.toSorted((left, right) => left.offset - right.offset),
+                signal,
+              });
+            }
+          }
+        } finally {
+          this.#isDrainingLocalFeedThrough = false;
+        }
       }
 
       private async appendProcessorError(args: {
