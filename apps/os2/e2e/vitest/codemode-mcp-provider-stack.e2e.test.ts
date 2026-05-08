@@ -9,8 +9,9 @@
  *   OS2_E2E_MCP_BEARER_TOKEN=... \
  *   pnpm test:e2e:codemode-mcp
  *
- * Optional:
- *   OS2_E2E_SLACK_CHANNEL_ID=C123  # proves real ctx.slack.chat.postMessage
+ * If APP_CONFIG_SLACK_BOT_TOKEN is available to the test process, the test
+ * discovers the shared Slack e2e channel and proves real
+ * ctx.slack.chat.postMessage.
  */
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -23,7 +24,7 @@ describeIfMcpTarget("project MCP run_code static codemode provider stack", () =>
   it("executes real codemode calls across built-in, RPC, OpenAPI, stream, and optional Slack providers", async () => {
     const mcpUrl = requireMcpUrl();
     const bearerToken = requireBearerToken();
-    const slackChannelId = process.env.OS2_E2E_SLACK_CHANNEL_ID?.trim() || null;
+    const slackChannelId = await findSlackE2eChannelId();
     const transport = new StreamableHTTPClientTransport(mcpUrl, {
       requestInit: {
         headers: {
@@ -58,7 +59,7 @@ describeIfMcpTarget("project MCP run_code static codemode provider stack", () =>
       const proof = parseRunCodeResult(text);
       expect(proof).toMatchObject({
         caughtMessage: "expected e2e throw",
-        fetchedRepo: "cloudflare/workers-sdk",
+        fetchedPackage: "wrangler",
         openApi: {
           hasFindPetsByStatus: true,
         },
@@ -128,13 +129,53 @@ function requireBearerToken() {
   const token =
     process.env.OS2_E2E_MCP_BEARER_TOKEN?.trim() ??
     process.env.OS2_E2E_ADMIN_API_SECRET?.trim() ??
-    process.env.OS2_ADMIN_API_SECRET?.trim();
+    process.env.OS2_ADMIN_API_SECRET?.trim() ??
+    process.env.APP_CONFIG_ADMIN_API_SECRET?.trim();
   if (!token) {
     throw new Error(
-      "OS2_E2E_MCP_BEARER_TOKEN, OS2_E2E_ADMIN_API_SECRET, or OS2_ADMIN_API_SECRET is required.",
+      "OS2_E2E_MCP_BEARER_TOKEN, OS2_E2E_ADMIN_API_SECRET, OS2_ADMIN_API_SECRET, or APP_CONFIG_ADMIN_API_SECRET is required.",
     );
   }
   return token;
+}
+
+async function findSlackE2eChannelId() {
+  const token = process.env.APP_CONFIG_SLACK_BOT_TOKEN?.trim();
+  if (!token) return null;
+
+  const channels = await listSlackChannels(token);
+  const channel = channels.find(
+    (candidate) => candidate.name === "slack-agent-e2e-test" && candidate.is_member === true,
+  );
+  if (!channel) {
+    throw new Error(
+      "APP_CONFIG_SLACK_BOT_TOKEN is set, but the bot is not a member of #slack-agent-e2e-test.",
+    );
+  }
+  return channel.id;
+}
+
+async function listSlackChannels(token: string) {
+  const channels: SlackChannel[] = [];
+  let cursor: string | undefined;
+  do {
+    const url = new URL("https://slack.com/api/conversations.list");
+    url.searchParams.set("exclude_archived", "true");
+    url.searchParams.set("limit", "200");
+    url.searchParams.set("types", "public_channel,private_channel");
+    if (cursor) url.searchParams.set("cursor", cursor);
+
+    const response = await fetch(url, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const result = (await response.json()) as SlackConversationsListResponse;
+    if (!result.ok) {
+      throw new Error(`Slack conversations.list failed: ${result.error ?? response.status}`);
+    }
+    channels.push(...result.channels);
+    cursor = result.response_metadata?.next_cursor || undefined;
+  } while (cursor);
+  return channels;
 }
 
 function buildCodemodeProofScript(input: { slackChannelId: string | null }) {
@@ -153,13 +194,13 @@ function buildCodemodeProofScript(input: { slackChannelId: string | null }) {
     console.warn("caught expected error", caughtMessage);
   }
 
-  const githubResponse = await fetch("https://api.github.com/repos/cloudflare/workers-sdk", {
+  const packageResponse = await fetch("https://registry.npmjs.org/wrangler/latest", {
     headers: { "user-agent": "iterate-os2-codemode-e2e" },
   });
-  if (!githubResponse.ok) {
-    throw new Error(\`GitHub fetch failed with \${githubResponse.status}\`);
+  if (!packageResponse.ok) {
+    throw new Error(\`npm registry fetch failed with \${packageResponse.status}\`);
   }
-  const githubRepo = await githubResponse.json();
+  const npmPackage = await packageResponse.json();
 
   const operations = await integrations.http.catalog.listOperations();
   const pets = await integrations.http.catalog.findPetsByStatus({ status: "available" });
@@ -227,7 +268,7 @@ function buildCodemodeProofScript(input: { slackChannelId: string | null }) {
       hasResponse: typeof aiResult.response === "string" || typeof aiResult.result === "string",
     },
     caughtMessage,
-    fetchedRepo: githubRepo.full_name,
+    fetchedPackage: npmPackage.name,
     openApi: {
       hasFindPetsByStatus: operations.some((operation) => operation.operationId === "findPetsByStatus"),
       operationCount: operations.length,
@@ -293,7 +334,7 @@ function parseRunCodeResult(text: string) {
   return JSON.parse(text.slice(index + marker.length).trim()) as {
     ai: { model: string };
     caughtMessage: string;
-    fetchedRepo: string;
+    fetchedPackage: string;
     openApi: { hasFindPetsByStatus: boolean; petCount: number };
     orpc: { sawStreamsList: boolean; streamCount: number };
     raced: string;
@@ -307,3 +348,20 @@ function parseRunCodeResult(text: string) {
     workspace: { callbackCalled: boolean; message: string };
   };
 }
+
+type SlackChannel = {
+  id: string;
+  is_member?: boolean;
+  name: string;
+};
+
+type SlackConversationsListResponse =
+  | {
+      channels: SlackChannel[];
+      ok: true;
+      response_metadata?: { next_cursor?: string };
+    }
+  | {
+      error?: string;
+      ok: false;
+    };

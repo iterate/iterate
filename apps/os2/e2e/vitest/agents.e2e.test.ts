@@ -17,8 +17,25 @@ import type { appRouter } from "~/orpc/root.ts";
 
 type OrpcClient = RouterClient<typeof appRouter>;
 
+type SlackChannel = {
+  id: string;
+  is_member?: boolean;
+  name: string;
+};
+
+type SlackConversationsListResponse =
+  | {
+      channels: SlackChannel[];
+      ok: true;
+      response_metadata?: { next_cursor?: string };
+    }
+  | {
+      error?: string;
+      ok: false;
+    };
+
 const createdProjectIds: string[] = [];
-const itIfSlackChannel = process.env.OS2_E2E_SLACK_CHANNEL_ID?.trim() ? it : it.skip;
+const itIfSlackBotToken = process.env.APP_CONFIG_SLACK_BOT_TOKEN?.trim() ? it : it.skip;
 
 afterEach(async () => {
   const client = createClient(requireBaseUrl());
@@ -164,7 +181,7 @@ async (ctx) => {
     );
   });
 
-  itIfSlackChannel(
+  itIfSlackBotToken(
     "lets a real agent conversation post to Slack through codemode",
     async () => {
       const baseUrl = requireBaseUrl();
@@ -172,7 +189,7 @@ async (ctx) => {
       const project = await createProject(client, "agent-slack");
       const suffix = uniqueSuffix();
       const agentPath = `/agents/slack-${suffix}`;
-      const slackChannelId = requireSlackChannelId();
+      const slackChannelId = await requireSlackChannelId();
       const slackText = `OS2 agent Slack proof ${suffix}`;
 
       await client.project.agents.configurePreset({
@@ -336,10 +353,43 @@ function requireBaseUrl() {
   return baseUrl;
 }
 
-function requireSlackChannelId() {
-  const channelId = process.env.OS2_E2E_SLACK_CHANNEL_ID?.trim();
-  if (!channelId) throw new Error("OS2_E2E_SLACK_CHANNEL_ID is required.");
-  return channelId;
+async function requireSlackChannelId() {
+  const token = process.env.APP_CONFIG_SLACK_BOT_TOKEN?.trim();
+  if (!token) throw new Error("APP_CONFIG_SLACK_BOT_TOKEN is required for Slack e2e tests.");
+
+  const channels = await listSlackChannels(token);
+  const channel = channels.find(
+    (candidate) => candidate.name === "slack-agent-e2e-test" && candidate.is_member === true,
+  );
+  if (!channel) {
+    throw new Error(
+      "APP_CONFIG_SLACK_BOT_TOKEN is set, but the bot is not a member of #slack-agent-e2e-test.",
+    );
+  }
+  return channel.id;
+}
+
+async function listSlackChannels(token: string) {
+  const channels: SlackChannel[] = [];
+  let cursor: string | undefined;
+  do {
+    const url = new URL("https://slack.com/api/conversations.list");
+    url.searchParams.set("exclude_archived", "true");
+    url.searchParams.set("limit", "200");
+    url.searchParams.set("types", "public_channel,private_channel");
+    if (cursor) url.searchParams.set("cursor", cursor);
+
+    const response = await fetch(url, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const result = (await response.json()) as SlackConversationsListResponse;
+    if (!result.ok) {
+      throw new Error(`Slack conversations.list failed: ${result.error ?? response.status}`);
+    }
+    channels.push(...result.channels);
+    cursor = result.response_metadata?.next_cursor || undefined;
+  } while (cursor);
+  return channels;
 }
 
 function requireAuthHeaders() {

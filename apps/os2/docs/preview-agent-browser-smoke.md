@@ -10,11 +10,10 @@ preview worker, unauthenticated redirect behavior, admin-token project setup,
 and MCP/codemode metadata wiring.
 
 It does not exercise Slack. Slack is covered by
-`apps/os2/e2e/vitest/codemode-mcp-provider-stack.e2e.test.ts`, but that test
-only sends a real Slack message when `OS2_E2E_SLACK_CHANNEL_ID` is set. Without
-that variable it still proves the MCP `run_code` surface and provider stack, but
-it will not catch missing Slack runtime config such as
-`APP_CONFIG_SLACK_BOT_TOKEN`.
+`apps/os2/e2e/vitest/codemode-mcp-provider-stack.e2e.test.ts`. When
+`APP_CONFIG_SLACK_BOT_TOKEN` is present in the test process, the test discovers
+`#slack-agent-e2e-test` and sends a real Slack message through the deployed
+codemode Slack capability.
 
 ## Authenticated Browser Smoke
 

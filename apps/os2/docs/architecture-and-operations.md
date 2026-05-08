@@ -253,10 +253,9 @@ Codemode MCP provider-stack smoke:
 
 ```bash
 OS2_E2E_MCP_URL=https://mcp__demo.iterate-preview-2.app \
-OS2_E2E_MCP_BEARER_TOKEN="$ADMIN_OR_MCP_ACCESS_TOKEN" \
-pnpm test:e2e:codemode-mcp
+doppler run --project os2 --config preview_2 -- pnpm test:e2e:codemode-mcp
 ```
 
-Set `OS2_E2E_SLACK_CHANNEL_ID=C123...` to include a real
-`ctx.slack.chat.postMessage(...)` call. Without that variable, the codemode MCP
-test does not prove Slack runtime config.
+When `APP_CONFIG_SLACK_BOT_TOKEN` is present in the test process, the codemode
+MCP test discovers `#slack-agent-e2e-test` and includes a real
+`ctx.slack.chat.postMessage(...)` call.
