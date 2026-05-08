@@ -1572,6 +1572,37 @@ Next check:
 - Add expected-duplicate thresholds to benchmark scripts so traffic tests fail
   when duplicate attempts exceed a small allowlist of known startup/setup keys.
 
+Fresh check from the `2026-05-08` Agent DO timing run:
+
+- Project: `proj__os__01kr2may2hf26vhtc4dkywd5xs`
+- Benchmark: `agent-server-bench-1778205490536-8b301e8e`
+- Traffic: `300` `agent-chat/assistant-response-added` events at `300/s`
+- Duplicate attempts: `39` across `9` keys
+- Top duplicate keys:
+  - `7` duplicate attempts:
+    `codemode-session-callable-subscription:{...}:afterAppendBatch`
+  - `6` duplicate attempts:
+    `events.iterate.com/codemode/session-started`
+  - `6` duplicate attempts:
+    `processor-registered:agent:0.1.0`
+  - `5` duplicate attempts:
+    `processor-registered:codemode:0.4.0`
+  - `3` duplicate attempts each for the default codemode tool providers and
+    Agent callable subscription setup
+
+Interpretation:
+
+- The user's suspicion is confirmed for setup traffic: idempotency is hiding
+  repeated append attempts.
+- These are not the high-volume benchmark source events themselves, but they are
+  still real work and a real signal that wake/setup paths are not cleanly
+  one-shot.
+- A benchmark can only prove "the stream contains one committed event per key."
+  It cannot prove "callers only attempted one append per key" unless we inspect
+  pre-idempotency diagnostics.
+- The Stream DO diagnostic table is the right source of truth because it is
+  recorded before the duplicate event is returned from `append()`.
+
 ### 2026-05-08: subscriber-mode isolation
 
 Question:

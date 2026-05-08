@@ -93,6 +93,16 @@ type AgentStreamApi = ProcessorStreamApi<{
   }): Promise<Event[]>;
 };
 
+type AgentAfterAppendBatchTiming = {
+  completedAtMs: number;
+  consumeDurationMs: number;
+  ensureStartedDurationMs: number;
+  eventCount: number;
+  firstOffset: number | null;
+  lastOffset: number | null;
+  totalDurationMs: number;
+};
+
 const AgentLifecycleBase = createIterateDurableObjectBase<
   typeof AgentDurableObjectStructuredName,
   Pick<AgentDurableObjectEnv, "DO_CATALOG">
@@ -117,6 +127,8 @@ const AgentBase = withStreamProcessor<AgentDurableObjectStructuredName, AgentDur
 })(AgentLifecycleBase);
 
 export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
+  private readonly afterAppendBatchTimings: AgentAfterAppendBatchTiming[] = [];
+
   constructor(ctx: DurableObjectState, env: AgentDurableObjectEnv) {
     super(ctx, env);
 
@@ -148,8 +160,25 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
   }
 
   async afterAppendBatch(input: { events: Event[] }) {
+    const startedAt = performance.now();
+    const ensureStartedAt = performance.now();
     await this.ensureStarted();
-    return await this.consumeStreamProcessorEvents({ events: input.events as StreamEvent[] });
+    const ensureStartedDurationMs = Math.round(performance.now() - ensureStartedAt);
+    const consumeStartedAt = performance.now();
+    const state = await this.consumeStreamProcessorEvents({
+      events: input.events as StreamEvent[],
+    });
+    const consumeDurationMs = Math.round(performance.now() - consumeStartedAt);
+    this.recordAfterAppendBatchTiming({
+      completedAtMs: Date.now(),
+      consumeDurationMs,
+      ensureStartedDurationMs,
+      eventCount: input.events.length,
+      firstOffset: input.events[0]?.offset ?? null,
+      lastOffset: input.events.at(-1)?.offset ?? null,
+      totalDurationMs: Math.round(performance.now() - startedAt),
+    });
+    return state;
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -182,7 +211,10 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
 
   async getRuntimeState() {
     await this.ensureStarted();
-    return this.getStreamProcessorRuntimeState();
+    return {
+      ...this.getStreamProcessorRuntimeState(),
+      lastAfterAppendBatchTimings: [...this.afterAppendBatchTimings],
+    };
   }
 
   async sendMessage(input: { message: string; channel?: string }) {
@@ -245,6 +277,11 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       failures: [...traffic.failures, ...terminal.failures],
       terminal: terminal.appended,
     };
+  }
+
+  private recordAfterAppendBatchTiming(timing: AgentAfterAppendBatchTiming) {
+    this.afterAppendBatchTimings.unshift(timing);
+    this.afterAppendBatchTimings.splice(50);
   }
 
   private async processAppendedStreamEvent(event: Event) {
