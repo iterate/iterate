@@ -6,9 +6,9 @@ values (1, json(?))
 on conflict (singleton) do update set json = excluded.json;
 `.trim();
 const query = (params: upsertReducedState.Params) => ({
+  name: "upsertReducedState",
   sql,
   args: [params.json],
-  name: "upsertReducedState",
 });
 
 export const upsertReducedState = Object.assign(

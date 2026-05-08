@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Event } from "@iterate-com/shared/streams/types";
 import {
+  agentStreamCircuitBreakerConfig,
   defaultAgentSetupEvents,
   defaultAgentSystemPrompt,
   normalizeAgentPresetBasePath,
@@ -58,6 +59,13 @@ describe("agent presets", () => {
   it("keeps the default system prompt on ctx.chat.sendMessage", () => {
     expect(defaultAgentSystemPrompt()).toContain("ctx.chat.sendMessage({ message:");
     expect(defaultAgentSystemPrompt()).not.toContain("ctx.streams.append");
+  });
+
+  it("configures agent streams for high-throughput event fanout", () => {
+    expect(defaultAgentSetupEvents("openai-ws")).toContainEqual({
+      type: "events.iterate.com/core/circuit-breaker-configured",
+      payload: agentStreamCircuitBreakerConfig,
+    });
   });
 });
 

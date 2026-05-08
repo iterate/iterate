@@ -230,7 +230,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
   }) {
     const params = await this.ensureStarted();
     const stream = this.streamsEntrypoint(params.agentPath);
-    const appended = await appendAgentStreamBenchmarkTraffic({
+    const traffic = await appendAgentStreamBenchmarkTraffic({
       append: async (event) => await stream.append({ event }),
       options: input.options,
     });
@@ -239,8 +239,12 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
           append: async (event) => await stream.append({ event }),
           benchmarkId: input.options.benchmarkId,
         })
-      : [];
-    return { appended, terminal };
+      : { appended: [], failures: [] };
+    return {
+      appended: traffic.appended,
+      failures: [...traffic.failures, ...terminal.failures],
+      terminal: terminal.appended,
+    };
   }
 
   private async processAppendedStreamEvent(event: Event) {

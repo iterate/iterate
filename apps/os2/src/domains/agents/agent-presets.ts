@@ -21,6 +21,11 @@ export const AgentPathPrefixPreset = z.object({
 });
 export type AgentPathPrefixPreset = z.infer<typeof AgentPathPrefixPreset>;
 
+export const agentStreamCircuitBreakerConfig = {
+  burstCapacity: 10_000,
+  refillRatePerMinute: 120_000,
+};
+
 export function providerSelectedEvent(provider: AgentLlmProvider): AgentPresetEvent {
   return {
     type: OS2_AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE,
@@ -42,6 +47,10 @@ export function defaultAgentSystemPrompt() {
 
 export function defaultAgentSetupEvents(provider: AgentLlmProvider): AgentPresetEvent[] {
   return [
+    {
+      type: "events.iterate.com/core/circuit-breaker-configured",
+      payload: agentStreamCircuitBreakerConfig,
+    },
     providerSelectedEvent(provider),
     ...(provider === "openai-ws"
       ? [

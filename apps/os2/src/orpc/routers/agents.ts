@@ -17,6 +17,7 @@ import {
   summarizeAgentStreamBenchmark,
   type AgentStreamBenchmarkAppendResult,
   type AgentStreamBenchmarkOptions,
+  type AgentStreamBenchmarkAppendFailure,
 } from "~/domains/agents/agent-stream-benchmark.ts";
 import {
   defaultAgentSetupEvents,
@@ -211,10 +212,14 @@ export const projectAgentsRouter = {
         publishDurationMs: round(publishDurationMs),
         traffic: {
           appendedCount: published.appended.length,
+          appendFailureCount: published.failures.length,
           benchmarkEventCount: benchmarkEvents.length,
+          idempotencyDuplicateAttemptCount: streamDiagnostics.idempotencyDuplicateAttemptCount,
+          idempotencyDuplicateKeyCount: streamDiagnostics.idempotencyDuplicateKeyCount,
           terminalEventCount: published.terminal.length,
           traffic: input.traffic,
         },
+        appendFailures: published.failures.slice(0, 25),
         appendLatencyMs: summarizeAgentStreamBenchmark(
           published.appended.map((event) => event.appendLatencyMs),
         ),
@@ -239,6 +244,7 @@ type AgentRpcStub = {
     terminalEvents: boolean;
   }): Promise<{
     appended: AgentStreamBenchmarkAppendResult[];
+    failures: AgentStreamBenchmarkAppendFailure[];
     terminal: AgentStreamBenchmarkAppendResult[];
   }>;
   sendMessage(input: { channel?: string; message: string }): Promise<{
@@ -300,6 +306,17 @@ function requireStreamNamespace(context: { stream?: DurableObjectNamespace<Strea
 type BenchmarkStreamStub = {
   append(event: EventInput): Promise<Event>;
   getDiagnostics(): Promise<{
+    idempotencyDuplicateAttemptCount: number;
+    idempotencyDuplicateKeyCount: number;
+    idempotencyDuplicateTopKeys: Array<{
+      duplicateAttempts: number;
+      eventType: string;
+      firstDuplicateAtMs: number;
+      idempotencyKey: string;
+      lastDuplicateAtMs: number;
+      streamPath: string;
+      targetOffset: number;
+    }>;
     idempotencyDuplicates: Array<{
       duplicateAttempts: number;
       eventType: string;
@@ -317,7 +334,7 @@ async function runAppWorkerBenchmarkPublisher(input: {
   stream: BenchmarkStreamStub;
   terminalEvents: boolean;
 }) {
-  const appended = await appendAgentStreamBenchmarkTraffic({
+  const traffic = await appendAgentStreamBenchmarkTraffic({
     append: async (event) => await input.stream.append(event),
     options: input.options,
   });
@@ -326,8 +343,12 @@ async function runAppWorkerBenchmarkPublisher(input: {
         append: async (event) => await input.stream.append(event),
         benchmarkId: input.options.benchmarkId,
       })
-    : [];
-  return { appended, terminal };
+    : { appended: [], failures: [] };
+  return {
+    appended: traffic.appended,
+    failures: [...traffic.failures, ...terminal.failures],
+    terminal: terminal.appended,
+  };
 }
 
 async function waitForProcessorCursors(input: {

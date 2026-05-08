@@ -32,6 +32,9 @@ import {
   getReducedState,
   history as selectHistory,
   insertEvent,
+  listIdempotencyDuplicateAttempts,
+  summarizeIdempotencyDuplicateAttempts,
+  upsertIdempotencyDuplicateAttempt,
   upsertReducedState,
 } from "./db/queries/.generated/index.ts";
 import {
@@ -460,7 +463,25 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
   }
 
   getDiagnostics() {
+    const duplicateSummary = summarizeIdempotencyDuplicateAttempts(this.client) ?? {
+      duplicate_attempt_count: 0,
+      duplicate_key_count: 0,
+    };
+
     return {
+      idempotencyDuplicateAttemptCount: duplicateSummary.duplicate_attempt_count,
+      idempotencyDuplicateKeyCount: duplicateSummary.duplicate_key_count,
+      idempotencyDuplicateTopKeys: listIdempotencyDuplicateAttempts(this.client, {
+        limit: IDEMPOTENCY_DIAGNOSTIC_LIMIT,
+      }).map((row) => ({
+        duplicateAttempts: row.duplicate_attempts,
+        eventType: row.event_type,
+        firstDuplicateAtMs: row.first_duplicate_at_ms,
+        idempotencyKey: row.idempotency_key,
+        lastDuplicateAtMs: row.last_duplicate_at_ms,
+        streamPath: row.stream_path,
+        targetOffset: row.target_offset,
+      })),
       idempotencyDuplicates: [...this.idempotencyDuplicates.values()].sort(
         (left, right) => right.lastDuplicateAtMs - left.lastDuplicateAtMs,
       ),
@@ -634,6 +655,15 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
     idempotencyKey: string;
   }) {
     const now = Date.now();
+    upsertIdempotencyDuplicateAttempt(this.client, {
+      eventType: args.attemptedEvent.type,
+      firstDuplicateAtMs: now,
+      idempotencyKey: args.idempotencyKey,
+      lastDuplicateAtMs: now,
+      streamPath: args.existingEvent.streamPath,
+      targetOffset: args.existingEvent.offset,
+    });
+
     const existing = this.idempotencyDuplicates.get(args.idempotencyKey);
     this.idempotencyDuplicates.set(args.idempotencyKey, {
       duplicateAttempts: (existing?.duplicateAttempts ?? 0) + 1,
@@ -662,6 +692,8 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
   }
 
   private async drainCallableSubscriberDelivery() {
+    const targetEventCount = this.state.eventCount;
+
     for (let batchIndex = 0; batchIndex < CALLABLE_SUBSCRIBER_ALARM_MAX_BATCHES; batchIndex += 1) {
       const subscribers = Object.values(
         this.state.processors["external-subscriber"].subscribersBySlug,
@@ -673,15 +705,15 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
       const results = await Promise.all(
         subscribers.map(async (subscriber) => {
           const cursor = await this.readCallableSubscriberCursor(subscriber.slug);
-          if (cursor >= this.state.eventCount) {
-            return { hasRemainingWork: false };
+          if (cursor >= targetEventCount) {
+            return { hasRemainingWork: false, shouldYield: false };
           }
 
           const events = this.history({
             after: cursor,
             before: Math.min(
               cursor + CALLABLE_SUBSCRIBER_ALARM_BATCH_SIZE + 1,
-              this.state.eventCount + 1,
+              targetEventCount + 1,
             ),
           });
           if (events.length === 0) {
@@ -698,7 +730,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
                 eventCount: this.state.eventCount,
               },
             });
-            return { hasRemainingWork: false };
+            return { hasRemainingWork: false, shouldYield: false };
           }
 
           const result = await publishExternalSubscriberBatch({
@@ -714,18 +746,26 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
           });
 
           if (result.failedEventCount > 0 && result.deliveredEventCount === 0) {
-            return { hasRemainingWork: true };
+            return { hasRemainingWork: true, shouldYield: true };
           }
 
           await this.writeCallableSubscriberCursor(
             subscriber.slug,
             events.at(-1)?.offset ?? cursor,
           );
-          return { hasRemainingWork: events.at(-1)!.offset < this.state.eventCount };
+          return { hasRemainingWork: events.at(-1)!.offset < targetEventCount, shouldYield: false };
         }),
       );
 
+      if (results.some((result) => result.shouldYield)) {
+        await this.scheduleCallableSubscriberDelivery();
+        return;
+      }
+
       if (!results.some((result) => result.hasRemainingWork)) {
+        if (this.state.eventCount > targetEventCount) {
+          await this.scheduleCallableSubscriberDelivery();
+        }
         return;
       }
     }

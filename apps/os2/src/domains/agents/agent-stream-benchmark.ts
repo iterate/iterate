@@ -20,6 +20,24 @@ export type AgentStreamBenchmarkAppendResult = {
   event: Event;
 };
 
+export type AgentStreamBenchmarkAppendFailure = {
+  appendLatencyMs: number;
+  error: {
+    message: string;
+    name?: string;
+    stack?: string;
+  };
+  event: {
+    benchmarkIndex: number | string | null;
+    type: string;
+  };
+};
+
+export type AgentStreamBenchmarkAppendTrafficResult = {
+  appended: AgentStreamBenchmarkAppendResult[];
+  failures: AgentStreamBenchmarkAppendFailure[];
+};
+
 export type AgentStreamBenchmarkSummary = {
   count: number;
   max: number;
@@ -33,17 +51,18 @@ export type AgentStreamBenchmarkSummary = {
 export async function appendAgentStreamBenchmarkTraffic(input: {
   append(event: EventInput): Promise<Event>;
   options: AgentStreamBenchmarkOptions;
-}) {
+}): Promise<AgentStreamBenchmarkAppendTrafficResult> {
   const intervalMs = 1000 / input.options.ratePerSecond;
   const startedAt = performance.now();
-  const inFlight = new Set<Promise<AgentStreamBenchmarkAppendResult>>();
+  const inFlight = new Set<Promise<AgentStreamBenchmarkAppendAttempt>>();
   const appended: AgentStreamBenchmarkAppendResult[] = [];
+  const failures: AgentStreamBenchmarkAppendFailure[] = [];
 
   for (let index = 0; index < input.options.count; index += 1) {
     const dueAt = startedAt + index * intervalMs;
     await delay(Math.max(0, dueAt - performance.now()));
 
-    const promise = appendOne({
+    const promise = appendOneAttempt({
       append: input.append,
       event: agentStreamBenchmarkEvent({
         index,
@@ -53,7 +72,13 @@ export async function appendAgentStreamBenchmarkTraffic(input: {
       inFlight.delete(promise);
     });
     inFlight.add(promise);
-    promise.then((event) => appended.push(event)).catch(() => undefined);
+    promise.then((attempt) => {
+      if (attempt.status === "fulfilled") {
+        appended.push(attempt.result);
+      } else {
+        failures.push(attempt.failure);
+      }
+    });
 
     if (inFlight.size >= input.options.concurrency) {
       await Promise.race(inFlight);
@@ -64,13 +89,16 @@ export async function appendAgentStreamBenchmarkTraffic(input: {
     await Promise.race(inFlight);
   }
 
-  return appended.toSorted((left, right) => left.event.offset - right.event.offset);
+  return {
+    appended: appended.toSorted((left, right) => left.event.offset - right.event.offset),
+    failures,
+  };
 }
 
 export async function appendAgentStreamBenchmarkTerminalEvents(input: {
   append(event: EventInput): Promise<Event>;
   benchmarkId: string;
-}) {
+}): Promise<AgentStreamBenchmarkAppendTrafficResult> {
   const terminalEvents: EventInput[] = [
     {
       type: "events.iterate.com/agent-chat/assistant-response-added",
@@ -97,10 +125,16 @@ export async function appendAgentStreamBenchmarkTerminalEvents(input: {
   ];
 
   const appended: AgentStreamBenchmarkAppendResult[] = [];
+  const failures: AgentStreamBenchmarkAppendFailure[] = [];
   for (const event of terminalEvents) {
-    appended.push(await appendOne({ append: input.append, event }));
+    const attempt = await appendOneAttempt({ append: input.append, event });
+    if (attempt.status === "fulfilled") {
+      appended.push(attempt.result);
+    } else {
+      failures.push(attempt.failure);
+    }
   }
-  return appended;
+  return { appended, failures };
 }
 
 export function agentStreamBenchmarkWebSocketSubscriptionEvent(input: {
@@ -258,6 +292,62 @@ async function appendOne(input: {
   return {
     appendLatencyMs: performance.now() - startedAt,
     event,
+  };
+}
+
+type AgentStreamBenchmarkAppendAttempt =
+  | {
+      result: AgentStreamBenchmarkAppendResult;
+      status: "fulfilled";
+    }
+  | {
+      failure: AgentStreamBenchmarkAppendFailure;
+      status: "rejected";
+    };
+
+async function appendOneAttempt(input: {
+  append(event: EventInput): Promise<Event>;
+  event: EventInput;
+}): Promise<AgentStreamBenchmarkAppendAttempt> {
+  const startedAt = performance.now();
+  try {
+    return {
+      result: await appendOne(input),
+      status: "fulfilled",
+    };
+  } catch (error) {
+    return {
+      failure: {
+        appendLatencyMs: performance.now() - startedAt,
+        error: serializeError(error),
+        event: {
+          benchmarkIndex: readBenchmarkIndex(input.event),
+          type: input.event.type,
+        },
+      },
+      status: "rejected",
+    };
+  }
+}
+
+function readBenchmarkIndex(event: EventInput) {
+  const metadata = event.metadata as { benchmark?: { index?: unknown } } | undefined;
+  const index = metadata?.benchmark?.index;
+  if (typeof index === "string" || typeof index === "number") return index;
+  return null;
+}
+
+function serializeError(error: unknown): AgentStreamBenchmarkAppendFailure["error"] {
+  if (error instanceof Error) {
+    return {
+      message: error.message,
+      name: error.name,
+      stack: error.stack,
+    };
+  }
+
+  return {
+    message: String(error),
   };
 }
 

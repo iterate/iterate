@@ -7,9 +7,9 @@ where offset > ? and offset < ?
 order by offset asc;
 `.trim();
 const query = (params: history.Params) => ({
+  name: "history",
   sql,
   args: [params.afterOffset, params.beforeOffset],
-  name: "history",
 });
 
 export const history = Object.assign(

@@ -7,6 +7,7 @@ import {applyMigrations, migrationsFromBundle, type AsyncClient, type Client, ty
 
 export const migrations = {
   "db/migrations/0000_init.sql": "-- Use IF NOT EXISTS in this introductory migration only: existing Durable\n-- Object instances already created these tables via the old ensureSchema()\n-- helper, before sqlfu took over migrations. The IF NOT EXISTS lets a fresh\n-- DO and a previously-deployed DO both end up with a consistent\n-- sqlfu_migrations row after the first call to migrate(client). Future\n-- migrations should use plain DDL.\ncreate table if not exists events (\n  offset integer primary key,\n  type text not null,\n  payload text not null check (json_valid(payload)),\n  metadata text check (metadata is null or (json_valid(metadata) and json_type(metadata) = 'object')),\n  idempotency_key text unique,\n  created_at text not null\n);\n\ncreate table if not exists reduced_state (\n  singleton integer primary key check (singleton = 1),\n  json text not null check (json_valid(json))\n);\n",
+  "db/migrations/0001_idempotency_duplicate_attempts.sql": "create table idempotency_duplicate_attempts (\n  idempotency_key text primary key,\n  event_type text not null,\n  stream_path text not null,\n  target_offset integer not null,\n  duplicate_attempts integer not null,\n  first_duplicate_at_ms integer not null,\n  last_duplicate_at_ms integer not null\n);\n",
 };
 
 export function migrate(client: SyncClient): void;

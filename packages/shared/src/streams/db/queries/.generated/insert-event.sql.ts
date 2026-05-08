@@ -5,6 +5,7 @@ insert into events (offset, type, payload, metadata, idempotency_key, created_at
 values (?, ?, json(?), ?, ?, ?);
 `.trim();
 const query = (params: insertEvent.Params) => ({
+  name: "insertEvent",
   sql,
   args: [
     params.offset,
@@ -14,7 +15,6 @@ const query = (params: insertEvent.Params) => ({
     params.idempotencyKey,
     params.createdAt,
   ],
-  name: "insertEvent",
 });
 
 export const insertEvent = Object.assign(
@@ -26,7 +26,7 @@ export const insertEvent = Object.assign(
 
 export namespace insertEvent {
   export type Params = {
-    offset: number | null;
+    offset: number;
     type: string;
     payload: string | null;
     metadata: string | null;

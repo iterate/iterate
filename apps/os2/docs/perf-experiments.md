@@ -774,6 +774,171 @@ Remaining duplicate classes to investigate:
 - These need separate state-backed guards after the explainer fix is deployed
   and remeasured.
 
+Follow-up diagnostic hardening:
+
+- In-memory top-N duplicate diagnostics are useful for spotting the hottest
+  offender, but they are not enough to prove that every event is not being
+  attempted repeatedly.
+- Added a Stream DO SQLite aggregate table keyed by `idempotency_key` for
+  duplicate append attempts. The stream now records:
+  - total duplicate attempt count;
+  - distinct duplicate idempotency-key count;
+  - top duplicate keys with event type, target committed offset, and first/last
+    duplicate timestamps.
+- This gives the invariant we need for benchmarks:
+  `attempted logical appends = committed idempotent events + duplicate attempts`.
+- If every committed event were attempted ten times with the same idempotency
+  key, a benchmark with `N` idempotent events should report roughly `9N`
+  duplicate attempts. That should fail the run even though the event log itself
+  looks clean.
+- This remains separate from the append-only stream: duplicate attempts are not
+  committed as stream events, because doing so would turn retry noise into real
+  domain events and could recursively perturb the system under test.
+
+### 2026-05-08: append failure instrumentation exposed stream pause
+
+Change:
+
+- The server-side benchmark publisher now catches individual append failures
+  and returns them instead of letting a benchmark request collapse into a
+  generic `500`.
+- Both app-worker and Agent DO publishers return:
+  - successful appended event count;
+  - append failure count;
+  - first failures with benchmark index and serialized error.
+
+Preview run:
+
+- Project: `proj__os__01kr2f2kbpf6db8qk2mf5tmhhk`
+- Benchmark: `agent-server-bench-1778199387820-702ffc27`
+- Agent stream: `/agents/diag-300-1778199387441`
+- Traffic: `300` `agent-chat/assistant-response-added` events at `150/s`
+- Publisher: app-worker
+- Transport: callable RPC
+
+Result:
+
+- successful benchmark appends: `260`;
+- append failures: `43`;
+- first failed benchmark index: `260`;
+- first failure: `StreamPausedError: stream is paused; only stream/resumed is allowed`;
+- terminal events: `0`, because terminal appends also failed after pause;
+- successful append latency: p50 `12ms`, p90 `23ms`, p99 `36ms`;
+- self-delivery samples around the pause were still low:
+  - offset `526`: `18ms`;
+  - offsets `515-523`: `53ms`.
+
+Interpretation:
+
+- The earlier `300+` event app-worker `500` was not enough signal. The real
+  symptom is that the stream circuit breaker paused the stream after sustained
+  pressure.
+- Self-delivery lag was not obviously exploding immediately before the pause,
+  so the next question is why the circuit breaker tripped: subscriber delivery
+  errors, processor-appended error events, or another built-in error threshold.
+- Next benchmark responses should expose circuit-breaker state and stream tail
+  events so we can correlate the pause with the exact preceding error events.
+
+Follow-up:
+
+- Queried the stream tail and confirmed the pause was exactly the built-in
+  circuit breaker:
+  - config: `burstCapacity: 500`, `refillRatePerMinute: 500`;
+  - pause offset: `525`;
+  - pause reason: `circuit breaker tripped: burst rate limit exceeded`.
+- The benchmark stream was producing roughly two committed events per source
+  event once `agent-chat` derived `agent/input-added`, so the default shared
+  stream breaker was far below the target load for agent streams.
+- Changed OS2 agent setup to append
+  `events.iterate.com/core/circuit-breaker-configured` with:
+  - `burstCapacity: 10000`;
+  - `refillRatePerMinute: 120000`.
+- This is intentionally scoped to agent streams rather than changing the
+  package-wide shared stream default.
+
+After deploy, same shape:
+
+- Project: `proj__os__01kr2frc5bects2h8k8zwd0skj`
+- Benchmark: `agent-server-bench-1778200101990-ca41cdb4`
+- Traffic: `300` `agent-chat/assistant-response-added` events at `150/s`
+- Result:
+  - appends: `300`;
+  - append failures: `0`;
+  - processor wait: `34ms`;
+  - tail self-delivery samples: `15-23ms`;
+  - duplicate attempts: `15` across `5` startup/setup keys.
+
+Interpretation:
+
+- For this moderate high-fanout run, the previous failure was breaker config,
+  not stream delivery.
+- Idempotency diagnostics also proved there was no "every event appended ten
+  times" pattern in this run.
+
+### 2026-05-08: high-rate 1000/s fanout and retry-storm fix
+
+First `1000` event run after raising the agent stream circuit breaker:
+
+- Project: `proj__os__01kr2fsatwfewte8140c7theyh`
+- Benchmark: `agent-server-bench-1778200132899-60551777`
+- Traffic: `1000` `agent-chat/assistant-response-added` events at `1000/s`
+- Appends: `1000`
+- Append failures: `0`
+- Processor wait: `2831ms`
+- Tail self-delivery samples: roughly `2355ms`
+- Duplicate attempts: `7212` across `204` keys.
+
+Worst duplicate class:
+
+- `stream-do:external-subscriber-error:<offset>:codemode-session:...`
+- Top keys had `36` duplicate attempts each.
+- Stream tail showed repeated
+  `Subrequest depth limit exceeded. This request recursed through Workers too
+many times.`
+
+Cause:
+
+- The callable subscriber alarm drain used live `this.state.eventCount` while
+  the Agent DO was appending derived events back to the same stream.
+- That let one alarm invocation chase newly appended events in the same request
+  chain: `Stream alarm -> Agent/Codemode subscriber -> Stream append -> same
+Stream alarm continues`.
+- When a batch failed fully, the same alarm invocation could retry the same
+  cursor repeatedly and append the same idempotent external-subscriber error
+  attempts over and over.
+
+Fix:
+
+- Snapshot `targetEventCount` at the start of each
+  `drainCallableSubscriberDelivery()` turn.
+- Deliver only offsets up to that snapshot during the current alarm invocation.
+- If processors append new events while draining, schedule a follow-up alarm
+  instead of chasing the tail in the same request chain.
+- If a subscriber batch fully fails, schedule another alarm and yield
+  immediately instead of retrying the same failed batch in the same invocation.
+
+After deploy:
+
+- Project: `proj__os__01kr2g0k7vfansg9xqp8776hk1`
+- Benchmark: `agent-server-bench-1778200373024-cfa821b7`
+- Traffic: `1000` `agent-chat/assistant-response-added` events at `1000/s`
+- Appends: `1000`
+- Append failures: `0`
+- Duplicate attempts: `13` across `4` startup/setup keys
+- Processor wait: `2468ms`
+- Tail self-delivery samples: roughly `1589ms`
+
+Interpretation:
+
+- The hidden idempotency retry storm is fixed for this case.
+- The remaining `1000/s` lag is real delivery architecture cost, not duplicate
+  append attempts.
+- The likely next candidates are:
+  - local ordered feed-through for processor-emitted events after durable append;
+  - WebSocket batch frames for subscriber delivery;
+  - larger alarm batch sizes with strict snapshot boundaries;
+  - reducing per-batch/per-subscriber RPC and cursor persistence overhead.
+
 ### E3: Batching WebSocket stream event frames
 
 Goal:

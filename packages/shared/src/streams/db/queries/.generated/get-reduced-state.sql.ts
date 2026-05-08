@@ -1,7 +1,7 @@
 import type { SyncClient } from "sqlfu";
 
 const sql = `select json from reduced_state where singleton = 1;`;
-const query = { sql, args: [], name: "getReducedState" };
+const query = { name: "getReducedState", sql, args: [] };
 
 export const getReducedState = Object.assign(
   function getReducedState(client: SyncClient): getReducedState.Result | null {

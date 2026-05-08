@@ -7,9 +7,9 @@ where idempotency_key = ?
 limit 1;
 `.trim();
 const query = (params: getEventByIdempotencyKey.Params) => ({
+  name: "getEventByIdempotencyKey",
   sql,
   args: [params.idempotencyKey],
-  name: "getEventByIdempotencyKey",
 });
 
 export const getEventByIdempotencyKey = Object.assign(
