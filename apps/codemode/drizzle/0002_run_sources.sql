@@ -1,1 +1,0 @@
-ALTER TABLE `codemode_runs` ADD `sources_json` text DEFAULT '[]' NOT NULL;

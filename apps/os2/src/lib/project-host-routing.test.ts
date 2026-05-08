@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildProjectMcpUrl,
   isReservedProjectHostname,
   isValidCustomHostname,
   normalizeCustomHostname,
@@ -14,6 +15,9 @@ describe("project host routing", () => {
     );
     expect(
       resolveProjectSlugFromHostname("my-project.os2.iterate.com", ["*.os2.iterate.com"]),
+    ).toBe("my-project");
+    expect(
+      resolveProjectSlugFromHostname("my-project.iterate-preview-3.app", ["iterate-preview-3.app"]),
     ).toBe("my-project");
   });
 
@@ -30,6 +34,11 @@ describe("project host routing", () => {
     ).toBeUndefined();
     expect(
       resolveProjectSlugFromHostname("bad_slug.os2.iterate.com", ["os2.iterate.com"]),
+    ).toBeUndefined();
+    expect(
+      resolveProjectSlugFromHostname("api.my-project.iterate-preview-3.app", [
+        "iterate-preview-3.app",
+      ]),
     ).toBeUndefined();
   });
 
@@ -48,6 +57,47 @@ describe("project host routing", () => {
   it("detects hostnames reserved for project slug routing", () => {
     expect(isReservedProjectHostname("os2.iterate.com", ["os2.iterate.com"])).toBe(true);
     expect(isReservedProjectHostname("alpha.os2.iterate.com", ["os2.iterate.com"])).toBe(true);
+    expect(
+      isReservedProjectHostname("alpha.iterate-preview-3.app", ["iterate-preview-3.app"]),
+    ).toBe(true);
     expect(isReservedProjectHostname("alpha.example.com", ["os2.iterate.com"])).toBe(false);
+  });
+
+  it("builds canonical MCP URLs from the first configured project host base", () => {
+    expect(
+      buildProjectMcpUrl({
+        projectSlug: "demo",
+        projectHostnameBases: ["iterate2.app"],
+      }),
+    ).toBe("https://mcp__demo.iterate2.app");
+    expect(
+      buildProjectMcpUrl({
+        projectSlug: "demo",
+        projectHostnameBases: ["*.iterate-preview-3.app"],
+      }),
+    ).toBe("https://mcp__demo.iterate-preview-3.app");
+  });
+
+  it("prefers custom hostnames for MCP URLs", () => {
+    expect(
+      buildProjectMcpUrl({
+        projectSlug: "demo",
+        customHostname: "mcp-demo.iterate.app",
+        projectHostnameBases: ["os2-mcp.iterate.app"],
+      }),
+    ).toBe("https://mcp-demo.iterate.app");
+  });
+
+  it("does not invent MCP URLs without a valid project slug and project host base", () => {
+    expect(
+      buildProjectMcpUrl({
+        projectSlug: "bad_slug",
+        projectHostnameBases: ["iterate2.app"],
+      }),
+    ).toBeNull();
+    expect(buildProjectMcpUrl({ projectSlug: "demo", projectHostnameBases: [] })).toBeNull();
+    expect(buildProjectMcpUrl({ projectSlug: "demo", projectHostnameBases: ["localhost"] })).toBe(
+      null,
+    );
   });
 });

@@ -10,6 +10,7 @@ export interface UseDevServerOptions {
   args: string[];
   port: number;
   env?: NodeJS.ProcessEnv;
+  inheritEnv?: boolean;
   healthcheckPath?: string;
   host?: string;
   timeoutMs?: number;
@@ -29,7 +30,7 @@ export interface DevServerHandle extends AsyncDisposable {
  */
 export async function useDevServer(options: UseDevServerOptions): Promise<DevServerHandle> {
   const mergedEnv: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...(options.inheritEnv === false ? {} : process.env),
     ...options.env,
     PORT: String(options.port),
     // Probe uses 127.0.0.1; Vite default HOST `::` can leave IPv4 unroutable on some systems.

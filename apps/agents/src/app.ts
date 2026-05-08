@@ -1,5 +1,6 @@
-import { BaseAppConfig, publicValue } from "@iterate-com/shared/apps/config";
+import { BaseAppConfig, publicValue, redacted } from "@iterate-com/shared/apps/config";
 import type { AppManifest } from "@iterate-com/shared/apps/types";
+import { StreamPath } from "@iterate-com/shared/streams/types";
 import { z } from "zod";
 import packageJson from "../package.json" with { type: "json" };
 
@@ -7,6 +8,15 @@ export const AppConfig = BaseAppConfig.extend({
   apiBaseUrl: publicValue(z.string().trim().default("")),
   eventsBaseUrl: z.string().trim().url().default("https://events.iterate.com"),
   eventsProjectSlug: z.string().trim().min(1).default("public"),
+  openAiApiKey: redacted(z.string().trim().min(1)).optional(),
+  slackBotToken: redacted(z.string().trim().min(1)).optional(),
+  /**
+   * Parent stream path to attach the `child-stream-auto-subscriber` processor
+   * to via the `installProcessor` oRPC procedure. New streams that appear below
+   * this path get an `agent-stream-processor-runner` WebSocket subscription
+   * auto-installed.
+   */
+  streamPathPrefix: StreamPath.default("/agents"),
   posthog: z
     .object({
       apiKey: publicValue(z.string().trim().default("")),

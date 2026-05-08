@@ -15,6 +15,7 @@ import { extractPublicConfigSchema } from "@iterate-com/shared/apps/config";
 import { AppProviders } from "@iterate-com/ui/apps/providers";
 import iterateLogoAsset from "@iterate-com/ui/assets/iterate-logo.svg";
 import { DefaultErrorComponent } from "@iterate-com/ui/components/route-defaults";
+import { ClerkProvider } from "@clerk/tanstack-react-start";
 import { AppConfig } from "../app.ts";
 import { orpcClient } from "../orpc/client.ts";
 import appCss from "../styles.css?url";
@@ -67,7 +68,19 @@ function RootComponent() {
 
   return (
     <AppProviders config={config} devtools={<OSDevtools />} forcedTheme="light">
-      <Outlet />
+      <ClerkProvider
+        publishableKey={config.clerk.publishableKey}
+        signInUrl={config.clerk.signInUrl}
+        signUpUrl={config.clerk.signUpUrl}
+        afterSignOutUrl={config.clerk.signInUrl}
+        // Clerk sends sessions with pending tasks to task-specific routes.
+        // `choose-organization` must render TaskChooseOrganization, not the
+        // normal OrganizationList chooser:
+        // https://clerk.com/docs/tanstack-react-start/reference/components/authentication/task-choose-organization
+        taskUrls={{ "choose-organization": "/session-tasks/choose-organization" }}
+      >
+        <Outlet />
+      </ClerkProvider>
     </AppProviders>
   );
 }

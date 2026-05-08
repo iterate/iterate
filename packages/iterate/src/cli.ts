@@ -878,7 +878,7 @@ const launcherProcedures = {
     set: os
       .input(
         z.object({
-          name: z.string().describe("Config name (e.g. dev, prd, staging)"),
+          name: z.string().describe("Config name (e.g. dev, prd, preview)"),
           osBaseUrl: z.string().describe("Base URL for OS API (e.g. https://os.iterate.com)"),
           authBaseUrl: z
             .string()

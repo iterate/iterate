@@ -89,22 +89,23 @@ Stripe customers are linked to PostHog persons via:
 
 ## Environment Variables
 
-Both apps use the same Doppler project (`os`) and share these env vars:
+The legacy product app in `apps/os` and the related marketing flow share these
+analytics env vars:
 
 - `POSTHOG_PUBLIC_KEY` - PostHog project API key (used for server-side tracking)
 - `VITE_POSTHOG_PUBLIC_KEY` - PostHog project API key for client (set as reference to `POSTHOG_PUBLIC_KEY` in Doppler)
 - `VITE_POSTHOG_PROXY_URL` - Proxy endpoint (defaults to `/api/integrations/posthog/proxy`)
-- `VITE_APP_STAGE` - Environment stage (dev, stg, prd) - automatically included as `$environment` in all events
+- `VITE_APP_STAGE` - Environment stage (`dev_*`, numbered `preview_N`, `prd`) - automatically included as `$environment` in all events
 
 ## Multi-Environment Setup
 
 We use separate PostHog projects for each environment to keep data isolated:
 
-| Environment | PostHog Project | Doppler Config |
-| ----------- | --------------- | -------------- |
-| Production  | `iterate-prd`   | `prd`          |
-| Staging     | `iterate-stg`   | `stg`          |
-| Development | `iterate-dev`   | `dev`          |
+| Environment | PostHog Project   | Doppler Config                                    |
+| ----------- | ----------------- | ------------------------------------------------- |
+| Production  | `iterate-prd`     | `prd`                                             |
+| Preview     | `iterate-preview` | numbered `preview_N` configs leased via Semaphore |
+| Development | `iterate-dev`     | `dev`                                             |
 
 Each Doppler config has a different `POSTHOG_PUBLIC_KEY` pointing to its respective PostHog project.
 
@@ -125,6 +126,6 @@ For isolated personal environments (e.g., `dev-jonas`), you can:
 
 All events (frontend and backend) automatically include:
 
-- `$environment` - The stage (dev/stg/prd) from `VITE_APP_STAGE`
+- `$environment` - The stage (dev/preview/prd) from `VITE_APP_STAGE`
 
 This allows filtering by environment within a project if needed, though with separate projects this is mainly useful for verification.

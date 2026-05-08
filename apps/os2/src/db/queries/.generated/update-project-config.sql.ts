@@ -8,9 +8,9 @@ set custom_hostname = ?,
 where id = ?;
 `.trim();
 const query = (data: updateProjectConfig.Data, params: updateProjectConfig.Params) => ({
+  name: "updateProjectConfig",
   sql,
   args: [data.customHostname, data.metadata, params.id],
-  name: "updateProjectConfig",
 });
 
 export const updateProjectConfig = Object.assign(

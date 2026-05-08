@@ -2,10 +2,8 @@
 
 import type {
   DurableObjectClass,
-  MembersOf,
-  ReqEnvOf,
+  DurableObjectMixinResult,
   RuntimeDurableObjectConstructor,
-  StaticSide,
 } from "./mixin-types.ts";
 export type {
   DurableObjectClass,
@@ -34,8 +32,10 @@ type OptionalFetchBase = {
  * The composed class remains generic in Env, statics from the wrapped class are
  * preserved, and the instance type now includes fetch().
  */
-export type WithFetchMixinResult<TBase extends DurableObjectClass> = StaticSide<TBase> &
-  DurableObjectClass<ReqEnvOf<TBase>, MembersOf<TBase> & FetchBase>;
+export type WithFetchMixinResult<TBase extends DurableObjectClass> = DurableObjectMixinResult<
+  TBase,
+  FetchBase
+>;
 
 /**
  * Delegate to the wrapped class's fetch() when a mixin does not own a route.

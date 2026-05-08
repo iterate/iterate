@@ -46,7 +46,55 @@ writeFileSync(
             name: "LISTED_ROOMS",
             class_name: "ListedRoom",
           },
+          {
+            name: "PUBLIC_ROUTE_ROOMS",
+            class_name: "PublicRouteTestRoom",
+          },
+          {
+            name: "APP_CONFIG_ROOMS",
+            class_name: "AppConfigTestRoom",
+          },
+          {
+            name: "INITIAL_STATE_ROOMS",
+            class_name: "InitialStateTestRoom",
+          },
         ],
+      },
+      vars: {
+        APP_CONFIG: JSON.stringify({
+          serviceName: "base-service",
+          feature: {
+            enabled: false,
+            limit: 4,
+          },
+          integrations: {
+            posthog: {
+              projectApiKey: "base-posthog-key",
+              captureEndpoint: "https://base.example.com/capture",
+              sampling: {
+                enabled: false,
+                rate: 0.25,
+              },
+            },
+          },
+          limits: {
+            queue: {
+              maxBatchSize: 10,
+              tags: ["base"],
+            },
+          },
+        }),
+        APP_CONFIG_SERVICE_NAME: "override-service",
+        APP_CONFIG_FEATURE__ENABLED: "true",
+        APP_CONFIG_INTEGRATIONS__POSTHOG__PROJECT_API_KEY: "override-posthog-key",
+        APP_CONFIG_INTEGRATIONS__POSTHOG__SAMPLING: JSON.stringify({
+          enabled: true,
+          rate: 0.5,
+        }),
+        APP_CONFIG_LIMITS__QUEUE: JSON.stringify({
+          maxBatchSize: 25,
+          tags: ["override", "nested"],
+        }),
       },
       d1_databases: [
         {
@@ -66,6 +114,9 @@ writeFileSync(
             "SchedulerTestRoom",
             "InspectorTestRoom",
             "ListedRoom",
+            "PublicRouteTestRoom",
+            "AppConfigTestRoom",
+            "InitialStateTestRoom",
           ],
         },
       ],
@@ -88,6 +139,10 @@ export default defineConfig({
     include: ["./src/durable-object-utils/**/*.unit.test.ts"],
     exclude: [...defaultExclude],
     hookTimeout: 60_000,
+    // KNOWN_RRULE_SOURCEMAP_WARNING: `rrule@2.8.1` ships sourcemap references
+    // to source files that are not included in the published package. Vite
+    // prints noisy warnings during this suite. Leave test behavior untouched
+    // here unless we decide to solve it at a broader tooling boundary.
     testTimeout: 45_000,
   },
   root,

@@ -5,7 +5,7 @@ import { rrulestr } from "rrule";
 import type {
   LifecycleHooksMembers,
   LifecycleHooksProtected,
-  LifecycleInit,
+  LifecycleStructuredName,
 } from "./with-lifecycle-hooks.ts";
 import type {
   MultiplexedAlarmsProtected,
@@ -16,9 +16,7 @@ import type {
   Constructor,
   DurableObjectClass,
   DurableObjectConstructor,
-  MembersOf,
-  ReqEnvOf,
-  StaticSide,
+  DurableObjectMixinResult,
 } from "./mixin-types.ts";
 import type { DurableObjectCoreProtected } from "./with-durable-object-core.ts";
 
@@ -160,10 +158,7 @@ type WithSchedulerResult<TBase extends DurableObjectClass> =
   //
   //   const Base = withScheduler<Init>()(withMultiplexedAlarms<Init>()(...));
   //   class Room extends Base<Env> {}
-  StaticSide<TBase> &
-    DurableObjectClass<ReqEnvOf<TBase>, MembersOf<TBase> & SchedulerMembers & SchedulerProtected> &
-    Constructor<SchedulerMembers> &
-    Constructor<SchedulerProtected>;
+  DurableObjectMixinResult<TBase, SchedulerMembers & SchedulerProtected>;
 
 type SchedulerRow = {
   key: string;
@@ -224,7 +219,7 @@ export class NoNextScheduleOccurrenceError extends Error {
  * `enableKeepAlive({ key, method, everyMs })` API for that shape; it would be
  * another scheduler with a less precise name.
  */
-export function withScheduler<InitParams extends LifecycleInit>(options?: {
+export function withScheduler<StructuredName extends LifecycleStructuredName>(options?: {
   /**
    * Overlap recovery threshold for recurring schedules.
    *
@@ -237,8 +232,8 @@ export function withScheduler<InitParams extends LifecycleInit>(options?: {
     Base: TBase &
       Constructor<
         DurableObjectCoreProtected &
-          LifecycleHooksMembers<InitParams> &
-          LifecycleHooksProtected<InitParams> &
+          LifecycleHooksMembers<StructuredName> &
+          LifecycleHooksProtected<StructuredName> &
           MultiplexedAlarmsMembers &
           MultiplexedAlarmsProtected
       >,
@@ -246,8 +241,8 @@ export function withScheduler<InitParams extends LifecycleInit>(options?: {
     const BaseWithCapabilities = Base as unknown as DurableObjectConstructor<
       unknown,
       DurableObjectCoreProtected &
-        LifecycleHooksMembers<InitParams> &
-        LifecycleHooksProtected<InitParams> &
+        LifecycleHooksMembers<StructuredName> &
+        LifecycleHooksProtected<StructuredName> &
         MultiplexedAlarmsMembers &
         MultiplexedAlarmsProtected
     >;
@@ -276,7 +271,7 @@ export function withScheduler<InitParams extends LifecycleInit>(options?: {
           .exec(`CREATE INDEX IF NOT EXISTS mixin_scheduler_schedules_next_run_at
           ON ${SCHEDULER_TABLE} (next_run_at_ms)`);
 
-        this.registerOnStart(() => this.armSchedulerRows());
+        this.registerOnInstanceWake(() => this.armSchedulerRows());
       }
 
       getSchedule(key: string): SchedulerRecord | null {

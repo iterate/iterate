@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { describe, expectTypeOf, it } from "vitest";
+import { z } from "zod";
 import { withDurableObjectCore as publicWithDurableObjectCore } from "@iterate-com/shared/durable-object-utils/mixins/with-durable-object-core";
 import { withLifecycleHooks as publicWithLifecycleHooks } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { withD1ObjectCatalog } from "./with-d1-object-catalog.ts";
@@ -9,9 +10,12 @@ import { withKvInspector } from "./with-kv-inspector.ts";
 import { withMultiplexedAlarms } from "./with-multiplexed-alarms.ts";
 import type { MultiplexedAlarmRecord } from "./with-multiplexed-alarms.ts";
 import { withOuterbase } from "./with-outerbase.ts";
+import {
+  registerDurableObjectPublicRoute,
+  withPublicFetchRoute,
+} from "./with-public-fetch-route.ts";
 import { withScheduler } from "./with-scheduler.ts";
 import type { SchedulerRecord } from "./with-scheduler.ts";
-import type { LifecycleInitInput } from "./with-lifecycle-hooks.ts";
 import { getOrInitializeDoStub, withLifecycleHooks } from "./with-lifecycle-hooks.ts";
 
 type Env = {
@@ -25,15 +29,28 @@ type ListingEnv = {
 type EnvWithListings = Env & ListingEnv;
 
 type RoomInit = {
-  name: string;
   ownerUserId: string;
 };
+
+const RoomInit = z.object({
+  ownerUserId: z.string(),
+});
+
+type RoomInitialState = {
+  projectId: string;
+  plan: "free" | "pro";
+};
+
+const RoomInitialState = z.object({
+  projectId: z.string(),
+  plan: z.enum(["free", "pro"]),
+});
 
 const DurableObjectCore = withDurableObjectCore(DurableObject);
 
 // The normal incantation: build a generic base once, then extend it as
 // `RoomBase<Env>`.
-const RoomBase = withLifecycleHooks<RoomInit>()(DurableObjectCore);
+const RoomBase = withLifecycleHooks({ nameSchema: RoomInit })(DurableObjectCore);
 
 class Room extends RoomBase<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
@@ -45,9 +62,9 @@ class Room extends RoomBase<Env> {
       expectTypeOf(params).toEqualTypeOf<RoomInit>();
     });
 
-    // They can also register per-activation start work. This is where future
+    // They can also register per-instance wake work. This is where future
     // alarm/scheduler mixins rehydrate state after params exist.
-    this.registerOnStart((params) => {
+    this.registerOnInstanceWake((params) => {
       expectTypeOf(params).toEqualTypeOf<RoomInit>();
     });
   }
@@ -55,12 +72,12 @@ class Room extends RoomBase<Env> {
   sendMessage(text: string) {
     // Subclasses get typed protected params without plumbing init state through
     // every method signature.
-    const init = this.initParams;
+    const init = this.structuredName;
 
     expectTypeOf(init).toEqualTypeOf<RoomInit>();
 
     return {
-      room: init.name,
+      room: this.name,
       ownerUserId: init.ownerUserId,
       text,
     };
@@ -70,9 +87,29 @@ class Room extends RoomBase<Env> {
 const room = {} as Room;
 const namespace = {} as DurableObjectNamespace<Room>;
 
+const InitialStateRoomBase = withLifecycleHooks({
+  initialStateSchema: RoomInitialState,
+})(DurableObjectCore);
+
+class InitialStateRoom extends InitialStateRoomBase<Env> {
+  describeInitialState() {
+    expectTypeOf(this.structuredName).toEqualTypeOf<string>();
+    expectTypeOf(this.initialState).toEqualTypeOf<RoomInitialState>();
+
+    return `${this.name}:${this.initialState.projectId}:${this.initialState.plan}`;
+  }
+}
+
+const initialStateNamespace = {} as DurableObjectNamespace<InitialStateRoom>;
+
 describe("withLifecycleHooks types", () => {
   it("adds public initialize/assertInitialized members and protected subclass params", () => {
     expectTypeOf(room.initialize).toBeFunction();
+    expectTypeOf(
+      room.initialize({
+        name: '{"ownerUserId":"user-a"}',
+      }),
+    ).resolves.toEqualTypeOf<RoomInit>();
     expectTypeOf(room.assertInitialized()).toEqualTypeOf<RoomInit>();
     expectTypeOf(room.ensureStarted()).resolves.toEqualTypeOf<RoomInit>();
     expectTypeOf(room.sendMessage("hello")).toEqualTypeOf<{
@@ -82,60 +119,43 @@ describe("withLifecycleHooks types", () => {
     }>();
 
     // This is the main protected-member payoff: subclasses can use
-    // `this.initParams`, but consumers of a stub/class instance cannot reach it.
-    // @ts-expect-error initParams is protected and must not be part of the public API.
-    room.initParams;
+    // `this.structuredName`, but consumers of a stub/class instance cannot reach it.
+    // @ts-expect-error structuredName is protected and must not be part of the public API.
+    room.structuredName;
 
     // @ts-expect-error registerOnFirstInitialize is for subclasses/mixins, not external callers.
     room.registerOnFirstInitialize;
 
-    // @ts-expect-error registerOnStart is for subclasses/mixins, not external callers.
-    room.registerOnStart;
+    // @ts-expect-error registerOnInstanceWake is for subclasses/mixins, not external callers.
+    room.registerOnInstanceWake;
   });
 
-  it("requires initParams when the init shape has fields beyond name", () => {
-    // RoomInit has ownerUserId, so initParams is required.
+  it("accepts either string names or structured names", () => {
+    expectTypeOf(
+      getOrInitializeDoStub({
+        namespace,
+        name: {
+          ownerUserId: "user-a",
+        },
+      }),
+    ).resolves.toEqualTypeOf<DurableObjectStub<Room>>();
+
     expectTypeOf(
       getOrInitializeDoStub({
         namespace,
         name: "room-a",
-        initParams: {
-          ownerUserId: "user-a",
-        },
-      }),
-    ).resolves.toEqualTypeOf<DurableObjectStub<Room>>();
-
-    // @ts-expect-error Room initialization needs ownerUserId, so the helper must receive initParams.
-    getOrInitializeDoStub({
-      namespace,
-      name: "room-a",
-    });
-  });
-
-  it("accepts complete init params when callers derive the Durable Object name themselves", () => {
-    expectTypeOf(
-      getOrInitializeDoStub({
-        namespace,
-        initParams: {
-          ownerUserId: "user-a",
-        },
       }),
     ).resolves.toEqualTypeOf<DurableObjectStub<Room>>();
 
     getOrInitializeDoStub({
       namespace,
-      // @ts-expect-error ownerUserId is required because the helper has no
-      // separate name argument to fall back to for this init shape.
-      initParams: {},
+      // @ts-expect-error ownerUserId is required when structuredName is used for Room.
+      name: {},
     });
   });
 
-  it("allows omitted initParams when name is the whole init shape", () => {
-    type NameOnlyInit = {
-      name: string;
-    };
-
-    const NameOnlyRoomBase = withLifecycleHooks<NameOnlyInit>()(DurableObjectCore);
+  it("defaults to string names when no structured-name type argument is provided", () => {
+    const NameOnlyRoomBase = withLifecycleHooks()(DurableObjectCore);
 
     class NameOnlyRoom extends NameOnlyRoomBase<Env> {}
 
@@ -148,62 +168,60 @@ describe("withLifecycleHooks types", () => {
         name: "name-only-room",
       }),
     ).resolves.toEqualTypeOf<DurableObjectStub<NameOnlyRoom>>();
+
+    expectTypeOf(
+      nameOnlyNamespace.getByName("name-only-room").initialize({
+        name: "name-only-room",
+      }),
+    ).resolves.toEqualTypeOf<string>();
   });
 
-  it("keeps LifecycleInitInput explicit while letting getOrInitializeDoStub fill in name", () => {
-    const withoutName = {
-      ownerUserId: "user-a",
-    } satisfies LifecycleInitInput<RoomInit>;
+  it("types immutable initial state separately from structured names", () => {
+    expectTypeOf(
+      getOrInitializeDoStub({
+        namespace: initialStateNamespace,
+        name: "stateful-room",
+        initialState: {
+          projectId: "project-a",
+          plan: "pro",
+        },
+      }),
+    ).resolves.toEqualTypeOf<DurableObjectStub<InitialStateRoom>>();
 
-    const withMatchingName = {
-      name: "room-a",
-      ownerUserId: "user-a",
-    } satisfies LifecycleInitInput<RoomInit>;
+    getOrInitializeDoStub({
+      namespace: initialStateNamespace,
+      name: "stateful-room",
+      // @ts-expect-error projectId is required by the initial state schema.
+      initialState: {
+        plan: "pro",
+      },
+    });
 
-    expectTypeOf(withoutName).toEqualTypeOf<{ ownerUserId: string }>();
-    expectTypeOf(withMatchingName).toEqualTypeOf<{
-      name: string;
-      ownerUserId: string;
-    }>();
+    getOrInitializeDoStub({
+      namespace: initialStateNamespace,
+      name: "stateful-room",
+      initialState: {
+        projectId: "project-a",
+        // @ts-expect-error initialState must use the configured plan enum.
+        plan: "enterprise",
+      },
+    });
 
-    // @ts-expect-error ownerUserId is required for RoomInit.
-    void ({} satisfies LifecycleInitInput<RoomInit>);
-  });
+    expectTypeOf(
+      initialStateNamespace.getByName("stateful-room").initialize({
+        name: "stateful-room",
+        initialState: {
+          projectId: "project-a",
+          plan: "free",
+        },
+      }),
+    ).resolves.toEqualTypeOf<string>();
 
-  it("preserves discriminated union init shapes when name is filled by the helper", () => {
-    type UnionInit =
-      | {
-          name: string;
-          kind: "team";
-          teamId: string;
-        }
-      | {
-          name: string;
-          kind: "user";
-          userId: string;
-        };
-
-    const team = {
-      kind: "team",
-      teamId: "team-a",
-    } satisfies LifecycleInitInput<UnionInit>;
-
-    const user = {
-      kind: "user",
-      userId: "user-a",
-    } satisfies LifecycleInitInput<UnionInit>;
-
-    expectTypeOf(team).toEqualTypeOf<{
-      kind: "team";
-      teamId: string;
-    }>();
-    expectTypeOf(user).toEqualTypeOf<{
-      kind: "user";
-      userId: string;
-    }>();
-
-    // @ts-expect-error userId belongs to the user variant, not the team variant.
-    void ({ kind: "team", userId: "user-a" } satisfies LifecycleInitInput<UnionInit>);
+    expectTypeOf(
+      initialStateNamespace.getByName("stateful-room").initialize({
+        name: "stateful-room",
+      }),
+    ).resolves.toEqualTypeOf<string>();
   });
 
   it("preserves static members from the wrapped base class", () => {
@@ -213,7 +231,9 @@ describe("withLifecycleHooks types", () => {
       }
     }
 
-    const StaticRoomBase = withLifecycleHooks<RoomInit>()(withDurableObjectCore(RootWithStatic));
+    const StaticRoomBase = withLifecycleHooks({ nameSchema: RoomInit })(
+      withDurableObjectCore(RootWithStatic),
+    );
 
     class StaticRoom extends StaticRoomBase<Env> {}
 
@@ -227,10 +247,10 @@ describe("withLifecycleHooks types", () => {
     class NotDurableObject {}
 
     // @ts-expect-error lifecycle hooks require the core Durable Object adapter below them.
-    withLifecycleHooks<RoomInit>()(NotDurableObject);
+    withLifecycleHooks({ nameSchema: RoomInit })(NotDurableObject);
 
     // @ts-expect-error lifecycle hooks require withDurableObjectCore below them.
-    withLifecycleHooks<RoomInit>()(DurableObject);
+    withLifecycleHooks({ nameSchema: RoomInit })(DurableObject);
 
     // @ts-expect-error inspector mixins require the core Durable Object adapter below them.
     withOuterbase({ unsafe: "I_UNDERSTAND_THIS_EXPOSES_SQL" })(NotDurableObject);
@@ -240,7 +260,7 @@ describe("withLifecycleHooks types", () => {
   });
 
   it("works through the package export path", () => {
-    const PublicRoomBase = publicWithLifecycleHooks<RoomInit>()(
+    const PublicRoomBase = publicWithLifecycleHooks({ nameSchema: RoomInit })(
       publicWithDurableObjectCore(DurableObject),
     );
 
@@ -272,7 +292,7 @@ describe("withD1ObjectCatalog types", () => {
       getOwnerUserId() {
         // D1 cataloging must not erase withLifecycleHooks' protected subclass
         // surface.
-        return this.initParams.ownerUserId;
+        return this.structuredName.ownerUserId;
       }
     }
 
@@ -301,7 +321,7 @@ describe("withMultiplexedAlarms types", () => {
           key: "daily-summary",
           runAt: Date.now(),
           method: "sendDailySummary",
-          payload: { room: this.initParams.name },
+          payload: { room: this.name },
         });
 
         expectTypeOf(await this.cancelMultiplexedAlarm("daily-summary")).toEqualTypeOf<boolean>();
@@ -336,7 +356,7 @@ describe("withScheduler types", () => {
         const schedule = await this.schedule({
           key: "daily-summary",
           method: "sendDailySummary",
-          payload: { room: this.initParams.name },
+          payload: { room: this.name },
           recurrence: {
             type: "cron",
             expression: "0 9 * * *",
@@ -388,5 +408,30 @@ describe("inspector mixin types", () => {
     // Constructor<FetchBase>` result is enough. If this stops compiling, a
     // wrapper erased the normal `Base<Env>` Durable Object shape.
     expectTypeOf(inspector.fetch).toBeFunction();
+  });
+});
+
+describe("public fetch route mixin types", () => {
+  it("adds an instance path helper and preserves the generic Durable Object base shape", () => {
+    const PublicRouteRoomBase = withPublicFetchRoute({
+      namespaceSlug: "rooms",
+      defaultAddressing: "by-structured-name",
+    })(RoomBase);
+
+    class PublicRouteRoom extends PublicRouteRoomBase<Env> {}
+
+    const publicRouteRoom = {} as PublicRouteRoom;
+    const publicRouteNamespace = {} as DurableObjectNamespace<PublicRouteRoom>;
+
+    expectTypeOf(publicRouteRoom.getPublicDurableObjectPath()).toEqualTypeOf<string>();
+    expectTypeOf(
+      publicRouteRoom.getPublicDurableObjectPath({ mode: "by-id" }),
+    ).toEqualTypeOf<string>();
+    const registration = registerDurableObjectPublicRoute({
+      namespace: publicRouteNamespace,
+      class: PublicRouteRoom,
+    });
+
+    expectTypeOf(registration.namespaceSlug).toEqualTypeOf<string>();
   });
 });

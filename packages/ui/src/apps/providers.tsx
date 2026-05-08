@@ -48,7 +48,7 @@ export function AppProviders<TConfig>(props: {
         attribute="class"
         defaultTheme={props.theme?.defaultTheme ?? "system"}
         enableSystem={props.theme?.enableSystem ?? true}
-        enableColorScheme
+        enableColorScheme={props.forcedTheme == null}
         storageKey={props.theme?.storageKey ?? "theme"}
         disableTransitionOnChange
         forcedTheme={props.forcedTheme ?? props.theme?.forcedTheme}

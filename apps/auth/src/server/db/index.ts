@@ -1,8 +1,5 @@
-import { drizzle } from "drizzle-orm/d1";
+import { createD1Client } from "sqlfu";
 import { env } from "../env.ts";
-import * as schema from "./schema.ts";
 
-export const db = drizzle(env.DB, { casing: "snake_case", schema });
+export const db = createD1Client(env.DB);
 export type DB = typeof db;
-
-export * as schema from "./schema.ts";

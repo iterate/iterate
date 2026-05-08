@@ -1,5 +1,6 @@
 import { ORPCError } from "@orpc/server";
 import { os, protectedMiddleware } from "../orpc.ts";
+import { listOrganizationsForUser } from "../../db/queries/index.ts";
 import { toMembershipRole, toUserRecord } from "./_shared.ts";
 
 const me = os.user.me.handler(async ({ context }) => {
@@ -17,17 +18,14 @@ const me = os.user.me.handler(async ({ context }) => {
 const myOrganizations = os.user.myOrganizations
   .use(protectedMiddleware)
   .handler(async ({ context }) => {
-    const memberships = await context.db.query.member.findMany({
-      where: (member, { eq }) => eq(member.userId, context.user.id),
-      with: {
-        organization: true,
-      },
+    const memberships = await listOrganizationsForUser(context.db, {
+      userId: context.user.id,
     });
 
     return memberships.map((membership) => ({
-      id: membership.organization.id,
-      name: membership.organization.name,
-      slug: membership.organization.slug,
+      id: membership.id,
+      name: membership.name,
+      slug: membership.slug,
       role: toMembershipRole(membership.role),
     }));
   });

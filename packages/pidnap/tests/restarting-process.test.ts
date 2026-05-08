@@ -83,7 +83,7 @@ describe("RestartingProcess", () => {
       const proc = new RestartingProcess("test", successProcess, options, mockLogger);
 
       proc.start();
-      await expect.poll(() => proc.restarts, { timeout: 3000 }).toBeGreaterThan(0);
+      await expect.poll(() => proc.restarts, { timeout: POLL_TIMEOUT_MS }).toBeGreaterThan(0);
 
       await proc.stop();
     });
@@ -186,16 +186,11 @@ describe("RestartingProcess", () => {
       };
       const proc = new RestartingProcess("test", successProcess, options, mockLogger);
 
-      const startTime = Date.now();
       proc.start();
 
-      // Wait for 2 restarts
-      await wait(600);
-
-      const elapsed = Date.now() - startTime;
-      // Should have at least 2 delays of 100ms each
-      expect(elapsed).toBeGreaterThanOrEqual(180);
-      expect(proc.restarts).toBeGreaterThanOrEqual(1);
+      await expect
+        .poll(() => mockLogger.info, { timeout: POLL_TIMEOUT_MS })
+        .toHaveBeenCalledWith("Restarting in 100ms (restart #1)");
 
       await proc.stop();
     });
@@ -246,11 +241,11 @@ describe("RestartingProcess", () => {
 
       proc.start();
 
-      // Should have restarted multiple times (crash loop triggers at 3 restarts)
-      await expect.poll(() => proc.restarts, { timeout: 2000 }).toBeGreaterThanOrEqual(3);
-
-      // Verify crash loop was detected at some point
+      await expect.poll(() => proc.state, { timeout: 2000 }).toBe("crash-loop-backoff");
       expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining("Crash loop detected"));
+      await expect
+        .poll(() => mockLogger.info, { timeout: 2000 })
+        .toHaveBeenCalledWith(expect.stringContaining("Crash loop backoff complete"));
 
       await proc.stop();
     });

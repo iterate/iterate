@@ -11,22 +11,49 @@
  */
 
 import { DurableObject } from "cloudflare:workers";
+import { z } from "zod";
+import { withAppConfig } from "../mixins/with-app-config.ts";
 import {
   listD1ObjectCatalogRecordsByIndex,
   withD1ObjectCatalog,
 } from "../mixins/with-d1-object-catalog.ts";
 import { withDurableObjectCore } from "../mixins/with-durable-object-core.ts";
-import { getOrInitializeDoStub, withLifecycleHooks } from "../mixins/with-lifecycle-hooks.ts";
+import {
+  deriveDurableObjectNameFromStructuredName,
+  getOrInitializeDoStub,
+  withLifecycleHooks,
+} from "../mixins/with-lifecycle-hooks.ts";
 import { withKvInspector } from "../mixins/with-kv-inspector.ts";
 import { withMultiplexedAlarms } from "../mixins/with-multiplexed-alarms.ts";
 import { withOuterbase } from "../mixins/with-outerbase.ts";
+import {
+  registerDurableObjectPublicRoute,
+  routeDurableObjectRequest,
+  withPublicFetchRoute,
+} from "../mixins/with-public-fetch-route.ts";
 import { withScheduler } from "../mixins/with-scheduler.ts";
 import type { SchedulerRecurrence } from "../mixins/with-scheduler.ts";
 
 export type RoomInit = {
-  name: string;
   ownerUserId: string;
 };
+
+export type RoomInitialState = {
+  projectId: string;
+  plan: "free" | "pro";
+};
+
+const RoomInit = z
+  .object({
+    ownerUserId: z.string(),
+    testName: z.string().optional(),
+  })
+  .transform(({ ownerUserId }) => ({ ownerUserId }));
+
+const RoomInitialState = z.object({
+  projectId: z.string(),
+  plan: z.enum(["free", "pro"]),
+});
 
 export type SendMessageResult = {
   room: string;
@@ -47,12 +74,39 @@ type Env = {
   ROOMS: DurableObjectNamespace<InitializeTestRoom>;
   INSPECTORS: DurableObjectNamespace<InspectorTestRoom>;
   LISTED_ROOMS: DurableObjectNamespace<ListedRoom>;
+  PUBLIC_ROUTE_ROOMS: DurableObjectNamespace<PublicRouteTestRoom>;
+  APP_CONFIG_ROOMS: DurableObjectNamespace<AppConfigTestRoom>;
+  INITIAL_STATE_ROOMS: DurableObjectNamespace<InitialStateTestRoom>;
   DO_CATALOG: D1Database;
+  APP_CONFIG?: string;
+  APP_CONFIG_SERVICE_NAME?: string;
+  APP_CONFIG_FEATURE__ENABLED?: string;
 };
 
 const DurableObjectCore = withDurableObjectCore(DurableObject);
 
-const RoomBase = withLifecycleHooks<RoomInit>()(DurableObjectCore);
+const RoomBase = withLifecycleHooks({ nameSchema: RoomInit })(DurableObjectCore);
+const InitialStateRoomBase = withLifecycleHooks({
+  initialStateSchema: RoomInitialState,
+})(DurableObjectCore);
+
+export class InitialStateTestRoom extends InitialStateRoomBase<Env> {
+  getInitialStateForTest(): RoomInitialState {
+    return this.initialState;
+  }
+
+  getNameForTest(): string {
+    return this.name;
+  }
+
+  async tryInitialize(input: { name: string; initialState?: RoomInitialState }) {
+    try {
+      return await this.initialize(input);
+    } catch (error) {
+      return serializeError(error);
+    }
+  }
+}
 
 export class InitializeTestRoom extends RoomBase<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
@@ -64,46 +118,47 @@ export class InitializeTestRoom extends RoomBase<Env> {
       this.ctx.storage.kv.put("test.firstInitializeHookOwnerUserId", params.ownerUserId);
     });
 
-    this.registerOnStart(async (params) => {
-      const runs = this.ctx.storage.kv.get<number>("test.startHookRuns") ?? 0;
-      this.ctx.storage.kv.put("test.startHookRuns", runs + 1);
-      this.ctx.storage.kv.put("test.startHookStarted", true);
+    this.registerOnInstanceWake(async () => {
+      const runs = this.ctx.storage.kv.get<number>("test.instanceWakeHookRuns") ?? 0;
+      this.ctx.storage.kv.put("test.instanceWakeHookRuns", runs + 1);
+      this.ctx.storage.kv.put("test.instanceWakeHookStarted", true);
 
       // Keep this asynchronous so tests prove initialize()/ensureStarted()
       // wait for hook completion rather than fire-and-forget constructor work.
       await Promise.resolve();
 
-      if (params.name.includes("hook-fails-once")) {
-        const alreadyFailed = this.ctx.storage.kv.get<boolean>("test.startHookFailedOnce") ?? false;
+      if (this.name.includes("hook-fails-once")) {
+        const alreadyFailed =
+          this.ctx.storage.kv.get<boolean>("test.instanceWakeHookFailedOnce") ?? false;
 
         if (!alreadyFailed) {
-          this.ctx.storage.kv.put("test.startHookFailedOnce", true);
-          throw new Error("start hook failed once");
+          this.ctx.storage.kv.put("test.instanceWakeHookFailedOnce", true);
+          throw new Error("instance wake hook failed once");
         }
       }
 
-      if (params.name.includes("hook-throws-undefined")) {
+      if (this.name.includes("hook-throws-undefined")) {
         // JavaScript allows throwing any value, including `undefined`.
         // The lifecycle implementation must treat that as a real startup
         // failure rather than confusing it with the "no error captured" state.
         throw undefined;
       }
 
-      this.ctx.storage.kv.put("test.startHookFinished", true);
+      this.ctx.storage.kv.put("test.instanceWakeHookFinished", true);
     });
   }
 
   sendMessage(text: string): SendMessageResult {
-    const { name, ownerUserId } = this.initParams;
+    const { ownerUserId } = this.structuredName;
 
     return {
-      room: name,
+      room: this.name,
       ownerUserId,
       text,
     };
   }
 
-  getInitParams(): RoomInit {
+  getStructuredName(): RoomInit {
     return this.assertInitialized();
   }
 
@@ -114,19 +169,22 @@ export class InitializeTestRoom extends RoomBase<Env> {
   getLifecycleHookState(): {
     firstInitializeRuns: number;
     firstInitializeOwnerUserId: string | null;
-    startRuns: number;
-    startStarted: boolean;
-    startFinished: boolean;
-    startFailedOnce: boolean;
+    instanceWakeRuns: number;
+    instanceWakeStarted: boolean;
+    instanceWakeFinished: boolean;
+    instanceWakeFailedOnce: boolean;
   } {
     return {
       firstInitializeRuns: this.ctx.storage.kv.get<number>("test.firstInitializeHookRuns") ?? 0,
       firstInitializeOwnerUserId:
         this.ctx.storage.kv.get<string>("test.firstInitializeHookOwnerUserId") ?? null,
-      startRuns: this.ctx.storage.kv.get<number>("test.startHookRuns") ?? 0,
-      startStarted: this.ctx.storage.kv.get<boolean>("test.startHookStarted") ?? false,
-      startFinished: this.ctx.storage.kv.get<boolean>("test.startHookFinished") ?? false,
-      startFailedOnce: this.ctx.storage.kv.get<boolean>("test.startHookFailedOnce") ?? false,
+      instanceWakeRuns: this.ctx.storage.kv.get<number>("test.instanceWakeHookRuns") ?? 0,
+      instanceWakeStarted:
+        this.ctx.storage.kv.get<boolean>("test.instanceWakeHookStarted") ?? false,
+      instanceWakeFinished:
+        this.ctx.storage.kv.get<boolean>("test.instanceWakeHookFinished") ?? false,
+      instanceWakeFailedOnce:
+        this.ctx.storage.kv.get<boolean>("test.instanceWakeHookFailedOnce") ?? false,
     };
   }
 
@@ -134,14 +192,15 @@ export class InitializeTestRoom extends RoomBase<Env> {
     results: [RoomInit, RoomInit];
     hookRuns: number;
   }> {
-    const results = (await Promise.all([this.initialize(params), this.initialize(params)])) as [
+    const input = this.getInitializeInput(params);
+    const results = (await Promise.all([this.initialize(input), this.initialize(input)])) as [
       RoomInit,
       RoomInit,
     ];
 
     return {
       results,
-      hookRuns: this.getLifecycleHookState().startRuns,
+      hookRuns: this.getLifecycleHookState().instanceWakeRuns,
     };
   }
 
@@ -155,7 +214,15 @@ export class InitializeTestRoom extends RoomBase<Env> {
 
   async tryInitialize(params: RoomInit): Promise<RoomInit | CaughtErrorResult> {
     try {
-      return await this.initialize(params);
+      return await this.initialize(this.getInitializeInput(params));
+    } catch (error) {
+      return serializeError(error);
+    }
+  }
+
+  async tryInitializeName(input: { name: string }): Promise<RoomInit | CaughtErrorResult> {
+    try {
+      return await this.initialize(input);
     } catch (error) {
       return serializeError(error);
     }
@@ -167,6 +234,64 @@ export class InitializeTestRoom extends RoomBase<Env> {
     } catch (error) {
       return serializeError(error);
     }
+  }
+
+  private getInitializeInput(params: RoomInit): { name: string } {
+    const runtimeName = this.getDurableObjectName();
+    if (runtimeName !== undefined) {
+      return { name: runtimeName };
+    }
+
+    return {
+      name: deriveDurableObjectNameFromStructuredName({ structuredName: params }),
+    };
+  }
+}
+
+const PublicRouteRoomBase = withPublicFetchRoute({
+  namespaceSlug: "public-route-rooms",
+  defaultAddressing: "by-structured-name",
+})(withLifecycleHooks({ nameSchema: RoomInit })(DurableObjectCore));
+
+export class PublicRouteTestRoom extends PublicRouteRoomBase<Env> {
+  async fetch(request: Request): Promise<Response> {
+    await this.ensureStarted();
+    const init = this.assertInitialized();
+
+    const url = new URL(request.url);
+    const bodyText =
+      request.method === "GET" || request.method === "HEAD" ? null : await request.text();
+
+    return json({
+      durableObjectName: this.name,
+      ownerUserId: init.ownerUserId,
+      pathname: url.pathname,
+      search: url.search,
+      method: request.method,
+      bodyText,
+    });
+  }
+
+  getIdStringForTest(): string {
+    return this.getDurableObjectId().toString();
+  }
+
+  getStructuredNameForTest(): RoomInit {
+    return this.assertInitialized();
+  }
+
+  getPublicPathsForTest(): {
+    defaultPath: string;
+    byNamePath: string;
+    byIdPath: string;
+    byStructuredNamePath: string;
+  } {
+    return {
+      defaultPath: this.getPublicDurableObjectPath(),
+      byNamePath: this.getPublicDurableObjectPath({ mode: "by-name" }),
+      byIdPath: this.getPublicDurableObjectPath({ mode: "by-id" }),
+      byStructuredNamePath: this.getPublicDurableObjectPath({ mode: "by-structured-name" }),
+    };
   }
 }
 
@@ -180,16 +305,16 @@ const ListedRoomBase = withD1ObjectCatalog<RoomInit, Env>({
       return params.ownerUserId;
     },
   },
-})(withLifecycleHooks<RoomInit>()(DurableObjectCore));
+})(withLifecycleHooks({ nameSchema: RoomInit })(DurableObjectCore));
 
 export class ListedRoom extends ListedRoomBase<Env> {
-  getInitParams(): RoomInit {
+  getStructuredName(): RoomInit {
     return this.assertInitialized();
   }
 }
 
 const AlarmRoomBase = withMultiplexedAlarms<RoomInit>()(
-  withLifecycleHooks<RoomInit>()(DurableObjectCore),
+  withLifecycleHooks({ nameSchema: RoomInit })(DurableObjectCore),
 );
 
 export class AlarmTestRoom extends AlarmRoomBase<Env> {
@@ -338,7 +463,9 @@ export class AlarmTestRoom extends AlarmRoomBase<Env> {
   }
 }
 
-const AlarmForwardingLifecycleBase = withLifecycleHooks<RoomInit>()(DurableObjectCore);
+const AlarmForwardingLifecycleBase = withLifecycleHooks({ nameSchema: RoomInit })(
+  DurableObjectCore,
+);
 
 class AlarmForwardingRoot<FinalEnv> extends AlarmForwardingLifecycleBase<FinalEnv> {
   async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
@@ -369,7 +496,9 @@ export class AlarmForwardingTestRoom extends AlarmForwardingRoomBase<Env> {
 }
 
 const SchedulerRoomBase = withScheduler<RoomInit>()(
-  withMultiplexedAlarms<RoomInit>()(withLifecycleHooks<RoomInit>()(DurableObjectCore)),
+  withMultiplexedAlarms<RoomInit>()(
+    withLifecycleHooks({ nameSchema: RoomInit })(DurableObjectCore),
+  ),
 );
 
 export class SchedulerTestRoom extends SchedulerRoomBase<Env> {
@@ -622,8 +751,57 @@ export class InspectorTestRoom extends InspectorBase<Env> {
   }
 }
 
+const TestAppConfig = z.object({
+  serviceName: z.string().trim().min(1),
+  feature: z.object({
+    enabled: z.boolean(),
+    limit: z.number(),
+  }),
+  integrations: z.object({
+    posthog: z.object({
+      projectApiKey: z.string().trim().min(1),
+      captureEndpoint: z.url(),
+      sampling: z.object({
+        enabled: z.boolean(),
+        rate: z.number(),
+      }),
+    }),
+  }),
+  limits: z.object({
+    queue: z.object({
+      maxBatchSize: z.number(),
+      tags: z.array(z.string()),
+    }),
+  }),
+  optionalText: z.string().default("default-text"),
+});
+
+type TestAppConfig = z.output<typeof TestAppConfig>;
+
+const AppConfigRoomBase = withAppConfig(TestAppConfig)(DurableObjectCore);
+
+export class AppConfigTestRoom extends AppConfigRoomBase<Env> {
+  getConfigForTest(): TestAppConfig {
+    return this.config;
+  }
+
+  getConfigReferenceStableForTest(): boolean {
+    return this.config === this.config;
+  }
+}
+
 export default {
   async fetch(request, env): Promise<Response> {
+    const routedDurableObjectResponse = await routeDurableObjectRequest(request, [
+      registerDurableObjectPublicRoute({
+        namespace: env.PUBLIC_ROUTE_ROOMS,
+        class: PublicRouteTestRoom,
+      }),
+    ]);
+    if (routedDurableObjectResponse !== undefined) {
+      return routedDurableObjectResponse;
+    }
+
     const url = new URL(request.url);
     const inspectorMatch = url.pathname.match(/^\/inspectors\/([^/]+)(\/.*)$/);
 
@@ -671,16 +849,10 @@ export default {
       const name = decodeURIComponent(rawName);
 
       if (request.method === "POST" && action === "initialize") {
-        const body = await request.json<Partial<RoomInit>>();
-        const stub = await getOrInitializeDoStub({
-          namespace: env.LISTED_ROOMS,
-          name,
-          initParams: {
-            ownerUserId: requireString(body.ownerUserId, "ownerUserId"),
-          },
-        });
+        const stub = env.LISTED_ROOMS.getByName(name);
+        await stub.initialize({ name });
 
-        return json(await stub.getInitParams());
+        return json(await stub.getStructuredName());
       }
 
       if (request.method === "GET" && action === "catalog") {
@@ -700,11 +872,7 @@ export default {
       const stub = env.ALARM_ROOMS.getByName(name);
 
       if (request.method === "POST" && action === "initialize") {
-        const body = await request.json<Partial<RoomInit>>();
-        const initialized = await stub.initialize({
-          name,
-          ownerUserId: requireString(body.ownerUserId, "ownerUserId"),
-        });
+        const initialized = await stub.initialize({ name });
 
         return json(initialized);
       }
@@ -763,11 +931,7 @@ export default {
       const stub = env.SCHEDULE_ROOMS.getByName(name);
 
       if (request.method === "POST" && action === "initialize") {
-        const body = await request.json<Partial<RoomInit>>();
-        const initialized = await stub.initialize({
-          name,
-          ownerUserId: requireString(body.ownerUserId, "ownerUserId"),
-        });
+        const initialized = await stub.initialize({ name });
 
         return json(initialized);
       }
@@ -836,13 +1000,12 @@ export default {
         const body = await request.json<Partial<RoomInit>>();
         const stub = await getOrInitializeDoStub({
           namespace: env.ROOMS,
-          name,
-          initParams: {
+          name: {
             ownerUserId: requireString(body.ownerUserId, "ownerUserId"),
           },
         });
 
-        return json(await stub.getInitParams());
+        return json(await stub.getStructuredName());
       }
 
       if (request.method === "POST" && action === "message") {
@@ -866,7 +1029,7 @@ export default {
       if (request.method === "GET" && action === "init") {
         const stub = env.ROOMS.getByName(name);
 
-        return json(await stub.getInitParams());
+        return json(await stub.getStructuredName());
       }
 
       return json({ error: "Not found" }, { status: 404 });

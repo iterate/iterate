@@ -13,7 +13,7 @@ export default defineConfig({
   },
   test: {
     // Route `/api2/test` is implemented as `api2.test.ts` — not a Vitest file.
-    exclude: [...defaultExclude, "**/src/routes/**/*.test.ts"],
+    exclude: [...defaultExclude, "e2e/**", "**/src/routes/**/*.test.ts", "**/*.workerd.test.ts"],
     fileParallelism: false,
     pool: "forks",
     hookTimeout: 60_000,

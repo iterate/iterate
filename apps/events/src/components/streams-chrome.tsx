@@ -1,8 +1,7 @@
 import { createContext, useContext, useMemo, useState, type PropsWithChildren } from "react";
 import { ChevronDownIcon, InfoIcon } from "lucide-react";
 import { useLocation } from "@tanstack/react-router";
-import { type StreamPath } from "@iterate-com/events-contract";
-import { Badge } from "@iterate-com/ui/components/badge";
+import { type StreamPath } from "@iterate-com/shared/streams/types";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   DropdownMenu,
@@ -14,14 +13,16 @@ import {
   DropdownMenuTrigger,
 } from "@iterate-com/ui/components/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
+import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { streamPathFromPathname } from "~/lib/stream-links.ts";
 import { streamRendererModeOptions, type StreamRendererMode } from "~/lib/stream-feed-types.ts";
-import type { StreamFeedSummary } from "~/lib/stream-feed-summary.ts";
+import { type StreamFeedViewMode } from "~/lib/stream-view-search.ts";
 
 type StreamHeaderControls = {
   rendererMode: StreamRendererMode;
   onRendererModeChange?: (mode: StreamRendererMode) => void;
-  feedSummary?: StreamFeedSummary;
+  feedViewMode: StreamFeedViewMode;
+  onFeedViewModeChange?: (mode: StreamFeedViewMode) => void;
 };
 
 type StreamsChromeContextValue = {
@@ -87,19 +88,23 @@ export function StreamsHeaderAction() {
     streamRendererModeOptions[0];
 
   return (
-    <div className="flex items-center gap-2">
-      {headerControls.feedSummary ? (
-        <div className="hidden lg:flex">
-          <Badge
-            variant="outline"
-            className="px-1.5 font-mono text-[10px] font-normal tabular-nums text-muted-foreground"
-            aria-label={`${headerControls.feedSummary.rawEvents} event${headerControls.feedSummary.rawEvents === 1 ? "" : "s"} in stream`}
-          >
-            {headerControls.feedSummary.rawEvents}{" "}
-            {headerControls.feedSummary.rawEvents === 1 ? "event" : "events"}
-          </Badge>
-        </div>
-      ) : null}
+    <div className="flex min-w-0 items-center gap-1.5 sm:gap-2">
+      <Tabs
+        value={headerControls.feedViewMode}
+        onValueChange={(value) =>
+          headerControls.onFeedViewModeChange?.(value as StreamFeedViewMode)
+        }
+      >
+        <TabsList className="h-8">
+          <TabsTrigger value="current" className="px-2 text-xs">
+            Current
+          </TabsTrigger>
+          <TabsTrigger value="clean" className="px-2 text-xs">
+            Clean
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
+
       {/* shadcn/ui's Dropdown Menu radio group is a better fit than Select here
           because the options need short explanations, not just terse labels.
           First-party docs: https://github.com/shadcn-ui/ui/blob/main/apps/v4/content/docs/components/base/dropdown-menu.mdx */}
@@ -109,14 +114,14 @@ export function StreamsHeaderAction() {
             <Button
               variant="outline"
               size="sm"
-              className="min-w-56 justify-between gap-2 text-left"
+              className="w-24 min-w-0 justify-between gap-2 text-left max-[359px]:w-8 max-[359px]:justify-center max-[359px]:px-0 sm:w-56"
             />
           }
         >
-          <span className="truncate">{selectedRendererMode.label}</span>
+          <span className="truncate max-[359px]:sr-only">{selectedRendererMode.label}</span>
           <ChevronDownIcon className="size-4 text-muted-foreground" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-80">
+        <DropdownMenuContent align="end" className="w-[min(20rem,calc(100vw-1rem))]">
           <DropdownMenuGroup>
             <DropdownMenuLabel>Renderer mode</DropdownMenuLabel>
             <DropdownMenuRadioGroup

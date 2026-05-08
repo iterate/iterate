@@ -1,5 +1,12 @@
 {
-  "include": ["**/*.ts", "**/*.tsx", "**/*.d.ts", "alchemy.run.ts"],
+  "include": ["**/*.ts", "**/*.tsx", "**/*.d.ts"],
+  "exclude": [
+    "alchemy.run.ts",
+    "tmp/**",
+    "**/*.workerd.test.ts",
+    "src/durable-objects/*.test.ts",
+    "../../packages/shared/src/alchemy/**"
+  ],
   "compilerOptions": {
     "target": "ES2024",
     "jsx": "react-jsx",
@@ -7,6 +14,7 @@
     "paths": {
       "~/*": ["./src/*"],
       "@iterate-com/ui/*": ["../../packages/ui/src/*"],
+      "@iterate-com/shared/*": ["../../packages/shared/src/*"],
       "@iterate-com/shared/posthog/vite-plugin": [
         "../../packages/shared/src/posthog/sourcemaps-vite-plugin.ts"
       ]

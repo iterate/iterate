@@ -10,6 +10,7 @@ import type {
   InitializeTestRoom,
   InspectorTestRoom,
   ListedRoom,
+  PublicRouteTestRoom,
   SchedulerTestRoom,
 } from "../test-harness/initialize-fronting-worker.ts";
 
@@ -97,6 +98,11 @@ const listedRooms = DurableObjectNamespace<ListedRoom>("listed-rooms", {
   // The listed room combines local SQLite-backed init state with a D1 mirror.
   sqlite: true,
 });
+const publicRouteRooms = DurableObjectNamespace<PublicRouteTestRoom>("public-route-rooms", {
+  className: "PublicRouteTestRoom",
+  // Public route tests exercise named/id/structured-name addressing through stub.fetch().
+  sqlite: true,
+});
 const catalog = await D1Database("catalog", {
   name: `${workerName}-catalog`,
   // E2E stages are intentionally reusable by name. `adopt` lets reruns cleanly
@@ -114,6 +120,7 @@ export const worker = await Worker(APP_NAME, {
     SCHEDULE_ROOMS: scheduleRooms,
     INSPECTORS: inspectors,
     LISTED_ROOMS: listedRooms,
+    PUBLIC_ROUTE_ROOMS: publicRouteRooms,
     DO_CATALOG: catalog,
   },
   entrypoint: "./src/durable-object-utils/test-harness/initialize-fronting-worker.ts",

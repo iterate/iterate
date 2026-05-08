@@ -7,9 +7,9 @@ where custom_hostname = ?
 limit 1;
 `.trim();
 const query = (params: getProjectByCustomHostname.Params) => ({
+  name: "getProjectByCustomHostname",
   sql,
   args: [params.customHostname],
-  name: "getProjectByCustomHostname",
 });
 
 export const getProjectByCustomHostname = Object.assign(

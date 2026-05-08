@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
-import { StreamPath } from "@iterate-com/events-contract";
+import { StreamPath } from "@iterate-com/shared/streams/types";
 import {
   createEvents2AppFixture,
   createEvents2ProjectAppFixture,
-  defaultE2EProjectSlug,
+  defaultE2ENamespace,
   requireEventsBaseUrl,
   supportsProjectHostRouting,
 } from "../helpers.ts";
@@ -13,12 +13,12 @@ const eventsBaseUrl = requireEventsBaseUrl();
 const publicApp = createEvents2AppFixture({
   baseURL: eventsBaseUrl,
 });
-const teamProjectSlug = "team-a";
+const teamNamespace = "team-a";
 const teamApp = createEvents2ProjectAppFixture({
   baseURL: eventsBaseUrl,
-  projectSlug: teamProjectSlug,
+  namespace: teamNamespace,
 });
-const defaultProjectSlug = defaultE2EProjectSlug;
+const defaultNamespace = defaultE2ENamespace;
 const projectHostTest = supportsProjectHostRouting(eventsBaseUrl) ? test : test.skip;
 const testTimeoutMs = 20_000;
 
@@ -37,7 +37,7 @@ describe("events auth-adjacent e2e", () => {
           },
           body: JSON.stringify({
             type: "https://events.iterate.com/events/example/value-recorded",
-            payload: { scope: defaultProjectSlug },
+            payload: { scope: defaultNamespace },
           }),
         },
       );
@@ -48,7 +48,7 @@ describe("events auth-adjacent e2e", () => {
         },
         body: JSON.stringify({
           type: "https://events.iterate.com/events/example/value-recorded",
-          payload: { scope: teamProjectSlug },
+          payload: { scope: teamNamespace },
         }),
       });
 
@@ -63,11 +63,11 @@ describe("events auth-adjacent e2e", () => {
       );
 
       expect(await defaultProjectStateResponse.json()).toMatchObject({
-        projectSlug: defaultProjectSlug,
+        namespace: defaultNamespace,
         path,
       });
       expect(await projectStateResponse.json()).toMatchObject({
-        projectSlug: teamProjectSlug,
+        namespace: teamNamespace,
         path,
       });
 
@@ -76,18 +76,18 @@ describe("events auth-adjacent e2e", () => {
       );
       expect(defaultProjectHistoryResponse.status).toBe(200);
       const defaultProjectHistoryText = await defaultProjectHistoryResponse.text();
-      expect(defaultProjectHistoryText).toContain(`"projectSlug":"${defaultProjectSlug}"`);
-      expect(defaultProjectHistoryText).toContain(`"scope":"${defaultProjectSlug}"`);
-      expect(defaultProjectHistoryText).not.toContain(`"scope":"${teamProjectSlug}"`);
+      expect(defaultProjectHistoryText).toContain(`"namespace":"${defaultNamespace}"`);
+      expect(defaultProjectHistoryText).toContain(`"scope":"${defaultNamespace}"`);
+      expect(defaultProjectHistoryText).not.toContain(`"scope":"${teamNamespace}"`);
 
       const projectHistoryResponse = await teamApp.fetch(
         `/api/streams/${routePathFor(path)}?beforeOffset=end`,
       );
       expect(projectHistoryResponse.status).toBe(200);
       const projectHistoryText = await projectHistoryResponse.text();
-      expect(projectHistoryText).toContain(`"projectSlug":"${teamProjectSlug}"`);
-      expect(projectHistoryText).toContain(`"scope":"${teamProjectSlug}"`);
-      expect(projectHistoryText).not.toContain(`"scope":"${defaultProjectSlug}"`);
+      expect(projectHistoryText).toContain(`"namespace":"${teamNamespace}"`);
+      expect(projectHistoryText).toContain(`"scope":"${teamNamespace}"`);
+      expect(projectHistoryText).not.toContain(`"scope":"${defaultNamespace}"`);
     },
     testTimeoutMs,
   );
@@ -100,13 +100,13 @@ describe("events auth-adjacent e2e", () => {
 
       expect(publicRootStateResponse.status).toBe(200);
       expect(await publicRootStateResponse.json()).toMatchObject({
-        projectSlug: defaultProjectSlug,
+        namespace: defaultNamespace,
         path: "/",
       });
 
       expect(teamRootStateResponse.status).toBe(200);
       expect(await teamRootStateResponse.json()).toMatchObject({
-        projectSlug: teamProjectSlug,
+        namespace: teamNamespace,
         path: "/",
       });
     },

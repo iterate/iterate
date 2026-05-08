@@ -7,7 +7,8 @@ import { http, HttpResponse } from "@iterate-com/mock-http-proxy";
  *
  * Returning 405 matches servers that do not expose SSE on GET; the SDK treats that as normal and continues with POST only.
  *
- * URLs must match `publicMcpServers` in `apps/agents/src/durable-objects/iterate-agent.ts`.
+ * URLs must match the default MCP tool provider events configured by the
+ * agents app.
  */
 export const mcpStreamableHttpGetStubHandlers = [
   http.get(

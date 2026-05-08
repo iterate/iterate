@@ -1,4 +1,4 @@
-import { Event } from "@iterate-com/events-contract";
+import { Event } from "@iterate-com/shared/streams/types";
 import { createEventsOrpcClient } from "~/lib/events-orpc-client.ts";
 import type { AppContext } from "~/context.ts";
 
@@ -18,7 +18,7 @@ export async function handleEventsForwardedPost(args: {
 
   const eventsClient = createEventsOrpcClient({
     baseUrl: args.context.config.eventsBaseUrl,
-    projectSlug: args.context.config.eventsProjectSlug,
+    projectId: args.context.config.eventsProjectSlug,
   });
 
   await eventsClient.append({

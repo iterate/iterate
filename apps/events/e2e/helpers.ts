@@ -2,17 +2,14 @@ import { setTimeout as delay } from "node:timers/promises";
 import { createORPCClient } from "@orpc/client";
 import type { ContractRouterClient } from "@orpc/contract";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
-import {
-  ProjectSlug,
-  eventsContract,
-  type EventInput,
-  type StreamPath,
-} from "@iterate-com/events-contract";
-import { defaultProjectSlug, getProjectUrl } from "../src/lib/project-slug.ts";
+import { eventsContract } from "@iterate-com/events-contract";
+import { type EventInput, type StreamPath } from "@iterate-com/shared/streams/types";
+import { defaultNamespace, getNamespaceUrl, Namespace } from "../src/lib/namespace.ts";
 
 export type Events2Client = ContractRouterClient<typeof eventsContract>;
-export const defaultE2EProjectSlug = defaultProjectSlug;
-export const scopedE2EProjectSlug = "test";
+export const defaultE2ENamespace = defaultNamespace;
+export const scopedE2ENamespace = "test";
+const numberedEventsPreviewHostnamePattern = /^events\.iterate-preview-\d+\.com$/;
 
 export type Events2AppFixture = {
   baseURL: string;
@@ -57,25 +54,33 @@ export function createEvents2AppFixture(args: { baseURL: string }): Events2AppFi
   };
 }
 
-export function getEventsProjectBaseUrl(args: { baseURL: string; projectSlug: string }) {
-  return getProjectUrl({
+export function getEventsProjectBaseUrl(args: { baseURL: string; namespace: string }) {
+  return getNamespaceUrl({
     currentUrl: args.baseURL,
-    projectSlug: ProjectSlug.parse(args.projectSlug),
+    namespace: Namespace.parse(args.namespace),
   })
     .toString()
     .replace(/\/+$/, "");
 }
 
-export function createEvents2ProjectAppFixture(args: { baseURL: string; projectSlug: string }) {
+export function createEvents2ProjectAppFixture(args: { baseURL: string; namespace: string }) {
   return createEvents2AppFixture({
     baseURL: getEventsProjectBaseUrl(args),
   });
 }
 
 export function supportsProjectHostRouting(baseURL: string) {
+  const hostname = new URL(baseURL).hostname;
+
+  // Numbered preview zones currently have TLS for `*.iterate-preview-N.com`,
+  // not the nested `*.events.iterate-preview-N.com` project hosts.
+  if (numberedEventsPreviewHostnamePattern.test(hostname)) {
+    return false;
+  }
+
   return (
-    new URL(getEventsProjectBaseUrl({ baseURL, projectSlug: scopedE2EProjectSlug })).hostname !==
-    new URL(baseURL).hostname
+    new URL(getEventsProjectBaseUrl({ baseURL, namespace: scopedE2ENamespace })).hostname !==
+    hostname
   );
 }
 

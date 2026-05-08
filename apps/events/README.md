@@ -7,7 +7,7 @@ Cloudflare-only: TanStack Start + oRPC + Drizzle on D1, Alchemy + Vite.
 - **API:** oRPC at `/api`; optional WebSocket oRPC at `/api/orpc-ws`
 - **Frontend:** TanStack Start + Router + Query
 - **DB:** Drizzle + D1 (`src/entry.workerd.ts`). The **Secrets** UI stores values in D1 **as plaintext** (demo only — not a production secret manager).
-- **Secrets:** Doppler project `events` (see repo `doppler.yaml`). `DOPPLER_CONFIG` is injected by `doppler run`, and `_shared` defines `ALCHEMY_STAGE=${DOPPLER_CONFIG}`. Today we use `dev`, personal dev configs like `dev_jonas`, and `prd` only. Local: `doppler setup --project events --config dev_jonas` (or `dev_misha` / `dev_rahul`). Deploy uses `--config prd`. Non-local Alchemy state is stored in Cloudflare, so Doppler also needs `ALCHEMY_STATE_TOKEN`.
+- **Secrets:** Doppler project `events` (see repo `doppler.yaml`). `DOPPLER_CONFIG` is injected by `doppler run`, and `_shared` defines `ALCHEMY_STAGE=${DOPPLER_CONFIG}`. Local uses personal dev configs like `dev_jonas`; PR previews use numbered `preview_N` configs with routed hosts like `events.iterate-preview-N.com`; production uses `prd`. Non-local Alchemy state is stored in Cloudflare, so Doppler also needs `ALCHEMY_STATE_TOKEN`.
 
 ## Key files
 
@@ -30,3 +30,26 @@ pnpm alchemy:down  # run `alchemy.run.ts --destroy`; caller supplies env
 ## Contract
 
 [`apps/events-contract`](../events-contract) — `src/orpc/orpc.ts` implements it.
+
+## Stream Durable Object binding
+
+`packages/shared/src/streams` is the source of truth for stream event shapes and
+the `StreamDurableObject` implementation. `apps/events-contract` only describes
+the Events app oRPC surface. The shared durable object is initialized with
+`{ namespace, path }`; Events keeps its POC project host routing as an
+app-level namespace choice rather than making the shared runtime know about
+Projects.
+
+Deployed Events Workers should not create an independent production stream
+namespace. They bind `STREAM` to the OS2 Worker script's exported
+`StreamDurableObject` with:
+
+```bash
+DEPLOYMENT_CONFIG_STREAM_DURABLE_OBJECT_BINDING_SCRIPT_NAME=os2-prd
+```
+
+Preview configs use the matching OS2 preview script name, for example
+`os2-preview-2`. Local and isolated runtime tests may omit the setting; in that
+case `alchemy.run.ts` creates a local namespace from the same shared
+`StreamDurableObject` class so the app can still run without a deployed OS2
+Worker.

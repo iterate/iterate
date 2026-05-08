@@ -9,8 +9,7 @@ import { yaml } from "@codemirror/lang-yaml";
 import { foldService } from "@codemirror/language";
 import { search, searchKeymap } from "@codemirror/search";
 import { keymap } from "@codemirror/view";
-import { vsCodeDark, vsCodeLight } from "@fsegurai/codemirror-theme-bundle";
-import { useTheme } from "next-themes";
+import { vsCodeLight } from "@fsegurai/codemirror-theme-bundle";
 import { toast } from "sonner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import { cn } from "@iterate-com/ui/lib/utils";
@@ -161,7 +160,6 @@ export function SourceCodeBlock({
   onModEnter,
 }: SourceCodeBlockProps) {
   const [copied, setCopied] = useState(false);
-  const { resolvedTheme } = useTheme();
 
   const extensions = useMemo<CodeMirrorProps["extensions"]>(() => {
     const languageExtension =
@@ -175,7 +173,7 @@ export function SourceCodeBlock({
 
     return [
       basicSetup,
-      resolvedTheme === "dark" ? vsCodeDark : vsCodeLight,
+      vsCodeLight,
       languageExtension,
       search({ top: true }),
       foldPromptBlocks(),
@@ -183,7 +181,7 @@ export function SourceCodeBlock({
       EditorView.contentAttributes.of({ tabindex: "0" }),
       wrapLongLines ? EditorView.lineWrapping : [],
     ];
-  }, [language, resolvedTheme, wrapLongLines]);
+  }, [language, wrapLongLines]);
 
   const handleCopy = async () => {
     try {

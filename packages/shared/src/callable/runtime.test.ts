@@ -1,6 +1,7 @@
 import { env, exports as workerExports } from "cloudflare:workers";
 import { describe, expect, test, vi } from "vitest";
 import {
+  assertCallableDispatchContext,
   connectCallableWebSocket,
   dispatchCallable,
   dispatchCallableFetch,
@@ -371,6 +372,63 @@ describe("callable validation", () => {
         },
       }),
     ).toThrow("Invalid callable");
+  });
+});
+
+describe("callable dispatch context validation", () => {
+  test("accepts loopback bindings when the dispatch context has matching exports", () => {
+    expect(
+      assertCallableDispatchContext({
+        callable: {
+          type: "workers-rpc",
+          via: {
+            type: "loopback-binding",
+            bindingType: "service",
+            exportName: "CallableLoopbackService",
+            props: { tenantId: "tenant_loopback" },
+          },
+          rpcMethod: "echo",
+        },
+        ctx: { exports: workerExports },
+      }),
+    ).toMatchObject({
+      type: "workers-rpc",
+      via: { type: "loopback-binding" },
+    });
+  });
+
+  test("rejects loopback bindings when the dispatch context has no exports", () => {
+    expect(() =>
+      assertCallableDispatchContext({
+        callable: {
+          type: "workers-rpc",
+          via: {
+            type: "loopback-binding",
+            bindingType: "service",
+            exportName: "CallableLoopbackService",
+          },
+          rpcMethod: "echo",
+        },
+        ctx: {},
+      }),
+    ).toThrow("Loopback export");
+  });
+
+  test("rejects missing env bindings in the dispatch context", () => {
+    expect(() =>
+      assertCallableDispatchContext({
+        callable: {
+          type: "workers-rpc",
+          via: {
+            type: "env-binding",
+            bindingType: "service",
+            bindingName: "MISSING_SERVICE",
+          },
+          rpcMethod: "echo",
+        },
+        ctx: { env: testEnv },
+      }),
+    ).toThrow('Binding "MISSING_SERVICE" not found');
   });
 });
 
@@ -1390,6 +1448,26 @@ describe("dispatchCallableFetch", () => {
     });
   });
 
+  test("calls URL fetch with the runtime global as this", async () => {
+    const response = await dispatchCallableFetch({
+      callable: {
+        type: "fetch",
+        via: { type: "url", url: "https://api.example.com/v1" },
+      },
+      request: new Request("https://router.local/users"),
+      ctx: {
+        fetch: function (this: unknown, request: Request) {
+          if (this !== globalThis) throw new TypeError("Illegal invocation");
+          return Response.json({ url: request.url });
+        } as typeof globalThis.fetch,
+      },
+    });
+
+    await expect(response.json()).resolves.toEqual({
+      url: "https://api.example.com/v1/users",
+    });
+  });
+
   test("uses fetch path replace when the base URL path is the complete target path", async () => {
     const response = await dispatchCallableFetch({
       callable: {
@@ -1850,6 +1928,30 @@ describe("connectCallableWebSocket", () => {
       retryable: false,
       details: { status: 403, statusText: "Forbidden" },
     });
+  });
+
+  test("preserves public URL callable query parameters on the upgrade request", async () => {
+    let requestUrl: string | undefined;
+
+    await expect(
+      connectCallableWebSocket({
+        callable: {
+          type: "fetch",
+          via: { type: "url", url: "https://api.example.com/socket?streamPath=%2Fdemo&token=abc" },
+        },
+        ctx: {
+          fetch: async (request) => {
+            requestUrl = request.url;
+            return new Response("forbidden", { status: 403, statusText: "Forbidden" });
+          },
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "TRANSPORT_FAILED",
+      retryable: false,
+    });
+
+    expect(requestUrl).toBe("https://api.example.com/socket?streamPath=%2Fdemo&token=abc");
   });
 
   test("connects through a Durable Object fetch callable", async () => {

@@ -419,7 +419,18 @@ const plugin = {
               ];
               /** @type {string[]} Full specifier must match (anchored in code). */
               const ALLOWED_RUNTIME_IMPORT_REGEX = [
-                // Reserved for one-off imports that are not expressible as a safe prefix.
+                // OS2's contract needs to share event-stream and codemode wire
+                // schemas with the services that persist/execute those payloads.
+                // These exact entrypoints are Zod schema modules on their runtime
+                // paths; do not broaden to the package prefixes without checking
+                // for Node/server transitive imports first.
+                "@iterate-com/events-contract",
+                // Events contract needs Callable payload schemas for browser-visible
+                // wire types. This exact module is descriptor-only: Zod plus local
+                // validation helpers, with no Worker/Node runtime authority.
+                "@iterate-com/shared/callable/descriptor-types\\.ts",
+                "@iterate-com/shared/codemode/types",
+                "@iterate-com/shared/streams/types",
               ];
               const compiledRegex = ALLOWED_RUNTIME_IMPORT_REGEX.map(
                 (pattern) => new RegExp(`^${pattern}$`),

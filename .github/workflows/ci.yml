@@ -9,19 +9,11 @@ on:
   push:
     branches:
       - main
-  workflow_dispatch:
-    inputs:
-      stage:
-        description: The stage to deploy to. Must correspond to a Doppler config in the os project (prd, stg, dev, dev_bob etc.).
-        required: false
-        type: string
+  workflow_dispatch: {}
 jobs:
   variables:
-    runs-on: ubuntu-24.04
+    runs-on: depot-ubuntu-24.04-32
     steps:
-      - id: get_env
-        name: Get environment variables
-        run: echo stage=${{ inputs.stage || 'prd' }} >> $GITHUB_OUTPUT
       - name: Document rollout strategy
         run: |-
           cat <<'EOF' >> "$GITHUB_STEP_SUMMARY"
@@ -31,23 +23,18 @@ jobs:
           3. Run Fly sandbox tests against the new image.
           4. If tests pass, update Doppler FLY_DEFAULT_IMAGE and deploy OS worker again.
           EOF
-    outputs:
-      stage: ${{ steps.get_env.outputs.stage }}
   deploy-os-early:
     uses: ./.github/workflows/deploy.yml
     needs:
       - variables
-    if: needs.variables.outputs.stage == 'prd'
     secrets: inherit
     with:
-      stage: ${{ needs.variables.outputs.stage }}
       deploy_iterate_com: false
   build-sandbox-image:
     uses: ./.github/workflows/build-sandbox-image.yml
     needs:
       - variables
       - deploy-os-early
-    if: needs.variables.outputs.stage == 'prd'
     secrets: inherit
     with:
       doppler_config: prd
@@ -58,7 +45,6 @@ jobs:
     needs:
       - variables
       - build-sandbox-image
-    if: needs.variables.outputs.stage == 'prd'
     uses: ./.github/workflows/sandbox-test-fly.yml
     secrets: inherit
     with:
@@ -69,8 +55,7 @@ jobs:
       - variables
       - build-sandbox-image
       - test-sandbox-fly
-    if: needs.variables.outputs.stage == 'prd'
-    runs-on: ubuntu-24.04
+    runs-on: depot-ubuntu-24.04-32
     steps:
       - name: Install Doppler CLI
         run: |-
@@ -86,8 +71,8 @@ jobs:
           FLY_IMAGE_TAG: ${{ needs.build-sandbox-image.outputs.fly_image_tag }}
         run: |-
           set -euo pipefail
-          echo "Promoting FLY_DEFAULT_IMAGE=${FLY_IMAGE_TAG} to dev/stg/prd"
-          for cfg in dev stg prd; do
+          echo "Promoting FLY_DEFAULT_IMAGE=${FLY_IMAGE_TAG} to os dev/preview/prd base configs"
+          for cfg in dev preview prd; do
             doppler secrets set FLY_DEFAULT_IMAGE="${FLY_IMAGE_TAG}" --project os --config "${cfg}"
           done
   deploy:
@@ -98,10 +83,7 @@ jobs:
       - build-sandbox-image
       - test-sandbox-fly
       - promote-fly-default-image
-    if: needs.variables.outputs.stage == 'prd'
     secrets: inherit
-    with:
-      stage: ${{ needs.variables.outputs.stage }}
   slack_failure:
     needs:
       - variables
@@ -111,7 +93,7 @@ jobs:
       - promote-fly-default-image
       - deploy
     if: always() && contains(needs.*.result, 'failure')
-    runs-on: ubuntu-24.04
+    runs-on: depot-ubuntu-24.04-32
     env:
       NEEDS: ${{ toJson(needs) }}
     steps:

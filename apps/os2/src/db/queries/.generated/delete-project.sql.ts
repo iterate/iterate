@@ -4,7 +4,7 @@ const sql = `
 delete from projects
 where id = ?;
 `.trim();
-const query = (params: deleteProject.Params) => ({ sql, args: [params.id], name: "deleteProject" });
+const query = (params: deleteProject.Params) => ({ name: "deleteProject", sql, args: [params.id] });
 
 export const deleteProject = Object.assign(
   async function deleteProject(client: Client, params: deleteProject.Params) {

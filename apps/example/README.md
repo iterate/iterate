@@ -6,7 +6,7 @@ Minimal full-stack app: TanStack Start + oRPC over OpenAPI/HTTP + Drizzle, dual-
 
 - **API:** oRPC over OpenAPI/HTTP at `/api`
 - **Confetti:** websocket at `/api/confetti`
-- **Durable Object:** counter demo at `/api/durable-counter` with WebSocket sync at `/api/durable-counter/websocket`
+- **Durable Object:** counter demo at `/durable-objects`, with individual counters at `/counters/:name` and public Durable Object routes under `/durable-objects/counters/...`
 - **Frontend:** TanStack Start in SPA mode + TanStack Router + TanStack Query
 - **DB:** Drizzle ORM — better-sqlite3 (Node), D1 (Workers). Shared `BaseSQLiteDatabase<"sync" | "async">` type.
 - **Observability:** Node and Workers both use the shared `withEvlog()` runtime wrapper; shared `useEvlog()` only enriches a request-scoped log
@@ -76,9 +76,16 @@ the shared `withEvlog()` wrapper in the runtime entrypoints rather than Nitro's
 ## Dev
 
 ```bash
-doppler run --config stg -- pnpm alchemy:up    # staging-style deploy
-doppler run --config prd -- pnpm alchemy:up    # production-style deploy
-doppler run --config stg -- pnpm alchemy:down  # destroy the staging stack
+# Normal preview lifecycle is managed from the repo root:
+# doppler run --project os --config prd -- pnpm preview sync --pull-request-number 1234
+#
+# A direct preview_N deploy bypasses Semaphore's environment config lease.
+# Check `pnpm preview status` first and use it only for emergency debugging.
+#
+# Lease-bypassing manual deploy:
+doppler run --project example --config preview_2 -- pnpm exec tsx ./alchemy.run.ts
+doppler run --project example --config preview_2 -- pnpm exec tsx ./alchemy.run.ts --destroy
+doppler run --project example --config prd -- pnpm exec tsx ./alchemy.run.ts
 pnpm dev          # Node dev server
 pnpm start        # Run the built server bundle and restart on rebuilds
 pnpm cf:dev       # Cloudflare local dev

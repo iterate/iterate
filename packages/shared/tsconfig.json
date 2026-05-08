@@ -18,7 +18,9 @@
     "src/**/*.test.ts",
     "src/**/*.test-d.ts",
     "src/**/old/**",
+    "src/alchemy/**",
     "src/callable/entry.workerd.vitest.ts",
-    "src/callable/vitest.config.ts"
+    "src/callable/vitest.config.ts",
+    "src/codemode/vitest.config.ts"
   ]
 }

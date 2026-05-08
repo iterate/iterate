@@ -6,9 +6,9 @@ values (?, ?, ?)
 returning id, slug, custom_hostname, metadata, created_at, updated_at;
 `.trim();
 const query = (params: insertProject.Params) => ({
+  name: "insertProject",
   sql,
   args: [params.id, params.slug, params.metadata],
-  name: "insertProject",
 });
 
 export const insertProject = Object.assign(
