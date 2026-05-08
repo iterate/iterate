@@ -9,6 +9,9 @@ import { standardProcessorBehavior } from "../core/standard-processor-behavior.t
 import { AgentChatProcessorContract, type AgentChatChannel } from "./contract.ts";
 
 type AgentChatStreamApi = ProcessorStreamApi<typeof AgentChatProcessorContract>;
+type AgentChatAppendInput = Parameters<
+  NonNullable<AgentChatStreamApi["appendBatch"]>
+>[0]["events"][number];
 
 /**
  * Backend implementation for the agent-chat processor.
@@ -22,7 +25,7 @@ export function createAgentChatProcessor() {
   return implementProcessor(AgentChatProcessorContract, {
     firstAttachAfterAppend: { mode: "lookback", milliseconds: 60_000 },
 
-    async afterAppend({ event, state, streamApi }) {
+    async afterAppend({ event, previousState, state, streamApi }) {
       await standardProcessorBehavior.afterAppend({
         contract: AgentChatProcessorContract,
         state,
@@ -33,74 +36,157 @@ export function createAgentChatProcessor() {
         case CoreProcessorRegisteredEventType:
           return;
         case "events.iterate.com/agent-chat/user-message-added":
-          await appendEventTypeExplanation({ eventType: event.type, streamApi });
-          await streamApi.append({
-            event: {
-              type: "events.iterate.com/agent/input-added",
-              idempotencyKey: buildProcessorIdempotencyKey({
-                processor: AgentChatProcessorContract,
-                key: "render-message",
-                sourceEvent: event,
-              }),
-              payload: {
-                content: eventBlock({
-                  offset: event.offset,
-                  type: event.type,
-                  channel: event.payload.channel,
-                  bodyTag: "content",
-                  body: event.payload.content,
-                }),
-              },
-            },
+          await appendAgentInputEvents({
+            streamApi,
+            events: buildAgentInputEventsForChatEvent({
+              event,
+              hasAlreadyExplained: previousState.explainedEventTypes.includes(event.type),
+            }),
           });
           return;
         case "events.iterate.com/agent-chat/assistant-response-added":
-          await appendEventTypeExplanation({ eventType: event.type, streamApi });
-          await streamApi.append({
-            event: {
-              type: "events.iterate.com/agent/input-added",
-              idempotencyKey: buildProcessorIdempotencyKey({
-                processor: AgentChatProcessorContract,
-                key: "render-response",
-                sourceEvent: event,
-              }),
-              payload: {
-                content: eventBlock({
-                  offset: event.offset,
-                  type: event.type,
-                  channel: event.payload.channel,
-                  bodyTag: "message",
-                  body: event.payload.message,
-                }),
-                triggerLlmRequest: { behaviour: "dont-trigger-request" },
-              },
-            },
+          await appendAgentInputEvents({
+            streamApi,
+            events: buildAgentInputEventsForChatEvent({
+              event,
+              hasAlreadyExplained: previousState.explainedEventTypes.includes(event.type),
+            }),
           });
           return;
         default:
           return assertNever(event);
       }
     },
+
+    async afterAppendBatch({ reductions, streamApi }) {
+      const state = reductions.at(-1)?.state;
+      if (state != null) {
+        await standardProcessorBehavior.afterAppend({
+          contract: AgentChatProcessorContract,
+          state,
+          streamApi,
+        });
+      }
+
+      const events = reductions.flatMap((reduction) => {
+        switch (reduction.event.type) {
+          case CoreProcessorRegisteredEventType:
+            return [];
+          case "events.iterate.com/agent-chat/user-message-added":
+          case "events.iterate.com/agent-chat/assistant-response-added":
+            return buildAgentInputEventsForChatEvent({
+              event: reduction.event,
+              hasAlreadyExplained: reduction.previousState.explainedEventTypes.includes(
+                reduction.event.type,
+              ),
+            });
+          default:
+            return assertNever(reduction.event);
+        }
+      });
+      if (events.length > 0) {
+        await appendAgentInputEvents({ streamApi, events });
+      }
+    },
   });
 }
 
-async function appendEventTypeExplanation(args: {
+async function appendAgentInputEvents(args: {
   streamApi: AgentChatStreamApi;
-  eventType: string;
+  events: AgentChatAppendInput[];
 }) {
-  await args.streamApi.append({
-    event: {
+  if (args.streamApi.appendBatch != null) {
+    await args.streamApi.appendBatch({ events: args.events });
+    return;
+  }
+
+  for (const event of args.events) {
+    await args.streamApi.append({ event });
+  }
+}
+
+function buildAgentInputEventsForChatEvent(args: {
+  event:
+    | {
+        offset: number;
+        type: "events.iterate.com/agent-chat/user-message-added";
+        payload: { channel: AgentChatChannel; content: string };
+      }
+    | {
+        offset: number;
+        type: "events.iterate.com/agent-chat/assistant-response-added";
+        payload: { channel: AgentChatChannel; message: string };
+      };
+  hasAlreadyExplained: boolean;
+}): AgentChatAppendInput[] {
+  const events: AgentChatAppendInput[] = [];
+  const explanation = buildEventTypeExplanation({
+    eventType: args.event.type,
+    hasAlreadyExplained: args.hasAlreadyExplained,
+  });
+  if (explanation != null) {
+    events.push(explanation);
+  }
+
+  if (args.event.type === "events.iterate.com/agent-chat/user-message-added") {
+    events.push({
       type: "events.iterate.com/agent/input-added",
       idempotencyKey: buildProcessorIdempotencyKey({
         processor: AgentChatProcessorContract,
-        key: `event-type-explainer/${args.eventType}`,
+        key: "render-message",
+        sourceEvent: args.event,
       }),
       payload: {
-        content: eventTypeExplanation(args.eventType),
+        content: eventBlock({
+          offset: args.event.offset,
+          type: args.event.type,
+          channel: args.event.payload.channel,
+          bodyTag: "content",
+          body: args.event.payload.content,
+        }),
+      },
+    });
+  } else {
+    events.push({
+      type: "events.iterate.com/agent/input-added",
+      idempotencyKey: buildProcessorIdempotencyKey({
+        processor: AgentChatProcessorContract,
+        key: "render-response",
+        sourceEvent: args.event,
+      }),
+      payload: {
+        content: eventBlock({
+          offset: args.event.offset,
+          type: args.event.type,
+          channel: args.event.payload.channel,
+          bodyTag: "message",
+          body: args.event.payload.message,
+        }),
         triggerLlmRequest: { behaviour: "dont-trigger-request" },
       },
+    });
+  }
+
+  return events;
+}
+
+function buildEventTypeExplanation(args: {
+  hasAlreadyExplained: boolean;
+  eventType: string;
+}): AgentChatAppendInput | null {
+  if (args.hasAlreadyExplained) return null;
+
+  return {
+    type: "events.iterate.com/agent/input-added",
+    idempotencyKey: buildProcessorIdempotencyKey({
+      processor: AgentChatProcessorContract,
+      key: `event-type-explainer/${args.eventType}`,
+    }),
+    payload: {
+      content: eventTypeExplanation(args.eventType),
+      triggerLlmRequest: { behaviour: "dont-trigger-request" },
     },
-  });
+  };
 }
 
 function eventTypeExplanation(eventType: string): string {

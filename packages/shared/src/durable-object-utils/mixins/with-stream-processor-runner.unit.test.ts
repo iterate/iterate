@@ -40,6 +40,12 @@ class PrototypeStreamApi implements ProcessorStreamApi<typeof TestContract> {
     return event;
   }
 
+  async appendBatch(
+    args: Parameters<NonNullable<ProcessorStreamApi<typeof TestContract>["appendBatch"]>>[0],
+  ): Promise<StreamEvent[]> {
+    return await Promise.all(args.events.map((event) => this.append({ event })));
+  }
+
   async read(): Promise<StreamEvent[]> {
     return [
       {

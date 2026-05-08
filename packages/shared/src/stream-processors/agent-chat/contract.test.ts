@@ -7,6 +7,7 @@ describe("AgentChatProcessorContract", () => {
   it("initializes its own reduced state", () => {
     expect(getInitialProcessorState(AgentChatProcessorContract)).toEqual({
       hasRegisteredCurrentVersion: false,
+      explainedEventTypes: [],
     });
   });
 

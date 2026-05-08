@@ -110,6 +110,38 @@ describe("createAgentProcessor", () => {
     expect(payload.content).not.toContain("invocation");
   });
 
+  it("does not repeatedly append codemode tool-provider event explanations after the event type was reduced", async () => {
+    const appended: StreamEventInput[] = [];
+    const processor = createAgentProcessor({
+      waitUntil: () => undefined,
+    });
+
+    await processor.implementation.afterAppend?.({
+      event: consumedAgentEvent({
+        type: "events.iterate.com/codemode/tool-provider-registered",
+        payload: {
+          instructions: "Use ctx.chat.sendMessage({ message }) for chat output.",
+          invocation: { kind: "event" },
+          path: ["chat"],
+        },
+        offset: 44,
+      }),
+      previousState: {
+        ...registeredState(),
+        explainedEventTypes: ["events.iterate.com/codemode/tool-provider-registered"],
+      },
+      state: registeredState(),
+      streamApi: testStreamApi({ appended }),
+      signal: new AbortController().signal,
+    });
+
+    expect(appended).toHaveLength(1);
+    expect(appended[0]).toMatchObject({
+      type: "events.iterate.com/agent/input-added",
+      idempotencyKey: "agent/render-codemode-tool-provider-registered@44",
+    });
+  });
+
   it("re-reads stream history before handing a scheduled LLM request to providers", async () => {
     vi.useFakeTimers();
     const appended: StreamEventInput[] = [];
@@ -186,6 +218,10 @@ function testStreamApi(args: {
     append: async ({ event }) => {
       args.appended.push(event);
       return committedEvent(event);
+    },
+    appendBatch: async ({ events }) => {
+      args.appended.push(...events);
+      return events.map((event) => committedEvent(event));
     },
     read: async () => args.readEvents ?? [],
     subscribe: async function* () {},

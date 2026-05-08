@@ -89,6 +89,7 @@ export type CodemodeSessionEnv = {
 
 type CodemodeSessionStreamApi = ProcessorStreamApi<typeof CodemodeProcessorContract> & {
   append(args: { event: EventInput; streamPath?: string }): Promise<Event>;
+  appendBatch(args: { events: EventInput[]; streamPath?: string }): Promise<Event[]>;
   read(args?: {
     streamPath?: string;
     afterOffset?: number | "start" | "end";
@@ -241,6 +242,14 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
       afterAppendCompletedThroughOffset: state.afterAppendCompletedThroughOffset,
       reducedThroughOffset: state.reducedThroughOffset,
     });
+    return state;
+  }
+
+  async afterAppendBatch(input: { events: Event[] }) {
+    let state = this.getStreamProcessorRunnerState();
+    for (const event of input.events) {
+      state = await this.afterAppend({ event });
+    }
     return state;
   }
 
@@ -524,7 +533,7 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
 
     await stream.append({
       type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      idempotencyKey: `codemode-session-callable-subscription:${this.name}`,
+      idempotencyKey: `codemode-session-callable-subscription:${this.name}:afterAppendBatch`,
       payload: {
         slug: `codemode-session:${this.name}`,
         type: "callable",
@@ -538,7 +547,7 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
               name: this.name,
             },
           },
-          rpcMethod: "afterAppend",
+          rpcMethod: "afterAppendBatch",
           argsMode: "object",
         },
       },
@@ -701,6 +710,17 @@ function processorStreamApiFromNamespace(args: {
         }),
       });
       return await stream.append(input.event as EventInput);
+    },
+    async appendBatch(input) {
+      const stream = await getInitializedStreamStub({
+        durableObjectNamespace: args.durableObjectNamespace,
+        namespace: args.namespace,
+        path: resolveProcessorStreamPath({
+          basePath: args.streamPath,
+          pathInput: input.streamPath,
+        }),
+      });
+      return await stream.appendBatch(input.events as EventInput[]);
     },
     async read(input = {}) {
       const stream = await getInitializedStreamStub({

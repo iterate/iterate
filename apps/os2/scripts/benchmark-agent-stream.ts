@@ -2,12 +2,14 @@ import { createORPCClient } from "@orpc/client";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import type { RouterClient } from "@orpc/server";
 import { osContract } from "@iterate-com/os2-contract";
+import { STREAM_SUBSCRIPTION_CONFIGURED_TYPE } from "@iterate-com/shared/streams/core-event-types";
 import type { Event, EventInput } from "@iterate-com/shared/streams/types";
 import type { appRouter } from "~/orpc/root.ts";
 
 type OrpcClient = RouterClient<typeof appRouter>;
 
 type TrafficKind = "raw-openai-ws" | "mixed-control" | "agent-chat-responses";
+type SubscriptionTransport = "rpc" | "websocket";
 
 type Options = {
   agentPath: string;
@@ -18,6 +20,7 @@ type Options = {
   payloadBytes: number;
   projectSlugOrId: string | null;
   ratePerSecond: number;
+  subscriptionTransport: SubscriptionTransport;
   terminalEvents: boolean;
   traffic: TrafficKind;
 };
@@ -52,6 +55,13 @@ async function main() {
     agentPath: options.agentPath,
     projectSlugOrId,
   });
+  if (options.subscriptionTransport === "websocket") {
+    await configureWebSocketSubscription({
+      agentPath: options.agentPath,
+      client,
+      projectSlugOrId,
+    });
+  }
 
   const appended = await appendTrafficAtRate({
     benchmarkId,
@@ -90,6 +100,7 @@ async function main() {
       lastOffset,
       terminalEventCount: terminal.length,
       traffic: options.traffic,
+      subscriptionTransport: options.subscriptionTransport,
     },
     appendLatencyMs: summarize(appended.map((item) => item.appendLatencyMs)),
     terminalAppendLatencyMs: summarize(terminal.map((item) => item.appendLatencyMs)),
@@ -191,6 +202,51 @@ async function appendTerminalEvents(input: {
     );
   }
   return appended;
+}
+
+async function configureWebSocketSubscription(input: {
+  agentPath: string;
+  client: OrpcClient;
+  projectSlugOrId: string;
+}) {
+  return await input.client.project.streams.append({
+    projectSlugOrId: input.projectSlugOrId,
+    streamPath: input.agentPath,
+    event: {
+      type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
+      idempotencyKey: `stream-processor-websocket-subscription:AGENT:${agentDurableObjectName({
+        agentPath: input.agentPath,
+        projectId: input.projectSlugOrId,
+      })}:${input.agentPath}:agent:${input.projectSlugOrId}:${input.agentPath}`,
+      payload: {
+        slug: agentSubscriptionSlug({
+          agentPath: input.agentPath,
+          projectId: input.projectSlugOrId,
+        }),
+        type: "websocket",
+        callable: {
+          type: "fetch",
+          via: {
+            type: "env-binding",
+            bindingType: "durable-object-namespace",
+            bindingName: "AGENT",
+            durableObject: {
+              name: agentDurableObjectName({
+                agentPath: input.agentPath,
+                projectId: input.projectSlugOrId,
+              }),
+            },
+          },
+          fetchRequest: {
+            path: {
+              base: "/stream-subscription",
+              mode: "replace",
+            },
+          },
+        },
+      },
+    },
+  });
 }
 
 function benchmarkEvent(input: {
@@ -441,6 +497,7 @@ function parseOptions(args: readonly string[]): Options {
     payloadBytes: numberOption(values, "payload-bytes", 64),
     projectSlugOrId: optionalStringOption(values, "project"),
     ratePerSecond: numberOption(values, "rate", 50),
+    subscriptionTransport: subscriptionTransportOption(values, "subscription-transport", "rpc"),
     terminalEvents: booleanOption(values, "terminal-events", true),
     traffic: trafficOption(values, "traffic", "raw-openai-ws"),
   };
@@ -506,9 +563,30 @@ function trafficOption(values: Map<string, string>, key: string, fallback: Traff
   throw new Error(`--${key} must be raw-openai-ws, mixed-control, or agent-chat-responses.`);
 }
 
+function subscriptionTransportOption(
+  values: Map<string, string>,
+  key: string,
+  fallback: SubscriptionTransport,
+) {
+  const value = values.get(key) ?? fallback;
+  if (value === "rpc" || value === "websocket") return value;
+  throw new Error(`--${key} must be rpc or websocket.`);
+}
+
 function requireProjectSlugOrId(value: string | null) {
   if (!value) throw new Error("--project is required when --create-project=false.");
   return value;
+}
+
+function agentSubscriptionSlug(input: { agentPath: string; projectId: string }) {
+  return `agent:${input.projectId}:${input.agentPath}`;
+}
+
+function agentDurableObjectName(input: { agentPath: string; projectId: string }) {
+  return JSON.stringify({
+    agentPath: input.agentPath,
+    projectId: input.projectId,
+  });
 }
 
 async function delay(ms: number) {

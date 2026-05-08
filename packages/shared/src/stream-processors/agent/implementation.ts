@@ -67,7 +67,7 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
   return implementProcessor(AgentProcessorContract, {
     firstAttachAfterAppend: { mode: "lookback", milliseconds: 60_000 },
 
-    async afterAppend({ event, state, streamApi }) {
+    async afterAppend({ event, previousState, state, streamApi }) {
       await standardProcessorBehavior.afterAppend({
         contract: AgentProcessorContract,
         state,
@@ -87,6 +87,7 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
             streamApi,
             event,
             key: "render-codemode-tool-provider-registered",
+            hasAlreadyExplained: previousState.explainedEventTypes.includes(event.type),
             content: toolProviderRegisteredEventBlock({
               instructions: event.payload.instructions,
               offset: event.offset,
@@ -117,6 +118,7 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
             streamApi,
             event,
             key: "render-llm-request-queued",
+            hasAlreadyExplained: previousState.explainedEventTypes.includes(event.type),
             content: eventBlock({ offset: event.offset, type: event.type }),
           });
           return;
@@ -125,6 +127,7 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
             streamApi,
             event,
             key: "render-llm-request-completed",
+            hasAlreadyExplained: previousState.explainedEventTypes.includes(event.type),
             content: eventBlock({
               offset: event.offset,
               type: event.type,
@@ -150,6 +153,7 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
             streamApi,
             event,
             key: "render-llm-request-cancelled",
+            hasAlreadyExplained: previousState.explainedEventTypes.includes(event.type),
             content: eventBlock({
               offset: event.offset,
               type: event.type,
@@ -459,12 +463,14 @@ async function emitAgentStatus(args: {
 async function appendLlmEventContext(args: {
   streamApi: AgentStreamApi;
   event: { streamPath: string; offset: number; type: string };
+  hasAlreadyExplained: boolean;
   key: string;
   content: string;
 }) {
   await appendEventTypeExplanation({
     streamApi: args.streamApi,
     eventType: args.event.type,
+    hasAlreadyExplained: args.hasAlreadyExplained,
   });
   await appendRewrite(args);
 }
@@ -491,7 +497,13 @@ async function appendRewrite(args: {
   });
 }
 
-async function appendEventTypeExplanation(args: { streamApi: AgentStreamApi; eventType: string }) {
+async function appendEventTypeExplanation(args: {
+  hasAlreadyExplained: boolean;
+  streamApi: AgentStreamApi;
+  eventType: string;
+}) {
+  if (args.hasAlreadyExplained) return;
+
   const explanation = eventTypeExplanation(args.eventType);
   if (explanation == null) return;
 

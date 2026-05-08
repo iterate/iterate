@@ -95,6 +95,54 @@ export function wrapProcessorStreamApiWithProvenance<
         },
       });
     },
+    appendBatch: async (appendArgs) => {
+      const withProvenance = appendArgs.events.map((event) => {
+        const existingMetadata = event.metadata ?? {};
+        const existingProvenance =
+          typeof existingMetadata.provenance === "object" &&
+          existingMetadata.provenance !== null &&
+          !Array.isArray(existingMetadata.provenance)
+            ? existingMetadata.provenance
+            : {};
+
+        return {
+          ...event,
+          metadata: {
+            ...existingMetadata,
+            provenance: {
+              ...existingProvenance,
+              processor: {
+                slug: processor.contract.slug,
+                version: processor.contract.version,
+              },
+              ...(processingEvent == null
+                ? {}
+                : {
+                    whileProcessingEvent: {
+                      streamPath: processingEvent.streamPath,
+                      offset: processingEvent.offset,
+                      type: processingEvent.type,
+                    },
+                  }),
+            },
+          },
+        };
+      });
+      if (streamApi.appendBatch == null) {
+        return await Promise.all(
+          withProvenance.map((event) =>
+            streamApi.append({
+              event,
+              streamPath: appendArgs.streamPath,
+            }),
+          ),
+        );
+      }
+      return await streamApi.appendBatch({
+        ...appendArgs,
+        events: withProvenance,
+      });
+    },
     read: async (readArgs) => await streamApi.read(readArgs),
     subscribe: (subscribeArgs) => streamApi.subscribe(subscribeArgs),
   };
@@ -244,9 +292,6 @@ export function withStreamProcessorRunner<
       }): Promise<StreamProcessorRunnerState<Contract>> {
         await this.ensureStarted();
         const processor = this.streamProcessorRunnerProcessor();
-        if (!processorConsumesEvent({ processor, eventType: args.event.type })) {
-          return this.loadStreamProcessorStoredState(processor);
-        }
         const storedState = this.loadStreamProcessorStoredState(processor);
 
         return await consumeLiveProcessorEvent({
@@ -402,16 +447,6 @@ export function withStreamProcessorRunner<
 
 function storageKey(processor: { contract: { slug: string } }): string {
   return `stream-processor:${processor.contract.slug}:stored-state`;
-}
-
-function processorConsumesEvent<Contract extends RunnerContract<Contract>>(args: {
-  processor: Processor<Contract>;
-  eventType: string;
-}): boolean {
-  return (
-    args.processor.contract.consumesAllEvents === true ||
-    args.processor.contract.consumes.includes(args.eventType)
-  );
 }
 
 function getStoredProcessorStateSchema<Contract extends RunnerContract<Contract>>(

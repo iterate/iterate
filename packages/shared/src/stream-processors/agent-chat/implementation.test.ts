@@ -74,6 +74,38 @@ describe("createAgentChatProcessor", () => {
       },
     });
   });
+
+  it("does not repeatedly append event-type explanations after the event type was reduced", async () => {
+    const appended: StreamEventInput[] = [];
+    const processor = createAgentChatProcessor();
+
+    await processor.implementation.afterAppend?.({
+      event: consumedAgentChatEvent({
+        type: "events.iterate.com/agent-chat/assistant-response-added",
+        payload: { channel: "web", message: "hello back" },
+        offset: 43,
+      }),
+      previousState: {
+        ...registeredState(),
+        explainedEventTypes: ["events.iterate.com/agent-chat/assistant-response-added"],
+      },
+      state: registeredState(),
+      streamApi: testStreamApi({ appended }),
+      signal: new AbortController().signal,
+    });
+
+    expect(appended).toEqual([
+      {
+        type: "events.iterate.com/agent/input-added",
+        idempotencyKey: "agent-chat/render-response@43",
+        payload: {
+          content:
+            "```yaml\nevent:\n  offset: 43\n  type: events.iterate.com/agent-chat/assistant-response-added\n  channel: web\n  message: |-\n    hello back\n```",
+          triggerLlmRequest: { behaviour: "dont-trigger-request" },
+        },
+      },
+    ]);
+  });
 });
 
 function registeredState(): AgentChatState {
@@ -90,6 +122,10 @@ function testStreamApi(args: {
     append: async ({ event }) => {
       args.appended.push(event);
       return committedEvent(event);
+    },
+    appendBatch: async ({ events }) => {
+      args.appended.push(...events);
+      return events.map((event) => committedEvent(event));
     },
     read: async () => [],
     subscribe: async function* () {},

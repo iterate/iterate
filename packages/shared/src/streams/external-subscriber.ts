@@ -82,7 +82,7 @@ export async function publishExternalSubscribers(args: {
         (subscriber) => args.subscriberTypes == null || args.subscriberTypes.has(subscriber.type),
       )
       .map((subscriber) =>
-        publishToExternalSubscriber({
+        publishExternalSubscriber({
           append: args.append,
           callableContext: args.callableContext,
           event: args.event,
@@ -91,6 +91,87 @@ export async function publishExternalSubscribers(args: {
         }),
       ),
   );
+}
+
+export async function publishExternalSubscriberBatch(args: {
+  append: (event: EventInput) => Promise<Event>;
+  callableContext: CallableContext;
+  events: readonly Event[];
+  onError?(failure: ExternalSubscriberPublishFailure): void | Promise<void>;
+  subscriber: ExternalSubscriber;
+}): Promise<{ deliveredEventCount: number; failedEventCount: number }> {
+  if (
+    args.subscriber.type === "callable" &&
+    args.subscriber.callable.type === "workers-rpc" &&
+    args.subscriber.callable.rpcMethod === "afterAppendBatch"
+  ) {
+    const events: Event[] = [];
+    let failedEventCount = 0;
+    for (const event of args.events) {
+      try {
+        if (await evaluateFilter({ event, subscriber: args.subscriber })) {
+          events.push(event);
+        }
+      } catch (error) {
+        failedEventCount += 1;
+        await args.onError?.({
+          error,
+          event,
+          subscriber: args.subscriber,
+        });
+      }
+    }
+    if (events.length === 0) {
+      return { deliveredEventCount: 0, failedEventCount };
+    }
+
+    try {
+      await dispatchCallable({
+        callable: args.subscriber.callable,
+        payload: { events },
+        ctx: args.callableContext,
+      });
+      return { deliveredEventCount: events.length, failedEventCount };
+    } catch (error) {
+      await Promise.all(
+        events.map((event) =>
+          args.onError?.({
+            error,
+            event,
+            subscriber: args.subscriber,
+          }),
+        ),
+      );
+      console.error("[stream-do] external subscriber batch publish failed", {
+        streamPath: events[0]?.streamPath,
+        subscriberSlug: args.subscriber.slug,
+        subscriberCallable: getSubscriberCallableKey(args.subscriber),
+        eventCount: events.length,
+        firstOffset: events[0]?.offset,
+        lastOffset: events.at(-1)?.offset,
+        error,
+      });
+      return { deliveredEventCount: 0, failedEventCount: failedEventCount + events.length };
+    }
+  }
+
+  let deliveredEventCount = 0;
+  let failedEventCount = 0;
+  for (const event of args.events) {
+    try {
+      await publishExternalSubscriber({
+        append: args.append,
+        callableContext: args.callableContext,
+        event,
+        onError: args.onError,
+        subscriber: args.subscriber,
+      });
+      deliveredEventCount += 1;
+    } catch {
+      failedEventCount += 1;
+    }
+  }
+  return { deliveredEventCount, failedEventCount };
 }
 
 export function hasExternalSubscribersOfType(
@@ -102,7 +183,7 @@ export function hasExternalSubscribersOfType(
   );
 }
 
-async function publishToExternalSubscriber(args: {
+export async function publishExternalSubscriber(args: {
   append: (event: EventInput) => Promise<Event>;
   callableContext: CallableContext;
   event: Event;

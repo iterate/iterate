@@ -31,6 +31,7 @@ export type StreamDurableObjectName = {
 export type StreamDurableObjectStub = {
   initialize(params: { name: string }): Promise<unknown>;
   append(event: EventInput): Promise<Event>;
+  appendBatch(events: EventInput[]): Promise<Event[]>;
   destroy(args?: { destroyChildren?: boolean }): Promise<DestroyStreamResult>;
   history(args?: { after?: StreamCursor; before?: StreamCursor }): Promise<Event[]>;
   historyIfInitialized(args?: { after?: StreamCursor; before?: StreamCursor }): Promise<Event[]>;

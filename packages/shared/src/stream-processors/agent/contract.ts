@@ -46,6 +46,7 @@ export const AgentProcessorContract = defineProcessorContract({
       ])
       .nullable()
       .default(null),
+    explainedEventTypes: z.array(z.string()).default([]),
     pendingTriggerCount: z.number().int().nonnegative().default(0),
   }),
   initialState: {
@@ -224,8 +225,9 @@ export const AgentProcessorContract = defineProcessorContract({
 
     switch (event.type) {
       case CoreProcessorRegisteredEventType:
-      case "events.iterate.com/codemode/tool-provider-registered":
         return nextState;
+      case "events.iterate.com/codemode/tool-provider-registered":
+        return markExplainedEventType({ state: nextState, eventType: event.type });
       case "events.iterate.com/agent/system-prompt-updated":
         return { ...nextState, systemPrompt: event.payload.systemPrompt };
       case "events.iterate.com/agent/input-added":
@@ -258,20 +260,31 @@ export const AgentProcessorContract = defineProcessorContract({
           currentRequest: { phase: "requested" as const, llmRequestId: event.offset },
         };
       case "events.iterate.com/agent/llm-request-completed":
-        return nextState.currentRequest?.phase === "requested" &&
-          nextState.currentRequest.llmRequestId === event.payload.llmRequestId
-          ? { ...nextState, currentRequest: null }
-          : nextState;
+        return markExplainedEventType({
+          state:
+            nextState.currentRequest?.phase === "requested" &&
+            nextState.currentRequest.llmRequestId === event.payload.llmRequestId
+              ? { ...nextState, currentRequest: null }
+              : nextState,
+          eventType: event.type,
+        });
       case "events.iterate.com/agent/llm-request-cancelled":
-        return nextState.currentRequest?.phase === "scheduled" &&
-          nextState.currentRequest.requestId === event.payload.requestId
-          ? { ...nextState, currentRequest: null }
-          : nextState;
+        return markExplainedEventType({
+          state:
+            nextState.currentRequest?.phase === "scheduled" &&
+            nextState.currentRequest.requestId === event.payload.requestId
+              ? { ...nextState, currentRequest: null }
+              : nextState,
+          eventType: event.type,
+        });
       case "events.iterate.com/agent/llm-request-queued":
-        return {
-          ...nextState,
-          pendingTriggerCount: nextState.pendingTriggerCount + 1,
-        };
+        return markExplainedEventType({
+          state: {
+            ...nextState,
+            pendingTriggerCount: nextState.pendingTriggerCount + 1,
+          },
+          eventType: event.type,
+        });
 
       // we consume these events, but they don't update our state but they do cause side-effects in the implementation
       case "events.iterate.com/agent/status-updated":
@@ -281,6 +294,17 @@ export const AgentProcessorContract = defineProcessorContract({
     }
   },
 });
+
+function markExplainedEventType<State extends { explainedEventTypes: string[] }>(args: {
+  state: State;
+  eventType: string;
+}): State {
+  if (args.state.explainedEventTypes.includes(args.eventType)) return args.state;
+  return {
+    ...args.state,
+    explainedEventTypes: [...args.state.explainedEventTypes, args.eventType],
+  };
+}
 
 export function reduceAgentEvents(args: {
   events: readonly StreamEvent[];

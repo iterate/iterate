@@ -15,6 +15,13 @@ const ProjectScopedInput = z.object({
   projectSlugOrId: z.string(),
 });
 const AgentLlmProvider = z.enum(["openai-ws", "cloudflare-ai"]);
+const AgentStreamBenchmarkTraffic = z.enum([
+  "raw-openai-ws",
+  "mixed-control",
+  "agent-chat-responses",
+]);
+const AgentStreamBenchmarkSubscriptionTransport = z.enum(["rpc", "websocket"]);
+const AgentStreamBenchmarkPublisher = z.enum(["app-worker", "agent-durable-object"]);
 const AgentPresetEvent = z.object({
   type: z.string().trim().min(1),
   payload: z.record(z.string(), z.unknown()),
@@ -460,6 +467,27 @@ export const osContract = oc.router({
           tags: ["/project", "/agents"],
         })
         .input(ProjectScopedInput.extend({ agentPath: StreamPath }))
+        .output(z.unknown()),
+      benchmarkStream: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectSlugOrId}/agents/benchmark-stream/{+agentPath}",
+          description: "Server-side benchmark for agent stream append and processor delivery",
+          tags: ["/project", "/agents", "/debug"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            agentPath: StreamPath,
+            concurrency: z.number().int().positive().max(100).default(10),
+            count: z.number().int().positive().max(2_000).default(200),
+            payloadBytes: z.number().int().nonnegative().max(32_000).default(64),
+            publisher: AgentStreamBenchmarkPublisher.default("app-worker"),
+            ratePerSecond: z.number().positive().max(2_000).default(50),
+            subscriptionTransport: AgentStreamBenchmarkSubscriptionTransport.default("rpc"),
+            terminalEvents: z.boolean().default(true),
+            traffic: AgentStreamBenchmarkTraffic.default("raw-openai-ws"),
+          }),
+        )
         .output(z.unknown()),
     },
     inboundMcpServer: {

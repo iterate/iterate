@@ -63,6 +63,7 @@ type RuntimeProcessorReduction = {
 
 type RuntimeProcessorStreamApi = Omit<ProcessorStreamApi<unknown>, "append"> & {
   append(args: { event: EventInput; streamPath?: string }): Promise<StreamEvent>;
+  appendBatch(args: { events: EventInput[]; streamPath?: string }): Promise<StreamEvent[]>;
 };
 
 type StreamProcessorOptions<StructuredName extends LifecycleStructuredName, Env> = {
@@ -102,6 +103,7 @@ export abstract class StreamProcessorProtected {
   protected ensureStreamProcessorCallableSubscription(_args: {
     bindingName: string;
     durableObjectName: string;
+    rpcMethod?: string;
     slug: string;
     streamPath: StreamPath | string;
   }): Promise<StreamEvent> {
@@ -117,6 +119,13 @@ export abstract class StreamProcessorProtected {
 
   protected consumeStreamProcessorEvent(_args: {
     event: StreamEvent;
+    signal?: AbortSignal;
+  }): Promise<StreamProcessorRuntimeEntry[]> {
+    throw new Error("StreamProcessorProtected is type-only and should never run.");
+  }
+
+  protected consumeStreamProcessorEvents(_args: {
+    events: StreamEvent[];
     signal?: AbortSignal;
   }): Promise<StreamProcessorRuntimeEntry[]> {
     throw new Error("StreamProcessorProtected is type-only and should never run.");
@@ -185,14 +194,16 @@ export function withStreamProcessor<
       protected async ensureStreamProcessorCallableSubscription(args: {
         bindingName: string;
         durableObjectName: string;
+        rpcMethod?: string;
         slug: string;
         streamPath: StreamPath | string;
       }): Promise<StreamEvent> {
         await this.ensureStarted();
+        const rpcMethod = args.rpcMethod ?? "afterAppend";
         return await this.streamApiForPath(args.streamPath).append({
           event: {
             type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-            idempotencyKey: `stream-processor-callable-subscription:${args.bindingName}:${args.durableObjectName}:${args.streamPath}:${args.slug}`,
+            idempotencyKey: `stream-processor-callable-subscription:${args.bindingName}:${args.durableObjectName}:${args.streamPath}:${args.slug}:${rpcMethod}`,
             payload: {
               slug: args.slug,
               type: "callable",
@@ -206,7 +217,7 @@ export function withStreamProcessor<
                     name: args.durableObjectName,
                   },
                 },
-                rpcMethod: "afterAppend",
+                rpcMethod,
                 argsMode: "object",
               } satisfies Callable,
             },
@@ -275,9 +286,29 @@ export function withStreamProcessor<
         const signal = args.signal ?? new AbortController().signal;
         await Promise.all(
           [...this.#processors.values()].map(async (processor) => {
-            if (!processorConsumesEvent({ processor, eventType: args.event.type })) return;
             await this.consumeForProcessor({
               event: args.event,
+              processor,
+              signal,
+            });
+          }),
+        );
+        return this.runtimeEntries();
+      }
+
+      protected async consumeStreamProcessorEvents(args: {
+        events: StreamEvent[];
+        signal?: AbortSignal;
+      }): Promise<StreamProcessorRuntimeEntry[]> {
+        await this.ensureStarted();
+        for (const event of args.events) {
+          this.recordLocalDelivery(event);
+        }
+        const signal = args.signal ?? new AbortController().signal;
+        await Promise.all(
+          [...this.#processors.values()].map(async (processor) => {
+            await this.consumeBatchForProcessor({
+              events: args.events,
               processor,
               signal,
             });
@@ -340,6 +371,116 @@ export function withStreamProcessor<
           processor: args.processor,
           signal: args.signal,
           storedState,
+        });
+      }
+
+      private async consumeBatchForProcessor(args: {
+        events: StreamEvent[];
+        processor: RegisteredProcessor;
+        signal: AbortSignal;
+      }) {
+        let storedState = this.loadStoredState({
+          processor: args.processor,
+          streamPath: args.events[0]?.streamPath ?? "",
+        });
+        const reductions: RuntimeProcessorReduction[] = [];
+
+        for (const event of args.events) {
+          if (event.offset <= storedState.afterAppendCompletedThroughOffset) {
+            continue;
+          }
+
+          if (event.offset < storedState.reducedThroughOffset) {
+            await this.appendProcessorError({
+              error: new Error(
+                `Received event offset ${event.offset} after ${args.processor.contract.slug} had reduced through offset ${storedState.reducedThroughOffset}.`,
+              ),
+              event,
+              processor: args.processor,
+            });
+            continue;
+          }
+
+          if (event.offset > storedState.reducedThroughOffset + 1) {
+            const gapEvents = await this.streamApiForPath(event.streamPath).read({
+              afterOffset: storedState.reducedThroughOffset,
+              beforeOffset: event.offset,
+            });
+            for (const gapEvent of gapEvents) {
+              const consumed = await this.reduceOneEvent({
+                event: gapEvent,
+                processor: args.processor,
+                storedState,
+              });
+              storedState = consumed.storedState;
+              if (consumed.reduction != null) {
+                reductions.push(consumed.reduction);
+              }
+            }
+          }
+
+          const consumed = await this.reduceOneEvent({
+            event,
+            processor: args.processor,
+            storedState,
+          });
+          storedState = consumed.storedState;
+          if (consumed.reduction != null) {
+            reductions.push(consumed.reduction);
+          }
+        }
+
+        if (reductions.length === 0) {
+          return;
+        }
+
+        try {
+          if (args.processor.implementation.afterAppendBatch != null) {
+            await runProcessorAfterAppendBatchRuntime({
+              processor: args.processor,
+              reductions,
+              streamApi: this.streamApiForProcessor({
+                processingEvent: reductions.at(-1)?.event,
+                processor: args.processor,
+                streamPath: args.events[0]!.streamPath,
+              }),
+              signal: args.signal,
+              waitUntil: (promise) => this.waitUntilStreamProcessor(promise),
+            });
+          } else {
+            for (const reduction of reductions) {
+              await runProcessorAfterAppendRuntime({
+                processor: args.processor,
+                ...reduction,
+                streamApi: this.streamApiForProcessor({
+                  processingEvent: reduction.event,
+                  processor: args.processor,
+                  streamPath: reduction.event.streamPath,
+                }),
+                signal: args.signal,
+                waitUntil: (promise) => this.waitUntilStreamProcessor(promise),
+              });
+            }
+          }
+        } catch (error) {
+          await this.appendProcessorError({
+            error,
+            event: reductions.at(-1)!.event,
+            processor: args.processor,
+          });
+        }
+
+        storedState = {
+          ...storedState,
+          afterAppendCompletedThroughOffset: Math.max(
+            storedState.afterAppendCompletedThroughOffset,
+            reductions.at(-1)!.event.offset,
+          ),
+        };
+        this.saveStoredState({
+          processor: args.processor,
+          storedState,
+          streamPath: args.events[0]!.streamPath,
         });
       }
 
@@ -410,6 +551,37 @@ export function withStreamProcessor<
         return storedState;
       }
 
+      private async reduceOneEvent(args: {
+        event: StreamEvent;
+        processor: RegisteredProcessor;
+        storedState: RuntimeStoredProcessorState;
+      }): Promise<{
+        reduction: RuntimeProcessorReduction | null;
+        storedState: RuntimeStoredProcessorState;
+      }> {
+        const reduction = reduceProcessorRuntime({
+          processor: args.processor,
+          event: args.event,
+          state: args.storedState.state,
+        });
+        const storedState: RuntimeStoredProcessorState = {
+          ...args.storedState,
+          state: reduction?.state ?? args.storedState.state,
+          reducedThroughOffset: Math.max(args.storedState.reducedThroughOffset, args.event.offset),
+          afterAppendCompletedThroughOffset:
+            reduction == null
+              ? Math.max(args.storedState.afterAppendCompletedThroughOffset, args.event.offset)
+              : args.storedState.afterAppendCompletedThroughOffset,
+        };
+        this.saveStoredState({
+          processor: args.processor,
+          storedState,
+          streamPath: args.event.streamPath,
+        });
+
+        return { reduction: reduction ?? null, storedState };
+      }
+
       private loadStoredState(args: {
         processor: RegisteredProcessor;
         streamPath: StreamPath | string;
@@ -467,6 +639,26 @@ export function withStreamProcessor<
               processorSlug: args.processor.contract.slug,
             });
             return event;
+          },
+          appendBatch: async (appendArgs) => {
+            const events = await streamApi.appendBatch({
+              ...appendArgs,
+              events: appendArgs.events.map((event) => ({
+                ...event,
+                metadata: addProcessorProvenance({
+                  event,
+                  processor: args.processor,
+                  processingEvent: args.processingEvent,
+                }),
+              })) as EventInput[],
+            });
+            for (const event of events) {
+              this.#localAppendTimes.set(localAppendKey(event), {
+                appendedAtMs: Date.now(),
+                processorSlug: args.processor.contract.slug,
+              });
+            }
+            return events;
           },
           read: async (readArgs) => await streamApi.read(readArgs),
           subscribe: (subscribeArgs) => streamApi.subscribe(subscribeArgs),
@@ -569,16 +761,6 @@ function parseStorageKey(key: string): { processorSlug: string; streamPath: stri
   };
 }
 
-function processorConsumesEvent(args: {
-  processor: RegisteredProcessor;
-  eventType: string;
-}): boolean {
-  return (
-    args.processor.contract.consumesAllEvents === true ||
-    args.processor.contract.consumes.includes(args.eventType)
-  );
-}
-
 function localAppendKey(event: Pick<StreamEvent, "offset" | "streamPath">) {
   return `${event.streamPath}:${event.offset}`;
 }
@@ -651,6 +833,29 @@ async function runProcessorAfterAppendRuntime(args: {
     event: args.event,
     previousState: args.previousState,
     state: args.state,
+    streamApi: args.streamApi,
+    signal: args.signal,
+    waitUntil: args.waitUntil,
+  });
+}
+
+async function runProcessorAfterAppendBatchRuntime(args: {
+  processor: RegisteredProcessor;
+  reductions: RuntimeProcessorReduction[];
+  streamApi: RuntimeProcessorStreamApi;
+  signal: AbortSignal;
+  waitUntil: (promise: Promise<unknown>) => void;
+}) {
+  const afterAppendBatch = args.processor.implementation.afterAppendBatch as
+    | ((input: {
+        reductions: RuntimeProcessorReduction[];
+        streamApi: RuntimeProcessorStreamApi;
+        signal: AbortSignal;
+        waitUntil: (promise: Promise<unknown>) => void;
+      }) => Promise<void> | void)
+    | undefined;
+  await afterAppendBatch?.({
+    reductions: args.reductions,
     streamApi: args.streamApi,
     signal: args.signal,
     waitUntil: args.waitUntil,

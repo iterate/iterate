@@ -24,6 +24,7 @@ export const AgentChatProcessorContract = defineProcessorContract({
   description: "Renders chat ingress and visible responses into model-visible agent input.",
   stateSchema: z.object({
     ...standardProcessorBehavior.stateShape,
+    explainedEventTypes: z.array(z.string()).default([]),
   }),
   initialState: {
     ...standardProcessorBehavior.initialState,
@@ -60,9 +61,15 @@ export const AgentChatProcessorContract = defineProcessorContract({
 
     switch (event.type) {
       case CoreProcessorRegisteredEventType:
+        return nextState;
       case "events.iterate.com/agent-chat/user-message-added":
       case "events.iterate.com/agent-chat/assistant-response-added":
-        return nextState;
+        return {
+          ...nextState,
+          explainedEventTypes: nextState.explainedEventTypes.includes(event.type)
+            ? nextState.explainedEventTypes
+            : [...nextState.explainedEventTypes, event.type],
+        };
       default:
         return assertNever(event);
     }

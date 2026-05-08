@@ -20,6 +20,7 @@ describe("AgentProcessorContract", () => {
       },
       currentRequest: null,
       pendingTriggerCount: 0,
+      explainedEventTypes: [],
     });
   });
 

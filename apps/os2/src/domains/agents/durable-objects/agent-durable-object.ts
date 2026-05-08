@@ -11,6 +11,10 @@ import {
   type CloudflareAiProcessorDeps,
   createCloudflareAiProcessor,
 } from "@iterate-com/shared/stream-processors/cloudflare-ai/implementation";
+import {
+  StreamSocketErrorFrame,
+  StreamSocketEventFrame,
+} from "@iterate-com/shared/streams/stream-socket-types";
 import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
 import type { ExecuteCodemodeFunctionCallInput } from "@iterate-com/shared/stream-processors/codemode/implementation";
 import {
@@ -42,6 +46,11 @@ import {
   selectAgentPathPrefixPreset,
   type AgentLlmProvider,
 } from "~/domains/agents/agent-presets.ts";
+import {
+  appendAgentStreamBenchmarkTerminalEvents,
+  appendAgentStreamBenchmarkTraffic,
+  type AgentStreamBenchmarkOptions,
+} from "~/domains/agents/agent-stream-benchmark.ts";
 
 export const AGENTS_STREAM_PATH = StreamPath.parse("/agents");
 
@@ -76,6 +85,7 @@ type AgentStreamApi = ProcessorStreamApi<{
   processorDeps?: readonly unknown[];
 }> & {
   append(args: { event: EventInput; streamPath?: string }): Promise<Event>;
+  appendBatch(args: { events: EventInput[]; streamPath?: string }): Promise<Event[]>;
   read(args?: {
     streamPath?: string;
     afterOffset?: StreamCursor;
@@ -134,12 +144,40 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
   }
 
   async afterAppend(input: { event: Event }) {
+    return await this.processAppendedStreamEvent(input.event);
+  }
+
+  async afterAppendBatch(input: { events: Event[] }) {
     await this.ensureStarted();
-    const state = await this.consumeStreamProcessorEvent({ event: input.event as StreamEvent });
-    await this.ensureChildAgentRunner(input.event);
-    await this.handleAgentOutputAddedForCodemode(input.event);
-    await this.handleCodemodeScriptExecutionCompleted(input.event);
-    return state;
+    return await this.consumeStreamProcessorEvents({ events: input.events as StreamEvent[] });
+  }
+
+  async fetch(request: Request): Promise<Response> {
+    if (new URL(request.url).pathname !== "/stream-subscription") {
+      return new Response("Not found", { status: 404 });
+    }
+    if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+      return new Response("Expected WebSocket upgrade", { status: 426 });
+    }
+
+    await this.ensureStarted();
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
+    server.accept();
+
+    let processing = Promise.resolve();
+    server.addEventListener("message", (messageEvent) => {
+      processing = processing
+        .then(() => this.handleStreamSubscriptionSocketMessage({ messageEvent, socket: server }))
+        .catch((error) => {
+          sendSocketError(server, error instanceof Error ? error.message : String(error));
+        });
+    });
+
+    return new Response(null, {
+      status: 101,
+      webSocket: client,
+    } as ResponseInit & { webSocket: WebSocket });
   }
 
   async getRuntimeState() {
@@ -186,10 +224,65 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     return { event };
   }
 
+  async runStreamBenchmark(input: {
+    options: AgentStreamBenchmarkOptions;
+    terminalEvents: boolean;
+  }) {
+    const params = await this.ensureStarted();
+    const stream = this.streamsEntrypoint(params.agentPath);
+    const appended = await appendAgentStreamBenchmarkTraffic({
+      append: async (event) => await stream.append({ event }),
+      options: input.options,
+    });
+    const terminal = input.terminalEvents
+      ? await appendAgentStreamBenchmarkTerminalEvents({
+          append: async (event) => await stream.append({ event }),
+          benchmarkId: input.options.benchmarkId,
+        })
+      : [];
+    return { appended, terminal };
+  }
+
+  private async processAppendedStreamEvent(event: Event) {
+    await this.ensureStarted();
+    const state = await this.consumeStreamProcessorEvent({ event: event as StreamEvent });
+    await this.ensureChildAgentRunner(event);
+    await this.handleAgentOutputAddedForCodemode(event);
+    await this.handleCodemodeScriptExecutionCompleted(event);
+    return state;
+  }
+
+  private async handleStreamSubscriptionSocketMessage(input: {
+    messageEvent: MessageEvent;
+    socket: WebSocket;
+  }) {
+    if (typeof input.messageEvent.data !== "string") {
+      sendSocketError(input.socket, "Expected text WebSocket frame.");
+      return;
+    }
+
+    let raw: unknown;
+    try {
+      raw = JSON.parse(input.messageEvent.data);
+    } catch {
+      sendSocketError(input.socket, "Expected JSON WebSocket frame.");
+      return;
+    }
+
+    const frame = StreamSocketEventFrame.safeParse(raw);
+    if (!frame.success) {
+      sendSocketError(input.socket, "Expected stream event WebSocket frame.");
+      return;
+    }
+
+    await this.processAppendedStreamEvent(frame.data.event);
+  }
+
   private async ensureAgentSubscription(params: AgentDurableObjectStructuredName) {
     await this.ensureStreamProcessorCallableSubscription({
       bindingName: "AGENT",
       durableObjectName: this.name,
+      rpcMethod: "afterAppendBatch",
       slug: `agent:${params.projectId}:${params.agentPath}`,
       streamPath: params.agentPath,
     });
@@ -484,6 +577,17 @@ function agentStreamApiFromNamespace(args: {
       });
       return await stream.append(input.event);
     },
+    async appendBatch(input) {
+      const stream = await getInitializedStreamStub({
+        durableObjectNamespace: args.durableObjectNamespace,
+        namespace: args.namespace,
+        path: resolveProcessorStreamPath({
+          basePath: args.streamPath,
+          pathInput: input.streamPath,
+        }),
+      });
+      return await stream.appendBatch(input.events);
+    },
     async read(input = {}) {
       const stream = await getInitializedStreamStub({
         durableObjectNamespace: args.durableObjectNamespace,
@@ -564,6 +668,19 @@ function parseChatToolMessage(value: unknown) {
     throw new Error("ctx.chat.sendMessage requires a non-empty message string.");
   }
   return message;
+}
+
+function sendSocketError(socket: WebSocket, message: string) {
+  try {
+    socket.send(
+      JSON.stringify(
+        StreamSocketErrorFrame.parse({
+          type: "error",
+          message,
+        }),
+      ),
+    );
+  } catch {}
 }
 
 type CloudflareSocketEventName = "open" | "message" | "close" | "error" | string;
