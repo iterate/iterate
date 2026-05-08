@@ -67,6 +67,7 @@ const CALLABLE_SUBSCRIBER_CURSOR_KEY_PREFIX = "stream-do:callable-subscriber-cur
 const CALLABLE_SUBSCRIBER_ALARM_BATCH_SIZE = 500;
 const CALLABLE_SUBSCRIBER_ALARM_MAX_BATCHES = 50;
 const CALLABLE_SUBSCRIBER_DIAGNOSTIC_LIMIT = 20;
+const APPEND_BATCH_DIAGNOSTIC_LIMIT = 20;
 const NON_CALLABLE_SUBSCRIBERS = new Set(["webhook", "websocket"] as const);
 const IDEMPOTENCY_DIAGNOSTIC_LIMIT = 50;
 
@@ -111,6 +112,21 @@ type CallableSubscriberDeliveryAttemptDiagnostic = {
   filterDurationMs: number;
   historyEventCount: number;
   subscriberSlug: string;
+};
+
+type AppendBatchDiagnostic = {
+  afterAppendDurationMs: number;
+  buildReduceDurationMs: number;
+  commitDurationMs: number;
+  committedEventCount: number;
+  completedAtMs: number;
+  duplicateEventCount: number;
+  error?: string;
+  firstCommittedOffset: number | null;
+  inputEventCount: number;
+  lastCommittedOffset: number | null;
+  parseDurationMs: number;
+  totalDurationMs: number;
 };
 
 const StreamDurableObjectLifecycleBase = withD1ObjectCatalog<
@@ -162,6 +178,7 @@ const StreamDurableObjectBase = withPublicFetchRoute({
 export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableObjectEnv> {
   private _state: StreamState | null = null;
   private readonly client: SyncClient;
+  private readonly appendBatchDiagnostics: AppendBatchDiagnostic[] = [];
   private readonly callableSubscriberDeliveries: CallableSubscriberDeliveryDiagnostic[] = [];
   private readonly idempotencyDuplicates = new Map<string, IdempotencyDuplicateDiagnostic>();
   private readonly subscribers = new Set<ReadableStreamDefaultController<Uint8Array>>();
@@ -323,70 +340,106 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
   }
 
   appendBatch(inputEvents: EventInput[]): Event[] {
-    const inputs = inputEvents.map((inputEvent) => EventInput.parse(inputEvent));
-    this.ensureInitializedStreamStorage();
-
-    let nextState = this.state;
+    const startedAt = performance.now();
+    let afterAppendDurationMs = 0;
+    let buildReduceDurationMs = 0;
+    let commitDurationMs = 0;
+    let parseDurationMs = 0;
+    let inputs: EventInput[] = [];
     const results: Event[] = [];
     const committedEvents: { event: Event; stateAfterEvent: StreamState }[] = [];
-    const pendingEventsByIdempotencyKey = new Map<string, Event>();
+    let errorMessage: string | undefined;
 
-    for (const input of inputs) {
-      if (input.idempotencyKey != null) {
-        const existingEvent =
-          pendingEventsByIdempotencyKey.get(input.idempotencyKey) ??
-          this.getEventByIdempotencyKey(input.idempotencyKey);
-        if (existingEvent != null) {
-          this.recordIdempotencyDuplicate({
-            attemptedEvent: input,
-            existingEvent,
-            idempotencyKey: input.idempotencyKey,
-          });
-          results.push(existingEvent);
-          continue;
+    try {
+      const parseStartedAt = performance.now();
+      inputs = inputEvents.map((inputEvent) => EventInput.parse(inputEvent));
+      parseDurationMs = Math.round(performance.now() - parseStartedAt);
+      this.ensureInitializedStreamStorage();
+
+      let nextState = this.state;
+      const pendingEventsByIdempotencyKey = new Map<string, Event>();
+
+      const buildReduceStartedAt = performance.now();
+      for (const input of inputs) {
+        if (input.idempotencyKey != null) {
+          const existingEvent =
+            pendingEventsByIdempotencyKey.get(input.idempotencyKey) ??
+            this.getEventByIdempotencyKey(input.idempotencyKey);
+          if (existingEvent != null) {
+            this.recordIdempotencyDuplicate({
+              attemptedEvent: input,
+              existingEvent,
+              idempotencyKey: input.idempotencyKey,
+            });
+            results.push(existingEvent);
+            continue;
+          }
         }
-      }
 
-      const nextOffset = this.beforeAppend(input, nextState);
-      const event = {
-        streamPath: nextState.path,
-        ...input,
-        offset: nextOffset,
-        createdAt: new Date().toISOString(),
-      };
-      nextState = this.reduce(event, nextState);
-      if (event.idempotencyKey != null) {
-        pendingEventsByIdempotencyKey.set(event.idempotencyKey, event);
-      }
-      results.push(event);
-      committedEvents.push({ event, stateAfterEvent: nextState });
-    }
-
-    if (committedEvents.length === 0) {
-      return results;
-    }
-
-    this.client.transaction((tx) => {
-      for (const { event } of committedEvents) {
-        insertEvent(tx, {
-          offset: event.offset,
-          type: event.type,
-          payload: JSON.stringify(event.payload),
-          metadata: event.metadata === undefined ? null : JSON.stringify(event.metadata),
-          idempotencyKey: event.idempotencyKey ?? null,
-          createdAt: event.createdAt,
+        const nextOffset = this.beforeAppend(input, nextState);
+        const event = Event.parse({
+          streamPath: nextState.path,
+          ...input,
+          offset: nextOffset,
+          createdAt: new Date().toISOString(),
         });
+        nextState = this.reduce(event, nextState);
+        if (event.idempotencyKey != null) {
+          pendingEventsByIdempotencyKey.set(event.idempotencyKey, event);
+        }
+        results.push(event);
+        committedEvents.push({ event, stateAfterEvent: nextState });
       }
-      upsertReducedState(tx, { json: JSON.stringify(nextState) });
-    });
+      buildReduceDurationMs = Math.round(performance.now() - buildReduceStartedAt);
 
-    for (const { event, stateAfterEvent } of committedEvents) {
-      this._state = stateAfterEvent;
-      this.afterAppend(event);
+      if (committedEvents.length === 0) {
+        return results;
+      }
+
+      const commitStartedAt = performance.now();
+      this.client.transaction((tx) => {
+        for (const { event } of committedEvents) {
+          insertEvent(tx, {
+            offset: event.offset,
+            type: event.type,
+            payload: JSON.stringify(event.payload),
+            metadata: event.metadata === undefined ? null : JSON.stringify(event.metadata),
+            idempotencyKey: event.idempotencyKey ?? null,
+            createdAt: event.createdAt,
+          });
+        }
+        upsertReducedState(tx, { json: JSON.stringify(nextState) });
+      });
+      commitDurationMs = Math.round(performance.now() - commitStartedAt);
+
+      const afterAppendStartedAt = performance.now();
+      for (const { event, stateAfterEvent } of committedEvents) {
+        this._state = stateAfterEvent;
+        this.afterAppend(event);
+      }
+      this._state = nextState;
+      afterAppendDurationMs = Math.round(performance.now() - afterAppendStartedAt);
+
+      return results;
+    } catch (error) {
+      errorMessage = formatErrorMessage(error);
+      throw error;
+    } finally {
+      this.recordAppendBatchDiagnostic({
+        afterAppendDurationMs,
+        buildReduceDurationMs,
+        commitDurationMs,
+        committedEventCount: committedEvents.length,
+        completedAtMs: Date.now(),
+        duplicateEventCount: results.length - committedEvents.length,
+        ...(errorMessage == null ? {} : { error: errorMessage }),
+        firstCommittedOffset: committedEvents[0]?.event.offset ?? null,
+        inputEventCount: inputEvents.length,
+        lastCommittedOffset: committedEvents.at(-1)?.event.offset ?? null,
+        parseDurationMs,
+        totalDurationMs: Math.round(performance.now() - startedAt),
+      });
     }
-    this._state = nextState;
-
-    return results;
   }
 
   /**
@@ -600,6 +653,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
       idempotencyDuplicates: [...this.idempotencyDuplicates.values()].sort(
         (left, right) => right.lastDuplicateAtMs - left.lastDuplicateAtMs,
       ),
+      appendBatchDiagnostics: this.appendBatchDiagnostics.toReversed(),
       callableSubscriberDeliveries: this.callableSubscriberDeliveries.toReversed(),
     };
   }
@@ -991,6 +1045,17 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
     this.callableSubscriberDeliveries.splice(
       0,
       this.callableSubscriberDeliveries.length - CALLABLE_SUBSCRIBER_DIAGNOSTIC_LIMIT,
+    );
+  }
+
+  private recordAppendBatchDiagnostic(diagnostic: AppendBatchDiagnostic) {
+    this.appendBatchDiagnostics.push(diagnostic);
+    if (this.appendBatchDiagnostics.length <= APPEND_BATCH_DIAGNOSTIC_LIMIT) {
+      return;
+    }
+    this.appendBatchDiagnostics.splice(
+      0,
+      this.appendBatchDiagnostics.length - APPEND_BATCH_DIAGNOSTIC_LIMIT,
     );
   }
 

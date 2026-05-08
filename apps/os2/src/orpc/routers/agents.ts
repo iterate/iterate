@@ -347,6 +347,20 @@ type BenchmarkStreamStub = {
       cursor: number;
       subscriberSlug: string;
     }>;
+    appendBatchDiagnostics: Array<{
+      afterAppendDurationMs: number;
+      buildReduceDurationMs: number;
+      commitDurationMs: number;
+      committedEventCount: number;
+      completedAtMs: number;
+      duplicateEventCount: number;
+      error?: string;
+      firstCommittedOffset: number | null;
+      inputEventCount: number;
+      lastCommittedOffset: number | null;
+      parseDurationMs: number;
+      totalDurationMs: number;
+    }>;
     callableSubscriberDeliveries: Array<{
       batchIterations: number;
       completedAtMs: number;

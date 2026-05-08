@@ -2651,3 +2651,34 @@ Interpretation:
 - Current evidence says static batch-size tuning alone is not enough. We need
   deeper instrumentation around receiver dispatch time, cold/wake effects, and
   Stream DO appendBatch internals.
+
+### 2026-05-08: instrument Stream DO appendBatch phases
+
+Hypothesis:
+
+- AgentChat receiver timings show derived `streamApi.appendBatch` still costs
+  hundreds of milliseconds for a few hundred events.
+- We need to know whether that cost is:
+  - input parsing;
+  - in-memory idempotency/build/reduce;
+  - the SQLite transaction;
+  - synchronous `afterAppend` work after commit;
+  - or total overhead around the call.
+
+Change under test:
+
+- Add bounded Stream DO diagnostics for recent `appendBatch` calls.
+- Each diagnostic records:
+  - input event count;
+  - committed event count;
+  - duplicate/idempotent-return count;
+  - parse duration;
+  - build/reduce duration;
+  - commit duration;
+  - `afterAppend` duration;
+  - total duration;
+  - first/last committed offset;
+  - error message if the batch throws.
+- The diagnostics are returned from `StreamDurableObject.getDiagnostics()`, so
+  they appear in the existing server benchmark JSON under
+  `result.streamDiagnostics.appendBatchDiagnostics`.
