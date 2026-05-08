@@ -2517,3 +2517,62 @@ Hypothesis:
 - Now that processor-derived `appendBatch` uses one Stream DO transaction, a
   larger subscriber delivery batch may reduce Worker RPC dispatch count without
   causing the same append p99 regression.
+
+Results after deploying commit `f81131413` to preview slot 2:
+
+`both`, `1000/s`, app-worker publisher, run 1:
+
+- Benchmark: `agent-server-bench-1778209833746-a7e1a962`
+- Duplicate invariant: passed
+- Duplicate attempts: `13`
+- Publish duration: `1158ms`
+- Source subscriber wait: `792ms`
+- Final subscriber wait: `3ms`
+- Processor wait: `11ms`
+- Append latency: p50 `24ms`, p90 `102ms`, p99 `168ms`
+- Agent subscriber totals:
+  - delivered events: `2025`
+  - dispatch duration: `1865ms`
+  - attempts: `8`
+  - max dispatch: `555ms`
+
+`both`, `1000/s`, app-worker publisher, run 2:
+
+- Benchmark: `agent-server-bench-1778209868317-8fa91e06`
+- Duplicate invariant: passed
+- Duplicate attempts: `15`
+- Publish duration: `1587ms`
+- Source subscriber wait: `729ms`
+- Final subscriber wait: `4ms`
+- Processor wait: `5ms`
+- Append latency: p50 `112ms`, p90 `247ms`, p99 `290ms`
+- Agent subscriber totals:
+  - delivered events: `2025`
+  - dispatch duration: `2112ms`
+  - attempts: `7`
+  - max dispatch: `595ms`
+
+Interpretation:
+
+- Larger batches reduce dispatch count slightly, but each dispatch becomes
+  chunkier (`555-595ms` max Agent dispatch).
+- Source subscriber wait did not improve over batch `500` after true batch
+  commit (`645-683ms` in the two `both` runs).
+- Append p99 no longer explodes as badly as old batch `1000`, but run 2 still
+  regressed to `290ms`.
+- Static `1000` is not obviously better than `500`. The better direction is
+  likely alarm scheduling and adaptive batch sizing.
+
+### 2026-05-08: coalesce callable subscriber alarm scheduling
+
+Hypothesis:
+
+- `StreamDurableObject.afterAppend` calls `scheduleCallableSubscriberDelivery`
+  for every committed event that has callable subscribers.
+- `scheduleCallableSubscriberDelivery` calls `ctx.storage.setAlarm(Date.now())`.
+- At `1000/s`, and especially during processor-derived `appendBatch`, this can
+  create hundreds or thousands of redundant alarm writes while one pending alarm
+  would be enough.
+- Coalescing pending alarm scheduling in memory should reduce Stream DO storage
+  work and append-side contention without changing ordering or delivery
+  semantics.

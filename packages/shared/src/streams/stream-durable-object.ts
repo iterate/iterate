@@ -161,6 +161,7 @@ const StreamDurableObjectBase = withPublicFetchRoute({
  */
 export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableObjectEnv> {
   private _state: StreamState | null = null;
+  private callableSubscriberDeliveryAlarmScheduled = false;
   private readonly client: SyncClient;
   private readonly callableSubscriberDeliveries: CallableSubscriberDeliveryDiagnostic[] = [];
   private readonly idempotencyDuplicates = new Map<string, IdempotencyDuplicateDiagnostic>();
@@ -545,6 +546,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
   }
 
   async alarm() {
+    this.callableSubscriberDeliveryAlarmScheduled = false;
     if (this._state == null && !this.hydratePersistedStreamState({ appendWakeEvent: false })) {
       return;
     }
@@ -804,7 +806,16 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
   }
 
   private async scheduleCallableSubscriberDelivery() {
-    await this.ctx.storage.setAlarm(Date.now());
+    if (this.callableSubscriberDeliveryAlarmScheduled) {
+      return;
+    }
+    this.callableSubscriberDeliveryAlarmScheduled = true;
+    try {
+      await this.ctx.storage.setAlarm(Date.now());
+    } catch (error) {
+      this.callableSubscriberDeliveryAlarmScheduled = false;
+      throw error;
+    }
   }
 
   private async drainCallableSubscriberDelivery() {
