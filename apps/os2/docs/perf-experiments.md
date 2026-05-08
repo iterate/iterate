@@ -4260,3 +4260,166 @@ Next instrumentation if this counter rises:
 - Consider returning all duplicate-key rows, or separate prefix aggregate counts,
   for benchmark invariant checks so unexpected low-count duplicate classes are
   not limited by top-N diagnostics.
+
+### 2026-05-08: clean WebSocket replacement benchmark and measurement fixes
+
+Problem found:
+
+- The earlier `subscriptionTransport=websocket` benchmark was not clean enough.
+- Agent startup installed the default callable subscriber, then the benchmark
+  appended a WebSocket subscriber with the same slug.
+- Because subscribers are keyed by slug, the WebSocket event replaces the
+  callable once reduced, but warmup/setup ordering could still contaminate
+  measurements.
+- The benchmark also had two correctness gaps:
+  - `processorWait` only targeted terminal events, not the full published
+    traffic;
+  - `agent-chat` now schedules derived appends asynchronously, so an
+    `agent-chat` cursor reaching the source event does not prove the derived
+    `agent/input-added` event is committed.
+
+Changes:
+
+- Added `subscriptionTransport=websocket-only`.
+- Benchmark agent paths under `/agents/server-bench-*` and `/agents/bench-*`
+  now skip AgentDurableObject's default startup subscription.
+- The benchmark endpoint explicitly installs the requested Agent subscriber:
+  - `rpc` installs a callable Agent subscriber;
+  - `websocket` / `websocket-only` install a WebSocket Agent subscriber.
+- `processorWait` now targets all published traffic plus terminal events.
+- For `agent-chat-responses`, the benchmark now waits for corresponding
+  `agent-chat/render-response@<sourceOffset>` derived `agent/input-added`
+  events to appear in the stream.
+
+Commits:
+
+- `7e484ff06` - `Add clean websocket stream benchmark mode`
+- `a3eaedf72` - `Measure processor wait against benchmark traffic`
+- `c80380509` - `Wait for benchmark derived agent chat events`
+
+Verification:
+
+- `pnpm --dir apps/os2-contract typecheck`
+- `pnpm --dir apps/os2 typecheck`
+- Deployed to preview slot 2 after each benchmark-significant change.
+
+Important measurement caveat:
+
+- In `agent-only` mode the Codemode subscriber still exists with
+  `jsonataFilter: false`, so callable cursor waits may report completion for
+  that disabled callable subscriber.
+- For WebSocket Agent delivery, `sourceSubscriberWait` and `finalSubscriberWait`
+  are therefore not Agent-delivery metrics. The meaningful fields are:
+  - `processorWait`;
+  - `derivedEventWait`;
+  - stream diagnostics;
+  - duplicate invariant;
+  - append latency.
+
+Clean 500-event comparison:
+
+RPC:
+
+- File: `/tmp/os2-bench-agent-chat-agent-only-rpc-clean-target-500-fail2.json`
+- Benchmark id: `agent-server-bench-1778218389626-50baa1b2`
+- Traffic/count/rate/concurrency: `agent-chat-responses`, `500`, `1000/s`,
+  `100`
+- Subscriber mode: `agent-only`
+- Transport: `rpc`
+- Result:
+  - publish duration: `805ms`
+  - source callable wait: `833ms`
+  - processor wait: `4ms`
+  - final callable wait: `137ms`
+  - append p50/p90/p99: `102/175/175ms`
+  - duplicate invariant: passed
+  - duplicate attempts: `17`
+  - committed idempotent events: `522`
+
+WebSocket-only:
+
+- File:
+  `/tmp/os2-bench-agent-chat-agent-only-websocket-only-derived-wait-500.json`
+- Benchmark id: `agent-server-bench-1778218880454-903e854d`
+- Same traffic/count/rate/concurrency.
+- Subscriber mode: `agent-only`
+- Transport: `websocket-only`
+- Result:
+  - publish duration: `1307ms`
+  - processor wait: `1416ms`
+  - derived event wait: `3076ms` for `500/500` derived events
+  - append p50/p90/p99: `223/274/274ms`
+  - duplicate invariant: passed
+  - duplicate attempts: `13`
+  - committed idempotent events: `522`
+
+Clean 1000-event comparison:
+
+RPC:
+
+- File: `/tmp/os2-bench-agent-chat-agent-only-rpc-derived-wait-1000.json`
+- Benchmark id: `agent-server-bench-1778218828095-12a04fa5`
+- Traffic/count/rate/concurrency: `agent-chat-responses`, `1000`, `1000/s`,
+  `100`
+- Subscriber mode: `agent-only`
+- Transport: `rpc`
+- Result:
+  - publish duration: `1749ms`
+  - source callable wait: `697ms`
+  - processor wait: `5ms`
+  - derived event wait: `55ms` for `1000/1000` derived events
+  - final callable wait: `10ms`
+  - append p50/p90/p99: `141/173/181ms`
+  - duplicate invariant: passed
+  - duplicate attempts: `17`
+  - committed idempotent events: `1022`
+  - local delivery sample: derived offsets showed about `131ms` delay in the
+    retained sample.
+
+WebSocket-only:
+
+- File:
+  `/tmp/os2-bench-agent-chat-agent-only-websocket-only-derived-wait-1000-retry.json`
+- Benchmark id: `agent-server-bench-1778218915813-89b4dccd`
+- Same traffic/count/rate/concurrency.
+- Subscriber mode: `agent-only`
+- Transport: `websocket-only`
+- Result:
+  - publish duration: `1590ms`
+  - processor wait: `2890ms`
+  - derived event wait: `10323ms` for `1000/1000` derived events
+  - append p50/p90/p99: `120/166/174ms`
+  - duplicate invariant: passed
+  - duplicate attempts: `17`
+  - committed idempotent events: `1022`
+  - local delivery sample: derived offsets showed about `33ms` delay in the
+    retained sample.
+
+Interpretation:
+
+- Clean WebSocket replacement is better than the old unbatched WebSocket path,
+  but still much worse than callable RPC for this agent workload.
+- The bottleneck is not simply source-event delivery. WebSocket can get source
+  frames into the Agent DO, but derived `agent/input-added` commits lag badly.
+- The important comparison is:
+  - RPC at `1000/s`: derived event wait `55ms`;
+  - WebSocket-only at `1000/s`: derived event wait `10323ms`.
+- The local retained delay sample can be misleading because it only records the
+  last bounded window. The derived-event wait is the stronger metric.
+- There was one transient WebSocket-only 1000 run that returned a generic 500
+  before result serialization. A retry completed. Treat this as another reason
+  to add explicit error logging around benchmark waits and WebSocket delivery.
+
+Current conclusion:
+
+- Do not replace callable RPC subscriber delivery with the current WebSocket
+  subscriber implementation for Agent processors.
+- The next useful WebSocket experiment would need:
+  - aggregate WebSocket delivery counters in `AgentDurableObject`;
+  - frame batch-size timings;
+  - explicit error logs from `fetch("/stream-subscription")` processing;
+  - a way to distinguish source delivery from processor-derived append
+    completion.
+- The next broader performance experiment should focus on the StreamDO/AgentDO
+  derived append path and/or keeping callable RPC while reducing Stream DO
+  queue pressure.
