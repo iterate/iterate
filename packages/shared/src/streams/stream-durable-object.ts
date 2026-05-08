@@ -105,8 +105,10 @@ type CallableSubscriberDeliveryAttemptDiagnostic = {
   completedAtMs: number;
   cursor: number;
   deliveredEventCount: number;
+  dispatchDurationMs: number;
   durationMs: number;
   failedEventCount: number;
+  filterDurationMs: number;
   historyEventCount: number;
   subscriberSlug: string;
 };
@@ -823,8 +825,10 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
                 completedAtMs: Date.now(),
                 cursor,
                 deliveredEventCount: 0,
+                dispatchDurationMs: 0,
                 durationMs: 0,
                 failedEventCount: 0,
+                filterDurationMs: 0,
                 historyEventCount: 0,
                 subscriberSlug: subscriber.slug,
               });
@@ -861,8 +865,10 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
               completedAtMs: Date.now(),
               cursor,
               deliveredEventCount: result.deliveredEventCount,
+              dispatchDurationMs: result.dispatchDurationMs,
               durationMs: Math.round(performance.now() - subscriberDeliveryStartedAt),
               failedEventCount: result.failedEventCount,
+              filterDurationMs: result.filterDurationMs,
               historyEventCount: events.length,
               subscriberSlug: subscriber.slug,
             });

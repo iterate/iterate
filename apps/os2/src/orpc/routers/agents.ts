@@ -366,8 +366,10 @@ type BenchmarkStreamStub = {
         completedAtMs: number;
         cursor: number;
         deliveredEventCount: number;
+        dispatchDurationMs: number;
         durationMs: number;
         failedEventCount: number;
+        filterDurationMs: number;
         historyEventCount: number;
         subscriberSlug: string;
       }>;

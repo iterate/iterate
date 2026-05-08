@@ -2038,3 +2038,72 @@ Follow-up instrumentation:
   - time waiting to enter the Agent DO;
   - `ensureStarted`;
   - actual stream processor consumption.
+
+### 2026-05-08: Agent delivery lag instrumentation result
+
+Change deployed:
+
+- Deployed commit `eac42f66d` to preview slot 2.
+- Callable `afterAppendBatch` payloads include `deliveryStartedAtMs`.
+- `AgentDurableObject.afterAppendBatch()` records `deliveryLagMs`.
+
+Run:
+
+- Project: `proj__os__01kr2q1gs0fahv12t30vgavan6`
+- Benchmark: `agent-server-bench-1778207741231-ccf58b08`
+- Mode: `agent-only`
+- Traffic: `1000` `agent-chat/assistant-response-added` events at `1000/s`
+- Duplicate invariant: passed
+- Duplicate attempts: `13`
+- Source subscriber wait: `3074ms`
+- Final subscriber wait: `414ms`
+- Processor wait: `142ms`
+- Append latency: p50 `76ms`, p90 `114ms`, p99 `149ms`
+
+Slow Stream DO delivery windows:
+
+- `680` delivered events took `2844ms`.
+- Slowest Agent subscriber delivery inside that drain:
+  - `beforeOffset`: `639`
+  - duration: `1656ms`
+- Later drains were shorter:
+  - `811` delivered events took `1040ms`
+  - `299` delivered events took `309ms`
+
+Matching Agent-side timings:
+
+- Batch offsets `639-738`:
+  - `deliveryLagMs`: `409`
+  - `consumeDurationMs`: `250`
+  - `totalDurationMs`: `250`
+- Max observed Agent `deliveryLagMs` in retained timings: `416ms`.
+- Max observed Agent method `totalDurationMs` in retained timings: `250ms`.
+- Late batches often had `deliveryLagMs: 0` and `consumeDurationMs: 0`.
+
+Interpretation:
+
+- Agent DO queue/entry lag is real and can be hundreds of milliseconds in the
+  high-rate same-stream derived-append case.
+- Agent-side method time is also non-zero for some windows, but retained
+  receiver timings do not explain the full Stream DO sender-side wait. Example:
+  Stream DO saw `1656ms`; Agent-side `deliveryLagMs + totalDurationMs` explains
+  about `659ms`.
+- `Date.now()` across Durable Object instances may include clock skew, so the
+  absolute `deliveryLagMs` should be treated as directional rather than exact.
+- We need one more Stream DO-side timestamp per subscriber delivery:
+  - started before filtering/dispatch;
+  - started immediately before `dispatchCallable`;
+  - returned immediately after `dispatchCallable`.
+- That will separate JSONata/filter work, RPC dispatch wait, and post-return
+  bookkeeping without relying on cross-object clocks.
+
+Follow-up change:
+
+- Added Stream DO-side per-subscriber `filterDurationMs` and
+  `dispatchDurationMs` to callable subscriber delivery diagnostics.
+- Next run should compare:
+  - subscriber delivery `durationMs`;
+  - `filterDurationMs`;
+  - `dispatchDurationMs`;
+  - Agent receiver `deliveryLagMs`;
+  - Agent receiver `totalDurationMs`.

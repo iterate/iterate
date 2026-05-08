@@ -99,7 +99,12 @@ export async function publishExternalSubscriberBatch(args: {
   events: readonly Event[];
   onError?(failure: ExternalSubscriberPublishFailure): void | Promise<void>;
   subscriber: ExternalSubscriber;
-}): Promise<{ deliveredEventCount: number; failedEventCount: number }> {
+}): Promise<{
+  deliveredEventCount: number;
+  dispatchDurationMs: number;
+  failedEventCount: number;
+  filterDurationMs: number;
+}> {
   if (
     args.subscriber.type === "callable" &&
     args.subscriber.callable.type === "workers-rpc" &&
@@ -107,6 +112,7 @@ export async function publishExternalSubscriberBatch(args: {
   ) {
     const events: Event[] = [];
     let failedEventCount = 0;
+    const filterStartedAt = performance.now();
     for (const event of args.events) {
       try {
         if (await evaluateFilter({ event, subscriber: args.subscriber })) {
@@ -121,10 +127,12 @@ export async function publishExternalSubscriberBatch(args: {
         });
       }
     }
+    const filterDurationMs = Math.round(performance.now() - filterStartedAt);
     if (events.length === 0) {
-      return { deliveredEventCount: 0, failedEventCount };
+      return { deliveredEventCount: 0, dispatchDurationMs: 0, failedEventCount, filterDurationMs };
     }
 
+    const dispatchStartedAt = performance.now();
     try {
       const deliveryStartedAtMs = Date.now();
       await dispatchCallable({
@@ -132,7 +140,12 @@ export async function publishExternalSubscriberBatch(args: {
         payload: { deliveryStartedAtMs, events },
         ctx: args.callableContext,
       });
-      return { deliveredEventCount: events.length, failedEventCount };
+      return {
+        deliveredEventCount: events.length,
+        dispatchDurationMs: Math.round(performance.now() - dispatchStartedAt),
+        failedEventCount,
+        filterDurationMs,
+      };
     } catch (error) {
       await Promise.all(
         events.map((event) =>
@@ -152,7 +165,12 @@ export async function publishExternalSubscriberBatch(args: {
         lastOffset: events.at(-1)?.offset,
         error,
       });
-      return { deliveredEventCount: 0, failedEventCount: failedEventCount + events.length };
+      return {
+        deliveredEventCount: 0,
+        dispatchDurationMs: Math.round(performance.now() - dispatchStartedAt),
+        failedEventCount: failedEventCount + events.length,
+        filterDurationMs,
+      };
     }
   }
 
@@ -172,7 +190,7 @@ export async function publishExternalSubscriberBatch(args: {
       failedEventCount += 1;
     }
   }
-  return { deliveredEventCount, failedEventCount };
+  return { deliveredEventCount, dispatchDurationMs: 0, failedEventCount, filterDurationMs: 0 };
 }
 
 export function hasExternalSubscribersOfType(
