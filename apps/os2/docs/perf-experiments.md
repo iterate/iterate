@@ -2200,3 +2200,115 @@ Interpretation:
 - Next experiment: test an intermediate batch size, likely `500`, to find a
   better balance between fewer RPC dispatches and less receiver/append tail
   pressure.
+
+### 2026-05-08: callable subscriber batch size 500
+
+Change deployed:
+
+- Deployed commit `c31a529ec` to preview slot 2.
+- Changed `CALLABLE_SUBSCRIBER_ALARM_BATCH_SIZE` from `1000` to `500`.
+- First benchmark attempt immediately after deploy failed with a generic `500`.
+- Cloudflare traces showed the only error in the window was:
+  `Durable Object reset because its code was updated.`
+  - Trace id: `fd4899c1f364b511a52ec0d9472e0f21`
+  - Service/script: `os2-preview-2`
+  - Entrypoint: `StreamDurableObject`
+  - Handler: `alarm`
+  - Outcome: `exception`
+  - Wall time: `13592ms`
+  - This was deploy-induced, not a benchmark logic error.
+- Reran after the preview settled.
+
+`agent-only`, `1000/s`:
+
+- Project: `proj__os__01kr2qrve2fzrtrp9c11wdsszh`
+- Benchmark: `agent-server-bench-1778208506102-1c34e11e`
+- Duplicate invariant: passed
+- Duplicate attempts: `12`
+- Source subscriber wait: `686ms`
+- Final subscriber wait: `2ms`
+- Processor wait: `159ms`
+- Append latency: p50 `84ms`, p90 `117ms`, p99 `158ms`
+- Slow attempts:
+  - `500` events: `dispatchDurationMs=398`
+  - `323` events: `dispatchDurationMs=304`
+  - `500` events: `dispatchDurationMs=298`
+- Max retained Agent receiver timing:
+  - `323` events
+  - `consumeDurationMs=337`
+  - `deliveryLagMs=514`
+
+`both`, `1000/s`:
+
+- Project: `proj__os__01kr2qszbve06azj9kv3emr4pq`
+- Benchmark: `agent-server-bench-1778208543502-a60523ac`
+- Duplicate invariant: passed
+- Duplicate attempts: `15`
+- Source subscriber wait: `889ms`
+- Final subscriber wait: `32ms`
+- Processor wait: `6ms`
+- Append latency: p50 `92ms`, p90 `135ms`, p99 `199ms`
+- Slow attempts:
+  - Agent, `500` events: `dispatchDurationMs=466`
+  - Agent, `500` events: `dispatchDurationMs=396`
+  - Codemode, `500` events: `dispatchDurationMs=393`
+  - Codemode, `500` events: `dispatchDurationMs=295`
+- Max retained Agent receiver timing:
+  - `500` events
+  - `consumeDurationMs=353`
+  - `deliveryLagMs=605`
+
+Batch-size comparison for `agent-only`, app-worker publisher:
+
+| Batch size | Source wait | Final wait | Processor wait | Append p50 | Append p90 | Append p99 |
+| ---------- | ----------: | ---------: | -------------: | ---------: | ---------: | ---------: |
+| `100`      |    `1194ms` |    `413ms` |         `74ms` |     `73ms` |    `109ms` |    `136ms` |
+| `500`      |     `686ms` |      `2ms` |        `159ms` |     `84ms` |    `117ms` |    `158ms` |
+| `1000`     |     `870ms` |      `3ms` |         `10ms` |    `117ms` |    `170ms` |    `454ms` |
+
+Interpretation:
+
+- `500` is the best tested static batch size so far.
+- It keeps most of the subscriber-tail improvement while avoiding the severe
+  append p99 regression from `1000`.
+- It is still not the target: `686-889ms` source wait is much better than
+  multi-second lag, but not close to zero.
+- The hot path is now clearly a small number of large Worker RPC / DO dispatches
+  per drain. Filter time remains `0ms`.
+
+Next checks:
+
+- Test `publisher=agent-durable-object` to simulate a server-side publisher
+  closer to OpenAI/WebSocket event production.
+- Consider adaptive batch sizing instead of one static constant:
+  - small batches for low traffic / first delivery;
+  - larger batches while backlog is large;
+  - cap receiver invocation size to avoid p99 append regressions.
+
+`both`, `1000/s`, `publisher=agent-durable-object`:
+
+- Project: `proj__os__01kr2qw92ye06azj9wrxz8bm04`
+- Benchmark: `agent-server-bench-1778208618034-cd1d7037`
+- Duplicate invariant: passed
+- Duplicate attempts: `15`
+- Source subscriber wait: `94ms`
+- Final subscriber wait: `2ms`
+- Processor wait: `6ms`
+- Publish duration: `2776ms`
+- Append latency: p50 `180ms`, p90 `335ms`, p99 `399ms`
+
+Comparison with app-worker publisher for `both`, `1000/s`, batch `500`:
+
+| Publisher              | Publish duration | Source wait | Final wait | Append p50 | Append p90 | Append p99 |
+| ---------------------- | ---------------: | ----------: | ---------: | ---------: | ---------: | ---------: |
+| `app-worker`           |         `1231ms` |     `889ms` |     `32ms` |     `92ms` |    `135ms` |    `199ms` |
+| `agent-durable-object` |         `2776ms` |      `94ms` |      `2ms` |    `180ms` |    `335ms` |    `399ms` |
+
+Interpretation:
+
+- Publishing from the Agent DO makes post-publish delivery lag look much better,
+  but the work did not disappear. It shifted into publisher backpressure.
+- This is not a good default shape for high-throughput event production unless
+  producer backpressure is explicitly desired.
+- The app-worker publisher remains the better benchmark for detecting subscriber
+  delivery lag because it can outrun subscriber dispatch and expose backlog.
