@@ -3828,3 +3828,48 @@ Current conclusions:
 - For full Agent history traffic, returning less helps, but the state shape is
   still too large.
 - For `agent-chat`, derived append volume is now the main visible bottleneck.
+
+### 2026-05-08: Cloudflare docs/Kenton reading notes
+
+Sources read:
+
+- Kenton Varda, "We've added JavaScript-native RPC to Cloudflare Workers"
+  - https://blog.cloudflare.com/javascript-native-rpc/
+- Kenton Varda, "Durable Objects: Easy, Fast, Correct - Choose three"
+  - https://blog.cloudflare.com/durable-objects-easy-fast-correct-choose-three/
+- Cloudflare Workers RPC docs
+  - https://developers.cloudflare.com/workers/runtime-apis/rpc/
+- Cloudflare Durable Objects alarms docs
+  - https://developers.cloudflare.com/durable-objects/api/alarms/
+
+Relevant notes:
+
+- Workers RPC is designed to make Worker/DO calls feel like local method calls,
+  but parameters and return values are still transferred across a remote
+  boundary. The docs describe RPC parameters and return values as structured
+  clonable values. That reinforces the benchmark lesson: do not return large
+  reduced state from fire-and-forget subscriber calls.
+- Kenton's Durable Objects writing emphasizes that a DO instance is single
+  threaded and owns its state in one place. This matches the observed queueing:
+  one hot Stream DO can serialize many concurrent append calls, alarm delivery,
+  derived appends, diagnostics, and benchmark reads.
+- The Durable Objects alarms docs say each DO can only have one alarm scheduled
+  at a time, while alarm handlers are intended for queue/batch-style work and
+  execute at least once with retry behavior. This supports the current design
+  direction of one alarm-driven delivery loop plus per-subscriber cursors, but
+  also means we need explicit coalescing and bounded work per alarm.
+- The docs also warn that `setAlarm()` replaces an existing scheduled alarm.
+  This supports keeping the scheduled-only coalescing logic: many append calls
+  should not blindly fight over alarm timestamps.
+
+Design implications for this stream processor system:
+
+- Keep RPC call payloads and return values intentionally small.
+- Treat every hot Stream DO as a single-threaded queue; caller concurrency is
+  backpressure, not free throughput.
+- Prefer batching at the alarm/subscriber boundary, but bound batch size and
+  per-alarm work so diagnostics/read calls are not stuck behind long delivery
+  loops.
+- Avoid observer methods like `getRuntimeState()` participating in hot traces
+  unless necessary; they can queue behind delivery work and then look like
+  product latency.
