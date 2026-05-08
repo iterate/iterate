@@ -1571,3 +1571,100 @@ Next check:
 
 - Add expected-duplicate thresholds to benchmark scripts so traffic tests fail
   when duplicate attempts exceed a small allowlist of known startup/setup keys.
+
+### 2026-05-08: subscriber-mode isolation
+
+Question:
+
+- Is the slow source subscriber delivery caused by the Stream DO fanout loop,
+  Agent subscriber work, Codemode subscriber work, or the interaction between
+  Agent and Codemode on the same stream?
+
+Change:
+
+- Added `subscriberMode` to `project.agents.benchmarkStream` and
+  `apps/os2/scripts/benchmark-agent-stream-server.ts`.
+- Modes:
+  - `both`: normal Agent + Codemode callable subscribers;
+  - `agent-only`: keep the Agent subscriber active and overwrite the Codemode
+    subscriber with `jsonataFilter: "false"`;
+  - `codemode-only`: keep the Codemode subscriber active and overwrite the Agent
+    subscriber with `jsonataFilter: "false"`.
+- This is a benchmark-only isolation tool. It does not add unsubscribe
+  semantics. The disabled side still has a cursor lane and filter evaluation,
+  but no RPC work.
+
+Validation:
+
+- `pnpm --dir apps/os2 typecheck`: passed.
+- `pnpm --filter @iterate-com/os2-contract typecheck`: passed.
+- Deployed to preview slot 2.
+
+Preview runs, `300` `agent-chat/assistant-response-added` events at `300/s`,
+RPC transport, app-worker publisher:
+
+- `both`
+  - project: `proj__os__01kr2kwg80ecxse1ym9kzsyyp5`
+  - benchmark: `agent-server-bench-1778204431393-ae08bb89`
+  - append failures: `0`
+  - append latency: p50 `17ms`, p90 `39ms`, p99 `69ms`
+  - duplicate attempts: `15` across `5` setup keys
+  - source subscriber wait: `965ms`
+  - final subscriber wait: `11ms`
+  - processor wait: `11ms`
+  - final stream offset: `627`
+  - main delivery drain: `6` batches, `12` cursor reads, `12` cursor writes,
+    `6` history reads, `1192` delivered events, `906ms`
+- `agent-only`
+  - project: `proj__os__01kr2kx4yjesmbxwphbh9hafdx`
+  - benchmark: `agent-server-bench-1778204452780-cb7d2f7e`
+  - append failures: `0`
+  - append latency: p50 `17ms`, p90 `38ms`, p99 `80ms`
+  - duplicate attempts: `14` across `5` setup keys
+  - source subscriber wait: `295ms`
+  - final subscriber wait: `8ms`
+  - processor wait: `14ms`
+  - final stream offset: `628`
+  - main delivery drain: `6` batches, `12` cursor reads, `12` cursor writes,
+    `6` history reads, `593` delivered events, `92ms`
+- `codemode-only`
+  - project: `proj__os__01kr2m2xvmexr8bc8dpzp4zq0v`
+  - benchmark: `agent-server-bench-1778204641454-3b5c0b27`
+  - append failures: `0`
+  - append latency: p50 `9ms`, p90 `17ms`, p99 `61ms`
+  - duplicate attempts: `13` across `4` setup keys
+  - source subscriber wait: `107ms`
+  - final subscriber wait: `1ms`
+  - processor wait: skipped because the Agent subscriber is disabled
+  - final stream offset: `326`
+  - largest delivery drain: `3` batches, `6` cursor reads, `6` cursor writes,
+    `3` history reads, `202` delivered events, `161ms`
+
+Interpretation:
+
+- Codemode by itself is not the source of the second-scale lag for this traffic.
+- Agent by itself is much faster than Agent+Codemode even though it produces a
+  similar final stream offset.
+- The expensive shape is the interaction: active Agent subscriber processes
+  source events and appends derived events, while active Codemode also receives
+  the source and derived stream traffic in the same catch-up/drain cycle.
+- The `both` run delivered roughly twice as many events as `agent-only`, but its
+  main drain duration was almost ten times larger (`906ms` vs `92ms`). That
+  suggests per-event Codemode processing of Agent-derived traffic, or
+  cross-subscriber interference while one subscriber appends derived events, not
+  just raw history read/cursor overhead.
+
+Benchmark issue found and fixed:
+
+- The first `codemode-only` run spent `30s` waiting for Agent processor cursors,
+  even though the Agent subscriber was deliberately disabled.
+- The benchmark now skips Agent processor cursor wait in `codemode-only` mode.
+
+Next experiments:
+
+- Add per-subscriber drain diagnostics so one delivery drain reports duration,
+  delivered count, failed count, and RPC time by subscriber slug.
+- Add event-type filter subscriptions for processors so Codemode does not pay
+  for Agent/OpenAI events it does not consume.
+- Re-run the same three-mode comparison at `1000/s` after per-subscriber timing
+  is available.

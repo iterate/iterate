@@ -22,6 +22,7 @@ const AgentStreamBenchmarkTraffic = z.enum([
 ]);
 const AgentStreamBenchmarkSubscriptionTransport = z.enum(["rpc", "websocket"]);
 const AgentStreamBenchmarkPublisher = z.enum(["app-worker", "agent-durable-object"]);
+const AgentStreamBenchmarkSubscriberMode = z.enum(["both", "agent-only", "codemode-only"]);
 const AgentPresetEvent = z.object({
   type: z.string().trim().min(1),
   payload: z.record(z.string(), z.unknown()),
@@ -483,6 +484,7 @@ export const osContract = oc.router({
             payloadBytes: z.number().int().nonnegative().max(32_000).default(64),
             publisher: AgentStreamBenchmarkPublisher.default("app-worker"),
             ratePerSecond: z.number().positive().max(2_000).default(50),
+            subscriberMode: AgentStreamBenchmarkSubscriberMode.default("both"),
             subscriptionTransport: AgentStreamBenchmarkSubscriptionTransport.default("rpc"),
             terminalEvents: z.boolean().default(true),
             traffic: AgentStreamBenchmarkTraffic.default("raw-openai-ws"),

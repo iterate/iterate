@@ -1,6 +1,8 @@
 import { ORPCError } from "@orpc/server";
 import { listD1ObjectCatalogRecordsByIndex } from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
+import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { getOrInitializeDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import { STREAM_SUBSCRIPTION_CONFIGURED_TYPE } from "@iterate-com/shared/streams/core-event-types";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
@@ -155,19 +157,30 @@ export const projectAgentsRouter = {
         path: input.agentPath,
       });
       const benchmarkStream = stream as unknown as BenchmarkStreamStub;
+      const agentDurableObjectName = getAgentDurableObjectName({
+        agentPath: input.agentPath,
+        projectId: project.id,
+      });
 
       if (input.subscriptionTransport === "websocket") {
         await stream.append(
           agentStreamBenchmarkWebSocketSubscriptionEvent({
-            agentDurableObjectName: getAgentDurableObjectName({
-              agentPath: input.agentPath,
-              projectId: project.id,
-            }),
+            agentDurableObjectName,
             agentPath: input.agentPath,
             projectId: project.id,
           }),
         );
       }
+      await configureBenchmarkSubscriberMode({
+        agentDurableObjectName,
+        agentPath: input.agentPath,
+        codemodeSessionName: deriveDurableObjectNameFromStructuredName({
+          structuredName: { projectId: project.id, streamPath: input.agentPath },
+        }),
+        mode: input.subscriberMode,
+        projectId: project.id,
+        stream: benchmarkStream,
+      });
 
       const options: AgentStreamBenchmarkOptions = {
         benchmarkId,
@@ -196,11 +209,19 @@ export const projectAgentsRouter = {
         targetOffset: agentStreamBenchmarkTargetOffset(published),
       });
 
-      const processorWait = await waitForProcessorCursors({
-        agent,
-        agentPath: input.agentPath,
-        targetOffsetByProcessor: agentStreamBenchmarkTargetOffsetByProcessor(published.terminal),
-      });
+      const processorWait =
+        input.subscriberMode === "codemode-only"
+          ? {
+              completed: false,
+              reason: "skipped because Agent subscriber is disabled for codemode-only benchmark",
+            }
+          : await waitForProcessorCursors({
+              agent,
+              agentPath: input.agentPath,
+              targetOffsetByProcessor: agentStreamBenchmarkTargetOffsetByProcessor(
+                published.terminal,
+              ),
+            });
       const history = await stream.history({ after: "start" });
       const benchmarkEvents = history.filter((event) =>
         isAgentStreamBenchmarkEvent({ benchmarkId, event }),
@@ -218,6 +239,7 @@ export const projectAgentsRouter = {
       return {
         benchmarkId,
         publisher: input.publisher,
+        subscriberMode: input.subscriberMode,
         subscriptionTransport: input.subscriptionTransport,
         publishDurationMs: round(publishDurationMs),
         traffic: {
@@ -382,6 +404,77 @@ async function runAppWorkerBenchmarkPublisher(input: {
     appended: traffic.appended,
     failures: [...traffic.failures, ...terminal.failures],
     terminal: terminal.appended,
+  };
+}
+
+async function configureBenchmarkSubscriberMode(input: {
+  agentDurableObjectName: string;
+  agentPath: StreamPath;
+  codemodeSessionName: string;
+  mode: "both" | "agent-only" | "codemode-only";
+  projectId: string;
+  stream: BenchmarkStreamStub;
+}) {
+  if (input.mode === "both") return;
+
+  if (input.mode === "codemode-only") {
+    await input.stream.append(disabledAgentSubscriberEvent(input));
+  }
+
+  if (input.mode === "agent-only") {
+    await input.stream.append(disabledCodemodeSubscriberEvent(input));
+  }
+}
+
+function disabledAgentSubscriberEvent(input: {
+  agentDurableObjectName: string;
+  agentPath: StreamPath;
+  projectId: string;
+}): EventInput {
+  return {
+    payload: {
+      slug: `agent:${input.projectId}:${input.agentPath}`,
+      type: "callable",
+      jsonataFilter: "false",
+      callable: {
+        type: "workers-rpc",
+        via: {
+          type: "env-binding",
+          bindingType: "durable-object-namespace",
+          bindingName: "AGENT",
+          durableObject: {
+            name: input.agentDurableObjectName,
+          },
+        },
+        rpcMethod: "afterAppendBatch",
+        argsMode: "object",
+      },
+    },
+    type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
+  };
+}
+
+function disabledCodemodeSubscriberEvent(input: { codemodeSessionName: string }): EventInput {
+  return {
+    payload: {
+      slug: `codemode-session:${input.codemodeSessionName}`,
+      type: "callable",
+      jsonataFilter: "false",
+      callable: {
+        type: "workers-rpc",
+        via: {
+          type: "env-binding",
+          bindingType: "durable-object-namespace",
+          bindingName: "CODEMODE_SESSION",
+          durableObject: {
+            name: input.codemodeSessionName,
+          },
+        },
+        rpcMethod: "afterAppendBatch",
+        argsMode: "object",
+      },
+    },
+    type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
   };
 }
 

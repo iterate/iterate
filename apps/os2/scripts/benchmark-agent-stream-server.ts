@@ -6,6 +6,7 @@ import type { appRouter } from "~/orpc/root.ts";
 
 type TrafficKind = "raw-openai-ws" | "mixed-control" | "agent-chat-responses";
 type Publisher = "app-worker" | "agent-durable-object";
+type SubscriberMode = "both" | "agent-only" | "codemode-only";
 type SubscriptionTransport = "rpc" | "websocket";
 type OrpcClient = RouterClient<typeof appRouter>;
 
@@ -18,6 +19,7 @@ type Options = {
   projectSlugOrId: string | null;
   publisher: Publisher;
   ratePerSecond: number;
+  subscriberMode: SubscriberMode;
   subscriptionTransport: SubscriptionTransport;
   terminalEvents: boolean;
   traffic: TrafficKind;
@@ -43,6 +45,7 @@ async function main() {
     projectSlugOrId,
     publisher: options.publisher,
     ratePerSecond: options.ratePerSecond,
+    subscriberMode: options.subscriberMode,
     subscriptionTransport: options.subscriptionTransport,
     terminalEvents: options.terminalEvents,
     traffic: options.traffic,
@@ -108,6 +111,7 @@ function parseOptions(args: readonly string[]): Options {
     projectSlugOrId: optionalStringOption(values, "project"),
     publisher: publisherOption(values, "publisher", "app-worker"),
     ratePerSecond: numberOption(values, "rate", 1000),
+    subscriberMode: subscriberModeOption(values, "subscriber-mode", "both"),
     subscriptionTransport: subscriptionTransportOption(values, "subscription-transport", "rpc"),
     terminalEvents: booleanOption(values, "terminal-events", true),
     traffic,
@@ -176,6 +180,12 @@ function publisherOption(values: Map<string, string>, key: string, fallback: Pub
   const value = values.get(key) ?? fallback;
   if (value === "app-worker" || value === "agent-durable-object") return value;
   throw new Error(`--${key} must be app-worker or agent-durable-object`);
+}
+
+function subscriberModeOption(values: Map<string, string>, key: string, fallback: SubscriberMode) {
+  const value = values.get(key) ?? fallback;
+  if (value === "both" || value === "agent-only" || value === "codemode-only") return value;
+  throw new Error(`--${key} must be both, agent-only, or codemode-only`);
 }
 
 function subscriptionTransportOption(
