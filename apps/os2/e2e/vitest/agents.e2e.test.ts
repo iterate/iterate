@@ -52,6 +52,7 @@ describe("project agents codemode", () => {
     const suffix = uniqueSuffix();
     const basePath = `/agents/cloudflare-preset-${suffix}`;
     const agentPath = `${basePath}/child`;
+    const assistantMessage = `cloudflare ai gateway chat proof ${suffix}`;
 
     await client.project.agents.configurePreset({
       basePath,
@@ -60,7 +61,14 @@ describe("project agents codemode", () => {
       projectSlugOrId: project.id,
       provider: "cloudflare-ai",
       runOpts: { gateway: { id: "default" } },
-      systemPrompt: "Reply tersely. If you use codemode, call ctx.chat.sendMessage({ message }).",
+      systemPrompt: [
+        "For every user message, reply with exactly one fenced JavaScript code block and no surrounding prose.",
+        "The block must evaluate to an async function.",
+        "Use this exact code body:",
+        `async (ctx) => {
+  await ctx.chat.sendMessage({ message: ${JSON.stringify(assistantMessage)} });
+}`,
+      ].join("\n"),
     });
 
     const presets = await client.project.agents.listPresets({
@@ -87,7 +95,9 @@ describe("project agents codemode", () => {
       client,
       projectId: project.id,
       afterOffset: "start",
-      predicate: (event) => event.type === "events.iterate.com/cloudflare-ai/llm-request-started",
+      predicate: (event) =>
+        event.type === "events.iterate.com/agent-chat/assistant-response-added" &&
+        (event.payload as { message?: unknown }).message === assistantMessage,
     });
 
     expect(events).toContainEqual(
@@ -101,9 +111,40 @@ describe("project agents codemode", () => {
         type: "events.iterate.com/cloudflare-ai/llm-request-started",
       }),
     );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/cloudflare-ai/llm-request-completed",
+        payload: expect.objectContaining({
+          result: expect.objectContaining({
+            status: "success",
+          }),
+        }),
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/agent/output-added",
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/codemode/script-execution-requested",
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/agent-chat/assistant-response-added",
+        payload: expect.objectContaining({
+          message: assistantMessage,
+        }),
+      }),
+    );
     expect(
       events.some((event) => event.type === "events.iterate.com/openai-ws/llm-request-started"),
     ).toBe(false);
+    expect(
+      events.filter((event) => event.type === "events.iterate.com/core/error-occurred"),
+    ).toEqual([]);
   });
 
   it("lets codemode send visible agent responses through ctx.chat.sendMessage", async () => {

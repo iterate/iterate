@@ -27,7 +27,6 @@ import {
   type AgentDurableObject,
   getAgentDurableObjectName,
 } from "~/domains/agents/durable-objects/agent-durable-object.ts";
-import { defaultAgentSystemPrompt } from "~/domains/agents/agent-presets.ts";
 import { deleteIngressRoutesByProject, upsertIngressRoute } from "~/db/queries/.generated/index.ts";
 import {
   dispatchFetchCallable,
@@ -465,23 +464,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
       payload: {
         slug: "agents-child-stream-setup",
         matcher: "type = 'events.iterate.com/core/child-stream-created'",
-        reactions: [
-          {
-            type: "append-events",
-            events: `[
-              {
-                "streamPath": payload.childPath,
-                "event": {
-                  "type": "events.iterate.com/agent/system-prompt-updated",
-                  "payload": {
-                    "systemPrompt": ${JSON.stringify(defaultAgentSystemPrompt())}
-                  },
-                  "idempotencyKey": "agent-default-system-prompt-v2"
-                }
-              }
-            ]`,
-          },
-        ],
+        reactions: [],
       },
     });
   }

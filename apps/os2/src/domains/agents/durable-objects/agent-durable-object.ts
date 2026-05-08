@@ -600,7 +600,8 @@ function resolveProcessorStreamPath(input: { basePath: StreamPath; pathInput?: s
   );
 }
 
-const CODEMODE_FENCE_RE = /^```(?:js|javascript|codemode|ts|typescript)\s*\n([\s\S]*?)\n```\s*$/;
+const CODEMODE_FENCE_RE =
+  /^```(?:js|javascript|codemode|ts|typescript)\s*\n([\s\S]*?)(?:\n```\s*)?$/;
 
 function extractCodemodeScript(content: string): string | null {
   const trimmed = content.trim();
