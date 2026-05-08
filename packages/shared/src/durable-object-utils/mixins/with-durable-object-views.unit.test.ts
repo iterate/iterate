@@ -3,6 +3,29 @@ import { describe, expect, it } from "vitest";
 import { isDurableObjectViewMessage } from "./with-durable-object-views.ts";
 
 describe("withDurableObjectViews", () => {
+  it("sends the default view when no view query param is provided", async () => {
+    const roomName = `view-room-${crypto.randomUUID()}`;
+    await postJson(`/durable-object-view-rooms/${encodeURIComponent(roomName)}/initialize`, {
+      ownerUserId: "user-default-view",
+    });
+
+    const socket = await connectWebSocket(
+      `/durable-objects/durable-object-view-rooms/by-name/${encodeURIComponent(roomName)}/__websocket`,
+    );
+
+    const initial = await readDurableObjectViewMessage(socket);
+    expect(initial).toMatchObject({
+      kind: "durable-object-view",
+      view: "default",
+      value: {
+        count: 0,
+        ownerUserId: "user-default-view",
+      },
+    });
+
+    socket.close(1000, "test complete");
+  });
+
   it("sends the requested view on connect and after a server-side mutation", async () => {
     const roomName = `view-room-${crypto.randomUUID()}`;
     await postJson(`/durable-object-view-rooms/${encodeURIComponent(roomName)}/initialize`, {

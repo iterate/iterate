@@ -1,6 +1,9 @@
 import { DurableObject } from "cloudflare:workers";
 import { describe, expectTypeOf, it } from "vitest";
-import { withDurableObjectViews } from "./with-durable-object-views.ts";
+import {
+  UnknownDurableObjectViewError,
+  withDurableObjectViews,
+} from "./with-durable-object-views.ts";
 import type { HibernatingWebSocketConnection } from "./with-hibernating-websockets.ts";
 import { withHibernatingWebSockets } from "./with-hibernating-websockets.ts";
 import { withLifecycleHooks } from "./with-lifecycle-hooks.ts";
@@ -38,21 +41,23 @@ type RoomView = {
   ownerUserId: string;
 };
 
-type RoomViewHost = {
-  getRoomView(): RoomView;
+type RoomViews = {
+  default: RoomView;
+  room: RoomView;
 };
 
-const ViewRoomBase = withDurableObjectViews<{ room: RoomView }, RoomViewHost>({
-  views: {
-    room(room) {
-      return room.getRoomView();
-    },
-  },
-})(WebSocketRoomBase);
+const ViewRoomBase = withDurableObjectViews<RoomViews>()(WebSocketRoomBase);
 
-class ViewRoom extends ViewRoomBase<Env> implements RoomViewHost {
-  getRoomView(): RoomView {
-    return { ownerUserId: this.initParams.ownerUserId };
+class ViewRoom extends ViewRoomBase<Env> {
+  protected getDurableObjectView(view = "default"): RoomView {
+    switch (view) {
+      case "default":
+      case "room":
+        return { ownerUserId: this.initParams.ownerUserId };
+
+      default:
+        throw new UnknownDurableObjectViewError(view);
+    }
   }
 
   async broadcastRoomViewForTest() {
@@ -83,18 +88,34 @@ describe("withHibernatingWebSockets types", () => {
 });
 
 describe("withDurableObjectViews types", () => {
+  it("requires subclasses to implement the view method", () => {
+    // @ts-expect-error subclasses must define how synchronized views are computed.
+    class MissingViewRoom extends ViewRoomBase<Env> {}
+
+    expectTypeOf(MissingViewRoom).toMatchTypeOf<
+      abstract new (ctx: DurableObjectState, env: Env) => DurableObject<Env>
+    >();
+  });
+
   it("keeps view names typed for broadcasts", async () => {
     const room = {} as ViewRoom;
 
     expectTypeOf(await room.broadcastRoomViewForTest()).toEqualTypeOf<void>();
 
-    class InvalidViewRoom extends ViewRoomBase<Env> implements RoomViewHost {
-      getRoomView(): RoomView {
-        return { ownerUserId: this.initParams.ownerUserId };
+    class InvalidViewRoom extends ViewRoomBase<Env> {
+      protected getDurableObjectView(view = "default"): RoomView {
+        switch (view) {
+          case "default":
+          case "room":
+            return { ownerUserId: this.initParams.ownerUserId };
+
+          default:
+            throw new UnknownDurableObjectViewError(view);
+        }
       }
 
       async broadcastMissingViewForTest() {
-        // @ts-expect-error only configured view names can be broadcast.
+        // @ts-expect-error only declared view names can be broadcast.
         await this.broadcastDurableObjectView("missing");
       }
     }

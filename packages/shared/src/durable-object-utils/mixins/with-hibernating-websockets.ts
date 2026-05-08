@@ -172,10 +172,10 @@ const attachmentCache = new WeakMap<WebSocket, SerializedHibernatingWebSocketAtt
  * post-hibernation lookup/filtering.
  *
  * `onHibernatingWebSocketConnect()` runs after the `101` response is created.
- * That is deliberate: view factories and auth/logging hooks are often async,
- * and sending frames from an async connect hook before the upgrade response
- * reaches the caller can drop those frames in workerd. Returning the accepted
- * socket first makes "send initial view after connect" behave like a normal
+ * That is deliberate: initial synchronized views and auth/logging hooks are
+ * often async, and sending frames from an async connect hook before the upgrade
+ * response reaches the caller can drop those frames in workerd. Returning the
+ * accepted socket first makes "send initial view after connect" behave like a normal
  * post-handshake server send. We still pass the promise to `ctx.waitUntil()`,
  * but Cloudflare documents that `waitUntil()` has no effect in Durable Objects
  * because pending work already keeps the object active:

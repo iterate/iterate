@@ -440,21 +440,25 @@ type RoomView = {
   selectedMachineId: string | null;
 };
 
-type RoomViewHost = {
-  getRoomView(): RoomView;
+type RoomViews = {
+  default: RoomView;
+  room: RoomView;
 };
 
-const RoomBase = withDurableObjectViews<{ room: RoomView }, RoomViewHost>({
-  views: {
-    room(room) {
-      return room.getRoomView();
-    },
-  },
-})(withHibernatingWebSockets<RoomInit>()(withLifecycleHooks<RoomInit>()(DurableObject)));
+const RoomBase = withDurableObjectViews<RoomViews>()(
+  withHibernatingWebSockets<RoomInit>()(withLifecycleHooks<RoomInit>()(DurableObject)),
+);
 
-class Room extends RoomBase<Env> implements RoomViewHost {
-  getRoomView(): RoomView {
-    return this.readRoomView();
+class Room extends RoomBase<Env> {
+  protected getDurableObjectView(view = "default"): RoomView {
+    switch (view) {
+      case "default":
+      case "room":
+        return this.readRoomView();
+
+      default:
+        throw new UnknownDurableObjectViewError(view);
+    }
   }
 
   async renameRoom(name: string) {
@@ -463,6 +467,13 @@ class Room extends RoomBase<Env> implements RoomViewHost {
   }
 }
 ```
+
+The subclass method is the authority for how views are computed. Keep storage
+and domain decisions there; the mixin owns only WebSocket subscription handling
+and the message envelope. A connection without a `view` query param receives the
+`"default"` view. Throw `UnknownDurableObjectViewError` for names the Durable
+Object does not expose; runtime requests are strings, while
+`broadcastDurableObjectView()` stays typed from the `RoomViews` map.
 
 Clients request views with repeated `view` query params:
 

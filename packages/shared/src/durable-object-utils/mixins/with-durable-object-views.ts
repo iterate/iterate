@@ -15,6 +15,7 @@ import type {
 } from "./with-hibernating-websockets.ts";
 
 const DURABLE_OBJECT_VIEW_MESSAGE_KIND = "durable-object-view";
+const DEFAULT_DURABLE_OBJECT_VIEW = "default";
 
 export type DurableObjectViewMessage<View extends string = string, Value = unknown> = {
   kind: typeof DURABLE_OBJECT_VIEW_MESSAGE_KIND;
@@ -23,21 +24,40 @@ export type DurableObjectViewMessage<View extends string = string, Value = unkno
   value: Value;
 };
 
-type DurableObjectViewMap = Record<string, unknown>;
+type DurableObjectViewMap = { default: unknown };
+type DurableObjectViewName<Views extends DurableObjectViewMap> = Extract<keyof Views, string>;
+type DurableObjectViewValue<Views extends DurableObjectViewMap> =
+  Views[DurableObjectViewName<Views>];
 
-type DurableObjectViewFactories<Views extends DurableObjectViewMap, Host> = {
-  [View in Extract<keyof Views, string>]: (host: Host) => Views[View] | Promise<Views[View]>;
-};
+export class UnknownDurableObjectViewError extends Error {
+  constructor(view: string) {
+    super(`Unknown Durable Object view: ${view}`);
+  }
+}
 
 export abstract class DurableObjectViewsProtected<Views extends DurableObjectViewMap> {
-  protected sendDurableObjectView<View extends Extract<keyof Views, string>>(
+  /**
+   * Return the full replacement value that should be synchronized to clients
+   * subscribed to `view`.
+   *
+   * The mixin deliberately asks the subclass for the value instead of accepting
+   * configured callbacks. That keeps persistence and domain modeling in the
+   * Durable Object class: a view can be derived from SQLite, KV, runtime memory,
+   * a stream projection, or any ordinary method. The mixin only owns connection
+   * handling and the stable wire envelope.
+   */
+  protected abstract getDurableObjectView(
+    _view?: string,
+  ): DurableObjectViewValue<Views> | Promise<DurableObjectViewValue<Views>>;
+
+  protected sendDurableObjectView<View extends DurableObjectViewName<Views>>(
     _connection: HibernatingWebSocketConnection,
     _view: View,
   ): Promise<void> {
     throw new Error("DurableObjectViewsProtected is type-only and should never run.");
   }
 
-  protected broadcastDurableObjectView<View extends Extract<keyof Views, string>>(
+  protected broadcastDurableObjectView<View extends DurableObjectViewName<Views>>(
     _view: View,
     _options?: { tag?: string; except?: string | readonly string[] },
   ): Promise<void> {
@@ -76,22 +96,15 @@ type WithDurableObjectViewsResult<
  *
  *   /__websocket?view=room&view=presence
  *
- * If no `view` param is present and exactly one view is configured, that single
- * view is sent as a convenience. If multiple views exist, callers must request
- * them explicitly so a connection does not accidentally receive expensive or
- * sensitive views it did not ask for.
- *
- * Factories receive the Durable Object instance as an explicit `host` argument
- * instead of relying on JavaScript `this`. That keeps dependencies visible at
- * the call site and avoids the weak `this: any` pattern that tends to leak out
- * of callback-based APIs.
+ * If no `view` param is present, the connection subscribes to the `"default"`
+ * view. Subclasses that expose additional named views should branch inside
+ * `getDurableObjectView(view)` and throw for unsupported names. The mixin does
+ * not keep a separate runtime registry, because the Durable Object method is
+ * the single authority for what values can be synchronized.
  */
 export function withDurableObjectViews<
-  Views extends DurableObjectViewMap,
-  Host = unknown,
->(options: { views: DurableObjectViewFactories<Views, Host> }) {
-  const viewNames = Object.keys(options.views);
-
+  Views extends DurableObjectViewMap = DurableObjectViewMap,
+>() {
   return function <TBase extends DurableObjectClass>(
     Base: TBase & Constructor<HibernatingWebSocketsProtected>,
   ): WithDurableObjectViewsResult<TBase, Views> {
@@ -100,19 +113,23 @@ export function withDurableObjectViews<
       Constructor<HibernatingWebSocketsProtected>;
 
     abstract class DurableObjectViewsMixin extends BaseWithWebSockets {
+      protected abstract getDurableObjectView(
+        view?: string,
+      ): DurableObjectViewValue<Views> | Promise<DurableObjectViewValue<Views>>;
+
       protected async onHibernatingWebSocketConnect(
         connection: HibernatingWebSocketConnection,
         context: HibernatingWebSocketConnectionContext,
       ): Promise<void> {
         await super.onHibernatingWebSocketConnect(connection, context);
 
-        const requestedViews = resolveRequestedViews(context.url, viewNames);
+        const requestedViews = resolveRequestedViews(context.url);
         for (const view of requestedViews) {
-          await this.sendDurableObjectView(connection, view as Extract<keyof Views, string>);
+          await this.sendDurableObjectView(connection, view as DurableObjectViewName<Views>);
         }
       }
 
-      protected async sendDurableObjectView<View extends Extract<keyof Views, string>>(
+      protected async sendDurableObjectView<View extends DurableObjectViewName<Views>>(
         connection: HibernatingWebSocketConnection,
         view: View,
       ): Promise<void> {
@@ -127,7 +144,7 @@ export function withDurableObjectViews<
         (this.getHibernatingWebSocket(connection.id) ?? connection).send(JSON.stringify(message));
       }
 
-      protected async broadcastDurableObjectView<View extends Extract<keyof Views, string>>(
+      protected async broadcastDurableObjectView<View extends DurableObjectViewName<Views>>(
         view: View,
         options?: { tag?: string; except?: string | readonly string[] },
       ): Promise<void> {
@@ -138,17 +155,12 @@ export function withDurableObjectViews<
         );
       }
 
-      private createDurableObjectViewMessage<View extends Extract<keyof Views, string>>(
+      private createDurableObjectViewMessage<View extends DurableObjectViewName<Views>>(
         view: View,
       ):
         | DurableObjectViewMessage<View, Views[View]>
         | Promise<DurableObjectViewMessage<View, Views[View]>> {
-        const createView = options.views[view];
-        if (createView === undefined) {
-          throw new Error(`Unknown Durable Object view: ${view}`);
-        }
-
-        const value = createView(this as unknown as Host);
+        const value = this.getDurableObjectView(view);
         const createMessage = (
           resolvedValue: Views[View],
         ): DurableObjectViewMessage<View, Views[View]> => {
@@ -164,7 +176,15 @@ export function withDurableObjectViews<
           };
         };
 
-        return isPromiseLike(value) ? value.then(createMessage) : createMessage(value);
+        // `getDurableObjectView()` is intentionally easier for subclasses to
+        // implement: it returns the union of all declared view values instead
+        // of forcing a generic method with casts in every Durable Object class.
+        // The caller still passes one concrete `view`, so the message envelope
+        // can safely narrow the returned value back to that view's declared type
+        // at the mixin boundary.
+        return isPromiseLike(value)
+          ? value.then((resolvedValue) => createMessage(resolvedValue as Views[View]))
+          : createMessage(value as Views[View]);
       }
     }
 
@@ -182,16 +202,10 @@ export function isDurableObjectViewMessage(
   return "value" in value;
 }
 
-function resolveRequestedViews(url: URL, viewNames: string[]): string[] {
+function resolveRequestedViews(url: URL): string[] {
   const requested = url.searchParams.getAll("view");
   if (requested.length === 0) {
-    return viewNames.length === 1 ? viewNames : [];
-  }
-
-  const knownViews = new Set(viewNames);
-  const unknownViews = requested.filter((view) => !knownViews.has(view));
-  if (unknownViews.length > 0) {
-    throw new Error(`Unknown Durable Object view requested: ${unknownViews.join(", ")}`);
+    return [DEFAULT_DURABLE_OBJECT_VIEW];
   }
 
   return Array.from(new Set(requested));

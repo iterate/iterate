@@ -17,7 +17,10 @@ import {
   listD1ObjectCatalogRecordsByIndex,
   withD1ObjectCatalog,
 } from "../mixins/with-d1-object-catalog.ts";
-import { withDurableObjectViews } from "../mixins/with-durable-object-views.ts";
+import {
+  UnknownDurableObjectViewError,
+  withDurableObjectViews,
+} from "../mixins/with-durable-object-views.ts";
 import type {
   HibernatingWebSocketConnection,
   HibernatingWebSocketConnectionContext,
@@ -380,27 +383,21 @@ type DurableObjectViewCounter = {
   ownerUserId: string;
 };
 
-type DurableObjectViewHost = {
-  getCounterViewForTest(): DurableObjectViewCounter;
+type DurableObjectViewMap = {
+  default: DurableObjectViewCounter;
+  counter: DurableObjectViewCounter;
 };
 
 const DurableObjectViewRoomBase = withPublicFetchRoute({
   namespaceSlug: "durable-object-view-rooms",
   defaultAddressing: "by-name",
 })(
-  withDurableObjectViews<{ counter: DurableObjectViewCounter }, DurableObjectViewHost>({
-    views: {
-      counter(room) {
-        return room.getCounterViewForTest();
-      },
-    },
-  })(withHibernatingWebSockets<RoomInit>()(withLifecycleHooks<RoomInit>()(DurableObject))),
+  withDurableObjectViews<DurableObjectViewMap>()(
+    withHibernatingWebSockets<RoomInit>()(withLifecycleHooks<RoomInit>()(DurableObject)),
+  ),
 );
 
-export class DurableObjectViewTestRoom
-  extends DurableObjectViewRoomBase<Env>
-  implements DurableObjectViewHost
-{
+export class DurableObjectViewTestRoom extends DurableObjectViewRoomBase<Env> {
   protected onHibernatingWebSocketMessage(
     _connection: HibernatingWebSocketConnection,
     message: HibernatingWebSocketMessage,
@@ -409,6 +406,17 @@ export class DurableObjectViewTestRoom
     if (text === "increment") {
       this.ctx.storage.kv.put("count", (this.ctx.storage.kv.get<number>("count") ?? 0) + 1);
       return this.broadcastDurableObjectView("counter");
+    }
+  }
+
+  protected getDurableObjectView(view = "default"): DurableObjectViewCounter {
+    switch (view) {
+      case "default":
+      case "counter":
+        return this.getCounterViewForTest();
+
+      default:
+        throw new UnknownDurableObjectViewError(view);
     }
   }
 
