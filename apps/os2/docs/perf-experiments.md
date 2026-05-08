@@ -2148,3 +2148,55 @@ Interpretation:
   Hypothesis: fewer Worker RPC calls should reduce source subscriber wait
   materially. Risk: a too-large batch can make one receiver invocation too
   chunky and worsen tail latency or CPU time.
+
+### 2026-05-08: callable subscriber batch size 1000
+
+Change deployed:
+
+- Deployed commit `a75224d71` to preview slot 2.
+- Changed `CALLABLE_SUBSCRIBER_ALARM_BATCH_SIZE` from `100` to `1000`.
+
+Run:
+
+- Project: `proj__os__01kr2qg0b0e49rbkwqwdmzt9sj`
+- Benchmark: `agent-server-bench-1778208215924-13ecfe64`
+- Mode: `agent-only`
+- Traffic: `1000` `agent-chat/assistant-response-added` events at `1000/s`
+- Duplicate invariant: passed
+- Duplicate attempts: `12`
+- Source subscriber wait: `870ms`
+- Final subscriber wait: `3ms`
+- Processor wait: `10ms`
+- Append latency: p50 `117ms`, p90 `170ms`, p99 `454ms`
+
+Comparison with previous `100` batch run:
+
+- Source subscriber wait improved: `1194ms` -> `870ms`.
+- Final subscriber wait improved: `413ms` -> `3ms`.
+- Processor wait improved: `74ms` -> `10ms`.
+- Append latency got worse:
+  - p50 `73ms` -> `117ms`
+  - p90 `109ms` -> `170ms`
+  - p99 `136ms` -> `454ms`
+
+Delivery shape:
+
+- The Stream DO now does one history read and one dispatch for each large drain.
+- Slow attempts:
+  - `927` delivered events: `dispatchDurationMs=695`
+  - `571` delivered events: `dispatchDurationMs=527`
+  - `433` delivered events: `dispatchDurationMs=307`
+- Filter time remained `0ms`.
+- The largest retained Agent receiver batch was `571` events:
+  - `consumeDurationMs=645`
+  - `deliveryLagMs=1030`
+
+Interpretation:
+
+- Larger delivery batches materially reduce cursor tail lag because they remove
+  many serialized Worker RPC calls.
+- `1000` looks too large as a blanket default: one receiver invocation becomes
+  chunky, and append p99 regressed badly.
+- Next experiment: test an intermediate batch size, likely `500`, to find a
+  better balance between fewer RPC dispatches and less receiver/append tail
+  pressure.
