@@ -1041,6 +1041,144 @@ Interpretation:
   - callable RPC delivery vs WebSocket batch delivery now that local derived
     event feed-through removes the largest same-runner round trip.
 
+### 2026-05-08: cursor persistence and alarm delivery experiments
+
+Reusable command added:
+
+```sh
+OS2_BASE_URL=https://os2.iterate-preview-2.com \
+doppler run --project os2 --config preview_2 -- \
+pnpm --dir apps/os2 benchmark:agent-stream:server -- \
+  --traffic agent-chat-responses \
+  --count 1000 \
+  --rate 1000 \
+  --concurrency 100
+```
+
+Processor batch cursor persistence change:
+
+- Before this change, `withStreamProcessor.consumeBatchForProcessor()` called
+  `saveStoredState()` inside `reduceOneEvent()` for every event, then saved
+  again after `afterAppend`/`afterAppendBatch` completed.
+- For a `1000` event source batch and three processors, that creates thousands
+  of local storage writes even if most events just advance cursors.
+- Changed batch consumption so reduction updates in-memory stored state for each
+  event, saves once after reduction, and saves once after afterAppend completes.
+- Single-event consumption keeps the old per-event persistence behavior.
+
+Preview result after batch cursor persistence, with callable batch size still
+`100`:
+
+- Project: `proj__os__01kr2h22xhfvn9jrmhta2gzayb`
+- Benchmark: `agent-server-bench-1778201468618-4592aa90`
+- Traffic: `1000` `agent-chat/assistant-response-added` at `1000/s`
+- Appends: `1000`
+- Append failures: `0`
+- Duplicate attempts: `15` across `5` startup/setup keys
+- Append latency: p50 `27ms`, p90 `98ms`, p99 `142ms`
+- Processor wait: `721ms`
+- Tail self-delivery samples: `0ms`
+
+Raw comparison after the same change:
+
+- Project: `proj__os__01kr2h2yv8fvha4563dggh9fyz`
+- Benchmark: `agent-server-bench-1778201496728-453ca55c`
+- Traffic: `1000` `openai-ws/websocket-message-received` at `1000/s`
+- Appends: `1000`
+- Append failures: `0`
+- Duplicate attempts: `12` across `4` startup/setup keys
+- Append latency: p50 `26ms`, p90 `85ms`, p99 `113ms`
+- Processor wait: `245ms`
+- Tail self-delivery samples for terminal derived events: `0ms`
+
+Interpretation:
+
+- The persistence change is a real win for fanout: agent-chat improved from
+  `1136ms` to `721ms`.
+- Raw traffic stayed in the same rough range (`222ms` before, `245ms` after),
+  so the change mainly removes fanout write amplification rather than source
+  delivery cost.
+
+Rejected experiment: immediate in-memory callable subscriber pump.
+
+- Implementation tried:
+  - keep the durable alarm fallback;
+  - coalesce alarm writes;
+  - start a guarded in-memory drain from `afterAppend`;
+  - do not recursively start another pump when processor-generated appends come
+    back through the same Stream DO.
+- Agent-chat result:
+  - project: `proj__os__01kr2h9wr8fesvv76xy59xvn7z`
+  - benchmark: `agent-server-bench-1778201725316-774edbc2`
+  - processor wait: `396ms`
+  - append latency: p50 `118ms`, p90 `259ms`, p99 `280ms`
+- Raw result:
+  - project: `proj__os__01kr2has3recw84c19e8h5mp6p`
+  - benchmark: `agent-server-bench-1778201753801-991a698b`
+  - processor wait: `751ms`
+  - append latency: p50 `43ms`, p90 `118ms`, p99 `123ms`
+- Rejected because it improves fanout terminal settling while badly hurting raw
+  delivery and append contention. The Stream DO should not run a live subscriber
+  pump that competes with a high-rate publisher in the same object.
+
+Rejected experiment: callable subscriber alarm batch size `500`.
+
+- Implementation tried:
+  - no immediate pump;
+  - keep alarm write coalescing;
+  - change `CALLABLE_SUBSCRIBER_ALARM_BATCH_SIZE` from `100` to `500`.
+- Raw result:
+  - project: `proj__os__01kr2hg031fetrdvjneaanqm8s`
+  - benchmark: `agent-server-bench-1778201924150-ea0d037c`
+  - processor wait: `317ms`
+  - append latency: p50 `15ms`, p90 `65ms`, p99 `115ms`
+- Agent-chat result:
+  - project: `proj__os__01kr2hgtkre01sr2rq88dcjdpt`
+  - benchmark: `agent-server-bench-1778201951182-ed3a021b`
+  - processor wait: `682ms`
+  - append latency: p50 `117ms`, p90 `201ms`, p99 `244ms`
+- Rejected for now because the fanout win over batch size `100` is small
+  (`721ms -> 682ms`) and raw delivery worsened (`245ms -> 317ms`).
+
+Rejected experiment: alarm write coalescing.
+
+- Implementation tried:
+  - keep callable subscriber batch size at `100`;
+  - only call `ctx.storage.setAlarm(Date.now())` once while an alarm is already
+    known to be scheduled.
+- Raw confirmation after reverting batch size but keeping alarm coalescing:
+  - project: `proj__os__01kr2hsxx8e8jtd7cb7h43tg82`
+  - benchmark: `agent-server-bench-1778202249886-ead216b2`
+  - processor wait: `441ms`
+  - append latency: p50 `15ms`, p90 `56ms`, p99 `106ms`
+- A prior raw run in the same deployed state was worse:
+  - project: `proj__os__01kr2hs5amecybmv3tz3b7we02`
+  - benchmark: `agent-server-bench-1778202224608-cefb7ba2`
+  - processor wait: `854ms`
+  - append latency: p50 `125ms`, p90 `155ms`, p99 `157ms`
+- Rejected because the proven batch-persistence-only raw run was `245ms`, and
+  repeated immediate `setAlarm(Date.now())` may be helping Cloudflare's alarm
+  scheduler notice hot streams faster than an application-level coalescing flag.
+
+Current candidate kept:
+
+- Batch cursor persistence in `withStreamProcessor`.
+- Callable subscriber alarm batch size remains `100`.
+- Final preview confirmation after reverting rejected alarm experiments:
+  - project: `proj__os__01kr2hz2ajeh4a983g7n62h9sa`
+  - benchmark: `agent-server-bench-1778202417965-6d8c81ec`
+  - traffic: `1000` `agent-chat/assistant-response-added` at `1000/s`
+  - processor wait: `834ms`
+  - append latency: p50 `101ms`, p90 `147ms`, p99 `211ms`
+  - self-delivery samples: `0ms`
+  - interpretation: preview results have meaningful run-to-run variance; the
+    stable finding is not the exact wait number, but that local self-delivery is
+    gone and batch cursor persistence was the only non-regressing improvement in
+    this pass.
+- Next experiment should isolate CodemodeSession subscriber cost and shared
+  history reads per subscriber, because every agent stream currently has both
+  Agent and CodemodeSession callable subscribers.
+
 ### E3: Batching WebSocket stream event frames
 
 Goal:

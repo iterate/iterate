@@ -413,6 +413,7 @@ export function withStreamProcessor<
           streamPath: args.events[0]?.streamPath ?? "",
         });
         const reductions: RuntimeProcessorReduction[] = [];
+        let hasStoredStateChanges = false;
 
         for (const event of args.events) {
           if (event.offset <= storedState.afterAppendCompletedThroughOffset) {
@@ -438,10 +439,12 @@ export function withStreamProcessor<
             for (const gapEvent of gapEvents) {
               const consumed = await this.reduceOneEvent({
                 event: gapEvent,
+                persist: false,
                 processor: args.processor,
                 storedState,
               });
               storedState = consumed.storedState;
+              hasStoredStateChanges = true;
               if (consumed.reduction != null) {
                 reductions.push(consumed.reduction);
               }
@@ -450,13 +453,23 @@ export function withStreamProcessor<
 
           const consumed = await this.reduceOneEvent({
             event,
+            persist: false,
             processor: args.processor,
             storedState,
           });
           storedState = consumed.storedState;
+          hasStoredStateChanges = true;
           if (consumed.reduction != null) {
             reductions.push(consumed.reduction);
           }
+        }
+
+        if (hasStoredStateChanges) {
+          this.saveStoredState({
+            processor: args.processor,
+            storedState,
+            streamPath: args.events[0]!.streamPath,
+          });
         }
 
         if (reductions.length === 0) {
@@ -582,6 +595,7 @@ export function withStreamProcessor<
 
       private async reduceOneEvent(args: {
         event: StreamEvent;
+        persist?: boolean;
         processor: RegisteredProcessor;
         storedState: RuntimeStoredProcessorState;
       }): Promise<{
@@ -602,11 +616,13 @@ export function withStreamProcessor<
               ? Math.max(args.storedState.afterAppendCompletedThroughOffset, args.event.offset)
               : args.storedState.afterAppendCompletedThroughOffset,
         };
-        this.saveStoredState({
-          processor: args.processor,
-          storedState,
-          streamPath: args.event.streamPath,
-        });
+        if (args.persist ?? true) {
+          this.saveStoredState({
+            processor: args.processor,
+            storedState,
+            streamPath: args.event.streamPath,
+          });
+        }
 
         return { reduction: reduction ?? null, storedState };
       }
