@@ -28,6 +28,7 @@ import {
 import { circuitBreakerProcessor } from "./circuit-breaker.ts";
 import { migrate } from "./db/migrations/.generated/migrations.ts";
 import {
+  countIdempotentEvents,
   getEventByIdempotencyKey,
   getReducedState,
   history as selectHistory,
@@ -496,6 +497,9 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
   }
 
   async getDiagnostics() {
+    const idempotentEventSummary = countIdempotentEvents(this.client) ?? {
+      committed_idempotent_event_count: 0,
+    };
     const duplicateSummary = summarizeIdempotencyDuplicateAttempts(this.client) ?? {
       duplicate_attempt_count: 0,
       duplicate_key_count: 0,
@@ -513,6 +517,10 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
       ),
       idempotencyDuplicateAttemptCount: duplicateSummary.duplicate_attempt_count,
       idempotencyDuplicateKeyCount: duplicateSummary.duplicate_key_count,
+      idempotencyCommittedEventCount: idempotentEventSummary.committed_idempotent_event_count,
+      idempotencyLogicalAppendAttemptCount:
+        idempotentEventSummary.committed_idempotent_event_count +
+        duplicateSummary.duplicate_attempt_count,
       idempotencyDuplicateTopKeys: listIdempotencyDuplicateAttempts(this.client, {
         limit: IDEMPOTENCY_DIAGNOSTIC_LIMIT,
       }).map((row) => ({

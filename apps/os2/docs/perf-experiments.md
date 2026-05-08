@@ -1569,8 +1569,22 @@ Current known duplicate classes:
 
 Next check:
 
-- Add expected-duplicate thresholds to benchmark scripts so traffic tests fail
-  when duplicate attempts exceed a small allowlist of known startup/setup keys.
+- Done: add expected-duplicate thresholds to benchmark scripts so traffic tests
+  fail when duplicate attempts exceed a small allowlist of known startup/setup
+  keys.
+- The benchmark CLI now reports:
+  - committed idempotent event count;
+  - duplicate append attempts observed before the idempotency return path;
+  - logical idempotent append attempts
+    (`committed idempotent events + duplicate attempts`);
+  - duplicate-attempt ratio;
+  - unexpected duplicate keys outside the setup allowlist.
+- Default invariant:
+  - total duplicate attempts must be <= `25`;
+  - unexpected duplicate attempts must be `0`.
+- The defaults intentionally allow known startup/setup cleanup work to continue
+  while making a hidden per-traffic-event duplicate storm fail the benchmark
+  immediately.
 
 Fresh check from the `2026-05-08` Agent DO timing run:
 

@@ -246,8 +246,11 @@ export const projectAgentsRouter = {
           appendedCount: published.appended.length,
           appendFailureCount: published.failures.length,
           benchmarkEventCount: benchmarkEvents.length,
+          idempotencyCommittedEventCount: streamDiagnostics.idempotencyCommittedEventCount,
           idempotencyDuplicateAttemptCount: streamDiagnostics.idempotencyDuplicateAttemptCount,
           idempotencyDuplicateKeyCount: streamDiagnostics.idempotencyDuplicateKeyCount,
+          idempotencyLogicalAppendAttemptCount:
+            streamDiagnostics.idempotencyLogicalAppendAttemptCount,
           terminalEventCount: published.terminal.length,
           traffic: input.traffic,
         },
@@ -372,8 +375,10 @@ type BenchmarkStreamStub = {
       uniqueHistoryWindowCount: number;
       yielded: boolean;
     }>;
+    idempotencyCommittedEventCount: number;
     idempotencyDuplicateAttemptCount: number;
     idempotencyDuplicateKeyCount: number;
+    idempotencyLogicalAppendAttemptCount: number;
     idempotencyDuplicateTopKeys: Array<{
       duplicateAttempts: number;
       eventType: string;

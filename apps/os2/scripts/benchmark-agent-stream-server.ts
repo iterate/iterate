@@ -10,6 +10,20 @@ type SubscriberMode = "both" | "agent-only" | "codemode-only";
 type SubscriptionTransport = "rpc" | "websocket";
 type OrpcClient = RouterClient<typeof appRouter>;
 
+type BenchmarkResult = {
+  streamDiagnostics: {
+    idempotencyCommittedEventCount: number;
+    idempotencyDuplicateAttemptCount: number;
+    idempotencyLogicalAppendAttemptCount: number;
+    idempotencyDuplicateTopKeys: IdempotencyDuplicateKey[];
+  };
+};
+
+type IdempotencyDuplicateKey = {
+  duplicateAttempts: number;
+  idempotencyKey: string;
+};
+
 type Options = {
   agentPath: string;
   baseUrl: string;
@@ -19,11 +33,25 @@ type Options = {
   projectSlugOrId: string | null;
   publisher: Publisher;
   ratePerSecond: number;
+  allowedIdempotencyDuplicateKeyPrefixes: string[];
+  maxIdempotencyDuplicateAttempts: number;
+  maxUnexpectedIdempotencyDuplicateAttempts: number;
   subscriberMode: SubscriberMode;
   subscriptionTransport: SubscriptionTransport;
   terminalEvents: boolean;
   traffic: TrafficKind;
 };
+
+const DEFAULT_ALLOWED_IDEMPOTENCY_DUPLICATE_KEY_PREFIXES = [
+  "agent-default-system-prompt-v2",
+  "codemode-session-callable-subscription:",
+  "codemode:tool-provider-registered:",
+  "events.iterate.com/codemode/session-started",
+  "os2-agent-setup:",
+  "processor-registered:",
+  "stream-processor-callable-subscription:",
+  "stream-processor-websocket-subscription:",
+];
 
 async function main() {
   const options = parseOptions(process.argv.slice(2));
@@ -37,7 +65,7 @@ async function main() {
       })
     ).id;
 
-  const result = await client.project.agents.benchmarkStream({
+  const result = (await client.project.agents.benchmarkStream({
     agentPath: options.agentPath,
     concurrency: options.concurrency,
     count: options.count,
@@ -49,18 +77,32 @@ async function main() {
     subscriptionTransport: options.subscriptionTransport,
     terminalEvents: options.terminalEvents,
     traffic: options.traffic,
-  });
+  })) as BenchmarkResult;
 
+  const duplicateInvariant = evaluateIdempotencyDuplicateInvariant({ options, result });
   console.log(
     JSON.stringify(
       {
         options: { ...options, projectSlugOrId },
+        duplicateInvariant,
         result,
       },
       null,
       2,
     ),
   );
+
+  if (!duplicateInvariant.passed) {
+    throw new Error(
+      [
+        "Idempotency duplicate invariant failed.",
+        `duplicateAttempts=${duplicateInvariant.duplicateAttempts}`,
+        `maxDuplicateAttempts=${options.maxIdempotencyDuplicateAttempts}`,
+        `unexpectedDuplicateAttempts=${duplicateInvariant.unexpectedDuplicateAttempts}`,
+        `maxUnexpectedDuplicateAttempts=${options.maxUnexpectedIdempotencyDuplicateAttempts}`,
+      ].join(" "),
+    );
+  }
 }
 
 function createClient(baseUrl: string) {
@@ -111,6 +153,23 @@ function parseOptions(args: readonly string[]): Options {
     projectSlugOrId: optionalStringOption(values, "project"),
     publisher: publisherOption(values, "publisher", "app-worker"),
     ratePerSecond: numberOption(values, "rate", 1000),
+    allowedIdempotencyDuplicateKeyPrefixes: stringListOption(
+      values,
+      "allowed-idempotency-duplicate-key-prefixes",
+      DEFAULT_ALLOWED_IDEMPOTENCY_DUPLICATE_KEY_PREFIXES,
+    ),
+    maxIdempotencyDuplicateAttempts: numberOption(
+      values,
+      "max-idempotency-duplicate-attempts",
+      25,
+      { allowZero: true },
+    ),
+    maxUnexpectedIdempotencyDuplicateAttempts: numberOption(
+      values,
+      "max-unexpected-idempotency-duplicate-attempts",
+      0,
+      { allowZero: true },
+    ),
     subscriberMode: subscriberModeOption(values, "subscriber-mode", "both"),
     subscriptionTransport: subscriptionTransportOption(values, "subscription-transport", "rpc"),
     terminalEvents: booleanOption(values, "terminal-events", true),
@@ -152,12 +211,30 @@ function optionalStringOption(values: Map<string, string>, key: string) {
   return values.get(key) ?? null;
 }
 
-function numberOption(values: Map<string, string>, key: string, fallback: number) {
+function numberOption(
+  values: Map<string, string>,
+  key: string,
+  fallback: number,
+  options: { allowZero?: boolean } = {},
+) {
   const raw = values.get(key);
   if (raw == null) return fallback;
   const value = Number(raw);
-  if (!Number.isFinite(value) || value <= 0) throw new Error(`--${key} must be positive`);
+  if (!Number.isFinite(value) || (options.allowZero ? value < 0 : value <= 0)) {
+    throw new Error(`--${key} must be ${options.allowZero ? "zero or positive" : "positive"}`);
+  }
   return value;
+}
+
+function stringListOption(values: Map<string, string>, key: string, fallback: string[]) {
+  const raw = values.get(key);
+  if (raw == null) return fallback;
+  const items = raw
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (items.length === 0) throw new Error(`--${key} must contain at least one value`);
+  return items;
 }
 
 function booleanOption(values: Map<string, string>, key: string, fallback: boolean) {
@@ -196,6 +273,43 @@ function subscriptionTransportOption(
   const value = values.get(key) ?? fallback;
   if (value === "rpc" || value === "websocket") return value;
   throw new Error(`--${key} must be rpc or websocket`);
+}
+
+function evaluateIdempotencyDuplicateInvariant(input: {
+  options: Options;
+  result: BenchmarkResult;
+}) {
+  const duplicateKeys = input.result.streamDiagnostics.idempotencyDuplicateTopKeys;
+  const unexpectedKeys = duplicateKeys.filter(
+    (key) =>
+      !input.options.allowedIdempotencyDuplicateKeyPrefixes.some((prefix) =>
+        key.idempotencyKey.startsWith(prefix),
+      ),
+  );
+  const unexpectedDuplicateAttempts = unexpectedKeys.reduce(
+    (sum, key) => sum + key.duplicateAttempts,
+    0,
+  );
+  const duplicateAttempts = input.result.streamDiagnostics.idempotencyDuplicateAttemptCount;
+  const logicalAppendAttempts = input.result.streamDiagnostics.idempotencyLogicalAppendAttemptCount;
+  const committedIdempotentEvents = input.result.streamDiagnostics.idempotencyCommittedEventCount;
+
+  return {
+    passed:
+      duplicateAttempts <= input.options.maxIdempotencyDuplicateAttempts &&
+      unexpectedDuplicateAttempts <= input.options.maxUnexpectedIdempotencyDuplicateAttempts,
+    committedIdempotentEvents,
+    duplicateAttempts,
+    logicalAppendAttempts,
+    duplicateAttemptRatio:
+      committedIdempotentEvents === 0 ? null : round(duplicateAttempts / committedIdempotentEvents),
+    unexpectedDuplicateAttempts,
+    unexpectedKeys,
+  };
+}
+
+function round(value: number) {
+  return Math.round(value * 100) / 100;
 }
 
 await main();
