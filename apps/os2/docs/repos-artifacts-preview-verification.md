@@ -83,8 +83,8 @@ left behind by failed first attempts.
 
 ## Live verification
 
-Preview sync deployed OS2 commit `2906e29`, then `d550ac8` was committed for
-list hardening. The `2906e29` preview smoke passed against
+Preview sync deployed OS2 commit `bb6500b` after the list hardening and this
+document were committed. The final OS2 preview smoke passed against
 `https://os2.iterate-preview-2.com/`.
 
 Direct repo API creation succeeded for slug `codex-artifacts-1778533765369` and
@@ -138,6 +138,9 @@ Git using the returned header credentials:
 d7f379f Verify codemode repo push
 9662167 Initial commit
 ```
+
+After deploying list hardening, `GET /api/projects/haha/repos` returned three
+created repos and did not include the earlier failed `asdasd` catalog row.
 
 Local checks run before commits:
 
