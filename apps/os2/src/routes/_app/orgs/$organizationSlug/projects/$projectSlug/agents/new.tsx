@@ -2,7 +2,6 @@ import { useCallback, useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Play, RotateCcw } from "lucide-react";
-import { parse as parseYaml } from "yaml";
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import {
   EventInput,
@@ -33,8 +32,10 @@ import {
 } from "~/domains/codemode/examples.ts";
 import {
   type AgentLlmProvider,
-  defaultAgentSetupEvents,
+  configuredAgentSetupEvents,
   defaultAgentSystemPrompt,
+  parseAgentEventInputsYaml,
+  parseAgentRunOptsJson,
 } from "~/domains/agents/agent-presets.ts";
 import { agentPathFromInput } from "~/lib/agent-links.ts";
 import { streamPathToSplat } from "~/lib/stream-links.ts";
@@ -354,8 +355,8 @@ function buildPreviewEvents(input: {
     agentPath = agentPathFromInput(input.agentPathInput);
     if (input.model.trim() === "") throw new Error("Model is required.");
     if (input.systemPrompt.trim() === "") throw new Error("System prompt is required.");
-    const customEvents = parseCustomEvents(input.customEventsYaml);
-    const runOpts = input.provider === "cloudflare-ai" ? parseRunOpts(input.runOpts) : {};
+    const customEvents = parseAgentEventInputsYaml(input.customEventsYaml);
+    const runOpts = input.provider === "cloudflare-ai" ? parseAgentRunOptsJson(input.runOpts) : {};
     const providers = [
       ...(input.selectedToolProviders.has("default")
         ? createDefaultCodemodeProviderRegistrations({
@@ -381,7 +382,8 @@ function buildPreviewEvents(input: {
     return {
       agentPath,
       events: [
-        ...agentSetupEvents({
+        ...configuredAgentSetupEvents({
+          idempotencyKeyPrefix: "os2-agent-new:setup",
           model: input.model.trim(),
           provider: input.provider,
           runOpts,
@@ -402,31 +404,6 @@ function buildPreviewEvents(input: {
       events: [],
     };
   }
-}
-
-function agentSetupEvents(input: {
-  model: string;
-  provider: AgentLlmProvider;
-  runOpts: Record<string, unknown>;
-  systemPrompt: string;
-}): EventInput[] {
-  return defaultAgentSetupEvents(input.provider).map((event, index) => ({
-    idempotencyKey: `os2-agent-new:setup:${index}:${event.type}`,
-    type: event.type,
-    payload:
-      input.provider === "openai-ws" && event.type === "events.iterate.com/openai-ws/config-updated"
-        ? { model: input.model }
-        : input.provider === "cloudflare-ai" &&
-            event.type === "events.iterate.com/agent/llm-config-updated"
-          ? {
-              debounceMs: 1000,
-              model: input.model,
-              runOpts: input.runOpts,
-            }
-          : event.type === "events.iterate.com/agent/system-prompt-updated"
-            ? { systemPrompt: input.systemPrompt }
-            : event.payload,
-  }));
 }
 
 function agentSubscriptionConfiguredEvent(input: {
@@ -505,21 +482,4 @@ function dedupeToolProviders(providers: ToolProviderRegistration[]) {
     if (!byPath.has(key)) byPath.set(key, provider);
   }
   return [...byPath.values()];
-}
-
-function parseCustomEvents(value: string) {
-  const parsed = parseYaml(value.trim() || "[]") as unknown;
-  return EventInput.array().parse(parsed);
-}
-
-function parseRunOpts(value: string): Record<string, unknown> {
-  try {
-    const parsed = JSON.parse(value);
-    if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("Run options must be a JSON object.");
-    }
-    return parsed as Record<string, unknown>;
-  } catch {
-    throw new Error("Run options must be valid JSON.");
-  }
 }

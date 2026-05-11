@@ -129,7 +129,7 @@ async function authenticateMcpRequest(request: Request) {
 
     const claims = await tryReadJwtClaims(token);
     const userId = readStringProperty(clerkAuth, "userId");
-    const tokenType = readStringProperty(clerkAuth, "tokenType") ?? undefined;
+    const tokenType = readClerkTokenType(clerkAuth);
 
     if (!userId) {
       return unauthorizedMcpResponse(request, "MCP token must identify a Clerk user");
@@ -176,6 +176,14 @@ function authenticateSharedSecret(token: string): ProjectMcpServerConnectionProp
     userId: "admin-api-secret",
     clerkTokenType: "admin_api_secret",
   };
+}
+
+function readClerkTokenType(clerkAuth: unknown): ProjectMcpServerConnectionProps["clerkTokenType"] {
+  const tokenType = readStringProperty(clerkAuth, "tokenType");
+  if (tokenType === "oauth_token" || tokenType === "session_token") {
+    return tokenType;
+  }
+  return undefined;
 }
 
 async function resolveMcpProjectAccess(input: {

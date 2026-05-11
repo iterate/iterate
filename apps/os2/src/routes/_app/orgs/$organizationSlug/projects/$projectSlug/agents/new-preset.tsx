@@ -2,7 +2,6 @@ import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Save } from "lucide-react";
-import { parse as parseYaml } from "yaml";
 import { EventInput, StreamPath } from "@iterate-com/shared/streams/types";
 import { Button } from "@iterate-com/ui/components/button";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@iterate-com/ui/components/field";
@@ -15,9 +14,11 @@ import { Textarea } from "@iterate-com/ui/components/textarea";
 import {
   AgentPresetEvent,
   type AgentLlmProvider,
-  defaultAgentSetupEvents,
+  configuredAgentSetupEvents,
   defaultAgentSystemPrompt,
   normalizeAgentPresetBasePath,
+  parseAgentPresetEventsYaml,
+  parseAgentRunOptsJson,
 } from "~/domains/agents/agent-presets.ts";
 import { orpc, orpcClient } from "~/orpc/client.ts";
 
@@ -77,7 +78,7 @@ function NewAgentPresetPage() {
         model: model.trim(),
         projectSlugOrId: project.id,
         provider,
-        runOpts: provider === "cloudflare-ai" ? parseRunOpts(runOpts) : {},
+        runOpts: provider === "cloudflare-ai" ? parseAgentRunOptsJson(runOpts) : {},
         systemPrompt: systemPrompt.trim(),
       });
     },
@@ -245,14 +246,14 @@ function buildPresetPreview(input: {
     basePath = normalizeAgentPresetBasePath(input.basePathInput);
     if (input.model.trim() === "") throw new Error("Model is required.");
     if (input.systemPrompt.trim() === "") throw new Error("System prompt is required.");
-    const customEvents = parseCustomEvents(input.customEventsYaml);
-    const runOpts = input.provider === "cloudflare-ai" ? parseRunOpts(input.runOpts) : {};
+    const customEvents = parseAgentPresetEventsYaml(input.customEventsYaml);
+    const runOpts = input.provider === "cloudflare-ai" ? parseAgentRunOptsJson(input.runOpts) : {};
 
     return {
       basePath,
       customEvents,
       events: [
-        ...agentSetupEvents({
+        ...configuredAgentSetupEvents({
           model: input.model.trim(),
           provider: input.provider,
           runOpts,
@@ -268,46 +269,5 @@ function buildPresetPreview(input: {
       error: error instanceof Error ? error.message : String(error),
       events: [],
     };
-  }
-}
-
-function agentSetupEvents(input: {
-  model: string;
-  provider: AgentLlmProvider;
-  runOpts: Record<string, unknown>;
-  systemPrompt: string;
-}): EventInput[] {
-  return defaultAgentSetupEvents(input.provider).map((event) => ({
-    type: event.type,
-    payload:
-      input.provider === "openai-ws" && event.type === "events.iterate.com/openai-ws/config-updated"
-        ? { model: input.model }
-        : input.provider === "cloudflare-ai" &&
-            event.type === "events.iterate.com/agent/llm-config-updated"
-          ? {
-              debounceMs: 1000,
-              model: input.model,
-              runOpts: input.runOpts,
-            }
-          : event.type === "events.iterate.com/agent/system-prompt-updated"
-            ? { systemPrompt: input.systemPrompt }
-            : event.payload,
-  }));
-}
-
-function parseCustomEvents(value: string) {
-  const parsed = parseYaml(value.trim() || "[]") as unknown;
-  return AgentPresetEvent.array().parse(parsed);
-}
-
-function parseRunOpts(value: string): Record<string, unknown> {
-  try {
-    const parsed = JSON.parse(value);
-    if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("Run options must be a JSON object.");
-    }
-    return parsed as Record<string, unknown>;
-  } catch {
-    throw new Error("Run options must be valid JSON.");
   }
 }

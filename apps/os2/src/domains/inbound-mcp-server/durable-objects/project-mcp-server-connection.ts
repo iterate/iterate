@@ -54,7 +54,7 @@ export interface ProjectMcpServerConnectionProps extends Record<string, unknown>
   orgPermissions: string[];
   scopes: string[];
   clientId: string | null;
-  clerkTokenType?: string;
+  clerkTokenType?: "admin_api_secret" | "oauth_token" | "session_token";
 }
 
 export type ProjectMcpServerConnectionStructuredName = {
@@ -389,7 +389,7 @@ export class ProjectMcpServerConnection extends McpAgent<
   }
 
   private requireScope(props: ProjectMcpServerConnectionProps, scope: string) {
-    if (props.clerkTokenType && props.clerkTokenType !== "oauth_token") {
+    if (props.clerkTokenType === "session_token" || props.clerkTokenType === "admin_api_secret") {
       return;
     }
 
