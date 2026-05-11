@@ -2,12 +2,16 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { Event, EventInput, type StreamPath } from "@iterate-com/shared/streams/types";
 import {
-  processEventsWithViewReducer,
-  selectEventsStreamViewReducer,
-} from "@iterate-com/ui/components/events/feed-processors";
+  getInitialProcessorState,
+  runProcessorReduce,
+  type ProcessorState,
+  type StreamEvent,
+} from "@iterate-com/shared/stream-processors";
+import { StreamViewProcessorContract } from "@iterate-com/ui/components/events/stream-view-processor/contract";
 import type {
   EventsStreamInputAction,
   EventsStreamRegisteredProcessor,
+  EventsStreamViewState,
 } from "@iterate-com/ui/components/events/feed-items";
 import {
   EventsStreamComposer,
@@ -159,33 +163,71 @@ export function ProjectStreamView({
     };
   }, [projectSlugOrId, streamPath]);
 
-  const viewReducerRef = useRef<{
-    state: ReturnType<typeof processEventsWithViewReducer> | null;
+  const processorRef = useRef<{
+    state: ProcessorState<typeof StreamViewProcessorContract>;
     processedCount: number;
-    rendererMode: typeof rendererMode;
-  }>({ state: null, processedCount: 0, rendererMode });
+  }>({
+    state: getInitialProcessorState(StreamViewProcessorContract),
+    processedCount: 0,
+  });
 
-  const viewState = useMemo(() => {
-    const reducer = selectEventsStreamViewReducer(rendererMode);
-    const ref = viewReducerRef.current;
+  const processorState = useMemo(() => {
+    const ref = processorRef.current;
 
-    // Full reprocess when renderer mode changes or events were reset (stream path change)
-    if (ref.rendererMode !== rendererMode || ref.processedCount > events.length) {
-      ref.state = processEventsWithViewReducer({ events, reducer });
-      ref.processedCount = events.length;
-      ref.rendererMode = rendererMode;
-      return ref.state;
+    // Reset when events are cleared (stream path change)
+    if (ref.processedCount > events.length) {
+      ref.state = getInitialProcessorState(StreamViewProcessorContract);
+      ref.processedCount = 0;
     }
 
-    // Incremental: only reduce new events against existing state
-    let state = ref.state ?? reducer.createInitialState();
+    // Incremental reduce — only process new events
+    const processor = { contract: StreamViewProcessorContract };
     for (let i = ref.processedCount; i < events.length; i++) {
-      state = reducer.reduce({ event: events[i]!, state }) ?? state;
+      const reduction = runProcessorReduce({
+        processor,
+        event: events[i] as unknown as StreamEvent,
+        state: ref.state,
+      });
+      ref.state = reduction?.state ?? ref.state;
     }
-    ref.state = state;
     ref.processedCount = events.length;
-    return state;
-  }, [events, rendererMode]);
+    return ref.state;
+  }, [events]);
+
+  // Renderer mode is a pure view-time filter — no re-processing needed
+  const viewState = useMemo((): EventsStreamViewState => {
+    if (rendererMode === "raw-single-json") {
+      return {
+        ...processorState,
+        slots: {
+          ...processorState.slots,
+          feed:
+            events.length === 0
+              ? []
+              : [
+                  {
+                    type: "raw-json-dump",
+                    id: "raw-json-dump",
+                    props: { events: [...events] },
+                  },
+                ],
+        },
+      };
+    }
+
+    if (rendererMode === "pretty") {
+      return {
+        ...processorState,
+        slots: {
+          ...processorState.slots,
+          feed: processorState.slots.feed.filter((element) => element.type !== "grouped-raw-event"),
+        },
+      };
+    }
+
+    // raw-pretty: show everything
+    return processorState;
+  }, [processorState, rendererMode, events]);
 
   const rawPresets = useMemo(
     () => buildRawPresets(viewState.activity.registeredProcessors),

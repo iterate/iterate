@@ -423,19 +423,3 @@ export type EventsStreamViewState = {
   slots: EventsStreamSlots;
   activity: EventsStreamActivityState;
 };
-
-/**
- * Browser-side stream view reducer.
- *
- * Reducers synchronously reduce raw stream events into renderer-neutral view
- * state. React, terminal, and future renderers consume that state without
- * owning event interpretation.
- */
-export type EventsStreamViewReducer = {
-  slug: string;
-  createInitialState: () => EventsStreamViewState;
-  reduce: (args: {
-    event: Event;
-    state: EventsStreamViewState;
-  }) => EventsStreamViewState | undefined;
-};
