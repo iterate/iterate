@@ -122,6 +122,59 @@ const codemodeExampleSeeds = [
     ],
   },
   {
+    slug: "repo-create-and-git-details",
+    name: "Create Repo and inspect Git details",
+    description:
+      "Use the project-scoped Repos capability to create a Cloudflare Artifacts-backed repo, read it back, and show safe Git clone details.",
+    providers: [{ type: "example-capabilities" }],
+    code: `async (ctx) => {
+  const slug = \`codemode-example-\${Date.now()}\`;
+
+  const created = await ctx.repos.create({ slug }).getInfo();
+  const fetched = await ctx.repos.get({ slug }).getInfo();
+  const repos = await ctx.repos.list({});
+
+  const redactedCloneCommand = created.git.cloneCommand.replace(
+    created.token,
+    "<repo-token>",
+  );
+  const redactedPushCommand = created.git.pushCommand.replace(
+    created.token,
+    "<repo-token>",
+  );
+
+  console.log("created repo", {
+    slug: created.slug,
+    remote: created.remote,
+    defaultBranch: created.defaultBranch,
+    tokenExpiresAt: created.tokenExpiresAt,
+  });
+
+  return {
+    created: {
+      slug: created.slug,
+      remote: created.remote,
+      defaultBranch: created.defaultBranch,
+      tokenExpiresAt: created.tokenExpiresAt,
+      hasToken: typeof created.token === "string" && created.token.length > 0,
+      cloneCommand: redactedCloneCommand,
+      pushCommand: redactedPushCommand,
+    },
+    fetchedMatchesCreated: fetched.remote === created.remote,
+    repoCount: repos.length,
+  };
+}`,
+    events: [
+      {
+        type: "events.iterate.com/codemode/example-note",
+        payload: {
+          message:
+            "Creates one project-scoped Repo through ctx.repos.create({ slug }).getInfo() and redacts the returned token in the script output.",
+        },
+      },
+    ],
+  },
+  {
     slug: "cloudflare-docs-mcp",
     name: "Cloudflare Docs MCP",
     description: "Use Cloudflare's public documentation MCP server as a normal codemode provider.",
