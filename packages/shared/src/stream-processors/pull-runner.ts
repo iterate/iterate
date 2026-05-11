@@ -1,3 +1,4 @@
+import type { z } from "zod";
 import {
   catchUpProcessorFromStream,
   consumeLiveProcessorEvent,
@@ -11,7 +12,6 @@ import {
   type StreamEvent,
 } from "./stream-processor.ts";
 import { CoreProcessorContract, CoreProcessorErrorOccurredEventType } from "./core/contract.ts";
-import type { z } from "zod";
 
 type PullRunnerContract<Contract> = {
   slug: string;

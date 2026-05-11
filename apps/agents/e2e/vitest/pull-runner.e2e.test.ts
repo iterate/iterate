@@ -9,11 +9,11 @@ import {
 import type { ProcessorStreamApi } from "@iterate-com/shared/stream-processors";
 import { LegacyCodemodeProcessorContract } from "@iterate-com/shared/stream-processors/legacy-codemode/contract";
 import { createLegacyCodemodeProcessor } from "@iterate-com/shared/stream-processors/legacy-codemode/implementation";
-import { setupE2E, type E2EContext } from "../test-support/e2e-test.ts";
 import {
   createMemoryPullProcessorStorage,
   runPullProcessor,
 } from "@iterate-com/shared/stream-processors/pull-runner";
+import { setupE2E, type E2EContext } from "../test-support/e2e-test.ts";
 
 test(
   "polling pull runner catches up from real Events history and appends derived codemode events",
