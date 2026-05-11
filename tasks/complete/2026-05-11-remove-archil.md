@@ -13,7 +13,7 @@ Remove all Archil-specific code, configuration, environment variables, bindings,
 
 ## Checklist
 
-- [x] Remove Archil Cloudflare/Alchemy resources and Worker bindings. _Removed the `R2Bucket("archil-data")` resource plus `ARCHIL_R2_\*`bindings from`apps/os/alchemy.run.ts`.\_
+- [x] Remove Archil Cloudflare/Alchemy resources and Worker bindings. _Removed the `R2Bucket("archil-data")` resource plus R2 bindings from `apps/os/alchemy.run.ts`._
 - [x] Remove Archil runtime environment variables, schemas, and backend usage. _Removed `ArchilApiKeys`, region config fields, env typing, and machine-creation disk provisioning._
 - [x] Remove Archil API key/global-secret seeding and related docs. _No global secret config remained; deleted the customer config source doc that was centered on Archil sync options._
 - [x] Remove Archil tests, helpers, scripts, and package dependencies that are no longer used. _Deleted the OS integration module, sandbox mount script, benchmark experiment, Dockerfile install step, and `@archildata/client` dependency._
