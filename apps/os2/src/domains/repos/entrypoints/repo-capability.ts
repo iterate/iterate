@@ -6,6 +6,7 @@ import {
 } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import type { ExecuteCodemodeFunctionCallInput } from "@iterate-com/shared/stream-processors/codemode/implementation";
 import type {
+  RepoInfo,
   RepoDurableObject,
   RepoStructuredName,
 } from "~/domains/repos/durable-objects/repo-durable-object.ts";
@@ -28,7 +29,10 @@ export type RepoCatalogRecord = {
   repoSlug: string;
 };
 
-type ReposCapabilityClient = Pick<ReposCapability, "create" | "get" | "list">;
+type ReposCapabilityClient = Pick<
+  ReposCapability,
+  "create" | "createInfo" | "get" | "getInfo" | "list"
+>;
 type RepoLifecycleCatalogRecord = D1ObjectCatalogRecord<RepoStructuredName>;
 
 export class ReposCapability extends WorkerEntrypoint<ReposCapabilityEnv, ReposCapabilityProps> {
@@ -74,6 +78,11 @@ export class ReposCapability extends WorkerEntrypoint<ReposCapabilityEnv, ReposC
     return repo;
   }
 
+  async createInfo(input: { projectSlug?: string; slug: string }): Promise<RepoInfo> {
+    const repo = await this.create(input);
+    return await repo.getInfo();
+  }
+
   async get(input: { slug: string }) {
     const repo = await getInitializedDoStub({
       allowCreate: false,
@@ -86,6 +95,11 @@ export class ReposCapability extends WorkerEntrypoint<ReposCapabilityEnv, ReposC
     }
 
     return repo;
+  }
+
+  async getInfo(input: { slug: string }): Promise<RepoInfo> {
+    const repo = await this.get(input);
+    return await repo.getInfo();
   }
 
   async list(): Promise<RepoCatalogRecord[]> {

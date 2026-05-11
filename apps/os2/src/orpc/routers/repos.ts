@@ -15,11 +15,10 @@ export const projectReposRouter = {
     .handler(async ({ context, input }) => {
       const project = requireProjectScope(context);
       try {
-        const repo = await getProjectReposCapability(context, project.id).create({
+        return await getProjectReposCapability(context, project.id).createInfo({
           projectSlug: project.slug,
           slug: input.slug,
         });
-        return await repo.getInfo();
       } catch (error) {
         throw toRepoORPCError(error);
       }
@@ -27,10 +26,9 @@ export const projectReposRouter = {
   get: os.project.repos.get.use(projectScopeMiddleware).handler(async ({ context, input }) => {
     const project = requireProjectScope(context);
     try {
-      const repo = await getProjectReposCapability(context, project.id).get({
+      return await getProjectReposCapability(context, project.id).getInfo({
         slug: input.repoSlug,
       });
-      return await repo.getInfo();
     } catch (error) {
       throw toRepoORPCError(error);
     }
