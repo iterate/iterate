@@ -4,6 +4,45 @@ import { z } from "zod";
 import packageJson from "../package.json" with { type: "json" };
 
 const ClerkMcpOauthScope = z.enum(["openid", "profile", "email"]);
+const SlackScope = z.string().trim().min(1);
+const GoogleScope = z.string().trim().min(1);
+
+export const DEFAULT_SLACK_BOT_SCOPES = [
+  "channels:history",
+  "channels:join",
+  "channels:manage",
+  "channels:read",
+  "chat:write",
+  "chat:write.public",
+  "files:read",
+  "files:write",
+  "groups:history",
+  "groups:read",
+  "im:history",
+  "im:read",
+  "im:write",
+  "mpim:history",
+  "mpim:read",
+  "reactions:read",
+  "reactions:write",
+  "users.profile:read",
+  "users:read",
+  "users:read.email",
+  "assistant:write",
+  "conversations.connect:write",
+];
+
+export const DEFAULT_GOOGLE_OAUTH_SCOPES = [
+  "openid",
+  "https://www.googleapis.com/auth/userinfo.email",
+  "https://www.googleapis.com/auth/userinfo.profile",
+  "https://www.googleapis.com/auth/gmail.modify",
+  "https://www.googleapis.com/auth/gmail.send",
+  "https://www.googleapis.com/auth/gmail.labels",
+  "https://www.googleapis.com/auth/calendar",
+  "https://www.googleapis.com/auth/documents",
+  "https://www.googleapis.com/auth/drive",
+];
 
 export const AppConfig = BaseAppConfig.extend({
   adminApiSecret: redacted(z.string().trim().min(1)).optional(),
@@ -28,6 +67,25 @@ export const AppConfig = BaseAppConfig.extend({
   }),
   openAiApiKey: redacted(z.string().trim().min(1)),
   projectHostnameBases: publicValue(z.array(z.string().trim().min(1)).default([])),
+  integrations: z
+    .object({
+      slack: z
+        .object({
+          clientId: publicValue(z.string().trim().min(1)),
+          clientSecret: redacted(z.string().trim().min(1)),
+          signingSecret: redacted(z.string().trim().min(1)),
+          scopes: publicValue(z.array(SlackScope).default(DEFAULT_SLACK_BOT_SCOPES)),
+        })
+        .optional(),
+      google: z
+        .object({
+          clientId: publicValue(z.string().trim().min(1)),
+          clientSecret: redacted(z.string().trim().min(1)),
+          scopes: publicValue(z.array(GoogleScope).default(DEFAULT_GOOGLE_OAUTH_SCOPES)),
+        })
+        .optional(),
+    })
+    .default({}),
   slackBotToken: redacted(z.string().trim().min(1)).optional(),
   typeIdPrefix: redacted(
     z

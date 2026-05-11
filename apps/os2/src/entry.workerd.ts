@@ -48,6 +48,7 @@ export { ProjectMcpServerEntrypoint } from "~/domains/inbound-mcp-server/entrypo
 export { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 export { RepoCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 export { SlackCapability } from "~/domains/slack/entrypoints/slack-capability.ts";
+export { SecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 export { StreamDurableObject };
 export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";

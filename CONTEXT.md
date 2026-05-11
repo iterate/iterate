@@ -41,6 +41,42 @@ _Avoid_: OS2 Stream API, Events app stream API, Events contract
 A project-bound RPC capability for stream operations, optionally narrowed to a default Event Stream Path.
 _Avoid_: StreamCapability, generic stream client
 
+**Secret**:
+A project-scoped credential record whose Secret Material may be read by authorized OS2 runtime capabilities.
+_Avoid_: environment variable, integration, connection
+
+**Secret Material**:
+The raw credential value stored for a Secret.
+_Avoid_: token, key, secret metadata
+
+**Secret Metadata**:
+Non-material descriptive or operational data returned with a Secret, such as provider, scope, expiry, or connection details.
+_Avoid_: secret, secret value
+
+**SecretsCapability**:
+A project-bound RPC capability for reading and managing Secrets for one ProjectId.
+_Avoid_: global secret client, egress proxy
+
+**OAuth Client Configuration**:
+Runtime Config for a provider OAuth app, including client identity, client secret, scopes, and provider-specific webhook verification secrets.
+_Avoid_: deployment config, connection, token secret
+
+**Connection**:
+A provider account or workspace grant that links an external system identity to one ProjectId and yields one or more Secrets.
+_Avoid_: integration, OAuth client, secret
+
+**Provider Claim**:
+A mutually exclusive Connection from one external provider identity to one ProjectId.
+_Avoid_: user connection, shared integration, provider config
+
+**Webhook Provider Identifier**:
+A third-party identifier present on inbound webhook payloads or headers that OS2 uses to find the claimed ProjectId.
+_Avoid_: organization ID, project slug, connection name
+
+**Slack Team Claim**:
+A mutually exclusive Connection from one Slack team to one ProjectId for inbound Slack webhook forwarding.
+_Avoid_: Slack secret, Slack app config
+
 **Processor Subscription**:
 A durable callable registration that asks the Stream Runtime to invoke a processor runner after matching stream events append.
 _Avoid_: WebSocket subscription, callback URL
@@ -73,6 +109,17 @@ _Avoid_: runtime config, app config
 - A **StreamsCapability** may be narrowed to one default stream path, making path arguments optional for operations such as append and read.
 - In a narrowed **StreamsCapability**, stream paths without a leading slash, including `./` paths, are relative to the default stream path.
 - In a narrowed **StreamsCapability**, stream paths with a leading slash are absolute within the same **ProjectId** and still constrained by capability policy.
+- In the current OS2 secrets slice, every **Secret** belongs to exactly one **ProjectId**.
+- A **Secret** may have **Secret Metadata** in addition to **Secret Material**.
+- For the current OS2 secrets/codemode slice, `getSecret` returns raw **Secret Material** and **Secret Metadata**, not a Secret Reference for later egress substitution.
+- **OAuth Client Configuration** belongs in **Runtime Config** because workers and local/Docker runtimes need it when handling OAuth callbacks and webhooks.
+- A **Connection** may yield a project-wide **Secret** that runtime capabilities can read.
+- In the current OS2 secrets slice, every **Connection** is project-level; user-level and organization-level Connections are out of scope.
+- A **Provider Claim** binds one **Webhook Provider Identifier** to exactly one **ProjectId**.
+- Clerk Organizations do not scope **Provider Claims**.
+- A **Webhook Provider Identifier** must not resolve to more than one **ProjectId**.
+- A **Slack Team Claim** is the lookup record for routing inbound Slack webhooks to the claimed ProjectId.
+- Google Connections are project-level in the current OS2 secrets slice.
 - Navigating to or reading a project stream may initialize that stream; a separate create command is not required for ordinary stream discovery.
 - A **Processor Subscription** delivers events through Durable Object RPC callables, not WebSockets.
 - **Runtime Config** is available inside deployed app code.
@@ -109,3 +156,7 @@ _Avoid_: runtime config, app config
 - Processor subscriptions were described as WebSocket callbacks — resolved: use **Processor Subscription** callables that invoke Durable Object RPC methods.
 - "app config" mixed runtime-readable values with deployment-only values — resolved: use **Runtime Config** for app-readable config and **Deployment Config** for Alchemy-only deployment inputs.
 - "stream API" and "streams API" were both used for OS2's project stream surface — resolved: use **OS2 Streams API** and **StreamsCapability** because callers can operate over a project-scoped set of streams, not only one stream.
+- "getSecret" was used both as a raw credential read and as a placeholder for later egress substitution — resolved for the current OS2 secrets/codemode slice: `getSecret` is a raw **Secret Material** read through **SecretsCapability**.
+- "Slack OAuth client" could mean the OAuth app config, a workspace connection, or a token — resolved: provider OAuth app settings are **OAuth Client Configuration** in **Runtime Config**.
+- "Slack connection" could mean the OAuth app, workspace claim, or token — resolved: the Slack workspace grant is a **Slack Team Claim**, an instance of **Provider Claim**, and its token is a project-wide **Secret**.
+- "Google connection" was initially considered user-scoped because OS1 works that way — resolved for the current OS2 secrets slice: Google Connections are project-level, and user-level Secrets are out of scope.

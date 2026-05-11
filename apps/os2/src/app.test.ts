@@ -70,6 +70,27 @@ describe("AppConfig", () => {
     ).toEqual("xoxb-example");
   });
 
+  it("accepts structured Slack and Google integration runtime config", () => {
+    const parsed = parseAppConfigFromEnv({
+      configSchema: AppConfig,
+      prefix: "APP_CONFIG_",
+      env: {
+        APP_CONFIG: JSON.stringify(baseConfig),
+        APP_CONFIG_INTEGRATIONS__SLACK__CLIENT_ID: "slack-client-id",
+        APP_CONFIG_INTEGRATIONS__SLACK__CLIENT_SECRET: "slack-client-secret",
+        APP_CONFIG_INTEGRATIONS__SLACK__SIGNING_SECRET: "slack-signing-secret",
+        APP_CONFIG_INTEGRATIONS__GOOGLE__CLIENT_ID: "google-client-id",
+        APP_CONFIG_INTEGRATIONS__GOOGLE__CLIENT_SECRET: "google-client-secret",
+      },
+    });
+
+    expect(parsed.integrations.slack?.clientId).toEqual("slack-client-id");
+    expect(parsed.integrations.slack?.clientSecret.exposeSecret()).toEqual("slack-client-secret");
+    expect(parsed.integrations.slack?.signingSecret.exposeSecret()).toEqual("slack-signing-secret");
+    expect(parsed.integrations.google?.clientId).toEqual("google-client-id");
+    expect(parsed.integrations.google?.clientSecret.exposeSecret()).toEqual("google-client-secret");
+  });
+
   it("requires an OpenAI API key for upcoming OS2 AI-backed features", () => {
     const { openAiApiKey: _openAiApiKey, ...missingOpenAiConfig } = baseConfig;
 

@@ -1,4 +1,5 @@
 import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
+import { createSecretsProviderRegistration } from "~/domains/secrets/secrets-provider-registration.ts";
 
 export function createDefaultCodemodeProviderRegistrations(input: {
   projectId: string;
@@ -66,5 +67,6 @@ export function createDefaultCodemodeProviderRegistrations(input: {
         },
       },
     },
+    createSecretsProviderRegistration({ projectId: input.projectId }),
   ];
 }

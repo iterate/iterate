@@ -203,6 +203,24 @@ function ProjectSidebarGroup({
               <span>Examples</span>
             </SidebarMenuSubButton>
           </SidebarMenuSubItem>
+          <SidebarMenuSubItem>
+            <SidebarMenuSubButton
+              render={
+                <Link
+                  to="/orgs/$organizationSlug/projects/$projectSlug/integrations"
+                  params={{ organizationSlug, projectSlug }}
+                />
+              }
+              isActive={Boolean(
+                matchRoute({
+                  to: "/orgs/$organizationSlug/projects/$projectSlug/integrations",
+                  params: { organizationSlug, projectSlug },
+                }),
+              )}
+            >
+              <span>Integrations</span>
+            </SidebarMenuSubButton>
+          </SidebarMenuSubItem>
           {mcpUrl ? (
             <SidebarMenuSubItem>
               <SidebarMenuSubButton
