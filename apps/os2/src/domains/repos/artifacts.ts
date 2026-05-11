@@ -15,10 +15,12 @@ export type CloudflareArtifactRepo = {
   default_branch?: string;
   name: string;
   remote: string;
-  createToken(
+  createToken?(
     scope: CloudflareArtifactTokenScope,
     ttlSeconds: number,
   ): Promise<CloudflareArtifactToken>;
+  plaintext?: string;
+  token?: string;
 };
 
 export type CloudflareArtifactsBinding = {
@@ -51,6 +53,31 @@ export function normalizeArtifactToken(token: CloudflareArtifactToken) {
     plaintext,
     expiresAt: normalizeTokenExpiresAt(token.expiresAt ?? token.expires_at ?? null),
   };
+}
+
+export async function createArtifactToken(input: {
+  artifact: CloudflareArtifactRepo;
+  artifacts: CloudflareArtifactsBinding;
+  name: string;
+  scope: CloudflareArtifactTokenScope;
+  ttlSeconds: number;
+}) {
+  if (typeof input.artifact.createToken === "function") {
+    return normalizeArtifactToken(await input.artifact.createToken(input.scope, input.ttlSeconds));
+  }
+
+  if (input.artifact.plaintext || input.artifact.token) {
+    return normalizeArtifactToken(input.artifact);
+  }
+
+  const persistedArtifact = await input.artifacts.get(input.name);
+  if (typeof persistedArtifact.createToken === "function") {
+    return normalizeArtifactToken(
+      await persistedArtifact.createToken(input.scope, input.ttlSeconds),
+    );
+  }
+
+  throw new Error("Cloudflare Artifacts repo handle did not expose token creation.");
 }
 
 export async function pushInitialReadme(input: {

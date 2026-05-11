@@ -21,7 +21,7 @@ import {
   REPO_README_PATH,
   REPO_WRITE_TOKEN_TTL_SECONDS,
   type CloudflareArtifactsBinding,
-  normalizeArtifactToken,
+  createArtifactToken,
   pushInitialReadme,
   repoArtifactName,
 } from "~/domains/repos/artifacts.ts";
@@ -118,12 +118,17 @@ export class RepoDurableObject extends RepoBase<RepoEnv> {
     }
 
     const artifactName = repoArtifactName(this.structuredName);
-    const artifact = await this.requireArtifacts().create(artifactName, {
+    const artifacts = this.requireArtifacts();
+    const artifact = await artifacts.create(artifactName, {
       setDefaultBranch: REPO_DEFAULT_BRANCH,
     });
-    const token = normalizeArtifactToken(
-      await artifact.createToken("write", REPO_WRITE_TOKEN_TTL_SECONDS),
-    );
+    const token = await createArtifactToken({
+      artifact,
+      artifacts,
+      name: artifactName,
+      scope: "write",
+      ttlSeconds: REPO_WRITE_TOKEN_TTL_SECONDS,
+    });
     const defaultBranch = artifact.defaultBranch ?? artifact.default_branch ?? REPO_DEFAULT_BRANCH;
 
     await pushInitialReadme({
