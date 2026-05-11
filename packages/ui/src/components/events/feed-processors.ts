@@ -168,10 +168,6 @@ function createEventsStreamViewReducer(args: {
       });
       const activity = reduceActivityState({ event, state });
 
-      if (feedItems === state.slots.feed && activity === state.activity) {
-        return undefined;
-      }
-
       return createEventsStreamViewState({ feed: feedItems, activity });
     },
   };

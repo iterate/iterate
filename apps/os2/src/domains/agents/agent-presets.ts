@@ -119,6 +119,16 @@ export function normalizeAgentPresetBasePath(input: string): StreamPath {
 }
 
 export function presetMatchesAgentPath(input: { agentPath: string; basePath: string }) {
-  const basePath = normalizeAgentPresetBasePath(input.basePath);
+  const basePath = tryNormalizeAgentPresetBasePath(input.basePath);
+  if (basePath == null) return false;
+
   return input.agentPath === basePath || input.agentPath.startsWith(`${basePath}/`);
+}
+
+function tryNormalizeAgentPresetBasePath(input: string): StreamPath | null {
+  try {
+    return normalizeAgentPresetBasePath(input);
+  } catch {
+    return null;
+  }
 }

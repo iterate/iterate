@@ -281,9 +281,11 @@ function NewAgentPage() {
               {toolProviderOptions.map((option) => (
                 <label
                   key={option.key}
+                  htmlFor={`agent-tool-provider-${option.key}`}
                   className="flex items-start gap-3 rounded-md border p-3 text-sm"
                 >
                   <Checkbox
+                    id={`agent-tool-provider-${option.key}`}
                     checked={selectedToolProviders.has(option.key)}
                     onCheckedChange={() => toggleToolProvider(option.key)}
                   />

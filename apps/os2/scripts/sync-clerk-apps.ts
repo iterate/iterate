@@ -1,4 +1,4 @@
-import { createPublicKey, randomBytes } from "node:crypto";
+import { createPublicKey } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { deriveClerkFrontendApiUrl } from "../src/lib/clerk-frontend-api.ts";
 
@@ -249,33 +249,6 @@ function setDopplerSecrets(target: Target, instance: ClerkInstance, jwtKey: stri
       );
     }
   }
-}
-
-function readExistingDopplerSecret(config: string, key: string) {
-  const result = spawnSync(
-    "doppler",
-    [
-      "run",
-      "--project",
-      "os2",
-      "--config",
-      config,
-      "--",
-      "node",
-      "-e",
-      `process.stdout.write(process.env[${JSON.stringify(key)}] || "")`,
-    ],
-    {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
-
-  if (result.status !== 0) {
-    return null;
-  }
-
-  return result.stdout.trim() || null;
 }
 
 function exec(command: string, args: string[]) {

@@ -39,6 +39,26 @@ describe("agent presets", () => {
     ).toBe(nestedPreset);
   });
 
+  it("ignores invalid stored preset paths while selecting a prefix preset", () => {
+    const validPreset = {
+      basePath: "/agents/alice",
+      events: defaultAgentSetupEvents("cloudflare-ai"),
+    };
+
+    expect(
+      selectAgentPathPrefixPreset({
+        agentPath: "/agents/alice/bla",
+        presets: [
+          {
+            basePath: "/alice",
+            events: defaultAgentSetupEvents("openai-ws"),
+          },
+          validPreset,
+        ],
+      }),
+    ).toBe(validPreset);
+  });
+
   it("reads the latest configured preset per base path", () => {
     const first = presetConfiguredEvent({
       basePath: "/agents/alice",
