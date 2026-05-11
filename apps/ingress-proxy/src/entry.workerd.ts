@@ -5,6 +5,7 @@ import handler from "@tanstack/react-start/server-entry";
 import manifest, { AppConfig } from "~/app.ts";
 import type { AppContext } from "~/context.ts";
 import type { Env } from "~/env.ts";
+import { isManagementHost } from "~/lib/management-host.ts";
 import { normalizeInboundHost, proxyRequestToRoute } from "~/lib/proxy.ts";
 import { resolveRouteByHost } from "~/lib/route-store.ts";
 
@@ -13,19 +14,6 @@ const config = parseAppConfigFromEnv({
   prefix: "APP_CONFIG_",
   env: workerEnv as Record<string, unknown>,
 });
-
-function isManagementHost(host: string | null) {
-  if (!host) return true;
-
-  return (
-    host === "localhost" ||
-    host === "127.0.0.1" ||
-    host === "::1" ||
-    host === "ingress.iterate.com" ||
-    host === "dev-placeholder.ingress.iterate.com" ||
-    host.endsWith(".workers.dev")
-  );
-}
 
 function routeNotFoundResponse() {
   return Response.json({ error: "route_not_found" }, { status: 404 });
@@ -54,7 +42,7 @@ export async function handleIngressProxyRequest(
       };
 
       const normalizedHost = normalizeInboundHost(request.headers.get("host"));
-      if (isManagementHost(normalizedHost)) {
+      if (isManagementHost({ baseUrl: config.baseUrl, host: normalizedHost })) {
         return handler.fetch(request, { context });
       }
 
