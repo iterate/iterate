@@ -54,13 +54,12 @@ Current primary reducers:
   feed item. Consecutive unsupported events with the same type may collapse into
   a grouped summary only when each event produced no other feed item, but the
   group keeps every raw event for inspector navigation.
+- `prettyEventsStreamViewReducer` emits the same semantic feed elements without
+  grouped raw event rows.
 - `rawJsonDumpEventsStreamViewReducer` emits one `raw-json-dump` item.
 
-`rawEventsStreamViewReducer` and `prettyEventsStreamViewReducer` may remain as
-debugging helpers while the UI settles, but they are not the target product
-shape and should not appear in the visible renderer-mode controls. If an old
-clean-renderer link carries `renderer=raw` or `renderer=pretty`, the clean view
-falls back to `raw-pretty`.
+`rawEventsStreamViewReducer` remains a helper for terminal/debug clients and is
+not exposed in the browser renderer-mode controls.
 
 All reducers also share small cross-slot projections:
 

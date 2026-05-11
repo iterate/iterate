@@ -264,6 +264,14 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
     return event;
   }
 
+  async appendBatch(inputEvents: EventInput[]): Promise<Event[]> {
+    const events: Event[] = [];
+    for (const inputEvent of inputEvents) {
+      events.push(await this.append(inputEvent));
+    }
+    return events;
+  }
+
   /**
    * Validate-or-throw boundary. Enforces core invariants and runs builtin
    * processor gates before any state mutation occurs:

@@ -1,12 +1,16 @@
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
-import { Event, type StreamPath } from "@iterate-com/shared/streams/types";
+import { Event, EventInput, type StreamPath } from "@iterate-com/shared/streams/types";
 import {
   processEventsWithViewReducer,
   selectEventsStreamViewReducer,
 } from "@iterate-com/ui/components/events/feed-processors";
 import type { EventsStreamInputAction } from "@iterate-com/ui/components/events/feed-items";
-import { EventsStreamComposer } from "@iterate-com/ui/components/events/stream-composer";
+import {
+  EventsStreamComposer,
+  type EventsStreamComposerMode,
+  type EventsStreamComposerRawPreset,
+} from "@iterate-com/ui/components/events/stream-composer";
 import {
   EventsStreamInputSlot,
   EventsStreamView,
@@ -15,6 +19,7 @@ import {
 } from "@iterate-com/ui/components/events/stream-feed";
 import { EventsStreamLayoutMessageInput } from "@iterate-com/ui/components/events/stream-layout";
 import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
+import { parse as parseYaml } from "yaml";
 import { EventsDebugLink } from "~/components/events-debug-link.tsx";
 import { createBrowserOpenApiClient } from "~/orpc/client.ts";
 import { streamPathToSplat } from "~/lib/stream-links.ts";
@@ -23,6 +28,42 @@ type ProjectStreamMessageComposer = {
   placeholder?: string;
   onSubmit: (message: string) => Promise<void>;
 };
+
+const DEFAULT_RAW_EVENT_PRESET_ID = "manual-event";
+
+const defaultRawEventPresets: readonly EventsStreamComposerRawPreset[] = [
+  {
+    id: DEFAULT_RAW_EVENT_PRESET_ID,
+    label: "Manual event",
+    value: [
+      "type: events.iterate.com/os2/manual-event",
+      "payload:",
+      "  message: Hello from the stream composer",
+      "",
+    ].join("\n"),
+  },
+  {
+    id: "stream-error",
+    label: "Stream error",
+    value: [
+      "type: events.iterate.com/core/error-occurred",
+      "payload:",
+      "  message: Something notable happened",
+      "",
+    ].join("\n"),
+  },
+  {
+    id: "metadata-updated",
+    label: "Metadata updated",
+    value: [
+      "type: events.iterate.com/core/metadata-updated",
+      "payload:",
+      "  metadata:",
+      "    source: manual",
+      "",
+    ].join("\n"),
+  },
+];
 
 export function ProjectStreamView({
   emptyLabel = "No events in this stream yet.",
@@ -41,7 +82,13 @@ export function ProjectStreamView({
   projectSlugOrId: string;
   streamPath: StreamPath;
 }) {
+  const hasMessageComposer = messageComposer != null;
   const [composerText, setComposerText] = useState("");
+  const [composerMode, setComposerMode] = useState<EventsStreamComposerMode>(
+    hasMessageComposer ? "message" : "raw",
+  );
+  const [rawComposerText, setRawComposerText] = useState(defaultRawEventPresets[0]?.value ?? "");
+  const [selectedRawPresetId, setSelectedRawPresetId] = useState(DEFAULT_RAW_EVENT_PRESET_ID);
   const [events, setEvents] = useState<Event[]>([]);
   const [errorLabel, setErrorLabel] = useState<string | undefined>();
   const [hiddenElementTypes, setHiddenElementTypes] = useState<EventsStreamElementType[]>([]);
@@ -118,9 +165,37 @@ export function ProjectStreamView({
     }
   }
 
+  async function submitRawEvents() {
+    const trimmed = rawComposerText.trim();
+    if (!trimmed) return;
+
+    setIsSubmitting(true);
+    try {
+      const inputEvents = parseRawEventInputs(trimmed);
+      await createBrowserOpenApiClient().project.streams.appendBatch({
+        events: inputEvents,
+        projectSlugOrId,
+        streamPath,
+      });
+    } catch (error) {
+      setErrorLabel(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  function selectRawPreset(presetId: string) {
+    setSelectedRawPresetId(presetId);
+    const preset = defaultRawEventPresets.find((candidate) => candidate.id === presetId);
+    if (preset != null) {
+      setRawComposerText(preset.value);
+    }
+  }
+
   function handleInputAction(action: EventsStreamInputAction) {
     if (action.type === "prefill-agent-message") {
       setComposerText(action.text);
+      setComposerMode("message");
     }
   }
 
@@ -164,22 +239,36 @@ export function ProjectStreamView({
         onRendererModeChange={setRendererMode}
       />
 
-      {messageComposer ? (
-        <EventsStreamLayoutMessageInput>
-          <EventsStreamInputSlot
-            className="mb-3"
-            elements={viewState.slots.input}
-            onAction={handleInputAction}
-          />
-          <EventsStreamComposer
-            value={composerText}
-            onValueChange={setComposerText}
-            onSubmit={submitMessage}
-            isSubmitting={isSubmitting}
-            placeholder={messageComposer.placeholder ?? "Message this stream"}
-          />
-        </EventsStreamLayoutMessageInput>
-      ) : null}
+      <EventsStreamLayoutMessageInput>
+        <EventsStreamInputSlot
+          className="mb-3"
+          elements={viewState.slots.input}
+          onAction={handleInputAction}
+        />
+        <EventsStreamComposer
+          mode={composerMode}
+          onModeChange={setComposerMode}
+          message={
+            hasMessageComposer
+              ? {
+                  value: composerText,
+                  onValueChange: setComposerText,
+                  onSubmit: submitMessage,
+                  placeholder: messageComposer.placeholder ?? "Message this stream",
+                }
+              : undefined
+          }
+          raw={{
+            value: rawComposerText,
+            onValueChange: setRawComposerText,
+            onSubmit: submitRawEvents,
+            presets: defaultRawEventPresets,
+            selectedPresetId: selectedRawPresetId,
+            onSelectedPresetIdChange: selectRawPreset,
+          }}
+          isSubmitting={isSubmitting}
+        />
+      </EventsStreamLayoutMessageInput>
     </section>
   );
 }
@@ -188,4 +277,11 @@ function appendStreamEvent(events: Event[], event: Event): Event[] {
   if (events.some((candidate) => candidate.offset === event.offset)) return events;
 
   return [...events, event].toSorted((left, right) => left.offset - right.offset);
+}
+
+function parseRawEventInputs(value: string): EventInput[] {
+  const parsed = parseYaml(value) as unknown;
+  const inputEvents = Array.isArray(parsed) ? parsed : [parsed];
+
+  return inputEvents.map((inputEvent) => EventInput.parse(inputEvent));
 }

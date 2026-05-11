@@ -35,7 +35,7 @@ const CODEMODE_SCRIPT_EXECUTION_COMPLETED_TYPE =
  * "raw-pretty" is the default interleaved view; "raw-single-json" dumps every
  * event as a single YAML/JSON block.
  */
-export const eventsStreamRendererModes = ["raw-pretty", "raw-single-json"] as const;
+export const eventsStreamRendererModes = ["raw-pretty", "pretty", "raw-single-json"] as const;
 export type EventsStreamRendererMode = (typeof eventsStreamRendererModes)[number];
 
 export const eventsStreamRendererModeOptions: ReadonlyArray<{
@@ -43,6 +43,7 @@ export const eventsStreamRendererModeOptions: ReadonlyArray<{
   label: string;
 }> = [
   { value: "raw-pretty", label: "Raw + Pretty" },
+  { value: "pretty", label: "Pretty" },
   { value: "raw-single-json", label: "Raw YAML" },
 ];
 
@@ -52,6 +53,8 @@ export function selectEventsStreamViewReducer(
   switch (mode) {
     case "raw-pretty":
       return rawPrettyEventsStreamViewReducer;
+    case "pretty":
+      return prettyEventsStreamViewReducer;
     case "raw-single-json":
       return rawJsonDumpEventsStreamViewReducer;
   }
@@ -61,6 +64,7 @@ function createInitialEventsStreamViewState(): EventsStreamViewState {
   return createEventsStreamViewState({
     feed: [],
     activity: {
+      eventCount: 0,
       currentLlmRequestId: null,
       latestStreamError: null,
     },
@@ -73,7 +77,7 @@ function createEventsStreamViewState(args: {
 }): EventsStreamViewState {
   const slots = {
     feed: args.feed,
-    header: createHeaderSlotElements({ activity: args.activity, feed: args.feed }),
+    header: createHeaderSlotElements(args.activity),
     input: createInputSlotElements(args.activity),
   };
 
@@ -173,12 +177,11 @@ function createEventsStreamViewReducer(args: {
   };
 }
 
-function createHeaderSlotElements(args: {
-  activity: EventsStreamViewState["activity"];
-  feed: readonly EventsStreamBuiltInElement[];
-}): EventsStreamBuiltInElement[] {
+function createHeaderSlotElements(
+  activity: EventsStreamViewState["activity"],
+): EventsStreamBuiltInElement[] {
   const elements: EventsStreamBuiltInElement[] = [];
-  const eventCount = countRawEventsInFeed(args.feed);
+  const eventCount = activity.eventCount;
 
   if (eventCount > 0) {
     elements.push({
@@ -190,36 +193,19 @@ function createHeaderSlotElements(args: {
     });
   }
 
-  if (args.activity.currentLlmRequestId != null) {
+  if (activity.currentLlmRequestId != null) {
     elements.push({
       type: "activity",
       id: "activity",
       props: {
         status: "working",
         label: "Agent working",
-        detail: args.activity.currentLlmRequestId,
+        detail: activity.currentLlmRequestId,
       },
     });
   }
 
   return elements;
-}
-
-function countRawEventsInFeed(elements: readonly EventsStreamBuiltInElement[]) {
-  let count = 0;
-
-  for (const element of elements) {
-    if (element.type === "grouped-raw-event") {
-      count += element.props.count;
-      continue;
-    }
-
-    if (element.type === "raw-json-dump") {
-      count += element.props.events.length;
-    }
-  }
-
-  return count;
 }
 
 function createInputSlotElements(
@@ -291,11 +277,16 @@ function reduceActivityState(args: {
   event: Event;
   state: EventsStreamViewState;
 }): EventsStreamViewState["activity"] {
+  const activity = {
+    ...args.state.activity,
+    eventCount: args.state.activity.eventCount + 1,
+  };
+
   if (args.event.type === STREAM_ERROR_OCCURRED_TYPE) {
     const message = readStringPayloadField(args.event, "message") ?? "Stream error";
 
     return {
-      ...args.state.activity,
+      ...activity,
       latestStreamError: {
         message,
         offset: args.event.offset,
@@ -308,13 +299,13 @@ function reduceActivityState(args: {
 
   if (args.event.type === AGENT_LLM_REQUEST_REQUESTED_TYPE) {
     return {
-      ...args.state.activity,
+      ...activity,
       currentLlmRequestId: String(llmRequestId ?? args.event.offset),
     };
   }
 
   if (requestId == null && llmRequestId == null) {
-    return args.state.activity;
+    return activity;
   }
 
   const currentRequestId = requestId ?? String(llmRequestId);
@@ -323,10 +314,10 @@ function reduceActivityState(args: {
     (args.event.type === AGENT_LLM_REQUEST_COMPLETED_TYPE ||
       args.event.type === AGENT_LLM_REQUEST_CANCELLED_TYPE)
   ) {
-    return { ...args.state.activity, currentLlmRequestId: null };
+    return { ...activity, currentLlmRequestId: null };
   }
 
-  return args.state.activity;
+  return activity;
 }
 
 function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElement[] {

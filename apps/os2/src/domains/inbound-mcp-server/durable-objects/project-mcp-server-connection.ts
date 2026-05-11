@@ -56,6 +56,7 @@ export interface ProjectMcpServerConnectionProps extends Record<string, unknown>
   orgPermissions: string[];
   scopes: string[];
   clientId: string | null;
+  clerkTokenType?: string;
 }
 
 export type ProjectMcpServerConnectionStructuredName = {
@@ -435,6 +436,10 @@ export class ProjectMcpServerConnection extends McpAgent<
   }
 
   private requireScope(props: ProjectMcpServerConnectionProps, scope: string) {
+    if (props.clerkTokenType && props.clerkTokenType !== "oauth_token") {
+      return;
+    }
+
     if (!props.scopes.includes(scope)) {
       throw new Error(`MCP token is missing required scope: ${scope}`);
     }

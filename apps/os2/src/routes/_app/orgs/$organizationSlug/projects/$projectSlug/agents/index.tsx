@@ -182,7 +182,20 @@ function ProjectAgentsIndexPage() {
   return (
     <section className="w-full space-y-4 p-4">
       <div className="flex justify-end">
-        <EventsDebugLink label="Open namespace in Events" namespace={project.id} streamPath="/" />
+        <div className="flex gap-2">
+          <Button
+            type="button"
+            onClick={() =>
+              void navigate({
+                to: "/orgs/$organizationSlug/projects/$projectSlug/agents/new",
+                params,
+              })
+            }
+          >
+            New agent
+          </Button>
+          <EventsDebugLink label="Open namespace in Events" namespace={project.id} streamPath="/" />
+        </div>
       </div>
       <form
         className="flex w-full flex-col gap-2 md:flex-row"

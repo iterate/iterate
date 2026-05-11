@@ -506,6 +506,20 @@ export const osContract = oc.router({
           }),
         )
         .output(z.object({ event: Event })),
+      appendBatch: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectSlugOrId}/streams/event-batches/{+streamPath}",
+          description: "Append multiple events to a project stream in order",
+          tags: ["/project", "/streams"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            streamPath: StreamPath,
+            events: z.array(EventInput),
+          }),
+        )
+        .output(z.object({ events: z.array(Event) })),
       read: oc
         .route({
           method: "GET",
