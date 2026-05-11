@@ -152,6 +152,10 @@ async function handleDebugAppendChainFetch(input: { request: Request; env: Env }
     return Response.json({ error: "Unauthorized." }, { status: 401 });
   }
 
+  if (!hasDebugAppendChainSubscriber(input.env)) {
+    return Response.json({ error: "Debug append-chain endpoint is disabled." }, { status: 404 });
+  }
+
   const action = parseDebugAppendChainAction(url.searchParams.get("action"));
   const mode = parseDebugAppendChainMode(url.searchParams.get("mode"));
   const chainId = normalizeDebugChainId(url.searchParams.get("chainId"));
@@ -250,6 +254,13 @@ async function handleDebugAppendChainFetch(input: { request: Request; env: Env }
       { status: 500 },
     );
   }
+}
+
+function hasDebugAppendChainSubscriber(env: Env) {
+  return (
+    (env as Partial<Env> & { DEBUG_APPEND_CHAIN_SUBSCRIBER?: DurableObjectNamespace })
+      .DEBUG_APPEND_CHAIN_SUBSCRIBER != null
+  );
 }
 
 function parseDebugAppendChainAction(value: string | null): "start" | "status" {
