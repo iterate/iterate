@@ -292,6 +292,15 @@ export const osContract = oc.router({
       })
       .input(ProjectScopedInput)
       .output(Project),
+    lifecycleState: oc
+      .route({
+        method: "GET",
+        path: "/projects/{projectSlugOrId}/lifecycle-state",
+        description: "Read Project Durable Object lifecycle processor state",
+        tags: ["/project"],
+      })
+      .input(ProjectScopedInput)
+      .output(z.unknown()),
     codemode: {
       listSessions: oc
         .route({
