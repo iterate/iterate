@@ -14,6 +14,7 @@
   "embeddedLanguageFormatting": "auto",
   "sortPackageJson": false,
   "ignorePatterns": [
+    "**/ai-engineer-workshop/lib/files.ts",
     "node_modules/",
     ".pnpm-store/",
     "dist/",

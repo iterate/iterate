@@ -2,7 +2,9 @@ import { eq, and, inArray, isNull, sql } from "drizzle-orm";
 import { createMachineStub } from "@iterate-com/sandbox/providers/machine-stub";
 import { match } from "schematch";
 import { z } from "zod/v4";
-import { ORPCError } from "@orpc/client";
+
+import { isSignupAllowed } from "@iterate-com/shared/signup-allowlist";
+import { slugifyWithSuffix } from "@iterate-com/shared/slug";
 import { getDb } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import {
@@ -17,15 +19,14 @@ import {
   pollForProbeAnswer,
 } from "../services/machine-readiness-probe.ts";
 import { buildMachineEnvVars, createMachineForProject } from "../services/machine-creation.ts";
-import { createUserFromVerifiedEmail } from "../auth/auth.ts";
+import { ensureLocalUserMirror } from "../auth/auth-worker-session.ts";
 import { stripMachineStateMetadata } from "../utils/machine-metadata.ts";
 import { createDaemonClient } from "../utils/daemon-orpc-client.ts";
-import { isSignupAllowed } from "../email/signup-allowlist.ts";
 import { getDefaultOrganizationNameFromEmail, parseSender } from "../email/email-routing.ts";
 import { parseSpecMachineEmail } from "../email/spec-machine.ts";
-import { slugifyWithSuffix } from "../utils/slug.ts";
 import { getDefaultProjectSandboxProvider } from "../utils/sandbox-providers.ts";
 import { runTestingFailureScenario, FailureScenario } from "../orpc/routers/testing.ts";
+import { createAuthWorkerClient } from "../utils/auth-worker-client.ts";
 import { outboxClient as cc } from "./client.ts";
 
 const IterateMainPushWebhookPayload = z.object({
@@ -53,32 +54,89 @@ function createDefaultMachineName(sandboxProvider: string): string {
   return `${sandboxProvider}-${month}-${day}-${hour}h${minute}`;
 }
 
-function isMissingSandboxError(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-
-  if (error.name === "DaytonaNotFoundError") return true;
-
-  return [
-    /No such container/i,
-    /not found in Daytona/i,
-    /failed \(404\)/i,
-    /machine .* not found/i,
-    /app .* not found/i,
-  ].some((pattern) => pattern.test(error.message));
-}
-
 async function findAvailableProjectSlug(db: Awaited<ReturnType<typeof getDb>>, baseSlug: string) {
   let candidate = baseSlug;
 
   while (true) {
-    const [existingOrg, existingProject] = await Promise.all([
-      db.query.organization.findFirst({ where: eq(schema.organization.slug, candidate) }),
-      db.query.project.findFirst({ where: eq(schema.project.slug, candidate) }),
-    ]);
+    const existingProject = await db.query.project.findFirst({
+      where: eq(schema.project.slug, candidate),
+    });
 
-    if (!existingOrg && !existingProject) return candidate;
+    if (!existingProject) return candidate;
     candidate = slugifyWithSuffix(baseSlug);
   }
+}
+
+async function findResendRoutingTarget(db: Awaited<ReturnType<typeof getDb>>, senderEmail: string) {
+  const localUser = await db.query.user.findFirst({
+    where: eq(schema.user.email, senderEmail),
+  });
+  if (!localUser?.authUserId) {
+    return {
+      user: localUser ?? null,
+      project: null,
+      machine: null,
+    };
+  }
+
+  const authClient = createAuthWorkerClient({ asUser: { authUserId: localUser.authUserId } });
+  const organizations = await authClient.user.myOrganizations();
+  if (organizations.length === 0) {
+    return {
+      user: localUser,
+      project: null,
+      machine: null,
+    };
+  }
+
+  const authProjects = await Promise.all(
+    organizations.map((organization) =>
+      authClient.project.list({
+        organizationSlug: organization.slug,
+      }),
+    ),
+  );
+  const authProjectIds = [...new Set(authProjects.flat().map((project) => project.id))];
+  if (authProjectIds.length === 0) {
+    return {
+      user: localUser,
+      project: null,
+      machine: null,
+    };
+  }
+
+  const [routing] = await db
+    .select({
+      project: schema.project,
+      machine: schema.machine,
+    })
+    .from(schema.project)
+    .leftJoin(
+      schema.machine,
+      and(
+        eq(schema.machine.projectId, schema.project.id),
+        inArray(schema.machine.state, ["active", "starting"]),
+      ),
+    )
+    .where(inArray(schema.project.authProjectId, authProjectIds))
+    .orderBy(
+      sql`
+        case
+          when ${schema.machine.state} = 'active' then 0
+          when ${schema.machine.state} = 'starting' then 1
+          when ${schema.project.id} is not null then 2
+          else 3
+        end
+      `,
+      schema.project.createdAt,
+    )
+    .limit(1);
+
+  return {
+    user: localUser,
+    project: routing?.project ?? null,
+    machine: routing?.machine ?? null,
+  };
 }
 
 export const registerConsumers = () => {
@@ -128,42 +186,7 @@ export const registerConsumers = () => {
       const resendEmailId = payload.data.email_id;
       const db = await getDb();
       const senderEmail = parseSender(payload.data.from).email;
-      const [routing] = await db
-        .select({
-          user: schema.user,
-          project: schema.project,
-          machine: schema.machine,
-        })
-        .from(schema.user)
-        .leftJoin(
-          schema.organizationUserMembership,
-          eq(schema.organizationUserMembership.userId, schema.user.id),
-        )
-        .leftJoin(
-          schema.organization,
-          eq(schema.organization.id, schema.organizationUserMembership.organizationId),
-        )
-        .leftJoin(schema.project, eq(schema.project.organizationId, schema.organization.id))
-        .leftJoin(
-          schema.machine,
-          and(
-            eq(schema.machine.projectId, schema.project.id),
-            inArray(schema.machine.state, ["active", "starting"]),
-          ),
-        )
-        .where(eq(schema.user.email, senderEmail))
-        .orderBy(
-          sql`
-            case
-              when ${schema.machine.state} = 'active' then 0
-              when ${schema.machine.state} = 'starting' then 1
-              when ${schema.project.id} is not null then 2
-              else 3
-            end
-          `,
-          schema.project.createdAt,
-        )
-        .limit(1);
+      const routing = await findResendRoutingTarget(db, senderEmail);
 
       logger.set({
         emailRouting: {
@@ -177,6 +200,10 @@ export const registerConsumers = () => {
       });
 
       if (routing?.machine?.state === "active") {
+        if (!routing.user) {
+          throw new Error(`missing local user for active resend routing target ${senderEmail}`);
+        }
+
         // happy path: machine is already active
         const { createResendClient, fetchEmailContent, forwardEmailWebhookToMachine } =
           await import("../integrations/resend/resend.ts");
@@ -278,52 +305,44 @@ export const registerConsumers = () => {
       const payload = ResendWebhookReceivedEventPayload.parse(event.payload);
       const sender = parseSender(payload.data.from);
       const specMachine = parseSpecMachineEmail(sender.email);
-      const user = await createUserFromVerifiedEmail({
-        db,
-        env,
-        email: sender.email,
-        name: sender.name,
-        consideredVerifiedReason:
-          "Received email from this account, so we know they have access to it!",
-      });
-
       const projectSlug = await findAvailableProjectSlug(
         db,
         getDefaultOrganizationNameFromEmail(sender.email),
       );
-
-      const projectId = await db.transaction(async (tx) => {
-        const [organization] = await tx
-          .insert(schema.organization)
-          .values({ name: projectSlug, slug: projectSlug })
-          .returning();
-        if (!organization) {
-          throw new Error(`failed to create organization for ${sender.email}`);
-        }
-
-        await tx.insert(schema.organizationUserMembership).values({
-          organizationId: organization.id,
-          userId: user.id,
-          role: "owner",
-        });
-
-        const [project] = await tx
-          .insert(schema.project)
-          .values({
-            name: projectSlug,
-            slug: projectSlug,
-            organizationId: organization.id,
-            sandboxProvider: specMachine
-              ? "spec-machine"
-              : getDefaultProjectSandboxProvider(env, import.meta.env.DEV),
-          })
-          .returning();
-        if (!project) {
-          throw new Error(`failed to create project for ${sender.email}`);
-        }
-
-        return project.id;
+      const authClient = createAuthWorkerClient({ serviceToken: env.SERVICE_AUTH_TOKEN });
+      const authUser = await authClient.internal.user.upsertVerifiedEmail({
+        email: sender.email,
+        name: sender.name,
+        image: null,
       });
+      const user = await ensureLocalUserMirror(db, authUser);
+      const authOrganization = await authClient.internal.organization.createForUser({
+        userId: authUser.id,
+        name: projectSlug,
+        slug: projectSlug,
+      });
+      const authProject = await authClient.internal.project.createForOrganization({
+        organizationSlug: authOrganization.slug,
+        name: projectSlug,
+        slug: projectSlug,
+      });
+      const [project] = await db
+        .insert(schema.project)
+        .values({
+          authProjectId: authProject.id,
+          authOrganizationId: authOrganization.id,
+          authOrganizationSlug: authOrganization.slug,
+          name: authProject.name,
+          slug: authProject.slug,
+          sandboxProvider: specMachine
+            ? "spec-machine"
+            : getDefaultProjectSandboxProvider(env, import.meta.env.DEV),
+        })
+        .returning();
+      if (!project) {
+        throw new Error(`failed to create project for ${sender.email}`);
+      }
+      const projectId = project.id;
 
       await db
         .update(schema.emailInboundDelivery)
@@ -476,34 +495,24 @@ export const registerConsumers = () => {
           ref: params.payload.ref,
         });
       } catch (e: unknown) {
-        if (isMissingSandboxError(e)) {
-          logger.set({
-            machineId: machine.id,
-            externalId: machine.externalId,
-            eventId: params.eventId,
-          });
-          logger.warn("Skipping iterate pull for missing sandbox");
-          return `skipped: sandbox for machine ${machine.id} no longer exists (${machine.externalId})`;
-        }
-
-        // The daemon may be mid-restart (from a prior pull) or the sandbox
-        // proxy may return a non-oRPC response (HTML error page, 502, etc.).
-        // The oRPC client surfaces these as ORPCError with codes like
-        // BAD_GATEWAY, MALFORMED_ORPC_ERROR_RESPONSE, or INTERNAL_SERVER_ERROR.
-        // Retrying is wasteful — the next push to main will fan-out a fresh
-        // attempt.
-        if (e instanceof ORPCError) {
-          logger.set({
-            machineId: machine.id,
-            orpcCode: e.code,
-            orpcStatus: e.status,
-            eventId: params.eventId,
-          });
-          logger.warn("Skipping iterate pull: daemon returned oRPC error");
-          return `skipped: machine ${machine.id} daemon oRPC error ${e.code} (status ${e.status})`;
-        }
-
-        throw e;
+        // All errors are non-retryable: the next push to main will fan-out a
+        // fresh attempt, so retrying this specific event is wasteful.
+        // Known error families:
+        //   - isMissingSandboxError: sandbox was deleted
+        //   - ORPCError: daemon mid-restart, proxy 502, HTML error page, etc.
+        //   - TypeError/DOMException: fetch network failures, DNS, timeouts
+        //   - DaytonaError/DaytonaRateLimitError: provider API errors
+        const errorName = e instanceof Error ? e.name : String(e);
+        const errorMessage = e instanceof Error ? e.message : String(e);
+        logger.set({
+          machineId: machine.id,
+          externalId: machine.externalId,
+          eventId: params.eventId,
+          errorName,
+          errorMessage,
+        });
+        logger.warn("Skipping iterate pull due to error");
+        return `skipped: machine ${machine.id} error ${errorName}: ${errorMessage}`;
       }
 
       logger.set({
@@ -529,7 +538,7 @@ export const registerConsumers = () => {
 
       const machine = await db.query.machine.findFirst({
         where: eq(schema.machine.id, machineId),
-        with: { project: { with: { organization: true } } },
+        with: { project: true },
       });
       if (!machine) throw new Error(`Machine ${machineId} not found`);
 
@@ -547,8 +556,8 @@ export const registerConsumers = () => {
         db,
         env,
         projectId: machine.projectId,
-        organizationId: machine.project.organizationId,
-        organizationSlug: machine.project.organization.slug,
+        organizationId: machine.project.authOrganizationId,
+        organizationSlug: machine.project.authOrganizationSlug,
         projectSlug: machine.project.slug,
         machineId,
         name: machine.name,
@@ -607,7 +616,12 @@ export const registerConsumers = () => {
     when: (params) => params.payload.status === "ready" && !!params.payload.externalId,
     visibilityTimeout: "120s", // env write + repo clones can take a while
     retry: (job) => {
-      if (job.read_ct <= 4) return { retry: true, reason: "retrying setup push", delay: "15s" };
+      // Exponential backoff: 15s, 30s, 60s, 60s, 60s, 60s (~5 min total).
+      // The daemon may take a while to become ready after reporting status.
+      if (job.read_ct <= 6) {
+        const delaySec = Math.min(15 * 2 ** (job.read_ct - 1), 60);
+        return { retry: true, reason: "retrying setup push", delay: `${delaySec}s` };
+      }
       return { retry: false, reason: "setup push failed after retries" };
     },
     async handler(params) {
@@ -627,28 +641,48 @@ export const registerConsumers = () => {
       try {
         input = await getPushMachineSetupInput(db, env, machine);
       } catch (e: unknown) {
-        // The daemon may still be starting up when the outbox fires
-        // immediately after daemon-status-reported.  The sandbox proxy
-        // or half-ready daemon can return a non-oRPC 500 which the
-        // client surfaces as MALFORMED_ORPC_ERROR_RESPONSE, or a
-        // well-formed oRPC INTERNAL_SERVER_ERROR.  Log and re-throw
-        // so the retry policy can handle it.
-        if (e instanceof ORPCError) {
-          logger.set({
-            machineId: machine.id,
-            orpcCode: e.code,
-            orpcStatus: e.status,
-            eventId: params.eventId,
-          });
-          logger.warn("pushMachineSetup: daemon oRPC call failed, will retry");
-        }
-        throw e;
+        // All errors are non-retryable: the next daemon-status-reported event
+        // will fan-out a fresh attempt, so retrying is wasteful.
+        // Known error families:
+        //   - isMissingSandboxError: sandbox was deleted
+        //   - ORPCError: daemon mid-restart, proxy 502, HTML error page, etc.
+        //   - TypeError/DOMException: fetch network failures, DNS, timeouts
+        //   - DaytonaError/DaytonaRateLimitError: provider API errors
+        //   - Error("Internal Server Error"): ORPCError not matched by instanceof
+        //     due to bundle code-splitting class identity issues
+        const errorName = e instanceof Error ? e.name : String(e);
+        const errorMessage = e instanceof Error ? e.message : String(e);
+        logger.set({
+          machineId: machine.id,
+          externalId: machine.externalId,
+          eventId: params.eventId,
+          errorName,
+          errorMessage,
+        });
+        logger.warn("pushMachineSetup: error getting setup input, skipping");
+        return `skipped: machine ${machineId} setup input error ${errorName}: ${errorMessage}`;
       }
       if (!input) {
         return `skipped: setup already done for ${machineId}`;
       }
 
-      const writeSentinel = await pushSetupToMachine(machine, input);
+      let writeSentinel;
+      try {
+        writeSentinel = await pushSetupToMachine(machine, input);
+      } catch (e: unknown) {
+        // Same catch-all rationale as above.
+        const errorName = e instanceof Error ? e.name : String(e);
+        const errorMessage = e instanceof Error ? e.message : String(e);
+        logger.set({
+          machineId: machine.id,
+          externalId: machine.externalId,
+          eventId: params.eventId,
+          errorName,
+          errorMessage,
+        });
+        logger.warn("pushMachineSetup: error during push, skipping");
+        return `skipped: machine ${machineId} push error ${errorName}: ${errorMessage}`;
+      }
 
       // Emit setup-pushed so the readiness probe can begin
       await cc.send(db, {
@@ -656,7 +690,24 @@ export const registerConsumers = () => {
         payload: { machineId, projectId },
       });
 
-      await writeSentinel();
+      try {
+        await writeSentinel();
+      } catch (e: unknown) {
+        // Sentinel write is best-effort: setup was already pushed successfully.
+        // If this fails (daemon 502, timeout, etc.) the only consequence is a
+        // redundant re-push on the next daemon-status-reported event, which is
+        // idempotent.
+        const errorName = e instanceof Error ? e.name : String(e);
+        const errorMessage = e instanceof Error ? e.message : String(e);
+        logger.set({
+          machineId: machine.id,
+          externalId: machine.externalId,
+          eventId: params.eventId,
+          errorName,
+          errorMessage,
+        });
+        logger.warn("pushMachineSetup: sentinel write failed, setup was still pushed");
+      }
 
       return `setup pushed to ${machineId}`;
     },

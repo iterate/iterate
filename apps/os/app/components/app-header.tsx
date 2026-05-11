@@ -24,6 +24,7 @@ interface Project {
   id: string;
   name: string;
   slug: string;
+  jonasLand: boolean;
 }
 
 interface Machine {
@@ -61,6 +62,7 @@ const PAGE_NAMES: Record<string, string> = {
   "access-tokens": "Access Tokens",
   "env-vars": "Env Vars",
   approvals: "Approvals",
+  deployments: "Deployments",
   settings: "Settings",
   team: "Team",
   "new-project": "New Project",
@@ -89,16 +91,17 @@ export function AppHeader({
   // Org home: /orgs/{orgSlug} → 2 parts
   // Project home: /proj/{projectSlug} → 2 parts
   const isProjectRoute = Boolean(projectSlug);
-  const isProjectHome = isProjectRoute && pathParts[0] === "proj" && pathParts.length === 2;
+  const projectRootSegment = pathParts[0];
+  const isClassicProjectRoute = projectRootSegment === "proj";
+  const isJonasLandProjectRoute = projectRootSegment === "jonasland";
+  const isProjectHome =
+    isProjectRoute && (isClassicProjectRoute || isJonasLandProjectRoute) && pathParts.length === 2;
   const isOrgRoute = Boolean(organizationSlug) && !isProjectRoute;
   const isOrgHome = isOrgRoute && pathParts.length === 2;
 
   // Check if we're on a machine detail page: /proj/{proj}/machines/{machineId}
   const isMachineDetailRoute =
-    isProjectRoute &&
-    pathParts[0] === "proj" &&
-    pathParts[2] === "machines" &&
-    Boolean(pathParts[3]);
+    isProjectRoute && isClassicProjectRoute && pathParts[2] === "machines" && Boolean(pathParts[3]);
 
   // Get the current page name (only if we're on a sub-page, not a home page)
   // This prevents slugs matching PAGE_NAMES keys from being treated as sub-pages
@@ -109,6 +112,7 @@ export function AppHeader({
   // Find current IDs for aria-current
   const _currentOrgId = organizations.find((o) => o.slug === organizationSlug)?.id ?? "";
   const currentProjectId = projects.find((p) => p.slug === projectSlug)?.id ?? "";
+  const currentProject = projects.find((p) => p.slug === projectSlug);
 
   // Determine display name for mobile
   const mobileDisplayName =
@@ -202,7 +206,14 @@ export function AppHeader({
                         <BreadcrumbPage>Project: {projectName || projectSlug}</BreadcrumbPage>
                       ) : (
                         <BreadcrumbLink asChild>
-                          <Link to="/proj/$projectSlug" params={{ projectSlug }}>
+                          <Link
+                            to={
+                              currentProject?.jonasLand || isJonasLandProjectRoute
+                                ? "/jonasland/$projectSlug"
+                                : "/proj/$projectSlug"
+                            }
+                            params={{ projectSlug }}
+                          >
                             Project: {projectName || projectSlug}
                           </Link>
                         </BreadcrumbLink>

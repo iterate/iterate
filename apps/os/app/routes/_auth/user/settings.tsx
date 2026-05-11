@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
+import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import { Mail, LogOut, Check, X } from "lucide-react";
@@ -36,6 +36,7 @@ export const Route = createFileRoute("/_auth/user/settings")({
 });
 
 function UserSettingsPage() {
+  const queryClient = useQueryClient();
   const { data: user } = useSuspenseQuery(orpc.user.me.queryOptions());
   const { data: memberships } = useSuspenseQuery(orpc.user.memberships.queryOptions());
   const { data: pendingInvites } = useSuspenseQuery(
@@ -60,6 +61,9 @@ function UserSettingsPage() {
       return orpcClient.organization.acceptInvite({ inviteId });
     },
     onSuccess: (org) => {
+      queryClient.invalidateQueries({
+        queryKey: orpc.organization.myPendingInvites.queryOptions().queryKey,
+      });
       toast.success(`Joined ${org.name}!`);
       navigate({ to: "/orgs/$organizationSlug", params: { organizationSlug: org.slug } });
     },
@@ -73,6 +77,9 @@ function UserSettingsPage() {
       return orpcClient.organization.declineInvite({ inviteId });
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: orpc.organization.myPendingInvites.queryOptions().queryKey,
+      });
       toast.success("Invite declined");
     },
     onError: (error) => {
@@ -110,7 +117,9 @@ function UserSettingsPage() {
                   <div className="flex items-center gap-3 min-w-0">
                     <Mail className="h-5 w-5 text-muted-foreground shrink-0" />
                     <div className="min-w-0">
-                      <div className="font-medium truncate">{invite.organization.name}</div>
+                      <div className="font-medium truncate">
+                        {invite.organization?.name ?? "Organization invite"}
+                      </div>
                       <div className="text-sm text-muted-foreground">
                         Invited by {invite.invitedBy.name} as {invite.role}
                       </div>

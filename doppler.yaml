@@ -2,10 +2,31 @@
 # We intentionally pin projects here but not configs:
 # local dev config names vary by user (`dev_<name>`), while many scripts pass
 # `--config` explicitly. This file exists to document and set project scope.
+#
+# `doppler run` resolves `project` from the current working directory against these `path` entries
+# (see `doppler setup`). Scripts should not hard-code `--project` unless there is a special reason.
 setup:
+  - project: _shared
+    path: packages/shared/
   - project: os
     path: ./
   - project: ingress-proxy
-    path: apps/cf-ingress-proxy-worker/
-  - project: auth
-    path: apps/auth/
+    path: apps/ingress-proxy/
+  - project: example
+    path: apps/example/
+  - project: example
+    path: apps/example-v2/
+  - project: example
+    path: apps/fetch-test/
+  - project: os2
+    path: apps/os2/
+  - project: events
+    path: apps/events/
+  - project: semaphore
+    path: apps/semaphore/
+  - project: test
+    path: apps/test/
+  - project: agents
+    path: apps/agents/
+  - project: channel-agent-poc
+    path: experiments/channel-agent-poc/nested-facets/

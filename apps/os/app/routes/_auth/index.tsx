@@ -44,7 +44,7 @@ const maybeRedirectToOrg = createServerFn({ method: "GET" })
         const firstProject = orgWithProjects.projects?.[0];
         if (firstProject) {
           throw redirect({
-            to: "/proj/$projectSlug",
+            to: firstProject.jonasLand ? "/jonasland/$projectSlug" : "/proj/$projectSlug",
             params: { projectSlug: firstProject.slug },
           });
         }
@@ -86,6 +86,9 @@ function IndexPage() {
       return orpcClient.organization.acceptInvite({ inviteId });
     },
     onSuccess: (org) => {
+      queryClient.invalidateQueries({
+        queryKey: orpc.organization.myPendingInvites.queryOptions().queryKey,
+      });
       toast.success(`Joined ${org.name}!`);
       navigate({ to: "/orgs/$organizationSlug", params: { organizationSlug: org.slug } });
     },
@@ -99,6 +102,9 @@ function IndexPage() {
       return orpcClient.organization.declineInvite({ inviteId });
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: orpc.organization.myPendingInvites.queryOptions().queryKey,
+      });
       toast.success("Invite declined");
     },
     onError: (error: Error) => {
@@ -147,7 +153,7 @@ function IndexPage() {
                       <Building2 className="h-4 w-4" />
                     </ItemMedia>
                     <ItemContent>
-                      <ItemTitle>{invite.organization.name}</ItemTitle>
+                      <ItemTitle>{invite.organization?.name ?? "Organization invite"}</ItemTitle>
                       <ItemDescription>
                         Invited by {invite.invitedBy.name} as {invite.role}
                       </ItemDescription>

@@ -1,6 +1,6 @@
-import { createFileRoute, Link, Outlet, redirect, useMatchRoute } from "@tanstack/react-router";
+import { Suspense } from "react";
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { Suspense, useMemo } from "react";
+import { createFileRoute, Link, Outlet, redirect, useMatchRoute } from "@tanstack/react-router";
 import {
   ExternalLink,
   Home,
@@ -10,31 +10,28 @@ import {
   ShieldCheck,
   SlidersHorizontal,
 } from "lucide-react";
-import { SidebarShell } from "@/components/sidebar-shell.tsx";
-import { Spinner } from "@/components/ui/spinner.tsx";
-import { orpc } from "@/lib/orpc.tsx";
-import { useSessionUser } from "@/hooks/use-session-user.ts";
-import { usePostHogIdentity } from "@/hooks/use-posthog-identity.tsx";
-import { OrgSwitcher } from "@/components/org-project-switcher.tsx";
+import { AppHeader } from "@/components/app-header.tsx";
+import { HeaderActionsProvider } from "@/components/header-actions.tsx";
 import { OrgSidebarNav } from "@/components/org-sidebar-nav.tsx";
+import { OrgSwitcher } from "@/components/org-project-switcher.tsx";
+import { SidebarShell } from "@/components/sidebar-shell.tsx";
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar.tsx";
 import {
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
-  SidebarInset,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarProvider,
 } from "@/components/ui/sidebar.tsx";
-import { AppHeader } from "@/components/app-header.tsx";
-import { HeaderActionsProvider } from "@/components/header-actions.tsx";
+import { Spinner } from "@/components/ui/spinner.tsx";
 import { useHeaderActions } from "@/hooks/use-header-actions.ts";
+import { usePostHogIdentity } from "@/hooks/use-posthog-identity.tsx";
+import { useSessionUser } from "@/hooks/use-session-user.ts";
+import { orpc } from "@/lib/orpc.tsx";
 
 export const Route = createFileRoute("/_auth/proj/$projectSlug")({
-  // beforeLoad: ONLY for validation and redirects (runs serially)
   beforeLoad: async ({ context, params }) => {
-    // Lookup project by slug only (globally unique)
     const project = await context.queryClient.ensureQueryData(
       orpc.project.bySlug.queryOptions({
         input: {
@@ -46,9 +43,15 @@ export const Route = createFileRoute("/_auth/proj/$projectSlug")({
     if (!project) {
       throw redirect({ to: "/" });
     }
+
+    if (project.jonasLand) {
+      throw redirect({
+        to: "/jonasland/$projectSlug",
+        params: { projectSlug: params.projectSlug },
+      });
+    }
   },
 
-  // loader: Prefetch data (non-blocking, shows spinner if not ready)
   loader: ({ context, params }) => {
     context.queryClient.prefetchQuery(
       orpc.project.bySlug.queryOptions({
@@ -66,29 +69,37 @@ export const Route = createFileRoute("/_auth/proj/$projectSlug")({
 function ProjectLayout() {
   const params = Route.useParams();
   const matchRoute = useMatchRoute();
-  const { user } = useSessionUser();
   const [headerActions, setHeaderActions] = useHeaderActions();
+  const { user } = useSessionUser();
 
   if (!user) {
     throw new Error("User not found - should not happen in auth-required layout");
   }
 
   const { data: organizations } = useSuspenseQuery(orpc.user.myOrganizations.queryOptions());
-
-  // bySlug returns project with organization
-  const { data: projectWithOrg } = useSuspenseQuery(
+  const { data: project } = useSuspenseQuery(
     orpc.project.bySlug.queryOptions({
       input: {
         projectSlug: params.projectSlug,
       },
     }),
   );
+  const currentOrg = project.organization;
 
-  const currentOrg = projectWithOrg.organization;
-  const currentProject = projectWithOrg;
+  usePostHogIdentity({
+    user,
+    organization: currentOrg,
+    project,
+  });
 
-  // Fetch machines list for breadcrumb dropdown
-  const { data: machinesList } = useSuspenseQuery(
+  const { data: org } = useSuspenseQuery(
+    orpc.organization.withProjects.queryOptions({
+      input: {
+        organizationSlug: currentOrg.slug,
+      },
+    }),
+  );
+  const { data: machines } = useSuspenseQuery(
     orpc.machine.list.queryOptions({
       input: {
         projectSlug: params.projectSlug,
@@ -97,7 +108,6 @@ function ProjectLayout() {
     }),
   );
 
-  // Detect if we're on a machine detail page and extract machine ID
   const machineMatch = matchRoute({
     to: "/proj/$projectSlug/machines/$machineId",
     params,
@@ -106,156 +116,114 @@ function ProjectLayout() {
     ? (machineMatch as { machineId: string }).machineId
     : undefined;
   const currentMachine = currentMachineId
-    ? machinesList.find((m) => m.id === currentMachineId)
+    ? machines.find((machine) => machine.id === currentMachineId)
     : undefined;
-
-  // Memoize user props to avoid creating new objects on each render
-  const userProps = useMemo(
-    () => ({
-      name: user.name,
-      email: user.email,
-      image: user.image,
-      role: user.role ?? undefined,
-    }),
-    [user.name, user.email, user.image, user.role],
-  );
-
-  // currentOrg is guaranteed by beforeLoad, but TypeScript needs the check
-  if (!currentOrg || !currentOrg.id || !currentOrg.name || !currentOrg.slug) {
-    throw redirect({ to: "/" });
-  }
-
-  // Identify user, organization, and project in PostHog
-  usePostHogIdentity({
-    user: user ?? null,
-    organization: {
-      id: currentOrg.id,
-      name: currentOrg.name,
-      slug: currentOrg.slug,
-    },
-    project: currentProject
-      ? {
-          id: currentProject.id,
-          name: currentProject.name,
-          slug: currentProject.slug,
-        }
-      : null,
-  });
-
-  const orgsList = organizations.map((organization) => ({
-    id: organization.id,
-    name: organization.name,
-    slug: organization.slug,
-    role: organization.role,
-  }));
-
-  const currentOrgData = {
-    id: currentOrg.id,
-    name: currentOrg.name,
-    slug: currentOrg.slug,
-  };
-
-  // Fetch org with projects for the sidebar
-  const { data: orgWithProjects } = useSuspenseQuery(
-    orpc.organization.withProjects.queryOptions({
-      input: {
-        organizationSlug: currentOrg.slug,
-      },
-    }),
-  );
-
-  const projects = (orgWithProjects?.projects ?? []).map((p) => ({
-    id: p.id,
-    name: p.name,
-    slug: p.slug,
-  }));
-
-  // Transform machines for breadcrumb dropdown (using id as slug for machines)
-  const machines = machinesList.map((m) => ({
-    id: m.id,
-    name: m.name,
-    slug: m.id, // machines use id for routing
-  }));
-
-  // Type-safe navigation items - using simplified /proj routes
-  const navItems = [
-    {
-      to: "/proj/$projectSlug/connectors" as const,
-      label: "Connectors",
-      icon: Plug,
-    },
-    {
-      to: "/proj/$projectSlug/machines" as const,
-      label: "Machines",
-      icon: Server,
-    },
-    {
-      to: "/proj/$projectSlug/env-vars" as const,
-      label: "Env vars",
-      icon: SlidersHorizontal,
-    },
-    {
-      to: "/proj/$projectSlug/approvals" as const,
-      label: "Approvals",
-      icon: ShieldCheck,
-    },
-    {
-      to: "/proj/$projectSlug/settings" as const,
-      label: "Settings",
-      icon: Settings,
-    },
-  ];
-
-  const isHomeActive = Boolean(
-    matchRoute({
-      to: "/proj/$projectSlug",
-      params,
-      fuzzy: false,
-    }),
-  );
 
   return (
     <SidebarProvider defaultOpen={true}>
       <SidebarShell
-        header={<OrgSwitcher organizations={orgsList} currentOrg={currentOrgData} />}
-        user={userProps}
+        header={<OrgSwitcher organizations={organizations} currentOrg={currentOrg} />}
+        user={{
+          name: user.name,
+          email: user.email,
+          image: user.image,
+          role: user.role ?? undefined,
+        }}
       >
         <SidebarGroup>
           <SidebarGroupLabel className="h-auto min-h-8 flex-wrap gap-x-1">
             <span>Project:</span>
-            <span>{currentProject?.name}</span>
+            <span>{project.name}</span>
           </SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={isHomeActive}>
+                <SidebarMenuButton
+                  asChild
+                  isActive={Boolean(
+                    matchRoute({
+                      to: "/proj/$projectSlug",
+                      params,
+                      fuzzy: false,
+                    }),
+                  )}
+                >
                   <Link to="/proj/$projectSlug" params={params}>
                     <Home className="h-4 w-4" />
                     <span>Home</span>
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
-              {navItems.map((item) => {
-                const isActive = Boolean(matchRoute({ to: item.to, params, fuzzy: true }));
-                return (
-                  <SidebarMenuItem key={item.to}>
-                    <SidebarMenuButton asChild isActive={isActive}>
-                      <Link to={item.to} params={params}>
-                        <item.icon className="h-4 w-4" />
-                        <span>{item.label}</span>
-                      </Link>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                );
-              })}
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  asChild
+                  isActive={Boolean(
+                    matchRoute({ to: "/proj/$projectSlug/connectors", params, fuzzy: true }),
+                  )}
+                >
+                  <Link to="/proj/$projectSlug/connectors" params={params}>
+                    <Plug className="h-4 w-4" />
+                    <span>Connectors</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  asChild
+                  isActive={Boolean(
+                    matchRoute({ to: "/proj/$projectSlug/machines", params, fuzzy: true }),
+                  )}
+                >
+                  <Link to="/proj/$projectSlug/machines" params={params}>
+                    <Server className="h-4 w-4" />
+                    <span>Machines</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  asChild
+                  isActive={Boolean(
+                    matchRoute({ to: "/proj/$projectSlug/env-vars", params, fuzzy: true }),
+                  )}
+                >
+                  <Link to="/proj/$projectSlug/env-vars" params={params}>
+                    <SlidersHorizontal className="h-4 w-4" />
+                    <span>Env vars</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  asChild
+                  isActive={Boolean(
+                    matchRoute({ to: "/proj/$projectSlug/approvals", params, fuzzy: true }),
+                  )}
+                >
+                  <Link to="/proj/$projectSlug/approvals" params={params}>
+                    <ShieldCheck className="h-4 w-4" />
+                    <span>Approvals</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  asChild
+                  isActive={Boolean(
+                    matchRoute({ to: "/proj/$projectSlug/settings", params, fuzzy: true }),
+                  )}
+                >
+                  <Link to="/proj/$projectSlug/settings" params={params}>
+                    <Settings className="h-4 w-4" />
+                    <span>Settings</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
 
-        <OrgSidebarNav orgSlug={currentOrg.slug} />
-
-        {/* Admin deep-links section - only visible to system admins */}
-        {user.role === "admin" && currentProject && (
+        {user.role === "admin" && (
           <SidebarGroup>
             <SidebarGroupLabel>Admin Links</SidebarGroupLabel>
             <SidebarGroupContent>
@@ -263,7 +231,7 @@ function ProjectLayout() {
                 <SidebarMenuItem>
                   <SidebarMenuButton asChild>
                     <a
-                      href={`https://eu.posthog.com/project/115112/groups/1/${currentProject.id}/events`}
+                      href={`https://eu.posthog.com/project/115112/groups/1/${project.id}/events`}
                       target="_blank"
                       rel="noopener noreferrer"
                     >
@@ -275,7 +243,7 @@ function ProjectLayout() {
                 <SidebarMenuItem>
                   <SidebarMenuButton asChild>
                     <a
-                      href={`https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/workers/services/view/os/production/observability/events?filterCombination=%22and%22&needle=%7B%22value%22%3A%22${currentProject.id}%22%7D&calculations=%5B%7B%22operator%22%3A%22count%22%7D%5D&orderBy=%7B%22value%22%3A%22count%22%2C%22limit%22%3A10%2C%22order%22%3A%22desc%22%7D&timeframe=1h&conditions=%7B%7D&conditionCombination=%22and%22&alertTiming=%7B%22interval%22%3A300%2C%22window%22%3A900%2C%22timeBeforeFiring%22%3A600%2C%22timeBeforeResolved%22%3A600%7D`}
+                      href={`https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/workers/services/view/os/production/observability/events?filterCombination=%22and%22&needle=%7B%22value%22%3A%22${project.id}%22%7D&calculations=%5B%7B%22operator%22%3A%22count%22%7D%5D&orderBy=%7B%22value%22%3A%22count%22%2C%22limit%22%3A10%2C%22order%22%3A%22desc%22%7D&timeframe=1h&conditions=%7B%7D&conditionCombination=%22and%22&alertTiming=%7B%22interval%22%3A300%2C%22window%22%3A900%2C%22timeBeforeFiring%22%3A600%2C%22timeBeforeResolved%22%3A600%7D`}
                       target="_blank"
                       rel="noopener noreferrer"
                     >
@@ -288,16 +256,22 @@ function ProjectLayout() {
             </SidebarGroupContent>
           </SidebarGroup>
         )}
+
+        <OrgSidebarNav orgSlug={currentOrg.slug} />
       </SidebarShell>
       <SidebarInset>
         <AppHeader
           orgName={currentOrg.name}
-          projectName={currentProject?.name}
+          projectName={project.name}
           organizationSlug={currentOrg.slug}
           projectSlug={params.projectSlug}
-          organizations={orgsList}
-          projects={projects}
-          machines={machines}
+          organizations={organizations}
+          projects={org.projects ?? []}
+          machines={machines.map((machine) => ({
+            id: machine.id,
+            name: machine.name,
+            slug: machine.id,
+          }))}
           currentMachineId={currentMachineId}
           currentMachineName={currentMachine?.name}
           actions={headerActions}
@@ -314,7 +288,6 @@ function ProjectLayout() {
   );
 }
 
-/** Content area loading spinner for child routes */
 function ContentSpinner() {
   return (
     <div className="flex h-full min-h-[200px] items-center justify-center p-4">

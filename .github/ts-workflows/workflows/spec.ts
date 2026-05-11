@@ -5,7 +5,11 @@ import * as utils from "../utils/index.ts";
 export default workflow({
   name: "specs",
   on: {
-    push: {},
+    push: {
+      branches: ["main"],
+    },
+    pull_request: {},
+    workflow_dispatch: {},
   },
   env: {
     SLACK_CLIENT_ID: "fake123",
@@ -13,7 +17,7 @@ export default workflow({
   },
   jobs: {
     specs: {
-      ...utils.runsOnDepotUbuntuForContainerThings,
+      ...utils.runsOnDepotUbuntu,
       steps: [
         { uses: "actions/checkout@v4" },
         { uses: "pnpm/action-setup@v4" },

@@ -9,6 +9,7 @@ import { accessTokenRouter } from "./routers/access-token.ts";
 import { billingRouter } from "./routers/billing.ts";
 import { secretRouter } from "./routers/secret.ts";
 import { webchatRouter } from "./routers/webchat.ts";
+import { deploymentRouter } from "./routers/deployment.ts";
 
 /** oRPC app router — plain object assembling all sub-routers */
 export const appRouter = {
@@ -23,6 +24,7 @@ export const appRouter = {
   billing: billingRouter,
   secret: secretRouter,
   webchat: webchatRouter,
+  deployment: deploymentRouter,
 };
 
 export type AppRouter = typeof appRouter;

@@ -16,6 +16,7 @@ dist
 .wrangler
 .dev.vars*
 .alchemy
+apps/ingress-proxy-worker/wrangler.json
 
 !.dev.vars.example
 .env*
@@ -31,6 +32,8 @@ __pycache__/
 
 # Experiment artifacts
 experiments/*/disk-config.json
+ai-engineer-workshop/.codemode/
+ai-engineer-workshop/README.html
 
 # ad-hoc ignored files/paths
 *ignoreme*
@@ -44,6 +47,9 @@ playwright-report/
 *.db
 *.sqlite
 *.db-wal
+
+# sqlfu scratch databases
+.sqlfu/
 *.db-shm
 *.db-journal
 *.sqlite-wal
@@ -56,6 +62,7 @@ opensrc/
 
 # opencode sessions
 session-ses*.md
+_code-review*.md
 
 # local lint-staged config
 lint-staged.local.cjs

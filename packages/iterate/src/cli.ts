@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 
 import * as prompts from "@clack/prompts";
 import { createORPCClient } from "@orpc/client";
@@ -9,9 +10,10 @@ import { RPCLink } from "@orpc/client/fetch";
 import { os } from "@orpc/server";
 import { createAuthClient } from "better-auth/client";
 import { adminClient } from "better-auth/client/plugins";
-import { createCli, parseRouter, type AnyRouter, yamlTableConsoleLogger } from "trpc-cli";
+import { createCli, parseRouter, type AnyRouter } from "trpc-cli";
 import { z } from "zod/v4";
 import type { StandardSchemaV1 } from "trpc-cli/dist/standard-schema/contract.js";
+import type { AuthContractClient } from "../../../apps/auth-contract/src/index.ts";
 
 type ParsedRouter = ReturnType<typeof parseRouter>;
 
@@ -46,6 +48,7 @@ const Session = z.object({
 /** A named config — describes which server to talk to and how to authenticate. */
 const Config = z.object({
   osBaseUrl: z.string(),
+  authBaseUrl: z.string().optional(),
   daemonBaseUrl: z.string().optional(),
   auth: AuthStrategy,
   session: Session.optional(),
@@ -91,6 +94,51 @@ const writeConfigFile = (configFile: ConfigFile): void => {
 
 /** Global override set by --config flag before CLI commands run. */
 let configFlagOverride: string | undefined;
+
+/**
+ * We strip host-level flags before handing argv to `trpc-cli`,
+ * That keeps router-local help/validation focused on the mounted
+ * procedures instead of teaching every command about iterate-specific flags.
+ *
+ * Usage examples:
+ * - `iterate --local-router ./scripts/preview/router.ts local-router preview sync`
+ * - `iterate --config dev doctor`
+ */
+const consumeCliStringFlag = (flagName: string): string | undefined => {
+  const args = process.argv.slice(2);
+  const flagIndex = args.indexOf(flagName);
+  if (flagIndex === -1) return undefined;
+  const value = args[flagIndex + 1];
+  if (!value || value.startsWith("-")) {
+    throw new Error(`${flagName} requires a value`);
+  }
+  process.argv.splice(flagIndex + 2, 2);
+  return value;
+};
+
+/**
+ * Temporary compatibility for root-owned preview commands.
+ * App CLIs should use packages/shared/src/apps/cli.ts instead of iterate --local-router,
+ * but preview still depends on this mounted-router flow for now.
+ */
+const loadLocalRouter = async (routerPath: string) => {
+  const fullPath = resolve(process.cwd(), routerPath);
+  const importedModule = (await import(pathToFileURL(fullPath).href)) as {
+    router?: import("@orpc/server").Router<any, any>;
+  };
+  const router = importedModule.router;
+  if (router == null) {
+    throw new Error(
+      `Local router module ${JSON.stringify(routerPath)} must export a named "router" value.`,
+    );
+  }
+  if (typeof router !== "object") {
+    throw new Error(
+      `Local router module ${JSON.stringify(routerPath)} exported a router mount, but it is not an object.`,
+    );
+  }
+  return router;
+};
 
 /**
  * Resolve which config name to use.
@@ -154,10 +202,47 @@ const resolveConfig = (workspacePath: string): { name: string; config: Config } 
   }
   // Normalize: strip trailing slashes from URLs to avoid double-slash issues
   parsed.data.osBaseUrl = parsed.data.osBaseUrl.replace(/\/+$/, "");
+  if (parsed.data.authBaseUrl) {
+    parsed.data.authBaseUrl = parsed.data.authBaseUrl.replace(/\/+$/, "");
+  }
   if (parsed.data.daemonBaseUrl) {
     parsed.data.daemonBaseUrl = parsed.data.daemonBaseUrl.replace(/\/+$/, "");
   }
   return { name, config: parsed.data };
+};
+
+const resolveAuthBaseUrl = (config: Config): string => {
+  if (config.authBaseUrl) {
+    return config.authBaseUrl;
+  }
+
+  const osUrl = new URL(config.osBaseUrl);
+  if (osUrl.hostname === "os.iterate.com") {
+    return "https://auth.iterate.com";
+  }
+  if (osUrl.hostname === "localhost" || osUrl.hostname === "127.0.0.1") {
+    return "http://localhost:7101";
+  }
+  if (osUrl.hostname.endsWith(".iterate-dev.com")) {
+    return "http://localhost:7101";
+  }
+
+  throw new Error(
+    `No authBaseUrl configured for ${config.osBaseUrl}. Set one with \`iterate config set --auth-base-url ...\`.`,
+  );
+};
+
+const getLocalConfigDefaults = () => {
+  const username = process.env.USER || process.env.LOGNAME || "dev";
+  return {
+    name: "local",
+    osBaseUrl: `https://${username}.iterate-dev.com`,
+    authBaseUrl: "http://localhost:7101",
+    daemonBaseUrl: "http://localhost:3001",
+    auth: {
+      strategy: "device" as const,
+    },
+  };
 };
 
 const storeSession = (configName: string, session: Config["session"]): void => {
@@ -363,18 +448,61 @@ const getOsAuthHeaders = async (
 
 /** Get an authenticated better-auth client for whoami/getSession etc. */
 const getAuthenticatedClient = async (config: Config) => {
+  const baseURL = config.auth.strategy === "device" ? resolveAuthBaseUrl(config) : config.osBaseUrl;
   const headers = await getOsAuthHeaders(config);
   return createAuthClient({
-    baseURL: config.osBaseUrl,
+    baseURL,
     fetchOptions: {
       throw: true,
       onRequest: (ctx: { headers: Headers }) => {
-        ctx.headers.set("origin", config.osBaseUrl);
+        ctx.headers.set("origin", baseURL);
         if (headers.cookie) ctx.headers.set("cookie", headers.cookie);
         if (headers.authorization) ctx.headers.set("authorization", headers.authorization);
       },
     },
   });
+};
+
+const getAuthWorkerHeaders = async (
+  config: Config,
+): Promise<{ cookie?: string; authorization?: string }> => {
+  if (config.auth.strategy !== "device") {
+    throw new Error("Auth worker commands currently require device auth strategy.");
+  }
+  const session = config.session;
+  if (!session) {
+    throw new Error(`Not logged in to ${resolveAuthBaseUrl(config)}. Run \`iterate login\` first.`);
+  }
+  if (session.expiresAt && new Date(session.expiresAt) < new Date()) {
+    throw new Error(
+      `Session expired for ${resolveAuthBaseUrl(config)}. Run \`iterate login\` again.`,
+    );
+  }
+  if (session.token) {
+    return { authorization: `Bearer ${session.token}` };
+  }
+  if (session.cookie) {
+    return { cookie: session.cookie };
+  }
+  throw new Error(`Stored session for ${resolveAuthBaseUrl(config)} has no token or cookie.`);
+};
+
+const getAuthWorkerClient = async (config: Config): Promise<AuthContractClient> => {
+  const baseURL = resolveAuthBaseUrl(config);
+  const headers = await getAuthWorkerHeaders(config);
+  return createORPCClient(
+    new RPCLink({
+      url: `${baseURL}/api/orpc/`,
+      fetch: async (request: URL | Request, init?: RequestInit) => {
+        const reqHeaders = new Headers(
+          request instanceof Request ? request.headers : init?.headers,
+        );
+        if (headers.cookie) reqHeaders.set("cookie", headers.cookie);
+        if (headers.authorization) reqHeaders.set("authorization", headers.authorization);
+        return fetch(request, { ...init, headers: reqHeaders });
+      },
+    }),
+  );
 };
 
 // Device flow login (RFC 8628 via better-auth deviceAuthorization plugin)
@@ -383,10 +511,11 @@ const DEVICE_CLIENT_ID = "iterate-cli";
 const deviceFlowLogin = async (
   config: Config,
 ): Promise<{ token?: string; cookie?: string; expiresAt?: string }> => {
+  const authBaseUrl = resolveAuthBaseUrl(config);
   // Step 1: Request device code (RFC 8628 — all fields are snake_case)
-  const codeRes = await fetch(`${config.osBaseUrl}/api/auth/device/code`, {
+  const codeRes = await fetch(`${authBaseUrl}/api/auth/device/code`, {
     method: "POST",
-    headers: { "content-type": "application/json", origin: config.osBaseUrl },
+    headers: { "content-type": "application/json", origin: authBaseUrl },
     body: JSON.stringify({ client_id: DEVICE_CLIENT_ID }),
   });
   if (!codeRes.ok) {
@@ -405,7 +534,7 @@ const deviceFlowLogin = async (
   // Step 2: Show user code and open browser
   const verifyUrl =
     code.verification_uri_complete ||
-    `${config.osBaseUrl}${code.verification_uri}?user_code=${code.user_code}`;
+    `${authBaseUrl}${code.verification_uri}?user_code=${code.user_code}`;
   console.error(`\nOpen this URL in your browser to authenticate:\n`);
   console.error(`  ${verifyUrl}\n`);
   console.error(`Your code: ${code.user_code}\n`);
@@ -428,10 +557,10 @@ const deviceFlowLogin = async (
   while (Date.now() < expiresAt) {
     await new Promise((resolve) => setTimeout(resolve, pollInterval));
 
-    const tokenUrl = `${config.osBaseUrl}/api/auth/device/token`;
+    const tokenUrl = `${authBaseUrl}/api/auth/device/token`;
     const tokenRes = await fetch(tokenUrl, {
       method: "POST",
-      headers: { "content-type": "application/json", origin: config.osBaseUrl },
+      headers: { "content-type": "application/json", origin: authBaseUrl },
       body: JSON.stringify({
         grant_type: "urn:ietf:params:oauth:grant-type:device_code",
         device_code: code.device_code,
@@ -628,6 +757,8 @@ const launcherProcedures = {
         configPath: CONFIG_PATH,
         configFile,
         resolved: resolved instanceof Error ? { error: resolved.message } : resolved,
+        resolvedAuthBaseUrl:
+          resolved instanceof Error ? undefined : resolveAuthBaseUrl(resolved.config),
         sessions: Object.fromEntries(
           Object.entries(configs).map(([name, cfg]) => [
             name,
@@ -681,7 +812,7 @@ const launcherProcedures = {
       }
 
       // Device flow
-      console.error(`Logging in to ${config.osBaseUrl}...`);
+      console.error(`Logging in to ${resolveAuthBaseUrl(config)}...`);
       const deviceResult = await deviceFlowLogin(config);
       storeSession(resolved.name, deviceResult);
       // Update in-memory config so getAuthenticatedClient sees the token
@@ -713,6 +844,15 @@ const launcherProcedures = {
     return await client.getSession();
   }),
 
+  orgs: {
+    list: os.meta({ description: "List organizations from the auth worker" }).handler(async () => {
+      const resolved = resolveConfig(process.cwd());
+      if (resolved instanceof Error) throw resolved;
+      const authClient = await getAuthWorkerClient(resolved.config);
+      return await authClient.user.myOrganizations();
+    }),
+  },
+
   config: {
     list: os.meta({ description: "List all named configs" }).handler(async () => {
       const configFile = readConfigFile();
@@ -724,6 +864,7 @@ const launcherProcedures = {
             name,
             {
               osBaseUrl: cfg.osBaseUrl,
+              authBaseUrl: cfg.authBaseUrl,
               daemonBaseUrl: cfg.daemonBaseUrl,
               strategy: cfg.auth.strategy,
               active: name === currentName ? true : undefined,
@@ -737,8 +878,12 @@ const launcherProcedures = {
     set: os
       .input(
         z.object({
-          name: z.string().describe("Config name (e.g. dev, prd, staging)"),
+          name: z.string().describe("Config name (e.g. dev, prd, preview)"),
           osBaseUrl: z.string().describe("Base URL for OS API (e.g. https://os.iterate.com)"),
+          authBaseUrl: z
+            .string()
+            .optional()
+            .describe("Base URL for auth API (e.g. https://auth.iterate.com)"),
           daemonBaseUrl: z
             .string()
             .optional()
@@ -772,6 +917,7 @@ const launcherProcedures = {
 
         configFile.configs[input.name] = {
           osBaseUrl: input.osBaseUrl,
+          authBaseUrl: input.authBaseUrl,
           daemonBaseUrl: input.daemonBaseUrl,
           auth,
         };
@@ -816,21 +962,63 @@ const launcherProcedures = {
       return {
         name: resolved.name,
         config: resolved.config,
+        resolvedAuthBaseUrl: resolveAuthBaseUrl(resolved.config),
         resolvedVia: configFlagOverride ? "--config flag" : "workspace mapping or default",
       };
     }),
+
+    local: os
+      .input(
+        z
+          .object({
+            name: z.string().optional().describe("Config name to create or update"),
+            setDefault: z.boolean().optional().describe("Set this config as the default"),
+            setWorkspace: z
+              .boolean()
+              .optional()
+              .describe("Map the current directory to this config"),
+          })
+          .partial(),
+      )
+      .meta({
+        description: "Create a local dev config wired to auth localhost and your dev tunnel",
+      })
+      .handler(async ({ input }) => {
+        const configFile = readConfigFile();
+        configFile.configs ||= {};
+
+        const defaults = getLocalConfigDefaults();
+        const name = input.name || defaults.name;
+
+        configFile.configs[name] = {
+          osBaseUrl: defaults.osBaseUrl,
+          authBaseUrl: defaults.authBaseUrl,
+          daemonBaseUrl: defaults.daemonBaseUrl,
+          auth: defaults.auth,
+        };
+
+        if (input.setDefault ?? true) {
+          configFile.default = name;
+        }
+        if (input.setWorkspace ?? true) {
+          configFile.workspaces ||= {};
+          configFile.workspaces[process.cwd()] = name;
+        }
+
+        writeConfigFile(configFile);
+        return {
+          configPath: CONFIG_PATH,
+          name,
+          config: configFile.configs[name],
+        };
+      }),
   },
 };
 
 export const getCli = async () => {
-  // Parse --config flag early, before trpc-cli sees the args
-  const args = process.argv.slice(2);
-  const configFlagIndex = args.indexOf("--config");
-  if (configFlagIndex !== -1 && args[configFlagIndex + 1]) {
-    configFlagOverride = args[configFlagIndex + 1];
-    // Remove --config <name> from argv so trpc-cli doesn't choke on it
-    process.argv.splice(configFlagIndex + 2, 2);
-  }
+  // Parse custom top-level flags early, before trpc-cli sees the args.
+  configFlagOverride = consumeCliStringFlag("--config");
+  const localRouterPath = consumeCliStringFlag("--local-router");
 
   const resolved = resolveConfig(process.cwd());
 
@@ -842,6 +1030,11 @@ export const getCli = async () => {
   };
 
   const routers: Record<string, import("@orpc/server").Router<any, any>>[] = [launcherProcedures];
+
+  if (localRouterPath) {
+    const localRouter = await loadLocalRouter(localRouterPath);
+    routers.push({ "local-router": localRouter });
+  }
 
   if (resolved instanceof Error) {
     const procedure = errorProcedure(`Invalid config`)(resolved);
@@ -890,7 +1083,7 @@ export const getCli = async () => {
 
 export const runCli = async () => {
   const { cli, prompts: cliPrompts } = await getCli();
-  await cli.run({ prompts: cliPrompts, logger: yamlTableConsoleLogger });
+  await cli.run({ prompts: cliPrompts });
 };
 
 // todo: move this to trpc-cli

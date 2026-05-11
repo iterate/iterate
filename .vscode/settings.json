@@ -1,4 +1,5 @@
 {
+  "css.lint.unknownAtRules": "ignore",
   "files.associations": {
     "wrangler.json": "jsonc"
   },
@@ -27,7 +28,7 @@
   },
   "typescript.enablePromptUseWorkspaceTsdk": true,
   "typescript.tsdk": "node_modules/typescript/lib",
-  "typescript.preferences.importModuleSpecifierEnding": "js",
+  "typescript.preferences.importModuleSpecifierEnding": "auto",
   "typescript.preferences.preferTypeOnlyAutoImports": true,
   "typescript.experimental.useTsgo": true,
   "search.exclude": {

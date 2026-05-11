@@ -43,7 +43,7 @@ function RootComponent() {
       </AppErrorBoundary>
       <TanStackDevtools
         config={{
-          position: "bottom-right",
+          position: "bottom-left",
         }}
         plugins={[
           {

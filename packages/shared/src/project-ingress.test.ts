@@ -8,8 +8,8 @@ import {
   buildProjectPortUrl,
   buildMachinePortUrl,
   isProjectIngressHostname,
-  SERVICE_ALIASES,
-  PORT_TO_ALIAS,
+  NAMED_PORT_ALIASES,
+  PORT_TO_NAMED_ALIAS,
 } from "./project-ingress.ts";
 
 describe("parseProjectIngressHostname", () => {
@@ -259,16 +259,16 @@ describe("buildProjectPortUrl with custom domain", () => {
   });
 });
 
-describe("PORT_TO_ALIAS", () => {
+describe("PORT_TO_NAMED_ALIAS", () => {
   it("maps port 4096 to opencode (first alias wins)", () => {
-    expect(PORT_TO_ALIAS[4096]).toBe("opencode");
+    expect(PORT_TO_NAMED_ALIAS[4096]).toBe("opencode");
   });
 
-  it("is consistent with SERVICE_ALIASES", () => {
-    for (const [_name, port] of Object.entries(SERVICE_ALIASES)) {
-      expect(PORT_TO_ALIAS[port]).toBeDefined();
+  it("is consistent with NAMED_PORT_ALIASES", () => {
+    for (const [_name, port] of Object.entries(NAMED_PORT_ALIASES)) {
+      expect(PORT_TO_NAMED_ALIAS[port]).toBeDefined();
       // The reverse mapping should resolve back to the same port
-      expect(SERVICE_ALIASES[PORT_TO_ALIAS[port]!]).toBe(port);
+      expect(NAMED_PORT_ALIASES[PORT_TO_NAMED_ALIAS[port]!]).toBe(port);
     }
   });
 });
@@ -348,11 +348,11 @@ describe("parseCustomDomainHostname", () => {
     expect(result).toEqual({ ok: true, target: { kind: "project", targetPort: 4096 } });
   });
 
-  it("service alias → project, aliased port", () => {
+  it("named alias → project, aliased port", () => {
     const result = parseCustomDomainHostname("opencode.templestein.com", "templestein.com");
     expect(result).toEqual({
       ok: true,
-      target: { kind: "project", targetPort: SERVICE_ALIASES.opencode },
+      target: { kind: "project", targetPort: NAMED_PORT_ALIASES.opencode },
     });
   });
 
@@ -360,7 +360,7 @@ describe("parseCustomDomainHostname", () => {
     const result = parseCustomDomainHostname("daemon.templestein.com", "templestein.com");
     expect(result).toEqual({
       ok: true,
-      target: { kind: "project", targetPort: SERVICE_ALIASES.daemon },
+      target: { kind: "project", targetPort: NAMED_PORT_ALIASES.daemon },
     });
   });
 
@@ -410,7 +410,7 @@ describe("parseCustomDomainHostname", () => {
     const result = parseCustomDomainHostname("OpenCode.Templestein.COM", "templestein.com");
     expect(result).toEqual({
       ok: true,
-      target: { kind: "project", targetPort: SERVICE_ALIASES.opencode },
+      target: { kind: "project", targetPort: NAMED_PORT_ALIASES.opencode },
     });
   });
 
@@ -426,11 +426,11 @@ describe("parseCustomDomainHostname", () => {
       expect(result).toEqual({ ok: true, target: { kind: "project", targetPort: 4096 } });
     });
 
-    it("apex with multi-part TLD — service alias", () => {
+    it("apex with multi-part TLD — named alias", () => {
       const result = parseCustomDomainHostname("opencode.my-domain.co.uk", "my-domain.co.uk");
       expect(result).toEqual({
         ok: true,
-        target: { kind: "project", targetPort: SERVICE_ALIASES.opencode },
+        target: { kind: "project", targetPort: NAMED_PORT_ALIASES.opencode },
       });
     });
 
@@ -460,14 +460,14 @@ describe("parseCustomDomainHostname", () => {
       expect(result).toEqual({ ok: true, target: { kind: "project", targetPort: 4096 } });
     });
 
-    it("service alias", () => {
+    it("named alias", () => {
       const result = parseCustomDomainHostname(
         "opencode.iterate.my-domain.co.uk",
         "iterate.my-domain.co.uk",
       );
       expect(result).toEqual({
         ok: true,
-        target: { kind: "project", targetPort: SERVICE_ALIASES.opencode },
+        target: { kind: "project", targetPort: NAMED_PORT_ALIASES.opencode },
       });
     });
 
@@ -500,14 +500,14 @@ describe("parseCustomDomainHostname", () => {
       expect(result).toEqual({ ok: true, target: { kind: "project", targetPort: 4096 } });
     });
 
-    it("service alias", () => {
+    it("named alias", () => {
       const result = parseCustomDomainHostname(
         "opencode.iterate.playground.my-domain.co.uk",
         "iterate.playground.my-domain.co.uk",
       );
       expect(result).toEqual({
         ok: true,
-        target: { kind: "project", targetPort: SERVICE_ALIASES.opencode },
+        target: { kind: "project", targetPort: NAMED_PORT_ALIASES.opencode },
       });
     });
 

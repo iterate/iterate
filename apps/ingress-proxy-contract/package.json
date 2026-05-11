@@ -1,0 +1,23 @@
+{
+  "name": "@iterate-com/ingress-proxy-contract",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@iterate-com/shared": "workspace:*",
+    "@orpc/client": "1.13.14",
+    "@orpc/contract": "1.13.14",
+    "@orpc/openapi-client": "1.13.14",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3"
+  }
+}

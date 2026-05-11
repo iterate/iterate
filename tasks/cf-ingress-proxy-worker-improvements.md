@@ -4,13 +4,13 @@ priority: medium
 size: large
 ---
 
-# cf-ingress-proxy-worker improvements
+# ingress-proxy improvements
 
-Rewrite the cf-ingress-proxy-worker to be a clean, minimal, transparent proxy worthy of being a showcase CF Workers project. Add comprehensive E2E tests.
+Rewrite the ingress-proxy app to be a clean, minimal, transparent proxy worthy of being a showcase Cloudflare Workers project. Add comprehensive E2E tests.
 
 ## Context
 
-The cf-ingress-proxy-worker is a programmable ingress proxy on Cloudflare Workers. It stores hostname→target mappings in D1 and proxies requests. It was originally vibe-coded and needs a proper rewrite.
+The ingress-proxy app is a programmable ingress proxy on Cloudflare Workers. It stores hostname→target mappings in D1 and proxies requests. It was originally vibe-coded and needs a proper rewrite.
 
 Goal: Kent C. Dodds / Barda-quality code. Minimal, transparent, zero unnecessary overhead on the request path.
 
@@ -99,7 +99,7 @@ This passes the entire request (including upgrade headers, body stream, etc.) tr
 
 **Strategy:** All tests are E2E tests against the live worker, except unit tests for route matching logic (exact vs wildcard priority, suffix sorting, etc.).
 
-Model after the JonasLand E2E test suite.
+Keep the tests readable and focused on product behavior rather than worker internals.
 
 ### 4a. Unit tests (route matching only)
 

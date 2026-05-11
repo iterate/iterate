@@ -10,15 +10,9 @@ import {
   useSidebar,
 } from "./ui/sidebar.tsx";
 
-interface Project {
-  id: string;
-  name: string;
-  slug: string;
-}
-
 interface OrgSidebarNavProps {
   orgSlug: string;
-  projects?: Project[];
+  projects?: Array<{ id: string; name: string; slug: string; jonasLand: boolean }>;
 }
 
 export function OrgSidebarNav({ orgSlug, projects }: OrgSidebarNavProps) {
@@ -96,17 +90,22 @@ export function OrgSidebarNav({ orgSlug, projects }: OrgSidebarNavProps) {
           <SidebarGroupContent>
             <SidebarMenu>
               {projects.map((project) => {
-                const isActive = Boolean(
-                  matchRoute({
-                    to: "/proj/$projectSlug",
-                    params: { projectSlug: project.slug },
-                    fuzzy: true,
-                  }),
-                );
                 return (
                   <SidebarMenuItem key={project.id}>
-                    <SidebarMenuButton asChild isActive={isActive}>
-                      <Link to="/proj/$projectSlug" params={{ projectSlug: project.slug }}>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={Boolean(
+                        matchRoute({
+                          to: project.jonasLand ? "/jonasland/$projectSlug" : "/proj/$projectSlug",
+                          params: { projectSlug: project.slug },
+                          fuzzy: true,
+                        }),
+                      )}
+                    >
+                      <Link
+                        to={project.jonasLand ? "/jonasland/$projectSlug" : "/proj/$projectSlug"}
+                        params={{ projectSlug: project.slug }}
+                      >
                         <Box className="h-4 w-4" />
                         <span>{project.name}</span>
                       </Link>

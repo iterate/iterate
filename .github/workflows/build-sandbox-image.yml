@@ -23,7 +23,7 @@ on:
         type: boolean
         default: false
       doppler_config:
-        description: Doppler config (dev, stg, prd)
+        description: Doppler config (dev, preview, prd)
         required: false
         type: string
         default: dev
@@ -38,7 +38,7 @@ on:
         type: boolean
         default: false
       doppler_configs_to_update:
-        description: Comma-separated Doppler configs to update (e.g. dev,stg,prd)
+        description: Comma-separated Doppler configs to update (e.g. dev,preview,prd)
         required: false
         type: string
         default: ""
@@ -70,7 +70,7 @@ on:
         type: boolean
         default: false
       doppler_config:
-        description: Doppler config (dev, stg, prd)
+        description: Doppler config (dev, preview, prd)
         required: false
         type: string
         default: dev
@@ -85,13 +85,13 @@ on:
         type: boolean
         default: false
       doppler_configs_to_update:
-        description: Comma-separated Doppler configs to update (e.g. dev,stg,prd)
+        description: Comma-separated Doppler configs to update (e.g. dev,preview,prd)
         required: false
         type: string
         default: ""
 jobs:
   build:
-    runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
+    runs-on: depot-ubuntu-24.04-32
     outputs:
       image_tag: ${{ steps.output.outputs.image_tag }}
       fly_image_tag: ${{ steps.output.outputs.fly_image_tag }}

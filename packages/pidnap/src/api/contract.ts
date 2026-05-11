@@ -1,8 +1,8 @@
-import { oc as ocBase } from "@orpc/contract";
+import { eventIterator, oc as ocBase } from "@orpc/contract";
 import * as v from "valibot";
 import { ProcessDefinition } from "../lazy-process.ts";
 import { RestartingProcessOptions, RestartingProcessState } from "../restarting-process.ts";
-import { EnvOptions } from "../manager.ts";
+import { EnvOptions, ProcessHealthCheck } from "../manager.ts";
 
 const oc = ocBase.$input(v.void());
 
@@ -56,10 +56,43 @@ export const WaitForRunningResponseSchema = v.object({
 
 export type WaitForRunningResponse = v.InferOutput<typeof WaitForRunningResponseSchema>;
 
+// Wait condition: any process state plus derived "healthy"
+export const WaitCondition = v.picklist([
+  "idle",
+  "running",
+  "restarting",
+  "stopping",
+  "stopped",
+  "crash-loop-backoff",
+  "max-restarts-reached",
+  "healthy",
+]);
+export type WaitCondition = v.InferOutput<typeof WaitCondition>;
+
+export const WaitForResultEntry = v.object({
+  state: RestartingProcessState,
+  healthy: v.boolean(),
+  elapsedMs: v.number(),
+});
+
+export const WaitForResponseSchema = v.object({
+  results: v.record(v.string(), WaitForResultEntry),
+  allMet: v.boolean(),
+});
+export type WaitForResponse = v.InferOutput<typeof WaitForResponseSchema>;
+
+export const ProcessLogEntrySchema = v.object({
+  text: v.string(),
+});
+export type ProcessLogEntry = v.InferOutput<typeof ProcessLogEntrySchema>;
+
 // API contract
 export const manager = {
   status: oc.output(ManagerStatusSchema),
 };
+
+export const HealthCheckConfig = ProcessHealthCheck;
+export type HealthCheckConfig = v.InferOutput<typeof HealthCheckConfig>;
 
 export const processes = {
   get: oc
@@ -75,6 +108,7 @@ export const processes = {
         envOptions: v.optional(EnvOptions),
         tags: v.optional(v.array(v.string())),
         restartImmediately: v.optional(v.boolean()),
+        healthCheck: v.optional(HealthCheckConfig),
       }),
     )
     .output(RestartingProcessInfoSchema),
@@ -89,14 +123,31 @@ export const processes = {
   waitForRunning: oc
     .input(
       v.object({
-        target: ResourceTarget,
-        timeoutMs: v.optional(v.number()), // default 60000
-        pollIntervalMs: v.optional(v.number()), // default 500
-        includeLogs: v.optional(v.boolean()), // default true
-        logTailLines: v.optional(v.number()), // default 100
+        processSlug: v.string(),
+        timeoutMs: v.optional(v.number()),
+        pollIntervalMs: v.optional(v.number()),
+        includeLogs: v.optional(v.boolean()),
+        logTailLines: v.optional(v.number()),
       }),
     )
     .output(WaitForRunningResponseSchema),
+  waitFor: oc
+    .input(
+      v.object({
+        processes: v.record(v.string(), WaitCondition),
+        timeoutMs: v.optional(v.number()),
+      }),
+    )
+    .output(WaitForResponseSchema),
+  logs: oc
+    .input(
+      v.object({
+        processSlug: v.string(),
+        tailLines: v.optional(v.number()),
+        pollIntervalMs: v.optional(v.number()),
+      }),
+    )
+    .output(eventIterator(ProcessLogEntrySchema)),
 };
 
 // Simple health check response

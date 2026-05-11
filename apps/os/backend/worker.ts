@@ -4,10 +4,11 @@ import { minimatch } from "minimatch";
 import { parseRouter } from "trpc-cli";
 import { contextStorage } from "hono/context-storage";
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { setCookie } from "hono/cookie";
 import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
 import { RPCHandler } from "@orpc/server/fetch";
-import { onError, ORPCError } from "@orpc/server";
+import { onError } from "@orpc/server";
 import { RequestHeadersPlugin } from "@orpc/server/plugins";
 import { createRouterClient } from "@orpc/server";
 import { sql } from "drizzle-orm";
@@ -17,11 +18,13 @@ import {
   parseProjectIngressHostname,
 } from "@iterate-com/shared/project-ingress";
 import dedent from "dedent";
+import { parseBearerToken } from "@iterate-com/shared/bearer";
 import type { CloudflareEnv } from "../env.ts";
 import { isNonProd } from "../env.ts";
 import * as standardSchema from "./standard-schema/index.ts";
 import { getDb } from "./db/client.ts";
-import { getAuth } from "./auth/auth.ts";
+import { getOAuthMirroredSession, getOsIterateAuth } from "./auth/auth-worker-session.ts";
+import { PROJECT_INGRESS_AUTH_TOKEN_COOKIE } from "./auth/constants.ts";
 import { appRouter } from "./orpc/root.ts";
 import { createContext } from "./orpc/context.ts";
 import { slackApp } from "./integrations/slack/slack.ts";
@@ -42,8 +45,11 @@ import { queuer } from "./outbox/outbox-queuer.ts";
 import * as workerConfig from "./worker-config.ts";
 import { RealtimePusher } from "./durable-objects/realtime-pusher.ts";
 import { ApprovalCoordinator } from "./durable-objects/approval-coordinator.ts";
+import { ProjectDurableObject } from "./durable-objects/project.ts";
+import { DeploymentDurableObject } from "./durable-objects/deployment.ts";
 import type { Variables } from "./types.ts";
 import { getOtelConfig, initializeOtel, withExtractedTraceContext } from "./utils/otel-init.ts";
+import { createAuthWorkerClient } from "./utils/auth-worker-client.ts";
 import {
   buildCanonicalProjectIngressProxyHostname,
   buildControlPlaneProjectIngressProxyLoginUrl,
@@ -223,10 +229,7 @@ app.post("/api/debug/trigger-error", (c) => {
     return c.json({ error: "Not found" }, 404);
   }
 
-  const authorization = c.req.header("authorization");
-  const bearerToken = authorization?.startsWith("Bearer ")
-    ? authorization.slice(7).trim()
-    : undefined;
+  const bearerToken = parseBearerToken(c.req.header("authorization"));
   const providedToken = bearerToken ?? c.req.header("x-iterate-debug-token")?.trim();
 
   if (!providedToken || providedToken !== serviceAuthToken) {
@@ -253,18 +256,23 @@ app.use(
   secureHeaders(),
 );
 
+app.all("/api/iterate-auth/*", (c) => getOsIterateAuth(c.env).handler(c.req.raw));
+
 app.use("*", async (c, next) => {
   const db = await getDb();
-  const auth = getAuth(db);
-  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  const { session, responseHeaders } = await getOAuthMirroredSession({
+    db,
+    env: c.env,
+    headers: c.req.raw.headers,
+  });
   c.set("db", db);
-  c.set("auth", auth);
   c.set("session", session);
   const orpcCaller = createRouterClient(appRouter, {
     context: createContext(c),
   });
   c.set("orpcCaller", orpcCaller);
-  return next();
+  await next();
+  responseHeaders.forEach((value, key) => c.res.headers.append(key, value));
 });
 
 app.get("/api/testing/db-connection-probe", async (c) => {
@@ -360,9 +368,10 @@ app.get(PROJECT_INGRESS_PROXY_AUTH_BRIDGE_START_PATH, async (c) => {
     return c.redirect(controlPlaneLoginUrl.toString(), 302);
   }
 
-  const oneTimeToken = await c.var.auth.api.generateOneTimeToken({
-    headers: c.req.raw.headers,
+  const authWorkerClient = createAuthWorkerClient({
+    asUser: { authUserId: c.var.session.user.authUserId! },
   });
+  const oneTimeToken = await authWorkerClient.internal.session.createProjectIngressToken();
   const projectIngressProxyScheme = getIngressSchemeFromPublicUrl(c.env.VITE_PUBLIC_URL);
   const exchangeUrl = new URL(
     `${projectIngressProxyScheme}://${canonicalHost}${PROJECT_INGRESS_PROXY_AUTH_EXCHANGE_PATH}`,
@@ -398,21 +407,29 @@ app.get(PROJECT_INGRESS_PROXY_AUTH_EXCHANGE_PATH, async (c) => {
     }
   }
 
-  const exchangePath = new URL(
-    "/api/auth/project-ingress-proxy/one-time-token/exchange",
-    c.req.url,
-  );
   const token = c.req.query("token");
-  if (token) exchangePath.searchParams.set("token", token);
+  if (!token) {
+    return c.json({ error: "Missing token" }, 400);
+  }
   const redirectPath = c.req.query("redirectPath");
-  if (redirectPath) exchangePath.searchParams.set("redirectPath", redirectPath);
+  const normalizedRedirectPath = normalizeProjectIngressProxyRedirectPath(redirectPath);
 
-  return c.var.auth.handler(
-    new Request(exchangePath.toString(), {
-      method: "GET",
-      headers: c.req.raw.headers,
-    }),
-  );
+  const authWorkerClient = createAuthWorkerClient({
+    serviceToken: c.env.SERVICE_AUTH_TOKEN,
+  });
+  const exchanged = await authWorkerClient.internal.session.exchangeProjectIngressToken({
+    token,
+  });
+
+  setCookie(c, PROJECT_INGRESS_AUTH_TOKEN_COOKIE, exchanged.token, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "Lax",
+    path: "/",
+    maxAge: 60 * 60,
+  });
+
+  return c.redirect(normalizedRedirectPath, 302);
 });
 
 app.onError((err, c) => {
@@ -431,30 +448,50 @@ app.onError((err, c) => {
   return c.json({ error: "Internal Server Error" }, 500);
 });
 
-app.all("/api/auth/*", (c) => c.var.auth.handler(c.req.raw));
+function handleOrpcError(
+  kind: "app" | "daemon",
+  error: unknown,
+  request: { url: URL | string },
+): void {
+  const url = request.url.toString();
+  const resolvedError = error instanceof Error ? error : new Error(String(error));
+  if (resolvedError !== error) resolvedError.name = "NonErrorThrowable";
+  const pretty = standardSchema.prettifyStandardSchemaError(resolvedError.cause);
+  const maybeStatus =
+    typeof error === "object" &&
+    error !== null &&
+    "status" in error &&
+    typeof (error as { status?: unknown }).status === "number"
+      ? (error as { status: number }).status
+      : undefined;
+  const effectiveStatus = maybeStatus ?? 999;
+  const errorDetails = {
+    name: resolvedError.name,
+    message: resolvedError.message,
+    stack: resolvedError.stack ?? "stack unavailable",
+    kind,
+    url,
+  };
+  const message =
+    pretty ??
+    `oRPC Error ${maybeStatus ?? "unknown"} ${url}: ${String(
+      (error as { message?: unknown })?.message ?? error,
+    )}`;
+
+  logger.set({ request: { status: effectiveStatus } });
+  if (effectiveStatus >= 500) {
+    logger.error(message, errorDetails, resolvedError);
+  } else {
+    logger.set({ errors: [errorDetails] });
+    logger.warn(message);
+  }
+}
 
 // oRPC endpoint for client-facing API (app router)
 const appOrpcHandler = new RPCHandler(appRouter, {
-  interceptors: [
-    onError((maybeError) => {
-      const error = maybeError instanceof Error ? maybeError : new Error(String(maybeError));
-      if (maybeError !== error) error.name = "NonErrorThrowable";
-      const pretty = standardSchema.prettifyStandardSchemaError(error.cause);
-      const maybeStatus = (error as Partial<ORPCError<never, never>>).status;
-      const message = pretty ?? String(error);
-      const effectiveStatus = maybeStatus ?? 999;
-      logger.set({ request: { status: effectiveStatus } });
-
-      const errorDetails = { name: error.name, message: error.message, stack: error.stack || "" };
-
-      if (effectiveStatus >= 500) logger.error(message, error);
-      else {
-        logger.set({ errors: [errorDetails] });
-        logger.warn(message);
-      }
-    }),
-  ],
+  interceptors: [onError((error, params) => handleOrpcError("app", error, params.request))],
 });
+
 app.all("/api/orpc/*", async (c, next) => {
   // Skip if this is the daemon-facing endpoint (handled below)
   if (c.req.path.startsWith("/api/orpc-daemon/")) return next();
@@ -486,25 +523,7 @@ app.route("", egressProxyApp);
 
 // oRPC handler for daemon→worker communication (API key auth, separate context)
 const daemonOrpcHandler = new RPCHandler(workerRouter, {
-  interceptors: [
-    onError((maybeError) => {
-      const error = maybeError instanceof Error ? maybeError : new Error(String(maybeError));
-      if (maybeError !== error) error.name = "NonErrorThrowable";
-      const pretty = standardSchema.prettifyStandardSchemaError(error.cause);
-      const maybeStatus = (error as Partial<ORPCError<never, never>>).status;
-      const message = pretty ?? String(error);
-      const effectiveStatus = maybeStatus ?? 999;
-      logger.set({ request: { status: effectiveStatus } });
-
-      const errorDetails = { name: error.name, message: error.message, stack: error.stack || "" };
-
-      if (effectiveStatus >= 500) logger.error(message, error);
-      else {
-        logger.set({ errors: [errorDetails] });
-        logger.warn(message);
-      }
-    }),
-  ],
+  interceptors: [onError((error, params) => handleOrpcError("daemon", error, params.request))],
   plugins: [new RequestHeadersPlugin()],
 });
 app.all("/api/orpc-daemon/*", async (c) => {
@@ -592,4 +611,4 @@ export default class extends WorkerEntrypoint {
   }
 }
 
-export { RealtimePusher, ApprovalCoordinator };
+export { RealtimePusher, ApprovalCoordinator, ProjectDurableObject, DeploymentDurableObject };

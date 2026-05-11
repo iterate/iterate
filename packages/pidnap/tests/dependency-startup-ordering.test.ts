@@ -19,7 +19,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { RestartingProcess } from "../src/restarting-process.ts";
 import { Manager } from "../src/manager.ts";
 import type { Logger } from "../src/logger.ts";
-import { createMockLogger, longRunningProcess, timedProcess } from "./test-utils.ts";
+import { createMockLogger, longRunningProcess } from "./test-utils.ts";
 
 const POLL_TIMEOUT_MS = 5000;
 
@@ -130,16 +130,34 @@ describe("dependency startup ordering", () => {
     });
 
     it("gate pattern: dependent waits for gate process to exit (completed condition)", async () => {
+      const releasePath = join(tempDir, "gate-release.txt");
       const logger = createMockLogger();
       manager = new Manager(
         {
           logDir: tempDir,
           processes: [
             {
-              // Gate process: runs for 500ms then exits 0.
-              // restartPolicy "never" → default condition is "completed".
+              // Use an explicit release file instead of a timer-based process.
+              // The previous timed gate was correct in isolation but flaky under the
+              // root parallel workspace run because a short-lived 500ms child can be
+              // delayed by test-worker load. This keeps the test focused on the
+              // "completed" dependency condition: the worker must remain idle until
+              // the gate has actually exited 0, and the test controls exactly when
+              // that exit happens.
               name: "gate",
-              definition: timedProcess(500),
+              definition: {
+                command: "node",
+                args: [
+                  "-e",
+                  `const { existsSync } = require("node:fs");
+const releasePath = ${JSON.stringify(releasePath)};
+const interval = setInterval(() => {
+  if (!existsSync(releasePath)) return;
+  clearInterval(interval);
+  process.exit(0);
+}, 25);`,
+                ],
+              },
               options: { restartPolicy: "never" },
             },
             {
@@ -160,6 +178,9 @@ describe("dependency startup ordering", () => {
 
       // Worker should be idle while the gate is still running
       expect(worker?.state).toBe("idle");
+
+      // Release the gate and let it complete successfully.
+      writeFileSync(releasePath, "go");
 
       // Wait for gate to complete
       await expect.poll(() => gate?.state, { timeout: POLL_TIMEOUT_MS }).toBe("stopped");

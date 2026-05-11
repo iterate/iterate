@@ -126,7 +126,10 @@ function OrgHomePage() {
             <div key={project.id}>
               {index > 0 && <ItemSeparator />}
               <Item asChild variant="default" className="hover:bg-accent/50 cursor-pointer">
-                <Link to="/proj/$projectSlug" params={{ projectSlug: project.slug }}>
+                <Link
+                  to={project.jonasLand ? "/jonasland/$projectSlug" : "/proj/$projectSlug"}
+                  params={{ projectSlug: project.slug }}
+                >
                   <ItemMedia variant="icon">
                     <Box className="h-4 w-4" />
                   </ItemMedia>

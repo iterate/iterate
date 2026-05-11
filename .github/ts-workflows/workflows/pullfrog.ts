@@ -28,7 +28,7 @@ export default {
   },
   jobs: {
     pullfrog: {
-      ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
+      ...utils.runsOnDepotUbuntu,
       steps: [
         ...utils.setupRepo.map((step) => {
           if (step.name === "Checkout code") {

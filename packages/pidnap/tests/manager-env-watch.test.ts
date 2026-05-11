@@ -21,7 +21,7 @@ describe("Manager - Env File Watching", () => {
     }
   });
 
-  it("should reload process when env file changes with default delay", async () => {
+  it("should reload process immediately when env file changes by default", async () => {
     writeFileSync(join(testDir, ".env"), "TEST_VAR=original");
 
     const testLogger = logger({ name: "test" });
@@ -35,7 +35,7 @@ describe("Manager - Env File Watching", () => {
               command: "sleep",
               args: ["30"],
             },
-            // reloadDelay defaults to 5000ms
+            // reloadDelay defaults to "immediately"
           },
         ],
       },
@@ -56,15 +56,15 @@ describe("Manager - Env File Watching", () => {
     // Change env file
     writeFileSync(join(testDir, ".env"), "TEST_VAR=updated");
 
-    // Wait for file watch (100ms debounce) + env reload debounce (100ms) + default reload delay (5000ms) + extra buffer
-    await wait(6000);
+    // Wait for file watch + immediate reload + process restart.
+    await wait(1000);
 
     // Process should have been reloaded
     const reloadedDefinition = proc!.lazyProcess.definition;
     expect(reloadedDefinition.env?.TEST_VAR).toBe("updated");
 
     await manager.stop();
-  }, 10000); // 10 second timeout
+  }, 5000);
 
   it("should reload process immediately when reloadDelay is true", async () => {
     writeFileSync(join(testDir, ".env"), "TEST_VAR=original");
@@ -344,6 +344,166 @@ describe("Manager - Env File Watching", () => {
 
     expect(reloadedDef1.env?.GLOBAL_VAR).toBe("updated");
     expect(reloadedDef2.env?.GLOBAL_VAR).toBe("updated");
+
+    await manager.stop();
+  }, 5000);
+
+  it("should skip env-triggered restart when only unrelated env keys change", async () => {
+    writeFileSync(
+      join(testDir, ".env"),
+      "CLOUDFLARE_TUNNEL_TOKEN=original-token\nUNRELATED_VAR=original",
+    );
+
+    const testLogger = logger({ name: "test" });
+    const manager = new Manager(
+      {
+        cwd: testDir,
+        processes: [
+          {
+            name: "cloudflare-tunnel",
+            definition: {
+              command: "sleep",
+              args: ["30"],
+            },
+            envOptions: {
+              reloadDelay: true,
+              onlyRestartIfChanged: ["CLOUDFLARE_TUNNEL_TOKEN"],
+            },
+          },
+          {
+            name: "ungated",
+            definition: {
+              command: "sleep",
+              args: ["30"],
+            },
+            envOptions: { reloadDelay: true },
+          },
+        ],
+      },
+      testLogger,
+    );
+
+    await manager.start();
+
+    const gatedProc = manager.getRestartingProcess("cloudflare-tunnel");
+    const ungatedProc = manager.getRestartingProcess("ungated");
+    const initialGatedDefinition = gatedProc!.lazyProcess.definition;
+    const initialUngatedDefinition = ungatedProc!.lazyProcess.definition;
+
+    await wait(200);
+
+    writeFileSync(
+      join(testDir, ".env"),
+      "CLOUDFLARE_TUNNEL_TOKEN=original-token\nUNRELATED_VAR=updated",
+    );
+
+    await wait(1000);
+
+    expect(gatedProc!.lazyProcess.definition).toBe(initialGatedDefinition);
+    expect(gatedProc!.lazyProcess.definition.env?.UNRELATED_VAR).toBe("original");
+
+    expect(ungatedProc!.lazyProcess.definition).not.toBe(initialUngatedDefinition);
+    expect(ungatedProc!.lazyProcess.definition.env?.UNRELATED_VAR).toBe("updated");
+
+    await manager.stop();
+  }, 5000);
+
+  it("should reload process when an allowlisted env key changes", async () => {
+    writeFileSync(
+      join(testDir, ".env"),
+      "CLOUDFLARE_TUNNEL_TOKEN=original-token\nUNRELATED_VAR=original",
+    );
+
+    const testLogger = logger({ name: "test" });
+    const manager = new Manager(
+      {
+        cwd: testDir,
+        processes: [
+          {
+            name: "cloudflare-tunnel",
+            definition: {
+              command: "sleep",
+              args: ["30"],
+            },
+            envOptions: {
+              reloadDelay: true,
+              onlyRestartIfChanged: ["CLOUDFLARE_TUNNEL_TOKEN"],
+            },
+          },
+        ],
+      },
+      testLogger,
+    );
+
+    await manager.start();
+
+    const proc = manager.getRestartingProcess("cloudflare-tunnel");
+    const initialDefinition = proc!.lazyProcess.definition;
+
+    await wait(200);
+
+    writeFileSync(
+      join(testDir, ".env"),
+      "CLOUDFLARE_TUNNEL_TOKEN=updated-token\nUNRELATED_VAR=updated",
+    );
+
+    await wait(1000);
+
+    const reloadedDefinition = proc!.lazyProcess.definition;
+    expect(reloadedDefinition).not.toBe(initialDefinition);
+    expect(reloadedDefinition.env?.CLOUDFLARE_TUNNEL_TOKEN).toBe("updated-token");
+
+    await manager.stop();
+  }, 5000);
+
+  it("should ignore global env changes when inheritGlobalEnv is false", async () => {
+    writeFileSync(
+      join(testDir, ".env"),
+      "CLOUDFLARE_TUNNEL_TOKEN=global-token\nUNRELATED_VAR=original",
+    );
+    writeFileSync(join(testDir, ".env.cloudflare-tunnel"), "CLOUDFLARE_TUNNEL_TOKEN=process-token");
+
+    const testLogger = logger({ name: "test" });
+    const manager = new Manager(
+      {
+        cwd: testDir,
+        processes: [
+          {
+            name: "cloudflare-tunnel",
+            definition: {
+              command: "sleep",
+              args: ["30"],
+            },
+            envOptions: {
+              inheritGlobalEnv: false,
+              reloadDelay: true,
+              onlyRestartIfChanged: ["CLOUDFLARE_TUNNEL_TOKEN"],
+            },
+          },
+        ],
+      },
+      testLogger,
+    );
+
+    await manager.start();
+
+    const proc = manager.getRestartingProcess("cloudflare-tunnel");
+    const initialDefinition = proc!.lazyProcess.definition;
+    expect(initialDefinition.env?.CLOUDFLARE_TUNNEL_TOKEN).toBe("process-token");
+    expect(initialDefinition.env?.UNRELATED_VAR).toBeUndefined();
+
+    await wait(200);
+
+    writeFileSync(
+      join(testDir, ".env"),
+      "CLOUDFLARE_TUNNEL_TOKEN=global-token-updated\nUNRELATED_VAR=updated",
+    );
+
+    await wait(1000);
+
+    expect(proc!.lazyProcess.definition).toBe(initialDefinition);
+    expect(proc!.lazyProcess.definition.env?.CLOUDFLARE_TUNNEL_TOKEN).toBe("process-token");
+    expect(proc!.lazyProcess.definition.env?.UNRELATED_VAR).toBeUndefined();
 
     await manager.stop();
   }, 5000);

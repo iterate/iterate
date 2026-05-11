@@ -1,7 +1,10 @@
 import { execSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import { join } from "node:path";
+import { parseEnv } from "node:util";
 import { CronExpressionParser } from "cron-parser";
+import { createORPCClient } from "@orpc/client";
+import { RPCLink } from "@orpc/client/fetch";
 import alchemy, { type Scope } from "alchemy";
 import {
   DurableObjectNamespace,
@@ -18,6 +21,7 @@ import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { Exec } from "alchemy/os";
 import { z } from "zod/v4";
 import dedent from "dedent";
+import { SERVICE_TOKEN_HEADER, type AuthContractClient } from "../auth-contract/src/index.ts";
 import {
   ensurePnpmStoreVolume as ensureIteratePnpmStoreVolume,
   getDockerEnvVars,
@@ -49,7 +53,7 @@ if (!/^[\w-]+$/.test(app.stage)) {
 }
 
 const isProduction = app.stage === "prd";
-const isStaging = app.stage === "stg";
+const isPreviewStage = app.stage === "preview";
 const isDevelopment = app.local;
 const isPreview =
   app.stage === "dev" ||
@@ -67,6 +71,13 @@ const DEV_TUNNEL = DEV_TUNNEL_DISABLED
   : (explicitDevTunnel ?? process.env.ITERATE_USER?.trim());
 const DEV_OS_DOMAIN = "iterate-dev.com";
 const DEV_MACHINE_DOMAIN = "iterate-dev.app";
+const AUTH_EXAMPLE_DEV_VARS_PATH = join(repoRoot, "apps", "auth-example", ".dev.vars");
+const AUTH_EXAMPLE_REDIRECT_URI = "http://localhost:7201/api/iterate-auth/callback";
+
+function readEnvFileValue(params: { filePath: string; key: string }): string | undefined {
+  if (!fs.existsSync(params.filePath)) return undefined;
+  return parseEnv(fs.readFileSync(params.filePath, "utf8"))[params.key] || undefined;
+}
 
 async function ensureDevTunnelWildcardDns(tunnelId: string) {
   if (!DEV_TUNNEL) return;
@@ -332,6 +343,85 @@ function setupDevTunnelEnv() {
   process.env.VITE_PUBLIC_URL = `https://${DEV_TUNNEL}.${DEV_OS_DOMAIN}`;
 }
 
+async function ensureLocalDevOAuthClients(params: {
+  authAppOrigin: string;
+  serviceAuthToken: string;
+  osPublicUrl: string;
+}) {
+  const client: AuthContractClient = createORPCClient(
+    new RPCLink({
+      url: new URL("/api/orpc", params.authAppOrigin).toString(),
+      fetch: (input: RequestInfo | URL, init?: RequestInit) => {
+        const headers = new Headers(init?.headers);
+        headers.set(SERVICE_TOKEN_HEADER, params.serviceAuthToken);
+        return fetch(input, { ...init, headers });
+      },
+    }),
+  );
+
+  const osRedirectUri = new URL("/api/iterate-auth/callback", params.osPublicUrl).toString();
+  const existingAuthExampleClientId = readEnvFileValue({
+    filePath: AUTH_EXAMPLE_DEV_VARS_PATH,
+    key: "ITERATE_OAUTH_CLIENT_ID",
+  });
+  const existingOsClientId = process.env.ITERATE_OAUTH_CLIENT_ID?.trim() || undefined;
+
+  const startedAt = Date.now();
+  let authExampleClient: Awaited<ReturnType<typeof client.internal.oauth.ensureClient>>;
+  let osClient: Awaited<ReturnType<typeof client.internal.oauth.ensureClient>>;
+
+  while (true) {
+    try {
+      [authExampleClient, osClient] = await Promise.all([
+        client.internal.oauth.ensureClient({
+          referenceId: "dev:auth-example",
+          clientName: "Iterate Auth Example (Local Dev)",
+          redirectURIs: [AUTH_EXAMPLE_REDIRECT_URI],
+          existingClientId: existingAuthExampleClientId,
+        }),
+        client.internal.oauth.ensureClient({
+          referenceId: "dev:os",
+          clientName: "Iterate OS (Local Dev)",
+          redirectURIs: [osRedirectUri],
+          existingClientId: existingOsClientId,
+        }),
+      ]);
+      break;
+    } catch (error) {
+      if (Date.now() - startedAt > 180_000) {
+        throw new Error("Timed out waiting for auth dev server to provision local OAuth clients", {
+          cause: error instanceof Error ? error : undefined,
+        });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
+  }
+
+  const authIssuer = new URL("/api/auth", params.authAppOrigin).toString();
+  const nextContents = [
+    "# Managed by apps/os/alchemy.run.ts during `pnpm dev`.",
+    `ITERATE_OAUTH_ISSUER=${authIssuer}`,
+    `ITERATE_OAUTH_CLIENT_ID=${authExampleClient.clientId}`,
+    `ITERATE_OAUTH_CLIENT_SECRET=${authExampleClient.clientSecret}`,
+    `ITERATE_OAUTH_REDIRECT_URI=${AUTH_EXAMPLE_REDIRECT_URI}`,
+    "",
+  ].join("\n");
+
+  const currentContents = fs.existsSync(AUTH_EXAMPLE_DEV_VARS_PATH)
+    ? fs.readFileSync(AUTH_EXAMPLE_DEV_VARS_PATH, "utf8")
+    : null;
+
+  if (currentContents !== nextContents) {
+    fs.writeFileSync(AUTH_EXAMPLE_DEV_VARS_PATH, nextContents, "utf8");
+    console.log(`Updated ${AUTH_EXAMPLE_DEV_VARS_PATH} with local dev OAuth client credentials`);
+  }
+
+  process.env.ITERATE_OAUTH_ISSUER = authIssuer;
+  process.env.ITERATE_OAUTH_CLIENT_ID = osClient.clientId;
+  process.env.ITERATE_OAUTH_CLIENT_SECRET = osClient.clientSecret;
+  process.env.ITERATE_OAUTH_REDIRECT_URI = osRedirectUri;
+}
+
 async function verifyDopplerEnvironment() {
   if (process.env.SKIP_DOPPLER_CHECK) return;
   const dopplerConfig = z
@@ -351,9 +441,9 @@ async function verifyDopplerEnvironment() {
     );
   }
 
-  if (isStaging && !dopplerConfig.environment.startsWith("stg")) {
+  if (isPreviewStage && !dopplerConfig.environment.startsWith("preview")) {
     throw new Error(
-      `You are trying to deploy to staging, but the doppler environment is set to ${dopplerConfig.environment}, exiting...`,
+      `You are trying to deploy to preview, but the doppler environment is set to ${dopplerConfig.environment}, exiting...`,
     );
   }
 
@@ -383,7 +473,7 @@ const Env = z.object({
   SANDBOX_DAYTONA_ENABLED: BoolyString,
   SANDBOX_DOCKER_ENABLED: BoolyString,
   SANDBOX_FLY_ENABLED: BoolyString,
-  SANDBOX_NAME_PREFIX: z.enum(["dev", "stg", "prd"]),
+  SANDBOX_NAME_PREFIX: z.enum(["dev", "preview", "prd"]),
   SANDBOX_PROVIDER_PREFERENCE: Optional, // comma-separated list of providers in order of preference
   FLY_API_TOKEN: Optional,
   FLY_ORG: Optional,
@@ -422,6 +512,11 @@ const Env = z.object({
   POSTHOG_WEBHOOK_SECRET: Optional,
   SERVICE_AUTH_TOKEN: Required,
   VITE_PUBLIC_URL: Required,
+  VITE_AUTH_APP_ORIGIN: Required,
+  ITERATE_OAUTH_ISSUER: Optional,
+  ITERATE_OAUTH_CLIENT_ID: Optional,
+  ITERATE_OAUTH_CLIENT_SECRET: Optional,
+  ITERATE_OAUTH_REDIRECT_URI: Optional,
   PROJECT_INGRESS_DOMAIN: Optional, // optional here; validated after fallback from old var name
   PROJECT_INGRESS_PROXY_CANONICAL_HOST: Optional, // legacy fallback, remove after Doppler update
   VITE_APP_STAGE: Required,
@@ -567,8 +662,12 @@ async function setupDatabase() {
     };
   }
 
-  if (isStaging) {
+  if (isPreviewStage) {
     const planetscaleDb = await Database("planetscale-db", {
+      // Keep the existing PlanetScale database name while the public stage name
+      // changes from stg to preview. Renaming this field would make Alchemy
+      // adopt/create a different empty database even though the resource ID is
+      // unchanged.
       name: "os-staging",
       clusterSize: "PS_10",
       adopt: true,
@@ -695,6 +794,18 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
     className: "ApprovalCoordinator",
     sqlite: true,
   });
+  const PROJECT_DURABLE_OBJECT = DurableObjectNamespace<
+    import("./backend/worker.ts").ProjectDurableObject
+  >("project-durable-object", {
+    className: "ProjectDurableObject",
+    sqlite: true,
+  });
+  const DEPLOYMENT_DURABLE_OBJECT = DurableObjectNamespace<
+    import("./backend/worker.ts").DeploymentDurableObject
+  >("deployment-durable-object", {
+    className: "DeploymentDurableObject",
+    sqlite: true,
+  });
 
   const parseCsv = (value: string | undefined): string[] =>
     (value ?? "")
@@ -716,7 +827,7 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
 
   const osWorkerRoutes = parseCsv(process.env.OS_WORKER_ROUTES);
   if (osWorkerRoutes.length === 0) {
-    throw new Error("OS_WORKER_ROUTES is required. Set it in Doppler for dev/stg/prd.");
+    throw new Error("OS_WORKER_ROUTES is required. Set it in Doppler for dev/preview/prd.");
   }
   const routeHosts = [...new Set([...osWorkerRoutes, ...domains, `*.${projectIngressDomain}`])];
   const allowedDomains = [
@@ -768,6 +879,8 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       ALLOWED_DOMAINS: allowedDomains.join(","),
       REALTIME_PUSHER,
       APPROVAL_COORDINATOR,
+      PROJECT_DURABLE_OBJECT,
+      DEPLOYMENT_DURABLE_OBJECT,
       PROJECT_INGRESS_DOMAIN: projectIngressDomain,
       // Archil R2: derived from alchemy state, not Doppler
       ARCHIL_R2_BUCKET_NAME: archilBucket.name,
@@ -776,7 +889,11 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       // Use empty defaults outside dev so worker.Env contains these bindings for typing.
       ...dockerBindings,
     },
-    name: isProduction ? "os" : isStaging ? "os-staging" : undefined,
+    // Public environment names moved from staging/stg to preview, but this is
+    // the Cloudflare Worker script name Alchemy adopts. Keeping the historical
+    // os-staging resource avoids orphaning the existing preview worker while
+    // Doppler, URLs, and Alchemy stages use preview terminology.
+    name: isProduction ? "os" : isPreviewStage ? "os-staging" : undefined,
     // Place the worker near the PlanetScale Postgres primary
     // to minimise round-trip latency on DB-heavy pages.
     placement: { region: regionConfig.workerPlacementRegion },
@@ -839,6 +956,19 @@ if (isDevelopment) {
 
 // Setup database and env first
 const dbConfig = await setupDatabase();
+
+if (isDevelopment) {
+  const authAppOrigin = process.env.VITE_AUTH_APP_ORIGIN;
+  const serviceAuthToken = process.env.SERVICE_AUTH_TOKEN;
+  const osPublicUrl = process.env.VITE_PUBLIC_URL;
+  if (!authAppOrigin || !serviceAuthToken || !osPublicUrl) {
+    throw new Error(
+      "VITE_AUTH_APP_ORIGIN, SERVICE_AUTH_TOKEN, and VITE_PUBLIC_URL are required for dev OAuth client provisioning",
+    );
+  }
+  await ensureLocalDevOAuthClients({ authAppOrigin, serviceAuthToken, osPublicUrl });
+}
+
 const envSecrets = await setupEnvironmentVariables();
 
 // Deploy main worker (includes egress proxy on /api/egress-proxy)

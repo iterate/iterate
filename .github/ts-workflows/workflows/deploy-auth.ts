@@ -7,23 +7,44 @@ export default workflow({
     contents: "read",
     deployments: "write",
   },
+  concurrency: {
+    group: "auth-${{ github.ref_name || 'prd' }}",
+    "cancel-in-progress": true,
+  },
   on: {
-    workflow_dispatch: {},
+    push: {
+      branches: ["main"],
+      paths: ["apps/auth/**", "apps/auth-contract/**"],
+    },
+    workflow_dispatch: {
+      inputs: {
+        ref: {
+          description: "Git ref to deploy. Leave empty for the current branch or commit.",
+          required: false,
+          type: "string",
+          default: "",
+        },
+      },
+    },
   },
   jobs: {
     deploy: {
-      ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
+      ...utils.runsOnDepotUbuntu,
       steps: [
-        ...utils.setupRepo,
-        ...utils.setupDoppler({ config: "prd" }),
+        ...utils.getSetupRepo({
+          ref: "${{ inputs.ref || github.sha }}",
+        }),
+        ...utils.setupDoppler({
+          config: "prd",
+          project: "auth",
+        }),
         {
           name: "Deploy apps/auth",
           "working-directory": "apps/auth",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
-            APP_STAGE: "prd",
           },
-          run: "pnpm run deploy:prd",
+          run: "doppler run -- pnpm alchemy:up",
         },
       ],
     },

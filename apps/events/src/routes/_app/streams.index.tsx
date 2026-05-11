@@ -1,0 +1,102 @@
+import { useCallback } from "react";
+import { createFileRoute } from "@tanstack/react-router";
+import type { EventsStreamElementType } from "@iterate-com/ui/components/events/stream-feed";
+import { StreamPage } from "~/components/stream-page.tsx";
+import { validateStreamViewSearch } from "~/lib/stream-view-search.ts";
+
+export const Route = createFileRoute("/_app/streams/")({
+  // Root stream and child-stream routes share the same view-state contract so
+  // the header controls work the same way on `/streams/` and `/streams/$`.
+  validateSearch: validateStreamViewSearch,
+  loader: () => ({
+    breadcrumb: "/",
+  }),
+  component: StreamsIndexPage,
+});
+
+type StreamRouteSearch = ReturnType<typeof Route.useSearch>;
+
+function StreamsIndexPage() {
+  const { composer, event, hiddenElements, renderer, view } = Route.useSearch();
+  const navigate = Route.useNavigate();
+  const updateEventOffset = useCallback(
+    (nextEventOffset?: number) => {
+      // TanStack Router's functional `search` updater preserves sibling view
+      // state while only changing the event currently shown in the sheet.
+      void navigate({
+        search: (previous: StreamRouteSearch) => ({
+          ...previous,
+          event: nextEventOffset,
+        }),
+        replace: true,
+      });
+    },
+    [navigate],
+  );
+  const updateRenderer = useCallback(
+    (nextRenderer: typeof renderer) => {
+      // Renderer mode is URL state on purpose so switching between pretty/raw
+      // survives refresh and can be shared as a link.
+      void navigate({
+        search: (previous: StreamRouteSearch) => ({
+          ...previous,
+          renderer: nextRenderer,
+        }),
+        replace: true,
+      });
+    },
+    [navigate],
+  );
+  const updateComposer = useCallback(
+    (nextComposer: typeof composer) => {
+      void navigate({
+        search: (previous: StreamRouteSearch) => ({
+          ...previous,
+          composer: nextComposer,
+        }),
+        replace: true,
+      });
+    },
+    [navigate],
+  );
+  const updateFeedView = useCallback(
+    (nextView: typeof view) => {
+      void navigate({
+        search: (previous: StreamRouteSearch) => ({
+          ...previous,
+          view: nextView,
+        }),
+        replace: true,
+      });
+    },
+    [navigate],
+  );
+  const updateHiddenElements = useCallback(
+    (nextHiddenElements: EventsStreamElementType[]) => {
+      void navigate({
+        search: (previous: StreamRouteSearch) => ({
+          ...previous,
+          hiddenElements: nextHiddenElements,
+        }),
+        replace: true,
+      });
+    },
+    [navigate],
+  );
+
+  return (
+    <StreamPage
+      streamPath="/"
+      rendererMode={renderer}
+      composerMode={composer}
+      feedViewMode={view}
+      hiddenElementTypes={hiddenElements}
+      openEventOffset={event}
+      onOpenEventOffsetChange={updateEventOffset}
+      onRendererModeChange={updateRenderer}
+      onComposerModeChange={updateComposer}
+      onFeedViewModeChange={updateFeedView}
+      onHiddenElementTypesChange={updateHiddenElements}
+    />
+  );
+}

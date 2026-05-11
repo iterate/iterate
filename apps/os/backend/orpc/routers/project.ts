@@ -15,7 +15,6 @@ import {
 } from "../procedures.ts";
 import { project, verification, projectConnection } from "../../db/schema.ts";
 import * as schema from "../../db/schema.ts";
-import { slugify, slugifyWithSuffix } from "../../utils/slug.ts";
 import {
   listInstallationRepositories,
   deleteGitHubInstallation,
@@ -40,6 +39,8 @@ import {
 } from "../../utils/sandbox-providers.ts";
 import { waitUntil } from "../../../env.ts";
 import { logger } from "../../tag-logger.ts";
+import { createAuthWorkerClient } from "../../utils/auth-worker-client.ts";
+import { listProjectsForOrganizationFromAuthWorker } from "../../auth/auth-context.ts";
 
 export const projectRouter = {
   getAvailableSandboxProviders: publicProcedure.handler(({ context: ctx }) => {
@@ -97,7 +98,6 @@ export const projectRouter = {
 
       const proj = await ctx.db.query.project.findFirst({
         where: eq(project.id, conflictData.projectId),
-        with: { organization: true },
       });
 
       if (!proj) {
@@ -112,7 +112,7 @@ export const projectRouter = {
           newProject: {
             id: proj.id,
             slug: proj.slug,
-            organizationName: proj.organization.name,
+            organizationName: proj.authOrganizationSlug,
           },
         };
       }
@@ -124,19 +124,18 @@ export const projectRouter = {
         newProject: {
           id: proj.id,
           slug: proj.slug,
-          organizationName: proj.organization.name,
+          organizationName: proj.authOrganizationSlug,
         },
       };
     }),
 
   // List projects in organization
   list: orgProtectedProcedure.input(OrgInput).handler(async ({ context: ctx }) => {
-    const projects = await ctx.db.query.project.findMany({
-      where: eq(project.organizationId, ctx.organization.id),
-      orderBy: (proj, { desc }) => [desc(proj.createdAt)],
+    return listProjectsForOrganizationFromAuthWorker({
+      db: ctx.db,
+      authUserId: ctx.user.authUserId!,
+      organizationSlug: ctx.organization.slug,
     });
-
-    return projects;
   }),
 
   // Get project by slug (project slugs are globally unique)
@@ -144,6 +143,7 @@ export const projectRouter = {
   bySlug: projectProtectedProcedure.input(ProjectInput).handler(async ({ context: ctx }) => {
     return {
       ...ctx.project,
+      organizationId: ctx.project.authOrganizationId,
       organization: ctx.organization,
     };
   }),
@@ -155,6 +155,7 @@ export const projectRouter = {
         name: z.string().min(1).max(100),
         slug: z.string().min(1).max(50).optional(), // Optional: defaults to org slug if first project
         sandboxProvider: z.enum(PROJECT_SANDBOX_PROVIDER).optional(),
+        jonasLand: z.boolean().default(false),
       }),
     )
     .handler(async ({ context: ctx, input }) => {
@@ -172,26 +173,23 @@ export const projectRouter = {
         });
       }
 
-      // Determine base slug: use provided slug, or org slug for first project, or slugify name
-      const orgProjects = await ctx.db.query.project.findMany({
-        where: eq(project.organizationId, ctx.organization.id),
+      const authClient = createAuthWorkerClient({ asUser: { authUserId: ctx.user.authUserId! } });
+      const createdAuthProject = await authClient.project.create({
+        organizationSlug: ctx.organization.slug,
+        name: input.name,
+        slug: input.slug,
+        metadata: {},
       });
-      const isFirstProject = orgProjects.length === 0;
-      const baseSlug = input.slug ?? (isFirstProject ? ctx.organization.slug : slugify(input.name));
-
-      // Check global uniqueness (project slugs are now globally unique)
-      const existing = await ctx.db.query.project.findFirst({
-        where: eq(project.slug, baseSlug),
-      });
-
-      const slug = existing ? slugifyWithSuffix(baseSlug) : baseSlug;
 
       const [newProject] = await ctx.db
         .insert(project)
         .values({
-          name: input.name,
-          slug,
-          organizationId: ctx.organization.id,
+          authProjectId: createdAuthProject.id,
+          authOrganizationId: ctx.organization.id,
+          authOrganizationSlug: ctx.organization.slug,
+          name: createdAuthProject.name,
+          slug: createdAuthProject.slug,
+          jonasLand: input.jonasLand,
           sandboxProvider,
         })
         .returning();
@@ -224,6 +222,8 @@ export const projectRouter = {
       }),
     )
     .handler(async ({ context: ctx, input }) => {
+      const authClient = createAuthWorkerClient({ asUser: { authUserId: ctx.user.authUserId! } });
+
       if (input.sandboxProvider && input.sandboxProvider !== ctx.project.sandboxProvider) {
         // Validate provider is available
         const availableProviders = getAvailableProjectSandboxProviders(
@@ -271,10 +271,21 @@ export const projectRouter = {
         }
       }
 
+      const updatedAuthProject =
+        input.name === undefined
+          ? null
+          : await authClient.project.update({
+              projectSlug: ctx.project.slug,
+              name: input.name,
+            });
+
       const [updated] = await ctx.db
         .update(project)
         .set({
-          ...(input.name && { name: input.name }),
+          ...(updatedAuthProject && {
+            name: updatedAuthProject.name,
+            slug: updatedAuthProject.slug,
+          }),
           ...(input.sandboxProvider && {
             sandboxProvider: input.sandboxProvider,
           }),
@@ -295,7 +306,7 @@ export const projectRouter = {
   delete: projectProtectedMutation.input(ProjectInput).handler(async ({ context: ctx }) => {
     // Check if this is the last project in the organization
     const projectCount = await ctx.db.query.project.findMany({
-      where: eq(project.organizationId, ctx.organization.id),
+      where: eq(project.authOrganizationId, ctx.organization.id),
     });
 
     if (projectCount.length <= 1) {
@@ -303,6 +314,11 @@ export const projectRouter = {
         message: "Cannot delete the last project in an organization",
       });
     }
+
+    const authClient = createAuthWorkerClient({ asUser: { authUserId: ctx.user.authUserId! } });
+    await authClient.project.delete({
+      projectSlug: ctx.project.slug,
+    });
 
     await ctx.db.delete(project).where(eq(project.id, ctx.project.id));
 
@@ -548,7 +564,6 @@ export const projectRouter = {
             .update(schema.secret)
             .set({
               encryptedValue: encryptedSecretToken,
-              organizationId: ctx.organization.id,
               metadata: secretMetadata,
               egressProxyRule: githubEgressRule,
               lastSuccessAt: new Date(),
@@ -558,7 +573,6 @@ export const projectRouter = {
           await tx.insert(schema.secret).values({
             key: "github.access_token",
             encryptedValue: encryptedSecretToken,
-            organizationId: ctx.organization.id,
             projectId: targetProjectId,
             metadata: secretMetadata,
             egressProxyRule: githubEgressRule,
@@ -817,7 +831,7 @@ export const projectRouter = {
           eq(projectConnection.provider, "slack"),
           eq(projectConnection.externalId, slackConflictData.teamId),
         ),
-        with: { project: { with: { organization: true } } },
+        with: { project: true },
       });
 
       if (!existingConnection) {
@@ -868,7 +882,6 @@ export const projectRouter = {
             .update(schema.secret)
             .set({
               encryptedValue: slackConflictData.encryptedAccessToken,
-              organizationId: ctx.organization.id,
               egressProxyRule: `$contains(url.hostname, 'slack.com')`,
               lastSuccessAt: new Date(),
             })
@@ -877,7 +890,6 @@ export const projectRouter = {
           await tx.insert(schema.secret).values({
             key: "slack.access_token",
             encryptedValue: slackConflictData.encryptedAccessToken,
-            organizationId: ctx.organization.id,
             projectId: targetProjectId,
             egressProxyRule: `$contains(url.hostname, 'slack.com')`,
             lastSuccessAt: new Date(),
@@ -915,7 +927,7 @@ export const projectRouter = {
       return {
         success: true,
         previousProjectSlug: existingConnection.project?.slug,
-        previousOrgSlug: existingConnection.project?.organization?.slug,
+        previousOrgSlug: existingConnection.project?.authOrganizationSlug,
       };
     }),
 

@@ -1,0 +1,219 @@
+import { eventIterator, oc } from "@orpc/contract";
+import { internalContract } from "@iterate-com/shared/apps/internal-router-contract";
+import { z } from "zod";
+
+import {
+  DestroyStreamResult,
+  Event,
+  EventInput,
+  InvalidEventAppendedEventInput,
+  STREAM_INVALID_EVENT_APPENDED_TYPE,
+  StreamPath,
+  StreamQuery,
+  StreamState,
+} from "@iterate-com/shared/streams/types";
+
+const PathMungingDescription =
+  "For curl ergonomics, nested stream paths accept either raw nested segments or percent-escaped slash forms. Both resolve to the same canonical stream path.";
+
+// `.transform()` keeps the server lenient — malformed events are stored as
+// InvalidEventAppendedEvent instead of rejected. This preserves the original
+// input before defaults inside EventInput can obscure malformed bare JSON.
+const NormalizedAppendEventInput = z.unknown().transform((input) => {
+  const parsed = EventInput.safeParse(input);
+  if (parsed.success) {
+    return parsed.data;
+  }
+
+  return InvalidEventAppendedEventInput.parse({
+    type: STREAM_INVALID_EVENT_APPENDED_TYPE,
+    payload: {
+      rawInput: toJsonValue(input),
+      error: prettifyAppendEventError({
+        fallbackIssues: parsed.error.issues,
+      }),
+    },
+  });
+}) as unknown as z.ZodType<z.output<typeof EventInput>, EventInput>;
+
+export const AppendInput = z.object({
+  path: StreamPath,
+  event: NormalizedAppendEventInput,
+});
+
+const SecretSummary = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export const eventsContract = oc.router({
+  __internal: internalContract,
+  append: oc
+    .route({
+      operationId: "appendStreamEvents",
+      method: "POST",
+      path: "/streams/{+path}",
+      successDescription: "Event appended successfully and returned",
+      description:
+        "Appends one event to a stream. Offsets are assigned by the stream itself. Events with an existing idempotencyKey return the stored event instead of creating a duplicate.",
+      tags: ["/streams"],
+    })
+    .input(AppendInput)
+    .output(
+      z.object({
+        event: Event,
+      }),
+    ),
+  destroy: oc
+    .route({
+      operationId: "destroyStream",
+      method: "DELETE",
+      path: "/streams/{+path}",
+      inputStructure: "detailed",
+      description:
+        "Deletes all persisted data for a stream durable object. When `destroyChildren=true`, also destroys descendant streams discovered from that stream's history.",
+      tags: ["/streams"],
+    })
+    .input(
+      z.object({
+        params: z.object({
+          path: StreamPath,
+        }),
+        query: z
+          .object({
+            destroyChildren: z.union([z.boolean(), z.stringbool()]).optional(),
+          })
+          .optional()
+          .default({}),
+      }),
+    )
+    .output(DestroyStreamResult),
+  stream: oc
+    .route({
+      operationId: "streamEvents",
+      method: "GET",
+      path: "/streams/{+path}",
+      description: `Reads events from a stream using exclusive \`afterOffset\` / \`beforeOffset\` cursors. They are strictly non-inclusive: \`afterOffset=1&beforeOffset=2\` returns no events, which is expected because offset 1 is excluded and offset 2 is also excluded. \`start\` and \`end\` are virtual bookends outside the event space. Omitting \`beforeOffset\` keeps the connection open for future events; setting \`beforeOffset\` returns a finite stream. ${PathMungingDescription} For example, \`GET /api/streams/team/inbox\`, \`GET /api/streams/team%2Finbox\`, and \`GET /api/streams/%2Fteam%2Finbox\` all target the same stream. The root stream is addressed canonically as \`GET /api/streams/%2F\`.`,
+      tags: ["/streams"],
+    })
+    .input(
+      StreamQuery.extend({
+        path: StreamPath,
+      }),
+    )
+    // https://orpc.dev/docs/event-iterator
+    // https://orpc.dev/docs/client/event-iterator
+    .output(eventIterator(Event)),
+  getState: oc
+    .route({
+      operationId: "getStreamState",
+      method: "GET",
+      path: "/streams/__state/{+path}",
+      description: `Returns the latest reduced projection for a stream, including whether it has been initialized, metadata, and generated offsets. ${PathMungingDescription} For example, \`GET /api/streams/__state/team/inbox\`, \`GET /api/streams/__state/team%2Finbox\`, and \`GET /api/streams/__state/%2Fteam%2Finbox\` all target the same stream state. The root stream state is addressed canonically as \`GET /api/streams/__state/%2F\`.`,
+      tags: ["/streams"],
+    })
+    .input(
+      z.object({
+        path: StreamPath,
+      }),
+    )
+    .output(StreamState),
+  listChildren: oc
+    .route({
+      operationId: "listChildren",
+      method: "GET",
+      path: "/streams/__children/{+path}",
+      description:
+        "Returns child stream paths discovered from a given stream. Defaults to the root stream ('/').",
+      tags: ["/streams"],
+    })
+    .input(
+      z.object({
+        path: StreamPath,
+      }),
+    )
+    .output(
+      z.array(
+        z.object({
+          path: StreamPath,
+          createdAt: z.iso.datetime({ offset: true }),
+        }),
+      ),
+    ),
+  secrets: {
+    create: oc
+      .route({
+        method: "POST",
+        path: "/secrets",
+        description: "Create a secret (values stored in D1 as plaintext — demo only)",
+        tags: ["/secrets"],
+      })
+      .input(
+        z.object({
+          name: z.string().trim().min(1),
+          value: z.string(),
+          description: z.string().optional(),
+        }),
+      )
+      .output(SecretSummary),
+    list: oc
+      .route({
+        method: "GET",
+        path: "/secrets",
+        description: "List secrets (no values)",
+        tags: ["/secrets"],
+      })
+      .input(
+        z.object({
+          limit: z.coerce.number().int().min(1).max(100).optional().default(20),
+          offset: z.coerce.number().int().min(0).optional().default(0),
+        }),
+      )
+      .output(z.object({ secrets: z.array(SecretSummary), total: z.number().int().nonnegative() })),
+    remove: oc
+      .route({
+        method: "DELETE",
+        path: "/secrets/{id}",
+        description: "Delete secret",
+        tags: ["/secrets"],
+      })
+      .input(z.object({ id: z.string() }))
+      .output(z.object({ ok: z.literal(true), id: z.string(), deleted: z.boolean() })),
+  },
+});
+
+type JsonValue = null | string | number | boolean | JsonValue[] | { [key: string]: JsonValue };
+
+function prettifyAppendEventError(args: { fallbackIssues: z.ZodError["issues"] }) {
+  return z.prettifyError(new z.ZodError(args.fallbackIssues));
+}
+
+function toJsonValue(input: unknown): JsonValue {
+  if (input === undefined) {
+    return null;
+  }
+
+  if (
+    input === null ||
+    typeof input === "string" ||
+    typeof input === "number" ||
+    typeof input === "boolean"
+  ) {
+    return input;
+  }
+
+  if (Array.isArray(input)) {
+    return input.map((value) => toJsonValue(value));
+  }
+
+  if (typeof input === "object") {
+    return Object.fromEntries(
+      Object.entries(input).map(([key, value]) => [key, toJsonValue(value)]),
+    );
+  }
+
+  return null;
+}

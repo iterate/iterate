@@ -1,7 +1,35 @@
+/**
+ * HAR recorder — captures HTTP and WebSocket exchanges into a HAR archive.
+ *
+ * ## Sanitization
+ *
+ * All entries pass through a sanitizer function before being stored in the
+ * in-memory journal. This means `recorder.getHar()` never returns unsanitized
+ * secrets, even if the archive is never written to disk.
+ *
+ * By default, `createDefaultHarSanitizer()` from `./har-sanitizer.ts` is used.
+ * It redacts sensitive headers (authorization, cookie, set-cookie, etc.),
+ * query parameters (token, api_key, jwt, etc.), JSON body fields (token,
+ * secret, password, etc.), and WebSocket text frames (Discord Identify,
+ * GraphQL connection_init, Coinbase subscribe JWTs).
+ *
+ * Values matching the `getIterateSecret({...})` placeholder pattern are
+ * preserved — they are safe proxy tokens that never contain real secrets.
+ *
+ * The redaction format is `<prefix>---sanitised-secret-<hash>` where the
+ * prefix is up to 30% of the original value and the hash is 8 hex chars of
+ * SHA-256. This is deterministic, so the same secret always produces the same
+ * redacted form.
+ *
+ * To disable sanitization, pass `sanitizer: null`. To use a custom sanitizer,
+ * pass any `(entry: HarEntry) => HarEntry` function.
+ */
+
 import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
-import type { Har } from "har-format";
+import type { Entry as HarEntry, Har } from "har-format";
 import type { AppendHttpExchangeInput, AppendWebSocketExchangeInput } from "./har-journal.ts";
 import { HarJournal } from "./har-journal.ts";
+import { createDefaultHarSanitizer, type HarEntrySanitizer } from "./har-sanitizer.ts";
 
 export type RecorderContentEncoding = "br" | "gzip" | "deflate";
 export type RecorderEntryKind = "http" | "websocket";
@@ -13,19 +41,23 @@ export type RecorderFilterContext = {
   url: URL;
 };
 
-export type RecorderSanitizeOptions = {
-  requestHeaders?: string[];
-  responseHeaders?: string[];
-  replacement?: string;
-};
-
 export type RecorderOpts = {
   enabled?: boolean;
   harPath?: string;
   includeHandledRequests?: boolean;
   decodeContentEncodings?: RecorderContentEncoding[];
-  sanitize?: RecorderSanitizeOptions;
+  /**
+   * Entry-level sanitizer applied to every HarEntry before it is stored in
+   * the in-memory journal. Pass `null` to disable sanitization entirely.
+   *
+   * Default: `createDefaultHarSanitizer()` which redacts sensitive headers,
+   * query params, JSON body keys, and WebSocket text frame payloads while
+   * preserving `getIterateSecret({...})` placeholder values.
+   */
+  sanitizer?: HarEntrySanitizer | null;
   filter?: (entry: RecorderFilterContext) => boolean;
+  /** Fired with each HAR entry after it is sanitized and appended. */
+  onEntry?: (entry: HarEntry) => void;
 };
 
 type NormalizedRecorderOpts = {
@@ -33,52 +65,23 @@ type NormalizedRecorderOpts = {
   harPath?: string;
   includeHandledRequests: boolean;
   decodeContentEncodings: Set<RecorderContentEncoding>;
-  sanitizeRequestHeaders: Set<string>;
-  sanitizeResponseHeaders: Set<string>;
-  sanitizeReplacement: string;
+  sanitizer: HarEntrySanitizer | null;
   filter?: (entry: RecorderFilterContext) => boolean;
+  onEntry?: (entry: HarEntry) => void;
 };
 
-function normalizeHeaderNames(input: string[] | undefined): Set<string> {
-  if (!input || input.length === 0) return new Set();
-  return new Set(input.map((value) => value.toLowerCase()));
-}
-
 function normalizeRecorderOpts(input: RecorderOpts | undefined): NormalizedRecorderOpts {
+  const explicitSanitizer = input?.sanitizer;
   return {
     enabled: input?.enabled ?? true,
     harPath: input?.harPath,
     includeHandledRequests: input?.includeHandledRequests ?? true,
     decodeContentEncodings: new Set(input?.decodeContentEncodings ?? []),
-    sanitizeRequestHeaders: normalizeHeaderNames(input?.sanitize?.requestHeaders),
-    sanitizeResponseHeaders: normalizeHeaderNames(input?.sanitize?.responseHeaders),
-    sanitizeReplacement: input?.sanitize?.replacement ?? "<redacted>",
+    sanitizer:
+      explicitSanitizer === null ? null : (explicitSanitizer ?? createDefaultHarSanitizer()),
     filter: input?.filter,
+    onEntry: input?.onEntry,
   };
-}
-
-function sanitizeRecordHeaders(
-  input: Record<string, string>,
-  names: Set<string>,
-  replacement: string,
-): Record<string, string> {
-  if (names.size === 0) return input;
-
-  const mapped: Record<string, string> = {};
-  for (const [name, value] of Object.entries(input)) {
-    mapped[name] = names.has(name.toLowerCase()) ? replacement : value;
-  }
-  return mapped;
-}
-
-function sanitizeHeaders(input: Headers, names: Set<string>, replacement: string): Headers {
-  if (names.size === 0) return input;
-
-  const mapped = new Headers();
-  for (const [name, value] of input.entries()) {
-    mapped.append(name, names.has(name.toLowerCase()) ? replacement : value);
-  }
-  return mapped;
 }
 
 function readContentEncoding(headers: Headers): RecorderContentEncoding | undefined {
@@ -114,9 +117,13 @@ export class HarRecorder {
 
   static async create(opts: RecorderOpts | undefined): Promise<HarRecorder> {
     const normalized = normalizeRecorderOpts(opts);
+    const sanitizer = normalized.sanitizer ?? undefined;
+    const onEntry = normalized.onEntry;
     const journal = normalized.harPath
-      ? await HarJournal.fromSource(normalized.harPath).catch(() => new HarJournal())
-      : new HarJournal();
+      ? await HarJournal.fromSource(normalized.harPath, { sanitizer, onEntry }).catch(
+          () => new HarJournal({ sanitizer, onEntry }),
+        )
+      : new HarJournal({ sanitizer, onEntry });
     return new HarRecorder(normalized, journal);
   }
 
@@ -148,23 +155,13 @@ export class HarRecorder {
       return;
     }
 
-    const requestHeaders = sanitizeRecordHeaders(
-      input.requestHeaders,
-      this.opts.sanitizeRequestHeaders,
-      this.opts.sanitizeReplacement,
-    );
-    const sanitizedResponseHeaders = sanitizeHeaders(
-      input.response.headers,
-      this.opts.sanitizeResponseHeaders,
-      this.opts.sanitizeReplacement,
-    );
-    const contentEncoding = readContentEncoding(sanitizedResponseHeaders);
+    const contentEncoding = readContentEncoding(input.response.headers);
     const canDecode =
       contentEncoding !== undefined &&
       Boolean(input.responseBody) &&
       this.opts.decodeContentEncodings.has(contentEncoding);
 
-    let responseHeaders = sanitizedResponseHeaders;
+    let responseHeaders = input.response.headers;
     let responseBody = input.responseBody;
 
     if (canDecode && contentEncoding !== undefined && responseBody) {
@@ -187,7 +184,6 @@ export class HarRecorder {
 
     this.journal.appendHttpExchange({
       ...input,
-      requestHeaders,
       response,
       responseBody,
     });
@@ -204,22 +200,7 @@ export class HarRecorder {
       return;
     }
 
-    const requestHeaders = sanitizeRecordHeaders(
-      input.requestHeaders,
-      this.opts.sanitizeRequestHeaders,
-      this.opts.sanitizeReplacement,
-    );
-    const responseHeaders = sanitizeHeaders(
-      input.responseHeaders,
-      this.opts.sanitizeResponseHeaders,
-      this.opts.sanitizeReplacement,
-    );
-
-    this.journal.appendWebSocketExchange({
-      ...input,
-      requestHeaders,
-      responseHeaders,
-    });
+    this.journal.appendWebSocketExchange(input);
   }
 
   async write(path = this.opts.harPath): Promise<void> {

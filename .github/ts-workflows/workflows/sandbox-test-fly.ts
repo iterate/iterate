@@ -22,7 +22,7 @@ export default workflow({
           type: "string",
         },
         doppler_config: {
-          description: "Doppler config (dev, stg, prd)",
+          description: "Doppler config (dev, preview, prd)",
           required: false,
           type: "string",
           default: "dev",
@@ -43,7 +43,7 @@ export default workflow({
           type: "string",
         },
         doppler_config: {
-          description: "Doppler config (dev, stg, prd)",
+          description: "Doppler config (dev, preview, prd)",
           required: false,
           type: "string",
           default: "dev",
@@ -53,7 +53,7 @@ export default workflow({
   },
   jobs: {
     "test-sandbox-fly": {
-      ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
+      ...utils.runsOnDepotUbuntu,
       steps: [
         ...utils.getSetupRepo({
           ref: "${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}",

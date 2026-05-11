@@ -43,7 +43,7 @@ on:
         default: true
 jobs:
   build-and-docker-tests:
-    runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
+    runs-on: depot-ubuntu-24.04-32
     outputs:
       fly_image_tag: ${{ steps.metadata.outputs.fly_image_tag }}
     steps:
@@ -103,6 +103,7 @@ jobs:
           FLY_IMAGE_TAG: ${{ steps.metadata.outputs.fly_image_tag }}
           RUN_DOCKER_TESTS: ${{ github.event_name == 'workflow_dispatch' && (inputs.run_docker_tests && 'true' || 'false') || 'true' }}
           RUN_FLY_TESTS: ${{ github.event_name == 'workflow_dispatch' && (inputs.run_fly_tests && 'true' || 'false') || 'true' }}
+          FLY_TEST_APP_PREFIX: test-base-image-test-${{ github.run_id }}-${{ github.run_attempt }}
         run: |-
           set -euo pipefail
           mkdir -p sandbox/test-results
@@ -119,8 +120,9 @@ jobs:
               SANDBOX_TEST_PROVIDER=fly \
               SANDBOX_TEST_SNAPSHOT_ID="${FLY_IMAGE_TAG}" \
               FLY_DEFAULT_IMAGE="${FLY_IMAGE_TAG}" \
+              SANDBOX_TEST_APP_PREFIX="${FLY_TEST_APP_PREFIX}" \
               DOPPLER_TOKEN="${DOPPLER_TOKEN}" \
-              doppler run -- env RUN_SANDBOX_TESTS=true SANDBOX_TEST_PROVIDER=fly SANDBOX_TEST_SNAPSHOT_ID="$FLY_IMAGE_TAG" FLY_DEFAULT_IMAGE="$FLY_IMAGE_TAG" pnpm sandbox test test/provider-base-image.test.ts --maxWorkers=1
+              doppler run -- env RUN_SANDBOX_TESTS=true SANDBOX_TEST_PROVIDER=fly SANDBOX_TEST_SNAPSHOT_ID="$FLY_IMAGE_TAG" FLY_DEFAULT_IMAGE="$FLY_IMAGE_TAG" SANDBOX_TEST_APP_PREFIX="$FLY_TEST_APP_PREFIX" pnpm sandbox test test/provider-base-image.test.ts --maxWorkers=1
             ) >"${fly_log}" 2>&1 &
             fly_pid="$!"
           fi
@@ -167,4 +169,5 @@ jobs:
         if: always()
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run -- pnpm sandbox fly:cleanup -- --timeframe 0s --action delete --prefix test-base-image-test --all
+          FLY_TEST_APP_PREFIX: test-base-image-test-${{ github.run_id }}-${{ github.run_attempt }}
+        run: doppler run -- pnpm sandbox fly:cleanup -- --timeframe 0s --action delete --prefix "$FLY_TEST_APP_PREFIX" --all

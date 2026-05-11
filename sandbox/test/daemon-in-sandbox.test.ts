@@ -26,7 +26,7 @@ import { test, ITERATE_REPO_PATH, RUN_SANDBOX_TESTS, POLL_DEFAULTS } from "./hel
 class TerminalProcessStateError extends Error {}
 
 type WaitForRunningInput = {
-  target: string | number;
+  processSlug: string;
   timeoutMs?: number;
   pollIntervalMs?: number;
   includeLogs?: boolean;
@@ -163,7 +163,7 @@ async function waitForServiceHealthy(params: {
     try {
       const client = await getPidnapClient(sandbox);
       const status = await client.processes.waitForRunning({
-        target: process,
+        processSlug: process,
         timeoutMs: Math.min(10_000, remainingMs),
         pollIntervalMs: 500,
         includeLogs: true,

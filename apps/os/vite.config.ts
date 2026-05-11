@@ -75,13 +75,7 @@ export default defineConfig({
     host: "0.0.0.0",
     cors: false,
     strictPort: false,
-    allowedHosts: [
-      "host.docker.internal",
-      ".iterate.com",
-      ".iterate.app",
-      ".iterate-dev.com",
-      ".iterate-dev.app",
-    ],
+    allowedHosts: true,
   },
   plugins: [
     {

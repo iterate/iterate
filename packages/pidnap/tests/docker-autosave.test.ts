@@ -108,7 +108,7 @@ describeDocker("pidnap docker autosave", () => {
       });
 
       const started = await firstClient.processes.waitForRunning({
-        target: processSlug,
+        processSlug,
         timeoutMs: 30_000,
       });
       expect(started.state).toBe("running");

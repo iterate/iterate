@@ -5,6 +5,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import { HttpResponse, http, ws } from "msw";
 import { WebSocket, WebSocketServer } from "ws";
 import type { RawData } from "ws";
+import { ws as exportedWs } from "../index.ts";
 import { createNativeMswServer, type NativeMswServer } from "./msw-server-adapter.ts";
 
 const activeServers = new Set<NativeMswServer>();
@@ -338,6 +339,84 @@ describe("native transport e2e", () => {
       client.once("error", reject);
     });
     expect(messages[0]).toBe("hello-from-handler");
+
+    const secondMessagePromise = new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error("Timed out waiting for second websocket message"));
+      }, 1_000);
+      const interval = setInterval(() => {
+        if (messages.length >= 2) {
+          clearInterval(interval);
+          clearTimeout(timeout);
+          resolve();
+        }
+      }, 5);
+      client.once("error", reject);
+    });
+    client.send("ping");
+    await secondMessagePromise;
+    expect(messages[1]).toBe("pong");
+
+    client.close();
+    await once(client, "close");
+
+    expect(connectionHandled).toBe(true);
+  });
+
+  test("accepts websocket handlers created from the package ws re-export", async () => {
+    let connectionHandled = false;
+    const chat = exportedWs.link("/socket");
+    const wsHandler = chat.addEventListener("connection", ({ client }) => {
+      connectionHandled = true;
+      client.send("hello-from-exported-handler");
+      client.addEventListener("message", (event) => {
+        if (event.data === "ping") {
+          client.send("pong");
+        }
+      });
+    });
+
+    const server = createNativeMswServer(wsHandler);
+    const { port } = await listen(server);
+
+    const client = new WebSocket(`ws://127.0.0.1:${String(port)}/socket`);
+    const messages: string[] = [];
+    client.on("message", (data: RawData) => {
+      messages.push(data.toString());
+    });
+
+    const openOutcome = await new Promise<string>((resolve) => {
+      const timeout = setTimeout(() => resolve("timeout"), 1_000);
+
+      client.once("open", () => {
+        clearTimeout(timeout);
+        resolve("open");
+      });
+      client.once("close", () => {
+        clearTimeout(timeout);
+        resolve("close");
+      });
+      client.once("error", () => {
+        clearTimeout(timeout);
+        resolve("error");
+      });
+    });
+    expect(openOutcome).toBe("open");
+
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error("Timed out waiting for first websocket message"));
+      }, 1_000);
+      const interval = setInterval(() => {
+        if (messages.length >= 1) {
+          clearInterval(interval);
+          clearTimeout(timeout);
+          resolve();
+        }
+      }, 5);
+      client.once("error", reject);
+    });
+    expect(messages[0]).toBe("hello-from-exported-handler");
 
     const secondMessagePromise = new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {

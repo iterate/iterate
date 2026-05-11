@@ -1,32 +1,76 @@
 {
   "name": "@iterate-com/semaphore",
   "private": true,
+  "version": "0.0.1",
   "type": "module",
+  "imports": {
+    "~/*": "./src/*"
+  },
   "scripts": {
-    "dev": "doppler run --config dev -- sh -c 'WORKER_NAME=semaphore-dev tsx ./alchemy.run.ts cli --dev --stage dev'",
-    "deploy:prd": "doppler run --config prd -- sh -c 'WORKER_NAME=semaphore tsx ./alchemy.run.ts cli deploy --stage prd'",
-    "deploy": "pnpm run deploy:prd",
-    "test": "pnpm run test:workers",
-    "test:workers": "vitest run",
-    "test:e2e": "vitest run --config ./vitest.node.config.ts",
-    "test:e2e-live": "vitest run --config ./vitest.live.config.ts",
-    "test:all": "pnpm run test:workers && pnpm run test:e2e",
-    "typecheck": "tsc --noEmit"
+    "alchemy:up": "tsx ./alchemy.run.ts",
+    "alchemy:down": "tsx ./alchemy.run.ts --destroy",
+    "cli": "doppler run --project semaphore -- iterate-app-cli",
+    "dev": "doppler run --project semaphore -- pnpm exec tsx ./alchemy.run.ts",
+    "build": "doppler run -- pnpm exec vite build",
+    "deploy": "doppler run --project semaphore --config prd -- pnpm exec tsx ./alchemy.run.ts",
+    "rpc": "pnpm cli rpc",
+    "seed:environment-config-leases": "pnpm cli seed-environment-config-leases",
+    "seed:tunnel-pool": "pnpm cli seed-cloudflare-tunnel-pool",
+    "typecheck": "tsc --noEmit",
+    "test": "pnpm typecheck",
+    "test:e2e": "node -e \"if (!process.env.SEMAPHORE_BASE_URL) { console.error('SEMAPHORE_BASE_URL is required for semaphore e2e tests'); process.exit(1); }\" && vitest run --config ./e2e/vitest.config.ts",
+    "test:e2e:preview": "node -e \"if (!process.env.SEMAPHORE_BASE_URL) { console.error('SEMAPHORE_BASE_URL is required for semaphore e2e tests'); process.exit(1); }\" && vitest run --config ./e2e/vitest.config.ts ./e2e/vitest/preview.e2e.test.ts",
+    "test:all": "pnpm run test && pnpm run test:e2e",
+    "test:quick": "pnpm test:e2e",
+    "test:watch": "node -e \"if (!process.env.SEMAPHORE_BASE_URL) { console.error('SEMAPHORE_BASE_URL is required for semaphore e2e tests'); process.exit(1); }\" && vitest --config ./e2e/vitest.config.ts",
+    "destroy": "doppler run --project semaphore --config prd -- pnpm exec tsx ./alchemy.run.ts --destroy",
+    "db:rebuild": "rm -f .local.db && sqlite3 .local.db '' && find migrations -name '*.sql' -print | sort | while read -r file; do sqlite3 .local.db < \"$file\"; done",
+    "db:types": "pnpm run db:rebuild && tsx ./scripts/generate-queries.ts --force",
+    "db:types:stale": "tsx ./scripts/generate-queries.ts --if-stale",
+    "db:watch": "pnpm run db:rebuild && tsx ./scripts/generate-queries.ts --watch"
+  },
+  "iterateAppCli": {
+    "remote": {
+      "defaultBaseUrl": "https://semaphore.iterate.com",
+      "auth": "shared-api-secret-bearer"
+    }
   },
   "dependencies": {
     "@iterate-com/semaphore-contract": "workspace:*",
-    "@orpc/server": "^1.13.4",
-    "alchemy": "^0.83.0",
-    "hono": "^4.11.3",
-    "zod": "^4.1.12"
+    "@iterate-com/shared": "workspace:*",
+    "@iterate-com/ui": "workspace:*",
+    "@orpc/client": "1.13.14",
+    "@orpc/openapi": "1.13.14",
+    "@orpc/openapi-client": "1.13.14",
+    "@orpc/server": "1.13.14",
+    "@tanstack/react-devtools": "0.10.0",
+    "@tanstack/react-query": "^5.91.0",
+    "@tanstack/react-query-devtools": "^5.91.3",
+    "@tanstack/react-router": "1.168.3",
+    "@tanstack/react-router-devtools": "1.166.11",
+    "@tanstack/react-router-ssr-query": "^1.166.2",
+    "@tanstack/react-start": "1.167.5",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "tailwindcss": "^4.1.18",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.12.17",
-    "@cloudflare/workers-types": "^4.20260207.0",
-    "@types/node": "^24.10.1",
+    "@cloudflare/vite-plugin": "catalog:cloudflare",
+    "@cloudflare/workers-types": "catalog:cloudflare",
+    "@tailwindcss/vite": "^4.1.18",
+    "@tanstack/devtools-vite": "^0.6.0",
+    "@types/node": "^25.0.10",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^6.0.1",
+    "alchemy": "^0.83.3",
+    "esbuild": "^0.27.4",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
-    "vitest": "3.2.4",
-    "wrangler": "^4.64.0"
+    "typesql-cli": "github:iterate/typesql#5687eb2",
+    "vite": "^8.0.0",
+    "vitest": "4.0.15",
+    "wrangler": "catalog:cloudflare"
   }
 }

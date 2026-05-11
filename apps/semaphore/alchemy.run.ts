@@ -1,62 +1,29 @@
-import alchemy from "alchemy";
-import { D1Database, DurableObjectNamespace, Worker, WranglerJson } from "alchemy/cloudflare";
-import { z } from "zod/v4";
+import { D1Database, DurableObjectNamespace } from "alchemy/cloudflare";
+import { initAlchemy } from "@iterate-com/shared/alchemy/init";
+import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
+import manifest, { AppConfig } from "./src/app.ts";
+import type { ResourceCoordinator } from "~/durable-objects/resource-coordinator.ts";
 
-const Env = z.object({
-  ALCHEMY_PASSWORD: z.string().optional(),
-  WORKER_NAME: z.string().trim().min(1, "WORKER_NAME is required"),
-  SEMAPHORE_API_TOKEN: z.string().trim().min(1, "SEMAPHORE_API_TOKEN is required"),
-});
-
-const env = Env.parse(process.env);
-const wranglerJsonPath = "./wrangler.jsonc";
-const compatibilityDate = "2025-02-24";
-
-const app = await alchemy("semaphore", {
-  password: env.ALCHEMY_PASSWORD,
-});
+const ctx = await initAlchemy(manifest, AppConfig, process.env);
 
 const db = await D1Database("resources-db", {
-  name: `${env.WORKER_NAME}-resources`,
+  name: `${ctx.workerName}-resources`,
   migrationsDir: "./migrations",
   adopt: true,
 });
 
-const coordinator = DurableObjectNamespace<import("./server.ts").ResourceCoordinator>(
-  "resource-coordinator",
-  {
-    className: "ResourceCoordinator",
-    sqlite: true,
-  },
-);
-
-export const worker = await Worker("worker", {
-  name: env.WORKER_NAME,
-  entrypoint: "./server.ts",
-  compatibilityDate,
-  bindings: {
-    DB: db,
-    RESOURCE_COORDINATOR: coordinator,
-    SEMAPHORE_API_TOKEN: alchemy.secret(env.SEMAPHORE_API_TOKEN),
-  },
-  adopt: true,
+const coordinator = DurableObjectNamespace<ResourceCoordinator>("resource-coordinator", {
+  className: "ResourceCoordinator",
+  sqlite: true,
 });
 
-await WranglerJson({
-  worker,
-  path: wranglerJsonPath,
-  secrets: false,
-  transform: {
-    wrangler: (spec) => ({
-      ...spec,
-      vars: {
-        ...(spec.vars ?? {}),
-        SEMAPHORE_API_TOKEN: "test-token",
-      },
-    }),
-  },
+const { worker, afterFinalize } = await IterateApp(ctx, {
+  bindings: { DB: db, RESOURCE_COORDINATOR: coordinator },
 });
 
-console.log(worker.url);
+export { worker };
 
-await app.finalize();
+await ctx.app.finalize();
+await afterFinalize();
+
+if (!ctx.app.local) process.exit(0);

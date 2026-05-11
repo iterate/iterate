@@ -9,7 +9,7 @@ export default workflow({
   },
   jobs: {
     generate: {
-      ...utils.runsOnGithubUbuntuStartsFastButNoContainers,
+      ...utils.runsOnDepotUbuntu,
       steps: [
         {
           name: "Checkout code",

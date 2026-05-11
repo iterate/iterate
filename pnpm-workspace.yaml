@@ -1,34 +1,67 @@
 packages:
-  - apps/cf-ingress-proxy-worker
-  - apps/semaphore
-  - apps/semaphore-contract
+  - experiments/channel-agent-poc/nested-facets
+  - apps/ingress-proxy
+  - apps/ingress-proxy-contract
   - apps/project-ingress-proxy
   - apps/cli
   - apps/daemon
   - apps/iterate-com
   - apps/os
-  - apps/auth
-  - apps/auth-contract
-  - apps/auth-example
+  - apps/os2
+  - apps/os2-contract
+  - apps/semaphore
+  - apps/semaphore-contract
+  - apps/example
+  - apps/fetch-test
+  - apps/example-3
+  - apps/example-contract
+  - apps/example-v2
+  - apps/example-v2-contract
+  - apps/events
+  - apps/events-contract
+  - apps/agents
+  - apps/agents-contract
+  - apps/*
   - sandbox
-  - jonasland/sandbox
-  - jonasland/e2e
   - services/*
+  - '!services/events'
+  - '!services/events-contract'
   - packages/*
   - packages/pidnap/docker
   - repo-templates/**/*
   - .github/ts-workflows
-  - experiments/*
+
+catalogs:
+  cloudflare:
+    "@cloudflare/codemode": "https://pkg.pr.new/iterate/agents/@cloudflare/codemode@7c0735e"
+    "@cloudflare/unenv-preset": ^2.16.0
+    "@cloudflare/vite-plugin": 1.33.2
+    "@cloudflare/vitest-pool-workers": ^0.14.9
+    "@cloudflare/worker-bundler": ^0.1.2
+    "@cloudflare/workers-types": ^4.20260426.1
+    miniflare: 4.20260424.0
+    workerd: 1.20260426.1
+    wrangler: 4.85.0
 
 minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
   - drizzle-kit
+  - alchemy
   - miniflare
   - wrangler
-  - "@cloudflare/unenv-preset"
-  - alchemy
-  - "@cloudflare/sandbox"
   - workerd
+  - "@cloudflare/workerd-darwin-64"
+  - "@cloudflare/workerd-darwin-arm64"
+  - "@cloudflare/workerd-linux-64"
+  - "@cloudflare/workerd-linux-arm64"
+  - "@cloudflare/workerd-windows-64"
+  - "@cloudflare/codemode"
+  - "@cloudflare/sandbox"
+  - "@cloudflare/unenv-preset"
+  - "@cloudflare/vite-plugin"
+  - "@cloudflare/vitest-pool-workers"
+  - "@cloudflare/worker-bundler"
+  - "@cloudflare/workers-types"
   - "@mmkal/jsonata"
   - "@mmkal/json-schema-to-typescript"
   - "@mariozechner/pi-ai"
@@ -37,22 +70,40 @@ minimumReleaseAgeExclude:
   - "@mariozechner/pi-tui"
   - pidnap
   - schematch
+  - sqlfu
   - trpc-cli
+  - hono
+  - "@hono/node-server"
+  - "@hono/node-ws"
 
 onlyBuiltDependencies:
   - "@tailwindcss/oxide"
   - better-sqlite3
   - esbuild
+  - lightningcss
+  - node-pty
   - sharp
   - workerd
-  - bun
-
-patchedDependencies:
-  "@better-auth/drizzle-adapter": "patches/@better-auth__drizzle-adapter.patch"
 
 overrides:
   # x402,viem are optional peer dependencies of agents sdk, which is source of lot of unnecessary/deprecated packages, removing them is fine
+  "axios": "1.13.6"
   "agents>x402": "-"
   "agents>viem": "-"
   "quicktype-core>readable-stream": "npm:vite-compatible-readable-stream@3.6.1"
   "better-sqlite3": "npm:libsql@0.5.22"
+  "@orpc/server": "1.13.13"
+  "@orpc/client": "1.13.13"
+  "@orpc/contract": "1.13.13"
+  "@orpc/openapi": "1.13.13"
+  "@orpc/zod": "1.13.13"
+  "@orpc/otel": "1.13.13"
+  "@orpc/openapi-client": "1.13.13"
+  "@orpc/json-schema": "1.13.13"
+  "@orpc/react-query": "1.13.13"
+  "@orpc/tanstack-query": "1.13.13"
+  "srvx": "0.11.12"
+  "ws": "8.19.0"
+  "@tanstack/query-core": "5.90.21"
+  "@tanstack/react-query": "5.90.21"
+  "trpc-cli": "0.14.0"

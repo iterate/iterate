@@ -1,0 +1,131 @@
+/**
+ * Legacy end-to-end coverage for the deleted monolithic `IterateAgent`.
+ *
+ * Kept skipped while the equivalent MCP/codemode coverage is rebuilt around
+ * the stream processor runner callbacks.
+ *
+ * Re-record: `pnpm test:e2e:record` (from `apps/agents`, with Doppler + network).
+ */
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { expect, test } from "vitest";
+import { setupE2E } from "../test-support/e2e-test.ts";
+import { createLocalDevServer } from "../test-support/create-local-dev-server.ts";
+import { createMockInternet } from "../test-support/create-mock-internet.ts";
+import { MCP_TOOL_PROVIDER_PRESET_EVENT } from "~/lib/default-tool-provider-events.ts";
+import { buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl } from "~/lib/iterate-agent-addressing.ts";
+
+const appRoot = fileURLToPath(new URL("../..", import.meta.url));
+const harFixturePath = join(appRoot, "e2e/vitest/__snapshots__/iterate-agent-mcp.har");
+
+const MCP_CODEMODE_SCRIPT = `
+async () => {
+  const query = "workers";
+  const docSearch = await cloudflare_docs.search_cloudflare_documentation({ query });
+  const text = typeof docSearch === "string" ? docSearch : JSON.stringify(docSearch);
+  return {
+    summary:
+      "MCP e2e: cloudflare_docs.search_cloudflare_documentation succeeded — snippet is real tool output (HAR replay).",
+    query,
+    mcpSearchSnippet: text.slice(0, 500),
+    mcpSearchChars: text.length,
+    mcpSearchOk: text.length > 80,
+  };
+}
+`.trim();
+
+test.skip(
+  "codemode calls Cloudflare Docs MCP with mocked egress (HAR replay)",
+  { tags: ["local-dev-server", "mocked-internet"], timeout: 150_000 },
+  async (ctx) => {
+    const e2e = await setupE2E(ctx);
+    const streamPath = e2e.createStreamPath();
+
+    await using mock = await createMockInternet({
+      harPath: harFixturePath,
+      eventsBaseUrl: e2e.eventsBaseUrl,
+      eventsProjectSlug: e2e.runSlug,
+    });
+
+    await using server = await createLocalDevServer({
+      egressProxy: mock.url,
+      eventsBaseUrl: e2e.eventsBaseUrl,
+      eventsProjectSlug: e2e.runSlug,
+      streamPath,
+    });
+
+    await e2e.events.append(streamPath, {
+      type: "events.iterate.com/core/subscription-configured",
+      payload: {
+        slug: `codemode-runner-mcp-ws-${e2e.executionSuffix}`,
+        type: "websocket",
+        callable: fetchCallableFromWebSocketUrl(
+          buildCodemodeStreamProcessorRunnerWebSocketCallbackUrl({
+            publicOrigin: server.publicUrl,
+            streamPath,
+          }),
+        ),
+      },
+    });
+
+    await e2e.events.append(streamPath, MCP_TOOL_PROVIDER_PRESET_EVENT);
+
+    await e2e.events.waitForEvent(
+      streamPath,
+      (event) =>
+        event.type === "events.iterate.com/agent/input-added" &&
+        typeof event.payload.content === "string" &&
+        event.payload.content.includes("Tool provider `cloudflare_docs` is now available"),
+      { timeoutMs: 120_000 },
+    );
+
+    await e2e.events.append(streamPath, {
+      type: "events.iterate.com/codemode/block-added",
+      payload: { script: MCP_CODEMODE_SCRIPT },
+    });
+
+    const resultEvent = await e2e.events.waitForEvent(
+      streamPath,
+      (event) => event.type === "events.iterate.com/codemode/result-added",
+      { timeoutMs: 120_000 },
+    );
+
+    const payload = resultEvent.payload as {
+      result?: {
+        summary?: string;
+        query?: string;
+        mcpSearchSnippet?: string;
+        mcpSearchChars?: number;
+        mcpSearchOk?: boolean;
+      };
+      error?: string;
+    };
+    expect(payload.error ?? "").toBe("");
+    expect(payload.result?.mcpSearchOk).toBe(true);
+    expect(payload.result?.query).toBe("workers");
+    expect(payload.result?.summary ?? "").toContain("MCP e2e");
+    expect(payload.result?.mcpSearchChars).toBeGreaterThan(80);
+    expect(payload.result?.mcpSearchSnippet ?? "").toMatch(/worker|Worker|Cloudflare|cloudflare/);
+
+    const har = mock.getHar();
+    const urls = har.log.entries.map((entry) => entry.request.url);
+    expect(urls.some((url) => url.includes("docs.mcp.cloudflare.com"))).toBe(true);
+  },
+);
+
+function fetchCallableFromWebSocketUrl(websocketUrl: string) {
+  const url = new URL(websocketUrl);
+  if (url.protocol === "ws:") {
+    url.protocol = "http:";
+  } else if (url.protocol === "wss:") {
+    url.protocol = "https:";
+  }
+
+  return {
+    type: "fetch" as const,
+    via: {
+      type: "url" as const,
+      url: url.toString(),
+    },
+  };
+}

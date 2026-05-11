@@ -1,9 +1,9 @@
 import { Link, useParams, useNavigate, useLocation } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, MoreHorizontal, ArchiveIcon, TerminalIcon, BotIcon } from "lucide-react";
+import { SidebarThemeSwitcher } from "@iterate-com/ui/components/sidebar-theme-switcher";
 
 import type { SerializedAgent } from "@server/routers/agents.ts";
-import { ThemeSwitcher } from "./theme-switcher.tsx";
 import { orpc } from "@/integrations/tanstack-query/orpc-client.tsx";
 
 import {
@@ -134,7 +134,7 @@ export function AppSidebar({ agents }: { agents: SerializedAgent[] }) {
           </SidebarGroup>
         </SidebarContent>
         <SidebarFooter>
-          <ThemeSwitcher />
+          <SidebarThemeSwitcher />
         </SidebarFooter>
       </Sidebar>
     </>

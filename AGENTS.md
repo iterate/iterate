@@ -50,6 +50,8 @@ When you're writing helpers/utilities/library functions, you have to try to LIMI
 
 Similarly, avoid "fallback" values which just encourage the proliferation of uncertain system behavior. Instead of accomodating for bizarre system states and adding code complexity to account for it, make the bizarre state impossible to reach in the first place.
 
+Durable Objects should normally live behind tiny dedicated workers and be invoked from app workers through namespace bindings. This keeps app worker startup smaller and makes the Durable Object deployment boundary explicit. Prefer the mixins in `packages/shared/src/durable-object-utils` for new Durable Objects unless there is a clear reason not to.
+
 ## Writing React
 
 Avoid useEffect and useState wherever possible. Instead, use `@tanstack/react-query` for any asynchronous work or side-effects. Only use `useSuspenseQuery` sparingly - if you are sure that the _whole component_ is meaningless without the data. If you can use `useQuery` instead, with an isPending/null-check, that's usually better.
@@ -229,6 +231,7 @@ PSCALE_DATABASE_URL=$(doppler secrets --config prd get --plain PLANETSCALE_PROD_
 
 - Egress proxy & secrets: `docs/egress-proxy-secrets.md`
 - Brand & tone: `docs/brand-and-tone-of-voice.md`
+- Cloudflare preview + deploy cheat sheet: `docs/cloudflare-preview-and-deploy-cheatsheet.md`
 - Website (iterate.com): `apps/iterate-com`
 - Frontend: `apps/os/app/AGENTS.md`
 - Backend: `apps/os/backend/AGENTS.md`
@@ -238,3 +241,4 @@ PSCALE_DATABASE_URL=$(doppler secrets --config prd get --plain PLANETSCALE_PROD_
 - Drizzle migration workflow: `.agents/skills/drizzle-migrations/SKILL.md` (MUST follow when making schema changes)
 - Drizzle migration conflicts: `docs/fixing-drizzle-migration-conflicts.md`
 - Sandbox image pipeline (build, tag, push, CI): `sandbox/README.md`
+- Why `apps/os` pins older Cloudflare deps: `docs/cloudflare-deps-split-versions.md`

@@ -1,4 +1,5 @@
 {
-  "setup": ["pnpm i"],
-  "teardown": []
+  "setup": ["pnpm i\ndoppler setup --config dev_jonas --no-interactive"],
+  "teardown": [],
+  "run": []
 }

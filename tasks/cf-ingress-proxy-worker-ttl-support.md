@@ -5,7 +5,7 @@ size: small
 dependsOn: []
 ---
 
-# Add TTL support to cf-ingress-proxy-worker routes
+# Add TTL support to ingress-proxy routes
 
 Deferred follow-up:
 

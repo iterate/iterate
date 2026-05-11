@@ -42,6 +42,9 @@ function getTimestamp(timestamp?: string): string {
   return timestamp ?? new Date().toISOString();
 }
 
+const POSTHOG_MAX_RETRIES = 2;
+const POSTHOG_RETRY_BASE_MS = 500;
+
 function getEffectiveEgress(log: WideLog): Record<string, string> {
   let original: WideLog | undefined = log;
   while (original) {
@@ -76,16 +79,30 @@ function resolveEgressURL(url: string, log: WideLog): string {
 }
 
 async function posthogCapture(body: Record<string, unknown>): Promise<void> {
-  const response = await fetch(resolveEgressURL(POSTHOG_CAPTURE_URL, logger.get()), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
+  const jsonBody = JSON.stringify(body);
 
-  if (!response.ok) {
+  for (let attempt = 0; attempt <= POSTHOG_MAX_RETRIES; attempt++) {
+    const response = await fetch(resolveEgressURL(POSTHOG_CAPTURE_URL, logger.get()), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: jsonBody,
+    });
+
+    if (response.ok) return;
+
     const details = await response.text().catch(() => "<no body>");
+    const isServerError = response.status >= 500;
+    const hasRetries = attempt < POSTHOG_MAX_RETRIES;
+
+    if (isServerError && hasRetries) {
+      const delayMs = POSTHOG_RETRY_BASE_MS * 2 ** attempt;
+      logger.warn(
+        `PostHog capture ${response.status}, retrying in ${delayMs}ms (attempt ${attempt + 1}/${POSTHOG_MAX_RETRIES})`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      continue;
+    }
+
     throw new Error(
       `PostHog capture failed: ${response.status} ${response.statusText} ${details.slice(0, 500)}`,
     );
