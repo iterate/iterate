@@ -283,6 +283,14 @@ export const projectsRouter = {
       const row = requireProjectScope(context);
       return toProject(row);
     }),
+    lifecycleState: os.project.lifecycleState
+      .use(projectScopeMiddleware)
+      .handler(async ({ context }) => {
+        const project = requireProjectScope(context);
+        return await requireProjectDurableObjectNamespace(context)
+          .getByName(getProjectDurableObjectName(project.id))
+          .getProjectLifecycleRunnerState();
+      }),
     codemode: {
       ...projectCodemodeRouter,
       listSessions: os.project.codemode.listSessions

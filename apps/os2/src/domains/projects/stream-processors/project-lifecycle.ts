@@ -7,7 +7,7 @@ import {
 } from "@iterate-com/shared/stream-processors";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 
-export const PROJECT_LIFECYCLE_STREAM_PATH = StreamPath.parse("/project");
+export const PROJECT_LIFECYCLE_STREAM_PATH = StreamPath.parse("/");
 
 export const projectLifecycleEventTypes = {
   projectCreated: "events.iterate.com/os2/project-created",
