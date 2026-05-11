@@ -230,9 +230,7 @@ describe("CodemodeSession", () => {
       events: codemodeSessionStartupEvents({ providers: exampleCapabilityProviders(), streamPath }),
       code: `async (ctx) => {
   const ai = await ctx.ai.run("test-model", { prompt: "hello" });
-  const repo = await ctx.repos.get({ slug: "web" }).proofOfConcept({
-    callback: async (args) => console.log("repo callback", args.repoName),
-  });
+  const repos = await ctx.repos.list({});
   const workspace = await ctx.workspace.proofOfConcept({
     callback: async (args) => console.log("workspace callback", args.workspaceName),
   });
@@ -244,7 +242,7 @@ describe("CodemodeSession", () => {
 	  const streams = await ctx.os.streams.list({});
 	  const sessions = await ctx.os.codemode.listSessions({});
 
-	  return { ai, repo, workspace, agent, procedures, sessions, streams };
+	  return { ai, repos, workspace, agent, procedures, sessions, streams };
 	}`,
     });
     const scriptExecutionId = scriptExecutionIdFromEvent(created.scriptExecutionEvent);
@@ -257,7 +255,7 @@ describe("CodemodeSession", () => {
           ai: expect.objectContaining({ model: "test-model" }),
           agent: expect.objectContaining({ message: "hi", subPath: "bob" }),
           procedures: expect.stringContaining("interface CodemodeExecutionContext"),
-          repo: expect.objectContaining({ message: "repo proof of concept" }),
+          repos: [],
           sessions: expect.objectContaining({ sessions: expect.any(Array) }),
           streams: expect.objectContaining({ streams: expect.any(Array) }),
           workspace: expect.objectContaining({ message: "workspace proof of concept" }),
@@ -267,8 +265,8 @@ describe("CodemodeSession", () => {
     expect(await readCurrentStreamEvents(streamPath)).toEqual(
       expect.arrayContaining([
         functionCallRequested(["ai", "run"], ["ai"], ["run"]),
-        functionCallRequested(["repos", "get"], ["repos"], ["get"]),
-        functionCallCompleted(["repos", "get"], ["repos"], ["get"]),
+        functionCallRequested(["repos", "list"], ["repos"], ["list"]),
+        functionCallCompleted(["repos", "list"], ["repos"], ["list"]),
         functionCallRequested(["workspace", "proofOfConcept"], ["workspace"], ["proofOfConcept"]),
         functionCallRequested(["agents", "create"], ["agents", "create"], []),
         functionCallRequested(["os", "streams", "list"], ["os"], ["streams", "list"]),
@@ -277,10 +275,6 @@ describe("CodemodeSession", () => {
           ["os"],
           ["codemode", "listSessions"],
         ),
-        expect.objectContaining({
-          type: "events.iterate.com/codemode/log-emitted",
-          payload: expect.objectContaining({ message: expect.stringContaining("repo callback") }),
-        }),
         expect.objectContaining({
           type: "events.iterate.com/codemode/log-emitted",
           payload: expect.objectContaining({
@@ -638,8 +632,9 @@ function exampleCapabilityProviders(): ToolProviderRegistration[] {
       projectId,
     }),
     createExampleRpcProviderRegistration({
-      exportName: "RepoCapability",
-      instructions: "Use ctx.repos.get({ slug }) to get a repo handle.",
+      exportName: "ReposCapability",
+      instructions:
+        "Use ctx.repos.create({ slug }) to create a Repo, ctx.repos.get({ slug }).getInfo() to inspect one, and ctx.repos.list({}) to list Repos.",
       path: ["repos"],
       projectId,
     }),

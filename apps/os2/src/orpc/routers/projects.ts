@@ -35,6 +35,7 @@ import { activeOrganizationMiddleware, os, projectScopeMiddleware } from "~/orpc
 import { requireProjectScope } from "~/orpc/project-access.ts";
 import { projectCodemodeRouter } from "~/orpc/routers/codemode.ts";
 import { projectAgentsRouter } from "~/orpc/routers/agents.ts";
+import { projectReposRouter } from "~/orpc/routers/repos.ts";
 import { projectStreamsRouter } from "~/orpc/routers/streams.ts";
 
 type ProjectRow = {
@@ -330,6 +331,7 @@ export const projectsRouter = {
         }),
     },
     agents: projectAgentsRouter,
+    repos: projectReposRouter,
     inboundMcpServer: {
       listSessions: os.project.inboundMcpServer.listSessions
         .use(projectScopeMiddleware)

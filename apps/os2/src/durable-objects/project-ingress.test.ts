@@ -2,7 +2,6 @@ import { SELF, env } from "cloudflare:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { describe, expect, test } from "vitest";
-import { PROJECT_CREATED_EVENT_TYPE } from "~/domains/projects/durable-objects/project-durable-object.ts";
 
 describe("Project ingress routing", () => {
   test("routes iterate.localhost project hosts through the Project Durable Object", async () => {
@@ -64,7 +63,7 @@ describe("Project ingress routing", () => {
     expect(streamBody.events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          type: PROJECT_CREATED_EVENT_TYPE,
+          type: "events.iterate.com/project/created",
           payload: expect.objectContaining({
             defaultHost: "demo.iterate.localhost",
             projectId: "proj_local_test",

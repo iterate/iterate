@@ -21,6 +21,7 @@ import { createD1Client } from "sqlfu";
 import manifest, { AppConfig } from "~/app.ts";
 import type { AppContext } from "~/context.ts";
 import { getIngressRouteByHost } from "~/db/queries/.generated/index.ts";
+import type { CloudflareArtifactsBinding } from "~/domains/repos/artifacts.ts";
 import {
   dispatchFetchCallable,
   matchIngressRequest,
@@ -46,7 +47,7 @@ export { FetchCapability } from "~/domains/codemode/fetch-capability.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
 export { ProjectMcpServerEntrypoint } from "~/domains/inbound-mcp-server/entrypoints/project-mcp-server-entrypoint.ts";
 export { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
-export { RepoCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
+export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 export { SlackCapability } from "~/domains/slack/entrypoints/slack-capability.ts";
 export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 export { StreamDurableObject };
@@ -103,6 +104,7 @@ export default {
           });
         }
 
+        const envWithArtifacts = env as Env & { ARTIFACTS?: CloudflareArtifactsBinding };
         const context: AppContext = {
           manifest,
           config,
@@ -112,10 +114,12 @@ export default {
           log,
           projectHostnameBases,
           agent: env.AGENT,
+          artifacts: envWithArtifacts.ARTIFACTS,
           loader: env.LOADER,
           codemodeSession: env.CODEMODE_SESSION,
           callableEnv: env,
           projectDurableObjectNamespace: env.PROJECT,
+          repo: env.REPO,
           stream: env.STREAM,
           workerExports: cfCtx.exports,
         };

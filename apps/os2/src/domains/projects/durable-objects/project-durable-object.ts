@@ -40,7 +40,6 @@ import {
   createProjectLifecycleProcessor,
   PROJECT_LIFECYCLE_STREAM_PATH,
   ProjectLifecycleProcessorContract,
-  projectLifecycleEventTypes,
 } from "~/domains/projects/stream-processors/project-lifecycle.ts";
 
 export type ProjectStructuredName = {
@@ -132,8 +131,6 @@ const ProjectBase = withStreamProcessorRunner<
     });
   },
 })(ProjectLifecycleBase);
-
-export const PROJECT_CREATED_EVENT_TYPE = projectLifecycleEventTypes.projectCreated;
 
 export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
   constructor(ctx: DurableObjectState, env: ProjectEnv) {
@@ -430,7 +427,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     });
 
     await stream.append({
-      type: PROJECT_CREATED_EVENT_TYPE,
+      type: "events.iterate.com/project/created",
       idempotencyKey: `project-created:${summary.id}`,
       payload: {
         defaultHost: summary.defaultHost,

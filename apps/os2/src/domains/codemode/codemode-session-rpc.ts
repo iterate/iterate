@@ -95,16 +95,18 @@ export function createCodemodeSessionStartupEvents(input: {
   providers: ToolProviderRegistration[];
   streamPath: StreamPath;
 }): EventInput[] {
-  return [
-    ...input.events,
-    ...toolProviderRegistrationEvents([
-      ...createDefaultCodemodeProviderRegistrations({
-        projectId: input.projectId,
-        streamPath: input.streamPath,
-      }),
-      ...input.providers,
-    ]),
-  ];
+  const providersByPath = new Map<string, ToolProviderRegistration>();
+  for (const provider of [
+    ...createDefaultCodemodeProviderRegistrations({
+      projectId: input.projectId,
+      streamPath: input.streamPath,
+    }),
+    ...input.providers,
+  ]) {
+    providersByPath.set(provider.path.join("/"), provider);
+  }
+
+  return [...input.events, ...toolProviderRegistrationEvents([...providersByPath.values()])];
 }
 
 export function toolProviderRegistrationEvents(

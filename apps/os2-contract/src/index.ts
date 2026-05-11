@@ -70,6 +70,32 @@ export const AgentRecord = z.object({
 });
 export type AgentRecord = z.output<typeof AgentRecord>;
 
+export const RepoRecord = z.object({
+  createdAt: z.string(),
+  lastWokenAt: z.string(),
+  name: z.string(),
+  projectId: z.string(),
+  repoSlug: z.string(),
+});
+export type RepoRecord = z.output<typeof RepoRecord>;
+
+export const RepoInfo = z.object({
+  defaultBranch: z.string(),
+  git: z.object({
+    authorizationHeader: z.string(),
+    cloneCommand: z.string(),
+    commitExampleCommand: z.string(),
+    pushCommand: z.string(),
+    remote: z.string(),
+  }),
+  readmePath: z.string(),
+  remote: z.string(),
+  slug: z.string(),
+  token: z.string(),
+  tokenExpiresAt: z.string().nullable(),
+});
+export type RepoInfo = z.output<typeof RepoInfo>;
+
 export const RandomLogStreamRequest = z
   .object({
     count: z
@@ -470,6 +496,51 @@ export const osContract = oc.router({
         })
         .input(ProjectScopedInput.extend({ agentPath: StreamPath }))
         .output(z.unknown()),
+    },
+    repos: {
+      list: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectSlugOrId}/repos",
+          description: "List Repos for a project",
+          tags: ["/project", "/repos"],
+        })
+        .input(ProjectScopedInput)
+        .output(z.object({ repos: z.array(RepoRecord) })),
+      create: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectSlugOrId}/repos",
+          description: "Create a Repo for a project",
+          tags: ["/project", "/repos"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            slug: z
+              .string()
+              .trim()
+              .min(1, "Repo slug is required")
+              .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Repo slug must be lowercase kebab-case"),
+          }),
+        )
+        .output(RepoInfo),
+      get: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectSlugOrId}/repos/{repoSlug}",
+          description: "Get Repo Git access details",
+          tags: ["/project", "/repos"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            repoSlug: z
+              .string()
+              .trim()
+              .min(1, "Repo slug is required")
+              .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Repo slug must be lowercase kebab-case"),
+          }),
+        )
+        .output(RepoInfo),
     },
     inboundMcpServer: {
       listSessions: oc

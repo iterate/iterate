@@ -55,9 +55,7 @@ const codemodeExampleSeeds = [
     prompt: "Write one line about codemode.",
   });
 
-  const repo = await ctx.repos.get({ slug: "web" }).proofOfConcept({
-    callback: async (args) => console.log("repo callback", args.repoName),
-  });
+  const repos = await ctx.repos.list({});
 
   const workspace = await ctx.workspace.proofOfConcept({
     callback: async (args) => console.log("workspace callback", args.workspaceName),
@@ -78,7 +76,7 @@ const codemodeExampleSeeds = [
 
   console.log("available oRPC procedures", procedures);
   console.log("project streams", streams);
-  return { ai, repo, workspace, agent, pipelinedAgent, procedures, streams };
+  return { ai, repos, workspace, agent, pipelinedAgent, procedures, streams };
 }`,
     events: [
       {

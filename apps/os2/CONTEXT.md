@@ -233,7 +233,7 @@ The shared stream runtime's stable owner key for a group of Event Stream Paths. 
 _Avoid_: Project ID inside shared stream runtime, tenant path prefix
 
 **Project Lifecycle Stream**:
-The Project-owned Event Stream Path `/project` that records durable Project lifecycle facts.
+The Project-owned root Event Stream Path `/` that records durable Project lifecycle facts.
 _Avoid_: Project UI state stream, project activity log
 
 **Project Lifecycle Event**:
@@ -269,6 +269,10 @@ _Avoid_: RpcTarget, session stub, callback bundle
 **StreamsCapability**:
 A Project ID-backed RPC capability for stream operations. Its props bind the shared stream namespace to the Project ID, and optional `streamPath` props narrow calls to one namespace-local Event Stream Path.
 _Avoid_: Generic stream client, Events app stream client
+
+**ReposCapability**:
+A Project ID-backed RPC Tool Provider capability for creating, listing, and selecting Repos inside one Project.
+_Avoid_: Repo oRPC service, Artifact client, GitHub client
 
 **Codemode Session Control Plane**:
 The explicit command surface for starting codemode work on a Codemode Session.
@@ -370,6 +374,42 @@ _Avoid_: Direct tool, live provider
 A Cloudflare RPC value returned by an RPC Tool Provider that exposes its own method surface after the Codemode Function Call returns.
 _Avoid_: Tool Function, nested codemode path, provider proxy
 
+**Repo**:
+A project-scoped versioned file tree identified by one Project ID and one Repo Slug.
+_Avoid_: Repository row, GitHub repo, Cloudflare Artifacts repo
+
+**Repo Slug**:
+The project-local human-readable slug that identifies one Repo inside a Project.
+_Avoid_: Repo ID, Artifact name, GitHub repo name
+
+**Repo Stream**:
+The Project-owned Event Stream Path `/repos/{repoSlug}` that records durable Repo lifecycle facts.
+_Avoid_: Artifact log, repo activity feed, repo UI state
+
+**Repo Lifecycle Event**:
+A fact appended to a Repo Stream about Repo creation, backing storage, or future external connections.
+_Avoid_: Git commit, Artifact API response, UI event
+
+**Repo Created Event**:
+The Repo Lifecycle Event that records the initial project-local Repo facts needed to derive Repo state.
+_Avoid_: Create response, Artifact response, Repo row
+
+**Repo Stream Processor**:
+The stream processor that interprets Repo Lifecycle Events and derives Repo state.
+_Avoid_: Repo service, Artifact wrapper, UI reducer
+
+**Repo Reduced State**:
+The current Repo state derived by reducing Repo Lifecycle Events from one Repo Stream.
+_Avoid_: Repo row, Durable Object fields, frontend state
+
+**Repo Token**:
+A long-lived Cloudflare Artifacts write token stored in Repo Reduced State so a user or script can access a Repo's Git remote in the v1 prototype.
+_Avoid_: API key, separate secret, token row
+
+**Cloudflare Artifacts**:
+The Cloudflare-hosted Git-compatible storage service currently used as backing storage for OS2 Repos.
+_Avoid_: Repo, GitHub repo, Artifact repo
+
 **Repo Durable Object**:
 A project-scoped Durable Object selected by Project ID and repo slug and exposed to codemode as a Live Tool Handle.
 _Avoid_: Repository row, repo provider, GitHub repo
@@ -425,11 +465,25 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - A **Clerk Organization** owns zero or more **Projects**.
 - A **Project** belongs to exactly one **Clerk Organization**.
 - The **Project Durable Object** is the lifecycle authority for a **Project**.
-- Every **Project** has one **Project Lifecycle Stream** at Event Stream Path `/project` in that Project's **Stream Namespace**.
+- Every **Project** has one **Project Lifecycle Stream** at root Event Stream Path `/` in that Project's **Stream Namespace**.
 - The **Project Lifecycle Stream** records **Project Lifecycle Events** as facts, not frontend view state.
+- Resource streams such as `/repos/{repoSlug}` are child Event Stream Paths inside the same Project Stream Namespace.
 - The **Project Lifecycle Processor** may use **Project Lifecycle Reduced State** to decide follow-up work, but **Project Lifecycle Events** remain the shared durable facts.
 - The OS2 frontend may reduce **Project Lifecycle Events** with the same reducer as the **Project Lifecycle Processor**, but it does not own the Project lifecycle model.
 - The **Project Listing Projection** is derived query state and should be written by the **Project Durable Object** as part of Project lifecycle commands.
+- A **Project** owns zero or more **Repos**.
+- A **Repo** belongs to exactly one **Project**.
+- A **Repo** is identified in OS2 by **Project ID** and **Repo Slug**; **Cloudflare Artifacts** is backing storage, not OS2 domain identity.
+- A **Repo Durable Object** uses a structured Durable Object name derived from **Project ID** and **Repo Slug**.
+- Every **Repo** has one **Repo Stream** at Event Stream Path `/repos/{repoSlug}` in that Project's **Stream Namespace**; the stream path is derived from **Repo Slug** and is not separate Repo identity.
+- A **Repo Stream** records **Repo Lifecycle Events** as facts, not frontend view state.
+- A **Repo Created Event** records the initial facts for one **Repo** and is consumed by the **Repo Stream Processor**.
+- **Repo Reduced State** is derived from the **Repo Stream Processor**, not from ad hoc Durable Object fields or frontend state.
+- The **Repo Created Event** payload is project-local; Project ID comes from the **Stream Namespace**, not the event payload.
+- The initial long-lived **Repo Token** and Git remote details are part of the **Repo Created Event** and therefore part of **Repo Reduced State** returned by Repo info reads.
+- **ReposCapability** owns Repo collection semantics for one **Project**; project-scoped oRPC procedures and codemode both use it instead of duplicating Repo lifecycle logic.
+- Creating a **Repo** is explicit through **ReposCapability** create behavior and fails if that Repo already exists.
+- Selecting a missing **Repo** returns a not-found result and should not initialize a **Repo Durable Object**.
 - A **Project Route** includes both the owning **Clerk Organization** slug and the **Project** slug.
 - A **Project Slug** is route identity and may change; a **Project ID** is stable identity.
 - A **Project Route** resolves its **Project Slug** before rendering Project-local UI. Project-scoped oRPC procedures still accept `projectSlugOrId` so the same API remains curlable by slug or callable by stable Project ID.
@@ -1033,3 +1087,8 @@ The provider composition case targets provider-to-provider Tool Function Calls: 
 - "MCP authorization" could become a one-off Project Durable Object method. Resolved: avoid MCP-specific Project DO auth methods; model future auth as generic **Project Route Authorization**.
 - "project access" and "route authorization" are different depths of policy. Resolved: v1 can use a generic **Project Access Check**; richer destination-specific policy belongs to future **Project Route Authorization**.
 - "egress proxy", "egress gateway", and **Project Ingress** were used around outbound traffic. Resolved for current code: use **Project Egress** only as a pointer to future outbound policy work.
+- "Cloudflare Artifacts repo" introduced a second repo concept. Resolved: use **Repo** for the OS2 domain object and **Cloudflare Artifacts** for the backing service.
+- "stream path" sounded like independent Repo identity. Resolved: **Repo Stream** path is derived from **Repo Slug** as `/repos/{repoSlug}`.
+- "token" originally meant a one-time response secret. Resolved for the Repo v1 prototype: an initial long-lived **Repo Token** is stored in **Repo Reduced State** so `getInfo()` can return clone and push details.
+- First-party Cloudflare Artifacts docs recommend short-lived, least-privilege tokens. The v1 **Repo Token** decision intentionally optimizes for a simple clone/push prototype and should be revisited before broad availability.
+- The **Project Lifecycle Stream** path was ambiguous between `/project` and `/`. Resolved: use root `/`; resource streams such as `/repos/{repoSlug}` are child streams in the Project Stream Namespace.

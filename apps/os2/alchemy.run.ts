@@ -96,6 +96,17 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     WORKSPACE: workspace,
     ...(slackBotToken == null ? {} : { APP_CONFIG_SLACK_BOT_TOKEN: alchemy.secret(slackBotToken) }),
   },
+  wranglerTransform: (spec) => ({
+    ...spec,
+    artifacts: [
+      ...(((spec as { artifacts?: unknown[] }).artifacts ?? []) as unknown[]),
+      {
+        binding: "ARTIFACTS",
+        namespace: `${ctx.workerName}-repos`,
+        remote: true,
+      },
+    ],
+  }),
   extraRouteHostnames: projectHostnameBases.flatMap(projectRouteHostnamesForBase),
 });
 

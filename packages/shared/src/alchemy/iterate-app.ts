@@ -67,6 +67,10 @@ export async function IterateApp<B extends Bindings>(
     build?: string;
     /** Override dev command (default: `pnpm exec vite dev --config vite.config.ts`). */
     dev?: { command: string };
+    /** Hook to modify the generated wrangler config for bindings Alchemy does not model yet. */
+    wranglerTransform?: (
+      spec: Record<string, unknown>,
+    ) => Record<string, unknown> | Promise<Record<string, unknown>>;
   },
 ) {
   const { app, workerName, rawRuntimeConfig, manifest } = ctx;
@@ -92,7 +96,10 @@ export async function IterateApp<B extends Bindings>(
         ? JSON.stringify(rawRuntimeConfig, null, 2)
         : alchemy.secret(JSON.stringify(rawRuntimeConfig, null, 2)),
     },
-    wrangler: { main: "./src/entry.workerd.ts" },
+    wrangler: {
+      main: "./src/entry.workerd.ts",
+      transform: props.wranglerTransform,
+    },
     // Full sampling with persistent logs/traces for all Iterate workers.
     // https://developers.cloudflare.com/workers/observability/logs/workers-logs/
     observability: {

@@ -9,12 +9,8 @@ import { StreamPath } from "@iterate-com/shared/streams/types";
 
 export const PROJECT_LIFECYCLE_STREAM_PATH = StreamPath.parse("/");
 
-export const projectLifecycleEventTypes = {
-  projectCreated: "events.iterate.com/os2/project-created",
-} as const;
-
 export const ProjectLifecycleProcessorContract = defineProcessorContract({
-  slug: "project-lifecycle",
+  slug: "project",
   version: "0.1.0",
   description: "Tracks Project lifecycle facts and provisioning status.",
   stateSchema: z.object({
@@ -32,7 +28,7 @@ export const ProjectLifecycleProcessorContract = defineProcessorContract({
     project: null,
   },
   events: {
-    [projectLifecycleEventTypes.projectCreated]: {
+    "events.iterate.com/project/created": {
       description: "A Project was created and its initial platform hosts were recorded.",
       payloadSchema: z.object({
         defaultHost: z.string().trim().min(1),
@@ -42,11 +38,11 @@ export const ProjectLifecycleProcessorContract = defineProcessorContract({
       }),
     },
   },
-  consumes: [projectLifecycleEventTypes.projectCreated],
+  consumes: ["events.iterate.com/project/created"],
   emits: [],
   reduce({ state, event }) {
     switch (event.type) {
-      case projectLifecycleEventTypes.projectCreated:
+      case "events.iterate.com/project/created":
         return {
           ...state,
           project: event.payload,
