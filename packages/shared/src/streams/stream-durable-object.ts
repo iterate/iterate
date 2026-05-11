@@ -235,7 +235,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
       }
     }
 
-    const nextOffset = this.beforeAppend(input);
+    const nextOffset = this.beforeAppend(input, this.state);
 
     const event = {
       streamPath: this.state.path,
@@ -244,7 +244,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
       createdAt: new Date().toISOString(),
     };
 
-    const nextState = this.reduce(event);
+    const nextState = this.reduce(this.state, event);
 
     this.client.transaction((tx) => {
       insertEvent(tx, {
@@ -264,6 +264,66 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
     return event;
   }
 
+  async appendBatch(inputEvents: EventInput[]): Promise<Event[]> {
+    const inputs = inputEvents.map((inputEvent) => EventInput.parse(inputEvent));
+    const events: Event[] = [];
+    const newEvents: Event[] = [];
+    const newEventsByIdempotencyKey = new Map<string, Event>();
+
+    this.ensureInitializedStreamStorage();
+    let nextState = this.state;
+
+    for (const input of inputs) {
+      if (input.idempotencyKey != null) {
+        const existingEvent =
+          newEventsByIdempotencyKey.get(input.idempotencyKey) ??
+          this.getEventByIdempotencyKey(input.idempotencyKey);
+        if (existingEvent != null) {
+          events.push(existingEvent);
+          continue;
+        }
+      }
+
+      const nextOffset = this.beforeAppend(input, nextState);
+      const event = {
+        streamPath: nextState.path,
+        ...input,
+        offset: nextOffset,
+        createdAt: new Date().toISOString(),
+      };
+
+      nextState = this.reduce(nextState, event);
+      events.push(event);
+      newEvents.push(event);
+      if (event.idempotencyKey != null) {
+        newEventsByIdempotencyKey.set(event.idempotencyKey, event);
+      }
+    }
+
+    if (newEvents.length === 0) return events;
+
+    this.client.transaction((tx) => {
+      for (const event of newEvents) {
+        insertEvent(tx, {
+          offset: event.offset,
+          type: event.type,
+          payload: JSON.stringify(event.payload),
+          metadata: event.metadata === undefined ? null : JSON.stringify(event.metadata),
+          idempotencyKey: event.idempotencyKey ?? null,
+          createdAt: event.createdAt,
+        });
+      }
+      upsertReducedState(tx, { json: JSON.stringify(nextState) });
+    });
+    this._state = nextState;
+
+    for (const event of newEvents) {
+      this.afterAppend(event);
+    }
+
+    return events;
+  }
+
   /**
    * Validate-or-throw boundary. Enforces core invariants and runs builtin
    * processor gates before any state mutation occurs:
@@ -275,12 +335,12 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
    * before this method is called — by the time we get here, the input is
    * known to be a genuinely new event.
    */
-  private beforeAppend(input: EventInput): number {
-    if (input.type === STREAM_FIRST_INITIALIZED_TYPE && this.state.eventCount > 0) {
+  private beforeAppend(input: EventInput, state: StreamState): number {
+    if (input.type === STREAM_FIRST_INITIALIZED_TYPE && state.eventCount > 0) {
       throw new Error("stream-initialized may only be appended once");
     }
 
-    const nextOffset = this.state.eventCount + 1;
+    const nextOffset = state.eventCount + 1;
 
     if (input.offset != null && input.offset !== nextOffset) {
       throw new StreamOffsetPreconditionError(
@@ -291,12 +351,12 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
     assertValidCoreEventInput({
       input,
       nextOffset,
-      streamPath: this.state.path,
+      streamPath: state.path,
     });
 
     runBuiltinBeforeAppend({
       event: input,
-      processors: this.state.processors,
+      processors: state.processors,
     });
 
     return nextOffset;
@@ -311,15 +371,15 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
    * mirrors the processor `reduce` hook but for the privileged top-level
    * fields that are not modeled as processor state.
    */
-  private reduce(event: Event): StreamState {
-    if (this.state.path !== event.streamPath) {
+  private reduce(state: StreamState, event: Event): StreamState {
+    if (state.path !== event.streamPath) {
       throw new Error(
-        `This should never happen. Somebody is trying to append an event to the wrong stream. Stream has path ${this.state.path}, but the event has path ${event.streamPath}.`,
+        `This should never happen. Somebody is trying to append an event to the wrong stream. Stream has path ${state.path}, but the event has path ${event.streamPath}.`,
       );
     }
 
     let nextState = reduceStreamCore({
-      state: this.state,
+      state,
       event,
     });
 

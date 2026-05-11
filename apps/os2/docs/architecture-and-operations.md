@@ -128,8 +128,9 @@ Current direct debug fetch routes include:
 OS2 has two MCP flows:
 
 - Inbound MCP: external MCP clients connect to a project MCP hostname. The
-  request enters `ProjectMcpServerEntrypoint`, authenticates with Clerk OAuth,
-  and delegates session state to `ProjectMcpServerConnection`.
+  request enters `ProjectMcpServerEntrypoint`, authenticates with an OS2 admin
+  token or a Clerk user token, and delegates session state to
+  `ProjectMcpServerConnection`.
 - Outbound MCP: a codemode session uses an external MCP server as a Tool
   Provider. `OutboundMcpFromOurClientCapability` owns the client connection and
   exposes `executeCodemodeFunctionCall(...)`.
@@ -139,8 +140,10 @@ is not itself a codemode Tool Provider.
 
 Project MCP hostnames expose RFC 9728 protected-resource metadata at
 `/.well-known/oauth-protected-resource`, pointing clients at Clerk as the
-authorization server. The MCP entrypoint verifies Clerk-issued OAuth bearer
-tokens before it passes identity props to the MCP session Durable Object.
+authorization server. The MCP entrypoint accepts Clerk OAuth access tokens for
+OAuth MCP clients and Clerk session tokens for first-party/e2e clients. If a
+Clerk token has no active organization claim, OS2 checks the user's Clerk
+organization memberships before running the project access check.
 
 ## Codemode
 
@@ -152,7 +155,7 @@ Primary surfaces:
 - UI: project codemode session pages.
 - oRPC: `project.codemode.createSession`,
   `project.codemode.executeScript`, and `project.streams` reads.
-- MCP: `run_code` on a project MCP route, such as
+- MCP: `exec_js` on a project MCP route, such as
   `https://mcp__demo.iterate2.app`.
 
 Default providers are registered for every session. The important built-ins are
@@ -233,6 +236,10 @@ Useful first-party references:
   `https://clerk.com/docs/organizations/overview`
 - Clerk OAuth token verification:
   `https://clerk.com/docs/guides/configure/auth-strategies/oauth/verify-oauth-tokens`
+- Clerk request authentication and accepted token types:
+  `https://clerk.com/docs/reference/backend/authenticate-request`
+- Clerk test session-token flow:
+  `https://clerk.com/docs/testing/overview`
 - Clerk CLI:
   `https://clerk.com/docs/cli`
 
@@ -255,6 +262,20 @@ Codemode MCP provider-stack smoke:
 OS2_E2E_MCP_URL=https://mcp__demo.iterate-preview-2.app \
 doppler run --project os2 --config preview_2 -- pnpm test:e2e:codemode-mcp
 ```
+
+The MCP smoke accepts either:
+
+- `OS2_E2E_MCP_BEARER_TOKEN`: an explicit Clerk OAuth access token or Clerk
+  session token for a user whose Clerk organization has access to the project.
+- `OS2_E2E_ADMIN_API_SECRET`, `OS2_ADMIN_API_SECRET`, or
+  `APP_CONFIG_ADMIN_API_SECRET`: an OS2 admin token for deployment-level smoke
+  tests that do not need user/project membership setup.
+
+For browserless Clerk e2e, do not pass a Clerk Testing Token as the bearer
+token. Clerk Testing Tokens are only bot-detection bypass tokens for Frontend
+API requests. Create a Clerk user, create a session for that user, create a
+session token from that session, and pass the returned session token as
+`Authorization: Bearer <session_token>` through `OS2_E2E_MCP_BEARER_TOKEN`.
 
 When `APP_CONFIG_SLACK_BOT_TOKEN` is present in the test process, the codemode
 MCP test discovers `#slack-agent-e2e-test` and includes a real

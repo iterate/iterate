@@ -25,14 +25,11 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
       await client.connect(transport);
 
       await expect(client.listTools()).resolves.toMatchObject({
-        tools: expect.arrayContaining([
-          expect.objectContaining({ name: "run_code" }),
-          expect.objectContaining({ name: "reveal_secret" }),
-        ]),
+        tools: expect.arrayContaining([expect.objectContaining({ name: "exec_js" })]),
       });
 
       const result = await client.callTool({
-        name: "run_code",
+        name: "exec_js",
         arguments: {
           code: `async (ctx) => {
   const message = \`hello from \${"inbound mcp"}\`;
@@ -63,7 +60,7 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
             payload: expect.objectContaining({
               projectId: "proj__test__inboundmcp",
               streamPath,
-              toolName: "run_code",
+              toolName: "exec_js",
             }),
           }),
           expect.objectContaining({
@@ -89,7 +86,7 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
             payload: expect.objectContaining({
               projectId: "proj__test__inboundmcp",
               streamPath,
-              toolName: "run_code",
+              toolName: "exec_js",
             }),
           }),
         ]),
@@ -99,7 +96,7 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
     }
   });
 
-  test("auto-loads static codemode tool providers for run_code", async () => {
+  test("auto-loads static codemode tool providers for exec_js", async () => {
     const transport = new StreamableHTTPClientTransport(
       new URL("https://mcp-project.iterate-preview-test.app/mcp"),
       {
@@ -112,7 +109,7 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
       await client.connect(transport);
 
       const result = await client.callTool({
-        name: "run_code",
+        name: "exec_js",
         arguments: {
           code: `async (ctx) => {
   const operations = await ctx.integrations.http.catalog.listOperations();
@@ -286,7 +283,7 @@ function parseRunCodeResult(content: unknown) {
   const text = extractTextContent(content).join("\n");
   const marker = "Result: ";
   const index = text.indexOf(marker);
-  if (index === -1) throw new Error(`run_code result did not contain "${marker}": ${text}`);
+  if (index === -1) throw new Error(`exec_js result did not contain "${marker}": ${text}`);
   return JSON.parse(text.slice(index + marker.length));
 }
 

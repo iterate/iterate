@@ -413,7 +413,6 @@ const plugin = {
                 "@orpc/contract",
                 "@orpc/zod",
                 "@iterate-com/shared/apps",
-                "@iterate-com/shared/jonasland",
                 "@orpc/client",
                 "@orpc/openapi-client",
               ];
@@ -522,98 +521,6 @@ const plugin = {
                   context.report({
                     node: firstArg,
                     message: "Implied eval. Pass a function instead of a string.",
-                  });
-                },
-              };
-            },
-          },
-          "no-global-vitest-expect-in-jonasland-e2e": {
-            meta: {
-              type: "problem",
-              docs: {
-                description:
-                  "Disallow importing global expect from vitest in jonasland/e2e/vitest tests, because concurrent tests must use context-bound expect",
-              },
-            },
-            create: (context) => {
-              const filename = context.filename || "";
-              const normalizedFilename = filename.replaceAll("\\", "/");
-              const isJonaslandVitestFile = normalizedFilename.includes("/jonasland/e2e/vitest/");
-
-              if (!isJonaslandVitestFile) {
-                return {};
-              }
-
-              return {
-                ImportDeclaration: (node) => {
-                  if (node.source.value !== "vitest") return;
-
-                  for (const specifier of node.specifiers) {
-                    if (specifier.type !== "ImportSpecifier") continue;
-                    if (specifier.imported.name !== "expect") continue;
-                    context.report({
-                      node: specifier,
-                      message:
-                        'Do not import global `expect` from "vitest" in `jonasland/e2e/vitest`. This is not concurrency-safe. Use the per-test context instead: `async ({ task, expect }) => { ... }`, and prefer `task.name` over `expect.getState().currentTestName`.',
-                    });
-                  }
-                },
-              };
-            },
-          },
-          "jonasland-e2e-test-harness": {
-            meta: {
-              type: "problem",
-              docs: {
-                description:
-                  "Require .test.ts files in jonasland/e2e to import `test` from the local e2e harness instead of directly from vitest",
-              },
-            },
-            create: (context) => {
-              const filename = context.filename || "";
-              const normalizedFilename = filename.replaceAll("\\", "/");
-              const isJonaslandE2ETestFile =
-                normalizedFilename.includes("/jonasland/e2e/") &&
-                normalizedFilename.endsWith(".test.ts") &&
-                !normalizedFilename.includes("/tests/old/") &&
-                !normalizedFilename.includes("/spec/old/") &&
-                !normalizedFilename.includes("/old/");
-
-              if (!isJonaslandE2ETestFile) {
-                return {};
-              }
-
-              let hasHarnessImport = false;
-
-              return {
-                ImportDeclaration: (node) => {
-                  const source = String(node.source.value ?? "");
-
-                  if (source.endsWith("/test-support/e2e-test.ts")) {
-                    hasHarnessImport ||= node.specifiers.some(
-                      (specifier) =>
-                        specifier.type === "ImportSpecifier" && specifier.imported.name === "test",
-                    );
-                  }
-
-                  if (source !== "vitest") return;
-
-                  for (const specifier of node.specifiers) {
-                    if (specifier.type !== "ImportSpecifier") continue;
-                    if (specifier.imported.name !== "test") continue;
-                    context.report({
-                      node: specifier,
-                      message:
-                        'Do not import `test` from "vitest" in `jonasland/e2e/*.test.ts`. Import it from the local harness instead: `import { test } from "../../test-support/e2e-test.ts"`.',
-                    });
-                  }
-                },
-                "Program:exit": (node) => {
-                  if (hasHarnessImport) return;
-                  context.report({
-                    node,
-                    message:
-                      "jonasland/e2e .test.ts files must import `{ test }` from the local `test-support/e2e-test.ts` harness so the shared E2E fixture auto-loads.",
                   });
                 },
               };

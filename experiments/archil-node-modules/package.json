@@ -1,8 +1,0 @@
-{
-  "name": "archil-node-modules-experiment",
-  "private": true,
-  "type": "module",
-  "dependencies": {
-    "@archildata/client": "^0.8.2"
-  }
-}

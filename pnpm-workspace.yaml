@@ -1,6 +1,5 @@
 packages:
   - experiments/channel-agent-poc/nested-facets
-  - jonasland
   - apps/ingress-proxy
   - apps/ingress-proxy-contract
   - apps/project-ingress-proxy
@@ -13,13 +12,9 @@ packages:
   - apps/semaphore
   - apps/semaphore-contract
   - apps/example
-  - apps/fake-os
-  - apps/daemon-v2
   - apps/fetch-test
   - apps/example-3
   - apps/example-contract
-  - apps/fake-os-contract
-  - apps/daemon-v2-contract
   - apps/example-v2
   - apps/example-v2-contract
   - apps/events
@@ -28,8 +23,6 @@ packages:
   - apps/agents-contract
   - apps/*
   - sandbox
-  - jonasland/sandbox
-  - jonasland/e2e
   - services/*
   - '!services/events'
   - '!services/events-contract'

@@ -8,7 +8,6 @@ const baseConfig = {
     secretKey: "sk_test_example",
     jwtKey: "jwt-key",
   },
-  mcpProofSecret: "proof-secret",
   openAiApiKey: "openai-api-key",
 };
 

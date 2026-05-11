@@ -121,10 +121,7 @@ describe("Project ingress routing", () => {
     try {
       await client.connect(transport);
       await expect(client.listTools()).resolves.toMatchObject({
-        tools: expect.arrayContaining([
-          expect.objectContaining({ name: "run_code" }),
-          expect.objectContaining({ name: "reveal_secret" }),
-        ]),
+        tools: expect.arrayContaining([expect.objectContaining({ name: "exec_js" })]),
       });
     } finally {
       await client.close();

@@ -29,6 +29,16 @@ export const projectStreamsRouter = {
       });
       return { event };
     }),
+  appendBatch: os.project.streams.appendBatch
+    .use(projectScopeMiddleware)
+    .handler(async ({ context, input }) => {
+      const project = requireProjectScope(context);
+      const events = await getProjectStreamsCapability(context, project.id).appendBatch({
+        events: input.events,
+        streamPath: input.streamPath,
+      });
+      return { events };
+    }),
   read: os.project.streams.read.use(projectScopeMiddleware).handler(async ({ context, input }) => {
     const project = requireProjectScope(context);
     const events = await getProjectStreamsCapability(context, project.id).read({

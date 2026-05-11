@@ -10,7 +10,6 @@ import { decrypt, encrypt } from "../utils/encryption.ts";
 import { stripMachineStateMetadata } from "../utils/machine-metadata.ts";
 import { getIngressSchemeFromPublicUrl } from "../utils/project-ingress-url.ts";
 import { logger } from "../tag-logger.ts";
-import { ensureProjectArchilDisk } from "../integrations/archil/archil.ts";
 
 /**
  * Generate a project access token API key.
@@ -172,23 +171,6 @@ export async function createMachineForProject(params: CreateMachineParams): Prom
 
   if (!projectRecord) {
     throw new Error(`Project not found: ${projectId}`);
-  }
-
-  // Local Docker sandboxes use ephemeral local persistence by default.
-  // Non-Docker providers still provision Archil unless explicitly local-only.
-  const persistenceMode = await db.query.projectEnvVar.findFirst({
-    where: and(
-      eq(schema.projectEnvVar.projectId, projectId),
-      eq(schema.projectEnvVar.key, "ITERATE_PERSISTENCE_MODE"),
-      isNull(schema.projectEnvVar.machineId),
-    ),
-  });
-  // todo: just get rid of archil for now, we can come back to it when we have more demanding persistence requirements
-  if (projectRecord.sandboxProvider !== "docker" && persistenceMode?.value !== "local") {
-    await ensureProjectArchilDisk(db, env, {
-      projectId,
-      projectSlug: projectRecord.slug,
-    });
   }
 
   const type = projectRecord.sandboxProvider;

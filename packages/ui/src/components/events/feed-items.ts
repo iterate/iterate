@@ -386,6 +386,7 @@ export type EventsStreamSlotName = keyof EventsStreamSlots;
  * the event log, then project them into slots.
  */
 export type EventsStreamActivityState = {
+  eventCount: number;
   currentLlmRequestId: string | null;
   latestStreamError: {
     message: string;

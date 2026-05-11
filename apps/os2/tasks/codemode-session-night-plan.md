@@ -94,7 +94,7 @@ End state for this slice:
 4. A script can call a bridge-backed Tool Function through `ctx.provider.fn()`.
 5. A provider can call another provider through the same Codemode Session
    Capability.
-6. Inbound MCP `run_code` can start a Script Execution on a Codemode Session
+6. Inbound MCP `exec_js` can start a Script Execution on a Codemode Session
    using the MCP session's existing Event Stream Path.
 7. Outbound MCP client connections can be registered as Tool Providers without
    confusing them with inbound MCP server sessions.
@@ -244,12 +244,12 @@ input.
 Questions to resolve:
 
 - Does each inbound MCP session map to one Codemode Session?
-- Does each `run_code` tool call create only a new Script Execution on that
+- Does each `exec_js` tool call create only a new Script Execution on that
   Codemode Session?
 - How does the Project MCP Endpoint resolve the stable Project ID from the request route?
   Resolved: route slugs identify the Project route; the handler looks up the
   Project row and initializes CodemodeSession with stable `project.id`.
-- Should MCP `run_code` return final text only, event offsets, the Event Stream
+- Should MCP `exec_js` return final text only, event offsets, the Event Stream
   Path, or a combination?
 - Should MCP expose tools to register Provider Descriptors, or should provider
   setup be Project/session state managed elsewhere?
@@ -344,5 +344,5 @@ These are intentionally ordered so each answer narrows later work.
 - [ ] Add explicit codemode event schemas.
 - [ ] Add runtime limit/cycle tests.
 - [ ] Wire browser Run Code route to explicit Codemode Session creation/selection.
-- [ ] Move inbound MCP `run_code` onto the MCP-session Event Stream Path.
+- [ ] Move inbound MCP `exec_js` onto the MCP-session Event Stream Path.
 - [ ] Delete or deprecate compatibility `codemode.execute`.

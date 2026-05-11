@@ -3,7 +3,7 @@ import * as crypto from "node:crypto";
 import { format } from "oxfmt";
 import { findUpSync } from "find-up";
 import type { Step } from "@jlarky/gha-ts/workflow-types";
-import { markdownAnnotator } from "../../../packages/shared/src/jonasland/markdown-annotator.ts";
+import { markdownAnnotator } from "../../../packages/shared/src/dev/markdown-annotator.ts";
 
 export type GitHubScriptVariables = {
   context: typeof import("@actions/github").context;

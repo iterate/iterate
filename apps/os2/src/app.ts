@@ -26,7 +26,6 @@ export const AppConfig = BaseAppConfig.extend({
         scopes.filter((scope): scope is "email" | "profile" => scope !== "openid"),
       ),
   }),
-  mcpProofSecret: redacted(z.string().trim().min(1)),
   openAiApiKey: redacted(z.string().trim().min(1)),
   projectHostnameBases: publicValue(z.array(z.string().trim().min(1)).default([])),
   slackBotToken: redacted(z.string().trim().min(1)).optional(),
