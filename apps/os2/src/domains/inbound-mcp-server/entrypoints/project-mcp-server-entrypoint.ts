@@ -205,6 +205,13 @@ async function resolveMcpProjectAccess(input: {
     }
   }
 
+  if (input.auth.clerkTokenType !== "session_token") {
+    return new Response("MCP user is not a member of an organization with access to this project", {
+      status: 403,
+      headers: mcpCorsHeaders,
+    });
+  }
+
   const membershipAccess = await findMcpProjectMembershipAccess({
     auth: input.auth,
     clerk: createClerkClientForApp(),
