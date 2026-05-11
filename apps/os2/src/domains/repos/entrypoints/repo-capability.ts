@@ -127,7 +127,19 @@ export class ReposCapability extends WorkerEntrypoint<ReposCapabilityEnv, ReposC
       },
     );
 
-    return records.map(toRepoCatalogRecord);
+    const repos: RepoCatalogRecord[] = [];
+    for (const record of records) {
+      const repo = toRepoCatalogRecord(record);
+      try {
+        await this.getInfo({ slug: repo.repoSlug });
+        repos.push(repo);
+      } catch (error) {
+        if (isUncreatedRepoError(error)) continue;
+        throw error;
+      }
+    }
+
+    return repos;
   }
 
   private requireRepoNamespace() {
@@ -188,6 +200,10 @@ function readSlug(value: unknown) {
 
 function readOptionalString(value: unknown) {
   return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+}
+
+function isUncreatedRepoError(error: unknown) {
+  return error instanceof Error && /Repo .+ has not been created\./.test(error.message);
 }
 
 export { getRepoDurableObjectName };
