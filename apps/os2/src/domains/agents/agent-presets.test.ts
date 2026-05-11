@@ -79,6 +79,26 @@ describe("agent presets", () => {
     ]);
   });
 
+  it("ignores configured preset events with invalid base paths", () => {
+    const invalid = presetConfiguredEvent({
+      basePath: "/alice",
+      events: defaultAgentSetupEvents("openai-ws"),
+    });
+    const valid = presetConfiguredEvent({
+      basePath: "/agents/alice",
+      events: defaultAgentSetupEvents("cloudflare-ai"),
+    });
+
+    expect(
+      readAgentPathPrefixPresets([committedEvent(invalid, 1), committedEvent(valid, 2)]),
+    ).toEqual([
+      {
+        basePath: "/agents/alice",
+        events: defaultAgentSetupEvents("cloudflare-ai"),
+      },
+    ]);
+  });
+
   it("keeps the default system prompt on ctx.chat.sendMessage", () => {
     expect(defaultAgentSystemPrompt()).toContain("ctx.chat.sendMessage({ message:");
     expect(defaultAgentSystemPrompt()).not.toContain("ctx.streams.append");

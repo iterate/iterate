@@ -136,8 +136,10 @@ export function readAgentPathPrefixPresets(
     if (event.type !== OS2_AGENT_PATH_PREFIX_PRESET_CONFIGURED_EVENT_TYPE) continue;
     const parsed = AgentPathPrefixPreset.safeParse(event.payload);
     if (!parsed.success) continue;
-    presetsByBasePath.set(normalizeAgentPresetBasePath(parsed.data.basePath), {
-      basePath: normalizeAgentPresetBasePath(parsed.data.basePath),
+    const basePath = tryNormalizeAgentPresetBasePath(parsed.data.basePath);
+    if (basePath == null) continue;
+    presetsByBasePath.set(basePath, {
+      basePath,
       events: parsed.data.events,
     });
   }
