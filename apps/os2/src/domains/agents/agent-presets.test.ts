@@ -4,6 +4,7 @@ import {
   defaultAgentSetupEvents,
   defaultAgentSystemPrompt,
   normalizeAgentPresetBasePath,
+  parseAgentRunOptsJson,
   presetConfiguredEvent,
   readAgentPathPrefixPresets,
   selectAgentPathPrefixPreset,
@@ -102,6 +103,11 @@ describe("agent presets", () => {
   it("keeps the default system prompt on ctx.chat.sendMessage", () => {
     expect(defaultAgentSystemPrompt()).toContain("ctx.chat.sendMessage({ message:");
     expect(defaultAgentSystemPrompt()).not.toContain("ctx.streams.append");
+  });
+
+  it("distinguishes invalid run options JSON from non-object run options", () => {
+    expect(() => parseAgentRunOptsJson("[1, 2]")).toThrow("Run options must be a JSON object.");
+    expect(() => parseAgentRunOptsJson("{")).toThrow("Run options must be valid JSON.");
   });
 });
 

@@ -107,15 +107,16 @@ export function parseAgentEventInputsYaml(value: string): EventInput[] {
 }
 
 export function parseAgentRunOptsJson(value: string): Record<string, unknown> {
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(value);
-    if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("Run options must be a JSON object.");
-    }
-    return parsed as Record<string, unknown>;
+    parsed = JSON.parse(value);
   } catch {
     throw new Error("Run options must be valid JSON.");
   }
+  if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Run options must be a JSON object.");
+  }
+  return parsed as Record<string, unknown>;
 }
 
 export function presetConfiguredEvent(input: AgentPathPrefixPreset): EventInput {
