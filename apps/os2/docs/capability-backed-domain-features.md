@@ -90,9 +90,11 @@ can use the capability directly.
 
 ## Codemode
 
-If a capability returns a live Durable Object RPC stub, that Durable Object's
-public methods become the codemode handle API. Keep public methods small,
-intentional, and product-shaped.
+If a capability returns a live handle, that handle's public methods become the
+codemode API. Prefer a tiny `RpcTarget` wrapper when the underlying implementation
+is a Durable Object stub: Cloudflare Workers RPC can pipeline calls through an
+`RpcTarget`, while a raw Durable Object stub is not a reliable return value across
+every capability/session boundary.
 
 Internal lifecycle helpers should be private or reached through a separate
 control surface, not exposed on the handle.
@@ -104,9 +106,8 @@ Repos follow this pattern:
 - `ReposCapability` is bound to one Project ID.
 - `os.project.repos.*` is an adapter around `ReposCapability`.
 - `ctx.repos.create({ slug })` explicitly creates a Repo.
-- `ctx.repos.get({ slug })` selects an existing Repo and returns its Durable
-  Object RPC stub.
+- `ctx.repos.get({ slug })` selects an existing Repo and returns a tiny Repo
+  handle backed by the Durable Object.
 - `ctx.repos.get({ slug }).getInfo()` reads Repo details, including the remote
   Git URL backed by Cloudflare Artifacts.
-- The Repo detail UI uses a normal Field/Input/NativeSelect form for token
-  creation when a user wants local clone and push commands.
+- The Repo detail UI shows clone/push commands from `getInfo()`.
