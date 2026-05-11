@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { StreamPath, type EventInput } from "@iterate-com/shared/streams/types";
+import { parse as parseYaml } from "yaml";
+import { EventInput, StreamPath } from "@iterate-com/shared/streams/types";
 
 export const OS2_AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE =
   "events.iterate.com/os2-agent/llm-provider-selected";
@@ -69,6 +70,55 @@ export function defaultAgentSetupEvents(provider: AgentLlmProvider): AgentPreset
   ];
 }
 
+export function configuredAgentSetupEvents(input: {
+  idempotencyKeyPrefix?: string;
+  model: string;
+  provider: AgentLlmProvider;
+  runOpts: Record<string, unknown>;
+  systemPrompt: string;
+}): EventInput[] {
+  return defaultAgentSetupEvents(input.provider).map((event, index) => ({
+    ...(input.idempotencyKeyPrefix == null
+      ? {}
+      : { idempotencyKey: `${input.idempotencyKeyPrefix}:${index}:${event.type}` }),
+    type: event.type,
+    payload:
+      input.provider === "openai-ws" && event.type === "events.iterate.com/openai-ws/config-updated"
+        ? { model: input.model }
+        : input.provider === "cloudflare-ai" &&
+            event.type === "events.iterate.com/agent/llm-config-updated"
+          ? {
+              debounceMs: 1000,
+              model: input.model,
+              runOpts: input.runOpts,
+            }
+          : event.type === "events.iterate.com/agent/system-prompt-updated"
+            ? { systemPrompt: input.systemPrompt }
+            : event.payload,
+  }));
+}
+
+export function parseAgentPresetEventsYaml(value: string): AgentPresetEvent[] {
+  return AgentPresetEvent.array().parse(parseAgentEventsYaml(value));
+}
+
+export function parseAgentEventInputsYaml(value: string): EventInput[] {
+  return EventInput.array().parse(parseAgentEventsYaml(value));
+}
+
+export function parseAgentRunOptsJson(value: string): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("Run options must be valid JSON.");
+  }
+  if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Run options must be a JSON object.");
+  }
+  return parsed as Record<string, unknown>;
+}
+
 export function presetConfiguredEvent(input: AgentPathPrefixPreset): EventInput {
   return {
     type: OS2_AGENT_PATH_PREFIX_PRESET_CONFIGURED_EVENT_TYPE,
@@ -87,8 +137,10 @@ export function readAgentPathPrefixPresets(
     if (event.type !== OS2_AGENT_PATH_PREFIX_PRESET_CONFIGURED_EVENT_TYPE) continue;
     const parsed = AgentPathPrefixPreset.safeParse(event.payload);
     if (!parsed.success) continue;
-    presetsByBasePath.set(normalizeAgentPresetBasePath(parsed.data.basePath), {
-      basePath: normalizeAgentPresetBasePath(parsed.data.basePath),
+    const basePath = tryNormalizeAgentPresetBasePath(parsed.data.basePath);
+    if (basePath == null) continue;
+    presetsByBasePath.set(basePath, {
+      basePath,
       events: parsed.data.events,
     });
   }
@@ -111,17 +163,28 @@ export function selectAgentPathPrefixPreset(input: {
 }
 
 export function normalizeAgentPresetBasePath(input: string): StreamPath {
-  const trimmed = input.trim();
-  const withSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  const withoutTrailing = withSlash.replace(/\/+$/, "");
-  const basePath = withoutTrailing === "" ? "/agents" : withoutTrailing;
+  const basePath = StreamPath.parse(input.trim());
   if (basePath === "/agents" || basePath.startsWith("/agents/")) {
-    return StreamPath.parse(basePath);
+    return basePath;
   }
-  return StreamPath.parse(`/agents/${basePath.replace(/^\/+/, "")}`);
+  throw new Error("Agent preset path must be /agents or start with /agents/.");
 }
 
 export function presetMatchesAgentPath(input: { agentPath: string; basePath: string }) {
-  const basePath = normalizeAgentPresetBasePath(input.basePath);
+  const basePath = tryNormalizeAgentPresetBasePath(input.basePath);
+  if (basePath == null) return false;
+
   return input.agentPath === basePath || input.agentPath.startsWith(`${basePath}/`);
+}
+
+function tryNormalizeAgentPresetBasePath(input: string): StreamPath | null {
+  try {
+    return normalizeAgentPresetBasePath(input);
+  } catch {
+    return null;
+  }
+}
+
+function parseAgentEventsYaml(value: string) {
+  return parseYaml(value.trim() || "[]") as unknown;
 }

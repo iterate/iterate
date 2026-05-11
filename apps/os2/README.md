@@ -40,6 +40,8 @@ pnpm dev:localhost       # localhost-oriented config
 pnpm typecheck           # TypeScript
 pnpm test                # unit tests
 pnpm test:e2e:preview    # deployed preview smoke
+pnpm cli claude-mcp --project-slug-or-id bob
+                         # open Claude against one project MCP server
 pnpm sqlfu:generate      # regenerate sqlfu migrations/query wrappers
 pnpm sqlfu:check         # compare migrations to definitions.sql
 pnpm cf:deploy           # production deploy
@@ -47,6 +49,14 @@ pnpm cf:deploy           # production deploy
 
 Use `doppler run --project os2 --config <config> -- <command>` when a command
 needs deployed secrets or preview/prd app config.
+
+For example, to open Claude against the production MCP server for project
+`bob`, using the production `APP_CONFIG_ADMIN_API_SECRET`:
+
+```bash
+doppler run --project os2 --config prd -- \
+  pnpm cli claude-mcp --project-slug-or-id bob
+```
 
 ## Important Files
 

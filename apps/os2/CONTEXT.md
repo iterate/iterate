@@ -30,6 +30,10 @@ _Avoid_: Member, account
 A Clerk-issued OAuth access token used by a remote MCP client to call OS2 as a protected resource.
 _Avoid_: MCP JWT, session token
 
+**Clerk Session Token**:
+A Clerk-issued session token used by first-party or e2e clients to call OS2 as an authenticated Clerk User.
+_Avoid_: testing token, OAuth token
+
 **Project**:
 An OS2-managed app surface owned by exactly one Clerk Organization.
 _Avoid_: App, site, workspace
@@ -503,21 +507,22 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - The **Codemode Session Control Plane** compiles a requested **Script Execution** into a script-execution-requested Event Input internally.
 - When a **Codemode Example Stack**, custom Event Inputs, and a **Script** are combined, OS2 appends example Event Inputs, custom Event Inputs, then the script-execution-requested event.
 - Browser UI creates **Codemode Sessions** through a session-first command where the **Script** is optional.
-- Project MCP server `run_code` starts a **Script Execution** and therefore requires a **Script**.
-- Browser session creation and Project MCP server `run_code` share the same internal attach-or-create and stream append behavior.
+- Project MCP server `exec_js` starts a **Script Execution** and therefore requires a **Script**.
+- Browser session creation and Project MCP server `exec_js` share the same internal attach-or-create and stream append behavior.
 - A **Project Route** resolves its **Project Slug** to the stable **Project ID** before initializing a **Codemode Session**.
 - A **Project MCP Route** resolves to the stable **Project ID** through project ingress before initializing a **Codemode Session**.
 - A **Clerk User** acts through their **Active Organization** when managing **Projects**.
 - A signed-in **Clerk User** without an **Active Organization** must create or select a **Clerk Organization** before using OS2.
-- A remote MCP client calls OS2 with a **Clerk OAuth Token**, not a Clerk session token.
-- OS2 accepts Clerk's OAuth token contract for MCP; JWT token format is the preferred Clerk environment setting, not the domain boundary.
+- A remote OAuth MCP client calls OS2 with a **Clerk OAuth Token**.
+- A first-party or e2e MCP client may call OS2 with a **Clerk Session Token** when it needs browserless user authentication.
+- OS2 accepts Clerk user-token contracts for MCP; JWT token format is the preferred Clerk environment setting, not the domain boundary.
 - The browser UI explicitly creates and selects **Codemode Sessions** for a **Project**.
 - Browser oRPC calls identify the **Project** with `projectSlugOrId`; handlers resolve that value to the stable Project ID before touching capabilities or Durable Objects.
 - Browser oRPC may pass an **Event Stream Path** when creating a **Codemode Session**; if it does not, OS2 generates one for the Project.
 - The **Codemode Session Creation Form** may include an optional **Event Stream Path** so users can attach the codemode processor to an existing stream.
 - Creating a **Codemode Session** is attach-or-create for the pair of **Project ID** and **Event Stream Path**.
 - A **Project MCP Server Connection** already has an **Event Stream Path**; when it runs codemode, the **Codemode Session** uses that same Event Stream Path.
-- Project MCP server `run_code` may include Event Inputs, such as Tool Provider registration events, which are appended to the **Codemode Session** before the **Script Execution** starts.
+- Project MCP server `exec_js` may include Event Inputs, such as Tool Provider registration events, which are appended to the **Codemode Session** before the **Script Execution** starts.
 - An **Outbound MCP From Our Client Capability** can be registered as a Tool Provider; it is unrelated to **Project MCP Server Connection** identity.
 - A **Codemode Session** is initialized with exactly one stable **Project ID** and exactly one **Event Stream Path**.
 - An **Event Stream Path** may exist before a **Codemode Session** is attached to it.
@@ -886,7 +891,7 @@ The provider composition case targets provider-to-provider Tool Function Calls: 
 > **Dev:** "Is there a separate Project Run Code Session concept above Codemode Session?"
 > **Domain expert:** "No. The concept is **Codemode Session**. Browser UI creates explicit Codemode Sessions with their own Event Stream Paths; Project MCP server connections reuse the MCP connection's existing Event Stream Path."
 
-> **Dev:** "Should MCP `run_code` take a project selector?"
+> **Dev:** "Should MCP `exec_js` take a project selector?"
 > **Domain expert:** "No. MCP is project-scoped: the **Project MCP Route** identifies the **Project**. Browser oRPC gets the project from the **Project Route** and resolves the stable **Project ID**."
 
 > **Dev:** "Does a Codemode Session init with the project slug?"
@@ -920,7 +925,7 @@ The provider composition case targets provider-to-provider Tool Function Calls: 
 > **Domain expert:** "Show Clerk's organization selection or creation flow before rendering the **OS2 App**."
 
 > **Dev:** "Does the MCP server require a Clerk JWT?"
-> **Domain expert:** "No. The MCP server requires a valid **Clerk OAuth Token**. JWT is the preferred Clerk token format for cheaper verification, but OS2 should not model MCP auth as JWT-only."
+> **Domain expert:** "No. The MCP server requires a valid OS2 admin token or Clerk user token. OAuth MCP clients use a **Clerk OAuth Token**; browserless first-party and e2e clients may use a **Clerk Session Token**. JWT is the preferred Clerk token format for cheaper verification, but OS2 should not model MCP auth as JWT-only."
 
 > **Dev:** "Should a request for a Project-owned hostname hit the OS2 App auth middleware before project routing?"
 > **Domain expert:** "No. The OS2 Worker first classifies the **Ingress Hostname**. If it is a **Project-Owned Hostname**, the request becomes **Project Ingress** before OS2 App auth runs."
@@ -999,7 +1004,7 @@ The provider composition case targets provider-to-provider Tool Function Calls: 
 - "session id" and "stream path" were conflated. Resolved: **Project ID** plus **Event Stream Path** is the **Codemode Session** identity.
 - "app" can mean the OS2 product or a managed project surface. Resolved: use **OS2 App** for this dashboard and **Project** for the managed app surface.
 - "personal organization" is misleading because Clerk treats personal accounts separately from organizations. Resolved: use **Personal Account** for Clerk's non-organization user context.
-- "MCP JWT" is too narrow for Clerk OAuth Applications. Resolved: use **Clerk OAuth Token** for MCP bearer tokens, regardless of Clerk's token format setting.
+- "MCP JWT" is too narrow for Clerk OAuth Applications and Clerk session-based e2e. Resolved: use **Clerk OAuth Token** for OAuth MCP bearer tokens and **Clerk Session Token** for first-party/e2e bearer tokens, regardless of Clerk's token format setting.
 - "project URL" was ambiguous between stable IDs and slugs. Resolved: use **Project Route** for the user-facing organization-slug/project-slug URL.
 - "MCP" can mean OS2 as an MCP server or OS2 as a client of another MCP server. Resolved: use **Project MCP Server Entry Point** plus **Project MCP Server Connection** for external clients connected to OS2, and **Outbound MCP From Our Client Capability** for OS2 connecting to external MCP servers as codemode Tool Providers.
 - "`IterateMcpServer`" names the product, not the domain concept. Resolved: use `ProjectMcpServerConnection` for the Durable Object class/catalog name.

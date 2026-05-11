@@ -1,4 +1,4 @@
-import { createPublicKey, randomBytes } from "node:crypto";
+import { createPublicKey } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { deriveClerkFrontendApiUrl } from "../src/lib/clerk-frontend-api.ts";
 
@@ -216,11 +216,6 @@ async function getJwtPublicKey(publishableKey: string) {
 function setDopplerSecrets(target: Target, instance: ClerkInstance, jwtKey: string | Buffer) {
   const secrets = new Map([
     ["APP_CONFIG_BASE_URL", target.baseUrl],
-    [
-      "APP_CONFIG_MCP_PROOF_SECRET",
-      readExistingDopplerSecret(target.dopplerConfig, "APP_CONFIG_MCP_PROOF_SECRET") ??
-        randomBytes(32).toString("base64url"),
-    ],
     ["APP_CONFIG_PROJECT_HOSTNAME_BASES", JSON.stringify([target.projectHostnameBase])],
     ["APP_CONFIG_CLERK__PUBLISHABLE_KEY", instance.publishable_key],
     ["APP_CONFIG_CLERK__SECRET_KEY", instance.secret_key!],
@@ -254,33 +249,6 @@ function setDopplerSecrets(target: Target, instance: ClerkInstance, jwtKey: stri
       );
     }
   }
-}
-
-function readExistingDopplerSecret(config: string, key: string) {
-  const result = spawnSync(
-    "doppler",
-    [
-      "run",
-      "--project",
-      "os2",
-      "--config",
-      config,
-      "--",
-      "node",
-      "-e",
-      `process.stdout.write(process.env[${JSON.stringify(key)}] || "")`,
-    ],
-    {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
-
-  if (result.status !== 0) {
-    return null;
-  }
-
-  return result.stdout.trim() || null;
 }
 
 function exec(command: string, args: string[]) {
