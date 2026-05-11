@@ -1,7 +1,7 @@
 import alchemy, { type Scope } from "alchemy";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { z } from "zod";
-import { compileRawAppConfigFromEnv, parseAppConfigFromEnv } from "../apps/config.ts";
+import { compileRawAppConfigFromEnv } from "../apps/config.ts";
 import type { AppManifest } from "../apps/types.ts";
 import { slugify } from "../slugify.ts";
 
@@ -46,17 +46,12 @@ export async function initAlchemy<TSchema extends z.ZodTypeAny>(
   const alchemyEnv = AlchemyEnv.parse(env);
   if (alchemyEnv.ALCHEMY_LOCAL) delete env.CI;
 
-  const runtimeConfig = parseAppConfigFromEnv({
-    configSchema,
-    prefix: "APP_CONFIG_",
-    env,
-  }) as z.output<TSchema>;
-
   const rawRuntimeConfig = compileRawAppConfigFromEnv({
     configSchema,
     prefix: "APP_CONFIG_",
     env,
   }) as Record<string, unknown>;
+  const runtimeConfig = configSchema.parse(rawRuntimeConfig) as z.output<TSchema>;
 
   const stateStore = (scope: Scope) =>
     scope.local

@@ -308,7 +308,7 @@ function unwrapConfigSchema(schema: z.ZodTypeAny): z.ZodTypeAny {
   return current;
 }
 
-function assertKnownConfigOverrideKeys(options: {
+function warnForUnknownConfigOverrideKeys(options: {
   configSchema: z.ZodTypeAny;
   overrides: unknown;
   prefix: string;
@@ -334,15 +334,23 @@ function assertKnownConfigOverrideKeys(options: {
     const childPath = [...path, key];
     const childSchema = configSchema.shape[key] as z.ZodTypeAny | undefined;
     if (!childSchema) {
-      throw new Error(
-        `Unknown config key "${formatConfigPath(childPath)}" from env var "${formatEnvOverrideKey(
-          options.prefix,
-          childPath,
-        )}". This env var is not consumed by the config schema.`,
+      console.warn(
+        [
+          "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
+          "WARNING: UNKNOWN APP CONFIG OVERRIDE",
+          `Unknown config key "${formatConfigPath(childPath)}" from env var "${formatEnvOverrideKey(
+            options.prefix,
+            childPath,
+          )}". This env var is not consumed by the config schema.`,
+          "Deployment will continue, but this config value is being ignored by the typed runtime config.",
+          "Add the key to the app config schema or remove the env var from Doppler.",
+          "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
+        ].join("\n"),
       );
+      continue;
     }
 
-    assertKnownConfigOverrideKeys({
+    warnForUnknownConfigOverrideKeys({
       configSchema: childSchema,
       overrides: value,
       prefix: options.prefix,
@@ -453,9 +461,9 @@ export interface CompileRawAppConfigFromEnvOptions<TSchema extends z.ZodTypeAny>
  * - `APP_CONFIG_LOGS__STDOUT_FORMAT=raw` -> `logs.stdoutFormat`
  * - `APP_CONFIG_POSTHOG='{"apiKey":"phc_xxx"}'` -> `posthog`
  *
- * Prefixed overrides are validated against `configSchema` before the final
- * merge so typos fail early during bootstrap and in runtime entrypoints,
- * instead of being silently ignored.
+ * Prefixed overrides are checked against `configSchema` before the final
+ * merge so typos are loudly reported during bootstrap and in runtime
+ * entrypoints, instead of being silently ignored.
  */
 export function parseAppConfigFromEnv<TSchema extends z.ZodTypeAny>({
   configSchema,
@@ -481,7 +489,7 @@ export function compileRawAppConfigFromEnv<TSchema extends z.ZodTypeAny>({
   const baseConfig = parseRawAppConfig(configEnv[baseKey], baseKey);
   const overrides = unflattenEnv(prefix, configEnv);
 
-  assertKnownConfigOverrideKeys({
+  warnForUnknownConfigOverrideKeys({
     configSchema,
     overrides,
     prefix,
