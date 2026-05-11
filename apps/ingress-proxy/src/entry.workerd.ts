@@ -14,6 +14,8 @@ const config = parseAppConfigFromEnv({
   env: workerEnv as Record<string, unknown>,
 });
 
+const configuredManagementHost = config.baseUrl ? new URL(config.baseUrl).host : null;
+
 function isManagementHost(host: string | null) {
   if (!host) return true;
 
@@ -21,6 +23,7 @@ function isManagementHost(host: string | null) {
     host === "localhost" ||
     host === "127.0.0.1" ||
     host === "::1" ||
+    host === configuredManagementHost ||
     host === "ingress.iterate.com" ||
     host === "dev-placeholder.ingress.iterate.com" ||
     host.endsWith(".workers.dev")
