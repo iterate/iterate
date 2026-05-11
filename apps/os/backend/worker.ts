@@ -1,3 +1,4 @@
+import jsonata from "@mmkal/jsonata/sync";
 import { Hono, type Context } from "hono";
 import { minimatch } from "minimatch";
 import { parseRouter } from "trpc-cli";
@@ -11,16 +12,16 @@ import { onError } from "@orpc/server";
 import { RequestHeadersPlugin } from "@orpc/server/plugins";
 import { createRouterClient } from "@orpc/server";
 import { sql } from "drizzle-orm";
-import { initLogger } from "evlog";
-import { createWorkersLogger, initWorkersLogger } from "evlog/workers";
 import tanstackStartServerEntry from "@tanstack/react-start/server-entry";
 import {
   isProjectIngressHostname,
   parseProjectIngressHostname,
 } from "@iterate-com/shared/project-ingress";
+import dedent from "dedent";
 import { parseBearerToken } from "@iterate-com/shared/bearer";
 import type { CloudflareEnv } from "../env.ts";
 import { isNonProd } from "../env.ts";
+import * as standardSchema from "./standard-schema/index.ts";
 import { getDb } from "./db/client.ts";
 import { getOAuthMirroredSession, getOsIterateAuth } from "./auth/auth-worker-session.ts";
 import { PROJECT_INGRESS_AUTH_TOKEN_COOKIE } from "./auth/constants.ts";
@@ -37,14 +38,8 @@ import { posthogProxyApp } from "./integrations/posthog/proxy.ts";
 import { egressProxyApp } from "./egress-proxy/egress-proxy.ts";
 import { egressApprovalsApp } from "./routes/egress-approvals.ts";
 import { workerRouter, type ORPCContext } from "./orpc/router.ts";
-import {
-  flushRequestEvlog,
-  log as evlog,
-  setRequestEvlogFlushHandler,
-  withRequestEvlogContext,
-} from "./evlog.ts";
-import { sendEvlogExceptionToPostHog, type PostHogUserContext } from "./lib/posthog.ts";
-import { logger } from "./tag-logger.ts";
+import { appendDevLogFile, logger, recordBufferedLog } from "./logging/index.ts";
+import { sendLogExceptionToPostHog, type PostHogUserContext } from "./lib/posthog.ts";
 import { registerConsumers } from "./outbox/consumers.ts";
 import { queuer } from "./outbox/outbox-queuer.ts";
 import * as workerConfig from "./worker-config.ts";
@@ -94,31 +89,41 @@ registerConsumers();
 const appStage =
   process.env.VITE_APP_STAGE ?? process.env.APP_STAGE ?? process.env.NODE_ENV ?? "development";
 
-setRequestEvlogFlushHandler(sendEvlogExceptionToPostHog);
+const getLogKeepExpression = () => {
+  if (process.env.EVLOG_KEEP) {
+    throw new Error("EVLOG_KEEP is no longer supported. Use LOG_KEEP instead.");
+  }
+  const expr =
+    process.env.LOG_KEEP ||
+    dedent`
+      $contains(request.path, '/api/integrations/posthog/proxy') = false /* posthog proxy is slow but frequent */
+      and (
+        (request.status ?? 999) > 299
+        or (meta.durationMs ?? 999) >= 500
+        or $count(errors) > 0
+        or $contains(request.url, 'logmepls')
+      )
+    `;
+  return jsonata(expr);
+};
+const logKeepExpression = getLogKeepExpression();
 
-if (import.meta.env.DEV) {
-  // Use initLogger directly in dev to enable pretty tree-format output.
-  // initWorkersLogger hardcodes pretty: false, which is correct for production
-  // (CF Workers dashboard needs raw objects) but noisy locally.
-  initLogger({
-    env: {
-      service: "os",
-      environment: appStage,
-    },
-    pretty: true,
-    stringify: false,
-  });
-} else {
-  initWorkersLogger({
-    env: {
-      service: "os",
-      environment: appStage,
-    },
-  });
-}
+logger.globalExitHandlers = [];
+logger.globalExitHandlers.push(recordBufferedLog);
+logger.globalExitHandlers.push(async (log, helpers) => {
+  const keep = Boolean(logKeepExpression.evaluate(log));
+  if (import.meta.env.DEV) {
+    if (keep) process.stdout.write(helpers.formatPrettyLogEvent(log) + "\n");
+    await appendDevLogFile(log);
+    return;
+  }
+
+  if (keep) process.stdout.write(helpers.formatJsonLogEvent(log) + "\n");
+});
 
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 app.use(contextStorage());
+export { app };
 
 function getPostHogUserContext(
   c: Context<{ Bindings: CloudflareEnv; Variables: Variables }>,
@@ -129,62 +134,66 @@ function getPostHogUserContext(
   };
 }
 
-app.use("*", async (c, next) => {
-  const requestLogger = createWorkersLogger(c.req.raw);
-  const currentContext = requestLogger.getContext();
-  const requestId =
-    typeof currentContext.requestId === "string" && currentContext.requestId.length > 0
-      ? currentContext.requestId
-      : crypto.randomUUID();
-  const method = typeof currentContext.method === "string" ? currentContext.method : c.req.method;
-  const path = typeof currentContext.path === "string" ? currentContext.path : c.req.path;
+const requestInfoForWideLog = (
+  requestId: string,
+  c: Context<{ Bindings: CloudflareEnv; Variables: Variables }>,
+) => {
+  const url = new URL(c.req.raw.url);
+  return {
+    path: c.req.path,
+    status: -1,
+    method: c.req.method,
+    id: requestId,
+    url: c.req.raw.url,
+    hostname: url.hostname,
+    traceparent: c.req.raw.headers.get("traceparent"),
+    cfRay: c.req.raw.headers.get("cf-ray"),
+    timezone: c.req.raw.cf?.timezone,
+  };
+};
+export type RequestInfoForWideLog = ReturnType<typeof requestInfoForWideLog>;
 
-  requestLogger.set({
-    request: {
-      id: requestId,
-      method,
-      path,
-      status: 500,
-      duration: 0,
-      waitUntil: false,
-    },
-    user: {
-      id: "anonymous",
-      email: "unknown",
-    },
+function seedRequestLogContext(
+  c: Context<{ Bindings: CloudflareEnv; Variables: Variables }>,
+  requestId: string,
+): void {
+  logger.set({
+    service: "os",
+    environment: appStage,
+    request: requestInfoForWideLog(requestId, c),
+    user: { id: "anonymous", email: "unknown" },
   });
+  if (isNonProd) {
+    const posthogEgressOverride = c.req.header("x-replace-posthog-egress");
+    if (posthogEgressOverride) {
+      logger.set({
+        egress: {
+          ["https://eu.i.posthog.com"]: posthogEgressOverride,
+        },
+      });
+    }
+  }
+}
 
-  const requestStartedAt = Date.now();
-  return withRequestEvlogContext(
-    {
-      logger: requestLogger,
-      request: {
-        requestId,
-        method,
-        path,
-      },
-      env: c.env,
-      executionCtx: c.executionCtx,
-    },
-    async () => {
-      let status = 500;
-      try {
-        await next();
-        status = c.res.status;
-      } finally {
-        const user = getPostHogUserContext(c);
-        const duration = Date.now() - requestStartedAt;
-        evlog.set({
-          request: {
-            status,
-            duration,
-          },
-          user,
-        });
-        flushRequestEvlog();
-      }
-    },
-  );
+app.use("*", async (c, next) => {
+  const requestId = c.req.header("cf-ray")?.trim() || crypto.randomUUID();
+
+  return logger.run(async ({ store }) => {
+    seedRequestLogContext(c, requestId);
+    store.exitHandlers.push((log) => {
+      if (!log.errors?.length) return;
+      c.executionCtx.waitUntil(sendLogExceptionToPostHog({ log, env: c.env }));
+    });
+
+    try {
+      const result = await next();
+      logger.set({ request: { status: c.res.status } });
+      return result;
+    } finally {
+      c.res.headers.set("x-iterate-request-id", requestId);
+      logger.set({ user: getPostHogUserContext(c) });
+    }
+  });
 });
 
 app.use("*", async (c, next) => {
@@ -202,6 +211,15 @@ app.get("/api/observability", (c) => {
       note: "Viewer runs inside the sandbox",
     },
   });
+});
+
+app.get("/api/testing/throw-hono-error", (c) => {
+  if (!isNonProd) {
+    return c.json({ error: "Not found" }, 404);
+  }
+
+  const marker = c.req.query("marker") ?? "default";
+  throw new Error(`[test_hono_error] ${marker}`);
 });
 
 app.post("/api/debug/trigger-error", (c) => {
@@ -415,18 +433,17 @@ app.get(PROJECT_INGRESS_PROXY_AUTH_EXCHANGE_PATH, async (c) => {
 });
 
 app.onError((err, c) => {
-  const user = getPostHogUserContext(c);
-  logger.error(
-    `${err instanceof Error ? err.message : String(err)} (hono unhandled error)`,
-    {
-      request: {
-        path: c.req.path,
-        method: c.req.method,
-        status: 500,
-      },
-      user,
-    },
-    err,
+  c.executionCtx.waitUntil(
+    logger.run(async ({ store }) => {
+      seedRequestLogContext(c, c.req.header("cf-ray")?.trim() || crypto.randomUUID());
+      logger.set({ user: getPostHogUserContext(c) });
+      store.exitHandlers.push((log) => {
+        if (!log.errors?.length) return;
+        c.executionCtx.waitUntil(sendLogExceptionToPostHog({ log, env: c.env }));
+      });
+      logger.set({ request: { status: 500 } });
+      logger.error("Hono unhandled error", err);
+    }),
   );
   return c.json({ error: "Internal Server Error" }, 500);
 });
@@ -437,6 +454,9 @@ function handleOrpcError(
   request: { url: URL | string },
 ): void {
   const url = request.url.toString();
+  const resolvedError = error instanceof Error ? error : new Error(String(error));
+  if (resolvedError !== error) resolvedError.name = "NonErrorThrowable";
+  const pretty = standardSchema.prettifyStandardSchemaError(resolvedError.cause);
   const maybeStatus =
     typeof error === "object" &&
     error !== null &&
@@ -444,34 +464,25 @@ function handleOrpcError(
     typeof (error as { status?: unknown }).status === "number"
       ? (error as { status: number }).status
       : undefined;
-  const errorDetails =
-    error instanceof Error
-      ? {
-          name: error.name,
-          message: error.message,
-          stack: error.stack ?? "stack unavailable",
-        }
-      : {
-          name: "NonErrorThrowable",
-          message: String(error),
-          stack: new Error(String(error)).stack ?? "stack unavailable",
-        };
-  const message = `oRPC Error ${maybeStatus ?? "unknown"} ${url}: ${String(
-    (error as { message?: unknown })?.message ?? error,
-  )}`;
-  if (!maybeStatus || maybeStatus >= 500) {
-    if (kind === "daemon") {
-      logger.error(message, errorDetails, error);
-    } else {
-      logger.error(message, errorDetails);
-    }
+  const effectiveStatus = maybeStatus ?? 999;
+  const errorDetails = {
+    name: resolvedError.name,
+    message: resolvedError.message,
+    stack: resolvedError.stack ?? "stack unavailable",
+    kind,
+    url,
+  };
+  const message =
+    pretty ??
+    `oRPC Error ${maybeStatus ?? "unknown"} ${url}: ${String(
+      (error as { message?: unknown })?.message ?? error,
+    )}`;
+
+  logger.set({ request: { status: effectiveStatus } });
+  if (effectiveStatus >= 500) {
+    logger.error(message, errorDetails, resolvedError);
   } else {
-    if (kind === "daemon") {
-      logger.set({ status: maybeStatus, url });
-    } else {
-      logger.set({ request: { status: maybeStatus } });
-    }
-    logger.warn(message);
+    logger.warn(message, { clientErrors: [errorDetails] });
   }
 }
 

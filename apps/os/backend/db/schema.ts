@@ -494,6 +494,9 @@ export type OutboxEventContext = {
     consumerName: string;
     jobId: number | string;
   };
+  telemetry?: {
+    egress?: Record<string, string>;
+  };
 };
 
 export const outboxEvent = pgTable(

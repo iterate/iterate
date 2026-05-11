@@ -42,6 +42,15 @@ export type OutboxCausation = {
   jobId: number | string;
 };
 
+export type OutboxTelemetryContext = {
+  egress?: Record<string, string>;
+};
+
+export type OutboxEventContext = Record<string, unknown> & {
+  causedBy?: OutboxCausation;
+  telemetry?: OutboxTelemetryContext;
+};
+
 export const outboxALS = new AsyncLocalStorage<OutboxCausation>();
 
 // Minimal DB interface - just needs to run raw SQL via drizzle's execute
@@ -138,12 +147,27 @@ export type ConsumersRecord = Record<`eventName:${string}`, ConsumersForEvent>;
 
 export type QueuePeekOptions = { limit?: number; offset?: number; minReadCount?: number };
 
-export type QueuerEvent = {
+export type ParsedQueuerEvent = {
+  kind: "parsed-job";
   job: ConsumerJobQueueMessage;
   error?: string;
   /** True when the job has exhausted retries and is being archived (DLQ). */
   isDLQ?: boolean;
 };
+
+export type MalformedQueuerEvent = {
+  kind: "malformed-job";
+  rawJob: Record<string, unknown>;
+  msgId: number | string;
+  enqueuedAt: string;
+  vt: string;
+  readCt: number;
+  eventContext: unknown;
+  error: string;
+  isDLQ: true;
+};
+
+export type QueuerEvent = ParsedQueuerEvent | MalformedQueuerEvent;
 
 export type QueuerEventMap = {
   statusChange: QueuerEvent;
@@ -204,6 +228,67 @@ const jsonbify = (val: unknown) => {
   );
   return text.append(sql`::jsonb`);
 };
+
+function toMalformedQueuerEvent(
+  rawJob: Record<string, unknown>,
+  error: unknown,
+): MalformedQueuerEvent {
+  const rawMessage =
+    typeof rawJob.message === "object" && rawJob.message !== null
+      ? (rawJob.message as Record<string, unknown>)
+      : {};
+
+  return {
+    kind: "malformed-job",
+    rawJob,
+    msgId:
+      typeof rawJob.msg_id === "number" || typeof rawJob.msg_id === "string" ? rawJob.msg_id : -1,
+    enqueuedAt:
+      typeof rawJob.enqueued_at === "string" ? rawJob.enqueued_at : new Date().toISOString(),
+    vt: typeof rawJob.vt === "string" ? rawJob.vt : new Date().toISOString(),
+    readCt: typeof rawJob.read_ct === "number" ? rawJob.read_ct : 0,
+    eventContext: rawMessage.event_context ?? null,
+    error: String(error),
+    isDLQ: true,
+  };
+}
+
+function getLoggerEgress(): Record<string, string> | undefined {
+  const log = typeof logger.peek === "function" ? logger.peek() : undefined;
+  const egress = log?.egress;
+  if (!egress || typeof egress !== "object") return undefined;
+
+  return Object.fromEntries(
+    Object.entries(egress as Record<string, unknown>).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string",
+    ),
+  );
+}
+
+function mergeOutboxEventContext(
+  context: unknown,
+  causation?: OutboxCausation,
+): OutboxEventContext {
+  const loggerEgress = getLoggerEgress();
+  const base = { ...(context as OutboxEventContext) };
+  const baseEgress = toStringRecord(base.telemetry?.egress);
+  const egress = baseEgress || loggerEgress ? { ...baseEgress, ...loggerEgress } : undefined;
+
+  return {
+    ...base,
+    ...(causation ? { causedBy: causation } : {}),
+    ...(egress ? { telemetry: { ...base.telemetry, egress } } : {}),
+  };
+}
+
+function toStringRecord(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== "object") return undefined;
+
+  const entries = Object.entries(value).filter(
+    (entry): entry is [string, string] => typeof entry[1] === "string",
+  );
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
 
 export type CTEParams<T, Name extends string, Payload> = {
   query: CTEableQuery<T>;
@@ -362,7 +447,12 @@ export const createPgmqQueuer = (queueOptions: {
         select appended.* from appended cross join archived limit 1
       `);
       if (!updated) throw new Error(`Failed to archive message ${params.job.msg_id}`);
-      emit("statusChange", { job: updated, error: params.error, isDLQ: true });
+      emit("statusChange", {
+        kind: "parsed-job",
+        job: updated,
+        error: params.error,
+        isDLQ: true,
+      });
       logger.warn(params.logMessage);
     };
     const jobQueueMessages = await exec<{ msg_id: number | string }>(
@@ -469,7 +559,7 @@ export const createPgmqQueuer = (queueOptions: {
           )
           select updated.* from updated cross join archived limit 1
         `);
-        emit("statusChange", { job: updated });
+        emit("statusChange", { kind: "parsed-job", job: updated });
         logger.info(`[outbox] DONE msg_id=${job.msg_id}. Result: ${result}`);
       } catch (e) {
         if (!job) {
@@ -478,6 +568,7 @@ export const createPgmqQueuer = (queueOptions: {
           await exec(sql`
             select * from pgmq.archive(queue_name => ${queueName}::text, msg_id => ${msgId}::bigint)
           `);
+          emit("statusChange", toMalformedQueuerEvent(_job as Record<string, unknown>, e));
           continue;
         }
         let retryFn = consumer?.retry ?? defaultRetryFn;
@@ -516,7 +607,12 @@ export const createPgmqQueuer = (queueOptions: {
             )
             select updated.* from updated cross join vt_bump limit 1
           `);
-          emit("statusChange", { job: updated, error: String(e), isDLQ: false });
+          emit("statusChange", {
+            kind: "parsed-job",
+            job: updated,
+            error: String(e),
+            isDLQ: false,
+          });
         }
       }
     }
@@ -532,7 +628,7 @@ export const createPgmqQueuer = (queueOptions: {
   const enqueue: Queuer<DBLike>["enqueue"] = async (db, params) => {
     logger.info(`[outbox] adding to pgmq:${params.name}`);
     const causation = outboxALS.getStore();
-    const context = causation ? { causedBy: causation } : {};
+    const context = mergeOutboxEventContext({}, causation);
     const exec = getExec(db);
 
     const deduplicationKey = params.deduplicationKey ?? null;
@@ -597,8 +693,10 @@ export const createPgmqQueuer = (queueOptions: {
 
     const { name } = params;
     const payload = resolveFromQueryResult(params.payload);
-    let context = resolveFromQueryResult(params.context || {});
-    if (causation) context = { ...context, causedBy: causation };
+    const context = mergeOutboxEventContext(
+      resolveFromQueryResult(params.context || {}),
+      causation,
+    );
 
     const exec = getExec(db);
     const getSQL = () => {
