@@ -1,7 +1,7 @@
 import { getInitializedStreamStub } from "@iterate-com/shared/streams/helpers";
+import { StreamPath } from "@iterate-com/shared/streams/types";
 import type { ClerkAuth } from "~/context.ts";
 import type { AppContext } from "~/context.ts";
-import { StreamPath } from "@iterate-com/shared/streams/types";
 import {
   consumeOAuthState,
   getProjectConnectionByWebhookIdentifier,
