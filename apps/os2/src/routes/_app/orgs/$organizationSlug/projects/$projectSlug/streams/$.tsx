@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { orpc } from "~/orpc/client.ts";
+import { createBrowserOpenApiClient, orpc } from "~/orpc/client.ts";
 import { ProjectStreamView } from "~/components/project-stream-view.tsx";
 import { streamPathFromSplat } from "~/lib/stream-links.ts";
 
@@ -33,8 +33,21 @@ function ProjectStreamDetailPage() {
   const params = Route.useParams();
   const { project, streamPath } = Route.useLoaderData();
 
+  async function submitMessage(message: string) {
+    await createBrowserOpenApiClient().project.streams.appendBatch({
+      events: [{ type: "events.iterate.com/os2/manual-event", payload: { message } }],
+      projectSlugOrId: project.id,
+      streamPath,
+    });
+  }
+
   return (
     <ProjectStreamView
+      defaultComposerMode="raw"
+      messageComposer={{
+        onSubmit: submitMessage,
+        placeholder: "Message this stream",
+      }}
       organizationSlug={params.organizationSlug}
       projectSlug={params.projectSlug}
       projectSlugOrId={project.id}

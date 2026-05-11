@@ -672,7 +672,13 @@ describe("stream processor contract types", () => {
 
   it("types runProcessorReduce as consumed-event reduction or ignored event", () => {
     const processor = implementProcessor(codemodeProcessorContract, {});
-    const event = null as unknown as StreamEvent;
+    const event: StreamEvent = {
+      streamPath: "test",
+      type: "unknown-event",
+      payload: {},
+      offset: 1,
+      createdAt: new Date().toISOString(),
+    };
 
     const result = runProcessorReduce({
       processor,

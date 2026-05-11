@@ -619,8 +619,6 @@ function ChildStreamCreatedLine({
       path={element.props.childPath}
       label={label}
       className="w-full max-w-full overflow-hidden"
-      startChars={28}
-      endChars={18}
     />
   );
   const value =

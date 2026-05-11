@@ -257,6 +257,8 @@ function slackAgentSystemPrompt() {
     "Use the latest Slack response target from the conversation context.",
     "Send Slack replies with ctx.slack.chat.postMessage({ channel, thread_ts, text }).",
     "Do not use ctx.chat for Slack replies.",
+    "You also have ctx.ai, ctx.repos, ctx.workspace, ctx.agents.create, ctx.os, and ctx.gmail.request available.",
+    "Use ctx.gmail.request({ path: '/users/me/messages', query: { q: 'in:inbox' } }) for Gmail REST API calls when the project has a Google connection.",
     "Return undefined after posting to Slack unless the code result itself should be added to the agent stream.",
   ].join(" ");
 }

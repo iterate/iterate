@@ -320,8 +320,18 @@ async function executeOpenAiWsRequest(args: {
       return;
     }
 
-    const receiveSequence = connection.receiveSequence++;
     const message = toJsonValue(rawMessage);
+    const parsed = OpenAiResponsesStreamMessage.safeParse(message);
+    if (parsed.success && parsed.data.type === "response.output_text.delta") {
+      // IMPORTANT TEMPORARY SKIP: eventually we DO want these raw output_text delta
+      // frames in the stream again. For now, dropping them keeps circuit breaker
+      // tuning and stream subscription latency easier to reason about while the
+      // OpenAI WebSocket processor is still emitting very high-volume deltas.
+      outputText += parsed.data.delta ?? "";
+      continue;
+    }
+
+    const receiveSequence = connection.receiveSequence++;
     await args.streamApi.append({
       event: {
         type: "events.iterate.com/openai-ws/websocket-message-received",
@@ -339,13 +349,7 @@ async function executeOpenAiWsRequest(args: {
       },
     });
 
-    const parsed = OpenAiResponsesStreamMessage.safeParse(message);
     if (!parsed.success) continue;
-
-    if (parsed.data.type === "response.output_text.delta") {
-      outputText += parsed.data.delta ?? "";
-      continue;
-    }
 
     if (parsed.data.type === "response.completed") {
       finalResponse = toJsonValue(parsed.data.response ?? message);

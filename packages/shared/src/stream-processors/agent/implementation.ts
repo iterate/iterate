@@ -113,29 +113,8 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
           });
           return;
         case "events.iterate.com/agent/llm-request-queued":
-          await appendLlmEventContext({
-            streamApi,
-            event,
-            key: "render-llm-request-queued",
-            content: eventBlock({ offset: event.offset, type: event.type }),
-          });
           return;
         case "events.iterate.com/agent/llm-request-completed":
-          await appendLlmEventContext({
-            streamApi,
-            event,
-            key: "render-llm-request-completed",
-            content: eventBlock({
-              offset: event.offset,
-              type: event.type,
-              fields: {
-                llmRequestId: event.payload.llmRequestId,
-                provider: event.payload.provider,
-                status: event.payload.result.status,
-                durationMs: event.payload.durationMs,
-              },
-            }),
-          });
           await handleTerminalLlmRequestEvent({
             sourceEvent: event,
             streamApi,
@@ -511,23 +490,10 @@ async function appendEventTypeExplanation(args: { streamApi: AgentStreamApi; eve
 }
 
 function eventTypeExplanation(eventType: string): string | null {
-  if (eventType === "events.iterate.com/agent/llm-request-queued") {
-    return eventTypeExplanationBlock({
-      type: eventType,
-      meaning:
-        "A trigger arrived while an LLM request was running and should be handled after the current request ends.",
-    });
-  }
   if (eventType === "events.iterate.com/agent/llm-request-cancelled") {
     return eventTypeExplanationBlock({
       type: eventType,
       meaning: "The current scheduled LLM request was interrupted or timed out before handoff.",
-    });
-  }
-  if (eventType === "events.iterate.com/agent/llm-request-completed") {
-    return eventTypeExplanationBlock({
-      type: eventType,
-      meaning: "The current LLM request reached a terminal success or failure result.",
     });
   }
   if (eventType === "events.iterate.com/codemode/tool-provider-registered") {

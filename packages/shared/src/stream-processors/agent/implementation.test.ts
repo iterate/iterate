@@ -73,6 +73,70 @@ describe("createAgentProcessor", () => {
     ]);
   });
 
+  it("does not render completed LLM request events into model-visible history", async () => {
+    const appended: StreamEventInput[] = [];
+    const processor = createAgentProcessor({
+      waitUntil: () => undefined,
+    });
+
+    await processor.implementation.afterAppend?.({
+      event: consumedAgentEvent({
+        type: "events.iterate.com/agent/llm-request-completed",
+        payload: {
+          llmRequestId: 43,
+          provider: "openai-ws",
+          durationMs: 6164,
+          result: { status: "success" },
+        },
+        offset: 44,
+      }),
+      previousState: {
+        ...registeredState(),
+        currentRequest: { phase: "requested", llmRequestId: 43 },
+      },
+      state: registeredState(),
+      streamApi: testStreamApi({ appended }),
+      signal: new AbortController().signal,
+    });
+
+    expect(appended).toEqual([
+      {
+        type: "events.iterate.com/agent/status-updated",
+        idempotencyKey: "agent/status-updated/idle/llm-request-completed@44",
+        payload: {
+          status: "idle",
+          reason: "llm-request-completed",
+          llmRequestId: 43,
+        },
+      },
+    ]);
+  });
+
+  it("does not render queued LLM request events into model-visible history", async () => {
+    const appended: StreamEventInput[] = [];
+    const processor = createAgentProcessor({
+      waitUntil: () => undefined,
+    });
+
+    await processor.implementation.afterAppend?.({
+      event: consumedAgentEvent({
+        type: "events.iterate.com/agent/llm-request-queued",
+        payload: {},
+        offset: 45,
+      }),
+      previousState: registeredState(),
+      state: {
+        ...registeredState(),
+        currentRequest: { phase: "requested", llmRequestId: 43 },
+        pendingTriggerCount: 1,
+      },
+      streamApi: testStreamApi({ appended }),
+      signal: new AbortController().signal,
+    });
+
+    expect(appended).toEqual([]);
+  });
+
   it("renders codemode tool-provider registrations into model-visible instructions", async () => {
     const appended: StreamEventInput[] = [];
     const processor = createAgentProcessor({

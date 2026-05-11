@@ -385,6 +385,24 @@ export type EventsStreamSlotName = keyof EventsStreamSlots;
  * This is not directly rendered. It exists so a reducer can track facts across
  * the event log, then project them into slots.
  */
+export type EventsStreamRegisteredEventExample = {
+  description: string;
+  payload: unknown;
+};
+
+export type EventsStreamRegisteredEvent = {
+  type: string;
+  description?: string;
+  examples?: EventsStreamRegisteredEventExample[];
+};
+
+export type EventsStreamRegisteredProcessor = {
+  slug: string;
+  version: string;
+  description: string;
+  ownedEvents: EventsStreamRegisteredEvent[];
+};
+
 export type EventsStreamActivityState = {
   eventCount: number;
   currentLlmRequestId: string | null;
@@ -392,6 +410,7 @@ export type EventsStreamActivityState = {
     message: string;
     offset: number;
   } | null;
+  registeredProcessors: EventsStreamRegisteredProcessor[];
 };
 
 /**

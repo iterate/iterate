@@ -15,7 +15,7 @@ import { Spinner } from "@iterate-com/ui/components/spinner";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Mail, MessageSquare } from "lucide-react";
 import { z } from "zod";
-import { orpc, orpcClient } from "~/orpc/client.ts";
+import { orpc } from "~/orpc/client.ts";
 
 const Search = z.object({
   error: z.string().optional(),
@@ -40,7 +40,6 @@ export const Route = createFileRoute(
 });
 
 function ProjectIntegrationsPage() {
-  const params = Route.useParams();
   const search = Route.useSearch();
   const { project } = Route.useLoaderData();
   const queryClient = useQueryClient();

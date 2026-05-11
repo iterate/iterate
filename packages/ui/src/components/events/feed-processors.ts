@@ -11,11 +11,13 @@ import type {
   EventsStreamBuiltInElement,
   EventsStreamGroupedRawEventElement,
   EventsStreamRawEventSummary,
+  EventsStreamRegisteredProcessor,
   EventsStreamViewReducer,
   EventsStreamViewState,
 } from "@iterate-com/ui/components/events/feed-items";
 
 const MAX_SAME_TYPE_RAW_GROUP = 50_000;
+const STREAM_PROCESSOR_REGISTERED_TYPE = "events.iterate.com/core/stream-processor-registered";
 const AGENT_SYSTEM_PROMPT_UPDATED_TYPE = "events.iterate.com/agent/system-prompt-updated";
 const AGENT_INPUT_ADDED_TYPE = "events.iterate.com/agent/input-added";
 const AGENT_OUTPUT_ADDED_TYPE = "events.iterate.com/agent/output-added";
@@ -28,6 +30,7 @@ const CODEMODE_SCRIPT_EXECUTION_REQUESTED_TYPE =
   "events.iterate.com/codemode/script-execution-requested";
 const CODEMODE_SCRIPT_EXECUTION_COMPLETED_TYPE =
   "events.iterate.com/codemode/script-execution-completed";
+const HIDDEN_FEED_EVENT_TYPES = new Set<string>([AGENT_OUTPUT_ADDED_TYPE]);
 
 /**
  * Renderer modes available in the shared stream view component.
@@ -67,6 +70,7 @@ function createInitialEventsStreamViewState(): EventsStreamViewState {
       eventCount: 0,
       currentLlmRequestId: null,
       latestStreamError: null,
+      registeredProcessors: [],
     },
   });
 }
@@ -138,6 +142,12 @@ export const rawJsonDumpEventsStreamViewReducer: EventsStreamViewReducer = {
     const previousDump = state.slots.feed[0];
     const previousEvents = previousDump?.type === "raw-json-dump" ? previousDump.props.events : [];
     const activity = reduceActivityState({ event, state });
+    if (HIDDEN_FEED_EVENT_TYPES.has(event.type)) {
+      return createEventsStreamViewState({
+        feed: state.slots.feed,
+        activity,
+      });
+    }
 
     return createEventsStreamViewState({
       feed: [
@@ -161,6 +171,13 @@ function createEventsStreamViewReducer(args: {
     slug: args.slug,
     createInitialState: createInitialEventsStreamViewState,
     reduce: ({ event, state }) => {
+      if (HIDDEN_FEED_EVENT_TYPES.has(event.type)) {
+        return createEventsStreamViewState({
+          feed: state.slots.feed,
+          activity: reduceActivityState({ event, state }),
+        });
+      }
+
       const feedItems = appendFeedItems({
         feedItems: state.slots.feed,
         nextItems: args.reduceEventToFeedItems(event),
@@ -277,6 +294,22 @@ function reduceActivityState(args: {
     ...args.state.activity,
     eventCount: args.state.activity.eventCount + 1,
   };
+
+  if (args.event.type === STREAM_PROCESSOR_REGISTERED_TYPE) {
+    const payload = readPayloadRecord(args.event);
+    if (payload != null) {
+      const processor = readRegisteredProcessor(payload);
+      if (processor != null) {
+        const existing = activity.registeredProcessors.find((p) => p.slug === processor.slug);
+        return {
+          ...activity,
+          registeredProcessors: existing
+            ? activity.registeredProcessors.map((p) => (p.slug === processor.slug ? processor : p))
+            : [...activity.registeredProcessors, processor],
+        };
+      }
+    }
+  }
 
   if (args.event.type === STREAM_ERROR_OCCURRED_TYPE) {
     const message = readStringPayloadField(args.event, "message") ?? "Stream error";
@@ -720,6 +753,36 @@ function readPayloadRecord(event: Event) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value != null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readRegisteredProcessor(
+  payload: Record<string, unknown>,
+): EventsStreamRegisteredProcessor | null {
+  const slug = typeof payload.slug === "string" ? payload.slug : null;
+  const version = typeof payload.version === "string" ? payload.version : null;
+  const description = typeof payload.description === "string" ? payload.description : "";
+  const ownedEvents = Array.isArray(payload.ownedEvents) ? payload.ownedEvents : null;
+  if (slug == null || version == null || ownedEvents == null) return null;
+
+  return {
+    slug,
+    version,
+    description,
+    ownedEvents: ownedEvents
+      .filter((e): e is Record<string, unknown> => isRecord(e) && typeof e.type === "string")
+      .map((e) => ({
+        type: e.type as string,
+        ...(typeof e.description === "string" ? { description: e.description } : {}),
+        ...(Array.isArray(e.examples) && e.examples.length > 0
+          ? {
+              examples: e.examples.filter(
+                (ex): ex is { description: string; payload: unknown } =>
+                  isRecord(ex) && typeof ex.description === "string",
+              ),
+            }
+          : {}),
+      })),
+  };
 }
 
 function getTimestamp(createdAt: string) {

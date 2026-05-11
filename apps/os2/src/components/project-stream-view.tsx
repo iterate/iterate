@@ -5,7 +5,10 @@ import {
   processEventsWithViewReducer,
   selectEventsStreamViewReducer,
 } from "@iterate-com/ui/components/events/feed-processors";
-import type { EventsStreamInputAction } from "@iterate-com/ui/components/events/feed-items";
+import type {
+  EventsStreamInputAction,
+  EventsStreamRegisteredProcessor,
+} from "@iterate-com/ui/components/events/feed-items";
 import {
   EventsStreamComposer,
   type EventsStreamComposerMode,
@@ -19,7 +22,7 @@ import {
 } from "@iterate-com/ui/components/events/stream-feed";
 import { EventsStreamLayoutMessageInput } from "@iterate-com/ui/components/events/stream-layout";
 import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
-import { parse as parseYaml } from "yaml";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { EventsDebugLink } from "~/components/events-debug-link.tsx";
 import { createBrowserOpenApiClient } from "~/orpc/client.ts";
 import { streamPathToSplat } from "~/lib/stream-links.ts";
@@ -66,6 +69,7 @@ const defaultRawEventPresets: readonly EventsStreamComposerRawPreset[] = [
 ];
 
 export function ProjectStreamView({
+  defaultComposerMode,
   emptyLabel = "No events in this stream yet.",
   headerAccessory,
   messageComposer,
@@ -74,6 +78,7 @@ export function ProjectStreamView({
   projectSlugOrId,
   streamPath,
 }: {
+  defaultComposerMode?: EventsStreamComposerMode;
   emptyLabel?: string;
   headerAccessory?: ReactNode;
   messageComposer?: ProjectStreamMessageComposer;
@@ -85,7 +90,7 @@ export function ProjectStreamView({
   const hasMessageComposer = messageComposer != null;
   const [composerText, setComposerText] = useState("");
   const [composerMode, setComposerMode] = useState<EventsStreamComposerMode>(
-    hasMessageComposer ? "message" : "raw",
+    defaultComposerMode ?? (hasMessageComposer ? "message" : "raw"),
   );
   const [rawComposerText, setRawComposerText] = useState(defaultRawEventPresets[0]?.value ?? "");
   const [selectedRawPresetId, setSelectedRawPresetId] = useState(DEFAULT_RAW_EVENT_PRESET_ID);
@@ -149,6 +154,11 @@ export function ProjectStreamView({
     [events, rendererMode],
   );
 
+  const rawPresets = useMemo(
+    () => buildRawPresets(viewState.activity.registeredProcessors),
+    [viewState.activity.registeredProcessors],
+  );
+
   async function submitMessage() {
     if (!messageComposer) return;
     const trimmed = composerText.trim();
@@ -186,7 +196,7 @@ export function ProjectStreamView({
 
   function selectRawPreset(presetId: string) {
     setSelectedRawPresetId(presetId);
-    const preset = defaultRawEventPresets.find((candidate) => candidate.id === presetId);
+    const preset = rawPresets.find((candidate) => candidate.id === presetId);
     if (preset != null) {
       setRawComposerText(preset.value);
     }
@@ -262,7 +272,7 @@ export function ProjectStreamView({
             value: rawComposerText,
             onValueChange: setRawComposerText,
             onSubmit: submitRawEvents,
-            presets: defaultRawEventPresets,
+            presets: rawPresets,
             selectedPresetId: selectedRawPresetId,
             onSelectedPresetIdChange: selectRawPreset,
           }}
@@ -284,4 +294,26 @@ function parseRawEventInputs(value: string): EventInput[] {
   const inputEvents = Array.isArray(parsed) ? parsed : [parsed];
 
   return inputEvents.map((inputEvent) => EventInput.parse(inputEvent));
+}
+
+function buildRawPresets(
+  processors: readonly EventsStreamRegisteredProcessor[],
+): EventsStreamComposerRawPreset[] {
+  const processorPresets: EventsStreamComposerRawPreset[] = [];
+
+  for (const processor of processors) {
+    for (const event of processor.ownedEvents) {
+      if (event.examples == null || event.examples.length === 0) continue;
+
+      for (const example of event.examples) {
+        processorPresets.push({
+          id: `${processor.slug}/${event.type}/${example.description}`,
+          label: `${processor.slug}: ${example.description}`,
+          value: stringifyYaml({ type: event.type, payload: example.payload }),
+        });
+      }
+    }
+  }
+
+  return [...defaultRawEventPresets, ...processorPresets];
 }

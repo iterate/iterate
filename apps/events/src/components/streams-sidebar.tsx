@@ -362,8 +362,6 @@ function StreamPathLink({
         path={path}
         label={getSidebarPathSegmentLabel(path)}
         className="leading-4 text-[10px]"
-        startChars={14}
-        endChars={12}
       />
       {childCount > 0 ? (
         <Badge
