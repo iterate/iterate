@@ -72,8 +72,8 @@ string.
 getSecret({ slug: "..." });
 ```
 
-- Resolve each matched Secret using `getOrInitializeDoStub({ namespace,
-structuredName })`, not a hand-rolled Durable Object name.
+- Resolve each matched Secret using `getInitializedDoStub({ allowCreate: true,
+namespace, name: structuredName })`, not a hand-rolled Durable Object name.
 - Forward the final request with substituted headers using ordinary `fetch()`.
 - For MVP, no egress policy enforcement is required beyond routing through this
   method.
@@ -96,13 +96,13 @@ type SecretStructuredName = {
 };
 ```
 
-- Callers should pass `structuredName: { projectId, slug }` to
-  `getOrInitializeDoStub`; the helper derives `name` and calls `initialize()`.
+- Callers should pass `name: { projectId, slug }` to
+  `getInitializedDoStub({ allowCreate: true, ... })`; the helper derives the
+  Durable Object name and calls `initialize()`.
 - Do not store Secret value in lifecycle initial state.
 - Use the base durable-object-utils stack:
   - `withDurableObjectCore`
-  - `withLifecycleHooks<SecretStructuredName>`
-  - `withD1ObjectCatalog`
+  - `withLifecycleHooks<SecretStructuredName>` with `d1ObjectCatalog`
   - `withPublicFetchRoute`
 - Use catalog class name `SecretDurableObject`.
 - Add D1 catalog indexes:

@@ -26,8 +26,7 @@ worker.
 Use the shared durable object utils:
 
 - `withDurableObjectCore`
-- `withLifecycleHooks<CodemodeSessionStructuredName>`
-- `withD1ObjectCatalog<CodemodeSessionStructuredName, { DO_CATALOG: D1Database }>`
+- `withLifecycleHooks<CodemodeSessionStructuredName>` with `d1ObjectCatalog`
 - `withOuterbase`
 - `withKvInspector`
 

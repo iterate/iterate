@@ -12,7 +12,6 @@ import {
   type StreamDurableObjectNamespace,
 } from "@iterate-com/shared/streams/helpers";
 import type { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
-import { withD1ObjectCatalog } from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
 import { withDurableObjectCore } from "@iterate-com/shared/durable-object-utils/mixins/with-durable-object-core";
 import { withKvInspector } from "@iterate-com/shared/durable-object-utils/mixins/with-kv-inspector";
 import { withLifecycleHooks } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
@@ -111,21 +110,21 @@ type DisposableRpcValue = {
   [Symbol.dispose](): void;
 };
 
-const CodemodeSessionLifecycleBase = withD1ObjectCatalog<
+const CodemodeSessionLifecycleBase = withLifecycleHooks<
   CodemodeSessionStructuredName,
+  undefined,
   Pick<CodemodeSessionEnv, "DO_CATALOG">
 >({
-  className: "CodemodeSession",
-  getDatabase: (env) => env.DO_CATALOG,
-  indexes: {
-    projectId: (params) => params.projectId,
-    streamPath: (params) => params.streamPath,
+  d1ObjectCatalog: {
+    className: "CodemodeSession",
+    getDatabase: (env) => env.DO_CATALOG,
+    indexes: {
+      projectId: (params) => params.projectId,
+      streamPath: (params) => params.streamPath,
+    },
   },
-})(
-  withLifecycleHooks({
-    nameSchema: CodemodeSessionStructuredName,
-  })(withDurableObjectCore(DurableObject)),
-);
+  nameSchema: CodemodeSessionStructuredName,
+})(withDurableObjectCore(DurableObject));
 
 const CodemodeSessionRunnerBase = withStreamProcessorRunner<
   CodemodeSessionStructuredName,

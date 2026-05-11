@@ -1,7 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { StreamSocketFrame } from "@iterate-com/shared/streams/stream-socket-types";
 import { StreamPath } from "@iterate-com/shared/streams/types";
-import { withD1ObjectCatalog } from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
 import { withDurableObjectCore } from "@iterate-com/shared/durable-object-utils/mixins/with-durable-object-core";
 import { withKvInspector } from "@iterate-com/shared/durable-object-utils/mixins/with-kv-inspector";
 import { withLifecycleHooks } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
@@ -54,16 +53,19 @@ export function createStreamProcessorRunnerDurableObject<
     structuredName: StreamProcessorRunnerName;
   }): Processor<Contract>;
 }) {
-  const Core = withD1ObjectCatalog<StreamProcessorRunnerName, StreamProcessorRunnerCatalogEnv>({
-    className: options.className,
-    getDatabase(env) {
-      return env.DB;
+  const Core = withLifecycleHooks<
+    StreamProcessorRunnerName,
+    undefined,
+    StreamProcessorRunnerCatalogEnv
+  >({
+    d1ObjectCatalog: {
+      className: options.className,
+      getDatabase(env) {
+        return env.DB;
+      },
     },
-  })(
-    withLifecycleHooks({
-      nameSchema: StreamPath,
-    })(withDurableObjectCore(DurableObject)),
-  );
+    nameSchema: StreamPath,
+  })(withDurableObjectCore(DurableObject));
 
   const ProcessorRunner = withStreamProcessorRunner<
     StreamProcessorRunnerName,

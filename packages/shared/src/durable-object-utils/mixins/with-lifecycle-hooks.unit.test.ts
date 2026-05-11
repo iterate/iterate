@@ -11,7 +11,7 @@ import {
 } from "../test-harness/initialize-fronting-worker.ts";
 import {
   deriveDurableObjectNameFromStructuredName,
-  getOrInitializeDoStub,
+  getInitializedDoStub,
 } from "./with-lifecycle-hooks.ts";
 
 const testEnv = env as {
@@ -114,8 +114,9 @@ describe("withLifecycleHooks", () => {
     });
   });
 
-  it("initializes through the free getOrInitializeDoStub helper", async () => {
-    const room = await getOrInitializeDoStub({
+  it("initializes through the free getInitializedDoStub helper", async () => {
+    const room = await getInitializedDoStub({
+      allowCreate: true,
       namespace: testEnv.ROOMS,
       name: {
         ownerUserId: "user-static",
@@ -128,7 +129,8 @@ describe("withLifecycleHooks", () => {
   });
 
   it("initializes from a deterministic name when callers omit the name", async () => {
-    const room = await getOrInitializeDoStub({
+    const room = await getInitializedDoStub({
+      allowCreate: true,
       namespace: testEnv.ROOMS,
       name: {
         ownerUserId: "user-derived",
@@ -154,7 +156,8 @@ describe("withLifecycleHooks", () => {
 
   it("rejects helper calls without a name", async () => {
     await expect(
-      getOrInitializeDoStub({
+      getInitializedDoStub({
+        allowCreate: true,
         namespace: testEnv.ROOMS,
       } as never),
     ).rejects.toThrow("requires name");
@@ -169,7 +172,8 @@ describe("withLifecycleHooks", () => {
     await room.initialize({ name });
 
     await expect(
-      getOrInitializeDoStub({
+      getInitializedDoStub({
+        allowCreate: true,
         namespace: testEnv.ROOMS,
         name: {
           ownerUserId: "user-order",
@@ -177,6 +181,44 @@ describe("withLifecycleHooks", () => {
       }).then((stub) => stub.getStructuredName()),
     ).resolves.toEqual({
       ownerUserId: "user-order",
+    });
+  });
+
+  it("can look up an initialized stub without creating lifecycle state", async () => {
+    const missing = await getInitializedDoStub({
+      allowCreate: false,
+      namespace: testEnv.LISTED_ROOMS,
+      name: {
+        ownerUserId: "user-lookup-missing",
+      },
+    });
+    expect(missing).toBeNull();
+
+    const created = await getInitializedDoStub({
+      allowCreate: true,
+      namespace: testEnv.LISTED_ROOMS,
+      name: {
+        ownerUserId: "user-lookup-existing",
+      },
+    });
+
+    await expect(created.getStructuredName()).resolves.toEqual({
+      ownerUserId: "user-lookup-existing",
+    });
+
+    await vi.waitFor(async () => {
+      const existing = await getInitializedDoStub({
+        allowCreate: false,
+        namespace: testEnv.LISTED_ROOMS,
+        name: {
+          ownerUserId: "user-lookup-existing",
+        },
+      });
+
+      expect(existing).not.toBeNull();
+      await expect(existing!.getStructuredName()).resolves.toEqual({
+        ownerUserId: "user-lookup-existing",
+      });
     });
   });
 
@@ -304,7 +346,8 @@ describe("withLifecycleHooks", () => {
 
   it("supports immutable initial state separate from the Durable Object name", async () => {
     const name = `initial-state-${crypto.randomUUID()}`;
-    const room = await getOrInitializeDoStub({
+    const room = await getInitializedDoStub({
+      allowCreate: true,
       namespace: testEnv.INITIAL_STATE_ROOMS,
       name,
       initialState: {
@@ -423,7 +466,7 @@ describe("withKvInspector", () => {
   });
 });
 
-describe("withD1ObjectCatalog", () => {
+describe("withLifecycleHooks D1 object catalog", () => {
   it("returns null when the object has not been initialized", async () => {
     const room = testEnv.LISTED_ROOMS.getByName("listed-uninitialized-unit");
 

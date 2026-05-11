@@ -65,7 +65,9 @@ const counterRunnerMixin = withStreamProcessorRunner<
 >(counterRunnerOptions);
 
 const CounterRoomBase = counterRunnerMixin(
-  withLifecycleHooks({ nameSchema: CounterStructuredName })(withDurableObjectCore(DurableObject)),
+  withLifecycleHooks({ d1ObjectCatalog: "none", nameSchema: CounterStructuredName })(
+    withDurableObjectCore(DurableObject),
+  ),
 );
 
 class CounterRoom extends CounterRoomBase<CounterEnv> {

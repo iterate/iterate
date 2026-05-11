@@ -6,8 +6,7 @@ Utilities here are experimental helpers for composing Cloudflare Durable Object 
 
 - `mixins/with-durable-object-core.ts` is the root adapter for mixins that need Cloudflare's protected Durable Object `ctx` APIs. It exposes small protected capabilities for local SQLite, synchronous KV, and the single platform alarm slot.
 - `mixins/with-app-config.ts` parses typed app runtime config from `APP_CONFIG` / `APP_CONFIG_*` Cloudflare env vars and exposes it as protected `this.config`.
-- `mixins/with-lifecycle-hooks.ts` adds reliable named initialization state and tiny lifecycle hooks for SQLite-backed Durable Objects.
-- `mixins/with-d1-object-catalog.ts` best-effort mirrors initialized objects into D1 tables owned by the mixin, with optional secondary indexes derived from structured names.
+- `mixins/with-lifecycle-hooks.ts` adds reliable named initialization state, tiny lifecycle hooks, and an explicit `d1ObjectCatalog` setting for best-effort D1 catalog projection.
 - `mixins/with-multiplexed-alarms.ts` stores many logical one-shot alarms behind Cloudflare's single Durable Object alarm slot.
 - `mixins/with-scheduler.ts` adds key-based one-shot, delayed, interval, cron, and RRULE scheduling on top of multiplexed alarms.
 - `mixins/with-stream-processor-runner.ts` stores stream processor reduced state/progress per processor slug and exposes protected catch-up / live-event / subscription runner methods. It assumes one stream path per Durable Object instance.
@@ -35,17 +34,20 @@ type Env = NeedsCatalog & {
   OTHER_BINDING: Fetcher;
 };
 
-const RoomBase = withD1ObjectCatalog<RoomStructuredName, NeedsCatalog>({
-  className: "Room",
-  getDatabase(env) {
-    return env.DO_CATALOG;
-  },
-  indexes: {
-    ownerUserId(params) {
-      return params.ownerUserId;
+const RoomBase = withLifecycleHooks<RoomStructuredName, undefined, NeedsCatalog>({
+  d1ObjectCatalog: {
+    className: "Room",
+    getDatabase(env) {
+      return env.DO_CATALOG;
+    },
+    indexes: {
+      ownerUserId(params) {
+        return params.ownerUserId;
+      },
     },
   },
-})(withLifecycleHooks({ nameSchema: RoomStructuredName })(withDurableObjectCore(DurableObject)));
+  nameSchema: RoomStructuredName,
+})(withDurableObjectCore(DurableObject));
 
 export class Room extends RoomBase<Env> {}
 ```
@@ -117,7 +119,9 @@ type WithSomeMixinResult<TBase> = TBase & Constructor<MembersAddedByTheMixin>;
 `DurableObject` class, keeping `TBase` in the return type keeps this valid:
 
 ```ts
-const Base = withLifecycleHooks({ nameSchema: RoomInit })(withDurableObjectCore(DurableObject));
+const Base = withLifecycleHooks({ d1ObjectCatalog: "none", nameSchema: RoomInit })(
+  withDurableObjectCore(DurableObject),
+);
 
 export class Room extends Base<Env> {}
 ```
@@ -125,16 +129,16 @@ export class Room extends Base<Env> {}
 Without `TBase`, TypeScript would know about the new members but forget that
 the returned class is still generic in `Env`.
 
-Some mixins also spell out a generic constructor surface explicitly:
+Some mixin options also spell out a generic constructor surface explicitly:
 
 ```ts
 abstract new <FinalEnv extends NeedsCatalog>(
   ctx: DurableObjectState,
   env: FinalEnv,
-) => DurableObject<FinalEnv> & D1ObjectCatalogMembers<RoomInit>
+) => DurableObject<FinalEnv> & LifecycleHooksMembers<RoomInit>
 ```
 
-That is how `withD1ObjectCatalog()` keeps the D1 requirement visible without
+That is how lifecycle `d1ObjectCatalog` keeps the D1 requirement visible without
 forcing the final app env to be exactly the small requirement:
 
 ```ts
@@ -146,12 +150,15 @@ type Env = NeedsCatalog & {
   OTHER_BINDING: Fetcher;
 };
 
-const Base = withD1ObjectCatalog<RoomInit, NeedsCatalog>({
-  className: "Room",
-  getDatabase(env) {
-    return env.DO_CATALOG;
+const Base = withLifecycleHooks<RoomInit, undefined, NeedsCatalog>({
+  d1ObjectCatalog: {
+    className: "Room",
+    getDatabase(env) {
+      return env.DO_CATALOG;
+    },
   },
-})(withLifecycleHooks({ nameSchema: RoomInit })(withDurableObjectCore(DurableObject)));
+  nameSchema: RoomInit,
+})(withDurableObjectCore(DurableObject));
 
 class Room extends Base<Env> {} // ok: Env has DO_CATALOG
 
@@ -196,7 +203,7 @@ const AgentProcessorBase = withStreamProcessorRunner<
     }) as ProcessorStreamApi<typeof AgentProcessorContract>;
   },
 })(
-  withLifecycleHooks({ nameSchema: AgentProcessorStructuredName })(
+  withLifecycleHooks({ d1ObjectCatalog: "none", nameSchema: AgentProcessorStructuredName })(
     withDurableObjectCore(DurableObject),
   ),
 );
@@ -215,7 +222,8 @@ class AgentProcessorDO extends AgentProcessorBase<Env> {
 Callers should initialize the object once with the immutable stream binding:
 
 ```ts
-const runner = await getOrInitializeDoStub({
+const runner = await getInitializedDoStub({
+  allowCreate: true,
   namespace: env.AGENT_PROCESSORS,
   name: { streamPath },
 });
@@ -268,10 +276,12 @@ room.assertInitialized();
 
 Cloudflare Durable Objects are primarily named by strings. That remains the
 base model here: use `namespace.getByName(name)` when you only need a stub, and
-use `getOrInitializeDoStub({ name })` when the object also uses lifecycle hooks:
+use `getInitializedDoStub({ allowCreate, name })` when the object also uses
+lifecycle hooks:
 
 ```ts
-const stub = await getOrInitializeDoStub({
+const stub = await getInitializedDoStub({
+  allowCreate: true,
   namespace: env.ROOMS,
   name: "room-a",
 });
@@ -296,7 +306,8 @@ derives the deterministic string name and initializes the object with that raw
 name:
 
 ```ts
-const stub = await getOrInitializeDoStub({
+const stub = await getInitializedDoStub({
+  allowCreate: true,
   namespace: env.CODEMODE_SESSIONS,
   name: {
     projectId: "proj_123",
@@ -338,10 +349,12 @@ const SessionInitialState = z.object({
 });
 
 const SessionBase = withLifecycleHooks({
+  d1ObjectCatalog: "none",
   initialStateSchema: SessionInitialState,
 })(withDurableObjectCore(DurableObject));
 
-const session = await getOrInitializeDoStub({
+const session = await getInitializedDoStub({
+  allowCreate: true,
   namespace: env.SESSIONS,
   name: sessionId,
   initialState: {
@@ -397,7 +410,11 @@ public Worker route while still owning its own internal `fetch()` paths:
 const ProjectBase = withPublicFetchRoute({
   namespaceSlug: "projects",
   defaultAddressing: "by-name",
-})(withLifecycleHooks({ nameSchema: ProjectInit })(withDurableObjectCore(DurableObject)));
+})(
+  withLifecycleHooks({ d1ObjectCatalog: "none", nameSchema: ProjectInit })(
+    withDurableObjectCore(DurableObject),
+  ),
+);
 
 export class Project extends ProjectBase<Env> {
   async fetch(request: Request) {
@@ -534,27 +551,31 @@ disagree about the identity or immutable setup of the same named object.
 
 ## D1 Object Catalog
 
-`withD1ObjectCatalog()` deliberately takes `getDatabase(env)` instead of a
+`withLifecycleHooks()` requires an explicit `d1ObjectCatalog` setting. Use
+`"none"` for deliberate opt-out, or provide `getDatabase(env)` instead of a
 string binding name. That keeps the type story explicit: the call site decides
 the minimal `Env` shape that can retrieve D1, and the returned mixin class keeps
-that shape as the lower bound for `class Room extends CatalogedRoomBase<Env>`.
+that shape as the lower bound for `class Room extends RoomBase<Env>`.
 
 ```ts
 type NeedsCatalog = {
   DO_CATALOG: D1Database;
 };
 
-const CatalogedRoomBase = withD1ObjectCatalog<RoomInit, NeedsCatalog>({
-  className: "Room",
-  getDatabase(env) {
-    return env.DO_CATALOG;
-  },
-  indexes: {
-    ownerUserId(params) {
-      return params.ownerUserId;
+const RoomBase = withLifecycleHooks<RoomInit, undefined, NeedsCatalog>({
+  d1ObjectCatalog: {
+    className: "Room",
+    getDatabase(env) {
+      return env.DO_CATALOG;
+    },
+    indexes: {
+      ownerUserId(params) {
+        return params.ownerUserId;
+      },
     },
   },
-})(withLifecycleHooks({ nameSchema: RoomInit })(withDurableObjectCore(DurableObject)));
+  nameSchema: RoomInit,
+})(withDurableObjectCore(DurableObject));
 ```
 
 The D1 write is best-effort and idempotent. The mixin sends
@@ -562,11 +583,9 @@ The D1 write is best-effort and idempotent. The mixin sends
 batch as each upsert, so object construction does not block on catalog-table
 setup.
 
-Catalog writes happen from the lifecycle instance wake hook as a detached, caught
-promise. That is deliberate: this mixin is just a consumer of
-`withLifecycleHooks()`, not a separate lifecycle system. The Durable Object's
-local initialization remains the source of truth, and D1 is only a
-discoverability index.
+Catalog writes happen from the lifecycle instance wake hook as a detached,
+caught promise. The Durable Object's local initialization remains the source of
+truth, and D1 is only a discoverability index.
 `getD1ObjectCatalogRecord()` therefore returns `null` when the object is
 uninitialized, the background D1 write has not completed yet, or the catalog
 tables do not exist yet. It never uses
@@ -632,7 +651,9 @@ type RoomInit = {
 };
 
 const RoomBase = withMultiplexedAlarms<RoomInit>()(
-  withLifecycleHooks({ nameSchema: RoomInit })(withDurableObjectCore(DurableObject)),
+  withLifecycleHooks({ d1ObjectCatalog: "none", nameSchema: RoomInit })(
+    withDurableObjectCore(DurableObject),
+  ),
 );
 
 class Room extends RoomBase<Env> {
@@ -695,7 +716,9 @@ retry metadata.
 ```ts
 const RoomBase = withScheduler<RoomInit>()(
   withMultiplexedAlarms<RoomInit>()(
-    withLifecycleHooks({ nameSchema: RoomInit })(withDurableObjectCore(DurableObject)),
+    withLifecycleHooks({ d1ObjectCatalog: "none", nameSchema: RoomInit })(
+      withDurableObjectCore(DurableObject),
+    ),
   ),
 );
 
@@ -831,7 +854,9 @@ type Env = {
 
 const DiscordBase = withScheduler<DiscordInit>()(
   withMultiplexedAlarms<DiscordInit>()(
-    withLifecycleHooks({ nameSchema: DiscordInit })(withDurableObjectCore(DurableObject)),
+    withLifecycleHooks({ d1ObjectCatalog: "none", nameSchema: DiscordInit })(
+      withDurableObjectCore(DurableObject),
+    ),
   ),
 );
 

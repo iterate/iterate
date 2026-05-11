@@ -1,10 +1,12 @@
 import { useForm } from "@tanstack/react-form";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { createServerFn, useServerFn } from "@tanstack/react-start";
-import { getOrInitializeDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import { listD1ObjectCatalogRecords } from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
-import type { D1ObjectCatalogRecord } from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
+import {
+  deriveDurableObjectNameFromStructuredName,
+  getInitializedDoStub,
+  listD1ObjectCatalogRecords,
+  type D1ObjectCatalogRecord,
+} from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   Field,
@@ -23,7 +25,6 @@ import {
   CreateCounterFormValues,
   type CounterInitParams,
 } from "~/lib/counter-durable-objects.ts";
-import type { ExampleCounter } from "~/durable-objects/example-counter.ts";
 
 type CounterCatalogEntry = D1ObjectCatalogRecord<CounterInitParams> & {
   publicPath: string;
@@ -72,7 +73,8 @@ const createCounterDurableObject = createServerFn({ method: "POST" })
     const name = deriveDurableObjectNameFromStructuredName({
       structuredName: initParams,
     });
-    await getOrInitializeDoStub<ExampleCounter>({
+    await getInitializedDoStub({
+      allowCreate: true,
       namespace: context.workerEnv.EXAMPLE_COUNTER,
       name: initParams,
     });

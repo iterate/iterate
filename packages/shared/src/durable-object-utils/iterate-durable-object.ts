@@ -2,14 +2,14 @@
 
 import { DurableObject } from "cloudflare:workers";
 import type { z } from "zod";
-import {
-  type D1ObjectCatalogIndexDefinitions,
-  withD1ObjectCatalog,
-} from "./mixins/with-d1-object-catalog.ts";
 import { withDurableObjectCore } from "./mixins/with-durable-object-core.ts";
 import type { DurableObjectCoreProtected } from "./mixins/with-durable-object-core.ts";
 import { withKvInspector } from "./mixins/with-kv-inspector.ts";
-import { withLifecycleHooks, type LifecycleStructuredName } from "./mixins/with-lifecycle-hooks.ts";
+import {
+  type D1ObjectCatalogIndexDefinitions,
+  withLifecycleHooks,
+  type LifecycleStructuredName,
+} from "./mixins/with-lifecycle-hooks.ts";
 import type { Constructor, DurableObjectClass } from "./mixins/mixin-types.ts";
 import { withOuterbase } from "./mixins/with-outerbase.ts";
 
@@ -51,13 +51,14 @@ export function withIterateDurableObjectStack<
   Env,
 >(options: IterateDurableObjectBaseOptions<NameSchema, Env>) {
   return function <TBase extends DurableObjectClass>(Base: TBase) {
-    const CatalogBase = withD1ObjectCatalog<StructuredNameFromSchema<NameSchema>, Env>(options)(
-      withLifecycleHooks<StructuredNameFromSchema<NameSchema>>({
-        nameSchema: options.nameSchema as unknown as z.ZodType<
-          StructuredNameFromSchema<NameSchema>
-        >,
-      })(withDurableObjectCore(Base)),
-    );
+    const CatalogBase = withLifecycleHooks<StructuredNameFromSchema<NameSchema>, undefined, Env>({
+      d1ObjectCatalog: {
+        className: options.className,
+        getDatabase: options.getDatabase,
+        indexes: options.indexes,
+      },
+      nameSchema: options.nameSchema as unknown as z.ZodType<StructuredNameFromSchema<NameSchema>>,
+    })(withDurableObjectCore(Base));
     const CatalogBaseWithCore = CatalogBase as typeof CatalogBase &
       Constructor<DurableObjectCoreProtected>;
     const WithOuterbase = withOuterbase({

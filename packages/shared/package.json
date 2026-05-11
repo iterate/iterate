@@ -25,7 +25,6 @@
     "./apps/middleware/require-header": "./src/apps/middleware/require-header.ts",
     "./test-helpers": "./src/test-helpers/index.ts",
     "./test-support/vitest-e2e": "./src/test-support/vitest-e2e/index.ts",
-    "./durable-object-utils/mixins/with-d1-object-catalog": "./src/durable-object-utils/mixins/with-d1-object-catalog.ts",
     "./durable-object-utils/mixins/with-app-config": "./src/durable-object-utils/mixins/with-app-config.ts",
     "./durable-object-utils/mixins/with-durable-object-core": "./src/durable-object-utils/mixins/with-durable-object-core.ts",
     "./durable-object-utils/mixins/with-lifecycle-hooks": "./src/durable-object-utils/mixins/with-lifecycle-hooks.ts",

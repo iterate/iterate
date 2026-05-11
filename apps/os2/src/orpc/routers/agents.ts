@@ -1,6 +1,6 @@
 import { ORPCError } from "@orpc/server";
-import { listD1ObjectCatalogRecordsByIndex } from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
-import { getOrInitializeDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import { listD1ObjectCatalogRecordsByIndex } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
@@ -182,7 +182,8 @@ async function getAgentStub(input: {
     agentPath: input.agentPath,
     projectId: input.projectId,
   };
-  return (await getOrInitializeDoStub({
+  return (await getInitializedDoStub({
+    allowCreate: true,
     namespace: input.context.agent,
     name: getAgentDurableObjectName(name),
   })) as unknown as AgentRpcStub;

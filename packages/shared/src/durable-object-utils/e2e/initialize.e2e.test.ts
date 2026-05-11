@@ -72,7 +72,7 @@ describe("inspector mixins fronting worker", () => {
   });
 });
 
-describe("withD1ObjectCatalog fronting worker", () => {
+describe("withLifecycleHooks D1 object catalog fronting worker", () => {
   it("returns JSON null when a cataloged object has no D1 record yet", async () => {
     const roomName = `e2e-listed-missing-${crypto.randomUUID()}`;
     const response = await getWithRouteRetry(`/listed-rooms/${roomName}/catalog`);

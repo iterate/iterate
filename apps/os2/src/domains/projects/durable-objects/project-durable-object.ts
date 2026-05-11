@@ -4,7 +4,7 @@ import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import type { Callable, FetchCallable } from "@iterate-com/shared/callable/types.ts";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import { getOrInitializeDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { withStreamProcessorRunner } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor-runner";
 import { jsonataReactorEventTypes } from "@iterate-com/shared/stream-processors/jsonata-reactor/contract";
 import type { ProcessorStreamApi, StreamEvent } from "@iterate-com/shared/stream-processors";
@@ -442,7 +442,8 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
   }
 
   private async ensureAgentsRoot(projectId: string) {
-    await getOrInitializeDoStub({
+    await getInitializedDoStub({
+      allowCreate: true,
       namespace: this.env.AGENT,
       name: getAgentDurableObjectName({
         agentPath: AGENTS_STREAM_PATH,

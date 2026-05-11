@@ -41,9 +41,9 @@ In both cases, `name` is infrastructure metadata, not a separate lifecycle fact.
   Durable Object's optional lifecycle `nameSchema`.
 - `initialize({ name })` stores the reliable string name and starts lifecycle
   hooks.
-- `getOrInitializeDoStub({ namespace, name })` accepts either a string name or
-  a flat structured-name object. Object names are serialized to deterministic
-  JSON before `namespace.getByName(name)`.
+- `getInitializedDoStub({ allowCreate, namespace, name })` accepts either a
+  string name or a flat structured-name object. Object names are serialized to
+  deterministic JSON before `namespace.getByName(name)`.
 - Domain mixins should constrain the structured identity they need, such as
   `{ projectId: string }`, without also treating `name` as domain input.
 - Documentation should explicitly say that structured names are identity
