@@ -27,17 +27,7 @@ const ToolProviderRegistration = z.object({
   path: CodemodePath,
 });
 const CodemodeError = z.unknown();
-const ScriptExecutionOutcome = z.discriminatedUnion("status", [
-  z.object({
-    status: z.literal("succeeded"),
-    output: z.unknown(),
-  }),
-  z.object({
-    status: z.literal("failed"),
-    error: CodemodeError,
-  }),
-]);
-const FunctionCallOutcome = z.discriminatedUnion("status", [
+const Outcome = z.discriminatedUnion("status", [
   z.object({
     status: z.literal("returned"),
     value: z.unknown(),
@@ -73,7 +63,7 @@ export const CodemodeProcessorContract = defineProcessorContract({
           z.object({
             status: z.literal("completed"),
             durationMs: z.number().int().nonnegative().optional(),
-            outcome: ScriptExecutionOutcome,
+            outcome: Outcome,
             scriptExecutionId: CodemodeId,
           }),
         ]),
@@ -99,7 +89,7 @@ export const CodemodeProcessorContract = defineProcessorContract({
             functionCallId: CodemodeId,
             functionPath: CodemodeFunctionPath,
             invocationKind: InvocationKind,
-            outcome: FunctionCallOutcome,
+            outcome: Outcome,
             path: CodemodePath,
             providerPath: CodemodePath,
             scriptExecutionId: CodemodeId.optional(),
@@ -135,7 +125,7 @@ export const CodemodeProcessorContract = defineProcessorContract({
       description: "A codemode script completed with either an output or a serialized error.",
       payloadSchema: z.object({
         durationMs: z.number().int().nonnegative().optional(),
-        outcome: ScriptExecutionOutcome,
+        outcome: Outcome,
         scriptExecutionId: CodemodeId,
       }),
     },
@@ -160,7 +150,7 @@ export const CodemodeProcessorContract = defineProcessorContract({
         functionCallId: CodemodeId,
         functionPath: CodemodeFunctionPath,
         invocationKind: InvocationKind,
-        outcome: FunctionCallOutcome,
+        outcome: Outcome,
         path: CodemodePath,
         providerPath: CodemodePath,
         scriptExecutionId: CodemodeId.optional(),

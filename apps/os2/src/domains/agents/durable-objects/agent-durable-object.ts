@@ -34,7 +34,9 @@ import {
   createCodemodeSession,
   startCodemodeScriptOnExistingSession,
 } from "~/domains/codemode/codemode-session-rpc.ts";
+import { createExampleCapabilityProviders } from "~/domains/codemode/example-provider-registrations.ts";
 import type { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
+import { createGmailProviderRegistration } from "~/domains/google/gmail-provider-registration.ts";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
 import {
   defaultAgentSetupEvents,
@@ -288,7 +290,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       events: [],
       namespace: this.env.CODEMODE_SESSION,
       projectId: params.projectId,
-      providers: [this.createAgentChatToolProvider()],
+      providers: this.createCodemodeToolProviders(params),
       streamPath: params.agentPath,
     });
   }
@@ -384,21 +386,21 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     if (outcome == null || typeof outcome !== "object") return;
 
     const status = "status" in outcome ? outcome.status : undefined;
-    if (status === "succeeded") {
-      const output = "output" in outcome ? outcome.output : undefined;
-      if (output === undefined) return;
+    if (status === "returned") {
+      const value = "value" in outcome ? outcome.value : undefined;
+      if (value === undefined) return;
       await this.appendAssistantResponse({
         idempotencyKey: `agent-codemode-script-result:${String(payload.scriptExecutionId)}`,
-        message: formatCodemodeOutput(output),
+        message: formatCodemodeOutput(value),
       });
       return;
     }
 
-    if (status === "failed") {
+    if (status === "threw") {
       const error = "error" in outcome ? outcome.error : "Unknown codemode error";
       await this.appendAssistantResponse({
         idempotencyKey: `agent-codemode-script-error:${String(payload.scriptExecutionId)}`,
-        message: `Codemode failed: ${formatCodemodeOutput(error)}`,
+        message: `Codemode threw: ${formatCodemodeOutput(error)}`,
       });
     }
   }
@@ -442,6 +444,21 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
         },
       },
     };
+  }
+
+  private createCodemodeToolProviders(
+    params: AgentDurableObjectStructuredName,
+  ): ToolProviderRegistration[] {
+    const providers = [this.createAgentChatToolProvider()];
+    if (!isSlackAgentPath(params.agentPath)) return providers;
+
+    providers.push(
+      ...createExampleCapabilityProviders({ projectId: params.projectId }).filter(
+        (provider) => provider.path.join("/") !== "slack",
+      ),
+      createGmailProviderRegistration({ projectId: params.projectId }),
+    );
+    return providers;
   }
 
   private async resolveLlmProvider(

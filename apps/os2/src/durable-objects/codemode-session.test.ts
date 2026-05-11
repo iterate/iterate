@@ -252,8 +252,8 @@ describe("CodemodeSession", () => {
 
     expect(completed.payload).toMatchObject({
       outcome: {
-        status: "succeeded",
-        output: {
+        status: "returned",
+        value: {
           ai: expect.objectContaining({ model: "test-model" }),
           agent: expect.objectContaining({ message: "hi", subPath: "bob" }),
           procedures: expect.stringContaining("interface CodemodeExecutionContext"),
@@ -289,7 +289,7 @@ describe("CodemodeSession", () => {
         }),
       ]),
     );
-    const procedures = completed.payload.outcome.output.procedures;
+    const procedures = completed.payload.outcome.value.procedures;
     expect(procedures).toContain("listSessions");
     expect(procedures).not.toContain("projectSlugOrId");
   });
@@ -310,7 +310,7 @@ describe("CodemodeSession", () => {
     expect(completed.payload).toMatchObject({
       outcome: {
         error: expect.stringContaining("projectSlugOrId"),
-        status: "failed",
+        status: "threw",
       },
     });
   });
@@ -335,8 +335,8 @@ describe("CodemodeSession", () => {
 
     expect(completed.payload).toMatchObject({
       outcome: {
-        status: "succeeded",
-        output: {
+        status: "returned",
+        value: {
           body: { hello: "codemode" },
           caughtMessage: "expected example failure",
           hasStreamsListProcedure: true,
@@ -461,8 +461,8 @@ describe("CodemodeSession", () => {
     const completed = await waitForScriptExecutionCompleted({ scriptExecutionId, streamPath });
     expect(completed.payload).toMatchObject({
       outcome: {
-        status: "succeeded",
-        output: {
+        status: "returned",
+        value: {
           discordMessageId: "discord-msg-1",
           mirroredToSlack: true,
         },
@@ -565,8 +565,8 @@ describe("CodemodeSession", () => {
     const completed = await waitForScriptExecutionCompleted({ scriptExecutionId, streamPath });
     expect(completed.payload).toMatchObject({
       outcome: {
-        status: "succeeded",
-        output: {
+        status: "returned",
+        value: {
           ping: "pong",
           navigation: {
             navigatedTo: "https://example.com",

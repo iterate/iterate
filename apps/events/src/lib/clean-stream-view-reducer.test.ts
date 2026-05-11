@@ -426,7 +426,7 @@ describe("clean stream view reducers", () => {
           payload: {
             durationMs: 17,
             logs: ["ran"],
-            outcome: { status: "succeeded", output: { ok: true } },
+            outcome: { status: "returned", value: { ok: true } },
             scriptExecutionId: "script-1",
           },
         }),

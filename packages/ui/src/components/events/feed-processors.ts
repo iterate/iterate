@@ -567,7 +567,7 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
     const durationMs = readNumberPayloadField(event, "durationMs") ?? 0;
     const outcome = readRecordPayloadField(event, "outcome");
     const status = outcome?.status;
-    const success = status === "succeeded" || status === "returned";
+    const success = status === "returned";
     const error = readCodemodeOutcomeError(outcome);
     return [
       {
@@ -596,14 +596,13 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
 
 function readCodemodeOutcomeResult(outcome: Record<string, unknown> | null): unknown {
   if (outcome == null) return {};
-  if (outcome.status === "succeeded" && "output" in outcome) return outcome.output;
   if (outcome.status === "returned" && "value" in outcome) return outcome.value;
   return outcome;
 }
 
 function readCodemodeOutcomeError(outcome: Record<string, unknown> | null) {
   if (outcome == null) return undefined;
-  if (outcome.status !== "failed" && outcome.status !== "threw") return undefined;
+  if (outcome.status !== "threw") return undefined;
   if (!("error" in outcome)) return undefined;
   return stringifyCodemodeError(outcome.error);
 }

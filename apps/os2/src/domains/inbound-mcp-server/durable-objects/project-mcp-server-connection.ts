@@ -633,9 +633,9 @@ async function waitForScriptExecutionFinished(input: {
     ) {
       const outcome = isRecord(payload.outcome) ? payload.outcome : {};
       return {
-        error: outcome.status === "failed" ? stringifyPayloadError(outcome.error) : undefined,
+        error: outcome.status === "threw" ? stringifyPayloadError(outcome.error) : undefined,
         logs,
-        result: outcome.status === "succeeded" ? outcome.output : undefined,
+        result: outcome.status === "returned" ? outcome.value : undefined,
       };
     }
   }

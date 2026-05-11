@@ -149,8 +149,8 @@ async function executeRequestedScript(args: {
         durationMs: Math.max(0, finishedAt.getTime() - startedAt.getTime()),
         outcome:
           result.error == null
-            ? { status: "succeeded" as const, output: result.result }
-            : { status: "failed" as const, error: result.error },
+            ? { status: "returned" as const, value: result.result }
+            : { status: "threw" as const, error: result.error },
         scriptExecutionId: args.event.payload.scriptExecutionId,
       },
     },

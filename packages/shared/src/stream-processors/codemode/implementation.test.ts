@@ -82,7 +82,7 @@ describe("createCodemodeProcessor", () => {
         idempotencyKey: "codemode/script-execution-completed@7",
         payload: {
           durationMs: 25,
-          outcome: { status: "succeeded", output: { ok: true } },
+          outcome: { status: "returned", value: { ok: true } },
           scriptExecutionId: "scr-1",
         },
       },
@@ -165,7 +165,7 @@ describe("createCodemodeProcessor", () => {
         idempotencyKey: "codemode/script-execution-completed@7",
         payload: {
           durationMs: expect.any(Number),
-          outcome: { status: "succeeded", output: { value: "HELLO!" } },
+          outcome: { status: "returned", value: { value: "HELLO!" } },
           scriptExecutionId: "scr-1",
         },
       },
@@ -268,7 +268,7 @@ describe("createCodemodeProcessor", () => {
         type: "events.iterate.com/codemode/script-execution-completed",
         payload: {
           durationMs: expect.any(Number),
-          outcome: { status: "succeeded", output: { stdout: "ran pnpm test" } },
+          outcome: { status: "returned", value: { stdout: "ran pnpm test" } },
           scriptExecutionId: "scr-rpc",
         },
       },
@@ -351,8 +351,8 @@ describe("createCodemodeProcessor", () => {
         payload: {
           durationMs: expect.any(Number),
           outcome: {
-            status: "succeeded",
-            output: {
+            status: "returned",
+            value: {
               args: [{ source: "test" }],
               functionCallId: "fn-debug",
               functionPath: ["debugInfo"],
@@ -716,8 +716,8 @@ describe("createCodemodeProcessor", () => {
         payload: {
           durationMs: expect.any(Number),
           outcome: {
-            status: "succeeded",
-            output: { mirroredToSlack: true },
+            status: "returned",
+            value: { mirroredToSlack: true },
           },
           scriptExecutionId: "scr-compose",
         },
