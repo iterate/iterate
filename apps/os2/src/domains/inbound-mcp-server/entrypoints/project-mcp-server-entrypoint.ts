@@ -232,34 +232,43 @@ async function findMcpProjectMembershipAccess(input: {
   clerk: ClerkClient;
   project: DurableObjectStub<ProjectDurableObject>;
 }) {
-  const memberships = await input.clerk.users.getOrganizationMembershipList({
-    limit: 100,
-    userId: input.auth.userId,
-  });
+  const limit = 100;
+  let offset = 0;
 
-  for (const membership of memberships.data) {
-    const project = await tryCheckMcpProjectAccess({
-      auth: input.auth,
-      orgId: membership.organization.id,
-      project: input.project,
+  while (true) {
+    const memberships = await input.clerk.users.getOrganizationMembershipList({
+      limit,
+      offset,
+      userId: input.auth.userId,
     });
-    if (!project) {
-      continue;
+
+    for (const membership of memberships.data) {
+      const project = await tryCheckMcpProjectAccess({
+        auth: input.auth,
+        orgId: membership.organization.id,
+        project: input.project,
+      });
+      if (!project) {
+        continue;
+      }
+
+      return {
+        auth: {
+          ...input.auth,
+          orgId: membership.organization.id,
+          orgPermissions: membership.permissions,
+          orgRole: membership.role,
+          orgSlug: membership.organization.slug ?? null,
+        },
+        project,
+      };
     }
 
-    return {
-      auth: {
-        ...input.auth,
-        orgId: membership.organization.id,
-        orgPermissions: membership.permissions,
-        orgRole: membership.role,
-        orgSlug: membership.organization.slug ?? null,
-      },
-      project,
-    };
+    offset += memberships.data.length;
+    if (memberships.data.length === 0 || offset >= memberships.totalCount) {
+      return null;
+    }
   }
-
-  return null;
 }
 
 async function tryCheckMcpProjectAccess(input: {
