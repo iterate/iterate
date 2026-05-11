@@ -56,6 +56,15 @@ export const AgentProcessorContract = defineProcessorContract({
   events: {
     "events.iterate.com/agent/system-prompt-updated": {
       description: "Updates the system prompt used for future LLM requests.",
+      examples: [
+        {
+          description: "Set a focused system prompt",
+          payload: {
+            systemPrompt:
+              "You are a deployment assistant. Help the user check service health and review recent deploys.",
+          },
+        },
+      ],
       payloadSchema: z.object({ systemPrompt: z.string() }),
     },
     "events.iterate.com/agent/input-added": {

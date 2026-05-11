@@ -116,6 +116,15 @@ export const CodemodeProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/codemode/script-execution-requested": {
       description: "A codemode script should run against the stream's documented functions.",
+      examples: [
+        {
+          description: "Run a simple script",
+          payload: {
+            code: "return 1 + 1",
+            scriptExecutionId: "manual-1",
+          },
+        },
+      ],
       payloadSchema: z.object({
         code: z.string().min(1),
         scriptExecutionId: CodemodeId,
