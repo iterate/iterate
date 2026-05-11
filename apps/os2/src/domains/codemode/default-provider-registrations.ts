@@ -1,10 +1,15 @@
 import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
+import { createWorkspaceProviderRegistration } from "~/domains/workspaces/entrypoints/workspace-capability.ts";
 
 export function createDefaultCodemodeProviderRegistrations(input: {
   projectId: string;
   streamPath: string;
 }): ToolProviderRegistration[] {
   return [
+    createWorkspaceProviderRegistration({
+      projectId: input.projectId,
+      streamPath: input.streamPath,
+    }),
     {
       path: ["fetch"],
       instructions:

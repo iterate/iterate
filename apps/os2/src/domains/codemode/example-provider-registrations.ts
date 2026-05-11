@@ -76,11 +76,6 @@ export function createExampleCapabilityProviders(input: {
       path: ["repos"],
       projectId: input.projectId,
     }),
-    createWorkspaceProviderRegistration({
-      instructions: "Use ctx.workspace.proofOfConcept(args) for the current workspace.",
-      name: input.projectId,
-      path: ["workspace"],
-    }),
     createExampleRpcProviderRegistration({
       exportName: "AgentCapability",
       activeOrganization: input.activeOrganization,

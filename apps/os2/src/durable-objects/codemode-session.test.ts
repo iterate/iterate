@@ -9,10 +9,7 @@ import type { StreamProcessorRunnerState } from "@iterate-com/shared/durable-obj
 import { describe, expect, test } from "vitest";
 import type { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
 import { createCodemodeSessionStartupEvents } from "~/domains/codemode/codemode-session-rpc.ts";
-import {
-  createExampleRpcProviderRegistration,
-  createWorkspaceProviderRegistration,
-} from "~/domains/codemode/example-capabilities.ts";
+import { createExampleRpcProviderRegistration } from "~/domains/codemode/example-capabilities.ts";
 import { findCodemodeExample, providersForCodemodeExample } from "~/domains/codemode/examples.ts";
 
 type CodemodeSessionStub = DurableObjectStub<CodemodeSession> & {
@@ -286,6 +283,57 @@ describe("CodemodeSession", () => {
     const procedures = completed.payload.outcome.output.procedures;
     expect(procedures).toContain("listSessions");
     expect(procedures).not.toContain("projectSlugOrId");
+  });
+
+  test("runs default workspace state and git shell operations", async () => {
+    const streamPath = `/codemode-session-tests/${crypto.randomUUID()}` as StreamPath;
+    const session = await initializeSession(streamPath);
+
+    const created = await session.createSession({
+      events: codemodeSessionStartupEvents({ providers: [], streamPath }),
+      code: `async (ctx) => {
+  await ctx.workspace.writeFile("/README.md", "# Workspace shell test\\n");
+  const text = await ctx.workspace.readFile("/README.md");
+  const initialized = await ctx.workspace.git.init({ dir: "/", defaultBranch: "main" });
+  await ctx.workspace.git.add({ dir: "/", filepath: "README.md" });
+  const commit = await ctx.workspace.git.commit({
+    dir: "/",
+    message: "Add workspace shell README",
+    author: { name: "Workspace Test", email: "workspace-test@iterate.com" },
+  });
+  const status = await ctx.workspace.git.status({ dir: "/" });
+
+  return { commit, initialized, status, text };
+}`,
+    });
+    const scriptExecutionId = scriptExecutionIdFromEvent(created.scriptExecutionEvent);
+    const completed = await waitForScriptExecutionCompleted({ scriptExecutionId, streamPath });
+
+    expect(completed.payload).toMatchObject({
+      outcome: {
+        status: "succeeded",
+        output: {
+          commit: {
+            message: "Add workspace shell README",
+            oid: expect.any(String),
+          },
+          initialized: { initialized: "/" },
+          status: [],
+          text: "# Workspace shell test\n",
+        },
+      },
+    });
+    expect(await readCurrentStreamEvents(streamPath)).toEqual(
+      expect.arrayContaining([
+        functionCallRequested(["workspace", "writeFile"], ["workspace"], ["writeFile"]),
+        functionCallCompleted(["workspace", "writeFile"], ["workspace"], ["writeFile"]),
+        functionCallRequested(["workspace", "readFile"], ["workspace"], ["readFile"]),
+        functionCallRequested(["workspace", "git", "init"], ["workspace"], ["git", "init"]),
+        functionCallCompleted(["workspace", "git", "init"], ["workspace"], ["git", "init"]),
+        functionCallRequested(["workspace", "git", "commit"], ["workspace"], ["git", "commit"]),
+        functionCallCompleted(["workspace", "git", "commit"], ["workspace"], ["git", "commit"]),
+      ]),
+    );
   });
 
   test("rejects caller supplied project identity in codemode ctx.os calls", async () => {
@@ -637,11 +685,6 @@ function exampleCapabilityProviders(): ToolProviderRegistration[] {
         "Use ctx.repos.create({ slug }) to create a Repo, ctx.repos.get({ slug }).getInfo() to inspect one, and ctx.repos.list({}) to list Repos.",
       path: ["repos"],
       projectId,
-    }),
-    createWorkspaceProviderRegistration({
-      instructions: "Use ctx.workspace.proofOfConcept(args) for the current workspace.",
-      name: projectId,
-      path: ["workspace"],
     }),
     createExampleRpcProviderRegistration({
       exportName: "AgentCapability",

@@ -15,6 +15,7 @@ export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/rep
 export { SlackCapability } from "~/domains/slack/entrypoints/slack-capability.ts";
 export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 export { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
+export { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-capability.ts";
 export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 export { OutboundMcpFromOurClientCapability } from "~/domains/outbound-mcp-client/entrypoints/outbound-mcp-from-our-client-capability.ts";
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";

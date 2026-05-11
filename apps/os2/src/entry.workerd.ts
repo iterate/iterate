@@ -51,6 +51,7 @@ export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/rep
 export { SlackCapability } from "~/domains/slack/entrypoints/slack-capability.ts";
 export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 export { StreamDurableObject };
+export { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-capability.ts";
 export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 
 const config = parseAppConfigFromEnv({
