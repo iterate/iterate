@@ -1,4 +1,4 @@
-import { WorkerEntrypoint } from "cloudflare:workers";
+import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 import {
   getInitializedDoStub,
   listD1ObjectCatalogRecordsByIndex,
@@ -34,6 +34,19 @@ type ReposCapabilityClient = Pick<
   "create" | "createInfo" | "get" | "getInfo" | "list"
 >;
 type RepoLifecycleCatalogRecord = D1ObjectCatalogRecord<RepoStructuredName>;
+
+export class RepoHandle extends RpcTarget {
+  readonly #repo: DurableObjectStub<RepoDurableObject>;
+
+  constructor(repo: DurableObjectStub<RepoDurableObject>) {
+    super();
+    this.#repo = repo;
+  }
+
+  async getInfo(): Promise<RepoInfo> {
+    return await this.#repo.getInfo();
+  }
+}
 
 export class ReposCapability extends WorkerEntrypoint<ReposCapabilityEnv, ReposCapabilityProps> {
   async executeCodemodeFunctionCall(input: ExecuteCodemodeFunctionCallInput) {
@@ -75,12 +88,11 @@ export class ReposCapability extends WorkerEntrypoint<ReposCapabilityEnv, ReposC
       name,
     });
     await repo.createRepo({ projectSlug: input.projectSlug });
-    return repo;
+    return new RepoHandle(repo);
   }
 
   async createInfo(input: { projectSlug?: string; slug: string }): Promise<RepoInfo> {
-    const repo = await this.create(input);
-    return await repo.getInfo();
+    return await (await this.create(input)).getInfo();
   }
 
   async get(input: { slug: string }) {
@@ -94,12 +106,11 @@ export class ReposCapability extends WorkerEntrypoint<ReposCapabilityEnv, ReposC
       throw new Error(`Repo ${input.slug} not found.`);
     }
 
-    return repo;
+    return new RepoHandle(repo);
   }
 
   async getInfo(input: { slug: string }): Promise<RepoInfo> {
-    const repo = await this.get(input);
-    return await repo.getInfo();
+    return await (await this.get(input)).getInfo();
   }
 
   async list(): Promise<RepoCatalogRecord[]> {

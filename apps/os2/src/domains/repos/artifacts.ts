@@ -51,7 +51,9 @@ export function normalizeArtifactToken(token: CloudflareArtifactToken) {
 
   return {
     plaintext,
-    expiresAt: normalizeTokenExpiresAt(token.expiresAt ?? token.expires_at ?? null),
+    expiresAt: normalizeTokenExpiresAt(
+      token.expiresAt ?? token.expires_at ?? expiresAtFromTokenQuery(plaintext),
+    ),
   };
 }
 
@@ -132,4 +134,9 @@ function normalizeTokenExpiresAt(value: string | number | Date | null): string |
     return new Date(milliseconds).toISOString();
   }
   return new Date(value).toISOString();
+}
+
+function expiresAtFromTokenQuery(token: string): number | null {
+  const match = /[?&]expires=(\d+)/.exec(token);
+  return match ? Number(match[1]) : null;
 }
