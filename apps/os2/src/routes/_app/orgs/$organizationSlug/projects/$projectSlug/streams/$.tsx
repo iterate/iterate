@@ -35,7 +35,12 @@ function ProjectStreamDetailPage() {
 
   async function submitMessage(message: string) {
     await createBrowserOpenApiClient().project.streams.appendBatch({
-      events: [{ type: "events.iterate.com/os2/manual-event", payload: { message } }],
+      events: [
+        {
+          type: "events.iterate.com/agent-chat/user-message-added",
+          payload: { channel: "web", content: message },
+        },
+      ],
       projectSlugOrId: project.id,
       streamPath,
     });
