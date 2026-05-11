@@ -72,6 +72,9 @@
   },
   "packageManager": "pnpm@10.24.0",
   "pnpm": {
+    "patchedDependencies": {
+      "alchemy@0.83.3": "patches/alchemy@0.83.3.patch"
+    },
     "overrides": {
       "axios": "1.13.6",
       "@orpc/client": "1.13.14",

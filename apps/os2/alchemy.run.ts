@@ -1,5 +1,6 @@
 import alchemy from "alchemy";
 import { Ai, D1Database, DurableObjectNamespace, WorkerLoader } from "alchemy/cloudflare";
+import { Artifacts } from "@iterate-com/shared/alchemy/artifacts";
 import { initAlchemy } from "@iterate-com/shared/alchemy/init";
 import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
 import type { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
@@ -88,6 +89,7 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     CODEMODE_SESSION: codemodeSession,
     DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber,
     AGENT: agent,
+    ARTIFACTS: Artifacts({ namespace: `${ctx.workerName}-repos` }),
     PROJECT: project,
     REPO: repo,
     PROJECT_MCP_SERVER_CONNECTION: projectMcpServerConnection,
@@ -96,17 +98,6 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     WORKSPACE: workspace,
     ...(slackBotToken == null ? {} : { APP_CONFIG_SLACK_BOT_TOKEN: alchemy.secret(slackBotToken) }),
   },
-  wranglerTransform: (spec) => ({
-    ...spec,
-    artifacts: [
-      ...(((spec as { artifacts?: unknown[] }).artifacts ?? []) as unknown[]),
-      {
-        binding: "ARTIFACTS",
-        namespace: `${ctx.workerName}-repos`,
-        remote: true,
-      },
-    ],
-  }),
   extraRouteHostnames: projectHostnameBases.flatMap(projectRouteHostnamesForBase),
 });
 
