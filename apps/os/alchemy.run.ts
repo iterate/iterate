@@ -9,7 +9,6 @@ import alchemy, { type Scope } from "alchemy";
 import {
   DurableObjectNamespace,
   Hyperdrive,
-  R2Bucket,
   TanStackStart,
   Tunnel,
   WorkerLoader,
@@ -27,7 +26,7 @@ import {
   getDockerEnvVars,
 } from "../../sandbox/providers/docker/utils.ts";
 import { normalizeProjectIngressCanonicalHost } from "./backend/utils/project-ingress-url.ts";
-import { ArchilApiKeys, jsonEnvVar, RegionConfig, workerCrons } from "./backend/worker-config.ts";
+import { jsonEnvVar, RegionConfig, workerCrons } from "./backend/worker-config.ts";
 import {
   GLOBAL_SECRETS_CONFIG,
   type GlobalSecretEnvVarName,
@@ -502,12 +501,6 @@ const Env = z.object({
   RESEND_BOT_DOMAIN: Required,
   RESEND_BOT_API_KEY: Required,
   RESEND_BOT_WEBHOOK_SECRET: Optional,
-  // Archil — persistent POSIX volumes backed by R2
-  // Bucket name and endpoint are derived in alchemy.run.ts and passed as computed bindings.
-  // Only the API key and R2 credentials need to live in Doppler.
-  ARCHIL_API_KEYS: jsonEnvVar.wrap(ArchilApiKeys),
-  ARCHIL_R2_ACCESS_KEY_ID: Required,
-  ARCHIL_R2_SECRET_ACCESS_KEY: Required,
   POSTHOG_PUBLIC_KEY: Optional,
   POSTHOG_WEBHOOK_SECRET: Optional,
   SERVICE_AUTH_TOKEN: Required,
@@ -851,21 +844,6 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
     adopt: true,
   });
 
-  // Archil R2 bucket — one bucket per stage, with per-project prefixes inside.
-  // Archil's FUSE client talks to R2 via S3 protocol using the API token credentials from Doppler.
-  // todo: generate a bucket dynamically for each project
-  const archilBucket = await R2Bucket("archil-data", {
-    locationHint: regionConfig.r2BucketHint,
-    dev: { remote: true }, // always create real bucket, even in dev (Archil needs actual R2)
-    adopt: isDevelopment, // because we use dev: {remote: true}, all the dev-nobody CI runs will need to adopt this bucket
-  });
-
-  // Derive R2 endpoint so it doesn't need to be in Doppler per-stack.
-  const cloudflareAccountId = process.env.CLOUDFLARE_ACCOUNT_ID;
-  if (!cloudflareAccountId) throw new Error("CLOUDFLARE_ACCOUNT_ID is required");
-
-  const archilR2Endpoint = `https://${cloudflareAccountId}.r2.cloudflarestorage.com`;
-
   const worker = await TanStackStart("os", {
     bindings: {
       ...dbConfig,
@@ -882,9 +860,6 @@ async function deployWorker(dbConfig: { DATABASE_URL: string }, envSecrets: EnvS
       PROJECT_DURABLE_OBJECT,
       DEPLOYMENT_DURABLE_OBJECT,
       PROJECT_INGRESS_DOMAIN: projectIngressDomain,
-      // Archil R2: derived from alchemy state, not Doppler
-      ARCHIL_R2_BUCKET_NAME: archilBucket.name,
-      ARCHIL_R2_ENDPOINT: archilR2Endpoint,
       // Workerd can't exec in dev, so git/compose info must be injected via env vars here.
       // Use empty defaults outside dev so worker.Env contains these bindings for typing.
       ...dockerBindings,
