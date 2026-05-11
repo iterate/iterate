@@ -1,5 +1,5 @@
 import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
-import { createWorkspaceProviderRegistration } from "~/domains/workspaces/entrypoints/workspace-capability.ts";
+import { createWorkspaceProviderRegistration } from "~/domains/workspaces/entrypoints/workspace-provider-registration.ts";
 
 export function createDefaultCodemodeProviderRegistrations(input: {
   projectId: string;
