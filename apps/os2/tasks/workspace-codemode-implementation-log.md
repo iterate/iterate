@@ -1,5 +1,5 @@
 ---
-state: doing
+state: done
 priority: high
 size: large
 dependsOn: [repos-vertical-slice]
@@ -73,6 +73,79 @@ real preview MCP codemode session can use a simple JavaScript block to:
 - [x] Add local codemode tests.
 - [x] Commit and push local implementation checkpoint.
 - [x] Deploy preview.
-- [ ] Seed preview `iterate-config-base` through admin debug route.
-- [ ] Run real MCP codemode script: repo info -> clone -> edit -> commit -> push.
-- [ ] Record verification evidence.
+- [x] Seed preview `iterate-config-base` through admin debug route.
+- [x] Run real MCP codemode script: repo info -> clone -> edit -> commit -> push.
+- [x] Record verification evidence.
+
+## Verification Evidence
+
+Local checks:
+
+```sh
+pnpm --dir apps/os2 typecheck
+pnpm --dir apps/os2 test:codemode-session
+pnpm --dir apps/os2 build
+```
+
+Preview deployment:
+
+```sh
+doppler run --project os2 --config preview_2 -- pnpm --dir apps/os2 alchemy:up
+```
+
+The direct OS2 deploy completed for `https://os2.iterate-preview-2.com`.
+
+Preview seed and smoke:
+
+```sh
+POST https://os2.iterate-preview-2.com/__debug/seed-iterate-config-base
+OS2_BASE_URL=https://os2.iterate-preview-2.com \
+  OS2_PREVIEW_SMOKE_PROJECT_SLUG=workspace-mcp-proof-3dbbcbf7 \
+  pnpm --dir apps/os2 test:e2e:preview
+```
+
+The seed route returned the base repo
+`os2-preview-2-repos/iterate-config-base.git`. The preview smoke then created
+project `workspace-mcp-proof-3dbbcbf7` and verified its MCP endpoint.
+
+Real MCP codemode proof:
+
+```sh
+OS2_E2E_MCP_URL=https://mcp__workspace-mcp-proof-3dbbcbf7.iterate-preview-2.app/ \
+  pnpm --dir apps/os2 exec tsx /tmp/os2-workspace-mcp-proof.ts
+```
+
+The script executed a single JavaScript codemode block that:
+
+1. called `ctx.repos.get({ slug: "iterate-config" }).getInfo()`,
+2. cloned the repo with `ctx.workspace.git.clone(...)`,
+3. wrote `workspace-codemode-proof.md` with `ctx.workspace.writeFile(...)`,
+4. committed with `ctx.workspace.git.commit(...)`,
+5. pushed with `ctx.workspace.git.push(...)`.
+
+Returned proof:
+
+```json
+{
+  "marker": "workspace-mcp-proof-1778538010701",
+  "repo": {
+    "slug": "iterate-config",
+    "defaultBranch": "main",
+    "hasToken": true
+  },
+  "commit": {
+    "oid": "cf4839914cd51d9759efa2ff8f65a6f9f6c2561e",
+    "message": "Verify workspace codemode push"
+  },
+  "pushed": {
+    "ok": true,
+    "refs": {
+      "refs/heads/main": {
+        "ok": true,
+        "error": ""
+      }
+    }
+  },
+  "status": []
+}
+```
