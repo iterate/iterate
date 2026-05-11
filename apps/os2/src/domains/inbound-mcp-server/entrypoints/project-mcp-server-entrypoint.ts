@@ -1,5 +1,5 @@
 import { env as workerEnv, WorkerEntrypoint } from "cloudflare:workers";
-import { createClerkClient, verifyToken } from "@clerk/backend";
+import { createClerkClient, verifyToken, type ClerkClient } from "@clerk/backend";
 import { generateProtectedResourceMetadata } from "@clerk/mcp-tools/server";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { McpAgent } from "agents/mcp";
@@ -60,16 +60,19 @@ export class ProjectMcpServerEntrypoint extends WorkerEntrypoint<
       return mcpAuth;
     }
 
-    const project = await resolveMcpProject({
+    const access = await resolveMcpProjectAccess({
       auth: mcpAuth,
       project: this.env.PROJECT.getByName(getProjectDurableObjectName(this.ctx.props.projectId)),
     });
+    if (access instanceof Response) {
+      return access;
+    }
 
     const ctxWithProps = this.ctx as ExecutionContext & { props?: ProjectMcpServerConnectionProps };
     ctxWithProps.props = {
-      ...mcpAuth,
-      projectId: project.id,
-      projectSlug: project.slug,
+      ...access.auth,
+      projectId: access.project.id,
+      projectSlug: access.project.slug,
     };
 
     return await mcpHandler.fetch(request, this.env, this.ctx);
@@ -114,43 +117,35 @@ async function authenticateMcpRequest(request: Request) {
   }
 
   try {
-    const clerk = createClerkClient({
-      secretKey: config.clerk.secretKey.exposeSecret(),
-      publishableKey: config.clerk.publishableKey,
-      jwtKey: config.clerk.jwtKey.exposeSecret(),
-    });
+    const clerk = createClerkClientForApp();
     const requestState = await clerk.authenticateRequest(request, {
-      acceptsToken: "oauth_token",
+      acceptsToken: ["oauth_token", "session_token"],
     });
-    const oauthAuth = requestState.toAuth();
+    const clerkAuth = requestState.toAuth();
 
-    if (!oauthAuth.isAuthenticated) {
+    if (!clerkAuth?.isAuthenticated) {
       return unauthorizedMcpResponse(request, "Invalid bearer token");
     }
 
     const claims = await tryReadJwtClaims(token);
-    const userId = oauthAuth.userId;
-    const orgId = readOrganizationIdClaim(claims);
+    const userId = readStringProperty(clerkAuth, "userId");
+    const tokenType = readClerkTokenType(clerkAuth);
 
     if (!userId) {
-      return unauthorizedMcpResponse(request, "MCP token is missing Clerk user subject");
-    }
-
-    if (!orgId) {
-      return new Response("MCP token is missing active Clerk Organization", {
-        status: 403,
-        headers: mcpCorsHeaders,
-      });
+      return unauthorizedMcpResponse(request, "MCP token must identify a Clerk user");
     }
 
     return {
       userId,
-      orgId,
-      orgRole: readOrganizationRoleClaim(claims),
-      orgSlug: readOrganizationSlugClaim(claims),
-      orgPermissions: readOrganizationPermissionsClaim(claims),
-      scopes: oauthAuth.scopes.length > 0 ? oauthAuth.scopes : readScopeClaims(claims),
-      clientId: oauthAuth.clientId ?? readStringClaim(claims, "client_id"),
+      orgId: readStringProperty(clerkAuth, "orgId") ?? readOrganizationIdClaim(claims),
+      orgRole: readStringProperty(clerkAuth, "orgRole") ?? readOrganizationRoleClaim(claims),
+      orgSlug: readStringProperty(clerkAuth, "orgSlug") ?? readOrganizationSlugClaim(claims),
+      orgPermissions:
+        readStringArrayProperty(clerkAuth, "orgPermissions") ??
+        readOrganizationPermissionsClaim(claims),
+      scopes: readStringArrayProperty(clerkAuth, "scopes") ?? readScopeClaims(claims),
+      clientId: readStringProperty(clerkAuth, "clientId") ?? readStringClaim(claims, "client_id"),
+      clerkTokenType: tokenType,
       projectId: null,
       projectSlug: null,
     } satisfies ProjectMcpServerConnectionProps;
@@ -179,26 +174,125 @@ function authenticateSharedSecret(token: string): ProjectMcpServerConnectionProp
     projectSlug: null,
     scopes: ["profile"],
     userId: "admin-api-secret",
+    clerkTokenType: "admin_api_secret",
   };
 }
 
-async function resolveMcpProject(input: {
+function readClerkTokenType(clerkAuth: unknown): ProjectMcpServerConnectionProps["clerkTokenType"] {
+  const tokenType = readStringProperty(clerkAuth, "tokenType");
+  if (tokenType === "oauth_token" || tokenType === "session_token") {
+    return tokenType;
+  }
+  return undefined;
+}
+
+async function resolveMcpProjectAccess(input: {
   auth: ProjectMcpServerConnectionProps;
   project: DurableObjectStub<ProjectDurableObject>;
-}): Promise<ProjectSummary> {
+}): Promise<{ auth: ProjectMcpServerConnectionProps; project: ProjectSummary } | Response> {
   if (input.auth.clientId === "admin-api-secret") {
-    return await input.project.getSummary();
+    return { auth: input.auth, project: await input.project.getSummary() };
   }
 
-  if (!input.auth.orgId) {
-    throw new Error("MCP OAuth auth is missing an organization id.");
-  }
-
-  return await input.project.checkAccess({
-    principal: {
+  if (input.auth.orgId) {
+    const project = await tryCheckMcpProjectAccess({
+      auth: input.auth,
       orgId: input.auth.orgId,
+      project: input.project,
+    });
+    if (project) {
+      return { auth: input.auth, project };
+    }
+  }
+
+  if (input.auth.clerkTokenType !== "session_token") {
+    return new Response("MCP user is not a member of an organization with access to this project", {
+      status: 403,
+      headers: mcpCorsHeaders,
+    });
+  }
+
+  const membershipAccess = await findMcpProjectMembershipAccess({
+    auth: input.auth,
+    clerk: createClerkClientForApp(),
+    project: input.project,
+  });
+  if (membershipAccess) {
+    return membershipAccess;
+  }
+
+  return new Response("MCP user is not a member of an organization with access to this project", {
+    status: 403,
+    headers: mcpCorsHeaders,
+  });
+}
+
+async function findMcpProjectMembershipAccess(input: {
+  auth: ProjectMcpServerConnectionProps;
+  clerk: ClerkClient;
+  project: DurableObjectStub<ProjectDurableObject>;
+}) {
+  const limit = 100;
+  let offset = 0;
+
+  while (true) {
+    const memberships = await input.clerk.users.getOrganizationMembershipList({
+      limit,
+      offset,
       userId: input.auth.userId,
-    },
+    });
+
+    for (const membership of memberships.data) {
+      const project = await tryCheckMcpProjectAccess({
+        auth: input.auth,
+        orgId: membership.organization.id,
+        project: input.project,
+      });
+      if (!project) {
+        continue;
+      }
+
+      return {
+        auth: {
+          ...input.auth,
+          orgId: membership.organization.id,
+          orgPermissions: membership.permissions,
+          orgRole: membership.role,
+          orgSlug: membership.organization.slug ?? null,
+        },
+        project,
+      };
+    }
+
+    offset += memberships.data.length;
+    if (memberships.data.length === 0 || offset >= memberships.totalCount) {
+      return null;
+    }
+  }
+}
+
+async function tryCheckMcpProjectAccess(input: {
+  auth: ProjectMcpServerConnectionProps;
+  orgId: string;
+  project: DurableObjectStub<ProjectDurableObject>;
+}) {
+  try {
+    return await input.project.checkAccess({
+      principal: {
+        orgId: input.orgId,
+        userId: input.auth.userId,
+      },
+    });
+  } catch {
+    return null;
+  }
+}
+
+function createClerkClientForApp(): ClerkClient {
+  return createClerkClient({
+    secretKey: config.clerk.secretKey.exposeSecret(),
+    publishableKey: config.clerk.publishableKey,
+    jwtKey: config.clerk.jwtKey.exposeSecret(),
   });
 }
 
@@ -287,6 +381,25 @@ function readStringClaim(claims: Record<string, unknown>, key: string) {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+function readStringProperty(value: unknown, key: string) {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  return readStringClaim(value, key);
+}
+
+function readStringArrayProperty(value: unknown, key: string) {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const propertyValue = value[key];
+  return Array.isArray(propertyValue)
+    ? propertyValue.filter((entry) => typeof entry === "string")
+    : null;
+}
+
 function readOrganizationIdClaim(claims: Record<string, unknown>) {
   const organization = readRecordClaim(claims, "o");
   return readStringClaim(organization, "id") ?? readStringClaim(claims, "org_id");
@@ -327,7 +440,9 @@ function readScopeClaims(claims: Record<string, unknown>) {
 
 function readRecordClaim(claims: Record<string, unknown>, key: string): Record<string, unknown> {
   const value = claims[key];
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
+  return isRecord(value) ? value : {};
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

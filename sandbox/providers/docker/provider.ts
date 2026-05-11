@@ -356,7 +356,6 @@ export class DockerProvider extends SandboxProvider {
     const dockerEnv: Record<string, string> = {
       ...rewrittenEnvVars,
       ITERATE_DEV: "true",
-      ITERATE_PERSISTENCE_MODE: "local",
       DOCKER_DEFAULT_SERVICE_TRANSPORT: this.env.DOCKER_DEFAULT_SERVICE_TRANSPORT,
       ...(this.env.DOCKER_TUNNEL_PORTS
         ? { DOCKER_TUNNEL_PORTS: this.env.DOCKER_TUNNEL_PORTS }

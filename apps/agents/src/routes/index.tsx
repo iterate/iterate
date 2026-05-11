@@ -277,11 +277,14 @@ function SelectedAgentStreamView({
         />
         <EventsStreamLayoutMessageInput>
           <EventsStreamComposer
-            value={composerText}
-            onValueChange={setComposerText}
-            onSubmit={submitComposer}
+            mode="message"
+            message={{
+              value: composerText,
+              onValueChange: setComposerText,
+              onSubmit: submitComposer,
+              placeholder: "Message this agent",
+            }}
             isSubmitting={appendMessage.isPending}
-            placeholder="Message this agent"
           />
         </EventsStreamLayoutMessageInput>
       </div>

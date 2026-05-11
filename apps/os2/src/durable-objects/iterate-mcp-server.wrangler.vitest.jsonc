@@ -3,9 +3,7 @@
   "main": "iterate-mcp-server-test-entry.ts",
   "compatibility_date": "2026-04-27",
   "compatibility_flags": ["nodejs_compat"],
-  "vars": {
-    "MCP_PROOF_SECRET": "mcp-proof-secret-test",
-  },
+  "vars": {},
   "durable_objects": {
     "bindings": [
       {

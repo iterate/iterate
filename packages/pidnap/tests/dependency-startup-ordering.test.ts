@@ -8,9 +8,9 @@
  * and starts dependents on the same tick. This means dependsOn is a no-op
  * for the "started" and "healthy" conditions.
  *
- * Real-world impact: archil-mount.sh restores sqlite snapshots before
- * signaling ready, but opencode starts before the restore because pidnap
- * considers archil-mount "started" the instant start() is called.
+ * Real-world impact: a setup process can restore sqlite snapshots before
+ * signaling ready, but dependents start before the restore if pidnap considers
+ * the setup process "started" the instant start() is called.
  */
 
 import { writeFileSync } from "node:fs";

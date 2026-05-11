@@ -111,9 +111,8 @@ USER iterate
 # Keep both in sync! The .iterate/bin paths must be prepended last so wrappers win.
 ENV PATH="/home/iterate/.iterate/bin:/home/iterate/.local/bin:$PATH"
 
-# Install uv and use that to install mitmproxy to /opt/mitmproxy (NOT ~/.local/share).
-# ~/.local/share is symlinked to archil persistent storage at runtime, so nothing
-# baked into the image should live there.
+# Install uv and use that to install mitmproxy to /opt/mitmproxy.
+# Keep generated tooling outside ~/.local/share so runtime user data stays separate.
 RUN curl -fsSL https://astral.sh/uv/install.sh | sh
 RUN sudo mkdir -p /opt/mitmproxy /opt/uv/python && \
     sudo chown -R iterate:iterate /opt/mitmproxy /opt/uv && \
@@ -176,13 +175,6 @@ RUN mkdir -p /home/iterate/.local/bin && \
     git checkout ${SANDBOX_GOGCLI_REF} && \
     go build -o /home/iterate/.local/bin/gog ./cmd/gog && \
     rm -rf /tmp/gogcli
-
-# Install Archil client (persistent POSIX volumes backed by S3/R2)
-# Installs to /usr/bin/archil by default (system path)
-# ARG placed here (not at top) to avoid busting cache for layers above (Go, gogcli, etc.)
-ARG SANDBOX_ARCHIL_CLIENT_VERSION=0.7.3
-RUN curl -fsSL https://s3.amazonaws.com/archil-client/install | \
-    sudo ARCHIL_CLIENT_VERSION="${SANDBOX_ARCHIL_CLIENT_VERSION}" sh || true
 
 # === Agent packages (npm, userspace) ===
 RUN npm install -g \

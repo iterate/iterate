@@ -1,5 +1,5 @@
 import { inspect } from "node:util";
-import { describe, expect, expectTypeOf, it } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { z } from "zod";
 import {
   BaseAppConfig,
@@ -131,15 +131,71 @@ describe("parseAppConfigFromEnv", () => {
     });
   });
 
-  it("throws for unknown APP_CONFIG_* keys instead of silently ignoring them", () => {
+  it("warns loudly for unknown APP_CONFIG_* keys instead of failing deployment", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      expect(
+        parseTestAppConfigFromEnv({
+          APP_CONFIG_LOGGING: JSON.stringify({
+            stdoutFormat: "raw",
+          }),
+        }),
+      ).toEqual({
+        logs: { stdoutFormat: "pretty", filtering: { rules: [] } },
+        public: { somePublicKey: "default-public-key" },
+        logger: { stdout: false },
+        someOtherThing: "default-other-thing",
+      });
+
+      expect(warn).toHaveBeenCalledOnce();
+      expect(warn.mock.calls[0]?.[0]).toContain("WARNING: UNKNOWN APP CONFIG OVERRIDE");
+      expect(warn.mock.calls[0]?.[0]).toContain(
+        'Unknown config key "logging" from env var "APP_CONFIG_LOGGING". This env var is not consumed by the config schema.',
+      );
+      expect(warn.mock.calls[0]?.[0]).toContain(
+        "Deployment will continue, but this config value is being ignored by the typed runtime config.",
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("warns loudly for unknown nested APP_CONFIG_* keys instead of failing deployment", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      expect(
+        parseTestAppConfigFromEnv({
+          APP_CONFIG_INTEGRATIONS: JSON.stringify({
+            posthog: {
+              projectApiKey: "phc_example",
+            },
+          }),
+        }),
+      ).toEqual({
+        logs: { stdoutFormat: "pretty", filtering: { rules: [] } },
+        public: { somePublicKey: "default-public-key" },
+        logger: { stdout: false },
+        someOtherThing: "default-other-thing",
+      });
+
+      expect(warn).toHaveBeenCalledOnce();
+      expect(warn.mock.calls[0]?.[0]).toContain(
+        'Unknown config key "integrations" from env var "APP_CONFIG_INTEGRATIONS". This env var is not consumed by the config schema.',
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("still throws when a nested override targets a non-object config field", () => {
     expect(() =>
       parseTestAppConfigFromEnv({
-        APP_CONFIG_LOGGING: JSON.stringify({
-          stdoutFormat: "raw",
-        }),
+        APP_CONFIG_SOME_OTHER_THING__NESTED: "bad",
       }),
     ).toThrow(
-      'Unknown config key "logging" from env var "APP_CONFIG_LOGGING". This env var is not consumed by the config schema.',
+      'Config override "someOtherThing" from env var "APP_CONFIG_SOME_OTHER_THING" targets nested keys on a non-object config field.',
     );
   });
 

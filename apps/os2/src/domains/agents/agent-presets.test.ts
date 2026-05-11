@@ -4,17 +4,22 @@ import {
   defaultAgentSetupEvents,
   defaultAgentSystemPrompt,
   normalizeAgentPresetBasePath,
+  parseAgentRunOptsJson,
   presetConfiguredEvent,
   readAgentPathPrefixPresets,
   selectAgentPathPrefixPreset,
 } from "./agent-presets.ts";
 
 describe("agent presets", () => {
-  it("normalizes preset paths under /agents", () => {
-    expect(normalizeAgentPresetBasePath("alice/bla")).toBe("/agents/alice/bla");
-    expect(normalizeAgentPresetBasePath("/alice/bla/")).toBe("/agents/alice/bla");
-    expect(normalizeAgentPresetBasePath("/agents/alice/bla/")).toBe("/agents/alice/bla");
-    expect(normalizeAgentPresetBasePath("/")).toBe("/agents");
+  it("accepts full preset paths under /agents", () => {
+    expect(normalizeAgentPresetBasePath("/agents")).toBe("/agents");
+    expect(normalizeAgentPresetBasePath("/agents/alice/bla")).toBe("/agents/alice/bla");
+    expect(() => normalizeAgentPresetBasePath("alice/bla")).toThrow(
+      "Agent preset path must be /agents or start with /agents/.",
+    );
+    expect(() => normalizeAgentPresetBasePath("/alice/bla")).toThrow(
+      "Agent preset path must be /agents or start with /agents/.",
+    );
   });
 
   it("selects the longest matching path-prefix preset", () => {
@@ -33,6 +38,26 @@ describe("agent presets", () => {
         presets: [rootPreset, nestedPreset],
       }),
     ).toBe(nestedPreset);
+  });
+
+  it("ignores invalid stored preset paths while selecting a prefix preset", () => {
+    const validPreset = {
+      basePath: "/agents/alice",
+      events: defaultAgentSetupEvents("cloudflare-ai"),
+    };
+
+    expect(
+      selectAgentPathPrefixPreset({
+        agentPath: "/agents/alice/bla",
+        presets: [
+          {
+            basePath: "/alice",
+            events: defaultAgentSetupEvents("openai-ws"),
+          },
+          validPreset,
+        ],
+      }),
+    ).toBe(validPreset);
   });
 
   it("reads the latest configured preset per base path", () => {
@@ -55,9 +80,34 @@ describe("agent presets", () => {
     ]);
   });
 
+  it("ignores configured preset events with invalid base paths", () => {
+    const invalid = presetConfiguredEvent({
+      basePath: "/alice",
+      events: defaultAgentSetupEvents("openai-ws"),
+    });
+    const valid = presetConfiguredEvent({
+      basePath: "/agents/alice",
+      events: defaultAgentSetupEvents("cloudflare-ai"),
+    });
+
+    expect(
+      readAgentPathPrefixPresets([committedEvent(invalid, 1), committedEvent(valid, 2)]),
+    ).toEqual([
+      {
+        basePath: "/agents/alice",
+        events: defaultAgentSetupEvents("cloudflare-ai"),
+      },
+    ]);
+  });
+
   it("keeps the default system prompt on ctx.chat.sendMessage", () => {
     expect(defaultAgentSystemPrompt()).toContain("ctx.chat.sendMessage({ message:");
     expect(defaultAgentSystemPrompt()).not.toContain("ctx.streams.append");
+  });
+
+  it("distinguishes invalid run options JSON from non-object run options", () => {
+    expect(() => parseAgentRunOptsJson("[1, 2]")).toThrow("Run options must be a JSON object.");
+    expect(() => parseAgentRunOptsJson("{")).toThrow("Run options must be valid JSON.");
   });
 });
 
