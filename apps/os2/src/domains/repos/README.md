@@ -244,6 +244,33 @@ intentionally stores one long-lived write token in Repo state so browser UI and
 codemode can show a complete clone/push workflow without token refresh yet. That
 trade-off should be revisited before making Repos broadly available.
 
+## Iterate config repo
+
+Every newly created Project should get an accompanying Repo with slug
+`iterate-config`. This Repo is the project-local configuration tree, not a
+special Cloudflare Artifacts concept.
+
+The `iterate-config` Repo is created by the Project Durable Object during
+Project creation. It is forked from the base Cloudflare Artifacts repo named
+`iterate-config-base`; the fork then follows normal Repo lifecycle rules and
+records `events.iterate.com/repo/created` in `/repos/iterate-config`.
+
+The base repo is populated from the checked-in holder directory:
+
+```txt
+apps/os2/iterate-config-repo
+```
+
+Run the seed script from `apps/os2` with Cloudflare credentials and the exact
+Artifacts namespace configured in `alchemy.run.ts`:
+
+```sh
+pnpm artifacts:seed-config-base -- --namespace <worker-name>-repos
+```
+
+The holder must contain `iterate.config.jsonc`. The file can stay a placeholder
+until project config semantics exist.
+
 ## Discovery
 
 Use `getInitializedDoStub({ allowCreate, name })` as the selector for Repo
@@ -279,11 +306,14 @@ Repo creation time for the token stored in Repo state. The Artifacts docs expose
 TTL in seconds and do not currently document a maximum. Use one far-future
 constant for the prototype rather than exposing token refresh in v1.
 
-Repos should not start empty. Create a minimal initial commit on the default
-branch so clone and push instructions can use ordinary Git commands.
-`RepoDurableObject` owns this v1 behavior directly: after creating the
+New Repos created from scratch should not start empty. Create a minimal initial
+commit on the default branch so clone and push instructions can use ordinary Git
+commands. `RepoDurableObject` owns this v1 behavior directly: after creating the
 Cloudflare Artifacts repo and minting the long-lived write token, it pushes a
 minimal README commit before appending `events.iterate.com/repo/created`.
+
+Forked Repos, such as `iterate-config`, inherit their initial tree from the
+source Artifact and therefore should not receive the README bootstrap commit.
 
 Initial README content should be deterministic:
 

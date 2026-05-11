@@ -82,6 +82,21 @@ describe("Project ingress routing", () => {
     expect(lifecycleState.reducedThroughOffset).toBeGreaterThanOrEqual(3);
     expect(lifecycleState.afterAppendCompletedThroughOffset).toBeGreaterThanOrEqual(3);
 
+    const repoResponse = await SELF.fetch(
+      "https://os.iterate.localhost/__test/iterate-config-repo",
+    );
+    expect(repoResponse.ok).toBe(true);
+    await expect(repoResponse.json()).resolves.toMatchObject({
+      defaultBranch: "main",
+      git: expect.objectContaining({
+        cloneCommand: expect.stringContaining("git -c http.extraHeader="),
+        remote: "https://artifacts.example.test/proj_local_test--iterate-config.git",
+      }),
+      remote: "https://artifacts.example.test/proj_local_test--iterate-config.git",
+      slug: "iterate-config",
+      token: expect.stringContaining("mock-write-"),
+    });
+
     const projectResponse = await SELF.fetch("https://demo.iterate.localhost/", {
       headers: { accept: "text/html" },
     });

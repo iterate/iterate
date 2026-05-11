@@ -41,6 +41,14 @@ import {
   PROJECT_LIFECYCLE_STREAM_PATH,
   ProjectLifecycleProcessorContract,
 } from "~/domains/projects/stream-processors/project-lifecycle.ts";
+import {
+  getRepoDurableObjectName,
+  type RepoDurableObject,
+} from "~/domains/repos/durable-objects/repo-durable-object.ts";
+import {
+  ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME,
+  ITERATE_CONFIG_REPO_SLUG,
+} from "~/domains/repos/iterate-config-repo.ts";
 
 export type ProjectStructuredName = {
   projectId: string;
@@ -79,6 +87,7 @@ type ProjectEnv = {
   APP_CONFIG: string;
   DB: D1Database;
   DO_CATALOG: D1Database;
+  REPO: DurableObjectNamespace<RepoDurableObject>;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
 };
 
@@ -210,6 +219,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     await this.writeIngressRoutes({ hosts, projectId: input.projectId });
     const summary = this.requireSummary();
     await this.writeProjectCreatedLifecycleEvent(summary);
+    await this.ensureIterateConfigRepo(summary);
     await this.writeAgentsRootRule(summary);
 
     return summary;
@@ -438,6 +448,52 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     });
   }
 
+  private async ensureIterateConfigRepo(summary: ProjectSummary) {
+    const repoName = getRepoDurableObjectName({
+      projectId: summary.id,
+      repoSlug: ITERATE_CONFIG_REPO_SLUG,
+    });
+    const existing = await getInitializedDoStub({
+      allowCreate: false,
+      namespace: this.env.REPO,
+      name: repoName,
+    });
+
+    if (existing !== null) {
+      try {
+        await existing.getInfo();
+        return;
+      } catch (error) {
+        if (!isRepoNotCreatedError(error)) {
+          throw error;
+        }
+      }
+    }
+
+    const repo = await getInitializedDoStub({
+      allowCreate: true,
+      namespace: this.env.REPO,
+      name: repoName,
+    });
+
+    try {
+      await repo.createRepo({
+        projectSlug: summary.slug,
+        source: {
+          artifactName: ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME,
+          description: `Iterate config repo for ${summary.slug}`,
+          kind: "artifact-fork",
+        },
+      });
+    } catch (error) {
+      if (isRepoAlreadyExistsError(error)) {
+        return;
+      }
+
+      throw error;
+    }
+  }
+
   private async ensureAgentsRoot(projectId: string) {
     await getInitializedDoStub({
       allowCreate: true,
@@ -610,6 +666,14 @@ function projectHosts(input: { bases: readonly string[]; projectId: string; slug
 
 function readLoopbackExports(ctx: DurableObjectState) {
   return ctx.exports;
+}
+
+function isRepoAlreadyExistsError(error: unknown) {
+  return error instanceof Error && /Repo .* already exists\./.test(error.message);
+}
+
+function isRepoNotCreatedError(error: unknown) {
+  return error instanceof Error && /Repo .* has not been created\./.test(error.message);
 }
 
 function projectLandingResponse(input: { request: Request; summary: ProjectSummary }) {

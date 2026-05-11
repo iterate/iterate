@@ -175,6 +175,35 @@ const codemodeExampleSeeds = [
     ],
   },
   {
+    slug: "iterate-config-repo-info",
+    name: "Inspect iterate config repo",
+    description:
+      "Read the project-created iterate-config Repo handle and return the Git access details needed to clone and push.",
+    providers: [{ type: "example-capabilities" }],
+    code: `async (ctx) => {
+  const repo = await ctx.repos.get({ slug: "iterate-config" }).getInfo();
+
+  return {
+    slug: repo.slug,
+    remote: repo.remote,
+    defaultBranch: repo.defaultBranch,
+    tokenExpiresAt: repo.tokenExpiresAt,
+    cloneCommand: repo.git.cloneCommand,
+    pushCommand: repo.git.pushCommand,
+    hasToken: typeof repo.token === "string" && repo.token.length > 0,
+  };
+}`,
+    events: [
+      {
+        type: "events.iterate.com/codemode/example-note",
+        payload: {
+          message:
+            "Reads the project-created iterate-config Repo with ctx.repos.get({ slug }).getInfo().",
+        },
+      },
+    ],
+  },
+  {
     slug: "cloudflare-docs-mcp",
     name: "Cloudflare Docs MCP",
     description: "Use Cloudflare's public documentation MCP server as a normal codemode provider.",

@@ -54,6 +54,14 @@ export type RepoInfo = {
 
 export type CreateRepoInput = {
   projectSlug?: string;
+  source?:
+    | { kind: "initial-readme" }
+    | {
+        artifactName: string;
+        defaultBranchOnly?: boolean;
+        description?: string;
+        kind: "artifact-fork";
+      };
 };
 
 const RepoStructuredName = z.object({
@@ -119,9 +127,17 @@ export class RepoDurableObject extends RepoBase<RepoEnv> {
 
     const artifactName = repoArtifactName(this.structuredName);
     const artifacts = this.requireArtifacts();
-    const artifact = await artifacts.create(artifactName, {
-      setDefaultBranch: REPO_DEFAULT_BRANCH,
-    });
+    const source = input.source ?? { kind: "initial-readme" as const };
+    const artifact =
+      source.kind === "artifact-fork"
+        ? await this.forkArtifactRepo({
+            artifactName,
+            artifacts,
+            source,
+          })
+        : await artifacts.create(artifactName, {
+            setDefaultBranch: REPO_DEFAULT_BRANCH,
+          });
     const token = await createArtifactToken({
       artifact,
       artifacts,
@@ -129,20 +145,26 @@ export class RepoDurableObject extends RepoBase<RepoEnv> {
       scope: "write",
       ttlSeconds: REPO_WRITE_TOKEN_TTL_SECONDS,
     });
-    const defaultBranch = artifact.defaultBranch ?? artifact.default_branch ?? REPO_DEFAULT_BRANCH;
+    const remote = await requireArtifactString(artifact.remote, "remote");
+    const defaultBranch =
+      (await readArtifactString(artifact.defaultBranch)) ??
+      (await readArtifactString(artifact.default_branch)) ??
+      REPO_DEFAULT_BRANCH;
 
-    await pushInitialReadme({
-      defaultBranch,
-      projectId: this.structuredName.projectId,
-      projectSlug: input.projectSlug,
-      remote: artifact.remote,
-      repoSlug: this.structuredName.repoSlug,
-      token: token.plaintext,
-    });
+    if (source.kind === "initial-readme") {
+      await pushInitialReadme({
+        defaultBranch,
+        projectId: this.structuredName.projectId,
+        projectSlug: input.projectSlug,
+        remote,
+        repoSlug: this.structuredName.repoSlug,
+        token: token.plaintext,
+      });
+    }
 
     const event = await this.appendRepoCreatedEvent({
       defaultBranch,
-      remote: artifact.remote,
+      remote,
       slug: this.structuredName.repoSlug,
       token: token.plaintext,
       tokenExpiresAt: token.expiresAt,
@@ -195,6 +217,25 @@ export class RepoDurableObject extends RepoBase<RepoEnv> {
     }
 
     return this.env.ARTIFACTS;
+  }
+
+  private async forkArtifactRepo(input: {
+    artifactName: string;
+    artifacts: CloudflareArtifactsBinding;
+    source: Extract<NonNullable<CreateRepoInput["source"]>, { kind: "artifact-fork" }>;
+  }) {
+    const sourceArtifact = await input.artifacts.get(input.source.artifactName);
+    if (typeof sourceArtifact.fork !== "function") {
+      throw new Error("Cloudflare Artifacts repo handle did not expose fork().");
+    }
+
+    return await sourceArtifact.fork(input.artifactName, {
+      defaultBranchOnly: input.source.defaultBranchOnly ?? true,
+      description:
+        input.source.description ??
+        `Fork of ${input.source.artifactName} for ${this.structuredName.repoSlug}`,
+      readOnly: false,
+    });
   }
 
   private async appendRepoCreatedEvent(input: {
@@ -278,6 +319,22 @@ function gitInfo(input: { defaultBranch: string; remote: string; slug: string; t
     )}`,
     remote: input.remote,
   };
+}
+
+async function readArtifactString(value: unknown): Promise<string | undefined> {
+  const candidate =
+    typeof value === "function" ? (value as () => unknown | Promise<unknown>)() : value;
+  const resolved = await candidate;
+  return typeof resolved === "string" && resolved.length > 0 ? resolved : undefined;
+}
+
+async function requireArtifactString(value: unknown, property: string) {
+  const resolved = await readArtifactString(value);
+  if (!resolved) {
+    throw new Error(`Cloudflare Artifacts repo response did not include ${property}.`);
+  }
+
+  return resolved;
 }
 
 function shellQuote(value: string) {

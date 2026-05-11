@@ -28,6 +28,10 @@ export default defineConfig({
       main: resolve(testRoot, "project-ingress-test-entry.ts"),
       miniflare: {
         serviceBindings: {
+          ARTIFACTS: {
+            entrypoint: "MockArtifactsBinding",
+            name: miniflare.kCurrentWorker,
+          },
           PROJECT_ENTRYPOINT: {
             entrypoint: "ProjectIngressEntrypoint",
             name: miniflare.kCurrentWorker,

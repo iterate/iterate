@@ -19,6 +19,16 @@ export type CloudflareArtifactRepo = {
     scope: CloudflareArtifactTokenScope,
     ttlSeconds: number,
   ): Promise<CloudflareArtifactToken>;
+  fork?(
+    name: string,
+    options?: {
+      defaultBranchOnly?: boolean;
+      default_branch_only?: boolean;
+      description?: string;
+      readOnly?: boolean;
+      read_only?: boolean;
+    },
+  ): Promise<CloudflareArtifactRepo>;
   plaintext?: string;
   token?: string;
 };
