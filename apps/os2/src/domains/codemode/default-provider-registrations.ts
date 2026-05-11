@@ -28,7 +28,7 @@ export function createDefaultCodemodeProviderRegistrations(input: {
     {
       path: ["streams"],
       instructions:
-        "Use ctx.streams.append({ event, streamPath? }) and ctx.streams.read({ streamPath?, afterOffset?, beforeOffset? }) for namespace event streams.",
+        "ctx.streams.read({ streamPath?, afterOffset?, beforeOffset? }) reads event history. ctx.streams.append({ event: { type, payload }, streamPath? }) appends. Omit streamPath for the current stream; use relative paths (e.g. './child') for other streams.",
       invocation: {
         kind: "rpc",
         callable: {
@@ -51,7 +51,7 @@ export function createDefaultCodemodeProviderRegistrations(input: {
     {
       path: ["slack"],
       instructions:
-        "Use ctx.slack.<Slack Web API method path>(args), for example ctx.slack.chat.postMessage({ channel, text }).",
+        "Use ctx.slack.<Slack Web API method path>(args), e.g. ctx.slack.chat.postMessage({ channel, thread_ts, text }). Best practice: use Promise.all to send an immediate acknowledgment ('On it...') while doing the real work in parallel, then send the actual result afterwards. Example: const [, data] = await Promise.all([ctx.slack.chat.postMessage({ channel, thread_ts, text: 'Looking into it...' }), fetch('https://...').then(r => r.json())]); await ctx.slack.chat.postMessage({ channel, thread_ts, text: formatResult(data) });",
       invocation: {
         kind: "rpc",
         callable: {

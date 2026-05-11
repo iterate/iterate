@@ -500,7 +500,7 @@ function eventTypeExplanation(eventType: string): string | null {
     return eventTypeExplanationBlock({
       type: eventType,
       meaning:
-        "A codemode tool provider became available. Its path and instructions should be used when writing codemode scripts.",
+        "A codemode tool provider is now available. Call it as `ctx.<path>.<method>(args)` in your codemode scripts. The event below shows the provider's path and usage instructions.",
     });
   }
   return null;

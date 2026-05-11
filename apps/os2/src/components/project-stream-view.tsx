@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { Event, EventInput, type StreamPath } from "@iterate-com/shared/streams/types";
 import {
@@ -38,6 +38,10 @@ const defaultRawEventPresets: readonly EventsStreamComposerRawPreset[] = [
   {
     id: DEFAULT_RAW_EVENT_PRESET_ID,
     label: "Manual event",
+    processorSlug: "manual",
+    eventType: "events.iterate.com/os2/manual-event",
+    eventDescription: "A generic event you can edit before appending it to the stream.",
+    exampleName: "Manual event",
     value: [
       "type: events.iterate.com/os2/manual-event",
       "payload:",
@@ -48,6 +52,11 @@ const defaultRawEventPresets: readonly EventsStreamComposerRawPreset[] = [
   {
     id: "stream-error",
     label: "Stream error",
+    processorSlug: "core",
+    eventType: "events.iterate.com/core/error-occurred",
+    eventDescription: "Records a stream-level error that can be surfaced in the stream UI.",
+    eventDocsHref: "https://events.iterate.com/core/error-occurred/",
+    exampleName: "Stream error",
     value: [
       "type: events.iterate.com/core/error-occurred",
       "payload:",
@@ -58,6 +67,11 @@ const defaultRawEventPresets: readonly EventsStreamComposerRawPreset[] = [
   {
     id: "metadata-updated",
     label: "Metadata updated",
+    processorSlug: "core",
+    eventType: "events.iterate.com/core/metadata-updated",
+    eventDescription: "Updates metadata associated with this stream.",
+    eventDocsHref: "https://events.iterate.com/core/metadata-updated/",
+    exampleName: "Metadata updated",
     value: [
       "type: events.iterate.com/core/metadata-updated",
       "payload:",
@@ -145,14 +159,33 @@ export function ProjectStreamView({
     };
   }, [projectSlugOrId, streamPath]);
 
-  const viewState = useMemo(
-    () =>
-      processEventsWithViewReducer({
-        events,
-        reducer: selectEventsStreamViewReducer(rendererMode),
-      }),
-    [events, rendererMode],
-  );
+  const viewReducerRef = useRef<{
+    state: ReturnType<typeof processEventsWithViewReducer> | null;
+    processedCount: number;
+    rendererMode: typeof rendererMode;
+  }>({ state: null, processedCount: 0, rendererMode });
+
+  const viewState = useMemo(() => {
+    const reducer = selectEventsStreamViewReducer(rendererMode);
+    const ref = viewReducerRef.current;
+
+    // Full reprocess when renderer mode changes or events were reset (stream path change)
+    if (ref.rendererMode !== rendererMode || ref.processedCount > events.length) {
+      ref.state = processEventsWithViewReducer({ events, reducer });
+      ref.processedCount = events.length;
+      ref.rendererMode = rendererMode;
+      return ref.state;
+    }
+
+    // Incremental: only reduce new events against existing state
+    let state = ref.state ?? reducer.createInitialState();
+    for (let i = ref.processedCount; i < events.length; i++) {
+      state = reducer.reduce({ event: events[i]!, state }) ?? state;
+    }
+    ref.state = state;
+    ref.processedCount = events.length;
+    return state;
+  }, [events, rendererMode]);
 
   const rawPresets = useMemo(
     () => buildRawPresets(viewState.activity.registeredProcessors),
@@ -284,8 +317,18 @@ export function ProjectStreamView({
 }
 
 function appendStreamEvent(events: Event[], event: Event): Event[] {
+  const lastEvent = events[events.length - 1];
+
+  // Fast path: event arrives in order (the normal SSE case)
+  if (lastEvent == null || event.offset > lastEvent.offset) {
+    return [...events, event];
+  }
+
+  // Duplicate
+  if (event.offset === lastEvent.offset) return events;
   if (events.some((candidate) => candidate.offset === event.offset)) return events;
 
+  // Out-of-order fallback
   return [...events, event].toSorted((left, right) => left.offset - right.offset);
 }
 
@@ -307,14 +350,30 @@ function buildRawPresets(
         for (const example of event.examples) {
           processorPresets.push({
             id: `${processor.slug}/${event.type}/${example.description}`,
-            label: `${processor.slug}: ${example.description}`,
+            label: `${shortEventType(event.type)}: ${example.description}`,
+            processorSlug: processor.slug,
+            eventType: event.type,
+            ...(event.description == null ? {} : { eventDescription: event.description }),
+            eventDocsHref: eventDocsHref({
+              processorSlug: processor.slug,
+              eventType: event.type,
+            }),
+            exampleName: example.description,
             value: stringifyYaml({ type: event.type, payload: example.payload }),
           });
         }
       } else {
         processorPresets.push({
           id: `${processor.slug}/${event.type}`,
-          label: `${processor.slug}: ${shortEventType(event.type)}`,
+          label: `${shortEventType(event.type)}: Empty payload`,
+          processorSlug: processor.slug,
+          eventType: event.type,
+          ...(event.description == null ? {} : { eventDescription: event.description }),
+          eventDocsHref: eventDocsHref({
+            processorSlug: processor.slug,
+            eventType: event.type,
+          }),
+          exampleName: "Empty payload",
           value: stringifyYaml({ type: event.type, payload: {} }),
         });
       }
@@ -327,4 +386,12 @@ function buildRawPresets(
 function shortEventType(eventType: string): string {
   const lastSegment = eventType.split("/").pop();
   return lastSegment ?? eventType;
+}
+
+function eventDocsHref(args: { processorSlug: string; eventType: string }) {
+  const prefix = `events.iterate.com/${args.processorSlug}/`;
+  const eventSlug = args.eventType.startsWith(prefix)
+    ? args.eventType.slice(prefix.length)
+    : (args.eventType.split("/").at(-1) ?? args.eventType);
+  return `https://events.iterate.com/${args.processorSlug}/${eventSlug}/`;
 }

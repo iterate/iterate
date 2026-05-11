@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import type { ResponsesClientEvent } from "openai/resources/responses/responses";
 import { ResponsesWSBase } from "openai/resources/responses/ws-base";
+import { createD1Client } from "sqlfu";
 import { z } from "zod";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
@@ -37,6 +38,8 @@ import {
 import { createExampleCapabilityProviders } from "~/domains/codemode/example-provider-registrations.ts";
 import type { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
 import { createGmailProviderRegistration } from "~/domains/google/gmail-provider-registration.ts";
+import { getProjectSecret } from "~/domains/secrets/secrets-store.ts";
+import { callSlackWebApi } from "~/domains/slack/entrypoints/slack-capability.ts";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
 import {
   defaultAgentSetupEvents,
@@ -69,8 +72,10 @@ export type AgentDurableObjectEnv = {
   AGENT: DurableObjectNamespace<AgentDurableObject>;
   AI: CloudflareAiProcessorDeps["ai"];
   APP_CONFIG: string;
+  APP_CONFIG_SLACK_BOT_TOKEN?: string;
   CODEMODE_SESSION: DurableObjectNamespace<CodemodeSession>;
   DO_CATALOG: D1Database;
+  SLACK_BOT_TOKEN?: string;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
 };
 
@@ -112,6 +117,7 @@ const AgentBase = withStreamProcessor<AgentDurableObjectStructuredName, AgentDur
 
 export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
   #streamSocketMessageQueue = Promise.resolve();
+  #slackThreadTarget: SlackThreadTarget | null = null;
 
   constructor(ctx: DurableObjectState, env: AgentDurableObjectEnv) {
     super(ctx, env);
@@ -211,6 +217,8 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     await this.ensureStarted();
     const state = await this.consumeStreamProcessorEvent({ event: input.event as StreamEvent });
     await this.ensureChildAgentRunner(input.event);
+    await this.handleSlackWebhookSideEffects(input.event);
+    await this.handleSlackThreadStatusIndicator(input.event);
     await this.handleAgentOutputAddedForCodemode(input.event);
     await this.handleCodemodeScriptExecutionCompleted(input.event);
     return state;
@@ -247,6 +255,14 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
 
   async executeCodemodeFunctionCall(input: ExecuteCodemodeFunctionCallInput) {
     await this.ensureStarted();
+    const providerName = input.providerPath.join(".");
+    if (providerName === "debug") {
+      return await this.createDebugSnapshot();
+    }
+    if (providerName === "slack" && input.functionPath.join(".") === "threadInfo") {
+      return await this.createSlackThreadInfo();
+    }
+
     const functionName = input.functionPath.join(".");
     if (functionName !== "sendMessage") {
       throw new Error(`Unknown agent chat tool function chat.${functionName}`);
@@ -309,7 +325,8 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     const defaultProvider = readOpenAiApiKey(this.env as Record<string, unknown>).trim()
       ? "openai-ws"
       : "cloudflare-ai";
-    const setupEvents = preset?.events ?? defaultAgentSetupEvents(defaultProvider);
+    const setupEvents =
+      preset?.events ?? defaultAgentSetupEvents(defaultProvider, params.agentPath);
     const hasSetupPrompt = setupEvents.some(
       (event) => event.type === "events.iterate.com/agent/system-prompt-updated",
     );
@@ -348,7 +365,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
           type: "events.iterate.com/agent/system-prompt-updated",
           idempotencyKey: "agent-default-system-prompt-v2",
           payload: {
-            systemPrompt: defaultAgentSystemPrompt(),
+            systemPrompt: defaultAgentSystemPrompt(params.agentPath),
           },
         },
       });
@@ -405,6 +422,149 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     }
   }
 
+  private async handleSlackWebhookSideEffects(event: Event) {
+    if (!isSlackAgentPath(this.structuredName.agentPath)) return;
+    if (event.type !== "events.iterate.com/slack/webhook-received") return;
+
+    const target = slackThreadTargetFromWebhookEvent(event);
+    if (target == null) return;
+    this.#slackThreadTarget = target;
+
+    if (target.messageTs == null || target.isBotMessage || target.isReactionEvent) return;
+    await this.callSlackApi("reactions.add", {
+      channel: target.channel,
+      name: "eyes",
+      timestamp: target.messageTs,
+    });
+  }
+
+  private async handleSlackThreadStatusIndicator(event: Event) {
+    if (!isSlackAgentPath(this.structuredName.agentPath)) return;
+
+    const update = slackThreadStatusForEvent(event);
+    if (update == null) return;
+
+    const target = await this.resolveSlackThreadTarget();
+    if (target == null) return;
+
+    await this.callSlackApi("assistant.threads.setStatus", {
+      channel_id: target.channel,
+      thread_ts: target.threadTs,
+      ...update.status,
+    });
+    if (update.clear && target.messageTs != null) {
+      await this.callSlackApi("reactions.remove", {
+        channel: target.channel,
+        name: "eyes",
+        timestamp: target.messageTs,
+      });
+    }
+  }
+
+  private async resolveSlackThreadTarget(): Promise<SlackThreadTarget | null> {
+    if (this.#slackThreadTarget != null) return this.#slackThreadTarget;
+
+    const events = await this.streamsEntrypoint(this.structuredName.agentPath).read({
+      afterOffset: "start",
+      beforeOffset: "end",
+    });
+    for (const event of events.toReversed()) {
+      const target = slackThreadTargetFromWebhookEvent(event);
+      if (target == null) continue;
+      this.#slackThreadTarget = target;
+      return target;
+    }
+    return null;
+  }
+
+  private async callSlackApi(method: string, body: Record<string, unknown>) {
+    const token = await this.readSlackToken();
+    if (!token) return;
+
+    try {
+      await callSlackWebApi({ body, method, token });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (
+        method === "reactions.add" &&
+        (message.includes("already_reacted") || message.includes("not_reactable"))
+      ) {
+        return;
+      }
+      if (method === "reactions.remove" && message.includes("no_reaction")) {
+        return;
+      }
+      console.error("[os2-agent] Slack side effect failed", {
+        agentName: this.name,
+        error,
+        method,
+      });
+    }
+  }
+
+  private async readSlackToken() {
+    const secret = await getProjectSecret(createD1Client(this.env.DO_CATALOG), {
+      key: "slack.access_token",
+      projectId: this.structuredName.projectId,
+    });
+    if (secret) return secret.material;
+
+    return this.env.SLACK_BOT_TOKEN ?? this.env.APP_CONFIG_SLACK_BOT_TOKEN ?? "";
+  }
+
+  private async createDebugSnapshot() {
+    const slackTarget = isSlackAgentPath(this.structuredName.agentPath)
+      ? await this.resolveSlackThreadTarget()
+      : null;
+    const project = await this.readDebugProjectInfo();
+    const streamUrl = buildEventsStreamViewerUrl({
+      namespace: this.structuredName.projectId,
+      streamPath: this.structuredName.agentPath,
+    });
+    const snapshot = {
+      project:
+        project == null
+          ? { id: this.structuredName.projectId }
+          : { id: this.structuredName.projectId, slug: project.slug },
+      slack:
+        slackTarget == null
+          ? null
+          : { channel: slackTarget.channel, threadTs: slackTarget.threadTs },
+      streamPath: this.structuredName.agentPath,
+      streamUrl,
+    };
+    return formatSlackDebugMessage(snapshot);
+  }
+
+  private async createSlackThreadInfo() {
+    const target = await this.resolveSlackThreadTarget();
+    if (target == null) {
+      throw new Error("ctx.slack.threadInfo() is only available on Slack thread agent streams.");
+    }
+    return {
+      channel: target.channel,
+      thread_ts: target.threadTs,
+    };
+  }
+
+  private async readDebugProjectInfo(): Promise<DebugProjectInfo | null> {
+    try {
+      const row = await this.env.DO_CATALOG.prepare(
+        "select id, slug from projects where id = ? limit 1",
+      )
+        .bind(this.structuredName.projectId)
+        .first<{ id: string; slug: string }>();
+      if (row == null) return null;
+      return { id: row.id, slug: row.slug };
+    } catch (error) {
+      console.error("[os2-agent] failed to read project debug info", {
+        agentName: this.name,
+        error,
+      });
+      return null;
+    }
+  }
+
   private async appendAssistantResponse(input: {
     channel?: string;
     idempotencyKey: string;
@@ -446,13 +606,62 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     };
   }
 
+  private createAgentDebugToolProvider(): ToolProviderRegistration {
+    return {
+      path: ["debug"],
+      instructions:
+        "Use ctx.debug() to return OS2 debug information about the current agent stream.",
+      invocation: {
+        kind: "rpc",
+        callable: {
+          type: "workers-rpc",
+          via: {
+            type: "env-binding",
+            bindingType: "durable-object-namespace",
+            bindingName: "AGENT",
+            durableObject: {
+              name: this.name,
+            },
+          },
+          rpcMethod: "executeCodemodeFunctionCall",
+          argsMode: "object",
+        },
+      },
+    };
+  }
+
+  private createSlackThreadToolProvider(): ToolProviderRegistration {
+    return {
+      path: ["slack", "threadInfo"],
+      instructions:
+        "Use ctx.slack.threadInfo() on Slack agent streams to get { channel, thread_ts } for the current Slack thread.",
+      invocation: {
+        kind: "rpc",
+        callable: {
+          type: "workers-rpc",
+          via: {
+            type: "env-binding",
+            bindingType: "durable-object-namespace",
+            bindingName: "AGENT",
+            durableObject: {
+              name: this.name,
+            },
+          },
+          rpcMethod: "executeCodemodeFunctionCall",
+          argsMode: "object",
+        },
+      },
+    };
+  }
+
   private createCodemodeToolProviders(
     params: AgentDurableObjectStructuredName,
   ): ToolProviderRegistration[] {
-    const providers = [this.createAgentChatToolProvider()];
+    const providers = [this.createAgentChatToolProvider(), this.createAgentDebugToolProvider()];
     if (!isSlackAgentPath(params.agentPath)) return providers;
 
     providers.push(
+      this.createSlackThreadToolProvider(),
       ...createExampleCapabilityProviders({ projectId: params.projectId }).filter(
         (provider) => provider.path.join("/") !== "slack",
       ),
@@ -648,6 +857,128 @@ function formatCodemodeOutput(output: unknown) {
 
 function parseAgentChatChannel(channel: string | undefined) {
   return channel === "tui" ? "tui" : "web";
+}
+
+type DebugProjectInfo = {
+  id: string;
+  slug: string;
+};
+
+type DebugSnapshot = {
+  project: { id: string; slug?: string };
+  slack: { channel: string; threadTs: string } | null;
+  streamPath: string;
+  streamUrl: string;
+};
+
+function formatSlackDebugMessage(snapshot: DebugSnapshot) {
+  return [
+    `*Debug:* <${snapshot.streamUrl}|open stream>`,
+    `Path: \`${snapshot.streamPath}\``,
+    `Project: \`${snapshot.project.slug ?? snapshot.project.id}\``,
+  ].join("\n");
+}
+
+function buildEventsStreamViewerUrl(input: { namespace: string; streamPath: string }) {
+  const origin = new URL("https://events.iterate.com");
+  origin.hostname = `${input.namespace}.${origin.hostname}`;
+  origin.pathname = eventsStreamPathname(input.streamPath);
+  return origin.toString();
+}
+
+function eventsStreamPathname(streamPath: string) {
+  if (streamPath === "/") return "/streams/";
+  const segments = streamPath
+    .replace(/^\/+/, "")
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => encodeURIComponent(segment));
+  return `/streams/${segments.join("/")}`;
+}
+
+type SlackThreadTarget = {
+  channel: string;
+  isBotMessage: boolean;
+  isReactionEvent: boolean;
+  messageTs?: string;
+  threadTs: string;
+};
+
+function slackThreadTargetFromWebhookEvent(event: {
+  payload: unknown;
+  type: string;
+}): SlackThreadTarget | null {
+  if (event.type !== "events.iterate.com/slack/webhook-received") return null;
+
+  const payload = readRecord(event.payload);
+  const body = readRecord(payload?.body);
+  const slackEvent = readRecord(body?.event);
+  if (slackEvent == null) return null;
+
+  const item = readRecord(slackEvent.item);
+  const message = readRecord(slackEvent.message);
+  const channel =
+    readString(slackEvent.channel) ?? readString(item?.channel) ?? readString(message?.channel);
+  const threadTs =
+    readString(slackEvent.thread_ts) ??
+    readString(message?.thread_ts) ??
+    readString(slackEvent.ts) ??
+    readString(item?.ts) ??
+    readString(message?.ts);
+  if (channel == null || threadTs == null) return null;
+
+  const type = readString(slackEvent.type);
+  const messageTs = readString(slackEvent.ts) ?? readString(message?.ts);
+  return {
+    channel,
+    isBotMessage:
+      readString(slackEvent.subtype) === "bot_message" ||
+      readString(slackEvent.bot_id) != null ||
+      readRecord(slackEvent.bot_profile) != null,
+    isReactionEvent: type === "reaction_added" || type === "reaction_removed",
+    messageTs,
+    threadTs,
+  };
+}
+
+function slackThreadStatusForEvent(event: { payload: unknown; type: string }): {
+  clear: boolean;
+  status: { loading_messages?: string[]; status: string };
+} | null {
+  if (event.type === "events.iterate.com/agent/status-updated") {
+    const payload = readRecord(event.payload);
+    if (readString(payload?.status) === "working") {
+      return {
+        clear: false,
+        status: { status: "is thinking...", loading_messages: ["Thinking..."] },
+      };
+    }
+    if (readString(payload?.status) === "idle") {
+      return { clear: true, status: { status: "" } };
+    }
+  }
+
+  if (event.type === "events.iterate.com/codemode/script-execution-requested") {
+    return {
+      clear: false,
+      status: { status: "is using tools...", loading_messages: ["Using tools..."] },
+    };
+  }
+  if (event.type === "events.iterate.com/codemode/script-execution-completed") {
+    return { clear: true, status: { status: "" } };
+  }
+
+  return null;
+}
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value != null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
 }
 
 function isSlackAgentPath(agentPath: string) {

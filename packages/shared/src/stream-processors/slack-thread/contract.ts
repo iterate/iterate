@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { AgentProcessorContract } from "../agent/contract.ts";
+import { CodemodeProcessorContract } from "../codemode/contract.ts";
 import { defineProcessorContract } from "../stream-processor.ts";
 import { SlackProcessorContract } from "../slack/contract.ts";
 
@@ -9,9 +10,9 @@ import { SlackProcessorContract } from "../slack/contract.ts";
  * This processor is deliberately only the Slack-to-agent transcription step.
  * The upstream `slack` router has already decided that the raw Slack webhook
  * belongs on this stream. Once it lands here, we append model-visible agent
- * input and stop. Slack reactions, status updates, and other Slack API writes
- * will be driven later by ordinary agent tool calls, not by hidden processor
- * side-effect events.
+ * input or codemode script requests and stop. Slack reactions, status updates,
+ * and other Slack API writes are owned by the OS2 runner, not this portable
+ * shared processor.
  */
 export const SlackThreadProcessorContract = defineProcessorContract({
   slug: "slack-thread",
@@ -19,8 +20,11 @@ export const SlackThreadProcessorContract = defineProcessorContract({
   description: "Transcribes routed Slack webhooks for one Slack-backed agent stream.",
   stateSchema: z.object({}),
   initialState: {},
-  processorDeps: [AgentProcessorContract, SlackProcessorContract],
+  processorDeps: [AgentProcessorContract, CodemodeProcessorContract, SlackProcessorContract],
   events: {},
   consumes: ["events.iterate.com/slack/webhook-received"],
-  emits: ["events.iterate.com/agent/input-added"],
+  emits: [
+    "events.iterate.com/agent/input-added",
+    "events.iterate.com/codemode/script-execution-requested",
+  ],
 });

@@ -8,31 +8,6 @@ export function createSlackThreadProcessor() {
     async afterAppend({ event, streamApi }) {
       switch (event.type) {
         case "events.iterate.com/slack/webhook-received": {
-          /**
-           * `slack` forwards the original Slack Events API callback to this
-           * stream without changing it. This processor is intentionally the
-           * first and only place in this POC that turns that Slack-shaped fact
-           * into agent-shaped input.
-           *
-           * Example forwarded message body:
-           *
-           * ```json
-           * {
-           *   "type": "event_callback",
-           *   "event": {
-           *     "type": "app_mention",
-           *     "channel": "C123",
-           *     "ts": "1772136258.963519",
-           *     "text": "<@U_BOT> ship it"
-           *   }
-           * }
-           * ```
-           *
-           * The agent receives the Slack event mostly verbatim, wrapped with
-           * enough source metadata to make future prompt formatting obvious.
-           * We do not request Slack reactions or thread status here; the agent
-           * will eventually do Slack writes through tools.
-           */
           const parsed = z
             .object({
               type: z.literal("event_callback"),
@@ -45,11 +20,31 @@ export function createSlackThreadProcessor() {
           const slackEvent = parsed.data.event as unknown as SlackEvent;
           if (isBotMessage(slackEvent)) return;
 
+          const bangCommand = compileBangCommand(slackEvent);
+          if (bangCommand != null) {
+            await streamApi.append({
+              event: {
+                type: "events.iterate.com/codemode/script-execution-requested",
+                idempotencyKey: buildProcessorIdempotencyKey({
+                  processor: SlackThreadProcessorContract,
+                  key: "slack-bang-command-to-codemode-script",
+                  sourceEvent: event,
+                }),
+                payload: {
+                  code: bangCommand.code,
+                  scriptExecutionId: `slack-bang-command-${event.offset}`,
+                },
+              },
+            });
+            return;
+          }
+
           const channel = readStringField(slackEvent, "channel");
           const threadTs =
             readStringField(slackEvent, "thread_ts") ??
             readNestedMessageStringField(slackEvent, "thread_ts") ??
             readStringField(slackEvent, "ts");
+
           await streamApi.append({
             event: {
               type: "events.iterate.com/agent/input-added",
@@ -60,13 +55,11 @@ export function createSlackThreadProcessor() {
               }),
               payload: {
                 content: [
-                  "Slack event received for this agent thread.",
+                  "Slack message received.",
                   "",
                   "Response target:",
                   `- channel: ${channel ?? "unknown"}`,
                   `- thread_ts: ${threadTs ?? "unknown"}`,
-                  "",
-                  "When responding in Slack, use `ctx.slack.chat.postMessage({ channel, thread_ts, text })` with the response target above.",
                   "",
                   "Slack event:",
                   "```json",
@@ -100,4 +93,34 @@ function readStringField(value: unknown, key: string): string | undefined {
 function readNestedMessageStringField(value: unknown, key: string): string | undefined {
   if (value == null || typeof value !== "object") return undefined;
   return readStringField((value as Record<string, unknown>).message, key);
+}
+
+function compileBangCommand(slackEvent: SlackEvent): { code: string } | null {
+  const message = readStringField(slackEvent, "text")?.trim();
+  if (!message) return null;
+
+  const withoutMention = message.replace(/^<@[^>]+>\s*/i, "").trim();
+  if (!withoutMention.startsWith("!")) return null;
+
+  const rawCommand = withoutMention.slice(1).trim();
+  if (!rawCommand) return null;
+
+  let expression = rawCommand.startsWith("ctx.") ? rawCommand : `ctx.${rawCommand}`;
+  if (!expression.includes("(")) expression = `${expression}()`;
+
+  const lines = [
+    "async (ctx) => {",
+    `  // this snippet was invoked as a bang-command by the slack processor in response to the user typing ${JSON.stringify(message)}; bang-commands are deterministic commands often requested by the user to e.g. debug a session`,
+    `  const result = await ${expression};`,
+    "  if (result === undefined) return;",
+    '  const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);',
+    "  const thread = await ctx.slack.threadInfo();",
+    "  await ctx.slack.chat.postMessage({",
+    "    channel: thread.channel,",
+    "    thread_ts: thread.thread_ts,",
+    "    text,",
+    "  });",
+    "}",
+  ];
+  return { code: lines.join("\n") };
 }

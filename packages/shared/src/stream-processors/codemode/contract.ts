@@ -118,10 +118,60 @@ export const CodemodeProcessorContract = defineProcessorContract({
       description: "A codemode script should run against the stream's documented functions.",
       examples: [
         {
-          description: "Run a simple script",
+          description: "Send a chat message",
           payload: {
-            code: "return 1 + 1",
-            scriptExecutionId: "manual-1",
+            code: [
+              "async (ctx) => {",
+              '  await ctx.chat.sendMessage({ message: "Hello!" })',
+              "}",
+            ].join("\n"),
+            scriptExecutionId: "example-chat",
+          },
+        },
+        {
+          description: "Fetch data and send the result",
+          payload: {
+            code: [
+              "async (ctx) => {",
+              '  const res = await fetch("https://api.example.com/data")',
+              "  const data = await res.json()",
+              "  await ctx.chat.sendMessage({ message: JSON.stringify(data, null, 2) })",
+              "}",
+            ].join("\n"),
+            scriptExecutionId: "example-fetch",
+          },
+        },
+        {
+          description: "Acknowledge immediately then do work in parallel (Slack best practice)",
+          payload: {
+            code: [
+              "async (ctx) => {",
+              "  const thread = await ctx.slack.threadInfo()",
+              "  const [, data] = await Promise.all([",
+              '    ctx.slack.chat.postMessage({ channel: thread.channel, thread_ts: thread.thread_ts, text: "Looking into it..." }),',
+              '    fetch("https://api.example.com/data").then(r => r.json()),',
+              "  ])",
+              "  await ctx.slack.chat.postMessage({",
+              "    channel: thread.channel,",
+              "    thread_ts: thread.thread_ts,",
+              "    text: `Found: ${JSON.stringify(data)}`,",
+              "  })",
+              "}",
+            ].join("\n"),
+            scriptExecutionId: "example-slack-parallel",
+          },
+        },
+        {
+          description: "Read the current stream history",
+          payload: {
+            code: [
+              "async (ctx) => {",
+              "  const events = await ctx.streams.read()",
+              "  const summary = events.map(e => `${e.offset}: ${e.type}`).join('\\n')",
+              "  await ctx.chat.sendMessage({ message: summary })",
+              "}",
+            ].join("\n"),
+            scriptExecutionId: "example-read-stream",
           },
         },
       ],

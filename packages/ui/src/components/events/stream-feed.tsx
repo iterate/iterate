@@ -1,4 +1,4 @@
-import { type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { type Event, type StreamPath } from "@iterate-com/shared/streams/types";
 import {
   AlertTriangleIcon,
@@ -569,9 +569,14 @@ function ActivityHeaderElement({ element }: { element: EventsStreamActivityEleme
 }
 
 function RawJsonDump({ element }: { element: EventsStreamRawJsonDumpElement }) {
+  const events = useMemo(
+    () => orderRawJsonDumpEventsForDisplay(element.props.events),
+    [element.props.events],
+  );
+
   return (
     <SerializedObjectCodeBlock
-      data={element.props.events}
+      data={events}
       className="h-full min-h-80"
       initialFormat="yaml"
       showToggle
@@ -579,6 +584,56 @@ function RawJsonDump({ element }: { element: EventsStreamRawJsonDumpElement }) {
       scrollToBottom
     />
   );
+}
+
+const RAW_JSON_DUMP_EVENT_PREFIX_KEY_ORDER = [
+  "type",
+  "offset",
+  "idempotencyKey",
+  "createdAt",
+  "updatedAt",
+  "timestamp",
+  "metadata",
+] as const;
+
+const RAW_JSON_DUMP_EVENT_SUFFIX_KEY_ORDER = ["payload"] as const;
+
+const RAW_JSON_DUMP_EVENT_ORDERED_KEYS = new Set<string>([
+  ...RAW_JSON_DUMP_EVENT_PREFIX_KEY_ORDER,
+  ...RAW_JSON_DUMP_EVENT_SUFFIX_KEY_ORDER,
+]);
+
+function orderRawJsonDumpEventsForDisplay(
+  events: readonly Event[],
+): Array<Record<string, unknown>> {
+  return events.map(orderRawJsonDumpEventForDisplay);
+}
+
+function orderRawJsonDumpEventForDisplay(event: Event): Record<string, unknown> {
+  const eventRecord = event as Record<string, unknown>;
+  const orderedEvent: Record<string, unknown> = {};
+
+  for (const key of RAW_JSON_DUMP_EVENT_PREFIX_KEY_ORDER) {
+    if (key in eventRecord) {
+      orderedEvent[key] = eventRecord[key];
+    }
+  }
+
+  for (const key of Object.keys(eventRecord).sort()) {
+    if (RAW_JSON_DUMP_EVENT_ORDERED_KEYS.has(key)) {
+      continue;
+    }
+
+    orderedEvent[key] = eventRecord[key];
+  }
+
+  for (const key of RAW_JSON_DUMP_EVENT_SUFFIX_KEY_ORDER) {
+    if (key in eventRecord) {
+      orderedEvent[key] = eventRecord[key];
+    }
+  }
+
+  return orderedEvent;
 }
 
 function LlmRequestBoundaryLine({ element }: { element: EventsStreamLlmRequestBoundaryElement }) {

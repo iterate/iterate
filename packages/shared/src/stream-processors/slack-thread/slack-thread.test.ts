@@ -50,9 +50,93 @@ describe("createSlackThreadProcessor", () => {
       content: expect.stringContaining('"text": "<@U_BOT> ship it"'),
     });
     expect((appended[0].event.payload as { content: string }).content).toContain(
-      "ctx.slack.chat.postMessage({ channel, thread_ts, text })",
+      "Slack message received.",
     );
     expect((appended[0].event.payload as { content: string }).content).toContain("- channel: C123");
+  });
+
+  it("compiles Slack bang commands into codemode script execution requests", async () => {
+    const appended: Array<{ streamPath?: string; event: StreamEventInput }> = [];
+    await createSlackThreadProcessor().implementation.afterAppend?.({
+      event: threadEvent({
+        offset: 10,
+        type: "events.iterate.com/slack/webhook-received",
+        payload: {
+          body: {
+            type: "event_callback",
+            authorizations: [{ user_id: "U_BOT", is_bot: true }],
+            event: {
+              type: "app_mention",
+              channel: "C123",
+              user: "U_USER",
+              ts: "1772136258.963519",
+              event_ts: "1772136258.963519",
+              text: "<@U_BOT> !debug",
+            } satisfies AppMentionEvent,
+          },
+        },
+      }),
+      previousState: registeredSlackThreadState(),
+      state: registeredSlackThreadState(),
+      streamApi: testSlackThreadStreamApi(appended),
+      signal: new AbortController().signal,
+    });
+
+    expect(appended.map((item) => item.event.type)).toEqual([
+      "events.iterate.com/codemode/script-execution-requested",
+    ]);
+    expect(appended[0].event.payload).toEqual({
+      code: [
+        "async (ctx) => {",
+        '  // this snippet was invoked as a bang-command by the slack processor in response to the user typing "<@U_BOT> !debug"; bang-commands are deterministic commands often requested by the user to e.g. debug a session',
+        "  const result = await ctx.debug();",
+        "  if (result === undefined) return;",
+        '  const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);',
+        "  const thread = await ctx.slack.threadInfo();",
+        "  await ctx.slack.chat.postMessage({",
+        "    channel: thread.channel,",
+        "    thread_ts: thread.thread_ts,",
+        "    text,",
+        "  });",
+        "}",
+      ].join("\n"),
+      scriptExecutionId: "slack-bang-command-10",
+    });
+  });
+
+  it("keeps explicit ctx bang commands and call arguments intact", async () => {
+    const appended: Array<{ streamPath?: string; event: StreamEventInput }> = [];
+    await createSlackThreadProcessor().implementation.afterAppend?.({
+      event: threadEvent({
+        offset: 11,
+        type: "events.iterate.com/slack/webhook-received",
+        payload: {
+          body: {
+            type: "event_callback",
+            authorizations: [{ user_id: "U_BOT", is_bot: true }],
+            event: {
+              type: "app_mention",
+              channel: "C123",
+              user: "U_USER",
+              ts: "1772136258.963519",
+              event_ts: "1772136258.963519",
+              text: '!ctx.someFunction({ bla: "haha" })',
+            } satisfies AppMentionEvent,
+          },
+        },
+      }),
+      previousState: registeredSlackThreadState(),
+      state: registeredSlackThreadState(),
+      streamApi: testSlackThreadStreamApi(appended),
+      signal: new AbortController().signal,
+    });
+
+    expect((appended[0].event.payload as { code: string }).code).toContain(
+      'const result = await ctx.someFunction({ bla: "haha" });',
+    );
+    expect((appended[0].event.payload as { code: string }).code).toContain(
+      "await ctx.slack.chat.postMessage({",
+    );
   });
 });
 

@@ -100,9 +100,12 @@ describe("agent presets", () => {
     ]);
   });
 
-  it("keeps the default system prompt on ctx.chat.sendMessage", () => {
-    expect(defaultAgentSystemPrompt()).toContain("ctx.chat.sendMessage({ message:");
-    expect(defaultAgentSystemPrompt()).not.toContain("ctx.streams.append");
+  it("includes key patterns in the default system prompt", () => {
+    const prompt = defaultAgentSystemPrompt("/agents/test");
+    expect(prompt).toContain("ctx.chat.sendMessage({ message }");
+    expect(prompt).toContain("/agents/test");
+    expect(prompt).toContain("return undefined");
+    expect(prompt).toContain("Promise.all");
   });
 
   it("distinguishes invalid run options JSON from non-object run options", () => {

@@ -29,19 +29,34 @@ export function providerSelectedEvent(provider: AgentLlmProvider): AgentPresetEv
   };
 }
 
-export function defaultAgentSystemPrompt() {
-  return [
-    "You are an agent inside this Iterate OS2 project.",
-    "Codemode is available and should be used for user-visible answers.",
-    "Reply with exactly one fenced JavaScript code block and no surrounding prose.",
-    "The block must evaluate to an async function, usually async (ctx) => { ... }.",
-    "Use ctx.chat.sendMessage({ message: 'your message' }) to send visible chat replies.",
-    "Return a non-undefined value only when the code result itself should be shown to the user.",
-    "Use fetch for HTTP requests and ctx.streams for project-local streams.",
-  ].join(" ");
+export function defaultAgentSystemPrompt(agentPath?: string) {
+  const lines = [
+    "You are an agent inside an Iterate OS2 project. Everything in this system is built on streams — ordered event logs. You are running inside a stream yourself" +
+      (agentPath != null ? ` at path \`${agentPath}\`` : "") +
+      ". The messages you see (agent/input-added, tool-provider-registered, etc.) are all stream events. Your responses become stream events too.",
+    "",
+    "## Codemode",
+    "Codemode is mandatory for user-visible answers. Reply with exactly one fenced JavaScript code block (```js) and no surrounding prose. The block must be a single async arrow function: `async (ctx) => { ... }`.",
+    "",
+    "Use `ctx.chat.sendMessage({ message })` to send visible chat replies. The function body implicitly returns undefined — do NOT write `return undefined` or `return;`, just let the function end. Only return a value when you want the result shown back to you and another LLM turn.",
+    "",
+    "Use `Promise.all([...])` for independent concurrent operations. Use `fetch` for HTTP requests. Use normal JavaScript — loops, variables, try/catch, destructuring — as you would in any async function.",
+    "",
+    "## Tool providers",
+    "Available tools are announced as `codemode/tool-provider-registered` events. Call them as `ctx.<path>.<method>(args)` — e.g. `ctx.slack.chat.postMessage({ channel, text })` or `ctx.streams.read()`.",
+    "",
+    "## Streams",
+    "Use `ctx.streams.read()` to read the current stream's full event history — this is how you get full details for events you've only seen as summaries. Use `ctx.streams.append({ event: { type, payload } })` to append new events.",
+    "",
+    "Streams support relative paths from your agent's stream. For example, `ctx.streams.append({ event: { type: 'events.iterate.com/agent/input-added', payload: { content: 'hello' } }, streamPath: './sub-task' })` appends to a child stream. A subagent at that child path can respond back with `ctx.streams.append({ ..., streamPath: '..' })` to write to the parent.",
+  ];
+  return lines.join("\n");
 }
 
-export function defaultAgentSetupEvents(provider: AgentLlmProvider): AgentPresetEvent[] {
+export function defaultAgentSetupEvents(
+  provider: AgentLlmProvider,
+  agentPath?: string,
+): AgentPresetEvent[] {
   return [
     providerSelectedEvent(provider),
     ...(provider === "openai-ws"
@@ -64,7 +79,7 @@ export function defaultAgentSetupEvents(provider: AgentLlmProvider): AgentPreset
     {
       type: "events.iterate.com/agent/system-prompt-updated",
       payload: {
-        systemPrompt: defaultAgentSystemPrompt(),
+        systemPrompt: defaultAgentSystemPrompt(agentPath),
       },
     },
   ];
