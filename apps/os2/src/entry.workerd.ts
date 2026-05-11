@@ -40,6 +40,7 @@ export { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-ses
 export { DebugAppendChainSubscriber } from "~/durable-objects/debug-append-chain-subscriber.ts";
 export { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
 export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
+export { SlackIntegrationDurableObject } from "~/domains/slack/durable-objects/slack-integration-durable-object.ts";
 export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.ts";
 export { AiCapability, OrpcCapability } from "~/domains/codemode/example-capabilities.ts";
 export { FetchCapability } from "~/domains/codemode/fetch-capability.ts";
@@ -117,6 +118,7 @@ export default {
           codemodeSession: env.CODEMODE_SESSION,
           callableEnv: env,
           projectDurableObjectNamespace: env.PROJECT,
+          slackIntegration: env.SLACK_INTEGRATION,
           stream: env.STREAM,
           workerExports: cfCtx.exports,
         };

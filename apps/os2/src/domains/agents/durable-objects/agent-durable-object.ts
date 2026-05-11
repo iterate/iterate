@@ -11,6 +11,7 @@ import {
   type CloudflareAiProcessorDeps,
   createCloudflareAiProcessor,
 } from "@iterate-com/shared/stream-processors/cloudflare-ai/implementation";
+import { createSlackThreadProcessor } from "@iterate-com/shared/stream-processors/slack-thread/implementation";
 import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
 import type { ExecuteCodemodeFunctionCallInput } from "@iterate-com/shared/stream-processors/codemode/implementation";
 import {
@@ -120,6 +121,9 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
         await this.ensureAgentSetupEvents(params);
         const llmProvider = await this.resolveLlmProvider(params);
         this.registerStreamProcessor(createAgentChatProcessor());
+        if (isSlackAgentPath(params.agentPath)) {
+          this.registerStreamProcessor(createSlackThreadProcessor());
+        }
         this.registerStreamProcessor(
           createAgentProcessor({
             waitUntil: (promise) => this.waitUntilStreamProcessor(promise),
@@ -265,7 +269,6 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
   }
 
   private async ensureChildAgentRunner(event: Event) {
-    if (this.structuredName.agentPath !== AGENTS_STREAM_PATH) return;
     if (event.type !== STREAM_CHILD_STREAM_CREATED_TYPE) return;
 
     const payload = event.payload as { childPath?: unknown };
@@ -628,6 +631,10 @@ function formatCodemodeOutput(output: unknown) {
 
 function parseAgentChatChannel(channel: string | undefined) {
   return channel === "tui" ? "tui" : "web";
+}
+
+function isSlackAgentPath(agentPath: string) {
+  return agentPath === "/agents/slack" || agentPath.startsWith("/agents/slack/");
 }
 
 function parseChatToolMessage(value: unknown) {

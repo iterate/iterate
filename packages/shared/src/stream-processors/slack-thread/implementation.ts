@@ -43,6 +43,13 @@ export function createSlackThreadProcessor() {
           if (!parsed.success) return;
 
           const slackEvent = parsed.data.event as unknown as SlackEvent;
+          if (isBotMessage(slackEvent)) return;
+
+          const channel = readStringField(slackEvent, "channel");
+          const threadTs =
+            readStringField(slackEvent, "thread_ts") ??
+            readNestedMessageStringField(slackEvent, "thread_ts") ??
+            readStringField(slackEvent, "ts");
           await streamApi.append({
             event: {
               type: "events.iterate.com/agent/input-added",
@@ -52,7 +59,20 @@ export function createSlackThreadProcessor() {
                 sourceEvent: event,
               }),
               payload: {
-                content: `Slack webhook received:\n\`\`\`json\n${JSON.stringify(slackEvent, null, 2)}\n\`\`\``,
+                content: [
+                  "Slack event received for this agent thread.",
+                  "",
+                  "Response target:",
+                  `- channel: ${channel ?? "unknown"}`,
+                  `- thread_ts: ${threadTs ?? "unknown"}`,
+                  "",
+                  "When responding in Slack, use `ctx.slack.chat.postMessage({ channel, thread_ts, text })` with the response target above.",
+                  "",
+                  "Slack event:",
+                  "```json",
+                  JSON.stringify(slackEvent, null, 2),
+                  "```",
+                ].join("\n"),
               },
             },
           });
@@ -63,4 +83,21 @@ export function createSlackThreadProcessor() {
       }
     },
   });
+}
+
+function isBotMessage(slackEvent: SlackEvent): boolean {
+  if (readStringField(slackEvent, "subtype") === "bot_message") return true;
+  if (readStringField(slackEvent, "bot_id") != null) return true;
+  return false;
+}
+
+function readStringField(value: unknown, key: string): string | undefined {
+  if (value == null || typeof value !== "object") return undefined;
+  const field = (value as Record<string, unknown>)[key];
+  return typeof field === "string" ? field : undefined;
+}
+
+function readNestedMessageStringField(value: unknown, key: string): string | undefined {
+  if (value == null || typeof value !== "object") return undefined;
+  return readStringField((value as Record<string, unknown>).message, key);
 }

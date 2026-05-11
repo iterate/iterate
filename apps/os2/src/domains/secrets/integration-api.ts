@@ -13,6 +13,7 @@ import {
   upsertProjectConnection,
   upsertProjectSecret,
 } from "~/domains/secrets/secrets-store.ts";
+import { getSlackIntegrationDurableObjectName } from "~/domains/slack/durable-objects/slack-integration-durable-object.ts";
 import {
   oauthRedirectUri,
   providerSecretKey,
@@ -284,6 +285,14 @@ async function handleSlackWebhook(input: { context: AppContext; request: Request
   if (!input.context.stream) {
     return Response.json({ error: "STREAM binding is not available." }, { status: 500 });
   }
+  if (!input.context.slackIntegration) {
+    return Response.json({ error: "SLACK_INTEGRATION binding is not available." }, { status: 500 });
+  }
+
+  const slackIntegrationName = getSlackIntegrationDurableObjectName(connection.projectId);
+  const slackIntegration = input.context.slackIntegration.getByName(slackIntegrationName);
+  await slackIntegration.initialize({ name: slackIntegrationName });
+  await slackIntegration.ensureReady();
 
   const stream = await getInitializedStreamStub({
     durableObjectNamespace: input.context.stream as never,

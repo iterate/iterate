@@ -23,14 +23,14 @@ describe("createSlackProcessor", () => {
           payload: {
             channel: "C123",
             threadTs: "1772136258.963519",
-            streamPath: "/agents/slack/ts-1772136258-963519",
+            streamPath: "/agents/slack/c123/ts-1772136258-963519",
           },
         }),
       ],
     });
 
     expect(state.routes).toEqual({
-      "C123:1772136258.963519": "/agents/slack/ts-1772136258-963519",
+      "C123:1772136258.963519": "/agents/slack/c123/ts-1772136258-963519",
     });
   });
 
@@ -89,7 +89,7 @@ describe("createSlackProcessor", () => {
       event,
       previousState: slackState(),
       state: slackState({
-        routes: { "C123:1772136258.963519": "/agents/slack/ts-1772136258-963519" },
+        routes: { "C123:1772136258.963519": "/agents/slack/c123/ts-1772136258-963519" },
       }),
       streamApi: testSlackStreamApi(appended),
       signal: new AbortController().signal,
@@ -97,11 +97,11 @@ describe("createSlackProcessor", () => {
 
     expect(appended).toEqual([
       {
-        streamPath: "/agents/slack/ts-1772136258-963519",
+        streamPath: "/agents/slack/c123/ts-1772136258-963519",
         event: {
           type: "events.iterate.com/slack/webhook-received",
           payload: event.payload,
-          idempotencyKey: "slack/forward-slack-webhook@10",
+          idempotencyKey: "slack-integration/forward-slack-webhook@10",
         },
       },
     ]);
@@ -128,7 +128,7 @@ describe("createSlackProcessor", () => {
 
     expect(appended.map((item) => item.streamPath)).toEqual([
       undefined,
-      "/agents/slack/ts-1772136258-963519",
+      "/agents/slack/c123/ts-1772136258-963519",
     ]);
     expect(appended.map((item) => item.event.type)).toEqual([
       "events.iterate.com/slack/thread-route-configured",
@@ -137,7 +137,7 @@ describe("createSlackProcessor", () => {
     expect(appended[0].event.payload).toEqual({
       channel: "C123",
       threadTs: "1772136258.963519",
-      streamPath: "/agents/slack/ts-1772136258-963519",
+      streamPath: "/agents/slack/c123/ts-1772136258-963519",
     });
     expect(appended[1].event.payload).toEqual(event.payload);
   });
@@ -157,13 +157,15 @@ describe("createSlackProcessor", () => {
       event,
       previousState: slackState(),
       state: slackState({
-        routes: { "C123:1772136258.963519": "/agents/slack/ts-1772136258-963519" },
+        routes: { "C123:1772136258.963519": "/agents/slack/c123/ts-1772136258-963519" },
       }),
       streamApi: testSlackStreamApi(appended),
       signal: new AbortController().signal,
     });
 
-    expect(appended.map((item) => item.streamPath)).toEqual(["/agents/slack/ts-1772136258-963519"]);
+    expect(appended.map((item) => item.streamPath)).toEqual([
+      "/agents/slack/c123/ts-1772136258-963519",
+    ]);
   });
 
   it("routes reaction webhooks through the reacted Slack timestamp", async () => {
@@ -181,7 +183,7 @@ describe("createSlackProcessor", () => {
       event,
       previousState: slackState(),
       state: slackState({
-        routes: { "C123:1772136258.963519": "/agents/slack/ts-1772136258-963519" },
+        routes: { "C123:1772136258.963519": "/agents/slack/c123/ts-1772136258-963519" },
       }),
       streamApi: testSlackStreamApi(appended),
       signal: new AbortController().signal,
@@ -249,7 +251,7 @@ function webhookEvent(args: { body: Record<string, unknown>; offset: number }) {
       payload: { body: args.body },
       offset: args.offset,
     },
-    "/slack/webhooks",
+    "/integrations/slack/webhooks",
   ) as Extract<
     ConsumedEvent<typeof SlackProcessorContract>,
     { type: "events.iterate.com/slack/webhook-received" }
@@ -258,7 +260,7 @@ function webhookEvent(args: { body: Record<string, unknown>; offset: number }) {
 
 function committedEvent(
   args: { type: string; payload: unknown; idempotencyKey?: string; offset?: number },
-  streamPath = "/agents/slack/ts-1772136258-963519",
+  streamPath = "/agents/slack/c123/ts-1772136258-963519",
 ): StreamEvent {
   return {
     streamPath,

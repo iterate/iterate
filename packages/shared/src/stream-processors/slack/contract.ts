@@ -3,7 +3,7 @@ import { standardProcessorBehavior } from "../core/standard-processor-behavior.t
 import { defineProcessorContract } from "../stream-processor.ts";
 
 /**
- * Processor mounted on `/slack/webhooks`.
+ * Processor mounted on `/integrations/slack/webhooks`.
  *
  * This processor is only a Slack webhook router. It owns the raw Slack webhook
  * event and a reduced `channel:thread_ts -> streamPath` lookup table. It does
@@ -13,14 +13,14 @@ import { defineProcessorContract } from "../stream-processor.ts";
  * The intended flow is:
  *
  * 1. A Slack ingress worker appends the raw Slack Events API body to
- *    `/slack/webhooks` as `events.iterate.com/slack/webhook-received`.
+ *    `/integrations/slack/webhooks` as `events.iterate.com/slack/webhook-received`.
  * 2. If the webhook is about a Slack thread and that thread has no route yet,
  *    this processor emits `events.iterate.com/slack/thread-route-configured`.
  * 3. This processor forwards the original webhook body verbatim to the routed
  *    Slack-backed stream. `slack-thread` does the actual agent transcription.
  */
 export const SlackProcessorContract = defineProcessorContract({
-  slug: "slack",
+  slug: "slack-integration",
   version: "0.1.0",
   description: "Routes raw Slack webhooks into Slack-backed agent streams.",
   stateSchema: z.object({
@@ -38,7 +38,7 @@ export const SlackProcessorContract = defineProcessorContract({
   events: {
     "events.iterate.com/slack/webhook-received": {
       description:
-        "Raw Slack Events API callback body, appended by the Slack ingress worker to `/slack/webhooks` and forwarded unchanged to routed thread streams.",
+        "Raw Slack Events API callback body, appended by the Slack ingress worker to `/integrations/slack/webhooks` and forwarded unchanged to routed thread streams.",
       payloadSchema: z.object({ body: z.record(z.string(), z.unknown()) }),
     },
     "events.iterate.com/slack/thread-route-configured": {

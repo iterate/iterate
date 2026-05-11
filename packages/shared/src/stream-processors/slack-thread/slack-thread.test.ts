@@ -49,6 +49,10 @@ describe("createSlackThreadProcessor", () => {
     expect(appended[0].event.payload).toEqual({
       content: expect.stringContaining('"text": "<@U_BOT> ship it"'),
     });
+    expect((appended[0].event.payload as { content: string }).content).toContain(
+      "ctx.slack.chat.postMessage({ channel, thread_ts, text })",
+    );
+    expect((appended[0].event.payload as { content: string }).content).toContain("- channel: C123");
   });
 });
 
@@ -78,12 +82,12 @@ function threadEvent<T extends ConsumedEvent<typeof SlackThreadProcessorContract
   payload: T["payload"];
   offset: number;
 }) {
-  return committedEvent(args, "/agents/slack/ts-1772136258-963519") as T;
+  return committedEvent(args, "/agents/slack/c123/ts-1772136258-963519") as T;
 }
 
 function committedEvent(
   args: { type: string; payload: unknown; idempotencyKey?: string; offset?: number },
-  streamPath = "/agents/slack/ts-1772136258-963519",
+  streamPath = "/agents/slack/c123/ts-1772136258-963519",
 ): StreamEvent {
   return {
     streamPath,

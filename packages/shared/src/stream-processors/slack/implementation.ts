@@ -133,7 +133,7 @@ export function createSlackProcessor() {
               routeKey = `${slackEvent.channel}:${slackThreadTs}`;
               routeChannel = slackEvent.channel;
               routeThreadTs = slackThreadTs;
-              routeStreamPath = `/agents/slack/ts-${slackThreadTs.replaceAll(".", "-")}`;
+              routeStreamPath = `/agents/slack/${sanitizePathPart(slackEvent.channel)}/ts-${sanitizePathPart(slackThreadTs)}`;
             }
           }
 
@@ -188,4 +188,8 @@ export function createSlackProcessor() {
       }
     },
   });
+}
+
+function sanitizePathPart(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
 }
