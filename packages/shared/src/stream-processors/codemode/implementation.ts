@@ -107,7 +107,6 @@ async function executeRequestedScript(args: {
   streamApi: CodemodeStreamApi;
 }) {
   const startedAt = (args.deps.now ?? (() => new Date()))();
-  await args.deps.ensureLiveConsumer?.();
   const session = createProcessorSession({
     callableContext: args.deps.callableContext,
     ensureLiveConsumer: args.deps.ensureLiveConsumer,

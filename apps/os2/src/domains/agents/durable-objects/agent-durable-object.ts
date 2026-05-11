@@ -1,10 +1,12 @@
 import OpenAI from "openai";
 import type { ResponsesClientEvent } from "openai/resources/responses/responses";
 import { ResponsesWSBase } from "openai/resources/responses/ws-base";
-import { createD1Client } from "sqlfu";
 import { z } from "zod";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
-import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import {
+  deriveDurableObjectNameFromStructuredName,
+  NotInitializedError,
+} from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { withStreamProcessor } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor";
 import { createAgentChatProcessor } from "@iterate-com/shared/stream-processors/agent-chat/implementation";
 import { createAgentProcessor } from "@iterate-com/shared/stream-processors/agent/implementation";
@@ -12,7 +14,6 @@ import {
   type CloudflareAiProcessorDeps,
   createCloudflareAiProcessor,
 } from "@iterate-com/shared/stream-processors/cloudflare-ai/implementation";
-import { createSlackThreadProcessor } from "@iterate-com/shared/stream-processors/slack-thread/implementation";
 import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
 import type { ExecuteCodemodeFunctionCallInput } from "@iterate-com/shared/stream-processors/codemode/implementation";
 import {
@@ -38,8 +39,6 @@ import {
 import { createExampleCapabilityProviders } from "~/domains/codemode/example-provider-registrations.ts";
 import type { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
 import { createGmailProviderRegistration } from "~/domains/google/gmail-provider-registration.ts";
-import { getProjectSecret } from "~/domains/secrets/secrets-store.ts";
-import { callSlackWebApi } from "~/domains/slack/entrypoints/slack-capability.ts";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
 import {
   defaultAgentSetupEvents,
@@ -72,10 +71,8 @@ export type AgentDurableObjectEnv = {
   AGENT: DurableObjectNamespace<AgentDurableObject>;
   AI: CloudflareAiProcessorDeps["ai"];
   APP_CONFIG: string;
-  APP_CONFIG_SLACK_BOT_TOKEN?: string;
   CODEMODE_SESSION: DurableObjectNamespace<CodemodeSession>;
   DO_CATALOG: D1Database;
-  SLACK_BOT_TOKEN?: string;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
 };
 
@@ -85,6 +82,7 @@ type AgentStreamApi = ProcessorStreamApi<{
   processorDeps?: readonly unknown[];
 }> & {
   append(args: { event: EventInput; streamPath?: string }): Promise<Event>;
+  appendBatch(args: { events: EventInput[]; streamPath?: string }): Promise<Event[]>;
   read(args?: {
     streamPath?: string;
     afterOffset?: StreamCursor;
@@ -117,7 +115,6 @@ const AgentBase = withStreamProcessor<AgentDurableObjectStructuredName, AgentDur
 
 export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
   #streamSocketMessageQueue = Promise.resolve();
-  #slackThreadTarget: SlackThreadTarget | null = null;
 
   constructor(ctx: DurableObjectState, env: AgentDurableObjectEnv) {
     super(ctx, env);
@@ -129,9 +126,6 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
         await this.ensureAgentSetupEvents(params);
         const llmProvider = await this.resolveLlmProvider(params);
         this.registerStreamProcessor(createAgentChatProcessor());
-        if (isSlackAgentPath(params.agentPath)) {
-          this.registerStreamProcessor(createSlackThreadProcessor());
-        }
         this.registerStreamProcessor(
           createAgentProcessor({
             waitUntil: (promise) => this.waitUntilStreamProcessor(promise),
@@ -214,11 +208,9 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
   }
 
   async afterAppend(input: { event: Event }) {
-    await this.ensureStarted();
+    await this.ensureStartedOrInitializeFromRuntimeName();
     const state = await this.consumeStreamProcessorEvent({ event: input.event as StreamEvent });
     await this.ensureChildAgentRunner(input.event);
-    await this.handleSlackWebhookSideEffects(input.event);
-    await this.handleSlackThreadStatusIndicator(input.event);
     await this.handleAgentOutputAddedForCodemode(input.event);
     await this.handleCodemodeScriptExecutionCompleted(input.event);
     return state;
@@ -259,9 +251,6 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     if (providerName === "debug") {
       return await this.createDebugSnapshot();
     }
-    if (providerName === "slack" && input.functionPath.join(".") === "threadInfo") {
-      return await this.createSlackThreadInfo();
-    }
 
     const functionName = input.functionPath.join(".");
     if (functionName !== "sendMessage") {
@@ -284,6 +273,17 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       slug: `agent:${params.projectId}:${params.agentPath}`,
       streamPath: params.agentPath,
     });
+  }
+
+  private async ensureStartedOrInitializeFromRuntimeName() {
+    try {
+      return await this.ensureStarted();
+    } catch (error) {
+      if (!(error instanceof NotInitializedError)) throw error;
+      const runtimeName = this.getDurableObjectName();
+      if (runtimeName == null) throw error;
+      return await this.initialize({ name: runtimeName });
+    }
   }
 
   private async ensureChildAgentRunner(event: Event) {
@@ -322,11 +322,8 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       agentPath: params.agentPath,
       presets: readAgentPathPrefixPresets(rootEvents),
     });
-    const defaultProvider = readOpenAiApiKey(this.env as Record<string, unknown>).trim()
-      ? "openai-ws"
-      : "cloudflare-ai";
     const setupEvents =
-      preset?.events ?? defaultAgentSetupEvents(defaultProvider, params.agentPath);
+      preset?.events ?? defaultAgentSetupEvents("cloudflare-ai", params.agentPath);
     const hasSetupPrompt = setupEvents.some(
       (event) => event.type === "events.iterate.com/agent/system-prompt-updated",
     );
@@ -422,100 +419,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     }
   }
 
-  private async handleSlackWebhookSideEffects(event: Event) {
-    if (!isSlackAgentPath(this.structuredName.agentPath)) return;
-    if (event.type !== "events.iterate.com/slack/webhook-received") return;
-
-    const target = slackThreadTargetFromWebhookEvent(event);
-    if (target == null) return;
-    this.#slackThreadTarget = target;
-
-    if (target.messageTs == null || target.isBotMessage || target.isReactionEvent) return;
-    await this.callSlackApi("reactions.add", {
-      channel: target.channel,
-      name: "eyes",
-      timestamp: target.messageTs,
-    });
-  }
-
-  private async handleSlackThreadStatusIndicator(event: Event) {
-    if (!isSlackAgentPath(this.structuredName.agentPath)) return;
-
-    const update = slackThreadStatusForEvent(event);
-    if (update == null) return;
-
-    const target = await this.resolveSlackThreadTarget();
-    if (target == null) return;
-
-    await this.callSlackApi("assistant.threads.setStatus", {
-      channel_id: target.channel,
-      thread_ts: target.threadTs,
-      ...update.status,
-    });
-    if (update.clear && target.messageTs != null) {
-      await this.callSlackApi("reactions.remove", {
-        channel: target.channel,
-        name: "eyes",
-        timestamp: target.messageTs,
-      });
-    }
-  }
-
-  private async resolveSlackThreadTarget(): Promise<SlackThreadTarget | null> {
-    if (this.#slackThreadTarget != null) return this.#slackThreadTarget;
-
-    const events = await this.streamsEntrypoint(this.structuredName.agentPath).read({
-      afterOffset: "start",
-      beforeOffset: "end",
-    });
-    for (const event of events.toReversed()) {
-      const target = slackThreadTargetFromWebhookEvent(event);
-      if (target == null) continue;
-      this.#slackThreadTarget = target;
-      return target;
-    }
-    return null;
-  }
-
-  private async callSlackApi(method: string, body: Record<string, unknown>) {
-    const token = await this.readSlackToken();
-    if (!token) return;
-
-    try {
-      await callSlackWebApi({ body, method, token });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (
-        method === "reactions.add" &&
-        (message.includes("already_reacted") || message.includes("not_reactable"))
-      ) {
-        return;
-      }
-      if (method === "reactions.remove" && message.includes("no_reaction")) {
-        return;
-      }
-      console.error("[os2-agent] Slack side effect failed", {
-        agentName: this.name,
-        error,
-        method,
-      });
-    }
-  }
-
-  private async readSlackToken() {
-    const secret = await getProjectSecret(createD1Client(this.env.DO_CATALOG), {
-      key: "slack.access_token",
-      projectId: this.structuredName.projectId,
-    });
-    if (secret) return secret.material;
-
-    return this.env.SLACK_BOT_TOKEN ?? this.env.APP_CONFIG_SLACK_BOT_TOKEN ?? "";
-  }
-
   private async createDebugSnapshot() {
-    const slackTarget = isSlackAgentPath(this.structuredName.agentPath)
-      ? await this.resolveSlackThreadTarget()
-      : null;
     const project = await this.readDebugProjectInfo();
     const streamUrl = buildEventsStreamViewerUrl({
       namespace: this.structuredName.projectId,
@@ -526,25 +430,10 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
         project == null
           ? { id: this.structuredName.projectId }
           : { id: this.structuredName.projectId, slug: project.slug },
-      slack:
-        slackTarget == null
-          ? null
-          : { channel: slackTarget.channel, threadTs: slackTarget.threadTs },
       streamPath: this.structuredName.agentPath,
       streamUrl,
     };
-    return formatSlackDebugMessage(snapshot);
-  }
-
-  private async createSlackThreadInfo() {
-    const target = await this.resolveSlackThreadTarget();
-    if (target == null) {
-      throw new Error("ctx.slack.threadInfo() is only available on Slack thread agent streams.");
-    }
-    return {
-      channel: target.channel,
-      thread_ts: target.threadTs,
-    };
+    return formatDebugMessage(snapshot);
   }
 
   private async readDebugProjectInfo(): Promise<DebugProjectInfo | null> {
@@ -630,44 +519,15 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     };
   }
 
-  private createSlackThreadToolProvider(): ToolProviderRegistration {
-    return {
-      path: ["slack", "threadInfo"],
-      instructions:
-        "Use ctx.slack.threadInfo() on Slack agent streams to get { channel, thread_ts } for the current Slack thread.",
-      invocation: {
-        kind: "rpc",
-        callable: {
-          type: "workers-rpc",
-          via: {
-            type: "env-binding",
-            bindingType: "durable-object-namespace",
-            bindingName: "AGENT",
-            durableObject: {
-              name: this.name,
-            },
-          },
-          rpcMethod: "executeCodemodeFunctionCall",
-          argsMode: "object",
-        },
-      },
-    };
-  }
-
   private createCodemodeToolProviders(
     params: AgentDurableObjectStructuredName,
   ): ToolProviderRegistration[] {
-    const providers = [this.createAgentChatToolProvider(), this.createAgentDebugToolProvider()];
-    if (!isSlackAgentPath(params.agentPath)) return providers;
-
-    providers.push(
-      this.createSlackThreadToolProvider(),
-      ...createExampleCapabilityProviders({ projectId: params.projectId }).filter(
-        (provider) => provider.path.join("/") !== "slack",
-      ),
+    return [
+      this.createAgentChatToolProvider(),
+      this.createAgentDebugToolProvider(),
+      ...createExampleCapabilityProviders({ projectId: params.projectId }),
       createGmailProviderRegistration({ projectId: params.projectId }),
-    );
-    return providers;
+    ];
   }
 
   private async resolveLlmProvider(
@@ -698,7 +558,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       const provider = (event.payload as { provider?: unknown }).provider;
       if (provider === "cloudflare-ai" || provider === "openai-ws") return provider;
     }
-    return readOpenAiApiKey(this.env as Record<string, unknown>) ? "openai-ws" : "cloudflare-ai";
+    return "cloudflare-ai";
   }
 
   private createLlmProcessor(provider: AgentLlmProvider) {
@@ -787,6 +647,17 @@ function agentStreamApiFromNamespace(args: {
       });
       return await stream.append(input.event);
     },
+    async appendBatch(input) {
+      const stream = await getInitializedStreamStub({
+        durableObjectNamespace: args.durableObjectNamespace,
+        namespace: args.namespace,
+        path: resolveProcessorStreamPath({
+          basePath: args.streamPath,
+          pathInput: input.streamPath,
+        }),
+      });
+      return await stream.appendBatch(input.events);
+    },
     async read(input = {}) {
       const stream = await getInitializedStreamStub({
         durableObjectNamespace: args.durableObjectNamespace,
@@ -866,12 +737,11 @@ type DebugProjectInfo = {
 
 type DebugSnapshot = {
   project: { id: string; slug?: string };
-  slack: { channel: string; threadTs: string } | null;
   streamPath: string;
   streamUrl: string;
 };
 
-function formatSlackDebugMessage(snapshot: DebugSnapshot) {
+function formatDebugMessage(snapshot: DebugSnapshot) {
   return [
     `*Debug:* <${snapshot.streamUrl}|open stream>`,
     `Path: \`${snapshot.streamPath}\``,
@@ -894,95 +764,6 @@ function eventsStreamPathname(streamPath: string) {
     .filter(Boolean)
     .map((segment) => encodeURIComponent(segment));
   return `/streams/${segments.join("/")}`;
-}
-
-type SlackThreadTarget = {
-  channel: string;
-  isBotMessage: boolean;
-  isReactionEvent: boolean;
-  messageTs?: string;
-  threadTs: string;
-};
-
-function slackThreadTargetFromWebhookEvent(event: {
-  payload: unknown;
-  type: string;
-}): SlackThreadTarget | null {
-  if (event.type !== "events.iterate.com/slack/webhook-received") return null;
-
-  const payload = readRecord(event.payload);
-  const body = readRecord(payload?.body);
-  const slackEvent = readRecord(body?.event);
-  if (slackEvent == null) return null;
-
-  const item = readRecord(slackEvent.item);
-  const message = readRecord(slackEvent.message);
-  const channel =
-    readString(slackEvent.channel) ?? readString(item?.channel) ?? readString(message?.channel);
-  const threadTs =
-    readString(slackEvent.thread_ts) ??
-    readString(message?.thread_ts) ??
-    readString(slackEvent.ts) ??
-    readString(item?.ts) ??
-    readString(message?.ts);
-  if (channel == null || threadTs == null) return null;
-
-  const type = readString(slackEvent.type);
-  const messageTs = readString(slackEvent.ts) ?? readString(message?.ts);
-  return {
-    channel,
-    isBotMessage:
-      readString(slackEvent.subtype) === "bot_message" ||
-      readString(slackEvent.bot_id) != null ||
-      readRecord(slackEvent.bot_profile) != null,
-    isReactionEvent: type === "reaction_added" || type === "reaction_removed",
-    messageTs,
-    threadTs,
-  };
-}
-
-function slackThreadStatusForEvent(event: { payload: unknown; type: string }): {
-  clear: boolean;
-  status: { loading_messages?: string[]; status: string };
-} | null {
-  if (event.type === "events.iterate.com/agent/status-updated") {
-    const payload = readRecord(event.payload);
-    if (readString(payload?.status) === "working") {
-      return {
-        clear: false,
-        status: { status: "is thinking...", loading_messages: ["Thinking..."] },
-      };
-    }
-    if (readString(payload?.status) === "idle") {
-      return { clear: true, status: { status: "" } };
-    }
-  }
-
-  if (event.type === "events.iterate.com/codemode/script-execution-requested") {
-    return {
-      clear: false,
-      status: { status: "is using tools...", loading_messages: ["Using tools..."] },
-    };
-  }
-  if (event.type === "events.iterate.com/codemode/script-execution-completed") {
-    return { clear: true, status: { status: "" } };
-  }
-
-  return null;
-}
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value != null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
-function isSlackAgentPath(agentPath: string) {
-  return agentPath === "/agents/slack" || agentPath.startsWith("/agents/slack/");
 }
 
 function parseChatToolMessage(value: unknown) {

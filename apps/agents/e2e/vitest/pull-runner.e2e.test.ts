@@ -13,7 +13,7 @@ import { setupE2E, type E2EContext } from "../test-support/e2e-test.ts";
 import {
   createMemoryPullProcessorStorage,
   runPullProcessor,
-} from "../../src/stream-processors/pull-runner.ts";
+} from "@iterate-com/shared/stream-processors/pull-runner";
 
 test(
   "polling pull runner catches up from real Events history and appends derived codemode events",
@@ -149,6 +149,21 @@ function createPollingEventsStreamApi(args: {
       return Event.parse(result.event);
     },
 
+    async appendBatch({ events, streamPath }) {
+      const appendedEvents: EventsEvent[] = [];
+      for (const event of events) {
+        const result = await args.e2e.events.client.append({
+          path: resolveStreamPath({
+            boundStreamPath: args.streamPath,
+            streamPath,
+          }),
+          event: event as EventInput,
+        });
+        appendedEvents.push(Event.parse(result.event));
+      }
+      return appendedEvents;
+    },
+
     async read(readArgs) {
       return await readEvents({
         e2e: args.e2e,
@@ -209,6 +224,21 @@ function createOrpcStreamEventsStreamApi(args: {
         event: event as EventInput,
       });
       return Event.parse(result.event);
+    },
+
+    async appendBatch({ events, streamPath }) {
+      const appendedEvents: EventsEvent[] = [];
+      for (const event of events) {
+        const result = await args.e2e.events.client.append({
+          path: resolveStreamPath({
+            boundStreamPath: args.streamPath,
+            streamPath,
+          }),
+          event: event as EventInput,
+        });
+        appendedEvents.push(Event.parse(result.event));
+      }
+      return appendedEvents;
     },
 
     async read(readArgs) {

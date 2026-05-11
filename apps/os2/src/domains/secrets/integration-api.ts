@@ -5,7 +5,7 @@ import {
   appendIntegrationEvent,
   GOOGLE_CONNECTED_EVENT_TYPE,
   SLACK_CONNECTED_EVENT_TYPE,
-  SLACK_WEBHOOKS_STREAM_PATH,
+  SLACK_INTEGRATION_STREAM_PATH,
 } from "~/domains/secrets/integration-streams.ts";
 import {
   consumeOAuthState,
@@ -124,7 +124,7 @@ async function handleSlackCallback(input: {
     provider: "slack",
     event: {
       type: SLACK_CONNECTED_EVENT_TYPE,
-      idempotencyKey: `slack-integration:connected:${connection.id}:${connection.updatedAt}`,
+      idempotencyKey: `slack:connected:${connection.id}:${connection.updatedAt}`,
       payload: {
         connectionId: connection.id,
         externalId: connection.externalId,
@@ -297,7 +297,7 @@ async function handleSlackWebhook(input: { context: AppContext; request: Request
   const stream = await getInitializedStreamStub({
     durableObjectNamespace: input.context.stream as never,
     namespace: connection.projectId,
-    path: SLACK_WEBHOOKS_STREAM_PATH,
+    path: SLACK_INTEGRATION_STREAM_PATH,
   });
   await stream.append({
     type: "events.iterate.com/slack/webhook-received",

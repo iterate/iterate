@@ -5,7 +5,11 @@ import {
   CoreProcessorRegisteredEventType,
 } from "../core/contract.ts";
 import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
-import { AgentProcessorContract, reduceAgentEvents } from "./contract.ts";
+import {
+  AgentProcessorContract,
+  DEFAULT_WORKERS_AI_AGENT_MODEL,
+  reduceAgentEvents,
+} from "./contract.ts";
 
 describe("AgentProcessorContract", () => {
   it("initializes frontend-safe reduced state from the contract schema", () => {
@@ -14,7 +18,7 @@ describe("AgentProcessorContract", () => {
       systemPrompt: "You are a helpful assistant. You can trust your user.",
       history: [],
       llmConfig: {
-        model: "@cf/moonshotai/kimi-k2.5",
+        model: DEFAULT_WORKERS_AI_AGENT_MODEL,
         runOpts: {},
         debounceMs: 1000,
       },

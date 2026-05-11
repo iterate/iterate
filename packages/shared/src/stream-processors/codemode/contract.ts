@@ -146,7 +146,7 @@ export const CodemodeProcessorContract = defineProcessorContract({
           payload: {
             code: [
               "async (ctx) => {",
-              "  const thread = await ctx.slack.threadInfo()",
+              "  const thread = await ctx.slack.agent.threadInfo()",
               "  const [, data] = await Promise.all([",
               '    ctx.slack.chat.postMessage({ channel: thread.channel, thread_ts: thread.thread_ts, text: "Looking into it..." }),',
               '    fetch("https://api.example.com/data").then(r => r.json()),',

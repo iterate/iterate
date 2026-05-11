@@ -43,7 +43,7 @@ Runtime dependencies belong in `deps`: AI bindings, code executors, HTTP clients
 When a feature contains multiple processors, give each processor its own folder
 with its own `contract.ts`, `implementation.ts`, and one integrated test file
 named after the processor folder, for example `slack.test.ts` or
-`slack-thread.test.ts`. That test should cover reducer behavior and
+`slack-agent.test.ts`. That test should cover reducer behavior and
 implementation `afterAppend` behavior together, because the contract and
 implementation are two halves of one stream processor.
 
@@ -51,11 +51,11 @@ Keep the dependency direction explicit. A pure router should not import the
 interpreter or worker that consumes routed events. The downstream processor may
 depend on the router contract when it consumes router-owned events.
 
-For example, Slack is split into `slack` and `slack-thread`. The `slack`
+For example, Slack is split into `slack` and `slack-agent`. The `slack`
 processor owns the raw `events.iterate.com/slack/webhook-received` event, keeps
 a reduced `channel:slack_ts -> streamPath` lookup table, and forwards raw
 webhooks when it can derive a lookup key. It does not know about the Agent
-processor and does not translate Slack into agent input. The `slack-thread`
+processor and does not translate Slack into agent input. The `slack-agent`
 processor runs on the Slack-backed agent stream, consumes the forwarded raw
 webhooks, and is the only Slack processor that interprets Slack activity as
 agent events. In the current POC, it should only emit agent input. Slack writes

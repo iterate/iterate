@@ -283,6 +283,14 @@ function testStreamApi(args: {
       args.appended.push(event);
       return committedEvent(event);
     },
+    appendBatch: async ({ events }) => {
+      const appendedEvents: StreamEvent[] = [];
+      for (const event of events) {
+        args.appended.push(event);
+        appendedEvents.push(committedEvent(event));
+      }
+      return appendedEvents;
+    },
     read: async () => [],
     subscribe: async function* () {},
   };

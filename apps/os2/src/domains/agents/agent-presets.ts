@@ -1,11 +1,13 @@
 import { z } from "zod";
 import { parse as parseYaml } from "yaml";
 import { EventInput, StreamPath } from "@iterate-com/shared/streams/types";
+import { DEFAULT_WORKERS_AI_AGENT_MODEL } from "@iterate-com/shared/stream-processors/agent/contract";
 
 export const OS2_AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE =
   "events.iterate.com/os2-agent/llm-provider-selected";
 export const OS2_AGENT_PATH_PREFIX_PRESET_CONFIGURED_EVENT_TYPE =
   "events.iterate.com/os2-agent/path-prefix-preset-configured";
+export const DEFAULT_CLOUDFLARE_AGENT_MODEL = DEFAULT_WORKERS_AI_AGENT_MODEL;
 
 export const AgentLlmProvider = z.enum(["openai-ws", "cloudflare-ai"]);
 export type AgentLlmProvider = z.infer<typeof AgentLlmProvider>;
@@ -70,7 +72,7 @@ export function defaultAgentSetupEvents(
           {
             type: "events.iterate.com/agent/llm-config-updated",
             payload: {
-              model: "@cf/meta/llama-3.1-8b-instruct",
+              model: DEFAULT_CLOUDFLARE_AGENT_MODEL,
               runOpts: { gateway: { id: "default" } },
               debounceMs: 1000,
             },

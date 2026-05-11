@@ -721,6 +721,13 @@ describe("stream processor contract types", () => {
           }>();
           return null as unknown as StreamEvent;
         },
+        appendBatch: async (input) => {
+          expectTypeOf(input).toEqualTypeOf<{
+            events: EmittedInput<typeof codemodeProcessorContract>[];
+            streamPath?: string;
+          }>();
+          return null as unknown as StreamEvent[];
+        },
         read: async () => [],
         subscribe: () => null as unknown as AsyncIterable<StreamEvent>,
       },
@@ -756,6 +763,13 @@ describe("stream processor contract types", () => {
             streamPath?: string;
           }>();
           return null as unknown as StreamEvent;
+        },
+        appendBatch: async (input) => {
+          expectTypeOf(input).toEqualTypeOf<{
+            events: EmittedInput<typeof codemodeProcessorContract>[];
+            streamPath?: string;
+          }>();
+          return null as unknown as StreamEvent[];
         },
         read: async () => [],
         subscribe: () => null as unknown as AsyncIterable<StreamEvent>,

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { GenericMessageEvent, MessageChangedEvent, ReactionAddedEvent } from "@slack/types";
+import { STREAM_SUBSCRIPTION_CONFIGURED_TYPE } from "../../streams/core-event-types.ts";
 import { buildProcessorRegisteredEvent } from "../core/contract.ts";
 import {
   getInitialProcessorState,
@@ -31,6 +32,32 @@ describe("createSlackProcessor", () => {
 
     expect(state.routes).toEqual({
       "C123:1772136258.963519": "/agents/slack/c123/ts-1772136258-963519",
+    });
+  });
+
+  it("keeps Slack connection state on the integration stream", () => {
+    const state = reduceProcessorEvents({
+      contract: SlackProcessorContract,
+      events: [
+        committedEvent({
+          type: "events.iterate.com/slack/connected",
+          payload: {
+            connectionId: "conn_123",
+            externalId: "T123",
+            projectId: "prj_123",
+            teamId: "T123",
+            teamName: "Iterate",
+          },
+        }),
+      ],
+    });
+
+    expect(state.connection).toEqual({
+      status: "connected",
+      connectionId: "conn_123",
+      externalId: "T123",
+      teamId: "T123",
+      teamName: "Iterate",
     });
   });
 
@@ -101,13 +128,13 @@ describe("createSlackProcessor", () => {
         event: {
           type: "events.iterate.com/slack/webhook-received",
           payload: event.payload,
-          idempotencyKey: "slack-integration/forward-slack-webhook@10",
+          idempotencyKey: "slack/forward-slack-webhook@10",
         },
       },
     ]);
   });
 
-  it("creates a route for the first message-like Slack webhook about a thread and forwards the raw webhook unchanged", async () => {
+  it("creates a route for the first message-like Slack webhook and bootstraps the routed stream in one batch", async () => {
     const appended: Array<{ streamPath?: string; event: StreamEventInput }> = [];
     const event = webhookEvent({
       offset: 14,
@@ -118,7 +145,48 @@ describe("createSlackProcessor", () => {
       }),
     });
 
-    await createSlackProcessor().implementation.afterAppend?.({
+    await createSlackProcessor({
+      createRoutedStreamBootstrapEvents: () => [
+        {
+          type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
+          idempotencyKey: "slack-agent-subscription",
+          payload: {
+            slug: "slack-agent:C123:1772136258.963519",
+            type: "callable",
+            callable: {
+              type: "workers-rpc",
+              via: {
+                type: "env-binding",
+                bindingType: "durable-object-namespace",
+                bindingName: "SLACK_AGENT",
+                durableObject: { name: "slack-agent-do" },
+              },
+              rpcMethod: "afterAppend",
+              argsMode: "object",
+            },
+          },
+        },
+        {
+          type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
+          idempotencyKey: "agent-subscription",
+          payload: {
+            slug: "agent:C123:1772136258.963519",
+            type: "callable",
+            callable: {
+              type: "workers-rpc",
+              via: {
+                type: "env-binding",
+                bindingType: "durable-object-namespace",
+                bindingName: "AGENT",
+                durableObject: { name: "agent-do" },
+              },
+              rpcMethod: "afterAppend",
+              argsMode: "object",
+            },
+          },
+        },
+      ],
+    }).implementation.afterAppend?.({
       event,
       previousState: slackState(),
       state: slackState(),
@@ -129,8 +197,14 @@ describe("createSlackProcessor", () => {
     expect(appended.map((item) => item.streamPath)).toEqual([
       undefined,
       "/agents/slack/c123/ts-1772136258-963519",
+      "/agents/slack/c123/ts-1772136258-963519",
+      "/agents/slack/c123/ts-1772136258-963519",
+      "/agents/slack/c123/ts-1772136258-963519",
     ]);
     expect(appended.map((item) => item.event.type)).toEqual([
+      "events.iterate.com/slack/thread-route-configured",
+      STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
+      STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
       "events.iterate.com/slack/thread-route-configured",
       "events.iterate.com/slack/webhook-received",
     ]);
@@ -139,7 +213,8 @@ describe("createSlackProcessor", () => {
       threadTs: "1772136258.963519",
       streamPath: "/agents/slack/c123/ts-1772136258-963519",
     });
-    expect(appended[1].event.payload).toEqual(event.payload);
+    expect(appended[3].event.payload).toEqual(appended[0].event.payload);
+    expect(appended[4].event.payload).toEqual(event.payload);
   });
 
   it("uses nested Slack message thread coordinates instead of enumerating every Slack update subtype", async () => {
@@ -239,6 +314,20 @@ function testStreamApi(appended: Array<{ streamPath?: string; event: StreamEvent
       appended.push({ event, streamPath });
       return committedEvent(event, streamPath);
     },
+    appendBatch: async ({
+      events,
+      streamPath,
+    }: {
+      events: StreamEventInput[];
+      streamPath?: string;
+    }) => {
+      const appendedEvents: StreamEvent[] = [];
+      for (const event of events) {
+        appended.push({ event, streamPath });
+        appendedEvents.push(committedEvent(event, streamPath));
+      }
+      return appendedEvents;
+    },
     read: async () => [],
     subscribe: async function* () {},
   };
@@ -251,7 +340,7 @@ function webhookEvent(args: { body: Record<string, unknown>; offset: number }) {
       payload: { body: args.body },
       offset: args.offset,
     },
-    "/integrations/slack/webhooks",
+    "/integrations/slack",
   ) as Extract<
     ConsumedEvent<typeof SlackProcessorContract>,
     { type: "events.iterate.com/slack/webhook-received" }

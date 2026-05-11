@@ -483,7 +483,7 @@ const codemodeExampleSeeds = [
   const [slackLifecycle, googleLifecycle, slackWebhooks] = await Promise.all([
     streams.read({ streamPath: "/integrations/slack", afterOffset: "start" }),
     streams.read({ streamPath: "/integrations/google", afterOffset: "start" }),
-    streams.read({ streamPath: "/integrations/slack/webhooks", afterOffset: "start" }),
+    streams.read({ streamPath: "/integrations/slack", afterOffset: "start" }),
   ]);
 
   console.log("integration secrets", integrationSecrets.map((secret) => secret.key));

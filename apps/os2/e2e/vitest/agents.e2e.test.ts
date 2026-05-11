@@ -12,7 +12,9 @@ import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import type { RouterClient } from "@orpc/server";
 import { afterEach, describe, expect, it } from "vitest";
 import { osContract } from "@iterate-com/os2-contract";
+import { STREAM_SUBSCRIPTION_CONFIGURED_TYPE } from "@iterate-com/shared/streams/core-event-types";
 import type { Event } from "@iterate-com/shared/streams/types";
+import { DEFAULT_WORKERS_AI_AGENT_MODEL } from "@iterate-com/shared/stream-processors/agent/contract";
 import type { appRouter } from "~/orpc/root.ts";
 
 type OrpcClient = RouterClient<typeof appRouter>;
@@ -57,7 +59,7 @@ describe("project agents codemode", () => {
     await client.project.agents.configurePreset({
       basePath,
       events: [],
-      model: "@cf/meta/llama-3.1-8b-instruct",
+      model: DEFAULT_WORKERS_AI_AGENT_MODEL,
       projectSlugOrId: project.id,
       provider: "cloudflare-ai",
       runOpts: { gateway: { id: "default" } },
@@ -109,6 +111,9 @@ describe("project agents codemode", () => {
     expect(events).toContainEqual(
       expect.objectContaining({
         type: "events.iterate.com/cloudflare-ai/llm-request-started",
+        payload: expect.objectContaining({
+          model: DEFAULT_WORKERS_AI_AGENT_MODEL,
+        }),
       }),
     );
     expect(events).toContainEqual(
@@ -137,6 +142,68 @@ describe("project agents codemode", () => {
         payload: expect.objectContaining({
           message: assistantMessage,
         }),
+      }),
+    );
+    expect(
+      events.some((event) => event.type === "events.iterate.com/openai-ws/llm-request-started"),
+    ).toBe(false);
+    expect(
+      events.filter((event) => event.type === "events.iterate.com/core/error-occurred"),
+    ).toEqual([]);
+  });
+
+  it("uses Kimi K2.6 through Cloudflare AI for unconfigured agent chats by default", async () => {
+    const baseUrl = requireBaseUrl();
+    const client = createClient(baseUrl);
+    const project = await createProject(client, "agent-default-kimi");
+    const suffix = uniqueSuffix();
+    const agentPath = `/agents/default-kimi-${suffix}`;
+
+    await client.project.agents.runtimeState({
+      agentPath,
+      projectSlugOrId: project.id,
+    });
+    await client.project.agents.sendMessage({
+      agentPath,
+      message: `default Kimi 2.6 proof ${suffix}`,
+      projectSlugOrId: project.id,
+    });
+
+    const events = await readUntil({
+      agentPath,
+      client,
+      projectId: project.id,
+      afterOffset: "start",
+      predicate: (event) =>
+        event.type === "events.iterate.com/cloudflare-ai/llm-request-completed" &&
+        (event.payload as { result?: { status?: unknown } }).result?.status === "success",
+    });
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/os2-agent/llm-provider-selected",
+        payload: { provider: "cloudflare-ai" },
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/agent/llm-config-updated",
+        payload: expect.objectContaining({
+          model: DEFAULT_WORKERS_AI_AGENT_MODEL,
+        }),
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/cloudflare-ai/llm-request-started",
+        payload: expect.objectContaining({
+          model: DEFAULT_WORKERS_AI_AGENT_MODEL,
+        }),
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/agent/output-added",
       }),
     );
     expect(
@@ -329,6 +396,163 @@ async (ctx) => {
     90_000,
   );
 
+  itIfSlackBotToken(
+    "routes Slack webhooks into slack-agent streams and executes bang command replies",
+    async () => {
+      const baseUrl = requireBaseUrl();
+      const client = createClient(baseUrl);
+      const project = await createProject(client, "slack-agent-route");
+      const suffix = uniqueSuffix();
+      const slackChannelId = await requireSlackChannelId();
+      const rootText = `OS2 slack-agent route proof ${suffix}`;
+      const replyText = `OS2 slack-agent bang proof ${suffix}`;
+      const rootMessage = await postSlackMessage({
+        channel: slackChannelId,
+        text: rootText,
+        token: requireSlackToken(),
+      });
+      const routedAgentPath = slackAgentPath({
+        channel: slackChannelId,
+        threadTs: rootMessage.ts,
+      });
+
+      await client.project.streams.append({
+        projectSlugOrId: project.id,
+        streamPath: "/integrations/slack",
+        event: {
+          type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
+          idempotencyKey: `slack-integration-e2e-subscription:${suffix}`,
+          payload: {
+            slug: `slack-integration-e2e:${suffix}`,
+            type: "callable",
+            callable: {
+              type: "workers-rpc",
+              via: {
+                type: "env-binding",
+                bindingType: "durable-object-namespace",
+                bindingName: "SLACK_INTEGRATION",
+                durableObject: {
+                  name: slackIntegrationDurableObjectName(project.id),
+                },
+              },
+              rpcMethod: "afterAppend",
+              argsMode: "object",
+            },
+          },
+        },
+      });
+
+      await client.project.streams.append({
+        projectSlugOrId: project.id,
+        streamPath: "/integrations/slack",
+        event: {
+          type: "events.iterate.com/slack/webhook-received",
+          idempotencyKey: `slack-agent-e2e-webhook:${suffix}`,
+          payload: {
+            slackTeamId: "T_E2E",
+            projectId: project.id,
+            body: {
+              type: "event_callback",
+              team_id: "T_E2E",
+              event_id: `Ev${suffix}`,
+              event: {
+                type: "message",
+                channel: slackChannelId,
+                channel_type: "channel",
+                user: "U_E2E",
+                ts: rootMessage.ts,
+                event_ts: rootMessage.ts,
+                text: `!slack.chat.postMessage({ channel: ${JSON.stringify(slackChannelId)}, thread_ts: ${JSON.stringify(rootMessage.ts)}, text: ${JSON.stringify(replyText)} })`,
+              },
+            },
+          },
+        },
+      });
+
+      const events = await readUntil({
+        agentPath: routedAgentPath,
+        client,
+        projectId: project.id,
+        afterOffset: "start",
+        predicate: (event) =>
+          event.type === "events.iterate.com/codemode/function-call-completed" &&
+          (event.payload as { path?: unknown }).path instanceof Array &&
+          (event.payload as { path: string[] }).path.join(".") === "slack.chat.postMessage",
+      });
+      const slackCallCompleted = requiredPathEvent(
+        events,
+        "events.iterate.com/codemode/function-call-completed",
+        "slack.chat.postMessage",
+      );
+
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
+          payload: expect.objectContaining({
+            slug: expect.stringContaining("slack-agent:"),
+          }),
+        }),
+      );
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
+          payload: expect.objectContaining({
+            slug: expect.stringContaining("agent:"),
+          }),
+        }),
+      );
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "events.iterate.com/slack/thread-route-configured",
+          payload: {
+            channel: slackChannelId,
+            threadTs: rootMessage.ts,
+            streamPath: routedAgentPath,
+          },
+        }),
+      );
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "events.iterate.com/codemode/tool-provider-registered",
+          payload: expect.objectContaining({
+            path: ["slack", "agent"],
+          }),
+        }),
+      );
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "events.iterate.com/codemode/script-execution-requested",
+          payload: expect.objectContaining({
+            code: expect.stringContaining("ctx.slack.chat.postMessage"),
+          }),
+        }),
+      );
+      expect(slackCallCompleted).toMatchObject({
+        payload: expect.objectContaining({
+          outcome: expect.objectContaining({
+            status: "returned",
+            value: expect.objectContaining({
+              channel: slackChannelId,
+              ok: true,
+            }),
+          }),
+        }),
+      });
+      expect(
+        events.filter(
+          (event) =>
+            event.type === "events.iterate.com/agent/input-added" &&
+            typeof (event.payload as { content?: unknown }).content === "string" &&
+            (event.payload as { content: string }).content.includes("Slack message received."),
+        ),
+      ).toEqual([]);
+      expect(
+        events.filter((event) => event.type === "events.iterate.com/core/error-occurred"),
+      ).toEqual([]);
+    },
+    90_000,
+  );
+
   it("does not append normal out-of-order reducer errors during an agent codemode turn", async () => {
     const baseUrl = requireBaseUrl();
     const client = createClient(baseUrl);
@@ -395,10 +619,7 @@ function requireBaseUrl() {
 }
 
 async function requireSlackChannelId() {
-  const token = process.env.APP_CONFIG_SLACK_BOT_TOKEN?.trim();
-  if (!token) throw new Error("APP_CONFIG_SLACK_BOT_TOKEN is required for Slack e2e tests.");
-
-  const channels = await listSlackChannels(token);
+  const channels = await listSlackChannels(requireSlackToken());
   const channel = channels.find(
     (candidate) => candidate.name === "slack-agent-e2e-test" && candidate.is_member === true,
   );
@@ -408,6 +629,40 @@ async function requireSlackChannelId() {
     );
   }
   return channel.id;
+}
+
+function requireSlackToken() {
+  const token = process.env.APP_CONFIG_SLACK_BOT_TOKEN?.trim();
+  if (!token) throw new Error("APP_CONFIG_SLACK_BOT_TOKEN is required for Slack e2e tests.");
+  return token;
+}
+
+async function postSlackMessage(input: { channel: string; text: string; token: string }) {
+  const response = await fetch("https://slack.com/api/chat.postMessage", {
+    body: JSON.stringify({
+      channel: input.channel,
+      text: input.text,
+    }),
+    headers: {
+      authorization: `Bearer ${input.token}`,
+      "content-type": "application/json; charset=utf-8",
+    },
+    method: "POST",
+  });
+  const result = (await response.json()) as
+    | {
+        channel: string;
+        ok: true;
+        ts: string;
+      }
+    | {
+        error?: string;
+        ok: false;
+      };
+  if (!result.ok) {
+    throw new Error(`Slack chat.postMessage failed: ${result.error ?? response.status}`);
+  }
+  return result;
 }
 
 async function listSlackChannels(token: string) {
@@ -518,6 +773,29 @@ function requiredEvent(events: readonly Event[], type: string) {
   const event = events.find((item) => item.type === type);
   if (!event) throw new Error(`Expected ${type}.`);
   return event;
+}
+
+function requiredPathEvent(events: readonly Event[], type: string, path: string) {
+  const event = events.find(
+    (item) =>
+      item.type === type &&
+      (item.payload as { path?: unknown }).path instanceof Array &&
+      (item.payload as { path: string[] }).path.join(".") === path,
+  );
+  if (!event) throw new Error(`Expected ${type} for ${path}.`);
+  return event;
+}
+
+function slackAgentPath(input: { channel: string; threadTs: string }) {
+  return `/agents/slack/${sanitizeSlackPathPart(input.channel)}/ts-${sanitizeSlackPathPart(input.threadTs)}`;
+}
+
+function sanitizeSlackPathPart(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
+}
+
+function slackIntegrationDurableObjectName(projectId: string) {
+  return JSON.stringify({ projectId });
 }
 
 function maxGapAfter(events: readonly Event[], afterOffset: number) {

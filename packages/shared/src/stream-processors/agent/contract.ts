@@ -9,6 +9,8 @@ import { CoreProcessorRegisteredEventType } from "../core/contract.ts";
 import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
 import { CodemodeProcessorContract } from "../codemode/contract.ts";
 
+export const DEFAULT_WORKERS_AI_AGENT_MODEL = "@cf/moonshotai/kimi-k2.6";
+
 /**
  * Frontend-safe public contract for the agent processor.
  *
@@ -39,7 +41,7 @@ export const AgentProcessorContract = defineProcessorContract({
         runOpts: z.json().default({}),
         debounceMs: z.number().int().nonnegative().default(1000),
       })
-      .default({ model: "@cf/moonshotai/kimi-k2.5", runOpts: {}, debounceMs: 1000 }),
+      .default({ model: DEFAULT_WORKERS_AI_AGENT_MODEL, runOpts: {}, debounceMs: 1000 }),
     currentRequest: z
       .discriminatedUnion("phase", [
         z.object({ phase: z.literal("scheduled"), requestId: z.string() }),

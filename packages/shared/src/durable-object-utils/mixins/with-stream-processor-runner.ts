@@ -95,6 +95,42 @@ export function wrapProcessorStreamApiWithProvenance<
         },
       });
     },
+    appendBatch: async (appendArgs) =>
+      await streamApi.appendBatch({
+        ...appendArgs,
+        events: appendArgs.events.map((event) => {
+          const existingMetadata = event.metadata ?? {};
+          const existingProvenance =
+            typeof existingMetadata.provenance === "object" &&
+            existingMetadata.provenance !== null &&
+            !Array.isArray(existingMetadata.provenance)
+              ? existingMetadata.provenance
+              : {};
+
+          return {
+            ...event,
+            metadata: {
+              ...existingMetadata,
+              provenance: {
+                ...existingProvenance,
+                processor: {
+                  slug: processor.contract.slug,
+                  version: processor.contract.version,
+                },
+                ...(processingEvent == null
+                  ? {}
+                  : {
+                      whileProcessingEvent: {
+                        streamPath: processingEvent.streamPath,
+                        offset: processingEvent.offset,
+                        type: processingEvent.type,
+                      },
+                    }),
+              },
+            },
+          };
+        }),
+      }),
     read: async (readArgs) => await streamApi.read(readArgs),
     subscribe: (subscribeArgs) => streamApi.subscribe(subscribeArgs),
   };

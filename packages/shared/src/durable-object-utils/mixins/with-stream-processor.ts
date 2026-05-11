@@ -63,6 +63,7 @@ type RuntimeProcessorReduction = {
 
 type RuntimeProcessorStreamApi = Omit<ProcessorStreamApi<unknown>, "append"> & {
   append(args: { event: EventInput; streamPath?: string }): Promise<StreamEvent>;
+  appendBatch(args: { events: EventInput[]; streamPath?: string }): Promise<StreamEvent[]>;
 };
 
 type StreamProcessorOptions<StructuredName extends LifecycleStructuredName, Env> = {
@@ -514,6 +515,29 @@ export function withStreamProcessor<
               processorSlug: args.processor.contract.slug,
             });
             return event;
+          },
+          appendBatch: async (appendArgs) => {
+            const events = await streamApi.appendBatch({
+              ...appendArgs,
+              events: appendArgs.events.map(
+                (event) =>
+                  ({
+                    ...event,
+                    metadata: addProcessorProvenance({
+                      event,
+                      processor: args.processor,
+                      processingEvent: args.processingEvent,
+                    }),
+                  }) as EventInput,
+              ),
+            });
+            for (const event of events) {
+              this.#localAppendTimes.set(localAppendKey(event), {
+                appendedAtMs: Date.now(),
+                processorSlug: args.processor.contract.slug,
+              });
+            }
+            return events;
           },
           read: async (readArgs) => await streamApi.read(readArgs),
           subscribe: (subscribeArgs) => streamApi.subscribe(subscribeArgs),
