@@ -28,7 +28,16 @@ export function wrapWaitUntilWithLogging<T>(
   const method = typeof parentRequest.method === "string" ? parentRequest.method : "WAITUNTIL";
   const path = `${typeof parentRequest.path === "string" ? parentRequest.path : "unknown"}#waitUntil`;
 
-  return logger.run(async () => {
+  const onError = options?.onError;
+
+  return logger.run(async ({ store }) => {
+    if (onError) {
+      store.exitHandlers.push(async (log) => {
+        if (!log.errors?.length) return;
+        await onError(log);
+      });
+    }
+
     logger.set({
       ...(typeof parent.service === "string" ? { service: parent.service } : {}),
       ...(typeof parent.environment === "string" ? { environment: parent.environment } : {}),
@@ -44,14 +53,8 @@ export function wrapWaitUntilWithLogging<T>(
       ...(parent.user ? { user: parent.user } : {}),
     });
 
-    try {
-      const result = await resolveTask(task);
-      logger.set({ request: { status: 200 } });
-      return result;
-    } catch (error) {
-      logger.error(error, { request: { parentRequestId, waitUntil: true } });
-      await options?.onError?.(logger.get());
-      throw error;
-    }
+    const result = await resolveTask(task);
+    logger.set({ request: { status: 200 } });
+    return result;
   });
 }

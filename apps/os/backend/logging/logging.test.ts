@@ -15,6 +15,7 @@ import {
   writeJsonLog,
   writePrettyLog,
 } from "./index.ts";
+import type { WideLog } from "./types.ts";
 
 const { mockSendPostHogException } = vi.hoisted(() => ({
   mockSendPostHogException: vi.fn<(opts: Record<string, unknown>) => Promise<void>>(),
@@ -245,5 +246,42 @@ describe("logging", () => {
     await expect(wrapWaitUntilWithLogging(Promise.resolve("ok"))).resolves.toBe("ok");
 
     expect(getBufferedLogEvents()).toEqual([]);
+  });
+
+  test("waitUntil logging records thrown errors once", async () => {
+    const observedLogs: WideLog[] = [];
+
+    await logger.run(async () => {
+      logger.set({
+        service: "os",
+        environment: "test",
+        request: { id: "req_parent", method: "POST", path: "/api/do-thing", status: 500 },
+      });
+
+      await expect(
+        wrapWaitUntilWithLogging(
+          async () => {
+            throw new Error("waitUntil boom");
+          },
+          {
+            onError: (log) => {
+              observedLogs.push(log);
+            },
+          },
+        ),
+      ).rejects.toThrow("waitUntil boom");
+    });
+
+    const childLog = getBufferedLogEvents().find(
+      (event) => (event.request as { waitUntil?: boolean } | undefined)?.waitUntil === true,
+    );
+    expect(childLog).toMatchObject({
+      request: { waitUntil: true, parentRequestId: "req_parent", status: 500 },
+      errors: [expect.objectContaining({ name: "Error", message: "waitUntil boom" })],
+    });
+    expect(childLog?.messages?.filter((message) => message.includes("[ERROR] "))).toHaveLength(1);
+    expect(observedLogs).toMatchObject([
+      { errors: [expect.objectContaining({ message: "waitUntil boom" })] },
+    ]);
   });
 });

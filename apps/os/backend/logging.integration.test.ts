@@ -563,17 +563,7 @@ test("captures the raw waitUntil child log", async () => {
               at createTestingThrowable (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
               at runTestingFailureScenario (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
               at <repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>
-      - name: Error
-        message: "[test_error] <marker>"
-        stack: |-
-          Error: [test_error] <marker>
-              at createTestingThrowable (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
-              at runTestingFailureScenario (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
-              at <repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>
     messages:
-      - "[ERROR] <elapsed>s: Error: [test_error] <marker>"
-      - "[INFO] <elapsed>s: PostHog log exception dispatch requestId=<uuid>:waitUntil:<uuid> path=/api/orpc/testing/emitWaitUntilFailure#waitUntil errorCount=1"
-      - "[INFO] <elapsed>s: PostHog log exception sent requestId=<uuid>:waitUntil:<uuid>"
       - "[ERROR] <elapsed>s: [test_error] <marker>""
   `);
 });
@@ -650,18 +640,7 @@ test("captures custom error properties in a waitUntil log", async () => {
               at runTestingFailureScenario (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
               at <repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>
         exampleField: <marker>
-      - name: TestingCustomError
-        message: "[test_custom_error] <marker>"
-        stack: |-
-          TestingCustomError: [test_custom_error] <marker>
-              at createTestingThrowable (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
-              at runTestingFailureScenario (<repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>)
-              at <repo>/apps/os/backend/orpc/routers/testing.ts:<lineno>:<colno>
-        exampleField: <marker>
     messages:
-      - "[ERROR] <elapsed>s: TestingCustomError: [test_custom_error] <marker>"
-      - "[INFO] <elapsed>s: PostHog log exception dispatch requestId=<uuid>:waitUntil:<uuid> path=/api/orpc/testing/emitWaitUntilFailure#waitUntil errorCount=1"
-      - "[INFO] <elapsed>s: PostHog log exception sent requestId=<uuid>:waitUntil:<uuid>"
       - "[ERROR] <elapsed>s: [test_custom_error] <marker>""
   `);
 });
