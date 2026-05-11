@@ -303,17 +303,28 @@ function buildRawPresets(
 
   for (const processor of processors) {
     for (const event of processor.ownedEvents) {
-      if (event.examples == null || event.examples.length === 0) continue;
-
-      for (const example of event.examples) {
+      if (event.examples != null && event.examples.length > 0) {
+        for (const example of event.examples) {
+          processorPresets.push({
+            id: `${processor.slug}/${event.type}/${example.description}`,
+            label: `${processor.slug}: ${example.description}`,
+            value: stringifyYaml({ type: event.type, payload: example.payload }),
+          });
+        }
+      } else {
         processorPresets.push({
-          id: `${processor.slug}/${event.type}/${example.description}`,
-          label: `${processor.slug}: ${example.description}`,
-          value: stringifyYaml({ type: event.type, payload: example.payload }),
+          id: `${processor.slug}/${event.type}`,
+          label: `${processor.slug}: ${shortEventType(event.type)}`,
+          value: stringifyYaml({ type: event.type, payload: {} }),
         });
       }
     }
   }
 
   return [...defaultRawEventPresets, ...processorPresets];
+}
+
+function shortEventType(eventType: string): string {
+  const lastSegment = eventType.split("/").pop();
+  return lastSegment ?? eventType;
 }
