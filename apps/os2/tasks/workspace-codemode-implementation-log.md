@@ -59,14 +59,20 @@ real preview MCP codemode session can use a simple JavaScript block to:
 - Final verification requires a deployed preview MCP session and a real
   Cloudflare Artifacts-backed Iterate Config Repo, so local tests are necessary
   but not sufficient.
+- Preview project creation initially failed because the Artifacts namespace was
+  missing the `iterate-config-base` source repo. The local token available to
+  the shell could deploy Workers but could not call the Artifacts REST API, so I
+  added an admin-only debug repair route that seeds the base repo through the
+  deployed Worker's own `ARTIFACTS` binding.
 
 ## Checkpoints
 
-- [ ] Implement shell-backed `WorkspaceDurableObject`.
-- [ ] Implement `WorkspaceCapability`.
-- [ ] Register default `ctx.workspace` provider.
-- [ ] Add local codemode tests.
-- [ ] Commit and push local implementation checkpoint.
-- [ ] Deploy preview.
+- [x] Implement shell-backed `WorkspaceDurableObject`.
+- [x] Implement `WorkspaceCapability`.
+- [x] Register default `ctx.workspace` provider.
+- [x] Add local codemode tests.
+- [x] Commit and push local implementation checkpoint.
+- [x] Deploy preview.
+- [ ] Seed preview `iterate-config-base` through admin debug route.
 - [ ] Run real MCP codemode script: repo info -> clone -> edit -> commit -> push.
 - [ ] Record verification evidence.
