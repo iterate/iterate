@@ -11,6 +11,7 @@ import {
   getBufferedLogEvents,
   logger,
   recordBufferedLog,
+  wrapWaitUntilWithLogging,
   writeJsonLog,
   writePrettyLog,
 } from "./index.ts";
@@ -238,5 +239,11 @@ describe("logging", () => {
     expect(events).toHaveLength(2);
     expect(events[0].errors).toEqual([expect.any(Error)]);
     expect(events[1].errors).toEqual([expect.any(Error)]);
+  });
+
+  test("waitUntil logging is a no-op outside a logger context", async () => {
+    await expect(wrapWaitUntilWithLogging(Promise.resolve("ok"))).resolves.toBe("ok");
+
+    expect(getBufferedLogEvents()).toEqual([]);
   });
 });

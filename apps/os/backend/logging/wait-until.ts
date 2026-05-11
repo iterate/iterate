@@ -15,13 +15,8 @@ export function wrapWaitUntilWithLogging<T>(
   task: WaitUntilTask<T>,
   options?: WaitUntilOptions,
 ): Promise<T> {
-  let parent: ReturnType<typeof logger.get>;
-
-  try {
-    parent = logger.get();
-  } catch {
-    return resolveTask(task);
-  }
+  const parent = logger.peek();
+  if (!parent) return resolveTask(task);
 
   const parentRequest =
     typeof parent.request === "object" && parent.request !== null

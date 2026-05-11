@@ -1218,7 +1218,7 @@ test("returns a clean 400 and logs invalid orpc input", async () => {
       email: unknown
     egress:
       <origin> <origin>
-    errors:
+    clientErrors:
       - name: Error
         message: Input validation failed
         stack: |-

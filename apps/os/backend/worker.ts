@@ -482,8 +482,7 @@ function handleOrpcError(
   if (effectiveStatus >= 500) {
     logger.error(message, errorDetails, resolvedError);
   } else {
-    logger.set({ errors: [errorDetails] });
-    logger.warn(message);
+    logger.warn(message, { clientErrors: [errorDetails] });
   }
 }
 
