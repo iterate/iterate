@@ -10,11 +10,15 @@ import {
 } from "./agent-presets.ts";
 
 describe("agent presets", () => {
-  it("normalizes preset paths under /agents", () => {
-    expect(normalizeAgentPresetBasePath("alice/bla")).toBe("/agents/alice/bla");
-    expect(normalizeAgentPresetBasePath("/alice/bla/")).toBe("/agents/alice/bla");
-    expect(normalizeAgentPresetBasePath("/agents/alice/bla/")).toBe("/agents/alice/bla");
-    expect(normalizeAgentPresetBasePath("/")).toBe("/agents");
+  it("accepts full preset paths under /agents", () => {
+    expect(normalizeAgentPresetBasePath("/agents")).toBe("/agents");
+    expect(normalizeAgentPresetBasePath("/agents/alice/bla")).toBe("/agents/alice/bla");
+    expect(() => normalizeAgentPresetBasePath("alice/bla")).toThrow(
+      "Agent preset path must be /agents or start with /agents/.",
+    );
+    expect(() => normalizeAgentPresetBasePath("/alice/bla")).toThrow(
+      "Agent preset path must be /agents or start with /agents/.",
+    );
   });
 
   it("selects the longest matching path-prefix preset", () => {

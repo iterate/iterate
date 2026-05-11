@@ -83,7 +83,7 @@ function NewAgentPage() {
   const params = Route.useParams();
   const { project } = Route.useLoaderData();
   const navigate = useNavigate();
-  const [agentPathInput, setAgentPathInput] = useState("assistant");
+  const [agentPathInput, setAgentPathInput] = useState("/agents/assistant");
   const [provider, setProvider] = useState<AgentLlmProvider>("openai-ws");
   const [model, setModel] = useState("gpt-5.5");
   const [runOpts, setRunOpts] = useState('{"gateway":{"id":"default"}}');
@@ -131,7 +131,7 @@ function NewAgentPage() {
     },
     onSuccess: () => {
       void navigate({
-        to: "/orgs/$organizationSlug/projects/$projectSlug/streams/$",
+        to: "/orgs/$organizationSlug/projects/$projectSlug/agents/streams/$",
         params: {
           ...params,
           _splat: streamPathToSplat(preview.agentPath),
@@ -188,11 +188,8 @@ function NewAgentPage() {
                 id="agent-path"
                 value={agentPathInput}
                 onChange={(event) => setAgentPathInput(event.currentTarget.value)}
-                placeholder="assistant"
+                placeholder="/agents/assistant"
               />
-              <FieldDescription>
-                Inputs such as alice/bla are saved as /agents/alice/bla.
-              </FieldDescription>
             </Field>
 
             <div className="grid gap-3 md:grid-cols-[14rem_minmax(0,1fr)]">

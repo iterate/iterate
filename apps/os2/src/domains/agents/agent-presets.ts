@@ -111,14 +111,11 @@ export function selectAgentPathPrefixPreset(input: {
 }
 
 export function normalizeAgentPresetBasePath(input: string): StreamPath {
-  const trimmed = input.trim();
-  const withSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  const withoutTrailing = withSlash.replace(/\/+$/, "");
-  const basePath = withoutTrailing === "" ? "/agents" : withoutTrailing;
+  const basePath = StreamPath.parse(input.trim());
   if (basePath === "/agents" || basePath.startsWith("/agents/")) {
-    return StreamPath.parse(basePath);
+    return basePath;
   }
-  return StreamPath.parse(`/agents/${basePath.replace(/^\/+/, "")}`);
+  throw new Error("Agent preset path must be /agents or start with /agents/.");
 }
 
 export function presetMatchesAgentPath(input: { agentPath: string; basePath: string }) {

@@ -34,14 +34,12 @@ export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capabil
  * Code execution is delegated to the project/stream-scoped CodemodeSession DO.
  *
  * Tools:
- * - run_code: Execute JavaScript in an isolated dynamic worker sandbox
- * - reveal_secret: Return a dedicated deploy-time proof secret
+ * - exec_js: Execute JavaScript in an isolated dynamic worker sandbox
  */
 
 interface McpServerEnv {
   CODEMODE_SESSION: CodemodeSessionNamespace;
   DO_CATALOG: D1Database;
-  MCP_PROOF_SECRET: string;
   MOCK_PROVIDER_BASE_URL?: string;
   PROJECT_MCP_SERVER_CONNECTION: DurableObjectNamespace;
 }
@@ -145,52 +143,7 @@ export class ProjectMcpServerConnection extends McpAgent<
 
   async init() {
     this.server.registerTool(
-      "reveal_secret",
-      {
-        title: "Reveal secret",
-        description:
-          "Return the dedicated MCP proof secret configured on this deployment. " +
-          "This is intentionally not a production credential.",
-        inputSchema: z.object({}),
-      },
-      async () => {
-        const invocationId = `mcp_tool_${crypto.randomUUID()}`;
-        const startedAt = Date.now();
-        const auth = this.requireProjectAuthProps();
-        this.requireScope(auth, requiredToolScope);
-
-        await this.emitLifecycleEvent("tool-invocation-started", {
-          auth: summarizeAuthProps(auth),
-          input: {},
-          invocationId,
-          projectId: auth.projectId,
-          projectSlug: auth.projectSlug,
-          toolName: "reveal_secret",
-        });
-
-        const response = {
-          content: [{ type: "text" as const, text: this.env.MCP_PROOF_SECRET }],
-          isError: false,
-        };
-
-        await this.emitLifecycleEvent("tool-invocation-finished", {
-          auth: summarizeAuthProps(auth),
-          durationMs: Date.now() - startedAt,
-          input: {},
-          invocationId,
-          output: response,
-          projectId: auth.projectId,
-          projectSlug: auth.projectSlug,
-          result: this.env.MCP_PROOF_SECRET,
-          toolName: "reveal_secret",
-        });
-
-        return response;
-      },
-    );
-
-    this.server.registerTool(
-      "run_code",
+      "exec_js",
       {
         title: "Run code",
         description:
@@ -212,7 +165,7 @@ export class ProjectMcpServerConnection extends McpAgent<
         const invocationId = `mcp_tool_${crypto.randomUUID()}`;
         const startedAt = Date.now();
         const streamPath = await this.getSessionStreamPath();
-        debugCodemodeDepth("mcp.run_code.start", {
+        debugCodemodeDepth("mcp.exec_js.start", {
           invocationId,
           providerCount: staticProviders.length,
           sessionId: this.getSessionId(),
@@ -226,15 +179,15 @@ export class ProjectMcpServerConnection extends McpAgent<
           projectId: auth.projectId,
           projectSlug: auth.projectSlug,
           streamPath,
-          toolName: "run_code",
+          toolName: "exec_js",
         });
-        debugCodemodeDepth("mcp.run_code.afterStartedLifecycle", {
+        debugCodemodeDepth("mcp.exec_js.afterStartedLifecycle", {
           invocationId,
           elapsedMs: Date.now() - startedAt,
         });
 
         try {
-          debugCodemodeDepth("mcp.run_code.beforeStartSession", {
+          debugCodemodeDepth("mcp.exec_js.beforeStartSession", {
             invocationId,
             elapsedMs: Date.now() - startedAt,
           });
@@ -246,7 +199,7 @@ export class ProjectMcpServerConnection extends McpAgent<
             providers: staticProviders,
             streamPath,
           });
-          debugCodemodeDepth("mcp.run_code.afterStartSession", {
+          debugCodemodeDepth("mcp.exec_js.afterStartSession", {
             invocationId,
             elapsedMs: Date.now() - startedAt,
             offset: started.event.offset,
@@ -289,12 +242,12 @@ export class ProjectMcpServerConnection extends McpAgent<
             scriptExecutionId: (started.event.payload as { scriptExecutionId?: unknown })
               .scriptExecutionId,
             streamPath,
-            toolName: "run_code",
+            toolName: "exec_js",
           });
 
           return response;
         } catch (error) {
-          debugCodemodeDepth("mcp.run_code.error", {
+          debugCodemodeDepth("mcp.exec_js.error", {
             invocationId,
             elapsedMs: Date.now() - startedAt,
             error: serializeError(error),
@@ -312,7 +265,7 @@ export class ProjectMcpServerConnection extends McpAgent<
             projectId: auth.projectId,
             projectSlug: auth.projectSlug,
             streamPath,
-            toolName: "run_code",
+            toolName: "exec_js",
           });
 
           throw error;

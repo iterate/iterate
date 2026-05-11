@@ -216,11 +216,6 @@ async function getJwtPublicKey(publishableKey: string) {
 function setDopplerSecrets(target: Target, instance: ClerkInstance, jwtKey: string | Buffer) {
   const secrets = new Map([
     ["APP_CONFIG_BASE_URL", target.baseUrl],
-    [
-      "APP_CONFIG_MCP_PROOF_SECRET",
-      readExistingDopplerSecret(target.dopplerConfig, "APP_CONFIG_MCP_PROOF_SECRET") ??
-        randomBytes(32).toString("base64url"),
-    ],
     ["APP_CONFIG_PROJECT_HOSTNAME_BASES", JSON.stringify([target.projectHostnameBase])],
     ["APP_CONFIG_CLERK__PUBLISHABLE_KEY", instance.publishable_key],
     ["APP_CONFIG_CLERK__SECRET_KEY", instance.secret_key!],
