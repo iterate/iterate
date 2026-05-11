@@ -83,46 +83,6 @@ export default defineConfig({
       },
     },
     {
-      name: "archil-mount",
-      definition: {
-        command: "bash",
-        args: [`${sandboxDir}/archil-mount.sh`],
-      },
-      envOptions: {
-        // inheritGlobalEnv=false: skip ~/.iterate/.env (proxy vars would break archil).
-        // inheritProcessEnv=true (default): ARCHIL_* vars come from Fly process env.
-        inheritGlobalEnv: false,
-        reloadDelay: false,
-      },
-      options: {
-        restartPolicy: "always",
-        backoff: {
-          type: "exponential",
-          initialDelayMs: 2000,
-          maxDelayMs: 60000,
-        },
-      },
-      dependsOn: ["egress-proxy"],
-    },
-    {
-      // Gate process: polls for /tmp/persistence-ready (touched by archil-mount.sh
-      // after mount + symlink setup), then exits 0. Uses restartPolicy "never"
-      // so the default dependsOn condition is "completed" — dependents wait for exit.
-      name: "archil-repo-ready",
-      definition: {
-        command: "bash",
-        args: ["-c", "while [ ! -f /tmp/persistence-ready ]; do sleep 1; done"],
-      },
-      envOptions: {
-        inheritGlobalEnv: false,
-        reloadDelay: false,
-      },
-      options: {
-        restartPolicy: "never",
-      },
-      dependsOn: ["archil-mount"],
-    },
-    {
       name: "project-ingress-proxy",
       definition: {
         command: "tsx",
@@ -139,7 +99,7 @@ export default defineConfig({
       options: {
         restartPolicy: "always",
       },
-      dependsOn: ["archil-repo-ready"],
+      dependsOn: ["egress-proxy"],
     },
     {
       name: "events",
@@ -159,7 +119,7 @@ export default defineConfig({
       options: {
         restartPolicy: "always",
       },
-      dependsOn: ["archil-repo-ready"],
+      dependsOn: ["egress-proxy"],
     },
     {
       name: "daemon-backend",
@@ -183,7 +143,7 @@ export default defineConfig({
         // Safe now that daemon no longer writes to .env (PR #1030 moved to push-based setup).
         reloadDelay: 500,
       },
-      dependsOn: ["archil-repo-ready"],
+      dependsOn: ["egress-proxy"],
     },
     {
       name: "daemon-frontend",
@@ -226,7 +186,7 @@ export default defineConfig({
       options: {
         restartPolicy: "always",
       },
-      dependsOn: ["archil-repo-ready"],
+      dependsOn: ["egress-proxy"],
     },
     {
       name: "trace-viewer",

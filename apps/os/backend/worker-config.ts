@@ -22,15 +22,6 @@ export type WorkerCronName = keyof WorkerCrons;
 export type WorkerCronExpression = WorkerCrons[WorkerCronName];
 
 export const RegionConfig = z.object({
-  /** https://developers.cloudflare.com/r2/reference/data-location/#available-hints */
-  r2BucketHint: z.enum([
-    "wnam", // Western North America
-    "enam", // Eastern North America
-    "weur", // Western Europe
-    "eeur", // Eastern Europe
-    "apac", // Asia Pacific
-    "oc", // Oceania
-  ]),
   /**
    * Cloud provider region to place your Worker closest to.
    *
@@ -56,14 +47,6 @@ export const RegionConfig = z.object({
     "aws:eu-west-1", // Dublin
     "aws:eu-west-2", // London
     // other ones not used yet omitted for now
-  ]),
-  /** https://docs.archil.com/reference/regions#aws-regions */
-  archilRegion: z.enum([
-    "aws-us-east-1", // N. Virginia
-    "aws-us-west-2", // Oregon
-    "aws-eu-west-1", // Dublin
-    // todo: check for London soon!
-    "gcp-us-central1", // Iowa
   ]),
   /** https://fly.io/docs/reference/regions/#fly-io-regions */
   flyIoRegion: z.enum([
@@ -110,12 +93,6 @@ export const RegionConfig = z.object({
     "gcp-europe-west1", // GCP europe-west1 (St Ghislain, Belgium)
   ]),
 });
-
-/** Archil API keys are region-specific, so have a single env var mapping from region to API */
-export const ArchilApiKeys = z.partialRecord(
-  z.enum(RegionConfig.shape.archilRegion.options),
-  z.string().brand("ArchilApiKey"),
-);
 
 const wrapJsonEnvVar = <Z extends z.ZodType>(schema: Z) =>
   z
