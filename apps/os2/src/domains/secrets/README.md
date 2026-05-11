@@ -22,7 +22,9 @@ Slack is the first concrete claim:
 - Provider: `slack`
 - Webhook Provider Identifier: Slack `team_id`
 - Claim owner: exactly one `ProjectId`
-- Webhook destination: that project's stream namespace at `/slack/webhooks`
+- Lifecycle stream: that project's stream namespace at `/integrations/slack`
+- Webhook destination: that project's stream namespace at `/integrations/slack/webhooks`
+- Future processor slug: `slack-integration`
 
 This means one Slack team cannot forward signed webhooks into two projects at
 the same time. Reconnecting Slack in the same project can replace that project's
@@ -33,3 +35,15 @@ Future webhook-driven integrations should follow the same shape: identify the
 provider-owned webhook routing key, store it in
 `project_connections.webhook_provider_identifier`, enforce global uniqueness for
 that provider, and route inbound webhooks by resolving that claim to a ProjectId.
+
+Google is project-scoped for this slice:
+
+- Provider: `google`
+- Lifecycle stream: that project's stream namespace at `/integrations/google`
+- Future processor slug: `google-integration`
+
+OAuth callbacks manually append `events.iterate.com/slack-integration/connected`
+and `events.iterate.com/google-integration/connected` for now. Disconnect
+actions manually append the matching `/disconnected` events. Future
+`slack-integration` and `google-integration` stream processors should own this
+event vocabulary.

@@ -355,6 +355,164 @@ const codemodeExampleSeeds = [
     ],
   },
   {
+    slug: "gmail-read-latest-email",
+    name: "Read latest Gmail message",
+    description:
+      "Read the project-scoped Google access token from ctx.secrets, call the Gmail API, and return the latest inbox message.",
+    providers: [],
+    code: `async (ctx) => {
+  const { console, fetch, secrets } = ctx;
+
+  const googleToken = await secrets.getSecret({ key: "google.access_token" });
+  console.log("using Google connection", {
+    email: googleToken.metadata.email,
+    googleUserId: googleToken.metadata.googleUserId,
+    scopes: googleToken.metadata.scopes,
+  });
+
+  async function gmail(path, init = {}) {
+    const response = await fetch(\`https://gmail.googleapis.com/gmail/v1\${path}\`, {
+      ...init,
+      headers: {
+        ...(init.headers ?? {}),
+        authorization: \`Bearer \${googleToken.material}\`,
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(\`Gmail API \${path} returned \${response.status}: \${await response.text()}\`);
+    }
+    return await response.json();
+  }
+
+  const listParams = new URLSearchParams({
+    maxResults: "1",
+    q: "in:inbox newer_than:30d",
+  });
+  const messageList = await gmail(\`/users/me/messages?\${listParams}\`);
+  const messageId = messageList.messages?.[0]?.id;
+  if (!messageId) {
+    return { email: googleToken.metadata.email, message: null, reason: "No recent inbox mail." };
+  }
+
+  const messageParams = new URLSearchParams({ format: "full" });
+  const message = await gmail(\`/users/me/messages/\${messageId}?\${messageParams}\`);
+  const headers = Object.fromEntries(
+    (message.payload?.headers ?? []).map((header) => [
+      String(header.name).toLowerCase(),
+      header.value,
+    ]),
+  );
+
+  function decodeBase64Url(value) {
+    const padded = value.replaceAll("-", "+").replaceAll("_", "/").padEnd(
+      Math.ceil(value.length / 4) * 4,
+      "=",
+    );
+    return atob(padded);
+  }
+
+  function findTextPart(part) {
+    if (!part) return null;
+    if (part.mimeType === "text/plain" && part.body?.data) {
+      return decodeBase64Url(part.body.data);
+    }
+    for (const child of part.parts ?? []) {
+      const found = findTextPart(child);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  const text = findTextPart(message.payload);
+  const result = {
+    id: message.id,
+    threadId: message.threadId,
+    from: headers.from ?? null,
+    to: headers.to ?? null,
+    subject: headers.subject ?? null,
+    date: headers.date ?? null,
+    snippet: message.snippet ?? null,
+    textPreview: text ? text.slice(0, 2000) : null,
+  };
+
+  console.log("latest Gmail message", {
+    from: result.from,
+    subject: result.subject,
+    hasTextPreview: result.textPreview != null,
+  });
+  return result;
+}`,
+    events: [
+      {
+        type: "events.iterate.com/codemode/example-note",
+        payload: {
+          message:
+            "Requires a project Google connection. Reads ctx.secrets.getSecret({ key: 'google.access_token' }) and calls the Gmail REST API with fetch.",
+        },
+      },
+    ],
+  },
+  {
+    slug: "integration-secrets-and-streams",
+    name: "Inspect integration secrets and streams",
+    description:
+      "List project secrets, read Slack/Google connection metadata, and inspect integration lifecycle/webhook streams.",
+    providers: [],
+    code: `async (ctx) => {
+  const { console, secrets, streams } = ctx;
+
+  const secretSummaries = await secrets.list({});
+  const integrationSecrets = secretSummaries.filter((secret) =>
+    secret.key === "slack.access_token" || secret.key === "google.access_token",
+  );
+
+  const results = {};
+  for (const key of ["slack.access_token", "google.access_token"]) {
+    try {
+      const secret = await secrets.getSecret({ key });
+      results[key] = {
+        metadata: secret.metadata,
+        materialChars: secret.material.length,
+      };
+    } catch (error) {
+      results[key] = { missing: true, message: error.message };
+    }
+  }
+
+  const [slackLifecycle, googleLifecycle, slackWebhooks] = await Promise.all([
+    streams.read({ streamPath: "/integrations/slack", afterOffset: "start" }),
+    streams.read({ streamPath: "/integrations/google", afterOffset: "start" }),
+    streams.read({ streamPath: "/integrations/slack/webhooks", afterOffset: "start" }),
+  ]);
+
+  console.log("integration secrets", integrationSecrets.map((secret) => secret.key));
+  console.log("slack lifecycle events", slackLifecycle.map((event) => event.type));
+  console.log("google lifecycle events", googleLifecycle.map((event) => event.type));
+  console.log("slack webhook events", slackWebhooks.map((event) => event.type));
+
+  return {
+    integrationSecrets,
+    secretMetadata: results,
+    streamEventCounts: {
+      slackLifecycle: slackLifecycle.length,
+      googleLifecycle: googleLifecycle.length,
+      slackWebhooks: slackWebhooks.length,
+    },
+    latestSlackWebhook: slackWebhooks.at(-1) ?? null,
+  };
+}`,
+    events: [
+      {
+        type: "events.iterate.com/codemode/example-note",
+        payload: {
+          message:
+            "Uses default ctx.secrets and ctx.streams providers to inspect project-scoped integration state.",
+        },
+      },
+    ],
+  },
+  {
     slug: "custom-events",
     name: "Custom event notebook",
     description: "Start with a few scenario events, then add script logs and a result.",

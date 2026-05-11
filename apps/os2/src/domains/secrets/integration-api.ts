@@ -1,7 +1,12 @@
 import { getInitializedStreamStub } from "@iterate-com/shared/streams/helpers";
-import { StreamPath } from "@iterate-com/shared/streams/types";
 import type { ClerkAuth } from "~/context.ts";
 import type { AppContext } from "~/context.ts";
+import {
+  appendIntegrationEvent,
+  GOOGLE_CONNECTED_EVENT_TYPE,
+  SLACK_CONNECTED_EVENT_TYPE,
+  SLACK_WEBHOOKS_STREAM_PATH,
+} from "~/domains/secrets/integration-streams.ts";
 import {
   consumeOAuthState,
   getProjectConnectionByWebhookIdentifier,
@@ -90,7 +95,7 @@ async function handleSlackCallback(input: {
     return redirectWithError(stateData.callbackUrl, "slack_team_already_claimed");
   }
 
-  await upsertProjectConnection(input.context.db, {
+  const connection = await upsertProjectConnection(input.context.db, {
     externalId: tokenData.team.id,
     projectId: stateData.projectId,
     provider: "slack",
@@ -112,6 +117,24 @@ async function handleSlackCallback(input: {
       teamName: tokenData.team.name ?? tokenData.team.id,
     },
     projectId: stateData.projectId,
+  });
+  await appendIntegrationEvent(input.context, {
+    projectId: stateData.projectId,
+    provider: "slack",
+    event: {
+      type: SLACK_CONNECTED_EVENT_TYPE,
+      idempotencyKey: `slack-integration:connected:${connection.id}:${connection.updatedAt}`,
+      payload: {
+        connectionId: connection.id,
+        externalId: connection.externalId,
+        projectId: stateData.projectId,
+        scopes: config.scopes,
+        teamDomain: tokenData.team.domain,
+        teamId: tokenData.team.id,
+        teamName: tokenData.team.name ?? tokenData.team.id,
+        webhookProviderIdentifier: connection.webhookProviderIdentifier,
+      },
+    },
   });
 
   return Response.redirect(stateData.callbackUrl ?? "/", 302);
@@ -179,7 +202,7 @@ async function handleGoogleCallback(input: {
     return redirectWithError(stateData.callbackUrl, "google_userinfo_failed");
   }
 
-  await upsertProjectConnection(input.context.db, {
+  const connection = await upsertProjectConnection(input.context.db, {
     externalId: userInfo.id,
     projectId: stateData.projectId,
     provider: "google",
@@ -205,6 +228,25 @@ async function handleGoogleCallback(input: {
       scopes: tokenData.scope?.split(" ") ?? config.scopes,
     },
     projectId: stateData.projectId,
+  });
+  const scopes = tokenData.scope?.split(" ") ?? config.scopes;
+  await appendIntegrationEvent(input.context, {
+    projectId: stateData.projectId,
+    provider: "google",
+    event: {
+      type: GOOGLE_CONNECTED_EVENT_TYPE,
+      idempotencyKey: `google-integration:connected:${connection.id}:${connection.updatedAt}`,
+      payload: {
+        connectionId: connection.id,
+        email: userInfo.email,
+        externalId: connection.externalId,
+        googleUserId: userInfo.id,
+        name: userInfo.name,
+        picture: userInfo.picture,
+        projectId: stateData.projectId,
+        scopes,
+      },
+    },
   });
 
   return Response.redirect(stateData.callbackUrl ?? "/", 302);
@@ -246,7 +288,7 @@ async function handleSlackWebhook(input: { context: AppContext; request: Request
   const stream = await getInitializedStreamStub({
     durableObjectNamespace: input.context.stream as never,
     namespace: connection.projectId,
-    path: StreamPath.parse("/slack/webhooks"),
+    path: SLACK_WEBHOOKS_STREAM_PATH,
   });
   await stream.append({
     type: "events.iterate.com/slack/webhook-received",
