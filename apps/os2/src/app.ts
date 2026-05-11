@@ -71,16 +71,16 @@ export const AppConfig = BaseAppConfig.extend({
     .object({
       slack: z
         .object({
-          clientId: publicValue(z.string().trim().min(1)),
-          clientSecret: redacted(z.string().trim().min(1)),
-          signingSecret: redacted(z.string().trim().min(1)),
+          oauthClientId: publicValue(z.string().trim().min(1)),
+          oauthClientSecret: redacted(z.string().trim().min(1)),
+          webhookSigningSecret: redacted(z.string().trim().min(1)),
           scopes: publicValue(z.array(SlackScope).default(DEFAULT_SLACK_BOT_SCOPES)),
         })
         .optional(),
       google: z
         .object({
-          clientId: publicValue(z.string().trim().min(1)),
-          clientSecret: redacted(z.string().trim().min(1)),
+          oauthClientId: publicValue(z.string().trim().min(1)),
+          oauthClientSecret: redacted(z.string().trim().min(1)),
           scopes: publicValue(z.array(GoogleScope).default(DEFAULT_GOOGLE_OAUTH_SCOPES)),
         })
         .optional(),

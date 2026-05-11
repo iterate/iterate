@@ -49,7 +49,7 @@ export async function createSlackAuthorizationUrl(input: {
     userId: input.userId,
   });
   const authorizationUrl = new URL("https://slack.com/oauth/v2/authorize");
-  authorizationUrl.searchParams.set("client_id", slack.clientId);
+  authorizationUrl.searchParams.set("client_id", slack.oauthClientId);
   authorizationUrl.searchParams.set(
     "redirect_uri",
     oauthRedirectUri({ ...input, provider: "slack" }),
@@ -79,7 +79,7 @@ export async function createGoogleAuthorizationUrl(input: {
   });
   const authorizationUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   authorizationUrl.searchParams.set("access_type", "offline");
-  authorizationUrl.searchParams.set("client_id", google.clientId);
+  authorizationUrl.searchParams.set("client_id", google.oauthClientId);
   authorizationUrl.searchParams.set("code_challenge", codeChallenge);
   authorizationUrl.searchParams.set("code_challenge_method", "S256");
   authorizationUrl.searchParams.set("prompt", "consent");

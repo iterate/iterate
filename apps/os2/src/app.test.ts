@@ -76,19 +76,29 @@ describe("AppConfig", () => {
       prefix: "APP_CONFIG_",
       env: {
         APP_CONFIG: JSON.stringify(baseConfig),
-        APP_CONFIG_INTEGRATIONS__SLACK__CLIENT_ID: "slack-client-id",
-        APP_CONFIG_INTEGRATIONS__SLACK__CLIENT_SECRET: "slack-client-secret",
-        APP_CONFIG_INTEGRATIONS__SLACK__SIGNING_SECRET: "slack-signing-secret",
-        APP_CONFIG_INTEGRATIONS__GOOGLE__CLIENT_ID: "google-client-id",
-        APP_CONFIG_INTEGRATIONS__GOOGLE__CLIENT_SECRET: "google-client-secret",
+        APP_CONFIG_INTEGRATIONS__SLACK: JSON.stringify({
+          oauthClientId: "slack-client-id",
+          oauthClientSecret: "slack-client-secret",
+          webhookSigningSecret: "slack-signing-secret",
+        }),
+        APP_CONFIG_INTEGRATIONS__GOOGLE: JSON.stringify({
+          oauthClientId: "google-client-id",
+          oauthClientSecret: "google-client-secret",
+        }),
       },
     });
 
-    expect(parsed.integrations.slack?.clientId).toEqual("slack-client-id");
-    expect(parsed.integrations.slack?.clientSecret.exposeSecret()).toEqual("slack-client-secret");
-    expect(parsed.integrations.slack?.signingSecret.exposeSecret()).toEqual("slack-signing-secret");
-    expect(parsed.integrations.google?.clientId).toEqual("google-client-id");
-    expect(parsed.integrations.google?.clientSecret.exposeSecret()).toEqual("google-client-secret");
+    expect(parsed.integrations.slack?.oauthClientId).toEqual("slack-client-id");
+    expect(parsed.integrations.slack?.oauthClientSecret.exposeSecret()).toEqual(
+      "slack-client-secret",
+    );
+    expect(parsed.integrations.slack?.webhookSigningSecret.exposeSecret()).toEqual(
+      "slack-signing-secret",
+    );
+    expect(parsed.integrations.google?.oauthClientId).toEqual("google-client-id");
+    expect(parsed.integrations.google?.oauthClientSecret.exposeSecret()).toEqual(
+      "google-client-secret",
+    );
   });
 
   it("requires an OpenAI API key for upcoming OS2 AI-backed features", () => {

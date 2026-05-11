@@ -58,8 +58,8 @@ async function handleSlackCallback(input: {
   const baseUrl = requestBaseUrl({ config: input.context.config, request: input.request });
   const tokenResponse = await fetch("https://slack.com/api/oauth.v2.access", {
     body: new URLSearchParams({
-      client_id: config.clientId,
-      client_secret: config.clientSecret.exposeSecret(),
+      client_id: config.oauthClientId,
+      client_secret: config.oauthClientSecret.exposeSecret(),
       code,
       redirect_uri: oauthRedirectUri({ baseUrl, provider: "slack" }),
     }),
@@ -144,8 +144,8 @@ async function handleGoogleCallback(input: {
   const baseUrl = requestBaseUrl({ config: input.context.config, request: input.request });
   const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
     body: new URLSearchParams({
-      client_id: config.clientId,
-      client_secret: config.clientSecret.exposeSecret(),
+      client_id: config.oauthClientId,
+      client_secret: config.oauthClientSecret.exposeSecret(),
       code,
       code_verifier: stateData.codeVerifier,
       grant_type: "authorization_code",
@@ -216,7 +216,7 @@ async function handleSlackWebhook(input: { context: AppContext; request: Request
   const valid = await verifySlackSignature({
     body,
     signature: input.request.headers.get("x-slack-signature"),
-    signingSecret: config.signingSecret.exposeSecret(),
+    signingSecret: config.webhookSigningSecret.exposeSecret(),
     timestamp: input.request.headers.get("x-slack-request-timestamp"),
   });
   if (!valid) return Response.json({ error: "Invalid Slack signature." }, { status: 401 });
