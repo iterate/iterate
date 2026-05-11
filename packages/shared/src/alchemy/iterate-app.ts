@@ -1,12 +1,6 @@
 import { fileURLToPath } from "node:url";
 import alchemy from "alchemy";
-import {
-  Route,
-  TanStackStart,
-  Tunnel,
-  createCloudflareApi,
-  findZoneForHostname,
-} from "alchemy/cloudflare";
+import { Route, TanStackStart, Tunnel, createCloudflareApi } from "alchemy/cloudflare";
 import type { Bindings } from "alchemy/cloudflare";
 import type { BaseAppConfig } from "../apps/config.ts";
 import { slugify } from "../slugify.ts";
@@ -178,7 +172,7 @@ export async function IterateApp<B extends Bindings>(
 
     const routeZoneIds = new Map<string, string>();
     for (const hostname of routeHosts) {
-      const { zoneId } = await findZoneForHostname(cloudflareApi, hostname);
+      const { zoneId } = await findActiveZoneForHostname(cloudflareApi, hostname);
       routeZoneIds.set(hostname, zoneId);
 
       await retryCloudflareWorkerRouteCreation(() =>
@@ -195,7 +189,8 @@ export async function IterateApp<B extends Bindings>(
     await Promise.all(
       dnsRouteHosts.map(async (hostname) => {
         const zoneId =
-          routeZoneIds.get(hostname) ?? (await findZoneForHostname(cloudflareApi, hostname)).zoneId;
+          routeZoneIds.get(hostname) ??
+          (await findActiveZoneForHostname(cloudflareApi, hostname)).zoneId;
         const record = {
           type: "A" as const,
           name: hostname,
@@ -304,6 +299,60 @@ async function ensureCloudflareDnsRecord(input: {
       `Failed to upsert DNS record ${input.record.name}: ${response.status} ${await response.text()}`,
     );
   }
+}
+
+async function findActiveZoneForHostname(
+  cloudflareApi: Awaited<ReturnType<typeof createCloudflareApi>>,
+  hostname: string,
+) {
+  const cleanHostname = hostname.replace(/^\*\./, "");
+  let page = 1;
+  let totalPages = 1;
+  const zones: Array<{
+    account?: { id?: string };
+    id: string;
+    name: string;
+    status?: string;
+  }> = [];
+
+  do {
+    const response = await cloudflareApi.get(`/zones?per_page=50&page=${page}`);
+    if (!response.ok) {
+      throw new Error(`Failed to list zones (page ${page}): ${response.statusText}`);
+    }
+
+    const data = (await response.json()) as {
+      result: Array<{
+        account?: { id?: string };
+        id: string;
+        name: string;
+        status?: string;
+      }>;
+      result_info?: { total_pages?: number };
+    };
+    zones.push(...data.result);
+    totalPages = data.result_info?.total_pages ?? 1;
+    page += 1;
+  } while (page <= totalPages);
+
+  const matchingZones = zones
+    .filter((zone) => cleanHostname === zone.name || cleanHostname.endsWith(`.${zone.name}`))
+    .sort((a, b) => b.name.length - a.name.length);
+  const bestZone =
+    matchingZones.find(
+      (zone) => zone.account?.id === cloudflareApi.accountId && zone.status === "active",
+    ) ??
+    matchingZones.find((zone) => zone.account?.id === cloudflareApi.accountId) ??
+    matchingZones.find((zone) => zone.status === "active") ??
+    matchingZones[0];
+
+  if (!bestZone) {
+    throw new Error(
+      `Could not find zone for hostname '${hostname}'. Available zones: ${zones.map((zone) => zone.name).join(", ")}`,
+    );
+  }
+
+  return { zoneId: bestZone.id, zoneName: bestZone.name };
 }
 
 function withSequentialCloudflareAssetPreupload(input: { command: string; workerName: string }) {

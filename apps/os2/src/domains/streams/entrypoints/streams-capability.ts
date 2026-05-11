@@ -49,6 +49,10 @@ type StreamAppendInput = StreamPathInput & {
   event: EventInput;
 };
 
+type StreamAppendBatchInput = StreamPathInput & {
+  events: EventInput[];
+};
+
 type StreamReadInput = StreamPathInput & {
   afterOffset?: StreamCursor;
   beforeOffset?: StreamCursor;
@@ -63,7 +67,7 @@ type StreamListChildrenInput = StreamPathInput;
 type StreamCatalogRecord = D1ObjectCatalogRecord<StreamDurableObjectStructuredName>;
 type StreamsCapabilityClient = Pick<
   StreamsCapability,
-  "append" | "create" | "getState" | "list" | "listChildren" | "read" | "stream"
+  "append" | "appendBatch" | "create" | "getState" | "list" | "listChildren" | "read" | "stream"
 >;
 
 /**
@@ -88,6 +92,8 @@ export class StreamsCapability extends WorkerEntrypoint<
     switch (input.functionPath.join(".")) {
       case "append":
         return await this.append(options as StreamAppendInput);
+      case "appendBatch":
+        return await this.appendBatch(options as StreamAppendBatchInput);
       case "create":
         return await this.create(options as StreamPathInput);
       case "list":
@@ -131,6 +137,26 @@ export class StreamsCapability extends WorkerEntrypoint<
       namespace: this.ctx.props.namespace,
     });
     return event;
+  }
+
+  async appendBatch(input: StreamAppendBatchInput): Promise<Event[]> {
+    const path = this.resolveNamespacePath(input);
+    this.assertMayAppend(path);
+    return await appendNamespaceStreamEventBatch({
+      durableObjectNamespace: this.env.STREAM,
+      path,
+      namespace: this.ctx.props.namespace,
+      events: input.events.map(
+        (event) =>
+          ({
+            ...event,
+            metadata: {
+              ...(event.metadata ?? {}),
+              ...(this.ctx.props.appendMetadata ?? {}),
+            },
+          }) as EventInput,
+      ),
+    });
   }
 
   async create(input: StreamPathInput) {
@@ -370,6 +396,16 @@ async function appendNamespaceStreamEvent(args: {
 }) {
   const stub = await getInitializedNamespaceStreamStub(args);
   return await stub.append(args.event);
+}
+
+async function appendNamespaceStreamEventBatch(args: {
+  durableObjectNamespace: DurableObjectNamespace<StreamDurableObject>;
+  namespace: string;
+  path: StreamPath;
+  events: EventInput[];
+}) {
+  const stub = await getInitializedNamespaceStreamStub(args);
+  return await stub.appendBatch(args.events);
 }
 
 async function readNamespaceStreamEvents(args: {

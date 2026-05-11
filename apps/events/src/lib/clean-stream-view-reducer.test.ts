@@ -7,6 +7,7 @@ import {
 import { getAdjacentEventOffset } from "@iterate-com/ui/components/events/event-inspector-sheet";
 import {
   processEventsWithViewReducer,
+  prettyEventsStreamViewReducer,
   rawJsonDumpEventsStreamViewReducer,
   rawPrettyEventsStreamViewReducer,
 } from "@iterate-com/ui/components/events/feed-processors";
@@ -61,6 +62,45 @@ describe("clean stream view reducers", () => {
         type: "event-counter",
         props: {
           count: 1,
+        },
+      },
+    ]);
+  });
+
+  test("pretty emits semantic items without grouped raw events", () => {
+    const viewState = processEventsWithViewReducer({
+      reducer: prettyEventsStreamViewReducer,
+      events: [
+        event({
+          offset: 1,
+          type: "events.iterate.com/agent-chat/user-message-added",
+          payload: { channel: "web", content: "hello" },
+        }),
+        event({
+          offset: 2,
+          type: "events.iterate.com/example/no-renderer",
+        }),
+      ],
+    });
+
+    expect(viewState.slots.feed).toMatchObject([
+      {
+        type: "message",
+        id: "message-user-1",
+        props: {
+          role: "user",
+          text: "hello",
+        },
+      },
+    ]);
+    expect(viewState.slots.feed).not.toContainEqual(
+      expect.objectContaining({ type: "grouped-raw-event" }),
+    );
+    expect(viewState.slots.header).toMatchObject([
+      {
+        type: "event-counter",
+        props: {
+          count: 2,
         },
       },
     ]);

@@ -9,6 +9,10 @@
  *   OS2_E2E_MCP_BEARER_TOKEN=... \
  *   pnpm test:e2e:codemode-mcp
  *
+ * OS2_E2E_MCP_BEARER_TOKEN may be a Clerk OAuth access token, a Clerk session
+ * token, or an OS2 admin token. Clerk Testing Tokens are not bearer auth tokens;
+ * they only bypass Clerk bot detection for Frontend API requests.
+ *
  * If APP_CONFIG_SLACK_BOT_TOKEN is available to the test process, the test
  * discovers the shared Slack e2e channel and proves real
  * ctx.slack.chat.postMessage.
@@ -20,7 +24,7 @@ import { describe, expect, it } from "vitest";
 const maybeMcpUrl = process.env.OS2_E2E_MCP_URL?.trim();
 const describeIfMcpTarget = maybeMcpUrl ? describe : describe.skip;
 
-describeIfMcpTarget("project MCP run_code static codemode provider stack", () => {
+describeIfMcpTarget("project MCP exec_js static codemode provider stack", () => {
   it("executes real codemode calls across built-in, RPC, OpenAPI, stream, and optional Slack providers", async () => {
     const mcpUrl = requireMcpUrl();
     const bearerToken = requireBearerToken();
@@ -38,13 +42,13 @@ describeIfMcpTarget("project MCP run_code static codemode provider stack", () =>
       await client.connect(transport);
 
       const tools = await client.listTools();
-      const runCode = tools.tools.find((tool) => tool.name === "run_code");
+      const runCode = tools.tools.find((tool) => tool.name === "exec_js");
       expect(runCode).toBeTruthy();
       expect(JSON.stringify(runCode?.inputSchema)).toContain("code");
       expect(JSON.stringify(runCode?.inputSchema)).not.toContain("providers");
 
       const result = await client.callTool({
-        name: "run_code",
+        name: "exec_js",
         arguments: {
           code: buildCodemodeProofScript({ slackChannelId }),
         },
@@ -329,7 +333,7 @@ function parseRunCodeResult(text: string) {
   const marker = "Result:";
   const index = text.lastIndexOf(marker);
   if (index === -1) {
-    throw new Error(`run_code did not return a Result block:\n${text}`);
+    throw new Error(`exec_js did not return a Result block:\n${text}`);
   }
   return JSON.parse(text.slice(index + marker.length).trim()) as {
     ai: { model: string };
