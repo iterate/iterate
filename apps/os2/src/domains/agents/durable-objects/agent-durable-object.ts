@@ -3,7 +3,10 @@ import type { ResponsesClientEvent } from "openai/resources/responses/responses"
 import { ResponsesWSBase } from "openai/resources/responses/ws-base";
 import { z } from "zod";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
-import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import {
+  deriveDurableObjectNameFromStructuredName,
+  getInitializedDoStub,
+} from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { withStreamProcessor } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor";
 import { createAgentChatProcessor } from "@iterate-com/shared/stream-processors/agent-chat/implementation";
 import { createAgentProcessor } from "@iterate-com/shared/stream-processors/agent/implementation";
@@ -34,7 +37,21 @@ import {
   startCodemodeScriptOnExistingSession,
 } from "~/domains/codemode/codemode-session-rpc.ts";
 import type { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
+import {
+  getRepoDurableObjectName,
+  type RepoDurableObject,
+  type RepoInfo,
+} from "~/domains/repos/durable-objects/repo-durable-object.ts";
+import {
+  ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME,
+  ITERATE_CONFIG_REPO_SLUG,
+} from "~/domains/repos/iterate-config-repo.ts";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
+import {
+  type WorkspaceDurableObject,
+  type WorkspaceStructuredName,
+} from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
+import { defaultWorkspaceIdForCodemodeSession } from "~/domains/workspaces/entrypoints/workspace-provider-registration.ts";
 import {
   defaultAgentSetupEvents,
   defaultAgentSystemPrompt,
@@ -68,8 +85,12 @@ export type AgentDurableObjectEnv = {
   APP_CONFIG: string;
   CODEMODE_SESSION: DurableObjectNamespace<CodemodeSession>;
   DO_CATALOG: D1Database;
+  REPO: DurableObjectNamespace<RepoDurableObject>;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
+  WORKSPACE: DurableObjectNamespace<WorkspaceDurableObject>;
 };
+
+const AGENT_ITERATE_CONFIG_DIR = "/iterate-config";
 
 type AgentStreamApi = ProcessorStreamApi<{
   emits: readonly string[];
@@ -126,6 +147,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
           }),
         );
         this.registerStreamProcessor(this.createLlmProcessor(llmProvider));
+        await this.ensureAgentWorkspace(params);
         await this.ensureCodemodeSession(params);
       }
       await this.ensureAgentSubscription(params);
@@ -287,6 +309,89 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       projectId: params.projectId,
       providers: [this.createAgentChatToolProvider()],
       streamPath: params.agentPath,
+    });
+  }
+
+  private async ensureAgentWorkspace(params: AgentDurableObjectStructuredName) {
+    const repo = await this.getOrCreateIterateConfigRepo(params);
+    const workspace = await this.getAgentWorkspace(params);
+    const git = await workspace.cloudflareShellGit();
+    const state = await workspace.cloudflareShellState();
+
+    if (await workspace.hasFile(`${AGENT_ITERATE_CONFIG_DIR}/.git/HEAD`)) {
+      return;
+    }
+
+    if (repo.remote.startsWith("https://artifacts.example.test/")) {
+      await prepareMockIterateConfigWorkspace({
+        git,
+        writeFile: readWorkspaceStateMethod({ method: "writeFile", state }),
+      });
+      return;
+    }
+
+    await git.clone({
+      url: remoteWithToken({
+        remote: repo.remote,
+        token: repo.token,
+      }),
+      dir: AGENT_ITERATE_CONFIG_DIR,
+      branch: repo.defaultBranch,
+      depth: 1,
+    });
+  }
+
+  private async getOrCreateIterateConfigRepo(
+    params: AgentDurableObjectStructuredName,
+  ): Promise<RepoInfo> {
+    const repoName = getRepoDurableObjectName({
+      projectId: params.projectId,
+      repoSlug: ITERATE_CONFIG_REPO_SLUG,
+    });
+    const existing = await getInitializedDoStub({
+      allowCreate: false,
+      namespace: this.env.REPO,
+      name: repoName,
+    });
+
+    if (existing !== null) {
+      try {
+        return await existing.getInfo();
+      } catch (error) {
+        if (!isRepoNotCreatedError(error)) {
+          throw error;
+        }
+      }
+    }
+
+    const repo = await getInitializedDoStub({
+      allowCreate: true,
+      namespace: this.env.REPO,
+      name: repoName,
+    });
+
+    try {
+      return await repo.createRepo({
+        source: {
+          artifactName: ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME,
+          description: `Iterate config repo for ${params.projectId}`,
+          kind: "artifact-fork",
+        },
+      });
+    } catch (error) {
+      if (isRepoAlreadyExistsError(error)) {
+        return await repo.getInfo();
+      }
+
+      throw error;
+    }
+  }
+
+  private async getAgentWorkspace(params: AgentDurableObjectStructuredName) {
+    return await getInitializedDoStub({
+      allowCreate: true,
+      namespace: this.env.WORKSPACE,
+      name: agentWorkspaceName(params),
     });
   }
 
@@ -598,6 +703,64 @@ function resolveProcessorStreamPath(input: { basePath: StreamPath; pathInput?: s
   return StreamPath.parse(
     input.basePath === "/" ? `/${relativePath}` : `${input.basePath}/${relativePath}`,
   );
+}
+
+function agentWorkspaceName(params: AgentDurableObjectStructuredName): WorkspaceStructuredName {
+  return {
+    projectId: params.projectId,
+    workspaceId: defaultWorkspaceIdForCodemodeSession({ streamPath: params.agentPath }),
+  };
+}
+
+function remoteWithToken(input: { remote: string; token: string }) {
+  const url = new URL(input.remote);
+  url.username = "x";
+  url.password = input.token.includes("?expires=")
+    ? (input.token.split("?expires=")[0] ?? input.token)
+    : input.token;
+  return url.toString();
+}
+
+async function prepareMockIterateConfigWorkspace(input: {
+  git: Pick<
+    Awaited<ReturnType<WorkspaceDurableObject["cloudflareShellGit"]>>,
+    "add" | "commit" | "init"
+  >;
+  writeFile(...args: unknown[]): Promise<unknown>;
+}) {
+  await input.writeFile(
+    `${AGENT_ITERATE_CONFIG_DIR}/iterate.config.jsonc`,
+    '{\n  "version": 1\n}\n',
+  );
+  await input.git.init({ dir: AGENT_ITERATE_CONFIG_DIR, defaultBranch: "main" });
+  await input.git.add({ dir: AGENT_ITERATE_CONFIG_DIR, filepath: "iterate.config.jsonc" });
+  await input.git.commit({
+    dir: AGENT_ITERATE_CONFIG_DIR,
+    message: "Seed iterate config",
+    author: {
+      name: "Iterate",
+      email: "support@iterate.com",
+    },
+  });
+}
+
+function readWorkspaceStateMethod(input: {
+  method: string;
+  state: Awaited<ReturnType<WorkspaceDurableObject["cloudflareShellState"]>>;
+}) {
+  const method = input.state[input.method];
+  if (typeof method !== "function") {
+    throw new Error(`Workspace state does not implement ${input.method}.`);
+  }
+  return method;
+}
+
+function isRepoNotCreatedError(error: unknown) {
+  return error instanceof Error && error.message.includes("has not been created");
+}
+
+function isRepoAlreadyExistsError(error: unknown) {
+  return error instanceof Error && error.message.includes("already exists");
 }
 
 const CODEMODE_FENCE_RE =

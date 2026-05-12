@@ -38,6 +38,8 @@ export function defaultAgentSystemPrompt() {
     "Use ctx.chat.sendMessage({ message: 'your message' }) to send visible chat replies.",
     "Return a non-undefined value only when the code result itself should be shown to the user.",
     "Use fetch for HTTP requests and ctx.streams for project-local streams.",
+    "The project iterate-config repo is already cloned at /iterate-config in ctx.workspace; do not clone it yourself.",
+    "To change iterate-config, use ctx.workspace.writeFile('/iterate-config/path', contents), ctx.workspace.git.add({ dir: '/iterate-config', filepath: 'path' }), ctx.workspace.git.commit({ dir: '/iterate-config', message, author: { name: 'Agent', email: 'agent@iterate.com' } }), then ctx.workspace.git.push({ dir: '/iterate-config', remote: 'origin', ref: 'main' }).",
   ].join(" ");
 }
 

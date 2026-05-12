@@ -1,4 +1,5 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { RpcTarget } from "cloudflare:workers";
 import { createCodemodeContext } from "@iterate-com/shared/codemode/context-proxy";
 
 export { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
@@ -13,6 +14,61 @@ export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capabil
 export { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
 export { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-capability.ts";
 export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
+
+const mockArtifactRepos = new Map<string, MockArtifactRepo>();
+
+export class MockArtifactsBinding extends WorkerEntrypoint {
+  async create(name: string) {
+    if (mockArtifactRepos.has(name)) {
+      throw new Error(`Artifact repo ${name} already exists.`);
+    }
+
+    const repo = new MockArtifactRepo(name);
+    mockArtifactRepos.set(name, repo);
+    return repo;
+  }
+
+  async get(name: string) {
+    const repo = mockArtifactRepos.get(name);
+    if (!repo) {
+      throw new Error(`Artifact repo ${name} not found.`);
+    }
+
+    return repo;
+  }
+}
+
+export class MockArtifactRepo extends RpcTarget {
+  readonly artifactName: string;
+
+  constructor(name: string) {
+    super();
+    this.artifactName = name;
+  }
+
+  defaultBranch() {
+    return "main";
+  }
+
+  remote() {
+    return `https://artifacts.example.test/${this.artifactName}.git`;
+  }
+
+  async createToken(scope: "read" | "write", ttlSeconds: number) {
+    return {
+      expiresAt: new Date(Date.UTC(2036, 0, 1)).toISOString(),
+      plaintext: `mock-${scope}-${ttlSeconds}-${this.artifactName}`,
+    };
+  }
+
+  async fork(name: string) {
+    const repo = new MockArtifactRepo(name);
+    mockArtifactRepos.set(name, repo);
+    return repo;
+  }
+}
+
+mockArtifactRepos.set("iterate-config-base", new MockArtifactRepo("iterate-config-base"));
 
 type ToolFunctionInput = {
   codemodeSessionCapability: Parameters<

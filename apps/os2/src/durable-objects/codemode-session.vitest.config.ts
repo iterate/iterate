@@ -28,6 +28,10 @@ export default defineConfig({
       main: resolve(testRoot, "codemode-session-test-entry.ts"),
       miniflare: {
         serviceBindings: {
+          ARTIFACTS: {
+            entrypoint: "MockArtifactsBinding",
+            name: miniflare.kCurrentWorker,
+          },
           PROVIDER_A: {
             entrypoint: "ProviderA",
             name: miniflare.kCurrentWorker,

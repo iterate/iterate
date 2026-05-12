@@ -49,6 +49,26 @@ export class WorkspaceDurableObject extends WorkspaceBase<WorkspaceEnv> {
     return this.getShellGit();
   }
 
+  async hasFile(path: string): Promise<boolean> {
+    await this.ensureStarted();
+    const state = this.getShellState();
+    const readFile = state.readFile;
+    if (typeof readFile !== "function") {
+      throw new Error("Workspace state does not implement readFile.");
+    }
+
+    try {
+      await readFile(path);
+      return true;
+    } catch (error) {
+      if (isFileMissingError(error)) {
+        return false;
+      }
+
+      throw error;
+    }
+  }
+
   private getShellWorkspace() {
     if (this.#workspace === null) {
       this.#workspace = new Workspace({
@@ -110,4 +130,14 @@ function createPlainMethodObject(target: object): CloudflareShellState {
   }
 
   return methods;
+}
+
+function isFileMissingError(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("not found") ||
+    message.includes("could not find") ||
+    message.includes("no such file")
+  );
 }
