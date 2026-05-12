@@ -263,7 +263,7 @@ function getCount(event: Event) {
 }
 
 function callableAppendChainFilterExpression() {
-  return `event.type = "${E2E_APPEND_CHAIN_TICK_TYPE}" and event.payload.count < event.payload.max`;
+  return `type = "${E2E_APPEND_CHAIN_TICK_TYPE}" and payload.count < payload.max`;
 }
 
 function callableAppendChainNextEventExpression() {
