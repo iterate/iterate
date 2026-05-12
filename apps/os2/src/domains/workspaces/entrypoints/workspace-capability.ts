@@ -2,15 +2,10 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import type { ExecuteCodemodeFunctionCallInput } from "@iterate-com/shared/stream-processors/codemode/implementation";
 import {
-  getWorkspaceDurableObjectName,
   type CloudflareShellState,
   type WorkspaceDurableObject,
   type WorkspaceStructuredName,
 } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
-export {
-  createWorkspaceProviderRegistration,
-  defaultWorkspaceIdForCodemodeSession,
-} from "~/domains/workspaces/entrypoints/workspace-provider-registration.ts";
 
 type WorkspaceCapabilityEnv = {
   WORKSPACE?: DurableObjectNamespace<WorkspaceDurableObject>;
@@ -46,10 +41,6 @@ export class WorkspaceCapability extends WorkerEntrypoint<
       });
     }
 
-    if (input.functionPath.join(".") === "proofOfConcept") {
-      return await this.proofOfConcept(input.args);
-    }
-
     const method = readSingleMethodName("ctx.workspace", input.functionPath);
     const state = await (await this.workspace()).cloudflareShellState();
     return await callMethod({
@@ -83,16 +74,6 @@ export class WorkspaceCapability extends WorkerEntrypoint<
     }
 
     return this.env.WORKSPACE;
-  }
-
-  private async proofOfConcept(args: unknown[]) {
-    const [request] = args as [{ callback?: (args: unknown) => unknown; message?: string }];
-    const payload = {
-      workspaceName: getWorkspaceDurableObjectName(this.workspaceName()),
-      message: request?.message ?? "workspace proof of concept",
-    };
-    await request?.callback?.(payload);
-    return payload;
   }
 }
 

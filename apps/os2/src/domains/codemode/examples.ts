@@ -48,7 +48,7 @@ const codemodeExampleSeeds = [
     slug: "rpc-capability-tour",
     name: "RPC capability tour",
     description:
-      "Exercise Workers AI, repo/workspace handles, callback passing, subagent handles, promise pipelining, and the project-scoped OS2 oRPC capability.",
+      "Exercise Workers AI, repo handles, workspace files, subagent handles, promise pipelining, and the project-scoped OS2 oRPC capability.",
     providers: [{ type: "example-capabilities" }],
     code: `async (ctx) => {
   const ai = await ctx.ai.run("@cf/meta/llama-3.1-8b-instruct", {
@@ -57,9 +57,12 @@ const codemodeExampleSeeds = [
 
   const repos = await ctx.repos.list({});
 
-  const workspace = await ctx.workspace.proofOfConcept({
-    callback: async (args) => console.log("workspace callback", args.workspaceName),
-  });
+  const workspacePath = \`/rpc-capability-tour-\${Date.now()}.txt\`;
+  await ctx.workspace.writeFile(workspacePath, "workspace from codemode\\n");
+  const workspace = {
+    path: workspacePath,
+    text: await ctx.workspace.readFile(workspacePath),
+  };
 
   const agent = await ctx.agents.create().sendMessage({
     message: "hi",
@@ -199,6 +202,63 @@ const codemodeExampleSeeds = [
         payload: {
           message:
             "Reads the project-created iterate-config Repo with ctx.repos.get({ slug }).getInfo().",
+        },
+      },
+    ],
+  },
+  {
+    slug: "iterate-config-workspace-clone-edit-push",
+    name: "Clone, edit, and push iterate config",
+    description:
+      "Use the default workspace provider and the Repos capability to clone the project iterate-config Repo, write a proof file, commit it, and push it back.",
+    providers: [{ type: "example-capabilities" }],
+    code: `async (ctx) => {
+  const repo = await ctx.repos.get({ slug: "iterate-config" }).getInfo();
+  const dir = \`/iterate-config-\${Date.now()}\`;
+  const fileName = \`workspace-demo-\${Date.now()}.md\`;
+  const password = repo.token.includes("?expires=")
+    ? repo.token.split("?expires=")[0]
+    : repo.token;
+  const auth = { username: "x", password };
+
+  await ctx.workspace.git.clone({
+    url: repo.remote,
+    dir,
+    branch: repo.defaultBranch,
+    depth: 1,
+    ...auth,
+  });
+
+  await ctx.workspace.writeFile(
+    \`\${dir}/\${fileName}\`,
+    \`# Workspace codemode proof\\n\\nCreated: \${new Date().toISOString()}\\n\`,
+  );
+  await ctx.workspace.git.add({ dir, filepath: fileName });
+  const commit = await ctx.workspace.git.commit({
+    dir,
+    message: "Verify workspace codemode push",
+    author: { name: "Codemode", email: "codemode@iterate.com" },
+  });
+  const pushed = await ctx.workspace.git.push({
+    dir,
+    remote: "origin",
+    ref: repo.defaultBranch,
+    ...auth,
+  });
+
+  return {
+    commit,
+    fileName,
+    pushed,
+    status: await ctx.workspace.git.status({ dir }),
+  };
+}`,
+    events: [
+      {
+        type: "events.iterate.com/codemode/example-note",
+        payload: {
+          message:
+            "Uses ctx.workspace.git.clone/add/commit/push and ctx.workspace.writeFile against the project iterate-config Repo.",
         },
       },
     ],

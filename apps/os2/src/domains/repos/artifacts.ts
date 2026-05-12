@@ -47,7 +47,7 @@ export type CloudflareArtifactsBinding = {
 
 export const REPO_DEFAULT_BRANCH = "main";
 export const REPO_README_PATH = "README.md";
-export const REPO_WRITE_TOKEN_TTL_SECONDS = 10 * 365 * 24 * 60 * 60;
+export const REPO_WRITE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
 
 export function repoArtifactName(input: { projectId: string; repoSlug: string }) {
   return `${input.projectId}--${input.repoSlug}`;

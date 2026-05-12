@@ -24,7 +24,6 @@ import { projectsRouter } from "~/orpc/routers/projects.ts";
 export {
   createExampleCapabilityProviders,
   createExampleRpcProviderRegistration,
-  createWorkspaceProviderRegistration,
 } from "./example-provider-registrations.ts";
 
 type ExampleCapabilityEnv = {

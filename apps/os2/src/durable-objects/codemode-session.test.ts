@@ -228,9 +228,8 @@ describe("CodemodeSession", () => {
       code: `async (ctx) => {
   const ai = await ctx.ai.run("test-model", { prompt: "hello" });
   const repos = await ctx.repos.list({});
-  const workspace = await ctx.workspace.proofOfConcept({
-    callback: async (args) => console.log("workspace callback", args.workspaceName),
-  });
+  await ctx.workspace.writeFile("/loopback-rpc-workspace.txt", "workspace from test\\n");
+  const workspace = await ctx.workspace.readFile("/loopback-rpc-workspace.txt");
   const agent = await ctx.agents.create().sendMessage({
     message: "hi",
     subPath: "bob",
@@ -255,7 +254,7 @@ describe("CodemodeSession", () => {
           repos: [],
           sessions: expect.objectContaining({ sessions: expect.any(Array) }),
           streams: expect.objectContaining({ streams: expect.any(Array) }),
-          workspace: expect.objectContaining({ message: "workspace proof of concept" }),
+          workspace: "workspace from test\n",
         },
       },
     });
@@ -264,7 +263,8 @@ describe("CodemodeSession", () => {
         functionCallRequested(["ai", "run"], ["ai"], ["run"]),
         functionCallRequested(["repos", "list"], ["repos"], ["list"]),
         functionCallCompleted(["repos", "list"], ["repos"], ["list"]),
-        functionCallRequested(["workspace", "proofOfConcept"], ["workspace"], ["proofOfConcept"]),
+        functionCallRequested(["workspace", "writeFile"], ["workspace"], ["writeFile"]),
+        functionCallRequested(["workspace", "readFile"], ["workspace"], ["readFile"]),
         functionCallRequested(["agents", "create"], ["agents", "create"], []),
         functionCallRequested(["os", "streams", "list"], ["os"], ["streams", "list"]),
         functionCallRequested(
@@ -272,12 +272,6 @@ describe("CodemodeSession", () => {
           ["os"],
           ["codemode", "listSessions"],
         ),
-        expect.objectContaining({
-          type: "events.iterate.com/codemode/log-emitted",
-          payload: expect.objectContaining({
-            message: expect.stringContaining("workspace callback"),
-          }),
-        }),
       ]),
     );
     const procedures = completed.payload.outcome.output.procedures;

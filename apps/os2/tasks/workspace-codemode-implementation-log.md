@@ -26,7 +26,7 @@ real preview MCP codemode session can use a simple JavaScript block to:
 3. Use `@cloudflare/shell` directly:
    - `ctx.workspace.*` maps to `createWorkspaceStateBackend(workspace)`.
    - `ctx.workspace.git.*` maps to `createGit(new WorkspaceFileSystem(workspace))`.
-4. Let `WorkspaceDurableObject` expose raw shell objects from public methods:
+4. Let `WorkspaceDurableObject` expose shell-backed RPC targets from public methods:
    - `cloudflareShellState()`
    - `cloudflareShellGit()`
 5. Put codemode syntax/path adaptation in `WorkspaceCapability`, not in the DO.
@@ -42,10 +42,10 @@ real preview MCP codemode session can use a simple JavaScript block to:
   `workspaceId`.
 - The default codemode session workspace ID can be derived from the codemode
   stream path for now. This avoids a new allocation table or lifecycle event.
-- The raw `createGit(...)` and shell state objects can be returned across
-  Workers RPC. A throwaway `/tmp` experiment proved plain returned objects with
-  async methods and raw `createGit(...)` objects are callable across a Durable
-  Object RPC boundary; plain class instances are not.
+- The raw `createGit(...)` object can be returned across Workers RPC. Shell
+  state is exposed as a plain method object because plain returned objects with
+  async methods cross the Durable Object RPC boundary, while class instances do
+  not.
 - `WorkspaceCapability` is the codemode tool provider. `WorkspaceDurableObject`
   is the durable resource and should not know about codemode paths.
 
@@ -59,11 +59,13 @@ real preview MCP codemode session can use a simple JavaScript block to:
 - Final verification requires a deployed preview MCP session and a real
   Cloudflare Artifacts-backed Iterate Config Repo, so local tests are necessary
   but not sufficient.
-- Preview project creation initially failed because the Artifacts namespace was
-  missing the `iterate-config-base` source repo. The local token available to
-  the shell could deploy Workers but could not call the Artifacts REST API, so I
-  added an admin-only debug repair route that seeds the base repo through the
-  deployed Worker's own `ARTIFACTS` binding.
+- Preview project creation can fail if the Artifacts namespace is missing the
+  `iterate-config-base` source repo. The checked-in
+  `artifacts:seed-config-base` script is the intended repair path; the deployed
+  worker no longer exposes a seed/debug route.
+- Cloudflare Artifacts write token TTLs must be at most 31,536,000 seconds. The
+  repo write-token TTL is set to one year so project `iterate-config` creation
+  and preview proofs can create tokens successfully.
 
 ## Checkpoints
 
@@ -73,8 +75,8 @@ real preview MCP codemode session can use a simple JavaScript block to:
 - [x] Add local codemode tests.
 - [x] Commit and push local implementation checkpoint.
 - [x] Deploy preview.
-- [x] Seed preview `iterate-config-base` through admin debug route.
-- [x] Run real MCP codemode script: repo info -> clone -> edit -> commit -> push.
+- [x] Add checked-in preview example script for repo info -> clone -> edit -> commit -> push.
+- [x] Run real MCP codemode preview example against preview_2.
 - [x] Record verification evidence.
 
 ## Verification Evidence
@@ -95,18 +97,27 @@ doppler run --project os2 --config preview_2 -- pnpm --dir apps/os2 alchemy:up
 
 The direct OS2 deploy completed for `https://os2.iterate-preview-2.com`.
 
-Preview seed and smoke:
+Preview smoke:
 
 ```sh
-POST https://os2.iterate-preview-2.com/__debug/seed-iterate-config-base
 OS2_BASE_URL=https://os2.iterate-preview-2.com \
   OS2_PREVIEW_SMOKE_PROJECT_SLUG=workspace-mcp-proof-3dbbcbf7 \
   pnpm --dir apps/os2 test:e2e:preview
 ```
 
-The seed route returned the base repo
-`os2-preview-2-repos/iterate-config-base.git`. The preview smoke then created
-project `workspace-mcp-proof-3dbbcbf7` and verified its MCP endpoint.
+The preview smoke created project `workspace-mcp-proof-3dbbcbf7` and verified
+its MCP endpoint.
+
+Checked-in preview example:
+
+```sh
+doppler run --project os2 --config preview_2 -- \
+  pnpm --dir apps/os2 example:workspace-codemode-preview
+```
+
+The example creates a fresh preview project, connects to its MCP endpoint, and
+runs one `exec_js` block with the default workspace provider plus the static
+inbound MCP provider stack already loaded.
 
 Real MCP codemode proof:
 
@@ -147,5 +158,31 @@ Returned proof:
     }
   },
   "status": []
+}
+```
+
+Latest checked-in preview example proof:
+
+```json
+{
+  "project": {
+    "id": "proj__os__01krddypaae4db1f8fqzcy79et",
+    "slug": "workspace-codemode-example-1778567303786"
+  },
+  "result": {
+    "commit": {
+      "oid": "a2566ada2b6a2f038a43418d4b18985cb8a0256f",
+      "message": "Verify workspace codemode preview example"
+    },
+    "fileName": "workspace-preview-example-1778567326606.md",
+    "pushed": {
+      "ok": true
+    },
+    "repo": {
+      "slug": "iterate-config",
+      "defaultBranch": "main"
+    },
+    "status": []
+  }
 }
 ```

@@ -79,9 +79,25 @@ function parseOptions(args: string[]): Options {
       process.env.CLOUDFLARE_API_TOKEN_DEV_JONAS ??
       requireEnv("CLOUDFLARE_API_TOKEN"),
     holderDir: values.get("holder") ?? DEFAULT_HOLDER_DIR,
-    namespace: values.get("namespace") ?? requireEnv("OS2_ARTIFACTS_NAMESPACE"),
+    namespace:
+      values.get("namespace") ??
+      process.env.OS2_ARTIFACTS_NAMESPACE ??
+      inferArtifactsNamespaceFromBaseUrl() ??
+      requireEnv("OS2_ARTIFACTS_NAMESPACE"),
     repoName: values.get("repo") ?? ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME,
   };
+}
+
+function inferArtifactsNamespaceFromBaseUrl() {
+  const baseUrl = process.env.APP_CONFIG_BASE_URL?.trim();
+  if (!baseUrl) return null;
+
+  const hostname = new URL(baseUrl).hostname;
+  const previewMatch = /^os2\.iterate-preview-(\d+)\.com$/.exec(hostname);
+  if (previewMatch) return `os2-preview-${previewMatch[1]}-repos`;
+
+  if (hostname === "os2.iterate.com") return "os2-repos";
+  return null;
 }
 
 async function getOrCreateArtifactRepo(options: Options): Promise<ArtifactRepoAccess> {

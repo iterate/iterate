@@ -31,31 +31,6 @@ export function createExampleRpcProviderRegistration(input: {
   };
 }
 
-export function createWorkspaceProviderRegistration(input: {
-  instructions: string;
-  name: string;
-  path: string[];
-}): ToolProviderRegistration {
-  return {
-    instructions: input.instructions,
-    invocation: {
-      kind: "rpc",
-      callable: {
-        type: "workers-rpc",
-        via: {
-          type: "env-binding",
-          bindingType: "durable-object-namespace",
-          bindingName: "WORKSPACE",
-          durableObject: { name: input.name },
-        },
-        rpcMethod: "executeCodemodeFunctionCall",
-        argsMode: "object",
-      },
-    },
-    path: input.path,
-  };
-}
-
 export function createExampleCapabilityProviders(input: {
   activeOrganization?: ActiveOrganizationAuth;
   projectId: string;
