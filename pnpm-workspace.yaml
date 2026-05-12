@@ -1,5 +1,4 @@
 packages:
-  - experiments/channel-agent-poc/nested-facets
   - apps/project-ingress-proxy
   - apps/cli
   - apps/daemon

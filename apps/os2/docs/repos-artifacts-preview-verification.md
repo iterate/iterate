@@ -36,8 +36,7 @@ push.
 ## Cloudflare Artifacts deployment
 
 The Artifacts binding must be configured in `apps/os2/alchemy.run.ts`, not by a
-post-hoc config transform. The experiments precedent is
-`experiments/channel-agent-poc/nested-facets/wrangler.jsonc`, which uses:
+post-hoc config transform. The generated Worker metadata should include:
 
 ```json
 {

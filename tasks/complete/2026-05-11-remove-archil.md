@@ -30,4 +30,4 @@ Remove all Archil-specific code, configuration, environment variables, bindings,
 ## Implementation Notes
 
 - 2026-05-11: Created from the request to unblock repeated CI/local-dev failures caused by Archil R2 provisioning for `os-archil-data-dev-nobody`.
-- 2026-05-11: Removed active provisioning and sandbox mount code, deleted old experiments/docs, regenerated `pnpm-lock.yaml`, and validated touched packages.
+- 2026-05-11: Removed active provisioning and sandbox mount code, deleted old reference docs, regenerated `pnpm-lock.yaml`, and validated touched packages.
