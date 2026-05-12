@@ -161,6 +161,10 @@ export abstract class StreamProcessorRunnerProtected<
   protected getStreamProcessorRunnerState(): StreamProcessorRunnerState<Contract> {
     throw new Error("StreamProcessorRunnerProtected is type-only and should never run.");
   }
+
+  protected waitUntilStreamProcessor(_promise: Promise<unknown>): void {
+    throw new Error("StreamProcessorRunnerProtected is type-only and should never run.");
+  }
 }
 
 type StreamProcessorRunnerOptions<
@@ -243,6 +247,7 @@ export function withStreamProcessorRunner<
 
     abstract class StreamProcessorRunnerMixin extends BaseWithCore {
       #streamProcessorRunnerProcessor: Processor<Contract> | undefined;
+      #streamProcessorWaitUntilPromises = new Set<Promise<unknown>>();
 
       protected async catchUpStreamProcessor(args?: {
         signal?: AbortSignal;
@@ -271,6 +276,7 @@ export function withStreamProcessorRunner<
             });
           },
           signal: args?.signal ?? new AbortController().signal,
+          waitUntil: (promise) => this.waitUntilStreamProcessor(promise),
         });
       }
 
@@ -306,6 +312,7 @@ export function withStreamProcessorRunner<
             });
           },
           signal: args.signal ?? new AbortController().signal,
+          waitUntil: (promise) => this.waitUntilStreamProcessor(promise),
         });
       }
 
@@ -337,6 +344,18 @@ export function withStreamProcessorRunner<
 
       protected getStreamProcessorRunnerState(): StreamProcessorRunnerState<Contract> {
         return this.loadStreamProcessorStoredState(this.streamProcessorRunnerProcessor());
+      }
+
+      protected waitUntilStreamProcessor(promise: Promise<unknown>) {
+        this.#streamProcessorWaitUntilPromises.add(promise);
+        void promise.then(
+          () => {
+            this.#streamProcessorWaitUntilPromises.delete(promise);
+          },
+          () => {
+            this.#streamProcessorWaitUntilPromises.delete(promise);
+          },
+        );
       }
 
       private loadStreamProcessorStoredState(

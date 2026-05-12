@@ -69,7 +69,6 @@ export const externalSubscriberProcessor = {
 } satisfies BuiltinProcessor<ExternalSubscriberState>;
 
 export async function publishExternalSubscribers(args: {
-  awaitCallableSubscribers?: boolean;
   append: (event: EventInput) => Promise<Event>;
   callableContext: CallableContext;
   event: Event;
@@ -83,8 +82,7 @@ export async function publishExternalSubscribers(args: {
         (subscriber) => args.subscriberTypes == null || args.subscriberTypes.has(subscriber.type),
       )
       .map((subscriber) =>
-        publishToExternalSubscriber({
-          awaitCallableSubscribers: args.awaitCallableSubscribers ?? true,
+        publishExternalSubscriber({
           append: args.append,
           callableContext: args.callableContext,
           event: args.event,
@@ -93,6 +91,16 @@ export async function publishExternalSubscribers(args: {
         }),
       ),
   );
+}
+
+export async function publishExternalSubscriber(args: {
+  append: (event: EventInput) => Promise<Event>;
+  callableContext: CallableContext;
+  event: Event;
+  onError?(failure: ExternalSubscriberPublishFailure): void | Promise<void>;
+  subscriber: ExternalSubscriber;
+}) {
+  await publishToExternalSubscriber(args);
 }
 
 export function hasExternalSubscribersOfType(
@@ -105,7 +113,6 @@ export function hasExternalSubscribersOfType(
 }
 
 async function publishToExternalSubscriber(args: {
-  awaitCallableSubscribers: boolean;
   append: (event: EventInput) => Promise<Event>;
   callableContext: CallableContext;
   event: Event;
@@ -139,24 +146,11 @@ async function publishToExternalSubscriber(args: {
     }
 
     if (args.subscriber.type === "callable") {
-      const dispatchPromise = dispatchSubscriberCallable({
+      await dispatchSubscriberCallable({
         callable: args.subscriber.callable,
         callableContext: args.callableContext,
         event: args.event,
       });
-      if (!args.awaitCallableSubscribers) {
-        void dispatchPromise.catch((error) =>
-          handleExternalSubscriberPublishError({
-            error,
-            event: args.event,
-            onError: args.onError,
-            subscriber: args.subscriber,
-          }),
-        );
-        return;
-      }
-
-      await dispatchPromise;
       return;
     }
 

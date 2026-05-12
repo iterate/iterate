@@ -15,7 +15,6 @@ vi.mock("@iterate-com/shared/callable/runtime.ts", () => ({
 
 import {
   externalSubscriberProcessor,
-  publishExternalSubscribers,
   resetSubscriberSocketsForStream,
 } from "./external-subscriber.ts";
 
@@ -339,54 +338,6 @@ describe("externalSubscriber", () => {
         ctx: {},
       });
     } finally {
-      dispatchCallableMock.mockReset();
-    }
-  });
-
-  test("publishExternalSubscribers can start callable subscribers without awaiting long-running RPCs", async () => {
-    const event = createEvent({
-      streamPath: "/demo/callable-background",
-      type: "source",
-      payload: { value: 42 },
-    });
-    const callable = {
-      type: "workers-rpc" as const,
-      via: {
-        type: "env-binding" as const,
-        bindingType: "durable-object-namespace" as const,
-        bindingName: "CODEMODE_SESSION",
-        durableObject: { name: "session-a" },
-      },
-      rpcMethod: "afterAppend",
-      argsMode: "object" as const,
-    };
-    const pendingDispatch = Promise.withResolvers<unknown>();
-    dispatchCallableMock.mockReturnValueOnce(pendingDispatch.promise);
-
-    try {
-      await publishExternalSubscribers({
-        append: () => Promise.resolve(createEvent()),
-        awaitCallableSubscribers: false,
-        callableContext: {},
-        event,
-        state: {
-          subscribersBySlug: {
-            codemode: {
-              slug: "codemode",
-              type: "callable",
-              callable,
-            },
-          },
-        },
-      });
-
-      expect(dispatchCallableMock).toHaveBeenCalledWith({
-        callable,
-        payload: { event },
-        ctx: {},
-      });
-    } finally {
-      pendingDispatch.resolve(null);
       dispatchCallableMock.mockReset();
     }
   });

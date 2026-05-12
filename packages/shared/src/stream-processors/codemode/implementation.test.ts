@@ -124,6 +124,47 @@ describe("createCodemodeProcessor", () => {
     );
   });
 
+  it("can continue requested script work through waitUntil after accepting the stream event", async () => {
+    const appended: StreamEventInput[] = [];
+    const scriptResult = Promise.withResolvers<{ result: unknown }>();
+    const waitUntilPromises: Promise<unknown>[] = [];
+    const processor = createCodemodeProcessor({
+      ...baseDeps(),
+      scriptExecutor: async () => await scriptResult.promise,
+    });
+
+    await processor.implementation.afterAppend?.({
+      event: consumedCodemodeEvent({
+        type: "events.iterate.com/codemode/script-execution-requested",
+        payload: { code: "async (ctx) => ({ ok: true })", scriptExecutionId: "scr-1" },
+        offset: 7,
+      }),
+      previousState: registeredState({ sessionStarted: true }),
+      state: registeredState({ sessionStarted: true }),
+      streamApi: testStreamApi({ appended, storedEvents: [] }),
+      signal: new AbortController().signal,
+      waitUntil: (promise) => {
+        waitUntilPromises.push(promise);
+      },
+    });
+
+    expect(waitUntilPromises).toHaveLength(1);
+    expect(appended).toEqual([]);
+
+    scriptResult.resolve({ result: { ok: true } });
+    await Promise.all(waitUntilPromises);
+
+    expect(appended).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/codemode/script-execution-completed",
+        payload: expect.objectContaining({
+          outcome: { status: "returned", value: { ok: true } },
+          scriptExecutionId: "scr-1",
+        }),
+      }),
+    );
+  });
+
   it("requests event-mediated function calls and waits for matching completion events", async () => {
     const appended: StreamEventInput[] = [];
     const processor = createCodemodeProcessor({

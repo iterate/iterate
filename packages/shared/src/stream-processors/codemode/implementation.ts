@@ -45,7 +45,7 @@ export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
   return implementProcessor(CodemodeProcessorContract, {
     firstAttachAfterAppend: { mode: "lookback", milliseconds: 250 },
 
-    async afterAppend({ event, state, streamApi, signal }) {
+    async afterAppend({ event, state, streamApi, signal, waitUntil }) {
       await standardProcessorBehavior.afterAppend({
         contract: CodemodeProcessorContract,
         state,
@@ -63,13 +63,19 @@ export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
         case "events.iterate.com/codemode/log-emitted":
           return;
         case "events.iterate.com/codemode/script-execution-requested":
-          await executeRequestedScript({
+          const scriptExecution = executeRequestedScript({
             deps,
             event,
             signal,
             state,
             streamApi,
           });
+          if (waitUntil != null) {
+            waitUntil(scriptExecution);
+            return;
+          }
+
+          await scriptExecution;
           return;
         default:
           return assertNever(event);
