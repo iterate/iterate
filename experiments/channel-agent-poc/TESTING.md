@@ -38,7 +38,7 @@ agent-browser open "https://agents.${SLUG}.iterate-dev-jonas.app/"
 If nested app-subdomain TLS is still provisioning, use the project-host fallback:
 
 ```bash
-agent-browser open "https://${SLUG}.iterate-dev-jonas.app/apps/agents/"
+agent-browser open "https://${SLUG}.iterate-dev-jonas.app/apps/agent-host/"
 ```
 
 Send this through the visible webchat composer:

@@ -26,7 +26,5 @@ setup:
     path: apps/semaphore/
   - project: test
     path: apps/test/
-  - project: agents
-    path: apps/agents/
   - project: channel-agent-poc
     path: experiments/channel-agent-poc/nested-facets/

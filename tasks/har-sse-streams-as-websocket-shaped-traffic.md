@@ -16,7 +16,7 @@ Today, `packages/mock-http-proxy` records HTTP by buffering the **full** respons
 - the exchange may never be finalized for the HAR, or
 - recording blocks until the connection closes (impractical for e2e).
 
-Committed HAR fixtures therefore naturally emphasize **POST** JSON-RPC exchanges. Optional GET/SSE is either missing, stubbed (e.g. synthetic **405** handlers in `apps/agents/e2e/test-support/mcp-streamable-http-get-stub-handlers.ts`), or would leak to the real network under strict `onUnhandledRequest: "error"` if not handled separately.
+Committed HAR fixtures therefore naturally emphasize **POST** JSON-RPC exchanges. Optional GET/SSE is either missing, stubbed by test support, or would leak to the real network under strict `onUnhandledRequest: "error"` if not handled separately.
 
 The user goal: **fixtures should reflect real protocol behavior** where possible; where impossible to store one finite `response.content.text`, we need a **different representation**—the same way we already special-case **WebSockets**.
 

@@ -24,7 +24,7 @@ export async function handleAdminAPI(req: Request, url: URL, env: AdminEnv): Pro
     const slug = body.slug?.trim();
     if (!slug || !/^[a-z0-9-]+$/.test(slug))
       return Response.json({ error: "Invalid slug" }, { status: 400 });
-    const config = { apps: body.apps ?? ["agents"] };
+    const config = { apps: body.apps ?? ["agent-host"] };
     console.log(`[Admin] creating project ${slug}`);
 
     // Fork base-template artifact via RepoDO

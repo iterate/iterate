@@ -22,7 +22,7 @@ function initialStreamPath() {
 
 function appBasePath() {
   const match = window.location.pathname.match(/^\/apps\/agents(?:\/|$)/);
-  return match ? "/apps/agents" : "";
+  return match ? "/apps/agent-host" : "";
 }
 
 const APP_BASE_PATH = appBasePath();

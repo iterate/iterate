@@ -67,19 +67,6 @@ function makeDualRuntimeAppWorkspace(workerEnvShim: string): WorkspaceConfig {
   };
 }
 
-function makeAgentsTanStackAppWorkspace(workerEnvShim: string): WorkspaceConfig {
-  const base = makeCloudflareTanStackAppWorkspace(workerEnvShim);
-  return {
-    ...base,
-    entry: [
-      ...(base.entry ?? []),
-      "e2e/vitest.config.ts",
-      "e2e/tui-test/tui-test.config.ts",
-      "scripts/event-stream-terminal.tsx",
-    ],
-  };
-}
-
 function makeCloudflareTanStackAppWorkspace(workerEnvShim: string): WorkspaceConfig {
   return {
     entry: ["alchemy.run.ts", "vite.config.ts", "scripts/router.ts", "src/entry.workerd.ts!"],
@@ -154,8 +141,6 @@ const config: KnipConfig = {
   // unrelated apps with heavyweight config loading like `apps/os`.
   ignoreWorkspaces: [
     "apps/*",
-    "!apps/agents",
-    "!apps/agents-contract",
     "!apps/example",
     "!apps/example-contract",
     "!apps/events",
@@ -170,30 +155,11 @@ const config: KnipConfig = {
   ignoreIssues: {
     // TanStack Start resolves these router factories by convention from the
     // entrypoint, so there is no direct import Knip can follow.
-    "apps/agents/src/router.tsx": ["exports"],
     "apps/example/src/router.tsx": ["exports"],
     "apps/ingress-proxy-contract/src/client.ts": ["exports", "types"],
     "apps/semaphore-contract/src/client.ts": ["types"],
     "apps/semaphore/src/router.tsx": ["exports"],
     "apps/semaphore/scripts/seed-cloudflare-tunnel-pool.ts": ["exports"],
-    "apps/agents/src/lib/events-orpc-client.ts": ["exports", "types"],
-    "apps/agents/src/lib/mcp-tool-providers.ts": ["types"],
-    "apps/agents/src/lib/openapi-tool-provider.ts": ["types"],
-    "apps/agents/src/lib/llm-normalization.ts": ["exports"],
-    "apps/agents/src/durable-objects/agent-chat-stream-processor-runner.ts": ["types"],
-    "apps/agents/src/durable-objects/agent-stream-processor-runner.ts": ["types"],
-    "apps/agents/src/durable-objects/cloudflare-ai-stream-processor-runner.ts": ["types"],
-    "apps/agents/src/durable-objects/codemode-stream-processor-runner.ts": ["types"],
-    "apps/agents/src/durable-objects/openai-ws-stream-processor-runner.ts": ["types"],
-    "apps/agents/src/entrypoints/stream-api.ts": ["types"],
-    "apps/agents/src/stream-processors/codemode/cloudflare-code-executor.ts": ["types"],
-    "apps/agents/src/stream-processors/pull-runner.ts": ["types"],
-    "apps/agents/src/stream-tui/command-invocation.ts": ["types"],
-    "apps/agents/src/stream-tui/command-router.ts": ["types"],
-    "apps/agents/src/stream-tui/feed-formatting.ts": ["exports"],
-    "apps/agents/src/stream-tui/navigation-state.ts": ["types"],
-    "apps/agents/src/stream-tui/pilotty-command.ts": ["types"],
-    "apps/agents/src/stream-tui/stream-tree.ts": ["types"],
     // Generated SQLFU bundles/configs are loaded by scripts/runtime conventions.
     "apps/events/src/db/migrations/.generated/migrations.ts": ["files", "exports", "types"],
     "apps/events/src/durable-objects/db/migrations/.generated/migrations.ts": ["exports", "types"],
@@ -215,8 +181,6 @@ const config: KnipConfig = {
     "packages/shared/src/durable-object-utils/mixins/fetch-mixin-utils.ts": ["types"],
   },
   workspaces: {
-    "apps/agents": makeAgentsTanStackAppWorkspace("./src/lib/worker-env.d.ts"),
-    "apps/agents-contract": makePrivateContractWorkspace(),
     "apps/example": makeDualRuntimeAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/example-contract": makePrivateContractWorkspace(),
     "apps/events": makeEventsCloudflareWorkspace("./src/lib/worker-env.d.ts"),

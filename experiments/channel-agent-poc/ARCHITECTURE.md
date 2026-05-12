@@ -26,7 +26,7 @@ events.
 
 ## App Boundaries
 
-- `apps/agents`: thin agent host, event stream UI, copied agent-loop processor,
+- `apps/agent-host`: thin agent host, event stream UI, copied agent-loop processor,
   copied codemode processor, and dynamic provider wiring.
 - `apps/slack`: Slack webhook receiver and thin Slack Web API provider.
 - `apps/github`: GitHub webhook receiver and GitHub App/Octokit provider.

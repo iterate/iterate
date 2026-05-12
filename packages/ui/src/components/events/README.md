@@ -43,7 +43,7 @@ Reducers are the view policy. If a dropdown mode wants different content, add
 or select a different reducer.
 
 The shape follows the same reducer discipline as the stream processor contracts
-under `apps/agents/src/stream-processors`: each reducer is plain data plus a
+under each app's stream processor directory: each reducer is plain data plus a
 pure `reduce({ event, state })` function. Rendering concerns stay outside the
 reducer.
 
@@ -81,7 +81,7 @@ Do not make renderer selection depend on the dropdown mode. The mode selects the
 reducer; `item.type` selects the renderer.
 
 This directory currently has a web renderer in `stream-feed.tsx`. The Bun +
-OpenTUI proof of concept in `apps/agents/scripts/event-stream-terminal.ts`
+OpenTUI proof of concept in the app-local event stream terminal
 reuses `feed-items.ts` and `feed-processors.ts`, but defines its own terminal
 renderer. That is the intended split: processors and feed item data are shared;
 renderers belong to each UI runtime.

@@ -19,7 +19,7 @@ shape:
 
 - `nested-facets/` is the self-contained Cloudflare Worker package formerly at
   `apps/events/poc/nested-facets`.
-- `nested-facets/base-template/apps/agents` contains the thin agent host, the
+- `nested-facets/base-template/apps/agent-host` contains the thin agent host, the
   event stream mini UI, the copied agent loop processor, and the codemode
   processor.
 - `nested-facets/base-template/apps/slack`, `github`, `linear`, and `discord`

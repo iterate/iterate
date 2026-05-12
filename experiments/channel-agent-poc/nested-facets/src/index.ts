@@ -213,7 +213,7 @@ export default {
 
     const headers = new Headers();
     headers.set("x-level", "app");
-    headers.set("x-app", "agents");
+    headers.set("x-app", "agent-host");
     headers.set("x-project-slug", projectSlug);
     if (project.artifacts_remote) headers.set("x-artifacts-remote", project.artifacts_remote);
     if (project.artifacts_repo) headers.set("x-artifacts-repo", project.artifacts_repo);
@@ -862,7 +862,7 @@ export class Project extends DurableObject<Env> {
     // ── Level 2: Artifact editor ────────────────────────────────────────
     if (level === "project") {
       // Path-mounted app access for fresh projects while nested app-subdomain
-      // TLS is provisioning: https://<project>.iterate-dev-jonas.app/apps/agents/
+      // TLS is provisioning: https://<project>.iterate-dev-jonas.app/apps/agent-host/
       const mountedAppMatch = url.pathname.match(/^\/apps\/([a-z0-9-]+)(\/.*)?$/);
       if (mountedAppMatch) {
         const mountedApp = mountedAppMatch[1];

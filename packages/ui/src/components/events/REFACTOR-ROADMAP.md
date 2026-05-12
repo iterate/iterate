@@ -114,7 +114,7 @@ Desired shape:
 
 Priority: low unless type exports change without compatibility.
 
-### `apps/agents/src/routes/index.tsx`
+### Event stream route
 
 Current shape:
 
@@ -128,7 +128,7 @@ Desired shape:
 
 Priority: low for behavior, high for typecheck verification.
 
-### `apps/agents/scripts/event-stream-terminal.ts`
+### Event stream terminal
 
 Current shape:
 

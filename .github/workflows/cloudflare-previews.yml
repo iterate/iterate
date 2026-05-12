@@ -34,8 +34,6 @@ jobs:
               "packages/shared/src/alchemy/**",
               "packages/shared/src/apps/**",
               "scripts/preview/**",
-              "apps/agents/**",
-              "apps/agents-contract/**",
               "apps/example/**",
               "apps/example-contract/**",
               "apps/events/**",

@@ -4,7 +4,7 @@
  *
  * This is the concrete runtime behavior behind the shared app config in
  * `packages/shared/src/apps/config.ts`, and is installed at the worker boundary
- * in files like `apps/agents/src/entry.workerd.ts`.
+ * at app Worker entrypoints.
  *
  * We intentionally forward requests using the same `x-forwarded-host` and
  * `x-forwarded-proto` contract that `packages/mock-http-proxy` already consumes

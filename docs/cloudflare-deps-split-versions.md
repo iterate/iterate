@@ -7,7 +7,7 @@
 - `@cloudflare/vite-plugin: 1.15.3` (transitively pulls `miniflare@4.20251125.0`)
 - `@cloudflare/workers-types: ^4.20251128.0`
 
-Every other app (`apps/agents`, `apps/events`, `apps/os2`, …) uses
+Every other app (`apps/events`, `apps/os2`, …) uses
 `catalog:cloudflare`, pinned to the day‑20 release (`@cloudflare/vite-plugin
 1.33.0`, `miniflare 4.20260420.0`, `workerd 1.20260420.1`, `wrangler 4.84.0`).
 These versions are pinned exactly rather than as caret ranges because `pnpm`'s
@@ -39,11 +39,6 @@ SSR traffic, plus concurrent Playwright specs) creates sockets faster than
 it can free them. The Node host heap grows past the default ~1.4 GB limit
 and V8 aborts. Bumping `--max-old-space-size` only delays the crash.
 
-`apps/agents` does not trigger this — its e2e suite is a single WebSocket
-turn against `events.iterate.com` with no cron loop — and it genuinely
-needs `@cloudflare/vite-plugin ^1.33.x` for newer Node.js `require()`
-interop used by its Workers AI + codemode flows. Hence the split.
-
 ## How the split works
 
 1. `apps/os/package.json` pins the direct dep versions (no `catalog:` ref).
@@ -54,7 +49,7 @@ interop used by its Workers AI + codemode flows. Hence the split.
    `@cloudflare/vite-plugin` brings its own transitive pair:
    - `apps/os` → `vite-plugin@1.15.3` → `miniflare@4.20251125.0` +
      `workerd@1.20251128.0`
-   - `apps/agents`, others → `vite-plugin@1.33.0` → `miniflare@4.20260420.0` +
+   - Other catalog-based apps → `vite-plugin@1.33.0` → `miniflare@4.20260420.0` +
      `workerd@1.20260420.1`
 4. `wrangler` stays overridden to `4.84.0` repo-wide so both plugins agree
    on the CLI/config format.
@@ -63,7 +58,7 @@ You can verify the split:
 
 ```bash
 readlink apps/os/node_modules/@cloudflare/vite-plugin        # …vite-plugin@1.15.3…
-readlink apps/agents/node_modules/@cloudflare/vite-plugin    # …vite-plugin@1.33.0…
+readlink apps/events/node_modules/@cloudflare/vite-plugin    # …vite-plugin@1.33.0…
 ```
 
 ## When to revisit

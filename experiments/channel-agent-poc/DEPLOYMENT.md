@@ -120,7 +120,7 @@ The worker also exposes a project-host fallback that does not depend on nested
 subdomain TLS:
 
 ```text
-https://<project>.iterate-dev-jonas.app/apps/agents/
+https://<project>.iterate-dev-jonas.app/apps/agent-host/
 ```
 
 ## Base Artifact Only

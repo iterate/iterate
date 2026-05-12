@@ -60,7 +60,7 @@ export function adminHTML(projects: ProjectRow[]): string {
   <form id="create-form">
     <label>Slug <input name="slug" placeholder="my-project" required pattern="[a-z0-9-]+"></label>
     <label>Custom hostname <input name="canonical_hostname" placeholder="optional"></label>
-    <label>Apps <input name="apps" value="agents" placeholder="comma-separated"></label>
+    <label>Apps <input name="apps" value="agent-host" placeholder="comma-separated"></label>
     <button type="submit">Create</button>
   </form>
 </div>
@@ -108,7 +108,7 @@ export function adminHTML(projects: ProjectRow[]): string {
     const body = {
       slug: fd.get('slug'),
       canonical_hostname: fd.get('canonical_hostname') || null,
-      apps: fd.get('apps')?.split(',').map(s => s.trim()).filter(Boolean) ?? ['agents'],
+      apps: fd.get('apps')?.split(',').map(s => s.trim()).filter(Boolean) ?? ['agent-host'],
     };
     addLog('Creating project ' + body.slug + '...');
     const resp = await fetch('/admin/api/projects', {
