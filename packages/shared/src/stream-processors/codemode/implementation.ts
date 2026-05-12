@@ -62,7 +62,7 @@ export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
         case "events.iterate.com/codemode/function-call-completed":
         case "events.iterate.com/codemode/log-emitted":
           return;
-        case "events.iterate.com/codemode/script-execution-requested":
+        case "events.iterate.com/codemode/script-execution-requested": {
           const scriptExecution = executeRequestedScript({
             deps,
             event,
@@ -77,6 +77,7 @@ export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
 
           await scriptExecution;
           return;
+        }
         default:
           return assertNever(event);
       }

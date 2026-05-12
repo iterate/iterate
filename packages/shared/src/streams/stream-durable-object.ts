@@ -61,7 +61,6 @@ type StreamDurableObjectEnv = {
 
 const LEGACY_CALLABLE_SUBSCRIBER_ALARM_QUEUE_KEY = "stream-do:callable-subscriber-alarm-queue";
 const CALLABLE_SUBSCRIBER_DELIVERY_QUEUE_KEY = "stream-do:callable-subscriber-delivery-queue-v2";
-const CALLABLE_SUBSCRIBERS = new Set(["callable"] as const);
 const NON_CALLABLE_SUBSCRIBERS = new Set(["webhook", "websocket"] as const);
 
 type CallableSubscriberDeliveryQueue = Record<string, number[]>;
