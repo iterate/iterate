@@ -61,6 +61,7 @@ type StreamDurableObjectEnv = {
 
 const LEGACY_CALLABLE_SUBSCRIBER_ALARM_QUEUE_KEY = "stream-do:callable-subscriber-alarm-queue";
 const CALLABLE_SUBSCRIBER_DELIVERY_QUEUE_KEY = "stream-do:callable-subscriber-delivery-queue-v2";
+const CALLABLE_SUBSCRIBER_ALARM_DELAY_MS = 10;
 const NON_CALLABLE_SUBSCRIBERS = new Set(["webhook", "websocket"] as const);
 
 type CallableSubscriberDeliveryQueue = Record<string, number[]>;
@@ -685,7 +686,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
       return queue;
     });
 
-    await this.ctx.storage.setAlarm(Date.now());
+    await this.scheduleCallableSubscriberAlarm();
   }
 
   private async deliverNextCallableSubscriber() {
@@ -742,8 +743,12 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
   private async ensureCallableSubscriberAlarmIfQueued() {
     const queue = await this.readCallableSubscriberDeliveryQueue();
     if (this.hasInactiveCallableSubscriberDelivery(queue)) {
-      await this.ctx.storage.setAlarm(Date.now());
+      await this.scheduleCallableSubscriberAlarm();
     }
+  }
+
+  private async scheduleCallableSubscriberAlarm() {
+    await this.ctx.storage.setAlarm(Date.now() + CALLABLE_SUBSCRIBER_ALARM_DELAY_MS);
   }
 
   private async readCallableSubscriberDeliveryQueue() {
