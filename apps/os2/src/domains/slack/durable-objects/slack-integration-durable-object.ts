@@ -115,7 +115,6 @@ export class SlackIntegrationDurableObject extends SlackIntegrationBase<SlackInt
 
     this.registerOnFirstInitialize(async (params) => {
       await this.ensureIntegrationSubscription(params.projectId);
-      await this.catchUpStreamProcessor({ signal: AbortSignal.timeout(30_000) });
     });
   }
 
@@ -128,7 +127,7 @@ export class SlackIntegrationDurableObject extends SlackIntegrationBase<SlackInt
   async ensureReady() {
     const params = await this.ensureStartedOrInitializeFromRuntimeName();
     await this.ensureIntegrationSubscription(params.projectId);
-    return this.getStreamProcessorRunnerState();
+    return await this.catchUpStreamProcessor({ signal: AbortSignal.timeout(30_000) });
   }
 
   async getRunnerState() {
