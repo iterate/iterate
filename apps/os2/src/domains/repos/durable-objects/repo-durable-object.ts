@@ -108,6 +108,8 @@ const RepoBase = withStreamProcessorRunner<
   },
 })(RepoLifecycleBase);
 
+const REPO_WRITE_TOKEN_STORAGE_KEY = "repo.writeToken";
+
 export class RepoDurableObject extends RepoBase<RepoEnv> {
   constructor(ctx: DurableObjectState, env: RepoEnv) {
     super(ctx, env);
@@ -162,22 +164,22 @@ export class RepoDurableObject extends RepoBase<RepoEnv> {
       });
     }
 
+    await this.ctx.storage.put(REPO_WRITE_TOKEN_STORAGE_KEY, token.plaintext);
     const event = await this.appendRepoCreatedEvent({
       defaultBranch,
       remote,
       slug: this.structuredName.repoSlug,
-      token: token.plaintext,
       tokenExpiresAt: token.expiresAt,
     });
     await this.consumeStreamProcessorEvent({ event: event as StreamEvent });
 
-    return this.requireInfo();
+    return await this.requireInfo();
   }
 
   async getInfo(): Promise<RepoInfo> {
     await this.ensureStarted();
     await this.catchUpStreamProcessor({ signal: AbortSignal.timeout(30_000) });
-    return this.requireInfo();
+    return await this.requireInfo();
   }
 
   async afterAppend(input: { event: Event }) {
@@ -189,10 +191,15 @@ export class RepoDurableObject extends RepoBase<RepoEnv> {
     return this.getStreamProcessorRunnerState().state.repo;
   }
 
-  private requireInfo(): RepoInfo {
+  private async requireInfo(): Promise<RepoInfo> {
     const repo = this.currentRepo();
     if (repo === null) {
       throw new Error(`Repo ${this.structuredName.repoSlug} has not been created.`);
+    }
+
+    const token = await this.ctx.storage.get<string>(REPO_WRITE_TOKEN_STORAGE_KEY);
+    if (!token) {
+      throw new Error(`Repo ${this.structuredName.repoSlug} write token is not available.`);
     }
 
     return {
@@ -201,12 +208,12 @@ export class RepoDurableObject extends RepoBase<RepoEnv> {
         defaultBranch: repo.defaultBranch,
         remote: repo.remote,
         slug: repo.slug,
-        token: repo.token,
+        token,
       }),
       readmePath: REPO_README_PATH,
       remote: repo.remote,
       slug: repo.slug,
-      token: repo.token,
+      token,
       tokenExpiresAt: repo.tokenExpiresAt,
     };
   }
@@ -242,7 +249,6 @@ export class RepoDurableObject extends RepoBase<RepoEnv> {
     defaultBranch: string;
     remote: string;
     slug: string;
-    token: string;
     tokenExpiresAt: string | null;
   }) {
     const stream = await getInitializedStreamStub({

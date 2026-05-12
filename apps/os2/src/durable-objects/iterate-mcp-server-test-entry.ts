@@ -1,12 +1,15 @@
 import { McpAgent } from "agents/mcp";
-import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
+import { WorkerEntrypoint } from "cloudflare:workers";
 import { createCodemodeContext } from "@iterate-com/shared/codemode/context-proxy";
 import type { ExecuteCodemodeFunctionCallInput } from "@iterate-com/shared/stream-processors/codemode/implementation";
 import type { ProjectMcpServerConnectionProps } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 
 export { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
 export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
-export { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
+export {
+  MockArtifactAgentDurableObject as AgentDurableObject,
+  MockArtifactsBinding,
+} from "./mock-artifacts-binding.ts";
 export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.ts";
 export { AiCapability, OrpcCapability } from "~/domains/codemode/example-capabilities.ts";
 export { FetchCapability } from "~/domains/codemode/fetch-capability.ts";
@@ -19,61 +22,6 @@ export { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-
 export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 export { OutboundMcpFromOurClientCapability } from "~/domains/outbound-mcp-client/entrypoints/outbound-mcp-from-our-client-capability.ts";
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
-
-const mockArtifactRepos = new Map<string, MockArtifactRepo>();
-
-export class MockArtifactsBinding extends WorkerEntrypoint {
-  async create(name: string) {
-    if (mockArtifactRepos.has(name)) {
-      throw new Error(`Artifact repo ${name} already exists.`);
-    }
-
-    const repo = new MockArtifactRepo(name);
-    mockArtifactRepos.set(name, repo);
-    return repo;
-  }
-
-  async get(name: string) {
-    const repo = mockArtifactRepos.get(name);
-    if (!repo) {
-      throw new Error(`Artifact repo ${name} not found.`);
-    }
-
-    return repo;
-  }
-}
-
-export class MockArtifactRepo extends RpcTarget {
-  readonly artifactName: string;
-
-  constructor(name: string) {
-    super();
-    this.artifactName = name;
-  }
-
-  defaultBranch() {
-    return "main";
-  }
-
-  remote() {
-    return `https://artifacts.example.test/${this.artifactName}.git`;
-  }
-
-  async createToken(scope: "read" | "write", ttlSeconds: number) {
-    return {
-      expiresAt: new Date(Date.UTC(2036, 0, 1)).toISOString(),
-      plaintext: `mock-${scope}-${ttlSeconds}-${this.artifactName}`,
-    };
-  }
-
-  async fork(name: string) {
-    const repo = new MockArtifactRepo(name);
-    mockArtifactRepos.set(name, repo);
-    return repo;
-  }
-}
-
-mockArtifactRepos.set("iterate-config-base", new MockArtifactRepo("iterate-config-base"));
 
 const mcpHandler = McpAgent.serve("/mcp", { binding: "PROJECT_MCP_SERVER_CONNECTION" });
 

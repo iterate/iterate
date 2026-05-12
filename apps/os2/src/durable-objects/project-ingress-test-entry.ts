@@ -1,5 +1,4 @@
 import { createD1Client } from "sqlfu";
-import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
@@ -22,68 +21,17 @@ import type { ExactHostIngressRule } from "~/ingress/types.ts";
 
 export { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
 export { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
+export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
-export { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
+export {
+  MockArtifactAgentDurableObject as AgentDurableObject,
+  MockArtifactsBinding,
+} from "./mock-artifacts-binding.ts";
 export { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
 export { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
 export { PROJECT_LIFECYCLE_STREAM_PATH } from "~/domains/projects/stream-processors/project-lifecycle.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
 export { ProjectMcpServerEntrypoint } from "~/domains/inbound-mcp-server/entrypoints/project-mcp-server-entrypoint.ts";
-
-const mockArtifactRepos = new Map<string, MockArtifactRepo>();
-
-export class MockArtifactsBinding extends WorkerEntrypoint {
-  async create(name: string) {
-    if (mockArtifactRepos.has(name)) {
-      throw new Error(`Artifact repo ${name} already exists.`);
-    }
-
-    const repo = new MockArtifactRepo(name);
-    mockArtifactRepos.set(name, repo);
-    return repo;
-  }
-
-  async get(name: string) {
-    const repo = mockArtifactRepos.get(name);
-    if (!repo) {
-      throw new Error(`Artifact repo ${name} not found.`);
-    }
-
-    return repo;
-  }
-}
-
-export class MockArtifactRepo extends RpcTarget {
-  readonly artifactName: string;
-
-  constructor(name: string) {
-    super();
-    this.artifactName = name;
-  }
-
-  defaultBranch() {
-    return "main";
-  }
-
-  remote() {
-    return `https://artifacts.example.test/${this.artifactName}.git`;
-  }
-
-  async createToken(scope: "read" | "write", ttlSeconds: number) {
-    return {
-      expiresAt: new Date(Date.UTC(2036, 0, 1)).toISOString(),
-      plaintext: `mock-${scope}-${ttlSeconds}-${this.artifactName}`,
-    };
-  }
-
-  async fork(name: string) {
-    const repo = new MockArtifactRepo(name);
-    mockArtifactRepos.set(name, repo);
-    return repo;
-  }
-}
-
-mockArtifactRepos.set("iterate-config-base", new MockArtifactRepo("iterate-config-base"));
 
 export default {
   async fetch(request, env, ctx) {

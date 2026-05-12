@@ -21,7 +21,6 @@ export const RepoStreamProcessorContract = defineProcessorContract({
         defaultBranch: z.string().trim().min(1),
         remote: z.string().url(),
         slug: z.string().trim().min(1),
-        token: z.string().trim().min(1),
         tokenExpiresAt: z.iso.datetime().nullable(),
       })
       .nullable()
@@ -37,7 +36,6 @@ export const RepoStreamProcessorContract = defineProcessorContract({
         defaultBranch: z.string().trim().min(1),
         remote: z.string().url(),
         slug: z.string().trim().min(1),
-        token: z.string().trim().min(1),
         tokenExpiresAt: z.iso.datetime().nullable(),
       }),
     },

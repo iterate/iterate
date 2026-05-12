@@ -11,6 +11,15 @@ import type {
   RepoStructuredName,
 } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import { getRepoDurableObjectName } from "~/domains/repos/durable-objects/repo-durable-object.ts";
+import {
+  isRepoAlreadyExistsError,
+  isRepoNotCreatedError,
+  isRepoNotFoundError,
+} from "~/domains/repos/repo-errors.ts";
+import {
+  ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME,
+  ITERATE_CONFIG_REPO_SLUG,
+} from "~/domains/repos/iterate-config-repo.ts";
 
 type ReposCapabilityEnv = {
   DO_CATALOG?: D1Database;
@@ -31,7 +40,7 @@ export type RepoCatalogRecord = {
 
 type ReposCapabilityClient = Pick<
   ReposCapability,
-  "create" | "createInfo" | "get" | "getInfo" | "list"
+  "create" | "createInfo" | "ensureIterateConfigInfo" | "get" | "getInfo" | "list"
 >;
 type RepoLifecycleCatalogRecord = D1ObjectCatalogRecord<RepoStructuredName>;
 
@@ -79,7 +88,17 @@ export class ReposCapability extends WorkerEntrypoint<ReposCapabilityEnv, ReposC
     });
 
     if (existing !== null) {
-      throw new Error(`Repo ${input.slug} already exists.`);
+      let existingRepoIsUncreated = false;
+      try {
+        await existing.getInfo();
+      } catch (error) {
+        if (!isRepoNotCreatedError(error)) throw error;
+        existingRepoIsUncreated = true;
+      }
+
+      if (!existingRepoIsUncreated) {
+        throw new Error(`Repo ${input.slug} already exists.`);
+      }
     }
 
     const repo = await getInitializedDoStub({
@@ -113,6 +132,49 @@ export class ReposCapability extends WorkerEntrypoint<ReposCapabilityEnv, ReposC
     return await (await this.get(input)).getInfo();
   }
 
+  async ensureIterateConfigInfo(input: { projectSlug: string | null }): Promise<RepoInfo> {
+    const namespace = this.requireRepoNamespace();
+    const name = this.repoName(ITERATE_CONFIG_REPO_SLUG);
+    const existing = await getInitializedDoStub({
+      allowCreate: false,
+      namespace,
+      name,
+    });
+
+    if (existing !== null) {
+      try {
+        return await existing.getInfo();
+      } catch (error) {
+        if (!isRepoNotCreatedError(error)) {
+          throw error;
+        }
+      }
+    }
+
+    const repo = await getInitializedDoStub({
+      allowCreate: true,
+      namespace,
+      name,
+    });
+
+    try {
+      return await repo.createRepo({
+        projectSlug: input.projectSlug ?? undefined,
+        source: {
+          artifactName: ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME,
+          description: `Iterate config repo for ${input.projectSlug ?? this.ctx.props.projectId}`,
+          kind: "artifact-fork",
+        },
+      });
+    } catch (error) {
+      if (isRepoAlreadyExistsError(error)) {
+        return await repo.getInfo();
+      }
+
+      throw error;
+    }
+  }
+
   async list(): Promise<RepoCatalogRecord[]> {
     if (!this.env.DO_CATALOG) {
       throw new Error("DO_CATALOG binding is required to list Repos.");
@@ -127,19 +189,20 @@ export class ReposCapability extends WorkerEntrypoint<ReposCapabilityEnv, ReposC
       },
     );
 
-    const repos: RepoCatalogRecord[] = [];
-    for (const record of records) {
-      const repo = toRepoCatalogRecord(record);
-      try {
-        await this.getInfo({ slug: repo.repoSlug });
-        repos.push(repo);
-      } catch (error) {
-        if (isUncreatedRepoError(error)) continue;
-        throw error;
-      }
-    }
+    const repos = await Promise.all(
+      records.map(async (record) => {
+        const repo = toRepoCatalogRecord(record);
+        try {
+          await this.getInfo({ slug: repo.repoSlug });
+          return repo;
+        } catch (error) {
+          if (isRepoNotCreatedError(error) || isRepoNotFoundError(error)) return null;
+          throw error;
+        }
+      }),
+    );
 
-    return repos;
+    return repos.filter((repo): repo is RepoCatalogRecord => repo !== null);
   }
 
   private requireRepoNamespace() {
@@ -200,10 +263,6 @@ function readSlug(value: unknown) {
 
 function readOptionalString(value: unknown) {
   return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
-}
-
-function isUncreatedRepoError(error: unknown) {
-  return error instanceof Error && /Repo .+ has not been created\./.test(error.message);
 }
 
 export { getRepoDurableObjectName };

@@ -69,6 +69,31 @@ export class WorkspaceDurableObject extends WorkspaceBase<WorkspaceEnv> {
     }
   }
 
+  async removePath(input: { force: boolean; path: string; recursive: boolean }): Promise<void> {
+    await this.ensureStarted();
+    const state = this.getShellState();
+    const rm = state.rm;
+    if (typeof rm !== "function") {
+      throw new Error("Workspace state does not implement rm.");
+    }
+
+    await rm(input.path, {
+      force: input.force,
+      recursive: input.recursive,
+    });
+  }
+
+  async writeFile(input: { content: string; path: string }): Promise<void> {
+    await this.ensureStarted();
+    const state = this.getShellState();
+    const writeFile = state.writeFile;
+    if (typeof writeFile !== "function") {
+      throw new Error("Workspace state does not implement writeFile.");
+    }
+
+    await writeFile(input.path, input.content);
+  }
+
   private getShellWorkspace() {
     if (this.#workspace === null) {
       this.#workspace = new Workspace({

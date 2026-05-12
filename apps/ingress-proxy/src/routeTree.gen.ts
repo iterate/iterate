@@ -14,7 +14,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiSplatRouteImport } from './routes/api.$'
 import { Route as AppRoutesRouteImport } from './routes/_app/routes'
 import { Route as AppRoutesIndexRouteImport } from './routes/_app/routes.index'
-import { Route as Api_internalHealthRouteImport } from './routes/api.__internal.health'
+import { Route as Api_internalHealthRouteImport } from './routes/api.[_]_internal.health'
 import { Route as AppRoutesRootHostRouteImport } from './routes/_app/routes.$rootHost'
 
 const AppRoute = AppRouteImport.update({
@@ -43,7 +43,7 @@ const AppRoutesIndexRoute = AppRoutesIndexRouteImport.update({
 } as any)
 const Api_internalHealthRoute = Api_internalHealthRouteImport.update({
   id: '/api/__internal/health',
-  path: '/api/health',
+  path: '/api/__internal/health',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppRoutesRootHostRoute = AppRoutesRootHostRouteImport.update({
@@ -57,14 +57,14 @@ export interface FileRoutesByFullPath {
   '/routes': typeof AppRoutesRouteWithChildren
   '/api/$': typeof ApiSplatRoute
   '/routes/$rootHost': typeof AppRoutesRootHostRoute
-  '/api/health': typeof Api_internalHealthRoute
+  '/api/__internal/health': typeof Api_internalHealthRoute
   '/routes/': typeof AppRoutesIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/api/$': typeof ApiSplatRoute
   '/routes/$rootHost': typeof AppRoutesRootHostRoute
-  '/api/health': typeof Api_internalHealthRoute
+  '/api/__internal/health': typeof Api_internalHealthRoute
   '/routes': typeof AppRoutesIndexRoute
 }
 export interface FileRoutesById {
@@ -84,10 +84,15 @@ export interface FileRouteTypes {
     | '/routes'
     | '/api/$'
     | '/routes/$rootHost'
-    | '/api/health'
+    | '/api/__internal/health'
     | '/routes/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/$' | '/routes/$rootHost' | '/api/health' | '/routes'
+  to:
+    | '/'
+    | '/api/$'
+    | '/routes/$rootHost'
+    | '/api/__internal/health'
+    | '/routes'
   id:
     | '__root__'
     | '/'
@@ -145,8 +150,8 @@ declare module '@tanstack/react-router' {
     }
     '/api/__internal/health': {
       id: '/api/__internal/health'
-      path: '/api/health'
-      fullPath: '/api/health'
+      path: '/api/__internal/health'
+      fullPath: '/api/__internal/health'
       preLoaderRoute: typeof Api_internalHealthRouteImport
       parentRoute: typeof rootRouteImport
     }

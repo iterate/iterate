@@ -124,7 +124,7 @@ export async function pushInitialReadme(input: {
     remote: "origin",
     ref: input.defaultBranch,
     username: "x",
-    password: input.token,
+    password: stripArtifactTokenQuery(input.token),
   });
 }
 
@@ -149,4 +149,8 @@ function normalizeTokenExpiresAt(value: string | number | Date | null): string |
 function expiresAtFromTokenQuery(token: string): number | null {
   const match = /[?&]expires=(\d+)/.exec(token);
   return match ? Number(match[1]) : null;
+}
+
+export function stripArtifactTokenQuery(token: string) {
+  return token.split("?expires=")[0] ?? token;
 }

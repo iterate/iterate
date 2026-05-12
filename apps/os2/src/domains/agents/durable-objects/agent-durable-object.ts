@@ -38,20 +38,17 @@ import {
 } from "~/domains/codemode/codemode-session-rpc.ts";
 import type { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
 import {
-  getRepoDurableObjectName,
   type RepoDurableObject,
   type RepoInfo,
 } from "~/domains/repos/durable-objects/repo-durable-object.ts";
-import {
-  ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME,
-  ITERATE_CONFIG_REPO_SLUG,
-} from "~/domains/repos/iterate-config-repo.ts";
+import { getReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
 import {
   type WorkspaceDurableObject,
   type WorkspaceStructuredName,
 } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 import { defaultWorkspaceIdForCodemodeSession } from "~/domains/workspaces/entrypoints/workspace-provider-registration.ts";
+import { stripArtifactTokenQuery } from "~/domains/repos/artifacts.ts";
 import {
   defaultAgentSetupEvents,
   defaultAgentSystemPrompt,
@@ -91,6 +88,13 @@ export type AgentDurableObjectEnv = {
 };
 
 const AGENT_ITERATE_CONFIG_DIR = "/iterate-config";
+const AGENT_ITERATE_CONFIG_CLONE_COMPLETE_PATH = `${AGENT_ITERATE_CONFIG_DIR}/.git/iterate-clone-complete`;
+
+export type CloneIterateConfigRepoInput = {
+  git: Awaited<ReturnType<WorkspaceDurableObject["cloudflareShellGit"]>>;
+  repo: RepoInfo;
+  workspace: DurableObjectStub<WorkspaceDurableObject>;
+};
 
 type AgentStreamApi = ProcessorStreamApi<{
   emits: readonly string[];
@@ -313,30 +317,52 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
   }
 
   private async ensureAgentWorkspace(params: AgentDurableObjectStructuredName) {
-    const repo = await this.getOrCreateIterateConfigRepo(params);
     const workspace = await this.getAgentWorkspace(params);
+
+    if (await workspace.hasFile(AGENT_ITERATE_CONFIG_CLONE_COMPLETE_PATH)) {
+      return;
+    }
+
+    const repo = await this.getOrCreateIterateConfigRepo(params);
     const git = await workspace.cloudflareShellGit();
-    const state = await workspace.cloudflareShellState();
 
     if (await workspace.hasFile(`${AGENT_ITERATE_CONFIG_DIR}/.git/HEAD`)) {
-      return;
+      let cloneIsUsable = true;
+      try {
+        await git.status({ dir: AGENT_ITERATE_CONFIG_DIR });
+      } catch {
+        cloneIsUsable = false;
+      }
+
+      if (cloneIsUsable) {
+        await workspace.writeFile({
+          content: `${repo.slug}\n`,
+          path: AGENT_ITERATE_CONFIG_CLONE_COMPLETE_PATH,
+        });
+        return;
+      }
     }
 
-    if (repo.remote.startsWith("https://artifacts.example.test/")) {
-      await prepareMockIterateConfigWorkspace({
-        git,
-        writeFile: readWorkspaceStateMethod({ method: "writeFile", state }),
-      });
-      return;
-    }
+    await workspace.removePath({
+      force: true,
+      path: AGENT_ITERATE_CONFIG_DIR,
+      recursive: true,
+    });
+    await this.cloneIterateConfigRepo({ git, repo, workspace });
+    await workspace.writeFile({
+      content: `${repo.slug}\n`,
+      path: AGENT_ITERATE_CONFIG_CLONE_COMPLETE_PATH,
+    });
+  }
 
-    await git.clone({
+  protected async cloneIterateConfigRepo(input: CloneIterateConfigRepoInput) {
+    await input.git.clone({
       url: remoteWithToken({
-        remote: repo.remote,
-        token: repo.token,
+        remote: input.repo.remote,
+        token: input.repo.token,
       }),
       dir: AGENT_ITERATE_CONFIG_DIR,
-      branch: repo.defaultBranch,
+      branch: input.repo.defaultBranch,
       depth: 1,
     });
   }
@@ -344,47 +370,10 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
   private async getOrCreateIterateConfigRepo(
     params: AgentDurableObjectStructuredName,
   ): Promise<RepoInfo> {
-    const repoName = getRepoDurableObjectName({
-      projectId: params.projectId,
-      repoSlug: ITERATE_CONFIG_REPO_SLUG,
-    });
-    const existing = await getInitializedDoStub({
-      allowCreate: false,
-      namespace: this.env.REPO,
-      name: repoName,
-    });
-
-    if (existing !== null) {
-      try {
-        return await existing.getInfo();
-      } catch (error) {
-        if (!isRepoNotCreatedError(error)) {
-          throw error;
-        }
-      }
-    }
-
-    const repo = await getInitializedDoStub({
-      allowCreate: true,
-      namespace: this.env.REPO,
-      name: repoName,
-    });
-
-    try {
-      return await repo.createRepo({
-        source: {
-          artifactName: ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME,
-          description: `Iterate config repo for ${params.projectId}`,
-          kind: "artifact-fork",
-        },
-      });
-    } catch (error) {
-      if (isRepoAlreadyExistsError(error)) {
-        return await repo.getInfo();
-      }
-
-      throw error;
-    }
+    return await getReposCapability({
+      exports: this.ctx.exports,
+      props: { projectId: params.projectId },
+    }).ensureIterateConfigInfo({ projectSlug: null });
   }
 
   private async getAgentWorkspace(params: AgentDurableObjectStructuredName) {
@@ -715,52 +704,8 @@ function agentWorkspaceName(params: AgentDurableObjectStructuredName): Workspace
 function remoteWithToken(input: { remote: string; token: string }) {
   const url = new URL(input.remote);
   url.username = "x";
-  url.password = input.token.includes("?expires=")
-    ? (input.token.split("?expires=")[0] ?? input.token)
-    : input.token;
+  url.password = stripArtifactTokenQuery(input.token);
   return url.toString();
-}
-
-async function prepareMockIterateConfigWorkspace(input: {
-  git: Pick<
-    Awaited<ReturnType<WorkspaceDurableObject["cloudflareShellGit"]>>,
-    "add" | "commit" | "init"
-  >;
-  writeFile(...args: unknown[]): Promise<unknown>;
-}) {
-  await input.writeFile(
-    `${AGENT_ITERATE_CONFIG_DIR}/iterate.config.jsonc`,
-    '{\n  "version": 1\n}\n',
-  );
-  await input.git.init({ dir: AGENT_ITERATE_CONFIG_DIR, defaultBranch: "main" });
-  await input.git.add({ dir: AGENT_ITERATE_CONFIG_DIR, filepath: "iterate.config.jsonc" });
-  await input.git.commit({
-    dir: AGENT_ITERATE_CONFIG_DIR,
-    message: "Seed iterate config",
-    author: {
-      name: "Iterate",
-      email: "support@iterate.com",
-    },
-  });
-}
-
-function readWorkspaceStateMethod(input: {
-  method: string;
-  state: Awaited<ReturnType<WorkspaceDurableObject["cloudflareShellState"]>>;
-}) {
-  const method = input.state[input.method];
-  if (typeof method !== "function") {
-    throw new Error(`Workspace state does not implement ${input.method}.`);
-  }
-  return method;
-}
-
-function isRepoNotCreatedError(error: unknown) {
-  return error instanceof Error && error.message.includes("has not been created");
-}
-
-function isRepoAlreadyExistsError(error: unknown) {
-  return error instanceof Error && error.message.includes("already exists");
 }
 
 const CODEMODE_FENCE_RE =

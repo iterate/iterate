@@ -10,6 +10,7 @@ import { ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME } from "../src/domains/repos/ite
 import {
   REPO_DEFAULT_BRANCH,
   REPO_WRITE_TOKEN_TTL_SECONDS,
+  stripArtifactTokenQuery,
 } from "../src/domains/repos/artifacts.ts";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -219,7 +220,7 @@ function runGit(cwd: string, args: string[]) {
 function remoteWithToken(input: { remote: string; token: string }) {
   const url = new URL(input.remote);
   url.username = "x";
-  url.password = input.token.split("?expires=")[0] ?? input.token;
+  url.password = stripArtifactTokenQuery(input.token);
   return url.toString();
 }
 

@@ -12,7 +12,6 @@ describe("Repo stream processor", () => {
             defaultBranch: "main",
             remote: "https://git.cloudflare.com/artifacts/os2/project--banana.git",
             slug: "banana",
-            token: "repo-token",
             tokenExpiresAt: "2036-05-09T12:00:00.000Z",
           },
           streamPath: repoStreamPath("banana"),
@@ -25,7 +24,6 @@ describe("Repo stream processor", () => {
       defaultBranch: "main",
       remote: "https://git.cloudflare.com/artifacts/os2/project--banana.git",
       slug: "banana",
-      token: "repo-token",
       tokenExpiresAt: "2036-05-09T12:00:00.000Z",
     });
   });
