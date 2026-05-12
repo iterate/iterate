@@ -7,7 +7,7 @@ import {
   StreamPath,
   type Event,
 } from "@iterate-com/shared/streams/types";
-import { getStreamDurableObjectName } from "@iterate-com/shared/streams/helpers.ts";
+import { getStreamDurableObjectName } from "@iterate-com/shared/streams/helpers";
 import {
   collectAsyncIterableUntilIdle,
   createEvents2AppFixture,

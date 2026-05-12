@@ -230,7 +230,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
    *
    *   parse → idempotency check → beforeAppend → build event → reduce → commit → afterAppend
    */
-  append(inputEvent: EventInput): Event {
+  async append(inputEvent: EventInput): Promise<Event> {
     const input = EventInput.parse(inputEvent);
     this.ensureInitializedStreamStorage();
 
@@ -265,7 +265,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
     });
     this._state = nextState;
 
-    this.afterAppend(event);
+    await this.afterAppend(event);
 
     return event;
   }
@@ -324,7 +324,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
     this._state = nextState;
 
     for (const event of newEvents) {
-      this.afterAppend(event);
+      await this.afterAppend(event);
     }
 
     return events;
@@ -421,7 +421,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
    * Correctness-critical derived work still needs a durable event/outbox cursor
    * before we rely on it operationally.
    */
-  private afterAppend(event: Event) {
+  private async afterAppend(event: Event) {
     this.publish(event);
 
     if (event.type === STREAM_FIRST_INITIALIZED_TYPE) {
@@ -462,7 +462,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
     });
 
     if (this.shouldQueueCallableSubscriberDelivery(event)) {
-      void this.enqueueCallableSubscriberDelivery(event.offset).catch((error) => {
+      await this.enqueueCallableSubscriberDelivery(event.offset).catch((error) => {
         console.error("[stream-do] failed to enqueue callable subscriber delivery", {
           path: this.state.path,
           offset: event.offset,
@@ -978,7 +978,7 @@ function reduceBuiltinProcessors(args: {
 }
 
 function runBuiltinAfterAppend(args: {
-  append: (event: EventInput) => Event;
+  append: (event: EventInput) => Event | Promise<Event>;
   callableContext: CallableContext;
   event: Event;
   onExternalSubscriberError?(failure: ExternalSubscriberPublishFailure): void | Promise<void>;
