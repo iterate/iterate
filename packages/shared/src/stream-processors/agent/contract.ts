@@ -73,7 +73,8 @@ export const AgentProcessorContract = defineProcessorContract({
       description: "A curated model-visible row of agent context.",
       examples: [
         {
-          description: "User input that uses the default automatic LLM request behaviour.",
+          description:
+            "User input that uses the default policy: request an LLM response without interrupting in-flight work.",
           payload: {
             content: "Summarize the deployment logs.",
           },
@@ -82,30 +83,21 @@ export const AgentProcessorContract = defineProcessorContract({
           description: "User input that interrupts the current request before starting a new one.",
           payload: {
             content: "Actually, focus only on failed checks.",
-            triggerLlmRequest: { behaviour: "interrupt-current-request" },
+            llmRequestPolicy: { behaviour: "interrupt-current-request" },
           },
         },
       ],
       payloadSchema: z
         .object({
           content: z.string().describe("Model-visible user context to append to agent history."),
-          triggerLlmRequest: z
+          llmRequestPolicy: z
             .discriminatedUnion("behaviour", [
-              z.object({ behaviour: z.literal("auto") }),
               z.object({ behaviour: z.literal("dont-trigger-request") }),
               z.object({ behaviour: z.literal("interrupt-current-request") }),
               z.object({ behaviour: z.literal("after-current-request") }),
-              z.object({
-                behaviour: z.literal("trigger-request-within-time-period"),
-                withinMs: z
-                  .number()
-                  .int()
-                  .nonnegative()
-                  .describe("Maximum delay before the queued LLM request should start."),
-              }),
             ])
             .describe("How this input should affect LLM request scheduling.")
-            .default({ behaviour: "auto" }),
+            .default({ behaviour: "after-current-request" }),
         })
         .describe("Payload for an agent input row."),
     },
@@ -113,6 +105,7 @@ export const AgentProcessorContract = defineProcessorContract({
       description: "A model-visible assistant output row.",
       payloadSchema: z.object({
         content: z.string(),
+        llmRequestId: z.number().int().positive().optional(),
       }),
     },
     "events.iterate.com/agent/llm-config-updated": {
@@ -177,10 +170,20 @@ export const AgentProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/agent/llm-request-cancelled": {
       description: "The LLM request was cancelled before completion.",
-      payloadSchema: z.object({
-        requestId: z.string(),
-        reason: z.enum(["interrupted-by-user-input", "deadline-exceeded"]),
-      }),
+      payloadSchema: z
+        .discriminatedUnion("phase", [
+          z.object({
+            phase: z.literal("scheduled"),
+            requestId: z.string(),
+            reason: z.literal("interrupted-by-user-input"),
+          }),
+          z.object({
+            phase: z.literal("requested"),
+            llmRequestId: z.number().int().positive(),
+            reason: z.literal("interrupted-by-user-input"),
+          }),
+        ])
+        .describe("Cancellation fact for either a debounced or in-flight LLM request."),
     },
     "events.iterate.com/agent/llm-request-queued": {
       description: "A follow-up trigger arrived while a request was already in flight.",
@@ -241,6 +244,13 @@ export const AgentProcessorContract = defineProcessorContract({
           ],
         };
       case "events.iterate.com/agent/output-added":
+        if (
+          event.payload.llmRequestId != null &&
+          (nextState.currentRequest?.phase !== "requested" ||
+            nextState.currentRequest.llmRequestId !== event.payload.llmRequestId)
+        ) {
+          return nextState;
+        }
         return {
           ...nextState,
           history: [
@@ -267,10 +277,21 @@ export const AgentProcessorContract = defineProcessorContract({
           ? { ...nextState, currentRequest: null }
           : nextState;
       case "events.iterate.com/agent/llm-request-cancelled":
-        return nextState.currentRequest?.phase === "scheduled" &&
+        if (
+          event.payload.phase === "scheduled" &&
+          nextState.currentRequest?.phase === "scheduled" &&
           nextState.currentRequest.requestId === event.payload.requestId
-          ? { ...nextState, currentRequest: null }
-          : nextState;
+        ) {
+          return { ...nextState, currentRequest: null };
+        }
+        if (
+          event.payload.phase === "requested" &&
+          nextState.currentRequest?.phase === "requested" &&
+          nextState.currentRequest.llmRequestId === event.payload.llmRequestId
+        ) {
+          return { ...nextState, currentRequest: null };
+        }
+        return nextState;
       case "events.iterate.com/agent/llm-request-queued":
         return {
           ...nextState,

@@ -234,11 +234,11 @@ export function codemodeResultNeedsAgentTurn(payload: { result: unknown; error?:
 }
 
 function isExternalAgentTurn(event: {
-  payload: { triggerLlmRequest?: { behaviour: string } };
+  payload: { llmRequestPolicy?: { behaviour: string } };
   idempotencyKey?: string;
 }) {
   return (
-    event.payload.triggerLlmRequest?.behaviour !== "dont-trigger-request" &&
+    event.payload.llmRequestPolicy?.behaviour !== "dont-trigger-request" &&
     !event.idempotencyKey?.startsWith("legacy-codemode/") &&
     !event.idempotencyKey?.startsWith("stream-processor:legacy-codemode:derived:")
   );

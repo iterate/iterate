@@ -46,17 +46,15 @@ export type EventsStreamMessageElement = EventsStreamRenderedElement<
 export type EventsStreamPromptContextElementProps = {
   source?: string;
   text: string;
-  triggerLlmRequest: EventsStreamPromptContextTriggerLlmRequest;
+  llmRequestPolicy: EventsStreamPromptContextLlmRequestPolicy;
   timestamp: number;
   raw: Event;
 };
 
-export type EventsStreamPromptContextTriggerLlmRequest =
-  | { behaviour: "auto" }
+export type EventsStreamPromptContextLlmRequestPolicy =
   | { behaviour: "dont-trigger-request" }
   | { behaviour: "interrupt-current-request" }
-  | { behaviour: "after-current-request" }
-  | { behaviour: "trigger-request-within-time-period"; withinMs: number };
+  | { behaviour: "after-current-request" };
 
 /**
  * Agent prompt context element.

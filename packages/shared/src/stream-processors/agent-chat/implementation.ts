@@ -72,7 +72,7 @@ export function createAgentChatProcessor() {
                   bodyTag: "message",
                   body: event.payload.message,
                 }),
-                triggerLlmRequest: { behaviour: "dont-trigger-request" },
+                llmRequestPolicy: { behaviour: "dont-trigger-request" },
               },
             },
           });
@@ -97,7 +97,7 @@ async function appendEventTypeExplanation(args: {
       }),
       payload: {
         content: eventTypeExplanation(args.eventType),
-        triggerLlmRequest: { behaviour: "dont-trigger-request" },
+        llmRequestPolicy: { behaviour: "dont-trigger-request" },
       },
     },
   });

@@ -110,8 +110,7 @@ export const createAgentRouter = {
         type: "events.iterate.com/agent/input-added",
         payload: {
           content: input.initialPrompt,
-          // Omitting `triggerLlmRequest` means it defaults to `auto`, which
-          // resolves to `interrupt-current-request`.
+          // Omitting `llmRequestPolicy` means it defaults to `after-current-request`.
         },
       },
     });

@@ -88,7 +88,7 @@ describe("runPullProcessor", () => {
         idempotencyKey: CODEMODE_PRIMER_IDEMPOTENCY_KEY,
         payload: {
           content: expect.stringContaining("Codemode is mandatory"),
-          triggerLlmRequest: { behaviour: "dont-trigger-request" },
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
         },
       },
       {
@@ -145,7 +145,7 @@ describe("runPullProcessor", () => {
         idempotencyKey: CODEMODE_PRIMER_IDEMPOTENCY_KEY,
         payload: {
           content: expect.stringContaining("Codemode is mandatory"),
-          triggerLlmRequest: { behaviour: "dont-trigger-request" },
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
         },
       },
     ]);

@@ -314,7 +314,7 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
         props: {
           source: readStringPayloadField(event, "source") ?? undefined,
           text: content,
-          triggerLlmRequest: readTriggerLlmRequest(event),
+          llmRequestPolicy: readLlmRequestPolicy(event),
           timestamp,
           raw: event,
         },
@@ -616,22 +616,17 @@ function readPayloadRecord(event: Event) {
   return isRecord(event.payload) ? event.payload : null;
 }
 
-function readTriggerLlmRequest(event: Event) {
-  const trigger = readRecordPayloadField(event, "triggerLlmRequest");
-  if (trigger == null) return { behaviour: "auto" as const };
+function readLlmRequestPolicy(event: Event) {
+  const policy = readRecordPayloadField(event, "llmRequestPolicy");
+  if (policy == null) return { behaviour: "after-current-request" as const };
 
-  switch (trigger.behaviour) {
-    case "auto":
+  switch (policy.behaviour) {
     case "dont-trigger-request":
     case "interrupt-current-request":
     case "after-current-request":
-      return { behaviour: trigger.behaviour };
-    case "trigger-request-within-time-period":
-      return typeof trigger.withinMs === "number"
-        ? { behaviour: trigger.behaviour, withinMs: trigger.withinMs }
-        : { behaviour: "auto" as const };
+      return { behaviour: policy.behaviour };
     default:
-      return { behaviour: "auto" as const };
+      return { behaviour: "after-current-request" as const };
   }
 }
 

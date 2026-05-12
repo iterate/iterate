@@ -20,13 +20,11 @@ describe("processor docs", () => {
           type: "string",
           description: "Model-visible user context to append to agent history.",
         },
-        triggerLlmRequest: {
+        llmRequestPolicy: {
           oneOf: [
-            { title: "auto" },
             { title: "dont-trigger-request" },
             { title: "interrupt-current-request" },
             { title: "after-current-request" },
-            { title: "trigger-request-within-time-period" },
           ],
         },
       },
@@ -36,13 +34,14 @@ describe("processor docs", () => {
         },
         {
           content: "Actually, focus only on failed checks.",
-          triggerLlmRequest: { behaviour: "interrupt-current-request" },
+          llmRequestPolicy: { behaviour: "interrupt-current-request" },
         },
       ],
     });
     expect(event?.examples).toEqual([
       {
-        description: "User input that uses the default automatic LLM request behaviour.",
+        description:
+          "User input that uses the default policy: request an LLM response without interrupting in-flight work.",
         payload: {
           content: "Summarize the deployment logs.",
         },
@@ -51,7 +50,7 @@ describe("processor docs", () => {
         description: "User input that interrupts the current request before starting a new one.",
         payload: {
           content: "Actually, focus only on failed checks.",
-          triggerLlmRequest: { behaviour: "interrupt-current-request" },
+          llmRequestPolicy: { behaviour: "interrupt-current-request" },
         },
       },
     ]);

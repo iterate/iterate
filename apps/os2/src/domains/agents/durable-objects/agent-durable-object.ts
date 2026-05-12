@@ -550,7 +550,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
             event: input.event,
             outcome: input.outcome,
           }),
-          triggerLlmRequest: { behaviour: "auto" },
+          llmRequestPolicy: { behaviour: "after-current-request" },
         },
       },
     });

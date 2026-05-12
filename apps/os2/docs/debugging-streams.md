@@ -55,7 +55,7 @@ curl -fsS -X POST "$BASE_URL" \
     "type": "events.iterate.com/agent/input-added",
     "payload": {
       "content": "late non-triggering context",
-      "triggerLlmRequest": { "behaviour": "dont-trigger-request" }
+      "llmRequestPolicy": { "behaviour": "dont-trigger-request" }
     }
   }'
 ```

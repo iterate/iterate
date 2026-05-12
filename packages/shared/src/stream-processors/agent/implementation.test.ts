@@ -25,7 +25,7 @@ describe("createAgentProcessor", () => {
         type: "events.iterate.com/agent/input-added",
         payload: {
           content: "hello",
-          triggerLlmRequest: { behaviour: "dont-trigger-request" },
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
         },
         offset: 42,
       }),
@@ -36,6 +36,122 @@ describe("createAgentProcessor", () => {
     });
 
     expect(appended).toEqual([]);
+  });
+
+  it("schedules debounced LLM work by default", async () => {
+    const appended: StreamEventInput[] = [];
+    const processor = createAgentProcessor({
+      waitUntil: () => undefined,
+    });
+
+    await processor.implementation.afterAppend?.({
+      event: consumedAgentEvent({
+        type: "events.iterate.com/agent/input-added",
+        payload: {
+          content: "hello",
+          llmRequestPolicy: { behaviour: "after-current-request" },
+        },
+        offset: 42,
+      }),
+      previousState: registeredState(),
+      state: {
+        ...registeredState(),
+        history: [{ role: "user", content: "hello" }],
+      },
+      streamApi: testStreamApi({ appended }),
+      signal: new AbortController().signal,
+    });
+
+    expect(appended).toEqual([
+      expect.objectContaining({
+        type: "events.iterate.com/agent/llm-request-scheduled",
+        idempotencyKey: "agent/llm-request-scheduled@42",
+        payload: expect.objectContaining({
+          debounceMs: 1000,
+          model: "@cf/moonshotai/kimi-k2.6",
+        }),
+      }),
+    ]);
+  });
+
+  it("queues a follow-up for after-current-request while an LLM request is in flight", async () => {
+    const appended: StreamEventInput[] = [];
+    const processor = createAgentProcessor({
+      waitUntil: () => undefined,
+    });
+
+    await processor.implementation.afterAppend?.({
+      event: consumedAgentEvent({
+        type: "events.iterate.com/agent/input-added",
+        payload: {
+          content: "follow up",
+          llmRequestPolicy: { behaviour: "after-current-request" },
+        },
+        offset: 43,
+      }),
+      previousState: {
+        ...registeredState(),
+        currentRequest: { phase: "requested", llmRequestId: 12 },
+      },
+      state: {
+        ...registeredState(),
+        currentRequest: { phase: "requested", llmRequestId: 12 },
+      },
+      streamApi: testStreamApi({ appended }),
+      signal: new AbortController().signal,
+    });
+
+    expect(appended).toEqual([
+      {
+        type: "events.iterate.com/agent/llm-request-queued",
+        idempotencyKey: "agent/llm-request-queued@43",
+        payload: {},
+      },
+    ]);
+  });
+
+  it("cancels in-flight work and schedules a fresh request for interrupt-current-request", async () => {
+    const appended: StreamEventInput[] = [];
+    const processor = createAgentProcessor({
+      waitUntil: () => undefined,
+    });
+
+    await processor.implementation.afterAppend?.({
+      event: consumedAgentEvent({
+        type: "events.iterate.com/agent/input-added",
+        payload: {
+          content: "stop and do this",
+          llmRequestPolicy: { behaviour: "interrupt-current-request" },
+        },
+        offset: 44,
+      }),
+      previousState: {
+        ...registeredState(),
+        currentRequest: { phase: "requested", llmRequestId: 12 },
+      },
+      state: {
+        ...registeredState(),
+        currentRequest: { phase: "requested", llmRequestId: 12 },
+      },
+      streamApi: testStreamApi({ appended }),
+      signal: new AbortController().signal,
+    });
+
+    expect(appended).toEqual([
+      {
+        type: "events.iterate.com/agent/llm-request-cancelled",
+        idempotencyKey: "agent/llm-request-cancelled/interrupted-by-user-input@44",
+        payload: {
+          phase: "requested",
+          llmRequestId: 12,
+          reason: "interrupted-by-user-input",
+        },
+      },
+      expect.objectContaining({
+        type: "events.iterate.com/agent/llm-request-scheduled",
+        idempotencyKey: "agent/llm-request-scheduled@44",
+      }),
+    ]);
   });
 
   it("marks requested LLM work as a working status update", async () => {
@@ -164,7 +280,7 @@ describe("createAgentProcessor", () => {
       type: "events.iterate.com/agent/input-added",
       idempotencyKey: "agent/render-codemode-tool-provider-registered@44",
       payload: {
-        triggerLlmRequest: { behaviour: "dont-trigger-request" },
+        llmRequestPolicy: { behaviour: "dont-trigger-request" },
       },
     });
     const payload = appended[1]?.payload as { content: string };
@@ -186,7 +302,7 @@ describe("createAgentProcessor", () => {
     await processor.implementation.afterAppend?.({
       event: consumedAgentEvent({
         type: "events.iterate.com/agent/input-added",
-        payload: { content: "hi", triggerLlmRequest: { behaviour: "auto" } },
+        payload: { content: "hi", llmRequestPolicy: { behaviour: "after-current-request" } },
         offset: 3,
       }),
       previousState: registeredState(),
@@ -201,13 +317,13 @@ describe("createAgentProcessor", () => {
             type: "events.iterate.com/agent/input-added",
             payload: {
               content: "codemode primer",
-              triggerLlmRequest: { behaviour: "dont-trigger-request" },
+              llmRequestPolicy: { behaviour: "dont-trigger-request" },
             },
             offset: 2,
           }),
           committedEvent({
             type: "events.iterate.com/agent/input-added",
-            payload: { content: "hi", triggerLlmRequest: { behaviour: "auto" } },
+            payload: { content: "hi", llmRequestPolicy: { behaviour: "after-current-request" } },
             offset: 3,
           }),
         ],

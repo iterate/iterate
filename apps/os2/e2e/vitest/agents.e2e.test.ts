@@ -346,7 +346,7 @@ async (ctx) => {
         type: "events.iterate.com/agent/input-added",
         payload: expect.objectContaining({
           content: expect.stringContaining(returnedScriptExecutionId),
-          triggerLlmRequest: { behaviour: "auto" },
+          llmRequestPolicy: { behaviour: "after-current-request" },
         }),
       }),
     );
@@ -355,7 +355,7 @@ async (ctx) => {
         type: "events.iterate.com/agent/input-added",
         payload: expect.objectContaining({
           content: expect.stringContaining("expected codemode failure"),
-          triggerLlmRequest: { behaviour: "auto" },
+          llmRequestPolicy: { behaviour: "after-current-request" },
         }),
       }),
     );

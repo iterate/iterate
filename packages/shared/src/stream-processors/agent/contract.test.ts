@@ -229,6 +229,64 @@ describe("AgentProcessorContract", () => {
 
     expect(state.currentRequest).toEqual({ phase: "requested", llmRequestId: 12 });
   });
+
+  it("ignores output from a stale LLM request", () => {
+    const state = reduceAgentEvents({
+      events: [
+        committedEvent({
+          type: "events.iterate.com/agent/llm-request-requested",
+          payload: {
+            model: "test-model",
+            body: { messages: [{ role: "user", content: "hello" }] },
+            runOpts: {},
+          },
+          offset: 12,
+        }),
+        committedEvent({
+          type: "events.iterate.com/agent/output-added",
+          payload: {
+            content: "stale",
+            llmRequestId: 11,
+          },
+        }),
+        committedEvent({
+          type: "events.iterate.com/agent/output-added",
+          payload: {
+            content: "current",
+            llmRequestId: 12,
+          },
+        }),
+      ],
+    });
+
+    expect(state.history).toEqual([{ role: "assistant", content: "current" }]);
+  });
+
+  it("cancels in-flight requests by llm request id", () => {
+    const state = reduceAgentEvents({
+      events: [
+        committedEvent({
+          type: "events.iterate.com/agent/llm-request-requested",
+          payload: {
+            model: "test-model",
+            body: { messages: [{ role: "user", content: "hello" }] },
+            runOpts: {},
+          },
+          offset: 12,
+        }),
+        committedEvent({
+          type: "events.iterate.com/agent/llm-request-cancelled",
+          payload: {
+            phase: "requested",
+            llmRequestId: 12,
+            reason: "interrupted-by-user-input",
+          },
+        }),
+      ],
+    });
+
+    expect(state.currentRequest).toBeNull();
+  });
 });
 
 function committedEvent(args: {
