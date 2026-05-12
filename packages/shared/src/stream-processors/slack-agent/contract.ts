@@ -21,6 +21,7 @@ export const SlackAgentProcessorContract = defineProcessorContract({
   description: "Handles Slack-specific behavior for one routed Slack agent stream.",
   stateSchema: z.object({
     ...standardProcessorBehavior.stateShape,
+    botUserId: z.string().optional(),
     channel: z.string().optional(),
     latestMessageTs: z.string().optional(),
     streamPath: z.string().optional(),
@@ -64,8 +65,10 @@ export const SlackAgentProcessorContract = defineProcessorContract({
       case "events.iterate.com/slack/webhook-received": {
         const target = slackTargetFromPayload(event.payload);
         if (target == null) return nextState;
+        const botUserId = nextState.botUserId ?? botUserIdFromPayload(event.payload);
         return {
           ...nextState,
+          ...(botUserId == null ? {} : { botUserId }),
           channel: target.channel,
           ...(target.messageTs == null ? {} : { latestMessageTs: target.messageTs }),
           threadTs: target.threadTs,
@@ -104,6 +107,16 @@ function slackTargetFromPayload(payload: unknown): {
     ...(messageTs == null ? {} : { messageTs }),
     threadTs,
   };
+}
+
+function botUserIdFromPayload(payload: unknown): string | undefined {
+  const body = readRecord(readRecord(payload)?.body);
+  const authorizations = body?.authorizations;
+  if (!Array.isArray(authorizations)) return undefined;
+  const botAuth = authorizations.find(
+    (auth) => readRecord(auth)?.is_bot === true && typeof readRecord(auth)?.user_id === "string",
+  );
+  return botAuth == null ? undefined : readString(readRecord(botAuth)?.user_id);
 }
 
 function readRecord(value: unknown): Record<string, unknown> | null {

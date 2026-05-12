@@ -1,4 +1,5 @@
 import type { SlackEvent } from "@slack/types";
+import { stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
 import { buildProcessorIdempotencyKey, implementProcessor } from "../stream-processor.ts";
 import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
@@ -31,7 +32,7 @@ export function createSlackAgentProcessor(deps: SlackAgentProcessorDeps = {}) {
                 path: ["slack", "agent"],
                 invocation: { kind: "event" },
                 instructions:
-                  "Use ctx.slack.agent.threadInfo() to get { channel, thread_ts } for the current Slack thread.",
+                  "Use ctx.slack.agent.threadInfo() only when you need route context that is not already in the Slack webhook payload. Normal Slack replies can use channel/thread_ts from the webhook event directly.",
               },
             },
           });
@@ -56,9 +57,20 @@ export function createSlackAgentProcessor(deps: SlackAgentProcessorDeps = {}) {
             });
           }
           if (isBotMessage(slackEvent)) return;
+          if (isBotAction(slackEvent, state.botUserId)) return;
 
+          const channel =
+            target?.channel ?? state.channel ?? readStringField(slackEvent, "channel");
+          const threadTs =
+            target?.threadTs ??
+            state.threadTs ??
+            readStringField(slackEvent, "thread_ts") ??
+            readNestedMessageStringField(slackEvent, "thread_ts") ??
+            readStringField(slackEvent, "ts");
           const bangCommand = compileBangCommand({
+            channel,
             message: readStringField(slackEvent, "text")?.trim(),
+            threadTs,
           });
           if (bangCommand != null) {
             await streamApi.append({
@@ -78,15 +90,6 @@ export function createSlackAgentProcessor(deps: SlackAgentProcessorDeps = {}) {
             return;
           }
 
-          const channel =
-            target?.channel ?? state.channel ?? readStringField(slackEvent, "channel");
-          const threadTs =
-            target?.threadTs ??
-            state.threadTs ??
-            readStringField(slackEvent, "thread_ts") ??
-            readNestedMessageStringField(slackEvent, "thread_ts") ??
-            readStringField(slackEvent, "ts");
-
           await streamApi.append({
             event: {
               type: "events.iterate.com/agent/input-added",
@@ -96,18 +99,7 @@ export function createSlackAgentProcessor(deps: SlackAgentProcessorDeps = {}) {
                 sourceEvent: event,
               }),
               payload: {
-                content: [
-                  "Slack message received.",
-                  "",
-                  "Response target:",
-                  `- channel: ${channel ?? "unknown"}`,
-                  `- thread_ts: ${threadTs ?? "unknown"}`,
-                  "",
-                  "Slack event:",
-                  "```json",
-                  JSON.stringify(slackEvent, null, 2),
-                  "```",
-                ].join("\n"),
+                content: slackWebhookAgentInput(event.payload),
               },
             },
           });
@@ -203,6 +195,16 @@ async function callSlackApi(
   }
 }
 
+function slackWebhookAgentInput(payload: unknown) {
+  return [
+    "`events.iterate.com/slack/webhook-received` event received",
+    "",
+    "```yaml",
+    stringifyYaml(payload).trimEnd(),
+    "```",
+  ].join("\n");
+}
+
 function isSlackAgentThreadInfoCall(payload: {
   functionPath: readonly string[];
   invocationKind: string;
@@ -222,6 +224,15 @@ function isBotMessage(slackEvent: SlackEvent): boolean {
   return false;
 }
 
+/**
+ * Returns true when the Slack event was performed by our own bot user (e.g.
+ * our bot adding a reaction).
+ */
+function isBotAction(slackEvent: SlackEvent, botUserId: string | undefined): boolean {
+  if (botUserId == null) return false;
+  return readStringField(slackEvent, "user") === botUserId;
+}
+
 function readStringField(value: unknown, key: string): string | undefined {
   if (value == null || typeof value !== "object") return undefined;
   const field = (value as Record<string, unknown>)[key];
@@ -238,13 +249,33 @@ function readNestedMessageStringField(value: unknown, key: string): string | und
   return readStringField((value as Record<string, unknown>).message, key);
 }
 
-function compileBangCommand(input: { message: string | undefined }): { code: string } | null {
+function compileBangCommand(input: {
+  channel: string | undefined;
+  message: string | undefined;
+  threadTs: string | undefined;
+}): { code: string } | null {
   if (!input.message) return null;
   const withoutMention = input.message.replace(/^<@[^>]+>\s*/i, "").trim();
   if (!withoutMention.startsWith("!")) return null;
 
   const rawCommand = withoutMention.slice(1).trim();
   if (!rawCommand) return null;
+
+  if (rawCommand === "debug" || rawCommand === "debug()") {
+    if (input.channel == null || input.threadTs == null) return null;
+    return {
+      code: [
+        "async (ctx) => {",
+        "  const debug = await ctx.debug();",
+        "  await ctx.slack.chat.postMessage({",
+        `    channel: ${JSON.stringify(input.channel)},`,
+        `    thread_ts: ${JSON.stringify(input.threadTs)},`,
+        "    text: `Debug info:\\n${debug}`,",
+        "  });",
+        "}",
+      ].join("\n"),
+    };
+  }
 
   let expression = rawCommand.startsWith("ctx.") ? rawCommand : `ctx.${rawCommand}`;
   if (!expression.includes("(")) expression = `${expression}()`;

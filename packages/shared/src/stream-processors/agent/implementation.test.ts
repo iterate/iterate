@@ -168,10 +168,9 @@ describe("createAgentProcessor", () => {
       },
     });
     const payload = appended[1]?.payload as { content: string };
-    expect(payload.content).toContain("path:");
-    expect(payload.content).toContain("instructions: |-");
+    expect(payload.content).toContain("ctx.chat");
     expect(payload.content).toContain("ctx.chat.sendMessage({ message })");
-    expect(payload.content).not.toContain("invocation");
+    expect(payload.content).toContain("offset 44");
   });
 
   it("re-reads stream history before handing a scheduled LLM request to providers", async () => {

@@ -61,6 +61,34 @@ describe("createSlackProcessor", () => {
     });
   });
 
+  it("tolerates nullable Slack connected metadata from existing integration events", () => {
+    const state = reduceProcessorEvents({
+      contract: SlackProcessorContract,
+      events: [
+        committedEvent({
+          type: "events.iterate.com/slack/connected",
+          payload: {
+            connectionId: "conn_123",
+            externalId: "T123",
+            projectId: "prj_123",
+            teamDomain: null,
+            teamId: "T123",
+            teamName: "Iterate",
+            webhookProviderIdentifier: null,
+          },
+        }),
+      ],
+    });
+
+    expect(state.connection).toEqual({
+      status: "connected",
+      connectionId: "conn_123",
+      externalId: "T123",
+      teamId: "T123",
+      teamName: "Iterate",
+    });
+  });
+
   it("does not infer routes from raw Slack webhooks", () => {
     expect(
       reduceProcessorEvents({
@@ -217,6 +245,42 @@ describe("createSlackProcessor", () => {
     expect(appended[4].event.payload).toEqual(event.payload);
   });
 
+  it("creates a route for a Slack assistant root mention webhook", async () => {
+    const appended: Array<{ streamPath?: string; event: StreamEventInput }> = [];
+    const event = webhookEvent({
+      offset: 15,
+      body: slackMessageWebhook({
+        channel: "C08R1SMTZGD",
+        ts: "1778565914.773159",
+        text: "<@U08T48230AD>",
+        assistantThread: { action_token: "redacted-action-token" },
+      }),
+    });
+
+    await createSlackProcessor().implementation.afterAppend?.({
+      event,
+      previousState: slackState(),
+      state: slackState(),
+      streamApi: testSlackStreamApi(appended),
+      signal: new AbortController().signal,
+    });
+
+    expect(appended.map((item) => item.event.type)).toEqual([
+      "events.iterate.com/slack/thread-route-configured",
+      "events.iterate.com/slack/thread-route-configured",
+      "events.iterate.com/slack/webhook-received",
+    ]);
+    expect(appended[0].event.payload).toEqual({
+      channel: "C08R1SMTZGD",
+      threadTs: "1778565914.773159",
+      streamPath: "/agents/slack/c08r1smtzgd/ts-1778565914-773159",
+    });
+    expect(appended.slice(1).map((item) => item.streamPath)).toEqual([
+      "/agents/slack/c08r1smtzgd/ts-1778565914-773159",
+      "/agents/slack/c08r1smtzgd/ts-1778565914-773159",
+    ]);
+  });
+
   it("uses nested Slack message thread coordinates instead of enumerating every Slack update subtype", async () => {
     const appended: Array<{ streamPath?: string; event: StreamEventInput }> = [];
     const event = webhookEvent({
@@ -362,6 +426,7 @@ function committedEvent(
 }
 
 function slackMessageWebhook(args: {
+  assistantThread?: Record<string, unknown>;
   channel: string;
   ts: string;
   threadTs?: string;
@@ -378,6 +443,7 @@ function slackMessageWebhook(args: {
       ts: args.ts,
       event_ts: args.ts,
       text: args.text,
+      ...(args.assistantThread == null ? {} : { assistant_thread: args.assistantThread }),
       ...(args.threadTs == null ? {} : { thread_ts: args.threadTs }),
     } satisfies GenericMessageEvent,
   };

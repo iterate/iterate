@@ -69,6 +69,7 @@ export const externalSubscriberProcessor = {
 } satisfies BuiltinProcessor<ExternalSubscriberState>;
 
 export async function publishExternalSubscribers(args: {
+  awaitCallableSubscribers?: boolean;
   append: (event: EventInput) => Promise<Event>;
   callableContext: CallableContext;
   event: Event;
@@ -83,6 +84,7 @@ export async function publishExternalSubscribers(args: {
       )
       .map((subscriber) =>
         publishToExternalSubscriber({
+          awaitCallableSubscribers: args.awaitCallableSubscribers ?? true,
           append: args.append,
           callableContext: args.callableContext,
           event: args.event,
@@ -103,6 +105,7 @@ export function hasExternalSubscribersOfType(
 }
 
 async function publishToExternalSubscriber(args: {
+  awaitCallableSubscribers: boolean;
   append: (event: EventInput) => Promise<Event>;
   callableContext: CallableContext;
   event: Event;
@@ -136,11 +139,24 @@ async function publishToExternalSubscriber(args: {
     }
 
     if (args.subscriber.type === "callable") {
-      await dispatchSubscriberCallable({
+      const dispatchPromise = dispatchSubscriberCallable({
         callable: args.subscriber.callable,
         callableContext: args.callableContext,
         event: args.event,
       });
+      if (!args.awaitCallableSubscribers) {
+        void dispatchPromise.catch((error) =>
+          handleExternalSubscriberPublishError({
+            error,
+            event: args.event,
+            onError: args.onError,
+            subscriber: args.subscriber,
+          }),
+        );
+        return;
+      }
+
+      await dispatchPromise;
       return;
     }
 
@@ -155,20 +171,34 @@ async function publishToExternalSubscriber(args: {
       streamPath: args.event.streamPath,
     });
   } catch (error) {
-    await args.onError?.({
+    await handleExternalSubscriberPublishError({
       error,
       event: args.event,
+      onError: args.onError,
       subscriber: args.subscriber,
     });
-    console.error("[stream-do] external subscriber publish failed", {
-      streamPath: args.event.streamPath,
-      offset: args.event.offset,
-      eventType: args.event.type,
-      subscriberSlug: args.subscriber.slug,
-      subscriberCallable: getSubscriberCallableKey(args.subscriber),
-      error,
-    });
   }
+}
+
+async function handleExternalSubscriberPublishError(args: {
+  error: unknown;
+  event: Event;
+  onError?(failure: ExternalSubscriberPublishFailure): void | Promise<void>;
+  subscriber: ExternalSubscriber;
+}) {
+  await args.onError?.({
+    error: args.error,
+    event: args.event,
+    subscriber: args.subscriber,
+  });
+  console.error("[stream-do] external subscriber publish failed", {
+    streamPath: args.event.streamPath,
+    offset: args.event.offset,
+    eventType: args.event.type,
+    subscriberSlug: args.subscriber.slug,
+    subscriberCallable: getSubscriberCallableKey(args.subscriber),
+    error: args.error,
+  });
 }
 
 async function evaluateFilter(args: { event: Event; subscriber: ExternalSubscriber }) {

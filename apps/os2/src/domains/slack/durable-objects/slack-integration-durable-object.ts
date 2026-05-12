@@ -120,12 +120,14 @@ export class SlackIntegrationDurableObject extends SlackIntegrationBase<SlackInt
   }
 
   async afterAppend(input: { event: Event }) {
-    await this.ensureStartedOrInitializeFromRuntimeName();
+    const params = await this.ensureStartedOrInitializeFromRuntimeName();
+    await this.ensureIntegrationSubscription(params.projectId);
     return await this.consumeStreamProcessorEvent({ event: input.event as StreamEvent });
   }
 
   async ensureReady() {
-    await this.ensureStartedOrInitializeFromRuntimeName();
+    const params = await this.ensureStartedOrInitializeFromRuntimeName();
+    await this.ensureIntegrationSubscription(params.projectId);
     return this.getStreamProcessorRunnerState();
   }
 

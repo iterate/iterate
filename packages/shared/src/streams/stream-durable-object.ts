@@ -507,6 +507,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
     }
 
     await publishExternalSubscribers({
+      awaitCallableSubscribers: false,
       append: (nextEvent) => Promise.resolve(this.append(nextEvent)),
       callableContext: {
         env: this.env as Record<string, unknown>,

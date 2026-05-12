@@ -83,7 +83,11 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
         case "events.iterate.com/agent/status-updated":
           return;
         case "events.iterate.com/codemode/tool-provider-registered":
-          await appendLlmEventContext({
+          await appendEventTypeExplanation({
+            streamApi,
+            eventType: event.type,
+          });
+          await appendRewrite({
             streamApi,
             event,
             key: "render-codemode-tool-provider-registered",
@@ -445,7 +449,7 @@ async function appendLlmEventContext(args: {
     streamApi: args.streamApi,
     eventType: args.event.type,
   });
-  await appendRewrite(args);
+  await appendRewrite({ ...args, content: `An event has occurred: \n\n${args.content}` });
 }
 
 async function appendRewrite(args: {
@@ -463,7 +467,7 @@ async function appendRewrite(args: {
         sourceEvent: args.event,
       }),
       payload: {
-        content: `An event has occurred: \n\n${args.content}`,
+        content: args.content,
         triggerLlmRequest: { behaviour: "dont-trigger-request" },
       },
     },
@@ -543,14 +547,6 @@ function toolProviderRegisteredEventBlock(args: {
   path: readonly string[];
   type: string;
 }): string {
-  const yamlLines = [
-    "event:",
-    `  offset: ${args.offset}`,
-    `  type: ${yamlScalar(args.type)}`,
-    "  payload:",
-    "    path:",
-    ...args.path.map((segment) => `      - ${yamlScalar(segment)}`),
-    ...yamlBlockScalar("instructions", args.instructions).map((line) => `  ${line}`),
-  ];
-  return ["```yaml", ...yamlLines, "```"].join("\n");
+  const ctxPath = `ctx.${args.path.join(".")}`;
+  return `Codemode tool provider registered for \`${ctxPath}\`. ${args.instructions} (to debug further, see ${args.type} event at offset ${args.offset})`;
 }

@@ -3,6 +3,11 @@ import { ExternalSubscriber } from "../../streams/external-subscriber-types.ts";
 import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
 import { defineProcessorContract } from "../stream-processor.ts";
 
+const NullableOptionalString = z.preprocess(
+  (value) => (value === null ? undefined : value),
+  z.string().optional(),
+);
+
 /**
  * Processor mounted on `/integrations/slack`.
  *
@@ -58,10 +63,10 @@ export const SlackProcessorContract = defineProcessorContract({
           externalId: z.string(),
           projectId: z.string(),
           scopes: z.array(z.string()).optional(),
-          teamDomain: z.string().optional(),
-          teamId: z.string().optional(),
-          teamName: z.string().optional(),
-          webhookProviderIdentifier: z.string().optional(),
+          teamDomain: NullableOptionalString,
+          teamId: NullableOptionalString,
+          teamName: NullableOptionalString,
+          webhookProviderIdentifier: NullableOptionalString,
         })
         .loose(),
     },
@@ -73,10 +78,10 @@ export const SlackProcessorContract = defineProcessorContract({
           externalId: z.string().optional(),
           projectId: z.string(),
           scopes: z.array(z.string()).optional(),
-          teamDomain: z.string().optional(),
-          teamId: z.string().optional(),
-          teamName: z.string().optional(),
-          webhookProviderIdentifier: z.string().optional(),
+          teamDomain: NullableOptionalString,
+          teamId: NullableOptionalString,
+          teamName: NullableOptionalString,
+          webhookProviderIdentifier: NullableOptionalString,
         })
         .loose(),
     },

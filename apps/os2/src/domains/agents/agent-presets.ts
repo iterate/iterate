@@ -8,6 +8,8 @@ export const OS2_AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE =
 export const OS2_AGENT_PATH_PREFIX_PRESET_CONFIGURED_EVENT_TYPE =
   "events.iterate.com/os2-agent/path-prefix-preset-configured";
 export const DEFAULT_CLOUDFLARE_AGENT_MODEL = DEFAULT_WORKERS_AI_AGENT_MODEL;
+const LEGACY_GENERATED_SLACK_OPENAI_PROMPT_MARKER =
+  "You are an Iterate agent responding from Slack.";
 
 export const AgentLlmProvider = z.enum(["openai-ws", "cloudflare-ai"]);
 export type AgentLlmProvider = z.infer<typeof AgentLlmProvider>;
@@ -33,14 +35,14 @@ export function providerSelectedEvent(provider: AgentLlmProvider): AgentPresetEv
 
 export function defaultAgentSystemPrompt(agentPath?: string) {
   const lines = [
-    "You are an agent inside an Iterate OS2 project. Everything in this system is built on streams — ordered event logs. You are running inside a stream yourself" +
+    "You are the iterate AI agent. A new kind of general purpose agent built on stream processing. You will be sent _events_ and your only job is to respond by _writing code_. Everything in this system is built on streams — ordered event logs with an incrementing `offset`. You are running inside a stream yourself" +
       (agentPath != null ? ` at path \`${agentPath}\`` : "") +
-      ". The messages you see (agent/input-added, tool-provider-registered, etc.) are all stream events. Your responses become stream events too.",
+      ". The messages you see (agent/input-added, tool-provider-registered, etc.) are all stream events. Your responses become agent/output-added events, which are then parsed into codemode/script-execution-requested blocks.",
     "",
     "## Codemode",
     "Codemode is mandatory for user-visible answers. Reply with exactly one fenced JavaScript code block (```js) and no surrounding prose. The block must be a single async arrow function: `async (ctx) => { ... }`.",
     "",
-    "Use `ctx.chat.sendMessage({ message })` to send visible chat replies. The function body implicitly returns undefined — do NOT write `return undefined` or `return;`, just let the function end. Only return a value when you want the result shown back to you and another LLM turn.",
+    "The function body implicitly returns undefined — do NOT write `return undefined` or `return;`, just let the function end. Only return a value when you want the result shown back to you and another LLM turn.",
     "",
     "Use `Promise.all([...])` for independent concurrent operations. Use `fetch` for HTTP requests. Use normal JavaScript — loops, variables, try/catch, destructuring — as you would in any async function.",
     "",
@@ -179,6 +181,22 @@ export function selectAgentPathPrefixPreset(input: {
   );
 }
 
+export function selectAgentSetupPreset(input: {
+  agentPath: string;
+  presets: readonly AgentPathPrefixPreset[];
+}): AgentPathPrefixPreset | null {
+  if (!isSlackAgentPath(input.agentPath)) {
+    return selectAgentPathPrefixPreset(input);
+  }
+
+  return selectAgentPathPrefixPreset({
+    agentPath: input.agentPath,
+    presets: input.presets
+      .filter((preset) => isSlackAgentPath(preset.basePath))
+      .filter((preset) => !isLegacyGeneratedSlackOpenAiPreset(preset)),
+  });
+}
+
 export function normalizeAgentPresetBasePath(input: string): StreamPath {
   const basePath = StreamPath.parse(input.trim());
   if (basePath === "/agents" || basePath.startsWith("/agents/")) {
@@ -200,6 +218,27 @@ function tryNormalizeAgentPresetBasePath(input: string): StreamPath | null {
   } catch {
     return null;
   }
+}
+
+export function isSlackAgentPath(agentPath: string) {
+  return agentPath === "/agents/slack" || agentPath.startsWith("/agents/slack/");
+}
+
+function isLegacyGeneratedSlackOpenAiPreset(preset: AgentPathPrefixPreset) {
+  if (preset.basePath !== "/agents/slack") return false;
+  const provider = preset.events
+    .map((event) => (event.payload as { provider?: unknown }).provider)
+    .find((value) => value === "openai-ws" || value === "cloudflare-ai");
+  if (provider !== "openai-ws") return false;
+
+  return preset.events.some((event) => {
+    if (event.type !== "events.iterate.com/agent/system-prompt-updated") return false;
+    const systemPrompt = (event.payload as { systemPrompt?: unknown }).systemPrompt;
+    return (
+      typeof systemPrompt === "string" &&
+      systemPrompt.includes(LEGACY_GENERATED_SLACK_OPENAI_PROMPT_MARKER)
+    );
+  });
 }
 
 function parseAgentEventsYaml(value: string) {
