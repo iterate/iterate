@@ -747,6 +747,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
     this.activeCallableSubscriberDeliveries.delete(delivery.subscriberSlug);
     try {
       await this.removeCallableSubscriberDelivery(delivery);
+      await this.startCallableSubscriberDeliveries();
       await this.ensureCallableSubscriberAlarmIfQueued();
     } catch (error) {
       console.error("[stream-do] failed to finish callable subscriber delivery", {
