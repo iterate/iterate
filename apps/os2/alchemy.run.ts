@@ -6,7 +6,6 @@ import type { StreamDurableObject } from "@iterate-com/shared/streams/stream-dur
 import manifest, { AppConfig } from "./src/app.ts";
 import type { CodemodeSession } from "./src/domains/codemode/durable-objects/codemode-session.ts";
 import type { DebugAppendChainSubscriber } from "./src/durable-objects/debug-append-chain-subscriber.ts";
-import type { E2EAppendChainSubscriber } from "./src/durable-objects/e2e-append-chain-subscriber.ts";
 import type { ProjectDurableObject } from "./src/domains/projects/durable-objects/project-durable-object.ts";
 import type { ProjectMcpServerConnection } from "./src/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 import type { AgentDurableObject } from "./src/domains/agents/durable-objects/agent-durable-object.ts";
@@ -86,13 +85,6 @@ const debugAppendChainSubscriber = ctx.app.local
       sqlite: true,
     })
   : undefined;
-const enableE2EAppendChainSubscriber = ctx.app.local || ctx.app.stage.startsWith("preview_");
-const e2eAppendChainSubscriber = enableE2EAppendChainSubscriber
-  ? DurableObjectNamespace<E2EAppendChainSubscriber>("e2e-append-chain-subscriber", {
-      className: "E2EAppendChainSubscriber",
-      sqlite: true,
-    })
-  : undefined;
 
 const { worker, afterFinalize } = await IterateApp(ctx, {
   bindings: {
@@ -118,9 +110,6 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     ...(debugAppendChainSubscriber == null
       ? {}
       : { DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber }),
-    ...(e2eAppendChainSubscriber == null
-      ? {}
-      : { E2E_APPEND_CHAIN_SUBSCRIBER: e2eAppendChainSubscriber }),
     ...(slackBotToken == null ? {} : { APP_CONFIG_SLACK_BOT_TOKEN: alchemy.secret(slackBotToken) }),
   },
   extraRouteHostnames: projectHostnameBases.flatMap(projectRouteHostnamesForBase),

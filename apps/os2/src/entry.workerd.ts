@@ -38,7 +38,6 @@ export { OutboundMcpFromOurClientCapability } from "~/domains/outbound-mcp-clien
 export { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
 export { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
 export { DebugAppendChainSubscriber } from "~/durable-objects/debug-append-chain-subscriber.ts";
-export { E2EAppendChainSubscriber } from "~/durable-objects/e2e-append-chain-subscriber.ts";
 export { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
 export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 export { SlackAgentDurableObject } from "~/domains/slack/durable-objects/slack-agent-durable-object.ts";
