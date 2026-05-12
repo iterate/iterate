@@ -489,7 +489,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
       return;
     }
 
-    await this.startCallableSubscriberDeliveries();
+    await this.deliverNextCallableSubscriber();
     await this.ensureCallableSubscriberAlarmIfQueued();
   }
 
@@ -688,41 +688,41 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
     await this.ctx.storage.setAlarm(Date.now());
   }
 
-  private async startCallableSubscriberDeliveries() {
-    while (true) {
-      const queue = await this.readCallableSubscriberDeliveryQueue();
-      const delivery = this.nextCallableSubscriberDelivery(queue);
-      if (delivery == null) {
-        return;
-      }
+  private async deliverNextCallableSubscriber() {
+    const queue = await this.readCallableSubscriberDeliveryQueue();
+    const delivery = this.nextCallableSubscriberDelivery(queue);
+    if (delivery == null) {
+      return;
+    }
 
-      const event = this.getEventByOffset(delivery.offset);
-      if (event == null) {
-        this.appendProcessorErrorEvent({
-          event: null,
-          idempotencyKey: `stream-do:callable-subscriber-missing-event:${delivery.subscriberSlug}:${delivery.offset}`,
-          message: `Callable subscriber "${delivery.subscriberSlug}" delivery could not find event at offset ${delivery.offset}.`,
-          metadata: {
-            source: "stream-do",
-            processor: "external-subscriber",
-            stage: "deliver-callable-subscriber",
-            missingEventOffset: delivery.offset,
-            subscriberSlug: delivery.subscriberSlug,
-          },
-        });
-        await this.removeCallableSubscriberDelivery(delivery);
-        continue;
-      }
+    const event = this.getEventByOffset(delivery.offset);
+    if (event == null) {
+      this.appendProcessorErrorEvent({
+        event: null,
+        idempotencyKey: `stream-do:callable-subscriber-missing-event:${delivery.subscriberSlug}:${delivery.offset}`,
+        message: `Callable subscriber "${delivery.subscriberSlug}" delivery could not find event at offset ${delivery.offset}.`,
+        metadata: {
+          source: "stream-do",
+          processor: "external-subscriber",
+          stage: "deliver-callable-subscriber",
+          missingEventOffset: delivery.offset,
+          subscriberSlug: delivery.subscriberSlug,
+        },
+      });
+      await this.removeCallableSubscriberDelivery(delivery);
+      return;
+    }
 
-      const subscriber =
-        this.state.processors["external-subscriber"].subscribersBySlug[delivery.subscriberSlug];
-      if (subscriber?.type !== "callable") {
-        await this.removeCallableSubscriberDelivery(delivery);
-        continue;
-      }
+    const subscriber =
+      this.state.processors["external-subscriber"].subscribersBySlug[delivery.subscriberSlug];
+    if (subscriber?.type !== "callable") {
+      await this.removeCallableSubscriberDelivery(delivery);
+      return;
+    }
 
-      this.activeCallableSubscriberDeliveries.add(delivery.subscriberSlug);
-      const deliveryPromise = publishExternalSubscriber({
+    this.activeCallableSubscriberDeliveries.add(delivery.subscriberSlug);
+    try {
+      await publishExternalSubscriber({
         append: (nextEvent) => Promise.resolve(this.append(nextEvent)),
         callableContext: {
           env: this.env as Record<string, unknown>,
@@ -733,29 +733,9 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
         },
         subscriber,
       });
-      void deliveryPromise.then(
-        () => this.finishCallableSubscriberDelivery(delivery),
-        () => this.finishCallableSubscriberDelivery(delivery),
-      );
-    }
-  }
-
-  private async finishCallableSubscriberDelivery(delivery: {
-    offset: number;
-    subscriberSlug: string;
-  }) {
-    this.activeCallableSubscriberDeliveries.delete(delivery.subscriberSlug);
-    try {
+    } finally {
+      this.activeCallableSubscriberDeliveries.delete(delivery.subscriberSlug);
       await this.removeCallableSubscriberDelivery(delivery);
-      await this.startCallableSubscriberDeliveries();
-      await this.ensureCallableSubscriberAlarmIfQueued();
-    } catch (error) {
-      console.error("[stream-do] failed to finish callable subscriber delivery", {
-        path: this.state.path,
-        offset: delivery.offset,
-        subscriberSlug: delivery.subscriberSlug,
-        error,
-      });
     }
   }
 
