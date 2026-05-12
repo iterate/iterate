@@ -113,6 +113,7 @@ const StreamDurableObjectBase = withPublicFetchRoute({
  */
 export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableObjectEnv> {
   private _state: StreamState | null = null;
+  private callableSubscriberQueueMutation: Promise<void> = Promise.resolve();
   private readonly client: SyncClient;
   private readonly activeCallableSubscriberDeliveries = new Set<string>();
   private readonly subscribers = new Set<ReadableStreamDefaultController<Uint8Array>>();
@@ -674,14 +675,15 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
   }
 
   private async enqueueCallableSubscriberDelivery(offset: number) {
-    const queue = await this.readCallableSubscriberDeliveryQueue();
-    for (const subscriber of this.callableSubscribers()) {
-      const offsets = queue[subscriber.slug] ?? [];
-      if (!offsets.includes(offset)) {
-        queue[subscriber.slug] = [...offsets, offset];
+    await this.mutateCallableSubscriberDeliveryQueue((queue) => {
+      for (const subscriber of this.callableSubscribers()) {
+        const offsets = queue[subscriber.slug] ?? [];
+        if (!offsets.includes(offset)) {
+          queue[subscriber.slug] = [...offsets, offset];
+        }
       }
-    }
-    await this.writeCallableSubscriberDeliveryQueue(queue);
+      return queue;
+    });
 
     await this.ctx.storage.setAlarm(Date.now());
   }
@@ -797,13 +799,28 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
     offset: number;
     subscriberSlug: string;
   }) {
-    const queue = await this.readCallableSubscriberDeliveryQueue();
-    const offsets = queue[delivery.subscriberSlug] ?? [];
-    const index = offsets.indexOf(delivery.offset);
-    if (index >= 0) {
-      queue[delivery.subscriberSlug] = [...offsets.slice(0, index), ...offsets.slice(index + 1)];
-      await this.writeCallableSubscriberDeliveryQueue(queue);
-    }
+    await this.mutateCallableSubscriberDeliveryQueue((queue) => {
+      const offsets = queue[delivery.subscriberSlug] ?? [];
+      const index = offsets.indexOf(delivery.offset);
+      if (index >= 0) {
+        queue[delivery.subscriberSlug] = [...offsets.slice(0, index), ...offsets.slice(index + 1)];
+      }
+      return queue;
+    });
+  }
+
+  private async mutateCallableSubscriberDeliveryQueue(
+    mutate: (queue: CallableSubscriberDeliveryQueue) => CallableSubscriberDeliveryQueue,
+  ) {
+    const nextMutation = this.callableSubscriberQueueMutation.then(async () => {
+      const queue = await this.readCallableSubscriberDeliveryQueue();
+      await this.writeCallableSubscriberDeliveryQueue(mutate(queue));
+    });
+    this.callableSubscriberQueueMutation = nextMutation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return await nextMutation;
   }
 
   private nextCallableSubscriberDelivery(queue: CallableSubscriberDeliveryQueue) {
