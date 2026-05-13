@@ -25,6 +25,7 @@ import {
   createArtifactToken,
   pushInitialReadme,
   repoArtifactName,
+  stripArtifactTokenQuery,
 } from "~/domains/repos/artifacts.ts";
 import {
   createRepoStreamProcessor,
@@ -321,7 +322,8 @@ export function getRepoDurableObjectName(name: RepoStructuredName) {
 }
 
 function gitInfo(input: { defaultBranch: string; remote: string; slug: string; token: string }) {
-  const authorizationHeader = `Authorization: Bearer ${input.token}`;
+  const token = stripArtifactTokenQuery(input.token);
+  const authorizationHeader = `Authorization: Bearer ${token}`;
   const quotedHeader = shellQuote(authorizationHeader);
   const quotedRemote = shellQuote(input.remote);
   const quotedSlug = shellQuote(input.slug);

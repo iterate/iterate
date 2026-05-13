@@ -49,7 +49,7 @@ export class MockArtifactRepo extends RpcTarget {
   async createToken(scope: "read" | "write", ttlSeconds: number) {
     return {
       expiresAt: new Date(Date.UTC(2036, 0, 1)).toISOString(),
-      plaintext: `mock-${scope}-${ttlSeconds}-${this.artifactName}`,
+      plaintext: `mock-${scope}-${ttlSeconds}-${this.artifactName}?expires=2082758400`,
     };
   }
 

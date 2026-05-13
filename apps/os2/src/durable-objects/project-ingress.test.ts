@@ -86,7 +86,14 @@ describe("Project ingress routing", () => {
       "https://os.iterate.localhost/__test/iterate-config-repo",
     );
     expect(repoResponse.ok).toBe(true);
-    await expect(repoResponse.json()).resolves.toMatchObject({
+    const repo = (await repoResponse.json()) as {
+      git: {
+        cloneCommand: string;
+        pushCommand: string;
+      };
+      token: string;
+    };
+    expect(repo).toMatchObject({
       defaultBranch: "main",
       git: expect.objectContaining({
         cloneCommand: expect.stringContaining("git -c http.extraHeader="),
@@ -96,6 +103,9 @@ describe("Project ingress routing", () => {
       slug: "iterate-config",
       token: expect.stringContaining("mock-write-"),
     });
+    expect(repo.token).toContain("?expires=");
+    expect(repo.git.cloneCommand).not.toContain("?expires=");
+    expect(repo.git.pushCommand).not.toContain("?expires=");
 
     const projectIngressResponse = await SELF.fetch("https://demo.iterate.localhost/");
     expect(projectIngressResponse.ok).toBe(true);
