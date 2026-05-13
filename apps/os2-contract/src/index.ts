@@ -67,6 +67,15 @@ export const ProjectIntegrationConnection = z.object({
   displayName: z.string().nullable(),
   metadata: JSONObject,
   scopes: z.string().nullable(),
+  token: z
+    .object({
+      createdAt: z.string(),
+      expiresAt: z.string().nullable(),
+      hasMaterial: z.boolean(),
+      refreshTokenStored: z.boolean(),
+      updatedAt: z.string(),
+    })
+    .nullable(),
 });
 export type ProjectIntegrationConnection = z.output<typeof ProjectIntegrationConnection>;
 

@@ -217,7 +217,7 @@ async function callFunction(args: {
     // Temporary duplication with the OS2 CodemodeSession host. The cleaner
     // design is for every script and provider call to go through one session
     // capability implementation. Keeping this local branch is awkward, but it
-    // makes `ctx.__codemode.*` truly always available in the portable processor
+    // makes `ctx.codemode.*` truly always available in the portable processor
     // while the host/session split is still settling.
     const requestedEvent = await args.streamApi.append({
       event: {
@@ -516,10 +516,10 @@ function isPathPrefix(prefix: readonly string[], path: readonly string[]) {
 }
 
 function resolveCodemodeBuiltin(path: readonly string[]) {
-  if (path[0] !== "__codemode") return null;
+  if (path[0] !== "codemode") return null;
   return {
     functionPath: path.slice(1),
-    providerPath: ["__codemode"],
+    providerPath: ["codemode"],
   };
 }
 
@@ -547,7 +547,7 @@ function runCodemodeBuiltin(args: {
     };
   }
 
-  throw new Error(`Unknown codemode builtin __codemode.${name}`);
+  throw new Error(`Unknown codemode builtin codemode.${name}`);
 }
 
 function serializeTraceValue(value: unknown): unknown {

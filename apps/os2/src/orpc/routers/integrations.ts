@@ -4,6 +4,7 @@ import {
   createGoogleAuthorizationUrl,
   createSlackAuthorizationUrl,
   disconnectProvider,
+  providerSecretKey,
   requestBaseUrl,
 } from "~/domains/secrets/oauth.ts";
 import {
@@ -11,7 +12,7 @@ import {
   GOOGLE_DISCONNECTED_EVENT_TYPE,
   SLACK_DISCONNECTED_EVENT_TYPE,
 } from "~/domains/secrets/integration-streams.ts";
-import { getProjectConnection } from "~/domains/secrets/secrets-store.ts";
+import { getProjectConnection, getProjectSecret } from "~/domains/secrets/secrets-store.ts";
 import { os, projectScopeMiddleware } from "~/orpc/orpc.ts";
 import { requireProjectScope } from "~/orpc/project-access.ts";
 
@@ -139,8 +140,14 @@ async function connectionStatus(context: AppContext, provider: "google" | "slack
       externalId: null,
       metadata: {},
       scopes: null,
+      token: null,
     };
   }
+
+  const secret = await getProjectSecret(context.db, {
+    key: providerSecretKey(provider),
+    projectId: project.id,
+  });
 
   return {
     connected: true,
@@ -148,6 +155,15 @@ async function connectionStatus(context: AppContext, provider: "google" | "slack
     externalId: connection.externalId,
     metadata: connection.providerData,
     scopes: connection.scopes,
+    token: secret
+      ? {
+          createdAt: secret.createdAt,
+          expiresAt: readStringMetadata(secret.metadata, "expiresAt"),
+          hasMaterial: secret.material.length > 0,
+          refreshTokenStored: readStringMetadata(secret.metadata, "refreshToken") !== null,
+          updatedAt: secret.updatedAt,
+        }
+      : null,
   };
 }
 

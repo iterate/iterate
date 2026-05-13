@@ -1,7 +1,9 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { createD1Client } from "sqlfu";
 import type { ExecuteCodemodeFunctionCallInput } from "@iterate-com/shared/stream-processors/codemode/implementation";
-import { getProjectSecret } from "~/domains/secrets/secrets-store.ts";
+import { AppConfig } from "~/app.ts";
+import { getFreshGoogleAccessToken } from "~/domains/secrets/oauth.ts";
 
 type GmailCapabilityEnv = {
   DB?: D1Database;
@@ -44,14 +46,16 @@ export class GmailCapability extends WorkerEntrypoint<GmailCapabilityEnv, GmailC
       throw new Error("GmailCapability requires ctx.props.projectId.");
     }
 
-    const secret = await getProjectSecret(createD1Client(this.env.DB), {
-      key: "google.access_token",
+    const config = parseAppConfigFromEnv({
+      configSchema: AppConfig,
+      env: this.env as unknown as Record<string, unknown>,
+      prefix: "APP_CONFIG_",
+    });
+    return await getFreshGoogleAccessToken({
+      config,
+      db: createD1Client(this.env.DB),
       projectId,
     });
-    if (!secret) {
-      throw new Error("GmailCapability requires a project google.access_token Secret.");
-    }
-    return secret.material;
   }
 }
 

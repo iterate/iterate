@@ -546,7 +546,7 @@ function eventTypeExplanation(eventType: string): string | null {
     return eventTypeExplanationBlock({
       type: eventType,
       meaning:
-        "A codemode tool provider is now available. Call it as `ctx.<path>.<method>(args)` in your codemode scripts. The event below shows the provider's path and usage instructions.",
+        "A codemode tool provider is now available. Call it as `ctx.<path>.<method>(args)` in your codemode scripts. If you're not sure about the shape of the result of a function call, just return it from a codemode block and you'll be shown it on your next turn. The event below shows the provider's path and usage instructions.",
     });
   }
   return null;

@@ -142,7 +142,8 @@ export const CodemodeProcessorContract = defineProcessorContract({
           },
         },
         {
-          description: "Acknowledge immediately then do work in parallel (Slack best practice)",
+          description:
+            "When a Slack reply is needed, acknowledge immediately then do work in parallel",
           payload: {
             code: [
               "async (ctx) => {",
