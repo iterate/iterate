@@ -116,12 +116,13 @@ export async function seedIterateConfigBaseRepo(input: {
         email: "support@iterate.com",
       },
     });
+    await ensureBranchRef({ branch: defaultBranch, git });
   } catch (error) {
     if (!isNothingToCommitError(error)) throw error;
     committed = false;
   }
 
-  if (committed || created) {
+  if (committed) {
     await git.push({
       dir: ITERATE_CONFIG_REPO_DIR,
       force: true,
@@ -138,6 +139,17 @@ export async function seedIterateConfigBaseRepo(input: {
     defaultBranch,
     remote,
   };
+}
+
+async function ensureBranchRef(input: { branch: string; git: ReturnType<typeof createGit> }) {
+  try {
+    await input.git.branch({
+      dir: ITERATE_CONFIG_REPO_DIR,
+      name: input.branch,
+    });
+  } catch (error) {
+    if (!isBranchExistsError(error)) throw error;
+  }
 }
 
 async function getOrCreateBaseArtifact(artifacts: CloudflareArtifactsBinding): Promise<{
@@ -161,6 +173,10 @@ async function getOrCreateBaseArtifact(artifacts: CloudflareArtifactsBinding): P
 
 function isNothingToCommitError(error: unknown) {
   return error instanceof Error && /nothing to commit|no changes/i.test(error.message);
+}
+
+function isBranchExistsError(error: unknown) {
+  return error instanceof Error && /already exists/i.test(error.message);
 }
 
 async function readArtifactString(value: unknown): Promise<string | null> {
