@@ -124,6 +124,7 @@ export async function seedIterateConfigBaseRepo(input: {
   if (committed || created) {
     await git.push({
       dir: ITERATE_CONFIG_REPO_DIR,
+      force: true,
       remote: "origin",
       ref: defaultBranch,
       username: "x",
