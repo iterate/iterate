@@ -10,6 +10,7 @@ export { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durab
 export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.ts";
 export { AiCapability, OrpcCapability } from "~/domains/codemode/example-capabilities.ts";
 export { FetchCapability } from "~/domains/codemode/fetch-capability.ts";
+export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
 export { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 export { RepoCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 export { SlackCapability } from "~/domains/slack/entrypoints/slack-capability.ts";

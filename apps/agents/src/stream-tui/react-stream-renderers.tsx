@@ -420,7 +420,7 @@ function TuiPromptContextItem(props: {
   contentWidth: number;
 }) {
   const source = props.element.props.source == null ? "" : ` · from ${props.element.props.source}`;
-  const trigger = props.element.props.triggerLlmRequest.behaviour;
+  const trigger = props.element.props.llmRequestPolicy.behaviour;
   const label = `Prompt context${source} · ${trigger} · ${formatTime(props.element.props.timestamp)}`;
 
   return (

@@ -34,7 +34,7 @@ describe("createAgentChatProcessor", () => {
         payload: {
           content:
             "First `events.iterate.com/agent-chat/user-message-added` event. This represents a message received from a chat user.",
-          triggerLlmRequest: { behaviour: "dont-trigger-request" },
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
         },
       },
       {
@@ -70,7 +70,7 @@ describe("createAgentChatProcessor", () => {
       payload: {
         content:
           "```yaml\nevent:\n  offset: 43\n  type: events.iterate.com/agent-chat/assistant-response-added\n  channel: web\n  message: |-\n    hello back\n```",
-        triggerLlmRequest: { behaviour: "dont-trigger-request" },
+        llmRequestPolicy: { behaviour: "dont-trigger-request" },
       },
     });
   });
@@ -90,6 +90,14 @@ function testStreamApi(args: {
     append: async ({ event }) => {
       args.appended.push(event);
       return committedEvent(event);
+    },
+    appendBatch: async ({ events }) => {
+      const appendedEvents: StreamEvent[] = [];
+      for (const event of events) {
+        args.appended.push(event);
+        appendedEvents.push(committedEvent(event));
+      }
+      return appendedEvents;
     },
     read: async () => [],
     subscribe: async function* () {},

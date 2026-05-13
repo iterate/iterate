@@ -128,7 +128,7 @@ describe("codemode.executeScript", () => {
         (event) => event.type === "events.iterate.com/codemode/script-execution-completed",
       );
       expect(finished?.payload).toMatchObject({
-        outcome: { status: "succeeded", output: 2 },
+        outcome: { status: "returned", value: 2 },
         scriptExecutionId,
       });
     } finally {

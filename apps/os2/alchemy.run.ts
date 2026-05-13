@@ -10,6 +10,8 @@ import type { ProjectDurableObject } from "./src/domains/projects/durable-object
 import type { ProjectMcpServerConnection } from "./src/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 import type { AgentDurableObject } from "./src/domains/agents/durable-objects/agent-durable-object.ts";
 import type { RepoDurableObject } from "./src/domains/repos/durable-objects/repo-durable-object.ts";
+import type { SlackAgentDurableObject } from "./src/domains/slack/durable-objects/slack-agent-durable-object.ts";
+import type { SlackIntegrationDurableObject } from "./src/domains/slack/durable-objects/slack-integration-durable-object.ts";
 import type { WorkspaceDurableObject } from "./src/domains/workspaces/durable-objects/workspace-durable-object.ts";
 import type { OutboundMcpFromOurClientCapability } from "./src/domains/outbound-mcp-client/entrypoints/outbound-mcp-from-our-client-capability.ts";
 
@@ -66,13 +68,23 @@ const agent = DurableObjectNamespace<AgentDurableObject>("agent", {
   className: "AgentDurableObject",
   sqlite: true,
 });
-const debugAppendChainSubscriber = DurableObjectNamespace<DebugAppendChainSubscriber>(
-  "debug-append-chain-subscriber",
+const slackIntegration = DurableObjectNamespace<SlackIntegrationDurableObject>(
+  "slack-integration",
   {
-    className: "DebugAppendChainSubscriber",
+    className: "SlackIntegrationDurableObject",
     sqlite: true,
   },
 );
+const slackAgent = DurableObjectNamespace<SlackAgentDurableObject>("slack-agent", {
+  className: "SlackAgentDurableObject",
+  sqlite: true,
+});
+const debugAppendChainSubscriber = ctx.app.local
+  ? DurableObjectNamespace<DebugAppendChainSubscriber>("debug-append-chain-subscriber", {
+      className: "DebugAppendChainSubscriber",
+      sqlite: true,
+    })
+  : undefined;
 
 const { worker, afterFinalize } = await IterateApp(ctx, {
   bindings: {
@@ -86,14 +98,18 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     AI: Ai(),
     LOADER: WorkerLoader(),
     CODEMODE_SESSION: codemodeSession,
-    DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber,
     AGENT: agent,
     PROJECT: project,
+    SLACK_AGENT: slackAgent,
+    SLACK_INTEGRATION: slackIntegration,
     REPO: repo,
     PROJECT_MCP_SERVER_CONNECTION: projectMcpServerConnection,
     OUTBOUND_MCP_FROM_OUR_CLIENT_CAPABILITY: outboundMcpFromOurClientCapability,
     STREAM: stream,
     WORKSPACE: workspace,
+    ...(debugAppendChainSubscriber == null
+      ? {}
+      : { DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber }),
     ...(slackBotToken == null ? {} : { APP_CONFIG_SLACK_BOT_TOKEN: alchemy.secret(slackBotToken) }),
   },
   extraRouteHostnames: projectHostnameBases.flatMap(projectRouteHostnamesForBase),

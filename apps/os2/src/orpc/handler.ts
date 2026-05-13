@@ -20,7 +20,7 @@ export const orpcOpenApiHandler = new OpenAPIHandler(appRouter, {
     ...plugins,
     createOpenApiReferencePluginForApp(
       manifest,
-      ["/debug", "/test", "/projects", "/streams", "/codemode", "/agents"],
+      ["/debug", "/test", "/projects", "/streams", "/codemode", "/agents", "/integrations"],
       {
         defaultOpenFirstTag: true,
       },

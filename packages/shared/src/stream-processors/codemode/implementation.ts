@@ -45,7 +45,7 @@ export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
   return implementProcessor(CodemodeProcessorContract, {
     firstAttachAfterAppend: { mode: "lookback", milliseconds: 250 },
 
-    async afterAppend({ event, state, streamApi, signal }) {
+    async afterAppend({ event, state, streamApi, signal, waitUntil }) {
       await standardProcessorBehavior.afterAppend({
         contract: CodemodeProcessorContract,
         state,
@@ -62,15 +62,22 @@ export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
         case "events.iterate.com/codemode/function-call-completed":
         case "events.iterate.com/codemode/log-emitted":
           return;
-        case "events.iterate.com/codemode/script-execution-requested":
-          await executeRequestedScript({
+        case "events.iterate.com/codemode/script-execution-requested": {
+          const scriptExecution = executeRequestedScript({
             deps,
             event,
             signal,
             state,
             streamApi,
           });
+          if (waitUntil != null) {
+            waitUntil(scriptExecution);
+            return;
+          }
+
+          await scriptExecution;
           return;
+        }
         default:
           return assertNever(event);
       }
@@ -107,7 +114,6 @@ async function executeRequestedScript(args: {
   streamApi: CodemodeStreamApi;
 }) {
   const startedAt = (args.deps.now ?? (() => new Date()))();
-  await args.deps.ensureLiveConsumer?.();
   const session = createProcessorSession({
     callableContext: args.deps.callableContext,
     ensureLiveConsumer: args.deps.ensureLiveConsumer,
@@ -149,8 +155,8 @@ async function executeRequestedScript(args: {
         durationMs: Math.max(0, finishedAt.getTime() - startedAt.getTime()),
         outcome:
           result.error == null
-            ? { status: "succeeded" as const, output: result.result }
-            : { status: "failed" as const, error: result.error },
+            ? { status: "returned" as const, value: result.result }
+            : { status: "threw" as const, error: result.error },
         scriptExecutionId: args.event.payload.scriptExecutionId,
       },
     },

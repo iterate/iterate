@@ -82,7 +82,7 @@ export async function publishExternalSubscribers(args: {
         (subscriber) => args.subscriberTypes == null || args.subscriberTypes.has(subscriber.type),
       )
       .map((subscriber) =>
-        publishToExternalSubscriber({
+        publishExternalSubscriber({
           append: args.append,
           callableContext: args.callableContext,
           event: args.event,
@@ -91,6 +91,16 @@ export async function publishExternalSubscribers(args: {
         }),
       ),
   );
+}
+
+export async function publishExternalSubscriber(args: {
+  append: (event: EventInput) => Promise<Event>;
+  callableContext: CallableContext;
+  event: Event;
+  onError?(failure: ExternalSubscriberPublishFailure): void | Promise<void>;
+  subscriber: ExternalSubscriber;
+}) {
+  await publishToExternalSubscriber(args);
 }
 
 export function hasExternalSubscribersOfType(
@@ -155,20 +165,34 @@ async function publishToExternalSubscriber(args: {
       streamPath: args.event.streamPath,
     });
   } catch (error) {
-    await args.onError?.({
+    await handleExternalSubscriberPublishError({
       error,
       event: args.event,
+      onError: args.onError,
       subscriber: args.subscriber,
     });
-    console.error("[stream-do] external subscriber publish failed", {
-      streamPath: args.event.streamPath,
-      offset: args.event.offset,
-      eventType: args.event.type,
-      subscriberSlug: args.subscriber.slug,
-      subscriberCallable: getSubscriberCallableKey(args.subscriber),
-      error,
-    });
   }
+}
+
+async function handleExternalSubscriberPublishError(args: {
+  error: unknown;
+  event: Event;
+  onError?(failure: ExternalSubscriberPublishFailure): void | Promise<void>;
+  subscriber: ExternalSubscriber;
+}) {
+  await args.onError?.({
+    error: args.error,
+    event: args.event,
+    subscriber: args.subscriber,
+  });
+  console.error("[stream-do] external subscriber publish failed", {
+    streamPath: args.event.streamPath,
+    offset: args.event.offset,
+    eventType: args.event.type,
+    subscriberSlug: args.subscriber.slug,
+    subscriberCallable: getSubscriberCallableKey(args.subscriber),
+    error: args.error,
+  });
 }
 
 async function evaluateFilter(args: { event: Event; subscriber: ExternalSubscriber }) {

@@ -35,6 +35,7 @@ import { activeOrganizationMiddleware, os, projectScopeMiddleware } from "~/orpc
 import { requireProjectScope } from "~/orpc/project-access.ts";
 import { projectCodemodeRouter } from "~/orpc/routers/codemode.ts";
 import { projectAgentsRouter } from "~/orpc/routers/agents.ts";
+import { projectIntegrationsRouter } from "~/orpc/routers/integrations.ts";
 import { projectStreamsRouter } from "~/orpc/routers/streams.ts";
 
 type ProjectRow = {
@@ -348,6 +349,7 @@ export const projectsRouter = {
           return { sessions: rows.map(toInboundMcpSession) };
         }),
     },
+    integrations: projectIntegrationsRouter,
     streams: projectStreamsRouter,
   },
 };

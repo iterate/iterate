@@ -7,7 +7,6 @@ import {
 } from "@iterate-com/shared/durable-object-utils/mixins/with-public-fetch-route";
 import { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
 import handler from "@tanstack/react-start/server-entry";
-import { createD1Client } from "sqlfu";
 import manifest, { AppConfig } from "~/app.ts";
 import type { AppContext } from "~/context.ts";
 import { E2EAppendChainSubscriber } from "~/durable-objects/e2e-append-chain-subscriber.ts";
@@ -43,13 +42,11 @@ export default {
         executionCtx: cfCtx,
       },
       async ({ log }) => {
-        const db = createD1Client(env.DB);
         const context: AppContext = {
           manifest,
           config,
           env,
           rawRequest: request,
-          db,
           log,
         };
 

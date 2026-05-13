@@ -10,10 +10,7 @@ import {
 } from "@iterate-com/shared/streams/types";
 import { makeFunnySlug } from "@iterate-com/shared/slug-maker";
 import { CODEMODE_CHAT_RESPONSE_SYSTEM_PROMPT } from "@iterate-com/shared/stream-processors/legacy-codemode/contract";
-import {
-  processEventsWithViewReducer,
-  rawPrettyEventsStreamViewReducer,
-} from "@iterate-com/ui/components/events/feed-processors";
+import { reduceStreamViewEvents } from "@iterate-com/ui/components/events/stream-view-processor/contract";
 import { EventsStreamComposer } from "@iterate-com/ui/components/events/stream-composer";
 import {
   EventsStreamView,
@@ -39,8 +36,10 @@ const LLM_PROVIDER_PRESETS: { value: LlmProvider; label: string }[] = [
   { value: "cloudflare-ai", label: "Cloudflare AI Gateway" },
 ];
 
+const DEFAULT_WORKERS_AI_AGENT_MODEL = "@cf/moonshotai/kimi-k2.6";
+
 const CLOUDFLARE_MODEL_PRESETS = [
-  { value: "@cf/moonshotai/kimi-k2.5", label: "@cf/moonshotai/kimi-k2.5 (default)" },
+  { value: DEFAULT_WORKERS_AI_AGENT_MODEL, label: `${DEFAULT_WORKERS_AI_AGENT_MODEL} (default)` },
   { value: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", label: "@cf/meta/llama-3.3-70b" },
   {
     value: "@cf/mistralai/mistral-small-3.1-24b-instruct",
@@ -194,11 +193,7 @@ function SelectedAgentStreamView({
     refetchOnWindowFocus: true,
   });
   const viewState = useMemo(
-    () =>
-      processEventsWithViewReducer({
-        events: eventsQuery.data ?? [],
-        reducer: rawPrettyEventsStreamViewReducer,
-      }),
+    () => reduceStreamViewEvents(eventsQuery.data ?? []),
     [eventsQuery.data],
   );
   const viewerUrl = buildStreamComposerUrl({

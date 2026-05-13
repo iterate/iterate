@@ -76,8 +76,8 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
             type: "events.iterate.com/codemode/script-execution-completed",
             payload: expect.objectContaining({
               outcome: {
-                status: "succeeded",
-                output: { message: "hello from inbound mcp", value: 42 },
+                status: "returned",
+                value: { message: "hello from inbound mcp", value: 42 },
               },
             }),
           }),
@@ -211,7 +211,7 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
             type: "events.iterate.com/codemode/script-execution-completed",
             payload: expect.objectContaining({
               outcome: expect.objectContaining({
-                output: expect.objectContaining({
+                value: expect.objectContaining({
                   agent: expect.objectContaining({ message: "hi", subPath: "mcp" }),
                   pet: expect.objectContaining({ petId: "fido", provider: "openapi" }),
                   pipelinedAgent: expect.objectContaining({
@@ -219,7 +219,7 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
                     label: "promise-pipeline",
                   }),
                 }),
-                status: "succeeded",
+                status: "returned",
               }),
             }),
           }),

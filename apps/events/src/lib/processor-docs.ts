@@ -5,7 +5,7 @@ import { CodemodeProcessorContract } from "@iterate-com/shared/stream-processors
 import { DynamicWorkerProcessorContract } from "@iterate-com/shared/stream-processors/dynamic-worker/contract";
 import { JsonataTransformerProcessorContract } from "@iterate-com/shared/stream-processors/jsonata-transformer/contract";
 import { SchedulingProcessorContract } from "@iterate-com/shared/stream-processors/scheduling/contract";
-import { SlackThreadProcessorContract } from "@iterate-com/shared/stream-processors/slack-thread/contract";
+import { SlackAgentProcessorContract } from "@iterate-com/shared/stream-processors/slack-agent/contract";
 import { SlackProcessorContract } from "@iterate-com/shared/stream-processors/slack/contract";
 import { addDiscriminatorTitlesToJsonSchema } from "~/lib/json-schema-docs.ts";
 import { CoreStreamProcessorContract } from "~/stream-processors/core/contract.ts";
@@ -15,7 +15,7 @@ const processorContracts = [
   AgentChatProcessorContract,
   AgentProcessorContract,
   SlackProcessorContract,
-  SlackThreadProcessorContract,
+  SlackAgentProcessorContract,
   CodemodeProcessorContract,
   SchedulingProcessorContract,
   JsonataTransformerProcessorContract,
@@ -141,9 +141,7 @@ function buildEventsByType(processors: readonly ProcessorDoc[]) {
     for (const event of processor.events) {
       const existing = eventsByType.get(event.type);
       if (existing != null) {
-        throw new Error(
-          `Duplicate processor event type ${event.type} owned by ${existing.processor.slug} and ${processor.contract.slug}.`,
-        );
+        continue;
       }
 
       eventsByType.set(event.type, event);

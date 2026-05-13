@@ -209,7 +209,7 @@ function ProjectStreamsIndexPage() {
               ) : (
                 visibleStreams.map((stream) => (
                   <TableRow key={stream.name}>
-                    <TableCell className="min-w-[28rem] py-3">
+                    <TableCell className="py-3">
                       <Link
                         className="block min-w-0 rounded-sm text-sm font-medium hover:underline"
                         to="/orgs/$organizationSlug/projects/$projectSlug/streams/$"

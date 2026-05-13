@@ -82,11 +82,87 @@ describe("createCodemodeProcessor", () => {
         idempotencyKey: "codemode/script-execution-completed@7",
         payload: {
           durationMs: 25,
-          outcome: { status: "succeeded", output: { ok: true } },
+          outcome: { status: "returned", value: { ok: true } },
           scriptExecutionId: "scr-1",
         },
       },
     ]);
+  });
+
+  it("does not re-enter live catch-up before executing a requested script", async () => {
+    const appended: StreamEventInput[] = [];
+    const ensureLiveConsumer = vi.fn(async () => {});
+    const scriptExecutor = vi.fn(async () => ({ result: { ok: true } }));
+    const processor = createCodemodeProcessor({
+      ...baseDeps(),
+      ensureLiveConsumer,
+      scriptExecutor,
+    });
+
+    await processor.implementation.afterAppend?.({
+      event: consumedCodemodeEvent({
+        type: "events.iterate.com/codemode/script-execution-requested",
+        payload: { code: "async (ctx) => ({ ok: true })", scriptExecutionId: "scr-1" },
+        offset: 7,
+      }),
+      previousState: registeredState({ sessionStarted: true }),
+      state: registeredState({ sessionStarted: true }),
+      streamApi: testStreamApi({ appended, storedEvents: [] }),
+      signal: new AbortController().signal,
+    });
+
+    expect(ensureLiveConsumer).not.toHaveBeenCalled();
+    expect(scriptExecutor).toHaveBeenCalledOnce();
+    expect(appended).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/codemode/script-execution-completed",
+        payload: expect.objectContaining({
+          outcome: { status: "returned", value: { ok: true } },
+          scriptExecutionId: "scr-1",
+        }),
+      }),
+    );
+  });
+
+  it("can continue requested script work through waitUntil after accepting the stream event", async () => {
+    const appended: StreamEventInput[] = [];
+    const scriptResult = Promise.withResolvers<{ result: unknown }>();
+    const waitUntilPromises: Promise<unknown>[] = [];
+    const processor = createCodemodeProcessor({
+      ...baseDeps(),
+      scriptExecutor: async () => await scriptResult.promise,
+    });
+
+    await processor.implementation.afterAppend?.({
+      event: consumedCodemodeEvent({
+        type: "events.iterate.com/codemode/script-execution-requested",
+        payload: { code: "async (ctx) => ({ ok: true })", scriptExecutionId: "scr-1" },
+        offset: 7,
+      }),
+      previousState: registeredState({ sessionStarted: true }),
+      state: registeredState({ sessionStarted: true }),
+      streamApi: testStreamApi({ appended, storedEvents: [] }),
+      signal: new AbortController().signal,
+      waitUntil: (promise) => {
+        waitUntilPromises.push(promise);
+      },
+    });
+
+    expect(waitUntilPromises).toHaveLength(1);
+    expect(appended).toEqual([]);
+
+    scriptResult.resolve({ result: { ok: true } });
+    await Promise.all(waitUntilPromises);
+
+    expect(appended).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/codemode/script-execution-completed",
+        payload: expect.objectContaining({
+          outcome: { status: "returned", value: { ok: true } },
+          scriptExecutionId: "scr-1",
+        }),
+      }),
+    );
   });
 
   it("requests event-mediated function calls and waits for matching completion events", async () => {
@@ -165,7 +241,7 @@ describe("createCodemodeProcessor", () => {
         idempotencyKey: "codemode/script-execution-completed@7",
         payload: {
           durationMs: expect.any(Number),
-          outcome: { status: "succeeded", output: { value: "HELLO!" } },
+          outcome: { status: "returned", value: { value: "HELLO!" } },
           scriptExecutionId: "scr-1",
         },
       },
@@ -268,7 +344,7 @@ describe("createCodemodeProcessor", () => {
         type: "events.iterate.com/codemode/script-execution-completed",
         payload: {
           durationMs: expect.any(Number),
-          outcome: { status: "succeeded", output: { stdout: "ran pnpm test" } },
+          outcome: { status: "returned", value: { stdout: "ran pnpm test" } },
           scriptExecutionId: "scr-rpc",
         },
       },
@@ -351,8 +427,8 @@ describe("createCodemodeProcessor", () => {
         payload: {
           durationMs: expect.any(Number),
           outcome: {
-            status: "succeeded",
-            output: {
+            status: "returned",
+            value: {
               args: [{ source: "test" }],
               functionCallId: "fn-debug",
               functionPath: ["debugInfo"],
@@ -582,11 +658,25 @@ describe("createCodemodeProcessor", () => {
     };
     const streamApi: ProcessorStreamApi<typeof CodemodeProcessorContract> = {
       append: appendToStream,
+      appendBatch: async ({ events }) => {
+        const appendedEvents: StreamEvent[] = [];
+        for (const event of events) {
+          appendedEvents.push(await appendToStream({ event }));
+        }
+        return appendedEvents;
+      },
       read: readFromStream,
       subscribe: subscribeToStream,
     };
     const providerStreamApi: ProcessorStreamApi<typeof providerProcessorContract> = {
       append: appendToStream,
+      appendBatch: async ({ events }) => {
+        const appendedEvents: StreamEvent[] = [];
+        for (const event of events) {
+          appendedEvents.push(await appendToStream({ event }));
+        }
+        return appendedEvents;
+      },
       read: readFromStream,
       subscribe: subscribeToStream,
     };
@@ -716,8 +806,8 @@ describe("createCodemodeProcessor", () => {
         payload: {
           durationMs: expect.any(Number),
           outcome: {
-            status: "succeeded",
-            output: { mirroredToSlack: true },
+            status: "returned",
+            value: { mirroredToSlack: true },
           },
           scriptExecutionId: "scr-compose",
         },
@@ -758,10 +848,11 @@ function completedEventInput(args: {
   };
 }
 
-function registeredState(): CodemodeState {
+function registeredState(state?: Partial<CodemodeState>): CodemodeState {
   return {
     ...getInitialProcessorState(CodemodeProcessorContract),
     hasRegisteredCurrentVersion: true,
+    ...state,
   };
 }
 
@@ -785,6 +876,9 @@ function testStreamApi(args: {
     append: async ({ event }) => {
       args.appended.push(event);
       return committedEvent({ ...event, offset: args.appended.length });
+    },
+    appendBatch: async ({ events }) => {
+      return await Promise.all(events.map((event) => testStreamApi(args).append({ event })));
     },
     read: async () => args.storedEvents,
     subscribe: async function* () {},

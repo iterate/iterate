@@ -35,10 +35,7 @@ export function AppSidebar({ namespace }: { namespace: NamespaceValue }) {
   );
 }
 
-const items = [
-  { to: "/secrets/", label: "Secrets" },
-  { to: "/streams/", label: "Streams" },
-] as const;
+const items = [{ to: "/streams/", label: "Streams" }] as const;
 
 function AppSidebarBrand() {
   const search = useSearch({ strict: false });
@@ -101,19 +98,15 @@ function AppSidebarNav() {
             <SidebarMenuItem key={item.to}>
               <SidebarMenuButton
                 render={
-                  item.to === "/streams/" ? (
-                    <Link
-                      to={item.to}
-                      search={(previous: StreamLinkSearch) => ({
-                        ...previous,
-                        event: defaultStreamViewSearch.event,
-                        renderer: currentRenderer,
-                        composer: currentComposer,
-                      })}
-                    />
-                  ) : (
-                    <Link to={item.to} />
-                  )
+                  <Link
+                    to={item.to}
+                    search={(previous: StreamLinkSearch) => ({
+                      ...previous,
+                      event: defaultStreamViewSearch.event,
+                      renderer: currentRenderer,
+                      composer: currentComposer,
+                    })}
+                  />
                 }
                 isActive={Boolean(matchRoute({ to: item.to, fuzzy: true }))}
               >

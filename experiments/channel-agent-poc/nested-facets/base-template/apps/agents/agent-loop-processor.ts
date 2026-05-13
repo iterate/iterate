@@ -7,19 +7,13 @@ import type {
 import type {
   HistoryItem,
   IterateAgentProcessorState,
-  TriggerLlm,
+  LlmRequestPolicy,
 } from "./agent-processor-types.ts";
 
 const CODEMODE_REPAIR_MARKER = "[codemode-repair-request]";
 
-type ConcreteTriggerLlm = Exclude<TriggerLlm, { behaviour: "auto" }>;
-
-function resolveTrigger(payload: Record<string, any>): ConcreteTriggerLlm {
-  const trigger = (payload.triggerLlmRequest ?? { behaviour: "auto" }) as TriggerLlm;
-  if (trigger.behaviour !== "auto") return trigger;
-  return payload.role === "assistant"
-    ? { behaviour: "dont-trigger-request" }
-    : { behaviour: "interrupt-current-request" };
+function resolveTrigger(payload: Record<string, any>): LlmRequestPolicy {
+  return (payload.llmRequestPolicy ?? { behaviour: "after-current-request" }) as LlmRequestPolicy;
 }
 
 export function buildLlmChatRequest(state: IterateAgentProcessorState) {
@@ -104,7 +98,7 @@ async function appendRewrite(args: { append: Append; content: string }): Promise
       payload: {
         role: "user",
         content: args.content,
-        triggerLlmRequest: { behaviour: "dont-trigger-request" },
+        llmRequestPolicy: { behaviour: "dont-trigger-request" },
       },
     },
   });
@@ -123,7 +117,7 @@ async function appendEventTypeExplanation(args: {
       payload: {
         role: "user",
         content: explanation,
-        triggerLlmRequest: { behaviour: "dont-trigger-request" },
+        llmRequestPolicy: { behaviour: "dont-trigger-request" },
       },
     },
   });
@@ -237,7 +231,7 @@ async function handleUserInput(args: {
   runtime: ProcessorRuntime;
   append: Append;
   state: IterateAgentProcessorState;
-  trigger: ConcreteTriggerLlm;
+  trigger: LlmRequestPolicy;
 }): Promise<void> {
   const { runtime, append, state, trigger } = args;
   if (trigger.behaviour === "dont-trigger-request") return;
@@ -250,33 +244,24 @@ async function handleUserInput(args: {
 
   if (inflight.status === "scheduled") {
     if (trigger.behaviour === "interrupt-current-request") {
-      runtime.extendDebounce({
+      await emitCancelled({
+        runtime,
+        append,
         requestId: inflight.requestId,
-        debounceMs: state.llmConfig.debounceMs,
+        reason: "interrupted-by-user-input",
       });
+      await emitScheduledAndKickoff({ runtime, append, state });
       return;
     }
-    await emitQueued({ append });
-    if (trigger.behaviour === "trigger-request-within-time-period") {
-      runtime.armCancelDeadline({
-        requestId: inflight.requestId,
-        withinMs: trigger.withinMs,
-      });
-    }
+    runtime.extendDebounce({
+      requestId: inflight.requestId,
+      debounceMs: state.llmConfig.debounceMs,
+    });
     return;
   }
 
   if (trigger.behaviour === "after-current-request") {
     await emitQueued({ append });
-    return;
-  }
-
-  if (trigger.behaviour === "trigger-request-within-time-period") {
-    await emitQueued({ append });
-    runtime.armCancelDeadline({
-      requestId: inflight.requestId,
-      withinMs: trigger.withinMs,
-    });
     return;
   }
 

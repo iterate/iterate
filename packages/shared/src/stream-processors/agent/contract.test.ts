@@ -5,7 +5,11 @@ import {
   CoreProcessorRegisteredEventType,
 } from "../core/contract.ts";
 import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
-import { AgentProcessorContract, reduceAgentEvents } from "./contract.ts";
+import {
+  AgentProcessorContract,
+  DEFAULT_WORKERS_AI_AGENT_MODEL,
+  reduceAgentEvents,
+} from "./contract.ts";
 
 describe("AgentProcessorContract", () => {
   it("initializes frontend-safe reduced state from the contract schema", () => {
@@ -14,7 +18,7 @@ describe("AgentProcessorContract", () => {
       systemPrompt: "You are a helpful assistant. You can trust your user.",
       history: [],
       llmConfig: {
-        model: "@cf/moonshotai/kimi-k2.5",
+        model: DEFAULT_WORKERS_AI_AGENT_MODEL,
         runOpts: {},
         debounceMs: 1000,
       },
@@ -224,6 +228,64 @@ describe("AgentProcessorContract", () => {
     });
 
     expect(state.currentRequest).toEqual({ phase: "requested", llmRequestId: 12 });
+  });
+
+  it("ignores output from a stale LLM request", () => {
+    const state = reduceAgentEvents({
+      events: [
+        committedEvent({
+          type: "events.iterate.com/agent/llm-request-requested",
+          payload: {
+            model: "test-model",
+            body: { messages: [{ role: "user", content: "hello" }] },
+            runOpts: {},
+          },
+          offset: 12,
+        }),
+        committedEvent({
+          type: "events.iterate.com/agent/output-added",
+          payload: {
+            content: "stale",
+            llmRequestId: 11,
+          },
+        }),
+        committedEvent({
+          type: "events.iterate.com/agent/output-added",
+          payload: {
+            content: "current",
+            llmRequestId: 12,
+          },
+        }),
+      ],
+    });
+
+    expect(state.history).toEqual([{ role: "assistant", content: "current" }]);
+  });
+
+  it("cancels in-flight requests by llm request id", () => {
+    const state = reduceAgentEvents({
+      events: [
+        committedEvent({
+          type: "events.iterate.com/agent/llm-request-requested",
+          payload: {
+            model: "test-model",
+            body: { messages: [{ role: "user", content: "hello" }] },
+            runOpts: {},
+          },
+          offset: 12,
+        }),
+        committedEvent({
+          type: "events.iterate.com/agent/llm-request-cancelled",
+          payload: {
+            phase: "requested",
+            llmRequestId: 12,
+            reason: "interrupted-by-user-input",
+          },
+        }),
+      ],
+    });
+
+    expect(state.currentRequest).toBeNull();
   });
 });
 

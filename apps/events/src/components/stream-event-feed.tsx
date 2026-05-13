@@ -358,8 +358,6 @@ function ChildStreamCreatedCard({ item }: { item: ChildStreamCreatedFeedItem }) 
             path={item.createdPath}
             label={relativePath}
             className="w-full max-w-full overflow-hidden"
-            startChars={28}
-            endChars={18}
           />
         </Link>
       </div>

@@ -9,9 +9,6 @@ export const AppConfig = BaseAppConfig.extend({
     clientId: publicValue(z.string().trim().min(1)),
     clientSecret: redacted(z.string().trim().min(1)),
   }),
-  posthog: z.object({
-    apiKey: publicValue(z.string().trim().min(1)),
-  }),
 });
 
 export type AppConfig = z.output<typeof AppConfig>;

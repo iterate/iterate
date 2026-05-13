@@ -41,14 +41,6 @@ export const AppendInput = z.object({
   event: NormalizedAppendEventInput,
 });
 
-const SecretSummary = z.object({
-  id: z.string(),
-  name: z.string(),
-  description: z.string().nullable(),
-  createdAt: z.string(),
-  updatedAt: z.string(),
-});
-
 export const eventsContract = oc.router({
   __internal: internalContract,
   append: oc
@@ -143,46 +135,6 @@ export const eventsContract = oc.router({
         }),
       ),
     ),
-  secrets: {
-    create: oc
-      .route({
-        method: "POST",
-        path: "/secrets",
-        description: "Create a secret (values stored in D1 as plaintext — demo only)",
-        tags: ["/secrets"],
-      })
-      .input(
-        z.object({
-          name: z.string().trim().min(1),
-          value: z.string(),
-          description: z.string().optional(),
-        }),
-      )
-      .output(SecretSummary),
-    list: oc
-      .route({
-        method: "GET",
-        path: "/secrets",
-        description: "List secrets (no values)",
-        tags: ["/secrets"],
-      })
-      .input(
-        z.object({
-          limit: z.coerce.number().int().min(1).max(100).optional().default(20),
-          offset: z.coerce.number().int().min(0).optional().default(0),
-        }),
-      )
-      .output(z.object({ secrets: z.array(SecretSummary), total: z.number().int().nonnegative() })),
-    remove: oc
-      .route({
-        method: "DELETE",
-        path: "/secrets/{id}",
-        description: "Delete secret",
-        tags: ["/secrets"],
-      })
-      .input(z.object({ id: z.string() }))
-      .output(z.object({ ok: z.literal(true), id: z.string(), deleted: z.boolean() })),
-  },
 });
 
 type JsonValue = null | string | number | boolean | JsonValue[] | { [key: string]: JsonValue };

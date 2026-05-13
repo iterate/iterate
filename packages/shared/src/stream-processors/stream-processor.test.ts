@@ -562,6 +562,7 @@ describe("stream processor contracts", () => {
       state: result!.state,
       streamApi: {
         append: async () => committedEvent({ type: "unused", payload: {} }),
+        appendBatch: async () => [committedEvent({ type: "unused", payload: {} })],
         read: async () => [],
         subscribe: () => emptyAsyncIterable(),
       },
@@ -605,6 +606,7 @@ describe("stream processor contracts", () => {
       state: contract.stateSchema.parse(undefined),
       streamApi: {
         append: async () => committedEvent({ type: "unused", payload: {} }),
+        appendBatch: async () => [committedEvent({ type: "unused", payload: {} })],
         read: async () => [],
         subscribe: () => emptyAsyncIterable(),
       },
@@ -1352,6 +1354,7 @@ function replayProcessorEvents<const Contract extends RunnableProcessorContract>
 function createTestStreamApi<Contract>(): ProcessorStreamApi<Contract> {
   return {
     append: async () => committedEvent({ type: "unused", payload: {} }),
+    appendBatch: async () => [committedEvent({ type: "unused", payload: {} })],
     read: async () => [],
     subscribe: () => emptyAsyncIterable(),
   };

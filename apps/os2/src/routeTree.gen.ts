@@ -31,6 +31,7 @@ import { Route as AppOrgsOrganizationSlugProjectsProjectSlugRouteRouteImport } f
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugIndexRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/index'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugSettingsRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/settings'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugMcpRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/mcp'
+import { Route as AppOrgsOrganizationSlugProjectsProjectSlugIntegrationsRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/integrations'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugExamplesRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/examples'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/streams/route'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugAgentsRouteRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/agents/route'
@@ -164,6 +165,12 @@ const AppOrgsOrganizationSlugProjectsProjectSlugMcpRoute =
     path: '/mcp',
     getParentRoute: () => AppOrgsOrganizationSlugProjectsProjectSlugRouteRoute,
   } as any)
+const AppOrgsOrganizationSlugProjectsProjectSlugIntegrationsRoute =
+  AppOrgsOrganizationSlugProjectsProjectSlugIntegrationsRouteImport.update({
+    id: '/integrations',
+    path: '/integrations',
+    getParentRoute: () => AppOrgsOrganizationSlugProjectsProjectSlugRouteRoute,
+  } as any)
 const AppOrgsOrganizationSlugProjectsProjectSlugExamplesRoute =
   AppOrgsOrganizationSlugProjectsProjectSlugExamplesRouteImport.update({
     id: '/examples',
@@ -276,6 +283,7 @@ export interface FileRoutesByFullPath {
   '/orgs/$organizationSlug/projects/$projectSlug/agents': typeof AppOrgsOrganizationSlugProjectsProjectSlugAgentsRouteRouteWithChildren
   '/orgs/$organizationSlug/projects/$projectSlug/streams': typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRouteWithChildren
   '/orgs/$organizationSlug/projects/$projectSlug/examples': typeof AppOrgsOrganizationSlugProjectsProjectSlugExamplesRoute
+  '/orgs/$organizationSlug/projects/$projectSlug/integrations': typeof AppOrgsOrganizationSlugProjectsProjectSlugIntegrationsRoute
   '/orgs/$organizationSlug/projects/$projectSlug/mcp': typeof AppOrgsOrganizationSlugProjectsProjectSlugMcpRoute
   '/orgs/$organizationSlug/projects/$projectSlug/settings': typeof AppOrgsOrganizationSlugProjectsProjectSlugSettingsRoute
   '/orgs/$organizationSlug/projects/$projectSlug/': typeof AppOrgsOrganizationSlugProjectsProjectSlugIndexRoute
@@ -306,6 +314,7 @@ export interface FileRoutesByTo {
   '/orgs/$organizationSlug': typeof AppOrgsOrganizationSlugIndexRoute
   '/orgs/$organizationSlug/projects': typeof AppOrgsOrganizationSlugProjectsIndexRoute
   '/orgs/$organizationSlug/projects/$projectSlug/examples': typeof AppOrgsOrganizationSlugProjectsProjectSlugExamplesRoute
+  '/orgs/$organizationSlug/projects/$projectSlug/integrations': typeof AppOrgsOrganizationSlugProjectsProjectSlugIntegrationsRoute
   '/orgs/$organizationSlug/projects/$projectSlug/mcp': typeof AppOrgsOrganizationSlugProjectsProjectSlugMcpRoute
   '/orgs/$organizationSlug/projects/$projectSlug/settings': typeof AppOrgsOrganizationSlugProjectsProjectSlugSettingsRoute
   '/orgs/$organizationSlug/projects/$projectSlug': typeof AppOrgsOrganizationSlugProjectsProjectSlugIndexRoute
@@ -343,6 +352,7 @@ export interface FileRoutesById {
   '/_app/orgs/$organizationSlug/projects/$projectSlug/agents': typeof AppOrgsOrganizationSlugProjectsProjectSlugAgentsRouteRouteWithChildren
   '/_app/orgs/$organizationSlug/projects/$projectSlug/streams': typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRouteWithChildren
   '/_app/orgs/$organizationSlug/projects/$projectSlug/examples': typeof AppOrgsOrganizationSlugProjectsProjectSlugExamplesRoute
+  '/_app/orgs/$organizationSlug/projects/$projectSlug/integrations': typeof AppOrgsOrganizationSlugProjectsProjectSlugIntegrationsRoute
   '/_app/orgs/$organizationSlug/projects/$projectSlug/mcp': typeof AppOrgsOrganizationSlugProjectsProjectSlugMcpRoute
   '/_app/orgs/$organizationSlug/projects/$projectSlug/settings': typeof AppOrgsOrganizationSlugProjectsProjectSlugSettingsRoute
   '/_app/orgs/$organizationSlug/projects/$projectSlug/': typeof AppOrgsOrganizationSlugProjectsProjectSlugIndexRoute
@@ -380,6 +390,7 @@ export interface FileRouteTypes {
     | '/orgs/$organizationSlug/projects/$projectSlug/agents'
     | '/orgs/$organizationSlug/projects/$projectSlug/streams'
     | '/orgs/$organizationSlug/projects/$projectSlug/examples'
+    | '/orgs/$organizationSlug/projects/$projectSlug/integrations'
     | '/orgs/$organizationSlug/projects/$projectSlug/mcp'
     | '/orgs/$organizationSlug/projects/$projectSlug/settings'
     | '/orgs/$organizationSlug/projects/$projectSlug/'
@@ -410,6 +421,7 @@ export interface FileRouteTypes {
     | '/orgs/$organizationSlug'
     | '/orgs/$organizationSlug/projects'
     | '/orgs/$organizationSlug/projects/$projectSlug/examples'
+    | '/orgs/$organizationSlug/projects/$projectSlug/integrations'
     | '/orgs/$organizationSlug/projects/$projectSlug/mcp'
     | '/orgs/$organizationSlug/projects/$projectSlug/settings'
     | '/orgs/$organizationSlug/projects/$projectSlug'
@@ -446,6 +458,7 @@ export interface FileRouteTypes {
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/agents'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/streams'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/examples'
+    | '/_app/orgs/$organizationSlug/projects/$projectSlug/integrations'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/mcp'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/settings'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/'
@@ -631,6 +644,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugMcpRouteImport
       parentRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugRouteRoute
     }
+    '/_app/orgs/$organizationSlug/projects/$projectSlug/integrations': {
+      id: '/_app/orgs/$organizationSlug/projects/$projectSlug/integrations'
+      path: '/integrations'
+      fullPath: '/orgs/$organizationSlug/projects/$projectSlug/integrations'
+      preLoaderRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugIntegrationsRouteImport
+      parentRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugRouteRoute
+    }
     '/_app/orgs/$organizationSlug/projects/$projectSlug/examples': {
       id: '/_app/orgs/$organizationSlug/projects/$projectSlug/examples'
       path: '/examples'
@@ -764,6 +784,7 @@ interface AppOrgsOrganizationSlugProjectsProjectSlugRouteRouteChildren {
   AppOrgsOrganizationSlugProjectsProjectSlugAgentsRouteRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugAgentsRouteRouteWithChildren
   AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRouteWithChildren
   AppOrgsOrganizationSlugProjectsProjectSlugExamplesRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugExamplesRoute
+  AppOrgsOrganizationSlugProjectsProjectSlugIntegrationsRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugIntegrationsRoute
   AppOrgsOrganizationSlugProjectsProjectSlugMcpRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugMcpRoute
   AppOrgsOrganizationSlugProjectsProjectSlugSettingsRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugSettingsRoute
   AppOrgsOrganizationSlugProjectsProjectSlugIndexRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugIndexRoute
@@ -780,6 +801,8 @@ const AppOrgsOrganizationSlugProjectsProjectSlugRouteRouteChildren: AppOrgsOrgan
       AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRouteWithChildren,
     AppOrgsOrganizationSlugProjectsProjectSlugExamplesRoute:
       AppOrgsOrganizationSlugProjectsProjectSlugExamplesRoute,
+    AppOrgsOrganizationSlugProjectsProjectSlugIntegrationsRoute:
+      AppOrgsOrganizationSlugProjectsProjectSlugIntegrationsRoute,
     AppOrgsOrganizationSlugProjectsProjectSlugMcpRoute:
       AppOrgsOrganizationSlugProjectsProjectSlugMcpRoute,
     AppOrgsOrganizationSlugProjectsProjectSlugSettingsRoute:

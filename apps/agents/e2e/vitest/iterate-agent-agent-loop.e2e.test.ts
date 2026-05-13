@@ -14,8 +14,8 @@ import { buildAgentStreamProcessorRunnerWebSocketCallbackUrl } from "~/lib/itera
 const GATEWAY_ID = "e2e";
 const AGENT_INPUT_CONTENT = "What is the capital of France? Answer with one word.";
 
-// Only kimi (native Workers AI) is exercised for now.
-const SCENARIOS = [{ label: "kimi", model: "@cf/moonshotai/kimi-k2.5" }] as const;
+// Only Kimi (native Workers AI) is exercised for now.
+const SCENARIOS = [{ label: "kimi", model: "@cf/moonshotai/kimi-k2.6" }] as const;
 
 test.skip(
   "websocket subscription drives Workers AI chat loop (kimi) via e2e AI Gateway",

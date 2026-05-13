@@ -45,7 +45,6 @@ describeRuntimeSmoke("events runtime smoke", () => {
     async () => {
       const config = PublicConfigSchema.parse(await app.client.__internal.publicConfig({}));
       expect(config.iterateOauth.clientId).toEqual(expect.any(String));
-      expect(config.posthog.apiKey).toEqual(expect.any(String));
 
       const res = await app.fetch("/api/openapi.json", {
         signal: AbortSignal.timeout(3_000),

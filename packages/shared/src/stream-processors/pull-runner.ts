@@ -1,3 +1,4 @@
+import type { z } from "zod";
 import {
   catchUpProcessorFromStream,
   consumeLiveProcessorEvent,
@@ -9,12 +10,8 @@ import {
   type ProcessorStreamApi,
   type StoredProcessorState,
   type StreamEvent,
-} from "@iterate-com/shared/stream-processors";
-import {
-  CoreProcessorContract,
-  CoreProcessorErrorOccurredEventType,
-} from "@iterate-com/shared/stream-processors/core/contract";
-import type { z } from "zod";
+} from "./stream-processor.ts";
+import { CoreProcessorContract, CoreProcessorErrorOccurredEventType } from "./core/contract.ts";
 
 type PullRunnerContract<Contract> = {
   slug: string;
@@ -38,7 +35,7 @@ export type PullProcessorStorage<Contract extends PullRunnerContract<Contract>> 
 /**
  * Runs one processor against one stream API using pull/subscription delivery.
  *
- * This is intentionally just the app-local runner shell. The shared package
+ * This is intentionally just the runner shell. The shared package
  * owns processor lifecycle details (`catchUpProcessorFromStream` and
  * `consumeLiveProcessorEvent`); this function owns the deployment loop:
  * load stored state, catch up, then keep consuming subscription events.

@@ -506,6 +506,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
 
 type ProjectLifecycleStreamApi = ProcessorStreamApi<typeof ProjectLifecycleProcessorContract> & {
   append(args: { event: EventInput; streamPath?: string }): Promise<Event>;
+  appendBatch(args: { events: EventInput[]; streamPath?: string }): Promise<Event[]>;
   read(args?: {
     streamPath?: string;
     afterOffset?: StreamCursor;
@@ -529,6 +530,17 @@ function projectLifecycleStreamApiFromNamespace(args: {
         }),
       });
       return await stream.append(input.event);
+    },
+    async appendBatch(input) {
+      const stream = await getInitializedStreamStub({
+        durableObjectNamespace: args.durableObjectNamespace,
+        namespace: args.namespace,
+        path: resolveProcessorStreamPath({
+          basePath: args.streamPath,
+          pathInput: input.streamPath,
+        }),
+      });
+      return await stream.appendBatch(input.events);
     },
     async read(input = {}) {
       const stream = await getInitializedStreamStub({
