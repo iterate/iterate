@@ -97,14 +97,6 @@ describe("Project ingress routing", () => {
       token: expect.stringContaining("mock-write-"),
     });
 
-    const projectResponse = await SELF.fetch("https://demo.iterate.localhost/", {
-      headers: { accept: "text/html" },
-    });
-    expect(projectResponse.ok).toBe(true);
-    const projectHtml = await projectResponse.text();
-    expect(projectHtml).toContain("This request reached the Project Durable Object");
-    expect(projectHtml).toContain("demo.iterate.localhost");
-
     const mcpResponse = await SELF.fetch("https://mcp.demo.iterate.localhost/", {
       headers: { accept: "text/html" },
     });

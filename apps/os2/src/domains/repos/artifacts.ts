@@ -53,6 +53,10 @@ export function repoArtifactName(input: { projectId: string; repoSlug: string })
   return `${input.projectId}--${input.repoSlug}`;
 }
 
+export function artifactRemoteUrl(input: { accountId: string; name: string; namespace: string }) {
+  return `https://${input.accountId}.artifacts.cloudflare.net/git/${input.namespace}/${input.name}.git`;
+}
+
 export function normalizeArtifactToken(token: CloudflareArtifactToken) {
   const plaintext = token.plaintext ?? token.token;
   if (!plaintext) {

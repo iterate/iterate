@@ -22,6 +22,7 @@ import manifest, { AppConfig } from "~/app.ts";
 import type { AppContext } from "~/context.ts";
 import { getIngressRouteByHost } from "~/db/queries/.generated/index.ts";
 import type { CloudflareArtifactsBinding } from "~/domains/repos/artifacts.ts";
+import { seedIterateConfigBaseRepo } from "~/domains/repos/iterate-config-base-seed.ts";
 import {
   dispatchFetchCallable,
   matchIngressRequest,
@@ -76,6 +77,8 @@ export default {
 
     const debugAppendChainResponse = await handleDebugAppendChainFetch({ request, env });
     if (debugAppendChainResponse) return debugAppendChainResponse;
+    const seedIterateConfigBaseResponse = await handleSeedIterateConfigBaseFetch({ request, env });
+    if (seedIterateConfigBaseResponse) return seedIterateConfigBaseResponse;
 
     return withEvlog(
       {
@@ -255,6 +258,56 @@ async function handleDebugAppendChainFetch(input: { request: Request; env: Env }
         max,
         mode,
         streamPath,
+      },
+      { status: 500 },
+    );
+  }
+}
+
+async function handleSeedIterateConfigBaseFetch(input: { request: Request; env: Env }) {
+  const url = new URL(input.request.url);
+  if (url.pathname !== "/__debug/seed-iterate-config-base") return null;
+
+  if (input.request.method !== "POST") {
+    return Response.json({ error: "Method not allowed." }, { status: 405 });
+  }
+
+  const expectedToken = config.adminApiSecret?.exposeSecret();
+  if (expectedToken == null) {
+    return Response.json({ error: "Seed endpoint is disabled." }, { status: 404 });
+  }
+
+  if (input.request.headers.get("authorization") !== `Bearer ${expectedToken}`) {
+    return Response.json({ error: "Unauthorized." }, { status: 401 });
+  }
+
+  const envWithArtifacts = input.env as Env & { ARTIFACTS?: CloudflareArtifactsBinding };
+  if (!envWithArtifacts.ARTIFACTS) {
+    return Response.json({ error: "ARTIFACTS binding is not configured." }, { status: 500 });
+  }
+  if (!input.env.ARTIFACTS_ACCOUNT_ID || !input.env.ARTIFACTS_NAMESPACE) {
+    return Response.json(
+      { error: "Artifacts account and namespace bindings are not configured." },
+      { status: 500 },
+    );
+  }
+
+  try {
+    return Response.json(
+      await seedIterateConfigBaseRepo({
+        accountId: input.env.ARTIFACTS_ACCOUNT_ID,
+        artifacts: envWithArtifacts.ARTIFACTS,
+        namespace: input.env.ARTIFACTS_NAMESPACE,
+      }),
+    );
+  } catch (error) {
+    return Response.json(
+      {
+        error: {
+          message: error instanceof Error ? error.message : String(error),
+          name: error instanceof Error ? error.name : "Error",
+          stack: error instanceof Error ? error.stack : undefined,
+        },
       },
       { status: 500 },
     );

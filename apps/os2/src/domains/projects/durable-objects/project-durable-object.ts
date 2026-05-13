@@ -31,7 +31,6 @@ import { deleteIngressRoutesByProject, upsertIngressRoute } from "~/db/queries/.
 import {
   dispatchFetchCallable,
   ingressHostnameFromRequest,
-  ingressUrlFromRequest,
   normalizeIngressHost,
   parseIngressCallable,
 } from "~/ingress/host-routing.ts";
@@ -41,8 +40,13 @@ import {
   PROJECT_LIFECYCLE_STREAM_PATH,
   ProjectLifecycleProcessorContract,
 } from "~/domains/projects/stream-processors/project-lifecycle.ts";
-import { type RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
+import {
+  type RepoDurableObject,
+  type RepoInfo,
+} from "~/domains/repos/durable-objects/repo-durable-object.ts";
+import { stripArtifactTokenQuery } from "~/domains/repos/artifacts.ts";
 import { getReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
+import { ITERATE_CONFIG_REPO_SLUG } from "~/domains/repos/iterate-config-repo.ts";
 
 export type ProjectStructuredName = {
   projectId: string;
@@ -104,6 +108,69 @@ type ProjectIngressRouteRow = {
   callable_json: string;
   created_at_ms: number;
   updated_at_ms: number;
+};
+
+type ProjectDynamicWorkerEntrypoint = {
+  fetch(request: Request): Response | Promise<Response>;
+  afterAppend(input: { event: Event }): unknown | Promise<unknown>;
+};
+
+type ProjectDynamicWorkerCode = {
+  compatibilityDate: string;
+  compatibilityFlags: string[];
+  globalOutbound: null;
+  mainModule: string;
+  modules: Record<string, { js: string }>;
+};
+
+type ProjectDynamicWorkerLoader = {
+  get(
+    name: string,
+    getCode: () => ProjectDynamicWorkerCode,
+  ): {
+    getEntrypoint(): unknown;
+  };
+};
+
+type ProjectRuntimeEnv = {
+  LOADER: ProjectDynamicWorkerLoader;
+  WORKSPACE: DurableObjectNamespace;
+};
+
+type ProjectConfigCheckout = {
+  commitOid: string;
+  workerSource: string;
+};
+
+type ProjectConfigGit = {
+  clone(input: Record<string, unknown>): Promise<unknown>;
+  log(input: { depth: number; dir: string; ref: string }): Promise<Array<{ oid: string }>>;
+  pull(input: Record<string, unknown>): Promise<unknown>;
+  status(input: { dir: string }): Promise<unknown>;
+};
+
+type ProjectConfigWorkspace = {
+  git: ProjectConfigGit;
+  workspace: ProjectConfigWorkspaceStub;
+};
+
+const PROJECT_CONFIG_WORKSPACE_ID = "project-ingress";
+const PROJECT_CONFIG_DIR = "/iterate-config";
+const PROJECT_CONFIG_WORKER_PATH = `${PROJECT_CONFIG_DIR}/worker.ts`;
+const PROJECT_CONFIG_READY_STORAGE_KEY = "project.configWorker.ready";
+const PROJECT_DYNAMIC_WORKER_MAIN_MODULE = "worker.ts";
+
+type ProjectConfigWorkspaceName = {
+  projectId: string;
+  workspaceId: string;
+};
+
+type ProjectConfigWorkspaceStub = {
+  cloudflareShellGit(): Promise<unknown>;
+  cloudflareShellState(): Promise<Record<string, unknown>>;
+  hasFile(path: string): Promise<boolean>;
+  initialize(input: { name: string }): Promise<unknown>;
+  removePath(input: { force: boolean; path: string; recursive: boolean }): Promise<void>;
 };
 
 const ProjectLifecycleBase = createIterateDurableObjectBase<
@@ -212,8 +279,8 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     });
     await this.writeIngressRoutes({ hosts, projectId: input.projectId });
     const summary = this.requireSummary();
+    await this.getOrCreateIterateConfigRepo(summary);
     await this.writeProjectCreatedLifecycleEvent(summary);
-    await this.ensureIterateConfigRepo(summary);
     await this.writeAgentsRootRule(summary);
 
     return summary;
@@ -251,7 +318,15 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
 
   async afterAppend(input: { event: Event }) {
     await this.ensureStarted();
-    return await this.consumeStreamProcessorEvent({ event: input.event as StreamEvent });
+    const result = await this.consumeStreamProcessorEvent({ event: input.event as StreamEvent });
+    const summary = this.currentSummary();
+    const configWorkerIsReady = await this.ctx.storage.get<boolean>(
+      PROJECT_CONFIG_READY_STORAGE_KEY,
+    );
+    if (summary !== null && configWorkerIsReady === true) {
+      await (await this.getProjectDynamicWorkerEntrypoint(summary)).afterAppend(input);
+    }
+    return result;
   }
 
   async ingressFetch(request: Request): Promise<Response> {
@@ -271,7 +346,123 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
       });
     }
 
-    return projectLandingResponse({ request, summary });
+    return await (await this.getProjectDynamicWorkerEntrypoint(summary)).fetch(request);
+  }
+
+  private async getProjectDynamicWorkerEntrypoint(
+    summary: ProjectSummary,
+  ): Promise<ProjectDynamicWorkerEntrypoint> {
+    const checkout = await this.ensureProjectConfigCheckout(summary);
+    await this.ctx.storage.put(PROJECT_CONFIG_READY_STORAGE_KEY, true);
+    const loader = projectRuntimeEnv(this.env).LOADER;
+    const entrypoint = loader
+      .get(
+        projectDynamicWorkerId({
+          commitOid: checkout.commitOid,
+          projectId: summary.id,
+        }),
+        () => projectDynamicWorkerCode(checkout.workerSource),
+      )
+      .getEntrypoint();
+
+    if (!isProjectDynamicWorkerEntrypoint(entrypoint)) {
+      throw new Error("Project dynamic worker entrypoint is missing fetch or afterAppend.");
+    }
+
+    return entrypoint;
+  }
+
+  private async ensureProjectConfigCheckout(
+    summary: ProjectSummary,
+  ): Promise<ProjectConfigCheckout> {
+    const repo = await this.getOrCreateIterateConfigRepo(summary);
+    const { git, workspace } = await this.getProjectConfigWorkspace(summary.id);
+
+    if (await workspace.hasFile(`${PROJECT_CONFIG_DIR}/.git/HEAD`)) {
+      let checkoutIsUsable = true;
+      try {
+        await git.status({ dir: PROJECT_CONFIG_DIR });
+      } catch {
+        checkoutIsUsable = false;
+      }
+
+      if (checkoutIsUsable) {
+        await this.refreshProjectConfigRepo({ git, repo });
+        return await this.readProjectConfigCheckout({ git, workspace });
+      }
+    }
+
+    await workspace.removePath({
+      force: true,
+      path: PROJECT_CONFIG_DIR,
+      recursive: true,
+    });
+    await this.cloneProjectConfigRepo({ git, repo, workspace });
+    return await this.readProjectConfigCheckout({ git, workspace });
+  }
+
+  protected async cloneProjectConfigRepo(input: ProjectConfigWorkspace & { repo: RepoInfo }) {
+    await input.git.clone({
+      url: input.repo.remote,
+      dir: PROJECT_CONFIG_DIR,
+      branch: input.repo.defaultBranch,
+      depth: 1,
+      ...artifactGitAuth(input.repo),
+    });
+  }
+
+  protected async refreshProjectConfigRepo(input: { git: ProjectConfigGit; repo: RepoInfo }) {
+    await input.git.pull({
+      dir: PROJECT_CONFIG_DIR,
+      remote: "origin",
+      ref: input.repo.defaultBranch,
+      author: {
+        name: "Iterate",
+        email: "support@iterate.com",
+      },
+      ...artifactGitAuth(input.repo),
+    });
+  }
+
+  private async readProjectConfigCheckout(input: ProjectConfigWorkspace) {
+    const [commit] = await input.git.log({
+      dir: PROJECT_CONFIG_DIR,
+      depth: 1,
+      ref: "HEAD",
+    });
+    if (!commit) {
+      throw new Error("Project iterate-config checkout does not have a HEAD commit.");
+    }
+
+    const state = await input.workspace.cloudflareShellState();
+    const readFile = state.readFile;
+    if (typeof readFile !== "function") {
+      throw new Error("Project Workspace state does not implement readFile.");
+    }
+
+    const workerSource = await readFile(PROJECT_CONFIG_WORKER_PATH);
+    if (typeof workerSource !== "string" || workerSource.trim() === "") {
+      throw new Error(`${ITERATE_CONFIG_REPO_SLUG} repo is missing worker.ts.`);
+    }
+
+    return {
+      commitOid: commit.oid,
+      workerSource,
+    };
+  }
+
+  private async getProjectConfigWorkspace(projectId: string): Promise<ProjectConfigWorkspace> {
+    const name = projectConfigWorkspaceName(projectId);
+    const durableObjectName = deriveDurableObjectNameFromStructuredName({ structuredName: name });
+    const workspace = projectRuntimeEnv(this.env).WORKSPACE.getByName(
+      durableObjectName,
+    ) as unknown as ProjectConfigWorkspaceStub;
+    await workspace.initialize({ name: durableObjectName });
+
+    return {
+      git: (await workspace.cloudflareShellGit()) as unknown as ProjectConfigGit,
+      workspace,
+    };
   }
 
   private lookupLocalRoute(host: string): ExactHostIngressRule | null {
@@ -390,6 +581,12 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
   }
 
   private requireSummary(): ProjectSummary {
+    const summary = this.currentSummary();
+    if (!summary) throw new Error("Project has not been created yet.");
+    return summary;
+  }
+
+  private currentSummary(): ProjectSummary | null {
     const row = this.getDurableObjectSql()
       .exec<ProjectStateRow>(
         `SELECT id, slug, default_host, hosts_json, metadata_json, created_at_ms, updated_at_ms
@@ -398,7 +595,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
       )
       .toArray()[0];
 
-    if (!row) throw new Error("Project has not been created yet.");
+    if (!row) return null;
 
     return {
       id: row.id,
@@ -442,8 +639,8 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     });
   }
 
-  private async ensureIterateConfigRepo(summary: ProjectSummary) {
-    await getReposCapability({
+  private async getOrCreateIterateConfigRepo(summary: ProjectSummary) {
+    return await getReposCapability({
       exports: readLoopbackExports(this.ctx),
       props: { projectId: summary.id },
     }).ensureIterateConfigInfo({ projectSlug: summary.slug });
@@ -631,39 +828,53 @@ function projectHosts(input: { bases: readonly string[]; projectId: string; slug
   };
 }
 
+function projectDynamicWorkerId(input: { commitOid: string; projectId: string }) {
+  return `project-ingress:${input.projectId}:${input.commitOid}`;
+}
+
+function projectDynamicWorkerCode(workerSource: string) {
+  return {
+    compatibilityDate: "2026-04-27",
+    compatibilityFlags: ["nodejs_compat"],
+    globalOutbound: null,
+    mainModule: PROJECT_DYNAMIC_WORKER_MAIN_MODULE,
+    modules: {
+      [PROJECT_DYNAMIC_WORKER_MAIN_MODULE]: {
+        js: workerSource,
+      },
+    },
+  };
+}
+
+function projectConfigWorkspaceName(projectId: string): ProjectConfigWorkspaceName {
+  return {
+    projectId,
+    workspaceId: PROJECT_CONFIG_WORKSPACE_ID,
+  };
+}
+
+function artifactGitAuth(repo: RepoInfo) {
+  return {
+    username: "x",
+    password: stripArtifactTokenQuery(repo.token),
+  };
+}
+
+function projectRuntimeEnv(env: ProjectEnv): ProjectRuntimeEnv {
+  return env as unknown as ProjectRuntimeEnv;
+}
+
 function readLoopbackExports(ctx: DurableObjectState) {
   return ctx.exports;
 }
 
-function projectLandingResponse(input: { request: Request; summary: ProjectSummary }) {
-  const url = ingressUrlFromRequest(input.request);
-  return new Response(
-    `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${escapeHtml(input.summary.slug)} project</title>
-  <style>
-    body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #171717; background: #fafafa; }
-    main { max-width: 680px; margin: 0 auto; padding: 32px 20px; }
-    h1 { font-size: 18px; margin: 0 0 8px; }
-    p { color: #525252; line-height: 1.5; }
-    code { display: block; overflow-wrap: anywhere; white-space: pre-wrap; border-radius: 6px; background: #f5f5f5; padding: 12px; font: 13px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>${escapeHtml(input.summary.slug)}</h1>
-    <p>This request reached the Project Durable Object for ${escapeHtml(url.host)}.</p>
-    <code>${escapeHtml(input.summary.hosts.join("\n"))}</code>
-  </main>
-</body>
-</html>`,
-    { headers: { "Content-Type": "text/html; charset=utf-8" } },
+function isProjectDynamicWorkerEntrypoint(value: unknown): value is ProjectDynamicWorkerEntrypoint {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "fetch" in value &&
+    typeof value.fetch === "function" &&
+    "afterAppend" in value &&
+    typeof value.afterAppend === "function"
   );
-}
-
-function escapeHtml(value: string) {
-  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }

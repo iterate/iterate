@@ -21,6 +21,7 @@ import {
   REPO_README_PATH,
   REPO_WRITE_TOKEN_TTL_SECONDS,
   type CloudflareArtifactsBinding,
+  artifactRemoteUrl,
   createArtifactToken,
   pushInitialReadme,
   repoArtifactName,
@@ -74,6 +75,8 @@ const RepoStructuredName = z.object({
 
 type RepoEnv = {
   ARTIFACTS?: CloudflareArtifactsBinding;
+  ARTIFACTS_ACCOUNT_ID?: string;
+  ARTIFACTS_NAMESPACE?: string;
   DO_CATALOG: D1Database;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
 };
@@ -147,7 +150,7 @@ export class RepoDurableObject extends RepoBase<RepoEnv> {
       scope: "write",
       ttlSeconds: REPO_WRITE_TOKEN_TTL_SECONDS,
     });
-    const remote = await requireArtifactString(artifact.remote, "remote");
+    const remote = (await readArtifactString(artifact.remote)) ?? this.artifactRemote(artifactName);
     const defaultBranch =
       (await readArtifactString(artifact.defaultBranch)) ??
       (await readArtifactString(artifact.default_branch)) ??
@@ -224,6 +227,18 @@ export class RepoDurableObject extends RepoBase<RepoEnv> {
     }
 
     return this.env.ARTIFACTS;
+  }
+
+  private artifactRemote(artifactName: string) {
+    if (!this.env.ARTIFACTS_ACCOUNT_ID || !this.env.ARTIFACTS_NAMESPACE) {
+      throw new Error("Artifacts account and namespace bindings are required.");
+    }
+
+    return artifactRemoteUrl({
+      accountId: this.env.ARTIFACTS_ACCOUNT_ID,
+      name: artifactName,
+      namespace: this.env.ARTIFACTS_NAMESPACE,
+    });
   }
 
   private async forkArtifactRepo(input: {
@@ -328,19 +343,14 @@ function gitInfo(input: { defaultBranch: string; remote: string; slug: string; t
 }
 
 async function readArtifactString(value: unknown): Promise<string | undefined> {
-  const candidate =
-    typeof value === "function" ? (value as () => unknown | Promise<unknown>)() : value;
-  const resolved = await candidate;
-  return typeof resolved === "string" && resolved.length > 0 ? resolved : undefined;
-}
-
-async function requireArtifactString(value: unknown, property: string) {
-  const resolved = await readArtifactString(value);
-  if (!resolved) {
-    throw new Error(`Cloudflare Artifacts repo response did not include ${property}.`);
+  let candidate: unknown;
+  try {
+    candidate = typeof value === "function" ? (value as () => unknown | Promise<unknown>)() : value;
+    const resolved = await candidate;
+    return typeof resolved === "string" && resolved.length > 0 ? resolved : undefined;
+  } catch {
+    return undefined;
   }
-
-  return resolved;
 }
 
 function shellQuote(value: string) {
