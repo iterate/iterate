@@ -8,9 +8,11 @@ import {
 import { StreamPath } from "@iterate-com/shared/streams/types";
 
 export const PROJECT_LIFECYCLE_STREAM_PATH = StreamPath.parse("/");
+const PROJECT_CREATED_EVENT_TYPE = "events.iterate.com/project/created";
+const LEGACY_PROJECT_CREATED_EVENT_TYPE = "events.iterate.com/os2/project-created";
 
 export const ProjectLifecycleProcessorContract = defineProcessorContract({
-  slug: "project",
+  slug: "project-lifecycle",
   version: "0.1.0",
   description: "Tracks Project lifecycle facts and provisioning status.",
   stateSchema: z.object({
@@ -28,7 +30,16 @@ export const ProjectLifecycleProcessorContract = defineProcessorContract({
     project: null,
   },
   events: {
-    "events.iterate.com/project/created": {
+    [PROJECT_CREATED_EVENT_TYPE]: {
+      description: "A Project was created and its initial platform hosts were recorded.",
+      payloadSchema: z.object({
+        defaultHost: z.string().trim().min(1),
+        hosts: z.array(z.string().trim().min(1)),
+        projectId: z.string().trim().min(1),
+        slug: z.string().trim().min(1),
+      }),
+    },
+    [LEGACY_PROJECT_CREATED_EVENT_TYPE]: {
       description: "A Project was created and its initial platform hosts were recorded.",
       payloadSchema: z.object({
         defaultHost: z.string().trim().min(1),
@@ -38,11 +49,12 @@ export const ProjectLifecycleProcessorContract = defineProcessorContract({
       }),
     },
   },
-  consumes: ["events.iterate.com/project/created"],
+  consumes: [PROJECT_CREATED_EVENT_TYPE, LEGACY_PROJECT_CREATED_EVENT_TYPE],
   emits: [],
   reduce({ state, event }) {
     switch (event.type) {
-      case "events.iterate.com/project/created":
+      case PROJECT_CREATED_EVENT_TYPE:
+      case LEGACY_PROJECT_CREATED_EVENT_TYPE:
         return {
           ...state,
           project: event.payload,

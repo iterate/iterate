@@ -159,6 +159,8 @@ const PROJECT_CONFIG_DIR = "/iterate-config";
 const PROJECT_CONFIG_WORKER_PATH = `${PROJECT_CONFIG_DIR}/worker.ts`;
 const PROJECT_CONFIG_CHECKOUT_STORAGE_KEY = "project.configWorker.checkout";
 const PROJECT_CONFIG_READY_STORAGE_KEY = "project.configWorker.ready";
+const PROJECT_CONFIG_REFRESHED_AT_STORAGE_KEY = "project.configWorker.refreshedAt";
+const PROJECT_CONFIG_REFRESH_INTERVAL_MS = 10_000;
 const PROJECT_DYNAMIC_WORKER_MAIN_MODULE = "worker.ts";
 
 type ProjectConfigWorkspaceName = {
@@ -358,13 +360,37 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     }
 
     try {
-      return await (await this.getFreshProjectDynamicWorkerEntrypoint(summary)).fetch(request);
+      return await (await this.getIngressProjectDynamicWorkerEntrypoint(summary)).fetch(request);
     } catch (error) {
       console.error(
         "Project config worker fetch failed; serving fallback landing response.",
         error,
       );
       return projectLandingResponse({ request, summary });
+    }
+  }
+
+  private async getIngressProjectDynamicWorkerEntrypoint(
+    summary: ProjectSummary,
+  ): Promise<ProjectDynamicWorkerEntrypoint> {
+    if (await this.projectConfigCheckoutIsFresh()) {
+      try {
+        return await this.getCachedProjectDynamicWorkerEntrypoint(summary);
+      } catch (error) {
+        await this.clearProjectConfigWorkerReady();
+        console.error("Cached project config worker is invalid.", error);
+      }
+    }
+
+    try {
+      return await this.getFreshProjectDynamicWorkerEntrypoint(summary);
+    } catch (error) {
+      try {
+        console.error("Project config worker refresh failed; using cached worker.", error);
+        return await this.getCachedProjectDynamicWorkerEntrypoint(summary);
+      } catch {
+        throw error;
+      }
     }
   }
 
@@ -375,6 +401,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     const entrypoint = this.loadProjectDynamicWorkerEntrypoint({ checkout, projectId: summary.id });
     await this.ctx.storage.put(PROJECT_CONFIG_CHECKOUT_STORAGE_KEY, checkout);
     await this.ctx.storage.put(PROJECT_CONFIG_READY_STORAGE_KEY, true);
+    await this.ctx.storage.put(PROJECT_CONFIG_REFRESHED_AT_STORAGE_KEY, Date.now());
     return entrypoint;
   }
 
@@ -426,6 +453,16 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     this.#dynamicWorkerEntrypoint = null;
     await this.ctx.storage.delete(PROJECT_CONFIG_READY_STORAGE_KEY);
     await this.ctx.storage.delete(PROJECT_CONFIG_CHECKOUT_STORAGE_KEY);
+    await this.ctx.storage.delete(PROJECT_CONFIG_REFRESHED_AT_STORAGE_KEY);
+  }
+
+  private async projectConfigCheckoutIsFresh() {
+    const refreshedAt = await this.ctx.storage.get<number>(PROJECT_CONFIG_REFRESHED_AT_STORAGE_KEY);
+    return (
+      typeof refreshedAt === "number" &&
+      Number.isFinite(refreshedAt) &&
+      Date.now() - refreshedAt < PROJECT_CONFIG_REFRESH_INTERVAL_MS
+    );
   }
 
   private async ensureProjectConfigCheckout(
