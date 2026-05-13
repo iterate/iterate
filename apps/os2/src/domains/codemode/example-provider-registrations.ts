@@ -31,31 +31,6 @@ export function createExampleRpcProviderRegistration(input: {
   };
 }
 
-export function createWorkspaceProviderRegistration(input: {
-  instructions: string;
-  name: string;
-  path: string[];
-}): ToolProviderRegistration {
-  return {
-    instructions: input.instructions,
-    invocation: {
-      kind: "rpc",
-      callable: {
-        type: "workers-rpc",
-        via: {
-          type: "env-binding",
-          bindingType: "durable-object-namespace",
-          bindingName: "WORKSPACE",
-          durableObject: { name: input.name },
-        },
-        rpcMethod: "executeCodemodeFunctionCall",
-        argsMode: "object",
-      },
-    },
-    path: input.path,
-  };
-}
-
 export function createExampleCapabilityProviders(input: {
   activeOrganization?: ActiveOrganizationAuth;
   projectId: string;
@@ -69,16 +44,12 @@ export function createExampleCapabilityProviders(input: {
       projectId: input.projectId,
     }),
     createExampleRpcProviderRegistration({
-      exportName: "RepoCapability",
+      exportName: "ReposCapability",
       activeOrganization: input.activeOrganization,
-      instructions: "Use ctx.repos.get({ slug }) to get a repo handle.",
+      instructions:
+        "Use ctx.repos.create({ slug }) to create a Repo, ctx.repos.get({ slug }).getInfo() to inspect one, and ctx.repos.list({}) to list Repos.",
       path: ["repos"],
       projectId: input.projectId,
-    }),
-    createWorkspaceProviderRegistration({
-      instructions: "Use ctx.workspace.proofOfConcept(args) for the current workspace.",
-      name: input.projectId,
-      path: ["workspace"],
     }),
     createExampleRpcProviderRegistration({
       exportName: "AgentCapability",

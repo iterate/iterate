@@ -30,8 +30,7 @@ The default is **do not code immediately**. First spec the API with the user. If
 ## Reference Implementations
 
 - `mixins/with-durable-object-core.ts`: root adapter for Cloudflare's protected `ctx` APIs. It exposes protected local SQLite, synchronous KV, and platform alarm capabilities so feature mixins do not reach into `ctx` directly.
-- `mixins/with-lifecycle-hooks.ts`: protected subclass surface, named initialization, first-initialize/start hooks, static/generic preservation through `DurableObjectClass`.
-- `mixins/with-d1-object-catalog.ts`: env lower-bound via `getDatabase(env)`, detached/caught best-effort D1 work, D1 tables owned by the mixin, and init-param indexes.
+- `mixins/with-lifecycle-hooks.ts`: protected subclass surface, named initialization, first-initialize/start hooks, static/generic preservation through `DurableObjectClass`, and optional lifecycle-owned D1 object catalog projection.
 - `mixins/with-multiplexed-alarms.ts`: one owner for Cloudflare's single Durable Object alarm slot, protected scheduling methods, SQLite-backed logical alarm rows.
 - `mixins/with-scheduler.ts`: key-based scheduler layered above multiplexed alarms, tagged recurrence rows, split one-shot/recurring failure policy.
 - `mixins/with-kv-inspector.ts`: fetch wrapper that preserves generic `Base<Env>`.
@@ -132,12 +131,15 @@ type NeedsCatalog = {
   DO_CATALOG: D1Database;
 };
 
-const Base = withD1ObjectCatalog<RoomInit, NeedsCatalog>({
-  className: "Room",
-  getDatabase(env) {
-    return env.DO_CATALOG;
+const Base = withLifecycleHooks<RoomInit, undefined, NeedsCatalog>({
+  d1ObjectCatalog: {
+    className: "Room",
+    getDatabase(env) {
+      return env.DO_CATALOG;
+    },
   },
-})(withLifecycleHooks<RoomInit>()(withDurableObjectCore(DurableObject)));
+  nameSchema: RoomInit,
+})(withDurableObjectCore(DurableObject));
 
 class Room extends Base<NeedsCatalog & { OTHER: string }> {}
 ```

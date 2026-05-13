@@ -2,7 +2,6 @@ import { SELF, env } from "cloudflare:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { describe, expect, test } from "vitest";
-import { PROJECT_CREATED_EVENT_TYPE } from "~/domains/projects/durable-objects/project-durable-object.ts";
 
 describe("Project ingress routing", () => {
   test("routes iterate.localhost project hosts through the Project Durable Object", async () => {
@@ -64,7 +63,7 @@ describe("Project ingress routing", () => {
     expect(streamBody.events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          type: PROJECT_CREATED_EVENT_TYPE,
+          type: "events.iterate.com/project/created",
           payload: expect.objectContaining({
             defaultHost: "demo.iterate.localhost",
             projectId: "proj_local_test",
@@ -83,13 +82,40 @@ describe("Project ingress routing", () => {
     expect(lifecycleState.reducedThroughOffset).toBeGreaterThanOrEqual(3);
     expect(lifecycleState.afterAppendCompletedThroughOffset).toBeGreaterThanOrEqual(3);
 
-    const projectResponse = await SELF.fetch("https://demo.iterate.localhost/", {
-      headers: { accept: "text/html" },
+    const repoResponse = await SELF.fetch(
+      "https://os.iterate.localhost/__test/iterate-config-repo",
+    );
+    expect(repoResponse.ok).toBe(true);
+    const repo = (await repoResponse.json()) as {
+      git: {
+        cloneCommand: string;
+        pushCommand: string;
+      };
+      token: string;
+    };
+    expect(repo).toMatchObject({
+      defaultBranch: "main",
+      git: expect.objectContaining({
+        cloneCommand: expect.stringContaining("git -c http.extraHeader="),
+        remote: "https://artifacts.example.test/proj_local_test--iterate-config.git",
+      }),
+      remote: "https://artifacts.example.test/proj_local_test--iterate-config.git",
+      slug: "iterate-config",
+      token: expect.stringContaining("mock-write-"),
     });
-    expect(projectResponse.ok).toBe(true);
-    const projectHtml = await projectResponse.text();
-    expect(projectHtml).toContain("This request reached the Project Durable Object");
-    expect(projectHtml).toContain("demo.iterate.localhost");
+    expect(repo.token).toContain("?expires=");
+    expect(repo.git.cloneCommand).not.toContain("?expires=");
+    expect(repo.git.pushCommand).not.toContain("?expires=");
+
+    const projectIngressResponse = await SELF.fetch("https://demo.iterate.localhost/");
+    expect(projectIngressResponse.ok).toBe(true);
+    expect(projectIngressResponse.headers.get("x-project-ingress-runtime")).toBe("static-fallback");
+    await expect(projectIngressResponse.json()).resolves.toMatchObject({
+      defaultHost: "demo.iterate.localhost",
+      hostname: "demo.iterate.localhost",
+      projectId: "proj_local_test",
+      slug: "demo",
+    });
 
     const mcpResponse = await SELF.fetch("https://mcp.demo.iterate.localhost/", {
       headers: { accept: "text/html" },

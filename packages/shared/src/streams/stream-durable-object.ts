@@ -3,7 +3,6 @@ import { z } from "zod";
 import { createDurableObjectClient, type SyncClient } from "sqlfu";
 import type { CallableContext } from "@iterate-com/shared/callable/types.ts";
 import { withDurableObjectCore } from "@iterate-com/shared/durable-object-utils/mixins/with-durable-object-core";
-import { withD1ObjectCatalog } from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
 import { withKvInspector } from "@iterate-com/shared/durable-object-utils/mixins/with-kv-inspector";
 import { withLifecycleHooks } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { withOuterbase } from "@iterate-com/shared/durable-object-utils/mixins/with-outerbase";
@@ -66,24 +65,24 @@ const NON_CALLABLE_SUBSCRIBERS = new Set(["webhook", "websocket"] as const);
 
 type CallableSubscriberDeliveryQueue = Record<string, number[]>;
 
-const StreamDurableObjectLifecycleBase = withD1ObjectCatalog<
+const StreamDurableObjectLifecycleBase = withLifecycleHooks<
   StreamDurableObjectStructuredName,
+  undefined,
   Pick<StreamDurableObjectEnv, "DO_CATALOG">
 >({
-  className: "StreamDurableObject",
-  getDatabase: (env) => env.DO_CATALOG,
-  indexes: {
-    namespace: (params) => params.namespace,
-    path: (params) => params.path,
+  d1ObjectCatalog: {
+    className: "StreamDurableObject",
+    getDatabase: (env) => env.DO_CATALOG,
+    indexes: {
+      namespace: (params) => params.namespace,
+      path: (params) => params.path,
+    },
   },
-})(
-  withLifecycleHooks({
-    nameSchema: z.object({
-      namespace: z.string(),
-      path: StreamPath,
-    }),
-  })(withDurableObjectCore(DurableObject)),
-);
+  nameSchema: z.object({
+    namespace: z.string(),
+    path: StreamPath,
+  }),
+})(withDurableObjectCore(DurableObject));
 
 const StreamDurableObjectInspectorBase = withKvInspector({
   unsafe: "I_UNDERSTAND_THIS_EXPOSES_KV",

@@ -1,10 +1,10 @@
 import { ORPCError } from "@orpc/server";
 import { StreamPath } from "@iterate-com/shared/streams/types";
-import type { D1ObjectCatalogRecord } from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
+import type { D1ObjectCatalogRecord } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import {
   getD1ObjectCatalogRecord,
   listD1ObjectCatalogRecordsByIndex,
-} from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
+} from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { typeid } from "@iterate-com/shared/typeid";
 import type { AppContext } from "~/context.ts";
 import {
@@ -35,6 +35,7 @@ import { activeOrganizationMiddleware, os, projectScopeMiddleware } from "~/orpc
 import { requireProjectScope } from "~/orpc/project-access.ts";
 import { projectCodemodeRouter } from "~/orpc/routers/codemode.ts";
 import { projectAgentsRouter } from "~/orpc/routers/agents.ts";
+import { projectReposRouter } from "~/orpc/routers/repos.ts";
 import { projectIntegrationsRouter } from "~/orpc/routers/integrations.ts";
 import { projectStreamsRouter } from "~/orpc/routers/streams.ts";
 
@@ -331,6 +332,7 @@ export const projectsRouter = {
         }),
     },
     agents: projectAgentsRouter,
+    repos: projectReposRouter,
     inboundMcpServer: {
       listSessions: os.project.inboundMcpServer.listSessions
         .use(projectScopeMiddleware)

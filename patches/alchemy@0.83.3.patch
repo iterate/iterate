@@ -1,0 +1,106 @@
+diff --git a/lib/cloudflare/bindings.d.ts b/lib/cloudflare/bindings.d.ts
+index 202181c..4e779fe 100644
+--- a/lib/cloudflare/bindings.d.ts
++++ b/lib/cloudflare/bindings.d.ts
+@@ -42,10 +42,14 @@ export declare namespace Bindings {
+ /**
+  * L2 Binding Resources.
+  */
+-export type Binding = Ai | Assets | Container | CloudflareSecret | CloudflareSecretRef | D1Database | DispatchNamespace | AnalyticsEngineDataset | DurableObjectNamespace<any> | Hyperdrive | HyperdriveRef | Images | KVNamespace | Pipeline | Queue | RateLimit | R2Bucket | {
++export type Binding = Ai | Artifacts | Assets | Container | CloudflareSecret | CloudflareSecretRef | D1Database | DispatchNamespace | AnalyticsEngineDataset | DurableObjectNamespace<any> | Hyperdrive | HyperdriveRef | Images | KVNamespace | Pipeline | Queue | RateLimit | R2Bucket | {
+     type: "kv_namespace";
+     id: string;
+ } | Secret | SecretKey | string | VectorizeIndex | Worker | Worker.DevDomain | Worker.DevUrl | WorkerStub | WorkerRef | WorkerEntrypoint | WorkerLoader | Workflow | BrowserRendering | VersionMetadata | Self | Json;
++export type Artifacts = {
++    type: "artifacts";
++    namespace: string;
++};
+ export type Self<RPC extends Rpc.WorkerEntrypointBranded = Rpc.WorkerEntrypointBranded> = {
+     type: "cloudflare::Worker::Self";
+     __entrypoint__?: string;
+@@ -65,7 +69,15 @@ export declare function Json<const T>(value: T): Json<T>;
+ /**
+  * Union type for all Worker binding types (API spec)
+  */
+-export type WorkerBindingSpec = WorkerBindingAI | WorkerBindingAnalyticsEngine | WorkerBindingAssets | WorkerBindingBrowserRendering | WorkerBindingD1 | WorkerBindingDispatchNamespace | WorkerBindingDurableObjectNamespace | WorkerBindingHyperdrive | WorkerBindingImages | WorkerBindingJson | WorkerBindingKVNamespace | WorkerBindingMTLSCertificate | WorkerBindingPipeline | WorkerBindingPlainText | WorkerBindingQueue | WorkerBindingRateLimit | WorkerBindingR2Bucket | WorkerBindingSecretKey | WorkerBindingSecretText | WorkerBindingSecretsStore | WorkerBindingSecretsStoreSecret | WorkerBindingService | WorkerBindingStaticContent | WorkerBindingTailConsumer | WorkerBindingVectorize | WorkerBindingVersionMetadata | WorkerBindingWasmModule | WorkerBindingWorkerLoader | WorkerBindingWorkflow;
++export type WorkerBindingSpec = WorkerBindingAI | WorkerBindingAnalyticsEngine | WorkerBindingArtifacts | WorkerBindingAssets | WorkerBindingBrowserRendering | WorkerBindingD1 | WorkerBindingDispatchNamespace | WorkerBindingDurableObjectNamespace | WorkerBindingHyperdrive | WorkerBindingImages | WorkerBindingJson | WorkerBindingKVNamespace | WorkerBindingMTLSCertificate | WorkerBindingPipeline | WorkerBindingPlainText | WorkerBindingQueue | WorkerBindingRateLimit | WorkerBindingR2Bucket | WorkerBindingSecretKey | WorkerBindingSecretText | WorkerBindingSecretsStore | WorkerBindingSecretsStoreSecret | WorkerBindingService | WorkerBindingStaticContent | WorkerBindingTailConsumer | WorkerBindingVectorize | WorkerBindingVersionMetadata | WorkerBindingWasmModule | WorkerBindingWorkerLoader | WorkerBindingWorkflow;
++export interface WorkerBindingArtifacts {
++    /** The name of the binding */
++    name: string;
++    /** Type identifier for Artifacts binding */
++    type: "artifacts";
++    /** Cloudflare Artifacts namespace */
++    namespace: string;
++}
+ /**
+  * AI binding type
+  */
+@@ -414,4 +426,4 @@ export interface WorkerBindingWorkerLoader {
+     /** Type identifier for Worker Loader binding */
+     type: "worker_loader";
+ }
+-//# sourceMappingURL=bindings.d.ts.map
+\ No newline at end of file
++//# sourceMappingURL=bindings.d.ts.map
+diff --git a/lib/cloudflare/worker-metadata.js b/lib/cloudflare/worker-metadata.js
+index d521d20..e1ff04d 100644
+--- a/lib/cloudflare/worker-metadata.js
++++ b/lib/cloudflare/worker-metadata.js
+@@ -330,6 +330,13 @@ export async function prepareWorkerMetadata(api, props) {
+                 name: bindingName,
+             });
+         }
++        else if (binding.type === "artifacts") {
++            meta.bindings.push({
++                type: "artifacts",
++                name: bindingName,
++                namespace: binding.namespace,
++            });
++        }
+         else if (binding.type === "version_metadata") {
+             meta.bindings.push({
+                 type: "version_metadata",
+@@ -469,4 +476,4 @@ export async function getWorkerSettings(api, workerName) {
+         throw error;
+     });
+ }
+-//# sourceMappingURL=worker-metadata.js.map
+\ No newline at end of file
++//# sourceMappingURL=worker-metadata.js.map
+diff --git a/lib/cloudflare/wrangler.json.js b/lib/cloudflare/wrangler.json.js
+index 43dfd76..ea4821b 100644
+--- a/lib/cloudflare/wrangler.json.js
++++ b/lib/cloudflare/wrangler.json.js
+@@ -138,6 +138,7 @@ async function processBindings(spec, bindings, eventSources, workerName, workerC
+     const ratelimits = [];
+     const containers = [];
+     const workerLoaders = [];
++    const artifacts = [];
+     for (const eventSource of eventSources ?? []) {
+         if (isQueueEventSource(eventSource)) {
+             queues.consumers.push({
+@@ -321,6 +322,13 @@ async function processBindings(spec, bindings, eventSources, workerName, workerC
+                 remote: true,
+             };
+         }
++        else if (binding.type === "artifacts") {
++            artifacts.push({
++                binding: bindingName,
++                namespace: binding.namespace,
++                remote: true,
++            });
++        }
+         else if (binding.type === "analytics_engine") {
+             analyticsEngineDatasets.push({
+                 binding: bindingName,
+@@ -466,5 +474,8 @@ async function processBindings(spec, bindings, eventSources, workerName, workerC
+     if (workerLoaders.length > 0) {
+         spec.worker_loaders = workerLoaders;
+     }
++    if (artifacts.length > 0) {
++        spec.artifacts = artifacts;
++    }
+ }
+-//# sourceMappingURL=wrangler.json.js.map
+\ No newline at end of file
++//# sourceMappingURL=wrangler.json.js.map

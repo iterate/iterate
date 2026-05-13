@@ -11,7 +11,7 @@ import {
 import {
   listD1ObjectCatalogRecordsByIndex,
   type D1ObjectCatalogRecord,
-} from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
+} from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,

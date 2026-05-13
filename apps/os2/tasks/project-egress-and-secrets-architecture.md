@@ -56,11 +56,12 @@ brief yet.
 - Every Secret should have a Durable Object instance as its lifecycle authority.
 - Secret Durable Objects and Project Durable Objects should use the repo's base
   durable-object-utils stack: `withDurableObjectCore`,
-  `withLifecycleHooks`, `withD1ObjectCatalog`, and public/rootable routing
-  where appropriate.
+  `withLifecycleHooks` with `d1ObjectCatalog`, and public/rootable routing where
+  appropriate.
 - Secret Durable Objects should be resolved with
-  `getOrInitializeDoStub({ namespace, name: { projectId, slug } })`, using the
-  lifecycle structured name rather than hand-rolled Durable Object names.
+  `getInitializedDoStub({ allowCreate: true, namespace, name: { projectId,
+slug } })`, using the lifecycle structured name rather than hand-rolled
+  Durable Object names.
 - The PoC Secret structured name should include `{ projectId, slug }`; the helper
   derives the stable Durable Object name from that value and calls
   `initialize()`.

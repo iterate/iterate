@@ -4,7 +4,7 @@ import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import type { Callable, FetchCallable } from "@iterate-com/shared/callable/types.ts";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import { getOrInitializeDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { withStreamProcessorRunner } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor-runner";
 import { jsonataReactorEventTypes } from "@iterate-com/shared/stream-processors/jsonata-reactor/contract";
 import type { ProcessorStreamApi, StreamEvent } from "@iterate-com/shared/stream-processors";
@@ -31,7 +31,6 @@ import { deleteIngressRoutesByProject, upsertIngressRoute } from "~/db/queries/.
 import {
   dispatchFetchCallable,
   ingressHostnameFromRequest,
-  ingressUrlFromRequest,
   normalizeIngressHost,
   parseIngressCallable,
 } from "~/ingress/host-routing.ts";
@@ -40,8 +39,14 @@ import {
   createProjectLifecycleProcessor,
   PROJECT_LIFECYCLE_STREAM_PATH,
   ProjectLifecycleProcessorContract,
-  projectLifecycleEventTypes,
 } from "~/domains/projects/stream-processors/project-lifecycle.ts";
+import {
+  type RepoDurableObject,
+  type RepoInfo,
+} from "~/domains/repos/durable-objects/repo-durable-object.ts";
+import { stripArtifactTokenQuery } from "~/domains/repos/artifacts.ts";
+import { getReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
+import { ITERATE_CONFIG_REPO_SLUG } from "~/domains/repos/iterate-config-repo.ts";
 
 export type ProjectStructuredName = {
   projectId: string;
@@ -80,6 +85,7 @@ type ProjectEnv = {
   APP_CONFIG: string;
   DB: D1Database;
   DO_CATALOG: D1Database;
+  REPO: DurableObjectNamespace<RepoDurableObject>;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
 };
 
@@ -102,6 +108,72 @@ type ProjectIngressRouteRow = {
   callable_json: string;
   created_at_ms: number;
   updated_at_ms: number;
+};
+
+type ProjectDynamicWorkerEntrypoint = {
+  fetch(request: Request): Response | Promise<Response>;
+  afterAppend(input: { event: Event }): unknown | Promise<unknown>;
+};
+
+type ProjectDynamicWorkerCode = {
+  compatibilityDate: string;
+  compatibilityFlags: string[];
+  globalOutbound: null;
+  mainModule: string;
+  modules: Record<string, { js: string }>;
+};
+
+type ProjectDynamicWorkerLoader = {
+  get(
+    name: string,
+    getCode: () => ProjectDynamicWorkerCode,
+  ): {
+    getEntrypoint(): unknown;
+  };
+};
+
+type ProjectRuntimeEnv = {
+  LOADER: ProjectDynamicWorkerLoader;
+  WORKSPACE: DurableObjectNamespace;
+};
+
+type ProjectConfigCheckout = {
+  commitOid: string;
+  workerSource: string;
+};
+
+type ProjectConfigGit = {
+  clone(input: Record<string, unknown>): Promise<unknown>;
+  log(input: { depth: number; dir: string; ref: string }): Promise<Array<{ oid: string }>>;
+  pull(input: Record<string, unknown>): Promise<unknown>;
+  status(input: { dir: string }): Promise<unknown>;
+};
+
+type ProjectConfigWorkspace = {
+  git: ProjectConfigGit;
+  workspace: ProjectConfigWorkspaceStub;
+};
+
+const PROJECT_CONFIG_WORKSPACE_ID = "project-ingress";
+const PROJECT_CONFIG_DIR = "/iterate-config";
+const PROJECT_CONFIG_WORKER_PATH = `${PROJECT_CONFIG_DIR}/worker.ts`;
+const PROJECT_CONFIG_CHECKOUT_STORAGE_KEY = "project.configWorker.checkout";
+const PROJECT_CONFIG_READY_STORAGE_KEY = "project.configWorker.ready";
+const PROJECT_CONFIG_REFRESHED_AT_STORAGE_KEY = "project.configWorker.refreshedAt";
+const PROJECT_CONFIG_REFRESH_INTERVAL_MS = 10_000;
+const PROJECT_DYNAMIC_WORKER_MAIN_MODULE = "worker.ts";
+
+type ProjectConfigWorkspaceName = {
+  projectId: string;
+  workspaceId: string;
+};
+
+type ProjectConfigWorkspaceStub = {
+  cloudflareShellGit(): Promise<unknown>;
+  cloudflareShellState(): Promise<Record<string, unknown>>;
+  hasFile(path: string): Promise<boolean>;
+  initialize(input: { name: string }): Promise<unknown>;
+  removePath(input: { force: boolean; path: string; recursive: boolean }): Promise<void>;
 };
 
 const ProjectLifecycleBase = createIterateDurableObjectBase<
@@ -133,9 +205,12 @@ const ProjectBase = withStreamProcessorRunner<
   },
 })(ProjectLifecycleBase);
 
-export const PROJECT_CREATED_EVENT_TYPE = projectLifecycleEventTypes.projectCreated;
-
 export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
+  #dynamicWorkerEntrypoint: {
+    commitOid: string;
+    entrypoint: ProjectDynamicWorkerEntrypoint;
+  } | null = null;
+
   constructor(ctx: DurableObjectState, env: ProjectEnv) {
     super(ctx, env);
     const sql = this.getDurableObjectSql();
@@ -212,6 +287,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     });
     await this.writeIngressRoutes({ hosts, projectId: input.projectId });
     const summary = this.requireSummary();
+    await this.getOrCreateIterateConfigRepo(summary);
     await this.writeProjectCreatedLifecycleEvent(summary);
     await this.writeAgentsRootRule(summary);
 
@@ -250,7 +326,20 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
 
   async afterAppend(input: { event: Event }) {
     await this.ensureStarted();
-    return await this.consumeStreamProcessorEvent({ event: input.event as StreamEvent });
+    const result = await this.consumeStreamProcessorEvent({ event: input.event as StreamEvent });
+    const summary = this.currentSummary();
+    const configWorkerIsReady = await this.ctx.storage.get<boolean>(
+      PROJECT_CONFIG_READY_STORAGE_KEY,
+    );
+    if (summary !== null && configWorkerIsReady === true) {
+      try {
+        await (await this.getCachedProjectDynamicWorkerEntrypoint(summary)).afterAppend(input);
+      } catch (error) {
+        await this.clearProjectConfigWorkerReady();
+        console.error("Project config worker afterAppend failed.", error);
+      }
+    }
+    return result;
   }
 
   async ingressFetch(request: Request): Promise<Response> {
@@ -270,7 +359,203 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
       });
     }
 
-    return projectLandingResponse({ request, summary });
+    try {
+      return await (await this.getIngressProjectDynamicWorkerEntrypoint(summary)).fetch(request);
+    } catch (error) {
+      console.error(
+        "Project config worker fetch failed; serving fallback landing response.",
+        error,
+      );
+      return projectLandingResponse({ request, summary });
+    }
+  }
+
+  private async getIngressProjectDynamicWorkerEntrypoint(
+    summary: ProjectSummary,
+  ): Promise<ProjectDynamicWorkerEntrypoint> {
+    if (await this.projectConfigCheckoutIsFresh()) {
+      try {
+        return await this.getCachedProjectDynamicWorkerEntrypoint(summary);
+      } catch (error) {
+        await this.clearProjectConfigWorkerReady();
+        console.error("Cached project config worker is invalid.", error);
+      }
+    }
+
+    try {
+      return await this.getFreshProjectDynamicWorkerEntrypoint(summary);
+    } catch (error) {
+      try {
+        console.error("Project config worker refresh failed; using cached worker.", error);
+        return await this.getCachedProjectDynamicWorkerEntrypoint(summary);
+      } catch {
+        throw error;
+      }
+    }
+  }
+
+  private async getFreshProjectDynamicWorkerEntrypoint(
+    summary: ProjectSummary,
+  ): Promise<ProjectDynamicWorkerEntrypoint> {
+    const checkout = await this.ensureProjectConfigCheckout(summary);
+    const entrypoint = this.loadProjectDynamicWorkerEntrypoint({ checkout, projectId: summary.id });
+    await this.ctx.storage.put(PROJECT_CONFIG_CHECKOUT_STORAGE_KEY, checkout);
+    await this.ctx.storage.put(PROJECT_CONFIG_READY_STORAGE_KEY, true);
+    await this.ctx.storage.put(PROJECT_CONFIG_REFRESHED_AT_STORAGE_KEY, Date.now());
+    return entrypoint;
+  }
+
+  private async getCachedProjectDynamicWorkerEntrypoint(
+    summary: ProjectSummary,
+  ): Promise<ProjectDynamicWorkerEntrypoint> {
+    const checkout = await this.ctx.storage.get<ProjectConfigCheckout>(
+      PROJECT_CONFIG_CHECKOUT_STORAGE_KEY,
+    );
+    if (!isProjectConfigCheckout(checkout)) {
+      throw new Error("Project config worker is marked ready but has no validated checkout.");
+    }
+
+    return this.loadProjectDynamicWorkerEntrypoint({ checkout, projectId: summary.id });
+  }
+
+  private loadProjectDynamicWorkerEntrypoint(input: {
+    checkout: ProjectConfigCheckout;
+    projectId: string;
+  }): ProjectDynamicWorkerEntrypoint {
+    const { checkout } = input;
+    if (this.#dynamicWorkerEntrypoint?.commitOid === checkout.commitOid) {
+      return this.#dynamicWorkerEntrypoint.entrypoint;
+    }
+
+    const loader = projectRuntimeEnv(this.env).LOADER;
+    const entrypoint = loader
+      .get(
+        projectDynamicWorkerId({
+          commitOid: checkout.commitOid,
+          projectId: input.projectId,
+        }),
+        () => projectDynamicWorkerCode(checkout.workerSource),
+      )
+      .getEntrypoint();
+
+    if (!isProjectDynamicWorkerEntrypoint(entrypoint)) {
+      throw new Error("Project dynamic worker entrypoint is missing fetch or afterAppend.");
+    }
+
+    this.#dynamicWorkerEntrypoint = {
+      commitOid: checkout.commitOid,
+      entrypoint,
+    };
+    return entrypoint;
+  }
+
+  private async clearProjectConfigWorkerReady() {
+    this.#dynamicWorkerEntrypoint = null;
+    await this.ctx.storage.delete(PROJECT_CONFIG_READY_STORAGE_KEY);
+    await this.ctx.storage.delete(PROJECT_CONFIG_CHECKOUT_STORAGE_KEY);
+    await this.ctx.storage.delete(PROJECT_CONFIG_REFRESHED_AT_STORAGE_KEY);
+  }
+
+  private async projectConfigCheckoutIsFresh() {
+    const refreshedAt = await this.ctx.storage.get<number>(PROJECT_CONFIG_REFRESHED_AT_STORAGE_KEY);
+    return (
+      typeof refreshedAt === "number" &&
+      Number.isFinite(refreshedAt) &&
+      Date.now() - refreshedAt < PROJECT_CONFIG_REFRESH_INTERVAL_MS
+    );
+  }
+
+  private async ensureProjectConfigCheckout(
+    summary: ProjectSummary,
+  ): Promise<ProjectConfigCheckout> {
+    const repo = await this.getOrCreateIterateConfigRepo(summary);
+    const { git, workspace } = await this.getProjectConfigWorkspace(summary.id);
+
+    if (await workspace.hasFile(`${PROJECT_CONFIG_DIR}/.git/HEAD`)) {
+      let checkoutIsUsable = true;
+      try {
+        await git.status({ dir: PROJECT_CONFIG_DIR });
+      } catch {
+        checkoutIsUsable = false;
+      }
+
+      if (checkoutIsUsable) {
+        await this.refreshProjectConfigRepo({ git, repo });
+        return await this.readProjectConfigCheckout({ git, workspace });
+      }
+    }
+
+    await workspace.removePath({
+      force: true,
+      path: PROJECT_CONFIG_DIR,
+      recursive: true,
+    });
+    await this.cloneProjectConfigRepo({ git, repo, workspace });
+    return await this.readProjectConfigCheckout({ git, workspace });
+  }
+
+  protected async cloneProjectConfigRepo(input: ProjectConfigWorkspace & { repo: RepoInfo }) {
+    await input.git.clone({
+      url: input.repo.remote,
+      dir: PROJECT_CONFIG_DIR,
+      branch: input.repo.defaultBranch,
+      depth: 1,
+      ...artifactGitAuth(input.repo),
+    });
+  }
+
+  protected async refreshProjectConfigRepo(input: { git: ProjectConfigGit; repo: RepoInfo }) {
+    await input.git.pull({
+      dir: PROJECT_CONFIG_DIR,
+      remote: "origin",
+      ref: input.repo.defaultBranch,
+      author: {
+        name: "Iterate",
+        email: "support@iterate.com",
+      },
+      ...artifactGitAuth(input.repo),
+    });
+  }
+
+  private async readProjectConfigCheckout(input: ProjectConfigWorkspace) {
+    const [commit] = await input.git.log({
+      dir: PROJECT_CONFIG_DIR,
+      depth: 1,
+      ref: "HEAD",
+    });
+    if (!commit) {
+      throw new Error("Project iterate-config checkout does not have a HEAD commit.");
+    }
+
+    const state = await input.workspace.cloudflareShellState();
+    const readFile = state.readFile;
+    if (typeof readFile !== "function") {
+      throw new Error("Project Workspace state does not implement readFile.");
+    }
+
+    const workerSource = await readFile(PROJECT_CONFIG_WORKER_PATH);
+    if (typeof workerSource !== "string" || workerSource.trim() === "") {
+      throw new Error(`${ITERATE_CONFIG_REPO_SLUG} repo is missing worker.ts.`);
+    }
+
+    return {
+      commitOid: commit.oid,
+      workerSource,
+    };
+  }
+
+  private async getProjectConfigWorkspace(projectId: string): Promise<ProjectConfigWorkspace> {
+    const name = projectConfigWorkspaceName(projectId);
+    const durableObjectName = deriveDurableObjectNameFromStructuredName({ structuredName: name });
+    const workspace = projectRuntimeEnv(this.env).WORKSPACE.getByName(
+      durableObjectName,
+    ) as unknown as ProjectConfigWorkspaceStub;
+    await workspace.initialize({ name: durableObjectName });
+
+    return {
+      git: (await workspace.cloudflareShellGit()) as unknown as ProjectConfigGit,
+      workspace,
+    };
   }
 
   private lookupLocalRoute(host: string): ExactHostIngressRule | null {
@@ -389,6 +674,12 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
   }
 
   private requireSummary(): ProjectSummary {
+    const summary = this.currentSummary();
+    if (!summary) throw new Error("Project has not been created yet.");
+    return summary;
+  }
+
+  private currentSummary(): ProjectSummary | null {
     const row = this.getDurableObjectSql()
       .exec<ProjectStateRow>(
         `SELECT id, slug, default_host, hosts_json, metadata_json, created_at_ms, updated_at_ms
@@ -397,7 +688,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
       )
       .toArray()[0];
 
-    if (!row) throw new Error("Project has not been created yet.");
+    if (!row) return null;
 
     return {
       id: row.id,
@@ -430,7 +721,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     });
 
     await stream.append({
-      type: PROJECT_CREATED_EVENT_TYPE,
+      type: "events.iterate.com/project/created",
       idempotencyKey: `project-created:${summary.id}`,
       payload: {
         defaultHost: summary.defaultHost,
@@ -441,8 +732,16 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     });
   }
 
+  private async getOrCreateIterateConfigRepo(summary: ProjectSummary) {
+    return await getReposCapability({
+      exports: readLoopbackExports(this.ctx),
+      props: { projectId: summary.id },
+    }).ensureIterateConfigInfo({ projectSlug: summary.slug });
+  }
+
   private async ensureAgentsRoot(projectId: string) {
-    await getOrInitializeDoStub({
+    await getInitializedDoStub({
+      allowCreate: true,
       namespace: this.env.AGENT,
       name: getAgentDurableObjectName({
         agentPath: AGENTS_STREAM_PATH,
@@ -622,39 +921,85 @@ function projectHosts(input: { bases: readonly string[]; projectId: string; slug
   };
 }
 
+function projectDynamicWorkerId(input: { commitOid: string; projectId: string }) {
+  return `project-ingress:${input.projectId}:${input.commitOid}`;
+}
+
+function projectDynamicWorkerCode(workerSource: string) {
+  return {
+    compatibilityDate: "2026-04-27",
+    compatibilityFlags: ["nodejs_compat"],
+    globalOutbound: null,
+    mainModule: PROJECT_DYNAMIC_WORKER_MAIN_MODULE,
+    modules: {
+      [PROJECT_DYNAMIC_WORKER_MAIN_MODULE]: {
+        js: workerSource,
+      },
+    },
+  };
+}
+
+function projectLandingResponse(input: { request: Request; summary: ProjectSummary }) {
+  const url = new URL(input.request.url);
+  const hostname = input.request.headers.get("x-iterate-ingress-hostname") ?? url.hostname;
+  return new Response(
+    JSON.stringify({
+      defaultHost: input.summary.defaultHost,
+      hostname,
+      projectId: input.summary.id,
+      slug: input.summary.slug,
+    }),
+    {
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        "x-project-ingress-runtime": "static-fallback",
+      },
+    },
+  );
+}
+
+function projectConfigWorkspaceName(projectId: string): ProjectConfigWorkspaceName {
+  return {
+    projectId,
+    workspaceId: PROJECT_CONFIG_WORKSPACE_ID,
+  };
+}
+
+function artifactGitAuth(repo: RepoInfo) {
+  return {
+    username: "x",
+    password: stripArtifactTokenQuery(repo.token),
+  };
+}
+
+function projectRuntimeEnv(env: ProjectEnv): ProjectRuntimeEnv {
+  return env as unknown as ProjectRuntimeEnv;
+}
+
 function readLoopbackExports(ctx: DurableObjectState) {
   return ctx.exports;
 }
 
-function projectLandingResponse(input: { request: Request; summary: ProjectSummary }) {
-  const url = ingressUrlFromRequest(input.request);
-  return new Response(
-    `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${escapeHtml(input.summary.slug)} project</title>
-  <style>
-    body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #171717; background: #fafafa; }
-    main { max-width: 680px; margin: 0 auto; padding: 32px 20px; }
-    h1 { font-size: 18px; margin: 0 0 8px; }
-    p { color: #525252; line-height: 1.5; }
-    code { display: block; overflow-wrap: anywhere; white-space: pre-wrap; border-radius: 6px; background: #f5f5f5; padding: 12px; font: 13px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>${escapeHtml(input.summary.slug)}</h1>
-    <p>This request reached the Project Durable Object for ${escapeHtml(url.host)}.</p>
-    <code>${escapeHtml(input.summary.hosts.join("\n"))}</code>
-  </main>
-</body>
-</html>`,
-    { headers: { "Content-Type": "text/html; charset=utf-8" } },
+function isProjectDynamicWorkerEntrypoint(value: unknown): value is ProjectDynamicWorkerEntrypoint {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "fetch" in value &&
+    typeof value.fetch === "function" &&
+    "afterAppend" in value &&
+    typeof value.afterAppend === "function"
   );
 }
 
-function escapeHtml(value: string) {
-  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+function isProjectConfigCheckout(value: unknown): value is ProjectConfigCheckout {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "commitOid" in value &&
+    typeof value.commitOid === "string" &&
+    value.commitOid.length > 0 &&
+    "workerSource" in value &&
+    typeof value.workerSource === "string" &&
+    value.workerSource.trim() !== ""
+  );
 }

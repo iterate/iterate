@@ -119,7 +119,8 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
 
   const [pet, workspace, agent, pipelinedAgent, composed] = await Promise.all([
     ctx.integrations.http.catalog.getPet({ petId: "fido", include: "owner" }),
-    ctx.workspace.proofOfConcept({ message: "workspace from inbound MCP" }),
+    ctx.workspace.writeFile("/inbound-mcp-workspace.txt", "workspace from inbound MCP\\n")
+      .then(() => ctx.workspace.readFile("/inbound-mcp-workspace.txt")),
     agentHandle.sendMessage({ message: "hi", subPath: "mcp" }),
     ctx.agents.create().doThing({ label: "promise-pipeline", value: 21 }),
     ctx.integrations.builtinMatrix.compose({
@@ -158,7 +159,7 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
         operationIds: ["getPet"],
         pet: { include: "owner", name: "Pet FIDO", petId: "fido", provider: "openapi" },
         pipelinedAgent: { doubled: 42, label: "promise-pipeline", value: 21 },
-        workspace: { message: "workspace from inbound MCP" },
+        workspace: "workspace from inbound MCP\n",
       });
 
       const sessionId = transport.sessionId;

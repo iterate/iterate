@@ -28,6 +28,10 @@
         "name": "STREAM",
         "class_name": "StreamDurableObject",
       },
+      {
+        "name": "REPO",
+        "class_name": "RepoDurableObject",
+      },
     ],
   },
   "d1_databases": [
@@ -56,6 +60,10 @@
     {
       "tag": "v3",
       "new_sqlite_classes": ["AgentDurableObject", "CodemodeSession"],
+    },
+    {
+      "tag": "v4",
+      "new_sqlite_classes": ["RepoDurableObject"],
     },
   ],
 }

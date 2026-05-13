@@ -7,6 +7,7 @@ import type {
   DurableObjectClass,
   DurableObjectConstructor,
   DurableObjectMixinResult,
+  ReqEnvOf,
 } from "./mixin-types.ts";
 import type { DurableObjectCoreProtected } from "./with-durable-object-core.ts";
 
@@ -45,6 +46,13 @@ export interface LifecycleHooksMembers<
   initialize(input: LifecycleInitializeInput<InitialState>): Promise<StructuredName>;
   assertInitialized(): StructuredName;
   ensureStarted(): Promise<StructuredName>;
+  /**
+   * Returns this Durable Object's D1 catalog row, or `null` when D1 cataloging
+   * is explicitly disabled, the object has not been initialized, the
+   * background D1 write has not run yet, or the mixin-owned tables have not
+   * been created yet.
+   */
+  getD1ObjectCatalogRecord(): Promise<D1ObjectCatalogRecord<StructuredName> | null>;
 }
 
 type LifecycleHook<StructuredName extends LifecycleStructuredName> = (
@@ -56,7 +64,7 @@ type DurableObjectBranded = {
    * `DurableObjectNamespace<T>` is meant to contain real Durable Object
    * instances, not arbitrary objects that happen to implement `initialize()`.
    * Cloudflare's DurableObject instance type includes this brand, so requiring
-   * it keeps `getOrInitializeDoStub({ namespace, ... })` tied to actual DO
+   * it keeps `getInitializedDoStub({ namespace, ... })` tied to actual DO
    * namespaces.
    */
   __DURABLE_OBJECT_BRAND: never;
@@ -70,16 +78,29 @@ type InitialStateOf<TInstance> =
     ? InitialState
     : undefined;
 
-type GetOrInitializeDoStubOptions<TInstance extends DurableObjectBranded> = {
-  namespace: DurableObjectNamespace<TInstance>;
-  name: string | StructuredNameOf<TInstance>;
-} & ([InitialStateOf<TInstance>] extends [undefined]
-  ? {
-      initialState?: never;
-    }
-  : {
-      initialState: InitialStateOf<TInstance>;
-    });
+export type D1ObjectCatalogRecord<StructuredName extends LifecycleStructuredName> = {
+  class: string;
+  name: string;
+  id: string;
+  structuredName: StructuredName;
+  createdAt: string;
+  lastWokenAt: string;
+};
+
+export type D1ObjectCatalogIndexValue = string | number | readonly (string | number)[];
+
+export type D1ObjectCatalogIndexDefinitions<StructuredName extends LifecycleStructuredName> =
+  Record<string, (structuredName: StructuredName) => D1ObjectCatalogIndexValue>;
+
+export type D1ObjectCatalogOptions<StructuredName extends LifecycleStructuredName, Env> = {
+  className: string;
+  getDatabase(env: Env): D1Database;
+  indexes?: D1ObjectCatalogIndexDefinitions<StructuredName>;
+};
+
+type D1ObjectCatalogSetting<StructuredName extends LifecycleStructuredName, Env> =
+  | "none"
+  | D1ObjectCatalogOptions<StructuredName, Env>;
 
 /**
  * Type-only protected surface.
@@ -120,10 +141,14 @@ type WithLifecycleHooksResult<
   TBase extends DurableObjectClass,
   StructuredName extends LifecycleStructuredName,
   InitialState,
+  Env,
 > =
   // Preserve the generic Durable Object constructor so this remains legal:
   //
-  //   const RoomBase = withLifecycleHooks({ nameSchema: RoomName })(withDurableObjectCore(DurableObject));
+  //   const RoomBase = withLifecycleHooks({
+  //     d1ObjectCatalog: "none",
+  //     nameSchema: RoomName,
+  //   })(withDurableObjectCore(DurableObject));
   //   class Room extends RoomBase<Env> {}
   // Add the instance members introduced by this mixin. The protected getters
   // have to come from `LifecycleHooksProtected` because protected members
@@ -131,7 +156,8 @@ type WithLifecycleHooksResult<
   DurableObjectMixinResult<
     TBase,
     LifecycleHooksMembers<StructuredName, InitialState> &
-      LifecycleHooksProtected<StructuredName, InitialState>
+      LifecycleHooksProtected<StructuredName, InitialState>,
+    ReqEnvOf<TBase> & Env
   >;
 
 const LIFECYCLE_NAME_STORAGE_KEY = "__mixin_lifecycle_hooks.name.v1";
@@ -182,7 +208,8 @@ export class InitializeInitialStateMismatchError extends Error {
 /**
  * Adds named initialization and lifecycle hooks to a SQLite-backed Durable Object.
  *
- * Public methods: `initialize()`, `ensureStarted()`, and `assertInitialized()`.
+ * Public methods: `initialize()`, `ensureStarted()`, `assertInitialized()`,
+ * and `getD1ObjectCatalogRecord()`.
  * Protected subclass/mixin surface: `name`, `structuredName`,
  * `registerOnFirstInitialize()`, and `registerOnInstanceWake()`.
  *
@@ -209,7 +236,8 @@ export class InitializeInitialStateMismatchError extends Error {
 export function withLifecycleHooks<
   StructuredName extends LifecycleStructuredName = string,
   InitialState = undefined,
->(options?: {
+  Env = unknown,
+>(options: {
   /**
    * Parses the Durable Object string name after a tiny convenience step:
    * names starting with "{" are JSON-parsed if possible before being passed
@@ -223,13 +251,23 @@ export function withLifecycleHooks<
    * later calls may omit it, or may provide the exact same value.
    */
   initialStateSchema?: z.ZodType<InitialState>;
+  /**
+   * Explicit D1 object catalog configuration.
+   *
+   * Use `"none"` for Durable Objects that deliberately should not be listed in
+   * D1. Otherwise lifecycle hooks own a best-effort D1 projection of initialized
+   * objects. Catalog writes are intentionally detached from startup so Durable
+   * Object creation does not depend on external D1 latency or availability.
+   */
+  d1ObjectCatalog: D1ObjectCatalogSetting<StructuredName, Env>;
 }) {
-  const nameSchema = (options?.nameSchema ?? z.string()) as z.ZodType<StructuredName>;
-  const initialStateSchema = options?.initialStateSchema as z.ZodType<InitialState> | undefined;
+  const nameSchema = (options.nameSchema ?? z.string()) as z.ZodType<StructuredName>;
+  const initialStateSchema = options.initialStateSchema as z.ZodType<InitialState> | undefined;
+  const d1ObjectCatalog = options.d1ObjectCatalog;
 
   return function <TBase extends DurableObjectClass>(
     Base: TBase & Constructor<DurableObjectCoreProtected>,
-  ): WithLifecycleHooksResult<TBase, StructuredName, InitialState> {
+  ): WithLifecycleHooksResult<TBase, StructuredName, InitialState, Env> {
     const BaseWithCore = Base as unknown as DurableObjectConstructor<
       unknown,
       DurableObjectCoreProtected
@@ -265,6 +303,12 @@ export function withLifecycleHooks<
         );
         if (initialState !== undefined) {
           this.#initialState = this.parseInitialState(initialState);
+        }
+
+        if (d1ObjectCatalog !== "none") {
+          this.registerOnInstanceWake((structuredName) => {
+            this.scheduleD1ObjectCatalogUpsert(structuredName);
+          });
         }
       }
 
@@ -430,6 +474,62 @@ export function withLifecycleHooks<
         }
       }
 
+      async getD1ObjectCatalogRecord(): Promise<D1ObjectCatalogRecord<StructuredName> | null> {
+        if (d1ObjectCatalog === "none") {
+          return null;
+        }
+
+        const initialized = tryGetInitialized(this);
+        if (!initialized) {
+          return null;
+        }
+
+        return await getD1ObjectCatalogRecord<StructuredName>(
+          d1ObjectCatalog.getDatabase(this.env as Env),
+          {
+            className: d1ObjectCatalog.className,
+            name: this.name,
+          },
+        );
+      }
+
+      /**
+       * Fire-and-log catalog update.
+       *
+       * D1 is outside the Durable Object's local transaction boundary. This
+       * promise is deliberately detached and caught: startup can succeed and
+       * callers can retry even when D1 is temporarily unavailable.
+       *
+       * Future non-creating stub lookups should treat this catalog as a
+       * preflight: if no row exists, return "not found" without waking the
+       * Durable Object. If a row exists, the lookup should call
+       * `ensureStarted()`, not `initialize()`, so catalog/local-storage drift is
+       * surfaced instead of silently recreating lifecycle state. Because
+       * catalog writes are currently best-effort, catalog misses can be false
+       * negatives until this mixin owns a durable retry task that eventually
+       * guarantees the projection write.
+       */
+      private scheduleD1ObjectCatalogUpsert(structuredName: StructuredName) {
+        if (d1ObjectCatalog === "none") {
+          return;
+        }
+
+        void Promise.resolve()
+          .then(() =>
+            upsertD1ObjectCatalog({
+              db: d1ObjectCatalog.getDatabase(this.env as Env),
+              className: d1ObjectCatalog.className,
+              id: this.getDurableObjectId().toString(),
+              indexes: d1ObjectCatalog.indexes,
+              name: this.name,
+              structuredName,
+            }),
+          )
+          .catch((error: unknown) => {
+            console.error("[withLifecycleHooks] failed to upsert D1 object catalog row", error);
+          });
+      }
+
       private parseName(name: string): StructuredName {
         let valueForSchema: unknown = name;
 
@@ -491,29 +591,88 @@ export function withLifecycleHooks<
     return LifecycleHooksMixin as unknown as WithLifecycleHooksResult<
       TBase,
       StructuredName,
-      InitialState
+      InitialState,
+      Env
     >;
   };
 }
 
 /**
- * Returns a named Durable Object stub after calling `initialize({ name })`.
+ * Returns a named Durable Object stub after starting lifecycle hooks.
  *
  * `name` may be either a raw string Durable Object name or the structured-name
  * object accepted by the target Durable Object's lifecycle schema. Object names
  * are serialized as bare canonical JSON before `namespace.getByName(name)`.
+ *
+ * `allowCreate: true` calls `initialize({ name })`, which creates lifecycle
+ * state when it is missing. `allowCreate: false` asks the lifecycle object for
+ * its D1 catalog record and returns `null` when there is no row or local
+ * lifecycle state is missing. Because a raw `DurableObjectNamespace` does not
+ * expose class-owned catalog metadata, this first version still wakes the named
+ * Durable Object and cannot distinguish catalog/local-storage drift from "not
+ * found". It deliberately treats the best-effort catalog as the current
+ * existence check, so a delayed or failed catalog write can produce a false
+ * miss. A future helper shape should move the D1 preflight outside the stub
+ * wake, then call `ensureStarted()` on catalog hits so drift is surfaced.
  */
-export async function getOrInitializeDoStub<TInstance extends DurableObjectBranded>(
-  options: GetOrInitializeDoStubOptions<TInstance>,
-): Promise<DurableObjectStub<TInstance>> {
+export async function getInitializedDoStub<
+  TInstance extends DurableObjectBranded,
+  const AllowCreate extends boolean,
+>(
+  options: {
+    allowCreate: AllowCreate;
+    namespace: DurableObjectNamespace<TInstance>;
+    name: string | StructuredNameOf<TInstance>;
+  } & (AllowCreate extends true
+    ? [InitialStateOf<TInstance>] extends [undefined]
+      ? {
+          initialState?: never;
+        }
+      : {
+          initialState: InitialStateOf<TInstance>;
+        }
+    : {
+        initialState?: never;
+      }),
+): Promise<
+  AllowCreate extends true ? DurableObjectStub<TInstance> : DurableObjectStub<TInstance> | null
+> {
   if (options.name === undefined) {
-    throw new Error("getOrInitializeDoStub() requires name.");
+    throw new Error("getInitializedDoStub() requires name.");
   }
 
   const name = deriveDurableObjectNameFromStructuredName({
     structuredName: options.name,
   });
   const stub = options.namespace.getByName(name);
+
+  if (!options.allowCreate) {
+    const lifecycleStub = stub as unknown as LifecycleHooksMembers<
+      StructuredNameOf<TInstance>,
+      InitialStateOf<TInstance>
+    >;
+    const catalogRecord = await lifecycleStub.getD1ObjectCatalogRecord();
+    if (catalogRecord === null) {
+      return null as AllowCreate extends true
+        ? DurableObjectStub<TInstance>
+        : DurableObjectStub<TInstance> | null;
+    }
+
+    try {
+      await lifecycleStub.ensureStarted();
+      return stub as AllowCreate extends true
+        ? DurableObjectStub<TInstance>
+        : DurableObjectStub<TInstance> | null;
+    } catch (error) {
+      if (isNotInitializedError(error)) {
+        return null as AllowCreate extends true
+          ? DurableObjectStub<TInstance>
+          : DurableObjectStub<TInstance> | null;
+      }
+
+      throw error;
+    }
+  }
 
   // Durable Object RPC methods are exposed on the stub, but the local variable
   // cannot carry the exact structured-name generic after Cloudflare's namespace
@@ -523,10 +682,250 @@ export async function getOrInitializeDoStub<TInstance extends DurableObjectBrand
     stub as unknown as LifecycleHooksMembers<StructuredNameOf<TInstance>, InitialStateOf<TInstance>>
   ).initialize({
     name,
-    initialState: options.initialState,
-  });
+    initialState: "initialState" in options ? options.initialState : undefined,
+  } as LifecycleInitializeInput<InitialStateOf<TInstance>>);
 
-  return stub;
+  return stub as AllowCreate extends true
+    ? DurableObjectStub<TInstance>
+    : DurableObjectStub<TInstance> | null;
+}
+
+export async function getD1ObjectCatalogRecord<StructuredName extends LifecycleStructuredName>(
+  db: D1Database,
+  input: {
+    className: string;
+    name: string;
+  },
+): Promise<D1ObjectCatalogRecord<StructuredName> | null> {
+  try {
+    const row = await db
+      .prepare(
+        `SELECT class, name, id, structured_name_json, created_at, last_woken_at
+         FROM mixin_d1_object_catalog_objects
+         WHERE class = ? AND name = ?
+         LIMIT 1`,
+      )
+      .bind(input.className, input.name)
+      .first<D1ObjectCatalogRow>();
+
+    return row === null ? null : parseD1ObjectCatalogRow<StructuredName>(row);
+  } catch (error) {
+    if (isMissingD1ObjectCatalogTableError(error)) {
+      return null;
+    }
+
+    throw error;
+  }
+}
+
+export async function listD1ObjectCatalogRecordsByIndex<
+  StructuredName extends LifecycleStructuredName,
+>(
+  db: D1Database,
+  input: {
+    className: string;
+    indexName: string;
+    indexValue: string | number;
+  },
+): Promise<D1ObjectCatalogRecord<StructuredName>[]> {
+  try {
+    const { results } = await db
+      .prepare(
+        `SELECT o.class, o.name, o.id, o.structured_name_json, o.created_at, o.last_woken_at
+         FROM mixin_d1_object_catalog_indexes i
+         JOIN mixin_d1_object_catalog_objects o
+           ON o.class = i.class AND o.name = i.name
+         WHERE i.class = ? AND i.index_name = ? AND i.index_value = ?
+         ORDER BY o.created_at ASC, o.name ASC`,
+      )
+      .bind(input.className, input.indexName, String(input.indexValue))
+      .all<D1ObjectCatalogRow>();
+
+    return results.map((row) => parseD1ObjectCatalogRow<StructuredName>(row));
+  } catch (error) {
+    if (isMissingD1ObjectCatalogTableError(error)) {
+      return [];
+    }
+
+    throw error;
+  }
+}
+
+export async function listD1ObjectCatalogRecords<StructuredName extends LifecycleStructuredName>(
+  db: D1Database,
+  input: {
+    className: string;
+  },
+): Promise<D1ObjectCatalogRecord<StructuredName>[]> {
+  try {
+    const { results } = await db
+      .prepare(
+        `SELECT class, name, id, structured_name_json, created_at, last_woken_at
+         FROM mixin_d1_object_catalog_objects
+         WHERE class = ?
+         ORDER BY created_at ASC, name ASC`,
+      )
+      .bind(input.className)
+      .all<D1ObjectCatalogRow>();
+
+    return results.map((row) => parseD1ObjectCatalogRow<StructuredName>(row));
+  } catch (error) {
+    if (isMissingD1ObjectCatalogTableError(error)) {
+      return [];
+    }
+
+    throw error;
+  }
+}
+
+/**
+ * @internal Prefer lifecycle-owned catalog writes through `d1ObjectCatalog`.
+ * This remains exported for Durable Object bases that cannot use this mixin yet.
+ */
+export async function upsertD1ObjectCatalog<StructuredName extends LifecycleStructuredName>(input: {
+  db: D1Database;
+  className: string;
+  id: string;
+  indexes: D1ObjectCatalogIndexDefinitions<StructuredName> | undefined;
+  name: string;
+  structuredName: StructuredName;
+}) {
+  const now = new Date().toISOString();
+  const indexEntries = getIndexEntries(input.indexes, input.structuredName);
+
+  await input.db.batch([
+    input.db.prepare(CREATE_D1_OBJECT_CATALOG_OBJECTS_TABLE_SQL),
+    input.db.prepare(CREATE_D1_OBJECT_CATALOG_INDEXES_TABLE_SQL),
+    input.db
+      .prepare(
+        `INSERT INTO mixin_d1_object_catalog_objects (
+          class,
+          name,
+          id,
+          structured_name_json,
+          created_at,
+          last_woken_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(class, name) DO UPDATE SET
+          id = excluded.id,
+          structured_name_json = excluded.structured_name_json,
+          last_woken_at = excluded.last_woken_at`,
+      )
+      .bind(input.className, input.name, input.id, JSON.stringify(input.structuredName), now, now),
+    input.db
+      .prepare(
+        `DELETE FROM mixin_d1_object_catalog_indexes
+         WHERE class = ? AND name = ?`,
+      )
+      .bind(input.className, input.name),
+    ...indexEntries.map((entry) =>
+      input.db
+        .prepare(
+          `INSERT INTO mixin_d1_object_catalog_indexes (
+            class,
+            index_name,
+            index_value,
+            name
+          )
+          VALUES (?, ?, ?, ?)`,
+        )
+        .bind(input.className, entry.indexName, entry.indexValue, input.name),
+    ),
+  ]);
+}
+
+const CREATE_D1_OBJECT_CATALOG_OBJECTS_TABLE_SQL = `CREATE TABLE IF NOT EXISTS mixin_d1_object_catalog_objects (
+      class TEXT NOT NULL,
+      name TEXT NOT NULL,
+      id TEXT NOT NULL,
+      structured_name_json TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      last_woken_at TEXT NOT NULL,
+      PRIMARY KEY (class, name)
+    )`;
+
+const CREATE_D1_OBJECT_CATALOG_INDEXES_TABLE_SQL = `CREATE TABLE IF NOT EXISTS mixin_d1_object_catalog_indexes (
+      class TEXT NOT NULL,
+      index_name TEXT NOT NULL,
+      index_value TEXT NOT NULL,
+      name TEXT NOT NULL,
+      PRIMARY KEY (class, index_name, index_value, name)
+    )`;
+
+type D1ObjectCatalogRow = {
+  class: string;
+  name: string;
+  id: string;
+  structured_name_json: string;
+  created_at: string;
+  last_woken_at: string;
+};
+
+function parseD1ObjectCatalogRow<StructuredName extends LifecycleStructuredName>(
+  row: D1ObjectCatalogRow,
+): D1ObjectCatalogRecord<StructuredName> {
+  return {
+    class: row.class,
+    name: row.name,
+    id: row.id,
+    structuredName: JSON.parse(row.structured_name_json) as StructuredName,
+    createdAt: row.created_at,
+    lastWokenAt: row.last_woken_at,
+  };
+}
+
+function getIndexEntries<StructuredName extends LifecycleStructuredName>(
+  indexes: D1ObjectCatalogIndexDefinitions<StructuredName> | undefined,
+  structuredName: StructuredName,
+) {
+  return Object.entries(indexes ?? {}).flatMap(([indexName, getValue]) => {
+    const value = getValue(structuredName);
+    const values = Array.isArray(value) ? value : [value];
+
+    return values.map((indexValue) => ({
+      indexName,
+      indexValue: String(indexValue),
+    }));
+  });
+}
+
+function tryGetInitialized<StructuredName extends LifecycleStructuredName>(
+  instance: LifecycleHooksMembers<StructuredName>,
+) {
+  try {
+    instance.assertInitialized();
+    return true;
+  } catch (error) {
+    if (isNotInitializedError(error)) {
+      return false;
+    }
+
+    throw error;
+  }
+}
+
+function isNotInitializedError(error: unknown) {
+  if (error instanceof Error && error.name === "NotInitializedError") {
+    return true;
+  }
+
+  if (error instanceof Error && error.message.includes("NotInitializedError")) {
+    return true;
+  }
+
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "name" in error &&
+    error.name === "NotInitializedError"
+  );
+}
+
+function isMissingD1ObjectCatalogTableError(error: unknown) {
+  return (
+    error instanceof Error && error.message.includes("no such table: mixin_d1_object_catalog_")
+  );
 }
 
 /**

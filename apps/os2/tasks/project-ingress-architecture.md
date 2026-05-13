@@ -122,8 +122,8 @@ system simpler.
   `initializeProject`.
 - **Project Listing Projection**: app-level D1 `projects` row used for listing,
   route lookup, and app queries.
-- **Durable Object Catalog**: mixin-owned D1 tables from `withD1ObjectCatalog`,
-  separate from product tables.
+- **Durable Object Catalog**: lifecycle-owned D1 tables configured with
+  `d1ObjectCatalog`, separate from product tables.
 - **Project Ingress Host**: a rootable Project-owned host.
 - **Default Project Ingress Host**: the host OS2 uses for ordinary generated
   public URLs.
@@ -197,7 +197,7 @@ stacks:
 
 - `withDurableObjectCore`
 - `withLifecycleHooks`
-- `withD1ObjectCatalog`
+- lifecycle `d1ObjectCatalog`
 - `withOuterbase`
 - `withKvInspector`
 

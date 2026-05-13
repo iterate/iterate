@@ -58,7 +58,6 @@ describeIfMcpTarget("project MCP exec_js static codemode provider stack", () => 
       expect(result.isError, text).not.toBe(true);
       expect(text).toContain("codemode e2e proof started");
       expect(text).toContain("repo callback");
-      expect(text).toContain("workspace callback");
 
       const proof = parseRunCodeResult(text);
       expect(proof).toMatchObject({
@@ -89,8 +88,7 @@ describeIfMcpTarget("project MCP exec_js static codemode provider stack", () => 
           },
         },
         workspace: {
-          callbackCalled: true,
-          message: "workspace from MCP e2e",
+          text: "workspace from MCP e2e\n",
         },
       });
       expect(proof.ai.model).toBe("@cf/meta/llama-3.1-8b-instruct");
@@ -214,7 +212,6 @@ function buildCodemodeProofScript(input: { slackChannelId: string | null }) {
   });
 
   const repoCallbacks = [];
-  const workspaceCallbacks = [];
   const repo = await repos.get({ slug: \`e2e-\${marker}\` }).proofOfConcept({
     message: "repo from MCP e2e",
     callback: async (args) => {
@@ -222,13 +219,9 @@ function buildCodemodeProofScript(input: { slackChannelId: string | null }) {
       console.log("repo callback", args.repoName);
     },
   });
-  const workspaceResult = await workspace.proofOfConcept({
-    message: "workspace from MCP e2e",
-    callback: async (args) => {
-      workspaceCallbacks.push(args.workspaceName);
-      console.log("workspace callback", args.workspaceName);
-    },
-  });
+  const workspacePath = \`/mcp-e2e-\${marker}.txt\`;
+  await workspace.writeFile(workspacePath, "workspace from MCP e2e\\n");
+  const workspaceText = await workspace.readFile(workspacePath);
 
   const explicitAgentHandle = await ctx.agents.create();
   const explicitAgent = await explicitAgentHandle.sendMessage({
@@ -306,9 +299,8 @@ function buildCodemodeProofScript(input: { slackChannelId: string | null }) {
       pipelined: pipelinedAgent,
     },
     workspace: {
-      callbackCalled: workspaceCallbacks.length > 0,
-      message: workspaceResult.message,
-      workspaceName: workspaceResult.workspaceName,
+      path: workspacePath,
+      text: workspaceText,
     },
   };
 }`;
@@ -349,7 +341,7 @@ function parseRunCodeResult(text: string) {
       explicit: { message: string; subPath: string };
       pipelined: { doubled: number; label: string; value: number };
     };
-    workspace: { callbackCalled: boolean; message: string };
+    workspace: { path: string; text: string };
   };
 }
 

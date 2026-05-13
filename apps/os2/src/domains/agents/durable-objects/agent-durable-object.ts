@@ -7,6 +7,7 @@ import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import {
   deriveDurableObjectNameFromStructuredName,
+  getInitializedDoStub,
   NotInitializedError,
 } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { withStreamProcessor } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor";
@@ -41,8 +42,19 @@ import {
 } from "~/domains/codemode/codemode-session-rpc.ts";
 import { createExampleCapabilityProviders } from "~/domains/codemode/example-provider-registrations.ts";
 import type { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
+import {
+  type RepoDurableObject,
+  type RepoInfo,
+} from "~/domains/repos/durable-objects/repo-durable-object.ts";
+import { getReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 import { createGmailProviderRegistration } from "~/domains/google/gmail-provider-registration.ts";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
+import {
+  type WorkspaceDurableObject,
+  type WorkspaceStructuredName,
+} from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
+import { defaultWorkspaceIdForCodemodeSession } from "~/domains/workspaces/entrypoints/workspace-provider-registration.ts";
+import { stripArtifactTokenQuery } from "~/domains/repos/artifacts.ts";
 import {
   defaultAgentSetupEvents,
   defaultAgentSystemPrompt,
@@ -78,7 +90,18 @@ export type AgentDurableObjectEnv = {
   APP_CONFIG: string;
   CODEMODE_SESSION: DurableObjectNamespace<CodemodeSession>;
   DO_CATALOG: D1Database;
+  REPO: DurableObjectNamespace<RepoDurableObject>;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
+  WORKSPACE: DurableObjectNamespace<WorkspaceDurableObject>;
+};
+
+const AGENT_ITERATE_CONFIG_DIR = "/iterate-config";
+const AGENT_ITERATE_CONFIG_CLONE_COMPLETE_PATH = `${AGENT_ITERATE_CONFIG_DIR}/.git/iterate-clone-complete`;
+
+export type CloneIterateConfigRepoInput = {
+  git: Awaited<ReturnType<WorkspaceDurableObject["cloudflareShellGit"]>>;
+  repo: RepoInfo;
+  workspace: DurableObjectStub<WorkspaceDurableObject>;
 };
 
 type AgentStreamApi = ProcessorStreamApi<{
@@ -137,6 +160,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
           }),
         );
         this.registerStreamProcessor(this.createLlmProcessor(llmProvider));
+        await this.ensureAgentWorkspace(params);
         await this.ensureCodemodeSession(params);
       }
       await this.ensureAgentSubscription(params);
@@ -313,6 +337,74 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       projectId: params.projectId,
       providers: this.createCodemodeToolProviders(params),
       streamPath: params.agentPath,
+    });
+  }
+
+  private async ensureAgentWorkspace(params: AgentDurableObjectStructuredName) {
+    const workspace = await this.getAgentWorkspace(params);
+
+    if (await workspace.hasFile(AGENT_ITERATE_CONFIG_CLONE_COMPLETE_PATH)) {
+      return;
+    }
+
+    const repo = await this.getOrCreateIterateConfigRepo(params);
+    const git = await workspace.cloudflareShellGit();
+
+    if (await workspace.hasFile(`${AGENT_ITERATE_CONFIG_DIR}/.git/HEAD`)) {
+      let cloneIsUsable = true;
+      try {
+        await git.status({ dir: AGENT_ITERATE_CONFIG_DIR });
+      } catch {
+        cloneIsUsable = false;
+      }
+
+      if (cloneIsUsable) {
+        await workspace.writeFile({
+          content: `${repo.slug}\n`,
+          path: AGENT_ITERATE_CONFIG_CLONE_COMPLETE_PATH,
+        });
+        return;
+      }
+    }
+
+    await workspace.removePath({
+      force: true,
+      path: AGENT_ITERATE_CONFIG_DIR,
+      recursive: true,
+    });
+    await this.cloneIterateConfigRepo({ git, repo, workspace });
+    await workspace.writeFile({
+      content: `${repo.slug}\n`,
+      path: AGENT_ITERATE_CONFIG_CLONE_COMPLETE_PATH,
+    });
+  }
+
+  protected async cloneIterateConfigRepo(input: CloneIterateConfigRepoInput) {
+    await input.git.clone({
+      url: remoteWithToken({
+        remote: input.repo.remote,
+        token: input.repo.token,
+      }),
+      dir: AGENT_ITERATE_CONFIG_DIR,
+      branch: input.repo.defaultBranch,
+      depth: 1,
+    });
+  }
+
+  private async getOrCreateIterateConfigRepo(
+    params: AgentDurableObjectStructuredName,
+  ): Promise<RepoInfo> {
+    return await getReposCapability({
+      exports: this.ctx.exports,
+      props: { projectId: params.projectId },
+    }).ensureIterateConfigInfo({ projectSlug: null });
+  }
+
+  private async getAgentWorkspace(params: AgentDurableObjectStructuredName) {
+    return await getInitializedDoStub({
+      allowCreate: true,
+      namespace: this.env.WORKSPACE,
+      name: agentWorkspaceName(params),
     });
   }
 
@@ -783,6 +875,20 @@ function resolveProcessorStreamPath(input: { basePath: StreamPath; pathInput?: s
   return StreamPath.parse(
     input.basePath === "/" ? `/${relativePath}` : `${input.basePath}/${relativePath}`,
   );
+}
+
+function agentWorkspaceName(params: AgentDurableObjectStructuredName): WorkspaceStructuredName {
+  return {
+    projectId: params.projectId,
+    workspaceId: defaultWorkspaceIdForCodemodeSession({ streamPath: params.agentPath }),
+  };
+}
+
+function remoteWithToken(input: { remote: string; token: string }) {
+  const url = new URL(input.remote);
+  url.username = "x";
+  url.password = stripArtifactTokenQuery(input.token);
+  return url.toString();
 }
 
 const CODEMODE_FENCE_RE =

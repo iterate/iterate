@@ -5,6 +5,11 @@ import {
 } from "@iterate-com/shared/streams/helpers";
 import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import { PROJECT_LIFECYCLE_STREAM_PATH } from "~/domains/projects/stream-processors/project-lifecycle.ts";
+import {
+  getRepoDurableObjectName,
+  type RepoInfo,
+} from "~/domains/repos/durable-objects/repo-durable-object.ts";
+import { ITERATE_CONFIG_REPO_SLUG } from "~/domains/repos/iterate-config-repo.ts";
 import { getIngressRouteByHost } from "~/db/queries/.generated/index.ts";
 import {
   dispatchFetchCallable,
@@ -15,8 +20,13 @@ import {
 import type { ExactHostIngressRule } from "~/ingress/types.ts";
 
 export { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
+export { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
+export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
-export { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
+export {
+  MockArtifactAgentDurableObject as AgentDurableObject,
+  MockArtifactsBinding,
+} from "./mock-artifacts-binding.ts";
 export { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
 export { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
 export { PROJECT_LIFECYCLE_STREAM_PATH } from "~/domains/projects/stream-processors/project-lifecycle.ts";
@@ -55,6 +65,17 @@ export default {
         getProjectDurableObjectName("proj_local_test"),
       ).getProjectLifecycleRunnerState();
       return Response.json(state);
+    }
+
+    if (url.pathname === "/__test/iterate-config-repo") {
+      const repo = await env.REPO.getByName(
+        getRepoDurableObjectName({
+          projectId: "proj_local_test",
+          repoSlug: ITERATE_CONFIG_REPO_SLUG,
+        }),
+      ).getInfo();
+
+      return Response.json(repo satisfies RepoInfo);
     }
 
     const db = createD1Client(env.DB);

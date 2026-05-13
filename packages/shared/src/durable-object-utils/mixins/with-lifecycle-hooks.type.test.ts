@@ -3,8 +3,7 @@ import { describe, expectTypeOf, it } from "vitest";
 import { z } from "zod";
 import { withDurableObjectCore as publicWithDurableObjectCore } from "@iterate-com/shared/durable-object-utils/mixins/with-durable-object-core";
 import { withLifecycleHooks as publicWithLifecycleHooks } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import { withD1ObjectCatalog } from "./with-d1-object-catalog.ts";
-import type { D1ObjectCatalogRecord } from "./with-d1-object-catalog.ts";
+import type { D1ObjectCatalogRecord } from "./with-lifecycle-hooks.ts";
 import { withDurableObjectCore } from "./with-durable-object-core.ts";
 import { withKvInspector } from "./with-kv-inspector.ts";
 import { withMultiplexedAlarms } from "./with-multiplexed-alarms.ts";
@@ -16,7 +15,7 @@ import {
 } from "./with-public-fetch-route.ts";
 import { withScheduler } from "./with-scheduler.ts";
 import type { SchedulerRecord } from "./with-scheduler.ts";
-import { getOrInitializeDoStub, withLifecycleHooks } from "./with-lifecycle-hooks.ts";
+import { getInitializedDoStub, withLifecycleHooks } from "./with-lifecycle-hooks.ts";
 
 type Env = {
   EXAMPLE: string;
@@ -50,7 +49,9 @@ const DurableObjectCore = withDurableObjectCore(DurableObject);
 
 // The normal incantation: build a generic base once, then extend it as
 // `RoomBase<Env>`.
-const RoomBase = withLifecycleHooks({ nameSchema: RoomInit })(DurableObjectCore);
+const RoomBase = withLifecycleHooks({ d1ObjectCatalog: "none", nameSchema: RoomInit })(
+  DurableObjectCore,
+);
 
 class Room extends RoomBase<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
@@ -88,6 +89,7 @@ const room = {} as Room;
 const namespace = {} as DurableObjectNamespace<Room>;
 
 const InitialStateRoomBase = withLifecycleHooks({
+  d1ObjectCatalog: "none",
   initialStateSchema: RoomInitialState,
 })(DurableObjectCore);
 
@@ -132,7 +134,8 @@ describe("withLifecycleHooks types", () => {
 
   it("accepts either string names or structured names", () => {
     expectTypeOf(
-      getOrInitializeDoStub({
+      getInitializedDoStub({
+        allowCreate: true,
         namespace,
         name: {
           ownerUserId: "user-a",
@@ -141,13 +144,23 @@ describe("withLifecycleHooks types", () => {
     ).resolves.toEqualTypeOf<DurableObjectStub<Room>>();
 
     expectTypeOf(
-      getOrInitializeDoStub({
+      getInitializedDoStub({
+        allowCreate: true,
         namespace,
         name: "room-a",
       }),
     ).resolves.toEqualTypeOf<DurableObjectStub<Room>>();
 
-    getOrInitializeDoStub({
+    expectTypeOf(
+      getInitializedDoStub({
+        allowCreate: false,
+        namespace,
+        name: "room-a",
+      }),
+    ).resolves.toEqualTypeOf<DurableObjectStub<Room> | null>();
+
+    getInitializedDoStub({
+      allowCreate: true,
       namespace,
       // @ts-expect-error ownerUserId is required when structuredName is used for Room.
       name: {},
@@ -155,7 +168,7 @@ describe("withLifecycleHooks types", () => {
   });
 
   it("defaults to string names when no structured-name type argument is provided", () => {
-    const NameOnlyRoomBase = withLifecycleHooks()(DurableObjectCore);
+    const NameOnlyRoomBase = withLifecycleHooks({ d1ObjectCatalog: "none" })(DurableObjectCore);
 
     class NameOnlyRoom extends NameOnlyRoomBase<Env> {}
 
@@ -163,7 +176,8 @@ describe("withLifecycleHooks types", () => {
 
     // NameOnlyInit has no fields beyond name, so the stub name is enough.
     expectTypeOf(
-      getOrInitializeDoStub({
+      getInitializedDoStub({
+        allowCreate: true,
         namespace: nameOnlyNamespace,
         name: "name-only-room",
       }),
@@ -178,7 +192,8 @@ describe("withLifecycleHooks types", () => {
 
   it("types immutable initial state separately from structured names", () => {
     expectTypeOf(
-      getOrInitializeDoStub({
+      getInitializedDoStub({
+        allowCreate: true,
         namespace: initialStateNamespace,
         name: "stateful-room",
         initialState: {
@@ -188,7 +203,15 @@ describe("withLifecycleHooks types", () => {
       }),
     ).resolves.toEqualTypeOf<DurableObjectStub<InitialStateRoom>>();
 
-    getOrInitializeDoStub({
+    // @ts-expect-error initialState is required when allowCreate can initialize a stateful DO.
+    getInitializedDoStub({
+      allowCreate: true,
+      namespace: initialStateNamespace,
+      name: "stateful-room",
+    });
+
+    getInitializedDoStub({
+      allowCreate: true,
       namespace: initialStateNamespace,
       name: "stateful-room",
       // @ts-expect-error projectId is required by the initial state schema.
@@ -197,7 +220,8 @@ describe("withLifecycleHooks types", () => {
       },
     });
 
-    getOrInitializeDoStub({
+    getInitializedDoStub({
+      allowCreate: true,
       namespace: initialStateNamespace,
       name: "stateful-room",
       initialState: {
@@ -231,7 +255,7 @@ describe("withLifecycleHooks types", () => {
       }
     }
 
-    const StaticRoomBase = withLifecycleHooks({ nameSchema: RoomInit })(
+    const StaticRoomBase = withLifecycleHooks({ d1ObjectCatalog: "none", nameSchema: RoomInit })(
       withDurableObjectCore(RootWithStatic),
     );
 
@@ -247,10 +271,10 @@ describe("withLifecycleHooks types", () => {
     class NotDurableObject {}
 
     // @ts-expect-error lifecycle hooks require the core Durable Object adapter below them.
-    withLifecycleHooks({ nameSchema: RoomInit })(NotDurableObject);
+    withLifecycleHooks({ d1ObjectCatalog: "none", nameSchema: RoomInit })(NotDurableObject);
 
     // @ts-expect-error lifecycle hooks require withDurableObjectCore below them.
-    withLifecycleHooks({ nameSchema: RoomInit })(DurableObject);
+    withLifecycleHooks({ d1ObjectCatalog: "none", nameSchema: RoomInit })(DurableObject);
 
     // @ts-expect-error inspector mixins require the core Durable Object adapter below them.
     withOuterbase({ unsafe: "I_UNDERSTAND_THIS_EXPOSES_SQL" })(NotDurableObject);
@@ -260,9 +284,10 @@ describe("withLifecycleHooks types", () => {
   });
 
   it("works through the package export path", () => {
-    const PublicRoomBase = publicWithLifecycleHooks({ nameSchema: RoomInit })(
-      publicWithDurableObjectCore(DurableObject),
-    );
+    const PublicRoomBase = publicWithLifecycleHooks({
+      d1ObjectCatalog: "none",
+      nameSchema: RoomInit,
+    })(publicWithDurableObjectCore(DurableObject));
 
     class PublicRoom extends PublicRoomBase<Env> {}
 
@@ -272,21 +297,24 @@ describe("withLifecycleHooks types", () => {
   });
 });
 
-describe("withD1ObjectCatalog types", () => {
+describe("withLifecycleHooks D1 object catalog types", () => {
   it("keeps the D1 env lower-bound on the composed class", () => {
     // The second generic is the minimum env shape getDatabase needs, not
     // necessarily the final Worker Env.
-    const ListedRoomBase = withD1ObjectCatalog<RoomInit, ListingEnv>({
-      className: "Room",
-      getDatabase(env) {
-        return env.DO_CATALOG;
-      },
-      indexes: {
-        ownerUserId(params) {
-          return params.ownerUserId;
+    const ListedRoomBase = withLifecycleHooks<RoomInit, undefined, ListingEnv>({
+      d1ObjectCatalog: {
+        className: "Room",
+        getDatabase(env) {
+          return env.DO_CATALOG;
+        },
+        indexes: {
+          ownerUserId(params) {
+            return params.ownerUserId;
+          },
         },
       },
-    })(RoomBase);
+      nameSchema: RoomInit,
+    })(DurableObjectCore);
 
     class ListedRoom extends ListedRoomBase<EnvWithListings> {
       getOwnerUserId() {

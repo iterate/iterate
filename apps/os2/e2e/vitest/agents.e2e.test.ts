@@ -289,6 +289,82 @@ async (ctx) => {
     );
   });
 
+  it("lets agent chat update iterate-config through the prepared workspace", async () => {
+    const baseUrl = requireBaseUrl();
+    const client = createClient(baseUrl);
+    const project = await createProject(client, "agent-workspace");
+    const suffix = uniqueSuffix();
+    const agentPath = `/agents/workspace-${suffix}`;
+
+    await client.project.agents.runtimeState({
+      agentPath,
+      projectSlugOrId: project.id,
+    });
+    await client.project.agents.sendMessage({
+      agentPath,
+      message: "add a file called folder/banana.txt to the iterate config repo and push",
+      projectSlugOrId: project.id,
+    });
+
+    await readUntil({
+      agentPath,
+      client,
+      projectId: project.id,
+      afterOffset: "start",
+      predicate: (event) =>
+        event.type === "events.iterate.com/codemode/function-call-completed" &&
+        eventPath(event).join(".") === "workspace.git.push",
+      timeoutMs: 120_000,
+    });
+    const events = await readUntil({
+      agentPath,
+      client,
+      projectId: project.id,
+      afterOffset: "start",
+      predicate: (event) => event.type === "events.iterate.com/codemode/script-execution-completed",
+      timeoutMs: 30_000,
+    });
+
+    const output = requiredEvent(events, "events.iterate.com/agent/output-added");
+    const scriptRequested = requiredEvent(
+      events,
+      "events.iterate.com/codemode/script-execution-requested",
+    );
+    const scriptCompleted = requiredEvent(
+      events,
+      "events.iterate.com/codemode/script-execution-completed",
+    );
+    const generatedCode = requiredStringPayload(output, "content");
+    const requestedCode = requiredStringPayload(scriptRequested, "code");
+
+    expect(generatedCode).toContain("ctx.workspace.writeFile");
+    expect(generatedCode).toContain("ctx.workspace.git.commit");
+    expect(generatedCode).toContain("ctx.workspace.git.push");
+    expect(generatedCode).toContain("/iterate-config");
+    expect(generatedCode).toContain("folder/banana.txt");
+    expect(generatedCode).not.toContain("git.clone");
+    expect(generatedCode).not.toContain("ctx.repos");
+    expect(requestedCode).not.toContain("git.clone");
+    expect(events.map((event) => eventPath(event).join("."))).toEqual(
+      expect.arrayContaining([
+        "workspace.writeFile",
+        "workspace.git.add",
+        "workspace.git.commit",
+        "workspace.git.push",
+      ]),
+    );
+    expect(scriptCompleted.payload).toEqual(
+      expect.objectContaining({
+        outcome: expect.objectContaining({
+          status: "returned",
+        }),
+      }),
+    );
+    expect(
+      events.filter((event) => event.type === "events.iterate.com/core/error-occurred"),
+    ).toEqual([]);
+  }, 180_000);
+
   it("renders codemode completions as direct auto-triggering agent inputs", async () => {
     const baseUrl = requireBaseUrl();
     const client = createClient(baseUrl);
@@ -1088,9 +1164,11 @@ async function readUntil(input: {
   client: OrpcClient;
   predicate(event: Event): boolean;
   projectId: string;
+  timeoutMs?: number;
 }) {
   const startedAt = Date.now();
-  while (Date.now() - startedAt < 60_000) {
+  const timeoutMs = input.timeoutMs ?? 60_000;
+  while (Date.now() - startedAt < timeoutMs) {
     const result = await input.client.project.streams.read({
       afterOffset: input.afterOffset,
       projectSlugOrId: input.projectId,
@@ -1116,13 +1194,27 @@ function requiredEvent(events: readonly Event[], type: string) {
   return event;
 }
 
+function eventPath(event: Event) {
+  const payload = event.payload;
+  if (payload == null || typeof payload !== "object" || !("path" in payload)) return [];
+  const path = payload.path;
+  return path instanceof Array && path.every((item) => typeof item === "string") ? path : [];
+}
+
+function requiredStringPayload(event: Event, key: string) {
+  const payload = event.payload;
+  if (payload == null || typeof payload !== "object" || !(key in payload)) {
+    throw new Error(`Expected string payload key ${key}.`);
+  }
+  const value = payload[key as keyof typeof payload];
+  if (typeof value !== "string") {
+    throw new Error(`Expected string payload key ${key}.`);
+  }
+  return value;
+}
+
 function requiredPathEvent(events: readonly Event[], type: string, path: string) {
-  const event = events.find(
-    (item) =>
-      item.type === type &&
-      (item.payload as { path?: unknown }).path instanceof Array &&
-      (item.payload as { path: string[] }).path.join(".") === path,
-  );
+  const event = events.find((item) => item.type === type && eventPath(item).join(".") === path);
   if (!event) throw new Error(`Expected ${type} for ${path}.`);
   return event;
 }

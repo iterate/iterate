@@ -9,10 +9,7 @@ import type { StreamProcessorRunnerState } from "@iterate-com/shared/durable-obj
 import { describe, expect, test } from "vitest";
 import type { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
 import { createCodemodeSessionStartupEvents } from "~/domains/codemode/codemode-session-rpc.ts";
-import {
-  createExampleRpcProviderRegistration,
-  createWorkspaceProviderRegistration,
-} from "~/domains/codemode/example-capabilities.ts";
+import { createExampleRpcProviderRegistration } from "~/domains/codemode/example-capabilities.ts";
 import { findCodemodeExample, providersForCodemodeExample } from "~/domains/codemode/examples.ts";
 
 type CodemodeSessionStub = DurableObjectStub<CodemodeSession> & {
@@ -230,12 +227,9 @@ describe("CodemodeSession", () => {
       events: codemodeSessionStartupEvents({ providers: exampleCapabilityProviders(), streamPath }),
       code: `async (ctx) => {
   const ai = await ctx.ai.run("test-model", { prompt: "hello" });
-  const repo = await ctx.repos.get({ slug: "web" }).proofOfConcept({
-    callback: async (args) => console.log("repo callback", args.repoName),
-  });
-  const workspace = await ctx.workspace.proofOfConcept({
-    callback: async (args) => console.log("workspace callback", args.workspaceName),
-  });
+  const repos = await ctx.repos.list({});
+  await ctx.workspace.writeFile("/loopback-rpc-workspace.txt", "workspace from test\\n");
+  const workspace = await ctx.workspace.readFile("/loopback-rpc-workspace.txt");
   const agent = await ctx.agents.create().sendMessage({
     message: "hi",
     subPath: "bob",
@@ -244,7 +238,7 @@ describe("CodemodeSession", () => {
 	  const streams = await ctx.os.streams.list({});
 	  const sessions = await ctx.os.codemode.listSessions({});
 
-	  return { ai, repo, workspace, agent, procedures, sessions, streams };
+	  return { ai, repos, workspace, agent, procedures, sessions, streams };
 	}`,
     });
     const scriptExecutionId = scriptExecutionIdFromEvent(created.scriptExecutionEvent);
@@ -257,19 +251,20 @@ describe("CodemodeSession", () => {
           ai: expect.objectContaining({ model: "test-model" }),
           agent: expect.objectContaining({ message: "hi", subPath: "bob" }),
           procedures: expect.stringContaining("interface CodemodeExecutionContext"),
-          repo: expect.objectContaining({ message: "repo proof of concept" }),
+          repos: [],
           sessions: expect.objectContaining({ sessions: expect.any(Array) }),
           streams: expect.objectContaining({ streams: expect.any(Array) }),
-          workspace: expect.objectContaining({ message: "workspace proof of concept" }),
+          workspace: "workspace from test\n",
         },
       },
     });
     expect(await readCurrentStreamEvents(streamPath)).toEqual(
       expect.arrayContaining([
         functionCallRequested(["ai", "run"], ["ai"], ["run"]),
-        functionCallRequested(["repos", "get"], ["repos"], ["get"]),
-        functionCallCompleted(["repos", "get"], ["repos"], ["get"]),
-        functionCallRequested(["workspace", "proofOfConcept"], ["workspace"], ["proofOfConcept"]),
+        functionCallRequested(["repos", "list"], ["repos"], ["list"]),
+        functionCallCompleted(["repos", "list"], ["repos"], ["list"]),
+        functionCallRequested(["workspace", "writeFile"], ["workspace"], ["writeFile"]),
+        functionCallRequested(["workspace", "readFile"], ["workspace"], ["readFile"]),
         functionCallRequested(["agents", "create"], ["agents", "create"], []),
         functionCallRequested(["os", "streams", "list"], ["os"], ["streams", "list"]),
         functionCallRequested(
@@ -277,21 +272,62 @@ describe("CodemodeSession", () => {
           ["os"],
           ["codemode", "listSessions"],
         ),
-        expect.objectContaining({
-          type: "events.iterate.com/codemode/log-emitted",
-          payload: expect.objectContaining({ message: expect.stringContaining("repo callback") }),
-        }),
-        expect.objectContaining({
-          type: "events.iterate.com/codemode/log-emitted",
-          payload: expect.objectContaining({
-            message: expect.stringContaining("workspace callback"),
-          }),
-        }),
       ]),
     );
     const procedures = completed.payload.outcome.value.procedures;
     expect(procedures).toContain("listSessions");
     expect(procedures).not.toContain("projectSlugOrId");
+  });
+
+  test("runs default workspace state and git shell operations", async () => {
+    const streamPath = `/codemode-session-tests/${crypto.randomUUID()}` as StreamPath;
+    const session = await initializeSession(streamPath);
+
+    const created = await session.createSession({
+      events: codemodeSessionStartupEvents({ providers: [], streamPath }),
+      code: `async (ctx) => {
+  await ctx.workspace.writeFile("/README.md", "# Workspace shell test\\n");
+  const text = await ctx.workspace.readFile("/README.md");
+  const initialized = await ctx.workspace.git.init({ dir: "/", defaultBranch: "main" });
+  await ctx.workspace.git.add({ dir: "/", filepath: "README.md" });
+  const commit = await ctx.workspace.git.commit({
+    dir: "/",
+    message: "Add workspace shell README",
+    author: { name: "Workspace Test", email: "workspace-test@iterate.com" },
+  });
+  const status = await ctx.workspace.git.status({ dir: "/" });
+
+  return { commit, initialized, status, text };
+}`,
+    });
+    const scriptExecutionId = scriptExecutionIdFromEvent(created.scriptExecutionEvent);
+    const completed = await waitForScriptExecutionCompleted({ scriptExecutionId, streamPath });
+
+    expect(completed.payload).toMatchObject({
+      outcome: {
+        status: "returned",
+        value: {
+          commit: {
+            message: "Add workspace shell README",
+            oid: expect.any(String),
+          },
+          initialized: { initialized: "/" },
+          status: [],
+          text: "# Workspace shell test\n",
+        },
+      },
+    });
+    expect(await readCurrentStreamEvents(streamPath)).toEqual(
+      expect.arrayContaining([
+        functionCallRequested(["workspace", "writeFile"], ["workspace"], ["writeFile"]),
+        functionCallCompleted(["workspace", "writeFile"], ["workspace"], ["writeFile"]),
+        functionCallRequested(["workspace", "readFile"], ["workspace"], ["readFile"]),
+        functionCallRequested(["workspace", "git", "init"], ["workspace"], ["git", "init"]),
+        functionCallCompleted(["workspace", "git", "init"], ["workspace"], ["git", "init"]),
+        functionCallRequested(["workspace", "git", "commit"], ["workspace"], ["git", "commit"]),
+        functionCallCompleted(["workspace", "git", "commit"], ["workspace"], ["git", "commit"]),
+      ]),
+    );
   });
 
   test("rejects caller supplied project identity in codemode ctx.os calls", async () => {
@@ -702,15 +738,11 @@ function exampleCapabilityProviders(): ToolProviderRegistration[] {
       projectId,
     }),
     createExampleRpcProviderRegistration({
-      exportName: "RepoCapability",
-      instructions: "Use ctx.repos.get({ slug }) to get a repo handle.",
+      exportName: "ReposCapability",
+      instructions:
+        "Use ctx.repos.create({ slug }) to create a Repo, ctx.repos.get({ slug }).getInfo() to inspect one, and ctx.repos.list({}) to list Repos.",
       path: ["repos"],
       projectId,
-    }),
-    createWorkspaceProviderRegistration({
-      instructions: "Use ctx.workspace.proofOfConcept(args) for the current workspace.",
-      name: projectId,
-      path: ["workspace"],
     }),
     createExampleRpcProviderRegistration({
       exportName: "AgentCapability",

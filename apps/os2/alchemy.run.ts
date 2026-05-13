@@ -1,5 +1,6 @@
 import alchemy from "alchemy";
 import { Ai, D1Database, DurableObjectNamespace, WorkerLoader } from "alchemy/cloudflare";
+import { Artifacts } from "@iterate-com/shared/alchemy/artifacts";
 import { initAlchemy } from "@iterate-com/shared/alchemy/init";
 import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
 import type { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
@@ -30,6 +31,8 @@ const db = await D1Database("os-db", {
 // iterate-preview-N.com zone (`os2.iterate-preview-N.com`) so project/MCP hosts
 // can own the iterate-preview-N.app zone cleanly.
 const projectHostnameBases = ctx.runtimeConfig.projectHostnameBases ?? [];
+const artifactsAccountId = requireEnv("CLOUDFLARE_ACCOUNT_ID");
+const artifactsNamespace = `${ctx.workerName}-repos`;
 const outboundMcpFromOurClientCapability =
   DurableObjectNamespace<OutboundMcpFromOurClientCapability>(
     "outbound-mcp-from-our-client-capability",
@@ -96,9 +99,12 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     DB: db,
     DO_CATALOG: db,
     AI: Ai(),
+    ARTIFACTS_ACCOUNT_ID: artifactsAccountId,
+    ARTIFACTS_NAMESPACE: artifactsNamespace,
     LOADER: WorkerLoader(),
     CODEMODE_SESSION: codemodeSession,
     AGENT: agent,
+    ARTIFACTS: Artifacts({ namespace: artifactsNamespace }),
     PROJECT: project,
     SLACK_AGENT: slackAgent,
     SLACK_INTEGRATION: slackIntegration,
@@ -130,4 +136,10 @@ if (!ctx.app.local) process.exit(0);
  */
 function projectRouteHostnamesForBase(base: string) {
   return [base, `*.${base}`];
+}
+
+function requireEnv(name: string) {
+  const value = process.env[name]?.trim();
+  if (!value) throw new Error(`${name} is required.`);
+  return value;
 }
