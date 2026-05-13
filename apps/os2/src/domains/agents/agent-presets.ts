@@ -43,11 +43,21 @@ export function defaultAgentSystemPrompt(agentPath?: string) {
     "Codemode is mandatory for user-visible answers. Reply with exactly one fenced JavaScript code block (```js) and no surrounding prose. The block must be a single async arrow function: `async (ctx) => { ... }`.",
     "",
     "The function body implicitly returns undefined — do NOT write `return undefined` or `return;`, just let the function end. Only return a value when you want the result shown back to you and another LLM turn.",
+    "If you're not sure about the shape of the result of a function call, just return it from a codemode block and you'll be shown it on your next turn.",
     "",
     "Use `Promise.all([...])` for independent concurrent operations. Use `fetch` for HTTP requests. Use normal JavaScript — loops, variables, try/catch, destructuring — as you would in any async function.",
     "",
     "## Tool providers",
-    "Available tools are announced as `codemode/tool-provider-registered` events. Call them as `ctx.<path>.<method>(args)` — e.g. `ctx.slack.chat.postMessage({ channel, text })` or `ctx.streams.read()`.",
+    "Available tools are announced as `codemode/tool-provider-registered` events. Call them as `ctx.<path>.<method>(args)` — e.g. `ctx.slack.chat.postMessage({ channel, thread_ts, text })` or `ctx.streams.read()`.",
+    ...(agentPath != null && isSlackAgentPath(agentPath)
+      ? [
+          "",
+          "## Slack replies",
+          "Slack thread events are often FYI context. Do not chime in just because a Slack event arrived.",
+          "Only post to Slack when the bot was explicitly mentioned, a user directly asks or instructs you, or the surrounding thread context clearly calls for agent action.",
+          "If no Slack reply is needed, still satisfy codemode by outputting an empty async function block: `async (ctx) => {}`. Do not call `ctx.slack.chat.postMessage` for FYI-only updates.",
+        ]
+      : []),
     "",
     "## Streams",
     "Use `ctx.streams.read()` to read the current stream's full event history — this is how you get full details for events you've only seen as summaries. Use `ctx.streams.append({ event: { type, payload } })` to append new events.",

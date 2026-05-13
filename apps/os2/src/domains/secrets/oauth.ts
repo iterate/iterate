@@ -6,9 +6,11 @@ import {
   deleteProjectSecret,
   getProjectConnection,
   getProjectSecret,
+  upsertProjectSecret,
 } from "~/domains/secrets/secrets-store.ts";
 
 type OAuthProvider = "google" | "slack";
+const GOOGLE_ACCESS_TOKEN_REFRESH_SKEW_MS = 5 * 60 * 1000;
 
 export function requireSlackConfig(config: AppConfig) {
   const slack = config.integrations.slack;
@@ -120,6 +122,74 @@ export async function disconnectProvider(input: {
   return { success: true };
 }
 
+export async function getFreshGoogleAccessToken(input: {
+  config: AppConfig;
+  db: Client;
+  projectId: string;
+}) {
+  const secret = await getProjectSecret(input.db, {
+    key: providerSecretKey("google"),
+    projectId: input.projectId,
+  });
+  if (!secret) {
+    throw new Error("GmailCapability requires a project google.access_token Secret.");
+  }
+
+  const expiresAt = readStringMetadata(secret.metadata, "expiresAt");
+  if (!expiresAt || Date.parse(expiresAt) > Date.now() + GOOGLE_ACCESS_TOKEN_REFRESH_SKEW_MS) {
+    return secret.material;
+  }
+
+  const refreshToken = readStringMetadata(secret.metadata, "refreshToken");
+  if (!refreshToken) {
+    throw new Error(
+      "Google access token expired and no refresh token is stored. Reconnect Google.",
+    );
+  }
+
+  const google = requireGoogleConfig(input.config);
+  const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+    body: new URLSearchParams({
+      client_id: google.oauthClientId,
+      client_secret: google.oauthClientSecret.exposeSecret(),
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+    }),
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    method: "POST",
+  });
+  const tokenData = (await tokenResponse.json()) as {
+    access_token?: string;
+    error?: string;
+    error_description?: string;
+    expires_in?: number;
+    refresh_token?: string;
+    scope?: string;
+  };
+
+  if (!tokenResponse.ok || !tokenData.access_token) {
+    const reason = tokenData.error_description ?? tokenData.error ?? "google_token_refresh_failed";
+    throw new Error(`Google access token refresh failed: ${reason}`);
+  }
+
+  await upsertProjectSecret(input.db, {
+    key: providerSecretKey("google"),
+    material: tokenData.access_token,
+    metadata: {
+      ...secret.metadata,
+      expiresAt:
+        typeof tokenData.expires_in === "number"
+          ? new Date(Date.now() + tokenData.expires_in * 1000).toISOString()
+          : expiresAt,
+      refreshToken: tokenData.refresh_token ?? refreshToken,
+      ...(tokenData.scope ? { scopes: tokenData.scope.split(" ") } : {}),
+    },
+    projectId: input.projectId,
+  });
+
+  return tokenData.access_token;
+}
+
 export function providerSecretKey(provider: OAuthProvider) {
   return `${provider}.access_token`;
 }
@@ -155,4 +225,9 @@ function base64Url(bytes: Uint8Array) {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+}
+
+function readStringMetadata(metadata: Record<string, unknown>, key: string) {
+  const value = metadata[key];
+  return typeof value === "string" && value.trim() ? value : null;
 }

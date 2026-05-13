@@ -295,6 +295,75 @@ const codemodeExampleSeeds = [
     ],
   },
   {
+    slug: "live-connect-openapi-petstore",
+    name: "Live-connect OpenAPI Petstore",
+    description:
+      "Register Swagger Petstore from codemode itself, then immediately call the newly mounted OpenAPI operations.",
+    providers: [],
+    code: `async (ctx) => {
+  const registration = await ctx.codemode.connectToOpenApiServer({
+    path: ["live", "petstore"],
+    specUrl: "https://petstore.swagger.io/v2/swagger.json",
+    baseUrl: "https://petstore.swagger.io/v2",
+  });
+
+  const operations = await ctx.live.petstore.listOperations();
+  const pets = await ctx.live.petstore.findPetsByStatus({ status: "available" });
+  const operationIds = operations.map((operation) => operation.operationId);
+
+  return {
+    registeredPath: registration.payload.path,
+    operationCount: operations.length,
+    hasFindPetsByStatus: operationIds.includes("findPetsByStatus"),
+    firstPet: Array.isArray(pets) ? pets[0] ?? null : pets,
+  };
+}`,
+    events: [
+      {
+        type: "events.iterate.com/codemode/example-note",
+        payload: {
+          message:
+            "Registers Swagger Petstore at ctx.live.petstore via ctx.codemode.connectToOpenApiServer, then calls listOperations and findPetsByStatus.",
+        },
+      },
+    ],
+  },
+  {
+    slug: "live-connect-cloudflare-docs-mcp",
+    name: "Live-connect Cloudflare Docs MCP",
+    description:
+      "Register Cloudflare's public documentation MCP server from codemode itself, then call a real MCP search tool.",
+    providers: [],
+    code: `async (ctx) => {
+  const registration = await ctx.codemode.connectToMcpServer({
+    path: ["live", "cloudflareDocs"],
+    url: "https://docs.mcp.cloudflare.com/mcp",
+    instructions:
+      "Use ctx.live.cloudflareDocs.search_cloudflare_documentation({ query }) to search Cloudflare docs.",
+  });
+
+  const tools = await ctx.live.cloudflareDocs.listTools();
+  const searchResult = await ctx.live.cloudflareDocs.search_cloudflare_documentation({
+    query: "Durable Objects alarms",
+  });
+
+  return {
+    registeredPath: registration.payload.path,
+    toolNames: tools.tools.map((tool) => tool.name),
+    firstResult: searchResult.content?.[0] ?? searchResult,
+  };
+}`,
+    events: [
+      {
+        type: "events.iterate.com/codemode/example-note",
+        payload: {
+          message:
+            "Registers Cloudflare Docs MCP at ctx.live.cloudflareDocs via ctx.codemode.connectToMcpServer, then calls listTools and search_cloudflare_documentation.",
+        },
+      },
+    ],
+  },
+  {
     slug: "stream-append-tool",
     name: "Append to a project stream",
     description: "Use ctx.streams.append as a normal codemode function call.",
@@ -324,7 +393,7 @@ const codemodeExampleSeeds = [
       "Sketch an event-based provider for a browser extension, OpenClaw plugin, or tab runner that can only make outbound requests.",
     providers: [{ type: "iterate-browser-extension" }],
     code: `async (ctx) => {
-  const debug = await ctx.__codemode.debugInfo({
+  const debug = await ctx.codemode.debugInfo({
     source: "codemode script before browser-extension call",
   });
   console.log("session debug", debug);
@@ -341,7 +410,7 @@ const codemodeExampleSeeds = [
         type: "events.iterate.com/codemode/example-note",
         payload: {
           message:
-            "ctx.__codemode.* is always available on the session and does not require provider registration.",
+            "ctx.codemode.* is always available on the session and does not require provider registration.",
         },
       },
       {
@@ -355,7 +424,7 @@ const codemodeExampleSeeds = [
         type: "events.iterate.com/codemode/example-note",
         payload: {
           message:
-            "A Worker-side bridge for that outbound provider can reduce session-started, invoke sessionCapabilityCallable, build a codemode ctx, and call ctx.__codemode.debugInfo() or any other session tool while handling the request.",
+            "A Worker-side bridge for that outbound provider can reduce session-started, invoke sessionCapabilityCallable, build a codemode ctx, and call ctx.codemode.debugInfo() or any other session tool while handling the request.",
         },
       },
     ],

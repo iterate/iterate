@@ -162,6 +162,46 @@ describe("createSlackProcessor", () => {
     ]);
   });
 
+  it("forwards raw Slack interactivity payloads when they include message thread coordinates", async () => {
+    const appended: Array<{ streamPath?: string; event: StreamEventInput }> = [];
+    const event = webhookEvent({
+      offset: 16,
+      body: {
+        type: "block_actions",
+        team: { id: "T123" },
+        channel: { id: "C123" },
+        message: {
+          type: "message",
+          ts: "1772136259.000000",
+          thread_ts: "1772136258.963519",
+          text: "Choose one",
+        },
+        actions: [{ action_id: "approve", block_id: "decision", type: "button", value: "yes" }],
+      },
+    });
+
+    await createSlackProcessor().implementation.afterAppend?.({
+      event,
+      previousState: slackState(),
+      state: slackState({
+        routes: { "C123:1772136258.963519": "/agents/slack/c123/ts-1772136258-963519" },
+      }),
+      streamApi: testSlackStreamApi(appended),
+      signal: new AbortController().signal,
+    });
+
+    expect(appended).toEqual([
+      {
+        streamPath: "/agents/slack/c123/ts-1772136258-963519",
+        event: {
+          type: "events.iterate.com/slack/webhook-received",
+          payload: event.payload,
+          idempotencyKey: "slack/forward-slack-webhook@16",
+        },
+      },
+    ]);
+  });
+
   it("creates a route for the first message-like Slack webhook and bootstraps the routed stream in one batch", async () => {
     const appended: Array<{ streamPath?: string; event: StreamEventInput }> = [];
     const event = webhookEvent({

@@ -16,6 +16,7 @@ import {
   getStreamsCapability,
   type StreamsCapabilityProps,
 } from "~/domains/streams/entrypoints/streams-capability.ts";
+import { createDefaultOutboundMcpProviderRegistrations } from "~/domains/codemode/default-provider-registrations.ts";
 import { readEventPayload, stringifyPayloadError } from "~/lib/codemode-event-payload.ts";
 import { createOpenApiProviderRegistration } from "~/rpc-targets/openapi-provider-registration.ts";
 import { createOutboundMcpFromOurClientToolProviderRegistration } from "~/domains/outbound-mcp-client/utils/outbound-mcp-provider-registration.ts";
@@ -157,7 +158,7 @@ export class ProjectMcpServerConnection extends McpAgent<
 
   async init() {
     const providers = this.createStaticCodemodeToolProviders(this.requireProjectAuthProps());
-    const providerDocs = providers
+    const providerDocs = [...createDefaultOutboundMcpProviderRegistrations(), ...providers]
       .map((p) => `- ctx.${p.path.join(".")}: ${p.instructions}`)
       .join("\n");
 
@@ -169,6 +170,7 @@ export class ProjectMcpServerConnection extends McpAgent<
           "Execute JavaScript in an isolated sandbox. The code MUST be a single async arrow function: `async (ctx) => { ... }`.",
           "",
           "The function receives a `ctx` object with registered tool providers. Use `Promise.all([...])` for concurrent operations. Use `fetch` for HTTP. The return value (or thrown error) is sent back as the tool result.",
+          "If you're not sure about the shape of the result of a function call, just return it from a codemode block and you'll be shown it on your next turn.",
           "",
           "Available tool providers on ctx:",
           providerDocs,

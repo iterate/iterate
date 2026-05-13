@@ -351,7 +351,7 @@ describe("createCodemodeProcessor", () => {
     ]);
   });
 
-  it("serves __codemode builtins without a registered provider", async () => {
+  it("serves codemode builtins without a registered provider", async () => {
     const appended: StreamEventInput[] = [];
     const processor = createCodemodeProcessor({
       ...baseDeps(),
@@ -359,7 +359,7 @@ describe("createCodemodeProcessor", () => {
       scriptExecutor: async ({ session }) => {
         const output = await session.callFunction({
           args: [{ source: "test" }],
-          path: ["__codemode", "debugInfo"],
+          path: ["codemode", "debugInfo"],
         });
         return { result: output };
       },
@@ -369,7 +369,7 @@ describe("createCodemodeProcessor", () => {
       event: consumedCodemodeEvent({
         type: "events.iterate.com/codemode/script-execution-requested",
         payload: {
-          code: "async (ctx) => ctx.__codemode.debugInfo({ source: 'test' })",
+          code: "async (ctx) => ctx.codemode.debugInfo({ source: 'test' })",
           scriptExecutionId: "scr-debug",
         },
         offset: 17,
@@ -392,8 +392,8 @@ describe("createCodemodeProcessor", () => {
           functionCallId: "fn-debug",
           functionPath: ["debugInfo"],
           invocationKind: "rpc",
-          path: ["__codemode", "debugInfo"],
-          providerPath: ["__codemode"],
+          path: ["codemode", "debugInfo"],
+          providerPath: ["codemode"],
           scriptExecutionId: "scr-debug",
         },
       },
@@ -411,14 +411,14 @@ describe("createCodemodeProcessor", () => {
               functionCallId: "fn-debug",
               functionPath: ["debugInfo"],
               invocationKind: "rpc",
-              path: ["__codemode", "debugInfo"],
-              providerPath: ["__codemode"],
+              path: ["codemode", "debugInfo"],
+              providerPath: ["codemode"],
               scriptExecutionId: "scr-debug",
               streamPath: "/projects/prj_test/codemode-sessions/cblk_test",
             },
           },
-          path: ["__codemode", "debugInfo"],
-          providerPath: ["__codemode"],
+          path: ["codemode", "debugInfo"],
+          providerPath: ["codemode"],
           scriptExecutionId: "scr-debug",
         },
       },
@@ -433,8 +433,8 @@ describe("createCodemodeProcessor", () => {
               functionCallId: "fn-debug",
               functionPath: ["debugInfo"],
               invocationKind: "rpc",
-              path: ["__codemode", "debugInfo"],
-              providerPath: ["__codemode"],
+              path: ["codemode", "debugInfo"],
+              providerPath: ["codemode"],
               scriptExecutionId: "scr-debug",
               streamPath: "/projects/prj_test/codemode-sessions/cblk_test",
             },

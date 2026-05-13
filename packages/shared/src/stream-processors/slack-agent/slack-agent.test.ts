@@ -90,7 +90,7 @@ describe("createSlackAgentProcessor", () => {
             path: ["slack", "agent"],
             invocation: { kind: "event" },
             instructions:
-              "Use ctx.slack.agent.threadInfo() only when you need route context that is not already in the Slack webhook payload. Normal Slack replies can use channel/thread_ts from the webhook event directly.",
+              "Use ctx.slack.agent.threadInfo() only when you need route context that is not already in the Slack webhook payload. Slack agents MUST respond on the same thread_ts that received the message; otherwise they will not receive responses from that thread. Unless explicitly required, always include thread_ts in Slack replies. Do not post to Slack unless the bot was explicitly mentioned, a user directly asks or instructs you, or the surrounding thread context clearly calls for agent action. Normal Slack replies can use channel/thread_ts from the webhook event directly.",
           },
         },
       },
@@ -191,11 +191,62 @@ describe("createSlackAgentProcessor", () => {
     });
     const content = (appended[0].event.payload as { content: string }).content;
     expect(content).toContain("```yaml");
+    expect(content).toContain("Slack reply guidance");
+    expect(content).toContain("do not chime in just because this event arrived");
+    expect(content).toContain("surrounding thread context clearly calls for agent action");
     expect(content).toContain("text: please look at this");
     expect(content).toContain('thread_ts: "1772136258.963519"');
     expect(content).not.toContain("Reply requirement:");
     expect(content).not.toContain("ctx.slack.chat.postMessage({ channel, thread_ts, text })");
     expect(content).not.toContain("Do not use `ctx.chat.sendMessage`");
+  });
+
+  it("emits agent input for raw Slack interactivity payloads", async () => {
+    const appended: Array<{ streamPath?: string; event: StreamEventInput }> = [];
+    const event = committedEvent({
+      type: "events.iterate.com/slack/webhook-received",
+      payload: {
+        body: {
+          type: "block_actions",
+          team: { id: "T123" },
+          channel: { id: "C123" },
+          message: {
+            ts: "1772136259.000000",
+            thread_ts: "1772136258.963519",
+            text: "Choose one",
+          },
+          actions: [{ action_id: "approve", type: "button", value: "yes" }],
+        },
+      },
+      offset: 46,
+    }) as Extract<
+      ConsumedEvent<typeof SlackAgentProcessorContract>,
+      { type: "events.iterate.com/slack/webhook-received" }
+    >;
+
+    await createSlackAgentProcessor().implementation.afterAppend?.({
+      event,
+      previousState: registeredSlackAgentState(),
+      state: registeredSlackAgentState({
+        channel: "C123",
+        latestMessageTs: "1772136259.000000",
+        threadTs: "1772136258.963519",
+      }),
+      streamApi: testSlackAgentStreamApi(appended),
+      signal: new AbortController().signal,
+    });
+
+    expect(appended).toHaveLength(1);
+    expect(appended[0].event).toMatchObject({
+      type: "events.iterate.com/agent/input-added",
+      idempotencyKey: "slack-agent/slack-webhook-to-agent-input@46",
+      payload: {
+        content: expect.stringContaining("type: block_actions"),
+      },
+    });
+    expect((appended[0].event.payload as { content: string }).content).toContain(
+      "action_id: approve",
+    );
   });
 
   it("satisfies ctx.slack.agent.threadInfo function calls from reduced route state", async () => {

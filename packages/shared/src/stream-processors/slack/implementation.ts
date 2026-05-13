@@ -33,124 +33,10 @@ export function createSlackProcessor(deps: SlackProcessorDeps = {}) {
            * be keyed as `channel:thread_ts`, and have we already learned where
            * that Slack thread should be forwarded?
            */
-          const parsed = z
-            .object({
-              type: z.literal("event_callback"),
-              event: z.record(z.string(), z.unknown()),
-            })
-            .loose()
-            .safeParse(event.payload.body);
-          if (!parsed.success) return;
+          const route = slackRouteFromWebhookBody(event.payload.body);
+          if (route == null) return;
 
-          const slackEvent = parsed.data.event as unknown as SlackEvent;
-          let routeKey: string | undefined;
-          let routeChannel: string | undefined;
-          let routeThreadTs: string | undefined;
-          let routeStreamPath: string | undefined;
-
-          /**
-           * Reaction webhooks put the referenced message under `item`. That
-           * `item.ts` is the message timestamp, so it can be used to look up an
-           * existing route for reactions on root Slack messages that already
-           * started an agent thread.
-           *
-           * Example:
-           *
-           * ```json
-           * {
-           *   "event": {
-           *     "type": "reaction_added",
-           *     "item": { "type": "message", "channel": "C123", "ts": "1772136258.963519" }
-           *   }
-           * }
-           * ```
-           *
-           * We do not create new routes from reaction payloads because Slack
-           * does not tell us the parent thread when the reaction is on a reply.
-           */
-          if (
-            "item" in slackEvent &&
-            typeof slackEvent.item === "object" &&
-            slackEvent.item != null &&
-            "channel" in slackEvent.item &&
-            typeof slackEvent.item.channel === "string" &&
-            "ts" in slackEvent.item &&
-            typeof slackEvent.item.ts === "string"
-          ) {
-            routeKey = `${slackEvent.item.channel}:${slackEvent.item.ts}`;
-          }
-
-          /**
-           * Message-like Slack webhooks usually carry `channel` and either
-           * `thread_ts` or `ts` at the top level. Some Slack update events wrap
-           * the actual message in `message`, so prefer `message.thread_ts` when
-           * Slack gives it to us.
-           *
-           * Example root message:
-           *
-           * ```json
-           * {
-           *   "event": {
-           *     "type": "message",
-           *     "channel": "C123",
-           *     "ts": "1772136258.963519",
-           *     "text": "hello"
-           *   }
-           * }
-           * ```
-           *
-           * Example thread reply:
-           *
-           * ```json
-           * {
-           *   "event": {
-           *     "type": "message",
-           *     "channel": "C123",
-           *     "thread_ts": "1772136258.963519",
-           *     "ts": "1772136260.000000"
-           *   }
-           * }
-           * ```
-           *
-           * This stays structural on purpose: adding a new Slack webhook type
-           * should not require teaching this processor a new `case` if Slack
-           * already provides the same channel/thread coordinates.
-           */
-          if (
-            routeKey == null &&
-            "channel" in slackEvent &&
-            typeof slackEvent.channel === "string"
-          ) {
-            let slackThreadTs: string | undefined;
-            if (
-              "message" in slackEvent &&
-              typeof slackEvent.message === "object" &&
-              slackEvent.message != null &&
-              "thread_ts" in slackEvent.message &&
-              typeof slackEvent.message.thread_ts === "string"
-            ) {
-              slackThreadTs = slackEvent.message.thread_ts;
-            }
-            if (
-              slackThreadTs == null &&
-              "thread_ts" in slackEvent &&
-              typeof slackEvent.thread_ts === "string"
-            ) {
-              slackThreadTs = slackEvent.thread_ts;
-            }
-            if (slackThreadTs == null && "ts" in slackEvent && typeof slackEvent.ts === "string") {
-              slackThreadTs = slackEvent.ts;
-            }
-            if (slackThreadTs != null) {
-              routeKey = `${slackEvent.channel}:${slackThreadTs}`;
-              routeChannel = slackEvent.channel;
-              routeThreadTs = slackThreadTs;
-              routeStreamPath = `/agents/slack/${sanitizePathPart(slackEvent.channel)}/ts-${sanitizePathPart(slackThreadTs)}`;
-            }
-          }
-
-          if (routeKey == null) return;
-          const streamPath = state.routes[routeKey] ?? routeStreamPath;
+          const streamPath = state.routes[route.key] ?? route.streamPath;
           if (streamPath == null) return;
 
           /**
@@ -158,13 +44,13 @@ export function createSlackProcessor(deps: SlackProcessorDeps = {}) {
            * "when a future Slack webhook gives us this same Slack thread key,
            * forward it to this stream path."
            */
-          if (state.routes[routeKey] == null && routeChannel != null && routeThreadTs != null) {
+          if (state.routes[route.key] == null && route.canCreateRoute) {
             const routeEvent: EmittedInput<typeof SlackProcessorContract> = {
               type: "events.iterate.com/slack/thread-route-configured",
-              idempotencyKey: `slack-route:${routeKey}`,
+              idempotencyKey: `slack-route:${route.key}`,
               payload: {
-                channel: routeChannel,
-                threadTs: routeThreadTs,
+                channel: route.channel,
+                threadTs: route.threadTs,
                 streamPath,
               },
             };
@@ -183,9 +69,9 @@ export function createSlackProcessor(deps: SlackProcessorDeps = {}) {
               streamPath,
               events: [
                 ...(deps.createRoutedStreamBootstrapEvents?.({
-                  channel: routeChannel,
+                  channel: route.channel,
                   streamPath,
-                  threadTs: routeThreadTs,
+                  threadTs: route.threadTs,
                 }) ?? []),
                 routeEvent,
                 forwardedWebhookEvent,
@@ -220,6 +106,123 @@ export function createSlackProcessor(deps: SlackProcessorDeps = {}) {
       }
     },
   });
+}
+
+type SlackRoute = {
+  canCreateRoute: boolean;
+  channel: string;
+  key: string;
+  streamPath?: string;
+  threadTs: string;
+};
+
+function slackRouteFromWebhookBody(body: unknown): SlackRoute | null {
+  const parsed = z
+    .object({
+      type: z.literal("event_callback"),
+      event: z.record(z.string(), z.unknown()),
+    })
+    .loose()
+    .safeParse(body);
+  if (parsed.success) {
+    return slackRouteFromEvent(parsed.data.event as unknown as SlackEvent);
+  }
+
+  return slackRouteFromInteraction(body);
+}
+
+function slackRouteFromEvent(slackEvent: SlackEvent): SlackRoute | null {
+  if (
+    "item" in slackEvent &&
+    typeof slackEvent.item === "object" &&
+    slackEvent.item != null &&
+    "channel" in slackEvent.item &&
+    typeof slackEvent.item.channel === "string" &&
+    "ts" in slackEvent.item &&
+    typeof slackEvent.item.ts === "string"
+  ) {
+    return {
+      canCreateRoute: false,
+      channel: slackEvent.item.channel,
+      key: `${slackEvent.item.channel}:${slackEvent.item.ts}`,
+      threadTs: slackEvent.item.ts,
+    };
+  }
+
+  if (!("channel" in slackEvent) || typeof slackEvent.channel !== "string") return null;
+
+  let slackThreadTs: string | undefined;
+  if (
+    "message" in slackEvent &&
+    typeof slackEvent.message === "object" &&
+    slackEvent.message != null &&
+    "thread_ts" in slackEvent.message &&
+    typeof slackEvent.message.thread_ts === "string"
+  ) {
+    slackThreadTs = slackEvent.message.thread_ts;
+  }
+  if (
+    slackThreadTs == null &&
+    "thread_ts" in slackEvent &&
+    typeof slackEvent.thread_ts === "string"
+  ) {
+    slackThreadTs = slackEvent.thread_ts;
+  }
+  if (slackThreadTs == null && "ts" in slackEvent && typeof slackEvent.ts === "string") {
+    slackThreadTs = slackEvent.ts;
+  }
+  if (slackThreadTs == null) return null;
+
+  return routeFromChannelAndThread({
+    canCreateRoute: true,
+    channel: slackEvent.channel,
+    threadTs: slackThreadTs,
+  });
+}
+
+function slackRouteFromInteraction(body: unknown): SlackRoute | null {
+  const interaction = readRecord(body);
+  if (interaction == null) return null;
+
+  const channel = readString(readRecord(interaction.channel)?.id);
+  const message = readRecord(interaction.message);
+  const container = readRecord(interaction.container);
+  const threadTs =
+    readString(message?.thread_ts) ??
+    readString(container?.thread_ts) ??
+    readString(message?.ts) ??
+    readString(container?.message_ts);
+  if (channel == null || threadTs == null) return null;
+
+  return routeFromChannelAndThread({
+    canCreateRoute: true,
+    channel,
+    threadTs,
+  });
+}
+
+function routeFromChannelAndThread(input: {
+  canCreateRoute: boolean;
+  channel: string;
+  threadTs: string;
+}): SlackRoute {
+  return {
+    canCreateRoute: input.canCreateRoute,
+    channel: input.channel,
+    key: `${input.channel}:${input.threadTs}`,
+    streamPath: `/agents/slack/${sanitizePathPart(input.channel)}/ts-${sanitizePathPart(input.threadTs)}`,
+    threadTs: input.threadTs,
+  };
+}
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value != null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
 }
 
 function sanitizePathPart(value: string): string {

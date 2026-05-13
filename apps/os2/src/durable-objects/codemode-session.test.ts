@@ -418,7 +418,7 @@ describe("CodemodeSession", () => {
 
     const created = await session.createSession({
       events: codemodeSessionStartupEvents({
-        providers: [providerRegistration(["discord"]), providerRegistration(["slack"])],
+        providers: [providerRegistration(["discord"]), providerRegistration(["mirrorSlack"])],
         streamPath,
       }),
       code: `async (ctx) => {
@@ -444,8 +444,8 @@ describe("CodemodeSession", () => {
 
     // This block is the event-provider proof: a Discord-style stream processor
     // reduces session-started, invokes the Session Capability Callable, builds a
-    // Codemode Context, and then calls a Slack Tool Function without becoming an
-    // RPC provider itself.
+    // Codemode Context, and then calls another event-mediated Tool Function
+    // without becoming an RPC provider itself.
     const codemodeSessionCapability = await dispatchCallable({
       callable: (sessionStarted!.payload as { sessionCapabilityCallable: unknown })
         .sessionCapabilityCallable,
@@ -458,13 +458,13 @@ describe("CodemodeSession", () => {
       >[0]["codemodeSessionCapability"],
       scriptExecutionId,
     });
-    const slackCall = providerCtx.slack.chat.postMessage({
+    const slackCall = providerCtx.mirrorSlack.chat.postMessage({
       channel: "C123",
       text: "Released v1.2.3 to Discord message discord-msg-1",
     });
 
     const slackRequest = await waitForFunctionCallRequested({
-      path: ["slack", "chat", "postMessage"],
+      path: ["mirrorSlack", "chat", "postMessage"],
       streamPath,
     });
     await session.receiveFunctionCallResult({
@@ -472,8 +472,8 @@ describe("CodemodeSession", () => {
       functionPath: ["chat", "postMessage"],
       invocationKind: "event",
       outcome: { status: "returned", value: { ok: true, ts: "123.456" } },
-      path: ["slack", "chat", "postMessage"],
-      providerPath: ["slack"],
+      path: ["mirrorSlack", "chat", "postMessage"],
+      providerPath: ["mirrorSlack"],
       scriptExecutionId,
     });
     await expect(slackCall).resolves.toEqual({ ok: true, ts: "123.456" });
@@ -513,11 +513,75 @@ describe("CodemodeSession", () => {
           "event",
         ),
         functionCallRequestedWithKind(
-          ["slack", "chat", "postMessage"],
-          ["slack"],
+          ["mirrorSlack", "chat", "postMessage"],
+          ["mirrorSlack"],
           ["chat", "postMessage"],
           "event",
         ),
+      ]),
+    );
+  });
+
+  test("lets codemode helpers register MCP and OpenAPI providers", async () => {
+    const streamPath = `/codemode-session-tests/${crypto.randomUUID()}` as StreamPath;
+    const session = await initializeSession(streamPath);
+
+    const created = await session.createSession({
+      code: `async (ctx) => {
+  const mcp = await ctx.codemode.connectToMcpServer({
+    path: ["mcp", "custom"],
+    url: "https://example.com/mcp",
+  });
+  const openApi = await ctx.codemode.connectToOpenApiServer({
+    path: ["api", "custom"],
+    specUrl: "https://example.com/openapi.json",
+    baseUrl: "https://example.com",
+  });
+
+  return {
+    mcpPath: mcp.payload.path,
+    openApiPath: openApi.payload.path,
+    openApiExportName: openApi.payload.invocation.callable.via.exportName,
+  };
+}`,
+    });
+    const scriptExecutionId = scriptExecutionIdFromEvent(created.scriptExecutionEvent);
+
+    const completed = await waitForScriptExecutionCompleted({ scriptExecutionId, streamPath });
+    expect(completed.payload).toMatchObject({
+      outcome: {
+        status: "returned",
+        value: {
+          mcpPath: ["mcp", "custom"],
+          openApiPath: ["api", "custom"],
+          openApiExportName: "OpenApiBridge",
+        },
+      },
+    });
+    expect(await readCurrentStreamEvents(streamPath)).toEqual(
+      expect.arrayContaining([
+        functionCallRequested(
+          ["codemode", "connectToMcpServer"],
+          ["codemode"],
+          ["connectToMcpServer"],
+        ),
+        expect.objectContaining({
+          type: "events.iterate.com/codemode/tool-provider-registered",
+          payload: expect.objectContaining({
+            path: ["mcp", "custom"],
+          }),
+        }),
+        functionCallRequested(
+          ["codemode", "connectToOpenApiServer"],
+          ["codemode"],
+          ["connectToOpenApiServer"],
+        ),
+        expect.objectContaining({
+          type: "events.iterate.com/codemode/tool-provider-registered",
+          payload: expect.objectContaining({
+            path: ["api", "custom"],
+          }),
+        }),
       ]),
     );
   });
@@ -532,7 +596,7 @@ describe("CodemodeSession", () => {
         streamPath,
       }),
       code: `async (ctx) => {
-  const ping = await ctx.__codemode.ping();
+  const ping = await ctx.codemode.ping();
   const navigation = await ctx.iterateBrowserExtension.navigateToPage({
     url: "https://example.com",
   });
@@ -568,15 +632,15 @@ describe("CodemodeSession", () => {
       >[0]["codemodeSessionCapability"],
       scriptExecutionId,
     });
-    const debugInfo = await providerCtx.__codemode.debugInfo({
+    const debugInfo = await providerCtx.codemode.debugInfo({
       provider: "iterateBrowserExtension",
       reason: "navigateToPage completed from outbound-only provider",
     });
     expect(debugInfo).toMatchObject({
       functionPath: ["debugInfo"],
       invocationKind: "rpc",
-      path: ["__codemode", "debugInfo"],
-      providerPath: ["__codemode"],
+      path: ["codemode", "debugInfo"],
+      providerPath: ["codemode"],
       scriptExecutionId,
       streamPath,
     });
@@ -613,16 +677,16 @@ describe("CodemodeSession", () => {
     });
     expect(await readCurrentStreamEvents(streamPath)).toEqual(
       expect.arrayContaining([
-        functionCallRequested(["__codemode", "ping"], ["__codemode"], ["ping"]),
-        functionCallCompleted(["__codemode", "ping"], ["__codemode"], ["ping"]),
+        functionCallRequested(["codemode", "ping"], ["codemode"], ["ping"]),
+        functionCallCompleted(["codemode", "ping"], ["codemode"], ["ping"]),
         functionCallRequestedWithKind(
           ["iterateBrowserExtension", "navigateToPage"],
           ["iterateBrowserExtension"],
           ["navigateToPage"],
           "event",
         ),
-        functionCallRequested(["__codemode", "debugInfo"], ["__codemode"], ["debugInfo"]),
-        functionCallCompleted(["__codemode", "debugInfo"], ["__codemode"], ["debugInfo"]),
+        functionCallRequested(["codemode", "debugInfo"], ["codemode"], ["debugInfo"]),
+        functionCallCompleted(["codemode", "debugInfo"], ["codemode"], ["debugInfo"]),
       ]),
     );
   });

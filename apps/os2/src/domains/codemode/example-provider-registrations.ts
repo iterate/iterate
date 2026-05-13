@@ -71,7 +71,7 @@ export function createExampleCapabilityProviders(input: {
       exportName: "SlackCapability",
       activeOrganization: input.activeOrganization,
       instructions:
-        "Use ctx.slack.<Slack Web API method path>(args), for example ctx.slack.chat.postMessage({ channel, text }).",
+        "Use ctx.slack.<Slack Web API method path>(args), for example ctx.slack.chat.postMessage({ channel, thread_ts, text }). Slack agents MUST respond on the same thread_ts that received the message; otherwise they will not receive responses from that thread. Unless explicitly required, always include thread_ts in Slack replies. Do not post to Slack unless the bot was explicitly mentioned, a user directly asks or instructs you, or the surrounding thread context clearly calls for agent action.",
       path: ["slack"],
       projectId: input.projectId,
     }),
