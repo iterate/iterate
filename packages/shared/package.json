@@ -8,6 +8,7 @@
   },
   "exports": {
     "./alchemy/init": "./src/alchemy/init.ts",
+    "./alchemy/artifacts": "./src/alchemy/artifacts.ts",
     "./alchemy/iterate-app": "./src/alchemy/iterate-app.ts",
     "./alchemy/start-cloudflared": "./src/alchemy/start-cloudflared.ts",
     "./apps/cli": "./src/apps/cli.ts",
