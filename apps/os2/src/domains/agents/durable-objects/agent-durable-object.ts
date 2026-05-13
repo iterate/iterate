@@ -1,11 +1,14 @@
 import OpenAI from "openai";
 import type { ResponsesClientEvent } from "openai/resources/responses/responses";
 import { ResponsesWSBase } from "openai/resources/responses/ws-base";
+import { createClerkClient } from "@clerk/backend";
 import { z } from "zod";
+import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import {
   deriveDurableObjectNameFromStructuredName,
   getInitializedDoStub,
+  NotInitializedError,
 } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { withStreamProcessor } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor";
 import { createAgentChatProcessor } from "@iterate-com/shared/stream-processors/agent-chat/implementation";
@@ -32,16 +35,19 @@ import { StreamSocketFrame } from "@iterate-com/shared/streams/stream-socket-typ
 import { STREAM_CHILD_STREAM_CREATED_TYPE } from "@iterate-com/shared/streams/core-event-types";
 import type { Event, EventInput, StreamCursor } from "@iterate-com/shared/streams/types";
 import { StreamPath } from "@iterate-com/shared/streams/types";
+import { AppConfig } from "~/app.ts";
 import {
   createCodemodeSession,
   startCodemodeScriptOnExistingSession,
 } from "~/domains/codemode/codemode-session-rpc.ts";
+import { createExampleCapabilityProviders } from "~/domains/codemode/example-provider-registrations.ts";
 import type { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
 import {
   type RepoDurableObject,
   type RepoInfo,
 } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import { getReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
+import { createGmailProviderRegistration } from "~/domains/google/gmail-provider-registration.ts";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
 import {
   type WorkspaceDurableObject,
@@ -52,11 +58,13 @@ import { stripArtifactTokenQuery } from "~/domains/repos/artifacts.ts";
 import {
   defaultAgentSetupEvents,
   defaultAgentSystemPrompt,
+  isSlackAgentPath,
   OS2_AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE,
   readAgentPathPrefixPresets,
-  selectAgentPathPrefixPreset,
+  selectAgentSetupPreset,
   type AgentLlmProvider,
 } from "~/domains/agents/agent-presets.ts";
+import { buildProjectStreamViewerUrl } from "~/lib/stream-viewer-url.ts";
 
 export const AGENTS_STREAM_PATH = StreamPath.parse("/agents");
 
@@ -102,6 +110,7 @@ type AgentStreamApi = ProcessorStreamApi<{
   processorDeps?: readonly unknown[];
 }> & {
   append(args: { event: EventInput; streamPath?: string }): Promise<Event>;
+  appendBatch(args: { events: EventInput[]; streamPath?: string }): Promise<Event[]>;
   read(args?: {
     streamPath?: string;
     afterOffset?: StreamCursor;
@@ -228,7 +237,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
   }
 
   async afterAppend(input: { event: Event }) {
-    await this.ensureStarted();
+    await this.ensureStartedOrInitializeFromRuntimeName();
     const state = await this.consumeStreamProcessorEvent({ event: input.event as StreamEvent });
     await this.ensureChildAgentRunner(input.event);
     await this.handleAgentOutputAddedForCodemode(input.event);
@@ -267,6 +276,11 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
 
   async executeCodemodeFunctionCall(input: ExecuteCodemodeFunctionCallInput) {
     await this.ensureStarted();
+    const providerName = input.providerPath.join(".");
+    if (providerName === "debug") {
+      return await this.createDebugSnapshot();
+    }
+
     const functionName = input.functionPath.join(".");
     if (functionName !== "sendMessage") {
       throw new Error(`Unknown agent chat tool function chat.${functionName}`);
@@ -290,8 +304,18 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     });
   }
 
+  private async ensureStartedOrInitializeFromRuntimeName() {
+    try {
+      return await this.ensureStarted();
+    } catch (error) {
+      if (!(error instanceof NotInitializedError)) throw error;
+      const runtimeName = this.getDurableObjectName();
+      if (runtimeName == null) throw error;
+      return await this.initialize({ name: runtimeName });
+    }
+  }
+
   private async ensureChildAgentRunner(event: Event) {
-    if (this.structuredName.agentPath !== AGENTS_STREAM_PATH) return;
     if (event.type !== STREAM_CHILD_STREAM_CREATED_TYPE) return;
 
     const payload = event.payload as { childPath?: unknown };
@@ -311,7 +335,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       events: [],
       namespace: this.env.CODEMODE_SESSION,
       projectId: params.projectId,
-      providers: [this.createAgentChatToolProvider()],
+      providers: this.createCodemodeToolProviders(params),
       streamPath: params.agentPath,
     });
   }
@@ -391,14 +415,12 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       afterOffset: "start",
       beforeOffset: "end",
     });
-    const preset = selectAgentPathPrefixPreset({
+    const preset = selectAgentSetupPreset({
       agentPath: params.agentPath,
       presets: readAgentPathPrefixPresets(rootEvents),
     });
-    const defaultProvider = readOpenAiApiKey(this.env as Record<string, unknown>).trim()
-      ? "openai-ws"
-      : "cloudflare-ai";
-    const setupEvents = preset?.events ?? defaultAgentSetupEvents(defaultProvider);
+    const setupEvents =
+      preset?.events ?? defaultAgentSetupEvents("cloudflare-ai", params.agentPath);
     const hasSetupPrompt = setupEvents.some(
       (event) => event.type === "events.iterate.com/agent/system-prompt-updated",
     );
@@ -437,7 +459,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
           type: "events.iterate.com/agent/system-prompt-updated",
           idempotencyKey: "agent-default-system-prompt-v2",
           payload: {
-            systemPrompt: defaultAgentSystemPrompt(),
+            systemPrompt: defaultAgentSystemPrompt(params.agentPath),
           },
         },
       });
@@ -475,23 +497,118 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     if (outcome == null || typeof outcome !== "object") return;
 
     const status = "status" in outcome ? outcome.status : undefined;
-    if (status === "succeeded") {
-      const output = "output" in outcome ? outcome.output : undefined;
-      if (output === undefined) return;
-      await this.appendAssistantResponse({
+    if (status === "returned") {
+      const value = "value" in outcome ? outcome.value : undefined;
+      if (value === undefined) return;
+      await this.appendCodemodeCompletionInput({
+        event,
         idempotencyKey: `agent-codemode-script-result:${String(payload.scriptExecutionId)}`,
-        message: formatCodemodeOutput(output),
+        outcome: {
+          status,
+          value,
+        },
       });
       return;
     }
 
-    if (status === "failed") {
+    if (status === "threw") {
       const error = "error" in outcome ? outcome.error : "Unknown codemode error";
-      await this.appendAssistantResponse({
+      await this.appendCodemodeCompletionInput({
+        event,
         idempotencyKey: `agent-codemode-script-error:${String(payload.scriptExecutionId)}`,
-        message: `Codemode failed: ${formatCodemodeOutput(error)}`,
+        outcome: {
+          error,
+          status,
+        },
       });
     }
+  }
+
+  private async createDebugSnapshot() {
+    const project = await this.readDebugProjectInfo();
+    const config = this.getAppConfig();
+    const streamUrl =
+      project?.organizationSlug && project.slug
+        ? buildProjectStreamViewerUrl({
+            baseUrl: config.baseUrl,
+            organizationSlug: project.organizationSlug,
+            projectSlug: project.slug,
+            streamPath: this.structuredName.agentPath,
+          })
+        : (config.baseUrl ?? "https://os.iterate.com");
+    const snapshot = {
+      project:
+        project == null
+          ? { id: this.structuredName.projectId }
+          : {
+              id: this.structuredName.projectId,
+              organizationSlug: project.organizationSlug ?? undefined,
+              slug: project.slug,
+            },
+      streamPath: this.structuredName.agentPath,
+      streamUrl,
+    };
+    return formatDebugMessage(snapshot);
+  }
+
+  private async readDebugProjectInfo(): Promise<DebugProjectInfo | null> {
+    try {
+      const row = await this.env.DO_CATALOG.prepare(
+        `select p.id, p.slug, pp.principal_id as organization_id
+         from projects p
+         left join project_permissions pp
+           on pp.project_id = p.id
+          and pp.principal_type = 'clerk_organization'
+         where p.id = ?
+         order by pp.created_at asc
+         limit 1`,
+      )
+        .bind(this.structuredName.projectId)
+        .first<{ id: string; slug: string; organization_id: string | null }>();
+      if (row == null) return null;
+      return {
+        id: row.id,
+        organizationId: row.organization_id ?? undefined,
+        organizationSlug: await this.readOrganizationSlug(row.organization_id),
+        slug: row.slug,
+      };
+    } catch (error) {
+      console.error("[os2-agent] failed to read project debug info", {
+        agentName: this.name,
+        error,
+      });
+      return null;
+    }
+  }
+
+  private async readOrganizationSlug(organizationId: string | null) {
+    if (!organizationId) return null;
+
+    try {
+      const config = this.getAppConfig();
+      const clerk = createClerkClient({
+        secretKey: config.clerk.secretKey.exposeSecret(),
+        publishableKey: config.clerk.publishableKey,
+        jwtKey: config.clerk.jwtKey.exposeSecret(),
+      });
+      const organization = await clerk.organizations.getOrganization({ organizationId });
+      return organization.slug?.trim() || null;
+    } catch (error) {
+      console.error("[os2-agent] failed to read organization debug slug", {
+        agentName: this.name,
+        organizationId,
+        error,
+      });
+      return null;
+    }
+  }
+
+  private getAppConfig() {
+    return parseAppConfigFromEnv({
+      configSchema: AppConfig,
+      prefix: "APP_CONFIG_",
+      env: this.env as unknown as Record<string, unknown>,
+    });
   }
 
   private async appendAssistantResponse(input: {
@@ -506,6 +623,26 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
         payload: {
           channel: parseAgentChatChannel(input.channel),
           message: input.message,
+        },
+      },
+    });
+  }
+
+  private async appendCodemodeCompletionInput(input: {
+    event: Event;
+    idempotencyKey: string;
+    outcome: { status: "returned"; value: unknown } | { status: "threw"; error: unknown };
+  }) {
+    return await this.streamsEntrypoint(this.structuredName.agentPath).append({
+      event: {
+        type: "events.iterate.com/agent/input-added",
+        idempotencyKey: input.idempotencyKey,
+        payload: {
+          content: codemodeCompletionInputBlock({
+            event: input.event,
+            outcome: input.outcome,
+          }),
+          llmRequestPolicy: { behaviour: "after-current-request" },
         },
       },
     });
@@ -535,6 +672,41 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     };
   }
 
+  private createAgentDebugToolProvider(): ToolProviderRegistration {
+    return {
+      path: ["debug"],
+      instructions:
+        "Use ctx.debug() to return OS2 debug information about the current agent stream.",
+      invocation: {
+        kind: "rpc",
+        callable: {
+          type: "workers-rpc",
+          via: {
+            type: "env-binding",
+            bindingType: "durable-object-namespace",
+            bindingName: "AGENT",
+            durableObject: {
+              name: this.name,
+            },
+          },
+          rpcMethod: "executeCodemodeFunctionCall",
+          argsMode: "object",
+        },
+      },
+    };
+  }
+
+  private createCodemodeToolProviders(
+    params: AgentDurableObjectStructuredName,
+  ): ToolProviderRegistration[] {
+    return [
+      ...(isSlackAgentPath(params.agentPath) ? [] : [this.createAgentChatToolProvider()]),
+      this.createAgentDebugToolProvider(),
+      ...createExampleCapabilityProviders({ projectId: params.projectId }),
+      createGmailProviderRegistration({ projectId: params.projectId }),
+    ];
+  }
+
   private async resolveLlmProvider(
     params: AgentDurableObjectStructuredName,
   ): Promise<AgentLlmProvider> {
@@ -542,7 +714,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       afterOffset: "start",
       beforeOffset: "end",
     });
-    const preset = selectAgentPathPrefixPreset({
+    const preset = selectAgentSetupPreset({
       agentPath: params.agentPath,
       presets: readAgentPathPrefixPresets(rootEvents),
     });
@@ -563,7 +735,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       const provider = (event.payload as { provider?: unknown }).provider;
       if (provider === "cloudflare-ai" || provider === "openai-ws") return provider;
     }
-    return readOpenAiApiKey(this.env as Record<string, unknown>) ? "openai-ws" : "cloudflare-ai";
+    return "cloudflare-ai";
   }
 
   private createLlmProcessor(provider: AgentLlmProvider) {
@@ -652,6 +824,17 @@ function agentStreamApiFromNamespace(args: {
       });
       return await stream.append(input.event);
     },
+    async appendBatch(input) {
+      const stream = await getInitializedStreamStub({
+        durableObjectNamespace: args.durableObjectNamespace,
+        namespace: args.namespace,
+        path: resolveProcessorStreamPath({
+          basePath: args.streamPath,
+          pathInput: input.streamPath,
+        }),
+      });
+      return await stream.appendBatch(input.events);
+    },
     async read(input = {}) {
       const stream = await getInitializedStreamStub({
         durableObjectNamespace: args.durableObjectNamespace,
@@ -728,14 +911,75 @@ function extractCodemodeScript(content: string): string | null {
 function formatCodemodeOutput(output: unknown) {
   if (typeof output === "string") return output;
   try {
-    return JSON.stringify(output, null, 2);
+    return JSON.stringify(output, null, 2) ?? String(output);
   } catch {
     return String(output);
   }
 }
 
+function codemodeCompletionInputBlock(input: {
+  event: Event;
+  outcome: { status: "returned"; value: unknown } | { status: "threw"; error: unknown };
+}) {
+  const scriptExecutionId = (input.event.payload as { scriptExecutionId?: unknown })
+    .scriptExecutionId;
+  return [
+    "```yaml",
+    "event:",
+    `  offset: ${input.event.offset}`,
+    "  type: events.iterate.com/codemode/script-execution-completed",
+    ...(typeof scriptExecutionId === "string"
+      ? [`  scriptExecutionId: ${yamlScalar(scriptExecutionId)}`]
+      : []),
+    "  outcome:",
+    `    status: ${input.outcome.status}`,
+    ...yamlBlockScalar(
+      input.outcome.status === "returned" ? "    value" : "    error",
+      formatCodemodeOutput(
+        input.outcome.status === "returned" ? input.outcome.value : input.outcome.error,
+      ),
+    ),
+    "```",
+  ].join("\n");
+}
+
 function parseAgentChatChannel(channel: string | undefined) {
   return channel === "tui" ? "tui" : "web";
+}
+
+function yamlScalar(value: string): string {
+  if (/^[a-zA-Z0-9._/@:-]+$/.test(value)) return value;
+  return JSON.stringify(value);
+}
+
+function yamlBlockScalar(key: string, value: string): string[] {
+  return [`${key}: |-`, ...value.split("\n").map((line) => `      ${line}`)];
+}
+
+type DebugProjectInfo = {
+  id: string;
+  organizationId?: string;
+  organizationSlug?: string | null;
+  slug: string;
+};
+
+type DebugSnapshot = {
+  project: { id: string; organizationSlug?: string; slug?: string };
+  streamPath: string;
+  streamUrl: string;
+};
+
+function formatDebugMessage(snapshot: DebugSnapshot) {
+  return [
+    `*Debug:* <${snapshot.streamUrl}|open stream>`,
+    `Path: \`${snapshot.streamPath}\``,
+    `Project: \`${snapshot.project.slug ?? snapshot.project.id}\``,
+    snapshot.project.organizationSlug
+      ? `Organization: \`${snapshot.project.organizationSlug}\``
+      : undefined,
+  ]
+    .filter((line): line is string => line !== undefined)
+    .join("\n");
 }
 
 function parseChatToolMessage(value: unknown) {

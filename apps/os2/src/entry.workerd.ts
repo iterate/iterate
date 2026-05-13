@@ -41,14 +41,18 @@ export { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-ses
 export { DebugAppendChainSubscriber } from "~/durable-objects/debug-append-chain-subscriber.ts";
 export { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
 export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
+export { SlackAgentDurableObject } from "~/domains/slack/durable-objects/slack-agent-durable-object.ts";
+export { SlackIntegrationDurableObject } from "~/domains/slack/durable-objects/slack-integration-durable-object.ts";
 export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.ts";
 export { AiCapability, OrpcCapability } from "~/domains/codemode/example-capabilities.ts";
 export { FetchCapability } from "~/domains/codemode/fetch-capability.ts";
+export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
 export { ProjectMcpServerEntrypoint } from "~/domains/inbound-mcp-server/entrypoints/project-mcp-server-entrypoint.ts";
 export { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 export { SlackCapability } from "~/domains/slack/entrypoints/slack-capability.ts";
+export { SecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 export { StreamDurableObject };
 export { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-capability.ts";
@@ -121,6 +125,8 @@ export default {
           callableEnv: env,
           projectDurableObjectNamespace: env.PROJECT,
           repo: env.REPO,
+          slackAgent: env.SLACK_AGENT,
+          slackIntegration: env.SLACK_INTEGRATION,
           stream: env.STREAM,
           workerExports: cfCtx.exports,
         };
@@ -149,6 +155,10 @@ async function handleDebugAppendChainFetch(input: { request: Request; env: Env }
 
   if (input.request.headers.get("authorization") !== `Bearer ${expectedToken}`) {
     return Response.json({ error: "Unauthorized." }, { status: 401 });
+  }
+
+  if (!hasDebugAppendChainSubscriber(input.env)) {
+    return Response.json({ error: "Debug append-chain endpoint is disabled." }, { status: 404 });
   }
 
   const action = parseDebugAppendChainAction(url.searchParams.get("action"));
@@ -249,6 +259,13 @@ async function handleDebugAppendChainFetch(input: { request: Request; env: Env }
       { status: 500 },
     );
   }
+}
+
+function hasDebugAppendChainSubscriber(env: Env) {
+  return (
+    (env as Partial<Env> & { DEBUG_APPEND_CHAIN_SUBSCRIBER?: DurableObjectNamespace })
+      .DEBUG_APPEND_CHAIN_SUBSCRIBER != null
+  );
 }
 
 function parseDebugAppendChainAction(value: string | null): "start" | "status" {

@@ -672,7 +672,13 @@ describe("stream processor contract types", () => {
 
   it("types runProcessorReduce as consumed-event reduction or ignored event", () => {
     const processor = implementProcessor(codemodeProcessorContract, {});
-    const event = null as unknown as StreamEvent;
+    const event: StreamEvent = {
+      streamPath: "test",
+      type: "unknown-event",
+      payload: {},
+      offset: 1,
+      createdAt: new Date().toISOString(),
+    };
 
     const result = runProcessorReduce({
       processor,
@@ -715,6 +721,13 @@ describe("stream processor contract types", () => {
           }>();
           return null as unknown as StreamEvent;
         },
+        appendBatch: async (input) => {
+          expectTypeOf(input).toEqualTypeOf<{
+            events: EmittedInput<typeof codemodeProcessorContract>[];
+            streamPath?: string;
+          }>();
+          return null as unknown as StreamEvent[];
+        },
         read: async () => [],
         subscribe: () => null as unknown as AsyncIterable<StreamEvent>,
       },
@@ -750,6 +763,13 @@ describe("stream processor contract types", () => {
             streamPath?: string;
           }>();
           return null as unknown as StreamEvent;
+        },
+        appendBatch: async (input) => {
+          expectTypeOf(input).toEqualTypeOf<{
+            events: EmittedInput<typeof codemodeProcessorContract>[];
+            streamPath?: string;
+          }>();
+          return null as unknown as StreamEvent[];
         },
         read: async () => [],
         subscribe: () => null as unknown as AsyncIterable<StreamEvent>,

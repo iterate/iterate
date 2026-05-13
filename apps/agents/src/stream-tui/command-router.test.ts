@@ -1,5 +1,6 @@
 import { StreamPath } from "@iterate-com/shared/streams/types";
-import { rawEventsStreamViewReducer } from "@iterate-com/ui/components/events/feed-processors";
+import { getInitialProcessorState } from "@iterate-com/shared/stream-processors";
+import { StreamViewProcessorContract } from "@iterate-com/ui/components/events/stream-view-processor/contract";
 import { describe, expect, test } from "vitest";
 import {
   commandEntries,
@@ -21,7 +22,7 @@ function createTestAppContext() {
       return StreamPath.parse("/test");
     },
     get reducedState() {
-      return rawEventsStreamViewReducer.createInitialState();
+      return getInitialProcessorState(StreamViewProcessorContract);
     },
     streamApi: {
       append: async () => {

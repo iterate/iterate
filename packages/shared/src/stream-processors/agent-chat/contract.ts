@@ -32,6 +32,12 @@ export const AgentChatProcessorContract = defineProcessorContract({
   events: {
     "events.iterate.com/agent-chat/user-message-added": {
       description: "Raw inbound chat message before it is rendered into model context.",
+      examples: [
+        {
+          description: "Web chat message",
+          payload: { channel: "web", content: "What can you help me with?" },
+        },
+      ],
       payloadSchema: z.object({
         channel: AgentChatChannel,
         content: z.string(),
@@ -39,6 +45,15 @@ export const AgentChatProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/agent-chat/assistant-response-added": {
       description: "User-visible chat response emitted by a tool call.",
+      examples: [
+        {
+          description: "Assistant reply via web",
+          payload: {
+            channel: "web",
+            message: "I can help you manage your project, run code, and more.",
+          },
+        },
+      ],
       payloadSchema: z.object({
         channel: AgentChatChannel,
         message: z.string(),

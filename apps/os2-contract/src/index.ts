@@ -61,6 +61,15 @@ export const StreamCatalogRecord = z.object({
 });
 export type StreamCatalogRecord = z.output<typeof StreamCatalogRecord>;
 
+export const ProjectIntegrationConnection = z.object({
+  connected: z.boolean(),
+  externalId: z.string().nullable(),
+  displayName: z.string().nullable(),
+  metadata: JSONObject,
+  scopes: z.string().nullable(),
+});
+export type ProjectIntegrationConnection = z.output<typeof ProjectIntegrationConnection>;
+
 export const AgentRecord = z.object({
   agentPath: StreamPath,
   name: z.string(),
@@ -552,6 +561,62 @@ export const osContract = oc.router({
         })
         .input(ProjectScopedInput)
         .output(z.object({ sessions: z.array(InboundMcpSession) })),
+    },
+    integrations: {
+      getSlackConnection: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectSlugOrId}/integrations/slack",
+          description: "Get the Slack connection for a project",
+          tags: ["/project", "/integrations"],
+        })
+        .input(ProjectScopedInput)
+        .output(ProjectIntegrationConnection),
+      startSlackOAuthFlow: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectSlugOrId}/integrations/slack/oauth",
+          description: "Start the Slack OAuth flow for a project",
+          tags: ["/project", "/integrations"],
+        })
+        .input(ProjectScopedInput.extend({ callbackUrl: z.string().optional() }))
+        .output(z.object({ authorizationUrl: z.string() })),
+      disconnectSlack: oc
+        .route({
+          method: "DELETE",
+          path: "/projects/{projectSlugOrId}/integrations/slack",
+          description: "Disconnect Slack from a project",
+          tags: ["/project", "/integrations"],
+        })
+        .input(ProjectScopedInput)
+        .output(z.object({ success: z.boolean() })),
+      getGoogleConnection: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectSlugOrId}/integrations/google",
+          description: "Get the Google connection for a project",
+          tags: ["/project", "/integrations"],
+        })
+        .input(ProjectScopedInput)
+        .output(ProjectIntegrationConnection),
+      startGoogleOAuthFlow: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectSlugOrId}/integrations/google/oauth",
+          description: "Start the Google OAuth flow for a project",
+          tags: ["/project", "/integrations"],
+        })
+        .input(ProjectScopedInput.extend({ callbackUrl: z.string().optional() }))
+        .output(z.object({ authorizationUrl: z.string() })),
+      disconnectGoogle: oc
+        .route({
+          method: "DELETE",
+          path: "/projects/{projectSlugOrId}/integrations/google",
+          description: "Disconnect Google from a project",
+          tags: ["/project", "/integrations"],
+        })
+        .input(ProjectScopedInput)
+        .output(z.object({ success: z.boolean() })),
     },
     streams: {
       list: oc

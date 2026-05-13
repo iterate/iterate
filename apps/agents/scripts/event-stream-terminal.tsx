@@ -13,15 +13,12 @@ import {
   StreamPath,
   type EventInput,
 } from "@iterate-com/shared/streams/types";
-import type {
-  EventsStreamViewReducer,
-  EventsStreamViewState,
-} from "@iterate-com/ui/components/events/feed-items";
+import type { EventsStreamViewState } from "@iterate-com/ui/components/events/feed-items";
 import {
-  prettyEventsStreamViewReducer,
-  rawEventsStreamViewReducer,
-  rawPrettyEventsStreamViewReducer,
-} from "@iterate-com/ui/components/events/feed-processors";
+  reduceStreamViewEvents,
+  StreamViewProcessorContract,
+} from "@iterate-com/ui/components/events/stream-view-processor/contract";
+import { getInitialProcessorState } from "@iterate-com/shared/stream-processors";
 import { createCliRenderer, type KeyEvent } from "@opentui/core";
 import { createRoot, useKeyboard, useRenderer } from "@opentui/react";
 import { ORPCError } from "@orpc/server";
@@ -72,11 +69,33 @@ if (!process.stdin.isTTY || !process.stdout.isTTY) {
 const args = parseArgs(process.argv.slice(2));
 
 const feedModes = {
-  raw: { label: "Raw", reducer: rawEventsStreamViewReducer },
-  mixed: { label: "Mixed", reducer: rawPrettyEventsStreamViewReducer },
-  pretty: { label: "Pretty", reducer: prettyEventsStreamViewReducer },
+  raw: { label: "Raw" },
+  mixed: { label: "Mixed" },
+  pretty: { label: "Pretty" },
 } as const;
 type FeedMode = keyof typeof feedModes;
+
+function applyFeedMode(state: EventsStreamViewState, mode: FeedMode): EventsStreamViewState {
+  if (mode === "pretty") {
+    return {
+      ...state,
+      slots: {
+        ...state.slots,
+        feed: state.slots.feed.filter((el) => el.type !== "grouped-raw-event"),
+      },
+    };
+  }
+  if (mode === "raw") {
+    return {
+      ...state,
+      slots: {
+        ...state.slots,
+        feed: state.slots.feed.filter((el) => el.type === "grouped-raw-event"),
+      },
+    };
+  }
+  return state;
+}
 
 function StreamTerminalApp() {
   const renderer = useRenderer();
@@ -88,7 +107,7 @@ function StreamTerminalApp() {
   const [currentFeedMode, setCurrentFeedMode] = useState<FeedMode>("mixed");
   const [rawEvents, setRawEvents] = useState<Event[]>([]);
   const [viewState, setViewState] = useState<EventsStreamViewState>(() =>
-    feedModes.mixed.reducer.createInitialState(),
+    getInitialProcessorState(StreamViewProcessorContract),
   );
   const [status, setStatus] = useState("connecting");
   const [appendStatus, setAppendStatus] = useState("");
@@ -110,7 +129,6 @@ function StreamTerminalApp() {
   const [selectedSlashCommandPath, setSelectedSlashCommandPath] = useState<string | undefined>();
   const [lastSpaceTimestamp, setLastSpaceTimestamp] = useState(0);
   const [streamRestartNonce, setStreamRestartNonce] = useState(0);
-  const currentReducer = feedModes[currentFeedMode].reducer;
   const activeAbortController = useRef<AbortController | undefined>(undefined);
 
   useEffect(() => {
@@ -124,17 +142,9 @@ function StreamTerminalApp() {
     setComposerRevision((previous) => previous + 1);
   }, []);
 
-  const reduceEvents = useCallback((events: readonly Event[], reducer: EventsStreamViewReducer) => {
-    let nextState = reducer.createInitialState();
-    for (const event of events) {
-      nextState = reducer.reduce({ event, state: nextState }) ?? nextState;
-    }
-    return nextState;
-  }, []);
-
   useEffect(() => {
-    setViewState(reduceEvents(rawEvents, currentReducer));
-  }, [currentReducer, rawEvents, reduceEvents]);
+    setViewState(applyFeedMode(reduceStreamViewEvents(rawEvents), currentFeedMode));
+  }, [currentFeedMode, rawEvents]);
 
   useEffect(() => {
     const abortController = new AbortController();

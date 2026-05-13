@@ -1,10 +1,22 @@
 import type { SlackEvent } from "@slack/types";
 import { z } from "zod";
-import { buildProcessorIdempotencyKey, implementProcessor } from "../stream-processor.ts";
+import {
+  buildProcessorIdempotencyKey,
+  implementProcessor,
+  type EmittedInput,
+} from "../stream-processor.ts";
 import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
 import { SlackProcessorContract } from "./contract.ts";
 
-export function createSlackProcessor() {
+export type SlackProcessorDeps = {
+  createRoutedStreamBootstrapEvents?(input: {
+    channel: string;
+    streamPath: string;
+    threadTs: string;
+  }): EmittedInput<typeof SlackProcessorContract>[];
+};
+
+export function createSlackProcessor(deps: SlackProcessorDeps = {}) {
   return implementProcessor(SlackProcessorContract, {
     async afterAppend({ event, state, streamApi }) {
       await standardProcessorBehavior.afterAppend({
@@ -133,7 +145,7 @@ export function createSlackProcessor() {
               routeKey = `${slackEvent.channel}:${slackThreadTs}`;
               routeChannel = slackEvent.channel;
               routeThreadTs = slackThreadTs;
-              routeStreamPath = `/agents/slack/ts-${slackThreadTs.replaceAll(".", "-")}`;
+              routeStreamPath = `/agents/slack/${sanitizePathPart(slackEvent.channel)}/ts-${sanitizePathPart(slackThreadTs)}`;
             }
           }
 
@@ -142,29 +154,49 @@ export function createSlackProcessor() {
           if (streamPath == null) return;
 
           /**
-           * The route event stays on `/slack/webhooks`. It is router state:
+           * The route event stays on `/integrations/slack`. It is router state:
            * "when a future Slack webhook gives us this same Slack thread key,
-           * forward it to this stream path." The destination stream only needs
-           * the raw Slack webhook, because `slack-thread` transcribes from the
-           * Slack event body itself.
+           * forward it to this stream path."
            */
           if (state.routes[routeKey] == null && routeChannel != null && routeThreadTs != null) {
-            await streamApi.append({
-              event: {
-                type: "events.iterate.com/slack/thread-route-configured",
-                idempotencyKey: `slack-thread-route:${routeKey}`,
-                payload: {
-                  channel: routeChannel,
-                  threadTs: routeThreadTs,
-                  streamPath,
-                },
+            const routeEvent: EmittedInput<typeof SlackProcessorContract> = {
+              type: "events.iterate.com/slack/thread-route-configured",
+              idempotencyKey: `slack-route:${routeKey}`,
+              payload: {
+                channel: routeChannel,
+                threadTs: routeThreadTs,
+                streamPath,
               },
+            };
+            const forwardedWebhookEvent: EmittedInput<typeof SlackProcessorContract> = {
+              type: "events.iterate.com/slack/webhook-received",
+              idempotencyKey: buildProcessorIdempotencyKey({
+                processor: SlackProcessorContract,
+                key: "forward-slack-webhook",
+                sourceEvent: event,
+              }),
+              payload: event.payload,
+            };
+
+            await streamApi.append({ event: routeEvent });
+            await streamApi.appendBatch({
+              streamPath,
+              events: [
+                ...(deps.createRoutedStreamBootstrapEvents?.({
+                  channel: routeChannel,
+                  streamPath,
+                  threadTs: routeThreadTs,
+                }) ?? []),
+                routeEvent,
+                forwardedWebhookEvent,
+              ],
             });
+            return;
           }
 
           /**
            * The routed stream receives the original Slack webhook unchanged.
-           * The downstream `slack-thread` processor owns interpretation: it can
+           * The downstream `slack-agent` processor owns interpretation: it can
            * turn messages, app mentions, reactions, edits, or future Slack event
            * shapes into agent input without this router needing to understand
            * agent semantics.
@@ -188,4 +220,8 @@ export function createSlackProcessor() {
       }
     },
   });
+}
+
+function sanitizePathPart(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
 }

@@ -14,7 +14,10 @@ import {
 } from "@iterate-com/shared/stream-processors/legacy-codemode/contract";
 import { createLegacyCodemodeProcessor } from "@iterate-com/shared/stream-processors/legacy-codemode/implementation";
 import { buildProcessorRegisteredEvent } from "@iterate-com/shared/stream-processors/core/contract";
-import { createMemoryPullProcessorStorage, runPullProcessor } from "./pull-runner.ts";
+import {
+  createMemoryPullProcessorStorage,
+  runPullProcessor,
+} from "@iterate-com/shared/stream-processors/pull-runner";
 
 const ThrowingProcessorContract = defineProcessorContract({
   slug: "throwaway-proof",
@@ -85,7 +88,7 @@ describe("runPullProcessor", () => {
         idempotencyKey: CODEMODE_PRIMER_IDEMPOTENCY_KEY,
         payload: {
           content: expect.stringContaining("Codemode is mandatory"),
-          triggerLlmRequest: { behaviour: "dont-trigger-request" },
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
         },
       },
       {
@@ -142,7 +145,7 @@ describe("runPullProcessor", () => {
         idempotencyKey: CODEMODE_PRIMER_IDEMPOTENCY_KEY,
         payload: {
           content: expect.stringContaining("Codemode is mandatory"),
-          triggerLlmRequest: { behaviour: "dont-trigger-request" },
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
         },
       },
     ]);
@@ -163,6 +166,8 @@ describe("runPullProcessor", () => {
       storage,
       streamApi: {
         append: async ({ event: input }) => event(input, { offset: 100 }),
+        appendBatch: async ({ events }) =>
+          events.map((input, index) => event(input, { offset: 100 + index })),
         read: async () => [
           event(buildProcessorRegisteredEvent({ contract: LegacyCodemodeProcessorContract }), {
             offset: 1,
@@ -258,6 +263,14 @@ function testStreamApi(args: {
     append: async ({ event: input }) => {
       args.appended.push(input);
       return event(input, { offset: 100 + args.appended.length });
+    },
+    appendBatch: async ({ events }) => {
+      const appendedEvents: StreamEvent[] = [];
+      for (const input of events) {
+        args.appended.push(input);
+        appendedEvents.push(event(input, { offset: 100 + args.appended.length }));
+      }
+      return appendedEvents;
     },
     read: async () => args.history,
     subscribe: async function* ({ afterOffset } = {}) {

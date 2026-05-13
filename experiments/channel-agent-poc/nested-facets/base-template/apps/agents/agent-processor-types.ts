@@ -5,12 +5,10 @@ export type HistoryItem = {
   content: string;
 };
 
-export type TriggerLlm =
-  | { behaviour: "auto" }
+export type LlmRequestPolicy =
   | { behaviour: "dont-trigger-request" }
   | { behaviour: "interrupt-current-request" }
-  | { behaviour: "after-current-request" }
-  | { behaviour: "trigger-request-within-time-period"; withinMs: number };
+  | { behaviour: "after-current-request" };
 
 export type LlmConfig = {
   model: string;

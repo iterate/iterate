@@ -8,6 +8,8 @@ import type { AgentDurableObject } from "~/domains/agents/durable-objects/agent-
 import type { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import type { CloudflareArtifactsBinding } from "~/domains/repos/artifacts.ts";
 import type { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
+import type { SlackAgentDurableObject } from "~/domains/slack/durable-objects/slack-agent-durable-object.ts";
+import type { SlackIntegrationDurableObject } from "~/domains/slack/durable-objects/slack-integration-durable-object.ts";
 
 export type ClerkAuth = Awaited<ReturnType<typeof auth>>;
 
@@ -27,6 +29,8 @@ export interface AppContext {
   codemodeSession?: DurableObjectNamespace<CodemodeSession>;
   projectDurableObjectNamespace?: DurableObjectNamespace<ProjectDurableObject>;
   repo?: DurableObjectNamespace<RepoDurableObject>;
+  slackAgent?: DurableObjectNamespace<SlackAgentDurableObject>;
+  slackIntegration?: DurableObjectNamespace<SlackIntegrationDurableObject>;
   stream?: DurableObjectNamespace<StreamDurableObject>;
   workerExports?: Cloudflare.Exports;
   callableEnv?: Record<string, unknown>;

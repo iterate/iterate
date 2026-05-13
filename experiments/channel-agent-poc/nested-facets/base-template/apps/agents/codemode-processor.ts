@@ -45,7 +45,7 @@ async function appendRewrite(args: {
       payload: {
         role: "user",
         content: args.content,
-        triggerLlmRequest: { behaviour: "dont-trigger-request" },
+        llmRequestPolicy: { behaviour: "dont-trigger-request" },
       },
     },
   });
@@ -180,7 +180,7 @@ export async function codemodeAfterAppend(
         payload: {
           role: "user",
           content: CODEMODE_PRIMER_TEXT,
-          triggerLlmRequest: { behaviour: "dont-trigger-request" },
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
         },
       },
     });
@@ -260,7 +260,7 @@ export async function codemodeAfterAppend(
                 : { logs: event.payload.logs }),
             },
           }),
-          triggerLlmRequest: { behaviour: "dont-trigger-request" },
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
         },
       },
     });

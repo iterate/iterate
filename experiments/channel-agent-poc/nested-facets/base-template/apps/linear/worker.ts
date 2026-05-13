@@ -157,7 +157,7 @@ const DEFAULT_EVENTS = [
       role: "user",
       content:
         "Linear policy: read the filtered `events.iterate.com/linear/webhook-received` YAML. Reply on Linear with `linear.createComment` using `event.response.createComment.issueId`. Do not send a separate webchat confirmation. There is no `event` global in codemode; copy exact IDs from the YAML into constants. Always return the tool promise or result. If you perform multiple independent actions, use `Promise.all`.",
-      triggerLlmRequest: { behaviour: "dont-trigger-request" },
+      llmRequestPolicy: { behaviour: "dont-trigger-request" },
     },
   },
 ];

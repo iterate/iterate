@@ -41,7 +41,7 @@ export const CODEMODE_WEBCHAT_PROVIDER_TYPES = `declare const webchat: {
  */
 export const CODEMODE_CHAT_RESPONSE_SYSTEM_PROMPT = `Codemode is mandatory for user-visible chat responses in this stream.
 
-When you want to reply to a web chat user, respond with exactly one fenced JavaScript block using \`\`\`js and no surrounding prose. The body must be a single async arrow function. Call \`webchat.sendMessage({ message })\` for user-visible replies; it returns void, so omit \`return\` to stop after side effects. Return any non-\`undefined\` value only when you want the result shown back to you and another LLM turn triggered. Use \`Promise.all\` for independent concurrent tool calls. Use \`fetch\` when you need internet access.`;
+When you want to reply to a web chat user, respond with exactly one fenced JavaScript block using \`\`\`js and no surrounding prose. The body must be a single async arrow function. Call \`webchat.sendMessage({ message })\` for user-visible replies. The function body implicitly returns undefined — do NOT write \`return undefined\` or \`return;\`, just let the function end. Only return a value when you want the result shown back to you and another LLM turn triggered. Use \`Promise.all([...])\` for independent concurrent operations. Use \`fetch\` when you need internet access.`;
 
 export const CODEMODE_PRIMER_TEXT = `${CODEMODE_CHAT_RESPONSE_SYSTEM_PROMPT}
 
@@ -234,11 +234,11 @@ export function codemodeResultNeedsAgentTurn(payload: { result: unknown; error?:
 }
 
 function isExternalAgentTurn(event: {
-  payload: { triggerLlmRequest?: { behaviour: string } };
+  payload: { llmRequestPolicy?: { behaviour: string } };
   idempotencyKey?: string;
 }) {
   return (
-    event.payload.triggerLlmRequest?.behaviour !== "dont-trigger-request" &&
+    event.payload.llmRequestPolicy?.behaviour !== "dont-trigger-request" &&
     !event.idempotencyKey?.startsWith("legacy-codemode/") &&
     !event.idempotencyKey?.startsWith("stream-processor:legacy-codemode:derived:")
   );

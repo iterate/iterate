@@ -88,6 +88,7 @@ export type CodemodeSessionEnv = {
 
 type CodemodeSessionStreamApi = ProcessorStreamApi<typeof CodemodeProcessorContract> & {
   append(args: { event: EventInput; streamPath?: string }): Promise<Event>;
+  appendBatch(args: { events: EventInput[]; streamPath?: string }): Promise<Event[]>;
   read(args?: {
     streamPath?: string;
     afterOffset?: number | "start" | "end";
@@ -700,6 +701,17 @@ function processorStreamApiFromNamespace(args: {
         }),
       });
       return await stream.append(input.event as EventInput);
+    },
+    async appendBatch(input) {
+      const stream = await getInitializedStreamStub({
+        durableObjectNamespace: args.durableObjectNamespace,
+        namespace: args.namespace,
+        path: resolveProcessorStreamPath({
+          basePath: args.streamPath,
+          pathInput: input.streamPath,
+        }),
+      });
+      return await stream.appendBatch(input.events as EventInput[]);
     },
     async read(input = {}) {
       const stream = await getInitializedStreamStub({

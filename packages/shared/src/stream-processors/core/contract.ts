@@ -31,6 +31,14 @@ export const CoreProcessorContract = defineProcessorContract({
           z.object({
             type: z.string(),
             description: z.string().optional(),
+            examples: z
+              .array(
+                z.object({
+                  description: z.string(),
+                  payload: z.unknown(),
+                }),
+              )
+              .optional(),
           }),
         ),
       }),
@@ -94,6 +102,9 @@ export function buildProcessorRegisteredEvent(args: {
       ownedEvents: Object.entries(args.contract.events).map(([type, event]) => ({
         type,
         ...(event.description == null ? {} : { description: event.description }),
+        ...(event.examples == null || event.examples.length === 0
+          ? {}
+          : { examples: [...event.examples] }),
       })),
     },
   };

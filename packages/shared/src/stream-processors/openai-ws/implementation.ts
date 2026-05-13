@@ -8,6 +8,7 @@ import {
 } from "../stream-processor.ts";
 import { CoreProcessorRegisteredEventType } from "../core/contract.ts";
 import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
+import { reduceAgentEvents } from "../agent/contract.ts";
 import { OpenAiWsProcessorContract, type OpenAiWsState } from "./contract.ts";
 
 type OpenAiWsStreamApi = ProcessorStreamApi<typeof OpenAiWsProcessorContract>;
@@ -320,8 +321,18 @@ async function executeOpenAiWsRequest(args: {
       return;
     }
 
-    const receiveSequence = connection.receiveSequence++;
     const message = toJsonValue(rawMessage);
+    const parsed = OpenAiResponsesStreamMessage.safeParse(message);
+    if (parsed.success && parsed.data.type === "response.output_text.delta") {
+      // IMPORTANT TEMPORARY SKIP: eventually we DO want these raw output_text delta
+      // frames in the stream again. For now, dropping them keeps circuit breaker
+      // tuning and stream subscription latency easier to reason about while the
+      // OpenAI WebSocket processor is still emitting very high-volume deltas.
+      outputText += parsed.data.delta ?? "";
+      continue;
+    }
+
+    const receiveSequence = connection.receiveSequence++;
     await args.streamApi.append({
       event: {
         type: "events.iterate.com/openai-ws/websocket-message-received",
@@ -339,13 +350,7 @@ async function executeOpenAiWsRequest(args: {
       },
     });
 
-    const parsed = OpenAiResponsesStreamMessage.safeParse(message);
     if (!parsed.success) continue;
-
-    if (parsed.data.type === "response.output_text.delta") {
-      outputText += parsed.data.delta ?? "";
-      continue;
-    }
 
     if (parsed.data.type === "response.completed") {
       finalResponse = toJsonValue(parsed.data.response ?? message);
@@ -353,6 +358,27 @@ async function executeOpenAiWsRequest(args: {
       if (responseId != null) args.setPreviousResponseId(responseId);
       const durationMs = Date.now() - startedAt;
       const usage = parsed.data.response?.usage;
+      if (
+        !(await isAgentLlmRequestStillCurrent({
+          llmRequestId,
+          streamApi: args.streamApi,
+        }))
+      ) {
+        await appendOpenAiWsProviderCompleted({
+          connectionId: connection.id,
+          durationMs,
+          llmRequestId,
+          responseId,
+          result: {
+            status: "success",
+            rawResponse: finalResponse,
+            ...(usage == null ? {} : { usage }),
+          },
+          sourceEvent: args.event,
+          streamApi: args.streamApi,
+        });
+        return;
+      }
       await args.streamApi.append({
         event: {
           type: "events.iterate.com/agent/output-added",
@@ -361,29 +387,21 @@ async function executeOpenAiWsRequest(args: {
             key: "agent-output-added",
             sourceEvent: args.event,
           }),
-          payload: { content: outputText },
+          payload: { content: outputText, llmRequestId },
         },
       });
-      await args.streamApi.append({
-        event: {
-          type: "events.iterate.com/openai-ws/llm-request-completed",
-          idempotencyKey: buildProcessorIdempotencyKey({
-            processor: OpenAiWsProcessorContract,
-            key: "provider-llm-request-completed",
-            sourceEvent: args.event,
-          }),
-          payload: {
-            connectionId: connection.id,
-            llmRequestId,
-            durationMs,
-            ...(responseId == null ? {} : { responseId }),
-            result: {
-              status: "success",
-              rawResponse: finalResponse,
-              ...(usage == null ? {} : { usage }),
-            },
-          },
+      await appendOpenAiWsProviderCompleted({
+        connectionId: connection.id,
+        durationMs,
+        llmRequestId,
+        responseId,
+        result: {
+          status: "success",
+          rawResponse: finalResponse,
+          ...(usage == null ? {} : { usage }),
         },
+        sourceEvent: args.event,
+        streamApi: args.streamApi,
       });
       await args.streamApi.append({
         event: {
@@ -454,6 +472,56 @@ async function executeOpenAiWsRequest(args: {
       return;
     }
   }
+}
+
+async function appendOpenAiWsProviderCompleted(args: {
+  connectionId: string;
+  durationMs: number;
+  llmRequestId: number;
+  responseId: string | undefined;
+  result: {
+    status: "success";
+    rawResponse: JsonValue | undefined;
+    usage?: JsonValue;
+  };
+  sourceEvent: Extract<
+    OpenAiWsConsumedEvent,
+    { type: "events.iterate.com/agent/llm-request-requested" }
+  >;
+  streamApi: OpenAiWsStreamApi;
+}) {
+  await args.streamApi.append({
+    event: {
+      type: "events.iterate.com/openai-ws/llm-request-completed",
+      idempotencyKey: buildProcessorIdempotencyKey({
+        processor: OpenAiWsProcessorContract,
+        key: "provider-llm-request-completed",
+        sourceEvent: args.sourceEvent,
+      }),
+      payload: {
+        connectionId: args.connectionId,
+        llmRequestId: args.llmRequestId,
+        durationMs: args.durationMs,
+        ...(args.responseId == null ? {} : { responseId: args.responseId }),
+        result: args.result,
+      },
+    },
+  });
+}
+
+async function isAgentLlmRequestStillCurrent(args: {
+  llmRequestId: number;
+  streamApi: OpenAiWsStreamApi;
+}) {
+  const events = await args.streamApi.read({
+    afterOffset: "start",
+    beforeOffset: "end",
+  });
+  const state = reduceAgentEvents({ events });
+  return (
+    state.currentRequest?.phase === "requested" &&
+    state.currentRequest.llmRequestId === args.llmRequestId
+  );
 }
 
 async function openOpenAiWsConnection(args: {

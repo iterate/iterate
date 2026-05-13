@@ -29,6 +29,17 @@ export class StreamApi extends WorkerEntrypoint<Env, StreamApiProps> {
     return result.event;
   }
 
+  async appendBatch(args: { events: EventInput[]; streamPath?: string }): Promise<Event[]> {
+    const eventsClient = this.createEventsClient();
+    const path = this.resolveStreamPath(args.streamPath);
+    const events: Event[] = [];
+    for (const event of args.events) {
+      const result = await eventsClient.append({ path, event });
+      events.push(result.event);
+    }
+    return events;
+  }
+
   async read(
     args: {
       streamPath?: string;

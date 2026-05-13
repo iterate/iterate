@@ -125,14 +125,7 @@ export function PathBreadcrumbs() {
 
 function BreadcrumbLabel({ crumb }: { crumb: { label: string; streamPath?: StreamPathType } }) {
   if (!crumb.streamPath) return <>{crumb.label}</>;
-  return (
-    <EventsStreamPathLabel
-      path={crumb.streamPath}
-      label={crumb.label}
-      startChars={18}
-      endChars={16}
-    />
-  );
+  return <EventsStreamPathLabel path={crumb.streamPath} label={crumb.label} />;
 }
 
 function renderCrumbLink({

@@ -54,7 +54,7 @@ const DEFAULT_EVENTS = [
       role: "user",
       content:
         "Slack policy: read the filtered `events.iterate.com/slack/webhook-received` YAML. Use `event.response.chatPostMessage.channel` and `event.response.chatPostMessage.thread_ts` when replying. Use `event.response.reactionsAdd.channel` and `event.response.reactionsAdd.timestamp` when reacting. For ordinary replies, return only `Promise.all([slack.chat.postMessage({ channel, thread_ts, text }), slack.reactions.add({ channel, timestamp, name })])`. For longer work, set Slack assistant thread status before/during the work and clear it at the end. Do not send a separate webchat confirmation. There is no `event` global in codemode; copy exact IDs from the YAML into constants. Always return the tool promise or result.",
-      triggerLlmRequest: { behaviour: "dont-trigger-request" },
+      llmRequestPolicy: { behaviour: "dont-trigger-request" },
     },
   },
 ];

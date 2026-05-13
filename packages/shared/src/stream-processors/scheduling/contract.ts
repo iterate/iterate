@@ -78,6 +78,27 @@ export const SchedulingProcessorContract = defineProcessorContract({
   events: {
     [schedulingEventTypes.appendScheduled]: {
       description: "User intent to append an event later or repeatedly.",
+      examples: [
+        {
+          description: "Append an event every 60 seconds",
+          payload: {
+            slug: "heartbeat",
+            append: { type: "events.iterate.com/os2/manual-event", payload: { message: "ping" } },
+            schedule: { kind: "every", intervalSeconds: 60 },
+          },
+        },
+        {
+          description: "Append an event once after 30 seconds",
+          payload: {
+            slug: "delayed-reminder",
+            append: {
+              type: "events.iterate.com/os2/manual-event",
+              payload: { message: "reminder" },
+            },
+            schedule: { kind: "once-in", delaySeconds: 30 },
+          },
+        },
+      ],
       payloadSchema: z.strictObject({
         slug: z.string().trim().min(1),
         append: EventInputPayload,
@@ -96,6 +117,12 @@ export const SchedulingProcessorContract = defineProcessorContract({
     },
     [schedulingEventTypes.scheduleCancelled]: {
       description: "Cancels one configured schedule.",
+      examples: [
+        {
+          description: "Cancel a schedule by slug",
+          payload: { slug: "heartbeat" },
+        },
+      ],
       payloadSchema: z.strictObject({ slug: z.string().trim().min(1) }),
     },
     [schedulingEventTypes.scheduleExecutionStarted]: {

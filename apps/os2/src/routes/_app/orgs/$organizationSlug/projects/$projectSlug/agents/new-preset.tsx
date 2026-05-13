@@ -14,6 +14,7 @@ import { Textarea } from "@iterate-com/ui/components/textarea";
 import {
   AgentPresetEvent,
   type AgentLlmProvider,
+  DEFAULT_CLOUDFLARE_AGENT_MODEL,
   configuredAgentSetupEvents,
   defaultAgentSystemPrompt,
   normalizeAgentPresetBasePath,
@@ -47,8 +48,8 @@ function NewAgentPresetPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [basePathInput, setBasePathInput] = useState("/agents");
-  const [provider, setProvider] = useState<AgentLlmProvider>("openai-ws");
-  const [model, setModel] = useState("gpt-5.5");
+  const [provider, setProvider] = useState<AgentLlmProvider>("cloudflare-ai");
+  const [model, setModel] = useState(DEFAULT_CLOUDFLARE_AGENT_MODEL);
   const [runOpts, setRunOpts] = useState('{"gateway":{"id":"default"}}');
   const [systemPrompt, setSystemPrompt] = useState(defaultAgentSystemPrompt());
   const [customEventsYaml, setCustomEventsYaml] = useState(emptyEventsYaml);
@@ -100,11 +101,11 @@ function NewAgentPresetPage() {
   function selectProvider(nextProvider: AgentLlmProvider) {
     setProvider(nextProvider);
     setModel((current) => {
-      if (nextProvider === "openai-ws" && current === "@cf/meta/llama-3.1-8b-instruct") {
+      if (nextProvider === "openai-ws" && current === DEFAULT_CLOUDFLARE_AGENT_MODEL) {
         return "gpt-5.5";
       }
       if (nextProvider === "cloudflare-ai" && current === "gpt-5.5") {
-        return "@cf/meta/llama-3.1-8b-instruct";
+        return DEFAULT_CLOUDFLARE_AGENT_MODEL;
       }
       return current;
     });

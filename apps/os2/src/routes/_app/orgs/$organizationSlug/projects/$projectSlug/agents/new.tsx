@@ -32,6 +32,7 @@ import {
 } from "~/domains/codemode/examples.ts";
 import {
   type AgentLlmProvider,
+  DEFAULT_CLOUDFLARE_AGENT_MODEL,
   configuredAgentSetupEvents,
   defaultAgentSystemPrompt,
   parseAgentEventInputsYaml,
@@ -85,8 +86,8 @@ function NewAgentPage() {
   const { project } = Route.useLoaderData();
   const navigate = useNavigate();
   const [agentPathInput, setAgentPathInput] = useState("/agents/assistant");
-  const [provider, setProvider] = useState<AgentLlmProvider>("openai-ws");
-  const [model, setModel] = useState("gpt-5.5");
+  const [provider, setProvider] = useState<AgentLlmProvider>("cloudflare-ai");
+  const [model, setModel] = useState(DEFAULT_CLOUDFLARE_AGENT_MODEL);
   const [runOpts, setRunOpts] = useState('{"gateway":{"id":"default"}}');
   const [systemPrompt, setSystemPrompt] = useState(defaultAgentSystemPrompt());
   const [customEventsYaml, setCustomEventsYaml] = useState(emptyEventsYaml);
@@ -149,11 +150,11 @@ function NewAgentPage() {
   function selectProvider(nextProvider: AgentLlmProvider) {
     setProvider(nextProvider);
     setModel((current) => {
-      if (nextProvider === "openai-ws" && current === "@cf/meta/llama-3.1-8b-instruct") {
+      if (nextProvider === "openai-ws" && current === DEFAULT_CLOUDFLARE_AGENT_MODEL) {
         return "gpt-5.5";
       }
       if (nextProvider === "cloudflare-ai" && current === "gpt-5.5") {
-        return "@cf/meta/llama-3.1-8b-instruct";
+        return DEFAULT_CLOUDFLARE_AGENT_MODEL;
       }
       return current;
     });

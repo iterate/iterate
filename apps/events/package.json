@@ -15,7 +15,6 @@
     "deploy": "doppler run --config prd -- pnpm alchemy:up",
     "destroy": "doppler run --config prd -- pnpm alchemy:down",
     "rpc": "pnpm cli rpc",
-    "sqlfu:generate": "sqlfu generate",
     "demo": "pnpm cli hello-world",
     "demo:hello-world": "pnpm cli hello-world",
     "typecheck": "tsc --noEmit",
@@ -57,7 +56,6 @@
     "mustache": "^4.2.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "sqlfu": "0.0.3-14",
     "tailwindcss": "^4.1.18",
     "yaml": "^2.8.3",
     "zod": "^4.3.6"
@@ -77,6 +75,7 @@
     "alchemy": "^0.83.3",
     "esbuild": "^0.27.4",
     "miniflare": "catalog:cloudflare",
+    "sqlfu": "0.0.3-14",
     "tinyexec": "^1.0.2",
     "tsx": "^4.20.3",
     "typescript": "^5.9.3",

@@ -15,9 +15,9 @@ import { cn } from "@iterate-com/ui/lib/utils";
 
 export function PromptContextCard({ element }: { element: EventsStreamPromptContextElement }) {
   const sourceLabel = element.props.source == null ? null : `from ${element.props.source}`;
-  const triggerLabel = formatTriggerLlmRequest(element.props.triggerLlmRequest);
-  const triggerDescription = describeTriggerLlmRequest(element.props.triggerLlmRequest);
-  const canTriggerLlmRequest = element.props.triggerLlmRequest.behaviour !== "dont-trigger-request";
+  const policyLabel = formatLlmRequestPolicy(element.props.llmRequestPolicy);
+  const policyDescription = describeLlmRequestPolicy(element.props.llmRequestPolicy);
+  const canTriggerRequest = element.props.llmRequestPolicy.behaviour !== "dont-trigger-request";
 
   return (
     <Message from="user" className="max-w-3xl">
@@ -34,16 +34,16 @@ export function PromptContextCard({ element }: { element: EventsStreamPromptCont
                 variant="outline"
                 className={cn(
                   "font-mono shadow-none",
-                  canTriggerLlmRequest
+                  canTriggerRequest
                     ? "border-orange-300 bg-orange-50 text-orange-800 dark:border-orange-900/70 dark:bg-orange-950/40 dark:text-orange-300"
                     : "border-border/60 bg-muted/20 text-muted-foreground/75",
                 )}
               >
-                triggerLlmRequest: {triggerLabel}
+                llmRequestPolicy: {policyLabel}
               </Badge>
             </TooltipTrigger>
             <TooltipContent className="max-w-xs">
-              <p>{triggerDescription}</p>
+              <p>{policyDescription}</p>
             </TooltipContent>
           </Tooltip>
         </div>
@@ -58,28 +58,21 @@ export function PromptContextCard({ element }: { element: EventsStreamPromptCont
   );
 }
 
-function formatTriggerLlmRequest(
-  trigger: EventsStreamPromptContextElement["props"]["triggerLlmRequest"],
+function formatLlmRequestPolicy(
+  policy: EventsStreamPromptContextElement["props"]["llmRequestPolicy"],
 ) {
-  if (trigger.behaviour === "trigger-request-within-time-period") {
-    return `${trigger.behaviour} ${trigger.withinMs}ms`;
-  }
-  return trigger.behaviour;
+  return policy.behaviour;
 }
 
-function describeTriggerLlmRequest(
-  trigger: EventsStreamPromptContextElement["props"]["triggerLlmRequest"],
+function describeLlmRequestPolicy(
+  policy: EventsStreamPromptContextElement["props"]["llmRequestPolicy"],
 ) {
-  switch (trigger.behaviour) {
-    case "auto":
-      return "auto means the agent processor resolves this to interrupt-current-request: it cancels any current LLM request and schedules a fresh one.";
+  switch (policy.behaviour) {
     case "dont-trigger-request":
       return "Adds context for future LLM requests, but does not schedule a request by itself.";
     case "interrupt-current-request":
       return "Cancels any current LLM request and schedules a new one with this context included.";
     case "after-current-request":
-      return "Queues a follow-up LLM request after the current request finishes.";
-    case "trigger-request-within-time-period":
-      return `Queues or keeps a request only if it can run within ${trigger.withinMs}ms.`;
+      return "Requests an LLM response without interrupting in-flight work; debounced requests are reset so this context is included promptly.";
   }
 }

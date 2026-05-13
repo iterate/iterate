@@ -349,6 +349,7 @@ function shellQuote(value: string) {
 
 type RepoStreamApi = ProcessorStreamApi<typeof RepoStreamProcessorContract> & {
   append(args: { event: EventInput; streamPath?: string }): Promise<Event>;
+  appendBatch(args: { events: EventInput[]; streamPath?: string }): Promise<Event[]>;
   read(args?: {
     streamPath?: string;
     afterOffset?: StreamCursor;
@@ -372,6 +373,17 @@ function repoStreamApiFromNamespace(args: {
         }),
       });
       return await stream.append(input.event);
+    },
+    async appendBatch(input) {
+      const stream = await getInitializedStreamStub({
+        durableObjectNamespace: args.durableObjectNamespace,
+        namespace: args.namespace,
+        path: resolveRepoProcessorStreamPath({
+          basePath: args.streamPath,
+          pathInput: input.streamPath,
+        }),
+      });
+      return await stream.appendBatch(input.events);
     },
     async read(input = {}) {
       const stream = await getInitializedStreamStub({

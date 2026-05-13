@@ -25,6 +25,7 @@ import { createDaemonClient } from "../utils/daemon-orpc-client.ts";
 import { getDefaultOrganizationNameFromEmail, parseSender } from "../email/email-routing.ts";
 import { parseSpecMachineEmail } from "../email/spec-machine.ts";
 import { getDefaultProjectSandboxProvider } from "../utils/sandbox-providers.ts";
+import { runTestingFailureScenario, FailureScenario } from "../orpc/routers/testing.ts";
 import { createAuthWorkerClient } from "../utils/auth-worker-client.ts";
 import { outboxClient as cc } from "./client.ts";
 
@@ -1013,6 +1014,23 @@ function registerTestConsumers() {
     when: (params) => params.payload.input.message.includes("fail"),
     handler: (params) => {
       throw new Error(`[test_error] Attempt ${params.job.attempt} failed ${Math.random()}`);
+    },
+  });
+
+  cc.registerConsumer({
+    name: "testingSuccessConsumer",
+    on: "rpc:testing.emitSuccessfulOutboxEvent",
+    handler: (params) => {
+      return `testing success: ${String(params.payload.input.message)}`;
+    },
+  });
+
+  cc.registerConsumer({
+    name: "testingFailureConsumer",
+    on: "rpc:testing.emitOutboxFailure",
+    handler: (params) => {
+      runTestingFailureScenario(FailureScenario.parse(params.payload.input));
+      return "processed testing failure scenario";
     },
   });
 }
