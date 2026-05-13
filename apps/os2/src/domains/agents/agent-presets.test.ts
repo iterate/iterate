@@ -174,9 +174,20 @@ describe("agent presets", () => {
     const prompt = defaultAgentSystemPrompt("/agents/test");
     expect(prompt).toContain("/agents/test");
     expect(prompt).toContain("return undefined");
+    expect(prompt).toContain("If you're not sure about the shape of the result of a function call");
     expect(prompt).toContain("Promise.all");
     expect(prompt).toContain("ctx.<path>.<method>(args)");
+    expect(prompt).toContain("ctx.slack.chat.postMessage({ channel, thread_ts, text })");
     expect(prompt).toContain("ctx.streams.read()");
+  });
+
+  it("tells Slack agents not to reply to FYI-only thread events", () => {
+    const prompt = defaultAgentSystemPrompt("/agents/slack/c123/ts-1778565914-773159");
+    expect(prompt).toContain("Do not chime in just because a Slack event arrived.");
+    expect(prompt).toContain("explicitly mentioned");
+    expect(prompt).toContain("surrounding thread context clearly calls for agent action");
+    expect(prompt).toContain("async (ctx) => {}");
+    expect(prompt).toContain("Do not call `ctx.slack.chat.postMessage` for FYI-only updates.");
   });
 
   it("distinguishes invalid run options JSON from non-object run options", () => {

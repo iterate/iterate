@@ -37,6 +37,9 @@ export async function handleIntegrationApiRequest(input: {
   if (url.pathname === "/api/integrations/slack/webhook") {
     return await handleSlackWebhook(input);
   }
+  if (url.pathname === "/api/integrations/slack/interactivity-webhook") {
+    return await handleSlackInteractivityWebhook(input);
+  }
   return null;
 }
 
@@ -254,6 +257,24 @@ async function handleGoogleCallback(input: {
 }
 
 async function handleSlackWebhook(input: { context: AppContext; request: Request }) {
+  return await handleVerifiedSlackWebhook({
+    ...input,
+    parsePayload: parseSlackJsonPayload,
+  });
+}
+
+async function handleSlackInteractivityWebhook(input: { context: AppContext; request: Request }) {
+  return await handleVerifiedSlackWebhook({
+    ...input,
+    parsePayload: parseSlackInteractivityPayload,
+  });
+}
+
+async function handleVerifiedSlackWebhook(input: {
+  context: AppContext;
+  parsePayload(body: string): Record<string, unknown> | null;
+  request: Request;
+}) {
   const config = requireSlackConfig(input.context.config);
   const body = await input.request.text();
   const valid = await verifySlackSignature({
@@ -264,9 +285,9 @@ async function handleSlackWebhook(input: { context: AppContext; request: Request
   });
   if (!valid) return Response.json({ error: "Invalid Slack signature." }, { status: 401 });
 
-  const payload = parseSlackPayload(body);
+  const payload = input.parsePayload(body);
   if (!payload)
-    return Response.json({ error: "Slack webhook payload is invalid JSON." }, { status: 400 });
+    return Response.json({ error: "Slack webhook payload is invalid." }, { status: 400 });
   if (payload.type === "url_verification") {
     return Response.json({ challenge: payload.challenge });
   }
@@ -304,13 +325,14 @@ async function handleSlackWebhook(input: { context: AppContext; request: Request
     idempotencyKey:
       typeof payload.event_id === "string"
         ? `slack-webhook:${payload.event_id}`
-        : `slack-webhook:${crypto.randomUUID()}`,
+        : typeof payload.trigger_id === "string"
+          ? `slack-webhook:${payload.trigger_id}`
+          : `slack-webhook:${crypto.randomUUID()}`,
     payload: {
       headers: {
         slackEventId: input.request.headers.get("x-slack-event-id"),
         slackRequestTimestamp: input.request.headers.get("x-slack-request-timestamp"),
       },
-      projectId: connection.projectId,
       slackTeamId: teamId,
       body: payload,
     },
@@ -349,7 +371,7 @@ function readSlackTeamId(payload: Record<string, unknown>) {
   return null;
 }
 
-function parseSlackPayload(body: string) {
+function parseSlackJsonPayload(body: string) {
   try {
     const payload = JSON.parse(body) as unknown;
     if (payload && typeof payload === "object" && !Array.isArray(payload)) {
@@ -359,6 +381,12 @@ function parseSlackPayload(body: string) {
   } catch {
     return null;
   }
+}
+
+function parseSlackInteractivityPayload(body: string) {
+  const payload = new URLSearchParams(body).get("payload");
+  if (!payload) return null;
+  return parseSlackJsonPayload(payload);
 }
 
 async function verifySlackSignature(input: {

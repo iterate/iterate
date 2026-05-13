@@ -530,7 +530,6 @@ async (ctx) => {
           idempotencyKey: `slack-agent-e2e-webhook:${suffix}`,
           payload: {
             slackTeamId: "T_E2E",
-            projectId: project.id,
             body: {
               type: "event_callback",
               team_id: "T_E2E",
@@ -649,7 +648,6 @@ async (ctx) => {
           idempotencyKey: `slack-agent-e2e-debug-webhook:${suffix}`,
           payload: {
             slackTeamId: "T_E2E",
-            projectId: project.id,
             body: {
               type: "event_callback",
               team_id: "T_E2E",
@@ -778,7 +776,6 @@ async (ctx) => {
         idempotencyKey: `slack-agent-e2e-thread-info-route-webhook:${suffix}`,
         payload: {
           slackTeamId: "T_E2E",
-          projectId: project.id,
           body: {
             type: "event_callback",
             team_id: "T_E2E",

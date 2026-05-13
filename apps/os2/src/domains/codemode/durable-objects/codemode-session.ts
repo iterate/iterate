@@ -32,6 +32,8 @@ import type { ProcessorStreamApi, StreamEvent } from "@iterate-com/shared/stream
 import type { Callable } from "@iterate-com/shared/callable/types.ts";
 import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
+import { createOutboundMcpFromOurClientToolProviderRegistration } from "~/domains/outbound-mcp-client/utils/outbound-mcp-provider-registration.ts";
+import { createOpenApiProviderRegistration } from "~/rpc-targets/openapi-provider-registration.ts";
 
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
 export { OutboundMcpFromOurClientCapability } from "~/domains/outbound-mcp-client/entrypoints/outbound-mcp-from-our-client-capability.ts";
@@ -45,6 +47,28 @@ export type CodemodeSessionStructuredName = {
 const CodemodeSessionStructuredName = z.object({
   projectId: z.string(),
   streamPath: StreamPath,
+});
+
+const CodemodeProviderPath = z
+  .array(z.string().min(1))
+  .min(1)
+  .refine((path) => path[0] !== "codemode", {
+    message: "Provider path cannot start with reserved segment codemode.",
+  });
+
+const ConnectToMcpServerInput = z.object({
+  headers: z.record(z.string(), z.string()).optional(),
+  instructions: z.string().optional(),
+  path: CodemodeProviderPath,
+  url: z.string().url(),
+});
+
+const ConnectToOpenApiServerInput = z.object({
+  baseUrl: z.string().url(),
+  headers: z.record(z.string(), z.string()).optional(),
+  instructions: z.string().optional(),
+  path: CodemodeProviderPath,
+  specUrl: z.string().url(),
 });
 
 export type StartScriptExecutionInput = {
@@ -333,7 +357,7 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
     const builtin = this.resolveCodemodeBuiltin(input.path);
     if (builtin != null) {
       // Temporary duplication with the shared codemode processor. This is not
-      // the design we want long-term: `__codemode` should be owned by exactly
+      // the design we want long-term: `codemode` should be owned by exactly
       // one session capability implementation. For now the OS2 host and the
       // portable processor both need this branch so the internal path is always
       // available, still records a normal requested/completed event pair, and
@@ -354,7 +378,7 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
       });
       const startedAt = Date.now();
       try {
-        const result = this.runCodemodeBuiltin({
+        const result = await this.runCodemodeBuiltin({
           args: input.args,
           functionCallId,
           functionPath: builtin.functionPath,
@@ -650,14 +674,14 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
   }
 
   private resolveCodemodeBuiltin(path: string[]) {
-    if (path[0] !== "__codemode") return null;
+    if (path[0] !== "codemode") return null;
     return {
       functionPath: path.slice(1),
-      providerPath: ["__codemode"],
+      providerPath: ["codemode"],
     };
   }
 
-  private runCodemodeBuiltin(input: {
+  private async runCodemodeBuiltin(input: {
     args: unknown[];
     functionCallId: string;
     functionPath: string[];
@@ -668,6 +692,37 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
   }) {
     const name = input.functionPath.join(".");
     if (name === "ping") return "pong";
+    if (name === "connectToMcpServer") {
+      const args = parseUnaryCodemodeBuiltinArgs({
+        args: input.args,
+        name,
+        schema: ConnectToMcpServerInput,
+      });
+      return await this.appendToolProviderRegisteredEvent({
+        provider: createOutboundMcpFromOurClientToolProviderRegistration({
+          headers: args.headers,
+          instructions: args.instructions,
+          path: args.path,
+          serverUrl: args.url,
+        }),
+      });
+    }
+    if (name === "connectToOpenApiServer") {
+      const args = parseUnaryCodemodeBuiltinArgs({
+        args: input.args,
+        name,
+        schema: ConnectToOpenApiServerInput,
+      });
+      return await this.appendToolProviderRegisteredEvent({
+        provider: createOpenApiProviderRegistration({
+          baseUrl: args.baseUrl,
+          headers: args.headers,
+          instructions: args.instructions,
+          path: args.path,
+          specUrl: args.specUrl,
+        }),
+      });
+    }
     if (name === "debugInfo") {
       return {
         args: serializeFunctionCallArgsForEvent(input.args),
@@ -682,8 +737,30 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
       };
     }
 
-    throw new Error(`Unknown codemode builtin __codemode.${name}`);
+    throw new Error(`Unknown codemode builtin codemode.${name}`);
   }
+}
+
+function parseUnaryCodemodeBuiltinArgs<T>(input: {
+  args: unknown[];
+  name: string;
+  schema: z.ZodType<T>;
+}) {
+  if (input.args.length !== 1) {
+    throw new Error(`ctx.codemode.${input.name} requires exactly one object argument.`);
+  }
+
+  const result = input.schema.safeParse(input.args[0]);
+  if (result.success) return result.data;
+
+  throw new Error(
+    `Invalid ctx.codemode.${input.name} argument: ${result.error.issues
+      .map((issue) => {
+        const path = issue.path.length === 0 ? "input" : `input.${issue.path.join(".")}`;
+        return `${path}: ${issue.message}`;
+      })
+      .join("; ")}`,
+  );
 }
 
 function processorStreamApiFromNamespace(args: {

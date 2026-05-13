@@ -32,7 +32,7 @@ export function createSlackAgentProcessor(deps: SlackAgentProcessorDeps = {}) {
                 path: ["slack", "agent"],
                 invocation: { kind: "event" },
                 instructions:
-                  "Use ctx.slack.agent.threadInfo() only when you need route context that is not already in the Slack webhook payload. Normal Slack replies can use channel/thread_ts from the webhook event directly.",
+                  "Use ctx.slack.agent.threadInfo() only when you need route context that is not already in the Slack webhook payload. Slack agents MUST respond on the same thread_ts that received the message; otherwise they will not receive responses from that thread. Unless explicitly required, always include thread_ts in Slack replies. Do not post to Slack unless the bot was explicitly mentioned, a user directly asks or instructs you, or the surrounding thread context clearly calls for agent action. Normal Slack replies can use channel/thread_ts from the webhook event directly.",
               },
             },
           });
@@ -45,7 +45,22 @@ export function createSlackAgentProcessor(deps: SlackAgentProcessorDeps = {}) {
             })
             .loose()
             .safeParse(event.payload.body);
-          if (!parsed.success) return;
+          if (!parsed.success) {
+            await streamApi.append({
+              event: {
+                type: "events.iterate.com/agent/input-added",
+                idempotencyKey: buildProcessorIdempotencyKey({
+                  processor: SlackAgentProcessorContract,
+                  key: "slack-webhook-to-agent-input",
+                  sourceEvent: event,
+                }),
+                payload: {
+                  content: slackWebhookAgentInput(event.payload),
+                },
+              },
+            });
+            return;
+          }
 
           const slackEvent = parsed.data.event as unknown as SlackEvent;
           const target = slackAgentTargetFromWebhookPayload(event.payload);
@@ -198,6 +213,8 @@ async function callSlackApi(
 function slackWebhookAgentInput(payload: unknown) {
   return [
     "`events.iterate.com/slack/webhook-received` event received",
+    "",
+    "Slack reply guidance: do not chime in just because this event arrived. Reply only when the bot was explicitly mentioned, the user directly asks or instructs you, or the surrounding thread context clearly calls for agent action. If this is FYI-only, output an empty codemode block and do not call `ctx.slack.chat.postMessage`.",
     "",
     "```yaml",
     stringifyYaml(payload).trimEnd(),

@@ -1,4 +1,5 @@
 import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
+import { createOutboundMcpFromOurClientToolProviderRegistration } from "~/domains/outbound-mcp-client/utils/outbound-mcp-provider-registration.ts";
 import { createSecretsProviderRegistration } from "~/domains/secrets/secrets-provider-registration.ts";
 
 export function createDefaultCodemodeProviderRegistrations(input: {
@@ -51,7 +52,7 @@ export function createDefaultCodemodeProviderRegistrations(input: {
     {
       path: ["slack"],
       instructions:
-        "Use ctx.slack.<Slack Web API method path>(args), e.g. ctx.slack.chat.postMessage({ channel, thread_ts, text }). Best practice: use Promise.all to send an immediate acknowledgment ('On it...') while doing the real work in parallel, then send the actual result afterwards. Example: const [, data] = await Promise.all([ctx.slack.chat.postMessage({ channel, thread_ts, text: 'Looking into it...' }), fetch('https://...').then(r => r.json())]); await ctx.slack.chat.postMessage({ channel, thread_ts, text: formatResult(data) });",
+        "Use ctx.slack.<Slack Web API method path>(args), e.g. ctx.slack.chat.postMessage({ channel, thread_ts, text }). Slack agents MUST respond on the same thread_ts that received the message; otherwise they will not receive responses from that thread. Unless explicitly required, always include thread_ts in Slack replies. Do not post to Slack unless the bot was explicitly mentioned, a user directly asks or instructs you, or the surrounding thread context clearly calls for agent action. If no reply is needed, do not call chat.postMessage. For legitimate long-running Slack replies, use Promise.all to send an immediate acknowledgment while doing the real work in parallel, then send the actual result afterwards. Example: const [, data] = await Promise.all([ctx.slack.chat.postMessage({ channel, thread_ts, text: 'Looking into it...' }), fetch('https://...').then(r => r.json())]); await ctx.slack.chat.postMessage({ channel, thread_ts, text: formatResult(data) });",
       invocation: {
         kind: "rpc",
         callable: {
@@ -68,5 +69,23 @@ export function createDefaultCodemodeProviderRegistrations(input: {
       },
     },
     createSecretsProviderRegistration({ projectId: input.projectId }),
+    ...createDefaultOutboundMcpProviderRegistrations(),
+  ];
+}
+
+export function createDefaultOutboundMcpProviderRegistrations(): ToolProviderRegistration[] {
+  return [
+    createOutboundMcpFromOurClientToolProviderRegistration({
+      instructions:
+        "Use ctx.mcp.exa for Exa web search. Call ctx.mcp.exa.listTools() to inspect available tools, then call tools such as ctx.mcp.exa.web_search_exa({ query, numResults }) or ctx.mcp.exa.web_fetch_exa({ urls }).",
+      path: ["mcp", "exa"],
+      serverUrl: "https://mcp.exa.ai/mcp",
+    }),
+    createOutboundMcpFromOurClientToolProviderRegistration({
+      instructions:
+        "Use ctx.mcp.context7 for current library/framework documentation. Call ctx.mcp.context7.listTools() to inspect available tools, then call hyphenated tool names with bracket syntax, for example ctx.mcp.context7['resolve-library-id']({ libraryName, query }) and ctx.mcp.context7['query-docs']({ libraryId, query }).",
+      path: ["mcp", "context7"],
+      serverUrl: "https://mcp.context7.com/mcp",
+    }),
   ];
 }
