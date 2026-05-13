@@ -33,6 +33,13 @@ function authenticateAdminApiSecret(context: AppContext): ActiveOrganizationAuth
   return adminApiActiveOrganization;
 }
 
+export function isAdminApiSecretRequest(context: Pick<AppContext, "config">, request: Request) {
+  const expectedToken = context.config.adminApiSecret?.exposeSecret();
+  const providedToken = readBearerToken(request.headers.get("authorization"));
+
+  return !!expectedToken && providedToken === expectedToken;
+}
+
 export function resolveActiveOrganizationAuth(context: AppContext): ActiveOrganizationAuth | null {
   if (context.auth?.isAuthenticated && context.auth.orgId && context.auth.orgSlug) {
     return normalizeActiveOrganizationAuth(context.auth);
