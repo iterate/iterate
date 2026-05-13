@@ -4,14 +4,7 @@ import {
   newStyleCloudflareAppSharedPaths,
 } from "../../packages/shared/src/apps/new-style-cloudflare-apps.ts";
 
-export const CloudflarePreviewAppSlug = z.enum([
-  "agents",
-  "example",
-  "events",
-  "os2",
-  "semaphore",
-  "ingress-proxy",
-]);
+export const CloudflarePreviewAppSlug = z.enum(["agents", "example", "events", "os2", "semaphore"]);
 
 export type CloudflarePreviewAppSlug = z.infer<typeof CloudflarePreviewAppSlug>;
 
@@ -65,11 +58,6 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
   semaphore: {
     ...newStyleCloudflareApps.semaphore,
     previewTestBaseUrlEnvVar: "SEMAPHORE_BASE_URL",
-    previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
-  },
-  "ingress-proxy": {
-    ...newStyleCloudflareApps["ingress-proxy"],
-    previewTestBaseUrlEnvVar: "INGRESS_PROXY_BASE_URL",
     previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
   },
 };

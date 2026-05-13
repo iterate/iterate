@@ -44,8 +44,6 @@ jobs:
               "apps/os2-contract/**",
               "apps/semaphore/**",
               "apps/semaphore-contract/**",
-              "apps/ingress-proxy/**",
-              "apps/ingress-proxy-contract/**",
             ];
             const __handler = async function should_run_preview({ context, github }) {
               const pullRequest = context.payload.pull_request;

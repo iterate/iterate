@@ -43,9 +43,7 @@ It's okay for errors to escape! That's what they are for if something is wrong.
 E.g.: DO NOT guess at which of several env vars you've found in the codebase is correct. DO NOT write stuff like this. Instead, ask the human which they want!
 
 ```ts
-process.env.FEATURE_SPECIFIC_INGRESS_PROXY_DOMAIN ??
-  process.env.INGRESS_PROXY_DOMAIN ??
-  DEFAULT_INGRESS_PROXY_DOMAIN;
+process.env.FEATURE_SPECIFIC_API_BASE_URL ?? process.env.API_BASE_URL ?? DEFAULT_API_BASE_URL;
 ```
 
 **Prefer explicit dependencies over globals**
@@ -70,7 +68,7 @@ Don't use all-caps acronyms in identifiers. So makeOrpcUrl instead of makeORPCUR
 
 Make sure identifiers are greppable. For instance, try to re-use the exact term that is used elsewhere in the codebase. E.g. don't create a camel cased wrapper envVarName for ENV_VAR_NAME . Just use ENV_VAR_NAME everywhere, so it's easy to find all references.
 
-Don't use fancy names - just use names that clearly describe what something is. For example an IngressProxyWorker is good - it's an HTTP proxy for inbound traffic that is deployed to cloudflare workers.
+Don't use fancy names - just use names that clearly describe what something is. For example a WebhookReceiver is good - it receives webhook HTTP requests and validates them.
 
 # Abstractions
 

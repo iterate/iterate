@@ -10,8 +10,6 @@ setup:
     path: packages/shared/
   - project: os
     path: ./
-  - project: ingress-proxy
-    path: apps/ingress-proxy/
   - project: example
     path: apps/example/
   - project: example

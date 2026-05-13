@@ -2,13 +2,7 @@ import { resolve } from "node:path";
 import { z } from "zod";
 import { runCommand } from "../node/run-command.ts";
 
-export const NewStyleCloudflareAppSlug = z.enum([
-  "agents",
-  "example",
-  "os2",
-  "semaphore",
-  "ingress-proxy",
-]);
+export const NewStyleCloudflareAppSlug = z.enum(["agents", "example", "os2", "semaphore"]);
 
 export type NewStyleCloudflareAppSlug = z.infer<typeof NewStyleCloudflareAppSlug>;
 
@@ -62,13 +56,6 @@ export const newStyleCloudflareApps: Record<
     appPath: "apps/semaphore",
     dopplerProject: "semaphore",
     paths: ["apps/semaphore/**", "apps/semaphore-contract/**"],
-  },
-  "ingress-proxy": {
-    slug: "ingress-proxy",
-    displayName: "Ingress Proxy",
-    appPath: "apps/ingress-proxy",
-    dopplerProject: "ingress-proxy",
-    paths: ["apps/ingress-proxy/**", "apps/ingress-proxy-contract/**"],
   },
 };
 
