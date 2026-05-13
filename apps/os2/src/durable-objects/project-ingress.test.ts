@@ -97,6 +97,16 @@ describe("Project ingress routing", () => {
       token: expect.stringContaining("mock-write-"),
     });
 
+    const projectIngressResponse = await SELF.fetch("https://demo.iterate.localhost/");
+    expect(projectIngressResponse.ok).toBe(true);
+    expect(projectIngressResponse.headers.get("x-project-ingress-runtime")).toBe("static-fallback");
+    await expect(projectIngressResponse.json()).resolves.toMatchObject({
+      defaultHost: "demo.iterate.localhost",
+      hostname: "demo.iterate.localhost",
+      projectId: "proj_local_test",
+      slug: "demo",
+    });
+
     const mcpResponse = await SELF.fetch("https://mcp.demo.iterate.localhost/", {
       headers: { accept: "text/html" },
     });

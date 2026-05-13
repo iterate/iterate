@@ -157,6 +157,7 @@ type ProjectConfigWorkspace = {
 const PROJECT_CONFIG_WORKSPACE_ID = "project-ingress";
 const PROJECT_CONFIG_DIR = "/iterate-config";
 const PROJECT_CONFIG_WORKER_PATH = `${PROJECT_CONFIG_DIR}/worker.ts`;
+const PROJECT_CONFIG_CHECKOUT_STORAGE_KEY = "project.configWorker.checkout";
 const PROJECT_CONFIG_READY_STORAGE_KEY = "project.configWorker.ready";
 const PROJECT_DYNAMIC_WORKER_MAIN_MODULE = "worker.ts";
 
@@ -203,6 +204,11 @@ const ProjectBase = withStreamProcessorRunner<
 })(ProjectLifecycleBase);
 
 export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
+  #dynamicWorkerEntrypoint: {
+    commitOid: string;
+    entrypoint: ProjectDynamicWorkerEntrypoint;
+  } | null = null;
+
   constructor(ctx: DurableObjectState, env: ProjectEnv) {
     super(ctx, env);
     const sql = this.getDurableObjectSql();
@@ -324,7 +330,12 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
       PROJECT_CONFIG_READY_STORAGE_KEY,
     );
     if (summary !== null && configWorkerIsReady === true) {
-      await (await this.getProjectDynamicWorkerEntrypoint(summary)).afterAppend(input);
+      try {
+        await (await this.getCachedProjectDynamicWorkerEntrypoint(summary)).afterAppend(input);
+      } catch (error) {
+        await this.clearProjectConfigWorkerReady();
+        console.error("Project config worker afterAppend failed.", error);
+      }
     }
     return result;
   }
@@ -346,20 +357,55 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
       });
     }
 
-    return await (await this.getProjectDynamicWorkerEntrypoint(summary)).fetch(request);
+    try {
+      return await (await this.getFreshProjectDynamicWorkerEntrypoint(summary)).fetch(request);
+    } catch (error) {
+      console.error(
+        "Project config worker fetch failed; serving fallback landing response.",
+        error,
+      );
+      return projectLandingResponse({ request, summary });
+    }
   }
 
-  private async getProjectDynamicWorkerEntrypoint(
+  private async getFreshProjectDynamicWorkerEntrypoint(
     summary: ProjectSummary,
   ): Promise<ProjectDynamicWorkerEntrypoint> {
     const checkout = await this.ensureProjectConfigCheckout(summary);
+    const entrypoint = this.loadProjectDynamicWorkerEntrypoint({ checkout, projectId: summary.id });
+    await this.ctx.storage.put(PROJECT_CONFIG_CHECKOUT_STORAGE_KEY, checkout);
     await this.ctx.storage.put(PROJECT_CONFIG_READY_STORAGE_KEY, true);
+    return entrypoint;
+  }
+
+  private async getCachedProjectDynamicWorkerEntrypoint(
+    summary: ProjectSummary,
+  ): Promise<ProjectDynamicWorkerEntrypoint> {
+    const checkout = await this.ctx.storage.get<ProjectConfigCheckout>(
+      PROJECT_CONFIG_CHECKOUT_STORAGE_KEY,
+    );
+    if (!isProjectConfigCheckout(checkout)) {
+      throw new Error("Project config worker is marked ready but has no validated checkout.");
+    }
+
+    return this.loadProjectDynamicWorkerEntrypoint({ checkout, projectId: summary.id });
+  }
+
+  private loadProjectDynamicWorkerEntrypoint(input: {
+    checkout: ProjectConfigCheckout;
+    projectId: string;
+  }): ProjectDynamicWorkerEntrypoint {
+    const { checkout } = input;
+    if (this.#dynamicWorkerEntrypoint?.commitOid === checkout.commitOid) {
+      return this.#dynamicWorkerEntrypoint.entrypoint;
+    }
+
     const loader = projectRuntimeEnv(this.env).LOADER;
     const entrypoint = loader
       .get(
         projectDynamicWorkerId({
           commitOid: checkout.commitOid,
-          projectId: summary.id,
+          projectId: input.projectId,
         }),
         () => projectDynamicWorkerCode(checkout.workerSource),
       )
@@ -369,7 +415,17 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
       throw new Error("Project dynamic worker entrypoint is missing fetch or afterAppend.");
     }
 
+    this.#dynamicWorkerEntrypoint = {
+      commitOid: checkout.commitOid,
+      entrypoint,
+    };
     return entrypoint;
+  }
+
+  private async clearProjectConfigWorkerReady() {
+    this.#dynamicWorkerEntrypoint = null;
+    await this.ctx.storage.delete(PROJECT_CONFIG_READY_STORAGE_KEY);
+    await this.ctx.storage.delete(PROJECT_CONFIG_CHECKOUT_STORAGE_KEY);
   }
 
   private async ensureProjectConfigCheckout(
@@ -846,6 +902,25 @@ function projectDynamicWorkerCode(workerSource: string) {
   };
 }
 
+function projectLandingResponse(input: { request: Request; summary: ProjectSummary }) {
+  const url = new URL(input.request.url);
+  const hostname = input.request.headers.get("x-iterate-ingress-hostname") ?? url.hostname;
+  return new Response(
+    JSON.stringify({
+      defaultHost: input.summary.defaultHost,
+      hostname,
+      projectId: input.summary.id,
+      slug: input.summary.slug,
+    }),
+    {
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        "x-project-ingress-runtime": "static-fallback",
+      },
+    },
+  );
+}
+
 function projectConfigWorkspaceName(projectId: string): ProjectConfigWorkspaceName {
   return {
     projectId,
@@ -876,5 +951,18 @@ function isProjectDynamicWorkerEntrypoint(value: unknown): value is ProjectDynam
     typeof value.fetch === "function" &&
     "afterAppend" in value &&
     typeof value.afterAppend === "function"
+  );
+}
+
+function isProjectConfigCheckout(value: unknown): value is ProjectConfigCheckout {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "commitOid" in value &&
+    typeof value.commitOid === "string" &&
+    value.commitOid.length > 0 &&
+    "workerSource" in value &&
+    typeof value.workerSource === "string" &&
+    value.workerSource.trim() !== ""
   );
 }
