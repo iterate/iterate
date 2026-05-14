@@ -85,39 +85,40 @@ export class SandboxesCapability extends WorkerEntrypoint<
   SandboxesCapabilityProps
 > {
   async executeCodemodeFunctionCall(input: ExecuteCodemodeFunctionCallInput) {
+    const projectId = readProjectId(input);
     const [request] = input.args;
     const options =
       request != null && typeof request === "object" ? (request as Record<string, unknown>) : {};
 
     switch (input.functionPath.join(".")) {
       case "create":
-        return await this.create({ slug: readSlug(options.slug) });
+        return await this.create({ projectId, slug: readSlug(options.slug) });
       case "get":
-        return await this.get({ slug: readSlug(options.slug) });
+        return await this.get({ projectId, slug: readSlug(options.slug) });
       case "getInitialized":
-        return await this.getInitialized({ slug: readSlug(options.slug) });
+        return await this.getInitialized({ projectId, slug: readSlug(options.slug) });
       case "list":
-        return await this.list();
+        return await this.list({ projectId });
       case "wake":
-        return await this.wake({ slug: readSlug(options.slug) });
+        return await this.wake({ projectId, slug: readSlug(options.slug) });
       default:
         throw new Error(`SandboxesCapability does not implement ${input.functionPath.join(".")}`);
     }
   }
 
-  async create(input: { slug: string }) {
-    return new SandboxHandle(await this.initializedLogicalSandbox(input.slug));
+  async create(input: { projectId?: string; slug: string }) {
+    return new SandboxHandle(await this.initializedLogicalSandbox(input.slug, input.projectId));
   }
 
   async createInfo(input: { slug: string }): Promise<SandboxInfo> {
     return await (await this.create(input)).getInfo();
   }
 
-  async get(input: { slug: string }) {
+  async get(input: { projectId?: string; slug: string }) {
     const sandbox = await getInitializedDoStub({
       allowCreate: false,
       namespace: this.requireLogicalNamespace(),
-      name: this.sandboxName(input.slug),
+      name: this.sandboxName(input.slug, input.projectId),
     });
 
     if (sandbox === null) {
@@ -131,17 +132,17 @@ export class SandboxesCapability extends WorkerEntrypoint<
     return await (await this.get(input)).getInfo();
   }
 
-  async getInitialized(input: { slug: string }): Promise<CloudflareSandbox> {
-    await this.initializedLogicalSandbox(input.slug);
-    const sandbox = this.runtimeSandbox(input.slug);
-    await this.mountWorkspace({ sandbox, slug: input.slug });
-    await this.ensureIterateConfigClone({ sandbox });
+  async getInitialized(input: { projectId?: string; slug: string }): Promise<CloudflareSandbox> {
+    await this.initializedLogicalSandbox(input.slug, input.projectId);
+    const sandbox = this.runtimeSandbox(input.slug, input.projectId);
+    await this.mountWorkspace({ projectId: input.projectId, sandbox, slug: input.slug });
+    await this.ensureIterateConfigClone({ projectId: input.projectId, sandbox });
     return sandbox;
   }
 
-  async wake(input: { slug: string }): Promise<SandboxInfo> {
+  async wake(input: { projectId?: string; slug: string }): Promise<SandboxInfo> {
     await this.getInitialized(input);
-    return sandboxInfo(this.sandboxName(input.slug));
+    return sandboxInfo(this.sandboxName(input.slug, input.projectId));
   }
 
   async exec(input: { exec: SandboxExecInput; slug: string }): Promise<ExecResult> {
@@ -149,14 +150,14 @@ export class SandboxesCapability extends WorkerEntrypoint<
     return await sandbox.exec(input.exec.command, toExecOptions(input.exec));
   }
 
-  async destroyRuntime(input: { slug: string }): Promise<SandboxInfo> {
+  async destroyRuntime(input: { projectId?: string; slug: string }): Promise<SandboxInfo> {
     await this.get(input);
-    const sandbox = this.runtimeSandbox(input.slug);
+    const sandbox = this.runtimeSandbox(input.slug, input.projectId);
     await sandbox.destroy();
-    return sandboxInfo(this.sandboxName(input.slug));
+    return sandboxInfo(this.sandboxName(input.slug, input.projectId));
   }
 
-  async list(): Promise<SandboxCatalogRecord[]> {
+  async list(input: { projectId?: string } = {}): Promise<SandboxCatalogRecord[]> {
     if (!this.env.DO_CATALOG) {
       throw new Error("DO_CATALOG binding is required to list Sandboxes.");
     }
@@ -166,37 +167,45 @@ export class SandboxesCapability extends WorkerEntrypoint<
       {
         className: "SandboxDurableObject",
         indexName: "projectId",
-        indexValue: this.ctx.props.projectId,
+        indexValue: this.projectId(input.projectId),
       },
     );
 
     return records.map(toSandboxCatalogRecord);
   }
 
-  private async initializedLogicalSandbox(slug: string) {
+  private async initializedLogicalSandbox(slug: string, projectId?: string) {
     return await getInitializedDoStub({
       allowCreate: true,
       namespace: this.requireLogicalNamespace(),
-      name: this.sandboxName(slug),
+      name: this.sandboxName(slug, projectId),
     });
   }
 
-  private runtimeSandbox(slug: string) {
-    return getSandbox(this.requireRuntimeNamespace(), sandboxRuntimeId(this.sandboxName(slug)), {
-      containerTimeouts: {
-        instanceGetTimeoutMS: 60_000,
+  private runtimeSandbox(slug: string, projectId?: string) {
+    return getSandbox(
+      this.requireRuntimeNamespace(),
+      sandboxRuntimeId(this.sandboxName(slug, projectId)),
+      {
+        containerTimeouts: {
+          instanceGetTimeoutMS: 60_000,
+        },
+        normalizeId: true,
+        sleepAfter: "10m",
       },
-      normalizeId: true,
-      sleepAfter: "10m",
-    });
+    );
   }
 
-  private async mountWorkspace(input: { sandbox: CloudflareSandbox; slug: string }) {
+  private async mountWorkspace(input: {
+    projectId?: string;
+    sandbox: CloudflareSandbox;
+    slug: string;
+  }) {
     try {
       await input.sandbox.mountBucket(
         this.storageBucket(),
         "/workspace",
-        this.mountOptions(input.slug),
+        this.mountOptions(input.slug, input.projectId),
       );
     } catch (error) {
       if (isAlreadyMountedError(error)) return;
@@ -204,7 +213,10 @@ export class SandboxesCapability extends WorkerEntrypoint<
     }
   }
 
-  private async ensureIterateConfigClone(input: { sandbox: CloudflareSandbox }) {
+  private async ensureIterateConfigClone(input: {
+    projectId?: string;
+    sandbox: CloudflareSandbox;
+  }) {
     const status = await input.sandbox.exec(
       `test -f ${shellQuote(`${SANDBOX_ITERATE_CONFIG_PATH}/.git/HEAD`)} && git -C ${shellQuote(
         SANDBOX_ITERATE_CONFIG_PATH,
@@ -213,7 +225,7 @@ export class SandboxesCapability extends WorkerEntrypoint<
     );
     if (status.success) return;
 
-    const repo = await this.iterateConfigRepo();
+    const repo = await this.iterateConfigRepo(input.projectId);
     const clone = await input.sandbox.exec(
       [
         `rm -rf ${shellQuote(SANDBOX_ITERATE_CONFIG_PATH)}`,
@@ -240,15 +252,15 @@ export class SandboxesCapability extends WorkerEntrypoint<
     }
   }
 
-  private async iterateConfigRepo(): Promise<RepoInfo> {
+  private async iterateConfigRepo(projectId?: string): Promise<RepoInfo> {
     return await getReposCapability({
       exports: this.ctx.exports,
-      props: { projectId: this.ctx.props.projectId },
+      props: { projectId: this.projectId(projectId) },
     }).ensureIterateConfigInfo({ projectSlug: null });
   }
 
-  private mountOptions(slug: string) {
-    const prefix = `/projects/${this.ctx.props.projectId}/sandboxes/${slug}/workspace/`;
+  private mountOptions(slug: string, projectId?: string) {
+    const prefix = `/projects/${this.projectId(projectId)}/sandboxes/${slug}/workspace/`;
     if (this.env.SANDBOX_STORAGE_LOCAL_DEV === "true") {
       return {
         localBucket: true as const,
@@ -302,19 +314,23 @@ export class SandboxesCapability extends WorkerEntrypoint<
     return this.env.SANDBOX_RUNTIME;
   }
 
-  private sandboxName(sandboxSlug: string): SandboxStructuredName {
+  private sandboxName(sandboxSlug: string, projectId?: string): SandboxStructuredName {
     return {
-      projectId: this.ctx.props.projectId,
+      projectId: this.projectId(projectId),
       sandboxSlug,
     };
+  }
+
+  private projectId(projectId?: string) {
+    return readProjectId({ projectId: projectId ?? this.ctx.props.projectId });
   }
 }
 
 export function getSandboxesCapability(input: {
-  exports: Pick<Cloudflare.Exports, "SandboxesCapability"> | undefined;
+  exports: { SandboxesCapability?: unknown } | undefined;
   props: SandboxesCapabilityProps;
 }): SandboxesCapabilityClient {
-  if (!input.exports) {
+  if (!input.exports?.SandboxesCapability) {
     throw new Error("SandboxesCapability export is not available.");
   }
 
@@ -354,6 +370,19 @@ function readSlug(value: unknown) {
   }
 
   return slug;
+}
+
+function readProjectId(value: unknown) {
+  if (value == null || typeof value !== "object") {
+    throw new Error("projectId is required.");
+  }
+
+  const projectId = (value as { projectId?: unknown }).projectId;
+  if (typeof projectId !== "string" || projectId.trim() === "") {
+    throw new Error("projectId is required.");
+  }
+
+  return projectId;
 }
 
 function isAlreadyMountedError(error: unknown) {

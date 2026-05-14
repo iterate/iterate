@@ -27,7 +27,9 @@ type SandboxWorkerRequest =
       projectId: string;
     };
 
-type SandboxWorkerExports = Pick<Cloudflare.Exports, "SandboxesCapability">;
+type SandboxWorkerExports = {
+  SandboxesCapability: unknown;
+};
 
 export default {
   async fetch(request: Request, _env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -39,7 +41,7 @@ export default {
     try {
       const body = SandboxWorkerRequest(await request.json());
       const sandboxes = getSandboxesCapabilityFromExports({
-        exports: ctx.exports,
+        exports: ctx.exports as unknown as SandboxWorkerExports,
         projectId: body.projectId,
       });
 

@@ -12,13 +12,15 @@ export function createSandboxesProviderRegistration(input: {
       callable: {
         type: "workers-rpc",
         via: {
-          type: "loopback-binding",
+          type: "env-binding",
           bindingType: "service",
-          exportName: "SandboxesCapability",
-          props: { projectId: input.projectId },
+          bindingName: "SANDBOXES_CAPABILITY",
         },
         rpcMethod: "executeCodemodeFunctionCall",
         argsMode: "object",
+        transformInput: {
+          shallowMerge: { projectId: input.projectId },
+        },
       },
     },
   };
