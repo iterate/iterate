@@ -118,10 +118,6 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
       : { DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber }),
     ...(slackBotToken == null ? {} : { APP_CONFIG_SLACK_BOT_TOKEN: alchemy.secret(slackBotToken) }),
   },
-  // OS2 dispatches first-party capabilities through ctx.exports loopback
-  // bindings. Local vitest config still uses Cloudflare's broad `experimental`
-  // flag, but deployed Workers must request the concrete runtime flag.
-  compatibilityFlags: ["enable_ctx_exports"],
   extraRouteHostnames: projectHostnameBases.flatMap(projectRouteHostnamesForBase),
 });
 
