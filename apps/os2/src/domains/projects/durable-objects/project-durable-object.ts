@@ -36,6 +36,7 @@ import {
 } from "~/ingress/host-routing.ts";
 import type { ExactHostIngressRule } from "~/ingress/types.ts";
 import {
+  PROJECT_CONFIG_WORKER_BUILT_EVENT_TYPE,
   createProjectLifecycleProcessor,
   PROJECT_LIFECYCLE_STREAM_PATH,
   ProjectLifecycleProcessorContract,
@@ -300,8 +301,12 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     });
     await this.writeIngressRoutes({ hosts, projectId: input.projectId });
     const summary = this.requireSummary();
-    await this.getOrCreateIterateConfigRepo(summary);
+    const projectConfigCheckout = await this.buildFreshProjectDynamicWorker(summary);
     await this.writeProjectCreatedLifecycleEvent(summary);
+    await this.writeProjectConfigWorkerBuiltLifecycleEvent({
+      checkout: projectConfigCheckout,
+      summary,
+    });
     await this.writeAgentsRootRule(summary);
 
     return summary;
@@ -346,9 +351,11 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     );
     if (summary !== null && configWorkerIsReady === true) {
       try {
-        await (await this.getCachedProjectDynamicWorkerEntrypoint(summary)).afterAppend?.(input);
+        const entrypoint =
+          this.#dynamicWorkerEntrypoint?.entrypoint ??
+          (await this.getCachedProjectDynamicWorkerEntrypoint(summary));
+        await entrypoint.afterAppend?.(input);
       } catch (error) {
-        await this.clearProjectConfigWorkerReady();
         console.error("Project config worker afterAppend failed.", error);
       }
     }
@@ -454,12 +461,17 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
   private async getFreshProjectDynamicWorkerEntrypoint(
     summary: ProjectSummary,
   ): Promise<ProjectDynamicWorkerEntrypoint> {
+    const checkout = await this.buildFreshProjectDynamicWorker(summary);
+    return this.loadProjectDynamicWorkerEntrypoint({ checkout, projectId: summary.id });
+  }
+
+  private async buildFreshProjectDynamicWorker(summary: ProjectSummary) {
     const checkout = await this.ensureProjectConfigCheckout(summary);
-    const entrypoint = this.loadProjectDynamicWorkerEntrypoint({ checkout, projectId: summary.id });
+    this.loadProjectDynamicWorkerEntrypoint({ checkout, projectId: summary.id });
     await this.ctx.storage.put(PROJECT_CONFIG_CHECKOUT_STORAGE_KEY, checkout);
     await this.ctx.storage.put(PROJECT_CONFIG_READY_STORAGE_KEY, true);
     await this.ctx.storage.put(PROJECT_CONFIG_REFRESHED_AT_STORAGE_KEY, Date.now());
-    return entrypoint;
+    return checkout;
   }
 
   private async getCachedProjectDynamicWorkerEntrypoint(
@@ -791,6 +803,28 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
         hosts: summary.hosts,
         projectId: summary.id,
         slug: summary.slug,
+      },
+    });
+  }
+
+  private async writeProjectConfigWorkerBuiltLifecycleEvent(input: {
+    checkout: ProjectConfigCheckout;
+    summary: ProjectSummary;
+  }) {
+    const stream = await getInitializedStreamStub({
+      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+      namespace: input.summary.id,
+      path: PROJECT_LIFECYCLE_STREAM_PATH,
+    });
+
+    await stream.append({
+      type: PROJECT_CONFIG_WORKER_BUILT_EVENT_TYPE,
+      idempotencyKey: `project-config-worker-built:${input.summary.id}:${input.checkout.commitOid}`,
+      payload: {
+        commitOid: input.checkout.commitOid,
+        mainModule: input.checkout.workerCode.mainModule,
+        projectId: input.summary.id,
+        repoSlug: ITERATE_CONFIG_REPO_SLUG,
       },
     });
   }

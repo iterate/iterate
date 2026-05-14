@@ -94,6 +94,14 @@ describe("Project ingress routing", () => {
             slug: "demo",
           }),
         }),
+        expect.objectContaining({
+          type: "events.iterate.com/project/config-worker-built",
+          payload: expect.objectContaining({
+            mainModule: "worker.ts",
+            projectId: "proj_local_test",
+            repoSlug: "iterate-config",
+          }),
+        }),
       ]),
     );
 
@@ -103,8 +111,8 @@ describe("Project ingress routing", () => {
       projectId: "proj_local_test",
       slug: "demo",
     });
-    expect(lifecycleState.reducedThroughOffset).toBeGreaterThanOrEqual(3);
-    expect(lifecycleState.afterAppendCompletedThroughOffset).toBeGreaterThanOrEqual(3);
+    expect(lifecycleState.reducedThroughOffset).toBeGreaterThanOrEqual(4);
+    expect(lifecycleState.afterAppendCompletedThroughOffset).toBeGreaterThanOrEqual(4);
 
     const repoResponse = await SELF.fetch(
       "https://os.iterate.localhost/__test/iterate-config-repo",
@@ -130,13 +138,6 @@ describe("Project ingress routing", () => {
     expect(repo.token).toContain("?expires=");
     expect(repo.git.cloneCommand).not.toContain("?expires=");
     expect(repo.git.pushCommand).not.toContain("?expires=");
-
-    const buildingResponse = await SELF.fetch("https://demo.iterate.localhost/");
-    expect(buildingResponse.status).toBe(503);
-    expect(buildingResponse.headers.get("x-project-ingress-runtime")).toBe(
-      "dynamic-worker-building",
-    );
-    await expect(buildingResponse.text()).resolves.toBe("This worker is currently being built.");
 
     const projectIngressResponse = await waitForProjectIngressResponse({
       expectedText: "Bundled project worker",

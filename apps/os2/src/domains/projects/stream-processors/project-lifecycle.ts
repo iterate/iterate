@@ -9,6 +9,8 @@ import { StreamPath } from "@iterate-com/shared/streams/types";
 
 export const PROJECT_LIFECYCLE_STREAM_PATH = StreamPath.parse("/");
 const PROJECT_CREATED_EVENT_TYPE = "events.iterate.com/project/created";
+export const PROJECT_CONFIG_WORKER_BUILT_EVENT_TYPE =
+  "events.iterate.com/project/config-worker-built";
 const LEGACY_PROJECT_CREATED_EVENT_TYPE = "events.iterate.com/os2/project-created";
 
 export const ProjectLifecycleProcessorContract = defineProcessorContract({
@@ -48,8 +50,21 @@ export const ProjectLifecycleProcessorContract = defineProcessorContract({
         slug: z.string().trim().min(1),
       }),
     },
+    [PROJECT_CONFIG_WORKER_BUILT_EVENT_TYPE]: {
+      description: "The Project iterate-config worker was built and cached for dispatch.",
+      payloadSchema: z.object({
+        commitOid: z.string().trim().min(1),
+        mainModule: z.string().trim().min(1),
+        projectId: z.string().trim().min(1),
+        repoSlug: z.string().trim().min(1),
+      }),
+    },
   },
-  consumes: [PROJECT_CREATED_EVENT_TYPE, LEGACY_PROJECT_CREATED_EVENT_TYPE],
+  consumes: [
+    PROJECT_CREATED_EVENT_TYPE,
+    LEGACY_PROJECT_CREATED_EVENT_TYPE,
+    PROJECT_CONFIG_WORKER_BUILT_EVENT_TYPE,
+  ],
   emits: [],
   reduce({ state, event }) {
     switch (event.type) {
