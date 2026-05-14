@@ -13,6 +13,25 @@ import {
 } from "./agent-presets.ts";
 
 describe("agent presets", () => {
+  it("defaults new agent setup events to OpenAI", () => {
+    expect(defaultAgentSetupEvents()).toEqual([
+      {
+        type: "events.iterate.com/os2-agent/llm-provider-selected",
+        payload: { provider: "openai-ws" },
+      },
+      {
+        type: "events.iterate.com/openai-ws/config-updated",
+        payload: { model: "gpt-5.5" },
+      },
+      {
+        type: "events.iterate.com/agent/system-prompt-updated",
+        payload: {
+          systemPrompt: defaultAgentSystemPrompt(),
+        },
+      },
+    ]);
+  });
+
   it("accepts full preset paths under /agents", () => {
     expect(normalizeAgentPresetBasePath("/agents")).toBe("/agents");
     expect(normalizeAgentPresetBasePath("/agents/alice/bla")).toBe("/agents/alice/bla");
@@ -42,7 +61,7 @@ describe("agent presets", () => {
     ).toBe(nestedPreset);
   });
 
-  it("keeps Slack agents on the built-in Kimi default when only the root agent preset selects OpenAI", () => {
+  it("keeps Slack agents from inheriting the root agent preset", () => {
     const rootOpenAiPreset = {
       basePath: "/agents",
       events: defaultAgentSetupEvents("openai-ws"),
@@ -62,7 +81,7 @@ describe("agent presets", () => {
     expect(isSlackAgentPath("/agents/slack-test")).toBe(false);
   });
 
-  it("allows explicit Slack presets to override the built-in Kimi default", () => {
+  it("allows explicit Slack presets to override the built-in default", () => {
     const rootOpenAiPreset = {
       basePath: "/agents",
       events: defaultAgentSetupEvents("openai-ws"),
@@ -80,7 +99,7 @@ describe("agent presets", () => {
     ).toBe(slackOpenAiPreset);
   });
 
-  it("ignores the legacy generated Slack OpenAI preset so Slack agents fall back to Kimi", () => {
+  it("ignores the legacy generated Slack OpenAI preset so Slack agents fall back to the built-in default", () => {
     const legacySlackOpenAiPreset = {
       basePath: "/agents/slack",
       events: [

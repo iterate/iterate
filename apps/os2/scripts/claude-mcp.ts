@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import process from "node:process";
 
 import { os } from "@orpc/server";
@@ -58,7 +58,11 @@ export const claudeMcpScript = os
     console.info("  Auth: Doppler OS2 admin token");
     console.info("");
 
-    runClaude(args, signal);
+    const result = await runClaude(args, signal);
+
+    if (result.type === "signal") {
+      process.exit(result.exitCode);
+    }
 
     return {
       ok: true as const,
@@ -106,25 +110,104 @@ function buildClaudeMcpConfig(input: { mcpUrl: string; token: string }) {
   return JSON.stringify(config);
 }
 
-function runClaude(args: string[], signal: AbortSignal | undefined) {
+export type ClaudeProcessResult =
+  | { type: "exit"; code: number }
+  | { type: "signal"; exitCode: number; signal: NodeJS.Signals };
+
+export async function runClaude(
+  args: string[],
+  signal: AbortSignal | undefined,
+): Promise<ClaudeProcessResult> {
   if (signal?.aborted) {
-    return;
+    return { type: "signal", exitCode: signalExitCode("SIGTERM"), signal: "SIGTERM" };
   }
 
-  const result = spawnSync("claude", args, {
+  const result = await runClaudeChild({
+    args,
     env: process.env,
+    signal,
+    spawnChild: (command, childArgs, options) => spawn(command, childArgs, options),
+  });
+
+  if (result.type === "signal") {
+    return result;
+  }
+
+  if (result.code !== 0) {
+    throw new Error(`claude exited with code ${result.code}.`);
+  }
+
+  return result;
+}
+
+export async function runClaudeChild(input: {
+  args: string[];
+  env: NodeJS.ProcessEnv;
+  signal: AbortSignal | undefined;
+  spawnChild: (
+    command: string,
+    args: string[],
+    options: { env: NodeJS.ProcessEnv; stdio: "inherit" },
+  ) => ChildProcess;
+}): Promise<ClaudeProcessResult> {
+  const child = input.spawnChild("claude", input.args, {
+    env: input.env,
     stdio: "inherit",
   });
 
-  if (result.error) {
-    throw result.error;
-  }
+  return await new Promise<ClaudeProcessResult>((resolve, reject) => {
+    const forwardSignal = (forwardedSignal: NodeJS.Signals) => {
+      if (!child.killed) {
+        child.kill(forwardedSignal);
+      }
+    };
+    const abortChild = () => forwardSignal("SIGTERM");
+    const forwardSIGINT = () => forwardSignal("SIGINT");
+    const forwardSIGTERM = () => forwardSignal("SIGTERM");
+    const forwardSIGHUP = () => forwardSignal("SIGHUP");
+    const cleanup = () => {
+      input.signal?.removeEventListener("abort", abortChild);
+      process.off("SIGINT", forwardSIGINT);
+      process.off("SIGTERM", forwardSIGTERM);
+      process.off("SIGHUP", forwardSIGHUP);
+    };
 
-  if (result.signal) {
-    return;
-  }
+    input.signal?.addEventListener("abort", abortChild, { once: true });
+    process.on("SIGINT", forwardSIGINT);
+    process.on("SIGTERM", forwardSIGTERM);
+    process.on("SIGHUP", forwardSIGHUP);
 
-  if (result.status !== 0) {
-    throw new Error(`claude exited with code ${result.status ?? "unknown"}.`);
+    child.once("error", (error) => {
+      cleanup();
+      reject(error);
+    });
+
+    child.once("close", (code, closedSignal) => {
+      cleanup();
+
+      if (closedSignal) {
+        resolve({
+          type: "signal",
+          exitCode: signalExitCode(closedSignal),
+          signal: closedSignal,
+        });
+        return;
+      }
+
+      resolve({ type: "exit", code: code ?? 1 });
+    });
+  });
+}
+
+export function signalExitCode(signal: NodeJS.Signals) {
+  switch (signal) {
+    case "SIGINT":
+      return 130;
+    case "SIGTERM":
+      return 143;
+    case "SIGHUP":
+      return 129;
+    default:
+      return 1;
   }
 }
