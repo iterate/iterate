@@ -10,9 +10,12 @@ declare const appDisplayName: string;
 declare const publicUrl: string;
 declare const runUrl: string;
 declare const shortSha: string;
+declare const slackChannelName: string;
 
 export async function createCloudflareAppWorkflow(meta: ImportMeta, app: CloudflareApp) {
   const isNewStyleApp = isNewStyleCloudflareAppSlug(app.slug);
+  const successSlackChannelName = isNewStyleApp ? "#ci" : "#building";
+  const failureSlackChannelName = isNewStyleApp ? "#ci" : "#error-pulse";
 
   return workflow({
     name: `Deploy ${app.displayName}`,
@@ -125,6 +128,7 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
                 publicUrl: "${{ needs.deploy.outputs.public_url }}",
                 runUrl: "${{ needs.variables.outputs.run_url }}",
                 shortSha: "${{ needs.variables.outputs.short_sha }}",
+                slackChannelName: successSlackChannelName,
               },
             },
             async function notify_slack_on_success() {
@@ -139,7 +143,9 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
                 .join(" · ");
 
               await slack.chat.postMessage({
-                channel: slackChannelIds["#building"],
+                channel:
+                  slackChannelIds[slackChannelName as keyof typeof slackChannelIds] ??
+                  slackChannelName,
                 text: message,
               });
             },
@@ -159,6 +165,7 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
                 appDisplayName: app.displayName,
                 runUrl: "${{ needs.variables.outputs.run_url }}",
                 shortSha: "${{ needs.variables.outputs.short_sha }}",
+                slackChannelName: failureSlackChannelName,
               },
             },
             async function notify_slack_on_failure() {
@@ -171,7 +178,9 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
               ].join(" ");
 
               await slack.chat.postMessage({
-                channel: slackChannelIds["#error-pulse"],
+                channel:
+                  slackChannelIds[slackChannelName as keyof typeof slackChannelIds] ??
+                  slackChannelName,
                 text: message,
               });
             },
