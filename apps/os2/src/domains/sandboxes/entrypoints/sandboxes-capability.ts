@@ -67,6 +67,7 @@ type SandboxesCapabilityClient = Pick<
   | "wake"
 >;
 type SandboxLifecycleCatalogRecord = D1ObjectCatalogRecord<SandboxStructuredName>;
+const ITERATE_CONFIG_HYDRATION_PROCESS_ID = "iterate-config-hydration";
 
 export class SandboxHandle extends RpcTarget {
   readonly #sandbox: DurableObjectStub<SandboxDurableObject>;
@@ -246,10 +247,13 @@ export class SandboxesCapability extends WorkerEntrypoint<
 
     const repo = await this.iterateConfigRepo(input.projectId);
     const cloneCommand = [
+      "rm -rf /tmp/iterate-config-clone /tmp/iterate-config-clone.log",
       "tmp_dir=$(mktemp -d)",
       "trap 'rm -rf \"$tmp_dir\"' EXIT",
       [
         "GIT_TERMINAL_PROMPT=0",
+        "timeout",
+        "120s",
         "git",
         "-c",
         shellQuote("credential.helper="),
@@ -268,31 +272,15 @@ export class SandboxesCapability extends WorkerEntrypoint<
       `cp -a "${"${tmp_dir}"}/iterate-config" ${shellQuote(SANDBOX_ITERATE_CONFIG_PATH)}`,
     ].join(" && ");
 
-    let clone: ExecResult;
     try {
-      clone = await input.sandbox.exec(cloneCommand, { cwd: "/", timeout: 120_000 });
+      await input.sandbox.startProcess(cloneCommand, {
+        autoCleanup: false,
+        cwd: "/",
+        processId: ITERATE_CONFIG_HYDRATION_PROCESS_ID,
+      });
     } catch (error) {
-      await this.recordIterateConfigCloneFailure(input.sandbox, cloneFailureMessage(error));
-      return;
+      if (!isAlreadyStartedProcessError(error)) throw error;
     }
-
-    if (!clone.success) {
-      const message = clone.stderr || clone.stdout || "unknown clone error";
-      await this.recordIterateConfigCloneFailure(input.sandbox, message);
-    }
-  }
-
-  private async recordIterateConfigCloneFailure(sandbox: CloudflareSandbox, message: string) {
-    await sandbox.exec(
-      [
-        "mkdir -p /workspace",
-        `printf '%s\\n' ${shellQuote(message)} > /workspace/.iterate-config-clone-error.txt`,
-      ].join(" && "),
-      { cwd: "/", timeout: 10_000 },
-    );
-    console.warn("[sandboxes] iterate-config clone failed; continuing without hydrated repo", {
-      error: message,
-    });
   }
 
   private async iterateConfigRepo(projectId?: string): Promise<RepoInfo> {
@@ -434,16 +422,18 @@ function isAlreadyMountedError(error: unknown) {
   return message.includes("already mounted") || message.includes("mount path already in use");
 }
 
+function isAlreadyStartedProcessError(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return message.includes("already exists") || message.includes("already running");
+}
+
 function repoBearerToken(repo: RepoInfo) {
   return repo.token.includes("?expires=") ? repo.token.split("?expires=")[0] : repo.token;
 }
 
 function repoAuthorizationHeader(repo: RepoInfo) {
   return `Authorization: Bearer ${repoBearerToken(repo)}`;
-}
-
-function cloneFailureMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function shellQuote(value: string) {
