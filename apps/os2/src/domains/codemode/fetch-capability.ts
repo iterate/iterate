@@ -17,9 +17,13 @@ export class FetchCapability extends WorkerEntrypoint<
     }
 
     const [requestInfo, requestInit] = input.args as [RequestInfo | URL, RequestInit | undefined];
+    return await this.fetch(requestInfo, requestInit);
+  }
+
+  async fetch(requestInfo: RequestInfo | URL, requestInit?: RequestInit) {
     // Public egress is deliberately behind a codemode provider instead of the
     // Dynamic Worker's ambient global fetch. That keeps fetch traceable in the
     // Function Call event log and leaves room for project egress policy here.
-    return await fetch(requestInfo, requestInit);
+    return await globalThis.fetch(requestInfo, requestInit);
   }
 }

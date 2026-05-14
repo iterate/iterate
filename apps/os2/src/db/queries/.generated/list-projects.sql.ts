@@ -1,7 +1,7 @@
 import type { Client } from "sqlfu";
 
 const sql = `
-select distinct p.id, p.slug, p.custom_hostname, p.metadata, p.created_at, p.updated_at
+select distinct p.id, p.slug, p.custom_hostname, p.external_egress_proxy, p.metadata, p.created_at, p.updated_at
 from projects p
 join project_permissions pp on pp.project_id = p.id
 where pp.principal_type = ?
@@ -28,7 +28,7 @@ export const listProjects = Object.assign(
 
 export namespace listProjects {
   export type Params = {
-    principalType: "clerk_organization";
+    principalType: string;
     principalId: string;
     limit: number;
     offset: number;
@@ -37,6 +37,7 @@ export namespace listProjects {
     id: string;
     slug: string;
     custom_hostname?: string;
+    external_egress_proxy?: string;
     metadata: string;
     created_at: string;
     updated_at: string;

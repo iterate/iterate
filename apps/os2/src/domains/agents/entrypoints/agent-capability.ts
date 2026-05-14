@@ -32,6 +32,14 @@ export class AgentCapability extends WorkerEntrypoint<AgentCapabilityEnv, AgentC
       throw new Error("AGENT Durable Object namespace is not configured.");
     }
 
+    return this.create();
+  }
+
+  create() {
+    if (!this.env.AGENT) {
+      throw new Error("AGENT Durable Object namespace is not configured.");
+    }
+
     return new AgentHandle({
       namespace: this.env.AGENT,
       projectId: requireProjectId(this.ctx.props),

@@ -91,6 +91,99 @@ const codemodeExampleSeeds = [
     ],
   },
   {
+    slug: "project-capability-pipelining",
+    name: "Project capability pipelining",
+    description:
+      "Use ctx.env.PROJECT as a Cloudflare RPC service binding, then pipeline through nested project-scoped capabilities.",
+    providers: [],
+    code: `async (ctx) => {
+  const streamPath = \`/codemode/project-capability-\${Date.now()}\`;
+  const project = ctx.env.PROJECT;
+  const lowerCaseProject = ctx.env.project;
+
+  const firstAppendPromise = project.streams().append({
+    streamPath,
+    event: {
+      type: "events.iterate.com/codemode/example-note",
+      payload: { message: "project capability direct stream append" },
+    },
+  });
+  const batchAppendPromise = ctx.env.PROJECT.streams().appendBatch({
+    streamPath,
+    events: [
+      {
+        type: "events.iterate.com/codemode/example-note",
+        payload: { message: "project capability batch append one" },
+      },
+      {
+        type: "events.iterate.com/codemode/example-note",
+        payload: { message: "project capability batch append two" },
+      },
+    ],
+  });
+  const aiPromise = ctx.env.PROJECT.ai().run("test-model", {
+    prompt: "show that nested project capability RPC works",
+  });
+  const agentMessagePromise = ctx.env.PROJECT.agents().create().sendMessage({
+    message: "hello from env project",
+    subPath: "project-capability-pipelining",
+  });
+  const agentThingPromise = project.agents().create().doThing({
+    label: "project-pipeline",
+    value: 21,
+  });
+  const reposPromise = project.repos().list();
+  const proceduresPromise = project.orpc().listProcedures();
+
+  const [firstAppend, batchAppends, ai, agentMessage, agentThing, repos, procedures] =
+    await Promise.all([
+      firstAppendPromise,
+      batchAppendPromise,
+      aiPromise,
+      agentMessagePromise,
+      agentThingPromise,
+      reposPromise,
+      proceduresPromise,
+    ]);
+
+  const lowerCaseAppend = await lowerCaseProject.streams().append({
+    streamPath,
+    event: {
+      type: "events.iterate.com/codemode/example-note",
+      payload: { message: "project capability lowercase env alias" },
+    },
+  });
+  const [events, state] = await Promise.all([
+    project.streams().read({ streamPath, afterOffset: "start" }),
+    project.streams().getState({ streamPath }),
+  ]);
+
+  return {
+    aiModel: ai.model,
+    agentMessage: agentMessage.message,
+    agentThing,
+    batchAppendCount: batchAppends.length,
+    eventMessages: events
+      .filter((event) => event.type === "events.iterate.com/codemode/example-note")
+      .map((event) => event.payload.message),
+    firstAppendOffset: firstAppend.offset,
+    lowerCaseAppendOffset: lowerCaseAppend.offset,
+    repoCount: repos.length,
+    streamInitialized: state != null,
+    proceduresIncludeStreams: procedures.includes("streams") && procedures.includes("list"),
+  };
+}`,
+    events: [
+      {
+        type: "events.iterate.com/codemode/example-note",
+        payload: {
+          message:
+            "ctx.env.PROJECT is injected into the dynamic Worker Loader env as a project-scoped WorkerEntrypoint binding.",
+        },
+      },
+    ],
+  },
+  {
     slug: "openapi-petstore",
     name: "OpenAPI Petstore",
     description:

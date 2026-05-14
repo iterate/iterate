@@ -61,4 +61,5 @@ export type ProjectsRow = {
   metadata: string;
   created_at: string;
   updated_at: string;
+  external_egress_proxy: string | null;
 };

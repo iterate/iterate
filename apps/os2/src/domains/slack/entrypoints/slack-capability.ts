@@ -29,6 +29,13 @@ export class SlackCapability extends WorkerEntrypoint<SlackCapabilityEnv, SlackC
       );
     }
 
+    return await this.request({
+      body: input.args[0] as Record<string, unknown> | undefined,
+      method,
+    });
+  }
+
+  async request(input: { body?: Record<string, unknown>; method: string }) {
     const token = await this.readToken();
     if (!token) {
       throw new Error(
@@ -36,10 +43,9 @@ export class SlackCapability extends WorkerEntrypoint<SlackCapabilityEnv, SlackC
       );
     }
 
-    const [body] = input.args as [Record<string, unknown> | undefined];
     return await callSlackWebApi({
-      body: body ?? {},
-      method,
+      body: input.body ?? {},
+      method: input.method,
       token,
     });
   }

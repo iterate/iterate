@@ -370,6 +370,11 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     }
   }
 
+  async egressFetch(request: Request): Promise<Response> {
+    await this.ensureStarted();
+    return await fetch(request);
+  }
+
   private async getIngressProjectDynamicWorkerEntrypoint(
     summary: ProjectSummary,
   ): Promise<ProjectDynamicWorkerEntrypoint> {

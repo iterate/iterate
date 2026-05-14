@@ -279,6 +279,51 @@ describe("CodemodeSession", () => {
     expect(procedures).not.toContain("projectSlugOrId");
   });
 
+  test("runs the project capability env example with pipelined nested RPC", async () => {
+    const streamPath = `/codemode-session-tests/${crypto.randomUUID()}` as StreamPath;
+    const session = await initializeSession(streamPath);
+    const example = findCodemodeExample("project-capability-pipelining");
+    if (!example) throw new Error("Expected project-capability-pipelining codemode example.");
+    const script = example.scripts[0];
+    if (!script) throw new Error("Expected project-capability-pipelining to have a script.");
+
+    const created = await session.createSession({
+      events: codemodeSessionStartupEvents({
+        events: example.events,
+        providers: providersForCodemodeExample({ example, projectId }),
+        streamPath,
+      }),
+      code: script.code,
+    });
+    const scriptExecutionId = scriptExecutionIdFromEvent(created.scriptExecutionEvent);
+    const completed = await waitForScriptExecutionCompleted({ scriptExecutionId, streamPath });
+
+    expect(completed.payload).toMatchObject({
+      outcome: {
+        status: "returned",
+        value: {
+          agentMessage: "hello from env project",
+          agentThing: {
+            doubled: 42,
+            label: "project-pipeline",
+            value: 21,
+          },
+          aiModel: "test-model",
+          batchAppendCount: 2,
+          eventMessages: expect.arrayContaining([
+            "project capability direct stream append",
+            "project capability batch append one",
+            "project capability batch append two",
+            "project capability lowercase env alias",
+          ]),
+          proceduresIncludeStreams: true,
+          repoCount: expect.any(Number),
+          streamInitialized: true,
+        },
+      },
+    });
+  });
+
   test("runs default workspace state and git shell operations", async () => {
     const streamPath = `/codemode-session-tests/${crypto.randomUUID()}` as StreamPath;
     const session = await initializeSession(streamPath);

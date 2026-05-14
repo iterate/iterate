@@ -1,7 +1,7 @@
 import type { Client } from "sqlfu";
 
 const sql = `
-select id, slug, custom_hostname, metadata, created_at, updated_at
+select id, slug, custom_hostname, external_egress_proxy, metadata, created_at, updated_at
 from projects
 where slug = ?
 order by created_at asc
@@ -31,6 +31,7 @@ export namespace listProjectsBySlug {
     id: string;
     slug: string;
     custom_hostname?: string;
+    external_egress_proxy?: string;
     metadata: string;
     created_at: string;
     updated_at: string;

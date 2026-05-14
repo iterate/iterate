@@ -118,6 +118,7 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
       : { DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber }),
     ...(slackBotToken == null ? {} : { APP_CONFIG_SLACK_BOT_TOKEN: alchemy.secret(slackBotToken) }),
   },
+  compatibilityFlags: ["experimental"],
   extraRouteHostnames: projectHostnameBases.flatMap(projectRouteHostnamesForBase),
 });
 

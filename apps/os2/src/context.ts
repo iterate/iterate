@@ -42,6 +42,7 @@ export interface AppContext {
       id: string;
       slug: string;
       custom_hostname?: string | null;
+      external_egress_proxy?: string | null;
       metadata: string;
       created_at: string;
       updated_at: string;

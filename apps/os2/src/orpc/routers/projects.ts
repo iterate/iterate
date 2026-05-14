@@ -1,5 +1,9 @@
 import { ORPCError } from "@orpc/server";
 import { StreamPath } from "@iterate-com/shared/streams/types";
+import {
+  getInitializedStreamStub,
+  type StreamDurableObjectNamespace,
+} from "@iterate-com/shared/streams/helpers";
 import type { D1ObjectCatalogRecord } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import {
   getD1ObjectCatalogRecord,
@@ -26,6 +30,10 @@ import {
 } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import type { ProjectMcpServerConnectionStructuredName } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 import {
+  PROJECT_LIFECYCLE_STREAM_PATH,
+  PROJECT_SETTINGS_UPDATED_EVENT_TYPE,
+} from "~/domains/projects/stream-processors/project-lifecycle.ts";
+import {
   isReservedProjectHostname,
   isValidCustomHostname,
   normalizeCustomHostname,
@@ -44,6 +52,7 @@ type ProjectRow = {
   id: string;
   slug: string;
   custom_hostname?: string | null;
+  external_egress_proxy?: string | null;
   metadata: string;
   created_at: string;
   updated_at: string;
@@ -58,6 +67,7 @@ function toProject(row: ProjectRow) {
     id: row.id,
     slug: row.slug,
     customHostname: row.custom_hostname ?? null,
+    externalEgressProxy: row.external_egress_proxy ?? null,
     metadata: JSON.parse(row.metadata) as Record<string, unknown>,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -110,6 +120,22 @@ function normalizeConfigCustomHostname(
   }
 
   return customHostname;
+}
+
+function normalizeConfigExternalEgressProxy(input: string | null | undefined) {
+  if (input === undefined) return undefined;
+  if (input === null) return null;
+
+  const externalEgressProxy = input.trim();
+  if (externalEgressProxy === "") return null;
+
+  try {
+    return new URL(externalEgressProxy).toString();
+  } catch {
+    throw new ORPCError("BAD_REQUEST", {
+      message: "External egress proxy must be a valid URL.",
+    });
+  }
 }
 
 function isUniqueConstraintError(error: unknown) {
@@ -226,6 +252,13 @@ export const projectsRouter = {
           normalizedCustomHostname === undefined
             ? (existing.custom_hostname ?? null)
             : normalizedCustomHostname;
+        const normalizedExternalEgressProxy = normalizeConfigExternalEgressProxy(
+          input.externalEgressProxy,
+        );
+        const nextExternalEgressProxy =
+          normalizedExternalEgressProxy === undefined
+            ? (existing.external_egress_proxy ?? null)
+            : normalizedExternalEgressProxy;
         const nextMetadata =
           input.metadata ?? (JSON.parse(existing.metadata) as Record<string, unknown>);
 
@@ -234,6 +267,7 @@ export const projectsRouter = {
             context.db,
             {
               customHostname: nextCustomHostname,
+              externalEgressProxy: nextExternalEgressProxy,
               metadata: JSON.stringify(nextMetadata),
             },
             { id: input.id },
@@ -254,6 +288,11 @@ export const projectsRouter = {
             message: `Project ${input.id} was not returned after update`,
           });
         }
+
+        await appendProjectSettingsUpdatedEvent({
+          context,
+          project: row,
+        });
 
         return toProject(row);
       }),
@@ -407,4 +446,38 @@ function requireProjectDurableObjectNamespace(context: AppContext) {
   }
 
   return context.projectDurableObjectNamespace;
+}
+
+async function appendProjectSettingsUpdatedEvent(input: {
+  context: AppContext;
+  project: ProjectRow;
+}) {
+  const stream = await getInitializedStreamStub({
+    durableObjectNamespace: requireStreamDurableObjectNamespace(
+      input.context,
+    ) as unknown as StreamDurableObjectNamespace,
+    namespace: input.project.id,
+    path: PROJECT_LIFECYCLE_STREAM_PATH,
+  });
+
+  await stream.append({
+    type: PROJECT_SETTINGS_UPDATED_EVENT_TYPE,
+    payload: {
+      customHostname: input.project.custom_hostname ?? null,
+      externalEgressProxy: input.project.external_egress_proxy ?? null,
+      metadata: JSON.parse(input.project.metadata) as Record<string, unknown>,
+      projectId: input.project.id,
+      slug: input.project.slug,
+    },
+  });
+}
+
+function requireStreamDurableObjectNamespace(context: AppContext) {
+  if (!context.stream) {
+    throw new ORPCError("INTERNAL_SERVER_ERROR", {
+      message: "STREAM binding not available.",
+    });
+  }
+
+  return context.stream;
 }

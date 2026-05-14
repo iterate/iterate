@@ -157,6 +157,10 @@ const CodemodeSessionRunnerBase = withStreamProcessorRunner<
   typeof CodemodeProcessorContract
 >({
   processor(args) {
+    const projectCapability = args.ctx.exports.ProjectCapability({
+      props: { projectId: args.structuredName.projectId },
+    });
+
     return createCodemodeProcessor({
       buildSessionCapabilityCallable: () => {
         const session = args.instance as unknown as {
@@ -181,6 +185,10 @@ const CodemodeSessionRunnerBase = withStreamProcessorRunner<
       },
       newId: () => crypto.randomUUID(),
       scriptExecutor: createCloudflareCodemodeScriptExecutor({
+        env: {
+          PROJECT: projectCapability,
+          project: projectCapability,
+        },
         getSessionCapability: () => {
           const session = args.instance as unknown as {
             getCodemodeSessionCapability(): CodemodeProcessorSession;
@@ -833,6 +841,7 @@ function resolveProcessorStreamPath(input: { basePath: StreamPath; pathInput?: s
 }
 
 function createCloudflareCodemodeScriptExecutor(input: {
+  env?: Record<string, unknown>;
   getSessionCapability?: () => CodemodeProcessorSession;
   loader: WorkerLoader | undefined;
 }): CodemodeScriptExecutor {
@@ -856,6 +865,7 @@ function createCloudflareCodemodeScriptExecutor(input: {
             "executor.js": buildScriptExecutorModule(),
             "user-code.js": buildUserCodeModule(code),
           },
+          env: input.env,
           globalOutbound: null,
         })
         .getEntrypoint() as unknown as CodemodeExecutorEntrypoint;
@@ -1036,6 +1046,7 @@ function __stringify(value) {
           error: (...args) => console.error(...args),
         };
       }
+      if (key === "env" && path.length === 0) return options.env;
       if (typeof key !== "string") return undefined;
       return make([...path, key]);
 	    },
@@ -1082,6 +1093,7 @@ function __stringify(value) {
 	    };
 	    const ctx = __createCodemodeContext({
 	      codemodeSessionCapability: __codemodeSessionCapability,
+	      env: this.env,
 	      scriptExecutionId: __scriptExecutionId,
 	    });
 

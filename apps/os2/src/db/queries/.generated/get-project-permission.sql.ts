@@ -28,14 +28,14 @@ export const getProjectPermission = Object.assign(
 export namespace getProjectPermission {
   export type Params = {
     projectId: string;
-    principalType: "clerk_organization";
+    principalType: string;
     principalId: string;
   };
   export type Result = {
     project_id: string;
-    principal_type: "clerk_organization";
+    principal_type: string;
     principal_id: string;
-    role: "owner";
+    role: string;
     created_at: string;
     updated_at: string;
   };

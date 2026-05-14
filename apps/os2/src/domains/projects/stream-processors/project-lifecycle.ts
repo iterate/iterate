@@ -8,7 +8,8 @@ import {
 import { StreamPath } from "@iterate-com/shared/streams/types";
 
 export const PROJECT_LIFECYCLE_STREAM_PATH = StreamPath.parse("/");
-const PROJECT_CREATED_EVENT_TYPE = "events.iterate.com/project/created";
+export const PROJECT_CREATED_EVENT_TYPE = "events.iterate.com/project/created";
+export const PROJECT_SETTINGS_UPDATED_EVENT_TYPE = "events.iterate.com/project/settings-updated";
 const LEGACY_PROJECT_CREATED_EVENT_TYPE = "events.iterate.com/os2/project-created";
 
 export const ProjectLifecycleProcessorContract = defineProcessorContract({
@@ -21,6 +22,14 @@ export const ProjectLifecycleProcessorContract = defineProcessorContract({
         defaultHost: z.string().trim().min(1),
         hosts: z.array(z.string().trim().min(1)),
         projectId: z.string().trim().min(1),
+        settings: z
+          .object({
+            customHostname: z.string().nullable(),
+            externalEgressProxy: z.string().url().nullable(),
+            metadata: z.record(z.string(), z.unknown()),
+          })
+          .nullable()
+          .default(null),
         slug: z.string().trim().min(1),
       })
       .nullable()
@@ -48,8 +57,22 @@ export const ProjectLifecycleProcessorContract = defineProcessorContract({
         slug: z.string().trim().min(1),
       }),
     },
+    [PROJECT_SETTINGS_UPDATED_EVENT_TYPE]: {
+      description: "A Project's settings were updated.",
+      payloadSchema: z.object({
+        customHostname: z.string().nullable(),
+        externalEgressProxy: z.string().url().nullable(),
+        metadata: z.record(z.string(), z.unknown()),
+        projectId: z.string().trim().min(1),
+        slug: z.string().trim().min(1),
+      }),
+    },
   },
-  consumes: [PROJECT_CREATED_EVENT_TYPE, LEGACY_PROJECT_CREATED_EVENT_TYPE],
+  consumes: [
+    PROJECT_CREATED_EVENT_TYPE,
+    PROJECT_SETTINGS_UPDATED_EVENT_TYPE,
+    LEGACY_PROJECT_CREATED_EVENT_TYPE,
+  ],
   emits: [],
   reduce({ state, event }) {
     switch (event.type) {
@@ -57,7 +80,23 @@ export const ProjectLifecycleProcessorContract = defineProcessorContract({
       case LEGACY_PROJECT_CREATED_EVENT_TYPE:
         return {
           ...state,
-          project: event.payload,
+          project: {
+            ...event.payload,
+            settings: null,
+          },
+        };
+      case PROJECT_SETTINGS_UPDATED_EVENT_TYPE:
+        if (state.project === null) return state;
+        return {
+          ...state,
+          project: {
+            ...state.project,
+            settings: {
+              customHostname: event.payload.customHostname,
+              externalEgressProxy: event.payload.externalEgressProxy,
+              metadata: event.payload.metadata,
+            },
+          },
         };
     }
   },
