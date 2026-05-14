@@ -39,7 +39,7 @@
   "iterateAppCli": {
     "remote": {
       "auth": "shared-api-secret-bearer",
-      "defaultBaseUrl": "https://os2.iterate.com"
+      "defaultBaseUrl": "https://os.iterate2.com"
     }
   },
   "dependencies": {
@@ -51,6 +51,8 @@
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@opentui/core": "0.1.102",
+    "@opentui/react": "0.1.102",
     "@orpc/client": "1.13.14",
     "@orpc/contract": "1.13.14",
     "@orpc/openapi": "1.13.14",
