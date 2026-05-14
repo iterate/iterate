@@ -66,6 +66,11 @@ export const AppConfig = BaseAppConfig.extend({
       ),
   }),
   openAiApiKey: redacted(z.string().trim().min(1)),
+  cloudflare: z
+    .object({
+      apiToken: redacted(z.string().trim().min(1)).optional(),
+    })
+    .default({}),
   projectHostnameBases: publicValue(z.array(z.string().trim().min(1)).default([])),
   integrations: z
     .object({

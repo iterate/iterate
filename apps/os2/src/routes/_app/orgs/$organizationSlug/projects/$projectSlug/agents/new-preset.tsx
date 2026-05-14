@@ -14,7 +14,9 @@ import { Textarea } from "@iterate-com/ui/components/textarea";
 import {
   AgentPresetEvent,
   type AgentLlmProvider,
+  DEFAULT_AGENT_LLM_PROVIDER,
   DEFAULT_CLOUDFLARE_AGENT_MODEL,
+  DEFAULT_OPENAI_AGENT_MODEL,
   configuredAgentSetupEvents,
   defaultAgentSystemPrompt,
   normalizeAgentPresetBasePath,
@@ -48,8 +50,8 @@ function NewAgentPresetPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [basePathInput, setBasePathInput] = useState("/agents");
-  const [provider, setProvider] = useState<AgentLlmProvider>("cloudflare-ai");
-  const [model, setModel] = useState(DEFAULT_CLOUDFLARE_AGENT_MODEL);
+  const [provider, setProvider] = useState<AgentLlmProvider>(DEFAULT_AGENT_LLM_PROVIDER);
+  const [model, setModel] = useState(DEFAULT_OPENAI_AGENT_MODEL);
   const [runOpts, setRunOpts] = useState('{"gateway":{"id":"default"}}');
   const [systemPrompt, setSystemPrompt] = useState(defaultAgentSystemPrompt());
   const [customEventsYaml, setCustomEventsYaml] = useState(emptyEventsYaml);
@@ -102,9 +104,9 @@ function NewAgentPresetPage() {
     setProvider(nextProvider);
     setModel((current) => {
       if (nextProvider === "openai-ws" && current === DEFAULT_CLOUDFLARE_AGENT_MODEL) {
-        return "gpt-5.5";
+        return DEFAULT_OPENAI_AGENT_MODEL;
       }
-      if (nextProvider === "cloudflare-ai" && current === "gpt-5.5") {
+      if (nextProvider === "cloudflare-ai" && current === DEFAULT_OPENAI_AGENT_MODEL) {
         return DEFAULT_CLOUDFLARE_AGENT_MODEL;
       }
       return current;

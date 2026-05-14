@@ -152,12 +152,12 @@ describe("project agents codemode", () => {
     ).toEqual([]);
   });
 
-  it("uses Kimi K2.6 through Cloudflare AI for unconfigured agent chats by default", async () => {
+  it("uses OpenAI for unconfigured agent chats by default", async () => {
     const baseUrl = requireBaseUrl();
     const client = createClient(baseUrl);
-    const project = await createProject(client, "agent-default-kimi");
+    const project = await createProject(client, "agent-default-openai");
     const suffix = uniqueSuffix();
-    const agentPath = `/agents/default-kimi-${suffix}`;
+    const agentPath = `/agents/default-openai-${suffix}`;
 
     await client.project.agents.runtimeState({
       agentPath,
@@ -165,7 +165,7 @@ describe("project agents codemode", () => {
     });
     await client.project.agents.sendMessage({
       agentPath,
-      message: `default Kimi 2.6 proof ${suffix}`,
+      message: `default OpenAI proof ${suffix}`,
       projectSlugOrId: project.id,
     });
 
@@ -175,29 +175,29 @@ describe("project agents codemode", () => {
       projectId: project.id,
       afterOffset: "start",
       predicate: (event) =>
-        event.type === "events.iterate.com/cloudflare-ai/llm-request-completed" &&
+        event.type === "events.iterate.com/openai-ws/llm-request-completed" &&
         (event.payload as { result?: { status?: unknown } }).result?.status === "success",
     });
 
     expect(events).toContainEqual(
       expect.objectContaining({
         type: "events.iterate.com/os2-agent/llm-provider-selected",
-        payload: { provider: "cloudflare-ai" },
+        payload: { provider: "openai-ws" },
       }),
     );
     expect(events).toContainEqual(
       expect.objectContaining({
-        type: "events.iterate.com/agent/llm-config-updated",
+        type: "events.iterate.com/openai-ws/config-updated",
         payload: expect.objectContaining({
-          model: DEFAULT_WORKERS_AI_AGENT_MODEL,
+          model: "gpt-5.5",
         }),
       }),
     );
     expect(events).toContainEqual(
       expect.objectContaining({
-        type: "events.iterate.com/cloudflare-ai/llm-request-started",
+        type: "events.iterate.com/openai-ws/llm-request-started",
         payload: expect.objectContaining({
-          model: DEFAULT_WORKERS_AI_AGENT_MODEL,
+          model: "gpt-5.5",
         }),
       }),
     );
@@ -207,7 +207,7 @@ describe("project agents codemode", () => {
       }),
     );
     expect(
-      events.some((event) => event.type === "events.iterate.com/openai-ws/llm-request-started"),
+      events.some((event) => event.type === "events.iterate.com/cloudflare-ai/llm-request-started"),
     ).toBe(false);
     expect(
       events.filter((event) => event.type === "events.iterate.com/core/error-occurred"),
@@ -677,19 +677,19 @@ async (ctx) => {
       expect(events).toContainEqual(
         expect.objectContaining({
           type: "events.iterate.com/os2-agent/llm-provider-selected",
-          payload: { provider: "cloudflare-ai" },
+          payload: { provider: "openai-ws" },
         }),
       );
       expect(events).toContainEqual(
         expect.objectContaining({
-          type: "events.iterate.com/agent/llm-config-updated",
+          type: "events.iterate.com/openai-ws/config-updated",
           payload: expect.objectContaining({
-            model: DEFAULT_WORKERS_AI_AGENT_MODEL,
+            model: "gpt-5.5",
           }),
         }),
       );
       expect(
-        events.filter((event) => event.type === "events.iterate.com/openai-ws/config-updated"),
+        events.filter((event) => event.type === "events.iterate.com/agent/llm-config-updated"),
       ).toEqual([]);
       expect(
         events.filter((event) => event.type.startsWith("events.iterate.com/agent-chat/")),
@@ -1149,9 +1149,6 @@ function createClient(baseUrl: string) {
 
 async function createProject(client: OrpcClient, slugPrefix: string) {
   const project = await client.projects.create({
-    metadata: {
-      seededBy: "os2-agents-e2e",
-    },
     slug: `${slugPrefix}-${uniqueSuffix()}`,
   });
   createdProjectIds.push(project.id);

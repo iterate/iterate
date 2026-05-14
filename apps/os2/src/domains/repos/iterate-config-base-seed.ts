@@ -13,26 +13,43 @@ import { ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME } from "~/domains/repos/iterate-
 
 const ITERATE_CONFIG_REPO_DIR = "/repo";
 const ITERATE_CONFIG_JSONC = '{\n  "version": 1\n}\n';
+const ITERATE_CONFIG_PACKAGE_JSON = '{\n  "type": "module"\n}\n';
 
-export const ITERATE_CONFIG_WORKER_SOURCE = `// @ts-nocheck
-import { WorkerEntrypoint } from "cloudflare:workers";
+export const ITERATE_CONFIG_WORKER_SOURCE = `import app1 from "./apps/app1/worker.ts";
+import app2 from "./apps/app2/worker.ts";
 
-export default class Project extends WorkerEntrypoint {
+const apps = [app1, app2];
+
+export default {
   async fetch(request) {
-    const url = new URL(request.url);
-    const hostname = request.headers.get("x-iterate-ingress-hostname") ?? url.hostname;
-    return new Response("Hello from the project config worker at " + hostname, {
-      headers: {
-        "content-type": "text/plain; charset=utf-8",
-        "x-project-ingress-runtime": "dynamic-worker-config-repo",
-      },
-    });
-  }
+    for (const app of apps) {
+      const response = await app.fetch(request);
+      if (response) return response;
+    }
+
+    return new Response("Hello from the project config worker");
+  },
 
   async afterAppend({ event }) {
     console.log("Project config worker afterAppend", event.type);
-  }
-}
+  },
+};
+`;
+
+const ITERATE_CONFIG_APP_ONE_WORKER_SOURCE = `export default {
+  async fetch(request) {
+    if (request.headers.get("x-iterate-app-slug") !== "app1") return;
+    return new Response("hello from app one");
+  },
+};
+`;
+
+const ITERATE_CONFIG_APP_TWO_WORKER_SOURCE = `export default {
+  async fetch(request) {
+    if (request.headers.get("x-iterate-app-slug") !== "app2") return;
+    return new Response("hello from app two");
+  },
+};
 `;
 
 export type SeedIterateConfigBaseResult = {
@@ -102,9 +119,26 @@ export async function seedIterateConfigBaseRepo(input: {
     `${ITERATE_CONFIG_REPO_DIR}/iterate.config.jsonc`,
     ITERATE_CONFIG_JSONC,
   );
+  await filesystem.writeFile(
+    `${ITERATE_CONFIG_REPO_DIR}/package.json`,
+    ITERATE_CONFIG_PACKAGE_JSON,
+  );
+  await filesystem.mkdir(`${ITERATE_CONFIG_REPO_DIR}/apps/app1`, { recursive: true });
+  await filesystem.mkdir(`${ITERATE_CONFIG_REPO_DIR}/apps/app2`, { recursive: true });
   await filesystem.writeFile(`${ITERATE_CONFIG_REPO_DIR}/worker.ts`, ITERATE_CONFIG_WORKER_SOURCE);
+  await filesystem.writeFile(
+    `${ITERATE_CONFIG_REPO_DIR}/apps/app1/worker.ts`,
+    ITERATE_CONFIG_APP_ONE_WORKER_SOURCE,
+  );
+  await filesystem.writeFile(
+    `${ITERATE_CONFIG_REPO_DIR}/apps/app2/worker.ts`,
+    ITERATE_CONFIG_APP_TWO_WORKER_SOURCE,
+  );
   await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "iterate.config.jsonc" });
+  await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "package.json" });
   await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "worker.ts" });
+  await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "apps/app1/worker.ts" });
+  await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "apps/app2/worker.ts" });
 
   let committed = true;
   try {

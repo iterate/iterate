@@ -8,8 +8,13 @@ import {
 import { StreamPath } from "@iterate-com/shared/streams/types";
 
 export const PROJECT_LIFECYCLE_STREAM_PATH = StreamPath.parse("/");
-export const PROJECT_CREATED_EVENT_TYPE = "events.iterate.com/project/created";
-export const PROJECT_SETTINGS_UPDATED_EVENT_TYPE = "events.iterate.com/project/settings-updated";
+const PROJECT_CREATED_EVENT_TYPE = "events.iterate.com/project/created";
+export const PROJECT_CONFIG_WORKER_BUILT_EVENT_TYPE =
+  "events.iterate.com/project/config-worker-built";
+export const PROJECT_CNAME_RECORD_CREATED_EVENT_TYPE =
+  "events.iterate.com/project/cname-record-created";
+export const PROJECT_CNAME_RECORD_CREATION_FAILED_EVENT_TYPE =
+  "events.iterate.com/project/cname-record-creation-failed";
 const LEGACY_PROJECT_CREATED_EVENT_TYPE = "events.iterate.com/os2/project-created";
 
 export const ProjectLifecycleProcessorContract = defineProcessorContract({
@@ -22,14 +27,6 @@ export const ProjectLifecycleProcessorContract = defineProcessorContract({
         defaultHost: z.string().trim().min(1),
         hosts: z.array(z.string().trim().min(1)),
         projectId: z.string().trim().min(1),
-        settings: z
-          .object({
-            customHostname: z.string().nullable(),
-            externalEgressProxyUrl: z.string().url().nullable(),
-            metadata: z.record(z.string(), z.unknown()),
-          })
-          .nullable()
-          .default(null),
         slug: z.string().trim().min(1),
       })
       .nullable()
@@ -57,21 +54,45 @@ export const ProjectLifecycleProcessorContract = defineProcessorContract({
         slug: z.string().trim().min(1),
       }),
     },
-    [PROJECT_SETTINGS_UPDATED_EVENT_TYPE]: {
-      description: "A Project's settings were updated.",
+    [PROJECT_CONFIG_WORKER_BUILT_EVENT_TYPE]: {
+      description: "The Project iterate-config worker was built and cached for dispatch.",
       payloadSchema: z.object({
-        customHostname: z.string().nullable(),
-        externalEgressProxyUrl: z.string().url().nullable(),
-        metadata: z.record(z.string(), z.unknown()),
+        commitOid: z.string().trim().min(1),
+        mainModule: z.string().trim().min(1),
         projectId: z.string().trim().min(1),
-        slug: z.string().trim().min(1),
+        repoSlug: z.string().trim().min(1),
+      }),
+    },
+    [PROJECT_CNAME_RECORD_CREATED_EVENT_TYPE]: {
+      description: "A Project wildcard CNAME record was created in Cloudflare DNS.",
+      payloadSchema: z.object({
+        base: z.string().trim().min(1),
+        cloudflareRecord: z.record(z.string(), z.unknown()),
+        name: z.string().trim().min(1),
+        projectId: z.string().trim().min(1),
+        projectSlug: z.string().trim().min(1),
+        target: z.string().trim().min(1),
+        zoneId: z.string().trim().min(1),
+        zoneName: z.string().trim().min(1),
+      }),
+    },
+    [PROJECT_CNAME_RECORD_CREATION_FAILED_EVENT_TYPE]: {
+      description: "Project wildcard CNAME record creation failed.",
+      payloadSchema: z.object({
+        base: z.string().trim().min(1).optional(),
+        message: z.string().trim().min(1),
+        name: z.string().trim().min(1).optional(),
+        projectId: z.string().trim().min(1),
+        projectSlug: z.string().trim().min(1),
       }),
     },
   },
   consumes: [
     PROJECT_CREATED_EVENT_TYPE,
-    PROJECT_SETTINGS_UPDATED_EVENT_TYPE,
     LEGACY_PROJECT_CREATED_EVENT_TYPE,
+    PROJECT_CONFIG_WORKER_BUILT_EVENT_TYPE,
+    PROJECT_CNAME_RECORD_CREATED_EVENT_TYPE,
+    PROJECT_CNAME_RECORD_CREATION_FAILED_EVENT_TYPE,
   ],
   emits: [],
   reduce({ state, event }) {
@@ -80,23 +101,7 @@ export const ProjectLifecycleProcessorContract = defineProcessorContract({
       case LEGACY_PROJECT_CREATED_EVENT_TYPE:
         return {
           ...state,
-          project: {
-            ...event.payload,
-            settings: null,
-          },
-        };
-      case PROJECT_SETTINGS_UPDATED_EVENT_TYPE:
-        if (state.project === null) return state;
-        return {
-          ...state,
-          project: {
-            ...state.project,
-            settings: {
-              customHostname: event.payload.customHostname,
-              externalEgressProxyUrl: event.payload.externalEgressProxyUrl,
-              metadata: event.payload.metadata,
-            },
-          },
+          project: event.payload,
         };
     }
   },

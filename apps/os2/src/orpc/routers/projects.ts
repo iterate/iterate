@@ -1,9 +1,5 @@
 import { ORPCError } from "@orpc/server";
 import { StreamPath } from "@iterate-com/shared/streams/types";
-import {
-  getInitializedStreamStub,
-  type StreamDurableObjectNamespace,
-} from "@iterate-com/shared/streams/helpers";
 import type { D1ObjectCatalogRecord } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import {
   getD1ObjectCatalogRecord,
@@ -18,21 +14,15 @@ import {
   getProjectById,
   getProjectPermission,
   getProjectBySlug,
+  insertProject,
   insertProjectPermission,
   listAllProjects,
   listProjects,
   updateProjectConfig,
 } from "~/db/queries/.generated/index.ts";
 import type { CodemodeSessionStructuredName } from "~/domains/codemode/durable-objects/codemode-session.ts";
-import {
-  getProjectDurableObjectName,
-  type ProjectDurableObject,
-} from "~/domains/projects/durable-objects/project-durable-object.ts";
+import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import type { ProjectMcpServerConnectionStructuredName } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
-import {
-  PROJECT_LIFECYCLE_STREAM_PATH,
-  PROJECT_SETTINGS_UPDATED_EVENT_TYPE,
-} from "~/domains/projects/stream-processors/project-lifecycle.ts";
 import {
   isReservedProjectHostname,
   isValidCustomHostname,
@@ -53,7 +43,6 @@ type ProjectRow = {
   slug: string;
   custom_hostname?: string | null;
   external_egress_proxy_url?: string | null;
-  metadata: string;
   created_at: string;
   updated_at: string;
 };
@@ -68,7 +57,6 @@ function toProject(row: ProjectRow) {
     slug: row.slug,
     customHostname: row.custom_hostname ?? null,
     externalEgressProxyUrl: row.external_egress_proxy_url ?? null,
-    metadata: JSON.parse(row.metadata) as Record<string, unknown>,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -153,16 +141,13 @@ export const projectsRouter = {
           prefix: "proj",
         });
 
-        let project: Awaited<ReturnType<ProjectDurableObject["createProject"]>>;
+        let project: ProjectRow;
 
         try {
-          project = await requireProjectDurableObjectNamespace(context)
-            .getByName(getProjectDurableObjectName(id))
-            .createProject({
-              metadata: input.metadata,
-              projectId: id,
-              slug: input.slug,
-            });
+          project = await insertProject(context.db, {
+            id,
+            slug: input.slug,
+          });
           if (!auth.isAdminApi) {
             await insertProjectPermission(context.db, {
               principalId: auth.orgId,
@@ -181,14 +166,13 @@ export const projectsRouter = {
           throw error;
         }
 
-        const row = await getProjectById(context.db, { id: project.id });
-        if (!row) {
-          throw new ORPCError("INTERNAL_SERVER_ERROR", {
-            message: `Project ${id} was not returned after createProject`,
-          });
-        }
+        scheduleProjectBootstrap({
+          context,
+          projectId: id,
+          slug: input.slug,
+        });
 
-        return toProject(row);
+        return toProject(project);
       }),
     list: os.projects.list.use(activeOrganizationMiddleware).handler(async ({ context, input }) => {
       const auth = context.activeOrganization;
@@ -259,8 +243,6 @@ export const projectsRouter = {
           normalizedExternalEgressProxyUrl === undefined
             ? (existing.external_egress_proxy_url ?? null)
             : normalizedExternalEgressProxyUrl;
-        const nextMetadata =
-          input.metadata ?? (JSON.parse(existing.metadata) as Record<string, unknown>);
 
         try {
           await updateProjectConfig(
@@ -268,7 +250,6 @@ export const projectsRouter = {
             {
               customHostname: nextCustomHostname,
               externalEgressProxyUrl: nextExternalEgressProxyUrl,
-              metadata: JSON.stringify(nextMetadata),
             },
             { id: input.id },
           );
@@ -288,11 +269,6 @@ export const projectsRouter = {
             message: `Project ${input.id} was not returned after update`,
           });
         }
-
-        await appendProjectSettingsUpdatedEvent({
-          context,
-          project: row,
-        });
 
         return toProject(row);
       }),
@@ -448,36 +424,24 @@ function requireProjectDurableObjectNamespace(context: AppContext) {
   return context.projectDurableObjectNamespace;
 }
 
-async function appendProjectSettingsUpdatedEvent(input: {
-  context: AppContext;
-  project: ProjectRow;
-}) {
-  const stream = await getInitializedStreamStub({
-    durableObjectNamespace: requireStreamDurableObjectNamespace(
-      input.context,
-    ) as unknown as StreamDurableObjectNamespace,
-    namespace: input.project.id,
-    path: PROJECT_LIFECYCLE_STREAM_PATH,
-  });
-
-  await stream.append({
-    type: PROJECT_SETTINGS_UPDATED_EVENT_TYPE,
-    payload: {
-      customHostname: input.project.custom_hostname ?? null,
-      externalEgressProxyUrl: input.project.external_egress_proxy_url ?? null,
-      metadata: JSON.parse(input.project.metadata) as Record<string, unknown>,
-      projectId: input.project.id,
-      slug: input.project.slug,
-    },
-  });
-}
-
-function requireStreamDurableObjectNamespace(context: AppContext) {
-  if (!context.stream) {
-    throw new ORPCError("INTERNAL_SERVER_ERROR", {
-      message: "STREAM binding not available.",
-    });
+function scheduleProjectBootstrap(input: { context: AppContext; projectId: string; slug: string }) {
+  const namespace = input.context.projectDurableObjectNamespace;
+  if (!namespace) {
+    console.error(
+      `[projects.create] Project bootstrap skipped for ${input.projectId}: PROJECT binding not available.`,
+    );
+    return;
   }
 
-  return context.stream;
+  const promise = namespace
+    .getByName(getProjectDurableObjectName(input.projectId))
+    .createProject({
+      projectId: input.projectId,
+      slug: input.slug,
+    })
+    .catch((error) => {
+      console.error(`[projects.create] Project bootstrap failed for ${input.projectId}:`, error);
+    });
+
+  input.context.waitUntil?.(promise);
 }

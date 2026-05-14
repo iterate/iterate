@@ -25,7 +25,6 @@ export const Project = z.object({
   slug: z.string(),
   customHostname: z.string().nullable(),
   externalEgressProxyUrl: z.string().url().nullable(),
-  metadata: JSONObject,
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -277,7 +276,6 @@ export const osContract = oc.router({
             .trim()
             .min(1)
             .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Slug must be lowercase kebab-case"),
-          metadata: JSONObject.default({}),
         }),
       )
       .output(Project),
@@ -325,7 +323,6 @@ export const osContract = oc.router({
           id: z.string(),
           customHostname: z.string().trim().nullable().optional(),
           externalEgressProxyUrl: z.string().trim().url().nullable().optional(),
-          metadata: JSONObject.optional(),
         }),
       )
       .output(Project),

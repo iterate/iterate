@@ -13,15 +13,8 @@ describe("Project ingress routing", () => {
     expect(createResponse.ok).toBe(true);
     await expect(createResponse.json()).resolves.toMatchObject({
       defaultHost: "demo.iterate.localhost",
-      hosts: expect.arrayContaining([
-        "demo.iterate.localhost",
-        "proj_local_test.iterate.localhost",
-        "mcp.demo.iterate.localhost",
-        "mcp.proj_local_test.iterate.localhost",
-        "mcp__demo.iterate.localhost",
-        "mcp__proj_local_test.iterate.localhost",
-      ]),
-      id: "proj_local_test",
+      hosts: ["demo.iterate.localhost", "proj__local__test.iterate.localhost"],
+      id: "proj__local__test",
       slug: "demo",
     });
 
@@ -31,15 +24,11 @@ describe("Project ingress routing", () => {
        WHERE project_id = ?
        ORDER BY host ASC`,
     )
-      .bind("proj_local_test")
+      .bind("proj__local__test")
       .all<{ host: string; project_id: string; callable_json: string }>();
     expect(ingressRows.results.map((row) => row.host)).toEqual([
       "demo.iterate.localhost",
-      "mcp.demo.iterate.localhost",
-      "mcp.proj_local_test.iterate.localhost",
-      "mcp__demo.iterate.localhost",
-      "mcp__proj_local_test.iterate.localhost",
-      "proj_local_test.iterate.localhost",
+      "proj__local__test.iterate.localhost",
     ]);
     expect(
       ingressRows.results.map((row) => ({
@@ -52,11 +41,7 @@ describe("Project ingress routing", () => {
       })),
     ).toEqual([
       { host: "demo.iterate.localhost", exportName: "ProjectIngressEntrypoint" },
-      { host: "mcp.demo.iterate.localhost", exportName: "ProjectIngressEntrypoint" },
-      { host: "mcp.proj_local_test.iterate.localhost", exportName: "ProjectIngressEntrypoint" },
-      { host: "mcp__demo.iterate.localhost", exportName: "ProjectIngressEntrypoint" },
-      { host: "mcp__proj_local_test.iterate.localhost", exportName: "ProjectIngressEntrypoint" },
-      { host: "proj_local_test.iterate.localhost", exportName: "ProjectIngressEntrypoint" },
+      { host: "proj__local__test.iterate.localhost", exportName: "ProjectIngressEntrypoint" },
     ]);
 
     const streamResponse = await SELF.fetch("https://os.iterate.localhost/__test/project-stream");
@@ -70,21 +55,31 @@ describe("Project ingress routing", () => {
           type: "events.iterate.com/project/created",
           payload: expect.objectContaining({
             defaultHost: "demo.iterate.localhost",
-            projectId: "proj_local_test",
+            projectId: "proj__local__test",
             slug: "demo",
           }),
         }),
       ]),
     );
+    await waitForProjectLifecycleEvents([
+      expect.objectContaining({
+        type: "events.iterate.com/project/config-worker-built",
+        payload: expect.objectContaining({
+          mainModule: "worker.ts",
+          projectId: "proj__local__test",
+          repoSlug: "iterate-config",
+        }),
+      }),
+    ]);
 
     const lifecycleState = await waitForProjectLifecycleState();
     expect(lifecycleState.state.project).toMatchObject({
       defaultHost: "demo.iterate.localhost",
-      projectId: "proj_local_test",
+      projectId: "proj__local__test",
       slug: "demo",
     });
-    expect(lifecycleState.reducedThroughOffset).toBeGreaterThanOrEqual(3);
-    expect(lifecycleState.afterAppendCompletedThroughOffset).toBeGreaterThanOrEqual(3);
+    expect(lifecycleState.reducedThroughOffset).toBeGreaterThanOrEqual(4);
+    expect(lifecycleState.afterAppendCompletedThroughOffset).toBeGreaterThanOrEqual(4);
 
     const repoResponse = await SELF.fetch(
       "https://os.iterate.localhost/__test/iterate-config-repo",
@@ -101,9 +96,9 @@ describe("Project ingress routing", () => {
       defaultBranch: "main",
       git: expect.objectContaining({
         cloneCommand: expect.stringContaining("git -c http.extraHeader="),
-        remote: "https://artifacts.example.test/proj_local_test--iterate-config.git",
+        remote: "https://artifacts.example.test/proj__local__test--iterate-config.git",
       }),
-      remote: "https://artifacts.example.test/proj_local_test--iterate-config.git",
+      remote: "https://artifacts.example.test/proj__local__test--iterate-config.git",
       slug: "iterate-config",
       token: expect.stringContaining("mock-write-"),
     });
@@ -111,15 +106,73 @@ describe("Project ingress routing", () => {
     expect(repo.git.cloneCommand).not.toContain("?expires=");
     expect(repo.git.pushCommand).not.toContain("?expires=");
 
-    const projectIngressResponse = await SELF.fetch("https://demo.iterate.localhost/");
-    expect(projectIngressResponse.ok).toBe(true);
-    expect(projectIngressResponse.headers.get("x-project-ingress-runtime")).toBe("static-fallback");
-    await expect(projectIngressResponse.json()).resolves.toMatchObject({
-      defaultHost: "demo.iterate.localhost",
-      hostname: "demo.iterate.localhost",
-      projectId: "proj_local_test",
-      slug: "demo",
+    const projectIngressResponse = await waitForProjectIngressResponse({
+      expectedText: "Bundled project worker",
+      url: "https://demo.iterate.localhost/",
     });
+    expect(projectIngressResponse.text).toBe("Bundled project worker");
+
+    const projectIdIngressResponse = await waitForProjectIngressResponse({
+      expectedText: "Bundled project worker",
+      url: "https://proj__local__test.iterate.localhost/",
+    });
+    expect(projectIdIngressResponse.text).toBe("Bundled project worker");
+
+    const appOneDotResponse = await SELF.fetch("https://app1.demo.iterate.localhost/");
+    expect(appOneDotResponse.ok).toBe(true);
+    await expect(appOneDotResponse.text()).resolves.toBe("hello from app one");
+
+    const appOneUnderscoreResponse = await SELF.fetch("https://app1__demo.iterate.localhost/");
+    expect(appOneUnderscoreResponse.ok).toBe(true);
+    await expect(appOneUnderscoreResponse.text()).resolves.toBe("hello from app one");
+
+    const appOneProjectIdDotResponse = await SELF.fetch(
+      "https://app1.proj__local__test.iterate.localhost/",
+    );
+    expect(appOneProjectIdDotResponse.ok).toBe(true);
+    await expect(appOneProjectIdDotResponse.text()).resolves.toBe("hello from app one");
+
+    const appOneProjectIdUnderscoreResponse = await SELF.fetch(
+      "https://app1__proj__local__test.iterate.localhost/",
+    );
+    expect(appOneProjectIdUnderscoreResponse.ok).toBe(true);
+    await expect(appOneProjectIdUnderscoreResponse.text()).resolves.toBe("hello from app one");
+
+    const appTwoDotResponse = await SELF.fetch("https://app2.demo.iterate.localhost/");
+    expect(appTwoDotResponse.ok).toBe(true);
+    await expect(appTwoDotResponse.text()).resolves.toBe("hello from app two");
+
+    const appTwoUnderscoreResponse = await SELF.fetch("https://app2__demo.iterate.localhost/");
+    expect(appTwoUnderscoreResponse.ok).toBe(true);
+    await expect(appTwoUnderscoreResponse.text()).resolves.toBe("hello from app two");
+
+    await env.DB.prepare(`UPDATE projects SET custom_hostname = ? WHERE id = ?`)
+      .bind("shiterate.localhost", "proj__local__test")
+      .run();
+
+    const customHostnameResponse = await waitForProjectIngressResponse({
+      expectedText: "Bundled project worker",
+      url: "https://shiterate.localhost/",
+    });
+    expect(customHostnameResponse.text).toBe("Bundled project worker");
+
+    const customHostnameAppResponse = await SELF.fetch("https://app1.shiterate.localhost/");
+    expect(customHostnameAppResponse.ok).toBe(true);
+    await expect(customHostnameAppResponse.text()).resolves.toBe("hello from app one");
+
+    const nestedCustomHostnameAppResponse = await SELF.fetch(
+      "https://nested.app1.shiterate.localhost/",
+    );
+    expect(nestedCustomHostnameAppResponse.status).toBe(404);
+    await expect(nestedCustomHostnameAppResponse.text()).resolves.toBe("No ingress route matched.");
+
+    await env.DB.prepare(`UPDATE projects SET custom_hostname = ? WHERE id = ?`)
+      .bind("iterate.localhost", "proj__local__test")
+      .run();
+
+    const appHostnameResponse = await SELF.fetch("https://os.iterate.localhost/");
+    expect(appHostnameResponse.status).toBe(404);
+    await expect(appHostnameResponse.text()).resolves.toBe("No ingress route matched.");
 
     const mcpResponse = await SELF.fetch("https://mcp.demo.iterate.localhost/", {
       headers: { accept: "text/html" },
@@ -160,8 +213,8 @@ describe("Project ingress routing", () => {
     const streamsResponse = await SELF.fetch("https://streams.demo.iterate.localhost/", {
       headers: { accept: "text/html" },
     });
-    expect(streamsResponse.status).toBe(404);
-    expect(await streamsResponse.text()).toBe("No ingress route matched.");
+    expect(streamsResponse.ok).toBe(true);
+    expect(await streamsResponse.text()).toBe("Bundled project worker");
   });
 
   test("substitutes egress header secrets through the Project Durable Object", async () => {
@@ -282,7 +335,7 @@ async function waitForProjectLifecycleState() {
         project: { projectId: string } | null;
       };
     };
-    if (state.state.project?.projectId === "proj_local_test") {
+    if (state.state.project?.projectId === "proj__local__test") {
       return state;
     }
 
@@ -290,4 +343,51 @@ async function waitForProjectLifecycleState() {
   }
 
   throw new Error(`Timed out waiting for project lifecycle state: ${JSON.stringify(latest)}`);
+}
+
+async function waitForProjectLifecycleEvents(expectedEvents: unknown[]) {
+  const deadline = Date.now() + 5_000;
+  let latest: unknown;
+
+  while (Date.now() < deadline) {
+    const response = await SELF.fetch("https://os.iterate.localhost/__test/project-stream");
+    latest = await response.json();
+    const body = latest as {
+      events: Array<{ type: string; payload: Record<string, unknown> }>;
+    };
+
+    try {
+      expect(body.events).toEqual(expect.arrayContaining(expectedEvents));
+      return body.events;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
+  throw new Error(`Timed out waiting for project lifecycle events: ${JSON.stringify(latest)}`);
+}
+
+async function waitForProjectIngressResponse(input: { expectedText: string; url: string }) {
+  const deadline = Date.now() + 5_000;
+  let latest: unknown;
+
+  while (Date.now() < deadline) {
+    const response = await SELF.fetch(input.url);
+    const text = await response.text();
+    latest = {
+      status: response.status,
+      text,
+      runtime: response.headers.get("x-project-ingress-runtime"),
+    };
+    if (response.ok && text === input.expectedText) {
+      return {
+        headers: response.headers,
+        text,
+      };
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+
+  throw new Error(`Timed out waiting for project ingress response: ${JSON.stringify(latest)}`);
 }

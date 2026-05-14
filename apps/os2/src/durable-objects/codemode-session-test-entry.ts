@@ -125,7 +125,6 @@ export default {
     if (url.pathname === "/__test/setup-egress-secret") {
       await ensureD1Schema(env.DB);
       await env.PROJECT.getByName(getProjectDurableObjectName(projectId)).createProject({
-        metadata: {},
         projectId,
         slug: "codemode-session-test",
       });
@@ -155,7 +154,6 @@ async function ensureD1Schema(db: D1Database) {
       id text primary key not null,
       slug text not null unique,
       custom_hostname text unique,
-      metadata text not null check (json_valid(metadata)),
       created_at text not null default current_timestamp,
       updated_at text not null default current_timestamp,
       external_egress_proxy_url text
@@ -209,11 +207,10 @@ async function ensureD1Schema(db: D1Database) {
 async function upsertProjectRow(db: D1Database) {
   await db
     .prepare(
-      `INSERT INTO projects (id, slug, custom_hostname, metadata)
-       VALUES (?, ?, NULL, '{}')
+      `INSERT INTO projects (id, slug, custom_hostname)
+       VALUES (?, ?, NULL)
        ON CONFLICT(id) DO UPDATE SET
          slug = excluded.slug,
-         metadata = excluded.metadata,
          updated_at = current_timestamp`,
     )
     .bind(projectId, "codemode-session-test")

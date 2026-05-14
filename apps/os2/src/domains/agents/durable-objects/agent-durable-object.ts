@@ -56,6 +56,7 @@ import {
 import { defaultWorkspaceIdForCodemodeSession } from "~/domains/workspaces/entrypoints/workspace-provider-registration.ts";
 import { stripArtifactTokenQuery } from "~/domains/repos/artifacts.ts";
 import {
+  DEFAULT_AGENT_LLM_PROVIDER,
   defaultAgentSetupEvents,
   defaultAgentSystemPrompt,
   isSlackAgentPath,
@@ -420,7 +421,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       presets: readAgentPathPrefixPresets(rootEvents),
     });
     const setupEvents =
-      preset?.events ?? defaultAgentSetupEvents("cloudflare-ai", params.agentPath);
+      preset?.events ?? defaultAgentSetupEvents(DEFAULT_AGENT_LLM_PROVIDER, params.agentPath);
     const hasSetupPrompt = setupEvents.some(
       (event) => event.type === "events.iterate.com/agent/system-prompt-updated",
     );
@@ -735,7 +736,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       const provider = (event.payload as { provider?: unknown }).provider;
       if (provider === "cloudflare-ai" || provider === "openai-ws") return provider;
     }
-    return "cloudflare-ai";
+    return DEFAULT_AGENT_LLM_PROVIDER;
   }
 
   private createLlmProcessor(provider: AgentLlmProvider) {

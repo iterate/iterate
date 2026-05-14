@@ -406,7 +406,6 @@ function createClient(baseUrl: string) {
 
 async function createBenchmarkProject(client: OrpcClient, benchmarkId: string) {
   return await client.projects.create({
-    metadata: { benchmarkId, seededBy: "benchmark-agent-stream" },
     slug: benchmarkId,
   });
 }
