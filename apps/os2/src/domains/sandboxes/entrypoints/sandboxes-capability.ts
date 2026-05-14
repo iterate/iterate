@@ -254,7 +254,7 @@ export class SandboxesCapability extends WorkerEntrypoint<
           "-c",
           shellQuote("credential.helper="),
           "-c",
-          shellQuote(`http.extraHeader=Authorization: Bearer ${repoBearerToken(repo)}`),
+          shellQuote(`http.extraHeader=Authorization: ${repoAuthorizationHeader(repo)}`),
           "clone",
           "--depth",
           "1",
@@ -414,6 +414,10 @@ function isAlreadyMountedError(error: unknown) {
 
 function repoBearerToken(repo: RepoInfo) {
   return repo.token.includes("?expires=") ? repo.token.split("?expires=")[0] : repo.token;
+}
+
+function repoAuthorizationHeader(repo: RepoInfo) {
+  return `Basic ${btoa(`x:${repoBearerToken(repo)}`)}`;
 }
 
 function shellQuote(value: string) {

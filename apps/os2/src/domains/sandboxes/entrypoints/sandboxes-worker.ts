@@ -167,5 +167,7 @@ function errorMessage(error: unknown) {
 }
 
 function redactSandboxSecrets(message: string) {
-  return message.replaceAll(/Bearer\s+art_v1_[^'"\s]+/g, "Bearer [REDACTED]");
+  return message
+    .replaceAll(/Bearer\s+art_v1_[^'"\s]+/g, "Bearer [REDACTED]")
+    .replaceAll(/Authorization:\s+Basic\s+[A-Za-z0-9+/=]+/g, "Authorization: Basic [REDACTED]");
 }
