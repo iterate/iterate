@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { SELF, env } from "cloudflare:test";
 import { createCodemodeContext } from "@iterate-com/shared/codemode/context-proxy";
 import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
 import { type Event, type EventInput, type StreamPath } from "@iterate-com/shared/streams/types";
@@ -6,11 +6,15 @@ import { getInitializedStreamStub } from "@iterate-com/shared/streams/helpers";
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
 import type { StreamProcessorRunnerState } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor-runner";
-import { describe, expect, test } from "vitest";
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import type { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
 import { createCodemodeSessionStartupEvents } from "~/domains/codemode/codemode-session-rpc.ts";
 import { createExampleRpcProviderRegistration } from "~/domains/codemode/example-capabilities.ts";
 import { findCodemodeExample, providersForCodemodeExample } from "~/domains/codemode/examples.ts";
+import {
+  EXAMPLE_EGRESS_SECRET_KEY,
+  EXAMPLE_EGRESS_SECRET_MATERIAL,
+} from "~/domains/secrets/example-secret.ts";
 
 type CodemodeSessionStub = DurableObjectStub<CodemodeSession> & {
   callFunction(input: {
@@ -60,6 +64,15 @@ const activeOrganization = {
   sessionId: "sess__codemode_session_test",
   userId: "user__codemode_session_test",
 };
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+beforeAll(async () => {
+  const response = await SELF.fetch("https://os.iterate.localhost/__test/setup-project-row");
+  expect(response.ok).toBe(true);
+});
 
 describe("CodemodeSession", () => {
   test("createSession returns after appending a slow script request", async () => {
@@ -279,6 +292,51 @@ describe("CodemodeSession", () => {
     expect(procedures).not.toContain("projectSlugOrId");
   });
 
+  test("runs the project capability env example with pipelined nested RPC", async () => {
+    const streamPath = `/codemode-session-tests/${crypto.randomUUID()}` as StreamPath;
+    const session = await initializeSession(streamPath);
+    const example = findCodemodeExample("project-capability-pipelining");
+    if (!example) throw new Error("Expected project-capability-pipelining codemode example.");
+    const script = example.scripts[0];
+    if (!script) throw new Error("Expected project-capability-pipelining to have a script.");
+
+    const created = await session.createSession({
+      events: codemodeSessionStartupEvents({
+        events: example.events,
+        providers: providersForCodemodeExample({ example, projectId }),
+        streamPath,
+      }),
+      code: script.code,
+    });
+    const scriptExecutionId = scriptExecutionIdFromEvent(created.scriptExecutionEvent);
+    const completed = await waitForScriptExecutionCompleted({ scriptExecutionId, streamPath });
+
+    expect(completed.payload).toMatchObject({
+      outcome: {
+        status: "returned",
+        value: {
+          agentMessage: "hello from env project",
+          agentThing: {
+            doubled: 42,
+            label: "project-pipeline",
+            value: 21,
+          },
+          aiModel: "test-model",
+          batchAppendCount: 2,
+          eventMessages: expect.arrayContaining([
+            "project capability direct stream append",
+            "project capability batch append one",
+            "project capability batch append two",
+            "project capability lowercase env alias",
+          ]),
+          proceduresIncludeStreams: true,
+          repoCount: expect.any(Number),
+          streamInitialized: true,
+        },
+      },
+    });
+  });
+
   test("runs default workspace state and git shell operations", async () => {
     const streamPath = `/codemode-session-tests/${crypto.randomUUID()}` as StreamPath;
     const session = await initializeSession(streamPath);
@@ -330,7 +388,7 @@ describe("CodemodeSession", () => {
     );
   });
 
-  test("rejects caller supplied project identity in codemode ctx.os calls", async () => {
+  test("ignores caller supplied project identity in codemode ctx.os calls", async () => {
     const streamPath = `/codemode-session-tests/${crypto.randomUUID()}` as StreamPath;
     const session = await initializeSession(streamPath);
 
@@ -345,8 +403,8 @@ describe("CodemodeSession", () => {
 
     expect(completed.payload).toMatchObject({
       outcome: {
-        error: expect.stringContaining("projectSlugOrId"),
-        status: "threw",
+        status: "returned",
+        value: expect.objectContaining({ streams: expect.any(Array) }),
       },
     });
   });
@@ -410,6 +468,82 @@ describe("CodemodeSession", () => {
         }),
       ]),
     );
+  });
+
+  test("routes codemode fetch egress through project secret substitution", async () => {
+    const setupResponse = await SELF.fetch(
+      "https://os.iterate.localhost/__test/setup-egress-secret",
+    );
+    expect(setupResponse.ok).toBe(true);
+    mockPublicEchoFetch();
+    const streamPath = `/codemode-session-tests/${crypto.randomUUID()}` as StreamPath;
+    const session = await initializeSession(streamPath);
+
+    const created = await session.createSession({
+      events: codemodeSessionStartupEvents({
+        providers: exampleCapabilityProviders(),
+        streamPath,
+      }),
+      code: `async () => {
+  const response = await fetch("https://httpbingo.org/anything", {
+    headers: {
+      "x-iterate-test-secret": "getSecret({ key: \\"openai\\" })",
+    },
+  });
+  return await response.json();
+}`,
+    });
+    const scriptExecutionId = scriptExecutionIdFromEvent(created.scriptExecutionEvent);
+    const completed = await waitForScriptExecutionCompleted({ scriptExecutionId, streamPath });
+
+    expect(completed.payload).toMatchObject({
+      outcome: {
+        status: "returned",
+        value: {
+          headers: {
+            "x-iterate-test-secret": ["codemode-secret-value"],
+          },
+          url: "https://httpbingo.org/anything",
+        },
+      },
+    });
+    expect(JSON.stringify(completed.payload)).not.toContain("getSecret");
+  });
+
+  test("runs the selectable egress secret echo codemode example", async () => {
+    const setupResponse = await SELF.fetch(
+      "https://os.iterate.localhost/__test/setup-egress-secret",
+    );
+    expect(setupResponse.ok).toBe(true);
+    mockPublicEchoFetch();
+    const streamPath = `/codemode-session-tests/${crypto.randomUUID()}` as StreamPath;
+    const session = await initializeSession(streamPath);
+    const example = findCodemodeExample("egress-secret-echo");
+    expect(example).toBeDefined();
+
+    const created = await session.createSession({
+      events: codemodeSessionStartupEvents({
+        events: example?.events ?? [],
+        providers: providersForCodemodeExample({ example, projectId }),
+        streamPath,
+      }),
+      code: example?.scripts[0]?.code,
+    });
+    const scriptExecutionId = scriptExecutionIdFromEvent(created.scriptExecutionEvent);
+    const completed = await waitForScriptExecutionCompleted({ scriptExecutionId, streamPath });
+
+    expect(completed.payload).toMatchObject({
+      outcome: {
+        status: "returned",
+        value: {
+          echoedValue: `Bearer ${EXAMPLE_EGRESS_SECRET_MATERIAL}`,
+          headerName: "x-iterate-example-secret",
+          secretKey: EXAMPLE_EGRESS_SECRET_KEY,
+          secretReferenceWasSubstituted: true,
+        },
+      },
+    });
+    expect(JSON.stringify(completed.payload)).not.toContain("getSecret");
   });
 
   test("lets an event-mediated provider use session-started to call another provider", async () => {
@@ -716,6 +850,21 @@ function providerRegistration(path: string[]): ToolProviderRegistration {
     invocation: { kind: "event" },
     path,
   };
+}
+
+function mockPublicEchoFetch() {
+  const originalFetch = globalThis.fetch;
+  return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const request = new Request(input, init);
+    if (new URL(request.url).hostname !== "httpbingo.org") {
+      return await originalFetch(input, init);
+    }
+
+    return Response.json({
+      headers: Object.fromEntries([...request.headers].map(([key, value]) => [key, [value]])),
+      url: request.url,
+    });
+  });
 }
 
 function scriptExecutionIdFromEvent(event: Event | null) {

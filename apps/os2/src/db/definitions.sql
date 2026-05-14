@@ -3,7 +3,8 @@ create table projects (
   slug text not null unique,
   custom_hostname text unique,
   created_at text not null default current_timestamp,
-  updated_at text not null default current_timestamp
+  updated_at text not null default current_timestamp,
+  external_egress_proxy_url text
 );
 
 create index idx_projects_created_at on projects (created_at);

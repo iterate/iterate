@@ -1,20 +1,39 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import type { ExecuteCodemodeFunctionCallInput } from "@iterate-com/shared/stream-processors/codemode/implementation";
 import { createD1Client } from "sqlfu";
+import { AppConfig } from "~/app.ts";
 import {
+  deleteProjectSecretById,
   deleteProjectSecret,
+  getProjectSecretSummaryById,
+  getProjectSecretSummaryByKey,
   getProjectSecret,
   listProjectSecrets,
-  upsertProjectSecret,
+  projectSecretId,
+  upsertProjectSecretSummary,
 } from "~/domains/secrets/secrets-store.ts";
 
 type SecretsCapabilityEnv = {
+  APP_CONFIG?: string;
   DB?: D1Database;
 };
 
 type SecretsCapabilityProps = {
   projectId?: string;
 };
+
+type SecretsCapabilityClient = Pick<
+  SecretsCapability,
+  | "deleteSecretById"
+  | "getSecret"
+  | "getSecretOrNull"
+  | "getSecretSummary"
+  | "getSecretSummaryByKey"
+  | "getSecretSummaryByKeyOrNull"
+  | "listSecrets"
+  | "setSecret"
+>;
 
 export class SecretsCapability extends WorkerEntrypoint<
   SecretsCapabilityEnv,
@@ -55,27 +74,66 @@ export class SecretsCapability extends WorkerEntrypoint<
     return secret;
   }
 
+  async getSecretOrNull(input: { key: string }) {
+    return await getProjectSecret(this.db(), {
+      key: input.key,
+      projectId: this.projectId(),
+    });
+  }
+
   async setSecret(input: { key: string; material: string; metadata?: Record<string, unknown> }) {
-    const secret = await upsertProjectSecret(this.db(), {
+    return await upsertProjectSecretSummary(this.db(), {
+      id: this.createSecretId(),
       key: input.key,
       material: input.material,
       metadata: input.metadata,
       projectId: this.projectId(),
     });
-    return {
-      id: secret.id,
-      key: secret.key,
-      metadata: secret.metadata,
-      projectId: secret.projectId,
-      createdAt: secret.createdAt,
-      updatedAt: secret.updatedAt,
-      hasMaterial: true,
-    };
+  }
+
+  async listSecrets() {
+    return await listProjectSecrets(this.db(), { projectId: this.projectId() });
+  }
+
+  async getSecretSummary(input: { id: string }) {
+    const secret = await getProjectSecretSummaryById(this.db(), {
+      id: input.id,
+      projectId: this.projectId(),
+    });
+    if (!secret) {
+      throw new Error(`Secret ${input.id} was not found for this project.`);
+    }
+    return secret;
+  }
+
+  async getSecretSummaryByKey(input: { key: string }) {
+    const secret = await getProjectSecretSummaryByKey(this.db(), {
+      key: input.key,
+      projectId: this.projectId(),
+    });
+    if (!secret) {
+      throw new Error(`Secret ${input.key} was not found for this project.`);
+    }
+    return secret;
+  }
+
+  async getSecretSummaryByKeyOrNull(input: { key: string }) {
+    return await getProjectSecretSummaryByKey(this.db(), {
+      key: input.key,
+      projectId: this.projectId(),
+    });
   }
 
   async deleteSecret(input: { key: string }) {
     return await deleteProjectSecret(this.db(), {
       key: input.key,
+      projectId: this.projectId(),
+    });
+  }
+
+  async deleteSecretById(input: { id: string }) {
+    return await deleteProjectSecretById(this.db(), {
+      id: input.id,
       projectId: this.projectId(),
     });
   }
@@ -92,6 +150,30 @@ export class SecretsCapability extends WorkerEntrypoint<
     if (!projectId) throw new Error("SecretsCapability requires ctx.props.projectId.");
     return projectId;
   }
+
+  private createSecretId() {
+    const config = parseAppConfigFromEnv({
+      configSchema: AppConfig,
+      env: this.env as unknown as Record<string, unknown>,
+      prefix: "APP_CONFIG_",
+    });
+    return projectSecretId({ typeIdPrefix: config.typeIdPrefix.exposeSecret() });
+  }
+}
+
+export function getSecretsCapability(input: {
+  exports: Pick<Cloudflare.Exports, "SecretsCapability"> | undefined;
+  props: SecretsCapabilityProps;
+}): SecretsCapabilityClient {
+  if (!input.exports) {
+    throw new Error("SecretsCapability export is not available.");
+  }
+
+  const secretsCapability = input.exports.SecretsCapability as unknown as (options: {
+    props: SecretsCapabilityProps;
+  }) => SecretsCapabilityClient;
+
+  return secretsCapability({ props: input.props });
 }
 
 function readKey(input: Record<string, unknown>) {

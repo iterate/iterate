@@ -6,7 +6,7 @@ describe("createExternalEgressProxyFetch", () => {
     const nativeFetch = vi.fn(async (request: Request) => new Response(request.url));
     const proxiedFetch = createExternalEgressProxyFetch({
       fetch: nativeFetch,
-      externalEgressProxy: "https://proxy.example.com",
+      externalEgressProxyUrl: "https://proxy.example.com",
     });
 
     const response = await proxiedFetch("https://api.example.com/v1/models?x=1", {
@@ -18,9 +18,11 @@ describe("createExternalEgressProxyFetch", () => {
 
     expect(response.ok).toBe(true);
     expect(request.url).toBe("https://proxy.example.com/v1/models?x=1");
+    expect(request.headers.get("forwarded")).toBe("proto=https;host=api.example.com");
     expect(request.headers.get("host")).toBe("proxy.example.com");
     expect(request.headers.get("x-forwarded-host")).toBe("api.example.com");
     expect(request.headers.get("x-forwarded-proto")).toBe("https");
+    expect(request.headers.get("x-forwarded-uri")).toBe("/v1/models?x=1");
     expect(request.headers.get("authorization")).toBe("Bearer test");
   });
 
@@ -28,7 +30,7 @@ describe("createExternalEgressProxyFetch", () => {
     const nativeFetch = vi.fn(async (request: Request) => new Response(request.url));
     const proxiedFetch = createExternalEgressProxyFetch({
       fetch: nativeFetch,
-      externalEgressProxy: "https://proxy.example.com/egress",
+      externalEgressProxyUrl: "https://proxy.example.com/egress",
     });
 
     await proxiedFetch("https://api.example.com/v1/models?x=1");
@@ -41,22 +43,24 @@ describe("createExternalEgressProxyFetch", () => {
     const nativeFetch = vi.fn(async (request: Request) => new Response(request.url));
     const proxiedFetch = createExternalEgressProxyFetch({
       fetch: nativeFetch,
-      externalEgressProxy: "https://proxy.example.com/egress",
+      externalEgressProxyUrl: "https://proxy.example.com/egress",
     });
 
     await proxiedFetch("https://proxy.example.com/health");
     const request = nativeFetch.mock.calls[0]?.[0] as Request;
 
     expect(request.url).toBe("https://proxy.example.com/health");
+    expect(request.headers.get("forwarded")).toBeNull();
     expect(request.headers.get("x-forwarded-host")).toBeNull();
     expect(request.headers.get("x-forwarded-proto")).toBeNull();
+    expect(request.headers.get("x-forwarded-uri")).toBeNull();
   });
 
   it("preserves request method and body", async () => {
     const nativeFetch = vi.fn(async (request: Request) => new Response(await request.text()));
     const proxiedFetch = createExternalEgressProxyFetch({
       fetch: nativeFetch,
-      externalEgressProxy: "https://proxy.example.com",
+      externalEgressProxyUrl: "https://proxy.example.com",
     });
 
     const response = await proxiedFetch("https://api.example.com/v1/chat/completions", {

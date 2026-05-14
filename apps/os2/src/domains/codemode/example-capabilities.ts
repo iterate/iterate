@@ -52,6 +52,10 @@ export class AiCapability extends WorkerEntrypoint<ExampleCapabilityEnv, Example
     }
 
     const [model, request] = input.args as [string, unknown];
+    return await this.run(model, request);
+  }
+
+  async run(model: string, request: unknown) {
     if (this.env.AI) {
       return await this.env.AI.run(model, request);
     }
@@ -89,6 +93,10 @@ export class OrpcCapability extends WorkerEntrypoint<ExampleCapabilityEnv, Examp
     }
 
     throw new Error(`OrpcCapability does not implement ${path}`);
+  }
+
+  async listProcedures() {
+    return createOrpcProcedureListing(["env", "PROJECT", "orpc"]);
   }
 }
 
@@ -215,10 +223,6 @@ function readUnaryOrpcInput(input: ExecuteCodemodeFunctionCallInput, projectId: 
   if (!request || typeof request !== "object" || Array.isArray(request)) {
     throw new Error(`ORPC codemode calls require an object input for ${input.path.join(".")}.`);
   }
-  if (Object.hasOwn(request, "projectSlugOrId")) {
-    throw new Error("ORPC codemode callers must not supply projectSlugOrId.");
-  }
-
   return {
     ...(request as Record<string, unknown>),
     projectSlugOrId: projectId,

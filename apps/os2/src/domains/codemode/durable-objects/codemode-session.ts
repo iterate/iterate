@@ -33,6 +33,7 @@ import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
 import { createOutboundMcpFromOurClientToolProviderRegistration } from "~/domains/outbound-mcp-client/utils/outbound-mcp-provider-registration.ts";
 import { createOpenApiProviderRegistration } from "~/rpc-targets/openapi-provider-registration.ts";
+import { type ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
 
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
 export { OutboundMcpFromOurClientCapability } from "~/domains/outbound-mcp-client/entrypoints/outbound-mcp-from-our-client-capability.ts";
@@ -107,6 +108,7 @@ export type CodemodeSessionEnv = {
   CODEMODE_SESSION: DurableObjectNamespace<CodemodeSession>;
   DO_CATALOG: D1Database;
   LOADER?: WorkerLoader;
+  PROJECT?: DurableObjectNamespace<ProjectDurableObject>;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
 } & Record<string, unknown>;
 
@@ -157,6 +159,10 @@ const CodemodeSessionRunnerBase = withStreamProcessorRunner<
   typeof CodemodeProcessorContract
 >({
   processor(args) {
+    const projectCapability = args.ctx.exports.ProjectCapability({
+      props: { projectId: args.structuredName.projectId },
+    });
+
     return createCodemodeProcessor({
       buildSessionCapabilityCallable: () => {
         const session = args.instance as unknown as {
@@ -181,6 +187,10 @@ const CodemodeSessionRunnerBase = withStreamProcessorRunner<
       },
       newId: () => crypto.randomUUID(),
       scriptExecutor: createCloudflareCodemodeScriptExecutor({
+        env: {
+          PROJECT: projectCapability,
+          project: projectCapability,
+        },
         getSessionCapability: () => {
           const session = args.instance as unknown as {
             getCodemodeSessionCapability(): CodemodeProcessorSession;
@@ -188,6 +198,7 @@ const CodemodeSessionRunnerBase = withStreamProcessorRunner<
           return session.getCodemodeSessionCapability();
         },
         loader: args.env.LOADER,
+        outboundFetch: projectCapability,
       }),
     });
   },
@@ -833,8 +844,10 @@ function resolveProcessorStreamPath(input: { basePath: StreamPath; pathInput?: s
 }
 
 function createCloudflareCodemodeScriptExecutor(input: {
+  env?: Record<string, unknown>;
   getSessionCapability?: () => CodemodeProcessorSession;
   loader: WorkerLoader | undefined;
+  outboundFetch: Fetcher;
 }): CodemodeScriptExecutor {
   return async ({ code, logger, scriptExecutionId, session }) => {
     if (!input.loader) {
@@ -856,7 +869,8 @@ function createCloudflareCodemodeScriptExecutor(input: {
             "executor.js": buildScriptExecutorModule(),
             "user-code.js": buildUserCodeModule(code),
           },
-          globalOutbound: null,
+          env: input.env,
+          globalOutbound: input.outboundFetch,
         })
         .getEntrypoint() as unknown as CodemodeExecutorEntrypoint;
 
@@ -1036,6 +1050,7 @@ function __stringify(value) {
           error: (...args) => console.error(...args),
         };
       }
+      if (key === "env" && path.length === 0) return options.env;
       if (typeof key !== "string") return undefined;
       return make([...path, key]);
 	    },
@@ -1082,6 +1097,7 @@ function __stringify(value) {
 	    };
 	    const ctx = __createCodemodeContext({
 	      codemodeSessionCapability: __codemodeSessionCapability,
+	      env: this.env,
 	      scriptExecutionId: __scriptExecutionId,
 	    });
 

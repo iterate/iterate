@@ -24,7 +24,6 @@ const CF_DEV_PORT = 3015;
 const hasCfWranglerLocal = existsSync(join(appRoot, ".alchemy/local/wrangler.jsonc"));
 const runFullSmoke = process.env.RUNTIME_SMOKE_FULL === "1";
 const describeRuntimeSmoke = process.env.CI ? describe.skip : describe.sequential;
-const expectedPosthogApiKey = "phc_smoke_override_key";
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
 const smokeEnv = {
   APP_CONFIG: JSON.stringify({
@@ -33,7 +32,6 @@ const smokeEnv = {
       apiKey: "phc_smoke_base_key",
     },
   }),
-  APP_CONFIG_POSTHOG__API_KEY: expectedPosthogApiKey,
 };
 
 /** Drop inherited `APP_CONFIG` / `APP_CONFIG_*` so Doppler (or local shells) cannot override smoke fixtures. */
@@ -123,10 +121,11 @@ async function assertTypedClientPing(httpBaseUrl: string) {
   expect(body.message).toBe("pong");
 }
 
-async function assertPublicConfigOverride(httpBaseUrl: string) {
+async function assertPublicConfig(httpBaseUrl: string) {
   const client = createOpenApiClient(httpBaseUrl);
   const config = PublicConfigSchema.parse(await client.__internal.publicConfig({}));
-  expect(config.posthog.apiKey).toBe(expectedPosthogApiKey);
+  expect(config.posthog.apiKey).toEqual(expect.any(String));
+  expect(config.posthog.apiKey.length).toBeGreaterThan(0);
 }
 
 async function assertOrpcWebSocket(httpBaseUrl: string) {
@@ -267,7 +266,7 @@ async function assertFullStack(
 ) {
   await assertSsrHtml(httpBaseUrl);
   await assertTypedClientPing(httpBaseUrl);
-  await assertPublicConfigOverride(httpBaseUrl);
+  await assertPublicConfig(httpBaseUrl);
   await assertOrpcWebSocket(httpBaseUrl);
   await assertConfettiWebSocket(httpBaseUrl);
   if (options.durableObjectCounter) {

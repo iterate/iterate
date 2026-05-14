@@ -1,4 +1,5 @@
 import type { Client } from "sqlfu";
+import { typeid } from "@iterate-com/shared/typeid";
 
 export type ProjectSecret = {
   id: string;
@@ -48,7 +49,14 @@ type ProjectConnectionRow = {
   updated_at: string;
 };
 
-function id(prefix: string) {
+export function projectSecretId(input: { typeIdPrefix: string }) {
+  return typeid({
+    env: { TYPEID_PREFIX: input.typeIdPrefix },
+    prefix: "sec",
+  });
+}
+
+function legacyId(prefix: string) {
   return `${prefix}_${crypto.randomUUID().replaceAll("-", "")}`;
 }
 
@@ -75,7 +83,7 @@ function toSecretSummary(secret: ProjectSecret): ProjectSecretSummary {
   const { material: _material, ...rest } = secret;
   return {
     ...rest,
-    hasMaterial: true,
+    hasMaterial: secret.material.length > 0,
   };
 }
 
@@ -110,6 +118,39 @@ export async function getProjectSecret(
   return rows[0] ? toSecret(rows[0]) : null;
 }
 
+export async function getProjectSecretById(
+  db: Client,
+  input: { id: string; projectId: string },
+): Promise<ProjectSecret | null> {
+  const rows = await db.all<ProjectSecretRow>({
+    name: "getProjectSecretById",
+    sql: `
+      select id, project_id, key, material, metadata, created_at, updated_at
+      from project_secrets
+      where project_id = ? and id = ?
+      limit 1
+    `,
+    args: [input.projectId, input.id],
+  });
+  return rows[0] ? toSecret(rows[0]) : null;
+}
+
+export async function getProjectSecretSummaryById(
+  db: Client,
+  input: { id: string; projectId: string },
+): Promise<ProjectSecretSummary | null> {
+  const secret = await getProjectSecretById(db, input);
+  return secret ? toSecretSummary(secret) : null;
+}
+
+export async function getProjectSecretSummaryByKey(
+  db: Client,
+  input: { key: string; projectId: string },
+): Promise<ProjectSecretSummary | null> {
+  const secret = await getProjectSecret(db, input);
+  return secret ? toSecretSummary(secret) : null;
+}
+
 export async function listProjectSecrets(
   db: Client,
   input: { projectId: string },
@@ -130,13 +171,13 @@ export async function listProjectSecrets(
 export async function upsertProjectSecret(
   db: Client,
   input: {
+    id: string;
     key: string;
     material: string;
     metadata?: Record<string, unknown>;
     projectId: string;
   },
 ): Promise<ProjectSecret> {
-  const secretId = id("sec");
   const metadata = JSON.stringify(input.metadata ?? {});
   const rows = await db.all<ProjectSecretRow>({
     name: "upsertProjectSecret",
@@ -149,11 +190,24 @@ export async function upsertProjectSecret(
         updated_at = excluded.updated_at
       returning id, project_id, key, material, metadata, created_at, updated_at
     `,
-    args: [secretId, input.projectId, input.key, input.material, metadata],
+    args: [input.id, input.projectId, input.key, input.material, metadata],
   });
   const row = rows[0];
   if (!row) throw new Error(`Failed to upsert project secret ${input.key}.`);
   return toSecret(row);
+}
+
+export async function upsertProjectSecretSummary(
+  db: Client,
+  input: {
+    id: string;
+    key: string;
+    material: string;
+    metadata?: Record<string, unknown>;
+    projectId: string;
+  },
+): Promise<ProjectSecretSummary> {
+  return toSecretSummary(await upsertProjectSecret(db, input));
 }
 
 export async function deleteProjectSecret(
@@ -164,6 +218,18 @@ export async function deleteProjectSecret(
     name: "deleteProjectSecret",
     sql: "delete from project_secrets where project_id = ? and key = ?",
     args: [input.projectId, input.key],
+  });
+  return { deleted: (result.rowsAffected ?? 0) > 0 };
+}
+
+export async function deleteProjectSecretById(
+  db: Client,
+  input: { id: string; projectId: string },
+): Promise<{ deleted: boolean }> {
+  const result = await db.run({
+    name: "deleteProjectSecretById",
+    sql: "delete from project_secrets where project_id = ? and id = ?",
+    args: [input.projectId, input.id],
   });
   return { deleted: (result.rowsAffected ?? 0) > 0 };
 }
@@ -215,7 +281,7 @@ export async function upsertProjectConnection(
     webhookProviderIdentifier?: string | null;
   },
 ): Promise<ProjectConnection> {
-  const connectionId = id("conn");
+  const connectionId = legacyId("conn");
   const rows = await db.all<ProjectConnectionRow>({
     name: "upsertProjectConnection",
     sql: `

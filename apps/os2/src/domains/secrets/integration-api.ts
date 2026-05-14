@@ -10,6 +10,7 @@ import {
 import {
   consumeOAuthState,
   getProjectConnectionByWebhookIdentifier,
+  projectSecretId,
   upsertProjectConnection,
   upsertProjectSecret,
 } from "~/domains/secrets/secrets-store.ts";
@@ -112,6 +113,7 @@ async function handleSlackCallback(input: {
     webhookProviderIdentifier: tokenData.team.id,
   });
   await upsertProjectSecret(input.context.db, {
+    id: projectSecretId({ typeIdPrefix: input.context.config.typeIdPrefix.exposeSecret() }),
     key: providerSecretKey("slack"),
     material: tokenData.access_token,
     metadata: {
@@ -219,6 +221,7 @@ async function handleGoogleCallback(input: {
     scopes: tokenData.scope ?? config.scopes.join(" "),
   });
   await upsertProjectSecret(input.context.db, {
+    id: projectSecretId({ typeIdPrefix: input.context.config.typeIdPrefix.exposeSecret() }),
     key: providerSecretKey("google"),
     material: tokenData.access_token,
     metadata: {

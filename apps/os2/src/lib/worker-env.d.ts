@@ -13,6 +13,7 @@ type WorkerMainModule = Pick<
     | "GmailCapability"
     | "OpenApiBridge"
     | "OrpcCapability"
+    | "ProjectCapability"
     | "ProjectIngressEntrypoint"
     | "ProjectMcpServerEntrypoint"
     | "RepoCapability"

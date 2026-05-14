@@ -208,6 +208,25 @@ function ProjectSidebarGroup({
             <SidebarMenuSubButton
               render={
                 <Link
+                  to="/orgs/$organizationSlug/projects/$projectSlug/secrets"
+                  params={{ organizationSlug, projectSlug }}
+                />
+              }
+              isActive={Boolean(
+                matchRoute({
+                  to: "/orgs/$organizationSlug/projects/$projectSlug/secrets",
+                  params: { organizationSlug, projectSlug },
+                  fuzzy: true,
+                }),
+              )}
+            >
+              <span>Secrets</span>
+            </SidebarMenuSubButton>
+          </SidebarMenuSubItem>
+          <SidebarMenuSubItem>
+            <SidebarMenuSubButton
+              render={
+                <Link
                   to="/orgs/$organizationSlug/projects/$projectSlug/examples"
                   params={{ organizationSlug, projectSlug }}
                 />

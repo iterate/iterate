@@ -60,4 +60,5 @@ export type ProjectsRow = {
   custom_hostname: string | null;
   created_at: string;
   updated_at: string;
+  external_egress_proxy_url: string | null;
 };

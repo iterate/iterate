@@ -3,6 +3,10 @@ import type { ToolProviderRegistration } from "@iterate-com/shared/stream-proces
 import { createDefaultCodemodeProviderRegistrations } from "./default-provider-registrations.ts";
 import { createExampleCapabilityProviders } from "./example-provider-registrations.ts";
 import { createOutboundMcpFromOurClientToolProviderRegistration } from "~/domains/outbound-mcp-client/utils/outbound-mcp-provider-registration.ts";
+import {
+  EXAMPLE_EGRESS_SECRET_KEY,
+  EXAMPLE_EGRESS_SECRET_MATERIAL,
+} from "~/domains/secrets/example-secret.ts";
 import { createOpenApiProviderRegistration } from "~/rpc-targets/openapi-provider-registration.ts";
 
 export type CodemodeExampleScript = {
@@ -86,6 +90,99 @@ const codemodeExampleSeeds = [
         type: "events.iterate.com/codemode/example-note",
         payload: {
           message: "Registers loopback RPC providers for ai, repos, workspace, agents, and os.",
+        },
+      },
+    ],
+  },
+  {
+    slug: "project-capability-pipelining",
+    name: "Project capability pipelining",
+    description:
+      "Use ctx.env.PROJECT as a Cloudflare RPC service binding, then pipeline through nested project-scoped capabilities.",
+    providers: [],
+    code: `async (ctx) => {
+  const streamPath = \`/codemode/project-capability-\${Date.now()}\`;
+  const project = ctx.env.PROJECT;
+  const lowerCaseProject = ctx.env.project;
+
+  const firstAppendPromise = project.streams().append({
+    streamPath,
+    event: {
+      type: "events.iterate.com/codemode/example-note",
+      payload: { message: "project capability direct stream append" },
+    },
+  });
+  const batchAppendPromise = ctx.env.PROJECT.streams().appendBatch({
+    streamPath,
+    events: [
+      {
+        type: "events.iterate.com/codemode/example-note",
+        payload: { message: "project capability batch append one" },
+      },
+      {
+        type: "events.iterate.com/codemode/example-note",
+        payload: { message: "project capability batch append two" },
+      },
+    ],
+  });
+  const aiPromise = ctx.env.PROJECT.ai().run("test-model", {
+    prompt: "show that nested project capability RPC works",
+  });
+  const agentMessagePromise = ctx.env.PROJECT.agents().create().sendMessage({
+    message: "hello from env project",
+    subPath: "project-capability-pipelining",
+  });
+  const agentThingPromise = project.agents().create().doThing({
+    label: "project-pipeline",
+    value: 21,
+  });
+  const reposPromise = project.repos().list();
+  const proceduresPromise = project.orpc().listProcedures();
+
+  const [firstAppend, batchAppends, ai, agentMessage, agentThing, repos, procedures] =
+    await Promise.all([
+      firstAppendPromise,
+      batchAppendPromise,
+      aiPromise,
+      agentMessagePromise,
+      agentThingPromise,
+      reposPromise,
+      proceduresPromise,
+    ]);
+
+  const lowerCaseAppend = await lowerCaseProject.streams().append({
+    streamPath,
+    event: {
+      type: "events.iterate.com/codemode/example-note",
+      payload: { message: "project capability lowercase env alias" },
+    },
+  });
+  const [events, state] = await Promise.all([
+    project.streams().read({ streamPath, afterOffset: "start" }),
+    project.streams().getState({ streamPath }),
+  ]);
+
+  return {
+    aiModel: ai.model,
+    agentMessage: agentMessage.message,
+    agentThing,
+    batchAppendCount: batchAppends.length,
+    eventMessages: events
+      .filter((event) => event.type === "events.iterate.com/codemode/example-note")
+      .map((event) => event.payload.message),
+    firstAppendOffset: firstAppend.offset,
+    lowerCaseAppendOffset: lowerCaseAppend.offset,
+    repoCount: repos.length,
+    streamInitialized: state != null,
+    proceduresIncludeStreams: procedures.includes("streams") && procedures.includes("list"),
+  };
+}`,
+    events: [
+      {
+        type: "events.iterate.com/codemode/example-note",
+        payload: {
+          message:
+            "ctx.env.PROJECT is injected into the dynamic Worker Loader env as a project-scoped WorkerEntrypoint binding.",
         },
       },
     ],
@@ -741,6 +838,49 @@ const codemodeExampleSeeds = [
       {
         type: "events.iterate.com/codemode/example-note",
         payload: { message: "custom events are ordinary event inputs" },
+      },
+    ],
+  },
+  {
+    slug: "egress-secret-echo",
+    name: "Verify egress secret substitution",
+    description:
+      "Call a public echo server with a getSecret(...) header and verify the Project Durable Object substituted the seeded example secret.",
+    providers: [],
+    code: `async () => {
+  const headerName = "x-iterate-example-secret";
+  const response = await fetch("https://httpbingo.org/anything", {
+    headers: {
+      [headerName]: "Bearer getSecret({ key: \\"${EXAMPLE_EGRESS_SECRET_KEY}\\" })",
+    },
+  });
+  if (!response.ok) throw new Error(\`Echo server returned \${response.status}\`);
+
+  const body = await response.json();
+  const echoedHeader = body.headers?.[headerName] ?? body.headers?.["X-Iterate-Example-Secret"];
+  const echoedValue = Array.isArray(echoedHeader) ? echoedHeader.join(", ") : String(echoedHeader ?? "");
+  const expectedValue = "Bearer ${EXAMPLE_EGRESS_SECRET_MATERIAL}";
+
+  if (echoedValue !== expectedValue) {
+    throw new Error(\`Expected \${headerName} to echo \${expectedValue}, got \${echoedValue}\`);
+  }
+
+  console.log("egress secret substitution worked", { headerName, echoedValue });
+  return {
+    echoUrl: body.url,
+    headerName,
+    echoedValue,
+    secretKey: "${EXAMPLE_EGRESS_SECRET_KEY}",
+    secretReferenceWasSubstituted: true,
+  };
+}`,
+    events: [
+      {
+        type: "events.iterate.com/codemode/example-note",
+        payload: {
+          message:
+            "New projects seed an example secret so this script can prove fetch egress header substitution with httpbingo.org.",
+        },
       },
     ],
   },

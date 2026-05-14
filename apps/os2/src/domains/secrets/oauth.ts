@@ -6,6 +6,7 @@ import {
   deleteProjectSecret,
   getProjectConnection,
   getProjectSecret,
+  projectSecretId,
   upsertProjectSecret,
 } from "~/domains/secrets/secrets-store.ts";
 
@@ -173,6 +174,7 @@ export async function getFreshGoogleAccessToken(input: {
   }
 
   await upsertProjectSecret(input.db, {
+    id: projectSecretId({ typeIdPrefix: input.config.typeIdPrefix.exposeSecret() }),
     key: providerSecretKey("google"),
     material: tokenData.access_token,
     metadata: {

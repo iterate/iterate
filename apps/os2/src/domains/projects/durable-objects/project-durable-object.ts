@@ -1,6 +1,7 @@
 import { createD1Client } from "sqlfu";
 import { z } from "zod";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
+import { createExternalEgressProxyFetch } from "@iterate-com/shared/apps/fetch-egress-proxy";
 import type { Callable, FetchCallable } from "@iterate-com/shared/callable/types.ts";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
@@ -46,12 +47,22 @@ import {
 } from "~/domains/projects/stream-processors/project-lifecycle.ts";
 import { createProjectWildcardCNAMERecord as createCloudflareProjectWildcardCNAMERecord } from "~/domains/projects/cloudflare-dns.ts";
 import {
+  ProjectEgressSecretSubstitutionError,
+  substituteProjectEgressSecretHeaders,
+} from "~/domains/projects/egress-secret-substitution.ts";
+import {
   type RepoDurableObject,
   type RepoInfo,
 } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import { stripArtifactTokenQuery } from "~/domains/repos/artifacts.ts";
 import { getReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 import { ITERATE_CONFIG_REPO_SLUG } from "~/domains/repos/iterate-config-repo.ts";
+import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
+import {
+  EXAMPLE_EGRESS_SECRET_KEY,
+  EXAMPLE_EGRESS_SECRET_MATERIAL,
+  EXAMPLE_EGRESS_SECRET_METADATA,
+} from "~/domains/secrets/example-secret.ts";
 
 export type ProjectStructuredName = {
   projectId: string;
@@ -131,7 +142,7 @@ type ProjectDynamicWorkerModule =
 type ProjectDynamicWorkerCode = {
   compatibilityDate: string;
   compatibilityFlags: string[];
-  globalOutbound: null;
+  globalOutbound: Fetcher | null;
   mainModule: string;
   modules: Record<string, ProjectDynamicWorkerModule>;
 };
@@ -298,6 +309,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
       db: this.env.DB,
       input,
     });
+    await this.ensureExampleEgressSecret(input.projectId);
     await this.writeIngressRoutes({ hosts, projectId: input.projectId });
     const summary = this.requireSummary();
     await this.writeProjectCreatedLifecycleEvent(summary);
@@ -325,6 +337,24 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     } catch (error) {
       console.error(`[ProjectDO] finishProjectSetup failed for ${summary.id}:`, error);
     }
+  }
+
+  private async ensureExampleEgressSecret(projectId: string) {
+    const secrets = getSecretsCapability({
+      exports: readLoopbackExports(this.ctx),
+      props: { projectId },
+    });
+
+    const existing = await secrets.getSecretSummaryByKeyOrNull({
+      key: EXAMPLE_EGRESS_SECRET_KEY,
+    });
+    if (existing) return;
+
+    await secrets.setSecret({
+      key: EXAMPLE_EGRESS_SECRET_KEY,
+      material: EXAMPLE_EGRESS_SECRET_MATERIAL,
+      metadata: EXAMPLE_EGRESS_SECRET_METADATA,
+    });
   }
 
   async checkAccess(input: { principal: ProjectAccessPrincipal }): Promise<ProjectSummary> {
@@ -420,6 +450,51 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
       );
       return projectLandingResponse({ request, summary });
     }
+  }
+
+  async egressFetch(request: Request): Promise<Response> {
+    if (!isHttpRequestUrl(request.url)) {
+      return await fetch(request);
+    }
+
+    await this.ensureStarted();
+    const summary = this.requireSummary();
+    const externalEgressProxyUrl = await this.getExternalEgressProxyUrl(summary.id);
+    const secrets = getSecretsCapability({
+      exports: readLoopbackExports(this.ctx),
+      props: { projectId: summary.id },
+    });
+
+    let substitutedHeaders: Awaited<ReturnType<typeof substituteProjectEgressSecretHeaders>>;
+    try {
+      substitutedHeaders = await substituteProjectEgressSecretHeaders({
+        externalEgressProxyUrl,
+        headers: request.headers,
+        secrets,
+      });
+    } catch (error) {
+      if (error instanceof ProjectEgressSecretSubstitutionError) {
+        return error.toResponse();
+      }
+      throw error;
+    }
+
+    const outboundRequest = substitutedHeaders.substituted
+      ? new Request(request, { headers: substitutedHeaders.headers })
+      : request;
+
+    if (externalEgressProxyUrl) {
+      return await createExternalEgressProxyFetch({
+        fetch,
+        externalEgressProxyUrl,
+      })(outboundRequest);
+    }
+
+    return await fetch(outboundRequest);
+  }
+
+  async fetch(request: Request): Promise<Response> {
+    return await this.egressFetch(request);
   }
 
   private async getIngressProjectDynamicWorkerEntrypoint(
@@ -518,7 +593,13 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
           commitOid: checkout.commitOid,
           projectId: input.projectId,
         }),
-        () => checkout.workerCode,
+        () =>
+          projectDynamicWorkerCodeWithOutboundFetch({
+            outboundFetch: readProjectLoopbackExports(this.ctx).ProjectCapability({
+              props: { projectId: input.projectId },
+            }),
+            workerCode: checkout.workerCode,
+          }),
       )
       .getEntrypoint();
 
@@ -540,6 +621,15 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     await this.ctx.storage.delete(PROJECT_CONFIG_REFRESHED_AT_STORAGE_KEY);
   }
 
+  private async getExternalEgressProxyUrl(projectId: string) {
+    const row = await this.env.DB.prepare(
+      `SELECT external_egress_proxy_url FROM projects WHERE id = ? LIMIT 1`,
+    )
+      .bind(projectId)
+      .first<{ external_egress_proxy_url: string | null }>();
+    return row?.external_egress_proxy_url ?? null;
+  }
+
   private async projectConfigCheckoutIsFresh() {
     const refreshedAt = await this.ctx.storage.get<number>(PROJECT_CONFIG_REFRESHED_AT_STORAGE_KEY);
     return (
@@ -554,20 +644,6 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
   ): Promise<ProjectConfigCheckout> {
     const repo = await this.getOrCreateIterateConfigRepo(summary);
     const { git, workspace } = await this.getProjectConfigWorkspace(summary.id);
-
-    if (await workspace.hasFile(`${PROJECT_CONFIG_DIR}/.git/HEAD`)) {
-      let checkoutIsUsable = true;
-      try {
-        await git.status({ dir: PROJECT_CONFIG_DIR });
-      } catch {
-        checkoutIsUsable = false;
-      }
-
-      if (checkoutIsUsable) {
-        await this.refreshProjectConfigRepo({ git, repo });
-        return await this.readProjectConfigCheckout({ git, workspace });
-      }
-    }
 
     await workspace.removePath({
       force: true,
@@ -584,19 +660,6 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
       dir: PROJECT_CONFIG_DIR,
       branch: input.repo.defaultBranch,
       depth: 1,
-      ...artifactGitAuth(input.repo),
-    });
-  }
-
-  protected async refreshProjectConfigRepo(input: { git: ProjectConfigGit; repo: RepoInfo }) {
-    await input.git.pull({
-      dir: PROJECT_CONFIG_DIR,
-      remote: "origin",
-      ref: input.repo.defaultBranch,
-      author: {
-        name: "Iterate",
-        email: "support@iterate.com",
-      },
       ...artifactGitAuth(input.repo),
     });
   }
@@ -1145,7 +1208,7 @@ function projectDynamicWorkerId(input: { commitOid: string; projectId: string })
   return `project-ingress:${input.projectId}:${input.commitOid}`;
 }
 
-function projectDynamicWorkerCode(workerSource: string) {
+function projectDynamicWorkerCode(input: string) {
   return {
     compatibilityDate: PROJECT_DYNAMIC_WORKER_COMPATIBILITY_DATE,
     compatibilityFlags: PROJECT_DYNAMIC_WORKER_COMPATIBILITY_FLAGS,
@@ -1153,9 +1216,19 @@ function projectDynamicWorkerCode(workerSource: string) {
     mainModule: PROJECT_DYNAMIC_WORKER_MAIN_MODULE,
     modules: {
       [PROJECT_DYNAMIC_WORKER_MAIN_MODULE]: {
-        js: workerSource,
+        js: input,
       },
     },
+  };
+}
+
+function projectDynamicWorkerCodeWithOutboundFetch(input: {
+  outboundFetch: Fetcher;
+  workerCode: ProjectDynamicWorkerCode;
+}): ProjectDynamicWorkerCode {
+  return {
+    ...input.workerCode,
+    globalOutbound: input.outboundFetch,
   };
 }
 
@@ -1285,6 +1358,11 @@ function projectLandingResponse(input: { request: Request; summary: ProjectSumma
   );
 }
 
+function isHttpRequestUrl(urlString: string) {
+  const url = new URL(urlString);
+  return url.protocol === "http:" || url.protocol === "https:";
+}
+
 function projectWorkerBuildingResponse() {
   return new Response("This worker is currently being built.", {
     status: 503,
@@ -1323,6 +1401,14 @@ function projectRuntimeEnv(env: ProjectEnv): ProjectRuntimeEnv {
 
 function readLoopbackExports(ctx: DurableObjectState) {
   return ctx.exports;
+}
+
+function readProjectLoopbackExports(ctx: DurableObjectState): {
+  ProjectCapability(input: { props: { projectId: string } }): Fetcher;
+} {
+  return ctx.exports as unknown as {
+    ProjectCapability(input: { props: { projectId: string } }): Fetcher;
+  };
 }
 
 function isProjectDynamicWorkerEntrypoint(value: unknown): value is ProjectDynamicWorkerEntrypoint {

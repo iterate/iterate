@@ -42,12 +42,24 @@ _Avoid_: App, site, workspace
 The ownership boundary for a persisted OS2 record: Project, Clerk Organization, Clerk User, or Global.
 _Avoid_: Tenant type, resource kind
 
+**ID**:
+A stable TypeID-prefixed identifier minted by OS2 for a durable domain object.
+_Avoid_: slug, key, database rowid
+
+**Slug**:
+A human-readable locator constrained to hostname-safe lowercase letters, numbers, and hyphens.
+_Avoid_: ID, arbitrary key
+
+**Key**:
+An arbitrary string locator chosen by a caller or integration for project-local lookup.
+_Avoid_: ID, slug, hostname label
+
 **Project ID**:
-The stable OS2 identifier for a Project.
+The stable TypeID-prefixed OS2 identifier for a Project.
 _Avoid_: Project slug, Project Route
 
 **Project Slug**:
-The globally unique human-readable slug used in Project Routes.
+The globally unique hostname-safe Slug used in Project Routes.
 _Avoid_: Project ID
 
 **Project Route**:
@@ -137,6 +149,18 @@ _Avoid_: Project Ingress, implemented gateway, implemented secret system
 **Codemode Fetch Capability**:
 The default RPC Tool Provider used by codemode for ordinary Script `fetch(...)` and `ctx.fetch(...)` calls.
 _Avoid_: Raw Dynamic Worker fetch, untraced public fetch
+
+**D1-backed Secrets Capability**:
+The current project-bound capability authority for storing, listing, reading, updating, and deleting Project Secrets in D1.
+_Avoid_: Secret Durable Object, oRPC secrets service
+
+**Secret ID**:
+The stable TypeID-prefixed identifier for one Project Secret.
+_Avoid_: Secret Key, Secret Slug
+
+**Secret Key**:
+The project-local arbitrary Key used by Secret References to resolve one Project Secret.
+_Avoid_: Secret ID, Secret Slug, hostname-safe name
 
 **Project MCP Server Entry Point**:
 A named WorkerEntrypoint exported as `ProjectMcpServerEntrypoint` that receives Project identity as props and exposes that Project's MCP server as a fetch destination.
@@ -494,6 +518,7 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - **ReposCapability** owns Repo collection semantics for one **Project**; project-scoped oRPC procedures and codemode both use it instead of duplicating Repo lifecycle logic.
 - Creating a **Repo** is explicit through **ReposCapability** create behavior and fails if that Repo already exists.
 - Selecting a missing **Repo** returns a not-found result and should not initialize a **Repo Durable Object**.
+- A **Key** may contain characters that are not valid in a **Slug**; do not use a Key where OS2 needs hostname-safe routing.
 - A **Project Route** includes both the owning **Clerk Organization** slug and the **Project** slug.
 - A **Project Slug** is route identity and may change; a **Project ID** is stable identity.
 - A **Project Route** resolves its **Project Slug** before rendering Project-local UI. Project-scoped oRPC procedures still accept `projectSlugOrId` so the same API remains curlable by slug or callable by stable Project ID.
@@ -528,6 +553,14 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - The **Project Ingress Entry Point** takes only a stable **Project ID** prop in v1, resolves the Project Durable Object stub by using that **Project ID** as the Durable Object name, and delegates the request to the Project Durable Object's ingress RPC.
 - The **Project Ingress Entry Point** does not accept **Project Slug** props in v1; slug-to-ID resolution happens before a request reaches hot ingress.
 - **Project Egress** is future work. Until it is implemented, codemode Script `fetch(...)` calls go through the default **Codemode Fetch Capability** so they are traceable as Function Calls.
+- Project-scoped oRPC Secret CRUD is an adapter over the **D1-backed Secrets Capability**; oRPC must not reimplement Secret storage behavior directly.
+- Project-scoped oRPC Secret reads return redacted Secret summaries and metadata, not raw Secret material.
+- The first Project Egress Secret Injection proof also resolves Secret material through the **D1-backed Secrets Capability**; Secret Durable Objects are not in the immediate substitution path.
+- A **Project Secret** has a stable **Secret ID** for management routes and CRUD reads/removals.
+- A **Project Secret** has one **Secret Key** that is unique within its **Project**.
+- **Secret Keys** are arbitrary strings and are not required to be URL-safe.
+- Upserting a **Project Secret** by **Secret Key** preserves the existing **Secret ID** when that key already exists in the Project.
+- **Secret References** resolve by **Secret Key**, such as `getSecret({ key: "openai-api-key" })`.
 - The **Project MCP Server Entry Point** class/export name is `ProjectMcpServerEntrypoint`.
 - The **Project MCP Server Entry Point** is a fetch-based Worker entrypoint, not a Tool Provider or Capability wrapper.
 - The **Project MCP Server Entry Point** takes only a stable **Project ID** prop in v1 and is the default project-local MCP server fetch destination.

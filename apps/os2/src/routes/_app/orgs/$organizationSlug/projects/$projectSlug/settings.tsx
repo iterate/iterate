@@ -47,6 +47,9 @@ function ProjectDetailContent({
   const router = useRouter();
   const queryClient = useQueryClient();
   const [customHostname, setCustomHostname] = useState(project.customHostname ?? "");
+  const [externalEgressProxyUrl, setExternalEgressProxyUrl] = useState(
+    project.externalEgressProxyUrl ?? "",
+  );
   const updateConfig = useMutation(
     orpc.projects.updateConfig.mutationOptions({
       onSuccess: () => {
@@ -64,8 +67,9 @@ function ProjectDetailContent({
     updateConfig.mutate({
       id: project.id,
       customHostname: customHostname.trim() === "" ? null : customHostname,
+      externalEgressProxyUrl: externalEgressProxyUrl.trim() === "" ? null : externalEgressProxyUrl,
     });
-  }, [customHostname, project.id, updateConfig]);
+  }, [customHostname, externalEgressProxyUrl, project.id, updateConfig]);
 
   return (
     <section className="space-y-4 p-4">
@@ -101,11 +105,24 @@ function ProjectDetailContent({
               onChange={(event) => setCustomHostname(event.target.value)}
               onKeyDown={(event) => event.key === "Enter" && handleUpdateConfig()}
             />
-            <Button size="sm" onClick={handleUpdateConfig} disabled={updateConfig.isPending}>
-              {updateConfig.isPending ? "Saving..." : "Save"}
-            </Button>
           </div>
         </div>
+
+        <div className="space-y-2">
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">
+            External egress proxy URL
+          </p>
+          <Input
+            placeholder="https://proxy.example.com"
+            value={externalEgressProxyUrl}
+            onChange={(event) => setExternalEgressProxyUrl(event.target.value)}
+            onKeyDown={(event) => event.key === "Enter" && handleUpdateConfig()}
+          />
+        </div>
+
+        <Button size="sm" onClick={handleUpdateConfig} disabled={updateConfig.isPending}>
+          {updateConfig.isPending ? "Saving..." : "Save"}
+        </Button>
 
         <div className="space-y-1">
           <p className="text-xs uppercase tracking-wide text-muted-foreground">Created</p>

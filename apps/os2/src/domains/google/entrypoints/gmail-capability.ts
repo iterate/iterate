@@ -33,6 +33,10 @@ export class GmailCapability extends WorkerEntrypoint<GmailCapabilityEnv, GmailC
     }
 
     const request = parseGmailRequestInput(input.args[0]);
+    return await this.request(request);
+  }
+
+  async request(request: GmailRequestInput) {
     const token = await this.readToken();
     return await callGmailApi({ request, token });
   }

@@ -145,6 +145,9 @@ export class ProjectDurableObject extends RealProjectDurableObject {
 }
 export { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
+export { ProjectCapability } from "~/domains/projects/entrypoints/project-capability.ts";
+export { SecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
+export { OrpcCapability } from "~/domains/codemode/example-capabilities.ts";
 export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 export {
@@ -179,6 +182,55 @@ export default {
       }
 
       return Response.json(project);
+    }
+
+    if (url.pathname === "/__test/upsert-secret") {
+      const secret = await ctx.exports
+        .OrpcCapability({ props: { projectId: "proj__local__test" } })
+        .executeCodemodeFunctionCall({
+          args: [
+            {
+              key: url.searchParams.get("key") ?? "openai",
+              material: url.searchParams.get("material") ?? "mvp-secret-value",
+            },
+          ],
+          codemodeSessionCapability: {
+            async callFunction() {
+              throw new Error("Project ingress tests do not route nested codemode calls.");
+            },
+          },
+          functionCallId: crypto.randomUUID(),
+          functionPath: ["secrets", "upsert"],
+          invocationKind: "rpc",
+          path: ["PROJECT", "orpc", "secrets", "upsert"],
+          providerPath: ["PROJECT", "orpc"],
+        });
+      return Response.json(secret);
+    }
+
+    if (url.pathname === "/__test/set-external-egress-proxy-url") {
+      await env.DB.prepare(`UPDATE projects SET external_egress_proxy_url = ? WHERE id = ?`)
+        .bind(url.searchParams.get("url"), "proj__local__test")
+        .run();
+      return Response.json({ ok: true });
+    }
+
+    if (url.pathname === "/__test/egress") {
+      const target = url.searchParams.get("target") ?? "https://os.iterate.localhost/__test/echo";
+      return await env.PROJECT.getByName(
+        getProjectDurableObjectName("proj__local__test"),
+      ).egressFetch(
+        new Request(target, {
+          headers: request.headers,
+        }),
+      );
+    }
+
+    if (url.pathname === "/__test/echo" || url.pathname.startsWith("/__test/proxy/")) {
+      return Response.json({
+        headers: Object.fromEntries(request.headers),
+        url: request.url,
+      });
     }
 
     if (url.pathname === "/__test/project-stream") {
@@ -256,7 +308,8 @@ async function ensureD1Schema(db: D1Database) {
         slug text not null unique,
         custom_hostname text unique,
         created_at text not null default current_timestamp,
-        updated_at text not null default current_timestamp
+        updated_at text not null default current_timestamp,
+        external_egress_proxy_url text
       )`),
     db.prepare(`CREATE TABLE IF NOT EXISTS project_permissions (
         project_id text not null references projects (id) on delete cascade,
@@ -284,6 +337,20 @@ async function ensureD1Schema(db: D1Database) {
       updated_at text not null default current_timestamp
     )`),
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_ingress_routes_host ON ingress_routes (host)`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS project_secrets (
+      id text primary key not null,
+      project_id text not null references projects (id) on delete cascade,
+      key text not null,
+      material text not null,
+      metadata text not null check (json_valid(metadata)),
+      created_at text not null default current_timestamp,
+      updated_at text not null default current_timestamp,
+      unique (project_id, key)
+    )`),
+    db.prepare(
+      `CREATE INDEX IF NOT EXISTS idx_project_secrets_project_id ON project_secrets (project_id)`,
+    ),
+    db.prepare(`CREATE INDEX IF NOT EXISTS idx_project_secrets_key ON project_secrets (key)`),
     db.prepare(
       `CREATE INDEX IF NOT EXISTS idx_ingress_routes_project_id ON ingress_routes (project_id)`,
     ),
