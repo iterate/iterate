@@ -3,6 +3,10 @@ import type { ToolProviderRegistration } from "@iterate-com/shared/stream-proces
 import { createDefaultCodemodeProviderRegistrations } from "./default-provider-registrations.ts";
 import { createExampleCapabilityProviders } from "./example-provider-registrations.ts";
 import { createOutboundMcpFromOurClientToolProviderRegistration } from "~/domains/outbound-mcp-client/utils/outbound-mcp-provider-registration.ts";
+import {
+  EXAMPLE_EGRESS_SECRET_KEY,
+  EXAMPLE_EGRESS_SECRET_MATERIAL,
+} from "~/domains/secrets/example-secret.ts";
 import { createOpenApiProviderRegistration } from "~/rpc-targets/openapi-provider-registration.ts";
 
 export type CodemodeExampleScript = {
@@ -834,6 +838,49 @@ const codemodeExampleSeeds = [
       {
         type: "events.iterate.com/codemode/example-note",
         payload: { message: "custom events are ordinary event inputs" },
+      },
+    ],
+  },
+  {
+    slug: "egress-secret-echo",
+    name: "Verify egress secret substitution",
+    description:
+      "Call a public echo server with a getSecret(...) header and verify the Project Durable Object substituted the seeded example secret.",
+    providers: [],
+    code: `async () => {
+  const headerName = "x-iterate-example-secret";
+  const response = await fetch("https://httpbingo.org/anything", {
+    headers: {
+      [headerName]: "Bearer getSecret({ key: \\"${EXAMPLE_EGRESS_SECRET_KEY}\\" })",
+    },
+  });
+  if (!response.ok) throw new Error(\`Echo server returned \${response.status}\`);
+
+  const body = await response.json();
+  const echoedHeader = body.headers?.[headerName] ?? body.headers?.["X-Iterate-Example-Secret"];
+  const echoedValue = Array.isArray(echoedHeader) ? echoedHeader.join(", ") : String(echoedHeader ?? "");
+  const expectedValue = "Bearer ${EXAMPLE_EGRESS_SECRET_MATERIAL}";
+
+  if (echoedValue !== expectedValue) {
+    throw new Error(\`Expected \${headerName} to echo \${expectedValue}, got \${echoedValue}\`);
+  }
+
+  console.log("egress secret substitution worked", { headerName, echoedValue });
+  return {
+    echoUrl: body.url,
+    headerName,
+    echoedValue,
+    secretKey: "${EXAMPLE_EGRESS_SECRET_KEY}",
+    secretReferenceWasSubstituted: true,
+  };
+}`,
+    events: [
+      {
+        type: "events.iterate.com/codemode/example-note",
+        payload: {
+          message:
+            "New projects seed an example secret so this script can prove fetch egress header substitution with httpbingo.org.",
+        },
       },
     ],
   },

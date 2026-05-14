@@ -11,6 +11,10 @@ import type { CodemodeSession } from "~/domains/codemode/durable-objects/codemod
 import { createCodemodeSessionStartupEvents } from "~/domains/codemode/codemode-session-rpc.ts";
 import { createExampleRpcProviderRegistration } from "~/domains/codemode/example-capabilities.ts";
 import { findCodemodeExample, providersForCodemodeExample } from "~/domains/codemode/examples.ts";
+import {
+  EXAMPLE_EGRESS_SECRET_KEY,
+  EXAMPLE_EGRESS_SECRET_MATERIAL,
+} from "~/domains/secrets/example-secret.ts";
 
 type CodemodeSessionStub = DurableObjectStub<CodemodeSession> & {
   callFunction(input: {
@@ -384,7 +388,7 @@ describe("CodemodeSession", () => {
     );
   });
 
-  test("rejects caller supplied project identity in codemode ctx.os calls", async () => {
+  test("ignores caller supplied project identity in codemode ctx.os calls", async () => {
     const streamPath = `/codemode-session-tests/${crypto.randomUUID()}` as StreamPath;
     const session = await initializeSession(streamPath);
 
@@ -399,8 +403,8 @@ describe("CodemodeSession", () => {
 
     expect(completed.payload).toMatchObject({
       outcome: {
-        error: expect.stringContaining("projectSlugOrId"),
-        status: "threw",
+        status: "returned",
+        value: expect.objectContaining({ streams: expect.any(Array) }),
       },
     });
   });
@@ -500,6 +504,42 @@ describe("CodemodeSession", () => {
             "x-iterate-test-secret": ["codemode-secret-value"],
           },
           url: "https://httpbingo.org/anything",
+        },
+      },
+    });
+    expect(JSON.stringify(completed.payload)).not.toContain("getSecret");
+  });
+
+  test("runs the selectable egress secret echo codemode example", async () => {
+    const setupResponse = await SELF.fetch(
+      "https://os.iterate.localhost/__test/setup-egress-secret",
+    );
+    expect(setupResponse.ok).toBe(true);
+    mockPublicEchoFetch();
+    const streamPath = `/codemode-session-tests/${crypto.randomUUID()}` as StreamPath;
+    const session = await initializeSession(streamPath);
+    const example = findCodemodeExample("egress-secret-echo");
+    expect(example).toBeDefined();
+
+    const created = await session.createSession({
+      events: codemodeSessionStartupEvents({
+        events: example?.events ?? [],
+        providers: providersForCodemodeExample({ example, projectId }),
+        streamPath,
+      }),
+      code: example?.scripts[0]?.code,
+    });
+    const scriptExecutionId = scriptExecutionIdFromEvent(created.scriptExecutionEvent);
+    const completed = await waitForScriptExecutionCompleted({ scriptExecutionId, streamPath });
+
+    expect(completed.payload).toMatchObject({
+      outcome: {
+        status: "returned",
+        value: {
+          echoedValue: `Bearer ${EXAMPLE_EGRESS_SECRET_MATERIAL}`,
+          headerName: "x-iterate-example-secret",
+          secretKey: EXAMPLE_EGRESS_SECRET_KEY,
+          secretReferenceWasSubstituted: true,
         },
       },
     });
@@ -813,8 +853,13 @@ function providerRegistration(path: string[]): ToolProviderRegistration {
 }
 
 function mockPublicEchoFetch() {
+  const originalFetch = globalThis.fetch;
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const request = new Request(input, init);
+    if (new URL(request.url).hostname !== "httpbingo.org") {
+      return await originalFetch(input, init);
+    }
+
     return Response.json({
       headers: Object.fromEntries([...request.headers].map(([key, value]) => [key, [value]])),
       url: request.url,

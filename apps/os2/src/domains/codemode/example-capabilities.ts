@@ -223,10 +223,6 @@ function readUnaryOrpcInput(input: ExecuteCodemodeFunctionCallInput, projectId: 
   if (!request || typeof request !== "object" || Array.isArray(request)) {
     throw new Error(`ORPC codemode calls require an object input for ${input.path.join(".")}.`);
   }
-  if (Object.hasOwn(request, "projectSlugOrId")) {
-    throw new Error("ORPC codemode callers must not supply projectSlugOrId.");
-  }
-
   return {
     ...(request as Record<string, unknown>),
     projectSlugOrId: projectId,

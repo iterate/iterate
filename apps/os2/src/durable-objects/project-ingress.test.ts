@@ -2,6 +2,10 @@ import { SELF, env } from "cloudflare:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import {
+  EXAMPLE_EGRESS_SECRET_KEY,
+  EXAMPLE_EGRESS_SECRET_MATERIAL,
+} from "~/domains/secrets/example-secret.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -43,6 +47,19 @@ describe("Project ingress routing", () => {
       { host: "demo.iterate.localhost", exportName: "ProjectIngressEntrypoint" },
       { host: "proj__local__test.iterate.localhost", exportName: "ProjectIngressEntrypoint" },
     ]);
+
+    const exampleSecret = await env.DB.prepare(
+      `SELECT key, material
+       FROM project_secrets
+       WHERE project_id = ? AND key = ?
+       LIMIT 1`,
+    )
+      .bind("proj__local__test", EXAMPLE_EGRESS_SECRET_KEY)
+      .first<{ key: string; material: string }>();
+    expect(exampleSecret).toEqual({
+      key: EXAMPLE_EGRESS_SECRET_KEY,
+      material: EXAMPLE_EGRESS_SECRET_MATERIAL,
+    });
 
     const streamResponse = await SELF.fetch("https://os.iterate.localhost/__test/project-stream");
     expect(streamResponse.ok).toBe(true);
@@ -306,8 +323,13 @@ async function createProject() {
 }
 
 function mockPublicEchoFetch() {
+  const originalFetch = globalThis.fetch;
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const request = new Request(input, init);
+    if (new URL(request.url).hostname !== "httpbingo.org") {
+      return await originalFetch(input, init);
+    }
+
     return Response.json({
       headers: headersToArrays(request.headers),
       url: request.url,

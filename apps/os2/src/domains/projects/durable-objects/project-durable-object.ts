@@ -58,6 +58,11 @@ import { stripArtifactTokenQuery } from "~/domains/repos/artifacts.ts";
 import { getReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 import { ITERATE_CONFIG_REPO_SLUG } from "~/domains/repos/iterate-config-repo.ts";
 import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
+import {
+  EXAMPLE_EGRESS_SECRET_KEY,
+  EXAMPLE_EGRESS_SECRET_MATERIAL,
+  EXAMPLE_EGRESS_SECRET_METADATA,
+} from "~/domains/secrets/example-secret.ts";
 
 export type ProjectStructuredName = {
   projectId: string;
@@ -304,6 +309,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
       db: this.env.DB,
       input,
     });
+    await this.ensureExampleEgressSecret(input.projectId);
     await this.writeIngressRoutes({ hosts, projectId: input.projectId });
     const summary = this.requireSummary();
     await this.writeProjectCreatedLifecycleEvent(summary);
@@ -331,6 +337,24 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     } catch (error) {
       console.error(`[ProjectDO] finishProjectSetup failed for ${summary.id}:`, error);
     }
+  }
+
+  private async ensureExampleEgressSecret(projectId: string) {
+    const secrets = getSecretsCapability({
+      exports: readLoopbackExports(this.ctx),
+      props: { projectId },
+    });
+
+    const existing = await secrets.getSecretSummaryByKeyOrNull({
+      key: EXAMPLE_EGRESS_SECRET_KEY,
+    });
+    if (existing) return;
+
+    await secrets.setSecret({
+      key: EXAMPLE_EGRESS_SECRET_KEY,
+      material: EXAMPLE_EGRESS_SECRET_MATERIAL,
+      metadata: EXAMPLE_EGRESS_SECRET_METADATA,
+    });
   }
 
   async checkAccess(input: { principal: ProjectAccessPrincipal }): Promise<ProjectSummary> {
@@ -621,20 +645,6 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     const repo = await this.getOrCreateIterateConfigRepo(summary);
     const { git, workspace } = await this.getProjectConfigWorkspace(summary.id);
 
-    if (await workspace.hasFile(`${PROJECT_CONFIG_DIR}/.git/HEAD`)) {
-      let checkoutIsUsable = true;
-      try {
-        await git.status({ dir: PROJECT_CONFIG_DIR });
-      } catch {
-        checkoutIsUsable = false;
-      }
-
-      if (checkoutIsUsable) {
-        await this.refreshProjectConfigRepo({ git, repo });
-        return await this.readProjectConfigCheckout({ git, workspace });
-      }
-    }
-
     await workspace.removePath({
       force: true,
       path: PROJECT_CONFIG_DIR,
@@ -650,19 +660,6 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
       dir: PROJECT_CONFIG_DIR,
       branch: input.repo.defaultBranch,
       depth: 1,
-      ...artifactGitAuth(input.repo),
-    });
-  }
-
-  protected async refreshProjectConfigRepo(input: { git: ProjectConfigGit; repo: RepoInfo }) {
-    await input.git.pull({
-      dir: PROJECT_CONFIG_DIR,
-      remote: "origin",
-      ref: input.repo.defaultBranch,
-      author: {
-        name: "Iterate",
-        email: "support@iterate.com",
-      },
       ...artifactGitAuth(input.repo),
     });
   }
