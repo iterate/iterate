@@ -245,44 +245,54 @@ export class SandboxesCapability extends WorkerEntrypoint<
     if (status.success) return;
 
     const repo = await this.iterateConfigRepo(input.projectId);
-    const clone = await input.sandbox.exec(
+    const cloneCommand = [
+      "tmp_dir=$(mktemp -d)",
+      "trap 'rm -rf \"$tmp_dir\"' EXIT",
       [
-        "tmp_dir=$(mktemp -d)",
-        "trap 'rm -rf \"$tmp_dir\"' EXIT",
-        [
-          "GIT_TERMINAL_PROMPT=0",
-          "git",
-          "-c",
-          shellQuote("credential.helper="),
-          "-c",
-          shellQuote(`http.extraHeader=Authorization: ${repoAuthorizationHeader(repo)}`),
-          "clone",
-          "--depth",
-          "1",
-          "--branch",
-          shellQuote(repo.defaultBranch),
-          shellQuote(repo.remote),
-          `"${"${tmp_dir}"}/iterate-config"`,
-        ].join(" "),
-        `rm -rf ${shellQuote(SANDBOX_ITERATE_CONFIG_PATH)}`,
-        `mkdir -p ${shellQuote("/workspace")}`,
-        `cp -a "${"${tmp_dir}"}/iterate-config" ${shellQuote(SANDBOX_ITERATE_CONFIG_PATH)}`,
-      ].join(" && "),
-      { cwd: "/", timeout: 30_000 },
-    );
-    if (!clone.success) {
-      await input.sandbox.exec(
-        [
-          "mkdir -p /workspace",
-          `printf '%s\\n' ${shellQuote(clone.stderr || clone.stdout || "unknown clone error")} > /workspace/.iterate-config-clone-error.txt`,
-        ].join(" && "),
-        { cwd: "/", timeout: 10_000 },
-      );
-      console.warn("[sandboxes] iterate-config clone failed; continuing without hydrated repo", {
-        stderr: clone.stderr,
-        stdout: clone.stdout,
-      });
+        "GIT_TERMINAL_PROMPT=0",
+        "git",
+        "-c",
+        shellQuote("credential.helper="),
+        "-c",
+        shellQuote(`http.extraHeader=${repoAuthorizationHeader(repo)}`),
+        "clone",
+        "--depth",
+        "1",
+        "--branch",
+        shellQuote(repo.defaultBranch),
+        shellQuote(repo.remote),
+        `"${"${tmp_dir}"}/iterate-config"`,
+      ].join(" "),
+      `rm -rf ${shellQuote(SANDBOX_ITERATE_CONFIG_PATH)}`,
+      `mkdir -p ${shellQuote("/workspace")}`,
+      `cp -a "${"${tmp_dir}"}/iterate-config" ${shellQuote(SANDBOX_ITERATE_CONFIG_PATH)}`,
+    ].join(" && ");
+
+    let clone: ExecResult;
+    try {
+      clone = await input.sandbox.exec(cloneCommand, { cwd: "/", timeout: 120_000 });
+    } catch (error) {
+      await this.recordIterateConfigCloneFailure(input.sandbox, cloneFailureMessage(error));
+      return;
     }
+
+    if (!clone.success) {
+      const message = clone.stderr || clone.stdout || "unknown clone error";
+      await this.recordIterateConfigCloneFailure(input.sandbox, message);
+    }
+  }
+
+  private async recordIterateConfigCloneFailure(sandbox: CloudflareSandbox, message: string) {
+    await sandbox.exec(
+      [
+        "mkdir -p /workspace",
+        `printf '%s\\n' ${shellQuote(message)} > /workspace/.iterate-config-clone-error.txt`,
+      ].join(" && "),
+      { cwd: "/", timeout: 10_000 },
+    );
+    console.warn("[sandboxes] iterate-config clone failed; continuing without hydrated repo", {
+      error: message,
+    });
   }
 
   private async iterateConfigRepo(projectId?: string): Promise<RepoInfo> {
@@ -429,7 +439,11 @@ function repoBearerToken(repo: RepoInfo) {
 }
 
 function repoAuthorizationHeader(repo: RepoInfo) {
-  return `Basic ${btoa(`x:${repoBearerToken(repo)}`)}`;
+  return `Authorization: Bearer ${repoBearerToken(repo)}`;
+}
+
+function cloneFailureMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function shellQuote(value: string) {
