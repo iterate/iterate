@@ -170,5 +170,5 @@ function toSandboxORPCError(error: unknown) {
     return new ORPCError("BAD_REQUEST", { message: error.message });
   }
 
-  return error;
+  return new ORPCError("INTERNAL_SERVER_ERROR", { message: error.message });
 }

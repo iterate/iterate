@@ -14,6 +14,7 @@ import type { ExecuteCodemodeFunctionCallInput } from "@iterate-com/shared/strea
 import { getReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 import type { RepoInfo } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import {
+  SANDBOX_WORKSPACE_MOUNT_PATH,
   SANDBOX_ITERATE_CONFIG_PATH,
   type SandboxInfo,
   type SandboxDurableObject,
@@ -204,12 +205,30 @@ export class SandboxesCapability extends WorkerEntrypoint<
     try {
       await input.sandbox.mountBucket(
         this.storageBucket(),
-        "/workspace",
+        SANDBOX_WORKSPACE_MOUNT_PATH,
         this.mountOptions(input.slug, input.projectId),
       );
     } catch (error) {
-      if (isAlreadyMountedError(error)) return;
-      throw error;
+      if (!isAlreadyMountedError(error)) throw error;
+    }
+
+    await this.ensureWorkspacePath(input.sandbox);
+  }
+
+  private async ensureWorkspacePath(sandbox: CloudflareSandbox) {
+    const result = await sandbox.exec(
+      [
+        `if [ "$(readlink /workspace 2>/dev/null || true)" != ${shellQuote(SANDBOX_WORKSPACE_MOUNT_PATH)} ]; then`,
+        "  rm -rf /workspace",
+        `  ln -s ${shellQuote(SANDBOX_WORKSPACE_MOUNT_PATH)} /workspace`,
+        "fi",
+        "test -d /workspace",
+      ].join("\n"),
+      { cwd: "/", timeout: 20_000 },
+    );
+
+    if (!result.success) {
+      throw new Error(`Could not prepare /workspace symlink: ${result.stderr || result.stdout}`);
     }
   }
 

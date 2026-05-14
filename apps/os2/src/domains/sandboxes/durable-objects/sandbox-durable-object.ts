@@ -3,6 +3,7 @@ import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-obje
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 
 export const SANDBOX_WORKSPACE_PATH = "/workspace";
+export const SANDBOX_WORKSPACE_MOUNT_PATH = "/mnt/workspace";
 export const SANDBOX_ITERATE_CONFIG_PATH = "/workspace/iterate-config";
 
 export type SandboxStructuredName = {

@@ -60,6 +60,9 @@ export default {
           return Response.json(await sandboxes.wake(body.input));
       }
     } catch (error) {
+      console.error("[sandboxes-worker] rpc failed", {
+        error: errorMessage(error),
+      });
       return Response.json({ error: errorMessage(error) }, { status: 500 });
     }
   },
