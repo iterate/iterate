@@ -162,6 +162,10 @@ function isStringRecord(value: unknown): value is Record<string, string | undefi
 }
 
 function errorMessage(error: unknown) {
-  if (error instanceof Error) return error.message;
-  return String(error);
+  const message = error instanceof Error ? error.message : String(error);
+  return redactSandboxSecrets(message);
+}
+
+function redactSandboxSecrets(message: string) {
+  return message.replaceAll(/Bearer\s+art_v1_[^'"\s]+/g, "Bearer [REDACTED]");
 }

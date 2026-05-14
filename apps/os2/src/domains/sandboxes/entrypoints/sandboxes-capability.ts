@@ -252,7 +252,9 @@ export class SandboxesCapability extends WorkerEntrypoint<
         [
           "git",
           "-c",
-          shellQuote(`http.extraHeader=Authorization: Bearer ${repo.token}`),
+          shellQuote("credential.helper="),
+          "-c",
+          shellQuote(`http.extraHeader=Authorization: Bearer ${repoBearerToken(repo)}`),
           "clone",
           "--depth",
           "1",
@@ -408,6 +410,10 @@ function isAlreadyMountedError(error: unknown) {
   if (!(error instanceof Error)) return false;
   const message = error.message.toLowerCase();
   return message.includes("already mounted") || message.includes("mount path already in use");
+}
+
+function repoBearerToken(repo: RepoInfo) {
+  return repo.token.includes("?expires=") ? repo.token.split("?expires=")[0] : repo.token;
 }
 
 function shellQuote(value: string) {
