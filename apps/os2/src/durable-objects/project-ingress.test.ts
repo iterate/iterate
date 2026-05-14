@@ -12,6 +12,14 @@ describe("Project ingress routing", () => {
       hosts: expect.arrayContaining([
         "demo.iterate.localhost",
         "proj_local_test.iterate.localhost",
+        "app1.demo.iterate.localhost",
+        "app1.proj_local_test.iterate.localhost",
+        "app1__demo.iterate.localhost",
+        "app1__proj_local_test.iterate.localhost",
+        "app2.demo.iterate.localhost",
+        "app2.proj_local_test.iterate.localhost",
+        "app2__demo.iterate.localhost",
+        "app2__proj_local_test.iterate.localhost",
         "mcp.demo.iterate.localhost",
         "mcp.proj_local_test.iterate.localhost",
         "mcp__demo.iterate.localhost",
@@ -30,6 +38,14 @@ describe("Project ingress routing", () => {
       .bind("proj_local_test")
       .all<{ host: string; project_id: string; callable_json: string }>();
     expect(ingressRows.results.map((row) => row.host)).toEqual([
+      "app1.demo.iterate.localhost",
+      "app1.proj_local_test.iterate.localhost",
+      "app1__demo.iterate.localhost",
+      "app1__proj_local_test.iterate.localhost",
+      "app2.demo.iterate.localhost",
+      "app2.proj_local_test.iterate.localhost",
+      "app2__demo.iterate.localhost",
+      "app2__proj_local_test.iterate.localhost",
       "demo.iterate.localhost",
       "mcp.demo.iterate.localhost",
       "mcp.proj_local_test.iterate.localhost",
@@ -47,6 +63,14 @@ describe("Project ingress routing", () => {
         ).via.exportName,
       })),
     ).toEqual([
+      { host: "app1.demo.iterate.localhost", exportName: "ProjectIngressEntrypoint" },
+      { host: "app1.proj_local_test.iterate.localhost", exportName: "ProjectIngressEntrypoint" },
+      { host: "app1__demo.iterate.localhost", exportName: "ProjectIngressEntrypoint" },
+      { host: "app1__proj_local_test.iterate.localhost", exportName: "ProjectIngressEntrypoint" },
+      { host: "app2.demo.iterate.localhost", exportName: "ProjectIngressEntrypoint" },
+      { host: "app2.proj_local_test.iterate.localhost", exportName: "ProjectIngressEntrypoint" },
+      { host: "app2__demo.iterate.localhost", exportName: "ProjectIngressEntrypoint" },
+      { host: "app2__proj_local_test.iterate.localhost", exportName: "ProjectIngressEntrypoint" },
       { host: "demo.iterate.localhost", exportName: "ProjectIngressEntrypoint" },
       { host: "mcp.demo.iterate.localhost", exportName: "ProjectIngressEntrypoint" },
       { host: "mcp.proj_local_test.iterate.localhost", exportName: "ProjectIngressEntrypoint" },
@@ -122,6 +146,26 @@ describe("Project ingress routing", () => {
       "dynamic-worker-config-repo",
     );
     expect(projectIngressResponse.text).toBe("Bundled project worker for demo.iterate.localhost");
+
+    const appOneDotResponse = await SELF.fetch("https://app1.demo.iterate.localhost/");
+    expect(appOneDotResponse.ok).toBe(true);
+    expect(appOneDotResponse.headers.get("x-project-app")).toBe("app1");
+    await expect(appOneDotResponse.text()).resolves.toBe("hello from app one");
+
+    const appOneUnderscoreResponse = await SELF.fetch("https://app1__demo.iterate.localhost/");
+    expect(appOneUnderscoreResponse.ok).toBe(true);
+    expect(appOneUnderscoreResponse.headers.get("x-project-app")).toBe("app1");
+    await expect(appOneUnderscoreResponse.text()).resolves.toBe("hello from app one");
+
+    const appTwoDotResponse = await SELF.fetch("https://app2.demo.iterate.localhost/");
+    expect(appTwoDotResponse.ok).toBe(true);
+    expect(appTwoDotResponse.headers.get("x-project-app")).toBe("app2");
+    await expect(appTwoDotResponse.text()).resolves.toBe("hello from app two");
+
+    const appTwoUnderscoreResponse = await SELF.fetch("https://app2__demo.iterate.localhost/");
+    expect(appTwoUnderscoreResponse.ok).toBe(true);
+    expect(appTwoUnderscoreResponse.headers.get("x-project-app")).toBe("app2");
+    await expect(appTwoUnderscoreResponse.text()).resolves.toBe("hello from app two");
 
     const mcpResponse = await SELF.fetch("https://mcp.demo.iterate.localhost/", {
       headers: { accept: "text/html" },

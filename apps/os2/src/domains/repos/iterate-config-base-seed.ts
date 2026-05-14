@@ -18,10 +18,23 @@ const ITERATE_CONFIG_PACKAGE_JSON = '{\n  "type": "module"\n}\n';
 export const ITERATE_CONFIG_WORKER_SOURCE = `// @ts-nocheck
 import { WorkerEntrypoint } from "cloudflare:workers";
 
+export { AppOne } from "./apps/app1/worker.ts";
+export { AppTwo } from "./apps/app2/worker.ts";
+
 export default class Project extends WorkerEntrypoint {
   async fetch(request) {
     const url = new URL(request.url);
     const hostname = request.headers.get("x-iterate-ingress-hostname") ?? url.hostname;
+    const appSlug = appSlugFromHostname(hostname);
+
+    if (appSlug === "app1") {
+      return await this.ctx.exports.AppOne.fetch(request);
+    }
+
+    if (appSlug === "app2") {
+      return await this.ctx.exports.AppTwo.fetch(request);
+    }
+
     return new Response("Hello from the project config worker at " + hostname, {
       headers: {
         "content-type": "text/plain; charset=utf-8",
@@ -32,6 +45,43 @@ export default class Project extends WorkerEntrypoint {
 
   async afterAppend({ event }) {
     console.log("Project config worker afterAppend", event.type);
+  }
+}
+
+function appSlugFromHostname(hostname) {
+  const firstLabel = hostname.split(".")[0] ?? "";
+  if (firstLabel === "app1" || firstLabel.startsWith("app1__")) return "app1";
+  if (firstLabel === "app2" || firstLabel.startsWith("app2__")) return "app2";
+  return null;
+}
+`;
+
+const ITERATE_CONFIG_APP_ONE_WORKER_SOURCE = `// @ts-nocheck
+import { WorkerEntrypoint } from "cloudflare:workers";
+
+export class AppOne extends WorkerEntrypoint {
+  async fetch() {
+    return new Response("hello from app one", {
+      headers: {
+        "content-type": "text/plain; charset=utf-8",
+        "x-project-app": "app1",
+      },
+    });
+  }
+}
+`;
+
+const ITERATE_CONFIG_APP_TWO_WORKER_SOURCE = `// @ts-nocheck
+import { WorkerEntrypoint } from "cloudflare:workers";
+
+export class AppTwo extends WorkerEntrypoint {
+  async fetch() {
+    return new Response("hello from app two", {
+      headers: {
+        "content-type": "text/plain; charset=utf-8",
+        "x-project-app": "app2",
+      },
+    });
   }
 }
 `;
@@ -107,10 +157,22 @@ export async function seedIterateConfigBaseRepo(input: {
     `${ITERATE_CONFIG_REPO_DIR}/package.json`,
     ITERATE_CONFIG_PACKAGE_JSON,
   );
+  await filesystem.mkdir(`${ITERATE_CONFIG_REPO_DIR}/apps/app1`, { recursive: true });
+  await filesystem.mkdir(`${ITERATE_CONFIG_REPO_DIR}/apps/app2`, { recursive: true });
   await filesystem.writeFile(`${ITERATE_CONFIG_REPO_DIR}/worker.ts`, ITERATE_CONFIG_WORKER_SOURCE);
+  await filesystem.writeFile(
+    `${ITERATE_CONFIG_REPO_DIR}/apps/app1/worker.ts`,
+    ITERATE_CONFIG_APP_ONE_WORKER_SOURCE,
+  );
+  await filesystem.writeFile(
+    `${ITERATE_CONFIG_REPO_DIR}/apps/app2/worker.ts`,
+    ITERATE_CONFIG_APP_TWO_WORKER_SOURCE,
+  );
   await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "iterate.config.jsonc" });
   await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "package.json" });
   await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "worker.ts" });
+  await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "apps/app1/worker.ts" });
+  await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "apps/app2/worker.ts" });
 
   let committed = true;
   try {

@@ -963,16 +963,25 @@ function projectHosts(input: { bases: readonly string[]; projectId: string; slug
     normalizeIngressHost(`${input.slug}.${base}`),
     normalizeIngressHost(`${input.projectId}.${base}`),
   ]);
+  const appHosts = input.bases.flatMap((base) =>
+    ["app1", "app2"].flatMap((appSlug) => [
+      normalizeIngressHost(`${appSlug}.${input.slug}.${base}`),
+      normalizeIngressHost(`${appSlug}.${input.projectId}.${base}`),
+      normalizeIngressHost(`${appSlug}__${input.slug}.${base}`),
+      normalizeIngressHost(`${appSlug}__${input.projectId}.${base}`),
+    ]),
+  );
   const mcpHosts = input.bases.flatMap((base) => [
     normalizeIngressHost(`mcp.${input.slug}.${base}`),
     normalizeIngressHost(`mcp.${input.projectId}.${base}`),
     normalizeIngressHost(`mcp__${input.slug}.${base}`),
     normalizeIngressHost(`mcp__${input.projectId}.${base}`),
   ]);
-  const allHosts = [...projectHosts, ...mcpHosts];
+  const allHosts = [...projectHosts, ...appHosts, ...mcpHosts];
 
   return {
     allHosts,
+    appHosts,
     defaultHost: normalizeIngressHost(`${input.slug}.${input.bases[0] ?? "iterate.localhost"}`),
     mcpHosts,
     projectHosts,

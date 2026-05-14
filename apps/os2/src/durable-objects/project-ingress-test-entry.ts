@@ -24,6 +24,67 @@ import type { ExactHostIngressRule } from "~/ingress/types.ts";
 
 const PROJECT_CONFIG_DIR = "/iterate-config";
 const MOCK_ARTIFACT_REMOTE_BASE = "https://artifacts.example.test/";
+const TEST_PROJECT_WORKER_SOURCE = `import { WorkerEntrypoint } from "cloudflare:workers";
+
+export { AppOne } from "./apps/app1/worker.ts";
+export { AppTwo } from "./apps/app2/worker.ts";
+
+export default class Project extends WorkerEntrypoint {
+  async fetch(request) {
+    const url = new URL(request.url);
+    const hostname = request.headers.get("x-iterate-ingress-hostname") ?? url.hostname;
+    const appSlug = appSlugFromHostname(hostname);
+
+    if (appSlug === "app1") {
+      return await this.ctx.exports.AppOne.fetch(request);
+    }
+
+    if (appSlug === "app2") {
+      return await this.ctx.exports.AppTwo.fetch(request);
+    }
+
+    return new Response("Bundled project worker for " + hostname, {
+      headers: {
+        "content-type": "text/plain; charset=utf-8",
+        "x-project-ingress-runtime": "dynamic-worker-config-repo",
+      },
+    });
+  }
+}
+
+function appSlugFromHostname(hostname) {
+  const firstLabel = hostname.split(".")[0] ?? "";
+  if (firstLabel === "app1" || firstLabel.startsWith("app1__")) return "app1";
+  if (firstLabel === "app2" || firstLabel.startsWith("app2__")) return "app2";
+  return null;
+}
+`;
+const TEST_APP_ONE_WORKER_SOURCE = `import { WorkerEntrypoint } from "cloudflare:workers";
+
+export class AppOne extends WorkerEntrypoint {
+  async fetch() {
+    return new Response("hello from app one", {
+      headers: {
+        "content-type": "text/plain; charset=utf-8",
+        "x-project-app": "app1",
+      },
+    });
+  }
+}
+`;
+const TEST_APP_TWO_WORKER_SOURCE = `import { WorkerEntrypoint } from "cloudflare:workers";
+
+export class AppTwo extends WorkerEntrypoint {
+  async fetch() {
+    return new Response("hello from app two", {
+      headers: {
+        "content-type": "text/plain; charset=utf-8",
+        "x-project-app": "app2",
+      },
+    });
+  }
+}
+`;
 
 type TestProjectConfigGit = {
   add(input: { dir: string; filepath: string }): Promise<unknown>;
@@ -62,28 +123,15 @@ export class ProjectDurableObject extends RealProjectDurableObject {
     const writeFile = readWorkspaceStateMethod({ method: "writeFile", state });
     await writeFile(`${PROJECT_CONFIG_DIR}/iterate.config.jsonc`, '{\n  "version": 1\n}\n');
     await writeFile(`${PROJECT_CONFIG_DIR}/package.json`, '{\n  "type": "module"\n}\n');
-    await writeFile(
-      `${PROJECT_CONFIG_DIR}/worker.ts`,
-      `import { WorkerEntrypoint } from "cloudflare:workers";
-
-export default class Project extends WorkerEntrypoint {
-  async fetch(request) {
-    const url = new URL(request.url);
-    const hostname = request.headers.get("x-iterate-ingress-hostname") ?? url.hostname;
-    return new Response("Raw project worker for " + hostname, {
-      headers: {
-        "content-type": "text/plain; charset=utf-8",
-        "x-project-ingress-runtime": "raw-worker-config-repo",
-      },
-    });
-  }
-}
-`,
-    );
+    await writeFile(`${PROJECT_CONFIG_DIR}/worker.ts`, TEST_PROJECT_WORKER_SOURCE);
+    await writeFile(`${PROJECT_CONFIG_DIR}/apps/app1/worker.ts`, TEST_APP_ONE_WORKER_SOURCE);
+    await writeFile(`${PROJECT_CONFIG_DIR}/apps/app2/worker.ts`, TEST_APP_TWO_WORKER_SOURCE);
     await input.git.init({ dir: PROJECT_CONFIG_DIR, defaultBranch: input.repo.defaultBranch });
     await input.git.add({ dir: PROJECT_CONFIG_DIR, filepath: "iterate.config.jsonc" });
     await input.git.add({ dir: PROJECT_CONFIG_DIR, filepath: "package.json" });
     await input.git.add({ dir: PROJECT_CONFIG_DIR, filepath: "worker.ts" });
+    await input.git.add({ dir: PROJECT_CONFIG_DIR, filepath: "apps/app1/worker.ts" });
+    await input.git.add({ dir: PROJECT_CONFIG_DIR, filepath: "apps/app2/worker.ts" });
     await input.git.commit({
       dir: PROJECT_CONFIG_DIR,
       message: "Seed test iterate config worker",
@@ -98,6 +146,12 @@ export default class Project extends WorkerEntrypoint {
     if (typeof files["package.json"] !== "string") {
       throw new Error("Test project worker bundler path requires package.json.");
     }
+    if (typeof files["apps/app1/worker.ts"] !== "string") {
+      throw new Error("Test project worker bundler path requires apps/app1/worker.ts.");
+    }
+    if (typeof files["apps/app2/worker.ts"] !== "string") {
+      throw new Error("Test project worker bundler path requires apps/app2/worker.ts.");
+    }
 
     return {
       compatibilityDate: "2026-04-27",
@@ -106,21 +160,13 @@ export default class Project extends WorkerEntrypoint {
       mainModule: "worker.ts",
       modules: {
         "worker.ts": {
-          js: `import { WorkerEntrypoint } from "cloudflare:workers";
-
-export default class Project extends WorkerEntrypoint {
-  async fetch(request) {
-    const url = new URL(request.url);
-    const hostname = request.headers.get("x-iterate-ingress-hostname") ?? url.hostname;
-    return new Response("Bundled project worker for " + hostname, {
-      headers: {
-        "content-type": "text/plain; charset=utf-8",
-        "x-project-ingress-runtime": "dynamic-worker-config-repo",
-      },
-    });
-  }
-}
-`,
+          js: TEST_PROJECT_WORKER_SOURCE,
+        },
+        "apps/app1/worker.ts": {
+          js: TEST_APP_ONE_WORKER_SOURCE,
+        },
+        "apps/app2/worker.ts": {
+          js: TEST_APP_TWO_WORKER_SOURCE,
         },
       },
     };
