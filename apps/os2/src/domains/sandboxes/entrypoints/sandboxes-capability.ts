@@ -268,12 +268,20 @@ export class SandboxesCapability extends WorkerEntrypoint<
         `mkdir -p ${shellQuote("/workspace")}`,
         `cp -a "${"${tmp_dir}"}/iterate-config" ${shellQuote(SANDBOX_ITERATE_CONFIG_PATH)}`,
       ].join(" && "),
-      { cwd: "/", timeout: 300_000 },
+      { cwd: "/", timeout: 30_000 },
     );
     if (!clone.success) {
-      throw new Error(
-        `Could not clone iterate-config into Sandbox: ${clone.stderr || clone.stdout}`,
+      await input.sandbox.exec(
+        [
+          "mkdir -p /workspace",
+          `printf '%s\\n' ${shellQuote(clone.stderr || clone.stdout || "unknown clone error")} > /workspace/.iterate-config-clone-error.txt`,
+        ].join(" && "),
+        { cwd: "/", timeout: 10_000 },
       );
+      console.warn("[sandboxes] iterate-config clone failed; continuing without hydrated repo", {
+        stderr: clone.stderr,
+        stdout: clone.stdout,
+      });
     }
   }
 
