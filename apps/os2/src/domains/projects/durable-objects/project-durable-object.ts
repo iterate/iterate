@@ -303,7 +303,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     await this.writeProjectCreatedLifecycleEvent(summary);
     void this.createProjectWildcardCNAMERecord(summary).catch((error) => {
       console.error(
-        `[ProjectDNS] Wildcard CNAME fire-and-forget task failed for ${summary.id}:`,
+        `[ProjectDNS] Wildcard DNS record fire-and-forget task failed for ${summary.id}:`,
         error,
       );
     });
@@ -860,7 +860,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
         summary,
       });
     } catch (error) {
-      console.error(`[ProjectDNS] Wildcard CNAME creation failed for ${summary.id}:`, error);
+      console.error(`[ProjectDNS] Wildcard DNS record creation failed for ${summary.id}:`, error);
       await this.writeProjectCNAMERecordCreationFailedLifecycleEvent({
         base,
         error,

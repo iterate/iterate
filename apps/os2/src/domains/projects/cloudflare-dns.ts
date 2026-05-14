@@ -42,30 +42,33 @@ export async function createProjectWildcardCNAMERecord(input: {
   // DNS automation is intentionally optional so local/test configs can create
   // Projects without Cloudflare credentials.
   if (!input.apiToken) {
-    console.log("[ProjectDNS] Skipping wildcard CNAME creation: cloudflare.apiToken is absent.");
+    console.log(
+      "[ProjectDNS] Skipping wildcard DNS record creation: cloudflare.apiToken is absent.",
+    );
     return null;
   }
 
   // Local workerd hostnames are not Cloudflare-managed DNS zones.
   if (!base || base === "localhost" || base.endsWith(".localhost")) {
-    console.log(`[ProjectDNS] Skipping wildcard CNAME creation for local base '${base}'.`);
+    console.log(`[ProjectDNS] Skipping wildcard DNS record creation for local base '${base}'.`);
     return null;
   }
 
   const zone = await resolveZone({ apiToken: input.apiToken, zoneName: base });
   const sourceRecordName = `*.${base}`;
-  const sourceRecord = await getRequiredCNAMERecord({
+  const sourceRecord = await getRequiredProxiedDnsRecord({
     apiToken: input.apiToken,
     name: sourceRecordName,
     zoneId: zone.id,
   });
   const targetRecordName = `*.${input.projectSlug}.${base}`;
-  const targetRecord = await createCNAMERecord({
+  const targetRecord = await createDnsRecord({
     apiToken: input.apiToken,
     comment: `Managed by apps/os2 for project ${input.projectId}`,
     content: sourceRecord.content,
     name: targetRecordName,
     proxied: sourceRecord.proxied ?? true,
+    type: sourceRecord.type,
     zoneId: zone.id,
   });
 
@@ -89,25 +92,27 @@ async function resolveZone(input: { apiToken: string; zoneName: string }) {
   return zone;
 }
 
-async function getRequiredCNAMERecord(input: { apiToken: string; name: string; zoneId: string }) {
+async function getRequiredProxiedDnsRecord(input: {
+  apiToken: string;
+  name: string;
+  zoneId: string;
+}) {
   const records = await cloudflareFetch<CloudflareDnsRecord[]>({
     apiToken: input.apiToken,
-    path: `/zones/${input.zoneId}/dns_records?type=CNAME&name=${encodeURIComponent(
-      input.name,
-    )}&per_page=1`,
+    path: `/zones/${input.zoneId}/dns_records?name=${encodeURIComponent(input.name)}&per_page=20`,
   });
-  const record = records[0];
-  if (!record) throw new Error(`Cloudflare CNAME '${input.name}' was not found.`);
-  if (record.type !== "CNAME") throw new Error(`Cloudflare record '${input.name}' is not CNAME.`);
+  const record = records.find((candidate) => candidate.proxied);
+  if (!record) throw new Error(`Cloudflare proxied DNS record '${input.name}' was not found.`);
   return record;
 }
 
-async function createCNAMERecord(input: {
+async function createDnsRecord(input: {
   apiToken: string;
   comment: string;
   content: string;
   name: string;
   proxied: boolean;
+  type: string;
   zoneId: string;
 }) {
   // This is deliberately create-only happy-path DNS provisioning. If the target
@@ -121,7 +126,7 @@ async function createCNAMERecord(input: {
       name: input.name,
       proxied: input.proxied,
       ttl: 1,
-      type: "CNAME",
+      type: input.type,
     },
     method: "POST",
     path: `/zones/${input.zoneId}/dns_records`,
