@@ -139,10 +139,10 @@ describe("Project ingress routing", () => {
     await expect(buildingResponse.text()).resolves.toBe("This worker is currently being built.");
 
     const projectIngressResponse = await waitForProjectIngressResponse({
-      expectedText: "Bundled project worker for demo.iterate.localhost",
+      expectedText: "Bundled project worker",
       url: "https://demo.iterate.localhost/",
     });
-    expect(projectIngressResponse.text).toBe("Bundled project worker for demo.iterate.localhost");
+    expect(projectIngressResponse.text).toBe("Bundled project worker");
 
     const appOneDotResponse = await SELF.fetch("https://app1.demo.iterate.localhost/");
     expect(appOneDotResponse.ok).toBe(true);

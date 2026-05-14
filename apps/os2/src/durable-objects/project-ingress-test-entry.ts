@@ -24,54 +24,35 @@ import type { ExactHostIngressRule } from "~/ingress/types.ts";
 
 const PROJECT_CONFIG_DIR = "/iterate-config";
 const MOCK_ARTIFACT_REMOTE_BASE = "https://artifacts.example.test/";
-const TEST_PROJECT_WORKER_SOURCE = `import { WorkerEntrypoint } from "cloudflare:workers";
-import { fetch as fetchAppOne } from "./apps/app1/worker.ts";
-import { fetch as fetchAppTwo } from "./apps/app2/worker.ts";
-import { firstResponse } from "./lib/sdk.ts";
+const TEST_PROJECT_WORKER_SOURCE = `import app1 from "./apps/app1/worker.ts";
+import app2 from "./apps/app2/worker.ts";
 
-const appFetchers = [fetchAppOne, fetchAppTwo];
+const apps = [app1, app2];
 
-export default class Project extends WorkerEntrypoint {
+export default {
   async fetch(request) {
-    const appResponse = await firstResponse(appFetchers, request);
-    if (appResponse) return appResponse;
+    for (const app of apps) {
+      const response = await app.fetch(request);
+      if (response) return response;
+    }
 
-    const url = new URL(request.url);
-    const hostname = request.headers.get("x-iterate-ingress-hostname") ?? url.hostname;
-    return new Response("Bundled project worker for " + hostname);
-  }
-}
+    return new Response("Bundled project worker");
+  },
+};
 `;
-const TEST_APP_ONE_WORKER_SOURCE = `import { appFetch } from "../../lib/sdk.ts";
-
-export const fetch = appFetch("app1", () => new Response("hello from app one"));
+const TEST_APP_ONE_WORKER_SOURCE = `export default {
+  async fetch(request) {
+    if (request.headers.get("x-iterate-app-slug") !== "app1") return;
+    return new Response("hello from app one");
+  },
+};
 `;
-const TEST_APP_TWO_WORKER_SOURCE = `import { appFetch } from "../../lib/sdk.ts";
-
-export const fetch = appFetch("app2", () => new Response("hello from app two"));
-`;
-const TEST_SDK_SOURCE = `export function appFetch(appSlug, fetch) {
-  return async (request) => {
-    const hostname = ingressHostname(request);
-    const firstLabel = hostname.split(".")[0] ?? "";
-    if (firstLabel !== appSlug && !firstLabel.startsWith(\`\${appSlug}__\`)) return null;
-
-    return await fetch(request);
-  };
-}
-
-export async function firstResponse(fetchers, request) {
-  for (const fetch of fetchers) {
-    const response = await fetch(request);
-    if (response) return response;
-  }
-
-  return null;
-}
-
-function ingressHostname(request) {
-  return request.headers.get("x-iterate-ingress-hostname") ?? new URL(request.url).hostname;
-}
+const TEST_APP_TWO_WORKER_SOURCE = `export default {
+  async fetch(request) {
+    if (request.headers.get("x-iterate-app-slug") !== "app2") return;
+    return new Response("hello from app two");
+  },
+};
 `;
 
 type TestProjectConfigGit = {
@@ -114,14 +95,12 @@ export class ProjectDurableObject extends RealProjectDurableObject {
     await writeFile(`${PROJECT_CONFIG_DIR}/worker.ts`, TEST_PROJECT_WORKER_SOURCE);
     await writeFile(`${PROJECT_CONFIG_DIR}/apps/app1/worker.ts`, TEST_APP_ONE_WORKER_SOURCE);
     await writeFile(`${PROJECT_CONFIG_DIR}/apps/app2/worker.ts`, TEST_APP_TWO_WORKER_SOURCE);
-    await writeFile(`${PROJECT_CONFIG_DIR}/lib/sdk.ts`, TEST_SDK_SOURCE);
     await input.git.init({ dir: PROJECT_CONFIG_DIR, defaultBranch: input.repo.defaultBranch });
     await input.git.add({ dir: PROJECT_CONFIG_DIR, filepath: "iterate.config.jsonc" });
     await input.git.add({ dir: PROJECT_CONFIG_DIR, filepath: "package.json" });
     await input.git.add({ dir: PROJECT_CONFIG_DIR, filepath: "worker.ts" });
     await input.git.add({ dir: PROJECT_CONFIG_DIR, filepath: "apps/app1/worker.ts" });
     await input.git.add({ dir: PROJECT_CONFIG_DIR, filepath: "apps/app2/worker.ts" });
-    await input.git.add({ dir: PROJECT_CONFIG_DIR, filepath: "lib/sdk.ts" });
     await input.git.commit({
       dir: PROJECT_CONFIG_DIR,
       message: "Seed test iterate config worker",
@@ -142,9 +121,6 @@ export class ProjectDurableObject extends RealProjectDurableObject {
     if (typeof files["apps/app2/worker.ts"] !== "string") {
       throw new Error("Test project worker bundler path requires apps/app2/worker.ts.");
     }
-    if (typeof files["lib/sdk.ts"] !== "string") {
-      throw new Error("Test project worker bundler path requires lib/sdk.ts.");
-    }
 
     return {
       compatibilityDate: "2026-04-27",
@@ -160,9 +136,6 @@ export class ProjectDurableObject extends RealProjectDurableObject {
         },
         "apps/app2/worker.ts": {
           js: TEST_APP_TWO_WORKER_SOURCE,
-        },
-        "lib/sdk.ts": {
-          js: TEST_SDK_SOURCE,
         },
       },
     };

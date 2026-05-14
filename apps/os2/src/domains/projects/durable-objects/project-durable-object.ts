@@ -385,7 +385,12 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     }
 
     try {
-      return await entrypoint.fetch(request);
+      return await entrypoint.fetch(
+        withProjectAppSlug({
+          appSlug: projectAppSlugFromHost({ host, summary }),
+          request,
+        }),
+      );
     } catch (error) {
       console.error(
         "Project config worker fetch failed; serving fallback landing response.",
@@ -986,6 +991,29 @@ function projectHosts(input: { bases: readonly string[]; projectId: string; slug
     mcpHosts,
     projectHosts,
   };
+}
+
+function projectAppSlugFromHost(input: { host: string; summary: ProjectSummary }) {
+  if (!input.summary.hosts.includes(input.host)) return null;
+
+  const firstLabel = input.host.split(".")[0] ?? "";
+  const doubleUnderscoreIndex = firstLabel.indexOf("__");
+  if (doubleUnderscoreIndex > 0) return firstLabel.slice(0, doubleUnderscoreIndex);
+
+  const rest = input.host.slice(firstLabel.length);
+  if (rest.startsWith(`.${input.summary.slug}.`) || rest.startsWith(`.${input.summary.id}.`)) {
+    return firstLabel;
+  }
+
+  return null;
+}
+
+function withProjectAppSlug(input: { appSlug: string | null; request: Request }) {
+  if (input.appSlug === null) return input.request;
+
+  const headers = new Headers(input.request.headers);
+  headers.set("x-iterate-app-slug", input.appSlug);
+  return new Request(input.request, { headers });
 }
 
 function projectDynamicWorkerId(input: { commitOid: string; projectId: string }) {

@@ -1,22 +1,19 @@
-// @ts-nocheck
-import { WorkerEntrypoint } from "cloudflare:workers";
-import { fetch as fetchAppOne } from "./apps/app1/worker.ts";
-import { fetch as fetchAppTwo } from "./apps/app2/worker.ts";
-import { firstResponse } from "./lib/sdk.ts";
+import app1 from "./apps/app1/worker.ts";
+import app2 from "./apps/app2/worker.ts";
 
-const appFetchers = [fetchAppOne, fetchAppTwo];
+const apps = [app1, app2];
 
-export default class Project extends WorkerEntrypoint {
+export default {
   async fetch(request) {
-    const appResponse = await firstResponse(appFetchers, request);
-    if (appResponse) return appResponse;
+    for (const app of apps) {
+      const response = await app.fetch(request);
+      if (response) return response;
+    }
 
-    const url = new URL(request.url);
-    const hostname = request.headers.get("x-iterate-ingress-hostname") ?? url.hostname;
-    return new Response("Hello from the project config worker at " + hostname);
-  }
+    return new Response("Hello from the project config worker");
+  },
 
   async afterAppend({ event }) {
     console.log("Project config worker afterAppend", event.type);
-  }
-}
+  },
+};
