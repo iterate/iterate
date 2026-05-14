@@ -8,6 +8,8 @@ export const OS2_AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE =
 export const OS2_AGENT_PATH_PREFIX_PRESET_CONFIGURED_EVENT_TYPE =
   "events.iterate.com/os2-agent/path-prefix-preset-configured";
 export const DEFAULT_CLOUDFLARE_AGENT_MODEL = DEFAULT_WORKERS_AI_AGENT_MODEL;
+export const DEFAULT_OPENAI_AGENT_MODEL = "gpt-5.5";
+export const DEFAULT_AGENT_LLM_PROVIDER = "openai-ws";
 const LEGACY_GENERATED_SLACK_OPENAI_PROMPT_MARKER =
   "You are an Iterate agent responding from Slack.";
 
@@ -72,7 +74,7 @@ export function defaultAgentSystemPrompt(agentPath?: string) {
 }
 
 export function defaultAgentSetupEvents(
-  provider: AgentLlmProvider,
+  provider: AgentLlmProvider = DEFAULT_AGENT_LLM_PROVIDER,
   agentPath?: string,
 ): AgentPresetEvent[] {
   return [
@@ -81,7 +83,7 @@ export function defaultAgentSetupEvents(
       ? [
           {
             type: "events.iterate.com/openai-ws/config-updated",
-            payload: { model: "gpt-5.5" },
+            payload: { model: DEFAULT_OPENAI_AGENT_MODEL },
           },
         ]
       : [
