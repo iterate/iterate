@@ -1149,9 +1149,6 @@ function createClient(baseUrl: string) {
 
 async function createProject(client: OrpcClient, slugPrefix: string) {
   const project = await client.projects.create({
-    metadata: {
-      seededBy: "os2-agents-e2e",
-    },
     slug: `${slugPrefix}-${uniqueSuffix()}`,
   });
   createdProjectIds.push(project.id);

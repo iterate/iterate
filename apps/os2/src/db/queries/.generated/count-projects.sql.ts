@@ -26,7 +26,7 @@ export const countProjects = Object.assign(
 
 export namespace countProjects {
   export type Params = {
-    principalType: "clerk_organization";
+    principalType: string;
     principalId: string;
   };
   export type Result = {

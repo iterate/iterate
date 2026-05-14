@@ -29,6 +29,7 @@ import {
   normalizeIngressHost,
   parseIngressCallable,
 } from "~/ingress/host-routing.ts";
+import { getProjectCustomHostnameIngressRule } from "~/ingress/project-custom-hostname-routing.ts";
 import type { ExactHostIngressRule } from "~/ingress/types.ts";
 import { DEBUG_APPEND_CHAIN_EVENT_TYPE } from "~/durable-objects/debug-append-chain-subscriber.ts";
 
@@ -93,11 +94,18 @@ export default {
 
         const db = createD1Client(env.DB);
         const projectHostnameBases = config.projectHostnameBases;
+        const appHostname = config.baseUrl ? new URL(config.baseUrl).hostname : null;
         const ingressMatch = await matchIngressRequest({
           request,
           lookupRule: async (host) => {
             const row = await getIngressRouteByHost(db, { host: normalizeIngressHost(host) });
-            return row ? ingressRouteRowToRule(row) : null;
+            if (row) return ingressRouteRowToRule(row);
+
+            return await getProjectCustomHostnameIngressRule({
+              appHostname,
+              db: env.DB,
+              host,
+            });
           },
         });
 
@@ -121,6 +129,7 @@ export default {
           doCatalog: env.DB,
           log,
           projectHostnameBases,
+          waitUntil: (promise) => cfCtx.waitUntil(promise),
           agent: env.AGENT,
           artifacts: envWithArtifacts.ARTIFACTS,
           loader: env.LOADER,

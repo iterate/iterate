@@ -20,6 +20,7 @@ import {
   normalizeIngressHost,
   parseIngressCallable,
 } from "~/ingress/host-routing.ts";
+import { getProjectCustomHostnameIngressRule } from "~/ingress/project-custom-hostname-routing.ts";
 import type { ExactHostIngressRule } from "~/ingress/types.ts";
 
 const PROJECT_CONFIG_DIR = "/iterate-config";
@@ -163,13 +164,18 @@ export default {
     if (url.pathname === "/__test/create-project") {
       const projectId = url.searchParams.get("projectId") ?? "proj_local_test";
       const slug = url.searchParams.get("slug") ?? "demo";
+      const customHostname = url.searchParams.get("customHostname");
       const project = await env.PROJECT.getByName(
         getProjectDurableObjectName(projectId),
       ).createProject({
-        metadata: {},
         projectId,
         slug,
       });
+      if (customHostname) {
+        await env.DB.prepare(`UPDATE projects SET custom_hostname = ? WHERE id = ?`)
+          .bind(normalizeIngressHost(customHostname), projectId)
+          .run();
+      }
 
       return Response.json(project);
     }
@@ -203,11 +209,18 @@ export default {
     }
 
     const db = createD1Client(env.DB);
+    const appHostname = "os.iterate.localhost";
     const ingressMatch = await matchIngressRequest({
       request,
       lookupRule: async (host) => {
         const row = await getIngressRouteByHost(db, { host: normalizeIngressHost(host) });
-        return row ? ingressRouteRowToRule(row) : null;
+        if (row) return ingressRouteRowToRule(row);
+
+        return await getProjectCustomHostnameIngressRule({
+          appHostname,
+          db: env.DB,
+          host,
+        });
       },
     });
 
@@ -232,7 +245,6 @@ async function ensureD1Schema(db: D1Database) {
         id text primary key not null,
         slug text not null unique,
         custom_hostname text unique,
-        metadata text not null check (json_valid(metadata)),
         created_at text not null default current_timestamp,
         updated_at text not null default current_timestamp
       )`),

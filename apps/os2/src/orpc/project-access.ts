@@ -116,7 +116,6 @@ async function resolveBoundProject(input: { context: AppContext; projectSlugOrId
     id: input.projectSlugOrId,
     slug: input.projectSlugOrId,
     custom_hostname: null,
-    metadata: "{}",
     created_at: now,
     updated_at: now,
   };

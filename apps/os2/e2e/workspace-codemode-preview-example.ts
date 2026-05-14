@@ -62,10 +62,6 @@ function readProjectSlug() {
 async function createProject(input: { adminApiSecret: string; baseUrl: URL; slug: string }) {
   const response = await fetch(new URL("/api/projects", input.baseUrl), {
     body: JSON.stringify({
-      metadata: {
-        seededAt: new Date().toISOString(),
-        seededBy: "workspace-codemode-preview-example",
-      },
       slug: input.slug,
     }),
     headers: {

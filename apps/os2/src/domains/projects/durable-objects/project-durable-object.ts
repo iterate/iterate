@@ -73,7 +73,6 @@ export type ProjectSummary = {
 export type CreateProjectInput = {
   projectId: string;
   slug: string;
-  metadata: Record<string, unknown>;
 };
 
 export type ProjectAccessPrincipal = {
@@ -95,7 +94,6 @@ type ProjectStateRow = {
   slug: string;
   default_host: string;
   hosts_json: string;
-  metadata_json: string;
   created_at_ms: number;
   updated_at_ms: number;
 };
@@ -237,7 +235,6 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
       slug TEXT NOT NULL,
       default_host TEXT NOT NULL,
       hosts_json TEXT NOT NULL,
-      metadata_json TEXT NOT NULL,
       created_at_ms INTEGER NOT NULL,
       updated_at_ms INTEGER NOT NULL
     )`);
@@ -278,19 +275,17 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
 
     this.getDurableObjectSql().exec(
       `INSERT INTO project_state
-        (id, slug, default_host, hosts_json, metadata_json, created_at_ms, updated_at_ms)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+        (id, slug, default_host, hosts_json, created_at_ms, updated_at_ms)
+       VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
         slug = excluded.slug,
         default_host = excluded.default_host,
         hosts_json = excluded.hosts_json,
-        metadata_json = excluded.metadata_json,
         updated_at_ms = excluded.updated_at_ms`,
       input.projectId,
       input.slug,
       defaultHost,
       JSON.stringify(hosts.allHosts),
-      JSON.stringify(input.metadata),
       now,
       now,
     );
@@ -301,15 +296,25 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     });
     await this.writeIngressRoutes({ hosts, projectId: input.projectId });
     const summary = this.requireSummary();
-    const projectConfigCheckout = await this.buildFreshProjectDynamicWorker(summary);
     await this.writeProjectCreatedLifecycleEvent(summary);
-    await this.writeProjectConfigWorkerBuiltLifecycleEvent({
-      checkout: projectConfigCheckout,
-      summary,
-    });
-    await this.writeAgentsRootRule(summary);
+
+    // Defer heavy setup (config worker build, agents root) so the create call returns fast.
+    this.ctx.waitUntil(this.finishProjectSetup(summary));
 
     return summary;
+  }
+
+  private async finishProjectSetup(summary: ProjectSummary) {
+    try {
+      const projectConfigCheckout = await this.buildFreshProjectDynamicWorker(summary);
+      await this.writeProjectConfigWorkerBuiltLifecycleEvent({
+        checkout: projectConfigCheckout,
+        summary,
+      });
+      await this.writeAgentsRootRule(summary);
+    } catch (error) {
+      console.error(`[ProjectDO] finishProjectSetup failed for ${summary.id}:`, error);
+    }
   }
 
   async checkAccess(input: { principal: ProjectAccessPrincipal }): Promise<ProjectSummary> {
@@ -394,7 +399,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     try {
       return await entrypoint.fetch(
         withProjectAppSlug({
-          appSlug: projectAppSlugFromHost({ host, summary }),
+          appSlug: await this.projectAppSlugFromHost({ host, summary }),
           request,
         }),
       );
@@ -757,7 +762,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
   private currentSummary(): ProjectSummary | null {
     const row = this.getDurableObjectSql()
       .exec<ProjectStateRow>(
-        `SELECT id, slug, default_host, hosts_json, metadata_json, created_at_ms, updated_at_ms
+        `SELECT id, slug, default_host, hosts_json, created_at_ms, updated_at_ms
          FROM project_state
          LIMIT 1`,
       )
@@ -898,6 +903,24 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
       argsMode: "object",
     };
   }
+
+  private async projectAppSlugFromHost(input: { host: string; summary: ProjectSummary }) {
+    const platformAppSlug = projectAppSlugFromHost(input);
+    if (platformAppSlug !== null) return platformAppSlug;
+
+    const row = await this.env.DB.prepare(`SELECT custom_hostname FROM projects WHERE id = ?`)
+      .bind(input.summary.id)
+      .first<{ custom_hostname: string | null }>();
+    const customHostname = row?.custom_hostname?.trim().toLowerCase();
+    if (!customHostname) return null;
+
+    const host = normalizeIngressHost(input.host);
+    if (host === customHostname) return null;
+    if (!host.endsWith(`.${customHostname}`)) return null;
+
+    const prefix = host.slice(0, host.length - customHostname.length - 1);
+    return prefix !== "" && !prefix.includes(".") ? prefix : null;
+  }
 }
 
 type ProjectLifecycleStreamApi = ProcessorStreamApi<typeof ProjectLifecycleProcessorContract> & {
@@ -983,15 +1006,14 @@ function resolveProcessorStreamPath(input: { basePath: StreamPath; pathInput?: s
 async function upsertProjectProjection(input: { db: D1Database; input: CreateProjectInput }) {
   const row = await input.db
     .prepare(
-      `INSERT INTO projects (id, slug, metadata, updated_at)
-       VALUES (?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', 'now'))
+      `INSERT INTO projects (id, slug, updated_at)
+       VALUES (?, ?, strftime('%Y-%m-%d %H:%M:%S', 'now'))
        ON CONFLICT(id) DO UPDATE SET
         slug = excluded.slug,
-        metadata = excluded.metadata,
         updated_at = excluded.updated_at
        RETURNING id`,
     )
-    .bind(input.input.projectId, input.input.slug, JSON.stringify(input.input.metadata))
+    .bind(input.input.projectId, input.input.slug)
     .first<{ id: string }>();
 
   if (!row) throw new Error(`Project ${input.input.projectId} projection was not written.`);
