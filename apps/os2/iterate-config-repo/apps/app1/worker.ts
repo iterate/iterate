@@ -1,13 +1,4 @@
 // @ts-nocheck
-import { WorkerEntrypoint } from "cloudflare:workers";
+import { appFetch } from "../../lib/sdk.ts";
 
-export class AppOne extends WorkerEntrypoint {
-  async fetch() {
-    return new Response("hello from app one", {
-      headers: {
-        "content-type": "text/plain; charset=utf-8",
-        "x-project-app": "app1",
-      },
-    });
-  }
-}
+export const fetch = appFetch("app1", () => new Response("hello from app one"));

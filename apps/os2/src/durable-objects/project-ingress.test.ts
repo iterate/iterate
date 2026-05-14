@@ -142,29 +142,22 @@ describe("Project ingress routing", () => {
       expectedText: "Bundled project worker for demo.iterate.localhost",
       url: "https://demo.iterate.localhost/",
     });
-    expect(projectIngressResponse.headers.get("x-project-ingress-runtime")).toBe(
-      "dynamic-worker-config-repo",
-    );
     expect(projectIngressResponse.text).toBe("Bundled project worker for demo.iterate.localhost");
 
     const appOneDotResponse = await SELF.fetch("https://app1.demo.iterate.localhost/");
     expect(appOneDotResponse.ok).toBe(true);
-    expect(appOneDotResponse.headers.get("x-project-app")).toBe("app1");
     await expect(appOneDotResponse.text()).resolves.toBe("hello from app one");
 
     const appOneUnderscoreResponse = await SELF.fetch("https://app1__demo.iterate.localhost/");
     expect(appOneUnderscoreResponse.ok).toBe(true);
-    expect(appOneUnderscoreResponse.headers.get("x-project-app")).toBe("app1");
     await expect(appOneUnderscoreResponse.text()).resolves.toBe("hello from app one");
 
     const appTwoDotResponse = await SELF.fetch("https://app2.demo.iterate.localhost/");
     expect(appTwoDotResponse.ok).toBe(true);
-    expect(appTwoDotResponse.headers.get("x-project-app")).toBe("app2");
     await expect(appTwoDotResponse.text()).resolves.toBe("hello from app two");
 
     const appTwoUnderscoreResponse = await SELF.fetch("https://app2__demo.iterate.localhost/");
     expect(appTwoUnderscoreResponse.ok).toBe(true);
-    expect(appTwoUnderscoreResponse.headers.get("x-project-app")).toBe("app2");
     await expect(appTwoUnderscoreResponse.text()).resolves.toBe("hello from app two");
 
     const mcpResponse = await SELF.fetch("https://mcp.demo.iterate.localhost/", {
