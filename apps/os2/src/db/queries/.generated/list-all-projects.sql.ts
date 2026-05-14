@@ -1,7 +1,7 @@
 import type { Client } from "sqlfu";
 
 const sql = `
-select id, slug, custom_hostname, external_egress_proxy, metadata, created_at, updated_at
+select id, slug, custom_hostname, external_egress_proxy_url, metadata, created_at, updated_at
 from projects
 order by created_at desc
 limit ?
@@ -32,7 +32,7 @@ export namespace listAllProjects {
     id: string;
     slug: string;
     custom_hostname?: string;
-    external_egress_proxy?: string;
+    external_egress_proxy_url?: string;
     metadata: string;
     created_at: string;
     updated_at: string;

@@ -116,7 +116,7 @@ async function resolveBoundProject(input: { context: AppContext; projectSlugOrId
     id: input.projectSlugOrId,
     slug: input.projectSlugOrId,
     custom_hostname: null,
-    external_egress_proxy: null,
+    external_egress_proxy_url: null,
     metadata: "{}",
     created_at: now,
     updated_at: now,

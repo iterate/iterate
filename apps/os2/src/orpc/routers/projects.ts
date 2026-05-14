@@ -52,7 +52,7 @@ type ProjectRow = {
   id: string;
   slug: string;
   custom_hostname?: string | null;
-  external_egress_proxy?: string | null;
+  external_egress_proxy_url?: string | null;
   metadata: string;
   created_at: string;
   updated_at: string;
@@ -67,7 +67,7 @@ function toProject(row: ProjectRow) {
     id: row.id,
     slug: row.slug,
     customHostname: row.custom_hostname ?? null,
-    externalEgressProxy: row.external_egress_proxy ?? null,
+    externalEgressProxyUrl: row.external_egress_proxy_url ?? null,
     metadata: JSON.parse(row.metadata) as Record<string, unknown>,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -122,18 +122,18 @@ function normalizeConfigCustomHostname(
   return customHostname;
 }
 
-function normalizeConfigExternalEgressProxy(input: string | null | undefined) {
+function normalizeConfigExternalEgressProxyUrl(input: string | null | undefined) {
   if (input === undefined) return undefined;
   if (input === null) return null;
 
-  const externalEgressProxy = input.trim();
-  if (externalEgressProxy === "") return null;
+  const externalEgressProxyUrl = input.trim();
+  if (externalEgressProxyUrl === "") return null;
 
   try {
-    return new URL(externalEgressProxy).toString();
+    return new URL(externalEgressProxyUrl).toString();
   } catch {
     throw new ORPCError("BAD_REQUEST", {
-      message: "External egress proxy must be a valid URL.",
+      message: "External egress proxy URL must be a valid URL.",
     });
   }
 }
@@ -252,13 +252,13 @@ export const projectsRouter = {
           normalizedCustomHostname === undefined
             ? (existing.custom_hostname ?? null)
             : normalizedCustomHostname;
-        const normalizedExternalEgressProxy = normalizeConfigExternalEgressProxy(
-          input.externalEgressProxy,
+        const normalizedExternalEgressProxyUrl = normalizeConfigExternalEgressProxyUrl(
+          input.externalEgressProxyUrl,
         );
-        const nextExternalEgressProxy =
-          normalizedExternalEgressProxy === undefined
-            ? (existing.external_egress_proxy ?? null)
-            : normalizedExternalEgressProxy;
+        const nextExternalEgressProxyUrl =
+          normalizedExternalEgressProxyUrl === undefined
+            ? (existing.external_egress_proxy_url ?? null)
+            : normalizedExternalEgressProxyUrl;
         const nextMetadata =
           input.metadata ?? (JSON.parse(existing.metadata) as Record<string, unknown>);
 
@@ -267,7 +267,7 @@ export const projectsRouter = {
             context.db,
             {
               customHostname: nextCustomHostname,
-              externalEgressProxy: nextExternalEgressProxy,
+              externalEgressProxyUrl: nextExternalEgressProxyUrl,
               metadata: JSON.stringify(nextMetadata),
             },
             { id: input.id },
@@ -464,7 +464,7 @@ async function appendProjectSettingsUpdatedEvent(input: {
     type: PROJECT_SETTINGS_UPDATED_EVENT_TYPE,
     payload: {
       customHostname: input.project.custom_hostname ?? null,
-      externalEgressProxy: input.project.external_egress_proxy ?? null,
+      externalEgressProxyUrl: input.project.external_egress_proxy_url ?? null,
       metadata: JSON.parse(input.project.metadata) as Record<string, unknown>,
       projectId: input.project.id,
       slug: input.project.slug,

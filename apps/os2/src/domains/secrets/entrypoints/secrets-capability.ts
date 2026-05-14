@@ -7,6 +7,7 @@ import {
   deleteProjectSecretById,
   deleteProjectSecret,
   getProjectSecretSummaryById,
+  getProjectSecretSummaryByKey,
   getProjectSecret,
   listProjectSecrets,
   projectSecretId,
@@ -24,7 +25,14 @@ type SecretsCapabilityProps = {
 
 type SecretsCapabilityClient = Pick<
   SecretsCapability,
-  "deleteSecretById" | "getSecretSummary" | "listSecrets" | "setSecret"
+  | "deleteSecretById"
+  | "getSecret"
+  | "getSecretOrNull"
+  | "getSecretSummary"
+  | "getSecretSummaryByKey"
+  | "getSecretSummaryByKeyOrNull"
+  | "listSecrets"
+  | "setSecret"
 >;
 
 export class SecretsCapability extends WorkerEntrypoint<
@@ -66,6 +74,13 @@ export class SecretsCapability extends WorkerEntrypoint<
     return secret;
   }
 
+  async getSecretOrNull(input: { key: string }) {
+    return await getProjectSecret(this.db(), {
+      key: input.key,
+      projectId: this.projectId(),
+    });
+  }
+
   async setSecret(input: { key: string; material: string; metadata?: Record<string, unknown> }) {
     return await upsertProjectSecretSummary(this.db(), {
       id: this.createSecretId(),
@@ -89,6 +104,24 @@ export class SecretsCapability extends WorkerEntrypoint<
       throw new Error(`Secret ${input.id} was not found for this project.`);
     }
     return secret;
+  }
+
+  async getSecretSummaryByKey(input: { key: string }) {
+    const secret = await getProjectSecretSummaryByKey(this.db(), {
+      key: input.key,
+      projectId: this.projectId(),
+    });
+    if (!secret) {
+      throw new Error(`Secret ${input.key} was not found for this project.`);
+    }
+    return secret;
+  }
+
+  async getSecretSummaryByKeyOrNull(input: { key: string }) {
+    return await getProjectSecretSummaryByKey(this.db(), {
+      key: input.key,
+      projectId: this.projectId(),
+    });
   }
 
   async deleteSecret(input: { key: string }) {

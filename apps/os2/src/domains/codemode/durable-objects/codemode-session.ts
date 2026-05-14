@@ -33,6 +33,7 @@ import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
 import { createOutboundMcpFromOurClientToolProviderRegistration } from "~/domains/outbound-mcp-client/utils/outbound-mcp-provider-registration.ts";
 import { createOpenApiProviderRegistration } from "~/rpc-targets/openapi-provider-registration.ts";
+import { type ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
 
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
 export { OutboundMcpFromOurClientCapability } from "~/domains/outbound-mcp-client/entrypoints/outbound-mcp-from-our-client-capability.ts";
@@ -107,6 +108,7 @@ export type CodemodeSessionEnv = {
   CODEMODE_SESSION: DurableObjectNamespace<CodemodeSession>;
   DO_CATALOG: D1Database;
   LOADER?: WorkerLoader;
+  PROJECT?: DurableObjectNamespace<ProjectDurableObject>;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
 } & Record<string, unknown>;
 
@@ -196,6 +198,7 @@ const CodemodeSessionRunnerBase = withStreamProcessorRunner<
           return session.getCodemodeSessionCapability();
         },
         loader: args.env.LOADER,
+        outboundFetch: projectCapability,
       }),
     });
   },
@@ -844,6 +847,7 @@ function createCloudflareCodemodeScriptExecutor(input: {
   env?: Record<string, unknown>;
   getSessionCapability?: () => CodemodeProcessorSession;
   loader: WorkerLoader | undefined;
+  outboundFetch: Fetcher;
 }): CodemodeScriptExecutor {
   return async ({ code, logger, scriptExecutionId, session }) => {
     if (!input.loader) {
@@ -866,7 +870,7 @@ function createCloudflareCodemodeScriptExecutor(input: {
             "user-code.js": buildUserCodeModule(code),
           },
           env: input.env,
-          globalOutbound: null,
+          globalOutbound: input.outboundFetch,
         })
         .getEntrypoint() as unknown as CodemodeExecutorEntrypoint;
 

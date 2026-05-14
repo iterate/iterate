@@ -143,6 +143,14 @@ export async function getProjectSecretSummaryById(
   return secret ? toSecretSummary(secret) : null;
 }
 
+export async function getProjectSecretSummaryByKey(
+  db: Client,
+  input: { key: string; projectId: string },
+): Promise<ProjectSecretSummary | null> {
+  const secret = await getProjectSecret(db, input);
+  return secret ? toSecretSummary(secret) : null;
+}
+
 export async function listProjectSecrets(
   db: Client,
   input: { projectId: string },

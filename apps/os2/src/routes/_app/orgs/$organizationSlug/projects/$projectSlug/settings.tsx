@@ -47,7 +47,9 @@ function ProjectDetailContent({
   const router = useRouter();
   const queryClient = useQueryClient();
   const [customHostname, setCustomHostname] = useState(project.customHostname ?? "");
-  const [externalEgressProxy, setExternalEgressProxy] = useState(project.externalEgressProxy ?? "");
+  const [externalEgressProxyUrl, setExternalEgressProxyUrl] = useState(
+    project.externalEgressProxyUrl ?? "",
+  );
   const updateConfig = useMutation(
     orpc.projects.updateConfig.mutationOptions({
       onSuccess: () => {
@@ -65,9 +67,9 @@ function ProjectDetailContent({
     updateConfig.mutate({
       id: project.id,
       customHostname: customHostname.trim() === "" ? null : customHostname,
-      externalEgressProxy: externalEgressProxy.trim() === "" ? null : externalEgressProxy,
+      externalEgressProxyUrl: externalEgressProxyUrl.trim() === "" ? null : externalEgressProxyUrl,
     });
-  }, [customHostname, externalEgressProxy, project.id, updateConfig]);
+  }, [customHostname, externalEgressProxyUrl, project.id, updateConfig]);
 
   return (
     <section className="space-y-4 p-4">
@@ -108,12 +110,12 @@ function ProjectDetailContent({
 
         <div className="space-y-2">
           <p className="text-xs uppercase tracking-wide text-muted-foreground">
-            External egress proxy
+            External egress proxy URL
           </p>
           <Input
             placeholder="https://proxy.example.com"
-            value={externalEgressProxy}
-            onChange={(event) => setExternalEgressProxy(event.target.value)}
+            value={externalEgressProxyUrl}
+            onChange={(event) => setExternalEgressProxyUrl(event.target.value)}
             onKeyDown={(event) => event.key === "Enter" && handleUpdateConfig()}
           />
         </div>

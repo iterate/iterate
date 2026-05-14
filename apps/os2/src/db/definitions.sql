@@ -5,7 +5,7 @@ create table projects (
   metadata text not null check (json_valid(metadata)),
   created_at text not null default current_timestamp,
   updated_at text not null default current_timestamp,
-  external_egress_proxy text
+  external_egress_proxy_url text
 );
 
 create index idx_projects_created_at on projects (created_at);

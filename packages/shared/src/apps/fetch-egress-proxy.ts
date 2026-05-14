@@ -6,10 +6,11 @@
  * `packages/shared/src/apps/config.ts`, and is installed at the worker boundary
  * in files like `apps/agents/src/entry.workerd.ts`.
  *
- * We intentionally forward requests using the same `x-forwarded-host` and
- * `x-forwarded-proto` contract that `packages/mock-http-proxy` already consumes
- * in `src/server/proxy-request-transform.ts`, so the app-side egress feature
- * and the repo's mock/replay tooling agree on how the original destination is
+ * We intentionally forward requests using conventional `Forwarded` and
+ * `X-Forwarded-*` headers, plus the same path/query rewrite contract that
+ * `packages/mock-http-proxy` already consumes in
+ * `src/server/proxy-request-transform.ts`, so the app-side egress feature and
+ * the repo's mock/replay tooling agree on how the original destination is
  * represented.
  *
  * We construct `new Request(proxyUrl, request)` because Cloudflare Workers
@@ -19,27 +20,33 @@
  */
 export function createExternalEgressProxyFetch(options: {
   fetch: typeof globalThis.fetch;
-  externalEgressProxy: string;
+  externalEgressProxyUrl: string;
 }) {
   const nativeFetch = options.fetch;
-  const externalEgressProxy = new URL(options.externalEgressProxy);
+  const externalEgressProxyUrl = new URL(options.externalEgressProxyUrl);
 
   return (input: Request | URL | string, init?: RequestInit) => {
     const request = new Request(input, init);
     const requestUrl = new URL(request.url);
 
-    if (shouldBypassProxy(requestUrl, externalEgressProxy)) {
+    if (shouldBypassProxy(requestUrl, externalEgressProxyUrl)) {
       return nativeFetch(request);
     }
 
-    const proxyUrl = new URL(externalEgressProxy);
+    const proxyUrl = new URL(externalEgressProxyUrl);
     proxyUrl.pathname = joinProxyPath(proxyUrl.pathname, requestUrl.pathname);
     proxyUrl.search = requestUrl.search;
 
     const proxyRequest = new Request(proxyUrl, request);
+    const originalProto = requestUrl.protocol.replace(/:$/, "");
     proxyRequest.headers.set("host", proxyUrl.host);
+    proxyRequest.headers.set(
+      "forwarded",
+      `proto=${quoteForwardedValue(originalProto)};host=${quoteForwardedValue(requestUrl.host)}`,
+    );
     proxyRequest.headers.set("x-forwarded-host", requestUrl.host);
-    proxyRequest.headers.set("x-forwarded-proto", requestUrl.protocol.replace(/:$/, ""));
+    proxyRequest.headers.set("x-forwarded-proto", originalProto);
+    proxyRequest.headers.set("x-forwarded-uri", `${requestUrl.pathname}${requestUrl.search}`);
 
     return nativeFetch(proxyRequest);
   };
@@ -61,4 +68,9 @@ function joinProxyPath(proxyBasePathname: string, requestPathname: string) {
   const normalizedBasePathname =
     proxyBasePathname === "/" ? "" : proxyBasePathname.replace(/\/+$/, "");
   return `${normalizedBasePathname}${requestPathname}`;
+}
+
+function quoteForwardedValue(value: string) {
+  if (/^[A-Za-z0-9._:[\]-]+$/.test(value)) return value;
+  return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
 }

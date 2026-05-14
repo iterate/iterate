@@ -3,6 +3,9 @@
   "main": "codemode-session-test-entry.ts",
   "compatibility_date": "2026-04-27",
   "compatibility_flags": ["nodejs_compat", "experimental"],
+  "vars": {
+    "APP_CONFIG": "{\"adminApiSecret\":\"codemode-session-admin-secret\",\"clerk\":{\"publishableKey\":\"pk_test_ZHVtbXkuY2xlcmsuYWNjb3VudHMuZGV2JA\",\"secretKey\":\"sk_test_codemode_session\",\"jwtKey\":\"codemode-session-jwt-key\"},\"openAiApiKey\":\"openai-test-key\",\"projectHostnameBases\":[\"iterate.localhost\"],\"typeIdPrefix\":\"os\"}",
+  },
   "durable_objects": {
     "bindings": [
       {
@@ -25,9 +28,19 @@
         "name": "AGENT",
         "class_name": "AgentDurableObject",
       },
+      {
+        "name": "PROJECT",
+        "class_name": "ProjectDurableObject",
+      },
     ],
   },
   "d1_databases": [
+    {
+      "binding": "DB",
+      "database_id": "os2-codemode-session-db-vitest",
+      "database_name": "os2-codemode-session-db-vitest",
+      "preview_database_id": "os2-codemode-session-db-vitest",
+    },
     {
       "binding": "DO_CATALOG",
       "database_id": "os2-codemode-session-vitest",
@@ -52,6 +65,10 @@
     {
       "tag": "v3",
       "new_sqlite_classes": ["RepoDurableObject", "WorkspaceDurableObject", "AgentDurableObject"],
+    },
+    {
+      "tag": "v4",
+      "new_sqlite_classes": ["ProjectDurableObject"],
     },
   ],
 }

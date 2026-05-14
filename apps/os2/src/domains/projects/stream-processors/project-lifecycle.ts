@@ -25,7 +25,7 @@ export const ProjectLifecycleProcessorContract = defineProcessorContract({
         settings: z
           .object({
             customHostname: z.string().nullable(),
-            externalEgressProxy: z.string().url().nullable(),
+            externalEgressProxyUrl: z.string().url().nullable(),
             metadata: z.record(z.string(), z.unknown()),
           })
           .nullable()
@@ -61,7 +61,7 @@ export const ProjectLifecycleProcessorContract = defineProcessorContract({
       description: "A Project's settings were updated.",
       payloadSchema: z.object({
         customHostname: z.string().nullable(),
-        externalEgressProxy: z.string().url().nullable(),
+        externalEgressProxyUrl: z.string().url().nullable(),
         metadata: z.record(z.string(), z.unknown()),
         projectId: z.string().trim().min(1),
         slug: z.string().trim().min(1),
@@ -93,7 +93,7 @@ export const ProjectLifecycleProcessorContract = defineProcessorContract({
             ...state.project,
             settings: {
               customHostname: event.payload.customHostname,
-              externalEgressProxy: event.payload.externalEgressProxy,
+              externalEgressProxyUrl: event.payload.externalEgressProxyUrl,
               metadata: event.payload.metadata,
             },
           },
