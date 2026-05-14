@@ -247,9 +247,10 @@ export class SandboxesCapability extends WorkerEntrypoint<
     const repo = await this.iterateConfigRepo(input.projectId);
     const clone = await input.sandbox.exec(
       [
-        `rm -rf ${shellQuote(SANDBOX_ITERATE_CONFIG_PATH)}`,
-        `mkdir -p ${shellQuote("/workspace")}`,
+        "tmp_dir=$(mktemp -d)",
+        "trap 'rm -rf \"$tmp_dir\"' EXIT",
         [
+          "GIT_TERMINAL_PROMPT=0",
           "git",
           "-c",
           shellQuote("credential.helper="),
@@ -261,10 +262,13 @@ export class SandboxesCapability extends WorkerEntrypoint<
           "--branch",
           shellQuote(repo.defaultBranch),
           shellQuote(repo.remote),
-          shellQuote(SANDBOX_ITERATE_CONFIG_PATH),
+          `"${"${tmp_dir}"}/iterate-config"`,
         ].join(" "),
+        `rm -rf ${shellQuote(SANDBOX_ITERATE_CONFIG_PATH)}`,
+        `mkdir -p ${shellQuote("/workspace")}`,
+        `cp -a "${"${tmp_dir}"}/iterate-config" ${shellQuote(SANDBOX_ITERATE_CONFIG_PATH)}`,
       ].join(" && "),
-      { timeout: 120_000 },
+      { cwd: "/", timeout: 300_000 },
     );
     if (!clone.success) {
       throw new Error(
