@@ -21,6 +21,7 @@ import {
   parseIngressCallable,
 } from "~/ingress/host-routing.ts";
 import { getProjectCustomHostnameIngressRule } from "~/ingress/project-custom-hostname-routing.ts";
+import { getProjectPlatformHostIngressRule } from "~/ingress/project-platform-host-routing.ts";
 import type { ExactHostIngressRule } from "~/ingress/types.ts";
 
 const PROJECT_CONFIG_DIR = "/iterate-config";
@@ -162,7 +163,7 @@ export default {
 
     const url = new URL(request.url);
     if (url.pathname === "/__test/create-project") {
-      const projectId = url.searchParams.get("projectId") ?? "proj_local_test";
+      const projectId = url.searchParams.get("projectId") ?? "proj__local__test";
       const slug = url.searchParams.get("slug") ?? "demo";
       const customHostname = url.searchParams.get("customHostname");
       const project = await env.PROJECT.getByName(
@@ -183,7 +184,7 @@ export default {
     if (url.pathname === "/__test/project-stream") {
       const stream = await getInitializedStreamStub({
         durableObjectNamespace: env.STREAM as unknown as StreamDurableObjectNamespace,
-        namespace: "proj_local_test",
+        namespace: "proj__local__test",
         path: PROJECT_LIFECYCLE_STREAM_PATH,
       });
 
@@ -192,7 +193,7 @@ export default {
 
     if (url.pathname === "/__test/project-lifecycle-state") {
       const state = await env.PROJECT.getByName(
-        getProjectDurableObjectName("proj_local_test"),
+        getProjectDurableObjectName("proj__local__test"),
       ).getProjectLifecycleRunnerState();
       return Response.json(state);
     }
@@ -200,7 +201,7 @@ export default {
     if (url.pathname === "/__test/iterate-config-repo") {
       const repo = await env.REPO.getByName(
         getRepoDurableObjectName({
-          projectId: "proj_local_test",
+          projectId: "proj__local__test",
           repoSlug: ITERATE_CONFIG_REPO_SLUG,
         }),
       ).getInfo();
@@ -210,11 +211,20 @@ export default {
 
     const db = createD1Client(env.DB);
     const appHostname = "os.iterate.localhost";
+    const projectHostnameBases = ["iterate.localhost"];
     const ingressMatch = await matchIngressRequest({
       request,
       lookupRule: async (host) => {
         const row = await getIngressRouteByHost(db, { host: normalizeIngressHost(host) });
         if (row) return ingressRouteRowToRule(row);
+
+        const platformRule = await getProjectPlatformHostIngressRule({
+          appHostname,
+          bases: projectHostnameBases,
+          db: env.DB,
+          host,
+        });
+        if (platformRule) return platformRule;
 
         return await getProjectCustomHostnameIngressRule({
           appHostname,

@@ -67,7 +67,7 @@ function ProjectsIndexPage() {
       onSuccess: (project) => {
         void queryClient.invalidateQueries({ queryKey: orpc.projects.list.key() });
         void navigate({
-          to: "/orgs/$organizationSlug/projects/$projectSlug/streams",
+          to: "/orgs/$organizationSlug/projects/$projectSlug",
           params: {
             organizationSlug: params.organizationSlug,
             projectSlug: project.slug,

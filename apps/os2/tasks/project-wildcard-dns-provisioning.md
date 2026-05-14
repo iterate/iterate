@@ -50,26 +50,25 @@ management is enabled for them.
 - Single-label aliases such as `app1__<slug>.<base>` work with ordinary
   `*.<base>` DNS and cert coverage, but they are fallback aliases rather than
   the canonical dotted app shape.
-- `apps/os/alchemy.run.ts` has precedent for Cloudflare DNS upsert:
+- `apps/os/alchemy.run.ts` has precedent for Cloudflare DNS management:
   resolve zone by name, list `dns_records` by `type=CNAME&name=...`, then create
   or update a proxied CNAME with `ttl: 1` and a managed comment.
 - Cloudflare's DNS API supports:
   - `GET /zones?name=<zone>&status=active&per_page=1`
   - `GET /zones/<zoneId>/dns_records?type=CNAME&name=<record>&per_page=1`
   - `POST /zones/<zoneId>/dns_records`
-  - `PATCH /zones/<zoneId>/dns_records/<recordId>`
 
 ## Target Behavior
 
 On Project creation, after durable Project state and ingress projections are
-written, OS2 kicks off DNS provisioning for every configured project hostname
-base that has DNS management config.
+written, OS2 kicks off DNS provisioning for the first configured project
+hostname base when DNS management is configured.
 
-For each base:
+For that canonical base:
 
 1. Resolve the Cloudflare zone.
 2. Read the existing source CNAME record at `*.<base>`.
-3. Upsert `*.<project-slug>.<base>` as a CNAME with:
+3. Create `*.<project-slug>.<base>` as a CNAME with:
    - `content`: copied from the source wildcard CNAME.
    - `proxied`: copied from the source record, defaulting to `true` only if the
      source omits it.
@@ -78,9 +77,9 @@ For each base:
 4. Do not provision `*.<project-id>.<base>` in this slice unless a DNS-safe
    stable alias is introduced. Keep that separate from slug wildcard DNS.
 
-The operation must be idempotent. Re-running it should treat an existing record
-that already points at the source wildcard target as success. This first slice
-does not update existing records whose targets drift.
+The first slice should optimize for the happy path and the least code that makes
+that path work. It should not try to solve idempotent target lookup, general DNS
+ownership, target drift, or unusual zone layouts.
 
 Provisioning should append project lifecycle events to the Project lifecycle
 stream. The minimum event set is:
@@ -88,12 +87,10 @@ stream. The minimum event set is:
 - `events.iterate.com/project/cname-record-created`
 - `events.iterate.com/project/cname-record-creation-failed`
 
-Each event should include `projectId`, `projectSlug`, `base`, `name`, `target`,
-and enough Cloudflare record metadata or failure details to debug without
-storing credentials. Treat idempotent "already exists and is correct" as
-created for product semantics, but use an idempotency key based on project ID,
-record name, target, and result type so retries do not spam duplicate success
-events.
+Each event should include useful debugging context: `projectId`, `projectSlug`,
+`base`, `name`, `target`, Cloudflare record metadata when available, and failure
+details when applicable. Do not include credentials. Treat idempotent "already
+exists and is correct" as out of scope for this slice.
 
 ## Implementation Plan
 
@@ -109,11 +106,10 @@ cloudflare: z
   .default({}),
 ```
 
-Derive Cloudflare zone names from `projectHostnameBases`. For the first slice,
-assume each configured project hostname base is also the Cloudflare zone apex,
-for example `iterate2.app` or `iterate-preview-3.app`. If OS2 later needs a
-base like `projects.example.com` where the Cloudflare zone is `example.com`, add
-an override then.
+Derive the Cloudflare zone name from `projectHostnameBases[0]`. For the first
+slice, assume that canonical project hostname base is also the Cloudflare zone
+apex, for example `iterate2.app` or `iterate-preview-3.app`. Do the simplest
+thing that works for current OS2 domains.
 
 Do not rely on deployment-time `CLOUDFLARE_API_TOKEN` automatically existing in
 the runtime Worker. Bind the runtime token through Doppler/AppConfig.
@@ -121,12 +117,20 @@ the runtime Worker. Bind the runtime token through Doppler/AppConfig.
 Add a Doppler note/config node for:
 
 ```text
-APP_CONFIG_CLOUDFLARE__API_TOKEN=<runtime DNS edit token>
+APP_CONFIG_CLOUDFLARE__API_TOKEN=${_shared.<config>.CLOUDFLARE_API_TOKEN}
 ```
 
 This token needs Cloudflare `DNS:Read` and `DNS:Edit` for the relevant project
 hostname zones. It is intentionally separate from `_shared` deploy-time
-`CLOUDFLARE_API_TOKEN`, which Alchemy uses before the Worker is running.
+`CLOUDFLARE_API_TOKEN`, but references the same underlying token in Doppler so
+runtime DNS provisioning and Alchemy deployment use the same Cloudflare account
+credentials per environment.
+
+This has been configured on the `os2` root configs:
+
+- `dev`: `${_shared.dev.CLOUDFLARE_API_TOKEN}`
+- `preview`: `${_shared.preview.CLOUDFLARE_API_TOKEN}`
+- `prd`: `${_shared.prd.CLOUDFLARE_API_TOKEN}`
 
 ### 2. Cloudflare DNS Helper
 
@@ -140,24 +144,33 @@ Keep it fetch-based and dependency-free. Suggested functions:
 
 - `resolveZoneId({ apiToken, zoneName, zoneId })`
 - `getCNAMERecord({ apiToken, zoneId, name })`
-- `upsertCNAMERecord({ apiToken, zoneId, name, content, proxied, comment })`
+- `createCNAMERecord({ apiToken, zoneId, name, content, proxied, comment })`
 - `provisionProjectWildcardDns({ config, projectId, projectSlug })`
 
-Use structured errors that include the zone/base/record name but never include
-the API token.
+Use plain errors that include the zone/base/record name but never include the
+API token.
 
-Return a small result union from the helper instead of only throwing:
+Add short comments around intentionally simple behavior, especially:
+
+- no runtime token means log and skip DNS provisioning;
+- local/localhost bases are skipped;
+- existing target records may fail Cloudflare creation and are not reconciled;
+- this is create-only happy-path DNS provisioning, not a DNS reconciler.
+
+Return success details from the helper and throw on failure. Keep the call site
+simple:
 
 ```ts
-type ProvisionProjectWildcardDnsResult =
-  | { type: "created"; name: string; target: string; recordId: string }
-  | { type: "already-existed"; name: string; target: string; recordId: string }
-  | { type: "failed"; name: string; target?: string; reason: string }
-  | { type: "skipped"; reason: "not-configured" };
+type ProvisionProjectWildcardDnsSuccess = {
+  name: string;
+  target: string;
+  recordId: string;
+};
 ```
 
-That keeps event emission in the Project Durable Object where the lifecycle
-stream is already available.
+Emit the lifecycle events wherever it takes the least code. In practice this is
+probably the Project Durable Object wrapper, because it already knows the
+Project lifecycle stream.
 
 ### 3. Hook Into Project Creation
 
@@ -175,25 +188,17 @@ Do not block Project creation on Cloudflare DNS. A Cloudflare outage, missing
 token, or certificate delay should not roll back the Project. Log failures with
 enough context to retry.
 
-Add a Project DO method such as `provisionDns()` or `repairDns()` so an admin
-route/script can retry without recreating the Project.
-
 Emit lifecycle events from this scheduled task:
 
-- `cname-record-created` after a successful create or after confirming the
-  intended record already exists and points at the right target.
+- `cname-record-created` after a successful create.
 - `cname-record-creation-failed` when Cloudflare config/API/source-record lookup
-  fails, or when an unmanaged conflicting record already exists.
+  fails, including if the target record already exists.
 
 ### 4. Conflict Policy
 
-If `*.<project-slug>.<base>` exists:
-
-- If it already matches the intended CNAME target, treat it as success.
-- If it points elsewhere, do not overwrite it in this slice. Log a
-  `cname-record-creation-failed` event and expose it through the retry/status
-  path. This includes records with an OS2 managed comment whose source wildcard
-  target has changed since initial provisioning.
+Do not preflight-check whether `*.<project-slug>.<base>` exists. If Cloudflare
+rejects creation because a record already exists, treat that as
+`cname-record-creation-failed` in this slice.
 
 If the source `*.<base>` record is missing or is not a CNAME, fail the DNS task
 with a clear message. That is a deployment configuration problem.
@@ -207,20 +212,26 @@ tunnel code has the same note after wildcard DNS creation.
 Acceptance should verify both DNS and HTTPS. A successful DNS API response alone
 is not enough for production readiness.
 
-### 6. Tests
+### 6. Proof
 
-Add focused unit coverage for the DNS helper with mocked `fetch`:
+Do not add automated tests in the first slice. Prove the feature through a real
+PR preview deployment:
 
-- Resolves zone ID by zone name.
-- Reads source `*.<base>` CNAME.
-- Creates missing `*.<slug>.<base>` record.
-- Patches existing managed record.
-- Refuses to overwrite unmanaged conflicting record.
-- Skips cleanly when DNS config/token is absent.
+1. Push the implementation branch and open a PR.
+2. Deploy or wait for the OS2 preview deployment for that PR.
+3. Ensure the preview Doppler config has
+   `APP_CONFIG_CLOUDFLARE__API_TOKEN` configured.
+4. Create a throwaway Project through the preview OS2 Project creation path.
+5. Confirm Cloudflare has a CNAME for `*.<slug>.<preview-base>` with content
+   copied from `*.<preview-base>`.
+6. Confirm the Project lifecycle stream contains
+   `events.iterate.com/project/cname-record-created`.
+7. After DNS/certificate propagation, load
+   `https://app1.<slug>.<preview-base>/`.
 
-Add Project DO/workerd coverage that project creation schedules DNS provisioning
-for configured non-local bases. Keep local `iterate.localhost` tests from
-calling Cloudflare by leaving DNS config absent in the vitest app config.
+Also prove the failure branch once by temporarily using a bad token or a
+throwaway base without a source wildcard, then confirm the lifecycle stream
+contains `events.iterate.com/project/cname-record-creation-failed`.
 
 ## Acceptance Criteria
 
@@ -229,11 +240,11 @@ calling Cloudflare by leaving DNS config absent in the vitest app config.
 - The new records copy the CNAME target from `*.iterate2.app`.
 - Project creation still succeeds if DNS provisioning is skipped because runtime
   DNS config is absent.
-- Cloudflare API failures are logged and retryable without Project recreation.
+- Cloudflare API failures are logged and represented as lifecycle events.
 - DNS provisioning appends lifecycle events for created/creation-failed.
-- Existing OS2 ingress tests still pass.
-- A deployed smoke check can load `https://app1.<slug>.iterate2.app/` after DNS
-  and certificate issuance complete.
+- Manual proof above is completed.
+- A PR preview smoke check can load `https://app1.<slug>.<preview-base>/` after
+  DNS and certificate issuance complete.
 
 ## Open Questions
 
@@ -241,7 +252,7 @@ calling Cloudflare by leaving DNS config absent in the vitest app config.
   stable alias rather than raw TypeIDs with underscores. If not, remove them
   from `projectHosts(...)`.
 - Should DNS provisioning status be persisted in Project DO storage for UI/admin
-  display, or is logging plus an admin repair method enough for the first slice?
+  display later, or are lifecycle events enough?
 - Do preview environments need runtime DNS automation, or should this be
   production-only until preview zone/token scoping is settled?
 - Source wildcard target drift is not reconciled in the first slice. If

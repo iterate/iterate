@@ -34,13 +34,17 @@ import {
   normalizeIngressHost,
   parseIngressCallable,
 } from "~/ingress/host-routing.ts";
+import { parseProjectPlatformHosts } from "~/ingress/project-platform-host-routing.ts";
 import type { ExactHostIngressRule } from "~/ingress/types.ts";
 import {
+  PROJECT_CNAME_RECORD_CREATED_EVENT_TYPE,
+  PROJECT_CNAME_RECORD_CREATION_FAILED_EVENT_TYPE,
   PROJECT_CONFIG_WORKER_BUILT_EVENT_TYPE,
   createProjectLifecycleProcessor,
   PROJECT_LIFECYCLE_STREAM_PATH,
   ProjectLifecycleProcessorContract,
 } from "~/domains/projects/stream-processors/project-lifecycle.ts";
+import { createProjectWildcardCNAMERecord as createCloudflareProjectWildcardCNAMERecord } from "~/domains/projects/cloudflare-dns.ts";
 import {
   type RepoDurableObject,
   type RepoInfo,
@@ -285,7 +289,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
       input.projectId,
       input.slug,
       defaultHost,
-      JSON.stringify(hosts.allHosts),
+      JSON.stringify(hosts.projectHosts),
       now,
       now,
     );
@@ -297,6 +301,12 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     await this.writeIngressRoutes({ hosts, projectId: input.projectId });
     const summary = this.requireSummary();
     await this.writeProjectCreatedLifecycleEvent(summary);
+    void this.createProjectWildcardCNAMERecord(summary).catch((error) => {
+      console.error(
+        `[ProjectDNS] Wildcard CNAME fire-and-forget task failed for ${summary.id}:`,
+        error,
+      );
+    });
 
     // Defer heavy setup (config worker build, agents root) so the create call returns fast.
     this.ctx.waitUntil(this.finishProjectSetup(summary));
@@ -672,7 +682,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     await deleteIngressRoutesByProject(db, { projectId: input.projectId });
     this.getDurableObjectSql().exec(`DELETE FROM project_ingress_routes`);
 
-    for (const host of input.hosts.allHosts) {
+    for (const host of input.hosts.projectHosts) {
       const callable = {
         type: "fetch",
         via: {
@@ -834,6 +844,82 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     });
   }
 
+  private async createProjectWildcardCNAMERecord(summary: ProjectSummary) {
+    const config = this.getAppConfig();
+    const base = config.projectHostnameBases[0];
+    try {
+      const result = await createCloudflareProjectWildcardCNAMERecord({
+        apiToken: config.cloudflare.apiToken?.exposeSecret(),
+        projectHostnameBase: base,
+        projectId: summary.id,
+        projectSlug: summary.slug,
+      });
+      if (result === null) return;
+      await this.writeProjectCNAMERecordCreatedLifecycleEvent({
+        result,
+        summary,
+      });
+    } catch (error) {
+      console.error(`[ProjectDNS] Wildcard CNAME creation failed for ${summary.id}:`, error);
+      await this.writeProjectCNAMERecordCreationFailedLifecycleEvent({
+        base,
+        error,
+        summary,
+      });
+    }
+  }
+
+  private async writeProjectCNAMERecordCreatedLifecycleEvent(input: {
+    result: Awaited<ReturnType<typeof createCloudflareProjectWildcardCNAMERecord>>;
+    summary: ProjectSummary;
+  }) {
+    if (input.result === null) return;
+    const stream = await getInitializedStreamStub({
+      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+      namespace: input.summary.id,
+      path: PROJECT_LIFECYCLE_STREAM_PATH,
+    });
+
+    await stream.append({
+      type: PROJECT_CNAME_RECORD_CREATED_EVENT_TYPE,
+      idempotencyKey: `project-cname-record-created:${input.summary.id}:${input.result.name}`,
+      payload: {
+        base: input.result.base,
+        cloudflareRecord: input.result.record,
+        name: input.result.name,
+        projectId: input.summary.id,
+        projectSlug: input.summary.slug,
+        target: input.result.target,
+        zoneId: input.result.zoneId,
+        zoneName: input.result.zoneName,
+      },
+    });
+  }
+
+  private async writeProjectCNAMERecordCreationFailedLifecycleEvent(input: {
+    base: string | undefined;
+    error: unknown;
+    summary: ProjectSummary;
+  }) {
+    const stream = await getInitializedStreamStub({
+      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+      namespace: input.summary.id,
+      path: PROJECT_LIFECYCLE_STREAM_PATH,
+    });
+    const base = input.base?.trim();
+
+    await stream.append({
+      type: PROJECT_CNAME_RECORD_CREATION_FAILED_EVENT_TYPE,
+      idempotencyKey: `project-cname-record-creation-failed:${input.summary.id}:${Date.now()}`,
+      payload: {
+        ...(base ? { base, name: `*.${input.summary.slug}.${base}` } : {}),
+        message: errorMessage(input.error),
+        projectId: input.summary.id,
+        projectSlug: input.summary.slug,
+      },
+    });
+  }
+
   private async getOrCreateIterateConfigRepo(summary: ProjectSummary) {
     return await getReposCapability({
       exports: readLoopbackExports(this.ctx),
@@ -905,8 +991,18 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
   }
 
   private async projectAppSlugFromHost(input: { host: string; summary: ProjectSummary }) {
-    const platformAppSlug = projectAppSlugFromHost(input);
-    if (platformAppSlug !== null) return platformAppSlug;
+    const platformHosts = parseProjectPlatformHosts({
+      bases: this.getAppConfig().projectHostnameBases,
+      host: input.host,
+    });
+    for (const platformHost of platformHosts) {
+      if (
+        platformHost.projectIdentifier === input.summary.slug ||
+        platformHost.projectIdentifier === input.summary.id
+      ) {
+        return platformHost.appSlug;
+      }
+    }
 
     const row = await this.env.DB.prepare(`SELECT custom_hostname FROM projects WHERE id = ?`)
       .bind(input.summary.id)
@@ -1024,44 +1120,17 @@ function projectHosts(input: { bases: readonly string[]; projectId: string; slug
     normalizeIngressHost(`${input.slug}.${base}`),
     normalizeIngressHost(`${input.projectId}.${base}`),
   ]);
-  const appHosts = input.bases.flatMap((base) =>
-    ["app1", "app2"].flatMap((appSlug) => [
-      normalizeIngressHost(`${appSlug}.${input.slug}.${base}`),
-      normalizeIngressHost(`${appSlug}.${input.projectId}.${base}`),
-      normalizeIngressHost(`${appSlug}__${input.slug}.${base}`),
-      normalizeIngressHost(`${appSlug}__${input.projectId}.${base}`),
-    ]),
-  );
   const mcpHosts = input.bases.flatMap((base) => [
     normalizeIngressHost(`mcp.${input.slug}.${base}`),
     normalizeIngressHost(`mcp.${input.projectId}.${base}`),
     normalizeIngressHost(`mcp__${input.slug}.${base}`),
     normalizeIngressHost(`mcp__${input.projectId}.${base}`),
   ]);
-  const allHosts = [...projectHosts, ...appHosts, ...mcpHosts];
-
   return {
-    allHosts,
-    appHosts,
     defaultHost: normalizeIngressHost(`${input.slug}.${input.bases[0] ?? "iterate.localhost"}`),
     mcpHosts,
     projectHosts,
   };
-}
-
-function projectAppSlugFromHost(input: { host: string; summary: ProjectSummary }) {
-  if (!input.summary.hosts.includes(input.host)) return null;
-
-  const firstLabel = input.host.split(".")[0] ?? "";
-  const doubleUnderscoreIndex = firstLabel.indexOf("__");
-  if (doubleUnderscoreIndex > 0) return firstLabel.slice(0, doubleUnderscoreIndex);
-
-  const rest = input.host.slice(firstLabel.length);
-  if (rest.startsWith(`.${input.summary.slug}.`) || rest.startsWith(`.${input.summary.id}.`)) {
-    return firstLabel;
-  }
-
-  return null;
 }
 
 function withProjectAppSlug(input: { appSlug: string | null; request: Request }) {
@@ -1088,6 +1157,10 @@ function projectDynamicWorkerCode(workerSource: string) {
       },
     },
   };
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function bundledProjectDynamicWorkerCode(
