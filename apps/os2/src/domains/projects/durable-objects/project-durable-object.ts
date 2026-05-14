@@ -34,12 +34,17 @@ import {
   normalizeIngressHost,
   parseIngressCallable,
 } from "~/ingress/host-routing.ts";
+import { parseProjectPlatformHosts } from "~/ingress/project-platform-host-routing.ts";
 import type { ExactHostIngressRule } from "~/ingress/types.ts";
 import {
+  PROJECT_CNAME_RECORD_CREATED_EVENT_TYPE,
+  PROJECT_CNAME_RECORD_CREATION_FAILED_EVENT_TYPE,
+  PROJECT_CONFIG_WORKER_BUILT_EVENT_TYPE,
   createProjectLifecycleProcessor,
   PROJECT_LIFECYCLE_STREAM_PATH,
   ProjectLifecycleProcessorContract,
 } from "~/domains/projects/stream-processors/project-lifecycle.ts";
+import { createProjectWildcardCNAMERecord as createCloudflareProjectWildcardCNAMERecord } from "~/domains/projects/cloudflare-dns.ts";
 import {
   type RepoDurableObject,
   type RepoInfo,
@@ -72,7 +77,6 @@ export type ProjectSummary = {
 export type CreateProjectInput = {
   projectId: string;
   slug: string;
-  metadata: Record<string, unknown>;
 };
 
 export type ProjectAccessPrincipal = {
@@ -94,7 +98,6 @@ type ProjectStateRow = {
   slug: string;
   default_host: string;
   hosts_json: string;
-  metadata_json: string;
   created_at_ms: number;
   updated_at_ms: number;
 };
@@ -112,15 +115,25 @@ type ProjectIngressRouteRow = {
 
 type ProjectDynamicWorkerEntrypoint = {
   fetch(request: Request): Response | Promise<Response>;
-  afterAppend(input: { event: Event }): unknown | Promise<unknown>;
+  afterAppend?(input: { event: Event }): unknown | Promise<unknown>;
 };
+
+type ProjectDynamicWorkerModule =
+  | string
+  | {
+      cjs?: string;
+      data?: ArrayBuffer;
+      js?: string;
+      json?: object;
+      text?: string;
+    };
 
 type ProjectDynamicWorkerCode = {
   compatibilityDate: string;
   compatibilityFlags: string[];
   globalOutbound: null;
   mainModule: string;
-  modules: Record<string, { js: string }>;
+  modules: Record<string, ProjectDynamicWorkerModule>;
 };
 
 type ProjectDynamicWorkerLoader = {
@@ -139,7 +152,7 @@ type ProjectRuntimeEnv = {
 
 type ProjectConfigCheckout = {
   commitOid: string;
-  workerSource: string;
+  workerCode: ProjectDynamicWorkerCode;
 };
 
 type ProjectConfigGit = {
@@ -162,6 +175,8 @@ const PROJECT_CONFIG_READY_STORAGE_KEY = "project.configWorker.ready";
 const PROJECT_CONFIG_REFRESHED_AT_STORAGE_KEY = "project.configWorker.refreshedAt";
 const PROJECT_CONFIG_REFRESH_INTERVAL_MS = 10_000;
 const PROJECT_DYNAMIC_WORKER_MAIN_MODULE = "worker.ts";
+const PROJECT_DYNAMIC_WORKER_COMPATIBILITY_DATE = "2026-04-27";
+const PROJECT_DYNAMIC_WORKER_COMPATIBILITY_FLAGS = ["nodejs_compat"];
 
 type ProjectConfigWorkspaceName = {
   projectId: string;
@@ -210,6 +225,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     commitOid: string;
     entrypoint: ProjectDynamicWorkerEntrypoint;
   } | null = null;
+  #projectConfigWorkerBuildPromise: Promise<ProjectDynamicWorkerEntrypoint> | null = null;
 
   constructor(ctx: DurableObjectState, env: ProjectEnv) {
     super(ctx, env);
@@ -223,7 +239,6 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
       slug TEXT NOT NULL,
       default_host TEXT NOT NULL,
       hosts_json TEXT NOT NULL,
-      metadata_json TEXT NOT NULL,
       created_at_ms INTEGER NOT NULL,
       updated_at_ms INTEGER NOT NULL
     )`);
@@ -264,19 +279,17 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
 
     this.getDurableObjectSql().exec(
       `INSERT INTO project_state
-        (id, slug, default_host, hosts_json, metadata_json, created_at_ms, updated_at_ms)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+        (id, slug, default_host, hosts_json, created_at_ms, updated_at_ms)
+       VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
         slug = excluded.slug,
         default_host = excluded.default_host,
         hosts_json = excluded.hosts_json,
-        metadata_json = excluded.metadata_json,
         updated_at_ms = excluded.updated_at_ms`,
       input.projectId,
       input.slug,
       defaultHost,
-      JSON.stringify(hosts.allHosts),
-      JSON.stringify(input.metadata),
+      JSON.stringify(hosts.projectHosts),
       now,
       now,
     );
@@ -287,11 +300,31 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     });
     await this.writeIngressRoutes({ hosts, projectId: input.projectId });
     const summary = this.requireSummary();
-    await this.getOrCreateIterateConfigRepo(summary);
     await this.writeProjectCreatedLifecycleEvent(summary);
-    await this.writeAgentsRootRule(summary);
+    void this.createProjectWildcardCNAMERecord(summary).catch((error) => {
+      console.error(
+        `[ProjectDNS] Wildcard CNAME fire-and-forget task failed for ${summary.id}:`,
+        error,
+      );
+    });
+
+    // Defer heavy setup (config worker build, agents root) so the create call returns fast.
+    this.ctx.waitUntil(this.finishProjectSetup(summary));
 
     return summary;
+  }
+
+  private async finishProjectSetup(summary: ProjectSummary) {
+    try {
+      const projectConfigCheckout = await this.buildFreshProjectDynamicWorker(summary);
+      await this.writeProjectConfigWorkerBuiltLifecycleEvent({
+        checkout: projectConfigCheckout,
+        summary,
+      });
+      await this.writeAgentsRootRule(summary);
+    } catch (error) {
+      console.error(`[ProjectDO] finishProjectSetup failed for ${summary.id}:`, error);
+    }
   }
 
   async checkAccess(input: { principal: ProjectAccessPrincipal }): Promise<ProjectSummary> {
@@ -333,9 +366,11 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     );
     if (summary !== null && configWorkerIsReady === true) {
       try {
-        await (await this.getCachedProjectDynamicWorkerEntrypoint(summary)).afterAppend(input);
+        const entrypoint =
+          this.#dynamicWorkerEntrypoint?.entrypoint ??
+          (await this.getCachedProjectDynamicWorkerEntrypoint(summary));
+        await entrypoint.afterAppend?.(input);
       } catch (error) {
-        await this.clearProjectConfigWorkerReady();
         console.error("Project config worker afterAppend failed.", error);
       }
     }
@@ -359,8 +394,25 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
       });
     }
 
+    let entrypoint: ProjectDynamicWorkerEntrypoint;
     try {
-      return await (await this.getIngressProjectDynamicWorkerEntrypoint(summary)).fetch(request);
+      entrypoint = await this.getIngressProjectDynamicWorkerEntrypoint(summary);
+    } catch (error) {
+      if (error instanceof ProjectConfigWorkerUnavailableError) {
+        return projectWorkerBuildingResponse();
+      }
+
+      console.error("Project config worker load failed; serving fallback landing response.", error);
+      return projectLandingResponse({ request, summary });
+    }
+
+    try {
+      return await entrypoint.fetch(
+        withProjectAppSlug({
+          appSlug: await this.projectAppSlugFromHost({ host, summary }),
+          request,
+        }),
+      );
     } catch (error) {
       console.error(
         "Project config worker fetch failed; serving fallback landing response.",
@@ -382,27 +434,59 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
       }
     }
 
-    try {
-      return await this.getFreshProjectDynamicWorkerEntrypoint(summary);
-    } catch (error) {
-      try {
-        console.error("Project config worker refresh failed; using cached worker.", error);
-        return await this.getCachedProjectDynamicWorkerEntrypoint(summary);
-      } catch {
-        throw error;
-      }
+    const cachedWorker = await this.getAvailableCachedProjectDynamicWorkerEntrypoint(summary);
+    if (this.#projectConfigWorkerBuildPromise !== null) {
+      if (cachedWorker !== null) return cachedWorker;
+      throw new ProjectConfigWorkerUnavailableError("Project config worker is still building.");
     }
+
+    this.startProjectConfigWorkerBuild(summary);
+    if (cachedWorker !== null) return cachedWorker;
+    throw new ProjectConfigWorkerUnavailableError("Project config worker is building.");
+  }
+
+  private async getAvailableCachedProjectDynamicWorkerEntrypoint(
+    summary: ProjectSummary,
+  ): Promise<ProjectDynamicWorkerEntrypoint | null> {
+    try {
+      return await this.getCachedProjectDynamicWorkerEntrypoint(summary);
+    } catch (error) {
+      await this.clearProjectConfigWorkerReady();
+      console.error("Cached project config worker is unavailable.", error);
+      return null;
+    }
+  }
+
+  private startProjectConfigWorkerBuild(summary: ProjectSummary) {
+    const buildPromise = this.getFreshProjectDynamicWorkerEntrypoint(summary);
+    this.#projectConfigWorkerBuildPromise = buildPromise;
+    this.ctx.waitUntil(
+      buildPromise
+        .catch((error) => {
+          console.error("Project config worker build failed.", error);
+        })
+        .finally(() => {
+          if (this.#projectConfigWorkerBuildPromise === buildPromise) {
+            this.#projectConfigWorkerBuildPromise = null;
+          }
+        }),
+    );
   }
 
   private async getFreshProjectDynamicWorkerEntrypoint(
     summary: ProjectSummary,
   ): Promise<ProjectDynamicWorkerEntrypoint> {
+    const checkout = await this.buildFreshProjectDynamicWorker(summary);
+    return this.loadProjectDynamicWorkerEntrypoint({ checkout, projectId: summary.id });
+  }
+
+  private async buildFreshProjectDynamicWorker(summary: ProjectSummary) {
     const checkout = await this.ensureProjectConfigCheckout(summary);
-    const entrypoint = this.loadProjectDynamicWorkerEntrypoint({ checkout, projectId: summary.id });
+    this.loadProjectDynamicWorkerEntrypoint({ checkout, projectId: summary.id });
     await this.ctx.storage.put(PROJECT_CONFIG_CHECKOUT_STORAGE_KEY, checkout);
     await this.ctx.storage.put(PROJECT_CONFIG_READY_STORAGE_KEY, true);
     await this.ctx.storage.put(PROJECT_CONFIG_REFRESHED_AT_STORAGE_KEY, Date.now());
-    return entrypoint;
+    return checkout;
   }
 
   private async getCachedProjectDynamicWorkerEntrypoint(
@@ -434,12 +518,12 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
           commitOid: checkout.commitOid,
           projectId: input.projectId,
         }),
-        () => projectDynamicWorkerCode(checkout.workerSource),
+        () => checkout.workerCode,
       )
       .getEntrypoint();
 
     if (!isProjectDynamicWorkerEntrypoint(entrypoint)) {
-      throw new Error("Project dynamic worker entrypoint is missing fetch or afterAppend.");
+      throw new Error("Project dynamic worker entrypoint is missing fetch.");
     }
 
     this.#dynamicWorkerEntrypoint = {
@@ -528,20 +612,26 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     }
 
     const state = await input.workspace.cloudflareShellState();
-    const readFile = state.readFile;
-    if (typeof readFile !== "function") {
-      throw new Error("Project Workspace state does not implement readFile.");
-    }
-
-    const workerSource = await readFile(PROJECT_CONFIG_WORKER_PATH);
+    const files = await readProjectConfigFiles(state);
+    const workerSource = files[PROJECT_DYNAMIC_WORKER_MAIN_MODULE];
     if (typeof workerSource !== "string" || workerSource.trim() === "") {
       throw new Error(`${ITERATE_CONFIG_REPO_SLUG} repo is missing worker.ts.`);
     }
+    const workerCode =
+      typeof files["package.json"] === "string" && files["package.json"].trim() !== ""
+        ? await this.bundleProjectDynamicWorkerCode(files)
+        : projectDynamicWorkerCode(workerSource);
 
     return {
       commitOid: commit.oid,
-      workerSource,
+      workerCode,
     };
+  }
+
+  protected async bundleProjectDynamicWorkerCode(
+    files: Record<string, string>,
+  ): Promise<ProjectDynamicWorkerCode> {
+    return await bundledProjectDynamicWorkerCode(files);
   }
 
   private async getProjectConfigWorkspace(projectId: string): Promise<ProjectConfigWorkspace> {
@@ -592,7 +682,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     await deleteIngressRoutesByProject(db, { projectId: input.projectId });
     this.getDurableObjectSql().exec(`DELETE FROM project_ingress_routes`);
 
-    for (const host of input.hosts.allHosts) {
+    for (const host of input.hosts.projectHosts) {
       const callable = {
         type: "fetch",
         via: {
@@ -682,7 +772,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
   private currentSummary(): ProjectSummary | null {
     const row = this.getDurableObjectSql()
       .exec<ProjectStateRow>(
-        `SELECT id, slug, default_host, hosts_json, metadata_json, created_at_ms, updated_at_ms
+        `SELECT id, slug, default_host, hosts_json, created_at_ms, updated_at_ms
          FROM project_state
          LIMIT 1`,
       )
@@ -728,6 +818,104 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
         hosts: summary.hosts,
         projectId: summary.id,
         slug: summary.slug,
+      },
+    });
+  }
+
+  private async writeProjectConfigWorkerBuiltLifecycleEvent(input: {
+    checkout: ProjectConfigCheckout;
+    summary: ProjectSummary;
+  }) {
+    const stream = await getInitializedStreamStub({
+      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+      namespace: input.summary.id,
+      path: PROJECT_LIFECYCLE_STREAM_PATH,
+    });
+
+    await stream.append({
+      type: PROJECT_CONFIG_WORKER_BUILT_EVENT_TYPE,
+      idempotencyKey: `project-config-worker-built:${input.summary.id}:${input.checkout.commitOid}`,
+      payload: {
+        commitOid: input.checkout.commitOid,
+        mainModule: input.checkout.workerCode.mainModule,
+        projectId: input.summary.id,
+        repoSlug: ITERATE_CONFIG_REPO_SLUG,
+      },
+    });
+  }
+
+  private async createProjectWildcardCNAMERecord(summary: ProjectSummary) {
+    const config = this.getAppConfig();
+    const base = config.projectHostnameBases[0];
+    try {
+      const result = await createCloudflareProjectWildcardCNAMERecord({
+        apiToken: config.cloudflare.apiToken?.exposeSecret(),
+        projectHostnameBase: base,
+        projectId: summary.id,
+        projectSlug: summary.slug,
+      });
+      if (result === null) return;
+      await this.writeProjectCNAMERecordCreatedLifecycleEvent({
+        result,
+        summary,
+      });
+    } catch (error) {
+      console.error(`[ProjectDNS] Wildcard CNAME creation failed for ${summary.id}:`, error);
+      await this.writeProjectCNAMERecordCreationFailedLifecycleEvent({
+        base,
+        error,
+        summary,
+      });
+    }
+  }
+
+  private async writeProjectCNAMERecordCreatedLifecycleEvent(input: {
+    result: Awaited<ReturnType<typeof createCloudflareProjectWildcardCNAMERecord>>;
+    summary: ProjectSummary;
+  }) {
+    if (input.result === null) return;
+    const stream = await getInitializedStreamStub({
+      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+      namespace: input.summary.id,
+      path: PROJECT_LIFECYCLE_STREAM_PATH,
+    });
+
+    await stream.append({
+      type: PROJECT_CNAME_RECORD_CREATED_EVENT_TYPE,
+      idempotencyKey: `project-cname-record-created:${input.summary.id}:${input.result.name}`,
+      payload: {
+        base: input.result.base,
+        cloudflareRecord: input.result.record,
+        name: input.result.name,
+        projectId: input.summary.id,
+        projectSlug: input.summary.slug,
+        target: input.result.target,
+        zoneId: input.result.zoneId,
+        zoneName: input.result.zoneName,
+      },
+    });
+  }
+
+  private async writeProjectCNAMERecordCreationFailedLifecycleEvent(input: {
+    base: string | undefined;
+    error: unknown;
+    summary: ProjectSummary;
+  }) {
+    const stream = await getInitializedStreamStub({
+      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+      namespace: input.summary.id,
+      path: PROJECT_LIFECYCLE_STREAM_PATH,
+    });
+    const base = input.base?.trim();
+
+    await stream.append({
+      type: PROJECT_CNAME_RECORD_CREATION_FAILED_EVENT_TYPE,
+      idempotencyKey: `project-cname-record-creation-failed:${input.summary.id}:${Date.now()}`,
+      payload: {
+        ...(base ? { base, name: `*.${input.summary.slug}.${base}` } : {}),
+        message: errorMessage(input.error),
+        projectId: input.summary.id,
+        projectSlug: input.summary.slug,
       },
     });
   }
@@ -800,6 +988,34 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
       rpcMethod,
       argsMode: "object",
     };
+  }
+
+  private async projectAppSlugFromHost(input: { host: string; summary: ProjectSummary }) {
+    const platformHosts = parseProjectPlatformHosts({
+      bases: this.getAppConfig().projectHostnameBases,
+      host: input.host,
+    });
+    for (const platformHost of platformHosts) {
+      if (
+        platformHost.projectIdentifier === input.summary.slug ||
+        platformHost.projectIdentifier === input.summary.id
+      ) {
+        return platformHost.appSlug;
+      }
+    }
+
+    const row = await this.env.DB.prepare(`SELECT custom_hostname FROM projects WHERE id = ?`)
+      .bind(input.summary.id)
+      .first<{ custom_hostname: string | null }>();
+    const customHostname = row?.custom_hostname?.trim().toLowerCase();
+    if (!customHostname) return null;
+
+    const host = normalizeIngressHost(input.host);
+    if (host === customHostname) return null;
+    if (!host.endsWith(`.${customHostname}`)) return null;
+
+    const prefix = host.slice(0, host.length - customHostname.length - 1);
+    return prefix !== "" && !prefix.includes(".") ? prefix : null;
   }
 }
 
@@ -886,15 +1102,14 @@ function resolveProcessorStreamPath(input: { basePath: StreamPath; pathInput?: s
 async function upsertProjectProjection(input: { db: D1Database; input: CreateProjectInput }) {
   const row = await input.db
     .prepare(
-      `INSERT INTO projects (id, slug, metadata, updated_at)
-       VALUES (?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', 'now'))
+      `INSERT INTO projects (id, slug, updated_at)
+       VALUES (?, ?, strftime('%Y-%m-%d %H:%M:%S', 'now'))
        ON CONFLICT(id) DO UPDATE SET
         slug = excluded.slug,
-        metadata = excluded.metadata,
         updated_at = excluded.updated_at
        RETURNING id`,
     )
-    .bind(input.input.projectId, input.input.slug, JSON.stringify(input.input.metadata))
+    .bind(input.input.projectId, input.input.slug)
     .first<{ id: string }>();
 
   if (!row) throw new Error(`Project ${input.input.projectId} projection was not written.`);
@@ -911,14 +1126,19 @@ function projectHosts(input: { bases: readonly string[]; projectId: string; slug
     normalizeIngressHost(`mcp__${input.slug}.${base}`),
     normalizeIngressHost(`mcp__${input.projectId}.${base}`),
   ]);
-  const allHosts = [...projectHosts, ...mcpHosts];
-
   return {
-    allHosts,
     defaultHost: normalizeIngressHost(`${input.slug}.${input.bases[0] ?? "iterate.localhost"}`),
     mcpHosts,
     projectHosts,
   };
+}
+
+function withProjectAppSlug(input: { appSlug: string | null; request: Request }) {
+  if (input.appSlug === null) return input.request;
+
+  const headers = new Headers(input.request.headers);
+  headers.set("x-iterate-app-slug", input.appSlug);
+  return new Request(input.request, { headers });
 }
 
 function projectDynamicWorkerId(input: { commitOid: string; projectId: string }) {
@@ -927,8 +1147,8 @@ function projectDynamicWorkerId(input: { commitOid: string; projectId: string })
 
 function projectDynamicWorkerCode(workerSource: string) {
   return {
-    compatibilityDate: "2026-04-27",
-    compatibilityFlags: ["nodejs_compat"],
+    compatibilityDate: PROJECT_DYNAMIC_WORKER_COMPATIBILITY_DATE,
+    compatibilityFlags: PROJECT_DYNAMIC_WORKER_COMPATIBILITY_FLAGS,
     globalOutbound: null,
     mainModule: PROJECT_DYNAMIC_WORKER_MAIN_MODULE,
     modules: {
@@ -937,6 +1157,113 @@ function projectDynamicWorkerCode(workerSource: string) {
       },
     },
   };
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function bundledProjectDynamicWorkerCode(
+  files: Record<string, string>,
+): Promise<ProjectDynamicWorkerCode> {
+  const { createWorker } = await import("@cloudflare/worker-bundler");
+  const result = await createWorker({
+    entryPoint: PROJECT_DYNAMIC_WORKER_MAIN_MODULE,
+    files,
+  });
+
+  for (const warning of result.warnings ?? []) {
+    console.warn(`Project config worker bundler warning: ${warning}`);
+  }
+
+  return {
+    compatibilityDate:
+      result.wranglerConfig?.compatibilityDate ?? PROJECT_DYNAMIC_WORKER_COMPATIBILITY_DATE,
+    compatibilityFlags:
+      result.wranglerConfig?.compatibilityFlags ?? PROJECT_DYNAMIC_WORKER_COMPATIBILITY_FLAGS,
+    globalOutbound: null,
+    mainModule: result.mainModule,
+    modules: result.modules,
+  };
+}
+
+async function readProjectConfigFiles(
+  state: Record<string, unknown>,
+): Promise<Record<string, string>> {
+  const readFile = state.readFile;
+  if (typeof readFile !== "function") {
+    throw new Error("Project Workspace state does not implement readFile.");
+  }
+  const readTextFile = readFile as (...args: unknown[]) => unknown;
+
+  const find = state.find;
+  if (typeof find !== "function") {
+    const workerSource = await readWorkspaceTextFile(readTextFile, PROJECT_CONFIG_WORKER_PATH);
+    const packageJson = await readOptionalWorkspaceTextFile(
+      readTextFile,
+      `${PROJECT_CONFIG_DIR}/package.json`,
+    );
+    return packageJson === null
+      ? { [PROJECT_DYNAMIC_WORKER_MAIN_MODULE]: workerSource }
+      : {
+          [PROJECT_DYNAMIC_WORKER_MAIN_MODULE]: workerSource,
+          "package.json": packageJson,
+        };
+  }
+
+  const entries = (await find(PROJECT_CONFIG_DIR, {
+    type: "file",
+  })) as Array<{ path?: unknown }>;
+  const files: Record<string, string> = {};
+
+  for (const entry of entries) {
+    if (typeof entry.path !== "string") continue;
+    const relativePath = projectConfigRelativePath(entry.path);
+    if (relativePath === null) continue;
+
+    files[relativePath] = await readWorkspaceTextFile(readTextFile, entry.path);
+  }
+
+  return files;
+}
+
+function projectConfigRelativePath(path: string) {
+  if (!path.startsWith(`${PROJECT_CONFIG_DIR}/`)) return null;
+
+  const relativePath = path.slice(PROJECT_CONFIG_DIR.length + 1);
+  if (
+    relativePath === "" ||
+    relativePath.startsWith(".git/") ||
+    relativePath.startsWith("node_modules/")
+  ) {
+    return null;
+  }
+
+  return relativePath;
+}
+
+async function readWorkspaceTextFile(
+  readFile: (...args: unknown[]) => unknown,
+  path: string,
+): Promise<string> {
+  const content = await readFile(path);
+  if (typeof content !== "string") {
+    throw new Error(`Project Workspace file ${path} did not contain text.`);
+  }
+
+  return content;
+}
+
+async function readOptionalWorkspaceTextFile(
+  readFile: (...args: unknown[]) => unknown,
+  path: string,
+) {
+  try {
+    return await readWorkspaceTextFile(readFile, path);
+  } catch (error) {
+    if (isFileMissingError(error)) return null;
+    throw error;
+  }
 }
 
 function projectLandingResponse(input: { request: Request; summary: ProjectSummary }) {
@@ -956,6 +1283,24 @@ function projectLandingResponse(input: { request: Request; summary: ProjectSumma
       },
     },
   );
+}
+
+function projectWorkerBuildingResponse() {
+  return new Response("This worker is currently being built.", {
+    status: 503,
+    headers: {
+      "content-type": "text/plain; charset=utf-8",
+      "retry-after": "5",
+      "x-project-ingress-runtime": "dynamic-worker-building",
+    },
+  });
+}
+
+class ProjectConfigWorkerUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProjectConfigWorkerUnavailableError";
+  }
 }
 
 function projectConfigWorkspaceName(projectId: string): ProjectConfigWorkspaceName {
@@ -985,9 +1330,7 @@ function isProjectDynamicWorkerEntrypoint(value: unknown): value is ProjectDynam
     typeof value === "object" &&
     value !== null &&
     "fetch" in value &&
-    typeof value.fetch === "function" &&
-    "afterAppend" in value &&
-    typeof value.afterAppend === "function"
+    typeof value.fetch === "function"
   );
 }
 
@@ -998,8 +1341,36 @@ function isProjectConfigCheckout(value: unknown): value is ProjectConfigCheckout
     "commitOid" in value &&
     typeof value.commitOid === "string" &&
     value.commitOid.length > 0 &&
-    "workerSource" in value &&
-    typeof value.workerSource === "string" &&
-    value.workerSource.trim() !== ""
+    "workerCode" in value &&
+    isProjectDynamicWorkerCode(value.workerCode)
+  );
+}
+
+function isProjectDynamicWorkerCode(value: unknown): value is ProjectDynamicWorkerCode {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "compatibilityDate" in value &&
+    typeof value.compatibilityDate === "string" &&
+    "compatibilityFlags" in value &&
+    Array.isArray(value.compatibilityFlags) &&
+    value.compatibilityFlags.every((flag) => typeof flag === "string") &&
+    "globalOutbound" in value &&
+    value.globalOutbound === null &&
+    "mainModule" in value &&
+    typeof value.mainModule === "string" &&
+    "modules" in value &&
+    typeof value.modules === "object" &&
+    value.modules !== null
+  );
+}
+
+function isFileMissingError(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("not found") ||
+    message.includes("could not find") ||
+    message.includes("no such file")
   );
 }

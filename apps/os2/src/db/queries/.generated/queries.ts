@@ -51,25 +51,25 @@ export const sqlfuQuerySources = [
     sqlFile: "get-project-by-custom-hostname.sql",
     generatedFile: "get-project-by-custom-hostname.sql.ts",
     sourceSql:
-      "select id, slug, custom_hostname, metadata, created_at, updated_at\nfrom projects\nwhere custom_hostname = :customHostname\nlimit 1;\n",
+      "select id, slug, custom_hostname, created_at, updated_at\nfrom projects\nwhere custom_hostname = :customHostname\nlimit 1;\n",
   },
   {
     sqlFile: "get-project-by-custom-hostname-any-organization.sql",
     generatedFile: "get-project-by-custom-hostname-any-organization.sql.ts",
     sourceSql:
-      "select id, slug, custom_hostname, metadata, created_at, updated_at\nfrom projects\nwhere custom_hostname = :customHostname\nlimit 1;\n",
+      "select id, slug, custom_hostname, created_at, updated_at\nfrom projects\nwhere custom_hostname = :customHostname\nlimit 1;\n",
   },
   {
     sqlFile: "get-project-by-id.sql",
     generatedFile: "get-project-by-id.sql.ts",
     sourceSql:
-      "select id, slug, custom_hostname, metadata, created_at, updated_at\nfrom projects\nwhere id = :id\nlimit 1;\n",
+      "select id, slug, custom_hostname, created_at, updated_at\nfrom projects\nwhere id = :id\nlimit 1;\n",
   },
   {
     sqlFile: "get-project-by-slug.sql",
     generatedFile: "get-project-by-slug.sql.ts",
     sourceSql:
-      "select id, slug, custom_hostname, metadata, created_at, updated_at\nfrom projects\nwhere slug = :slug\nlimit 1;\n",
+      "select id, slug, custom_hostname, created_at, updated_at\nfrom projects\nwhere slug = :slug\nlimit 1;\n",
   },
   {
     sqlFile: "get-project-permission.sql",
@@ -81,7 +81,7 @@ export const sqlfuQuerySources = [
     sqlFile: "insert-project.sql",
     generatedFile: "insert-project.sql.ts",
     sourceSql:
-      "insert into projects (id, slug, metadata)\nvalues (:id, :slug, :metadata)\nreturning id, slug, custom_hostname, metadata, created_at, updated_at;\n",
+      "insert into projects (id, slug)\nvalues (:id, :slug)\nreturning id, slug, custom_hostname, created_at, updated_at;\n",
   },
   {
     sqlFile: "insert-project-permission.sql",
@@ -93,7 +93,7 @@ export const sqlfuQuerySources = [
     sqlFile: "list-all-projects.sql",
     generatedFile: "list-all-projects.sql.ts",
     sourceSql:
-      "select id, slug, custom_hostname, metadata, created_at, updated_at\nfrom projects\norder by created_at desc\nlimit :limit\noffset :offset;\n",
+      "select id, slug, custom_hostname, created_at, updated_at\nfrom projects\norder by created_at desc\nlimit :limit\noffset :offset;\n",
   },
   {
     sqlFile: "list-ingress-routes-by-project.sql",
@@ -105,19 +105,19 @@ export const sqlfuQuerySources = [
     sqlFile: "list-projects.sql",
     generatedFile: "list-projects.sql.ts",
     sourceSql:
-      "select distinct p.id, p.slug, p.custom_hostname, p.metadata, p.created_at, p.updated_at\nfrom projects p\njoin project_permissions pp on pp.project_id = p.id\nwhere pp.principal_type = :principalType\n  and pp.principal_id = :principalId\norder by p.created_at desc\nlimit :limit\noffset :offset;\n",
+      "select distinct p.id, p.slug, p.custom_hostname, p.created_at, p.updated_at\nfrom projects p\njoin project_permissions pp on pp.project_id = p.id\nwhere pp.principal_type = :principalType\n  and pp.principal_id = :principalId\norder by p.created_at desc\nlimit :limit\noffset :offset;\n",
   },
   {
     sqlFile: "list-projects-by-slug.sql",
     generatedFile: "list-projects-by-slug.sql.ts",
     sourceSql:
-      "select id, slug, custom_hostname, metadata, created_at, updated_at\nfrom projects\nwhere slug = :slug\norder by created_at asc\nlimit 2;\n",
+      "select id, slug, custom_hostname, created_at, updated_at\nfrom projects\nwhere slug = :slug\norder by created_at asc\nlimit 2;\n",
   },
   {
     sqlFile: "update-project-config.sql",
     generatedFile: "update-project-config.sql.ts",
     sourceSql:
-      "update projects\nset custom_hostname = :customHostname,\n    metadata = :metadata,\n    updated_at = strftime('%Y-%m-%d %H:%M:%S', 'now')\nwhere id = :id;\n",
+      "update projects\nset custom_hostname = :customHostname,\n    updated_at = strftime('%Y-%m-%d %H:%M:%S', 'now')\nwhere id = :id;\n",
   },
   {
     sqlFile: "upsert-ingress-route.sql",

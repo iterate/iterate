@@ -1,19 +1,19 @@
-// @ts-nocheck
-import { WorkerEntrypoint } from "cloudflare:workers";
+import app1 from "./apps/app1/worker.ts";
+import app2 from "./apps/app2/worker.ts";
 
-export default class Project extends WorkerEntrypoint {
+const apps = [app1, app2];
+
+export default {
   async fetch(request) {
-    const url = new URL(request.url);
-    const hostname = request.headers.get("x-iterate-ingress-hostname") ?? url.hostname;
-    return new Response("Hello from the project config worker at " + hostname, {
-      headers: {
-        "content-type": "text/plain; charset=utf-8",
-        "x-project-ingress-runtime": "dynamic-worker-config-repo",
-      },
-    });
-  }
+    for (const app of apps) {
+      const response = await app.fetch(request);
+      if (response) return response;
+    }
+
+    return new Response("Hello from the project config worker");
+  },
 
   async afterAppend({ event }) {
     console.log("Project config worker afterAppend", event.type);
-  }
-}
+  },
+};

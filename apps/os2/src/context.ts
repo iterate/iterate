@@ -21,6 +21,7 @@ export interface AppContext {
   auth?: ClerkAuth;
   log: SharedRequestLogger;
   projectHostnameBases: string[];
+  waitUntil?: (promise: Promise<unknown>) => void;
   workerScriptName?: string;
   rawRequest?: Request;
   agent?: DurableObjectNamespace<AgentDurableObject>;
@@ -42,7 +43,6 @@ export interface AppContext {
       id: string;
       slug: string;
       custom_hostname?: string | null;
-      metadata: string;
       created_at: string;
       updated_at: string;
     };

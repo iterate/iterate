@@ -14,16 +14,14 @@ import {
   getProjectById,
   getProjectPermission,
   getProjectBySlug,
+  insertProject,
   insertProjectPermission,
   listAllProjects,
   listProjects,
   updateProjectConfig,
 } from "~/db/queries/.generated/index.ts";
 import type { CodemodeSessionStructuredName } from "~/domains/codemode/durable-objects/codemode-session.ts";
-import {
-  getProjectDurableObjectName,
-  type ProjectDurableObject,
-} from "~/domains/projects/durable-objects/project-durable-object.ts";
+import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import type { ProjectMcpServerConnectionStructuredName } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 import {
   isReservedProjectHostname,
@@ -43,7 +41,6 @@ type ProjectRow = {
   id: string;
   slug: string;
   custom_hostname?: string | null;
-  metadata: string;
   created_at: string;
   updated_at: string;
 };
@@ -57,7 +54,6 @@ function toProject(row: ProjectRow) {
     id: row.id,
     slug: row.slug,
     customHostname: row.custom_hostname ?? null,
-    metadata: JSON.parse(row.metadata) as Record<string, unknown>,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -126,16 +122,13 @@ export const projectsRouter = {
           prefix: "proj",
         });
 
-        let project: Awaited<ReturnType<ProjectDurableObject["createProject"]>>;
+        let project: ProjectRow;
 
         try {
-          project = await requireProjectDurableObjectNamespace(context)
-            .getByName(getProjectDurableObjectName(id))
-            .createProject({
-              metadata: input.metadata,
-              projectId: id,
-              slug: input.slug,
-            });
+          project = await insertProject(context.db, {
+            id,
+            slug: input.slug,
+          });
           if (!auth.isAdminApi) {
             await insertProjectPermission(context.db, {
               principalId: auth.orgId,
@@ -154,14 +147,13 @@ export const projectsRouter = {
           throw error;
         }
 
-        const row = await getProjectById(context.db, { id: project.id });
-        if (!row) {
-          throw new ORPCError("INTERNAL_SERVER_ERROR", {
-            message: `Project ${id} was not returned after createProject`,
-          });
-        }
+        scheduleProjectBootstrap({
+          context,
+          projectId: id,
+          slug: input.slug,
+        });
 
-        return toProject(row);
+        return toProject(project);
       }),
     list: os.projects.list.use(activeOrganizationMiddleware).handler(async ({ context, input }) => {
       const auth = context.activeOrganization;
@@ -225,15 +217,12 @@ export const projectsRouter = {
           normalizedCustomHostname === undefined
             ? (existing.custom_hostname ?? null)
             : normalizedCustomHostname;
-        const nextMetadata =
-          input.metadata ?? (JSON.parse(existing.metadata) as Record<string, unknown>);
 
         try {
           await updateProjectConfig(
             context.db,
             {
               customHostname: nextCustomHostname,
-              metadata: JSON.stringify(nextMetadata),
             },
             { id: input.id },
           );
@@ -405,4 +394,26 @@ function requireProjectDurableObjectNamespace(context: AppContext) {
   }
 
   return context.projectDurableObjectNamespace;
+}
+
+function scheduleProjectBootstrap(input: { context: AppContext; projectId: string; slug: string }) {
+  const namespace = input.context.projectDurableObjectNamespace;
+  if (!namespace) {
+    console.error(
+      `[projects.create] Project bootstrap skipped for ${input.projectId}: PROJECT binding not available.`,
+    );
+    return;
+  }
+
+  const promise = namespace
+    .getByName(getProjectDurableObjectName(input.projectId))
+    .createProject({
+      projectId: input.projectId,
+      slug: input.slug,
+    })
+    .catch((error) => {
+      console.error(`[projects.create] Project bootstrap failed for ${input.projectId}:`, error);
+    });
+
+  input.context.waitUntil?.(promise);
 }

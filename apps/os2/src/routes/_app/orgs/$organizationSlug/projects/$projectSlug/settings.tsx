@@ -108,13 +108,6 @@ function ProjectDetailContent({
         </div>
 
         <div className="space-y-1">
-          <p className="text-xs uppercase tracking-wide text-muted-foreground">Metadata</p>
-          <pre className="overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs">
-            {JSON.stringify(project.metadata, null, 2)}
-          </pre>
-        </div>
-
-        <div className="space-y-1">
           <p className="text-xs uppercase tracking-wide text-muted-foreground">Created</p>
           <p className="text-sm text-muted-foreground">{project.createdAt}</p>
         </div>

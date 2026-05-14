@@ -58,7 +58,6 @@ export type ProjectsRow = {
   id: string;
   slug: string;
   custom_hostname: string | null;
-  metadata: string;
   created_at: string;
   updated_at: string;
 };

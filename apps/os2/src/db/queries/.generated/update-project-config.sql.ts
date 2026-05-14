@@ -3,14 +3,13 @@ import type { Client } from "sqlfu";
 const sql = `
 update projects
 set custom_hostname = ?,
-    metadata = ?,
     updated_at = strftime('%Y-%m-%d %H:%M:%S', 'now')
 where id = ?;
 `.trim();
 const query = (data: updateProjectConfig.Data, params: updateProjectConfig.Params) => ({
   name: "updateProjectConfig",
   sql,
-  args: [data.customHostname, data.metadata, params.id],
+  args: [data.customHostname, params.id],
 });
 
 export const updateProjectConfig = Object.assign(
@@ -27,7 +26,6 @@ export const updateProjectConfig = Object.assign(
 export namespace updateProjectConfig {
   export type Data = {
     customHostname: string | null;
-    metadata: string;
   };
   export type Params = {
     id: string;
