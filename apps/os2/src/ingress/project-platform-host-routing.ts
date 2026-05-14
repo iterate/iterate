@@ -1,7 +1,7 @@
 import type { FetchCallable } from "@iterate-com/shared/callable/types.ts";
-import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { normalizeIngressHost } from "./host-routing.ts";
 import type { ExactHostIngressRule } from "./types.ts";
+import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 
 type ProjectPlatformHostRow = {
   id: string;
