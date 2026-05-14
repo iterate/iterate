@@ -49,6 +49,7 @@ const artifacts = Artifacts({ namespace: artifactsNamespace });
 const sandboxStorageBucket = await R2Bucket("sandbox-storage", {
   name: `${ctx.workerName}-sandbox-storage`,
   adopt: true,
+  empty: true,
   dev: {
     remote: false,
   },
