@@ -16,6 +16,7 @@ import {
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
+import { parseMetadataJson } from "~/domains/secrets/metadata-json.ts";
 import { orpc } from "~/orpc/client.ts";
 
 const SecretForm = z.object({
@@ -305,23 +306,6 @@ function ProjectSecretsIndexPage() {
       )}
     </section>
   );
-}
-
-function parseMetadataJson(
-  value: string,
-): { metadata: Record<string, unknown> } | { message: string } {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    return { message: "Metadata must be valid JSON." };
-  }
-
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return { message: "Metadata must be a JSON object." };
-  }
-
-  return { metadata: parsed as Record<string, unknown> };
 }
 
 function formatRelativeTime(value: string) {

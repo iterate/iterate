@@ -55,7 +55,7 @@ export async function substituteProjectEgressSecretHeaders(input: {
         reference,
         secrets: input.secrets,
       });
-      nextValue = nextValue.replace(reference.source, replacement);
+      nextValue = nextValue.replace(reference.source, () => replacement);
     }
 
     headers.set(header, nextValue);

@@ -47,6 +47,22 @@ describe("substituteProjectEgressSecretHeaders", () => {
     expect(getSecret).toHaveBeenCalledWith({ key: "openai" });
   });
 
+  it("substitutes secret material containing dollar replacement tokens literally", async () => {
+    const material = "real-$&-$'-$$-secret";
+    const result = await substituteProjectEgressSecretHeaders({
+      externalEgressProxyUrl: null,
+      headers: new Headers({
+        "x-api-key": `prefix getSecret({ key: "openai" }) suffix`,
+      }),
+      secrets: {
+        getSecretOrNull: vi.fn(async () => ({ material })),
+        getSecretSummaryByKeyOrNull: vi.fn(),
+      },
+    });
+
+    expect(result.headers.get("x-api-key")).toBe(`prefix ${material} suffix`);
+  });
+
   it("substitutes descriptive withheld text when an external proxy URL is configured", async () => {
     const getSecret = vi.fn();
     const getSecretSummaryByKeyOrNull = vi.fn(async () => ({ id: "sec_test" }));
