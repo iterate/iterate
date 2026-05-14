@@ -3,6 +3,7 @@
   "exclude": [
     "alchemy.run.ts",
     "tmp/**",
+    "e2e/test-support/tmp-rescued-from-agents/**",
     "iterate-config-repo/**",
     "**/*.workerd.test.ts",
     "src/durable-objects/*.test.ts",
