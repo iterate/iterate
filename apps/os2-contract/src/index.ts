@@ -108,6 +108,15 @@ export const RepoRecord = z.object({
 });
 export type RepoRecord = z.output<typeof RepoRecord>;
 
+export const SandboxRecord = z.object({
+  createdAt: z.string(),
+  lastWokenAt: z.string(),
+  name: z.string(),
+  projectId: z.string(),
+  slug: z.string(),
+});
+export type SandboxRecord = z.output<typeof SandboxRecord>;
+
 export const RepoInfo = z.object({
   defaultBranch: z.string(),
   git: z.object({
@@ -124,6 +133,28 @@ export const RepoInfo = z.object({
   tokenExpiresAt: z.string().nullable(),
 });
 export type RepoInfo = z.output<typeof RepoInfo>;
+
+export const SandboxInfo = z.object({
+  iterateConfigPath: z.string(),
+  name: z.string(),
+  projectId: z.string(),
+  runtimeId: z.string(),
+  slug: z.string(),
+  workspacePath: z.string(),
+});
+export type SandboxInfo = z.output<typeof SandboxInfo>;
+
+export const SandboxExecResult = z.object({
+  command: z.string(),
+  duration: z.number(),
+  exitCode: z.number(),
+  sessionId: z.string().optional(),
+  stderr: z.string(),
+  stdout: z.string(),
+  success: z.boolean(),
+  timestamp: z.string(),
+});
+export type SandboxExecResult = z.output<typeof SandboxExecResult>;
 
 export const RandomLogStreamRequest = z
   .object({
@@ -569,6 +600,106 @@ export const osContract = oc.router({
           }),
         )
         .output(RepoInfo),
+    },
+    sandboxes: {
+      list: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectSlugOrId}/sandboxes",
+          description: "List Sandboxes for a project",
+          tags: ["/project", "/sandboxes"],
+        })
+        .input(ProjectScopedInput)
+        .output(z.object({ sandboxes: z.array(SandboxRecord) })),
+      create: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectSlugOrId}/sandboxes",
+          description: "Create a logical Sandbox for a project",
+          tags: ["/project", "/sandboxes"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            slug: z
+              .string()
+              .trim()
+              .min(1, "Sandbox slug is required")
+              .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Sandbox slug must be lowercase kebab-case"),
+          }),
+        )
+        .output(SandboxInfo),
+      get: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectSlugOrId}/sandboxes/{sandboxSlug}",
+          description: "Get Sandbox metadata",
+          tags: ["/project", "/sandboxes"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            sandboxSlug: z
+              .string()
+              .trim()
+              .min(1, "Sandbox slug is required")
+              .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Sandbox slug must be lowercase kebab-case"),
+          }),
+        )
+        .output(SandboxInfo),
+      wake: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectSlugOrId}/sandboxes/{sandboxSlug}/wake",
+          description: "Wake and prepare the Sandbox runtime without running a user command",
+          tags: ["/project", "/sandboxes"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            sandboxSlug: z
+              .string()
+              .trim()
+              .min(1, "Sandbox slug is required")
+              .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Sandbox slug must be lowercase kebab-case"),
+          }),
+        )
+        .output(SandboxInfo),
+      exec: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectSlugOrId}/sandboxes/{sandboxSlug}/exec",
+          description: "Execute a command in a prepared Sandbox runtime",
+          tags: ["/project", "/sandboxes"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            command: z.string().trim().min(1, "Command is required"),
+            cwd: z.string().trim().min(1).optional(),
+            env: z.record(z.string(), z.string().optional()).optional(),
+            sandboxSlug: z
+              .string()
+              .trim()
+              .min(1, "Sandbox slug is required")
+              .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Sandbox slug must be lowercase kebab-case"),
+            timeout: z.number().int().positive().max(600_000).optional(),
+          }),
+        )
+        .output(SandboxExecResult),
+      destroyRuntime: oc
+        .route({
+          method: "DELETE",
+          path: "/projects/{projectSlugOrId}/sandboxes/{sandboxSlug}/runtime",
+          description: "Destroy the running Sandbox runtime without deleting logical metadata",
+          tags: ["/project", "/sandboxes"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            sandboxSlug: z
+              .string()
+              .trim()
+              .min(1, "Sandbox slug is required")
+              .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Sandbox slug must be lowercase kebab-case"),
+          }),
+        )
+        .output(SandboxInfo),
     },
     inboundMcpServer: {
       listSessions: oc

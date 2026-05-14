@@ -18,6 +18,7 @@ type WorkerMainModule = Pick<
     | "ProjectMcpServerEntrypoint"
     | "RepoCapability"
     | "ReposCapability"
+    | "SandboxesCapability"
     | "SecretsCapability"
     | "SlackCapability"
     | "StreamsCapability"

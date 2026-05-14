@@ -311,7 +311,7 @@ const codemodeExampleSeeds = [
     providers: [{ type: "example-capabilities" }],
     code: `async (ctx) => {
   const repo = await ctx.repos.get({ slug: "iterate-config" }).getInfo();
-  const dir = \`/iterate-config-\${Date.now()}\`;
+  const dir = \`/workspace/iterate-config-demo-\${Date.now()}\`;
   const fileName = \`workspace-demo-\${Date.now()}.md\`;
   const password = repo.token.includes("?expires=")
     ? repo.token.split("?expires=")[0]
@@ -356,6 +356,50 @@ const codemodeExampleSeeds = [
         payload: {
           message:
             "Uses ctx.workspace.git.clone/add/commit/push and ctx.workspace.writeFile against the project iterate-config Repo.",
+        },
+      },
+    ],
+  },
+  {
+    slug: "cloudflare-sandbox-exec",
+    name: "Cloudflare Sandbox exec",
+    description:
+      "Create a project-scoped Sandbox, lazily prepare /workspace, clone iterate-config, and run shell commands through the raw Cloudflare Sandbox SDK handle.",
+    providers: [{ type: "example-capabilities" }],
+    code: `async (ctx) => {
+  const slug = \`scratch-\${Date.now()}\`;
+  const sandbox = await ctx.sandboxes.getInitialized({ slug });
+
+  const proof = await sandbox.exec(
+    [
+      "pwd",
+      "printf '%s\\n' 'hello from Cloudflare Sandbox' > proof.txt",
+      "cat proof.txt",
+      "ls -la /workspace | head",
+    ].join(" && "),
+    { cwd: "/workspace", timeout: 120000 },
+  );
+
+  const iterateConfig = await sandbox.exec(
+    "git -C /workspace/iterate-config status --short && git -C /workspace/iterate-config branch --show-current",
+    { timeout: 120000 },
+  );
+
+  const sandboxes = await ctx.sandboxes.list({});
+
+  return {
+    slug,
+    proof,
+    iterateConfig,
+    knownSandboxes: sandboxes.map((sandbox) => sandbox.slug),
+  };
+}`,
+    events: [
+      {
+        type: "events.iterate.com/codemode/example-note",
+        payload: {
+          message:
+            "Uses ctx.sandboxes.getInitialized({ slug }) to return the raw Cloudflare Sandbox SDK object, then calls sandbox.exec(command, options).",
         },
       },
     ],

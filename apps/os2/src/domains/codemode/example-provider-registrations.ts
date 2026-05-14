@@ -1,6 +1,7 @@
 import type { Callable } from "@iterate-com/shared/callable/types.ts";
 import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
 import type { ActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
+import { createSandboxesProviderRegistration } from "~/domains/sandboxes/entrypoints/sandboxes-provider-registration.ts";
 
 type SerializableValue =
   | null
@@ -49,6 +50,9 @@ export function createExampleCapabilityProviders(input: {
       instructions:
         "Use ctx.repos.create({ slug }) to create a Repo, ctx.repos.get({ slug }).getInfo() to inspect one, and ctx.repos.list({}) to list Repos.",
       path: ["repos"],
+      projectId: input.projectId,
+    }),
+    createSandboxesProviderRegistration({
       projectId: input.projectId,
     }),
     createExampleRpcProviderRegistration({

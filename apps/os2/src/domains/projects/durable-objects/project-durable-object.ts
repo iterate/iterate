@@ -179,7 +179,7 @@ type ProjectConfigWorkspace = {
 };
 
 const PROJECT_CONFIG_WORKSPACE_ID = "project-ingress";
-const PROJECT_CONFIG_DIR = "/iterate-config";
+const PROJECT_CONFIG_DIR = "/workspace/iterate-config";
 const PROJECT_CONFIG_WORKER_PATH = `${PROJECT_CONFIG_DIR}/worker.ts`;
 const PROJECT_CONFIG_CHECKOUT_STORAGE_KEY = "project.configWorker.checkout";
 const PROJECT_CONFIG_READY_STORAGE_KEY = "project.configWorker.ready";

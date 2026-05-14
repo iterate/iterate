@@ -96,7 +96,7 @@ export type AgentDurableObjectEnv = {
   WORKSPACE: DurableObjectNamespace<WorkspaceDurableObject>;
 };
 
-const AGENT_ITERATE_CONFIG_DIR = "/iterate-config";
+const AGENT_ITERATE_CONFIG_DIR = "/workspace/iterate-config";
 const AGENT_ITERATE_CONFIG_CLONE_COMPLETE_PATH = `${AGENT_ITERATE_CONFIG_DIR}/.git/iterate-clone-complete`;
 
 export type CloneIterateConfigRepoInput = {

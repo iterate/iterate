@@ -5,7 +5,7 @@ import {
 } from "~/domains/agents/durable-objects/agent-durable-object.ts";
 import type { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 
-const AGENT_ITERATE_CONFIG_DIR = "/iterate-config";
+const AGENT_ITERATE_CONFIG_DIR = "/workspace/iterate-config";
 const MOCK_ARTIFACT_REMOTE_BASE = "https://artifacts.example.test/";
 const mockArtifactRepos = new Map<string, MockArtifactRepo>();
 

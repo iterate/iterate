@@ -36,6 +36,7 @@ import { projectAgentsRouter } from "~/orpc/routers/agents.ts";
 import { projectReposRouter } from "~/orpc/routers/repos.ts";
 import { projectIntegrationsRouter } from "~/orpc/routers/integrations.ts";
 import { projectSecretsRouter } from "~/orpc/routers/secrets.ts";
+import { projectSandboxesRouter } from "~/orpc/routers/sandboxes.ts";
 import { projectStreamsRouter } from "~/orpc/routers/streams.ts";
 
 type ProjectRow = {
@@ -349,6 +350,7 @@ export const projectsRouter = {
     },
     agents: projectAgentsRouter,
     repos: projectReposRouter,
+    sandboxes: projectSandboxesRouter,
     inboundMcpServer: {
       listSessions: os.project.inboundMcpServer.listSessions
         .use(projectScopeMiddleware)

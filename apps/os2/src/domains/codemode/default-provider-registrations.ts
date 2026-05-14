@@ -1,5 +1,6 @@
 import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
 import { createOutboundMcpFromOurClientToolProviderRegistration } from "~/domains/outbound-mcp-client/utils/outbound-mcp-provider-registration.ts";
+import { createSandboxesProviderRegistration } from "~/domains/sandboxes/entrypoints/sandboxes-provider-registration.ts";
 import { createSecretsProviderRegistration } from "~/domains/secrets/secrets-provider-registration.ts";
 import { createWorkspaceProviderRegistration } from "~/domains/workspaces/entrypoints/workspace-provider-registration.ts";
 
@@ -11,6 +12,9 @@ export function createDefaultCodemodeProviderRegistrations(input: {
     createWorkspaceProviderRegistration({
       projectId: input.projectId,
       streamPath: input.streamPath,
+    }),
+    createSandboxesProviderRegistration({
+      projectId: input.projectId,
     }),
     {
       path: ["fetch"],
