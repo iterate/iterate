@@ -23,6 +23,7 @@ export const slackChannelIds = {
   "#misha-test": "C09B4EGQT7E",
   "#error-pulse": "C09K1CTN4M7",
   "#building": "C06LU7PGK0S",
+  "#ci": "C0B3QJSU32A",
 };
 
 export const slackUsers = [
