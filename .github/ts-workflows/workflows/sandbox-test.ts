@@ -15,23 +15,6 @@ export default workflow({
     "id-token": "write",
   },
   on: {
-    push: {
-      branches: ["main"],
-      paths: [
-        "sandbox/**",
-        "apps/daemon/**",
-        "packages/pidnap/**",
-        ".github/workflows/sandbox-test.yml",
-      ],
-    },
-    pull_request: {
-      paths: [
-        "sandbox/**",
-        "apps/daemon/**",
-        "packages/pidnap/**",
-        ".github/workflows/sandbox-test.yml",
-      ],
-    },
     workflow_dispatch: {
       inputs: {
         ref: {

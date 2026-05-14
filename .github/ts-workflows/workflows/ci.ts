@@ -3,20 +3,14 @@ import * as utils from "../utils/index.ts";
 
 /**
  * Production rollout strategy (main branch):
- * 1) Deploy OS worker fast with current env vars (deploy-os-early)
- * 2) Build new sandbox image
- * 3) Run Fly sandbox tests against the new image
- * 4) Promote FLY_DEFAULT_IMAGE in Doppler + deploy OS worker again
- *
- * This keeps the worker rollout fast while still gating env-var promotion
- * and final deploy on post-build sandbox verification.
+ * 1) Deploy OS worker and app with current env vars.
+ * 2) Leave FLY_DEFAULT_IMAGE unchanged so production keeps using the current sandbox image.
  */
 export default {
   name: "CI",
   permissions: {
     contents: "read",
     deployments: "write",
-    "id-token": "write", // Required for Depot OIDC auth in called workflows
   },
   on: {
     push: {
@@ -33,84 +27,20 @@ export default {
           run: [
             "cat <<'EOF' >> \"$GITHUB_STEP_SUMMARY\"",
             "## Rollout Strategy",
-            "1. Deploy OS worker quickly with current environment variables.",
-            "2. Build new sandbox image.",
-            "3. Run Fly sandbox tests against the new image.",
-            "4. If tests pass, update Doppler FLY_DEFAULT_IMAGE and deploy OS worker again.",
+            "1. Deploy OS worker and app with current environment variables.",
+            "2. Leave FLY_DEFAULT_IMAGE unchanged; sandbox image promotion is not part of CI.",
             "EOF",
-          ].join("\n"),
-        },
-      ],
-    },
-    "deploy-os-early": {
-      uses: "./.github/workflows/deploy.yml",
-      needs: ["variables"],
-      secrets: "inherit",
-      with: {
-        deploy_iterate_com: false,
-      },
-    },
-    "build-sandbox-image": {
-      uses: "./.github/workflows/build-sandbox-image.yml",
-      needs: ["variables", "deploy-os-early"],
-      secrets: "inherit",
-      with: {
-        doppler_config: "prd",
-        docker_platform: "linux/amd64",
-        skip_load: false,
-        update_doppler: false,
-      },
-    },
-    "test-sandbox-fly": {
-      needs: ["variables", "build-sandbox-image"],
-      uses: "./.github/workflows/sandbox-test-fly.yml",
-      secrets: "inherit",
-      with: {
-        doppler_config: "prd",
-        fly_image_tag: "${{ needs.build-sandbox-image.outputs.fly_image_tag }}",
-      },
-    },
-    "promote-fly-default-image": {
-      needs: ["variables", "build-sandbox-image", "test-sandbox-fly"],
-      ...utils.runsOnDepotUbuntu,
-      steps: [
-        ...utils.setupDoppler({ config: "prd" }),
-        {
-          name: "Update Doppler FLY_DEFAULT_IMAGE",
-          env: {
-            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
-            FLY_IMAGE_TAG: "${{ needs.build-sandbox-image.outputs.fly_image_tag }}",
-          },
-          run: [
-            "set -euo pipefail",
-            'echo "Promoting FLY_DEFAULT_IMAGE=${FLY_IMAGE_TAG} to os dev/preview/prd base configs"',
-            "for cfg in dev preview prd; do",
-            '  doppler secrets set FLY_DEFAULT_IMAGE="${FLY_IMAGE_TAG}" --project os --config "${cfg}"',
-            "done",
           ].join("\n"),
         },
       ],
     },
     deploy: {
       uses: "./.github/workflows/deploy.yml",
-      needs: [
-        "variables",
-        "deploy-os-early",
-        "build-sandbox-image",
-        "test-sandbox-fly",
-        "promote-fly-default-image",
-      ],
+      needs: ["variables"],
       secrets: "inherit",
     },
     slack_failure: {
-      needs: [
-        "variables",
-        "deploy-os-early",
-        "build-sandbox-image",
-        "test-sandbox-fly",
-        "promote-fly-default-image",
-        "deploy",
-      ],
+      needs: ["variables", "deploy"],
       if: `always() && contains(needs.*.result, 'failure')`,
       ...utils.runsOnDepotUbuntu,
       env: { NEEDS: "${{ toJson(needs) }}" },
@@ -123,9 +53,7 @@ export default {
           const failedJobs = Object.entries(needs)
             .filter(([_, { result }]: [string, any]) => result === "failure")
             .map(([name]) => name);
-          const outputs = needs.variables?.outputs as Record<string, string>;
-          const outputsString = new URLSearchParams(outputs).toString().replaceAll("&", ", ");
-          let message = `🚨 ${failedJobs.join(", ")} failed on \${{ github.ref_name }}. ${outputsString}.`;
+          let message = `🚨 ${failedJobs.join(", ")} failed on \${{ github.ref_name }}.`;
           message +=
             " <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow Run>";
           message += "\n@iterate please investigate";
