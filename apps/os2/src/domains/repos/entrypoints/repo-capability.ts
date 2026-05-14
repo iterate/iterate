@@ -40,7 +40,14 @@ export type RepoCatalogRecord = {
 
 type ReposCapabilityClient = Pick<
   ReposCapability,
-  "create" | "createInfo" | "ensureIterateConfigInfo" | "get" | "getInfo" | "list"
+  | "create"
+  | "createInfo"
+  | "ensureIterateConfigGitAccess"
+  | "ensureIterateConfigInfo"
+  | "get"
+  | "getGitAccess"
+  | "getInfo"
+  | "list"
 >;
 type RepoLifecycleCatalogRecord = D1ObjectCatalogRecord<RepoStructuredName>;
 
@@ -54,6 +61,10 @@ export class RepoHandle extends RpcTarget {
 
   async getInfo(): Promise<RepoInfo> {
     return await this.#repo.getInfo();
+  }
+
+  async createGitAccess(): Promise<RepoInfo> {
+    return await this.#repo.createGitAccess();
   }
 }
 
@@ -132,6 +143,10 @@ export class ReposCapability extends WorkerEntrypoint<ReposCapabilityEnv, ReposC
     return await (await this.get(input)).getInfo();
   }
 
+  async getGitAccess(input: { slug: string }): Promise<RepoInfo> {
+    return await (await this.get(input)).createGitAccess();
+  }
+
   async ensureIterateConfigInfo(input: { projectSlug: string | null }): Promise<RepoInfo> {
     const namespace = this.requireRepoNamespace();
     const name = this.repoName(ITERATE_CONFIG_REPO_SLUG);
@@ -173,6 +188,11 @@ export class ReposCapability extends WorkerEntrypoint<ReposCapabilityEnv, ReposC
 
       throw error;
     }
+  }
+
+  async ensureIterateConfigGitAccess(input: { projectSlug: string | null }): Promise<RepoInfo> {
+    await this.ensureIterateConfigInfo(input);
+    return await this.getGitAccess({ slug: ITERATE_CONFIG_REPO_SLUG });
   }
 
   async list(): Promise<RepoCatalogRecord[]> {

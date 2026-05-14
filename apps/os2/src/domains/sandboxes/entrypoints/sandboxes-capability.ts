@@ -299,7 +299,7 @@ export class SandboxesCapability extends WorkerEntrypoint<
     return await getReposCapability({
       exports: this.ctx.exports,
       props: { projectId: this.projectId(projectId) },
-    }).ensureIterateConfigInfo({ projectSlug: null });
+    }).ensureIterateConfigGitAccess({ projectSlug: null });
   }
 
   private mountOptions(slug: string, projectId?: string) {

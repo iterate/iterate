@@ -186,6 +186,35 @@ export class RepoDurableObject extends RepoBase<RepoEnv> {
     return await this.requireInfo();
   }
 
+  async createGitAccess(): Promise<RepoInfo> {
+    await this.ensureStarted();
+    await this.catchUpStreamProcessor({ signal: AbortSignal.timeout(30_000) });
+
+    const repo = this.currentRepo();
+    if (repo === null) {
+      throw new Error(`Repo ${this.structuredName.repoSlug} has not been created.`);
+    }
+
+    const artifactName = repoArtifactName(this.structuredName);
+    const artifacts = this.requireArtifacts();
+    const artifact = await artifacts.get(artifactName);
+    const token = await createArtifactToken({
+      artifact,
+      artifacts,
+      name: artifactName,
+      scope: "write",
+      ttlSeconds: REPO_WRITE_TOKEN_TTL_SECONDS,
+    });
+
+    return repoInfo({
+      defaultBranch: repo.defaultBranch,
+      remote: repo.remote,
+      slug: repo.slug,
+      token: token.plaintext,
+      tokenExpiresAt: token.expiresAt,
+    });
+  }
+
   async afterAppend(input: { event: Event }) {
     await this.ensureStarted();
     return await this.consumeStreamProcessorEvent({ event: input.event as StreamEvent });
@@ -206,20 +235,13 @@ export class RepoDurableObject extends RepoBase<RepoEnv> {
       throw new Error(`Repo ${this.structuredName.repoSlug} write token is not available.`);
     }
 
-    return {
+    return repoInfo({
       defaultBranch: repo.defaultBranch,
-      git: gitInfo({
-        defaultBranch: repo.defaultBranch,
-        remote: repo.remote,
-        slug: repo.slug,
-        token,
-      }),
-      readmePath: REPO_README_PATH,
       remote: repo.remote,
       slug: repo.slug,
       token,
       tokenExpiresAt: repo.tokenExpiresAt,
-    };
+    });
   }
 
   private requireArtifacts() {
@@ -319,6 +341,24 @@ export function getRepoDurableObjectName(name: RepoStructuredName) {
   return deriveDurableObjectNameFromStructuredName({
     structuredName: name,
   });
+}
+
+function repoInfo(input: {
+  defaultBranch: string;
+  remote: string;
+  slug: string;
+  token: string;
+  tokenExpiresAt: string | null;
+}): RepoInfo {
+  return {
+    defaultBranch: input.defaultBranch,
+    git: gitInfo(input),
+    readmePath: REPO_README_PATH,
+    remote: input.remote,
+    slug: input.slug,
+    token: input.token,
+    tokenExpiresAt: input.tokenExpiresAt,
+  };
 }
 
 function gitInfo(input: { defaultBranch: string; remote: string; slug: string; token: string }) {
