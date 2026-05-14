@@ -128,9 +128,8 @@ async function callSandboxWorker<T = unknown>(
   });
 
   if (!response.ok) {
-    const result = await response.json<{ error?: string }>().catch(async () => ({
-      error: await response.text(),
-    }));
+    const responseBody = await response.text();
+    const result = parseSandboxWorkerError(responseBody);
 
     throw new Error(result.error || `Sandbox worker returned ${response.status}`);
   }
@@ -145,6 +144,18 @@ function isFetcher(value: unknown): value is Fetcher {
     "fetch" in value &&
     typeof (value as { fetch?: unknown }).fetch === "function"
   );
+}
+
+function parseSandboxWorkerError(responseBody: string): { error?: string } {
+  try {
+    const parsed = JSON.parse(responseBody) as unknown;
+    if (parsed != null && typeof parsed === "object" && "error" in parsed) {
+      const error = (parsed as { error?: unknown }).error;
+      if (typeof error === "string") return { error };
+    }
+  } catch {}
+
+  return { error: responseBody };
 }
 
 function toSandboxORPCError(error: unknown) {
