@@ -155,6 +155,20 @@ export async function IterateApp<B extends Bindings>(
       ],
     });
 
+    const cloudflareApi = await createCloudflareApi({});
+    await Promise.all(
+      wildcardHosts.map(async (hostname) => {
+        const { zoneId } = await findActiveZoneForHostname(cloudflareApi, hostname);
+        await ensureDevTunnelWildcardDnsRecord({
+          cloudflareApi,
+          zoneId,
+          name: hostname,
+          target: `${tunnel.tunnelId}.cfargotunnel.com`,
+          comment: `Managed by ${manifest.slug} dev tunnel (${app.stage}).`,
+        });
+      }),
+    );
+
     tunnelToken = tunnel.token.unencrypted;
   }
 
@@ -304,6 +318,64 @@ async function ensureCloudflareDnsRecord(input: {
   if (!response.ok) {
     throw new Error(
       `Failed to upsert DNS record ${input.record.name}: ${response.status} ${await response.text()}`,
+    );
+  }
+}
+
+async function ensureDevTunnelWildcardDnsRecord(input: {
+  cloudflareApi: Awaited<ReturnType<typeof createCloudflareApi>>;
+  comment: string;
+  name: string;
+  target: string;
+  zoneId: string;
+}) {
+  const params = new URLSearchParams({ name: input.name, per_page: "100" });
+  const listResponse = await input.cloudflareApi.get(
+    `/zones/${input.zoneId}/dns_records?${params.toString()}`,
+  );
+  if (!listResponse.ok) {
+    throw new Error(
+      `Failed to check dev tunnel wildcard DNS record ${input.name}: ${listResponse.status} ${await listResponse.text()}`,
+    );
+  }
+
+  const listResult = (await listResponse.json()) as {
+    result?: Array<{
+      content?: string;
+      id: string;
+      name?: string;
+      proxied?: boolean;
+      type?: string;
+    }>;
+  };
+  const records = listResult.result?.filter((record) => record.name === input.name) ?? [];
+  const cname = records.find((record) => record.type === "CNAME");
+  const conflictingRecords = records.filter((record) => record.type !== "CNAME");
+
+  if (conflictingRecords.length > 0) {
+    throw new Error(
+      `Dev tunnel wildcard DNS record ${input.name} has conflicting ${[
+        ...new Set(conflictingRecords.map((record) => record.type ?? "unknown")),
+      ].join(", ")} record(s). Replace them with a proxied CNAME to ${input.target}.`,
+    );
+  }
+
+  const record = {
+    type: "CNAME" as const,
+    name: input.name,
+    content: input.target,
+    proxied: true,
+    ttl: 1,
+    comment: input.comment,
+  };
+
+  const response = cname
+    ? await input.cloudflareApi.put(`/zones/${input.zoneId}/dns_records/${cname.id}`, record)
+    : await input.cloudflareApi.post(`/zones/${input.zoneId}/dns_records`, record);
+
+  if (!response.ok) {
+    throw new Error(
+      `Failed to upsert dev tunnel wildcard DNS record ${input.name}: ${response.status} ${await response.text()}`,
     );
   }
 }
