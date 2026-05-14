@@ -79,6 +79,17 @@ export const ProjectIntegrationConnection = z.object({
 });
 export type ProjectIntegrationConnection = z.output<typeof ProjectIntegrationConnection>;
 
+export const ProjectSecretSummary = z.object({
+  id: z.string(),
+  key: z.string(),
+  metadata: JSONObject,
+  projectId: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  hasMaterial: z.boolean(),
+});
+export type ProjectSecretSummary = z.output<typeof ProjectSecretSummary>;
+
 export const AgentRecord = z.object({
   agentPath: StreamPath,
   name: z.string(),
@@ -626,6 +637,50 @@ export const osContract = oc.router({
         })
         .input(ProjectScopedInput)
         .output(z.object({ success: z.boolean() })),
+    },
+    secrets: {
+      list: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectSlugOrId}/secrets",
+          description: "List redacted Secrets for a project",
+          tags: ["/project", "/secrets"],
+        })
+        .input(ProjectScopedInput)
+        .output(z.object({ secrets: z.array(ProjectSecretSummary) })),
+      get: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectSlugOrId}/secrets/{id}",
+          description: "Get a redacted Secret by ID",
+          tags: ["/project", "/secrets"],
+        })
+        .input(ProjectScopedInput.extend({ id: z.string().trim().min(1) }))
+        .output(ProjectSecretSummary),
+      upsert: oc
+        .route({
+          method: "PUT",
+          path: "/projects/{projectSlugOrId}/secrets",
+          description: "Create or update a project Secret by key",
+          tags: ["/project", "/secrets"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            key: z.string().trim().min(1),
+            material: z.string().min(1),
+            metadata: JSONObject.default({}),
+          }),
+        )
+        .output(ProjectSecretSummary),
+      remove: oc
+        .route({
+          method: "DELETE",
+          path: "/projects/{projectSlugOrId}/secrets/{id}",
+          description: "Delete a project Secret by ID",
+          tags: ["/project", "/secrets"],
+        })
+        .input(ProjectScopedInput.extend({ id: z.string().trim().min(1) }))
+        .output(z.object({ deleted: z.boolean() })),
     },
     streams: {
       list: oc

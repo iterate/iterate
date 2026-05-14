@@ -37,6 +37,7 @@ import { projectCodemodeRouter } from "~/orpc/routers/codemode.ts";
 import { projectAgentsRouter } from "~/orpc/routers/agents.ts";
 import { projectReposRouter } from "~/orpc/routers/repos.ts";
 import { projectIntegrationsRouter } from "~/orpc/routers/integrations.ts";
+import { projectSecretsRouter } from "~/orpc/routers/secrets.ts";
 import { projectStreamsRouter } from "~/orpc/routers/streams.ts";
 
 type ProjectRow = {
@@ -352,6 +353,7 @@ export const projectsRouter = {
         }),
     },
     integrations: projectIntegrationsRouter,
+    secrets: projectSecretsRouter,
     streams: projectStreamsRouter,
   },
 };
