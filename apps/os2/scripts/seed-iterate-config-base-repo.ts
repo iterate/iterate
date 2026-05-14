@@ -60,6 +60,7 @@ function parseOptions(args: string[]): Options {
   const values = new Map<string, string>();
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
+    if (arg === "--") continue;
     if (!arg?.startsWith("--")) {
       throw new Error(`Unexpected argument: ${arg ?? ""}`);
     }
@@ -83,10 +84,19 @@ function parseOptions(args: string[]): Options {
     namespace:
       values.get("namespace") ??
       process.env.OS2_ARTIFACTS_NAMESPACE ??
+      inferArtifactsNamespaceFromAlchemyStage() ??
       inferArtifactsNamespaceFromBaseUrl() ??
       requireEnv("OS2_ARTIFACTS_NAMESPACE"),
     repoName: values.get("repo") ?? ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME,
   };
+}
+
+function inferArtifactsNamespaceFromAlchemyStage() {
+  const stage = process.env.ALCHEMY_STAGE?.trim();
+  if (!stage) return null;
+  if (stage === "prd") return "os2-prd-repos";
+  if (stage === "preview") return "os2-preview-1-repos";
+  return `${slugify(`os2-${stage}`)}-repos`;
 }
 
 function inferArtifactsNamespaceFromBaseUrl() {
@@ -97,8 +107,22 @@ function inferArtifactsNamespaceFromBaseUrl() {
   const previewMatch = /^os2\.iterate-preview-(\d+)\.com$/.exec(hostname);
   if (previewMatch) return `os2-preview-${previewMatch[1]}-repos`;
 
-  if (hostname === "os2.iterate.com") return "os2-repos";
+  const devMatch = /^os\.iterate-dev-([^.]+)\.com$/.exec(hostname);
+  if (devMatch) return `os2-dev-${devMatch[1]}-repos`;
+
+  if (hostname === "os.iterate2.com" || hostname === "os2.iterate.com") {
+    return "os2-prd-repos";
+  }
   return null;
+}
+
+function slugify(input: string) {
+  return input
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
 async function getOrCreateArtifactRepo(options: Options): Promise<ArtifactRepoAccess> {
