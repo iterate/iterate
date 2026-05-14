@@ -112,15 +112,25 @@ type ProjectIngressRouteRow = {
 
 type ProjectDynamicWorkerEntrypoint = {
   fetch(request: Request): Response | Promise<Response>;
-  afterAppend(input: { event: Event }): unknown | Promise<unknown>;
+  afterAppend?(input: { event: Event }): unknown | Promise<unknown>;
 };
+
+type ProjectDynamicWorkerModule =
+  | string
+  | {
+      cjs?: string;
+      data?: ArrayBuffer;
+      js?: string;
+      json?: object;
+      text?: string;
+    };
 
 type ProjectDynamicWorkerCode = {
   compatibilityDate: string;
   compatibilityFlags: string[];
   globalOutbound: null;
   mainModule: string;
-  modules: Record<string, { js: string }>;
+  modules: Record<string, ProjectDynamicWorkerModule>;
 };
 
 type ProjectDynamicWorkerLoader = {
@@ -139,7 +149,7 @@ type ProjectRuntimeEnv = {
 
 type ProjectConfigCheckout = {
   commitOid: string;
-  workerSource: string;
+  workerCode: ProjectDynamicWorkerCode;
 };
 
 type ProjectConfigGit = {
@@ -162,6 +172,8 @@ const PROJECT_CONFIG_READY_STORAGE_KEY = "project.configWorker.ready";
 const PROJECT_CONFIG_REFRESHED_AT_STORAGE_KEY = "project.configWorker.refreshedAt";
 const PROJECT_CONFIG_REFRESH_INTERVAL_MS = 10_000;
 const PROJECT_DYNAMIC_WORKER_MAIN_MODULE = "worker.ts";
+const PROJECT_DYNAMIC_WORKER_COMPATIBILITY_DATE = "2026-04-27";
+const PROJECT_DYNAMIC_WORKER_COMPATIBILITY_FLAGS = ["nodejs_compat"];
 
 type ProjectConfigWorkspaceName = {
   projectId: string;
@@ -210,6 +222,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     commitOid: string;
     entrypoint: ProjectDynamicWorkerEntrypoint;
   } | null = null;
+  #projectConfigWorkerBuildPromise: Promise<ProjectDynamicWorkerEntrypoint> | null = null;
 
   constructor(ctx: DurableObjectState, env: ProjectEnv) {
     super(ctx, env);
@@ -333,7 +346,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     );
     if (summary !== null && configWorkerIsReady === true) {
       try {
-        await (await this.getCachedProjectDynamicWorkerEntrypoint(summary)).afterAppend(input);
+        await (await this.getCachedProjectDynamicWorkerEntrypoint(summary)).afterAppend?.(input);
       } catch (error) {
         await this.clearProjectConfigWorkerReady();
         console.error("Project config worker afterAppend failed.", error);
@@ -359,8 +372,20 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
       });
     }
 
+    let entrypoint: ProjectDynamicWorkerEntrypoint;
     try {
-      return await (await this.getIngressProjectDynamicWorkerEntrypoint(summary)).fetch(request);
+      entrypoint = await this.getIngressProjectDynamicWorkerEntrypoint(summary);
+    } catch (error) {
+      if (error instanceof ProjectConfigWorkerUnavailableError) {
+        return projectWorkerBuildingResponse();
+      }
+
+      console.error("Project config worker load failed; serving fallback landing response.", error);
+      return projectLandingResponse({ request, summary });
+    }
+
+    try {
+      return await entrypoint.fetch(request);
     } catch (error) {
       console.error(
         "Project config worker fetch failed; serving fallback landing response.",
@@ -382,16 +407,43 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
       }
     }
 
-    try {
-      return await this.getFreshProjectDynamicWorkerEntrypoint(summary);
-    } catch (error) {
-      try {
-        console.error("Project config worker refresh failed; using cached worker.", error);
-        return await this.getCachedProjectDynamicWorkerEntrypoint(summary);
-      } catch {
-        throw error;
-      }
+    const cachedWorker = await this.getAvailableCachedProjectDynamicWorkerEntrypoint(summary);
+    if (this.#projectConfigWorkerBuildPromise !== null) {
+      if (cachedWorker !== null) return cachedWorker;
+      throw new ProjectConfigWorkerUnavailableError("Project config worker is still building.");
     }
+
+    this.startProjectConfigWorkerBuild(summary);
+    if (cachedWorker !== null) return cachedWorker;
+    throw new ProjectConfigWorkerUnavailableError("Project config worker is building.");
+  }
+
+  private async getAvailableCachedProjectDynamicWorkerEntrypoint(
+    summary: ProjectSummary,
+  ): Promise<ProjectDynamicWorkerEntrypoint | null> {
+    try {
+      return await this.getCachedProjectDynamicWorkerEntrypoint(summary);
+    } catch (error) {
+      await this.clearProjectConfigWorkerReady();
+      console.error("Cached project config worker is unavailable.", error);
+      return null;
+    }
+  }
+
+  private startProjectConfigWorkerBuild(summary: ProjectSummary) {
+    const buildPromise = this.getFreshProjectDynamicWorkerEntrypoint(summary);
+    this.#projectConfigWorkerBuildPromise = buildPromise;
+    this.ctx.waitUntil(
+      buildPromise
+        .catch((error) => {
+          console.error("Project config worker build failed.", error);
+        })
+        .finally(() => {
+          if (this.#projectConfigWorkerBuildPromise === buildPromise) {
+            this.#projectConfigWorkerBuildPromise = null;
+          }
+        }),
+    );
   }
 
   private async getFreshProjectDynamicWorkerEntrypoint(
@@ -434,12 +486,12 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
           commitOid: checkout.commitOid,
           projectId: input.projectId,
         }),
-        () => projectDynamicWorkerCode(checkout.workerSource),
+        () => checkout.workerCode,
       )
       .getEntrypoint();
 
     if (!isProjectDynamicWorkerEntrypoint(entrypoint)) {
-      throw new Error("Project dynamic worker entrypoint is missing fetch or afterAppend.");
+      throw new Error("Project dynamic worker entrypoint is missing fetch.");
     }
 
     this.#dynamicWorkerEntrypoint = {
@@ -528,20 +580,26 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     }
 
     const state = await input.workspace.cloudflareShellState();
-    const readFile = state.readFile;
-    if (typeof readFile !== "function") {
-      throw new Error("Project Workspace state does not implement readFile.");
-    }
-
-    const workerSource = await readFile(PROJECT_CONFIG_WORKER_PATH);
+    const files = await readProjectConfigFiles(state);
+    const workerSource = files[PROJECT_DYNAMIC_WORKER_MAIN_MODULE];
     if (typeof workerSource !== "string" || workerSource.trim() === "") {
       throw new Error(`${ITERATE_CONFIG_REPO_SLUG} repo is missing worker.ts.`);
     }
+    const workerCode =
+      typeof files["package.json"] === "string" && files["package.json"].trim() !== ""
+        ? await this.bundleProjectDynamicWorkerCode(files)
+        : projectDynamicWorkerCode(workerSource);
 
     return {
       commitOid: commit.oid,
-      workerSource,
+      workerCode,
     };
+  }
+
+  protected async bundleProjectDynamicWorkerCode(
+    files: Record<string, string>,
+  ): Promise<ProjectDynamicWorkerCode> {
+    return await bundledProjectDynamicWorkerCode(files);
   }
 
   private async getProjectConfigWorkspace(projectId: string): Promise<ProjectConfigWorkspace> {
@@ -927,8 +985,8 @@ function projectDynamicWorkerId(input: { commitOid: string; projectId: string })
 
 function projectDynamicWorkerCode(workerSource: string) {
   return {
-    compatibilityDate: "2026-04-27",
-    compatibilityFlags: ["nodejs_compat"],
+    compatibilityDate: PROJECT_DYNAMIC_WORKER_COMPATIBILITY_DATE,
+    compatibilityFlags: PROJECT_DYNAMIC_WORKER_COMPATIBILITY_FLAGS,
     globalOutbound: null,
     mainModule: PROJECT_DYNAMIC_WORKER_MAIN_MODULE,
     modules: {
@@ -937,6 +995,109 @@ function projectDynamicWorkerCode(workerSource: string) {
       },
     },
   };
+}
+
+async function bundledProjectDynamicWorkerCode(
+  files: Record<string, string>,
+): Promise<ProjectDynamicWorkerCode> {
+  const { createWorker } = await import("@cloudflare/worker-bundler");
+  const result = await createWorker({
+    entryPoint: PROJECT_DYNAMIC_WORKER_MAIN_MODULE,
+    files,
+  });
+
+  for (const warning of result.warnings ?? []) {
+    console.warn(`Project config worker bundler warning: ${warning}`);
+  }
+
+  return {
+    compatibilityDate:
+      result.wranglerConfig?.compatibilityDate ?? PROJECT_DYNAMIC_WORKER_COMPATIBILITY_DATE,
+    compatibilityFlags:
+      result.wranglerConfig?.compatibilityFlags ?? PROJECT_DYNAMIC_WORKER_COMPATIBILITY_FLAGS,
+    globalOutbound: null,
+    mainModule: result.mainModule,
+    modules: result.modules,
+  };
+}
+
+async function readProjectConfigFiles(
+  state: Record<string, unknown>,
+): Promise<Record<string, string>> {
+  const readFile = state.readFile;
+  if (typeof readFile !== "function") {
+    throw new Error("Project Workspace state does not implement readFile.");
+  }
+  const readTextFile = readFile as (...args: unknown[]) => unknown;
+
+  const find = state.find;
+  if (typeof find !== "function") {
+    const workerSource = await readWorkspaceTextFile(readTextFile, PROJECT_CONFIG_WORKER_PATH);
+    const packageJson = await readOptionalWorkspaceTextFile(
+      readTextFile,
+      `${PROJECT_CONFIG_DIR}/package.json`,
+    );
+    return packageJson === null
+      ? { [PROJECT_DYNAMIC_WORKER_MAIN_MODULE]: workerSource }
+      : {
+          [PROJECT_DYNAMIC_WORKER_MAIN_MODULE]: workerSource,
+          "package.json": packageJson,
+        };
+  }
+
+  const entries = (await find(PROJECT_CONFIG_DIR, {
+    type: "file",
+  })) as Array<{ path?: unknown }>;
+  const files: Record<string, string> = {};
+
+  for (const entry of entries) {
+    if (typeof entry.path !== "string") continue;
+    const relativePath = projectConfigRelativePath(entry.path);
+    if (relativePath === null) continue;
+
+    files[relativePath] = await readWorkspaceTextFile(readTextFile, entry.path);
+  }
+
+  return files;
+}
+
+function projectConfigRelativePath(path: string) {
+  if (!path.startsWith(`${PROJECT_CONFIG_DIR}/`)) return null;
+
+  const relativePath = path.slice(PROJECT_CONFIG_DIR.length + 1);
+  if (
+    relativePath === "" ||
+    relativePath.startsWith(".git/") ||
+    relativePath.startsWith("node_modules/")
+  ) {
+    return null;
+  }
+
+  return relativePath;
+}
+
+async function readWorkspaceTextFile(
+  readFile: (...args: unknown[]) => unknown,
+  path: string,
+): Promise<string> {
+  const content = await readFile(path);
+  if (typeof content !== "string") {
+    throw new Error(`Project Workspace file ${path} did not contain text.`);
+  }
+
+  return content;
+}
+
+async function readOptionalWorkspaceTextFile(
+  readFile: (...args: unknown[]) => unknown,
+  path: string,
+) {
+  try {
+    return await readWorkspaceTextFile(readFile, path);
+  } catch (error) {
+    if (isFileMissingError(error)) return null;
+    throw error;
+  }
 }
 
 function projectLandingResponse(input: { request: Request; summary: ProjectSummary }) {
@@ -956,6 +1117,24 @@ function projectLandingResponse(input: { request: Request; summary: ProjectSumma
       },
     },
   );
+}
+
+function projectWorkerBuildingResponse() {
+  return new Response("This worker is currently being built.", {
+    status: 503,
+    headers: {
+      "content-type": "text/plain; charset=utf-8",
+      "retry-after": "5",
+      "x-project-ingress-runtime": "dynamic-worker-building",
+    },
+  });
+}
+
+class ProjectConfigWorkerUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProjectConfigWorkerUnavailableError";
+  }
 }
 
 function projectConfigWorkspaceName(projectId: string): ProjectConfigWorkspaceName {
@@ -985,9 +1164,7 @@ function isProjectDynamicWorkerEntrypoint(value: unknown): value is ProjectDynam
     typeof value === "object" &&
     value !== null &&
     "fetch" in value &&
-    typeof value.fetch === "function" &&
-    "afterAppend" in value &&
-    typeof value.afterAppend === "function"
+    typeof value.fetch === "function"
   );
 }
 
@@ -998,8 +1175,36 @@ function isProjectConfigCheckout(value: unknown): value is ProjectConfigCheckout
     "commitOid" in value &&
     typeof value.commitOid === "string" &&
     value.commitOid.length > 0 &&
-    "workerSource" in value &&
-    typeof value.workerSource === "string" &&
-    value.workerSource.trim() !== ""
+    "workerCode" in value &&
+    isProjectDynamicWorkerCode(value.workerCode)
+  );
+}
+
+function isProjectDynamicWorkerCode(value: unknown): value is ProjectDynamicWorkerCode {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "compatibilityDate" in value &&
+    typeof value.compatibilityDate === "string" &&
+    "compatibilityFlags" in value &&
+    Array.isArray(value.compatibilityFlags) &&
+    value.compatibilityFlags.every((flag) => typeof flag === "string") &&
+    "globalOutbound" in value &&
+    value.globalOutbound === null &&
+    "mainModule" in value &&
+    typeof value.mainModule === "string" &&
+    "modules" in value &&
+    typeof value.modules === "object" &&
+    value.modules !== null
+  );
+}
+
+function isFileMissingError(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("not found") ||
+    message.includes("could not find") ||
+    message.includes("no such file")
   );
 }

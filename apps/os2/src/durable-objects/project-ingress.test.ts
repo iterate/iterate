@@ -107,15 +107,21 @@ describe("Project ingress routing", () => {
     expect(repo.git.cloneCommand).not.toContain("?expires=");
     expect(repo.git.pushCommand).not.toContain("?expires=");
 
-    const projectIngressResponse = await SELF.fetch("https://demo.iterate.localhost/");
-    expect(projectIngressResponse.ok).toBe(true);
-    expect(projectIngressResponse.headers.get("x-project-ingress-runtime")).toBe("static-fallback");
-    await expect(projectIngressResponse.json()).resolves.toMatchObject({
-      defaultHost: "demo.iterate.localhost",
-      hostname: "demo.iterate.localhost",
-      projectId: "proj_local_test",
-      slug: "demo",
+    const buildingResponse = await SELF.fetch("https://demo.iterate.localhost/");
+    expect(buildingResponse.status).toBe(503);
+    expect(buildingResponse.headers.get("x-project-ingress-runtime")).toBe(
+      "dynamic-worker-building",
+    );
+    await expect(buildingResponse.text()).resolves.toBe("This worker is currently being built.");
+
+    const projectIngressResponse = await waitForProjectIngressResponse({
+      expectedText: "Bundled project worker for demo.iterate.localhost",
+      url: "https://demo.iterate.localhost/",
     });
+    expect(projectIngressResponse.headers.get("x-project-ingress-runtime")).toBe(
+      "dynamic-worker-config-repo",
+    );
+    expect(projectIngressResponse.text).toBe("Bundled project worker for demo.iterate.localhost");
 
     const mcpResponse = await SELF.fetch("https://mcp.demo.iterate.localhost/", {
       headers: { accept: "text/html" },
@@ -185,4 +191,29 @@ async function waitForProjectLifecycleState() {
   }
 
   throw new Error(`Timed out waiting for project lifecycle state: ${JSON.stringify(latest)}`);
+}
+
+async function waitForProjectIngressResponse(input: { expectedText: string; url: string }) {
+  const deadline = Date.now() + 5_000;
+  let latest: unknown;
+
+  while (Date.now() < deadline) {
+    const response = await SELF.fetch(input.url);
+    const text = await response.text();
+    latest = {
+      status: response.status,
+      text,
+      runtime: response.headers.get("x-project-ingress-runtime"),
+    };
+    if (response.ok && text === input.expectedText) {
+      return {
+        headers: response.headers,
+        text,
+      };
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+
+  throw new Error(`Timed out waiting for project ingress response: ${JSON.stringify(latest)}`);
 }

@@ -13,6 +13,7 @@ import { ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME } from "~/domains/repos/iterate-
 
 const ITERATE_CONFIG_REPO_DIR = "/repo";
 const ITERATE_CONFIG_JSONC = '{\n  "version": 1\n}\n';
+const ITERATE_CONFIG_PACKAGE_JSON = '{\n  "type": "module"\n}\n';
 
 export const ITERATE_CONFIG_WORKER_SOURCE = `// @ts-nocheck
 import { WorkerEntrypoint } from "cloudflare:workers";
@@ -102,8 +103,13 @@ export async function seedIterateConfigBaseRepo(input: {
     `${ITERATE_CONFIG_REPO_DIR}/iterate.config.jsonc`,
     ITERATE_CONFIG_JSONC,
   );
+  await filesystem.writeFile(
+    `${ITERATE_CONFIG_REPO_DIR}/package.json`,
+    ITERATE_CONFIG_PACKAGE_JSON,
+  );
   await filesystem.writeFile(`${ITERATE_CONFIG_REPO_DIR}/worker.ts`, ITERATE_CONFIG_WORKER_SOURCE);
   await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "iterate.config.jsonc" });
+  await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "package.json" });
   await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "worker.ts" });
 
   let committed = true;
