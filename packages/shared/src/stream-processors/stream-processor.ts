@@ -474,6 +474,7 @@ export async function catchUpProcessorFromStream<
     reduction: ProcessorReduction<Contract>;
   }): Promise<void> | void;
   signal: AbortSignal;
+  waitUntil?: (promise: Promise<unknown>) => void;
   now?: Date;
   firstAttachAfterAppend?: FirstAttachAfterAppendPolicy;
 }): Promise<StoredProcessorState<Contract>> {
@@ -547,6 +548,7 @@ export async function catchUpProcessorFromStream<
     state: storedState.state,
     streamApi: args.streamApi,
     signal: args.signal,
+    waitUntil: args.waitUntil,
   });
 
   for (const reduction of pendingAfterAppend) {
@@ -556,6 +558,7 @@ export async function catchUpProcessorFromStream<
         ...reduction,
         streamApi: args.streamApiForEvent?.(reduction.event) ?? args.streamApi,
         signal: args.signal,
+        waitUntil: args.waitUntil,
       });
     } catch (error) {
       await args.afterAppendError?.({ error, reduction });
@@ -636,6 +639,7 @@ export async function consumeLiveProcessorEvent<
     reduction: ProcessorReduction<Contract>;
   }): Promise<void> | void;
   signal: AbortSignal;
+  waitUntil?: (promise: Promise<unknown>) => void;
 }): Promise<StoredProcessorState<Contract>> {
   let storedState = args.storedState;
 
@@ -683,6 +687,7 @@ async function consumeLiveProcessorEventWithoutGapCatchUp<
     reduction: ProcessorReduction<Contract>;
   }): Promise<void> | void;
   signal: AbortSignal;
+  waitUntil?: (promise: Promise<unknown>) => void;
 }): Promise<StoredProcessorState<Contract>> {
   if (args.event.offset <= args.storedState.afterAppendCompletedThroughOffset) {
     return args.storedState;
@@ -715,6 +720,7 @@ async function consumeLiveProcessorEventWithoutGapCatchUp<
       ...reduction,
       streamApi: args.streamApiForEvent?.(reduction.event) ?? args.streamApi,
       signal: args.signal,
+      waitUntil: args.waitUntil,
     });
   } catch (error) {
     await args.afterAppendError?.({ error, reduction });

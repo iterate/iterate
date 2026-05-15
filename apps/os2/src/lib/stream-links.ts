@@ -1,12 +1,15 @@
 import { StreamPath } from "@iterate-com/shared/streams/types";
 
+const ROOT_SPLAT = "%2F";
+
 export function streamPathToSplat(path: StreamPath) {
-  if (path === "/") return "";
+  if (path === "/") return ROOT_SPLAT;
   return path.slice(1);
 }
 
 export function streamPathFromSplat(value: string | undefined) {
-  const normalized = (value ?? "").replace(/^\/+/, "");
+  if (value == null || value === "" || value === ROOT_SPLAT) return StreamPath.parse("/");
+  const normalized = value.replace(/^\/+/, "");
   return StreamPath.parse(normalized ? `/${normalized}` : "/");
 }
 

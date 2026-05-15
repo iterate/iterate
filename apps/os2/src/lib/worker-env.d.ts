@@ -1,22 +1,29 @@
 import type { worker } from "../../alchemy.run.ts";
-import type { DurableObject } from "cloudflare:workers";
 
 export type CloudflareEnv = typeof worker.Env;
 
-type WorkerMainModule = typeof import("../entry.workerd.ts");
-
-type WorkerEnvBinding = CloudflareEnv[keyof CloudflareEnv];
-
-type DurableObjectExportNames<TModule> = {
-  [K in keyof TModule]: TModule[K] extends abstract new (...args: any[]) => infer TInstance
-    ? TInstance extends DurableObject<any, any>
-      ? Extract<WorkerEnvBinding, DurableObjectNamespace<TInstance>> extends never
-        ? never
-        : K
-      : never
-    : never;
-}[keyof TModule] &
-  string;
+type WorkerEntryExports = typeof import("../entry.workerd.ts");
+type WorkerMainModule = Pick<
+  WorkerEntryExports,
+  Extract<
+    keyof WorkerEntryExports,
+    | "AgentCapability"
+    | "AiCapability"
+    | "FetchCapability"
+    | "GmailCapability"
+    | "OpenApiBridge"
+    | "OrpcCapability"
+    | "ProjectCapability"
+    | "ProjectIngressEntrypoint"
+    | "ProjectMcpServerEntrypoint"
+    | "RepoCapability"
+    | "ReposCapability"
+    | "SecretsCapability"
+    | "SlackCapability"
+    | "StreamsCapability"
+    | "WorkspaceCapability"
+  >
+>;
 
 declare global {
   type Env = CloudflareEnv;
@@ -49,30 +56,14 @@ declare global {
      * module, so every top-level export participates in Cloudflare's own
      * `Cloudflare.Exports` mapper.
      *
-     * Cloudflare still needs `durableNamespaces` to know which exported Durable
-     * Object classes should also be typed as namespace bindings. Wrangler writes
-     * that as an explicit string union in generated files. OS2 is configured by
-     * Alchemy rather than checked-in Wrangler generated types, so we derive the
-     * union by intersecting two facts we already have:
-     *
-     * - the Worker entry module exports a class with a DurableObject instance;
-     * - Alchemy's `typeof worker.Env` contains a DurableObjectNamespace whose
-     *   instance type is that same exported class.
-     *
-     * This avoids the tempting but too-broad shortcut of treating every
-     * exported Durable Object class as deployed durable storage. The runtime
-     * contract is the namespace binding, not the export by itself.
-     *
-     * This is why the shared Durable Object mixin result type must preserve the
-     * branded `DurableObject<Env>` constructor. If a mixin publishes a plain
-     * member-only constructor like `new (...args) => AddedMembers`, this derived
-     * union and Cloudflare's own mapper can no longer prove the final class is a
-     * Durable Object. The symptom is a misleading circular-looking
-     * `DurableObjectBranded` failure when `mainModule` imports the full Worker.
+     * OS2 uses `ctx.exports` for loopback entrypoints and capabilities. Durable
+     * Object calls go through explicit env namespace bindings, so `mainModule`
+     * deliberately exposes only the loopback classes and `durableNamespaces` is
+     * empty. That avoids circular mapped types for mixin-heavy Durable Objects.
      */
     interface GlobalProps {
       mainModule: WorkerMainModule;
-      durableNamespaces: DurableObjectExportNames<WorkerMainModule>;
+      durableNamespaces: never;
     }
   }
 }

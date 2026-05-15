@@ -47,7 +47,7 @@ describe("createLegacyCodemodeProcessor", () => {
         idempotencyKey: CODEMODE_PRIMER_IDEMPOTENCY_KEY,
         payload: {
           content: expect.stringContaining("Codemode is mandatory"),
-          triggerLlmRequest: { behaviour: "dont-trigger-request" },
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
         },
       },
       {
@@ -205,7 +205,7 @@ describe("createLegacyCodemodeProcessor", () => {
       expect.objectContaining({
         type: "events.iterate.com/agent/input-added",
         payload: expect.objectContaining({
-          triggerLlmRequest: { behaviour: "after-current-request" },
+          llmRequestPolicy: { behaviour: "after-current-request" },
         }),
       }),
     );
@@ -242,7 +242,7 @@ describe("createLegacyCodemodeProcessor", () => {
         type: "events.iterate.com/agent/input-added",
         payload: expect.objectContaining({
           content: expect.stringContaining("Automatic codemode continuation limit reached"),
-          triggerLlmRequest: { behaviour: "after-current-request" },
+          llmRequestPolicy: { behaviour: "after-current-request" },
         }),
       }),
     );
@@ -271,6 +271,14 @@ function testStreamApi(args: {
     append: async ({ event }) => {
       args.appended.push(event);
       return committedEvent(event);
+    },
+    appendBatch: async ({ events }) => {
+      const appendedEvents: StreamEvent[] = [];
+      for (const event of events) {
+        args.appended.push(event);
+        appendedEvents.push(committedEvent(event));
+      }
+      return appendedEvents;
     },
     read: async () => args.storedEvents,
     subscribe: async function* () {},

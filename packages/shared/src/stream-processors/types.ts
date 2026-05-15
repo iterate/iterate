@@ -438,6 +438,10 @@ export type ProcessorStreamApiProps = {
 
 export type ProcessorStreamApi<Contract> = {
   append(args: { event: EmittedInput<Contract>; streamPath?: string }): Promise<StreamEvent>;
+  appendBatch(args: {
+    events: EmittedInput<Contract>[];
+    streamPath?: string;
+  }): Promise<StreamEvent[]>;
   read(args?: {
     streamPath?: string;
     afterOffset?: number | "start" | "end";

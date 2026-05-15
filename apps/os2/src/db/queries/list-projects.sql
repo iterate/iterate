@@ -1,4 +1,4 @@
-select distinct p.id, p.slug, p.custom_hostname, p.metadata, p.created_at, p.updated_at
+select distinct p.id, p.slug, p.custom_hostname, p.external_egress_proxy_url, p.created_at, p.updated_at
 from projects p
 join project_permissions pp on pp.project_id = p.id
 where pp.principal_type = :principalType

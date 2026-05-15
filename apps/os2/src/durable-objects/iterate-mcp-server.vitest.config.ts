@@ -223,6 +223,10 @@ export default defineConfig({
           MOCK_PROVIDER_BASE_URL: mockProviderServer.url,
         },
         serviceBindings: {
+          ARTIFACTS: {
+            entrypoint: "MockArtifactsBinding",
+            name: miniflare.kCurrentWorker,
+          },
           BUILTIN_MATRIX_PROVIDER: {
             entrypoint: "TestBuiltinMatrixProvider",
             name: miniflare.kCurrentWorker,

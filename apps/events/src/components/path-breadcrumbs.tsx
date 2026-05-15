@@ -206,7 +206,7 @@ function BreadcrumbLabel({ crumb }: { crumb: { label: string; path?: StreamPathT
     return <>{crumb.label}</>;
   }
 
-  return <StreamPathLabel path={crumb.path} label={crumb.label} startChars={18} endChars={16} />;
+  return <StreamPathLabel path={crumb.path} label={crumb.label} />;
 }
 
 function getRouteCrumbs(matches: ReturnType<typeof useMatches>) {

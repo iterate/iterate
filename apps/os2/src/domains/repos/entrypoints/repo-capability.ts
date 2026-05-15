@@ -1,31 +1,50 @@
 import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
+import {
+  getInitializedDoStub,
+  listD1ObjectCatalogRecordsByIndex,
+  type D1ObjectCatalogRecord,
+} from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import type { ExecuteCodemodeFunctionCallInput } from "@iterate-com/shared/stream-processors/codemode/implementation";
-import type { RepoDurableObject } from "../durable-objects/repo-durable-object.ts";
+import type {
+  RepoInfo,
+  RepoDurableObject,
+  RepoStructuredName,
+} from "~/domains/repos/durable-objects/repo-durable-object.ts";
+import { getRepoDurableObjectName } from "~/domains/repos/durable-objects/repo-durable-object.ts";
+import {
+  isRepoAlreadyExistsError,
+  isRepoNotCreatedError,
+  isRepoNotFoundError,
+} from "~/domains/repos/repo-errors.ts";
+import {
+  ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME,
+  ITERATE_CONFIG_REPO_SLUG,
+} from "~/domains/repos/iterate-config-repo.ts";
 
-type RepoCapabilityEnv = {
+type ReposCapabilityEnv = {
+  DO_CATALOG?: D1Database;
   REPO?: DurableObjectNamespace<RepoDurableObject>;
 };
 
-type RepoCapabilityProps = {
-  projectId?: string;
+export type ReposCapabilityProps = {
+  projectId: string;
 };
 
-export class RepoCapability extends WorkerEntrypoint<RepoCapabilityEnv, RepoCapabilityProps> {
-  async executeCodemodeFunctionCall(input: ExecuteCodemodeFunctionCallInput) {
-    if (input.functionPath.join(".") !== "get") {
-      throw new Error(`RepoCapability does not implement ${input.functionPath.join(".")}`);
-    }
-    if (!this.env.REPO) {
-      throw new Error("REPO Durable Object namespace is not configured.");
-    }
+export type RepoCatalogRecord = {
+  createdAt: string;
+  lastWokenAt: string;
+  name: string;
+  projectId: string;
+  repoSlug: string;
+};
 
-    const [{ slug }] = input.args as [{ slug?: string }];
-    const projectId = requireProjectId(this.ctx.props);
-    return new RepoHandle(this.env.REPO.getByName(`${projectId}:${slug ?? "default"}`));
-  }
-}
+type ReposCapabilityClient = Pick<
+  ReposCapability,
+  "create" | "createInfo" | "ensureIterateConfigInfo" | "get" | "getInfo" | "list"
+>;
+type RepoLifecycleCatalogRecord = D1ObjectCatalogRecord<RepoStructuredName>;
 
-class RepoHandle extends RpcTarget {
+export class RepoHandle extends RpcTarget {
   readonly #repo: DurableObjectStub<RepoDurableObject>;
 
   constructor(repo: DurableObjectStub<RepoDurableObject>) {
@@ -33,20 +52,217 @@ class RepoHandle extends RpcTarget {
     this.#repo = repo;
   }
 
-  /**
-   * This handle deliberately forwards to the Durable Object rather than
-   * exposing the namespace-generated DO stub itself. Workers RPC documents
-   * `RpcTarget` instances and received RPC stubs as passable live values; the
-   * facade keeps that live shape while the DO address stays private capability
-   * state inside the provider.
-   */
-  async proofOfConcept(input: { callback?: (args: unknown) => unknown; message?: string }) {
-    return await this.#repo.proofOfConcept(input);
+  async getInfo(): Promise<RepoInfo> {
+    return await this.#repo.getInfo();
   }
 }
 
-function requireProjectId(props: RepoCapabilityProps | undefined) {
-  const projectId = props?.projectId;
-  if (!projectId) throw new Error("RepoCapability requires ctx.props.projectId.");
-  return projectId;
+export class ReposCapability extends WorkerEntrypoint<ReposCapabilityEnv, ReposCapabilityProps> {
+  async executeCodemodeFunctionCall(input: ExecuteCodemodeFunctionCallInput) {
+    const [request] = input.args;
+    const options =
+      request != null && typeof request === "object" ? (request as Record<string, unknown>) : {};
+
+    switch (input.functionPath.join(".")) {
+      case "create":
+        return await this.create({
+          projectSlug: readOptionalString(options.projectSlug),
+          slug: readSlug(options.slug),
+        });
+      case "get":
+        return await this.get({ slug: readSlug(options.slug) });
+      case "list":
+        return await this.list();
+      default:
+        throw new Error(`ReposCapability does not implement ${input.functionPath.join(".")}`);
+    }
+  }
+
+  async create(input: { projectSlug?: string; slug: string }) {
+    const namespace = this.requireRepoNamespace();
+    const name = this.repoName(input.slug);
+    const existing = await getInitializedDoStub({
+      allowCreate: false,
+      namespace,
+      name,
+    });
+
+    if (existing !== null) {
+      let existingRepoIsUncreated = false;
+      try {
+        await existing.getInfo();
+      } catch (error) {
+        if (!isRepoNotCreatedError(error)) throw error;
+        existingRepoIsUncreated = true;
+      }
+
+      if (!existingRepoIsUncreated) {
+        throw new Error(`Repo ${input.slug} already exists.`);
+      }
+    }
+
+    const repo = await getInitializedDoStub({
+      allowCreate: true,
+      namespace,
+      name,
+    });
+    await repo.createRepo({ projectSlug: input.projectSlug });
+    return new RepoHandle(repo);
+  }
+
+  async createInfo(input: { projectSlug?: string; slug: string }): Promise<RepoInfo> {
+    return await (await this.create(input)).getInfo();
+  }
+
+  async get(input: { slug: string }) {
+    const repo = await getInitializedDoStub({
+      allowCreate: false,
+      namespace: this.requireRepoNamespace(),
+      name: this.repoName(input.slug),
+    });
+
+    if (repo === null) {
+      throw new Error(`Repo ${input.slug} not found.`);
+    }
+
+    return new RepoHandle(repo);
+  }
+
+  async getInfo(input: { slug: string }): Promise<RepoInfo> {
+    return await (await this.get(input)).getInfo();
+  }
+
+  async ensureIterateConfigInfo(input: { projectSlug: string | null }): Promise<RepoInfo> {
+    const namespace = this.requireRepoNamespace();
+    const name = this.repoName(ITERATE_CONFIG_REPO_SLUG);
+    const existing = await getInitializedDoStub({
+      allowCreate: false,
+      namespace,
+      name,
+    });
+
+    if (existing !== null) {
+      try {
+        return await existing.getInfo();
+      } catch (error) {
+        if (!isRepoNotCreatedError(error)) {
+          throw error;
+        }
+      }
+    }
+
+    const repo = await getInitializedDoStub({
+      allowCreate: true,
+      namespace,
+      name,
+    });
+
+    try {
+      return await repo.createRepo({
+        projectSlug: input.projectSlug ?? undefined,
+        source: {
+          artifactName: ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME,
+          description: `Iterate config repo for ${input.projectSlug ?? this.ctx.props.projectId}`,
+          kind: "artifact-fork",
+        },
+      });
+    } catch (error) {
+      if (isRepoAlreadyExistsError(error)) {
+        return await repo.getInfo();
+      }
+
+      throw error;
+    }
+  }
+
+  async list(): Promise<RepoCatalogRecord[]> {
+    if (!this.env.DO_CATALOG) {
+      throw new Error("DO_CATALOG binding is required to list Repos.");
+    }
+
+    const records = await listD1ObjectCatalogRecordsByIndex<RepoStructuredName>(
+      this.env.DO_CATALOG,
+      {
+        className: "RepoDurableObject",
+        indexName: "projectId",
+        indexValue: this.ctx.props.projectId,
+      },
+    );
+
+    const repos = await Promise.all(
+      records.map(async (record) => {
+        const repo = toRepoCatalogRecord(record);
+        try {
+          await this.getInfo({ slug: repo.repoSlug });
+          return repo;
+        } catch (error) {
+          if (isRepoNotCreatedError(error) || isRepoNotFoundError(error)) return null;
+          throw error;
+        }
+      }),
+    );
+
+    return repos.filter((repo): repo is RepoCatalogRecord => repo !== null);
+  }
+
+  private requireRepoNamespace() {
+    if (!this.env.REPO) {
+      throw new Error("REPO Durable Object namespace is not configured.");
+    }
+
+    return this.env.REPO;
+  }
+
+  private repoName(repoSlug: string): RepoStructuredName {
+    return {
+      projectId: this.ctx.props.projectId,
+      repoSlug,
+    };
+  }
 }
+
+export { ReposCapability as RepoCapability };
+
+export function getReposCapability(input: {
+  exports: Pick<Cloudflare.Exports, "ReposCapability"> | undefined;
+  props: ReposCapabilityProps;
+}): ReposCapabilityClient {
+  if (!input.exports) {
+    throw new Error("ReposCapability export is not available.");
+  }
+
+  const reposCapability = input.exports.ReposCapability as unknown as (options: {
+    props: ReposCapabilityProps;
+  }) => ReposCapabilityClient;
+
+  return reposCapability({ props: input.props });
+}
+
+function toRepoCatalogRecord(record: RepoLifecycleCatalogRecord): RepoCatalogRecord {
+  return {
+    createdAt: record.createdAt,
+    lastWokenAt: record.lastWokenAt,
+    name: record.name,
+    projectId: record.structuredName.projectId,
+    repoSlug: record.structuredName.repoSlug,
+  };
+}
+
+function readSlug(value: unknown) {
+  if (typeof value !== "string") {
+    throw new Error("Repo slug is required.");
+  }
+
+  const slug = value.trim();
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+    throw new Error("Repo slug must be lowercase kebab-case.");
+  }
+
+  return slug;
+}
+
+function readOptionalString(value: unknown) {
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+}
+
+export { getRepoDurableObjectName };

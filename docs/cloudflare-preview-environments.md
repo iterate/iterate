@@ -125,7 +125,7 @@ Do not paste the token into scripts or docs.
 - Preview app configs inherit Cloudflare credentials from `_shared/preview`.
   Do not set app-local `CLOUDFLARE_ACCOUNT_ID` or `CLOUDFLARE_API_TOKEN`
   overrides; the preview domain pairs live in account
-  `cc7f6f461fbe823c199da2b27f9e0ff3`.
+  `376ef7ed81b0573f93524de763666c15`.
 - If two apps are affected by a PR, or one affected app has an explicit deploy
   dependency, they are deployed together under the same environment config
   lease. If one selected app fails, the overall preview is unhealthy and the

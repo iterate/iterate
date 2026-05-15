@@ -205,11 +205,20 @@ APP_CONFIG_CLERK__JWT_KEY='-----BEGIN PUBLIC KEY-----...'
 APP_CONFIG_PROJECT_HOSTNAME_BASES=["iterate2.app"]
 APP_CONFIG_LOGS__STDOUT_FORMAT=pretty
 APP_CONFIG_SLACK_BOT_TOKEN=xoxb-...
+APP_CONFIG_INTEGRATIONS__SLACK='{"oauthClientId":"123.456","oauthClientSecret":"...","webhookSigningSecret":"..."}'
+APP_CONFIG_INTEGRATIONS__GOOGLE='{"oauthClientId":"...","oauthClientSecret":"..."}'
 ```
 
 The final merged object must satisfy the app schema in `src/app.ts`.
 Frontend-visible config is exposed through the typed
 `__internal.publicConfig` oRPC procedure.
+
+`integrations.slack` and `integrations.google` are Runtime Config, not
+deployment config. They are supplied by Doppler as grouped JSON values so each
+provider's OAuth client values are updated atomically. Local Docker/workerd runs
+receive the same config through `doppler run`. Slack uses one OAuth client for
+OS2; the Slack team ID claimed during OAuth decides which project receives
+signed Slack webhooks.
 
 ## Clerk
 

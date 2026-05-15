@@ -1,4 +1,3 @@
-import type { AsyncClient } from "sqlfu";
 import type { SharedRequestLogger } from "@iterate-com/shared/request-logging";
 import manifest, { type AppConfig } from "~/app.ts";
 
@@ -6,7 +5,6 @@ export interface AppContext {
   manifest: typeof manifest;
   config: AppConfig;
   env: Env;
-  db: AsyncClient;
   log: SharedRequestLogger;
   rawRequest?: Request;
 }

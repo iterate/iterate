@@ -31,31 +31,6 @@ export function createExampleRpcProviderRegistration(input: {
   };
 }
 
-export function createWorkspaceProviderRegistration(input: {
-  instructions: string;
-  name: string;
-  path: string[];
-}): ToolProviderRegistration {
-  return {
-    instructions: input.instructions,
-    invocation: {
-      kind: "rpc",
-      callable: {
-        type: "workers-rpc",
-        via: {
-          type: "env-binding",
-          bindingType: "durable-object-namespace",
-          bindingName: "WORKSPACE",
-          durableObject: { name: input.name },
-        },
-        rpcMethod: "executeCodemodeFunctionCall",
-        argsMode: "object",
-      },
-    },
-    path: input.path,
-  };
-}
-
 export function createExampleCapabilityProviders(input: {
   activeOrganization?: ActiveOrganizationAuth;
   projectId: string;
@@ -69,16 +44,12 @@ export function createExampleCapabilityProviders(input: {
       projectId: input.projectId,
     }),
     createExampleRpcProviderRegistration({
-      exportName: "RepoCapability",
+      exportName: "ReposCapability",
       activeOrganization: input.activeOrganization,
-      instructions: "Use ctx.repos.get({ slug }) to get a repo handle.",
+      instructions:
+        "Use ctx.repos.create({ slug }) to create a Repo, ctx.repos.get({ slug }).getInfo() to inspect one, and ctx.repos.list({}) to list Repos.",
       path: ["repos"],
       projectId: input.projectId,
-    }),
-    createWorkspaceProviderRegistration({
-      instructions: "Use ctx.workspace.proofOfConcept(args) for the current workspace.",
-      name: input.projectId,
-      path: ["workspace"],
     }),
     createExampleRpcProviderRegistration({
       exportName: "AgentCapability",
@@ -100,7 +71,7 @@ export function createExampleCapabilityProviders(input: {
       exportName: "SlackCapability",
       activeOrganization: input.activeOrganization,
       instructions:
-        "Use ctx.slack.<Slack Web API method path>(args), for example ctx.slack.chat.postMessage({ channel, text }).",
+        "Use ctx.slack.<Slack Web API method path>(args), for example ctx.slack.chat.postMessage({ channel, thread_ts, text }). Slack agents MUST respond on the same thread_ts that received the message; otherwise they will not receive responses from that thread. Unless explicitly required, always include thread_ts in Slack replies. Do not post to Slack unless the bot was explicitly mentioned, a user directly asks or instructs you, or the surrounding thread context clearly calls for agent action.",
       path: ["slack"],
       projectId: input.projectId,
     }),

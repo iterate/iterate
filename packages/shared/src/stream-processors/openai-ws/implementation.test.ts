@@ -140,6 +140,52 @@ describe("createOpenAiWsProcessor", () => {
     });
   });
 
+  it("does not append agent output for a cancelled request", async () => {
+    const appended: StreamEventInput[] = [];
+    const sockets: FakeOpenAiResponsesWebSocket[] = [];
+    const processor = createOpenAiWsProcessor({
+      openResponsesWebSocket: async () => {
+        const socket = new FakeOpenAiResponsesWebSocket();
+        sockets.push(socket);
+        return socket;
+      },
+    });
+
+    const request = processor.implementation.afterAppend?.({
+      event: consumedOpenAiEvent({
+        type: "events.iterate.com/agent/llm-request-requested",
+        payload: llmRequestPayload("cancelled"),
+        offset: 17,
+      }),
+      previousState: registeredState(),
+      state: registeredState(),
+      streamApi: testStreamApi({
+        appended,
+        readEvents: [
+          committedEvent({
+            type: "events.iterate.com/agent/llm-request-requested",
+            payload: llmRequestPayload("replacement"),
+            offset: 18,
+          }),
+        ],
+      }),
+      signal: new AbortController().signal,
+    });
+
+    await waitFor(() => sockets.length === 1);
+    sockets[0]?.open();
+    await waitFor(() => sockets[0]?.sent.length === 1);
+    completeResponse(sockets[0]!, {
+      delta: "STALE",
+      responseId: "resp_cancelled",
+    });
+    await request;
+
+    expect(eventTypes(appended)).toContain("events.iterate.com/openai-ws/llm-request-completed");
+    expect(eventTypes(appended)).not.toContain("events.iterate.com/agent/output-added");
+    expect(eventTypes(appended)).not.toContain("events.iterate.com/agent/llm-request-completed");
+  });
+
   it("opens a fresh Responses WebSocket after the runner instance wakes without closure state", async () => {
     const appended: StreamEventInput[] = [];
     const sockets: FakeOpenAiResponsesWebSocket[] = [];
@@ -277,15 +323,38 @@ function llmRequestPayload(content: string) {
 
 function testStreamApi(args: {
   appended: StreamEventInput[];
+  readEvents?: StreamEvent[];
 }): ProcessorStreamApi<typeof OpenAiWsProcessorContract> {
   return {
     append: async ({ event }) => {
       args.appended.push(event);
       return committedEvent(event);
     },
-    read: async () => [],
+    appendBatch: async ({ events }) => {
+      const appendedEvents: StreamEvent[] = [];
+      for (const event of events) {
+        args.appended.push(event);
+        appendedEvents.push(committedEvent(event));
+      }
+      return appendedEvents;
+    },
+    read: async () => args.readEvents ?? currentAgentRequestEvents(args.appended),
     subscribe: async function* () {},
   };
+}
+
+function currentAgentRequestEvents(appended: readonly StreamEventInput[]) {
+  const llmRequestId = appended
+    .map((event) => (event.payload as { llmRequestId?: unknown }).llmRequestId)
+    .findLast((value): value is number => typeof value === "number");
+  if (llmRequestId == null) return [];
+  return [
+    committedEvent({
+      type: "events.iterate.com/agent/llm-request-requested",
+      payload: llmRequestPayload("current"),
+      offset: llmRequestId,
+    }),
+  ];
 }
 
 function consumedOpenAiEvent<T extends ConsumedEvent<typeof OpenAiWsProcessorContract>>(args: {

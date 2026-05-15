@@ -34,7 +34,7 @@ the active app config. App configs must not define local
 The current account split is:
 
 - `_shared/dev`, `_shared/dev_*`, and `_shared/prd` use account `04b3b57291ef2626c6a8daa9d47065a7`
-- `_shared/preview` uses account `cc7f6f461fbe823c199da2b27f9e0ff3`
+- `_shared/preview` uses account `376ef7ed81b0573f93524de763666c15`
 
 The API token (`cfut_...` user token) must have:
 

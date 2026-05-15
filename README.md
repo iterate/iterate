@@ -46,8 +46,8 @@ Think of every new-style Cloudflare deploy as selecting two axes:
 - Doppler project: app/service dimension, such as `os2` or `semaphore`
 - Doppler config: environment config dimension, such as `dev_jonas_2`, `preview_2`, or `prd`
 
-For new-style Cloudflare apps (`agents`, `example`, `ingress-proxy`, `os2`,
-and `semaphore`), local deployed dev, PR previews, and
+For new-style Cloudflare apps (`agents`, `example`, `os2`, and `semaphore`),
+local deployed dev, PR previews, and
 main/prod deploys all use the same primitive:
 
 ```bash
@@ -62,7 +62,7 @@ generated per-app workflows with `prd`. PR previews are not promoted to
 production.
 
 The shared PR preview lifecycle currently covers `agents`, `example`, `events`,
-`ingress-proxy`, `os2`, and `semaphore`. `events` is
+`os2`, and `semaphore`. `events` is
 preview-managed but has not yet moved to the new-style `alchemy.run.ts`
 primitive.
 

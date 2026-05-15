@@ -46,17 +46,15 @@ export type EventsStreamMessageElement = EventsStreamRenderedElement<
 export type EventsStreamPromptContextElementProps = {
   source?: string;
   text: string;
-  triggerLlmRequest: EventsStreamPromptContextTriggerLlmRequest;
+  llmRequestPolicy: EventsStreamPromptContextLlmRequestPolicy;
   timestamp: number;
   raw: Event;
 };
 
-export type EventsStreamPromptContextTriggerLlmRequest =
-  | { behaviour: "auto" }
+export type EventsStreamPromptContextLlmRequestPolicy =
   | { behaviour: "dont-trigger-request" }
   | { behaviour: "interrupt-current-request" }
-  | { behaviour: "after-current-request" }
-  | { behaviour: "trigger-request-within-time-period"; withinMs: number };
+  | { behaviour: "after-current-request" };
 
 /**
  * Agent prompt context element.
@@ -385,6 +383,24 @@ export type EventsStreamSlotName = keyof EventsStreamSlots;
  * This is not directly rendered. It exists so a reducer can track facts across
  * the event log, then project them into slots.
  */
+export type EventsStreamRegisteredEventExample = {
+  description: string;
+  payload: unknown;
+};
+
+export type EventsStreamRegisteredEvent = {
+  type: string;
+  description?: string;
+  examples?: EventsStreamRegisteredEventExample[];
+};
+
+export type EventsStreamRegisteredProcessor = {
+  slug: string;
+  version: string;
+  description: string;
+  ownedEvents: EventsStreamRegisteredEvent[];
+};
+
 export type EventsStreamActivityState = {
   eventCount: number;
   currentLlmRequestId: string | null;
@@ -392,6 +408,7 @@ export type EventsStreamActivityState = {
     message: string;
     offset: number;
   } | null;
+  registeredProcessors: EventsStreamRegisteredProcessor[];
 };
 
 /**
@@ -403,20 +420,4 @@ export type EventsStreamActivityState = {
 export type EventsStreamViewState = {
   slots: EventsStreamSlots;
   activity: EventsStreamActivityState;
-};
-
-/**
- * Browser-side stream view reducer.
- *
- * Reducers synchronously reduce raw stream events into renderer-neutral view
- * state. React, terminal, and future renderers consume that state without
- * owning event interpretation.
- */
-export type EventsStreamViewReducer = {
-  slug: string;
-  createInitialState: () => EventsStreamViewState;
-  reduce: (args: {
-    event: Event;
-    state: EventsStreamViewState;
-  }) => EventsStreamViewState | undefined;
 };

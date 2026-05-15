@@ -8,6 +8,7 @@ import {
 } from "../stream-processor.ts";
 import { CoreProcessorRegisteredEventType } from "../core/contract.ts";
 import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
+import { reduceAgentEvents } from "../agent/contract.ts";
 import { CloudflareAiProcessorContract, type CloudflareAiState } from "./contract.ts";
 
 type CloudflareAiStreamApi = ProcessorStreamApi<typeof CloudflareAiProcessorContract>;
@@ -212,6 +213,29 @@ async function executeCloudflareAiRequest(args: {
   const usage = extractUsage(raw);
   const durationMs = Date.now() - startedAt;
 
+  if (
+    !(await isAgentLlmRequestStillCurrent({
+      llmRequestId,
+      streamApi: args.streamApi,
+    }))
+  ) {
+    await appendProviderCompleted({
+      durationMs,
+      llmRequestId,
+      result: {
+        status: "success",
+        rawResponse,
+        ...(usage == null ? {} : { usage }),
+        ...(args.deps.ai.aiGatewayLogId == null
+          ? {}
+          : { aiGatewayLogId: args.deps.ai.aiGatewayLogId }),
+      },
+      sourceEvent: args.event,
+      streamApi: args.streamApi,
+    });
+    return;
+  }
+
   await args.streamApi.append({
     event: {
       type: "events.iterate.com/agent/output-added",
@@ -220,30 +244,22 @@ async function executeCloudflareAiRequest(args: {
         key: "agent-output-added",
         sourceEvent: args.event,
       }),
-      payload: { content: assistantText },
+      payload: { content: assistantText, llmRequestId },
     },
   });
-  await args.streamApi.append({
-    event: {
-      type: "events.iterate.com/cloudflare-ai/llm-request-completed",
-      idempotencyKey: buildProcessorIdempotencyKey({
-        processor: CloudflareAiProcessorContract,
-        key: "provider-llm-request-completed",
-        sourceEvent: args.event,
-      }),
-      payload: {
-        llmRequestId,
-        durationMs,
-        result: {
-          status: "success",
-          rawResponse,
-          ...(usage == null ? {} : { usage }),
-          ...(args.deps.ai.aiGatewayLogId == null
-            ? {}
-            : { aiGatewayLogId: args.deps.ai.aiGatewayLogId }),
-        },
-      },
+  await appendProviderCompleted({
+    durationMs,
+    llmRequestId,
+    result: {
+      status: "success",
+      rawResponse,
+      ...(usage == null ? {} : { usage }),
+      ...(args.deps.ai.aiGatewayLogId == null
+        ? {}
+        : { aiGatewayLogId: args.deps.ai.aiGatewayLogId }),
     },
+    sourceEvent: args.event,
+    streamApi: args.streamApi,
   });
   await args.streamApi.append({
     event: {
@@ -265,6 +281,53 @@ async function executeCloudflareAiRequest(args: {
       },
     },
   });
+}
+
+async function appendProviderCompleted(args: {
+  durationMs: number;
+  llmRequestId: number;
+  result: {
+    status: "success";
+    rawResponse: JsonValue;
+    usage?: JsonValue;
+    aiGatewayLogId?: string;
+  };
+  sourceEvent: Extract<
+    CloudflareAiConsumedEvent,
+    { type: "events.iterate.com/agent/llm-request-requested" }
+  >;
+  streamApi: CloudflareAiStreamApi;
+}) {
+  await args.streamApi.append({
+    event: {
+      type: "events.iterate.com/cloudflare-ai/llm-request-completed",
+      idempotencyKey: buildProcessorIdempotencyKey({
+        processor: CloudflareAiProcessorContract,
+        key: "provider-llm-request-completed",
+        sourceEvent: args.sourceEvent,
+      }),
+      payload: {
+        llmRequestId: args.llmRequestId,
+        durationMs: args.durationMs,
+        result: args.result,
+      },
+    },
+  });
+}
+
+async function isAgentLlmRequestStillCurrent(args: {
+  llmRequestId: number;
+  streamApi: CloudflareAiStreamApi;
+}) {
+  const events = await args.streamApi.read({
+    afterOffset: "start",
+    beforeOffset: "end",
+  });
+  const state = reduceAgentEvents({ events });
+  return (
+    state.currentRequest?.phase === "requested" &&
+    state.currentRequest.llmRequestId === args.llmRequestId
+  );
 }
 
 function extractCloudflareAssistantText(raw: unknown): string {

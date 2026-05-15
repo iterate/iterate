@@ -40,6 +40,12 @@ class PrototypeStreamApi implements ProcessorStreamApi<typeof TestContract> {
     return event;
   }
 
+  async appendBatch(
+    args: Parameters<ProcessorStreamApi<typeof TestContract>["appendBatch"]>[0],
+  ): Promise<StreamEvent[]> {
+    return await Promise.all(args.events.map((event) => this.append({ event })));
+  }
+
   async read(): Promise<StreamEvent[]> {
     return [
       {
@@ -105,5 +111,15 @@ describe("wrapProcessorStreamApiWithProvenance", () => {
         type: "events.iterate.com/test/message",
       },
     });
+
+    const [batchAppended] = await wrapped.appendBatch({
+      events: [
+        {
+          type: "events.iterate.com/test/message",
+          payload: { message: "batch appended" },
+        },
+      ],
+    });
+    expect(batchAppended.metadata?.provenance).toEqual(appended.metadata?.provenance);
   });
 });

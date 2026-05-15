@@ -3,14 +3,35 @@ import type { Event } from "@iterate-com/shared/streams/types";
 import {
   defaultAgentSetupEvents,
   defaultAgentSystemPrompt,
+  isSlackAgentPath,
   normalizeAgentPresetBasePath,
   parseAgentRunOptsJson,
   presetConfiguredEvent,
   readAgentPathPrefixPresets,
+  selectAgentSetupPreset,
   selectAgentPathPrefixPreset,
 } from "./agent-presets.ts";
 
 describe("agent presets", () => {
+  it("defaults new agent setup events to OpenAI", () => {
+    expect(defaultAgentSetupEvents()).toEqual([
+      {
+        type: "events.iterate.com/os2-agent/llm-provider-selected",
+        payload: { provider: "openai-ws" },
+      },
+      {
+        type: "events.iterate.com/openai-ws/config-updated",
+        payload: { model: "gpt-5.5" },
+      },
+      {
+        type: "events.iterate.com/agent/system-prompt-updated",
+        payload: {
+          systemPrompt: defaultAgentSystemPrompt(),
+        },
+      },
+    ]);
+  });
+
   it("accepts full preset paths under /agents", () => {
     expect(normalizeAgentPresetBasePath("/agents")).toBe("/agents");
     expect(normalizeAgentPresetBasePath("/agents/alice/bla")).toBe("/agents/alice/bla");
@@ -38,6 +59,74 @@ describe("agent presets", () => {
         presets: [rootPreset, nestedPreset],
       }),
     ).toBe(nestedPreset);
+  });
+
+  it("keeps Slack agents from inheriting the root agent preset", () => {
+    const rootOpenAiPreset = {
+      basePath: "/agents",
+      events: defaultAgentSetupEvents("openai-ws"),
+    };
+
+    expect(
+      selectAgentSetupPreset({
+        agentPath: "/agents/slack/c123/ts-1778565914-773159",
+        presets: [rootOpenAiPreset],
+      }),
+    ).toBeNull();
+  });
+
+  it("recognizes only routed Slack agent paths as Slack agents", () => {
+    expect(isSlackAgentPath("/agents/slack")).toBe(true);
+    expect(isSlackAgentPath("/agents/slack/c123/ts-1778565914-773159")).toBe(true);
+    expect(isSlackAgentPath("/agents/slack-test")).toBe(false);
+  });
+
+  it("allows explicit Slack presets to override the built-in default", () => {
+    const rootOpenAiPreset = {
+      basePath: "/agents",
+      events: defaultAgentSetupEvents("openai-ws"),
+    };
+    const slackOpenAiPreset = {
+      basePath: "/agents/slack",
+      events: defaultAgentSetupEvents("openai-ws"),
+    };
+
+    expect(
+      selectAgentSetupPreset({
+        agentPath: "/agents/slack/c123/ts-1778565914-773159",
+        presets: [rootOpenAiPreset, slackOpenAiPreset],
+      }),
+    ).toBe(slackOpenAiPreset);
+  });
+
+  it("ignores the legacy generated Slack OpenAI preset so Slack agents fall back to the built-in default", () => {
+    const legacySlackOpenAiPreset = {
+      basePath: "/agents/slack",
+      events: [
+        {
+          type: "events.iterate.com/os2-agent/llm-provider-selected",
+          payload: { provider: "openai-ws" },
+        },
+        {
+          type: "events.iterate.com/openai-ws/config-updated",
+          payload: { model: "gpt-5.5" },
+        },
+        {
+          type: "events.iterate.com/agent/system-prompt-updated",
+          payload: {
+            systemPrompt:
+              "You are an Iterate agent responding from Slack. Send Slack replies with ctx.slack.chat.postMessage({ channel, thread_ts, text }).",
+          },
+        },
+      ],
+    };
+
+    expect(
+      selectAgentSetupPreset({
+        agentPath: "/agents/slack/c123/ts-1778565914-773159",
+        presets: [legacySlackOpenAiPreset],
+      }),
+    ).toBeNull();
   });
 
   it("ignores invalid stored preset paths while selecting a prefix preset", () => {
@@ -100,9 +189,24 @@ describe("agent presets", () => {
     ]);
   });
 
-  it("keeps the default system prompt on ctx.chat.sendMessage", () => {
-    expect(defaultAgentSystemPrompt()).toContain("ctx.chat.sendMessage({ message:");
-    expect(defaultAgentSystemPrompt()).not.toContain("ctx.streams.append");
+  it("includes key patterns in the default system prompt", () => {
+    const prompt = defaultAgentSystemPrompt("/agents/test");
+    expect(prompt).toContain("/agents/test");
+    expect(prompt).toContain("return undefined");
+    expect(prompt).toContain("If you're not sure about the shape of the result of a function call");
+    expect(prompt).toContain("Promise.all");
+    expect(prompt).toContain("ctx.<path>.<method>(args)");
+    expect(prompt).toContain("ctx.slack.chat.postMessage({ channel, thread_ts, text })");
+    expect(prompt).toContain("ctx.streams.read()");
+  });
+
+  it("tells Slack agents not to reply to FYI-only thread events", () => {
+    const prompt = defaultAgentSystemPrompt("/agents/slack/c123/ts-1778565914-773159");
+    expect(prompt).toContain("Do not chime in just because a Slack event arrived.");
+    expect(prompt).toContain("explicitly mentioned");
+    expect(prompt).toContain("surrounding thread context clearly calls for agent action");
+    expect(prompt).toContain("async (ctx) => {}");
+    expect(prompt).toContain("Do not call `ctx.slack.chat.postMessage` for FYI-only updates.");
   });
 
   it("distinguishes invalid run options JSON from non-object run options", () => {

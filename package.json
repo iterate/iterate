@@ -22,9 +22,10 @@
     "lint": "oxlint . --threads 1 --deny-warnings",
     "lint:check": "pnpm lint",
     "lint:fix": "oxlint . --fix",
-    "knip": "knip --workspace apps/agents --workspace apps/agents-contract --workspace apps/example --workspace apps/example-contract --workspace apps/events --workspace apps/events-contract --workspace apps/ingress-proxy --workspace apps/ingress-proxy-contract --workspace apps/semaphore --workspace apps/semaphore-contract --workspace packages/shared",
+    "knip": "knip --workspace apps/agents --workspace apps/agents-contract --workspace apps/example --workspace apps/example-contract --workspace apps/events --workspace apps/events-contract --workspace apps/semaphore --workspace apps/semaphore-contract --workspace packages/shared",
     "prepare": "is-ci || husky",
     "vitest": "pnpm os test",
+    "int": "pnpm os test:integration",
     "test": "pnpm -r --parallel test",
     "test:onboarding": "pnpm -r --parallel test:onboarding",
     "test:onboarding:production": "pnpm -r --parallel test:onboarding:production",
@@ -72,6 +73,9 @@
   },
   "packageManager": "pnpm@10.24.0",
   "pnpm": {
+    "patchedDependencies": {
+      "alchemy@0.83.3": "patches/alchemy@0.83.3.patch"
+    },
     "overrides": {
       "axios": "1.13.6",
       "@orpc/client": "1.13.14",

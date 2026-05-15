@@ -6,7 +6,7 @@ import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import type { AppConfig } from "~/app.ts";
-import { buildProjectMcpUrl } from "~/lib/project-host-routing.ts";
+import { buildProjectMcpUrl, normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { streamPathToSplat } from "~/lib/stream-links.ts";
 import { orpc } from "~/orpc/client.ts";
 
@@ -62,6 +62,13 @@ function ProjectMcpPage() {
   }
 
   const claudeCommand = `claude mcp add --transport http ${project.slug} ${mcpUrl}`;
+  const baseHost = normalizeProjectHostnameBase(config.projectHostnameBases[0] ?? "");
+  const cliBaseHostFlag = baseHost && baseHost !== "iterate2.app" ? ` --base-host ${baseHost}` : "";
+  const cliCommand = `cd apps/os2 && pnpm cli claude-mcp --project-slug-or-id ${project.slug}${cliBaseHostFlag}`;
+  const cliCommandHint =
+    baseHost === "iterate2.app"
+      ? "Run from the repo root. Uses the admin token for auth and disables all other MCP servers. For production, prefix with: doppler run --project os2 --config prd --"
+      : "Run from the repo root. Uses the admin token for auth and disables all other MCP servers.";
 
   return (
     <section className="max-w-md space-y-4 p-4">
@@ -94,6 +101,14 @@ function ProjectMcpPage() {
         >
           Claude Code docs
         </a>
+      </div>
+
+      <div className="space-y-2 rounded-lg border bg-card p-4">
+        <p className="text-xs uppercase tracking-wide text-muted-foreground">CLI Script</p>
+        <code className="block whitespace-pre-wrap break-all rounded-md bg-muted p-3 font-mono text-xs">
+          {cliCommand}
+        </code>
+        <p className="text-sm text-muted-foreground">{cliCommandHint}</p>
       </div>
 
       <div className="space-y-2 rounded-lg border bg-card p-4">

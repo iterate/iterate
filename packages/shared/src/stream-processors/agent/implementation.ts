@@ -29,7 +29,7 @@ type AgentStreamApi = ProcessorStreamApi<typeof AgentProcessorContract>;
 type AgentInputPayload = z.infer<
   (typeof AgentProcessorContract.events)["events.iterate.com/agent/input-added"]["payloadSchema"]
 >;
-type ConcreteTriggerLlm = Exclude<AgentInputPayload["triggerLlmRequest"], { behaviour: "auto" }>;
+type LlmRequestPolicy = AgentInputPayload["llmRequestPolicy"];
 
 type ScheduledLlmRequest = {
   requestId: string;
@@ -67,7 +67,7 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
   return implementProcessor(AgentProcessorContract, {
     firstAttachAfterAppend: { mode: "lookback", milliseconds: 60_000 },
 
-    async afterAppend({ event, state, streamApi }) {
+    async afterAppend({ event, previousState, state, streamApi }) {
       await standardProcessorBehavior.afterAppend({
         contract: AgentProcessorContract,
         state,
@@ -83,7 +83,11 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
         case "events.iterate.com/agent/status-updated":
           return;
         case "events.iterate.com/codemode/tool-provider-registered":
-          await appendLlmEventContext({
+          await appendEventTypeExplanation({
+            streamApi,
+            eventType: event.type,
+          });
+          await appendRewrite({
             streamApi,
             event,
             key: "render-codemode-tool-provider-registered",
@@ -100,7 +104,7 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
             event,
             streamApi,
             state,
-            trigger: resolveTrigger(event.payload),
+            policy: event.payload.llmRequestPolicy,
           });
           return;
         case "events.iterate.com/agent/llm-request-requested":
@@ -113,29 +117,15 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
           });
           return;
         case "events.iterate.com/agent/llm-request-queued":
-          await appendLlmEventContext({
-            streamApi,
-            event,
-            key: "render-llm-request-queued",
-            content: eventBlock({ offset: event.offset, type: event.type }),
-          });
           return;
         case "events.iterate.com/agent/llm-request-completed":
-          await appendLlmEventContext({
-            streamApi,
-            event,
-            key: "render-llm-request-completed",
-            content: eventBlock({
-              offset: event.offset,
-              type: event.type,
-              fields: {
-                llmRequestId: event.payload.llmRequestId,
-                provider: event.payload.provider,
-                status: event.payload.result.status,
-                durationMs: event.payload.durationMs,
-              },
-            }),
-          });
+          if (
+            event.payload.llmRequestId !== undefined &&
+            (previousState.currentRequest?.phase !== "requested" ||
+              previousState.currentRequest.llmRequestId !== event.payload.llmRequestId)
+          ) {
+            return;
+          }
           await handleTerminalLlmRequestEvent({
             sourceEvent: event,
             streamApi,
@@ -145,7 +135,23 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
           });
           return;
         case "events.iterate.com/agent/llm-request-cancelled":
-          cancelScheduledLlmRequest({ requestId: event.payload.requestId });
+          if (
+            event.payload.phase === "scheduled" &&
+            (previousState.currentRequest?.phase !== "scheduled" ||
+              previousState.currentRequest.requestId !== event.payload.requestId)
+          ) {
+            return;
+          }
+          if (
+            event.payload.phase === "requested" &&
+            (previousState.currentRequest?.phase !== "requested" ||
+              previousState.currentRequest.llmRequestId !== event.payload.llmRequestId)
+          ) {
+            return;
+          }
+          if (event.payload.phase === "scheduled") {
+            cancelScheduledLlmRequest({ requestId: event.payload.requestId });
+          }
           await appendLlmEventContext({
             streamApi,
             event,
@@ -154,7 +160,9 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
               offset: event.offset,
               type: event.type,
               fields: {
-                requestId: event.payload.requestId,
+                ...(event.payload.phase === "scheduled"
+                  ? { requestId: event.payload.requestId }
+                  : { llmRequestId: event.payload.llmRequestId }),
                 reason: event.payload.reason,
               },
             }),
@@ -164,7 +172,9 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
             streamApi,
             state,
             reason: "llm-request-cancelled",
-            requestId: event.payload.requestId,
+            ...(event.payload.phase === "scheduled"
+              ? { requestId: event.payload.requestId }
+              : { llmRequestId: event.payload.llmRequestId }),
           });
           return;
         default:
@@ -182,10 +192,10 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
     streamApi: AgentStreamApi;
     event: { streamPath: string; offset: number };
     state: AgentState;
-    trigger: ConcreteTriggerLlm;
+    policy: LlmRequestPolicy;
   }) {
-    const { event, streamApi, state, trigger } = args;
-    if (trigger.behaviour === "dont-trigger-request") return;
+    const { event, streamApi, state, policy } = args;
+    if (policy.behaviour === "dont-trigger-request") return;
 
     if (state.currentRequest == null) {
       await appendLlmRequestScheduled({ sourceEvent: event, streamApi, state });
@@ -193,23 +203,31 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
     }
 
     if (state.currentRequest.phase === "scheduled") {
-      if (trigger.behaviour === "interrupt-current-request") {
-        resetScheduledLlmRequestTimer({
+      if (policy.behaviour === "interrupt-current-request") {
+        await cancelCurrentScheduledRequest({
           requestId: state.currentRequest.requestId,
-          debounceMs: state.llmConfig.debounceMs,
+          sourceEvent: event,
           streamApi,
         });
+        await appendLlmRequestScheduled({ sourceEvent: event, streamApi, state });
         return;
       }
 
-      await emitQueued({ sourceEvent: event, streamApi });
-      if (trigger.behaviour === "trigger-request-within-time-period") {
-        armScheduledLlmRequestCancelDeadline({
-          requestId: state.currentRequest.requestId,
-          withinMs: trigger.withinMs,
-          streamApi,
-        });
-      }
+      resetScheduledLlmRequestTimer({
+        requestId: state.currentRequest.requestId,
+        debounceMs: state.llmConfig.debounceMs,
+        streamApi,
+      });
+      return;
+    }
+
+    if (policy.behaviour === "interrupt-current-request") {
+      await cancelCurrentInFlightRequest({
+        llmRequestId: state.currentRequest.llmRequestId,
+        sourceEvent: event,
+        streamApi,
+      });
+      await appendLlmRequestScheduled({ sourceEvent: event, streamApi, state });
       return;
     }
 
@@ -287,6 +305,51 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
     scheduledLlmRequest = null;
   }
 
+  async function cancelCurrentScheduledRequest(args: {
+    requestId: string;
+    sourceEvent: { streamPath: string; offset: number };
+    streamApi: AgentStreamApi;
+  }) {
+    cancelScheduledLlmRequest({ requestId: args.requestId });
+    await args.streamApi.append({
+      event: {
+        type: "events.iterate.com/agent/llm-request-cancelled",
+        idempotencyKey: buildProcessorIdempotencyKey({
+          processor: AgentProcessorContract,
+          key: "llm-request-cancelled/interrupted-by-user-input",
+          sourceEvent: args.sourceEvent,
+        }),
+        payload: {
+          phase: "scheduled",
+          requestId: args.requestId,
+          reason: "interrupted-by-user-input",
+        },
+      },
+    });
+  }
+
+  async function cancelCurrentInFlightRequest(args: {
+    llmRequestId: number;
+    sourceEvent: { streamPath: string; offset: number };
+    streamApi: AgentStreamApi;
+  }) {
+    await args.streamApi.append({
+      event: {
+        type: "events.iterate.com/agent/llm-request-cancelled",
+        idempotencyKey: buildProcessorIdempotencyKey({
+          processor: AgentProcessorContract,
+          key: "llm-request-cancelled/interrupted-by-user-input",
+          sourceEvent: args.sourceEvent,
+        }),
+        payload: {
+          phase: "requested",
+          llmRequestId: args.llmRequestId,
+          reason: "interrupted-by-user-input",
+        },
+      },
+    });
+  }
+
   function resetScheduledLlmRequestTimer(args: {
     requestId: string;
     debounceMs: number;
@@ -296,37 +359,6 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
     cancelScheduledLlmRequest({ requestId: args.requestId });
     if (scheduledEvent == null) return;
     armLlmRequestDebounceTimer({ ...args, scheduledEvent });
-  }
-
-  /**
-   * Arms a best-effort deadline for "finish within N ms" triggers while a
-   * request is still only scheduled. Once handed to a provider, cancellation is
-   * a provider concern for a later slice.
-   */
-  function armScheduledLlmRequestCancelDeadline(args: {
-    requestId: string;
-    withinMs: number;
-    streamApi: AgentStreamApi;
-  }) {
-    setTimeout(() => {
-      if (scheduledLlmRequest?.requestId !== args.requestId) return;
-
-      const scheduledEvent = scheduledLlmRequest.scheduledEvent;
-      cancelScheduledLlmRequest({ requestId: args.requestId });
-      deps.waitUntil(
-        args.streamApi.append({
-          event: {
-            type: "events.iterate.com/agent/llm-request-cancelled",
-            idempotencyKey: buildProcessorIdempotencyKey({
-              processor: AgentProcessorContract,
-              key: "llm-request-cancelled/deadline-exceeded",
-              sourceEvent: scheduledEvent,
-            }),
-            payload: { requestId: args.requestId, reason: "deadline-exceeded" },
-          },
-        }),
-      );
-    }, args.withinMs);
   }
 
   function armLlmRequestDebounceTimer(args: {
@@ -406,13 +438,6 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
   }
 }
 
-function resolveTrigger(payload: AgentInputPayload): ConcreteTriggerLlm {
-  if (payload.triggerLlmRequest.behaviour !== "auto") {
-    return payload.triggerLlmRequest;
-  }
-  return { behaviour: "interrupt-current-request" };
-}
-
 async function emitQueued(args: {
   sourceEvent: { streamPath: string; offset: number };
   streamApi: AgentStreamApi;
@@ -466,7 +491,7 @@ async function appendLlmEventContext(args: {
     streamApi: args.streamApi,
     eventType: args.event.type,
   });
-  await appendRewrite(args);
+  await appendRewrite({ ...args, content: `An event has occurred: \n\n${args.content}` });
 }
 
 async function appendRewrite(args: {
@@ -484,8 +509,8 @@ async function appendRewrite(args: {
         sourceEvent: args.event,
       }),
       payload: {
-        content: `An event has occurred: \n\n${args.content}`,
-        triggerLlmRequest: { behaviour: "dont-trigger-request" },
+        content: args.content,
+        llmRequestPolicy: { behaviour: "dont-trigger-request" },
       },
     },
   });
@@ -504,37 +529,24 @@ async function appendEventTypeExplanation(args: { streamApi: AgentStreamApi; eve
       }),
       payload: {
         content: explanation,
-        triggerLlmRequest: { behaviour: "dont-trigger-request" },
+        llmRequestPolicy: { behaviour: "dont-trigger-request" },
       },
     },
   });
 }
 
 function eventTypeExplanation(eventType: string): string | null {
-  if (eventType === "events.iterate.com/agent/llm-request-queued") {
-    return eventTypeExplanationBlock({
-      type: eventType,
-      meaning:
-        "A trigger arrived while an LLM request was running and should be handled after the current request ends.",
-    });
-  }
   if (eventType === "events.iterate.com/agent/llm-request-cancelled") {
     return eventTypeExplanationBlock({
       type: eventType,
-      meaning: "The current scheduled LLM request was interrupted or timed out before handoff.",
-    });
-  }
-  if (eventType === "events.iterate.com/agent/llm-request-completed") {
-    return eventTypeExplanationBlock({
-      type: eventType,
-      meaning: "The current LLM request reached a terminal success or failure result.",
+      meaning: "The current LLM request was interrupted by user input.",
     });
   }
   if (eventType === "events.iterate.com/codemode/tool-provider-registered") {
     return eventTypeExplanationBlock({
       type: eventType,
       meaning:
-        "A codemode tool provider became available. Its path and instructions should be used when writing codemode scripts.",
+        "A codemode tool provider is now available. Call it as `ctx.<path>.<method>(args)` in your codemode scripts. If you're not sure about the shape of the result of a function call, just return it from a codemode block and you'll be shown it on your next turn. The event below shows the provider's path and usage instructions.",
     });
   }
   return null;
@@ -577,14 +589,6 @@ function toolProviderRegisteredEventBlock(args: {
   path: readonly string[];
   type: string;
 }): string {
-  const yamlLines = [
-    "event:",
-    `  offset: ${args.offset}`,
-    `  type: ${yamlScalar(args.type)}`,
-    "  payload:",
-    "    path:",
-    ...args.path.map((segment) => `      - ${yamlScalar(segment)}`),
-    ...yamlBlockScalar("instructions", args.instructions).map((line) => `  ${line}`),
-  ];
-  return ["```yaml", ...yamlLines, "```"].join("\n");
+  const ctxPath = `ctx.${args.path.join(".")}`;
+  return `Codemode tool provider registered for \`${ctxPath}\`. ${args.instructions} (to debug further, see ${args.type} event at offset ${args.offset})`;
 }

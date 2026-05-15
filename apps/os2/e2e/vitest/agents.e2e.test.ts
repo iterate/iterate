@@ -12,7 +12,9 @@ import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import type { RouterClient } from "@orpc/server";
 import { afterEach, describe, expect, it } from "vitest";
 import { osContract } from "@iterate-com/os2-contract";
+import { STREAM_SUBSCRIPTION_CONFIGURED_TYPE } from "@iterate-com/shared/streams/core-event-types";
 import type { Event } from "@iterate-com/shared/streams/types";
+import { DEFAULT_WORKERS_AI_AGENT_MODEL } from "@iterate-com/shared/stream-processors/agent/contract";
 import type { appRouter } from "~/orpc/root.ts";
 
 type OrpcClient = RouterClient<typeof appRouter>;
@@ -57,7 +59,7 @@ describe("project agents codemode", () => {
     await client.project.agents.configurePreset({
       basePath,
       events: [],
-      model: "@cf/meta/llama-3.1-8b-instruct",
+      model: DEFAULT_WORKERS_AI_AGENT_MODEL,
       projectSlugOrId: project.id,
       provider: "cloudflare-ai",
       runOpts: { gateway: { id: "default" } },
@@ -109,6 +111,9 @@ describe("project agents codemode", () => {
     expect(events).toContainEqual(
       expect.objectContaining({
         type: "events.iterate.com/cloudflare-ai/llm-request-started",
+        payload: expect.objectContaining({
+          model: DEFAULT_WORKERS_AI_AGENT_MODEL,
+        }),
       }),
     );
     expect(events).toContainEqual(
@@ -141,6 +146,68 @@ describe("project agents codemode", () => {
     );
     expect(
       events.some((event) => event.type === "events.iterate.com/openai-ws/llm-request-started"),
+    ).toBe(false);
+    expect(
+      events.filter((event) => event.type === "events.iterate.com/core/error-occurred"),
+    ).toEqual([]);
+  });
+
+  it("uses OpenAI for unconfigured agent chats by default", async () => {
+    const baseUrl = requireBaseUrl();
+    const client = createClient(baseUrl);
+    const project = await createProject(client, "agent-default-openai");
+    const suffix = uniqueSuffix();
+    const agentPath = `/agents/default-openai-${suffix}`;
+
+    await client.project.agents.runtimeState({
+      agentPath,
+      projectSlugOrId: project.id,
+    });
+    await client.project.agents.sendMessage({
+      agentPath,
+      message: `default OpenAI proof ${suffix}`,
+      projectSlugOrId: project.id,
+    });
+
+    const events = await readUntil({
+      agentPath,
+      client,
+      projectId: project.id,
+      afterOffset: "start",
+      predicate: (event) =>
+        event.type === "events.iterate.com/openai-ws/llm-request-completed" &&
+        (event.payload as { result?: { status?: unknown } }).result?.status === "success",
+    });
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/os2-agent/llm-provider-selected",
+        payload: { provider: "openai-ws" },
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/openai-ws/config-updated",
+        payload: expect.objectContaining({
+          model: "gpt-5.5",
+        }),
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/openai-ws/llm-request-started",
+        payload: expect.objectContaining({
+          model: "gpt-5.5",
+        }),
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/agent/output-added",
+      }),
+    );
+    expect(
+      events.some((event) => event.type === "events.iterate.com/cloudflare-ai/llm-request-started"),
     ).toBe(false);
     expect(
       events.filter((event) => event.type === "events.iterate.com/core/error-occurred"),
@@ -220,6 +287,162 @@ async (ctx) => {
         }),
       }),
     );
+  });
+
+  it("lets agent chat update iterate-config through the prepared workspace", async () => {
+    const baseUrl = requireBaseUrl();
+    const client = createClient(baseUrl);
+    const project = await createProject(client, "agent-workspace");
+    const suffix = uniqueSuffix();
+    const agentPath = `/agents/workspace-${suffix}`;
+
+    await client.project.agents.runtimeState({
+      agentPath,
+      projectSlugOrId: project.id,
+    });
+    await client.project.agents.sendMessage({
+      agentPath,
+      message: "add a file called folder/banana.txt to the iterate config repo and push",
+      projectSlugOrId: project.id,
+    });
+
+    await readUntil({
+      agentPath,
+      client,
+      projectId: project.id,
+      afterOffset: "start",
+      predicate: (event) =>
+        event.type === "events.iterate.com/codemode/function-call-completed" &&
+        eventPath(event).join(".") === "workspace.git.push",
+      timeoutMs: 120_000,
+    });
+    const events = await readUntil({
+      agentPath,
+      client,
+      projectId: project.id,
+      afterOffset: "start",
+      predicate: (event) => event.type === "events.iterate.com/codemode/script-execution-completed",
+      timeoutMs: 30_000,
+    });
+
+    const output = requiredEvent(events, "events.iterate.com/agent/output-added");
+    const scriptRequested = requiredEvent(
+      events,
+      "events.iterate.com/codemode/script-execution-requested",
+    );
+    const scriptCompleted = requiredEvent(
+      events,
+      "events.iterate.com/codemode/script-execution-completed",
+    );
+    const generatedCode = requiredStringPayload(output, "content");
+    const requestedCode = requiredStringPayload(scriptRequested, "code");
+
+    expect(generatedCode).toContain("ctx.workspace.writeFile");
+    expect(generatedCode).toContain("ctx.workspace.git.commit");
+    expect(generatedCode).toContain("ctx.workspace.git.push");
+    expect(generatedCode).toContain("/iterate-config");
+    expect(generatedCode).toContain("folder/banana.txt");
+    expect(generatedCode).not.toContain("git.clone");
+    expect(generatedCode).not.toContain("ctx.repos");
+    expect(requestedCode).not.toContain("git.clone");
+    expect(events.map((event) => eventPath(event).join("."))).toEqual(
+      expect.arrayContaining([
+        "workspace.writeFile",
+        "workspace.git.add",
+        "workspace.git.commit",
+        "workspace.git.push",
+      ]),
+    );
+    expect(scriptCompleted.payload).toEqual(
+      expect.objectContaining({
+        outcome: expect.objectContaining({
+          status: "returned",
+        }),
+      }),
+    );
+    expect(
+      events.filter((event) => event.type === "events.iterate.com/core/error-occurred"),
+    ).toEqual([]);
+  }, 180_000);
+
+  it("renders codemode completions as direct auto-triggering agent inputs", async () => {
+    const baseUrl = requireBaseUrl();
+    const client = createClient(baseUrl);
+    const project = await createProject(client, "agent-codemode-completion");
+    const suffix = uniqueSuffix();
+    const agentPath = `/agents/codemode-completion-${suffix}`;
+    const returnedScriptExecutionId = `returned-${suffix}`;
+    const threwScriptExecutionId = `threw-${suffix}`;
+
+    await client.project.agents.runtimeState({
+      agentPath,
+      projectSlugOrId: project.id,
+    });
+
+    const returned = await client.project.streams.append({
+      projectSlugOrId: project.id,
+      streamPath: agentPath,
+      event: {
+        type: "events.iterate.com/codemode/script-execution-completed",
+        idempotencyKey: `agent-codemode-completion-returned:${suffix}`,
+        payload: {
+          durationMs: 12,
+          outcome: { status: "returned", value: { ok: true, suffix } },
+          scriptExecutionId: returnedScriptExecutionId,
+        },
+      },
+    });
+    await client.project.streams.append({
+      projectSlugOrId: project.id,
+      streamPath: agentPath,
+      event: {
+        type: "events.iterate.com/codemode/script-execution-completed",
+        idempotencyKey: `agent-codemode-completion-threw:${suffix}`,
+        payload: {
+          durationMs: 12,
+          outcome: { status: "threw", error: `expected codemode failure ${suffix}` },
+          scriptExecutionId: threwScriptExecutionId,
+        },
+      },
+    });
+
+    const events = await readUntil({
+      agentPath,
+      client,
+      projectId: project.id,
+      afterOffset: returned.event.offset - 1,
+      predicate: (event) =>
+        event.type === "events.iterate.com/agent/input-added" &&
+        typeof (event.payload as { content?: unknown }).content === "string" &&
+        (event.payload as { content: string }).content.includes(threwScriptExecutionId),
+    });
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/agent/input-added",
+        payload: expect.objectContaining({
+          content: expect.stringContaining(returnedScriptExecutionId),
+          llmRequestPolicy: { behaviour: "after-current-request" },
+        }),
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/agent/input-added",
+        payload: expect.objectContaining({
+          content: expect.stringContaining("expected codemode failure"),
+          llmRequestPolicy: { behaviour: "after-current-request" },
+        }),
+      }),
+    );
+    expect(
+      events.some(
+        (event) =>
+          event.type === "events.iterate.com/agent-chat/assistant-response-added" &&
+          typeof (event.payload as { message?: unknown }).message === "string" &&
+          (event.payload as { message: string }).message.includes("Codemode threw"),
+      ),
+    ).toBe(false);
   });
 
   itIfSlackBotToken(
@@ -329,6 +552,424 @@ async (ctx) => {
     90_000,
   );
 
+  itIfSlackBotToken(
+    "routes Slack webhooks into slack-agent streams and executes bang command replies",
+    async () => {
+      const baseUrl = requireBaseUrl();
+      const client = createClient(baseUrl);
+      const project = await createProject(client, "slack-agent-route");
+      const suffix = uniqueSuffix();
+      const slackChannelId = await requireSlackChannelId();
+      const rootText = `OS2 slack-agent route proof ${suffix}`;
+      const replyText = `OS2 slack-agent bang proof ${suffix}`;
+      const rootMessage = await postSlackMessage({
+        channel: slackChannelId,
+        text: rootText,
+        token: requireSlackToken(),
+      });
+      const routedAgentPath = slackAgentPath({
+        channel: slackChannelId,
+        threadTs: rootMessage.ts,
+      });
+
+      await client.project.streams.append({
+        projectSlugOrId: project.id,
+        streamPath: "/integrations/slack",
+        event: {
+          type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
+          idempotencyKey: `slack-integration-e2e-subscription:${suffix}`,
+          payload: {
+            slug: `slack-integration-e2e:${suffix}`,
+            type: "callable",
+            callable: {
+              type: "workers-rpc",
+              via: {
+                type: "env-binding",
+                bindingType: "durable-object-namespace",
+                bindingName: "SLACK_INTEGRATION",
+                durableObject: {
+                  name: slackIntegrationDurableObjectName(project.id),
+                },
+              },
+              rpcMethod: "afterAppend",
+              argsMode: "object",
+            },
+          },
+        },
+      });
+
+      await client.project.streams.append({
+        projectSlugOrId: project.id,
+        streamPath: "/integrations/slack",
+        event: {
+          type: "events.iterate.com/slack/webhook-received",
+          idempotencyKey: `slack-agent-e2e-webhook:${suffix}`,
+          payload: {
+            slackTeamId: "T_E2E",
+            body: {
+              type: "event_callback",
+              team_id: "T_E2E",
+              event_id: `Ev${suffix}`,
+              event: {
+                type: "message",
+                channel: slackChannelId,
+                channel_type: "channel",
+                user: "U_E2E",
+                ts: rootMessage.ts,
+                event_ts: rootMessage.ts,
+                text: `!slack.chat.postMessage({ channel: ${JSON.stringify(slackChannelId)}, thread_ts: ${JSON.stringify(rootMessage.ts)}, text: ${JSON.stringify(replyText)} })`,
+              },
+            },
+          },
+        },
+      });
+
+      const events = await readUntil({
+        agentPath: routedAgentPath,
+        client,
+        projectId: project.id,
+        afterOffset: "start",
+        predicate: (event) =>
+          event.type === "events.iterate.com/codemode/function-call-completed" &&
+          (event.payload as { path?: unknown }).path instanceof Array &&
+          (event.payload as { path: string[] }).path.join(".") === "slack.chat.postMessage",
+      });
+      const slackCallCompleted = requiredPathEvent(
+        events,
+        "events.iterate.com/codemode/function-call-completed",
+        "slack.chat.postMessage",
+      );
+
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
+          payload: expect.objectContaining({
+            slug: expect.stringContaining("slack-agent:"),
+          }),
+        }),
+      );
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
+          payload: expect.objectContaining({
+            slug: expect.stringContaining("agent:"),
+          }),
+        }),
+      );
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "events.iterate.com/slack/thread-route-configured",
+          payload: {
+            channel: slackChannelId,
+            threadTs: rootMessage.ts,
+            streamPath: routedAgentPath,
+          },
+        }),
+      );
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "events.iterate.com/codemode/tool-provider-registered",
+          payload: expect.objectContaining({
+            path: ["slack", "agent"],
+          }),
+        }),
+      );
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "events.iterate.com/os2-agent/llm-provider-selected",
+          payload: { provider: "openai-ws" },
+        }),
+      );
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "events.iterate.com/openai-ws/config-updated",
+          payload: expect.objectContaining({
+            model: "gpt-5.5",
+          }),
+        }),
+      );
+      expect(
+        events.filter((event) => event.type === "events.iterate.com/agent/llm-config-updated"),
+      ).toEqual([]);
+      expect(
+        events.filter((event) => event.type.startsWith("events.iterate.com/agent-chat/")),
+      ).toEqual([]);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "events.iterate.com/codemode/script-execution-requested",
+          payload: expect.objectContaining({
+            code: expect.stringContaining("ctx.slack.chat.postMessage"),
+          }),
+        }),
+      );
+      expect(slackCallCompleted).toMatchObject({
+        payload: expect.objectContaining({
+          outcome: expect.objectContaining({
+            status: "returned",
+            value: expect.objectContaining({
+              channel: slackChannelId,
+              ok: true,
+            }),
+          }),
+        }),
+      });
+
+      const debugAfterOffset = Math.max(...events.map((event) => event.offset));
+      const debugMessageTs = `${Date.now()}.123456`;
+      await client.project.streams.append({
+        projectSlugOrId: project.id,
+        streamPath: "/integrations/slack",
+        event: {
+          type: "events.iterate.com/slack/webhook-received",
+          idempotencyKey: `slack-agent-e2e-debug-webhook:${suffix}`,
+          payload: {
+            slackTeamId: "T_E2E",
+            body: {
+              type: "event_callback",
+              team_id: "T_E2E",
+              event_id: `EvDebug${suffix}`,
+              event: {
+                type: "message",
+                channel: slackChannelId,
+                channel_type: "channel",
+                user: "U_E2E",
+                ts: debugMessageTs,
+                thread_ts: rootMessage.ts,
+                event_ts: debugMessageTs,
+                text: "!debug",
+              },
+            },
+          },
+        },
+      });
+
+      const debugEvents = await readUntil({
+        agentPath: routedAgentPath,
+        client,
+        projectId: project.id,
+        afterOffset: debugAfterOffset,
+        predicate: (event) =>
+          event.type === "events.iterate.com/codemode/function-call-completed" &&
+          (event.payload as { path?: unknown }).path instanceof Array &&
+          (event.payload as { path: string[] }).path.join(".") === "slack.chat.postMessage",
+      });
+      expect(debugEvents).toContainEqual(
+        expect.objectContaining({
+          type: "events.iterate.com/codemode/script-execution-requested",
+          payload: expect.objectContaining({
+            code: expect.stringContaining("const debug = await ctx.debug();"),
+          }),
+        }),
+      );
+      expect(debugEvents).toContainEqual(
+        expect.objectContaining({
+          type: "events.iterate.com/codemode/function-call-completed",
+          payload: expect.objectContaining({
+            path: ["debug"],
+            outcome: expect.objectContaining({ status: "returned" }),
+          }),
+        }),
+      );
+      expect(debugEvents).toContainEqual(
+        expect.objectContaining({
+          type: "events.iterate.com/codemode/function-call-completed",
+          payload: expect.objectContaining({
+            path: ["slack", "chat", "postMessage"],
+            outcome: expect.objectContaining({ status: "returned" }),
+          }),
+        }),
+      );
+      const debugSlackCallCompleted = requiredPathEvent(
+        debugEvents,
+        "events.iterate.com/codemode/function-call-completed",
+        "slack.chat.postMessage",
+      );
+      const debugSlackPayload = JSON.stringify(debugSlackCallCompleted.payload);
+      expect(debugSlackPayload).toContain(`${baseUrl}/orgs/`);
+      expect(debugSlackPayload).not.toContain("events.iterate.com");
+      expect(
+        debugEvents.filter((event) => event.type.startsWith("events.iterate.com/agent-chat/")),
+      ).toEqual([]);
+      expect(
+        events.filter(
+          (event) =>
+            event.type === "events.iterate.com/agent/input-added" &&
+            typeof (event.payload as { content?: unknown }).content === "string" &&
+            (event.payload as { content: string }).content.includes("Reply requirement:"),
+        ),
+      ).toEqual([]);
+      expect(
+        events.filter((event) => event.type === "events.iterate.com/core/error-occurred"),
+      ).toEqual([]);
+    },
+    90_000,
+  );
+
+  it("completes slack-agent event-mode codemode calls without blocking the stream callable queue", async () => {
+    const baseUrl = requireBaseUrl();
+    const client = createClient(baseUrl);
+    const project = await createProject(client, "slack-agent-thread-info");
+    const suffix = uniqueSuffix();
+    const slackChannelId = `C_E2E_${suffix.replace(/[^a-zA-Z0-9]/g, "").slice(-12)}`;
+    const rootMessageTs = `${Date.now()}.123456`;
+    const routedAgentPath = slackAgentPath({
+      channel: slackChannelId,
+      threadTs: rootMessageTs,
+    });
+    const proofType = "events.iterate.com/slack-agent/e2e-thread-info-proof";
+
+    await client.project.streams.append({
+      projectSlugOrId: project.id,
+      streamPath: "/integrations/slack",
+      event: {
+        type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
+        idempotencyKey: `slack-integration-e2e-thread-info-subscription:${suffix}`,
+        payload: {
+          slug: `slack-integration-e2e-thread-info:${suffix}`,
+          type: "callable",
+          callable: {
+            type: "workers-rpc",
+            via: {
+              type: "env-binding",
+              bindingType: "durable-object-namespace",
+              bindingName: "SLACK_INTEGRATION",
+              durableObject: {
+                name: slackIntegrationDurableObjectName(project.id),
+              },
+            },
+            rpcMethod: "afterAppend",
+            argsMode: "object",
+          },
+        },
+      },
+    });
+
+    await client.project.streams.append({
+      projectSlugOrId: project.id,
+      streamPath: "/integrations/slack",
+      event: {
+        type: "events.iterate.com/slack/webhook-received",
+        idempotencyKey: `slack-agent-e2e-thread-info-route-webhook:${suffix}`,
+        payload: {
+          slackTeamId: "T_E2E",
+          body: {
+            type: "event_callback",
+            team_id: "T_E2E",
+            event_id: `EvThreadInfo${suffix}`,
+            event: {
+              type: "message",
+              subtype: "bot_message",
+              bot_id: "B_E2E",
+              channel: slackChannelId,
+              channel_type: "channel",
+              ts: rootMessageTs,
+              event_ts: rootMessageTs,
+              text: "synthetic route initializer",
+            },
+          },
+        },
+      },
+    });
+
+    await readUntil({
+      agentPath: routedAgentPath,
+      client,
+      projectId: project.id,
+      afterOffset: "start",
+      predicate: (event) =>
+        event.type === "events.iterate.com/codemode/tool-provider-registered" &&
+        (event.payload as { path?: unknown }).path instanceof Array &&
+        (event.payload as { path: string[] }).path.join(".") === "slack.agent",
+    });
+
+    const started = await client.project.codemode.executeScript({
+      code: `async (ctx) => {
+  const thread = await ctx.slack.agent.threadInfo();
+  await ctx.streams.append({
+    event: {
+      type: ${JSON.stringify(proofType)},
+      payload: thread
+    }
+  });
+}`,
+      projectSlugOrId: project.id,
+      streamPath: routedAgentPath,
+      providers: [],
+    });
+    const scriptExecutionId = (started.event.payload as { scriptExecutionId: string })
+      .scriptExecutionId;
+
+    /**
+     * Regression coverage for a stream alarm deadlock:
+     *
+     * codemode/script-execution-requested is delivered to CODEMODE_SESSION by the
+     * stream callable-subscriber alarm. The script then appends
+     * codemode/function-call-requested and waits for SLACK_AGENT to answer it.
+     * If the alarm waits for the codemode RPC before delivering later queued
+     * callable events, SLACK_AGENT never sees the function call and this proof
+     * event is never appended.
+     */
+    const events = await readUntil({
+      agentPath: routedAgentPath,
+      client,
+      projectId: project.id,
+      afterOffset: started.event.offset - 1,
+      predicate: (event) =>
+        event.type === "events.iterate.com/codemode/script-execution-completed" &&
+        (event.payload as { scriptExecutionId?: unknown }).scriptExecutionId === scriptExecutionId,
+    });
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/codemode/function-call-requested",
+        payload: expect.objectContaining({
+          path: ["slack", "agent", "threadInfo"],
+          providerPath: ["slack", "agent"],
+          scriptExecutionId,
+        }),
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/codemode/function-call-completed",
+        payload: expect.objectContaining({
+          path: ["slack", "agent", "threadInfo"],
+          scriptExecutionId,
+          outcome: expect.objectContaining({
+            status: "returned",
+            value: expect.objectContaining({
+              channel: slackChannelId,
+              thread_ts: rootMessageTs,
+              streamPath: routedAgentPath,
+            }),
+          }),
+        }),
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/codemode/script-execution-completed",
+        payload: expect.objectContaining({
+          scriptExecutionId,
+          outcome: expect.objectContaining({ status: "returned" }),
+        }),
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: proofType,
+        payload: {
+          channel: slackChannelId,
+          thread_ts: rootMessageTs,
+          streamPath: routedAgentPath,
+        },
+      }),
+    );
+    expect(
+      events.filter((event) => event.type === "events.iterate.com/core/error-occurred"),
+    ).toEqual([]);
+  });
+
   it("does not append normal out-of-order reducer errors during an agent codemode turn", async () => {
     const baseUrl = requireBaseUrl();
     const client = createClient(baseUrl);
@@ -395,10 +1036,7 @@ function requireBaseUrl() {
 }
 
 async function requireSlackChannelId() {
-  const token = process.env.APP_CONFIG_SLACK_BOT_TOKEN?.trim();
-  if (!token) throw new Error("APP_CONFIG_SLACK_BOT_TOKEN is required for Slack e2e tests.");
-
-  const channels = await listSlackChannels(token);
+  const channels = await listSlackChannels(requireSlackToken());
   const channel = channels.find(
     (candidate) => candidate.name === "slack-agent-e2e-test" && candidate.is_member === true,
   );
@@ -408,6 +1046,40 @@ async function requireSlackChannelId() {
     );
   }
   return channel.id;
+}
+
+function requireSlackToken() {
+  const token = process.env.APP_CONFIG_SLACK_BOT_TOKEN?.trim();
+  if (!token) throw new Error("APP_CONFIG_SLACK_BOT_TOKEN is required for Slack e2e tests.");
+  return token;
+}
+
+async function postSlackMessage(input: { channel: string; text: string; token: string }) {
+  const response = await fetch("https://slack.com/api/chat.postMessage", {
+    body: JSON.stringify({
+      channel: input.channel,
+      text: input.text,
+    }),
+    headers: {
+      authorization: `Bearer ${input.token}`,
+      "content-type": "application/json; charset=utf-8",
+    },
+    method: "POST",
+  });
+  const result = (await response.json()) as
+    | {
+        channel: string;
+        ok: true;
+        ts: string;
+      }
+    | {
+        error?: string;
+        ok: false;
+      };
+  if (!result.ok) {
+    throw new Error(`Slack chat.postMessage failed: ${result.error ?? response.status}`);
+  }
+  return result;
 }
 
 async function listSlackChannels(token: string) {
@@ -477,9 +1149,6 @@ function createClient(baseUrl: string) {
 
 async function createProject(client: OrpcClient, slugPrefix: string) {
   const project = await client.projects.create({
-    metadata: {
-      seededBy: "os2-agents-e2e",
-    },
     slug: `${slugPrefix}-${uniqueSuffix()}`,
   });
   createdProjectIds.push(project.id);
@@ -492,9 +1161,11 @@ async function readUntil(input: {
   client: OrpcClient;
   predicate(event: Event): boolean;
   projectId: string;
+  timeoutMs?: number;
 }) {
   const startedAt = Date.now();
-  while (Date.now() - startedAt < 60_000) {
+  const timeoutMs = input.timeoutMs ?? 60_000;
+  while (Date.now() - startedAt < timeoutMs) {
     const result = await input.client.project.streams.read({
       afterOffset: input.afterOffset,
       projectSlugOrId: input.projectId,
@@ -518,6 +1189,43 @@ function requiredEvent(events: readonly Event[], type: string) {
   const event = events.find((item) => item.type === type);
   if (!event) throw new Error(`Expected ${type}.`);
   return event;
+}
+
+function eventPath(event: Event) {
+  const payload = event.payload;
+  if (payload == null || typeof payload !== "object" || !("path" in payload)) return [];
+  const path = payload.path;
+  return path instanceof Array && path.every((item) => typeof item === "string") ? path : [];
+}
+
+function requiredStringPayload(event: Event, key: string) {
+  const payload = event.payload;
+  if (payload == null || typeof payload !== "object" || !(key in payload)) {
+    throw new Error(`Expected string payload key ${key}.`);
+  }
+  const value = payload[key as keyof typeof payload];
+  if (typeof value !== "string") {
+    throw new Error(`Expected string payload key ${key}.`);
+  }
+  return value;
+}
+
+function requiredPathEvent(events: readonly Event[], type: string, path: string) {
+  const event = events.find((item) => item.type === type && eventPath(item).join(".") === path);
+  if (!event) throw new Error(`Expected ${type} for ${path}.`);
+  return event;
+}
+
+function slackAgentPath(input: { channel: string; threadTs: string }) {
+  return `/agents/slack/${sanitizeSlackPathPart(input.channel)}/ts-${sanitizeSlackPathPart(input.threadTs)}`;
+}
+
+function sanitizeSlackPathPart(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
+}
+
+function slackIntegrationDurableObjectName(projectId: string) {
+  return JSON.stringify({ projectId });
 }
 
 function maxGapAfter(events: readonly Event[], afterOffset: number) {

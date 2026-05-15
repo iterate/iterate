@@ -118,7 +118,7 @@ export function createLegacyCodemodeProcessor(deps: LegacyCodemodeProcessorDeps)
               }),
               payload: {
                 content: toolProviderExplainer({ slug, types }),
-                triggerLlmRequest: { behaviour: "dont-trigger-request" },
+                llmRequestPolicy: { behaviour: "dont-trigger-request" },
               },
             },
           });
@@ -158,7 +158,7 @@ async function appendCodemodePrimerIfNeeded(args: {
       idempotencyKey: CODEMODE_PRIMER_IDEMPOTENCY_KEY,
       payload: {
         content: CODEMODE_PRIMER_TEXT,
-        triggerLlmRequest: { behaviour: "dont-trigger-request" },
+        llmRequestPolicy: { behaviour: "dont-trigger-request" },
       },
     },
   });
@@ -272,7 +272,7 @@ async function appendCodemodeResultAsAgentInput(args: {
         ]
           .filter(Boolean)
           .join("\n\n"),
-        triggerLlmRequest: { behaviour: "after-current-request" },
+        llmRequestPolicy: { behaviour: "after-current-request" },
       },
     },
   });

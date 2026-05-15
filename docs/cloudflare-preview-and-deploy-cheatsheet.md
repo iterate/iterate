@@ -2,7 +2,7 @@
 
 ## Cheat sheet
 
-- In scope apps: `agents`, `example`, `events`, `os2`, `semaphore`, `ingress-proxy`
+- In scope apps: `agents`, `example`, `events`, `os2`, `semaphore`
 - PR previews are owned by one workflow: `Cloudflare Previews`
 - Production deploys are owned by generated per-app workflows in `.github/workflows/deploy-*.yml`
 - Preview state lives in the managed PR body section, not in PR comments
@@ -125,5 +125,4 @@ The Semaphore UI labels this as an operator token. It is the same shared API sec
 EXAMPLE_BASE_URL=https://example.iterate.com pnpm --dir apps/example test:e2e
 EVENTS_BASE_URL=https://events.iterate.com pnpm --dir apps/events test:e2e:preview
 doppler run --project semaphore --config prd -- env SEMAPHORE_BASE_URL=https://semaphore.iterate.com pnpm --dir apps/semaphore test:e2e:preview
-doppler run --project ingress-proxy --config prd -- env INGRESS_PROXY_BASE_URL=https://ingress.iterate.com pnpm --dir apps/ingress-proxy test:e2e:preview
 ```

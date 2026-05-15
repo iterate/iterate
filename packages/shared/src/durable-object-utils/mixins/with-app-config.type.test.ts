@@ -76,7 +76,9 @@ describe("withAppConfig types", () => {
     });
 
     const Base = withAppConfig(AppConfig)(
-      withLifecycleHooks({ nameSchema: RoomInit })(withDurableObjectCore(DurableObject)),
+      withLifecycleHooks({ d1ObjectCatalog: "none", nameSchema: RoomInit })(
+        withDurableObjectCore(DurableObject),
+      ),
     );
 
     class Room extends Base<Env> {

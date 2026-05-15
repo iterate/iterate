@@ -160,8 +160,6 @@ const config: KnipConfig = {
     "!apps/example-contract",
     "!apps/events",
     "!apps/events-contract",
-    "!apps/ingress-proxy",
-    "!apps/ingress-proxy-contract",
     "!apps/semaphore",
     "!apps/semaphore-contract",
     "packages/*",
@@ -172,7 +170,6 @@ const config: KnipConfig = {
     // entrypoint, so there is no direct import Knip can follow.
     "apps/agents/src/router.tsx": ["exports"],
     "apps/example/src/router.tsx": ["exports"],
-    "apps/ingress-proxy-contract/src/client.ts": ["exports", "types"],
     "apps/semaphore-contract/src/client.ts": ["types"],
     "apps/semaphore/src/router.tsx": ["exports"],
     "apps/semaphore/scripts/seed-cloudflare-tunnel-pool.ts": ["exports"],
@@ -196,9 +193,11 @@ const config: KnipConfig = {
     "apps/agents/src/stream-tui/stream-tree.ts": ["types"],
     // Generated SQLFU bundles/configs are loaded by scripts/runtime conventions.
     "apps/events/src/db/migrations/.generated/migrations.ts": ["files", "exports", "types"],
+    "apps/events/src/db/queries/.generated/index.ts": ["files", "exports", "types"],
     "apps/events/src/durable-objects/db/migrations/.generated/migrations.ts": ["exports", "types"],
+    "apps/events/src/durable-objects/db/queries/.generated/index.ts": ["exports", "types"],
     "apps/events/src/durable-objects/db/queries/.generated/tables.ts": ["types"],
-    "apps/events/src/db/queries/.generated/tables.ts": ["types"],
+    "apps/events/src/db/queries/.generated/tables.ts": ["files", "types"],
     "apps/events/src/durable-objects/sqlfu.config.ts": ["files"],
     "apps/events/src/lib/custom-html-renderers.ts": ["exports"],
     "apps/events/src/lib/stream-feed-summary.ts": ["types"],
@@ -219,10 +218,19 @@ const config: KnipConfig = {
     "apps/agents-contract": makePrivateContractWorkspace(),
     "apps/example": makeDualRuntimeAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/example-contract": makePrivateContractWorkspace(),
-    "apps/events": makeEventsCloudflareWorkspace("./src/lib/worker-env.d.ts"),
+    "apps/events": {
+      ...makeEventsCloudflareWorkspace("./src/lib/worker-env.d.ts"),
+      ignoreDependencies: [
+        ...(makeEventsCloudflareWorkspace("./src/lib/worker-env.d.ts").ignoreDependencies ?? []),
+        // Form devtools expects the form package in this app workspace even
+        // though the root source only imports the devtools panel directly.
+        "@tanstack/react-form",
+        // SQLFU config is a tool entrypoint; `sqlfu` is intentionally
+        // resolved from the monorepo toolchain rather than app runtime code.
+        "sqlfu",
+      ],
+    },
     "apps/events-contract": makePrivateContractWorkspace(),
-    "apps/ingress-proxy": makeCloudflareTanStackAppWorkspace("./src/lib/worker-env.d.ts"),
-    "apps/ingress-proxy-contract": makePrivateContractWorkspace(),
     "apps/semaphore": makeCloudflareTanStackAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/semaphore-contract": makePrivateContractWorkspace(),
     "packages/shared": makeSharedWorkspace(),

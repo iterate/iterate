@@ -14,14 +14,11 @@ import { Route as AppRouteImport } from './routes/_app'
 import { Route as ProcessorSlugRouteImport } from './routes/$processorSlug'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ProcessorSlugIndexRouteImport } from './routes/$processorSlug.index'
-import { Route as PosthogProxySplatRouteImport } from './routes/posthog-proxy.$'
 import { Route as ApiOrpcWsRouteImport } from './routes/api.orpc-ws'
 import { Route as ApiSplatRouteImport } from './routes/api.$'
 import { Route as AppStreamsRouteImport } from './routes/_app/streams'
-import { Route as AppSecretsRouteImport } from './routes/_app/secrets'
 import { Route as ProcessorSlugEventSlugRouteImport } from './routes/$processorSlug.$eventSlug'
 import { Route as AppStreamsIndexRouteImport } from './routes/_app/streams.index'
-import { Route as AppSecretsIndexRouteImport } from './routes/_app/secrets.index'
 import { Route as ApiOrpcSplatRouteImport } from './routes/api.orpc.$'
 import { Route as AppStreamsSplatRouteImport } from './routes/_app/streams.$'
 
@@ -49,11 +46,6 @@ const ProcessorSlugIndexRoute = ProcessorSlugIndexRouteImport.update({
   path: '/',
   getParentRoute: () => ProcessorSlugRoute,
 } as any)
-const PosthogProxySplatRoute = PosthogProxySplatRouteImport.update({
-  id: '/posthog-proxy/$',
-  path: '/posthog-proxy/$',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const ApiOrpcWsRoute = ApiOrpcWsRouteImport.update({
   id: '/api/orpc-ws',
   path: '/api/orpc-ws',
@@ -69,11 +61,6 @@ const AppStreamsRoute = AppStreamsRouteImport.update({
   path: '/streams',
   getParentRoute: () => AppRoute,
 } as any)
-const AppSecretsRoute = AppSecretsRouteImport.update({
-  id: '/secrets',
-  path: '/secrets',
-  getParentRoute: () => AppRoute,
-} as any)
 const ProcessorSlugEventSlugRoute = ProcessorSlugEventSlugRouteImport.update({
   id: '/$eventSlug',
   path: '/$eventSlug',
@@ -83,11 +70,6 @@ const AppStreamsIndexRoute = AppStreamsIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => AppStreamsRoute,
-} as any)
-const AppSecretsIndexRoute = AppSecretsIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => AppSecretsRoute,
 } as any)
 const ApiOrpcSplatRoute = ApiOrpcSplatRouteImport.update({
   id: '/api/orpc/$',
@@ -105,15 +87,12 @@ export interface FileRoutesByFullPath {
   '/$processorSlug': typeof ProcessorSlugRouteWithChildren
   '/docs': typeof DocsRoute
   '/$processorSlug/$eventSlug': typeof ProcessorSlugEventSlugRoute
-  '/secrets': typeof AppSecretsRouteWithChildren
   '/streams': typeof AppStreamsRouteWithChildren
   '/api/$': typeof ApiSplatRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
-  '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/$processorSlug/': typeof ProcessorSlugIndexRoute
   '/streams/$': typeof AppStreamsSplatRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
-  '/secrets/': typeof AppSecretsIndexRoute
   '/streams/': typeof AppStreamsIndexRoute
 }
 export interface FileRoutesByTo {
@@ -122,11 +101,9 @@ export interface FileRoutesByTo {
   '/$processorSlug/$eventSlug': typeof ProcessorSlugEventSlugRoute
   '/api/$': typeof ApiSplatRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
-  '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/$processorSlug': typeof ProcessorSlugIndexRoute
   '/streams/$': typeof AppStreamsSplatRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
-  '/secrets': typeof AppSecretsIndexRoute
   '/streams': typeof AppStreamsIndexRoute
 }
 export interface FileRoutesById {
@@ -136,15 +113,12 @@ export interface FileRoutesById {
   '/_app': typeof AppRouteWithChildren
   '/docs': typeof DocsRoute
   '/$processorSlug/$eventSlug': typeof ProcessorSlugEventSlugRoute
-  '/_app/secrets': typeof AppSecretsRouteWithChildren
   '/_app/streams': typeof AppStreamsRouteWithChildren
   '/api/$': typeof ApiSplatRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
-  '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/$processorSlug/': typeof ProcessorSlugIndexRoute
   '/_app/streams/$': typeof AppStreamsSplatRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
-  '/_app/secrets/': typeof AppSecretsIndexRoute
   '/_app/streams/': typeof AppStreamsIndexRoute
 }
 export interface FileRouteTypes {
@@ -154,15 +128,12 @@ export interface FileRouteTypes {
     | '/$processorSlug'
     | '/docs'
     | '/$processorSlug/$eventSlug'
-    | '/secrets'
     | '/streams'
     | '/api/$'
     | '/api/orpc-ws'
-    | '/posthog-proxy/$'
     | '/$processorSlug/'
     | '/streams/$'
     | '/api/orpc/$'
-    | '/secrets/'
     | '/streams/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -171,11 +142,9 @@ export interface FileRouteTypes {
     | '/$processorSlug/$eventSlug'
     | '/api/$'
     | '/api/orpc-ws'
-    | '/posthog-proxy/$'
     | '/$processorSlug'
     | '/streams/$'
     | '/api/orpc/$'
-    | '/secrets'
     | '/streams'
   id:
     | '__root__'
@@ -184,15 +153,12 @@ export interface FileRouteTypes {
     | '/_app'
     | '/docs'
     | '/$processorSlug/$eventSlug'
-    | '/_app/secrets'
     | '/_app/streams'
     | '/api/$'
     | '/api/orpc-ws'
-    | '/posthog-proxy/$'
     | '/$processorSlug/'
     | '/_app/streams/$'
     | '/api/orpc/$'
-    | '/_app/secrets/'
     | '/_app/streams/'
   fileRoutesById: FileRoutesById
 }
@@ -203,7 +169,6 @@ export interface RootRouteChildren {
   DocsRoute: typeof DocsRoute
   ApiSplatRoute: typeof ApiSplatRoute
   ApiOrpcWsRoute: typeof ApiOrpcWsRoute
-  PosthogProxySplatRoute: typeof PosthogProxySplatRoute
   ApiOrpcSplatRoute: typeof ApiOrpcSplatRoute
 }
 
@@ -244,13 +209,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProcessorSlugIndexRouteImport
       parentRoute: typeof ProcessorSlugRoute
     }
-    '/posthog-proxy/$': {
-      id: '/posthog-proxy/$'
-      path: '/posthog-proxy/$'
-      fullPath: '/posthog-proxy/$'
-      preLoaderRoute: typeof PosthogProxySplatRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/api/orpc-ws': {
       id: '/api/orpc-ws'
       path: '/api/orpc-ws'
@@ -272,13 +230,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppStreamsRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/secrets': {
-      id: '/_app/secrets'
-      path: '/secrets'
-      fullPath: '/secrets'
-      preLoaderRoute: typeof AppSecretsRouteImport
-      parentRoute: typeof AppRoute
-    }
     '/$processorSlug/$eventSlug': {
       id: '/$processorSlug/$eventSlug'
       path: '/$eventSlug'
@@ -292,13 +243,6 @@ declare module '@tanstack/react-router' {
       fullPath: '/streams/'
       preLoaderRoute: typeof AppStreamsIndexRouteImport
       parentRoute: typeof AppStreamsRoute
-    }
-    '/_app/secrets/': {
-      id: '/_app/secrets/'
-      path: '/'
-      fullPath: '/secrets/'
-      preLoaderRoute: typeof AppSecretsIndexRouteImport
-      parentRoute: typeof AppSecretsRoute
     }
     '/api/orpc/$': {
       id: '/api/orpc/$'
@@ -331,18 +275,6 @@ const ProcessorSlugRouteWithChildren = ProcessorSlugRoute._addFileChildren(
   ProcessorSlugRouteChildren,
 )
 
-interface AppSecretsRouteChildren {
-  AppSecretsIndexRoute: typeof AppSecretsIndexRoute
-}
-
-const AppSecretsRouteChildren: AppSecretsRouteChildren = {
-  AppSecretsIndexRoute: AppSecretsIndexRoute,
-}
-
-const AppSecretsRouteWithChildren = AppSecretsRoute._addFileChildren(
-  AppSecretsRouteChildren,
-)
-
 interface AppStreamsRouteChildren {
   AppStreamsSplatRoute: typeof AppStreamsSplatRoute
   AppStreamsIndexRoute: typeof AppStreamsIndexRoute
@@ -358,12 +290,10 @@ const AppStreamsRouteWithChildren = AppStreamsRoute._addFileChildren(
 )
 
 interface AppRouteChildren {
-  AppSecretsRoute: typeof AppSecretsRouteWithChildren
   AppStreamsRoute: typeof AppStreamsRouteWithChildren
 }
 
 const AppRouteChildren: AppRouteChildren = {
-  AppSecretsRoute: AppSecretsRouteWithChildren,
   AppStreamsRoute: AppStreamsRouteWithChildren,
 }
 
@@ -376,7 +306,6 @@ const rootRouteChildren: RootRouteChildren = {
   DocsRoute: DocsRoute,
   ApiSplatRoute: ApiSplatRoute,
   ApiOrpcWsRoute: ApiOrpcWsRoute,
-  PosthogProxySplatRoute: PosthogProxySplatRoute,
   ApiOrpcSplatRoute: ApiOrpcSplatRoute,
 }
 export const routeTree = rootRouteImport

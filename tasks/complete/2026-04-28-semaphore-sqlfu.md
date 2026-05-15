@@ -6,7 +6,7 @@ size: medium
 
 # Move semaphore to SQLFu
 
-Status summary: implemented and verified. Semaphore now uses SQLFu for D1 resource storage and ResourceCoordinator Durable Object SQLite storage, with one `queries.sql` file per SQLFu project. No known missing pieces remain.
+Status summary: implemented, merged with current `main`, and verified. Semaphore now uses SQLFu for D1 resource storage and ResourceCoordinator Durable Object SQLite storage, with one `queries.sql` file per SQLFu project. No known missing pieces remain.
 
 ## Goal
 
@@ -35,3 +35,9 @@ Move `apps/semaphore` to SQLFu, matching the direction already taken by `apps/ev
 - SQLFu generation command: `pnpm --dir apps/semaphore sqlfu:generate`
 - D1 schema check: `pnpm --dir apps/semaphore exec sqlfu check migrations-match-definitions`
 - Durable Object schema check: `../../node_modules/.bin/sqlfu check migrations-match-definitions` from `apps/semaphore/src/durable-objects`
+
+### 2026-05-15 PR update
+
+- Merged current `origin/main` into `semaphore-sqlfu` and resolved conflicts from `main` removing the old ingress-proxy app.
+- Dropped the PR's stray ingress-proxy management-host files so the final PR diff is Semaphore-only plus lockfile/task updates.
+- Restored lazy SQLFu D1 config resolution so `pnpm --dir apps/semaphore sqlfu:generate` works in a clean checkout without pre-existing Alchemy Miniflare state; DB-touching SQLFu commands still throw a targeted setup error if local D1 state has not been materialized.

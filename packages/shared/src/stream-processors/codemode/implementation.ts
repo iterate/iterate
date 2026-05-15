@@ -45,7 +45,7 @@ export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
   return implementProcessor(CodemodeProcessorContract, {
     firstAttachAfterAppend: { mode: "lookback", milliseconds: 250 },
 
-    async afterAppend({ event, state, streamApi, signal }) {
+    async afterAppend({ event, state, streamApi, signal, waitUntil }) {
       await standardProcessorBehavior.afterAppend({
         contract: CodemodeProcessorContract,
         state,
@@ -62,15 +62,22 @@ export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
         case "events.iterate.com/codemode/function-call-completed":
         case "events.iterate.com/codemode/log-emitted":
           return;
-        case "events.iterate.com/codemode/script-execution-requested":
-          await executeRequestedScript({
+        case "events.iterate.com/codemode/script-execution-requested": {
+          const scriptExecution = executeRequestedScript({
             deps,
             event,
             signal,
             state,
             streamApi,
           });
+          if (waitUntil != null) {
+            waitUntil(scriptExecution);
+            return;
+          }
+
+          await scriptExecution;
           return;
+        }
         default:
           return assertNever(event);
       }
@@ -107,7 +114,6 @@ async function executeRequestedScript(args: {
   streamApi: CodemodeStreamApi;
 }) {
   const startedAt = (args.deps.now ?? (() => new Date()))();
-  await args.deps.ensureLiveConsumer?.();
   const session = createProcessorSession({
     callableContext: args.deps.callableContext,
     ensureLiveConsumer: args.deps.ensureLiveConsumer,
@@ -149,8 +155,8 @@ async function executeRequestedScript(args: {
         durationMs: Math.max(0, finishedAt.getTime() - startedAt.getTime()),
         outcome:
           result.error == null
-            ? { status: "succeeded" as const, output: result.result }
-            : { status: "failed" as const, error: result.error },
+            ? { status: "returned" as const, value: result.result }
+            : { status: "threw" as const, error: result.error },
         scriptExecutionId: args.event.payload.scriptExecutionId,
       },
     },
@@ -211,7 +217,7 @@ async function callFunction(args: {
     // Temporary duplication with the OS2 CodemodeSession host. The cleaner
     // design is for every script and provider call to go through one session
     // capability implementation. Keeping this local branch is awkward, but it
-    // makes `ctx.__codemode.*` truly always available in the portable processor
+    // makes `ctx.codemode.*` truly always available in the portable processor
     // while the host/session split is still settling.
     const requestedEvent = await args.streamApi.append({
       event: {
@@ -510,10 +516,10 @@ function isPathPrefix(prefix: readonly string[], path: readonly string[]) {
 }
 
 function resolveCodemodeBuiltin(path: readonly string[]) {
-  if (path[0] !== "__codemode") return null;
+  if (path[0] !== "codemode") return null;
   return {
     functionPath: path.slice(1),
-    providerPath: ["__codemode"],
+    providerPath: ["codemode"],
   };
 }
 
@@ -541,7 +547,7 @@ function runCodemodeBuiltin(args: {
     };
   }
 
-  throw new Error(`Unknown codemode builtin __codemode.${name}`);
+  throw new Error(`Unknown codemode builtin codemode.${name}`);
 }
 
 function serializeTraceValue(value: unknown): unknown {

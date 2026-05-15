@@ -1,5 +1,5 @@
 import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
-import { getOrInitializeDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import type { ExecuteCodemodeFunctionCallInput } from "@iterate-com/shared/stream-processors/codemode/implementation";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import {
@@ -28,6 +28,14 @@ export class AgentCapability extends WorkerEntrypoint<AgentCapabilityEnv, AgentC
         `AgentCapability is unary and expected an empty functionPath, received ${input.functionPath.join(".")}`,
       );
     }
+    if (!this.env.AGENT) {
+      throw new Error("AGENT Durable Object namespace is not configured.");
+    }
+
+    return this.create();
+  }
+
+  create() {
     if (!this.env.AGENT) {
       throw new Error("AGENT Durable Object namespace is not configured.");
     }
@@ -80,7 +88,8 @@ class AgentHandle extends RpcTarget {
       agentPath: StreamPath.parse(agentPathInput),
       projectId: this.#projectId,
     };
-    return (await getOrInitializeDoStub({
+    return (await getInitializedDoStub({
+      allowCreate: true,
       namespace: this.#namespace,
       name: getAgentDurableObjectName(name),
     })) as unknown as AgentRpcStub;

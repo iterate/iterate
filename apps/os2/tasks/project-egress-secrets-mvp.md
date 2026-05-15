@@ -10,8 +10,8 @@ dependsOn:
 
 Implement the smallest end-to-end proof that codemode Dynamic Worker outbound
 `fetch()` can be routed through Project Egress, substitute a `getSecret(...)`
-header value through a Secret Durable Object, and prove the substituted value
-reaches an echo API.
+header value through the D1-backed `SecretsCapability`, and prove the
+substituted value reaches an echo API.
 
 This task is intentionally narrower than the full Project Egress and Secrets
 architecture. Prefer clear code paths over production completeness.
@@ -26,14 +26,14 @@ codemode Dynamic Worker
   -> Dynamic Worker globalOutbound
   -> ProjectEgressEntrypoint({ projectId })
   -> ProjectDurableObject.egressFetch(request)
-  -> SecretDurableObject.resolve/inject
+  -> D1-backed SecretsCapability.resolve/inject
   -> upstream echo API
 ```
 
 The proof should show that an outbound request containing:
 
 ```text
-x-iterate-test-secret: getSecret({ slug: "openai" })
+x-iterate-test-secret: getSecret({ key: "openai" })
 ```
 
 arrives at the echo API with the stored Secret value instead of the sentinel
@@ -69,11 +69,11 @@ string.
 - Find sentinel strings matching:
 
 ```ts
-getSecret({ slug: "..." });
+getSecret({ key: "..." });
 ```
 
-- Resolve each matched Secret using `getOrInitializeDoStub({ namespace,
-structuredName })`, not a hand-rolled Durable Object name.
+- Resolve each matched Secret through the existing D1-backed
+  `SecretsCapability` with the stable Project ID.
 - Forward the final request with substituted headers using ordinary `fetch()`.
 - For MVP, no egress policy enforcement is required beyond routing through this
   method.
@@ -82,6 +82,13 @@ structuredName })`, not a hand-rolled Durable Object name.
   `packages/shared/src/http-route-matcher` package.
 
 ### SecretDurableObject
+
+- Defer `apps/os2/src/durable-objects/secret-durable-object.ts`.
+- The first substitution proof uses the D1-backed `SecretsCapability` instead.
+- Reintroduce the Secret Durable Object when this slice needs Secret lifecycle
+  authority, usage accounting, or refresh behavior.
+
+Future shape:
 
 - Add `apps/os2/src/durable-objects/secret-durable-object.ts`.
 - Class/export name: `SecretDurableObject`.
@@ -96,13 +103,13 @@ type SecretStructuredName = {
 };
 ```
 
-- Callers should pass `structuredName: { projectId, slug }` to
-  `getOrInitializeDoStub`; the helper derives `name` and calls `initialize()`.
+- Callers should pass `name: { projectId, slug }` to
+  `getInitializedDoStub({ allowCreate: true, ... })`; the helper derives the
+  Durable Object name and calls `initialize()`.
 - Do not store Secret value in lifecycle initial state.
 - Use the base durable-object-utils stack:
   - `withDurableObjectCore`
-  - `withLifecycleHooks<SecretStructuredName>`
-  - `withD1ObjectCatalog`
+  - `withLifecycleHooks<SecretStructuredName>` with `d1ObjectCatalog`
   - `withPublicFetchRoute`
 - Use catalog class name `SecretDurableObject`.
 - Add D1 catalog indexes:
@@ -152,18 +159,14 @@ type ProjectEgressEntrypointProps = {
   via `routeDurableObjectRequest()`.
 - Register at least:
   - `ProjectDurableObject` with namespace `env.PROJECT`
-  - `SecretDurableObject` with namespace `env.SECRET`
 - This should happen near the top of `fetch()` before TanStack Start fallback.
 - Use `withPublicFetchRoute()` on rootable Durable Object classes.
 - These routes are infrastructure/debug routes; they must not become product UI.
 
 ## Alchemy / Bindings
 
-- Add `SECRET` Durable Object namespace to `apps/os2/alchemy.run.ts`.
-- Bind `SECRET` into the main OS2 Worker.
-- Bind `SECRET` anywhere needed by `ProjectDurableObject` and the secret oRPC
-  procedures.
-- Ensure generated `CloudflareEnv` type picks up `SECRET`.
+- A `SECRET` binding is not needed for the D1-backed substitution slice.
+- Add and bind `SECRET` when Secret Durable Objects are introduced.
 
 ## Codemode Dynamic Worker Egress
 
@@ -189,60 +192,88 @@ globalOutbound: ctx.exports.ProjectEgressEntrypoint({
 
 ## oRPC / OpenAPI Management Procedures
 
-Add normal OS2 oRPC procedures exposed through OpenAPI. These are the MVP
-management surface so codemode can use the existing OpenAPI-to-tool-provider
-mechanism.
+Add normal project-scoped OS2 oRPC procedures exposed through OpenAPI. These are
+the MVP management surface so browser UI and codemode can use the same typed
+control-plane API.
 
-Use explicit `projectId` for ease of implementation. This is temporary.
+For this slice, oRPC must be a thin adapter over the existing D1-backed
+`SecretsCapability`. Do not make `SecretsCapability` call oRPC, and do not
+duplicate Secret storage behavior in the oRPC handlers.
 
-### `secrets.add`
+### `project.secrets.upsert`
 
 Input:
 
 ```ts
 {
-  projectId: string;
-  slug: string;
-  value: string;
+  projectSlugOrId: string;
+  key: string;
+  material: string;
+  metadata?: Record<string, unknown>;
 }
 ```
 
 Behavior:
 
-- Authenticate through existing active organization middleware if practical.
-- Check caller can access the Project, at least by verifying the Project row
-  belongs to the active Clerk Organization.
-- Initialize `SecretDurableObject` with `{ projectId, slug }`.
-- Call `setValue({ value })`.
+- Run existing project-scope middleware to resolve and authorize the Project.
+- Instantiate/call `SecretsCapability` with the stable Project ID.
+- Create by Secret Key when absent; update material/metadata and preserve the
+  existing Secret ID when that Project already has the key.
 - Return summary without raw value.
 
-### `secrets.list`
+### `project.secrets.list`
 
 Input:
 
 ```ts
 {
-  projectId: string;
+  projectSlugOrId: string;
 }
 ```
 
 Behavior:
 
-- Authenticate/check Project access as above.
-- Temporary implementation: use durable-object-utils D1 catalog/index lookup,
-  not a dedicated app-level D1 projection.
-- Query `className: "SecretDurableObject"`, `indexName: "projectId"`,
-  `indexValue: projectId`.
-- Return each record's structured name and timestamps.
-- Do not wake every Secret Durable Object just to list raw values.
+- Run existing project-scope middleware to resolve and authorize the Project.
+- Instantiate/call `SecretsCapability` with the stable Project ID.
 - Do not return raw Secret values.
+
+### `project.secrets.get`
+
+Input:
+
+```ts
+{
+  projectSlugOrId: string;
+  id: string;
+}
+```
+
+Behavior:
+
+- Return the redacted Secret summary and metadata only, not raw material.
+
+### `project.secrets.remove`
+
+Input:
+
+```ts
+{
+  projectSlugOrId: string;
+  id: string;
+}
+```
+
+Behavior:
+
+- Delete through `SecretsCapability`.
+- Return whether a row was deleted.
 
 ## Sentinel Parsing
 
 MVP only supports the exact logical shape:
 
 ```ts
-getSecret({ slug: "openai" });
+getSecret({ key: "openai" });
 ```
 
 Requirements:
@@ -263,7 +294,8 @@ headers.
 The proof should:
 
 1. Create or use a Project.
-2. Call `secrets.add({ projectId, slug: "openai", value: "mvp-secret-value" })`.
+2. Call `project.secrets.upsert({ projectSlugOrId, key: "openai", material:
+"mvp-secret-value" })`.
 3. Start codemode for that Project.
 4. Run a snippet like:
 
@@ -271,7 +303,7 @@ The proof should:
 async (ctx) => {
   const response = await fetch("https://<echo-api>/anything", {
     headers: {
-      "x-iterate-test-secret": "getSecret({ slug: 'openai' })",
+      "x-iterate-test-secret": "getSecret({ key: 'openai' })",
     },
   });
   return await response.json();
@@ -285,7 +317,7 @@ x-iterate-test-secret: mvp-secret-value
 ```
 
 6. Assert the echo response does not contain `getSecret`.
-7. Assert Secret usage accounting increased.
+7. Do not assert Secret usage accounting in the D1-backed substitution slice.
 
 ## Tests
 
@@ -294,8 +326,6 @@ Add focused tests rather than broad UI specs.
 Recommended coverage:
 
 - Unit test sentinel parsing/replacement helper.
-- Workerd test for `SecretDurableObject.setValue`, `resolveForEgress`, and
-  usage count.
 - Workerd test for `ProjectDurableObject.egressFetch` substituting one header
   and forwarding to an echo handler.
 - Codemode/workerd test proving Dynamic Worker `fetch()` routes through
@@ -308,13 +338,14 @@ Recommended coverage:
 - Codemode user code calls ordinary `fetch()`, not a custom egress API.
 - Dynamic Worker outbound fetch reaches `ProjectEgressEntrypoint`.
 - `ProjectEgressEntrypoint` delegates to `ProjectDurableObject.egressFetch`.
-- Header sentinel `getSecret({ slug: "openai" })` is replaced with the Secret
-  value stored in `SecretDurableObject`.
+- Header sentinel `getSecret({ key: "openai" })` is replaced with the Secret
+  value resolved through the D1-backed `SecretsCapability`.
 - Upstream echo response proves substitution happened.
 - Secret value is not returned by `secrets.list`.
-- Secret usage accounting increments when the Secret participates in egress.
-- Project and Secret Durable Objects are rootable from the main OS2 Worker via
-  shared durable-object-utils public routes.
+- Secret usage accounting is deferred until Secret Durable Objects own Secret
+  lifecycle.
+- Project Durable Objects are rootable from the main OS2 Worker via shared
+  durable-object-utils public routes if needed for the egress proof.
 - No dedicated app-level D1 secrets projection is added.
 
 ## Temporary Shortcuts To Remove Later
@@ -327,4 +358,4 @@ Recommended coverage:
   only proves sentinel substitution.
 - No Secret stack or overrides.
 - No refreshable Secret behavior.
-- `secrets.list` reads the durable-object-utils D1 catalog directly.
+- Secret Durable Object catalog listing is deferred.

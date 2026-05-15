@@ -63,10 +63,6 @@ async function seedProject(input: { adminApiSecret: string; baseUrl: URL }) {
   const slug = previewSmokeProjectSlug();
   const response = await fetch(new URL("/api/projects", input.baseUrl), {
     body: JSON.stringify({
-      metadata: {
-        seededAt: new Date().toISOString(),
-        seededBy: "os2-preview-mcp-smoke",
-      },
       slug,
     }),
     headers: {

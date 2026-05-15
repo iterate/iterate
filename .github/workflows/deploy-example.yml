@@ -117,6 +117,7 @@ jobs:
             const publicUrl = "${{ needs.deploy.outputs.public_url }}";
             const runUrl = "${{ needs.variables.outputs.run_url }}";
             const shortSha = "${{ needs.variables.outputs.short_sha }}";
+            const slackChannelName = "#ci";
             const __handler = async function notify_slack_on_success() {
               const { getSlackClient, slackChannelIds } =
                 await require(".github/ts-workflows/workflows/deploy-example.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */).load();
@@ -130,7 +131,7 @@ jobs:
                 .join(" · ");
 
               await slack.chat.postMessage({
-                channel: slackChannelIds["#building"],
+                channel: slackChannelIds[slackChannelName] ?? slackChannelName,
                 text: message,
               });
             };
@@ -170,6 +171,7 @@ jobs:
             const appDisplayName = "Example";
             const runUrl = "${{ needs.variables.outputs.run_url }}";
             const shortSha = "${{ needs.variables.outputs.short_sha }}";
+            const slackChannelName = "#ci";
             const __handler = async function notify_slack_on_failure() {
               const { getSlackClient, slackChannelIds } =
                 await require(".github/ts-workflows/workflows/deploy-example.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */).load();
@@ -181,7 +183,7 @@ jobs:
               ].join(" ");
 
               await slack.chat.postMessage({
-                channel: slackChannelIds["#error-pulse"],
+                channel: slackChannelIds[slackChannelName] ?? slackChannelName,
                 text: message,
               });
             };

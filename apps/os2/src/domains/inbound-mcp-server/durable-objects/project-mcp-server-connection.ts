@@ -4,9 +4,10 @@ import type { Connection } from "agents";
 import { z } from "zod";
 import { StreamPath, type Event, type EventInput } from "@iterate-com/shared/streams/types";
 import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
-import { upsertD1ObjectCatalog } from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
+import { upsertD1ObjectCatalog } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import packageJson from "../../../../package.json" with { type: "json" };
 import { createExampleCapabilityProviders } from "~/domains/codemode/example-provider-registrations.ts";
+import { createGmailProviderRegistration } from "~/domains/google/gmail-provider-registration.ts";
 import {
   type CodemodeSessionNamespace,
   startCodemodeScriptOnSession,
@@ -15,6 +16,7 @@ import {
   getStreamsCapability,
   type StreamsCapabilityProps,
 } from "~/domains/streams/entrypoints/streams-capability.ts";
+import { createDefaultOutboundMcpProviderRegistrations } from "~/domains/codemode/default-provider-registrations.ts";
 import { readEventPayload, stringifyPayloadError } from "~/lib/codemode-event-payload.ts";
 import { createOpenApiProviderRegistration } from "~/rpc-targets/openapi-provider-registration.ts";
 import { createOutboundMcpFromOurClientToolProviderRegistration } from "~/domains/outbound-mcp-client/utils/outbound-mcp-provider-registration.ts";
@@ -88,10 +90,23 @@ export class ProjectMcpServerConnection extends McpAgent<
   unknown,
   ProjectMcpServerConnectionProps
 > {
-  server = new McpServer({
-    name: "os2",
-    version: packageJson.version,
-  });
+  server = new McpServer(
+    {
+      name: "os2",
+      version: packageJson.version,
+    },
+    {
+      instructions: [
+        "This is an Iterate OS2 project MCP server. You have one tool: exec_js.",
+        "",
+        "exec_js runs JavaScript in an isolated sandbox. The code MUST be a single async arrow function: `async (ctx) => { ... }`.",
+        "",
+        "The `ctx` object provides registered tool providers. Call them as `ctx.<path>.<method>(args)`. Available providers are listed in the exec_js tool description.",
+        "",
+        "Use `Promise.all([...])` for concurrent operations. Use `fetch` for HTTP requests. The return value is sent back as the result. Do NOT write bare statements — always wrap in `async (ctx) => { ... }`.",
+      ].join("\n"),
+    },
+  );
 
   async setInitializeRequest(initializeRequest: Parameters<McpAgent["setInitializeRequest"]>[0]) {
     await super.setInitializeRequest(initializeRequest);
@@ -142,25 +157,38 @@ export class ProjectMcpServerConnection extends McpAgent<
   }
 
   async init() {
+    const providers = this.createStaticCodemodeToolProviders(this.requireProjectAuthProps());
+    const providerDocs = [...createDefaultOutboundMcpProviderRegistrations(), ...providers]
+      .map((p) => `- ctx.${p.path.join(".")}: ${p.instructions}`)
+      .join("\n");
+
     this.server.registerTool(
       "exec_js",
       {
         title: "Run code",
-        description:
-          "Execute JavaScript code in an isolated sandbox. " +
-          "The final expression is returned as the result. " +
-          'Example: console.log("hello"); 1 + 1',
+        description: [
+          "Execute JavaScript in an isolated sandbox. The code MUST be a single async arrow function: `async (ctx) => { ... }`.",
+          "",
+          "The function receives a `ctx` object with registered tool providers. Use `Promise.all([...])` for concurrent operations. Use `fetch` for HTTP. The return value (or thrown error) is sent back as the tool result.",
+          "If you're not sure about the shape of the result of a function call, just return it from a codemode block and you'll be shown it on your next turn.",
+          "",
+          "Available tool providers on ctx:",
+          providerDocs,
+          "",
+          'Example: async (ctx) => { const msgs = await ctx.gmail.request({ path: "/gmail/v1/users/me/messages", query: { maxResults: 5 } }); return msgs.data; }',
+        ].join("\n"),
         inputSchema: z.object({
-          code: z.string().describe("JavaScript code to execute"),
+          code: z
+            .string()
+            .describe(
+              "JavaScript async arrow function to execute, e.g. `async (ctx) => { return await ctx.os.listProcedures(); }`",
+            ),
         }),
       },
       async ({ code }) => {
         const auth = this.requireProjectAuthProps();
         this.requireScope(auth, requiredToolScope);
-        const staticProviders = this.createStaticCodemodeToolProviders(auth).slice(
-          0,
-          readDebugProviderLimit(code),
-        );
+        const staticProviders = providers.slice(0, readDebugProviderLimit(code));
 
         const invocationId = `mcp_tool_${crypto.randomUUID()}`;
         const startedAt = Date.now();
@@ -288,6 +316,8 @@ export class ProjectMcpServerConnection extends McpAgent<
       },
       projectId: auth.projectId,
     });
+
+    providers.push(createGmailProviderRegistration({ projectId: auth.projectId }));
 
     const providerMatrixBaseUrl = this.env.MOCK_PROVIDER_BASE_URL?.replace(/\/+$/, "");
     providers.push(
@@ -633,9 +663,9 @@ async function waitForScriptExecutionFinished(input: {
     ) {
       const outcome = isRecord(payload.outcome) ? payload.outcome : {};
       return {
-        error: outcome.status === "failed" ? stringifyPayloadError(outcome.error) : undefined,
+        error: outcome.status === "threw" ? stringifyPayloadError(outcome.error) : undefined,
         logs,
-        result: outcome.status === "succeeded" ? outcome.output : undefined,
+        result: outcome.status === "returned" ? outcome.value : undefined,
       };
     }
   }

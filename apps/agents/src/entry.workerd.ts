@@ -40,7 +40,7 @@ if (config.externalEgressProxy) {
   // subrequest made by this Worker takes the same egress path.
   globalThis.fetch = createExternalEgressProxyFetch({
     fetch: nativeFetch,
-    externalEgressProxy: config.externalEgressProxy,
+    externalEgressProxyUrl: config.externalEgressProxy,
   });
 }
 

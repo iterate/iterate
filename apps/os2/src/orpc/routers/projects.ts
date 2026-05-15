@@ -1,10 +1,10 @@
 import { ORPCError } from "@orpc/server";
 import { StreamPath } from "@iterate-com/shared/streams/types";
-import type { D1ObjectCatalogRecord } from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
+import type { D1ObjectCatalogRecord } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import {
   getD1ObjectCatalogRecord,
   listD1ObjectCatalogRecordsByIndex,
-} from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
+} from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { typeid } from "@iterate-com/shared/typeid";
 import type { AppContext } from "~/context.ts";
 import {
@@ -14,16 +14,14 @@ import {
   getProjectById,
   getProjectPermission,
   getProjectBySlug,
+  insertProject,
   insertProjectPermission,
   listAllProjects,
   listProjects,
   updateProjectConfig,
 } from "~/db/queries/.generated/index.ts";
 import type { CodemodeSessionStructuredName } from "~/domains/codemode/durable-objects/codemode-session.ts";
-import {
-  getProjectDurableObjectName,
-  type ProjectDurableObject,
-} from "~/domains/projects/durable-objects/project-durable-object.ts";
+import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import type { ProjectMcpServerConnectionStructuredName } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 import {
   isReservedProjectHostname,
@@ -35,13 +33,16 @@ import { activeOrganizationMiddleware, os, projectScopeMiddleware } from "~/orpc
 import { requireProjectScope } from "~/orpc/project-access.ts";
 import { projectCodemodeRouter } from "~/orpc/routers/codemode.ts";
 import { projectAgentsRouter } from "~/orpc/routers/agents.ts";
+import { projectReposRouter } from "~/orpc/routers/repos.ts";
+import { projectIntegrationsRouter } from "~/orpc/routers/integrations.ts";
+import { projectSecretsRouter } from "~/orpc/routers/secrets.ts";
 import { projectStreamsRouter } from "~/orpc/routers/streams.ts";
 
 type ProjectRow = {
   id: string;
   slug: string;
   custom_hostname?: string | null;
-  metadata: string;
+  external_egress_proxy_url?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -55,7 +56,7 @@ function toProject(row: ProjectRow) {
     id: row.id,
     slug: row.slug,
     customHostname: row.custom_hostname ?? null,
-    metadata: JSON.parse(row.metadata) as Record<string, unknown>,
+    externalEgressProxyUrl: row.external_egress_proxy_url ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -109,6 +110,22 @@ function normalizeConfigCustomHostname(
   return customHostname;
 }
 
+function normalizeConfigExternalEgressProxyUrl(input: string | null | undefined) {
+  if (input === undefined) return undefined;
+  if (input === null) return null;
+
+  const externalEgressProxyUrl = input.trim();
+  if (externalEgressProxyUrl === "") return null;
+
+  try {
+    return new URL(externalEgressProxyUrl).toString();
+  } catch {
+    throw new ORPCError("BAD_REQUEST", {
+      message: "External egress proxy URL must be a valid URL.",
+    });
+  }
+}
+
 function isUniqueConstraintError(error: unknown) {
   return error instanceof Error && error.message.includes("UNIQUE constraint failed");
 }
@@ -124,16 +141,13 @@ export const projectsRouter = {
           prefix: "proj",
         });
 
-        let project: Awaited<ReturnType<ProjectDurableObject["createProject"]>>;
+        let project: ProjectRow;
 
         try {
-          project = await requireProjectDurableObjectNamespace(context)
-            .getByName(getProjectDurableObjectName(id))
-            .createProject({
-              metadata: input.metadata,
-              projectId: id,
-              slug: input.slug,
-            });
+          project = await insertProject(context.db, {
+            id,
+            slug: input.slug,
+          });
           if (!auth.isAdminApi) {
             await insertProjectPermission(context.db, {
               principalId: auth.orgId,
@@ -152,14 +166,13 @@ export const projectsRouter = {
           throw error;
         }
 
-        const row = await getProjectById(context.db, { id: project.id });
-        if (!row) {
-          throw new ORPCError("INTERNAL_SERVER_ERROR", {
-            message: `Project ${id} was not returned after createProject`,
-          });
-        }
+        scheduleProjectBootstrap({
+          context,
+          projectId: id,
+          slug: input.slug,
+        });
 
-        return toProject(row);
+        return toProject(project);
       }),
     list: os.projects.list.use(activeOrganizationMiddleware).handler(async ({ context, input }) => {
       const auth = context.activeOrganization;
@@ -223,15 +236,20 @@ export const projectsRouter = {
           normalizedCustomHostname === undefined
             ? (existing.custom_hostname ?? null)
             : normalizedCustomHostname;
-        const nextMetadata =
-          input.metadata ?? (JSON.parse(existing.metadata) as Record<string, unknown>);
+        const normalizedExternalEgressProxyUrl = normalizeConfigExternalEgressProxyUrl(
+          input.externalEgressProxyUrl,
+        );
+        const nextExternalEgressProxyUrl =
+          normalizedExternalEgressProxyUrl === undefined
+            ? (existing.external_egress_proxy_url ?? null)
+            : normalizedExternalEgressProxyUrl;
 
         try {
           await updateProjectConfig(
             context.db,
             {
               customHostname: nextCustomHostname,
-              metadata: JSON.stringify(nextMetadata),
+              externalEgressProxyUrl: nextExternalEgressProxyUrl,
             },
             { id: input.id },
           );
@@ -330,6 +348,7 @@ export const projectsRouter = {
         }),
     },
     agents: projectAgentsRouter,
+    repos: projectReposRouter,
     inboundMcpServer: {
       listSessions: os.project.inboundMcpServer.listSessions
         .use(projectScopeMiddleware)
@@ -348,6 +367,8 @@ export const projectsRouter = {
           return { sessions: rows.map(toInboundMcpSession) };
         }),
     },
+    integrations: projectIntegrationsRouter,
+    secrets: projectSecretsRouter,
     streams: projectStreamsRouter,
   },
 };
@@ -401,4 +422,26 @@ function requireProjectDurableObjectNamespace(context: AppContext) {
   }
 
   return context.projectDurableObjectNamespace;
+}
+
+function scheduleProjectBootstrap(input: { context: AppContext; projectId: string; slug: string }) {
+  const namespace = input.context.projectDurableObjectNamespace;
+  if (!namespace) {
+    console.error(
+      `[projects.create] Project bootstrap skipped for ${input.projectId}: PROJECT binding not available.`,
+    );
+    return;
+  }
+
+  const promise = namespace
+    .getByName(getProjectDurableObjectName(input.projectId))
+    .createProject({
+      projectId: input.projectId,
+      slug: input.slug,
+    })
+    .catch((error) => {
+      console.error(`[projects.create] Project bootstrap failed for ${input.projectId}:`, error);
+    });
+
+  input.context.waitUntil?.(promise);
 }

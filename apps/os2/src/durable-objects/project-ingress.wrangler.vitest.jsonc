@@ -6,6 +6,11 @@
   "vars": {
     "APP_CONFIG": "{\"adminApiSecret\":\"project-ingress-admin-secret\",\"clerk\":{\"publishableKey\":\"pk_test_ZHVtbXkuY2xlcmsuYWNjb3VudHMuZGV2JA\",\"secretKey\":\"sk_test_project_ingress\",\"jwtKey\":\"project-ingress-jwt-key\"},\"openAiApiKey\":\"openai-test-key\",\"projectHostnameBases\":[\"iterate.localhost\"],\"typeIdPrefix\":\"os\"}",
   },
+  "worker_loaders": [
+    {
+      "binding": "LOADER",
+    },
+  ],
   "durable_objects": {
     "bindings": [
       {
@@ -27,6 +32,14 @@
       {
         "name": "STREAM",
         "class_name": "StreamDurableObject",
+      },
+      {
+        "name": "REPO",
+        "class_name": "RepoDurableObject",
+      },
+      {
+        "name": "WORKSPACE",
+        "class_name": "WorkspaceDurableObject",
       },
     ],
   },
@@ -56,6 +69,14 @@
     {
       "tag": "v3",
       "new_sqlite_classes": ["AgentDurableObject", "CodemodeSession"],
+    },
+    {
+      "tag": "v4",
+      "new_sqlite_classes": ["RepoDurableObject"],
+    },
+    {
+      "tag": "v5",
+      "new_sqlite_classes": ["WorkspaceDurableObject"],
     },
   ],
 }

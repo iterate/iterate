@@ -24,7 +24,7 @@ export const Project = z.object({
   id: z.string(),
   slug: z.string(),
   customHostname: z.string().nullable(),
-  metadata: JSONObject,
+  externalEgressProxyUrl: z.string().url().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -61,6 +61,35 @@ export const StreamCatalogRecord = z.object({
 });
 export type StreamCatalogRecord = z.output<typeof StreamCatalogRecord>;
 
+export const ProjectIntegrationConnection = z.object({
+  connected: z.boolean(),
+  externalId: z.string().nullable(),
+  displayName: z.string().nullable(),
+  metadata: JSONObject,
+  scopes: z.string().nullable(),
+  token: z
+    .object({
+      createdAt: z.string(),
+      expiresAt: z.string().nullable(),
+      hasMaterial: z.boolean(),
+      refreshTokenStored: z.boolean(),
+      updatedAt: z.string(),
+    })
+    .nullable(),
+});
+export type ProjectIntegrationConnection = z.output<typeof ProjectIntegrationConnection>;
+
+export const ProjectSecretSummary = z.object({
+  id: z.string(),
+  key: z.string(),
+  metadata: JSONObject,
+  projectId: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  hasMaterial: z.boolean(),
+});
+export type ProjectSecretSummary = z.output<typeof ProjectSecretSummary>;
+
 export const AgentRecord = z.object({
   agentPath: StreamPath,
   name: z.string(),
@@ -69,6 +98,32 @@ export const AgentRecord = z.object({
   lastWokenAt: z.string(),
 });
 export type AgentRecord = z.output<typeof AgentRecord>;
+
+export const RepoRecord = z.object({
+  createdAt: z.string(),
+  lastWokenAt: z.string(),
+  name: z.string(),
+  projectId: z.string(),
+  repoSlug: z.string(),
+});
+export type RepoRecord = z.output<typeof RepoRecord>;
+
+export const RepoInfo = z.object({
+  defaultBranch: z.string(),
+  git: z.object({
+    authorizationHeader: z.string(),
+    cloneCommand: z.string(),
+    commitExampleCommand: z.string(),
+    pushCommand: z.string(),
+    remote: z.string(),
+  }),
+  readmePath: z.string(),
+  remote: z.string(),
+  slug: z.string(),
+  token: z.string(),
+  tokenExpiresAt: z.string().nullable(),
+});
+export type RepoInfo = z.output<typeof RepoInfo>;
 
 export const RandomLogStreamRequest = z
   .object({
@@ -221,7 +276,6 @@ export const osContract = oc.router({
             .trim()
             .min(1)
             .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Slug must be lowercase kebab-case"),
-          metadata: JSONObject.default({}),
         }),
       )
       .output(Project),
@@ -268,7 +322,7 @@ export const osContract = oc.router({
         z.object({
           id: z.string(),
           customHostname: z.string().trim().nullable().optional(),
-          metadata: JSONObject.optional(),
+          externalEgressProxyUrl: z.string().trim().url().nullable().optional(),
         }),
       )
       .output(Project),
@@ -471,6 +525,51 @@ export const osContract = oc.router({
         .input(ProjectScopedInput.extend({ agentPath: StreamPath }))
         .output(z.unknown()),
     },
+    repos: {
+      list: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectSlugOrId}/repos",
+          description: "List Repos for a project",
+          tags: ["/project", "/repos"],
+        })
+        .input(ProjectScopedInput)
+        .output(z.object({ repos: z.array(RepoRecord) })),
+      create: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectSlugOrId}/repos",
+          description: "Create a Repo for a project",
+          tags: ["/project", "/repos"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            slug: z
+              .string()
+              .trim()
+              .min(1, "Repo slug is required")
+              .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Repo slug must be lowercase kebab-case"),
+          }),
+        )
+        .output(RepoInfo),
+      get: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectSlugOrId}/repos/{repoSlug}",
+          description: "Get Repo Git access details",
+          tags: ["/project", "/repos"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            repoSlug: z
+              .string()
+              .trim()
+              .min(1, "Repo slug is required")
+              .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Repo slug must be lowercase kebab-case"),
+          }),
+        )
+        .output(RepoInfo),
+    },
     inboundMcpServer: {
       listSessions: oc
         .route({
@@ -481,6 +580,106 @@ export const osContract = oc.router({
         })
         .input(ProjectScopedInput)
         .output(z.object({ sessions: z.array(InboundMcpSession) })),
+    },
+    integrations: {
+      getSlackConnection: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectSlugOrId}/integrations/slack",
+          description: "Get the Slack connection for a project",
+          tags: ["/project", "/integrations"],
+        })
+        .input(ProjectScopedInput)
+        .output(ProjectIntegrationConnection),
+      startSlackOAuthFlow: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectSlugOrId}/integrations/slack/oauth",
+          description: "Start the Slack OAuth flow for a project",
+          tags: ["/project", "/integrations"],
+        })
+        .input(ProjectScopedInput.extend({ callbackUrl: z.string().optional() }))
+        .output(z.object({ authorizationUrl: z.string() })),
+      disconnectSlack: oc
+        .route({
+          method: "DELETE",
+          path: "/projects/{projectSlugOrId}/integrations/slack",
+          description: "Disconnect Slack from a project",
+          tags: ["/project", "/integrations"],
+        })
+        .input(ProjectScopedInput)
+        .output(z.object({ success: z.boolean() })),
+      getGoogleConnection: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectSlugOrId}/integrations/google",
+          description: "Get the Google connection for a project",
+          tags: ["/project", "/integrations"],
+        })
+        .input(ProjectScopedInput)
+        .output(ProjectIntegrationConnection),
+      startGoogleOAuthFlow: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectSlugOrId}/integrations/google/oauth",
+          description: "Start the Google OAuth flow for a project",
+          tags: ["/project", "/integrations"],
+        })
+        .input(ProjectScopedInput.extend({ callbackUrl: z.string().optional() }))
+        .output(z.object({ authorizationUrl: z.string() })),
+      disconnectGoogle: oc
+        .route({
+          method: "DELETE",
+          path: "/projects/{projectSlugOrId}/integrations/google",
+          description: "Disconnect Google from a project",
+          tags: ["/project", "/integrations"],
+        })
+        .input(ProjectScopedInput)
+        .output(z.object({ success: z.boolean() })),
+    },
+    secrets: {
+      list: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectSlugOrId}/secrets",
+          description: "List redacted Secrets for a project",
+          tags: ["/project", "/secrets"],
+        })
+        .input(ProjectScopedInput)
+        .output(z.object({ secrets: z.array(ProjectSecretSummary) })),
+      get: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectSlugOrId}/secrets/{id}",
+          description: "Get a redacted Secret by ID",
+          tags: ["/project", "/secrets"],
+        })
+        .input(ProjectScopedInput.extend({ id: z.string().trim().min(1) }))
+        .output(ProjectSecretSummary),
+      upsert: oc
+        .route({
+          method: "PUT",
+          path: "/projects/{projectSlugOrId}/secrets",
+          description: "Create or update a project Secret by key",
+          tags: ["/project", "/secrets"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            key: z.string().trim().min(1),
+            material: z.string().min(1),
+            metadata: JSONObject.default({}),
+          }),
+        )
+        .output(ProjectSecretSummary),
+      remove: oc
+        .route({
+          method: "DELETE",
+          path: "/projects/{projectSlugOrId}/secrets/{id}",
+          description: "Delete a project Secret by ID",
+          tags: ["/project", "/secrets"],
+        })
+        .input(ProjectScopedInput.extend({ id: z.string().trim().min(1) }))
+        .output(z.object({ deleted: z.boolean() })),
     },
     streams: {
       list: oc

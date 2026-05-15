@@ -12,15 +12,8 @@ import {
 } from "@iterate-com/shared/streams/types";
 import { Button } from "@iterate-com/ui/components/button";
 import { Checkbox } from "@iterate-com/ui/components/checkbox";
-import {
-  processEventsWithViewReducer,
-  rawJsonDumpEventsStreamViewReducer,
-  rawPrettyEventsStreamViewReducer,
-} from "@iterate-com/ui/components/events/feed-processors";
-import type {
-  EventsStreamInputAction,
-  EventsStreamViewReducer,
-} from "@iterate-com/ui/components/events/feed-items";
+import { reduceStreamViewEvents } from "@iterate-com/ui/components/events/stream-view-processor/contract";
+import type { EventsStreamInputAction } from "@iterate-com/ui/components/events/feed-items";
 import { EventsStreamEventInspectorSheet } from "@iterate-com/ui/components/events/event-inspector-sheet";
 import {
   EventsStreamFeed,
@@ -628,20 +621,36 @@ function getStreamDebugLinks(streamPath: StreamPath) {
 }
 
 function reduceCleanViewState(args: { events: readonly Event[]; mode: StreamRendererMode }) {
-  return processEventsWithViewReducer({
-    events: args.events,
-    reducer: selectCleanViewReducer(args.mode),
-  });
-}
+  const state = reduceStreamViewEvents(args.events);
 
-function selectCleanViewReducer(mode: StreamRendererMode): EventsStreamViewReducer {
-  switch (mode) {
-    case "raw-pretty":
-      return rawPrettyEventsStreamViewReducer;
-    case "raw-single-json":
-      return rawJsonDumpEventsStreamViewReducer;
-    case "raw":
-    case "pretty":
-      return rawPrettyEventsStreamViewReducer;
+  if (args.mode === "raw-single-json") {
+    return {
+      ...state,
+      slots: {
+        ...state.slots,
+        feed:
+          args.events.length === 0
+            ? []
+            : [
+                {
+                  type: "raw-json-dump" as const,
+                  id: "raw-json-dump",
+                  props: { events: [...args.events] },
+                },
+              ],
+      },
+    };
   }
+
+  if (args.mode === "pretty") {
+    return {
+      ...state,
+      slots: {
+        ...state.slots,
+        feed: state.slots.feed.filter((element) => element.type !== "grouped-raw-event"),
+      },
+    };
+  }
+
+  return state;
 }

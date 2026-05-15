@@ -3,9 +3,11 @@ import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, test } from "vitest";
 import {
   STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
+  STREAM_ERROR_OCCURRED_TYPE,
   StreamPath,
   type Event,
 } from "@iterate-com/shared/streams/types";
+import { getStreamDurableObjectName } from "@iterate-com/shared/streams/helpers";
 import {
   collectAsyncIterableUntilIdle,
   createEvents2AppFixture,
@@ -76,16 +78,25 @@ describe.sequential("events callable subscriber e2e", () => {
           payload: {
             slug: `e2e-callable-chain:${chainId}`,
             type: "callable",
+            jsonataFilter: callableAppendChainFilterExpression(),
             callable: {
               type: "workers-rpc",
               via: {
                 type: "env-binding",
                 bindingType: "durable-object-namespace",
-                bindingName: "E2E_APPEND_CHAIN_SUBSCRIBER",
-                durableObject: { name: chainId },
+                bindingName: "STREAM",
+                durableObject: {
+                  name: getStreamDurableObjectName({
+                    namespace: defaultE2ENamespace,
+                    path,
+                  }),
+                },
               },
-              rpcMethod: "afterAppend",
+              rpcMethod: "append",
               argsMode: "object",
+              transformInput: {
+                jsonata: callableAppendChainNextEventExpression(),
+              },
             },
           },
         },
@@ -134,16 +145,25 @@ describe.sequential("events callable subscriber e2e", () => {
           payload: {
             slug: `e2e-callable-chain:${chainId}`,
             type: "callable",
+            jsonataFilter: callableAppendChainFilterExpression(),
             callable: {
               type: "workers-rpc",
               via: {
                 type: "env-binding",
                 bindingType: "durable-object-namespace",
-                bindingName: "E2E_APPEND_CHAIN_SUBSCRIBER",
-                durableObject: { name: chainId },
+                bindingName: "STREAM",
+                durableObject: {
+                  name: getStreamDurableObjectName({
+                    namespace: defaultE2ENamespace,
+                    path,
+                  }),
+                },
               },
-              rpcMethod: "afterAppend",
+              rpcMethod: "append",
               argsMode: "object",
+              transformInput: {
+                jsonata: callableAppendChainNextEventExpression(),
+              },
             },
           },
         },
@@ -167,7 +187,6 @@ describe.sequential("events callable subscriber e2e", () => {
 
       const ticks = await waitForCallableChainTicks({
         chainId,
-        failOnSubscriberError: true,
         max,
         path,
       });
@@ -180,12 +199,7 @@ describe.sequential("events callable subscriber e2e", () => {
   );
 });
 
-async function waitForCallableChainTicks(args: {
-  chainId: string;
-  failOnSubscriberError?: boolean;
-  max: number;
-  path: StreamPath;
-}) {
+async function waitForCallableChainTicks(args: { chainId: string; max: number; path: StreamPath }) {
   const deadline = Date.now() + chainWaitTimeoutMs;
   let lastTicks: Event[] = [];
 
@@ -204,13 +218,15 @@ async function waitForCallableChainTicks(args: {
     }
     lastTicks = ticks;
 
-    if (args.failOnSubscriberError === true) {
-      const status = await getSubscriberStatus(args.chainId);
-      if (status.lastError != null) {
-        throw new Error(
-          `Callable subscriber recorded ${status.lastError.name} after tick ${status.lastError.count}: ${status.lastError.message}`,
-        );
-      }
+    const subscriberErrors = (await collectEvents(args.path)).filter(
+      (event) => event.type === STREAM_ERROR_OCCURRED_TYPE,
+    );
+    if (subscriberErrors.length > 0) {
+      throw new Error(
+        `Callable subscriber recorded stream errors: ${subscriberErrors
+          .map((event) => JSON.stringify(event.payload))
+          .join("\n")}`,
+      );
     }
 
     await delay(pollIntervalMs);
@@ -221,23 +237,6 @@ async function waitForCallableChainTicks(args: {
       .map((event) => getCount(event))
       .join(", ")}]`,
   );
-}
-
-async function getSubscriberStatus(chainId: string) {
-  const response = await app.fetch(
-    `/__e2e/append-chain-subscriber/${encodeURIComponent(chainId)}/status`,
-  );
-  if (!response.ok) {
-    throw new Error(`Subscriber status returned ${response.status}: ${await response.text()}`);
-  }
-
-  return (await response.json()) as {
-    lastError: null | {
-      count: number;
-      message: string;
-      name: string;
-    };
-  };
 }
 
 async function collectEvents(path: StreamPath) {
@@ -261,4 +260,23 @@ function getCount(event: Event) {
   }
 
   return event.payload.count;
+}
+
+function callableAppendChainFilterExpression() {
+  return `type = "${E2E_APPEND_CHAIN_TICK_TYPE}" and payload.count < payload.max`;
+}
+
+function callableAppendChainNextEventExpression() {
+  return `{
+    "type": event.type,
+    "idempotencyKey": "e2e-callable-append-chain:" & event.payload.chainId & ":" & (event.payload.count + 1),
+    "payload": {
+      "chainId": event.payload.chainId,
+      "count": event.payload.count + 1,
+      "max": event.payload.max,
+      "mode": event.payload.mode,
+      "namespace": event.payload.namespace,
+      "streamPath": event.payload.streamPath
+    }
+  }`;
 }

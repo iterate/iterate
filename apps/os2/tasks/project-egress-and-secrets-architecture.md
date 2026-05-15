@@ -29,14 +29,26 @@ brief yet.
   `globalOutbound` rather than an oRPC/OpenAPI facade. Codemode's Dynamic
   Worker should receive `ProjectEgressEntrypoint` as its outbound fetch gateway
   through `ctx.exports` with `{ projectId }` props.
-- Secret management for the PoC should use ordinary oRPC procedures exposed
-  through OS2's OpenAPI surface. Codemode can use the existing OpenAPI-to-tool
-  provider mechanism to call those procedures as tools.
-- oRPC/OpenAPI is the PoC management/control surface for `secrets.add` and
-  `secrets.list`; it is not the Project Egress data plane.
-- PoC secret management procedures should accept an explicit `projectId` for
-  ease of implementation. This is temporary; a later product API can move back
-  to route/context-scoped Project identity.
+- Secret management for the immediate CRUD slice should use project-scoped oRPC
+  procedures under `os.project.secrets.*`.
+- oRPC/OpenAPI is the management/control surface; it is not the Project Egress
+  data plane.
+- Project-scoped oRPC Secret CRUD must call the internal D1-backed
+  `SecretsCapability`; the capability must not call oRPC.
+- Project-scoped oRPC Secret CRUD should accept `projectSlugOrId`, run existing
+  project-scope middleware, and pass the resolved stable Project ID to
+  `SecretsCapability`.
+- Project-scoped oRPC Secret reads should return redacted Secret summaries and
+  metadata, not raw Secret material.
+- Project-scoped oRPC Secret get/remove should locate Secrets by stable Secret
+  ID, because Secret Keys are arbitrary strings and are not necessarily
+  URL-safe.
+- Secret Keys remain unique within one Project.
+- Upserting by Secret Key preserves the existing Secret ID for that Project.
+- The first Project Egress Secret Injection proof should also resolve Secret
+  material through the D1-backed `SecretsCapability`.
+- Secret Durable Objects are deferred until Secret lifecycle authority, usage
+  accounting, or refresh behavior is part of the slice.
 - The existing codemode Dynamic Worker executor currently blocks network with
   `globalOutbound: null`; the Project Egress PoC should replace that with a
   Project-scoped egress gateway.
@@ -49,18 +61,18 @@ brief yet.
 - Secrets are a separate domain concept from Project Egress.
 - Secret References should use a `getSecret(...)` placeholder shape rather than
   exposing raw secret values to Project-owned execution.
-- The v1 placeholder examples are `getSecret({id: "sec_..."})` and
-  `getSecret({key: "openai-api-key"})`.
+- The v1 placeholder example is `getSecret({ key: "openai-api-key" })`.
 - Secret Injection should happen only inside a trusted OS2 boundary on the
   egress path.
 - Every Secret should have a Durable Object instance as its lifecycle authority.
 - Secret Durable Objects and Project Durable Objects should use the repo's base
   durable-object-utils stack: `withDurableObjectCore`,
-  `withLifecycleHooks`, `withD1ObjectCatalog`, and public/rootable routing
-  where appropriate.
+  `withLifecycleHooks` with `d1ObjectCatalog`, and public/rootable routing where
+  appropriate.
 - Secret Durable Objects should be resolved with
-  `getOrInitializeDoStub({ namespace, name: { projectId, slug } })`, using the
-  lifecycle structured name rather than hand-rolled Durable Object names.
+  `getInitializedDoStub({ allowCreate: true, namespace, name: { projectId,
+slug } })`, using the lifecycle structured name rather than hand-rolled
+  Durable Object names.
 - The PoC Secret structured name should include `{ projectId, slug }`; the helper
   derives the stable Durable Object name from that value and calls
   `initialize()`.
@@ -228,15 +240,14 @@ brief yet.
 
 - Add `ProjectEgressEntrypoint`.
 - Add `ProjectDurableObject.egressFetch(request)`.
-- Add a Secret Durable Object with structured name `{ projectId, slug }`, a
-  `setValue({ value })` method, and usage accounting.
-- Do not add a dedicated app-level D1 secrets projection for the PoC.
-- Implement `secrets.list` as a temporary procedure over the
-  durable-object-utils D1 catalog/index tables, using the `projectId` index.
-  This is acceptable for the PoC and should be replaced by a proper product
-  model later.
-- Wrap `ProjectDurableObject` and `SecretDurableObject` with the base
-  durable-object-utils mixins and `withPublicFetchRoute()`.
+- Use the existing D1-backed `SecretsCapability` for Secret material in the
+  first substitution proof.
+- Do not add `SecretDurableObject` or a `SECRET` namespace binding in the
+  immediate slice.
+- Keep Secret Durable Object lifecycle, catalog listing, and usage accounting as
+  the next hardening step.
+- Wrap `ProjectDurableObject` with the base durable-object-utils mixins and
+  `withPublicFetchRoute()` if public/rootable Project Egress testing needs it.
 - Mount `routeDurableObjectRequest()` in the main OS2 Worker entrypoint for the
   relevant Durable Object namespaces.
 - Support Secret References in HTTP headers only.
@@ -245,24 +256,23 @@ brief yet.
 - Add codemode examples/snippets that call a third-party echo API with a header
   containing a Secret Reference and assert the echo response contains the
   substituted value rather than the sentinel string.
-- Add minimal oRPC/OpenAPI secret management procedures, such as `secrets.add`
-  and `secrets.list`, so codemode can set up and inspect the PoC through the
-  OpenAPI-to-tool-provider mechanism without a full UI.
-- PoC procedure inputs can use explicit `projectId`.
+- Add minimal project-scoped oRPC/OpenAPI secret management procedures under
+  `os.project.secrets.*`, implemented as thin adapters over the D1-backed
+  `SecretsCapability`.
 - Forward the final request and return the upstream response.
 - Skip approval, refresh, missing-secret provisioning, body substitution, URL
   substitution, Basic auth, WebSockets, and UI.
 
 ## Proof Examples
 
-- oRPC/OpenAPI `secrets.add` creates a static Secret for the current Project.
-- oRPC/OpenAPI `secrets.list` shows available Project-scoped PoC Secrets
+- oRPC/OpenAPI `project.secrets.upsert` creates a static Secret for the current Project.
+- oRPC/OpenAPI `project.secrets.list` shows available Project-scoped PoC Secrets
   without exposing raw Secret material.
 - A codemode snippet fetches a third-party echo endpoint with
   `x-iterate-test-secret: getSecret(...)`.
 - The echo response proves the upstream request received the resolved value.
-- Secret usage accounting proves the Secret Durable Object participated in the
-  request.
+- Secret usage accounting is deferred until Secret Durable Objects own Secret
+  lifecycle.
 - Logs or events prove the codemode Dynamic Worker did not receive direct raw
   internet access outside Project Egress.
 

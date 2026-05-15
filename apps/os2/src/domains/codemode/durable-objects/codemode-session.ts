@@ -12,7 +12,6 @@ import {
   type StreamDurableObjectNamespace,
 } from "@iterate-com/shared/streams/helpers";
 import type { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
-import { withD1ObjectCatalog } from "@iterate-com/shared/durable-object-utils/mixins/with-d1-object-catalog";
 import { withDurableObjectCore } from "@iterate-com/shared/durable-object-utils/mixins/with-durable-object-core";
 import { withKvInspector } from "@iterate-com/shared/durable-object-utils/mixins/with-kv-inspector";
 import { withLifecycleHooks } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
@@ -32,6 +31,9 @@ import type { ProcessorStreamApi, StreamEvent } from "@iterate-com/shared/stream
 import type { Callable } from "@iterate-com/shared/callable/types.ts";
 import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
+import { createOutboundMcpFromOurClientToolProviderRegistration } from "~/domains/outbound-mcp-client/utils/outbound-mcp-provider-registration.ts";
+import { createOpenApiProviderRegistration } from "~/rpc-targets/openapi-provider-registration.ts";
+import { type ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
 
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
 export { OutboundMcpFromOurClientCapability } from "~/domains/outbound-mcp-client/entrypoints/outbound-mcp-from-our-client-capability.ts";
@@ -45,6 +47,28 @@ export type CodemodeSessionStructuredName = {
 const CodemodeSessionStructuredName = z.object({
   projectId: z.string(),
   streamPath: StreamPath,
+});
+
+const CodemodeProviderPath = z
+  .array(z.string().min(1))
+  .min(1)
+  .refine((path) => path[0] !== "codemode", {
+    message: "Provider path cannot start with reserved segment codemode.",
+  });
+
+const ConnectToMcpServerInput = z.object({
+  headers: z.record(z.string(), z.string()).optional(),
+  instructions: z.string().optional(),
+  path: CodemodeProviderPath,
+  url: z.string().url(),
+});
+
+const ConnectToOpenApiServerInput = z.object({
+  baseUrl: z.string().url(),
+  headers: z.record(z.string(), z.string()).optional(),
+  instructions: z.string().optional(),
+  path: CodemodeProviderPath,
+  specUrl: z.string().url(),
 });
 
 export type StartScriptExecutionInput = {
@@ -84,11 +108,13 @@ export type CodemodeSessionEnv = {
   CODEMODE_SESSION: DurableObjectNamespace<CodemodeSession>;
   DO_CATALOG: D1Database;
   LOADER?: WorkerLoader;
+  PROJECT?: DurableObjectNamespace<ProjectDurableObject>;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
 } & Record<string, unknown>;
 
 type CodemodeSessionStreamApi = ProcessorStreamApi<typeof CodemodeProcessorContract> & {
   append(args: { event: EventInput; streamPath?: string }): Promise<Event>;
+  appendBatch(args: { events: EventInput[]; streamPath?: string }): Promise<Event[]>;
   read(args?: {
     streamPath?: string;
     afterOffset?: number | "start" | "end";
@@ -111,21 +137,21 @@ type DisposableRpcValue = {
   [Symbol.dispose](): void;
 };
 
-const CodemodeSessionLifecycleBase = withD1ObjectCatalog<
+const CodemodeSessionLifecycleBase = withLifecycleHooks<
   CodemodeSessionStructuredName,
+  undefined,
   Pick<CodemodeSessionEnv, "DO_CATALOG">
 >({
-  className: "CodemodeSession",
-  getDatabase: (env) => env.DO_CATALOG,
-  indexes: {
-    projectId: (params) => params.projectId,
-    streamPath: (params) => params.streamPath,
+  d1ObjectCatalog: {
+    className: "CodemodeSession",
+    getDatabase: (env) => env.DO_CATALOG,
+    indexes: {
+      projectId: (params) => params.projectId,
+      streamPath: (params) => params.streamPath,
+    },
   },
-})(
-  withLifecycleHooks({
-    nameSchema: CodemodeSessionStructuredName,
-  })(withDurableObjectCore(DurableObject)),
-);
+  nameSchema: CodemodeSessionStructuredName,
+})(withDurableObjectCore(DurableObject));
 
 const CodemodeSessionRunnerBase = withStreamProcessorRunner<
   CodemodeSessionStructuredName,
@@ -133,6 +159,10 @@ const CodemodeSessionRunnerBase = withStreamProcessorRunner<
   typeof CodemodeProcessorContract
 >({
   processor(args) {
+    const projectCapability = args.ctx.exports.ProjectCapability({
+      props: { projectId: args.structuredName.projectId },
+    });
+
     return createCodemodeProcessor({
       buildSessionCapabilityCallable: () => {
         const session = args.instance as unknown as {
@@ -157,6 +187,10 @@ const CodemodeSessionRunnerBase = withStreamProcessorRunner<
       },
       newId: () => crypto.randomUUID(),
       scriptExecutor: createCloudflareCodemodeScriptExecutor({
+        env: {
+          PROJECT: projectCapability,
+          project: projectCapability,
+        },
         getSessionCapability: () => {
           const session = args.instance as unknown as {
             getCodemodeSessionCapability(): CodemodeProcessorSession;
@@ -164,6 +198,7 @@ const CodemodeSessionRunnerBase = withStreamProcessorRunner<
           return session.getCodemodeSessionCapability();
         },
         loader: args.env.LOADER,
+        outboundFetch: projectCapability,
       }),
     });
   },
@@ -332,7 +367,7 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
     const builtin = this.resolveCodemodeBuiltin(input.path);
     if (builtin != null) {
       // Temporary duplication with the shared codemode processor. This is not
-      // the design we want long-term: `__codemode` should be owned by exactly
+      // the design we want long-term: `codemode` should be owned by exactly
       // one session capability implementation. For now the OS2 host and the
       // portable processor both need this branch so the internal path is always
       // available, still records a normal requested/completed event pair, and
@@ -353,7 +388,7 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
       });
       const startedAt = Date.now();
       try {
-        const result = this.runCodemodeBuiltin({
+        const result = await this.runCodemodeBuiltin({
           args: input.args,
           functionCallId,
           functionPath: builtin.functionPath,
@@ -649,14 +684,14 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
   }
 
   private resolveCodemodeBuiltin(path: string[]) {
-    if (path[0] !== "__codemode") return null;
+    if (path[0] !== "codemode") return null;
     return {
       functionPath: path.slice(1),
-      providerPath: ["__codemode"],
+      providerPath: ["codemode"],
     };
   }
 
-  private runCodemodeBuiltin(input: {
+  private async runCodemodeBuiltin(input: {
     args: unknown[];
     functionCallId: string;
     functionPath: string[];
@@ -667,6 +702,37 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
   }) {
     const name = input.functionPath.join(".");
     if (name === "ping") return "pong";
+    if (name === "connectToMcpServer") {
+      const args = parseUnaryCodemodeBuiltinArgs({
+        args: input.args,
+        name,
+        schema: ConnectToMcpServerInput,
+      });
+      return await this.appendToolProviderRegisteredEvent({
+        provider: createOutboundMcpFromOurClientToolProviderRegistration({
+          headers: args.headers,
+          instructions: args.instructions,
+          path: args.path,
+          serverUrl: args.url,
+        }),
+      });
+    }
+    if (name === "connectToOpenApiServer") {
+      const args = parseUnaryCodemodeBuiltinArgs({
+        args: input.args,
+        name,
+        schema: ConnectToOpenApiServerInput,
+      });
+      return await this.appendToolProviderRegisteredEvent({
+        provider: createOpenApiProviderRegistration({
+          baseUrl: args.baseUrl,
+          headers: args.headers,
+          instructions: args.instructions,
+          path: args.path,
+          specUrl: args.specUrl,
+        }),
+      });
+    }
     if (name === "debugInfo") {
       return {
         args: serializeFunctionCallArgsForEvent(input.args),
@@ -681,8 +747,30 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
       };
     }
 
-    throw new Error(`Unknown codemode builtin __codemode.${name}`);
+    throw new Error(`Unknown codemode builtin codemode.${name}`);
   }
+}
+
+function parseUnaryCodemodeBuiltinArgs<T>(input: {
+  args: unknown[];
+  name: string;
+  schema: z.ZodType<T>;
+}) {
+  if (input.args.length !== 1) {
+    throw new Error(`ctx.codemode.${input.name} requires exactly one object argument.`);
+  }
+
+  const result = input.schema.safeParse(input.args[0]);
+  if (result.success) return result.data;
+
+  throw new Error(
+    `Invalid ctx.codemode.${input.name} argument: ${result.error.issues
+      .map((issue) => {
+        const path = issue.path.length === 0 ? "input" : `input.${issue.path.join(".")}`;
+        return `${path}: ${issue.message}`;
+      })
+      .join("; ")}`,
+  );
 }
 
 function processorStreamApiFromNamespace(args: {
@@ -701,6 +789,17 @@ function processorStreamApiFromNamespace(args: {
         }),
       });
       return await stream.append(input.event as EventInput);
+    },
+    async appendBatch(input) {
+      const stream = await getInitializedStreamStub({
+        durableObjectNamespace: args.durableObjectNamespace,
+        namespace: args.namespace,
+        path: resolveProcessorStreamPath({
+          basePath: args.streamPath,
+          pathInput: input.streamPath,
+        }),
+      });
+      return await stream.appendBatch(input.events as EventInput[]);
     },
     async read(input = {}) {
       const stream = await getInitializedStreamStub({
@@ -745,8 +844,10 @@ function resolveProcessorStreamPath(input: { basePath: StreamPath; pathInput?: s
 }
 
 function createCloudflareCodemodeScriptExecutor(input: {
+  env?: Record<string, unknown>;
   getSessionCapability?: () => CodemodeProcessorSession;
   loader: WorkerLoader | undefined;
+  outboundFetch: Fetcher;
 }): CodemodeScriptExecutor {
   return async ({ code, logger, scriptExecutionId, session }) => {
     if (!input.loader) {
@@ -768,7 +869,8 @@ function createCloudflareCodemodeScriptExecutor(input: {
             "executor.js": buildScriptExecutorModule(),
             "user-code.js": buildUserCodeModule(code),
           },
-          globalOutbound: null,
+          env: input.env,
+          globalOutbound: input.outboundFetch,
         })
         .getEntrypoint() as unknown as CodemodeExecutorEntrypoint;
 
@@ -948,6 +1050,7 @@ function __stringify(value) {
           error: (...args) => console.error(...args),
         };
       }
+      if (key === "env" && path.length === 0) return options.env;
       if (typeof key !== "string") return undefined;
       return make([...path, key]);
 	    },
@@ -994,6 +1097,7 @@ function __stringify(value) {
 	    };
 	    const ctx = __createCodemodeContext({
 	      codemodeSessionCapability: __codemodeSessionCapability,
+	      env: this.env,
 	      scriptExecutionId: __scriptExecutionId,
 	    });
 

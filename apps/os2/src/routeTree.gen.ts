@@ -31,13 +31,18 @@ import { Route as AppOrgsOrganizationSlugProjectsProjectSlugRouteRouteImport } f
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugIndexRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/index'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugSettingsRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/settings'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugMcpRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/mcp'
+import { Route as AppOrgsOrganizationSlugProjectsProjectSlugIntegrationsRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/integrations'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugExamplesRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/examples'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/streams/route'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugAgentsRouteRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/agents/route'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugStreamsIndexRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/streams/index'
+import { Route as AppOrgsOrganizationSlugProjectsProjectSlugSecretsIndexRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/secrets/index'
+import { Route as AppOrgsOrganizationSlugProjectsProjectSlugReposIndexRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/repos/index'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsIndexRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/index'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugAgentsIndexRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/agents/index'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugStreamsSplatRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/streams/$'
+import { Route as AppOrgsOrganizationSlugProjectsProjectSlugSecretsSecretIdRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/secrets/$secretId'
+import { Route as AppOrgsOrganizationSlugProjectsProjectSlugReposRepoSlugRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/repos/$repoSlug'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsNewRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/new'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/$codemodeSessionName'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugAgentsNewPresetRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/agents/new-preset'
@@ -164,6 +169,12 @@ const AppOrgsOrganizationSlugProjectsProjectSlugMcpRoute =
     path: '/mcp',
     getParentRoute: () => AppOrgsOrganizationSlugProjectsProjectSlugRouteRoute,
   } as any)
+const AppOrgsOrganizationSlugProjectsProjectSlugIntegrationsRoute =
+  AppOrgsOrganizationSlugProjectsProjectSlugIntegrationsRouteImport.update({
+    id: '/integrations',
+    path: '/integrations',
+    getParentRoute: () => AppOrgsOrganizationSlugProjectsProjectSlugRouteRoute,
+  } as any)
 const AppOrgsOrganizationSlugProjectsProjectSlugExamplesRoute =
   AppOrgsOrganizationSlugProjectsProjectSlugExamplesRouteImport.update({
     id: '/examples',
@@ -189,6 +200,18 @@ const AppOrgsOrganizationSlugProjectsProjectSlugStreamsIndexRoute =
     getParentRoute: () =>
       AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRoute,
   } as any)
+const AppOrgsOrganizationSlugProjectsProjectSlugSecretsIndexRoute =
+  AppOrgsOrganizationSlugProjectsProjectSlugSecretsIndexRouteImport.update({
+    id: '/secrets/',
+    path: '/secrets/',
+    getParentRoute: () => AppOrgsOrganizationSlugProjectsProjectSlugRouteRoute,
+  } as any)
+const AppOrgsOrganizationSlugProjectsProjectSlugReposIndexRoute =
+  AppOrgsOrganizationSlugProjectsProjectSlugReposIndexRouteImport.update({
+    id: '/repos/',
+    path: '/repos/',
+    getParentRoute: () => AppOrgsOrganizationSlugProjectsProjectSlugRouteRoute,
+  } as any)
 const AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsIndexRoute =
   AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsIndexRouteImport.update(
     {
@@ -211,6 +234,18 @@ const AppOrgsOrganizationSlugProjectsProjectSlugStreamsSplatRoute =
     path: '/$',
     getParentRoute: () =>
       AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRoute,
+  } as any)
+const AppOrgsOrganizationSlugProjectsProjectSlugSecretsSecretIdRoute =
+  AppOrgsOrganizationSlugProjectsProjectSlugSecretsSecretIdRouteImport.update({
+    id: '/secrets/$secretId',
+    path: '/secrets/$secretId',
+    getParentRoute: () => AppOrgsOrganizationSlugProjectsProjectSlugRouteRoute,
+  } as any)
+const AppOrgsOrganizationSlugProjectsProjectSlugReposRepoSlugRoute =
+  AppOrgsOrganizationSlugProjectsProjectSlugReposRepoSlugRouteImport.update({
+    id: '/repos/$repoSlug',
+    path: '/repos/$repoSlug',
+    getParentRoute: () => AppOrgsOrganizationSlugProjectsProjectSlugRouteRoute,
   } as any)
 const AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsNewRoute =
   AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsNewRouteImport.update(
@@ -276,6 +311,7 @@ export interface FileRoutesByFullPath {
   '/orgs/$organizationSlug/projects/$projectSlug/agents': typeof AppOrgsOrganizationSlugProjectsProjectSlugAgentsRouteRouteWithChildren
   '/orgs/$organizationSlug/projects/$projectSlug/streams': typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRouteWithChildren
   '/orgs/$organizationSlug/projects/$projectSlug/examples': typeof AppOrgsOrganizationSlugProjectsProjectSlugExamplesRoute
+  '/orgs/$organizationSlug/projects/$projectSlug/integrations': typeof AppOrgsOrganizationSlugProjectsProjectSlugIntegrationsRoute
   '/orgs/$organizationSlug/projects/$projectSlug/mcp': typeof AppOrgsOrganizationSlugProjectsProjectSlugMcpRoute
   '/orgs/$organizationSlug/projects/$projectSlug/settings': typeof AppOrgsOrganizationSlugProjectsProjectSlugSettingsRoute
   '/orgs/$organizationSlug/projects/$projectSlug/': typeof AppOrgsOrganizationSlugProjectsProjectSlugIndexRoute
@@ -283,9 +319,13 @@ export interface FileRoutesByFullPath {
   '/orgs/$organizationSlug/projects/$projectSlug/agents/new-preset': typeof AppOrgsOrganizationSlugProjectsProjectSlugAgentsNewPresetRoute
   '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/$codemodeSessionName': typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute
   '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/new': typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsNewRoute
+  '/orgs/$organizationSlug/projects/$projectSlug/repos/$repoSlug': typeof AppOrgsOrganizationSlugProjectsProjectSlugReposRepoSlugRoute
+  '/orgs/$organizationSlug/projects/$projectSlug/secrets/$secretId': typeof AppOrgsOrganizationSlugProjectsProjectSlugSecretsSecretIdRoute
   '/orgs/$organizationSlug/projects/$projectSlug/streams/$': typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsSplatRoute
   '/orgs/$organizationSlug/projects/$projectSlug/agents/': typeof AppOrgsOrganizationSlugProjectsProjectSlugAgentsIndexRoute
   '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/': typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsIndexRoute
+  '/orgs/$organizationSlug/projects/$projectSlug/repos/': typeof AppOrgsOrganizationSlugProjectsProjectSlugReposIndexRoute
+  '/orgs/$organizationSlug/projects/$projectSlug/secrets/': typeof AppOrgsOrganizationSlugProjectsProjectSlugSecretsIndexRoute
   '/orgs/$organizationSlug/projects/$projectSlug/streams/': typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsIndexRoute
   '/orgs/$organizationSlug/projects/$projectSlug/agents/streams/$': typeof AppOrgsOrganizationSlugProjectsProjectSlugAgentsStreamsSplatRoute
 }
@@ -306,6 +346,7 @@ export interface FileRoutesByTo {
   '/orgs/$organizationSlug': typeof AppOrgsOrganizationSlugIndexRoute
   '/orgs/$organizationSlug/projects': typeof AppOrgsOrganizationSlugProjectsIndexRoute
   '/orgs/$organizationSlug/projects/$projectSlug/examples': typeof AppOrgsOrganizationSlugProjectsProjectSlugExamplesRoute
+  '/orgs/$organizationSlug/projects/$projectSlug/integrations': typeof AppOrgsOrganizationSlugProjectsProjectSlugIntegrationsRoute
   '/orgs/$organizationSlug/projects/$projectSlug/mcp': typeof AppOrgsOrganizationSlugProjectsProjectSlugMcpRoute
   '/orgs/$organizationSlug/projects/$projectSlug/settings': typeof AppOrgsOrganizationSlugProjectsProjectSlugSettingsRoute
   '/orgs/$organizationSlug/projects/$projectSlug': typeof AppOrgsOrganizationSlugProjectsProjectSlugIndexRoute
@@ -313,9 +354,13 @@ export interface FileRoutesByTo {
   '/orgs/$organizationSlug/projects/$projectSlug/agents/new-preset': typeof AppOrgsOrganizationSlugProjectsProjectSlugAgentsNewPresetRoute
   '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/$codemodeSessionName': typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute
   '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/new': typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsNewRoute
+  '/orgs/$organizationSlug/projects/$projectSlug/repos/$repoSlug': typeof AppOrgsOrganizationSlugProjectsProjectSlugReposRepoSlugRoute
+  '/orgs/$organizationSlug/projects/$projectSlug/secrets/$secretId': typeof AppOrgsOrganizationSlugProjectsProjectSlugSecretsSecretIdRoute
   '/orgs/$organizationSlug/projects/$projectSlug/streams/$': typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsSplatRoute
   '/orgs/$organizationSlug/projects/$projectSlug/agents': typeof AppOrgsOrganizationSlugProjectsProjectSlugAgentsIndexRoute
   '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions': typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsIndexRoute
+  '/orgs/$organizationSlug/projects/$projectSlug/repos': typeof AppOrgsOrganizationSlugProjectsProjectSlugReposIndexRoute
+  '/orgs/$organizationSlug/projects/$projectSlug/secrets': typeof AppOrgsOrganizationSlugProjectsProjectSlugSecretsIndexRoute
   '/orgs/$organizationSlug/projects/$projectSlug/streams': typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsIndexRoute
   '/orgs/$organizationSlug/projects/$projectSlug/agents/streams/$': typeof AppOrgsOrganizationSlugProjectsProjectSlugAgentsStreamsSplatRoute
 }
@@ -343,6 +388,7 @@ export interface FileRoutesById {
   '/_app/orgs/$organizationSlug/projects/$projectSlug/agents': typeof AppOrgsOrganizationSlugProjectsProjectSlugAgentsRouteRouteWithChildren
   '/_app/orgs/$organizationSlug/projects/$projectSlug/streams': typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRouteWithChildren
   '/_app/orgs/$organizationSlug/projects/$projectSlug/examples': typeof AppOrgsOrganizationSlugProjectsProjectSlugExamplesRoute
+  '/_app/orgs/$organizationSlug/projects/$projectSlug/integrations': typeof AppOrgsOrganizationSlugProjectsProjectSlugIntegrationsRoute
   '/_app/orgs/$organizationSlug/projects/$projectSlug/mcp': typeof AppOrgsOrganizationSlugProjectsProjectSlugMcpRoute
   '/_app/orgs/$organizationSlug/projects/$projectSlug/settings': typeof AppOrgsOrganizationSlugProjectsProjectSlugSettingsRoute
   '/_app/orgs/$organizationSlug/projects/$projectSlug/': typeof AppOrgsOrganizationSlugProjectsProjectSlugIndexRoute
@@ -350,9 +396,13 @@ export interface FileRoutesById {
   '/_app/orgs/$organizationSlug/projects/$projectSlug/agents/new-preset': typeof AppOrgsOrganizationSlugProjectsProjectSlugAgentsNewPresetRoute
   '/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/$codemodeSessionName': typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute
   '/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/new': typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsNewRoute
+  '/_app/orgs/$organizationSlug/projects/$projectSlug/repos/$repoSlug': typeof AppOrgsOrganizationSlugProjectsProjectSlugReposRepoSlugRoute
+  '/_app/orgs/$organizationSlug/projects/$projectSlug/secrets/$secretId': typeof AppOrgsOrganizationSlugProjectsProjectSlugSecretsSecretIdRoute
   '/_app/orgs/$organizationSlug/projects/$projectSlug/streams/$': typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsSplatRoute
   '/_app/orgs/$organizationSlug/projects/$projectSlug/agents/': typeof AppOrgsOrganizationSlugProjectsProjectSlugAgentsIndexRoute
   '/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/': typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsIndexRoute
+  '/_app/orgs/$organizationSlug/projects/$projectSlug/repos/': typeof AppOrgsOrganizationSlugProjectsProjectSlugReposIndexRoute
+  '/_app/orgs/$organizationSlug/projects/$projectSlug/secrets/': typeof AppOrgsOrganizationSlugProjectsProjectSlugSecretsIndexRoute
   '/_app/orgs/$organizationSlug/projects/$projectSlug/streams/': typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsIndexRoute
   '/_app/orgs/$organizationSlug/projects/$projectSlug/agents/streams/$': typeof AppOrgsOrganizationSlugProjectsProjectSlugAgentsStreamsSplatRoute
 }
@@ -380,6 +430,7 @@ export interface FileRouteTypes {
     | '/orgs/$organizationSlug/projects/$projectSlug/agents'
     | '/orgs/$organizationSlug/projects/$projectSlug/streams'
     | '/orgs/$organizationSlug/projects/$projectSlug/examples'
+    | '/orgs/$organizationSlug/projects/$projectSlug/integrations'
     | '/orgs/$organizationSlug/projects/$projectSlug/mcp'
     | '/orgs/$organizationSlug/projects/$projectSlug/settings'
     | '/orgs/$organizationSlug/projects/$projectSlug/'
@@ -387,9 +438,13 @@ export interface FileRouteTypes {
     | '/orgs/$organizationSlug/projects/$projectSlug/agents/new-preset'
     | '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/$codemodeSessionName'
     | '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/new'
+    | '/orgs/$organizationSlug/projects/$projectSlug/repos/$repoSlug'
+    | '/orgs/$organizationSlug/projects/$projectSlug/secrets/$secretId'
     | '/orgs/$organizationSlug/projects/$projectSlug/streams/$'
     | '/orgs/$organizationSlug/projects/$projectSlug/agents/'
     | '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/'
+    | '/orgs/$organizationSlug/projects/$projectSlug/repos/'
+    | '/orgs/$organizationSlug/projects/$projectSlug/secrets/'
     | '/orgs/$organizationSlug/projects/$projectSlug/streams/'
     | '/orgs/$organizationSlug/projects/$projectSlug/agents/streams/$'
   fileRoutesByTo: FileRoutesByTo
@@ -410,6 +465,7 @@ export interface FileRouteTypes {
     | '/orgs/$organizationSlug'
     | '/orgs/$organizationSlug/projects'
     | '/orgs/$organizationSlug/projects/$projectSlug/examples'
+    | '/orgs/$organizationSlug/projects/$projectSlug/integrations'
     | '/orgs/$organizationSlug/projects/$projectSlug/mcp'
     | '/orgs/$organizationSlug/projects/$projectSlug/settings'
     | '/orgs/$organizationSlug/projects/$projectSlug'
@@ -417,9 +473,13 @@ export interface FileRouteTypes {
     | '/orgs/$organizationSlug/projects/$projectSlug/agents/new-preset'
     | '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/$codemodeSessionName'
     | '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/new'
+    | '/orgs/$organizationSlug/projects/$projectSlug/repos/$repoSlug'
+    | '/orgs/$organizationSlug/projects/$projectSlug/secrets/$secretId'
     | '/orgs/$organizationSlug/projects/$projectSlug/streams/$'
     | '/orgs/$organizationSlug/projects/$projectSlug/agents'
     | '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions'
+    | '/orgs/$organizationSlug/projects/$projectSlug/repos'
+    | '/orgs/$organizationSlug/projects/$projectSlug/secrets'
     | '/orgs/$organizationSlug/projects/$projectSlug/streams'
     | '/orgs/$organizationSlug/projects/$projectSlug/agents/streams/$'
   id:
@@ -446,6 +506,7 @@ export interface FileRouteTypes {
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/agents'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/streams'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/examples'
+    | '/_app/orgs/$organizationSlug/projects/$projectSlug/integrations'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/mcp'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/settings'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/'
@@ -453,9 +514,13 @@ export interface FileRouteTypes {
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/agents/new-preset'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/$codemodeSessionName'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/new'
+    | '/_app/orgs/$organizationSlug/projects/$projectSlug/repos/$repoSlug'
+    | '/_app/orgs/$organizationSlug/projects/$projectSlug/secrets/$secretId'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/streams/$'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/agents/'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/'
+    | '/_app/orgs/$organizationSlug/projects/$projectSlug/repos/'
+    | '/_app/orgs/$organizationSlug/projects/$projectSlug/secrets/'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/streams/'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/agents/streams/$'
   fileRoutesById: FileRoutesById
@@ -631,6 +696,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugMcpRouteImport
       parentRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugRouteRoute
     }
+    '/_app/orgs/$organizationSlug/projects/$projectSlug/integrations': {
+      id: '/_app/orgs/$organizationSlug/projects/$projectSlug/integrations'
+      path: '/integrations'
+      fullPath: '/orgs/$organizationSlug/projects/$projectSlug/integrations'
+      preLoaderRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugIntegrationsRouteImport
+      parentRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugRouteRoute
+    }
     '/_app/orgs/$organizationSlug/projects/$projectSlug/examples': {
       id: '/_app/orgs/$organizationSlug/projects/$projectSlug/examples'
       path: '/examples'
@@ -659,6 +731,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsIndexRouteImport
       parentRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRoute
     }
+    '/_app/orgs/$organizationSlug/projects/$projectSlug/secrets/': {
+      id: '/_app/orgs/$organizationSlug/projects/$projectSlug/secrets/'
+      path: '/secrets'
+      fullPath: '/orgs/$organizationSlug/projects/$projectSlug/secrets/'
+      preLoaderRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugSecretsIndexRouteImport
+      parentRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugRouteRoute
+    }
+    '/_app/orgs/$organizationSlug/projects/$projectSlug/repos/': {
+      id: '/_app/orgs/$organizationSlug/projects/$projectSlug/repos/'
+      path: '/repos'
+      fullPath: '/orgs/$organizationSlug/projects/$projectSlug/repos/'
+      preLoaderRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugReposIndexRouteImport
+      parentRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugRouteRoute
+    }
     '/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/': {
       id: '/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/'
       path: '/codemode-sessions'
@@ -679,6 +765,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/orgs/$organizationSlug/projects/$projectSlug/streams/$'
       preLoaderRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsSplatRouteImport
       parentRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRoute
+    }
+    '/_app/orgs/$organizationSlug/projects/$projectSlug/secrets/$secretId': {
+      id: '/_app/orgs/$organizationSlug/projects/$projectSlug/secrets/$secretId'
+      path: '/secrets/$secretId'
+      fullPath: '/orgs/$organizationSlug/projects/$projectSlug/secrets/$secretId'
+      preLoaderRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugSecretsSecretIdRouteImport
+      parentRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugRouteRoute
+    }
+    '/_app/orgs/$organizationSlug/projects/$projectSlug/repos/$repoSlug': {
+      id: '/_app/orgs/$organizationSlug/projects/$projectSlug/repos/$repoSlug'
+      path: '/repos/$repoSlug'
+      fullPath: '/orgs/$organizationSlug/projects/$projectSlug/repos/$repoSlug'
+      preLoaderRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugReposRepoSlugRouteImport
+      parentRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugRouteRoute
     }
     '/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/new': {
       id: '/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/new'
@@ -764,12 +864,17 @@ interface AppOrgsOrganizationSlugProjectsProjectSlugRouteRouteChildren {
   AppOrgsOrganizationSlugProjectsProjectSlugAgentsRouteRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugAgentsRouteRouteWithChildren
   AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRouteWithChildren
   AppOrgsOrganizationSlugProjectsProjectSlugExamplesRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugExamplesRoute
+  AppOrgsOrganizationSlugProjectsProjectSlugIntegrationsRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugIntegrationsRoute
   AppOrgsOrganizationSlugProjectsProjectSlugMcpRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugMcpRoute
   AppOrgsOrganizationSlugProjectsProjectSlugSettingsRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugSettingsRoute
   AppOrgsOrganizationSlugProjectsProjectSlugIndexRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugIndexRoute
   AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute
   AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsNewRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsNewRoute
+  AppOrgsOrganizationSlugProjectsProjectSlugReposRepoSlugRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugReposRepoSlugRoute
+  AppOrgsOrganizationSlugProjectsProjectSlugSecretsSecretIdRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugSecretsSecretIdRoute
   AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsIndexRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsIndexRoute
+  AppOrgsOrganizationSlugProjectsProjectSlugReposIndexRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugReposIndexRoute
+  AppOrgsOrganizationSlugProjectsProjectSlugSecretsIndexRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugSecretsIndexRoute
 }
 
 const AppOrgsOrganizationSlugProjectsProjectSlugRouteRouteChildren: AppOrgsOrganizationSlugProjectsProjectSlugRouteRouteChildren =
@@ -780,6 +885,8 @@ const AppOrgsOrganizationSlugProjectsProjectSlugRouteRouteChildren: AppOrgsOrgan
       AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRouteWithChildren,
     AppOrgsOrganizationSlugProjectsProjectSlugExamplesRoute:
       AppOrgsOrganizationSlugProjectsProjectSlugExamplesRoute,
+    AppOrgsOrganizationSlugProjectsProjectSlugIntegrationsRoute:
+      AppOrgsOrganizationSlugProjectsProjectSlugIntegrationsRoute,
     AppOrgsOrganizationSlugProjectsProjectSlugMcpRoute:
       AppOrgsOrganizationSlugProjectsProjectSlugMcpRoute,
     AppOrgsOrganizationSlugProjectsProjectSlugSettingsRoute:
@@ -790,8 +897,16 @@ const AppOrgsOrganizationSlugProjectsProjectSlugRouteRouteChildren: AppOrgsOrgan
       AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute,
     AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsNewRoute:
       AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsNewRoute,
+    AppOrgsOrganizationSlugProjectsProjectSlugReposRepoSlugRoute:
+      AppOrgsOrganizationSlugProjectsProjectSlugReposRepoSlugRoute,
+    AppOrgsOrganizationSlugProjectsProjectSlugSecretsSecretIdRoute:
+      AppOrgsOrganizationSlugProjectsProjectSlugSecretsSecretIdRoute,
     AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsIndexRoute:
       AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsIndexRoute,
+    AppOrgsOrganizationSlugProjectsProjectSlugReposIndexRoute:
+      AppOrgsOrganizationSlugProjectsProjectSlugReposIndexRoute,
+    AppOrgsOrganizationSlugProjectsProjectSlugSecretsIndexRoute:
+      AppOrgsOrganizationSlugProjectsProjectSlugSecretsIndexRoute,
   }
 
 const AppOrgsOrganizationSlugProjectsProjectSlugRouteRouteWithChildren =

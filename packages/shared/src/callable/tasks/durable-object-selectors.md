@@ -21,18 +21,21 @@ machinery that may never be needed.
 Keep this task only as a parking lot for cases where name composition is not
 enough. The durable-object-utils mixins make that possible:
 `withLifecycleHooks()` gives named Durable Objects a persistent reliable `name`,
-`getOrInitializeDoStub()` initializes named stubs before use, and
-`withD1ObjectCatalog()` mirrors initialized object metadata and secondary
-indexes into D1. If we later add indexed selectors, callable should resolve the
-selector to a normal Durable Object stub first, then enter the existing fetch/RPC
-dispatch path.
+`getInitializedDoStub()` selects lifecycle-managed stubs with explicit
+`allowCreate` behavior, and the lifecycle `d1ObjectCatalog` option mirrors
+initialized object metadata and secondary indexes into D1. `allowCreate: false`
+currently treats the best-effort catalog as the existence check, so a catalog
+miss can return "not found" even when local Durable Object state exists but the
+D1 projection has not caught up. If we later add indexed selectors, callable
+should resolve the selector to a normal Durable Object stub first, then enter
+the existing fetch/RPC dispatch path.
 
 Possible future scope:
 
 - document name-composition conventions for common structured-name shapes
-- indexed structured-name selectors backed by `withD1ObjectCatalog()` or another
-  registry, only if a real caller cannot use deterministic names
-- named initialization helpers that call `getOrInitializeDoStub()` before
+- indexed structured-name selectors backed by the lifecycle D1 object catalog or
+  another registry, only if a real caller cannot use deterministic names
+- named initialization helpers that call `getInitializedDoStub()` before
   creating or invoking a callable when the target object follows the lifecycle
   mixin contract
 - allocation/provisioning helpers that call `newUniqueId()` and persist the ID

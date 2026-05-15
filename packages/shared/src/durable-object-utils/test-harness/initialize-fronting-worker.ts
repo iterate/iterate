@@ -13,14 +13,11 @@
 import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
 import { withAppConfig } from "../mixins/with-app-config.ts";
-import {
-  listD1ObjectCatalogRecordsByIndex,
-  withD1ObjectCatalog,
-} from "../mixins/with-d1-object-catalog.ts";
+import { listD1ObjectCatalogRecordsByIndex } from "../mixins/with-lifecycle-hooks.ts";
 import { withDurableObjectCore } from "../mixins/with-durable-object-core.ts";
 import {
   deriveDurableObjectNameFromStructuredName,
-  getOrInitializeDoStub,
+  getInitializedDoStub,
   withLifecycleHooks,
 } from "../mixins/with-lifecycle-hooks.ts";
 import { withKvInspector } from "../mixins/with-kv-inspector.ts";
@@ -85,8 +82,12 @@ type Env = {
 
 const DurableObjectCore = withDurableObjectCore(DurableObject);
 
-const RoomBase = withLifecycleHooks({ nameSchema: RoomInit })(DurableObjectCore);
+const RoomBase = withLifecycleHooks({
+  d1ObjectCatalog: "none",
+  nameSchema: RoomInit,
+})(DurableObjectCore);
 const InitialStateRoomBase = withLifecycleHooks({
+  d1ObjectCatalog: "none",
   initialStateSchema: RoomInitialState,
 })(DurableObjectCore);
 
@@ -251,7 +252,12 @@ export class InitializeTestRoom extends RoomBase<Env> {
 const PublicRouteRoomBase = withPublicFetchRoute({
   namespaceSlug: "public-route-rooms",
   defaultAddressing: "by-structured-name",
-})(withLifecycleHooks({ nameSchema: RoomInit })(DurableObjectCore));
+})(
+  withLifecycleHooks({
+    d1ObjectCatalog: "none",
+    nameSchema: RoomInit,
+  })(DurableObjectCore),
+);
 
 export class PublicRouteTestRoom extends PublicRouteRoomBase<Env> {
   async fetch(request: Request): Promise<Response> {
@@ -295,17 +301,20 @@ export class PublicRouteTestRoom extends PublicRouteRoomBase<Env> {
   }
 }
 
-const ListedRoomBase = withD1ObjectCatalog<RoomInit, Env>({
-  className: "ListedRoom",
-  getDatabase(env) {
-    return env.DO_CATALOG;
-  },
-  indexes: {
-    ownerUserId(params) {
-      return params.ownerUserId;
+const ListedRoomBase = withLifecycleHooks<RoomInit, undefined, Env>({
+  d1ObjectCatalog: {
+    className: "ListedRoom",
+    getDatabase(env) {
+      return env.DO_CATALOG;
+    },
+    indexes: {
+      ownerUserId(params) {
+        return params.ownerUserId;
+      },
     },
   },
-})(withLifecycleHooks({ nameSchema: RoomInit })(DurableObjectCore));
+  nameSchema: RoomInit,
+})(DurableObjectCore);
 
 export class ListedRoom extends ListedRoomBase<Env> {
   getStructuredName(): RoomInit {
@@ -314,7 +323,10 @@ export class ListedRoom extends ListedRoomBase<Env> {
 }
 
 const AlarmRoomBase = withMultiplexedAlarms<RoomInit>()(
-  withLifecycleHooks({ nameSchema: RoomInit })(DurableObjectCore),
+  withLifecycleHooks({
+    d1ObjectCatalog: "none",
+    nameSchema: RoomInit,
+  })(DurableObjectCore),
 );
 
 export class AlarmTestRoom extends AlarmRoomBase<Env> {
@@ -463,9 +475,10 @@ export class AlarmTestRoom extends AlarmRoomBase<Env> {
   }
 }
 
-const AlarmForwardingLifecycleBase = withLifecycleHooks({ nameSchema: RoomInit })(
-  DurableObjectCore,
-);
+const AlarmForwardingLifecycleBase = withLifecycleHooks({
+  d1ObjectCatalog: "none",
+  nameSchema: RoomInit,
+})(DurableObjectCore);
 
 class AlarmForwardingRoot<FinalEnv> extends AlarmForwardingLifecycleBase<FinalEnv> {
   async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
@@ -497,7 +510,10 @@ export class AlarmForwardingTestRoom extends AlarmForwardingRoomBase<Env> {
 
 const SchedulerRoomBase = withScheduler<RoomInit>()(
   withMultiplexedAlarms<RoomInit>()(
-    withLifecycleHooks({ nameSchema: RoomInit })(DurableObjectCore),
+    withLifecycleHooks({
+      d1ObjectCatalog: "none",
+      nameSchema: RoomInit,
+    })(DurableObjectCore),
   ),
 );
 
@@ -998,7 +1014,8 @@ export default {
     try {
       if (request.method === "POST" && action === "initialize") {
         const body = await request.json<Partial<RoomInit>>();
-        const stub = await getOrInitializeDoStub({
+        const stub = await getInitializedDoStub({
+          allowCreate: true,
           namespace: env.ROOMS,
           name: {
             ownerUserId: requireString(body.ownerUserId, "ownerUserId"),

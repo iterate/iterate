@@ -30,6 +30,8 @@
     "test:e2e": "node -e \"if (!process.env.OS2_BASE_URL) { console.error('OS2_BASE_URL is required for OS e2e tests'); process.exit(1); }\" && vitest run --config ./e2e/vitest.config.ts",
     "test:e2e:codemode-mcp": "node -e \"if (!process.env.OS2_E2E_MCP_URL) { console.error('OS2_E2E_MCP_URL is required for codemode MCP e2e tests'); process.exit(1); }\" && vitest run --config ./e2e/vitest.config.ts ./e2e/vitest/codemode-mcp-provider-stack.e2e.test.ts",
     "test:e2e:preview": "tsx ./e2e/preview-smoke.ts",
+    "example:workspace-codemode-preview": "tsx ./e2e/workspace-codemode-preview-example.ts",
+    "artifacts:seed-config-base": "tsx ./scripts/seed-iterate-config-base-repo.ts",
     "benchmark:agent-stream": "tsx ./scripts/benchmark-agent-stream.ts",
     "test:smoke": "RUNTIME_SMOKE_FULL=1 vitest run",
     "test:watch": "vitest"
@@ -37,17 +39,21 @@
   "iterateAppCli": {
     "remote": {
       "auth": "shared-api-secret-bearer",
-      "defaultBaseUrl": "https://os2.iterate.com"
+      "defaultBaseUrl": "https://os.iterate2.com"
     }
   },
   "dependencies": {
     "@clerk/backend": "^3.4.1",
     "@clerk/mcp-tools": "^0.5.0",
     "@clerk/tanstack-react-start": "^1.1.7",
+    "@cloudflare/shell": "^0.3.4",
+    "@cloudflare/worker-bundler": "^0.1.3",
     "@iterate-com/os2-contract": "workspace:*",
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@opentui/core": "0.1.102",
+    "@opentui/react": "0.1.102",
     "@orpc/client": "1.13.14",
     "@orpc/contract": "1.13.14",
     "@orpc/openapi": "1.13.14",

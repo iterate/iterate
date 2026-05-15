@@ -1,12 +1,19 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type { ExecuteCodemodeFunctionCallInput } from "@iterate-com/shared/stream-processors/codemode/implementation";
+import { createD1Client } from "sqlfu";
+import { getProjectSecret } from "~/domains/secrets/secrets-store.ts";
 
 type SlackCapabilityEnv = {
   APP_CONFIG_SLACK_BOT_TOKEN?: string;
+  DB?: D1Database;
   SLACK_BOT_TOKEN?: string;
 };
 
-export class SlackCapability extends WorkerEntrypoint<SlackCapabilityEnv> {
+type SlackCapabilityProps = {
+  projectId?: string;
+};
+
+export class SlackCapability extends WorkerEntrypoint<SlackCapabilityEnv, SlackCapabilityProps> {
   async executeCodemodeFunctionCall(input: ExecuteCodemodeFunctionCallInput) {
     // Slack's Web API is already method-path based (`chat.postMessage`,
     // `conversations.list`, ...), so this capability intentionally keeps the
@@ -22,17 +29,37 @@ export class SlackCapability extends WorkerEntrypoint<SlackCapabilityEnv> {
       );
     }
 
-    const token = this.env.SLACK_BOT_TOKEN ?? this.env.APP_CONFIG_SLACK_BOT_TOKEN;
+    return await this.request({
+      body: input.args[0] as Record<string, unknown> | undefined,
+      method,
+    });
+  }
+
+  async request(input: { body?: Record<string, unknown>; method: string }) {
+    const token = await this.readToken();
     if (!token) {
-      throw new Error("SlackCapability requires SLACK_BOT_TOKEN or APP_CONFIG_SLACK_BOT_TOKEN.");
+      throw new Error(
+        "SlackCapability requires a project slack.access_token Secret or SLACK_BOT_TOKEN/APP_CONFIG_SLACK_BOT_TOKEN.",
+      );
     }
 
-    const [body] = input.args as [Record<string, unknown> | undefined];
     return await callSlackWebApi({
-      body: body ?? {},
-      method,
+      body: input.body ?? {},
+      method: input.method,
       token,
     });
+  }
+
+  private async readToken() {
+    if (this.env.DB && this.ctx.props.projectId) {
+      const secret = await getProjectSecret(createD1Client(this.env.DB), {
+        key: "slack.access_token",
+        projectId: this.ctx.props.projectId,
+      });
+      if (secret) return secret.material;
+    }
+
+    return this.env.SLACK_BOT_TOKEN ?? this.env.APP_CONFIG_SLACK_BOT_TOKEN;
   }
 }
 

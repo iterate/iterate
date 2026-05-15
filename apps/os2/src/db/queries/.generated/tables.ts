@@ -12,6 +12,29 @@ export type IngressRoutesRow = {
   updated_at: string;
 };
 
+export type OauthStatesRow = {
+  state: string;
+  provider: string;
+  project_id: string;
+  user_id: string;
+  callback_url: string | null;
+  code_verifier: string | null;
+  created_at: string;
+  expires_at: string;
+};
+
+export type ProjectConnectionsRow = {
+  id: string;
+  project_id: string;
+  provider: string;
+  external_id: string;
+  webhook_provider_identifier: string | null;
+  provider_data: string;
+  scopes: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type ProjectPermissionsRow = {
   project_id: string;
   principal_type: string;
@@ -21,11 +44,21 @@ export type ProjectPermissionsRow = {
   updated_at: string;
 };
 
+export type ProjectSecretsRow = {
+  id: string;
+  project_id: string;
+  key: string;
+  material: string;
+  metadata: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type ProjectsRow = {
   id: string;
   slug: string;
   custom_hostname: string | null;
-  metadata: string;
   created_at: string;
   updated_at: string;
+  external_egress_proxy_url: string | null;
 };

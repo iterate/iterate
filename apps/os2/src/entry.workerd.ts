@@ -21,12 +21,16 @@ import { createD1Client } from "sqlfu";
 import manifest, { AppConfig } from "~/app.ts";
 import type { AppContext } from "~/context.ts";
 import { getIngressRouteByHost } from "~/db/queries/.generated/index.ts";
+import type { CloudflareArtifactsBinding } from "~/domains/repos/artifacts.ts";
+import { seedIterateConfigBaseRepo } from "~/domains/repos/iterate-config-base-seed.ts";
 import {
   dispatchFetchCallable,
   matchIngressRequest,
   normalizeIngressHost,
   parseIngressCallable,
 } from "~/ingress/host-routing.ts";
+import { getProjectPlatformHostIngressRule } from "~/ingress/project-platform-host-routing.ts";
+import { getProjectCustomHostnameIngressRule } from "~/ingress/project-custom-hostname-routing.ts";
 import type { ExactHostIngressRule } from "~/ingress/types.ts";
 import { DEBUG_APPEND_CHAIN_EVENT_TYPE } from "~/durable-objects/debug-append-chain-subscriber.ts";
 
@@ -40,16 +44,22 @@ export { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-ses
 export { DebugAppendChainSubscriber } from "~/durable-objects/debug-append-chain-subscriber.ts";
 export { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
 export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
+export { SlackAgentDurableObject } from "~/domains/slack/durable-objects/slack-agent-durable-object.ts";
+export { SlackIntegrationDurableObject } from "~/domains/slack/durable-objects/slack-integration-durable-object.ts";
 export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.ts";
 export { AiCapability, OrpcCapability } from "~/domains/codemode/example-capabilities.ts";
 export { FetchCapability } from "~/domains/codemode/fetch-capability.ts";
+export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
+export { ProjectCapability } from "~/domains/projects/entrypoints/project-capability.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
 export { ProjectMcpServerEntrypoint } from "~/domains/inbound-mcp-server/entrypoints/project-mcp-server-entrypoint.ts";
 export { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
-export { RepoCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
+export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 export { SlackCapability } from "~/domains/slack/entrypoints/slack-capability.ts";
+export { SecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 export { StreamDurableObject };
+export { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-capability.ts";
 export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 
 const config = parseAppConfigFromEnv({
@@ -70,6 +80,8 @@ export default {
 
     const debugAppendChainResponse = await handleDebugAppendChainFetch({ request, env });
     if (debugAppendChainResponse) return debugAppendChainResponse;
+    const seedIterateConfigBaseResponse = await handleSeedIterateConfigBaseFetch({ request, env });
+    if (seedIterateConfigBaseResponse) return seedIterateConfigBaseResponse;
 
     return withEvlog(
       {
@@ -84,11 +96,26 @@ export default {
 
         const db = createD1Client(env.DB);
         const projectHostnameBases = config.projectHostnameBases;
+        const appHostname = config.baseUrl ? new URL(config.baseUrl).hostname : null;
         const ingressMatch = await matchIngressRequest({
           request,
           lookupRule: async (host) => {
             const row = await getIngressRouteByHost(db, { host: normalizeIngressHost(host) });
-            return row ? ingressRouteRowToRule(row) : null;
+            if (row) return ingressRouteRowToRule(row);
+
+            const platformRule = await getProjectPlatformHostIngressRule({
+              appHostname,
+              bases: projectHostnameBases,
+              db: env.DB,
+              host,
+            });
+            if (platformRule) return platformRule;
+
+            return await getProjectCustomHostnameIngressRule({
+              appHostname,
+              db: env.DB,
+              host,
+            });
           },
         });
 
@@ -103,6 +130,7 @@ export default {
           });
         }
 
+        const envWithArtifacts = env as Env & { ARTIFACTS?: CloudflareArtifactsBinding };
         const context: AppContext = {
           manifest,
           config,
@@ -111,11 +139,16 @@ export default {
           doCatalog: env.DB,
           log,
           projectHostnameBases,
+          waitUntil: (promise) => cfCtx.waitUntil(promise),
           agent: env.AGENT,
+          artifacts: envWithArtifacts.ARTIFACTS,
           loader: env.LOADER,
           codemodeSession: env.CODEMODE_SESSION,
           callableEnv: env,
           projectDurableObjectNamespace: env.PROJECT,
+          repo: env.REPO,
+          slackAgent: env.SLACK_AGENT,
+          slackIntegration: env.SLACK_INTEGRATION,
           stream: env.STREAM,
           workerExports: cfCtx.exports,
         };
@@ -144,6 +177,10 @@ async function handleDebugAppendChainFetch(input: { request: Request; env: Env }
 
   if (input.request.headers.get("authorization") !== `Bearer ${expectedToken}`) {
     return Response.json({ error: "Unauthorized." }, { status: 401 });
+  }
+
+  if (!hasDebugAppendChainSubscriber(input.env)) {
+    return Response.json({ error: "Debug append-chain endpoint is disabled." }, { status: 404 });
   }
 
   const action = parseDebugAppendChainAction(url.searchParams.get("action"));
@@ -244,6 +281,63 @@ async function handleDebugAppendChainFetch(input: { request: Request; env: Env }
       { status: 500 },
     );
   }
+}
+
+async function handleSeedIterateConfigBaseFetch(input: { request: Request; env: Env }) {
+  const url = new URL(input.request.url);
+  if (url.pathname !== "/__debug/seed-iterate-config-base") return null;
+
+  if (input.request.method !== "POST") {
+    return Response.json({ error: "Method not allowed." }, { status: 405 });
+  }
+
+  const expectedToken = config.adminApiSecret?.exposeSecret();
+  if (expectedToken == null) {
+    return Response.json({ error: "Seed endpoint is disabled." }, { status: 404 });
+  }
+
+  if (input.request.headers.get("authorization") !== `Bearer ${expectedToken}`) {
+    return Response.json({ error: "Unauthorized." }, { status: 401 });
+  }
+
+  const envWithArtifacts = input.env as Env & { ARTIFACTS?: CloudflareArtifactsBinding };
+  if (!envWithArtifacts.ARTIFACTS) {
+    return Response.json({ error: "ARTIFACTS binding is not configured." }, { status: 500 });
+  }
+  if (!input.env.ARTIFACTS_ACCOUNT_ID || !input.env.ARTIFACTS_NAMESPACE) {
+    return Response.json(
+      { error: "Artifacts account and namespace bindings are not configured." },
+      { status: 500 },
+    );
+  }
+
+  try {
+    return Response.json(
+      await seedIterateConfigBaseRepo({
+        accountId: input.env.ARTIFACTS_ACCOUNT_ID,
+        artifacts: envWithArtifacts.ARTIFACTS,
+        namespace: input.env.ARTIFACTS_NAMESPACE,
+      }),
+    );
+  } catch (error) {
+    return Response.json(
+      {
+        error: {
+          message: error instanceof Error ? error.message : String(error),
+          name: error instanceof Error ? error.name : "Error",
+          stack: error instanceof Error ? error.stack : undefined,
+        },
+      },
+      { status: 500 },
+    );
+  }
+}
+
+function hasDebugAppendChainSubscriber(env: Env) {
+  return (
+    (env as Partial<Env> & { DEBUG_APPEND_CHAIN_SUBSCRIBER?: DurableObjectNamespace })
+      .DEBUG_APPEND_CHAIN_SUBSCRIBER != null
+  );
 }
 
 function parseDebugAppendChainAction(value: string | null): "start" | "status" {
