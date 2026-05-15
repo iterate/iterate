@@ -82,7 +82,7 @@ describe("Project ingress routing", () => {
       expect.objectContaining({
         type: "events.iterate.com/project/config-worker-built",
         payload: expect.objectContaining({
-          mainModule: "worker.ts",
+          mainModule: "worker.js",
           projectId: "proj__local__test",
           repoSlug: "iterate-config",
         }),

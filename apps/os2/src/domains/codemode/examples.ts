@@ -849,7 +849,7 @@ const codemodeExampleSeeds = [
     providers: [],
     code: `async () => {
   const headerName = "x-iterate-example-secret";
-  const response = await fetch("https://httpbingo.org/anything", {
+  const response = await fetch("https://httpbin.org/anything", {
     headers: {
       [headerName]: "Bearer getSecret({ key: \\"${EXAMPLE_EGRESS_SECRET_KEY}\\" })",
     },
@@ -879,7 +879,7 @@ const codemodeExampleSeeds = [
         type: "events.iterate.com/codemode/example-note",
         payload: {
           message:
-            "New projects seed an example secret so this script can prove fetch egress header substitution with httpbingo.org.",
+            "New projects seed an example secret so this script can prove fetch egress header substitution with httpbin.org.",
         },
       },
     ],

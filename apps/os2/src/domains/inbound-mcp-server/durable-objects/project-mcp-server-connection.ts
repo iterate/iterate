@@ -554,7 +554,7 @@ function streamCapabilityProps(input: {
 }): StreamsCapabilityProps {
   return {
     appendPolicy: { mode: "stream" },
-    namespace: input.projectId,
+    projectId: input.projectId,
     streamPath: input.streamPath,
   };
 }

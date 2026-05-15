@@ -2,7 +2,10 @@ import { useMemo, useState } from "react";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ExternalLink } from "lucide-react";
 import { z } from "zod";
+import type { PublicAppConfig } from "@iterate-com/shared/apps/config";
+import { useConfig } from "@iterate-com/ui/apps/config";
 import { Button } from "@iterate-com/ui/components/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import {
@@ -22,7 +25,12 @@ import {
   TableHeader,
   TableRow,
 } from "@iterate-com/ui/components/table";
+import type { AppConfig } from "~/app.ts";
+import { repoArtifactName } from "~/domains/repos/repo-artifact-name.ts";
+import { buildArtifactViewerUrl } from "~/lib/artifact-viewer-url.ts";
 import { orpc } from "~/orpc/client.ts";
+
+type PublicConfig = PublicAppConfig<AppConfig>;
 
 const CreateRepoForm = z.object({
   slug: z
@@ -60,6 +68,7 @@ export const Route = createFileRoute("/_app/orgs/$organizationSlug/projects/$pro
 
 function ProjectReposIndexPage() {
   const params = Route.useParams();
+  const config = useConfig<PublicConfig>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { project } = Route.useLoaderData();
@@ -225,39 +234,61 @@ function ProjectReposIndexPage() {
                   label="Woke"
                   onClick={() => setSort(nextSort(sort, "lastWokenAt"))}
                 />
+                <TableHead>Artifact</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {visibleRepos.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={3} className="h-24 text-center text-muted-foreground">
+                  <TableCell colSpan={4} className="h-24 text-center text-muted-foreground">
                     No Repos match.
                   </TableCell>
                 </TableRow>
               ) : (
-                visibleRepos.map((repo) => (
-                  <TableRow key={repo.name}>
-                    <TableCell className="min-w-[18rem] py-3">
-                      <Link
-                        className="block min-w-0 truncate rounded-sm text-sm font-medium hover:underline"
-                        to="/orgs/$organizationSlug/projects/$projectSlug/repos/$repoSlug"
-                        params={{
-                          organizationSlug: params.organizationSlug,
-                          projectSlug: params.projectSlug,
-                          repoSlug: repo.repoSlug,
-                        }}
-                      >
-                        {repo.repoSlug}
-                      </Link>
-                    </TableCell>
-                    <TableCell className="w-40 text-muted-foreground">
-                      {formatRelativeTime(repo.createdAt)}
-                    </TableCell>
-                    <TableCell className="w-40 text-muted-foreground">
-                      {formatRelativeTime(repo.lastWokenAt)}
-                    </TableCell>
-                  </TableRow>
-                ))
+                visibleRepos.map((repo) => {
+                  const artifactViewerUrl = buildArtifactViewerUrl({
+                    appBaseUrl: config.baseUrl ?? currentOrigin(),
+                    artifactName: repoArtifactName({
+                      projectId: repo.projectId,
+                      repoSlug: repo.repoSlug,
+                    }),
+                  });
+
+                  return (
+                    <TableRow key={repo.name}>
+                      <TableCell className="min-w-[18rem] py-3">
+                        <Link
+                          className="block min-w-0 truncate rounded-sm text-sm font-medium hover:underline"
+                          to="/orgs/$organizationSlug/projects/$projectSlug/repos/$repoSlug"
+                          params={{
+                            organizationSlug: params.organizationSlug,
+                            projectSlug: params.projectSlug,
+                            repoSlug: repo.repoSlug,
+                          }}
+                        >
+                          {repo.repoSlug}
+                        </Link>
+                      </TableCell>
+                      <TableCell className="w-40 text-muted-foreground">
+                        {formatRelativeTime(repo.createdAt)}
+                      </TableCell>
+                      <TableCell className="w-40 text-muted-foreground">
+                        {formatRelativeTime(repo.lastWokenAt)}
+                      </TableCell>
+                      <TableCell className="w-32">
+                        <a
+                          className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+                          href={artifactViewerUrl ?? "#"}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          <ExternalLink className="size-4" />
+                          Artifact
+                        </a>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
               )}
             </TableBody>
           </Table>
@@ -321,4 +352,8 @@ function formatRelativeTime(value: string) {
   const count = Math.round(absoluteSeconds / unit.seconds);
   const suffix = count === 1 ? unit.label : `${unit.label}s`;
   return seconds < 0 ? `in ${count} ${suffix}` : `${count} ${suffix} ago`;
+}
+
+function currentOrigin() {
+  return typeof window === "undefined" ? undefined : window.location.origin;
 }

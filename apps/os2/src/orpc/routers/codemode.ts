@@ -95,7 +95,7 @@ export const projectCodemodeRouter = {
         exports: context.workerExports,
         props: {
           appendPolicy: { mode: "stream" },
-          namespace: project.id,
+          projectId: project.id,
           streamPath: input.streamPath,
         },
       }).stream({

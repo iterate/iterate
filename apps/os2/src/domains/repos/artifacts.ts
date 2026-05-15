@@ -1,5 +1,6 @@
 import { InMemoryFs } from "@cloudflare/shell";
 import { createGit } from "@cloudflare/shell/git";
+export { repoArtifactName } from "~/domains/repos/repo-artifact-name.ts";
 
 export type CloudflareArtifactTokenScope = "read" | "write";
 
@@ -48,10 +49,6 @@ export type CloudflareArtifactsBinding = {
 export const REPO_DEFAULT_BRANCH = "main";
 export const REPO_README_PATH = "README.md";
 export const REPO_WRITE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
-
-export function repoArtifactName(input: { projectId: string; repoSlug: string }) {
-  return `${input.projectId}--${input.repoSlug}`;
-}
 
 export function artifactRemoteUrl(input: { accountId: string; name: string; namespace: string }) {
   return `https://${input.accountId}.artifacts.cloudflare.net/git/${input.namespace}/${input.name}.git`;

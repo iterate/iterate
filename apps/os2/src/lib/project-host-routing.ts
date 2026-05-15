@@ -76,3 +76,24 @@ export function buildProjectMcpUrl(input: {
 
   return `https://mcp__${input.projectSlug}.${normalizedBase}`;
 }
+
+export function buildProjectWorkerUrl(input: {
+  projectSlug: string;
+  customHostname?: string | null;
+  projectHostnameBases: readonly string[];
+}) {
+  if (!projectSlugPattern.test(input.projectSlug)) return null;
+  const customHostname = normalizeCustomHostname(input.customHostname);
+  if (customHostname) {
+    if (!hostnamePattern.test(customHostname)) return null;
+    return `https://${customHostname}`;
+  }
+
+  const projectHostnameBase = input.projectHostnameBases[0];
+  if (!projectHostnameBase) return null;
+
+  const normalizedBase = normalizeProjectHostnameBase(projectHostnameBase);
+  if (!hostnamePattern.test(normalizedBase)) return null;
+
+  return `https://${input.projectSlug}.${normalizedBase}`;
+}

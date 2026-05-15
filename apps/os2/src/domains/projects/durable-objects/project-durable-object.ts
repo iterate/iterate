@@ -58,6 +58,7 @@ import { stripArtifactTokenQuery } from "~/domains/repos/artifacts.ts";
 import { getReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 import { ITERATE_CONFIG_REPO_SLUG } from "~/domains/repos/iterate-config-repo.ts";
 import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
+import type { StreamsCapabilityProps } from "~/domains/streams/entrypoints/streams-capability.ts";
 import {
   EXAMPLE_EGRESS_SECRET_KEY,
   EXAMPLE_EGRESS_SECRET_MATERIAL,
@@ -141,6 +142,7 @@ type ProjectDynamicWorkerModule =
 
 type ProjectDynamicWorkerCode = {
   compatibilityDate: string;
+  env?: Record<string, unknown>;
   compatibilityFlags: string[];
   globalOutbound: Fetcher | null;
   mainModule: string;
@@ -180,12 +182,12 @@ type ProjectConfigWorkspace = {
 
 const PROJECT_CONFIG_WORKSPACE_ID = "project-ingress";
 const PROJECT_CONFIG_DIR = "/iterate-config";
-const PROJECT_CONFIG_WORKER_PATH = `${PROJECT_CONFIG_DIR}/worker.ts`;
+const PROJECT_CONFIG_WORKER_PATH = `${PROJECT_CONFIG_DIR}/worker.js`;
 const PROJECT_CONFIG_CHECKOUT_STORAGE_KEY = "project.configWorker.checkout";
 const PROJECT_CONFIG_READY_STORAGE_KEY = "project.configWorker.ready";
 const PROJECT_CONFIG_REFRESHED_AT_STORAGE_KEY = "project.configWorker.refreshedAt";
 const PROJECT_CONFIG_REFRESH_INTERVAL_MS = 10_000;
-const PROJECT_DYNAMIC_WORKER_MAIN_MODULE = "worker.ts";
+const PROJECT_DYNAMIC_WORKER_MAIN_MODULE = "worker.js";
 const PROJECT_DYNAMIC_WORKER_COMPATIBILITY_DATE = "2026-04-27";
 const PROJECT_DYNAMIC_WORKER_COMPATIBILITY_FLAGS = ["nodejs_compat"];
 
@@ -594,8 +596,8 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
           projectId: input.projectId,
         }),
         () =>
-          projectDynamicWorkerCodeWithOutboundFetch({
-            outboundFetch: readProjectLoopbackExports(this.ctx).ProjectCapability({
+          projectDynamicWorkerCodeWithStreams({
+            streams: readLoopbackExports(this.ctx).StreamsCapability({
               props: { projectId: input.projectId },
             }),
             workerCode: checkout.workerCode,
@@ -678,7 +680,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     const files = await readProjectConfigFiles(state);
     const workerSource = files[PROJECT_DYNAMIC_WORKER_MAIN_MODULE];
     if (typeof workerSource !== "string" || workerSource.trim() === "") {
-      throw new Error(`${ITERATE_CONFIG_REPO_SLUG} repo is missing worker.ts.`);
+      throw new Error(`${ITERATE_CONFIG_REPO_SLUG} repo is missing worker.js.`);
     }
     const workerCode =
       typeof files["package.json"] === "string" && files["package.json"].trim() !== ""
@@ -1205,7 +1207,7 @@ function withProjectAppSlug(input: { appSlug: string | null; request: Request })
 }
 
 function projectDynamicWorkerId(input: { commitOid: string; projectId: string }) {
-  return `project-ingress:${input.projectId}:${input.commitOid}`;
+  return `project-ingress:v4:${input.projectId}:${input.commitOid}`;
 }
 
 function projectDynamicWorkerCode(input: string) {
@@ -1222,13 +1224,16 @@ function projectDynamicWorkerCode(input: string) {
   };
 }
 
-function projectDynamicWorkerCodeWithOutboundFetch(input: {
-  outboundFetch: Fetcher;
+function projectDynamicWorkerCodeWithStreams(input: {
+  streams: Fetcher;
   workerCode: ProjectDynamicWorkerCode;
 }): ProjectDynamicWorkerCode {
   return {
     ...input.workerCode,
-    globalOutbound: input.outboundFetch,
+    env: {
+      ...(input.workerCode.env ?? {}),
+      STREAMS: input.streams,
+    },
   };
 }
 
@@ -1400,14 +1405,8 @@ function projectRuntimeEnv(env: ProjectEnv): ProjectRuntimeEnv {
 }
 
 function readLoopbackExports(ctx: DurableObjectState) {
-  return ctx.exports;
-}
-
-function readProjectLoopbackExports(ctx: DurableObjectState): {
-  ProjectCapability(input: { props: { projectId: string } }): Fetcher;
-} {
-  return ctx.exports as unknown as {
-    ProjectCapability(input: { props: { projectId: string } }): Fetcher;
+  return ctx.exports as unknown as Cloudflare.Exports & {
+    StreamsCapability(input: { props: StreamsCapabilityProps }): Fetcher;
   };
 }
 

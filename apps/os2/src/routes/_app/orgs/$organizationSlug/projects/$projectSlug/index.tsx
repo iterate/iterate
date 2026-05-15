@@ -11,10 +11,6 @@ export const Route = createFileRoute("/_app/orgs/$organizationSlug/projects/$pro
       ...orpc.projects.findBySlug.queryOptions({ input: { slug: params.projectSlug } }),
       staleTime: 30_000,
     });
-    await context.queryClient.ensureQueryData({
-      ...orpc.project.lifecycleState.queryOptions({ input: { projectSlugOrId: project.id } }),
-      staleTime: 5_000,
-    });
 
     return {
       breadcrumb: "Home",

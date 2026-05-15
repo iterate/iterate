@@ -1,4 +1,5 @@
 import { Link, useMatchRoute } from "@tanstack/react-router";
+import { ExternalLink } from "lucide-react";
 import type { PublicAppConfig } from "@iterate-com/shared/apps/config";
 import { useConfig } from "@iterate-com/ui/apps/config";
 import { OrganizationSwitcher, UserButton } from "@clerk/tanstack-react-start";
@@ -16,7 +17,7 @@ import {
 } from "@iterate-com/ui/components/sidebar";
 import { SidebarShell } from "@iterate-com/ui/components/sidebar-shell";
 import type { AppConfig } from "~/app.ts";
-import { buildProjectMcpUrl } from "~/lib/project-host-routing.ts";
+import { buildProjectMcpUrl, buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
 import { orpc } from "~/orpc/client.ts";
 
 type PublicConfig = PublicAppConfig<AppConfig>;
@@ -122,6 +123,11 @@ function ProjectSidebarGroup({
 }) {
   const matchRoute = useMatchRoute();
   const mcpUrl = buildProjectMcpUrl({ projectSlug, customHostname, projectHostnameBases });
+  const customWorkerUrl = buildProjectWorkerUrl({
+    projectSlug,
+    customHostname,
+    projectHostnameBases,
+  });
 
   return (
     <SidebarGroup>
@@ -316,6 +322,23 @@ function ProjectSidebarGroup({
               <span>Settings</span>
             </SidebarMenuSubButton>
           </SidebarMenuSubItem>
+          {customWorkerUrl ? (
+            <SidebarMenuSubItem>
+              <SidebarMenuSubButton
+                render={
+                  <a
+                    aria-label={`Open ${projectSlug} custom worker`}
+                    href={customWorkerUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  />
+                }
+              >
+                <ExternalLink />
+                <span>Custom worker</span>
+              </SidebarMenuSubButton>
+            </SidebarMenuSubItem>
+          ) : null}
         </SidebarMenuSub>
       </SidebarGroupContent>
     </SidebarGroup>
