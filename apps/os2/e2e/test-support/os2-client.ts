@@ -113,10 +113,10 @@ export async function createProject(client: Os2Client, slugPrefix: string) {
   });
 }
 
-export async function readProjectStreamUntil(input: {
+export async function readProjectStreamUntil<T extends Event>(input: {
   afterOffset: number | "start";
   client: Os2Client;
-  predicate(event: Event): boolean;
+  predicate: (event: Event) => event is T;
   projectSlugOrId: string;
   streamPath: string;
   timeoutMs?: number;

@@ -54,7 +54,7 @@ testIfAdminApiTarget("runs codemode fetch through a mocked project egress proxy"
     slugPrefix: "mock-internet",
   });
 
-  const script = await fixture.startCodemodeScript(async () => {
+  const completed = await fixture.executeCodemodeScript(async () => {
     const response = await fetch("https://example.com/os2-e2e?source=codemode");
     return {
       body: (await response.json()) as { mocked: boolean; query: string; runSlug: string },
@@ -62,8 +62,6 @@ testIfAdminApiTarget("runs codemode fetch through a mocked project egress proxy"
       status: response.status,
     };
   });
-
-  const completed = await script.awaitCompleted();
 
   const har = internet.getHar();
 
