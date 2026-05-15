@@ -403,7 +403,7 @@ function repoAuthorizationHeader(repo: RepoInfo) {
 }
 
 function artifactFsMountCommand(repo: RepoInfo) {
-  return [
+  const script = [
     "set -eu",
     `export ARTIFACT_FS_ROOT=${shellQuote(ARTIFACT_FS_ROOT)}`,
     'mkdir -p "$ARTIFACT_FS_ROOT" /workspace',
@@ -415,32 +415,25 @@ function artifactFsMountCommand(repo: RepoInfo) {
       shellQuote(`http.${repo.remote}.extraHeader`),
       shellQuote(repoAuthorizationHeader(repo)),
     ].join(" "),
+    `if ! artifact-fs status --name ${shellQuote(ITERATE_CONFIG_REPO_NAME)} >/tmp/artifact-fs-iterate-config-status.log 2>&1; then`,
+    `  mkdir -p ${shellQuote(SANDBOX_ITERATE_CONFIG_PATH)}`,
     [
-      "if ! artifact-fs status --name",
+      "  timeout 60s artifact-fs",
+      "add-repo",
+      "--name",
       shellQuote(ITERATE_CONFIG_REPO_NAME),
-      ">/tmp/artifact-fs-iterate-config-status.log 2>&1; then",
-      `  if ! mountpoint -q ${shellQuote(SANDBOX_ITERATE_CONFIG_PATH)}; then rm -rf ${shellQuote(SANDBOX_ITERATE_CONFIG_PATH)}; fi`,
-      [
-        "  artifact-fs",
-        "add-repo",
-        "--name",
-        shellQuote(ITERATE_CONFIG_REPO_NAME),
-        "--remote",
-        shellQuote(repo.remote),
-        "--branch",
-        shellQuote(repo.defaultBranch),
-        "--mount-root",
-        shellQuote("/workspace"),
-      ].join(" "),
-      "fi",
-    ].join("\n"),
-    [
-      "if ! pgrep -f",
-      shellQuote("artifact-fs daemon --root /workspace"),
-      ">/dev/null; then",
-      "  nohup artifact-fs daemon --root /workspace --hydration-concurrency 4 >/tmp/artifact-fs-daemon.log 2>&1 &",
-      "fi",
-    ].join("\n"),
+      "--remote",
+      shellQuote(repo.remote),
+      "--branch",
+      shellQuote(repo.defaultBranch),
+      "--mount-root",
+      shellQuote("/workspace"),
+      ">/tmp/artifact-fs-add-repo.log 2>&1",
+    ].join(" "),
+    "fi",
+    `if ! pgrep -f ${shellQuote("artifact-fs daemon --root /workspace")} >/dev/null; then`,
+    "  nohup artifact-fs daemon --root /workspace --hydration-concurrency 4 >/tmp/artifact-fs-daemon.log 2>&1 &",
+    "fi",
     [
       "for _ in $(seq 1 120); do",
       `  if mountpoint -q ${shellQuote(SANDBOX_ITERATE_CONFIG_PATH)} && git -C ${shellQuote(
@@ -449,10 +442,13 @@ function artifactFsMountCommand(repo: RepoInfo) {
       "  sleep 0.25",
       "done",
       "cat /tmp/artifact-fs-iterate-config-status.log 2>/dev/null || true",
+      "cat /tmp/artifact-fs-add-repo.log 2>/dev/null || true",
       "tail -n 80 /tmp/artifact-fs-daemon.log 2>/dev/null || true",
       "exit 1",
     ].join("\n"),
   ].join("\n");
+
+  return `bash -lc ${shellQuote(script)}`;
 }
 
 function shellQuote(value: string) {
