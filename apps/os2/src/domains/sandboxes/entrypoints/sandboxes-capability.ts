@@ -237,14 +237,6 @@ export class SandboxesCapability extends WorkerEntrypoint<
     projectId?: string;
     sandbox: CloudflareSandbox;
   }) {
-    const status = await input.sandbox.exec(
-      `test -f ${shellQuote(`${SANDBOX_ITERATE_CONFIG_PATH}/.git/HEAD`)} && git -C ${shellQuote(
-        SANDBOX_ITERATE_CONFIG_PATH,
-      )} status --short`,
-      { timeout: 20_000 },
-    );
-    if (status.success) return;
-
     const repo = await this.iterateConfigRepo(input.projectId);
     const cloneCommand = [
       "rm -rf /tmp/iterate-config-clone /tmp/iterate-config-clone.log",
