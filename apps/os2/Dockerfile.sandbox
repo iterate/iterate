@@ -1,16 +1,3 @@
-FROM --platform=$BUILDPLATFORM docker.io/golang:1.25 AS artifact-fs-build
-
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
-ARG ARTIFACT_FS_COMMIT=92d0bd212177aff3fe791a46c623b721654aafc1
-
-RUN git clone https://github.com/cloudflare/artifact-fs.git /src/artifact-fs \
-  && cd /src/artifact-fs \
-  && git checkout "$ARTIFACT_FS_COMMIT" \
-  && CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" go build -o /artifact-fs ./cmd/artifact-fs
-
 FROM docker.io/cloudflare/sandbox:0.9.4
-
-COPY --from=artifact-fs-build /artifact-fs /usr/local/bin/artifact-fs
 
 EXPOSE 8080
