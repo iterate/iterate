@@ -122,7 +122,7 @@ export async function readProjectStreamUntil(input: {
   timeoutMs?: number;
 }) {
   const startedAt = Date.now();
-  const timeoutMs = input.timeoutMs ?? 60_000;
+  const timeoutMs = input.timeoutMs ?? 4_000;
   while (Date.now() - startedAt < timeoutMs) {
     const result = await input.client.project.streams.read({
       afterOffset: input.afterOffset,
@@ -139,7 +139,7 @@ export async function readProjectStreamUntil(input: {
     streamPath: input.streamPath,
   });
   throw new Error(
-    `Timed out waiting for project stream event. Saw: ${JSON.stringify(result.events)}`,
+    `Timed out waiting for project stream event matching ${input.predicate.toString()}. Saw: ${JSON.stringify(result.events, null, 2)}`,
   );
 }
 
