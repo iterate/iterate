@@ -67,7 +67,8 @@ type SandboxesCapabilityClient = Pick<
   | "wake"
 >;
 type SandboxLifecycleCatalogRecord = D1ObjectCatalogRecord<SandboxStructuredName>;
-const ITERATE_CONFIG_HYDRATION_PROCESS_ID = "iterate-config-hydration";
+const ARTIFACT_FS_ROOT = "/workspace/.artifact-fs";
+const ITERATE_CONFIG_REPO_NAME = "iterate-config";
 
 export class SandboxHandle extends RpcTarget {
   readonly #sandbox: DurableObjectStub<SandboxDurableObject>;
@@ -138,7 +139,7 @@ export class SandboxesCapability extends WorkerEntrypoint<
     await this.initializedLogicalSandbox(input.slug, input.projectId);
     const sandbox = this.runtimeSandbox(input.slug, input.projectId);
     await this.mountWorkspace({ projectId: input.projectId, sandbox, slug: input.slug });
-    await this.ensureIterateConfigClone({ projectId: input.projectId, sandbox });
+    await this.ensureIterateConfigMount({ projectId: input.projectId, sandbox });
     return sandbox;
   }
 
@@ -233,45 +234,20 @@ export class SandboxesCapability extends WorkerEntrypoint<
     }
   }
 
-  private async ensureIterateConfigClone(input: {
+  private async ensureIterateConfigMount(input: {
     projectId?: string;
     sandbox: CloudflareSandbox;
   }) {
     const repo = await this.iterateConfigRepo(input.projectId);
-    const cloneCommand = [
-      "rm -rf /tmp/iterate-config-clone /tmp/iterate-config-clone.log",
-      "tmp_dir=$(mktemp -d)",
-      "trap 'rm -rf \"$tmp_dir\"' EXIT",
-      [
-        "GIT_TERMINAL_PROMPT=0",
-        "timeout",
-        "120s",
-        "git",
-        "-c",
-        shellQuote("credential.helper="),
-        "-c",
-        shellQuote(`http.extraHeader=${repoAuthorizationHeader(repo)}`),
-        "clone",
-        "--depth",
-        "1",
-        "--branch",
-        shellQuote(repo.defaultBranch),
-        shellQuote(repo.remote),
-        `"${"${tmp_dir}"}/iterate-config"`,
-      ].join(" "),
-      `rm -rf ${shellQuote(SANDBOX_ITERATE_CONFIG_PATH)}`,
-      `mkdir -p ${shellQuote("/workspace")}`,
-      `cp -a "${"${tmp_dir}"}/iterate-config" ${shellQuote(SANDBOX_ITERATE_CONFIG_PATH)}`,
-    ].join(" && ");
+    const result = await input.sandbox.exec(artifactFsMountCommand(repo), {
+      cwd: "/",
+      timeout: 120_000,
+    });
 
-    try {
-      await input.sandbox.startProcess(cloneCommand, {
-        autoCleanup: false,
-        cwd: "/",
-        processId: ITERATE_CONFIG_HYDRATION_PROCESS_ID,
-      });
-    } catch (error) {
-      if (!isAlreadyStartedProcessError(error)) throw error;
+    if (!result.success) {
+      throw new Error(
+        `Could not mount iterate-config with ArtifactFS: ${result.stderr || result.stdout}`,
+      );
     }
   }
 
@@ -411,13 +387,11 @@ function readProjectId(value: unknown) {
 function isAlreadyMountedError(error: unknown) {
   if (!(error instanceof Error)) return false;
   const message = error.message.toLowerCase();
-  return message.includes("already mounted") || message.includes("mount path already in use");
-}
-
-function isAlreadyStartedProcessError(error: unknown) {
-  if (!(error instanceof Error)) return false;
-  const message = error.message.toLowerCase();
-  return message.includes("already exists") || message.includes("already running");
+  return (
+    message.includes("already mounted") ||
+    message.includes("already in use by bucket") ||
+    message.includes("mount path already in use")
+  );
 }
 
 function repoBearerToken(repo: RepoInfo) {
@@ -426,6 +400,59 @@ function repoBearerToken(repo: RepoInfo) {
 
 function repoAuthorizationHeader(repo: RepoInfo) {
   return `Authorization: Bearer ${repoBearerToken(repo)}`;
+}
+
+function artifactFsMountCommand(repo: RepoInfo) {
+  return [
+    "set -eu",
+    `export ARTIFACT_FS_ROOT=${shellQuote(ARTIFACT_FS_ROOT)}`,
+    'mkdir -p "$ARTIFACT_FS_ROOT" /workspace',
+    [
+      "git",
+      "config",
+      "--global",
+      "--replace-all",
+      shellQuote(`http.${repo.remote}.extraHeader`),
+      shellQuote(repoAuthorizationHeader(repo)),
+    ].join(" "),
+    [
+      "if ! artifact-fs status --name",
+      shellQuote(ITERATE_CONFIG_REPO_NAME),
+      ">/tmp/artifact-fs-iterate-config-status.log 2>&1; then",
+      `  if ! mountpoint -q ${shellQuote(SANDBOX_ITERATE_CONFIG_PATH)}; then rm -rf ${shellQuote(SANDBOX_ITERATE_CONFIG_PATH)}; fi`,
+      [
+        "  artifact-fs",
+        "add-repo",
+        "--name",
+        shellQuote(ITERATE_CONFIG_REPO_NAME),
+        "--remote",
+        shellQuote(repo.remote),
+        "--branch",
+        shellQuote(repo.defaultBranch),
+        "--mount-root",
+        shellQuote("/workspace"),
+      ].join(" "),
+      "fi",
+    ].join("\n"),
+    [
+      "if ! pgrep -f",
+      shellQuote("artifact-fs daemon --root /workspace"),
+      ">/dev/null; then",
+      "  nohup artifact-fs daemon --root /workspace --hydration-concurrency 4 >/tmp/artifact-fs-daemon.log 2>&1 &",
+      "fi",
+    ].join("\n"),
+    [
+      "for _ in $(seq 1 120); do",
+      `  if mountpoint -q ${shellQuote(SANDBOX_ITERATE_CONFIG_PATH)} && git -C ${shellQuote(
+        SANDBOX_ITERATE_CONFIG_PATH,
+      )} rev-parse --verify HEAD >/dev/null 2>&1; then exit 0; fi`,
+      "  sleep 0.25",
+      "done",
+      "cat /tmp/artifact-fs-iterate-config-status.log 2>/dev/null || true",
+      "tail -n 80 /tmp/artifact-fs-daemon.log 2>/dev/null || true",
+      "exit 1",
+    ].join("\n"),
+  ].join("\n");
 }
 
 function shellQuote(value: string) {
