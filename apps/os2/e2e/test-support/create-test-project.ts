@@ -1,4 +1,3 @@
-import type { GenericEvent } from "@iterate-com/shared/streams/types";
 import type { ReceiveFunctionCallResultInput } from "../../src/domains/codemode/durable-objects/codemode-session.ts";
 import {
   createAdminOs2Client,
