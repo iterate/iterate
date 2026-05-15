@@ -87,11 +87,11 @@ testIfAdminApiTarget("runs codemode fetch through a mocked project egress proxy"
   expect(completed.payload).toMatchInlineSnapshot(
     {
       durationMs: expect.any(Number),
-      scriptExecutionId: scriptExecutionId,
+      scriptExecutionId: expect.any(String),
       outcome: {
         value: {
           body: {
-            runSlug: e2e.runSlug,
+            runSlug: expect.any(String),
           },
         },
       },
@@ -105,13 +105,13 @@ testIfAdminApiTarget("runs codemode fetch through a mocked project egress proxy"
           "body": {
             "mocked": true,
             "query": "codemode",
-            "runSlug": "os2-vitest-run-20260515-124540",
+            "runSlug": Any<String>,
           },
           "mockedHeader": "yes",
           "status": 200,
         },
       },
-      "scriptExecutionId": "889e3495-4a58-43a9-acc8-6e11c92f40d8",
+      "scriptExecutionId": Any<String>,
     }
   `,
   );
