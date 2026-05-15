@@ -131,18 +131,20 @@ function NewAgentPage() {
   const createAgent = useMutation({
     mutationFn: async () => {
       if (preview.error) throw new Error(preview.error);
-      return await orpcClient.project.streams.appendBatch({
+      const agentPath = preview.agentPath;
+      await orpcClient.project.streams.appendBatch({
         events: preview.events,
         projectSlugOrId: project.id,
-        streamPath: preview.agentPath,
+        streamPath: agentPath,
       });
+      return { agentPath };
     },
-    onSuccess: () => {
+    onSuccess: ({ agentPath }) => {
       void navigate({
         to: "/orgs/$organizationSlug/projects/$projectSlug/agents/streams/$",
         params: {
           ...params,
-          _splat: streamPathToSplat(preview.agentPath),
+          _splat: streamPathToSplat(agentPath),
         },
       });
     },

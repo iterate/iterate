@@ -81,11 +81,11 @@ function StreamEventTypeLabel({ type, className }: { type: string; className?: s
 
 function getIterateEventTypeLabel(type: string) {
   if (type.startsWith(ITERATE_EVENT_TYPE_PREFIX)) {
-    return type.slice(ITERATE_EVENT_TYPE_PREFIX.length);
+    return `/${type.slice(ITERATE_EVENT_TYPE_PREFIX.length)}`;
   }
 
   if (type.startsWith(ITERATE_EVENT_TYPE_URL_PREFIX)) {
-    return type.slice(ITERATE_EVENT_TYPE_URL_PREFIX.length);
+    return `/${type.slice(ITERATE_EVENT_TYPE_URL_PREFIX.length)}`;
   }
 
   return null;

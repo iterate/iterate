@@ -2390,6 +2390,9 @@ importers:
       '@iterate-com/shared':
         specifier: workspace:*
         version: link:../shared
+      '@mmkal/jsonata':
+        specifier: ^2.2.1
+        version: 2.2.1
       '@tailwindcss/postcss':
         specifier: ^4.1.17
         version: 4.2.1

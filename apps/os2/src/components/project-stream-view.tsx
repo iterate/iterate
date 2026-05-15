@@ -21,7 +21,6 @@ import {
 import {
   EventsStreamInputSlot,
   EventsStreamView,
-  type EventsStreamElementType,
   type EventsStreamRendererMode,
 } from "@iterate-com/ui/components/events/stream-feed";
 import { EventsStreamLayoutMessageInput } from "@iterate-com/ui/components/events/stream-layout";
@@ -114,7 +113,7 @@ export function ProjectStreamView({
   const [selectedRawPresetId, setSelectedRawPresetId] = useState(DEFAULT_RAW_EVENT_PRESET_ID);
   const [events, setEvents] = useState<Event[]>([]);
   const [errorLabel, setErrorLabel] = useState<string | undefined>();
-  const [hiddenElementTypes, setHiddenElementTypes] = useState<EventsStreamElementType[]>([]);
+  const [feedFilterExpression, setFeedFilterExpression] = useState("");
   const [rendererMode, setRendererMode] = useState<EventsStreamRendererMode>("raw-pretty");
   const [isPending, setIsPending] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -318,8 +317,8 @@ export function ProjectStreamView({
         emptyLabel={emptyLabel}
         isPending={isPending}
         errorLabel={errorLabel}
-        hiddenElementTypes={hiddenElementTypes}
-        onHiddenElementTypesChange={setHiddenElementTypes}
+        feedFilterExpression={feedFilterExpression}
+        onFeedFilterExpressionChange={setFeedFilterExpression}
         rendererMode={rendererMode}
         onRendererModeChange={setRendererMode}
       />

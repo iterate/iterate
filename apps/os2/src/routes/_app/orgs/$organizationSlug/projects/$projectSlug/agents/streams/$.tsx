@@ -14,12 +14,6 @@ export const Route = createFileRoute(
       ...orpc.projects.findBySlug.queryOptions({ input: { slug: params.projectSlug } }),
       staleTime: 30_000,
     });
-    await context.queryClient.ensureQueryData({
-      ...orpc.project.agents.runtimeState.queryOptions({
-        input: { agentPath, projectSlugOrId: project.id },
-      }),
-      staleTime: 5_000,
-    });
 
     return {
       breadcrumb: agentPath,

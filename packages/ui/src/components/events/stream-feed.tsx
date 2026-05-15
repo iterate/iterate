@@ -13,6 +13,7 @@ import {
   TerminalSquareIcon,
   XCircleIcon,
 } from "lucide-react";
+import jsonata from "@mmkal/jsonata/sync";
 
 import {
   Conversation,
@@ -23,6 +24,7 @@ import {
 import { Message, MessageContent } from "@iterate-com/ui/components/ai-elements/message";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
+import { Checkbox } from "@iterate-com/ui/components/checkbox";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -34,6 +36,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@iterate-com/ui/components/dropdown-menu";
+import {
+  Popover,
+  PopoverContent,
+  PopoverDescription,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+} from "@iterate-com/ui/components/popover";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Spinner } from "@iterate-com/ui/components/spinner";
@@ -97,6 +107,8 @@ export function EventsStreamView({
   renderStreamPathLink,
   hiddenElementTypes = [],
   onHiddenElementTypesChange,
+  feedFilterExpression,
+  onFeedFilterExpressionChange,
   rendererMode,
   onRendererModeChange,
   emptyLabel,
@@ -112,6 +124,8 @@ export function EventsStreamView({
   renderStreamPathLink?: EventsStreamPathLinkRenderer;
   hiddenElementTypes?: readonly EventsStreamElementType[];
   onHiddenElementTypesChange?: (types: EventsStreamElementType[]) => void;
+  feedFilterExpression?: string;
+  onFeedFilterExpressionChange?: (expression: string) => void;
   rendererMode?: EventsStreamRendererMode;
   onRendererModeChange?: (mode: EventsStreamRendererMode) => void;
   emptyLabel?: string;
@@ -120,10 +134,26 @@ export function EventsStreamView({
   className?: string;
 }) {
   const feedElementTypes = getElementTypes(viewState.slots.feed);
-  const visibleFeedElements = filterElementsByElementType({
-    elements: viewState.slots.feed,
-    hiddenElementTypes,
-  });
+  const eventTypes = getEventTypes(events);
+  const jsonataFilterResult = useMemo(
+    () =>
+      filterElementsByJsonataExpression({
+        elements: viewState.slots.feed,
+        expression: feedFilterExpression ?? "",
+      }),
+    [feedFilterExpression, viewState.slots.feed],
+  );
+  const visibleFeedElements =
+    onFeedFilterExpressionChange == null
+      ? filterElementsByElementType({
+          elements: viewState.slots.feed,
+          hiddenElementTypes,
+        })
+      : jsonataFilterResult.elements;
+  const hasActiveFeedFilter =
+    onFeedFilterExpressionChange != null &&
+    (feedFilterExpression ?? "").trim() !== "" &&
+    jsonataFilterResult.errorLabel == null;
 
   return (
     <EventsStreamLayout className={className}>
@@ -132,8 +162,12 @@ export function EventsStreamView({
           <EventsStreamHeader
             elements={viewState.slots.header}
             elementTypes={feedElementTypes}
+            eventTypes={eventTypes}
             hiddenElementTypes={hiddenElementTypes}
             onHiddenElementTypesChange={onHiddenElementTypesChange}
+            feedFilterExpression={feedFilterExpression}
+            feedFilterErrorLabel={jsonataFilterResult.errorLabel}
+            onFeedFilterExpressionChange={onFeedFilterExpressionChange}
             rendererMode={rendererMode}
             onRendererModeChange={onRendererModeChange}
           />
@@ -142,7 +176,7 @@ export function EventsStreamView({
       <EventsStreamLayoutMain>
         <EventsStreamFeed
           elements={visibleFeedElements}
-          emptyLabel={emptyLabel}
+          emptyLabel={hasActiveFeedFilter ? "No matching feed items." : emptyLabel}
           isPending={isPending}
           errorLabel={errorLabel}
           onOpenEventOffsetChange={onOpenEventOffsetChange}
@@ -165,15 +199,23 @@ export function EventsStreamView({
 export function EventsStreamHeader({
   elements,
   elementTypes = [],
+  eventTypes = [],
   hiddenElementTypes = [],
   onHiddenElementTypesChange,
+  feedFilterExpression,
+  feedFilterErrorLabel,
+  onFeedFilterExpressionChange,
   rendererMode,
   onRendererModeChange,
 }: {
   elements: readonly EventsStreamBuiltInElement[];
   elementTypes?: readonly EventsStreamElementType[];
+  eventTypes?: readonly string[];
   hiddenElementTypes?: readonly EventsStreamElementType[];
   onHiddenElementTypesChange?: (types: EventsStreamElementType[]) => void;
+  feedFilterExpression?: string;
+  feedFilterErrorLabel?: string;
+  onFeedFilterExpressionChange?: (expression: string) => void;
   rendererMode?: EventsStreamRendererMode;
   onRendererModeChange?: (mode: EventsStreamRendererMode) => void;
 }) {
@@ -193,11 +235,20 @@ export function EventsStreamHeader({
           rendererMode={rendererMode}
           onRendererModeChange={onRendererModeChange}
         />
-        <EventsStreamElementTypeFilter
-          elementTypes={elementTypes}
-          hiddenElementTypes={hiddenElementTypes}
-          onHiddenElementTypesChange={onHiddenElementTypesChange}
-        />
+        {onFeedFilterExpressionChange == null ? (
+          <EventsStreamElementTypeFilter
+            elementTypes={elementTypes}
+            hiddenElementTypes={hiddenElementTypes}
+            onHiddenElementTypesChange={onHiddenElementTypesChange}
+          />
+        ) : (
+          <EventsStreamJsonataFilter
+            eventTypes={eventTypes}
+            expression={feedFilterExpression ?? ""}
+            errorLabel={feedFilterErrorLabel}
+            onExpressionChange={onFeedFilterExpressionChange}
+          />
+        )}
       </div>
     </div>
   );
@@ -295,6 +346,120 @@ function EventsStreamElementTypeFilter({
         </DropdownMenuGroup>
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+function EventsStreamJsonataFilter({
+  eventTypes,
+  expression,
+  errorLabel,
+  onExpressionChange,
+}: {
+  eventTypes: readonly string[];
+  expression: string;
+  errorLabel?: string;
+  onExpressionChange: (expression: string) => void;
+}) {
+  if (eventTypes.length === 0 && expression.trim() === "") {
+    return null;
+  }
+
+  const selectedEventTypes = new Set(
+    eventTypes.filter((eventType) => expressionIncludesEventTypeClause(expression, eventType)),
+  );
+  const active = expression.trim() !== "";
+
+  return (
+    <Popover>
+      <PopoverTrigger
+        render={
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className={cn(
+              "h-7 shrink-0 gap-1.5 px-2 text-xs font-normal",
+              errorLabel != null && "border-destructive/40 text-destructive",
+            )}
+          />
+        }
+      >
+        {errorLabel == null ? null : <AlertTriangleIcon className="size-3.5" />}
+        <span className="truncate">{active ? "Feed filtered" : "Filter feed items"}</span>
+        <ChevronDownIcon className="size-3.5 text-muted-foreground" />
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-[min(34rem,calc(100vw-1rem))] gap-3 p-3">
+        <PopoverHeader className="flex-row items-center justify-between gap-3">
+          <div className="min-w-0">
+            <PopoverTitle>Filter feed items</PopoverTitle>
+            <PopoverDescription>JSONata expression</PopoverDescription>
+          </div>
+          <a
+            href="https://docs.jsonata.org/overview"
+            target="_blank"
+            rel="noreferrer"
+            className="shrink-0 text-xs text-primary underline-offset-4 hover:underline"
+          >
+            JSONata docs
+          </a>
+        </PopoverHeader>
+
+        <SourceCodeBlock
+          code={expression}
+          className="h-40 text-xs"
+          editable
+          language="text"
+          onChange={onExpressionChange}
+          showCopyButton={false}
+        />
+
+        {errorLabel == null ? null : (
+          <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-2.5 py-2 text-xs text-destructive">
+            <AlertTriangleIcon className="mt-0.5 size-3.5 shrink-0" />
+            <span className="min-w-0 break-words">{errorLabel}</span>
+          </div>
+        )}
+
+        <div className="flex items-center justify-between gap-2 border-t pt-2">
+          <span className="text-xs font-medium text-muted-foreground">Event types</span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-xs"
+            onClick={() => onExpressionChange("")}
+          >
+            Clear
+          </Button>
+        </div>
+
+        <div className="max-h-56 space-y-1 overflow-y-auto pr-1">
+          {eventTypes.length === 0 ? (
+            <p className="px-1 text-xs text-muted-foreground">No event types yet.</p>
+          ) : (
+            eventTypes.map((eventType) => (
+              <label
+                key={eventType}
+                className="flex min-w-0 cursor-pointer items-start gap-2 rounded-md px-1 py-1 text-xs hover:bg-accent"
+              >
+                <Checkbox
+                  className="mt-0.5"
+                  checked={selectedEventTypes.has(eventType)}
+                  onCheckedChange={(checked) => {
+                    onExpressionChange(
+                      checked
+                        ? appendEventTypeFilterClause(expression, eventType)
+                        : removeEventTypeFilterClause(expression, eventType),
+                    );
+                  }}
+                />
+                <span className="min-w-0 break-all font-mono leading-5">{eventType}</span>
+              </label>
+            ))
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -969,6 +1134,10 @@ function getElementTypes(
   return [...new Set(elements.map((element) => element.type))].sort();
 }
 
+function getEventTypes(events: readonly Event[]): string[] {
+  return [...new Set(events.map((event) => event.type))].sort();
+}
+
 function filterElementsByElementType({
   elements,
   hiddenElementTypes,
@@ -982,4 +1151,100 @@ function filterElementsByElementType({
 
   const hiddenElementTypeSet = new Set(hiddenElementTypes);
   return elements.filter((element) => !hiddenElementTypeSet.has(element.type));
+}
+
+function filterElementsByJsonataExpression({
+  elements,
+  expression,
+}: {
+  elements: readonly EventsStreamBuiltInElement[];
+  expression: string;
+}): { elements: EventsStreamBuiltInElement[]; errorLabel?: string } {
+  const trimmedExpression = expression.trim();
+  if (trimmedExpression === "") {
+    return { elements: [...elements] };
+  }
+
+  try {
+    const compiled = jsonata(trimmedExpression);
+    const filteredElements: EventsStreamBuiltInElement[] = [];
+
+    for (const element of elements) {
+      if (element.type === "raw-json-dump") {
+        const filteredEvents = element.props.events.filter((event) =>
+          Boolean(compiled.evaluate(event)),
+        );
+        if (filteredEvents.length > 0) {
+          filteredElements.push({
+            ...element,
+            props: { ...element.props, events: filteredEvents },
+          });
+        }
+        continue;
+      }
+
+      const rawEvents = getElementRawEvents(element);
+      if (rawEvents.length > 0 && rawEvents.some((event) => Boolean(compiled.evaluate(event)))) {
+        filteredElements.push(element);
+      }
+    }
+
+    return { elements: filteredElements };
+  } catch (error) {
+    return {
+      elements: [...elements],
+      errorLabel: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function getElementRawEvents(element: EventsStreamBuiltInElement): readonly Event[] {
+  if (element.type === "grouped-raw-event") {
+    return element.props.events.map((event) => event.raw);
+  }
+
+  if ("raw" in element.props) {
+    return [element.props.raw];
+  }
+
+  return [];
+}
+
+function appendEventTypeFilterClause(expression: string, eventType: string) {
+  if (expressionIncludesEventTypeClause(expression, eventType)) {
+    return expression;
+  }
+
+  const trimmedExpression = expression.trim();
+  const clause = eventTypeFilterClause(eventType);
+  return trimmedExpression === "" ? clause : `${trimmedExpression}\nor ${clause}`;
+}
+
+function removeEventTypeFilterClause(expression: string, eventType: string) {
+  const clause = eventTypeFilterClause(eventType);
+  const lines = expression.split(/\r?\n/).filter((line) => {
+    const trimmedLine = line.trim();
+    return trimmedLine !== clause && trimmedLine !== `or ${clause}`;
+  });
+
+  if (lines[0]?.trim().startsWith("or ")) {
+    lines[0] = lines[0].replace(/^(\s*)or\s+/, "$1");
+  }
+
+  return lines.join("\n").trim();
+}
+
+function expressionIncludesEventTypeClause(expression: string, eventType: string) {
+  const clause = eventTypeFilterClause(eventType);
+  return expression
+    .split(/\r?\n/)
+    .some((line) => line.trim() === clause || line.trim() === `or ${clause}`);
+}
+
+function eventTypeFilterClause(eventType: string) {
+  if (!eventType.includes("'") && !eventType.includes("\\")) {
+    return `type = '${eventType}'`;
+  }
+
+  return `type = ${JSON.stringify(eventType)}`;
 }
