@@ -1,7 +1,7 @@
 {
   "name": "os2-project-ingress-vitest",
   "main": "project-ingress-test-entry.ts",
-  "compatibility_date": "2026-04-27",
+  "compatibility_date": "2026-05-15",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
     "APP_CONFIG": "{\"adminApiSecret\":\"project-ingress-admin-secret\",\"clerk\":{\"publishableKey\":\"pk_test_ZHVtbXkuY2xlcmsuYWNjb3VudHMuZGV2JA\",\"secretKey\":\"sk_test_project_ingress\",\"jwtKey\":\"project-ingress-jwt-key\"},\"openAiApiKey\":\"openai-test-key\",\"projectHostnameBases\":[\"iterate.localhost\"],\"typeIdPrefix\":\"os\"}",

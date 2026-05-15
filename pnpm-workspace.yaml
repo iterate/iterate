@@ -33,11 +33,11 @@ catalogs:
     "@cloudflare/codemode": "https://pkg.pr.new/iterate/agents/@cloudflare/codemode@7c0735e"
     "@cloudflare/unenv-preset": ^2.16.0
     "@cloudflare/vite-plugin": 1.33.2
-    "@cloudflare/vitest-pool-workers": ^0.14.9
+    "@cloudflare/vitest-pool-workers": ^0.16.5
     "@cloudflare/worker-bundler": ^0.1.2
-    "@cloudflare/workers-types": ^4.20260426.1
-    miniflare: 4.20260424.0
-    workerd: 1.20260426.1
+    "@cloudflare/workers-types": ^4.20260515.1
+    miniflare: 4.20260511.0
+    workerd: 1.20260515.1
     wrangler: 4.85.0
 
 minimumReleaseAge: 1440

@@ -90,6 +90,7 @@ const debugAppendChainSubscriber = ctx.app.local
   : undefined;
 
 const { worker, afterFinalize } = await IterateApp(ctx, {
+  compatibilityDate: "2026-05-15",
   bindings: {
     CLERK_JWT_KEY: ctx.runtimeConfig.clerk.jwtKey.exposeSecret(),
     CLERK_PUBLISHABLE_KEY: ctx.runtimeConfig.clerk.publishableKey,

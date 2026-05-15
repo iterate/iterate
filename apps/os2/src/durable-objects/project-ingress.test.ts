@@ -82,7 +82,7 @@ describe("Project ingress routing", () => {
       expect.objectContaining({
         type: "events.iterate.com/project/config-worker-built",
         payload: expect.objectContaining({
-          mainModule: "worker.ts",
+          mainModule: "bundle.js",
           projectId: "proj__local__test",
           repoSlug: "iterate-config",
         }),
@@ -162,6 +162,18 @@ describe("Project ingress routing", () => {
     const appTwoUnderscoreResponse = await SELF.fetch("https://app2__demo.iterate.localhost/");
     expect(appTwoUnderscoreResponse.ok).toBe(true);
     await expect(appTwoUnderscoreResponse.text()).resolves.toBe("hello from app two");
+
+    const firstCounterResponse = await waitForProjectIngressJson({
+      expectedBody: { value: 1 },
+      url: "https://app3.demo.iterate.localhost/api/counter",
+    });
+    expect(firstCounterResponse.body).toMatchObject({ value: 1 });
+
+    const secondCounterResponse = await SELF.fetch(
+      "https://app3.demo.iterate.localhost/api/counter",
+    );
+    expect(secondCounterResponse.ok).toBe(true);
+    await expect(secondCounterResponse.json()).resolves.toMatchObject({ value: 2 });
 
     await env.DB.prepare(`UPDATE projects SET custom_hostname = ? WHERE id = ?`)
       .bind("shiterate.localhost", "proj__local__test")
@@ -412,4 +424,35 @@ async function waitForProjectIngressResponse(input: { expectedText: string; url:
   }
 
   throw new Error(`Timed out waiting for project ingress response: ${JSON.stringify(latest)}`);
+}
+
+async function waitForProjectIngressJson(input: {
+  expectedBody: Record<string, unknown>;
+  url: string;
+}) {
+  const deadline = Date.now() + 5_000;
+  let latest: unknown;
+
+  while (Date.now() < deadline) {
+    const response = await SELF.fetch(input.url);
+    const text = await response.text();
+    latest = {
+      status: response.status,
+      text,
+      runtime: response.headers.get("x-project-ingress-runtime"),
+    };
+    try {
+      const body = JSON.parse(text) as Record<string, unknown>;
+      if (response.ok) {
+        expect(body).toMatchObject(input.expectedBody);
+        return {
+          body,
+          headers: response.headers,
+        };
+      }
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+
+  throw new Error(`Timed out waiting for project ingress JSON: ${JSON.stringify(latest)}`);
 }

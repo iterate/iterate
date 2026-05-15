@@ -1,12 +1,13 @@
 import app1 from "./apps/app1/worker.ts";
 import app2 from "./apps/app2/worker.ts";
+import app3 from "./apps/app3/worker.ts";
 
-const apps = [app1, app2];
+const apps = [app1, app2, app3];
 
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
     for (const app of apps) {
-      const response = await app.fetch(request);
+      const response = await app.fetch(request, env);
       if (response) return response;
     }
 

@@ -17,13 +17,14 @@ const ITERATE_CONFIG_PACKAGE_JSON = '{\n  "type": "module"\n}\n';
 
 export const ITERATE_CONFIG_WORKER_SOURCE = `import app1 from "./apps/app1/worker.ts";
 import app2 from "./apps/app2/worker.ts";
+import app3 from "./apps/app3/worker.ts";
 
-const apps = [app1, app2];
+const apps = [app1, app2, app3];
 
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
     for (const app of apps) {
-      const response = await app.fetch(request);
+      const response = await app.fetch(request, env);
       if (response) return response;
     }
 
@@ -50,6 +51,33 @@ const ITERATE_CONFIG_APP_TWO_WORKER_SOURCE = `export default {
     return new Response("hello from app two");
   },
 };
+`;
+
+const ITERATE_CONFIG_APP_THREE_WORKER_SOURCE = `import { DurableObject } from "cloudflare:workers";
+
+export default {
+  async fetch(request, env) {
+    if (request.headers.get("x-iterate-app-slug") !== "app3") return;
+    const counter = await env.DURABLE_OBJECTS.get({
+      className: "CounterServer",
+      name: "main",
+    });
+    return await counter.fetch(request);
+  },
+};
+
+export class CounterServer extends DurableObject {
+  fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname !== "/api/counter") {
+      return new Response("Counter route not found", { status: 404 });
+    }
+
+    const value = (this.ctx.storage.kv.get("value") || 0) + 1;
+    this.ctx.storage.kv.put("value", value);
+    return Response.json({ value });
+  }
+}
 `;
 
 export type SeedIterateConfigBaseResult = {
@@ -125,6 +153,7 @@ export async function seedIterateConfigBaseRepo(input: {
   );
   await filesystem.mkdir(`${ITERATE_CONFIG_REPO_DIR}/apps/app1`, { recursive: true });
   await filesystem.mkdir(`${ITERATE_CONFIG_REPO_DIR}/apps/app2`, { recursive: true });
+  await filesystem.mkdir(`${ITERATE_CONFIG_REPO_DIR}/apps/app3`, { recursive: true });
   await filesystem.writeFile(`${ITERATE_CONFIG_REPO_DIR}/worker.ts`, ITERATE_CONFIG_WORKER_SOURCE);
   await filesystem.writeFile(
     `${ITERATE_CONFIG_REPO_DIR}/apps/app1/worker.ts`,
@@ -134,11 +163,16 @@ export async function seedIterateConfigBaseRepo(input: {
     `${ITERATE_CONFIG_REPO_DIR}/apps/app2/worker.ts`,
     ITERATE_CONFIG_APP_TWO_WORKER_SOURCE,
   );
+  await filesystem.writeFile(
+    `${ITERATE_CONFIG_REPO_DIR}/apps/app3/worker.ts`,
+    ITERATE_CONFIG_APP_THREE_WORKER_SOURCE,
+  );
   await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "iterate.config.jsonc" });
   await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "package.json" });
   await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "worker.ts" });
   await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "apps/app1/worker.ts" });
   await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "apps/app2/worker.ts" });
+  await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "apps/app3/worker.ts" });
 
   let committed = true;
   try {

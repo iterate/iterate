@@ -28,13 +28,14 @@ const PROJECT_CONFIG_DIR = "/iterate-config";
 const MOCK_ARTIFACT_REMOTE_BASE = "https://artifacts.example.test/";
 const TEST_PROJECT_WORKER_SOURCE = `import app1 from "./apps/app1/worker.ts";
 import app2 from "./apps/app2/worker.ts";
+import app3 from "./apps/app3/worker.ts";
 
-const apps = [app1, app2];
+const apps = [app1, app2, app3];
 
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
     for (const app of apps) {
-      const response = await app.fetch(request);
+      const response = await app.fetch(request, env);
       if (response) return response;
     }
 
@@ -55,6 +56,85 @@ const TEST_APP_TWO_WORKER_SOURCE = `export default {
     return new Response("hello from app two");
   },
 };
+`;
+const TEST_APP_THREE_WORKER_SOURCE = `import { DurableObject } from "cloudflare:workers";
+
+export default {
+  async fetch(request, env) {
+    if (request.headers.get("x-iterate-app-slug") !== "app3") return;
+    const counter = await env.DURABLE_OBJECTS.get({
+      className: "CounterServer",
+      name: "main",
+    });
+    return await counter.fetch(request);
+  },
+};
+
+export class CounterServer extends DurableObject {
+  fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname !== "/api/counter") {
+      return new Response("Counter route not found", { status: 404 });
+    }
+
+    const value = (this.ctx.storage.kv.get("value") || 0) + 1;
+    this.ctx.storage.kv.put("value", value);
+    return Response.json({ value });
+  }
+}
+`;
+const TEST_BUNDLED_PROJECT_WORKER_SOURCE = `import { DurableObject } from "cloudflare:workers";
+
+const app1 = {
+  async fetch(request) {
+    if (request.headers.get("x-iterate-app-slug") !== "app1") return;
+    return new Response("hello from app one");
+  },
+};
+
+const app2 = {
+  async fetch(request) {
+    if (request.headers.get("x-iterate-app-slug") !== "app2") return;
+    return new Response("hello from app two");
+  },
+};
+
+const app3 = {
+  async fetch(request, env) {
+    if (request.headers.get("x-iterate-app-slug") !== "app3") return;
+    const counter = await env.DURABLE_OBJECTS.get({
+      className: "CounterServer",
+      name: "main",
+    });
+    return await counter.fetch(request);
+  },
+};
+
+const apps = [app1, app2, app3];
+
+export default {
+  async fetch(request, env) {
+    for (const app of apps) {
+      const response = await app.fetch(request, env);
+      if (response) return response;
+    }
+
+    return new Response("Bundled project worker");
+  },
+};
+
+export class CounterServer extends DurableObject {
+  fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname !== "/api/counter") {
+      return new Response("Counter route not found", { status: 404 });
+    }
+
+    const value = (this.ctx.storage.kv.get("value") || 0) + 1;
+    this.ctx.storage.kv.put("value", value);
+    return Response.json({ value });
+  }
+}
 `;
 
 type TestProjectConfigGit = {
@@ -97,12 +177,14 @@ export class ProjectDurableObject extends RealProjectDurableObject {
     await writeFile(`${PROJECT_CONFIG_DIR}/worker.ts`, TEST_PROJECT_WORKER_SOURCE);
     await writeFile(`${PROJECT_CONFIG_DIR}/apps/app1/worker.ts`, TEST_APP_ONE_WORKER_SOURCE);
     await writeFile(`${PROJECT_CONFIG_DIR}/apps/app2/worker.ts`, TEST_APP_TWO_WORKER_SOURCE);
+    await writeFile(`${PROJECT_CONFIG_DIR}/apps/app3/worker.ts`, TEST_APP_THREE_WORKER_SOURCE);
     await input.git.init({ dir: PROJECT_CONFIG_DIR, defaultBranch: input.repo.defaultBranch });
     await input.git.add({ dir: PROJECT_CONFIG_DIR, filepath: "iterate.config.jsonc" });
     await input.git.add({ dir: PROJECT_CONFIG_DIR, filepath: "package.json" });
     await input.git.add({ dir: PROJECT_CONFIG_DIR, filepath: "worker.ts" });
     await input.git.add({ dir: PROJECT_CONFIG_DIR, filepath: "apps/app1/worker.ts" });
     await input.git.add({ dir: PROJECT_CONFIG_DIR, filepath: "apps/app2/worker.ts" });
+    await input.git.add({ dir: PROJECT_CONFIG_DIR, filepath: "apps/app3/worker.ts" });
     await input.git.commit({
       dir: PROJECT_CONFIG_DIR,
       message: "Seed test iterate config worker",
@@ -123,22 +205,17 @@ export class ProjectDurableObject extends RealProjectDurableObject {
     if (typeof files["apps/app2/worker.ts"] !== "string") {
       throw new Error("Test project worker bundler path requires apps/app2/worker.ts.");
     }
+    if (typeof files["apps/app3/worker.ts"] !== "string") {
+      throw new Error("Test project worker bundler path requires apps/app3/worker.ts.");
+    }
 
     return {
-      compatibilityDate: "2026-04-27",
+      compatibilityDate: "2026-05-15",
       compatibilityFlags: ["nodejs_compat"],
       globalOutbound: null,
-      mainModule: "worker.ts",
+      mainModule: "bundle.js",
       modules: {
-        "worker.ts": {
-          js: TEST_PROJECT_WORKER_SOURCE,
-        },
-        "apps/app1/worker.ts": {
-          js: TEST_APP_ONE_WORKER_SOURCE,
-        },
-        "apps/app2/worker.ts": {
-          js: TEST_APP_TWO_WORKER_SOURCE,
-        },
+        "bundle.js": TEST_BUNDLED_PROJECT_WORKER_SOURCE,
       },
     };
   }
@@ -157,6 +234,7 @@ export {
 export { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
 export { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
 export { PROJECT_LIFECYCLE_STREAM_PATH } from "~/domains/projects/stream-processors/project-lifecycle.ts";
+export { ProjectDynamicDurableObjectsBinding } from "~/domains/projects/entrypoints/project-dynamic-durable-objects-binding.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
 export { ProjectMcpServerEntrypoint } from "~/domains/inbound-mcp-server/entrypoints/project-mcp-server-entrypoint.ts";
 

@@ -124,6 +124,34 @@ type ProjectIngressRouteRow = {
   updated_at_ms: number;
 };
 
+type ProjectDynamicWorkerFacetRow = {
+  class_name: string;
+  facet_name: string;
+  name: string;
+};
+
+type ProjectDynamicWorkerFacetInput = {
+  className: string;
+  commitOid: string;
+  name: string;
+};
+
+export type ProjectDynamicWorkerFacetRequest = {
+  body: ArrayBuffer | null;
+  headers: Array<[string, string]>;
+  method: string;
+  url: string;
+};
+
+type ProjectDynamicWorkerFacetFetchInput = ProjectDynamicWorkerFacetInput & {
+  request: ProjectDynamicWorkerFacetRequest;
+};
+
+type ProjectDynamicDurableObjectsBinding = {
+  get(input: { className: string; name: string }): Promise<Fetcher>;
+  getByName(input: { className: string; name: string }): Promise<Fetcher>;
+};
+
 type ProjectDynamicWorkerEntrypoint = {
   fetch(request: Request): Response | Promise<Response>;
   afterAppend?(input: { event: Event }): unknown | Promise<unknown>;
@@ -142,18 +170,19 @@ type ProjectDynamicWorkerModule =
 type ProjectDynamicWorkerCode = {
   compatibilityDate: string;
   compatibilityFlags: string[];
+  env?: Record<string, unknown>;
   globalOutbound: Fetcher | null;
   mainModule: string;
   modules: Record<string, ProjectDynamicWorkerModule>;
 };
 
+type ProjectDynamicWorkerStub = {
+  getDurableObjectClass(className: string): DurableObjectClass;
+  getEntrypoint(): unknown;
+};
+
 type ProjectDynamicWorkerLoader = {
-  get(
-    name: string,
-    getCode: () => ProjectDynamicWorkerCode,
-  ): {
-    getEntrypoint(): unknown;
-  };
+  get(name: string, getCode: () => ProjectDynamicWorkerCode): ProjectDynamicWorkerStub;
 };
 
 type ProjectRuntimeEnv = {
@@ -185,9 +214,11 @@ const PROJECT_CONFIG_CHECKOUT_STORAGE_KEY = "project.configWorker.checkout";
 const PROJECT_CONFIG_READY_STORAGE_KEY = "project.configWorker.ready";
 const PROJECT_CONFIG_REFRESHED_AT_STORAGE_KEY = "project.configWorker.refreshedAt";
 const PROJECT_CONFIG_REFRESH_INTERVAL_MS = 10_000;
+const PROJECT_DYNAMIC_WORKER_FACETS_TABLE = "project_dynamic_worker_facets";
 const PROJECT_DYNAMIC_WORKER_MAIN_MODULE = "worker.ts";
-const PROJECT_DYNAMIC_WORKER_COMPATIBILITY_DATE = "2026-04-27";
+const PROJECT_DYNAMIC_WORKER_COMPATIBILITY_DATE = "2026-05-15";
 const PROJECT_DYNAMIC_WORKER_COMPATIBILITY_FLAGS = ["nodejs_compat"];
+const DYNAMIC_DURABLE_OBJECT_CLASS_NAME_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 type ProjectConfigWorkspaceName = {
   projectId: string;
@@ -265,6 +296,13 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     )`);
     sql.exec(`CREATE INDEX IF NOT EXISTS idx_project_ingress_routes_host
       ON project_ingress_routes (host)`);
+    sql.exec(`CREATE TABLE IF NOT EXISTS ${PROJECT_DYNAMIC_WORKER_FACETS_TABLE} (
+      facet_name TEXT PRIMARY KEY,
+      class_name TEXT NOT NULL,
+      name TEXT NOT NULL,
+      created_at_ms INTEGER NOT NULL,
+      updated_at_ms INTEGER NOT NULL
+    )`);
 
     this.registerOnFirstInitialize(async (params) => {
       await this.ensureProjectLifecycleSubscription(params.projectId);
@@ -401,6 +439,9 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
           (await this.getCachedProjectDynamicWorkerEntrypoint(summary));
         await entrypoint.afterAppend?.(input);
       } catch (error) {
+        if (isMissingRpcMethodError({ error, method: "afterAppend" })) {
+          return result;
+        }
         console.error("Project config worker afterAppend failed.", error);
       }
     }
@@ -497,6 +538,46 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     return await this.egressFetch(request);
   }
 
+  private async getDynamicWorkerDurableObjectFacet(
+    input: ProjectDynamicWorkerFacetInput,
+  ): Promise<Fetcher> {
+    assertDynamicWorkerFacetInput(input);
+    await this.ensureStarted();
+    const summary = this.requireSummary();
+    const checkout = await this.getCurrentProjectConfigCheckout();
+    if (checkout.commitOid !== input.commitOid) {
+      throw new Error(
+        `Project dynamic worker checkout ${input.commitOid} is no longer current for ${summary.id}.`,
+      );
+    }
+
+    const worker = this.loadProjectDynamicWorker({ checkout, projectId: summary.id });
+    const facetName = projectDynamicWorkerFacetName({
+      className: input.className,
+      name: input.name,
+    });
+    this.recordProjectDynamicWorkerFacet({
+      className: input.className,
+      facetName,
+      name: input.name,
+    });
+    return this.ctx.facets.get(facetName, () => ({
+      class: worker.getDurableObjectClass(input.className),
+      id: input.name,
+    }));
+  }
+
+  async fetchDynamicWorkerDurableObjectFacet(
+    input: ProjectDynamicWorkerFacetFetchInput,
+  ): Promise<Response> {
+    const facet = await this.getDynamicWorkerDurableObjectFacet({
+      className: input.className,
+      commitOid: input.commitOid,
+      name: input.name,
+    });
+    return await facet.fetch(requestFromProjectDynamicWorkerFacetRequest(input.request));
+  }
+
   private async getIngressProjectDynamicWorkerEntrypoint(
     summary: ProjectSummary,
   ): Promise<ProjectDynamicWorkerEntrypoint> {
@@ -556,8 +637,12 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
   }
 
   private async buildFreshProjectDynamicWorker(summary: ProjectSummary) {
+    const previousCheckout = await this.getProjectConfigCheckoutOrNull();
     const checkout = await this.ensureProjectConfigCheckout(summary);
     this.loadProjectDynamicWorkerEntrypoint({ checkout, projectId: summary.id });
+    if (previousCheckout !== null && previousCheckout.commitOid !== checkout.commitOid) {
+      this.abortProjectDynamicWorkerFacets();
+    }
     await this.ctx.storage.put(PROJECT_CONFIG_CHECKOUT_STORAGE_KEY, checkout);
     await this.ctx.storage.put(PROJECT_CONFIG_READY_STORAGE_KEY, true);
     await this.ctx.storage.put(PROJECT_CONFIG_REFRESHED_AT_STORAGE_KEY, Date.now());
@@ -567,51 +652,109 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
   private async getCachedProjectDynamicWorkerEntrypoint(
     summary: ProjectSummary,
   ): Promise<ProjectDynamicWorkerEntrypoint> {
+    const checkout = await this.getCurrentProjectConfigCheckout();
+    return this.loadProjectDynamicWorkerEntrypoint({ checkout, projectId: summary.id });
+  }
+
+  private async getCurrentProjectConfigCheckout() {
+    const checkout = await this.getProjectConfigCheckoutOrNull();
+    if (checkout === null) {
+      throw new Error("Project config worker is marked ready but has no validated checkout.");
+    }
+    return checkout;
+  }
+
+  private async getProjectConfigCheckoutOrNull() {
     const checkout = await this.ctx.storage.get<ProjectConfigCheckout>(
       PROJECT_CONFIG_CHECKOUT_STORAGE_KEY,
     );
-    if (!isProjectConfigCheckout(checkout)) {
-      throw new Error("Project config worker is marked ready but has no validated checkout.");
-    }
-
-    return this.loadProjectDynamicWorkerEntrypoint({ checkout, projectId: summary.id });
+    return isProjectConfigCheckout(checkout) ? checkout : null;
   }
 
   private loadProjectDynamicWorkerEntrypoint(input: {
     checkout: ProjectConfigCheckout;
     projectId: string;
   }): ProjectDynamicWorkerEntrypoint {
-    const { checkout } = input;
-    if (this.#dynamicWorkerEntrypoint?.commitOid === checkout.commitOid) {
+    if (this.#dynamicWorkerEntrypoint?.commitOid === input.checkout.commitOid) {
       return this.#dynamicWorkerEntrypoint.entrypoint;
     }
 
-    const loader = projectRuntimeEnv(this.env).LOADER;
-    const entrypoint = loader
-      .get(
-        projectDynamicWorkerId({
-          commitOid: checkout.commitOid,
-          projectId: input.projectId,
-        }),
-        () =>
-          projectDynamicWorkerCodeWithOutboundFetch({
-            outboundFetch: readProjectLoopbackExports(this.ctx).ProjectCapability({
-              props: { projectId: input.projectId },
-            }),
-            workerCode: checkout.workerCode,
-          }),
-      )
-      .getEntrypoint();
+    const entrypoint = this.loadProjectDynamicWorker(input).getEntrypoint();
 
     if (!isProjectDynamicWorkerEntrypoint(entrypoint)) {
       throw new Error("Project dynamic worker entrypoint is missing fetch.");
     }
 
     this.#dynamicWorkerEntrypoint = {
-      commitOid: checkout.commitOid,
+      commitOid: input.checkout.commitOid,
       entrypoint,
     };
     return entrypoint;
+  }
+
+  private loadProjectDynamicWorker(input: {
+    checkout: ProjectConfigCheckout;
+    projectId: string;
+  }): ProjectDynamicWorkerStub {
+    const loader = projectRuntimeEnv(this.env).LOADER;
+    return loader.get(
+      projectDynamicWorkerId({
+        commitOid: input.checkout.commitOid,
+        projectId: input.projectId,
+      }),
+      () =>
+        projectDynamicWorkerCodeWithRuntimeBindings({
+          durableObjects: readProjectLoopbackExports(this.ctx).ProjectDynamicDurableObjectsBinding({
+            props: {
+              commitOid: input.checkout.commitOid,
+              projectId: input.projectId,
+            },
+          }),
+          outboundFetch: readProjectLoopbackExports(this.ctx).ProjectCapability({
+            props: { projectId: input.projectId },
+          }),
+          workerCode: input.checkout.workerCode,
+        }),
+    );
+  }
+
+  private recordProjectDynamicWorkerFacet(input: {
+    className: string;
+    facetName: string;
+    name: string;
+  }) {
+    const now = Date.now();
+    this.getDurableObjectSql().exec(
+      `INSERT INTO ${PROJECT_DYNAMIC_WORKER_FACETS_TABLE}
+        (facet_name, class_name, name, created_at_ms, updated_at_ms)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(facet_name) DO UPDATE SET
+        class_name = excluded.class_name,
+        name = excluded.name,
+        updated_at_ms = excluded.updated_at_ms`,
+      input.facetName,
+      input.className,
+      input.name,
+      now,
+      now,
+    );
+  }
+
+  private abortProjectDynamicWorkerFacets() {
+    const rows = this.getDurableObjectSql()
+      .exec<ProjectDynamicWorkerFacetRow>(
+        `SELECT facet_name, class_name, name FROM ${PROJECT_DYNAMIC_WORKER_FACETS_TABLE}`,
+      )
+      .toArray();
+
+    for (const row of rows) {
+      this.ctx.facets.abort(
+        row.facet_name,
+        new Error(
+          `Project dynamic worker facet ${row.class_name}/${row.name} is restarting after a project config rebuild.`,
+        ),
+      );
+    }
   }
 
   private async clearProjectConfigWorkerReady() {
@@ -1222,18 +1365,30 @@ function projectDynamicWorkerCode(input: string) {
   };
 }
 
-function projectDynamicWorkerCodeWithOutboundFetch(input: {
+function projectDynamicWorkerCodeWithRuntimeBindings(input: {
+  durableObjects: ProjectDynamicDurableObjectsBinding;
   outboundFetch: Fetcher;
   workerCode: ProjectDynamicWorkerCode;
 }): ProjectDynamicWorkerCode {
   return {
     ...input.workerCode,
+    env: {
+      ...(input.workerCode.env || {}),
+      DURABLE_OBJECTS: input.durableObjects,
+    },
     globalOutbound: input.outboundFetch,
   };
 }
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isMissingRpcMethodError(input: { error: unknown; method: string }) {
+  return (
+    input.error instanceof Error &&
+    input.error.message.includes(`does not implement the method "${input.method}"`)
+  );
 }
 
 async function bundledProjectDynamicWorkerCode(
@@ -1404,9 +1559,15 @@ function readLoopbackExports(ctx: DurableObjectState) {
 }
 
 function readProjectLoopbackExports(ctx: DurableObjectState): {
+  ProjectDynamicDurableObjectsBinding(input: {
+    props: { commitOid: string; projectId: string };
+  }): ProjectDynamicDurableObjectsBinding;
   ProjectCapability(input: { props: { projectId: string } }): Fetcher;
 } {
   return ctx.exports as unknown as {
+    ProjectDynamicDurableObjectsBinding(input: {
+      props: { commitOid: string; projectId: string };
+    }): ProjectDynamicDurableObjectsBinding;
     ProjectCapability(input: { props: { projectId: string } }): Fetcher;
   };
 }
@@ -1449,6 +1610,34 @@ function isProjectDynamicWorkerCode(value: unknown): value is ProjectDynamicWork
     typeof value.modules === "object" &&
     value.modules !== null
   );
+}
+
+function assertDynamicWorkerFacetInput(
+  input: ProjectDynamicWorkerFacetInput,
+): asserts input is ProjectDynamicWorkerFacetInput {
+  if (!DYNAMIC_DURABLE_OBJECT_CLASS_NAME_PATTERN.test(input.className)) {
+    throw new Error(
+      `Dynamic Durable Object className must be a JavaScript identifier, got "${input.className}".`,
+    );
+  }
+  if (input.name.trim() === "") {
+    throw new Error("Dynamic Durable Object facet name is required.");
+  }
+  if (input.commitOid.trim() === "") {
+    throw new Error("Dynamic Durable Object facet commitOid is required.");
+  }
+}
+
+function projectDynamicWorkerFacetName(input: { className: string; name: string }) {
+  return `${input.className}:${input.name}`;
+}
+
+function requestFromProjectDynamicWorkerFacetRequest(input: ProjectDynamicWorkerFacetRequest) {
+  return new Request(input.url, {
+    body: input.body,
+    headers: input.headers,
+    method: input.method,
+  });
 }
 
 function isFileMissingError(error: unknown) {
