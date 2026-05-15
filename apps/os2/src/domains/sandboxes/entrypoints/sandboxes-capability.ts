@@ -68,6 +68,7 @@ type SandboxesCapabilityClient = Pick<
 >;
 type SandboxLifecycleCatalogRecord = D1ObjectCatalogRecord<SandboxStructuredName>;
 const ARTIFACT_FS_ROOT = "/workspace/.artifact-fs";
+const ARTIFACT_FS_MOUNT_ROOT = "/mnt/artifactfs";
 const ITERATE_CONFIG_REPO_NAME = "iterate-config";
 
 export class SandboxHandle extends RpcTarget {
@@ -404,9 +405,9 @@ function repoAuthorizationHeader(repo: RepoInfo) {
 
 function artifactFsMountCommand(repo: RepoInfo) {
   const script = [
-    "set -eu",
+    "set -u",
     `export ARTIFACT_FS_ROOT=${shellQuote(ARTIFACT_FS_ROOT)}`,
-    'mkdir -p "$ARTIFACT_FS_ROOT" /workspace',
+    `mkdir -p "$ARTIFACT_FS_ROOT" /workspace ${shellQuote(ARTIFACT_FS_MOUNT_ROOT)}`,
     [
       "git",
       "config",
@@ -416,9 +417,8 @@ function artifactFsMountCommand(repo: RepoInfo) {
       shellQuote(repoAuthorizationHeader(repo)),
     ].join(" "),
     `if ! artifact-fs status --name ${shellQuote(ITERATE_CONFIG_REPO_NAME)} >/tmp/artifact-fs-iterate-config-status.log 2>&1; then`,
-    `  mkdir -p ${shellQuote(SANDBOX_ITERATE_CONFIG_PATH)}`,
     [
-      "  timeout 60s artifact-fs",
+      "  if ! timeout 60s artifact-fs",
       "add-repo",
       "--name",
       shellQuote(ITERATE_CONFIG_REPO_NAME),
@@ -427,18 +427,31 @@ function artifactFsMountCommand(repo: RepoInfo) {
       "--branch",
       shellQuote(repo.defaultBranch),
       "--mount-root",
-      shellQuote("/workspace"),
-      ">/tmp/artifact-fs-add-repo.log 2>&1",
+      shellQuote(ARTIFACT_FS_MOUNT_ROOT),
+      ">/tmp/artifact-fs-add-repo.log 2>&1; then",
     ].join(" "),
+    "    cat /tmp/artifact-fs-add-repo.log 2>/dev/null || true",
+    "    exit 1",
+    "  fi",
     "fi",
-    `if ! pgrep -f ${shellQuote("artifact-fs daemon --root /workspace")} >/dev/null; then`,
-    "  nohup artifact-fs daemon --root /workspace --hydration-concurrency 4 >/tmp/artifact-fs-daemon.log 2>&1 &",
+    `if [ -e ${shellQuote(SANDBOX_ITERATE_CONFIG_PATH)} ] && [ ! -L ${shellQuote(
+      SANDBOX_ITERATE_CONFIG_PATH,
+    )} ]; then`,
+    `  rm -rf ${shellQuote(SANDBOX_ITERATE_CONFIG_PATH)}`,
+    "fi",
+    `ln -sfn ${shellQuote(
+      `${ARTIFACT_FS_MOUNT_ROOT}/${ITERATE_CONFIG_REPO_NAME}`,
+    )} ${shellQuote(SANDBOX_ITERATE_CONFIG_PATH)}`,
+    `if ! pgrep -f ${shellQuote(`artifact-fs daemon --root ${ARTIFACT_FS_MOUNT_ROOT}`)} >/dev/null; then`,
+    `  nohup artifact-fs daemon --root ${shellQuote(
+      ARTIFACT_FS_MOUNT_ROOT,
+    )} --hydration-concurrency 4 >/tmp/artifact-fs-daemon.log 2>&1 &`,
     "fi",
     [
       "for _ in $(seq 1 120); do",
-      `  if mountpoint -q ${shellQuote(SANDBOX_ITERATE_CONFIG_PATH)} && git -C ${shellQuote(
-        SANDBOX_ITERATE_CONFIG_PATH,
-      )} rev-parse --verify HEAD >/dev/null 2>&1; then exit 0; fi`,
+      `  if mountpoint -q ${shellQuote(
+        `${ARTIFACT_FS_MOUNT_ROOT}/${ITERATE_CONFIG_REPO_NAME}`,
+      )} && git -C ${shellQuote(SANDBOX_ITERATE_CONFIG_PATH)} rev-parse --verify HEAD >/dev/null 2>&1; then exit 0; fi`,
       "  sleep 0.25",
       "done",
       "cat /tmp/artifact-fs-iterate-config-status.log 2>/dev/null || true",
