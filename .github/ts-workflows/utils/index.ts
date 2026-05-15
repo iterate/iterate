@@ -9,6 +9,7 @@ export const prTriggerable = {
 export const runsOnDepotUbuntu = {
   "runs-on": "depot-ubuntu-24.04-32",
 };
+export const runsOnDepotUbuntuForContainerThings = runsOnDepotUbuntu;
 
 /** checkout, setup pnpm, setup node, install dependencies. Accepts an optional ref override (e.g. for workflow_dispatch inputs). */
 export const getSetupRepo = ({ ref }: { ref?: string } = {}) =>

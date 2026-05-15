@@ -8,6 +8,7 @@ on:
   pull_request: {}
 jobs:
   integration:
+    runs-on: depot-ubuntu-24.04-32
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

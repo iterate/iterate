@@ -41,3 +41,4 @@ Move `apps/semaphore` to SQLFu, matching the direction already taken by `apps/ev
 - Merged current `origin/main` into `semaphore-sqlfu` and resolved conflicts from `main` removing the old ingress-proxy app.
 - Dropped the PR's stray ingress-proxy management-host files so the final PR diff is Semaphore-only plus lockfile/task updates.
 - Restored lazy SQLFu D1 config resolution so `pnpm --dir apps/semaphore sqlfu:generate` works in a clean checkout without pre-existing Alchemy Miniflare state; DB-touching SQLFu commands still throw a targeted setup error if local D1 state has not been materialized.
+- Fixed an inherited generated-workflow issue where the new integration workflow referenced `runsOnDepotUbuntuForContainerThings` but the helper was missing, causing GitHub to create a failed no-job workflow run.
