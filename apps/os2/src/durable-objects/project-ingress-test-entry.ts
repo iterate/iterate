@@ -26,8 +26,8 @@ import type { ExactHostIngressRule } from "~/ingress/types.ts";
 
 const PROJECT_CONFIG_DIR = "/iterate-config";
 const MOCK_ARTIFACT_REMOTE_BASE = "https://artifacts.example.test/";
-const TEST_PROJECT_WORKER_SOURCE = `import app1 from "./apps/app1/worker.ts";
-import app2 from "./apps/app2/worker.ts";
+const TEST_PROJECT_WORKER_SOURCE = `import app1 from "./apps/app1/worker.js";
+import app2 from "./apps/app2/worker.js";
 
 const apps = [app1, app2];
 
@@ -94,15 +94,15 @@ export class ProjectDurableObject extends RealProjectDurableObject {
     const writeFile = readWorkspaceStateMethod({ method: "writeFile", state });
     await writeFile(`${PROJECT_CONFIG_DIR}/iterate.config.jsonc`, '{\n  "version": 1\n}\n');
     await writeFile(`${PROJECT_CONFIG_DIR}/package.json`, '{\n  "type": "module"\n}\n');
-    await writeFile(`${PROJECT_CONFIG_DIR}/worker.ts`, TEST_PROJECT_WORKER_SOURCE);
-    await writeFile(`${PROJECT_CONFIG_DIR}/apps/app1/worker.ts`, TEST_APP_ONE_WORKER_SOURCE);
-    await writeFile(`${PROJECT_CONFIG_DIR}/apps/app2/worker.ts`, TEST_APP_TWO_WORKER_SOURCE);
+    await writeFile(`${PROJECT_CONFIG_DIR}/worker.js`, TEST_PROJECT_WORKER_SOURCE);
+    await writeFile(`${PROJECT_CONFIG_DIR}/apps/app1/worker.js`, TEST_APP_ONE_WORKER_SOURCE);
+    await writeFile(`${PROJECT_CONFIG_DIR}/apps/app2/worker.js`, TEST_APP_TWO_WORKER_SOURCE);
     await input.git.init({ dir: PROJECT_CONFIG_DIR, defaultBranch: input.repo.defaultBranch });
     await input.git.add({ dir: PROJECT_CONFIG_DIR, filepath: "iterate.config.jsonc" });
     await input.git.add({ dir: PROJECT_CONFIG_DIR, filepath: "package.json" });
-    await input.git.add({ dir: PROJECT_CONFIG_DIR, filepath: "worker.ts" });
-    await input.git.add({ dir: PROJECT_CONFIG_DIR, filepath: "apps/app1/worker.ts" });
-    await input.git.add({ dir: PROJECT_CONFIG_DIR, filepath: "apps/app2/worker.ts" });
+    await input.git.add({ dir: PROJECT_CONFIG_DIR, filepath: "worker.js" });
+    await input.git.add({ dir: PROJECT_CONFIG_DIR, filepath: "apps/app1/worker.js" });
+    await input.git.add({ dir: PROJECT_CONFIG_DIR, filepath: "apps/app2/worker.js" });
     await input.git.commit({
       dir: PROJECT_CONFIG_DIR,
       message: "Seed test iterate config worker",
@@ -117,26 +117,26 @@ export class ProjectDurableObject extends RealProjectDurableObject {
     if (typeof files["package.json"] !== "string") {
       throw new Error("Test project worker bundler path requires package.json.");
     }
-    if (typeof files["apps/app1/worker.ts"] !== "string") {
-      throw new Error("Test project worker bundler path requires apps/app1/worker.ts.");
+    if (typeof files["apps/app1/worker.js"] !== "string") {
+      throw new Error("Test project worker bundler path requires apps/app1/worker.js.");
     }
-    if (typeof files["apps/app2/worker.ts"] !== "string") {
-      throw new Error("Test project worker bundler path requires apps/app2/worker.ts.");
+    if (typeof files["apps/app2/worker.js"] !== "string") {
+      throw new Error("Test project worker bundler path requires apps/app2/worker.js.");
     }
 
     return {
       compatibilityDate: "2026-04-27",
       compatibilityFlags: ["nodejs_compat"],
       globalOutbound: null,
-      mainModule: "worker.ts",
+      mainModule: "worker.js",
       modules: {
-        "worker.ts": {
+        "worker.js": {
           js: TEST_PROJECT_WORKER_SOURCE,
         },
-        "apps/app1/worker.ts": {
+        "apps/app1/worker.js": {
           js: TEST_APP_ONE_WORKER_SOURCE,
         },
-        "apps/app2/worker.ts": {
+        "apps/app2/worker.js": {
           js: TEST_APP_TWO_WORKER_SOURCE,
         },
       },
@@ -147,6 +147,7 @@ export { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-
 export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 export { ProjectCapability } from "~/domains/projects/entrypoints/project-capability.ts";
 export { SecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
+export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 export { OrpcCapability } from "~/domains/codemode/example-capabilities.ts";
 export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";

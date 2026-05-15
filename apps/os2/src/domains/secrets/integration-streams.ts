@@ -39,7 +39,7 @@ export async function appendIntegrationEvent(
     exports: context.workerExports,
     props: {
       appendPolicy: { mode: "stream" },
-      namespace: input.projectId,
+      projectId: input.projectId,
       streamPath,
     },
   }).append({

@@ -84,7 +84,7 @@ function getProjectStreamsCapability(context: AppContext, projectId: string) {
     exports: context.workerExports,
     props: {
       appendPolicy: { mode: "any" },
-      namespace: projectId,
+      projectId,
     },
   });
 }

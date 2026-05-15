@@ -21,6 +21,10 @@ import {
   updateProjectConfig,
 } from "~/db/queries/.generated/index.ts";
 import type { CodemodeSessionStructuredName } from "~/domains/codemode/durable-objects/codemode-session.ts";
+import {
+  ensureProjectCustomHostname,
+  ensureProjectCustomHostnameStatus,
+} from "~/domains/projects/cloudflare-custom-hostnames.ts";
 import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import type { ProjectMcpServerConnectionStructuredName } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 import {
@@ -270,7 +274,59 @@ export const projectsRouter = {
           });
         }
 
+        if (row.custom_hostname) {
+          await ensureProjectCustomHostnameStatus({
+            apiToken: context.config.cloudflare.apiToken?.exposeSecret(),
+            customHostname: row.custom_hostname,
+            projectHostnameBase: context.projectHostnameBases[0],
+          });
+        }
+
         return toProject(row);
+      }),
+    customHostnameStatus: os.projects.customHostnameStatus
+      .use(activeOrganizationMiddleware)
+      .handler(async ({ context, input }) => {
+        const row = await requireProject({
+          activeOrganization: context.activeOrganization,
+          context,
+          projectId: input.id,
+        });
+
+        return await ensureProjectCustomHostnameStatus({
+          apiToken: context.config.cloudflare.apiToken?.exposeSecret(),
+          customHostname: row.custom_hostname,
+          projectHostnameBase: context.projectHostnameBases[0],
+        });
+      }),
+    ensureCustomHostname: os.projects.ensureCustomHostname
+      .use(activeOrganizationMiddleware)
+      .handler(async ({ context, input }) => {
+        const row = await requireProject({
+          activeOrganization: context.activeOrganization,
+          context,
+          projectId: input.id,
+        });
+
+        if (!row.custom_hostname) {
+          throw new ORPCError("BAD_REQUEST", {
+            message: "Set a custom hostname before activating app hostnames.",
+          });
+        }
+
+        const hostname = normalizeCustomHostname(input.hostname);
+        if (!hostname || !isValidCustomHostname(hostname)) {
+          throw new ORPCError("BAD_REQUEST", {
+            message: "Hostname must be a valid DNS hostname.",
+          });
+        }
+
+        return await ensureProjectCustomHostname({
+          apiToken: context.config.cloudflare.apiToken?.exposeSecret(),
+          customHostname: row.custom_hostname,
+          hostname,
+          projectHostnameBase: context.projectHostnameBases[0],
+        });
       }),
     remove: os.projects.remove
       .use(activeOrganizationMiddleware)

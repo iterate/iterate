@@ -856,7 +856,8 @@ function mockPublicEchoFetch() {
   const originalFetch = globalThis.fetch;
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const request = new Request(input, init);
-    if (new URL(request.url).hostname !== "httpbingo.org") {
+    const hostname = new URL(request.url).hostname;
+    if (hostname !== "httpbingo.org" && hostname !== "httpbin.org") {
       return await originalFetch(input, init);
     }
 

@@ -37,7 +37,7 @@ export type StreamAppendPolicy =
 export type StreamsCapabilityProps = {
   appendMetadata?: Record<string, unknown>;
   appendPolicy?: StreamAppendPolicy;
-  namespace: string;
+  projectId: string;
   streamPath?: string;
 };
 
@@ -74,7 +74,7 @@ type StreamsCapabilityClient = Pick<
  * Capability-based stream access for OS2 code that needs to read or append
  * namespace-owned events. The only ambient authority is the `STREAM` namespace
  * binding; callers receive a narrowed Cloudflare WorkerEntrypoint binding with
- * props such as `namespace` and optional `streamPath`.
+ * props such as `projectId` and optional `streamPath`.
  *
  * This is an example of Cloudflare Workers capability-based security: instead
  * of passing a global Events URL/client around, OS2 passes a capability whose
@@ -115,13 +115,13 @@ export class StreamsCapability extends WorkerEntrypoint<
     debugCodemodeDepth("streamCapability.append.start", {
       eventType: input.event.type,
       path,
-      namespace: this.ctx.props.namespace,
+      namespace: this.ctx.props.projectId,
     });
 
     const event = await appendNamespaceStreamEvent({
       durableObjectNamespace: this.env.STREAM,
       path,
-      namespace: this.ctx.props.namespace,
+      namespace: this.ctx.props.projectId,
       event: {
         ...input.event,
         metadata: {
@@ -134,7 +134,7 @@ export class StreamsCapability extends WorkerEntrypoint<
       eventOffset: event.offset,
       eventType: event.type,
       path,
-      namespace: this.ctx.props.namespace,
+      namespace: this.ctx.props.projectId,
     });
     return event;
   }
@@ -145,7 +145,7 @@ export class StreamsCapability extends WorkerEntrypoint<
     return await appendNamespaceStreamEventBatch({
       durableObjectNamespace: this.env.STREAM,
       path,
-      namespace: this.ctx.props.namespace,
+      namespace: this.ctx.props.projectId,
       events: input.events.map(
         (event) =>
           ({
@@ -163,7 +163,7 @@ export class StreamsCapability extends WorkerEntrypoint<
     return await getNamespaceStreamState({
       durableObjectNamespace: this.env.STREAM,
       path: this.resolveNamespacePath(input),
-      namespace: this.ctx.props.namespace,
+      namespace: this.ctx.props.projectId,
     });
   }
 
@@ -177,7 +177,7 @@ export class StreamsCapability extends WorkerEntrypoint<
       {
         className: "StreamDurableObject",
         indexName: "namespace",
-        indexValue: this.ctx.props.namespace,
+        indexValue: this.ctx.props.projectId,
       },
     );
 
@@ -188,7 +188,7 @@ export class StreamsCapability extends WorkerEntrypoint<
     return await readNamespaceStreamEvents({
       durableObjectNamespace: this.env.STREAM,
       path: this.resolveNamespacePath(input),
-      namespace: this.ctx.props.namespace,
+      namespace: this.ctx.props.projectId,
       afterOffset: input.afterOffset,
       beforeOffset: input.beforeOffset ?? "end",
     });
@@ -199,12 +199,12 @@ export class StreamsCapability extends WorkerEntrypoint<
       afterOffset: input.afterOffset,
       beforeOffset: input.beforeOffset,
       path: this.resolveNamespacePath(input),
-      namespace: this.ctx.props.namespace,
+      namespace: this.ctx.props.projectId,
     });
     const events = streamNamespaceStreamEvents({
       durableObjectNamespace: this.env.STREAM,
       path: this.resolveNamespacePath(input),
-      namespace: this.ctx.props.namespace,
+      namespace: this.ctx.props.projectId,
       afterOffset: input.afterOffset,
       beforeOffset: input.beforeOffset,
     });
@@ -232,7 +232,7 @@ export class StreamsCapability extends WorkerEntrypoint<
     return await getNamespaceStreamState({
       durableObjectNamespace: this.env.STREAM,
       path: this.resolveNamespacePath(input),
-      namespace: this.ctx.props.namespace,
+      namespace: this.ctx.props.projectId,
     });
   }
 
@@ -241,7 +241,7 @@ export class StreamsCapability extends WorkerEntrypoint<
     const events = await readNamespaceStreamEvents({
       durableObjectNamespace: this.env.STREAM,
       path,
-      namespace: this.ctx.props.namespace,
+      namespace: this.ctx.props.projectId,
     });
     const discovered: Record<StreamPath, string> = {};
 

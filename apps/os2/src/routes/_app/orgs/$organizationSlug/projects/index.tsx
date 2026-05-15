@@ -1,6 +1,8 @@
 import { useForm } from "@tanstack/react-form";
+import type { QueryClient } from "@tanstack/react-query";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
+import { Link, createFileRoute, useRouter } from "@tanstack/react-router";
+import type { Project } from "@iterate-com/os2-contract";
 import { useConfig } from "@iterate-com/ui/apps/config";
 import { Button } from "@iterate-com/ui/components/button";
 import {
@@ -20,6 +22,7 @@ import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { orpc } from "~/orpc/client.ts";
 
 type PublicConfig = PublicAppConfig<AppConfig>;
+type ProjectsListData = { projects: Project[]; total: number };
 
 export const Route = createFileRoute("/_app/orgs/$organizationSlug/projects/")({
   loader: async ({ context }) => {
@@ -54,7 +57,7 @@ function buildProjectHostname(input: {
 
 function ProjectsIndexPage() {
   const params = Route.useParams();
-  const navigate = useNavigate();
+  const router = useRouter();
   const queryClient = useQueryClient();
   const config = useConfig<PublicConfig>();
   const { data: projectsData } = useQuery({
@@ -64,9 +67,11 @@ function ProjectsIndexPage() {
 
   const createProject = useMutation(
     orpc.projects.create.mutationOptions({
-      onSuccess: (project) => {
+      onSuccess: async (project) => {
+        cacheCreatedProjectQueries({ project, queryClient });
         void queryClient.invalidateQueries({ queryKey: orpc.projects.list.key() });
-        void navigate({
+        await router.invalidate({ sync: true });
+        await router.navigate({
           to: "/orgs/$organizationSlug/projects/$projectSlug",
           params: {
             organizationSlug: params.organizationSlug,
@@ -226,4 +231,30 @@ function ProjectsIndexPage() {
       )}
     </section>
   );
+}
+
+function cacheCreatedProjectQueries(input: { project: Project; queryClient: QueryClient }) {
+  const findQuery = orpc.projects.find.queryOptions({ input: { id: input.project.id } });
+  const findBySlugQuery = orpc.projects.findBySlug.queryOptions({
+    input: { slug: input.project.slug },
+  });
+  input.queryClient.setQueryData(findQuery.queryKey, input.project);
+  input.queryClient.setQueryData(findBySlugQuery.queryKey, input.project);
+
+  for (const listInput of [
+    { limit: 20, offset: 0 },
+    { limit: 100, offset: 0 },
+  ] as const) {
+    const listQuery = orpc.projects.list.queryOptions({ input: listInput });
+    input.queryClient.setQueryData<ProjectsListData>(listQuery.queryKey, (existing) => {
+      if (!existing) return existing;
+      if (existing.projects.some((project) => project.id === input.project.id)) return existing;
+
+      return {
+        ...existing,
+        projects: [input.project, ...existing.projects].slice(0, listInput.limit),
+        total: existing.total + 1,
+      };
+    });
+  }
 }

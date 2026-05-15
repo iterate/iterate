@@ -15,15 +15,16 @@ const ITERATE_CONFIG_REPO_DIR = "/repo";
 const ITERATE_CONFIG_JSONC = '{\n  "version": 1\n}\n';
 const ITERATE_CONFIG_PACKAGE_JSON = '{\n  "type": "module"\n}\n';
 
-export const ITERATE_CONFIG_WORKER_SOURCE = `import app1 from "./apps/app1/worker.ts";
-import app2 from "./apps/app2/worker.ts";
+export const ITERATE_CONFIG_WORKER_SOURCE = `import app1 from "./apps/app1/worker.js";
+import app2 from "./apps/app2/worker.js";
+import webhooks from "./apps/webhooks/worker.js";
 
-const apps = [app1, app2];
+const apps = [app1, app2, webhooks];
 
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
     for (const app of apps) {
-      const response = await app.fetch(request);
+      const response = await app.fetch(request, env);
       if (response) return response;
     }
 
@@ -48,6 +49,23 @@ const ITERATE_CONFIG_APP_TWO_WORKER_SOURCE = `export default {
   async fetch(request) {
     if (request.headers.get("x-iterate-app-slug") !== "app2") return;
     return new Response("hello from app two");
+  },
+};
+`;
+
+const ITERATE_CONFIG_WEBHOOKS_WORKER_SOURCE = `export default {
+  async fetch(request, env) {
+    if (request.headers.get("x-iterate-app-slug") !== "webhooks") return;
+
+    const url = new URL(request.url);
+    await env.STREAMS.append({
+      streamPath: url.pathname === "/" ? "/webhooks" : \`/webhooks\${url.pathname}\`,
+      event: {
+        type: "random-webhook-received",
+      },
+    });
+
+    return Response.json({ ok: true });
   },
 };
 `;
@@ -125,20 +143,26 @@ export async function seedIterateConfigBaseRepo(input: {
   );
   await filesystem.mkdir(`${ITERATE_CONFIG_REPO_DIR}/apps/app1`, { recursive: true });
   await filesystem.mkdir(`${ITERATE_CONFIG_REPO_DIR}/apps/app2`, { recursive: true });
-  await filesystem.writeFile(`${ITERATE_CONFIG_REPO_DIR}/worker.ts`, ITERATE_CONFIG_WORKER_SOURCE);
+  await filesystem.mkdir(`${ITERATE_CONFIG_REPO_DIR}/apps/webhooks`, { recursive: true });
+  await filesystem.writeFile(`${ITERATE_CONFIG_REPO_DIR}/worker.js`, ITERATE_CONFIG_WORKER_SOURCE);
   await filesystem.writeFile(
-    `${ITERATE_CONFIG_REPO_DIR}/apps/app1/worker.ts`,
+    `${ITERATE_CONFIG_REPO_DIR}/apps/app1/worker.js`,
     ITERATE_CONFIG_APP_ONE_WORKER_SOURCE,
   );
   await filesystem.writeFile(
-    `${ITERATE_CONFIG_REPO_DIR}/apps/app2/worker.ts`,
+    `${ITERATE_CONFIG_REPO_DIR}/apps/app2/worker.js`,
     ITERATE_CONFIG_APP_TWO_WORKER_SOURCE,
+  );
+  await filesystem.writeFile(
+    `${ITERATE_CONFIG_REPO_DIR}/apps/webhooks/worker.js`,
+    ITERATE_CONFIG_WEBHOOKS_WORKER_SOURCE,
   );
   await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "iterate.config.jsonc" });
   await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "package.json" });
-  await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "worker.ts" });
-  await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "apps/app1/worker.ts" });
-  await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "apps/app2/worker.ts" });
+  await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "worker.js" });
+  await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "apps/app1/worker.js" });
+  await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "apps/app2/worker.js" });
+  await git.add({ dir: ITERATE_CONFIG_REPO_DIR, filepath: "apps/webhooks/worker.js" });
 
   let committed = true;
   try {

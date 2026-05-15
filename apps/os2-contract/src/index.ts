@@ -30,6 +30,39 @@ export const Project = z.object({
 });
 export type Project = z.output<typeof Project>;
 
+export const ProjectCustomHostnameValidationRecord = z.object({
+  status: z.string().nullable(),
+  txtName: z.string(),
+  txtValue: z.string(),
+});
+export type ProjectCustomHostnameValidationRecord = z.output<
+  typeof ProjectCustomHostnameValidationRecord
+>;
+
+export const ProjectCustomHostnameCloudflareRecord = z.object({
+  hostname: z.string(),
+  hostnameStatus: z.string().nullable(),
+  id: z.string(),
+  kind: z.enum(["exact"]),
+  ownershipVerificationName: z.string().nullable(),
+  ownershipVerificationValue: z.string().nullable(),
+  sslStatus: z.string().nullable(),
+  validationRecords: z.array(ProjectCustomHostnameValidationRecord),
+  wildcard: z.boolean(),
+});
+export type ProjectCustomHostnameCloudflareRecord = z.output<
+  typeof ProjectCustomHostnameCloudflareRecord
+>;
+
+export const ProjectCustomHostnameStatus = z.object({
+  cloudflareConfigured: z.boolean(),
+  customHostname: z.string().nullable(),
+  hostnames: z.array(ProjectCustomHostnameCloudflareRecord),
+  message: z.string().nullable(),
+  target: z.string().nullable(),
+});
+export type ProjectCustomHostnameStatus = z.output<typeof ProjectCustomHostnameStatus>;
+
 export const CodemodeSession = z.object({
   name: z.string(),
   projectId: z.string(),
@@ -326,6 +359,24 @@ export const osContract = oc.router({
         }),
       )
       .output(Project),
+    customHostnameStatus: oc
+      .route({
+        method: "GET",
+        path: "/projects/{id}/custom-hostname-status",
+        description: "Read and ensure Cloudflare custom hostname status for a project",
+        tags: ["/projects"],
+      })
+      .input(z.object({ id: z.string() }))
+      .output(ProjectCustomHostnameStatus),
+    ensureCustomHostname: oc
+      .route({
+        method: "POST",
+        path: "/projects/{id}/custom-hostnames",
+        description: "Create or read a concrete Cloudflare custom hostname for a project",
+        tags: ["/projects"],
+      })
+      .input(z.object({ id: z.string(), hostname: z.string().trim().min(1) }))
+      .output(ProjectCustomHostnameStatus),
     remove: oc
       .route({
         method: "DELETE",

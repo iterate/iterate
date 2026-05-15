@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildProjectWorkerUrl,
   buildProjectMcpUrl,
   isReservedProjectHostname,
   isValidCustomHostname,
@@ -99,5 +100,26 @@ describe("project host routing", () => {
     expect(buildProjectMcpUrl({ projectSlug: "demo", projectHostnameBases: ["localhost"] })).toBe(
       null,
     );
+  });
+});
+
+describe("buildProjectWorkerUrl", () => {
+  it("builds the canonical project worker URL", () => {
+    expect(
+      buildProjectWorkerUrl({
+        projectSlug: "demo",
+        projectHostnameBases: ["iterate2.app"],
+      }),
+    ).toBe("https://demo.iterate2.app");
+  });
+
+  it("prefers a custom hostname", () => {
+    expect(
+      buildProjectWorkerUrl({
+        customHostname: "demo.example.com",
+        projectSlug: "demo",
+        projectHostnameBases: ["iterate2.app"],
+      }),
+    ).toBe("https://demo.example.com");
   });
 });
