@@ -44,10 +44,11 @@ export async function createMockInternet(opts: {
   if (replayMode) {
     const harRaw = JSON.parse(await readFile(opts.harPath, "utf8")) as HarWithExtensions;
     const har = opts.prepareHarForReplay ? opts.prepareHarForReplay(harRaw) : harRaw;
-    mockServer.use(...fromTrafficWithWebSocket(har), ...localConsolePipeHandlers);
+    mockServer.use(...localConsolePipeHandlers, ...(opts.handlers ?? []));
+    mockServer.use(...fromTrafficWithWebSocket(har));
+  } else {
+    mockServer.use(...localConsolePipeHandlers, ...(opts.handlers ?? []));
   }
-
-  mockServer.use(...localConsolePipeHandlers, ...(opts.handlers ?? []));
 
   return {
     url: mockServer.url,

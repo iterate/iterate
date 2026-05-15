@@ -20,7 +20,9 @@ const testIfAdminApiTarget = hasAdminApiTarget ? test : test.skip;
 
 testIfAdminApiTarget("runs codemode fetch through a mocked project egress proxy", async (ctx) => {
   const e2e = await setupE2E(ctx);
+
   await using tunnelLease = await useCloudflareTunnelLease({});
+
   await using internet = await createMockInternet({
     harPath: join(e2e.artifactDir, "codemode-fetch.har"),
     handlers: [
@@ -42,11 +44,13 @@ testIfAdminApiTarget("runs codemode fetch through a mocked project egress proxy"
     ],
     port: tunnelLease.localPort,
   });
+
   await using tunnel = await useCloudflareTunnel({
     healthcheckPath: "/__e2e-health",
     token: tunnelLease.tunnelToken,
     publicUrl: tunnelLease.publicUrl,
   });
+
   await using project = await createTestProject({
     externalEgressProxyUrl: tunnel.publicUrl,
     slugPrefix: "mock-internet",
@@ -64,7 +68,9 @@ testIfAdminApiTarget("runs codemode fetch through a mocked project egress proxy"
     projectSlugOrId: project.project.id,
     providers: [],
   });
+
   const scriptExecutionId = readScriptExecutionId(started.event);
+
   const events = await readProjectStreamUntil({
     afterOffset: started.event.offset > 1 ? started.event.offset - 1 : "start",
     client: project.client,
@@ -75,7 +81,40 @@ testIfAdminApiTarget("runs codemode fetch through a mocked project egress proxy"
       readPayloadRecord(event).scriptExecutionId === scriptExecutionId,
   });
   const completed = requiredEvent(events, "events.iterate.com/codemode/script-execution-completed");
+
   const har = internet.getHar();
+
+  expect(completed.payload).toMatchInlineSnapshot(
+    {
+      durationMs: expect.any(Number),
+      scriptExecutionId: scriptExecutionId,
+      outcome: {
+        value: {
+          body: {
+            runSlug: e2e.runSlug,
+          },
+        },
+      },
+    },
+    `
+    {
+      "durationMs": Any<Number>,
+      "outcome": {
+        "status": "returned",
+        "value": {
+          "body": {
+            "mocked": true,
+            "query": "codemode",
+            "runSlug": "os2-vitest-run-20260515-124540",
+          },
+          "mockedHeader": "yes",
+          "status": 200,
+        },
+      },
+      "scriptExecutionId": "889e3495-4a58-43a9-acc8-6e11c92f40d8",
+    }
+  `,
+  );
 
   expect(completed.payload).toMatchObject({
     outcome: {
