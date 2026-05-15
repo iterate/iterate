@@ -46,6 +46,10 @@ import { orpc, orpcClient } from "~/orpc/client.ts";
 
 const emptyEventsYaml = "[]\n";
 
+function createDefaultAgentPath() {
+  return `/agents/assistant_${Date.now()}`;
+}
+
 export const Route = createFileRoute(
   "/_app/orgs/$organizationSlug/projects/$projectSlug/agents/new",
 )({
@@ -87,7 +91,7 @@ function NewAgentPage() {
   const params = Route.useParams();
   const { project } = Route.useLoaderData();
   const navigate = useNavigate();
-  const [agentPathInput, setAgentPathInput] = useState("/agents/assistant");
+  const [agentPathInput, setAgentPathInput] = useState(createDefaultAgentPath);
   const [provider, setProvider] = useState<AgentLlmProvider>(DEFAULT_AGENT_LLM_PROVIDER);
   const [model, setModel] = useState(DEFAULT_OPENAI_AGENT_MODEL);
   const [runOpts, setRunOpts] = useState('{"gateway":{"id":"default"}}');
@@ -192,7 +196,7 @@ function NewAgentPage() {
                 id="agent-path"
                 value={agentPathInput}
                 onChange={(event) => setAgentPathInput(event.currentTarget.value)}
-                placeholder="/agents/assistant"
+                placeholder="/agents/assistant_1710000000000"
               />
             </Field>
 
@@ -353,7 +357,7 @@ function buildPreviewEvents(input: {
   selectedToolProviders: Set<ToolProviderKey>;
   systemPrompt: string;
 }): { agentPath: StreamPath; error?: string; events: EventInput[] } {
-  let agentPath = StreamPath.parse("/agents/assistant");
+  let agentPath = StreamPath.parse(createDefaultAgentPath());
   try {
     agentPath = agentPathFromInput(input.agentPathInput);
     if (input.model.trim() === "") throw new Error("Model is required.");
