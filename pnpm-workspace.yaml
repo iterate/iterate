@@ -1,9 +1,6 @@
 packages:
-  - apps/project-ingress-proxy
   - apps/cli
-  - apps/daemon
   - apps/iterate-com
-  - apps/os
   - apps/os2
   - apps/os2-contract
   - apps/semaphore
@@ -19,13 +16,11 @@ packages:
   - apps/agents
   - apps/agents-contract
   - apps/*
-  - sandbox
   - services/*
   - '!services/events'
   - '!services/events-contract'
   - packages/*
   - packages/pidnap/docker
-  - repo-templates/**/*
   - .github/ts-workflows
 
 catalogs:
@@ -53,7 +48,6 @@ minimumReleaseAgeExclude:
   - "@cloudflare/workerd-linux-arm64"
   - "@cloudflare/workerd-windows-64"
   - "@cloudflare/codemode"
-  - "@cloudflare/sandbox"
   - "@cloudflare/unenv-preset"
   - "@cloudflare/vite-plugin"
   - "@cloudflare/vitest-pool-workers"

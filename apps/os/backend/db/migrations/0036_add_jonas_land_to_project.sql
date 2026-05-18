@@ -1,1 +1,0 @@
-ALTER TABLE "project" ADD COLUMN "jonas_land" boolean DEFAULT false NOT NULL;

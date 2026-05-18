@@ -11,6 +11,7 @@
     "alchemy:down": "tsx ./alchemy.run.ts --destroy",
     "cli": "doppler run --project os2 -- iterate-app-cli",
     "dev": "doppler run --project os2 -- tsx ./alchemy.run.ts",
+    "dev:local": "tsx ./alchemy.run.ts",
     "dev:localhost": "doppler run --project os2 --config dev_localhost -- tsx ./alchemy.run.ts",
     "build": "doppler run -- pnpm exec vite build",
     "rpc": "pnpm cli rpc",

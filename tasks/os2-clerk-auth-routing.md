@@ -62,8 +62,8 @@ SSR oRPC, HTTP oRPC, WebSocket oRPC, and the MCP server.
 ## Deferred Questions
 
 - Whether to keep Clerk's prebuilt `OrganizationList` for create/select or move
-  toward an `apps/os`-style custom organization landing page. Current bias:
-  keep Clerk's prebuilt flow for OS2 unless it blocks slug redirect behavior.
+  to a custom organization landing in OS2. Current bias: custom landing unless
+  Clerk's prebuilt flow blocks slug redirect behavior.
 - Whether WebSocket auth should be refreshed per message or the browser should
   reconnect after org switches. Current bias: reconnect after org switches; do
   not make the message path heavier yet.

@@ -1,11 +1,11 @@
 # PostHog Analytics Setup
 
-This document describes the PostHog analytics implementation for user journey tracking across iterate.com (marketing) and os2.iterate.com (product).
+Cross-domain tracking between iterate.com (marketing) and the OS product app (`apps/os2`).
 
 ## Architecture
 
 ```
-iterate.com (anonymous)          os2.iterate.com (identified)
+iterate.com (anonymous)          os.iterate.com / os2.iterate.com (identified)
 ┌─────────────────────┐         ┌─────────────────────────────┐
 │ User visits         │         │ User signs up               │
 │ marketing page      │         │                             │
@@ -19,113 +19,32 @@ iterate.com (anonymous)          os2.iterate.com (identified)
 
 ## Cross-Domain Tracking
 
-Since iterate.com and os2.iterate.com are different origins, cookies aren't shared. We use URL parameters to link sessions:
+Different origins do not share cookies. Marketing passes PostHog IDs on signup links:
 
-1. **iterate.com** (`apps/iterate-com/backend/routes/index.tsx`):
-   - When user clicks "Add to Slack", we append `ph_distinct_id` and `ph_session_id` params
-
-2. **os2.iterate.com** (`apps/os/app/routes/root.tsx`):
-   - On init, PostHog reads URL params and bootstraps with the cross-domain IDs
-   - When user signs up, `identify(userId)` merges anonymous events to the user
-
-## Events Tracked
-
-### Frontend Events
-
-- `$pageview` - Automatic on route changes
-- `$pageleave` - Automatic on page leave
-
-### Backend Events (Auth)
-
-- `user_signed_up` - When a new user is created (via better-auth hook)
-
-### Backend Events (Stripe Webhooks)
-
-- `subscription_started` - When subscription is created
-- `invoice_paid` - When payment succeeds
-- `payment_failed` - When payment fails
-
-All backend events include:
-
-- `distinctId`: First org member's userId
-- `groups`: `{ organization: organizationId }`
-
-## Stripe Integration
-
-### Data Warehouse Sync
-
-PostHog can sync Stripe data for revenue analytics. Configure in PostHog Dashboard:
-
-1. Data Pipeline → Sources → Add Stripe
-2. Create restricted API key with read permissions
-3. Enable Revenue Analytics
-
-### Customer Linking
-
-Stripe customers are linked to PostHog persons via:
-
-- **Email match**: Customer email matches person email
-- **Metadata**: `createdByUserId` stored in Stripe customer metadata
+1. **iterate.com** — `apps/iterate-com/backend/routes/index.tsx` appends `ph_distinct_id` and `ph_session_id` on outbound product links.
+2. **OS app** — client init reads those params and bootstraps PostHog before `identify(userId)` on signup.
 
 ## Key Files
 
-| File                                                       | Purpose                                  |
-| ---------------------------------------------------------- | ---------------------------------------- |
-| `apps/iterate-com/backend/routes/index.tsx`                | Adds PostHog IDs to signup URLs          |
-| `apps/iterate-com/backend/components/posthog-provider.tsx` | PostHog init for marketing site          |
-| `apps/os/app/routes/root.tsx`                              | PostHog init with cross-domain bootstrap |
-| `apps/os/app/hooks/use-posthog-identity.tsx`               | User identification logic                |
-| `apps/os/backend/auth/auth.ts`                             | User signup event tracking               |
-| `apps/os/backend/integrations/stripe/webhook.ts`           | Billing event tracking                   |
-| `apps/os/backend/lib/posthog.ts`                           | Server-side event capture                |
-| `apps/os/backend/orpc/routers/billing.ts`                  | Stripe customer creation with metadata   |
+| File                                                       | Purpose                               |
+| ---------------------------------------------------------- | ------------------------------------- |
+| `apps/iterate-com/backend/routes/index.tsx`                | Adds PostHog IDs to signup URLs       |
+| `apps/iterate-com/backend/components/posthog-provider.tsx` | PostHog init for marketing site       |
+| `apps/os2/src/routes/posthog-proxy.$.ts`                   | Worker proxy route for PostHog ingest |
+| `packages/shared/src/posthog/`                             | Shared proxy + sourcemap helpers      |
 
-## Verification
-
-1. **Cross-domain tracking**: Click signup on iterate.com → URL should contain `ph_distinct_id`
-2. **Identity merge**: Sign up → Check PostHog person has marketing pageviews
-3. **Billing events**: Subscribe → Check `subscription_started` event in PostHog
-4. **Payment failure**: Simulate failed payment → Check `payment_failed` event
+Search `apps/os2` for PostHog client init and identity hooks when wiring new UI surfaces.
 
 ## Environment Variables
 
-The legacy product app in `apps/os` and the related marketing flow share these
-analytics env vars:
+Configured in Doppler for `os2` and `iterate-com`:
 
-- `POSTHOG_PUBLIC_KEY` - PostHog project API key (used for server-side tracking)
-- `VITE_POSTHOG_PUBLIC_KEY` - PostHog project API key for client (set as reference to `POSTHOG_PUBLIC_KEY` in Doppler)
-- `VITE_POSTHOG_PROXY_URL` - Proxy endpoint (defaults to `/api/integrations/posthog/proxy`)
-- `VITE_APP_STAGE` - Environment stage (`dev_*`, numbered `preview_N`, `prd`) - automatically included as `$environment` in all events
+- `POSTHOG_PUBLIC_KEY` — server-side project API key
+- `VITE_POSTHOG_PUBLIC_KEY` — client key (often aliased from `POSTHOG_PUBLIC_KEY`)
+- `VITE_APP_STAGE` — included as `$environment` on events (`dev_*`, `preview_N`, `prd`)
 
-## Multi-Environment Setup
+## Verification
 
-We use separate PostHog projects for each environment to keep data isolated:
-
-| Environment | PostHog Project   | Doppler Config                                    |
-| ----------- | ----------------- | ------------------------------------------------- |
-| Production  | `iterate-prd`     | `prd`                                             |
-| Preview     | `iterate-preview` | numbered `preview_N` configs leased via Semaphore |
-| Development | `iterate-dev`     | `dev`                                             |
-
-Each Doppler config has a different `POSTHOG_PUBLIC_KEY` pointing to its respective PostHog project.
-
-### Setting Up a New Environment
-
-1. **Create PostHog project**: In PostHog dashboard, click your project name → New project
-2. **Copy API key**: Project settings → Project API key
-3. **Update Doppler**: Set `POSTHOG_PUBLIC_KEY` in the appropriate config
-
-### Personal Dev Environments
-
-For isolated personal environments (e.g., `dev-jonas`), you can:
-
-- Create a personal PostHog project (e.g., `iterate-dev-jonas`)
-- Use a Doppler branch or separate config with your own API key
-
-### Consistent Properties
-
-All events (frontend and backend) automatically include:
-
-- `$environment` - The stage (dev/preview/prd) from `VITE_APP_STAGE`
-
-This allows filtering by environment within a project if needed, though with separate projects this is mainly useful for verification.
+1. Click signup on iterate.com → URL contains `ph_distinct_id`
+2. Sign up in OS → person in PostHog includes marketing pageviews
+3. Exercise billing flows → confirm subscription/payment events if enabled for the environment

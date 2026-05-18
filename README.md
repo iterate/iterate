@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- [Depot CLI](https://depot.dev/docs/cli/installation) for fast Docker builds with shared caching:
+- [Depot CLI](https://depot.dev/docs/cli/installation) for fast Docker builds with shared caching (optional):
   ```bash
   brew install depot/tap/depot
   depot login
@@ -12,31 +12,26 @@
 
 ```bash
 pnpm install
-pnpm docker:up
-pnpm os db:migrate
-docker buildx create --name iterate --driver docker-container --use
-pnpm sandbox build
 pnpm dev
 ```
 
 ## Repository Structure
 
-- `apps/os/` - Primary application (React + Cloudflare Workers)
-- `apps/daemon/` - Local daemon for durable streams and agent orchestration
+- `apps/os2/` - Primary application (React + Cloudflare Workers)
+- `apps/auth/` - Authentication service
 - `apps/iterate-com` - iterate.com website
 - `docs/` - Detailed documentation and patterns
 
 ## Development Commands
 
 ```bash
-pnpm dev          # Run auth + os together
-pnpm os dev       # Run apps/os only
+pnpm dev              # Run auth + os2 together
+pnpm os2 dev          # Run apps/os2 only
 pnpm --dir apps/auth dev  # Run apps/auth only
-pnpm daemon dev   # Run apps/daemon only
-pnpm test         # Run all tests
-pnpm typecheck    # Type check all packages
-pnpm lint         # Lint and fix
-pnpm format       # Format code
+pnpm test             # Run all tests
+pnpm typecheck        # Type check all packages
+pnpm lint             # Lint and fix
+pnpm format           # Format code
 ```
 
 ## Cloudflare App Deployments
@@ -76,8 +71,8 @@ preview slots exist. Each live Semaphore resource has:
 To inspect and validate that live inventory:
 
 ```bash
-doppler run --project os --config prd -- pnpm preview status
-doppler run --project os --config prd -- pnpm preview reconcile
+doppler run --project os2 --config prd -- pnpm preview status
+doppler run --project os2 --config prd -- pnpm preview reconcile
 ```
 
 `preview reconcile` checks every live `environment-config-lease` row against
@@ -97,7 +92,7 @@ To intentionally recreate the environment config lease inventory:
 
 ```bash
 doppler run --project semaphore --config prd -- pnpm --dir apps/semaphore seed:environment-config-leases
-doppler run --project os --config prd -- pnpm preview reconcile
+doppler run --project os2 --config prd -- pnpm preview reconcile
 ```
 
 The seed is exact for `environment-config-lease`: missing resources are created
@@ -119,8 +114,3 @@ DEV_TUNNEL=1 pnpm dev        # → {app}-dev-{ITERATE_USER}.dev.iterate.com
 DEV_TUNNEL=bob pnpm dev      # → bob.dev.iterate.com (custom, no stage/app suffix)
 DEV_TUNNEL=0 pnpm dev        # disabled (also: false, or unset)
 ```
-
-## Sandbox Providers
-
-See `sandbox/README.md` for provider strategy, image tagging, and CI flow.
-Fly is the primary deployment provider; Daytona is supported for one-off manual testing only.

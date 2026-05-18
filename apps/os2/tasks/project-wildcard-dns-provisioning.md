@@ -50,7 +50,7 @@ management is enabled for them.
 - Single-label aliases such as `app1__<slug>.<base>` work with ordinary
   `*.<base>` DNS and cert coverage, but they are fallback aliases rather than
   the canonical dotted app shape.
-- `apps/os/alchemy.run.ts` has precedent for Cloudflare DNS management:
+- `apps/os2/alchemy.run.ts` has precedent for Cloudflare DNS management in this repo:
   resolve zone by name, list `dns_records` by `type=CNAME&name=...`, then create
   or update a proxied CNAME with `ttl: 1` and a managed comment.
 - Cloudflare's DNS API supports:

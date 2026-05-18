@@ -1,7 +1,9 @@
 # Architecture
 
-The iterate platform consists of two parts.
+The iterate platform is a Cloudflare Workers control plane plus project-scoped runtime APIs.
 
-There is a control plane, which is our hosted offering. It runs on Cloudflare and handles things like secrets management, provisioning machines and overall management of the platform. `apps/os/backend` contains all the APIs for this. `apps/os/app` is the webapp for the cloud platform, which talks to the backend over oRPC.
+`apps/os2` is the primary product app. It provides the authenticated web UI, oRPC APIs, Clerk auth integration, D1/sqlfu projections, and Durable Objects for project lifecycle, ingress, MCP sessions, codemode sessions, and shared streams.
 
-The second part are the 'machines'. The machine has a daemon that controls multiple AI agents and provides a HTTP server, and communicates with the control plane. The machine is intended to be standalone and self-hostable. It should be infrastructure agnostic. A machine should not care whether it is being controlled by the control plane or not - you should be able to run it without the control plane. Eventually the control plane may seamlessly spread out tasks across multiple machines.
+Other Cloudflare apps in the monorepo (`agents`, `events`, `semaphore`, `example`, etc.) provide supporting services and reference implementations.
+
+See `apps/os2/AGENTS.md` and `apps/os2/docs/architecture-and-operations.md` for OS2-specific details.

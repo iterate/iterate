@@ -1,1 +1,0 @@
-CREATE UNIQUE INDEX "event_external_id_unique" ON "event" USING btree ("external_id") WHERE "event"."external_id" IS NOT NULL;

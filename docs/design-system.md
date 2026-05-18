@@ -4,7 +4,7 @@ We use shadcn/ui components with vanilla shadcn style. Install additional compon
 
 ## App Consistency
 
-Layout patterns, component usage, and structural patterns should stay in sync between `apps/os` and `apps/daemon`. When making structural changes to one app (layouts, shared components, navigation patterns), ask the user if they want to update the other app to match.
+Layout patterns, component usage, and structural patterns for the OS app live in `apps/os2`.
 
 ## Mobile-First Development
 
@@ -68,7 +68,7 @@ Key patterns:
 
 ### Sheet over Dialog
 
-Prefer `Sheet` (slides in from side) over `Dialog` (modal popup) for forms and actions. Sheets are more mobile-friendly and feel more native. See `apps/os/app/routes/org/project/machines.tsx` for example.
+Prefer `Sheet` (slides in from side) over `Dialog` (modal popup) for forms and actions. Sheets are more mobile-friendly and feel more native.
 
 ### Flex Layouts
 
