@@ -70,6 +70,8 @@ const app = await alchemy(APP_NAME, {
 });
 
 const workerName = slugify(`${APP_NAME}-${app.stage}`);
+const emailOtpEnabled =
+  alchemyEnv.VITE_ENABLE_EMAIL_OTP_SIGNIN?.trim() || (app.stage.startsWith("dev") ? "true" : "");
 
 await Exec("render-superadmin-seed", {
   command: `tsx ./scripts/render-superadmin-seed.ts ${SUPERADMIN_SEED_SQL_PATH}`,
@@ -96,7 +98,7 @@ const worker = await TanStackStart(APP_NAME, {
     RESEND_BOT_DOMAIN: alchemy.secret(alchemyEnv.RESEND_BOT_DOMAIN),
     RESEND_BOT_API_KEY: alchemy.secret(alchemyEnv.RESEND_BOT_API_KEY),
     SIGNUP_ALLOWLIST: alchemy.secret(alchemyEnv.SIGNUP_ALLOWLIST),
-    VITE_ENABLE_EMAIL_OTP_SIGNIN: alchemy.secret(alchemyEnv.VITE_ENABLE_EMAIL_OTP_SIGNIN ?? ""),
+    VITE_ENABLE_EMAIL_OTP_SIGNIN: alchemy.secret(emailOtpEnabled),
     GOOGLE_CLIENT_ID: alchemy.secret(alchemyEnv.GOOGLE_CLIENT_ID),
     GOOGLE_CLIENT_SECRET: alchemy.secret(alchemyEnv.GOOGLE_CLIENT_SECRET),
   },

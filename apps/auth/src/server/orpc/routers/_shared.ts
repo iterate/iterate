@@ -1,4 +1,6 @@
 import { OrganizationRole } from "@iterate-com/auth-contract";
+import { parseProjectMetadata, parseTimestampMs } from "../../db/helpers.ts";
+import type { insertProjectReturning, updateProjectReturning } from "../../db/queries/index.ts";
 
 export function generateId(prefix: string) {
   return `${prefix}_${crypto.randomUUID().replace(/-/g, "")}`;
@@ -48,4 +50,23 @@ export function toProjectRecord(project: {
 
 export function toMembershipRole(role: string | null | undefined): OrganizationRole {
   return OrganizationRole.parse(role ?? "member");
+}
+
+type ReturnedProjectRow = (insertProjectReturning.Result | updateProjectReturning.Result) &
+  Partial<{ organizationId: string; archivedAt?: number }>;
+
+export function toProjectRecordFromReturnedRow(project: ReturnedProjectRow) {
+  const organizationId =
+    typeof project.organizationId === "string" ? project.organizationId : project.organization_id;
+  const archivedAt =
+    typeof project.archivedAt === "number" ? project.archivedAt : project.archived_at;
+
+  return toProjectRecord({
+    id: project.id,
+    organizationId,
+    name: project.name,
+    slug: project.slug,
+    metadata: parseProjectMetadata(project.metadata),
+    archivedAt: parseTimestampMs(archivedAt),
+  });
 }

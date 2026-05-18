@@ -57,3 +57,18 @@ CREATE TABLE "project" (
 
 CREATE UNIQUE INDEX project_slug_uidx ON project(slug);
 CREATE INDEX project_organizationId_idx ON project(organization_id);
+
+CREATE TABLE "oauthProjectSelection" (
+  session_id TEXT NOT NULL,
+  client_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  project_ids TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (session_id, client_id),
+  FOREIGN KEY (session_id) REFERENCES session(id) ON DELETE cascade,
+  FOREIGN KEY (client_id) REFERENCES oauthClient(clientId) ON DELETE cascade,
+  FOREIGN KEY (user_id) REFERENCES user(id) ON DELETE cascade
+);
+
+CREATE INDEX oauthProjectSelection_userId_idx ON oauthProjectSelection(user_id);

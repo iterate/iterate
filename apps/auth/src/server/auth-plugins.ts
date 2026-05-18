@@ -3,13 +3,26 @@ import { bearer, deviceAuthorization, emailOTP, jwt, oneTimeToken } from "better
 import { oauthProvider } from "@better-auth/oauth-provider";
 import { organization } from "better-auth/plugins/organization";
 import {
+  ITERATE_PROJECT_SELECTION_SCOPE,
   ITERATE_ACTIVE_ORGANIZATION_ID_CLAIM,
   ITERATE_IS_ADMIN_CLAIM,
+  ITERATE_ORGANIZATIONS_CLAIM,
   ITERATE_ROLE_CLAIM,
+  type IterateAuthOrganizationClaim,
 } from "@iterate-com/shared/auth-claims";
 import { betterAuth } from "better-auth";
-import { getSessionActiveOrganizationIdById } from "./db/queries/.generated/index.ts";
+import {
+  deleteOAuthProjectSelectionsByUserId,
+  getSessionActiveOrganizationIdById,
+  listOrganizationsForUser,
+} from "./db/queries/.generated/index.ts";
 import { db } from "./db/index.ts";
+import {
+  buildAugmentedScopeClaims,
+  buildOAuthProjectSelectionReferenceId,
+  parseOAuthProjectSelectionReferenceId,
+  resolveStoredProjectSelection,
+} from "./oauth-project-selection.ts";
 
 const TEST_EMAIL_PATTERN = /\+.*test@/i;
 const TEST_OTP_CODE = "424242";
@@ -32,7 +45,41 @@ async function getSessionActiveOrganizationId(jwt: Record<string, unknown> | nul
   return authSession?.activeOrganizationId ?? null;
 }
 
+async function listOrganizationClaims(
+  user: Record<string, unknown> | null | undefined,
+): Promise<IterateAuthOrganizationClaim[]> {
+  const userId = typeof user?.id === "string" ? user.id : null;
+  if (!userId) return [];
+
+  const organizations = await listOrganizationsForUser(db, { userId });
+  return organizations.map((organization) => ({
+    id: organization.id,
+    name: organization.name,
+    slug: organization.slug,
+    role:
+      organization.role === "owner" || organization.role === "admin" ? organization.role : "member",
+  }));
+}
+
 export function getAuthPlugins(env: Record<string, unknown>) {
+  const validAudiences = [
+    env.VITE_AUTH_APP_ORIGIN,
+    typeof env.VITE_AUTH_APP_ORIGIN === "string" ? `${env.VITE_AUTH_APP_ORIGIN}/mcp` : null,
+    typeof env.VITE_AUTH_APP_ORIGIN === "string" ? `${env.VITE_AUTH_APP_ORIGIN}/mcp/` : null,
+    typeof env.VITE_MCP_APP_ORIGIN === "string" ? `${env.VITE_MCP_APP_ORIGIN}/mcp` : null,
+    typeof env.VITE_MCP_APP_ORIGIN === "string" ? `${env.VITE_MCP_APP_ORIGIN}/mcp/` : null,
+    "https://mcp.iterate.com/mcp",
+    "https://mcp.iterate.com/mcp/",
+    "http://localhost:1337/mcp",
+    "http://localhost:1337/mcp/",
+    "http://127.0.0.1:1337/mcp",
+    "http://127.0.0.1:1337/mcp/",
+    "http://localhost:7301/mcp",
+    "http://localhost:7301/mcp/",
+    "http://127.0.0.1:7301/mcp",
+    "http://127.0.0.1:7301/mcp/",
+  ].filter((audience): audience is string => typeof audience === "string" && audience.length > 0);
+
   return [
     jwt(),
     bearer(),
@@ -91,21 +138,66 @@ export function getAuthPlugins(env: Record<string, unknown>) {
     oauthProvider({
       loginPage: "/login",
       consentPage: "/consent",
+      postLogin: {
+        page: "/project-access",
+        shouldRedirect: async ({ scopes, session }) => {
+          if (!scopes.includes(ITERATE_PROJECT_SELECTION_SCOPE)) {
+            return false;
+          }
+
+          const selection = await resolveStoredProjectSelection({ userId: session?.userId });
+
+          return !selection;
+        },
+        consentReferenceId: async ({ session }) => {
+          const selection = await resolveStoredProjectSelection({ userId: session?.userId });
+          if (!selection || !session?.userId) {
+            return undefined;
+          }
+
+          return buildOAuthProjectSelectionReferenceId({
+            projectIds: selection,
+            userId: session.userId,
+          });
+        },
+      },
       silenceWarnings: { openidConfig: true, oauthAuthServerConfig: true },
       accessTokenExpiresIn: 5 * 60,
+      scopes: ["openid", "profile", "email", "offline_access", ITERATE_PROJECT_SELECTION_SCOPE],
+      validAudiences,
+      allowDynamicClientRegistration: true,
+      allowUnauthenticatedClientRegistration: true,
+      customAccessTokenClaims: async ({ referenceId, scopes }) => {
+        const selection = parseOAuthProjectSelectionReferenceId(referenceId);
+        if (selection?.userId) {
+          await deleteOAuthProjectSelectionsByUserId(db, { userId: selection.userId });
+        }
+
+        return {
+          scopes: buildAugmentedScopeClaims({
+            requestedScopes: scopes,
+            projectIds: selection?.projectIds ?? [],
+          }),
+        };
+      },
       customIdTokenClaims: ({ user }) => buildIterateTokenClaims(user),
-      customAccessTokenClaims: ({ user }) => buildIterateTokenClaims(user),
-      customUserInfoClaims: async ({ user, jwt }) => ({
-        ...buildIterateTokenClaims(user),
-        [ITERATE_ACTIVE_ORGANIZATION_ID_CLAIM]: await getSessionActiveOrganizationId(
-          jwt as Record<string, unknown> | null | undefined,
-        ),
-      }),
+      customUserInfoClaims: async ({ user, jwt }) => {
+        const [organizationClaims, activeOrganizationId] = await Promise.all([
+          listOrganizationClaims(user),
+          getSessionActiveOrganizationId(jwt as Record<string, unknown> | null | undefined),
+        ]);
+        return {
+          ...buildIterateTokenClaims(user),
+          [ITERATE_ORGANIZATIONS_CLAIM]: organizationClaims,
+          [ITERATE_ACTIVE_ORGANIZATION_ID_CLAIM]: activeOrganizationId,
+        };
+      },
       advertisedMetadata: {
         claims_supported: [
           ITERATE_IS_ADMIN_CLAIM,
           ITERATE_ROLE_CLAIM,
           ITERATE_ACTIVE_ORGANIZATION_ID_CLAIM,
+          ITERATE_ORGANIZATIONS_CLAIM,
         ],
       },
     }),

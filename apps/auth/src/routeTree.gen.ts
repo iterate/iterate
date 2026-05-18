@@ -14,6 +14,8 @@ import { Route as DeviceRouteImport } from "./routes/device.tsx";
 import { Route as AuthRouteImport } from "./routes/_auth.tsx";
 import { Route as AuthIndexRouteImport } from "./routes/_auth/index.tsx";
 import { Route as AuthSuperadminRouteImport } from "./routes/_auth/superadmin.tsx";
+import { Route as AuthProjectsRouteImport } from "./routes/_auth/projects.tsx";
+import { Route as AuthProjectAccessRouteImport } from "./routes/_auth/project-access.tsx";
 import { Route as AuthConsentRouteImport } from "./routes/_auth/consent.tsx";
 import { Route as AuthSuperadminClientsRouteImport } from "./routes/_auth/superadmin/clients.tsx";
 
@@ -41,6 +43,16 @@ const AuthSuperadminRoute = AuthSuperadminRouteImport.update({
   path: "/superadmin",
   getParentRoute: () => AuthRoute,
 } as any);
+const AuthProjectsRoute = AuthProjectsRouteImport.update({
+  id: "/projects",
+  path: "/projects",
+  getParentRoute: () => AuthRoute,
+} as any);
+const AuthProjectAccessRoute = AuthProjectAccessRouteImport.update({
+  id: "/project-access",
+  path: "/project-access",
+  getParentRoute: () => AuthRoute,
+} as any);
 const AuthConsentRoute = AuthConsentRouteImport.update({
   id: "/consent",
   path: "/consent",
@@ -57,6 +69,8 @@ export interface FileRoutesByFullPath {
   "/device": typeof DeviceRoute;
   "/login": typeof LoginRoute;
   "/consent": typeof AuthConsentRoute;
+  "/project-access": typeof AuthProjectAccessRoute;
+  "/projects": typeof AuthProjectsRoute;
   "/superadmin": typeof AuthSuperadminRouteWithChildren;
   "/superadmin/clients": typeof AuthSuperadminClientsRoute;
 }
@@ -64,6 +78,8 @@ export interface FileRoutesByTo {
   "/device": typeof DeviceRoute;
   "/login": typeof LoginRoute;
   "/consent": typeof AuthConsentRoute;
+  "/project-access": typeof AuthProjectAccessRoute;
+  "/projects": typeof AuthProjectsRoute;
   "/superadmin": typeof AuthSuperadminRouteWithChildren;
   "/": typeof AuthIndexRoute;
   "/superadmin/clients": typeof AuthSuperadminClientsRoute;
@@ -74,6 +90,8 @@ export interface FileRoutesById {
   "/device": typeof DeviceRoute;
   "/login": typeof LoginRoute;
   "/_auth/consent": typeof AuthConsentRoute;
+  "/_auth/project-access": typeof AuthProjectAccessRoute;
+  "/_auth/projects": typeof AuthProjectsRoute;
   "/_auth/superadmin": typeof AuthSuperadminRouteWithChildren;
   "/_auth/": typeof AuthIndexRoute;
   "/_auth/superadmin/clients": typeof AuthSuperadminClientsRoute;
@@ -85,6 +103,8 @@ export interface FileRouteTypes {
     | "/device"
     | "/login"
     | "/consent"
+    | "/project-access"
+    | "/projects"
     | "/superadmin"
     | "/superadmin/clients";
   fileRoutesByTo: FileRoutesByTo;
@@ -92,6 +112,8 @@ export interface FileRouteTypes {
     | "/device"
     | "/login"
     | "/consent"
+    | "/project-access"
+    | "/projects"
     | "/superadmin"
     | "/"
     | "/superadmin/clients";
@@ -101,6 +123,8 @@ export interface FileRouteTypes {
     | "/device"
     | "/login"
     | "/_auth/consent"
+    | "/_auth/project-access"
+    | "/_auth/projects"
     | "/_auth/superadmin"
     | "/_auth/"
     | "/_auth/superadmin/clients";
@@ -149,6 +173,20 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AuthSuperadminRouteImport;
       parentRoute: typeof AuthRoute;
     };
+    "/_auth/projects": {
+      id: "/_auth/projects";
+      path: "/projects";
+      fullPath: "/projects";
+      preLoaderRoute: typeof AuthProjectsRouteImport;
+      parentRoute: typeof AuthRoute;
+    };
+    "/_auth/project-access": {
+      id: "/_auth/project-access";
+      path: "/project-access";
+      fullPath: "/project-access";
+      preLoaderRoute: typeof AuthProjectAccessRouteImport;
+      parentRoute: typeof AuthRoute;
+    };
     "/_auth/consent": {
       id: "/_auth/consent";
       path: "/consent";
@@ -180,12 +218,16 @@ const AuthSuperadminRouteWithChildren = AuthSuperadminRoute._addFileChildren(
 
 interface AuthRouteChildren {
   AuthConsentRoute: typeof AuthConsentRoute;
+  AuthProjectAccessRoute: typeof AuthProjectAccessRoute;
+  AuthProjectsRoute: typeof AuthProjectsRoute;
   AuthSuperadminRoute: typeof AuthSuperadminRouteWithChildren;
   AuthIndexRoute: typeof AuthIndexRoute;
 }
 
 const AuthRouteChildren: AuthRouteChildren = {
   AuthConsentRoute: AuthConsentRoute,
+  AuthProjectAccessRoute: AuthProjectAccessRoute,
+  AuthProjectsRoute: AuthProjectsRoute,
   AuthSuperadminRoute: AuthSuperadminRouteWithChildren,
   AuthIndexRoute: AuthIndexRoute,
 };

@@ -46,14 +46,23 @@ function RouteComponent() {
           </CardContent>
           <Separator />
           <CardContent>
-            <Button
-              className="w-full"
-              variant="outline"
-              disabled={signOut.isPending}
-              onClick={() => signOut.mutate()}
-            >
-              {signOut.isPending ? "Signing out..." : "Sign out"}
-            </Button>
+            <div className="space-y-2">
+              <Button
+                className="w-full"
+                variant="outline"
+                onClick={() => navigate({ to: "/projects" })}
+              >
+                Manage projects
+              </Button>
+              <Button
+                className="w-full"
+                variant="outline"
+                disabled={signOut.isPending}
+                onClick={() => signOut.mutate()}
+              >
+                {signOut.isPending ? "Signing out..." : "Sign out"}
+              </Button>
+            </div>
           </CardContent>
         </Card>
 

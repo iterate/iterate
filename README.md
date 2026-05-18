@@ -87,6 +87,8 @@ Other Cloudflare apps (`events`, `semaphore`, `example`, …) are supporting ser
 
 ```bash
 pnpm dev                      # local OS dev server
+pnpm mcp:dev                  # local MCP app against local auth
+pnpm --dir apps/auth dev      # auth app only
 pnpm os dev                   # same, explicit apps/os path
 pnpm test && pnpm typecheck && pnpm lint && pnpm format
 ```

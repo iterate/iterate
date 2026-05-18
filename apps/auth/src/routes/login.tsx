@@ -1,5 +1,6 @@
 import { useEffect, useState, type ChangeEvent } from "react";
 import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createServerFn } from "@tanstack/react-start";
 import { useMutation } from "@tanstack/react-query";
 import { z } from "zod/v4";
 import { Button } from "@iterate-com/ui/components/button";
@@ -17,13 +18,16 @@ import { Separator } from "@iterate-com/ui/components/separator";
 import { toast } from "sonner";
 import { authClient } from "../utils/auth-client.ts";
 
-const emailOtpEnabled = import.meta.env.VITE_ENABLE_EMAIL_OTP_SIGNIN === "true";
+const getLoginSettings = createServerFn({ method: "GET" }).handler(({ context }) => ({
+  emailOtpEnabled: context.cloudflare.env.VITE_ENABLE_EMAIL_OTP_SIGNIN === "true",
+}));
 
 export const Route = createFileRoute("/login")({
   component: RouteComponent,
   validateSearch: z.looseObject({
     redirect: z.string().optional(),
   }),
+  loader: () => getLoginSettings(),
   beforeLoad: async ({ search }) => {
     const session = await authClient.getSession().catch(() => null);
     if (session) throw redirect({ to: search.redirect ?? "/" });
@@ -32,6 +36,7 @@ export const Route = createFileRoute("/login")({
 
 function RouteComponent() {
   const { redirect } = Route.useSearch();
+  const { emailOtpEnabled } = Route.useLoaderData();
 
   return (
     <div className="flex min-h-screen items-center justify-center p-4">
@@ -42,14 +47,20 @@ function RouteComponent() {
         </CardHeader>
         <Separator />
         <CardContent className="pt-6">
-          <LoginActions redirectTo={redirect ?? "/"} />
+          <LoginActions redirectTo={redirect ?? "/"} emailOtpEnabled={emailOtpEnabled} />
         </CardContent>
       </Card>
     </div>
   );
 }
 
-function LoginActions({ redirectTo }: { redirectTo: string }) {
+function LoginActions({
+  redirectTo,
+  emailOtpEnabled,
+}: {
+  redirectTo: string;
+  emailOtpEnabled: boolean;
+}) {
   const [emailMode, setEmailMode] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
   const googleSignIn = useMutation({
@@ -268,15 +279,12 @@ async function getPostLoginRedirectUrl(fallbackRedirect: string) {
     return fallbackRedirect;
   }
 
-  const result = await authClient.oauth2.continue({
-    postLogin: true,
-  });
-
-  if (!result.url) {
-    throw new Error("Signed in, but couldn't finish the OAuth redirect");
-  }
-
-  return result.url;
+  const redirectUrl = new URL("/api/auth/oauth2/authorize", window.location.origin);
+  const searchParams = new URLSearchParams(window.location.search);
+  searchParams.delete("exp");
+  searchParams.delete("sig");
+  redirectUrl.search = searchParams.toString();
+  return redirectUrl.toString();
 }
 
 function isOAuthProviderFlow() {
