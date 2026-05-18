@@ -1,5 +1,5 @@
-import type { ReceiveFunctionCallResultInput } from "../../src/domains/codemode/durable-objects/codemode-session.ts";
 import type { Event } from "@iterate-com/shared/streams/types";
+import type { ReceiveFunctionCallResultInput } from "../../src/domains/codemode/durable-objects/codemode-session.ts";
 import {
   createAdminOs2Client,
   requireBaseUrl,
@@ -24,8 +24,9 @@ export async function createFixture(params?: Parameters<typeof createTestProject
   const project = await createTestProject(params);
   const fixture = project;
   const startCodemodeScript = async <T>(
-    fn: (ctx: {}) => T | Promise<T>,
-    options?: Partial<Omit<typeof project.client.project.codemode.executeScript, "code">>,
+    fn: (ctx: {}) => Promise<T>,
+    // prettier-ignore
+    opts?: Partial<Omit<Parameters<Awaited<ReturnType<typeof createTestProject>>["client"]["project"]["codemode"]["executeScript"]>[0],"code">>,
   ) => {
     let code = fn.toString();
     if (!code.startsWith("async")) {
@@ -35,7 +36,7 @@ export async function createFixture(params?: Parameters<typeof createTestProject
       code,
       projectSlugOrId: project.project.id,
       providers: [],
-      ...options,
+      ...opts,
     });
 
     return {
@@ -44,11 +45,8 @@ export async function createFixture(params?: Parameters<typeof createTestProject
     };
   };
 
-  const executeCodemodeScript = async <T>(
-    fn: (ctx: {}) => T | Promise<T>,
-    options?: Partial<Omit<typeof project.client.project.codemode.executeScript, "code">>,
-  ) => {
-    const started = await startCodemodeScript(fn, options);
+  const executeCodemodeScript = async <T>(...args: Parameters<typeof startCodemodeScript<T>>) => {
+    const started = await startCodemodeScript(...args);
     const startedPayload = started.event.payload as { scriptExecutionId: string };
     const isCompletedScriptExecution = (
       event: Event,
