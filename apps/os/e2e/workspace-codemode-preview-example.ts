@@ -101,7 +101,7 @@ async function fetchProjectBySlug(input: { adminApiSecret: string; baseUrl: URL;
 }
 
 function projectMcpUrlFor(input: { baseUrl: URL; project: Project }) {
-  const previewMatch = /^os2\.iterate-preview-(\d+)\.com$/.exec(input.baseUrl.hostname);
+  const previewMatch = /^os\.iterate-preview-(\d+)\.com$/.exec(input.baseUrl.hostname);
   if (previewMatch) {
     return new URL(`https://mcp__${input.project.slug}.iterate-preview-${previewMatch[1]}.app/`);
   }
