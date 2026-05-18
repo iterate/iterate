@@ -1,11 +1,11 @@
 import type { ClerkClient } from "@clerk/backend";
 import { describe, expect, it, vi } from "vitest";
+import { resolveMcpProjectAccess } from "./mcp-project-access.ts";
 import type {
   ProjectDurableObject,
   ProjectSummary,
 } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import type { ProjectMcpServerConnectionProps } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
-import { resolveMcpProjectAccess } from "./mcp-project-access.ts";
 
 const projectSummary: ProjectSummary = {
   id: "proj_iterate",
