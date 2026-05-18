@@ -12,7 +12,7 @@ export type EnvironmentConfigLeaseInventoryItem = {
 
 // This is the deliberate seed used when recreating the Semaphore inventory.
 // The live Semaphore database remains the source of truth for deploys.
-const seededPreviewEnvironmentNumbers = [2, 3, 4, 5, 6, 7, 8, 9] as const;
+const seededPreviewEnvironmentNumbers = [1, 2, 3, 4, 5, 6, 7, 8, 9] as const;
 
 export const environmentConfigLeaseInventory = seededPreviewEnvironmentNumbers.map(
   (leaseNumber) => {

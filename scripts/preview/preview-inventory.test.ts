@@ -1,9 +1,26 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+  environmentConfigLeaseInventory,
   parseEnvironmentConfigLeaseData,
   syncPreviewInventory,
 } from "./preview-inventory.ts";
+
+describe("environmentConfigLeaseInventory", () => {
+  it("matches the currently provisioned preview slot range", () => {
+    expect(environmentConfigLeaseInventory.map((resource) => resource.slug)).toEqual([
+      "preview-1",
+      "preview-2",
+      "preview-3",
+      "preview-4",
+      "preview-5",
+      "preview-6",
+      "preview-7",
+      "preview-8",
+      "preview-9",
+    ]);
+  });
+});
 
 describe("syncPreviewInventory", () => {
   it("adds missing shared environment config lease resources", async () => {

@@ -33,14 +33,59 @@ type Project = {
 };
 
 async function expectStatus(input: { method?: string; status: number; url: URL }) {
-  const response = await fetch(input.url, {
-    method: input.method ?? "GET",
-    redirect: "manual",
+  const response = await fetchWithTransientRetry({
+    init: {
+      method: input.method ?? "GET",
+      redirect: "manual",
+    },
+    url: input.url,
   });
   if (response.status !== input.status) {
     throw new Error(`Expected ${input.status} from ${input.url}; received ${response.status}.`);
   }
   return response;
+}
+
+async function fetchWithTransientRetry(input: {
+  attempts?: number;
+  init?: RequestInit;
+  retryDelayMs?: number;
+  url: URL;
+}) {
+  const attempts = input.attempts ?? 6;
+  const retryDelayMs = input.retryDelayMs ?? 5_000;
+  let lastResponse: Response | null = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const response = await fetch(input.url, {
+      ...input.init,
+      redirect: input.init?.redirect ?? "manual",
+    });
+    lastResponse = response;
+    if (![502, 503, 504].includes(response.status) || attempt === attempts) {
+      return response;
+    }
+
+    response.body?.cancel().catch(() => {});
+    await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+  }
+
+  if (lastResponse) return lastResponse;
+  throw new Error(`No response received from ${input.url}`);
+}
+
+async function expectOkText(input: { headers?: HeadersInit; url: URL }) {
+  const response = await fetchWithTransientRetry({
+    init: {
+      headers: input.headers,
+      redirect: "manual",
+    },
+    url: input.url,
+  });
+  if (!response.ok) {
+    throw new Error(`Expected ok response from ${input.url}; received ${response.status}.`);
+  }
+  return await response.text();
 }
 
 async function fetchProjectBySlug(input: { adminApiSecret: string; baseUrl: URL; slug: string }) {
@@ -139,16 +184,10 @@ if (!projectMcpUrl) {
   process.exit(0);
 }
 
-const instructionsResponse = await fetch(projectMcpUrl, {
+const instructionsHtml = await expectOkText({
   headers: { accept: "text/html" },
-  redirect: "manual",
+  url: projectMcpUrl,
 });
-if (!instructionsResponse.ok) {
-  throw new Error(
-    `Expected MCP instructions page from ${projectMcpUrl}; received ${instructionsResponse.status}.`,
-  );
-}
-const instructionsHtml = await instructionsResponse.text();
 if (!instructionsHtml.includes("Connect an MCP client to this project endpoint")) {
   throw new Error(`MCP instructions page did not contain setup text: ${instructionsHtml}`);
 }

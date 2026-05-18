@@ -384,15 +384,9 @@ async function findActiveZoneForHostname(
   cloudflareApi: Awaited<ReturnType<typeof createCloudflareApi>>,
   hostname: string,
 ) {
-  const cleanHostname = hostname.replace(/^\*\./, "");
   let page = 1;
   let totalPages = 1;
-  const zones: Array<{
-    account?: { id?: string };
-    id: string;
-    name: string;
-    status?: string;
-  }> = [];
+  const zones: CloudflareZone[] = [];
 
   do {
     const response = await cloudflareApi.get(`/zones?per_page=50&page=${page}`);
@@ -414,16 +408,11 @@ async function findActiveZoneForHostname(
     page += 1;
   } while (page <= totalPages);
 
-  const matchingZones = zones
-    .filter((zone) => cleanHostname === zone.name || cleanHostname.endsWith(`.${zone.name}`))
-    .sort((a, b) => b.name.length - a.name.length);
-  const bestZone =
-    matchingZones.find(
-      (zone) => zone.account?.id === cloudflareApi.accountId && zone.status === "active",
-    ) ??
-    matchingZones.find((zone) => zone.account?.id === cloudflareApi.accountId) ??
-    matchingZones.find((zone) => zone.status === "active") ??
-    matchingZones[0];
+  const bestZone = selectBestCloudflareZoneForHostname({
+    accountId: cloudflareApi.accountId,
+    hostname,
+    zones,
+  });
 
   if (!bestZone) {
     throw new Error(
@@ -432,6 +421,33 @@ async function findActiveZoneForHostname(
   }
 
   return { zoneId: bestZone.id, zoneName: bestZone.name };
+}
+
+type CloudflareZone = {
+  account?: { id?: string };
+  id: string;
+  name: string;
+  status?: string;
+};
+
+export function selectBestCloudflareZoneForHostname(input: {
+  accountId: string;
+  hostname: string;
+  zones: CloudflareZone[];
+}) {
+  const cleanHostname = input.hostname.replace(/^\*\./, "");
+  const matchingZones = input.zones
+    .filter((zone) => cleanHostname === zone.name || cleanHostname.endsWith(`.${zone.name}`))
+    .sort((a, b) => b.name.length - a.name.length);
+
+  return (
+    matchingZones.find(
+      (zone) => zone.account?.id === input.accountId && zone.status === "active",
+    ) ??
+    matchingZones.find((zone) => zone.status === "active") ??
+    matchingZones.find((zone) => zone.account?.id === input.accountId) ??
+    matchingZones[0]
+  );
 }
 
 function withSequentialCloudflareAssetPreupload(input: { command: string; workerName: string }) {
