@@ -217,7 +217,7 @@
       "plugins": ["react"]
     },
     {
-      "files": ["packages/ui/src/components/**/*.tsx"],
+      "files": ["apps/*/backend/**/*.ts"],
       "rules": {
         "no-console": "error"
       }
