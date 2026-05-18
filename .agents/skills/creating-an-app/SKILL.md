@@ -44,8 +44,8 @@ The preview registry adds:
 Preview deploys do not live in app-local routers anymore. They run through the repo preview router:
 
 ```bash
-doppler run --project os-legacy-backup --config prd -- pnpm preview sync --pull-request-number 1234
-doppler run --project os-legacy-backup --config prd -- pnpm preview cleanup --pull-request-number 1234
+doppler run --project _shared --config prd -- pnpm preview sync --pull-request-number 1234
+doppler run --project _shared --config prd -- pnpm preview cleanup --pull-request-number 1234
 ```
 
 Workflow rules:

@@ -1032,7 +1032,7 @@ const codemodeExampleSeeds = [
   },
 ] satisfies CodemodeExampleSeed[];
 
-export const codemodeExampleStacks = codemodeExampleSeeds.map(
+const codemodeExampleStacks = codemodeExampleSeeds.map(
   ({ code, description, events, name, providers, slug }) =>
     ({
       description,

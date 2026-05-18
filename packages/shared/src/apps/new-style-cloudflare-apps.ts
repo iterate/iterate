@@ -23,6 +23,8 @@ export type NewStyleCloudflareAppDeploymentManifest = {
 export const newStyleCloudflareAppSharedPaths = [
   "packages/shared/src/alchemy/**",
   "packages/shared/src/apps/**",
+  "packages/ui/**",
+  "packages/mock-http-proxy/**",
 ] as const;
 
 export const newStyleCloudflareApps: Record<
@@ -48,7 +50,7 @@ export const newStyleCloudflareApps: Record<
     displayName: "OS",
     appPath: "apps/os",
     dopplerProject: "os",
-    paths: ["apps/os/**", "apps/os-contract/**"],
+    paths: ["apps/os/**", "apps/os-contract/**", "apps/auth/**", "apps/auth-contract/**"],
   },
   semaphore: {
     slug: "semaphore",

@@ -6,6 +6,12 @@ We use shadcn/ui components with vanilla shadcn style. Install additional compon
 
 Layout patterns, component usage, and structural patterns for the OS app live in `apps/os`.
 
+## Data fetching
+
+Avoid `useEffect` and `useState` for async work. Use `@tanstack/react-query` instead.
+
+Use `useSuspenseQuery` sparingly — only when the whole component is meaningless without the data. Prefer `useQuery` with an `isPending` / null check when possible.
+
 ## Mobile-First Development
 
 **All UI must work on mobile first.** Design for 375px width, then expand to desktop.

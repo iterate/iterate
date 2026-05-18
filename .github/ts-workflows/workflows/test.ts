@@ -14,7 +14,7 @@ export default workflow({
       ...utils.runsOnDepotUbuntu,
       steps: [
         ...utils.setupRepo,
-        ...utils.setupDoppler({ config: "dev" }),
+        ...utils.setupDoppler({ config: "dev", project: "test" }),
         {
           name: "Run Tests",
           env: {

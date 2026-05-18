@@ -16,21 +16,21 @@
 
 ```bash
 # inspect environment config lease state for PR previews
-doppler run --project os-legacy-backup --config prd -- pnpm preview status
+doppler run --project _shared --config prd -- pnpm preview status
 
 # create or refresh a PR preview; affected apps and dependencies are selected automatically
-doppler run --project os-legacy-backup --config prd -- pnpm preview sync --pull-request-number 1234
+doppler run --project _shared --config prd -- pnpm preview sync --pull-request-number 1234
 
 # deploy every preview-managed app even if the PR did not touch all of them
-doppler run --project os-legacy-backup --config prd -- pnpm preview sync --pull-request-number 1234 --force true
+doppler run --project _shared --config prd -- pnpm preview sync --pull-request-number 1234 --force true
 
 # split preview into explicit phases
-doppler run --project os-legacy-backup --config prd -- pnpm preview deploy --pull-request-number 1234
-doppler run --project os-legacy-backup --config prd -- pnpm preview test --pull-request-number 1234
-doppler run --project os-legacy-backup --config prd -- pnpm preview cleanup --pull-request-number 1234
+doppler run --project _shared --config prd -- pnpm preview deploy --pull-request-number 1234
+doppler run --project _shared --config prd -- pnpm preview test --pull-request-number 1234
+doppler run --project _shared --config prd -- pnpm preview cleanup --pull-request-number 1234
 
 # local PR commands need a GitHub token because they read and update PR body state
-GITHUB_TOKEN="$(gh auth token)" doppler run --project os-legacy-backup --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview test --pull-request-number 1234
+GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview test --pull-request-number 1234
 
 # manual prod deploy from GitHub Actions
 gh workflow run "Deploy Events" --ref main -f ref=main -f stage=prd
@@ -71,9 +71,9 @@ Preview commands need a Semaphore bearer token. The repo-root preview router get
 For normal operator work, use the `os` production Doppler config:
 
 ```bash
-doppler run --project os-legacy-backup --config prd -- pnpm preview status
-doppler run --project os-legacy-backup --config prd -- pnpm preview reconcile
-doppler run --project os-legacy-backup --config prd -- pnpm preview sync --pull-request-number 1234
+doppler run --project _shared --config prd -- pnpm preview status
+doppler run --project _shared --config prd -- pnpm preview reconcile
+doppler run --project _shared --config prd -- pnpm preview sync --pull-request-number 1234
 ```
 
 For Semaphore maintenance itself, use the `semaphore` production Doppler config:

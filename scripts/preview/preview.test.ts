@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { cloudflarePreviewApps, cloudflarePreviewSharedPaths } from "./apps.ts";
+import {
+  cloudflarePreviewApps,
+  cloudflarePreviewAdditionalTriggerPaths,
+  cloudflarePreviewSharedPaths,
+} from "./apps.ts";
 import {
   batchPreviewAppsByDependencies,
   expandPreviewDependencies,
@@ -43,6 +47,8 @@ describe("preview app dependency batches", () => {
 describe("preview workflow scope", () => {
   it("includes shared preview orchestration paths", () => {
     expect(cloudflarePreviewSharedPaths).toContain("scripts/preview/**");
+    expect(cloudflarePreviewSharedPaths).toContain("packages/ui/**");
+    expect(cloudflarePreviewAdditionalTriggerPaths).toContain("apps/iterate-com/**");
     expect(cloudflarePreviewSharedPaths).toContain(
       ".github/ts-workflows/workflows/cloudflare-previews.ts",
     );

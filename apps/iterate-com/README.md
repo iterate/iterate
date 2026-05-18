@@ -5,7 +5,7 @@
 Prereqs:
 
 - `pnpm install` at repo root
-- `doppler setup --project os-legacy-backup --config prd` (or `preview_N`/`dev`)
+- `doppler setup --project iterate-com --config prd` (or `dev` / `dev_<name>`)
 
 Deploy:
 

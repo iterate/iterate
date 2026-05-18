@@ -32,7 +32,7 @@ export default {
       if: "inputs.deploy_iterate_com",
       steps: [
         ...utils.setupRepo,
-        ...utils.setupDoppler({ config: "prd" }),
+        ...utils.setupDoppler({ config: "prd", project: "iterate-com" }),
         {
           name: "Deploy apps/iterate-com",
           env: {

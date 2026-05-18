@@ -14,8 +14,6 @@ servers, temporary workers, or mocked upstream services.
 - `test-support/create-local-dev-server.ts` starts OS locally, optionally with a Cloudflare tunnel.
 - `test-support/create-test-project.ts` creates an OS project via public oRPC using the admin
   bearer token and deletes it on dispose.
-- `test-support/tmp-rescued-from-agents/` holds raw agents helper copies for later adaptation. Do
-  not import these directly.
 - `test-support/os-client.ts` contains deployment-targeted oRPC/WebSocket helpers and stream
   waiters.
 
