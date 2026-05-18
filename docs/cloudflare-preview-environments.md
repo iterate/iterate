@@ -7,7 +7,7 @@ affected app deploys into that same config.
 ## Naming
 
 - Semaphore resource type: `environment-config-lease`
-- Semaphore resource slug: `preview-2`, `preview-3`, etc.
+- Semaphore resource slug: `preview-1`, `preview-2`, `preview-3`, etc.
 - Semaphore resource data: `{ "dopplerConfig": "preview_2" }`, etc.
 - Doppler project: app/service dimension, such as `events`, `os`, or `semaphore`
 - Doppler config: environment config dimension, such as `preview_2`, `prd`, or `dev_jonas_2`
@@ -59,6 +59,7 @@ eight healthy resources:
 
 | Semaphore slug | Doppler config | Cloudflare zones checked                         |
 | -------------- | -------------- | ------------------------------------------------ |
+| `preview-1`    | `preview_1`    | `iterate-preview-1.com`, `iterate-preview-1.app` |
 | `preview-2`    | `preview_2`    | `iterate-preview-2.com`, `iterate-preview-2.app` |
 | `preview-3`    | `preview_3`    | `iterate-preview-3.com`, `iterate-preview-3.app` |
 | `preview-4`    | `preview_4`    | `iterate-preview-4.com`, `iterate-preview-4.app` |
@@ -114,8 +115,13 @@ Do not paste the token into scripts or docs.
   `environment-config-lease` row against the preview-managed Doppler projects
   and the Cloudflare zone pair for that slot, such as
   `iterate-preview-N.com` / `iterate-preview-N.app`.
-- The current source-code seed contains `preview_2` through `preview_9`. Treat
+- The current source-code seed contains `preview_1` through `preview_9`. Treat
   it as a recreate script input, not as runtime deploy state.
+- To create or refresh a numbered Doppler config from an existing slot, run
+  `pnpm tsx scripts/preview/bootstrap-preview-doppler-config.ts <preview-number>`.
+  That command ensures the preview-managed Doppler projects exist, creates
+  `_shared.preview_N` when missing, then creates or updates each app project's
+  `preview_N` config and URL secrets.
 - The seed is exact for `environment-config-lease`: drifted resources are
   deleted and missing resources are recreated with the source-code data.
 - Only keep Semaphore resources when the matching `preview_N` Doppler

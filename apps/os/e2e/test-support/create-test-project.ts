@@ -1,18 +1,18 @@
 import type { Event } from "@iterate-com/shared/streams/types";
 import type { ReceiveFunctionCallResultInput } from "../../src/domains/codemode/durable-objects/codemode-session.ts";
 import {
-  createAdminOs2Client,
+  createAdminOsClient,
   requireBaseUrl,
-  type Os2Client,
+  type OsClient,
   uniqueSuffix,
   readProjectStreamUntil,
 } from "./os-client.ts";
 
-type TestProject = Awaited<ReturnType<Os2Client["projects"]["create"]>>;
+type TestProject = Awaited<ReturnType<OsClient["projects"]["create"]>>;
 
 export interface TestProjectHandle extends AsyncDisposable {
   baseUrl: string;
-  client: Os2Client;
+  client: OsClient;
   project: TestProject;
   updateConfig(input: {
     customHostname?: string | null;
@@ -104,7 +104,7 @@ export async function createTestProject(opts?: {
   slugPrefix?: string;
 }): Promise<TestProjectHandle> {
   const baseUrl = opts?.baseUrl ?? requireBaseUrl();
-  const client = createAdminOs2Client(baseUrl);
+  const client = createAdminOsClient(baseUrl);
   const slugPrefix = opts?.slugPrefix ?? "os-e2e";
   let project = await client.projects.create({
     slug: `${slugPrefix}-${uniqueSuffix()}`,

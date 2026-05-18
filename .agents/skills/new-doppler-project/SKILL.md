@@ -26,8 +26,11 @@ dev_rahul:
 
 preview:
 
+preview_1:
+APP_CONFIG_BASE_URL=https://<app>.iterate-preview-1.com
+
 preview_2:
-APP_CONFIG_BASE_URL=https://<app>-preview-2.iterate-dev-stg.workers.dev
+APP_CONFIG_BASE_URL=https://<app>.iterate-preview-2.com
 
 ...
 
@@ -58,6 +61,7 @@ doppler projects create <project-slug>
 doppler configs create dev_jonas -p <project-slug>
 doppler configs create dev_misha -p <project-slug>
 doppler configs create dev_rahul -p <project-slug>
+doppler configs create preview_1 -p <project-slug> -e preview
 doppler configs create preview_2 -p <project-slug> -e preview
 doppler configs create preview_3 -p <project-slug> -e preview
 doppler configs create preview_4 -p <project-slug> -e preview
@@ -72,21 +76,22 @@ doppler configs update dev_jonas -p <project-slug> --inherits="_shared.dev_jonas
 doppler configs update dev_misha -p <project-slug> --inherits="_shared.dev_misha" --yes
 doppler configs update dev_rahul -p <project-slug> --inherits="_shared.dev_rahul" --yes
 doppler configs update preview -p <project-slug> --inherits="_shared.preview" --yes
-doppler configs update preview_2 -p <project-slug> --inherits="_shared.preview" --yes
-doppler configs update preview_3 -p <project-slug> --inherits="_shared.preview" --yes
-doppler configs update preview_4 -p <project-slug> --inherits="_shared.preview" --yes
-doppler configs update preview_5 -p <project-slug> --inherits="_shared.preview" --yes
-doppler configs update preview_6 -p <project-slug> --inherits="_shared.preview" --yes
-doppler configs update preview_7 -p <project-slug> --inherits="_shared.preview" --yes
-doppler configs update preview_8 -p <project-slug> --inherits="_shared.preview" --yes
-doppler configs update preview_9 -p <project-slug> --inherits="_shared.preview" --yes
+doppler configs update preview_1 -p <project-slug> --inherits="_shared.preview_1" --yes
+doppler configs update preview_2 -p <project-slug> --inherits="_shared.preview_2" --yes
+doppler configs update preview_3 -p <project-slug> --inherits="_shared.preview_3" --yes
+doppler configs update preview_4 -p <project-slug> --inherits="_shared.preview_4" --yes
+doppler configs update preview_5 -p <project-slug> --inherits="_shared.preview_5" --yes
+doppler configs update preview_6 -p <project-slug> --inherits="_shared.preview_6" --yes
+doppler configs update preview_7 -p <project-slug> --inherits="_shared.preview_7" --yes
+doppler configs update preview_8 -p <project-slug> --inherits="_shared.preview_8" --yes
+doppler configs update preview_9 -p <project-slug> --inherits="_shared.preview_9" --yes
 doppler configs update prd -p <project-slug> --inherits="_shared.prd" --yes
 ```
 
-For preview-enabled new-style apps, use `preview` and numbered `preview_2` through
-`preview_9`. Do not create `preview_1`, `preview_10`, or `stg` unless the
-matching environment config lease and Cloudflare prerequisites are being added
-at the same time.
+For preview-enabled new-style apps, use `preview` for the legacy unnumbered slot
+and numbered `preview_1` through `preview_9` for repo-managed PR previews. Do
+not create `preview_10` or `stg` unless the matching environment config lease
+and Cloudflare prerequisites are being added at the same time.
 
 3. Set the tiny app-local secrets:
 
@@ -148,7 +153,7 @@ doppler secrets -c dev_jonas
 
 - Never ask for or mention a Doppler token.
 - Always create exactly `dev_jonas`, `dev_misha`, and `dev_rahul`.
-- For preview-enabled new-style apps, create only `dev`, `dev_jonas`, `dev_misha`, `dev_rahul`, `preview`, `preview_2` through `preview_9`, and `prd` unless the user explicitly asks for more.
+- For preview-enabled new-style apps, create only `dev`, `dev_jonas`, `dev_misha`, `dev_rahul`, `preview`, `preview_1` through `preview_9`, and `prd` unless the user explicitly asks for more.
 - `DOPPLER_CONFIG` is the canonical per-config selector, but it is injected by Doppler itself. Never create it as a secret.
 - `ALCHEMY_STAGE` should be set to `${DOPPLER_CONFIG}` in `_shared` so `dev_jonas` resolves to `dev_jonas`, `prd` resolves to `prd`, etc.
 - For a new project, the app-local template is just `APP_CONFIG={}` in `dev` and `prd`, plus `APP_CONFIG_BASE_URL` in each leased preview config when the app has a public route.

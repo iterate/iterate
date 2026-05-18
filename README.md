@@ -65,14 +65,14 @@ The live Semaphore production database is the source of truth for which PR
 preview slots exist. Each live Semaphore resource has:
 
 - type: `environment-config-lease`
-- slug: `preview-2`, `preview-3`, etc.
+- slug: `preview-1`, `preview-2`, `preview-3`, etc.
 - data: `{ "dopplerConfig": "preview_2" }`, etc.
 
 To inspect and validate that live inventory:
 
 ```bash
-doppler run --project os --config prd -- pnpm preview status
-doppler run --project os --config prd -- pnpm preview reconcile
+doppler run --project os-legacy-backup --config prd -- pnpm preview status
+doppler run --project os-legacy-backup --config prd -- pnpm preview reconcile
 ```
 
 `preview reconcile` checks every live `environment-config-lease` row against
@@ -82,9 +82,12 @@ slot, for example `iterate-preview-9.com` and `iterate-preview-9.app`.
 To intentionally recreate the environment config lease inventory:
 
 1. Add or confirm the lease in `scripts/preview/preview-inventory.ts`.
-2. Ensure every preview-managed app that may use that lease has the matching
-   Doppler config, for example `preview_9`, plus any required Cloudflare
-   route/domain config.
+2. Bootstrap the numbered Doppler configs:
+
+```bash
+pnpm tsx scripts/preview/bootstrap-preview-doppler-config.ts <preview-number>
+```
+
 3. Keep Cloudflare credentials in `_shared` where possible. Preview app configs
    inherit `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` from
    `_shared/preview`; app configs should not override those values.
@@ -92,7 +95,7 @@ To intentionally recreate the environment config lease inventory:
 
 ```bash
 doppler run --project semaphore --config prd -- pnpm --dir apps/semaphore seed:environment-config-leases
-doppler run --project os --config prd -- pnpm preview reconcile
+doppler run --project os-legacy-backup --config prd -- pnpm preview reconcile
 ```
 
 The seed is exact for `environment-config-lease`: missing resources are created

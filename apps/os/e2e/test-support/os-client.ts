@@ -7,7 +7,7 @@ import { osContract } from "@iterate-com/os-contract";
 import type { Event } from "@iterate-com/shared/streams/types";
 import type { appRouter } from "~/orpc/root.ts";
 
-export type Os2Client = RouterClient<typeof appRouter>;
+export type OsClient = RouterClient<typeof appRouter>;
 
 export function requireBaseUrl() {
   const baseUrl = (process.env.OS_BASE_URL ?? process.env.APP_CONFIG_BASE_URL)
@@ -51,7 +51,7 @@ export function requireAdminBearerToken() {
   return token;
 }
 
-export function createOs2Client(baseUrl: string = requireBaseUrl()) {
+export function createOsClient(baseUrl: string = requireBaseUrl()) {
   const authHeaders = requireAuthHeaders();
   return createORPCClient(
     new OpenAPILink(osContract, {
@@ -71,10 +71,10 @@ export function createOs2Client(baseUrl: string = requireBaseUrl()) {
         return fetch(input, { ...requestInit, headers });
       },
     }),
-  ) as Os2Client;
+  ) as OsClient;
 }
 
-export function createAdminOs2Client(baseUrl: string = requireBaseUrl()) {
+export function createAdminOsClient(baseUrl: string = requireBaseUrl()) {
   const bearerToken = requireAdminBearerToken();
   return createORPCClient(
     new OpenAPILink(osContract, {
@@ -92,22 +92,22 @@ export function createAdminOs2Client(baseUrl: string = requireBaseUrl()) {
         return fetch(input, { ...requestInit, headers });
       },
     }),
-  ) as Os2Client;
+  ) as OsClient;
 }
 
-export function createOs2WebSocketClient(baseUrl: string = requireBaseUrl()) {
+export function createOsWebSocketClient(baseUrl: string = requireBaseUrl()) {
   const authHeaders = requireAuthHeaders();
   const url = new URL("/api/orpc-ws", baseUrl);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   const websocket = new WebSocket(url.toString(), { headers: authHeaders });
-  const client = createORPCClient(new WebSocketRPCLink({ websocket })) as Os2Client;
+  const client = createORPCClient(new WebSocketRPCLink({ websocket })) as OsClient;
   return {
     client,
     close: () => websocket.close(),
   };
 }
 
-export async function createProject(client: Os2Client, slugPrefix: string) {
+export async function createProject(client: OsClient, slugPrefix: string) {
   return await client.projects.create({
     slug: `${slugPrefix}-${uniqueSuffix()}`,
   });
@@ -115,7 +115,7 @@ export async function createProject(client: Os2Client, slugPrefix: string) {
 
 export async function readProjectStreamUntil<T extends Event>(input: {
   afterOffset: number | "start";
-  client: Os2Client;
+  client: OsClient;
   predicate: (event: Event) => event is T;
   projectSlugOrId: string;
   streamPath: string;

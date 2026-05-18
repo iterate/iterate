@@ -6,6 +6,7 @@ import {
   ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
   parseEnvironmentConfigLeaseData,
 } from "./preview-inventory.ts";
+import { listPreviewAppDopplerProjects } from "./preview-doppler-projects.ts";
 
 type EnvironmentConfigLeaseResourceRecord = {
   slug: string;
@@ -91,9 +92,7 @@ const CloudflareZonesResponse = z
   })
   .passthrough();
 
-const previewManagedDopplerProjects = [
-  ...new Set(Object.values(cloudflarePreviewApps).map((app) => app.dopplerProject)),
-].sort();
+const previewManagedDopplerProjects = listPreviewAppDopplerProjects();
 
 const previewCloudflareCredentialsProject = newStyleCloudflareApps.os.dopplerProject;
 

@@ -1003,7 +1003,7 @@ The provider composition case targets provider-to-provider Tool Function Calls: 
 > **Dev:** "Is an MCP Tool Provider the same thing as OS's MCP server connection?"
 > **Domain expert:** "No. An **Outbound MCP From Our Client Tool Provider** can be a Tool Provider. A **Project MCP Server Connection** is an external client connected to OS's project-scoped MCP server."
 
-> **Dev:** "What are the two MCP directions in OS2?"
+> **Dev:** "What are the two MCP directions in OS?"
 > **Domain expert:** "Inbound MCP is OS acting as the MCP server via the fetch-based `ProjectMcpServerEntrypoint` and `ProjectMcpServerConnection`. Outbound MCP is OS acting as an MCP client via `OutboundMcpFromOurClientCapability`, which can be registered as a codemode Tool Provider."
 
 > **Dev:** "Should the Durable Object behind OS's project-scoped MCP server be called `IterateMcpServer`?"

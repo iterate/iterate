@@ -104,7 +104,7 @@ function inferArtifactsNamespaceFromBaseUrl() {
   if (!baseUrl) return null;
 
   const hostname = new URL(baseUrl).hostname;
-  const previewMatch = /^os2\.iterate-preview-(\d+)\.com$/.exec(hostname);
+  const previewMatch = /^os\.iterate-preview-(\d+)\.com$/.exec(hostname);
   if (previewMatch) return `os-preview-${previewMatch[1]}-repos`;
 
   const devMatch = /^os\.iterate-dev-([^.]+)\.com$/.exec(hostname);

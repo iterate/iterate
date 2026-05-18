@@ -100,7 +100,7 @@ function applyFeedMode(state: EventsStreamViewState, mode: FeedMode): EventsStre
 
 function StreamTerminalApp() {
   const renderer = useRenderer();
-  const client = useMemo(() => createOs2Client(args.baseUrl), []);
+  const client = useMemo(() => createOsClient(args.baseUrl), []);
   const [currentStreamPath, setCurrentStreamPath] = useState(args.streamPath ?? ROOT_STREAM_PATH);
   const [currentFeedMode, setCurrentFeedMode] = useState<FeedMode>("mixed");
   const [rawEvents, setRawEvents] = useState<Event[]>([]);
@@ -854,7 +854,7 @@ function readFlag(argv: string[], flagName: string) {
   return value;
 }
 
-function createOs2Client(baseUrl: string): OrpcClient {
+function createOsClient(baseUrl: string): OrpcClient {
   const authHeaders = requireAuthHeaders();
   return createORPCClient(
     new OpenAPILink(osContract, {

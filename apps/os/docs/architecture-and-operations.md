@@ -217,7 +217,7 @@ Frontend-visible config is exposed through the typed
 deployment config. They are supplied by Doppler as grouped JSON values so each
 provider's OAuth client values are updated atomically. Local Docker/workerd runs
 receive the same config through `doppler run`. Slack uses one OAuth client for
-OS2; the Slack team ID claimed during OAuth decides which project receives
+OS; the Slack team ID claimed during OAuth decides which project receives
 signed Slack webhooks.
 
 ## Clerk

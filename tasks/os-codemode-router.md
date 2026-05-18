@@ -139,7 +139,7 @@ Plain vitest hitting real HTTP endpoints via oRPC client against `OS_BASE_URL`. 
 
 ### MCP server tools
 
-os2's MCP server gains tools:
+OS's MCP server gains tools:
 
 - `addToolProvider` — register a CallableToolProvider
 - `describeToolProviders` — call describe on all registered providers, return types

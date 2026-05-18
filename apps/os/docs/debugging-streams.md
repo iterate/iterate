@@ -63,7 +63,7 @@ curl -fsS -X POST "$BASE_URL" \
 ## Attach Or Remove Processors
 
 To isolate runner behavior, write to a stream before any OS UI interaction has
-created the `AgentDurableObject`, then manually wake the agent through OS2:
+created the `AgentDurableObject`, then manually wake the agent through OS:
 
 ```bash
 curl -fsS \
