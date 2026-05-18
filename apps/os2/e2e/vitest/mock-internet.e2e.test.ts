@@ -1,12 +1,10 @@
 import { join } from "node:path";
 import { HttpResponse, http } from "@iterate-com/mock-http-proxy";
 import { useCloudflareTunnel, useCloudflareTunnelLease } from "@iterate-com/shared/test-helpers";
-import type { Event } from "@iterate-com/shared/streams/types";
-import { expect, test } from "vitest";
+import { expect, expectTypeOf, test } from "vitest";
 import { createMockInternet } from "../test-support/create-mock-internet.ts";
-import { createTestProject } from "../test-support/create-test-project.ts";
+import { createFixture } from "../test-support/create-test-project.ts";
 import { setupE2E } from "../test-support/e2e-test.ts";
-import { readProjectStreamUntil } from "../test-support/os2-client.ts";
 
 const hasAdminApiTarget =
   !!(process.env.OS2_BASE_URL?.trim() || process.env.APP_CONFIG_BASE_URL?.trim()) &&
@@ -51,70 +49,46 @@ testIfAdminApiTarget("runs codemode fetch through a mocked project egress proxy"
     publicUrl: tunnelLease.publicUrl,
   });
 
-  await using project = await createTestProject({
+  await using fixture = await createFixture({
     externalEgressProxyUrl: tunnel.publicUrl,
     slugPrefix: "mock-internet",
   });
 
-  const started = await project.client.project.codemode.executeScript({
-    code: `async () => {
-  const response = await fetch("https://example.com/os2-e2e?source=codemode");
-  return {
-    body: await response.json(),
-    mockedHeader: response.headers.get("x-e2e-mocked"),
-    status: response.status
-  };
-}`,
-    projectSlugOrId: project.project.id,
-    providers: [],
+  const completed = await fixture.executeCodemodeScript(async function () {
+    const response = await fetch("https://example.com/os2-e2e?source=codemode");
+    return {
+      body: (await response.json()) as { mocked: boolean; query: string; runSlug: string },
+      mockedHeader: response.headers.get("x-e2e-mocked"),
+      status: response.status,
+    };
   });
-
-  const scriptExecutionId = readScriptExecutionId(started.event);
-
-  const events = await readProjectStreamUntil({
-    afterOffset: started.event.offset > 1 ? started.event.offset - 1 : "start",
-    client: project.client,
-    projectSlugOrId: project.project.id,
-    streamPath: started.streamPath,
-    predicate: (event) =>
-      event.type === "events.iterate.com/codemode/script-execution-completed" &&
-      readPayloadRecord(event).scriptExecutionId === scriptExecutionId,
-  });
-  const completed = requiredEvent(events, "events.iterate.com/codemode/script-execution-completed");
 
   const har = internet.getHar();
 
-  expect(completed.payload).toMatchInlineSnapshot(
+  expectTypeOf(completed.payload).toExtend<{
+    functionCallId: string;
+    durationMs?: number;
+    scriptExecutionId?: string;
+  }>();
+  expect(completed.snapshot({ runSlug: e2e.runSlug })).toMatchInlineSnapshot(`
     {
-      durationMs: expect.any(Number),
-      scriptExecutionId: expect.any(String),
-      outcome: {
-        value: {
-          body: {
-            runSlug: expect.any(String),
-          },
-        },
-      },
-    },
-    `
-    {
-      "durationMs": Any<Number>,
+      "durationMs": 999,
+      "functionCallId": "<function-call-id>",
       "outcome": {
         "status": "returned",
         "value": {
           "body": {
             "mocked": true,
             "query": "codemode",
-            "runSlug": Any<String>,
+            "runSlug": "<runSlug>",
           },
           "mockedHeader": "yes",
           "status": 200,
         },
       },
-      "scriptExecutionId": Any<String>,
+      "scriptExecutionId": "<script-execution-id>",
     }
-  `,
-  );
+  `);
 
   expect(completed.payload).toMatchObject({
     outcome: {
@@ -129,9 +103,9 @@ testIfAdminApiTarget("runs codemode fetch through a mocked project egress proxy"
         status: 200,
       },
     },
-    scriptExecutionId,
+    scriptExecutionId: completed.payload.scriptExecutionId,
   });
-  expect(events).toContainEqual(
+  expect(completed.events).toContainEqual(
     expect.objectContaining({
       type: "events.iterate.com/codemode/function-call-completed",
       payload: expect.objectContaining({
@@ -139,9 +113,9 @@ testIfAdminApiTarget("runs codemode fetch through a mocked project egress proxy"
       }),
     }),
   );
-  expect(events.filter((event) => event.type === "events.iterate.com/core/error-occurred")).toEqual(
-    [],
-  );
+  expect(
+    completed.events.filter((event) => event.type === "events.iterate.com/core/error-occurred"),
+  ).toEqual([]);
   expect(
     har.log.entries
       .filter(
@@ -150,23 +124,3 @@ testIfAdminApiTarget("runs codemode fetch through a mocked project egress proxy"
       .map((entry) => entry.request.url),
   ).toContain("https://example.com/os2-e2e?source=codemode");
 });
-
-function readScriptExecutionId(event: Event) {
-  const scriptExecutionId = readPayloadRecord(event).scriptExecutionId;
-  if (typeof scriptExecutionId !== "string") {
-    throw new Error("Expected codemode script execution event to include scriptExecutionId.");
-  }
-  return scriptExecutionId;
-}
-
-function requiredEvent(events: readonly Event[], type: string) {
-  const event = events.find((item) => item.type === type);
-  if (!event) throw new Error(`Expected ${type}.`);
-  return event;
-}
-
-function readPayloadRecord(event: Event) {
-  return event.payload != null && typeof event.payload === "object"
-    ? (event.payload as Record<string, unknown>)
-    : {};
-}

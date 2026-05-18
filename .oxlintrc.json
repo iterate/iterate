@@ -117,6 +117,16 @@
     "iterate/no-implied-eval": "error",
     "prefer-const": "off",
     "iterate/prefer-const": "error",
+    "unicorn-js/isolated-functions": [
+      "error",
+      {
+        "selectors": ["CallExpression[callee.property.name=/CodemodeScript/] :function"],
+        "overrideGlobals": {
+          "fetch": "readonly",
+          "console": "readonly"
+        }
+      }
+    ],
     "unicorn-js/template-indent": "warn"
   },
   "overrides": [
