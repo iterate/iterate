@@ -1,4 +1,5 @@
 import type { ReceiveFunctionCallResultInput } from "../../src/domains/codemode/durable-objects/codemode-session.ts";
+import type { Event } from "@iterate-com/shared/streams/types";
 import {
   createAdminOs2Client,
   requireBaseUrl,
@@ -49,6 +50,12 @@ export async function createFixture(params?: Parameters<typeof createTestProject
   ) => {
     const started = await startCodemodeScript(fn, options);
     const startedPayload = started.event.payload as { scriptExecutionId: string };
+    const isCompletedScriptExecution = (
+      event: Event,
+    ): event is Event & { payload: ReceiveFunctionCallResultInput } =>
+      event.type === "events.iterate.com/codemode/script-execution-completed" &&
+      (event.payload as ReceiveFunctionCallResultInput).scriptExecutionId ===
+        startedPayload.scriptExecutionId;
 
     const events = await readProjectStreamUntil({
       afterOffset: started.event.offset > 1 ? started.event.offset - 1 : "start",
@@ -56,13 +63,15 @@ export async function createFixture(params?: Parameters<typeof createTestProject
       projectSlugOrId: fixture.project.id,
       streamPath: started.streamPath,
       // todo: proper strongly-typed version of this read-until helper
-      predicate: (event): event is typeof event =>
-        event.type === "events.iterate.com/codemode/script-execution-completed" &&
-        (event.payload as ReceiveFunctionCallResultInput).scriptExecutionId ===
-          startedPayload.scriptExecutionId,
+      predicate: isCompletedScriptExecution,
     });
-    const completed = events.at(-1)!;
-    const payload = completed.payload as ReceiveFunctionCallResultInput;
+    const completed = events.find(isCompletedScriptExecution);
+    if (!completed) {
+      throw new Error(
+        `Expected completed script execution ${startedPayload.scriptExecutionId} in stream batch.`,
+      );
+    }
+    const payload = completed.payload;
     return {
       $type: {} as T,
       payload,
