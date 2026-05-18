@@ -418,7 +418,7 @@ const plugin = {
               ];
               /** @type {string[]} Full specifier must match (anchored in code). */
               const ALLOWED_RUNTIME_IMPORT_REGEX = [
-                // OS2's contract needs to share event-stream and codemode wire
+                // OS's contract needs to share event-stream and codemode wire
                 // schemas with the services that persist/execute those payloads.
                 // These exact entrypoints are Zod schema modules on their runtime
                 // paths; do not broaden to the package prefixes without checking

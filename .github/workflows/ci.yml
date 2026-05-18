@@ -18,7 +18,7 @@ jobs:
           cat <<'EOF' >> "$GITHUB_STEP_SUMMARY"
           ## Rollout Strategy
           1. Deploy iterate.com with current environment variables.
-          2. OS deploys separately via deploy-os2.yml when apps/os2 changes.
+          2. OS deploys separately via deploy-os.yml when apps/os changes.
           EOF
   deploy:
     uses: ./.github/workflows/deploy.yml

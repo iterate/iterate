@@ -8,7 +8,7 @@ publish: true
 
 Use when an app e2e test is flaky or in flux and you want to execute the same flow manually with live debugging.
 
-Tests live under each app, e.g. `apps/os2/e2e/`, not a root `spec/` directory.
+Tests live under each app, e.g. `apps/os/e2e/`, not a root `spec/` directory.
 
 ## Workflow
 
@@ -28,7 +28,7 @@ Tests live under each app, e.g. `apps/os2/e2e/`, not a root `spec/` directory.
 ## Running tests
 
 ```bash
-OS2_BASE_URL=https://… pnpm --dir apps/os2 test:e2e
+OS_BASE_URL=https://… pnpm --dir apps/os test:e2e
 ```
 
 See each app's `package.json` for required env vars.

@@ -11,7 +11,7 @@ This repo no longer uses Drizzle for the main OS app. Remaining Drizzle packages
 - `apps/agents/src/db/`
 - `apps/example/src/db/`
 
-The main product app (`apps/os2`) uses **sqlfu + D1** — see `apps/os2/src/db/definitions.sql` and `pnpm --dir apps/os2 sqlfu:generate`.
+The main product app (`apps/os`) uses **sqlfu + D1** — see `apps/os/src/db/definitions.sql` and `pnpm --dir apps/os sqlfu:generate`.
 
 ## How Drizzle Migrations Work
 

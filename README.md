@@ -17,7 +17,7 @@ pnpm dev
 
 ## Repository Structure
 
-- `apps/os2/` - Primary application (React + Cloudflare Workers)
+- `apps/os/` - Primary application (React + Cloudflare Workers)
 - `apps/auth/` - Authentication service
 - `apps/iterate-com` - iterate.com website
 - `docs/` - Detailed documentation and patterns
@@ -25,8 +25,8 @@ pnpm dev
 ## Development Commands
 
 ```bash
-pnpm dev              # Run auth + os2 together
-pnpm os2 dev          # Run apps/os2 only
+pnpm dev              # Run auth + os together
+pnpm os dev          # Run apps/os only
 pnpm --dir apps/auth dev  # Run apps/auth only
 pnpm test             # Run all tests
 pnpm typecheck        # Type check all packages
@@ -38,10 +38,10 @@ pnpm format           # Format code
 
 Think of every new-style Cloudflare deploy as selecting two axes:
 
-- Doppler project: app/service dimension, such as `os2` or `semaphore`
+- Doppler project: app/service dimension, such as `os` or `semaphore`
 - Doppler config: environment config dimension, such as `dev_jonas_2`, `preview_2`, or `prd`
 
-For new-style Cloudflare apps (`agents`, `example`, `os2`, and `semaphore`),
+For new-style Cloudflare apps (`agents`, `example`, `os`, and `semaphore`),
 local deployed dev, PR previews, and
 main/prod deploys all use the same primitive:
 
@@ -57,7 +57,7 @@ generated per-app workflows with `prd`. PR previews are not promoted to
 production.
 
 The shared PR preview lifecycle currently covers `agents`, `example`, `events`,
-`os2`, and `semaphore`. `events` is
+`os`, and `semaphore`. `events` is
 preview-managed but has not yet moved to the new-style `alchemy.run.ts`
 primitive.
 
@@ -71,8 +71,8 @@ preview slots exist. Each live Semaphore resource has:
 To inspect and validate that live inventory:
 
 ```bash
-doppler run --project os2 --config prd -- pnpm preview status
-doppler run --project os2 --config prd -- pnpm preview reconcile
+doppler run --project os --config prd -- pnpm preview status
+doppler run --project os --config prd -- pnpm preview reconcile
 ```
 
 `preview reconcile` checks every live `environment-config-lease` row against
@@ -92,7 +92,7 @@ To intentionally recreate the environment config lease inventory:
 
 ```bash
 doppler run --project semaphore --config prd -- pnpm --dir apps/semaphore seed:environment-config-leases
-doppler run --project os2 --config prd -- pnpm preview reconcile
+doppler run --project os --config prd -- pnpm preview reconcile
 ```
 
 The seed is exact for `environment-config-lease`: missing resources are created
@@ -102,8 +102,8 @@ preview slots in deploy logic; remove them from the Semaphore inventory instead.
 
 For the full model and operator commands, see
 `docs/cloudflare-preview-environments.md`. For day-to-day deploy commands, see
-`docs/cloudflare-preview-and-deploy-cheatsheet.md`. For os2's preview domain
-pair shape, see `docs/os2-environments.md`.
+`docs/cloudflare-preview-and-deploy-cheatsheet.md`. For os's preview domain
+pair shape, see `docs/os-environments.md`.
 
 ## Cloudflare Tunnels
 

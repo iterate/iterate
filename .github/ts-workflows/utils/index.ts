@@ -61,7 +61,7 @@ export const installDopplerCli = {
 
 export const setupDoppler = ({
   config,
-  project = "os",
+  project = "os-legacy-backup",
 }: {
   config: DopplerConfigName;
   project?: DopplerProjectName;

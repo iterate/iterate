@@ -2,18 +2,18 @@
 
 Important directories:
 
-- `apps/os2` - the dashboard for our product. In production, this is served on `os.iterate.com`. In development it is something like `<username>.iterate-dev.com`
+- `apps/os` - the dashboard for our product. In production, this is served on `os.iterate.com`. In development it is something like `<username>.iterate-dev.com`
 - `packages/iterate` - the iterate CLI, which is globally installed `iterate`. Note that the CLI delegates to the local source code when run inside this repo, so you can use the globally-installed binary without worrying about which version is running
 
 ## Dev environment
 
-Locally, the dev server is run with `pnpm dev` (starts `apps/auth` and `apps/os2`). Sometimes, the user will already be running the dev server. If you need to look at its logs, but can't access them, you should kill the server that's running and run it again yourself with nohup, piping stdout to a log file you can tail. Tell the user when you do this to prevent confusion.
+Locally, the dev server is run with `pnpm dev` (starts `apps/auth` and `apps/os`). Sometimes, the user will already be running the dev server. If you need to look at its logs, but can't access them, you should kill the server that's running and run it again yourself with nohup, piping stdout to a log file you can tail. Tell the user when you do this to prevent confusion.
 
 Doppler is used for secrets management. Most commands don't need to worry about doppler, but if secrets or variables stored in doppler are needed, you can run `doppler run -- ./some-script.sh` and the script will automatically receive the correct environment variables. To look at a variable, you can run a command like `doppler run -- env | grep POSTHOG_PUBLIC_KEY`. You don't in general need to use the `--config` option, you can assume the user has set up their doppler config via the CLI already.
 
 ## E2E tests
 
-App-level e2e tests live next to each app, for example `apps/os2/e2e/`. Run them with that app's `test:e2e*` scripts after setting the required base URL env vars.
+App-level e2e tests live next to each app, for example `apps/os/e2e/`. Run them with that app's `test:e2e*` scripts after setting the required base URL env vars.
 
 ## Coding style
 
@@ -87,9 +87,9 @@ Run before PRs: `pnpm install && pnpm typecheck && pnpm lint && pnpm format && p
 - Brand & tone: `docs/brand-and-tone-of-voice.md`
 - Cloudflare preview + deploy cheat sheet: `docs/cloudflare-preview-and-deploy-cheatsheet.md`
 - Website (iterate.com): `apps/iterate-com`
-- OS app: `apps/os2/AGENTS.md`
+- OS app: `apps/os/AGENTS.md`
 - Vitest patterns: `docs/vitest-patterns.md`
 - Architecture: `docs/architecture.md`
-- OS2 environments: `docs/os2-environments.md`
+- OS environments: `docs/os-environments.md`
 - Drizzle migration workflow: `.agents/skills/drizzle-migrations/SKILL.md` (MUST follow when making schema changes)
 - Drizzle migration conflicts: `docs/fixing-drizzle-migration-conflicts.md`

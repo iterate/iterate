@@ -8,16 +8,16 @@ dependsOn: []
 # Callable subscription followups
 
 This branch moves Events external subscriptions from `callbackUrl` to stored
-`Callable` descriptors without changing `apps/agents` or `apps/os2`. Those apps
+`Callable` descriptors without changing `apps/agents` or `apps/os`. Those apps
 still need a coordinated follow-up once their owners are ready to adopt the new
 subscription payload shape.
 
-## OS2
+## OS
 
-- Decide which OS2 callable descriptors are intended to be stored or dispatched
+- Decide which OS callable descriptors are intended to be stored or dispatched
   outside the worker that created them.
 - Use same-worker `loopback-binding` only for descriptors dispatched in the same
-  OS2 worker request/DO context where `ctx.exports` is available.
+  OS worker request/DO context where `ctx.exports` is available.
 - For stored descriptors, prefer `createOpenApiProvider({ workerScriptName })`
   or another env/service-binding descriptor so the callable resolves from the
   dispatching worker's `env`, not from whichever worker happens to dispatch it.
@@ -25,10 +25,10 @@ subscription payload shape.
   with both:
   - a same-worker loopback OpenApiBridge descriptor
   - a stored/cross-worker self descriptor using `workerScriptName`
-- If OS2 ever configures Events subscriptions that should dispatch directly into
-  OS2 WorkerEntrypoints or Durable Objects, add explicit service/DO bindings to
+- If OS ever configures Events subscriptions that should dispatch directly into
+  OS WorkerEntrypoints or Durable Objects, add explicit service/DO bindings to
   the Events worker and document that subscription callables resolve in the
-  Events worker capability context, not in OS2's context.
+  Events worker capability context, not in OS's context.
 
 ## Agents
 

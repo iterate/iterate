@@ -1,11 +1,11 @@
 # PostHog Analytics Setup
 
-Cross-domain tracking between iterate.com (marketing) and the OS product app (`apps/os2`).
+Cross-domain tracking between iterate.com (marketing) and the OS product app (`apps/os`).
 
 ## Architecture
 
 ```
-iterate.com (anonymous)          os.iterate.com / os2.iterate.com (identified)
+iterate.com (anonymous)          os.iterate.com / os.iterate.com (identified)
 ┌─────────────────────┐         ┌─────────────────────────────┐
 │ User visits         │         │ User signs up               │
 │ marketing page      │         │                             │
@@ -30,14 +30,14 @@ Different origins do not share cookies. Marketing passes PostHog IDs on signup l
 | ---------------------------------------------------------- | ------------------------------------- |
 | `apps/iterate-com/backend/routes/index.tsx`                | Adds PostHog IDs to signup URLs       |
 | `apps/iterate-com/backend/components/posthog-provider.tsx` | PostHog init for marketing site       |
-| `apps/os2/src/routes/posthog-proxy.$.ts`                   | Worker proxy route for PostHog ingest |
+| `apps/os/src/routes/posthog-proxy.$.ts`                    | Worker proxy route for PostHog ingest |
 | `packages/shared/src/posthog/`                             | Shared proxy + sourcemap helpers      |
 
-Search `apps/os2` for PostHog client init and identity hooks when wiring new UI surfaces.
+Search `apps/os` for PostHog client init and identity hooks when wiring new UI surfaces.
 
 ## Environment Variables
 
-Configured in Doppler for `os2` and `iterate-com`:
+Configured in Doppler for `os` and `iterate-com`:
 
 - `POSTHOG_PUBLIC_KEY` — server-side project API key
 - `VITE_POSTHOG_PUBLIC_KEY` — client key (often aliased from `POSTHOG_PUBLIC_KEY`)

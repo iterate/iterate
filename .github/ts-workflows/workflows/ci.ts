@@ -4,7 +4,7 @@ import * as utils from "../utils/index.ts";
 /**
  * Production rollout strategy (main branch):
  * 1) Deploy iterate.com with current env vars.
- * 2) OS deploys via deploy-os2.yml when apps/os2 changes.
+ * 2) OS deploys via deploy-os.yml when apps/os changes.
  */
 export default {
   name: "CI",
@@ -28,7 +28,7 @@ export default {
             "cat <<'EOF' >> \"$GITHUB_STEP_SUMMARY\"",
             "## Rollout Strategy",
             "1. Deploy iterate.com with current environment variables.",
-            "2. OS deploys separately via deploy-os2.yml when apps/os2 changes.",
+            "2. OS deploys separately via deploy-os.yml when apps/os changes.",
             "EOF",
           ].join("\n"),
         },

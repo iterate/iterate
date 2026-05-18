@@ -214,7 +214,7 @@ async function callFunction(args: {
 }) {
   const builtin = resolveCodemodeBuiltin(args.path);
   if (builtin != null) {
-    // Temporary duplication with the OS2 CodemodeSession host. The cleaner
+    // Temporary duplication with the OS CodemodeSession host. The cleaner
     // design is for every script and provider call to go through one session
     // capability implementation. Keeping this local branch is awkward, but it
     // makes `ctx.codemode.*` truly always available in the portable processor

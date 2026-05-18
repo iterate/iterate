@@ -116,7 +116,7 @@ function createPreviewLifecycleJob(input: {
       includePullRequestHeadSha: input.command !== "cleanup",
       includePullRequestIsFork: input.command === "deploy",
       includeWorkflowRunUrl: input.command !== "cleanup",
-      prefix: "doppler run --project os --config prd -- ",
+      prefix: "doppler run --project os-legacy-backup --config prd -- ",
     }),
   };
 

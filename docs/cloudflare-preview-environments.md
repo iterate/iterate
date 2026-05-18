@@ -9,7 +9,7 @@ affected app deploys into that same config.
 - Semaphore resource type: `environment-config-lease`
 - Semaphore resource slug: `preview-2`, `preview-3`, etc.
 - Semaphore resource data: `{ "dopplerConfig": "preview_2" }`, etc.
-- Doppler project: app/service dimension, such as `events`, `os2`, or `semaphore`
+- Doppler project: app/service dimension, such as `events`, `os`, or `semaphore`
 - Doppler config: environment config dimension, such as `preview_2`, `prd`, or `dev_jonas_2`
 - Alchemy stage: inherited from Doppler as `${DOPPLER_CONFIG}`
 
@@ -21,8 +21,8 @@ For example, a PR that affects two new-style apps leases `preview-2`, reads
 app:
 
 ```bash
-cd apps/os2
-doppler run --project os2 --config preview_2 -- pnpm tsx ./alchemy.run.ts
+cd apps/os
+doppler run --project os-legacy-backup --config preview_2 -- pnpm tsx ./alchemy.run.ts
 
 cd ../semaphore
 doppler run --project semaphore --config preview_2 -- pnpm tsx ./alchemy.run.ts
@@ -94,13 +94,13 @@ eight healthy resources:
 ## Semaphore Token
 
 The preview router talks to Semaphore with a bearer token. In normal CI and
-operator commands, run it through `doppler run --project os --config prd`; the
+operator commands, run it through `doppler run --project os-legacy-backup --config prd`; the
 router reads `SEMAPHORE_API_TOKEN` when present and otherwise falls back to
 `APP_CONFIG_SHARED_API_SECRET`.
 
 ```bash
-doppler run --project os --config prd -- pnpm preview status
-doppler run --project os --config prd -- pnpm preview reconcile
+doppler run --project os-legacy-backup --config prd -- pnpm preview status
+doppler run --project os-legacy-backup --config prd -- pnpm preview reconcile
 doppler run --project semaphore --config prd -- pnpm --dir apps/semaphore seed:environment-config-leases
 ```
 
@@ -120,7 +120,7 @@ Do not paste the token into scripts or docs.
   deleted and missing resources are recreated with the source-code data.
 - Only keep Semaphore resources when the matching `preview_N` Doppler
   configs exist for the preview-managed apps and the app-specific Cloudflare
-  prerequisites are in the right accounts. For os2, that includes the
+  prerequisites are in the right accounts. For os, that includes the
   `iterate-preview-N.com` / `iterate-preview-N.app` zone pair.
 - Preview app configs inherit Cloudflare credentials from `_shared/preview`.
   Do not set app-local `CLOUDFLARE_ACCOUNT_ID` or `CLOUDFLARE_API_TOKEN`
@@ -131,8 +131,8 @@ Do not paste the token into scripts or docs.
   lease. If one selected app fails, the overall preview is unhealthy and the
   lease is kept.
 - Cross-app deployment references must be derived from the same config/stage.
-  OS2 exports `StreamDurableObject` from its main Worker script. Events may set
-  `DEPLOYMENT_CONFIG_STREAM_DURABLE_OBJECT_BINDING_SCRIPT_NAME` to the OS2
+  OS exports `StreamDurableObject` from its main Worker script. Events may set
+  `DEPLOYMENT_CONFIG_STREAM_DURABLE_OBJECT_BINDING_SCRIPT_NAME` to the OS
   Worker script for the same leased `preview_N` config. Keep this
   deployment-only value out of runtime `APP_CONFIG`.
 - CI workflows invoke one shared preview lifecycle. The lifecycle code, not the
@@ -147,18 +147,18 @@ In CI, `GITHUB_TOKEN`, `GITHUB_PR_NUMBER`, and `GITHUB_REPOSITORY` are set by
 the workflow. Locally, pass the PR number and preserve a GitHub token from `gh`:
 
 ```bash
-GITHUB_TOKEN="$(gh auth token)" doppler run --project os --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview sync --pull-request-number 1234
-GITHUB_TOKEN="$(gh auth token)" doppler run --project os --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview deploy --pull-request-number 1234
-GITHUB_TOKEN="$(gh auth token)" doppler run --project os --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview test --pull-request-number 1234
-GITHUB_TOKEN="$(gh auth token)" doppler run --project os --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview cleanup --pull-request-number 1234
+GITHUB_TOKEN="$(gh auth token)" doppler run --project os-legacy-backup --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview sync --pull-request-number 1234
+GITHUB_TOKEN="$(gh auth token)" doppler run --project os-legacy-backup --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview deploy --pull-request-number 1234
+GITHUB_TOKEN="$(gh auth token)" doppler run --project os-legacy-backup --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview test --pull-request-number 1234
+GITHUB_TOKEN="$(gh auth token)" doppler run --project os-legacy-backup --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview cleanup --pull-request-number 1234
 ```
 
 Direct app deploys are useful to prove the primitive or debug a specific slot,
 but they bypass Semaphore ownership:
 
 ```bash
-cd apps/os2
-doppler run --project os2 --config preview_2 -- pnpm tsx ./alchemy.run.ts
+cd apps/os
+doppler run --project os-legacy-backup --config preview_2 -- pnpm tsx ./alchemy.run.ts
 
 cd ../events
 doppler run --project events --config preview_2 -- pnpm tsx ./alchemy.run.ts
