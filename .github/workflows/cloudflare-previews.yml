@@ -40,8 +40,8 @@ jobs:
               "apps/example-contract/**",
               "apps/events/**",
               "apps/events-contract/**",
-              "apps/os2/**",
-              "apps/os2-contract/**",
+              "apps/os/**",
+              "apps/os-contract/**",
               "apps/semaphore/**",
               "apps/semaphore-contract/**",
             ];
@@ -137,7 +137,7 @@ jobs:
           WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |-
           set -euo pipefail
-          doppler run --project os --config prd -- pnpm preview deploy \
+          doppler run --project os-legacy-backup --config prd -- pnpm preview deploy \
             --github-token "$GITHUB_TOKEN" \
             --pull-request-head-ref-name "${{ github.event.pull_request.head.ref }}" \
             --pull-request-head-sha "${{ github.event.pull_request.head.sha }}" \
@@ -183,7 +183,7 @@ jobs:
           WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |-
           set -euo pipefail
-          doppler run --project os --config prd -- pnpm preview test \
+          doppler run --project os-legacy-backup --config prd -- pnpm preview test \
             --github-token "$GITHUB_TOKEN" \
             --pull-request-head-sha "${{ github.event.pull_request.head.sha }}" \
             --pull-request-number "${{ github.event.pull_request.number }}" \
@@ -225,7 +225,7 @@ jobs:
           WORKFLOW_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |-
           set -euo pipefail
-          doppler run --project os --config prd -- pnpm preview cleanup \
+          doppler run --project os-legacy-backup --config prd -- pnpm preview cleanup \
             --github-token "$GITHUB_TOKEN" \
             --pull-request-number "${{ github.event.pull_request.number }}" \
             --repository-full-name "${{ github.repository }}"

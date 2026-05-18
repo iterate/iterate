@@ -429,7 +429,7 @@ describe("stream view processor", () => {
     ]);
   });
 
-  test("projects OS2 codemode session completion outcomes", () => {
+  test("projects OS codemode session completion outcomes", () => {
     const returned = reduceStreamViewEvents([
       event({
         offset: 1,

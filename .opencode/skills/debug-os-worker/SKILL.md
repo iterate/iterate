@@ -1,23 +1,23 @@
 ---
 name: debug-os-worker
-description: Debug failures in the Cloudflare OS2 worker using the Cloudflare MCP server. Use when diagnosing 500s, missing logs, or request-level regressions in production or preview.
+description: Debug failures in the Cloudflare OS worker using the Cloudflare MCP server. Use when diagnosing 500s, missing logs, or request-level regressions in production or preview.
 publish: false
 ---
 
-# Debug OS2 Worker
+# Debug OS Worker
 
-Debug production/preview issues in the Cloudflare worker deployed from `apps/os2`.
+Debug production/preview issues in the Cloudflare worker deployed from `apps/os`.
 
 ## Workflow
 
 1. Query recent Worker observability events.
 2. Filter by trigger, message, requestId, or error text.
 3. Quantify scope and correlate with deploy/ref.
-4. Return evidence + next code path under `apps/os2/src/`.
+4. Return evidence + next code path under `apps/os/src/`.
 
 ## Defaults
 
-- Start with the deployed service name for the environment (often `os2` in preview/dev; confirm in Cloudflare dashboard).
+- Start with the deployed service name for the environment (often `os` in preview/dev; confirm in Cloudflare dashboard).
 - Start with last 30 minutes; widen to 60m, then 3h if empty.
 
 ## Steps
@@ -40,9 +40,9 @@ Filter on error level or distinctive message fragments from the alert.
 
 Map failures to handlers under:
 
-- `apps/os2/src/entry.workerd.ts`
-- `apps/os2/src/orpc/`
-- `apps/os2/src/domains/`
+- `apps/os/src/entry.workerd.ts`
+- `apps/os/src/orpc/`
+- `apps/os/src/domains/`
 
 ## Notes
 

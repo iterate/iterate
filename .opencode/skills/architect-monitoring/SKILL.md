@@ -5,7 +5,7 @@ description: "Monitoring workflow for architect: Cloudflare Worker checks, task 
 
 # Architect Monitoring
 
-Use this when the task is OS2 / Cloudflare app health monitoring.
+Use this when the task is OS / Cloudflare app health monitoring.
 
 ## Data sources
 
@@ -24,7 +24,7 @@ Use env vars first; if credentials are missing: `doppler run --config <env> -- <
 
 ## Slack escalation
 
-For broad or unclear impact, post in `#error-pulse` with deep links (PostHog issue, Cloudflare Worker logs query, GitHub permalink into `apps/os2/…`).
+For broad or unclear impact, post in `#error-pulse` with deep links (PostHog issue, Cloudflare Worker logs query, GitHub permalink into `apps/os/…`).
 
 ## Removed stack
 

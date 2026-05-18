@@ -1,7 +1,7 @@
 /**
  * Shared helpers for project ingress URL construction.
  *
- * These helpers are used by os2 project ingress durable objects and related
+ * These helpers are used by os project ingress durable objects and related
  * frontend/runtime code.
  *
  * ## Domain model

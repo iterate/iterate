@@ -83,7 +83,7 @@ async () => {
 ## Working Query
 
 See [EXAMPLES.md](EXAMPLES.md) for the exact codemode block that returned
-trace `250178b64271952ffb1ed1711133cf78` from `os2-preview-2` with 686 spans.
+trace `250178b64271952ffb1ed1711133cf78` from `os-preview-2` with 686 spans.
 
 If this returns no rows:
 

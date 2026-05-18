@@ -95,7 +95,7 @@ const previewManagedDopplerProjects = [
   ...new Set(Object.values(cloudflarePreviewApps).map((app) => app.dopplerProject)),
 ].sort();
 
-const previewCloudflareCredentialsProject = newStyleCloudflareApps.os2.dopplerProject;
+const previewCloudflareCredentialsProject = newStyleCloudflareApps.os.dopplerProject;
 
 export async function reconcileEnvironmentConfigLeaseResources(input: {
   checkCloudflareZone?: (input: {

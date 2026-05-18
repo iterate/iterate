@@ -9,25 +9,25 @@ import {
 
 describe("preview app dependency expansion", () => {
   it("adds explicit dependencies for affected apps", () => {
-    expect(expandPreviewDependencies(["events"])).toEqual(["events", "os2"]);
+    expect(expandPreviewDependencies(["events"])).toEqual(["events", "os"]);
   });
 
   it("keeps independent apps as-is", () => {
-    expect(expandPreviewDependencies(["os2"])).toEqual(["os2"]);
+    expect(expandPreviewDependencies(["os"])).toEqual(["os"]);
   });
 
   it("deduplicates dependencies", () => {
-    expect(expandPreviewDependencies(["events", "os2"])).toEqual(["events", "os2"]);
+    expect(expandPreviewDependencies(["events", "os"])).toEqual(["events", "os"]);
   });
 });
 
 describe("preview app dependency batches", () => {
   it("keeps dependent apps after their dependencies", () => {
     expect(
-      batchPreviewAppsByDependencies([cloudflarePreviewApps.os2, cloudflarePreviewApps.events]).map(
+      batchPreviewAppsByDependencies([cloudflarePreviewApps.os, cloudflarePreviewApps.events]).map(
         (batch) => batch.map((app) => app.slug),
       ),
-    ).toEqual([["os2"], ["events"]]);
+    ).toEqual([["os"], ["events"]]);
   });
 
   it("keeps independent apps in the same batch", () => {
@@ -68,9 +68,9 @@ describe("preview compare base", () => {
       resolvePreviewCompareBaseSha({
         previousState: {
           apps: {
-            os2: {
+            os: {
               appDisplayName: "OS",
-              appSlug: "os2",
+              appSlug: "os",
               headSha: "previous-preview-sha",
               status: "deployed",
               updatedAt: "2026-05-01T00:00:00.000Z",
@@ -102,7 +102,7 @@ describe("preview retry selection", () => {
         },
         pullRequestHeadSha: "current-head",
       }).map((app) => app.slug),
-    ).toEqual(["events", "os2"]);
+    ).toEqual(["events", "os"]);
   });
 
   it("does not retry previously failed apps from older commits", () => {
@@ -110,9 +110,9 @@ describe("preview retry selection", () => {
       selectPreviewAppsNeedingRetry({
         previousState: {
           apps: {
-            os2: {
+            os: {
               appDisplayName: "OS",
-              appSlug: "os2",
+              appSlug: "os",
               headSha: "old-head",
               status: "deploy-failed",
               updatedAt: "2026-05-01T00:00:00.000Z",

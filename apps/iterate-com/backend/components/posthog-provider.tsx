@@ -35,7 +35,7 @@ if (shouldEnablePostHog()) {
     capture_pageview: false, // We capture pageviews manually
     capture_pageleave: true, // Enable pageleave capture
     debug: import.meta.env.DEV,
-    // Session replay - match os2 config for consistency
+    // Session replay - match os config for consistency
     session_recording: {
       maskAllInputs: false,
       maskInputOptions: { password: true },

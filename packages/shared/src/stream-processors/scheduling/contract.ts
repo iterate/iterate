@@ -83,7 +83,7 @@ export const SchedulingProcessorContract = defineProcessorContract({
           description: "Append an event every 60 seconds",
           payload: {
             slug: "heartbeat",
-            append: { type: "events.iterate.com/os2/manual-event", payload: { message: "ping" } },
+            append: { type: "events.iterate.com/os/manual-event", payload: { message: "ping" } },
             schedule: { kind: "every", intervalSeconds: 60 },
           },
         },
@@ -92,7 +92,7 @@ export const SchedulingProcessorContract = defineProcessorContract({
           payload: {
             slug: "delayed-reminder",
             append: {
-              type: "events.iterate.com/os2/manual-event",
+              type: "events.iterate.com/os/manual-event",
               payload: { message: "reminder" },
             },
             schedule: { kind: "once-in", delaySeconds: 30 },

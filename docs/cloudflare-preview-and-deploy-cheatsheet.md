@@ -2,7 +2,7 @@
 
 ## Cheat sheet
 
-- In scope apps: `agents`, `example`, `events`, `os2`, `semaphore`
+- In scope apps: `agents`, `example`, `events`, `os`, `semaphore`
 - PR previews are owned by one workflow: `Cloudflare Previews`
 - Production deploys are owned by generated per-app workflows in `.github/workflows/deploy-*.yml`
 - Preview state lives in the managed PR body section, not in PR comments
@@ -16,21 +16,21 @@
 
 ```bash
 # inspect environment config lease state for PR previews
-doppler run --project os --config prd -- pnpm preview status
+doppler run --project os-legacy-backup --config prd -- pnpm preview status
 
 # create or refresh a PR preview; affected apps and dependencies are selected automatically
-doppler run --project os --config prd -- pnpm preview sync --pull-request-number 1234
+doppler run --project os-legacy-backup --config prd -- pnpm preview sync --pull-request-number 1234
 
 # deploy every preview-managed app even if the PR did not touch all of them
-doppler run --project os --config prd -- pnpm preview sync --pull-request-number 1234 --force true
+doppler run --project os-legacy-backup --config prd -- pnpm preview sync --pull-request-number 1234 --force true
 
 # split preview into explicit phases
-doppler run --project os --config prd -- pnpm preview deploy --pull-request-number 1234
-doppler run --project os --config prd -- pnpm preview test --pull-request-number 1234
-doppler run --project os --config prd -- pnpm preview cleanup --pull-request-number 1234
+doppler run --project os-legacy-backup --config prd -- pnpm preview deploy --pull-request-number 1234
+doppler run --project os-legacy-backup --config prd -- pnpm preview test --pull-request-number 1234
+doppler run --project os-legacy-backup --config prd -- pnpm preview cleanup --pull-request-number 1234
 
 # local PR commands need a GitHub token because they read and update PR body state
-GITHUB_TOKEN="$(gh auth token)" doppler run --project os --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview test --pull-request-number 1234
+GITHUB_TOKEN="$(gh auth token)" doppler run --project os-legacy-backup --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview test --pull-request-number 1234
 
 # manual prod deploy from GitHub Actions
 gh workflow run "Deploy Events" --ref main -f ref=main -f stage=prd
@@ -58,10 +58,10 @@ gh workflow run "Deploy Events" --ref main -f ref=main -f stage=prd
 8. It records each app result in the PR body. If one app fails, the overall preview is unhealthy and the lease is kept.
 9. On PR close, cleanup tears down recorded apps and releases the shared lease only after successful teardown.
 
-Cross-app links and bindings must be derived from that same config. OS2 exports
+Cross-app links and bindings must be derived from that same config. OS exports
 its own `StreamDurableObject` from the main Worker script. Events can use
 `DEPLOYMENT_CONFIG_STREAM_DURABLE_OBJECT_BINDING_SCRIPT_NAME` to bind `STREAM`
-to the OS2 preview Worker script for the same numbered slot. This is deployment
+to the OS preview Worker script for the same numbered slot. This is deployment
 config, not runtime `APP_CONFIG`.
 
 ## Semaphore token
@@ -71,9 +71,9 @@ Preview commands need a Semaphore bearer token. The repo-root preview router get
 For normal operator work, use the `os` production Doppler config:
 
 ```bash
-doppler run --project os --config prd -- pnpm preview status
-doppler run --project os --config prd -- pnpm preview reconcile
-doppler run --project os --config prd -- pnpm preview sync --pull-request-number 1234
+doppler run --project os-legacy-backup --config prd -- pnpm preview status
+doppler run --project os-legacy-backup --config prd -- pnpm preview reconcile
+doppler run --project os-legacy-backup --config prd -- pnpm preview sync --pull-request-number 1234
 ```
 
 For Semaphore maintenance itself, use the `semaphore` production Doppler config:

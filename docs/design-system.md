@@ -4,7 +4,7 @@ We use shadcn/ui components with vanilla shadcn style. Install additional compon
 
 ## App Consistency
 
-Layout patterns, component usage, and structural patterns for the OS app live in `apps/os2`.
+Layout patterns, component usage, and structural patterns for the OS app live in `apps/os`.
 
 ## Mobile-First Development
 

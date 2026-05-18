@@ -1,13 +1,13 @@
 ---
 name: drizzle-migrations
-description: Drizzle ORM database migration workflow for packages that still use Drizzle (agents, example). Do NOT use for apps/os2 — that app uses sqlfu/D1.
+description: Drizzle ORM database migration workflow for packages that still use Drizzle (agents, example). Do NOT use for apps/os — that app uses sqlfu/D1.
 ---
 
 # Drizzle Migration Workflow
 
 Use this skill only for packages that still ship Drizzle schema + migrations.
 
-**Do not use for `apps/os2`.** OS2 schema lives in `apps/os2/src/db/definitions.sql`; run `pnpm --dir apps/os2 sqlfu:generate` / `sqlfu:migrate` instead.
+**Do not use for `apps/os`.** OS schema lives in `apps/os/src/db/definitions.sql`; run `pnpm --dir apps/os sqlfu:generate` / `sqlfu:migrate` instead.
 
 ## Process
 
@@ -50,4 +50,4 @@ See `docs/fixing-drizzle-migration-conflicts.md`.
 
 - Never write migration SQL from scratch without `drizzle-kit generate`
 - Never use `pnpm os db:migrate` — legacy OS app removed
-- Never apply this workflow to `apps/os2` sqlfu migrations
+- Never apply this workflow to `apps/os` sqlfu migrations

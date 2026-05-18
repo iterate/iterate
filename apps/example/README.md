@@ -77,7 +77,7 @@ the shared `withEvlog()` wrapper in the runtime entrypoints rather than Nitro's
 
 ```bash
 # Normal preview lifecycle is managed from the repo root:
-# doppler run --project os --config prd -- pnpm preview sync --pull-request-number 1234
+# doppler run --project os-legacy-backup --config prd -- pnpm preview sync --pull-request-number 1234
 #
 # A direct preview_N deploy bypasses Semaphore's environment config lease.
 # Check `pnpm preview status` first and use it only for emergency debugging.

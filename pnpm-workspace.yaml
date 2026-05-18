@@ -1,8 +1,8 @@
 packages:
   - apps/cli
   - apps/iterate-com
-  - apps/os2
-  - apps/os2-contract
+  - apps/os
+  - apps/os-contract
   - apps/semaphore
   - apps/semaphore-contract
   - apps/example
