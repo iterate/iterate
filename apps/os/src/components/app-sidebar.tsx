@@ -122,7 +122,7 @@ function ProjectSidebarGroup({
   projectSlug: string;
 }) {
   const matchRoute = useMatchRoute();
-  const mcpUrl = buildProjectMcpUrl({ projectSlug, customHostname, projectHostnameBases });
+  const mcpUrl = buildProjectMcpUrl({ projectSlug, projectHostnameBases });
   const customWorkerUrl = buildProjectWorkerUrl({
     projectSlug,
     customHostname,

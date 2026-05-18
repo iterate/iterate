@@ -4,12 +4,11 @@ import { generateProtectedResourceMetadata } from "@clerk/mcp-tools/server";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { McpAgent } from "agents/mcp";
 import { AppConfig } from "~/app.ts";
-import type {
-  ProjectDurableObject,
-  ProjectSummary,
-} from "~/domains/projects/durable-objects/project-durable-object.ts";
+import type { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import type { ProjectMcpServerConnectionProps } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
+import { isBrowserMcpInstructionsRequest } from "~/domains/inbound-mcp-server/mcp-instructions-request.ts";
+import { resolveMcpProjectAccess } from "~/domains/inbound-mcp-server/mcp-project-access.ts";
 import { ingressUrlFromRequest } from "~/ingress/host-routing.ts";
 import { deriveClerkFrontendApiUrl } from "~/lib/clerk-frontend-api.ts";
 
@@ -62,10 +61,17 @@ export class ProjectMcpServerEntrypoint extends WorkerEntrypoint<
 
     const access = await resolveMcpProjectAccess({
       auth: mcpAuth,
+      clerk: createClerkClientForApp(),
       project: this.env.PROJECT.getByName(getProjectDurableObjectName(this.ctx.props.projectId)),
     });
-    if (access instanceof Response) {
-      return access;
+    if (!access) {
+      return new Response(
+        "MCP user is not a member of an organization with access to this project",
+        {
+          status: 403,
+          headers: mcpCorsHeaders,
+        },
+      );
     }
 
     const ctxWithProps = this.ctx as ExecutionContext & { props?: ProjectMcpServerConnectionProps };
@@ -186,108 +192,6 @@ function readClerkTokenType(clerkAuth: unknown): ProjectMcpServerConnectionProps
   return undefined;
 }
 
-async function resolveMcpProjectAccess(input: {
-  auth: ProjectMcpServerConnectionProps;
-  project: DurableObjectStub<ProjectDurableObject>;
-}): Promise<{ auth: ProjectMcpServerConnectionProps; project: ProjectSummary } | Response> {
-  if (input.auth.clientId === "admin-api-secret") {
-    return { auth: input.auth, project: await input.project.getSummary() };
-  }
-
-  if (input.auth.orgId) {
-    const project = await tryCheckMcpProjectAccess({
-      auth: input.auth,
-      orgId: input.auth.orgId,
-      project: input.project,
-    });
-    if (project) {
-      return { auth: input.auth, project };
-    }
-  }
-
-  if (input.auth.clerkTokenType !== "session_token") {
-    return new Response("MCP user is not a member of an organization with access to this project", {
-      status: 403,
-      headers: mcpCorsHeaders,
-    });
-  }
-
-  const membershipAccess = await findMcpProjectMembershipAccess({
-    auth: input.auth,
-    clerk: createClerkClientForApp(),
-    project: input.project,
-  });
-  if (membershipAccess) {
-    return membershipAccess;
-  }
-
-  return new Response("MCP user is not a member of an organization with access to this project", {
-    status: 403,
-    headers: mcpCorsHeaders,
-  });
-}
-
-async function findMcpProjectMembershipAccess(input: {
-  auth: ProjectMcpServerConnectionProps;
-  clerk: ClerkClient;
-  project: DurableObjectStub<ProjectDurableObject>;
-}) {
-  const limit = 100;
-  let offset = 0;
-
-  while (true) {
-    const memberships = await input.clerk.users.getOrganizationMembershipList({
-      limit,
-      offset,
-      userId: input.auth.userId,
-    });
-
-    for (const membership of memberships.data) {
-      const project = await tryCheckMcpProjectAccess({
-        auth: input.auth,
-        orgId: membership.organization.id,
-        project: input.project,
-      });
-      if (!project) {
-        continue;
-      }
-
-      return {
-        auth: {
-          ...input.auth,
-          orgId: membership.organization.id,
-          orgPermissions: membership.permissions,
-          orgRole: membership.role,
-          orgSlug: membership.organization.slug ?? null,
-        },
-        project,
-      };
-    }
-
-    offset += memberships.data.length;
-    if (memberships.data.length === 0 || offset >= memberships.totalCount) {
-      return null;
-    }
-  }
-}
-
-async function tryCheckMcpProjectAccess(input: {
-  auth: ProjectMcpServerConnectionProps;
-  orgId: string;
-  project: DurableObjectStub<ProjectDurableObject>;
-}) {
-  try {
-    return await input.project.checkAccess({
-      principal: {
-        orgId: input.orgId,
-        userId: input.auth.userId,
-      },
-    });
-  } catch {
-    return null;
-  }
-}
-
 function createClerkClientForApp(): ClerkClient {
   return createClerkClient({
     secretKey: config.clerk.secretKey.exposeSecret(),
@@ -324,10 +228,6 @@ function unauthorizedMcpResponse(request: Request, message: string) {
       "WWW-Authenticate": `Bearer resource_metadata="${metadataUrl.toString()}"`,
     },
   });
-}
-
-function isBrowserMcpInstructionsRequest(request: Request) {
-  return request.method === "GET" && request.headers.get("accept")?.includes("text/html");
 }
 
 function mcpInstructionsPageResponse(input: { projectId: string; url: URL }) {

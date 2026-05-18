@@ -52,15 +52,9 @@ export function resolveProjectSlugFromHostname(
 
 export function buildProjectMcpUrl(input: {
   projectSlug: string;
-  customHostname?: string | null;
   projectHostnameBases: readonly string[];
 }) {
   if (!projectSlugPattern.test(input.projectSlug)) return null;
-  const customHostname = normalizeCustomHostname(input.customHostname);
-  if (customHostname) {
-    if (!hostnamePattern.test(customHostname)) return null;
-    return `https://${customHostname}`;
-  }
 
   const projectHostnameBase = input.projectHostnameBases[0];
   if (!projectHostnameBase) return null;

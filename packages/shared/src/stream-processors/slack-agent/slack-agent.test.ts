@@ -191,9 +191,7 @@ describe("createSlackAgentProcessor", () => {
     });
     const content = (appended[0].event.payload as { content: string }).content;
     expect(content).toContain("```yaml");
-    expect(content).toContain("Slack reply guidance");
-    expect(content).toContain("do not chime in just because this event arrived");
-    expect(content).toContain("surrounding thread context clearly calls for agent action");
+    expect(content).not.toContain("Slack reply guidance");
     expect(content).toContain("text: please look at this");
     expect(content).toContain('thread_ts: "1772136258.963519"');
     expect(content).not.toContain("Reply requirement:");

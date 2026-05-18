@@ -214,8 +214,6 @@ function slackWebhookAgentInput(payload: unknown) {
   return [
     "`events.iterate.com/slack/webhook-received` event received",
     "",
-    "Slack reply guidance: do not chime in just because this event arrived. Reply only when the bot was explicitly mentioned, the user directly asks or instructs you, or the surrounding thread context clearly calls for agent action. If this is FYI-only, output an empty codemode block and do not call `ctx.slack.chat.postMessage`.",
-    "",
     "```yaml",
     stringifyYaml(payload).trimEnd(),
     "```",
