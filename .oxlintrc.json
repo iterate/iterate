@@ -120,10 +120,7 @@
     "unicorn-js/isolated-functions": [
       "error",
       {
-        "selectors": [
-          "CallExpression[callee.property.name=/CodemodeScript/] ArrowFunctionExpression",
-          "CallExpression[callee.property.name=/CodemodeScript/] FunctionExpression"
-        ],
+        "selectors": ["CallExpression[callee.property.name=/CodemodeScript/] :function"],
         "overrideGlobals": {
           "fetch": "readonly",
           "console": "readonly"
