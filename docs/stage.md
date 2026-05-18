@@ -114,7 +114,6 @@ Use Doppler branch configs for isolation:
 | `dev_jonas`    | Engineer-specific dev config         |
 | `dev_rahul`    | Engineer-specific dev config         |
 | `preview`      | Base preview config                  |
-| `preview_1`    | Repo-managed PR preview config 1     |
 | `preview_2`    | Repo-managed PR preview config 2     |
 | `preview_9`    | Repo-managed PR preview config 9     |
 | `preview_N`    | Repo-managed PR preview config N     |
