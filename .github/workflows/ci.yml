@@ -17,8 +17,8 @@ jobs:
         run: |-
           cat <<'EOF' >> "$GITHUB_STEP_SUMMARY"
           ## Rollout Strategy
-          1. Deploy OS worker and app with current environment variables.
-          2. Leave FLY_DEFAULT_IMAGE unchanged; sandbox image promotion is not part of CI.
+          1. Deploy iterate.com with current environment variables.
+          2. OS deploys separately via deploy-os2.yml when apps/os2 changes.
           EOF
   deploy:
     uses: ./.github/workflows/deploy.yml

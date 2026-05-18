@@ -1,10 +1,8 @@
 /**
  * Shared helpers for project ingress URL construction.
  *
- * These helpers are used by:
- * - The OS worker (alchemy.run.ts, worker.ts, project-ingress-proxy.ts, machine-creation.ts)
- * - The daemon (observability-links.ts, agent-debug-links.ts)
- * - The frontend (project-ingress-link.ts)
+ * These helpers are used by os2 project ingress durable objects and related
+ * frontend/runtime code.
  *
  * ## Domain model
  *

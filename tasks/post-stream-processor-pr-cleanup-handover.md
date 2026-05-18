@@ -40,9 +40,7 @@ Before starting a big cleanup branch, verify that the merged work actually deplo
 3. Run the local agents smoke flow against deployed events and confirm Webchat -> Agent -> Codemode still appends the expected stream events.
 4. Confirm the processor docs pages are served from the deployed events app and no old static event pages remain visible.
 5. Check CI on a clean follow-up PR, not only this PR. Re-check anything that was broken, skipped, or noisy here:
-   - preview deployments
-   - preview e2e tests
-   - sandbox-related jobs
+   - preview deployments and preview e2e tests
    - any old `ai-engineer-workshop` or old events SDK workflow references
    - HAR/mocked-internet agents tests
    - root `typecheck`, `lint`, `format`, and package tests

@@ -8,7 +8,7 @@
 setup:
   - project: _shared
     path: packages/shared/
-  - project: os
+  - project: os # monorepo root secrets — NOT the deleted apps/os directory
     path: ./
   - project: example
     path: apps/example/

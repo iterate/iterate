@@ -139,6 +139,7 @@ function makeSharedWorkspace(): WorkspaceConfig {
       "src/apps/cli-entry.ts",
       "src/durable-object-utils/e2e/alchemy.run.ts",
       "src/streams/sqlfu.config.ts",
+      "src/**/*.test.ts",
     ],
     project: ["src/**/*.ts"],
     ignoreDependencies: ["alchemy", "cloudflare", "wrangler"],
@@ -151,7 +152,7 @@ const config: KnipConfig = {
   treatConfigHintsAsErrors: true,
   // Keep this root command intentionally scoped. When Knip includes dependent
   // workspaces for a selected package, we still do not want it wandering into
-  // unrelated apps with heavyweight config loading like `apps/os`.
+  // unrelated apps with heavyweight config loading.
   ignoreWorkspaces: [
     "apps/*",
     "!apps/agents",
@@ -160,6 +161,8 @@ const config: KnipConfig = {
     "!apps/example-contract",
     "!apps/events",
     "!apps/events-contract",
+    "!apps/os2",
+    "!apps/os2-contract",
     "!apps/semaphore",
     "!apps/semaphore-contract",
     "packages/*",
@@ -233,6 +236,8 @@ const config: KnipConfig = {
     "apps/events-contract": makePrivateContractWorkspace(),
     "apps/semaphore": makeCloudflareTanStackAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/semaphore-contract": makePrivateContractWorkspace(),
+    "apps/os2": makeCloudflareTanStackAppWorkspace("./src/lib/worker-env.d.ts"),
+    "apps/os2-contract": makePrivateContractWorkspace(),
     "packages/shared": makeSharedWorkspace(),
   },
 };

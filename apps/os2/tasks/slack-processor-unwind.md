@@ -146,10 +146,7 @@ apps/events test` passed after updating their shared processor API/docs
   `@cf/moonshotai/kimi-k2.6`. OS2 now defaults new agents, new presets, shared
   agent reduced state, and unconfigured agent runtime setup to Cloudflare
   AI/Kimi K2.6 instead of OpenAI WebSocket.
-- Verification issue: root `pnpm test` is blocked by `apps/os` outbox
-  integration tests failing to connect to local Postgres on `localhost:5432`;
-  unrelated packages had already progressed, and the focused OS2/shared test
-  suites above passed.
+- Verification: `pnpm --dir apps/os2 test` and focused shared/agents/events suites passed for the processor refactor work described above.
 - Real-token check: `doppler run --project agents --config dev -- ... Slack
 auth.test` succeeded against the iterate Slack workspace without printing the
   token. OS2 Doppler dev config in this checkout did not expose

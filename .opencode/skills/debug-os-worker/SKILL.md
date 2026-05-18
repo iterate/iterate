@@ -1,92 +1,50 @@
 ---
 name: debug-os-worker
-description: Debug failures in the Cloudflare `os` worker using the Cloudflare MCP server (events, keys, values, and targeted queries). Use when diagnosing 500s, missing logs, daemon/control-plane issues, or request-level regressions in production.
+description: Debug failures in the Cloudflare OS2 worker using the Cloudflare MCP server. Use when diagnosing 500s, missing logs, or request-level regressions in production or preview.
 publish: false
 ---
 
-# Debug OS Worker
+# Debug OS2 Worker
 
-Debug production control-plane issues in the Cloudflare `os` worker.
+Debug production/preview issues in the Cloudflare worker deployed from `apps/os2`.
 
 ## Workflow
 
-1. Use the `os` worker only (no worker-name discovery step).
-2. Pull recent `events` first, then filter.
-3. Identify exact failing trigger/message/requestId.
-4. Quantify scope with calculations.
-5. Return evidence + next code path to inspect.
+1. Query recent Worker observability events.
+2. Filter by trigger, message, requestId, or error text.
+3. Quantify scope and correlate with deploy/ref.
+4. Return evidence + next code path under `apps/os2/src/`.
+
+## Defaults
+
+- Start with the deployed service name for the environment (often `os2` in preview/dev; confirm in Cloudflare dashboard).
+- Start with last 30 minutes; widen to 60m, then 3h if empty.
 
 ## Steps
 
-### 1) Worker + timeframe defaults
+### 1) Baseline events query
 
-- Worker is always `os`.
-- Start with last 30 minutes.
-- If empty/noisy, move to 60m, then 3h.
+Use Cloudflare observability MCP tools with:
 
-### 2) Baseline query (events)
+- `view: "events"`
+- filter on service name when available
+- limit 20–50
 
-- Run `user-cloudflare-query_worker_observability` with:
-  - `view: "events"`
-  - filter `$metadata.service == "os"` (if key exists)
-  - limit 20-50
-- Goal: collect real values for:
-  - `$metadata.trigger`
-  - `$metadata.message`
-  - `$metadata.error`
-  - `$metadata.requestId`
-  - `$metadata.level`
+Collect real values for trigger, message, error, requestId, level.
 
-### 3) Error-focused query
+### 2) Error-focused query
 
-- Add one of:
-  - `$metadata.error exists`
-  - `$metadata.level == "error"` (or observed level value)
-  - `$metadata.message includes "<observed failure substring>"`
-- Use concrete values from baseline results. Do not guess keys/values.
+Filter on error level or distinctive message fragments from the alert.
 
-If you have a daemon-side correlation id or `cf-ray`, search for it in message/request-id fields.
+### 3) Code correlation
 
-### 4) Verify keys/values only when needed
+Map failures to handlers under:
 
-- If a filter fails or returns nothing:
-  - call `user-cloudflare-observability_keys`
-  - call `user-cloudflare-observability_values` for the exact key
-- Then retry with exact returned value.
-
-### 5) Scope query (calculations)
-
-- Use `view: "calculations"` for:
-  - total error count in timeframe
-  - grouped counts by trigger or message
-- Keep group-bys small. Use only verified keys.
-
-### 6) Optional live tail with Doppler (outside MCP)
-
-Use only when you need live correlation during an active incident:
-
-`doppler run --config prd -- npx wrangler tail os --format json`
-
-Use MCP for historical triage; use tail for real-time confirmation.
-
-## Hard Rules
-
-- Always debug `os`, not other workers.
-- Start with `events` before `calculations`.
-- Prefer `includes` over `regex` unless required.
-- Keep queries iterative (small steps, short timeframe first).
-- If zero results, widen time before adding complexity.
-
-## Output Format
-
-Return:
-
-1. Failing path: trigger/message/error signature.
-2. Scope: count + timeframe (+ grouped breakdown if useful).
-3. Evidence: requestId/cf-ray/message excerpts.
-4. Most likely backend code path to inspect next.
+- `apps/os2/src/entry.workerd.ts`
+- `apps/os2/src/orpc/`
+- `apps/os2/src/domains/`
 
 ## Notes
 
-- Dashboard deep-link for manual checks:
-  - `https://dash.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/workers/services/view/os/production/observability/events`
+- Legacy `apps/os` and machine/daemon control-plane paths were removed from this repo.
+- Prefer Worker logs + PostHog error tracking over Fly SSH or container logs.

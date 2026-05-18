@@ -21,15 +21,7 @@ Add a GitHub integration to OS2 that mirrors the Slack integration shape:
 
 ## Current Findings
 
-`apps/os` has a large GitHub module at
-`apps/os/backend/integrations/github/github.ts`. It handles GitHub App install
-callback, installation token minting, repo listing, config repo selection,
-webhook signature verification, outbox dedupe, forwarding raw webhooks to active
-machines, config repo reloads, and special machine recreation from `[refresh]`
-commit comments.
-
-Do not port that module directly. Much of it is OS1 machine lifecycle behavior.
-OS2 should use its existing stream and capability model.
+Legacy `apps/os` GitHub integration was removed with the OS1 app. OS2 should implement GitHub using its existing stream and capability model from scratch.
 
 Relevant OS2 foundations already exist:
 
