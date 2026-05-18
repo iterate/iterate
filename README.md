@@ -71,8 +71,8 @@ preview slots exist. Each live Semaphore resource has:
 To inspect and validate that live inventory:
 
 ```bash
-doppler run --project os-legacy-backup --config prd -- pnpm preview status
-doppler run --project os-legacy-backup --config prd -- pnpm preview reconcile
+doppler run --project _shared --config prd -- pnpm preview status
+doppler run --project _shared --config prd -- pnpm preview reconcile
 ```
 
 `preview reconcile` checks every live `environment-config-lease` row against
@@ -95,7 +95,7 @@ pnpm tsx scripts/preview/bootstrap-preview-doppler-config.ts <preview-number>
 
 ```bash
 doppler run --project semaphore --config prd -- pnpm --dir apps/semaphore seed:environment-config-leases
-doppler run --project os-legacy-backup --config prd -- pnpm preview reconcile
+doppler run --project _shared --config prd -- pnpm preview reconcile
 ```
 
 The seed is exact for `environment-config-lease`: missing resources are created

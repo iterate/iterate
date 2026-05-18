@@ -1,5 +1,5 @@
 ---
-state: todo
+state: cancelled
 priority: high
 size: medium
 dependsOn: []

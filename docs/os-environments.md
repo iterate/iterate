@@ -76,7 +76,7 @@ _shared          ← CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, ALCHEMY_STAGE=
 
 ```bash
 # Uses your dev_jonas config — tunnel is created automatically because baseUrl is set
-doppler run --project os-legacy-backup --config dev_jonas -- tsx ./alchemy.run.ts
+doppler run --project os --config dev_jonas -- tsx ./alchemy.run.ts
 # Or simply:
 cd apps/os && pnpm dev
 ```
@@ -94,7 +94,7 @@ Prerequisites:
 Remove `APP_CONFIG_BASE_URL` from your config (or use the base `dev` config). Vite runs on localhost; no tunnel or DNS is created.
 
 ```bash
-doppler run --project os-legacy-backup --config dev -- tsx ./alchemy.run.ts
+doppler run --project os --config dev -- tsx ./alchemy.run.ts
 ```
 
 ### Port
@@ -114,7 +114,7 @@ configured in the right Cloudflare account.
 1. CI acquires a shared environment config lease from Semaphore (e.g. `preview-3`)
 2. The resource data maps the lease to Doppler config `preview_3`
 3. `preview_3` has `APP_CONFIG_BASE_URL=https://os.iterate-preview-3.com` and `APP_CONFIG_PROJECT_HOSTNAME_BASES=["iterate-preview-3.app"]`
-4. `doppler run --project os-legacy-backup --config preview_3 -- pnpm tsx ./alchemy.run.ts` deploys the worker with correct routes. `ALCHEMY_STAGE` comes from `_shared` as `${DOPPLER_CONFIG}` and is slugified by the app into Cloudflare names like `os-preview-3`.
+4. `doppler run --project os --config preview_3 -- pnpm tsx ./alchemy.run.ts` deploys the worker with correct routes. `ALCHEMY_STAGE` comes from `_shared` as `${DOPPLER_CONFIG}` and is slugified by the app into Cloudflare names like `os-preview-3`.
 5. PR body is updated with the shared lease and per-app deployment status
 6. On PR close, recorded apps are torn down and the environment config lease is released back to Semaphore
 
@@ -139,16 +139,16 @@ The `pnpm preview` CLI (from repo root) manages the full lifecycle. It uses the 
 
 ```bash
 # Check which environment config leases are free
-doppler run --project os-legacy-backup --config prd -- pnpm preview status
+doppler run --project _shared --config prd -- pnpm preview status
 
 # Full lifecycle for a PR (acquire lease, deploy affected apps, test, update PR body)
-GITHUB_TOKEN="$(gh auth token)" doppler run --project os-legacy-backup --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview sync --pull-request-number 1234
+GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview sync --pull-request-number 1234
 
 # Or just deploy without tests
-GITHUB_TOKEN="$(gh auth token)" doppler run --project os-legacy-backup --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview deploy --pull-request-number 1234
+GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview deploy --pull-request-number 1234
 
 # Clean up
-GITHUB_TOKEN="$(gh auth token)" doppler run --project os-legacy-backup --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview cleanup --pull-request-number 1234
+GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview cleanup --pull-request-number 1234
 ```
 
 Prefer the repo-root `pnpm preview` CLI so Semaphore owns the environment config
@@ -158,27 +158,27 @@ debugging after checking `pnpm preview status`.
 
 ```bash
 cd apps/os
-doppler run --project os-legacy-backup --config preview_3 -- pnpm tsx ./alchemy.run.ts
+doppler run --project os --config preview_3 -- pnpm tsx ./alchemy.run.ts
 
 # Hit it
 open https://os.iterate-preview-3.com         # dashboard
 open https://myproject.iterate-preview-3.app   # project subdomain
 
 # Clean up
-doppler run --project os-legacy-backup --config preview_3 -- pnpm tsx ./alchemy.run.ts --destroy
+doppler run --project os --config preview_3 -- pnpm tsx ./alchemy.run.ts --destroy
 ```
 
 ### Adding a new developer
 
 1. Buy/register `iterate-dev-<name>.com` and `iterate-dev-<name>.app` in the `04b3` account
-2. Create doppler config: `doppler configs create dev_<name> --project os-legacy-backup`
+2. Create doppler config: `doppler configs create dev_<name> --project os`
 3. Set the OS domain vars. OS deploys its own stream Durable Object namespace
    from the main Worker script; do not set a stream binding override on OS.
    ```bash
    doppler secrets set \
      APP_CONFIG_BASE_URL="https://os.iterate-dev-<name>.com" \
      'APP_CONFIG_PROJECT_HOSTNAME_BASES=["iterate-dev-<name>.app"]' \
-     --project os-legacy-backup --config dev_<name>
+     --project os --config dev_<name>
    ```
 4. If the Events app should inspect the same stream namespace, set
    `DEPLOYMENT_CONFIG_STREAM_DURABLE_OBJECT_BINDING_SCRIPT_NAME` on the matching

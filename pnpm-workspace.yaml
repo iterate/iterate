@@ -1,26 +1,17 @@
 packages:
-  - apps/cli
   - apps/iterate-com
   - apps/os
   - apps/os-contract
   - apps/semaphore
   - apps/semaphore-contract
   - apps/example
-  - apps/fetch-test
-  - apps/example-3
   - apps/example-contract
-  - apps/example-v2
-  - apps/example-v2-contract
   - apps/events
   - apps/events-contract
   - apps/agents
   - apps/agents-contract
   - apps/*
-  - services/*
-  - '!services/events'
-  - '!services/events-contract'
   - packages/*
-  - packages/pidnap/docker
   - .github/ts-workflows
 
 catalogs:
@@ -59,7 +50,6 @@ minimumReleaseAgeExclude:
   - "@mariozechner/pi-coding-agent"
   - "@mariozechner/pi-agent-core"
   - "@mariozechner/pi-tui"
-  - pidnap
   - schematch
   - sqlfu
   - trpc-cli

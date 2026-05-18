@@ -8,21 +8,21 @@
 setup:
   - project: _shared
     path: packages/shared/
-  - project: os-legacy-backup # monorepo root secrets — NOT the deleted apps/os directory
+  - project: _shared
     path: ./
+  - project: iterate-com
+    path: apps/iterate-com/
   - project: example
     path: apps/example/
-  - project: example
-    path: apps/example-v2/
-  - project: example
-    path: apps/fetch-test/
   - project: os
     path: apps/os/
   - project: events
     path: apps/events/
   - project: semaphore
     path: apps/semaphore/
-  - project: test
-    path: apps/test/
+  - project: auth
+    path: apps/auth/
+  - project: auth
+    path: apps/auth-example/
   - project: agents
     path: apps/agents/

@@ -80,6 +80,36 @@ function makeAgentsTanStackAppWorkspace(workerEnvShim: string): WorkspaceConfig 
   };
 }
 
+function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
+  const base = makeCloudflareTanStackAppWorkspace(workerEnvShim);
+  return {
+    ...base,
+    entry: [
+      ...(base.entry ?? []),
+      "e2e/vitest.config.ts",
+      "e2e/tui-test/tui-test.config.ts",
+      "e2e/tui-test/run.ts",
+      "scripts/claude-mcp.ts",
+      "scripts/event-stream-terminal.tsx",
+      "scripts/sync-clerk-apps.ts",
+      "sqlfu.config.ts",
+      "src/durable-objects/codemode-session.vitest.config.ts",
+      "src/durable-objects/codemode-session-test-entry.ts",
+      "src/durable-objects/iterate-mcp-server.vitest.config.ts",
+      "src/durable-objects/iterate-mcp-server-test-entry.ts",
+      "src/durable-objects/project-ingress.vitest.config.ts",
+      "src/durable-objects/project-ingress-test-entry.ts",
+    ],
+    ignoreDependencies: [
+      ...(base.ignoreDependencies ?? []),
+      "@opentui/core",
+      "@opentui/react",
+      "iterate",
+      "miniflare",
+    ],
+  };
+}
+
 function makeCloudflareTanStackAppWorkspace(workerEnvShim: string): WorkspaceConfig {
   return {
     entry: ["alchemy.run.ts", "vite.config.ts", "scripts/router.ts", "src/entry.workerd.ts!"],
@@ -173,6 +203,21 @@ const config: KnipConfig = {
     // entrypoint, so there is no direct import Knip can follow.
     "apps/agents/src/router.tsx": ["exports"],
     "apps/example/src/router.tsx": ["exports"],
+    "apps/os/src/router.tsx": ["exports"],
+    "apps/os-contract/src/index.ts": ["exports", "types"],
+    "apps/os/src/db/migrations/.generated/migrations.ts": ["files", "exports", "types"],
+    "apps/os/src/db/queries/.generated/index.ts": ["files", "exports", "types"],
+    "apps/os/src/db/queries/.generated/tables.ts": ["files", "types"],
+    "apps/os/src/durable-objects/mock-artifacts-binding.ts": ["exports"],
+    "apps/os/src/durable-objects/test-stream-durable-object.ts": ["exports"],
+    "apps/os/src/domains/codemode/examples.ts": ["exports"],
+    "apps/os/src/stream-tui/react-stream-renderers.tsx": ["exports"],
+    "apps/os/src/stream-tui/react-stream-view-model.ts": ["exports"],
+    "apps/os/e2e/test-support/app-config-env.ts": ["files", "exports"],
+    "apps/os/e2e/test-support/create-local-dev-server.ts": ["files", "exports"],
+    "apps/os/src/durable-objects/test-stream-durable-object.ts": ["files", "exports"],
+    "apps/os/src/**": ["exports", "types"],
+    "apps/os/e2e/test-support/**": ["exports", "types"],
     "apps/semaphore-contract/src/client.ts": ["types"],
     "apps/semaphore/src/router.tsx": ["exports"],
     "apps/semaphore/scripts/seed-cloudflare-tunnel-pool.ts": ["exports"],
@@ -236,7 +281,7 @@ const config: KnipConfig = {
     "apps/events-contract": makePrivateContractWorkspace(),
     "apps/semaphore": makeCloudflareTanStackAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/semaphore-contract": makePrivateContractWorkspace(),
-    "apps/os": makeCloudflareTanStackAppWorkspace("./src/lib/worker-env.d.ts"),
+    "apps/os": makeOsCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/os-contract": makePrivateContractWorkspace(),
     "packages/shared": makeSharedWorkspace(),
   },

@@ -26,6 +26,12 @@ export const cloudflarePreviewSharedPaths = [
   "scripts/preview/**",
 ] as const;
 
+/** Trigger preview workflow runs; apps here are not necessarily redeployed. */
+export const cloudflarePreviewAdditionalTriggerPaths = [
+  "apps/iterate-com/**",
+  "apps/auth-example/**",
+] as const;
+
 export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflarePreviewApp> = {
   agents: {
     ...newStyleCloudflareApps.agents,

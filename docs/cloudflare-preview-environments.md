@@ -22,7 +22,7 @@ app:
 
 ```bash
 cd apps/os
-doppler run --project os-legacy-backup --config preview_2 -- pnpm tsx ./alchemy.run.ts
+doppler run --project os --config preview_2 -- pnpm tsx ./alchemy.run.ts
 
 cd ../semaphore
 doppler run --project semaphore --config preview_2 -- pnpm tsx ./alchemy.run.ts
@@ -94,13 +94,13 @@ eight healthy resources:
 ## Semaphore Token
 
 The preview router talks to Semaphore with a bearer token. In normal CI and
-operator commands, run it through `doppler run --project os-legacy-backup --config prd`; the
+operator commands, run it through `doppler run --project _shared --config prd`; the
 router reads `SEMAPHORE_API_TOKEN` when present and otherwise falls back to
 `APP_CONFIG_SHARED_API_SECRET`.
 
 ```bash
-doppler run --project os-legacy-backup --config prd -- pnpm preview status
-doppler run --project os-legacy-backup --config prd -- pnpm preview reconcile
+doppler run --project _shared --config prd -- pnpm preview status
+doppler run --project _shared --config prd -- pnpm preview reconcile
 doppler run --project semaphore --config prd -- pnpm --dir apps/semaphore seed:environment-config-leases
 ```
 
@@ -147,10 +147,10 @@ In CI, `GITHUB_TOKEN`, `GITHUB_PR_NUMBER`, and `GITHUB_REPOSITORY` are set by
 the workflow. Locally, pass the PR number and preserve a GitHub token from `gh`:
 
 ```bash
-GITHUB_TOKEN="$(gh auth token)" doppler run --project os-legacy-backup --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview sync --pull-request-number 1234
-GITHUB_TOKEN="$(gh auth token)" doppler run --project os-legacy-backup --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview deploy --pull-request-number 1234
-GITHUB_TOKEN="$(gh auth token)" doppler run --project os-legacy-backup --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview test --pull-request-number 1234
-GITHUB_TOKEN="$(gh auth token)" doppler run --project os-legacy-backup --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview cleanup --pull-request-number 1234
+GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview sync --pull-request-number 1234
+GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview deploy --pull-request-number 1234
+GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview test --pull-request-number 1234
+GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- pnpm preview cleanup --pull-request-number 1234
 ```
 
 Direct app deploys are useful to prove the primitive or debug a specific slot,
@@ -158,7 +158,7 @@ but they bypass Semaphore ownership:
 
 ```bash
 cd apps/os
-doppler run --project os-legacy-backup --config preview_2 -- pnpm tsx ./alchemy.run.ts
+doppler run --project os --config preview_2 -- pnpm tsx ./alchemy.run.ts
 
 cd ../events
 doppler run --project events --config preview_2 -- pnpm tsx ./alchemy.run.ts
