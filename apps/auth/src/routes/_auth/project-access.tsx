@@ -218,6 +218,7 @@ function RouteComponent() {
                       return (
                         <label
                           key={project.id}
+                          aria-label={`Share project ${project.name}`}
                           className="flex cursor-pointer items-start gap-3 rounded-lg border p-3"
                         >
                           <input

@@ -23,7 +23,6 @@ const getLoginSettings = createServerFn({ method: "GET" }).handler(({ context })
 }));
 
 export const Route = createFileRoute("/login")({
-  component: RouteComponent,
   validateSearch: z.looseObject({
     redirect: z.string().optional(),
   }),
@@ -32,6 +31,7 @@ export const Route = createFileRoute("/login")({
     if (session) throw redirect({ to: search.redirect ?? "/" });
   },
   loader: () => getLoginSettings(),
+  component: RouteComponent,
 });
 
 function RouteComponent() {
