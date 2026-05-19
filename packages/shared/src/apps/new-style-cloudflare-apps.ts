@@ -2,7 +2,7 @@ import { resolve } from "node:path";
 import { z } from "zod";
 import { runCommand } from "../node/run-command.ts";
 
-export const NewStyleCloudflareAppSlug = z.enum(["agents", "example", "os", "semaphore"]);
+export const NewStyleCloudflareAppSlug = z.enum(["example", "os", "semaphore"]);
 
 export type NewStyleCloudflareAppSlug = z.infer<typeof NewStyleCloudflareAppSlug>;
 
@@ -31,13 +31,6 @@ export const newStyleCloudflareApps: Record<
   NewStyleCloudflareAppSlug,
   NewStyleCloudflareAppDeploymentManifest
 > = {
-  agents: {
-    slug: "agents",
-    displayName: "Agents",
-    appPath: "apps/agents",
-    dopplerProject: "agents",
-    paths: ["apps/agents/**", "apps/agents-contract/**"],
-  },
   example: {
     slug: "example",
     displayName: "Example",

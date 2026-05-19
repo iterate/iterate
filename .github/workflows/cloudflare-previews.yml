@@ -38,8 +38,6 @@ jobs:
               "scripts/preview/**",
               "apps/iterate-com/**",
               "apps/auth-example/**",
-              "apps/agents/**",
-              "apps/agents-contract/**",
               "apps/example/**",
               "apps/example-contract/**",
               "apps/events/**",

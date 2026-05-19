@@ -156,7 +156,6 @@ pnpm --filter @iterate-com/events typecheck
 pnpm --filter @iterate-com/events test
 pnpm --filter @iterate-com/events-contract typecheck
 pnpm --filter @iterate-com/os-contract typecheck
-pnpm --filter @iterate-com/agents typecheck
 pnpm --filter @iterate-com/events-contract test
 pnpm --filter @iterate-com/events sqlfu:generate
 pnpm --filter @iterate-com/events exec sqlfu check migrations-match-definitions

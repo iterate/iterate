@@ -81,12 +81,6 @@ PRs touching only those areas may skip previews.
 
 Examples: `knip`, `skills:sync`, `super-reset`, `preview`, `workflows` — OK if intentional; not validated in CI.
 
-### Not dead — technical debt
-
-- **`legacy-codemode`** stream processor — still used from agents; removal tracked elsewhere (`tasks/post-stream-processor-pr-cleanup-handover.md`, etc.).
-
----
-
 ## AGENTS.md / docs — redundancy and confusion
 
 ### Duplicate root agent files
@@ -99,7 +93,6 @@ Repeats layout rules already in AGENTS (no `h1`, `HeaderActions`, card list Tail
 
 ### Parallel e2e agent docs
 
-- `apps/agents/e2e/AGENTS.md` (~216 lines)
 - `apps/os/e2e/AGENTS.md` (~38 lines)
 
 Consider one canonical e2e/fixture doc (e.g. extend `docs/vitest-patterns.md`) + one-line pointers per app.

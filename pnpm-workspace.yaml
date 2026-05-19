@@ -8,15 +8,12 @@ packages:
   - apps/example-contract
   - apps/events
   - apps/events-contract
-  - apps/agents
-  - apps/agents-contract
   - apps/*
   - packages/*
   - .github/ts-workflows
 
 catalogs:
   cloudflare:
-    "@cloudflare/codemode": "https://pkg.pr.new/iterate/agents/@cloudflare/codemode@7c0735e"
     "@cloudflare/unenv-preset": ^2.16.0
     "@cloudflare/vite-plugin": 1.33.2
     "@cloudflare/vitest-pool-workers": ^0.14.9
@@ -38,7 +35,6 @@ minimumReleaseAgeExclude:
   - "@cloudflare/workerd-linux-64"
   - "@cloudflare/workerd-linux-arm64"
   - "@cloudflare/workerd-windows-64"
-  - "@cloudflare/codemode"
   - "@cloudflare/unenv-preset"
   - "@cloudflare/vite-plugin"
   - "@cloudflare/vitest-pool-workers"

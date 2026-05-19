@@ -114,36 +114,6 @@ Desired shape:
 
 Priority: low unless type exports change without compatibility.
 
-### `apps/agents/src/routes/index.tsx`
-
-Current shape:
-
-- Also passes `viewState` to `EventsStreamView`.
-- This is a useful canary because it consumes `packages/ui` outside
-  `apps/events`.
-
-Desired shape:
-
-- Same as Events app: choose processor, render view.
-
-Priority: low for behavior, high for typecheck verification.
-
-### `apps/agents/scripts/event-stream-terminal.ts`
-
-Current shape:
-
-- Reuses `feed-items.ts` and `feed-processors.ts`.
-- Has its own terminal renderer.
-- Reads `state.slots.feed` and `element.props`.
-
-Remaining work:
-
-- Decide whether terminal should render all built-in element types or keep
-  intentionally showing only raw-event rows in the current proof of concept.
-
-Priority: medium. It is the best proof that the model is renderer-neutral, but
-it should not block the web POC.
-
 ## Implementation Slices
 
 ### Slice 1: Add `slots` Without Moving Props
@@ -154,7 +124,6 @@ Verification run:
 
 - `pnpm --filter @iterate-com/ui typecheck`
 - `pnpm --filter @iterate-com/events typecheck`
-- `pnpm --filter @iterate-com/agents typecheck`
 
 ### Slice 2: Collapse Per-Slot Base Types
 
