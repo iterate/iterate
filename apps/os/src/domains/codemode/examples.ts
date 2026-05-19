@@ -311,7 +311,7 @@ const codemodeExampleSeeds = [
     providers: [{ type: "example-capabilities" }],
     code: `async (ctx) => {
   const repo = await ctx.repos.get({ slug: "iterate-config" }).getInfo();
-  const dir = \`/iterate-config-\${Date.now()}\`;
+  const dir = \`/workspace/iterate-config-demo-\${Date.now()}\`;
   const fileName = \`workspace-demo-\${Date.now()}.md\`;
   const password = repo.token.includes("?expires=")
     ? repo.token.split("?expires=")[0]
@@ -356,6 +356,230 @@ const codemodeExampleSeeds = [
         payload: {
           message:
             "Uses ctx.workspace.git.clone/add/commit/push and ctx.workspace.writeFile against the project iterate-config Repo.",
+        },
+      },
+    ],
+  },
+  {
+    slug: "cloudflare-sandbox-exec",
+    name: "Cloudflare Sandbox exec",
+    description:
+      "Create a project-scoped Sandbox, lazily prepare /workspace, clone iterate-config, and run shell commands through the project Sandboxes RPC provider.",
+    providers: [{ type: "example-capabilities" }],
+    code: `async (ctx) => {
+  const slug = \`scratch-\${Date.now()}\`;
+
+  const proof = await ctx.sandboxes.exec({
+    slug,
+    exec: {
+      cwd: "/workspace",
+      timeout: 120000,
+      command: [
+        "pwd",
+        "printf '%s\\n' 'hello from Cloudflare Sandbox' > proof.txt",
+        "cat proof.txt",
+        "ls -la /workspace | head",
+      ].join(" && "),
+    },
+  });
+
+  const iterateConfig = await ctx.sandboxes.exec({
+    slug,
+    exec: {
+      timeout: 120000,
+      command: "git -C /workspace/iterate-config status --short && git -C /workspace/iterate-config branch --show-current",
+    },
+  });
+
+  const sandboxes = await ctx.sandboxes.list({});
+
+  return {
+    slug,
+    proof,
+    iterateConfig,
+    knownSandboxes: sandboxes.map((sandbox) => sandbox.slug),
+  };
+}`,
+    events: [
+      {
+        type: "events.iterate.com/codemode/example-note",
+        payload: {
+          message:
+            "Uses ctx.sandboxes.exec({ slug, exec }) to lazily wake a Sandbox, mount durable /workspace, clone iterate-config, and execute a shell command.",
+        },
+      },
+    ],
+  },
+  {
+    slug: "sandbox-import-public-github-repo",
+    name: "Import public GitHub repo into an OS Repo",
+    description:
+      "Clone a public GitHub repo inside a Cloudflare Sandbox, create a project Repo, and push the cloned history into that new Repo.",
+    providers: [{ type: "example-capabilities" }],
+    code: `async (ctx) => {
+  const suffix = Date.now();
+  const sandboxSlug = \`github-import-\${suffix}\`;
+  const repoSlug = \`iterate-import-\${suffix}\`;
+  const checkoutDir = \`/workspace/imports/iterate-\${suffix}\`;
+
+  const repo = await ctx.repos.create({ slug: repoSlug }).getInfo();
+  const token = repo.token.includes("?expires=")
+    ? repo.token.split("?expires=")[0]
+    : repo.token;
+  const quotedHeader = JSON.stringify(\`Authorization: Bearer \${token}\`);
+  const quotedRemote = JSON.stringify(repo.remote);
+  const quotedCheckoutDir = JSON.stringify(checkoutDir);
+  const quotedBranch = JSON.stringify(repo.defaultBranch);
+
+  const importResult = await ctx.sandboxes.exec({
+    slug: sandboxSlug,
+    exec: {
+      cwd: "/workspace",
+      timeout: 600000,
+      command: \`set -eu
+rm -rf \${quotedCheckoutDir}
+mkdir -p /workspace/imports
+git clone --depth 1 https://github.com/iterate/iterate.git \${quotedCheckoutDir}
+git -C \${quotedCheckoutDir} remote add os-repo \${quotedRemote}
+git -C \${quotedCheckoutDir} -c http.extraHeader=\${quotedHeader} push --force os-repo HEAD:\${quotedBranch}
+git -C \${quotedCheckoutDir} rev-parse --short HEAD
+git -C \${quotedCheckoutDir} log -1 --pretty=%s\`,
+    },
+  });
+
+  const importedRepo = await ctx.repos.get({ slug: repoSlug }).getInfo();
+  const redactedImportResult = {
+    ...importResult,
+    command: importResult.command.replaceAll(token, "<repo-token>"),
+  };
+
+  return {
+    repo: {
+      slug: importedRepo.slug,
+      remote: importedRepo.remote,
+      defaultBranch: importedRepo.defaultBranch,
+      tokenExpiresAt: importedRepo.tokenExpiresAt,
+    },
+    sandboxSlug,
+    checkoutDir,
+    importResult: redactedImportResult,
+  };
+}`,
+    events: [
+      {
+        type: "events.iterate.com/codemode/example-note",
+        payload: {
+          message:
+            "Clones https://github.com/iterate/iterate.git inside a Sandbox, creates a project Repo, then force-pushes the cloned HEAD into that Repo with git http.extraHeader auth.",
+        },
+      },
+    ],
+  },
+  {
+    slug: "sandbox-public-repo-code-survey",
+    name: "Survey a public repo in a Sandbox",
+    description:
+      "Clone a public GitHub repo into a durable Sandbox workspace and run normal Unix/Git inspection commands against it.",
+    providers: [{ type: "example-capabilities" }],
+    code: `async (ctx) => {
+  const slug = \`repo-survey-\${Date.now()}\`;
+  const checkoutDir = "/workspace/public/iterate";
+
+  const survey = await ctx.sandboxes.exec({
+    slug,
+    exec: {
+      cwd: "/workspace",
+      timeout: 600000,
+      command: \`set -eu
+rm -rf \${checkoutDir}
+mkdir -p /workspace/public
+git clone --depth 1 https://github.com/iterate/iterate.git \${checkoutDir}
+cd \${checkoutDir}
+printf 'commit: '; git rev-parse --short HEAD
+printf 'files: '; git ls-files | wc -l
+printf 'typescript files: '; git ls-files '*.ts' '*.tsx' | wc -l
+printf 'largest tracked files:\\n'
+git ls-files -z | xargs -0 du -h | sort -hr | head -10
+printf 'top-level package scripts:\\n'
+node -e "const pkg=require('./package.json'); console.log(Object.keys(pkg.scripts ?? {}).join('\\\\n'))"\`,
+    },
+  });
+
+  return {
+    slug,
+    checkoutDir,
+    survey,
+  };
+}`,
+    events: [
+      {
+        type: "events.iterate.com/codemode/example-note",
+        payload: {
+          message:
+            "Shows that a Sandbox can clone a public repo into /workspace and use ordinary git, shell, and node commands to inspect it.",
+        },
+      },
+    ],
+  },
+  {
+    slug: "sandbox-install-skills-commit-push",
+    name: "Install agent skills and push iterate config",
+    description:
+      "Run npx skills inside the Sandbox to install Matt Pocock skills into /workspace/iterate-config, then commit and push them back to the project Repo.",
+    providers: [{ type: "example-capabilities" }],
+    code: `async (ctx) => {
+  const repo = await ctx.repos.get({ slug: "iterate-config" }).getInfo();
+  const slug = \`skills-install-\${Date.now()}\`;
+  const quotedHeader = JSON.stringify(repo.git.authorizationHeader);
+  const quotedBranch = JSON.stringify(repo.defaultBranch);
+
+  const result = await ctx.sandboxes.exec({
+    slug,
+    exec: {
+      cwd: "/workspace/iterate-config",
+      timeout: 600000,
+      command: \`set -eu
+git config user.name "Codemode"
+git config user.email "codemode@iterate.com"
+
+npx --yes skills@latest add mattpocock/skills/diagnose -a codex -a claude-code -y
+npx --yes skills@latest add mattpocock/skills/tdd -a codex -a claude-code -y
+npx --yes skills@latest add mattpocock/skills/grill-with-docs -a codex -a claude-code -y
+
+git status --short
+if test -z "$(git status --short)"; then
+  echo "No skill files changed."
+else
+  git add .
+  git commit -m "Install Matt Pocock agent skills"
+  git -c http.extraHeader=\${quotedHeader} push origin HEAD:\${quotedBranch}
+fi
+
+git rev-parse --short HEAD\`,
+    },
+  });
+  const redactedResult = {
+    ...result,
+    command: result.command.replace(repo.git.authorizationHeader, "Authorization: Bearer <repo-token>"),
+  };
+
+  return {
+    repo: {
+      slug: repo.slug,
+      remote: repo.remote,
+      defaultBranch: repo.defaultBranch,
+      tokenExpiresAt: repo.tokenExpiresAt,
+    },
+    sandboxSlug: slug,
+    result: redactedResult,
+  };
+}`,
+    events: [
+      {
+        type: "events.iterate.com/codemode/example-note",
+        payload: {
+          message:
+            "Runs npx skills@latest add mattpocock/skills/<skill> in /workspace/iterate-config, commits the installed agent skill files, and pushes to the project Repo.",
         },
       },
     ],

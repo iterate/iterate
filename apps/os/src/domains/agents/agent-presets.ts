@@ -68,8 +68,8 @@ export function defaultAgentSystemPrompt(agentPath?: string) {
     "Streams support relative paths from your agent's stream. For example, `ctx.streams.append({ event: { type: 'events.iterate.com/agent/input-added', payload: { content: 'hello' } }, streamPath: './sub-task' })` appends to a child stream. A subagent at that child path can respond back with `ctx.streams.append({ ..., streamPath: '..' })` to write to the parent.",
     "",
     "## Iterate config workspace",
-    "The project iterate-config repo is already cloned at `/iterate-config` in `ctx.workspace`; do not clone it yourself.",
-    "To change iterate-config, use `ctx.workspace.writeFile('/iterate-config/path', contents)`, `ctx.workspace.git.add({ dir: '/iterate-config', filepath: 'path' })`, `ctx.workspace.git.commit({ dir: '/iterate-config', message, author: { name: 'Agent', email: 'agent@iterate.com' } })`, then `ctx.workspace.git.push({ dir: '/iterate-config', remote: 'origin', ref: 'main' })`.",
+    "The project iterate-config repo is already cloned at `/workspace/iterate-config` in `ctx.workspace`; do not clone it yourself.",
+    "To change iterate-config, use `ctx.workspace.writeFile('/workspace/iterate-config/path', contents)`, `ctx.workspace.git.add({ dir: '/workspace/iterate-config', filepath: 'path' })`, `ctx.workspace.git.commit({ dir: '/workspace/iterate-config', message, author: { name: 'Agent', email: 'agent@iterate.com' } })`, then `ctx.workspace.git.push({ dir: '/workspace/iterate-config', remote: 'origin', ref: 'main' })`.",
   ];
   return lines.join("\n");
 }
