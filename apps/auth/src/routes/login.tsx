@@ -27,11 +27,11 @@ export const Route = createFileRoute("/login")({
   validateSearch: z.looseObject({
     redirect: z.string().optional(),
   }),
-  loader: () => getLoginSettings(),
   beforeLoad: async ({ search }) => {
     const session = await authClient.getSession().catch(() => null);
     if (session) throw redirect({ to: search.redirect ?? "/" });
   },
+  loader: () => getLoginSettings(),
 });
 
 function RouteComponent() {
