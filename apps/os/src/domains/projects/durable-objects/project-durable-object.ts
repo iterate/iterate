@@ -1,7 +1,6 @@
 import { createD1Client } from "sqlfu";
 import { z } from "zod";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
-import { acceptCaptunTunnel, type CaptunServerTunnel } from "~/lib/captun/server.ts";
 import type { Callable, FetchCallable } from "@iterate-com/shared/callable/types.ts";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
@@ -22,6 +21,7 @@ import {
   StreamPath,
 } from "@iterate-com/shared/streams/types";
 import { typeid } from "@iterate-com/shared/typeid";
+import { acceptCaptunTunnel, type CaptunServerTunnel } from "~/lib/captun/server.ts";
 import { AppConfig } from "~/app.ts";
 import {
   AGENTS_STREAM_PATH,
