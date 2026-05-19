@@ -22,6 +22,7 @@ export const AgentPresetEvent = z.object({
   payload: z.record(z.string(), z.unknown()),
 });
 export type AgentPresetEvent = z.infer<typeof AgentPresetEvent>;
+type AgentSetupEventInput = AgentPresetEvent & Pick<EventInput, "idempotencyKey">;
 
 export const AgentPathPrefixPreset = z.object({
   basePath: z.string().trim().min(1),
@@ -86,6 +87,14 @@ export function defaultAgentSetupEvents(
             type: "events.iterate.com/openai-ws/config-updated",
             payload: { model: DEFAULT_OPENAI_AGENT_MODEL },
           },
+          {
+            type: "events.iterate.com/agent/llm-config-updated",
+            payload: {
+              model: DEFAULT_OPENAI_AGENT_MODEL,
+              runOpts: {},
+              debounceMs: DEFAULT_AGENT_DEBOUNCE_MS,
+            },
+          },
         ]
       : [
           {
@@ -112,7 +121,7 @@ export function configuredAgentSetupEvents(input: {
   provider: AgentLlmProvider;
   runOpts: Record<string, unknown>;
   systemPrompt: string;
-}): EventInput[] {
+}): AgentSetupEventInput[] {
   return defaultAgentSetupEvents(input.provider).map((event, index) => ({
     ...(input.idempotencyKeyPrefix == null
       ? {}
@@ -121,12 +130,11 @@ export function configuredAgentSetupEvents(input: {
     payload:
       input.provider === "openai-ws" && event.type === "events.iterate.com/openai-ws/config-updated"
         ? { model: input.model }
-        : input.provider === "cloudflare-ai" &&
-            event.type === "events.iterate.com/agent/llm-config-updated"
+        : event.type === "events.iterate.com/agent/llm-config-updated"
           ? {
               debounceMs: DEFAULT_AGENT_DEBOUNCE_MS,
               model: input.model,
-              runOpts: input.runOpts,
+              runOpts: input.provider === "cloudflare-ai" ? input.runOpts : {},
             }
           : event.type === "events.iterate.com/agent/system-prompt-updated"
             ? { systemPrompt: input.systemPrompt }
