@@ -80,6 +80,18 @@ type TestProjectConfigWorkspace = {
 };
 
 export class ProjectDurableObject extends RealProjectDurableObject {
+  installTestProjectEgressInterceptTunnel() {
+    this.replaceProjectEgressInterceptTunnel({
+      fetch(request: Request) {
+        return Response.json({
+          headers: headersToArrays(request.headers),
+          url: request.url,
+        });
+      },
+      [Symbol.dispose]() {},
+    });
+  }
+
   protected async cloneProjectConfigRepo(input: {
     git: TestProjectConfigGit;
     repo: RepoInfo;
@@ -209,13 +221,6 @@ export default {
       return Response.json(secret);
     }
 
-    if (url.pathname === "/__test/set-external-egress-proxy-url") {
-      await env.DB.prepare(`UPDATE projects SET external_egress_proxy_url = ? WHERE id = ?`)
-        .bind(url.searchParams.get("url"), "proj__local__test")
-        .run();
-      return Response.json({ ok: true });
-    }
-
     if (url.pathname === "/__test/egress") {
       const target = url.searchParams.get("target") ?? "https://os.iterate.localhost/__test/echo";
       return await env.PROJECT.getByName(
@@ -225,6 +230,14 @@ export default {
           headers: request.headers,
         }),
       );
+    }
+
+    if (url.pathname === "/__test/connect-egress-intercept") {
+      const project = env.PROJECT.getByName(
+        getProjectDurableObjectName("proj__local__test"),
+      ) as DurableObjectStub<ProjectDurableObject>;
+      await project.installTestProjectEgressInterceptTunnel();
+      return Response.json({ ok: true });
     }
 
     if (url.pathname === "/__test/echo" || url.pathname.startsWith("/__test/proxy/")) {
@@ -309,8 +322,7 @@ async function ensureD1Schema(db: D1Database) {
         slug text not null unique,
         custom_hostname text unique,
         created_at text not null default current_timestamp,
-        updated_at text not null default current_timestamp,
-        external_egress_proxy_url text
+        updated_at text not null default current_timestamp
       )`),
     db.prepare(`CREATE TABLE IF NOT EXISTS project_permissions (
         project_id text not null references projects (id) on delete cascade,
@@ -386,4 +398,8 @@ function readWorkspaceStateMethod(input: { method: string; state: Record<string,
     throw new Error(`Workspace state does not implement ${input.method}.`);
   }
   return method;
+}
+
+function headersToArrays(headers: Headers) {
+  return Object.fromEntries([...headers].map(([key, value]) => [key, [value]]));
 }

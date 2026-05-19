@@ -14,10 +14,7 @@ export interface TestProjectHandle extends AsyncDisposable {
   baseUrl: string;
   client: OsClient;
   project: TestProject;
-  updateConfig(input: {
-    customHostname?: string | null;
-    externalEgressProxyUrl?: string | null;
-  }): Promise<TestProject>;
+  updateConfig(input: { customHostname?: string | null }): Promise<TestProject>;
 }
 
 export async function createFixture(params?: Parameters<typeof createTestProject>[0]) {
@@ -100,7 +97,6 @@ export async function createTestProject(opts?: {
   baseUrl?: string;
   cleanup?: boolean;
   customHostname?: string | null;
-  externalEgressProxyUrl?: string | null;
   slugPrefix?: string;
 }): Promise<TestProjectHandle> {
   const baseUrl = opts?.baseUrl ?? requireBaseUrl();
@@ -110,11 +106,10 @@ export async function createTestProject(opts?: {
     slug: `${slugPrefix}-${uniqueSuffix()}`,
   });
 
-  if (opts?.customHostname !== undefined || opts?.externalEgressProxyUrl !== undefined) {
+  if (opts?.customHostname !== undefined) {
     project = await client.projects.updateConfig({
       id: project.id,
       customHostname: opts.customHostname,
-      externalEgressProxyUrl: opts.externalEgressProxyUrl,
     });
   }
 
@@ -129,7 +124,6 @@ export async function createTestProject(opts?: {
       project = await client.projects.updateConfig({
         id: project.id,
         customHostname: input.customHostname,
-        externalEgressProxyUrl: input.externalEgressProxyUrl,
       });
       return project;
     },
