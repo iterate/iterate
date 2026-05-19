@@ -213,7 +213,7 @@ describe("createVoiceAgentProviderProcessor", () => {
       expect(providerText).toContain("BACKGROUND AGENT RESULT FOR THE CALLER:");
       expect(providerText).toContain("The weather is 18C and cloudy.");
       expect(providerText).toContain("This message is not from the caller.");
-      expect(providerText).toContain("Do not thank the caller for this update.");
+      expect(providerText).toContain("Do not say thanks, thank you");
     },
   );
 });

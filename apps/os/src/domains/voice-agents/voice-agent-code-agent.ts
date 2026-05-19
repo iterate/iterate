@@ -38,6 +38,7 @@ function voiceAgentCodeAgentSystemPrompt(streamPath: StreamPath) {
     "await ctx.streams.append({ event: { type: '" +
       VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE +
       "', payload: { text: 'Concise speakable response for the voice operator.', source: 'code-agent' } } });",
+    "If you need more information before you can do the work, append a concise clarifying question for the voice operator to ask the caller using that same event shape.",
     "For voice-agent streams, do not use ctx.chat.sendMessage for responses. The realtime voice model cannot consume chat responses. It consumes the voice-agent text input events you append to the stream.",
     "Keep voice-facing responses concise, directly speakable, and useful while the caller is waiting.",
   ].join("\n");

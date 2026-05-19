@@ -545,7 +545,9 @@ function providerInputText(
     event.payload.text,
     "",
     "This message is not from the caller. It is the result from the background code-capable agent you asked for help.",
-    "Tell the caller the answer directly and naturally now. Do not thank the caller for this update. Do not say the caller told you this.",
+    "Tell the caller the answer directly and naturally now.",
+    "Do not say thanks, thank you, thanks for the update, or any other gratitude/acknowledgement phrase.",
+    "Do not say the caller told you this. Do not describe the background agent as if it is another participant in the call.",
   ].join("\n");
 }
 
