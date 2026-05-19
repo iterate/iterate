@@ -64,14 +64,6 @@ export function createSlackAgentProcessor(deps: SlackAgentProcessorDeps = {}) {
 
           const slackEvent = parsed.data.event as unknown as SlackEvent;
           const target = slackAgentTargetFromWebhookPayload(event.payload);
-          if (target != null && !target.isBotMessage && !target.isReactionEvent) {
-            await callSlackApi(deps, "reactions.add", {
-              channel: target.channel,
-              name: "eyes",
-              timestamp: target.messageTs,
-            });
-          }
-          if (isBotMessage(slackEvent)) return;
           if (isBotAction(slackEvent, state.botUserId)) return;
 
           const channel =
@@ -232,13 +224,6 @@ function isSlackAgentThreadInfoCall(payload: {
   );
 }
 
-function isBotMessage(slackEvent: SlackEvent): boolean {
-  if (readStringField(slackEvent, "subtype") === "bot_message") return true;
-  if (readStringField(slackEvent, "bot_id") != null) return true;
-  if (readRecordField(slackEvent, "bot_profile") != null) return true;
-  return false;
-}
-
 /**
  * Returns true when the Slack event was performed by our own bot user (e.g.
  * our bot adding a reaction).
@@ -301,7 +286,6 @@ function compileBangCommand(input: {
 
 type SlackAgentTarget = {
   channel: string;
-  isBotMessage: boolean;
   isReactionEvent: boolean;
   messageTs?: string;
   threadTs: string;
@@ -328,10 +312,6 @@ function slackAgentTargetFromWebhookPayload(payload: unknown): SlackAgentTarget 
   const messageTs = readString(slackEvent.ts) ?? readString(message?.ts);
   return {
     channel,
-    isBotMessage:
-      readString(slackEvent.subtype) === "bot_message" ||
-      readString(slackEvent.bot_id) != null ||
-      readRecord(slackEvent.bot_profile) != null,
     isReactionEvent: type === "reaction_added" || type === "reaction_removed",
     ...(messageTs == null ? {} : { messageTs }),
     threadTs,

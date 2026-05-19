@@ -342,6 +342,45 @@ describe("externalSubscriber", () => {
     }
   });
 
+  test("afterAppend skips callable subscribers whose eventTypes do not include the event", async () => {
+    const callable = {
+      type: "workers-rpc" as const,
+      via: {
+        type: "env-binding" as const,
+        bindingType: "durable-object-namespace" as const,
+        bindingName: "CODEMODE_SESSION",
+        durableObject: { name: "session-a" },
+      },
+      rpcMethod: "afterAppend",
+      argsMode: "object" as const,
+    };
+
+    try {
+      await externalSubscriberProcessor.afterAppend?.({
+        append: () => createEvent(),
+        event: createEvent({
+          streamPath: "/demo/callable-filtered",
+          type: "events.iterate.com/slack/webhook-received",
+          payload: { value: 42 },
+        }),
+        state: {
+          subscribersBySlug: {
+            agent: {
+              slug: "agent",
+              type: "callable",
+              callable,
+              eventTypes: ["events.iterate.com/agent/input-added"],
+            },
+          },
+        },
+      });
+
+      expect(dispatchCallableMock).not.toHaveBeenCalled();
+    } finally {
+      dispatchCallableMock.mockReset();
+    }
+  });
+
   test("afterAppend does not deliver subscription-configured events to webhook subscribers by default", async () => {
     try {
       await externalSubscriberProcessor.afterAppend?.({

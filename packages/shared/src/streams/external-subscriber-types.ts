@@ -3,6 +3,7 @@ import { Callable, FetchCallable } from "@iterate-com/shared/callable/descriptor
 import {
   GenericEvent as GenericEventBase,
   GenericEventInput as GenericEventInputBase,
+  EventTypeSchema,
 } from "./event-base-types.ts";
 import { STREAM_SUBSCRIPTION_CONFIGURED_TYPE } from "./core-event-types.ts";
 import { JsonataExpression } from "./jsonata-expression.ts";
@@ -24,6 +25,7 @@ const ExternalSubscriberBase = z.strictObject({
    */
   jsonataFilter: JsonataExpression.optional(),
   jsonataTransform: JsonataExpression.optional(),
+  eventTypes: z.array(EventTypeSchema).optional(),
 });
 
 export const ExternalWebsocketSubscriber = z.strictObject({

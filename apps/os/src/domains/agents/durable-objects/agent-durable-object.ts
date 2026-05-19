@@ -68,6 +68,7 @@ import {
 import { buildProjectStreamViewerUrl } from "~/lib/stream-viewer-url.ts";
 
 export const AGENTS_STREAM_PATH = StreamPath.parse("/agents");
+const ADMIN_API_ORGANIZATION_SLUG = "admin-api";
 
 export type AgentDurableObjectStructuredName = {
   agentPath: StreamPath;
@@ -85,6 +86,72 @@ export function getAgentDurableObjectName(input: AgentDurableObjectStructuredNam
   });
 }
 
+export function createAgentCodemodeToolProviders(input: {
+  agentDurableObjectName: string;
+  agentPath: StreamPath;
+  projectId: string;
+}): ToolProviderRegistration[] {
+  return [
+    ...(isSlackAgentPath(input.agentPath)
+      ? []
+      : [createAgentChatToolProvider({ agentDurableObjectName: input.agentDurableObjectName })]),
+    createAgentDebugToolProvider({ agentDurableObjectName: input.agentDurableObjectName }),
+    ...createExampleCapabilityProviders({ projectId: input.projectId }),
+    createGmailProviderRegistration({ projectId: input.projectId }),
+  ];
+}
+
+function createAgentChatToolProvider(input: {
+  agentDurableObjectName: string;
+}): ToolProviderRegistration {
+  return {
+    path: ["chat"],
+    instructions:
+      "Use ctx.chat.sendMessage({ message }) to send a visible response to the user. Prefer this over appending chat events manually.",
+    invocation: {
+      kind: "rpc",
+      callable: {
+        type: "workers-rpc",
+        via: {
+          type: "env-binding",
+          bindingType: "durable-object-namespace",
+          bindingName: "AGENT",
+          durableObject: {
+            name: input.agentDurableObjectName,
+          },
+        },
+        rpcMethod: "executeCodemodeFunctionCall",
+        argsMode: "object",
+      },
+    },
+  };
+}
+
+function createAgentDebugToolProvider(input: {
+  agentDurableObjectName: string;
+}): ToolProviderRegistration {
+  return {
+    path: ["debug"],
+    instructions: "Use ctx.debug() to return OS debug information about the current agent stream.",
+    invocation: {
+      kind: "rpc",
+      callable: {
+        type: "workers-rpc",
+        via: {
+          type: "env-binding",
+          bindingType: "durable-object-namespace",
+          bindingName: "AGENT",
+          durableObject: {
+            name: input.agentDurableObjectName,
+          },
+        },
+        rpcMethod: "executeCodemodeFunctionCall",
+        argsMode: "object",
+      },
+    },
+  };
+}
+
 export type AgentDurableObjectEnv = {
   AGENT: DurableObjectNamespace<AgentDurableObject>;
   AI: CloudflareAiProcessorDeps["ai"];
@@ -98,6 +165,10 @@ export type AgentDurableObjectEnv = {
 
 const AGENT_ITERATE_CONFIG_DIR = "/iterate-config";
 const AGENT_ITERATE_CONFIG_CLONE_COMPLETE_PATH = `${AGENT_ITERATE_CONFIG_DIR}/.git/iterate-clone-complete`;
+
+function isSlackAgentStreamPath(path: string) {
+  return path.startsWith("/agents/slack/");
+}
 
 export type CloneIterateConfigRepoInput = {
   git: Awaited<ReturnType<WorkspaceDurableObject["cloudflareShellGit"]>>;
@@ -161,8 +232,12 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
           }),
         );
         this.registerStreamProcessor(this.createLlmProcessor(llmProvider));
-        await this.ensureAgentWorkspace(params);
-        await this.ensureCodemodeSession(params);
+        if (isSlackAgentStreamPath(params.agentPath)) {
+          this.warmAgentWorkspace(params);
+        } else {
+          await this.ensureAgentWorkspace(params);
+          await this.ensureCodemodeSession(params);
+        }
       }
       await this.ensureAgentSubscription(params);
       await this.catchUpStreamProcessors({
@@ -276,7 +351,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
   }
 
   async executeCodemodeFunctionCall(input: ExecuteCodemodeFunctionCallInput) {
-    await this.ensureStarted();
+    await this.ensureStartedOrInitializeFromRuntimeName();
     const providerName = input.providerPath.join(".");
     if (providerName === "debug") {
       return await this.createDebugSnapshot();
@@ -378,6 +453,18 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       content: `${repo.slug}\n`,
       path: AGENT_ITERATE_CONFIG_CLONE_COMPLETE_PATH,
     });
+  }
+
+  private warmAgentWorkspace(params: AgentDurableObjectStructuredName) {
+    this.waitUntilStreamProcessor(
+      this.ensureAgentWorkspace(params).catch((error) => {
+        console.error("[os-agent] Slack agent workspace warmup failed", {
+          agentPath: params.agentPath,
+          error,
+          projectId: params.projectId,
+        });
+      }),
+    );
   }
 
   protected async cloneIterateConfigRepo(input: CloneIterateConfigRepoInput) {
@@ -528,22 +615,22 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
   private async createDebugSnapshot() {
     const project = await this.readDebugProjectInfo();
     const config = this.getAppConfig();
-    const streamUrl =
-      project?.organizationSlug && project.slug
-        ? buildProjectStreamViewerUrl({
-            baseUrl: config.baseUrl,
-            organizationSlug: project.organizationSlug,
-            projectSlug: project.slug,
-            streamPath: this.structuredName.agentPath,
-          })
-        : (config.baseUrl ?? "https://os.iterate.com");
+    const organizationSlug = project?.organizationSlug ?? ADMIN_API_ORGANIZATION_SLUG;
+    const streamUrl = project?.slug
+      ? buildProjectStreamViewerUrl({
+          baseUrl: config.baseUrl,
+          organizationSlug,
+          projectSlug: project.slug,
+          streamPath: this.structuredName.agentPath,
+        })
+      : (config.baseUrl ?? "https://os.iterate.com");
     const snapshot = {
       project:
         project == null
           ? { id: this.structuredName.projectId }
           : {
               id: this.structuredName.projectId,
-              organizationSlug: project.organizationSlug ?? undefined,
+              organizationSlug,
               slug: project.slug,
             },
       streamPath: this.structuredName.agentPath,
@@ -649,63 +736,14 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     });
   }
 
-  private createAgentChatToolProvider(): ToolProviderRegistration {
-    return {
-      path: ["chat"],
-      instructions:
-        "Use ctx.chat.sendMessage({ message }) to send a visible response to the user. Prefer this over appending chat events manually.",
-      invocation: {
-        kind: "rpc",
-        callable: {
-          type: "workers-rpc",
-          via: {
-            type: "env-binding",
-            bindingType: "durable-object-namespace",
-            bindingName: "AGENT",
-            durableObject: {
-              name: this.name,
-            },
-          },
-          rpcMethod: "executeCodemodeFunctionCall",
-          argsMode: "object",
-        },
-      },
-    };
-  }
-
-  private createAgentDebugToolProvider(): ToolProviderRegistration {
-    return {
-      path: ["debug"],
-      instructions:
-        "Use ctx.debug() to return OS debug information about the current agent stream.",
-      invocation: {
-        kind: "rpc",
-        callable: {
-          type: "workers-rpc",
-          via: {
-            type: "env-binding",
-            bindingType: "durable-object-namespace",
-            bindingName: "AGENT",
-            durableObject: {
-              name: this.name,
-            },
-          },
-          rpcMethod: "executeCodemodeFunctionCall",
-          argsMode: "object",
-        },
-      },
-    };
-  }
-
   private createCodemodeToolProviders(
     params: AgentDurableObjectStructuredName,
   ): ToolProviderRegistration[] {
-    return [
-      ...(isSlackAgentPath(params.agentPath) ? [] : [this.createAgentChatToolProvider()]),
-      this.createAgentDebugToolProvider(),
-      ...createExampleCapabilityProviders({ projectId: params.projectId }),
-      createGmailProviderRegistration({ projectId: params.projectId }),
-    ];
+    return createAgentCodemodeToolProviders({
+      agentDurableObjectName: this.name,
+      agentPath: params.agentPath,
+      projectId: params.projectId,
+    });
   }
 
   private async resolveLlmProvider(

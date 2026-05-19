@@ -188,7 +188,13 @@ export function withStreamProcessor<
         const registered = processor as unknown as RegisteredProcessor;
         const existing = this.#processors.get(registered.contract.slug);
         if (existing != null) {
-          throw new Error(`Stream processor "${registered.contract.slug}" is already registered.`);
+          if (existing.contract.version === registered.contract.version) {
+            return;
+          }
+
+          throw new Error(
+            `Stream processor "${registered.contract.slug}" is already registered at version "${existing.contract.version}".`,
+          );
         }
         this.#processors.set(registered.contract.slug, registered);
       }

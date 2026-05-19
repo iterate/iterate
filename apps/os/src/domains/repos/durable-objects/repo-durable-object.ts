@@ -115,6 +115,8 @@ const RepoBase = withStreamProcessorRunner<
 const REPO_WRITE_TOKEN_STORAGE_KEY = "repo.writeToken";
 
 export class RepoDurableObject extends RepoBase<RepoEnv> {
+  #createRepoPromise: Promise<RepoInfo> | undefined;
+
   constructor(ctx: DurableObjectState, env: RepoEnv) {
     super(ctx, env);
     this.registerOnFirstInitialize(async (params) => {
@@ -124,6 +126,22 @@ export class RepoDurableObject extends RepoBase<RepoEnv> {
   }
 
   async createRepo(input: CreateRepoInput = {}): Promise<RepoInfo> {
+    if (this.#createRepoPromise != null) {
+      return await this.#createRepoPromise;
+    }
+
+    const promise = this.createRepoOnce(input);
+    this.#createRepoPromise = promise;
+    try {
+      return await promise;
+    } finally {
+      if (this.#createRepoPromise === promise) {
+        this.#createRepoPromise = undefined;
+      }
+    }
+  }
+
+  private async createRepoOnce(input: CreateRepoInput = {}): Promise<RepoInfo> {
     await this.ensureStarted();
     await this.catchUpStreamProcessor({ signal: AbortSignal.timeout(30_000) });
 
@@ -134,16 +152,11 @@ export class RepoDurableObject extends RepoBase<RepoEnv> {
     const artifactName = repoArtifactName(this.structuredName);
     const artifacts = this.requireArtifacts();
     const source = input.source ?? { kind: "initial-readme" as const };
-    const artifact =
-      source.kind === "artifact-fork"
-        ? await this.forkArtifactRepo({
-            artifactName,
-            artifacts,
-            source,
-          })
-        : await artifacts.create(artifactName, {
-            setDefaultBranch: REPO_DEFAULT_BRANCH,
-          });
+    const { artifact, recoveredExistingArtifact } = await this.createOrRecoverArtifactRepo({
+      artifactName,
+      artifacts,
+      source,
+    });
     const token = await createArtifactToken({
       artifact,
       artifacts,
@@ -157,7 +170,7 @@ export class RepoDurableObject extends RepoBase<RepoEnv> {
       (await readArtifactString(artifact.default_branch)) ??
       REPO_DEFAULT_BRANCH;
 
-    if (source.kind === "initial-readme") {
+    if (source.kind === "initial-readme" && !recoveredExistingArtifact) {
       await pushInitialReadme({
         defaultBranch,
         projectId: this.structuredName.projectId,
@@ -261,6 +274,37 @@ export class RepoDurableObject extends RepoBase<RepoEnv> {
     });
   }
 
+  private async createOrRecoverArtifactRepo(input: {
+    artifactName: string;
+    artifacts: CloudflareArtifactsBinding;
+    source: NonNullable<CreateRepoInput["source"]>;
+  }) {
+    try {
+      return {
+        artifact:
+          input.source.kind === "artifact-fork"
+            ? await this.forkArtifactRepo({
+                artifactName: input.artifactName,
+                artifacts: input.artifacts,
+                source: input.source,
+              })
+            : await input.artifacts.create(input.artifactName, {
+                setDefaultBranch: REPO_DEFAULT_BRANCH,
+              }),
+        recoveredExistingArtifact: false,
+      };
+    } catch (error) {
+      if (!isArtifactAlreadyExistsError(error)) {
+        throw error;
+      }
+
+      return {
+        artifact: await input.artifacts.get(input.artifactName),
+        recoveredExistingArtifact: true,
+      };
+    }
+  }
+
   private async appendRepoCreatedEvent(input: {
     defaultBranch: string;
     remote: string;
@@ -353,6 +397,10 @@ async function readArtifactString(value: unknown): Promise<string | undefined> {
   } catch {
     return undefined;
   }
+}
+
+function isArtifactAlreadyExistsError(error: unknown) {
+  return error instanceof Error && /already exists/i.test(error.message);
 }
 
 function shellQuote(value: string) {

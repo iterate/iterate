@@ -24,6 +24,10 @@ describe("agent presets", () => {
         payload: { model: "gpt-5.5" },
       },
       {
+        type: "events.iterate.com/agent/llm-config-updated",
+        payload: { model: "gpt-5.5", runOpts: {}, debounceMs: 200 },
+      },
+      {
         type: "events.iterate.com/agent/system-prompt-updated",
         payload: {
           systemPrompt: defaultAgentSystemPrompt(),

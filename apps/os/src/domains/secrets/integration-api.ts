@@ -1,4 +1,6 @@
 import { getInitializedStreamStub } from "@iterate-com/shared/streams/helpers";
+import { STREAM_SUBSCRIPTION_CONFIGURED_TYPE, type Event } from "@iterate-com/shared/streams/types";
+import { SlackProcessorContract } from "@iterate-com/shared/stream-processors/slack/contract";
 import type { ClerkAuth } from "~/context.ts";
 import type { AppContext } from "~/context.ts";
 import {
@@ -10,11 +12,13 @@ import {
 import {
   consumeOAuthState,
   getProjectConnectionByWebhookIdentifier,
+  getProjectSecret,
   projectSecretId,
   upsertProjectConnection,
   upsertProjectSecret,
 } from "~/domains/secrets/secrets-store.ts";
 import { getSlackIntegrationDurableObjectName } from "~/domains/slack/durable-objects/slack-integration-durable-object.ts";
+import { callSlackWebApi } from "~/domains/slack/entrypoints/slack-capability.ts";
 import {
   oauthRedirectUri,
   providerSecretKey,
@@ -313,35 +317,177 @@ async function handleVerifiedSlackWebhook(input: {
     return Response.json({ error: "SLACK_INTEGRATION binding is not available." }, { status: 500 });
   }
 
-  const slackIntegrationName = getSlackIntegrationDurableObjectName(connection.projectId);
-  const slackIntegration = input.context.slackIntegration.getByName(slackIntegrationName);
-  await slackIntegration.initialize({ name: slackIntegrationName });
-  await slackIntegration.ensureReady();
+  const reactionPromise = addIngressSlackEyesReaction({
+    context: input.context,
+    payload,
+    projectId: connection.projectId,
+  }).catch((error) => {
+    console.error("[slack-integration] ingress eyes reaction crashed", { error });
+  });
+  input.context.waitUntil?.(reactionPromise);
+  void reactionPromise;
 
   const stream = await getInitializedStreamStub({
     durableObjectNamespace: input.context.stream as never,
     namespace: connection.projectId,
     path: SLACK_INTEGRATION_STREAM_PATH,
   });
-  await stream.append({
-    type: "events.iterate.com/slack/webhook-received",
-    idempotencyKey:
-      typeof payload.event_id === "string"
-        ? `slack-webhook:${payload.event_id}`
-        : typeof payload.trigger_id === "string"
-          ? `slack-webhook:${payload.trigger_id}`
-          : `slack-webhook:${crypto.randomUUID()}`,
-    payload: {
-      headers: {
-        slackEventId: input.request.headers.get("x-slack-event-id"),
-        slackRequestTimestamp: input.request.headers.get("x-slack-request-timestamp"),
+
+  const slackIntegrationName = getSlackIntegrationDurableObjectName(connection.projectId);
+  const appendedEvents = await stream.appendBatch([
+    {
+      type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
+      idempotencyKey: `slack-subscription:${connection.projectId}`,
+      payload: {
+        slug: `slack:${connection.projectId}`,
+        type: "callable",
+        eventTypes: [...SlackProcessorContract.consumes],
+        callable: {
+          type: "workers-rpc",
+          via: {
+            type: "env-binding",
+            bindingType: "durable-object-namespace",
+            bindingName: "SLACK_INTEGRATION",
+            durableObject: {
+              name: slackIntegrationName,
+            },
+          },
+          rpcMethod: "afterAppend",
+          argsMode: "object",
+        },
       },
-      slackTeamId: teamId,
-      body: payload,
     },
-  });
+    {
+      type: "events.iterate.com/slack/webhook-received",
+      idempotencyKey:
+        typeof payload.event_id === "string"
+          ? `slack-webhook:${payload.event_id}`
+          : typeof payload.trigger_id === "string"
+            ? `slack-webhook:${payload.trigger_id}`
+            : `slack-webhook:${crypto.randomUUID()}`,
+      payload: {
+        headers: {
+          slackEventId: input.request.headers.get("x-slack-event-id"),
+          slackRequestTimestamp: input.request.headers.get("x-slack-request-timestamp"),
+        },
+        slackTeamId: teamId,
+        body: payload,
+      },
+    },
+  ]);
+  const webhookEvent = appendedEvents.find(
+    (event) => event.type === "events.iterate.com/slack/webhook-received",
+  );
+  if (webhookEvent != null) {
+    const slackIntegrationWakePromise = wakeSlackIntegrationFastPath({
+      context: input.context,
+      event: webhookEvent,
+      projectId: connection.projectId,
+    }).catch((error) => {
+      console.error("[slack-integration] fast-path wake failed", { error });
+    });
+    input.context.waitUntil?.(slackIntegrationWakePromise);
+    void slackIntegrationWakePromise;
+  }
 
   return Response.json({ ok: true });
+}
+
+async function wakeSlackIntegrationFastPath(input: {
+  context: AppContext;
+  event: Event;
+  projectId: string;
+}) {
+  if (!input.context.slackIntegration) return;
+
+  const slackIntegrationName = getSlackIntegrationDurableObjectName(input.projectId);
+  const stub = input.context.slackIntegration.getByName(slackIntegrationName);
+  await stub.afterAppend({ event: input.event });
+}
+
+async function addIngressSlackEyesReaction(input: {
+  context: AppContext;
+  payload: unknown;
+  projectId: string;
+}) {
+  const target = slackEyesReactionTarget(input.payload);
+  if (target == null) return;
+
+  const token = await readSlackBotToken(input);
+  if (!token) return;
+
+  try {
+    await callSlackWebApi({
+      method: "reactions.add",
+      token,
+      body: {
+        channel: target.channel,
+        name: "eyes",
+        timestamp: target.messageTs,
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("already_reacted")) return;
+    console.error("[slack-integration] ingress eyes reaction failed", {
+      channel: target.channel,
+      error,
+      messageTs: target.messageTs,
+    });
+  }
+}
+
+async function readSlackBotToken(input: { context: AppContext; projectId: string }) {
+  const secret = await getProjectSecret(input.context.db, {
+    key: "slack.access_token",
+    projectId: input.projectId,
+  });
+  if (secret) return secret.material;
+
+  return input.context.config.slackBotToken?.exposeSecret() ?? "";
+}
+
+function slackEyesReactionTarget(payload: unknown): { channel: string; messageTs: string } | null {
+  const body = readRecord(payload);
+  if (body?.type !== "event_callback") return null;
+
+  const event = readRecord(body.event);
+  if (event == null) return null;
+  const eventType = readString(event.type);
+  if (eventType === "reaction_added" || eventType === "reaction_removed") return null;
+
+  const botUserId = readSlackAuthorizedBotUserId(body);
+  if (botUserId != null && readString(event.user) === botUserId) return null;
+
+  const channel = readString(event.channel);
+  const message = readRecord(event.message);
+  const messageTs = readString(event.ts) ?? readString(message?.ts);
+  if (channel == null || messageTs == null) return null;
+
+  return { channel, messageTs };
+}
+
+function readSlackAuthorizedBotUserId(body: Record<string, unknown>) {
+  const authorizations = body.authorizations;
+  if (!Array.isArray(authorizations)) return null;
+  for (const authorization of authorizations) {
+    const record = readRecord(authorization);
+    if (record?.is_bot === true) {
+      const userId = readString(record.user_id);
+      if (userId != null) return userId;
+    }
+  }
+  return null;
+}
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value != null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
 }
 
 function redirectWithError(callbackUrl: string | null, error: string) {

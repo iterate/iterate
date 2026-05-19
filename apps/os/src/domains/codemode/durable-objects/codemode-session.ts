@@ -14,7 +14,10 @@ import {
 import type { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
 import { withDurableObjectCore } from "@iterate-com/shared/durable-object-utils/mixins/with-durable-object-core";
 import { withKvInspector } from "@iterate-com/shared/durable-object-utils/mixins/with-kv-inspector";
-import { withLifecycleHooks } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import {
+  NotInitializedError,
+  withLifecycleHooks,
+} from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { withOuterbase } from "@iterate-com/shared/durable-object-utils/mixins/with-outerbase";
 import { withStreamProcessorRunner } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor-runner";
 import {
@@ -237,36 +240,36 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
   }
 
   async getStreamPath() {
-    const params = await this.ensureStarted();
+    const params = await this.ensureStartedOrInitializeFromRuntimeName();
     return params.streamPath;
   }
 
   async ensureLiveConsumer() {
+    const params = await this.ensureStartedOrInitializeFromRuntimeName();
     debugCodemodeDepth("session.ensureLiveConsumer.start", {
       name: this.name,
-      streamPath: this.structuredName.streamPath,
+      streamPath: params.streamPath,
     });
-    await this.ensureStarted();
     await this.ensureCallableSubscription();
     debugCodemodeDepth("session.ensureLiveConsumer.afterSubscription", {
       name: this.name,
-      streamPath: this.structuredName.streamPath,
+      streamPath: params.streamPath,
     });
     await this.catchUpStreamProcessor({ signal: AbortSignal.timeout(30_000) });
     debugCodemodeDepth("session.ensureLiveConsumer.afterCatchUp", {
       name: this.name,
-      streamPath: this.structuredName.streamPath,
+      streamPath: params.streamPath,
       state: this.getStreamProcessorRunnerState(),
     });
   }
 
   async afterAppend(input: { event: Event }) {
+    await this.ensureStartedOrInitializeFromRuntimeName();
     debugCodemodeDepth("session.afterAppend.start", {
       eventOffset: input.event.offset,
       eventType: input.event.type,
       name: this.name,
     });
-    await this.ensureStarted();
     const state = await this.consumeStreamProcessorEvent({ event: input.event as StreamEvent });
     this.resolvePendingFunctionCallFromEvent(input.event as StreamEvent);
     debugCodemodeDepth("session.afterAppend.done", {
@@ -280,7 +283,7 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
   }
 
   async createSession(input: CreateCodemodeSessionInput = {}) {
-    const params = await this.ensureStarted();
+    const params = await this.ensureStartedOrInitializeFromRuntimeName();
     debugCodemodeDepth("session.createSession.start", {
       streamPath: params.streamPath,
       hasCode: input.code != null,
@@ -351,7 +354,7 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
   }
 
   async registerToolProvider(input: { provider: ToolProviderRegistration }) {
-    await this.ensureStarted();
+    await this.ensureStartedOrInitializeFromRuntimeName();
     await this.ensureLiveConsumer();
     return await this.appendToolProviderRegisteredEvent(input);
   }
@@ -361,7 +364,7 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
   }
 
   async callFunction(input: CallFunctionInput) {
-    await this.ensureStarted();
+    await this.ensureStartedOrInitializeFromRuntimeName();
     await this.ensureLiveConsumer();
     const functionCallId = input.functionCallId ?? crypto.randomUUID();
     const builtin = this.resolveCodemodeBuiltin(input.path);
@@ -510,7 +513,7 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
   }
 
   async receiveFunctionCallResult(input: ReceiveFunctionCallResultInput) {
-    await this.ensureStarted();
+    await this.ensureStartedOrInitializeFromRuntimeName();
     const event = await this.appendAndConsume({
       type: "events.iterate.com/codemode/function-call-completed",
       idempotencyKey: `codemode:function-call-completed:${input.functionCallId}`,
@@ -542,6 +545,17 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
     return this.getStreamProcessorRunnerState();
   }
 
+  private async ensureStartedOrInitializeFromRuntimeName() {
+    try {
+      return await this.ensureStarted();
+    } catch (error) {
+      if (!(error instanceof NotInitializedError)) throw error;
+      const runtimeName = this.getDurableObjectName();
+      if (runtimeName == null) throw error;
+      return await this.initialize({ name: runtimeName });
+    }
+  }
+
   private streamsEntrypoint() {
     return processorStreamApiFromNamespace({
       namespace: this.structuredName.projectId,
@@ -563,6 +577,7 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
       payload: {
         slug: `codemode-session:${this.name}`,
         type: "callable",
+        eventTypes: [...CodemodeProcessorContract.consumes],
         callable: {
           type: "workers-rpc",
           via: {

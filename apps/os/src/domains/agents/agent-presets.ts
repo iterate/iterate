@@ -86,6 +86,14 @@ export function defaultAgentSetupEvents(
             type: "events.iterate.com/openai-ws/config-updated",
             payload: { model: DEFAULT_OPENAI_AGENT_MODEL },
           },
+          {
+            type: "events.iterate.com/agent/llm-config-updated",
+            payload: {
+              model: DEFAULT_OPENAI_AGENT_MODEL,
+              runOpts: {},
+              debounceMs: DEFAULT_AGENT_DEBOUNCE_MS,
+            },
+          },
         ]
       : [
           {
@@ -121,8 +129,7 @@ export function configuredAgentSetupEvents(input: {
     payload:
       input.provider === "openai-ws" && event.type === "events.iterate.com/openai-ws/config-updated"
         ? { model: input.model }
-        : input.provider === "cloudflare-ai" &&
-            event.type === "events.iterate.com/agent/llm-config-updated"
+        : event.type === "events.iterate.com/agent/llm-config-updated"
           ? {
               debounceMs: DEFAULT_AGENT_DEBOUNCE_MS,
               model: input.model,

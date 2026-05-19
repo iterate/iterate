@@ -25,6 +25,12 @@ import {
   StreamState,
 } from "./types.ts";
 import { circuitBreakerProcessor } from "./circuit-breaker.ts";
+import {
+  hasInactiveCallableSubscriberDeliveries,
+  selectCallableSubscriberDeliveries,
+  type CallableSubscriberDelivery,
+  type CallableSubscriberDeliveryQueue,
+} from "./callable-subscriber-delivery.ts";
 import { migrate } from "./db/migrations/.generated/migrations.ts";
 import {
   getEventByIdempotencyKey,
@@ -34,8 +40,8 @@ import {
   upsertReducedState,
 } from "./db/queries/.generated/index.ts";
 import {
+  externalSubscriberMayReceiveEvent,
   externalSubscriberProcessor,
-  hasExternalSubscribersOfType,
   publishExternalSubscriber,
   publishExternalSubscribers,
   resetSubscriberSocketsForStream,
@@ -62,8 +68,6 @@ const LEGACY_CALLABLE_SUBSCRIBER_ALARM_QUEUE_KEY = "stream-do:callable-subscribe
 const CALLABLE_SUBSCRIBER_DELIVERY_QUEUE_KEY = "stream-do:callable-subscriber-delivery-queue-v2";
 const CALLABLE_SUBSCRIBER_ALARM_DELAY_MS = 10;
 const NON_CALLABLE_SUBSCRIBERS = new Set(["webhook", "websocket"] as const);
-
-type CallableSubscriberDeliveryQueue = Record<string, number[]>;
 
 const StreamDurableObjectLifecycleBase = withLifecycleHooks<
   StreamDurableObjectStructuredName,
@@ -323,8 +327,13 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
     this._state = nextState;
 
     for (const event of newEvents) {
-      await this.afterAppend(event);
+      await this.afterAppend(event, {
+        kickoffCallableSubscriberDeliveries: false,
+        queueCallableSubscriberDelivery: false,
+      });
     }
+    await this.enqueueCallableSubscriberDeliveries(newEvents);
+    await this.ensureCallableSubscriberAlarmIfQueued();
 
     return events;
   }
@@ -420,7 +429,13 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
    * Correctness-critical derived work still needs a durable event/outbox cursor
    * before we rely on it operationally.
    */
-  private async afterAppend(event: Event) {
+  private async afterAppend(
+    event: Event,
+    options: {
+      kickoffCallableSubscriberDeliveries?: boolean;
+      queueCallableSubscriberDelivery?: boolean;
+    } = {},
+  ) {
     this.publish(event);
 
     if (event.type === STREAM_FIRST_INITIALIZED_TYPE) {
@@ -460,8 +475,11 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
       },
     });
 
-    if (this.shouldQueueCallableSubscriberDelivery(event)) {
-      await this.enqueueCallableSubscriberDelivery(event.offset).catch((error) => {
+    if (
+      options.queueCallableSubscriberDelivery !== false &&
+      this.shouldQueueCallableSubscriberDelivery(event)
+    ) {
+      await this.enqueueCallableSubscriberDelivery(event).catch((error) => {
         console.error("[stream-do] failed to enqueue callable subscriber delivery", {
           path: this.state.path,
           offset: event.offset,
@@ -481,6 +499,9 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
           },
         });
       });
+      if (options.kickoffCallableSubscriberDeliveries !== false) {
+        await this.ensureCallableSubscriberAlarmIfQueued();
+      }
     }
   }
 
@@ -489,8 +510,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
       return;
     }
 
-    await this.deliverNextCallableSubscriber();
-    await this.ensureCallableSubscriberAlarmIfQueued();
+    await this.kickoffQueuedCallableSubscriberDeliveries();
   }
 
   // ---------------------------------------------------------------------------
@@ -666,82 +686,192 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
     );
   }
 
+  private callableSubscribersForEvent(event: Event) {
+    return this.callableSubscribers().filter((subscriber) =>
+      externalSubscriberMayReceiveEvent({ event, subscriber }),
+    );
+  }
+
   private shouldQueueCallableSubscriberDelivery(event: Event) {
     if (isInternalExternalSubscriberErrorEvent(event)) {
       return false;
     }
 
-    return hasExternalSubscribersOfType(this.state.processors["external-subscriber"], "callable");
+    return this.callableSubscribersForEvent(event).length > 0;
   }
 
-  private async enqueueCallableSubscriberDelivery(offset: number) {
-    await this.mutateCallableSubscriberDeliveryQueue((queue) => {
-      for (const subscriber of this.callableSubscribers()) {
-        const offsets = queue[subscriber.slug] ?? [];
-        if (!offsets.includes(offset)) {
-          queue[subscriber.slug] = [...offsets, offset];
+  private async enqueueCallableSubscriberDelivery(event: Event) {
+    await this.enqueueCallableSubscriberDeliveries([event]);
+  }
+
+  private async enqueueCallableSubscriberDeliveries(events: Event[]) {
+    const deliveries = events.flatMap((event) =>
+      this.callableSubscribersForEvent(event).map((subscriber) => ({
+        event,
+        subscriberSlug: subscriber.slug,
+      })),
+    );
+    if (deliveries.length === 0) {
+      return;
+    }
+
+    try {
+      await this.mutateCallableSubscriberDeliveryQueue((queue) => {
+        for (const { event, subscriberSlug } of deliveries) {
+          const offsets = queue[subscriberSlug] ?? [];
+          if (!offsets.includes(event.offset)) {
+            queue[subscriberSlug] = [...offsets, event.offset];
+          }
         }
+        return queue;
+      });
+
+      await this.scheduleCallableSubscriberAlarm();
+    } catch (error) {
+      for (const event of events) {
+        if (!this.shouldQueueCallableSubscriberDelivery(event)) continue;
+        console.error("[stream-do] failed to enqueue callable subscriber delivery", {
+          path: this.state.path,
+          offset: event.offset,
+          eventType: event.type,
+          error,
+        });
+        this.appendProcessorErrorEvent({
+          event,
+          idempotencyKey: `stream-do:callable-subscriber-enqueue-error:${event.offset}`,
+          message: `Failed to enqueue callable subscriber delivery for ${event.type} at offset ${event.offset}: ${formatErrorMessage(error)}`,
+          metadata: {
+            source: "stream-do",
+            processor: "external-subscriber",
+            stage: "enqueue-callable-subscriber-delivery",
+            failedEventOffset: event.offset,
+            failedEventType: event.type,
+          },
+        });
       }
-      return queue;
+    }
+  }
+
+  private async deliverQueuedCallableSubscribers() {
+    const queue = await this.readCallableSubscriberDeliveryQueue();
+    const deliveries = selectCallableSubscriberDeliveries({
+      activeSubscriberSlugs: this.activeCallableSubscriberDeliveries,
+      queue,
     });
 
-    await this.scheduleCallableSubscriberAlarm();
+    for (const delivery of deliveries) {
+      this.startCallableSubscriberDelivery(delivery);
+    }
   }
 
-  private async deliverNextCallableSubscriber() {
-    const queue = await this.readCallableSubscriberDeliveryQueue();
-    const delivery = this.nextCallableSubscriberDelivery(queue);
-    if (delivery == null) {
-      return;
-    }
+  private async kickoffQueuedCallableSubscriberDeliveries() {
+    await this.deliverQueuedCallableSubscribers();
+    await this.ensureCallableSubscriberAlarmIfQueued();
+  }
 
-    const event = this.getEventByOffset(delivery.offset);
-    if (event == null) {
-      this.appendProcessorErrorEvent({
-        event: null,
-        idempotencyKey: `stream-do:callable-subscriber-missing-event:${delivery.subscriberSlug}:${delivery.offset}`,
-        message: `Callable subscriber "${delivery.subscriberSlug}" delivery could not find event at offset ${delivery.offset}.`,
-        metadata: {
-          source: "stream-do",
-          processor: "external-subscriber",
-          stage: "deliver-callable-subscriber",
-          missingEventOffset: delivery.offset,
-          subscriberSlug: delivery.subscriberSlug,
-        },
-      });
-      await this.removeCallableSubscriberDelivery(delivery);
-      return;
-    }
-
-    const subscriber =
-      this.state.processors["external-subscriber"].subscribersBySlug[delivery.subscriberSlug];
-    if (subscriber?.type !== "callable") {
-      await this.removeCallableSubscriberDelivery(delivery);
+  private startCallableSubscriberDelivery(delivery: CallableSubscriberDelivery) {
+    if (this.activeCallableSubscriberDeliveries.has(delivery.subscriberSlug)) {
       return;
     }
 
     this.activeCallableSubscriberDeliveries.add(delivery.subscriberSlug);
-    try {
-      await publishExternalSubscriber({
-        append: (nextEvent) => Promise.resolve(this.append(nextEvent)),
-        callableContext: {
-          env: this.env as Record<string, unknown>,
-        },
-        event,
-        onError: (failure) => {
-          this.appendExternalSubscriberDeliveryError(failure);
-        },
-        subscriber,
+    void this.deliverCallableSubscriber(delivery).catch((error) => {
+      console.error("[stream-do] callable subscriber delivery failed", {
+        path: this.state.path,
+        offsets: delivery.offsets,
+        subscriberSlug: delivery.subscriberSlug,
+        error,
       });
+      this.appendProcessorErrorEvent({
+        event: null,
+        idempotencyKey: `stream-do:callable-subscriber-delivery-error:${delivery.subscriberSlug}:${delivery.offsets.join(",")}`,
+        message: `Callable subscriber "${delivery.subscriberSlug}" delivery failed at offsets ${delivery.offsets.join(", ")}: ${formatErrorMessage(error)}`,
+        metadata: {
+          source: "stream-do",
+          processor: "external-subscriber",
+          stage: "deliver-callable-subscriber",
+          failedEventOffsets: delivery.offsets.join(","),
+          subscriberSlug: delivery.subscriberSlug,
+        },
+      });
+    });
+  }
+
+  private async deliverCallableSubscriber(delivery: CallableSubscriberDelivery) {
+    let offsetsToRemove = delivery.offsets;
+    try {
+      const subscriber =
+        this.state.processors["external-subscriber"].subscribersBySlug[delivery.subscriberSlug];
+      if (subscriber?.type !== "callable") {
+        return;
+      }
+
+      offsetsToRemove = [];
+      for (const offset of delivery.offsets) {
+        try {
+          const event = this.getEventByOffset(offset);
+          if (event == null) {
+            this.appendProcessorErrorEvent({
+              event: null,
+              idempotencyKey: `stream-do:callable-subscriber-missing-event:${delivery.subscriberSlug}:${offset}`,
+              message: `Callable subscriber "${delivery.subscriberSlug}" delivery could not find event at offset ${offset}.`,
+              metadata: {
+                source: "stream-do",
+                processor: "external-subscriber",
+                stage: "deliver-callable-subscriber",
+                missingEventOffset: offset,
+                subscriberSlug: delivery.subscriberSlug,
+              },
+            });
+            offsetsToRemove.push(offset);
+            continue;
+          }
+
+          await publishExternalSubscriber({
+            append: (nextEvent) => Promise.resolve(this.append(nextEvent)),
+            callableContext: {
+              env: this.env as Record<string, unknown>,
+            },
+            event,
+            onError: (failure) => {
+              this.appendExternalSubscriberDeliveryError(failure);
+            },
+            subscriber,
+          });
+          offsetsToRemove.push(offset);
+        } catch (error) {
+          this.appendProcessorErrorEvent({
+            event: null,
+            idempotencyKey: `stream-do:callable-subscriber-delivery-error:${delivery.subscriberSlug}:${offset}`,
+            message: `Callable subscriber "${delivery.subscriberSlug}" delivery failed at offset ${offset}: ${formatErrorMessage(error)}`,
+            metadata: {
+              source: "stream-do",
+              processor: "external-subscriber",
+              stage: "deliver-callable-subscriber",
+              failedEventOffset: offset,
+              subscriberSlug: delivery.subscriberSlug,
+            },
+          });
+        }
+      }
     } finally {
       this.activeCallableSubscriberDeliveries.delete(delivery.subscriberSlug);
-      await this.removeCallableSubscriberDelivery(delivery);
+      await this.removeCallableSubscriberDeliveries({
+        offsets: offsetsToRemove,
+        subscriberSlug: delivery.subscriberSlug,
+      });
+      await this.ensureCallableSubscriberAlarmIfQueued();
     }
   }
 
   private async ensureCallableSubscriberAlarmIfQueued() {
     const queue = await this.readCallableSubscriberDeliveryQueue();
-    if (this.hasInactiveCallableSubscriberDelivery(queue)) {
+    if (
+      hasInactiveCallableSubscriberDeliveries({
+        activeSubscriberSlugs: this.activeCallableSubscriberDeliveries,
+        queue,
+      })
+    ) {
       await this.scheduleCallableSubscriberAlarm();
     }
   }
@@ -780,16 +910,14 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
     await this.ctx.storage.put(CALLABLE_SUBSCRIBER_DELIVERY_QUEUE_KEY, compacted);
   }
 
-  private async removeCallableSubscriberDelivery(delivery: {
-    offset: number;
+  private async removeCallableSubscriberDeliveries(delivery: {
+    offsets: number[];
     subscriberSlug: string;
   }) {
+    const deliveredOffsets = new Set(delivery.offsets);
     await this.mutateCallableSubscriberDeliveryQueue((queue) => {
       const offsets = queue[delivery.subscriberSlug] ?? [];
-      const index = offsets.indexOf(delivery.offset);
-      if (index >= 0) {
-        queue[delivery.subscriberSlug] = [...offsets.slice(0, index), ...offsets.slice(index + 1)];
-      }
+      queue[delivery.subscriberSlug] = offsets.filter((offset) => !deliveredOffsets.has(offset));
       return queue;
     });
   }
@@ -806,23 +934,6 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
       () => undefined,
     );
     return await nextMutation;
-  }
-
-  private nextCallableSubscriberDelivery(queue: CallableSubscriberDeliveryQueue) {
-    for (const [subscriberSlug, offsets] of Object.entries(queue).sort(([left], [right]) =>
-      left.localeCompare(right),
-    )) {
-      if (this.activeCallableSubscriberDeliveries.has(subscriberSlug)) continue;
-      const offset = offsets[0];
-      if (offset == null) continue;
-      return { offset, subscriberSlug };
-    }
-
-    return null;
-  }
-
-  private hasInactiveCallableSubscriberDelivery(queue: CallableSubscriberDeliveryQueue) {
-    return this.nextCallableSubscriberDelivery(queue) != null;
   }
 
   private callableSubscribers() {

@@ -199,6 +199,62 @@ describe("createSlackAgentProcessor", () => {
     expect(content).not.toContain("Do not use `ctx.chat.sendMessage`");
   });
 
+  it("emits agent input for messages from other bots", async () => {
+    const appended: Array<{ streamPath?: string; event: StreamEventInput }> = [];
+    const slackCalls: Array<{ body: Record<string, unknown>; method: string }> = [];
+    const event = committedEvent({
+      type: "events.iterate.com/slack/webhook-received",
+      payload: {
+        body: {
+          type: "event_callback",
+          event: {
+            type: "message",
+            channel: "C123",
+            channel_type: "channel",
+            user: "U_OTHER_BOT",
+            bot_id: "B_OTHER",
+            ts: "1772136259.000000",
+            event_ts: "1772136259.000000",
+            text: "<@U_BOT> deployment says hello",
+          },
+          authorizations: [
+            { team_id: "T123", user_id: "U_BOT", is_bot: true, is_enterprise_install: false },
+          ],
+        },
+      },
+      offset: 47,
+    }) as Extract<
+      ConsumedEvent<typeof SlackAgentProcessorContract>,
+      { type: "events.iterate.com/slack/webhook-received" }
+    >;
+
+    await createSlackAgentProcessor({
+      callSlackApi: async (method, body) => {
+        slackCalls.push({ method, body });
+      },
+    }).implementation.afterAppend?.({
+      event,
+      previousState: registeredSlackAgentState(),
+      state: registeredSlackAgentState({
+        botUserId: "U_BOT",
+        channel: "C123",
+        threadTs: "1772136258.963519",
+      }),
+      streamApi: testSlackAgentStreamApi(appended),
+      signal: new AbortController().signal,
+    });
+
+    expect(slackCalls).toEqual([]);
+    expect(appended).toHaveLength(1);
+    expect(appended[0].event).toMatchObject({
+      type: "events.iterate.com/agent/input-added",
+      idempotencyKey: "slack-agent/slack-webhook-to-agent-input@47",
+      payload: {
+        content: expect.stringContaining("<@U_BOT> deployment says hello"),
+      },
+    });
+  });
+
   it("emits agent input for raw Slack interactivity payloads", async () => {
     const appended: Array<{ streamPath?: string; event: StreamEventInput }> = [];
     const event = committedEvent({
@@ -409,6 +465,49 @@ it("ignores webhook events caused by our own bot user (e.g. bot adding a reactio
       },
     },
     offset: 50,
+  }) as Extract<
+    ConsumedEvent<typeof SlackAgentProcessorContract>,
+    { type: "events.iterate.com/slack/webhook-received" }
+  >;
+
+  await createSlackAgentProcessor().implementation.afterAppend?.({
+    event,
+    previousState: registeredSlackAgentState(),
+    state: registeredSlackAgentState({
+      botUserId: "U_BOT",
+      channel: "C123",
+      latestMessageTs: "1772136259.000000",
+      threadTs: "1772136258.963519",
+    }),
+    streamApi: testSlackAgentStreamApi(appended),
+    signal: new AbortController().signal,
+  });
+
+  expect(appended).toEqual([]);
+});
+
+it("ignores message webhooks from our own bot user", async () => {
+  const appended: Array<{ streamPath?: string; event: StreamEventInput }> = [];
+  const event = committedEvent({
+    type: "events.iterate.com/slack/webhook-received",
+    payload: {
+      body: {
+        type: "event_callback",
+        event: {
+          type: "message",
+          channel: "C123",
+          user: "U_BOT",
+          bot_id: "B_BOT",
+          ts: "1772136259.000000",
+          event_ts: "1772136259.000000",
+          text: "our own reply",
+        },
+        authorizations: [
+          { team_id: "T123", user_id: "U_BOT", is_bot: true, is_enterprise_install: false },
+        ],
+      },
+    },
+    offset: 51,
   }) as Extract<
     ConsumedEvent<typeof SlackAgentProcessorContract>,
     { type: "events.iterate.com/slack/webhook-received" }

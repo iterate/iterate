@@ -103,6 +103,27 @@ export async function publishExternalSubscriber(args: {
   await publishToExternalSubscriber(args);
 }
 
+export function externalSubscriberMayReceiveEvent(args: {
+  event: Event;
+  subscriber: ExternalSubscriber;
+}) {
+  if (args.subscriber.eventTypes != null && !args.subscriber.eventTypes.includes(args.event.type)) {
+    return false;
+  }
+
+  if (
+    (args.subscriber.type === "webhook" || args.subscriber.type === "callable") &&
+    args.event.type === STREAM_SUBSCRIPTION_CONFIGURED_TYPE &&
+    args.subscriber.jsonataFilter == null &&
+    (args.subscriber.eventTypes == null ||
+      !args.subscriber.eventTypes.includes(STREAM_SUBSCRIPTION_CONFIGURED_TYPE))
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
 export function hasExternalSubscribersOfType(
   state: ExternalSubscriberState,
   subscriberType: ExternalSubscriber["type"],
@@ -196,11 +217,7 @@ async function handleExternalSubscriberPublishError(args: {
 }
 
 async function evaluateFilter(args: { event: Event; subscriber: ExternalSubscriber }) {
-  if (
-    (args.subscriber.type === "webhook" || args.subscriber.type === "callable") &&
-    args.event.type === STREAM_SUBSCRIPTION_CONFIGURED_TYPE &&
-    args.subscriber.jsonataFilter == null
-  ) {
+  if (!externalSubscriberMayReceiveEvent(args)) {
     return false;
   }
 

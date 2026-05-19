@@ -5,6 +5,9 @@ import {
   NotInitializedError,
 } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { withStreamProcessorRunner } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor-runner";
+import { AgentProcessorContract } from "@iterate-com/shared/stream-processors/agent/contract";
+import { CodemodeProcessorContract } from "@iterate-com/shared/stream-processors/codemode/contract";
+import { SlackAgentProcessorContract } from "@iterate-com/shared/stream-processors/slack-agent/contract";
 import { createSlackProcessor } from "@iterate-com/shared/stream-processors/slack/implementation";
 import { SlackProcessorContract } from "@iterate-com/shared/stream-processors/slack/contract";
 import type {
@@ -25,9 +28,15 @@ import {
   type StreamPath,
 } from "@iterate-com/shared/streams/types";
 import {
+  createAgentCodemodeToolProviders,
   type AgentDurableObject,
   getAgentDurableObjectName,
 } from "~/domains/agents/durable-objects/agent-durable-object.ts";
+import {
+  DEFAULT_AGENT_LLM_PROVIDER,
+  defaultAgentSetupEvents,
+} from "~/domains/agents/agent-presets.ts";
+import { createCodemodeSessionStartupEvents } from "~/domains/codemode/codemode-session-rpc.ts";
 import { SLACK_INTEGRATION_STREAM_PATH } from "~/domains/secrets/integration-streams.ts";
 import {
   type SlackAgentDurableObject,
@@ -119,8 +128,7 @@ export class SlackIntegrationDurableObject extends SlackIntegrationBase<SlackInt
   }
 
   async afterAppend(input: { event: Event }) {
-    const params = await this.ensureStartedOrInitializeFromRuntimeName();
-    await this.ensureIntegrationSubscription(params.projectId);
+    await this.ensureStartedOrInitializeFromRuntimeName();
     return await this.consumeStreamProcessorEvent({ event: input.event as StreamEvent });
   }
 
@@ -159,6 +167,7 @@ export class SlackIntegrationDurableObject extends SlackIntegrationBase<SlackInt
       payload: {
         slug: `slack:${projectId}`,
         type: "callable",
+        eventTypes: [...SlackProcessorContract.consumes],
         callable: {
           type: "workers-rpc",
           via: {
@@ -183,13 +192,27 @@ function routedStreamBootstrapEvents(input: {
   slackAgentDurableObjectName: string;
   streamPath: string;
 }): EmittedInput<typeof SlackProcessorContract>[] {
+  const codemodeSessionDurableObjectName = deriveDurableObjectNameFromStructuredName({
+    structuredName: {
+      projectId: input.projectId,
+      streamPath: resolveStreamPath(input.streamPath),
+    },
+  });
+
   return [
+    ...defaultAgentSetupEvents(DEFAULT_AGENT_LLM_PROVIDER, input.streamPath).map(
+      (event, index) => ({
+        ...event,
+        idempotencyKey: `os-agent-setup:default:${index}:${event.type}`,
+      }),
+    ),
     {
       type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
       idempotencyKey: `slack-agent-subscription:${input.projectId}:${input.streamPath}`,
       payload: {
         slug: `slack-agent:${input.projectId}:${input.streamPath}`,
         type: "callable",
+        eventTypes: [...SlackAgentProcessorContract.consumes],
         callable: {
           type: "workers-rpc",
           via: {
@@ -207,10 +230,43 @@ function routedStreamBootstrapEvents(input: {
     },
     {
       type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
+      idempotencyKey: `codemode-session-callable-subscription:${codemodeSessionDurableObjectName}`,
+      payload: {
+        slug: `codemode-session:${codemodeSessionDurableObjectName}`,
+        type: "callable",
+        eventTypes: [...CodemodeProcessorContract.consumes],
+        callable: {
+          type: "workers-rpc",
+          via: {
+            type: "env-binding",
+            bindingType: "durable-object-namespace",
+            bindingName: "CODEMODE_SESSION",
+            durableObject: {
+              name: codemodeSessionDurableObjectName,
+            },
+          },
+          rpcMethod: "afterAppend",
+          argsMode: "object",
+        },
+      },
+    },
+    ...createCodemodeSessionStartupEvents({
+      events: [],
+      projectId: input.projectId,
+      providers: createAgentCodemodeToolProviders({
+        agentDurableObjectName: input.agentDurableObjectName,
+        agentPath: resolveStreamPath(input.streamPath),
+        projectId: input.projectId,
+      }),
+      streamPath: resolveStreamPath(input.streamPath),
+    }),
+    {
+      type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
       idempotencyKey: `agent-subscription:${input.projectId}:${input.streamPath}`,
       payload: {
         slug: `agent:${input.projectId}:${input.streamPath}`,
         type: "callable",
+        eventTypes: [...AgentProcessorContract.consumes],
         callable: {
           type: "workers-rpc",
           via: {
@@ -226,7 +282,7 @@ function routedStreamBootstrapEvents(input: {
         },
       },
     },
-  ];
+  ] as EmittedInput<typeof SlackProcessorContract>[];
 }
 
 function slackIntegrationStreamApiFromNamespace(args: {

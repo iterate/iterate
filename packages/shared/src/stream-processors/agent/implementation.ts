@@ -83,12 +83,9 @@ export function createAgentProcessor(deps: AgentProcessorDeps) {
         case "events.iterate.com/agent/status-updated":
           return;
         case "events.iterate.com/codemode/tool-provider-registered":
-          await appendEventTypeExplanation({
+          await appendEventTypeExplanationAndRewrite({
             streamApi,
             eventType: event.type,
-          });
-          await appendRewrite({
-            streamApi,
             event,
             key: "render-codemode-tool-provider-registered",
             content: toolProviderRegisteredEventBlock({
@@ -487,52 +484,65 @@ async function appendLlmEventContext(args: {
   key: string;
   content: string;
 }) {
-  await appendEventTypeExplanation({
+  await appendEventTypeExplanationAndRewrite({
     streamApi: args.streamApi,
     eventType: args.event.type,
+    event: args.event,
+    key: args.key,
+    content: `An event has occurred: \n\n${args.content}`,
   });
-  await appendRewrite({ ...args, content: `An event has occurred: \n\n${args.content}` });
 }
 
-async function appendRewrite(args: {
-  streamApi: AgentStreamApi;
+function rewriteInput(args: {
   event: { streamPath: string; offset: number };
   key: string;
   content: string;
 }) {
-  await args.streamApi.append({
-    event: {
-      type: "events.iterate.com/agent/input-added",
-      idempotencyKey: buildProcessorIdempotencyKey({
-        processor: AgentProcessorContract,
-        key: args.key,
-        sourceEvent: args.event,
-      }),
-      payload: {
-        content: args.content,
-        llmRequestPolicy: { behaviour: "dont-trigger-request" },
-      },
+  return {
+    type: "events.iterate.com/agent/input-added",
+    idempotencyKey: buildProcessorIdempotencyKey({
+      processor: AgentProcessorContract,
+      key: args.key,
+      sourceEvent: args.event,
+    }),
+    payload: {
+      content: args.content,
+      llmRequestPolicy: { behaviour: "dont-trigger-request" },
     },
+  } as const;
+}
+
+async function appendEventTypeExplanationAndRewrite(args: {
+  streamApi: AgentStreamApi;
+  eventType: string;
+  event: { streamPath: string; offset: number };
+  key: string;
+  content: string;
+}) {
+  const explanation = eventTypeExplanation(args.eventType);
+  const rewrite = rewriteInput(args);
+  if (explanation == null) {
+    await args.streamApi.append({ event: rewrite });
+    return;
+  }
+
+  await args.streamApi.appendBatch({
+    events: [eventTypeExplanationInput(args.eventType, explanation), rewrite],
   });
 }
 
-async function appendEventTypeExplanation(args: { streamApi: AgentStreamApi; eventType: string }) {
-  const explanation = eventTypeExplanation(args.eventType);
-  if (explanation == null) return;
-
-  await args.streamApi.append({
-    event: {
-      type: "events.iterate.com/agent/input-added",
-      idempotencyKey: buildProcessorIdempotencyKey({
-        processor: AgentProcessorContract,
-        key: `event-type-explainer/${args.eventType}`,
-      }),
-      payload: {
-        content: explanation,
-        llmRequestPolicy: { behaviour: "dont-trigger-request" },
-      },
+function eventTypeExplanationInput(eventType: string, explanation: string) {
+  return {
+    type: "events.iterate.com/agent/input-added",
+    idempotencyKey: buildProcessorIdempotencyKey({
+      processor: AgentProcessorContract,
+      key: `event-type-explainer/${eventType}`,
+    }),
+    payload: {
+      content: explanation,
+      llmRequestPolicy: { behaviour: "dont-trigger-request" },
     },
-  });
+  } as const;
 }
 
 function eventTypeExplanation(eventType: string): string | null {
