@@ -67,6 +67,8 @@ export const AppConfig = BaseAppConfig.extend({
       ),
   }),
   openAiApiKey: redacted(z.string().trim().min(1)),
+  geminiApiKey: redacted(z.string().trim().min(1)).optional(),
+  xAiApiKey: redacted(z.string().trim().min(1)).optional(),
   cloudflare: z
     .object({
       apiToken: redacted(z.string().trim().min(1)).optional(),

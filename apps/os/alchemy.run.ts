@@ -13,11 +13,15 @@ import type { AgentDurableObject } from "./src/domains/agents/durable-objects/ag
 import type { RepoDurableObject } from "./src/domains/repos/durable-objects/repo-durable-object.ts";
 import type { SlackAgentDurableObject } from "./src/domains/slack/durable-objects/slack-agent-durable-object.ts";
 import type { SlackIntegrationDurableObject } from "./src/domains/slack/durable-objects/slack-integration-durable-object.ts";
+import type { VoiceAgentDurableObject } from "./src/domains/voice-agents/durable-objects/voice-agent-durable-object.ts";
 import type { WorkspaceDurableObject } from "./src/domains/workspaces/durable-objects/workspace-durable-object.ts";
 import type { OutboundMcpFromOurClientCapability } from "./src/domains/outbound-mcp-client/entrypoints/outbound-mcp-from-our-client-capability.ts";
 
 const ctx = await initAlchemy(manifest, AppConfig, process.env);
 const slackBotToken = ctx.runtimeConfig.slackBotToken?.exposeSecret();
+const geminiApiKey = ctx.runtimeConfig.geminiApiKey?.exposeSecret() ?? process.env.GEMINI_API_KEY;
+const openAiApiKey = ctx.runtimeConfig.openAiApiKey.exposeSecret() ?? process.env.OPENAI_API_KEY;
+const xAiApiKey = ctx.runtimeConfig.xAiApiKey?.exposeSecret() ?? process.env.XAI_API_KEY;
 
 const db = await D1Database("os-db", {
   name: `${ctx.workerName}-db`,
@@ -71,6 +75,10 @@ const agent = DurableObjectNamespace<AgentDurableObject>("agent", {
   className: "AgentDurableObject",
   sqlite: true,
 });
+const voiceAgent = DurableObjectNamespace<VoiceAgentDurableObject>("voice-agent", {
+  className: "VoiceAgentDurableObject",
+  sqlite: true,
+});
 const slackIntegration = DurableObjectNamespace<SlackIntegrationDurableObject>(
   "slack-integration",
   {
@@ -104,6 +112,7 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     LOADER: WorkerLoader(),
     CODEMODE_SESSION: codemodeSession,
     AGENT: agent,
+    VOICE_AGENT: voiceAgent,
     ARTIFACTS: Artifacts({ namespace: artifactsNamespace }),
     PROJECT: project,
     SLACK_AGENT: slackAgent,
@@ -116,6 +125,9 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     ...(debugAppendChainSubscriber == null
       ? {}
       : { DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber }),
+    ...(geminiApiKey == null ? {} : { APP_CONFIG_GEMINI_API_KEY: alchemy.secret(geminiApiKey) }),
+    ...(openAiApiKey == null ? {} : { APP_CONFIG_OPEN_AI_API_KEY: alchemy.secret(openAiApiKey) }),
+    ...(xAiApiKey == null ? {} : { APP_CONFIG_X_AI_API_KEY: alchemy.secret(xAiApiKey) }),
     ...(slackBotToken == null ? {} : { APP_CONFIG_SLACK_BOT_TOKEN: alchemy.secret(slackBotToken) }),
   },
   extraRouteHostnames: projectHostnameBases.flatMap(projectRouteHostnamesForBase),

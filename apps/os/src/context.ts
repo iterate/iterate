@@ -10,6 +10,7 @@ import type { CloudflareArtifactsBinding } from "~/domains/repos/artifacts.ts";
 import type { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import type { SlackAgentDurableObject } from "~/domains/slack/durable-objects/slack-agent-durable-object.ts";
 import type { SlackIntegrationDurableObject } from "~/domains/slack/durable-objects/slack-integration-durable-object.ts";
+import type { VoiceAgentDurableObject } from "~/domains/voice-agents/durable-objects/voice-agent-durable-object.ts";
 
 export type ClerkAuth = Awaited<ReturnType<typeof auth>>;
 
@@ -25,6 +26,7 @@ export interface AppContext {
   workerScriptName?: string;
   rawRequest?: Request;
   agent?: DurableObjectNamespace<AgentDurableObject>;
+  voiceAgent?: DurableObjectNamespace<VoiceAgentDurableObject>;
   artifacts?: CloudflareArtifactsBinding;
   loader?: WorkerLoader;
   codemodeSession?: DurableObjectNamespace<CodemodeSession>;
