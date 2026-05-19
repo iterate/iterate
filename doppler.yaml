@@ -24,5 +24,3 @@ setup:
     path: apps/auth/
   - project: auth
     path: apps/auth-example/
-  - project: agents
-    path: apps/agents/

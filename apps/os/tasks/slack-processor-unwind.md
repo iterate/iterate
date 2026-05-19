@@ -139,23 +139,17 @@ processors and Slack domain, not in `AgentDurableObject`.
 - Verification update: root `pnpm typecheck`, `pnpm format:check`, `pnpm
 lint`, `pnpm knip`, `pnpm --dir packages/shared test`, and `pnpm --dir
 apps/os test` passed.
-- Verification update: `pnpm --dir apps/agents test` and `pnpm --dir
-apps/events test` passed after updating their shared processor API/docs
-  references and cleaning the stale apps/events route tree/knip config.
+- Verification update: `pnpm --dir apps/events test` passed after updating
+  shared processor API/docs references and cleaning the stale apps/events route
+  tree/knip config.
 - Kimi update: replaced prior Kimi K2.5 references with
   `@cf/moonshotai/kimi-k2.6`. OS now defaults new agents, new presets, shared
   agent reduced state, and unconfigured agent runtime setup to Cloudflare
   AI/Kimi K2.6 instead of OpenAI WebSocket.
-- Verification: `pnpm --dir apps/os test` and focused shared/agents/events suites passed for the processor refactor work described above.
-- Real-token check: `doppler run --project agents --config dev -- ... Slack
-auth.test` succeeded against the iterate Slack workspace without printing the
-  token. OS Doppler dev config in this checkout did not expose
-  `APP_CONFIG_SLACK_BOT_TOKEN`, so a full local OS Slack smoke needs either the
-  token copied into OS dev config or a preview/prod OS deployment that already
-  has it.
+- Verification: `pnpm --dir apps/os test` and focused shared/events suites passed for the processor refactor work described above.
 - Local tunnel proof: restarted the OS dev worker at
-  `https://os.iterate-dev-jonas.com` with the agents dev Slack bot token
-  preserved into the OS env. The focused e2e
+  `https://os.iterate-dev-jonas.com` with the Slack bot token preserved into the
+  OS env. The focused e2e
   `routes Slack webhooks into slack-agent streams and executes bang command
 replies` passed against that tunnel. It posts a real root Slack message,
   appends a representative bang-command webhook to `/integrations/slack`, then

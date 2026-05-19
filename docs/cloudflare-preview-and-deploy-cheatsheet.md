@@ -2,7 +2,7 @@
 
 ## Cheat sheet
 
-- In scope apps: `agents`, `example`, `events`, `os`, `semaphore`
+- In scope apps: `example`, `events`, `os`, `semaphore`
 - PR previews are owned by one workflow: `Cloudflare Previews`
 - Production deploys are owned by generated per-app workflows in `.github/workflows/deploy-*.yml`
 - Preview state lives in the managed PR body section, not in PR comments

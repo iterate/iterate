@@ -4,7 +4,7 @@
  *
  * This is the concrete runtime behavior behind the shared app config in
  * `packages/shared/src/apps/config.ts`, and is installed at the worker boundary
- * in files like `apps/agents/src/entry.workerd.ts`.
+ * in files like Cloudflare app Worker entrypoints.
  *
  * We intentionally forward requests using conventional `Forwarded` and
  * `X-Forwarded-*` headers, plus the same path/query rewrite contract that

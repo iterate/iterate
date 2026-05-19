@@ -4,8 +4,8 @@
 
 ## Current New-Style Cloudflare Apps
 
-For `agents`, `example`, `os`, and `semaphore`, stage is selected by choosing
-a Doppler config. Do not pass `--stage` to these
+For `example`, `os`, and `semaphore`, stage is selected by choosing a Doppler
+config. Do not pass `--stage` to these
 deploys. `_shared` sets `ALCHEMY_STAGE=${DOPPLER_CONFIG}`, so `prd`,
 `preview_2`, and `dev_jonas_2` are just different bags of environment config
 for the same `alchemy.run.ts` primitive.

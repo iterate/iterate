@@ -401,9 +401,8 @@ Rules:
 - The new Codemode Session UI should make the authoring layer explicit: show the
   selected Example Stack/providers/scripts, and also show the concrete Event
   Inputs that selection compiles down to or has added to the session.
-- This should be similar in spirit to the agent preset UX in `apps/agents`, where
-  users can understand both the friendly preset and the underlying generated
-  material.
+- This should let users understand both the friendly preset and the underlying
+  generated material.
 - The new Codemode Session UI is a picker. User actions such as selecting an
   Example Stack, adding providers, or choosing stack events copy/append concrete
   Event Inputs into a visible raw selected-event list.
