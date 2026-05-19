@@ -20,6 +20,7 @@ export default defineConfig({
   root: resolve(repoRoot, "packages/shared"),
   resolve: {
     alias: {
+      "captun/server": resolve(appRoot, "node_modules/captun/dist/server.js"),
       "~": resolve(appRoot, "src"),
     },
   },

@@ -20,8 +20,9 @@ servers, temporary workers, or mocked upstream services.
 ## Lanes
 
 - Mocked internet tests run through `pnpm test:e2e:mocked-internet`. They require `OS_BASE_URL`
-  or `APP_CONFIG_BASE_URL`, an admin bearer token, and `SEMAPHORE_API_TOKEN` so deployed OS can
-  reach the local mock proxy through a Cloudflare tunnel.
+  or `APP_CONFIG_BASE_URL` and an admin bearer token. The test opens a Project Egress Intercept
+  Tunnel through the project-owned route instead of exposing the local mock server through
+  Semaphore/Cloudflare Tunnel.
 - Live deployment tests run through `pnpm test:e2e` and require `OS_BASE_URL`.
 - MCP deployment smoke runs through `pnpm test:e2e:codemode-mcp`.
 - Admin project fixture smoke runs when `OS_BASE_URL` and one of `OS_E2E_ADMIN_API_SECRET`,
@@ -32,5 +33,5 @@ servers, temporary workers, or mocked upstream services.
 Prefer committed HAR fixtures under `e2e/vitest/__snapshots__/` for deterministic mocked-internet
 tests. Use per-test artifact paths for smoke tests that only prove the fixture wiring.
 
-OS does not currently install a global app-level egress proxy. Mocked-internet tests that need real
-OS traffic should configure a project-level `externalEgressProxyUrl`.
+OS does not install a global app-level egress proxy. Mocked-internet tests that need real OS traffic
+should use `useProjectEgressInterceptTunnel` from `test-support/project-egress-intercept-tunnel.ts`.

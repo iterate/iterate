@@ -1,7 +1,7 @@
 import { createD1Client } from "sqlfu";
 import { z } from "zod";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
-import { createExternalEgressProxyFetch } from "@iterate-com/shared/apps/fetch-egress-proxy";
+import { acceptCaptunTunnel, type CaptunServerTunnel } from "captun/server";
 import type { Callable, FetchCallable } from "@iterate-com/shared/callable/types.ts";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
@@ -190,6 +190,7 @@ const PROJECT_CONFIG_REFRESH_INTERVAL_MS = 10_000;
 const PROJECT_DYNAMIC_WORKER_MAIN_MODULE = "worker.js";
 const PROJECT_DYNAMIC_WORKER_COMPATIBILITY_DATE = "2026-04-27";
 const PROJECT_DYNAMIC_WORKER_COMPATIBILITY_FLAGS = ["nodejs_compat"];
+export const PROJECT_EGRESS_INTERCEPT_ROUTE = "/__iterate/intercept-project-egress";
 
 type ProjectConfigWorkspaceName = {
   projectId: string;
@@ -238,6 +239,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     commitOid: string;
     entrypoint: ProjectDynamicWorkerEntrypoint;
   } | null = null;
+  #projectEgressInterceptTunnel: CaptunServerTunnel | null = null;
   #projectConfigWorkerBuildPromise: Promise<ProjectDynamicWorkerEntrypoint> | null = null;
 
   constructor(ctx: DurableObjectState, env: ProjectEnv) {
@@ -412,6 +414,11 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
   async ingressFetch(request: Request): Promise<Response> {
     await this.ensureStarted();
     const summary = this.requireSummary();
+    const url = new URL(request.url);
+    if (url.pathname === PROJECT_EGRESS_INTERCEPT_ROUTE) {
+      return this.acceptProjectEgressInterceptTunnel(request);
+    }
+
     const host = normalizeIngressHost(ingressHostnameFromRequest(request));
     const route = this.lookupLocalRoute(host);
 
@@ -461,7 +468,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
 
     await this.ensureStarted();
     const summary = this.requireSummary();
-    const externalEgressProxyUrl = await this.getExternalEgressProxyUrl(summary.id);
+    const egressInterceptTunnel = this.#projectEgressInterceptTunnel;
     const secrets = getSecretsCapability({
       exports: readLoopbackExports(this.ctx),
       props: { projectId: summary.id },
@@ -470,8 +477,8 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     let substitutedHeaders: Awaited<ReturnType<typeof substituteProjectEgressSecretHeaders>>;
     try {
       substitutedHeaders = await substituteProjectEgressSecretHeaders({
-        externalEgressProxyUrl,
         headers: request.headers,
+        projectEgressInterceptActive: egressInterceptTunnel !== null,
         secrets,
       });
     } catch (error) {
@@ -485,11 +492,8 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
       ? new Request(request, { headers: substitutedHeaders.headers })
       : request;
 
-    if (externalEgressProxyUrl) {
-      return await createExternalEgressProxyFetch({
-        fetch,
-        externalEgressProxyUrl,
-      })(outboundRequest);
+    if (egressInterceptTunnel) {
+      return await egressInterceptTunnel.fetch(outboundRequest);
     }
 
     return await fetch(outboundRequest);
@@ -497,6 +501,39 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
 
   async fetch(request: Request): Promise<Response> {
     return await this.egressFetch(request);
+  }
+
+  private acceptProjectEgressInterceptTunnel(request: Request): Response {
+    const expectedToken = this.getAppConfig().adminApiSecret?.exposeSecret();
+    if (!expectedToken) {
+      return Response.json(
+        { error: "Project Egress Intercept Tunnel is disabled." },
+        { status: 404 },
+      );
+    }
+
+    if (readBearerToken(request.headers.get("authorization")) !== expectedToken) {
+      return Response.json({ error: "Unauthorized." }, { status: 401 });
+    }
+
+    const { response, tunnel } = acceptCaptunTunnel({
+      onDisconnect: () => {
+        if (this.#projectEgressInterceptTunnel === tunnel) {
+          this.#projectEgressInterceptTunnel = null;
+        }
+      },
+    });
+
+    this.replaceProjectEgressInterceptTunnel(tunnel);
+    return response;
+  }
+
+  protected replaceProjectEgressInterceptTunnel(tunnel: CaptunServerTunnel) {
+    if (this.#projectEgressInterceptTunnel) {
+      console.warn("Replacing active Project Egress Intercept Tunnel.");
+      this.#projectEgressInterceptTunnel[Symbol.dispose]();
+    }
+    this.#projectEgressInterceptTunnel = tunnel;
   }
 
   private async getIngressProjectDynamicWorkerEntrypoint(
@@ -621,15 +658,6 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     await this.ctx.storage.delete(PROJECT_CONFIG_READY_STORAGE_KEY);
     await this.ctx.storage.delete(PROJECT_CONFIG_CHECKOUT_STORAGE_KEY);
     await this.ctx.storage.delete(PROJECT_CONFIG_REFRESHED_AT_STORAGE_KEY);
-  }
-
-  private async getExternalEgressProxyUrl(projectId: string) {
-    const row = await this.env.DB.prepare(
-      `SELECT external_egress_proxy_url FROM projects WHERE id = ? LIMIT 1`,
-    )
-      .bind(projectId)
-      .first<{ external_egress_proxy_url: string | null }>();
-    return row?.external_egress_proxy_url ?? null;
   }
 
   private async projectConfigCheckoutIsFresh() {
@@ -1366,6 +1394,14 @@ function projectLandingResponse(input: { request: Request; summary: ProjectSumma
 function isHttpRequestUrl(urlString: string) {
   const url = new URL(urlString);
   return url.protocol === "http:" || url.protocol === "https:";
+}
+
+function readBearerToken(headerValue: string | null): string | null {
+  if (!headerValue) return null;
+  const match = /^bearer\s+(.+)$/i.exec(headerValue);
+  if (!match) return null;
+  const token = match[1]?.trim() ?? "";
+  return token.length > 0 ? token : null;
 }
 
 function projectWorkerBuildingResponse() {

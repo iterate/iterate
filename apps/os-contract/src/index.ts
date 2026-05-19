@@ -24,7 +24,6 @@ export const Project = z.object({
   id: z.string(),
   slug: z.string(),
   customHostname: z.string().nullable(),
-  externalEgressProxyUrl: z.string().url().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -355,7 +354,6 @@ export const osContract = oc.router({
         z.object({
           id: z.string(),
           customHostname: z.string().trim().nullable().optional(),
-          externalEgressProxyUrl: z.string().trim().url().nullable().optional(),
         }),
       )
       .output(Project),

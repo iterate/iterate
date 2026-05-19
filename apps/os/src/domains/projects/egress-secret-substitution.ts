@@ -36,8 +36,8 @@ export class ProjectEgressSecretSubstitutionError extends Error {
 }
 
 export async function substituteProjectEgressSecretHeaders(input: {
-  externalEgressProxyUrl: string | null;
   headers: Headers;
+  projectEgressInterceptActive: boolean;
   secrets: ProjectEgressSecretResolver;
 }) {
   let substituted = false;
@@ -50,8 +50,8 @@ export async function substituteProjectEgressSecretHeaders(input: {
     let nextValue = value;
     for (const reference of references) {
       const replacement = await resolveSecretReference({
-        externalEgressProxyUrl: input.externalEgressProxyUrl,
         header,
+        projectEgressInterceptActive: input.projectEgressInterceptActive,
         reference,
         secrets: input.secrets,
       });
@@ -90,15 +90,15 @@ export function parseSecretReferences(input: { header: string; value: string }):
 }
 
 async function resolveSecretReference(input: {
-  externalEgressProxyUrl: string | null;
   header: string;
+  projectEgressInterceptActive: boolean;
   reference: SecretReference;
   secrets: ProjectEgressSecretResolver;
 }) {
-  if (input.externalEgressProxyUrl) {
+  if (input.projectEgressInterceptActive) {
     const secret = await input.secrets.getSecretSummaryByKeyOrNull({ key: input.reference.key });
     if (secret) {
-      return `Secret value withheld because this project uses externalEgressProxyUrl. Requested ${input.reference.source}`;
+      return `Secret value withheld because this Project Egress Intercept Tunnel is active. Requested ${input.reference.source}`;
     }
 
     return secretNotFound(input);

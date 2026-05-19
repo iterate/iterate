@@ -3,6 +3,7 @@ import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import tailwindcss from "@tailwindcss/vite";
 import viteReact from "@vitejs/plugin-react";
 import alchemy from "alchemy/cloudflare/tanstack-start";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 
 const host = process.env.HOST ?? "127.0.0.1";
@@ -18,6 +19,14 @@ export default defineConfig({
     sourcemap: true,
   },
   resolve: {
+    alias: {
+      "captun/client": fileURLToPath(
+        new URL("./node_modules/captun/dist/client.js", import.meta.url),
+      ),
+      "captun/server": fileURLToPath(
+        new URL("./node_modules/captun/dist/server.js", import.meta.url),
+      ),
+    },
     tsconfigPaths: true,
   },
   server: {

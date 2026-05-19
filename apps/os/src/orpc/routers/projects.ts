@@ -46,7 +46,6 @@ type ProjectRow = {
   id: string;
   slug: string;
   custom_hostname?: string | null;
-  external_egress_proxy_url?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -60,7 +59,6 @@ function toProject(row: ProjectRow) {
     id: row.id,
     slug: row.slug,
     customHostname: row.custom_hostname ?? null,
-    externalEgressProxyUrl: row.external_egress_proxy_url ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -112,22 +110,6 @@ function normalizeConfigCustomHostname(
   }
 
   return customHostname;
-}
-
-function normalizeConfigExternalEgressProxyUrl(input: string | null | undefined) {
-  if (input === undefined) return undefined;
-  if (input === null) return null;
-
-  const externalEgressProxyUrl = input.trim();
-  if (externalEgressProxyUrl === "") return null;
-
-  try {
-    return new URL(externalEgressProxyUrl).toString();
-  } catch {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "External egress proxy URL must be a valid URL.",
-    });
-  }
 }
 
 function isUniqueConstraintError(error: unknown) {
@@ -240,20 +222,11 @@ export const projectsRouter = {
           normalizedCustomHostname === undefined
             ? (existing.custom_hostname ?? null)
             : normalizedCustomHostname;
-        const normalizedExternalEgressProxyUrl = normalizeConfigExternalEgressProxyUrl(
-          input.externalEgressProxyUrl,
-        );
-        const nextExternalEgressProxyUrl =
-          normalizedExternalEgressProxyUrl === undefined
-            ? (existing.external_egress_proxy_url ?? null)
-            : normalizedExternalEgressProxyUrl;
-
         try {
           await updateProjectConfig(
             context.db,
             {
               customHostname: nextCustomHostname,
-              externalEgressProxyUrl: nextExternalEgressProxyUrl,
             },
             { id: input.id },
           );
