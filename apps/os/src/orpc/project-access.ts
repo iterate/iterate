@@ -66,9 +66,9 @@ export async function requireProjectScopedAccess(input: {
 
   const activeOrganization = resolveActiveOrganizationAuth(input.context);
   if (!activeOrganization) {
-    if (input.context.auth?.isAuthenticated) {
+    if (input.context.principal?.type === "user") {
       throw new ORPCError("FORBIDDEN", {
-        message: "OS requires an active Clerk Organization.",
+        message: "OS requires an active Organization.",
       });
     }
     throw new ORPCError("UNAUTHORIZED");

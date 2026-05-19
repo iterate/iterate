@@ -3,6 +3,7 @@ import {
   type ActiveOrganizationAuth,
   normalizeActiveOrganizationAuth,
 } from "~/lib/active-organization-auth.ts";
+import { authenticateAdminApiSecret } from "~/auth/middleware.ts";
 
 const adminApiActiveOrganization: ActiveOrganizationAuth = {
   isAdminApi: true,
@@ -14,39 +15,25 @@ const adminApiActiveOrganization: ActiveOrganizationAuth = {
   userId: "user_admin_api",
 };
 
-function readBearerToken(headerValue: string | null): string | null {
-  if (!headerValue) return null;
-  const match = /^bearer\s+(.+)$/i.exec(headerValue);
-  if (!match) return null;
-  const token = match[1]?.trim() ?? "";
-  return token.length > 0 ? token : null;
-}
-
-function authenticateAdminApiSecret(context: AppContext): ActiveOrganizationAuth | null {
-  const expectedToken = context.config.adminApiSecret?.exposeSecret();
-  const providedToken = readBearerToken(context.rawRequest?.headers.get("authorization") ?? null);
-
-  if (!expectedToken || !providedToken || providedToken !== expectedToken) {
-    return null;
-  }
-
-  return adminApiActiveOrganization;
-}
-
 export function isAdminApiSecretRequest(context: Pick<AppContext, "config">, request: Request) {
-  const expectedToken = context.config.adminApiSecret?.exposeSecret();
-  const providedToken = readBearerToken(request.headers.get("authorization"));
-
-  return !!expectedToken && providedToken === expectedToken;
+  return authenticateAdminApiSecret(context, request)?.type === "admin";
 }
 
 export function resolveActiveOrganizationAuth(context: AppContext): ActiveOrganizationAuth | null {
-  if (context.auth?.isAuthenticated && context.auth.orgId && context.auth.orgSlug) {
-    return normalizeActiveOrganizationAuth(context.auth);
+  if (context.principal?.type === "user" && context.principal.organizations.length > 0) {
+    return normalizeActiveOrganizationAuth(context.principal);
   }
 
   // Preview and operator automation should exercise the same public oRPC
   // procedures as the UI. A valid admin bearer token therefore creates a small
   // synthetic active organization instead of introducing one-off seed routes.
-  return authenticateAdminApiSecret(context);
+  if (context.principal?.type === "admin") {
+    return adminApiActiveOrganization;
+  }
+
+  if (context.rawRequest && authenticateAdminApiSecret(context, context.rawRequest)) {
+    return adminApiActiveOrganization;
+  }
+
+  return null;
 }

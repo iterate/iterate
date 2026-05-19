@@ -1,8 +1,9 @@
 import type { Client } from "sqlfu";
 import type { SharedRequestLogger } from "@iterate-com/shared/request-logging";
-import type { auth } from "@clerk/tanstack-react-start/server";
+import type { AuthenticatedSession } from "@iterate-com/auth/server";
 import type { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
 import manifest, { type AppConfig } from "~/app.ts";
+import type { Principal } from "~/auth/principal.ts";
 import type { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
 import type { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
 import type { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
@@ -11,14 +12,13 @@ import type { RepoDurableObject } from "~/domains/repos/durable-objects/repo-dur
 import type { SlackAgentDurableObject } from "~/domains/slack/durable-objects/slack-agent-durable-object.ts";
 import type { SlackIntegrationDurableObject } from "~/domains/slack/durable-objects/slack-integration-durable-object.ts";
 
-export type ClerkAuth = Awaited<ReturnType<typeof auth>>;
-
 export interface AppContext {
   manifest: typeof manifest;
   config: AppConfig;
   db: Client;
   doCatalog?: D1Database;
-  auth?: ClerkAuth;
+  principal?: Principal | null;
+  iterateAuthSession?: AuthenticatedSession | null;
   log: SharedRequestLogger;
   projectHostnameBases: string[];
   waitUntil?: (promise: Promise<unknown>) => void;

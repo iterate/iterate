@@ -1,5 +1,5 @@
 import { getInitializedStreamStub } from "@iterate-com/shared/streams/helpers";
-import type { ClerkAuth } from "~/context.ts";
+import type { Principal } from "~/auth/principal.ts";
 import type { AppContext } from "~/context.ts";
 import {
   appendIntegrationEvent,
@@ -24,7 +24,7 @@ import {
 } from "~/domains/secrets/oauth.ts";
 
 export async function handleIntegrationApiRequest(input: {
-  auth: ClerkAuth;
+  auth: Principal | null | undefined;
   context: AppContext;
   request: Request;
 }): Promise<Response | null> {
@@ -45,7 +45,7 @@ export async function handleIntegrationApiRequest(input: {
 }
 
 async function handleSlackCallback(input: {
-  auth: ClerkAuth;
+  auth: Principal | null | undefined;
   context: AppContext;
   request: Request;
 }) {
@@ -147,7 +147,7 @@ async function handleSlackCallback(input: {
 }
 
 async function handleGoogleCallback(input: {
-  auth: ClerkAuth;
+  auth: Principal | null | undefined;
   context: AppContext;
   request: Request;
 }) {
@@ -351,8 +351,8 @@ function redirectWithError(callbackUrl: string | null, error: string) {
   return Response.redirect(url.toString(), 302);
 }
 
-function requireCallbackUser(auth: ClerkAuth, expectedUserId: string) {
-  if (!auth.isAuthenticated || auth.userId !== expectedUserId) {
+function requireCallbackUser(auth: Principal | null | undefined, expectedUserId: string) {
+  if (auth?.type !== "user" || auth.userId !== expectedUserId) {
     return new Response("OAuth callback user mismatch.", { status: 403 });
   }
   return null;

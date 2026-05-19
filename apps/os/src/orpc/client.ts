@@ -5,7 +5,6 @@ import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { createTanstackQueryUtils } from "@orpc/tanstack-query";
 import { createRouterClient, type RouterClient } from "@orpc/server";
 import { createIsomorphicFn, getGlobalStartContext } from "@tanstack/react-start";
-import { auth } from "@clerk/tanstack-react-start/server";
 import { osContract } from "@iterate-com/os-contract";
 import { appRouter } from "~/orpc/root.ts";
 
@@ -65,7 +64,6 @@ const makeOrpcClient = createIsomorphicFn()
 
           return {
             ...context,
-            auth: await auth(),
           };
         },
       }),

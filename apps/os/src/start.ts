@@ -1,6 +1,6 @@
-import { clerkMiddleware } from "@clerk/tanstack-react-start/server";
 import { isRedirect } from "@tanstack/react-router";
 import { createMiddleware, createStart } from "@tanstack/react-start";
+import { iterateAuthMiddleware } from "~/auth/middleware.ts";
 
 const convertRedirectErrorToExceptionMiddleware = createMiddleware({ type: "function" }).server(
   async ({ next }) => {
@@ -16,12 +16,6 @@ const convertRedirectErrorToExceptionMiddleware = createMiddleware({ type: "func
 );
 
 export const startInstance = createStart(() => ({
-  requestMiddleware: [
-    clerkMiddleware({
-      organizationSyncOptions: {
-        organizationPatterns: ["/orgs/:slug", "/orgs/:slug/(.*)"],
-      },
-    }),
-  ],
+  requestMiddleware: [iterateAuthMiddleware],
   functionMiddleware: [convertRedirectErrorToExceptionMiddleware],
 }));

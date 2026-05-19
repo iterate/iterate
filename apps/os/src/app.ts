@@ -47,6 +47,14 @@ export const DEFAULT_GOOGLE_OAUTH_SCOPES = [
 export const AppConfig = BaseAppConfig.extend({
   baseUrl: publicValue(z.url()).optional(),
   adminApiSecret: redacted(z.string().trim().min(1)).optional(),
+  iterateAuth: z
+    .object({
+      issuer: publicValue(z.url().default("https://auth.iterate.com/api/auth")),
+      clientId: publicValue(z.string().trim().min(1)),
+      clientSecret: redacted(z.string().trim().min(1)),
+      resource: publicValue(z.url()).optional(),
+    })
+    .optional(),
   clerk: z.object({
     publishableKey: publicValue(z.string().trim().min(1)),
     secretKey: redacted(z.string().trim().min(1)),

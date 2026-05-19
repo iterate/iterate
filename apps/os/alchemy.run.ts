@@ -17,7 +17,17 @@ import type { SlackIntegrationDurableObject } from "./src/domains/slack/durable-
 import type { WorkspaceDurableObject } from "./src/domains/workspaces/durable-objects/workspace-durable-object.ts";
 import type { OutboundMcpFromOurClientCapability } from "./src/domains/outbound-mcp-client/entrypoints/outbound-mcp-from-our-client-capability.ts";
 
-const ctx = await initAlchemy(manifest, AppConfig, process.env);
+const env = {
+  ...process.env,
+  APP_CONFIG_ITERATE_AUTH__ISSUER:
+    process.env.APP_CONFIG_ITERATE_AUTH__ISSUER ?? process.env.ITERATE_OAUTH_ISSUER,
+  APP_CONFIG_ITERATE_AUTH__CLIENT_ID:
+    process.env.APP_CONFIG_ITERATE_AUTH__CLIENT_ID ?? process.env.ITERATE_OAUTH_CLIENT_ID,
+  APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET:
+    process.env.APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET ?? process.env.ITERATE_OAUTH_CLIENT_SECRET,
+};
+
+const ctx = await initAlchemy(manifest, AppConfig, env);
 const slackBotToken = ctx.runtimeConfig.slackBotToken?.exposeSecret();
 
 const db = await D1Database("os-db", {

@@ -48,6 +48,7 @@
     "@clerk/tanstack-react-start": "^1.1.7",
     "@cloudflare/shell": "^0.3.4",
     "@cloudflare/worker-bundler": "^0.1.3",
+    "@iterate-com/auth": "workspace:*",
     "@iterate-com/os-contract": "workspace:*",
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",

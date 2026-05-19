@@ -1,36 +1,22 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { auth } from "@clerk/tanstack-react-start/server";
 import { handleIntegrationApiRequest } from "~/domains/secrets/integration-api.ts";
-import { isAdminApiSecretRequest } from "~/orpc/auth.ts";
 import { orpcOpenApiHandler } from "~/orpc/handler.ts";
 
 export const Route = createFileRoute("/api/$")({
   server: {
     handlers: {
       ANY: async ({ context, request }) => {
-        const adminApiRequest = isAdminApiSecretRequest(context, request);
-        const clerkAuth = adminApiRequest ? undefined : await auth();
-
-        if (clerkAuth) {
-          const integrationResponse = await handleIntegrationApiRequest({
-            auth: clerkAuth,
-            context: {
-              ...context,
-              auth: clerkAuth,
-              rawRequest: request,
-            },
-            request,
-          });
-          if (integrationResponse) return integrationResponse;
-        }
+        const requestContext = { ...context, rawRequest: request };
+        const integrationResponse = await handleIntegrationApiRequest({
+          auth: context.principal,
+          context: requestContext,
+          request,
+        });
+        if (integrationResponse) return integrationResponse;
 
         const { matched, response } = await orpcOpenApiHandler.handle(request, {
           prefix: "/api",
-          context: {
-            ...context,
-            auth: clerkAuth,
-            rawRequest: request,
-          },
+          context: requestContext,
         });
 
         if (matched) return response;

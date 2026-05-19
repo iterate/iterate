@@ -460,3 +460,15 @@ Phase F is last.
   directory for `auth-dev-auth-db`, so the generated query binding was updated
   manually to keep typecheck moving. Re-run sqlfu generation after initializing
   the local auth D1 store.
+- Added auth-library support for OS resource audiences and bearer access-token
+  verification. OS web login now asks the auth worker for an OS-audience token
+  instead of an auth-worker-audience token, while bearer verification accepts the
+  dashboard resource and the future `/mcp` resource.
+- Replaced OS's Clerk request middleware with an Iterate-auth middleware that
+  resolves a request-local Principal from, in order: admin API bearer secret,
+  auth-worker session cookie, then auth-worker OAuth bearer token. The admin API
+  path remains a first-class Principal instead of a separate oRPC special case.
+- Kept `APP_CONFIG_ITERATE_AUTH__*` as the runtime config shape, but mapped
+  Doppler's planned `ITERATE_OAUTH_*` variables into that shape in
+  `apps/os/alchemy.run.ts` so existing sync scripts can store OAuth client
+  credentials under the simpler environment names.

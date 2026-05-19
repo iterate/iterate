@@ -1,4 +1,5 @@
 import { ORPCError } from "@orpc/server";
+import type { AppContext } from "~/context.ts";
 import { activeOrganizationMiddleware, os } from "~/orpc/orpc.ts";
 
 export const testRouter = {
@@ -154,16 +155,14 @@ export const testRouter = {
  * with `never`, so this debug-only route performs the same active-organization
  * gate inline while keeping the public contract precise.
  */
-function requireActiveOrganizationForNeverEndpoint(context: {
-  auth?: { isAuthenticated: boolean; orgId?: string | null; orgSlug?: string | null };
-}) {
-  if (!context.auth?.isAuthenticated) {
+function requireActiveOrganizationForNeverEndpoint(context: AppContext) {
+  if (context.principal?.type !== "user") {
     throw new ORPCError("UNAUTHORIZED");
   }
 
-  if (!context.auth.orgId || !context.auth.orgSlug) {
+  if (context.principal.organizations.length === 0) {
     throw new ORPCError("FORBIDDEN", {
-      message: "OS requires an active Clerk Organization.",
+      message: "OS requires an active Organization.",
     });
   }
 }

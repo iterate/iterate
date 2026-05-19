@@ -1,8 +1,8 @@
 import { redirect } from "@tanstack/react-router";
 import { createServerFn, getGlobalStartContext } from "@tanstack/react-start";
 import { getRequestUrl } from "@tanstack/react-start/server";
-import { auth } from "@clerk/tanstack-react-start/server";
 import { z } from "zod";
+import type { UserPrincipal } from "~/auth/principal.ts";
 import { normalizeActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
 import {
   normalizeRequestHostname,
@@ -20,96 +20,100 @@ const RouteAuthInput = z
 
 export const requireActiveOrganizationForRoute = createServerFn({ method: "GET" }).handler(
   async () => {
-    const session = await auth();
+    const principal = requireUserPrincipal();
 
-    if (!session.isAuthenticated) {
-      throw redirectToSignIn();
-    }
-
-    if (!session.orgId || !session.orgSlug) {
+    if (principal.organizations.length === 0) {
       throw redirect({ to: "/organization" });
     }
 
-    return normalizeActiveOrganizationAuth(session);
+    return normalizeActiveOrganizationAuth(principal);
   },
 );
 
 export const requireActiveOrganizationForOrgRoute = createServerFn({ method: "GET" })
   .inputValidator(RouteAuthInput)
   .handler(async ({ data }) => {
-    const session = await auth();
+    const principal = requireUserPrincipal();
+    const organization = data?.organizationSlug
+      ? principal.organizations.find((org) => org.slug === data.organizationSlug)
+      : principal.organizations[0];
 
-    if (!session.isAuthenticated) {
-      throw redirectToSignIn();
-    }
-
-    if (!session.orgId || !session.orgSlug) {
+    if (!organization) {
       throw redirect({ to: "/organization" });
     }
 
-    if (data?.organizationSlug && session.orgSlug !== data.organizationSlug) {
-      throw redirect({ to: "/organization" });
-    }
-
-    return normalizeActiveOrganizationAuth(session);
+    return normalizeActiveOrganizationAuth({
+      ...principal,
+      organizations: [
+        organization,
+        ...principal.organizations.filter((org) => org !== organization),
+      ],
+    });
   });
 
 export const requireSignedInForOrganizationRoute = createServerFn({ method: "GET" }).handler(
   async () => {
-    const session = await auth();
+    const principal = requireUserPrincipal();
+    const organization = principal.organizations[0];
 
-    if (!session.isAuthenticated) {
-      throw redirectToSignIn();
-    }
-
-    if (session.orgId && session.orgSlug) {
+    if (organization) {
       throw redirect({
         to: "/orgs/$organizationSlug",
-        params: { organizationSlug: session.orgSlug },
+        params: { organizationSlug: organization.slug },
       });
     }
 
-    return { userId: session.userId, sessionId: session.sessionId };
+    return { userId: principal.userId, sessionId: principal.sessionId ?? principal.userId };
   },
 );
 
 export const redirectAuthenticatedUserFromAuthRoute = createServerFn({ method: "GET" }).handler(
   async () => {
-    const session = await auth();
-
-    if (!session.isAuthenticated) {
+    const principal = getUserPrincipal();
+    if (!principal) {
       return null;
     }
 
-    if (!session.orgId || !session.orgSlug) {
+    const organization = principal.organizations[0];
+    if (!organization) {
       throw redirect({ to: "/organization" });
     }
 
     throw redirect({
       to: "/orgs/$organizationSlug",
-      params: { organizationSlug: session.orgSlug },
+      params: { organizationSlug: organization.slug },
     });
   },
 );
 
 export const requireAuthenticatedRootRedirectTarget = createServerFn({ method: "GET" }).handler(
   async () => {
-    const session = await auth();
+    const principal = requireUserPrincipal();
+    const organization = principal.organizations[0];
 
-    if (!session.isAuthenticated) {
-      throw redirectToSignIn();
-    }
-
-    if (!session.orgId || !session.orgSlug) {
+    if (!organization) {
       throw redirect({ to: "/organization" });
     }
 
     return {
-      orgSlug: session.orgSlug,
+      orgSlug: organization.slug,
       projectSlug: resolveCurrentProjectHostSlug(),
     };
   },
 );
+
+function getUserPrincipal(): UserPrincipal | null {
+  const principal = getGlobalStartContext()?.principal;
+  return principal?.type === "user" ? principal : null;
+}
+
+function requireUserPrincipal(): UserPrincipal {
+  const principal = getUserPrincipal();
+  if (!principal) {
+    throw redirectToSignIn();
+  }
+  return principal;
+}
 
 function redirectToSignIn(): never {
   const request = getRequestUrl();

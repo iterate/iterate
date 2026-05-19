@@ -16,9 +16,9 @@ export const activeOrganizationMiddleware = os.middleware(async ({ context, next
     });
   }
 
-  if (context.auth?.isAuthenticated) {
+  if (context.principal?.type === "user") {
     throw new ORPCError("FORBIDDEN", {
-      message: "OS requires an active Clerk Organization.",
+      message: "OS requires an active Organization.",
     });
   }
 
