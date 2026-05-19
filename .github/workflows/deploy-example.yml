@@ -16,6 +16,8 @@ on:
       - apps/example-contract/**
       - packages/shared/src/alchemy/**
       - packages/shared/src/apps/**
+      - packages/ui/**
+      - packages/mock-http-proxy/**
   workflow_dispatch:
     inputs:
       ref:

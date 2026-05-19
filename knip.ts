@@ -67,7 +67,7 @@ function makeDualRuntimeAppWorkspace(workerEnvShim: string): WorkspaceConfig {
   };
 }
 
-function makeAgentsTanStackAppWorkspace(workerEnvShim: string): WorkspaceConfig {
+function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
   const base = makeCloudflareTanStackAppWorkspace(workerEnvShim);
   return {
     ...base,
@@ -75,7 +75,24 @@ function makeAgentsTanStackAppWorkspace(workerEnvShim: string): WorkspaceConfig 
       ...(base.entry ?? []),
       "e2e/vitest.config.ts",
       "e2e/tui-test/tui-test.config.ts",
+      "e2e/tui-test/run.ts",
+      "scripts/claude-mcp.ts",
       "scripts/event-stream-terminal.tsx",
+      "scripts/sync-clerk-apps.ts",
+      "sqlfu.config.ts",
+      "src/durable-objects/codemode-session.vitest.config.ts",
+      "src/durable-objects/codemode-session-test-entry.ts",
+      "src/durable-objects/iterate-mcp-server.vitest.config.ts",
+      "src/durable-objects/iterate-mcp-server-test-entry.ts",
+      "src/durable-objects/project-ingress.vitest.config.ts",
+      "src/durable-objects/project-ingress-test-entry.ts",
+    ],
+    ignoreDependencies: [
+      ...(base.ignoreDependencies ?? []),
+      "@opentui/core",
+      "@opentui/react",
+      "iterate",
+      "miniflare",
     ],
   };
 }
@@ -139,6 +156,7 @@ function makeSharedWorkspace(): WorkspaceConfig {
       "src/apps/cli-entry.ts",
       "src/durable-object-utils/e2e/alchemy.run.ts",
       "src/streams/sqlfu.config.ts",
+      "src/**/*.test.ts",
     ],
     project: ["src/**/*.ts"],
     ignoreDependencies: ["alchemy", "cloudflare", "wrangler"],
@@ -151,15 +169,15 @@ const config: KnipConfig = {
   treatConfigHintsAsErrors: true,
   // Keep this root command intentionally scoped. When Knip includes dependent
   // workspaces for a selected package, we still do not want it wandering into
-  // unrelated apps with heavyweight config loading like `apps/os`.
+  // unrelated apps with heavyweight config loading.
   ignoreWorkspaces: [
     "apps/*",
-    "!apps/agents",
-    "!apps/agents-contract",
     "!apps/example",
     "!apps/example-contract",
     "!apps/events",
     "!apps/events-contract",
+    "!apps/os",
+    "!apps/os-contract",
     "!apps/semaphore",
     "!apps/semaphore-contract",
     "packages/*",
@@ -168,29 +186,24 @@ const config: KnipConfig = {
   ignoreIssues: {
     // TanStack Start resolves these router factories by convention from the
     // entrypoint, so there is no direct import Knip can follow.
-    "apps/agents/src/router.tsx": ["exports"],
     "apps/example/src/router.tsx": ["exports"],
+    "apps/os/src/router.tsx": ["exports"],
+    "apps/os-contract/src/index.ts": ["exports", "types"],
+    "apps/os/src/db/migrations/.generated/migrations.ts": ["files", "exports", "types"],
+    "apps/os/src/db/queries/.generated/index.ts": ["files", "exports", "types"],
+    "apps/os/src/db/queries/.generated/tables.ts": ["files", "types"],
+    "apps/os/src/durable-objects/mock-artifacts-binding.ts": ["exports"],
+    "apps/os/src/durable-objects/test-stream-durable-object.ts": ["files", "exports"],
+    "apps/os/src/domains/codemode/examples.ts": ["exports"],
+    "apps/os/src/stream-tui/react-stream-renderers.tsx": ["exports"],
+    "apps/os/src/stream-tui/react-stream-view-model.ts": ["exports"],
+    "apps/os/e2e/test-support/app-config-env.ts": ["files", "exports"],
+    "apps/os/e2e/test-support/create-local-dev-server.ts": ["files", "exports"],
+    "apps/os/src/**": ["exports", "types"],
+    "apps/os/e2e/test-support/**": ["exports", "types"],
     "apps/semaphore-contract/src/client.ts": ["types"],
     "apps/semaphore/src/router.tsx": ["exports"],
     "apps/semaphore/scripts/seed-cloudflare-tunnel-pool.ts": ["exports"],
-    "apps/agents/src/lib/events-orpc-client.ts": ["exports", "types"],
-    "apps/agents/src/lib/mcp-tool-providers.ts": ["types"],
-    "apps/agents/src/lib/openapi-tool-provider.ts": ["types"],
-    "apps/agents/src/lib/llm-normalization.ts": ["exports"],
-    "apps/agents/src/durable-objects/agent-chat-stream-processor-runner.ts": ["types"],
-    "apps/agents/src/durable-objects/agent-stream-processor-runner.ts": ["types"],
-    "apps/agents/src/durable-objects/cloudflare-ai-stream-processor-runner.ts": ["types"],
-    "apps/agents/src/durable-objects/codemode-stream-processor-runner.ts": ["types"],
-    "apps/agents/src/durable-objects/openai-ws-stream-processor-runner.ts": ["types"],
-    "apps/agents/src/entrypoints/stream-api.ts": ["types"],
-    "apps/agents/src/stream-processors/codemode/cloudflare-code-executor.ts": ["types"],
-    "apps/agents/src/stream-processors/pull-runner.ts": ["types"],
-    "apps/agents/src/stream-tui/command-invocation.ts": ["types"],
-    "apps/agents/src/stream-tui/command-router.ts": ["types"],
-    "apps/agents/src/stream-tui/feed-formatting.ts": ["exports"],
-    "apps/agents/src/stream-tui/navigation-state.ts": ["types"],
-    "apps/agents/src/stream-tui/pilotty-command.ts": ["types"],
-    "apps/agents/src/stream-tui/stream-tree.ts": ["types"],
     // Generated SQLFU bundles/configs are loaded by scripts/runtime conventions.
     "apps/events/src/db/migrations/.generated/migrations.ts": ["files", "exports", "types"],
     "apps/events/src/db/queries/.generated/index.ts": ["files", "exports", "types"],
@@ -214,8 +227,6 @@ const config: KnipConfig = {
     "packages/shared/src/durable-object-utils/mixins/fetch-mixin-utils.ts": ["types"],
   },
   workspaces: {
-    "apps/agents": makeAgentsTanStackAppWorkspace("./src/lib/worker-env.d.ts"),
-    "apps/agents-contract": makePrivateContractWorkspace(),
     "apps/example": makeDualRuntimeAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/example-contract": makePrivateContractWorkspace(),
     "apps/events": {
@@ -233,6 +244,8 @@ const config: KnipConfig = {
     "apps/events-contract": makePrivateContractWorkspace(),
     "apps/semaphore": makeCloudflareTanStackAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/semaphore-contract": makePrivateContractWorkspace(),
+    "apps/os": makeOsCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
+    "apps/os-contract": makePrivateContractWorkspace(),
     "packages/shared": makeSharedWorkspace(),
   },
 };

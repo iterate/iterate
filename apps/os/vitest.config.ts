@@ -1,15 +1,22 @@
-import { defineConfig } from "vitest/config";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { defaultExclude, defineConfig } from "vitest/config";
+
+const appRoot = fileURLToPath(new URL(".", import.meta.url));
 
 export default defineConfig({
-  test: {
-    globals: true,
-    environment: "node",
-    include: ["**/*.test.ts", "**/*.test.tsx"],
-    exclude: ["**/node_modules/**", "**/*.integration.test.ts"],
-    testTimeout: 120_000,
-    passWithNoTests: true,
-    provide: {
-      vitestBatchId: `batch-${Date.now()}`,
+  resolve: {
+    // Vitest does not apply tsconfig `paths` for `~/` reliably; mirror `~/*` -> `./src/*`.
+    alias: {
+      "~": resolve(appRoot, "src"),
     },
+  },
+  test: {
+    // Route `/api2/test` is implemented as `api2.test.ts` — not a Vitest file.
+    exclude: [...defaultExclude, "e2e/**", "**/src/routes/**/*.test.ts", "**/*.workerd.test.ts"],
+    fileParallelism: false,
+    pool: "forks",
+    hookTimeout: 60_000,
+    testTimeout: 45_000,
   },
 });

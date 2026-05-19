@@ -37,7 +37,8 @@
     "test-results/**",
     "**/evalite-export/**",
     ".tmp-ci-build*",
-    "**/*ignoreme*"
+    "**/*ignoreme*",
+    "packages/iterate/**"
   ],
   "jsPlugins": [
     "./eslint.config.js",
@@ -117,6 +118,16 @@
     "iterate/no-implied-eval": "error",
     "prefer-const": "off",
     "iterate/prefer-const": "error",
+    "unicorn-js/isolated-functions": [
+      "error",
+      {
+        "selectors": ["CallExpression[callee.property.name=/CodemodeScript/] :function"],
+        "overrideGlobals": {
+          "fetch": "readonly",
+          "console": "readonly"
+        }
+      }
+    ],
     "unicorn-js/template-indent": "warn"
   },
   "overrides": [
@@ -192,23 +203,6 @@
       }
     },
     {
-      "files": ["spec/**/*"],
-      "rules": {
-        "react-hooks/rules-of-hooks": "off",
-        "no-console": "off",
-        "no-restricted-imports": [
-          "error",
-          {
-            "name": "@playwright/test",
-            "importNames": ["test"],
-            "message": "Use import { test } from './test-helpers.ts' instead. It has some opinionated conventions like adding a spinner waiter to the waitFor/click etc.."
-          }
-        ],
-        "iterate/spec-restricted-syntax": "error"
-      },
-      "plugins": ["react"]
-    },
-    {
       "files": ["**/routes/**", "**/app/root.tsx"],
       "rules": {
         "react/only-export-components": "off"
@@ -223,30 +217,6 @@
       "plugins": ["react"]
     },
     {
-      "files": ["apps/os/app/**/*.ts", "apps/os/app/**/*.tsx"],
-      "plugins": ["typescript", "import", "react", "jsx-a11y"],
-      "rules": {
-        "jsx-a11y/no-autofocus": "off",
-        "jsx-a11y/label-has-associated-control": "off",
-        "jsx-a11y/click-events-have-key-events": "off"
-      }
-    },
-    {
-      "files": ["apps/daemon/client/**/*.ts", "apps/daemon/client/**/*.tsx"],
-      "plugins": ["typescript", "import", "react", "jsx-a11y"],
-      "rules": {
-        "jsx-a11y/no-autofocus": "off",
-        "jsx-a11y/no-static-element-interactions": "off",
-        "jsx-a11y/click-events-have-key-events": "off"
-      }
-    },
-    {
-      "files": ["apps/os/**/*.ts", "apps/os/**/*.tsx"],
-      "rules": {
-        "iterate/no-direct-waituntil-import": "error"
-      }
-    },
-    {
       "files": ["apps/*/backend/**/*.ts"],
       "rules": {
         "no-console": "error"
@@ -256,8 +226,7 @@
       "files": [
         "apps/*/backend/**/*test*/**",
         "apps/*/backend/**/*.test.ts",
-        "apps/*/backend/**/*.test.tsx",
-        "apps/*/backend/**/spec/**/*"
+        "apps/*/backend/**/*.test.tsx"
       ],
       "rules": {
         "no-console": "off"

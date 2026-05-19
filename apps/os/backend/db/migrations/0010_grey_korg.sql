@@ -1,1 +1,0 @@
-ALTER TABLE "secret" ADD COLUMN "description" text;

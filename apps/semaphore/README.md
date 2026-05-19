@@ -38,7 +38,7 @@ pnpm test:e2e     # requires `SEMAPHORE_BASE_URL`
 Semaphore owns the environment config lease inventory used by PR previews. The preview router usually runs through the `os` production Doppler config:
 
 ```bash
-doppler run --project os --config prd -- pnpm preview status
+doppler run --project _shared --config prd -- pnpm preview status
 ```
 
 The router reads `SEMAPHORE_API_TOKEN` first and falls back to `APP_CONFIG_SHARED_API_SECRET`. To seed or repair the preview inventory from this package, run:

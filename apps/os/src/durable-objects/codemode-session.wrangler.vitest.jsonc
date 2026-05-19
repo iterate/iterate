@@ -1,0 +1,74 @@
+{
+  "name": "os-codemode-session-vitest",
+  "main": "codemode-session-test-entry.ts",
+  "compatibility_date": "2026-04-27",
+  "compatibility_flags": ["nodejs_compat", "experimental"],
+  "vars": {
+    "APP_CONFIG": "{\"adminApiSecret\":\"codemode-session-admin-secret\",\"clerk\":{\"publishableKey\":\"pk_test_ZHVtbXkuY2xlcmsuYWNjb3VudHMuZGV2JA\",\"secretKey\":\"sk_test_codemode_session\",\"jwtKey\":\"codemode-session-jwt-key\"},\"openAiApiKey\":\"openai-test-key\",\"projectHostnameBases\":[\"iterate.localhost\"],\"typeIdPrefix\":\"os\"}",
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "CODEMODE_SESSION",
+        "class_name": "CodemodeSession",
+      },
+      {
+        "name": "STREAM",
+        "class_name": "StreamDurableObject",
+      },
+      {
+        "name": "REPO",
+        "class_name": "RepoDurableObject",
+      },
+      {
+        "name": "WORKSPACE",
+        "class_name": "WorkspaceDurableObject",
+      },
+      {
+        "name": "AGENT",
+        "class_name": "AgentDurableObject",
+      },
+      {
+        "name": "PROJECT",
+        "class_name": "ProjectDurableObject",
+      },
+    ],
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_id": "os-codemode-session-db-vitest",
+      "database_name": "os-codemode-session-db-vitest",
+      "preview_database_id": "os-codemode-session-db-vitest",
+    },
+    {
+      "binding": "DO_CATALOG",
+      "database_id": "os-codemode-session-vitest",
+      "database_name": "os-codemode-session-vitest",
+      "preview_database_id": "os-codemode-session-vitest",
+    },
+  ],
+  "worker_loaders": [
+    {
+      "binding": "LOADER",
+    },
+  ],
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["CodemodeSession"],
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["StreamDurableObject"],
+    },
+    {
+      "tag": "v3",
+      "new_sqlite_classes": ["RepoDurableObject", "WorkspaceDurableObject", "AgentDurableObject"],
+    },
+    {
+      "tag": "v4",
+      "new_sqlite_classes": ["ProjectDurableObject"],
+    },
+  ],
+}

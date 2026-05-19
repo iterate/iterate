@@ -1,5 +1,8 @@
 {
   "mcpServers": {
+    "iterate": {
+      "url": "https://mcp__iterate.iterate.app/"
+    },
     "cloudflare-api": {
       "url": "https://mcp.cloudflare.com/mcp"
     },

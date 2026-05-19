@@ -3,7 +3,7 @@
 ## Exact Trace Lookup
 
 This query returned trace `250178b64271952ffb1ed1711133cf78` from
-`os2-preview-2` with 686 spans. It first asks for the trace summary, then asks for
+`os-preview-2` with 686 spans. It first asks for the trace summary, then asks for
 the underlying span events and counts them by span name.
 
 ```ts

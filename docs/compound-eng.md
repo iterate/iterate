@@ -24,7 +24,7 @@ To do their jobs, agents need information. The more the better.
 - Access to posthog (PostHog MCP)
 - Access to recent git commits & PRs
 - Optional, but recommended - being able to access vendor specific stuff like VictoriaMetrics on Fly
-- Optional, allow them to shell into sandboxes and run commands
+- Optional: allow them to run commands in preview/dev environments when credentials permit
 - Optional - access to some underlying roadmap or design direction - but this should be in git
 - Anything else (e.g. access to a gmail mailbox for support + slack threads)
 

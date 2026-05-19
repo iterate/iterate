@@ -27,33 +27,12 @@ export default {
     deployments: "write",
   },
   jobs: {
-    "deploy-os": {
-      ...utils.runsOnDepotUbuntu,
-      steps: [
-        ...utils.setupRepo,
-        ...utils.setupDoppler({ config: "prd" }),
-        {
-          name: "Deploy apps/os",
-          uses: "nick-fields/retry@v3",
-          with: {
-            timeout_minutes: 10,
-            max_attempts: 3,
-            // This sometimes flakes: db:migrate currently uses unpooled postgres client and can exhaust
-            // PlanetScale connection slots transiently. Retry smooths over that until migration path is fixed.
-            command: ["set -euo pipefail", "cd apps/os", "pnpm run deploy:prd"].join("\n"),
-          },
-          env: {
-            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
-          },
-        },
-      ],
-    },
     "deploy-iterate-com": {
       ...utils.runsOnDepotUbuntu,
       if: "inputs.deploy_iterate_com",
       steps: [
         ...utils.setupRepo,
-        ...utils.setupDoppler({ config: "prd" }),
+        ...utils.setupDoppler({ config: "prd", project: "iterate-com" }),
         {
           name: "Deploy apps/iterate-com",
           env: {

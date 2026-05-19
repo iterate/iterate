@@ -26,7 +26,8 @@ import { startCloudflared } from "./start-cloudflared.ts";
  * When running locally with a real `baseUrl` (not localhost), creates a Cloudflare
  * Tunnel so the app is reachable at the configured domain. The tunnel resource
  * auto-creates DNS CNAMEs for each ingress hostname. See
- * https://alchemy.run/providers/cloudflare/tunnel/ and docs/os2-environments.md.
+ * https://alchemy.run/providers/cloudflare/tunnel/ and
+ * docs/devops-cloudflare-doppler-alchemy-setup.md.
  *
  * **Observability:**
  * All Iterate workers use the same observability config: full sampling with
@@ -59,7 +60,7 @@ export async function IterateApp<B extends Bindings>(
     /**
      * Additional hostnames to route to this worker beyond `baseUrl`.
      * Each hostname gets a worker route and (for non-local deploys) a DNS CNAME.
-     * For example, os2 passes `["iterate2.app", "*.iterate2.app"]` for project
+     * For example, os passes `["iterate.app", "*.iterate.app"]` for project
      * subdomain routing.
      */
     extraRouteHostnames?: string[];
@@ -131,7 +132,7 @@ export async function IterateApp<B extends Bindings>(
   if (app.local && baseUrlHostname && !baseUrlHostname.startsWith("localhost") && worker.url) {
     tunnelVitePort = Number(new URL(worker.url).port || "5173");
 
-    // Wildcard hostnames from extraRouteHostnames (e.g. *.iterate2.app)
+    // Wildcard hostnames from extraRouteHostnames (e.g. *.iterate.app)
     const wildcardHosts = (props.extraRouteHostnames ?? []).filter((h) => h.startsWith("*."));
 
     console.log(
@@ -260,7 +261,7 @@ function routeResourceIdForHostname(hostname: string) {
 
 function shouldCreateDnsRecordForRouteHostname(hostname: string) {
   // Cloudflare accepts route patterns like `*-preview-1.iterate.app/*`, but
-  // DNS has no equivalent partial-label wildcard record. OS2 preview relies on
+  // DNS has no equivalent partial-label wildcard record. OS preview relies on
   // the existing proxied `*.iterate.app` DNS record for those one-label project
   // hosts, while ordinary exact and `*.` wildcard routes still get app-owned DNS.
   return !hostname.startsWith("*") || hostname.startsWith("*.");
@@ -384,15 +385,9 @@ async function findActiveZoneForHostname(
   cloudflareApi: Awaited<ReturnType<typeof createCloudflareApi>>,
   hostname: string,
 ) {
-  const cleanHostname = hostname.replace(/^\*\./, "");
   let page = 1;
   let totalPages = 1;
-  const zones: Array<{
-    account?: { id?: string };
-    id: string;
-    name: string;
-    status?: string;
-  }> = [];
+  const zones: CloudflareZone[] = [];
 
   do {
     const response = await cloudflareApi.get(`/zones?per_page=50&page=${page}`);
@@ -414,16 +409,11 @@ async function findActiveZoneForHostname(
     page += 1;
   } while (page <= totalPages);
 
-  const matchingZones = zones
-    .filter((zone) => cleanHostname === zone.name || cleanHostname.endsWith(`.${zone.name}`))
-    .sort((a, b) => b.name.length - a.name.length);
-  const bestZone =
-    matchingZones.find(
-      (zone) => zone.account?.id === cloudflareApi.accountId && zone.status === "active",
-    ) ??
-    matchingZones.find((zone) => zone.account?.id === cloudflareApi.accountId) ??
-    matchingZones.find((zone) => zone.status === "active") ??
-    matchingZones[0];
+  const bestZone = selectBestCloudflareZoneForHostname({
+    accountId: cloudflareApi.accountId,
+    hostname,
+    zones,
+  });
 
   if (!bestZone) {
     throw new Error(
@@ -432,6 +422,33 @@ async function findActiveZoneForHostname(
   }
 
   return { zoneId: bestZone.id, zoneName: bestZone.name };
+}
+
+type CloudflareZone = {
+  account?: { id?: string };
+  id: string;
+  name: string;
+  status?: string;
+};
+
+export function selectBestCloudflareZoneForHostname(input: {
+  accountId: string;
+  hostname: string;
+  zones: CloudflareZone[];
+}) {
+  const cleanHostname = input.hostname.replace(/^\*\./, "");
+  const matchingZones = input.zones
+    .filter((zone) => cleanHostname === zone.name || cleanHostname.endsWith(`.${zone.name}`))
+    .sort((a, b) => b.name.length - a.name.length);
+
+  return (
+    matchingZones.find(
+      (zone) => zone.account?.id === input.accountId && zone.status === "active",
+    ) ??
+    matchingZones.find((zone) => zone.status === "active") ??
+    matchingZones.find((zone) => zone.account?.id === input.accountId) ??
+    matchingZones[0]
+  );
 }
 
 function withSequentialCloudflareAssetPreupload(input: { command: string; workerName: string }) {
@@ -548,10 +565,10 @@ async function sleep(ms: number) {
  * Cloudflare worker routes use `hostname/*` patterns to match incoming requests.
  * We derive these from two sources:
  *
- * 1. `baseUrl` — the app's canonical URL (e.g. `https://os.iterate2.com`).
- *    The hostname (`os.iterate2.com`) becomes a route.
+ * 1. `baseUrl` — the app's canonical URL (e.g. `https://os.iterate.com`).
+ *    The hostname (`os.iterate.com`) becomes a route.
  * 2. `extraRouteHostnames` — additional hostnames passed by the caller.
- *    os2 uses this for project subdomain routing (`iterate2.app`, `*.iterate2.app`).
+ *    os uses this for project subdomain routing (`iterate.app`, `*.iterate.app`).
  *
  * Returns a deduplicated array of hostnames. Returns empty if no routes are
  * configured (localhost-only dev, or workers.dev-only previews).

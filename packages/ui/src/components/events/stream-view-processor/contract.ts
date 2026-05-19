@@ -119,7 +119,7 @@ export type StreamViewState = EventsStreamViewState;
  *
  * This is the simple all-at-once entry point for consumers that already have a
  * full event list (e.g. from a query). For incremental SSE-driven processing,
- * use `runProcessorReduce` directly with a ref as `apps/os2` does.
+ * use `runProcessorReduce` directly with a ref as `apps/os` does.
  */
 export function reduceStreamViewEvents(events: readonly Event[]): EventsStreamViewState {
   const processor = { contract: StreamViewProcessorContract };

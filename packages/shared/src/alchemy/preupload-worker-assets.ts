@@ -151,7 +151,7 @@ async function ensureWorkerShell(input: {
     "worker.js",
     new Blob(
       [
-        "export default { fetch() { return new Response('OS2 preview worker shell', { status: 503 }); } };",
+        "export default { fetch() { return new Response('OS preview worker shell', { status: 503 }); } };",
       ],
       { type: "application/javascript+module" },
     ),

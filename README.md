@@ -1,126 +1,117 @@
 # iterate
 
-## Prerequisites
+Monorepo for Iterate's Cloudflare Workers platform. **`apps/os`** is the main app — the product dashboard at `os.iterate.com`.
 
-- [Depot CLI](https://depot.dev/docs/cli/installation) for fast Docker builds with shared caching:
-  ```bash
-  brew install depot/tap/depot
-  depot login
-  ```
+## Environments
 
-## Quick Start
+- Commands run in the context of a Doppler config; that config chooses secrets,
+  app config, Cloudflare account, and Alchemy stage.
+- Local dev, previews, and production use the same `alchemy.run.ts` primitive
+  with different configs: `dev_<you>`, `preview_N`, or `prd`.
+- Details: [DevOps: Cloudflare, Doppler, And Alchemy](docs/devops-cloudflare-doppler-alchemy-setup.md).
+
+## Talking to OS
+
+Run these from `apps/os`. Wrap in `doppler run --project os --config <config> -- …` to target a specific environment; the config supplies URLs and secrets.
+
+### oRPC API
+
+OS exposes oRPC at `/api/orpc/`. The app CLI discovers procedures remotely and authenticates with the config's shared API secret:
+
+```bash
+# production (default when no DOPPLER_CONFIG is set)
+pnpm cli rpc --help
+
+# preview slot 2
+doppler run --project os --config preview_2 -- \
+  sh -c 'OS_BASE_URL="$APP_CONFIG_BASE_URL" pnpm cli rpc --help'
+
+# local dev server (while pnpm dev is running)
+doppler run --project os --config dev_jonas -- \
+  pnpm cli rpc --base-url http://localhost:5183 --help
+```
+
+Replace `--help` with a procedure path to call it.
+
+### Claude + project MCP
+
+Open Claude Code against a deployed project's MCP server:
+
+```bash
+doppler run --project os --config prd -- \
+  pnpm cli claude-mcp --project-slug-or-id my-project
+```
+
+The Doppler config picks the environment (prod, preview, your dev tunnel). `APP_CONFIG_PROJECT_HOSTNAME_BASES` in the config sets the project hostname base (e.g. `iterate.app`, `iterate-preview-3.app`); override with `--base-host` if needed.
+
+More: [apps/os README](apps/os/AGENTS.md).
+
+## Quick start
 
 ```bash
 pnpm install
-pnpm docker:up
-pnpm os db:migrate
-docker buildx create --name iterate --driver docker-container --use
-pnpm sandbox build
-pnpm dev
+pnpm dev          # local OS dev server
 ```
 
-## Repository Structure
-
-- `apps/os/` - Primary application (React + Cloudflare Workers)
-- `apps/daemon/` - Local daemon for durable streams and agent orchestration
-- `apps/iterate-com` - iterate.com website
-- `docs/` - Detailed documentation and patterns
-
-## Development Commands
+Before PRs:
 
 ```bash
-pnpm dev          # Run auth + os together
-pnpm os dev       # Run apps/os only
-pnpm --dir apps/auth dev  # Run apps/auth only
-pnpm daemon dev   # Run apps/daemon only
-pnpm test         # Run all tests
-pnpm typecheck    # Type check all packages
-pnpm lint         # Lint and fix
-pnpm format       # Format code
+pnpm install && pnpm typecheck && pnpm lint && pnpm format && pnpm test
 ```
 
-## Cloudflare App Deployments
+## Repository map
 
-Think of every new-style Cloudflare deploy as selecting two axes:
+**Start here:** `apps/os/`
 
-- Doppler project: app/service dimension, such as `os2` or `semaphore`
-- Doppler config: environment config dimension, such as `dev_jonas_2`, `preview_2`, or `prd`
+| Path                | What                                                                               |
+| ------------------- | ---------------------------------------------------------------------------------- |
+| `apps/os/`          | **Main app** — product dashboard (`os.iterate.com`; dev: `{user}.iterate-dev.com`) |
+| `packages/iterate/` | `iterate` CLI — delegates to local source when run inside this repo                |
+| `docs/`             | Detailed documentation                                                             |
+| `tasks/`            | Work tracking (markdown + frontmatter)                                             |
+| `apps/iterate-com/` | iterate.com marketing site                                                         |
 
-For new-style Cloudflare apps (`agents`, `example`, `os2`, and `semaphore`),
-local deployed dev, PR previews, and
-main/prod deploys all use the same primitive:
+Other Cloudflare apps (`events`, `semaphore`, `example`, …) are supporting services — see `docs/architecture.md`.
+
+## Common commands
 
 ```bash
-cd apps/<app>
-doppler run --project <app> --config <environment-config> -- pnpm tsx ./alchemy.run.ts
+pnpm dev                      # local OS dev server
+pnpm os dev                   # same, explicit apps/os path
+pnpm test && pnpm typecheck && pnpm lint && pnpm format
 ```
 
-The difference is orchestration. Local deployed dev selects a personal dev
-config. PR previews lease `data.dopplerConfig` from Semaphore and deploy
-affected apps plus dependencies into that same config. `main` deploys use
-generated per-app workflows with `prd`. PR previews are not promoted to
-production.
+Dev server, Doppler, Cloudflare, previews, and deploys:
+`docs/devops-cloudflare-doppler-alchemy-setup.md`.
 
-The shared PR preview lifecycle currently covers `agents`, `example`, `events`,
-`os2`, and `semaphore`. `events` is
-preview-managed but has not yet moved to the new-style `alchemy.run.ts`
-primitive.
+## Documentation
 
-The live Semaphore production database is the source of truth for which PR
-preview slots exist. Each live Semaphore resource has:
+### Platform & architecture
 
-- type: `environment-config-lease`
-- slug: `preview-2`, `preview-3`, etc.
-- data: `{ "dopplerConfig": "preview_2" }`, etc.
+- [Architecture](docs/architecture.md)
+- [DevOps: Cloudflare, Doppler, And Alchemy](docs/devops-cloudflare-doppler-alchemy-setup.md)
+- [Brand & tone](docs/brand-and-tone-of-voice.md)
 
-To inspect and validate that live inventory:
+### Development
 
-```bash
-doppler run --project os --config prd -- pnpm preview status
-doppler run --project os --config prd -- pnpm preview reconcile
-```
+- [Coding style](docs/coding-style.md)
+- [TypeScript conventions](docs/typescript-conventions.md)
+- [Design system & React](docs/design-system.md)
+- [Vitest patterns](docs/vitest-patterns.md)
 
-`preview reconcile` checks every live `environment-config-lease` row against
-the preview-managed Doppler projects and the Cloudflare zone pair for that
-slot, for example `iterate-preview-9.com` and `iterate-preview-9.app`.
+### Deploy & Cloudflare
 
-To intentionally recreate the environment config lease inventory:
+- [DevOps: Cloudflare, Doppler, And Alchemy](docs/devops-cloudflare-doppler-alchemy-setup.md)
+- [Drizzle migrations](.agents/skills/drizzle-migrations/SKILL.md) — not for `apps/os` (sqlfu/D1)
+- [Fixing Drizzle migration conflicts](docs/fixing-drizzle-migration-conflicts.md)
 
-1. Add or confirm the lease in `scripts/preview/preview-inventory.ts`.
-2. Ensure every preview-managed app that may use that lease has the matching
-   Doppler config, for example `preview_9`, plus any required Cloudflare
-   route/domain config.
-3. Keep Cloudflare credentials in `_shared` where possible. Preview app configs
-   inherit `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` from
-   `_shared/preview`; app configs should not override those values.
-4. Seed the live Semaphore inventory:
+### Tasks & agent docs
 
-```bash
-doppler run --project semaphore --config prd -- pnpm --dir apps/semaphore seed:environment-config-leases
-doppler run --project os --config prd -- pnpm preview reconcile
-```
+- [Task system](docs/task-system.md)
+- [Task grooming](docs/tasks-grooming.md)
+- [Writing agent docs](docs/writing-agent-docs.md)
 
-The seed is exact for `environment-config-lease`: missing resources are created
-and drifted resources are replaced. Only seed leases whose Doppler configs and
-Cloudflare domains exist in the right accounts. Do not encode broken or excluded
-preview slots in deploy logic; remove them from the Semaphore inventory instead.
+### App-specific
 
-For the full model and operator commands, see
-`docs/cloudflare-preview-environments.md`. For day-to-day deploy commands, see
-`docs/cloudflare-preview-and-deploy-cheatsheet.md`. For os2's preview domain
-pair shape, see `docs/os2-environments.md`.
-
-## Cloudflare Tunnels
-
-Expose local dev servers via public URLs (useful for webhooks, OAuth callbacks):
-
-```bash
-DEV_TUNNEL=1 pnpm dev        # → {app}-dev-{ITERATE_USER}.dev.iterate.com
-DEV_TUNNEL=bob pnpm dev      # → bob.dev.iterate.com (custom, no stage/app suffix)
-DEV_TUNNEL=0 pnpm dev        # disabled (also: false, or unset)
-```
-
-## Sandbox Providers
-
-See `sandbox/README.md` for provider strategy, image tagging, and CI flow.
-Fly is the primary deployment provider; Daytona is supported for one-off manual testing only.
+- [OS app](apps/os/AGENTS.md)
+- [OS architecture & operations](apps/os/docs/architecture-and-operations.md)

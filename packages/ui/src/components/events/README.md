@@ -42,10 +42,9 @@ items" versus "feed items" inside the feed slot.
 Reducers are the view policy. If a dropdown mode wants different content, add
 or select a different reducer.
 
-The shape follows the same reducer discipline as the stream processor contracts
-under `apps/agents/src/stream-processors`: each reducer is plain data plus a
-pure `reduce({ event, state })` function. Rendering concerns stay outside the
-reducer.
+The shape follows the same reducer discipline as the stream processor contracts:
+each reducer is plain data plus a pure `reduce({ event, state })` function.
+Rendering concerns stay outside the reducer.
 
 Current primary reducers:
 
@@ -80,11 +79,9 @@ to exist even when the selected processor never emits that item type.
 Do not make renderer selection depend on the dropdown mode. The mode selects the
 reducer; `item.type` selects the renderer.
 
-This directory currently has a web renderer in `stream-feed.tsx`. The Bun +
-OpenTUI proof of concept in `apps/agents/scripts/event-stream-terminal.ts`
-reuses `feed-items.ts` and `feed-processors.ts`, but defines its own terminal
-renderer. That is the intended split: processors and feed item data are shared;
-renderers belong to each UI runtime.
+This directory currently has a web renderer in `stream-feed.tsx`. That is the
+intended split: processors and feed item data are shared; renderers belong to
+each UI runtime.
 
 Input-slot elements are allowed to expose serializable actions such as
 `prefill-agent-message`. The reducer only describes the action. The host app

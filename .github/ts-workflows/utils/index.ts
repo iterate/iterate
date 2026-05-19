@@ -61,10 +61,10 @@ export const installDopplerCli = {
 
 export const setupDoppler = ({
   config,
-  project = "os",
+  project,
 }: {
   config: DopplerConfigName;
-  project?: DopplerProjectName;
+  project: DopplerProjectName;
 }) =>
   [
     installDopplerCli,

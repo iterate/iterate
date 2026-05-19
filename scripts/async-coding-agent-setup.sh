@@ -53,7 +53,7 @@ corepack enable
 corepack prepare pnpm@"$PNPM_VERSION" --activate
 
 echo "Setting up doppler (using DOPPLER_TOKEN env var)"
-doppler setup --project os --config "$DOPPLER_CONFIG"
+doppler setup --project test --config "$DOPPLER_CONFIG"
 
 echo "Installing workspace dependencies"
 pnpm install

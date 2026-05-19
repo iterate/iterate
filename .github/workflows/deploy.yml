@@ -17,41 +17,6 @@ permissions:
   contents: read
   deployments: write
 jobs:
-  deploy-os:
-    runs-on: depot-ubuntu-24.04-32
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install
-      - name: Install Doppler CLI
-        run: |-
-          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
-          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
-      - name: Setup Doppler
-        run: doppler setup --config prd --project os
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-      - name: Deploy apps/os
-        uses: nick-fields/retry@v3
-        with:
-          timeout_minutes: 10
-          max_attempts: 3
-          command: |-
-            set -euo pipefail
-            cd apps/os
-            pnpm run deploy:prd
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
   deploy-iterate-com:
     runs-on: depot-ubuntu-24.04-32
     if: inputs.deploy_iterate_com
@@ -74,7 +39,7 @@ jobs:
           for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
           doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
       - name: Setup Doppler
-        run: doppler setup --config prd --project os
+        run: doppler setup --config prd --project iterate-com
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - name: Deploy apps/iterate-com

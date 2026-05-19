@@ -32,7 +32,7 @@ npx -y @modelcontextprotocol/inspector --cli https://example.com/mcp \
 Pass headers without committing secrets:
 
 ```bash
-doppler run --project os2 --config preview_2 -- sh -lc '
+doppler run --project os --config preview_2 -- sh -lc '
   npx -y @modelcontextprotocol/inspector --cli https://mcp.cloudflare.com/mcp \
     --transport http \
     --method tools/list \

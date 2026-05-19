@@ -31,7 +31,7 @@ const stream =
         sqlite: true,
       })
     : DurableObjectNamespace<StreamDurableObject>("stream", {
-        // Deployed Events should use OS2's Stream Durable Object script so all
+        // Deployed Events should use OS's Stream Durable Object script so all
         // stream state and callable subscription delivery share one deployment
         // boundary. The Events app remains a UI/oRPC debugging surface; shared
         // stream schemas and the DO implementation live in `packages/shared`.

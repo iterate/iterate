@@ -1,25 +1,34 @@
 ---
 name: playwriter-spec
-description: Run a Playwright spec manually in the browser via Playwriter, mirroring test steps while debugging and adapting in-flight.
+description: Run a Playwright e2e test manually in the browser via Playwriter while debugging and adapting in-flight.
 publish: true
 ---
 
-# Manual Spec via Playwriter
+# Manual E2E via Playwriter
 
-Use this when a spec is flaky/in-flux and you want to execute the same flow manually with live debugging.
+Use when an app e2e test is flaky or in flux and you want to execute the same flow manually with live debugging.
+
+Tests live under each app, e.g. `apps/os/e2e/`, not a root `spec/` directory.
 
 ## Workflow
 
-1. Read the target spec fully.
-2. Extract exact user journey, data setup, and assertions.
-3. Reproduce steps in Playwriter (observe -> act -> observe after each major action).
-4. If behavior diverges, debug in-place (logs, status UI, infra logs) and continue.
-5. Record concrete timings, blockers, and recovery actions.
-6. If asked, patch the spec/product to match the observed reliable behavior.
+1. Read the target test file fully.
+2. Extract user journey, setup, and assertions.
+3. Reproduce steps in Playwriter (observe → act → observe).
+4. Debug in-place if behavior diverges.
+5. Record timings, blockers, and recovery actions.
+6. If asked, patch the test or product to match reliable behavior.
 
 ## Rules
 
-- Stay faithful to spec intent; only deviate when needed to unblock and explain why.
-- Prefer product signals over sleeps (state text, loading indicators, toasts, status badges).
-- For long async phases, rely on spinner-based waits + polling UIs instead of giant raw waitFor timeouts.
-- Summarize outcomes as: pass/fail, evidence, and concrete fixes.
+- Stay faithful to test intent; explain deviations.
+- Prefer product signals over sleeps (loading UI, toasts, status text).
+- Summarize: pass/fail, evidence, concrete fixes.
+
+## Running tests
+
+```bash
+OS_BASE_URL=https://… pnpm --dir apps/os test:e2e
+```
+
+See each app's `package.json` for required env vars.

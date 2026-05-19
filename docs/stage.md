@@ -1,11 +1,11 @@
 # Stage
 
-> **Note:** This document describes generic and older Alchemy stage naming rules. For current new-style Cloudflare apps, do not pass stage separately: select the Doppler config, and `_shared` sets `ALCHEMY_STAGE=${DOPPLER_CONFIG}`. For repo-managed PR previews, see `docs/cloudflare-preview-environments.md`. For `apps/os2`, see `docs/os2-environments.md` because os2 uses dedicated zone pairs per environment.
+> **Note:** This document describes generic and older Alchemy stage naming rules. For the current Cloudflare/Doppler/Alchemy model, see `docs/devops-cloudflare-doppler-alchemy-setup.md`.
 
 ## Current New-Style Cloudflare Apps
 
-For `agents`, `example`, `os2`, and `semaphore`, stage is selected by choosing
-a Doppler config. Do not pass `--stage` to these
+For `example`, `os`, and `semaphore`, stage is selected by choosing a Doppler
+config. Do not pass `--stage` to these
 deploys. `_shared` sets `ALCHEMY_STAGE=${DOPPLER_CONFIG}`, so `prd`,
 `preview_2`, and `dev_jonas_2` are just different bags of environment config
 for the same `alchemy.run.ts` primitive.

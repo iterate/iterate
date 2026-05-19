@@ -12,7 +12,7 @@ const ExternalSubscriberBase = z.strictObject({
   /**
    * Subscription state stores a Callable instead of a URL so stream replay only
    * needs JSON data. At delivery time the stream Durable Object supplies live
-   * authority through CallableContext. OS2 processor subscriptions use env
+   * authority through CallableContext. OS processor subscriptions use env
    * Durable Object namespace bindings; webhook and websocket subscribers may
    * still use the broader Callable forms supported by the shared runtime.
    */

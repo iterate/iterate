@@ -3,8 +3,8 @@ import * as utils from "../utils/index.ts";
 
 /**
  * Production rollout strategy (main branch):
- * 1) Deploy OS worker and app with current env vars.
- * 2) Leave FLY_DEFAULT_IMAGE unchanged so production keeps using the current sandbox image.
+ * 1) Deploy iterate.com with current env vars.
+ * 2) OS deploys via deploy-os.yml when apps/os changes.
  */
 export default {
   name: "CI",
@@ -27,8 +27,8 @@ export default {
           run: [
             "cat <<'EOF' >> \"$GITHUB_STEP_SUMMARY\"",
             "## Rollout Strategy",
-            "1. Deploy OS worker and app with current environment variables.",
-            "2. Leave FLY_DEFAULT_IMAGE unchanged; sandbox image promotion is not part of CI.",
+            "1. Deploy iterate.com with current environment variables.",
+            "2. OS deploys separately via deploy-os.yml when apps/os changes.",
             "EOF",
           ].join("\n"),
         },

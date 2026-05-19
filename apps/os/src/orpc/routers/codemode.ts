@@ -1,0 +1,374 @@
+import { ORPCError } from "@orpc/server";
+import { StreamPath, type Event, type EventInput } from "@iterate-com/shared/streams/types";
+import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import {
+  CodemodeProcessorContract,
+  type ToolProviderRegistration,
+} from "@iterate-com/shared/stream-processors/codemode/contract";
+import {
+  createCodemodeSession,
+  startCodemodeScriptOnSession,
+} from "~/domains/codemode/codemode-session-rpc.ts";
+import type { AppContext } from "~/context.ts";
+import { getStreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
+import { os, projectScopeMiddleware } from "~/orpc/orpc.ts";
+import { requireProjectScope } from "~/orpc/project-access.ts";
+
+const ToolProviderRegistrationPayload =
+  CodemodeProcessorContract.events["events.iterate.com/codemode/tool-provider-registered"]
+    .payloadSchema;
+
+type SerializableValue =
+  | null
+  | boolean
+  | number
+  | string
+  | SerializableValue[]
+  | { [key: string]: SerializableValue };
+
+export const projectCodemodeRouter = {
+  createSession: os.project.codemode.createSession
+    .use(projectScopeMiddleware)
+    .handler(async ({ input, context }) => {
+      const project = requireProjectScope(context);
+      const providers = attachRequestScopedProviderProps({
+        projectId: project.id,
+        providers: parseToolProviders(input.providers),
+      });
+      const streamPath =
+        input.streamPath ?? defaultStreamPathForProjectSession(generateSessionSlug());
+      const result = await createSession({
+        code: input.code,
+        context,
+        events: input.events,
+        projectId: project.id,
+        providers,
+        streamPath,
+      });
+      const now = new Date().toISOString();
+
+      return {
+        appendedEvents: result.appendedEvents,
+        registeredProviderEvents: result.registeredProviderEvents,
+        scriptExecutionEvent: result.scriptExecutionEvent,
+        session: {
+          createdAt: now,
+          lastWokenAt: now,
+          name: codemodeSessionName({
+            projectId: project.id,
+            streamPath: StreamPath.parse(streamPath),
+          }),
+          projectId: project.id,
+          streamPath: StreamPath.parse(streamPath),
+        },
+      };
+    }),
+
+  executeScript: os.project.codemode.executeScript
+    .use(projectScopeMiddleware)
+    .handler(async ({ input, context }) => {
+      const project = requireProjectScope(context);
+      const providers = attachRequestScopedProviderProps({
+        projectId: project.id,
+        providers: parseToolProviders(input.providers),
+      });
+      const result = await executeScriptOnSession({
+        code: input.code,
+        context,
+        events: input.events,
+        projectId: project.id,
+        providers,
+        streamPath: input.streamPath ?? defaultStreamPathForProjectBlock(generateBlockId()),
+      });
+      return {
+        event: result.event,
+        streamPath: result.streamPath,
+      };
+    }),
+
+  streamEvents: os.project.codemode.streamEvents
+    .use(projectScopeMiddleware)
+    .handler(async function* ({ input, context, signal }) {
+      const project = requireProjectScope(context);
+
+      const response = await getStreamsCapability({
+        exports: context.workerExports,
+        props: {
+          appendPolicy: { mode: "stream" },
+          projectId: project.id,
+          streamPath: input.streamPath,
+        },
+      }).stream({
+        afterOffset: input.afterOffset,
+        beforeOffset: input.beforeOffset,
+      });
+      if (!response.body) return;
+
+      for await (const event of decodeStreamEventLines(response.body, signal)) {
+        yield event;
+      }
+    }),
+
+  describe: os.project.codemode.describe
+    .use(projectScopeMiddleware)
+    .handler(async ({ input, context }) => {
+      const project = requireProjectScope(context);
+      const providers = attachRequestScopedProviderProps({
+        projectId: project.id,
+        providers: parseToolProviders(input.providers),
+      });
+
+      return {
+        // Tool providers now keep the model-visible surface intentionally
+        // compact. Richer MCP/OpenAPI/oRPC descriptions should be exposed as
+        // ordinary codemode functions such as `ctx.mcp.cloudflareDocs.listTools()`,
+        // so this endpoint returns the short instructions only.
+        instructions: providers
+          .map((provider) => `${provider.path.join(".")}: ${provider.instructions}`)
+          .join("\n\n"),
+      };
+    }),
+};
+
+function parseToolProviders(providers: unknown[]): ToolProviderRegistration[] {
+  const result = ToolProviderRegistrationPayload.array().safeParse(providers);
+  if (result.success) return result.data;
+
+  throw new ORPCError("BAD_REQUEST", {
+    message: `Invalid codemode provider registration: ${result.error.issues
+      .map((issue) => {
+        const path = issue.path.length === 0 ? "providers" : `providers.${issue.path.join(".")}`;
+        return `${path}: ${issue.message}`;
+      })
+      .join("; ")}`,
+  });
+}
+
+function attachRequestScopedProviderProps(input: {
+  projectId: string;
+  providers: ToolProviderRegistration[];
+}): ToolProviderRegistration[] {
+  return input.providers.map((provider) =>
+    attachOrpcCapabilityProps({
+      provider,
+      projectId: input.projectId,
+    }),
+  );
+}
+
+function attachOrpcCapabilityProps(input: {
+  provider: ToolProviderRegistration;
+  projectId: string;
+}): ToolProviderRegistration {
+  const invocation = input.provider.invocation;
+  if (invocation.kind !== "rpc") return input.provider;
+
+  const callable = invocation.callable;
+  if (callable.type !== "workers-rpc") return input.provider;
+
+  const via = callable.via;
+  if (
+    via.type !== "loopback-binding" ||
+    via.bindingType !== "service" ||
+    via.exportName !== "OrpcCapability"
+  ) {
+    return input.provider;
+  }
+
+  return {
+    ...input.provider,
+    invocation: {
+      ...invocation,
+      callable: {
+        ...callable,
+        via: {
+          ...via,
+          // `ctx.exports` service bindings lock props when the loopback
+          // binding is constructed. The browser can declare the provider, but
+          // only this server route knows the resolved stable Project ID.
+          props: {
+            ...readRecordProps(via.props),
+            projectId: input.projectId,
+          },
+        },
+      },
+    },
+  };
+}
+
+function readRecordProps(props: unknown) {
+  if (props && typeof props === "object" && !Array.isArray(props)) {
+    return props as { [key: string]: SerializableValue };
+  }
+  return {};
+}
+
+async function executeScriptOnSession(input: {
+  code: string;
+  context: AppContext;
+  events: EventInput[];
+  projectId: string;
+  providers: ToolProviderRegistration[];
+  streamPath: string;
+}) {
+  const context = input.context;
+  if (!context.codemodeSession) {
+    throw new ORPCError("INTERNAL_SERVER_ERROR", {
+      message: "CODEMODE_SESSION binding not available.",
+    });
+  }
+
+  requireCodemodeStreamPathProject({
+    projectId: input.projectId,
+    streamPath: input.streamPath,
+  });
+
+  const duplicateProviderPath = findDuplicateProviderPath(input.providers.map((p) => p.path));
+  if (duplicateProviderPath) {
+    throw new ORPCError("BAD_REQUEST", {
+      message: `Duplicate provider path: ${duplicateProviderPath}`,
+    });
+  }
+
+  return await startCodemodeScriptOnSession({
+    code: input.code,
+    events: input.events,
+    namespace: context.codemodeSession,
+    projectId: input.projectId,
+    providers: input.providers,
+    streamPath: StreamPath.parse(input.streamPath),
+  });
+}
+
+async function createSession(input: {
+  code?: string;
+  context: AppContext;
+  events: EventInput[];
+  projectId: string;
+  providers: ToolProviderRegistration[];
+  streamPath: string;
+}) {
+  const context = input.context;
+  if (!context.codemodeSession) {
+    throw new ORPCError("INTERNAL_SERVER_ERROR", {
+      message: "CODEMODE_SESSION binding not available.",
+    });
+  }
+
+  requireCodemodeStreamPathProject({
+    projectId: input.projectId,
+    streamPath: input.streamPath,
+  });
+
+  const duplicateProviderPath = findDuplicateProviderPath(input.providers.map((p) => p.path));
+  if (duplicateProviderPath) {
+    throw new ORPCError("BAD_REQUEST", {
+      message: `Duplicate provider path: ${duplicateProviderPath}`,
+    });
+  }
+
+  return await createCodemodeSession({
+    code: input.code,
+    events: input.events,
+    namespace: context.codemodeSession,
+    projectId: input.projectId,
+    providers: input.providers,
+    streamPath: StreamPath.parse(input.streamPath),
+  });
+}
+
+async function* decodeStreamEventLines(stream: ReadableStream<Uint8Array>, signal?: AbortSignal) {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const onAbort = () => {
+    void reader.cancel();
+  };
+
+  try {
+    if (signal?.aborted) return;
+    signal?.addEventListener("abort", onAbort, { once: true });
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      while (true) {
+        const newlineIndex = buffer.indexOf("\n");
+        if (newlineIndex === -1) break;
+        const line = buffer.slice(0, newlineIndex);
+        buffer = buffer.slice(newlineIndex + 1);
+        if (line.trim()) yield JSON.parse(line) as Event;
+      }
+    }
+
+    buffer += decoder.decode();
+    if (buffer.trim()) yield JSON.parse(buffer) as Event;
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+    reader.releaseLock();
+  }
+}
+
+/**
+ * The durable CodemodeSession writes to the shared Events service at a caller
+ * supplied path. Keep that path bound to the same project ID we just authorized
+ * through Clerk org membership; the path itself is intentionally project-local
+ * and must not redundantly encode `/projects/:projectId`.
+ */
+function requireCodemodeStreamPathProject(input: { projectId: string; streamPath: string }) {
+  const path = StreamPath.parse(input.streamPath);
+  if (path === "/") {
+    throw new ORPCError("BAD_REQUEST", {
+      message: "Codemode stream path must not be the project root stream.",
+    });
+  }
+  if (path.startsWith("/projects/")) {
+    throw new ORPCError("BAD_REQUEST", {
+      message: "Codemode stream paths are project-local and must not start with /projects/.",
+    });
+  }
+}
+
+function generateBlockId() {
+  const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
+  let id = "cblk_";
+  for (let i = 0; i < 16; i++) {
+    id += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return id;
+}
+
+function generateSessionSlug() {
+  const chars = "0123456789abcdefghijklmnopqrstuvwxyz";
+  let id = "csess_";
+  for (let i = 0; i < 16; i++) {
+    id += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return id;
+}
+
+function codemodeSessionName(input: { projectId: string; streamPath: StreamPath }) {
+  return deriveDurableObjectNameFromStructuredName({
+    structuredName: { projectId: input.projectId, streamPath: input.streamPath },
+  });
+}
+
+function defaultStreamPathForProjectSession(sessionSlug: string) {
+  return `/codemode-sessions/${sessionSlug}`;
+}
+
+function defaultStreamPathForProjectBlock(blockId: string) {
+  return `/codemode-sessions/${blockId}`;
+}
+
+function findDuplicateProviderPath(paths: string[][]) {
+  const seen = new Set<string>();
+  for (const path of paths) {
+    const key = path.join(".");
+    if (seen.has(key)) return key;
+    seen.add(key);
+  }
+
+  return null;
+}

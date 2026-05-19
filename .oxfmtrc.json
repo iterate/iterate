@@ -34,6 +34,7 @@
     "**/.alchemy",
     "**/.iterate/",
     "**/components/ui/",
-    "**/components/ai-elements/"
+    "**/components/ai-elements/",
+    "packages/iterate/**"
   ]
 }

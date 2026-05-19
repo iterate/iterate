@@ -1,6 +1,7 @@
 import type { Step, Workflow } from "@jlarky/gha-ts/workflow-types";
 import {
   cloudflarePreviewApps,
+  cloudflarePreviewAdditionalTriggerPaths,
   cloudflarePreviewSharedPaths,
 } from "../../../scripts/preview/apps.ts";
 import * as utils from "../utils/index.ts";
@@ -8,6 +9,7 @@ import * as utils from "../utils/index.ts";
 const previewPaths = [
   ...new Set([
     ...cloudflarePreviewSharedPaths,
+    ...cloudflarePreviewAdditionalTriggerPaths,
     ...Object.values(cloudflarePreviewApps).flatMap((app) => app.paths),
   ]),
 ];
@@ -116,7 +118,7 @@ function createPreviewLifecycleJob(input: {
       includePullRequestHeadSha: input.command !== "cleanup",
       includePullRequestIsFork: input.command === "deploy",
       includeWorkflowRunUrl: input.command !== "cleanup",
-      prefix: "doppler run --project os --config prd -- ",
+      prefix: "doppler run --project _shared --config prd -- ",
     }),
   };
 
