@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Event } from "@iterate-com/shared/streams/types";
 import {
+  configuredAgentSetupEvents,
   defaultAgentSetupEvents,
   defaultAgentSystemPrompt,
   isSlackAgentPath,
@@ -24,9 +25,43 @@ describe("agent presets", () => {
         payload: { model: "gpt-5.5" },
       },
       {
+        type: "events.iterate.com/agent/llm-config-updated",
+        payload: { model: "gpt-5.5", runOpts: {}, debounceMs: 200 },
+      },
+      {
         type: "events.iterate.com/agent/system-prompt-updated",
         payload: {
           systemPrompt: defaultAgentSystemPrompt(),
+        },
+      },
+    ]);
+  });
+
+  it("configures OpenAI agent scheduling debounce explicitly", () => {
+    expect(
+      configuredAgentSetupEvents({
+        model: "gpt-5.5-mini",
+        provider: "openai-ws",
+        runOpts: { ignored: true },
+        systemPrompt: "Use OpenAI quickly.",
+      }),
+    ).toEqual([
+      {
+        type: "events.iterate.com/os-agent/llm-provider-selected",
+        payload: { provider: "openai-ws" },
+      },
+      {
+        type: "events.iterate.com/openai-ws/config-updated",
+        payload: { model: "gpt-5.5-mini" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-config-updated",
+        payload: { model: "gpt-5.5-mini", runOpts: {}, debounceMs: 200 },
+      },
+      {
+        type: "events.iterate.com/agent/system-prompt-updated",
+        payload: {
+          systemPrompt: "Use OpenAI quickly.",
         },
       },
     ]);

@@ -8,8 +8,7 @@ import {
 import type { Event, EventInput, StreamPath } from "@iterate-com/shared/streams/types";
 import type { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
 import {
-  DEFAULT_AGENT_DEBOUNCE_MS,
-  defaultAgentSetupEvents,
+  configuredAgentSetupEvents,
   normalizeAgentPresetBasePath,
   presetConfiguredEvent,
   readAgentPathPrefixPresets,
@@ -71,24 +70,12 @@ export const projectAgentsRouter = {
       const project = requireProjectScope(context);
       const basePath = normalizeAgentPresetBasePath(input.basePath);
       const events = [
-        ...defaultAgentSetupEvents(input.provider as AgentLlmProvider).map((event) =>
-          input.provider === "openai-ws" &&
-          event.type === "events.iterate.com/openai-ws/config-updated"
-            ? { ...event, payload: { model: input.model } }
-            : input.provider === "cloudflare-ai" &&
-                event.type === "events.iterate.com/agent/llm-config-updated"
-              ? {
-                  ...event,
-                  payload: {
-                    debounceMs: DEFAULT_AGENT_DEBOUNCE_MS,
-                    model: input.model,
-                    runOpts: input.runOpts,
-                  },
-                }
-              : event.type === "events.iterate.com/agent/system-prompt-updated"
-                ? { ...event, payload: { systemPrompt: input.systemPrompt } }
-                : event,
-        ),
+        ...configuredAgentSetupEvents({
+          model: input.model,
+          provider: input.provider as AgentLlmProvider,
+          runOpts: input.runOpts,
+          systemPrompt: input.systemPrompt,
+        }),
         ...input.events,
       ];
       await appendAgentsRootEvent({
