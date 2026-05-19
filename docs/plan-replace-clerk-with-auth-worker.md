@@ -439,3 +439,24 @@ Phase F is last.
 3. **MCP dynamic client registration** — MCP clients (Claude Code, Cursor) need
    to register themselves as OAuth clients. The auth worker supports this via
    `dynamic_oauth_client_registration`. Verify this works end-to-end.
+
+## Running log
+
+### 2026-05-19
+
+- Started with Phase A because OS cannot trust auth-worker tokens until the auth
+  worker emits first-class organization/project claims.
+- Added optional caller-managed project IDs to the auth contract and both public
+  and internal project creation routers. The auth worker still generates `prj_*`
+  IDs by default, but stores provided IDs opaquely after checking for conflicts.
+  This keeps OS responsible for its TypeIDs without teaching auth about OS ID
+  semantics.
+- Added shared claim constants/types for access-token `organizations` and
+  `projects`. Kept full organization names in `/userinfo` only; access tokens
+  carry the smaller `{ id, slug, role }` shape planned for OS authorization.
+- Added `listProjectsForUser` and `getProjectById` SQL queries for token
+  generation and ID conflict checks. `pnpm --dir apps/auth db:generate` currently
+  fails before generation because this worktree has no Miniflare v3 D1 persist
+  directory for `auth-dev-auth-db`, so the generated query binding was updated
+  manually to keep typecheck moving. Re-run sqlfu generation after initializing
+  the local auth D1 store.

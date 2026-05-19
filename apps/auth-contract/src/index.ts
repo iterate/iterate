@@ -59,6 +59,12 @@ export const ProjectRecord = z.object({
 });
 export type ProjectRecord = z.infer<typeof ProjectRecord>;
 
+const CallerManagedProjectId = z
+  .string()
+  .trim()
+  .min(1)
+  .describe("Opaque caller-managed project ID. If omitted, auth generates a prj_* ID.");
+
 export const CreateClientInput = z.object({
   clientName: z.string().min(1),
   redirectURIs: z.array(z.url()).min(1),
@@ -100,6 +106,7 @@ export type InternalCreateOrganizationForUserInput = z.infer<
 >;
 
 export const InternalCreateProjectForOrganizationInput = z.object({
+  id: CallerManagedProjectId.optional(),
   organizationSlug: z.string().min(1),
   name: z.string().min(1).max(100),
   slug: z.string().min(1).max(50).optional(),
@@ -340,6 +347,7 @@ export const authContract = oc.router({
       })
       .input(
         z.object({
+          id: CallerManagedProjectId.optional(),
           ...OrgInput.shape,
           name: z.string().min(1).max(100),
           slug: z.string().min(1).max(50).optional(),

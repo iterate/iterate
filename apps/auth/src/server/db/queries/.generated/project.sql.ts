@@ -42,6 +42,48 @@ export namespace getProjectBySlug {
   };
 }
 
+const getProjectByIdSql = `
+SELECT id,
+  organization_id AS organizationId,
+  name,
+  slug,
+  metadata,
+  archived_at AS archivedAt
+FROM project
+WHERE id = ?
+LIMIT 1;
+`.trim();
+const getProjectByIdQuery = (params: getProjectById.Params) => ({
+  name: "getProjectById",
+  sql: getProjectByIdSql,
+  args: [params.id],
+});
+
+export const getProjectById = Object.assign(
+  async function getProjectById(
+    client: Client,
+    params: getProjectById.Params,
+  ): Promise<getProjectById.Result | null> {
+    const rows = await client.all<getProjectById.Result>(getProjectByIdQuery(params));
+    return rows.length > 0 ? rows[0] : null;
+  },
+  { sql: getProjectByIdSql, query: getProjectByIdQuery },
+);
+
+export namespace getProjectById {
+  export type Params = {
+    id: string;
+  };
+  export type Result = {
+    id: string;
+    organizationId: string;
+    name: string;
+    slug: string;
+    metadata: string;
+    archivedAt?: number;
+  };
+}
+
 const getProjectWithOrganizationBySlugSql = `
 SELECT p.id,
   p.organization_id AS organizationId,
@@ -128,6 +170,49 @@ export const listProjectsByOrganizationId = Object.assign(
 export namespace listProjectsByOrganizationId {
   export type Params = {
     organizationId: string;
+  };
+  export type Result = {
+    id: string;
+    organizationId: string;
+    name: string;
+    slug: string;
+    metadata: string;
+    archivedAt?: number;
+  };
+}
+
+const listProjectsForUserSql = `
+SELECT p.id,
+  p.organization_id AS organizationId,
+  p.name,
+  p.slug,
+  p.metadata,
+  p.archived_at AS archivedAt
+FROM project p
+JOIN member m ON m.organizationId = p.organization_id
+WHERE m.userId = ?
+ORDER BY p.created_at ASC,
+  p.slug ASC;
+`.trim();
+const listProjectsForUserQuery = (params: listProjectsForUser.Params) => ({
+  name: "listProjectsForUser",
+  sql: listProjectsForUserSql,
+  args: [params.userId],
+});
+
+export const listProjectsForUser = Object.assign(
+  async function listProjectsForUser(
+    client: Client,
+    params: listProjectsForUser.Params,
+  ): Promise<listProjectsForUser.Result[]> {
+    return client.all<listProjectsForUser.Result>(listProjectsForUserQuery(params));
+  },
+  { sql: listProjectsForUserSql, query: listProjectsForUserQuery },
+);
+
+export namespace listProjectsForUser {
+  export type Params = {
+    userId: string;
   };
   export type Result = {
     id: string;

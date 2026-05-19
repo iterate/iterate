@@ -3,18 +3,23 @@ import { bearer, deviceAuthorization, emailOTP, jwt, oneTimeToken } from "better
 import { oauthProvider } from "@better-auth/oauth-provider";
 import { organization } from "better-auth/plugins/organization";
 import {
+  ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM,
+  ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM,
   ITERATE_PROJECT_SELECTION_SCOPE,
   ITERATE_ACTIVE_ORGANIZATION_ID_CLAIM,
   ITERATE_IS_ADMIN_CLAIM,
   ITERATE_ORGANIZATIONS_CLAIM,
   ITERATE_ROLE_CLAIM,
+  type IterateAuthAccessTokenOrganizationClaim,
   type IterateAuthOrganizationClaim,
+  type IterateAuthProjectClaim,
 } from "@iterate-com/shared/auth-claims";
 import { betterAuth } from "better-auth";
 import {
   deleteOAuthProjectSelectionsByUserId,
   getSessionActiveOrganizationIdById,
   listOrganizationsForUser,
+  listProjectsForUser,
 } from "./db/queries/.generated/index.ts";
 import { db } from "./db/index.ts";
 import {
@@ -61,8 +66,42 @@ async function listOrganizationClaims(
   }));
 }
 
+async function listAccessTokenOrganizationClaims(
+  user: Record<string, unknown> | null | undefined,
+): Promise<IterateAuthAccessTokenOrganizationClaim[]> {
+  const organizations = await listOrganizationClaims(user);
+  return organizations.map((organization) => ({
+    id: organization.id,
+    slug: organization.slug,
+    role: organization.role,
+  }));
+}
+
+async function listProjectClaims(
+  user: Record<string, unknown> | null | undefined,
+  selectedProjectIds: string[] | null,
+): Promise<IterateAuthProjectClaim[]> {
+  const userId = typeof user?.id === "string" ? user.id : null;
+  if (!userId) return [];
+
+  const selectedProjectIdSet = selectedProjectIds ? new Set(selectedProjectIds) : null;
+  const projects = await listProjectsForUser(db, { userId });
+  return projects
+    .filter((project) => !selectedProjectIdSet || selectedProjectIdSet.has(project.id))
+    .map((project) => ({
+      id: project.id,
+      slug: project.slug,
+      organizationId: project.organizationId,
+    }));
+}
+
 export function getAuthPlugins(env: Record<string, unknown>) {
-  const validAudiences = ["https://mcp.iterate.com/mcp", "http://localhost:7301/mcp"];
+  const validAudiences = [
+    "https://os.iterate.com",
+    "https://os.iterate.com/mcp",
+    "https://mcp.iterate.com/mcp",
+    "http://localhost:7301/mcp",
+  ];
 
   return [
     jwt(),
@@ -151,17 +190,26 @@ export function getAuthPlugins(env: Record<string, unknown>) {
       validAudiences,
       allowDynamicClientRegistration: true,
       allowUnauthenticatedClientRegistration: true,
-      customAccessTokenClaims: async ({ referenceId, scopes }) => {
+      customAccessTokenClaims: async ({ user, referenceId, scopes }) => {
         const selection = parseOAuthProjectSelectionReferenceId(referenceId);
         if (selection?.userId) {
           await deleteOAuthProjectSelectionsByUserId(db, { userId: selection.userId });
         }
 
+        const isProjectScopedToken = scopes.includes(ITERATE_PROJECT_SELECTION_SCOPE);
+        const selectedProjectIds = isProjectScopedToken ? (selection?.projectIds ?? []) : null;
+        const [organizations, projects] = await Promise.all([
+          listAccessTokenOrganizationClaims(user),
+          listProjectClaims(user, selectedProjectIds),
+        ]);
+
         return {
           scopes: buildAugmentedScopeClaims({
             requestedScopes: scopes,
-            projectIds: selection?.projectIds ?? [],
+            projectIds: isProjectScopedToken ? projects.map((project) => project.id) : [],
           }),
+          [ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM]: organizations,
+          [ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM]: projects,
         };
       },
       customIdTokenClaims: ({ user }) => buildIterateTokenClaims(user),

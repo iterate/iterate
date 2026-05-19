@@ -8,6 +8,7 @@ import {
   getOAuthClientByClientId,
   getOAuthClientByReferenceId,
   getOrganizationBySlug,
+  getProjectById,
   getProjectBySlug,
   getUserByEmail,
   getUserById,
@@ -193,7 +194,11 @@ const createForOrganization = os.internal.project.createForOrganization
         Boolean(await getProjectBySlug(context.db, { slug: candidate })),
     });
 
-    const projectId = generateId("prj");
+    const projectId = input.id ?? generateId("prj");
+    if (input.id && (await getProjectById(context.db, { id: input.id }))) {
+      throw new ORPCError("CONFLICT", { message: "Project ID already exists" });
+    }
+
     const now = Date.now();
     const created = await insertProjectReturning(context.db, {
       id: projectId,
