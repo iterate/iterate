@@ -468,7 +468,6 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
 
     await this.ensureStarted();
     const summary = this.requireSummary();
-    const egressInterceptTunnel = this.#projectEgressInterceptTunnel;
     const secrets = getSecretsCapability({
       exports: readLoopbackExports(this.ctx),
       props: { projectId: summary.id },
@@ -478,7 +477,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     try {
       substitutedHeaders = await substituteProjectEgressSecretHeaders({
         headers: request.headers,
-        projectEgressInterceptActive: egressInterceptTunnel !== null,
+        projectEgressInterceptActive: this.#projectEgressInterceptTunnel !== null,
         secrets,
       });
     } catch (error) {
@@ -492,6 +491,9 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
       ? new Request(request, { headers: substitutedHeaders.headers })
       : request;
 
+    // Read the tunnel reference after the await above so that a concurrent
+    // tunnel replacement doesn't leave us holding a disposed handle.
+    const egressInterceptTunnel = this.#projectEgressInterceptTunnel;
     if (egressInterceptTunnel) {
       return await egressInterceptTunnel.fetch(outboundRequest);
     }
