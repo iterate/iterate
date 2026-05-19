@@ -809,9 +809,7 @@ export class StreamDurableObject extends StreamDurableObjectBase<StreamDurableOb
   }
 
   private nextCallableSubscriberDelivery(queue: CallableSubscriberDeliveryQueue) {
-    for (const [subscriberSlug, offsets] of Object.entries(queue).sort(([left], [right]) =>
-      left.localeCompare(right),
-    )) {
+    for (const [subscriberSlug, offsets] of Object.entries(queue)) {
       if (this.activeCallableSubscriberDeliveries.has(subscriberSlug)) continue;
       const offset = offsets[0];
       if (offset == null) continue;
