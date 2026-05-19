@@ -32,6 +32,11 @@ import {
   VOICE_AGENT_PROCESSOR_SLUG,
 } from "~/domains/stream-processors/stream-processor-slugs.ts";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
+import {
+  getAgentDurableObjectName,
+  type AgentDurableObject,
+} from "~/domains/agents/durable-objects/agent-durable-object.ts";
+import { voiceAgentCodeAgentEvents } from "~/domains/voice-agents/voice-agent-code-agent.ts";
 
 export type StreamProcessorDurableObjectStructuredName = {
   processorSlug: string;
@@ -50,6 +55,7 @@ export type StreamProcessorDurableObjectEnv = {
   APP_CONFIG_GEMINI_API_KEY?: string;
   APP_CONFIG_OPEN_AI_API_KEY?: string;
   APP_CONFIG_X_AI_API_KEY?: string;
+  AGENT: DurableObjectNamespace<AgentDurableObject>;
   DO_CATALOG: D1Database;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
   STREAM_PROCESSOR: DurableObjectNamespace<StreamProcessorDurableObject>;
@@ -70,7 +76,10 @@ type GenericStreamApi = ProcessorStreamApi<{
 };
 
 type RegistryEntry = {
-  create(env: StreamProcessorDurableObjectEnv): Processor<unknown>;
+  create(
+    env: StreamProcessorDurableObjectEnv,
+    params: StreamProcessorDurableObjectStructuredName,
+  ): Processor<unknown>;
 };
 
 const StreamProcessorLifecycleBase = createIterateDurableObjectBase<
@@ -112,7 +121,7 @@ export class StreamProcessorDurableObject extends StreamProcessorBase<StreamProc
         throw new Error(`Unknown stream processor "${params.processorSlug}".`);
       }
 
-      this.registerStreamProcessor(entry.create(this.env));
+      this.registerStreamProcessor(entry.create(this.env, params));
       await this.ensureProcessorSubscription(params);
       await this.catchUpStreamProcessors({
         signal: AbortSignal.timeout(30_000),
@@ -220,7 +229,12 @@ export class StreamProcessorDurableObject extends StreamProcessorBase<StreamProc
 
 const streamProcessorRegistry: Record<string, RegistryEntry> = {
   [VOICE_AGENT_PROCESSOR_SLUG]: {
-    create: () => createVoiceAgentProcessor(),
+    create: (env, params) =>
+      createVoiceAgentProcessor({
+        ensureCodeAgent: async () => {
+          await ensureVoiceAgentCodeAgent({ env, params });
+        },
+      }),
   },
   [GEMINI_LIVE_VOICE_PROCESSOR_SLUG]: {
     create: (env) =>
@@ -253,6 +267,30 @@ const streamProcessorRegistry: Record<string, RegistryEntry> = {
       }),
   },
 };
+
+async function ensureVoiceAgentCodeAgent(input: {
+  env: StreamProcessorDurableObjectEnv;
+  params: StreamProcessorDurableObjectStructuredName;
+}) {
+  const streamApi = streamApiFromNamespace({
+    durableObjectNamespace: input.env.STREAM as unknown as StreamDurableObjectNamespace,
+    namespace: input.params.projectId,
+    streamPath: input.params.streamPath,
+  });
+  await streamApi.appendBatch({
+    events: voiceAgentCodeAgentEvents({
+      projectId: input.params.projectId,
+      streamPath: input.params.streamPath,
+    }),
+  });
+
+  const structuredName = {
+    agentPath: input.params.streamPath,
+    projectId: input.params.projectId,
+  };
+  const name = getAgentDurableObjectName(structuredName);
+  await input.env.AGENT.getByName(name).initialize({ name });
+}
 
 function streamApiFromNamespace(args: {
   durableObjectNamespace: StreamDurableObjectNamespace;

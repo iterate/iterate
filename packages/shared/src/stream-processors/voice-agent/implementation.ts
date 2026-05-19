@@ -107,7 +107,9 @@ export type VoiceAgentProcessorDeps = {
 
 const ProviderConnectedReadyState = 1;
 
-export function createVoiceAgentProcessor() {
+export function createVoiceAgentProcessor(input: { ensureCodeAgent?: () => Promise<void> } = {}) {
+  let ensureCodeAgentPromise: Promise<void> | null = null;
+
   return implementProcessor(VoiceAgentProcessorContract, {
     async afterAppend({ state, streamApi }) {
       await standardProcessorBehavior.afterAppend({
@@ -115,6 +117,12 @@ export function createVoiceAgentProcessor() {
         state,
         streamApi,
       });
+      if (input.ensureCodeAgent == null) return;
+      ensureCodeAgentPromise ??= input.ensureCodeAgent().catch((error) => {
+        ensureCodeAgentPromise = null;
+        throw error;
+      });
+      await ensureCodeAgentPromise;
     },
   });
 }

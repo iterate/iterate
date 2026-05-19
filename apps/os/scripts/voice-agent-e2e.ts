@@ -8,6 +8,7 @@ import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import type { RouterClient } from "@orpc/server";
 import { osContract } from "@iterate-com/os-contract";
 import {
+  AGENT_INPUT_ADDED_EVENT_TYPE,
   DEFAULT_GEMINI_LIVE_MODEL,
   DEFAULT_GEMINI_LIVE_VOICE,
   DEFAULT_GROK_REALTIME_MODEL,
@@ -15,6 +16,7 @@ import {
   DEFAULT_OPENAI_REALTIME_MODEL,
   DEFAULT_OPENAI_REALTIME_VOICE,
   VOICE_AGENT_INPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE,
+  VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE,
   VOICE_AGENT_OUTPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE,
   VOICE_AGENT_INPUT_SAMPLE_RATE,
   VOICE_AGENT_OUTPUT_SAMPLE_RATE,
@@ -43,6 +45,7 @@ type Options = {
   baseUrl: string;
   chunkMs: number;
   createProject: boolean;
+  expectAskAgent: boolean;
   model: string;
   minOutputBytes: number;
   outputPcm: string | null;
@@ -63,6 +66,11 @@ type SeenEvents = {
   providerConnected: boolean;
   setupCompleted: boolean;
   turnCompleted: boolean;
+  askAgentInputAdded: boolean;
+  agentOutputAdded: boolean;
+  codemodeScriptCompleted: boolean;
+  codeAgentVoiceTextAdded: boolean;
+  codeAgentVoiceText: string | null;
 };
 
 const execFileAsync = promisify(execFile);
@@ -73,7 +81,7 @@ async function main() {
   const runId = `voice-agent-e2e-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
   const projectSlugOrId = options.createProject
     ? (await createTestProject(client, runId)).id
-    : requireProjectSlugOrId(options.projectSlugOrId);
+    : await resolveProjectId(client, requireProjectSlugOrId(options.projectSlugOrId));
   const pcm = options.pcmFile
     ? await readFile(resolve(options.pcmFile))
     : await synthesizePromptPcm(options.prompt);
@@ -124,8 +132,13 @@ async function main() {
           provider: options.provider,
           model: options.model,
           voiceName: options.voiceName,
-          systemInstruction:
-            "You are running an automated voice test. Reply with one short sentence.",
+          systemInstruction: options.expectAskAgent
+            ? [
+                "You are running an automated voice smoke test.",
+                "If the caller asks you to fetch, inspect, calculate, run code, or do any background work, you MUST call the Ask Agent tool with the caller's request.",
+                "After the tool call returns, say one short sentence telling the caller that you asked the background agent.",
+              ].join(" ")
+            : "You are running an automated voice test. Reply with one short sentence.",
         },
       }),
     ],
@@ -137,6 +150,11 @@ async function main() {
     providerConnected: false,
     setupCompleted: false,
     turnCompleted: false,
+    askAgentInputAdded: false,
+    agentOutputAdded: false,
+    codemodeScriptCompleted: false,
+    codeAgentVoiceTextAdded: false,
+    codeAgentVoiceText: null,
   };
 
   const watchPromise = watchStream({
@@ -147,6 +165,7 @@ async function main() {
     streamPath: options.streamPath,
     timeoutMs: options.timeoutMs,
     minOutputBytes: options.minOutputBytes,
+    expectAskAgent: options.expectAskAgent,
   });
 
   await appendPcmFrames({
@@ -178,6 +197,11 @@ async function main() {
         turnCompleted: seen.turnCompleted,
         outputBytes: output.byteLength,
         outputPcm: options.outputPcm,
+        askAgentInputAdded: seen.askAgentInputAdded,
+        agentOutputAdded: seen.agentOutputAdded,
+        codemodeScriptCompleted: seen.codemodeScriptCompleted,
+        codeAgentVoiceTextAdded: seen.codeAgentVoiceTextAdded,
+        codeAgentVoiceText: seen.codeAgentVoiceText,
       },
       null,
       2,
@@ -189,6 +213,7 @@ async function watchStream(input: {
   afterOffset: number;
   client: OrpcClient;
   minOutputBytes: number;
+  expectAskAgent: boolean;
   projectSlugOrId: string;
   seen: SeenEvents;
   streamPath: StreamPath;
@@ -241,15 +266,44 @@ async function watchStream(input: {
         input.seen.error = typeof payload.message === "string" ? payload.message : "unknown error";
         throw new Error(input.seen.error);
       }
+      if (event.type === AGENT_INPUT_ADDED_EVENT_TYPE) {
+        input.seen.askAgentInputAdded = true;
+        const payload = event.payload as { content?: unknown };
+        if (typeof payload.content === "string") {
+          console.log(`  agent input: ${payload.content.slice(0, 200)}`);
+        }
+      }
+      if (event.type === "events.iterate.com/agent/output-added") {
+        input.seen.agentOutputAdded = true;
+      }
+      if (event.type === "events.iterate.com/codemode/script-execution-completed") {
+        input.seen.codemodeScriptCompleted = true;
+      }
+      if (event.type === VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE) {
+        const payload = event.payload as { source?: unknown; text?: unknown };
+        if (input.seen.askAgentInputAdded) {
+          input.seen.codeAgentVoiceTextAdded = true;
+          input.seen.codeAgentVoiceText = typeof payload.text === "string" ? payload.text : null;
+          console.log(`  voice input text: ${input.seen.codeAgentVoiceText ?? "<missing>"}`);
+        }
+      }
 
       const outputBytes = input.seen.outputBuffers.reduce(
         (total, buffer) => total + buffer.byteLength,
         0,
       );
-      if (
-        input.seen.setupCompleted &&
-        (outputBytes >= input.minOutputBytes || input.seen.turnCompleted)
-      ) {
+      if (input.expectAskAgent) {
+        if (
+          input.seen.setupCompleted &&
+          input.seen.askAgentInputAdded &&
+          input.seen.codeAgentVoiceTextAdded
+        ) {
+          return;
+        }
+        continue;
+      }
+
+      if (input.seen.setupCompleted && outputBytes >= input.minOutputBytes) {
         return;
       }
     }
@@ -368,6 +422,14 @@ async function createTestProject(client: OrpcClient, runId: string) {
   });
 }
 
+async function resolveProjectId(client: OrpcClient, slugOrId: string) {
+  try {
+    return (await client.projects.find({ id: slugOrId })).id;
+  } catch {
+    return (await client.projects.findBySlug({ slug: slugOrId })).id;
+  }
+}
+
 function createClient(baseUrl: string) {
   const authHeaders = requireAuthHeaders();
   return createORPCClient(
@@ -406,10 +468,12 @@ function requireAuthHeaders() {
 
 function parseOptions(args: readonly string[]): Options {
   const values = parseArgs(args);
+  const expectAskAgent = booleanOption(values, "expect-ask-agent", false);
   return {
-    baseUrl: stringOption(values, "base-url", process.env.OS_BASE_URL ?? "http://127.0.0.1:5176"),
+    baseUrl: stringOption(values, "base-url", process.env.OS_BASE_URL ?? "http://127.0.0.1:5173"),
     chunkMs: numberOption(values, "chunk-ms", 100),
     createProject: booleanOption(values, "create-project", true),
+    expectAskAgent,
     provider: providerOption(values),
     model: modelOption(values),
     minOutputBytes: numberOption(values, "min-output-bytes", 4_800),
@@ -417,12 +481,18 @@ function parseOptions(args: readonly string[]): Options {
     pcmFile: optionalStringOption(values, "pcm-file"),
     play: booleanOption(values, "play", false),
     projectSlugOrId: optionalStringOption(values, "project"),
-    prompt: stringOption(values, "prompt", "Please say success."),
+    prompt: stringOption(
+      values,
+      "prompt",
+      expectAskAgent
+        ? "Ask the background agent to fetch example dot com and tell me what it says."
+        : "Please say success.",
+    ),
     silenceMs: numberOption(values, "silence-ms", 1500),
     streamPath: StreamPath.parse(
       stringOption(values, "stream-path", `/voice-agents/e2e-${Date.now().toString(36)}`),
     ),
-    timeoutMs: numberOption(values, "timeout-ms", 60_000),
+    timeoutMs: numberOption(values, "timeout-ms", expectAskAgent ? 180_000 : 60_000),
     voiceName: voiceOption(values),
   };
 }

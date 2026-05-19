@@ -36,7 +36,6 @@ import {
   streamProcessorSubscriptionConfiguredEvent,
   voiceAgentSubscriptionConfiguredEvent,
 } from "~/domains/voice-agents/voice-agent-subscription.ts";
-import { voiceAgentCodeAgentEvents } from "~/domains/voice-agents/voice-agent-code-agent.ts";
 import {
   GEMINI_LIVE_VOICE_PROCESSOR_SLUG,
   GROK_REALTIME_VOICE_PROCESSOR_SLUG,
@@ -161,10 +160,6 @@ function VoiceAgentsIndexPage() {
           }),
           streamProcessorSubscriptionConfiguredEvent({
             processorSlug: voiceProviderProcessorSlug(selectedProvider),
-            projectId: project.id,
-            streamPath,
-          }),
-          ...voiceAgentCodeAgentEvents({
             projectId: project.id,
             streamPath,
           }),

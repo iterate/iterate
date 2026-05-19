@@ -143,15 +143,17 @@ const AgentBase = withStreamProcessor<AgentDurableObjectStructuredName, AgentDur
 })(AgentLifecycleBase);
 
 export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
+  #processorsRegistered = false;
   #streamSocketMessageQueue = Promise.resolve();
 
   constructor(ctx: DurableObjectState, env: AgentDurableObjectEnv) {
     super(ctx, env);
 
     this.registerOnInstanceWake(async (params) => {
-      if (params.agentPath === AGENTS_STREAM_PATH) {
+      if (!this.#processorsRegistered && params.agentPath === AGENTS_STREAM_PATH) {
         this.registerStreamProcessor(createJsonataReactorProcessor());
-      } else {
+        this.#processorsRegistered = true;
+      } else if (!this.#processorsRegistered) {
         await this.ensureAgentSetupEvents(params);
         const llmProvider = await this.resolveLlmProvider(params);
         this.registerStreamProcessor(createAgentChatProcessor());
@@ -161,7 +163,12 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
           }),
         );
         this.registerStreamProcessor(this.createLlmProcessor(llmProvider));
-        await this.ensureAgentWorkspace(params);
+        this.#processorsRegistered = true;
+      }
+      if (params.agentPath !== AGENTS_STREAM_PATH) {
+        if (!isVoiceAgentPath(params.agentPath)) {
+          await this.ensureAgentWorkspace(params);
+        }
         await this.ensureCodemodeSession(params);
       }
       await this.ensureAgentSubscription(params);
@@ -186,7 +193,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       return new Response("Expected WebSocket upgrade", { status: 426 });
     }
 
-    await this.ensureStarted();
+    await this.ensureStartedOrInitializeFromRuntimeName();
 
     const pair = new WebSocketPair();
     const client = pair[0];
@@ -877,6 +884,10 @@ function agentWorkspaceName(params: AgentDurableObjectStructuredName): Workspace
     projectId: params.projectId,
     workspaceId: defaultWorkspaceIdForCodemodeSession({ streamPath: params.agentPath }),
   };
+}
+
+function isVoiceAgentPath(agentPath: string): boolean {
+  return agentPath === "/voice-agents" || agentPath.startsWith("/voice-agents/");
 }
 
 function remoteWithToken(input: { remote: string; token: string }) {
