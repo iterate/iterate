@@ -118,7 +118,7 @@ curl -fsS -X POST "https://${NAMESPACE}.events.iterate-preview-2.com/api/streams
     "payload": {
       "model": "@cf/meta/llama-3.1-8b-instruct",
       "runOpts": { "gateway": { "id": "default" } },
-      "debounceMs": 1000
+      "debounceMs": 200
     }
   }'
 ```
