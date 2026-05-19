@@ -41,4 +41,21 @@ describe("default codemode provider registrations", () => {
       "If no reply is needed, do not call chat.postMessage.",
     );
   });
+
+  test("registers project Sandboxes as a default codemode provider", () => {
+    const providers = createDefaultCodemodeProviderRegistrations({
+      projectId: "proj__test__defaults",
+      streamPath: "/codemode-sessions/defaults",
+    });
+
+    const sandboxesProvider = providers.find((provider) => provider.path.join(".") === "sandboxes");
+
+    expect(sandboxesProvider?.instructions).toContain("ctx.sandboxes.exec");
+    expect(sandboxesProvider?.instructions).toContain("/workspace/iterate-config");
+    expect(sandboxesProvider?.invocation).toEqual(
+      expect.objectContaining({
+        kind: "rpc",
+      }),
+    );
+  });
 });

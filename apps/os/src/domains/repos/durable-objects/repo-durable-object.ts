@@ -20,6 +20,7 @@ import {
   REPO_DEFAULT_BRANCH,
   REPO_README_PATH,
   REPO_WRITE_TOKEN_TTL_SECONDS,
+  type CloudflareArtifactRepo,
   type CloudflareArtifactsBinding,
   artifactRemoteUrl,
   createArtifactToken,
@@ -134,16 +135,21 @@ export class RepoDurableObject extends RepoBase<RepoEnv> {
     const artifactName = repoArtifactName(this.structuredName);
     const artifacts = this.requireArtifacts();
     const source = input.source ?? { kind: "initial-readme" as const };
-    const artifact =
+    const artifactResult =
       source.kind === "artifact-fork"
-        ? await this.forkArtifactRepo({
+        ? await this.forkOrGetArtifactRepo({
             artifactName,
             artifacts,
             source,
           })
-        : await artifacts.create(artifactName, {
-            setDefaultBranch: REPO_DEFAULT_BRANCH,
+        : await this.createOrGetArtifactRepo({
+            artifactName,
+            artifacts,
+            options: {
+              setDefaultBranch: REPO_DEFAULT_BRANCH,
+            },
           });
+    const artifact = artifactResult.artifact;
     const token = await createArtifactToken({
       artifact,
       artifacts,
@@ -157,7 +163,7 @@ export class RepoDurableObject extends RepoBase<RepoEnv> {
       (await readArtifactString(artifact.default_branch)) ??
       REPO_DEFAULT_BRANCH;
 
-    if (source.kind === "initial-readme") {
+    if (source.kind === "initial-readme" && artifactResult.created) {
       await pushInitialReadme({
         defaultBranch,
         projectId: this.structuredName.projectId,
@@ -242,23 +248,53 @@ export class RepoDurableObject extends RepoBase<RepoEnv> {
     });
   }
 
-  private async forkArtifactRepo(input: {
+  private async createOrGetArtifactRepo(input: {
+    artifactName: string;
+    artifacts: CloudflareArtifactsBinding;
+    options?: Parameters<CloudflareArtifactsBinding["create"]>[1];
+  }): Promise<{ artifact: CloudflareArtifactRepo; created: boolean }> {
+    try {
+      return {
+        artifact: await input.artifacts.create(input.artifactName, input.options),
+        created: true,
+      };
+    } catch (error) {
+      if (!isArtifactAlreadyExistsError(error)) throw error;
+      return {
+        artifact: await input.artifacts.get(input.artifactName),
+        created: false,
+      };
+    }
+  }
+
+  private async forkOrGetArtifactRepo(input: {
     artifactName: string;
     artifacts: CloudflareArtifactsBinding;
     source: Extract<NonNullable<CreateRepoInput["source"]>, { kind: "artifact-fork" }>;
-  }) {
+  }): Promise<{ artifact: CloudflareArtifactRepo; created: boolean }> {
     const sourceArtifact = await input.artifacts.get(input.source.artifactName);
     if (typeof sourceArtifact.fork !== "function") {
       throw new Error("Cloudflare Artifacts repo handle did not expose fork().");
     }
 
-    return await sourceArtifact.fork(input.artifactName, {
-      defaultBranchOnly: input.source.defaultBranchOnly ?? true,
-      description:
-        input.source.description ??
-        `Fork of ${input.source.artifactName} for ${this.structuredName.repoSlug}`,
-      readOnly: false,
-    });
+    try {
+      return {
+        artifact: await sourceArtifact.fork(input.artifactName, {
+          defaultBranchOnly: input.source.defaultBranchOnly ?? true,
+          description:
+            input.source.description ??
+            `Fork of ${input.source.artifactName} for ${this.structuredName.repoSlug}`,
+          readOnly: false,
+        }),
+        created: true,
+      };
+    } catch (error) {
+      if (!isArtifactAlreadyExistsError(error)) throw error;
+      return {
+        artifact: await input.artifacts.get(input.artifactName),
+        created: false,
+      };
+    }
   }
 
   private async appendRepoCreatedEvent(input: {
@@ -357,6 +393,10 @@ async function readArtifactString(value: unknown): Promise<string | undefined> {
 
 function shellQuote(value: string) {
   return `'${value.replaceAll("'", "'\"'\"'")}'`;
+}
+
+function isArtifactAlreadyExistsError(error: unknown) {
+  return error instanceof Error && /\b(repo|artifact) already exists\b/i.test(error.message);
 }
 
 type RepoStreamApi = ProcessorStreamApi<typeof RepoStreamProcessorContract> & {

@@ -37,11 +37,13 @@ import { Route as AppOrgsOrganizationSlugProjectsProjectSlugStreamsRouteRouteImp
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugAgentsRouteRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/agents/route'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugStreamsIndexRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/streams/index'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugSecretsIndexRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/secrets/index'
+import { Route as AppOrgsOrganizationSlugProjectsProjectSlugSandboxesIndexRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/sandboxes/index'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugReposIndexRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/repos/index'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsIndexRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/index'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugAgentsIndexRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/agents/index'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugStreamsSplatRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/streams/$'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugSecretsSecretIdRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/secrets/$secretId'
+import { Route as AppOrgsOrganizationSlugProjectsProjectSlugSandboxesSandboxSlugRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/sandboxes/$sandboxSlug'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugReposRepoSlugRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/repos/$repoSlug'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsNewRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/new'
 import { Route as AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRouteImport } from './routes/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/$codemodeSessionName'
@@ -206,6 +208,12 @@ const AppOrgsOrganizationSlugProjectsProjectSlugSecretsIndexRoute =
     path: '/secrets/',
     getParentRoute: () => AppOrgsOrganizationSlugProjectsProjectSlugRouteRoute,
   } as any)
+const AppOrgsOrganizationSlugProjectsProjectSlugSandboxesIndexRoute =
+  AppOrgsOrganizationSlugProjectsProjectSlugSandboxesIndexRouteImport.update({
+    id: '/sandboxes/',
+    path: '/sandboxes/',
+    getParentRoute: () => AppOrgsOrganizationSlugProjectsProjectSlugRouteRoute,
+  } as any)
 const AppOrgsOrganizationSlugProjectsProjectSlugReposIndexRoute =
   AppOrgsOrganizationSlugProjectsProjectSlugReposIndexRouteImport.update({
     id: '/repos/',
@@ -241,6 +249,15 @@ const AppOrgsOrganizationSlugProjectsProjectSlugSecretsSecretIdRoute =
     path: '/secrets/$secretId',
     getParentRoute: () => AppOrgsOrganizationSlugProjectsProjectSlugRouteRoute,
   } as any)
+const AppOrgsOrganizationSlugProjectsProjectSlugSandboxesSandboxSlugRoute =
+  AppOrgsOrganizationSlugProjectsProjectSlugSandboxesSandboxSlugRouteImport.update(
+    {
+      id: '/sandboxes/$sandboxSlug',
+      path: '/sandboxes/$sandboxSlug',
+      getParentRoute: () =>
+        AppOrgsOrganizationSlugProjectsProjectSlugRouteRoute,
+    } as any,
+  )
 const AppOrgsOrganizationSlugProjectsProjectSlugReposRepoSlugRoute =
   AppOrgsOrganizationSlugProjectsProjectSlugReposRepoSlugRouteImport.update({
     id: '/repos/$repoSlug',
@@ -320,11 +337,13 @@ export interface FileRoutesByFullPath {
   '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/$codemodeSessionName': typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute
   '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/new': typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsNewRoute
   '/orgs/$organizationSlug/projects/$projectSlug/repos/$repoSlug': typeof AppOrgsOrganizationSlugProjectsProjectSlugReposRepoSlugRoute
+  '/orgs/$organizationSlug/projects/$projectSlug/sandboxes/$sandboxSlug': typeof AppOrgsOrganizationSlugProjectsProjectSlugSandboxesSandboxSlugRoute
   '/orgs/$organizationSlug/projects/$projectSlug/secrets/$secretId': typeof AppOrgsOrganizationSlugProjectsProjectSlugSecretsSecretIdRoute
   '/orgs/$organizationSlug/projects/$projectSlug/streams/$': typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsSplatRoute
   '/orgs/$organizationSlug/projects/$projectSlug/agents/': typeof AppOrgsOrganizationSlugProjectsProjectSlugAgentsIndexRoute
   '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/': typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsIndexRoute
   '/orgs/$organizationSlug/projects/$projectSlug/repos/': typeof AppOrgsOrganizationSlugProjectsProjectSlugReposIndexRoute
+  '/orgs/$organizationSlug/projects/$projectSlug/sandboxes/': typeof AppOrgsOrganizationSlugProjectsProjectSlugSandboxesIndexRoute
   '/orgs/$organizationSlug/projects/$projectSlug/secrets/': typeof AppOrgsOrganizationSlugProjectsProjectSlugSecretsIndexRoute
   '/orgs/$organizationSlug/projects/$projectSlug/streams/': typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsIndexRoute
   '/orgs/$organizationSlug/projects/$projectSlug/agents/streams/$': typeof AppOrgsOrganizationSlugProjectsProjectSlugAgentsStreamsSplatRoute
@@ -355,11 +374,13 @@ export interface FileRoutesByTo {
   '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/$codemodeSessionName': typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute
   '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/new': typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsNewRoute
   '/orgs/$organizationSlug/projects/$projectSlug/repos/$repoSlug': typeof AppOrgsOrganizationSlugProjectsProjectSlugReposRepoSlugRoute
+  '/orgs/$organizationSlug/projects/$projectSlug/sandboxes/$sandboxSlug': typeof AppOrgsOrganizationSlugProjectsProjectSlugSandboxesSandboxSlugRoute
   '/orgs/$organizationSlug/projects/$projectSlug/secrets/$secretId': typeof AppOrgsOrganizationSlugProjectsProjectSlugSecretsSecretIdRoute
   '/orgs/$organizationSlug/projects/$projectSlug/streams/$': typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsSplatRoute
   '/orgs/$organizationSlug/projects/$projectSlug/agents': typeof AppOrgsOrganizationSlugProjectsProjectSlugAgentsIndexRoute
   '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions': typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsIndexRoute
   '/orgs/$organizationSlug/projects/$projectSlug/repos': typeof AppOrgsOrganizationSlugProjectsProjectSlugReposIndexRoute
+  '/orgs/$organizationSlug/projects/$projectSlug/sandboxes': typeof AppOrgsOrganizationSlugProjectsProjectSlugSandboxesIndexRoute
   '/orgs/$organizationSlug/projects/$projectSlug/secrets': typeof AppOrgsOrganizationSlugProjectsProjectSlugSecretsIndexRoute
   '/orgs/$organizationSlug/projects/$projectSlug/streams': typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsIndexRoute
   '/orgs/$organizationSlug/projects/$projectSlug/agents/streams/$': typeof AppOrgsOrganizationSlugProjectsProjectSlugAgentsStreamsSplatRoute
@@ -397,11 +418,13 @@ export interface FileRoutesById {
   '/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/$codemodeSessionName': typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute
   '/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/new': typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsNewRoute
   '/_app/orgs/$organizationSlug/projects/$projectSlug/repos/$repoSlug': typeof AppOrgsOrganizationSlugProjectsProjectSlugReposRepoSlugRoute
+  '/_app/orgs/$organizationSlug/projects/$projectSlug/sandboxes/$sandboxSlug': typeof AppOrgsOrganizationSlugProjectsProjectSlugSandboxesSandboxSlugRoute
   '/_app/orgs/$organizationSlug/projects/$projectSlug/secrets/$secretId': typeof AppOrgsOrganizationSlugProjectsProjectSlugSecretsSecretIdRoute
   '/_app/orgs/$organizationSlug/projects/$projectSlug/streams/$': typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsSplatRoute
   '/_app/orgs/$organizationSlug/projects/$projectSlug/agents/': typeof AppOrgsOrganizationSlugProjectsProjectSlugAgentsIndexRoute
   '/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/': typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsIndexRoute
   '/_app/orgs/$organizationSlug/projects/$projectSlug/repos/': typeof AppOrgsOrganizationSlugProjectsProjectSlugReposIndexRoute
+  '/_app/orgs/$organizationSlug/projects/$projectSlug/sandboxes/': typeof AppOrgsOrganizationSlugProjectsProjectSlugSandboxesIndexRoute
   '/_app/orgs/$organizationSlug/projects/$projectSlug/secrets/': typeof AppOrgsOrganizationSlugProjectsProjectSlugSecretsIndexRoute
   '/_app/orgs/$organizationSlug/projects/$projectSlug/streams/': typeof AppOrgsOrganizationSlugProjectsProjectSlugStreamsIndexRoute
   '/_app/orgs/$organizationSlug/projects/$projectSlug/agents/streams/$': typeof AppOrgsOrganizationSlugProjectsProjectSlugAgentsStreamsSplatRoute
@@ -439,11 +462,13 @@ export interface FileRouteTypes {
     | '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/$codemodeSessionName'
     | '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/new'
     | '/orgs/$organizationSlug/projects/$projectSlug/repos/$repoSlug'
+    | '/orgs/$organizationSlug/projects/$projectSlug/sandboxes/$sandboxSlug'
     | '/orgs/$organizationSlug/projects/$projectSlug/secrets/$secretId'
     | '/orgs/$organizationSlug/projects/$projectSlug/streams/$'
     | '/orgs/$organizationSlug/projects/$projectSlug/agents/'
     | '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/'
     | '/orgs/$organizationSlug/projects/$projectSlug/repos/'
+    | '/orgs/$organizationSlug/projects/$projectSlug/sandboxes/'
     | '/orgs/$organizationSlug/projects/$projectSlug/secrets/'
     | '/orgs/$organizationSlug/projects/$projectSlug/streams/'
     | '/orgs/$organizationSlug/projects/$projectSlug/agents/streams/$'
@@ -474,11 +499,13 @@ export interface FileRouteTypes {
     | '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/$codemodeSessionName'
     | '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/new'
     | '/orgs/$organizationSlug/projects/$projectSlug/repos/$repoSlug'
+    | '/orgs/$organizationSlug/projects/$projectSlug/sandboxes/$sandboxSlug'
     | '/orgs/$organizationSlug/projects/$projectSlug/secrets/$secretId'
     | '/orgs/$organizationSlug/projects/$projectSlug/streams/$'
     | '/orgs/$organizationSlug/projects/$projectSlug/agents'
     | '/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions'
     | '/orgs/$organizationSlug/projects/$projectSlug/repos'
+    | '/orgs/$organizationSlug/projects/$projectSlug/sandboxes'
     | '/orgs/$organizationSlug/projects/$projectSlug/secrets'
     | '/orgs/$organizationSlug/projects/$projectSlug/streams'
     | '/orgs/$organizationSlug/projects/$projectSlug/agents/streams/$'
@@ -515,11 +542,13 @@ export interface FileRouteTypes {
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/$codemodeSessionName'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/new'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/repos/$repoSlug'
+    | '/_app/orgs/$organizationSlug/projects/$projectSlug/sandboxes/$sandboxSlug'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/secrets/$secretId'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/streams/$'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/agents/'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/repos/'
+    | '/_app/orgs/$organizationSlug/projects/$projectSlug/sandboxes/'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/secrets/'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/streams/'
     | '/_app/orgs/$organizationSlug/projects/$projectSlug/agents/streams/$'
@@ -738,6 +767,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugSecretsIndexRouteImport
       parentRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugRouteRoute
     }
+    '/_app/orgs/$organizationSlug/projects/$projectSlug/sandboxes/': {
+      id: '/_app/orgs/$organizationSlug/projects/$projectSlug/sandboxes/'
+      path: '/sandboxes'
+      fullPath: '/orgs/$organizationSlug/projects/$projectSlug/sandboxes/'
+      preLoaderRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugSandboxesIndexRouteImport
+      parentRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugRouteRoute
+    }
     '/_app/orgs/$organizationSlug/projects/$projectSlug/repos/': {
       id: '/_app/orgs/$organizationSlug/projects/$projectSlug/repos/'
       path: '/repos'
@@ -771,6 +807,13 @@ declare module '@tanstack/react-router' {
       path: '/secrets/$secretId'
       fullPath: '/orgs/$organizationSlug/projects/$projectSlug/secrets/$secretId'
       preLoaderRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugSecretsSecretIdRouteImport
+      parentRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugRouteRoute
+    }
+    '/_app/orgs/$organizationSlug/projects/$projectSlug/sandboxes/$sandboxSlug': {
+      id: '/_app/orgs/$organizationSlug/projects/$projectSlug/sandboxes/$sandboxSlug'
+      path: '/sandboxes/$sandboxSlug'
+      fullPath: '/orgs/$organizationSlug/projects/$projectSlug/sandboxes/$sandboxSlug'
+      preLoaderRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugSandboxesSandboxSlugRouteImport
       parentRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugRouteRoute
     }
     '/_app/orgs/$organizationSlug/projects/$projectSlug/repos/$repoSlug': {
@@ -871,9 +914,11 @@ interface AppOrgsOrganizationSlugProjectsProjectSlugRouteRouteChildren {
   AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute
   AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsNewRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsNewRoute
   AppOrgsOrganizationSlugProjectsProjectSlugReposRepoSlugRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugReposRepoSlugRoute
+  AppOrgsOrganizationSlugProjectsProjectSlugSandboxesSandboxSlugRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugSandboxesSandboxSlugRoute
   AppOrgsOrganizationSlugProjectsProjectSlugSecretsSecretIdRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugSecretsSecretIdRoute
   AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsIndexRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsIndexRoute
   AppOrgsOrganizationSlugProjectsProjectSlugReposIndexRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugReposIndexRoute
+  AppOrgsOrganizationSlugProjectsProjectSlugSandboxesIndexRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugSandboxesIndexRoute
   AppOrgsOrganizationSlugProjectsProjectSlugSecretsIndexRoute: typeof AppOrgsOrganizationSlugProjectsProjectSlugSecretsIndexRoute
 }
 
@@ -899,12 +944,16 @@ const AppOrgsOrganizationSlugProjectsProjectSlugRouteRouteChildren: AppOrgsOrgan
       AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsNewRoute,
     AppOrgsOrganizationSlugProjectsProjectSlugReposRepoSlugRoute:
       AppOrgsOrganizationSlugProjectsProjectSlugReposRepoSlugRoute,
+    AppOrgsOrganizationSlugProjectsProjectSlugSandboxesSandboxSlugRoute:
+      AppOrgsOrganizationSlugProjectsProjectSlugSandboxesSandboxSlugRoute,
     AppOrgsOrganizationSlugProjectsProjectSlugSecretsSecretIdRoute:
       AppOrgsOrganizationSlugProjectsProjectSlugSecretsSecretIdRoute,
     AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsIndexRoute:
       AppOrgsOrganizationSlugProjectsProjectSlugCodemodeSessionsIndexRoute,
     AppOrgsOrganizationSlugProjectsProjectSlugReposIndexRoute:
       AppOrgsOrganizationSlugProjectsProjectSlugReposIndexRoute,
+    AppOrgsOrganizationSlugProjectsProjectSlugSandboxesIndexRoute:
+      AppOrgsOrganizationSlugProjectsProjectSlugSandboxesIndexRoute,
     AppOrgsOrganizationSlugProjectsProjectSlugSecretsIndexRoute:
       AppOrgsOrganizationSlugProjectsProjectSlugSecretsIndexRoute,
   }
