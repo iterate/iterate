@@ -7,6 +7,7 @@ import {
 import {
   batchPreviewAppsByDependencies,
   expandPreviewDependencies,
+  resolvePreviewReadinessUrls,
   resolvePreviewCompareBaseSha,
   selectPreviewAppsNeedingRetry,
 } from "./preview.ts";
@@ -53,6 +54,17 @@ describe("preview workflow scope", () => {
       ".github/ts-workflows/workflows/cloudflare-previews.ts",
     );
     expect(cloudflarePreviewSharedPaths).toContain(".github/workflows/cloudflare-previews.yml");
+  });
+});
+
+describe("preview readiness URLs", () => {
+  it("checks the deployed app URL without probing synthetic project hostnames", () => {
+    expect(
+      resolvePreviewReadinessUrls({
+        publicUrl: "https://os.iterate-preview-2.com",
+        projectHostnameBases: ["iterate-preview-2.app", "*.iterate-preview-2.app"],
+      }).map((url) => url.toString()),
+    ).toEqual(["https://os.iterate-preview-2.com/api/__internal/health"]);
   });
 });
 

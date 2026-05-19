@@ -84,6 +84,7 @@ const CloudflareZonesResponse = z
               })
               .passthrough()
               .optional(),
+            status: z.string().optional(),
           })
           .passthrough(),
       )
@@ -360,17 +361,54 @@ async function checkCloudflareZoneWithApi(input: {
     };
   }
 
-  const matchingZone = parsed.result.find(
-    (zone) => zone.name === input.domain && zone.account?.id === input.accountId,
-  );
-  if (matchingZone == null) {
+  return evaluateCloudflareZoneCheck({
+    accountId: input.accountId,
+    domain: input.domain,
+    zones: parsed.result,
+  });
+}
+
+export function evaluateCloudflareZoneCheck(input: {
+  accountId: string;
+  domain: string;
+  zones: Array<{
+    account?: { id?: string };
+    name: string;
+    status?: string;
+  }>;
+}): CheckResult {
+  const matchingZones = input.zones.filter((zone) => zone.name === input.domain);
+  const matchingActiveZone = matchingZones.find((zone) => zone.status === "active");
+  const matchingAccountZone = matchingZones.find((zone) => zone.account?.id === input.accountId);
+  if (matchingActiveZone?.account?.id === input.accountId) {
+    return { ok: true };
+  }
+
+  if (matchingActiveZone) {
+    return {
+      ok: false,
+      message: `active zone belongs to Cloudflare account ${matchingActiveZone.account?.id ?? "unknown"}, expected ${input.accountId}`,
+    };
+  }
+
+  if (matchingAccountZone) {
+    return {
+      ok: false,
+      message: `zone in Cloudflare account ${input.accountId} is ${matchingAccountZone.status ?? "not active"}`,
+    };
+  }
+
+  if (matchingZones.length === 0) {
     return {
       ok: false,
       message: `zone not found in Cloudflare account ${input.accountId}`,
     };
   }
 
-  return { ok: true };
+  return {
+    ok: false,
+    message: `zone exists but not in Cloudflare account ${input.accountId}`,
+  };
 }
 
 function commandFailureSummary(result: { stderr: string; stdout: string }) {

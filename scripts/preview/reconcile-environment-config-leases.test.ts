@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { reconcileEnvironmentConfigLeaseResources } from "./reconcile-environment-config-leases.ts";
+import {
+  evaluateCloudflareZoneCheck,
+  reconcileEnvironmentConfigLeaseResources,
+} from "./reconcile-environment-config-leases.ts";
 import { ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE } from "./preview-inventory.ts";
 
 describe("reconcileEnvironmentConfigLeaseResources", () => {
@@ -102,5 +105,48 @@ describe("reconcileEnvironmentConfigLeaseResources", () => {
         message: "iterate-preview-3.app: zone not found in Cloudflare account cf-account",
       },
     ]);
+  });
+});
+
+describe("evaluateCloudflareZoneCheck", () => {
+  it("rejects a moved same-account zone when DNS is delegated to a different active zone", () => {
+    expect(
+      evaluateCloudflareZoneCheck({
+        accountId: "preview-account",
+        domain: "iterate-preview-2.com",
+        zones: [
+          {
+            account: { id: "preview-account" },
+            name: "iterate-preview-2.com",
+            status: "moved",
+          },
+          {
+            account: { id: "delegated-account" },
+            name: "iterate-preview-2.com",
+            status: "active",
+          },
+        ],
+      }),
+    ).toEqual({
+      ok: false,
+      message:
+        "active zone belongs to Cloudflare account delegated-account, expected preview-account",
+    });
+  });
+
+  it("accepts an active zone in the expected account", () => {
+    expect(
+      evaluateCloudflareZoneCheck({
+        accountId: "preview-account",
+        domain: "iterate-preview-2.com",
+        zones: [
+          {
+            account: { id: "preview-account" },
+            name: "iterate-preview-2.com",
+            status: "active",
+          },
+        ],
+      }),
+    ).toEqual({ ok: true });
   });
 });

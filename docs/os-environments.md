@@ -34,7 +34,7 @@ the active app config. App configs must not define local
 The current account split is:
 
 - `_shared/dev`, `_shared/dev_*`, and `_shared/prd` use account `04b3b57291ef2626c6a8daa9d47065a7`
-- `_shared/preview` uses account `376ef7ed81b0573f93524de763666c15`
+- `_shared/preview` uses account `cc7f6f461fbe823c199da2b27f9e0ff3`
 
 The API token (`cfut_...` user token) must have:
 
@@ -104,10 +104,10 @@ Vite picks a free port automatically (defaults to 5173, increments if taken). Th
 ## Preview environments
 
 Preview environments use a shared Semaphore-controlled environment config lease inventory. The
-current inventory is `preview-2` through `preview-9`, each with
-`data.dopplerConfig` pointing at `preview_2` through `preview_9`. `preview_1`
-and `preview_10` are not leased because their os domain pairs are not fully
-configured in the right Cloudflare account.
+current inventory is `preview-1` through `preview-9`, each with
+`data.dopplerConfig` pointing at `preview_1` through `preview_9`. `preview_10`
+is not leased because its os domain pair is not fully configured in the right
+Cloudflare account.
 
 ### How it works
 

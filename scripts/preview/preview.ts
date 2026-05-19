@@ -569,7 +569,6 @@ async function deployPreviewApp(input: {
   }
 
   const readiness = await waitForPreviewAppReadiness({
-    projectHostnameBases: appConfig.projectHostnameBases,
     publicUrl: appConfig.baseUrl,
     signal: input.signal,
     timeoutMs: defaultPreviewReadyTimeoutMs,
@@ -887,18 +886,13 @@ async function mapWithConcurrency<T, Result>(
 }
 
 async function waitForPreviewAppReadiness(params: {
-  projectHostnameBases: readonly string[];
   publicUrl: string;
   signal?: AbortSignal;
   timeoutMs: number;
 }) {
-  const urls = [
-    new URL(defaultPreviewReadyUrlPath, params.publicUrl),
-    ...params.projectHostnameBases.map(
-      (base) =>
-        new URL(defaultPreviewReadyUrlPath, `https://project.${normalizeHostnameBase(base)}`),
-    ),
-  ];
+  const urls = resolvePreviewReadinessUrls({
+    publicUrl: params.publicUrl,
+  });
 
   for (const url of urls) {
     const readiness = await waitForHttpReadiness({
@@ -912,8 +906,13 @@ async function waitForPreviewAppReadiness(params: {
   return { ok: true as const };
 }
 
-function normalizeHostnameBase(base: string) {
-  return base.trim().replace(/^\*\./, "");
+export function resolvePreviewReadinessUrls(params: {
+  projectHostnameBases?: readonly string[];
+  publicUrl: string;
+}) {
+  // Project hostname bases are routed by app data and wildcard DNS, so a
+  // synthetic host like project.<base> is not a reliable app-health signal.
+  return [new URL(defaultPreviewReadyUrlPath, params.publicUrl)];
 }
 
 async function waitForHttpReadiness(params: { signal?: AbortSignal; timeoutMs: number; url: URL }) {
