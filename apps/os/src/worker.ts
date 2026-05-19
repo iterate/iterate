@@ -27,6 +27,7 @@ import { handleDebugRoutes, handleDurableObjectDebugFetch } from "~/debug-routes
 import { dispatchFetchCallable, matchIngressRequest } from "~/ingress/host-routing.ts";
 import { lookupIngressRule } from "~/ingress/lookup.ts";
 import { handleMcpFetch } from "~/domains/inbound-mcp-server/mcp-handler.ts";
+import { handleArtifactEventsBatch } from "~/domains/repos/artifact-events-queue-handler.ts";
 import { handleItxFetch, handleProjectHostItxFetch } from "~/itx/fetch.ts";
 import { handleProjectStreamRpcFetch } from "~/domains/streams/project-stream-rpc.ts";
 import { handleDocsMarkdownFetch } from "~/lib/docs-markdown.ts";
@@ -171,11 +172,8 @@ export default {
     );
   },
 
-  async queue(batch: { messages: readonly unknown[]; queue: string }) {
-    console.warn("[os] received unhandled queue batch", {
-      messageCount: batch.messages.length,
-      queue: batch.queue,
-    });
+  async queue(batch: MessageBatch, env: Env) {
+    await handleArtifactEventsBatch(batch, env);
   },
 };
 

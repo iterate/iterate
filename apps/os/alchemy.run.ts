@@ -1,5 +1,5 @@
 import alchemy from "alchemy";
-import { Ai, D1Database, DurableObjectNamespace, WorkerLoader } from "alchemy/cloudflare";
+import { Ai, D1Database, DurableObjectNamespace, Queue, WorkerLoader } from "alchemy/cloudflare";
 import { Artifacts } from "@iterate-com/shared/alchemy/artifacts";
 import { initAlchemy } from "@iterate-com/shared/alchemy/init";
 import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
@@ -155,6 +155,11 @@ const slackAgent = DurableObjectNamespace<SlackAgentDurableObject>("slack-agent"
   className: "SlackAgentDurableObject",
   sqlite: true,
 });
+const artifactEventsQueue = await Queue("artifact-events", {
+  name: `${ctx.workerName}-artifact-events`,
+  adopt: true,
+});
+
 const debugAppendChainSubscriber = ctx.app.local
   ? DurableObjectNamespace<DebugAppendChainSubscriber>("debug-append-chain-subscriber", {
       className: "DebugAppendChainSubscriber",
@@ -164,6 +169,18 @@ const debugAppendChainSubscriber = ctx.app.local
 
 const { worker, afterFinalize } = await IterateApp(ctx, {
   main: "./src/worker.ts",
+  wranglerTransform(spec) {
+    const queues = (spec.queues ?? {}) as Record<string, unknown>;
+    const consumers = (queues.consumers ?? []) as Array<Record<string, unknown>>;
+    consumers.push({
+      queue: artifactEventsQueue.name,
+      max_batch_size: 10,
+      max_batch_timeout: 5,
+      max_retries: 3,
+      retry_delay: 30,
+    });
+    return { ...spec, queues: { ...queues, consumers } };
+  },
   bindings: {
     DB: db,
     DO_CATALOG: db,
