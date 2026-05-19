@@ -833,6 +833,9 @@ importers:
       '@iterate-com/auth':
         specifier: workspace:*
         version: link:../auth
+      '@iterate-com/auth-contract':
+        specifier: workspace:*
+        version: link:../auth-contract
       '@iterate-com/os-contract':
         specifier: workspace:*
         version: link:../os-contract

@@ -477,3 +477,8 @@ Phase F is last.
   `/api/iterate-auth/session`, redirects auth routes to the auth worker login
   endpoint, and renders sidebar organization/user menus from auth-worker session
   claims.
+- Added `apps/os`'s `auth:sync-clients` script for the A3 OAuth client sync.
+  It ensures auth-worker OAuth clients for dev, preview, and production OS
+  targets, then writes the resulting web/MCP client credentials and OS URL
+  config back to Doppler. It is intended to run through the production auth
+  worker Doppler config so preview/dev OS can target `https://auth.iterate.com`.
