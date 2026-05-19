@@ -472,3 +472,8 @@ Phase F is last.
   Doppler's planned `ITERATE_OAUTH_*` variables into that shape in
   `apps/os/alchemy.run.ts` so existing sync scripts can store OAuth client
   credentials under the simpler environment names.
+- Replaced Clerk's frontend provider and prebuilt sign-in/sign-up/org chooser
+  components with a small Iterate-auth client provider. The UI reads
+  `/api/iterate-auth/session`, redirects auth routes to the auth worker login
+  endpoint, and renders sidebar organization/user menus from auth-worker session
+  claims.

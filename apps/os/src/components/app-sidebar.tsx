@@ -1,9 +1,17 @@
 import { Link, useMatchRoute } from "@tanstack/react-router";
-import { ExternalLink } from "lucide-react";
+import { Building2, ChevronsUpDown, ExternalLink, LogOut, UserCircle } from "lucide-react";
 import type { PublicAppConfig } from "@iterate-com/shared/apps/config";
 import { useConfig } from "@iterate-com/ui/apps/config";
-import { OrganizationSwitcher, UserButton } from "@clerk/tanstack-react-start";
 import { useQuery } from "@tanstack/react-query";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@iterate-com/ui/components/dropdown-menu";
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -17,6 +25,7 @@ import {
 } from "@iterate-com/ui/components/sidebar";
 import { SidebarShell } from "@iterate-com/ui/components/sidebar-shell";
 import type { AppConfig } from "~/app.ts";
+import { useAuthClient } from "~/auth/client.tsx";
 import { buildProjectMcpUrl, buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
 import { orpc } from "~/orpc/client.ts";
 
@@ -28,38 +37,89 @@ type AppSidebarProps = {
 
 export function AppSidebar({ organizationSlug }: AppSidebarProps) {
   return (
-    <SidebarShell header={<AppSidebarOrganization />} footer={<AppSidebarUser />}>
+    <SidebarShell
+      header={<AppSidebarOrganization organizationSlug={organizationSlug} />}
+      footer={<AppSidebarUser />}
+    >
       <AppSidebarNav organizationSlug={organizationSlug} />
     </SidebarShell>
   );
 }
 
-function AppSidebarOrganization() {
+function AppSidebarOrganization({ organizationSlug }: AppSidebarProps) {
+  const { session } = useAuthClient();
+  const organizations = session?.authenticated ? session.session.organizations : [];
+  const activeOrganization =
+    organizations.find((organization) => organization.slug === organizationSlug) ??
+    organizations[0];
+
   return (
-    <div className="px-2">
-      <OrganizationSwitcher
-        hidePersonal
-        afterCreateOrganizationUrl="/organization"
-        afterLeaveOrganizationUrl="/organization"
-        afterSelectOrganizationUrl="/organization"
-        appearance={{
-          elements: {
-            organizationSwitcherTrigger:
-              "w-full justify-start rounded-md border border-sidebar-border bg-sidebar-accent px-3 py-2 text-sidebar-accent-foreground shadow-none",
-            organizationPreview: "min-w-0",
-            organizationPreviewTextContainer: "min-w-0 text-left",
-          },
-        }}
-      />
-    </div>
+    <SidebarMenu>
+      <SidebarMenuItem>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <SidebarMenuButton className="h-10 gap-2 data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground">
+                <Building2 className="size-4" />
+                <span className="truncate">{activeOrganization?.name ?? organizationSlug}</span>
+                <ChevronsUpDown className="ml-auto size-4" />
+              </SidebarMenuButton>
+            }
+          />
+          <DropdownMenuContent side="bottom" align="start" className="w-56">
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>Organizations</DropdownMenuLabel>
+              {organizations.map((organization) => (
+                <DropdownMenuItem
+                  key={organization.id}
+                  render={
+                    <Link
+                      to="/orgs/$organizationSlug"
+                      params={{ organizationSlug: organization.slug }}
+                    />
+                  }
+                >
+                  <Building2 />
+                  <span className="truncate">{organization.name}</span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </SidebarMenuItem>
+    </SidebarMenu>
   );
 }
 
 function AppSidebarUser() {
+  const { session, signOut } = useAuthClient();
+  const user = session?.authenticated ? session.user : null;
+  const label = user?.name ?? user?.email ?? "Account";
+
   return (
-    <div className="flex items-center px-3 py-2">
-      <UserButton />
-    </div>
+    <SidebarMenu>
+      <SidebarMenuItem>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <SidebarMenuButton className="h-10 gap-2 data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground">
+                <UserCircle className="size-4" />
+                <span className="truncate">{label}</span>
+                <ChevronsUpDown className="ml-auto size-4" />
+              </SidebarMenuButton>
+            }
+          />
+          <DropdownMenuContent side="top" align="start" className="w-56">
+            <DropdownMenuLabel className="truncate">{label}</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => void signOut()}>
+              <LogOut />
+              <span>Sign out</span>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </SidebarMenuItem>
+    </SidebarMenu>
   );
 }
 
