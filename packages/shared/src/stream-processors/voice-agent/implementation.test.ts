@@ -97,6 +97,41 @@ describe("createVoiceAgentProviderProcessor", () => {
     );
   });
 
+  it("forces Gemini to call messageAgent when configured as required", async () => {
+    const socket = new FakeWebSocket();
+    const processor = providerProcessor({
+      provider: VOICE_AGENT_PROVIDER_GEMINI_LIVE,
+      socket,
+    });
+
+    void processor.implementation.afterAppend?.({
+      event: committedEvent({
+        type: VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE,
+        payload: { text: "Ask the agent to check the repo." },
+      }),
+      previousState: voiceAgentState(VOICE_AGENT_PROVIDER_GEMINI_LIVE, {
+        messageAgentToolChoice: "required",
+      }),
+      state: voiceAgentState(VOICE_AGENT_PROVIDER_GEMINI_LIVE, {
+        messageAgentToolChoice: "required",
+      }),
+      streamApi: testStreamApi([]),
+      signal: new AbortController().signal,
+    });
+
+    await waitFor(() => socket.sent.length === 1);
+    expect(socket.sent[0]).toMatchObject({
+      setup: {
+        toolConfig: {
+          functionCallingConfig: {
+            mode: "ANY",
+            allowedFunctionNames: ["messageAgent"],
+          },
+        },
+      },
+    });
+  });
+
   it.each([
     { label: "OpenAI", provider: VOICE_AGENT_PROVIDER_OPENAI_REALTIME },
     { label: "Grok", provider: VOICE_AGENT_PROVIDER_GROK_REALTIME },
@@ -259,7 +294,10 @@ function providerSentText(sent: unknown[], provider: VoiceAgentProvider) {
   return message?.item?.content?.find((part) => part.type === "input_text")?.text ?? "";
 }
 
-function voiceAgentState(provider: VoiceAgentProvider): VoiceAgentState {
+function voiceAgentState(
+  provider: VoiceAgentProvider,
+  overrides: Partial<VoiceAgentState["setup"]> = {},
+): VoiceAgentState {
   const providerDefaults = providerConfigDefaults(provider);
   return VoiceAgentProcessorContract.stateSchema.parse({
     setup: {
@@ -267,6 +305,7 @@ function voiceAgentState(provider: VoiceAgentProvider): VoiceAgentState {
       model: providerDefaults.model,
       voiceName: providerDefaults.voiceName,
       systemInstruction: "You are concise.",
+      ...overrides,
     },
   });
 }

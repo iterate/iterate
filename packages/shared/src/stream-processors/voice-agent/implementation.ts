@@ -623,6 +623,9 @@ async function openGeminiLiveConnection(args: {
         parts: [{ text: systemInstructionWithMessageAgent(args.setup.systemInstruction) }],
       },
       tools: [geminiMessageAgentTool()],
+      ...(args.setup.messageAgentToolChoice === "required"
+        ? { toolConfig: geminiRequiredMessageAgentToolConfig() }
+        : {}),
     },
   } satisfies JsonValue;
   const sequence = connection.sendSequence++;
@@ -1237,6 +1240,15 @@ function geminiMessageAgentTool() {
         parameters: messageAgentParameters(),
       },
     ],
+  } satisfies JsonValue;
+}
+
+function geminiRequiredMessageAgentToolConfig() {
+  return {
+    functionCallingConfig: {
+      mode: "ANY",
+      allowedFunctionNames: ["messageAgent"],
+    },
   } satisfies JsonValue;
 }
 
