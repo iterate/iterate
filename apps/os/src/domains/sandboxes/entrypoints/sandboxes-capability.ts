@@ -485,22 +485,6 @@ export class SandboxesCapability extends WorkerEntrypoint<
   }
 }
 
-type SandboxWorkerRequest =
-  | {
-      input: { slug: string };
-      op: "createInfo" | "destroyRuntime" | "getInfo" | "wake";
-      projectId: string;
-    }
-  | {
-      input: { exec: SandboxExecInput; slug: string };
-      op: "exec";
-      projectId: string;
-    }
-  | {
-      op: "list";
-      projectId: string;
-    };
-
 type SandboxWorkerRequestWithoutProject =
   | {
       input: { slug: string };
