@@ -541,11 +541,13 @@ function providerInputText(
 ) {
   if (event.payload.source !== "code-agent") return event.payload.text;
   return [
-    "BACKGROUND AGENT RESULT FOR THE CALLER:",
+    "BACKGROUND AGENT MESSAGE TO RELAY TO THE CALLER:",
     event.payload.text,
     "",
-    "This message is not from the caller. It is the result from the background code-capable agent you asked for help.",
-    "Tell the caller the answer directly and naturally now.",
+    "This message is not from the caller. It is from the background code-capable agent you asked for help.",
+    "Your job is to relay this message to the caller in natural speech.",
+    "If the background agent's message is a question, ask that question to the caller. Do not answer the question yourself.",
+    "If the background agent's message is an answer or update, tell the caller that answer or update directly.",
     "Do not say thanks, thank you, thanks for the update, or any other gratitude/acknowledgement phrase.",
     "Do not say the caller told you this. Do not describe the background agent as if it is another participant in the call.",
   ].join("\n");
@@ -1190,7 +1192,7 @@ async function sendOpenAiCompatibleFunctionCallOutput(args: {
 function systemInstructionWithMessageAgent(systemInstruction: string) {
   return [
     systemInstruction,
-    "You have a tool named Message Agent. Use it when the caller asks for actions, investigation, code, data lookup, or anything requiring tools. Message Agent sends the request to a code-capable background agent. After calling it, tell the caller you asked the agent and continue the conversation while it works.",
+    "You have a tool named Message Agent. Use it when the caller asks for actions, investigation, code, data lookup, or anything requiring tools. Message Agent sends the request to a code-capable background agent. After calling it, tell the caller you asked the agent and continue the conversation while it works. When the background agent replies, relay its message to the caller; if it replies with a question, ask that question to the caller rather than answering it yourself.",
   ].join("\n\n");
 }
 

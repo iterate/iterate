@@ -194,7 +194,7 @@ describe("createVoiceAgentProviderProcessor", () => {
           type: VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE,
           payload: {
             source: "code-agent",
-            text: "The weather is 18C and cloudy.",
+            text: "What occupation should I put on your profile?",
           },
         }),
         previousState: voiceAgentState(provider),
@@ -212,9 +212,10 @@ describe("createVoiceAgentProviderProcessor", () => {
       await afterAppend;
 
       const providerText = providerSentText(socket.sent, provider);
-      expect(providerText).toContain("BACKGROUND AGENT RESULT FOR THE CALLER:");
-      expect(providerText).toContain("The weather is 18C and cloudy.");
+      expect(providerText).toContain("BACKGROUND AGENT MESSAGE TO RELAY TO THE CALLER:");
+      expect(providerText).toContain("What occupation should I put on your profile?");
       expect(providerText).toContain("This message is not from the caller.");
+      expect(providerText).toContain("ask that question to the caller");
       expect(providerText).toContain("Do not say thanks, thank you");
     },
   );
