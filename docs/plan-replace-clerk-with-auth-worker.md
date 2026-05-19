@@ -495,3 +495,8 @@ Phase F is last.
   `sync-clerk-apps.ts`, and the last runtime Clerk API lookup. Remaining
   `clerk_organization` strings are legacy permission-table values; the runtime
   no longer imports Clerk packages or reads `APP_CONFIG_CLERK__*`.
+- Restructured OS dashboard URLs so project pages live under
+  `/projects/:projectSlug` and organization pages under `/org/:organizationSlug`.
+  The shared `_app` layout now owns the active-organization sidebar, while
+  project authorization also accepts auth-worker project claims before falling
+  back to the legacy permission table.

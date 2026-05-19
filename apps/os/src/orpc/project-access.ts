@@ -34,6 +34,10 @@ export async function requireActiveOrganizationProject(input: {
     return project;
   }
 
+  if (input.context.principal?.can("read", { projectId: input.projectId })) {
+    return project;
+  }
+
   const permission = await getProjectPermission(input.context.db, {
     principalId: input.activeOrganization.orgId,
     principalType: "clerk_organization",
@@ -76,6 +80,10 @@ export async function requireProjectScopedAccess(input: {
   }
 
   if (activeOrganization.isAdminApi) {
+    return project;
+  }
+
+  if (input.context.principal?.can("read", { projectId: project.id })) {
     return project;
   }
 

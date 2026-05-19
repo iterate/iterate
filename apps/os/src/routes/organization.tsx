@@ -22,7 +22,7 @@ function OrganizationRoute() {
             variant="outline"
             className="h-11 w-full justify-start gap-2"
             render={
-              <Link to="/orgs/$organizationSlug" params={{ organizationSlug: organization.slug }} />
+              <Link to="/org/$organizationSlug" params={{ organizationSlug: organization.slug }} />
             }
           >
             <Building2 className="size-4" />

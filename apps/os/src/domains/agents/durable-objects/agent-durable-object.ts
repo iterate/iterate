@@ -527,15 +527,13 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
   private async createDebugSnapshot() {
     const project = await this.readDebugProjectInfo();
     const config = this.getAppConfig();
-    const streamUrl =
-      project?.organizationSlug && project.slug
-        ? buildProjectStreamViewerUrl({
-            baseUrl: config.baseUrl,
-            organizationSlug: project.organizationSlug,
-            projectSlug: project.slug,
-            streamPath: this.structuredName.agentPath,
-          })
-        : (config.baseUrl ?? "https://os.iterate.com");
+    const streamUrl = project?.slug
+      ? buildProjectStreamViewerUrl({
+          baseUrl: config.baseUrl,
+          projectSlug: project.slug,
+          streamPath: this.structuredName.agentPath,
+        })
+      : (config.baseUrl ?? "https://os.iterate.com");
     const snapshot = {
       project:
         project == null

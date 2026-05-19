@@ -435,6 +435,10 @@ async function requireProject(input: {
     return project;
   }
 
+  if (input.context.principal?.can("read", { projectId: input.projectId })) {
+    return project;
+  }
+
   const permission = await getProjectPermission(input.context.db, {
     principalId: input.activeOrganization.orgId,
     principalType: "clerk_organization",

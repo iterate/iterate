@@ -58,7 +58,7 @@ export const requireSignedInForOrganizationRoute = createServerFn({ method: "GET
 
     if (organization) {
       throw redirect({
-        to: "/orgs/$organizationSlug",
+        to: "/org/$organizationSlug",
         params: { organizationSlug: organization.slug },
       });
     }
@@ -80,7 +80,7 @@ export const redirectAuthenticatedUserFromAuthRoute = createServerFn({ method: "
     }
 
     throw redirect({
-      to: "/orgs/$organizationSlug",
+      to: "/org/$organizationSlug",
       params: { organizationSlug: organization.slug },
     });
   },

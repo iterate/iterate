@@ -74,7 +74,7 @@ function AppSidebarOrganization({ organizationSlug }: AppSidebarProps) {
                   key={organization.id}
                   render={
                     <Link
-                      to="/orgs/$organizationSlug"
+                      to="/org/$organizationSlug"
                       params={{ organizationSlug: organization.slug }}
                     />
                   }
@@ -139,13 +139,10 @@ function AppSidebarNav({ organizationSlug }: AppSidebarProps) {
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton
-                render={
-                  <Link to="/orgs/$organizationSlug/projects" params={{ organizationSlug }} />
-                }
+                render={<Link to="/projects" />}
                 isActive={Boolean(
                   matchRoute({
-                    to: "/orgs/$organizationSlug/projects",
-                    params: { organizationSlug },
+                    to: "/projects",
                     fuzzy: false,
                   }),
                 )}
@@ -160,7 +157,6 @@ function AppSidebarNav({ organizationSlug }: AppSidebarProps) {
       {projects.map((project) => (
         <ProjectSidebarGroup
           key={project.id}
-          organizationSlug={organizationSlug}
           customHostname={project.customHostname}
           projectSlug={project.slug}
           baseUrl={config.baseUrl}
@@ -174,13 +170,11 @@ function AppSidebarNav({ organizationSlug }: AppSidebarProps) {
 function ProjectSidebarGroup({
   baseUrl,
   customHostname,
-  organizationSlug,
   projectHostnameBases,
   projectSlug,
 }: {
   baseUrl?: string;
   customHostname: string | null;
-  organizationSlug: string;
   projectHostnameBases: readonly string[];
   projectSlug: string;
 }) {
@@ -199,16 +193,11 @@ function ProjectSidebarGroup({
         <SidebarMenuSub>
           <SidebarMenuSubItem>
             <SidebarMenuSubButton
-              render={
-                <Link
-                  to="/orgs/$organizationSlug/projects/$projectSlug"
-                  params={{ organizationSlug, projectSlug }}
-                />
-              }
+              render={<Link to="/projects/$projectSlug" params={{ projectSlug }} />}
               isActive={Boolean(
                 matchRoute({
-                  to: "/orgs/$organizationSlug/projects/$projectSlug",
-                  params: { organizationSlug, projectSlug },
+                  to: "/projects/$projectSlug",
+                  params: { projectSlug },
                   fuzzy: false,
                 }),
               )}
@@ -218,16 +207,11 @@ function ProjectSidebarGroup({
           </SidebarMenuSubItem>
           <SidebarMenuSubItem>
             <SidebarMenuSubButton
-              render={
-                <Link
-                  to="/orgs/$organizationSlug/projects/$projectSlug/agents"
-                  params={{ organizationSlug, projectSlug }}
-                />
-              }
+              render={<Link to="/projects/$projectSlug/agents" params={{ projectSlug }} />}
               isActive={Boolean(
                 matchRoute({
-                  to: "/orgs/$organizationSlug/projects/$projectSlug/agents",
-                  params: { organizationSlug, projectSlug },
+                  to: "/projects/$projectSlug/agents",
+                  params: { projectSlug },
                   fuzzy: true,
                 }),
               )}
@@ -238,15 +222,12 @@ function ProjectSidebarGroup({
           <SidebarMenuSubItem>
             <SidebarMenuSubButton
               render={
-                <Link
-                  to="/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions"
-                  params={{ organizationSlug, projectSlug }}
-                />
+                <Link to="/projects/$projectSlug/codemode-sessions" params={{ projectSlug }} />
               }
               isActive={Boolean(
                 matchRoute({
-                  to: "/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions",
-                  params: { organizationSlug, projectSlug },
+                  to: "/projects/$projectSlug/codemode-sessions",
+                  params: { projectSlug },
                   fuzzy: true,
                 }),
               )}
@@ -256,16 +237,11 @@ function ProjectSidebarGroup({
           </SidebarMenuSubItem>
           <SidebarMenuSubItem>
             <SidebarMenuSubButton
-              render={
-                <Link
-                  to="/orgs/$organizationSlug/projects/$projectSlug/repos"
-                  params={{ organizationSlug, projectSlug }}
-                />
-              }
+              render={<Link to="/projects/$projectSlug/repos" params={{ projectSlug }} />}
               isActive={Boolean(
                 matchRoute({
-                  to: "/orgs/$organizationSlug/projects/$projectSlug/repos",
-                  params: { organizationSlug, projectSlug },
+                  to: "/projects/$projectSlug/repos",
+                  params: { projectSlug },
                   fuzzy: true,
                 }),
               )}
@@ -275,16 +251,11 @@ function ProjectSidebarGroup({
           </SidebarMenuSubItem>
           <SidebarMenuSubItem>
             <SidebarMenuSubButton
-              render={
-                <Link
-                  to="/orgs/$organizationSlug/projects/$projectSlug/secrets"
-                  params={{ organizationSlug, projectSlug }}
-                />
-              }
+              render={<Link to="/projects/$projectSlug/secrets" params={{ projectSlug }} />}
               isActive={Boolean(
                 matchRoute({
-                  to: "/orgs/$organizationSlug/projects/$projectSlug/secrets",
-                  params: { organizationSlug, projectSlug },
+                  to: "/projects/$projectSlug/secrets",
+                  params: { projectSlug },
                   fuzzy: true,
                 }),
               )}
@@ -294,16 +265,11 @@ function ProjectSidebarGroup({
           </SidebarMenuSubItem>
           <SidebarMenuSubItem>
             <SidebarMenuSubButton
-              render={
-                <Link
-                  to="/orgs/$organizationSlug/projects/$projectSlug/examples"
-                  params={{ organizationSlug, projectSlug }}
-                />
-              }
+              render={<Link to="/projects/$projectSlug/examples" params={{ projectSlug }} />}
               isActive={Boolean(
                 matchRoute({
-                  to: "/orgs/$organizationSlug/projects/$projectSlug/examples",
-                  params: { organizationSlug, projectSlug },
+                  to: "/projects/$projectSlug/examples",
+                  params: { projectSlug },
                 }),
               )}
             >
@@ -312,16 +278,11 @@ function ProjectSidebarGroup({
           </SidebarMenuSubItem>
           <SidebarMenuSubItem>
             <SidebarMenuSubButton
-              render={
-                <Link
-                  to="/orgs/$organizationSlug/projects/$projectSlug/integrations"
-                  params={{ organizationSlug, projectSlug }}
-                />
-              }
+              render={<Link to="/projects/$projectSlug/integrations" params={{ projectSlug }} />}
               isActive={Boolean(
                 matchRoute({
-                  to: "/orgs/$organizationSlug/projects/$projectSlug/integrations",
-                  params: { organizationSlug, projectSlug },
+                  to: "/projects/$projectSlug/integrations",
+                  params: { projectSlug },
                 }),
               )}
             >
@@ -331,16 +292,11 @@ function ProjectSidebarGroup({
           {mcpUrl ? (
             <SidebarMenuSubItem>
               <SidebarMenuSubButton
-                render={
-                  <Link
-                    to="/orgs/$organizationSlug/projects/$projectSlug/mcp"
-                    params={{ organizationSlug, projectSlug }}
-                  />
-                }
+                render={<Link to="/projects/$projectSlug/mcp" params={{ projectSlug }} />}
                 isActive={Boolean(
                   matchRoute({
-                    to: "/orgs/$organizationSlug/projects/$projectSlug/mcp",
-                    params: { organizationSlug, projectSlug },
+                    to: "/projects/$projectSlug/mcp",
+                    params: { projectSlug },
                   }),
                 )}
               >
@@ -350,16 +306,11 @@ function ProjectSidebarGroup({
           ) : null}
           <SidebarMenuSubItem>
             <SidebarMenuSubButton
-              render={
-                <Link
-                  to="/orgs/$organizationSlug/projects/$projectSlug/streams"
-                  params={{ organizationSlug, projectSlug }}
-                />
-              }
+              render={<Link to="/projects/$projectSlug/streams" params={{ projectSlug }} />}
               isActive={Boolean(
                 matchRoute({
-                  to: "/orgs/$organizationSlug/projects/$projectSlug/streams",
-                  params: { organizationSlug, projectSlug },
+                  to: "/projects/$projectSlug/streams",
+                  params: { projectSlug },
                   fuzzy: true,
                 }),
               )}
@@ -369,16 +320,11 @@ function ProjectSidebarGroup({
           </SidebarMenuSubItem>
           <SidebarMenuSubItem>
             <SidebarMenuSubButton
-              render={
-                <Link
-                  to="/orgs/$organizationSlug/projects/$projectSlug/settings"
-                  params={{ organizationSlug, projectSlug }}
-                />
-              }
+              render={<Link to="/projects/$projectSlug/settings" params={{ projectSlug }} />}
               isActive={Boolean(
                 matchRoute({
-                  to: "/orgs/$organizationSlug/projects/$projectSlug/settings",
-                  params: { organizationSlug, projectSlug },
+                  to: "/projects/$projectSlug/settings",
+                  params: { projectSlug },
                 }),
               )}
             >
