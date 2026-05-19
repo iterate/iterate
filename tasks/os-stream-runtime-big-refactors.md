@@ -2,8 +2,7 @@
 state: open
 priority: medium
 size: large
-dependsOn:
-  - os-shared-stream-runtime-preview
+dependsOn: []
 ---
 
 # OS stream runtime big refactors

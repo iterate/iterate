@@ -1,6 +1,6 @@
 # Stage
 
-> **Note:** This document describes generic and older Alchemy stage naming rules. For current new-style Cloudflare apps, do not pass stage separately: select the Doppler config, and `_shared` sets `ALCHEMY_STAGE=${DOPPLER_CONFIG}`. For repo-managed PR previews, see `docs/cloudflare-preview-environments.md`. For `apps/os`, see `docs/os-environments.md` because os uses dedicated zone pairs per environment.
+> **Note:** This document describes generic and older Alchemy stage naming rules. For the current Cloudflare/Doppler/Alchemy model, see `docs/devops-cloudflare-doppler-alchemy-setup.md`.
 
 ## Current New-Style Cloudflare Apps
 

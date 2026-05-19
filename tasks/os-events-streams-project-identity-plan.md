@@ -2,8 +2,7 @@
 state: open
 priority: high
 size: large
-dependsOn:
-  - os-shared-stream-runtime-preview
+dependsOn: []
 ---
 
 # OS and Events streams project identity plan
