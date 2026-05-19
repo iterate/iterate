@@ -190,6 +190,83 @@ GITHUB_TOKEN="$(gh auth token)" doppler run --project _shared --config prd --pre
 Direct app deploys to `preview_N` are useful for debugging the primitive, but
 they bypass Semaphore and can collide with a PR that owns the same lease.
 
+### Semaphore Resource Coordination
+
+Semaphore (`apps/semaphore`, deployed at `semaphore.iterate.com`) is a shared
+resource locking service. It manages **environment config leases** — time-bound
+claims on preview slots. Each lease maps to a Doppler config like `preview_2`
+and prevents two PRs from deploying to the same slot simultaneously.
+
+#### How leases work
+
+| Concept   | Meaning                                                            |
+| --------- | ------------------------------------------------------------------ |
+| Resource  | A preview slot (type `environment-config-lease`, slug `preview-N`) |
+| Lease     | Time-bound claim; identified by a `leaseId` UUID                   |
+| `leaseMs` | How long the lease is held (milliseconds; max 30 days)             |
+| `waitMs`  | How long to wait if no slot is available (max 5 minutes)           |
+| Acquire   | Claim any available slot of a given type                           |
+| Release   | Return a slot early (requires the matching `leaseId`)              |
+| Renew     | Extend the expiry on an active lease                               |
+
+Each resource type gets its own Durable Object that serializes lease
+operations, manages a waiter queue, and reaps expired leases via alarms. D1
+mirrors lease state for inspection but the Durable Object is authoritative.
+
+#### CLI commands
+
+All Semaphore CLI commands need the shared API secret, which lives in the
+`_shared/prd` Doppler config:
+
+```bash
+# List all resources and their lease state
+doppler run --project _shared --config prd -- pnpm preview status
+
+# Reconcile inventory: check Doppler configs and Cloudflare zones exist
+doppler run --project _shared --config prd -- pnpm preview reconcile
+
+# Acquire a preview slot for a PR (used by CI)
+GITHUB_TOKEN="$(gh auth token)" \
+  doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- \
+  pnpm preview sync --pull-request-number 1234
+
+# Release a preview slot after PR cleanup
+GITHUB_TOKEN="$(gh auth token)" \
+  doppler run --project _shared --config prd --preserve-env=GITHUB_TOKEN -- \
+  pnpm preview cleanup --pull-request-number 1234
+```
+
+#### Inspecting lease state directly
+
+The Semaphore oRPC API is available at `semaphore.iterate.com/api`. You can
+query it with curl using the shared API secret:
+
+```bash
+# List all resources and their lease state
+doppler run --project _shared --config prd -- \
+  sh -c 'curl -s -H "Authorization: Bearer $APP_CONFIG_SHARED_API_SECRET" \
+    https://semaphore.iterate.com/api/resources/list' | jq .
+
+# Find a specific resource
+doppler run --project _shared --config prd -- \
+  sh -c 'curl -s -H "Authorization: Bearer $APP_CONFIG_SHARED_API_SECRET" \
+    "https://semaphore.iterate.com/api/resources/find?type=environment-config-lease&slug=preview_5"' | jq .
+```
+
+Resources show `leaseState: "available"` or `leaseState: "leased"` with
+`leasedUntil` (epoch ms) when held.
+
+#### Seeding the inventory
+
+If preview slots need to be recreated (after a data loss or schema change):
+
+```bash
+doppler run --project semaphore --config prd -- \
+  pnpm --dir apps/semaphore seed:environment-config-leases
+```
+
+This idempotently syncs `preview_1` through `preview_9` into Semaphore.
+
 ## Production Deployments
 
 Production deploys use each app's `prd` config. Generated per-app GitHub
