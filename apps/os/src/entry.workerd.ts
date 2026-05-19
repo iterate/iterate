@@ -175,6 +175,12 @@ export default {
       },
     );
   },
+  async queue(batch: { messages: readonly unknown[]; queue: string }) {
+    console.warn("[os] received unhandled queue batch", {
+      messageCount: batch.messages.length,
+      queue: batch.queue,
+    });
+  },
 };
 
 async function handleCaptunTunnelFetch(input: { env: Env; request: Request }) {

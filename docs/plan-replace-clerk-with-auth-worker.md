@@ -504,3 +504,17 @@ Phase F is last.
   directly, removed the root `mcp:dev` script and workspace lockfile importer,
   and refreshed OS docs/CONTEXT language around auth-worker sessions,
   project-scoped URLs, centralized MCP, and OAuth client sync.
+- Ran `apps/os`'s `auth:sync-clients` through the production auth worker
+  Doppler config. It synced web and MCP OAuth clients plus OS Doppler runtime
+  variables for `dev_jonas`, `dev_misha`, `dev_rahul`, `preview_2` through
+  `preview_9`, and `prd`, then verified each expected key exists without
+  printing secret values.
+- Removed inherited `APP_CONFIG_CLERK__*` secrets from OS and shared Doppler
+  configs for dev, preview, and production. `preview_2` deploy now parses
+  config without Clerk overrides.
+- Added an explicit no-op queue handler for OS because the Cloudflare Artifacts
+  binding had provisioned an artifact-events queue consumer and Cloudflare
+  rejects uploads to queue-consuming Workers without a queue export.
+- Deployed `preview_2` successfully and ran both preview checks:
+  `test:e2e:preview` against `https://os.iterate-preview-2.com/` and
+  `test:e2e:codemode-mcp` against `/mcp?project=preview-mcp-smoke-manual`.
