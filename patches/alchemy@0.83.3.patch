@@ -46,6 +46,14 @@ diff --git a/lib/cloudflare/worker-metadata.js b/lib/cloudflare/worker-metadata.
 index d521d20..e1ff04d 100644
 --- a/lib/cloudflare/worker-metadata.js
 +++ b/lib/cloudflare/worker-metadata.js
+@@ -112,6 +112,6 @@ export async function prepareWorkerMetadata(api, props) {
+             ...(newMigrationTag ? [`alchemy:migration-tag:${newMigrationTag}`] : []),
+             ...(props.tags ?? []),
+-        ],
++        ].slice(0, 10),
+         migrations: {
+             old_tag: oldMigrationTag,
+             new_tag: newMigrationTag,
 @@ -330,6 +330,13 @@ export async function prepareWorkerMetadata(api, props) {
                  name: bindingName,
              });
