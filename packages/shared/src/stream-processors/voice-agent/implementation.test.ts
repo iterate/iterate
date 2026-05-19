@@ -2,28 +2,29 @@ import { describe, expect, it } from "vitest";
 import type { ProcessorStreamApi, StreamEvent, StreamEventInput } from "../stream-processor.ts";
 import {
   AGENT_INPUT_ADDED_EVENT_TYPE,
+  DEFAULT_GEMINI_LIVE_MODEL,
+  DEFAULT_GEMINI_LIVE_VOICE,
   DEFAULT_GROK_REALTIME_MODEL,
   DEFAULT_GROK_REALTIME_VOICE,
+  DEFAULT_OPENAI_REALTIME_MODEL,
+  DEFAULT_OPENAI_REALTIME_VOICE,
   VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE,
+  VOICE_AGENT_PROVIDER_GEMINI_LIVE,
   VOICE_AGENT_PROVIDER_GROK_REALTIME,
+  VOICE_AGENT_PROVIDER_OPENAI_REALTIME,
   VoiceAgentProcessorContract,
+  type VoiceAgentProvider,
   type VoiceAgentState,
 } from "./contract.ts";
 import { createVoiceAgentProviderProcessor } from "./implementation.ts";
 
 describe("createVoiceAgentProviderProcessor", () => {
-  it("lets Grok ask the colocated code agent through a realtime tool call", async () => {
+  it("lets Gemini ask the colocated code agent through a Live API tool call", async () => {
     const socket = new FakeWebSocket();
     const appended: StreamEventInput[] = [];
-    const processor = createVoiceAgentProviderProcessor({
-      geminiApiKey: "",
-      openAiApiKey: "",
-      openGrokRealtimeWebSocket: async () => socket as unknown as WebSocket,
-      openOpenAiRealtimeWebSocket: undefined,
-      openGeminiLiveWebSocket: undefined,
-      processorSlug: "voice-agent/grok-realtime",
-      provider: VOICE_AGENT_PROVIDER_GROK_REALTIME,
-      xAiApiKey: "xai_test",
+    const processor = providerProcessor({
+      provider: VOICE_AGENT_PROVIDER_GEMINI_LIVE,
+      socket,
     });
 
     const afterAppend = processor.implementation.afterAppend?.({
@@ -31,38 +32,37 @@ describe("createVoiceAgentProviderProcessor", () => {
         type: VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE,
         payload: { text: "Ask the agent to check the repo." },
       }),
-      previousState: voiceAgentState(),
-      state: voiceAgentState(),
+      previousState: voiceAgentState(VOICE_AGENT_PROVIDER_GEMINI_LIVE),
+      state: voiceAgentState(VOICE_AGENT_PROVIDER_GEMINI_LIVE),
       streamApi: testStreamApi(appended),
       signal: new AbortController().signal,
     });
 
     await waitFor(() => socket.sent.length === 1);
     expect(socket.sent[0]).toMatchObject({
-      type: "session.update",
-      session: {
+      setup: {
         tools: [
           {
-            type: "function",
-            name: "ask_agent",
+            functionDeclarations: [
+              {
+                name: "ask_agent",
+              },
+            ],
           },
         ],
       },
     });
 
-    socket.receive({ type: "session.updated" });
+    socket.receive({ setupComplete: {} });
     await afterAppend;
 
     socket.receive({
-      type: "response.done",
-      response: {
-        status: "completed",
-        output: [
+      toolCall: {
+        functionCalls: [
           {
-            type: "function_call",
             name: "ask_agent",
-            call_id: "call_123",
-            arguments: JSON.stringify({ message: "Please inspect the failing tests." }),
+            id: "call_123",
+            args: { message: "Please inspect the failing tests." },
           },
         ],
       },
@@ -73,7 +73,7 @@ describe("createVoiceAgentProviderProcessor", () => {
       expect.arrayContaining([
         expect.objectContaining({
           type: AGENT_INPUT_ADDED_EVENT_TYPE,
-          idempotencyKey: expect.stringContaining("grok-ask-agent:call_123:agent-input"),
+          idempotencyKey: expect.stringContaining("gemini-live:ask-agent:call_123:agent-input"),
           payload: {
             content: "Please inspect the failing tests.",
             llmRequestPolicy: { behaviour: "after-current-request" },
@@ -84,27 +84,152 @@ describe("createVoiceAgentProviderProcessor", () => {
     expect(socket.sent).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          type: "conversation.item.create",
-          item: expect.objectContaining({
-            type: "function_call_output",
-            call_id: "call_123",
-          }),
+          toolResponse: {
+            functionResponses: [
+              expect.objectContaining({
+                id: "call_123",
+                name: "ask_agent",
+              }),
+            ],
+          },
         }),
-        { type: "response.create" },
       ]),
     );
   });
+
+  it.each([
+    { label: "OpenAI", provider: VOICE_AGENT_PROVIDER_OPENAI_REALTIME },
+    { label: "Grok", provider: VOICE_AGENT_PROVIDER_GROK_REALTIME },
+  ] satisfies Array<{ label: string; provider: VoiceAgentProvider }>)(
+    "lets $label ask the colocated code agent through a realtime function call",
+    async ({ provider }) => {
+      const socket = new FakeWebSocket();
+      const appended: StreamEventInput[] = [];
+      const processor = providerProcessor({ provider, socket });
+
+      const afterAppend = processor.implementation.afterAppend?.({
+        event: committedEvent({
+          type: VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE,
+          payload: { text: "Ask the agent to check the repo." },
+        }),
+        previousState: voiceAgentState(provider),
+        state: voiceAgentState(provider),
+        streamApi: testStreamApi(appended),
+        signal: new AbortController().signal,
+      });
+
+      await waitFor(() => socket.sent.length === 1);
+      expect(socket.sent[0]).toMatchObject({
+        type: "session.update",
+        session: {
+          tools: [
+            {
+              type: "function",
+              name: "ask_agent",
+            },
+          ],
+        },
+      });
+
+      socket.receive({ type: "session.updated" });
+      await afterAppend;
+
+      socket.receive({
+        type: "response.done",
+        response: {
+          status: "completed",
+          output: [
+            {
+              type: "function_call",
+              name: "ask_agent",
+              call_id: "call_123",
+              arguments: JSON.stringify({ message: "Please inspect the failing tests." }),
+            },
+          ],
+        },
+      });
+
+      await waitFor(() => appended.some((event) => event.type === AGENT_INPUT_ADDED_EVENT_TYPE));
+      expect(appended).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: AGENT_INPUT_ADDED_EVENT_TYPE,
+            idempotencyKey: expect.stringContaining(`${provider}:ask-agent:call_123:agent-input`),
+            payload: {
+              content: "Please inspect the failing tests.",
+              llmRequestPolicy: { behaviour: "after-current-request" },
+            },
+          }),
+        ]),
+      );
+      expect(socket.sent).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "conversation.item.create",
+            item: expect.objectContaining({
+              type: "function_call_output",
+              call_id: "call_123",
+            }),
+          }),
+          { type: "response.create" },
+        ]),
+      );
+    },
+  );
 });
 
-function voiceAgentState(): VoiceAgentState {
+function providerProcessor(input: { provider: VoiceAgentProvider; socket: FakeWebSocket }) {
+  return createVoiceAgentProviderProcessor({
+    geminiApiKey: "gemini_test",
+    openAiApiKey: "openai_test",
+    openGeminiLiveWebSocket:
+      input.provider === VOICE_AGENT_PROVIDER_GEMINI_LIVE
+        ? async () => input.socket as unknown as WebSocket
+        : undefined,
+    openGrokRealtimeWebSocket:
+      input.provider === VOICE_AGENT_PROVIDER_GROK_REALTIME
+        ? async () => input.socket as unknown as WebSocket
+        : undefined,
+    openOpenAiRealtimeWebSocket:
+      input.provider === VOICE_AGENT_PROVIDER_OPENAI_REALTIME
+        ? async () => input.socket as unknown as WebSocket
+        : undefined,
+    processorSlug: `voice-agent/${input.provider}`,
+    provider: input.provider,
+    xAiApiKey: "xai_test",
+  });
+}
+
+function voiceAgentState(provider: VoiceAgentProvider): VoiceAgentState {
+  const providerDefaults = providerConfigDefaults(provider);
   return VoiceAgentProcessorContract.stateSchema.parse({
     setup: {
-      provider: VOICE_AGENT_PROVIDER_GROK_REALTIME,
-      model: DEFAULT_GROK_REALTIME_MODEL,
-      voiceName: DEFAULT_GROK_REALTIME_VOICE,
+      provider,
+      model: providerDefaults.model,
+      voiceName: providerDefaults.voiceName,
       systemInstruction: "You are concise.",
     },
   });
+}
+
+function providerConfigDefaults(provider: VoiceAgentProvider) {
+  switch (provider) {
+    case VOICE_AGENT_PROVIDER_GEMINI_LIVE:
+      return {
+        model: DEFAULT_GEMINI_LIVE_MODEL,
+        voiceName: DEFAULT_GEMINI_LIVE_VOICE,
+      };
+    case VOICE_AGENT_PROVIDER_OPENAI_REALTIME:
+      return {
+        model: DEFAULT_OPENAI_REALTIME_MODEL,
+        voiceName: DEFAULT_OPENAI_REALTIME_VOICE,
+      };
+    case VOICE_AGENT_PROVIDER_GROK_REALTIME:
+      return {
+        model: DEFAULT_GROK_REALTIME_MODEL,
+        voiceName: DEFAULT_GROK_REALTIME_VOICE,
+      };
+  }
 }
 
 function testStreamApi(

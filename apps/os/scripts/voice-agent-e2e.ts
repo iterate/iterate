@@ -46,6 +46,7 @@ type Options = {
   chunkMs: number;
   createProject: boolean;
   expectAskAgent: boolean;
+  inputMode: "audio" | "text";
   model: string;
   minOutputBytes: number;
   outputPcm: string | null;
@@ -82,10 +83,15 @@ async function main() {
   const projectSlugOrId = options.createProject
     ? (await createTestProject(client, runId)).id
     : await resolveProjectId(client, requireProjectSlugOrId(options.projectSlugOrId));
-  const pcm = options.pcmFile
-    ? await readFile(resolve(options.pcmFile))
-    : await synthesizePromptPcm(options.prompt);
-  const audio = Buffer.concat([pcm, silencePcm(options.silenceMs)]);
+  const audio =
+    options.inputMode === "audio"
+      ? Buffer.concat([
+          options.pcmFile
+            ? await readFile(resolve(options.pcmFile))
+            : await synthesizePromptPcm(options.prompt),
+          silencePcm(options.silenceMs),
+        ])
+      : Buffer.alloc(0);
 
   console.log(
     JSON.stringify(
@@ -96,6 +102,7 @@ async function main() {
         projectSlugOrId,
         streamPath: options.streamPath,
         model: options.model,
+        inputMode: options.inputMode,
         prompt: options.pcmFile ? `pcm-file:${options.pcmFile}` : options.prompt,
         inputBytes: audio.byteLength,
       },
@@ -132,6 +139,7 @@ async function main() {
           provider: options.provider,
           model: options.model,
           voiceName: options.voiceName,
+          askAgentToolChoice: options.expectAskAgent ? "required" : "auto",
           systemInstruction: options.expectAskAgent
             ? [
                 "You are running an automated voice smoke test.",
@@ -168,14 +176,24 @@ async function main() {
     expectAskAgent: options.expectAskAgent,
   });
 
-  await appendPcmFrames({
-    audio,
-    chunkMs: options.chunkMs,
-    client,
-    projectSlugOrId,
-    runId,
-    streamPath: options.streamPath,
-  });
+  if (options.inputMode === "audio") {
+    await appendPcmFrames({
+      audio,
+      chunkMs: options.chunkMs,
+      client,
+      projectSlugOrId,
+      runId,
+      streamPath: options.streamPath,
+    });
+  } else {
+    await appendInputText({
+      client,
+      projectSlugOrId,
+      runId,
+      streamPath: options.streamPath,
+      text: options.prompt,
+    });
+  }
 
   await watchPromise;
 
@@ -267,10 +285,12 @@ async function watchStream(input: {
         throw new Error(input.seen.error);
       }
       if (event.type === AGENT_INPUT_ADDED_EVENT_TYPE) {
-        input.seen.askAgentInputAdded = true;
-        const payload = event.payload as { content?: unknown };
+        const payload = event.payload as { content?: unknown; llmRequestPolicy?: unknown };
         if (typeof payload.content === "string") {
           console.log(`  agent input: ${payload.content.slice(0, 200)}`);
+        }
+        if (isAskAgentInput(payload)) {
+          input.seen.askAgentInputAdded = true;
         }
       }
       if (event.type === "events.iterate.com/agent/output-added") {
@@ -320,6 +340,11 @@ async function watchStream(input: {
   }
 }
 
+function isAskAgentInput(payload: { llmRequestPolicy?: unknown }) {
+  const policy = payload.llmRequestPolicy as { behaviour?: unknown } | undefined;
+  return policy?.behaviour === "after-current-request";
+}
+
 async function appendPcmFrames(input: {
   audio: Buffer;
   chunkMs: number;
@@ -359,6 +384,27 @@ async function appendPcmFrames(input: {
     sequence += 1;
     await delay(input.chunkMs);
   }
+}
+
+async function appendInputText(input: {
+  client: OrpcClient;
+  projectSlugOrId: string;
+  runId: string;
+  streamPath: StreamPath;
+  text: string;
+}) {
+  await input.client.project.streams.append({
+    projectSlugOrId: input.projectSlugOrId,
+    streamPath: input.streamPath,
+    event: EventInput.parse({
+      idempotencyKey: `${input.runId}:voice-agent-input-text`,
+      type: VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE,
+      payload: {
+        source: "voice-agent-e2e",
+        text: input.text,
+      },
+    }),
+  });
 }
 
 async function synthesizePromptPcm(prompt: string): Promise<Buffer> {
@@ -474,6 +520,7 @@ function parseOptions(args: readonly string[]): Options {
     chunkMs: numberOption(values, "chunk-ms", 100),
     createProject: booleanOption(values, "create-project", true),
     expectAskAgent,
+    inputMode: inputModeOption(values),
     provider: providerOption(values),
     model: modelOption(values),
     minOutputBytes: numberOption(values, "min-output-bytes", 4_800),
@@ -495,6 +542,12 @@ function parseOptions(args: readonly string[]): Options {
     timeoutMs: numberOption(values, "timeout-ms", expectAskAgent ? 180_000 : 60_000),
     voiceName: voiceOption(values),
   };
+}
+
+function inputModeOption(values: Map<string, string>) {
+  const raw = stringOption(values, "input-mode", "audio");
+  if (raw === "audio" || raw === "text") return raw;
+  throw new Error("--input-mode must be audio or text.");
 }
 
 function providerOption(values: Map<string, string>): VoiceAgentProvider {

@@ -63,7 +63,19 @@ type GeminiServerMessage = {
     inputTranscription?: { text?: string };
     outputTranscription?: { text?: string };
   };
+  toolCall?: {
+    functionCalls?: GeminiFunctionCall[];
+  };
+  toolCallCancellation?: {
+    ids?: string[];
+  };
   goAway?: { timeLeft?: string };
+};
+
+type GeminiFunctionCall = {
+  id?: string;
+  name?: string;
+  args?: unknown;
 };
 
 type RealtimeServerMessage = {
@@ -588,8 +600,9 @@ async function openGeminiLiveConnection(args: {
       inputAudioTranscription: {},
       outputAudioTranscription: {},
       systemInstruction: {
-        parts: [{ text: args.setup.systemInstruction }],
+        parts: [{ text: systemInstructionWithAskAgent(args.setup.systemInstruction) }],
       },
+      tools: [geminiAskAgentTool()],
     },
   } satisfies JsonValue;
   const sequence = connection.sendSequence++;
@@ -625,6 +638,14 @@ async function handleGeminiMessage(args: ProviderConnectionArgs & { data: unknow
         idempotencyKey: `voice-agent:${args.connection.id}:gemini-live-setup-completed`,
         payload: { connectionId: args.connection.id },
       },
+    });
+  }
+
+  for (const functionCall of message.toolCall?.functionCalls ?? []) {
+    await handleGeminiFunctionCall({
+      connection: args.connection,
+      functionCall,
+      streamApi: args.streamApi,
     });
   }
 
@@ -724,7 +745,7 @@ async function openOpenAiRealtimeConnection(args: {
     type: "session.update",
     session: {
       type: "realtime",
-      instructions: args.setup.systemInstruction,
+      instructions: systemInstructionWithAskAgent(args.setup.systemInstruction),
       audio: {
         input: {
           format: { type: "audio/pcm", rate: 24_000 },
@@ -740,6 +761,8 @@ async function openOpenAiRealtimeConnection(args: {
           voice: args.setup.voiceName,
         },
       },
+      tools: [openAiCompatibleAskAgentTool()],
+      tool_choice: openAiCompatibleAskAgentToolChoice(args.setup.askAgentToolChoice),
     },
   } satisfies JsonValue;
   const sequence = connection.sendSequence++;
@@ -801,37 +824,15 @@ async function openGrokRealtimeConnection(args: {
   const setupMessage = {
     type: "session.update",
     session: {
-      instructions: [
-        args.setup.systemInstruction,
-        "You have a tool named Ask Agent. Use it when the caller asks for actions, investigation, code, data lookup, or anything requiring tools. Ask Agent sends the request to a code-capable background agent. After calling it, tell the caller you asked the agent and continue the conversation while it works.",
-      ].join("\n\n"),
+      instructions: systemInstructionWithAskAgent(args.setup.systemInstruction),
       voice: args.setup.voiceName,
       turn_detection: { type: "server_vad" },
       audio: {
         input: { format: { type: "audio/pcm", rate: 16_000 } },
         output: { format: { type: "audio/pcm", rate: VOICE_AGENT_OUTPUT_SAMPLE_RATE } },
       },
-      tools: [
-        {
-          type: "function",
-          name: "ask_agent",
-          description:
-            "Ask the code-capable background agent to do work or answer a question. Use for actions, investigation, code, data lookup, or anything requiring tools.",
-          parameters: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              message: {
-                type: "string",
-                description:
-                  "The plain-language request for the background code agent. Include relevant context from the call.",
-              },
-            },
-            required: ["message"],
-          },
-        },
-      ],
-      tool_choice: "auto",
+      tools: [openAiCompatibleAskAgentTool()],
+      tool_choice: openAiCompatibleAskAgentToolChoice(args.setup.askAgentToolChoice),
     },
   } satisfies JsonValue;
   const sequence = connection.sendSequence++;
@@ -947,13 +948,11 @@ async function handleOpenAiCompatibleRealtimeMessage(
       });
       return;
     case "response.output_item.done":
-      if (args.eventPrefix === "grok-realtime") {
-        await handleGrokFunctionCallItem({
-          connection: args.connection,
-          item: message.item,
-          streamApi: args.streamApi,
-        });
-      }
+      await handleOpenAiCompatibleFunctionCallItem({
+        connection: args.connection,
+        item: message.item,
+        streamApi: args.streamApi,
+      });
       return;
     case "response.done":
       await appendProviderStatusEvent({
@@ -962,14 +961,12 @@ async function handleOpenAiCompatibleRealtimeMessage(
         sequence,
         streamApi: args.streamApi,
       });
-      if (args.eventPrefix === "grok-realtime") {
-        for (const item of message.response?.output ?? []) {
-          await handleGrokFunctionCallItem({
-            connection: args.connection,
-            item,
-            streamApi: args.streamApi,
-          });
-        }
+      for (const item of message.response?.output ?? []) {
+        await handleOpenAiCompatibleFunctionCallItem({
+          connection: args.connection,
+          item,
+          streamApi: args.streamApi,
+        });
       }
       return;
     case "error":
@@ -981,7 +978,39 @@ async function handleOpenAiCompatibleRealtimeMessage(
   }
 }
 
-async function handleGrokFunctionCallItem(args: {
+async function handleGeminiFunctionCall(args: {
+  connection: ProviderConnection;
+  functionCall: GeminiFunctionCall;
+  streamApi: VoiceAgentStreamApi;
+}) {
+  const callId = args.functionCall.id;
+  if (callId == null || callId.trim() === "") return;
+  if (args.connection.handledToolCallIds.has(callId)) return;
+  args.connection.handledToolCallIds.add(callId);
+
+  const toolResult =
+    args.functionCall.name === "ask_agent"
+      ? await appendAskAgentInput({
+          argumentsValue: args.functionCall.args,
+          callId,
+          connection: args.connection,
+          streamApi: args.streamApi,
+        })
+      : {
+          ok: false,
+          message: `Unknown tool: ${args.functionCall.name ?? "<missing>"}`,
+        };
+
+  await sendGeminiFunctionResponse({
+    callId,
+    connection: args.connection,
+    name: args.functionCall.name ?? "unknown_tool",
+    output: toolResult,
+    streamApi: args.streamApi,
+  });
+}
+
+async function handleOpenAiCompatibleFunctionCallItem(args: {
   connection: ProviderConnection;
   item: RealtimeFunctionCallItem | undefined;
   streamApi: VoiceAgentStreamApi;
@@ -995,7 +1024,7 @@ async function handleGrokFunctionCallItem(args: {
   const toolResult =
     args.item.name === "ask_agent"
       ? await appendAskAgentInput({
-          argumentsJson: args.item.arguments,
+          argumentsValue: args.item.arguments,
           callId,
           connection: args.connection,
           streamApi: args.streamApi,
@@ -1015,18 +1044,18 @@ async function handleGrokFunctionCallItem(args: {
 }
 
 async function appendAskAgentInput(args: {
-  argumentsJson: string | undefined;
+  argumentsValue: unknown;
   callId: string;
   connection: ProviderConnection;
   streamApi: VoiceAgentStreamApi;
 }) {
-  const parsed = parseAskAgentArguments(args.argumentsJson);
+  const parsed = parseAskAgentArguments(args.argumentsValue);
   if (!parsed.ok) return parsed;
 
   await args.streamApi.append({
     event: {
       type: AGENT_INPUT_ADDED_EVENT_TYPE,
-      idempotencyKey: `voice-agent:${args.connection.id}:grok-ask-agent:${args.callId}:agent-input`,
+      idempotencyKey: `voice-agent:${args.connection.id}:${args.connection.provider}:ask-agent:${args.callId}:agent-input`,
       payload: {
         content: parsed.message,
         llmRequestPolicy: { behaviour: "after-current-request" },
@@ -1042,17 +1071,22 @@ async function appendAskAgentInput(args: {
 }
 
 function parseAskAgentArguments(
-  argumentsJson: string | undefined,
+  argumentsValue: unknown,
 ): { ok: true; message: string } | { ok: false; message: string } {
-  if (argumentsJson == null || argumentsJson.trim() === "") {
+  if (argumentsValue == null) {
     return { ok: false, message: "ask_agent requires a JSON arguments object." };
   }
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(argumentsJson);
-  } catch {
-    return { ok: false, message: "ask_agent arguments must be valid JSON." };
+  let parsed = argumentsValue;
+  if (typeof argumentsValue === "string") {
+    if (argumentsValue.trim() === "") {
+      return { ok: false, message: "ask_agent requires a JSON arguments object." };
+    }
+    try {
+      parsed = JSON.parse(argumentsValue);
+    } catch {
+      return { ok: false, message: "ask_agent arguments must be valid JSON." };
+    }
   }
 
   const message = (parsed as { message?: unknown }).message;
@@ -1060,6 +1094,37 @@ function parseAskAgentArguments(
     return { ok: false, message: "ask_agent requires a non-empty message string." };
   }
   return { ok: true, message: message.trim() };
+}
+
+async function sendGeminiFunctionResponse(args: {
+  callId: string;
+  connection: ProviderConnection;
+  name: string;
+  output: JsonValue;
+  sequenceSourceEventOffset?: number;
+  streamApi: VoiceAgentStreamApi;
+}) {
+  const sequence = args.connection.sendSequence++;
+  const message = {
+    toolResponse: {
+      functionResponses: [
+        {
+          id: args.callId,
+          name: args.name,
+          response: args.output,
+        },
+      ],
+    },
+  } satisfies JsonValue;
+  args.connection.socket.send(JSON.stringify(message));
+  await appendProviderMessageSent({
+    connection: args.connection,
+    eventType: providerMessageSentEventType(args.connection.provider),
+    message,
+    sequence,
+    sourceEventOffset: args.sequenceSourceEventOffset,
+    streamApi: args.streamApi,
+  });
 }
 
 async function sendOpenAiCompatibleFunctionCallOutput(args: {
@@ -1089,7 +1154,10 @@ async function sendOpenAiCompatibleFunctionCallOutput(args: {
   });
 
   const responseSequence = args.connection.sendSequence++;
-  const responseMessage = { type: "response.create" } satisfies JsonValue;
+  const responseMessage = {
+    type: "response.create",
+    response: { tool_choice: "none" },
+  } satisfies JsonValue;
   args.connection.socket.send(JSON.stringify(responseMessage));
   await appendProviderMessageSent({
     connection: args.connection,
@@ -1099,6 +1167,57 @@ async function sendOpenAiCompatibleFunctionCallOutput(args: {
     sourceEventOffset: args.sequenceSourceEventOffset,
     streamApi: args.streamApi,
   });
+}
+
+function systemInstructionWithAskAgent(systemInstruction: string) {
+  return [
+    systemInstruction,
+    "You have a tool named Ask Agent. Use it when the caller asks for actions, investigation, code, data lookup, or anything requiring tools. Ask Agent sends the request to a code-capable background agent. After calling it, tell the caller you asked the agent and continue the conversation while it works.",
+  ].join("\n\n");
+}
+
+function askAgentParameters(input: { additionalProperties?: boolean } = {}) {
+  return {
+    type: "object",
+    ...(input.additionalProperties == null
+      ? {}
+      : { additionalProperties: input.additionalProperties }),
+    properties: {
+      message: {
+        type: "string",
+        description:
+          "The plain-language request for the background code agent. Include relevant context from the call.",
+      },
+    },
+    required: ["message"],
+  } satisfies JsonValue;
+}
+
+function openAiCompatibleAskAgentTool() {
+  return {
+    type: "function",
+    name: "ask_agent",
+    description:
+      "Ask the code-capable background agent to do work or answer a question. Use for actions, investigation, code, data lookup, or anything requiring tools.",
+    parameters: askAgentParameters({ additionalProperties: false }),
+  } satisfies JsonValue;
+}
+
+function openAiCompatibleAskAgentToolChoice(choice: VoiceAgentSetup["askAgentToolChoice"]) {
+  return choice === "required" ? "required" : "auto";
+}
+
+function geminiAskAgentTool() {
+  return {
+    functionDeclarations: [
+      {
+        name: "ask_agent",
+        description:
+          "Ask the code-capable background agent to do work or answer a question. Use for actions, investigation, code, data lookup, or anything requiring tools.",
+        parameters: askAgentParameters(),
+      },
+    ],
+  } satisfies JsonValue;
 }
 
 // Shared provider helpers.
