@@ -1,6 +1,7 @@
 import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 import {
   getSandbox,
+  SessionTerminatedError,
   type ExecOptions,
   type ExecResult,
   type Sandbox as CloudflareSandbox,
@@ -164,7 +165,12 @@ export class SandboxesCapability extends WorkerEntrypoint<
   async exec(input: { exec: SandboxExecInput; slug: string }): Promise<ExecResult> {
     const sandbox = await this.getInitialized({ slug: input.slug });
     this.logStage("exec.start", input.slug, { cwd: input.exec.cwd });
-    const result = await sandbox.exec(input.exec.command, toExecOptions(input.exec));
+    const result = await this.execWithSessionRetry(
+      sandbox,
+      input.exec.command,
+      toExecOptions(input.exec),
+      input.slug,
+    );
     this.logStage("exec.done", input.slug, { exitCode: result.exitCode });
     return result;
   }
@@ -250,7 +256,12 @@ export class SandboxesCapability extends WorkerEntrypoint<
 
   private async mountedWorkspaceIsUsable(sandbox: CloudflareSandbox) {
     try {
-      const result = await sandbox.exec("test -d /workspace && printf ok", { timeout: 10_000 });
+      const result = await this.execWithSessionRetry(
+        sandbox,
+        "test -d /workspace && printf ok",
+        { timeout: 10_000 },
+        null,
+      );
       return result.exitCode === 0 && result.stdout.includes("ok");
     } catch {
       return false;
@@ -259,7 +270,8 @@ export class SandboxesCapability extends WorkerEntrypoint<
 
   private async ensureIterateConfigClone(input: { sandbox: CloudflareSandbox }) {
     this.logStage("iterate-config.status.start", null);
-    const status = await input.sandbox.exec(
+    const status = await this.execWithSessionRetry(
+      input.sandbox,
       [
         "set +e",
         `test -f ${shellQuote("/workspace/.iterate-config-ready")}`,
@@ -271,6 +283,7 @@ export class SandboxesCapability extends WorkerEntrypoint<
         'if test "$ready_marker_exit" -eq 0 && test "$git_head_exit" -eq 0; then echo __ITERATE_CONFIG_READY__; fi',
       ].join("\n"),
       { timeout: 20_000 },
+      null,
     );
     if (status.stdout.includes("__ITERATE_CONFIG_READY__")) {
       this.logStage("iterate-config.status.ready", null);
@@ -281,7 +294,8 @@ export class SandboxesCapability extends WorkerEntrypoint<
     const repo = await this.iterateConfigRepo();
     this.logStage("iterate-config.clone.start", null);
     const token = repo.token.includes("?expires=") ? repo.token.split("?expires=")[0] : repo.token;
-    const clone = await input.sandbox.exec(
+    const clone = await this.execWithSessionRetry(
+      input.sandbox,
       [
         "set +e",
         `rm -rf ${shellQuote(SANDBOX_ITERATE_CONFIG_PATH)}`,
@@ -309,6 +323,7 @@ export class SandboxesCapability extends WorkerEntrypoint<
         )} rev-parse --verify HEAD > ${shellQuote("/workspace/.iterate-config-ready")}; fi`,
       ].join("\n"),
       { timeout: 300_000 },
+      null,
     );
     if (!clone.stdout.includes("__ITERATE_CONFIG_CLONE_EXIT__:0")) {
       this.logStage("iterate-config.clone.error", null, {
@@ -483,6 +498,23 @@ export class SandboxesCapability extends WorkerEntrypoint<
       }),
     );
   }
+
+  private async execWithSessionRetry(
+    sandbox: CloudflareSandbox,
+    command: string,
+    options: ExecOptions,
+    slug: string | null,
+  ): Promise<ExecResult> {
+    try {
+      return await sandbox.exec(command, options);
+    } catch (error) {
+      if (!isRetryableSandboxExecError(error)) throw error;
+
+      this.logStage("exec.session-retry", slug, { error: errorMessage(error) });
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      return await sandbox.exec(command, options);
+    }
+  }
 }
 
 type SandboxWorkerRequestWithoutProject =
@@ -581,6 +613,16 @@ function isAlreadyMountedError(error: unknown) {
 function errorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+function isRetryableSandboxExecError(error: unknown) {
+  if (error instanceof SessionTerminatedError) return true;
+
+  const message = errorMessage(error).toLowerCase();
+  return (
+    message.includes("session") &&
+    (message.includes("shell exited") || message.includes("terminated"))
+  );
 }
 
 function shellQuote(value: string) {
