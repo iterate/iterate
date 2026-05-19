@@ -518,3 +518,18 @@ Phase F is last.
 - Deployed `preview_2` successfully and ran both preview checks:
   `test:e2e:preview` against `https://os.iterate-preview-2.com/` and
   `test:e2e:codemode-mcp` against `/mcp?project=preview-mcp-smoke-manual`.
+- Verified the `dev_jonas` Doppler config has the new auth-worker OAuth
+  variables and no `APP_CONFIG_CLERK__*` variables. The first dev run exposed a
+  pre-existing Cloudflare DNS conflict: wildcard MX records at
+  `*.iterate-dev-jonas.app` blocked Alchemy from maintaining the dev tunnel
+  wildcard CNAME. Removed only those wildcard MX records, leaving apex/www email
+  records intact.
+- Started OS dev through the `dev_jonas` Doppler config, confirmed the local
+  health route, and let Alchemy start `cloudflared` for
+  `https://os.iterate-dev-jonas.com`.
+- Ran the same public smoke checks against dev:
+  `test:e2e:preview` with `OS_BASE_URL=https://os.iterate-dev-jonas.com/` and
+  `test:e2e:codemode-mcp` against
+  `/mcp?project=preview-mcp-smoke-manual`. Both passed, proving the dev tunnel,
+  auth-worker config, project seeding, MCP metadata, and codemode MCP path work
+  against the production auth worker.
