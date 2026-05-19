@@ -500,6 +500,9 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
   }
 
   async fetch(request: Request): Promise<Response> {
+    if (new URL(request.url).pathname === PROJECT_EGRESS_INTERCEPT_ROUTE) {
+      return this.acceptProjectEgressInterceptTunnel(request);
+    }
     return await this.egressFetch(request);
   }
 
@@ -514,6 +517,13 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
 
     if (readBearerToken(request.headers.get("authorization")) !== expectedToken) {
       return Response.json({ error: "Unauthorized." }, { status: 401 });
+    }
+
+    if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+      return Response.json(
+        { error: "Project Egress Intercept Tunnel requires a WebSocket upgrade." },
+        { status: 400 },
+      );
     }
 
     const { response, tunnel } = acceptCaptunTunnel({

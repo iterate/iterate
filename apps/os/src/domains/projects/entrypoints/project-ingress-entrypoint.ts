@@ -1,6 +1,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import {
   getProjectDurableObjectName,
+  PROJECT_EGRESS_INTERCEPT_ROUTE,
   type ProjectDurableObject,
 } from "~/domains/projects/durable-objects/project-durable-object.ts";
 
@@ -18,6 +19,9 @@ export class ProjectIngressEntrypoint extends WorkerEntrypoint<
 > {
   async fetch(request: Request) {
     const stub = this.env.PROJECT.getByName(getProjectDurableObjectName(this.ctx.props.projectId));
+    if (new URL(request.url).pathname === PROJECT_EGRESS_INTERCEPT_ROUTE) {
+      return await stub.fetch(request);
+    }
     return await stub.ingressFetch(request);
   }
 }
