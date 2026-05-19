@@ -1,3 +1,4 @@
+import { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
 import { ReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 import { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import { SandboxDurableObject } from "~/domains/sandboxes/durable-objects/sandbox-durable-object.ts";
@@ -5,7 +6,6 @@ import {
   SandboxesCapability,
   type SandboxExecInput,
 } from "~/domains/sandboxes/entrypoints/sandboxes-capability.ts";
-import { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
 
 export { Sandbox } from "@cloudflare/sandbox";
 export { ReposCapability, RepoDurableObject, SandboxDurableObject, SandboxesCapability };
