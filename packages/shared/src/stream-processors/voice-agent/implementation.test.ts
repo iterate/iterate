@@ -171,9 +171,49 @@ describe("createVoiceAgentProviderProcessor", () => {
               call_id: "call_123",
             }),
           }),
-          { type: "response.create" },
+          expect.objectContaining({ type: "response.create" }),
         ]),
       );
+    },
+  );
+
+  it.each([
+    { label: "Gemini", provider: VOICE_AGENT_PROVIDER_GEMINI_LIVE },
+    { label: "OpenAI", provider: VOICE_AGENT_PROVIDER_OPENAI_REALTIME },
+    { label: "Grok", provider: VOICE_AGENT_PROVIDER_GROK_REALTIME },
+  ] satisfies Array<{ label: string; provider: VoiceAgentProvider }>)(
+    "wraps $label code-agent text so the voice model relays it to the caller",
+    async ({ provider }) => {
+      const socket = new FakeWebSocket();
+      const processor = providerProcessor({ provider, socket });
+
+      const afterAppend = processor.implementation.afterAppend?.({
+        event: committedEvent({
+          type: VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE,
+          payload: {
+            source: "code-agent",
+            text: "The weather is 18C and cloudy.",
+          },
+        }),
+        previousState: voiceAgentState(provider),
+        state: voiceAgentState(provider),
+        streamApi: testStreamApi([]),
+        signal: new AbortController().signal,
+      });
+
+      await waitFor(() => socket.sent.length === 1);
+      socket.receive(
+        provider === VOICE_AGENT_PROVIDER_GEMINI_LIVE
+          ? { setupComplete: {} }
+          : { type: "session.updated" },
+      );
+      await afterAppend;
+
+      const providerText = providerSentText(socket.sent, provider);
+      expect(providerText).toContain("BACKGROUND AGENT RESULT FOR THE CALLER:");
+      expect(providerText).toContain("The weather is 18C and cloudy.");
+      expect(providerText).toContain("This message is not from the caller.");
+      expect(providerText).toContain("Do not thank the caller for this update.");
     },
   );
 });
@@ -198,6 +238,20 @@ function providerProcessor(input: { provider: VoiceAgentProvider; socket: FakeWe
     provider: input.provider,
     xAiApiKey: "xai_test",
   });
+}
+
+function providerSentText(sent: unknown[], provider: VoiceAgentProvider) {
+  if (provider === VOICE_AGENT_PROVIDER_GEMINI_LIVE) {
+    const message = sent.find(
+      (candidate) => (candidate as { clientContent?: unknown }).clientContent != null,
+    ) as { clientContent?: { turns?: Array<{ parts?: Array<{ text?: string }> }> } } | undefined;
+    return message?.clientContent?.turns?.[0]?.parts?.[0]?.text ?? "";
+  }
+
+  const message = sent.find(
+    (candidate) => (candidate as { type?: unknown }).type === "conversation.item.create",
+  ) as { item?: { content?: Array<{ type?: string; text?: string }> } } | undefined;
+  return message?.item?.content?.find((part) => part.type === "input_text")?.text ?? "";
 }
 
 function voiceAgentState(provider: VoiceAgentProvider): VoiceAgentState {

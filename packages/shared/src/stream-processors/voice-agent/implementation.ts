@@ -479,7 +479,7 @@ async function sendInputText(args: {
       const sequence = args.connection.sendSequence++;
       const message = {
         clientContent: {
-          turns: [{ role: "user", parts: [{ text: args.event.payload.text }] }],
+          turns: [{ role: "user", parts: [{ text: providerInputText(args.event) }] }],
           turnComplete: true,
         },
       } satisfies JsonValue;
@@ -502,7 +502,7 @@ async function sendInputText(args: {
         item: {
           type: "message",
           role: "user",
-          content: [{ type: "input_text", text: args.event.payload.text }],
+          content: [{ type: "input_text", text: providerInputText(args.event) }],
         },
       } satisfies JsonValue;
       args.connection.socket.send(JSON.stringify(itemMessage));
@@ -531,6 +531,22 @@ async function sendInputText(args: {
     default:
       return assertNever(args.connection.provider);
   }
+}
+
+function providerInputText(
+  event: Extract<
+    VoiceAgentConsumedEvent,
+    { type: typeof VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE }
+  >,
+) {
+  if (event.payload.source !== "code-agent") return event.payload.text;
+  return [
+    "BACKGROUND AGENT RESULT FOR THE CALLER:",
+    event.payload.text,
+    "",
+    "This message is not from the caller. It is the result from the background code-capable agent you asked for help.",
+    "Tell the caller the answer directly and naturally now. Do not thank the caller for this update. Do not say the caller told you this.",
+  ].join("\n");
 }
 
 async function openProviderConnection(args: {
