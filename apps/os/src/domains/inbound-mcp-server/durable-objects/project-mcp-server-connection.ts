@@ -409,10 +409,10 @@ export class ProjectMcpServerConnection extends McpAgent<
     }
   }
 
-  /** Returns the verified Clerk identity injected by the Worker before McpAgent dispatch. */
+  /** Returns the verified identity injected by the Worker before McpAgent dispatch. */
   private requireAuthProps() {
     if (!this.props?.userId || !this.props.orgId) {
-      throw new Error("MCP request is missing verified Clerk auth props.");
+      throw new Error("MCP request is missing verified auth props.");
     }
 
     return this.props;

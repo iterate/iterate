@@ -11,8 +11,9 @@ import { resolveActiveOrganizationAuth } from "~/orpc/auth.ts";
 /**
  * Confirms a caller can access an ownerless project before exposing
  * project-scoped capabilities such as Code Mode or stream access. Projects are
- * deliberately not owned by Clerk organizations; the permission table is the
- * current claim/grant layer, and admin API callers bypass it for operator work.
+ * deliberately not owned by organizations at their core; the permission table
+ * is the current claim/grant layer, and admin API callers bypass it for
+ * operator work.
  */
 export async function requireActiveOrganizationProject(input: {
   activeOrganization: ActiveOrganizationAuth;

@@ -312,9 +312,9 @@ async function* decodeStreamEventLines(stream: ReadableStream<Uint8Array>, signa
 
 /**
  * The durable CodemodeSession writes to the shared Events service at a caller
- * supplied path. Keep that path bound to the same project ID we just authorized
- * through Clerk org membership; the path itself is intentionally project-local
- * and must not redundantly encode `/projects/:projectId`.
+ * supplied path. Keep that path bound to the same project ID we just authorized;
+ * the path itself is intentionally project-local and must not redundantly encode
+ * `/projects/:projectId`.
  */
 function requireCodemodeStreamPathProject(input: { projectId: string; streamPath: string }) {
   const path = StreamPath.parse(input.streamPath);

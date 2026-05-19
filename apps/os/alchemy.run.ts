@@ -106,11 +106,6 @@ const debugAppendChainSubscriber = ctx.app.local
 
 const { worker, afterFinalize } = await IterateApp(ctx, {
   bindings: {
-    CLERK_JWT_KEY: ctx.runtimeConfig.clerk.jwtKey.exposeSecret(),
-    CLERK_PUBLISHABLE_KEY: ctx.runtimeConfig.clerk.publishableKey,
-    CLERK_SECRET_KEY: ctx.runtimeConfig.clerk.secretKey.exposeSecret(),
-    CLERK_SIGN_IN_URL: ctx.runtimeConfig.clerk.signInUrl,
-    CLERK_SIGN_UP_URL: ctx.runtimeConfig.clerk.signUpUrl,
     DB: db,
     DO_CATALOG: db,
     AI: Ai(),

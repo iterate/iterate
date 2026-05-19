@@ -491,3 +491,7 @@ Phase F is last.
   project MCP entrypoint with a tombstone response. The CLI and UI now point to
   the OS base URL `/mcp`; the CLI keeps its admin-token preflight by adding a
   `?project=<slug-or-id>` selector.
+- Removed OS's Clerk runtime config, Alchemy bindings, dependencies,
+  `sync-clerk-apps.ts`, and the last runtime Clerk API lookup. Remaining
+  `clerk_organization` strings are legacy permission-table values; the runtime
+  no longer imports Clerk packages or reads `APP_CONFIG_CLERK__*`.

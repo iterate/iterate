@@ -243,8 +243,8 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
   constructor(ctx: DurableObjectState, env: ProjectEnv) {
     super(ctx, env);
     const sql = this.getDurableObjectSql();
-    // Projects are intentionally ownerless at their core. Clerk org membership
-    // is an access grant in D1, not a property of the Project Durable Object,
+    // Projects are intentionally ownerless at their core. Organization
+    // membership is an access grant in D1, not a property of the Project Durable Object,
     // because we want agents to be able to create unclaimed projects and let a
     // user or organization claim them later, similar to Stripe sandboxes.
     sql.exec(`CREATE TABLE IF NOT EXISTS project_state (

@@ -134,8 +134,8 @@ function resolveCurrentProjectHostSlug() {
   const requestHostname = normalizeRequestHostname(requestUrl.hostname);
   if (dashboardHostname && requestHostname === dashboardHostname) return null;
 
-  // Clerk returns custom sign-in flows to `/` after authentication. For project
-  // hosts, the root route must recover the project slug from the hostname so
+  // Auth redirects can land at `/` after authentication. For project hosts, the
+  // root route must recover the project slug from the hostname so
   // `<project>.iterate-preview-N.app` lands directly in that project's app/OS.
   return (
     resolveProjectSlugFromHostname(requestHostname, context?.projectHostnameBases ?? []) ?? null

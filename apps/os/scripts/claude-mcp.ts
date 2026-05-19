@@ -14,7 +14,7 @@ const ClaudeMcpInput = z.object({
     .trim()
     .min(1)
     .regex(/^[a-zA-Z0-9_-]+$/, "Project slug or ID must be hostname-safe")
-    .describe("OS project slug or ID used in the mcp__<project> hostname"),
+    .describe("OS project slug or ID used for the admin-token MCP project selector"),
   baseHost: z
     .string()
     .trim()
