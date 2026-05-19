@@ -27,8 +27,14 @@ import {
 import { EventInput, StreamPath, type Event } from "@iterate-com/shared/streams/types";
 import {
   voiceAgentCircuitBreakerConfiguredEvent,
+  streamProcessorSubscriptionConfiguredEvent,
   voiceAgentSubscriptionConfiguredEvent,
 } from "~/domains/voice-agents/voice-agent-subscription.ts";
+import {
+  GEMINI_LIVE_VOICE_PROCESSOR_SLUG,
+  GROK_REALTIME_VOICE_PROCESSOR_SLUG,
+  OPENAI_REALTIME_VOICE_PROCESSOR_SLUG,
+} from "~/domains/stream-processors/stream-processor-slugs.ts";
 import type { appRouter } from "~/orpc/root.ts";
 
 type OrpcClient = RouterClient<typeof appRouter>;
@@ -103,6 +109,11 @@ async function main() {
         streamPath: options.streamPath,
       }),
       voiceAgentSubscriptionConfiguredEvent({
+        projectId: projectSlugOrId,
+        streamPath: options.streamPath,
+      }),
+      streamProcessorSubscriptionConfiguredEvent({
+        processorSlug: voiceProviderProcessorSlug(options.provider),
         projectId: projectSlugOrId,
         streamPath: options.streamPath,
       }),
@@ -453,6 +464,17 @@ function voiceOption(values: Map<string, string>) {
       return DEFAULT_OPENAI_REALTIME_VOICE;
     case VOICE_AGENT_PROVIDER_GROK_REALTIME:
       return DEFAULT_GROK_REALTIME_VOICE;
+  }
+}
+
+function voiceProviderProcessorSlug(provider: VoiceAgentProvider) {
+  switch (provider) {
+    case VOICE_AGENT_PROVIDER_GEMINI_LIVE:
+      return GEMINI_LIVE_VOICE_PROCESSOR_SLUG;
+    case VOICE_AGENT_PROVIDER_OPENAI_REALTIME:
+      return OPENAI_REALTIME_VOICE_PROCESSOR_SLUG;
+    case VOICE_AGENT_PROVIDER_GROK_REALTIME:
+      return GROK_REALTIME_VOICE_PROCESSOR_SLUG;
   }
 }
 

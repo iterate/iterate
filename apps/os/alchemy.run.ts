@@ -13,7 +13,7 @@ import type { AgentDurableObject } from "./src/domains/agents/durable-objects/ag
 import type { RepoDurableObject } from "./src/domains/repos/durable-objects/repo-durable-object.ts";
 import type { SlackAgentDurableObject } from "./src/domains/slack/durable-objects/slack-agent-durable-object.ts";
 import type { SlackIntegrationDurableObject } from "./src/domains/slack/durable-objects/slack-integration-durable-object.ts";
-import type { VoiceAgentDurableObject } from "./src/domains/voice-agents/durable-objects/voice-agent-durable-object.ts";
+import type { StreamProcessorDurableObject } from "./src/domains/stream-processors/durable-objects/stream-processor-durable-object.ts";
 import type { WorkspaceDurableObject } from "./src/domains/workspaces/durable-objects/workspace-durable-object.ts";
 import type { OutboundMcpFromOurClientCapability } from "./src/domains/outbound-mcp-client/entrypoints/outbound-mcp-from-our-client-capability.ts";
 
@@ -75,8 +75,8 @@ const agent = DurableObjectNamespace<AgentDurableObject>("agent", {
   className: "AgentDurableObject",
   sqlite: true,
 });
-const voiceAgent = DurableObjectNamespace<VoiceAgentDurableObject>("voice-agent", {
-  className: "VoiceAgentDurableObject",
+const streamProcessor = DurableObjectNamespace<StreamProcessorDurableObject>("stream-processor", {
+  className: "StreamProcessorDurableObject",
   sqlite: true,
 });
 const slackIntegration = DurableObjectNamespace<SlackIntegrationDurableObject>(
@@ -112,7 +112,7 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     LOADER: WorkerLoader(),
     CODEMODE_SESSION: codemodeSession,
     AGENT: agent,
-    VOICE_AGENT: voiceAgent,
+    STREAM_PROCESSOR: streamProcessor,
     ARTIFACTS: Artifacts({ namespace: artifactsNamespace }),
     PROJECT: project,
     SLACK_AGENT: slackAgent,

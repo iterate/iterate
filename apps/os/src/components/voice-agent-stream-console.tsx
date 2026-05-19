@@ -5,6 +5,7 @@ import {
   VOICE_AGENT_INPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE,
   VOICE_AGENT_INPUT_SAMPLE_RATE,
   VOICE_AGENT_OUTPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE,
+  VOICE_AGENT_OUTPUT_TEXT_APPENDED_EVENT_TYPE,
   VOICE_AGENT_OUTPUT_SAMPLE_RATE,
   VOICE_AGENT_SPEAKER_BUFFER_CLEAR_REQUESTED_EVENT_TYPE,
 } from "@iterate-com/shared/stream-processors/voice-agent/contract";
@@ -210,6 +211,17 @@ export function VoiceAgentStreamConsole({
       if (typeof payload.text === "string") {
         appendTranscriptLine({
           direction: payload.direction === "input" ? "input" : "output",
+          eventOffset: event.offset,
+          text: payload.text,
+        });
+      }
+      return;
+    }
+    if (event.type === VOICE_AGENT_OUTPUT_TEXT_APPENDED_EVENT_TYPE) {
+      const payload = event.payload as { source?: unknown; text?: unknown };
+      if (typeof payload.text === "string") {
+        appendTranscriptLine({
+          direction: payload.source === "input-transcription" ? "input" : "output",
           eventOffset: event.offset,
           text: payload.text,
         });

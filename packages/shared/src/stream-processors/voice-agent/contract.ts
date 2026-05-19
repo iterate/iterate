@@ -29,8 +29,12 @@ export const VOICE_AGENT_CONFIG_UPDATED_EVENT_TYPE =
   "events.iterate.com/voice-agent/config-updated";
 export const VOICE_AGENT_INPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE =
   "events.iterate.com/voice-agent/input-audio-frame-appended";
+export const VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE =
+  "events.iterate.com/voice-agent/input-text-appended";
 export const VOICE_AGENT_OUTPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE =
   "events.iterate.com/voice-agent/output-audio-frame-appended";
+export const VOICE_AGENT_OUTPUT_TEXT_APPENDED_EVENT_TYPE =
+  "events.iterate.com/voice-agent/output-text-appended";
 export const VOICE_AGENT_SPEAKER_BUFFER_CLEAR_REQUESTED_EVENT_TYPE =
   "events.iterate.com/voice-agent/speaker-buffer-clear-requested";
 
@@ -42,6 +46,17 @@ const VoiceAgentAudioFramePayload = z.object({
   channels: z.literal(1),
   durationMs: z.number().int().nonnegative(),
   dataBase64: z.string().trim().min(1),
+});
+
+const VoiceAgentInputTextPayload = z.object({
+  text: z.string().trim().min(1),
+  source: z.string().trim().min(1).optional(),
+});
+
+const VoiceAgentOutputTextPayload = z.object({
+  connectionId: z.string().min(1).optional(),
+  text: z.string().trim().min(1),
+  source: z.enum(["input-transcription", "output-transcription", "provider-text"]).optional(),
 });
 
 const GeminiSetupPayload = z.object({
@@ -135,7 +150,11 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
     setup: VoiceAgentSetup.nullable().default(null),
     inputFrameCount: z.number().int().nonnegative().default(0),
     outputFrameCount: z.number().int().nonnegative().default(0),
+    inputTextCount: z.number().int().nonnegative().default(0),
+    outputTextCount: z.number().int().nonnegative().default(0),
     connection: ConnectionState,
+    lastInputText: z.string().optional(),
+    lastOutputText: z.string().optional(),
     lastInputTranscription: z.string().optional(),
     lastOutputTranscription: z.string().optional(),
   }),
@@ -160,12 +179,22 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
         sampleRate: z.literal(VOICE_AGENT_INPUT_SAMPLE_RATE),
       }),
     },
+    [VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE]: {
+      description:
+        "Authoritative text input/context to send to the selected realtime voice model. Voice clients should not speak this text directly.",
+      payloadSchema: VoiceAgentInputTextPayload,
+    },
     [VOICE_AGENT_OUTPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE]: {
       description:
         "One raw little-endian PCM16 mono speaker frame returned by the selected realtime voice provider.",
       payloadSchema: VoiceAgentAudioFramePayload.extend({
         sampleRate: z.literal(VOICE_AGENT_OUTPUT_SAMPLE_RATE),
       }),
+    },
+    [VOICE_AGENT_OUTPUT_TEXT_APPENDED_EVENT_TYPE]: {
+      description:
+        "Text produced by the selected realtime voice provider, usually a transcript or diagnostic text.",
+      payloadSchema: VoiceAgentOutputTextPayload,
     },
     "events.iterate.com/voice-agent/transcription-appended": {
       description: "Provider transcription text for either input or output audio.",
@@ -308,7 +337,9 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
     VOICE_AGENT_SETUP_CONFIGURED_EVENT_TYPE,
     VOICE_AGENT_CONFIG_UPDATED_EVENT_TYPE,
     VOICE_AGENT_INPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE,
+    VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE,
     VOICE_AGENT_OUTPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE,
+    VOICE_AGENT_OUTPUT_TEXT_APPENDED_EVENT_TYPE,
     "events.iterate.com/voice-agent/transcription-appended",
     VOICE_AGENT_SPEAKER_BUFFER_CLEAR_REQUESTED_EVENT_TYPE,
     "events.iterate.com/voice-agent/error-occurred",
@@ -341,6 +372,7 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
   emits: [
     ...standardProcessorBehavior.emits,
     VOICE_AGENT_OUTPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE,
+    VOICE_AGENT_OUTPUT_TEXT_APPENDED_EVENT_TYPE,
     "events.iterate.com/voice-agent/transcription-appended",
     VOICE_AGENT_SPEAKER_BUFFER_CLEAR_REQUESTED_EVENT_TYPE,
     "events.iterate.com/voice-agent/error-occurred",
@@ -400,8 +432,20 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
         };
       case VOICE_AGENT_INPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE:
         return { ...nextState, inputFrameCount: nextState.inputFrameCount + 1 };
+      case VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE:
+        return {
+          ...nextState,
+          inputTextCount: nextState.inputTextCount + 1,
+          lastInputText: event.payload.text,
+        };
       case VOICE_AGENT_OUTPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE:
         return { ...nextState, outputFrameCount: nextState.outputFrameCount + 1 };
+      case VOICE_AGENT_OUTPUT_TEXT_APPENDED_EVENT_TYPE:
+        return {
+          ...nextState,
+          outputTextCount: nextState.outputTextCount + 1,
+          lastOutputText: event.payload.text,
+        };
       case "events.iterate.com/voice-agent/transcription-appended":
         return event.payload.direction === "input"
           ? { ...nextState, lastInputTranscription: event.payload.text }

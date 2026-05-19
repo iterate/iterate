@@ -10,7 +10,9 @@ import { CoreProcessorRegisteredEventType } from "../core/contract.ts";
 import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
 import {
   VOICE_AGENT_INPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE,
+  VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE,
   VOICE_AGENT_OUTPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE,
+  VOICE_AGENT_OUTPUT_TEXT_APPENDED_EVENT_TYPE,
   VOICE_AGENT_OUTPUT_SAMPLE_RATE,
   VOICE_AGENT_PROVIDER_GEMINI_LIVE,
   VOICE_AGENT_PROVIDER_GROK_REALTIME,
@@ -92,23 +94,88 @@ export type VoiceAgentProcessorDeps = {
 
 const ProviderConnectedReadyState = 1;
 
-export function createVoiceAgentProcessor(deps: VoiceAgentProcessorDeps) {
-  let connection: ProviderConnection | null = null;
-  let openingConnection: Promise<ProviderConnection> | null = null;
-  let outputSequence = 0;
-  let lastInputStreamId = "voice-agent";
-
+export function createVoiceAgentProcessor() {
   return implementProcessor(VoiceAgentProcessorContract, {
-    async afterAppend({ event, state, streamApi, waitUntil }) {
+    async afterAppend({ state, streamApi }) {
       await standardProcessorBehavior.afterAppend({
         contract: VoiceAgentProcessorContract,
         state,
         streamApi,
       });
+    },
+  });
+}
+
+export function createVoiceAgentProviderProcessor(
+  input: VoiceAgentProcessorDeps & {
+    processorSlug: string;
+    provider: VoiceAgentProvider;
+  },
+) {
+  return createVoiceAgentRealtimeProcessor({
+    contract: {
+      ...VoiceAgentProcessorContract,
+      slug: input.processorSlug,
+      description: `${providerLabel(input.provider)} realtime voice provider adapter for the canonical voice-agent stream protocol.`,
+    } as typeof VoiceAgentProcessorContract,
+    deps: input,
+    provider: input.provider,
+  });
+}
+
+function createVoiceAgentRealtimeProcessor(args: {
+  contract: typeof VoiceAgentProcessorContract;
+  deps: VoiceAgentProcessorDeps;
+  provider: VoiceAgentProvider;
+}) {
+  let connection: ProviderConnection | null = null;
+  let openingConnection: Promise<ProviderConnection> | null = null;
+  let outputSequence = 0;
+  let lastInputStreamId = "voice-agent";
+
+  return implementProcessor(args.contract, {
+    async afterAppend({ event, state, streamApi, waitUntil }) {
+      await standardProcessorBehavior.afterAppend({
+        contract: args.contract,
+        state,
+        streamApi,
+      });
+
+      const getConnection = async (setup: VoiceAgentSetup) => {
+        if (
+          connection?.provider === setup.provider &&
+          connection.socket.readyState === ProviderConnectedReadyState
+        ) {
+          return connection;
+        }
+
+        if (openingConnection != null) {
+          return await openingConnection;
+        }
+
+        connection?.socket.close(1000, "Voice-agent provider changed.");
+        openingConnection = openProviderConnection({
+          deps: args.deps,
+          setup,
+          streamApi,
+          createOutputSequence: () => outputSequence++,
+          getLastInputStreamId: () => lastInputStreamId,
+          markConnectionClosed: (closedConnection) => {
+            if (connection?.id === closedConnection.id) connection = null;
+          },
+        });
+        try {
+          connection = await openingConnection;
+          return connection;
+        } finally {
+          openingConnection = null;
+        }
+      };
 
       switch (event.type) {
         case CoreProcessorRegisteredEventType:
         case VOICE_AGENT_OUTPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE:
+        case VOICE_AGENT_OUTPUT_TEXT_APPENDED_EVENT_TYPE:
         case "events.iterate.com/voice-agent/transcription-appended":
         case VOICE_AGENT_SPEAKER_BUFFER_CLEAR_REQUESTED_EVENT_TYPE:
         case "events.iterate.com/voice-agent/error-occurred":
@@ -146,41 +213,29 @@ export function createVoiceAgentProcessor(deps: VoiceAgentProcessorDeps) {
           return;
         case VOICE_AGENT_INPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE: {
           const task = forwardInputAudioFrame({
-            deps,
+            deps: args.deps,
             event,
-            getConnection: async (setup) => {
-              if (
-                connection?.provider === setup.provider &&
-                connection.socket.readyState === ProviderConnectedReadyState
-              ) {
-                return connection;
-              }
-
-              if (openingConnection != null) {
-                return await openingConnection;
-              }
-
-              connection?.socket.close(1000, "Voice-agent provider changed.");
-              openingConnection = openProviderConnection({
-                deps,
-                setup,
-                streamApi,
-                createOutputSequence: () => outputSequence++,
-                getLastInputStreamId: () => lastInputStreamId,
-                markConnectionClosed: (closedConnection) => {
-                  if (connection?.id === closedConnection.id) connection = null;
-                },
-              });
-              try {
-                connection = await openingConnection;
-                return connection;
-              } finally {
-                openingConnection = null;
-              }
-            },
+            getConnection,
+            provider: args.provider,
             rememberInputStreamId: (streamId) => {
               lastInputStreamId = streamId;
             },
+            state,
+            streamApi,
+          });
+          if (waitUntil == null) {
+            await task;
+          } else {
+            waitUntil(task);
+          }
+          return;
+        }
+        case VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE: {
+          const task = forwardInputText({
+            deps: args.deps,
+            event,
+            getConnection,
+            provider: args.provider,
             state,
             streamApi,
           });
@@ -205,6 +260,7 @@ async function forwardInputAudioFrame(args: {
     { type: typeof VOICE_AGENT_INPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE }
   >;
   getConnection(setup: VoiceAgentSetup): Promise<ProviderConnection>;
+  provider: VoiceAgentProvider;
   rememberInputStreamId(streamId: string): void;
   state: VoiceAgentState;
   streamApi: VoiceAgentStreamApi;
@@ -218,6 +274,9 @@ async function forwardInputAudioFrame(args: {
       event: args.event,
       streamApi: args.streamApi,
     });
+    return;
+  }
+  if (setup.provider !== args.provider) {
     return;
   }
 
@@ -306,6 +365,131 @@ async function sendInputAudioFrame(args: {
         eventType: providerMessageSentEventType(args.connection.provider),
         message,
         sequence,
+        sourceEventOffset: args.event.offset,
+        streamApi: args.streamApi,
+      });
+      return;
+    }
+    default:
+      return assertNever(args.connection.provider);
+  }
+}
+
+async function forwardInputText(args: {
+  deps: VoiceAgentProcessorDeps;
+  event: Extract<
+    VoiceAgentConsumedEvent,
+    { type: typeof VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE }
+  >;
+  getConnection(setup: VoiceAgentSetup): Promise<ProviderConnection>;
+  provider: VoiceAgentProvider;
+  state: VoiceAgentState;
+  streamApi: VoiceAgentStreamApi;
+}) {
+  const setup = args.state.setup;
+  if (setup == null) {
+    await appendProcessorError({
+      error: new Error(
+        "Voice-agent setup-configured event is required before appending input text.",
+      ),
+      event: args.event,
+      streamApi: args.streamApi,
+    });
+    return;
+  }
+  if (setup.provider !== args.provider) return;
+
+  const missingKeyError = missingApiKeyError({ deps: args.deps, provider: setup.provider });
+  if (missingKeyError != null) {
+    await appendProcessorError({
+      error: new Error(missingKeyError),
+      event: args.event,
+      streamApi: args.streamApi,
+    });
+    return;
+  }
+
+  let connection: ProviderConnection;
+  try {
+    connection = await args.getConnection(setup);
+    await withTimeout(
+      connection.ready,
+      30_000,
+      `Timed out waiting for ${providerLabel(setup.provider)} setup.`,
+    );
+  } catch (error) {
+    await appendProcessorError({
+      error,
+      event: args.event,
+      streamApi: args.streamApi,
+    });
+    return;
+  }
+
+  await sendInputText({
+    connection,
+    event: args.event,
+    streamApi: args.streamApi,
+  });
+}
+
+async function sendInputText(args: {
+  connection: ProviderConnection;
+  event: Extract<
+    VoiceAgentConsumedEvent,
+    { type: typeof VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE }
+  >;
+  streamApi: VoiceAgentStreamApi;
+}) {
+  switch (args.connection.provider) {
+    case VOICE_AGENT_PROVIDER_GEMINI_LIVE: {
+      const sequence = args.connection.sendSequence++;
+      const message = {
+        clientContent: {
+          turns: [{ role: "user", parts: [{ text: args.event.payload.text }] }],
+          turnComplete: true,
+        },
+      } satisfies JsonValue;
+      args.connection.socket.send(JSON.stringify(message));
+      await appendProviderMessageSent({
+        connection: args.connection,
+        eventType: providerMessageSentEventType(args.connection.provider),
+        message,
+        sequence,
+        sourceEventOffset: args.event.offset,
+        streamApi: args.streamApi,
+      });
+      return;
+    }
+    case VOICE_AGENT_PROVIDER_OPENAI_REALTIME:
+    case VOICE_AGENT_PROVIDER_GROK_REALTIME: {
+      const itemSequence = args.connection.sendSequence++;
+      const itemMessage = {
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: args.event.payload.text }],
+        },
+      } satisfies JsonValue;
+      args.connection.socket.send(JSON.stringify(itemMessage));
+      await appendProviderMessageSent({
+        connection: args.connection,
+        eventType: providerMessageSentEventType(args.connection.provider),
+        message: itemMessage,
+        sequence: itemSequence,
+        sourceEventOffset: args.event.offset,
+        streamApi: args.streamApi,
+      });
+
+      const responseSequence = args.connection.sendSequence++;
+      const responseMessage = { type: "response.create" } satisfies JsonValue;
+      args.connection.socket.send(JSON.stringify(responseMessage));
+      await appendProviderMessageSent({
+        connection: args.connection,
+        eventType: providerMessageSentEventType(args.connection.provider),
+        message: responseMessage,
+        sequence: responseSequence,
         sourceEventOffset: args.event.offset,
         streamApi: args.streamApi,
       });
@@ -962,11 +1146,11 @@ async function appendTranscriptionEvents(args: {
   if (args.inputText) {
     await args.streamApi.append({
       event: {
-        type: "events.iterate.com/voice-agent/transcription-appended",
-        idempotencyKey: `voice-agent:${args.connectionId}:input-transcription:${args.sequence}`,
+        type: VOICE_AGENT_OUTPUT_TEXT_APPENDED_EVENT_TYPE,
+        idempotencyKey: `voice-agent:${args.connectionId}:input-transcription-output-text:${args.sequence}`,
         payload: {
           connectionId: args.connectionId,
-          direction: "input",
+          source: "input-transcription",
           text: args.inputText,
         },
       },
@@ -975,11 +1159,11 @@ async function appendTranscriptionEvents(args: {
   if (args.outputText) {
     await args.streamApi.append({
       event: {
-        type: "events.iterate.com/voice-agent/transcription-appended",
-        idempotencyKey: `voice-agent:${args.connectionId}:output-transcription:${args.sequence}`,
+        type: VOICE_AGENT_OUTPUT_TEXT_APPENDED_EVENT_TYPE,
+        idempotencyKey: `voice-agent:${args.connectionId}:output-transcription-output-text:${args.sequence}`,
         payload: {
           connectionId: args.connectionId,
-          direction: "output",
+          source: "output-transcription",
           text: args.outputText,
         },
       },
@@ -1022,12 +1206,12 @@ async function openFetchWebSocket(input: {
   providerLabel: string;
   url: URL;
 }): Promise<WebSocket> {
-  const response = await fetch(input.url, {
+  const response = (await fetch(input.url, {
     headers: {
       ...input.headers,
       Upgrade: "websocket",
     },
-  });
+  })) as Response & { webSocket?: WebSocket & { accept(): void } };
   if (!response.webSocket) {
     throw new Error(
       `${input.providerLabel} WebSocket upgrade failed with HTTP ${response.status}.`,
@@ -1148,7 +1332,11 @@ async function appendProcessorError(args: {
   error: unknown;
   event: Extract<
     VoiceAgentConsumedEvent,
-    { type: typeof VOICE_AGENT_INPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE }
+    {
+      type:
+        | typeof VOICE_AGENT_INPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE
+        | typeof VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE;
+    }
   >;
   streamApi: VoiceAgentStreamApi;
 }) {
@@ -1157,7 +1345,10 @@ async function appendProcessorError(args: {
       type: "events.iterate.com/voice-agent/error-occurred",
       idempotencyKey: buildProcessorIdempotencyKey({
         processor: VoiceAgentProcessorContract,
-        key: "input-audio-frame-forwarding-failed",
+        key:
+          args.event.type === VOICE_AGENT_INPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE
+            ? "input-audio-frame-forwarding-failed"
+            : "input-text-forwarding-failed",
         sourceEvent: args.event,
       }),
       payload: {

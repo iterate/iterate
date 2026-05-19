@@ -1,12 +1,21 @@
 import { z } from "zod";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
-import {
-  deriveDurableObjectNameFromStructuredName,
-  NotInitializedError,
-} from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import { NotInitializedError } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { withStreamProcessor } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor";
-import { createVoiceAgentProcessor } from "@iterate-com/shared/stream-processors/voice-agent/implementation";
-import type { ProcessorStreamApi, StreamEvent } from "@iterate-com/shared/stream-processors";
+import {
+  VOICE_AGENT_PROVIDER_GEMINI_LIVE,
+  VOICE_AGENT_PROVIDER_GROK_REALTIME,
+  VOICE_AGENT_PROVIDER_OPENAI_REALTIME,
+} from "@iterate-com/shared/stream-processors/voice-agent/contract";
+import {
+  createVoiceAgentProcessor,
+  createVoiceAgentProviderProcessor,
+} from "@iterate-com/shared/stream-processors/voice-agent/implementation";
+import type {
+  Processor,
+  ProcessorStreamApi,
+  StreamEvent,
+} from "@iterate-com/shared/stream-processors";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
@@ -15,35 +24,38 @@ import type { StreamDurableObject } from "@iterate-com/shared/streams/stream-dur
 import { StreamSocketFrame } from "@iterate-com/shared/streams/stream-socket-types";
 import type { Event, EventInput, StreamCursor } from "@iterate-com/shared/streams/types";
 import { StreamPath } from "@iterate-com/shared/streams/types";
+import {
+  GEMINI_LIVE_VOICE_PROCESSOR_SLUG,
+  GROK_REALTIME_VOICE_PROCESSOR_SLUG,
+  OPENAI_REALTIME_VOICE_PROCESSOR_SLUG,
+  streamProcessorSubscriptionSlug,
+  VOICE_AGENT_PROCESSOR_SLUG,
+} from "~/domains/stream-processors/stream-processor-slugs.ts";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
 
-export type VoiceAgentDurableObjectStructuredName = {
+export type StreamProcessorDurableObjectStructuredName = {
+  processorSlug: string;
   projectId: string;
   streamPath: StreamPath;
 };
 
-export const VoiceAgentDurableObjectStructuredName = z.object({
+export const StreamProcessorDurableObjectStructuredName = z.object({
+  processorSlug: z.string().trim().min(1),
   projectId: z.string().trim().min(1),
   streamPath: StreamPath,
 });
 
-export function getVoiceAgentDurableObjectName(input: VoiceAgentDurableObjectStructuredName) {
-  return deriveDurableObjectNameFromStructuredName({
-    structuredName: input,
-  });
-}
-
-export type VoiceAgentDurableObjectEnv = {
+export type StreamProcessorDurableObjectEnv = {
   APP_CONFIG?: string;
   APP_CONFIG_GEMINI_API_KEY?: string;
   APP_CONFIG_OPEN_AI_API_KEY?: string;
   APP_CONFIG_X_AI_API_KEY?: string;
   DO_CATALOG: D1Database;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
-  VOICE_AGENT: DurableObjectNamespace<VoiceAgentDurableObject>;
+  STREAM_PROCESSOR: DurableObjectNamespace<StreamProcessorDurableObject>;
 };
 
-type VoiceAgentStreamApi = ProcessorStreamApi<{
+type GenericStreamApi = ProcessorStreamApi<{
   emits: readonly string[];
   events: Record<string, unknown>;
   processorDeps?: readonly unknown[];
@@ -57,47 +69,51 @@ type VoiceAgentStreamApi = ProcessorStreamApi<{
   }): Promise<Event[]>;
 };
 
-const VoiceAgentLifecycleBase = createIterateDurableObjectBase<
-  typeof VoiceAgentDurableObjectStructuredName,
-  Pick<VoiceAgentDurableObjectEnv, "DO_CATALOG">
+type RegistryEntry = {
+  create(env: StreamProcessorDurableObjectEnv): Processor<unknown>;
+};
+
+const StreamProcessorLifecycleBase = createIterateDurableObjectBase<
+  typeof StreamProcessorDurableObjectStructuredName,
+  Pick<StreamProcessorDurableObjectEnv, "DO_CATALOG">
 >({
-  className: "VoiceAgentDurableObject",
+  className: "StreamProcessorDurableObject",
   getDatabase: (env) => env.DO_CATALOG,
   indexes: {
+    processorSlug: (params) => params.processorSlug,
     projectId: (params) => params.projectId,
     streamPath: (params) => params.streamPath,
   },
-  nameSchema: VoiceAgentDurableObjectStructuredName,
+  nameSchema: StreamProcessorDurableObjectStructuredName,
 });
 
-const VoiceAgentBase = withStreamProcessor<
-  VoiceAgentDurableObjectStructuredName,
-  VoiceAgentDurableObjectEnv
+const StreamProcessorBase = withStreamProcessor<
+  StreamProcessorDurableObjectStructuredName,
+  StreamProcessorDurableObjectEnv
 >({
   streamApi(args) {
-    return voiceAgentStreamApiFromNamespace({
+    return streamApiFromNamespace({
       durableObjectNamespace: args.env.STREAM as unknown as StreamDurableObjectNamespace,
       namespace: args.structuredName.projectId,
       streamPath: StreamPath.parse(String(args.streamPath)),
     });
   },
-})(VoiceAgentLifecycleBase);
+})(StreamProcessorLifecycleBase);
 
-export class VoiceAgentDurableObject extends VoiceAgentBase<VoiceAgentDurableObjectEnv> {
+export class StreamProcessorDurableObject extends StreamProcessorBase<StreamProcessorDurableObjectEnv> {
   #streamSocketMessageQueue = Promise.resolve();
 
-  constructor(ctx: DurableObjectState, env: VoiceAgentDurableObjectEnv) {
+  constructor(ctx: DurableObjectState, env: StreamProcessorDurableObjectEnv) {
     super(ctx, env);
 
     this.registerOnInstanceWake(async (params) => {
-      this.registerStreamProcessor(
-        createVoiceAgentProcessor({
-          geminiApiKey: readGeminiApiKey(this.env as Record<string, unknown>),
-          openAiApiKey: readOpenAiApiKey(this.env as Record<string, unknown>),
-          xAiApiKey: readXAiApiKey(this.env as Record<string, unknown>),
-        }),
-      );
-      await this.ensureVoiceAgentSubscription(params);
+      const entry = streamProcessorRegistry[params.processorSlug];
+      if (entry == null) {
+        throw new Error(`Unknown stream processor "${params.processorSlug}".`);
+      }
+
+      this.registerStreamProcessor(entry.create(this.env));
+      await this.ensureProcessorSubscription(params);
       await this.catchUpStreamProcessors({
         signal: AbortSignal.timeout(30_000),
         streamPath: params.streamPath,
@@ -151,12 +167,12 @@ export class VoiceAgentDurableObject extends VoiceAgentBase<VoiceAgentDurableObj
       try {
         await this.afterAppend({ event });
       } catch (error) {
-        console.error("[voice-agent] stream websocket event processing failed", {
+        console.error("[stream-processor] stream websocket event processing failed", {
           error,
           offset: event.offset,
+          processorName: this.name,
           streamPath: event.streamPath,
           type: event.type,
-          voiceAgentName: this.name,
         });
         socket.send(
           JSON.stringify({
@@ -180,12 +196,12 @@ export class VoiceAgentDurableObject extends VoiceAgentBase<VoiceAgentDurableObj
     return this.getStreamProcessorRuntimeState();
   }
 
-  private async ensureVoiceAgentSubscription(params: VoiceAgentDurableObjectStructuredName) {
+  private async ensureProcessorSubscription(params: StreamProcessorDurableObjectStructuredName) {
     await this.ensureStreamProcessorWebSocketSubscription({
-      bindingName: "VOICE_AGENT",
+      bindingName: "STREAM_PROCESSOR",
       durableObjectName: this.name,
       fetchPath: "/stream-subscription",
-      slug: `voice-agent:${params.projectId}:${params.streamPath}`,
+      slug: streamProcessorSubscriptionSlug(params),
       streamPath: params.streamPath,
     });
   }
@@ -202,11 +218,47 @@ export class VoiceAgentDurableObject extends VoiceAgentBase<VoiceAgentDurableObj
   }
 }
 
-function voiceAgentStreamApiFromNamespace(args: {
+const streamProcessorRegistry: Record<string, RegistryEntry> = {
+  [VOICE_AGENT_PROCESSOR_SLUG]: {
+    create: () => createVoiceAgentProcessor(),
+  },
+  [GEMINI_LIVE_VOICE_PROCESSOR_SLUG]: {
+    create: (env) =>
+      createVoiceAgentProviderProcessor({
+        geminiApiKey: readGeminiApiKey(env as Record<string, unknown>),
+        openAiApiKey: readOpenAiApiKey(env as Record<string, unknown>),
+        processorSlug: GEMINI_LIVE_VOICE_PROCESSOR_SLUG,
+        provider: VOICE_AGENT_PROVIDER_GEMINI_LIVE,
+        xAiApiKey: readXAiApiKey(env as Record<string, unknown>),
+      }),
+  },
+  [OPENAI_REALTIME_VOICE_PROCESSOR_SLUG]: {
+    create: (env) =>
+      createVoiceAgentProviderProcessor({
+        geminiApiKey: readGeminiApiKey(env as Record<string, unknown>),
+        openAiApiKey: readOpenAiApiKey(env as Record<string, unknown>),
+        processorSlug: OPENAI_REALTIME_VOICE_PROCESSOR_SLUG,
+        provider: VOICE_AGENT_PROVIDER_OPENAI_REALTIME,
+        xAiApiKey: readXAiApiKey(env as Record<string, unknown>),
+      }),
+  },
+  [GROK_REALTIME_VOICE_PROCESSOR_SLUG]: {
+    create: (env) =>
+      createVoiceAgentProviderProcessor({
+        geminiApiKey: readGeminiApiKey(env as Record<string, unknown>),
+        openAiApiKey: readOpenAiApiKey(env as Record<string, unknown>),
+        processorSlug: GROK_REALTIME_VOICE_PROCESSOR_SLUG,
+        provider: VOICE_AGENT_PROVIDER_GROK_REALTIME,
+        xAiApiKey: readXAiApiKey(env as Record<string, unknown>),
+      }),
+  },
+};
+
+function streamApiFromNamespace(args: {
   durableObjectNamespace: StreamDurableObjectNamespace;
   namespace: string;
   streamPath: StreamPath;
-}): VoiceAgentStreamApi {
+}): GenericStreamApi {
   return {
     async append(input) {
       const stream = await getInitializedStreamStub({
@@ -247,7 +299,7 @@ function voiceAgentStreamApiFromNamespace(args: {
     async *subscribe(input = {}) {
       void input;
       yield* [];
-      throw new Error("Voice agent processors receive live events through afterAppend RPC.");
+      throw new Error("Generic stream processors receive live events through websocket frames.");
     },
   };
 }

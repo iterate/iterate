@@ -46,7 +46,7 @@ export { ProjectDurableObject } from "~/domains/projects/durable-objects/project
 export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 export { SlackAgentDurableObject } from "~/domains/slack/durable-objects/slack-agent-durable-object.ts";
 export { SlackIntegrationDurableObject } from "~/domains/slack/durable-objects/slack-integration-durable-object.ts";
-export { VoiceAgentDurableObject } from "~/domains/voice-agents/durable-objects/voice-agent-durable-object.ts";
+export { StreamProcessorDurableObject } from "~/domains/stream-processors/durable-objects/stream-processor-durable-object.ts";
 export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.ts";
 export { AiCapability, OrpcCapability } from "~/domains/codemode/example-capabilities.ts";
 export { FetchCapability } from "~/domains/codemode/fetch-capability.ts";
@@ -142,7 +142,7 @@ export default {
           projectHostnameBases,
           waitUntil: (promise) => cfCtx.waitUntil(promise),
           agent: env.AGENT,
-          voiceAgent: env.VOICE_AGENT,
+          streamProcessor: env.STREAM_PROCESSOR,
           artifacts: envWithArtifacts.ARTIFACTS,
           loader: env.LOADER,
           codemodeSession: env.CODEMODE_SESSION,
