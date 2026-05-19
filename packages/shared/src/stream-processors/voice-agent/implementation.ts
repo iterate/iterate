@@ -9,6 +9,7 @@ import {
 import { CoreProcessorRegisteredEventType } from "../core/contract.ts";
 import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
 import {
+  AGENT_INPUT_ADDED_EVENT_TYPE,
   VOICE_AGENT_INPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE,
   VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE,
   VOICE_AGENT_OUTPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE,
@@ -35,6 +36,7 @@ type ProviderConnection = {
   ready: Promise<void>;
   receiveSequence: number;
   sendSequence: number;
+  handledToolCallIds: Set<string>;
   socket: WebSocket;
   urlForLog: string;
 };
@@ -69,7 +71,18 @@ type RealtimeServerMessage = {
   delta?: string;
   transcript?: string;
   error?: { message?: string };
-  response?: { status?: string };
+  item?: RealtimeFunctionCallItem;
+  response?: {
+    output?: RealtimeFunctionCallItem[];
+    status?: string;
+  };
+};
+
+type RealtimeFunctionCallItem = {
+  type?: string;
+  name?: string;
+  call_id?: string;
+  arguments?: string;
 };
 
 type OpenAiCompatibleEventPrefix = "openai-realtime" | "grok-realtime";
@@ -780,13 +793,37 @@ async function openGrokRealtimeConnection(args: {
   const setupMessage = {
     type: "session.update",
     session: {
-      instructions: args.setup.systemInstruction,
+      instructions: [
+        args.setup.systemInstruction,
+        "You have a tool named Ask Agent. Use it when the caller asks for actions, investigation, code, data lookup, or anything requiring tools. Ask Agent sends the request to a code-capable background agent. After calling it, tell the caller you asked the agent and continue the conversation while it works.",
+      ].join("\n\n"),
       voice: args.setup.voiceName,
       turn_detection: { type: "server_vad" },
       audio: {
         input: { format: { type: "audio/pcm", rate: 16_000 } },
         output: { format: { type: "audio/pcm", rate: VOICE_AGENT_OUTPUT_SAMPLE_RATE } },
       },
+      tools: [
+        {
+          type: "function",
+          name: "ask_agent",
+          description:
+            "Ask the code-capable background agent to do work or answer a question. Use for actions, investigation, code, data lookup, or anything requiring tools.",
+          parameters: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              message: {
+                type: "string",
+                description:
+                  "The plain-language request for the background code agent. Include relevant context from the call.",
+              },
+            },
+            required: ["message"],
+          },
+        },
+      ],
+      tool_choice: "auto",
     },
   } satisfies JsonValue;
   const sequence = connection.sendSequence++;
@@ -901,6 +938,15 @@ async function handleOpenAiCompatibleRealtimeMessage(
         streamApi: args.streamApi,
       });
       return;
+    case "response.output_item.done":
+      if (args.eventPrefix === "grok-realtime") {
+        await handleGrokFunctionCallItem({
+          connection: args.connection,
+          item: message.item,
+          streamApi: args.streamApi,
+        });
+      }
+      return;
     case "response.done":
       await appendProviderStatusEvent({
         connection: args.connection,
@@ -908,6 +954,15 @@ async function handleOpenAiCompatibleRealtimeMessage(
         sequence,
         streamApi: args.streamApi,
       });
+      if (args.eventPrefix === "grok-realtime") {
+        for (const item of message.response?.output ?? []) {
+          await handleGrokFunctionCallItem({
+            connection: args.connection,
+            item,
+            streamApi: args.streamApi,
+          });
+        }
+      }
       return;
     case "error":
       throw new Error(
@@ -916,6 +971,126 @@ async function handleOpenAiCompatibleRealtimeMessage(
     default:
       return;
   }
+}
+
+async function handleGrokFunctionCallItem(args: {
+  connection: ProviderConnection;
+  item: RealtimeFunctionCallItem | undefined;
+  streamApi: VoiceAgentStreamApi;
+}) {
+  if (args.item?.type !== "function_call") return;
+  const callId = args.item.call_id;
+  if (callId == null || callId.trim() === "") return;
+  if (args.connection.handledToolCallIds.has(callId)) return;
+  args.connection.handledToolCallIds.add(callId);
+
+  const toolResult =
+    args.item.name === "ask_agent"
+      ? await appendAskAgentInput({
+          argumentsJson: args.item.arguments,
+          callId,
+          connection: args.connection,
+          streamApi: args.streamApi,
+        })
+      : {
+          ok: false,
+          message: `Unknown tool: ${args.item.name ?? "<missing>"}`,
+        };
+
+  await sendOpenAiCompatibleFunctionCallOutput({
+    callId,
+    connection: args.connection,
+    output: toolResult,
+    sequenceSourceEventOffset: undefined,
+    streamApi: args.streamApi,
+  });
+}
+
+async function appendAskAgentInput(args: {
+  argumentsJson: string | undefined;
+  callId: string;
+  connection: ProviderConnection;
+  streamApi: VoiceAgentStreamApi;
+}) {
+  const parsed = parseAskAgentArguments(args.argumentsJson);
+  if (!parsed.ok) return parsed;
+
+  await args.streamApi.append({
+    event: {
+      type: AGENT_INPUT_ADDED_EVENT_TYPE,
+      idempotencyKey: `voice-agent:${args.connection.id}:grok-ask-agent:${args.callId}:agent-input`,
+      payload: {
+        content: parsed.message,
+        llmRequestPolicy: { behaviour: "after-current-request" },
+      },
+    },
+  });
+
+  return {
+    ok: true,
+    message:
+      "Asked the code-capable background agent. Continue the call while it works; it will respond back into the voice stream when ready.",
+  };
+}
+
+function parseAskAgentArguments(
+  argumentsJson: string | undefined,
+): { ok: true; message: string } | { ok: false; message: string } {
+  if (argumentsJson == null || argumentsJson.trim() === "") {
+    return { ok: false, message: "ask_agent requires a JSON arguments object." };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(argumentsJson);
+  } catch {
+    return { ok: false, message: "ask_agent arguments must be valid JSON." };
+  }
+
+  const message = (parsed as { message?: unknown }).message;
+  if (typeof message !== "string" || message.trim() === "") {
+    return { ok: false, message: "ask_agent requires a non-empty message string." };
+  }
+  return { ok: true, message: message.trim() };
+}
+
+async function sendOpenAiCompatibleFunctionCallOutput(args: {
+  callId: string;
+  connection: ProviderConnection;
+  output: JsonValue;
+  sequenceSourceEventOffset?: number;
+  streamApi: VoiceAgentStreamApi;
+}) {
+  const itemSequence = args.connection.sendSequence++;
+  const itemMessage = {
+    type: "conversation.item.create",
+    item: {
+      type: "function_call_output",
+      call_id: args.callId,
+      output: JSON.stringify(args.output),
+    },
+  } satisfies JsonValue;
+  args.connection.socket.send(JSON.stringify(itemMessage));
+  await appendProviderMessageSent({
+    connection: args.connection,
+    eventType: providerMessageSentEventType(args.connection.provider),
+    message: itemMessage,
+    sequence: itemSequence,
+    sourceEventOffset: args.sequenceSourceEventOffset,
+    streamApi: args.streamApi,
+  });
+
+  const responseSequence = args.connection.sendSequence++;
+  const responseMessage = { type: "response.create" } satisfies JsonValue;
+  args.connection.socket.send(JSON.stringify(responseMessage));
+  await appendProviderMessageSent({
+    connection: args.connection,
+    eventType: providerMessageSentEventType(args.connection.provider),
+    message: responseMessage,
+    sequence: responseSequence,
+    sourceEventOffset: args.sequenceSourceEventOffset,
+    streamApi: args.streamApi,
+  });
 }
 
 // Shared provider helpers.
@@ -947,6 +1122,7 @@ async function createProviderConnection(args: {
     ready,
     receiveSequence: 0,
     sendSequence: 0,
+    handledToolCallIds: new Set(),
     socket,
     urlForLog: args.urlForLog,
   };

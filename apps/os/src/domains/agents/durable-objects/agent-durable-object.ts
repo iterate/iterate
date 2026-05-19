@@ -782,13 +782,7 @@ function hasEquivalentDefaultSetupEvent(input: {
   existingEvents: readonly { payload: unknown; type: string }[];
 }) {
   if (input.event.type === "events.iterate.com/agent/system-prompt-updated") {
-    return input.existingEvents.some((event) => {
-      if (event.type !== input.event.type) return false;
-      const systemPrompt = (event.payload as { systemPrompt?: unknown }).systemPrompt;
-      return (
-        typeof systemPrompt === "string" && !systemPrompt.includes("ctx.streams.append({ event:")
-      );
-    });
+    return input.existingEvents.some((event) => event.type === input.event.type);
   }
   return input.existingEvents.some((event) => event.type === input.event.type);
 }

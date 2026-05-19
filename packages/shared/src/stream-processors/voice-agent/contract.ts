@@ -37,6 +37,7 @@ export const VOICE_AGENT_OUTPUT_TEXT_APPENDED_EVENT_TYPE =
   "events.iterate.com/voice-agent/output-text-appended";
 export const VOICE_AGENT_SPEAKER_BUFFER_CLEAR_REQUESTED_EVENT_TYPE =
   "events.iterate.com/voice-agent/speaker-buffer-clear-requested";
+export const AGENT_INPUT_ADDED_EVENT_TYPE = "events.iterate.com/agent/input-added";
 
 const VoiceAgentAudioFramePayload = z.object({
   streamId: z.string().trim().min(1),
@@ -140,6 +141,17 @@ const ProviderConnectionIdPayload = z.object({
   connectionId: z.string().min(1),
 });
 
+const AgentInputAddedPayload = z.object({
+  content: z.string().trim().min(1),
+  llmRequestPolicy: z
+    .discriminatedUnion("behaviour", [
+      z.object({ behaviour: z.literal("dont-trigger-request") }),
+      z.object({ behaviour: z.literal("interrupt-current-request") }),
+      z.object({ behaviour: z.literal("after-current-request") }),
+    ])
+    .default({ behaviour: "after-current-request" }),
+});
+
 export const VoiceAgentProcessorContract = defineProcessorContract({
   slug: "voice-agent",
   version: "0.1.0",
@@ -224,6 +236,11 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
         message: z.string().min(1),
         sourceEventOffset: z.number().int().positive().optional(),
       }),
+    },
+    [AGENT_INPUT_ADDED_EVENT_TYPE]: {
+      description:
+        "Input for the colocated code-capable agent. Grok Ask Agent tool calls append this event so the normal agent processor can do the requested work.",
+      payloadSchema: AgentInputAddedPayload,
     },
 
     // Gemini Live events.
@@ -401,6 +418,7 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
     "events.iterate.com/voice-agent/grok-realtime-speech-stopped",
     "events.iterate.com/voice-agent/grok-realtime-output-audio-done",
     "events.iterate.com/voice-agent/grok-realtime-response-done",
+    AGENT_INPUT_ADDED_EVENT_TYPE,
   ],
   reduce({ contract, state, event }) {
     const nextState = standardProcessorBehavior.reduce({
