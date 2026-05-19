@@ -21,7 +21,7 @@ import {
   StreamPath,
 } from "@iterate-com/shared/streams/types";
 import { typeid } from "@iterate-com/shared/typeid";
-import { acceptCaptunTunnel, type CaptunServerTunnel } from "~/lib/captun/server.ts";
+import { acceptCaptunTunnel, type CaptunServerTunnel } from "captun/server";
 import { AppConfig } from "~/app.ts";
 import {
   AGENTS_STREAM_PATH,

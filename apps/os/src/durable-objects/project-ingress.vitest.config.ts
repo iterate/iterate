@@ -20,10 +20,7 @@ export default defineConfig({
   root: resolve(repoRoot, "packages/shared"),
   resolve: {
     alias: {
-      capnweb: resolve(
-        repoRoot,
-        "node_modules/.pnpm/capnweb@0.8.0/node_modules/capnweb/dist/index-workers.js",
-      ),
+      "captun/server": resolve(appRoot, "node_modules/captun/dist/server.js"),
       "~": resolve(appRoot, "src"),
     },
   },

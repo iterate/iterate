@@ -76,7 +76,6 @@
     "@tanstack/react-router-ssr-query": "^1.166.2",
     "@tanstack/react-start": "1.167.5",
     "agents": "^0.11.0",
-    "capnweb": "0.8.0",
     "captun": "https://pkg.pr.new/iterate/captun@1",
     "crossws": "^0.4.4",
     "lucide-react": "^0.553.0",
