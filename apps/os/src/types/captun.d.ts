@@ -10,20 +10,3 @@ declare module "captun/client" {
 
   export function createCaptunTunnel(options: CaptunClientCreateTunnelOptions): Promise<Disposable>;
 }
-
-declare module "captun/server" {
-  interface Fetcher {
-    fetch(request: Request): Response | Promise<Response>;
-  }
-
-  export interface CaptunServerAcceptTunnelOptions {
-    onDisconnect?: () => void;
-  }
-
-  export interface CaptunServerTunnel extends Fetcher, Disposable {}
-
-  export function acceptCaptunTunnel(options?: CaptunServerAcceptTunnelOptions): {
-    response: Response;
-    tunnel: CaptunServerTunnel;
-  };
-}

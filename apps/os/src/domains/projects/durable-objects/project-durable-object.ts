@@ -1,7 +1,7 @@
 import { createD1Client } from "sqlfu";
 import { z } from "zod";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
-import { acceptCaptunTunnel, type CaptunServerTunnel } from "captun/server";
+import { acceptCaptunTunnel, type CaptunServerTunnel } from "~/lib/captun/server.ts";
 import type { Callable, FetchCallable } from "@iterate-com/shared/callable/types.ts";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
