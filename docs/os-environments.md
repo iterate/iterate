@@ -27,14 +27,18 @@ At deploy time, `alchemy.run.ts` reads AppConfig and derives Cloudflare worker r
 
 ## Cloudflare accounts
 
+See [Cloudflare accounts](cloudflare-accounts.md) for the repo-wide credential
+model.
+
 os reads Cloudflare credentials from the `_shared` Doppler config inherited by
 the active app config. App configs must not define local
 `CLOUDFLARE_ACCOUNT_ID` or `CLOUDFLARE_API_TOKEN` overrides.
 
 The current account split is:
 
-- `_shared/dev`, `_shared/dev_*`, and `_shared/prd` use account `04b3b57291ef2626c6a8daa9d47065a7`
-- `_shared/preview` uses account `cc7f6f461fbe823c199da2b27f9e0ff3`
+- `_shared/dev` and `_shared/preview` use account `376ef7ed81b0573f93524de763666c15`
+- `_shared/dev_*` and `_shared/preview_*` do not define Cloudflare credentials directly
+- `_shared/prd` uses account `04b3b57291ef2626c6a8daa9d47065a7`
 
 The API token (`cfut_...` user token) must have:
 
@@ -170,7 +174,7 @@ doppler run --project os --config preview_3 -- pnpm tsx ./alchemy.run.ts --destr
 
 ### Adding a new developer
 
-1. Buy/register `iterate-dev-<name>.com` and `iterate-dev-<name>.app` in the `04b3` account
+1. Buy/register `iterate-dev-<name>.com` and `iterate-dev-<name>.app` in the dev/preview account
 2. Create doppler config: `doppler configs create dev_<name> --project os`
 3. Set the OS domain vars. OS deploys its own stream Durable Object namespace
    from the main Worker script; do not set a stream binding override on OS.

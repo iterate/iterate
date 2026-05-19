@@ -58,7 +58,7 @@ A project-bound RPC capability for reading and managing Secrets for one ProjectI
 _Avoid_: global secret client, egress proxy
 
 **OAuth Client Configuration**:
-Runtime Config for a provider OAuth app, including client identity, client secret, scopes, and provider-specific webhook verification secrets.
+App Config for a provider OAuth app, including client identity, client secret, scopes, and provider-specific webhook verification secrets.
 _Avoid_: deployment config, connection, token secret
 
 **Connection**:
@@ -81,13 +81,13 @@ _Avoid_: Slack secret, Slack app config
 A durable callable registration that asks the Stream Runtime to invoke a processor runner after matching stream events append.
 _Avoid_: WebSocket subscription, callback URL
 
-**Runtime Config**:
-Typed app configuration serialized into the deployed runtime and readable by the running app.
-_Avoid_: app config, deployment config
+**App Config**:
+Typed runtime configuration serialized into the deployed app and readable by running app code.
+_Avoid_: runtime config, deployment config
 
 **Deployment Config**:
 Typed deployment-time configuration read by Alchemy while declaring cloud resources and not serialized into the running app.
-_Avoid_: runtime config, app config
+_Avoid_: app config, runtime config
 
 ## Relationships
 
@@ -112,7 +112,7 @@ _Avoid_: runtime config, app config
 - In the current OS secrets slice, every **Secret** belongs to exactly one **ProjectId**.
 - A **Secret** may have **Secret Metadata** in addition to **Secret Material**.
 - For the current OS secrets/codemode slice, `getSecret` returns raw **Secret Material** and **Secret Metadata**, not a Secret Reference for later egress substitution.
-- **OAuth Client Configuration** belongs in **Runtime Config** because workers and local/Docker runtimes need it when handling OAuth callbacks and webhooks.
+- **OAuth Client Configuration** belongs in **App Config** because workers and local/Docker runtimes need it when handling OAuth callbacks and webhooks.
 - A **Connection** may yield a project-wide **Secret** that runtime capabilities can read.
 - In the current OS secrets slice, every **Connection** is project-level; user-level and organization-level Connections are out of scope.
 - A **Provider Claim** binds one **Webhook Provider Identifier** to exactly one **ProjectId**.
@@ -122,9 +122,9 @@ _Avoid_: runtime config, app config
 - Google Connections are project-level in the current OS secrets slice.
 - Navigating to or reading a project stream may initialize that stream; a separate create command is not required for ordinary stream discovery.
 - A **Processor Subscription** delivers events through Durable Object RPC callables, not WebSockets.
-- **Runtime Config** is available inside deployed app code.
+- **App Config** is available inside deployed app code.
 - **Deployment Config** is available to Alchemy deployment code only.
-- Cloudflare API credentials and cross-script binding script names belong in **Deployment Config**, not **Runtime Config**.
+- Cloudflare API credentials and cross-script binding script names belong in **Deployment Config**, not **App Config**.
 
 ## Example dialogue
 
@@ -140,7 +140,7 @@ _Avoid_: runtime config, app config
 > **Dev:** "Can I use the project slug in a Durable Object name?"
 > **Domain expert:** "No — use **ProjectId** for durable identity. **ProjectSlug** is routing language."
 
-> **Dev:** "Should a Worker script name used for a cross-script Durable Object binding live in Runtime Config?"
+> **Dev:** "Should a Worker script name used for a cross-script Durable Object binding live in App Config?"
 > **Domain expert:** "No — that is **Deployment Config**, because only Alchemy needs it to create the binding."
 
 ## Flagged ambiguities
@@ -154,9 +154,9 @@ _Avoid_: runtime config, app config
 - Durable stream implementation was treated as Events app-owned — resolved: move shared stream implementation and core types into **Stream Runtime**.
 - OS stream access was coupled to the Events contract — resolved: expose an **OS Streams API** that wraps the shared Stream Runtime directly.
 - Processor subscriptions were described as WebSocket callbacks — resolved: use **Processor Subscription** callables that invoke Durable Object RPC methods.
-- "app config" mixed runtime-readable values with deployment-only values — resolved: use **Runtime Config** for app-readable config and **Deployment Config** for Alchemy-only deployment inputs.
+- "app config" mixed runtime-readable values with deployment-only values — resolved: use **App Config** for app-readable runtime configuration and **Deployment Config** for Alchemy-only deployment inputs.
 - "stream API" and "streams API" were both used for OS's project stream surface — resolved: use **OS Streams API** and **StreamsCapability** because callers can operate over a project-scoped set of streams, not only one stream.
 - "getSecret" was used both as a raw credential read and as a placeholder for later egress substitution — resolved for the current OS secrets/codemode slice: `getSecret` is a raw **Secret Material** read through **SecretsCapability**.
-- "Slack OAuth client" could mean the OAuth app config, a workspace connection, or a token — resolved: provider OAuth app settings are **OAuth Client Configuration** in **Runtime Config**.
+- "Slack OAuth client" could mean the OAuth app config, a workspace connection, or a token — resolved: provider OAuth app settings are **OAuth Client Configuration** in **App Config**.
 - "Slack connection" could mean the OAuth app, workspace claim, or token — resolved: the Slack workspace grant is a **Slack Team Claim**, an instance of **Provider Claim**, and its token is a project-wide **Secret**.
 - "Google connection" was initially considered user-scoped because OS1 works that way — resolved for the current OS secrets slice: Google Connections are project-level, and user-level Secrets are out of scope.
