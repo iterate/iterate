@@ -12,23 +12,30 @@ Monorepo for Iterate's Cloudflare Workers platform. **`apps/os`** is the main ap
 
 ## Talking to OS
 
-Run these from `apps/os`. Wrap in `doppler run --project os --config <config> -- …` to target a specific environment; the config supplies URLs and secrets.
+Run these from `apps/os`. Plain `pnpm cli ...` uses your local Doppler setup
+for `apps/os`. Wrap in `doppler run --config <config> -- ...` to target a
+specific environment; the config supplies URLs and secrets. More on this script
+pattern: [Doppler-backed scripts](docs/doppler-backed-scripts.md).
 
 ### oRPC API
 
-OS exposes oRPC at `/api/orpc/`. The app CLI discovers procedures remotely and authenticates with the config's shared API secret:
+OS exposes oRPC at `/api/orpc/`. The app CLI discovers procedures remotely and authenticates with the config's admin API secret:
 
 ```bash
-# production (default when no DOPPLER_CONFIG is set)
+# your local Doppler setup, normally dev_<you>
 pnpm cli rpc --help
 
-# preview slot 2
-doppler run --project os --config preview_2 -- \
-  sh -c 'OS_BASE_URL="$APP_CONFIG_BASE_URL" pnpm cli rpc --help'
+# production
+doppler run --config prd -- pnpm cli rpc --help
+
+# preview slot 3
+doppler run --config preview_3 -- pnpm cli rpc --help
 
 # local dev server (while pnpm dev is running)
-doppler run --project os --config dev_jonas -- \
-  pnpm cli rpc --base-url http://localhost:5183 --help
+doppler run --config dev_jonas -- pnpm cli --base-url http://localhost:5173 rpc --help
+
+# localhost-oriented config (while pnpm dev:localhost is running)
+doppler run --config dev_localhost -- pnpm cli rpc --help
 ```
 
 Replace `--help` with a procedure path to call it.
@@ -38,8 +45,7 @@ Replace `--help` with a procedure path to call it.
 Open Claude Code against a deployed project's MCP server:
 
 ```bash
-doppler run --project os --config prd -- \
-  pnpm cli claude-mcp --project-slug-or-id my-project
+doppler run --config prd -- pnpm cli claude-mcp --project-slug-or-id my-project
 ```
 
 The Doppler config picks the environment (prod, preview, your dev tunnel). `APP_CONFIG_PROJECT_HOSTNAME_BASES` in the config sets the project hostname base (e.g. `iterate.app`, `iterate-preview-3.app`); override with `--base-host` if needed.
