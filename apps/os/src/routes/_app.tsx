@@ -3,9 +3,9 @@ import { createServerFn } from "@tanstack/react-start";
 import { getRequestHeader } from "@tanstack/react-start/server";
 import { Separator } from "@iterate-com/ui/components/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@iterate-com/ui/components/sidebar";
+import { requireActiveOrganizationForRoute } from "../lib/auth.ts";
 import { AppSidebar } from "~/components/app-sidebar.tsx";
 import { PathBreadcrumbs } from "~/components/path-breadcrumbs.tsx";
-import { requireActiveOrganizationForRoute } from "../lib/auth.ts";
 import { orpc } from "~/orpc/client.ts";
 
 const getSidebarDefaultOpen = createServerFn({ method: "GET" }).handler(() => ({
