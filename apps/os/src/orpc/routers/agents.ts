@@ -8,6 +8,7 @@ import {
 import type { Event, EventInput, StreamPath } from "@iterate-com/shared/streams/types";
 import type { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
 import {
+  DEFAULT_AGENT_DEBOUNCE_MS,
   defaultAgentSetupEvents,
   normalizeAgentPresetBasePath,
   presetConfiguredEvent,
@@ -79,7 +80,7 @@ export const projectAgentsRouter = {
               ? {
                   ...event,
                   payload: {
-                    debounceMs: 1000,
+                    debounceMs: DEFAULT_AGENT_DEBOUNCE_MS,
                     model: input.model,
                     runOpts: input.runOpts,
                   },

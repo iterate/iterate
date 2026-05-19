@@ -10,6 +10,7 @@ export const OS_AGENT_PATH_PREFIX_PRESET_CONFIGURED_EVENT_TYPE =
 export const DEFAULT_CLOUDFLARE_AGENT_MODEL = DEFAULT_WORKERS_AI_AGENT_MODEL;
 export const DEFAULT_OPENAI_AGENT_MODEL = "gpt-5.5";
 export const DEFAULT_AGENT_LLM_PROVIDER = "openai-ws";
+export const DEFAULT_AGENT_DEBOUNCE_MS = 200;
 const LEGACY_GENERATED_SLACK_OPENAI_PROMPT_MARKER =
   "You are an Iterate agent responding from Slack.";
 
@@ -92,7 +93,7 @@ export function defaultAgentSetupEvents(
             payload: {
               model: DEFAULT_CLOUDFLARE_AGENT_MODEL,
               runOpts: { gateway: { id: "default" } },
-              debounceMs: 1000,
+              debounceMs: DEFAULT_AGENT_DEBOUNCE_MS,
             },
           },
         ]),
@@ -123,7 +124,7 @@ export function configuredAgentSetupEvents(input: {
         : input.provider === "cloudflare-ai" &&
             event.type === "events.iterate.com/agent/llm-config-updated"
           ? {
-              debounceMs: 1000,
+              debounceMs: DEFAULT_AGENT_DEBOUNCE_MS,
               model: input.model,
               runOpts: input.runOpts,
             }
