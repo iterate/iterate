@@ -62,23 +62,7 @@ async function listOrganizationClaims(
 }
 
 export function getAuthPlugins(env: Record<string, unknown>) {
-  const validAudiences = [
-    env.VITE_AUTH_APP_ORIGIN,
-    typeof env.VITE_AUTH_APP_ORIGIN === "string" ? `${env.VITE_AUTH_APP_ORIGIN}/mcp` : null,
-    typeof env.VITE_AUTH_APP_ORIGIN === "string" ? `${env.VITE_AUTH_APP_ORIGIN}/mcp/` : null,
-    typeof env.VITE_MCP_APP_ORIGIN === "string" ? `${env.VITE_MCP_APP_ORIGIN}/mcp` : null,
-    typeof env.VITE_MCP_APP_ORIGIN === "string" ? `${env.VITE_MCP_APP_ORIGIN}/mcp/` : null,
-    "https://mcp.iterate.com/mcp",
-    "https://mcp.iterate.com/mcp/",
-    "http://localhost:1337/mcp",
-    "http://localhost:1337/mcp/",
-    "http://127.0.0.1:1337/mcp",
-    "http://127.0.0.1:1337/mcp/",
-    "http://localhost:7301/mcp",
-    "http://localhost:7301/mcp/",
-    "http://127.0.0.1:7301/mcp",
-    "http://127.0.0.1:7301/mcp/",
-  ].filter((audience): audience is string => typeof audience === "string" && audience.length > 0);
+  const validAudiences = ["https://mcp.iterate.com/mcp", "http://localhost:7301/mcp"];
 
   return [
     jwt(),
