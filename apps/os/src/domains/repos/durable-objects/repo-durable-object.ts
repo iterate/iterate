@@ -21,6 +21,7 @@ import {
   REPO_README_PATH,
   REPO_WRITE_TOKEN_TTL_SECONDS,
   type CloudflareArtifactsBinding,
+  type CloudflareArtifactRepo,
   artifactRemoteUrl,
   createArtifactToken,
   pushInitialReadme,
@@ -134,16 +135,11 @@ export class RepoDurableObject extends RepoBase<RepoEnv> {
     const artifactName = repoArtifactName(this.structuredName);
     const artifacts = this.requireArtifacts();
     const source = input.source ?? { kind: "initial-readme" as const };
-    const artifact =
-      source.kind === "artifact-fork"
-        ? await this.forkArtifactRepo({
-            artifactName,
-            artifacts,
-            source,
-          })
-        : await artifacts.create(artifactName, {
-            setDefaultBranch: REPO_DEFAULT_BRANCH,
-          });
+    const { artifact, created } = await this.createOrGetArtifact({
+      artifactName,
+      artifacts,
+      source,
+    });
     const token = await createArtifactToken({
       artifact,
       artifacts,
@@ -157,7 +153,7 @@ export class RepoDurableObject extends RepoBase<RepoEnv> {
       (await readArtifactString(artifact.default_branch)) ??
       REPO_DEFAULT_BRANCH;
 
-    if (source.kind === "initial-readme") {
+    if (source.kind === "initial-readme" && created) {
       await pushInitialReadme({
         defaultBranch,
         projectId: this.structuredName.projectId,
@@ -222,6 +218,33 @@ export class RepoDurableObject extends RepoBase<RepoEnv> {
 
   private currentRepo() {
     return this.getStreamProcessorRunnerState().state.repo;
+  }
+
+  private async createOrGetArtifact(input: {
+    artifactName: string;
+    artifacts: CloudflareArtifactsBinding;
+    source: NonNullable<CreateRepoInput["source"]>;
+  }): Promise<{ artifact: CloudflareArtifactRepo; created: boolean }> {
+    try {
+      const artifact =
+        input.source.kind === "artifact-fork"
+          ? await this.forkArtifactRepo({
+              artifactName: input.artifactName,
+              artifacts: input.artifacts,
+              source: input.source,
+            })
+          : await input.artifacts.create(input.artifactName, {
+              setDefaultBranch: REPO_DEFAULT_BRANCH,
+            });
+
+      return { artifact, created: true };
+    } catch (error) {
+      if (!isArtifactAlreadyExistsError(error)) throw error;
+      return {
+        artifact: await input.artifacts.get(input.artifactName),
+        created: false,
+      };
+    }
   }
 
   private async requireInfo(): Promise<RepoInfo> {
@@ -393,6 +416,10 @@ async function readArtifactString(value: unknown): Promise<string | undefined> {
   } catch {
     return undefined;
   }
+}
+
+function isArtifactAlreadyExistsError(error: unknown) {
+  return error instanceof Error && /already exists/i.test(error.message);
 }
 
 function shellQuote(value: string) {
