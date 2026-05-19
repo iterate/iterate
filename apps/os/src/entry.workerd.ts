@@ -94,14 +94,21 @@ export default {
         const durableObjectDebugResponse = await handleDurableObjectDebugFetch({ request, env });
         if (durableObjectDebugResponse) return durableObjectDebugResponse;
 
+        const t0 = performance.now();
         const db = createD1Client(env.DB);
         const projectHostnameBases = config.projectHostnameBases;
         const appHostname = config.baseUrl ? new URL(config.baseUrl).hostname : null;
         const ingressMatch = await matchIngressRequest({
           request,
           lookupRule: async (host) => {
+            const t1 = performance.now();
             const row = await getIngressRouteByHost(db, { host: normalizeIngressHost(host) });
-            if (row) return ingressRouteRowToRule(row);
+            const t2 = performance.now();
+            if (row) {
+              console.log(`[ingress-timing] ingressRouteByHost hit: ${Math.round(t2 - t1)}ms`);
+              return ingressRouteRowToRule(row);
+            }
+            console.log(`[ingress-timing] ingressRouteByHost miss: ${Math.round(t2 - t1)}ms`);
 
             const platformRule = await getProjectPlatformHostIngressRule({
               appHostname,
@@ -109,6 +116,10 @@ export default {
               db: env.DB,
               host,
             });
+            const t3 = performance.now();
+            console.log(
+              `[ingress-timing] platformHostRule: ${Math.round(t3 - t2)}ms (${platformRule ? "hit" : "miss"})`,
+            );
             if (platformRule) return platformRule;
 
             return await getProjectCustomHostnameIngressRule({
@@ -118,9 +129,11 @@ export default {
             });
           },
         });
+        const t4 = performance.now();
+        console.log(`[ingress-timing] matchIngressRequest total: ${Math.round(t4 - t0)}ms`);
 
         if (ingressMatch) {
-          return await dispatchFetchCallable({
+          const dispatchResult = await dispatchFetchCallable({
             callable: ingressMatch.rule.callable,
             context: {
               env: env as unknown as Record<string, unknown>,
@@ -128,6 +141,11 @@ export default {
             },
             request,
           });
+          const t5 = performance.now();
+          console.log(
+            `[ingress-timing] dispatchFetchCallable: ${Math.round(t5 - t4)}ms, total: ${Math.round(t5 - t0)}ms`,
+          );
+          return dispatchResult;
         }
 
         const envWithArtifacts = env as Env & { ARTIFACTS?: CloudflareArtifactsBinding };
