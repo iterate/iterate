@@ -533,3 +533,11 @@ Phase F is last.
   `/mcp?project=preview-mcp-smoke-manual`. Both passed, proving the dev tunnel,
   auth-worker config, project seeding, MCP metadata, and codemode MCP path work
   against the production auth worker.
+- Deployed `apps/auth` to `prd` after a real dev OAuth token exchange exposed
+  that production auth was still running the pre-audience code and rejected
+  `https://os.iterate-dev-jonas.com` as an OAuth `resource`.
+- Re-ran real OAuth login/callback/session flows against both
+  `https://os.iterate-dev-jonas.com` and `https://os.iterate-preview-2.com`
+  using the production auth worker, bootstrap superadmin credentials from auth
+  Doppler, and in-memory cookies. Both flows completed and returned
+  authenticated OS sessions without printing tokens, codes, cookies, or secrets.
