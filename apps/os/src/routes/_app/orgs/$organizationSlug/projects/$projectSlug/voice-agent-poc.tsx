@@ -12,7 +12,7 @@ import { streamPathToSplat } from "~/lib/stream-links.ts";
 
 const INPUT_AUDIO_FRAME_EVENT_TYPE = "events.iterate.com/voice-agent/input-audio-frame-appended";
 const OUTPUT_AUDIO_FRAME_EVENT_TYPE = "events.iterate.com/voice-agent/output-audio-frame-appended";
-const DEFAULT_STREAM_PATH = StreamPath.parse("/voice-agent/poc");
+const DEFAULT_STREAM_PATH = StreamPath.parse("/agents/voice/poc");
 const INPUT_SAMPLE_RATE = 16000;
 const OUTPUT_SAMPLE_RATE = 24000;
 const CHANNELS = 1;

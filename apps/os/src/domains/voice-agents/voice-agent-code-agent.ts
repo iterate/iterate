@@ -1,30 +1,55 @@
 import { VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE } from "@iterate-com/shared/stream-processors/voice-agent/contract";
-import type { EventInput, StreamPath } from "@iterate-com/shared/streams/types";
+import type { StreamPath } from "@iterate-com/shared/streams/types";
 import {
+  type AgentPresetEvent,
   DEFAULT_AGENT_LLM_PROVIDER,
-  DEFAULT_OPENAI_AGENT_MODEL,
-  configuredAgentSetupEvents,
+  defaultAgentSetupEvents,
   defaultAgentSystemPrompt,
 } from "~/domains/agents/agent-presets.ts";
-import { agentSubscriptionConfiguredEvent } from "~/domains/agents/agent-subscription.ts";
 
-export function voiceAgentCodeAgentEvents(input: {
-  projectId: string;
+export const VOICE_AGENT_AGENT_PATH_PREFIX = "/agents/voice";
+
+export function isVoiceAgentPath(agentPath: string): boolean {
+  return (
+    agentPath === VOICE_AGENT_AGENT_PATH_PREFIX ||
+    agentPath.startsWith(`${VOICE_AGENT_AGENT_PATH_PREFIX}/`)
+  );
+}
+
+export function voiceAgentCodeAgentSetupEvents(input: {
+  baseEvents?: readonly AgentPresetEvent[];
   streamPath: StreamPath;
-}): EventInput[] {
-  return [
-    ...configuredAgentSetupEvents({
-      idempotencyKeyPrefix: `voice-agent-code-agent:setup:${input.projectId}:${input.streamPath}`,
-      model: DEFAULT_OPENAI_AGENT_MODEL,
-      provider: DEFAULT_AGENT_LLM_PROVIDER,
-      runOpts: {},
-      systemPrompt: voiceAgentCodeAgentSystemPrompt(input.streamPath),
-    }),
-    agentSubscriptionConfiguredEvent({
-      agentPath: input.streamPath,
-      projectId: input.projectId,
-    }),
-  ];
+}): AgentPresetEvent[] {
+  const systemPrompt = voiceAgentCodeAgentSystemPrompt(input.streamPath);
+  const baseEvents =
+    input.baseEvents ?? defaultAgentSetupEvents(DEFAULT_AGENT_LLM_PROVIDER, input.streamPath);
+
+  let replacedSystemPrompt = false;
+  const events = baseEvents.map((event) => {
+    if (event.type !== "events.iterate.com/agent/system-prompt-updated") {
+      return {
+        payload: event.payload,
+        type: event.type,
+      };
+    }
+    replacedSystemPrompt = true;
+    return {
+      payload: {
+        ...event.payload,
+        systemPrompt,
+      },
+      type: event.type,
+    };
+  });
+
+  if (!replacedSystemPrompt) {
+    events.push({
+      payload: { systemPrompt },
+      type: "events.iterate.com/agent/system-prompt-updated",
+    });
+  }
+
+  return events;
 }
 
 function voiceAgentCodeAgentSystemPrompt(streamPath: StreamPath) {

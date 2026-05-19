@@ -36,7 +36,6 @@ import {
   getAgentDurableObjectName,
   type AgentDurableObject,
 } from "~/domains/agents/durable-objects/agent-durable-object.ts";
-import { voiceAgentCodeAgentEvents } from "~/domains/voice-agents/voice-agent-code-agent.ts";
 
 export type StreamProcessorDurableObjectStructuredName = {
   processorSlug: string;
@@ -272,18 +271,6 @@ async function ensureVoiceAgentCodeAgent(input: {
   env: StreamProcessorDurableObjectEnv;
   params: StreamProcessorDurableObjectStructuredName;
 }) {
-  const streamApi = streamApiFromNamespace({
-    durableObjectNamespace: input.env.STREAM as unknown as StreamDurableObjectNamespace,
-    namespace: input.params.projectId,
-    streamPath: input.params.streamPath,
-  });
-  await streamApi.appendBatch({
-    events: voiceAgentCodeAgentEvents({
-      projectId: input.params.projectId,
-      streamPath: input.params.streamPath,
-    }),
-  });
-
   const structuredName = {
     agentPath: input.params.streamPath,
     projectId: input.params.projectId,

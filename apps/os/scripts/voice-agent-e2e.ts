@@ -537,7 +537,7 @@ function parseOptions(args: readonly string[]): Options {
     ),
     silenceMs: numberOption(values, "silence-ms", 1500),
     streamPath: StreamPath.parse(
-      stringOption(values, "stream-path", `/voice-agents/e2e-${Date.now().toString(36)}`),
+      stringOption(values, "stream-path", `/agents/voice/e2e-${Date.now().toString(36)}`),
     ),
     timeoutMs: numberOption(values, "timeout-ms", expectMessageAgent ? 180_000 : 60_000),
     voiceName: voiceOption(values),

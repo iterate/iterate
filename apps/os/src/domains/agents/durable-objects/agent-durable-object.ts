@@ -66,6 +66,10 @@ import {
   type AgentLlmProvider,
 } from "~/domains/agents/agent-presets.ts";
 import { buildProjectStreamViewerUrl } from "~/lib/stream-viewer-url.ts";
+import {
+  isVoiceAgentPath,
+  voiceAgentCodeAgentSetupEvents,
+} from "~/domains/voice-agents/voice-agent-code-agent.ts";
 
 export const AGENTS_STREAM_PATH = StreamPath.parse("/agents");
 
@@ -427,8 +431,14 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       agentPath: params.agentPath,
       presets: readAgentPathPrefixPresets(rootEvents),
     });
-    const setupEvents =
+    const baseSetupEvents =
       preset?.events ?? defaultAgentSetupEvents(DEFAULT_AGENT_LLM_PROVIDER, params.agentPath);
+    const setupEvents = isVoiceAgentPath(params.agentPath)
+      ? voiceAgentCodeAgentSetupEvents({
+          baseEvents: baseSetupEvents,
+          streamPath: params.agentPath,
+        })
+      : baseSetupEvents;
     const hasSetupPrompt = setupEvents.some(
       (event) => event.type === "events.iterate.com/agent/system-prompt-updated",
     );
@@ -884,10 +894,6 @@ function agentWorkspaceName(params: AgentDurableObjectStructuredName): Workspace
     projectId: params.projectId,
     workspaceId: defaultWorkspaceIdForCodemodeSession({ streamPath: params.agentPath }),
   };
-}
-
-function isVoiceAgentPath(agentPath: string): boolean {
-  return agentPath === "/voice-agents" || agentPath.startsWith("/voice-agents/");
 }
 
 function remoteWithToken(input: { remote: string; token: string }) {

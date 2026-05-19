@@ -125,7 +125,7 @@ function VoiceAgentsIndexPage() {
   const voiceAgentStreams = useMemo(
     () =>
       (data?.streams ?? [])
-        .filter((stream) => stream.streamPath.startsWith("/voice-agents/"))
+        .filter((stream) => stream.streamPath.startsWith("/agents/voice/"))
         .toSorted((left, right) => right.lastWokenAt.localeCompare(left.lastWokenAt)),
     [data?.streams],
   );
@@ -140,7 +140,7 @@ function VoiceAgentsIndexPage() {
 
     setIsCreating(true);
     const slug = `voice-${Date.now().toString(36)}`;
-    const streamPath = StreamPath.parse(`/voice-agents/${slug}`);
+    const streamPath = StreamPath.parse(`/agents/voice/${slug}`);
     try {
       await createBrowserOpenApiClient().project.streams.create({
         projectSlugOrId: project.id,
@@ -310,7 +310,7 @@ function VoiceAgentsIndexPage() {
         <Empty className="min-h-72 border">
           <EmptyHeader>
             <EmptyTitle>No voice conversations</EmptyTitle>
-            <EmptyDescription>Start one to create a /voice-agents stream.</EmptyDescription>
+            <EmptyDescription>Start one to create an /agents/voice stream.</EmptyDescription>
           </EmptyHeader>
         </Empty>
       ) : (
@@ -325,7 +325,7 @@ function VoiceAgentsIndexPage() {
             </TableHeader>
             <TableBody>
               {voiceAgentStreams.map((stream) => {
-                const slug = stream.streamPath.replace(/^\/voice-agents\//, "");
+                const slug = stream.streamPath.replace(/^\/agents\/voice\//, "");
                 return (
                   <TableRow key={stream.name}>
                     <TableCell>

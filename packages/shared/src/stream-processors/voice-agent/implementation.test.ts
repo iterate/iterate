@@ -322,7 +322,7 @@ function committedEvent<const Type extends string, Payload>(
     metadata: input.metadata,
     offset,
     payload: input.payload,
-    streamPath: "/voice-agents/test",
+    streamPath: "/agents/voice/test",
     type: input.type,
   };
 }

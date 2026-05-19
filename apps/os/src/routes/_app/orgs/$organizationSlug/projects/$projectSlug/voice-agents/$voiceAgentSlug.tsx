@@ -24,7 +24,7 @@ export const Route = createFileRoute(
 function VoiceAgentConversationPage() {
   const params = Route.useParams();
   const { project } = Route.useLoaderData();
-  const streamPath = StreamPath.parse(`/voice-agents/${params.voiceAgentSlug}`);
+  const streamPath = StreamPath.parse(`/agents/voice/${params.voiceAgentSlug}`);
 
   return (
     <VoiceAgentStreamConsole
