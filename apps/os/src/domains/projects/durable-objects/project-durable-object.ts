@@ -810,24 +810,6 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
         projectId: input.projectId,
       });
     }
-
-    for (const host of input.hosts.mcpHosts) {
-      const callable = {
-        type: "fetch",
-        via: {
-          type: "loopback-binding",
-          bindingType: "service",
-          exportName: "ProjectMcpServerEntrypoint",
-          props: { projectId: input.projectId },
-        },
-      } satisfies FetchCallable;
-      this.writeLocalRoute({
-        callable,
-        host,
-        notes: "Project MCP server host",
-        projectId: input.projectId,
-      });
-    }
   }
 
   private async writeGlobalRoute(input: {
@@ -1231,15 +1213,9 @@ function projectHosts(input: { bases: readonly string[]; projectId: string; slug
     normalizeIngressHost(`${input.slug}.${base}`),
     normalizeIngressHost(`${input.projectId}.${base}`),
   ]);
-  const mcpHosts = input.bases.flatMap((base) => [
-    normalizeIngressHost(`mcp.${input.slug}.${base}`),
-    normalizeIngressHost(`mcp.${input.projectId}.${base}`),
-    normalizeIngressHost(`mcp__${input.slug}.${base}`),
-    normalizeIngressHost(`mcp__${input.projectId}.${base}`),
-  ]);
   return {
     defaultHost: normalizeIngressHost(`${input.slug}.${input.bases[0] ?? "iterate.localhost"}`),
-    mcpHosts,
+    mcpHosts: [],
     projectHosts,
   };
 }

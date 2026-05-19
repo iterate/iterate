@@ -64,32 +64,25 @@ describe("project host routing", () => {
     expect(isReservedProjectHostname("alpha.example.com", ["os.iterate.com"])).toBe(false);
   });
 
-  it("builds canonical MCP URLs from the first configured project host base", () => {
+  it("builds the canonical MCP URL from the OS base URL", () => {
     expect(
       buildProjectMcpUrl({
+        baseUrl: "https://os.iterate.com",
         projectSlug: "demo",
         projectHostnameBases: ["iterate.app"],
       }),
-    ).toBe("https://mcp__demo.iterate.app");
+    ).toBe("https://os.iterate.com/mcp");
     expect(
       buildProjectMcpUrl({
+        baseUrl: "https://os.iterate-preview-3.com",
         projectSlug: "demo",
         projectHostnameBases: ["*.iterate-preview-3.app"],
       }),
-    ).toBe("https://mcp__demo.iterate-preview-3.app");
+    ).toBe("https://os.iterate-preview-3.com/mcp");
   });
 
-  it("does not invent MCP URLs without a valid project slug and project host base", () => {
-    expect(
-      buildProjectMcpUrl({
-        projectSlug: "bad_slug",
-        projectHostnameBases: ["iterate.app"],
-      }),
-    ).toBeNull();
+  it("does not invent MCP URLs without an OS base URL", () => {
     expect(buildProjectMcpUrl({ projectSlug: "demo", projectHostnameBases: [] })).toBeNull();
-    expect(buildProjectMcpUrl({ projectSlug: "demo", projectHostnameBases: ["localhost"] })).toBe(
-      null,
-    );
   });
 });
 

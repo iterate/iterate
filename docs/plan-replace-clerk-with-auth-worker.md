@@ -482,3 +482,12 @@ Phase F is last.
   targets, then writes the resulting web/MCP client credentials and OS URL
   config back to Doppler. It is intended to run through the production auth
   worker Doppler config so preview/dev OS can target `https://auth.iterate.com`.
+- Migrated inbound MCP to the OS `/mcp` resource. `entry.workerd.ts` now handles
+  `/mcp` and `/.well-known/oauth-protected-resource/mcp`, verifies auth-worker
+  bearer tokens against the MCP audience, and passes the token's project claims
+  into `ProjectMcpServerConnection`. The MCP tool schema requires a `project`
+  argument only when the token grants multiple projects.
+- Removed per-project MCP host registration and replaced the old Clerk-based
+  project MCP entrypoint with a tombstone response. The CLI and UI now point to
+  the OS base URL `/mcp`; the CLI keeps its admin-token preflight by adding a
+  `?project=<slug-or-id>` selector.

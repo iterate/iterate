@@ -96,9 +96,18 @@ async function listProjectClaims(
 }
 
 export function getAuthPlugins(env: Record<string, unknown>) {
-  const validAudiences = [
+  const osResourceBases = [
     "https://os.iterate.com",
-    "https://os.iterate.com/mcp",
+    "https://os.iterate-dev-jonas.com",
+    "https://os.iterate-dev-misha.com",
+    "https://os.iterate-dev-rahul.com",
+    ...[2, 3, 4, 5, 6, 7, 8, 9].map(
+      (previewNumber) => `https://os.iterate-preview-${previewNumber}.com`,
+    ),
+  ];
+  const validAudiences = [
+    ...osResourceBases,
+    ...osResourceBases.map((baseUrl) => `${baseUrl}/mcp`),
     "https://mcp.iterate.com/mcp",
     "http://localhost:7301/mcp",
   ];

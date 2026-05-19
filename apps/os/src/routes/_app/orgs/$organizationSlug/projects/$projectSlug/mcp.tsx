@@ -6,7 +6,7 @@ import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import type { AppConfig } from "~/app.ts";
-import { buildProjectMcpUrl, normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
+import { buildProjectMcpUrl } from "~/lib/project-host-routing.ts";
 import { streamPathToSplat } from "~/lib/stream-links.ts";
 import { orpc } from "~/orpc/client.ts";
 
@@ -44,6 +44,7 @@ function ProjectMcpPage() {
     staleTime: 10_000,
   });
   const mcpUrl = buildProjectMcpUrl({
+    baseUrl: config.baseUrl,
     projectSlug: project.slug,
     projectHostnameBases: config.projectHostnameBases,
   });
@@ -61,21 +62,23 @@ function ProjectMcpPage() {
   }
 
   const claudeCommand = `claude mcp add --transport http ${project.slug} ${mcpUrl}`;
-  const baseHost = normalizeProjectHostnameBase(config.projectHostnameBases[0] ?? "");
-  const cliBaseHostFlag = baseHost && baseHost !== "iterate.app" ? ` --base-host ${baseHost}` : "";
+  const cliBaseHostFlag =
+    config.baseUrl && config.baseUrl !== "https://os.iterate.com"
+      ? ` --base-host ${config.baseUrl}`
+      : "";
   const cliCommand = `cd apps/os && pnpm cli claude-mcp --project-slug-or-id ${project.slug}${cliBaseHostFlag}`;
   const cliCommandHint =
-    baseHost === "iterate.app"
-      ? "Run from the repo root. Prints a Claude Code command (with MCP preflight). For production, prefix with: doppler run --config prd --"
-      : "Run from the repo root. Prints a Claude Code command (with MCP preflight).";
+    config.baseUrl === "https://os.iterate.com"
+      ? "Run from the repo root. Uses the admin token for auth and disables all other MCP servers. For production, prefix with: doppler run --project os --config prd --"
+      : "Run from the repo root. Uses the admin token for auth and disables all other MCP servers.";
 
   return (
     <section className="max-w-md space-y-4 p-4">
       <div className="space-y-1">
         <h2 className="text-sm font-semibold">MCP</h2>
         <p className="text-sm text-muted-foreground">
-          Connect MCP clients to this project endpoint. The endpoint uses Clerk OAuth, so clients
-          should authenticate through their MCP connection flow.
+          Connect MCP clients to Iterate OS. The auth flow lets you choose which projects this
+          client can access.
         </p>
       </div>
 
@@ -114,7 +117,7 @@ function ProjectMcpPage() {
         <p className="text-xs uppercase tracking-wide text-muted-foreground">Cursor</p>
         <p className="text-sm text-muted-foreground">
           Add a remote MCP server using the endpoint above. Cursor will use the server&apos;s OAuth
-          metadata to start the Clerk sign-in flow.
+          metadata to start the Iterate Auth sign-in flow.
         </p>
         <a
           className={buttonVariants({ size: "sm", variant: "outline" })}
