@@ -646,7 +646,7 @@ async function waitForScriptExecutionFinished(input: {
     throw new Error("Codemode Script Execution stream response did not include a body.");
   }
 
-  for await (const event of decodeStreamEventLines(response.body, AbortSignal.timeout(60_000))) {
+  for await (const event of decodeStreamEventLines(response.body, AbortSignal.timeout(300_000))) {
     const payload = readEventPayload(event);
     if (
       event.type === "events.iterate.com/codemode/log-emitted" &&
