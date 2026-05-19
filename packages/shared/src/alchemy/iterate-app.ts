@@ -26,7 +26,8 @@ import { startCloudflared } from "./start-cloudflared.ts";
  * When running locally with a real `baseUrl` (not localhost), creates a Cloudflare
  * Tunnel so the app is reachable at the configured domain. The tunnel resource
  * auto-creates DNS CNAMEs for each ingress hostname. See
- * https://alchemy.run/providers/cloudflare/tunnel/ and docs/os-environments.md.
+ * https://alchemy.run/providers/cloudflare/tunnel/ and
+ * docs/devops-cloudflare-doppler-alchemy-setup.md.
  *
  * **Observability:**
  * All Iterate workers use the same observability config: full sampling with

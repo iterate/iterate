@@ -12,11 +12,11 @@ tags: [cloudflare, os-rename, cleanup]
 
 `apps/os2` → `apps/os` rename with **no backwards compatibility**. Prod (`ALCHEMY_STAGE=prd`) will be destroyed and recreated on new hostnames (`os.iterate.com`, `*.iterate.app`). We are **pre-customer** — safe to delete stale Workers, D1, R2, routes, and DO-related assets.
 
-Related: `tasks/doppler-os-legacy-backup-migration.md`, os rename PR.
+Related: the completed OS rename cutover and current Doppler audit task.
 
 ## Goal
 
-Inventory and remove orphaned resources in the **prd Cloudflare account** (`_shared/prd` → account `04b3b57291ef2626c6a8daa9d47065a7` per `docs/os-environments.md`) left by deleted `apps/os`, old `os-*` deploys, and failed/abandoned Alchemy runs.
+Inventory and remove orphaned resources in the **prd Cloudflare account** (`_shared/prd` → account `04b3b57291ef2626c6a8daa9d47065a7` per `docs/devops-cloudflare-doppler-alchemy-setup.md`) left by deleted `apps/os`, old `os-*` deploys, and failed/abandoned Alchemy runs.
 
 ## Expected naming patterns (from codebase)
 
@@ -132,4 +132,4 @@ Run second sweep post-rename; delete `os-prd` / `os-prd-db` / `os-prd-repos` aft
 ## Not in scope (follow-ups)
 
 - Preview account cleanup (`376ef7ed…`)
-- Doppler `os-legacy-backup` secret pruning (`tasks/doppler-os-legacy-backup-migration.md`)
+- Doppler `os-legacy-backup` secret pruning if that archive project still exists

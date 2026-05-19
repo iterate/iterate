@@ -13,7 +13,7 @@ tags: [doppler, os-rename, security]
 During `apps/os2` → `apps/os` rename:
 
 - Doppler `os` → `os` (product app configs).
-- Legacy monorepo bucket `os` → `os-legacy-backup` (see `tasks/doppler-os-legacy-backup-migration.md`).
+- Legacy monorepo bucket `os` → `os-legacy-backup`.
 
 Audit **`_shared`** and the **renamed product `os`** project for stale keys, duplicate inheritance, prd/dev leakage, and secrets that no longer match `apps/os/src/app.ts` `AppConfig`.
 
@@ -89,7 +89,7 @@ doppler secrets --project os --config prd --only-names > /tmp/product.txt
 
 - [ ] Every config: only keys listed in baseline (or documented additions).
 - [ ] No `APP_CONFIG_*` keys for a single app (e.g. Clerk) — those belong on app `os`.
-- [ ] `CLOUDFLARE_ACCOUNT_ID` / token: prd vs preview account IDs correct per `docs/os-environments.md`.
+- [ ] `CLOUDFLARE_ACCOUNT_ID` / token: prd vs preview account IDs correct per `docs/devops-cloudflare-doppler-alchemy-setup.md`.
 - [ ] `SEMAPHORE_API_TOKEN`: same token across configs intentional? Rotate if leaked in logs.
 - [ ] `APP_CONFIG_INTEGRATIONS__GOOGLE` on `_shared`: still used by multiple apps or move to `os` only.
 - [ ] Remove unused `preview_1` / `preview_10` if no matching lease slots.
@@ -107,7 +107,7 @@ doppler secrets --project os --config prd --only-names > /tmp/product.txt
 ### Cross-project
 
 - [ ] `os-legacy-backup`: no inheritance into product `os`.
-- [ ] Document which secrets CI will read post-rename (`tasks/doppler-os-legacy-backup-migration.md`).
+- [ ] Document which secrets CI reads now.
 
 ## Suspicious patterns to flag
 

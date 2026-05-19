@@ -90,7 +90,7 @@ Direct repo API creation succeeded for slug `codex-artifacts-1778533765369` and
 returned a Cloudflare Artifacts remote:
 
 ```text
-https://cc7f6f461fbe823c199da2b27f9e0ff3.artifacts.cloudflare.net/git/os-preview-2-repos/proj__os__01krcc1gw2endaxnw129rdm4cm--codex-artifacts-1778533765369.git
+https://<cloudflare-account-id>.artifacts.cloudflare.net/git/os-preview-2-repos/proj__os__01krcc1gw2endaxnw129rdm4cm--codex-artifacts-1778533765369.git
 ```
 
 Real local Git verification against that remote succeeded using the returned

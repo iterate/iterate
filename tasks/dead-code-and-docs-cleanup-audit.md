@@ -11,7 +11,7 @@ Inventory from a repo-wide audit (explore subagents + manual verification on `ap
 
 ## Verification notes
 
-- Live OS app in this tree: **`apps/os`** (not `apps/os2`). Root `AGENTS.md` pointers to `apps/os`, `apps/os/AGENTS.md`, and `docs/os-environments.md` are valid here.
+- Live OS app in this tree: **`apps/os`** (not `apps/os2`). Root `AGENTS.md` pointers to `apps/os`, `apps/os/AGENTS.md`, and `docs/devops-cloudflare-doppler-alchemy-setup.md` are valid here.
 - Run **`pnpm knip`** for a fuller unused-export pass beyond static grep.
 - Do not delete Worker bindings, wrangler routes, or CLI entrypoints without checking alchemy/wrangler/package scripts.
 

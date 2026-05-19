@@ -29,7 +29,7 @@ singular: `projectHostnameBases[0]` (DNS, MCP URLs, settings UI, oRPC), and
 The array shape is leftover from an earlier “maybe multiple bases per deploy”
 idea. It adds noise (`[0]`, JSON array in Doppler, plural naming) without
 behavior we use. Custom apex hosts (`iterate.com`) are **`custom_hostname` on a
-project**, not an extra entry in this list — see `docs/cloudflare-hostnames.md`.
+project**, not an extra entry in this list — see `docs/devops-cloudflare-doppler-alchemy-setup.md`.
 
 ## Goal
 
@@ -54,7 +54,7 @@ array).
 - Tests: replace array fixtures with a single string
 - Doppler: migrate all `os` configs from JSON array to string (prd, preview*N,
   dev*\*)
-- Docs: `docs/os-environments.md`, `docs/cloudflare-hostnames.md`,
+- Docs: `docs/devops-cloudflare-doppler-alchemy-setup.md`,
   `apps/os/docs/architecture-and-operations.md`, task files that mention the old
   name
 

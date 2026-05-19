@@ -2,23 +2,13 @@
 
 Monorepo for Iterate's Cloudflare Workers platform. **`apps/os`** is the main app — the product dashboard at `os.iterate.com`.
 
-## Environments = Doppler configs
+## Environments
 
-Everything runs in the context of a **Doppler config** — a named bag of env vars (`APP_CONFIG_BASE_URL`, API secrets, `ALCHEMY_LOCAL`, …). The config determines _which_ OS you're talking to, not a separate code path.
-
-Local dev, preview deploy, and production deploy all use the same primitive from `apps/os`:
-
-```bash
-doppler run --project os --config <config> -- tsx ./alchemy.run.ts
-```
-
-| Config      | Typical effect                                                 |
-| ----------- | -------------------------------------------------------------- |
-| `dev_<you>` | Local dev server (`ALCHEMY_LOCAL=true`; what `pnpm dev` wraps) |
-| `preview_N` | Deploy to `os.iterate-preview-N.com`                           |
-| `prd`       | Deploy to `os.iterate.com`                                     |
-
-Pick the config, run your script — the env vars do the rest. Details: [OS environments](docs/os-environments.md).
+- Commands run in the context of a Doppler config; that config chooses secrets,
+  app config, Cloudflare account, and Alchemy stage.
+- Local dev, previews, and production use the same `alchemy.run.ts` primitive
+  with different configs: `dev_<you>`, `preview_N`, or `prd`.
+- Details: [DevOps: Cloudflare, Doppler, And Alchemy](docs/devops-cloudflare-doppler-alchemy-setup.md).
 
 ## Talking to OS
 
@@ -91,19 +81,19 @@ pnpm os dev                   # same, explicit apps/os path
 pnpm test && pnpm typecheck && pnpm lint && pnpm format
 ```
 
-Dev server, Doppler, e2e, tunnels: `docs/dev-environment.md`.
+Dev server, Doppler, Cloudflare, previews, and deploys:
+`docs/devops-cloudflare-doppler-alchemy-setup.md`.
 
 ## Documentation
 
 ### Platform & architecture
 
 - [Architecture](docs/architecture.md)
-- [OS environments](docs/os-environments.md)
+- [DevOps: Cloudflare, Doppler, And Alchemy](docs/devops-cloudflare-doppler-alchemy-setup.md)
 - [Brand & tone](docs/brand-and-tone-of-voice.md)
 
 ### Development
 
-- [Dev environment & Doppler](docs/dev-environment.md)
 - [Coding style](docs/coding-style.md)
 - [TypeScript conventions](docs/typescript-conventions.md)
 - [Design system & React](docs/design-system.md)
@@ -111,8 +101,7 @@ Dev server, Doppler, e2e, tunnels: `docs/dev-environment.md`.
 
 ### Deploy & Cloudflare
 
-- [Preview environments model](docs/cloudflare-preview-environments.md)
-- [Preview & deploy cheat sheet](docs/cloudflare-preview-and-deploy-cheatsheet.md)
+- [DevOps: Cloudflare, Doppler, And Alchemy](docs/devops-cloudflare-doppler-alchemy-setup.md)
 - [Drizzle migrations](.agents/skills/drizzle-migrations/SKILL.md) — not for `apps/os` (sqlfu/D1)
 - [Fixing Drizzle migration conflicts](docs/fixing-drizzle-migration-conflicts.md)
 
