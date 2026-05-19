@@ -1,9 +1,9 @@
+import { fileURLToPath } from "node:url";
 import { devtools } from "@tanstack/devtools-vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import tailwindcss from "@tailwindcss/vite";
 import viteReact from "@vitejs/plugin-react";
 import alchemy from "alchemy/cloudflare/tanstack-start";
-import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 
 const host = process.env.HOST ?? "127.0.0.1";

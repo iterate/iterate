@@ -67,24 +67,24 @@ testIfAdminApiTarget(
       scriptExecutionId?: string;
     }>();
     expect(completed.snapshot({ runSlug: e2e.runSlug })).toMatchInlineSnapshot(`
-    {
-      "durationMs": 999,
-      "functionCallId": "<function-call-id>",
-      "outcome": {
-        "status": "returned",
-        "value": {
-          "body": {
-            "mocked": true,
-            "query": "codemode",
-            "runSlug": "<runSlug>",
+      {
+        "durationMs": 999,
+        "functionCallId": "<function-call-id>",
+        "outcome": {
+          "status": "returned",
+          "value": {
+            "body": {
+              "mocked": true,
+              "query": "codemode",
+              "runSlug": "<runSlug>",
+            },
+            "mockedHeader": "yes",
+            "status": 200,
           },
-          "mockedHeader": "yes",
-          "status": 200,
         },
-      },
-      "scriptExecutionId": "<script-execution-id>",
-    }
-  `);
+        "scriptExecutionId": "<script-execution-id>",
+      }
+    `);
 
     expect(completed.payload).toMatchObject({
       outcome: {
