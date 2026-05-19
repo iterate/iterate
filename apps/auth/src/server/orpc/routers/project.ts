@@ -15,7 +15,7 @@ import {
   listProjectsByOrganizationId,
   updateProjectReturning,
 } from "../../db/queries/index.ts";
-import { generateId, toProjectRecord } from "./_shared.ts";
+import { generateId, toProjectRecord, toProjectRecordFromReturnedRow } from "./_shared.ts";
 
 const list = os.project.list.use(organizationScopedMiddleware).handler(async ({ context }) => {
   const projects = await listProjectsByOrganizationId(context.db, {
@@ -63,14 +63,7 @@ const create = os.project.create
       throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "Failed to create project" });
     }
 
-    return toProjectRecord({
-      id: created.id,
-      organizationId: created.organizationId,
-      name: created.name,
-      slug: created.slug,
-      metadata: parseProjectMetadata(created.metadata),
-      archivedAt: parseTimestampMs(created.archivedAt),
-    });
+    return toProjectRecordFromReturnedRow(created);
   });
 
 const update = os.project.update.use(projectAdminMiddleware).handler(async ({ context, input }) => {
@@ -91,14 +84,7 @@ const update = os.project.update.use(projectAdminMiddleware).handler(async ({ co
     throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "Failed to update project" });
   }
 
-  return toProjectRecord({
-    id: updated.id,
-    organizationId: updated.organizationId,
-    name: updated.name,
-    slug: updated.slug,
-    metadata: parseProjectMetadata(updated.metadata),
-    archivedAt: parseTimestampMs(updated.archivedAt),
-  });
+  return toProjectRecordFromReturnedRow(updated);
 });
 
 const remove = os.project.delete.use(projectAdminMiddleware).handler(async ({ context }) => {

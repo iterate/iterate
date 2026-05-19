@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "doppler run --preserve-env=DEV_TUNNEL -- sh -c 'export VITE_AUTH_APP_ORIGIN=http://localhost:7101; export ALCHEMY_STAGE=dev-$ITERATE_USER; pnpm -r --parallel --stream --filter @iterate-com/auth --filter @iterate-com/os dev:local'",
+    "mcp:dev": "doppler run -- sh -c 'export AUTH_ISSUER=http://localhost:7101/api/auth; export ALCHEMY_STAGE=dev-$ITERATE_USER; pnpm --filter @iterate-com/mcp dev'",
     "build": "pnpm -r --parallel --filter '!iterate' build",
     "typecheck": "pnpm -r --parallel --filter '!iterate' typecheck",
     "format": "oxfmt",

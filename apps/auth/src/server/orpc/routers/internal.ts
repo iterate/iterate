@@ -2,7 +2,7 @@ import { ORPCError } from "@orpc/server";
 import { resolveUniqueSlug } from "@iterate-com/shared/slug";
 import { os, protectedMiddleware, serviceMiddleware } from "../orpc.ts";
 import { auth, createProjectIngressToken as createSignedProjectIngressToken } from "../../auth.ts";
-import { parseProjectMetadata, parseStringArray } from "../../db/helpers.ts";
+import { parseStringArray } from "../../db/helpers.ts";
 import {
   disableOAuthClientById,
   getOAuthClientByClientId,
@@ -25,7 +25,7 @@ import {
   generateId,
   toMembershipRole,
   toOrganizationRecord,
-  toProjectRecord,
+  toProjectRecordFromReturnedRow,
   toUserRecord,
 } from "./_shared.ts";
 
@@ -206,14 +206,7 @@ const createForOrganization = os.internal.project.createForOrganization
       updatedAt: now,
     });
 
-    return toProjectRecord({
-      id: created.id,
-      organizationId: created.organizationId,
-      name: created.name,
-      slug: created.slug,
-      metadata: parseProjectMetadata(created.metadata),
-      archivedAt: null,
-    });
+    return toProjectRecordFromReturnedRow(created);
   });
 
 const ensureOAuthClient = os.internal.oauth.ensureClient

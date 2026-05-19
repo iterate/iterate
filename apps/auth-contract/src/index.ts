@@ -124,6 +124,12 @@ export const InternalEnsureOAuthClientInput = z.object({
 });
 export type InternalEnsureOAuthClientInput = z.infer<typeof InternalEnsureOAuthClientInput>;
 
+export const OAuthProjectSelectionInput = z.object({
+  clientId: z.string().min(1),
+  projectIds: z.array(z.string().min(1)).min(1),
+});
+export type OAuthProjectSelectionInput = z.infer<typeof OAuthProjectSelectionInput>;
+
 export const authContract = oc.router({
   user: {
     me: oc
@@ -142,6 +148,15 @@ export const authContract = oc.router({
         tags: ["user", "organization"],
       })
       .output(z.array(OrganizationSummary)),
+    storeOAuthProjectSelection: oc
+      .route({
+        method: "POST",
+        path: "/user/store-oauth-project-selection",
+        summary: "Store selected projects for the current OAuth authorization flow",
+        tags: ["user", "oauth"],
+      })
+      .input(OAuthProjectSelectionInput)
+      .output(z.object({ success: z.literal(true) })),
   },
   organization: {
     create: oc

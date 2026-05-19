@@ -113,6 +113,15 @@ export type OauthConsentRow = {
   updatedAt: Date;
 };
 
+export type OauthProjectSelectionRow = {
+  session_id: string;
+  client_id: string;
+  user_id: string;
+  project_ids: string;
+  created_at: number;
+  updated_at: number;
+};
+
 export type OauthRefreshTokenRow = {
   id: string;
   token: string;

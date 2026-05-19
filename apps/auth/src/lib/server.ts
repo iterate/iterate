@@ -7,7 +7,10 @@ import { z } from "zod/v4";
 import {
   ITERATE_ACTIVE_ORGANIZATION_ID_CLAIM,
   ITERATE_IS_ADMIN_CLAIM,
+  ITERATE_ORGANIZATIONS_CLAIM,
+  IterateAuthOrganizationClaim,
   ITERATE_ROLE_CLAIM,
+  type IterateAuthOrganizationClaim as IterateAuthOrganizationClaimType,
 } from "@iterate-com/shared/auth-claims";
 
 const DEFAULT_ISSUER = "https://auth.iterate.com/api/auth";
@@ -59,18 +62,17 @@ const AccessTokenClaims = z.looseObject({
   aud: z.union([z.string(), z.array(z.string())]),
   iat: z.number(),
   exp: z.number(),
-  [ITERATE_IS_ADMIN_CLAIM]: z.boolean().optional(),
-  [ITERATE_ROLE_CLAIM]: z.string().nullable().optional(),
 });
 
 const UserInfoClaims = z.looseObject({
-  [ITERATE_IS_ADMIN_CLAIM]: z.boolean().optional(),
-  [ITERATE_ROLE_CLAIM]: z.string().nullable().optional(),
+  sub: z.string(),
   [ITERATE_ACTIVE_ORGANIZATION_ID_CLAIM]: z.string().nullable().optional(),
+  [ITERATE_ORGANIZATIONS_CLAIM]: z.array(IterateAuthOrganizationClaim).optional(),
 });
 
 export type IdTokenClaims = z.infer<typeof IdTokenClaims>;
 export type AccessTokenClaims = z.infer<typeof AccessTokenClaims>;
+export type UserInfoClaims = z.infer<typeof UserInfoClaims>;
 
 export type AuthUser = {
   id: string;
@@ -89,6 +91,7 @@ export type AuthSession = {
   scope: string;
   sessionId?: string;
   activeOrganizationId?: string | null;
+  organizations: IterateAuthOrganizationClaimType[];
 };
 
 export type AuthenticatedSession = {
@@ -103,7 +106,7 @@ export type AuthenticatedSession = {
 function buildAuthenticatedSession(
   accessToken: AccessTokenClaims,
   idToken: IdTokenClaims,
-  userInfo?: z.infer<typeof UserInfoClaims> | null,
+  userInfo: UserInfoClaims | null,
 ): AuthenticatedSession {
   return {
     user: {
@@ -114,22 +117,15 @@ function buildAuthenticatedSession(
       givenName: idToken.given_name,
       familyName: idToken.family_name,
       emailVerified: idToken.email_verified,
-      role:
-        userInfo?.[ITERATE_ROLE_CLAIM] ??
-        idToken[ITERATE_ROLE_CLAIM] ??
-        accessToken[ITERATE_ROLE_CLAIM] ??
-        null,
-      isAdmin:
-        userInfo?.[ITERATE_IS_ADMIN_CLAIM] ??
-        idToken[ITERATE_IS_ADMIN_CLAIM] ??
-        accessToken[ITERATE_IS_ADMIN_CLAIM] ??
-        false,
+      role: idToken[ITERATE_ROLE_CLAIM] ?? null,
+      isAdmin: idToken[ITERATE_IS_ADMIN_CLAIM] ?? false,
     },
     session: {
       expiresAt: accessToken.exp,
       scope: accessToken.scope,
       sessionId: accessToken.sid,
       activeOrganizationId: userInfo?.[ITERATE_ACTIVE_ORGANIZATION_ID_CLAIM] ?? null,
+      organizations: userInfo?.[ITERATE_ORGANIZATIONS_CLAIM] ?? [],
     },
     tokenClaims: { accessToken, idToken },
   };
@@ -160,6 +156,7 @@ type OAuthInfra = {
   httpOptions: () => { [oauth.allowInsecureRequests]: true } | undefined;
   toTokenSet: (token: oauth.TokenEndpointResponse, existing?: TokenSet | null) => TokenSet;
   doRefresh: (tokenSet: TokenSet) => Promise<TokenSet | null>;
+  getUserInfo: (accessToken: string) => Promise<UserInfoClaims | null>;
   cookieOpts: () => { httpOnly: true; path: string; sameSite: "Lax"; secure: boolean };
 };
 
@@ -231,6 +228,26 @@ function createOAuthInfra(config: IterateAuthConfig, jwks: JWKS): OAuthInfra {
     return toTokenSet(result, tokenSet);
   }
 
+  async function getUserInfo(accessToken: string): Promise<UserInfoClaims | null> {
+    const as = await getAuthorizationServer();
+    if (!as.userinfo_endpoint) {
+      return null;
+    }
+
+    const response = await fetch(as.userinfo_endpoint, {
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        accept: "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    return UserInfoClaims.parse(await response.json());
+  }
+
   return {
     issuerURL,
     jwks,
@@ -242,6 +259,7 @@ function createOAuthInfra(config: IterateAuthConfig, jwks: JWKS): OAuthInfra {
     httpOptions,
     toTokenSet,
     doRefresh,
+    getUserInfo,
     cookieOpts,
   };
 }
@@ -255,8 +273,7 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
   const prefix = config.cookiePrefix ?? "iterate";
   const SESSION_COOKIE = `${prefix}_session`;
   const issuer = new URL(config.issuer ?? DEFAULT_ISSUER).href;
-  const { jwks, doRefresh, cookieOpts } = infra;
-  const { getAuthorizationServer } = infra;
+  const { jwks, doRefresh, getUserInfo, cookieOpts } = infra;
 
   function serializeSessionCookie(tokenSet: TokenSet): string {
     const expires = tokenSet.refreshToken
@@ -292,7 +309,6 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
       }
 
       try {
-        const as = await getAuthorizationServer();
         const { payload: rawAccessToken } = await jwtVerify(tokenSet.accessToken, jwks, {
           issuer,
           audience: issuer,
@@ -304,22 +320,7 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
 
         const accessToken = AccessTokenClaims.parse(rawAccessToken);
         const idToken = IdTokenClaims.parse(rawIdToken);
-        let userInfo: z.infer<typeof UserInfoClaims> | null = null;
-        if (as.userinfo_endpoint) {
-          try {
-            const userInfoResponse = await fetch(as.userinfo_endpoint, {
-              headers: {
-                authorization: `Bearer ${tokenSet.accessToken}`,
-                accept: "application/json",
-              },
-            });
-            if (userInfoResponse.ok) {
-              userInfo = UserInfoClaims.parse(await userInfoResponse.json());
-            }
-          } catch {
-            userInfo = null;
-          }
-        }
+        const userInfo = await getUserInfo(tokenSet.accessToken);
 
         const responseHeaders = new Headers();
         if (refreshed) {
@@ -339,7 +340,8 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
 
 export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) {
   const { issuerURL, jwks, oauthClient, clientAuth } = infra;
-  const { getAuthorizationServer, httpOptions, toTokenSet, doRefresh, cookieOpts } = infra;
+  const { getAuthorizationServer, httpOptions, toTokenSet, doRefresh, getUserInfo, cookieOpts } =
+    infra;
   const prefix = config.cookiePrefix ?? "iterate";
   const SESSION_COOKIE = `${prefix}_session`;
   const STATE_COOKIE = `${prefix}_oauth_state`;
@@ -464,7 +466,6 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
     }
 
     try {
-      const as = await getAuthorizationServer();
       const { payload: rawAccessToken } = await jwtVerify(tokenSet.accessToken, jwks, {
         issuer: issuerURL.href,
         audience: issuerURL.href,
@@ -476,22 +477,7 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
 
       const accessToken = AccessTokenClaims.parse(rawAccessToken);
       const idToken = IdTokenClaims.parse(rawIdToken);
-      let userInfo: z.infer<typeof UserInfoClaims> | null = null;
-      if (as.userinfo_endpoint) {
-        try {
-          const userInfoResponse = await fetch(as.userinfo_endpoint, {
-            headers: {
-              authorization: `Bearer ${tokenSet.accessToken}`,
-              accept: "application/json",
-            },
-          });
-          if (userInfoResponse.ok) {
-            userInfo = UserInfoClaims.parse(await userInfoResponse.json());
-          }
-        } catch {
-          userInfo = null;
-        }
-      }
+      const userInfo = await getUserInfo(tokenSet.accessToken);
 
       writeCookie(c, tokenSet);
       return c.json({

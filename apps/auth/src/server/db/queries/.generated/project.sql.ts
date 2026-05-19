@@ -208,11 +208,11 @@ export namespace insertProjectReturning {
   };
   export type Result = {
     id: string;
-    organizationId: string;
+    organization_id: string;
     name: string;
     slug: string;
     metadata: string;
-    archivedAt?: number;
+    archived_at?: number;
   };
 }
 
@@ -265,11 +265,11 @@ export namespace updateProjectReturning {
   };
   export type Result = {
     id: string;
-    organizationId: string;
+    organization_id: string;
     name: string;
     slug: string;
     metadata: string;
-    archivedAt?: number;
+    archived_at?: number;
   };
 }
 

@@ -15,6 +15,7 @@ import type { CloudflareEnv } from "./env.ts";
 
 const app = hono();
 const allowedBrowserOrigins = new Set(getAllowedBrowserOrigins());
+const AUTH_ISSUER_PATH = "/api/auth";
 
 app.use(
   cors({
@@ -34,7 +35,13 @@ app.use(
 app.get("/api/auth/.well-known/openid-configuration", (c) =>
   oauthProviderOpenIdConfigMetadata(auth)(c.req.raw),
 );
+app.get(`/.well-known/openid-configuration${AUTH_ISSUER_PATH}`, (c) =>
+  oauthProviderOpenIdConfigMetadata(auth)(c.req.raw),
+);
 app.get("/api/auth/.well-known/oauth-authorization-server", (c) =>
+  oauthProviderAuthServerMetadata(auth)(c.req.raw),
+);
+app.get(`/.well-known/oauth-authorization-server${AUTH_ISSUER_PATH}`, (c) =>
   oauthProviderAuthServerMetadata(auth)(c.req.raw),
 );
 app.all("/api/auth/*", (c) => auth.handler(c.req.raw));
