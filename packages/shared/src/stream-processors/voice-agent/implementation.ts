@@ -618,9 +618,9 @@ async function openGeminiLiveConnection(args: {
       inputAudioTranscription: {},
       outputAudioTranscription: {},
       systemInstruction: {
-        parts: [{ text: systemInstructionWithAskAgent(args.setup.systemInstruction) }],
+        parts: [{ text: systemInstructionWithMessageAgent(args.setup.systemInstruction) }],
       },
-      tools: [geminiAskAgentTool()],
+      tools: [geminiMessageAgentTool()],
     },
   } satisfies JsonValue;
   const sequence = connection.sendSequence++;
@@ -763,7 +763,7 @@ async function openOpenAiRealtimeConnection(args: {
     type: "session.update",
     session: {
       type: "realtime",
-      instructions: systemInstructionWithAskAgent(args.setup.systemInstruction),
+      instructions: systemInstructionWithMessageAgent(args.setup.systemInstruction),
       audio: {
         input: {
           format: { type: "audio/pcm", rate: 24_000 },
@@ -779,8 +779,8 @@ async function openOpenAiRealtimeConnection(args: {
           voice: args.setup.voiceName,
         },
       },
-      tools: [openAiCompatibleAskAgentTool()],
-      tool_choice: openAiCompatibleAskAgentToolChoice(args.setup.askAgentToolChoice),
+      tools: [openAiCompatibleMessageAgentTool()],
+      tool_choice: openAiCompatibleMessageAgentToolChoice(args.setup.messageAgentToolChoice),
     },
   } satisfies JsonValue;
   const sequence = connection.sendSequence++;
@@ -842,15 +842,15 @@ async function openGrokRealtimeConnection(args: {
   const setupMessage = {
     type: "session.update",
     session: {
-      instructions: systemInstructionWithAskAgent(args.setup.systemInstruction),
+      instructions: systemInstructionWithMessageAgent(args.setup.systemInstruction),
       voice: args.setup.voiceName,
       turn_detection: { type: "server_vad" },
       audio: {
         input: { format: { type: "audio/pcm", rate: 16_000 } },
         output: { format: { type: "audio/pcm", rate: VOICE_AGENT_OUTPUT_SAMPLE_RATE } },
       },
-      tools: [openAiCompatibleAskAgentTool()],
-      tool_choice: openAiCompatibleAskAgentToolChoice(args.setup.askAgentToolChoice),
+      tools: [openAiCompatibleMessageAgentTool()],
+      tool_choice: openAiCompatibleMessageAgentToolChoice(args.setup.messageAgentToolChoice),
     },
   } satisfies JsonValue;
   const sequence = connection.sendSequence++;
@@ -1007,8 +1007,8 @@ async function handleGeminiFunctionCall(args: {
   args.connection.handledToolCallIds.add(callId);
 
   const toolResult =
-    args.functionCall.name === "ask_agent"
-      ? await appendAskAgentInput({
+    args.functionCall.name === "messageAgent"
+      ? await appendMessageAgentInput({
           argumentsValue: args.functionCall.args,
           callId,
           connection: args.connection,
@@ -1040,8 +1040,8 @@ async function handleOpenAiCompatibleFunctionCallItem(args: {
   args.connection.handledToolCallIds.add(callId);
 
   const toolResult =
-    args.item.name === "ask_agent"
-      ? await appendAskAgentInput({
+    args.item.name === "messageAgent"
+      ? await appendMessageAgentInput({
           argumentsValue: args.item.arguments,
           callId,
           connection: args.connection,
@@ -1061,19 +1061,19 @@ async function handleOpenAiCompatibleFunctionCallItem(args: {
   });
 }
 
-async function appendAskAgentInput(args: {
+async function appendMessageAgentInput(args: {
   argumentsValue: unknown;
   callId: string;
   connection: ProviderConnection;
   streamApi: VoiceAgentStreamApi;
 }) {
-  const parsed = parseAskAgentArguments(args.argumentsValue);
+  const parsed = parseMessageAgentArguments(args.argumentsValue);
   if (!parsed.ok) return parsed;
 
   await args.streamApi.append({
     event: {
       type: AGENT_INPUT_ADDED_EVENT_TYPE,
-      idempotencyKey: `voice-agent:${args.connection.id}:${args.connection.provider}:ask-agent:${args.callId}:agent-input`,
+      idempotencyKey: `voice-agent:${args.connection.id}:${args.connection.provider}:message-agent:${args.callId}:agent-input`,
       payload: {
         content: parsed.message,
         llmRequestPolicy: { behaviour: "after-current-request" },
@@ -1088,28 +1088,28 @@ async function appendAskAgentInput(args: {
   };
 }
 
-function parseAskAgentArguments(
+function parseMessageAgentArguments(
   argumentsValue: unknown,
 ): { ok: true; message: string } | { ok: false; message: string } {
   if (argumentsValue == null) {
-    return { ok: false, message: "ask_agent requires a JSON arguments object." };
+    return { ok: false, message: "messageAgent requires a JSON arguments object." };
   }
 
   let parsed = argumentsValue;
   if (typeof argumentsValue === "string") {
     if (argumentsValue.trim() === "") {
-      return { ok: false, message: "ask_agent requires a JSON arguments object." };
+      return { ok: false, message: "messageAgent requires a JSON arguments object." };
     }
     try {
       parsed = JSON.parse(argumentsValue);
     } catch {
-      return { ok: false, message: "ask_agent arguments must be valid JSON." };
+      return { ok: false, message: "messageAgent arguments must be valid JSON." };
     }
   }
 
   const message = (parsed as { message?: unknown }).message;
   if (typeof message !== "string" || message.trim() === "") {
-    return { ok: false, message: "ask_agent requires a non-empty message string." };
+    return { ok: false, message: "messageAgent requires a non-empty message string." };
   }
   return { ok: true, message: message.trim() };
 }
@@ -1187,14 +1187,14 @@ async function sendOpenAiCompatibleFunctionCallOutput(args: {
   });
 }
 
-function systemInstructionWithAskAgent(systemInstruction: string) {
+function systemInstructionWithMessageAgent(systemInstruction: string) {
   return [
     systemInstruction,
-    "You have a tool named Ask Agent. Use it when the caller asks for actions, investigation, code, data lookup, or anything requiring tools. Ask Agent sends the request to a code-capable background agent. After calling it, tell the caller you asked the agent and continue the conversation while it works.",
+    "You have a tool named Message Agent. Use it when the caller asks for actions, investigation, code, data lookup, or anything requiring tools. Message Agent sends the request to a code-capable background agent. After calling it, tell the caller you asked the agent and continue the conversation while it works.",
   ].join("\n\n");
 }
 
-function askAgentParameters(input: { additionalProperties?: boolean } = {}) {
+function messageAgentParameters(input: { additionalProperties?: boolean } = {}) {
   return {
     type: "object",
     ...(input.additionalProperties == null
@@ -1211,28 +1211,28 @@ function askAgentParameters(input: { additionalProperties?: boolean } = {}) {
   } satisfies JsonValue;
 }
 
-function openAiCompatibleAskAgentTool() {
+function openAiCompatibleMessageAgentTool() {
   return {
     type: "function",
-    name: "ask_agent",
+    name: "messageAgent",
     description:
       "Ask the code-capable background agent to do work or answer a question. Use for actions, investigation, code, data lookup, or anything requiring tools.",
-    parameters: askAgentParameters({ additionalProperties: false }),
+    parameters: messageAgentParameters({ additionalProperties: false }),
   } satisfies JsonValue;
 }
 
-function openAiCompatibleAskAgentToolChoice(choice: VoiceAgentSetup["askAgentToolChoice"]) {
+function openAiCompatibleMessageAgentToolChoice(choice: VoiceAgentSetup["messageAgentToolChoice"]) {
   return choice === "required" ? "required" : "auto";
 }
 
-function geminiAskAgentTool() {
+function geminiMessageAgentTool() {
   return {
     functionDeclarations: [
       {
-        name: "ask_agent",
+        name: "messageAgent",
         description:
           "Ask the code-capable background agent to do work or answer a question. Use for actions, investigation, code, data lookup, or anything requiring tools.",
-        parameters: askAgentParameters(),
+        parameters: messageAgentParameters(),
       },
     ],
   } satisfies JsonValue;

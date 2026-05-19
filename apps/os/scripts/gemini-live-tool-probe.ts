@@ -15,7 +15,7 @@ const timeoutMs = Number(option("--timeout-ms") ?? "20000");
 const inputPrompt =
   option("--prompt") ??
   [
-    "Call the ask_agent function now.",
+    "Call the messageAgent function now.",
     "Use message: Fetch https://example.com and summarize the page title.",
     "Do not answer in natural language before the function call.",
   ].join(" ");
@@ -24,7 +24,7 @@ const variants: Variant[] = [
   {
     name: "live-docs-json-schema-audio",
     responseModalities: ["AUDIO"],
-    tool: askAgentTool({
+    tool: messageAgentTool({
       parameters: {
         type: "object",
         properties: {
@@ -40,12 +40,12 @@ const variants: Variant[] = [
   {
     name: "no-parameters-audio",
     responseModalities: ["AUDIO"],
-    tool: askAgentTool({}),
+    tool: messageAgentTool({}),
   },
   {
     name: "uppercase-schema-audio",
     responseModalities: ["AUDIO"],
-    tool: askAgentTool({
+    tool: messageAgentTool({
       parameters: {
         type: "OBJECT",
         properties: {
@@ -61,7 +61,7 @@ const variants: Variant[] = [
   {
     name: "tool-config-any-audio",
     responseModalities: ["AUDIO"],
-    tool: askAgentTool({
+    tool: messageAgentTool({
       parameters: {
         type: "object",
         properties: {
@@ -74,7 +74,7 @@ const variants: Variant[] = [
       toolConfig: {
         functionCallingConfig: {
           mode: "ANY",
-          allowedFunctionNames: ["ask_agent"],
+          allowedFunctionNames: ["messageAgent"],
         },
       },
     },
@@ -82,7 +82,7 @@ const variants: Variant[] = [
   {
     name: "text-modality",
     responseModalities: ["TEXT"],
-    tool: askAgentTool({
+    tool: messageAgentTool({
       parameters: {
         type: "object",
         properties: {
@@ -160,7 +160,7 @@ async function runVariant(variant: Variant) {
                 functionResponses: [
                   {
                     id: firstFunctionCallId(message.toolCall),
-                    name: "ask_agent",
+                    name: "messageAgent",
                     response: {
                       ok: true,
                       message: "Probe tool response.",
@@ -231,7 +231,7 @@ function setupMessage(variant: Variant) {
       systemInstruction: {
         parts: [
           {
-            text: "You are a tool-calling probe. When asked, call ask_agent immediately.",
+            text: "You are a tool-calling probe. When asked, call messageAgent immediately.",
           },
         ],
       },
@@ -241,12 +241,12 @@ function setupMessage(variant: Variant) {
   };
 }
 
-function askAgentTool(input: { parameters?: JsonObject }) {
+function messageAgentTool(input: { parameters?: JsonObject }) {
   return {
     functionDeclarations: [
       {
-        name: "ask_agent",
-        description: "Ask the background agent to perform work.",
+        name: "messageAgent",
+        description: "Message the background agent to perform work.",
         ...input,
       },
     ],

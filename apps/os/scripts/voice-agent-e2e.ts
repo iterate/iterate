@@ -45,7 +45,7 @@ type Options = {
   baseUrl: string;
   chunkMs: number;
   createProject: boolean;
-  expectAskAgent: boolean;
+  expectMessageAgent: boolean;
   inputMode: "audio" | "text";
   model: string;
   minOutputBytes: number;
@@ -67,7 +67,7 @@ type SeenEvents = {
   providerConnected: boolean;
   setupCompleted: boolean;
   turnCompleted: boolean;
-  askAgentInputAdded: boolean;
+  messageAgentInputAdded: boolean;
   agentOutputAdded: boolean;
   codemodeScriptCompleted: boolean;
   codeAgentVoiceTextAdded: boolean;
@@ -139,11 +139,11 @@ async function main() {
           provider: options.provider,
           model: options.model,
           voiceName: options.voiceName,
-          askAgentToolChoice: options.expectAskAgent ? "required" : "auto",
-          systemInstruction: options.expectAskAgent
+          messageAgentToolChoice: options.expectMessageAgent ? "required" : "auto",
+          systemInstruction: options.expectMessageAgent
             ? [
                 "You are running an automated voice smoke test.",
-                "If the caller asks you to fetch, inspect, calculate, run code, or do any background work, you MUST call the Ask Agent tool with the caller's request.",
+                "If the caller asks you to fetch, inspect, calculate, run code, or do any background work, you MUST call the Message Agent tool with the caller's request.",
                 "After the tool call returns, say one short sentence telling the caller that you asked the background agent.",
               ].join(" ")
             : "You are running an automated voice test. Reply with one short sentence.",
@@ -158,7 +158,7 @@ async function main() {
     providerConnected: false,
     setupCompleted: false,
     turnCompleted: false,
-    askAgentInputAdded: false,
+    messageAgentInputAdded: false,
     agentOutputAdded: false,
     codemodeScriptCompleted: false,
     codeAgentVoiceTextAdded: false,
@@ -173,7 +173,7 @@ async function main() {
     streamPath: options.streamPath,
     timeoutMs: options.timeoutMs,
     minOutputBytes: options.minOutputBytes,
-    expectAskAgent: options.expectAskAgent,
+    expectMessageAgent: options.expectMessageAgent,
   });
 
   if (options.inputMode === "audio") {
@@ -215,7 +215,7 @@ async function main() {
         turnCompleted: seen.turnCompleted,
         outputBytes: output.byteLength,
         outputPcm: options.outputPcm,
-        askAgentInputAdded: seen.askAgentInputAdded,
+        messageAgentInputAdded: seen.messageAgentInputAdded,
         agentOutputAdded: seen.agentOutputAdded,
         codemodeScriptCompleted: seen.codemodeScriptCompleted,
         codeAgentVoiceTextAdded: seen.codeAgentVoiceTextAdded,
@@ -231,7 +231,7 @@ async function watchStream(input: {
   afterOffset: number;
   client: OrpcClient;
   minOutputBytes: number;
-  expectAskAgent: boolean;
+  expectMessageAgent: boolean;
   projectSlugOrId: string;
   seen: SeenEvents;
   streamPath: StreamPath;
@@ -289,8 +289,8 @@ async function watchStream(input: {
         if (typeof payload.content === "string") {
           console.log(`  agent input: ${payload.content.slice(0, 200)}`);
         }
-        if (isAskAgentInput(payload)) {
-          input.seen.askAgentInputAdded = true;
+        if (isMessageAgentInput(payload)) {
+          input.seen.messageAgentInputAdded = true;
         }
       }
       if (event.type === "events.iterate.com/agent/output-added") {
@@ -301,7 +301,7 @@ async function watchStream(input: {
       }
       if (event.type === VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE) {
         const payload = event.payload as { source?: unknown; text?: unknown };
-        if (input.seen.askAgentInputAdded) {
+        if (input.seen.messageAgentInputAdded) {
           input.seen.codeAgentVoiceTextAdded = true;
           input.seen.codeAgentVoiceText = typeof payload.text === "string" ? payload.text : null;
           console.log(`  voice input text: ${input.seen.codeAgentVoiceText ?? "<missing>"}`);
@@ -312,10 +312,10 @@ async function watchStream(input: {
         (total, buffer) => total + buffer.byteLength,
         0,
       );
-      if (input.expectAskAgent) {
+      if (input.expectMessageAgent) {
         if (
           input.seen.setupCompleted &&
-          input.seen.askAgentInputAdded &&
+          input.seen.messageAgentInputAdded &&
           input.seen.codeAgentVoiceTextAdded
         ) {
           return;
@@ -340,7 +340,7 @@ async function watchStream(input: {
   }
 }
 
-function isAskAgentInput(payload: { llmRequestPolicy?: unknown }) {
+function isMessageAgentInput(payload: { llmRequestPolicy?: unknown }) {
   const policy = payload.llmRequestPolicy as { behaviour?: unknown } | undefined;
   return policy?.behaviour === "after-current-request";
 }
@@ -514,12 +514,12 @@ function requireAuthHeaders() {
 
 function parseOptions(args: readonly string[]): Options {
   const values = parseArgs(args);
-  const expectAskAgent = booleanOption(values, "expect-ask-agent", false);
+  const expectMessageAgent = booleanOption(values, "expect-message-agent", false);
   return {
     baseUrl: stringOption(values, "base-url", process.env.OS_BASE_URL ?? "http://127.0.0.1:5173"),
     chunkMs: numberOption(values, "chunk-ms", 100),
     createProject: booleanOption(values, "create-project", true),
-    expectAskAgent,
+    expectMessageAgent,
     inputMode: inputModeOption(values),
     provider: providerOption(values),
     model: modelOption(values),
@@ -531,15 +531,15 @@ function parseOptions(args: readonly string[]): Options {
     prompt: stringOption(
       values,
       "prompt",
-      expectAskAgent
-        ? "Ask the background agent to fetch example dot com and tell me what it says."
+      expectMessageAgent
+        ? "Message the background agent to fetch example dot com and tell me what it says."
         : "Please say success.",
     ),
     silenceMs: numberOption(values, "silence-ms", 1500),
     streamPath: StreamPath.parse(
       stringOption(values, "stream-path", `/voice-agents/e2e-${Date.now().toString(36)}`),
     ),
-    timeoutMs: numberOption(values, "timeout-ms", expectAskAgent ? 180_000 : 60_000),
+    timeoutMs: numberOption(values, "timeout-ms", expectMessageAgent ? 180_000 : 60_000),
     voiceName: voiceOption(values),
   };
 }

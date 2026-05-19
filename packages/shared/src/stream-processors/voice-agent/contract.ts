@@ -60,14 +60,14 @@ const VoiceAgentOutputTextPayload = z.object({
   source: z.enum(["input-transcription", "output-transcription", "provider-text"]).optional(),
 });
 
-const AskAgentToolChoice = z.enum(["auto", "required"]).default("auto");
+const MessageAgentToolChoice = z.enum(["auto", "required"]).default("auto");
 
 const GeminiSetupPayload = z.object({
   provider: z.literal(VOICE_AGENT_PROVIDER_GEMINI_LIVE),
   model: z.string().trim().min(1).default(DEFAULT_GEMINI_LIVE_MODEL),
   voiceName: z.string().trim().min(1).default(DEFAULT_GEMINI_LIVE_VOICE),
   systemInstruction: z.string().default(DEFAULT_VOICE_AGENT_SYSTEM_INSTRUCTION),
-  askAgentToolChoice: AskAgentToolChoice,
+  messageAgentToolChoice: MessageAgentToolChoice,
 });
 
 const OpenAiSetupPayload = z.object({
@@ -75,7 +75,7 @@ const OpenAiSetupPayload = z.object({
   model: z.string().trim().min(1).default(DEFAULT_OPENAI_REALTIME_MODEL),
   voiceName: z.string().trim().min(1).default(DEFAULT_OPENAI_REALTIME_VOICE),
   systemInstruction: z.string().default(DEFAULT_VOICE_AGENT_SYSTEM_INSTRUCTION),
-  askAgentToolChoice: AskAgentToolChoice,
+  messageAgentToolChoice: MessageAgentToolChoice,
 });
 
 const GrokSetupPayload = z.object({
@@ -83,7 +83,7 @@ const GrokSetupPayload = z.object({
   model: z.string().trim().min(1).default(DEFAULT_GROK_REALTIME_MODEL),
   voiceName: z.string().trim().min(1).default(DEFAULT_GROK_REALTIME_VOICE),
   systemInstruction: z.string().default(DEFAULT_VOICE_AGENT_SYSTEM_INSTRUCTION),
-  askAgentToolChoice: AskAgentToolChoice,
+  messageAgentToolChoice: MessageAgentToolChoice,
 });
 
 const VoiceAgentSetup = z.discriminatedUnion("provider", [
@@ -244,7 +244,7 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
     },
     [AGENT_INPUT_ADDED_EVENT_TYPE]: {
       description:
-        "Input for the colocated code-capable agent. Grok Ask Agent tool calls append this event so the normal agent processor can do the requested work.",
+        "Input for the colocated code-capable agent. Grok Message Agent tool calls append this event so the normal agent processor can do the requested work.",
       payloadSchema: AgentInputAddedPayload,
     },
 
@@ -450,7 +450,7 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
             model: event.payload.model,
             voiceName: event.payload.voiceName,
             systemInstruction: event.payload.systemInstruction,
-            askAgentToolChoice: "auto" as const,
+            messageAgentToolChoice: "auto" as const,
           },
           connection: { status: "idle" as const },
         };

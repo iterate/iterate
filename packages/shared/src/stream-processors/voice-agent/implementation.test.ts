@@ -45,7 +45,7 @@ describe("createVoiceAgentProviderProcessor", () => {
           {
             functionDeclarations: [
               {
-                name: "ask_agent",
+                name: "messageAgent",
               },
             ],
           },
@@ -60,7 +60,7 @@ describe("createVoiceAgentProviderProcessor", () => {
       toolCall: {
         functionCalls: [
           {
-            name: "ask_agent",
+            name: "messageAgent",
             id: "call_123",
             args: { message: "Please inspect the failing tests." },
           },
@@ -73,7 +73,7 @@ describe("createVoiceAgentProviderProcessor", () => {
       expect.arrayContaining([
         expect.objectContaining({
           type: AGENT_INPUT_ADDED_EVENT_TYPE,
-          idempotencyKey: expect.stringContaining("gemini-live:ask-agent:call_123:agent-input"),
+          idempotencyKey: expect.stringContaining("gemini-live:message-agent:call_123:agent-input"),
           payload: {
             content: "Please inspect the failing tests.",
             llmRequestPolicy: { behaviour: "after-current-request" },
@@ -88,7 +88,7 @@ describe("createVoiceAgentProviderProcessor", () => {
             functionResponses: [
               expect.objectContaining({
                 id: "call_123",
-                name: "ask_agent",
+                name: "messageAgent",
               }),
             ],
           },
@@ -125,7 +125,7 @@ describe("createVoiceAgentProviderProcessor", () => {
           tools: [
             {
               type: "function",
-              name: "ask_agent",
+              name: "messageAgent",
             },
           ],
         },
@@ -141,7 +141,7 @@ describe("createVoiceAgentProviderProcessor", () => {
           output: [
             {
               type: "function_call",
-              name: "ask_agent",
+              name: "messageAgent",
               call_id: "call_123",
               arguments: JSON.stringify({ message: "Please inspect the failing tests." }),
             },
@@ -154,7 +154,9 @@ describe("createVoiceAgentProviderProcessor", () => {
         expect.arrayContaining([
           expect.objectContaining({
             type: AGENT_INPUT_ADDED_EVENT_TYPE,
-            idempotencyKey: expect.stringContaining(`${provider}:ask-agent:call_123:agent-input`),
+            idempotencyKey: expect.stringContaining(
+              `${provider}:message-agent:call_123:agent-input`,
+            ),
             payload: {
               content: "Please inspect the failing tests.",
               llmRequestPolicy: { behaviour: "after-current-request" },
