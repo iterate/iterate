@@ -212,10 +212,12 @@ describe("createVoiceAgentProviderProcessor", () => {
       await afterAppend;
 
       const providerText = providerSentText(socket.sent, provider);
-      expect(providerText).toContain("BACKGROUND AGENT MESSAGE TO RELAY TO THE CALLER:");
+      expect(providerText).toContain(
+        "BACKGROUND AGENT MESSAGE TO RELAY TO THE HUMAN YOU ARE SPEAKING TO:",
+      );
       expect(providerText).toContain("What occupation should I put on your profile?");
       expect(providerText).toContain("This message is not from the caller.");
-      expect(providerText).toContain("ask that question to the caller");
+      expect(providerText).toContain("ask that question to the human you are speaking to");
       expect(providerText).toContain("Do not say thanks, thank you");
     },
   );
