@@ -79,6 +79,9 @@ const DEFAULT_VOICES = Object.fromEntries(
   PROVIDER_OPTIONS.map((option) => [option.provider, option.voiceName]),
 ) as Record<VoiceAgentProvider, string>;
 
+const VOICE_AGENT_STREAM_PATH_PREFIX = "/agents/voice/";
+const LEGACY_VOICE_AGENT_STREAM_PATH_PREFIX = "/voice-agents/";
+
 export const Route = createFileRoute(
   "/_app/orgs/$organizationSlug/projects/$projectSlug/voice-agents/",
 )({
@@ -125,7 +128,7 @@ function VoiceAgentsIndexPage() {
   const voiceAgentStreams = useMemo(
     () =>
       (data?.streams ?? [])
-        .filter((stream) => stream.streamPath.startsWith("/agents/voice/"))
+        .filter((stream) => isVoiceAgentStreamPath(stream.streamPath))
         .toSorted((left, right) => right.lastWokenAt.localeCompare(left.lastWokenAt)),
     [data?.streams],
   );
@@ -325,7 +328,7 @@ function VoiceAgentsIndexPage() {
             </TableHeader>
             <TableBody>
               {voiceAgentStreams.map((stream) => {
-                const slug = stream.streamPath.replace(/^\/agents\/voice\//, "");
+                const slug = voiceAgentSlugFromStreamPath(stream.streamPath);
                 return (
                   <TableRow key={stream.name}>
                     <TableCell>
@@ -337,6 +340,7 @@ function VoiceAgentsIndexPage() {
                           projectSlug: params.projectSlug,
                           voiceAgentSlug: slug,
                         }}
+                        search={{ streamPath: stream.streamPath }}
                       >
                         <EventsStreamPathLabel path={stream.streamPath} />
                       </Link>
@@ -354,6 +358,23 @@ function VoiceAgentsIndexPage() {
       )}
     </section>
   );
+}
+
+function isVoiceAgentStreamPath(streamPath: string) {
+  return (
+    streamPath.startsWith(VOICE_AGENT_STREAM_PATH_PREFIX) ||
+    streamPath.startsWith(LEGACY_VOICE_AGENT_STREAM_PATH_PREFIX)
+  );
+}
+
+function voiceAgentSlugFromStreamPath(streamPath: string) {
+  if (streamPath.startsWith(VOICE_AGENT_STREAM_PATH_PREFIX)) {
+    return streamPath.slice(VOICE_AGENT_STREAM_PATH_PREFIX.length);
+  }
+  if (streamPath.startsWith(LEGACY_VOICE_AGENT_STREAM_PATH_PREFIX)) {
+    return streamPath.slice(LEGACY_VOICE_AGENT_STREAM_PATH_PREFIX.length);
+  }
+  return streamPath;
 }
 
 function voiceProviderProcessorSlug(provider: VoiceAgentProvider) {

@@ -1,11 +1,17 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { StreamPath } from "@iterate-com/shared/streams/types";
+import { z } from "zod";
 import { VoiceAgentStreamConsole } from "~/components/voice-agent-stream-console.tsx";
 import { orpc } from "~/orpc/client.ts";
+
+const Search = z.object({
+  streamPath: StreamPath.optional(),
+});
 
 export const Route = createFileRoute(
   "/_app/orgs/$organizationSlug/projects/$projectSlug/voice-agents/$voiceAgentSlug",
 )({
+  validateSearch: Search,
   ssr: false,
   loader: async ({ context, params }) => {
     const project = await context.queryClient.ensureQueryData({
@@ -23,8 +29,10 @@ export const Route = createFileRoute(
 
 function VoiceAgentConversationPage() {
   const params = Route.useParams();
+  const search = Route.useSearch();
   const { project } = Route.useLoaderData();
-  const streamPath = StreamPath.parse(`/agents/voice/${params.voiceAgentSlug}`);
+  const streamPath =
+    search.streamPath ?? StreamPath.parse(`/agents/voice/${params.voiceAgentSlug}`);
 
   return (
     <VoiceAgentStreamConsole
