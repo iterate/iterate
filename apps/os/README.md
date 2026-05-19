@@ -7,22 +7,25 @@ It combines:
 
 - TanStack Start, TanStack Router, and TanStack Query for the authenticated UI.
 - oRPC over HTTP/OpenAPI at `/api`.
-- Clerk for first-party sessions, organizations, and MCP OAuth.
+- Iterate Auth Worker for first-party sessions, organizations, project claims,
+  and MCP OAuth.
 - sqlfu and Cloudflare D1 for app projections.
 - Durable Objects for project lifecycle, ingress, MCP sessions, codemode
   sessions, and shared streams.
 
 ## How To Use It
 
-Browser users start at the app host and sign in with Clerk. Authenticated app
-routes are organization-scoped:
+Browser users start at the app host and sign in through the Iterate Auth
+Worker. Project routes are project-scoped, and organization-level settings live
+under `/org/:organizationSlug`:
 
 ```text
-/orgs/:organizationSlug/projects
-/orgs/:organizationSlug/projects/:projectSlug
-/orgs/:organizationSlug/projects/:projectSlug/codemode-sessions
-/orgs/:organizationSlug/projects/:projectSlug/streams
-/orgs/:organizationSlug/projects/:projectSlug/settings
+/projects
+/projects/:projectSlug
+/projects/:projectSlug/codemode-sessions
+/projects/:projectSlug/streams
+/projects/:projectSlug/settings
+/org/:organizationSlug
 ```
 
 Project slugs are globally unique and exist for readable URLs. Runtime work uses
@@ -69,7 +72,7 @@ The script pattern is documented in
 - `src/entry.workerd.ts` is the Cloudflare Worker entrypoint.
 - `src/domains` contains domain-local Durable Objects, WorkerEntrypoints, tool
   providers, and focused README/AGENTS notes.
-- `src/start.ts` installs Clerk's TanStack Start middleware.
+- `src/start.ts` installs the auth-worker request middleware.
 - `src/orpc/root.ts` composes the server router.
 - `src/orpc/routers/projects.ts` owns `os.projects` collection APIs and the
   singular `os.project.*` project-scoped router.
@@ -84,7 +87,7 @@ The script pattern is documented in
 - [Architecture And Operations](./docs/architecture-and-operations.md)
 - [Preview Agent Browser Smoke](./docs/preview-agent-browser-smoke.md)
 - [Codemode Subrequest Depth](./docs/codemode-subrequest-depth.md)
-- [ADR: Use Clerk As MCP OAuth Server](./docs/adr/0001-use-clerk-as-mcp-oauth-server.md)
+- [ADR: Replace Clerk With Auth Worker](../../docs/adr/0001-replace-clerk-with-auth-worker.md)
 - [Domain Context](./CONTEXT.md)
 
 ## Agent Notes

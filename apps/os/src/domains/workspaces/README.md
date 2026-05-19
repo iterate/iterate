@@ -1,7 +1,7 @@
 # Workspaces Domain
 
 Workspaces is currently a skeletal POC codemode provider. The product concept is
-not settled because OS already has Projects and Clerk Organizations.
+not settled because OS already has Projects and Organizations.
 
 Keep `ctx.workspace` unchanged for now while using this folder to make the
 domain boundary visible.

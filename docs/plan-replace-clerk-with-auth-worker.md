@@ -500,3 +500,7 @@ Phase F is last.
   The shared `_app` layout now owns the active-organization sidebar, while
   project authorization also accepts auth-worker project claims before falling
   back to the legacy permission table.
+- Deleted the obsolete dummy `apps/mcp` worker now that OS serves `/mcp`
+  directly, removed the root `mcp:dev` script and workspace lockfile importer,
+  and refreshed OS docs/CONTEXT language around auth-worker sessions,
+  project-scoped URLs, centralized MCP, and OAuth client sync.
