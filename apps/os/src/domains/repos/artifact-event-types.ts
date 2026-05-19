@@ -8,12 +8,13 @@ const CfEventSource = z.object({
   type: z.string(),
   namespace: z.string().optional(),
   repo_name: z.string().optional(),
+  repoName: z.string().optional(),
 });
 
 const CfEventMetadata = z.object({
   accountId: z.string().optional(),
   eventSubscriptionId: z.string().optional(),
-  eventSchemaVersion: z.string().optional(),
+  eventSchemaVersion: z.union([z.string(), z.number()]).optional(),
   eventTimestamp: z.string().optional(),
 });
 
@@ -150,5 +151,5 @@ export function parseArtifactName(artifactName: string): {
  * we need to look at source.repo_name.
  */
 export function deriveArtifactNameFromEvent(event: CfArtifactEvent): string | null {
-  return event.source?.repo_name ?? null;
+  return event.source?.repo_name ?? event.source?.repoName ?? null;
 }

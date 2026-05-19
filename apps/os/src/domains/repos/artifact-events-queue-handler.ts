@@ -14,7 +14,7 @@ import {
   deriveArtifactNameFromEvent,
   parseArtifactName,
 } from "~/domains/repos/artifact-event-types.ts";
-import { repoStreamPath } from "~/domains/repos/stream-processors/repo-stream-processor.ts";
+import { repoStreamPath } from "~/domains/repos/repo-stream-path.ts";
 
 // ---------------------------------------------------------------------------
 // Stream paths & namespaces

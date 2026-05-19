@@ -50,6 +50,24 @@ describe("deriveArtifactNameFromEvent", () => {
     expect(deriveArtifactNameFromEvent(event)).toBe("proj--repo");
   });
 
+  test("extracts camelCase repoName from source", () => {
+    const event: CfArtifactEvent = {
+      type: CF_EVENT_TYPES.REPO_FORKED,
+      source: { type: "artifacts", repoName: "proj--repo" },
+      payload: {},
+    };
+    expect(deriveArtifactNameFromEvent(event)).toBe("proj--repo");
+  });
+
+  test("prefers repo_name over repoName", () => {
+    const event: CfArtifactEvent = {
+      type: CF_EVENT_TYPES.PUSHED,
+      source: { type: "artifacts.repo", repo_name: "snake--case", repoName: "camel--case" },
+      payload: {},
+    };
+    expect(deriveArtifactNameFromEvent(event)).toBe("snake--case");
+  });
+
   test("returns null when source is missing", () => {
     const event: CfArtifactEvent = {
       type: CF_EVENT_TYPES.PUSHED,
@@ -58,7 +76,7 @@ describe("deriveArtifactNameFromEvent", () => {
     expect(deriveArtifactNameFromEvent(event)).toBeNull();
   });
 
-  test("returns null when repo_name is missing", () => {
+  test("returns null when repo_name and repoName are both missing", () => {
     const event: CfArtifactEvent = {
       type: CF_EVENT_TYPES.PUSHED,
       source: { type: "artifacts.repo" },
