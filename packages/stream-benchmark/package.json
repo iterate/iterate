@@ -1,0 +1,16 @@
+{
+  "name": "@iterate-com/stream-benchmark",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "benchmark:websocket": "node scripts/benchmark-websocket.ts",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "sqlfu": "0.0.3-14",
+    "wrangler": "catalog:cloudflare"
+  }
+}
