@@ -3,7 +3,6 @@ import { createORPCClient } from "@orpc/client";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import type { RouterClient } from "@orpc/server";
 import { osContract } from "@iterate-com/os-contract";
-import { projectEgressInterceptUrlFor } from "../e2e/test-support/project-egress-intercept-tunnel.ts";
 import type { appRouter } from "~/orpc/root.ts";
 
 type OrpcClient = RouterClient<typeof appRouter>;
@@ -33,7 +32,7 @@ async function main() {
     projectSlugOrId: options.projectSlugOrId,
   });
 
-  const interceptUrl = projectEgressInterceptUrlFor(project);
+  const interceptUrl = new URL(`${project.ingressUrl}/__iterate/intercept-project-egress`);
 
   const meta = {
     baseUrl: options.baseUrl,

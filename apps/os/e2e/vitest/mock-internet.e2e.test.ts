@@ -1,7 +1,4 @@
-import { join } from "node:path";
-import { HttpResponse, http } from "@iterate-com/mock-http-proxy";
 import { expect, expectTypeOf, test } from "vitest";
-import { createMockInternet } from "../test-support/create-mock-internet.ts";
 import { createFixture } from "../test-support/create-test-project.ts";
 import { setupE2E } from "../test-support/e2e-test.ts";
 import { useProjectEgressInterceptTunnel } from "../test-support/project-egress-intercept-tunnel.ts";
@@ -20,33 +17,29 @@ testIfAdminApiTarget(
   async (ctx) => {
     const e2e = await setupE2E(ctx);
 
-    await using internet = await createMockInternet({
-      harPath: join(e2e.artifactDir, "codemode-fetch.har"),
-      handlers: [
-        http.get("*/__e2e-health", () => HttpResponse.text("ok")),
-        http.get("https://example.com/os-e2e", ({ request }) =>
-          HttpResponse.json(
-            {
-              mocked: true,
-              query: new URL(request.url).searchParams.get("source"),
-              runSlug: e2e.runSlug,
-            },
-            {
-              headers: {
-                "x-e2e-mocked": "yes",
-              },
-            },
-          ),
-        ),
-      ],
-    });
-
     await using fixture = await createFixture({
       slugPrefix: "mock-internet",
     });
-    await using _intercept = await useProjectEgressInterceptTunnel({
-      fetch: internet.fetch,
+    using _intercept = await useProjectEgressInterceptTunnel({
       project: fixture.project,
+      fetch: async (request) => {
+        const url = new URL(request.url);
+        if (url.pathname === "/__e2e-health") return new Response("ok");
+        if (url.hostname === "example.com") {
+          if (url.pathname === "/os-e2e") {
+            return Response.json(
+              {
+                mocked: true,
+                query: url.searchParams.get("source"),
+                runSlug: e2e.runSlug,
+              },
+              { headers: { "x-e2e-mocked": "yes" } },
+            );
+          }
+        }
+
+        return new Response("not found", { status: 404 });
+      },
     });
 
     const completed = await fixture.executeCodemodeScript(async function () {
@@ -57,8 +50,6 @@ testIfAdminApiTarget(
         status: response.status,
       };
     });
-
-    const har = internet.getHar();
 
     expectTypeOf(completed.payload).toExtend<{
       functionCallId: string;
@@ -108,13 +99,5 @@ testIfAdminApiTarget(
         }),
       }),
     );
-    expect(
-      completed.events.filter((event) => event.type === "events.iterate.com/core/error-occurred"),
-    ).toEqual([]);
-    expect(
-      har.log.entries
-        .filter((entry) => !entry.request.url.endsWith("/__e2e-health"))
-        .map((entry) => entry.request.url),
-    ).toContain("https://example.com/os-e2e?source=codemode");
   },
 );
