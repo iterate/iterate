@@ -9,7 +9,7 @@ import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { z } from "zod";
 import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
-import { useAuthClient } from "~/auth/client.tsx";
+import { useAuthClient } from "~/auth/client-context.ts";
 import { requireSignedInForOrganizationRoute } from "~/lib/auth.ts";
 
 export const Route = createFileRoute("/organization")({

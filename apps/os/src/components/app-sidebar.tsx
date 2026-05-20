@@ -25,7 +25,7 @@ import {
 } from "@iterate-com/ui/components/sidebar";
 import { SidebarShell } from "@iterate-com/ui/components/sidebar-shell";
 import type { AppConfig } from "~/app.ts";
-import { useAuthClient } from "~/auth/client.tsx";
+import { useAuthClient } from "~/auth/client-context.ts";
 import { buildProjectMcpUrl, buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
 import { orpc } from "~/orpc/client.ts";
 
@@ -41,7 +41,7 @@ export function AppSidebar({ organizationSlug }: AppSidebarProps) {
       header={<AppSidebarOrganization organizationSlug={organizationSlug} />}
       footer={<AppSidebarUser />}
     >
-      <AppSidebarNav organizationSlug={organizationSlug} />
+      <AppSidebarNav />
     </SidebarShell>
   );
 }
@@ -123,7 +123,7 @@ function AppSidebarUser() {
   );
 }
 
-function AppSidebarNav({ organizationSlug }: AppSidebarProps) {
+function AppSidebarNav() {
   const matchRoute = useMatchRoute();
   const config = useConfig<PublicConfig>();
   const { data } = useQuery({
