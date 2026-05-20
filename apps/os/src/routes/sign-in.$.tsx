@@ -6,7 +6,7 @@ import { useAuthClient } from "~/auth/client-context.ts";
 
 export const Route = createFileRoute("/sign-in/$")({
   validateSearch: z.looseObject({
-    logged_out: z.string().optional(),
+    logged_out: z.union([z.boolean(), z.string()]).optional(),
   }),
   component: SignInRoute,
 });
@@ -14,7 +14,7 @@ export const Route = createFileRoute("/sign-in/$")({
 function SignInRoute() {
   const { signIn } = useAuthClient();
   const { logged_out } = Route.useSearch();
-  const isLoggedOutReturn = logged_out === "true";
+  const isLoggedOutReturn = logged_out === true || logged_out === "true";
 
   useEffect(() => {
     if (!isLoggedOutReturn) {
