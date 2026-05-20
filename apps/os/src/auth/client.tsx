@@ -28,9 +28,11 @@ export function AuthClientProvider({ children }: { children: ReactNode }) {
       refresh,
       signIn: () => void authClient.login(),
       signOut: async () => {
-        await authClient.logout();
+        await authClient.logout({
+          global: true,
+          returnTo: `${window.location.origin}/sign-in`,
+        });
         setSession({ authenticated: false });
-        window.location.href = "/sign-in";
       },
     }),
     [loading, refresh, session],

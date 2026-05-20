@@ -541,35 +541,72 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
     }
   });
 
+  app.get("/logout", async (c) => {
+    const tokenSet = getTokenSet(c);
+    deleteCookie(c, SESSION_COOKIE, cookieOpts());
+    deleteCookie(c, STATE_COOKIE, cookieOpts());
+
+    if (tokenSet?.refreshToken) {
+      await revokeRefreshToken(tokenSet.refreshToken);
+    }
+
+    const requestURL = new URL(c.req.url);
+    const returnTo = resolveSameOriginReturnTo(
+      requestURL.searchParams.get("return_to"),
+      requestURL.origin,
+    );
+    if (requestURL.searchParams.get("global") === "false") {
+      return c.redirect(returnTo);
+    }
+
+    const authLogoutUrl = new URL("/logout", issuerURL.origin);
+    authLogoutUrl.searchParams.set("return_to", returnTo);
+    return c.redirect(authLogoutUrl.toString());
+  });
+
   app.post("/logout", async (c) => {
     const tokenSet = getTokenSet(c);
     deleteCookie(c, SESSION_COOKIE, cookieOpts());
     deleteCookie(c, STATE_COOKIE, cookieOpts());
 
     if (tokenSet?.refreshToken) {
-      try {
-        const as = await getAuthorizationServer();
-        const revokeResponse = await oauth.revocationRequest(
-          as,
-          oauthClient,
-          clientAuth,
-          tokenSet.refreshToken,
-          httpOptions(),
-        );
-        await oauth.processRevocationResponse(revokeResponse);
-      } catch {
-        // Ignore revoke failures during logout.
-      }
+      await revokeRefreshToken(tokenSet.refreshToken);
     }
 
     return c.redirect("/");
   });
+
+  async function revokeRefreshToken(refreshToken: string) {
+    try {
+      const as = await getAuthorizationServer();
+      const revokeResponse = await oauth.revocationRequest(
+        as,
+        oauthClient,
+        clientAuth,
+        refreshToken,
+        httpOptions(),
+      );
+      await oauth.processRevocationResponse(revokeResponse);
+    } catch {
+      // Ignore revoke failures during logout.
+    }
+  }
 
   return {
     handler(request: Request): Response | Promise<Response> {
       return app.fetch(request);
     },
   };
+}
+
+export function resolveSameOriginReturnTo(rawReturnTo: string | null, origin: string) {
+  if (!rawReturnTo) return `${origin}/`;
+  try {
+    const parsed = new URL(rawReturnTo, origin);
+    return parsed.origin === origin ? parsed.toString() : `${origin}/`;
+  } catch {
+    return `${origin}/`;
+  }
 }
 
 export function createIterateAuth(config: IterateAuthConfig) {

@@ -119,7 +119,7 @@ function SessionCard() {
         </a>
         <button
           className="inline-flex items-center rounded-full bg-[#d26d4d] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#bb5b3d]"
-          onClick={() => auth.logout().then(() => window.location.reload())}
+          onClick={() => auth.logout({ global: true, returnTo: window.location.href })}
         >
           Log out
         </button>
