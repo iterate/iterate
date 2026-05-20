@@ -159,10 +159,20 @@ export const projectsRouter = {
           throw error;
         }
 
-        await projectDurableObject(context, id).createProject({
-          projectId: id,
-          slug: input.slug,
-        });
+        try {
+          await projectDurableObject(context, id).createProject({
+            projectId: id,
+            slug: input.slug,
+          });
+        } catch (error) {
+          await deleteProject(context.db, { id }).catch((cleanupError) => {
+            console.error(
+              `[projects.create] Failed to clean up partial project ${id} after bootstrap failure:`,
+              cleanupError,
+            );
+          });
+          throw error;
+        }
 
         return await toProjectWithIngressUrl(context, project);
       }),
