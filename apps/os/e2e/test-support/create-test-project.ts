@@ -17,13 +17,16 @@ export interface TestProjectHandle extends AsyncDisposable {
   updateConfig(input: { customHostname?: string | null }): Promise<TestProject>;
 }
 
-export async function createFixture(params?: Parameters<typeof createTestProject>[0]) {
+export async function createFixture(params: Parameters<typeof createTestProject>[0]) {
   const project = await createTestProject(params);
   const fixture = project;
+  type ExecuteScriptParams = Parameters<
+    Awaited<ReturnType<typeof createTestProject>>["client"]["project"]["codemode"]["executeScript"]
+  >[0];
+
   const startCodemodeScript = async <T>(
     fn: (ctx: {}) => Promise<T>,
-    // prettier-ignore
-    opts?: Partial<Omit<Parameters<Awaited<ReturnType<typeof createTestProject>>["client"]["project"]["codemode"]["executeScript"]>[0],"code">>,
+    opts?: Partial<Omit<ExecuteScriptParams, "code">>,
   ) => {
     let code = fn.toString();
     if (!code.startsWith("async")) {
@@ -93,25 +96,13 @@ export async function createFixture(params?: Parameters<typeof createTestProject
   };
 }
 
-export async function createTestProject(opts?: {
-  baseUrl?: string;
-  cleanup?: boolean;
-  customHostname?: string | null;
-  slugPrefix?: string;
-}): Promise<TestProjectHandle> {
-  const baseUrl = opts?.baseUrl ?? requireBaseUrl();
+export async function createTestProject(opts: { slugPrefix: string }): Promise<TestProjectHandle> {
+  const baseUrl = requireBaseUrl();
   const client = createAdminOsClient(baseUrl);
-  const slugPrefix = opts?.slugPrefix ?? "os-e2e";
+  const slugPrefix = opts.slugPrefix;
   let project = await client.projects.create({
     slug: `${slugPrefix}-${uniqueSuffix()}`,
   });
-
-  if (opts?.customHostname !== undefined) {
-    project = await client.projects.updateConfig({
-      id: project.id,
-      customHostname: opts.customHostname,
-    });
-  }
 
   let disposed = false;
   return {
@@ -130,7 +121,6 @@ export async function createTestProject(opts?: {
     async [Symbol.asyncDispose]() {
       if (disposed) return;
       disposed = true;
-      if (opts?.cleanup === false) return;
       await client.projects.remove({ id: project.id }).catch(() => undefined);
     },
   };
