@@ -190,7 +190,6 @@ const PROJECT_CONFIG_REFRESH_INTERVAL_MS = 10_000;
 const PROJECT_DYNAMIC_WORKER_MAIN_MODULE = "worker.js";
 const PROJECT_DYNAMIC_WORKER_COMPATIBILITY_DATE = "2026-04-27";
 const PROJECT_DYNAMIC_WORKER_COMPATIBILITY_FLAGS = ["nodejs_compat"];
-export const PROJECT_EGRESS_INTERCEPT_ROUTE = "/__iterate/intercept-project-egress";
 
 type ProjectConfigWorkspaceName = {
   projectId: string;
@@ -427,7 +426,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     await this.ensureStarted();
     const summary = this.requireSummary();
     const url = new URL(request.url);
-    if (url.pathname === PROJECT_EGRESS_INTERCEPT_ROUTE) {
+    if (url.pathname === "/__iterate/intercept-project-egress") {
       return this.acceptProjectEgressInterceptTunnel(request);
     }
 
@@ -517,7 +516,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
   }
 
   async fetch(request: Request): Promise<Response> {
-    if (new URL(request.url).pathname === PROJECT_EGRESS_INTERCEPT_ROUTE) {
+    if (new URL(request.url).pathname === "/__iterate/intercept-project-egress") {
       return this.acceptProjectEgressInterceptTunnel(request);
     }
     return await this.egressFetch(request);

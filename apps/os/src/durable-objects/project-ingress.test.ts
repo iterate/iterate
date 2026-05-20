@@ -2,11 +2,12 @@ import { SELF, env } from "cloudflare:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { PROJECT_EGRESS_INTERCEPT_ROUTE } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import {
   EXAMPLE_EGRESS_SECRET_KEY,
   EXAMPLE_EGRESS_SECRET_MATERIAL,
 } from "~/domains/secrets/example-secret.ts";
+
+const PROJECT_EGRESS_INTERCEPT_ROUTE = "/__iterate/intercept-project-egress";
 
 afterEach(() => {
   vi.restoreAllMocks();
