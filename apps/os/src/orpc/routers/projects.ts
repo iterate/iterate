@@ -32,6 +32,7 @@ import {
   isValidCustomHostname,
   normalizeCustomHostname,
 } from "~/lib/project-host-routing.ts";
+import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 import type { ActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
 import { activeOrganizationMiddleware, os, projectScopeMiddleware } from "~/orpc/orpc.ts";
 import { requireProjectScope } from "~/orpc/project-access.ts";
@@ -133,6 +134,23 @@ export const projectsRouter = {
           env: { TYPEID_PREFIX: context.config.typeIdPrefix.exposeSecret() },
           prefix: "proj",
         });
+        const existing = await getProjectBySlug(context.db, { slug: input.slug });
+        if (existing) {
+          throw new ORPCError("CONFLICT", {
+            message: `A project with slug ${input.slug} already exists.`,
+          });
+        }
+
+        if (!auth.isAdminApi) {
+          const authWorker = createAuthWorkerServiceClient(context);
+          await authWorker.internal.project.createForOrganization({
+            id,
+            organizationSlug: auth.orgSlug,
+            name: input.slug,
+            slug: input.slug,
+            metadata: { osProjectId: id },
+          });
+        }
 
         let project: ProjectRow;
 

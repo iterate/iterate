@@ -51,6 +51,7 @@ export const AppConfig = BaseAppConfig.extend({
       issuer: publicValue(z.url().default("https://auth.iterate.com/api/auth")),
       clientId: publicValue(z.string().trim().min(1)),
       clientSecret: redacted(z.string().trim().min(1)),
+      serviceToken: redacted(z.string().trim().min(1)).optional(),
       resource: publicValue(z.url()).optional(),
     })
     .optional(),

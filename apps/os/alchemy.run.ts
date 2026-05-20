@@ -25,6 +25,8 @@ const env = {
     process.env.APP_CONFIG_ITERATE_AUTH__CLIENT_ID ?? process.env.ITERATE_OAUTH_CLIENT_ID,
   APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET:
     process.env.APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET ?? process.env.ITERATE_OAUTH_CLIENT_SECRET,
+  APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN:
+    process.env.APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN ?? process.env.ITERATE_AUTH_SERVICE_TOKEN,
 };
 
 const ctx = await initAlchemy(manifest, AppConfig, env);

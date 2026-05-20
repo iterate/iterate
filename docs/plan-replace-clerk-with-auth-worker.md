@@ -541,3 +541,28 @@ Phase F is last.
   using the production auth worker, bootstrap superadmin credentials from auth
   Doppler, and in-memory cookies. Both flows completed and returned
   authenticated OS sessions without printing tokens, codes, cookies, or secrets.
+- Fixed the post-login empty-organization path on OS. `/organization` now shows
+  a first-party organization creation form for signed-in users with no
+  organizations instead of only a secondary Continue button, creates the
+  organization through an auth-worker service client, then refreshes the OS
+  session so the new organization claim is present.
+- Added OS-to-auth service-token config and mirrored user-created OS projects
+  into auth-worker projects before inserting the OS project row. This keeps
+  newly created dashboard projects visible to auth-worker OAuth project
+  selection and MCP project claims.
+- Fixed auth OAuth client sync for existing clients. Better Auth stores client
+  secrets hashed, so the sync procedure now reuses only caller-supplied
+  plaintext Doppler secrets or explicitly rotates the client; the script also
+  supports scoped target syncs. Rotated only `preview_2`, deployed auth prd and
+  OS `preview_2`, and verified the new client secret with a real OAuth
+  callback.
+- Used an isolated `agent-browser` session against
+  `https://os.iterate-preview-2.com/organization` with a no-organization test
+  user. Created organization `preview-org-1779255983`, refreshed the OS session,
+  created project `preview-project-1779256077` through the Projects UI, and
+  landed on the created project page.
+- Ran `pnpm cli claude-mcp --project-slug-or-id preview-project-1779256077`
+  through the `preview_2` Doppler config; the script preflighted the remote MCP
+  endpoint and Claude listed the Iterate MCP tool providers. Then ran
+  `test:e2e:codemode-mcp` against the same created project; the codemode MCP
+  provider-stack test passed.
