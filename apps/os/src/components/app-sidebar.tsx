@@ -110,12 +110,14 @@ function AppSidebarUser() {
             }
           />
           <DropdownMenuContent side="top" align="start" className="w-56">
-            <DropdownMenuLabel className="truncate">{label}</DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => void signOut()}>
-              <LogOut />
-              <span>Sign out</span>
-            </DropdownMenuItem>
+            <DropdownMenuGroup>
+              <DropdownMenuLabel className="truncate">{label}</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => void signOut()}>
+                <LogOut />
+                <span>Sign out</span>
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
       </SidebarMenuItem>
