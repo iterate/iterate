@@ -897,8 +897,8 @@ importers:
         specifier: ^0.11.0
         version: 0.11.0(@babel/core@7.29.0)(@babel/runtime@7.28.6)(@cloudflare/codemode@0.3.4(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(@tanstack/ai@0.10.2)(ai@6.0.159(zod@4.3.6))(zod@4.3.6))(@cloudflare/workers-types@4.20260426.1)(@tanstack/ai@0.10.2)(ai@6.0.159(zod@4.3.6))(react@19.2.4)(rolldown@1.0.0-rc.16)(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(zod@4.3.6)
       captun:
-        specifier: https://pkg.pr.new/iterate/captun@1
-        version: https://pkg.pr.new/iterate/captun@1(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0)
+        specifier: ^0.0.1
+        version: 0.0.1(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0)
       crossws:
         specifier: ^0.4.4
         version: 0.4.4(srvx@0.11.12)
@@ -1338,6 +1338,9 @@ importers:
       '@types/react':
         specifier: ^19.2.14
         version: 19.2.14
+      miniflare:
+        specifier: catalog:cloudflare
+        version: 4.20260424.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -7727,9 +7730,8 @@ packages:
   capnweb@0.8.0:
     resolution: {integrity: sha512-BK/TuXUiyfLSKsmjojn70yN7oYG/JJzoURZ3tckjg5Zj2KcygPm0A5jyOlswK7SYB4f0Gh9tt+RZ132b80iLfA==}
 
-  captun@https://pkg.pr.new/iterate/captun@1:
-    resolution: {tarball: https://pkg.pr.new/iterate/captun@1}
-    version: 0.0.0
+  captun@0.0.1:
+    resolution: {integrity: sha512-4MfYQBFUhfvrkPEAcLPUa5H1bIOqiEG4lUoVdjkxa1yxznvrr8geP72aKaVzFOw/TU9TmXQfg/JYvnxrQoZLKg==}
     hasBin: true
 
   ccount@2.0.1:
@@ -20922,7 +20924,7 @@ snapshots:
 
   capnweb@0.8.0: {}
 
-  captun@https://pkg.pr.new/iterate/captun@1(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0):
+  captun@0.0.1(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0):
     dependencies:
       '@inquirer/prompts': 8.4.3(@types/node@25.6.0)
       '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)

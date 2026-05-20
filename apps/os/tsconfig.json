@@ -13,8 +13,6 @@
     "jsx": "react-jsx",
     "module": "ESNext",
     "paths": {
-      "captun/client": ["./node_modules/captun/dist/client.js"],
-      "captun/server": ["./node_modules/captun/dist/server.js"],
       "~/*": ["./src/*"],
       "@iterate-com/ui/*": ["../../packages/ui/src/*"],
       "@iterate-com/shared/*": ["../../packages/shared/src/*"],

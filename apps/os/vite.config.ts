@@ -1,4 +1,3 @@
-import { fileURLToPath } from "node:url";
 import { devtools } from "@tanstack/devtools-vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import tailwindcss from "@tailwindcss/vite";
@@ -19,14 +18,6 @@ export default defineConfig({
     sourcemap: true,
   },
   resolve: {
-    alias: {
-      "captun/client": fileURLToPath(
-        new URL("./node_modules/captun/dist/client.js", import.meta.url),
-      ),
-      "captun/server": fileURLToPath(
-        new URL("./node_modules/captun/dist/server.js", import.meta.url),
-      ),
-    },
     tsconfigPaths: true,
   },
   server: {
