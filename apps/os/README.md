@@ -39,7 +39,8 @@ pnpm dev                 # local Cloudflare/TanStack dev through Doppler
 pnpm dev:localhost       # localhost-oriented config
 pnpm typecheck           # TypeScript
 pnpm test                # unit tests
-pnpm test:e2e:preview    # deployed preview smoke
+pnpm e2e -t "OS preview smoke"
+                         # deployed preview smoke
 pnpm cli claude-mcp --project-slug-or-id bob
                          # open Claude against one project MCP server
 pnpm sqlfu:generate      # regenerate sqlfu migrations/query wrappers

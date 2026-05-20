@@ -19,16 +19,16 @@ servers, temporary workers, or mocked upstream services.
 
 ## Lanes
 
-- Mocked internet tests run through `pnpm test:e2e:mocked-internet`. They require `OS_BASE_URL`
-  and an admin bearer token. The test opens a Project Egress Intercept Tunnel through the
-  project-owned route instead of exposing the local mock server through Semaphore/Cloudflare
+- Mocked internet tests run through `pnpm e2e -t "Project Egress Intercept Tunnel"`. They require
+  `OS_BASE_URL` and an admin bearer token. The test opens a Project Egress Intercept Tunnel through
+  the project-owned route instead of exposing the local mock server through Semaphore/Cloudflare
   Tunnel.
-- Live deployment tests run through `pnpm test:e2e` and require `OS_BASE_URL`.
-- MCP deployment smoke runs through `pnpm test:e2e:codemode-mcp`.
+- Live deployment tests run through `pnpm e2e` and require `OS_BASE_URL`.
+- MCP deployment smoke runs through `pnpm e2e -t "project MCP exec_js"`.
 - Admin project fixture smoke requires `OS_BASE_URL` and one of `OS_E2E_ADMIN_API_SECRET`,
   `OS_ADMIN_API_SECRET`, or `APP_CONFIG_ADMIN_API_SECRET`.
-- Stream TUI behavior specs run through `pnpm test:e2e:tui`. The script creates a disposable OS
-  project before launching Microsoft TUI Test and deletes it afterward.
+- Stream TUI behavior specs run through `tsx ./e2e/tui-test/run.ts`. The script creates a
+  disposable OS project before launching Microsoft TUI Test and deletes it afterward.
 
 Prefer committed HAR fixtures under `e2e/vitest/__snapshots__/` for deterministic mocked-internet
 tests. Use per-test artifact paths for smoke tests that only prove the fixture wiring.

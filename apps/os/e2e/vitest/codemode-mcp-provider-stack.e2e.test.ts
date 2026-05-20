@@ -7,7 +7,7 @@
  *
  *   OS_E2E_MCP_URL=https://mcp__demo.iterate-preview-2.app/ \
  *   OS_E2E_MCP_BEARER_TOKEN=... \
- *   pnpm test:e2e:codemode-mcp
+ *   pnpm e2e -t "project MCP exec_js"
  *
  * OS_E2E_MCP_BEARER_TOKEN may be a Clerk OAuth access token, a Clerk session
  * token, or an OS admin token. Clerk Testing Tokens are not bearer auth tokens;

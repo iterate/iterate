@@ -5,7 +5,7 @@
  *
  *   OS_BASE_URL=https://os.iterate-preview-2.com \
  *   doppler run --project os --config preview_2 -- \
- *   pnpm --dir apps/os test:e2e ./e2e/vitest/agents.e2e.test.ts
+ *   pnpm --dir apps/os e2e -t "project agents codemode"
  */
 import { createORPCClient } from "@orpc/client";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";

@@ -1,3 +1,5 @@
+import { test } from "vitest";
+
 function requireBaseUrl() {
   const baseUrl = process.env.OS_BASE_URL?.trim();
   if (!baseUrl) {
@@ -154,63 +156,63 @@ async function seedProjectMcpUrl(input: { adminApiSecret: string; baseUrl: URL }
   return projectMcpUrlFor({ baseUrl: input.baseUrl, project });
 }
 
-const baseUrl = requireBaseUrl();
-const projectMcpUrlOverride = readProjectMcpUrlOverride();
-const adminApiSecret = readAdminApiSecret();
+test("OS preview smoke", async () => {
+  const baseUrl = requireBaseUrl();
+  const projectMcpUrlOverride = readProjectMcpUrlOverride();
+  const adminApiSecret = readAdminApiSecret();
 
-// Keep the dashboard checks unauthenticated, then use the admin preview hook to
-// seed one deterministic project/MCP hostname. That makes the preview proof
-// repeatable without relying on a human Clerk session.
-await expectStatus({
-  url: new URL("/api/__internal/health", baseUrl),
-  status: 200,
+  // Keep the dashboard checks unauthenticated, then use the admin preview hook to
+  // seed one deterministic project/MCP hostname. That makes the preview proof
+  // repeatable without relying on a human Clerk session.
+  await expectStatus({
+    url: new URL("/api/__internal/health", baseUrl),
+    status: 200,
+  });
+
+  const rootResponse = await expectStatus({
+    url: new URL("/", baseUrl),
+    status: 307,
+  });
+  const rootLocation = rootResponse.headers.get("location") ?? "";
+  if (!rootLocation.startsWith("/sign-in?redirect_url=")) {
+    throw new Error(`Expected unauthenticated root to redirect to sign-in; got ${rootLocation}.`);
+  }
+
+  const projectMcpUrl =
+    projectMcpUrlOverride ??
+    (adminApiSecret ? await seedProjectMcpUrl({ adminApiSecret, baseUrl }) : null);
+
+  if (!projectMcpUrl) {
+    console.log(`OS preview smoke passed for ${baseUrl.toString()} (MCP project seed skipped)`);
+    return;
+  }
+
+  const instructionsHtml = await expectOkText({
+    headers: { accept: "text/html" },
+    url: projectMcpUrl,
+  });
+  if (!instructionsHtml.includes("Connect an MCP client to this project endpoint")) {
+    throw new Error(`MCP instructions page did not contain setup text: ${instructionsHtml}`);
+  }
+
+  const projectMcpResponse = await expectStatus({
+    url: projectMcpUrl,
+    status: 401,
+  });
+  const wwwAuthenticate = projectMcpResponse.headers.get("www-authenticate") ?? "";
+  const metadataUrl = new URL("/.well-known/oauth-protected-resource", projectMcpUrl.origin);
+  if (!wwwAuthenticate.includes(`resource_metadata="${metadataUrl.toString()}"`)) {
+    throw new Error(`Unexpected MCP WWW-Authenticate header: ${wwwAuthenticate}`);
+  }
+
+  const metadataResponse = await expectStatus({
+    url: metadataUrl,
+    status: 200,
+  });
+  const metadata = (await metadataResponse.json()) as { resource?: string };
+  if (metadata.resource !== projectMcpUrl.toString()) {
+    throw new Error(`Expected MCP metadata resource ${projectMcpUrl}; got ${metadata.resource}.`);
+  }
+
+  console.log(`OS preview smoke passed for ${baseUrl.toString()}`);
 });
-
-const rootResponse = await expectStatus({
-  url: new URL("/", baseUrl),
-  status: 307,
-});
-const rootLocation = rootResponse.headers.get("location") ?? "";
-if (!rootLocation.startsWith("/sign-in?redirect_url=")) {
-  throw new Error(`Expected unauthenticated root to redirect to sign-in; got ${rootLocation}.`);
-}
-
-const projectMcpUrl =
-  projectMcpUrlOverride ??
-  (adminApiSecret ? await seedProjectMcpUrl({ adminApiSecret, baseUrl }) : null);
-
-if (!projectMcpUrl) {
-  console.log(`OS preview smoke passed for ${baseUrl.toString()} (MCP project seed skipped)`);
-  process.exit(0);
-}
-
-const instructionsHtml = await expectOkText({
-  headers: { accept: "text/html" },
-  url: projectMcpUrl,
-});
-if (!instructionsHtml.includes("Connect an MCP client to this project endpoint")) {
-  throw new Error(`MCP instructions page did not contain setup text: ${instructionsHtml}`);
-}
-
-const projectMcpResponse = await expectStatus({
-  url: projectMcpUrl,
-  status: 401,
-});
-const wwwAuthenticate = projectMcpResponse.headers.get("www-authenticate") ?? "";
-const metadataUrl = new URL("/.well-known/oauth-protected-resource", projectMcpUrl.origin);
-if (!wwwAuthenticate.includes(`resource_metadata="${metadataUrl.toString()}"`)) {
-  throw new Error(`Unexpected MCP WWW-Authenticate header: ${wwwAuthenticate}`);
-}
-
-const metadataResponse = await expectStatus({
-  url: metadataUrl,
-  status: 200,
-});
-const metadata = (await metadataResponse.json()) as { resource?: string };
-if (metadata.resource !== projectMcpUrl.toString()) {
-  throw new Error(`Expected MCP metadata resource ${projectMcpUrl}; got ${metadata.resource}.`);
-}
-
-console.log(`OS preview smoke passed for ${baseUrl.toString()}`);
-
-export {};

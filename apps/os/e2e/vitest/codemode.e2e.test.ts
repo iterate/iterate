@@ -5,7 +5,7 @@
  * Set OS_BASE_URL to the deployment URL before running:
  *   OS_BASE_URL=https://os.iterate-dev-jonas.com \
  *   OS_E2E_PROJECT_ID=proj_... \
- *   OS_E2E_COOKIE='__session=...' pnpm test:e2e
+ *   OS_E2E_COOKIE='__session=...' pnpm e2e -t codemode.executeScript
  */
 import { createORPCClient } from "@orpc/client";
 import { RPCLink as WebSocketRPCLink } from "@orpc/client/websocket";
