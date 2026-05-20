@@ -7,8 +7,6 @@ import {
   EXAMPLE_EGRESS_SECRET_MATERIAL,
 } from "~/domains/secrets/example-secret.ts";
 
-const PROJECT_EGRESS_INTERCEPT_ROUTE = "/__iterate/intercept-project-egress";
-
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -265,7 +263,7 @@ describe("Project ingress routing", () => {
     await createProject();
 
     const response = await SELF.fetch(
-      `https://demo.iterate.localhost${PROJECT_EGRESS_INTERCEPT_ROUTE}`,
+      "https://demo.iterate.localhost/__iterate/intercept-project-egress",
     );
 
     expect(response.status).toBe(401);
