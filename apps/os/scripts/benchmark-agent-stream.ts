@@ -433,7 +433,7 @@ function parseOptions(args: readonly string[]): Options {
   const values = parseArgs(args);
   return {
     agentPath: stringOption(values, "agent-path", `/agents/bench-${Date.now()}`),
-    baseUrl: stringOption(values, "base-url", process.env.OS_BASE_URL ?? ""),
+    baseUrl: stringOption(values, "base-url", process.env.APP_CONFIG_BASE_URL ?? ""),
     concurrency: numberOption(values, "concurrency", 10),
     count: numberOption(values, "count", 200),
     createProject: booleanOption(values, "create-project", true),

@@ -2,8 +2,8 @@
  * E2E tests for codemode oRPC endpoints.
  * Runs against a live os deployment (dev or preview).
  *
- * Set OS_BASE_URL to the deployment URL before running:
- *   OS_BASE_URL=https://os.iterate-dev-jonas.com \
+ * Set APP_CONFIG_BASE_URL to the deployment URL before running:
+ *   APP_CONFIG_BASE_URL=https://os.iterate-dev-jonas.com \
  *   OS_E2E_PROJECT_ID=proj_... \
  *   OS_E2E_COOKIE='__session=...' pnpm e2e -t codemode.executeScript
  */

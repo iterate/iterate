@@ -1,9 +1,9 @@
 import { test } from "vitest";
 
 function requireBaseUrl() {
-  const baseUrl = process.env.OS_BASE_URL?.trim();
+  const baseUrl = process.env.APP_CONFIG_BASE_URL?.trim();
   if (!baseUrl) {
-    throw new Error("OS_BASE_URL is required for the OS preview smoke test.");
+    throw new Error("APP_CONFIG_BASE_URL is required for the OS preview smoke test.");
   }
   return new URL(baseUrl);
 }

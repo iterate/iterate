@@ -19,9 +19,15 @@ export async function createTestProjectFixture(params: {
 }) {
   const { slugPrefix, egressFetch } = params;
   const project = await createTestProject({ slugPrefix });
-  const tunnel = egressFetch
-    ? await createProjectEgressInterceptTunnel({ project: project.project, fetch: egressFetch })
-    : null;
+  let tunnel: Awaited<ReturnType<typeof createProjectEgressInterceptTunnel>> | null = null;
+  try {
+    tunnel = egressFetch
+      ? await createProjectEgressInterceptTunnel({ project: project.project, fetch: egressFetch })
+      : null;
+  } catch (error) {
+    await project[Symbol.asyncDispose]();
+    throw error;
+  }
   const fixture = project;
   type ExecuteScriptParams = Parameters<
     Awaited<ReturnType<typeof createTestProject>>["client"]["project"]["codemode"]["executeScript"]
@@ -98,7 +104,11 @@ export async function createTestProjectFixture(params: {
     startCodemodeScript,
     executeCodemodeScript,
     async [Symbol.asyncDispose]() {
-      tunnel?.[Symbol.dispose]();
+      try {
+        tunnel?.[Symbol.dispose]();
+      } finally {
+        await project[Symbol.asyncDispose]();
+      }
     },
   };
 }

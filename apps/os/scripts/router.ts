@@ -6,7 +6,7 @@ import { z } from "zod";
 
 import { claudeMcpScript } from "./claude-mcp.ts";
 
-const DEFAULT_OS_BASE_URL = "https://os.iterate.com";
+const DEFAULT_APP_CONFIG_BASE_URL = "https://os.iterate.com";
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 
 const StreamTuiInput = z.object({
@@ -21,7 +21,7 @@ const StreamTuiInput = z.object({
     .string()
     .trim()
     .url()
-    .default(process.env.OS_BASE_URL || DEFAULT_OS_BASE_URL)
+    .default(process.env.APP_CONFIG_BASE_URL || DEFAULT_APP_CONFIG_BASE_URL)
     .describe("OS base URL"),
 });
 

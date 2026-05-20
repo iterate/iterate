@@ -16,7 +16,7 @@ try {
   await runTuiTest({
     env: {
       ...process.env,
-      OS_BASE_URL: project.baseUrl,
+      APP_CONFIG_BASE_URL: project.baseUrl,
       OS_TUI_TEST_PROJECT_SLUG_OR_ID: project.project.id,
     },
   });

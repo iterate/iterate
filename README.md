@@ -24,7 +24,7 @@ pnpm cli rpc --help
 
 # preview slot 2
 doppler run --project os --config preview_2 -- \
-  sh -c 'OS_BASE_URL="$APP_CONFIG_BASE_URL" pnpm cli rpc --help'
+  pnpm cli rpc --help
 
 # local dev server (while pnpm dev is running)
 doppler run --project os --config dev_jonas -- \

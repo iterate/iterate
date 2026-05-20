@@ -257,7 +257,6 @@ Useful first-party references:
 Preview worker smoke:
 
 ```bash
-OS_BASE_URL=https://os.iterate-preview-2.com \
 doppler run --project os --config preview_2 -- pnpm e2e -t "OS preview smoke"
 ```
 

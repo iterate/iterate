@@ -47,6 +47,7 @@ Shared tools should prefer app config env vars when they exist. For deployed
 apps, Doppler already provides `APP_CONFIG_BASE_URL` and auth secrets such as
 `APP_CONFIG_ADMIN_API_SECRET`; scripts should not re-map those in every app.
 
-App-prefixed override variables like `OS_BASE_URL` and `OS_API_TOKEN` are still
-useful for ad hoc local overrides, but they should not be required for normal
-`doppler run --config <config> -- pnpm cli ...` usage.
+Use `APP_CONFIG_BASE_URL` for both configured deployments and ad hoc local
+overrides. When wrapping a local override with `doppler run`, pass
+`--preserve-env=APP_CONFIG_BASE_URL` so Doppler does not replace it with the
+configured deployment URL.
