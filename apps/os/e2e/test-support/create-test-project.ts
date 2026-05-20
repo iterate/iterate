@@ -1,39 +1,39 @@
 import type { Event } from "@iterate-com/shared/streams/types";
+import type { Project } from "@iterate-com/os-contract";
+import { createCaptunTunnel } from "captun/client";
 import type { ReceiveFunctionCallResultInput } from "../../src/domains/codemode/durable-objects/codemode-session.ts";
 import {
   createAdminOsClient,
   requireBaseUrl,
-  type OsClient,
   uniqueSuffix,
   readProjectStreamUntil,
+  requireAdminBearerToken,
 } from "./os-client.ts";
 
-type TestProject = Awaited<ReturnType<OsClient["projects"]["create"]>>;
+type Fetch = Parameters<typeof createCaptunTunnel>[0]["fetch"];
 
-export interface TestProjectHandle extends AsyncDisposable {
-  baseUrl: string;
-  client: OsClient;
-  project: TestProject;
-  updateConfig(input: { customHostname?: string | null }): Promise<TestProject>;
-}
-
-export async function createFixture(params: Parameters<typeof createTestProject>[0]) {
-  const project = await createTestProject(params);
+export async function createTestProjectFixture(params: {
+  slugPrefix: string;
+  /** a fetch implementation that will be used to intercept the project's egress */
+  egressFetch?: Fetch;
+}) {
+  const { slugPrefix, egressFetch } = params;
+  const project = await createTestProject({ slugPrefix });
+  const tunnel = egressFetch
+    ? await createProjectEgressInterceptTunnel({ project: project.project, fetch: egressFetch })
+    : null;
   const fixture = project;
   type ExecuteScriptParams = Parameters<
     Awaited<ReturnType<typeof createTestProject>>["client"]["project"]["codemode"]["executeScript"]
   >[0];
 
-  const startCodemodeScript = async <T>(
-    fn: (ctx: {}) => Promise<T>,
+  const startCodemodeScript = async <T, U>(
+    fn: (ctx: T) => Promise<U>,
     opts?: Partial<Omit<ExecuteScriptParams, "code">>,
   ) => {
-    let code = fn.toString();
-    if (!code.startsWith("async")) {
-      code = `async ${code}`;
-    }
+    const script = stringifyCodemodeScript(fn);
     const started = await project.client.project.codemode.executeScript({
-      code,
+      ...script,
       projectSlugOrId: project.project.id,
       providers: [],
       ...opts,
@@ -41,11 +41,13 @@ export async function createFixture(params: Parameters<typeof createTestProject>
 
     return {
       ...started,
-      $type: {} as T,
+      $type: {} as U,
     };
   };
 
-  const executeCodemodeScript = async <T>(...args: Parameters<typeof startCodemodeScript<T>>) => {
+  const executeCodemodeScript = async <T, U>(
+    ...args: Parameters<typeof startCodemodeScript<T, U>>
+  ) => {
     const started = await startCodemodeScript(...args);
     const startedPayload = started.event.payload as { scriptExecutionId: string };
     const isCompletedScriptExecution = (
@@ -89,14 +91,30 @@ export async function createFixture(params: Parameters<typeof createTestProject>
       },
     };
   };
+
   return {
     ...project,
+    stringifyCodemodeScript,
     startCodemodeScript,
     executeCodemodeScript,
+    async [Symbol.asyncDispose]() {
+      tunnel?.[Symbol.dispose]();
+    },
   };
 }
 
-export async function createTestProject(opts: { slugPrefix: string }): Promise<TestProjectHandle> {
+export const stringifyCodemodeScript = <T, U>(fn: (ctx: T) => Promise<U>) => {
+  let code = fn.toString();
+  if (!code.startsWith("async")) {
+    code = `async ${code}`;
+  }
+  return {
+    code,
+    $type: {} as U,
+  };
+};
+
+export async function createTestProject(opts: { slugPrefix: string }) {
   const baseUrl = requireBaseUrl();
   const client = createAdminOsClient(baseUrl);
   const slugPrefix = opts.slugPrefix;
@@ -111,7 +129,7 @@ export async function createTestProject(opts: { slugPrefix: string }): Promise<T
     get project() {
       return project;
     },
-    async updateConfig(input) {
+    async updateConfig(input: { customHostname?: string | null }) {
       project = await client.projects.updateConfig({
         id: project.id,
         customHostname: input.customHostname,
@@ -124,4 +142,16 @@ export async function createTestProject(opts: { slugPrefix: string }): Promise<T
       await client.projects.remove({ id: project.id }).catch(() => undefined);
     },
   };
+}
+
+/** creates a captun tunnel to the project's worker to capture its egress */
+export async function createProjectEgressInterceptTunnel(input: {
+  project: Project & { ingressUrl: string };
+  fetch: Fetch;
+}) {
+  return createCaptunTunnel({
+    url: `${input.project.ingressUrl}/__iterate/intercept-project-egress`,
+    headers: { Authorization: `Bearer ${requireAdminBearerToken()}` },
+    fetch: input.fetch,
+  });
 }

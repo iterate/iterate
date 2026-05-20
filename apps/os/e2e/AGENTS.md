@@ -34,4 +34,4 @@ Prefer committed HAR fixtures under `e2e/vitest/__snapshots__/` for deterministi
 tests. Use per-test artifact paths for smoke tests that only prove the fixture wiring.
 
 OS does not install a global app-level egress proxy. Mocked-internet tests that need real OS traffic
-should use `useProjectEgressInterceptTunnel` from `test-support/project-egress-intercept-tunnel.ts`.
+should use `createProjectEgressInterceptTunnel` from `test-support/project-egress-intercept-tunnel.ts`.

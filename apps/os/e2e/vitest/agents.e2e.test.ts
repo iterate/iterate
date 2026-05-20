@@ -15,6 +15,8 @@ import { osContract } from "@iterate-com/os-contract";
 import { STREAM_SUBSCRIPTION_CONFIGURED_TYPE } from "@iterate-com/shared/streams/core-event-types";
 import type { Event } from "@iterate-com/shared/streams/types";
 import { DEFAULT_WORKERS_AI_AGENT_MODEL } from "@iterate-com/shared/stream-processors/agent/contract";
+import dedent from "dedent";
+import { createTestProjectFixture } from "../test-support/create-test-project.ts";
 import type { appRouter } from "~/orpc/root.ts";
 
 type OrpcClient = RouterClient<typeof appRouter>;
@@ -39,18 +41,13 @@ type SlackConversationsListResponse =
 const createdProjectIds: string[] = [];
 const itIfSlackBotToken = process.env.APP_CONFIG_SLACK_BOT_TOKEN?.trim() ? it : it.skip;
 
-afterEach(async () => {
-  const client = createClient(requireBaseUrl());
-  for (const id of createdProjectIds.splice(0)) {
-    await client.projects.remove({ id }).catch(() => undefined);
-  }
-});
-
 describe("project agents codemode", () => {
   it("can configure Cloudflare AI Gateway as the provider for an agent path prefix", async () => {
-    const baseUrl = requireBaseUrl();
-    const client = createClient(baseUrl);
-    const project = await createProject(client, "agent-cloudflare-preset");
+    // const baseUrl = requireBaseUrl();
+    // const client = createClient(baseUrl);
+    // const project = await createProject(client, "agent-cloudflare-preset");
+    await using fixture = await createTestProjectFixture({ slugPrefix: "agent-cloudflare-preset" });
+    const { client, project } = fixture;
     const suffix = uniqueSuffix();
     const basePath = `/agents/cloudflare-preset-${suffix}`;
     const agentPath = `${basePath}/child`;
@@ -67,9 +64,11 @@ describe("project agents codemode", () => {
         "For every user message, reply with exactly one fenced JavaScript code block and no surrounding prose.",
         "The block must evaluate to an async function.",
         "Use this exact code body:",
-        `async (ctx) => {
-  await ctx.chat.sendMessage({ message: ${JSON.stringify(assistantMessage)} });
-}`,
+        dedent`
+          async (ctx) => {
+            await ctx.chat.sendMessage({ message: ${JSON.stringify(assistantMessage)} });
+          }
+        `,
       ].join("\n"),
     });
 
