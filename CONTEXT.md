@@ -81,6 +81,26 @@ _Avoid_: Slack secret, Slack app config
 A durable callable registration that asks the Stream Runtime to invoke a processor runner after matching stream events append.
 _Avoid_: WebSocket subscription, callback URL
 
+**Event Delivery Latency**:
+The time from a stream event being committed to an interested subscriber observing that event.
+_Avoid_: low latency, ack latency, processor latency
+
+**Interested Subscriber**:
+A stream peer that wants to observe committed events from a stream, possibly all events or a server-filtered subset.
+_Avoid_: filtered subscriber, processor-only subscriber
+
+**Stream Peer**:
+One endpoint of the stream wire protocol, regardless of whether it accepted or initiated the WebSocket connection.
+_Avoid_: client, server, WebSocket server
+
+**Stream Correctness Test**:
+A test that drives appends and stream processors, then asserts the final committed stream facts.
+_Avoid_: socket test, benchmark, delivery smoke test
+
+**Subscriber Cursor**:
+The latest stream offset that a durable subscriber has durably claimed to have processed.
+_Avoid_: client offset, last seen event, WebSocket cursor
+
 **App Config**:
 Typed runtime configuration serialized into the deployed app and readable by running app code.
 _Avoid_: runtime config, deployment config
@@ -122,6 +142,11 @@ _Avoid_: app config, runtime config
 - Google Connections are project-level in the current OS secrets slice.
 - Navigating to or reading a project stream may initialize that stream; a separate create command is not required for ordinary stream discovery.
 - A **Processor Subscription** delivers events through Durable Object RPC callables, not WebSockets.
+- For high-throughput stream benchmarks, **Event Delivery Latency** is the primary latency surface; append acknowledgements and processor follow-up appends are separate supporting latency surfaces.
+- An **Interested Subscriber** may subscribe to every stream event; server-side filtering is an optimization and future protocol capability, not a first-version requirement.
+- The stream wire protocol should describe interactions between **Stream Peers**, not assume the Durable Object is always the WebSocket server.
+- A **Stream Correctness Test** should prove behavior by inspecting committed stream facts after appends and processor work complete.
+- A **Subscriber Cursor** belongs to a durable subscriber identity, not to an anonymous browser/prototyping WebSocket.
 - **App Config** is available inside deployed app code.
 - **Deployment Config** is available to Alchemy deployment code only.
 - Cloudflare API credentials and cross-script binding script names belong in **Deployment Config**, not **App Config**.
@@ -143,6 +168,15 @@ _Avoid_: app config, runtime config
 > **Dev:** "Should a Worker script name used for a cross-script Durable Object binding live in App Config?"
 > **Domain expert:** "No — that is **Deployment Config**, because only Alchemy needs it to create the binding."
 
+> **Dev:** "When we say the stream protocol needs the lowest possible latency, do we mean the append ack?"
+> **Domain expert:** "Primarily no — we mean **Event Delivery Latency**, while append ack latency is a separate control-plane concern."
+
+> **Dev:** "Is a subscriber always filtered to the events it consumes?"
+> **Domain expert:** "No — an **Interested Subscriber** can ask for everything; filtering is an optimization."
+
+> **Dev:** "How do we prove the stream worked under processor activity?"
+> **Domain expert:** "Run a **Stream Correctness Test**: append inputs, let processors run, then assert the committed stream facts, including any **Subscriber Cursor** facts."
+
 ## Flagged ambiguities
 
 - "host", "runtime", "adapter", and "runner" were all used for the component that runs processors against streams — resolved: use **StreamProcessorRunner**.
@@ -154,6 +188,11 @@ _Avoid_: app config, runtime config
 - Durable stream implementation was treated as Events app-owned — resolved: move shared stream implementation and core types into **Stream Runtime**.
 - OS stream access was coupled to the Events contract — resolved: expose an **OS Streams API** that wraps the shared Stream Runtime directly.
 - Processor subscriptions were described as WebSocket callbacks — resolved: use **Processor Subscription** callables that invoke Durable Object RPC methods.
+- "low latency" was too broad for stream benchmark goals — resolved: use **Event Delivery Latency** for the primary target, with append ack and processor reaction latency tracked separately.
+- "subscriber" was initially drifting toward filtered processor subscriptions — resolved: use **Interested Subscriber** for any peer observing committed stream events, including peers that want the whole stream.
+- "client/server" was too tied to connection direction — resolved: use **Stream Peer** for wire-protocol participants when the same protocol can run with the Durable Object accepting or initiating the WebSocket.
+- "correctness test" was vague between transport tests and state tests — resolved: use **Stream Correctness Test** for tests that assert final committed stream facts after processors run.
+- "offset" for subscribers was ambiguous between an ephemeral socket observation and durable progress — resolved: use **Subscriber Cursor** for durable subscriber progress.
 - "app config" mixed runtime-readable values with deployment-only values — resolved: use **App Config** for app-readable runtime configuration and **Deployment Config** for Alchemy-only deployment inputs.
 - "stream API" and "streams API" were both used for OS's project stream surface — resolved: use **OS Streams API** and **StreamsCapability** because callers can operate over a project-scoped set of streams, not only one stream.
 - "getSecret" was used both as a raw credential read and as a placeholder for later egress substitution — resolved for the current OS secrets/codemode slice: `getSecret` is a raw **Secret Material** read through **SecretsCapability**.

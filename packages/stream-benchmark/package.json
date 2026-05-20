@@ -4,13 +4,28 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "benchmark:websocket": "node scripts/benchmark-websocket.ts",
+    "benchmark:websocket": "pnpm exec tsx findings/harness/websocket-external-cli.ts",
+    "benchmark:chaos": "pnpm exec tsx findings/harness/chaos-monkey.ts",
+    "benchmark:chaos-load": "bash findings/harness/run-chaos-with-benchmark.sh",
+    "benchmark:comparison": "bash findings/harness/run-comparison.sh",
+    "benchmark:load": "bash scripts/run-benchmark-load.sh",
+    "benchmark:max": "node scripts/benchmark-max-throughput.ts",
+    "query-peak-rate": "bash scripts/query-peak-append-rate.sh",
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
+    "query-metrics": "bash scripts/query-metrics.sh",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "catalog:cloudflare",
+    "partysocket": "^1.1.6",
     "sqlfu": "0.0.3-14",
+    "vitest": "^4.1.6",
     "wrangler": "catalog:cloudflare"
+  },
+  "dependencies": {
+    "@iterate-com/shared": "workspace:*",
+    "zod": "^4.3.6"
   }
 }

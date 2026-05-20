@@ -6,6 +6,9 @@ Some coding rules
 - use comments to explain context / why somethign is how it is. don't be afraid to give examples and DO link to first party docs
 - always cross reference against official cloudflare docs
 - things you only need once can and should be inline. e.g. don't create a massive typescript interface for something you only use once mate. just inline it.
+- most functions/methods should have a single `(args: { ... })` argument object. don't deconstruct it inside the function header
+
+- DON'T use crazy string constants like SUBSCRIPTION_CONFIGURED_TYPE = "subscription-configured". Use the actual string - the type system makes it safe
 
 ## sqlfu
 
@@ -17,8 +20,3 @@ cd packages/stream-benchmark/src/stream/v0
 pnpm exec sqlfu generate
 pnpm exec sqlfu check migrations-match-definitions
 ```
-
-For schema changes: edit `db/definitions.sql`, run `pnpm exec sqlfu draft`,
-review the generated migration, then run `pnpm exec sqlfu generate`. Runtime
-code should import generated queries from `db/queries/.generated/` and import
-`migrate` from `db/migrations/.generated/migrations.ts`.

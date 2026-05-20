@@ -1,9 +1,14 @@
 import { DurableObject } from "cloudflare:workers";
-import { killDurableObject } from "../../durable-object-kill.js";
+import type { StreamEventInput as SharedStreamEventInput } from "@iterate-com/shared/stream-processors";
 import { createDurableObjectClient, type SyncClient } from "sqlfu";
+import { killDurableObject } from "../../durable-object-kill.js";
 import { migrate } from "./db/migrations/.generated/migrations.js";
 import * as sqlfu from "./db/queries/.generated/queries.js";
+import { SubscriptionProcessorContract } from "./processors/subscriptions/contract.js";
+import { createSubscriptionProcessor } from "./processors/subscriptions/implementation.js";
 import type {
+  ProcessorPushFrame,
+  ProcessorReplyFrame,
   StreamCursor,
   StreamEvent,
   StreamEventInput,
@@ -12,9 +17,13 @@ import type {
   StreamSocketServerFrame,
 } from "./types.js";
 
-export class Stream extends DurableObject<Env> {
+export class StreamV1 extends DurableObject<Env> {
   private readonly sql: SyncClient;
   private readonly connectionSourceByWebSocket = new WeakMap<WebSocket, StreamEventSource>();
+  private readonly subscriptionProcessor: ReturnType<typeof createSubscriptionProcessor>;
+  private subscriptionState = SubscriptionProcessorContract.stateSchema.parse(
+    SubscriptionProcessorContract.initialState,
+  );
 
   /**
    * The Worker routes the whole URL path to the Durable Object name:
@@ -34,15 +43,13 @@ export class Stream extends DurableObject<Env> {
     if (name === undefined) {
       throw new Error("Stream Durable Object must be addressed by name.");
     }
-    if (!name.startsWith("/")) {
-      throw new Error(`Stream path must start with "/": ${name}`);
-    }
     return name as StreamPath;
   }
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.sql = createDurableObjectClient(ctx.storage);
+    this.subscriptionProcessor = createSubscriptionProcessor();
 
     /**
      * WebSocket hibernation is the first-class Durable Object pattern for
@@ -56,16 +63,55 @@ export class Stream extends DurableObject<Env> {
     this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
 
     migrate(this.sql);
+    this.subscriptionState = {
+      subscribersByKey: Object.fromEntries(
+        sqlfu.listSubscribers(this.sql).map((subscriber) => [
+          subscriber.key,
+          {
+            key: subscriber.key,
+            processorSlug: subscriber.processor_slug,
+            lastSentOffset: subscriber.last_sent_offset,
+          },
+        ]),
+      ),
+    };
   }
 
-  append({ event }: { event: StreamEventInput }): StreamEvent {
-    const result = this.commit({ event });
-    if (result.committed) this.broadcast(result.event);
-    return result.event;
+  async append(args: { event: StreamEventInput }): Promise<StreamEvent> {
+    await this.subscriptionProcessor.implementation.beforeAppend?.({
+      event: args.event as SharedStreamEventInput,
+      state: this.subscriptionState,
+    });
+
+    if (args.event.idempotencyKey !== undefined) {
+      const existing = sqlfu.findEventByIdempotencyKey(this.sql, {
+        idempotencyKey: args.event.idempotencyKey,
+      });
+      if (existing != null) {
+        return rowToEvent({ streamPath: this.path, row: existing });
+      }
+    }
+
+    const nextOffset = (sqlfu.countEvents(this.sql)?.count ?? 0) + 1;
+    if (args.event.offset !== undefined) {
+      if (args.event.offset !== nextOffset) {
+        throw new Error(
+          `Offset precondition failed: expected ${nextOffset}, got ${args.event.offset}`,
+        );
+      }
+    }
+
+    const committedEvent = this.commitAppend({ event: args.event, offset: nextOffset });
+    await this.afterAppend({ event: committedEvent });
+    return committedEvent;
   }
 
-  appendBatch({ events }: { events: StreamEventInput[] }): StreamEvent[] {
-    return events.map((event) => this.append({ event }));
+  async appendBatch(args: { events: StreamEventInput[] }): Promise<StreamEvent[]> {
+    const committedEvents: StreamEvent[] = [];
+    for (const event of args.events) {
+      committedEvents.push(await this.append({ event }));
+    }
+    return committedEvents;
   }
 
   /** Forcibly reset this instance (`ctx.abort`). RPC rejects; object restarts on next request. */
@@ -77,7 +123,7 @@ export class Stream extends DurableObject<Env> {
     return readEventRows({
       client: this.sql,
       after: args?.after,
-      before: args?.before,
+      before: args?.before ?? "end",
     }).map((row) => rowToEvent({ streamPath: this.path, row }));
   }
 
@@ -86,7 +132,7 @@ export class Stream extends DurableObject<Env> {
     const rows = readEventRows({
       client: this.sql,
       after: args?.after,
-      before: args?.before,
+      before: args?.before ?? "end",
     });
     const path = this.path;
     let index = 0;
@@ -174,7 +220,8 @@ export class Stream extends DurableObject<Env> {
       const after = parseCursor({
         value: url.searchParams.get("after") ?? url.searchParams.get("start"),
       });
-      const before = parseCursor({ value: url.searchParams.get("before") });
+      const beforeParam = url.searchParams.get("before");
+      const before = beforeParam == null ? "end" : parseCursor({ value: beforeParam });
       return Response.json(this.read({ after, before }));
     }
 
@@ -234,8 +281,30 @@ export class Stream extends DurableObject<Env> {
           throw new Error("events must be objects with a string type.");
         }
 
-        const result = this.commit({ event, source });
-        if (result.committed) this.broadcast(result.event);
+        const eventInput = event as StreamEventInput;
+        const eventSource: StreamEventSource = {
+          ...eventInput.source,
+          tracing: {
+            ...eventInput.source?.tracing,
+            ...source.tracing,
+          },
+        };
+        if (
+          eventSource.tracing &&
+          eventSource.tracing.cfRayId === undefined &&
+          eventSource.tracing.cfRequestId === undefined
+        ) {
+          delete eventSource.tracing;
+        }
+
+        await this.append({
+          event: {
+            ...eventInput,
+            ...(eventSource.processor !== undefined || eventSource.tracing !== undefined
+              ? { source: eventSource }
+              : {}),
+          },
+        });
       }
     } catch (error) {
       this.sendFrame({
@@ -259,64 +328,50 @@ export class Stream extends DurableObject<Env> {
     ws.close(code, reason);
   }
 
-  private commit({
-    event,
-    source: commitSource,
-  }: {
-    event: StreamEventInput;
-    source?: StreamEventSource;
-  }) {
-    if (event.idempotencyKey) {
-      const existing = sqlfu.findEventByIdempotencyKey(this.sql, {
-        idempotencyKey: event.idempotencyKey,
-      });
-      if (existing != null) {
-        return {
-          event: rowToEvent({ streamPath: this.path, row: existing }),
-          committed: false,
-        };
-      }
-    }
-
-    if (event.offset !== undefined) {
-      const nextOffset = (sqlfu.countEvents(this.sql)?.c ?? 0) + 1;
-      if (event.offset !== nextOffset) {
-        throw new Error(`Offset precondition failed: expected ${nextOffset}, got ${event.offset}`);
-      }
-    }
-
-    const source: StreamEventSource = {
-      ...event.source,
-      tracing: {
-        ...event.source?.tracing,
-        ...commitSource?.tracing,
-      },
+  private commitAppend(args: { event: StreamEventInput; offset: number }): StreamEvent {
+    const createdAt = new Date().toISOString();
+    const committedEvent: StreamEvent = {
+      streamPath: this.path,
+      offset: args.offset,
+      createdAt,
+      type: args.event.type,
+      ...(args.event.payload === undefined ? {} : { payload: args.event.payload }),
+      ...(args.event.metadata === undefined ? {} : { metadata: args.event.metadata }),
+      ...(args.event.source === undefined ? {} : { source: args.event.source }),
+      ...(args.event.idempotencyKey === undefined
+        ? {}
+        : { idempotencyKey: args.event.idempotencyKey }),
     };
-    if (
-      source.tracing &&
-      source.tracing.cfRayId === undefined &&
-      source.tracing.cfRequestId === undefined
-    ) {
-      delete source.tracing;
-    }
-
     const row = sqlfu.appendEvent(this.sql, {
-      type: event.type,
-      payload: event.payload !== undefined ? JSON.stringify(event.payload) : null,
-      metadata: event.metadata ? JSON.stringify(event.metadata) : null,
-      source:
-        source.processor !== undefined || source.tracing !== undefined
-          ? JSON.stringify(source)
-          : null,
-      idempotencyKey: event.idempotencyKey ?? null,
+      offset: committedEvent.offset,
+      type: args.event.type,
+      idempotencyKey: committedEvent.idempotencyKey ?? null,
+      createdAt,
+      rawJson: JSON.stringify(committedEvent),
     });
 
     recordAppendMetric({ env: this.env, streamPath: this.path });
 
-    return {
-      event: rowToEvent({ streamPath: this.path, row }),
-      committed: true,
-    };
+    const storedEvent = rowToEvent({ streamPath: this.path, row });
+    const nextSubscriptionState =
+      SubscriptionProcessorContract.reduce?.({
+        contract: SubscriptionProcessorContract,
+        event: storedEvent as never,
+        state: this.subscriptionState,
+      }) ?? this.subscriptionState;
+
+    if (nextSubscriptionState !== this.subscriptionState) {
+      this.subscriptionState = nextSubscriptionState;
+      for (const subscriber of Object.values(this.subscriptionState.subscribersByKey)) {
+        sqlfu.upsertSubscriber(this.sql, {
+          key: subscriber.key,
+          processorSlug: subscriber.processorSlug,
+          lastSentOffset: subscriber.lastSentOffset,
+        });
+      }
+    }
+
+    return storedEvent;
   }
 
   private broadcast(event: StreamEvent): void {
@@ -341,25 +396,98 @@ export class Stream extends DurableObject<Env> {
     }
   }
 
-  private sendEvent({
-    ws,
-    event,
-    attachment,
-  }: {
+  private sendEvent(args: {
     ws: WebSocket;
     event: StreamEvent;
     attachment: StreamSocketAttachment;
   }): void {
     try {
-      this.sendFrame({ ws, frame: { type: "event", event } });
-      ws.serializeAttachment({ ...attachment, lastSentOffset: event.offset });
+      this.sendFrame({ ws: args.ws, frame: { type: "event", event: args.event } });
+      args.ws.serializeAttachment({ ...args.attachment, lastSentOffset: args.event.offset });
     } catch {
-      ws.close(1011, "Failed to send stream event.");
+      args.ws.close(1011, "Failed to send stream event.");
     }
   }
 
-  private sendFrame({ ws, frame }: { ws: WebSocket; frame: StreamSocketServerFrame }): void {
-    ws.send(JSON.stringify(frame));
+  private sendFrame(args: { ws: WebSocket; frame: StreamSocketServerFrame }): void {
+    args.ws.send(JSON.stringify(args.frame));
+  }
+
+  private async afterAppend(args: { event: StreamEvent }) {
+    this.broadcast(args.event);
+
+    if (args.event.type === "subscription-configured") {
+      const payload = SubscriptionProcessorContract.events[
+        "events.iterate.com/stream/processor-subscribed"
+      ].payloadSchema.parse(args.event.payload);
+      const subscriber = this.subscriptionState.subscribersByKey[payload.key];
+      if (subscriber == null) return;
+
+      let lastSentOffset = subscriber.lastSentOffset;
+      for (const event of readEventRows({
+        client: this.sql,
+        after: lastSentOffset,
+        before: "end",
+      }).map((row) => rowToEvent({ streamPath: this.path, row }))) {
+        await this.deliverEventToSubscriber({
+          event,
+          subscriber: { ...subscriber, lastSentOffset },
+        });
+        lastSentOffset = event.offset;
+      }
+      return;
+    }
+
+    for (const subscriber of Object.values(this.subscriptionState.subscribersByKey)) {
+      if (subscriber.lastSentOffset >= args.event.offset) continue;
+      await this.deliverEventToSubscriber({ event: args.event, subscriber });
+    }
+  }
+
+  private async deliverEventToSubscriber(args: {
+    event: StreamEvent;
+    subscriber: ReturnType<
+      typeof SubscriptionProcessorContract.stateSchema.parse
+    >["subscribersByKey"][string];
+  }) {
+    const socket = await getSubscriberSocket({
+      env: this.env,
+      streamPath: this.path,
+      subscriber: args.subscriber,
+      onReply: async (frame) => {
+        if (frame.op === "cursor") {
+          this.updateSubscriberCursor({
+            key: args.subscriber.key,
+            offset: frame.offset,
+          });
+          return;
+        }
+
+        await this.append({ event: frame.event });
+      },
+    });
+
+    if (args.event.offset <= args.subscriber.lastSentOffset) return;
+
+    sendProcessorFrame({
+      socket,
+      frame: { type: "event", event: args.event },
+    });
+
+    this.updateSubscriberCursor({
+      key: args.subscriber.key,
+      offset: args.event.offset,
+    });
+    args.subscriber.lastSentOffset = args.event.offset;
+  }
+
+  private updateSubscriberCursor(args: { key: string; offset: number }) {
+    sqlfu.updateSubscriberCursor(this.sql, { lastSentOffset: args.offset }, { key: args.key });
+
+    const subscriber = this.subscriptionState.subscribersByKey[args.key];
+    if (subscriber != null) {
+      subscriber.lastSentOffset = args.offset;
+    }
   }
 }
 
@@ -386,14 +514,13 @@ function rowToEvent(args: {
   streamPath: StreamPath;
   row: sqlfu.readEventsRange.Result;
 }): StreamEvent {
+  const event = JSON.parse(args.row.raw_json) as StreamEvent;
   return {
+    ...event,
     streamPath: args.streamPath,
     offset: args.row.offset,
-    createdAt: args.row.created_at,
     type: args.row.type,
-    payload: args.row.payload ? JSON.parse(args.row.payload) : undefined,
-    metadata: args.row.metadata ? JSON.parse(args.row.metadata) : undefined,
-    source: args.row.source ? JSON.parse(args.row.source) : undefined,
+    createdAt: args.row.created_at,
     idempotencyKey: args.row.idempotency_key ?? undefined,
   };
 }
@@ -439,13 +566,133 @@ function recordAppendMetric(args: { env: Env; streamPath: StreamPath }) {
     doubles: [],
   });
 
-  // Workers Observability Query Builder graphs invocation logs (not AE datasets).
-  // https://developers.cloudflare.com/workers/observability/query-builder/
   console.log(
     JSON.stringify({
       metric: "stream.append",
       streamPath: args.streamPath,
       env: args.env.ENV_NAME,
+      version: "v1",
     }),
   );
+}
+
+const subscriberSockets = new Map<string, WebSocket>();
+const subscriberConnectPromises = new Map<string, Promise<WebSocket>>();
+
+async function getSubscriberSocket(args: {
+  env: Env;
+  onReply(args: ProcessorReplyFrame): Promise<void>;
+  streamPath: StreamPath;
+  subscriber: ReturnType<
+    typeof SubscriptionProcessorContract.stateSchema.parse
+  >["subscribersByKey"][string];
+}): Promise<WebSocket> {
+  const key = subscriberSocketKey({ key: args.subscriber.key, streamPath: args.streamPath });
+  const cached = subscriberSockets.get(key);
+  if (cached != null && cached.readyState === WebSocket.OPEN) {
+    return cached;
+  }
+
+  const inFlight = subscriberConnectPromises.get(key);
+  if (inFlight != null) return inFlight;
+
+  const connectPromise = connectSubscriberSocket(args);
+  subscriberConnectPromises.set(key, connectPromise);
+
+  try {
+    const socket = await connectPromise;
+    subscriberSockets.set(key, socket);
+    return socket;
+  } finally {
+    if (subscriberConnectPromises.get(key) === connectPromise) {
+      subscriberConnectPromises.delete(key);
+    }
+  }
+}
+
+async function connectSubscriberSocket(args: {
+  env: Env;
+  onReply(args: ProcessorReplyFrame): Promise<void>;
+  streamPath: StreamPath;
+  subscriber: ReturnType<
+    typeof SubscriptionProcessorContract.stateSchema.parse
+  >["subscribersByKey"][string];
+}): Promise<WebSocket> {
+  const key = subscriberSocketKey({ key: args.subscriber.key, streamPath: args.streamPath });
+  const stub = args.env.STREAM_PROCESSOR.getByName(
+    `${args.streamPath}:${args.subscriber.processorSlug}`,
+  );
+  const response = await stub.fetch(
+    new Request("https://stream-processor.internal/", {
+      headers: { Upgrade: "websocket" },
+    }),
+  );
+
+  const socket = response.webSocket;
+  if (socket == null) {
+    throw new Error(`Processor "${args.subscriber.processorSlug}" did not return a WebSocket.`);
+  }
+
+  // Client-side accept for cross-DO WebSocket fetch:
+  // https://developers.cloudflare.com/durable-objects/best-practices/websockets/#connect-to-a-websocket-server-from-a-durable-object
+  socket.accept();
+
+  socket.addEventListener("message", (event) => {
+    void handleSubscriberSocketMessage({
+      event,
+      onReply: args.onReply,
+      socketKey: key,
+    });
+  });
+  socket.addEventListener("close", () => {
+    subscriberSockets.delete(key);
+  });
+  socket.addEventListener("error", () => {
+    subscriberSockets.delete(key);
+  });
+
+  sendProcessorFrame({
+    socket,
+    frame: {
+      type: "ready",
+      streamPath: args.streamPath,
+      after: args.subscriber.lastSentOffset,
+      subscriberKey: args.subscriber.key,
+    },
+  });
+
+  return socket;
+}
+
+async function handleSubscriberSocketMessage(args: {
+  event: MessageEvent;
+  onReply(args: ProcessorReplyFrame): Promise<void>;
+  socketKey: string;
+}) {
+  const raw =
+    typeof args.event.data === "string"
+      ? args.event.data
+      : new TextDecoder().decode(args.event.data);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    console.error("[stream-v1] processor sent invalid JSON", { socketKey: args.socketKey });
+    return;
+  }
+
+  const frame = parsed as ProcessorReplyFrame & { type?: string };
+  if (frame.type === "error") return;
+
+  if (frame.op === "append" || frame.op === "cursor") {
+    await args.onReply(frame);
+  }
+}
+
+function sendProcessorFrame(args: { socket: WebSocket; frame: ProcessorPushFrame }) {
+  args.socket.send(JSON.stringify(args.frame));
+}
+
+function subscriberSocketKey(args: { key: string; streamPath: StreamPath }) {
+  return `${args.streamPath}:${args.key}`;
 }

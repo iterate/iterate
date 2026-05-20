@@ -2,8 +2,18 @@
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "stream-benchmark",
   "main": "src/worker.ts",
-  "compatibility_date": "2026-05-20",
+  "compatibility_date": "2026-05-01",
   "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "ENV_NAME": "prod",
+    "CF_ACCOUNT_ID": "376ef7ed81b0573f93524de763666c15"
+  },
+  "analytics_engine_datasets": [
+    {
+      "binding": "METRICS",
+      "dataset": "stream_metrics"
+    }
+  ],
   "upload_source_maps": true,
   "observability": {
     "enabled": true,
@@ -25,6 +35,18 @@
       {
         "name": "STREAM",
         "class_name": "Stream"
+      },
+      {
+        "name": "STREAM_V1",
+        "class_name": "StreamV1"
+      },
+      {
+        "name": "STREAM_PROCESSOR",
+        "class_name": "StreamProcessor"
+      },
+      {
+        "name": "BENCHMARK_DRIVER",
+        "class_name": "BenchmarkDriver"
       }
     ]
   },
@@ -32,6 +54,14 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["Stream"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["BenchmarkDriver"]
+    },
+    {
+      "tag": "v3",
+      "new_sqlite_classes": ["StreamV1", "StreamProcessor"]
     }
   ]
 }

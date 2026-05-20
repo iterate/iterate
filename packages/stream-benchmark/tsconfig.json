@@ -9,8 +9,8 @@
     "noEmit": true,
     "allowImportingTsExtensions": true,
     "moduleResolution": "bundler",
-    "types": ["node"],
+    "types": ["node", "@cloudflare/workers-types"],
     "skipLibCheck": true
   },
-  "include": ["src/**/*.ts", "scripts/**/*.ts", "worker-configuration.d.ts"]
+  "include": ["src/**/*.ts", "findings/**/*.ts", "worker-configuration.d.ts"]
 }

@@ -83,6 +83,12 @@ require a broad client or processor to do one request/response round trip per
 event, especially not a round trip that might cross a continent. That would
 create a backlog faster than it can be cleared.
 
+The primary latency target is event delivery latency: the time from an event
+being committed by the Durable Object to an interested subscriber observing that
+event. Append acknowledgement latency and processor follow-up append latency are
+separate supporting latency surfaces; they matter, but they should not redefine
+the main benchmark target.
+
 The default event delivery path should therefore be server-push:
 
 ```text
@@ -95,6 +101,16 @@ It is acceptable, and probably central to the design, that most processors only
 react to a small subset of events. A processor should be able to cheaply ignore
 the majority of stream traffic while preserving enough offset knowledge to catch
 up, detect gaps, and make append decisions.
+
+That said, the first protocol should not depend on server-side filtering. An
+interested subscriber may ask for every event. Coarse server-side filters can be
+added later for throughput and fanout efficiency, but they are an optimization,
+not the core semantics.
+
+The first implementation has the Durable Object accept WebSocket connections.
+The wire protocol should still be described in terms of stream peers rather than
+hard-coded client/server semantics, because a future streamer may initiate an
+outbound WebSocket connection to another peer while speaking the same protocol.
 
 This creates a split between two different jobs:
 
@@ -159,3 +175,72 @@ Implications for this Stream DO:
 - **Benchmark harness** must not measure CPU-bound phases with `Date.now()`/`performance.now()` in production; measure at the client, or time I/O-bound operations only.
 
 #
+
+For v1 (subscribers + StreamProcessor DO), run the same from `src/stream/v1`.
+
+For schema changes: edit `db/definitions.sql`, run `pnpm exec sqlfu draft`,
+review the generated migration, then run `pnpm exec sqlfu generate`. Runtime
+code should import generated queries from `db/queries/.generated/` and import
+`migrate` from `db/migrations/.generated/migrations.ts`.
+
+## Findings log
+
+Append-only benchmark results and reproducible harness: [`findings/findings.md`](findings/findings.md), code in [`findings/harness/`](findings/harness/).
+
+```bash
+pnpm benchmark:comparison https://stream-benchmark.<host>.workers.dev 10000
+```
+
+## Metrics (Workers Analytics Engine)
+
+Each committed append writes one row to dataset `stream_metrics` (`METRICS`
+binding). Query with `pnpm query-metrics` (needs `CF_ACCOUNT_ID` +
+`CF_API_TOKEN` with Account Analytics Read).
+
+- **Chart UI:** `GET /metrics` on the deployed worker (set `CF_API_TOKEN` secret).
+- **Cloudflare dashboard:** Workers & Pages → stream-benchmark → Observability.
+  Filter logs where message contains `stream.append`, Count visualization, group
+  by fields in the JSON payload (after running `pnpm benchmark:load`).
+
+```bash
+pnpm deploy
+pnpm benchmark:load https://stream-benchmark.<subdomain>.workers.dev
+# wait ~30s, then:
+pnpm query-metrics
+open https://stream-benchmark.<subdomain>.workers.dev/metrics
+```
+
+## Compare WebSocket vs in-Worker RPC
+
+External client (measures append + WS echo latency):
+
+```bash
+node scripts/benchmark-websocket.ts https://stream-benchmark.<host>/my-stream?after=end --messages 10000
+```
+
+In-Worker RPC (no external RTT; serial RPC is slow — prefer batching):
+
+```bash
+curl "https://stream-benchmark.<host>/benchmark/rpc?messages=10000&batch=1&path=/bench-rpc-serial"
+curl "https://stream-benchmark.<host>/benchmark/rpc?messages=10000&batch=100&path=/bench-rpc-batch"
+```
+
+## v1 subscriber proof (ping → pong via StreamProcessor DO)
+
+In-Worker end-to-end check: append `subscription-configured`, append `ping`, poll until `pong`.
+
+```bash
+curl "http://localhost:8787/benchmark/v1-subscriber"
+# or deployed:
+curl "https://stream-benchmark.<host>/benchmark/v1-subscriber"
+```
+
+## Chaos (kill Durable Objects)
+
+`kill()` RPC uses `ctx.abort` — see [DO state abort](https://developers.cloudflare.com/durable-objects/api/state/#abort).
+
+```bash
+pnpm benchmark:chaos https://stream-benchmark.<host>.workers.dev \
+  --kill-once --binding stream --path /my-stream
+bash findings/harness/run-chaos-with-benchmark.sh https://stream-benchmark.<host>.workers.dev 5000
+```
