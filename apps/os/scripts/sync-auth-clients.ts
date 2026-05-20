@@ -46,6 +46,13 @@ const authBaseUrl =
   process.env.VITE_AUTH_APP_ORIGIN?.trim() ||
   new URL(authIssuer).origin;
 const serviceToken = process.env.SERVICE_AUTH_TOKEN?.trim();
+const targetFilter = new Set(
+  (process.env.AUTH_CLIENT_SYNC_TARGETS ?? "")
+    .split(",")
+    .map((target) => target.trim())
+    .filter(Boolean),
+);
+const rotateClientSecrets = process.env.ROTATE_AUTH_CLIENT_SECRETS === "1";
 
 if (!serviceToken) {
   throw new Error(
@@ -65,14 +72,24 @@ const authClient = createORPCClient(
 ) as AuthContractClient;
 
 for (const target of targets) {
+  if (targetFilter.size > 0 && !targetFilter.has(target.dopplerConfig)) {
+    continue;
+  }
+
   const webRedirectUri = `${target.baseUrl}/api/iterate-auth/callback`;
+  const existingWebClientId = getDopplerSecret(target, "ITERATE_OAUTH_CLIENT_ID");
+  const existingWebClientSecret = getDopplerSecret(target, "ITERATE_OAUTH_CLIENT_SECRET");
   const webClient = await authClient.internal.oauth.ensureClient({
     referenceId: `os:${target.dopplerConfig}:web`,
     clientName: `OS ${target.dopplerConfig} web`,
     redirectURIs: [webRedirectUri],
-    existingClientId: getDopplerSecret(target, "ITERATE_OAUTH_CLIENT_ID"),
+    existingClientId: existingWebClientId,
+    existingClientSecret: existingWebClientSecret,
+    rotateClientSecret: rotateClientSecrets,
   });
 
+  const existingMcpClientId = getDopplerSecret(target, "ITERATE_MCP_OAUTH_CLIENT_ID");
+  const existingMcpClientSecret = getDopplerSecret(target, "ITERATE_MCP_OAUTH_CLIENT_SECRET");
   const mcpClient = await authClient.internal.oauth.ensureClient({
     referenceId: `os:${target.dopplerConfig}:mcp`,
     clientName: `OS ${target.dopplerConfig} MCP`,
@@ -82,7 +99,9 @@ for (const target of targets) {
       "http://127.0.0.1:3334/callback",
       "http://localhost:3334/callback",
     ],
-    existingClientId: getDopplerSecret(target, "ITERATE_MCP_OAUTH_CLIENT_ID"),
+    existingClientId: existingMcpClientId,
+    existingClientSecret: existingMcpClientSecret,
+    rotateClientSecret: rotateClientSecrets,
   });
 
   setDopplerSecrets(target, {
@@ -94,6 +113,7 @@ for (const target of targets) {
     ITERATE_OAUTH_REDIRECT_URI: webRedirectUri,
     ITERATE_MCP_OAUTH_CLIENT_ID: mcpClient.clientId,
     ITERATE_MCP_OAUTH_CLIENT_SECRET: mcpClient.clientSecret,
+    ITERATE_AUTH_SERVICE_TOKEN: serviceToken,
   });
 
   console.log(`synced auth clients for ${target.dopplerConfig}`);

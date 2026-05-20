@@ -128,6 +128,8 @@ export const InternalEnsureOAuthClientInput = z.object({
   clientName: z.string().min(1),
   redirectURIs: z.array(z.url()).min(1),
   existingClientId: z.string().min(1).optional(),
+  existingClientSecret: z.string().min(1).optional(),
+  rotateClientSecret: z.boolean().optional(),
 });
 export type InternalEnsureOAuthClientInput = z.infer<typeof InternalEnsureOAuthClientInput>;
 

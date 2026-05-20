@@ -233,7 +233,16 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
         ? existingByClientId
         : existingByReferenceId;
 
-    if (existing?.clientSecret && !shouldRotateDevClient) {
+    const shouldCreateFreshClient = input.rotateClientSecret || !input.existingClientSecret;
+
+    if (existing?.clientSecret && !shouldRotateDevClient && !shouldCreateFreshClient) {
+      const existingClientSecret = input.existingClientSecret;
+      if (!existingClientSecret) {
+        throw new ORPCError("INTERNAL_SERVER_ERROR", {
+          message: "Existing OAuth client secret is required.",
+        });
+      }
+
       const existingSorted = parseStringArray(existing.redirectUrisJson).sort();
       const needsUpdate =
         existing.name !== input.clientName ||
@@ -258,9 +267,21 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
       return {
         clientId: existing.clientId,
         clientName: input.clientName,
-        clientSecret: existing.clientSecret,
+        clientSecret: existingClientSecret,
         redirectURIs: redirectURIs,
       };
+    }
+
+    if (existing?.clientSecret && !shouldRotateDevClient && shouldCreateFreshClient) {
+      await disableOAuthClientById(
+        context.db,
+        {
+          updatedAt: Date.now(),
+        },
+        {
+          id: existing.id,
+        },
+      );
     }
 
     if (
@@ -280,7 +301,14 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
       );
     }
 
-    if (shouldRotateDevClient && existingByClientId?.clientSecret) {
+    if (shouldRotateDevClient && existingByClientId?.clientSecret && !shouldCreateFreshClient) {
+      const existingClientSecret = input.existingClientSecret;
+      if (!existingClientSecret) {
+        throw new ORPCError("INTERNAL_SERVER_ERROR", {
+          message: "Existing OAuth client secret is required.",
+        });
+      }
+
       const existingSorted = parseStringArray(existingByClientId.redirectUrisJson).sort();
       const needsUpdate =
         existingByClientId.name !== input.clientName ||
@@ -306,7 +334,7 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
       return {
         clientId: existingByClientId.clientId,
         clientName: input.clientName,
-        clientSecret: existingByClientId.clientSecret,
+        clientSecret: existingClientSecret,
         redirectURIs,
       };
     }
@@ -319,6 +347,18 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
         },
         {
           id: existingByReferenceId.id,
+        },
+      );
+    }
+
+    if (existingByClientId && existingByClientId.id !== existingByReferenceId?.id) {
+      await disableOAuthClientById(
+        context.db,
+        {
+          updatedAt: Date.now(),
+        },
+        {
+          id: existingByClientId.id,
         },
       );
     }
