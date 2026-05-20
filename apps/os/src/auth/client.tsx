@@ -17,6 +17,18 @@ export function AuthClientProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const signIn = useCallback(() => {
+    void authClient.login();
+  }, []);
+
+  const signOut = useCallback(async () => {
+    await authClient.logout({
+      global: true,
+      returnTo: `${window.location.origin}/sign-in?logged_out=true`,
+    });
+    setSession({ authenticated: false });
+  }, []);
+
   useEffect(() => {
     void refresh();
   }, [refresh]);
@@ -26,16 +38,10 @@ export function AuthClientProvider({ children }: { children: ReactNode }) {
       session,
       loading,
       refresh,
-      signIn: () => void authClient.login(),
-      signOut: async () => {
-        await authClient.logout({
-          global: true,
-          returnTo: `${window.location.origin}/sign-in`,
-        });
-        setSession({ authenticated: false });
-      },
+      signIn,
+      signOut,
     }),
-    [loading, refresh, session],
+    [loading, refresh, session, signIn, signOut],
   );
 
   return <AuthClientContext.Provider value={value}>{children}</AuthClientContext.Provider>;
