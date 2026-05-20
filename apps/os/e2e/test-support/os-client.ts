@@ -10,11 +10,9 @@ import type { appRouter } from "~/orpc/root.ts";
 export type OsClient = RouterClient<typeof appRouter>;
 
 export function requireBaseUrl() {
-  const baseUrl = (process.env.OS_BASE_URL ?? process.env.APP_CONFIG_BASE_URL)
-    ?.trim()
-    .replace(/\/+$/, "");
+  const baseUrl = process.env.OS_BASE_URL?.trim().replace(/\/+$/, "");
   if (!baseUrl) {
-    throw new Error("OS_BASE_URL or APP_CONFIG_BASE_URL is required for os e2e tests.");
+    throw new Error("OS_BASE_URL is required for os e2e tests.");
   }
   return baseUrl;
 }
