@@ -19,6 +19,14 @@ console.log(`[vitest-artifacts] run root: ${vitestRunRoot}`);
 console.log(`[vitest] run slug: ${vitestRunSlug}`);
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      // Temporary workaround for busted captun package exports in the PR build.
+      "captun/client": fileURLToPath(
+        new URL("../node_modules/captun/dist/client.js", import.meta.url),
+      ),
+    },
+  },
   test: {
     environment: "node",
     fileParallelism: false,

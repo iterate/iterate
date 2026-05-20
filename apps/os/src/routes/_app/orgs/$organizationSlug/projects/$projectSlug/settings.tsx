@@ -54,9 +54,6 @@ function ProjectDetailContent({
   const queryClient = useQueryClient();
   const config = useConfig<PublicConfig>();
   const [customHostname, setCustomHostname] = useState(project.customHostname ?? "");
-  const [externalEgressProxyUrl, setExternalEgressProxyUrl] = useState(
-    project.externalEgressProxyUrl ?? "",
-  );
   const [hostnameToActivate, setHostnameToActivate] = useState("");
   const dnsInstructions = customHostnameDnsInstructions({
     customHostname,
@@ -99,9 +96,8 @@ function ProjectDetailContent({
     updateConfig.mutate({
       id: project.id,
       customHostname: customHostname.trim() === "" ? null : customHostname,
-      externalEgressProxyUrl: externalEgressProxyUrl.trim() === "" ? null : externalEgressProxyUrl,
     });
-  }, [customHostname, externalEgressProxyUrl, project.id, updateConfig]);
+  }, [customHostname, project.id, updateConfig]);
   const handleActivateHostname = useCallback(() => {
     ensureCustomHostname.mutate({
       id: project.id,
@@ -169,18 +165,6 @@ function ProjectDetailContent({
               </div>
             </div>
           ) : null}
-        </div>
-
-        <div className="space-y-2">
-          <p className="text-xs uppercase tracking-wide text-muted-foreground">
-            External egress proxy URL
-          </p>
-          <Input
-            placeholder="https://proxy.example.com"
-            value={externalEgressProxyUrl}
-            onChange={(event) => setExternalEgressProxyUrl(event.target.value)}
-            onKeyDown={(event) => event.key === "Enter" && handleUpdateConfig()}
-          />
         </div>
 
         <Button size="sm" onClick={handleUpdateConfig} disabled={updateConfig.isPending}>

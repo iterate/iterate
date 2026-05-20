@@ -46,7 +46,6 @@ type ProjectRow = {
   id: string;
   slug: string;
   custom_hostname?: string | null;
-  external_egress_proxy_url?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -60,9 +59,15 @@ function toProject(row: ProjectRow) {
     id: row.id,
     slug: row.slug,
     customHostname: row.custom_hostname ?? null,
-    externalEgressProxyUrl: row.external_egress_proxy_url ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+async function toProjectWithIngressUrl(context: AppContext, row: ProjectRow) {
+  return {
+    ...toProject(row),
+    ingressUrl: await projectDurableObject(context, row.id).ingressUrl(),
   };
 }
 
@@ -114,22 +119,6 @@ function normalizeConfigCustomHostname(
   return customHostname;
 }
 
-function normalizeConfigExternalEgressProxyUrl(input: string | null | undefined) {
-  if (input === undefined) return undefined;
-  if (input === null) return null;
-
-  const externalEgressProxyUrl = input.trim();
-  if (externalEgressProxyUrl === "") return null;
-
-  try {
-    return new URL(externalEgressProxyUrl).toString();
-  } catch {
-    throw new ORPCError("BAD_REQUEST", {
-      message: "External egress proxy URL must be a valid URL.",
-    });
-  }
-}
-
 function isUniqueConstraintError(error: unknown) {
   return error instanceof Error && error.message.includes("UNIQUE constraint failed");
 }
@@ -170,13 +159,22 @@ export const projectsRouter = {
           throw error;
         }
 
-        scheduleProjectBootstrap({
-          context,
-          projectId: id,
-          slug: input.slug,
-        });
+        try {
+          await projectDurableObject(context, id).createProject({
+            projectId: id,
+            slug: input.slug,
+          });
+        } catch (error) {
+          await deleteProject(context.db, { id }).catch((cleanupError) => {
+            console.error(
+              `[projects.create] Failed to clean up partial project ${id} after bootstrap failure:`,
+              cleanupError,
+            );
+          });
+          throw error;
+        }
 
-        return toProject(project);
+        return await toProjectWithIngressUrl(context, project);
       }),
     list: os.projects.list.use(activeOrganizationMiddleware).handler(async ({ context, input }) => {
       const auth = context.activeOrganization;
@@ -205,7 +203,7 @@ export const projectsRouter = {
         context,
         projectId: input.id,
       });
-      return toProject(row);
+      return await toProjectWithIngressUrl(context, row);
     }),
     findBySlug: os.projects.findBySlug
       .use(activeOrganizationMiddleware)
@@ -221,7 +219,7 @@ export const projectsRouter = {
           context,
           projectId: row.id,
         });
-        return toProject(row);
+        return await toProjectWithIngressUrl(context, row);
       }),
     updateConfig: os.projects.updateConfig
       .use(activeOrganizationMiddleware)
@@ -240,20 +238,11 @@ export const projectsRouter = {
           normalizedCustomHostname === undefined
             ? (existing.custom_hostname ?? null)
             : normalizedCustomHostname;
-        const normalizedExternalEgressProxyUrl = normalizeConfigExternalEgressProxyUrl(
-          input.externalEgressProxyUrl,
-        );
-        const nextExternalEgressProxyUrl =
-          normalizedExternalEgressProxyUrl === undefined
-            ? (existing.external_egress_proxy_url ?? null)
-            : normalizedExternalEgressProxyUrl;
-
         try {
           await updateProjectConfig(
             context.db,
             {
               customHostname: nextCustomHostname,
-              externalEgressProxyUrl: nextExternalEgressProxyUrl,
             },
             { id: input.id },
           );
@@ -282,7 +271,7 @@ export const projectsRouter = {
           });
         }
 
-        return toProject(row);
+        return await toProjectWithIngressUrl(context, row);
       }),
     customHostnameStatus: os.projects.customHostnameStatus
       .use(activeOrganizationMiddleware)
@@ -355,7 +344,7 @@ export const projectsRouter = {
   project: {
     get: os.project.get.use(projectScopeMiddleware).handler(async ({ context }) => {
       const row = requireProjectScope(context);
-      return toProject(row);
+      return await toProjectWithIngressUrl(context, row);
     }),
     lifecycleState: os.project.lifecycleState
       .use(projectScopeMiddleware)
@@ -480,24 +469,8 @@ function requireProjectDurableObjectNamespace(context: AppContext) {
   return context.projectDurableObjectNamespace;
 }
 
-function scheduleProjectBootstrap(input: { context: AppContext; projectId: string; slug: string }) {
-  const namespace = input.context.projectDurableObjectNamespace;
-  if (!namespace) {
-    console.error(
-      `[projects.create] Project bootstrap skipped for ${input.projectId}: PROJECT binding not available.`,
-    );
-    return;
-  }
-
-  const promise = namespace
-    .getByName(getProjectDurableObjectName(input.projectId))
-    .createProject({
-      projectId: input.projectId,
-      slug: input.slug,
-    })
-    .catch((error) => {
-      console.error(`[projects.create] Project bootstrap failed for ${input.projectId}:`, error);
-    });
-
-  input.context.waitUntil?.(promise);
+function projectDurableObject(context: AppContext, projectId: string) {
+  return requireProjectDurableObjectNamespace(context).getByName(
+    getProjectDurableObjectName(projectId),
+  );
 }

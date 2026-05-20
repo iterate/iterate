@@ -155,8 +155,7 @@ async function ensureD1Schema(db: D1Database) {
       slug text not null unique,
       custom_hostname text unique,
       created_at text not null default current_timestamp,
-      updated_at text not null default current_timestamp,
-      external_egress_proxy_url text
+      updated_at text not null default current_timestamp
     )`),
     db.prepare(`CREATE TABLE IF NOT EXISTS project_permissions (
       project_id text not null references projects (id) on delete cascade,

@@ -2,6 +2,7 @@ import { SELF, env } from "cloudflare:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { PROJECT_EGRESS_INTERCEPT_ROUTE } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import {
   EXAMPLE_EGRESS_SECRET_KEY,
   EXAMPLE_EGRESS_SECRET_MATERIAL,
@@ -237,7 +238,6 @@ describe("Project ingress routing", () => {
   test("substitutes egress header secrets through the Project Durable Object", async () => {
     const fetchSpy = mockPublicEchoFetch();
     await createProject();
-    await SELF.fetch("https://os.iterate.localhost/__test/set-external-egress-proxy-url");
     await SELF.fetch(
       "https://os.iterate.localhost/__test/upsert-secret?key=openai&material=mvp-secret-value",
     );
@@ -260,15 +260,23 @@ describe("Project ingress routing", () => {
     fetchSpy.mockRestore();
   });
 
-  test("withholds egress header secrets and forwards through externalEgressProxyUrl", async () => {
-    const fetchSpy = mockPublicEchoFetch();
+  test("requires the admin API secret for the Project Egress Intercept Route", async () => {
+    await createProject();
+
+    const response = await SELF.fetch(
+      `https://demo.iterate.localhost${PROJECT_EGRESS_INTERCEPT_ROUTE}`,
+    );
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({ error: "Unauthorized." });
+  });
+
+  test("withholds egress header secrets and forwards through a Project Egress Intercept Tunnel", async () => {
     await createProject();
     await SELF.fetch(
       "https://os.iterate.localhost/__test/upsert-secret?key=openai&material=mvp-secret-value",
     );
-    await SELF.fetch(
-      `https://os.iterate.localhost/__test/set-external-egress-proxy-url?url=${encodeURIComponent("https://httpbingo.org/anything")}`,
-    );
+    await SELF.fetch("https://os.iterate.localhost/__test/connect-egress-intercept");
 
     const response = await SELF.fetch(
       `https://os.iterate.localhost/__test/egress?target=${encodeURIComponent("https://api.example.com/v1/models?x=1")}`,
@@ -285,21 +293,15 @@ describe("Project ingress routing", () => {
       url: string;
     };
 
-    expect(body.url).toBe("https://httpbingo.org/anything/v1/models?x=1");
-    expect(body.headers["forwarded"]).toEqual(["proto=https;host=api.example.com"]);
-    expect(body.headers["x-forwarded-host"]).toEqual(["api.example.com"]);
-    expect(body.headers["x-forwarded-proto"]).toEqual(["https"]);
-    expect(body.headers["x-forwarded-uri"]).toEqual(["/v1/models?x=1"]);
+    expect(body.url).toBe("https://api.example.com/v1/models?x=1");
     expect(body.headers["x-iterate-test-secret"]).toEqual([
-      `Secret value withheld because this project uses externalEgressProxyUrl. Requested getSecret({ key: "openai" })`,
+      `Secret value withheld because this Project Egress Intercept Tunnel is active. Requested getSecret({ key: "openai" })`,
     ]);
     expect(JSON.stringify(body)).not.toContain("mvp-secret-value");
-    fetchSpy.mockRestore();
   });
 
   test("fails egress descriptively when a referenced secret is missing", async () => {
     await createProject();
-    await SELF.fetch("https://os.iterate.localhost/__test/set-external-egress-proxy-url");
 
     const response = await SELF.fetch("https://os.iterate.localhost/__test/egress", {
       headers: {

@@ -146,6 +146,22 @@ _Avoid_: Project app worker, project service
 Future outbound HTTP/S policy work for Project-owned execution. Current codemode `fetch(...)` is traceable through the default Codemode Fetch Capability; full egress policy and secret injection live in `tasks/project-egress-secrets-mvp.md`.
 _Avoid_: Project Ingress, implemented gateway, implemented secret system
 
+**Project Egress Intercept Tunnel**:
+An ephemeral Project-owned tunnel that can intercept outbound Project Egress fetches while connected.
+_Avoid_: external egress proxy, egress gateway, intercept egress traffic
+
+**Project Egress Tunnel**:
+Short form for Project Egress Intercept Tunnel.
+_Avoid_: project proxy, mock internet proxy
+
+**Project Egress Intercept Route**:
+The reserved Project-owned HTTP route used to connect a Project Egress Intercept Tunnel.
+_Avoid_: mock route, test-only route, proxy URL
+
+**Project Egress Intercept Test Helper**:
+An e2e fixture helper that opens a Project Egress Intercept Tunnel for a test-owned Project.
+_Avoid_: semaphore tunnel helper, external proxy fixture, mock internet proxy
+
 **Codemode Fetch Capability**:
 The default RPC Tool Provider used by codemode for ordinary Script `fetch(...)` and `ctx.fetch(...)` calls.
 _Avoid_: Raw Dynamic Worker fetch, untraced public fetch
@@ -553,6 +569,14 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - The **Project Ingress Entry Point** takes only a stable **Project ID** prop in v1, resolves the Project Durable Object stub by using that **Project ID** as the Durable Object name, and delegates the request to the Project Durable Object's ingress RPC.
 - The **Project Ingress Entry Point** does not accept **Project Slug** props in v1; slug-to-ID resolution happens before a request reaches hot ingress.
 - **Project Egress** is future work. Until it is implemented, codemode Script `fetch(...)` calls go through the default **Codemode Fetch Capability** so they are traceable as Function Calls.
+- A **Project Egress Intercept Tunnel** is scoped to exactly one **Project** and is active only while its tunnel connection is connected.
+- A **Project Egress Tunnel** is the short form of **Project Egress Intercept Tunnel**, not a persistent Project configuration record.
+- The **Project Egress Intercept Route** is `/__iterate/intercept-project-egress` on a **Project-Owned Hostname**.
+- At most one **Project Egress Intercept Tunnel** is active for one **Project**; a new tunnel connection replaces and disposes the previous active tunnel.
+- A **Project Egress Intercept Tunnel** is not Project configuration and is not stored in the **Project Listing Projection**.
+- A **Project Egress Intercept Test Helper** connects to the **Project Egress Intercept Route** with the admin API secret and supplies the test's fetch handler over the tunnel.
+- While a **Project Egress Intercept Tunnel** is active, Secret references in Project Egress headers are replaced with explanatory withheld text that includes the full original `getSecret(...)` incantation.
+- Without an active **Project Egress Intercept Tunnel**, Project Egress header Secret references are replaced with raw **Secret Material** before public fetch.
 - Project-scoped oRPC Secret CRUD is an adapter over the **D1-backed Secrets Capability**; oRPC must not reimplement Secret storage behavior directly.
 - Project-scoped oRPC Secret reads return redacted Secret summaries and metadata, not raw Secret material.
 - The first Project Egress Secret Injection proof also resolves Secret material through the **D1-backed Secrets Capability**; Secret Durable Objects are not in the immediate substitution path.
@@ -1130,6 +1154,9 @@ The provider composition case targets provider-to-provider Tool Function Calls: 
 - "MCP authorization" could become a one-off Project Durable Object method. Resolved: avoid MCP-specific Project DO auth methods; model future auth as generic **Project Route Authorization**.
 - "project access" and "route authorization" are different depths of policy. Resolved: v1 can use a generic **Project Access Check**; richer destination-specific policy belongs to future **Project Route Authorization**.
 - "egress proxy", "egress gateway", and **Project Ingress** were used around outbound traffic. Resolved for current code: use **Project Egress** only as a pointer to future outbound policy work.
+- "external egress proxy", "intercept egress traffic", and "mock internet proxy" were used for test-time outbound interception. Resolved: use **Project Egress Intercept Tunnel**, or **Project Egress Tunnel** as the short form.
+- `externalEgressProxyUrl` was a persisted Project configuration field for test-time outbound interception. Resolved: remove it instead of preserving backwards compatibility; the **Project Egress Intercept Tunnel** is ephemeral runtime state.
+- `"/__intercept-egress-fetch"` and `"/__iterate/intercept-project-egress"` were both considered as the tunnel connection path. Resolved: use the namespaced **Project Egress Intercept Route** `"/__iterate/intercept-project-egress"`.
 - "Cloudflare Artifacts repo" introduced a second repo concept. Resolved: use **Repo** for the OS domain object and **Cloudflare Artifacts** for the backing service.
 - "stream path" sounded like independent Repo identity. Resolved: **Repo Stream** path is derived from **Repo Slug** as `/repos/{repoSlug}`.
 - "token" originally meant a one-time response secret. Resolved for the Repo v1 prototype: an initial long-lived **Repo Token** is stored in **Repo Reduced State** so `getInfo()` can return clone and push details.

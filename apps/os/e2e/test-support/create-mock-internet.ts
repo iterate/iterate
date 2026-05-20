@@ -12,11 +12,18 @@ import {
 type MockHttpHandler = Parameters<MockHttpServerFixture["use"]>[number];
 
 interface MockInternetHandle {
+  fetch: typeof fetch;
   getHar(): ReturnType<MockHttpServerFixture["getHar"]>;
   url: string;
   use: MockHttpServerFixture["use"];
 }
 
+/**
+ * Creates a local mock internet and a fetch implementation for Project Egress
+ * Intercept Tunnel tests. Requests for real http/https origins are sent to the
+ * local mock server, with forwarded headers preserving the original origin and
+ * path for mock-http-proxy matching, HAR recording, and replay.
+ */
 export async function createMockInternet(opts: {
   harPath: string;
   handlers?: MockHttpHandler[];
@@ -52,6 +59,9 @@ export async function createMockInternet(opts: {
 
   return {
     url: mockServer.url,
+    fetch(input, init) {
+      return fetch(rewriteRequestForMockInternet({ input, init, mockInternetUrl: mockServer.url }));
+    },
     getHar() {
       return mockServer.getHar();
     },
@@ -65,6 +75,51 @@ export async function createMockInternet(opts: {
       await mockServer.close();
     },
   };
+}
+
+function rewriteRequestForMockInternet(input: {
+  input: Request | URL | string;
+  init?: RequestInit;
+  mockInternetUrl: string;
+}) {
+  const request = new Request(input.input, input.init);
+  const requestUrl = new URL(request.url);
+  const mockInternetUrl = new URL(input.mockInternetUrl);
+
+  if (!isHttpRequest(requestUrl) || requestUrl.origin === mockInternetUrl.origin) {
+    return request;
+  }
+
+  const proxiedUrl = new URL(mockInternetUrl);
+  proxiedUrl.pathname = joinProxyPath(proxiedUrl.pathname, requestUrl.pathname);
+  proxiedUrl.search = requestUrl.search;
+
+  const proxiedRequest = new Request(proxiedUrl, request);
+  const originalProto = requestUrl.protocol.replace(/:$/, "");
+  proxiedRequest.headers.set("host", proxiedUrl.host);
+  proxiedRequest.headers.set(
+    "forwarded",
+    `proto=${quoteForwardedValue(originalProto)};host=${quoteForwardedValue(requestUrl.host)}`,
+  );
+  proxiedRequest.headers.set("x-forwarded-host", requestUrl.host);
+  proxiedRequest.headers.set("x-forwarded-proto", originalProto);
+  proxiedRequest.headers.set("x-forwarded-uri", `${requestUrl.pathname}${requestUrl.search}`);
+  return proxiedRequest;
+}
+
+function isHttpRequest(url: URL) {
+  return url.protocol === "http:" || url.protocol === "https:";
+}
+
+function joinProxyPath(proxyBasePathname: string, requestPathname: string) {
+  const normalizedBasePathname =
+    proxyBasePathname === "/" ? "" : proxyBasePathname.replace(/\/+$/, "");
+  return `${normalizedBasePathname}${requestPathname}`;
+}
+
+function quoteForwardedValue(value: string) {
+  if (/^[A-Za-z0-9._:[\]-]+$/.test(value)) return value;
+  return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
 }
 
 export function rewriteHarHostnames(

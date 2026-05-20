@@ -233,13 +233,23 @@ function ProjectsIndexPage() {
   );
 }
 
-function cacheCreatedProjectQueries(input: { project: Project; queryClient: QueryClient }) {
+function cacheCreatedProjectQueries(input: {
+  project: Project & { ingressUrl: string };
+  queryClient: QueryClient;
+}) {
   const findQuery = orpc.projects.find.queryOptions({ input: { id: input.project.id } });
   const findBySlugQuery = orpc.projects.findBySlug.queryOptions({
     input: { slug: input.project.slug },
   });
   input.queryClient.setQueryData(findQuery.queryKey, input.project);
   input.queryClient.setQueryData(findBySlugQuery.queryKey, input.project);
+  const listProject: Project = {
+    id: input.project.id,
+    slug: input.project.slug,
+    customHostname: input.project.customHostname,
+    createdAt: input.project.createdAt,
+    updatedAt: input.project.updatedAt,
+  };
 
   for (const listInput of [
     { limit: 20, offset: 0 },
@@ -252,7 +262,7 @@ function cacheCreatedProjectQueries(input: { project: Project; queryClient: Quer
 
       return {
         ...existing,
-        projects: [input.project, ...existing.projects].slice(0, listInput.limit),
+        projects: [listProject, ...existing.projects].slice(0, listInput.limit),
         total: existing.total + 1,
       };
     });
