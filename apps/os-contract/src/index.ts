@@ -310,7 +310,7 @@ export const osContract = oc.router({
             .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Slug must be lowercase kebab-case"),
         }),
       )
-      .output(Project),
+      .output(Project.extend({ ingressUrl: z.string().url() })),
     list: oc
       .route({
         method: "GET",
@@ -333,7 +333,7 @@ export const osContract = oc.router({
         tags: ["/projects"],
       })
       .input(z.object({ id: z.string() }))
-      .output(Project),
+      .output(Project.extend({ ingressUrl: z.string().url() })),
     findBySlug: oc
       .route({
         method: "GET",
@@ -342,7 +342,7 @@ export const osContract = oc.router({
         tags: ["/projects"],
       })
       .input(z.object({ slug: z.string() }))
-      .output(Project),
+      .output(Project.extend({ ingressUrl: z.string().url() })),
     updateConfig: oc
       .route({
         method: "PATCH",
@@ -356,7 +356,7 @@ export const osContract = oc.router({
           customHostname: z.string().trim().nullable().optional(),
         }),
       )
-      .output(Project),
+      .output(Project.extend({ ingressUrl: z.string().url() })),
     customHostnameStatus: oc
       .route({
         method: "GET",
@@ -394,7 +394,7 @@ export const osContract = oc.router({
         tags: ["/project"],
       })
       .input(ProjectScopedInput)
-      .output(Project),
+      .output(Project.extend({ ingressUrl: z.string().url() })),
     lifecycleState: oc
       .route({
         method: "GET",

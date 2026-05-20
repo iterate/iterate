@@ -45,7 +45,6 @@ testIfAdminApiTarget(
       slugPrefix: "mock-internet",
     });
     await using _intercept = await useProjectEgressInterceptTunnel({
-      baseUrl: fixture.baseUrl,
       fetch: internet.fetch,
       project: fixture.project,
     });

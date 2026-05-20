@@ -64,6 +64,13 @@ function toProject(row: ProjectRow) {
   };
 }
 
+async function toProjectWithIngressUrl(context: AppContext, row: ProjectRow) {
+  return {
+    ...toProject(row),
+    ingressUrl: await projectDurableObject(context, row.id).ingressUrl(),
+  };
+}
+
 function toCodemodeSession(record: CodemodeSessionCatalogRecord) {
   return {
     name: record.name,
@@ -152,13 +159,12 @@ export const projectsRouter = {
           throw error;
         }
 
-        scheduleProjectBootstrap({
-          context,
+        await projectDurableObject(context, id).createProject({
           projectId: id,
           slug: input.slug,
         });
 
-        return toProject(project);
+        return await toProjectWithIngressUrl(context, project);
       }),
     list: os.projects.list.use(activeOrganizationMiddleware).handler(async ({ context, input }) => {
       const auth = context.activeOrganization;
@@ -187,7 +193,7 @@ export const projectsRouter = {
         context,
         projectId: input.id,
       });
-      return toProject(row);
+      return await toProjectWithIngressUrl(context, row);
     }),
     findBySlug: os.projects.findBySlug
       .use(activeOrganizationMiddleware)
@@ -203,7 +209,7 @@ export const projectsRouter = {
           context,
           projectId: row.id,
         });
-        return toProject(row);
+        return await toProjectWithIngressUrl(context, row);
       }),
     updateConfig: os.projects.updateConfig
       .use(activeOrganizationMiddleware)
@@ -255,7 +261,7 @@ export const projectsRouter = {
           });
         }
 
-        return toProject(row);
+        return await toProjectWithIngressUrl(context, row);
       }),
     customHostnameStatus: os.projects.customHostnameStatus
       .use(activeOrganizationMiddleware)
@@ -328,7 +334,7 @@ export const projectsRouter = {
   project: {
     get: os.project.get.use(projectScopeMiddleware).handler(async ({ context }) => {
       const row = requireProjectScope(context);
-      return toProject(row);
+      return await toProjectWithIngressUrl(context, row);
     }),
     lifecycleState: os.project.lifecycleState
       .use(projectScopeMiddleware)
@@ -453,24 +459,8 @@ function requireProjectDurableObjectNamespace(context: AppContext) {
   return context.projectDurableObjectNamespace;
 }
 
-function scheduleProjectBootstrap(input: { context: AppContext; projectId: string; slug: string }) {
-  const namespace = input.context.projectDurableObjectNamespace;
-  if (!namespace) {
-    console.error(
-      `[projects.create] Project bootstrap skipped for ${input.projectId}: PROJECT binding not available.`,
-    );
-    return;
-  }
-
-  const promise = namespace
-    .getByName(getProjectDurableObjectName(input.projectId))
-    .createProject({
-      projectId: input.projectId,
-      slug: input.slug,
-    })
-    .catch((error) => {
-      console.error(`[projects.create] Project bootstrap failed for ${input.projectId}:`, error);
-    });
-
-  input.context.waitUntil?.(promise);
+function projectDurableObject(context: AppContext, projectId: string) {
+  return requireProjectDurableObjectNamespace(context).getByName(
+    getProjectDurableObjectName(projectId),
+  );
 }

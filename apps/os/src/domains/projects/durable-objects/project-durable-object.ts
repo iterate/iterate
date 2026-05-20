@@ -386,6 +386,18 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     return this.requireSummary();
   }
 
+  async ingressUrl(): Promise<string> {
+    await this.ensureStarted();
+    const summary = this.requireSummary();
+    const config = this.getAppConfig();
+    const row = await this.env.DB.prepare(`SELECT custom_hostname FROM projects WHERE id = ?`)
+      .bind(summary.id)
+      .first<{ custom_hostname: string | null }>();
+    const host = row?.custom_hostname?.trim().toLowerCase() || summary.defaultHost;
+    const protocol = config.baseUrl ? new URL(config.baseUrl).protocol : "https:";
+    return new URL(`${protocol}//${host}`).origin;
+  }
+
   async getProjectLifecycleRunnerState() {
     await this.ensureStarted();
     return this.getStreamProcessorRunnerState();
@@ -473,11 +485,14 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
       props: { projectId: summary.id },
     });
 
+    // Use one request-level intercept decision for both secret substitution and
+    // routing so a newly connected tunnel cannot see real secret material.
+    const projectEgressInterceptActive = this.#projectEgressInterceptTunnel !== null;
     let substitutedHeaders: Awaited<ReturnType<typeof substituteProjectEgressSecretHeaders>>;
     try {
       substitutedHeaders = await substituteProjectEgressSecretHeaders({
         headers: request.headers,
-        projectEgressInterceptActive: this.#projectEgressInterceptTunnel !== null,
+        projectEgressInterceptActive,
         secrets,
       });
     } catch (error) {
@@ -491,11 +506,11 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
       ? new Request(request, { headers: substitutedHeaders.headers })
       : request;
 
-    // Read the tunnel reference after the await above so that a concurrent
-    // tunnel replacement doesn't leave us holding a disposed handle.
-    const egressInterceptTunnel = this.#projectEgressInterceptTunnel;
-    if (egressInterceptTunnel) {
-      return await egressInterceptTunnel.fetch(outboundRequest);
+    if (projectEgressInterceptActive) {
+      const egressInterceptTunnel = this.#projectEgressInterceptTunnel;
+      if (egressInterceptTunnel) {
+        return await egressInterceptTunnel.fetch(outboundRequest);
+      }
     }
 
     return await fetch(outboundRequest);

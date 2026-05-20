@@ -33,10 +33,7 @@ async function main() {
     projectSlugOrId: options.projectSlugOrId,
   });
 
-  const interceptUrl = projectEgressInterceptUrlFor({
-    baseUrl: options.baseUrl,
-    project,
-  });
+  const interceptUrl = projectEgressInterceptUrlFor(project);
 
   const meta = {
     baseUrl: options.baseUrl,

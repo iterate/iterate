@@ -18,6 +18,12 @@ interface MockInternetHandle {
   use: MockHttpServerFixture["use"];
 }
 
+/**
+ * Creates a local mock internet and a fetch implementation for Project Egress
+ * Intercept Tunnel tests. Requests for real http/https origins are sent to the
+ * local mock server, with forwarded headers preserving the original origin and
+ * path for mock-http-proxy matching, HAR recording, and replay.
+ */
 export async function createMockInternet(opts: {
   harPath: string;
   handlers?: MockHttpHandler[];
