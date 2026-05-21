@@ -82,7 +82,7 @@ export default {
     ]);
     if (durableObjectPublicRouteResponse) return durableObjectPublicRouteResponse;
 
-    const captunTunnelResponse = await handleCaptunTunnelFetch({ cfCtx, env, request });
+    const captunTunnelResponse = await handleCaptunTunnelFetch({ env, request });
     if (captunTunnelResponse) return captunTunnelResponse;
 
     const debugAppendChainResponse = await handleDebugAppendChainFetch({ request, env });
@@ -173,11 +173,7 @@ export default {
   },
 };
 
-async function handleCaptunTunnelFetch(input: {
-  cfCtx: ExecutionContext;
-  env: Env;
-  request: Request;
-}) {
+async function handleCaptunTunnelFetch(input: { env: Env; request: Request }) {
   const url = new URL(input.request.url);
   if (
     url.pathname !== CAPTUN_TUNNEL_ROUTE_PREFIX &&
