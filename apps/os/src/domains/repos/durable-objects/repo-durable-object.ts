@@ -20,6 +20,7 @@ import {
   REPO_DEFAULT_BRANCH,
   REPO_README_PATH,
   REPO_WRITE_TOKEN_TTL_SECONDS,
+  type CloudflareArtifactRepo,
   type CloudflareArtifactsBinding,
   artifactRemoteUrl,
   createArtifactToken,
@@ -113,6 +114,7 @@ const RepoBase = withStreamProcessorRunner<
 })(RepoLifecycleBase);
 
 const REPO_WRITE_TOKEN_STORAGE_KEY = "repo.writeToken";
+const REPO_WRITE_TOKEN_EXPIRES_AT_STORAGE_KEY = "repo.writeTokenExpiresAt";
 
 export class RepoDurableObject extends RepoBase<RepoEnv> {
   constructor(ctx: DurableObjectState, env: RepoEnv) {
@@ -186,6 +188,41 @@ export class RepoDurableObject extends RepoBase<RepoEnv> {
     return await this.requireInfo();
   }
 
+  async refreshWriteToken(): Promise<RepoInfo> {
+    await this.ensureStarted();
+    await this.catchUpStreamProcessor({ signal: AbortSignal.timeout(30_000) });
+
+    if (this.currentRepo() === null) {
+      throw new Error(`Repo ${this.structuredName.repoSlug} has not been created.`);
+    }
+
+    const artifactName = repoArtifactName(this.structuredName);
+    const artifacts = this.requireArtifacts();
+    const token = await createArtifactToken({
+      artifact: await artifacts.get(artifactName),
+      artifacts,
+      name: artifactName,
+      scope: "write",
+      ttlSeconds: REPO_WRITE_TOKEN_TTL_SECONDS,
+    });
+
+    await this.ctx.storage.put(REPO_WRITE_TOKEN_STORAGE_KEY, token.plaintext);
+    await this.ctx.storage.put(REPO_WRITE_TOKEN_EXPIRES_AT_STORAGE_KEY, token.expiresAt);
+
+    return await this.requireInfo();
+  }
+
+  async getArtifact(): Promise<CloudflareArtifactRepo> {
+    await this.ensureStarted();
+    await this.catchUpStreamProcessor({ signal: AbortSignal.timeout(30_000) });
+
+    if (this.currentRepo() === null) {
+      throw new Error(`Repo ${this.structuredName.repoSlug} has not been created.`);
+    }
+
+    return this.requireArtifacts().get(repoArtifactName(this.structuredName));
+  }
+
   async afterAppend(input: { event: Event }) {
     await this.ensureStarted();
     return await this.consumeStreamProcessorEvent({ event: input.event as StreamEvent });
@@ -206,6 +243,10 @@ export class RepoDurableObject extends RepoBase<RepoEnv> {
       throw new Error(`Repo ${this.structuredName.repoSlug} write token is not available.`);
     }
 
+    const tokenExpiresAt =
+      (await this.ctx.storage.get<string | null>(REPO_WRITE_TOKEN_EXPIRES_AT_STORAGE_KEY)) ??
+      repo.tokenExpiresAt;
+
     return {
       defaultBranch: repo.defaultBranch,
       git: gitInfo({
@@ -218,7 +259,7 @@ export class RepoDurableObject extends RepoBase<RepoEnv> {
       remote: repo.remote,
       slug: repo.slug,
       token,
-      tokenExpiresAt: repo.tokenExpiresAt,
+      tokenExpiresAt,
     };
   }
 
