@@ -167,7 +167,7 @@ describe("e2e test map", () => {
         type: "events.iterate.com/codemode/tool-provider-registered",
         payload: {
           instructions:
-            "Use ctx.mcp.exa for Exa web search. Call ctx.mcp.exa.listTools() to inspect available tools, then call ctx.mcp.exa.web_search_exa({ query, numResults }).",
+            "Use ctx.mcp.publicTunnelSearch for test web search. Call ctx.mcp.publicTunnelSearch.listTools() to inspect available tools, then call ctx.mcp.publicTunnelSearch.web_search_exa({ query, numResults }).",
           invocation: {
             kind: "rpc",
             callable: {
@@ -187,14 +187,14 @@ describe("e2e test map", () => {
               argsMode: "object",
             },
           },
-          path: ["mcp", "exa"],
+          path: ["mcp", "publicTunnelSearch"],
         },
       },
     });
 
     const result = await fixture.executeCodemodeScript(async (ctx: any) => {
-      const tools = await ctx.mcp.exa.listTools();
-      const search = await ctx.mcp.exa.web_search_exa({
+      const tools = await ctx.mcp.publicTunnelSearch.listTools();
+      const search = await ctx.mcp.publicTunnelSearch.web_search_exa({
         numResults: 2,
         query: "public tunnel mcp",
       });
