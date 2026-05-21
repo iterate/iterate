@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { Event, EventInput } from "@iterate-com/shared/streams/types";
 import type { Project } from "@iterate-com/os-contract";
-import { createCaptunTunnel } from "captun/client";
+import { createCaptunTunnel } from "captun";
 import { expect } from "vitest";
 import { slugify } from "@iterate-com/shared/slug";
 import type { ProcessorContractShape } from "@iterate-com/shared/stream-processors";
@@ -22,6 +22,7 @@ export async function createTestProjectFixture<
   /** a fetch implementation that will be used to intercept the project's egress */
   egressFetch?: Fetch;
   processors?: ProcessorContracts;
+  slugPrefix?: string;
 }) {
   const testFilePath = expect.getState().testPath;
   if (!testFilePath) throw new Error(`Couldn't get test path from expect.getState()`);
@@ -31,7 +32,7 @@ export async function createTestProjectFixture<
   ].map(slugify);
   const streamPath = "/" + streamPathParts.join("/");
   const { egressFetch } = params || {};
-  const slugPrefix = streamPathParts.at(-1)!;
+  const slugPrefix = params?.slugPrefix || streamPathParts.at(-1)!;
   const project = await createTestProject({ slugPrefix });
   let tunnel: Awaited<ReturnType<typeof createProjectEgressInterceptTunnel>> | null = null;
   try {
@@ -172,7 +173,9 @@ type ExtractEventType<EventsDefinition extends ProcessorContractShape["events"]>
 
 export type CodemodeScript<Ctx, Result> = ReturnType<typeof stringifyCodemodeScript<Ctx, Result>>;
 
-export const stringifyCodemodeScript = <Ctx, Result>(fn: (ctx: Ctx) => Promise<Result>) => {
+export const stringifyCodemodeScript = <Ctx, Result>(
+  fn: (ctx: Ctx, ...args: any[]) => Promise<Result>,
+) => {
   let code = fn.toString();
   if (!code.startsWith("async")) {
     code = `async ${code}`;
@@ -245,4 +248,22 @@ export async function createProjectEgressInterceptTunnel(input: {
     headers: { Authorization: `Bearer ${requireAdminBearerToken()}` },
     fetch: input.fetch,
   });
+}
+
+/** creates a public OS-hosted captun tunnel for test-defined HTTP servers */
+export async function createOsCaptunTunnel(input: { fetch: Fetch; tunnelName?: string }) {
+  const tunnelName = input.tunnelName || `e2e-${uniqueSuffix()}`;
+  const url = `${requireBaseUrl()}/__iterate/captun/${encodeURIComponent(tunnelName)}`;
+  const tunnel = await createCaptunTunnel({
+    url: `${url}/__captun-connect`,
+    headers: { Authorization: `Bearer ${requireAdminBearerToken()}` },
+    fetch: input.fetch,
+  });
+
+  return {
+    url,
+    [Symbol.dispose]() {
+      tunnel[Symbol.dispose]();
+    },
+  };
 }

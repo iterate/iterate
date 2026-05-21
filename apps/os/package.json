@@ -70,7 +70,7 @@
     "@tanstack/react-router-ssr-query": "^1.166.2",
     "@tanstack/react-start": "1.167.5",
     "agents": "^0.11.0",
-    "captun": "^0.0.1",
+    "captun": "https://pkg.pr.new/captun@14",
     "crossws": "^0.4.4",
     "dedent": "^1.7.2",
     "lucide-react": "^0.553.0",

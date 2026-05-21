@@ -1,9 +1,9 @@
 import { describe, expect, test, vi, expectTypeOf } from "vitest";
 import { CodemodeProcessorContract } from "@iterate-com/shared/stream-processors/codemode/contract";
-import { env } from "@opentui/core";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp";
-import dedent from "dedent";
-import { createTestProjectFixture } from "../test-support/create-test-project.ts";
+import {
+  createOsCaptunTunnel,
+  createTestProjectFixture,
+} from "../test-support/create-test-project.ts";
 
 describe("e2e test map", () => {
   test("expect.getState", async () => {
@@ -155,70 +155,73 @@ describe("e2e test map", () => {
   });
 
   test("third party mcp and call tools", async () => {
-    const mcpServer = createMcpServer({
-      tools: [
-        {
-          name: "web_search_exa",
-          description: "Search the web",
-          inputSchema: z.object({
-            query: z.string(),
-            numResults: z.number(),
-          }),
-          execute: async ({ query, numResults }) => {
-            return { result: "search result" };
-          },
-        },
-      ],
+    using mcpTunnel = await createOsCaptunTunnel({
+      fetch: createTestMcpServerFetch(),
     });
-    using fixture = await createTestProjectFixture({
-      egressFetch: async (request) => {
-        const url = new URL(request.url);
-        if (url.hostname === "mcp.example.com") {
-          return await mcpServer.fetch(request);
-        }
-
-        return await mcpServer.fetch(request);
-      },
+    await using fixture = await createTestProjectFixture({
+      processors: [CodemodeProcessorContract],
     });
 
     await fixture.append({
-      type: "events.iterate.com/codemode/tool-provider-registered",
-      payload: {
-        instructions:
-          "Use ctx.mcp.exa for Exa web search. Call ctx.mcp.exa.listTools() to inspect available tools, then call tools such as ctx.mcp.exa.web_search_exa({ query, numResults }) or ctx.mcp.exa.web_fetch_exa({ urls }).",
-        invocation: {
-          kind: "rpc",
-          callable: {
-            type: "workers-rpc",
-            via: {
-              type: "env-binding",
-              bindingType: "durable-object-namespace",
-              bindingName: "OUTBOUND_MCP_FROM_OUR_CLIENT_CAPABILITY",
-              durableObject: {
-                name: '{"serverUrl":"https://mcp.exa.ai/mcp","headers":{}}',
+      event: {
+        type: "events.iterate.com/codemode/tool-provider-registered",
+        payload: {
+          instructions:
+            "Use ctx.mcp.exa for Exa web search. Call ctx.mcp.exa.listTools() to inspect available tools, then call ctx.mcp.exa.web_search_exa({ query, numResults }).",
+          invocation: {
+            kind: "rpc",
+            callable: {
+              type: "workers-rpc",
+              via: {
+                type: "env-binding",
+                bindingType: "durable-object-namespace",
+                bindingName: "OUTBOUND_MCP_FROM_OUR_CLIENT_CAPABILITY",
+                durableObject: {
+                  name: JSON.stringify({
+                    headers: {},
+                    serverUrl: `${mcpTunnel.url}/mcp`,
+                  }),
+                },
               },
+              rpcMethod: "executeCodemodeFunctionCall",
+              argsMode: "object",
             },
-            rpcMethod: "executeCodemodeFunctionCall",
-            argsMode: "object",
           },
+          path: ["mcp", "exa"],
         },
-        path: ["mcp", "exa"],
       },
-      idempotencyKey: "codemode:tool-provider-registered:mcp/exa",
-      offset: 9,
-      createdAt: "2026-05-21T13:00:51.993Z",
     });
 
-    await fixture.executeCodemodeScript(async (ctx) => {
+    const result = await fixture.executeCodemodeScript(async (ctx: any) => {
       const tools = await ctx.mcp.exa.listTools();
-      return tools;
+      const search = await ctx.mcp.exa.web_search_exa({
+        numResults: 2,
+        query: "public tunnel mcp",
+      });
+      return { search, tools };
+    });
+
+    expect(result.success()).toMatchObject({
+      search: {
+        numResults: 2,
+        query: "public tunnel mcp",
+        result: "search result",
+      },
+      tools: {
+        tools: [
+          expect.objectContaining({
+            description: "Search the web",
+            name: "web_search_exa",
+          }),
+        ],
+      },
     });
   });
 
   test("can use orpc os.project.* tools", async () => {
     await using fixture = await createTestProjectFixture({});
 
-    await fixture.executeCodemodeScript(async (ctx: any) => {
+    const result = await fixture.executeCodemodeScript(async (ctx: any) => {
       const projects = await ctx.os.__internal.health();
       return projects;
     });
@@ -306,80 +309,40 @@ describe("e2e test map", () => {
       return repo;
     });
 
-    test("tru e2e", async () => {
-      await using fixture = await createTestProjectFixture({});
-
-      // await fixture.waitToBeRoutable(); // wait for cname record event
-      // true-e2e__${projectSlug}.iterate.app is routable immediately
-
-      await fixture.executeCodemodeScript(async (ctx: any) => {
-        const repo = await ctx.repos.get({ slug: "iterate-config" }).getInfo();
-        const dir = `/iterate-config-${Date.now()}`;
-        const fileName = `workspace-demo-${Date.now()}.md`;
-        const password = repo.token.includes("?expires=")
-          ? repo.token.split("?expires=")[0]
-          : repo.token;
-        const auth = { username: "x", password };
-
-        // maybe not needed these days
-        // await ctx.workspace.git.clone({
-        //   url: repo.remote,
-        //   dir,
-        //   branch: repo.defaultBranch,
-        //   depth: 1,
-        //   ...auth,
-        // });
-
-        await ctx.workspace.writeFile(
-          "worker.js",
-          dedent`
-            export default {
-              fetch: async request => new Response('hello from app one')
-            }
-          `,
-        );
-        await ctx.workspace.git.add({ filepath: "worker.js" });
-        await ctx.workspace.git.commit({
-          message: "Add worker.js",
-        });
-        await ctx.workspace.git.push();
-        // await ctx.workspace.writeFile(
-        //   `${dir}/${fileName}`,
-        //   `# Workspace codemode proof\n\nCreated: ${new Date().toISOString()}\n`,
-        // );
-        // await ctx.workspace.git.add({ dir, filepath: fileName });
-        // const commit = await ctx.workspace.git.commit({
-        //   dir,
-        //   message: "Verify workspace codemode push",
-        //   author: { name: "Codemode", email: "codemode@iterate.com" },
-        // });
-        // const pushed = await ctx.workspace.git.push({
-        //   dir,
-        //   remote: "origin",
-        //   ref: repo.defaultBranch,
-        //   ...auth,
-        // });
-
-        // return {
-        //   commit,
-        //   fileName,
-        //   pushed,
-        //   status: await ctx.workspace.git.status({ dir }),
-        // };
-      });
-
-      const getHtml = async () => {
-        const res = await fetch(`https://true-e2e__${fixture.project.slug}.iterate.app`);
-        if (!res.ok) throw new Error("not ok (yet?)");
-        const html = await res.text();
-        if (!html.includes("hello from app one"))
-          throw new Error("not the expected html (yet?). Got: " + html);
-        return html;
-      };
-      await vi.waitFor(getHtml); // right now we poll for pushes every ten seconds
-      const html = await getHtml();
-      expect(html).toContain("hello from app one");
+    expect(result.success()).toMatchObject({
+      slug: "iterate-config",
     });
+  });
+
+  test("tru e2e", async () => {
+    await using fixture = await createTestProjectFixture({});
+
+    // await fixture.waitToBeRoutable(); // wait for cname record event
+    // true-e2e__${projectSlug}.iterate.app is routable immediately
+
+    await fixture.executeCodemodeScript(async (ctx: any) => {
+      await ctx.workspace.writeFile(
+        "worker.js",
+        "export default {\n  fetch: async () => new Response('hello from app one')\n}\n",
+      );
+      await ctx.workspace.git.add({ filepath: "worker.js" });
+      await ctx.workspace.git.commit({
+        message: "Add worker.js",
+      });
+      await ctx.workspace.git.push();
+    });
+
+    const getHtml = async () => {
+      const res = await fetch(`https://true-e2e__${fixture.project.slug}.iterate.app`);
+      if (!res.ok) throw new Error("not ok (yet?)");
+      const html = await res.text();
+      if (!html.includes("hello from app one"))
+        throw new Error("not the expected html (yet?). Got: " + html);
+      return html;
+    };
+    await vi.waitFor(getHtml); // right now we poll for pushes every ten seconds
+    const html = await getHtml();
+    expect(html).toContain("hello from app one");
   });
 
   // now do the above but with cname record
@@ -398,5 +361,88 @@ describe("ai tests", async () => {
       });
       return { ai };
     });
+
+    expect(result.success()).toMatchObject({
+      ai: expect.anything(),
+    });
   });
 });
+
+function createTestMcpServerFetch() {
+  return async (request: Request) => {
+    if (request.method === "GET") return new Response(null, { status: 405 });
+    if (request.method !== "POST") {
+      return Response.json({ error: "Method not allowed" }, { status: 405 });
+    }
+
+    const body = (await request.json()) as {
+      id?: number | string;
+      method?: string;
+      params?: {
+        arguments?: Record<string, unknown>;
+        name?: string;
+      };
+    };
+
+    if (body.method === "initialize") {
+      return Response.json({
+        id: body.id,
+        jsonrpc: "2.0",
+        result: {
+          capabilities: { tools: {} },
+          protocolVersion: "2025-11-25",
+          serverInfo: { name: "e2e-public-tunnel-mcp", version: "1.0.0" },
+        },
+      });
+    }
+
+    if (body.method === "notifications/initialized") {
+      return new Response(null, { status: 202 });
+    }
+
+    if (body.method === "tools/list") {
+      return Response.json({
+        id: body.id,
+        jsonrpc: "2.0",
+        result: {
+          tools: [
+            {
+              description: "Search the web",
+              inputSchema: {
+                properties: {
+                  numResults: { type: "number" },
+                  query: { type: "string" },
+                },
+                required: ["query", "numResults"],
+                type: "object",
+              },
+              name: "web_search_exa",
+            },
+          ],
+        },
+      });
+    }
+
+    if (body.method === "tools/call" && body.params?.name === "web_search_exa") {
+      const structuredContent = {
+        numResults: body.params.arguments?.numResults,
+        query: body.params.arguments?.query,
+        result: "search result",
+      };
+      return Response.json({
+        id: body.id,
+        jsonrpc: "2.0",
+        result: {
+          content: [{ text: JSON.stringify(structuredContent), type: "text" }],
+          structuredContent,
+        },
+      });
+    }
+
+    return Response.json({
+      error: { code: -32601, message: "Method not found" },
+      id: body.id,
+      jsonrpc: "2.0",
+    });
+  };
+}

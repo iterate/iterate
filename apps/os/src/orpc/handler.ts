@@ -11,8 +11,8 @@ import { CORSPlugin } from "@orpc/server/plugins";
 import manifest from "~/app.ts";
 import type { AppContext } from "~/context.ts";
 import { appRouter } from "~/orpc/root.ts";
-import { looksLikeStandardSchemaFailure } from "~/standard-schema/utils";
-import { prettifyStandardSchemaError } from "~/standard-schema/errors";
+import { prettifyStandardSchemaError } from "~/standard-schema/errors.ts";
+import { looksLikeStandardSchemaFailure } from "~/standard-schema/utils.ts";
 
 const plugins = [new CORSPlugin({ origin: "*" }), new EvlogHandlerPlugin<AppContext>()];
 

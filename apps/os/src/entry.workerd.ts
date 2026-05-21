@@ -16,6 +16,7 @@ import {
   StreamPath,
 } from "@iterate-com/shared/streams/types.ts";
 import handler from "@tanstack/react-start/server-entry";
+import captunWorker, { CaptunServerShard } from "captun/worker";
 import crossws from "crossws/adapters/cloudflare";
 import { createD1Client } from "sqlfu";
 import manifest, { AppConfig } from "~/app.ts";
@@ -40,6 +41,7 @@ import { DEBUG_APPEND_CHAIN_EVENT_TYPE } from "~/durable-objects/debug-append-ch
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
 export { OutboundMcpFromOurClientCapability } from "~/domains/outbound-mcp-client/entrypoints/outbound-mcp-from-our-client-capability.ts";
 export { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
+export { CaptunServerShard };
 export { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
 export { DebugAppendChainSubscriber } from "~/durable-objects/debug-append-chain-subscriber.ts";
 export { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
@@ -62,6 +64,8 @@ export { StreamDurableObject };
 export { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-capability.ts";
 export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 
+const CAPTUN_TUNNEL_ROUTE_PREFIX = "/__iterate/captun";
+
 const config = parseAppConfigFromEnv({
   configSchema: AppConfig,
   prefix: "APP_CONFIG_",
@@ -77,6 +81,9 @@ export default {
       }),
     ]);
     if (durableObjectPublicRouteResponse) return durableObjectPublicRouteResponse;
+
+    const captunTunnelResponse = await handleCaptunTunnelFetch({ cfCtx, env, request });
+    if (captunTunnelResponse) return captunTunnelResponse;
 
     const debugAppendChainResponse = await handleDebugAppendChainFetch({ request, env });
     if (debugAppendChainResponse) return debugAppendChainResponse;
@@ -165,6 +172,28 @@ export default {
     );
   },
 };
+
+async function handleCaptunTunnelFetch(input: {
+  cfCtx: ExecutionContext;
+  env: Env;
+  request: Request;
+}) {
+  const url = new URL(input.request.url);
+  if (
+    url.pathname !== CAPTUN_TUNNEL_ROUTE_PREFIX &&
+    !url.pathname.startsWith(`${CAPTUN_TUNNEL_ROUTE_PREFIX}/`)
+  ) {
+    return null;
+  }
+
+  url.pathname = url.pathname.slice(CAPTUN_TUNNEL_ROUTE_PREFIX.length) || "/";
+
+  return await captunWorker.fetch(new Request(url, input.request), {
+    CAPTUN_SECRET: config.adminApiSecret?.exposeSecret(),
+    CaptunServerShard: input.env.CaptunServerShard,
+    SHARD_COUNT: "1",
+  });
+}
 
 async function handleDebugAppendChainFetch(input: { request: Request; env: Env }) {
   const url = new URL(input.request.url);

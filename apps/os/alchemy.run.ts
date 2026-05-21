@@ -3,6 +3,7 @@ import { Ai, D1Database, DurableObjectNamespace, WorkerLoader } from "alchemy/cl
 import { Artifacts } from "@iterate-com/shared/alchemy/artifacts";
 import { initAlchemy } from "@iterate-com/shared/alchemy/init";
 import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
+import type { CaptunServerShard } from "captun/worker";
 import type { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
 import manifest, { AppConfig } from "./src/app.ts";
 import type { CodemodeSession } from "./src/domains/codemode/durable-objects/codemode-session.ts";
@@ -40,6 +41,10 @@ const outboundMcpFromOurClientCapability =
       className: "OutboundMcpFromOurClientCapability",
     },
   );
+const captunServerShard = DurableObjectNamespace<CaptunServerShard>("captun-server-shard", {
+  className: "CaptunServerShard",
+  sqlite: true,
+});
 const stream = DurableObjectNamespace<StreamDurableObject>("stream", {
   className: "StreamDurableObject",
   sqlite: true,
@@ -109,6 +114,7 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     SLACK_AGENT: slackAgent,
     SLACK_INTEGRATION: slackIntegration,
     REPO: repo,
+    CaptunServerShard: captunServerShard,
     PROJECT_MCP_SERVER_CONNECTION: projectMcpServerConnection,
     OUTBOUND_MCP_FROM_OUR_CLIENT_CAPABILITY: outboundMcpFromOurClientCapability,
     STREAM: stream,

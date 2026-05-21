@@ -334,6 +334,7 @@ const plugin = {
                   reportMissingRelativeImportExtension(context, node.source);
                 },
                 TSImportType(node) {
+                  if (!node.argument) return;
                   if (node.argument.type !== "Literal") return;
                   reportMissingRelativeImportExtension(context, node.argument);
                 },

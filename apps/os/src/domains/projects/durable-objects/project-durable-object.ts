@@ -1,7 +1,7 @@
 import { createD1Client } from "sqlfu";
 import { z } from "zod";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
-import { acceptCaptunTunnel, type CaptunServerTunnel } from "captun/server";
+import { acceptCaptunTunnel, type Fetcher } from "captun";
 import type { Callable, FetchCallable } from "@iterate-com/shared/callable/types.ts";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
@@ -46,10 +46,7 @@ import {
   ProjectLifecycleProcessorContract,
 } from "~/domains/projects/stream-processors/project-lifecycle.ts";
 import { createProjectWildcardCNAMERecord as createCloudflareProjectWildcardCNAMERecord } from "~/domains/projects/cloudflare-dns.ts";
-import {
-  ProjectEgressSecretSubstitutionError,
-  substituteProjectEgressSecretHeaders,
-} from "~/domains/projects/egress-secret-substitution.ts";
+import { substituteProjectEgressSecretHeaders } from "~/domains/projects/egress-secret-substitution.ts";
 import {
   type RepoDurableObject,
   type RepoInfo,
@@ -64,6 +61,8 @@ import {
   EXAMPLE_EGRESS_SECRET_MATERIAL,
   EXAMPLE_EGRESS_SECRET_METADATA,
 } from "~/domains/secrets/example-secret.ts";
+
+type CaptunServerTunnel = Fetcher & Disposable;
 
 export type ProjectStructuredName = {
   projectId: string;

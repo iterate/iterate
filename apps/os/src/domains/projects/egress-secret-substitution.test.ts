@@ -78,7 +78,7 @@ describe("substituteProjectEgressSecretHeaders", () => {
     });
 
     expect(result.headers.get("x-api-key")).toBe(
-      `Secret value withheld because this Project Egress Intercept Tunnel is active. Requested getSecret({ key: "openai" })`,
+      `Secret value withheld because this Project Egress Intercept Tunnel is active. Requested "getSecret({ key: \\"openai\\" })"`,
     );
     expect(getSecret).not.toHaveBeenCalled();
     expect(getSecretSummaryByKeyOrNull).toHaveBeenCalledWith({ key: "openai" });

@@ -1,4 +1,4 @@
-import { createCaptunTunnel } from "captun/client";
+import { createCaptunTunnel } from "captun";
 import { createORPCClient } from "@orpc/client";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import type { RouterClient } from "@orpc/server";
