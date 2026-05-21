@@ -77,7 +77,7 @@ export async function createTestProjectFixture(params: {
         `Expected completed script execution ${startedPayload.scriptExecutionId} in stream batch.`,
       );
     }
-    const payload = completed.payload;
+    const payload = completed.payload; // todo: maybe throw if it's outcome: "threw" and add a type of the actual script result
     return {
       $type: {} as T,
       payload,
