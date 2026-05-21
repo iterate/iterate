@@ -66,8 +66,8 @@ function ProjectMcpPage() {
   const cliCommand = `cd apps/os && pnpm cli claude-mcp --project-slug-or-id ${project.slug}${cliBaseHostFlag}`;
   const cliCommandHint =
     baseHost === "iterate.app"
-      ? "Run from the repo root. Uses the admin token for auth and disables all other MCP servers. For production, prefix with: doppler run --project os --config prd --"
-      : "Run from the repo root. Uses the admin token for auth and disables all other MCP servers.";
+      ? "Run from the repo root. Prints a Claude Code command (with MCP preflight). For production, prefix with: doppler run --config prd --"
+      : "Run from the repo root. Prints a Claude Code command (with MCP preflight).";
 
   return (
     <section className="max-w-md space-y-4 p-4">

@@ -79,7 +79,10 @@ export async function runAppCli() {
   }
 
   const apiBaseUrlInput =
-    baseUrlFlag ?? process.env[config.remote.baseUrlEnvVar] ?? config.remote.defaultBaseUrl;
+    baseUrlFlag ??
+    process.env.APP_CONFIG_BASE_URL ??
+    process.env[config.remote.baseUrlEnvVar] ??
+    config.remote.defaultBaseUrl;
   const rpcRequested = firstNonFlagArgument(process.argv.slice(2)) === REMOTE_GROUP_NAME;
 
   const remoteRouterResult = await loadRemoteRouter({
@@ -373,12 +376,13 @@ function resolveSharedApiSecretBearerHeaders(params: {
   const token =
     params.env[`${params.envPrefix}_API_KEY`]?.trim() ||
     params.env[`${params.envPrefix}_API_TOKEN`]?.trim() ||
+    params.env.APP_CONFIG_ADMIN_API_SECRET?.trim() ||
     params.env.APP_CONFIG_SHARED_API_SECRET?.trim() ||
     readSharedApiSecretFromAppConfig(params.env.APP_CONFIG);
 
   if (!token) {
     throw new Error(
-      `RPC commands require ${params.envPrefix}_API_KEY, ${params.envPrefix}_API_TOKEN, APP_CONFIG_SHARED_API_SECRET, or APP_CONFIG.sharedApiSecret.`,
+      `RPC commands require ${params.envPrefix}_API_KEY, ${params.envPrefix}_API_TOKEN, APP_CONFIG_ADMIN_API_SECRET, APP_CONFIG_SHARED_API_SECRET, or APP_CONFIG.sharedApiSecret.`,
     );
   }
 
