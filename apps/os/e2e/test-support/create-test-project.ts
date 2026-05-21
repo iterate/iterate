@@ -1,6 +1,10 @@
-import type { Event } from "@iterate-com/shared/streams/types";
+import path from "node:path";
+import type { Event, EventInput } from "@iterate-com/shared/streams/types";
 import type { Project } from "@iterate-com/os-contract";
 import { createCaptunTunnel } from "captun/client";
+import { expect } from "vitest";
+import { slugify } from "@iterate-com/shared/slug";
+import type { ProcessorContractShape } from "@iterate-com/shared/stream-processors";
 import type { ReceiveFunctionCallResultInput } from "../../src/domains/codemode/durable-objects/codemode-session.ts";
 import {
   createAdminOsClient,
@@ -12,12 +16,22 @@ import {
 
 type Fetch = Parameters<typeof createCaptunTunnel>[0]["fetch"];
 
-export async function createTestProjectFixture(params: {
-  slugPrefix: string;
+export async function createTestProjectFixture<
+  ProcessorContracts extends ProcessorContractShape[],
+>(params?: {
   /** a fetch implementation that will be used to intercept the project's egress */
   egressFetch?: Fetch;
+  processors?: ProcessorContracts;
 }) {
-  const { slugPrefix, egressFetch } = params;
+  const testFilePath = expect.getState().testPath;
+  if (!testFilePath) throw new Error(`Couldn't get test path from expect.getState()`);
+  const streamPathParts = [
+    ...path.relative(process.cwd(), testFilePath).split("/"),
+    ...expect.getState().currentTestName!.split(" > "),
+  ].map(slugify);
+  const streamPath = "/" + streamPathParts.join("/");
+  const { egressFetch } = params || {};
+  const slugPrefix = streamPathParts.at(-1)!;
   const project = await createTestProject({ slugPrefix });
   let tunnel: Awaited<ReturnType<typeof createProjectEgressInterceptTunnel>> | null = null;
   try {
@@ -30,29 +44,30 @@ export async function createTestProjectFixture(params: {
   }
   const fixture = project;
   type ExecuteScriptParams = Parameters<
-    Awaited<ReturnType<typeof createTestProject>>["client"]["project"]["codemode"]["executeScript"]
+    Awaited<ReturnType<typeof createTestProject>>["os"]["project"]["codemode"]["executeScript"]
   >[0];
 
-  const startCodemodeScript = async <T, U>(
-    fn: (ctx: T) => Promise<U>,
+  const startCodemodeScript = async <Ctx, Result>(
+    fn: ((ctx: Ctx) => Promise<Result>) | CodemodeScript<Ctx, Result>,
     opts?: Partial<Omit<ExecuteScriptParams, "code">>,
   ) => {
-    const script = stringifyCodemodeScript(fn);
-    const started = await project.client.project.codemode.executeScript({
-      ...script,
+    const script = typeof fn === "function" ? stringifyCodemodeScript(fn) : fn;
+    const started = await project.os.project.codemode.executeScript({
+      code: script.code,
       projectSlugOrId: project.project.id,
       providers: [],
+      streamPath,
       ...opts,
     });
 
     return {
+      ...script,
       ...started,
-      $type: {} as U,
     };
   };
 
-  const executeCodemodeScript = async <T, U>(
-    ...args: Parameters<typeof startCodemodeScript<T, U>>
+  const executeCodemodeScript = async <Ctx, Result>(
+    ...args: Parameters<typeof startCodemodeScript<Ctx, Result>>
   ) => {
     const started = await startCodemodeScript(...args);
     const startedPayload = started.event.payload as { scriptExecutionId: string };
@@ -79,9 +94,16 @@ export async function createTestProjectFixture(params: {
     }
     const payload = completed.payload; // todo: maybe throw if it's outcome: "threw" and add a type of the actual script result
     return {
-      $type: {} as T,
       payload,
-      event: completed as Omit<typeof completed, "payload"> & { payload: T },
+      success: () => {
+        if (payload.outcome?.status !== "returned") {
+          throw new Error(`codemode: ${payload.outcome?.status}: ${payload.outcome.error}`, {
+            cause: completed,
+          });
+        }
+        return payload.outcome.value as Result;
+      },
+      event: completed as Omit<typeof completed, "payload"> & { payload: Ctx },
       events,
       /** get a snapshot-friendly copy of the completed event payload. optionally pass in key-value pairs to replace in the whole payload */
       snapshot: (swaps: Record<string, string> = {}) => {
@@ -100,7 +122,25 @@ export async function createTestProjectFixture(params: {
 
   return {
     ...project,
+    /** recommended test stream path - arbitrary, but by convention mirrors test file + name as its path (`/${relativeFilePath}/${describeSlug}/${testSlug}`)  */
+    streamPath,
+    slugPrefix,
+    tunnelBaseUrl: tunnel ? project.baseUrl + "/__iterate/use-egress-tunnel" : undefined,
+    /** strongly-typed event constructor for the given processor contracts */
+    event: (event: ProcessorContractEvent<ProcessorContracts>) => event,
+    /** shorthand for appending an event to the associated test's associated project + stream */
+    append: (params: {
+      projectSlugOrId?: string;
+      streamPath?: string;
+      event: ProcessorContractEvent<ProcessorContracts>;
+    }) =>
+      project.os.project.streams.append({
+        projectSlugOrId: params.projectSlugOrId || project.project.slug,
+        streamPath: params.streamPath || streamPath,
+        event: params.event,
+      }),
     stringifyCodemodeScript,
+    createCodemodeScriptWithInputs,
     startCodemodeScript,
     executeCodemodeScript,
     async [Symbol.asyncDispose]() {
@@ -113,14 +153,52 @@ export async function createTestProjectFixture(params: {
   };
 }
 
-export const stringifyCodemodeScript = <T, U>(fn: (ctx: T) => Promise<U>) => {
+type ProcessorContractEvent<ProcessorContracts extends ProcessorContractShape[]> =
+  ProcessorContractShape extends { processorDeps: infer Deps extends ProcessorContractShape[] }
+    ? ExtractEventType<ProcessorContracts[number]["events"]> | ProcessorContractEvent<Deps>
+    : ExtractEventType<ProcessorContracts[number]["events"]>;
+
+type ExtractEventType<EventsDefinition extends ProcessorContractShape["events"]> = Extract<
+  {
+    [K in keyof EventsDefinition]: Omit<EventInput, "type" | "payload"> & {
+      type: Extract<K, string>;
+      payload: NoInfer<
+        NonNullable<EventsDefinition[K]["payloadSchema"]["~standard"]["types"]>["output"]
+      >;
+    };
+  }[keyof EventsDefinition],
+  EventInput
+>;
+
+export type CodemodeScript<Ctx, Result> = ReturnType<typeof stringifyCodemodeScript<Ctx, Result>>;
+
+export const stringifyCodemodeScript = <Ctx, Result>(fn: (ctx: Ctx) => Promise<Result>) => {
   let code = fn.toString();
   if (!code.startsWith("async")) {
     code = `async ${code}`;
   }
   return {
     code,
-    $type: {} as U,
+    $ctx: {} as Ctx,
+    $type: {} as Result,
+  };
+};
+
+export const createCodemodeScriptWithInputs = <Inputs, Ctx, Result>(
+  inputs: Inputs,
+  fn: (ctx: Ctx, inputs: Inputs) => Promise<Result>,
+) => {
+  const script = stringifyCodemodeScript(fn);
+  const match = script.code
+    .split("\n")[0]
+    .trim()
+    .match(/, inputs\) => {/);
+  if (!match) {
+    throw new Error(`code with inputs must take a second arg named 'inputs'. Got: ${script.code}`);
+  }
+  return {
+    ...script,
+    code: script.code.replace("\n", `\n  inputs = ${JSON.stringify(inputs)}\n`),
   };
 };
 
@@ -129,13 +207,16 @@ export async function createTestProject(opts: { slugPrefix: string }) {
   const client = createAdminOsClient(baseUrl);
   const slugPrefix = opts.slugPrefix;
   let project = await client.projects.create({
-    slug: `${slugPrefix}-${uniqueSuffix()}`,
+    // you get invalid DNS name errors if the slug is too long
+    slug: `${slugPrefix.slice(0, 20)}-${uniqueSuffix()}`.replace("--", "-"),
   });
 
   let disposed = false;
   return {
     baseUrl,
+    /** @deprecated use `.os` instead */
     client,
+    os: client,
     get project() {
       return project;
     },

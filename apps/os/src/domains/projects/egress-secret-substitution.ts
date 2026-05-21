@@ -82,7 +82,7 @@ export function parseSecretReferences(input: { header: string; value: string }):
   if (references.length === 0 || unmatchedValue.includes(SECRET_REFERENCE_NAME)) {
     throw new ProjectEgressSecretSubstitutionError({
       header: input.header,
-      message: `Project egress secret substitution failed: Could not parse Secret reference in header "${input.header}".`,
+      message: `Project egress secret substitution failed: Could not parse Secret reference ${SECRET_REFERENCE_NAME} in header "${input.header}".`,
     });
   }
 
@@ -98,7 +98,7 @@ async function resolveSecretReference(input: {
   if (input.projectEgressInterceptActive) {
     const secret = await input.secrets.getSecretSummaryByKeyOrNull({ key: input.reference.key });
     if (secret) {
-      return `Secret value withheld because this Project Egress Intercept Tunnel is active. Requested ${input.reference.source}`;
+      return `Secret value withheld because this Project Egress Intercept Tunnel is active. Requested ${JSON.stringify(input.reference.source)}`;
     }
 
     return secretNotFound(input);

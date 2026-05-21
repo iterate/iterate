@@ -1,11 +1,58 @@
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, test, vi, expectTypeOf } from "vitest";
 import { CodemodeProcessorContract } from "@iterate-com/shared/stream-processors/codemode/contract";
 import { env } from "@opentui/core";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp";
 import dedent from "dedent";
-import { createTestProjectFixture } from "../test-support/create-test-project";
+import { createTestProjectFixture } from "../test-support/create-test-project.ts";
 
 describe("e2e test map", () => {
+  test("expect.getState", async () => {
+    expect(expect.getState()).toMatchInlineSnapshot(`
+      {
+        "assertionCalls": 1,
+        "currentTestName": "e2e test map > expect.getState",
+        "environment": "node",
+        "expectedAssertionsNumber": null,
+        "expectedAssertionsNumberErrorGen": null,
+        "isExpectingAssertions": false,
+        "isExpectingAssertionsError": null,
+        "snapshotState": SnapshotState {
+          "_added": Map {},
+          "_counters": Map {
+            "e2e test map > expect.getState" => 1,
+          },
+          "_dirty": false,
+          "_environment": VitestNodeSnapshotEnvironment {
+            "options": {},
+          },
+          "_fileExists": false,
+          "_initialData": {},
+          "_inlineSnapshotStacks": [],
+          "_inlineSnapshots": [],
+          "_matched": Map {},
+          "_rawSnapshots": [],
+          "_snapshotData": {},
+          "_snapshotFormat": {
+            "escapeString": false,
+            "printBasicPrototype": false,
+          },
+          "_testIdToKeys": Map {
+            "1423330272_0_0" => [
+              "e2e test map > expect.getState 1",
+            ],
+          },
+          "_uncheckedKeys": Set {},
+          "_unmatched": Map {},
+          "_updateSnapshot": "new",
+          "_updated": Map {},
+          "expand": false,
+          "snapshotPath": "/Users/mmkal/src/iterate/apps/os/e2e/vitest/__snapshots__/e2e-test-map.e2e.test.ts.snap",
+          "testFilePath": "/Users/mmkal/src/iterate/apps/os/e2e/vitest/e2e-test-map.e2e.test.ts",
+        },
+        "testPath": "/Users/mmkal/src/iterate/apps/os/e2e/vitest/e2e-test-map.e2e.test.ts",
+      }
+    `);
+  });
   test("can connect to MCP with admin token", async () => {
     // run pnpm cli claude-mcp which prints how to run claude w/ an admin token from doppler
     // doppler run --config prd -- pnpm cli claude-mcp
@@ -20,39 +67,56 @@ describe("e2e test map", () => {
      */
   });
 
+  test("type inference for codemode script results", async () => {
+    await using fixture = await createTestProjectFixture();
+
+    const result = await fixture.executeCodemodeScript(async () => {
+      return { foo: "bar" };
+    });
+    expectTypeOf(result.success()).toMatchObjectType<{ foo: string }>();
+    expect(result.success()).toMatchObject({ foo: "bar" });
+  });
+
   test("secret-substitution: secret", async () => {
-    const fixture = await createTestProjectFixture();
+    await using fixture = await createTestProjectFixture({
+      egressFetch: async (request) => {
+        const url = new URL(request.url);
+        return Response.json({
+          hostname: url.hostname,
+          pathname: url.pathname,
+          authHeader: request.headers.get("authorization"),
+        });
+      },
+    });
 
     await fixture.os.project.secrets.upsert({
       projectSlugOrId: fixture.project.slug,
-      key: "openai",
+      key: "blabla",
       material: "codemode-secret-value",
     });
 
-    const result = await fixture.executeCodemodeScript(async (ctx) => {
-      const response = await fetch("httpbin.org/anything", {
-        headers: { Authorization: "Bearer getSecret('blabla')" },
+    const result = await fixture.executeCodemodeScript(async () => {
+      const response = await fetch("https://httpbin.org/anything", {
+        headers: { Authorization: "Bearer getSecret({key:'blabla'})" },
       });
-      return response.headers;
+      return response.json();
     });
     expect(result.success()).toMatchObject({
-      authorization: "Bearer notReallyTheSecretValue('codemode-secret-value')", // or "Secret value withheld because this Project Egress Intercept Tunnel is active. Requested"
+      authHeader: expect.stringMatching(/Bearer Secret value withheld .* Requested .*blabla/),
     });
   });
 
-  test("openapi codemode tool provider", async () => {
-    const fixture = await createTestProjectFixture({
-      slugPrefix: "openapi-codemode-tool-provider-test",
+  test.todo("secret-substitution: secret", async () => {
+    // like the above, but create a public tunnel to make sure actual secret substitution happens
+  });
+
+  test("openapi codemode tool provider petstore", async () => {
+    await using fixture = await createTestProjectFixture({
       processors: [CodemodeProcessorContract],
     });
 
-    // const path = fixture.createStreamPath(); // gives us a new path that follows the pattern of artifacts in temp folder
-    // `${vitestRunId}/${testFileRelativePath}/${describeSlug}/${testSlug}`
-
-    await fixture.client.project.streams.append({
-      projectSlugOrId: fixture.project.slug,
-      streamPath: fixture.streamPath,
-      event: fixture.event({
+    await fixture.append({
+      event: {
         type: "events.iterate.com/codemode/tool-provider-registered",
         payload: {
           instructions:
@@ -76,26 +140,18 @@ describe("e2e test map", () => {
           },
           path: ["petstore"],
         },
-        idempotencyKey: "codemode:tool-provider-registered:petstore",
-        offset: 11,
-        createdAt: "2026-05-21T13:00:52.058Z",
-      }),
+      },
     });
 
-    // fixture.append({
-    //   streamPath: "...",
-    //   event: {
-    //     type: // narrowed type
-    //   }
-    // })
+    const result = await fixture.executeCodemodeScript(async (ctx: any) => {
+      return ctx.petstore.getInventory();
+    });
 
-    // const { appendedEvent, events, matchedEvent } = await fixture.appendAndWaitForEvent({
-    //   streamPath: "...",
-    //   event: {
-    //     type: // narrowed type
-    //   },
-    //   predicate: (event, {appendedEvent}) => event.type === 'foo' && event.payload.requestId === appendedEvent.payload.requestId // narrowed type
-    // })
+    expect(result.success()).toMatchObject({
+      available: expect.any(Number),
+      pending: expect.any(Number),
+      sold: expect.any(Number),
+    });
   });
 
   test("third party mcp and call tools", async () => {

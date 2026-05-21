@@ -1,5 +1,8 @@
 // TODO: rename this file to something like `oxlint-plugin-iterate.js` once this PR is merged
 // (keeping the name `eslint.config.js` for now so git treats this as a rename+edit rather than delete+create)
+import { existsSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+
 import esquery from "esquery";
 
 const LIFECYCLE_HOOKS = new Set(["beforeAll", "beforeEach", "afterAll", "afterEach"]);
@@ -126,6 +129,51 @@ function getMatcherCall(node) {
   if (propertyName === "length") return undefined;
 
   return { actual, matcherName };
+}
+
+/**
+ * @param {string} source
+ * @param {string} filename
+ */
+function getRelativeTsImportWithExtension(source, filename) {
+  if (!filename) return undefined;
+  if (!source.startsWith("./") && !source.startsWith("../")) return undefined;
+
+  const queryIndex = source.search(/[?#]/);
+  const modulePath = queryIndex === -1 ? source : source.slice(0, queryIndex);
+  const segments = modulePath.split("/");
+  const lastSegment = segments[segments.length - 1] || "";
+  if (!lastSegment || lastSegment.includes(".")) return undefined;
+
+  const resolvedTsPath = resolve(dirname(filename), `${modulePath}.ts`);
+  if (!existsSync(resolvedTsPath)) return undefined;
+
+  return `${modulePath}.ts${queryIndex === -1 ? "" : source.slice(queryIndex)}`;
+}
+
+/**
+ * @param {import("eslint").Rule.RuleContext} context
+ * @param {import("estree").Literal} sourceNode
+ */
+function reportMissingRelativeImportExtension(context, sourceNode) {
+  if (typeof sourceNode.value !== "string") return;
+
+  const fixedSource = getRelativeTsImportWithExtension(sourceNode.value, context.filename || "");
+  if (!fixedSource) return;
+
+  context.report({
+    node: sourceNode,
+    message: `Use "${fixedSource}" instead of "${sourceNode.value}".`,
+    fix: (fixer) => {
+      const sourceText = context.sourceCode.getText(sourceNode);
+      const quote = sourceText[0];
+      const fixedSourceText =
+        (quote === '"' || quote === "'") && sourceText.endsWith(quote)
+          ? `${quote}${fixedSource}${quote}`
+          : JSON.stringify(fixedSource);
+      return fixer.replaceText(sourceNode, fixedSourceText);
+    },
+  });
 }
 
 // custom iterate-internal rules
@@ -256,6 +304,38 @@ const plugin = {
                       ],
                     });
                   }
+                },
+              };
+            },
+          },
+          "relative-import-extensions": {
+            meta: {
+              type: "problem",
+              fixable: "code",
+              docs: {
+                description:
+                  "Require .ts extensions on relative imports when the matching .ts file exists.",
+              },
+            },
+            create(context) {
+              return {
+                ImportDeclaration(node) {
+                  reportMissingRelativeImportExtension(context, node.source);
+                },
+                ExportNamedDeclaration(node) {
+                  if (!node.source) return;
+                  reportMissingRelativeImportExtension(context, node.source);
+                },
+                ExportAllDeclaration(node) {
+                  reportMissingRelativeImportExtension(context, node.source);
+                },
+                ImportExpression(node) {
+                  if (node.source.type !== "Literal") return;
+                  reportMissingRelativeImportExtension(context, node.source);
+                },
+                TSImportType(node) {
+                  if (node.argument.type !== "Literal") return;
+                  reportMissingRelativeImportExtension(context, node.argument);
                 },
               };
             },

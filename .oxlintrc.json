@@ -113,6 +113,7 @@
     "valid-typeof": "error",
     "@tanstack/router/create-route-property-order": "warn",
     "iterate/import-rules": "warn",
+    "iterate/relative-import-extensions": "error",
     "iterate/zod-schema-naming": "error",
     "iterate/drizzle-conventions": "error",
     "iterate/no-implied-eval": "error",

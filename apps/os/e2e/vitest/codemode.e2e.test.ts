@@ -51,7 +51,6 @@ test("runs codemode fetch through a Project Egress Intercept Tunnel", async (ctx
   const e2e = await setupE2E(ctx);
 
   await using fixture = await createTestProjectFixture({
-    slugPrefix: "mock-internet",
     egressFetch: async (request) => {
       const url = new URL(request.url);
       if (url.pathname === "/__e2e-health") return new Response("ok");

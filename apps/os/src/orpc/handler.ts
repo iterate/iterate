@@ -11,6 +11,8 @@ import { CORSPlugin } from "@orpc/server/plugins";
 import manifest from "~/app.ts";
 import type { AppContext } from "~/context.ts";
 import { appRouter } from "~/orpc/root.ts";
+import { looksLikeStandardSchemaFailure } from "~/standard-schema/utils";
+import { prettifyStandardSchemaError } from "~/standard-schema/errors";
 
 const plugins = [new CORSPlugin({ origin: "*" }), new EvlogHandlerPlugin<AppContext>()];
 
@@ -36,7 +38,11 @@ export const orpcOpenApiHandler = new OpenAPIHandler(appRouter, {
     ),
   ],
   interceptors: [
-    onError((error) => {
+    onError((error: any) => {
+      if (looksLikeStandardSchemaFailure(error.cause)) {
+        console.error(`${error.code} ${error}:\n\n${prettifyStandardSchemaError(error.cause)}`);
+        return;
+      }
       console.error(error);
     }),
   ],
