@@ -237,6 +237,17 @@
       "rules": {
         "iterate/contract-package-imports": "error"
       }
+    },
+    {
+      "files": ["apps/os/e2e/vitest/agents.e2e.test.ts"],
+      "rules": {
+        "iterate/helpers-after-tests": "error",
+        "iterate/no-describe": "error",
+        "iterate/no-lifecycle-hooks": "error",
+        "iterate/no-vi-mock": "error",
+        "iterate/prefer-object-property-match": "error",
+        "iterate/prefer-test-over-it": "error"
+      }
     }
   ]
 }
