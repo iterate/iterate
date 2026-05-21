@@ -55,6 +55,14 @@ export class RepoHandle extends RpcTarget {
   async getInfo(): Promise<RepoInfo> {
     return await this.#repo.getInfo();
   }
+
+  async refreshWriteToken(): Promise<RepoInfo> {
+    return await this.#repo.refreshWriteToken();
+  }
+
+  getArtifact() {
+    return this.#repo.getArtifact();
+  }
 }
 
 export class ReposCapability extends WorkerEntrypoint<ReposCapabilityEnv, ReposCapabilityProps> {
