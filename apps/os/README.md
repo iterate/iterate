@@ -42,22 +42,26 @@ pnpm test                # unit tests
 pnpm e2e -t "OS preview smoke"
                          # deployed preview smoke
 pnpm cli claude-mcp --project-slug-or-id bob
-                         # open Claude against one project MCP server
+                         # open Claude against one project MCP server in your local Doppler config
 pnpm sqlfu:generate      # regenerate sqlfu migrations/query wrappers
 pnpm sqlfu:check         # compare migrations to definitions.sql
 pnpm cf:deploy           # production deploy
 ```
 
-Use `doppler run --project os --config <config> -- <command>` when a command
-needs deployed secrets or preview/prd app config.
+`pnpm cli` uses `scripts/cli.ts`: if already inside `doppler run`, it preserves
+that config; otherwise it enters Doppler using the local `apps/os` setup. Use
+`doppler run --config <config> -- <command>` when you want preview/prd app
+config explicitly.
 
 For example, to open Claude against the production MCP server for project
 `bob`, using the production `APP_CONFIG_ADMIN_API_SECRET`:
 
 ```bash
-doppler run --project os --config prd -- \
-  pnpm cli claude-mcp --project-slug-or-id bob
+doppler run --config prd -- pnpm cli claude-mcp --project-slug-or-id bob
 ```
+
+The script pattern is documented in
+[`docs/doppler-backed-scripts.md`](./docs/doppler-backed-scripts.md).
 
 ## Important Files
 
@@ -75,6 +79,8 @@ doppler run --project os --config prd -- \
 
 ## Read Next
 
+- [Debugging Deployed OS Workers](./docs/debugging-deployed-os-workers.md)
+- [Doppler-Backed Scripts](./docs/doppler-backed-scripts.md)
 - [Architecture And Operations](./docs/architecture-and-operations.md)
 - [Preview Agent Browser Smoke](./docs/preview-agent-browser-smoke.md)
 - [Codemode Subrequest Depth](./docs/codemode-subrequest-depth.md)
