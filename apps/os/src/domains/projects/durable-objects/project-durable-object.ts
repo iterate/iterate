@@ -486,12 +486,12 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
 
     // Use one request-level intercept decision for both secret substitution and
     // routing so a newly connected tunnel cannot see real secret material.
-    const projectEgressInterceptActive = this.#projectEgressInterceptTunnel !== null;
+    const egressInterceptTunnel = this.#projectEgressInterceptTunnel;
     let substitutedHeaders: Awaited<ReturnType<typeof substituteProjectEgressSecretHeaders>>;
     try {
       substitutedHeaders = await substituteProjectEgressSecretHeaders({
         headers: request.headers,
-        projectEgressInterceptActive,
+        projectEgressInterceptActive: !!egressInterceptTunnel,
         secrets,
       });
     } catch (error) {
@@ -505,11 +505,8 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
       ? new Request(request, { headers: substitutedHeaders.headers })
       : request;
 
-    if (projectEgressInterceptActive) {
-      const egressInterceptTunnel = this.#projectEgressInterceptTunnel;
-      if (egressInterceptTunnel) {
-        return await egressInterceptTunnel.fetch(outboundRequest);
-      }
+    if (egressInterceptTunnel) {
+      return await egressInterceptTunnel.fetch(outboundRequest);
     }
 
     return await fetch(outboundRequest);
