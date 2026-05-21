@@ -35,9 +35,9 @@ export const claudeMcpScript = os
   .input(ClaudeMcpInput)
   .meta({
     description:
-      "Open Claude Code against one remote OS project MCP server using the Doppler admin token",
+      "Print the Claude Code command for one remote OS project MCP server (after Doppler admin-token preflight)",
   })
-  .handler(async ({ input, signal }) => {
+  .handler(async ({ input }) => {
     const adminToken = requireEnv("APP_CONFIG_ADMIN_API_SECRET");
     const baseHost = input.baseHost ?? defaultBaseHostFromEnv();
     const mcpUrl = buildProjectMcpUrl({
@@ -45,7 +45,7 @@ export const claudeMcpScript = os
       projectSlugOrId: input.projectSlugOrId,
     });
     await assertMcpAdminBearerAccepted({ mcpUrl, token: adminToken });
-    const args = [
+    const command = buildClaudeShellCommand([
       "--mcp-config",
       buildClaudeMcpConfig({
         mcpUrl,
@@ -54,24 +54,21 @@ export const claudeMcpScript = os
       "--strict-mcp-config",
       "--dangerously-skip-permissions",
       input.prompt,
-    ];
+    ]);
 
-    console.info("[claude-mcp] Starting Claude with remote OS MCP server:");
-    console.info(`  MCP URL: ${mcpUrl}`);
-    console.info(`  MCP server name: ${SERVER_NAME}`);
-    console.info("  Auth: Doppler OS admin token");
-    console.info("");
-
-    const result = await runClaude(args, signal);
-
-    if (result.type === "signal") {
-      process.exit(result.exitCode);
-    }
+    console.info(
+      [
+        "Here's the command you should run. It's an interactive TUI application so you may want to run it in tmux:",
+        "",
+        command,
+      ].join("\n"),
+    );
 
     return {
       ok: true as const,
       mcpUrl,
       serverName: SERVER_NAME,
+      command,
     };
   });
 
@@ -154,6 +151,18 @@ export async function assertMcpAdminBearerAccepted(input: { mcpUrl: string; toke
       `MCP preflight failed (${response.status}) for ${input.mcpUrl}: ${body || response.statusText}`,
     );
   }
+}
+
+export function buildClaudeShellCommand(args: string[]) {
+  return ["claude", ...args].map(shellQuoteArg).join(" ");
+}
+
+function shellQuoteArg(arg: string) {
+  if (/^[\w./:@%+=,-]+$/.test(arg)) {
+    return arg;
+  }
+
+  return `'${arg.replace(/'/g, `'\\''`)}'`;
 }
 
 function buildClaudeMcpConfig(input: { mcpUrl: string; token: string }) {

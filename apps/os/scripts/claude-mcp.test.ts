@@ -1,6 +1,21 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { assertMcpAdminBearerAccepted } from "./claude-mcp.ts";
+import { assertMcpAdminBearerAccepted, buildClaudeShellCommand } from "./claude-mcp.ts";
+
+describe("buildClaudeShellCommand", () => {
+  it("quotes JSON mcp config for shell copy-paste", () => {
+    const command = buildClaudeShellCommand([
+      "--mcp-config",
+      '{"mcpServers":{"iterate":{"type":"http"}}}',
+      "--strict-mcp-config",
+      "hello world",
+    ]);
+
+    expect(command).toBe(
+      'claude --mcp-config \'{"mcpServers":{"iterate":{"type":"http"}}}\' --strict-mcp-config \'hello world\'',
+    );
+  });
+});
 
 describe("assertMcpAdminBearerAccepted", () => {
   afterEach(() => {
