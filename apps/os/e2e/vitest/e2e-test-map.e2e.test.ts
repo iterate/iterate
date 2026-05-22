@@ -3,6 +3,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import { describe, expect, test, vi, expectTypeOf } from "vitest";
 import { z } from "zod";
 import { CodemodeProcessorContract } from "@iterate-com/shared/stream-processors/codemode/contract";
+import { createExampleRpcProviderRegistration } from "../../src/domains/codemode/example-provider-registrations.ts";
 import {
   createPublicTunnel,
   createTestProjectFixture,
@@ -277,26 +278,52 @@ describe("e2e test map", () => {
 
   // ^^^ tests above this point should be working. tests below are still WIP. Move this marker down below each test that we've got working.
 
-  test.todo("can use orpc os.project.* tools", async () => {
-    await using fixture = await createTestProjectFixture({});
+  test("can use orpc os.project.* tools", async () => {
+    await using fixture = await createTestProjectFixture({
+      processors: [CodemodeProcessorContract],
+    });
+
+    await fixture.append({
+      event: {
+        type: "events.iterate.com/codemode/tool-provider-registered",
+        payload: createExampleRpcProviderRegistration({
+          exportName: "OrpcCapability",
+          instructions: "Use ctx.os.project for project-scoped OS APIs.",
+          path: ["os", "project"],
+          projectId: fixture.project.id,
+        }),
+      },
+    });
 
     const result = await fixture.codemode.execute(async (ctx: any) => {
-      const projects = await ctx.os.__internal.health();
-      return projects;
+      return await ctx.os.project.get({});
     });
 
     expect(result.success()).toMatchObject({
-      ok: true,
-      app: "os",
-      version: expect.any(String),
+      id: fixture.project.id,
+      slug: fixture.project.slug,
     });
   });
 
-  test.todo("can use arbitrary replicate model via ctx.ai", async () => {
-    await using fixture = await createTestProjectFixture({});
+  test("can use Workers AI via ctx.ai", async () => {
+    await using fixture = await createTestProjectFixture({
+      processors: [CodemodeProcessorContract],
+    });
+
+    await fixture.append({
+      event: {
+        type: "events.iterate.com/codemode/tool-provider-registered",
+        payload: createExampleRpcProviderRegistration({
+          exportName: "AiCapability",
+          instructions: "Use ctx.ai.run(model, input) to call the Workers AI binding.",
+          path: ["ai"],
+          projectId: fixture.project.id,
+        }),
+      },
+    });
 
     const result = await fixture.codemode.execute(async (ctx: any) => {
-      const ai = await ctx.ai.run("replicate/llama-3.1-8b-instruct", {
+      const ai = await ctx.ai.run("@cf/meta/llama-3.1-8b-instruct", {
         prompt: "What is one plus two",
       });
       return { ai };
