@@ -336,19 +336,33 @@ describe("e2e test map", () => {
     });
   });
 
-  test.todo("promise pipelining", async () => {
-    await using fixture = await createTestProjectFixture({});
+  test("promise pipelining", async () => {
+    await using fixture = await createTestProjectFixture({
+      processors: [CodemodeProcessorContract],
+    });
+
+    await fixture.append({
+      event: {
+        type: "events.iterate.com/codemode/tool-provider-registered",
+        payload: createExampleRpcProviderRegistration({
+          exportName: "ReposCapability",
+          instructions:
+            "Use ctx.repos.create({ slug }) to create a Repo, ctx.repos.get({ slug }).getInfo() to inspect one, and ctx.repos.list({}) to list Repos.",
+          path: ["repos"],
+          projectId: fixture.project.id,
+        }),
+      },
+    });
 
     const result = await fixture.codemode.execute(async (ctx: any) => {
+      const slug = `pipeline-${Date.now()}`;
       // look ma, no intermediate await!
-      await ctx.repos.get({ slug: "iterate-config" }).getInfo();
+      return await ctx.repos.create({ slug }).getInfo();
     });
 
     expect(result.success()).toMatchObject({
-      ok: true,
-      slug: "iterate-config",
       defaultBranch: "main",
-      hasToken: true,
+      slug: expect.stringMatching(/^pipeline-/),
     });
   });
 
