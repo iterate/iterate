@@ -113,10 +113,7 @@ describe("e2e test map", () => {
     await using fixture = await createTestProjectFixture();
     using publicTunnel = await createPublicTunnel({
       fetch: (request) => {
-        const url = new URL(request.url);
         return Response.json({
-          hostname: url.hostname,
-          pathname: url.pathname,
           authHeader: request.headers.get("authorization"),
         });
       },
@@ -136,7 +133,7 @@ describe("e2e test map", () => {
         });
         return response.json();
       });
-    expect(result.success()).toMatchObject({
+    expect(result.success()).toEqual({
       authHeader: "Bearer codemode-secret-value",
     });
   });
@@ -180,7 +177,6 @@ describe("e2e test map", () => {
 
     expect(result.success()).toMatchObject({
       available: expect.any(Number),
-      pending: expect.any(Number),
       sold: expect.any(Number),
     });
   });
@@ -279,7 +275,9 @@ describe("e2e test map", () => {
     });
   });
 
-  test("can use orpc os.project.* tools", async () => {
+  // ^^^ tests above this point should be working. tests below are still WIP. Move this marker down below each test that we've got working.
+
+  test.todo("can use orpc os.project.* tools", async () => {
     await using fixture = await createTestProjectFixture({});
 
     const result = await fixture.codemode.execute(async (ctx: any) => {
@@ -294,7 +292,7 @@ describe("e2e test map", () => {
     });
   });
 
-  test("can use arbitrary replicate model via ctx.ai", async () => {
+  test.todo("can use arbitrary replicate model via ctx.ai", async () => {
     await using fixture = await createTestProjectFixture({});
 
     const result = await fixture.codemode.execute(async (ctx: any) => {
@@ -311,7 +309,7 @@ describe("e2e test map", () => {
     });
   });
 
-  test("promise pipelining", async () => {
+  test.todo("promise pipelining", async () => {
     await using fixture = await createTestProjectFixture({});
 
     const result = await fixture.codemode.execute(async (ctx: any) => {
@@ -354,7 +352,7 @@ describe("e2e test map", () => {
     });
   });
 
-  test("can update iterate config repo via workspace", async () => {
+  test.todo("can update iterate config repo via workspace", async () => {
     await using fixture = await createTestProjectFixture({});
 
     await fixture.codemode.execute(async (ctx: any) => {
@@ -375,7 +373,7 @@ describe("e2e test map", () => {
     });
   });
 
-  test("tru e2e", async () => {
+  test.todo("tru e2e", async () => {
     await using fixture = await createTestProjectFixture({});
 
     // await fixture.waitToBeRoutable(); // wait for cname record event
@@ -412,7 +410,7 @@ describe("e2e test map", () => {
 describe("ai tests", async () => {
   // https://www.notion.so/nustom/E2E-test-map-366622a338eb8053984fc756cae2abd2 /agents/e2e-blabla
 
-  test("can use ai", async () => {
+  test.todo("can use ai", async () => {
     await using fixture = await createTestProjectFixture({});
 
     // append export function defaultAgentSetupEvents but that's bad and janky

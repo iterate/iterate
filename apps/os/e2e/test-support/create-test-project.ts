@@ -122,31 +122,75 @@ export async function createTestProjectFixture<
   };
 
   class CodemodeBuilder<Ctx = {}, This = {}> {
-    bound: unknown = null;
+    _bound: This;
+    _options: Omit<ExecuteScriptParams, "code">;
 
-    execute<NewCtx extends Ctx = {} extends Ctx ? any : Ctx, Result = {}>(
-      fn: { dummyMethod(this: This, ctx: NewCtx): Promise<Result> }["dummyMethod"],
-      //    ^ dummyMethod needed because an inline arrow-style function type like `(this: X, foo: Y) => Z` doesn't actually set the type of `this`
-    ) {
+    constructor(params: { options: Omit<ExecuteScriptParams, "code">; bound: This }) {
+      this._bound = params.bound;
+      this._options = params.options;
+    }
+
+    stringify<Result>(fn: { (this: This, ctx: Ctx): Promise<Result> }) {
+      let code = fn.toString();
+      if (!code.startsWith("async")) {
+        code = `async ${code}`;
+      }
+      return {
+        code,
+        $ctx: {} as Ctx,
+        $type: {} as Result,
+      };
+    }
+
+    options(newOptions: Partial<typeof this._options>) {
+      return new CodemodeBuilder<Ctx, This>({
+        options: { ...this._options, ...newOptions },
+        bound: this._bound,
+      });
+    }
+
+    execute<NewCtx extends Ctx = {} extends Ctx ? any : Ctx, Result = {}>(fn: {
+      (this: This, ctx: NewCtx): Promise<Result>;
+    }) {
       return executeCodemodeScript(this.define(fn));
     }
+    /** Type-only method to set the type of the codemode function's context parameter */
     context<NewCtx>() {
-      return new CodemodeBuilder<NewCtx, This>();
+      return this as CodemodeBuilder<unknown, This> as CodemodeBuilder<NewCtx, This>;
     }
+    /**
+     * Set some serializable data as the codemode function's `this` binding. Useful when your script needs to access something from outside its scope
+     * @example
+     * ```ts
+     * const publicTunnel = await createPublicTunnel({ fetch: fixture.tunnelBaseUrl });
+     *
+     * const result = await fixture.codemode
+     *   .bind({ baseUrl: publicTunnel.url })
+     *   .execute(async function () {
+     *     const response = await fetch(`${this.baseUrl}/foobar`);
+     *     return response.json();
+     *   });
+     * ```
+     */
     bind<NewThis>(bound: NewThis) {
-      const newBuilder = new CodemodeBuilder<Ctx, NewThis>();
-      newBuilder.bound = structuredClone(bound);
-      return newBuilder;
+      try {
+        return new CodemodeBuilder<Ctx, NewThis>({
+          options: this._options,
+          bound: bound,
+        });
+      } catch (error) {
+        throw new Error(`Binding value passed to .bind() must be serializable`, { cause: error });
+      }
     }
-    define<NewCtx extends Ctx = {} extends Ctx ? any : Ctx, Result = {}>(
-      fn: { dummyMethod(this: This, ctx: NewCtx): Promise<Result> }["dummyMethod"],
-    ) {
-      const script = stringifyCodemodeScript(fn);
-      if (this.bound !== null) {
+    define<NewCtx extends Ctx = {} extends Ctx ? any : Ctx, Result = {}>(fn: {
+      (this: This, ctx: NewCtx): Promise<Result>;
+    }) {
+      const script = this.context<NewCtx>().stringify<Result>(fn);
+      if (this._bound !== null) {
         const indentedCode = script.code.replace(/\n/g, "\n  ");
         script.code = [
           `async (ctx) => {`,
-          `  return await (${indentedCode}).bind(${JSON.stringify(this.bound)})(ctx)`,
+          `  return await (${indentedCode}).bind(${JSON.stringify(this._bound)})(ctx)`,
           `}`,
         ].join("\n");
       }
@@ -159,7 +203,10 @@ export async function createTestProjectFixture<
     /** recommended test stream path - arbitrary, but by convention mirrors test file + name as its path (`/${relativeFilePath}/${describeSlug}/${testSlug}`)  */
     streamPath,
     slugPrefix,
-    codemode: new CodemodeBuilder(),
+    codemode: new CodemodeBuilder({
+      options: { projectSlugOrId: project.project.slug, streamPath },
+      bound: {},
+    }),
     tunnelBaseUrl: tunnel ? project.baseUrl + "/__iterate/use-egress-tunnel" : undefined,
     /** strongly-typed event constructor for the given processor contracts */
     event: (event: ProcessorContractEvent<ProcessorContracts>) => event,
