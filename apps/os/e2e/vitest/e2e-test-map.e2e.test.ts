@@ -1,4 +1,7 @@
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { describe, expect, test, vi, expectTypeOf } from "vitest";
+import { z } from "zod";
 import { CodemodeProcessorContract } from "@iterate-com/shared/stream-processors/codemode/contract";
 import {
   createOsCaptunTunnel,
@@ -155,8 +158,43 @@ describe("e2e test map", () => {
   });
 
   test("third party mcp and call tools", async () => {
+    const mcpServer = new McpServer({
+      name: "e2e-public-tunnel-mcp",
+      version: "1.0.0",
+    });
+    mcpServer.registerTool(
+      "web_search_exa",
+      {
+        description: "Search the web",
+        inputSchema: {
+          numResults: z.number(),
+          query: z.string(),
+        },
+      },
+      ({ numResults, query }) => {
+        const structuredContent = {
+          numResults,
+          query,
+          result: "search result",
+        };
+        return {
+          content: [{ text: JSON.stringify(structuredContent), type: "text" }],
+          structuredContent,
+        };
+      },
+    );
+    const mcpTransport = new WebStandardStreamableHTTPServerTransport({
+      enableJsonResponse: true,
+      sessionIdGenerator: () => crypto.randomUUID(),
+    });
+    await mcpServer.connect(mcpTransport);
+    await using _mcpConnection = {
+      async [Symbol.asyncDispose]() {
+        await mcpServer.close();
+      },
+    };
     using mcpTunnel = await createOsCaptunTunnel({
-      fetch: createTestMcpServerFetch(),
+      fetch: (request) => mcpTransport.handleRequest(request),
     });
     await using fixture = await createTestProjectFixture({
       processors: [CodemodeProcessorContract],
@@ -367,82 +405,3 @@ describe("ai tests", async () => {
     });
   });
 });
-
-function createTestMcpServerFetch() {
-  return async (request: Request) => {
-    if (request.method === "GET") return new Response(null, { status: 405 });
-    if (request.method !== "POST") {
-      return Response.json({ error: "Method not allowed" }, { status: 405 });
-    }
-
-    const body = (await request.json()) as {
-      id?: number | string;
-      method?: string;
-      params?: {
-        arguments?: Record<string, unknown>;
-        name?: string;
-      };
-    };
-
-    if (body.method === "initialize") {
-      return Response.json({
-        id: body.id,
-        jsonrpc: "2.0",
-        result: {
-          capabilities: { tools: {} },
-          protocolVersion: "2025-11-25",
-          serverInfo: { name: "e2e-public-tunnel-mcp", version: "1.0.0" },
-        },
-      });
-    }
-
-    if (body.method === "notifications/initialized") {
-      return new Response(null, { status: 202 });
-    }
-
-    if (body.method === "tools/list") {
-      return Response.json({
-        id: body.id,
-        jsonrpc: "2.0",
-        result: {
-          tools: [
-            {
-              description: "Search the web",
-              inputSchema: {
-                properties: {
-                  numResults: { type: "number" },
-                  query: { type: "string" },
-                },
-                required: ["query", "numResults"],
-                type: "object",
-              },
-              name: "web_search_exa",
-            },
-          ],
-        },
-      });
-    }
-
-    if (body.method === "tools/call" && body.params?.name === "web_search_exa") {
-      const structuredContent = {
-        numResults: body.params.arguments?.numResults,
-        query: body.params.arguments?.query,
-        result: "search result",
-      };
-      return Response.json({
-        id: body.id,
-        jsonrpc: "2.0",
-        result: {
-          content: [{ text: JSON.stringify(structuredContent), type: "text" }],
-          structuredContent,
-        },
-      });
-    }
-
-    return Response.json({
-      error: { code: -32601, message: "Method not found" },
-      id: body.id,
-      jsonrpc: "2.0",
-    });
-  };
-}
