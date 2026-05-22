@@ -18,6 +18,21 @@ describe("parseSecretReferences", () => {
     ]);
   });
 
+  it("parses JSON5 getSecret arguments", () => {
+    expect(
+      parseSecretReferences({
+        header: "x-test",
+        value: `Bearer getSecret("openai") and getSecret({ key: 'slack.access_token', reason: 'e2e' })`,
+      }),
+    ).toEqual([
+      { key: "openai", source: `getSecret("openai")` },
+      {
+        key: "slack.access_token",
+        source: `getSecret({ key: 'slack.access_token', reason: 'e2e' })`,
+      },
+    ]);
+  });
+
   it("fails when a getSecret reference is ambiguous", () => {
     expect(() =>
       parseSecretReferences({

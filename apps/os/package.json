@@ -73,6 +73,7 @@
     "captun": "https://pkg.pr.new/captun@14",
     "crossws": "^0.4.4",
     "dedent": "^1.7.2",
+    "json5": "^2.2.3",
     "lucide-react": "^0.553.0",
     "openai": "^6.36.0",
     "react": "^19.2.0",

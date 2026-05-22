@@ -105,6 +105,21 @@ index d521d20..e1ff04d 100644
 -//# sourceMappingURL=worker-metadata.js.map
 \ No newline at end of file
 +//# sourceMappingURL=worker-metadata.js.map
+diff --git a/lib/cloudflare/api.js b/lib/cloudflare/api.js
+index 3c8efda..7cc64ec 100644
+--- a/lib/cloudflare/api.js
++++ b/lib/cloudflare/api.js
+@@ -102,6 +102,10 @@ export class CloudflareApi {
+         else if (init.headers) {
+             headers = init.headers;
+         }
++        // Node 26 + undici Agent can expose gzip response bytes without the
++        // content-encoding header, which makes response.json() parse gzip data.
++        if (!Object.keys(headers).some((key) => key.toLowerCase() === "accept-encoding"))
++            headers["accept-encoding"] = "identity";
+         headers = {
+             ...(await CloudflareAuth.formatHeadersWithRefresh({
+                 profile: this.profile,
 diff --git a/lib/cloudflare/wrangler.json.js b/lib/cloudflare/wrangler.json.js
 index 43dfd76..ea4821b 100644
 --- a/lib/cloudflare/wrangler.json.js
