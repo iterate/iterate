@@ -109,8 +109,39 @@ describe("e2e test map", () => {
     });
   });
 
-  test.todo("secret-substitution: secret", async () => {
-    // like the above, but create a public tunnel to make sure actual secret substitution happens
+  test("secret-substitution: public tunnel", async () => {
+    await using fixture = await createTestProjectFixture();
+    using publicTunnel = await createOsCaptunTunnel({
+      fetch: (request) => {
+        const url = new URL(request.url);
+        return Response.json({
+          hostname: url.hostname,
+          pathname: url.pathname,
+          authHeader: request.headers.get("authorization"),
+        });
+      },
+    });
+
+    await fixture.os.project.secrets.upsert({
+      projectSlugOrId: fixture.project.slug,
+      key: "blabla",
+      material: "codemode-secret-value",
+    });
+
+    const result = await fixture.executeCodemodeScript(
+      fixture.createCodemodeScriptWithInputs(
+        { baseUrl: publicTunnel.url },
+        async (_ctx, inputs) => {
+          const response = await fetch(`${inputs.baseUrl}/anything`, {
+            headers: { Authorization: "Bearer getSecret({key:'blabla'})" },
+          });
+          return response.json();
+        },
+      ),
+    );
+    expect(result.success()).toMatchObject({
+      authHeader: "Bearer codemode-secret-value",
+    });
   });
 
   test("openapi codemode tool provider petstore", async () => {
