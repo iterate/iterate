@@ -251,7 +251,7 @@ export async function createProjectEgressInterceptTunnel(input: {
 }
 
 /** creates a public OS-hosted captun tunnel for test-defined HTTP servers */
-export async function createOsCaptunTunnel(input: { fetch: Fetch; tunnelName?: string }) {
+export async function createPublicTunnel(input: { fetch: Fetch; tunnelName?: string }) {
   const tunnelName = input.tunnelName || `e2e-${uniqueSuffix()}`;
   const url = `${requireBaseUrl()}/__iterate/captun/${encodeURIComponent(tunnelName)}`;
   const tunnel = await createCaptunTunnel({

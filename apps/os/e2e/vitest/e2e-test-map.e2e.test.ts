@@ -4,7 +4,7 @@ import { describe, expect, test, vi, expectTypeOf } from "vitest";
 import { z } from "zod";
 import { CodemodeProcessorContract } from "@iterate-com/shared/stream-processors/codemode/contract";
 import {
-  createOsCaptunTunnel,
+  createPublicTunnel,
   createTestProjectFixture,
 } from "../test-support/create-test-project.ts";
 
@@ -111,7 +111,7 @@ describe("e2e test map", () => {
 
   test("secret-substitution: public tunnel", async () => {
     await using fixture = await createTestProjectFixture();
-    using publicTunnel = await createOsCaptunTunnel({
+    using publicTunnel = await createPublicTunnel({
       fetch: (request) => {
         const url = new URL(request.url);
         return Response.json({
@@ -224,7 +224,7 @@ describe("e2e test map", () => {
         await mcpServer.close();
       },
     };
-    using mcpTunnel = await createOsCaptunTunnel({
+    using mcpTunnel = await createPublicTunnel({
       fetch: (request) => mcpTransport.handleRequest(request),
     });
     await using fixture = await createTestProjectFixture({
