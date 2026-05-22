@@ -73,14 +73,14 @@ describe("e2e test map", () => {
   test("type inference for codemode script results", async () => {
     await using fixture = await createTestProjectFixture();
 
-    const result = await fixture.executeCodemodeScript(async () => {
+    const result = await fixture.codemode.execute(async () => {
       return { foo: "bar" };
     });
     expectTypeOf(result.success()).toMatchObjectType<{ foo: string }>();
     expect(result.success()).toMatchObject({ foo: "bar" });
   });
 
-  test("secret-substitution: secret", async () => {
+  test("secret-substitution: egress intercept", async () => {
     await using fixture = await createTestProjectFixture({
       egressFetch: async (request) => {
         const url = new URL(request.url);
@@ -98,7 +98,7 @@ describe("e2e test map", () => {
       material: "codemode-secret-value",
     });
 
-    const result = await fixture.executeCodemodeScript(async () => {
+    const result = await fixture.codemode.execute(async () => {
       const response = await fetch("https://httpbin.org/anything", {
         headers: { Authorization: "Bearer getSecret({key:'blabla'})" },
       });
@@ -128,17 +128,14 @@ describe("e2e test map", () => {
       material: "codemode-secret-value",
     });
 
-    const result = await fixture.executeCodemodeScript(
-      fixture.createCodemodeScriptWithInputs(
-        { baseUrl: publicTunnel.url },
-        async (_ctx, inputs) => {
-          const response = await fetch(`${inputs.baseUrl}/anything`, {
-            headers: { Authorization: "Bearer getSecret({key:'blabla'})" },
-          });
-          return response.json();
-        },
-      ),
-    );
+    const result = await fixture.codemode
+      .bind({ baseUrl: publicTunnel.url })
+      .execute(async function () {
+        const response = await fetch(`${this.baseUrl}/anything`, {
+          headers: { Authorization: "Bearer getSecret({key:'blabla'})" },
+        });
+        return response.json();
+      });
     expect(result.success()).toMatchObject({
       authHeader: "Bearer codemode-secret-value",
     });
@@ -177,7 +174,7 @@ describe("e2e test map", () => {
       },
     });
 
-    const result = await fixture.executeCodemodeScript(async (ctx: any) => {
+    const result = await fixture.codemode.execute(async (ctx: any) => {
       return ctx.petstore.getInventory();
     });
 
@@ -194,7 +191,7 @@ describe("e2e test map", () => {
       version: "1.0.0",
     });
     mcpServer.registerTool(
-      "web_search_exa",
+      "my_funky_search",
       {
         description: "Search the web",
         inputSchema: {
@@ -236,7 +233,7 @@ describe("e2e test map", () => {
         type: "events.iterate.com/codemode/tool-provider-registered",
         payload: {
           instructions:
-            "Use ctx.mcp.publicTunnelSearch for test web search. Call ctx.mcp.publicTunnelSearch.listTools() to inspect available tools, then call ctx.mcp.publicTunnelSearch.web_search_exa({ query, numResults }).",
+            "Use ctx.mcp.publicTunnelSearch for test web search. Call ctx.mcp.publicTunnelSearch.listTools() to inspect available tools, then call ctx.mcp.publicTunnelSearch.my_funky_search({ query, numResults }).",
           invocation: {
             kind: "rpc",
             callable: {
@@ -261,9 +258,9 @@ describe("e2e test map", () => {
       },
     });
 
-    const result = await fixture.executeCodemodeScript(async (ctx: any) => {
+    const result = await fixture.codemode.execute(async (ctx: any) => {
       const tools = await ctx.mcp.publicTunnelSearch.listTools();
-      const search = await ctx.mcp.publicTunnelSearch.web_search_exa({
+      const search = await ctx.mcp.publicTunnelSearch.my_funky_search({
         numResults: 2,
         query: "public tunnel mcp",
       });
@@ -277,12 +274,7 @@ describe("e2e test map", () => {
         result: "search result",
       },
       tools: {
-        tools: [
-          expect.objectContaining({
-            description: "Search the web",
-            name: "web_search_exa",
-          }),
-        ],
+        tools: [{ description: "Search the web", name: "my_funky_search" }],
       },
     });
   });
@@ -290,7 +282,7 @@ describe("e2e test map", () => {
   test("can use orpc os.project.* tools", async () => {
     await using fixture = await createTestProjectFixture({});
 
-    const result = await fixture.executeCodemodeScript(async (ctx: any) => {
+    const result = await fixture.codemode.execute(async (ctx: any) => {
       const projects = await ctx.os.__internal.health();
       return projects;
     });
@@ -305,7 +297,7 @@ describe("e2e test map", () => {
   test("can use arbitrary replicate model via ctx.ai", async () => {
     await using fixture = await createTestProjectFixture({});
 
-    const result = await fixture.executeCodemodeScript(async (ctx: any) => {
+    const result = await fixture.codemode.execute(async (ctx: any) => {
       const ai = await ctx.ai.run("replicate/llama-3.1-8b-instruct", {
         prompt: "What is one plus two",
       });
@@ -322,7 +314,7 @@ describe("e2e test map", () => {
   test("promise pipelining", async () => {
     await using fixture = await createTestProjectFixture({});
 
-    const result = await fixture.executeCodemodeScript(async (ctx: any) => {
+    const result = await fixture.codemode.execute(async (ctx: any) => {
       // look ma, no intermediate await!
       await ctx.repos.get({ slug: "iterate-config" }).getInfo();
     });
@@ -338,11 +330,11 @@ describe("e2e test map", () => {
   test("can use workspace tools", async () => {
     await using fixture = await createTestProjectFixture({});
 
-    await fixture.executeCodemodeScript(async (ctx: any) => {
+    await fixture.codemode.execute(async (ctx: any) => {
       await ctx.workspace.writeFile("greeting.txt", "hiya");
     });
 
-    const result = await fixture.executeCodemodeScript(async (ctx: any) => {
+    const result = await fixture.codemode.execute(async (ctx: any) => {
       const text = await ctx.workspace.readFile("greeting.txt");
       return { text };
     });
@@ -355,7 +347,7 @@ describe("e2e test map", () => {
   test("workspace can clone public github repo", async () => {
     await using fixture = await createTestProjectFixture({});
 
-    await fixture.executeCodemodeScript(async (ctx: any) => {
+    await fixture.codemode.execute(async (ctx: any) => {
       await ctx.workspace.git.clone({
         url: "https://github.com/iterate/captun.git",
       });
@@ -365,7 +357,7 @@ describe("e2e test map", () => {
   test("can update iterate config repo via workspace", async () => {
     await using fixture = await createTestProjectFixture({});
 
-    await fixture.executeCodemodeScript(async (ctx: any) => {
+    await fixture.codemode.execute(async (ctx: any) => {
       await ctx.workspace.writeFile("iterate.config.ts", '{\n  "version": 1\n}\n');
       await ctx.workspace.git.commit({
         message: "Update iterate config",
@@ -373,7 +365,7 @@ describe("e2e test map", () => {
       await ctx.workspace.git.push();
     });
 
-    const result = await fixture.executeCodemodeScript(async (ctx: any) => {
+    const result = await fixture.codemode.execute(async (ctx: any) => {
       const repo = await ctx.repos.get({ slug: "iterate-config" }).getInfo();
       return repo;
     });
@@ -389,7 +381,7 @@ describe("e2e test map", () => {
     // await fixture.waitToBeRoutable(); // wait for cname record event
     // true-e2e__${projectSlug}.iterate.app is routable immediately
 
-    await fixture.executeCodemodeScript(async (ctx: any) => {
+    await fixture.codemode.execute(async (ctx: any) => {
       await ctx.workspace.writeFile(
         "worker.js",
         "export default {\n  fetch: async () => new Response('hello from app one')\n}\n",
@@ -424,7 +416,7 @@ describe("ai tests", async () => {
     await using fixture = await createTestProjectFixture({});
 
     // append export function defaultAgentSetupEvents but that's bad and janky
-    const result = await fixture.executeCodemodeScript(async (ctx: any) => {
+    const result = await fixture.codemode.execute(async (ctx: any) => {
       const ai = await ctx.ai.run("replicate/llama-3.1-8b-instruct", {
         prompt: "What is one plus two",
       });

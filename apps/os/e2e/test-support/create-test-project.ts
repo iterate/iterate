@@ -121,11 +121,45 @@ export async function createTestProjectFixture<
     };
   };
 
+  class CodemodeBuilder<Ctx = {}, This = {}> {
+    bound: unknown = null;
+
+    execute<NewCtx extends Ctx = {} extends Ctx ? any : Ctx, Result = {}>(
+      fn: { dummyMethod(this: This, ctx: NewCtx): Promise<Result> }["dummyMethod"],
+      //    ^ dummyMethod needed because an inline arrow-style function type like `(this: X, foo: Y) => Z` doesn't actually set the type of `this`
+    ) {
+      return executeCodemodeScript(this.define(fn));
+    }
+    context<NewCtx>() {
+      return new CodemodeBuilder<NewCtx, This>();
+    }
+    bind<NewThis>(bound: NewThis) {
+      const newBuilder = new CodemodeBuilder<Ctx, NewThis>();
+      newBuilder.bound = structuredClone(bound);
+      return newBuilder;
+    }
+    define<NewCtx extends Ctx = {} extends Ctx ? any : Ctx, Result = {}>(
+      fn: { dummyMethod(this: This, ctx: NewCtx): Promise<Result> }["dummyMethod"],
+    ) {
+      const script = stringifyCodemodeScript(fn);
+      if (this.bound !== null) {
+        const indentedCode = script.code.replace(/\n/g, "\n  ");
+        script.code = [
+          `async (ctx) => {`,
+          `  return await (${indentedCode}).bind(${JSON.stringify(this.bound)})(ctx)`,
+          `}`,
+        ].join("\n");
+      }
+      return script;
+    }
+  }
+
   return {
     ...project,
     /** recommended test stream path - arbitrary, but by convention mirrors test file + name as its path (`/${relativeFilePath}/${describeSlug}/${testSlug}`)  */
     streamPath,
     slugPrefix,
+    codemode: new CodemodeBuilder(),
     tunnelBaseUrl: tunnel ? project.baseUrl + "/__iterate/use-egress-tunnel" : undefined,
     /** strongly-typed event constructor for the given processor contracts */
     event: (event: ProcessorContractEvent<ProcessorContracts>) => event,

@@ -122,7 +122,10 @@
     "unicorn-js/isolated-functions": [
       "error",
       {
-        "selectors": ["CallExpression[callee.property.name=/CodemodeScript/] :function"],
+        "selectors": [
+          "CallExpression[callee.object.object.name=\"fixture\"][callee.object.property.name=\"codemode\"] :function",
+          "CallExpression[callee.object.callee.object.object.name=\"fixture\"][callee.object.callee.object.property.name=\"codemode\"] :function"
+        ],
         "overrideGlobals": {
           "fetch": "readonly",
           "console": "readonly"
