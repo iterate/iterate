@@ -148,6 +148,44 @@ export async function readProjectStreamUntil<T extends Event>(input: {
   );
 }
 
+export async function streamProjectEventsUntil<T extends Event>(input: {
+  afterOffset: number | "start";
+  client: OsClient;
+  predicate: (event: Event) => event is T;
+  projectSlugOrId: string;
+  streamPath: string;
+  timeoutMs?: number;
+}) {
+  const timeoutMs = input.timeoutMs || 4_000;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const events: Event[] = [];
+
+  try {
+    const stream = await input.client.project.streams.streamEvents(
+      {
+        afterOffset: input.afterOffset,
+        projectSlugOrId: input.projectSlugOrId,
+        streamPath: input.streamPath,
+      },
+      { signal: controller.signal },
+    );
+
+    for await (const event of stream) {
+      events.push(event);
+      if (input.predicate(event)) return events;
+    }
+  } catch (error) {
+    if (!controller.signal.aborted) throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  throw new Error(
+    `Timed out streaming project event matching ${input.predicate.toString()}. Saw: ${JSON.stringify(events, null, 2)}`,
+  );
+}
+
 export function uniqueSuffix() {
   return `${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
 }

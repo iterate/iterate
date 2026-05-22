@@ -10,7 +10,7 @@ import {
   createAdminOsClient,
   requireBaseUrl,
   uniqueSuffix,
-  readProjectStreamUntil,
+  streamProjectEventsUntil,
   requireAdminBearerToken,
 } from "./os-client.ts";
 
@@ -79,7 +79,7 @@ export async function createTestProjectFixture<
       (event.payload as ReceiveFunctionCallResultInput).scriptExecutionId ===
         startedPayload.scriptExecutionId;
 
-    const events = await readProjectStreamUntil({
+    const events = await streamProjectEventsUntil({
       afterOffset: started.event.offset > 1 ? started.event.offset - 1 : "start",
       client: fixture.client,
       projectSlugOrId: fixture.project.id,
