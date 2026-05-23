@@ -10,44 +10,52 @@ type SecretReference = {
   source: string;
 };
 
-const SECRET_REFERENCE_PATTERN = /getSecret\(([^()]*)\)/g;
 const SECRET_REFERENCE_NAME = "getSecret(";
 
-export class ProjectEgressSecretSubstitutionError extends Error {
-  readonly header?: string;
-  readonly secretKey?: string;
+export type ProjectEgressSecretSubstitutionClientError = {
+  header: string;
+  message: string;
+  secretKey?: string;
+};
 
-  constructor(input: { header?: string; message: string; secretKey?: string; cause?: unknown }) {
-    super(input.message);
-    this.name = "ProjectEgressSecretSubstitutionError";
-    this.header = input.header;
-    this.secretKey = input.secretKey;
-    this.cause = input.cause;
-  }
+type SecretReferenceParseResult =
+  | { ok: true; references: SecretReference[] }
+  | { ok: false; error: ProjectEgressSecretSubstitutionClientError };
 
-  toResponse() {
-    return Response.json(
-      {
-        error: "project_egress_secret_substitution_failed",
-        message: this.message,
-        ...(this.header == null ? {} : { header: this.header }),
-        ...(this.secretKey == null ? {} : { secretKey: this.secretKey }),
-      },
-      { status: 502 },
-    );
-  }
+type SecretReferenceResolutionResult =
+  | { ok: true; value: string }
+  | { ok: false; error: ProjectEgressSecretSubstitutionClientError };
+
+export type SubstituteProjectEgressSecretHeadersResult =
+  | { ok: true; headers: Headers; substituted: boolean }
+  | { ok: false; error: ProjectEgressSecretSubstitutionClientError };
+
+export function projectEgressSecretSubstitutionClientErrorToResponse(
+  error: ProjectEgressSecretSubstitutionClientError,
+) {
+  return Response.json(
+    {
+      error: "project_egress_secret_substitution_failed",
+      message: error.message,
+      header: error.header,
+      ...(error.secretKey == null ? {} : { secretKey: error.secretKey }),
+    },
+    { status: 400 },
+  );
 }
 
 export async function substituteProjectEgressSecretHeaders(input: {
   headers: Headers;
   projectEgressInterceptActive: boolean;
   secrets: ProjectEgressSecretResolver;
-}) {
+}): Promise<SubstituteProjectEgressSecretHeadersResult> {
   let substituted = false;
   const headers = new Headers(input.headers);
 
   for (const [header, value] of input.headers) {
-    const references = parseSecretReferences({ header, value });
+    const parsed = parseSecretReferences({ header, value });
+    if (!parsed.ok) return parsed;
+    const references = parsed.references;
     if (references.length === 0) continue;
 
     let nextValue = value;
@@ -58,45 +66,53 @@ export async function substituteProjectEgressSecretHeaders(input: {
         reference,
         secrets: input.secrets,
       });
-      nextValue = nextValue.replace(reference.source, () => replacement);
+      if (!replacement.ok) return replacement;
+      nextValue = nextValue.replace(reference.source, () => replacement.value);
     }
 
     headers.set(header, nextValue);
     substituted = true;
   }
 
-  return { headers, substituted };
+  return { ok: true, headers, substituted };
 }
 
-export function parseSecretReferences(input: { header: string; value: string }): SecretReference[] {
+export function parseSecretReferences(input: {
+  header: string;
+  value: string;
+}): SecretReferenceParseResult {
   const references: SecretReference[] = [];
-  let unmatchedValue = input.value;
-  for (const match of input.value.matchAll(SECRET_REFERENCE_PATTERN)) {
-    const source = match[0];
-    try {
-      const args = JSON5.parse(`[${match[1]}]`);
-      let key = args[0];
-      if (typeof key !== "string") key = args[0]?.key;
-      if (!key || typeof key !== "string") throw new Error(`Use format getSecret('mykey')`);
-      references.push({ key, source });
-      unmatchedValue = unmatchedValue.replace(source, "");
-    } catch (error) {
-      throw new ProjectEgressSecretSubstitutionError({
-        header: input.header,
-        message: `Project egress secret substitution failed: Could not parse Secret reference ${source} in header "${input.header}".`,
-        cause: error,
-      });
+  let searchStart = 0;
+
+  while (searchStart < input.value.length) {
+    const start = input.value.indexOf(SECRET_REFERENCE_NAME, searchStart);
+    if (start === -1) break;
+
+    const argumentStart = start + SECRET_REFERENCE_NAME.length;
+    const end = findSecretReferenceEnd(input.value, argumentStart);
+    const source = end === -1 ? input.value.slice(start) : input.value.slice(start, end + 1);
+    if (end === -1) {
+      return parseSecretReferenceError({ header: input.header, source });
     }
+
+    let args: any[];
+    try {
+      args = JSON5.parse(`[${input.value.slice(argumentStart, end)}]`) as any[];
+    } catch {
+      return parseSecretReferenceError({ header: input.header, source });
+    }
+
+    let key = args[0];
+    if (typeof key !== "string") key = args[0]?.key;
+    if (!key || typeof key !== "string") {
+      return parseSecretReferenceError({ header: input.header, source });
+    }
+    references.push({ key, source });
+
+    searchStart = end + 1;
   }
 
-  if (unmatchedValue.includes(SECRET_REFERENCE_NAME)) {
-    throw new ProjectEgressSecretSubstitutionError({
-      header: input.header,
-      message: `Project egress secret substitution failed: Could not parse Secret reference ${SECRET_REFERENCE_NAME} in header "${input.header}".`,
-    });
-  }
-
-  return references;
+  return { ok: true, references };
 }
 
 async function resolveSecretReference(input: {
@@ -104,26 +120,82 @@ async function resolveSecretReference(input: {
   projectEgressInterceptActive: boolean;
   reference: SecretReference;
   secrets: ProjectEgressSecretResolver;
-}) {
+}): Promise<SecretReferenceResolutionResult> {
   if (input.projectEgressInterceptActive) {
     const secret = await input.secrets.getSecretSummaryByKeyOrNull({ key: input.reference.key });
     if (secret) {
-      return `Secret value withheld because this Project Egress Intercept Tunnel is active. Requested ${JSON.stringify(input.reference.source)}`;
+      return {
+        ok: true,
+        value: `Secret value withheld because this Project Egress Intercept Tunnel is active. Requested ${JSON.stringify(input.reference.source)}`,
+      };
     }
 
     return secretNotFound(input);
   }
 
   const secret = await input.secrets.getSecretOrNull({ key: input.reference.key });
-  if (secret) return secret.material;
+  if (secret) return { ok: true, value: secret.material };
 
   return secretNotFound(input);
 }
 
-function secretNotFound(input: { header: string; reference: SecretReference }): never {
-  throw new ProjectEgressSecretSubstitutionError({
-    header: input.header,
-    message: `Project egress secret substitution failed: Secret not found for key "${input.reference.key}".`,
-    secretKey: input.reference.key,
-  });
+function findSecretReferenceEnd(value: string, argumentStart: number) {
+  let depth = 1;
+  let quote: string | null = null;
+  let escaped = false;
+
+  for (let index = argumentStart; index < value.length; index++) {
+    const char = value[index];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === quote) quote = null;
+      continue;
+    }
+
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char === "(") depth++;
+    if (char === ")") {
+      depth--;
+      if (depth === 0) return index;
+    }
+  }
+
+  return -1;
+}
+
+function parseSecretReferenceError(input: {
+  header: string;
+  source: string;
+}): SecretReferenceParseResult {
+  return {
+    ok: false,
+    error: {
+      header: input.header,
+      message: `Project egress secret substitution failed: Could not parse Secret reference ${input.source} in header "${input.header}".`,
+    },
+  };
+}
+
+function secretNotFound(input: {
+  header: string;
+  reference: SecretReference;
+}): SecretReferenceResolutionResult {
+  return {
+    ok: false,
+    error: {
+      header: input.header,
+      message: `Project egress secret substitution failed: Secret not found for key "${input.reference.key}".`,
+      secretKey: input.reference.key,
+    },
+  };
 }

@@ -46,7 +46,10 @@ import {
   ProjectLifecycleProcessorContract,
 } from "~/domains/projects/stream-processors/project-lifecycle.ts";
 import { createProjectWildcardCNAMERecord as createCloudflareProjectWildcardCNAMERecord } from "~/domains/projects/cloudflare-dns.ts";
-import { substituteProjectEgressSecretHeaders } from "~/domains/projects/egress-secret-substitution.ts";
+import {
+  projectEgressSecretSubstitutionClientErrorToResponse,
+  substituteProjectEgressSecretHeaders,
+} from "~/domains/projects/egress-secret-substitution.ts";
 import {
   type RepoDurableObject,
   type RepoInfo,
@@ -491,6 +494,9 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
       projectEgressInterceptActive: !!egressInterceptTunnel,
       secrets,
     });
+    if (!substitutedHeaders.ok) {
+      return projectEgressSecretSubstitutionClientErrorToResponse(substitutedHeaders.error);
+    }
 
     const outboundRequest = substitutedHeaders.substituted
       ? new Request(request, { headers: substitutedHeaders.headers })
