@@ -46,10 +46,7 @@ import {
   ProjectLifecycleProcessorContract,
 } from "~/domains/projects/stream-processors/project-lifecycle.ts";
 import { createProjectWildcardCNAMERecord as createCloudflareProjectWildcardCNAMERecord } from "~/domains/projects/cloudflare-dns.ts";
-import {
-  projectEgressSecretSubstitutionClientErrorToResponse,
-  substituteProjectEgressSecretHeaders,
-} from "~/domains/projects/egress-secret-substitution.ts";
+import { substituteProjectEgressSecretHeaders } from "~/domains/projects/egress-secret-substitution.ts";
 import {
   type RepoDurableObject,
   type RepoInfo,
@@ -489,18 +486,19 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     // Use one request-level intercept decision for both secret substitution and
     // routing so a newly connected tunnel cannot see real secret material.
     const egressInterceptTunnel = this.#projectEgressInterceptTunnel;
-    const substitutedHeaders = await substituteProjectEgressSecretHeaders({
-      headers: request.headers,
-      projectEgressInterceptActive: !!egressInterceptTunnel,
-      secrets,
-    });
-    if (!substitutedHeaders.ok) {
-      return projectEgressSecretSubstitutionClientErrorToResponse(substitutedHeaders.error);
-    }
+    const [secretSubstitutionError, substitutedHeaders] =
+      await substituteProjectEgressSecretHeaders({
+        headers: request.headers,
+        projectEgressInterceptActive: !!egressInterceptTunnel,
+        secrets,
+      });
+    if (secretSubstitutionError) return secretSubstitutionError;
 
-    const outboundRequest = substitutedHeaders.substituted
-      ? new Request(request, { headers: substitutedHeaders.headers })
-      : request;
+    const outboundHeaders = new Headers(request.headers);
+    for (const [header, value] of Object.entries(substitutedHeaders)) {
+      outboundHeaders.set(header, value);
+    }
+    const outboundRequest = new Request(request, { headers: outboundHeaders });
 
     if (egressInterceptTunnel) {
       return await egressInterceptTunnel.fetch(outboundRequest);

@@ -5,13 +5,12 @@
  * it at any running OS project MCP endpoint and it uses the server's static
  * inbound-MCP provider stack through the public MCP tool shape:
  *
- *   OS_E2E_MCP_URL=https://mcp__demo.iterate-preview-2.app/ \
- *   OS_E2E_MCP_BEARER_TOKEN=... \
- *   pnpm e2e -t "project MCP exec_js"
+ *   doppler run --config preview_2 -- pnpm e2e -t "project MCP exec_js"
  *
- * OS_E2E_MCP_BEARER_TOKEN may be a Clerk OAuth access token, a Clerk session
- * token, or an OS admin token. Clerk Testing Tokens are not bearer auth tokens;
- * they only bypass Clerk bot detection for Frontend API requests.
+ * OS_E2E_MCP_URL can override the fixture-created project MCP URL. When that is
+ * set, OS_E2E_MCP_BEARER_TOKEN may be a Clerk OAuth access token, a Clerk
+ * session token, or an OS admin token. Clerk Testing Tokens are not bearer auth
+ * tokens; they only bypass Clerk bot detection for Frontend API requests.
  *
  * If APP_CONFIG_SLACK_BOT_TOKEN is available to the test process, the test
  * discovers the shared Slack e2e channel and proves real
@@ -20,14 +19,17 @@
 import { Client as MCPClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { describe, expect, test } from "vitest";
+import { buildProjectMcpUrl } from "../../src/lib/project-host-routing.ts";
+import { createTestProjectFixture } from "../test-support/create-test-project.ts";
+import { requireAdminBearerToken } from "../test-support/os-client.ts";
 
-const maybeMcpUrl = process.env.OS_E2E_MCP_URL?.trim();
-const describeIfMcpTarget = maybeMcpUrl ? describe : describe.skip;
-
-describeIfMcpTarget("project MCP exec_js static codemode provider stack", () => {
+describe("project MCP exec_js static codemode provider stack", () => {
   test("executes real codemode calls across built-in, RPC, OpenAPI, stream, and optional Slack providers", async () => {
-    const mcpUrl = requireMcpUrl();
-    const bearerToken = requireBearerToken();
+    await using fixture = await createTestProjectFixture({ slugPrefix: "mcp-provider-stack" });
+    const mcpUrl = requireMcpUrl({ projectSlug: fixture.project.slug });
+    const bearerToken = process.env.OS_E2E_MCP_URL?.trim()
+      ? requireBearerToken()
+      : requireAdminBearerToken();
     const slackChannelId = await findSlackE2eChannelId();
     const transport = new StreamableHTTPClientTransport(mcpUrl, {
       requestInit: { headers: { authorization: `Bearer ${bearerToken}` } },
@@ -45,7 +47,7 @@ describeIfMcpTarget("project MCP exec_js static codemode provider stack", () => 
     expect(JSON.stringify(runCode?.inputSchema)).toContain("code");
     expect(JSON.stringify(runCode?.inputSchema)).not.toContain("providers");
 
-    const codemodeScript = stringifyCodemodeScript(async (ctx: any) => {
+    const codemodeScript = fixture.codemode.define(async (ctx: any) => {
       // todo: split into smaller more focused tests
       const channel = "SLACK_CHANNEL_ID_PLACEHOLDER";
       const { ai, console, fetch, integrations, os, repos, streams, workspace } = ctx;
@@ -77,16 +79,10 @@ describeIfMcpTarget("project MCP exec_js static codemode provider stack", () => 
         prompt: "Return the exact phrase codemode e2e.",
       });
 
-      const repoCallbacks = [];
-      const repo = await repos.get({ slug: `e2e-${marker}` }).proofOfConcept({
-        message: "repo from MCP e2e",
-        callback: async (args: { repoName: string }) => {
-          repoCallbacks.push(args.repoName);
-          console.log("repo callback", args.repoName);
-        },
-      });
+      const repo = await repos.create({ slug: `e2e-${marker}` }).getInfo();
+      console.log("repo created", repo.slug);
       const workspacePath = `/mcp-e2e-${marker}.txt`;
-      await workspace.writeFile(workspacePath, "workspace from MCP e2e\\n");
+      await workspace.writeFile(workspacePath, "workspace from MCP e2e\n");
       const workspaceText = await workspace.readFile(workspacePath);
 
       const explicitAgentHandle = await ctx.agents.create();
@@ -139,9 +135,8 @@ describeIfMcpTarget("project MCP exec_js static codemode provider stack", () => 
         },
         raced,
         repo: {
-          callbackCalled: repoCallbacks.length > 0,
-          message: repo.message,
-          repoName: repo.repoName,
+          defaultBranch: repo.defaultBranch,
+          slug: repo.slug,
         },
         slack: channel
           ? {
@@ -177,7 +172,7 @@ describeIfMcpTarget("project MCP exec_js static codemode provider stack", () => 
     const text = extractTextContent(result.content).join("\n");
     expect(result.isError, text).not.toBe(true);
     expect(text).toContain("codemode e2e proof started");
-    expect(text).toContain("repo callback");
+    expect(text).toContain("repo created");
 
     const proof = parseRunCodeResult(text);
     expect(proof).toMatchObject({
@@ -190,8 +185,8 @@ describeIfMcpTarget("project MCP exec_js static codemode provider stack", () => 
         sawStreamsList: true,
       },
       repo: {
-        callbackCalled: true,
-        message: "repo from MCP e2e",
+        defaultBranch: "main",
+        slug: expect.stringMatching(/^e2e-/),
       },
       stream: {
         readBackAppendedEvent: true,
@@ -247,24 +242,28 @@ function createMcpClient(params: ConstructorParameters<typeof MCPClient>[0]) {
   });
 }
 
-function stringifyCodemodeScript<Ctx, Result>(fn: (ctx: Ctx, ...args: any[]) => Promise<Result>) {
-  let code = fn.toString();
-  if (!code.startsWith("async")) {
-    code = `async ${code}`;
+function requireMcpUrl(input: { projectSlug: string }) {
+  const override = process.env.OS_E2E_MCP_URL?.trim();
+  if (override) return new URL(override);
+
+  const mcpUrl = buildProjectMcpUrl({
+    projectHostnameBases: requireProjectHostnameBases(),
+    projectSlug: input.projectSlug,
+  });
+  if (!mcpUrl) {
+    throw new Error(
+      `Could not derive an MCP URL for project ${input.projectSlug}; check APP_CONFIG_PROJECT_HOSTNAME_BASES.`,
+    );
   }
-  return {
-    code,
-    $ctx: {} as Ctx,
-    $type: {} as Result,
-  };
+  return new URL(mcpUrl);
 }
 
-function requireMcpUrl() {
-  const raw = process.env.OS_E2E_MCP_URL?.trim();
+function requireProjectHostnameBases() {
+  const raw = process.env.APP_CONFIG_PROJECT_HOSTNAME_BASES?.trim();
   if (!raw) {
-    throw new Error("OS_E2E_MCP_URL is required for the codemode MCP provider-stack e2e.");
+    throw new Error("APP_CONFIG_PROJECT_HOSTNAME_BASES is required for project MCP e2e.");
   }
-  return new URL(raw);
+  return JSON.parse(raw) as string[];
 }
 
 function requireBearerToken() {
@@ -348,7 +347,7 @@ function parseRunCodeResult(text: string) {
     openApi: { hasFindPetsByStatus: boolean; petCount: number };
     orpc: { sawStreamsList: boolean; streamCount: number };
     raced: string;
-    repo: { callbackCalled: boolean; message: string };
+    repo: { defaultBranch: string; slug: string };
     slack: { skipped: true } | { channel: string; ok: boolean; skipped: false; ts: string };
     stream: { readBackAppendedEvent: boolean };
     subagents: {

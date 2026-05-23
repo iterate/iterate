@@ -121,15 +121,11 @@ export async function createTestProjectFixture<
   };
 
   class CodemodeBuilder<Ctx = {}, This = {}> {
-    _boundJson: string;
+    _bound: This;
     _options: Omit<ExecuteScriptParams, "code">;
 
-    constructor(params: {
-      options: Omit<ExecuteScriptParams, "code">;
-      bound?: This;
-      boundJson?: string;
-    }) {
-      this._boundJson = params.boundJson || JSON.stringify(params.bound || {});
+    constructor(params: { options: Omit<ExecuteScriptParams, "code">; bound: This }) {
+      this._bound = params.bound;
       this._options = params.options;
     }
 
@@ -148,7 +144,7 @@ export async function createTestProjectFixture<
     options(newOptions: Partial<typeof this._options>) {
       return new CodemodeBuilder<Ctx, This>({
         options: { ...this._options, ...newOptions },
-        boundJson: this._boundJson,
+        bound: this._bound,
       });
     }
 
@@ -195,11 +191,12 @@ export async function createTestProjectFixture<
       (this: This, ctx: NewCtx): Promise<Result>;
     }) {
       const script = this.context<NewCtx>().stringify<Result>(fn);
-      if (this._boundJson !== "{}") {
+      const boundJson = JSON.stringify(this._bound || {});
+      if (boundJson !== "{}") {
         const indentedCode = script.code.replace(/\n/g, "\n  ");
         script.code = [
           `async (ctx) => {`,
-          `  return await (${indentedCode}).bind(${this._boundJson})(ctx)`,
+          `  return await (${indentedCode}).bind(${boundJson})(ctx)`,
           `}`,
         ].join("\n");
       }

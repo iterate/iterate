@@ -123,12 +123,14 @@
       "error",
       {
         "selectors": [
-          "CallExpression[callee.object.object.name=\"fixture\"][callee.object.property.name=\"codemode\"] :function",
-          "CallExpression[callee.object.callee.object.object.name=\"fixture\"][callee.object.callee.object.property.name=\"codemode\"] :function"
+          "CallExpression[callee.object.object.name=\"fixture\"][callee.object.property.name=\"codemode\"] > :function",
+          "CallExpression[callee.object.callee.object.object.name=\"fixture\"][callee.object.callee.object.property.name=\"codemode\"] > :function"
         ],
         "overrideGlobals": {
+          "crypto": "readonly",
           "fetch": "readonly",
-          "console": "readonly"
+          "console": "readonly",
+          "setTimeout": "readonly"
         }
       }
     ],

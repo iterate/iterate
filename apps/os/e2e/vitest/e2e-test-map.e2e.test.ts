@@ -343,9 +343,7 @@ describe("e2e test map", () => {
       return await ctx.workspace.readFile("/captun/package.json");
     });
 
-    expect(JSON.parse(result.success())).toMatchObject({
-      name: "captun",
-    });
+    expect(result.success()).toContain(`"name": "captun"`);
   });
 
   test("can update iterate config repo via workspace", async () => {
