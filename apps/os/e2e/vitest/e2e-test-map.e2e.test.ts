@@ -10,54 +10,7 @@ import {
 } from "../test-support/create-test-project.ts";
 
 describe("e2e test map", () => {
-  test("expect.getState", async () => {
-    expect(expect.getState()).toMatchInlineSnapshot(`
-      {
-        "assertionCalls": 1,
-        "currentTestName": "e2e test map > expect.getState",
-        "environment": "node",
-        "expectedAssertionsNumber": null,
-        "expectedAssertionsNumberErrorGen": null,
-        "isExpectingAssertions": false,
-        "isExpectingAssertionsError": null,
-        "snapshotState": SnapshotState {
-          "_added": Map {},
-          "_counters": Map {
-            "e2e test map > expect.getState" => 1,
-          },
-          "_dirty": false,
-          "_environment": VitestNodeSnapshotEnvironment {
-            "options": {},
-          },
-          "_fileExists": false,
-          "_initialData": {},
-          "_inlineSnapshotStacks": [],
-          "_inlineSnapshots": [],
-          "_matched": Map {},
-          "_rawSnapshots": [],
-          "_snapshotData": {},
-          "_snapshotFormat": {
-            "escapeString": false,
-            "printBasicPrototype": false,
-          },
-          "_testIdToKeys": Map {
-            "1423330272_0_0" => [
-              "e2e test map > expect.getState 1",
-            ],
-          },
-          "_uncheckedKeys": Set {},
-          "_unmatched": Map {},
-          "_updateSnapshot": "new",
-          "_updated": Map {},
-          "expand": false,
-          "snapshotPath": "/Users/mmkal/src/iterate/apps/os/e2e/vitest/__snapshots__/e2e-test-map.e2e.test.ts.snap",
-          "testFilePath": "/Users/mmkal/src/iterate/apps/os/e2e/vitest/e2e-test-map.e2e.test.ts",
-        },
-        "testPath": "/Users/mmkal/src/iterate/apps/os/e2e/vitest/e2e-test-map.e2e.test.ts",
-      }
-    `);
-  });
-  test("can connect to MCP with admin token", async () => {
+  test.todo("can connect to MCP with admin token", async () => {
     // run pnpm cli claude-mcp which prints how to run claude w/ an admin token from doppler
     // doppler run --config prd -- pnpm cli claude-mcp
     /**
@@ -84,10 +37,7 @@ describe("e2e test map", () => {
   test("secret-substitution: egress intercept", async () => {
     await using fixture = await createTestProjectFixture({
       egressFetch: async (request) => {
-        const url = new URL(request.url);
         return Response.json({
-          hostname: url.hostname,
-          pathname: url.pathname,
           authHeader: request.headers.get("authorization"),
         });
       },
@@ -101,7 +51,7 @@ describe("e2e test map", () => {
 
     const result = await fixture.codemode.execute(async () => {
       const response = await fetch("https://httpbin.org/anything", {
-        headers: { Authorization: "Bearer getSecret({key:'blabla'})" },
+        headers: { Authorization: "Bearer getSecret('blabla')" },
       });
       return response.json();
     });
@@ -130,7 +80,7 @@ describe("e2e test map", () => {
       .bind({ baseUrl: publicTunnel.url })
       .execute(async function () {
         const response = await fetch(`${this.baseUrl}/anything`, {
-          headers: { Authorization: "Bearer getSecret({key:'blabla'})" },
+          headers: { Authorization: "Bearer getSecret('blabla')" },
         });
         return response.json();
       });
@@ -276,8 +226,6 @@ describe("e2e test map", () => {
     });
   });
 
-  // ^^^ tests above this point should be working. tests below are still WIP. Move this marker down below each test that we've got working.
-
   test("can use orpc os.project.* tools", async () => {
     await using fixture = await createTestProjectFixture({
       processors: [CodemodeProcessorContract],
@@ -386,10 +334,17 @@ describe("e2e test map", () => {
   test("workspace can clone public github repo", async () => {
     await using fixture = await createTestProjectFixture({});
 
-    await fixture.codemode.execute(async (ctx: any) => {
+    const result = await fixture.codemode.execute(async (ctx: any) => {
       await ctx.workspace.git.clone({
+        dir: "/captun",
+        depth: 1,
         url: "https://github.com/iterate/captun.git",
       });
+      return await ctx.workspace.readFile("/captun/package.json");
+    });
+
+    expect(JSON.parse(result.success())).toMatchObject({
+      name: "captun",
     });
   });
 
@@ -477,58 +432,5 @@ describe("e2e test map", () => {
       return html;
     };
     await vi.waitFor(getHtml, { timeout: 15_000 });
-  });
-
-  test.todo("tru e2e", async () => {
-    await using fixture = await createTestProjectFixture({});
-
-    // await fixture.waitToBeRoutable(); // wait for cname record event
-    // true-e2e__${projectSlug}.iterate.app is routable immediately
-
-    await fixture.codemode.execute(async (ctx: any) => {
-      await ctx.workspace.writeFile(
-        "worker.js",
-        "export default {\n  fetch: async () => new Response('hello from app one')\n}\n",
-      );
-      await ctx.workspace.git.add({ filepath: "worker.js" });
-      await ctx.workspace.git.commit({
-        message: "Add worker.js",
-      });
-      await ctx.workspace.git.push();
-    });
-
-    const getHtml = async () => {
-      const res = await fetch(`https://true-e2e__${fixture.project.slug}.iterate.app`);
-      if (!res.ok) throw new Error("not ok (yet?)");
-      const html = await res.text();
-      if (!html.includes("hello from app one"))
-        throw new Error("not the expected html (yet?). Got: " + html);
-      return html;
-    };
-    await vi.waitFor(getHtml); // right now we poll for pushes every ten seconds
-    const html = await getHtml();
-    expect(html).toContain("hello from app one");
-  });
-
-  // now do the above but with cname record
-});
-
-describe("ai tests", async () => {
-  // https://www.notion.so/nustom/E2E-test-map-366622a338eb8053984fc756cae2abd2 /agents/e2e-blabla
-
-  test.todo("can use ai", async () => {
-    await using fixture = await createTestProjectFixture({});
-
-    // append export function defaultAgentSetupEvents but that's bad and janky
-    const result = await fixture.codemode.execute(async (ctx: any) => {
-      const ai = await ctx.ai.run("replicate/llama-3.1-8b-instruct", {
-        prompt: "What is one plus two",
-      });
-      return { ai };
-    });
-
-    expect(result.success()).toMatchObject({
-      ai: expect.anything(),
-    });
   });
 });

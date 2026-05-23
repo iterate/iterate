@@ -14,7 +14,7 @@ import { setupE2E } from "../test-support/e2e-test.ts";
 test("starts a script immediately and reads output events from the stream path", async () => {
   await using fixture = await createTestProjectFixture({ slugPrefix: "foobar" });
 
-  const started = await fixture.startCodemodeScript(async () => 1 + 1);
+  const started = await fixture.codemode.start(async () => 1 + 1);
 
   expect(started.event.type).toBe("events.iterate.com/codemode/script-execution-requested");
   expect(started.streamPath).toBeTruthy();
@@ -66,7 +66,7 @@ test("runs codemode fetch through a Project Egress Intercept Tunnel", async (ctx
     },
   });
 
-  const completed = await fixture.executeCodemodeScript(async function () {
+  const completed = await fixture.codemode.execute(async function () {
     const response = await fetch("https://example.com/os-e2e?source=codemode");
     return {
       body: (await response.json()) as { mocked: boolean; query: string; runSlug: string },

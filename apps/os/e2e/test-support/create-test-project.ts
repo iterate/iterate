@@ -48,16 +48,12 @@ export async function createTestProjectFixture<
     Awaited<ReturnType<typeof createTestProject>>["os"]["project"]["codemode"]["executeScript"]
   >[0];
 
-  const startCodemodeScript = async <Ctx, Result>(
-    fn: ((ctx: Ctx) => Promise<Result>) | CodemodeScript<Ctx, Result>,
-    opts?: Partial<Omit<ExecuteScriptParams, "code">>,
+  const startCodemodeScript = async <Result>(
+    script: { code: string; $type: Result },
+    opts: Omit<ExecuteScriptParams, "code">,
   ) => {
-    const script = typeof fn === "function" ? stringifyCodemodeScript(fn) : fn;
     const started = await project.os.project.codemode.executeScript({
       code: script.code,
-      projectSlugOrId: project.project.id,
-      providers: [],
-      streamPath,
       ...opts,
     });
 
@@ -67,10 +63,11 @@ export async function createTestProjectFixture<
     };
   };
 
-  const executeCodemodeScript = async <Ctx, Result>(
-    ...args: Parameters<typeof startCodemodeScript<Ctx, Result>>
+  const executeCodemodeScript = async <Result>(
+    script: { code: string; $type: Result },
+    opts: Omit<ExecuteScriptParams, "code">,
   ) => {
-    const started = await startCodemodeScript(...args);
+    const started = await startCodemodeScript(script, opts);
     const startedPayload = started.event.payload as { scriptExecutionId: string };
     const isCompletedScriptExecution = (
       event: Event,
@@ -93,7 +90,7 @@ export async function createTestProjectFixture<
         `Expected completed script execution ${startedPayload.scriptExecutionId} in stream batch.`,
       );
     }
-    const payload = completed.payload; // todo: maybe throw if it's outcome: "threw" and add a type of the actual script result
+    const payload = completed.payload;
     return {
       payload,
       success: () => {
@@ -104,7 +101,9 @@ export async function createTestProjectFixture<
         }
         return payload.outcome.value as Result;
       },
-      event: completed as Omit<typeof completed, "payload"> & { payload: Ctx },
+      event: completed as Omit<typeof completed, "payload"> & {
+        payload: ReceiveFunctionCallResultInput;
+      },
       events,
       /** get a snapshot-friendly copy of the completed event payload. optionally pass in key-value pairs to replace in the whole payload */
       snapshot: (swaps: Record<string, string> = {}) => {
@@ -122,11 +121,15 @@ export async function createTestProjectFixture<
   };
 
   class CodemodeBuilder<Ctx = {}, This = {}> {
-    _bound: This;
+    _boundJson: string;
     _options: Omit<ExecuteScriptParams, "code">;
 
-    constructor(params: { options: Omit<ExecuteScriptParams, "code">; bound: This }) {
-      this._bound = params.bound;
+    constructor(params: {
+      options: Omit<ExecuteScriptParams, "code">;
+      bound?: This;
+      boundJson?: string;
+    }) {
+      this._boundJson = params.boundJson || JSON.stringify(params.bound || {});
       this._options = params.options;
     }
 
@@ -145,14 +148,20 @@ export async function createTestProjectFixture<
     options(newOptions: Partial<typeof this._options>) {
       return new CodemodeBuilder<Ctx, This>({
         options: { ...this._options, ...newOptions },
-        bound: this._bound,
+        boundJson: this._boundJson,
       });
+    }
+
+    start<NewCtx extends Ctx = {} extends Ctx ? any : Ctx, Result = {}>(fn: {
+      (this: This, ctx: NewCtx): Promise<Result>;
+    }) {
+      return startCodemodeScript(this.define(fn), this._options);
     }
 
     execute<NewCtx extends Ctx = {} extends Ctx ? any : Ctx, Result = {}>(fn: {
       (this: This, ctx: NewCtx): Promise<Result>;
     }) {
-      return executeCodemodeScript(this.define(fn));
+      return executeCodemodeScript(this.define(fn), this._options);
     }
     /** Type-only method to set the type of the codemode function's context parameter */
     context<NewCtx>() {
@@ -162,7 +171,7 @@ export async function createTestProjectFixture<
      * Set some serializable data as the codemode function's `this` binding. Useful when your script needs to access something from outside its scope
      * @example
      * ```ts
-     * const publicTunnel = await createPublicTunnel({ fetch: fixture.tunnelBaseUrl });
+     * using publicTunnel = await createPublicTunnel({ fetch: async () => new Response("ok") });
      *
      * const result = await fixture.codemode
      *   .bind({ baseUrl: publicTunnel.url })
@@ -176,7 +185,7 @@ export async function createTestProjectFixture<
       try {
         return new CodemodeBuilder<Ctx, NewThis>({
           options: this._options,
-          bound: bound,
+          bound: structuredClone(bound),
         });
       } catch (error) {
         throw new Error(`Binding value passed to .bind() must be serializable`, { cause: error });
@@ -186,11 +195,11 @@ export async function createTestProjectFixture<
       (this: This, ctx: NewCtx): Promise<Result>;
     }) {
       const script = this.context<NewCtx>().stringify<Result>(fn);
-      if (this._bound !== null) {
+      if (this._boundJson !== "{}") {
         const indentedCode = script.code.replace(/\n/g, "\n  ");
         script.code = [
           `async (ctx) => {`,
-          `  return await (${indentedCode}).bind(${JSON.stringify(this._bound)})(ctx)`,
+          `  return await (${indentedCode}).bind(${this._boundJson})(ctx)`,
           `}`,
         ].join("\n");
       }
@@ -204,13 +213,12 @@ export async function createTestProjectFixture<
     streamPath,
     slugPrefix,
     codemode: new CodemodeBuilder({
-      options: { projectSlugOrId: project.project.slug, streamPath },
+      options: { projectSlugOrId: project.project.slug, providers: [], streamPath },
       bound: {},
     }),
-    tunnelBaseUrl: tunnel ? project.baseUrl + "/__iterate/use-egress-tunnel" : undefined,
     /** strongly-typed event constructor for the given processor contracts */
     event: (event: ProcessorContractEvent<ProcessorContracts>) => event,
-    /** shorthand for appending an event to the associated test's associated project + stream */
+    /** shorthand for appending an event to the test's associated project + stream */
     append: (params: {
       projectSlugOrId?: string;
       streamPath?: string;
@@ -221,10 +229,6 @@ export async function createTestProjectFixture<
         streamPath: params.streamPath || streamPath,
         event: params.event,
       }),
-    stringifyCodemodeScript,
-    createCodemodeScriptWithInputs,
-    startCodemodeScript,
-    executeCodemodeScript,
     async [Symbol.asyncDispose]() {
       try {
         tunnel?.[Symbol.dispose]();
@@ -251,40 +255,6 @@ type ExtractEventType<EventsDefinition extends ProcessorContractShape["events"]>
   }[keyof EventsDefinition],
   EventInput
 >;
-
-export type CodemodeScript<Ctx, Result> = ReturnType<typeof stringifyCodemodeScript<Ctx, Result>>;
-
-export const stringifyCodemodeScript = <Ctx, Result>(
-  fn: (ctx: Ctx, ...args: any[]) => Promise<Result>,
-) => {
-  let code = fn.toString();
-  if (!code.startsWith("async")) {
-    code = `async ${code}`;
-  }
-  return {
-    code,
-    $ctx: {} as Ctx,
-    $type: {} as Result,
-  };
-};
-
-export const createCodemodeScriptWithInputs = <Inputs, Ctx, Result>(
-  inputs: Inputs,
-  fn: (ctx: Ctx, inputs: Inputs) => Promise<Result>,
-) => {
-  const script = stringifyCodemodeScript(fn);
-  const match = script.code
-    .split("\n")[0]
-    .trim()
-    .match(/, inputs\) => {/);
-  if (!match) {
-    throw new Error(`code with inputs must take a second arg named 'inputs'. Got: ${script.code}`);
-  }
-  return {
-    ...script,
-    code: script.code.replace("\n", `\n  inputs = ${JSON.stringify(inputs)}\n`),
-  };
-};
 
 export async function createTestProject(opts: { slugPrefix: string }) {
   const baseUrl = requireBaseUrl();

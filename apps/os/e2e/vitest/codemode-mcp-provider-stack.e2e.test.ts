@@ -20,7 +20,6 @@
 import { Client as MCPClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { describe, expect, test } from "vitest";
-import { stringifyCodemodeScript } from "../test-support/create-test-project.ts";
 
 const maybeMcpUrl = process.env.OS_E2E_MCP_URL?.trim();
 const describeIfMcpTarget = maybeMcpUrl ? describe : describe.skip;
@@ -246,6 +245,18 @@ function createMcpClient(params: ConstructorParameters<typeof MCPClient>[0]) {
       await client.close();
     },
   });
+}
+
+function stringifyCodemodeScript<Ctx, Result>(fn: (ctx: Ctx, ...args: any[]) => Promise<Result>) {
+  let code = fn.toString();
+  if (!code.startsWith("async")) {
+    code = `async ${code}`;
+  }
+  return {
+    code,
+    $ctx: {} as Ctx,
+    $type: {} as Result,
+  };
 }
 
 function requireMcpUrl() {
