@@ -72,6 +72,10 @@ export class ReposCapability extends WorkerEntrypoint<ReposCapabilityEnv, ReposC
         });
       case "get":
         return await this.get({ slug: readSlug(options.slug) });
+      case "ensureIterateConfigInfo":
+        return await this.ensureIterateConfigInfo({
+          projectSlug: readOptionalString(options.projectSlug) || null,
+        });
       case "list":
         return await this.list();
       default:

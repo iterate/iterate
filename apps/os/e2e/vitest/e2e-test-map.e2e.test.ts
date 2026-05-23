@@ -393,25 +393,90 @@ describe("e2e test map", () => {
     });
   });
 
-  test.todo("can update iterate config repo via workspace", async () => {
-    await using fixture = await createTestProjectFixture({});
+  test("can update iterate config repo via workspace", async () => {
+    await using fixture = await createTestProjectFixture({
+      processors: [CodemodeProcessorContract],
+    });
 
-    await fixture.codemode.execute(async (ctx: any) => {
-      await ctx.workspace.writeFile("iterate.config.ts", '{\n  "version": 1\n}\n');
-      await ctx.workspace.git.commit({
-        message: "Update iterate config",
-      });
-      await ctx.workspace.git.push();
+    await fixture.append({
+      event: {
+        type: "events.iterate.com/codemode/tool-provider-registered",
+        payload: createExampleRpcProviderRegistration({
+          exportName: "ReposCapability",
+          instructions:
+            "Use ctx.repos.ensureIterateConfigInfo({ projectSlug }) to create or inspect the iterate-config Repo, ctx.repos.create({ slug }) to create a Repo, ctx.repos.get({ slug }).getInfo() to inspect one, and ctx.repos.list({}) to list Repos.",
+          path: ["repos"],
+          projectId: fixture.project.id,
+        }),
+      },
     });
 
     const result = await fixture.codemode.execute(async (ctx: any) => {
-      const repo = await ctx.repos.get({ slug: "iterate-config" }).getInfo();
-      return repo;
+      const proof = `hello from iterate config ${Date.now()}`;
+      const repo = await ctx.repos.ensureIterateConfigInfo({ projectSlug: null });
+      const dir = `/iterate-config-${Date.now()}`;
+      const password = repo.token.includes("?expires=")
+        ? repo.token.split("?expires=")[0]
+        : repo.token;
+      const auth = { username: "x", password };
+
+      await ctx.workspace.git.clone({
+        url: repo.remote,
+        dir,
+        branch: repo.defaultBranch,
+        depth: 1,
+        ...auth,
+      });
+
+      await ctx.workspace.writeFile(
+        `${dir}/worker.js`,
+        `export default { async fetch() { return new Response(${JSON.stringify(proof)}, { headers: { "content-type": "text/html" } }) } }\n`,
+      );
+      await ctx.workspace.git.add({ dir, filepath: "worker.js" });
+      const commit = await ctx.workspace.git.commit({
+        dir,
+        message: "Update iterate config",
+        author: { name: "Codemode", email: "codemode@iterate.com" },
+      });
+      const pushed = await ctx.workspace.git.push({
+        dir,
+        remote: "origin",
+        ref: repo.defaultBranch,
+        ...auth,
+      });
+
+      return {
+        commit,
+        proof,
+        pushed,
+        repo: {
+          defaultBranch: repo.defaultBranch,
+          slug: repo.slug,
+        },
+        status: await ctx.workspace.git.status({ dir }),
+      };
     });
 
     expect(result.success()).toMatchObject({
-      slug: "iterate-config",
+      commit: { oid: expect.any(String) },
+      repo: {
+        defaultBranch: "main",
+        slug: "iterate-config",
+      },
+      status: [],
     });
+
+    const proof = result.success().proof;
+    const getHtml = async () => {
+      const response = await fetch(fixture.project.ingressUrl);
+      if (!response.ok) throw new Error(`not ok (yet?): ${response.status}`);
+      const html = await response.text();
+      if (!html.includes(proof)) {
+        throw new Error(`not the expected html (yet?). Got: ${html}`);
+      }
+      return html;
+    };
+    await vi.waitFor(getHtml, { timeout: 15_000 });
   });
 
   test.todo("tru e2e", async () => {
