@@ -1,5 +1,4 @@
 import { eventIterator, oc } from "@orpc/contract";
-import { isValidTypeId } from "@iterate-com/shared/typeid";
 import {
   Event,
   EventInput,
@@ -21,6 +20,16 @@ const AgentPresetEvent = z.object({
   payload: z.record(z.string(), z.unknown()),
 });
 
+const EnvScopedTypeIdPattern =
+  /^(?<localPrefix>[a-z]+)__(?<envPrefix>[a-z]+)__(?<suffix>[0-9a-hjkmnp-tv-z]{26})$/;
+
+function isValidEnvScopedTypeId(value: string, expectedPrefix?: string) {
+  const match = EnvScopedTypeIdPattern.exec(value);
+  if (!match?.groups) return false;
+  if (expectedPrefix && match.groups.localPrefix !== expectedPrefix) return false;
+  return true;
+}
+
 export const Project = z.object({
   id: z.string(),
   slug: z.string(),
@@ -34,7 +43,7 @@ const CallerManagedProjectId = z
   .string()
   .trim()
   .min(1)
-  .refine((value) => isValidTypeId(value, "proj"), {
+  .refine((value) => isValidEnvScopedTypeId(value, "proj"), {
     message: "Project ID must be a valid TypeID with prefix proj",
   });
 
