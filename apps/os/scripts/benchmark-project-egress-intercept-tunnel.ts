@@ -1,9 +1,8 @@
-import { createCaptunTunnel } from "captun/client";
+import { createCaptunTunnel } from "captun";
 import { createORPCClient } from "@orpc/client";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import type { RouterClient } from "@orpc/server";
 import { osContract } from "@iterate-com/os-contract";
-import { projectEgressInterceptUrlFor } from "../e2e/test-support/project-egress-intercept-tunnel.ts";
 import type { appRouter } from "~/orpc/root.ts";
 
 type OrpcClient = RouterClient<typeof appRouter>;
@@ -33,7 +32,7 @@ async function main() {
     projectSlugOrId: options.projectSlugOrId,
   });
 
-  const interceptUrl = projectEgressInterceptUrlFor(project);
+  const interceptUrl = new URL(`${project.ingressUrl}/__iterate/intercept-project-egress`);
 
   const meta = {
     baseUrl: options.baseUrl,
@@ -246,7 +245,7 @@ function parseOptions(args: readonly string[]): Options {
 
 Options:
   --project-slug-or-id  Project slug or ID (required)
-  --base-url            OS base URL (default: OS_BASE_URL or APP_CONFIG_BASE_URL)
+  --base-url            OS base URL (default: APP_CONFIG_BASE_URL)
   --iterations          Number of benchmark iterations (default: 50)
   --concurrency         Concurrent tunnel connections (default: 1)
   --warmup              Warmup iterations (default: 3)
@@ -258,11 +257,7 @@ Options:
   }
 
   return {
-    baseUrl: stringOption(
-      values,
-      "base-url",
-      process.env.OS_BASE_URL ?? process.env.APP_CONFIG_BASE_URL ?? "",
-    ),
+    baseUrl: stringOption(values, "base-url", process.env.APP_CONFIG_BASE_URL ?? ""),
     concurrency: numberOption(values, "concurrency", 1),
     iterations: numberOption(values, "iterations", 50),
     json: booleanOption(values, "json", false),

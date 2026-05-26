@@ -1,37 +1,74 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   parseSecretReferences,
-  ProjectEgressSecretSubstitutionError,
   substituteProjectEgressSecretHeaders,
 } from "./egress-secret-substitution.ts";
 
 describe("parseSecretReferences", () => {
   it("parses simple single-quoted and double-quoted getSecret references", () => {
-    expect(
-      parseSecretReferences({
-        header: "x-test",
-        value: `Bearer getSecret({ key: "openai" }) and getSecret({ key: 'slack.access_token' })`,
-      }),
-    ).toEqual([
+    const [error, references] = parseSecretReferences({
+      header: "x-test",
+      value: `Bearer getSecret({ key: "openai" }) and getSecret({ key: 'slack.access_token' })`,
+    });
+
+    expect(error).toBeNull();
+    expect(references).toEqual([
       { key: "openai", source: `getSecret({ key: "openai" })` },
       { key: "slack.access_token", source: `getSecret({ key: 'slack.access_token' })` },
     ]);
   });
 
-  it("fails when a getSecret reference is ambiguous", () => {
-    expect(() =>
-      parseSecretReferences({
-        header: "x-test",
-        value: `getSecret({ key: process.env.OPENAI_API_KEY })`,
-      }),
-    ).toThrow(ProjectEgressSecretSubstitutionError);
+  it("parses JSON5 getSecret arguments", () => {
+    const [error, references] = parseSecretReferences({
+      header: "x-test",
+      value: `Bearer getSecret("openai") and getSecret({ key: 'slack.access_token', reason: 'e2e' })`,
+    });
+
+    expect(error).toBeNull();
+    expect(references).toEqual([
+      { key: "openai", source: `getSecret("openai")` },
+      {
+        key: "slack.access_token",
+        source: `getSecret({ key: 'slack.access_token', reason: 'e2e' })`,
+      },
+    ]);
+  });
+
+  it("parses quoted keys that contain parentheses", () => {
+    const [error, references] = parseSecretReferences({
+      header: "x-test",
+      value: `Bearer getSecret({ key: "foo)bar" }) and getSecret('baz)qux')`,
+    });
+
+    expect(error).toBeNull();
+    expect(references).toEqual([
+      { key: "foo)bar", source: `getSecret({ key: "foo)bar" })` },
+      { key: "baz)qux", source: `getSecret('baz)qux')` },
+    ]);
+  });
+
+  it("fails when a getSecret reference is ambiguous", async () => {
+    const [error, references] = parseSecretReferences({
+      header: "x-test",
+      value: `getSecret({ key: process.env.OPENAI_API_KEY })`,
+    });
+
+    expect(references).toEqual([]);
+    expect(error).not.toBeNull();
+    if (!error) throw new Error("Expected parseSecretReferences to return an error response.");
+    expect(error.status).toBe(400);
+    await expect(error.json()).resolves.toMatchObject({
+      error: "project_egress_secret_substitution_failed",
+      header: "x-test",
+      message: `Project egress secret substitution failed: Could not parse Secret reference getSecret({ key: process.env.OPENAI_API_KEY }) in header "x-test".`,
+    });
   });
 });
 
 describe("substituteProjectEgressSecretHeaders", () => {
   it("substitutes real secret material when no Project Egress Intercept Tunnel is active", async () => {
     const getSecret = vi.fn(async () => ({ material: "real-secret-value" }));
-    const result = await substituteProjectEgressSecretHeaders({
+    const [error, headers] = await substituteProjectEgressSecretHeaders({
       headers: new Headers({
         "x-api-key": `prefix getSecret({ key: "openai" }) suffix`,
       }),
@@ -42,14 +79,14 @@ describe("substituteProjectEgressSecretHeaders", () => {
       },
     });
 
-    expect(result.substituted).toBe(true);
-    expect(result.headers.get("x-api-key")).toBe("prefix real-secret-value suffix");
+    expect(error).toBeNull();
+    expect(headers).toEqual({ "x-api-key": "prefix real-secret-value suffix" });
     expect(getSecret).toHaveBeenCalledWith({ key: "openai" });
   });
 
   it("substitutes secret material containing dollar replacement tokens literally", async () => {
     const material = "real-$&-$'-$$-secret";
-    const result = await substituteProjectEgressSecretHeaders({
+    const [error, headers] = await substituteProjectEgressSecretHeaders({
       headers: new Headers({
         "x-api-key": `prefix getSecret({ key: "openai" }) suffix`,
       }),
@@ -60,13 +97,14 @@ describe("substituteProjectEgressSecretHeaders", () => {
       },
     });
 
-    expect(result.headers.get("x-api-key")).toBe(`prefix ${material} suffix`);
+    expect(error).toBeNull();
+    expect(headers).toEqual({ "x-api-key": `prefix ${material} suffix` });
   });
 
   it("substitutes descriptive withheld text when a Project Egress Intercept Tunnel is active", async () => {
     const getSecret = vi.fn();
     const getSecretSummaryByKeyOrNull = vi.fn(async () => ({ id: "sec_test" }));
-    const result = await substituteProjectEgressSecretHeaders({
+    const [error, headers] = await substituteProjectEgressSecretHeaders({
       headers: new Headers({
         "x-api-key": `getSecret({ key: "openai" })`,
       }),
@@ -77,26 +115,59 @@ describe("substituteProjectEgressSecretHeaders", () => {
       },
     });
 
-    expect(result.headers.get("x-api-key")).toBe(
-      `Secret value withheld because this Project Egress Intercept Tunnel is active. Requested getSecret({ key: "openai" })`,
-    );
+    expect(error).toBeNull();
+    expect(headers).toEqual({
+      "x-api-key": `Secret value withheld because this Project Egress Intercept Tunnel is active. Requested "getSecret({ key: \\"openai\\" })"`,
+    });
     expect(getSecret).not.toHaveBeenCalled();
     expect(getSecretSummaryByKeyOrNull).toHaveBeenCalledWith({ key: "openai" });
   });
 
-  it("fails descriptively when a referenced secret is missing", async () => {
-    await expect(
-      substituteProjectEgressSecretHeaders({
-        headers: new Headers({
-          "x-api-key": `getSecret({ key: "missing" })`,
-        }),
-        projectEgressInterceptActive: false,
-        secrets: {
-          getSecretOrNull: vi.fn(async () => null),
-          getSecretSummaryByKeyOrNull: vi.fn(),
-        },
+  it("returns successful substitutions alongside a later missing-secret response", async () => {
+    const [error, headers] = await substituteProjectEgressSecretHeaders({
+      headers: new Headers({
+        "x-api-key": `getSecret({ key: "openai" })`,
+        "x-missing": `getSecret({ key: "missing" })`,
       }),
-    ).rejects.toMatchObject({
+      projectEgressInterceptActive: false,
+      secrets: {
+        getSecretOrNull: vi.fn(async (input) =>
+          input.key === "openai" ? { material: "real-secret-value" } : null,
+        ),
+        getSecretSummaryByKeyOrNull: vi.fn(),
+      },
+    });
+
+    expect(error).not.toBeNull();
+    if (!error) throw new Error("Expected missing secret to return an error response.");
+    expect(error.status).toBe(400);
+    expect(headers).toEqual({ "x-api-key": "real-secret-value" });
+    await expect(error.json()).resolves.toMatchObject({
+      error: "project_egress_secret_substitution_failed",
+      header: "x-missing",
+      message: `Project egress secret substitution failed: Secret not found for key "missing".`,
+      secretKey: "missing",
+    });
+  });
+
+  it("fails descriptively when a referenced secret is missing", async () => {
+    const [error, headers] = await substituteProjectEgressSecretHeaders({
+      headers: new Headers({
+        "x-api-key": `getSecret({ key: "missing" })`,
+      }),
+      projectEgressInterceptActive: false,
+      secrets: {
+        getSecretOrNull: vi.fn(async () => null),
+        getSecretSummaryByKeyOrNull: vi.fn(),
+      },
+    });
+
+    expect(error).not.toBeNull();
+    if (!error) throw new Error("Expected missing secret to return an error response.");
+    expect(error.status).toBe(400);
+    expect(headers).toEqual({});
+    await expect(error.json()).resolves.toMatchObject({
+      error: "project_egress_secret_substitution_failed",
       header: "x-api-key",
       message: `Project egress secret substitution failed: Secret not found for key "missing".`,
       secretKey: "missing",

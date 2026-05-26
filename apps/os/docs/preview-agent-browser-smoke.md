@@ -5,9 +5,9 @@ real browser, Clerk, TanStack Start routing, and the app UI.
 
 ## What The Existing Smoke Covers
 
-`pnpm test:e2e:preview` runs `apps/os/e2e/preview-smoke.ts`. It verifies the
-preview worker, unauthenticated redirect behavior, admin-token project setup,
-and MCP/codemode metadata wiring.
+`pnpm e2e -t "OS preview smoke"` runs `apps/os/e2e/vitest/preview-smoke.e2e.test.ts`.
+It verifies the preview worker, unauthenticated redirect behavior, admin-token project setup, and
+MCP/codemode metadata wiring.
 
 It does not exercise Slack. Slack is covered by
 `apps/os/e2e/vitest/codemode-mcp-provider-stack.e2e.test.ts`. When

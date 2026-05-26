@@ -15,23 +15,21 @@ type OpenAiWsStreamApi = ProcessorStreamApi<typeof OpenAiWsProcessorContract>;
 type OpenAiWsConsumedEvent = ConsumedEvent<typeof OpenAiWsProcessorContract>;
 type JsonValue = z.infer<ReturnType<typeof z.json>>;
 
-const OpenAiResponsesStreamMessage = z
-  .object({
-    type: z.string(),
-    response: z
-      .object({
-        id: z.string().optional(),
-        usage: z.json().optional(),
-      })
-      .passthrough()
-      .optional(),
-    item_id: z.string().optional(),
-    output_index: z.number().int().optional(),
-    content_index: z.number().int().optional(),
-    delta: z.string().optional(),
-    error: z.object({ message: z.string().optional() }).passthrough().optional(),
-  })
-  .passthrough();
+const OpenAiResponsesStreamMessage = z.looseObject({
+  type: z.string(),
+  response: z
+    .object({
+      id: z.string().optional(),
+      usage: z.json().optional(),
+    })
+    .passthrough()
+    .optional(),
+  item_id: z.string().optional(),
+  output_index: z.number().int().optional(),
+  content_index: z.number().int().optional(),
+  delta: z.string().optional(),
+  error: z.object({ message: z.string().optional() }).passthrough().optional(),
+});
 
 export type OpenAiWsProcessorDeps = {
   openResponsesWebSocket(): Promise<OpenAiResponsesWebSocket>;

@@ -52,6 +52,7 @@ minimumReleaseAgeExclude:
   - hono
   - "@hono/node-server"
   - "@hono/node-ws"
+  - captun
 
 onlyBuiltDependencies:
   - "@tailwindcss/oxide"

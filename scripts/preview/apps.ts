@@ -54,7 +54,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       CloudflarePreviewAppSlug.parse(appSlug),
     ),
     previewTestBaseUrlEnvVar: "OS_BASE_URL",
-    previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
+    previewTestCommandArgs: ["pnpm", "e2e", "-t", "OS preview smoke"],
   },
   semaphore: {
     ...newStyleCloudflareApps.semaphore,

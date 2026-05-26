@@ -11,7 +11,7 @@ type Project = {
 };
 
 async function main() {
-  const baseUrl = new URL(process.env.OS_BASE_URL?.trim() || DEFAULT_BASE_URL);
+  const baseUrl = new URL(process.env.APP_CONFIG_BASE_URL?.trim() || DEFAULT_BASE_URL);
   const adminApiSecret = requireAdminApiSecret();
   const project = await createProject({
     adminApiSecret,
@@ -111,7 +111,7 @@ function projectMcpUrlFor(input: { baseUrl: URL; project: Project }) {
   }
 
   throw new Error(
-    `Cannot derive project MCP URL for ${input.project.slug} from ${input.baseUrl}. Set OS_BASE_URL to a known OS deployment.`,
+    `Cannot derive project MCP URL for ${input.project.slug} from ${input.baseUrl}. Set APP_CONFIG_BASE_URL to a known OS deployment.`,
   );
 }
 

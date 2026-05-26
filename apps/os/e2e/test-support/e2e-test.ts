@@ -47,10 +47,10 @@ export async function setupE2E(ctx: TestContext): Promise<E2EContext> {
 
   onTestFinished(async ({ task: finishedTask }) => {
     const result = finishedTask.result;
-    const errorMessages =
-      failureMessages.length > 0
-        ? failureMessages
-        : (result?.errors ?? []).map((error) => errorToMessage(error));
+    const errorMessages = [
+      ...failureMessages,
+      ...(result?.errors ?? []).map((error) => errorToMessage(error)),
+    ];
     await new Promise((resolve) => setTimeout(resolve, 25));
     await appendResultFooter({
       outputLogPath: paths.outputLogPath,

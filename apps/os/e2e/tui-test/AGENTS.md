@@ -6,7 +6,7 @@ This folder is its own Microsoft TUI Test project root. Run TUI Test from here s
 Run checked-in workflow specs with:
 
 ```bash
-pnpm --dir apps/os test:e2e:tui
+pnpm --dir apps/os exec tsx ./e2e/tui-test/run.ts
 ```
 
 Use Microsoft TUI Test for black-box terminal workflow specs. The runner owns the PTY, but specs must

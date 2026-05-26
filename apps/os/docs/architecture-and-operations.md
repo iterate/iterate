@@ -257,8 +257,7 @@ Useful first-party references:
 Preview worker smoke:
 
 ```bash
-OS_BASE_URL=https://os.iterate-preview-2.com \
-doppler run --project os --config preview_2 -- pnpm test:e2e:preview
+doppler run --project os --config preview_2 -- pnpm e2e -t "OS preview smoke"
 ```
 
 Full browser smoke with Clerk and `agent-browser`:
@@ -269,7 +268,7 @@ Codemode MCP provider-stack smoke:
 
 ```bash
 OS_E2E_MCP_URL=https://mcp__demo.iterate-preview-2.app \
-doppler run --project os --config preview_2 -- pnpm test:e2e:codemode-mcp
+doppler run --project os --config preview_2 -- pnpm e2e -t "project MCP exec_js"
 ```
 
 The MCP smoke accepts either:

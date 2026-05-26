@@ -2,156 +2,138 @@
  * E2E tests for codemode oRPC endpoints.
  * Runs against a live os deployment (dev or preview).
  *
- * Set OS_BASE_URL to the deployment URL before running:
- *   OS_BASE_URL=https://os.iterate-dev-jonas.com \
+ * Set APP_CONFIG_BASE_URL to the deployment URL before running:
+ *   APP_CONFIG_BASE_URL=https://os.iterate-dev-jonas.com \
  *   OS_E2E_PROJECT_ID=proj_... \
- *   OS_E2E_COOKIE='__session=...' pnpm test:e2e
+ *   OS_E2E_COOKIE='__session=...' pnpm e2e -t codemode.executeScript
  */
-import { createORPCClient } from "@orpc/client";
-import { RPCLink as WebSocketRPCLink } from "@orpc/client/websocket";
-import { OpenAPILink } from "@orpc/openapi-client/fetch";
-import type { RouterClient } from "@orpc/server";
-import WebSocket from "ws";
-import { describe, expect, it } from "vitest";
-import { osContract } from "@iterate-com/os-contract";
-import type { appRouter } from "~/orpc/root.ts";
+import { expect, expectTypeOf, test } from "vitest";
+import { createTestProjectFixture } from "../test-support/create-test-project.ts";
+import { setupE2E } from "../test-support/e2e-test.ts";
 
-type OrpcClient = RouterClient<typeof appRouter>;
+test("starts a script immediately and reads output events from the stream path", async () => {
+  await using fixture = await createTestProjectFixture({ slugPrefix: "foobar" });
 
-function requireBaseUrl() {
-  const baseUrl = process.env.OS_BASE_URL?.trim().replace(/\/+$/, "");
-  if (!baseUrl) {
-    throw new Error("OS_BASE_URL is required for os e2e tests.");
-  }
-  return baseUrl;
-}
+  const started = await fixture.codemode.start(async () => 1 + 1);
 
-function requireProjectId() {
-  const projectId = process.env.OS_E2E_PROJECT_ID?.trim();
-  if (!projectId) {
-    throw new Error("OS_E2E_PROJECT_ID is required for os codemode e2e tests.");
-  }
-  return projectId;
-}
+  expect(started.event.type).toBe("events.iterate.com/codemode/script-execution-requested");
+  expect(started.streamPath).toBeTruthy();
+  const { scriptExecutionId } = started.event.payload as { scriptExecutionId: string };
 
-function requireAuthHeaders() {
-  const bearerToken = process.env.OS_E2E_BEARER_TOKEN?.trim();
-  const cookie = process.env.OS_E2E_COOKIE?.trim();
-  if (!bearerToken && !cookie) {
-    throw new Error("OS_E2E_BEARER_TOKEN or OS_E2E_COOKIE is required for os codemode e2e tests.");
-  }
+  const stream = await fixture.client.project.codemode.streamEvents({
+    afterOffset: started.event.offset > 1 ? started.event.offset - 1 : "start",
+    projectSlugOrId: fixture.project.id,
+    streamPath: started.streamPath,
+  });
 
-  return {
-    ...(bearerToken ? { Authorization: `Bearer ${bearerToken}` } : {}),
-    ...(cookie ? { Cookie: cookie } : {}),
-  };
-}
-
-function createClient(baseUrl: string) {
-  const authHeaders = requireAuthHeaders();
-  return createORPCClient(
-    new OpenAPILink(osContract, {
-      url: `${baseUrl}/api`,
-      fetch: (input, init) => {
-        const requestInit: RequestInit = init ?? {};
-        const headers = new Headers(input instanceof Request ? input.headers : undefined);
-        for (const [key, value] of new Headers(requestInit.headers)) {
-          headers.set(key, value);
-        }
-        for (const [key, value] of Object.entries(authHeaders)) {
-          headers.set(key, value);
-        }
-        if (input instanceof Request) {
-          return fetch(new Request(input, { ...requestInit, headers }));
-        }
-        return fetch(input, { ...requestInit, headers });
-      },
-    }),
-  ) as OrpcClient;
-}
-
-function createWebSocketClient(baseUrl: string) {
-  const authHeaders = requireAuthHeaders();
-  const url = new URL("/api/orpc-ws", baseUrl);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  // Browser WebSocket cannot set headers, but these e2e tests run in Node.
-  // `ws` lets us carry the same Clerk session cookie/bearer token through the
-  // upgrade request that the server's Clerk auth() call reads.
-  const websocket = new WebSocket(url.toString(), { headers: authHeaders });
-  const client = createORPCClient(new WebSocketRPCLink({ websocket })) as OrpcClient;
-  return {
-    client,
-    close: () => websocket.close(),
-  };
-}
-
-describe("codemode.executeScript", () => {
-  it("starts a script immediately and reads output events from the stream path", async () => {
-    const baseUrl = requireBaseUrl();
-    const client = createClient(baseUrl);
-    const wsClient = createWebSocketClient(baseUrl);
-    const projectId = requireProjectId();
-
-    try {
-      const started = await client.project.codemode.executeScript({
-        code: "async () => 1 + 1",
-        projectSlugOrId: projectId,
-        providers: [],
-      });
-
-      expect(started.event.type).toBe("events.iterate.com/codemode/script-execution-requested");
-      expect(started.streamPath).toBeTruthy();
-      const scriptExecutionId = (started.event.payload as { scriptExecutionId: string })
-        .scriptExecutionId;
-
-      const stream = await wsClient.client.project.codemode.streamEvents({
-        afterOffset: started.event.offset > 1 ? started.event.offset - 1 : "start",
-        projectSlugOrId: projectId,
-        streamPath: started.streamPath,
-      });
-
-      const events: Array<Record<string, unknown>> = [];
-      for await (const event of stream) {
-        events.push(event as Record<string, unknown>);
-        const payload = event.payload as Record<string, unknown>;
-        if (
-          event.type === "events.iterate.com/codemode/script-execution-completed" &&
-          payload.scriptExecutionId === scriptExecutionId
-        ) {
-          break;
-        }
-      }
-
-      const finished = events.find(
-        (event) => event.type === "events.iterate.com/codemode/script-execution-completed",
-      );
-      expect(finished?.payload).toMatchObject({
-        outcome: { status: "returned", value: 2 },
-        scriptExecutionId,
-      });
-    } finally {
-      wsClient.close();
+  const events: Array<Record<string, unknown>> = [];
+  for await (const event of stream) {
+    events.push(event as Record<string, unknown>);
+    const payload = event.payload as Record<string, unknown>;
+    if (
+      event.type === "events.iterate.com/codemode/script-execution-completed" &&
+      payload.scriptExecutionId === scriptExecutionId
+    ) {
+      break;
     }
+  }
+
+  const finished = events.find(
+    (event) => event.type === "events.iterate.com/codemode/script-execution-completed",
+  );
+  expect(finished?.payload).toMatchObject({
+    outcome: { status: "returned", value: 2 },
+    scriptExecutionId,
   });
 });
 
-describe("codemode.describe", () => {
-  it("returns short provider instructions", async () => {
-    const baseUrl = requireBaseUrl();
-    const client = createClient(baseUrl);
-    const projectId = requireProjectId();
+test("runs codemode fetch through a Project Egress Intercept Tunnel", async (ctx) => {
+  const e2e = await setupE2E(ctx);
 
-    const result = await client.project.codemode.describe({
-      projectSlugOrId: projectId,
-      providers: [
-        {
-          instructions: "Test functions are available.",
-          invocation: { kind: "event" },
-          path: ["test"],
-        },
-      ],
-    });
+  await using fixture = await createTestProjectFixture({
+    egressFetch: async (request) => {
+      const url = new URL(request.url);
+      if (url.pathname === "/__e2e-health") return new Response("ok");
+      if (url.href.startsWith("https://example.com/os-e2e")) {
+        const source = url.searchParams.get("source");
+        return Response.json(
+          { mocked: true, query: source, runSlug: e2e.runSlug },
+          { headers: { "x-e2e-mocked": "yes" } },
+        );
+      }
 
-    expect(result.instructions).toBe("test: Test functions are available.");
+      return new Response("not found", { status: 404 });
+    },
   });
+
+  const completed = await fixture.codemode.execute(async function () {
+    const response = await fetch("https://example.com/os-e2e?source=codemode");
+    return {
+      body: (await response.json()) as { mocked: boolean; query: string; runSlug: string },
+      mockedHeader: response.headers.get("x-e2e-mocked"),
+      status: response.status,
+    };
+  });
+
+  expectTypeOf(completed.payload).toExtend<{
+    functionCallId: string;
+    durationMs?: number;
+    scriptExecutionId?: string;
+  }>();
+  expect(completed.snapshot({ runSlug: e2e.runSlug })).toMatchInlineSnapshot(`
+    {
+      "durationMs": 999,
+      "functionCallId": "<function-call-id>",
+      "outcome": {
+        "status": "returned",
+        "value": {
+          "body": {
+            "mocked": true,
+            "query": "codemode",
+            "runSlug": "<runSlug>",
+          },
+          "mockedHeader": "yes",
+          "status": 200,
+        },
+      },
+      "scriptExecutionId": "<script-execution-id>",
+    }
+  `);
+
+  expect(completed.payload).toMatchObject({
+    outcome: {
+      status: "returned",
+      value: {
+        body: { mocked: true, query: "codemode", runSlug: e2e.runSlug },
+        mockedHeader: "yes",
+        status: 200,
+      },
+    },
+    scriptExecutionId: completed.payload.scriptExecutionId,
+  });
+  expect(completed.events).toContainEqual(
+    expect.objectContaining({
+      type: "events.iterate.com/codemode/function-call-completed",
+      payload: expect.objectContaining({
+        path: ["fetch"],
+      }),
+    }),
+  );
+});
+
+test("returns short provider instructions", async () => {
+  await using fixture = await createTestProjectFixture({ slugPrefix: "provider-instructions" });
+
+  const result = await fixture.client.project.codemode.describe({
+    projectSlugOrId: fixture.project.id,
+    providers: [
+      {
+        instructions: "Test functions are available.",
+        invocation: { kind: "event" },
+        path: ["test"],
+      },
+    ],
+  });
+
+  expect(result.instructions).toBe("test: Test functions are available.");
 });

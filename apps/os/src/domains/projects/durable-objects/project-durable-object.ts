@@ -1,7 +1,7 @@
 import { createD1Client } from "sqlfu";
 import { z } from "zod";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
-import { acceptCaptunTunnel, type CaptunServerTunnel } from "captun/server";
+import { acceptCaptunTunnel, type Fetcher } from "captun";
 import type { Callable, FetchCallable } from "@iterate-com/shared/callable/types.ts";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
@@ -46,10 +46,7 @@ import {
   ProjectLifecycleProcessorContract,
 } from "~/domains/projects/stream-processors/project-lifecycle.ts";
 import { createProjectWildcardCNAMERecord as createCloudflareProjectWildcardCNAMERecord } from "~/domains/projects/cloudflare-dns.ts";
-import {
-  ProjectEgressSecretSubstitutionError,
-  substituteProjectEgressSecretHeaders,
-} from "~/domains/projects/egress-secret-substitution.ts";
+import { substituteProjectEgressSecretHeaders } from "~/domains/projects/egress-secret-substitution.ts";
 import {
   type RepoDurableObject,
   type RepoInfo,
@@ -64,6 +61,8 @@ import {
   EXAMPLE_EGRESS_SECRET_MATERIAL,
   EXAMPLE_EGRESS_SECRET_METADATA,
 } from "~/domains/secrets/example-secret.ts";
+
+type CaptunServerTunnel = Fetcher & Disposable;
 
 export type ProjectStructuredName = {
   projectId: string;
@@ -190,7 +189,6 @@ const PROJECT_CONFIG_REFRESH_INTERVAL_MS = 10_000;
 const PROJECT_DYNAMIC_WORKER_MAIN_MODULE = "worker.js";
 const PROJECT_DYNAMIC_WORKER_COMPATIBILITY_DATE = "2026-04-27";
 const PROJECT_DYNAMIC_WORKER_COMPATIBILITY_FLAGS = ["nodejs_compat"];
-export const PROJECT_EGRESS_INTERCEPT_ROUTE = "/__iterate/intercept-project-egress";
 
 type ProjectConfigWorkspaceName = {
   projectId: string;
@@ -427,7 +425,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     await this.ensureStarted();
     const summary = this.requireSummary();
     const url = new URL(request.url);
-    if (url.pathname === PROJECT_EGRESS_INTERCEPT_ROUTE) {
+    if (url.pathname === "/__iterate/intercept-project-egress") {
       return this.acceptProjectEgressInterceptTunnel(request);
     }
 
@@ -487,37 +485,30 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
 
     // Use one request-level intercept decision for both secret substitution and
     // routing so a newly connected tunnel cannot see real secret material.
-    const projectEgressInterceptActive = this.#projectEgressInterceptTunnel !== null;
-    let substitutedHeaders: Awaited<ReturnType<typeof substituteProjectEgressSecretHeaders>>;
-    try {
-      substitutedHeaders = await substituteProjectEgressSecretHeaders({
+    const egressInterceptTunnel = this.#projectEgressInterceptTunnel;
+    const [secretSubstitutionError, substitutedHeaders] =
+      await substituteProjectEgressSecretHeaders({
         headers: request.headers,
-        projectEgressInterceptActive,
+        projectEgressInterceptActive: !!egressInterceptTunnel,
         secrets,
       });
-    } catch (error) {
-      if (error instanceof ProjectEgressSecretSubstitutionError) {
-        return error.toResponse();
-      }
-      throw error;
+    if (secretSubstitutionError) return secretSubstitutionError;
+
+    const outboundHeaders = new Headers(request.headers);
+    for (const [header, value] of Object.entries(substitutedHeaders)) {
+      outboundHeaders.set(header, value);
     }
+    const outboundRequest = new Request(request, { headers: outboundHeaders });
 
-    const outboundRequest = substitutedHeaders.substituted
-      ? new Request(request, { headers: substitutedHeaders.headers })
-      : request;
-
-    if (projectEgressInterceptActive) {
-      const egressInterceptTunnel = this.#projectEgressInterceptTunnel;
-      if (egressInterceptTunnel) {
-        return await egressInterceptTunnel.fetch(outboundRequest);
-      }
+    if (egressInterceptTunnel) {
+      return await egressInterceptTunnel.fetch(outboundRequest);
     }
 
     return await fetch(outboundRequest);
   }
 
   async fetch(request: Request): Promise<Response> {
-    if (new URL(request.url).pathname === PROJECT_EGRESS_INTERCEPT_ROUTE) {
+    if (new URL(request.url).pathname === "/__iterate/intercept-project-egress") {
       return this.acceptProjectEgressInterceptTunnel(request);
     }
     return await this.egressFetch(request);

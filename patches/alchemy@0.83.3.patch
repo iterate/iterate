@@ -46,6 +46,44 @@ diff --git a/lib/cloudflare/worker-metadata.js b/lib/cloudflare/worker-metadata.
 index d521d20..e1ff04d 100644
 --- a/lib/cloudflare/worker-metadata.js
 +++ b/lib/cloudflare/worker-metadata.js
+@@ -90,5 +90,20 @@ export async function prepareWorkerMetadata(api, props) {
+     });
+     const observability = camelToSnakeObjectDeep(props.observability);
++    const durableObjectBindingTags = Object.entries(props.bindings ?? {}).flatMap(([bindingName, binding]) => isDurableObjectNamespace(binding) || isContainer(binding)
++        ? // TODO(sam): base64 encode if contains `:`?
++            [`alchemy:do:${binding.id}:${bindingName}`]
++        : []);
++    const reservedWorkerTags = [
++        // encode the migraiton tag if there is one so we can avoid the failed PutWorker after adoption
++        ...(newMigrationTag ? [`alchemy:migration-tag:${newMigrationTag}`] : []),
++        ...(props.tags ?? []),
++    ].slice(0, 10);
++    // Cloudflare caps Workers at 10 tags. Keep migration/user tags first, then
++    // fit as many Durable Object stable-id mapping tags as possible.
++    const workerTags = [
++        ...reservedWorkerTags,
++        ...durableObjectBindingTags.slice(0, 10 - reservedWorkerTags.length),
++    ];
+     // Prepare metadata with bindings
+     const meta = {
+         compatibility_date: props.compatibilityDate,
+@@ -102,15 +117,7 @@ export async function prepareWorkerMetadata(api, props) {
+         logpush: props.logpush ?? false,
+         // TODO(sam): base64 encode instead? 0 collision risk vs readability.
+         tags: [
+-            // encode a mapping table of Durable Object stable ID -> binding name
+-            // we use this to reliably compute class migrations based on server-side state
+-            ...Object.entries(props.bindings ?? {}).flatMap(([bindingName, binding]) => isDurableObjectNamespace(binding) || isContainer(binding)
+-                ? // TODO(sam): base64 encode if contains `:`?
+-                    [`alchemy:do:${binding.id}:${bindingName}`]
+-                : []),
+-            // encode the migraiton tag if there is one so we can avoid the failed PutWorker after adoption
+-            ...(newMigrationTag ? [`alchemy:migration-tag:${newMigrationTag}`] : []),
+-            ...(props.tags ?? []),
++            ...workerTags,
+         ],
+         migrations: {
+             old_tag: oldMigrationTag,
 @@ -330,6 +330,13 @@ export async function prepareWorkerMetadata(api, props) {
                  name: bindingName,
              });
@@ -67,6 +105,21 @@ index d521d20..e1ff04d 100644
 -//# sourceMappingURL=worker-metadata.js.map
 \ No newline at end of file
 +//# sourceMappingURL=worker-metadata.js.map
+diff --git a/lib/cloudflare/api.js b/lib/cloudflare/api.js
+index 3c8efda..7cc64ec 100644
+--- a/lib/cloudflare/api.js
++++ b/lib/cloudflare/api.js
+@@ -102,6 +102,10 @@ export class CloudflareApi {
+         else if (init.headers) {
+             headers = init.headers;
+         }
++        // Node 26 + undici Agent can expose gzip response bytes without the
++        // content-encoding header, which makes response.json() parse gzip data.
++        if (!Object.keys(headers).some((key) => key.toLowerCase() === "accept-encoding"))
++            headers["accept-encoding"] = "identity";
+         headers = {
+             ...(await CloudflareAuth.formatHeadersWithRefresh({
+                 profile: this.profile,
 diff --git a/lib/cloudflare/wrangler.json.js b/lib/cloudflare/wrangler.json.js
 index 43dfd76..ea4821b 100644
 --- a/lib/cloudflare/wrangler.json.js

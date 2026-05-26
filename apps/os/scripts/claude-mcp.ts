@@ -63,13 +63,6 @@ export const claudeMcpScript = os
         command,
       ].join("\n"),
     );
-
-    return {
-      ok: true as const,
-      mcpUrl,
-      serverName: SERVER_NAME,
-      command,
-    };
   });
 
 function defaultBaseHostFromEnv() {

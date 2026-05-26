@@ -33,18 +33,11 @@ export async function startCloudflared(options: {
   // --no-autoupdate: we manage cloudflared version via brew
   const cloudflared = spawn(
     "cloudflared",
-    [
-      "tunnel",
-      "--loglevel",
-      "warn",
-      "--protocol",
-      "http2",
-      "--no-autoupdate",
-      "run",
-      "--token",
-      options.tunnelToken,
-    ],
-    { stdio: ["ignore", "inherit", "inherit"] },
+    ["tunnel", "--loglevel", "warn", "--protocol", "http2", "--no-autoupdate", "run"],
+    {
+      env: { ...process.env, TUNNEL_TOKEN: options.tunnelToken },
+      stdio: ["ignore", "inherit", "inherit"],
+    },
   );
 
   cloudflared.on("error", (err) => {

@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink as WebSocketRPCLink } from "@orpc/client/websocket";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
@@ -10,11 +11,15 @@ import type { appRouter } from "~/orpc/root.ts";
 export type OsClient = RouterClient<typeof appRouter>;
 
 export function requireBaseUrl() {
-  const baseUrl = (process.env.OS_BASE_URL ?? process.env.APP_CONFIG_BASE_URL)
-    ?.trim()
-    .replace(/\/+$/, "");
+  let baseUrl = process.env.APP_CONFIG_BASE_URL?.trim().replace(/\/+$/, "");
   if (!baseUrl) {
-    throw new Error("OS_BASE_URL or APP_CONFIG_BASE_URL is required for os e2e tests.");
+    console.log(`No base URL found in environment, reading from Doppler.`);
+    const dopplerEnv = execSync(`doppler run -- node -p 'JSON.stringify(process.env)'`);
+    Object.assign(process.env, JSON.parse(dopplerEnv.toString()), process.env);
+    baseUrl = process.env.APP_CONFIG_BASE_URL?.trim().replace(/\/+$/, "");
+  }
+  if (!baseUrl) {
+    throw new Error("APP_CONFIG_BASE_URL is required for os e2e tests.");
   }
   return baseUrl;
 }
@@ -140,6 +145,44 @@ export async function readProjectStreamUntil<T extends Event>(input: {
   });
   throw new Error(
     `Timed out waiting for project stream event matching ${input.predicate.toString()}. Saw: ${JSON.stringify(result.events, null, 2)}`,
+  );
+}
+
+export async function streamProjectEventsUntil<T extends Event>(input: {
+  afterOffset: number | "start";
+  client: OsClient;
+  predicate: (event: Event) => event is T;
+  projectSlugOrId: string;
+  streamPath: string;
+  timeoutMs?: number;
+}) {
+  const timeoutMs = input.timeoutMs || 4_000;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const events: Event[] = [];
+
+  try {
+    const stream = await input.client.project.streams.streamEvents(
+      {
+        afterOffset: input.afterOffset,
+        projectSlugOrId: input.projectSlugOrId,
+        streamPath: input.streamPath,
+      },
+      { signal: controller.signal },
+    );
+
+    for await (const event of stream) {
+      events.push(event);
+      if (input.predicate(event)) return events;
+    }
+  } catch (error) {
+    if (!controller.signal.aborted) throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  throw new Error(
+    `Timed out streaming project event matching ${input.predicate.toString()}. Saw: ${JSON.stringify(events, null, 2)}`,
   );
 }
 

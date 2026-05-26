@@ -47,7 +47,7 @@ export function createExampleCapabilityProviders(input: {
       exportName: "ReposCapability",
       activeOrganization: input.activeOrganization,
       instructions:
-        "Use ctx.repos.create({ slug }) to create a Repo, ctx.repos.get({ slug }).getInfo() to inspect one, and ctx.repos.list({}) to list Repos.",
+        "Use ctx.repos.create({ slug }) to create a Repo, ctx.repos.get({ slug }).getInfo() to inspect one, ctx.repos.ensureIterateConfigInfo({ projectSlug }) to create or inspect the iterate-config Repo, and ctx.repos.list({}) to list Repos.",
       path: ["repos"],
       projectId: input.projectId,
     }),

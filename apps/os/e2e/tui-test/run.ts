@@ -2,15 +2,12 @@ import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createTestProject } from "../test-support/create-test-project.ts";
-import { requireBaseUrl } from "../test-support/os-client.ts";
 
 const thisDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = join(thisDir, "../..");
 const tuiTestBin = join(appRoot, "node_modules/.bin/tui-test");
 
-const baseUrl = requireBaseUrl();
 const project = await createTestProject({
-  baseUrl,
   slugPrefix: "tui-test",
 });
 
@@ -19,7 +16,7 @@ try {
   await runTuiTest({
     env: {
       ...process.env,
-      OS_BASE_URL: baseUrl,
+      APP_CONFIG_BASE_URL: project.baseUrl,
       OS_TUI_TEST_PROJECT_SLUG_OR_ID: project.project.id,
     },
   });

@@ -2,7 +2,6 @@ import { SELF, env } from "cloudflare:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { PROJECT_EGRESS_INTERCEPT_ROUTE } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import {
   EXAMPLE_EGRESS_SECRET_KEY,
   EXAMPLE_EGRESS_SECRET_MATERIAL,
@@ -246,7 +245,7 @@ describe("Project ingress routing", () => {
       `https://os.iterate.localhost/__test/egress?target=${encodeURIComponent("https://httpbingo.org/anything")}`,
       {
         headers: {
-          "x-iterate-test-secret": `getSecret({ key: "openai" })`,
+          "x-iterate-test-secret": `getSecret('openai')`,
         },
       },
     );
@@ -264,7 +263,7 @@ describe("Project ingress routing", () => {
     await createProject();
 
     const response = await SELF.fetch(
-      `https://demo.iterate.localhost${PROJECT_EGRESS_INTERCEPT_ROUTE}`,
+      "https://demo.iterate.localhost/__iterate/intercept-project-egress",
     );
 
     expect(response.status).toBe(401);
@@ -282,7 +281,7 @@ describe("Project ingress routing", () => {
       `https://os.iterate.localhost/__test/egress?target=${encodeURIComponent("https://api.example.com/v1/models?x=1")}`,
       {
         headers: {
-          "x-iterate-test-secret": `getSecret({ key: "openai" })`,
+          "x-iterate-test-secret": `getSecret('openai')`,
         },
       },
     );
@@ -295,7 +294,7 @@ describe("Project ingress routing", () => {
 
     expect(body.url).toBe("https://api.example.com/v1/models?x=1");
     expect(body.headers["x-iterate-test-secret"]).toEqual([
-      `Secret value withheld because this Project Egress Intercept Tunnel is active. Requested getSecret({ key: "openai" })`,
+      `Secret value withheld because this Project Egress Intercept Tunnel is active. Requested "getSecret('openai')"`,
     ]);
     expect(JSON.stringify(body)).not.toContain("mvp-secret-value");
   });
@@ -309,7 +308,7 @@ describe("Project ingress routing", () => {
       },
     });
 
-    expect(response.status).toBe(502);
+    expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({
       error: "project_egress_secret_substitution_failed",
       header: "x-iterate-test-secret",

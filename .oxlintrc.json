@@ -113,6 +113,7 @@
     "valid-typeof": "error",
     "@tanstack/router/create-route-property-order": "warn",
     "iterate/import-rules": "warn",
+    "iterate/relative-import-extensions": "error",
     "iterate/zod-schema-naming": "error",
     "iterate/drizzle-conventions": "error",
     "iterate/no-implied-eval": "error",
@@ -121,10 +122,15 @@
     "unicorn-js/isolated-functions": [
       "error",
       {
-        "selectors": ["CallExpression[callee.property.name=/CodemodeScript/] :function"],
+        "selectors": [
+          "CallExpression[callee.object.object.name=\"fixture\"][callee.object.property.name=\"codemode\"] > :function",
+          "CallExpression[callee.object.callee.object.object.name=\"fixture\"][callee.object.callee.object.property.name=\"codemode\"] > :function"
+        ],
         "overrideGlobals": {
+          "crypto": "readonly",
           "fetch": "readonly",
-          "console": "readonly"
+          "console": "readonly",
+          "setTimeout": "readonly"
         }
       }
     ],
@@ -236,6 +242,17 @@
       "files": ["apps/*-contract/src/**/*.ts", "apps/*-contract/src/**/*.tsx"],
       "rules": {
         "iterate/contract-package-imports": "error"
+      }
+    },
+    {
+      "files": ["apps/os/e2e/vitest/agents.e2e.test.ts"],
+      "rules": {
+        "iterate/helpers-after-tests": "error",
+        "iterate/no-describe": "error",
+        "iterate/no-lifecycle-hooks": "error",
+        "iterate/no-vi-mock": "error",
+        "iterate/prefer-object-property-match": "error",
+        "iterate/prefer-test-over-it": "error"
       }
     }
   ]
