@@ -51,29 +51,6 @@
     "typescript": "^5.9.3"
   },
   "packageManager": "pnpm@10.24.0",
-  "pnpm": {
-    "patchedDependencies": {
-      "alchemy@0.83.3": "patches/alchemy@0.83.3.patch"
-    },
-    "overrides": {
-      "axios": "1.13.6",
-      "@orpc/client": "1.13.14",
-      "@orpc/contract": "1.13.14",
-      "@orpc/openapi": "1.13.14",
-      "@orpc/openapi-client": "1.13.14",
-      "@orpc/otel": "1.13.14",
-      "@orpc/react-query": "1.13.14",
-      "@orpc/server": "1.13.14",
-      "@orpc/shared": "1.13.14",
-      "@orpc/tanstack-query": "1.13.14",
-      "@orpc/zod": "1.13.14",
-      "srvx": "0.11.12",
-      "ws": "8.19.0",
-      "baseline-browser-mapping": "^2.9.14",
-      "@babel/parser": "^7.28.0",
-      "wrangler": "4.85.0"
-    }
-  },
   "dependencies": {
     "@octokit/rest": "^22.0.0",
     "@orpc/client": "1.13.14",
