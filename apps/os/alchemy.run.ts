@@ -5,6 +5,7 @@ import { initAlchemy } from "@iterate-com/shared/alchemy/init";
 import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
 import type { CaptunServerShard } from "captun/worker";
 import type { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
+import { ensureLocalDevOAuthClient } from "./src/auth/dev-oauth-client-bootstrap.ts";
 import manifest, { AppConfig } from "./src/app.ts";
 import type { CodemodeSession } from "./src/domains/codemode/durable-objects/codemode-session.ts";
 import type { DebugAppendChainSubscriber } from "./src/durable-objects/debug-append-chain-subscriber.ts";
@@ -28,6 +29,8 @@ const env = {
   APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN:
     process.env.APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN ?? process.env.ITERATE_AUTH_SERVICE_TOKEN,
 };
+
+await ensureLocalDevOAuthClient(env);
 
 const ctx = await initAlchemy(manifest, AppConfig, env);
 const slackBotToken = ctx.runtimeConfig.slackBotToken?.exposeSecret();

@@ -166,6 +166,13 @@ export function getAuthPlugins(env: Record<string, unknown>) {
       postLogin: {
         page: "/project-access",
         shouldRedirect: async ({ scopes, session }) => {
+          if (session?.userId) {
+            const organizations = await listOrganizationsForUser(db, { userId: session.userId });
+            if (organizations.length === 0) {
+              return true;
+            }
+          }
+
           if (!scopes.includes(ITERATE_PROJECT_SELECTION_SCOPE)) {
             return false;
           }

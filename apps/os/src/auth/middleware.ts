@@ -13,46 +13,115 @@ const AUTH_HANDLER_PREFIX = "/api/iterate-auth/";
 export const iterateAuthMiddleware = createMiddleware().server(
   async ({ request, context, next }) => {
     const auth = createOsIterateAuth(context, request);
-    if (new URL(request.url).pathname.startsWith(AUTH_HANDLER_PREFIX)) {
-      if (!auth) {
-        return new Response("Iterate auth is not configured.", { status: 503 });
-      }
-      return auth.handler(request);
+    const authHandlerResponse = handleAuthHandlerRequest({ auth, request });
+    if (authHandlerResponse) {
+      return authHandlerResponse;
     }
 
-    let session: AuthenticatedSession | null = null;
-    const adminApiPrincipal = authenticateAdminApiSecret(context, request);
-    let principal: Principal | null = adminApiPrincipal;
-    let responseHeaders = new Headers();
-
-    if (!principal && auth) {
-      const result = await auth.authenticate({ headers: request.headers });
-      session = result.session;
-      responseHeaders = result.responseHeaders;
-      principal = session ? principalFromSession(session) : null;
-    }
-
-    if (!principal && auth) {
-      const accessToken = await auth.authenticateBearer({ headers: request.headers });
-      principal = accessToken ? principalFromAccessToken(accessToken) : null;
-    }
+    const resolvedAuth = await resolveRequestAuth({ auth, context, request });
 
     const result = await next({
       context: {
-        principal,
-        iterateAuthSession: session,
+        principal: resolvedAuth.principal,
+        iterateAuthSession: resolvedAuth.session,
         rawRequest: request,
       },
     });
 
-    const setCookie = responseHeaders.get("set-cookie");
-    if (setCookie && "response" in result) {
+    const setCookie = resolvedAuth.responseHeaders.get("set-cookie");
+    if (setCookie) {
       result.response.headers.append("set-cookie", setCookie);
     }
 
     return result;
   },
 );
+
+function handleAuthHandlerRequest(input: {
+  auth: ReturnType<typeof createOsIterateAuth>;
+  request: Request;
+}) {
+  if (!new URL(input.request.url).pathname.startsWith(AUTH_HANDLER_PREFIX)) {
+    return null;
+  }
+
+  if (!input.auth) {
+    return new Response("Iterate auth is not configured.", { status: 503 });
+  }
+
+  return input.auth.handler(input.request);
+}
+
+async function resolveRequestAuth(input: {
+  auth: ReturnType<typeof createOsIterateAuth>;
+  context: Pick<AppContext, "config">;
+  request: Request;
+}): Promise<{
+  principal: Principal | null;
+  session: AuthenticatedSession | null;
+  responseHeaders: Headers;
+}> {
+  const adminApiPrincipal = authenticateAdminApiSecret(input.context, input.request);
+  if (adminApiPrincipal) {
+    return {
+      principal: adminApiPrincipal,
+      session: null,
+      responseHeaders: new Headers(),
+    };
+  }
+
+  const sessionAuth = await authenticateSession({
+    auth: input.auth,
+    headers: input.request.headers,
+  });
+  if (sessionAuth.principal) {
+    return sessionAuth;
+  }
+
+  const bearerPrincipal = await authenticateBearerPrincipal({
+    auth: input.auth,
+    headers: input.request.headers,
+  });
+  return {
+    principal: bearerPrincipal,
+    session: sessionAuth.session,
+    responseHeaders: sessionAuth.responseHeaders,
+  };
+}
+
+async function authenticateSession(input: {
+  auth: ReturnType<typeof createOsIterateAuth>;
+  headers: Headers;
+}): Promise<{
+  principal: Principal | null;
+  session: AuthenticatedSession | null;
+  responseHeaders: Headers;
+}> {
+  if (!input.auth) {
+    return {
+      principal: null,
+      session: null,
+      responseHeaders: new Headers(),
+    };
+  }
+
+  const result = await input.auth.authenticate({ headers: input.headers });
+  return {
+    principal: result.session ? principalFromSession(result.session) : null,
+    session: result.session,
+    responseHeaders: result.responseHeaders,
+  };
+}
+
+async function authenticateBearerPrincipal(input: {
+  auth: ReturnType<typeof createOsIterateAuth>;
+  headers: Headers;
+}): Promise<Principal | null> {
+  if (!input.auth) return null;
+
+  const accessToken = await input.auth.authenticateBearer({ headers: input.headers });
+  return accessToken ? principalFromAccessToken(accessToken) : null;
+}
 
 export function readBearerToken(headerValue: string | null): string | null {
   if (!headerValue) return null;
@@ -88,5 +157,6 @@ function createOsIterateAuth(context: AppContext, request: Request) {
     clientSecret: config.clientSecret.exposeSecret(),
     redirectURI: `${(context.config.baseUrl ?? requestOrigin).replace(/\/+$/, "")}/api/iterate-auth/callback`,
     resource: [resource, `${resource}/mcp`],
+    logoutReturnToOrigins: context.config.baseUrl ? [context.config.baseUrl] : undefined,
   });
 }

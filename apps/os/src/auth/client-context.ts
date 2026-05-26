@@ -1,8 +1,18 @@
 import { createContext, useContext } from "react";
 import type { SessionResponse } from "@iterate-com/auth/client";
 
+type AuthenticatedSessionResponse = Extract<SessionResponse, { authenticated: true }>;
+
+export type OsSessionResponse =
+  | { authenticated: false }
+  | {
+      authenticated: true;
+      user: AuthenticatedSessionResponse["user"];
+      session: AuthenticatedSessionResponse["session"];
+    };
+
 export type AuthClientContextValue = {
-  session: SessionResponse | null;
+  session: OsSessionResponse | null;
   loading: boolean;
   signIn: () => void;
   signOut: () => Promise<void>;

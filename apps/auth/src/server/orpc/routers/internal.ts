@@ -226,7 +226,8 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
           clientId: input.existingClientId,
         })
       : null;
-    const shouldRotateDevClient = input.referenceId.startsWith("dev:");
+    const shouldRotateDevClient =
+      input.referenceId.startsWith("dev:") || input.referenceId.includes(":dev_");
 
     const existing =
       shouldRotateDevClient && existingByClientId?.clientSecret
@@ -267,7 +268,7 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
       return {
         clientId: existing.clientId,
         clientName: input.clientName,
-        clientSecret: existingClientSecret,
+        clientSecret: existing.clientSecret,
         redirectURIs: redirectURIs,
       };
     }
@@ -334,7 +335,7 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
       return {
         clientId: existingByClientId.clientId,
         clientName: input.clientName,
-        clientSecret: existingClientSecret,
+        clientSecret: existingByClientId.clientSecret,
         redirectURIs,
       };
     }

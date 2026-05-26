@@ -1,4 +1,5 @@
 import { eventIterator, oc } from "@orpc/contract";
+import { isValidTypeId } from "@iterate-com/shared/typeid";
 import {
   Event,
   EventInput,
@@ -28,6 +29,14 @@ export const Project = z.object({
   updatedAt: z.string(),
 });
 export type Project = z.output<typeof Project>;
+
+const CallerManagedProjectId = z
+  .string()
+  .trim()
+  .min(1)
+  .refine((value) => isValidTypeId(value, "proj"), {
+    message: "Project ID must be a valid TypeID with prefix proj",
+  });
 
 export const ProjectCustomHostnameValidationRecord = z.object({
   status: z.string().nullable(),
@@ -303,6 +312,7 @@ export const osContract = oc.router({
       })
       .input(
         z.object({
+          id: CallerManagedProjectId.optional(),
           slug: z
             .string()
             .trim()

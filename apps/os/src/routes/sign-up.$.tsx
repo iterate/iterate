@@ -1,17 +1,12 @@
-import { useEffect } from "react";
-import { createFileRoute } from "@tanstack/react-router";
-import { useAuthClient } from "~/auth/client-context.ts";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/sign-up/$")({
+  beforeLoad: () => {
+    throw redirect({ href: "/api/iterate-auth/login" });
+  },
   component: SignUpRoute,
 });
 
 function SignUpRoute() {
-  const auth = useAuthClient();
-
-  useEffect(() => {
-    auth.signIn();
-  }, [auth]);
-
   return <main className="grid min-h-svh place-items-center bg-background p-4" />;
 }

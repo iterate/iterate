@@ -28,6 +28,7 @@ export type IterateAuthConfig = {
   clientSecret: string;
   redirectURI: string;
   resource?: string | string[];
+  logoutReturnToOrigins?: string[];
   cookiePrefix?: string;
   authHandlerBasePath?: string;
 };
@@ -551,10 +552,10 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
     }
 
     const requestURL = new URL(c.req.url);
-    const returnTo = resolveSameOriginReturnTo(
-      requestURL.searchParams.get("return_to"),
+    const returnTo = resolveAllowedReturnTo(requestURL.searchParams.get("return_to"), [
       requestURL.origin,
-    );
+      ...(config.logoutReturnToOrigins ?? []),
+    ]);
     if (requestURL.searchParams.get("global") === "false") {
       return c.redirect(returnTo);
     }
@@ -599,13 +600,17 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
   };
 }
 
-export function resolveSameOriginReturnTo(rawReturnTo: string | null, origin: string) {
-  if (!rawReturnTo) return `${origin}/`;
+export function resolveAllowedReturnTo(rawReturnTo: string | null, allowedOrigins: string[]) {
+  const fallbackOrigin = allowedOrigins[0];
+  if (!fallbackOrigin) {
+    throw new Error("resolveAllowedReturnTo requires at least one allowed origin");
+  }
+  if (!rawReturnTo) return `${fallbackOrigin}/`;
   try {
-    const parsed = new URL(rawReturnTo, origin);
-    return parsed.origin === origin ? parsed.toString() : `${origin}/`;
+    const parsed = new URL(rawReturnTo, fallbackOrigin);
+    return allowedOrigins.includes(parsed.origin) ? parsed.toString() : `${fallbackOrigin}/`;
   } catch {
-    return `${origin}/`;
+    return `${fallbackOrigin}/`;
   }
 }
 
