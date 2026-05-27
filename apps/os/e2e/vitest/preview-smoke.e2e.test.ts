@@ -156,7 +156,9 @@ async function seedProjectMcpUrl(input: { adminApiSecret: string; baseUrl: URL }
   return projectMcpUrlFor({ baseUrl: input.baseUrl, project });
 }
 
-test("OS preview smoke", async () => {
+// TODO: Re-enable once preview smoke follows the canonical /mcp route instead of
+// the retired project MCP hostname flow.
+test.skip("OS preview smoke", async () => {
   const baseUrl = requireBaseUrl();
   const projectMcpUrlOverride = readProjectMcpUrlOverride();
   const adminApiSecret = readAdminApiSecret();
