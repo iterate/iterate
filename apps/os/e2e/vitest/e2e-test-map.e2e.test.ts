@@ -77,9 +77,9 @@ describe("e2e test map", () => {
     });
 
     const result = await fixture.codemode
-      .bind({ baseUrl: publicTunnel.url })
-      .execute(async function () {
-        const response = await fetch(`${this.baseUrl}/anything`, {
+      .env("PUBLIC_TUNNEL_URL", publicTunnel.url)
+      .execute(async (ctx) => {
+        const response = await fetch(`${ctx.env.PUBLIC_TUNNEL_URL}/anything`, {
           headers: { Authorization: "Bearer getSecret('blabla')" },
         });
         return response.json();

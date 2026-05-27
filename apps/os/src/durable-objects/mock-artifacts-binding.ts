@@ -100,8 +100,10 @@ async function prepareMockIterateConfigWorkspace(input: {
   });
 }
 
-function readWorkspaceStateMethod(input: {
-  method: string;
+function readWorkspaceStateMethod<
+  K extends keyof Awaited<ReturnType<WorkspaceDurableObject["cloudflareShellState"]>>,
+>(input: {
+  method: K;
   state: Awaited<ReturnType<WorkspaceDurableObject["cloudflareShellState"]>>;
 }) {
   const method = input.state[input.method];

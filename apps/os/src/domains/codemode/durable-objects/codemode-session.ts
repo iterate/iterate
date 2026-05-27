@@ -849,7 +849,7 @@ function createCloudflareCodemodeScriptExecutor(input: {
   loader: WorkerLoader | undefined;
   outboundFetch: Fetcher;
 }): CodemodeScriptExecutor {
-  return async ({ code, logger, scriptExecutionId, session }) => {
+  return async ({ code, env, logger, scriptExecutionId, session }) => {
     if (!input.loader) {
       return {
         result: undefined,
@@ -869,7 +869,10 @@ function createCloudflareCodemodeScriptExecutor(input: {
             "executor.js": buildScriptExecutorModule(),
             "user-code.js": buildUserCodeModule(code),
           },
-          env: input.env,
+          env: {
+            ...(input.env || {}),
+            ...env,
+          },
           globalOutbound: input.outboundFetch,
         })
         .getEntrypoint() as unknown as CodemodeExecutorEntrypoint;
@@ -1047,12 +1050,12 @@ function __stringify(value) {
 	        return {
 	          log: (...args) => console.log(...args),
 	          warn: (...args) => console.warn(...args),
-          error: (...args) => console.error(...args),
-        };
-      }
-      if (key === "env" && path.length === 0) return options.env;
-      if (typeof key !== "string") return undefined;
-      return make([...path, key]);
+            error: (...args) => console.error(...args),
+          };
+        }
+        if (key === "env" && path.length === 0) return options.env;
+        if (typeof key !== "string") return undefined;
+        return make([...path, key]);
 	    },
 	    apply: (_target, _thisArg, args) => {
 	      return trackCallResult(options.codemodeSessionCapability.callFunction({
