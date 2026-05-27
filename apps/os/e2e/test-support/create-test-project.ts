@@ -13,6 +13,7 @@ import {
   streamProjectEventsUntil,
   requireAdminBearerToken,
 } from "./os-client.ts";
+import type { AiCapability, ReposCapability, WorkspaceDurableObject } from "~/entry.workerd.ts";
 
 type Fetch = Parameters<typeof createCaptunTunnel>[0]["fetch"];
 
@@ -120,7 +121,30 @@ export async function createTestProjectFixture<
     };
   };
 
-  class CodemodeBuilder<Ctx = {}, This = {}> {
+  type OptionalProjectDeep<T> = T extends (
+    params: infer P extends { projectSlugOrId: string },
+  ) => infer R
+    ? (params: Omit<P, "projectSlugOrId"> & { projectSlugOrId?: string }) => R
+    : { [K in keyof T]: OptionalProjectDeep<T[K]> };
+
+  type Stubify<T> = {
+    [K in keyof T]: T[K] extends (...args: infer A) => infer R
+      ? (
+          ...args: A
+        ) => Awaited<R> extends import("cloudflare:workers").RpcTarget
+          ? Stubify<Awaited<R>>
+          : Promise<Awaited<R>>
+      : Stubify<T[K]>;
+  };
+
+  type DefaultCtx = {
+    os: OptionalProjectDeep<typeof project.os>;
+    ai: AiCapability;
+    repos: Stubify<ReposCapability>;
+    workspace: Stubify<ReturnType<WorkspaceDurableObject["getShellState"]>>;
+  };
+
+  class CodemodeBuilder<Ctx = DefaultCtx, This = {}> {
     _bound: This;
     _options: Omit<ExecuteScriptParams, "code">;
 
@@ -154,14 +178,15 @@ export async function createTestProjectFixture<
       return startCodemodeScript(this.define(fn), this._options);
     }
 
-    execute<NewCtx extends Ctx = {} extends Ctx ? any : Ctx, Result = {}>(fn: {
+    execute<NewCtx extends Ctx = Ctx, Result = {}>(fn: {
       (this: This, ctx: NewCtx): Promise<Result>;
     }) {
       return executeCodemodeScript(this.define(fn), this._options);
     }
     /** Type-only method to set the type of the codemode function's context parameter */
-    context<NewCtx>() {
-      return this as CodemodeBuilder<unknown, This> as CodemodeBuilder<NewCtx, This>;
+    context<NewCtx, Mode extends "extend" | "replace" = "extend">() {
+      type ReplacementCtx = Mode extends "extend" ? NewCtx & This : NewCtx;
+      return this as CodemodeBuilder<unknown, This> as CodemodeBuilder<ReplacementCtx, This>;
     }
     /**
      * Set some serializable data as the codemode function's `this` binding. Useful when your script needs to access something from outside its scope
