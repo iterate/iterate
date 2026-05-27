@@ -1,6 +1,4 @@
 import { SELF, env } from "cloudflare:test";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   EXAMPLE_EGRESS_SECRET_KEY,
@@ -190,42 +188,6 @@ describe("Project ingress routing", () => {
     const appHostnameResponse = await SELF.fetch("https://os.iterate.localhost/");
     expect(appHostnameResponse.status).toBe(404);
     await expect(appHostnameResponse.text()).resolves.toBe("No ingress route matched.");
-
-    const mcpResponse = await SELF.fetch("https://mcp.demo.iterate.localhost/", {
-      headers: { accept: "text/html" },
-    });
-    expect(mcpResponse.ok).toBe(true);
-    const mcpHtml = await mcpResponse.text();
-    expect(mcpHtml).toContain("Connect an MCP client to this project endpoint");
-    expect(mcpHtml).toContain("https://mcp.demo.iterate.localhost/");
-
-    const fallbackMcpResponse = await SELF.fetch("https://mcp__demo.iterate.localhost/", {
-      headers: { accept: "text/html" },
-    });
-    expect(fallbackMcpResponse.ok).toBe(true);
-    const fallbackMcpHtml = await fallbackMcpResponse.text();
-    expect(fallbackMcpHtml).toContain("Connect an MCP client to this project endpoint");
-    expect(fallbackMcpHtml).toContain("https://mcp__demo.iterate.localhost/");
-
-    const transport = new StreamableHTTPClientTransport(
-      new URL("https://mcp.demo.iterate.localhost/"),
-      {
-        fetch: (input, init) => {
-          const headers = new Headers(init?.headers);
-          headers.set("authorization", "Bearer project-ingress-admin-secret");
-          return SELF.fetch(new Request(input, { ...init, headers }));
-        },
-      },
-    );
-    const client = new Client({ name: "project-ingress-admin-secret-test", version: "1.0.0" });
-    try {
-      await client.connect(transport);
-      await expect(client.listTools()).resolves.toMatchObject({
-        tools: expect.arrayContaining([expect.objectContaining({ name: "exec_js" })]),
-      });
-    } finally {
-      await client.close();
-    }
 
     const streamsResponse = await SELF.fetch("https://streams.demo.iterate.localhost/", {
       headers: { accept: "text/html" },

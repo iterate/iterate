@@ -10,6 +10,7 @@ import {
 import { parseProjectMetadata, parseTimestampMs } from "../../db/helpers.ts";
 import {
   deleteProjectById,
+  getProjectById,
   getProjectBySlug,
   insertProjectReturning,
   listProjectsByOrganizationId,
@@ -47,9 +48,14 @@ const create = os.project.create
       isTaken: async (candidate) =>
         Boolean(await getProjectBySlug(context.db, { slug: candidate })),
     });
+    const projectId = input.id ?? generateId("prj");
+    if (input.id && (await getProjectById(context.db, { id: input.id }))) {
+      throw new ORPCError("CONFLICT", { message: "Project ID already exists" });
+    }
+
     const now = Date.now();
     const created = await insertProjectReturning(context.db, {
-      id: generateId("prj"),
+      id: projectId,
       organizationId: context.organization.id,
       name: input.name,
       slug,

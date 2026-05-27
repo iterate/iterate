@@ -10,36 +10,39 @@ OS is an authenticated app where users manage organization-owned projects and ru
 The authenticated dashboard where users manage organization-owned projects and run codemode.
 _Avoid_: Public site, marketing app
 
-**Clerk Organization**:
+**Organization**:
 The owning account boundary for projects in OS.
 _Avoid_: Workspace, team, tenant, account
 
 **Active Organization**:
-The Clerk Organization currently selected in a Clerk User's session.
+The Organization selected by auth-worker session claims for organization-level
+UI and project creation.
 _Avoid_: Current workspace, selected account
 
 **Personal Account**:
-Clerk's non-organization user context, which OS does not allow for project ownership.
+The auth worker's non-organization user context, which OS does not allow for project ownership.
 _Avoid_: Personal organization, default organization
 
-**Clerk User**:
-A person authenticated by Clerk who acts inside a Clerk Organization.
+**User**:
+A person authenticated by the auth worker who acts inside an Organization.
 _Avoid_: Member, account
 
-**Clerk OAuth Token**:
-A Clerk-issued OAuth access token used by a remote MCP client to call OS as a protected resource.
+**OAuth Access Token**:
+An auth-worker-issued OAuth access token used by a remote MCP client to call OS
+as a protected resource.
 _Avoid_: MCP JWT, session token
 
-**Clerk Session Token**:
-A Clerk-issued session token used by first-party or e2e clients to call OS as an authenticated Clerk User.
-_Avoid_: testing token, OAuth token
+**Principal**:
+The request-local authenticated actor resolved by OS from the admin API secret,
+auth-worker session cookie, or auth-worker OAuth access token.
+_Avoid_: Raw auth payload, token claims, provider-specific auth object
 
 **Project**:
-An OS-managed app surface owned by exactly one Clerk Organization.
+An OS-managed app surface owned by exactly one Organization.
 _Avoid_: App, site, workspace
 
 **Data Scope**:
-The ownership boundary for a persisted OS record: Project, Clerk Organization, Clerk User, or Global.
+The ownership boundary for a persisted OS record: Project, Organization, User, or Global.
 _Avoid_: Tenant type, resource kind
 
 **ID**:
@@ -63,8 +66,9 @@ The globally unique hostname-safe Slug used in Project Routes.
 _Avoid_: Project ID
 
 **Project Route**:
-The organization-scoped URL for a Project, identified by Clerk Organization slug and Project slug.
-_Avoid_: Global project URL, project ID URL
+The dashboard URL for a Project, identified by Project slug under
+`/projects/:projectSlug`.
+_Avoid_: Organization-scoped project URL, project ID URL
 
 **Project Route Context**:
 The TanStack Router route context for a Project Route. It should resolve the pretty Project Slug into the Project row once so child routes can render with Project details and call project-scoped APIs with either slug or ID.
@@ -79,8 +83,9 @@ The Worker environment binding used by server code to obtain Project Durable Obj
 _Avoid_: project context, resolved project
 
 **Project MCP Route**:
-The project-scoped MCP server route for one Project, served from a project-owned MCP hostname and resolved through Project ingress.
-_Avoid_: Global MCP endpoint, MCP project selector, `/mcp` path
+The OS `/mcp` resource for project-scoped MCP sessions. The selected Project
+comes from OAuth token project claims or an admin-token `?project=...` selector.
+_Avoid_: Project MCP hostname, ingress MCP alias
 
 **Ingress Hostname**:
 A public hostname that OS can classify before running the OS App.
@@ -178,9 +183,11 @@ _Avoid_: Secret Key, Secret Slug
 The project-local arbitrary Key used by Secret References to resolve one Project Secret.
 _Avoid_: Secret ID, Secret Slug, hostname-safe name
 
-**Project MCP Server Entry Point**:
-A named WorkerEntrypoint exported as `ProjectMcpServerEntrypoint` that receives Project identity as props and exposes that Project's MCP server as a fetch destination.
-_Avoid_: Global MCP server, MCP route, Iterate MCP server, Tool Provider, Capability wrapper
+**OS MCP Handler**:
+The OS Worker `/mcp` handler that exposes the inbound MCP server, verifies OAuth
+or admin credentials, selects the Project, and attaches a
+**Project MCP Server Connection**.
+_Avoid_: Project MCP hostname, ingress MCP entrypoint, Tool Provider, Capability wrapper
 
 **Loopback Fetch Callable**:
 A Fetch Callable that targets a named entrypoint exported by the same Worker and passes dynamic props through Cloudflare loopback bindings.
@@ -227,7 +234,7 @@ A future Project Durable Object-owned policy decision for whether a principal ma
 _Avoid_: MCP authorization, app-specific auth method
 
 **Project Access Check**:
-A generic Project Durable Object-owned check that decides whether a Clerk principal can access one Project.
+A generic Project Durable Object-owned check that decides whether an auth worker principal can access one Project.
 _Avoid_: MCP authorization, route-specific permission
 
 **Codemode Example Stack**:
@@ -464,11 +471,11 @@ _Avoid_: Repository row, repo provider, GitHub repo
 
 **Workspace Durable Object**:
 A project-scoped Durable Object selected by Project ID and workspace slug and exposed to codemode as a Live Tool Handle.
-_Avoid_: Clerk Organization, Project, workspace alias
+_Avoid_: Organization, Project, workspace alias
 
 **Workspace**:
 A project-scoped live work surface exposed to codemode through `ctx.workspace`.
-_Avoid_: Clerk Organization, Project, workspace alias
+_Avoid_: Organization, Project, workspace alias
 
 **Outbound MCP From Our Client Capability**:
 A Durable Object-backed codemode Tool Provider capability that connects from OS to one external MCP server using our MCP client connection and exposes that remote server as codemode Tool Functions through `executeCodemodeFunctionCall`.
@@ -504,14 +511,14 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 
 ## Relationships
 
-- The **OS App** has no public product pages; unauthenticated users are sent to Clerk sign-in.
-- The **OS App** hides **Personal Account** mode and requires a **Clerk Organization** context.
-- Every persisted OS record should have an explicit **Data Scope**: Project, Clerk Organization, Clerk User, or Global.
+- The **OS App** has no public product pages; unauthenticated users are sent to auth-worker sign-in.
+- The **OS App** hides **Personal Account** mode and requires an **Organization** context.
+- Every persisted OS record should have an explicit **Data Scope**: Project, Organization, User, or Global.
 - A record's **Data Scope** should be represented as first-class queryable columns, not only inside JSON payloads or callable props.
 - The **Durable Object Catalog** is infrastructure state and is separate from application-level **Project Projections**.
 - **Durable Object Utility Routes** may be mounted into the OS Worker entrypoint so app code can reuse shared Durable Object initialization, catalog, and lifecycle utilities.
-- A **Clerk Organization** owns zero or more **Projects**.
-- A **Project** belongs to exactly one **Clerk Organization**.
+- An **Organization** owns zero or more **Projects**.
+- A **Project** belongs to exactly one **Organization**.
 - The **Project Durable Object** is the lifecycle authority for a **Project**.
 - Every **Project** has one **Project Lifecycle Stream** at root Event Stream Path `/` in that Project's **Stream Namespace**.
 - The **Project Lifecycle Stream** records **Project Lifecycle Events** as facts, not frontend view state.
@@ -535,7 +542,7 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - Creating a **Repo** is explicit through **ReposCapability** create behavior and fails if that Repo already exists.
 - Selecting a missing **Repo** returns a not-found result and should not initialize a **Repo Durable Object**.
 - A **Key** may contain characters that are not valid in a **Slug**; do not use a Key where OS needs hostname-safe routing.
-- A **Project Route** includes both the owning **Clerk Organization** slug and the **Project** slug.
+- A **Project Route** includes the globally unique **Project** slug.
 - A **Project Slug** is route identity and may change; a **Project ID** is stable identity.
 - A **Project Route** resolves its **Project Slug** before rendering Project-local UI. Project-scoped oRPC procedures still accept `projectSlugOrId` so the same API remains curlable by slug or callable by stable Project ID.
 - The **Project Slug** used in the **Project Route** corresponds to the project slug used by the events app.
@@ -547,8 +554,10 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - The **Stable Project Ingress Host** remains routable even when the slug-derived host changes.
 - Custom hostname, default-host, dashboard-host, and stream-host lifecycle are future ingress work, not current routing behavior.
 - A **Project MCP Route** identifies exactly one **Project**.
-- A **Project MCP Route** is selected by project ingress, currently through platform hosts such as `mcp__<project-slug>.<project-host-base>`.
-- OS does not expose a normal global MCP endpoint.
+- A **Project MCP Route** is selected through OS `/mcp`, using auth-worker
+  project claims or an admin-token `?project=...` selector.
+- OS exposes one global MCP resource at `/mcp`; it does not expose per-project
+  MCP hostnames.
 - The OS Worker classifies every request by **Ingress Hostname** before invoking the **OS App**.
 - The OS Worker uses a global **Ingress Route Table** to decide whether a request becomes **Project Ingress** or continues to the **OS App**.
 - Requests that do not match the global **Ingress Route Table** are handled by the **OS App**.
@@ -585,19 +594,16 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - **Secret Keys** are arbitrary strings and are not required to be URL-safe.
 - Upserting a **Project Secret** by **Secret Key** preserves the existing **Secret ID** when that key already exists in the Project.
 - **Secret References** resolve by **Secret Key**, such as `getSecret({ key: "openai-api-key" })`.
-- The **Project MCP Server Entry Point** class/export name is `ProjectMcpServerEntrypoint`.
-- The **Project MCP Server Entry Point** is a fetch-based Worker entrypoint, not a Tool Provider or Capability wrapper.
-- The **Project MCP Server Entry Point** takes only a stable **Project ID** prop in v1 and is the default project-local MCP server fetch destination.
-- A **Project MCP Route** is host-routed in v1; every path on that MCP hostname is delegated to the **Project MCP Server Entry Point**.
-- The **Project MCP Server Entry Point** owns MCP protocol paths, OAuth protected-resource metadata paths, browser instructions, and 404s for unsupported paths on that MCP hostname.
+- The legacy `ProjectMcpServerEntrypoint` Worker export now returns a tombstone response.
+- The OS Worker owns MCP protocol paths, OAuth protected-resource metadata paths, browser instructions, and 404s for unsupported paths on `/mcp`.
 - A browser request to a **Project MCP Route** that is not an MCP client connection may return a static HTML instructions page.
 - The **Project MCP Server Connection** Durable Object class/catalog name is `ProjectMcpServerConnection`.
 - The **Outbound MCP From Our Client Capability** Durable Object class name is `OutboundMcpFromOurClientCapability`.
 - The **Outbound MCP From Our Client Capability** uses the `OUTBOUND_MCP_FROM_OUR_CLIENT_CAPABILITY` namespace binding.
-- The **Project MCP Server Entry Point** owns MCP OAuth protocol verification in v1.
+- The OS Worker `/mcp` handler owns MCP OAuth protocol verification in v1.
 - The **Project Durable Object** must not grow MCP-specific authorization methods such as `authorizeMcpServerConnection`.
 - The **Project Durable Object** may expose a generic **Project Access Check** in v1 for entrypoints that have already verified a principal.
-- The v1 **Project Access Check** may use the app-level **Project Listing Projection** in D1 to verify the principal's Clerk Organization can access the Project.
+- The v1 **Project Access Check** first trusts auth-worker project claims and may use the app-level **Project Listing Projection** in D1 as a legacy fallback.
 - Future project-owned authorization should be modeled as generic **Project Route Authorization** for **Project Route Destinations**.
 - New OS Worker named entrypoints live in an `entrypoints/` source folder, separate from `durable-objects/`.
 - A **Loopback Fetch Callable** is preferred when an ingress rule needs to target a named OS Worker entrypoint with per-route props.
@@ -607,17 +613,17 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - The **Create Project Command** writes the Project Durable Object's local lifecycle state and all v1 D1 projections before returning to the RPC caller.
 - Asynchronous provisioning work, such as Cloudflare DNS/custom-hostname/certificate lifecycle, may continue after the **Create Project Command** has written durable desired state.
 - TanStack/oRPC project routes should thinly proxy project lifecycle commands to the **Project Control Surface** instead of reimplementing project lifecycle logic in the app worker.
-- The **Project Durable Object** owns project ingress routing. MCP auth currently lives in `ProjectMcpServerEntrypoint`, which calls a generic **Project Access Check**.
+- The **Project Durable Object** owns project ingress routing. MCP auth lives in the OS `/mcp` handler, which calls generic project access logic after token verification.
 - The **Project Durable Object** is the authority for desired project-owned ingress state.
 - Global **Ingress Routing Rules** for project-owned hostnames are **Project Projections** written for fast indexed lookup by the OS Worker.
 - V1 may synchronously write **Project Projections** from **Project Control Surface** commands even though Durable Object SQLite and D1 are not one atomic transaction.
-- **Project Ingress** currently includes platform slug/stable hosts and platform MCP aliases. Custom hosts and per-destination auth are future work.
+- **Project Ingress** currently includes platform slug/stable hosts. Custom hosts and per-destination auth are future work.
 - A **Project Durable Object** owns a project-local **Ingress Route Table** that maps **Project Ingress** to **Project Route Destinations**.
 - A **Project Route Destination** is a kind of **Fetch Destination**.
 - A **Fetch Destination** may be backed by OS-packaged source code, runtime-loaded code, or another project-owned capability.
 - Global and project-local ingress use the same **Ingress Route Table** concept even though their first concrete destinations differ.
 - Projects are born with **Slug Project Ingress Host** and **Stable Project Ingress Host** routes.
-- Projects are born with MCP hostname aliases for their slug and stable hosts, such as `mcp__<project-slug>.<project-host-base>` and `mcp__<project-id>.<project-host-base>`, that resolve to the **Project MCP Server Entry Point**.
+- Projects are not born with MCP hostname aliases; MCP access is centralized at OS `/mcp`.
 - Slug changes should update slug-derived ingress routes at the same time; alias lifecycle is future work.
 - A **Codemode Example Stack** is global static product data, not owned by a **Project**.
 - **Codemode Example Stacks** are listed inside a **Project Route** because running an example requires a **Project**.
@@ -631,12 +637,11 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - Project MCP server `exec_js` starts a **Script Execution** and therefore requires a **Script**.
 - Browser session creation and Project MCP server `exec_js` share the same internal attach-or-create and stream append behavior.
 - A **Project Route** resolves its **Project Slug** to the stable **Project ID** before initializing a **Codemode Session**.
-- A **Project MCP Route** resolves to the stable **Project ID** through project ingress before initializing a **Codemode Session**.
-- A **Clerk User** acts through their **Active Organization** when managing **Projects**.
-- A signed-in **Clerk User** without an **Active Organization** must create or select a **Clerk Organization** before using OS.
-- A remote OAuth MCP client calls OS with a **Clerk OAuth Token**.
-- A first-party or e2e MCP client may call OS with a **Clerk Session Token** when it needs browserless user authentication.
-- OS accepts Clerk user-token contracts for MCP; JWT token format is the preferred Clerk environment setting, not the domain boundary.
+- A **Project MCP Route** resolves to the stable **Project ID** from token claims or an admin-token project selector before initializing a **Codemode Session**.
+- A **User** acts through their **Active Organization** when managing **Projects**.
+- A signed-in **User** without an **Active Organization** must create or select an **Organization** before using OS.
+- A remote OAuth MCP client calls OS with an **OAuth Access Token**.
+- First-party or e2e MCP clients should use either an **OAuth Access Token** or the OS admin API secret.
 - The browser UI explicitly creates and selects **Codemode Sessions** for a **Project**.
 - Browser oRPC calls identify the **Project** with `projectSlugOrId`; handlers resolve that value to the stable Project ID before touching capabilities or Durable Objects.
 - Browser oRPC may pass an **Event Stream Path** when creating a **Codemode Session**; if it does not, OS generates one for the Project.
@@ -718,7 +723,7 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - For the **Project Stream Explorer**, an Event Stream Path exists in reality when its Stream Durable Object is initialized and cataloged for the Project.
 - Child stream paths observed from a parent stream are navigation hints, not main-list entries, until their own Stream Durable Object is initialized.
 - Agents exist within **Projects**.
-- Agent work should be project-scoped and should not introduce new Clerk, organization, or auth concepts.
+- Agent work should be project-scoped and should not introduce new auth worker, organization, or auth concepts.
 - An **Agent** is not a **Codemode Session**.
 - An **Agent** may use the shared Agent processor and other shared stream processors almost verbatim.
 - An **Agent Path** is project-local because the **Project ID** is already the **Stream Namespace**.
@@ -1013,7 +1018,7 @@ The provider composition case targets provider-to-provider Tool Function Calls: 
 > **Domain expert:** "No. The concept is **Codemode Session**. Browser UI creates explicit Codemode Sessions with their own Event Stream Paths; Project MCP server connections reuse the MCP connection's existing Event Stream Path."
 
 > **Dev:** "Should MCP `exec_js` take a project selector?"
-> **Domain expert:** "No. MCP is project-scoped: the **Project MCP Route** identifies the **Project**. Browser oRPC gets the project from the **Project Route** and resolves the stable **Project ID**."
+> **Domain expert:** "Only when the OAuth token or admin caller has multiple project choices. MCP is project-scoped after the **OS MCP Handler** resolves the selected **Project**."
 
 > **Dev:** "Does a Codemode Session init with the project slug?"
 > **Domain expert:** "No. Routes use **Project Slug**, but Codemode Session init uses the stable **Project ID** resolved from that route."
@@ -1028,25 +1033,25 @@ The provider composition case targets provider-to-provider Tool Function Calls: 
 > **Domain expert:** "No. An **Outbound MCP From Our Client Tool Provider** can be a Tool Provider. A **Project MCP Server Connection** is an external client connected to OS's project-scoped MCP server."
 
 > **Dev:** "What are the two MCP directions in OS?"
-> **Domain expert:** "Inbound MCP is OS acting as the MCP server via the fetch-based `ProjectMcpServerEntrypoint` and `ProjectMcpServerConnection`. Outbound MCP is OS acting as an MCP client via `OutboundMcpFromOurClientCapability`, which can be registered as a codemode Tool Provider."
+> **Domain expert:** "Inbound MCP is OS acting as the MCP server via the fetch-based **OS MCP Handler** and `ProjectMcpServerConnection`. Outbound MCP is OS acting as an MCP client via `OutboundMcpFromOurClientCapability`, which can be registered as a codemode Tool Provider."
 
 > **Dev:** "Should the Durable Object behind OS's project-scoped MCP server be called `IterateMcpServer`?"
 > **Domain expert:** "No. Use `ProjectMcpServerConnection`: it describes one external MCP client connection and avoids confusing OS-as-server with OS-as-client."
 
 > **Dev:** "Can someone open an OS project page without signing in?"
-> **Domain expert:** "No. The **OS App** is authenticated, and every **Project** is managed through the user's active **Clerk Organization**."
+> **Domain expert:** "No. The **OS App** is authenticated, and every **Project** is managed through the user's active **Organization**."
 
 > **Dev:** "Can a **Personal Account** own a **Project**?"
-> **Domain expert:** "No. OS only lets a **Clerk Organization** own **Projects**."
+> **Domain expert:** "No. OS only lets an **Organization** own **Projects**."
 
 > **Dev:** "Can a project page be addressed without the organization slug?"
-> **Domain expert:** "No. A **Project Route** is organization-scoped and includes both the Clerk Organization slug and the Project slug."
+> **Domain expert:** "Yes. A **Project Route** is `/projects/:projectSlug`; organization-level UI lives under `/org/:organizationSlug`."
 
-> **Dev:** "What should OS show after sign-in if Clerk has no **Active Organization**?"
-> **Domain expert:** "Show Clerk's organization selection or creation flow before rendering the **OS App**."
+> **Dev:** "What should OS show after sign-in if auth worker has no **Active Organization**?"
+> **Domain expert:** "Redirect through the auth worker's organization selection or creation flow before rendering the **OS App**."
 
-> **Dev:** "Does the MCP server require a Clerk JWT?"
-> **Domain expert:** "No. The MCP server requires a valid OS admin token or Clerk user token. OAuth MCP clients use a **Clerk OAuth Token**; browserless first-party and e2e clients may use a **Clerk Session Token**. JWT is the preferred Clerk token format for cheaper verification, but OS should not model MCP auth as JWT-only."
+> **Dev:** "Does the MCP server require an auth-worker JWT?"
+> **Domain expert:** "No. The MCP server requires a valid OS admin token or auth-worker **OAuth Access Token**. JWT is a token format detail; OS should model the caller as a **Principal**."
 
 > **Dev:** "Should a request for a Project-owned hostname hit the OS App auth middleware before project routing?"
 > **Domain expert:** "No. The OS Worker first classifies the **Ingress Hostname**. If it is a **Project-Owned Hostname**, the request becomes **Project Ingress** before OS App auth runs."
@@ -1070,16 +1075,16 @@ The provider composition case targets provider-to-provider Tool Function Calls: 
 > **Domain expert:** "Not yet. Keep it exported from the main OS Worker while Project ingress depends on **Loopback Fetch Callables** with dynamic props."
 
 > **Dev:** "Does `/mcp` on a Project-owned hostname route to the Project MCP server?"
-> **Domain expert:** "No. MCP uses host-routed project ingress. Current platform aliases use the single-label `mcp__<project>.<project-host-base>` shape."
+> **Domain expert:** "No. MCP is served by the OS app at `/mcp`; project selection comes from token claims or an admin-token project selector."
 
 > **Dev:** "Does the Project Durable Object need to understand MCP protocol paths?"
-> **Domain expert:** "No. It routes the MCP hostname to the **Project MCP Server Entry Point**. That entry point owns protocol paths, OAuth metadata, browser setup instructions, and unsupported-path responses."
+> **Domain expert:** "No. The OS `/mcp` handler owns protocol paths, OAuth metadata, browser setup instructions, and unsupported-path responses."
 
 > **Dev:** "Should Project Durable Object expose `authorizeMcpServerConnection(...)`?"
 > **Domain expert:** "No. MCP is one Project Route Destination among many. Future authorization should be generic **Project Route Authorization**, not a method per destination type."
 
-> **Dev:** "How should `ProjectMcpServerEntrypoint` check access in v1 after verifying Clerk OAuth?"
-> **Domain expert:** "Call a generic **Project Access Check** on the Project Durable Object. The Project Durable Object can implement that check by reading the app-level D1 Project projection for the caller's Clerk Organization."
+> **Dev:** "How should `/mcp` check access in v1 after verifying auth-worker OAuth?"
+> **Domain expert:** "Use the verified **Principal**. Auth-worker project claims authorize directly; the legacy D1 Project projection remains a fallback for organization-owned projects."
 
 > **Dev:** "What should a global ingress rule point at for project traffic?"
 > **Domain expert:** "Point it at `ProjectIngressEntrypoint`, the **Project Ingress Entry Point**, with the stable **Project ID** in props. That entry point resolves the Project Durable Object and delegates to its ingress RPC."
@@ -1124,26 +1129,26 @@ The provider composition case targets provider-to-provider Tool Function Calls: 
 - "ExecutionContext" conflicts with Cloudflare's Worker `ExecutionContext`. Resolved: use **Codemode Context** for codemode userland.
 - "session id" and "stream path" were conflated. Resolved: **Project ID** plus **Event Stream Path** is the **Codemode Session** identity.
 - "app" can mean the OS product or a managed project surface. Resolved: use **OS App** for this dashboard and **Project** for the managed app surface.
-- "personal organization" is misleading because Clerk treats personal accounts separately from organizations. Resolved: use **Personal Account** for Clerk's non-organization user context.
-- "MCP JWT" is too narrow for Clerk OAuth Applications and Clerk session-based e2e. Resolved: use **Clerk OAuth Token** for OAuth MCP bearer tokens and **Clerk Session Token** for first-party/e2e bearer tokens, regardless of Clerk's token format setting.
-- "project URL" was ambiguous between stable IDs and slugs. Resolved: use **Project Route** for the user-facing organization-slug/project-slug URL.
-- "MCP" can mean OS as an MCP server or OS as a client of another MCP server. Resolved: use **Project MCP Server Entry Point** plus **Project MCP Server Connection** for external clients connected to OS, and **Outbound MCP From Our Client Capability** for OS connecting to external MCP servers as codemode Tool Providers.
+- "personal organization" is misleading because auth worker treats personal accounts separately from organizations. Resolved: use **Personal Account** for auth worker's non-organization user context.
+- "MCP JWT" is too narrow for auth-worker OAuth. Resolved: use **OAuth Access Token** for OAuth MCP bearer tokens and **Principal** for OS's request-local authenticated actor.
+- "project URL" was ambiguous between stable IDs and slugs. Resolved: use **Project Route** for the user-facing `/projects/:projectSlug` URL.
+- "MCP" can mean OS as an MCP server or OS as a client of another MCP server. Resolved: use **OS MCP Handler** plus **Project MCP Server Connection** for external clients connected to OS, and **Outbound MCP From Our Client Capability** for OS connecting to external MCP servers as codemode Tool Providers.
 - "`IterateMcpServer`" names the product, not the domain concept. Resolved: use `ProjectMcpServerConnection` for the Durable Object class/catalog name.
 - "Project Run Code Session" added an unnecessary layer. Resolved: use **Codemode Session** directly.
 - "route" can mean a TanStack route, a Worker hostname match, or a Project-local destination. Resolved: use **Ingress Hostname** for the Worker-level host classifier, **Project Route** for the authenticated OS dashboard URL, and **Project Route Destination** for a Project Durable Object target.
-- "authentication" can happen at the OS App layer or inside Project Ingress. Resolved: the OS App authenticates dashboard/control-plane routes; MCP auth currently lives in the **Project MCP Server Entry Point**.
+- "authentication" can happen at the OS App layer or inside MCP. Resolved: the OS App authenticates dashboard/control-plane routes; MCP auth currently lives in the **OS MCP Handler**.
 - "fetch callable" overlaps with generic JavaScript functions and Tool Provider callables. Resolved: use **Fetch Destination** for an ingress target that can receive an HTTP request.
 - "context request" made codemode look like a generic invocation broker. Resolved: use **Function Call** only for path-addressed codemode functions, and keep **Tool Provider** registration as model-visible information first.
 - "documentation" sounded like a generated API schema or external docs page. Resolved: use **Tool Provider Instructions** for the string-form guidance registered with a Tool Provider.
 - "executeFunctionCall" was clear but too generic for Worker and Durable Object classes. Resolved: use `executeCodemodeFunctionCall` for the RPC Tool Provider entry method.
-- "Workspace" is usually avoided for Clerk Organization or Project. Resolved: **Workspace Durable Object** is a separate codemode live-resource concept selected by Project ID and workspace slug.
+- "Workspace" is usually avoided for Organization or Project. Resolved: **Workspace Durable Object** is a separate codemode live-resource concept selected by Project ID and workspace slug.
 - "`ctx.workspaces.get`" made Workspace look like a repo-style collection lookup. Resolved: use singular `ctx.workspace` for the codemode Workspace surface.
 - "root tool" could imply a special non-provider mechanism. Resolved: subagent creation is the namespaced **RPC Tool Function** `ctx.agents.create()` registered at path `["agents", "create"]`.
 - "path" was doing two jobs: identifying the full Codemode Context call and identifying the function relative to the provider. Resolved: use **Provider Path** for the registered mount path and **Function Path** for the provider-relative call path.
 - "argsSummary" made RPC Function Calls look like a separate event family. Resolved: Function Call request events keep an `args` field and serialize live values best-effort.
 - "static callable" sounded like one fixed descriptor. Resolved: use **Callable Builder** for helpers that construct different Callable descriptors for one Capability.
 - "codemode-session-capability callable" was too noun-heavy and unclear about the value kind. Resolved: use **Session Capability Callable** for the Callable carried by `events.iterate.com/codemode/session-started`.
-- "Project DO worker" conflicted with loopback props. Resolved: use **Project Ingress Entry Point** and **Project MCP Server Entry Point** as same-worker loopback targets for now, while the **Project Durable Object** remains exported by the main OS Worker.
+- "Project DO worker" conflicted with loopback props. Resolved: use **Project Ingress Entry Point** as the same-worker loopback target for project ingress, while the **Project Durable Object** remains exported by the main OS Worker.
 - "project UI state" and lifecycle status could make the frontend look authoritative. Resolved: **Project Lifecycle Events** are durable facts, and UI can reduce them without owning the lifecycle model.
 - "project identity" in entrypoint props could mean slug or ID. Resolved: v1 ingress entrypoints accept **Project ID** only; **Project Slug** resolution happens in control-plane routes or route-registry writes.
 - "canonical project host" could mean stable ID host, slug host, or future custom host. Resolved for current code: use **Stable Project Ingress Host** for the ID-derived host and **Slug Project Ingress Host** for the slug-derived host.

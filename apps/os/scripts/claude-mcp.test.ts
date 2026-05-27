@@ -30,7 +30,7 @@ describe("assertMcpAdminBearerAccepted", () => {
 
     await expect(
       assertMcpAdminBearerAccepted({
-        mcpUrl: "https://mcp__iterate.iterate.app/",
+        mcpUrl: "https://os.iterate.com/mcp?project=iterate",
         token: "wrong",
       }),
     ).rejects.toThrow(/APP_CONFIG_ADMIN_API_SECRET/);
@@ -44,7 +44,7 @@ describe("assertMcpAdminBearerAccepted", () => {
 
     await expect(
       assertMcpAdminBearerAccepted({
-        mcpUrl: "https://mcp__demo.iterate.app/",
+        mcpUrl: "https://os.iterate.com/mcp?project=demo",
         token: "secret",
       }),
     ).resolves.toBeUndefined();

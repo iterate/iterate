@@ -1,4 +1,4 @@
-import { typeid as createTypeId } from "typeid-js";
+import { TypeID, typeid as createTypeId } from "typeid-js";
 
 export interface TypeIdEnv {
   TYPEID_PREFIX: string;
@@ -30,4 +30,24 @@ export function typeid<TEnv extends TypeIdEnv, TPrefix extends string>(params: {
   const generated = createTypeId(localPrefix);
 
   return `${generated.getType()}__${globalPrefix}__${generated.getSuffix()}` as `${string}__${string}__${string}`;
+}
+
+export function isValidTypeId(value: string, expectedPrefix?: string) {
+  try {
+    const [type, globalPrefix, suffix, ...rest] = value.split("__");
+    if (rest.length > 0 || !type || !globalPrefix || !suffix) {
+      return false;
+    }
+
+    normalizePrefix(globalPrefix, "TYPEID_PREFIX");
+    const localPrefix = normalizePrefix(type, "prefix");
+    if (expectedPrefix && localPrefix !== expectedPrefix) {
+      return false;
+    }
+
+    TypeID.fromString(`${localPrefix}_${suffix}`, localPrefix);
+    return true;
+  } catch {
+    return false;
+  }
 }

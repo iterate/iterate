@@ -4,7 +4,7 @@ import process from "node:process";
 import { os } from "@orpc/server";
 import { z } from "zod";
 
-const DEFAULT_BASE_HOST = "iterate.app";
+const DEFAULT_BASE_URL = "https://os.iterate.com";
 const SERVER_NAME = "iterate";
 const DEFAULT_INITIAL_PROMPT = "describe the MCP tools you have available";
 
@@ -14,14 +14,14 @@ const ClaudeMcpInput = z.object({
     .trim()
     .min(1)
     .regex(/^[a-zA-Z0-9_-]+$/, "Project slug or ID must be hostname-safe")
-    .describe("OS project slug or ID used in the mcp__<project> hostname"),
+    .describe("OS project slug or ID used for the admin-token MCP project selector"),
   baseHost: z
     .string()
     .trim()
     .min(1)
     .optional()
     .describe(
-      "Project hostname base, e.g. iterate.app (default: APP_CONFIG_PROJECT_HOSTNAME_BASES[0] or iterate.app)",
+      "Deprecated. OS base hostname or URL, e.g. os.iterate.com (default: APP_CONFIG_BASE_URL or https://os.iterate.com)",
     ),
   prompt: z
     .string()
@@ -39,9 +39,9 @@ export const claudeMcpScript = os
   })
   .handler(async ({ input }) => {
     const adminToken = requireEnv("APP_CONFIG_ADMIN_API_SECRET");
-    const baseHost = input.baseHost ?? defaultBaseHostFromEnv();
+    const baseUrl = input.baseHost ? normalizeBaseUrl(input.baseHost) : defaultBaseUrlFromEnv();
     const mcpUrl = buildProjectMcpUrl({
-      baseHost,
+      baseUrl,
       projectSlugOrId: input.projectSlugOrId,
     });
     await assertMcpAdminBearerAccepted({ mcpUrl, token: adminToken });
@@ -65,19 +65,8 @@ export const claudeMcpScript = os
     );
   });
 
-function defaultBaseHostFromEnv() {
-  const rawBases = process.env.APP_CONFIG_PROJECT_HOSTNAME_BASES?.trim();
-  if (rawBases) {
-    try {
-      const parsed = JSON.parse(rawBases) as unknown;
-      if (Array.isArray(parsed) && typeof parsed[0] === "string" && parsed[0].trim()) {
-        return parsed[0].trim();
-      }
-    } catch {
-      // fall through to prod default
-    }
-  }
-  return DEFAULT_BASE_HOST;
+function defaultBaseUrlFromEnv() {
+  return normalizeBaseUrl(process.env.APP_CONFIG_BASE_URL?.trim() || DEFAULT_BASE_URL);
 }
 
 function requireEnv(name: string) {
@@ -88,19 +77,20 @@ function requireEnv(name: string) {
   return value;
 }
 
-function buildProjectMcpUrl(input: { baseHost: string; projectSlugOrId: string }) {
-  const baseHost = normalizeBaseHost(input.baseHost);
-  return `https://mcp__${input.projectSlugOrId}.${baseHost}/`;
+function buildProjectMcpUrl(input: { baseUrl: string; projectSlugOrId: string }) {
+  const url = new URL("/mcp", normalizeBaseUrl(input.baseUrl));
+  url.searchParams.set("project", input.projectSlugOrId);
+  return url.toString();
 }
 
-function normalizeBaseHost(value: string) {
+function normalizeBaseUrl(value: string) {
   const parsed = new URL(/^https?:\/\//.test(value) ? value : `https://${value}`);
 
-  if (parsed.pathname !== "/" || parsed.search || parsed.hash) {
-    throw new Error("--base-host must be a hostname, not a URL with a path/query/hash.");
+  if (parsed.search || parsed.hash) {
+    throw new Error("--base-host must not include a query or hash.");
   }
 
-  return parsed.host;
+  return parsed.origin;
 }
 
 export async function assertMcpAdminBearerAccepted(input: { mcpUrl: string; token: string }) {

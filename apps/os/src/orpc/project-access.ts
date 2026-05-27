@@ -11,8 +11,9 @@ import { resolveActiveOrganizationAuth } from "~/orpc/auth.ts";
 /**
  * Confirms a caller can access an ownerless project before exposing
  * project-scoped capabilities such as Code Mode or stream access. Projects are
- * deliberately not owned by Clerk organizations; the permission table is the
- * current claim/grant layer, and admin API callers bypass it for operator work.
+ * deliberately not owned by organizations at their core; the permission table
+ * is the current claim/grant layer, and admin API callers bypass it for
+ * operator work.
  */
 export async function requireActiveOrganizationProject(input: {
   activeOrganization: ActiveOrganizationAuth;
@@ -30,6 +31,10 @@ export async function requireActiveOrganizationProject(input: {
   }
 
   if (input.activeOrganization.isAdminApi) {
+    return project;
+  }
+
+  if (input.context.principal?.can("read", { projectId: input.projectId })) {
     return project;
   }
 
@@ -66,15 +71,19 @@ export async function requireProjectScopedAccess(input: {
 
   const activeOrganization = resolveActiveOrganizationAuth(input.context);
   if (!activeOrganization) {
-    if (input.context.auth?.isAuthenticated) {
+    if (input.context.principal?.type === "user") {
       throw new ORPCError("FORBIDDEN", {
-        message: "OS requires an active Clerk Organization.",
+        message: "OS requires an active Organization.",
       });
     }
     throw new ORPCError("UNAUTHORIZED");
   }
 
   if (activeOrganization.isAdminApi) {
+    return project;
+  }
+
+  if (input.context.principal?.can("read", { projectId: project.id })) {
     return project;
   }
 

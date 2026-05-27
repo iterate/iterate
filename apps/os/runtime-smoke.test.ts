@@ -26,11 +26,6 @@ const describeRuntimeSmoke = process.env.CI ? describe.skip : describe.sequentia
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
 const smokeEnv = {
   APP_CONFIG: JSON.stringify({
-    clerk: {
-      publishableKey: "pk_test_ZHVtbXkuY2xlcmsuYWNjb3VudHMuZGV2JA",
-      secretKey: "sk_test_runtime_smoke",
-      jwtKey: "runtime-smoke-jwt-key",
-    },
     openAiApiKey: "runtime-smoke-openai-key",
   }),
 };

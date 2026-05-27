@@ -3,6 +3,7 @@ import { createFileRoute, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { useMutation } from "@tanstack/react-query";
 import { z } from "zod/v4";
+import { Avatar, AvatarFallback, AvatarImage } from "@iterate-com/ui/components/avatar";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   Card,
@@ -17,39 +18,125 @@ import { Label } from "@iterate-com/ui/components/label";
 import { Separator } from "@iterate-com/ui/components/separator";
 import { toast } from "sonner";
 import { authClient } from "../utils/auth-client.ts";
+import { getInitials } from "../utils/initials.ts";
 
-const getLoginSettings = createServerFn({ method: "GET" }).handler(({ context }) => ({
+const getLoginState = createServerFn({ method: "GET" }).handler(({ context }) => ({
   emailOtpEnabled: context.cloudflare.env.VITE_ENABLE_EMAIL_OTP_SIGNIN === "true",
+  session: context.variables.session,
 }));
 
 export const Route = createFileRoute("/login")({
   validateSearch: z.looseObject({
     redirect: z.string().optional(),
+    sig: z.string().optional(),
   }),
   beforeLoad: async ({ search }) => {
     const session = await authClient.getSession().catch(() => null);
-    if (session) throw redirect({ to: search.redirect ?? "/" });
+    if (session && !isOAuthProviderFlowSearch(search)) {
+      throw redirect({ to: search.redirect ?? "/" });
+    }
   },
-  loader: () => getLoginSettings(),
+  loader: () => getLoginState(),
   component: RouteComponent,
 });
 
 function RouteComponent() {
-  const { redirect } = Route.useSearch();
-  const { emailOtpEnabled } = Route.useLoaderData();
+  const search = Route.useSearch();
+  const { redirect } = search;
+  const { emailOtpEnabled, session } = Route.useLoaderData();
+  const signedInSession = session && isOAuthProviderFlowSearch(search) ? session : null;
 
   return (
     <div className="flex min-h-screen items-center justify-center p-4">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
-          <CardTitle className="text-xl">Sign in</CardTitle>
-          <CardDescription>Sign in to your Iterate account</CardDescription>
+          <CardTitle className="text-xl">
+            {signedInSession ? "Continue as this account" : "Sign in"}
+          </CardTitle>
+          <CardDescription>
+            {signedInSession
+              ? "You're already signed in. Continue with this account or switch before authorizing the app."
+              : "Sign in to your Iterate account"}
+          </CardDescription>
         </CardHeader>
         <Separator />
         <CardContent className="pt-6">
-          <LoginActions redirectTo={redirect ?? "/"} emailOtpEnabled={emailOtpEnabled} />
+          {signedInSession ? (
+            <SignedInAccountCard redirectTo={redirect ?? "/"} session={signedInSession} />
+          ) : (
+            <LoginActions redirectTo={redirect ?? "/"} emailOtpEnabled={emailOtpEnabled} />
+          )}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+function SignedInAccountCard({
+  redirectTo,
+  session,
+}: {
+  redirectTo: string;
+  session: {
+    user: {
+      name: string | null;
+      email: string;
+      image?: string | null;
+    };
+  };
+}) {
+  const user = session.user;
+  const initials = getInitials(user.name ?? user.email);
+  const continueWithAccount = useMutation({
+    mutationFn: () => getPostLoginRedirectUrl(redirectTo),
+    onSuccess: (nextUrl) => {
+      window.location.assign(nextUrl);
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Failed to continue");
+    },
+  });
+  const switchAccount = useMutation({
+    mutationFn: () => authClient.signOut(),
+    onSuccess: () => {
+      window.location.assign(window.location.pathname + window.location.search);
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Failed to switch account");
+    },
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3 rounded-xl border bg-muted/30 p-4">
+        <Avatar>
+          {user.image && <AvatarImage src={user.image} alt={user.name ?? user.email} />}
+          <AvatarFallback>{initials}</AvatarFallback>
+        </Avatar>
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium">{user.name ?? "User"}</p>
+          <p className="truncate text-xs text-muted-foreground">{user.email}</p>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <Button
+          className="w-full"
+          size="lg"
+          disabled={continueWithAccount.isPending || switchAccount.isPending}
+          onClick={() => continueWithAccount.mutate()}
+        >
+          {continueWithAccount.isPending ? "Continuing..." : "Continue with this account"}
+        </Button>
+        <Button
+          className="w-full"
+          variant="outline"
+          disabled={continueWithAccount.isPending || switchAccount.isPending}
+          onClick={() => switchAccount.mutate()}
+        >
+          {switchAccount.isPending ? "Switching..." : "Use another account"}
+        </Button>
+      </div>
     </div>
   );
 }
@@ -290,6 +377,10 @@ async function getPostLoginRedirectUrl(fallbackRedirect: string) {
 function isOAuthProviderFlow() {
   const searchParams = new URLSearchParams(window.location.search);
   return searchParams.has("sig");
+}
+
+function isOAuthProviderFlowSearch(search: { sig?: string }) {
+  return Boolean(search.sig);
 }
 
 function GoogleIcon() {

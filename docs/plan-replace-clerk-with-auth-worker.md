@@ -439,3 +439,130 @@ Phase F is last.
 3. **MCP dynamic client registration** — MCP clients (Claude Code, Cursor) need
    to register themselves as OAuth clients. The auth worker supports this via
    `dynamic_oauth_client_registration`. Verify this works end-to-end.
+
+## Running log
+
+### 2026-05-19
+
+- Started with Phase A because OS cannot trust auth-worker tokens until the auth
+  worker emits first-class organization/project claims.
+- Added optional caller-managed project IDs to the auth contract and both public
+  and internal project creation routers. The auth worker still generates `prj_*`
+  IDs by default, but stores provided IDs opaquely after checking for conflicts.
+  This keeps OS responsible for its TypeIDs without teaching auth about OS ID
+  semantics.
+- Added shared claim constants/types for access-token `organizations` and
+  `projects`. Kept full organization names in `/userinfo` only; access tokens
+  carry the smaller `{ id, slug, role }` shape planned for OS authorization.
+- Added `listProjectsForUser` and `getProjectById` SQL queries for token
+  generation and ID conflict checks. `pnpm --dir apps/auth db:generate` currently
+  fails before generation because this worktree has no Miniflare v3 D1 persist
+  directory for `auth-dev-auth-db`, so the generated query binding was updated
+  manually to keep typecheck moving. Re-run sqlfu generation after initializing
+  the local auth D1 store.
+- Added auth-library support for OS resource audiences and bearer access-token
+  verification. OS web login now asks the auth worker for an OS-audience token
+  instead of an auth-worker-audience token, while bearer verification accepts the
+  dashboard resource and the future `/mcp` resource.
+- Replaced OS's Clerk request middleware with an Iterate-auth middleware that
+  resolves a request-local Principal from, in order: admin API bearer secret,
+  auth-worker session cookie, then auth-worker OAuth bearer token. The admin API
+  path remains a first-class Principal instead of a separate oRPC special case.
+- Kept `APP_CONFIG_ITERATE_AUTH__*` as the runtime config shape, but mapped
+  Doppler's planned `ITERATE_OAUTH_*` variables into that shape in
+  `apps/os/alchemy.run.ts` so existing sync scripts can store OAuth client
+  credentials under the simpler environment names.
+- Replaced Clerk's frontend provider and prebuilt sign-in/sign-up/org chooser
+  components with a small Iterate-auth client provider. The UI reads
+  `/api/iterate-auth/session`, redirects auth routes to the auth worker login
+  endpoint, and renders sidebar organization/user menus from auth-worker session
+  claims.
+- Added `apps/os`'s `auth:sync-clients` script for the A3 OAuth client sync.
+  It ensures auth-worker OAuth clients for dev, preview, and production OS
+  targets, then writes the resulting web/MCP client credentials and OS URL
+  config back to Doppler. It is intended to run through the production auth
+  worker Doppler config so preview/dev OS can target `https://auth.iterate.com`.
+- Migrated inbound MCP to the OS `/mcp` resource. `entry.workerd.ts` now handles
+  `/mcp` and `/.well-known/oauth-protected-resource/mcp`, verifies auth-worker
+  bearer tokens against the MCP audience, and passes the token's project claims
+  into `ProjectMcpServerConnection`. The MCP tool schema requires a `project`
+  argument only when the token grants multiple projects.
+- Removed per-project MCP host registration and replaced the old Clerk-based
+  project MCP entrypoint with a tombstone response. The CLI and UI now point to
+  the OS base URL `/mcp`; the CLI keeps its admin-token preflight by adding a
+  `?project=<slug-or-id>` selector.
+- Removed OS's Clerk runtime config, Alchemy bindings, dependencies,
+  `sync-clerk-apps.ts`, and the last runtime Clerk API lookup. Remaining
+  `clerk_organization` strings are legacy permission-table values; the runtime
+  no longer imports Clerk packages or reads `APP_CONFIG_CLERK__*`.
+- Restructured OS dashboard URLs so project pages live under
+  `/projects/:projectSlug` and organization pages under `/org/:organizationSlug`.
+  The shared `_app` layout now owns the active-organization sidebar, while
+  project authorization also accepts auth-worker project claims before falling
+  back to the legacy permission table.
+- Deleted the obsolete dummy `apps/mcp` worker now that OS serves `/mcp`
+  directly, removed the root `mcp:dev` script and workspace lockfile importer,
+  and refreshed OS docs/CONTEXT language around auth-worker sessions,
+  project-scoped URLs, centralized MCP, and OAuth client sync.
+- Ran `apps/os`'s `auth:sync-clients` through the production auth worker
+  Doppler config. It synced web and MCP OAuth clients plus OS Doppler runtime
+  variables for `dev_jonas`, `dev_misha`, `dev_rahul`, `preview_2` through
+  `preview_9`, and `prd`, then verified each expected key exists without
+  printing secret values.
+- Removed inherited `APP_CONFIG_CLERK__*` secrets from OS and shared Doppler
+  configs for dev, preview, and production. `preview_2` deploy now parses
+  config without Clerk overrides.
+- Added an explicit no-op queue handler for OS because the Cloudflare Artifacts
+  binding had provisioned an artifact-events queue consumer and Cloudflare
+  rejects uploads to queue-consuming Workers without a queue export.
+- Deployed `preview_2` successfully and ran both preview checks:
+  `test:e2e:preview` against `https://os.iterate-preview-2.com/` and
+  `test:e2e:codemode-mcp` against `/mcp?project=preview-mcp-smoke-manual`.
+- Verified the `dev_jonas` Doppler config has the new auth-worker OAuth
+  variables and no `APP_CONFIG_CLERK__*` variables. The first dev run exposed a
+  pre-existing Cloudflare DNS conflict: wildcard MX records at
+  `*.iterate-dev-jonas.app` blocked Alchemy from maintaining the dev tunnel
+  wildcard CNAME. Removed only those wildcard MX records, leaving apex/www email
+  records intact.
+- Started OS dev through the `dev_jonas` Doppler config, confirmed the local
+  health route, and let Alchemy start `cloudflared` for
+  `https://os.iterate-dev-jonas.com`.
+- Ran the same public smoke checks against dev:
+  `test:e2e:preview` with `OS_BASE_URL=https://os.iterate-dev-jonas.com/` and
+  `test:e2e:codemode-mcp` against
+  `/mcp?project=preview-mcp-smoke-manual`. Both passed, proving the dev tunnel,
+  auth-worker config, project seeding, MCP metadata, and codemode MCP path work
+  against the production auth worker.
+- Deployed `apps/auth` to `prd` after a real dev OAuth token exchange exposed
+  that production auth was still running the pre-audience code and rejected
+  `https://os.iterate-dev-jonas.com` as an OAuth `resource`.
+- Re-ran real OAuth login/callback/session flows against both
+  `https://os.iterate-dev-jonas.com` and `https://os.iterate-preview-2.com`
+  using the production auth worker, bootstrap superadmin credentials from auth
+  Doppler, and in-memory cookies. Both flows completed and returned
+  authenticated OS sessions without printing tokens, codes, cookies, or secrets.
+- Fixed the post-login empty-organization path on OS. `/organization` now shows
+  a first-party organization creation form for signed-in users with no
+  organizations instead of only a secondary Continue button, creates the
+  organization through an auth-worker service client, then refreshes the OS
+  session so the new organization claim is present.
+- Added OS-to-auth service-token config and mirrored user-created OS projects
+  into auth-worker projects before inserting the OS project row. This keeps
+  newly created dashboard projects visible to auth-worker OAuth project
+  selection and MCP project claims.
+- Fixed auth OAuth client sync for existing clients. Better Auth stores client
+  secrets hashed, so the sync procedure now reuses only caller-supplied
+  plaintext Doppler secrets or explicitly rotates the client; the script also
+  supports scoped target syncs. Rotated only `preview_2`, deployed auth prd and
+  OS `preview_2`, and verified the new client secret with a real OAuth
+  callback.
+- Used an isolated `agent-browser` session against
+  `https://os.iterate-preview-2.com/organization` with a no-organization test
+  user. Created organization `preview-org-1779255983`, refreshed the OS session,
+  created project `preview-project-1779256077` through the Projects UI, and
+  landed on the created project page.
+- Ran `pnpm cli claude-mcp --project-slug-or-id preview-project-1779256077`
+  through the `preview_2` Doppler config; the script preflighted the remote MCP
+  endpoint and Claude listed the Iterate MCP tool providers. Then ran
+  `test:e2e:codemode-mcp` against the same created project; the codemode MCP
+  provider-stack test passed.

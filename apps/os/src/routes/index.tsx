@@ -6,14 +6,14 @@ export const Route = createFileRoute("/")({
     const target = await requireAuthenticatedRootRedirectTarget();
     if (target.projectSlug) {
       throw redirect({
-        to: "/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions/new",
-        params: { organizationSlug: target.orgSlug, projectSlug: target.projectSlug },
+        to: "/projects/$projectSlug/codemode-sessions/new",
+        params: { projectSlug: target.projectSlug },
         replace: true,
       });
     }
 
     throw redirect({
-      to: "/orgs/$organizationSlug",
+      to: "/org/$organizationSlug",
       params: { organizationSlug: target.orgSlug },
       replace: true,
     });

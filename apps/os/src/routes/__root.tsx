@@ -7,6 +7,7 @@ import {
   Scripts,
   createRootRouteWithContext,
 } from "@tanstack/react-router";
+import { createServerFn } from "@tanstack/react-start";
 import { TanStackDevtools } from "@tanstack/react-devtools";
 import { FormDevtoolsPanel } from "@tanstack/react-form-devtools";
 import { ReactQueryDevtoolsPanel } from "@tanstack/react-query-devtools";
@@ -15,13 +16,28 @@ import { extractPublicConfigSchema } from "@iterate-com/shared/apps/config";
 import { AppProviders } from "@iterate-com/ui/apps/providers";
 import iterateLogoAsset from "@iterate-com/ui/assets/iterate-logo.svg";
 import { DefaultErrorComponent } from "@iterate-com/ui/components/route-defaults";
-import { ClerkProvider } from "@clerk/tanstack-react-start";
 import { AppConfig } from "../app.ts";
+import type { OsSessionResponse } from "../auth/client-context.ts";
+import { AuthClientProvider } from "../auth/client.tsx";
 import { orpcClient } from "../orpc/client.ts";
 import appCss from "../styles.css?url";
 import type { RouterContext } from "../router.tsx";
 
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
+
+const getInitialAuthSession = createServerFn({ method: "GET" }).handler(
+  ({ context }): OsSessionResponse => {
+    if (!context.iterateAuthSession) {
+      return { authenticated: false };
+    }
+
+    return {
+      authenticated: true,
+      user: context.iterateAuthSession.user,
+      session: context.iterateAuthSession.session,
+    };
+  },
+);
 
 export const Route = createRootRouteWithContext<RouterContext>()({
   loader: async () => {
@@ -30,7 +46,10 @@ export const Route = createRootRouteWithContext<RouterContext>()({
         {},
       ),
     );
-    return config;
+    return {
+      config,
+      authSession: await getInitialAuthSession(),
+    };
   },
   staleTime: Number.POSITIVE_INFINITY,
   head: () => ({
@@ -64,23 +83,13 @@ function RootDocument({ children }: { children: ReactNode }) {
 }
 
 function RootComponent() {
-  const config = Route.useLoaderData();
+  const { config, authSession } = Route.useLoaderData();
 
   return (
     <AppProviders config={config} devtools={<OSDevtools />} forcedTheme="light">
-      <ClerkProvider
-        publishableKey={config.clerk.publishableKey}
-        signInUrl={config.clerk.signInUrl}
-        signUpUrl={config.clerk.signUpUrl}
-        afterSignOutUrl={config.clerk.signInUrl}
-        // Clerk sends sessions with pending tasks to task-specific routes.
-        // `choose-organization` must render TaskChooseOrganization, not the
-        // normal OrganizationList chooser:
-        // https://clerk.com/docs/tanstack-react-start/reference/components/authentication/task-choose-organization
-        taskUrls={{ "choose-organization": "/session-tasks/choose-organization" }}
-      >
+      <AuthClientProvider initialSession={authSession}>
         <Outlet />
-      </ClerkProvider>
+      </AuthClientProvider>
     </AppProviders>
   );
 }

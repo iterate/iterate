@@ -5,7 +5,7 @@ import {
   getD1ObjectCatalogRecord,
   listD1ObjectCatalogRecordsByIndex,
 } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import { typeid } from "@iterate-com/shared/typeid";
+import { isValidTypeId, typeid } from "@iterate-com/shared/typeid";
 import type { AppContext } from "~/context.ts";
 import {
   countAllProjects,
@@ -32,6 +32,7 @@ import {
   isValidCustomHostname,
   normalizeCustomHostname,
 } from "~/lib/project-host-routing.ts";
+import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 import type { ActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
 import { activeOrganizationMiddleware, os, projectScopeMiddleware } from "~/orpc/orpc.ts";
 import { requireProjectScope } from "~/orpc/project-access.ts";
@@ -123,16 +124,51 @@ function isUniqueConstraintError(error: unknown) {
   return error instanceof Error && error.message.includes("UNIQUE constraint failed");
 }
 
+function resolveProjectId(input: { id?: string; context: Pick<AppContext, "config"> }) {
+  if (input.id) {
+    if (!isValidTypeId(input.id, "proj")) {
+      throw new ORPCError("BAD_REQUEST", {
+        message: "Project ID must be a valid TypeID with prefix proj.",
+      });
+    }
+    return input.id;
+  }
+
+  return typeid({
+    env: { TYPEID_PREFIX: input.context.config.typeIdPrefix.exposeSecret() },
+    prefix: "proj",
+  });
+}
+
 export const projectsRouter = {
   projects: {
     create: os.projects.create
       .use(activeOrganizationMiddleware)
       .handler(async ({ context, input }) => {
         const auth = context.activeOrganization;
-        const id = typeid({
-          env: { TYPEID_PREFIX: context.config.typeIdPrefix.exposeSecret() },
-          prefix: "proj",
-        });
+        const id = resolveProjectId({ id: input.id, context });
+        const existing = await getProjectBySlug(context.db, { slug: input.slug });
+        if (existing) {
+          throw new ORPCError("CONFLICT", {
+            message: `A project with slug ${input.slug} already exists.`,
+          });
+        }
+        if (input.id && (await getProjectById(context.db, { id: input.id }))) {
+          throw new ORPCError("CONFLICT", {
+            message: `A project with ID ${input.id} already exists.`,
+          });
+        }
+
+        if (!auth.isAdminApi) {
+          const authWorker = createAuthWorkerServiceClient(context);
+          await authWorker.internal.project.createForOrganization({
+            id,
+            organizationSlug: auth.orgSlug,
+            name: input.slug,
+            slug: input.slug,
+            metadata: { osProjectId: id },
+          });
+        }
 
         let project: ProjectRow;
 
@@ -432,6 +468,10 @@ async function requireProject(input: {
   }
 
   if (input.activeOrganization.isAdminApi) {
+    return project;
+  }
+
+  if (input.context.principal?.can("read", { projectId: input.projectId })) {
     return project;
   }
 

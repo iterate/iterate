@@ -12,6 +12,7 @@ import { auth, getAllowedBrowserOrigins } from "./auth.ts";
 import { hono, variablesProvider, type Variables } from "./utils/hono.ts";
 import { appRouter } from "./orpc/index.ts";
 import type { CloudflareEnv } from "./env.ts";
+import { appendSetCookieHeaders, resolveAuthLogoutReturnTo } from "./logout.ts";
 
 const app = hono();
 const allowedBrowserOrigins = new Set(getAllowedBrowserOrigins());
@@ -45,6 +46,25 @@ app.get(`/.well-known/oauth-authorization-server${AUTH_ISSUER_PATH}`, (c) =>
   oauthProviderAuthServerMetadata(auth)(c.req.raw),
 );
 app.all("/api/auth/*", (c) => auth.handler(c.req.raw));
+
+app.get("/logout", async (c) => {
+  const signOutUrl = new URL("/api/auth/sign-out", c.req.url);
+  const signOutResponse = await auth.handler(
+    new Request(signOutUrl, {
+      method: "POST",
+      headers: c.req.raw.headers,
+    }),
+  );
+  const response = c.redirect(
+    resolveAuthLogoutReturnTo({
+      rawReturnTo: c.req.query("return_to"),
+      authOrigin: c.env.VITE_AUTH_APP_ORIGIN,
+      publicOrigin: c.env.VITE_PUBLIC_URL,
+    }),
+  );
+  appendSetCookieHeaders(response.headers, signOutResponse.headers);
+  return response;
+});
 
 export const orpcHandler = new RPCHandler(appRouter, {
   plugins: [new RequestHeadersPlugin()],

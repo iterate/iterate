@@ -34,6 +34,7 @@ import { getProjectPlatformHostIngressRule } from "~/ingress/project-platform-ho
 import { getProjectCustomHostnameIngressRule } from "~/ingress/project-custom-hostname-routing.ts";
 import type { ExactHostIngressRule } from "~/ingress/types.ts";
 import { DEBUG_APPEND_CHAIN_EVENT_TYPE } from "~/durable-objects/debug-append-chain-subscriber.ts";
+import { handleMcpFetch } from "~/domains/inbound-mcp-server/mcp-handler.ts";
 
 // Re-export rpc-targets used by OS's existing loopback callable paths.
 // Stream processor subscriptions do not use these exports; they target Durable
@@ -98,6 +99,9 @@ export default {
         executionCtx: cfCtx,
       },
       async ({ log }) => {
+        const mcpResponse = await handleMcpFetch({ request, env, ctx: cfCtx, config });
+        if (mcpResponse) return mcpResponse;
+
         const durableObjectDebugResponse = await handleDurableObjectDebugFetch({ request, env });
         if (durableObjectDebugResponse) return durableObjectDebugResponse;
 
@@ -170,6 +174,12 @@ export default {
         return response;
       },
     );
+  },
+  async queue(batch: { messages: readonly unknown[]; queue: string }) {
+    console.warn("[os] received unhandled queue batch", {
+      messageCount: batch.messages.length,
+      queue: batch.queue,
+    });
   },
 };
 

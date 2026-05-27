@@ -1,7 +1,6 @@
 import OpenAI from "openai";
 import type { ResponsesClientEvent } from "openai/resources/responses/responses";
 import { ResponsesWSBase } from "openai/resources/responses/ws-base";
-import { createClerkClient } from "@clerk/backend";
 import { z } from "zod";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
@@ -528,15 +527,13 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
   private async createDebugSnapshot() {
     const project = await this.readDebugProjectInfo();
     const config = this.getAppConfig();
-    const streamUrl =
-      project?.organizationSlug && project.slug
-        ? buildProjectStreamViewerUrl({
-            baseUrl: config.baseUrl,
-            organizationSlug: project.organizationSlug,
-            projectSlug: project.slug,
-            streamPath: this.structuredName.agentPath,
-          })
-        : (config.baseUrl ?? "https://os.iterate.com");
+    const streamUrl = project?.slug
+      ? buildProjectStreamViewerUrl({
+          baseUrl: config.baseUrl,
+          projectSlug: project.slug,
+          streamPath: this.structuredName.agentPath,
+        })
+      : (config.baseUrl ?? "https://os.iterate.com");
     const snapshot = {
       project:
         project == null
@@ -570,34 +567,12 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       return {
         id: row.id,
         organizationId: row.organization_id ?? undefined,
-        organizationSlug: await this.readOrganizationSlug(row.organization_id),
+        organizationSlug: null,
         slug: row.slug,
       };
     } catch (error) {
       console.error("[os-agent] failed to read project debug info", {
         agentName: this.name,
-        error,
-      });
-      return null;
-    }
-  }
-
-  private async readOrganizationSlug(organizationId: string | null) {
-    if (!organizationId) return null;
-
-    try {
-      const config = this.getAppConfig();
-      const clerk = createClerkClient({
-        secretKey: config.clerk.secretKey.exposeSecret(),
-        publishableKey: config.clerk.publishableKey,
-        jwtKey: config.clerk.jwtKey.exposeSecret(),
-      });
-      const organization = await clerk.organizations.getOrganization({ organizationId });
-      return organization.slug?.trim() || null;
-    } catch (error) {
-      console.error("[os-agent] failed to read organization debug slug", {
-        agentName: this.name,
-        organizationId,
         error,
       });
       return null;

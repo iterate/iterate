@@ -1,4 +1,4 @@
-import type { ClerkAuth } from "~/context.ts";
+import type { UserPrincipal } from "~/auth/principal.ts";
 
 export interface ActiveOrganizationAuth {
   isAdminApi?: boolean;
@@ -10,17 +10,18 @@ export interface ActiveOrganizationAuth {
   orgPermissions: string[];
 }
 
-export function normalizeActiveOrganizationAuth(session: ClerkAuth): ActiveOrganizationAuth {
-  if (!session.isAuthenticated || !session.orgId || !session.orgSlug) {
-    throw new Error("Expected authenticated Clerk session with active organization.");
+export function normalizeActiveOrganizationAuth(principal: UserPrincipal): ActiveOrganizationAuth {
+  const organization = principal.organizations[0];
+  if (!organization) {
+    throw new Error("Expected authenticated user principal with an organization.");
   }
 
   return {
-    userId: session.userId,
-    sessionId: session.sessionId,
-    orgId: session.orgId,
-    orgRole: session.orgRole ?? null,
-    orgSlug: session.orgSlug,
-    orgPermissions: session.orgPermissions ?? [],
+    userId: principal.userId,
+    sessionId: principal.sessionId ?? principal.userId,
+    orgId: organization.id,
+    orgRole: organization.role,
+    orgSlug: organization.slug,
+    orgPermissions: [],
   };
 }

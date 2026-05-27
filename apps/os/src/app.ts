@@ -3,7 +3,6 @@ import type { AppManifest } from "@iterate-com/shared/apps/types";
 import { z } from "zod";
 import packageJson from "../package.json" with { type: "json" };
 
-const ClerkMcpOauthScope = z.enum(["openid", "profile", "email"]);
 const SlackScope = z.string().trim().min(1);
 const GoogleScope = z.string().trim().min(1);
 
@@ -47,25 +46,15 @@ export const DEFAULT_GOOGLE_OAUTH_SCOPES = [
 export const AppConfig = BaseAppConfig.extend({
   baseUrl: publicValue(z.url()).optional(),
   adminApiSecret: redacted(z.string().trim().min(1)).optional(),
-  clerk: z.object({
-    publishableKey: publicValue(z.string().trim().min(1)),
-    secretKey: redacted(z.string().trim().min(1)),
-    jwtKey: redacted(z.string().trim().min(1)),
-    // Deprecated static OAuth app config. MCP now uses Clerk dynamic client registration,
-    // but older CI/Doppler configs may still provide these keys.
-    oauthClientId: publicValue(z.string().trim().min(1)).optional(),
-    oauthClientSecret: redacted(z.string().trim().min(1)).optional(),
-    signInUrl: publicValue(z.string().trim().min(1).default("/sign-in")),
-    signUpUrl: publicValue(z.string().trim().min(1).default("/sign-up")),
-    afterSignInUrl: publicValue(z.string().trim().min(1).default("/")),
-    afterSignUpUrl: publicValue(z.string().trim().min(1).default("/")),
-    mcpOauthScopes: z
-      .array(ClerkMcpOauthScope)
-      .default(["email", "profile"])
-      .transform((scopes) =>
-        scopes.filter((scope): scope is "email" | "profile" => scope !== "openid"),
-      ),
-  }),
+  iterateAuth: z
+    .object({
+      issuer: publicValue(z.url().default("https://auth.iterate.com/api/auth")),
+      clientId: publicValue(z.string().trim().min(1)),
+      clientSecret: redacted(z.string().trim().min(1)),
+      serviceToken: redacted(z.string().trim().min(1)).optional(),
+      resource: publicValue(z.url()).optional(),
+    })
+    .optional(),
   openAiApiKey: redacted(z.string().trim().min(1)),
   cloudflare: z
     .object({

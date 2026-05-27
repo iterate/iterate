@@ -8,6 +8,7 @@ import {
   getOAuthClientByClientId,
   getOAuthClientByReferenceId,
   getOrganizationBySlug,
+  getProjectById,
   getProjectBySlug,
   getUserByEmail,
   getUserById,
@@ -193,7 +194,11 @@ const createForOrganization = os.internal.project.createForOrganization
         Boolean(await getProjectBySlug(context.db, { slug: candidate })),
     });
 
-    const projectId = generateId("prj");
+    const projectId = input.id ?? generateId("prj");
+    if (input.id && (await getProjectById(context.db, { id: input.id }))) {
+      throw new ORPCError("CONFLICT", { message: "Project ID already exists" });
+    }
+
     const now = Date.now();
     const created = await insertProjectReturning(context.db, {
       id: projectId,
@@ -221,14 +226,24 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
           clientId: input.existingClientId,
         })
       : null;
-    const shouldRotateDevClient = input.referenceId.startsWith("dev:");
+    const shouldRotateDevClient =
+      input.referenceId.startsWith("dev:") || input.referenceId.includes(":dev_");
 
     const existing =
       shouldRotateDevClient && existingByClientId?.clientSecret
         ? existingByClientId
         : existingByReferenceId;
 
-    if (existing?.clientSecret && !shouldRotateDevClient) {
+    const shouldCreateFreshClient = input.rotateClientSecret || !input.existingClientSecret;
+
+    if (existing?.clientSecret && !shouldRotateDevClient && !shouldCreateFreshClient) {
+      const existingClientSecret = input.existingClientSecret;
+      if (!existingClientSecret) {
+        throw new ORPCError("INTERNAL_SERVER_ERROR", {
+          message: "Existing OAuth client secret is required.",
+        });
+      }
+
       const existingSorted = parseStringArray(existing.redirectUrisJson).sort();
       const needsUpdate =
         existing.name !== input.clientName ||
@@ -258,6 +273,18 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
       };
     }
 
+    if (existing?.clientSecret && !shouldRotateDevClient && shouldCreateFreshClient) {
+      await disableOAuthClientById(
+        context.db,
+        {
+          updatedAt: Date.now(),
+        },
+        {
+          id: existing.id,
+        },
+      );
+    }
+
     if (
       shouldRotateDevClient &&
       existingByClientId?.clientSecret &&
@@ -275,7 +302,14 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
       );
     }
 
-    if (shouldRotateDevClient && existingByClientId?.clientSecret) {
+    if (shouldRotateDevClient && existingByClientId?.clientSecret && !shouldCreateFreshClient) {
+      const existingClientSecret = input.existingClientSecret;
+      if (!existingClientSecret) {
+        throw new ORPCError("INTERNAL_SERVER_ERROR", {
+          message: "Existing OAuth client secret is required.",
+        });
+      }
+
       const existingSorted = parseStringArray(existingByClientId.redirectUrisJson).sort();
       const needsUpdate =
         existingByClientId.name !== input.clientName ||
@@ -314,6 +348,18 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
         },
         {
           id: existingByReferenceId.id,
+        },
+      );
+    }
+
+    if (existingByClientId && existingByClientId.id !== existingByReferenceId?.id) {
+      await disableOAuthClientById(
+        context.db,
+        {
+          updatedAt: Date.now(),
+        },
+        {
+          id: existingByClientId.id,
         },
       );
     }

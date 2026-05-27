@@ -99,10 +99,11 @@ doppler run --config prd -- pnpm cli rpc project streams read \
 
 ### Project MCP
 
-The project MCP host is `https://mcp__<project>.<project-host-base>/`, so production `iterate` is:
+The OS MCP resource is served by the OS app at `/mcp`; select a project with
+the CLI's `--project-slug-or-id` flag.
 
 ```txt
-https://mcp__iterate.iterate.app/
+https://os.iterate.com/mcp
 ```
 
 Start Claude with that MCP server preconfigured:
@@ -112,7 +113,7 @@ cd apps/os
 doppler run --config prd -- pnpm cli claude-mcp --project-slug-or-id iterate
 ```
 
-For previews, run under the preview Doppler config. The CLI derives the project host base from `APP_CONFIG_PROJECT_HOSTNAME_BASES`; override with `--base-host` only if needed.
+For previews, run under the preview Doppler config.
 
 ```bash
 doppler run --config preview_3 -- pnpm cli rpc projects list
@@ -137,7 +138,7 @@ doppler run --config prd -- \
     "$APP_CONFIG_BASE_URL/api/project/iterate"'
 ```
 
-Browser debugging can also authenticate through Clerk OAuth.
+Browser debugging can also authenticate through the Iterate Auth Worker.
 
 For `pnpm cli rpc`, prefer the CLI from `apps/os`:
 

@@ -22,8 +22,8 @@ The smallest useful slice is:
 Use Project-local Repo routes:
 
 ```txt
-/orgs/$organizationSlug/projects/$projectSlug/repos
-/orgs/$organizationSlug/projects/$projectSlug/repos/$repoSlug
+/projects/$projectSlug/repos
+/projects/$projectSlug/repos/$repoSlug
 ```
 
 The detail route param is the Repo Slug. Do not put Cloudflare Artifacts names

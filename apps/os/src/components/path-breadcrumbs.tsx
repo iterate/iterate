@@ -25,7 +25,6 @@ type BreadcrumbStaticData = {
 type BreadcrumbLoaderData = {
   breadcrumb?: string;
   streamBreadcrumb?: {
-    organizationSlug: string;
     projectId: string;
     projectSlug: string;
     streamPath: StreamPathType;
@@ -138,9 +137,8 @@ function renderCrumbLink({
   if (crumb.streamPath && streamBreadcrumb) {
     return (
       <Link
-        to="/orgs/$organizationSlug/projects/$projectSlug/streams/$"
+        to="/projects/$projectSlug/streams/$"
         params={{
-          organizationSlug: streamBreadcrumb.organizationSlug,
           projectSlug: streamBreadcrumb.projectSlug,
           _splat: streamPathToSplat(crumb.streamPath),
         }}
@@ -179,9 +177,8 @@ function StreamChildrenBreadcrumb({
   function navigateToChild(childPath: StreamPathType) {
     setOpen(false);
     void navigate({
-      to: "/orgs/$organizationSlug/projects/$projectSlug/streams/$",
+      to: "/projects/$projectSlug/streams/$",
       params: {
-        organizationSlug: streamBreadcrumb.organizationSlug,
         projectSlug: streamBreadcrumb.projectSlug,
         _splat: streamPathToSplat(childPath),
       },

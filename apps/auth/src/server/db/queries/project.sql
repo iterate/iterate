@@ -9,6 +9,17 @@ FROM project
 WHERE slug = :slug
 LIMIT 1;
 
+/** @name getProjectById */
+SELECT id,
+  organization_id AS organizationId,
+  name,
+  slug,
+  metadata,
+  archived_at AS archivedAt
+FROM project
+WHERE id = :id
+LIMIT 1;
+
 /** @name getProjectWithOrganizationBySlug */
 SELECT p.id,
   p.organization_id AS organizationId,
@@ -35,6 +46,19 @@ FROM project
 WHERE organization_id = :organizationId
 ORDER BY created_at ASC,
   slug ASC;
+
+/** @name listProjectsForUser */
+SELECT p.id,
+  p.organization_id AS organizationId,
+  p.name,
+  p.slug,
+  p.metadata,
+  p.archived_at AS archivedAt
+FROM project p
+JOIN member m ON m.organizationId = p.organization_id
+WHERE m.userId = :userId
+ORDER BY p.created_at ASC,
+  p.slug ASC;
 
 /** @name insertProjectReturning */
 INSERT INTO project (

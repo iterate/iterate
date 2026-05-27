@@ -6,11 +6,16 @@ import * as oauth from "oauth4webapi";
 import { z } from "zod/v4";
 import {
   ITERATE_ACTIVE_ORGANIZATION_ID_CLAIM,
+  ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM,
+  ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM,
   ITERATE_IS_ADMIN_CLAIM,
   ITERATE_ORGANIZATIONS_CLAIM,
+  IterateAuthAccessTokenOrganizationClaim,
   IterateAuthOrganizationClaim,
+  IterateAuthProjectClaim,
   ITERATE_ROLE_CLAIM,
   type IterateAuthOrganizationClaim as IterateAuthOrganizationClaimType,
+  type IterateAuthProjectClaim as IterateAuthProjectClaimType,
 } from "@iterate-com/shared/auth-claims";
 
 const DEFAULT_ISSUER = "https://auth.iterate.com/api/auth";
@@ -22,6 +27,8 @@ export type IterateAuthConfig = {
   clientId: string;
   clientSecret: string;
   redirectURI: string;
+  resource?: string | string[];
+  logoutReturnToOrigins?: string[];
   cookiePrefix?: string;
   authHandlerBasePath?: string;
 };
@@ -56,12 +63,17 @@ const IdTokenClaims = z.looseObject({
 const AccessTokenClaims = z.looseObject({
   sub: z.string(),
   scope: z.string(),
+  scopes: z.array(z.string()).optional(),
   sid: z.string().optional(),
   azp: z.string().optional(),
   iss: z.string(),
   aud: z.union([z.string(), z.array(z.string())]),
   iat: z.number(),
   exp: z.number(),
+  [ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM]: z
+    .array(IterateAuthAccessTokenOrganizationClaim)
+    .optional(),
+  [ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM]: z.array(IterateAuthProjectClaim).optional(),
 });
 
 const UserInfoClaims = z.looseObject({
@@ -92,6 +104,7 @@ export type AuthSession = {
   sessionId?: string;
   activeOrganizationId?: string | null;
   organizations: IterateAuthOrganizationClaimType[];
+  projects: IterateAuthProjectClaimType[];
 };
 
 export type AuthenticatedSession = {
@@ -108,6 +121,15 @@ function buildAuthenticatedSession(
   idToken: IdTokenClaims,
   userInfo: UserInfoClaims | null,
 ): AuthenticatedSession {
+  const accessTokenOrganizations =
+    accessToken[ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM]?.map((organization) => ({
+      ...organization,
+      name:
+        userInfo?.[ITERATE_ORGANIZATIONS_CLAIM]?.find(
+          (userInfoOrganization) => userInfoOrganization.id === organization.id,
+        )?.name ?? organization.slug,
+    })) ?? null;
+
   return {
     user: {
       id: idToken.sub,
@@ -125,7 +147,8 @@ function buildAuthenticatedSession(
       scope: accessToken.scope,
       sessionId: accessToken.sid,
       activeOrganizationId: userInfo?.[ITERATE_ACTIVE_ORGANIZATION_ID_CLAIM] ?? null,
-      organizations: userInfo?.[ITERATE_ORGANIZATIONS_CLAIM] ?? [],
+      organizations: accessTokenOrganizations ?? userInfo?.[ITERATE_ORGANIZATIONS_CLAIM] ?? [],
+      projects: accessToken[ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM] ?? [],
     },
     tokenClaims: { accessToken, idToken },
   };
@@ -158,6 +181,8 @@ type OAuthInfra = {
   doRefresh: (tokenSet: TokenSet) => Promise<TokenSet | null>;
   getUserInfo: (accessToken: string) => Promise<UserInfoClaims | null>;
   cookieOpts: () => { httpOnly: true; path: string; sameSite: "Lax"; secure: boolean };
+  resource: () => string;
+  audiences: () => string[];
 };
 
 function createOAuthInfra(config: IterateAuthConfig, jwks: JWKS): OAuthInfra {
@@ -177,6 +202,16 @@ function createOAuthInfra(config: IterateAuthConfig, jwks: JWKS): OAuthInfra {
 
   function cookieOpts() {
     return { httpOnly: true, path: "/", sameSite: "Lax", secure: secureCookies } as const;
+  }
+
+  function audiences() {
+    const resources = Array.isArray(config.resource) ? config.resource : [config.resource];
+    const configuredResources = resources.filter((resource): resource is string => !!resource);
+    return configuredResources.length > 0 ? configuredResources : [issuerURL.href];
+  }
+
+  function resource() {
+    return audiences()[0] ?? issuerURL.href;
   }
 
   function toTokenSet(token: oauth.TokenEndpointResponse, existing?: TokenSet | null): TokenSet {
@@ -221,7 +256,7 @@ function createOAuthInfra(config: IterateAuthConfig, jwks: JWKS): OAuthInfra {
       tokenSet.refreshToken,
       {
         ...httpOptions(),
-        additionalParameters: { resource: issuerURL.href },
+        additionalParameters: { resource: resource() },
       },
     );
     const result = await oauth.processRefreshTokenResponse(as, oauthClient, response);
@@ -261,6 +296,8 @@ function createOAuthInfra(config: IterateAuthConfig, jwks: JWKS): OAuthInfra {
     doRefresh,
     getUserInfo,
     cookieOpts,
+    resource,
+    audiences,
   };
 }
 
@@ -273,7 +310,7 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
   const prefix = config.cookiePrefix ?? "iterate";
   const SESSION_COOKIE = `${prefix}_session`;
   const issuer = new URL(config.issuer ?? DEFAULT_ISSUER).href;
-  const { jwks, doRefresh, getUserInfo, cookieOpts } = infra;
+  const { jwks, doRefresh, getUserInfo, cookieOpts, audiences } = infra;
 
   function serializeSessionCookie(tokenSet: TokenSet): string {
     const expires = tokenSet.refreshToken
@@ -311,7 +348,7 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
       try {
         const { payload: rawAccessToken } = await jwtVerify(tokenSet.accessToken, jwks, {
           issuer,
-          audience: issuer,
+          audience: audiences(),
         });
         const { payload: rawIdToken } = await jwtVerify(tokenSet.idToken, jwks, {
           issuer,
@@ -333,6 +370,21 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
         };
       } catch {
         return { session: null, responseHeaders: new Headers() };
+      }
+    },
+    async authenticateBearer({ headers }: { headers: Headers }): Promise<AccessTokenClaims | null> {
+      const match = /^bearer\s+(.+)$/i.exec(headers.get("authorization") ?? "");
+      const token = match?.[1]?.trim();
+      if (!token) return null;
+
+      try {
+        const { payload } = await jwtVerify(token, jwks, {
+          issuer,
+          audience: audiences(),
+        });
+        return AccessTokenClaims.parse(payload);
+      } catch {
+        return null;
       }
     },
   };
@@ -432,7 +484,7 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
         oauthState.verifier,
         {
           ...httpOptions(),
-          additionalParameters: { resource: issuerURL.href },
+          additionalParameters: { resource: infra.resource() },
         },
       );
       tokenResponse = await oauth.processAuthorizationCodeResponse(as, oauthClient, response, {
@@ -468,7 +520,7 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
     try {
       const { payload: rawAccessToken } = await jwtVerify(tokenSet.accessToken, jwks, {
         issuer: issuerURL.href,
-        audience: issuerURL.href,
+        audience: infra.audiences(),
       });
       const { payload: rawIdToken } = await jwtVerify(tokenSet.idToken, jwks, {
         issuer: issuerURL.href,
@@ -490,35 +542,76 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
     }
   });
 
+  app.get("/logout", async (c) => {
+    const tokenSet = getTokenSet(c);
+    deleteCookie(c, SESSION_COOKIE, cookieOpts());
+    deleteCookie(c, STATE_COOKIE, cookieOpts());
+
+    if (tokenSet?.refreshToken) {
+      await revokeRefreshToken(tokenSet.refreshToken);
+    }
+
+    const requestURL = new URL(c.req.url);
+    const returnTo = resolveAllowedReturnTo(requestURL.searchParams.get("return_to"), [
+      requestURL.origin,
+      ...(config.logoutReturnToOrigins ?? []),
+    ]);
+    if (requestURL.searchParams.get("global") === "false") {
+      return c.redirect(returnTo);
+    }
+
+    const authLogoutUrl = new URL("/logout", issuerURL.origin);
+    authLogoutUrl.searchParams.set("return_to", returnTo);
+    return c.redirect(authLogoutUrl.toString());
+  });
+
   app.post("/logout", async (c) => {
     const tokenSet = getTokenSet(c);
     deleteCookie(c, SESSION_COOKIE, cookieOpts());
     deleteCookie(c, STATE_COOKIE, cookieOpts());
 
     if (tokenSet?.refreshToken) {
-      try {
-        const as = await getAuthorizationServer();
-        const revokeResponse = await oauth.revocationRequest(
-          as,
-          oauthClient,
-          clientAuth,
-          tokenSet.refreshToken,
-          httpOptions(),
-        );
-        await oauth.processRevocationResponse(revokeResponse);
-      } catch {
-        // Ignore revoke failures during logout.
-      }
+      await revokeRefreshToken(tokenSet.refreshToken);
     }
 
     return c.redirect("/");
   });
+
+  async function revokeRefreshToken(refreshToken: string) {
+    try {
+      const as = await getAuthorizationServer();
+      const revokeResponse = await oauth.revocationRequest(
+        as,
+        oauthClient,
+        clientAuth,
+        refreshToken,
+        httpOptions(),
+      );
+      await oauth.processRevocationResponse(revokeResponse);
+    } catch {
+      // Ignore revoke failures during logout.
+    }
+  }
 
   return {
     handler(request: Request): Response | Promise<Response> {
       return app.fetch(request);
     },
   };
+}
+
+export function resolveAllowedReturnTo(rawReturnTo: string | null, allowedOrigins: string[]) {
+  const fallbackOrigin = allowedOrigins[0];
+  if (!fallbackOrigin) {
+    throw new Error("resolveAllowedReturnTo requires at least one allowed origin");
+  }
+  if (!rawReturnTo) return `${fallbackOrigin}/`;
+  try {
+    const parsed = new URL(rawReturnTo, fallbackOrigin);
+    return allowedOrigins.includes(parsed.origin) ? parsed.toString() : `${fallbackOrigin}/`;
+  } catch {
+    return `${fallbackOrigin}/`;
+  }
 }
 
 export function createIterateAuth(config: IterateAuthConfig) {
@@ -538,5 +631,6 @@ export function createIterateAuth(config: IterateAuthConfig) {
   return {
     handler: routes.handler,
     authenticate: middleware.authenticate,
+    authenticateBearer: middleware.authenticateBearer,
   };
 }

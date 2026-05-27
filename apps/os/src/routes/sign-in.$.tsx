@@ -1,21 +1,34 @@
-import { SignIn } from "@clerk/tanstack-react-start";
 import { createFileRoute } from "@tanstack/react-router";
+import { Button } from "@iterate-com/ui/components/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@iterate-com/ui/components/card";
+import { useAuthClient } from "~/auth/client-context.ts";
 
 export const Route = createFileRoute("/sign-in/$")({
-  component: SignInCatchAllRoute,
+  component: SignInRoute,
 });
 
-function SignInCatchAllRoute() {
+function SignInRoute() {
+  const { signIn } = useAuthClient();
+
   return (
     <main className="grid min-h-svh place-items-center bg-background p-4">
-      {/*
-        Clerk's prebuilt SignIn owns nested flow paths such as
-        `/sign-in/sso-callback` when mounted on the catch-all route. Keeping the
-        callback inside SignIn preserves Clerk's OAuth attempt state; a separate
-        AuthenticateWithRedirectCallback route is only for custom OAuth flows.
-        https://clerk.com/docs/tanstack-react-start/guides/development/custom-sign-in-or-up-page
-      */}
-      <SignIn signUpUrl="/sign-up" fallbackRedirectUrl="/" />
+      <Card className="w-full max-w-sm">
+        <CardHeader className="text-center">
+          <CardTitle className="text-xl">Sign in to OS</CardTitle>
+          <CardDescription>Continue with Iterate to open your workspace.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Button className="w-full" size="lg" onClick={signIn}>
+            Continue with Iterate
+          </Button>
+        </CardContent>
+      </Card>
     </main>
   );
 }

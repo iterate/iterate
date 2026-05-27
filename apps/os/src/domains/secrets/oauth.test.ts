@@ -101,11 +101,6 @@ function testConfig() {
     prefix: "APP_CONFIG_",
     env: {
       APP_CONFIG: JSON.stringify({
-        clerk: {
-          publishableKey: "pk_test_google",
-          secretKey: "sk_test_google",
-          jwtKey: "jwt-test-key",
-        },
         integrations: {
           google: {
             oauthClientId: "google-client-id",

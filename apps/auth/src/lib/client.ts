@@ -12,6 +12,16 @@ type IterateAuthClientConfig = {
   authHandlerBasePath?: string;
 };
 
+type LogoutOptions = {
+  /**
+   * Also sign out of the upstream auth server. This must use browser navigation
+   * so the auth server can clear its own HttpOnly cookies.
+   */
+  global?: boolean;
+  /** Destination after logout. Defaults to the current origin. */
+  returnTo?: string;
+};
+
 export function createIterateAuthClient(config: IterateAuthClientConfig = {}) {
   const base = (config.authHandlerBasePath ?? "/api/iterate-auth").replace(/\/$/, "");
 
@@ -31,7 +41,13 @@ export function createIterateAuthClient(config: IterateAuthClientConfig = {}) {
       window.location.href = `${base}/login`;
     },
     fetchSession,
-    async logout(): Promise<void> {
+    async logout(options: LogoutOptions = {}): Promise<void> {
+      if (options.global) {
+        const returnTo = options.returnTo ?? window.location.origin;
+        window.location.href = `${base}/logout?return_to=${encodeURIComponent(returnTo)}`;
+        return;
+      }
+
       await fetch(`${base}/logout`, { method: "POST", credentials: "include" });
     },
   };

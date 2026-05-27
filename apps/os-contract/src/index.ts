@@ -29,6 +29,8 @@ export const Project = z.object({
 });
 export type Project = z.output<typeof Project>;
 
+const CallerManagedProjectId = z.string().trim().min(1);
+
 export const ProjectCustomHostnameValidationRecord = z.object({
   status: z.string().nullable(),
   txtName: z.string(),
@@ -303,6 +305,7 @@ export const osContract = oc.router({
       })
       .input(
         z.object({
+          id: CallerManagedProjectId.optional(),
           slug: z
             .string()
             .trim()

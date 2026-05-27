@@ -186,7 +186,6 @@ function parseScopes(scopes: string | null, separator: "," | " ") {
 }
 
 function requireUserId(context: AppContext) {
-  const userId = context.auth?.userId;
-  if (!userId) throw new ORPCError("UNAUTHORIZED");
-  return userId;
+  if (context.principal?.type !== "user") throw new ORPCError("UNAUTHORIZED");
+  return context.principal.userId;
 }

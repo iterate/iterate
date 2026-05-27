@@ -8,9 +8,8 @@
  *   doppler run --config preview_2 -- pnpm e2e -t "project MCP exec_js"
  *
  * OS_E2E_MCP_URL can override the fixture-created project MCP URL. When that is
- * set, OS_E2E_MCP_BEARER_TOKEN may be a Clerk OAuth access token, a Clerk
- * session token, or an OS admin token. Clerk Testing Tokens are not bearer auth
- * tokens; they only bypass Clerk bot detection for Frontend API requests.
+ * set, OS_E2E_MCP_BEARER_TOKEN may be an auth-worker OAuth access token or an
+ * OS admin token.
  *
  * If APP_CONFIG_SLACK_BOT_TOKEN is available to the test process, the test
  * discovers the shared Slack e2e channel and proves real

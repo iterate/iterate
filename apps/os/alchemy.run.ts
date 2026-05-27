@@ -5,6 +5,7 @@ import { initAlchemy } from "@iterate-com/shared/alchemy/init";
 import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
 import type { CaptunServerShard } from "captun/worker";
 import type { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
+import { ensureLocalDevOAuthClient } from "./src/auth/dev-oauth-client-bootstrap.ts";
 import manifest, { AppConfig } from "./src/app.ts";
 import type { CodemodeSession } from "./src/domains/codemode/durable-objects/codemode-session.ts";
 import type { DebugAppendChainSubscriber } from "./src/durable-objects/debug-append-chain-subscriber.ts";
@@ -17,7 +18,21 @@ import type { SlackIntegrationDurableObject } from "./src/domains/slack/durable-
 import type { WorkspaceDurableObject } from "./src/domains/workspaces/durable-objects/workspace-durable-object.ts";
 import type { OutboundMcpFromOurClientCapability } from "./src/domains/outbound-mcp-client/entrypoints/outbound-mcp-from-our-client-capability.ts";
 
-const ctx = await initAlchemy(manifest, AppConfig, process.env);
+const env = {
+  ...process.env,
+  APP_CONFIG_ITERATE_AUTH__ISSUER:
+    process.env.APP_CONFIG_ITERATE_AUTH__ISSUER ?? process.env.ITERATE_OAUTH_ISSUER,
+  APP_CONFIG_ITERATE_AUTH__CLIENT_ID:
+    process.env.APP_CONFIG_ITERATE_AUTH__CLIENT_ID ?? process.env.ITERATE_OAUTH_CLIENT_ID,
+  APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET:
+    process.env.APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET ?? process.env.ITERATE_OAUTH_CLIENT_SECRET,
+  APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN:
+    process.env.APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN ?? process.env.ITERATE_AUTH_SERVICE_TOKEN,
+};
+
+await ensureLocalDevOAuthClient(env);
+
+const ctx = await initAlchemy(manifest, AppConfig, env);
 const slackBotToken = ctx.runtimeConfig.slackBotToken?.exposeSecret();
 
 const db = await D1Database("os-db", {
@@ -96,11 +111,6 @@ const debugAppendChainSubscriber = ctx.app.local
 
 const { worker, afterFinalize } = await IterateApp(ctx, {
   bindings: {
-    CLERK_JWT_KEY: ctx.runtimeConfig.clerk.jwtKey.exposeSecret(),
-    CLERK_PUBLISHABLE_KEY: ctx.runtimeConfig.clerk.publishableKey,
-    CLERK_SECRET_KEY: ctx.runtimeConfig.clerk.secretKey.exposeSecret(),
-    CLERK_SIGN_IN_URL: ctx.runtimeConfig.clerk.signInUrl,
-    CLERK_SIGN_UP_URL: ctx.runtimeConfig.clerk.signUpUrl,
     DB: db,
     DO_CATALOG: db,
     AI: Ai(),

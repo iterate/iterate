@@ -31,6 +31,7 @@
     "e2e": "vitest --config e2e/vitest.config.ts",
     "example:workspace-codemode-preview": "tsx ./e2e/workspace-codemode-preview-example.ts",
     "artifacts:seed-config-base": "tsx ./scripts/seed-iterate-config-base-repo.ts",
+    "auth:sync-clients": "tsx ./scripts/sync-auth-clients.ts",
     "benchmark:agent-stream": "tsx ./scripts/benchmark-agent-stream.ts",
     "benchmark:intercept-tunnel": "tsx ./scripts/benchmark-project-egress-intercept-tunnel.ts",
     "test:smoke": "RUNTIME_SMOKE_FULL=1 vitest run",
@@ -43,11 +44,10 @@
     }
   },
   "dependencies": {
-    "@clerk/backend": "^3.4.1",
-    "@clerk/mcp-tools": "^0.5.0",
-    "@clerk/tanstack-react-start": "^1.1.7",
     "@cloudflare/shell": "^0.3.4",
     "@cloudflare/worker-bundler": "^0.1.3",
+    "@iterate-com/auth": "workspace:*",
+    "@iterate-com/auth-contract": "workspace:*",
     "@iterate-com/os-contract": "workspace:*",
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/ui": "workspace:*",

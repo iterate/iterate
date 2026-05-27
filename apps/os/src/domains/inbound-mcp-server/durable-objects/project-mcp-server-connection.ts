@@ -27,10 +27,9 @@ export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capabil
  * Project-scoped MCP server connection for os.
  *
  * Runs as a Durable Object in a separate Worker (`project-mcp-server-connection-do`).
- * `entry.workerd.ts` verifies Clerk OAuth, resolves the request hostname to a
- * project, and passes that identity into this Durable Object through McpAgent
- * props. That mirrors Cloudflare's documented OAuth integration point while
- * letting Clerk remain the authorization server:
+ * `entry.workerd.ts` verifies Iterate Auth OAuth, resolves the token's project
+ * grants, and passes that identity into this Durable Object through McpAgent
+ * props. That mirrors Cloudflare's documented OAuth integration point:
  * https://developers.cloudflare.com/agents/model-context-protocol/mcp-agent-api/
  *
  * Code execution is delegated to the project/stream-scoped CodemodeSession DO.
@@ -56,7 +55,17 @@ export interface ProjectMcpServerConnectionProps extends Record<string, unknown>
   orgPermissions: string[];
   scopes: string[];
   clientId: string | null;
-  clerkTokenType?: "admin_api_secret" | "oauth_token" | "session_token";
+  authType?: "admin_api_secret" | "oauth_access_token" | "session";
+  projects?: ProjectMcpServerConnectionProject[];
+}
+
+export interface ProjectMcpServerConnectionProject {
+  id: string;
+  slug: string;
+  organizationId: string;
+  organizationSlug: string | null;
+  organizationRole: string | null;
+  organizationPermissions: string[];
 }
 
 export type ProjectMcpServerConnectionStructuredName = {
@@ -157,8 +166,13 @@ export class ProjectMcpServerConnection extends McpAgent<
   }
 
   async init() {
-    const providers = this.createStaticCodemodeToolProviders(this.requireProjectAuthProps());
-    const providerDocs = [...createDefaultOutboundMcpProviderRegistrations(), ...providers]
+    const auth = this.requireAuthProps();
+    const availableProjects = this.resolveAvailableProjects(auth);
+    const schema = this.createExecJsInputSchema(availableProjects);
+    const providerDocs = [
+      ...createDefaultOutboundMcpProviderRegistrations(),
+      ...this.createStaticCodemodeToolProviders(this.authForProject(auth, availableProjects[0])),
+    ]
       .map((p) => `- ctx.${p.path.join(".")}: ${p.instructions}`)
       .join("\n");
 
@@ -177,17 +191,18 @@ export class ProjectMcpServerConnection extends McpAgent<
           "",
           'Example: async (ctx) => { const msgs = await ctx.gmail.request({ path: "/gmail/v1/users/me/messages", query: { maxResults: 5 } }); return msgs.data; }',
         ].join("\n"),
-        inputSchema: z.object({
-          code: z
-            .string()
-            .describe(
-              "JavaScript async arrow function to execute, e.g. `async (ctx) => { return await ctx.os.listProcedures(); }`",
-            ),
-        }),
+        inputSchema: schema,
       },
-      async ({ code }) => {
-        const auth = this.requireProjectAuthProps();
+      async (input) => {
+        const parsedInput = schema.parse(input);
+        const code = parsedInput.code;
+        const project = typeof parsedInput.project === "string" ? parsedInput.project : undefined;
+        const auth = this.authForProject(
+          this.requireAuthProps(),
+          this.resolveToolProject(availableProjects, project),
+        );
         this.requireScope(auth, requiredToolScope);
+        const providers = this.createStaticCodemodeToolProviders(auth);
         const staticProviders = providers.slice(0, readDebugProviderLimit(code));
 
         const invocationId = `mcp_tool_${crypto.randomUUID()}`;
@@ -394,32 +409,23 @@ export class ProjectMcpServerConnection extends McpAgent<
     }
   }
 
-  /** Returns the verified Clerk identity injected by the Worker before McpAgent dispatch. */
+  /** Returns the verified identity injected by the Worker before McpAgent dispatch. */
   private requireAuthProps() {
     if (!this.props?.userId || !this.props.orgId) {
-      throw new Error("MCP request is missing verified Clerk auth props.");
+      throw new Error("MCP request is missing verified auth props.");
     }
 
     return this.props;
   }
 
   /**
-   * MCP tools are project-scoped. The ProjectMcpServerEntrypoint verifies Clerk
-   * OAuth and asks the Project Durable Object for project access before this DO
-   * sees a request, but this guard keeps tools from accidentally running with
-   * only org-level auth if the routing layer changes.
+   * MCP tools are project-scoped. The request layer verifies Iterate Auth OAuth
+   * and passes the token's project grants before this DO sees a request, but
+   * this guard keeps tools from accidentally running with only org-level auth if
+   * the routing layer changes.
    */
-  private requireProjectAuthProps() {
-    const auth = this.requireAuthProps();
-    if (!auth.projectId) {
-      throw new Error("MCP tools require a project-scoped MCP server host.");
-    }
-
-    return auth as ProjectMcpServerConnectionProps & { orgId: string; projectId: string };
-  }
-
   private requireScope(props: ProjectMcpServerConnectionProps, scope: string) {
-    if (props.clerkTokenType === "session_token" || props.clerkTokenType === "admin_api_secret") {
+    if (props.authType === "session" || props.authType === "admin_api_secret") {
       return;
     }
 
@@ -472,7 +478,10 @@ export class ProjectMcpServerConnection extends McpAgent<
   }
 
   private async initializeCatalogRecord() {
-    const auth = this.requireProjectAuthProps();
+    const auth = this.authForProject(
+      this.requireAuthProps(),
+      this.resolveAvailableProjects(this.requireAuthProps())[0],
+    );
     const name = this.ctx.id.name;
     if (!name) {
       throw new Error("Inbound MCP server Durable Object must be addressed by name.");
@@ -502,6 +511,88 @@ export class ProjectMcpServerConnection extends McpAgent<
       name,
       structuredName,
     });
+  }
+
+  private resolveAvailableProjects(
+    auth: ProjectMcpServerConnectionProps,
+  ): ProjectMcpServerConnectionProject[] {
+    const projects = auth.projects ?? [];
+    if (projects.length > 0) return projects;
+
+    if (auth.projectId && auth.orgId) {
+      return [
+        {
+          id: auth.projectId,
+          slug: auth.projectSlug ?? auth.projectId,
+          organizationId: auth.orgId,
+          organizationPermissions: auth.orgPermissions,
+          organizationRole: auth.orgRole,
+          organizationSlug: auth.orgSlug,
+        },
+      ];
+    }
+
+    throw new Error("MCP token does not grant access to any projects.");
+  }
+
+  private createExecJsInputSchema(projects: ProjectMcpServerConnectionProject[]) {
+    const projectDescription =
+      projects.length === 1
+        ? undefined
+        : `Project slug or ID. One of: ${projects.map((project) => project.slug).join(", ")}`;
+
+    return z.object({
+      code: z
+        .string()
+        .describe(
+          "JavaScript async arrow function to execute, e.g. `async (ctx) => { return await ctx.os.listProcedures(); }`",
+        ),
+      ...(projectDescription
+        ? {
+            project: z.string().describe(projectDescription),
+          }
+        : {}),
+    });
+  }
+
+  private resolveToolProject(
+    projects: ProjectMcpServerConnectionProject[],
+    requestedProject: string | undefined,
+  ) {
+    if (projects.length === 1 && !requestedProject) {
+      return projects[0];
+    }
+
+    const normalizedRequestedProject = requestedProject?.trim();
+    if (!normalizedRequestedProject) {
+      throw new Error("This MCP token grants multiple projects. Pass a project slug or ID.");
+    }
+
+    const project = projects.find(
+      (candidate) =>
+        candidate.id === normalizedRequestedProject ||
+        candidate.slug === normalizedRequestedProject,
+    );
+    if (!project) {
+      throw new Error(`MCP token does not grant access to project: ${normalizedRequestedProject}`);
+    }
+
+    return project;
+  }
+
+  private authForProject(
+    auth: ProjectMcpServerConnectionProps,
+    project: ProjectMcpServerConnectionProject,
+  ): ProjectMcpServerConnectionProps & { orgId: string; projectId: string } {
+    return {
+      ...auth,
+      orgId: project.organizationId,
+      orgPermissions: project.organizationPermissions,
+      orgRole: project.organizationRole,
+      orgSlug: project.organizationSlug,
+      projectId: project.id,
+      projectSlug: project.slug,
+    };
   }
 }
 

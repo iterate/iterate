@@ -1,9 +1,17 @@
 import { Link, useMatchRoute } from "@tanstack/react-router";
-import { ExternalLink } from "lucide-react";
+import { Building2, ChevronsUpDown, ExternalLink, LogOut, UserCircle } from "lucide-react";
 import type { PublicAppConfig } from "@iterate-com/shared/apps/config";
 import { useConfig } from "@iterate-com/ui/apps/config";
-import { OrganizationSwitcher, UserButton } from "@clerk/tanstack-react-start";
 import { useQuery } from "@tanstack/react-query";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@iterate-com/ui/components/dropdown-menu";
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -17,6 +25,7 @@ import {
 } from "@iterate-com/ui/components/sidebar";
 import { SidebarShell } from "@iterate-com/ui/components/sidebar-shell";
 import type { AppConfig } from "~/app.ts";
+import { useAuthClient } from "~/auth/client-context.ts";
 import { buildProjectMcpUrl, buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
 import { orpc } from "~/orpc/client.ts";
 
@@ -28,42 +37,95 @@ type AppSidebarProps = {
 
 export function AppSidebar({ organizationSlug }: AppSidebarProps) {
   return (
-    <SidebarShell header={<AppSidebarOrganization />} footer={<AppSidebarUser />}>
-      <AppSidebarNav organizationSlug={organizationSlug} />
+    <SidebarShell
+      header={<AppSidebarOrganization organizationSlug={organizationSlug} />}
+      footer={<AppSidebarUser />}
+    >
+      <AppSidebarNav />
     </SidebarShell>
   );
 }
 
-function AppSidebarOrganization() {
+function AppSidebarOrganization({ organizationSlug }: AppSidebarProps) {
+  const { session } = useAuthClient();
+  const organizations = session?.authenticated ? session.session.organizations : [];
+  const activeOrganization =
+    organizations.find((organization) => organization.slug === organizationSlug) ??
+    organizations[0];
+
   return (
-    <div className="px-2">
-      <OrganizationSwitcher
-        hidePersonal
-        afterCreateOrganizationUrl="/organization"
-        afterLeaveOrganizationUrl="/organization"
-        afterSelectOrganizationUrl="/organization"
-        appearance={{
-          elements: {
-            organizationSwitcherTrigger:
-              "w-full justify-start rounded-md border border-sidebar-border bg-sidebar-accent px-3 py-2 text-sidebar-accent-foreground shadow-none",
-            organizationPreview: "min-w-0",
-            organizationPreviewTextContainer: "min-w-0 text-left",
-          },
-        }}
-      />
-    </div>
+    <SidebarMenu>
+      <SidebarMenuItem>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <SidebarMenuButton className="h-10 gap-2 data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground">
+                <Building2 className="size-4" />
+                <span className="truncate">{activeOrganization?.name ?? organizationSlug}</span>
+                <ChevronsUpDown className="ml-auto size-4" />
+              </SidebarMenuButton>
+            }
+          />
+          <DropdownMenuContent side="bottom" align="start" className="w-56">
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>Organizations</DropdownMenuLabel>
+              {organizations.map((organization) => (
+                <DropdownMenuItem
+                  key={organization.id}
+                  render={
+                    <Link
+                      to="/org/$organizationSlug"
+                      params={{ organizationSlug: organization.slug }}
+                    />
+                  }
+                >
+                  <Building2 />
+                  <span className="truncate">{organization.name}</span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </SidebarMenuItem>
+    </SidebarMenu>
   );
 }
 
 function AppSidebarUser() {
+  const { session, signOut } = useAuthClient();
+  const user = session?.authenticated ? session.user : null;
+  const label = user?.name ?? user?.email ?? "Account";
+
   return (
-    <div className="flex items-center px-3 py-2">
-      <UserButton />
-    </div>
+    <SidebarMenu>
+      <SidebarMenuItem>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <SidebarMenuButton className="h-10 gap-2 data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground">
+                <UserCircle className="size-4" />
+                <span className="truncate">{label}</span>
+                <ChevronsUpDown className="ml-auto size-4" />
+              </SidebarMenuButton>
+            }
+          />
+          <DropdownMenuContent side="top" align="start" className="w-56">
+            <DropdownMenuGroup>
+              <DropdownMenuLabel className="truncate">{label}</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => void signOut()}>
+                <LogOut />
+                <span>Sign out</span>
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </SidebarMenuItem>
+    </SidebarMenu>
   );
 }
 
-function AppSidebarNav({ organizationSlug }: AppSidebarProps) {
+function AppSidebarNav() {
   const matchRoute = useMatchRoute();
   const config = useConfig<PublicConfig>();
   const { data } = useQuery({
@@ -79,13 +141,10 @@ function AppSidebarNav({ organizationSlug }: AppSidebarProps) {
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton
-                render={
-                  <Link to="/orgs/$organizationSlug/projects" params={{ organizationSlug }} />
-                }
+                render={<Link to="/projects" />}
                 isActive={Boolean(
                   matchRoute({
-                    to: "/orgs/$organizationSlug/projects",
-                    params: { organizationSlug },
+                    to: "/projects",
                     fuzzy: false,
                   }),
                 )}
@@ -100,9 +159,9 @@ function AppSidebarNav({ organizationSlug }: AppSidebarProps) {
       {projects.map((project) => (
         <ProjectSidebarGroup
           key={project.id}
-          organizationSlug={organizationSlug}
           customHostname={project.customHostname}
           projectSlug={project.slug}
+          baseUrl={config.baseUrl}
           projectHostnameBases={config.projectHostnameBases}
         />
       ))}
@@ -111,18 +170,18 @@ function AppSidebarNav({ organizationSlug }: AppSidebarProps) {
 }
 
 function ProjectSidebarGroup({
+  baseUrl,
   customHostname,
-  organizationSlug,
   projectHostnameBases,
   projectSlug,
 }: {
+  baseUrl?: string;
   customHostname: string | null;
-  organizationSlug: string;
   projectHostnameBases: readonly string[];
   projectSlug: string;
 }) {
   const matchRoute = useMatchRoute();
-  const mcpUrl = buildProjectMcpUrl({ projectSlug, projectHostnameBases });
+  const mcpUrl = buildProjectMcpUrl({ baseUrl, projectSlug, projectHostnameBases });
   const customWorkerUrl = buildProjectWorkerUrl({
     projectSlug,
     customHostname,
@@ -136,16 +195,11 @@ function ProjectSidebarGroup({
         <SidebarMenuSub>
           <SidebarMenuSubItem>
             <SidebarMenuSubButton
-              render={
-                <Link
-                  to="/orgs/$organizationSlug/projects/$projectSlug"
-                  params={{ organizationSlug, projectSlug }}
-                />
-              }
+              render={<Link to="/projects/$projectSlug" params={{ projectSlug }} />}
               isActive={Boolean(
                 matchRoute({
-                  to: "/orgs/$organizationSlug/projects/$projectSlug",
-                  params: { organizationSlug, projectSlug },
+                  to: "/projects/$projectSlug",
+                  params: { projectSlug },
                   fuzzy: false,
                 }),
               )}
@@ -155,16 +209,11 @@ function ProjectSidebarGroup({
           </SidebarMenuSubItem>
           <SidebarMenuSubItem>
             <SidebarMenuSubButton
-              render={
-                <Link
-                  to="/orgs/$organizationSlug/projects/$projectSlug/agents"
-                  params={{ organizationSlug, projectSlug }}
-                />
-              }
+              render={<Link to="/projects/$projectSlug/agents" params={{ projectSlug }} />}
               isActive={Boolean(
                 matchRoute({
-                  to: "/orgs/$organizationSlug/projects/$projectSlug/agents",
-                  params: { organizationSlug, projectSlug },
+                  to: "/projects/$projectSlug/agents",
+                  params: { projectSlug },
                   fuzzy: true,
                 }),
               )}
@@ -175,15 +224,12 @@ function ProjectSidebarGroup({
           <SidebarMenuSubItem>
             <SidebarMenuSubButton
               render={
-                <Link
-                  to="/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions"
-                  params={{ organizationSlug, projectSlug }}
-                />
+                <Link to="/projects/$projectSlug/codemode-sessions" params={{ projectSlug }} />
               }
               isActive={Boolean(
                 matchRoute({
-                  to: "/orgs/$organizationSlug/projects/$projectSlug/codemode-sessions",
-                  params: { organizationSlug, projectSlug },
+                  to: "/projects/$projectSlug/codemode-sessions",
+                  params: { projectSlug },
                   fuzzy: true,
                 }),
               )}
@@ -193,16 +239,11 @@ function ProjectSidebarGroup({
           </SidebarMenuSubItem>
           <SidebarMenuSubItem>
             <SidebarMenuSubButton
-              render={
-                <Link
-                  to="/orgs/$organizationSlug/projects/$projectSlug/repos"
-                  params={{ organizationSlug, projectSlug }}
-                />
-              }
+              render={<Link to="/projects/$projectSlug/repos" params={{ projectSlug }} />}
               isActive={Boolean(
                 matchRoute({
-                  to: "/orgs/$organizationSlug/projects/$projectSlug/repos",
-                  params: { organizationSlug, projectSlug },
+                  to: "/projects/$projectSlug/repos",
+                  params: { projectSlug },
                   fuzzy: true,
                 }),
               )}
@@ -212,16 +253,11 @@ function ProjectSidebarGroup({
           </SidebarMenuSubItem>
           <SidebarMenuSubItem>
             <SidebarMenuSubButton
-              render={
-                <Link
-                  to="/orgs/$organizationSlug/projects/$projectSlug/secrets"
-                  params={{ organizationSlug, projectSlug }}
-                />
-              }
+              render={<Link to="/projects/$projectSlug/secrets" params={{ projectSlug }} />}
               isActive={Boolean(
                 matchRoute({
-                  to: "/orgs/$organizationSlug/projects/$projectSlug/secrets",
-                  params: { organizationSlug, projectSlug },
+                  to: "/projects/$projectSlug/secrets",
+                  params: { projectSlug },
                   fuzzy: true,
                 }),
               )}
@@ -231,16 +267,11 @@ function ProjectSidebarGroup({
           </SidebarMenuSubItem>
           <SidebarMenuSubItem>
             <SidebarMenuSubButton
-              render={
-                <Link
-                  to="/orgs/$organizationSlug/projects/$projectSlug/examples"
-                  params={{ organizationSlug, projectSlug }}
-                />
-              }
+              render={<Link to="/projects/$projectSlug/examples" params={{ projectSlug }} />}
               isActive={Boolean(
                 matchRoute({
-                  to: "/orgs/$organizationSlug/projects/$projectSlug/examples",
-                  params: { organizationSlug, projectSlug },
+                  to: "/projects/$projectSlug/examples",
+                  params: { projectSlug },
                 }),
               )}
             >
@@ -249,16 +280,11 @@ function ProjectSidebarGroup({
           </SidebarMenuSubItem>
           <SidebarMenuSubItem>
             <SidebarMenuSubButton
-              render={
-                <Link
-                  to="/orgs/$organizationSlug/projects/$projectSlug/integrations"
-                  params={{ organizationSlug, projectSlug }}
-                />
-              }
+              render={<Link to="/projects/$projectSlug/integrations" params={{ projectSlug }} />}
               isActive={Boolean(
                 matchRoute({
-                  to: "/orgs/$organizationSlug/projects/$projectSlug/integrations",
-                  params: { organizationSlug, projectSlug },
+                  to: "/projects/$projectSlug/integrations",
+                  params: { projectSlug },
                 }),
               )}
             >
@@ -268,16 +294,11 @@ function ProjectSidebarGroup({
           {mcpUrl ? (
             <SidebarMenuSubItem>
               <SidebarMenuSubButton
-                render={
-                  <Link
-                    to="/orgs/$organizationSlug/projects/$projectSlug/mcp"
-                    params={{ organizationSlug, projectSlug }}
-                  />
-                }
+                render={<Link to="/projects/$projectSlug/mcp" params={{ projectSlug }} />}
                 isActive={Boolean(
                   matchRoute({
-                    to: "/orgs/$organizationSlug/projects/$projectSlug/mcp",
-                    params: { organizationSlug, projectSlug },
+                    to: "/projects/$projectSlug/mcp",
+                    params: { projectSlug },
                   }),
                 )}
               >
@@ -287,16 +308,11 @@ function ProjectSidebarGroup({
           ) : null}
           <SidebarMenuSubItem>
             <SidebarMenuSubButton
-              render={
-                <Link
-                  to="/orgs/$organizationSlug/projects/$projectSlug/streams"
-                  params={{ organizationSlug, projectSlug }}
-                />
-              }
+              render={<Link to="/projects/$projectSlug/streams" params={{ projectSlug }} />}
               isActive={Boolean(
                 matchRoute({
-                  to: "/orgs/$organizationSlug/projects/$projectSlug/streams",
-                  params: { organizationSlug, projectSlug },
+                  to: "/projects/$projectSlug/streams",
+                  params: { projectSlug },
                   fuzzy: true,
                 }),
               )}
@@ -306,16 +322,11 @@ function ProjectSidebarGroup({
           </SidebarMenuSubItem>
           <SidebarMenuSubItem>
             <SidebarMenuSubButton
-              render={
-                <Link
-                  to="/orgs/$organizationSlug/projects/$projectSlug/settings"
-                  params={{ organizationSlug, projectSlug }}
-                />
-              }
+              render={<Link to="/projects/$projectSlug/settings" params={{ projectSlug }} />}
               isActive={Boolean(
                 matchRoute({
-                  to: "/orgs/$organizationSlug/projects/$projectSlug/settings",
-                  params: { organizationSlug, projectSlug },
+                  to: "/projects/$projectSlug/settings",
+                  params: { projectSlug },
                 }),
               )}
             >

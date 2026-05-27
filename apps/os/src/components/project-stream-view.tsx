@@ -91,7 +91,6 @@ export function ProjectStreamView({
   emptyLabel = "No events in this stream yet.",
   headerAccessory,
   messageComposer,
-  organizationSlug,
   projectSlug,
   projectSlugOrId,
   streamPath,
@@ -100,7 +99,6 @@ export function ProjectStreamView({
   emptyLabel?: string;
   headerAccessory?: ReactNode;
   messageComposer?: ProjectStreamMessageComposer;
-  organizationSlug: string;
   projectSlug: string;
   projectSlugOrId: string;
   streamPath: StreamPath;
@@ -305,9 +303,8 @@ export function ProjectStreamView({
         renderStreamPathLink={({ path, children, className }) => (
           <Link
             className={className}
-            to="/orgs/$organizationSlug/projects/$projectSlug/streams/$"
+            to="/projects/$projectSlug/streams/$"
             params={{
-              organizationSlug,
               projectSlug,
               _splat: streamPathToSplat(path),
             }}
