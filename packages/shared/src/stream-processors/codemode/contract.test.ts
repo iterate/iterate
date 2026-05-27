@@ -55,22 +55,22 @@ describe("CodemodeProcessorContract", () => {
     });
   });
 
-  it("merges codemode env updates into processor state", () => {
+  it("merges codemode var updates into processor state", () => {
     const state = reduceCodemodeEvents({
       state: getInitialProcessorState(CodemodeProcessorContract),
       events: [
         committedEvent({
-          type: "events.iterate.com/codemode/env-updated",
-          payload: { env: { PUBLIC_TUNNEL_URL: "https://tunnel.example", RETRIES: "2" } },
+          type: "events.iterate.com/codemode/vars-updated",
+          payload: { vars: { PUBLIC_TUNNEL_URL: "https://tunnel.example", RETRIES: "2" } },
         }),
         committedEvent({
-          type: "events.iterate.com/codemode/env-updated",
-          payload: { env: { PUBLIC_TUNNEL_URL: "https://new-tunnel.example" } },
+          type: "events.iterate.com/codemode/vars-updated",
+          payload: { vars: { PUBLIC_TUNNEL_URL: "https://new-tunnel.example" } },
         }),
       ],
     });
 
-    expect(state.env).toEqual({
+    expect(state.vars).toEqual({
       PUBLIC_TUNNEL_URL: "https://new-tunnel.example",
       RETRIES: "2",
     });

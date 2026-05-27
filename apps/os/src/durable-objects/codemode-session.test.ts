@@ -337,6 +337,44 @@ describe("CodemodeSession", () => {
     });
   });
 
+  test("exposes codemode vars separately from the dynamic worker env", async () => {
+    const streamPath = `/codemode-session-tests/${crypto.randomUUID()}` as StreamPath;
+    const session = await initializeSession(streamPath);
+
+    const created = await session.createSession({
+      events: codemodeSessionStartupEvents({
+        events: [
+          {
+            type: "events.iterate.com/codemode/vars-updated",
+            payload: { vars: { PUBLIC_TUNNEL_URL: "https://tunnel.example" } },
+          },
+        ],
+        providers: [],
+        streamPath,
+      }),
+      code: `async (ctx) => {
+  return {
+    dynamicWorkerEnvHasProjectBinding: "PROJECT" in ctx.env,
+    dynamicWorkerEnvHasTemplateVar: "PUBLIC_TUNNEL_URL" in ctx.env,
+    publicTunnelUrl: ctx.codemode.vars.PUBLIC_TUNNEL_URL,
+  };
+}`,
+    });
+    const scriptExecutionId = scriptExecutionIdFromEvent(created.scriptExecutionEvent);
+    const completed = await waitForScriptExecutionCompleted({ scriptExecutionId, streamPath });
+
+    expect(completed.payload).toMatchObject({
+      outcome: {
+        status: "returned",
+        value: {
+          dynamicWorkerEnvHasProjectBinding: true,
+          dynamicWorkerEnvHasTemplateVar: false,
+          publicTunnelUrl: "https://tunnel.example",
+        },
+      },
+    });
+  });
+
   test("runs default workspace state and git shell operations", async () => {
     const streamPath = `/codemode-session-tests/${crypto.randomUUID()}` as StreamPath;
     const session = await initializeSession(streamPath);

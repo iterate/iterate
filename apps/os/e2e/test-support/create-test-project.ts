@@ -98,6 +98,7 @@ type Stubify<T> = {
 type DefaultCtx = {
   os: OptionalProjectDeep<OsClient>;
   ai: AiCapability;
+  codemode: { vars: {} };
   env: {};
   repos: Stubify<ReposCapability>;
   workspace: Stubify<ReturnType<WorkspaceDurableObject["getShellState"]>>;
@@ -203,23 +204,24 @@ class CodemodeBuilder<Ctx = DefaultCtx> {
   }
 
   /**
-   * Set an environment variable for the codemode function.
-   * This will be available to the codemode function as `ctx.env.YOUR_ENV_VAR`.
+   * Set a string template variable for the codemode function.
+   * This will be available to the codemode function as `ctx.codemode.vars.YOUR_VAR`.
    */
-  env<Key extends string, Value extends string>(key: Key, value: Value) {
+  var<Key extends string, Value extends string>(key: Key, value: Value) {
     if (key.trim() === "") {
-      throw new Error("Codemode env key must not be blank.");
+      throw new Error("Codemode var key must not be blank.");
     }
 
-    type OldEnv = Ctx extends { env: infer OldEnv } ? OldEnv : never;
-    type NewCtx = Ctx & { env: OldEnv & Record<Key, Value> };
+    type OldCodemode = Ctx extends { codemode: infer OldCodemode } ? OldCodemode : {};
+    type OldVars = OldCodemode extends { vars: infer OldVars } ? OldVars : {};
+    type NewCtx = Ctx & { codemode: OldCodemode & { vars: OldVars & Record<Key, Value> } };
     return new CodemodeBuilder<NewCtx>(this.os, {
       ...this.options,
       events: [
         ...(this.options.events || []),
         {
-          type: "events.iterate.com/codemode/env-updated",
-          payload: { env: { [key]: value } },
+          type: "events.iterate.com/codemode/vars-updated",
+          payload: { vars: { [key]: value } },
         },
       ],
     });
