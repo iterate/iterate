@@ -57,6 +57,7 @@ export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
         case CoreProcessorRegisteredEventType:
         case "events.iterate.com/codemode/session-started":
         case "events.iterate.com/codemode/tool-provider-registered":
+        case "events.iterate.com/codemode/env-updated":
         case "events.iterate.com/codemode/script-execution-completed":
         case "events.iterate.com/codemode/function-call-requested":
         case "events.iterate.com/codemode/function-call-completed":
@@ -133,6 +134,7 @@ async function executeRequestedScript(args: {
   try {
     result = await args.deps.scriptExecutor({
       code: args.event.payload.code,
+      env: args.state.env,
       logger,
       scriptExecutionId: args.event.payload.scriptExecutionId,
       session,

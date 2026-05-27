@@ -12,6 +12,7 @@ import {
   uniqueSuffix,
   streamProjectEventsUntil,
   requireAdminBearerToken,
+  type OsClient,
 } from "./os-client.ts";
 import type { AiCapability, ReposCapability, WorkspaceDurableObject } from "~/entry.workerd.ts";
 
@@ -44,199 +45,16 @@ export async function createTestProjectFixture<
     await project[Symbol.asyncDispose]();
     throw error;
   }
-  const fixture = project;
-  type ExecuteScriptParams = Parameters<
-    Awaited<ReturnType<typeof createTestProject>>["os"]["project"]["codemode"]["executeScript"]
-  >[0];
-
-  const startCodemodeScript = async <Result>(
-    script: { code: string; $type: Result },
-    opts: Omit<ExecuteScriptParams, "code">,
-  ) => {
-    const started = await project.os.project.codemode.executeScript({
-      code: script.code,
-      ...opts,
-    });
-
-    return {
-      ...script,
-      ...started,
-    };
-  };
-
-  const executeCodemodeScript = async <Result>(
-    script: { code: string; $type: Result },
-    opts: Omit<ExecuteScriptParams, "code">,
-  ) => {
-    const started = await startCodemodeScript(script, opts);
-    const startedPayload = started.event.payload as { scriptExecutionId: string };
-    const isCompletedScriptExecution = (
-      event: Event,
-    ): event is Event & { payload: ReceiveFunctionCallResultInput } =>
-      event.type === "events.iterate.com/codemode/script-execution-completed" &&
-      (event.payload as ReceiveFunctionCallResultInput).scriptExecutionId ===
-        startedPayload.scriptExecutionId;
-
-    const events = await streamProjectEventsUntil({
-      afterOffset: started.event.offset > 1 ? started.event.offset - 1 : "start",
-      client: fixture.client,
-      projectSlugOrId: fixture.project.id,
-      streamPath: started.streamPath,
-      // todo: proper strongly-typed version of this read-until helper
-      predicate: isCompletedScriptExecution,
-    });
-    const completed = events.find(isCompletedScriptExecution);
-    if (!completed) {
-      throw new Error(
-        `Expected completed script execution ${startedPayload.scriptExecutionId} in stream batch.`,
-      );
-    }
-    const payload = completed.payload;
-    return {
-      payload,
-      success: () => {
-        if (payload.outcome?.status !== "returned") {
-          throw new Error(`codemode: ${payload.outcome?.status}: ${payload.outcome.error}`, {
-            cause: completed,
-          });
-        }
-        return payload.outcome.value as Result;
-      },
-      event: completed as Omit<typeof completed, "payload"> & {
-        payload: ReceiveFunctionCallResultInput;
-      },
-      events,
-      /** get a snapshot-friendly copy of the completed event payload. optionally pass in key-value pairs to replace in the whole payload */
-      snapshot: (swaps: Record<string, string> = {}) => {
-        let json = JSON.stringify(completed.payload);
-        for (const [key, value] of Object.entries(swaps)) {
-          json = json.replaceAll(value, `<${key}>`);
-        }
-        const snapshottable = JSON.parse(json) as typeof payload;
-        snapshottable.durationMs = 999;
-        snapshottable.scriptExecutionId = "<script-execution-id>";
-        snapshottable.functionCallId = "<function-call-id>";
-        return snapshottable;
-      },
-    };
-  };
-
-  type OptionalProjectDeep<T> = T extends (
-    params: infer P extends { projectSlugOrId: string },
-  ) => infer R
-    ? (params: Omit<P, "projectSlugOrId"> & { projectSlugOrId?: string }) => R
-    : { [K in keyof T]: OptionalProjectDeep<T[K]> };
-
-  type Stubify<T> = {
-    [K in keyof T]: T[K] extends (...args: infer A) => infer R
-      ? (
-          ...args: A
-        ) => Awaited<R> extends import("cloudflare:workers").RpcTarget
-          ? Stubify<Awaited<R>>
-          : Promise<Awaited<R>>
-      : Stubify<T[K]>;
-  };
-
-  type DefaultCtx = {
-    os: OptionalProjectDeep<typeof project.os>;
-    ai: AiCapability;
-    repos: Stubify<ReposCapability>;
-    workspace: Stubify<ReturnType<WorkspaceDurableObject["getShellState"]>>;
-  };
-
-  class CodemodeBuilder<Ctx = DefaultCtx, This = {}> {
-    _bound: This;
-    _options: Omit<ExecuteScriptParams, "code">;
-
-    constructor(params: { options: Omit<ExecuteScriptParams, "code">; bound: This }) {
-      this._bound = params.bound;
-      this._options = params.options;
-    }
-
-    stringify<Result>(fn: { (this: This, ctx: Ctx): Promise<Result> }) {
-      let code = fn.toString();
-      if (!code.startsWith("async")) {
-        code = `async ${code}`;
-      }
-      return {
-        code,
-        $ctx: {} as Ctx,
-        $type: {} as Result,
-      };
-    }
-
-    options(newOptions: Partial<typeof this._options>) {
-      return new CodemodeBuilder<Ctx, This>({
-        options: { ...this._options, ...newOptions },
-        bound: this._bound,
-      });
-    }
-
-    start<NewCtx extends Ctx = {} extends Ctx ? any : Ctx, Result = {}>(fn: {
-      (this: This, ctx: NewCtx): Promise<Result>;
-    }) {
-      return startCodemodeScript(this.define(fn), this._options);
-    }
-
-    execute<NewCtx extends Ctx = Ctx, Result = {}>(fn: {
-      (this: This, ctx: NewCtx): Promise<Result>;
-    }) {
-      return executeCodemodeScript(this.define(fn), this._options);
-    }
-    /** Type-only method to set the type of the codemode function's context parameter */
-    context<NewCtx, Mode extends "extend" | "replace" = "extend">() {
-      type ReplacementCtx = Mode extends "extend" ? NewCtx & This : NewCtx;
-      return this as CodemodeBuilder<unknown, This> as CodemodeBuilder<ReplacementCtx, This>;
-    }
-    /**
-     * Set some serializable data as the codemode function's `this` binding. Useful when your script needs to access something from outside its scope
-     * @example
-     * ```ts
-     * using publicTunnel = await createPublicTunnel({ fetch: async () => new Response("ok") });
-     *
-     * const result = await fixture.codemode
-     *   .bind({ baseUrl: publicTunnel.url })
-     *   .execute(async function () {
-     *     const response = await fetch(`${this.baseUrl}/foobar`);
-     *     return response.json();
-     *   });
-     * ```
-     */
-    bind<NewThis>(bound: NewThis) {
-      try {
-        return new CodemodeBuilder<Ctx, NewThis>({
-          options: this._options,
-          bound: structuredClone(bound),
-        });
-      } catch (error) {
-        throw new Error(`Binding value passed to .bind() must be serializable`, { cause: error });
-      }
-    }
-    define<NewCtx extends Ctx = {} extends Ctx ? any : Ctx, Result = {}>(fn: {
-      (this: This, ctx: NewCtx): Promise<Result>;
-    }) {
-      const script = this.context<NewCtx>().stringify<Result>(fn);
-      const boundJson = JSON.stringify(this._bound || {});
-      if (boundJson !== "{}") {
-        const indentedCode = script.code.replace(/\n/g, "\n  ");
-        script.code = [
-          `async (ctx) => {`,
-          `  return await (${indentedCode}).bind(${boundJson})(ctx)`,
-          `}`,
-        ].join("\n");
-      }
-      return script;
-    }
-  }
 
   return {
     ...project,
     /** recommended test stream path - arbitrary, but by convention mirrors test file + name as its path (`/${relativeFilePath}/${describeSlug}/${testSlug}`)  */
     streamPath,
     slugPrefix,
-    codemode: new CodemodeBuilder({
-      options: { projectSlugOrId: project.project.slug, providers: [], streamPath },
-      bound: {},
+    codemode: new CodemodeBuilder(project.os, {
+      projectSlugOrId: project.project.slug,
+      providers: [],
+      streamPath,
     }),
     /** strongly-typed event constructor for the given processor contracts */
     event: (event: ProcessorContractEvent<ProcessorContracts>) => event,
@@ -259,6 +77,153 @@ export async function createTestProjectFixture<
       }
     },
   };
+}
+
+type OptionalProjectDeep<T> = T extends (
+  params: infer P extends { projectSlugOrId: string },
+) => infer R
+  ? (params: Omit<P, "projectSlugOrId"> & { projectSlugOrId?: string }) => R
+  : { [K in keyof T]: OptionalProjectDeep<T[K]> };
+
+type Stubify<T> = {
+  [K in keyof T]: T[K] extends (...args: infer A) => infer R
+    ? (
+        ...args: A
+      ) => Awaited<R> extends import("cloudflare:workers").RpcTarget
+        ? Stubify<Awaited<R>>
+        : Promise<Awaited<R>>
+    : Stubify<T[K]>;
+};
+
+type DefaultCtx = {
+  os: OptionalProjectDeep<OsClient>;
+  ai: AiCapability;
+  env: {};
+  repos: Stubify<ReposCapability>;
+  workspace: Stubify<ReturnType<WorkspaceDurableObject["getShellState"]>>;
+};
+
+type ExecuteScriptParams = Parameters<OsClient["project"]["codemode"]["executeScript"]>[0];
+type CodemodeBuilderOptions = Omit<ExecuteScriptParams, "code">;
+
+class CodemodeBuilder<Ctx = DefaultCtx> {
+  constructor(
+    readonly os: OsClient,
+    readonly options: CodemodeBuilderOptions,
+  ) {}
+
+  stringify<Result>(fn: (ctx: Ctx) => Promise<Result>) {
+    const code = fn.toString();
+    return code.startsWith("async ") ? code : `async ${code}`;
+  }
+
+  define<Result>(fn: (ctx: Ctx) => Promise<Result>) {
+    return {
+      code: this.stringify(fn),
+      $ctx: {} as Ctx,
+      $type: {} as Result,
+    };
+  }
+
+  async start<NewCtx extends Ctx = {} extends Ctx ? any : Ctx, Result = {}>(
+    fn: (ctx: NewCtx) => Promise<Result>,
+  ) {
+    return this.os.project.codemode.executeScript({
+      code: this.context<NewCtx>().stringify(fn),
+      ...this.options,
+    });
+  }
+
+  async execute<NewCtx extends Ctx = Ctx, Result = {}>(fn: { (ctx: NewCtx): Promise<Result> }) {
+    const started = await this.start(fn);
+    const startedPayload = started.event.payload as { scriptExecutionId: string };
+    const isCompletedScriptExecution = (
+      event: Event,
+    ): event is Event & { payload: ReceiveFunctionCallResultInput } =>
+      event.type === "events.iterate.com/codemode/script-execution-completed" &&
+      (event.payload as ReceiveFunctionCallResultInput).scriptExecutionId ===
+        startedPayload.scriptExecutionId;
+
+    const events = await streamProjectEventsUntil({
+      afterOffset: started.event.offset > 1 ? started.event.offset - 1 : "start",
+      client: this.os,
+      projectSlugOrId: this.options.projectSlugOrId,
+      streamPath: started.streamPath,
+      // todo: proper strongly-typed version of this read-until helper
+      predicate: isCompletedScriptExecution,
+    });
+    const completed = events.find(isCompletedScriptExecution);
+    if (!completed) {
+      throw new Error(
+        `Expected completed script execution ${startedPayload.scriptExecutionId} in stream batch.`,
+      );
+    }
+    const payload = completed.payload;
+    return {
+      /** Raw payload from the completed event. Use `.success()` instead if you expect a successful result. */
+      payload,
+      /** Asserts that the script executed successfully and returns the strongly-typed result */
+      success: () => {
+        if (payload.outcome?.status !== "returned") {
+          throw new Error(`codemode: ${payload.outcome?.status}: ${payload.outcome.error}`, {
+            cause: completed,
+          });
+        }
+        return payload.outcome.value as Result;
+      },
+      /** The full completed event object, including the payload. */
+      event: completed as Omit<typeof completed, "payload"> & {
+        payload: ReceiveFunctionCallResultInput;
+      },
+      /** All events in the stream batch, including the completed event. */
+      events,
+      /**
+       * a snapshot-friendly copy of the completed event payload. optionally pass in key-value pairs to replace in the whole payload
+       * note: each `value` is replaced with `<key>` so `{ requestId: "abc123" }` replaces all `abc123` occurrences in the whole payload with `<requestId>`
+       */
+      snapshot: (redactions: Record<string, string> = {}) => {
+        let json = JSON.stringify(completed.payload);
+        // sort by length descending to avoid replacing substrings
+        const entries = Object.entries(redactions).sort((a, b) => b[0].length - a[0].length);
+        for (const [key, value] of entries) {
+          json = json.replaceAll(value, `<${key}>`);
+        }
+        const snapshottable = JSON.parse(json) as typeof payload;
+        snapshottable.durationMs = 999;
+        snapshottable.scriptExecutionId = "<script-execution-id>";
+        snapshottable.functionCallId = "<function-call-id>";
+        return snapshottable;
+      },
+    };
+  }
+  /** Type-only method to set the type of the codemode function's context parameter */
+  context<NewCtx, Mode extends "extend" | "replace" = "extend">() {
+    type ReplacementCtx = Mode extends "extend" ? NewCtx & Ctx : NewCtx;
+    return this as CodemodeBuilder<ReplacementCtx>;
+  }
+
+  /**
+   * Set an environment variable for the codemode function.
+   * This will be available to the codemode function as `ctx.env.YOUR_ENV_VAR`.
+   */
+  env<Key extends string, Value extends string>(key: Key, value: Value) {
+    if (key.trim() === "") {
+      throw new Error("Codemode env key must not be blank.");
+    }
+
+    type OldEnv = Ctx extends { env: infer OldEnv } ? OldEnv : never;
+    type NewCtx = Ctx & { env: OldEnv & Record<Key, Value> };
+    return new CodemodeBuilder<NewCtx>(this.os, {
+      ...this.options,
+      events: [
+        ...(this.options.events || []),
+        {
+          type: "events.iterate.com/codemode/env-updated",
+          payload: { env: { [key]: value } },
+        },
+      ],
+    });
+  }
 }
 
 type ProcessorContractEvent<ProcessorContracts extends ProcessorContractShape[]> =

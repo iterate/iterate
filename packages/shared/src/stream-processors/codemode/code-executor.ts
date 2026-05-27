@@ -25,6 +25,7 @@ export type CodemodeScriptExecutionResult = {
  */
 export type CodemodeScriptExecutor = (args: {
   code: string;
+  env: Record<string, string>;
   logger: CodemodeProcessorLogger;
   scriptExecutionId: string;
   session: CodemodeProcessorSession;
