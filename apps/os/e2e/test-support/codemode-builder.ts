@@ -111,7 +111,7 @@ export class CodemodeBuilder<Ctx = DefaultCtx> {
       snapshot: (redactions: Record<string, string> = {}) => {
         let json = JSON.stringify(completed.payload);
         // sort by length descending to avoid replacing substrings
-        const entries = Object.entries(redactions).sort((a, b) => b[0].length - a[0].length);
+        const entries = Object.entries(redactions).sort((a, b) => b[1].length - a[1].length);
         for (const [key, value] of entries) {
           json = json.replaceAll(value, `<${key}>`);
         }
