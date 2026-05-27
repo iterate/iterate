@@ -5,34 +5,6 @@ import type { ReceiveFunctionCallResultInput } from "../../src/domains/codemode/
 import { streamProjectEventsUntil, type OsClient } from "./os-client.ts";
 import type { AiCapability, ReposCapability, WorkspaceDurableObject } from "~/entry.workerd.ts";
 
-type OptionalProjectDeep<T> = T extends (
-  params: infer P extends { projectSlugOrId: string },
-) => infer R
-  ? (params: Omit<P, "projectSlugOrId"> & { projectSlugOrId?: string }) => R
-  : { [K in keyof T]: OptionalProjectDeep<T[K]> };
-
-type Stubify<T> = {
-  [K in keyof T]: T[K] extends (...args: infer A) => infer R
-    ? (
-        ...args: A
-      ) => Awaited<R> extends import("cloudflare:workers").RpcTarget
-        ? Stubify<Awaited<R>>
-        : Promise<Awaited<R>>
-    : Stubify<T[K]>;
-};
-
-export type DefaultCtx = {
-  os: OptionalProjectDeep<OsClient>;
-  ai: AiCapability;
-  codemode: { vars: {} };
-  env: {};
-  repos: Stubify<ReposCapability>;
-  workspace: Stubify<ReturnType<WorkspaceDurableObject["getShellState"]>>;
-};
-
-type ExecuteScriptParams = Parameters<OsClient["project"]["codemode"]["executeScript"]>[0];
-export type CodemodeBuilderOptions = Omit<ExecuteScriptParams, "code">;
-
 export class CodemodeBuilder<Ctx = DefaultCtx> {
   constructor(
     readonly os: OsClient,
@@ -154,3 +126,31 @@ export class CodemodeBuilder<Ctx = DefaultCtx> {
     });
   }
 }
+
+export type DefaultCtx = {
+  os: OptionalProjectDeep<OsClient>;
+  ai: AiCapability;
+  codemode: { vars: {} };
+  env: {};
+  repos: Stubify<ReposCapability>;
+  workspace: Stubify<ReturnType<WorkspaceDurableObject["getShellState"]>>;
+};
+
+type ExecuteScriptParams = Parameters<OsClient["project"]["codemode"]["executeScript"]>[0];
+export type CodemodeBuilderOptions = Omit<ExecuteScriptParams, "code">;
+
+type OptionalProjectDeep<T> = T extends (
+  params: infer P extends { projectSlugOrId: string },
+) => infer R
+  ? (params: Omit<P, "projectSlugOrId"> & { projectSlugOrId?: string }) => R
+  : { [K in keyof T]: OptionalProjectDeep<T[K]> };
+
+type Stubify<T> = {
+  [K in keyof T]: T[K] extends (...args: infer A) => infer R
+    ? (
+        ...args: A
+      ) => Awaited<R> extends import("cloudflare:workers").RpcTarget
+        ? Stubify<Awaited<R>>
+        : Promise<Awaited<R>>
+    : Stubify<T[K]>;
+};
