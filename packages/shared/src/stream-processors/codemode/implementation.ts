@@ -57,6 +57,7 @@ export function createCodemodeProcessor(deps: CodemodeProcessorDeps) {
         case CoreProcessorRegisteredEventType:
         case "events.iterate.com/codemode/session-started":
         case "events.iterate.com/codemode/tool-provider-registered":
+        case "events.iterate.com/codemode/vars-updated":
         case "events.iterate.com/codemode/script-execution-completed":
         case "events.iterate.com/codemode/function-call-requested":
         case "events.iterate.com/codemode/function-call-completed":
@@ -137,6 +138,7 @@ async function executeRequestedScript(args: {
       scriptExecutionId: args.event.payload.scriptExecutionId,
       session,
       signal: args.signal,
+      vars: args.state.vars,
     });
   } catch (error) {
     result = { result: undefined, error: serializeError(error) };

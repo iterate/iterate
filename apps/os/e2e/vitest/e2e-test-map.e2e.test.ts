@@ -77,9 +77,9 @@ describe("e2e test map", () => {
     });
 
     const result = await fixture.codemode
-      .bind({ baseUrl: publicTunnel.url })
-      .execute(async function () {
-        const response = await fetch(`${this.baseUrl}/anything`, {
+      .var("PUBLIC_TUNNEL_URL", publicTunnel.url)
+      .execute(async (ctx) => {
+        const response = await fetch(`${ctx.codemode.vars.PUBLIC_TUNNEL_URL}/anything`, {
           headers: { Authorization: "Bearer getSecret('blabla')" },
         });
         return response.json();
@@ -122,9 +122,11 @@ describe("e2e test map", () => {
       },
     });
 
-    const result = await fixture.codemode.execute(async (ctx: any) => {
-      return ctx.petstore.getInventory();
-    });
+    const result = await fixture.codemode
+      .context<{ petstore: { getInventory: () => Promise<unknown> } }>()
+      .execute(async (ctx) => {
+        return ctx.petstore.getInventory();
+      });
 
     expect(result.success()).toMatchObject({
       available: expect.any(Number),
@@ -139,22 +141,12 @@ describe("e2e test map", () => {
     });
     mcpServer.registerTool(
       "my_funky_search",
-      {
-        description: "Search the web",
-        inputSchema: {
-          numResults: z.number(),
-          query: z.string(),
-        },
-      },
-      ({ numResults, query }) => {
-        const structuredContent = {
-          numResults,
-          query,
-          result: "search result",
-        };
+      { description: "Search the web", inputSchema: { query: z.string() } },
+      ({ query }) => {
+        const data = { result: `search result for ${query}` };
         return {
-          content: [{ text: JSON.stringify(structuredContent), type: "text" }],
-          structuredContent,
+          content: [{ text: JSON.stringify(data), type: "text" }],
+          structuredContent: data,
         };
       },
     );
@@ -205,24 +197,27 @@ describe("e2e test map", () => {
       },
     });
 
-    const result = await fixture.codemode.execute(async (ctx: any) => {
-      const tools = await ctx.mcp.publicTunnelSearch.listTools();
-      const search = await ctx.mcp.publicTunnelSearch.my_funky_search({
-        numResults: 2,
-        query: "public tunnel mcp",
+    const result = await fixture.codemode
+      .context<{
+        mcp: {
+          publicTunnelSearch: {
+            listTools: () => Promise<{ tools: unknown[] }>;
+            my_funky_search: (input: { numResults: number; query: string }) => Promise<unknown>;
+          };
+        };
+      }>()
+      .execute(async (ctx) => {
+        const { tools } = await ctx.mcp.publicTunnelSearch.listTools();
+        const search = await ctx.mcp.publicTunnelSearch.my_funky_search({
+          numResults: 2,
+          query: "public tunnel mcp",
+        });
+        return { search, tools };
       });
-      return { search, tools };
-    });
 
     expect(result.success()).toMatchObject({
-      search: {
-        numResults: 2,
-        query: "public tunnel mcp",
-        result: "search result",
-      },
-      tools: {
-        tools: [{ description: "Search the web", name: "my_funky_search" }],
-      },
+      search: { result: "search result for public tunnel mcp" },
+      tools: [{ description: "Search the web", name: "my_funky_search" }],
     });
   });
 
@@ -243,7 +238,7 @@ describe("e2e test map", () => {
       },
     });
 
-    const result = await fixture.codemode.execute(async (ctx: any) => {
+    const result = await fixture.codemode.execute(async (ctx) => {
       return await ctx.os.project.get({});
     });
 
@@ -270,7 +265,7 @@ describe("e2e test map", () => {
       },
     });
 
-    const result = await fixture.codemode.execute(async (ctx: any) => {
+    const result = await fixture.codemode.execute(async (ctx) => {
       const ai = await ctx.ai.run("@cf/meta/llama-3.1-8b-instruct", {
         prompt: "What is one plus two",
       });
@@ -302,7 +297,7 @@ describe("e2e test map", () => {
       },
     });
 
-    const result = await fixture.codemode.execute(async (ctx: any) => {
+    const result = await fixture.codemode.execute(async (ctx) => {
       const slug = `pipeline-${Date.now()}`;
       // look ma, no intermediate await!
       return await ctx.repos.create({ slug }).getInfo();
@@ -317,11 +312,11 @@ describe("e2e test map", () => {
   test("can use workspace tools", async () => {
     await using fixture = await createTestProjectFixture({});
 
-    await fixture.codemode.execute(async (ctx: any) => {
+    await fixture.codemode.execute(async (ctx) => {
       await ctx.workspace.writeFile("greeting.txt", "hiya");
     });
 
-    const result = await fixture.codemode.execute(async (ctx: any) => {
+    const result = await fixture.codemode.execute(async (ctx) => {
       const text = await ctx.workspace.readFile("greeting.txt");
       return { text };
     });
@@ -334,7 +329,7 @@ describe("e2e test map", () => {
   test("workspace can clone public github repo", async () => {
     await using fixture = await createTestProjectFixture({});
 
-    const result = await fixture.codemode.execute(async (ctx: any) => {
+    const result = await fixture.codemode.execute(async (ctx) => {
       await ctx.workspace.git.clone({
         dir: "/captun",
         depth: 1,
@@ -364,7 +359,7 @@ describe("e2e test map", () => {
       },
     });
 
-    const result = await fixture.codemode.execute(async (ctx: any) => {
+    const result = await fixture.codemode.execute(async (ctx) => {
       const proof = `hello from iterate config ${Date.now()}`;
       const repo = await ctx.repos.ensureIterateConfigInfo({ projectSlug: null });
       const dir = `/iterate-config-${Date.now()}`;

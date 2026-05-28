@@ -12,6 +12,7 @@ import { standardProcessorBehavior } from "../core/standard-processor-behavior.t
 const CodemodeId = z.string().trim().min(1);
 const CodemodePath = z.array(z.string().min(1)).min(1);
 const CodemodeFunctionPath = z.array(z.string().min(1));
+const CodemodeVars = z.record(z.string().min(1), z.string());
 const ToolProviderInvocation = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("event"),
@@ -50,6 +51,7 @@ export const CodemodeProcessorContract = defineProcessorContract({
     ...standardProcessorBehavior.stateShape,
     sessionStarted: z.boolean().default(false),
     sessionCapabilityCallable: Callable.optional(),
+    vars: CodemodeVars.default({}),
     toolProviders: z.record(z.string(), ToolProviderRegistration).default({}),
     scriptExecutions: z
       .record(
@@ -113,6 +115,13 @@ export const CodemodeProcessorContract = defineProcessorContract({
     "events.iterate.com/codemode/tool-provider-registered": {
       description: "Model-visible instructions and invocation mode for codemode tool functions.",
       payloadSchema: ToolProviderRegistration,
+    },
+    "events.iterate.com/codemode/vars-updated": {
+      description:
+        "String template variables that are exposed to codemode scripts on ctx.codemode.vars.",
+      payloadSchema: z.object({
+        vars: CodemodeVars,
+      }),
     },
     "events.iterate.com/codemode/script-execution-requested": {
       description: "A codemode script should run against the stream's documented functions.",
@@ -229,6 +238,7 @@ export const CodemodeProcessorContract = defineProcessorContract({
     ...standardProcessorBehavior.consumes,
     "events.iterate.com/codemode/session-started",
     "events.iterate.com/codemode/tool-provider-registered",
+    "events.iterate.com/codemode/vars-updated",
     "events.iterate.com/codemode/script-execution-requested",
     "events.iterate.com/codemode/script-execution-completed",
     "events.iterate.com/codemode/function-call-requested",
@@ -263,6 +273,14 @@ export const CodemodeProcessorContract = defineProcessorContract({
           toolProviders: {
             ...nextState.toolProviders,
             [toolProviderRegistryKey(event.payload.path)]: event.payload,
+          },
+        };
+      case "events.iterate.com/codemode/vars-updated":
+        return {
+          ...nextState,
+          vars: {
+            ...nextState.vars,
+            ...event.payload.vars,
           },
         };
       case "events.iterate.com/codemode/script-execution-requested":

@@ -131,6 +131,7 @@ type CodemodeExecutorEntrypoint = {
     capability: CodemodeSessionCapabilityTarget,
     logger: CodemodeLoggerTarget,
     scriptExecutionId: string,
+    vars: Record<string, string>,
   ): Promise<{ error?: string; result: unknown }>;
 };
 type DisposableRpcValue = {
@@ -844,12 +845,12 @@ function resolveProcessorStreamPath(input: { basePath: StreamPath; pathInput?: s
 }
 
 function createCloudflareCodemodeScriptExecutor(input: {
-  env?: Record<string, unknown>;
+  env: Record<string, unknown>;
   getSessionCapability?: () => CodemodeProcessorSession;
   loader: WorkerLoader | undefined;
   outboundFetch: Fetcher;
 }): CodemodeScriptExecutor {
-  return async ({ code, logger, scriptExecutionId, session }) => {
+  return async ({ code, logger, scriptExecutionId, session, vars }) => {
     if (!input.loader) {
       return {
         result: undefined,
@@ -883,6 +884,7 @@ function createCloudflareCodemodeScriptExecutor(input: {
         new CodemodeSessionCapabilityTarget(input.getSessionCapability?.() ?? session),
         new CodemodeLoggerTarget(logger),
         scriptExecutionId,
+        vars,
       );
       try {
         // `evaluate()` is itself a Workers RPC call into the dynamic executor.
@@ -1047,12 +1049,13 @@ function __stringify(value) {
 	        return {
 	          log: (...args) => console.log(...args),
 	          warn: (...args) => console.warn(...args),
-          error: (...args) => console.error(...args),
-        };
-      }
-      if (key === "env" && path.length === 0) return options.env;
-      if (typeof key !== "string") return undefined;
-      return make([...path, key]);
+            error: (...args) => console.error(...args),
+          };
+        }
+        if (key === "env" && path.length === 0) return options.env;
+        if (key === "vars" && path.length === 1 && path[0] === "codemode") return options.vars;
+        if (typeof key !== "string") return undefined;
+        return make([...path, key]);
 	    },
 	    apply: (_target, _thisArg, args) => {
 	      return trackCallResult(options.codemodeSessionCapability.callFunction({
@@ -1067,7 +1070,7 @@ function __stringify(value) {
 }
 
 	export default class CodeExecutor extends WorkerEntrypoint {
-	  async evaluate(__codemodeSessionCapability, __logger, __scriptExecutionId) {
+	  async evaluate(__codemodeSessionCapability, __logger, __scriptExecutionId, __codemodeVars) {
 	    const __pendingLogs = [];
 	    const __emitLog = (level, args) => {
 	      const message = args.map(__stringify).join(" ");
@@ -1099,6 +1102,7 @@ function __stringify(value) {
 	      codemodeSessionCapability: __codemodeSessionCapability,
 	      env: this.env,
 	      scriptExecutionId: __scriptExecutionId,
+	      vars: __codemodeVars,
 	    });
 
 	    try {

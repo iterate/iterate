@@ -9,7 +9,9 @@ export type WorkspaceStructuredName = {
   workspaceId: string;
 };
 
-export type CloudflareShellState = Record<string, (...args: unknown[]) => Promise<unknown>>;
+export type CloudflareShellState = import("@cloudflare/shell").StateBackend & {
+  git: import("@cloudflare/shell/git").Git;
+} & Record<string, unknown>;
 
 const WorkspaceStructuredName = z.object({
   projectId: z.string().trim().min(1),
@@ -138,16 +140,19 @@ export function getWorkspaceDurableObjectName(name: WorkspaceStructuredName) {
 }
 
 function createPlainMethodObject(target: object): CloudflareShellState {
-  const methods: CloudflareShellState = {};
+  const methods = {} as CloudflareShellState;
   let prototype: object | null = Object.getPrototypeOf(target);
 
   while (prototype !== null && prototype !== Object.prototype) {
     for (const name of Object.getOwnPropertyNames(prototype)) {
-      if (name === "constructor" || methods[name] !== undefined) continue;
+      if (name === "constructor" || methods[name as keyof CloudflareShellState] !== undefined)
+        continue;
 
       const value = (target as Record<string, unknown>)[name];
       if (typeof value === "function") {
-        methods[name] = async (...args: unknown[]) => await value.apply(target, args);
+        Object.assign(methods, {
+          [name]: async (...args: unknown[]) => await value.apply(target, args),
+        });
       }
     }
 

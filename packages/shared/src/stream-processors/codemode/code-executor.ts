@@ -29,4 +29,5 @@ export type CodemodeScriptExecutor = (args: {
   scriptExecutionId: string;
   session: CodemodeProcessorSession;
   signal: AbortSignal;
+  vars: Record<string, string>;
 }) => Promise<CodemodeScriptExecutionResult>;

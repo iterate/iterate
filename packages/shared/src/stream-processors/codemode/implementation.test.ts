@@ -124,6 +124,39 @@ describe("createCodemodeProcessor", () => {
     );
   });
 
+  it("passes codemode vars state to the script executor", async () => {
+    const appended: StreamEventInput[] = [];
+    const scriptExecutor = vi.fn(async () => ({ result: { ok: true } }));
+    const processor = createCodemodeProcessor({
+      ...baseDeps(),
+      scriptExecutor,
+    });
+
+    await processor.implementation.afterAppend?.({
+      event: consumedCodemodeEvent({
+        type: "events.iterate.com/codemode/script-execution-requested",
+        payload: {
+          code: "async (ctx) => ctx.codemode.vars.PUBLIC_TUNNEL_URL",
+          scriptExecutionId: "scr-1",
+        },
+        offset: 7,
+      }),
+      previousState: registeredState({ sessionStarted: true }),
+      state: registeredState({
+        sessionStarted: true,
+        vars: { PUBLIC_TUNNEL_URL: "https://tunnel.example" },
+      }),
+      streamApi: testStreamApi({ appended, storedEvents: [] }),
+      signal: new AbortController().signal,
+    });
+
+    expect(scriptExecutor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        vars: { PUBLIC_TUNNEL_URL: "https://tunnel.example" },
+      }),
+    );
+  });
+
   it("can continue requested script work through waitUntil after accepting the stream event", async () => {
     const appended: StreamEventInput[] = [];
     const scriptResult = Promise.withResolvers<{ result: unknown }>();
