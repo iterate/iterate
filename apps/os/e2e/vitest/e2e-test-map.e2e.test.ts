@@ -1,5 +1,9 @@
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { x } from "tinyexec";
 import { describe, expect, test, vi, expectTypeOf } from "vitest";
 import { z } from "zod";
 import { CodemodeProcessorContract } from "@iterate-com/shared/stream-processors/codemode/contract";
@@ -172,7 +176,7 @@ describe("e2e test map", () => {
         type: "events.iterate.com/codemode/tool-provider-registered",
         payload: {
           instructions:
-            "Use ctx.mcp.publicTunnelSearch for test web search. Call ctx.mcp.publicTunnelSearch.listTools() to inspect available tools, then call ctx.mcp.publicTunnelSearch.my_funky_search({ query, numResults }).",
+            "Use ctx.mcp.publicTunnelSearch for test web search. Call ctx.mcp.publicTunnelSearch.listTools() to inspect available tools, then call ctx.mcp.publicTunnelSearch.my_funky_search({ query }).",
           invocation: {
             kind: "rpc",
             callable: {
@@ -202,22 +206,19 @@ describe("e2e test map", () => {
         mcp: {
           publicTunnelSearch: {
             listTools: () => Promise<{ tools: unknown[] }>;
-            my_funky_search: (input: { numResults: number; query: string }) => Promise<unknown>;
+            my_funky_search: (input: { query: string }) => Promise<unknown>;
           };
         };
       }>()
       .execute(async (ctx) => {
         const { tools } = await ctx.mcp.publicTunnelSearch.listTools();
-        const search = await ctx.mcp.publicTunnelSearch.my_funky_search({
-          numResults: 2,
-          query: "public tunnel mcp",
-        });
-        return { search, tools };
+        const search = await ctx.mcp.publicTunnelSearch.my_funky_search({ query: "abc123" });
+        return { tools, search };
       });
 
     expect(result.success()).toMatchObject({
-      search: { result: "search result for public tunnel mcp" },
       tools: [{ description: "Search the web", name: "my_funky_search" }],
+      search: { result: "search result for abc123" },
     });
   });
 
@@ -341,6 +342,126 @@ describe("e2e test map", () => {
     expect(result.success()).toContain(`"name": "captun"`);
   });
 
+  test("codemode-create repo can be cloned as normal", async () => {
+    await using fixture = await createTestProjectFixture({
+      processors: [CodemodeProcessorContract],
+    });
+    const repoSlug = "codemode-create-repo";
+    const proofFileName = "normal-git-proof.txt";
+    const proof = `normal git proof for ${fixture.project.slug}\n`;
+
+    await fixture.append({
+      event: {
+        type: "events.iterate.com/codemode/tool-provider-registered",
+        payload: createExampleRpcProviderRegistration({
+          exportName: "ReposCapability",
+          instructions:
+            "Use ctx.repos.create({ slug }) to create a Repo, ctx.repos.get({ slug }).getInfo() to inspect one, and ctx.repos.list({}) to list Repos.",
+          path: ["repos"],
+          projectId: fixture.project.id,
+        }),
+      },
+    });
+
+    const created = await fixture.codemode.execute(async (ctx) => {
+      const repo = await ctx.repos.create({ slug: "codemode-create-repo" }).getInfo();
+      const credentials = await ctx.repos.get({ slug: "codemode-create-repo" }).getCredentials();
+
+      await ctx.workspace.git.clone({
+        url: repo.remote,
+        dir: "/codemode-create-repo",
+        branch: repo.defaultBranch,
+        depth: 1,
+        ...credentials,
+      });
+
+      return {
+        initialReadme: await ctx.workspace.readFile("/codemode-create-repo/README.md"),
+        repo,
+        status: await ctx.workspace.git.status({ dir: "/codemode-create-repo" }),
+      };
+    });
+
+    expect(created.success()).toMatchObject({
+      initialReadme: expect.stringContaining(`Project ID: ${fixture.project.id}`),
+      repo: {
+        defaultBranch: "main",
+        slug: repoSlug,
+      },
+      status: [],
+    });
+
+    await using temp = await createTempDirectory("os-codemode-repo-");
+    const localRepoDir = join(temp.path, repoSlug);
+    const repo = created.success().repo;
+    const authHeader = repo.git.authorizationHeader;
+
+    await runGit({
+      args: ["-c", `http.extraHeader=${authHeader}`, "clone", repo.remote, localRepoDir],
+      cwd: temp.path,
+    });
+    await writeFile(join(localRepoDir, proofFileName), proof);
+    await runGit({ args: ["-C", localRepoDir, "add", proofFileName], cwd: temp.path });
+    await runGit({
+      args: [
+        "-C",
+        localRepoDir,
+        "-c",
+        "user.name=Codemode E2E",
+        "-c",
+        "user.email=codemode-e2e@iterate.com",
+        "commit",
+        "-m",
+        "Add normal git proof",
+      ],
+      cwd: temp.path,
+    });
+    await runGit({
+      args: [
+        "-C",
+        localRepoDir,
+        "-c",
+        `http.extraHeader=${authHeader}`,
+        "push",
+        "origin",
+        repo.defaultBranch,
+      ],
+      cwd: temp.path,
+    });
+
+    expect(await readFile(join(localRepoDir, proofFileName), "utf8")).toBe(proof);
+    expect(await runGit({ args: ["-C", localRepoDir, "status", "--short"], cwd: temp.path })).toBe(
+      "",
+    );
+
+    const pulled = await fixture.codemode.execute(async (ctx) => {
+      const repo = await ctx.repos.get({ slug: "codemode-create-repo" }).getInfo();
+      const password = repo.token.includes("?expires=")
+        ? repo.token.split("?expires=")[0]
+        : repo.token;
+      const auth = { username: "x", password };
+      const pull = await ctx.workspace.git.pull({
+        dir: "/codemode-create-repo",
+        remote: "origin",
+        ref: repo.defaultBranch,
+        author: { name: "Codemode", email: "codemode@iterate.com" },
+        ...auth,
+      });
+
+      return {
+        proof: await ctx.workspace.readFile("/codemode-create-repo/normal-git-proof.txt"),
+        pull,
+        status: await ctx.workspace.git.status({ dir: "/codemode-create-repo" }),
+      };
+    });
+
+    expect(pulled.success()).toMatchObject({
+      proof,
+      pull: { pulled: true },
+      status: [],
+    });
+  });
+
   test("can update iterate config repo via workspace", async () => {
     await using fixture = await createTestProjectFixture({
       processors: [CodemodeProcessorContract],
@@ -427,3 +548,28 @@ describe("e2e test map", () => {
     await vi.waitFor(getHtml, { timeout: 15_000 });
   });
 });
+
+async function createTempDirectory(prefix: string) {
+  const path = await mkdtemp(join(tmpdir(), prefix));
+  return {
+    path,
+    async [Symbol.asyncDispose]() {
+      await rm(path, { force: true, recursive: true });
+    },
+  };
+}
+
+async function runGit(input: { args: string[]; cwd: string }) {
+  const result = await x("git", input.args, {
+    throwOnError: true,
+    nodeOptions: {
+      cwd: input.cwd,
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: "0",
+      },
+      stdio: "pipe",
+    },
+  });
+  return result.stdout.trim();
+}

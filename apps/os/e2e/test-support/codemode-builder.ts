@@ -145,7 +145,7 @@ type OptionalProjectDeep<T> = T extends (
   ? (params: Omit<P, "projectSlugOrId"> & { projectSlugOrId?: string }) => R
   : { [K in keyof T]: OptionalProjectDeep<T[K]> };
 
-type Stubify<T> = {
+type Stubify<T> = PromiseLike<T> & {
   [K in keyof T]: T[K] extends (...args: infer A) => infer R
     ? (
         ...args: A
