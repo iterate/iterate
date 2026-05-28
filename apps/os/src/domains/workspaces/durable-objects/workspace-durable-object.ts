@@ -11,7 +11,7 @@ export type WorkspaceStructuredName = {
 
 export type CloudflareShellState = import("@cloudflare/shell").StateBackend & {
   git: import("@cloudflare/shell/git").Git;
-} & Record<string, unknown>;
+};
 
 const WorkspaceStructuredName = z.object({
   projectId: z.string().trim().min(1),
