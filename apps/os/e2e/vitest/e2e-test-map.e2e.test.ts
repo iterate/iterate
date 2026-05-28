@@ -346,9 +346,7 @@ describe("e2e test map", () => {
     await using fixture = await createTestProjectFixture({
       processors: [CodemodeProcessorContract],
     });
-    const repoSlug = "codemode-create-repo";
-    const proofFileName = "normal-git-proof.txt";
-    const proof = `normal git proof for ${fixture.project.slug}\n`;
+    const proof = `normal git proof for ${fixture.project.slug}`;
 
     await fixture.append({
       event: {
@@ -386,23 +384,26 @@ describe("e2e test map", () => {
       initialReadme: expect.stringContaining(`Project ID: ${fixture.project.id}`),
       repo: {
         defaultBranch: "main",
-        slug: repoSlug,
+        slug: "codemode-create-repo",
       },
       status: [],
     });
 
     await using temp = await createTempDirectory("os-codemode-repo-");
-    const localRepoDir = join(temp.path, repoSlug);
+    const localRepoDir = join(temp.path, "codemode-create-repo");
     const repo = created.success().repo;
     const authHeader = repo.git.authorizationHeader;
 
-    await runGit({
+    await gitLocalCli({
       args: ["-c", `http.extraHeader=${authHeader}`, "clone", repo.remote, localRepoDir],
       cwd: temp.path,
     });
-    await writeFile(join(localRepoDir, proofFileName), proof);
-    await runGit({ args: ["-C", localRepoDir, "add", proofFileName], cwd: temp.path });
-    await runGit({
+    await writeFile(join(localRepoDir, "proofFileName"), proof);
+    await gitLocalCli({
+      args: ["-C", localRepoDir, "add", "normal-git-proof.txt"],
+      cwd: temp.path,
+    });
+    await gitLocalCli({
       args: [
         "-C",
         localRepoDir,
@@ -416,7 +417,7 @@ describe("e2e test map", () => {
       ],
       cwd: temp.path,
     });
-    await runGit({
+    await gitLocalCli({
       args: [
         "-C",
         localRepoDir,
@@ -429,21 +430,19 @@ describe("e2e test map", () => {
       cwd: temp.path,
     });
 
-    expect(await readFile(join(localRepoDir, proofFileName), "utf8")).toBe(proof);
-    expect(await runGit({ args: ["-C", localRepoDir, "status", "--short"], cwd: temp.path })).toBe(
-      "",
-    );
+    expect(await readFile(join(localRepoDir, "normal-git-proof.txt"), "utf8")).toBe(proof);
+    expect(
+      await gitLocalCli({ args: ["-C", localRepoDir, "status", "--short"], cwd: temp.path }),
+    ).toBe("");
 
     const pulled = await fixture.codemode.execute(async (ctx) => {
-      const repo = await ctx.repos.get({ slug: "codemode-create-repo" }).getInfo();
-      const password = repo.token.includes("?expires=")
-        ? repo.token.split("?expires=")[0]
-        : repo.token;
-      const auth = { username: "x", password };
+      const repo = ctx.repos.get({ slug: "codemode-create-repo" });
+      const repoInfo = await repo.getInfo();
+      const auth = await repo.getCredentials();
       const pull = await ctx.workspace.git.pull({
         dir: "/codemode-create-repo",
         remote: "origin",
-        ref: repo.defaultBranch,
+        ref: repoInfo.defaultBranch,
         author: { name: "Codemode", email: "codemode@iterate.com" },
         ...auth,
       });
@@ -559,7 +558,7 @@ async function createTempDirectory(prefix: string) {
   };
 }
 
-async function runGit(input: { args: string[]; cwd: string }) {
+async function gitLocalCli(input: { args: string[]; cwd: string }) {
   const result = await x("git", input.args, {
     throwOnError: true,
     nodeOptions: {
