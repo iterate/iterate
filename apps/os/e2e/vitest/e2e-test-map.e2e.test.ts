@@ -398,7 +398,7 @@ describe("e2e test map", () => {
       args: ["-c", `http.extraHeader=${authHeader}`, "clone", repo.remote, localRepoDir],
       cwd: temp.path,
     });
-    await writeFile(join(localRepoDir, "proofFileName"), proof);
+    await writeFile(join(localRepoDir, "normal-git-proof.txt"), proof);
     await gitLocalCli({
       args: ["-C", localRepoDir, "add", "normal-git-proof.txt"],
       cwd: temp.path,
