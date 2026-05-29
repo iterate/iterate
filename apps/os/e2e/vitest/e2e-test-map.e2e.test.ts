@@ -389,50 +389,23 @@ describe("e2e test map", () => {
     });
 
     await using temp = await createTempDirectory("os-codemode-repo-");
-    const localRepoDir = join(temp.path, "codemode-create-repo");
     const repo = created.success().repo;
     const authHeader = repo.git.authorizationHeader;
 
-    await gitLocalCli({
-      args: ["-c", `http.extraHeader=${authHeader}`, "clone", repo.remote, localRepoDir],
-      cwd: temp.path,
-    });
-    await writeFile(join(localRepoDir, "normal-git-proof.txt"), proof);
-    await gitLocalCli({
-      args: ["-C", localRepoDir, "add", "normal-git-proof.txt"],
-      cwd: temp.path,
-    });
-    await gitLocalCli({
-      args: [
-        "-C",
-        localRepoDir,
-        "-c",
-        "user.name=Codemode E2E",
-        "-c",
-        "user.email=codemode-e2e@iterate.com",
-        "commit",
-        "-m",
-        "Add normal git proof",
-      ],
-      cwd: temp.path,
-    });
-    await gitLocalCli({
-      args: [
-        "-C",
-        localRepoDir,
-        "-c",
-        `http.extraHeader=${authHeader}`,
-        "push",
-        "origin",
-        repo.defaultBranch,
-      ],
-      cwd: temp.path,
-    });
+    await temp.exec(
+      `git config --global http.extraHeader "${authHeader}" && git config --global user.name "Codemode E2E" && git config --global user.email codemode-e2e@iterate.com`,
+    );
+    await temp.exec(`git clone ${repo.remote} codemode-create-repo`);
+    const repoExec = temp.getExec("codemode-create-repo");
+    await writeFile(join(temp.path, "codemode-create-repo", "normal-git-proof.txt"), proof);
+    await repoExec(`git add normal-git-proof.txt`);
+    await repoExec(`git commit -m "Add normal git proof"`);
+    await repoExec(`git push origin ${repo.defaultBranch}`);
 
-    expect(await readFile(join(localRepoDir, "normal-git-proof.txt"), "utf8")).toBe(proof);
     expect(
-      await gitLocalCli({ args: ["-C", localRepoDir, "status", "--short"], cwd: temp.path }),
-    ).toBe("");
+      await readFile(join(temp.path, "codemode-create-repo", "normal-git-proof.txt"), "utf8"),
+    ).toBe(proof);
+    expect(await repoExec(`git status --short`)).toBe("");
 
     const pulled = await fixture.codemode.execute(async (ctx) => {
       const repo = await ctx.repos.get({ slug: "codemode-create-repo" }).getInfo();
@@ -510,10 +483,7 @@ describe("e2e test map", () => {
         commit,
         proof,
         pushed,
-        repo: {
-          defaultBranch: repo.defaultBranch,
-          slug: repo.slug,
-        },
+        repo: { defaultBranch: repo.defaultBranch, slug: repo.slug },
         status: await ctx.workspace.git.status({ dir }),
       };
     });
@@ -541,27 +511,35 @@ describe("e2e test map", () => {
   });
 });
 
+function getExec(home: string, cwd: string) {
+  return async (command: string) => {
+    const result = await x("sh", ["-c", command], {
+      throwOnError: true,
+      nodeOptions: {
+        cwd,
+        env: {
+          ...process.env,
+          GIT_CONFIG_GLOBAL: join(home, ".gitconfig"),
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_TERMINAL_PROMPT: "0",
+          HOME: home,
+          XDG_CONFIG_HOME: home,
+        },
+        stdio: "pipe",
+      },
+    });
+    return result.stdout.trim();
+  };
+}
+
 async function createTempDirectory(prefix: string) {
   const path = await mkdtemp(join(tmpdir(), prefix));
   return {
     path,
+    exec: getExec(path, path),
+    getExec: (subdir: string) => getExec(path, join(path, subdir)),
     async [Symbol.asyncDispose]() {
       await rm(path, { force: true, recursive: true });
     },
   };
-}
-
-async function gitLocalCli(input: { args: string[]; cwd: string }) {
-  const result = await x("git", input.args, {
-    throwOnError: true,
-    nodeOptions: {
-      cwd: input.cwd,
-      env: {
-        ...process.env,
-        GIT_TERMINAL_PROMPT: "0",
-      },
-      stdio: "pipe",
-    },
-  });
-  return result.stdout.trim();
 }
