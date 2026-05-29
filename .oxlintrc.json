@@ -119,13 +119,21 @@
     "iterate/no-implied-eval": "error",
     "prefer-const": "off",
     "iterate/prefer-const": "error",
+    "iterate/isolated-codemode": [
+      "error",
+      {
+        "selectors": [":function[codemode]"],
+        "overrideGlobals": {
+          "crypto": "readonly",
+          "fetch": "readonly",
+          "console": "readonly",
+          "setTimeout": "readonly"
+        }
+      }
+    ],
     "unicorn-js/isolated-functions": [
       "error",
       {
-        "selectors": [
-          "CallExpression[callee.object.object.name=\"fixture\"][callee.object.property.name=\"codemode\"] > :function",
-          "CallExpression[callee.object.callee.object.object.name=\"fixture\"][callee.object.callee.object.property.name=\"codemode\"] > :function"
-        ],
         "overrideGlobals": {
           "crypto": "readonly",
           "fetch": "readonly",

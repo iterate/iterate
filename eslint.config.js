@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
 import esquery from "esquery";
+import unicorn from "eslint-plugin-unicorn";
 
 const LIFECYCLE_HOOKS = new Set(["beforeAll", "beforeEach", "afterAll", "afterEach"]);
 const VI_MOCK_CALLS = new Set(["vi.mock", "vi.doMock"]);
@@ -101,6 +102,31 @@ function isFunctionLikeDeclaration(node) {
     );
   });
 }
+
+const isolatedCodemodeRule = {
+  ...unicorn.rules["isolated-functions"],
+  create(context) {
+    const original = unicorn.rules["isolated-functions"].create(context);
+    for (const codemodeSelector of [":function[codemode]", ":function[codemode]:exit"]) {
+      if (codemodeSelector in original) {
+        const cb = original[codemodeSelector];
+        delete original[codemodeSelector];
+        const suffix = codemodeSelector.match(/:exit$/)?.[0] || "";
+        const nonClashingCatchallFunctionSelector = `FunctionExpression[random!="${Math.random()}"]${suffix}`;
+        original[nonClashingCatchallFunctionSelector] = (node, ...args) => {
+          const parentCallee = node.parent?.callee;
+          if (!parentCallee) return;
+          if (!context.sourceCode.getText(parentCallee).match(/\bcodemode\b/i)) return;
+          if (!context.sourceCode.getText(parentCallee).match(/\bfixture\b/i)) return;
+          return cb(node, ...args);
+        };
+        original[`Arrow${nonClashingCatchallFunctionSelector}`] =
+          original[nonClashingCatchallFunctionSelector];
+      }
+    }
+    return original;
+  },
+};
 
 /** @param {import("estree").CallExpression} node */
 function getMatcherCall(node) {
@@ -308,6 +334,7 @@ const plugin = {
               };
             },
           },
+          "isolated-codemode": isolatedCodemodeRule,
           "relative-import-extensions": {
             meta: {
               type: "problem",

@@ -46,7 +46,7 @@ export class WorkspaceCapability extends WorkerEntrypoint<
     return await callMethod({
       method,
       namespace: "ctx.workspace",
-      target: state,
+      target: state as {},
       args: input.args,
     });
   }

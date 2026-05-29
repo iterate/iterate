@@ -53,6 +53,7 @@ export type RepoInfo = {
   slug: string;
   token: string;
   tokenExpiresAt: string | null;
+  credentials: { username: string; password: string };
 };
 
 export type CreateRepoInput = {
@@ -260,6 +261,7 @@ export class RepoDurableObject extends RepoBase<RepoEnv> {
       slug: repo.slug,
       token,
       tokenExpiresAt,
+      credentials: { username: "x", password: stripArtifactTokenQuery(token) },
     };
   }
 
