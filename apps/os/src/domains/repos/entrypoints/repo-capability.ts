@@ -57,11 +57,6 @@ export class RepoHandle extends RpcTarget {
     return await this.#repo.getInfo();
   }
 
-  async getCredentials() {
-    const info = await this.getInfo();
-    return { username: "x", password: info.token.split("?expires=")[0] };
-  }
-
   async refreshWriteToken(): Promise<RepoInfo> {
     return await this.#repo.refreshWriteToken();
   }

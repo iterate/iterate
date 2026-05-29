@@ -363,14 +363,13 @@ describe("e2e test map", () => {
 
     const created = await fixture.codemode.execute(async (ctx) => {
       const repo = await ctx.repos.create({ slug: "codemode-create-repo" }).getInfo();
-      const credentials = await ctx.repos.get({ slug: "codemode-create-repo" }).getCredentials();
 
       await ctx.workspace.git.clone({
         url: repo.remote,
         dir: "/codemode-create-repo",
         branch: repo.defaultBranch,
         depth: 1,
-        ...credentials,
+        ...repo.credentials,
       });
 
       return {
@@ -436,15 +435,13 @@ describe("e2e test map", () => {
     ).toBe("");
 
     const pulled = await fixture.codemode.execute(async (ctx) => {
-      const repo = ctx.repos.get({ slug: "codemode-create-repo" });
-      const repoInfo = await repo.getInfo();
-      const auth = await repo.getCredentials();
+      const repo = await ctx.repos.get({ slug: "codemode-create-repo" }).getInfo();
       const pull = await ctx.workspace.git.pull({
         dir: "/codemode-create-repo",
         remote: "origin",
-        ref: repoInfo.defaultBranch,
+        ref: repo.defaultBranch,
         author: { name: "Codemode", email: "codemode@iterate.com" },
-        ...auth,
+        ...repo.credentials,
       });
 
       return {
@@ -483,17 +480,13 @@ describe("e2e test map", () => {
       const proof = `hello from iterate config ${Date.now()}`;
       const repo = await ctx.repos.ensureIterateConfigInfo({ projectSlug: null });
       const dir = `/iterate-config-${Date.now()}`;
-      const password = repo.token.includes("?expires=")
-        ? repo.token.split("?expires=")[0]
-        : repo.token;
-      const auth = { username: "x", password };
 
       await ctx.workspace.git.clone({
         url: repo.remote,
         dir,
         branch: repo.defaultBranch,
         depth: 1,
-        ...auth,
+        ...repo.credentials,
       });
 
       await ctx.workspace.writeFile(
@@ -510,7 +503,7 @@ describe("e2e test map", () => {
         dir,
         remote: "origin",
         ref: repo.defaultBranch,
-        ...auth,
+        ...repo.credentials,
       });
 
       return {
