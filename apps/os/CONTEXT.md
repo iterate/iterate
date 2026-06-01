@@ -83,8 +83,10 @@ The Worker environment binding used by server code to obtain Project Durable Obj
 _Avoid_: project context, resolved project
 
 **Project MCP Route**:
-The OS `/mcp` resource for project-scoped MCP sessions. The selected Project
-comes from OAuth token project claims or an admin-token `?project=...` selector.
+The OS `/mcp` resource for project-scoped MCP sessions. OAuth access tokens
+expose projects granted by token claims and scopes; admin-token sessions expose
+all projects. Project-scoped tools such as `exec_js` select the Project per
+invocation.
 _Avoid_: Project MCP hostname, ingress MCP alias
 
 **Ingress Hostname**:
@@ -553,9 +555,11 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - Every Project has a **Slug Project Ingress Host** derived from the current **Project Slug**.
 - The **Stable Project Ingress Host** remains routable even when the slug-derived host changes.
 - Custom hostname, default-host, dashboard-host, and stream-host lifecycle are future ingress work, not current routing behavior.
-- A **Project MCP Route** identifies exactly one **Project**.
-- A **Project MCP Route** is selected through OS `/mcp`, using auth-worker
-  project claims or an admin-token `?project=...` selector.
+- A **Project MCP Route** may expose one or more authorized **Projects**.
+- A **Project MCP Route** is served through OS `/mcp`, using auth-worker project
+  claims and scopes or an admin token that exposes all projects.
+- Project-scoped MCP tools select one **Project** per invocation before touching
+  project-local capabilities.
 - OS exposes one global MCP resource at `/mcp`; it does not expose per-project
   MCP hostnames.
 - The OS Worker classifies every request by **Ingress Hostname** before invoking the **OS App**.
@@ -637,7 +641,9 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - Project MCP server `exec_js` starts a **Script Execution** and therefore requires a **Script**.
 - Browser session creation and Project MCP server `exec_js` share the same internal attach-or-create and stream append behavior.
 - A **Project Route** resolves its **Project Slug** to the stable **Project ID** before initializing a **Codemode Session**.
-- A **Project MCP Route** resolves to the stable **Project ID** from token claims or an admin-token project selector before initializing a **Codemode Session**.
+- A **Project MCP Route** resolves to the stable **Project ID** from token claims
+  or the tool invocation's selected project slug before initializing a
+  **Codemode Session**.
 - A **User** acts through their **Active Organization** when managing **Projects**.
 - A signed-in **User** without an **Active Organization** must create or select an **Organization** before using OS.
 - A remote OAuth MCP client calls OS with an **OAuth Access Token**.
@@ -1018,7 +1024,7 @@ The provider composition case targets provider-to-provider Tool Function Calls: 
 > **Domain expert:** "No. The concept is **Codemode Session**. Browser UI creates explicit Codemode Sessions with their own Event Stream Paths; Project MCP server connections reuse the MCP connection's existing Event Stream Path."
 
 > **Dev:** "Should MCP `exec_js` take a project selector?"
-> **Domain expert:** "Only when the OAuth token or admin caller has multiple project choices. MCP is project-scoped after the **OS MCP Handler** resolves the selected **Project**."
+> **Domain expert:** "Only when the OAuth token or admin caller has multiple project choices. The tool schema exposes a project slug enum, and `exec_js` resolves that slug to the stable **Project ID** before running codemode."
 
 > **Dev:** "Does a Codemode Session init with the project slug?"
 > **Domain expert:** "No. Routes use **Project Slug**, but Codemode Session init uses the stable **Project ID** resolved from that route."
@@ -1075,7 +1081,7 @@ The provider composition case targets provider-to-provider Tool Function Calls: 
 > **Domain expert:** "Not yet. Keep it exported from the main OS Worker while Project ingress depends on **Loopback Fetch Callables** with dynamic props."
 
 > **Dev:** "Does `/mcp` on a Project-owned hostname route to the Project MCP server?"
-> **Domain expert:** "No. MCP is served by the OS app at `/mcp`; project selection comes from token claims or an admin-token project selector."
+> **Domain expert:** "No. MCP is served by the OS app at `/mcp`; OAuth sessions expose token-granted projects, admin-token sessions expose all projects, and project-scoped tools select one project per invocation."
 
 > **Dev:** "Does the Project Durable Object need to understand MCP protocol paths?"
 > **Domain expert:** "No. The OS `/mcp` handler owns protocol paths, OAuth metadata, browser setup instructions, and unsupported-path responses."

@@ -99,8 +99,8 @@ doppler run --config prd -- pnpm cli rpc project streams read \
 
 ### Project MCP
 
-The OS MCP resource is served by the OS app at `/mcp`; select a project with
-the CLI's `--project-slug-or-id` flag.
+The OS MCP resource is served by the OS app at `/mcp`. Admin-token sessions
+expose all projects and the `exec_js` tool requires a project slug when it runs.
 
 ```txt
 https://os.iterate.com/mcp
@@ -110,7 +110,7 @@ Start Claude with that MCP server preconfigured:
 
 ```bash
 cd apps/os
-doppler run --config prd -- pnpm cli claude-mcp --project-slug-or-id iterate
+doppler run --config prd -- pnpm cli claude-mcp
 ```
 
 For previews, run under the preview Doppler config.
@@ -118,13 +118,13 @@ For previews, run under the preview Doppler config.
 ```bash
 doppler run --config preview_3 -- pnpm cli rpc projects list
 doppler run --config preview_3 -- \
-  pnpm cli claude-mcp --project-slug-or-id <existing-preview-project-slug>
+  pnpm cli claude-mcp
 ```
 
 Or leave it running in tmux:
 
 ```bash
-tmux new -s os-iterate-mcp 'cd apps/os && doppler run --config prd -- pnpm cli claude-mcp --project-slug-or-id iterate'
+tmux new -s os-iterate-mcp 'cd apps/os && doppler run --config prd -- pnpm cli claude-mcp'
 ```
 
 ## Authentication

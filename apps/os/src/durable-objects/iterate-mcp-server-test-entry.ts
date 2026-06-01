@@ -85,17 +85,58 @@ export class TestLeafProvider extends WorkerEntrypoint {
 export default {
   fetch(request, env, ctx) {
     const ctxWithProps = ctx as ExecutionContext & { props?: ProjectMcpServerConnectionProps };
-    ctxWithProps.props = {
-      clientId: "mcp-client-test",
-      orgId: "org_test",
-      orgPermissions: [],
-      orgRole: "admin",
-      orgSlug: "test-org",
-      projectId: "proj__test__inboundmcp",
-      projectSlug: "mcp-project",
-      scopes: ["profile"],
-      userId: "user_test",
-    };
+    ctxWithProps.props = propsForRequest(request);
     return mcpHandler.fetch(request, env, ctx);
   },
 } satisfies ExportedHandler<Env>;
+
+function propsForRequest(request: Request): ProjectMcpServerConnectionProps {
+  const mode = new URL(request.url).searchParams.get("mode");
+  if (mode === "multi" || mode === "admin") {
+    return {
+      authType: mode === "admin" ? "admin_api_secret" : "oauth_access_token",
+      clientId: "mcp-client-test",
+      orgId: mode === "admin" ? "admin-api" : "org_test",
+      orgPermissions: mode === "admin" ? ["admin:api"] : [],
+      orgRole: mode === "admin" ? "admin" : null,
+      orgSlug: mode === "admin" ? null : "test-org",
+      projectId: null,
+      projectSlug: null,
+      projects: [
+        {
+          id: "proj__test__inboundmcp",
+          slug: "mcp-project",
+          organizationId: mode === "admin" ? "admin-api" : "org_test",
+          organizationPermissions: mode === "admin" ? ["admin:api"] : [],
+          organizationRole: mode === "admin" ? "admin" : "admin",
+          organizationSlug: mode === "admin" ? null : "test-org",
+        },
+        {
+          id: "proj__test__other",
+          slug: "other-project",
+          organizationId: mode === "admin" ? "admin-api" : "org_test",
+          organizationPermissions: mode === "admin" ? ["admin:api"] : [],
+          organizationRole: mode === "admin" ? "admin" : "admin",
+          organizationSlug: mode === "admin" ? null : "test-org",
+        },
+      ],
+      scopes:
+        mode === "admin"
+          ? ["profile"]
+          : ["profile", "project", "project:proj__test__inboundmcp", "project:proj__test__other"],
+      userId: mode === "admin" ? "admin-api-secret" : "user_test",
+    };
+  }
+
+  return {
+    clientId: "mcp-client-test",
+    orgId: "org_test",
+    orgPermissions: [],
+    orgRole: "admin",
+    orgSlug: "test-org",
+    projectId: "proj__test__inboundmcp",
+    projectSlug: "mcp-project",
+    scopes: ["profile", "project", "project:proj__test__inboundmcp"],
+    userId: "user_test",
+  };
+}

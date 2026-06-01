@@ -168,7 +168,9 @@ export class ProjectMcpServerConnection extends McpAgent<
   async init() {
     const auth = this.requireAuthProps();
     const availableProjects = this.resolveAvailableProjects(auth);
-    const schema = this.createExecJsInputSchema(availableProjects);
+    const requireProjectInput =
+      auth.authType === "admin_api_secret" || availableProjects.length > 1;
+    const schema = this.createExecJsInputSchema(availableProjects, { requireProjectInput });
     const providerDocs = [
       ...createDefaultOutboundMcpProviderRegistrations(),
       ...this.createStaticCodemodeToolProviders(this.authForProject(auth, availableProjects[0])),
@@ -199,7 +201,7 @@ export class ProjectMcpServerConnection extends McpAgent<
         const project = typeof parsedInput.project === "string" ? parsedInput.project : undefined;
         const auth = this.authForProject(
           this.requireAuthProps(),
-          this.resolveToolProject(availableProjects, project),
+          this.resolveToolProject(availableProjects, project, { requireProjectInput }),
         );
         this.requireScope(auth, requiredToolScope);
         const providers = this.createStaticCodemodeToolProviders(auth);
@@ -376,14 +378,18 @@ export class ProjectMcpServerConnection extends McpAgent<
     try {
       const streamPath = await this.getSessionStreamPath();
       const auth = this.requireAuthProps();
-      if (!auth.projectId) {
+      const projectId =
+        typeof payload.projectId === "string"
+          ? payload.projectId
+          : (auth.projectId ?? this.resolveAvailableProjects(auth)[0]?.id);
+      if (!projectId) {
         return;
       }
 
       await getStreamsCapability({
         exports: this.workerExports(),
         props: streamCapabilityProps({
-          projectId: auth.projectId,
+          projectId,
           streamPath,
         }),
       }).append({
@@ -535,11 +541,11 @@ export class ProjectMcpServerConnection extends McpAgent<
     throw new Error("MCP token does not grant access to any projects.");
   }
 
-  private createExecJsInputSchema(projects: ProjectMcpServerConnectionProject[]) {
-    const projectDescription =
-      projects.length === 1
-        ? undefined
-        : `Project slug or ID. One of: ${projects.map((project) => project.slug).join(", ")}`;
+  private createExecJsInputSchema(
+    projects: ProjectMcpServerConnectionProject[],
+    options: { requireProjectInput: boolean },
+  ) {
+    const projectSlugs = Array.from(new Set(projects.map((project) => project.slug))).sort();
 
     return z.object({
       code: z
@@ -547,9 +553,11 @@ export class ProjectMcpServerConnection extends McpAgent<
         .describe(
           "JavaScript async arrow function to execute, e.g. `async (ctx) => { return await ctx.os.listProcedures(); }`",
         ),
-      ...(projectDescription
+      ...(options.requireProjectInput
         ? {
-            project: z.string().describe(projectDescription),
+            project: z
+              .enum(projectSlugs as [string, ...string[]])
+              .describe("Project slug to run this code against."),
           }
         : {}),
     });
@@ -558,21 +566,18 @@ export class ProjectMcpServerConnection extends McpAgent<
   private resolveToolProject(
     projects: ProjectMcpServerConnectionProject[],
     requestedProject: string | undefined,
+    options: { requireProjectInput: boolean },
   ) {
-    if (projects.length === 1 && !requestedProject) {
+    if (!options.requireProjectInput && projects.length === 1 && !requestedProject) {
       return projects[0];
     }
 
     const normalizedRequestedProject = requestedProject?.trim();
     if (!normalizedRequestedProject) {
-      throw new Error("This MCP token grants multiple projects. Pass a project slug or ID.");
+      throw new Error("Pass a project slug.");
     }
 
-    const project = projects.find(
-      (candidate) =>
-        candidate.id === normalizedRequestedProject ||
-        candidate.slug === normalizedRequestedProject,
-    );
+    const project = projects.find((candidate) => candidate.slug === normalizedRequestedProject);
     if (!project) {
       throw new Error(`MCP token does not grant access to project: ${normalizedRequestedProject}`);
     }

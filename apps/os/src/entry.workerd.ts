@@ -106,8 +106,14 @@ export default {
         if (durableObjectDebugResponse) return durableObjectDebugResponse;
 
         const db = createD1Client(env.DB);
+        const requestConfig = config.baseUrl
+          ? config
+          : {
+              ...config,
+              baseUrl: new URL(request.url).origin as AppConfig["baseUrl"],
+            };
         const projectHostnameBases = config.projectHostnameBases;
-        const appHostname = config.baseUrl ? new URL(config.baseUrl).hostname : null;
+        const appHostname = requestConfig.baseUrl ? new URL(requestConfig.baseUrl).hostname : null;
         const ingressMatch = await matchIngressRequest({
           request,
           lookupRule: async (host) => {
@@ -144,7 +150,7 @@ export default {
         const envWithArtifacts = env as Env & { ARTIFACTS?: CloudflareArtifactsBinding };
         const context: AppContext = {
           manifest,
-          config,
+          config: requestConfig,
           rawRequest: request,
           db,
           doCatalog: env.DB,
