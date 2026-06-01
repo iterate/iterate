@@ -9,12 +9,21 @@ import {
   CardTitle,
 } from "@iterate-com/ui/components/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@iterate-com/ui/components/avatar";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@iterate-com/ui/components/dialog";
 import { Separator } from "@iterate-com/ui/components/separator";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Field, FieldError, FieldGroup, FieldLabel } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
+import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
 import { z } from "zod/v4";
 import { authClient, useSession } from "../../utils/auth-client.ts";
 import { getInitials } from "../../utils/initials.ts";
@@ -32,12 +41,20 @@ const CreateOrganizationInput = z.object({
   name: z.string().trim().min(1, "Organization name is required").max(100),
 });
 
+const CreateProjectInput = z.object({
+  organizationSlug: z.string().trim().min(1, "Organization is required"),
+  name: z.string().trim().min(1, "Project name is required").max(100),
+});
+
 function RouteComponent() {
   const { client_id, scope } = Route.useSearch();
   const navigate = Route.useNavigate();
   const session = useSession();
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[] | null>(null);
   const [organizationName, setOrganizationName] = useState("");
+  const [projectName, setProjectName] = useState("");
+  const [selectedOrganizationSlug, setSelectedOrganizationSlug] = useState("");
+  const [isCreateProjectDialogOpen, setIsCreateProjectDialogOpen] = useState(false);
   const hasOAuthClientId = Boolean(client_id);
   const needsProjectSelection =
     scope?.split(" ").includes(ITERATE_PROJECT_SELECTION_SCOPE) ?? false;
@@ -84,6 +101,24 @@ function RouteComponent() {
 
         window.location.href = result.url;
       }
+    },
+  });
+
+  const createProjectMutation = useMutation({
+    mutationFn: (input: z.infer<typeof CreateProjectInput>) => orpcClient.project.create(input),
+    onSuccess: async (project) => {
+      setProjectName("");
+      setIsCreateProjectDialogOpen(false);
+      setSelectedProjectIds((current) => {
+        const existingProjectIds =
+          projectSelectionQuery.data?.flatMap((selection) =>
+            selection.projects.map((project) => project.id),
+          ) ?? [];
+        const next = new Set(current ?? existingProjectIds);
+        next.add(project.id);
+        return Array.from(next);
+      });
+      await projectSelectionQuery.refetch();
     },
   });
 
@@ -182,15 +217,43 @@ function RouteComponent() {
   const allProjectIds = projectSelections.flatMap((selection) =>
     selection.projects.map((project) => project.id),
   );
+  const hasProjects = allProjectIds.length > 0;
   const effectiveSelectedProjectIds = selectedProjectIds ?? allProjectIds;
   const canContinue = effectiveSelectedProjectIds.length > 0;
   const isCreatingFirstOrganization = organizations.length === 0;
   const parsedOrganization = CreateOrganizationInput.safeParse({ name: organizationName });
+  const effectiveOrganizationSlug =
+    selectedOrganizationSlug ||
+    organizations[0]?.slug ||
+    projectSelections[0]?.organization.slug ||
+    "";
+  const parsedProject = CreateProjectInput.safeParse({
+    organizationSlug: effectiveOrganizationSlug,
+    name: projectName,
+  });
   const isSubmitting =
     createOrganizationMutation.isPending ||
+    createProjectMutation.isPending ||
     saveSelectionMutation.isPending ||
     denyMutation.isPending ||
     switchAccount.isPending;
+
+  const createProjectFormProps = {
+    organizations,
+    projectName,
+    selectedOrganizationSlug: effectiveOrganizationSlug,
+    isSubmitting,
+    isCreating: createProjectMutation.isPending,
+    isValid: parsedProject.success,
+    error: !parsedProject.success && projectName.length > 0 ? parsedProject.error.issues : null,
+    mutationError: createProjectMutation.isError ? createProjectMutation.error.message : null,
+    onProjectNameChange: setProjectName,
+    onOrganizationSlugChange: setSelectedOrganizationSlug,
+    onSubmit: () => {
+      if (!parsedProject.success) return;
+      createProjectMutation.mutate(parsedProject.data);
+    },
+  };
 
   if (isCreatingFirstOrganization) {
     return (
@@ -273,6 +336,62 @@ function RouteComponent() {
     );
   }
 
+  if (!hasProjects) {
+    return (
+      <div className="flex min-h-screen items-center justify-center p-4">
+        <Card className="w-full max-w-sm">
+          <CardHeader className="text-center">
+            {client?.logo_uri && (
+              <img src={client.logo_uri} alt="" className="mx-auto size-12 rounded-lg" />
+            )}
+            <CardTitle className="text-xl">Create a project</CardTitle>
+            <CardDescription className="text-xs">
+              Create your first project before choosing access for{" "}
+              {client?.client_name ?? "this application"}.
+            </CardDescription>
+          </CardHeader>
+          <Separator />
+          <CardContent className="space-y-4">
+            <div className="flex items-center gap-3 rounded-xl border bg-muted/30 p-4">
+              <Avatar>
+                {user.image && <AvatarImage src={user.image} alt={user.name ?? user.email} />}
+                <AvatarFallback>{initials}</AvatarFallback>
+              </Avatar>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium">{user.name ?? "User"}</p>
+                <p className="truncate text-xs text-muted-foreground">{user.email}</p>
+              </div>
+            </div>
+            <CreateProjectForm
+              {...createProjectFormProps}
+              id="create-first-project-form"
+              showSubmitButton={false}
+            />
+          </CardContent>
+          <Separator />
+          <CardFooter className="gap-3">
+            <Button
+              className="flex-1"
+              variant="outline"
+              disabled={isSubmitting}
+              onClick={() => denyMutation.mutate()}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              form="create-first-project-form"
+              className="flex-1"
+              disabled={!parsedProject.success || isSubmitting}
+            >
+              {createProjectMutation.isPending ? "Creating..." : "Create project"}
+            </Button>
+          </CardFooter>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="flex min-h-screen items-center justify-center p-4">
       <Card className="w-full max-w-sm">
@@ -310,48 +429,67 @@ function RouteComponent() {
         </CardContent>
         <Separator />
         <CardContent className="space-y-3">
-          <div className="flex items-start justify-between gap-3">
-            <div>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
               <p className="text-sm font-medium">Select one or more projects</p>
               <p className="text-xs text-muted-foreground">
                 The access token will include these as `project:&lt;id&gt;` entries in its `scopes`
                 claim.
               </p>
             </div>
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                disabled={isSubmitting}
-                onClick={() => setSelectedProjectIds(allProjectIds)}
-              >
-                All
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                disabled={isSubmitting}
-                onClick={() => setSelectedProjectIds([])}
-              >
-                None
-              </Button>
+            <div className="flex shrink-0 flex-wrap justify-end gap-2">
+              <Dialog open={isCreateProjectDialogOpen} onOpenChange={setIsCreateProjectDialogOpen}>
+                <DialogTrigger
+                  render={
+                    <Button type="button" size="sm" variant="outline" disabled={isSubmitting}>
+                      New project
+                    </Button>
+                  }
+                />
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Create project</DialogTitle>
+                    <DialogDescription>
+                      Create another project, then choose whether to include it in this access
+                      grant.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <CreateProjectForm {...createProjectFormProps} />
+                </DialogContent>
+              </Dialog>
+              <div className="flex gap-1">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  disabled={isSubmitting}
+                  onClick={() => setSelectedProjectIds(allProjectIds)}
+                >
+                  All
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  disabled={isSubmitting}
+                  onClick={() => setSelectedProjectIds([])}
+                >
+                  None
+                </Button>
+              </div>
             </div>
           </div>
-          {projectSelections.length === 0 ? (
-            <p className="text-sm text-muted-foreground">You do not have any projects to share.</p>
-          ) : (
-            <div className="space-y-3">
-              {projectSelections.map((selection) => (
-                <section key={selection.organization.id} className="space-y-2">
-                  <div>
-                    <p className="text-sm font-medium">{selection.organization.name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {selection.projects.length} project
-                      {selection.projects.length === 1 ? "" : "s"}
-                    </p>
-                  </div>
+          <div className="space-y-3">
+            {projectSelections.map((selection) => (
+              <section key={selection.organization.id} className="space-y-2">
+                <div>
+                  <p className="text-sm font-medium">{selection.organization.name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {selection.projects.length} project
+                    {selection.projects.length === 1 ? "" : "s"}
+                  </p>
+                </div>
+                {selection.projects.length > 0 ? (
                   <div className="space-y-2">
                     {selection.projects.map((project) => {
                       const checked = effectiveSelectedProjectIds.includes(project.id);
@@ -386,10 +524,10 @@ function RouteComponent() {
                       );
                     })}
                   </div>
-                </section>
-              ))}
-            </div>
-          )}
+                ) : null}
+              </section>
+            ))}
+          </div>
         </CardContent>
         <Separator />
         <CardFooter className="gap-3">
@@ -411,5 +549,73 @@ function RouteComponent() {
         </CardFooter>
       </Card>
     </div>
+  );
+}
+
+function CreateProjectForm(props: {
+  id?: string;
+  className?: string;
+  organizations: { id: string; name: string; slug: string }[];
+  projectName: string;
+  selectedOrganizationSlug: string;
+  isSubmitting: boolean;
+  isCreating: boolean;
+  isValid: boolean;
+  error: z.core.$ZodIssue[] | null;
+  mutationError: string | null;
+  showSubmitButton?: boolean;
+  onProjectNameChange: (value: string) => void;
+  onOrganizationSlugChange: (value: string) => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <form
+      id={props.id}
+      className={props.className ? `space-y-3 ${props.className}` : "space-y-3"}
+      onSubmit={(event) => {
+        event.preventDefault();
+        props.onSubmit();
+      }}
+    >
+      <FieldGroup>
+        <Field>
+          <FieldLabel htmlFor="project-organization">Organization</FieldLabel>
+          <NativeSelect
+            id="project-organization"
+            className="w-full"
+            value={props.selectedOrganizationSlug}
+            onChange={(event) => props.onOrganizationSlugChange(event.target.value)}
+            disabled={props.organizations.length === 0 || props.isSubmitting}
+          >
+            {props.organizations.map((organization) => (
+              <NativeSelectOption key={organization.id} value={organization.slug}>
+                {organization.name}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+        </Field>
+        <Field data-invalid={Boolean(props.error)}>
+          <FieldLabel htmlFor="project-name">Project name</FieldLabel>
+          <Input
+            id="project-name"
+            name="project-name"
+            placeholder="MCP Alpha"
+            value={props.projectName}
+            onChange={(event) => props.onProjectNameChange(event.target.value)}
+            aria-invalid={Boolean(props.error)}
+            disabled={props.isSubmitting}
+          />
+          {props.error ? <FieldError errors={props.error} /> : null}
+        </Field>
+      </FieldGroup>
+      {props.mutationError ? (
+        <p className="text-sm text-destructive">{props.mutationError}</p>
+      ) : null}
+      {(props.showSubmitButton ?? true) ? (
+        <Button type="submit" size="sm" disabled={!props.isValid || props.isSubmitting}>
+          {props.isCreating ? "Creating..." : "Create project"}
+        </Button>
+      ) : null}
+    </form>
   );
 }
