@@ -14,7 +14,8 @@ const ClaudeMcpInput = z.object({
     .trim()
     .min(1)
     .regex(/^[a-zA-Z0-9_-]+$/, "Project slug or ID must be hostname-safe")
-    .describe("OS project slug or ID used for the admin-token MCP project selector"),
+    .optional()
+    .describe("Deprecated; admin-token MCP sessions now expose all projects."),
   baseHost: z
     .string()
     .trim()
@@ -35,15 +36,12 @@ export const claudeMcpScript = os
   .input(ClaudeMcpInput)
   .meta({
     description:
-      "Print the Claude Code command for one remote OS project MCP server (after Doppler admin-token preflight)",
+      "Print the Claude Code command for the remote OS MCP server (after Doppler admin-token preflight)",
   })
   .handler(async ({ input }) => {
     const adminToken = requireEnv("APP_CONFIG_ADMIN_API_SECRET");
     const baseUrl = input.baseHost ? normalizeBaseUrl(input.baseHost) : defaultBaseUrlFromEnv();
-    const mcpUrl = buildProjectMcpUrl({
-      baseUrl,
-      projectSlugOrId: input.projectSlugOrId,
-    });
+    const mcpUrl = buildProjectMcpUrl({ baseUrl });
     await assertMcpAdminBearerAccepted({ mcpUrl, token: adminToken });
     const command = buildClaudeShellCommand([
       "--mcp-config",
@@ -77,9 +75,8 @@ function requireEnv(name: string) {
   return value;
 }
 
-function buildProjectMcpUrl(input: { baseUrl: string; projectSlugOrId: string }) {
+function buildProjectMcpUrl(input: { baseUrl: string }) {
   const url = new URL("/mcp", normalizeBaseUrl(input.baseUrl));
-  url.searchParams.set("project", input.projectSlugOrId);
   return url.toString();
 }
 

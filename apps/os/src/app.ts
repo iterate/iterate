@@ -44,7 +44,7 @@ export const DEFAULT_GOOGLE_OAUTH_SCOPES = [
 ];
 
 export const AppConfig = BaseAppConfig.extend({
-  baseUrl: publicValue(z.url()).optional(),
+  baseUrl: publicValue(z.url().optional()),
   adminApiSecret: redacted(z.string().trim().min(1)).optional(),
   iterateAuth: z
     .object({

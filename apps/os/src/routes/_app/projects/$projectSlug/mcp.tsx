@@ -66,7 +66,7 @@ function ProjectMcpPage() {
     config.baseUrl && config.baseUrl !== "https://os.iterate.com"
       ? ` --base-host ${config.baseUrl}`
       : "";
-  const cliCommand = `cd apps/os && pnpm cli claude-mcp --project-slug-or-id ${project.slug}${cliBaseHostFlag}`;
+  const cliCommand = `cd apps/os && pnpm cli claude-mcp${cliBaseHostFlag}`;
   const cliCommandHint =
     config.baseUrl === "https://os.iterate.com"
       ? "Run from the repo root. Uses the admin token for auth and disables all other MCP servers. For production, prefix with: doppler run --project os --config prd --"

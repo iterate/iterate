@@ -24,8 +24,9 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
     try {
       await client.connect(transport);
 
-      await expect(client.listTools()).resolves.toMatchObject({
-        tools: expect.arrayContaining([expect.objectContaining({ name: "exec_js" })]),
+      const execJsTool = findExecJsTool(await client.listTools());
+      expect(execJsTool.inputSchema).toMatchObject({
+        properties: expect.not.objectContaining({ project: expect.anything() }),
       });
 
       const result = await client.callTool({
@@ -230,6 +231,98 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
       await closeMcpClient({ client, transport });
     }
   });
+
+  test("requires a literal project slug when OAuth grants multiple projects", async () => {
+    const transport = new StreamableHTTPClientTransport(
+      new URL("https://os.iterate.test/mcp?mode=multi"),
+      {
+        fetch: (input, init) => SELF.fetch(new Request(input, init)),
+      },
+    );
+    const client = new Client({ name: "mcp-multi-project-e2e", version: "1.0.0" });
+
+    try {
+      await client.connect(transport);
+
+      const execJsTool = findExecJsTool(await client.listTools());
+      expect(execJsTool.inputSchema).toMatchObject({
+        properties: {
+          project: {
+            enum: ["mcp-project", "other-project"],
+            type: "string",
+          },
+        },
+        required: expect.arrayContaining(["code", "project"]),
+      });
+
+      const result = await client.callTool({
+        name: "exec_js",
+        arguments: {
+          project: "other-project",
+          code: `async () => ({ project: "other-project" })`,
+        },
+      });
+
+      expect(result.isError).not.toBe(true);
+      expect(parseRunCodeResult(result.content)).toEqual({ project: "other-project" });
+
+      const sessionId = transport.sessionId;
+      expect(sessionId).toBeTruthy();
+      const streamPath = mcpSessionStreamPath("mcp-multi-project-e2e", sessionId ?? "");
+      const events = await readCurrentStreamEvents(streamPath, "proj__test__other");
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "events.iterate.com/mcp-server/tool-invocation-started",
+            payload: expect.objectContaining({
+              projectId: "proj__test__other",
+              projectSlug: "other-project",
+            }),
+          }),
+        ]),
+      );
+    } finally {
+      await closeMcpClient({ client, transport });
+    }
+  });
+
+  test("requires project even for admin-token MCP sessions", async () => {
+    const transport = new StreamableHTTPClientTransport(
+      new URL("https://os.iterate.test/mcp?mode=admin"),
+      {
+        fetch: (input, init) => SELF.fetch(new Request(input, init)),
+      },
+    );
+    const client = new Client({ name: "mcp-admin-project-e2e", version: "1.0.0" });
+
+    try {
+      await client.connect(transport);
+
+      const execJsTool = findExecJsTool(await client.listTools());
+      expect(execJsTool.inputSchema).toMatchObject({
+        properties: {
+          project: {
+            enum: ["mcp-project", "other-project"],
+            type: "string",
+          },
+        },
+        required: expect.arrayContaining(["code", "project"]),
+      });
+
+      const missingProjectResult = await client.callTool({
+        name: "exec_js",
+        arguments: {
+          code: `async () => ({ ok: true })`,
+        },
+      });
+      expect(missingProjectResult.isError).toBe(true);
+      expect(extractTextContent(missingProjectResult.content).join("\n")).toContain(
+        "Invalid arguments for tool exec_js",
+      );
+    } finally {
+      await closeMcpClient({ client, transport });
+    }
+  });
 });
 
 async function closeMcpClient(input: { client: Client; transport: StreamableHTTPClientTransport }) {
@@ -256,10 +349,10 @@ function extractTextContent(content: unknown) {
   );
 }
 
-async function readCurrentStreamEvents(streamPath: StreamPath) {
+async function readCurrentStreamEvents(streamPath: StreamPath, namespace = projectId) {
   const stream = await getInitializedStreamStub({
     durableObjectNamespace: (env as TestEnv).STREAM,
-    namespace: projectId,
+    namespace,
     path: streamPath,
   });
   const events = await stream.history({ before: "end" });
@@ -272,6 +365,12 @@ async function readCurrentStreamEvents(streamPath: StreamPath) {
   } finally {
     disposeRpcResult(events);
   }
+}
+
+function findExecJsTool(response: Awaited<ReturnType<Client["listTools"]>>) {
+  const tool = response.tools.find((candidate) => candidate.name === "exec_js");
+  if (!tool) throw new Error("exec_js tool not found");
+  return tool;
 }
 
 function mcpSessionStreamPath(clientName: string, sessionId: string) {

@@ -44,8 +44,7 @@ pnpm typecheck           # TypeScript
 pnpm test                # unit tests
 pnpm e2e -t "OS preview smoke"
                          # deployed preview smoke
-pnpm cli claude-mcp --project-slug-or-id bob
-                         # open Claude against one project MCP server in your local Doppler config
+pnpm cli claude-mcp      # open Claude against the OS MCP server in your local Doppler config
 pnpm sqlfu:generate      # regenerate sqlfu migrations/query wrappers
 pnpm sqlfu:check         # compare migrations to definitions.sql
 pnpm cf:deploy           # production deploy
@@ -56,11 +55,11 @@ that config; otherwise it enters Doppler using the local `apps/os` setup. Use
 `doppler run --config <config> -- <command>` when you want preview/prd app
 config explicitly.
 
-For example, to open Claude against the production MCP server for project
-`bob`, using the production `APP_CONFIG_ADMIN_API_SECRET`:
+For example, to open Claude against the production MCP server using the
+production `APP_CONFIG_ADMIN_API_SECRET`:
 
 ```bash
-doppler run --config prd -- pnpm cli claude-mcp --project-slug-or-id bob
+doppler run --config prd -- pnpm cli claude-mcp
 ```
 
 The script pattern is documented in

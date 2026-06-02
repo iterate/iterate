@@ -1,10 +1,14 @@
 import { createIterateAuth } from "@iterate-com/auth/server";
-import { ITERATE_PROJECT_SELECTION_SCOPE } from "@iterate-com/shared/auth-claims";
+import {
+  ITERATE_PROJECT_SELECTION_SCOPE,
+  hasWildcardProjectScope,
+  listProjectScopeIds,
+} from "@iterate-com/shared/auth-claims";
 import { McpAgent } from "agents/mcp";
 import { createD1Client } from "sqlfu";
 import type { AppConfig } from "~/app.ts";
 import { principalFromAccessToken, type Principal } from "~/auth/principal.ts";
-import { getProjectById, getProjectBySlug } from "~/db/queries/.generated/index.ts";
+import { listAllProjects } from "~/db/queries/.generated/index.ts";
 import { isBrowserMcpInstructionsRequest } from "~/domains/inbound-mcp-server/mcp-instructions-request.ts";
 import type {
   ProjectMcpServerConnectionProject,
@@ -73,17 +77,24 @@ export async function handleMcpFetch(input: McpHandlerInput): Promise<Response |
     return unauthorizedMcpResponse(input, "Missing or invalid bearer token");
   }
 
+  const scopes = readAccessTokenScopes(accessToken);
   const principal = principalFromAccessToken(accessToken);
-  const projects = principal.projects.map((project) => {
+  const grantedProjectIds = new Set(listProjectScopeIds(scopes));
+  const hasWildcardProjects = hasWildcardProjectScope(scopes);
+  const projects = principal.projects.flatMap((project) => {
+    if (!hasWildcardProjects && !grantedProjectIds.has(project.id)) return [];
+
     const organization = principal.organizations.find((org) => org.id === project.organizationId);
-    return {
-      id: project.id,
-      slug: project.slug,
-      organizationId: project.organizationId,
-      organizationPermissions: [],
-      organizationRole: organization?.role ?? null,
-      organizationSlug: organization?.slug ?? null,
-    } satisfies ProjectMcpServerConnectionProject;
+    return [
+      {
+        id: project.id,
+        slug: project.slug,
+        organizationId: project.organizationId,
+        organizationPermissions: [],
+        organizationRole: organization?.role ?? null,
+        organizationSlug: organization?.slug ?? null,
+      } satisfies ProjectMcpServerConnectionProject,
+    ];
   });
 
   if (projects.length === 0) {
@@ -98,7 +109,7 @@ export async function handleMcpFetch(input: McpHandlerInput): Promise<Response |
     clientId: accessToken.azp ?? null,
     principal,
     projects,
-    scopes: readAccessTokenScopes(accessToken),
+    scopes,
   });
 
   return withCorsHeaders(await mcpHandler.fetch(input.request, input.env, input.ctx));
@@ -109,22 +120,11 @@ async function authenticateAdminMcpRequest(input: McpHandlerInput) {
   const expectedToken = input.config.adminApiSecret?.exposeSecret();
   if (!token || !expectedToken || token !== expectedToken) return null;
 
-  const url = new URL(input.request.url);
-  const projectSlugOrId = url.searchParams.get("project")?.trim();
-  if (!projectSlugOrId) {
-    return new Response("Admin MCP requests must include ?project=<slug-or-id>.", {
-      status: 400,
-      headers: mcpCorsHeaders,
-    });
-  }
-
   const db = createD1Client(input.env.DB);
-  const project =
-    (await getProjectById(db, { id: projectSlugOrId })) ??
-    (await getProjectBySlug(db, { slug: projectSlugOrId }));
-  if (!project) {
-    return new Response(`Project not found: ${projectSlugOrId}`, {
-      status: 404,
+  const projects = await listAllProjects(db, { limit: 10_000, offset: 0 });
+  if (projects.length === 0) {
+    return new Response("No projects are available to this admin MCP token.", {
+      status: 403,
       headers: mcpCorsHeaders,
     });
   }
@@ -136,18 +136,16 @@ async function authenticateAdminMcpRequest(input: McpHandlerInput) {
     orgPermissions: ["admin:api"],
     orgRole: "admin",
     orgSlug: null,
-    projectId: project.id,
-    projectSlug: project.slug,
-    projects: [
-      {
-        id: project.id,
-        slug: project.slug,
-        organizationId: "admin-api",
-        organizationPermissions: ["admin:api"],
-        organizationRole: "admin",
-        organizationSlug: null,
-      },
-    ],
+    projectId: null,
+    projectSlug: null,
+    projects: projects.map((project) => ({
+      id: project.id,
+      slug: project.slug,
+      organizationId: "admin-api",
+      organizationPermissions: ["admin:api"],
+      organizationRole: "admin",
+      organizationSlug: null,
+    })),
     scopes: ["profile"],
     userId: "admin-api-secret",
   } satisfies ProjectMcpServerConnectionProps;
