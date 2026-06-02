@@ -222,11 +222,7 @@ function RouteComponent() {
   const canContinue = effectiveSelectedProjectIds.length > 0;
   const isCreatingFirstOrganization = organizations.length === 0;
   const parsedOrganization = CreateOrganizationInput.safeParse({ name: organizationName });
-  const effectiveOrganizationSlug =
-    selectedOrganizationSlug ||
-    organizations[0]?.slug ||
-    projectSelections[0]?.organization.slug ||
-    "";
+  const effectiveOrganizationSlug = selectedOrganizationSlug || organizations[0]?.slug || "";
   const parsedProject = CreateProjectInput.safeParse({
     organizationSlug: effectiveOrganizationSlug,
     name: projectName,
@@ -270,16 +266,13 @@ function RouteComponent() {
           </CardHeader>
           <Separator />
           <CardContent className="space-y-4">
-            <div className="flex items-center gap-3 rounded-xl border bg-muted/30 p-4">
-              <Avatar>
-                {user.image && <AvatarImage src={user.image} alt={user.name ?? user.email} />}
-                <AvatarFallback>{initials}</AvatarFallback>
-              </Avatar>
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium">{user.name ?? "User"}</p>
-                <p className="truncate text-xs text-muted-foreground">{user.email}</p>
-              </div>
-            </div>
+            <SignedInUserRow
+              user={user}
+              initials={initials}
+              isSubmitting={isSubmitting}
+              isSwitching={switchAccount.isPending}
+              onSwitch={() => switchAccount.mutate()}
+            />
 
             <form
               className="space-y-4"
@@ -352,16 +345,13 @@ function RouteComponent() {
           </CardHeader>
           <Separator />
           <CardContent className="space-y-4">
-            <div className="flex items-center gap-3 rounded-xl border bg-muted/30 p-4">
-              <Avatar>
-                {user.image && <AvatarImage src={user.image} alt={user.name ?? user.email} />}
-                <AvatarFallback>{initials}</AvatarFallback>
-              </Avatar>
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium">{user.name ?? "User"}</p>
-                <p className="truncate text-xs text-muted-foreground">{user.email}</p>
-              </div>
-            </div>
+            <SignedInUserRow
+              user={user}
+              initials={initials}
+              isSubmitting={isSubmitting}
+              isSwitching={switchAccount.isPending}
+              onSwitch={() => switchAccount.mutate()}
+            />
             <CreateProjectForm
               {...createProjectFormProps}
               id="create-first-project-form"
@@ -406,26 +396,13 @@ function RouteComponent() {
         </CardHeader>
         <Separator />
         <CardContent>
-          <div className="flex items-center justify-between">
-            <div className="flex min-w-0 items-center gap-3">
-              <Avatar>
-                {user.image && <AvatarImage src={user.image} alt={user.name ?? user.email} />}
-                <AvatarFallback>{initials}</AvatarFallback>
-              </Avatar>
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium">{user.name ?? "User"}</p>
-                <p className="truncate text-xs text-muted-foreground">{user.email}</p>
-              </div>
-            </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={isSubmitting}
-              onClick={() => switchAccount.mutate()}
-            >
-              {switchAccount.isPending ? "Switching..." : "Switch"}
-            </Button>
-          </div>
+          <SignedInUserRow
+            user={user}
+            initials={initials}
+            isSubmitting={isSubmitting}
+            isSwitching={switchAccount.isPending}
+            onSwitch={() => switchAccount.mutate()}
+          />
         </CardContent>
         <Separator />
         <CardContent className="space-y-3">
@@ -548,6 +525,38 @@ function RouteComponent() {
           </Button>
         </CardFooter>
       </Card>
+    </div>
+  );
+}
+
+function SignedInUserRow(props: {
+  user: {
+    name?: string | null;
+    email: string;
+    image?: string | null;
+  };
+  initials: string;
+  isSubmitting: boolean;
+  isSwitching: boolean;
+  onSwitch: () => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-xl border bg-muted/30 p-4">
+      <div className="flex min-w-0 items-center gap-3">
+        <Avatar>
+          {props.user.image && (
+            <AvatarImage src={props.user.image} alt={props.user.name ?? props.user.email} />
+          )}
+          <AvatarFallback>{props.initials}</AvatarFallback>
+        </Avatar>
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium">{props.user.name ?? "User"}</p>
+          <p className="truncate text-xs text-muted-foreground">{props.user.email}</p>
+        </div>
+      </div>
+      <Button variant="ghost" size="sm" disabled={props.isSubmitting} onClick={props.onSwitch}>
+        {props.isSwitching ? "Switching..." : "Switch"}
+      </Button>
     </div>
   );
 }

@@ -93,38 +93,30 @@ export default {
 function propsForRequest(request: Request): ProjectMcpServerConnectionProps {
   const mode = new URL(request.url).searchParams.get("mode");
   if (mode === "multi" || mode === "admin") {
+    const isAdmin = mode === "admin";
+    const orgFields = {
+      organizationId: isAdmin ? "admin-api" : "org_test",
+      organizationPermissions: isAdmin ? ["admin:api"] : [],
+      organizationRole: "admin",
+      organizationSlug: isAdmin ? null : "test-org",
+    } as const;
     return {
-      authType: mode === "admin" ? "admin_api_secret" : "oauth_access_token",
+      authType: isAdmin ? "admin_api_secret" : "oauth_access_token",
       clientId: "mcp-client-test",
-      orgId: mode === "admin" ? "admin-api" : "org_test",
-      orgPermissions: mode === "admin" ? ["admin:api"] : [],
-      orgRole: mode === "admin" ? "admin" : null,
-      orgSlug: mode === "admin" ? null : "test-org",
+      orgId: isAdmin ? "admin-api" : "org_test",
+      orgPermissions: isAdmin ? ["admin:api"] : [],
+      orgRole: isAdmin ? "admin" : null,
+      orgSlug: isAdmin ? null : "test-org",
       projectId: null,
       projectSlug: null,
       projects: [
-        {
-          id: "proj__test__inboundmcp",
-          slug: "mcp-project",
-          organizationId: mode === "admin" ? "admin-api" : "org_test",
-          organizationPermissions: mode === "admin" ? ["admin:api"] : [],
-          organizationRole: mode === "admin" ? "admin" : "admin",
-          organizationSlug: mode === "admin" ? null : "test-org",
-        },
-        {
-          id: "proj__test__other",
-          slug: "other-project",
-          organizationId: mode === "admin" ? "admin-api" : "org_test",
-          organizationPermissions: mode === "admin" ? ["admin:api"] : [],
-          organizationRole: mode === "admin" ? "admin" : "admin",
-          organizationSlug: mode === "admin" ? null : "test-org",
-        },
+        { id: "proj__test__inboundmcp", slug: "mcp-project", ...orgFields },
+        { id: "proj__test__other", slug: "other-project", ...orgFields },
       ],
-      scopes:
-        mode === "admin"
-          ? ["profile"]
-          : ["profile", "project", "project:proj__test__inboundmcp", "project:proj__test__other"],
-      userId: mode === "admin" ? "admin-api-secret" : "user_test",
+      scopes: isAdmin
+        ? ["profile"]
+        : ["profile", "project", "project:proj__test__inboundmcp", "project:proj__test__other"],
+      userId: isAdmin ? "admin-api-secret" : "user_test",
     };
   }
 

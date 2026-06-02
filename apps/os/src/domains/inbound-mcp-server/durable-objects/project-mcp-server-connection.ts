@@ -568,7 +568,7 @@ export class ProjectMcpServerConnection extends McpAgent<
     requestedProject: string | undefined,
     options: { requireProjectInput: boolean },
   ) {
-    if (!options.requireProjectInput && projects.length === 1 && !requestedProject) {
+    if (!options.requireProjectInput && !requestedProject) {
       return projects[0];
     }
 
