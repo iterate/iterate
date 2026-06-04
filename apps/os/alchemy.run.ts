@@ -134,6 +134,11 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
       : { DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber }),
     ...(slackBotToken == null ? {} : { APP_CONFIG_SLACK_BOT_TOKEN: alchemy.secret(slackBotToken) }),
   },
+  // OS fetches the auth worker's OIDC metadata and token/userinfo endpoints on
+  // auth.iterate.com from inside the Worker. Without this flag, same-zone
+  // subrequests bypass Worker routes and go to origin, which breaks auth-worker
+  // discovery on production iterate.com hostnames.
+  compatibilityFlags: ["global_fetch_strictly_public"],
   extraRouteHostnames: projectHostnameBases.flatMap(projectRouteHostnamesForBase),
 });
 
