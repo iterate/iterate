@@ -268,7 +268,7 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
       return {
         clientId: existing.clientId,
         clientName: input.clientName,
-        clientSecret: existing.clientSecret,
+        clientSecret: existingClientSecret,
         redirectURIs: redirectURIs,
       };
     }
@@ -335,7 +335,7 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
       return {
         clientId: existingByClientId.clientId,
         clientName: input.clientName,
-        clientSecret: existingByClientId.clientSecret,
+        clientSecret: existingClientSecret,
         redirectURIs,
       };
     }
