@@ -25,7 +25,7 @@ export default createServerEntry({
     // No COOP/COEP on purpose: the browser SQLite mirror uses wa-sqlite's OPFSCoopSyncVFS,
     // which needs no SharedArrayBuffer and no cross-origin isolation. (Isolation is what
     // made @sqlite.org/sqlite-wasm auto-install its async-proxy OPFS VFS and deadlock in
-    // production builds — see log.md.) Leaving it off also keeps OPFS working the same way
+    // production builds.) Leaving it off also keeps OPFS working the same way
     // across Chrome, Edge, Safari and mobile Safari.
     return handler.fetch(request);
   },

@@ -259,7 +259,7 @@ test("fresh runtime takes over when a legacy writer lock is still held", async (
 }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
   const legacyLockHolder = await context.newPage();
-  await legacyLockHolder.goto("/virtual-repro");
+  await legacyLockHolder.goto("/blank");
   await holdLegacyWriterLock(legacyLockHolder, streamPath);
 
   await page.goto(streamRoute(streamPath));
@@ -276,7 +276,7 @@ test("fresh runtime takes over when a legacy writer lock is still held", async (
 test("empty follower state is visible in the stream UI", async ({ context, page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
   const lockHolder = await context.newPage();
-  await lockHolder.goto("/virtual-repro");
+  await lockHolder.goto("/blank");
   await holdCurrentWriterLock(lockHolder, streamPath);
 
   await page.goto(streamRoute(streamPath));
@@ -663,56 +663,6 @@ test("large streams stay virtualized and can scroll from tail to earliest rows",
   await expect(page.locator(`[data-index='${expectedCount - 1}']`)).toBeVisible();
 });
 
-// Documents the reduced TanStack Virtual reproduction that explained the real stream bug.
-// Same-turn/microtask chunks can strand a tiny list far from the tail; one visible append or
-// requestAnimationFrame-spaced chunks with directDomUpdates follow the end correctly.
-test("TanStack repro captures same-render short-to-huge append behavior", async ({ page }) => {
-  await page.goto(
-    "/virtual-repro?initial=2&batch=1500&chunk=250&mode=microtask&footer=none&affordance=0",
-  );
-
-  await expect(page.getByTestId("virtual-repro-hydrated")).toHaveText("true");
-  await expect(page.getByTestId("virtual-repro-count")).toHaveText("2");
-  await page.getByRole("button", { name: "Append batch" }).click();
-  await expect(page.getByTestId("virtual-repro-count")).toHaveText("1502");
-  await expect.poll(() => scrollDistanceFromEnd(page)).toBeGreaterThan(40_000);
-
-  await page.goto(
-    "/virtual-repro?initial=2&batch=1500&chunk=1500&mode=single&footer=none&directDomUpdates=1",
-  );
-  await expect(page.getByTestId("virtual-repro-hydrated")).toHaveText("true");
-  await page.getByRole("button", { name: "Append batch" }).click();
-  await expect(page.getByTestId("virtual-repro-count")).toHaveText("1502");
-  await expect(page.locator("[data-index='1501']")).toBeVisible();
-  await expect.poll(() => scrollDistanceFromEnd(page)).toBe(0);
-
-  await page.goto(
-    "/virtual-repro?initial=2&batch=1500&chunk=250&mode=raf&footer=none&directDomUpdates=1",
-  );
-  await expect(page.getByTestId("virtual-repro-hydrated")).toHaveText("true");
-  await page.getByRole("button", { name: "Append batch" }).click();
-  await expect(page.getByTestId("virtual-repro-count")).toHaveText("1502");
-  await expect(page.locator("[data-index='1501']")).toBeVisible();
-  await expect.poll(() => scrollDistanceFromEnd(page)).toBe(0);
-});
-
-// Keeps footer experiments honest. A normal footer or measured overlay was not the root cause
-// of the stream stutter once appends were paced sanely, so both repro variants should still
-// follow the tail with the vanilla chat-style virtualizer.
-for (const footer of ["normal", "overlay-measured"] as const) {
-  test(`TanStack repro follows appends with ${footer} footer`, async ({ page }) => {
-    await page.goto(
-      `/virtual-repro?initial=2&batch=1500&chunk=1500&mode=single&footer=${footer}&directDomUpdates=1`,
-    );
-
-    await expect(page.getByTestId("virtual-repro-hydrated")).toHaveText("true");
-    await page.getByRole("button", { name: "Append batch" }).click();
-    await expect(page.getByTestId("virtual-repro-count")).toHaveText("1502");
-    await expect(page.locator("[data-index='1501']")).toBeVisible();
-    await expect.poll(() => scrollDistanceFromEnd(page)).toBe(0);
-  });
-}
-
 // Verifies the raw SQLite export feature end to end. The downloaded browser OPFS mirror must
 // be a real SQLite database that can be queried from disk, not just a blob with the right name.
 test("downloaded SQLite file can be queried from disk", async ({ page }) => {
@@ -927,14 +877,6 @@ function sqliteLiteral(value: string) {
 
 function cssString(value: string) {
   return value.replaceAll("\\", "\\\\").replaceAll("'", "\\'");
-}
-
-async function scrollDistanceFromEnd(page: Page) {
-  return await page.getByTestId("virtual-repro-scroller").evaluate((element) => {
-    if (!(element instanceof HTMLElement))
-      throw new Error("virtual repro scroller must be an HTMLElement");
-    return Math.round(element.scrollHeight - element.clientHeight - element.scrollTop);
-  });
 }
 
 async function streamDistanceFromEnd(page: Page) {

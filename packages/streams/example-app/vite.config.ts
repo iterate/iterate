@@ -27,7 +27,7 @@ export default defineConfig({
   //
   // Note there is deliberately NO COOP/COEP here: OPFSCoopSyncVFS needs no cross-origin
   // isolation. (Enabling it is what made @sqlite.org/sqlite-wasm auto-install its
-  // async-proxy "opfs" VFS and deadlock in production builds — see log.md.)
+  // async-proxy "opfs" VFS and deadlock in production builds.)
   optimizeDeps: { exclude: ["@journeyapps/wa-sqlite"] },
   plugins: [
     tailwindcss(),

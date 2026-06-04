@@ -1,8 +1,0 @@
-{
-  "$schema": "https://react.doctor/schema/config.json",
-  "rules": {
-    "react-doctor/only-export-components": "off",
-    "react-doctor/tanstack-start-no-navigate-in-render": "off",
-    "react-doctor/no-derived-useState": "off"
-  }
-}
