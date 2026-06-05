@@ -2,6 +2,20 @@
   "name": "@iterate-com/streams",
   "private": true,
   "type": "module",
+  "exports": {
+    "./connection": "./src/connection.ts",
+    "./processor": "./src/processor.ts",
+    "./processor-runner": "./src/processor-runner.ts",
+    "./processors/core/contract": "./src/processors/core/contract.ts",
+    "./shared/event": "./src/shared/event.ts",
+    "./shared/rpc-target": "./src/shared/rpc-target.ts",
+    "./shared/stream-processors": "./src/shared/stream-processors.ts",
+    "./subscription": "./src/subscription.ts",
+    "./types": "./src/types.ts",
+    "./workers/connect": "./src/workers/connect.ts",
+    "./workers/durable-objects/stream": "./src/workers/durable-objects/stream.ts",
+    "./workers/durable-objects/stream-processor-runner": "./src/workers/durable-objects/stream-processor-runner.ts"
+  },
   "scripts": {
     "dev": "pnpm --dir example-app dev",
     "build": "pnpm --dir example-app build",

@@ -1,10 +1,10 @@
 import { DurableObject } from "cloudflare:workers";
+import type { Event } from "@iterate-com/shared/streams/types.ts";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
-} from "@iterate-com/shared/streams/helpers.ts";
-import type { Event } from "@iterate-com/shared/streams/types.ts";
-import type { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object.ts";
+  type StreamDurableObject,
+} from "~/domains/streams/new-stream-runtime.ts";
 
 export const DEBUG_APPEND_CHAIN_EVENT_TYPE = "events.iterate.com/debug/append-chain-tick";
 
