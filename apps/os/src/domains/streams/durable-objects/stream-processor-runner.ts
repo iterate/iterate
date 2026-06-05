@@ -16,7 +16,7 @@ import {
   type StreamSubscription,
 } from "@iterate-com/streams/subscription";
 import type {
-  StreamPersistedProcessorState,
+  StreamCoreProcessorState,
   StreamProcessorRunnerRpc,
   StreamRpc,
   SubscriptionSink,
@@ -132,7 +132,7 @@ export class StreamProcessorRunner extends DurableObject {
         };
       };
     };
-    streamRuntimeState: { state: StreamPersistedProcessorState };
+    streamRuntimeState: { coreProcessorState: StreamCoreProcessorState };
   }): Promise<{ sink: SubscriptionSink; replayAfterOffset?: number }> {
     const subscriber = args.subscriptionConfiguredEvent.payload.subscriber;
     if (subscriber.type !== "built-in") {
@@ -213,7 +213,7 @@ function getOsProcessor(args: {
   env: StreamProcessorRunnerEnv;
   slug: string;
   stream: RpcStub<StreamRpc>;
-  streamRuntimeState: { state: StreamPersistedProcessorState };
+  streamRuntimeState: { coreProcessorState: StreamCoreProcessorState };
 }): OsProcessorBinding | undefined {
   if (args.slug === ProjectLifecycleProcessorContract.slug) {
     return {
@@ -226,8 +226,8 @@ function getOsProcessor(args: {
   }
 
   if (args.slug === CodemodeProcessorContract.slug) {
-    const projectId = args.streamRuntimeState.state.core.namespace;
-    const streamPath = StreamPath.parse(args.streamRuntimeState.state.core.path);
+    const projectId = args.streamRuntimeState.coreProcessorState.namespace;
+    const streamPath = StreamPath.parse(args.streamRuntimeState.coreProcessorState.path);
     return {
       processor: adaptSharedProcessor(
         createCodemodeProcessor(codemodeProcessorDeps({ ...args, projectId, streamPath })),
@@ -249,7 +249,7 @@ function getOsProcessor(args: {
   }
 
   if (args.slug === SlackProcessorContract.slug) {
-    const projectId = args.streamRuntimeState.state.core.namespace;
+    const projectId = args.streamRuntimeState.coreProcessorState.namespace;
     return {
       processor: adaptSharedProcessor(
         createSlackProcessor({
@@ -267,8 +267,8 @@ function getOsProcessor(args: {
   }
 
   if (args.slug === SlackAgentProcessorContract.slug) {
-    const projectId = args.streamRuntimeState.state.core.namespace;
-    const streamPath = StreamPath.parse(args.streamRuntimeState.state.core.path);
+    const projectId = args.streamRuntimeState.coreProcessorState.namespace;
+    const streamPath = StreamPath.parse(args.streamRuntimeState.coreProcessorState.path);
     return {
       processor: adaptSharedProcessor(
         createSlackAgentProcessor({
@@ -353,8 +353,8 @@ function getOsProcessor(args: {
   }
 
   if (args.slug === AGENT_HOST_PROCESSOR_SLUG) {
-    const projectId = args.streamRuntimeState.state.core.namespace;
-    const streamPath = StreamPath.parse(args.streamRuntimeState.state.core.path);
+    const projectId = args.streamRuntimeState.coreProcessorState.namespace;
+    const streamPath = StreamPath.parse(args.streamRuntimeState.coreProcessorState.path);
     return {
       processor: createAgentHostProcessor(),
       deps: {
@@ -426,13 +426,13 @@ function createAgentHostProcessor(): Processor<any, AgentHostProcessorDeps> {
 function sharedProcessorAdapterDeps(args: {
   env: StreamProcessorRunnerEnv;
   stream: RpcStub<StreamRpc>;
-  streamRuntimeState: { state: StreamPersistedProcessorState };
+  streamRuntimeState: { coreProcessorState: StreamCoreProcessorState };
 }): SharedProcessorAdapterDeps {
   return {
     env: args.env,
-    namespace: args.streamRuntimeState.state.core.namespace,
+    namespace: args.streamRuntimeState.coreProcessorState.namespace,
     stream: args.stream,
-    streamPath: StreamPath.parse(args.streamRuntimeState.state.core.path),
+    streamPath: StreamPath.parse(args.streamRuntimeState.coreProcessorState.path),
   };
 }
 
