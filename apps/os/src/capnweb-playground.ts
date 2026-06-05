@@ -23,12 +23,13 @@
  * Capability constructors take a single props bag (not positional args), per
  * house style (see `WorkerEntrypoint` + `ctx.props` elsewhere in the app).
  *
- * The project data is deliberately a hardcoded/dummy implementation for now —
- * `describe()` echoes the id and `list()` derives ids from the caller's scopes.
+ * Project capabilities are minted from scopes, but project methods validate
+ * against the real app database before exposing project data.
  */
 import { RpcTarget } from "cloudflare:workers";
 import { newWorkersRpcResponse } from "capnweb";
 import { ORPCError } from "@orpc/server";
+import type { Event, EventInput, StreamCursor } from "@iterate-com/shared/streams/types";
 import { isValidTypeId, typeid } from "@iterate-com/shared/typeid";
 import type { AppConfig } from "~/app.ts";
 import { authenticateAdminApiSecret } from "~/auth/middleware.ts";
@@ -51,6 +52,7 @@ import {
   getProjectDurableObjectName,
   type ProjectDurableObject,
 } from "~/domains/projects/durable-objects/project-durable-object.ts";
+import { getStreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 
 export const CAPTNWEB_PREFIX = "/api/captnweb";
 
@@ -76,6 +78,10 @@ function authorizesProject(scopes: string[], projectId: string): boolean {
 
 export interface ProjectDescription {
   id: string;
+  slug: string;
+  customHostname: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 type CaptnwebVars = Record<string, unknown>;
@@ -199,7 +205,12 @@ export class IterateCapability extends RpcTarget {
     if (ids.length === 0) {
       throw new Error("No current project is available for these scopes.");
     }
-    return new ProjectCapability({ projectId: ids[0] });
+    return new ProjectCapability({
+      activeOrganization: this.#activeOrganization,
+      context: this.#context,
+      projectId: ids[0],
+      scopes: this.#scopes,
+    });
   }
 
   async whoami(): Promise<{ scopes: string[] }> {
@@ -236,10 +247,15 @@ export class ProjectsCapability extends RpcTarget {
     // Enforce the scope before minting the capability, so a caller can't reach
     // a project outside its grant even though the stub proxy "looks like" it
     // has every method.
-    if (!authorizesProject(this.#scopes, projectId)) {
+    if (!this.#activeOrganization && !authorizesProject(this.#scopes, projectId)) {
       throw new Error(`Not authorized for project: ${projectId}`);
     }
-    return new ProjectCapability({ projectId });
+    return new ProjectCapability({
+      activeOrganization: this.#activeOrganization,
+      context: this.#context,
+      projectId,
+      scopes: this.#scopes,
+    });
   }
 
   async list(input: { limit?: number; offset?: number } = {}): Promise<ProjectListResult> {
@@ -383,7 +399,12 @@ export class ProjectsCapability extends RpcTarget {
     }
 
     try {
-      await this.#requireProject(input.id);
+      await requireProject({
+        activeOrganization,
+        context,
+        projectId: input.id,
+        scopes: this.#scopes,
+      });
     } catch (error) {
       if (error instanceof ORPCError && error.code === "NOT_FOUND") {
         return { ok: true, id: input.id, deleted: false };
@@ -399,35 +420,6 @@ export class ProjectsCapability extends RpcTarget {
     return { ok: true, id: input.id, deleted: true };
   }
 
-  async #requireProject(projectId: string): Promise<ProjectRow> {
-    const context = this.#requireContext();
-    const project = await getProjectById(context.db, { id: projectId });
-
-    if (!project) {
-      throw new ORPCError("NOT_FOUND", {
-        message: `Project ${projectId} not found`,
-      });
-    }
-
-    const activeOrganization = this.#activeOrganization;
-    if (activeOrganization?.isAdminApi || authorizesProject(this.#scopes, projectId)) {
-      return project;
-    }
-
-    if (activeOrganization) {
-      const permission = await getProjectPermission(context.db, {
-        principalId: activeOrganization.orgId,
-        principalType: "clerk_organization",
-        projectId,
-      });
-      if (permission) return project;
-    }
-
-    throw new ORPCError("FORBIDDEN", {
-      message: `Project ${projectId} not found`,
-    });
-  }
-
   #requireContext(): AppContext {
     if (!this.#context) {
       throw new Error("ProjectsCapability requires app context for this operation.");
@@ -437,25 +429,233 @@ export class ProjectsCapability extends RpcTarget {
 }
 
 export interface ProjectCapabilityProps {
+  activeOrganization?: ActiveOrganizationAuth;
+  context?: AppContext;
   projectId: string;
+  scopes?: string[];
 }
 
 export class ProjectCapability extends RpcTarget {
+  readonly #activeOrganization: ActiveOrganizationAuth | undefined;
+  readonly #context: AppContext | undefined;
   readonly #projectId: string;
+  readonly #scopes: string[];
+  #streams?: ProjectStreamsCapability;
+  #worker?: ProjectWorkerMethods;
 
   constructor(props: ProjectCapabilityProps) {
     super();
+    this.#activeOrganization = props.activeOrganization;
+    this.#context = props.context;
     this.#projectId = props.projectId;
+    this.#scopes = props.scopes ?? [];
   }
 
   get id(): string {
     return this.#projectId;
   }
 
-  async describe(): Promise<ProjectDescription> {
-    // Dummy hardcoded implementation.
-    return { id: this.#projectId };
+  get streams(): ProjectStreamsCapability {
+    return (this.#streams ??= new ProjectStreamsCapability({
+      activeOrganization: this.#activeOrganization,
+      context: this.#context,
+      projectId: this.#projectId,
+      scopes: this.#scopes,
+    }));
   }
+
+  get worker(): ProjectWorkerMethods {
+    return (this.#worker ??= createProjectWorkerCapability({
+      activeOrganization: this.#activeOrganization,
+      context: this.#context,
+      projectId: this.#projectId,
+      scopes: this.#scopes,
+    }));
+  }
+
+  async describe(): Promise<ProjectDescription> {
+    const project = await requireProject({
+      activeOrganization: this.#activeOrganization,
+      context: this.#requireContext(),
+      projectId: this.#projectId,
+      scopes: this.#scopes,
+    });
+    return toProject(project);
+  }
+
+  #requireContext(): AppContext {
+    if (!this.#context) {
+      throw new Error("ProjectCapability requires app context for this operation.");
+    }
+    return this.#context;
+  }
+}
+
+type ProjectCapabilityChildProps = {
+  activeOrganization?: ActiveOrganizationAuth;
+  context?: AppContext;
+  projectId: string;
+  scopes: string[];
+};
+
+type StreamAppendInput = {
+  event: EventInput;
+  streamPath: string;
+};
+
+type StreamReadInput = {
+  afterOffset?: StreamCursor;
+  beforeOffset?: StreamCursor;
+  streamPath: string;
+};
+
+export class ProjectStreamsCapability extends RpcTarget {
+  readonly #activeOrganization: ActiveOrganizationAuth | undefined;
+  readonly #context: AppContext | undefined;
+  readonly #projectId: string;
+  readonly #scopes: string[];
+
+  constructor(props: ProjectCapabilityChildProps) {
+    super();
+    this.#activeOrganization = props.activeOrganization;
+    this.#context = props.context;
+    this.#projectId = props.projectId;
+    this.#scopes = props.scopes;
+  }
+
+  async append(input: StreamAppendInput): Promise<Event> {
+    await this.#requireProject();
+    return await this.#streams().append(input);
+  }
+
+  async read(input: StreamReadInput): Promise<Event[]> {
+    await this.#requireProject();
+    return await this.#streams().read(input);
+  }
+
+  async getState(input: { streamPath: string }) {
+    await this.#requireProject();
+    return await this.#streams().getState(input);
+  }
+
+  async list() {
+    await this.#requireProject();
+    return await this.#streams().list();
+  }
+
+  async #requireProject() {
+    await requireProject({
+      activeOrganization: this.#activeOrganization,
+      context: this.#requireContext(),
+      projectId: this.#projectId,
+      scopes: this.#scopes,
+    });
+  }
+
+  #streams() {
+    const context = this.#requireContext();
+    return getStreamsCapability({
+      exports: context.workerExports,
+      props: {
+        appendPolicy: { mode: "any" },
+        projectId: this.#projectId,
+      },
+    });
+  }
+
+  #requireContext(): AppContext {
+    if (!this.#context) {
+      throw new Error("ProjectStreamsCapability requires app context for this operation.");
+    }
+    return this.#context;
+  }
+}
+
+export type ProjectWorkerMethods = ProjectWorkerCapability &
+  Record<string, (...args: unknown[]) => Promise<unknown>>;
+
+export class ProjectWorkerCapability extends RpcTarget {
+  readonly #activeOrganization: ActiveOrganizationAuth | undefined;
+  readonly #context: AppContext | undefined;
+  readonly #projectId: string;
+  readonly #scopes: string[];
+
+  constructor(props: ProjectCapabilityChildProps) {
+    super();
+    this.#activeOrganization = props.activeOrganization;
+    this.#context = props.context;
+    this.#projectId = props.projectId;
+    this.#scopes = props.scopes;
+  }
+
+  async call(input: { args?: unknown[]; functionName: string }): Promise<unknown> {
+    const context = this.#requireContext();
+    await requireProject({
+      activeOrganization: this.#activeOrganization,
+      context,
+      projectId: this.#projectId,
+      scopes: this.#scopes,
+    });
+    return await projectDurableObject(context, this.#projectId).callConfigWorkerFunction(input);
+  }
+
+  async someFunction(...args: unknown[]): Promise<unknown> {
+    return await this.call({ args, functionName: "someFunction" });
+  }
+
+  #requireContext(): AppContext {
+    if (!this.#context) {
+      throw new Error("ProjectWorkerCapability requires app context for this operation.");
+    }
+    return this.#context;
+  }
+}
+
+function createProjectWorkerCapability(props: ProjectCapabilityChildProps): ProjectWorkerMethods {
+  const target = new ProjectWorkerCapability(props);
+  return new Proxy(target, {
+    get(receiver, prop) {
+      if (typeof prop !== "string") return Reflect.get(receiver, prop, receiver);
+      if (prop === "then") return undefined;
+      if (prop in receiver) {
+        const value = Reflect.get(receiver, prop, receiver);
+        return typeof value === "function" ? value.bind(receiver) : value;
+      }
+      return async (...args: unknown[]) => await receiver.call({ args, functionName: prop });
+    },
+  }) as ProjectWorkerMethods;
+}
+
+async function requireProject(input: {
+  activeOrganization?: ActiveOrganizationAuth;
+  context: AppContext;
+  projectId: string;
+  scopes: string[];
+}): Promise<ProjectRow> {
+  const project = await getProjectById(input.context.db, { id: input.projectId });
+
+  if (!project) {
+    throw new ORPCError("NOT_FOUND", {
+      message: `Project ${input.projectId} not found`,
+    });
+  }
+
+  if (input.activeOrganization?.isAdminApi || authorizesProject(input.scopes, input.projectId)) {
+    return project;
+  }
+
+  if (input.activeOrganization) {
+    const permission = await getProjectPermission(input.context.db, {
+      principalId: input.activeOrganization.orgId,
+      principalType: "clerk_organization",
+      projectId: input.projectId,
+    });
+    if (permission) return project;
+  }
+
+  throw new ORPCError("FORBIDDEN", {
+    message: `Project ${input.projectId} not found`,
+  });
 }
 
 // ── dynamic worker source (loaded via Worker Loader) ────────────────────────
@@ -463,7 +663,10 @@ export class ProjectCapability extends RpcTarget {
 // just like the WebSocket tests call their local `iterate` stub.
 const DEFAULT_DYNAMIC_WORKER_CODE = /* js */ `
 async ({ iterate }) => {
-  return await iterate.projects.get("proj_alpha").describe();
+  const list = await iterate.projects.list({ limit: 1 });
+  const project = list.projects[0];
+  if (!project) throw new Error("No accessible projects are available.");
+  return await iterate.projects.get(project.id).describe();
 }
 `;
 

@@ -1,12 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
+import dedent from "dedent";
 import WebSocket from "ws";
 import { Redacted } from "@iterate-com/shared/apps/config";
 import {
+  createAdminOsClient,
   requireAdminBearerToken,
   requireBaseUrl,
   uniqueSuffix,
 } from "../test-support/os-client.ts";
+import { CodemodeBuilder } from "../test-support/codemode-builder.ts";
+import { createExampleRpcProviderRegistration } from "../../src/domains/codemode/example-provider-registrations.ts";
 import type { IterateCapability } from "~/capnweb-playground.ts";
 
 const baseUrl = requireBaseUrl();
@@ -42,8 +46,14 @@ const runWithIterateContexts = [
         body: JSON.stringify({ code: stringifySnippet(input.fn), vars: input.vars }),
       });
       if (!response.ok) {
-        const error = (await response.json()) as { error?: string };
-        throw new Error(error.error ?? `captnweb /run failed (${response.status})`);
+        const body = await response.text();
+        let message = body;
+        try {
+          message = ((JSON.parse(body) as { error?: string }).error ?? body).trim();
+        } catch {
+          message = body.trim();
+        }
+        throw new Error(message || `captnweb /run failed (${response.status})`);
       }
       return (await response.json()) as Awaited<ReturnType<typeof input.fn>>;
     },
@@ -55,8 +65,8 @@ const runWithIterateContexts = [
  *
  * Each connection authenticates with the admin API secret and assumes a chosen
  * set of project scopes — that's how a single admin token exercises many scope
- * combinations. The capability data is the hardcoded/dummy implementation, so
- * assertions are deterministic.
+ * combinations. Project capabilities are backed by real disposable projects so
+ * the tests exercise the same existence checks as production code.
  */
 
 describe("captnweb", () => {
@@ -70,140 +80,291 @@ describe("captnweb", () => {
   describe("with admin auth", () => {
     for (const { name, runWithIterateContext } of runWithIterateContexts) {
       describe(name, () => {
-        describe('with scopes ["project:proj_alpha", "project:proj_beta"]', () => {
-          const scopes = ["project:proj_alpha", "project:proj_beta"];
+        let alphaProject: CreatedProject;
+        let betaProject: CreatedProject;
 
-          it("whoami echoes the assumed scopes", async () => {
-            const result = await runWithIterateContext({
-              scopes,
-              fn: async ({ iterate }) => iterate.whoami(),
-            });
-            expect(result.scopes).toEqual(["project:proj_alpha", "project:proj_beta"]);
+        beforeAll(async () => {
+          alphaProject = await createCaptnwebProject({
+            runWithIterateContext,
+            slug: `${testRunSlugPrefix}-alpha-${uniqueSuffix()}`.slice(0, 40),
           });
-
-          it("the current project is the first concrete scope", async () => {
-            const current = await runWithIterateContext({
-              scopes,
-              fn: async ({ iterate }) => iterate.project.describe(),
-            });
-            expect(current).toEqual({ id: "proj_alpha" });
+          betaProject = await createCaptnwebProject({
+            runWithIterateContext,
+            slug: `${testRunSlugPrefix}-beta-${uniqueSuffix()}`.slice(0, 40),
           });
         });
 
-        describe('with scopes ["project:proj_alpha"]', () => {
-          const scopes = ["project:proj_alpha"];
-
-          it("projects.get(...).describe() pipelines", async () => {
-            const described = await runWithIterateContext({
-              scopes,
-              fn: async ({ iterate }) => iterate.projects.get("proj_alpha").describe(),
-            });
-            expect(described).toEqual({ id: "proj_alpha" });
-          });
-
-          it("projects.get rejects a project outside the scope grant", async () => {
-            await expect(
-              runWithIterateContext({
-                scopes,
-                fn: async ({ iterate }) => iterate.projects.get("proj_forbidden").describe(),
-              }),
-            ).rejects.toThrow(/Not authorized for project: proj_forbidden/);
-          });
-
-          it("surfaces errors thrown by the snippet", async () => {
-            await expect(
-              runWithIterateContext({
-                scopes,
-                fn: async () => {
-                  throw new Error("Snippet exploded");
-                },
-              }),
-            ).rejects.toThrow("Snippet exploded");
-          });
-
-          it("surfaces errors thrown by iterate capabilities", async () => {
-            await expect(
-              runWithIterateContext({
-                scopes,
-                fn: async ({ iterate }) =>
-                  iterate.testMethod({ behavior: "throw", message: "Bla bla" }),
-              }),
-            ).rejects.toThrow("Bla bla");
-          });
+        afterAll(async () => {
+          await Promise.all(
+            [alphaProject, betaProject].map((project) =>
+              project
+                ? removeCaptnwebProject({ project, runWithIterateContext }).catch(() => undefined)
+                : undefined,
+            ),
+          );
         });
 
-        describe('with scopes ["project:*"]', () => {
-          const scopes = ["project:*"];
+        it("enforces project scopes against real projects", async () => {
+          const scopes = [`project:${alphaProject.id}`, `project:${betaProject.id}`];
+          const deletedProject = await createCaptnwebProject({
+            runWithIterateContext,
+            slug: `${testRunSlugPrefix}-deleted-${uniqueSuffix()}`.slice(0, 40),
+          });
+          await removeCaptnwebProject({ project: deletedProject, runWithIterateContext });
 
-          it("projects.get authorizes any project", async () => {
-            const result = await runWithIterateContext({
-              scopes,
-              fn: async ({ iterate }) => iterate.projects.get("proj_alpha").describe(),
-            });
-            expect(result).toEqual({ id: "proj_alpha" });
+          const result = await runWithIterateContext({
+            scopes,
+            fn: async ({ iterate }) => {
+              const list = await iterate.projects.list();
+              return {
+                current: await iterate.project.describe(),
+                list,
+                whoami: await iterate.whoami(),
+              };
+            },
           });
 
-          it("a wildcard-only scope names no single current project", async () => {
-            await expect(
-              runWithIterateContext({
-                scopes,
-                fn: async ({ iterate }) => {
-                  const project = await iterate.project;
-                  return await project.describe();
-                },
-              }),
-            ).rejects.toThrow("No current project is available for these scopes.");
+          expect(result.whoami.scopes).toEqual(scopes);
+          expect(result.current).toMatchObject({ id: alphaProject.id, slug: alphaProject.slug });
+          expect(result.list).toMatchObject({
+            total: 2,
+            projects: [
+              { id: alphaProject.id, slug: alphaProject.slug },
+              { id: betaProject.id, slug: betaProject.slug },
+            ],
           });
+
+          await expect(
+            runWithIterateContext({
+              scopes: [`project:${alphaProject.id}`],
+              vars: { projectId: betaProject.id },
+              fn: async ({ iterate, vars }) => iterate.projects.get(vars.projectId).describe(),
+            }),
+          ).rejects.toThrow(new RegExp(`Not authorized for project: ${betaProject.id}`));
+          await expect(
+            runWithIterateContext({
+              scopes: [`project:${deletedProject.id}`],
+              vars: { projectId: deletedProject.id },
+              fn: async ({ iterate, vars }) => iterate.projects.get(vars.projectId).describe(),
+            }),
+          ).rejects.toThrow(new RegExp(`Project ${deletedProject.id} not found`));
         });
 
-        describe("with a brand new project", () => {
-          const slug = `${testRunSlugPrefix}-${uniqueSuffix()}`.slice(0, 40);
-          const scopes = ["create_project"];
-          let project: CreatedProject;
-
-          beforeAll(async () => {
-            project = await runWithIterateContext({
-              scopes,
-              vars: { slug },
-              fn: async ({ iterate, vars }) => iterate.projects.create({ slug: vars.slug }),
-            });
+        it("handles wildcard access without inventing a current project", async () => {
+          const result = await runWithIterateContext({
+            scopes: ["project:*"],
+            vars: { projectId: betaProject.id },
+            fn: async ({ iterate, vars }) => {
+              return {
+                current: await Promise.resolve()
+                  .then(() => iterate.project.describe())
+                  .then(
+                    () => "found",
+                    (error) => (error instanceof Error ? error.message : String(error)),
+                  ),
+                described: await iterate.projects.get(vars.projectId).describe(),
+                list: await iterate.projects.list({ limit: 1_000 }),
+              };
+            },
           });
 
-          afterAll(async () => {
-            if (!project || typeof project !== "object" || !("id" in project)) return;
-            await runWithIterateContext({
-              scopes: [`project:${project.id}`],
-              vars: { id: project.id },
-              fn: async ({ iterate, vars }) => iterate.projects.remove({ id: vars.id }),
-            }).catch(() => undefined);
-          });
+          expect(result.current).toBe("No current project is available for these scopes.");
+          expect(result.described).toMatchObject({ id: betaProject.id, slug: betaProject.slug });
+          expect(result.list.projects).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ id: alphaProject.id, slug: alphaProject.slug }),
+              expect.objectContaining({ id: betaProject.id, slug: betaProject.slug }),
+            ]),
+          );
+        });
 
-          it("creates a real project", () => {
-            expect(project).toMatchObject({
-              slug,
-            });
+        it("creates and removes a real project", async () => {
+          const project = await createCaptnwebProject({
+            runWithIterateContext,
+            slug: `${testRunSlugPrefix}-create-${uniqueSuffix()}`.slice(0, 40),
+          });
+          try {
             expect(project.id).toMatch(/^proj_/);
             expect(project.ingressUrl).toContain(project.slug);
+            expect(
+              await runWithIterateContext({
+                scopes: [`project:${project.id}`],
+                fn: async ({ iterate }) => ({
+                  described: await iterate.project.describe(),
+                  list: await iterate.projects.list(),
+                }),
+              }),
+            ).toMatchObject({
+              described: { id: project.id, slug: project.slug },
+              list: { projects: [{ id: project.id, slug: project.slug }] },
+            });
+            const removed = await removeCaptnwebProject({ project, runWithIterateContext });
+            expect(removed).toEqual({ ok: true, id: project.id, deleted: true });
+          } finally {
+            await removeCaptnwebProject({ project, runWithIterateContext }).catch(() => undefined);
+          }
+        });
+
+        it("appends and reads project stream events", async () => {
+          const streamPath = `/captnweb/${uniqueSuffix()}`;
+          const eventType = "events.iterate.com/captnweb/e2e-proof";
+          const marker = `captnweb-stream-${uniqueSuffix()}`;
+
+          const result = await runWithIterateContext({
+            scopes: [`project:${alphaProject.id}`],
+            vars: { eventType, marker, streamPath },
+            fn: async ({ iterate, vars }) => {
+              const appended = await iterate.project.streams.append({
+                streamPath: vars.streamPath,
+                event: {
+                  type: vars.eventType,
+                  payload: { marker: vars.marker },
+                },
+              });
+              const events = await iterate.project.streams.read({
+                afterOffset: "start",
+                streamPath: vars.streamPath,
+              });
+              return { appended, events };
+            },
           });
 
-          describe("with its project scope", () => {
-            it("projects.list reflects the concrete scope", async () => {
-              const list = await runWithIterateContext({
-                scopes: [`project:${project.id}`],
-                fn: async ({ iterate }) => iterate.projects.list(),
-              });
-              expect(list.projects).toMatchObject([{ id: project.id, slug: project.slug }]);
+          expect(result.appended).toMatchObject({
+            offset: expect.any(Number),
+            payload: { marker },
+            type: eventType,
+          });
+          expect(result.events).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                offset: result.appended.offset,
+                payload: { marker },
+                type: eventType,
+              }),
+            ]),
+          );
+        });
+
+        it("calls a function added to iterate-config worker.js by codemode", async () => {
+          const project = await createCaptnwebProject({
+            runWithIterateContext,
+            slug: `${testRunSlugPrefix}-worker-${uniqueSuffix()}`.slice(0, 40),
+          });
+          try {
+            const marker = `captnweb-worker-${uniqueSuffix()}`;
+            const os = createAdminOsClient(baseUrl);
+            const streamPath = `/captnweb/worker/${uniqueSuffix()}`;
+            const workerSource = dedent`
+              export default {
+                async fetch() {
+                  return new Response(${JSON.stringify(`captnweb worker ${marker}`)});
+                },
+                async someFunction(input = {}) {
+                  return { from: "iterate-config", input, marker: ${JSON.stringify(marker)} };
+                },
+              };
+            `;
+
+            await os.project.streams.append({
+              projectSlugOrId: project.slug,
+              streamPath,
+              event: {
+                type: "events.iterate.com/codemode/tool-provider-registered",
+                payload: createExampleRpcProviderRegistration({
+                  exportName: "ReposCapability",
+                  instructions:
+                    "Use ctx.repos.ensureIterateConfigInfo({ projectSlug }) to create or inspect the iterate-config Repo.",
+                  path: ["repos"],
+                  projectId: project.id,
+                }),
+              },
             });
 
-            it("describes the project", async () => {
-              const described = await runWithIterateContext({
-                scopes: [`project:${project.id}`],
-                vars: { project },
-                fn: async ({ iterate, vars }) => iterate.projects.get(vars.project.id).describe(),
-              });
-              expect(described).toEqual({ id: project.id });
+            const codemodeResult = (
+              await new CodemodeBuilder(os, {
+                projectSlugOrId: project.slug,
+                providers: [],
+                streamPath,
+              })
+                .var("MARKER", marker)
+                .var("WORKER_SOURCE", workerSource)
+                .execute(async (ctx) => {
+                  const repo = await ctx.repos.ensureIterateConfigInfo({ projectSlug: null });
+                  const dir = `/iterate-config-${Date.now()}`;
+
+                  await ctx.workspace.git.clone({
+                    url: repo.remote,
+                    dir,
+                    branch: repo.defaultBranch,
+                    depth: 1,
+                    ...repo.credentials,
+                  });
+
+                  await ctx.workspace.writeFile(
+                    `${dir}/worker.js`,
+                    ctx.codemode.vars.WORKER_SOURCE,
+                  );
+                  await ctx.workspace.git.add({ dir, filepath: "worker.js" });
+                  const commit = await ctx.workspace.git.commit({
+                    dir,
+                    message: "Add captnweb worker proof",
+                    author: { name: "Codemode", email: "codemode@iterate.com" },
+                  });
+                  await ctx.workspace.git.push({
+                    dir,
+                    remote: "origin",
+                    ref: repo.defaultBranch,
+                    ...repo.credentials,
+                  });
+
+                  return {
+                    commit,
+                    repo: { defaultBranch: repo.defaultBranch, slug: repo.slug },
+                    status: await ctx.workspace.git.status({ dir }),
+                  };
+                })
+            ).success();
+            expect(codemodeResult).toMatchObject({
+              commit: { oid: expect.any(String) },
+              repo: { defaultBranch: "main", slug: "iterate-config" },
+              status: [],
             });
-          });
+
+            const called = await runWithIterateContext({
+              scopes: [`project:${project.id}`],
+              vars: { marker },
+              fn: async ({ iterate, vars }) =>
+                iterate.project.worker.someFunction({
+                  echo: vars.marker,
+                }),
+            });
+            expect(called).toEqual({
+              from: "iterate-config",
+              input: { echo: marker },
+              marker,
+            });
+          } finally {
+            await removeCaptnwebProject({ project, runWithIterateContext }).catch(() => undefined);
+          }
+        });
+
+        it("surfaces errors thrown by snippets and capabilities", async () => {
+          await expect(
+            runWithIterateContext({
+              scopes: [`project:${alphaProject.id}`],
+              fn: async () => {
+                throw new Error("Snippet exploded");
+              },
+            }),
+          ).rejects.toThrow("Snippet exploded");
+
+          await expect(
+            runWithIterateContext({
+              scopes: [`project:${alphaProject.id}`],
+              fn: async ({ iterate }) =>
+                iterate.testMethod({ behavior: "throw", message: "Bla bla" }),
+            }),
+          ).rejects.toThrow("Bla bla");
         });
       });
     }
@@ -274,6 +435,30 @@ type CreatedProject = {
   slug: string;
   ingressUrl: string;
 };
+
+type RunWithIterateContext = (typeof runWithIterateContexts)[number]["runWithIterateContext"];
+
+async function createCaptnwebProject(input: {
+  runWithIterateContext: RunWithIterateContext;
+  slug: string;
+}): Promise<CreatedProject> {
+  return await input.runWithIterateContext({
+    scopes: ["create_project"],
+    vars: { slug: input.slug },
+    fn: async ({ iterate, vars }) => iterate.projects.create({ slug: vars.slug }),
+  });
+}
+
+async function removeCaptnwebProject(input: {
+  project: CreatedProject;
+  runWithIterateContext: RunWithIterateContext;
+}) {
+  return await input.runWithIterateContext({
+    scopes: [`project:${input.project.id}`],
+    vars: { id: input.project.id },
+    fn: async ({ iterate, vars }) => iterate.projects.remove({ id: vars.id }),
+  });
+}
 
 async function listProjectsWithSlugPrefix(prefix: string) {
   const matches: Array<{ id: string; slug: string }> = [];

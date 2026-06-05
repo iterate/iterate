@@ -125,6 +125,7 @@ type ProjectIngressRouteRow = {
 };
 
 type ProjectDynamicWorkerEntrypoint = {
+  [key: string]: unknown;
   fetch(request: Request): Response | Promise<Response>;
   afterAppend?(input: { event: Event }): unknown | Promise<unknown>;
 };
@@ -505,6 +506,21 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     }
 
     return await fetch(outboundRequest);
+  }
+
+  async callConfigWorkerFunction(input: {
+    args?: unknown[];
+    functionName: string;
+  }): Promise<unknown> {
+    await this.ensureStarted();
+    const summary = this.requireSummary();
+    const entrypoint = await this.getFreshProjectDynamicWorkerEntrypoint(summary);
+    const fn = entrypoint[input.functionName];
+    if (typeof fn !== "function") {
+      throw new Error(`Project config worker does not export ${input.functionName}.`);
+    }
+
+    return await fn(...(input.args ?? []));
   }
 
   async fetch(request: Request): Promise<Response> {
