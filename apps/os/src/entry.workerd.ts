@@ -35,6 +35,7 @@ import { getProjectCustomHostnameIngressRule } from "~/ingress/project-custom-ho
 import type { ExactHostIngressRule } from "~/ingress/types.ts";
 import { DEBUG_APPEND_CHAIN_EVENT_TYPE } from "~/durable-objects/debug-append-chain-subscriber.ts";
 import { handleMcpFetch } from "~/domains/inbound-mcp-server/mcp-handler.ts";
+import { handleCaptnwebFetch } from "~/capnweb-playground.ts";
 
 // Re-export rpc-targets used by OS's existing loopback callable paths.
 // Stream processor subscriptions do not use these exports; they target Durable
@@ -101,6 +102,9 @@ export default {
       async ({ log }) => {
         const mcpResponse = await handleMcpFetch({ request, env, ctx: cfCtx, config });
         if (mcpResponse) return mcpResponse;
+
+        const captnwebResponse = await handleCaptnwebFetch({ request, env, config });
+        if (captnwebResponse) return captnwebResponse;
 
         const durableObjectDebugResponse = await handleDurableObjectDebugFetch({ request, env });
         if (durableObjectDebugResponse) return durableObjectDebugResponse;
