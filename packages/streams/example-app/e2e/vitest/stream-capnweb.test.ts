@@ -10,6 +10,8 @@ import type { SubscriptionConfiguredEvent } from "../../../src/processors/core/c
 import type { StreamProcessorRunnerRpc, StreamRpc, SubscriptionSink } from "../../../src/types.ts";
 import { connectStreamProcessorRunner } from "../../../src/node/connect-processor-runner.ts";
 import { withStreamConnectionFromBrowser } from "../../../src/browser/connect.ts";
+import { withStreamConnectionFromNode } from "../../../src/node/connect.ts";
+import type { WebSocketFrame } from "../../../src/connection.ts";
 
 const workerUrl = process.env.WORKER_URL ?? "http://localhost:5173";
 const e2eIt = process.env.STREAM_STAGING_E2E === "true" ? it : it.skip;
@@ -23,11 +25,6 @@ const cloudflaredE2eIt =
     ? it
     : it.skip;
 const externalRunnerPort = Number(process.env.STREAM_STAGING_EXTERNAL_RUNNER_PORT ?? 0);
-
-type WsMessage = {
-  direction: "out" | "in";
-  data: string;
-};
 
 class TestSubscriptionSink extends RpcTarget implements SubscriptionSink {
   readonly batches: StreamEvent[][] = [];
@@ -89,7 +86,7 @@ describe("stream capnweb protocol", () => {
 
   e2eIt("appends events after the stream-created event over capnweb", async () => {
     const path = `stream-capnweb-append-${crypto.randomUUID()}`;
-    await using stream = await connectStream(path);
+    using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl(path) });
 
     const appended = await stream.stream.append({
       event: {
@@ -106,9 +103,105 @@ describe("stream capnweb protocol", () => {
     });
   });
 
+  // Cross-stream append must land on the same leading-slash DO name the rest of the
+  // system uses. The regressed `#resolveStream` stripped the leading slash, so an event
+  // appended via `streamPath` went to `default:e2e/.../child` while a reader connects to
+  // `default:/e2e/.../child` — a different, empty stream. These prove path resolution.
+  e2eIt('append resolves relative child paths ("child" and "./child")', async () => {
+    const base = `/e2e/resolve-child-${crypto.randomUUID()}`;
+    using parent = withStreamConnectionFromNode({ url: toStreamWebSocketUrl(base) });
+
+    const viaBare = await parent.stream.append({
+      streamPath: "child",
+      event: { type: "test.stream.resolve", payload: { kind: "bare" } },
+    });
+    const viaDot = await parent.stream.append({
+      streamPath: "./child",
+      event: { type: "test.stream.resolve", payload: { kind: "dot" } },
+    });
+
+    // Both forms resolve to the same `${base}/child` stream the reader connects to.
+    using child = withStreamConnectionFromNode({ url: toStreamWebSocketUrl(`${base}/child`) });
+    const events = await child.stream.getEvents({ afterOffset: 0 });
+    expect(events).toContainEqual(viaBare);
+    expect(events).toContainEqual(viaDot);
+    expect(viaBare.offset).not.toBe(viaDot.offset);
+
+    // Nothing leaked into the parent.
+    const parentEvents = await parent.stream.getEvents({ afterOffset: 0 });
+    expect(parentEvents.some((event) => event.type === "test.stream.resolve")).toBe(false);
+  });
+
+  e2eIt("append resolves an absolute /root/path", async () => {
+    const unique = crypto.randomUUID();
+    const base = `/e2e/resolve-abs-${unique}`;
+    const target = `/e2e/resolve-abs-target-${unique}`;
+    using parent = withStreamConnectionFromNode({ url: toStreamWebSocketUrl(base) });
+
+    const appended = await parent.stream.append({
+      streamPath: target,
+      event: { type: "test.stream.resolve", payload: { kind: "absolute" } },
+    });
+
+    using targetStream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl(target) });
+    await expect(targetStream.stream.getEvents({ afterOffset: 0 })).resolves.toContainEqual(
+      appended,
+    );
+    const parentEvents = await parent.stream.getEvents({ afterOffset: 0 });
+    expect(parentEvents.some((event) => event.type === "test.stream.resolve")).toBe(false);
+  });
+
+  e2eIt("append resolves ..-relative parent, grandparent and mixed paths", async () => {
+    const root = `/e2e/resolve-up-${crypto.randomUUID()}`;
+    using current = withStreamConnectionFromNode({ url: toStreamWebSocketUrl(`${root}/a/b/c`) });
+
+    // ../parent -> {root}/a/b/parent
+    const toParent = await current.stream.append({
+      streamPath: "../parent",
+      event: { type: "test.stream.resolve", payload: { kind: "parent" } },
+    });
+    using parentStream = withStreamConnectionFromNode({
+      url: toStreamWebSocketUrl(`${root}/a/b/parent`),
+    });
+    await expect(parentStream.stream.getEvents({ afterOffset: 0 })).resolves.toContainEqual(
+      toParent,
+    );
+
+    // ../../grandparent -> {root}/a/grandparent
+    const toGrand = await current.stream.append({
+      streamPath: "../../grandparent",
+      event: { type: "test.stream.resolve", payload: { kind: "grandparent" } },
+    });
+    using grandStream = withStreamConnectionFromNode({
+      url: toStreamWebSocketUrl(`${root}/a/grandparent`),
+    });
+    await expect(grandStream.stream.getEvents({ afterOffset: 0 })).resolves.toContainEqual(toGrand);
+
+    // ../../grandparent/.././bla normalizes to {root}/a/bla
+    const toMixed = await current.stream.append({
+      streamPath: "../../grandparent/.././bla",
+      event: { type: "test.stream.resolve", payload: { kind: "mixed" } },
+    });
+    using blaStream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl(`${root}/a/bla`) });
+    await expect(blaStream.stream.getEvents({ afterOffset: 0 })).resolves.toContainEqual(toMixed);
+  });
+
+  e2eIt("append rejects a streamPath that escapes the stream root", async () => {
+    // base has depth 2 ([e2e, resolve-escape-...]); three `..` pops past the root.
+    const base = `/e2e/resolve-escape-${crypto.randomUUID()}`;
+    using parent = withStreamConnectionFromNode({ url: toStreamWebSocketUrl(base) });
+
+    await expect(
+      parent.stream.append({
+        streamPath: "../../../too-far",
+        event: { type: "test.stream.resolve", payload: { kind: "escape" } },
+      }),
+    ).rejects.toThrow();
+  });
+
   e2eIt("appendBatch returns events in input order including idempotency hits", async () => {
     const path = `stream-capnweb-batch-${crypto.randomUUID()}`;
-    await using stream = await connectStream(path);
+    using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl(path) });
 
     const existing = await stream.stream.append({
       event: {
@@ -155,7 +248,7 @@ describe("stream capnweb protocol", () => {
 
   e2eIt("deduplicates same-batch idempotency keys before writing", async () => {
     const path = `stream-capnweb-same-batch-idempotency-${crypto.randomUUID()}`;
-    await using stream = await connectStream(path);
+    using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl(path) });
 
     const batch = await stream.stream.appendBatch({
       events: [
@@ -186,7 +279,7 @@ describe("stream capnweb protocol", () => {
 
   e2eIt("uses exclusive numeric cursors", async () => {
     const path = `stream-capnweb-cursors-${crypto.randomUUID()}`;
-    await using stream = await connectStream(path);
+    using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl(path) });
 
     await stream.stream.appendBatch({
       events: [
@@ -218,7 +311,7 @@ describe("stream capnweb protocol", () => {
 
   e2eIt("exposes the stream reducer as an RPC method", async () => {
     const path = `stream-capnweb-reduce-${crypto.randomUUID()}`;
-    await using stream = await connectStream(path);
+    using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl(path) });
 
     const state = await stream.stream.reduce({
       event: {
@@ -238,7 +331,7 @@ describe("stream capnweb protocol", () => {
 
   e2eIt("replays history and then delivers live batches to inbound subscribers", async () => {
     const path = `stream-capnweb-replay-${crypto.randomUUID()}`;
-    await using stream = await connectStream(path);
+    using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl(path) });
 
     const first = await stream.stream.append({
       event: {
@@ -285,7 +378,7 @@ describe("stream capnweb protocol", () => {
 
   e2eIt("assigns a subscription key when subscribe omits one", async () => {
     const path = `stream-capnweb-anon-sub-${crypto.randomUUID()}`;
-    await using stream = await connectStream(path);
+    using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl(path) });
 
     const sinkA = new TestSubscriptionSink();
     const sinkB = new TestSubscriptionSink();
@@ -332,7 +425,7 @@ describe("stream capnweb protocol", () => {
   e2eIt("runs a built-in outbound processor from subscription-configured", async () => {
     const path = `stream-capnweb-processor-${crypto.randomUUID()}`;
     const subscriptionKey = "echo-example";
-    await using stream = await connectStream(path);
+    using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl(path) });
     const runtime = await stream.stream.runtimeState();
     await using processor = await connectStreamProcessorRunner({
       url: toStreamProcessorRunnerWebSocketUrl(
@@ -393,7 +486,7 @@ describe("stream capnweb protocol", () => {
         port: externalRunnerPort,
         runner,
       });
-      await using stream = await connectStream(path);
+      using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl(path) });
 
       const configured = await stream.stream.append({
         event: {
@@ -449,7 +542,7 @@ describe("stream capnweb protocol", () => {
         runner,
       });
       await using tunnel = await startCloudflaredTunnel(runnerServer.url);
-      await using stream = await connectStream(path);
+      using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl(path) });
 
       const configured = await stream.stream.append({
         event: {
@@ -508,7 +601,7 @@ describe("stream capnweb protocol", () => {
         runner,
       });
       await using tunnel = await startCloudflaredTunnel(runnerServer.url);
-      await using stream = await connectStream(path);
+      using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl(path) });
 
       // Configure the outbound subscription and then immediately append an event,
       // WITHOUT waiting for the worker's outbound dial to complete. Dialing the
@@ -561,15 +654,17 @@ describe("stream capnweb protocol", () => {
     const path = `stream-capnweb-wire-${crypto.randomUUID()}`;
     const sink = new TestSubscriptionSink();
 
-    await using subscriber = await connectStream(path);
+    using subscriber = withStreamConnectionFromNode({ url: toStreamWebSocketUrl(path) });
+    const frames: WebSocketFrame[] = [];
+    subscriber.onWebSocketFrame((frame) => frames.push(frame));
     await subscriber.stream.subscribe({
       subscriptionKey: "wire",
       sink,
       replayAfterOffset: 2,
     });
-    const afterSubscribe = subscriber.wsMessages.length;
+    const afterSubscribe = frames.length;
 
-    await using publisher = await connectStream(path);
+    using publisher = withStreamConnectionFromNode({ url: toStreamWebSocketUrl(path) });
     const input: StreamEventInput = {
       type: "test.stream.capnweb-wire",
       payload: { path },
@@ -584,9 +679,9 @@ describe("stream capnweb protocol", () => {
       createdAt: expect.any(String),
     });
     expect(sink.batches).toEqual([[appended]]);
-    expect(outboundFrames(subscriber.wsMessages, afterSubscribe)).toEqual([]);
+    expect(outboundFrames(frames, afterSubscribe)).toEqual([]);
 
-    const inbound = parsedFrames(subscriber.wsMessages)
+    const inbound = parsedFrames(frames)
       .slice(afterSubscribe)
       .filter((frame) => frame.direction === "in");
     expect(inbound.every((frame) => isPushOrReleaseFrame(frame.data))).toBe(true);
@@ -790,43 +885,6 @@ async function waitForCloudflaredRegistered(
   });
 }
 
-async function connectStream(path: string): Promise<
-  AsyncDisposable & {
-    stream: RpcStub<StreamRpc>;
-    wsMessages: WsMessage[];
-  }
-> {
-  const wsMessages: WsMessage[] = [];
-  const webSocket = newRecordingWebSocket(toStreamWebSocketUrl(path), wsMessages);
-  await waitForWebSocketOpen(webSocket);
-  const stream = newWebSocketRpcSession<StreamRpc>(webSocket as unknown as globalThis.WebSocket);
-
-  return {
-    stream,
-    wsMessages,
-    async [Symbol.asyncDispose]() {
-      stream[Symbol.dispose]();
-      await closeWebSocket(webSocket);
-    },
-  };
-}
-
-function newRecordingWebSocket(url: string, wsMessages: WsMessage[]) {
-  const webSocket = new WebSocket(url);
-  const send = webSocket.send.bind(webSocket);
-
-  webSocket.send = ((data: Parameters<WebSocket["send"]>[0]) => {
-    wsMessages.push({ direction: "out", data: describeWebSocketFrameData(data) });
-    return send(data);
-  }) as WebSocket["send"];
-
-  webSocket.addEventListener("message", (event) => {
-    wsMessages.push({ direction: "in", data: describeWebSocketFrameData(event.data) });
-  });
-
-  return webSocket;
-}
-
 function toStreamWebSocketUrl(path: string) {
   const url = new URL(workerUrl);
   url.pathname = streamApiPath(path);
@@ -848,14 +906,14 @@ function toStreamProcessorRunnerWebSocketUrl(path: string) {
   return url.toString();
 }
 
-function parsedFrames(messages: WsMessage[]) {
+function parsedFrames(messages: WebSocketFrame[]) {
   return messages.map((frame) => ({
     direction: frame.direction,
     data: JSON.parse(frame.data) as unknown,
   }));
 }
 
-function outboundFrames(messages: WsMessage[], afterFrameIndex: number) {
+function outboundFrames(messages: WebSocketFrame[], afterFrameIndex: number) {
   return parsedFrames(messages)
     .slice(afterFrameIndex)
     .filter((frame) => frame.direction === "out")
@@ -868,31 +926,6 @@ function isPushOrReleaseFrame(value: unknown) {
 
 function isPushFrame(value: unknown) {
   return Array.isArray(value) && value[0] === "push";
-}
-
-function describeWebSocketFrameData(data: unknown) {
-  if (typeof data === "string") return data;
-  if (data instanceof ArrayBuffer) return new TextDecoder().decode(data);
-  if (ArrayBuffer.isView(data)) return new TextDecoder().decode(data);
-  throw new TypeError(`unexpected WebSocket frame data: ${String(data)}`);
-}
-
-function waitForWebSocketOpen(webSocket: WebSocket) {
-  if (webSocket.readyState === WebSocket.OPEN) return Promise.resolve();
-  return new Promise<void>((resolve, reject) => {
-    webSocket.addEventListener("open", () => resolve(), { once: true });
-    webSocket.addEventListener("error", () => reject(new Error("WebSocket connection failed")), {
-      once: true,
-    });
-  });
-}
-
-function closeWebSocket(webSocket: WebSocket) {
-  if (webSocket.readyState === WebSocket.CLOSED) return Promise.resolve();
-  return new Promise<void>((resolve) => {
-    webSocket.addEventListener("close", () => resolve(), { once: true });
-    webSocket.close();
-  });
 }
 
 async function waitFor(assertion: () => boolean | Promise<boolean>, timeoutMs: number) {

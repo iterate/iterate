@@ -17,7 +17,7 @@ const e2eIt = process.env.STREAM_STAGING_E2E === "true" ? it : it.skip;
 describe("node-hosted stream processor (e2e)", () => {
   e2eIt("hosts echo in-process over an inbound subscription", async () => {
     const path = `node-echo-${crypto.randomUUID()}`;
-    await using connection = await withStreamConnectionFromNode({
+    using connection = withStreamConnectionFromNode({
       url: toStreamWebSocketUrl(path),
     });
 
@@ -69,7 +69,7 @@ describe("node-hosted stream processor (e2e)", () => {
 
     // Session 1: process one input, then drop the connection + runner.
     {
-      await using connection = await withStreamConnectionFromNode({
+      using connection = withStreamConnectionFromNode({
         url: toStreamWebSocketUrl(path),
       });
       const processorRunner = createProcessorRunner({
@@ -100,7 +100,7 @@ describe("node-hosted stream processor (e2e)", () => {
     // Session 2: fresh connection + fresh runner, SAME persisted snapshot. It must
     // resume (subscribe afterOffset = stored offset), not reprocess the first input.
     {
-      await using connection = await withStreamConnectionFromNode({
+      using connection = withStreamConnectionFromNode({
         url: toStreamWebSocketUrl(path),
       });
       const processorRunner = createProcessorRunner({

@@ -48,7 +48,7 @@ export function StreamStateView({ streamPath }: { streamPath: string }) {
     return () => {
       disposed = true;
       if (timer !== undefined) clearTimeout(timer);
-      void connection?.[Symbol.asyncDispose]();
+      connection?.[Symbol.dispose]();
     };
   }, [streamPath]);
 

@@ -1,4 +1,3 @@
-import { posix } from "node:path";
 import { newWebSocketRpcSession, newWorkersRpcResponse, type RpcStub } from "capnweb";
 import { DurableObject } from "cloudflare:workers";
 import {
@@ -184,8 +183,8 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
   }
 
   #resolveStream(streamPath: string): Pick<StreamRpc, "append" | "appendBatch"> {
-    const resolvedPath = posix.resolve("/", this.#state.core.path, streamPath).slice(1);
-    if (resolvedPath === this.#state.core.path) return this;
+    const resolvedPath = resolveStreamPath(this.#state.core.path, streamPath);
+    if (resolvedPath === resolveStreamPath(this.#state.core.path, ".")) return this;
     return this.env.STREAM.getByName(`${this.#state.core.namespace}:${resolvedPath}`);
   }
 
@@ -703,6 +702,35 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
 // Wraps the Stream Durable Object in an RpcTarget that can be passed
 // across workers rpc and capnweb rpc boundaries
 export const StreamRpcTarget = makeRpcTargetClass(Stream);
+
+/**
+ * Resolves `streamPath` against the current stream's path into a canonical
+ * leading-slash path used for the target DO name (`${namespace}:${path}`).
+ *
+ * Stream identity uses leading-slash paths everywhere — DO names, ancestor names
+ * (getAncestorStreamPaths) and runner names all keep it — so resolution preserves
+ * the leading slash rather than stripping it. Relative paths (`child`, `./child`,
+ * `../sibling`) resolve against `basePath`; absolute paths (`/root/x`) resolve from
+ * the root. `.` and empty segments are ignored, `..` pops a segment, and a `..` that
+ * would pop past the root throws rather than silently clamping at `/`.
+ */
+export function resolveStreamPath(basePath: string, streamPath: string): string {
+  const segments = streamPath.startsWith("/") ? [] : basePath.split("/").filter(Boolean);
+  for (const segment of streamPath.split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") {
+      if (segments.length === 0) {
+        throw new Error(
+          `streamPath "${streamPath}" escapes the stream root (resolved from "${basePath}")`,
+        );
+      }
+      segments.pop();
+      continue;
+    }
+    segments.push(segment);
+  }
+  return `/${segments.join("/")}`;
+}
 
 /** Initial durable state for the Stream DO's inline processors, keyed by processor slug. */
 function initialProcessorState(): StreamPersistedProcessorState {

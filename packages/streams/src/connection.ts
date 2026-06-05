@@ -8,7 +8,7 @@ export type WebSocketFrame = {
   timestamp: number;
 };
 
-export type StreamConnection = AsyncDisposable & {
+export type StreamConnection = Disposable & {
   stream: RpcStub<StreamRpc>;
   onWebSocketFrame(listener: (frame: WebSocketFrame) => void): Disposable;
 };
@@ -33,9 +33,10 @@ export function streamConnectionFromWebSocket(webSocket: WebSocket): StreamConne
         },
       };
     },
-    async [Symbol.asyncDispose]() {
+    [Symbol.dispose]() {
       stream[Symbol.dispose]();
-      await closeWebSocket(webSocket);
+      // capnweb has already flushed; closing is fire-and-forget.
+      if (webSocket.readyState !== WebSocket.CLOSED) webSocket.close();
     },
   };
 }
@@ -54,14 +55,6 @@ export function waitForOpen(webSocket: WebSocket) {
     webSocket.addEventListener("error", () => reject(new Error("WebSocket connection failed")), {
       once: true,
     });
-  });
-}
-
-function closeWebSocket(webSocket: WebSocket) {
-  if (webSocket.readyState === WebSocket.CLOSED) return Promise.resolve();
-  return new Promise<void>((resolve) => {
-    webSocket.addEventListener("close", () => resolve(), { once: true });
-    webSocket.close();
   });
 }
 

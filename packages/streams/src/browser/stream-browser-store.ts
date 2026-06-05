@@ -298,7 +298,7 @@ function createStreamRuntime(
     })
       .then((connection) => {
         if (disposed) {
-          void connection[Symbol.asyncDispose]();
+          connection[Symbol.dispose]();
           return;
         }
         stream = connection;
@@ -373,7 +373,7 @@ function createStreamRuntime(
         if (disposed) return;
         console.error(`[stream ${args.streamPath}] subscribe failed`, error);
         stopSubscriptionElection();
-        void stream?.[Symbol.asyncDispose]();
+        stream?.[Symbol.dispose]();
         stream = undefined;
         reconnectAfter(`subscribe failed: ${errorMessage(error)}`);
       });
@@ -410,7 +410,7 @@ function createStreamRuntime(
     }
     connectTimer = reconnectTimer = databaseInfoTimer = databaseChangeTimer = undefined;
     stopSubscriptionElection();
-    void stream?.[Symbol.asyncDispose]();
+    stream?.[Symbol.dispose]();
     stream = undefined;
     offDatabaseChange();
     releaseDatabase();
@@ -442,7 +442,7 @@ function createStreamRuntime(
     },
     async clearLocalDatabase() {
       stopSubscriptionElection();
-      void stream?.[Symbol.asyncDispose]();
+      stream?.[Symbol.dispose]();
       stream = undefined;
       await discardLocalMirror();
       reconnectNow();
