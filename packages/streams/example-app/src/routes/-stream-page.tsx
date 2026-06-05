@@ -1271,13 +1271,9 @@ function StreamControlTool({
             payload: {
               subscriptionKey,
               subscriber: {
-                type: "external-url",
+                type: "built-in",
                 transport: "capnweb-websocket",
-                url: hostedProcessorRunnerUrl({
-                  namespace: core.namespace,
-                  streamPath: core.path,
-                  processorSlug: "circuit-breaker",
-                }),
+                processorSlug: "circuit-breaker",
               },
             },
             idempotencyKey: `subscription:${subscriptionKey}`,
@@ -1419,19 +1415,6 @@ function StreamControlTool({
       )}
     </section>
   );
-}
-
-function hostedProcessorRunnerUrl(args: {
-  namespace: string;
-  streamPath: string;
-  processorSlug: string;
-}) {
-  const url = new URL(window.location.href);
-  const runnerName = `${args.namespace}:${args.streamPath}:${args.processorSlug}`;
-  url.pathname = `/stream-processor-runner/${encodeURIComponent(runnerName)}`;
-  url.search = "";
-  url.searchParams.set("processorSlug", args.processorSlug);
-  return url.toString();
 }
 
 function formatByteSize(bytes: number) {

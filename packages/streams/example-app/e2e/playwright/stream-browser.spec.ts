@@ -22,6 +22,37 @@ test("stream page appends through the shared browser mirror", async ({ page }) =
   await expect(eventMeta(page, type).first()).toBeVisible();
 });
 
+test("sidebar circuit breaker config runs the hosted built-in processor", async ({ page }) => {
+  const streamPath = `/e2e/${crypto.randomUUID()}`;
+  await page.goto(streamRoute(streamPath));
+  await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
+
+  await page.getByTestId("circuit-breaker-burst-capacity").fill("1");
+  await page.getByTestId("circuit-breaker-refill-rate").fill("1");
+  await page.getByTestId("circuit-breaker-apply").click();
+  await expect(page.getByTestId("stream-control-action")).toHaveText("done");
+  await expect(
+    eventMeta(page, "events.iterate.com/stream/subscription-configured").first(),
+  ).toBeVisible();
+  await expect(
+    eventMeta(page, "events.iterate.com/circuit-breaker/configured").first(),
+  ).toBeVisible();
+
+  await appendComposerEvent(page, {
+    type: "events.iterate.com/debug/playwright-circuit-breaker-first",
+    payload: { streamPath, value: crypto.randomUUID() },
+  });
+  await appendComposerEvent(page, {
+    type: "events.iterate.com/debug/playwright-circuit-breaker-second",
+    payload: { streamPath, value: crypto.randomUUID() },
+  });
+
+  await expect(page.getByTestId("stream-pause-reason")).toContainText("circuit breaker", {
+    timeout: 10_000,
+  });
+  await expect(page.getByTestId("stream-resume-button")).toBeVisible();
+});
+
 // Event type filtering should stay as simple as the stream page SQL: COUNT(*) over the
 // generated type column plus the visible TanStack Virtual window over the same indexed type
 // and local_index ordering. The downloaded DB query plan check catches accidental full scans.
