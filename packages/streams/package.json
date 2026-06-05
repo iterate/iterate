@@ -1,0 +1,29 @@
+{
+  "name": "@iterate-com/streams",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --dir example-app dev",
+    "build": "pnpm --dir example-app build",
+    "preview": "pnpm --dir example-app preview",
+    "deploy": "pnpm --dir example-app run deploy",
+    "test": "vitest run",
+    "test:e2e": "pnpm --dir example-app test:e2e",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@journeyapps/wa-sqlite": "^1.7.0",
+    "capnweb": "^0.8.0",
+    "react": "^19.2.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:cloudflare",
+    "@types/node": "^24.12.4",
+    "@types/react": "^19.2.15",
+    "@types/ws": "^8.18.1",
+    "vite": "^8.0.16",
+    "vitest": "^4.1.7",
+    "ws": "^8.19.0"
+  }
+}

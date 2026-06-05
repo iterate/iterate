@@ -1,0 +1,34 @@
+{
+  "$schema": "../../../node_modules/wrangler/config-schema.json",
+  "account_id": "376ef7ed81b0573f93524de763666c15",
+  "name": "stream-staging-area",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-05-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "upload_source_maps": true,
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true,
+      "head_sampling_rate": 1,
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+    },
+  },
+  "limits": {
+    "cpu_ms": 300000,
+  },
+  "dev": {
+    "enable_containers": false,
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "STREAM", "class_name": "Stream" },
+      { "name": "STREAM_PROCESSOR_RUNNER", "class_name": "StreamProcessorRunner" },
+    ],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Stream", "StreamProcessorRunner"] }],
+}

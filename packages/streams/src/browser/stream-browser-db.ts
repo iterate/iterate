@@ -1,0 +1,384 @@
+export type SqlValue = string | number | bigint | Uint8Array | number[] | null;
+
+export type StreamEventRow = {
+  local_index: number;
+  offset: number;
+  type: string;
+  idempotency_key: string | null;
+  created_at: string;
+  inserted_at: string;
+  raw_json: string;
+};
+
+export type StreamDatabaseInfo = {
+  databaseSizeBytes: number;
+  storageType: "opfs";
+  persisted: boolean;
+  crossOriginIsolated: boolean;
+};
+
+export type StreamDatabaseEventSummary = {
+  count: number;
+  minOffset: number | null;
+  maxOffset: number | null;
+  isContinuous: boolean;
+};
+
+export type SqliteQueryStatus = "pending" | "ok" | "error";
+
+export type SqliteQuerySnapshot<T> = {
+  data: T[];
+  status: SqliteQueryStatus;
+  error: Error | undefined;
+};
+
+export type SqliteQueryHandle = {
+  getSnapshot(): SqliteQuerySnapshot<Record<string, SqlValue>>;
+  subscribe(listener: () => void): () => void;
+};
+
+export type SqlClient = {
+  exec(sql: string, params?: SqlValue[]): Promise<Record<string, SqlValue>[]>;
+  batch(
+    statements: { sql: string; params?: SqlValue[] }[],
+    options?: { transaction?: boolean },
+  ): Promise<void>;
+};
+
+type StreamDbChange = { kind: "append"; minOffset: number; maxOffset: number } | { kind: "clear" };
+
+type RegisteredQuery = {
+  sql: string;
+  params: SqlValue[];
+  snapshot: SqliteQuerySnapshot<Record<string, SqlValue>>;
+  started: boolean;
+  gcTimer: ReturnType<typeof setTimeout> | undefined;
+  readonly listeners: Set<() => void>;
+  readonly handle: SqliteQueryHandle;
+};
+
+const PENDING: SqliteQuerySnapshot<never> = { data: [], status: "pending", error: undefined };
+
+export class StreamBrowserDatabase implements Disposable {
+  readonly databasePath: string;
+  readonly downloadFilename: string;
+  readonly #worker: Worker;
+  readonly #channel: BroadcastChannel;
+  // eslint-disable-next-line no-unused-private-class-members -- oxlint false positive: this field is only ever read via `await this.#ready`, which the rule does not count as a use.
+  readonly #ready: Promise<void>;
+  #nextRequestId = 1;
+  #disposed = false;
+  #infoRefresh: Promise<StreamDatabaseInfo> | undefined;
+  readonly #pending = new Map<
+    number,
+    { resolve: (value: unknown) => void; reject: (error: Error) => void }
+  >();
+  readonly #queries = new Map<string, RegisteredQuery>();
+  readonly #changeListeners = new Set<(change: StreamDbChange) => void>();
+
+  constructor(
+    readonly namespace: string,
+    readonly streamPath: string,
+  ) {
+    this.databasePath = databasePathFor(namespace, streamPath);
+    this.downloadFilename = downloadFilenameFor(namespace, streamPath);
+    this.#worker = new Worker(new URL("./stream-db.worker.ts", import.meta.url), {
+      type: "module",
+    });
+    this.#worker.onmessage = (
+      event: MessageEvent<{ id: number; ok: boolean; result?: unknown; error?: string }>,
+    ) => {
+      const { id, ok, result, error } = event.data;
+      const pending = this.#pending.get(id);
+      if (pending === undefined) return;
+      this.#pending.delete(id);
+      if (ok) pending.resolve(result);
+      else pending.reject(new Error(error ?? "stream db worker error"));
+    };
+    this.#channel = new BroadcastChannel(
+      `stream-db:${encodeURIComponent(namespace)}:${encodeURIComponent(streamPath)}`,
+    );
+    this.#channel.onmessage = (event: MessageEvent<StreamDbChange>) => this.#onChange(event.data);
+    this.#ready = this.#call("init", { databasePath: this.databasePath }).then(() => undefined);
+  }
+
+  #assertOpen() {
+    if (this.#disposed) throw new Error("stream browser database is disposed");
+  }
+
+  #call(op: string, args: Record<string, unknown>): Promise<unknown> {
+    this.#assertOpen();
+    const id = this.#nextRequestId++;
+    return new Promise((resolve, reject) => {
+      this.#pending.set(id, { resolve, reject });
+      this.#worker.postMessage({ id, op, ...args });
+    });
+  }
+
+  async exec(sql: string, params: SqlValue[] = []): Promise<Record<string, SqlValue>[]> {
+    await this.#ready;
+    return await this.#execReady(sql, params);
+  }
+
+  async #execReady(sql: string, params: SqlValue[] = []): Promise<Record<string, SqlValue>[]> {
+    const rows = await this.#call("exec", { sql, params });
+    if (!Array.isArray(rows)) throw new Error("stream db worker returned non-array exec result");
+    return rows.filter(isSqlRow);
+  }
+
+  async batch(
+    statements: { sql: string; params?: SqlValue[] }[],
+    options: { transaction?: boolean } = {},
+  ): Promise<void> {
+    await this.#ready;
+    await this.#call("batch", { statements, transaction: options.transaction ?? false });
+  }
+
+  async maxOffset(): Promise<number> {
+    if (!(await this.#eventsTableExists())) return -1;
+    const [row] = await this.exec(`SELECT MAX(offset) AS max_offset FROM events`);
+    return Number(row?.max_offset ?? -1);
+  }
+
+  async eventSummary(): Promise<StreamDatabaseEventSummary> {
+    if (!(await this.#eventsTableExists())) {
+      return { count: 0, minOffset: null, maxOffset: null, isContinuous: true };
+    }
+    const [row] = await this.exec(
+      `SELECT COUNT(*) AS event_count, MIN(offset) AS min_offset, MAX(offset) AS max_offset
+       FROM events`,
+    );
+    const count = Number(row?.event_count ?? 0);
+    const minOffset =
+      row?.min_offset === null || row?.min_offset === undefined ? null : Number(row.min_offset);
+    const maxOffset =
+      row?.max_offset === null || row?.max_offset === undefined ? null : Number(row.max_offset);
+
+    return {
+      count,
+      minOffset,
+      maxOffset,
+      isContinuous: count === 0 || (minOffset === 1 && maxOffset === count),
+    };
+  }
+
+  notifyChanged(change: StreamDbChange = { kind: "append", minOffset: 0, maxOffset: 0 }) {
+    this.#publishChange(change);
+  }
+
+  async info(): Promise<StreamDatabaseInfo> {
+    this.#infoRefresh ??= (async () => {
+      try {
+        const persisted = (await navigator.storage?.persisted?.()) ?? false;
+        const [size] = await this.exec(
+          `SELECT page_count * page_size AS bytes
+           FROM pragma_page_count(), pragma_page_size()`,
+        );
+        return {
+          databaseSizeBytes: Number(size?.bytes ?? 0),
+          storageType: "opfs",
+          persisted,
+          crossOriginIsolated: globalThis.crossOriginIsolated,
+        };
+      } finally {
+        this.#infoRefresh = undefined;
+      }
+    })();
+    return this.#infoRefresh;
+  }
+
+  async download() {
+    await this.#ready;
+    const buffer = await this.#call("export", {});
+    if (!(buffer instanceof ArrayBuffer)) {
+      throw new Error("stream db worker returned non-ArrayBuffer export result");
+    }
+    const url = URL.createObjectURL(new Blob([buffer], { type: "application/x-sqlite3" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = this.downloadFilename;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  /** Clears the given tables (those that exist) and broadcasts a clear so views remount. */
+  async clearTables(tables: readonly string[]) {
+    for (const table of tables) {
+      if (await this.#tableExists(table)) await this.exec(`DELETE FROM ${table}`);
+    }
+    this.#publishChange({ kind: "clear" });
+  }
+
+  async compact() {
+    await this.exec(`VACUUM`);
+  }
+
+  query(sql: string, params: SqlValue[]): SqliteQueryHandle {
+    const key = `${sql}\0${JSON.stringify(params)}`;
+    const existing = this.#queries.get(key);
+    if (existing !== undefined) return existing.handle;
+    // The visible-range query changes on every virtual scroll range. Seed a new
+    // range query with the previous successful result for the same SQL shape so
+    // the feed does not briefly render an all-pending window while SQLite catches up.
+    const previousSnapshot = [...this.#queries.values()].find(
+      (query) => query.sql === sql && query.snapshot.status === "ok",
+    )?.snapshot;
+
+    const entry: RegisteredQuery = {
+      sql,
+      params,
+      snapshot:
+        previousSnapshot === undefined
+          ? PENDING
+          : { ...previousSnapshot, status: "pending", error: undefined },
+      started: false,
+      gcTimer: undefined,
+      listeners: new Set(),
+      handle: {
+        getSnapshot: () => entry.snapshot,
+        subscribe: (listener) => {
+          entry.listeners.add(listener);
+          if (entry.gcTimer !== undefined) {
+            clearTimeout(entry.gcTimer);
+            entry.gcTimer = undefined;
+          }
+          if (!entry.started) {
+            entry.started = true;
+            void this.#runQuery(entry);
+          }
+          return () => {
+            entry.listeners.delete(listener);
+            if (entry.listeners.size > 0) return;
+            entry.gcTimer = setTimeout(() => {
+              if (entry.listeners.size === 0) this.#queries.delete(key);
+            }, 0);
+          };
+        },
+      },
+    };
+    this.#queries.set(key, entry);
+    return entry.handle;
+  }
+
+  onChange(listener: (change: StreamDbChange) => void) {
+    this.#changeListeners.add(listener);
+    return () => void this.#changeListeners.delete(listener);
+  }
+
+  async #runQuery(entry: RegisteredQuery): Promise<void> {
+    try {
+      const data = await this.exec(entry.sql, entry.params);
+      entry.snapshot = { data, status: "ok", error: undefined };
+    } catch (error) {
+      if (isMissingTableError(error)) {
+        // A view's table may not exist until its processor's first write creates it. Treat
+        // that as an empty result (count 0 / no rows) rather than a surfaced error.
+        entry.snapshot = { data: emptyTableRows(entry.sql), status: "ok", error: undefined };
+        for (const listener of entry.listeners) listener();
+        return;
+      }
+      console.error(`[stream-browser-db ${this.streamPath}] SQLite query failed`, {
+        error,
+        params: entry.params,
+        sql: entry.sql,
+      });
+      entry.snapshot = {
+        ...entry.snapshot,
+        status: "error",
+        error: error instanceof Error ? error : new Error(String(error)),
+      };
+    }
+    for (const listener of entry.listeners) listener();
+  }
+
+  async #eventsTableExists(): Promise<boolean> {
+    return this.#tableExists("events");
+  }
+
+  async #tableExists(name: string): Promise<boolean> {
+    await this.#ready;
+    const [row] = await this.#execReady(
+      `SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?`,
+      [name],
+    );
+    return row !== undefined;
+  }
+
+  #publishChange(change: StreamDbChange) {
+    this.#channel.postMessage(change);
+    this.#onChange(change);
+  }
+
+  #onChange(change: StreamDbChange) {
+    this.#infoRefresh = undefined;
+    for (const entry of this.#queries.values()) void this.#runQuery(entry);
+    for (const listener of this.#changeListeners) listener(change);
+  }
+
+  dispose() {
+    if (this.#disposed) return;
+    this.#disposed = true;
+    for (const pending of this.#pending.values()) {
+      pending.reject(new Error("stream browser database disposed"));
+    }
+    this.#pending.clear();
+    this.#queries.clear();
+    this.#changeListeners.clear();
+    this.#channel.close();
+    this.#worker.terminate();
+  }
+
+  [Symbol.dispose]() {
+    this.dispose();
+  }
+}
+
+// OPFS layout: one folder per namespace, one SQLite file per stream path inside it.
+function databasePathFor(namespace: string, streamPath: string) {
+  return `${encodeURIComponent(namespace)}/${databaseSlugForStreamPath(streamPath)}.sqlite3`;
+}
+
+function downloadFilenameFor(namespace: string, streamPath: string) {
+  return `${encodeURIComponent(namespace)}__${databaseSlugForStreamPath(streamPath)}.sqlite3`;
+}
+
+function databaseSlugForStreamPath(streamPath: string) {
+  const segments = streamPath.split("/").filter(Boolean).map(encodeURIComponent);
+  const hint = segments.at(-1) ?? "root";
+  return `stream-${fnv1a32(streamPath).toString(16).padStart(8, "0")}-${hint.slice(0, 24)}`;
+}
+
+function fnv1a32(value: string) {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash;
+}
+
+function isSqlRow(value: unknown): value is Record<string, SqlValue> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  return Object.values(value).every(isSqlValue);
+}
+
+function isSqlValue(value: unknown): value is SqlValue {
+  return (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "bigint" ||
+    value instanceof Uint8Array ||
+    (Array.isArray(value) && value.every((item) => typeof item === "number"))
+  );
+}
+
+function isMissingTableError(error: unknown) {
+  return error instanceof Error && error.message.includes("no such table");
+}
+
+function emptyTableRows(sql: string): Record<string, SqlValue>[] {
+  // A `SELECT COUNT(*) AS count ...` over a not-yet-created table reads as 0; anything else
+  // reads as no rows.
+  return /^\s*SELECT\s+COUNT\(\*\)\s+AS\s+count\b/i.test(sql) ? [{ count: 0 }] : [];
+}
