@@ -1,7 +1,18 @@
 import { ORPCError } from "@orpc/server";
-import type { Event } from "@iterate-com/shared/streams/types";
+import { withStreamConnectionFromWorkers } from "@iterate-com/streams/workers/connect";
+import { createStreamSubscription } from "@iterate-com/streams/subscription";
 import type { AppContext } from "~/context.ts";
-import { getStreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
+import {
+  getStreamsCapability,
+  resolveStreamPath,
+} from "~/domains/streams/entrypoints/streams-capability.ts";
+import {
+  getStreamDurableObjectName,
+  toLegacyEvent,
+  toNewAfterOffset,
+  type StreamDurableObject,
+  type StreamDurableObjectNamespace,
+} from "~/domains/streams/new-stream-runtime.ts";
 import { os, projectScopeMiddleware } from "~/orpc/orpc.ts";
 import { requireProjectScope } from "~/orpc/project-access.ts";
 
@@ -52,14 +63,25 @@ export const projectStreamsRouter = {
     .use(projectScopeMiddleware)
     .handler(async function* ({ context, input, signal }) {
       const project = requireProjectScope(context);
-      const response = await getProjectStreamsCapability(context, project.id).stream({
-        afterOffset: input.afterOffset,
-        beforeOffset: input.beforeOffset,
-        streamPath: input.streamPath,
-      });
-      if (!response.body) return;
+      if (input.beforeOffset != null && input.beforeOffset !== "end") {
+        const events = await getProjectStreamsCapability(context, project.id).read({
+          afterOffset: input.afterOffset,
+          beforeOffset: input.beforeOffset,
+          streamPath: input.streamPath,
+        });
+        for (const event of events) {
+          yield event;
+        }
+        return;
+      }
 
-      for await (const event of decodeStreamEventLines(response.body, signal)) {
+      for await (const event of subscribeProjectStreamEvents({
+        afterOffset: input.afterOffset,
+        context,
+        projectId: project.id,
+        signal,
+        streamPath: input.streamPath,
+      })) {
         yield event;
       }
     }),
@@ -89,35 +111,74 @@ function getProjectStreamsCapability(context: AppContext, projectId: string) {
   });
 }
 
-async function* decodeStreamEventLines(stream: ReadableStream<Uint8Array>, signal?: AbortSignal) {
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
+async function* subscribeProjectStreamEvents(input: {
+  afterOffset?: Parameters<typeof toNewAfterOffset>[0];
+  context: AppContext;
+  projectId: string;
+  signal?: AbortSignal;
+  streamPath: string;
+}) {
+  const streamNamespace = requireStreamNamespace(input.context);
+  const streamPath = resolveStreamPath(input.streamPath);
+  const streamStub = streamNamespace.getByName(
+    getStreamDurableObjectName({
+      namespace: input.projectId,
+      path: streamPath,
+    }),
+  );
+  using connection = await withStreamConnectionFromWorkers({
+    url: "https://stream.local/",
+    fetch: (request) => fetchDurableObjectWebSocket(streamStub, request),
+  });
+  let handle: { unsubscribe(): void } | undefined;
+  await using subscription = createStreamSubscription({
+    onDispose: () => handle?.unsubscribe(),
+  });
   const onAbort = () => {
-    void reader.cancel();
+    handle?.unsubscribe();
+    void subscription[Symbol.asyncDispose]();
   };
 
   try {
-    if (signal?.aborted) return;
-    signal?.addEventListener("abort", onAbort, { once: true });
+    if (input.signal?.aborted) return;
+    input.signal?.addEventListener("abort", onAbort, { once: true });
+    handle = await connection.stream.subscribe({
+      sink: subscription.sink,
+      replayAfterOffset: toNewAfterOffset(input.afterOffset),
+    });
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      while (true) {
-        const newlineIndex = buffer.indexOf("\n");
-        if (newlineIndex === -1) break;
-        const line = buffer.slice(0, newlineIndex);
-        buffer = buffer.slice(newlineIndex + 1);
-        if (line.trim()) yield JSON.parse(line) as Event;
+    for await (const batch of subscription) {
+      if (input.signal?.aborted) return;
+      for (const event of batch.events) {
+        yield toLegacyEvent(event, streamPath);
       }
     }
-
-    buffer += decoder.decode();
-    if (buffer.trim()) yield JSON.parse(buffer) as Event;
   } finally {
-    signal?.removeEventListener("abort", onAbort);
-    reader.releaseLock();
+    input.signal?.removeEventListener("abort", onAbort);
   }
+}
+
+function fetchDurableObjectWebSocket(
+  stub: DurableObjectStub<StreamDurableObject>,
+  request: Request,
+) {
+  const url = new URL(request.url);
+  if (url.protocol === "wss:") url.protocol = "https:";
+  if (url.protocol === "ws:") url.protocol = "http:";
+  return stub.fetch(
+    new Request(url, {
+      headers: new Headers(request.headers),
+      method: request.method,
+    }),
+  );
+}
+
+function requireStreamNamespace(context: AppContext): StreamDurableObjectNamespace {
+  if (!context.stream) {
+    throw new ORPCError("INTERNAL_SERVER_ERROR", {
+      message: "STREAM Durable Object namespace is not configured.",
+    });
+  }
+
+  return context.stream as unknown as StreamDurableObjectNamespace;
 }

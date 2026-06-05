@@ -1,21 +1,12 @@
 import { z } from "zod";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import { withStreamProcessorRunner } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor-runner";
-import type { Callable } from "@iterate-com/shared/callable/types.ts";
-import type { ProcessorStreamApi, StreamEvent } from "@iterate-com/shared/stream-processors";
+import { type Event } from "@iterate-com/shared/streams/types";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
-} from "@iterate-com/shared/streams/helpers";
-import type { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
-import {
-  type Event,
-  type EventInput,
-  STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-  type StreamCursor,
-  type StreamPath,
-} from "@iterate-com/shared/streams/types";
+  type StreamDurableObject,
+} from "~/domains/streams/new-stream-runtime.ts";
 import {
   REPO_DEFAULT_BRANCH,
   REPO_README_PATH,
@@ -29,10 +20,10 @@ import {
   stripArtifactTokenQuery,
 } from "~/domains/repos/artifacts.ts";
 import {
-  createRepoStreamProcessor,
   RepoStreamProcessorContract,
   repoStreamPath,
 } from "~/domains/repos/stream-processors/repo-stream-processor.ts";
+import type { StreamProcessorRunner } from "~/domains/streams/durable-objects/stream-processor-runner.ts";
 
 export type RepoStructuredName = {
   projectId: string;
@@ -82,6 +73,7 @@ type RepoEnv = {
   ARTIFACTS_NAMESPACE?: string;
   DO_CATALOG: D1Database;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
+  STREAM_PROCESSOR_RUNNER: DurableObjectNamespace<StreamProcessorRunner>;
 };
 
 const RepoLifecycleBase = createIterateDurableObjectBase<
@@ -97,40 +89,23 @@ const RepoLifecycleBase = createIterateDurableObjectBase<
   nameSchema: RepoStructuredName,
 });
 
-const RepoBase = withStreamProcessorRunner<
-  RepoStructuredName,
-  RepoEnv,
-  typeof RepoStreamProcessorContract
->({
-  processor() {
-    return createRepoStreamProcessor();
-  },
-  streamApi(args) {
-    return repoStreamApiFromNamespace({
-      durableObjectNamespace: args.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: args.structuredName.projectId,
-      streamPath: repoStreamPath(args.structuredName.repoSlug),
-    });
-  },
-})(RepoLifecycleBase);
-
 const REPO_WRITE_TOKEN_STORAGE_KEY = "repo.writeToken";
 const REPO_WRITE_TOKEN_EXPIRES_AT_STORAGE_KEY = "repo.writeTokenExpiresAt";
+const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 
-export class RepoDurableObject extends RepoBase<RepoEnv> {
+export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
   constructor(ctx: DurableObjectState, env: RepoEnv) {
     super(ctx, env);
     this.registerOnFirstInitialize(async (params) => {
       await this.ensureRepoSubscription(params);
-      await this.catchUpStreamProcessor({ signal: AbortSignal.timeout(30_000) });
     });
   }
 
   async createRepo(input: CreateRepoInput = {}): Promise<RepoInfo> {
     await this.ensureStarted();
-    await this.catchUpStreamProcessor({ signal: AbortSignal.timeout(30_000) });
+    await this.waitForRepoProcessorCatchUp();
 
-    if (this.currentRepo() !== null) {
+    if ((await this.currentRepo()) !== null) {
       throw new Error(`Repo ${this.structuredName.repoSlug} already exists.`);
     }
 
@@ -178,22 +153,22 @@ export class RepoDurableObject extends RepoBase<RepoEnv> {
       slug: this.structuredName.repoSlug,
       tokenExpiresAt: token.expiresAt,
     });
-    await this.consumeStreamProcessorEvent({ event: event as StreamEvent });
+    await this.waitForRepoProcessorCatchUp(event.offset);
 
     return await this.requireInfo();
   }
 
   async getInfo(): Promise<RepoInfo> {
     await this.ensureStarted();
-    await this.catchUpStreamProcessor({ signal: AbortSignal.timeout(30_000) });
+    await this.waitForRepoProcessorCatchUp();
     return await this.requireInfo();
   }
 
   async refreshWriteToken(): Promise<RepoInfo> {
     await this.ensureStarted();
-    await this.catchUpStreamProcessor({ signal: AbortSignal.timeout(30_000) });
+    await this.waitForRepoProcessorCatchUp();
 
-    if (this.currentRepo() === null) {
+    if ((await this.currentRepo()) === null) {
       throw new Error(`Repo ${this.structuredName.repoSlug} has not been created.`);
     }
 
@@ -215,9 +190,9 @@ export class RepoDurableObject extends RepoBase<RepoEnv> {
 
   async getArtifact(): Promise<CloudflareArtifactRepo> {
     await this.ensureStarted();
-    await this.catchUpStreamProcessor({ signal: AbortSignal.timeout(30_000) });
+    await this.waitForRepoProcessorCatchUp();
 
-    if (this.currentRepo() === null) {
+    if ((await this.currentRepo()) === null) {
       throw new Error(`Repo ${this.structuredName.repoSlug} has not been created.`);
     }
 
@@ -225,16 +200,44 @@ export class RepoDurableObject extends RepoBase<RepoEnv> {
   }
 
   async afterAppend(input: { event: Event }) {
+    void input;
     await this.ensureStarted();
-    return await this.consumeStreamProcessorEvent({ event: input.event as StreamEvent });
+    await this.waitForRepoProcessorCatchUp();
+    return await this.getRepoRunnerState();
   }
 
-  private currentRepo() {
-    return this.getStreamProcessorRunnerState().state.repo;
+  private async currentRepo() {
+    return (await this.getRepoRunnerState()).state.repo;
+  }
+
+  private async getRepoRunnerState() {
+    const runner = this.env.STREAM_PROCESSOR_RUNNER.getByName(
+      repoProcessorRunnerName(this.structuredName),
+    ) as unknown as { runtimeState(): Promise<RepoProcessorRuntimeState> };
+    return await runner.runtimeState();
+  }
+
+  private async waitForRepoProcessorCatchUp(targetOffset?: number) {
+    const maxOffset = targetOffset ?? (await this.currentStreamMaxOffset());
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      const state = await this.getRepoRunnerState();
+      if (state.reducedThroughOffset >= maxOffset) return;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
+  private async currentStreamMaxOffset() {
+    const stream = await getInitializedStreamStub({
+      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+      namespace: this.structuredName.projectId,
+      path: repoStreamPath(this.structuredName.repoSlug),
+    });
+    return (await stream.history({ before: "end" })).at(-1)?.offset ?? 0;
   }
 
   private async requireInfo(): Promise<RepoInfo> {
-    const repo = this.currentRepo();
+    const repo = await this.currentRepo();
     if (repo === null) {
       throw new Error(`Repo ${this.structuredName.repoSlug} has not been created.`);
     }
@@ -334,28 +337,36 @@ export class RepoDurableObject extends RepoBase<RepoEnv> {
       type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
       idempotencyKey: `repo-subscription:${params.projectId}:${params.repoSlug}`,
       payload: {
-        slug: `repo:${params.repoSlug}`,
-        type: "callable",
-        callable: this.createSelfCallable("afterAppend"),
+        subscriptionKey: repoProcessorSubscriptionKey(params),
+        subscriber: {
+          type: "built-in",
+          transport: "capnweb-websocket",
+          processorSlug: RepoStreamProcessorContract.slug,
+        },
       },
     });
   }
+}
 
-  private createSelfCallable(rpcMethod: string): Callable {
-    return {
-      type: "workers-rpc",
-      via: {
-        type: "env-binding",
-        bindingType: "durable-object-namespace",
-        bindingName: "REPO",
-        durableObject: {
-          name: this.name,
-        },
-      },
-      rpcMethod,
-      argsMode: "object",
-    };
-  }
+type RepoInfoSource = {
+  defaultBranch: string;
+  remote: string;
+  slug: string;
+  tokenExpiresAt: string | null;
+};
+
+type RepoProcessorRuntimeState = {
+  state: { repo: RepoInfoSource | null };
+  reducedThroughOffset: number;
+};
+
+function repoProcessorSubscriptionKey(input: RepoStructuredName) {
+  return `repo:${input.projectId}:${input.repoSlug}`;
+}
+
+function repoProcessorRunnerName(input: RepoStructuredName) {
+  const streamPath = repoStreamPath(input.repoSlug);
+  return `${input.projectId}:${streamPath}:${repoProcessorSubscriptionKey(input)}`;
 }
 
 export function getRepoDurableObjectName(name: RepoStructuredName) {
@@ -400,77 +411,4 @@ async function readArtifactString(value: unknown): Promise<string | undefined> {
 
 function shellQuote(value: string) {
   return `'${value.replaceAll("'", "'\"'\"'")}'`;
-}
-
-type RepoStreamApi = ProcessorStreamApi<typeof RepoStreamProcessorContract> & {
-  append(args: { event: EventInput; streamPath?: string }): Promise<Event>;
-  appendBatch(args: { events: EventInput[]; streamPath?: string }): Promise<Event[]>;
-  read(args?: {
-    streamPath?: string;
-    afterOffset?: StreamCursor;
-    beforeOffset?: StreamCursor;
-  }): Promise<Event[]>;
-};
-
-function repoStreamApiFromNamespace(args: {
-  durableObjectNamespace: StreamDurableObjectNamespace;
-  namespace: string;
-  streamPath: StreamPath;
-}): RepoStreamApi {
-  return {
-    async append(input) {
-      const stream = await getInitializedStreamStub({
-        durableObjectNamespace: args.durableObjectNamespace,
-        namespace: args.namespace,
-        path: resolveRepoProcessorStreamPath({
-          basePath: args.streamPath,
-          pathInput: input.streamPath,
-        }),
-      });
-      return await stream.append(input.event);
-    },
-    async appendBatch(input) {
-      const stream = await getInitializedStreamStub({
-        durableObjectNamespace: args.durableObjectNamespace,
-        namespace: args.namespace,
-        path: resolveRepoProcessorStreamPath({
-          basePath: args.streamPath,
-          pathInput: input.streamPath,
-        }),
-      });
-      return await stream.appendBatch(input.events);
-    },
-    async read(input = {}) {
-      const stream = await getInitializedStreamStub({
-        durableObjectNamespace: args.durableObjectNamespace,
-        namespace: args.namespace,
-        path: resolveRepoProcessorStreamPath({
-          basePath: args.streamPath,
-          pathInput: input.streamPath,
-        }),
-      });
-      return await stream.history({
-        after: input.afterOffset,
-        before: input.beforeOffset ?? "end",
-      });
-    },
-    async *subscribe(input = {}) {
-      void input;
-      yield* [];
-      throw new Error("Repo processors receive live events through afterAppend RPC.");
-    },
-  };
-}
-
-function resolveRepoProcessorStreamPath(input: {
-  basePath: StreamPath;
-  pathInput?: string;
-}): StreamPath {
-  if (input.pathInput == null || input.pathInput.trim() === "") {
-    return input.basePath;
-  }
-
-  return input.pathInput.startsWith("/")
-    ? (input.pathInput as StreamPath)
-    : (`${input.basePath}/${input.pathInput}` as StreamPath);
 }

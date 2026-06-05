@@ -17,6 +17,10 @@
         "class_name": "StreamDurableObject",
       },
       {
+        "name": "STREAM_PROCESSOR_RUNNER",
+        "class_name": "StreamProcessorRunner",
+      },
+      {
         "name": "REPO",
         "class_name": "RepoDurableObject",
       },
@@ -69,6 +73,10 @@
     {
       "tag": "v4",
       "new_sqlite_classes": ["ProjectDurableObject"],
+    },
+    {
+      "tag": "v5",
+      "new_sqlite_classes": ["StreamProcessorRunner"],
     },
   ],
 }

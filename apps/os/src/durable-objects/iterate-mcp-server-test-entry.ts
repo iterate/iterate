@@ -19,7 +19,8 @@ export { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-
 export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 export { SlackCapability } from "~/domains/slack/entrypoints/slack-capability.ts";
 export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
-export { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
+export { Stream as StreamDurableObject } from "@iterate-com/streams/workers/durable-objects/stream";
+export { StreamProcessorRunner } from "~/domains/streams/durable-objects/stream-processor-runner.ts";
 export { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-capability.ts";
 export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 export { OutboundMcpFromOurClientCapability } from "~/domains/outbound-mcp-client/entrypoints/outbound-mcp-from-our-client-capability.ts";

@@ -2,11 +2,11 @@ import { SELF, env } from "cloudflare:test";
 import { createCodemodeContext } from "@iterate-com/shared/codemode/context-proxy";
 import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
 import { type Event, type EventInput, type StreamPath } from "@iterate-com/shared/streams/types";
-import { getInitializedStreamStub } from "@iterate-com/shared/streams/helpers";
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
 import type { StreamProcessorRunnerState } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor-runner";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { getInitializedStreamStub } from "~/domains/streams/new-stream-runtime.ts";
 import type { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
 import { createCodemodeSessionStartupEvents } from "~/domains/codemode/codemode-session-rpc.ts";
 import { createExampleRpcProviderRegistration } from "~/domains/codemode/example-capabilities.ts";
@@ -256,7 +256,6 @@ describe("CodemodeSession", () => {
     });
     const scriptExecutionId = scriptExecutionIdFromEvent(created.scriptExecutionEvent);
     const completed = await waitForScriptExecutionCompleted({ scriptExecutionId, streamPath });
-
     expect(completed.payload).toMatchObject({
       outcome: {
         status: "returned",
@@ -310,7 +309,6 @@ describe("CodemodeSession", () => {
     });
     const scriptExecutionId = scriptExecutionIdFromEvent(created.scriptExecutionEvent);
     const completed = await waitForScriptExecutionCompleted({ scriptExecutionId, streamPath });
-
     expect(completed.payload).toMatchObject({
       outcome: {
         status: "returned",

@@ -3,11 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Play, RotateCcw } from "lucide-react";
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import {
-  EventInput,
-  STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-  StreamPath,
-} from "@iterate-com/shared/streams/types";
+import { EventInput, StreamPath } from "@iterate-com/shared/streams/types";
 import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
 import { Button } from "@iterate-com/ui/components/button";
 import { Checkbox } from "@iterate-com/ui/components/checkbox";
@@ -40,6 +36,10 @@ import {
   parseAgentEventInputsYaml,
   parseAgentRunOptsJson,
 } from "~/domains/agents/agent-presets.ts";
+import {
+  agentProcessorSubscriptionConfiguredEvents,
+  defaultAgentProcessorSlugs,
+} from "~/domains/agents/agent-stream-subscriptions.ts";
 import { agentPathFromInput } from "~/lib/agent-links.ts";
 import { streamPathToSplat } from "~/lib/stream-links.ts";
 import { orpc, orpcClient } from "~/orpc/client.ts";
@@ -390,12 +390,13 @@ function buildPreviewEvents(input: {
           runOpts,
           systemPrompt: input.systemPrompt.trim(),
         }),
-        ...customEvents,
-        ...codemodeProviderRegistrationEvents(dedupeToolProviders(providers)),
-        agentSubscriptionConfiguredEvent({
+        ...agentProcessorSubscriptionConfiguredEvents({
           agentPath,
+          processorSlugs: defaultAgentProcessorSlugs(input.provider),
           projectId: input.projectId,
         }),
+        ...customEvents,
+        ...codemodeProviderRegistrationEvents(dedupeToolProviders(providers)),
       ],
     };
   } catch (error) {
@@ -405,43 +406,6 @@ function buildPreviewEvents(input: {
       events: [],
     };
   }
-}
-
-function agentSubscriptionConfiguredEvent(input: {
-  agentPath: StreamPath;
-  projectId: string;
-}): EventInput {
-  const durableObjectName = deriveDurableObjectNameFromStructuredName({
-    structuredName: {
-      agentPath: input.agentPath,
-      projectId: input.projectId,
-    },
-  });
-  return {
-    idempotencyKey: `stream-processor-websocket-subscription:AGENT:${durableObjectName}:${input.agentPath}:agent:${input.projectId}:${input.agentPath}`,
-    type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-    payload: {
-      slug: `agent:${input.projectId}:${input.agentPath}`,
-      type: "websocket",
-      callable: {
-        type: "fetch",
-        via: {
-          type: "env-binding",
-          bindingType: "durable-object-namespace",
-          bindingName: "AGENT",
-          durableObject: {
-            name: durableObjectName,
-          },
-        },
-        fetchRequest: {
-          path: {
-            base: "/stream-subscription",
-            mode: "replace",
-          },
-        },
-      },
-    },
-  };
 }
 
 function createAgentChatToolProvider(input: {

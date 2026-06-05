@@ -2,7 +2,7 @@ import { createD1Client } from "sqlfu";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
-} from "@iterate-com/shared/streams/helpers";
+} from "~/domains/streams/new-stream-runtime.ts";
 import {
   getProjectDurableObjectName,
   ProjectDurableObject as RealProjectDurableObject,
@@ -168,7 +168,8 @@ export {
   MockArtifactsBinding,
 } from "./mock-artifacts-binding.ts";
 export { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
-export { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
+export { Stream as StreamDurableObject } from "@iterate-com/streams/workers/durable-objects/stream";
+export { StreamProcessorRunner } from "~/domains/streams/durable-objects/stream-processor-runner.ts";
 export { PROJECT_LIFECYCLE_STREAM_PATH } from "~/domains/projects/stream-processors/project-lifecycle.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
 export { ProjectMcpServerEntrypoint } from "~/domains/inbound-mcp-server/entrypoints/project-mcp-server-entrypoint.ts";
@@ -235,7 +236,7 @@ export default {
     if (url.pathname === "/__test/connect-egress-intercept") {
       const project = env.PROJECT.getByName(
         getProjectDurableObjectName("proj__local__test"),
-      ) as DurableObjectStub<ProjectDurableObject>;
+      ) as unknown as ProjectEgressInterceptTestRpc;
       await project.installTestProjectEgressInterceptTunnel();
       return Response.json({ ok: true });
     }
@@ -258,9 +259,10 @@ export default {
     }
 
     if (url.pathname === "/__test/project-lifecycle-state") {
-      const state = await env.PROJECT.getByName(
+      const project = env.PROJECT.getByName(
         getProjectDurableObjectName("proj__local__test"),
-      ).getProjectLifecycleRunnerState();
+      ) as unknown as ProjectLifecycleStateRpc;
+      const state = await project.getProjectLifecycleRunnerState();
       return Response.json(state);
     }
 
@@ -314,6 +316,14 @@ export default {
     });
   },
 } satisfies ExportedHandler<Env>;
+
+type ProjectLifecycleStateRpc = {
+  getProjectLifecycleRunnerState(): Promise<unknown>;
+};
+
+type ProjectEgressInterceptTestRpc = {
+  installTestProjectEgressInterceptTunnel(): Promise<void>;
+};
 
 async function ensureD1Schema(db: D1Database) {
   await db.batch([

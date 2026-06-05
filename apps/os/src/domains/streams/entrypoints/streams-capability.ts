@@ -1,29 +1,23 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { withStreamConnectionFromWorkers } from "@iterate-com/streams/workers/connect";
+import { createStreamSubscription } from "@iterate-com/streams/subscription";
 import {
-  type ChildStreamCreatedEvent,
   type Event,
   type EventInput,
-  STREAM_CHILD_STREAM_CREATED_TYPE,
-  STREAM_FIRST_INITIALIZED_TYPE,
   type StreamCursor,
   StreamPath,
 } from "@iterate-com/shared/streams/types";
-import {
-  listD1ObjectCatalogRecordsByIndex,
-  type D1ObjectCatalogRecord,
-} from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import {
-  getInitializedStreamStub,
-  type StreamDurableObjectNamespace,
-} from "@iterate-com/shared/streams/helpers";
-import type {
-  StreamDurableObject,
-  StreamDurableObjectStructuredName,
-} from "@iterate-com/shared/streams/stream-durable-object";
 import type { ExecuteCodemodeFunctionCallInput } from "@iterate-com/shared/stream-processors/codemode/implementation";
+import {
+  getStreamDurableObjectName,
+  getInitializedStreamStub,
+  toLegacyEvent,
+  toNewAfterOffset,
+  type StreamDurableObjectNamespace,
+  type StreamDurableObject,
+} from "~/domains/streams/new-stream-runtime.ts";
 
 type StreamsCapabilityEnv = {
-  DO_CATALOG?: D1Database;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
 };
 
@@ -64,7 +58,6 @@ type StreamEventsInput = StreamPathInput & {
 };
 
 type StreamListChildrenInput = StreamPathInput;
-type StreamCatalogRecord = D1ObjectCatalogRecord<StreamDurableObjectStructuredName>;
 type StreamsCapabilityClient = Pick<
   StreamsCapability,
   "append" | "appendBatch" | "create" | "getState" | "list" | "listChildren" | "read" | "stream"
@@ -112,11 +105,6 @@ export class StreamsCapability extends WorkerEntrypoint<
   async append(input: StreamAppendInput): Promise<Event> {
     const path = this.resolveNamespacePath(input);
     this.assertMayAppend(path);
-    debugCodemodeDepth("streamCapability.append.start", {
-      eventType: input.event.type,
-      path,
-      namespace: this.ctx.props.projectId,
-    });
 
     const event = await appendNamespaceStreamEvent({
       durableObjectNamespace: this.env.STREAM,
@@ -129,12 +117,6 @@ export class StreamsCapability extends WorkerEntrypoint<
           ...(this.ctx.props.appendMetadata ?? {}),
         },
       } as EventInput,
-    });
-    debugCodemodeDepth("streamCapability.append.done", {
-      eventOffset: event.offset,
-      eventType: event.type,
-      path,
-      namespace: this.ctx.props.projectId,
     });
     return event;
   }
@@ -168,20 +150,17 @@ export class StreamsCapability extends WorkerEntrypoint<
   }
 
   async list() {
-    if (!this.env.DO_CATALOG) {
-      throw new Error("DO_CATALOG binding is required to list streams.");
-    }
-
-    const records = await listD1ObjectCatalogRecordsByIndex<StreamDurableObjectStructuredName>(
-      this.env.DO_CATALOG,
-      {
-        className: "StreamDurableObject",
-        indexName: "namespace",
-        indexValue: this.ctx.props.projectId,
-      },
-    );
-
-    return records.map((record) => toStreamCatalogRecord(record));
+    const paths = await listNamespaceStreamPaths({
+      durableObjectNamespace: this.env.STREAM,
+      namespace: this.ctx.props.projectId,
+    });
+    return paths.map((path) => ({
+      name: `${this.ctx.props.projectId}:${path}`,
+      namespace: this.ctx.props.projectId,
+      streamPath: StreamPath.parse(path),
+      createdAt: new Date(0).toISOString(),
+      lastWokenAt: new Date(0).toISOString(),
+    }));
   }
 
   async read(input: StreamReadInput = {}): Promise<Event[]> {
@@ -195,37 +174,29 @@ export class StreamsCapability extends WorkerEntrypoint<
   }
 
   async stream(input: StreamEventsInput = {}): Promise<Response> {
-    debugCodemodeDepth("streamCapability.stream.start", {
-      afterOffset: input.afterOffset,
-      beforeOffset: input.beforeOffset,
-      path: this.resolveNamespacePath(input),
-      namespace: this.ctx.props.projectId,
-    });
-    const events = streamNamespaceStreamEvents({
-      durableObjectNamespace: this.env.STREAM,
-      path: this.resolveNamespacePath(input),
-      namespace: this.ctx.props.projectId,
-      afterOffset: input.afterOffset,
-      beforeOffset: input.beforeOffset,
-    });
+    const path = this.resolveNamespacePath(input);
+    const events =
+      input.beforeOffset != null && input.beforeOffset !== "end"
+        ? streamNamespaceStreamEvents({
+            durableObjectNamespace: this.env.STREAM,
+            path,
+            namespace: this.ctx.props.projectId,
+            afterOffset: input.afterOffset,
+            beforeOffset: input.beforeOffset,
+          })
+        : liveNamespaceStreamEvents({
+            durableObjectNamespace: this.env.STREAM,
+            path,
+            namespace: this.ctx.props.projectId,
+            afterOffset: input.afterOffset,
+          });
 
-    return new Response(
-      new ReadableStream({
-        async start(controller) {
-          const encoder = new TextEncoder();
-          for await (const event of events) {
-            controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
-          }
-          controller.close();
-        },
-      }),
-      {
-        headers: {
-          "content-type": "application/x-ndjson",
-          "cache-control": "no-cache",
-        },
+    return new Response(eventsToNdjsonStream(events), {
+      headers: {
+        "content-type": "application/x-ndjson",
+        "cache-control": "no-cache",
       },
-    );
+    });
   }
 
   async getState(input: StreamPathInput = {}) {
@@ -238,23 +209,16 @@ export class StreamsCapability extends WorkerEntrypoint<
 
   async listChildren(input: StreamListChildrenInput = {}) {
     const path = this.resolveNamespacePath(input);
-    const events = await readNamespaceStreamEvents({
+    const state = await getNamespaceStreamState({
       durableObjectNamespace: this.env.STREAM,
       path,
       namespace: this.ctx.props.projectId,
     });
-    const discovered: Record<StreamPath, string> = {};
-
-    for (const event of events) {
-      if (event.type === STREAM_CHILD_STREAM_CREATED_TYPE) {
-        discovered[(event as ChildStreamCreatedEvent).payload.childPath] = event.createdAt;
-      } else if (event.type === STREAM_FIRST_INITIALIZED_TYPE) {
-        discovered[path] = event.createdAt;
-      }
-    }
-
-    return Object.entries(discovered)
-      .map(([path, createdAt]) => ({ path: path as StreamPath, createdAt }))
+    return state.childPaths
+      .map((childPath) => ({
+        path: StreamPath.parse(childPath),
+        createdAt: new Date(0).toISOString(),
+      }))
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }
 
@@ -362,20 +326,6 @@ function globMatchesPath(pattern: string, path: string) {
   return new RegExp(`^${source}$`).test(path);
 }
 
-function debugCodemodeDepth(message: string, payload: Record<string, unknown>) {
-  console.log("[DEBUG-cm-depth]", JSON.stringify({ message, ...payload }));
-}
-
-function toStreamCatalogRecord(record: StreamCatalogRecord) {
-  return {
-    name: record.name,
-    namespace: record.structuredName.namespace,
-    streamPath: StreamPath.parse(record.structuredName.path),
-    createdAt: record.createdAt,
-    lastWokenAt: record.lastWokenAt,
-  };
-}
-
 async function getInitializedNamespaceStreamStub(args: {
   durableObjectNamespace: DurableObjectNamespace<StreamDurableObject>;
   namespace: string;
@@ -431,6 +381,31 @@ async function getNamespaceStreamState(args: {
   return await stub.getState();
 }
 
+async function listNamespaceStreamPaths(args: {
+  durableObjectNamespace: DurableObjectNamespace<StreamDurableObject>;
+  namespace: string;
+}) {
+  const visited = new Set<string>();
+  const paths: StreamPath[] = [];
+
+  async function visit(path: StreamPath) {
+    if (visited.has(path)) return;
+    visited.add(path);
+    paths.push(path);
+    const state = await getNamespaceStreamState({
+      durableObjectNamespace: args.durableObjectNamespace,
+      namespace: args.namespace,
+      path,
+    });
+    for (const childPath of state.childPaths) {
+      await visit(StreamPath.parse(childPath));
+    }
+  }
+
+  await visit(StreamPath.parse("/"));
+  return paths;
+}
+
 async function* streamNamespaceStreamEvents(args: {
   durableObjectNamespace: DurableObjectNamespace<StreamDurableObject>;
   namespace: string;
@@ -444,6 +419,78 @@ async function* streamNamespaceStreamEvents(args: {
     before: args.beforeOffset,
   });
   yield* decodeStreamEventLines(stream);
+}
+
+async function* liveNamespaceStreamEvents(args: {
+  durableObjectNamespace: DurableObjectNamespace<StreamDurableObject>;
+  namespace: string;
+  path: StreamPath;
+  afterOffset?: StreamCursor;
+}) {
+  const streamStub = (
+    args.durableObjectNamespace as unknown as StreamDurableObjectNamespace
+  ).getByName(
+    getStreamDurableObjectName({
+      namespace: args.namespace,
+      path: args.path,
+    }),
+  );
+  using connection = await withStreamConnectionFromWorkers({
+    url: "https://stream.local/",
+    fetch: (request) => fetchDurableObjectWebSocket(streamStub, request),
+  });
+  let handle: { unsubscribe(): void } | undefined;
+  await using subscription = createStreamSubscription({
+    onDispose: () => handle?.unsubscribe(),
+  });
+  handle = await connection.stream.subscribe({
+    sink: subscription.sink,
+    replayAfterOffset: toNewAfterOffset(args.afterOffset),
+  });
+
+  for await (const batch of subscription) {
+    for (const event of batch.events) {
+      yield toLegacyEvent(event, args.path);
+    }
+  }
+}
+
+function fetchDurableObjectWebSocket(
+  stub: DurableObjectStub<StreamDurableObject>,
+  request: Request,
+) {
+  const url = new URL(request.url);
+  if (url.protocol === "wss:") url.protocol = "https:";
+  if (url.protocol === "ws:") url.protocol = "http:";
+  return stub.fetch(
+    new Request(url, {
+      headers: new Headers(request.headers),
+      method: request.method,
+    }),
+  );
+}
+
+function eventsToNdjsonStream(events: AsyncIterable<Event>) {
+  let iterator: AsyncIterator<Event> | undefined;
+  return new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const encoder = new TextEncoder();
+      iterator = events[Symbol.asyncIterator]();
+      try {
+        while (true) {
+          const result = await iterator.next();
+          if (result.done) break;
+          controller.enqueue(encoder.encode(`${JSON.stringify(result.value)}\n`));
+        }
+        controller.close();
+      } catch (error) {
+        controller.error(error);
+      }
+    },
+    async cancel() {
+      await iterator?.return?.();
+    },
+  });
 }
 
 async function* decodeStreamEventLines(stream: ReadableStream<Uint8Array>) {

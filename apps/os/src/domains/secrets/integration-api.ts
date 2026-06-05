@@ -1,4 +1,4 @@
-import { getInitializedStreamStub } from "@iterate-com/shared/streams/helpers";
+import { getInitializedStreamStub } from "~/domains/streams/new-stream-runtime.ts";
 import type { Principal } from "~/auth/principal.ts";
 import type { AppContext } from "~/context.ts";
 import {
@@ -314,7 +314,12 @@ async function handleVerifiedSlackWebhook(input: {
   }
 
   const slackIntegrationName = getSlackIntegrationDurableObjectName(connection.projectId);
-  const slackIntegration = input.context.slackIntegration.getByName(slackIntegrationName);
+  const slackIntegration = input.context.slackIntegration.getByName(
+    slackIntegrationName,
+  ) as unknown as {
+    ensureReady(): Promise<unknown>;
+    initialize(input: { name: string }): Promise<unknown>;
+  };
   await slackIntegration.initialize({ name: slackIntegrationName });
   await slackIntegration.ensureReady();
 

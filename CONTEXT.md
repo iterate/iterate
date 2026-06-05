@@ -78,8 +78,8 @@ A mutually exclusive Connection from one Slack team to one ProjectId for inbound
 _Avoid_: Slack secret, Slack app config
 
 **Processor Subscription**:
-A durable callable registration that asks the Stream Runtime to invoke a processor runner after matching stream events append.
-_Avoid_: WebSocket subscription, callback URL
+A durable registration that asks the Stream Runtime to deliver one Event Stream Path to a StreamProcessorRunner.
+_Avoid_: Domain DO callback, afterAppend subscriber, WebSocket subscription
 
 **App Config**:
 Typed runtime configuration serialized into the deployed app and readable by running app code.
@@ -121,7 +121,15 @@ _Avoid_: app config, runtime config
 - A **Slack Team Claim** is the lookup record for routing inbound Slack webhooks to the claimed ProjectId.
 - Google Connections are project-level in the current OS secrets slice.
 - Navigating to or reading a project stream may initialize that stream; a separate create command is not required for ordinary stream discovery.
-- A **Processor Subscription** delivers events through Durable Object RPC callables, not WebSockets.
+- During the OS `packages/streams` migration, **Processor Subscriptions** deliver events to standalone **StreamProcessorRunners**; domain Durable Objects remain command and capability owners rather than processor hosts.
+- The OS `packages/streams` migration is a POC cutover, not a backwards-compatible data migration; existing stream histories may be discarded.
+- During the OS `packages/streams` migration, OS-specific processor contracts stay in OS code for now; `@iterate-com/streams` remains app-agnostic runtime infrastructure.
+- The first OS `packages/streams` migration slice is creating and accessing a **Project** through oRPC with current OS behavior preserved after the stream cutover.
+- The first OS `packages/streams` migration slice may use a compatibility adapter to run existing OS processor contracts in the new **StreamProcessorRunner**.
+- The first OS `packages/streams` migration slice keeps broad project stream append authority; stream safety and event-type policy are out of scope.
+- The OS `packages/streams` migration uses only the new **Processor Subscription** event schema; legacy callable subscription events are not translated.
+- The OS `packages/streams` migration does not consider `apps/events`; Events app compatibility is out of scope.
+- **SecretsCapability** and **Workspace** lifecycle are out of scope for the first OS `packages/streams` migration slice.
 - **App Config** is available inside deployed app code.
 - **Deployment Config** is available to Alchemy deployment code only.
 - Cloudflare API credentials and cross-script binding script names belong in **Deployment Config**, not **App Config**.
@@ -153,7 +161,15 @@ _Avoid_: app config, runtime config
 - Durable Object debug access is usually private/admin-only, but the Events app POC intentionally exposes direct debug links publicly.
 - Durable stream implementation was treated as Events app-owned — resolved: move shared stream implementation and core types into **Stream Runtime**.
 - OS stream access was coupled to the Events contract — resolved: expose an **OS Streams API** that wraps the shared Stream Runtime directly.
-- Processor subscriptions were described as WebSocket callbacks — resolved: use **Processor Subscription** callables that invoke Durable Object RPC methods.
+- Processor subscriptions were described as WebSocket callbacks or domain Durable Object `afterAppend` callbacks — resolved for the OS `packages/streams` migration: use **Processor Subscriptions** to standalone **StreamProcessorRunners**.
+- Stream migration was initially discussed as a staged compatibility move with side-by-side bindings — resolved for the POC: cut over the existing `STREAM` binding and port functionality until tests pass again.
+- Moving all stream processor contracts into `@iterate-com/streams` would make the generic stream runtime OS-aware — resolved for now: keep OS-specific processor contracts in OS code.
+- "Getting started" could mean proving a domain processor such as Repo first or proving raw stream browsing first — resolved: start by replacing old streams in OS and proving a **Project** can be created and accessed through oRPC after the cutover, without intentionally bypassing current Project lifecycle behavior.
+- Porting Project lifecycle directly to `packages/streams` processor shape could front-load contract churn — resolved for the first slice: use a compatibility adapter for existing OS processor contracts if it keeps current behavior intact.
+- Stream append policy could be tightened during the cutover — resolved for the POC: leave broad append authority in place and focus on getting the new runtime working.
+- Legacy callable subscription events could be translated during migration — resolved for the hardcore cutover: emit and consume only the new `packages/streams` **Processor Subscription** schema.
+- `apps/events` could be considered because older stream language references the Events app — resolved for this migration: ignore `apps/events` entirely.
+- Secrets and workspaces were listed as possible stream-owned domain objects — resolved for the first slice: keep them as existing capabilities/stateful surfaces.
 - "app config" mixed runtime-readable values with deployment-only values — resolved: use **App Config** for app-readable runtime configuration and **Deployment Config** for Alchemy-only deployment inputs.
 - "stream API" and "streams API" were both used for OS's project stream surface — resolved: use **OS Streams API** and **StreamsCapability** because callers can operate over a project-scoped set of streams, not only one stream.
 - "getSecret" was used both as a raw credential read and as a placeholder for later egress substitution — resolved for the current OS secrets/codemode slice: `getSecret` is a raw **Secret Material** read through **SecretsCapability**.
