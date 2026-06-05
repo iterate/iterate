@@ -28,13 +28,35 @@
  */
 import { RpcTarget } from "cloudflare:workers";
 import { newWorkersRpcResponse } from "capnweb";
+import { ORPCError } from "@orpc/server";
+import { isValidTypeId, typeid } from "@iterate-com/shared/typeid";
 import type { AppConfig } from "~/app.ts";
 import { authenticateAdminApiSecret } from "~/auth/middleware.ts";
+import type { AppContext } from "~/context.ts";
+import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
+import type { ActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
+import {
+  deleteProject,
+  countAllProjects,
+  countProjects,
+  getProjectById,
+  getProjectPermission,
+  getProjectBySlug,
+  insertProject,
+  insertProjectPermission,
+  listAllProjects,
+  listProjects,
+} from "~/db/queries/.generated/index.ts";
+import {
+  getProjectDurableObjectName,
+  type ProjectDurableObject,
+} from "~/domains/projects/durable-objects/project-durable-object.ts";
 
 export const CAPTNWEB_PREFIX = "/api/captnweb";
 
 const PROJECT_SCOPE_PREFIX = "project:";
 const PROJECT_WILDCARD = `${PROJECT_SCOPE_PREFIX}*`;
+const CREATE_PROJECT_SCOPE = "create_project";
 
 // ── scope helpers (pure) ───────────────────────────────────────────────────
 
@@ -56,33 +78,127 @@ export interface ProjectDescription {
   id: string;
 }
 
+type CaptnwebVars = Record<string, unknown>;
+
+type ProjectRow = {
+  id: string;
+  slug: string;
+  custom_hostname?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type ProjectSummary = {
+  id: string;
+  slug: string;
+  customHostname: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type ProjectWithIngressUrl = ProjectSummary & {
+  ingressUrl: string;
+};
+
+type ProjectListResult = {
+  projects: ProjectSummary[];
+  total: number;
+};
+
+export function toProject(row: ProjectRow): ProjectSummary {
+  return {
+    id: row.id,
+    slug: row.slug,
+    customHostname: row.custom_hostname ?? null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export async function toProjectWithIngressUrl(
+  context: AppContext,
+  row: ProjectRow,
+): Promise<ProjectWithIngressUrl> {
+  return {
+    ...toProject(row),
+    ingressUrl: await projectDurableObject(context, row.id).ingressUrl(),
+  };
+}
+
+function isUniqueConstraintError(error: unknown) {
+  return error instanceof Error && error.message.includes("UNIQUE constraint failed");
+}
+
+function resolveProjectId(input: { id?: string; context: Pick<AppContext, "config"> }) {
+  if (input.id) {
+    if (!isValidTypeId(input.id, "proj")) {
+      throw new ORPCError("BAD_REQUEST", {
+        message: "Project ID must be a valid TypeID with prefix proj.",
+      });
+    }
+    return input.id;
+  }
+
+  return typeid({
+    env: { TYPEID_PREFIX: input.context.config.typeIdPrefix.exposeSecret() },
+    prefix: "proj",
+  });
+}
+
+function requireProjectDurableObjectNamespace(context: AppContext) {
+  if (!context.projectDurableObjectNamespace) {
+    throw new ORPCError("INTERNAL_SERVER_ERROR", {
+      message: "PROJECT binding not available.",
+    });
+  }
+
+  return context.projectDurableObjectNamespace;
+}
+
+function projectDurableObject(context: AppContext, projectId: string) {
+  return (
+    requireProjectDurableObjectNamespace(context) as DurableObjectNamespace<ProjectDurableObject>
+  ).getByName(getProjectDurableObjectName(projectId));
+}
+
 // ── the capability tree (every node is an RpcTarget; props passed as a bag) ──
 
 export interface IterateCapabilityProps {
   scopes: string[];
+  context?: AppContext;
+  activeOrganization?: ActiveOrganizationAuth;
 }
 
 export class IterateCapability extends RpcTarget {
   readonly #scopes: string[];
+  readonly #context: AppContext | undefined;
+  readonly #activeOrganization: ActiveOrganizationAuth | undefined;
   #projects?: ProjectsCapability;
 
   constructor(props: IterateCapabilityProps) {
     super();
     this.#scopes = props.scopes;
+    this.#context = props.context;
+    this.#activeOrganization = props.activeOrganization;
   }
 
   // Prototype getter => visible over RPC. Memoised so repeated access is cheap.
   get projects(): ProjectsCapability {
-    return (this.#projects ??= new ProjectsCapability({ scopes: this.#scopes }));
+    return (this.#projects ??= new ProjectsCapability({
+      activeOrganization: this.#activeOrganization,
+      context: this.#context,
+      scopes: this.#scopes,
+    }));
   }
 
-  // Super edge case: the "current" project.
-  //  - one or more concrete project scopes -> the first one
-  //  - no project scopes, or only "project:*" -> none (a wildcard names no
-  //    single current project)
-  get project(): ProjectCapability | undefined {
+  // Super edge case: the "current" project. One or more concrete project scopes
+  // names the first one; no concrete scope means there is no singular current
+  // project, even if the caller has project:*.
+  get project(): ProjectCapability {
     const ids = concreteProjectIds(this.#scopes);
-    if (ids.length === 0) return undefined;
+    if (ids.length === 0) {
+      throw new Error("No current project is available for these scopes.");
+    }
     return new ProjectCapability({ projectId: ids[0] });
   }
 
@@ -99,15 +215,21 @@ export class IterateCapability extends RpcTarget {
 }
 
 export interface ProjectsCapabilityProps {
+  activeOrganization?: ActiveOrganizationAuth;
+  context?: AppContext;
   scopes: string[];
 }
 
 export class ProjectsCapability extends RpcTarget {
   readonly #scopes: string[];
+  readonly #context: AppContext | undefined;
+  readonly #activeOrganization: ActiveOrganizationAuth | undefined;
 
   constructor(props: ProjectsCapabilityProps) {
     super();
     this.#scopes = props.scopes;
+    this.#context = props.context;
+    this.#activeOrganization = props.activeOrganization;
   }
 
   get(projectId: string): ProjectCapability {
@@ -120,13 +242,197 @@ export class ProjectsCapability extends RpcTarget {
     return new ProjectCapability({ projectId });
   }
 
-  async list(): Promise<string[]> {
-    // Dummy: derive directly from the scopes. "project:*" comes through
-    // literally for now; a real implementation would enumerate projects from
-    // the DB when the wildcard is present.
-    return this.#scopes
-      .filter((scope) => scope.startsWith(PROJECT_SCOPE_PREFIX))
-      .map((scope) => scope.slice(PROJECT_SCOPE_PREFIX.length));
+  async list(input: { limit?: number; offset?: number } = {}): Promise<ProjectListResult> {
+    const context = this.#context;
+    const activeOrganization = this.#activeOrganization;
+    const limit = input.limit ?? 100;
+    const offset = input.offset ?? 0;
+    if (context && activeOrganization) {
+      const [totalRow, rows] = await Promise.all([
+        activeOrganization.isAdminApi
+          ? countAllProjects(context.db)
+          : countProjects(context.db, {
+              principalId: activeOrganization.orgId,
+              principalType: "clerk_organization",
+            }),
+        activeOrganization.isAdminApi
+          ? listAllProjects(context.db, { limit, offset })
+          : listProjects(context.db, {
+              limit,
+              offset,
+              principalId: activeOrganization.orgId,
+              principalType: "clerk_organization",
+            }),
+      ]);
+      return { projects: rows.map(toProject), total: totalRow?.total ?? 0 };
+    }
+
+    const ids = concreteProjectIds(this.#scopes);
+    if (!context) {
+      return {
+        projects: ids.map((id) => ({
+          id,
+          slug: id,
+          customHostname: null,
+          createdAt: "",
+          updatedAt: "",
+        })),
+        total: ids.length,
+      };
+    }
+
+    if (this.#scopes.includes(PROJECT_WILDCARD)) {
+      const [totalRow, rows] = await Promise.all([
+        countAllProjects(context.db),
+        listAllProjects(context.db, { limit, offset }),
+      ]);
+      return { projects: rows.map(toProject), total: totalRow?.total ?? 0 };
+    }
+
+    const rows = (await Promise.all(ids.map((id) => getProjectById(context.db, { id })))).filter(
+      (row) => row != null,
+    );
+    const projects = rows.map((row) => ({
+      id: row.id,
+      slug: row.slug,
+      customHostname: row.custom_hostname ?? null,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+    return { projects: projects.slice(offset, offset + limit), total: projects.length };
+  }
+
+  async create(input: { id?: string; slug: string }): Promise<ProjectWithIngressUrl> {
+    const context = this.#requireContext();
+    const activeOrganization = this.#activeOrganization;
+    if (!activeOrganization && !this.#scopes.includes(CREATE_PROJECT_SCOPE)) {
+      throw new Error("Missing required scope: create_project");
+    }
+
+    const id = resolveProjectId({ id: input.id, context });
+    const existing = await getProjectBySlug(context.db, { slug: input.slug });
+    if (existing) {
+      throw new ORPCError("CONFLICT", {
+        message: `A project with slug ${input.slug} already exists.`,
+      });
+    }
+    if (input.id && (await getProjectById(context.db, { id: input.id }))) {
+      throw new ORPCError("CONFLICT", {
+        message: `A project with ID ${input.id} already exists.`,
+      });
+    }
+
+    if (activeOrganization && !activeOrganization.isAdminApi) {
+      const authWorker = createAuthWorkerServiceClient(context);
+      await authWorker.internal.project.createForOrganization({
+        id,
+        organizationSlug: activeOrganization.orgSlug,
+        name: input.slug,
+        slug: input.slug,
+        metadata: { osProjectId: id },
+      });
+    }
+
+    let project: ProjectRow;
+    try {
+      project = await insertProject(context.db, {
+        id,
+        slug: input.slug,
+      });
+      if (activeOrganization && !activeOrganization.isAdminApi) {
+        await insertProjectPermission(context.db, {
+          principalId: activeOrganization.orgId,
+          principalType: "clerk_organization",
+          projectId: id,
+          role: "owner",
+        });
+      }
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        throw new ORPCError("CONFLICT", {
+          message: `A project with slug ${input.slug} already exists.`,
+        });
+      }
+
+      throw error;
+    }
+
+    try {
+      await projectDurableObject(context, id).createProject({
+        projectId: id,
+        slug: input.slug,
+      });
+    } catch (error) {
+      await deleteProject(context.db, { id }).catch((cleanupError) => {
+        console.error(
+          `[projects.create] Failed to clean up partial project ${id} after bootstrap failure:`,
+          cleanupError,
+        );
+      });
+      throw error;
+    }
+
+    return await toProjectWithIngressUrl(context, project);
+  }
+
+  async remove(input: { id: string }): Promise<{ ok: true; id: string; deleted: boolean }> {
+    const context = this.#requireContext();
+    const activeOrganization = this.#activeOrganization;
+    if (!activeOrganization && !authorizesProject(this.#scopes, input.id)) {
+      throw new Error(`Not authorized for project: ${input.id}`);
+    }
+
+    try {
+      await this.#requireProject(input.id);
+    } catch (error) {
+      if (error instanceof ORPCError && error.code === "NOT_FOUND") {
+        return { ok: true, id: input.id, deleted: false };
+      }
+      throw error;
+    }
+
+    await deleteProject(context.db, { id: input.id });
+    const existing = await getProjectById(context.db, { id: input.id });
+    if (existing) {
+      return { ok: true, id: input.id, deleted: false };
+    }
+    return { ok: true, id: input.id, deleted: true };
+  }
+
+  async #requireProject(projectId: string): Promise<ProjectRow> {
+    const context = this.#requireContext();
+    const project = await getProjectById(context.db, { id: projectId });
+
+    if (!project) {
+      throw new ORPCError("NOT_FOUND", {
+        message: `Project ${projectId} not found`,
+      });
+    }
+
+    const activeOrganization = this.#activeOrganization;
+    if (activeOrganization?.isAdminApi || authorizesProject(this.#scopes, projectId)) {
+      return project;
+    }
+
+    if (activeOrganization) {
+      const permission = await getProjectPermission(context.db, {
+        principalId: activeOrganization.orgId,
+        principalType: "clerk_organization",
+        projectId,
+      });
+      if (permission) return project;
+    }
+
+    throw new ORPCError("FORBIDDEN", {
+      message: `Project ${projectId} not found`,
+    });
+  }
+
+  #requireContext(): AppContext {
+    if (!this.#context) {
+      throw new Error("ProjectsCapability requires app context for this operation.");
+    }
+    return this.#context;
   }
 }
 
@@ -156,7 +462,7 @@ export class ProjectCapability extends RpcTarget {
 // The parent passes a live scoped `iterate` target into `run`; snippets call it
 // just like the WebSocket tests call their local `iterate` stub.
 const DEFAULT_DYNAMIC_WORKER_CODE = /* js */ `
-async (iterate) => {
+async ({ iterate }) => {
   return await iterate.projects.get("proj_alpha").describe();
 }
 `;
@@ -166,8 +472,8 @@ function dynamicWorkerSrc(code: string) {
   import { WorkerEntrypoint } from "cloudflare:workers";
   const snippet = (${code});
   export default class extends WorkerEntrypoint {
-    run({ iterate }) {
-      return snippet(iterate);
+    run({ iterate, vars }) {
+      return snippet({ iterate, vars });
     }
   }
 `;
@@ -192,7 +498,7 @@ function resolveCaptnwebScopes(input: { request: Request; config: AppConfig }): 
 }
 
 interface CaptnwebRunEntrypoint {
-  run(input: { iterate: IterateCapability }): unknown;
+  run(input: { iterate: IterateCapability; vars: CaptnwebVars }): unknown;
 }
 
 function serializeError(error: unknown) {
@@ -202,6 +508,7 @@ function serializeError(error: unknown) {
 }
 
 async function handleRunLeg(input: {
+  context: AppContext;
   request: Request;
   url: URL;
   scopes: string[];
@@ -212,12 +519,14 @@ async function handleRunLeg(input: {
   }
 
   let code = DEFAULT_DYNAMIC_WORKER_CODE;
+  let vars: CaptnwebVars = {};
   if (input.request.method === "POST") {
-    const body = (await input.request.json()) as { code?: string };
+    const body = (await input.request.json()) as { code?: string; vars?: CaptnwebVars };
     if (typeof body.code !== "string" || body.code.trim() === "") {
       return Response.json({ error: "code is required" }, { status: 400 });
     }
     code = body.code;
+    vars = body.vars ?? {};
   }
 
   const worker = input.env.LOADER.load({
@@ -229,7 +538,8 @@ async function handleRunLeg(input: {
   const entry = worker.getEntrypoint() as unknown as CaptnwebRunEntrypoint & Partial<Disposable>;
   try {
     const result = await entry.run({
-      iterate: new IterateCapability({ scopes: input.scopes }),
+      iterate: new IterateCapability({ context: input.context, scopes: input.scopes }),
+      vars,
     });
     return Response.json(result);
   } catch (error) {
@@ -246,6 +556,7 @@ async function handleRunLeg(input: {
  * the WebSocket upgrade `Response` needs to reach the runtime untouched.
  */
 export async function handleCaptnwebFetch(input: {
+  context: AppContext;
   request: Request;
   env: Env;
   config: AppConfig;
@@ -261,9 +572,18 @@ export async function handleCaptnwebFetch(input: {
   }
 
   if (url.pathname === `${CAPTNWEB_PREFIX}/run`) {
-    return handleRunLeg({ request: input.request, url, scopes, env: input.env });
+    return handleRunLeg({
+      context: input.context,
+      request: input.request,
+      url,
+      scopes,
+      env: input.env,
+    });
   }
 
   // capnweb edge: handles the POST batch and the WebSocket upgrade.
-  return newWorkersRpcResponse(input.request, new IterateCapability({ scopes }));
+  return newWorkersRpcResponse(
+    input.request,
+    new IterateCapability({ context: input.context, scopes }),
+  );
 }

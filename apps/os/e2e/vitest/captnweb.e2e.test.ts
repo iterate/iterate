@@ -1,8 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import WebSocket from "ws";
 import { Redacted } from "@iterate-com/shared/apps/config";
-import { requireAdminBearerToken, requireBaseUrl } from "../test-support/os-client.ts";
+import {
+  requireAdminBearerToken,
+  requireBaseUrl,
+  uniqueSuffix,
+} from "../test-support/os-client.ts";
 import type { IterateCapability } from "~/capnweb-playground.ts";
 
 const baseUrl = requireBaseUrl();
@@ -14,24 +18,28 @@ const baseUrl = requireBaseUrl();
 const runWithIterateContexts = [
   {
     name: "over the websocket endpoint",
-    async runWithIterateContext<Result>(input: RunWithIterateContextInput<Result>) {
+    async runWithIterateContext<Result, Vars extends CaptnwebVars = CaptnwebVars>(
+      input: RunWithIterateContextInput<Result, Vars>,
+    ) {
       using iterate = withIterateFromNode({
         baseUrl,
         auth: adminAuth({ scopes: input.scopes }),
       });
-      return await input.fn(iterate);
+      return await input.fn({ iterate, vars: input.vars ?? ({} as Vars) });
     },
   },
   {
     name: "inside /run dynamic worker",
-    async runWithIterateContext<Result>(input: RunWithIterateContextInput<Result>) {
+    async runWithIterateContext<Result, Vars extends CaptnwebVars = CaptnwebVars>(
+      input: RunWithIterateContextInput<Result, Vars>,
+    ) {
       const response = await fetch(new URL("/api/captnweb/run", baseUrl), {
         method: "POST",
         headers: {
           ...adminAuthHeaders(adminAuth({ scopes: input.scopes })),
           "content-type": "application/json",
         },
-        body: JSON.stringify({ code: stringifySnippet(input.fn) }),
+        body: JSON.stringify({ code: stringifySnippet(input.fn), vars: input.vars }),
       });
       if (!response.ok) {
         const error = (await response.json()) as { error?: string };
@@ -52,6 +60,13 @@ const runWithIterateContexts = [
  */
 
 describe("captnweb", () => {
+  // Used as prefix for project slugs so we can later assert that we've deleted them all
+  const testRunSlugPrefix = `captnweb-${crypto.randomUUID().slice(0, 8)}`;
+  afterAll(async () => {
+    const remaining = await listProjectsWithSlugPrefix(testRunSlugPrefix);
+    expect(remaining).toEqual([]);
+  });
+
   describe("with admin auth", () => {
     for (const { name, runWithIterateContext } of runWithIterateContexts) {
       describe(name, () => {
@@ -61,26 +76,15 @@ describe("captnweb", () => {
           it("whoami echoes the assumed scopes", async () => {
             const result = await runWithIterateContext({
               scopes,
-              fn: async (iterate) => iterate.whoami(),
+              fn: async ({ iterate }) => iterate.whoami(),
             });
             expect(result.scopes).toEqual(["project:proj_alpha", "project:proj_beta"]);
-          });
-
-          it("projects.list reflects the concrete scopes", async () => {
-            const list = await runWithIterateContext({
-              scopes,
-              fn: async (iterate) => iterate.projects.list(),
-            });
-            expect(list).toEqual(["proj_alpha", "proj_beta"]);
           });
 
           it("the current project is the first concrete scope", async () => {
             const current = await runWithIterateContext({
               scopes,
-              fn: async (iterate) => {
-                const project = await iterate.project;
-                return project ? await project.describe() : undefined;
-              },
+              fn: async ({ iterate }) => iterate.project.describe(),
             });
             expect(current).toEqual({ id: "proj_alpha" });
           });
@@ -92,9 +96,18 @@ describe("captnweb", () => {
           it("projects.get(...).describe() pipelines", async () => {
             const described = await runWithIterateContext({
               scopes,
-              fn: async (iterate) => iterate.projects.get("proj_alpha").describe(),
+              fn: async ({ iterate }) => iterate.projects.get("proj_alpha").describe(),
             });
             expect(described).toEqual({ id: "proj_alpha" });
+          });
+
+          it("projects.get rejects a project outside the scope grant", async () => {
+            await expect(
+              runWithIterateContext({
+                scopes,
+                fn: async ({ iterate }) => iterate.projects.get("proj_forbidden").describe(),
+              }),
+            ).rejects.toThrow(/Not authorized for project: proj_forbidden/);
           });
 
           it("surfaces errors thrown by the snippet", async () => {
@@ -112,7 +125,7 @@ describe("captnweb", () => {
             await expect(
               runWithIterateContext({
                 scopes,
-                fn: async (iterate) =>
+                fn: async ({ iterate }) =>
                   iterate.testMethod({ behavior: "throw", message: "Bla bla" }),
               }),
             ).rejects.toThrow("Bla bla");
@@ -125,48 +138,75 @@ describe("captnweb", () => {
           it("projects.get authorizes any project", async () => {
             const result = await runWithIterateContext({
               scopes,
-              fn: async (iterate) => iterate.projects.get("proj_alpha").describe(),
+              fn: async ({ iterate }) => iterate.projects.get("proj_alpha").describe(),
             });
             expect(result).toEqual({ id: "proj_alpha" });
+          });
+
+          it("a wildcard-only scope names no single current project", async () => {
+            await expect(
+              runWithIterateContext({
+                scopes,
+                fn: async ({ iterate }) => {
+                  const project = await iterate.project;
+                  return await project.describe();
+                },
+              }),
+            ).rejects.toThrow("No current project is available for these scopes.");
+          });
+        });
+
+        describe("with a brand new project", () => {
+          const slug = `${testRunSlugPrefix}-${uniqueSuffix()}`.slice(0, 40);
+          const scopes = ["create_project"];
+          let project: CreatedProject;
+
+          beforeAll(async () => {
+            project = await runWithIterateContext({
+              scopes,
+              vars: { slug },
+              fn: async ({ iterate, vars }) => iterate.projects.create({ slug: vars.slug }),
+            });
+          });
+
+          afterAll(async () => {
+            if (!project || typeof project !== "object" || !("id" in project)) return;
+            await runWithIterateContext({
+              scopes: [`project:${project.id}`],
+              vars: { id: project.id },
+              fn: async ({ iterate, vars }) => iterate.projects.remove({ id: vars.id }),
+            }).catch(() => undefined);
+          });
+
+          it("creates a real project", () => {
+            expect(project).toMatchObject({
+              slug,
+            });
+            expect(project.id).toMatch(/^proj_/);
+            expect(project.ingressUrl).toContain(project.slug);
+          });
+
+          describe("with its project scope", () => {
+            it("projects.list reflects the concrete scope", async () => {
+              const list = await runWithIterateContext({
+                scopes: [`project:${project.id}`],
+                fn: async ({ iterate }) => iterate.projects.list(),
+              });
+              expect(list.projects).toMatchObject([{ id: project.id, slug: project.slug }]);
+            });
+
+            it("describes the project", async () => {
+              const described = await runWithIterateContext({
+                scopes: [`project:${project.id}`],
+                vars: { project },
+                fn: async ({ iterate, vars }) => iterate.projects.get(vars.project.id).describe(),
+              });
+              expect(described).toEqual({ id: project.id });
+            });
           });
         });
       });
     }
-
-    describe("over the websocket endpoint", () => {
-      describe('with scopes ["project:proj_alpha"]', () => {
-        const scopes = ["project:proj_alpha"];
-
-        it("projects.get rejects a project outside the scope grant", async () => {
-          using iterate = withIterateFromNode({ baseUrl, auth: adminAuth({ scopes }) });
-          await expect(iterate.projects.get("proj_forbidden").describe()).rejects.toThrow(
-            /Not authorized for project: proj_forbidden/,
-          );
-        });
-      });
-
-      describe('with scopes ["project:*"]', () => {
-        const scopes = ["project:*"];
-
-        it("a wildcard-only scope names no single current project", async () => {
-          using iterate = withIterateFromNode({ baseUrl, auth: adminAuth({ scopes }) });
-          const current = await iterate.project;
-          expect(current).toBeUndefined();
-        });
-      });
-    });
-
-    describe("inside /run dynamic worker", () => {
-      describe('with scopes ["project:proj_alpha"]', () => {
-        it("the default snippet pipelines through a loaded worker", async () => {
-          const response = await fetch(new URL("/api/captnweb/run", baseUrl), {
-            headers: adminAuthHeaders(adminAuth({ scopes: ["project:proj_alpha"] })),
-          });
-          expect(response.ok).toBe(true);
-          expect(await response.json()).toEqual({ id: "proj_alpha" });
-        });
-      });
-    });
   });
 });
 
@@ -212,14 +252,47 @@ function adminAuthHeaders(auth: AdminAuth) {
   };
 }
 
-type CaptnwebSnippet<Result> = (iterate: RpcStub<IterateCapability>) => Promise<Result>;
+type CaptnwebVars = Record<string, unknown>;
 
-type RunWithIterateContextInput<Result> = {
-  scopes: string[];
-  fn: CaptnwebSnippet<Result>;
+type CaptnwebSnippetInput<Vars extends CaptnwebVars> = {
+  iterate: RpcStub<IterateCapability>;
+  vars: Vars;
 };
 
-function stringifySnippet<Result>(fn: CaptnwebSnippet<Result>) {
+type CaptnwebSnippet<Result, Vars extends CaptnwebVars> = (
+  input: CaptnwebSnippetInput<Vars>,
+) => Promise<Result>;
+
+type RunWithIterateContextInput<Result, Vars extends CaptnwebVars = CaptnwebVars> = {
+  scopes: string[];
+  fn: CaptnwebSnippet<Result, Vars>;
+  vars?: Vars;
+};
+
+type CreatedProject = {
+  id: string;
+  slug: string;
+  ingressUrl: string;
+};
+
+async function listProjectsWithSlugPrefix(prefix: string) {
+  const matches: Array<{ id: string; slug: string }> = [];
+  const limit = 100;
+  for (let offset = 0; ; offset += limit) {
+    const page = await runWithIterateContexts[0].runWithIterateContext({
+      scopes: ["project:*"],
+      vars: { limit, offset },
+      fn: async ({ iterate, vars }) =>
+        iterate.projects.list({ limit: vars.limit, offset: vars.offset }),
+    });
+    matches.push(...page.projects.filter((project) => project.slug.startsWith(prefix)));
+    if (offset + page.projects.length >= page.total || page.projects.length === 0) {
+      return matches;
+    }
+  }
+}
+
+function stringifySnippet<Result, Vars extends CaptnwebVars>(fn: CaptnwebSnippet<Result, Vars>) {
   const code = fn.toString();
   return code.startsWith("async ") ? code : `async ${code}`;
 }

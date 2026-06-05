@@ -103,12 +103,6 @@ export default {
         const mcpResponse = await handleMcpFetch({ request, env, ctx: cfCtx, config });
         if (mcpResponse) return mcpResponse;
 
-        const captnwebResponse = await handleCaptnwebFetch({ request, env, config });
-        if (captnwebResponse) return captnwebResponse;
-
-        const durableObjectDebugResponse = await handleDurableObjectDebugFetch({ request, env });
-        if (durableObjectDebugResponse) return durableObjectDebugResponse;
-
         const db = createD1Client(env.DB);
         const requestConfig = config.baseUrl
           ? config
@@ -173,6 +167,12 @@ export default {
           stream: env.STREAM,
           workerExports: cfCtx.exports,
         };
+
+        const captnwebResponse = await handleCaptnwebFetch({ request, env, context, config });
+        if (captnwebResponse) return captnwebResponse;
+
+        const durableObjectDebugResponse = await handleDurableObjectDebugFetch({ request, env });
+        if (durableObjectDebugResponse) return durableObjectDebugResponse;
 
         const response = await handler.fetch(request, {
           context,
