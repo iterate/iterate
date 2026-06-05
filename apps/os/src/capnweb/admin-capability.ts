@@ -2,6 +2,7 @@ import { RpcTarget } from "cloudflare:workers";
 import { newWorkersRpcResponse } from "capnweb";
 import { ORPCError } from "@orpc/server";
 import { isValidTypeId, typeid } from "@iterate-com/shared/typeid";
+import { createIterateContext } from "./iterate-context-capability.ts";
 import type { AppConfig } from "~/app.ts";
 import { authenticateAdminApiSecret } from "~/auth/middleware.ts";
 import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
@@ -23,7 +24,6 @@ import {
   type ProjectDurableObject,
 } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import type { ActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
-import { createIterateContext } from "./iterate-context-capability.ts";
 
 export const ADMIN_CAPNWEB_PREFIX = "/api/captnweb/admin";
 
