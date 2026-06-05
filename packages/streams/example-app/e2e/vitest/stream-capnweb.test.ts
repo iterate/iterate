@@ -1093,14 +1093,6 @@ function toStreamProcessorRunnerWebSocketUrl(
   return url.toString();
 }
 
-function toStreamProcessorRunnerHttpUrl(path: string, params: { processorSlug?: string } = {}) {
-  const url = new URL(workerUrl);
-  url.pathname = `/stream-processor-runner/${path}`;
-  if (params.processorSlug !== undefined)
-    url.searchParams.set("processorSlug", params.processorSlug);
-  return url.toString();
-}
-
 function parsedFrames(messages: WebSocketFrame[]) {
   return messages.map((frame) => ({
     direction: frame.direction,
