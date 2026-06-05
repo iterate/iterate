@@ -26,157 +26,148 @@ describe("capnweb", () => {
 
   it("creates, lists, gets, and removes projects through admin capnweb", async () => {
     using admin = withAdminIterateFromNode({ auth, baseUrl });
-    const project = await admin.projects.create({
+    await using project = await createDisposableProject({
+      admin,
       slug: `${testRunSlugPrefix}-crud-${uniqueSuffix()}`.slice(0, 40),
     });
-    try {
-      expect(project).toMatchObject({ id: expect.stringMatching(/^proj_/) });
-      const list = await admin.projects.list({ limit: 1_000 });
-      expect(list.projects).toEqual(
-        expect.arrayContaining([expect.objectContaining({ id: project.id, slug: project.slug })]),
-      );
-      expect(await admin.projects.get(project.id).project.describe()).toMatchObject({
-        id: project.id,
-        slug: project.slug,
-      });
-      expect(await admin.projects.remove({ id: project.id })).toEqual({
-        deleted: true,
-        id: project.id,
-        ok: true,
-      });
-    } finally {
-      await admin.projects.remove({ id: project.id }).catch(() => undefined);
-    }
+    expect(project).toMatchObject({ id: expect.stringMatching(/^proj_/) });
+    const list = await admin.projects.list({ limit: 1_000 });
+    expect(list.projects).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: project.id, slug: project.slug })]),
+    );
+    expect(await admin.projects.get(project.id).project.describe()).toMatchObject({
+      id: project.id,
+      slug: project.slug,
+    });
+    expect(await admin.projects.remove({ id: project.id })).toEqual({
+      deleted: true,
+      id: project.id,
+      ok: true,
+    });
   });
 
   it("connects directly to the project durable object capnweb session", async () => {
     using admin = withAdminIterateFromNode({ auth, baseUrl });
-    const project = await admin.projects.create({
+    await using project = await createDisposableProject({
+      admin,
       slug: `${testRunSlugPrefix}-stream-${uniqueSuffix()}`.slice(0, 40),
     });
-    try {
-      using iterate = withIterateFromNode({ auth, ingressUrl: project.ingressUrl });
-      const streamPath = `/capnweb/project-session/${uniqueSuffix()}`;
-      const eventType = "events.iterate.com/capnweb/project-session";
-      const marker = `project-session-${uniqueSuffix()}`;
-      const appended = await iterate.ctx.streams.append({
-        event: { type: eventType, payload: { marker } },
-        streamPath,
-      });
-      const events = await iterate.ctx.streams.read({ afterOffset: "start", streamPath });
-      expect(appended).toMatchObject({ payload: { marker }, type: eventType });
-      expect(events).toEqual(
-        expect.arrayContaining([expect.objectContaining({ payload: { marker }, type: eventType })]),
-      );
-    } finally {
-      await admin.projects.remove({ id: project.id }).catch(() => undefined);
-    }
+    using iterate = withIterateFromNode({ auth, ingressUrl: project.ingressUrl });
+    const streamPath = `/capnweb/project-session/${uniqueSuffix()}`;
+    const eventType = "events.iterate.com/capnweb/project-session";
+    const marker = `project-session-${uniqueSuffix()}`;
+    const appended = await iterate.ctx.streams.append({
+      event: { type: eventType, payload: { marker } },
+      streamPath,
+    });
+    const events = await iterate.ctx.streams.read({ afterOffset: "start", streamPath });
+    expect(appended).toMatchObject({ payload: { marker }, type: eventType });
+    expect(events).toEqual(
+      expect.arrayContaining([expect.objectContaining({ payload: { marker }, type: eventType })]),
+    );
   });
 
   it("updates iterate-config and calls env.ITERATE.ctx from dynamic worker fetch", async () => {
     using admin = withAdminIterateFromNode({ auth, baseUrl });
-    const project = await admin.projects.create({
+    await using project = await createDisposableProject({
+      admin,
       slug: `${testRunSlugPrefix}-worker-${uniqueSuffix()}`.slice(0, 40),
     });
-    try {
-      using iterate = withIterateFromNode({ auth, ingressUrl: project.ingressUrl });
-      const marker = `capnweb-worker-${uniqueSuffix()}`;
-      const streamPath = `/capnweb/worker/${marker}`;
-      const eventType = `events.iterate.com/capnweb/worker/${marker}`;
-      const workerSource = dedent`
-        export default {
-          async fetch(request, env) {
-            const url = new URL(request.url);
-            const ctx = env.ITERATE.getContext();
-            const streamPath = url.searchParams.get("streamPath");
-            const eventType = url.searchParams.get("eventType");
-            const marker = url.searchParams.get("marker");
-            const appended = await ctx.streams.append({
+    using iterate = withIterateFromNode({ auth, ingressUrl: project.ingressUrl });
+    const marker = `capnweb-worker-${uniqueSuffix()}`;
+    const streamPath = `/capnweb/worker/${marker}`;
+    const eventType = `events.iterate.com/capnweb/worker/${marker}`;
+    const workerSource = dedent`
+      export default {
+        async fetch(request, env) {
+          const url = new URL(request.url);
+          const ctx = env.ITERATE.getContext();
+          const streamPath = url.searchParams.get("streamPath");
+          const eventType = url.searchParams.get("eventType");
+          const marker = url.searchParams.get("marker");
+          const appended = await ctx.streams.append({
+            streamPath,
+            event: {
+              type: eventType,
+              payload: { marker, source: "iterate-config" },
+            },
+          });
+          const events = await ctx.streams.read({ afterOffset: "start", streamPath });
+          return Response.json({
+            appended: {
+              eventType: appended.type,
+              marker: appended.payload.marker,
+              offset: appended.offset,
               streamPath,
-              event: {
-                type: eventType,
-                payload: { marker, source: "iterate-config" },
-              },
-            });
-            const events = await ctx.streams.read({ afterOffset: "start", streamPath });
-            return Response.json({
-              appended: {
-                eventType: appended.type,
-                marker: appended.payload.marker,
-                offset: appended.offset,
-                streamPath,
-              },
-              events,
-            });
-          },
-          async someFunction(input = {}) {
-            return { from: "iterate-config", input, marker: ${JSON.stringify(marker)} };
-          },
-        };
-      `;
+            },
+            events,
+          });
+        },
+        async someFunction(input = {}) {
+          return { from: "iterate-config", input, marker: ${JSON.stringify(marker)} };
+        },
+      };
+    `;
 
-      const repo = await iterate.ctx.repos.ensureIterateConfigInfo({ projectSlug: null });
-      const dir = `/iterate-config-${Date.now()}`;
-      await iterate.ctx.workspace.git.clone({
-        branch: repo.defaultBranch,
-        depth: 1,
-        dir,
-        url: repo.remote,
-        ...repo.credentials,
-      });
-      await iterate.ctx.workspace.writeFile(`${dir}/worker.js`, workerSource);
-      await iterate.ctx.workspace.git.add({ dir, filepath: "worker.js" });
-      await iterate.ctx.workspace.git.commit({
-        author: { name: "Capnweb", email: "captnweb-e2e@iterate.com" },
-        dir,
-        message: "Add capnweb worker proof",
-      });
-      await iterate.ctx.workspace.git.push({
-        dir,
-        ref: repo.defaultBranch,
-        remote: "origin",
-        ...repo.credentials,
-      });
+    const repo = await iterate.ctx.repos.ensureIterateConfigInfo({ projectSlug: null });
+    const dir = `/iterate-config-${Date.now()}`;
+    await iterate.ctx.workspace.git.clone({
+      branch: repo.defaultBranch,
+      depth: 1,
+      dir,
+      url: repo.remote,
+      ...repo.credentials,
+    });
+    await iterate.ctx.workspace.writeFile(`${dir}/worker.js`, workerSource);
+    await iterate.ctx.workspace.git.add({ dir, filepath: "worker.js" });
+    await iterate.ctx.workspace.git.commit({
+      author: { name: "Capnweb", email: "captnweb-e2e@iterate.com" },
+      dir,
+      message: "Add capnweb worker proof",
+    });
+    await iterate.ctx.workspace.git.push({
+      dir,
+      ref: repo.defaultBranch,
+      remote: "origin",
+      ...repo.credentials,
+    });
 
-      const streamFetch = (await iterate.ctx.worker.fetchJson({
-        url: `https://iterate-config.local/capnweb-fetch/${marker}?${new URLSearchParams({
-          eventType,
-          marker,
-          streamPath,
-        })}`,
-      })) as { appended: unknown; events: unknown[] };
-      const called = await iterate.ctx.worker.call({
-        args: [{ echo: marker }],
-        functionName: "someFunction",
-      });
-      const streamEvents = await iterate.ctx.streams.read({ afterOffset: "start", streamPath });
-
-      expect(called).toEqual({ from: "iterate-config", input: { echo: marker }, marker });
-      expect(streamFetch.appended).toMatchObject({
+    const streamFetch = (await iterate.ctx.worker.fetchJson({
+      url: `https://iterate-config.local/capnweb-fetch/${marker}?${new URLSearchParams({
         eventType,
         marker,
-        offset: expect.any(Number),
         streamPath,
-      });
-      expect(streamFetch.events).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            payload: { marker, source: "iterate-config" },
-            type: eventType,
-          }),
-        ]),
-      );
-      expect(streamEvents).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            payload: { marker, source: "iterate-config" },
-            type: eventType,
-          }),
-        ]),
-      );
-    } finally {
-      await admin.projects.remove({ id: project.id }).catch(() => undefined);
-    }
+      })}`,
+    })) as { appended: unknown; events: unknown[] };
+    const called = await iterate.ctx.worker.call({
+      args: [{ echo: marker }],
+      functionName: "someFunction",
+    });
+    const streamEvents = await iterate.ctx.streams.read({ afterOffset: "start", streamPath });
+
+    expect(called).toEqual({ from: "iterate-config", input: { echo: marker }, marker });
+    expect(streamFetch.appended).toMatchObject({
+      eventType,
+      marker,
+      offset: expect.any(Number),
+      streamPath,
+    });
+    expect(streamFetch.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          payload: { marker, source: "iterate-config" },
+          type: eventType,
+        }),
+      ]),
+    );
+    expect(streamEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          payload: { marker, source: "iterate-config" },
+          type: eventType,
+        }),
+      ]),
+    );
   });
 });
 
@@ -240,6 +231,19 @@ type AdminAuth = ReturnType<typeof adminAuth>;
 
 function adminAuthHeaders(auth: AdminAuth) {
   return { Authorization: `Bearer ${auth.token.exposeSecret()}` };
+}
+
+async function createDisposableProject(input: {
+  admin: RpcStub<IterateAdminCapability>;
+  slug: string;
+}) {
+  const project = await input.admin.projects.create({ slug: input.slug });
+  return {
+    ...project,
+    async [Symbol.asyncDispose]() {
+      await input.admin.projects.remove({ id: project.id }).catch(() => undefined);
+    },
+  };
 }
 
 async function listProjectsWithSlugPrefix(prefix: string) {
