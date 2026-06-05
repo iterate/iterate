@@ -8,21 +8,16 @@ import {
 } from "../../shared/event.ts";
 import { getInitialProcessorState, runProcessorReduce } from "../../shared/stream-processors.ts";
 import { makeRpcTargetClass } from "../../shared/rpc-target.ts";
-import type { StreamPersistedProcessorState } from "../../types.ts";
+import type { StreamCoreProcessorState } from "../../types.ts";
 import type { ProcessorStream } from "../../processor-runner.ts";
-import { circuitBreakerProcessor } from "../../processors/circuit-breaker/implementation.ts";
-import { circuitBreakerProcessorContract } from "../../processors/circuit-breaker/contract.ts";
 import { getAncestorStreamPaths, coreProcessor } from "../../processors/core/implementation.ts";
 import { coreProcessorContract, type CoreProcessorState } from "../../processors/core/contract.ts";
 import type { StreamProcessorRunnerRpc, StreamRpc, SubscriptionSink } from "../../types.ts";
 
 export class Stream extends DurableObject<Env> implements StreamRpc {
-  #state: StreamPersistedProcessorState;
+  #coreProcessorState: StreamCoreProcessorState;
   #coreProcessor = coreProcessor.build({
     propagateChildStreamCreated: (state) => this.#propagateChildStreamCreated(state),
-  });
-  #circuitBreakerProcessor = circuitBreakerProcessor.build({
-    readStreamState: () => this.#state.core,
   });
 
   // Live delivery connections, keyed by subscriptionKey. Runtime-only: outbound
@@ -44,23 +39,16 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
         idempotency_key text unique,
         raw_json text not null
       );
-
-      -- Inline built-in processor snapshots, keyed by processor slug. Runner DOs
-      -- keep their own processor snapshots in their own storage.
-      create table if not exists processor_state (
-        processor_slug text primary key,
-        state text not null
-      );
     `);
 
-    this.#state = this.#readProcessorState();
+    this.#coreProcessorState = this.readCoreProcessorState();
 
     // When the durable object boots up the _first time_, we add a
     // events.iterate.com/stream/created event to the stream.
     //
     // And every time it's woken up for any reason (inbound fetch, rpc or alarm),
     // we append a "woken" event to the stream.
-    if (this.#state.core.eventCount === 0) {
+    if (this.#coreProcessorState.eventCount === 0) {
       // stream durable objects have names like "namespace:/some/stream/path"
       if (!ctx.id.name) throw new Error("ctx.id.name is falsey - this should never happen");
       const [namespace, path] = ctx.id.name.split(":");
@@ -84,33 +72,15 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     this.#reconcile();
   }
 
-  #readProcessorState(): StreamPersistedProcessorState {
-    const rows = new Map(
-      this.ctx.storage.sql
-        .exec<{ processorSlug: string; state: string }>(
-          "select processor_slug as processorSlug, state from processor_state",
-        )
-        .toArray()
-        .map((row) => [row.processorSlug, row.state]),
-    );
-    return parseStreamProcessorStateRows(rows);
+  protected readCoreProcessorState(): StreamCoreProcessorState {
+    const stored = this.ctx.storage.kv.get<unknown>("state");
+    return stored === undefined
+      ? getInitialProcessorState(coreProcessorContract)
+      : coreProcessorContract.stateSchema.parse(stored);
   }
 
-  #persistProcessorState(state: StreamPersistedProcessorState): void {
-    for (const [slug, serialized] of [
-      ["core", JSON.stringify(state.core)],
-      ["circuit-breaker", JSON.stringify(state["circuit-breaker"])],
-    ] as const) {
-      this.ctx.storage.sql.exec(
-        `
-          insert into processor_state (processor_slug, state)
-          values (?, ?)
-          on conflict(processor_slug) do update set state = excluded.state
-        `,
-        slug,
-        serialized,
-      );
-    }
+  protected writeCoreProcessorState(state: StreamCoreProcessorState): void {
+    this.ctx.storage.kv.put("state", state);
   }
 
   #appendEventRows(events: StreamEvent[]): void {
@@ -183,9 +153,9 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
   }
 
   #resolveStream(streamPath: string): Pick<StreamRpc, "append" | "appendBatch"> {
-    const resolvedPath = resolveStreamPath(this.#state.core.path, streamPath);
-    if (resolvedPath === resolveStreamPath(this.#state.core.path, ".")) return this;
-    return this.env.STREAM.getByName(`${this.#state.core.namespace}:${resolvedPath}`);
+    const resolvedPath = resolveStreamPath(this.#coreProcessorState.path, streamPath);
+    if (resolvedPath === resolveStreamPath(this.#coreProcessorState.path, ".")) return this;
+    return this.env.STREAM.getByName(`${this.#coreProcessorState.namespace}:${resolvedPath}`);
   }
 
   /** Opens the capnweb RPC API for this stream Durable Object. */
@@ -216,7 +186,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
    * 1. `a` becomes offset 5, `b` becomes offset 6; each is folded into reduced state.
    *    An event whose `idempotencyKey` already exists is skipped and the existing
    *    event is returned in its place (so the returned array stays input-aligned).
-   * 2. Both rows + the new reduced state are written in one await-free SQLite turn.
+   * 2. Event rows + the new core processor state are written in one await-free turn.
    *    After this line the append has succeeded.
    * 3. Post-commit fan-out: every live connection's `wake()` is called (its pump then
    *    reads offsets 5..6 from storage and delivers them); reconciliation runs only if
@@ -237,7 +207,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
   }
 
   #appendBatchHere(args: { events: StreamEventInput[] }): StreamEvent[] {
-    let workingState = this.#state;
+    let workingCoreProcessorState = this.#coreProcessorState;
     const events: StreamEvent[] = [];
     const newEvents: StreamEvent[] = [];
     const idempotencyHitsInBatch = new Map<string, StreamEvent>();
@@ -266,20 +236,19 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
 
       this.#coreProcessor.beforeAppend?.({
         event: input,
-        state: workingState.core,
+        state: workingCoreProcessorState,
       });
 
       const committed: StreamEvent = {
         ...input,
-        offset: workingState.core.maxOffset + 1,
+        offset: workingCoreProcessorState.maxOffset + 1,
         createdAt: new Date().toISOString(),
       };
       if (input.offset !== undefined && input.offset !== committed.offset) {
         throw new Error(`expected offset ${committed.offset}, got ${input.offset}`);
       }
 
-      const previousCoreState = workingState.core;
-      const previousCircuitBreakerState = workingState["circuit-breaker"];
+      const previousCoreState = workingCoreProcessorState;
 
       const coreReduction = runProcessorReduce({
         processor: { contract: coreProcessorContract },
@@ -290,36 +259,12 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
         throw new Error(`core processor cannot reduce event type "${committed.type}"`);
       }
 
-      const circuitBreakerReduction = runProcessorReduce({
-        processor: { contract: circuitBreakerProcessorContract },
-        event: committed,
-        state: previousCircuitBreakerState,
-      });
-      if (circuitBreakerReduction === undefined) {
-        throw new Error(`circuit-breaker processor cannot reduce event type "${committed.type}"`);
-      }
-
-      workingState = {
-        core: coreProcessorContract.stateSchema.parse(coreReduction.state),
-        "circuit-breaker": circuitBreakerProcessorContract.stateSchema.parse(
-          circuitBreakerReduction.state,
-        ),
-      };
+      workingCoreProcessorState = coreProcessorContract.stateSchema.parse(coreReduction.state);
 
       this.#coreProcessor.afterAppend?.({
         event: coreReduction.event,
         previousState: previousCoreState,
-        state: workingState.core,
-        streamMaxOffset: committed.offset,
-        stream: appendStream,
-        shouldApplySideEffects: () => true,
-        blockProcessorUntil: (work) => void work(),
-        keepAlive: (work) => void work,
-      });
-      this.#circuitBreakerProcessor.afterAppend?.({
-        event: circuitBreakerReduction.event,
-        previousState: previousCircuitBreakerState,
-        state: workingState["circuit-breaker"],
+        state: workingCoreProcessorState,
         streamMaxOffset: committed.offset,
         stream: appendStream,
         shouldApplySideEffects: () => true,
@@ -336,17 +281,17 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
 
     if (newEvents.length === 0) return events;
 
-    // 2. Persist new event rows and reduced state.
+    // 2. Persist new event rows and reduced core processor state.
     // Durable Object SQL storage runs synchronously in the object's thread. The
     // first-party docs say each sql.exec() call is atomic, cursors should be fully
     // consumed before awaits, and Output Gates hold responses until writes are durable:
     // https://developers.cloudflare.com/durable-objects/api/sql-storage/
     // https://blog.cloudflare.com/sqlite-in-durable-objects/
     //
-    // Keep this section await-free: event rows + reduced state are the append boundary.
+    // Keep this section await-free: event rows + core processor state are the append boundary.
     this.#appendEventRows(newEvents);
-    this.#persistProcessorState(workingState);
-    this.#state = workingState;
+    this.writeCoreProcessorState(workingCoreProcessorState);
+    this.#coreProcessorState = workingCoreProcessorState;
 
     // 3. Wake live delivery; reconcile only when subscription topology changed.
     // Append success is already decided above — this is pure post-commit fan-out.
@@ -411,34 +356,20 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
 
   reduce(args: {
     event: StreamEvent;
-    state?: StreamPersistedProcessorState;
-  }): StreamPersistedProcessorState {
-    const base = args.state ?? this.#state;
+    coreProcessorState?: StreamCoreProcessorState;
+  }): StreamCoreProcessorState {
+    const base = args.coreProcessorState ?? this.#coreProcessorState;
 
     const coreReduction = runProcessorReduce({
       processor: { contract: coreProcessorContract },
       event: args.event,
-      state: base.core,
+      state: base,
     });
     if (coreReduction === undefined) {
       throw new Error(`core processor cannot reduce event type "${args.event.type}"`);
     }
 
-    const circuitBreakerReduction = runProcessorReduce({
-      processor: { contract: circuitBreakerProcessorContract },
-      event: args.event,
-      state: base["circuit-breaker"],
-    });
-    if (circuitBreakerReduction === undefined) {
-      throw new Error(`circuit-breaker processor cannot reduce event type "${args.event.type}"`);
-    }
-
-    return {
-      core: coreProcessorContract.stateSchema.parse(coreReduction.state),
-      "circuit-breaker": circuitBreakerProcessorContract.stateSchema.parse(
-        circuitBreakerReduction.state,
-      ),
-    };
+    return coreProcessorContract.stateSchema.parse(coreReduction.state);
   }
 
   /**
@@ -464,7 +395,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
 
   runtimeState() {
     return {
-      state: this.#state,
+      coreProcessorState: this.#coreProcessorState,
       runtime: {
         connections: Object.fromEntries(
           [...this.#connections].map(([subscriptionKey, connection]) => [
@@ -534,7 +465,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     this.#connections.get(subscriptionKey)?.close();
 
     const sink = args.sink.dup();
-    let cursor = args.replayAfterOffset ?? this.#state.core.maxOffset;
+    let cursor = args.replayAfterOffset ?? this.#coreProcessorState.maxOffset;
     let draining = false;
     let open = true;
 
@@ -564,7 +495,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
           // Awaiting it forces a return round-trip per batch (see design.md "capnweb API").
           const pendingBatch = sink.processEventBatch({
             events,
-            streamMaxOffset: this.#state.core.maxOffset,
+            streamMaxOffset: this.#coreProcessorState.maxOffset,
           });
           pendingBatch[Symbol.dispose]();
           await Promise.resolve();
@@ -600,7 +531,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
 
     return {
       subscriptionKey,
-      streamMaxOffset: this.#state.core.maxOffset,
+      streamMaxOffset: this.#coreProcessorState.maxOffset,
       unsubscribe: () => connection.close(),
     };
   }
@@ -631,14 +562,14 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     for (const [subscriptionKey, connection] of this.#connections) {
       if (
         connection.direction === "outbound" &&
-        this.#state.core.subscriptionsByKey[subscriptionKey] === undefined
+        this.#coreProcessorState.subscriptionsByKey[subscriptionKey] === undefined
       ) {
         connection.close();
       }
     }
 
     for (const [subscriptionKey, configured] of Object.entries(
-      this.#state.core.subscriptionsByKey,
+      this.#coreProcessorState.subscriptionsByKey,
     )) {
       if (this.#connections.has(subscriptionKey) || this.#connecting.has(subscriptionKey)) continue;
 
@@ -664,7 +595,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     let response: Response;
     if (subscriber.type === "built-in") {
       response = await this.env.STREAM_PROCESSOR_RUNNER.getByName(
-        `${this.#state.core.namespace}:${this.#state.core.path}:${args.subscriptionKey}`,
+        `${this.#coreProcessorState.namespace}:${this.#coreProcessorState.path}:${args.subscriptionKey}`,
       ).fetch(
         new Request("https://stream-processor.local/", {
           headers: { Upgrade: "websocket" },
@@ -687,9 +618,9 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     const request = await runner.requestSubscription({
       stream: new StreamRpcTarget(this),
       subscriptionKey: args.subscriptionKey,
-      streamMaxOffset: this.#state.core.maxOffset,
+      streamMaxOffset: this.#coreProcessorState.maxOffset,
       subscriptionConfiguredEvent: args.configured.latestConfiguredEvent,
-      streamRuntimeState: this.runtimeState(),
+      streamRuntimeState: { coreProcessorState: this.#coreProcessorState },
     });
 
     this.#openConnection({
@@ -700,7 +631,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
       // successful dial are replayed rather than skipped. `replayAfterOffset` is
       // exclusive, so this delivers from the first event after the subscription
       // was added. A subscriber that returns its own `replayAfterOffset` (e.g. a
-      // built-in runner resuming from a checkpoint) still wins.
+      // runner resuming from a checkpoint) still wins.
       replayAfterOffset: request.replayAfterOffset ?? args.configured.latestConfiguredEvent.offset,
       subscriptionKey: args.subscriptionKey,
       onClose: () => runner[Symbol.dispose](),
@@ -743,45 +674,6 @@ export function resolveStreamPath(basePath: string, streamPath: string): string 
     segments.push(segment);
   }
   return `/${segments.join("/")}`;
-}
-
-/** Initial durable state for the Stream DO's inline processors, keyed by processor slug. */
-function initialProcessorState(): StreamPersistedProcessorState {
-  return {
-    core: getInitialProcessorState(coreProcessorContract),
-    "circuit-breaker": getInitialProcessorState(circuitBreakerProcessorContract),
-  };
-}
-
-/** Parses persisted processor-state rows, falling back per slug when a processor is new. */
-function parseStreamProcessorStateRows(
-  rows: ReadonlyMap<string, string>,
-): StreamPersistedProcessorState {
-  const initial = initialProcessorState();
-  return {
-    core: parseProcessorStateRow({
-      rows,
-      slug: "core",
-      initial: initial.core,
-      parse: (value) => coreProcessorContract.stateSchema.parse(value),
-    }),
-    "circuit-breaker": parseProcessorStateRow({
-      rows,
-      slug: "circuit-breaker",
-      initial: initial["circuit-breaker"],
-      parse: (value) => circuitBreakerProcessorContract.stateSchema.parse(value),
-    }),
-  };
-}
-
-function parseProcessorStateRow<State>(args: {
-  rows: ReadonlyMap<string, string>;
-  slug: string;
-  initial: State;
-  parse: (value: unknown) => State;
-}): State {
-  const raw = args.rows.get(args.slug);
-  return raw === undefined ? args.initial : args.parse(JSON.parse(raw));
 }
 
 /**

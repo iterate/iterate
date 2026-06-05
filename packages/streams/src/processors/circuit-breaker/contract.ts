@@ -1,11 +1,11 @@
-// Defines the built-in "circuit-breaker" processor contract.
+// Defines the "circuit-breaker" processor contract.
 //
 // This processor owns the token-bucket rate limiter. When tokens go negative it
 // appends `events.iterate.com/stream/paused` so the core processor can shut
 // the door via its beforeAppend gate. More elaborate breakers — per-tenant
 // budgets, ML anomaly detectors, upstream coordination — could run as separate
-// processors (even on other workers) and use the same paused/resumed contract
-// with the built-in core processor.
+// processors and use the same paused/resumed contract with the inline core
+// processor.
 
 import { z } from "zod";
 import { defineProcessorContract } from "../../shared/stream-processors.ts";

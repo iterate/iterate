@@ -56,9 +56,9 @@ describe("core processor contract", () => {
           payload: {
             subscriptionKey: "echo",
             subscriber: {
-              type: "built-in",
+              type: "external-url",
               transport: "capnweb-websocket",
-              processorSlug: "echo-example",
+              url: "https://example.com/processor",
             },
           },
           createdAt: "2026-06-01T12:00:01.000Z",
