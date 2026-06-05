@@ -35,7 +35,7 @@ import { getProjectCustomHostnameIngressRule } from "~/ingress/project-custom-ho
 import type { ExactHostIngressRule } from "~/ingress/types.ts";
 import { DEBUG_APPEND_CHAIN_EVENT_TYPE } from "~/durable-objects/debug-append-chain-subscriber.ts";
 import { handleMcpFetch } from "~/domains/inbound-mcp-server/mcp-handler.ts";
-import { handleCaptnwebFetch } from "~/capnweb-playground.ts";
+import { handleAdminCapnwebFetch } from "~/capnweb/admin-capability.ts";
 
 // Re-export rpc-targets used by OS's existing loopback callable paths.
 // Stream processor subscriptions do not use these exports; they target Durable
@@ -54,7 +54,7 @@ export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.t
 export { AiCapability, OrpcCapability } from "~/domains/codemode/example-capabilities.ts";
 export { FetchCapability } from "~/domains/codemode/fetch-capability.ts";
 export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
-export { IterateCapabilityEntrypoint } from "~/capnweb-playground.ts";
+export { IterateContextEntrypoint } from "~/capnweb/iterate-context.ts";
 export { ProjectCapability } from "~/domains/projects/entrypoints/project-capability.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
 export { ProjectMcpServerEntrypoint } from "~/domains/inbound-mcp-server/entrypoints/project-mcp-server-entrypoint.ts";
@@ -169,7 +169,7 @@ export default {
           workerExports: cfCtx.exports,
         };
 
-        const captnwebResponse = await handleCaptnwebFetch({ request, env, context, config });
+        const captnwebResponse = await handleAdminCapnwebFetch({ request, env, context, config });
         if (captnwebResponse) return captnwebResponse;
 
         const durableObjectDebugResponse = await handleDurableObjectDebugFetch({ request, env });

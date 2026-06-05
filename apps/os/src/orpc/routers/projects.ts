@@ -34,7 +34,7 @@ import { projectReposRouter } from "~/orpc/routers/repos.ts";
 import { projectIntegrationsRouter } from "~/orpc/routers/integrations.ts";
 import { projectSecretsRouter } from "~/orpc/routers/secrets.ts";
 import { projectStreamsRouter } from "~/orpc/routers/streams.ts";
-import { ProjectsCapability } from "~/capnweb-playground.ts";
+import { ProjectAdminCapability } from "~/capnweb/admin-capability.ts";
 
 type ProjectRow = {
   id: string;
@@ -122,44 +122,30 @@ export const projectsRouter = {
     create: os.projects.create
       .use(activeOrganizationMiddleware)
       .handler(async ({ context, input }) => {
-        const auth = context.activeOrganization;
-        return await new ProjectsCapability({
-          activeOrganization: auth,
+        return await new ProjectAdminCapability({
+          activeOrganization: context.activeOrganization,
           context,
-          scopes: [],
         }).create(input);
       }),
     list: os.projects.list.use(activeOrganizationMiddleware).handler(async ({ context, input }) => {
-      const auth = context.activeOrganization;
-      return await new ProjectsCapability({
-        activeOrganization: auth,
+      return await new ProjectAdminCapability({
+        activeOrganization: context.activeOrganization,
         context,
-        scopes: [],
       }).list(input);
     }),
     find: os.projects.find.use(activeOrganizationMiddleware).handler(async ({ context, input }) => {
-      const row = await requireProject({
+      return await new ProjectAdminCapability({
         activeOrganization: context.activeOrganization,
         context,
-        projectId: input.id,
-      });
-      return await toProjectWithIngressUrl(context, row);
+      }).find(input);
     }),
     findBySlug: os.projects.findBySlug
       .use(activeOrganizationMiddleware)
       .handler(async ({ context, input }) => {
-        const row = await getProjectBySlug(context.db, { slug: input.slug });
-
-        if (!row) {
-          throw new ORPCError("NOT_FOUND", { message: `Project ${input.slug} not found` });
-        }
-
-        await requireProject({
+        return await new ProjectAdminCapability({
           activeOrganization: context.activeOrganization,
           context,
-          projectId: row.id,
-        });
-        return await toProjectWithIngressUrl(context, row);
+        }).findBySlug(input);
       }),
     updateConfig: os.projects.updateConfig
       .use(activeOrganizationMiddleware)
@@ -260,10 +246,9 @@ export const projectsRouter = {
     remove: os.projects.remove
       .use(activeOrganizationMiddleware)
       .handler(async ({ context, input }) => {
-        return await new ProjectsCapability({
+        return await new ProjectAdminCapability({
           activeOrganization: context.activeOrganization,
           context,
-          scopes: [],
         }).remove(input);
       }),
   },

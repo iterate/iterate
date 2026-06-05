@@ -24,6 +24,12 @@ import {
 import { typeid } from "@iterate-com/shared/typeid";
 import { AppConfig } from "~/app.ts";
 import {
+  createCapnwebAppContext,
+  createIterateContext,
+  type IterateContext,
+} from "~/capnweb/iterate-context.ts";
+import { handleProjectCapnwebFetch } from "~/capnweb/project-handler.ts";
+import {
   AGENTS_STREAM_PATH,
   type AgentDurableObject,
   getAgentDurableObjectName,
@@ -385,6 +391,21 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     return this.requireSummary();
   }
 
+  async getIterateContext(): Promise<IterateContext> {
+    await this.ensureStarted();
+    const summary = this.requireSummary();
+    return createIterateContext({
+      context: createCapnwebAppContext({
+        ctx: this.ctx,
+        env: this.env as unknown as Env,
+        method: "CAPNWEB",
+        path: "capnweb://project-durable-object",
+      }),
+      project: this,
+      projectId: summary.id,
+    });
+  }
+
   async ingressUrl(): Promise<string> {
     await this.ensureStarted();
     const summary = this.requireSummary();
@@ -426,6 +447,13 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     await this.ensureStarted();
     const summary = this.requireSummary();
     const url = new URL(request.url);
+    const capnwebResponse = await handleProjectCapnwebFetch({
+      config: this.getAppConfig(),
+      getContext: () => this.getIterateContext(),
+      request,
+    });
+    if (capnwebResponse) return capnwebResponse;
+
     if (url.pathname === "/__iterate/intercept-project-egress") {
       return this.acceptProjectEgressInterceptTunnel(request);
     }
@@ -668,7 +696,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
         }),
         () =>
           projectDynamicWorkerCodeWithStreams({
-            iterate: readLoopbackExports(this.ctx).IterateCapabilityEntrypoint({
+            iterate: readLoopbackExports(this.ctx).IterateContextEntrypoint({
               props: { projectId: input.projectId },
             }),
             streams: readLoopbackExports(this.ctx).StreamsCapability({
@@ -1457,7 +1485,7 @@ function projectRuntimeEnv(env: ProjectEnv): ProjectRuntimeEnv {
 
 function readLoopbackExports(ctx: DurableObjectState) {
   return ctx.exports as unknown as Cloudflare.Exports & {
-    IterateCapabilityEntrypoint(input: { props: { projectId: string } }): Fetcher;
+    IterateContextEntrypoint(input: { props: { projectId: string } }): Fetcher;
     StreamsCapability(input: { props: StreamsCapabilityProps }): Fetcher;
   };
 }
