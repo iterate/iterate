@@ -1,0 +1,11 @@
+{
+  "name": "iterate-context-mounts-poc",
+  "main": "src/host-entry.ts",
+  "compatibility_date": "2026-04-27",
+  "compatibility_flags": ["nodejs_compat"],
+  "worker_loaders": [
+    {
+      "binding": "LOADER",
+    },
+  ],
+}
