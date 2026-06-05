@@ -538,9 +538,11 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
 
   /** Fire-and-forget outbound reconciliation; never blocks the append path. */
   #reconcile() {
-    this.#reconcileOutboundConnections().then(undefined, (error: unknown) =>
-      console.error("Stream outbound reconciliation failed", error),
-    );
+    try {
+      this.#reconcileOutboundConnections();
+    } catch (error) {
+      console.error("Stream outbound reconciliation failed", error);
+    }
   }
 
   /**
@@ -556,7 +558,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
    * boot the constructor's `#reconcile()` re-establishes that same connection from
    * persisted state with no new append needed.
    */
-  async #reconcileOutboundConnections() {
+  #reconcileOutboundConnections() {
     for (const [subscriptionKey, connection] of this.#connections) {
       if (
         connection.direction === "outbound" &&
@@ -573,49 +575,60 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
 
       // Reserve the key before any await so a concurrent reconcile can't dial twice.
       this.#connecting.add(subscriptionKey);
-      try {
-        const subscriber = configured.latestConfiguredEvent.payload.subscriber;
-        const headers = new Headers(subscriber.headers);
-        headers.set("Upgrade", "websocket");
-        const response = await fetch(new Request(subscriber.url, { headers }));
-        const webSocket = response.webSocket;
-        if (webSocket === null) {
-          throw new Error(
-            `expected processor runner websocket, got ${response.status} ${response.statusText}: ${await response.text()}`,
-          );
-        }
-
-        webSocket.accept();
-        const runner = newWebSocketRpcSession<StreamProcessorRunnerRpc>(webSocket);
-        const request = await runner.requestSubscription({
-          stream: new StreamRpcTarget(this),
-          subscriptionKey,
-          streamMaxOffset: this.#coreProcessorState.maxOffset,
-          subscriptionConfiguredEvent: configured.latestConfiguredEvent,
-          streamRuntimeState: this.runtimeState(),
-        });
-
-        this.#openConnection({
-          ...request,
-          direction: "outbound",
-          // Default to the offset the subscription was configured at, so that events
-          // committed in the gap between the `subscription-configured` append and a
-          // successful dial are replayed rather than skipped. `replayAfterOffset` is
-          // exclusive, so this delivers from the first event after the subscription
-          // was added. A subscriber that returns its own `replayAfterOffset` (e.g. a
-          // runner resuming from a checkpoint) still wins.
-          replayAfterOffset: request.replayAfterOffset ?? configured.latestConfiguredEvent.offset,
-          subscriptionKey,
-          onClose: () => runner[Symbol.dispose](),
-        });
-        runner.onRpcBroken(() => {
-          // The connection's own onRpcBroken already closed it; reconnect if still configured.
-          this.#reconcile();
-        });
-      } finally {
-        this.#connecting.delete(subscriptionKey);
-      }
+      this.ctx.waitUntil(
+        this.#connectOutboundConnection({ configured, subscriptionKey })
+          .catch((error: unknown) => {
+            console.error("Stream outbound connection failed", { error, subscriptionKey });
+          })
+          .finally(() => {
+            this.#connecting.delete(subscriptionKey);
+          }),
+      );
     }
+  }
+
+  async #connectOutboundConnection(args: {
+    configured: CoreProcessorState["subscriptionsByKey"][string];
+    subscriptionKey: string;
+  }) {
+    const subscriber = args.configured.latestConfiguredEvent.payload.subscriber;
+    const headers = new Headers(subscriber.headers);
+    headers.set("Upgrade", "websocket");
+    const response = await fetch(new Request(subscriber.url, { headers }));
+    const webSocket = response.webSocket;
+    if (webSocket === null) {
+      throw new Error(
+        `expected processor runner websocket, got ${response.status} ${response.statusText}: ${await response.text()}`,
+      );
+    }
+
+    webSocket.accept();
+    const runner = newWebSocketRpcSession<StreamProcessorRunnerRpc>(webSocket);
+    const request = await runner.requestSubscription({
+      stream: new StreamRpcTarget(this),
+      subscriptionKey: args.subscriptionKey,
+      streamMaxOffset: this.#coreProcessorState.maxOffset,
+      subscriptionConfiguredEvent: args.configured.latestConfiguredEvent,
+      streamRuntimeState: this.runtimeState(),
+    });
+
+    this.#openConnection({
+      ...request,
+      direction: "outbound",
+      // Default to the offset the subscription was configured at, so that events
+      // committed in the gap between the `subscription-configured` append and a
+      // successful dial are replayed rather than skipped. `replayAfterOffset` is
+      // exclusive, so this delivers from the first event after the subscription
+      // was added. A subscriber that returns its own `replayAfterOffset` (e.g. a
+      // runner resuming from a checkpoint) still wins.
+      replayAfterOffset: request.replayAfterOffset ?? args.configured.latestConfiguredEvent.offset,
+      subscriptionKey: args.subscriptionKey,
+      onClose: () => runner[Symbol.dispose](),
+    });
+    runner.onRpcBroken(() => {
+      // The connection's own onRpcBroken already closed it; reconnect if still configured.
+      this.#reconcile();
+    });
   }
 }
 

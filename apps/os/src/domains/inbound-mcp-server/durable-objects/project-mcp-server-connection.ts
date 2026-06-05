@@ -210,12 +210,6 @@ export class ProjectMcpServerConnection extends McpAgent<
         const invocationId = `mcp_tool_${crypto.randomUUID()}`;
         const startedAt = Date.now();
         const streamPath = await this.getSessionStreamPath();
-        debugCodemodeDepth("mcp.exec_js.start", {
-          invocationId,
-          providerCount: staticProviders.length,
-          sessionId: this.getSessionId(),
-          streamPath,
-        });
 
         await this.emitLifecycleEvent("tool-invocation-started", {
           auth: summarizeAuthProps(auth),
@@ -226,16 +220,8 @@ export class ProjectMcpServerConnection extends McpAgent<
           streamPath,
           toolName: "exec_js",
         });
-        debugCodemodeDepth("mcp.exec_js.afterStartedLifecycle", {
-          invocationId,
-          elapsedMs: Date.now() - startedAt,
-        });
 
         try {
-          debugCodemodeDepth("mcp.exec_js.beforeStartSession", {
-            invocationId,
-            elapsedMs: Date.now() - startedAt,
-          });
           const started = await startCodemodeScriptOnSession({
             code,
             events: [],
@@ -243,11 +229,6 @@ export class ProjectMcpServerConnection extends McpAgent<
             projectId: auth.projectId,
             providers: staticProviders,
             streamPath,
-          });
-          debugCodemodeDepth("mcp.exec_js.afterStartSession", {
-            invocationId,
-            elapsedMs: Date.now() - startedAt,
-            offset: started.event.offset,
           });
           const output = await waitForScriptExecutionFinished({
             afterOffset: started.event.offset,
@@ -292,11 +273,6 @@ export class ProjectMcpServerConnection extends McpAgent<
 
           return response;
         } catch (error) {
-          debugCodemodeDepth("mcp.exec_js.error", {
-            invocationId,
-            elapsedMs: Date.now() - startedAt,
-            error: serializeError(error),
-          });
           await this.emitLifecycleEvent("tool-invocation-finished", {
             auth: summarizeAuthProps(auth),
             durationMs: Date.now() - startedAt,
@@ -599,10 +575,6 @@ export class ProjectMcpServerConnection extends McpAgent<
       projectSlug: project.slug,
     };
   }
-}
-
-function debugCodemodeDepth(message: string, payload: Record<string, unknown>) {
-  console.log("[DEBUG-cm-depth]", JSON.stringify({ message, ...payload }));
 }
 
 function readDebugProviderLimit(code: string) {

@@ -1,7 +1,7 @@
 import type { Client } from "sqlfu";
 import type { SharedRequestLogger } from "@iterate-com/shared/request-logging";
 import type { AuthenticatedSession } from "@iterate-com/auth/server";
-import type { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
+import type { Stream } from "@iterate-com/streams/workers/durable-objects/stream";
 import manifest, { type AppConfig } from "~/app.ts";
 import type { Principal } from "~/auth/principal.ts";
 import type { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
@@ -32,7 +32,7 @@ export interface AppContext {
   repo?: DurableObjectNamespace<RepoDurableObject>;
   slackAgent?: DurableObjectNamespace<SlackAgentDurableObject>;
   slackIntegration?: DurableObjectNamespace<SlackIntegrationDurableObject>;
-  stream?: DurableObjectNamespace<StreamDurableObject>;
+  stream?: DurableObjectNamespace<Stream>;
   workerExports?: Cloudflare.Exports;
   callableEnv?: Record<string, unknown>;
   projectAccess?: {

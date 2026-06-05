@@ -2,26 +2,18 @@ import { createD1Client } from "sqlfu";
 import { z } from "zod";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { acceptCaptunTunnel, type Fetcher } from "captun";
-import type { Callable, FetchCallable } from "@iterate-com/shared/callable/types.ts";
+import type { FetchCallable } from "@iterate-com/shared/callable/types.ts";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import { withStreamProcessorRunner } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor-runner";
 import { jsonataReactorEventTypes } from "@iterate-com/shared/stream-processors/jsonata-reactor/contract";
-import type { ProcessorStreamApi, StreamEvent } from "@iterate-com/shared/stream-processors";
+import { type Event } from "@iterate-com/shared/streams/types";
+import { typeid } from "@iterate-com/shared/typeid";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
-} from "@iterate-com/shared/streams/helpers";
-import type { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
-import {
-  type Event,
-  type EventInput,
-  STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-  type StreamCursor,
-  StreamPath,
-} from "@iterate-com/shared/streams/types";
-import { typeid } from "@iterate-com/shared/typeid";
+  type StreamDurableObject,
+} from "~/domains/streams/new-stream-runtime.ts";
 import { AppConfig } from "~/app.ts";
 import {
   AGENTS_STREAM_PATH,
@@ -41,7 +33,6 @@ import {
   PROJECT_CNAME_RECORD_CREATED_EVENT_TYPE,
   PROJECT_CNAME_RECORD_CREATION_FAILED_EVENT_TYPE,
   PROJECT_CONFIG_WORKER_BUILT_EVENT_TYPE,
-  createProjectLifecycleProcessor,
   PROJECT_LIFECYCLE_STREAM_PATH,
   ProjectLifecycleProcessorContract,
 } from "~/domains/projects/stream-processors/project-lifecycle.ts";
@@ -61,6 +52,7 @@ import {
   EXAMPLE_EGRESS_SECRET_MATERIAL,
   EXAMPLE_EGRESS_SECRET_METADATA,
 } from "~/domains/secrets/example-secret.ts";
+import type { StreamProcessorRunner } from "~/domains/streams/durable-objects/stream-processor-runner.ts";
 
 type CaptunServerTunnel = Fetcher & Disposable;
 
@@ -102,6 +94,7 @@ type ProjectEnv = {
   DO_CATALOG: D1Database;
   REPO: DurableObjectNamespace<RepoDurableObject>;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
+  STREAM_PROCESSOR_RUNNER: DurableObjectNamespace<StreamProcessorRunner>;
 };
 
 type ProjectStateRow = {
@@ -189,6 +182,7 @@ const PROJECT_CONFIG_REFRESH_INTERVAL_MS = 10_000;
 const PROJECT_DYNAMIC_WORKER_MAIN_MODULE = "worker.js";
 const PROJECT_DYNAMIC_WORKER_COMPATIBILITY_DATE = "2026-04-27";
 const PROJECT_DYNAMIC_WORKER_COMPATIBILITY_FLAGS = ["nodejs_compat"];
+const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 
 type ProjectConfigWorkspaceName = {
   projectId: string;
@@ -215,24 +209,7 @@ const ProjectLifecycleBase = createIterateDurableObjectBase<
   nameSchema: ProjectStructuredName,
 });
 
-const ProjectBase = withStreamProcessorRunner<
-  ProjectStructuredName,
-  ProjectEnv,
-  typeof ProjectLifecycleProcessorContract
->({
-  processor() {
-    return createProjectLifecycleProcessor();
-  },
-  streamApi(args) {
-    return projectLifecycleStreamApiFromNamespace({
-      durableObjectNamespace: args.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: args.structuredName.projectId,
-      streamPath: PROJECT_LIFECYCLE_STREAM_PATH,
-    });
-  },
-})(ProjectLifecycleBase);
-
-export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
+export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
   #dynamicWorkerEntrypoint: {
     commitOid: string;
     entrypoint: ProjectDynamicWorkerEntrypoint;
@@ -271,7 +248,6 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     this.registerOnFirstInitialize(async (params) => {
       await this.ensureProjectLifecycleSubscription(params.projectId);
       await this.ensureAgentsRoot(params.projectId);
-      await this.catchUpStreamProcessor({ signal: AbortSignal.timeout(30_000) });
     });
   }
 
@@ -398,12 +374,13 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
 
   async getProjectLifecycleRunnerState() {
     await this.ensureStarted();
-    return this.getStreamProcessorRunnerState();
+    return await this.env.STREAM_PROCESSOR_RUNNER.getByName(
+      projectLifecycleProcessorRunnerName(this.structuredName.projectId),
+    ).runtimeState();
   }
 
   async afterAppend(input: { event: Event }) {
     await this.ensureStarted();
-    const result = await this.consumeStreamProcessorEvent({ event: input.event as StreamEvent });
     const summary = this.currentSummary();
     const configWorkerIsReady = await this.ctx.storage.get<boolean>(
       PROJECT_CONFIG_READY_STORAGE_KEY,
@@ -418,7 +395,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
         console.error("Project config worker afterAppend failed.", error);
       }
     }
-    return result;
+    return await this.getProjectLifecycleRunnerState();
   }
 
   async ingressFetch(request: Request): Promise<Response> {
@@ -1060,27 +1037,14 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
       type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
       idempotencyKey: `project-lifecycle-subscription:${projectId}`,
       payload: {
-        slug: `project-lifecycle:${projectId}`,
-        type: "callable",
-        callable: this.createSelfCallable("afterAppend"),
-      },
-    });
-  }
-
-  private createSelfCallable(rpcMethod: string): Callable {
-    return {
-      type: "workers-rpc",
-      via: {
-        type: "env-binding",
-        bindingType: "durable-object-namespace",
-        bindingName: "PROJECT",
-        durableObject: {
-          name: this.name,
+        subscriptionKey: projectLifecycleSubscriptionKey(projectId),
+        subscriber: {
+          type: "built-in",
+          transport: "capnweb-websocket",
+          processorSlug: ProjectLifecycleProcessorContract.slug,
         },
       },
-      rpcMethod,
-      argsMode: "object",
-    };
+    });
   }
 
   private async projectAppSlugFromHost(input: { host: string; summary: ProjectSummary }) {
@@ -1112,84 +1076,12 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
   }
 }
 
-type ProjectLifecycleStreamApi = ProcessorStreamApi<typeof ProjectLifecycleProcessorContract> & {
-  append(args: { event: EventInput; streamPath?: string }): Promise<Event>;
-  appendBatch(args: { events: EventInput[]; streamPath?: string }): Promise<Event[]>;
-  read(args?: {
-    streamPath?: string;
-    afterOffset?: StreamCursor;
-    beforeOffset?: StreamCursor;
-  }): Promise<Event[]>;
-};
-
-function projectLifecycleStreamApiFromNamespace(args: {
-  durableObjectNamespace: StreamDurableObjectNamespace;
-  namespace: string;
-  streamPath: StreamPath;
-}): ProjectLifecycleStreamApi {
-  return {
-    async append(input) {
-      const stream = await getInitializedStreamStub({
-        durableObjectNamespace: args.durableObjectNamespace,
-        namespace: args.namespace,
-        path: resolveProcessorStreamPath({
-          basePath: args.streamPath,
-          pathInput: input.streamPath,
-        }),
-      });
-      return await stream.append(input.event);
-    },
-    async appendBatch(input) {
-      const stream = await getInitializedStreamStub({
-        durableObjectNamespace: args.durableObjectNamespace,
-        namespace: args.namespace,
-        path: resolveProcessorStreamPath({
-          basePath: args.streamPath,
-          pathInput: input.streamPath,
-        }),
-      });
-      return await stream.appendBatch(input.events);
-    },
-    async read(input = {}) {
-      const stream = await getInitializedStreamStub({
-        durableObjectNamespace: args.durableObjectNamespace,
-        namespace: args.namespace,
-        path: resolveProcessorStreamPath({
-          basePath: args.streamPath,
-          pathInput: input.streamPath,
-        }),
-      });
-      return await stream.history({
-        after: input.afterOffset,
-        before: input.beforeOffset ?? "end",
-      });
-    },
-    async *subscribe(input = {}) {
-      void input;
-      yield* [];
-      throw new Error("Project lifecycle processors receive live events through afterAppend RPC.");
-    },
-  };
+function projectLifecycleSubscriptionKey(projectId: string) {
+  return `project-lifecycle:${projectId}`;
 }
 
-function resolveProcessorStreamPath(input: { basePath: StreamPath; pathInput?: string }) {
-  if (input.pathInput == null) {
-    return input.basePath;
-  }
-
-  const trimmedPath = input.pathInput.trim();
-  if (!trimmedPath) {
-    throw new Error("Stream path is required.");
-  }
-
-  if (trimmedPath.startsWith("/")) {
-    return StreamPath.parse(trimmedPath);
-  }
-
-  const relativePath = trimmedPath.replace(/^\.\//, "").replace(/^\/+/, "");
-  return StreamPath.parse(
-    input.basePath === "/" ? `/${relativePath}` : `${input.basePath}/${relativePath}`,
-  );
+function projectLifecycleProcessorRunnerName(projectId: string) {
+  return `${projectId}:${PROJECT_LIFECYCLE_STREAM_PATH}:${projectLifecycleSubscriptionKey(projectId)}`;
 }
 
 async function upsertProjectProjection(input: { db: D1Database; input: CreateProjectInput }) {

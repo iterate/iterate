@@ -1,24 +1,17 @@
 import { env as workerEnv } from "cloudflare:workers";
+import { Stream as PackageStream } from "@iterate-com/streams/workers/durable-objects/stream";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { withEvlog } from "@iterate-com/shared/apps/logging/with-evlog";
-import {
-  registerDurableObjectPublicRoute,
-  routeDurableObjectRequest,
-} from "@iterate-com/shared/durable-object-utils/mixins/with-public-fetch-route";
 import { NitroWebSocketResponse } from "@iterate-com/shared/nitro-ws-response";
-import {
-  getInitializedStreamStub,
-  type StreamDurableObjectNamespace,
-} from "@iterate-com/shared/streams/helpers.ts";
-import { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
-import {
-  STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-  StreamPath,
-} from "@iterate-com/shared/streams/types.ts";
+import { StreamPath } from "@iterate-com/shared/streams/types.ts";
 import handler from "@tanstack/react-start/server-entry";
 import captunWorker, { CaptunServerShard } from "captun/worker";
 import crossws from "crossws/adapters/cloudflare";
 import { createD1Client } from "sqlfu";
+import {
+  getInitializedStreamStub,
+  type StreamDurableObjectNamespace,
+} from "~/domains/streams/new-stream-runtime.ts";
 import manifest, { AppConfig } from "~/app.ts";
 import type { AppContext } from "~/context.ts";
 import { getIngressRouteByHost } from "~/db/queries/.generated/index.ts";
@@ -61,11 +54,13 @@ export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/rep
 export { SlackCapability } from "~/domains/slack/entrypoints/slack-capability.ts";
 export { SecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
-export { StreamDurableObject };
+export { StreamProcessorRunner } from "~/domains/streams/durable-objects/stream-processor-runner.ts";
+export { PackageStream as StreamDurableObject };
 export { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-capability.ts";
 export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 
 const CAPTUN_TUNNEL_ROUTE_PREFIX = "/__iterate/captun";
+const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 
 const config = parseAppConfigFromEnv({
   configSchema: AppConfig,
@@ -75,14 +70,6 @@ const config = parseAppConfigFromEnv({
 
 export default {
   async fetch(request: Request, env: Env, cfCtx: ExecutionContext) {
-    const durableObjectPublicRouteResponse = await routeDurableObjectRequest(request, [
-      registerDurableObjectPublicRoute({
-        namespace: env.STREAM as never,
-        class: StreamDurableObject as never,
-      }),
-    ]);
-    if (durableObjectPublicRouteResponse) return durableObjectPublicRouteResponse;
-
     const captunTunnelResponse = await handleCaptunTunnelFetch({ env, request });
     if (captunTunnelResponse) return captunTunnelResponse;
 
