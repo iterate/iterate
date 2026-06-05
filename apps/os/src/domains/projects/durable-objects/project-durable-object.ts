@@ -1020,7 +1020,7 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
       idempotencyKey: `agents-child-stream-setup:${summary.id}`,
       payload: {
         slug: "agents-child-stream-setup",
-        matcher: "type = 'events.iterate.com/core/child-stream-created'",
+        matcher: "type = 'events.iterate.com/stream/child-stream-created'",
         reactions: [],
       },
     });
