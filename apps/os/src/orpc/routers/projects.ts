@@ -7,10 +7,8 @@ import {
 } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import type { AppContext } from "~/context.ts";
 import {
-  deleteProject,
   getProjectById,
   getProjectPermission,
-  getProjectBySlug,
   updateProjectConfig,
 } from "~/db/queries/.generated/index.ts";
 import type { CodemodeSessionStructuredName } from "~/domains/codemode/durable-objects/codemode-session.ts";
@@ -34,7 +32,7 @@ import { projectReposRouter } from "~/orpc/routers/repos.ts";
 import { projectIntegrationsRouter } from "~/orpc/routers/integrations.ts";
 import { projectSecretsRouter } from "~/orpc/routers/secrets.ts";
 import { projectStreamsRouter } from "~/orpc/routers/streams.ts";
-import { ProjectsCapability } from "~/capnweb/admin-capability.ts";
+import { ProjectsCapability } from "~/capnweb/projects-capability.ts";
 
 type ProjectRow = {
   id: string;

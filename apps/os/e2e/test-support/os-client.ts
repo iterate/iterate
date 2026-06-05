@@ -56,6 +56,10 @@ export function requireAdminBearerToken() {
   return token;
 }
 
+export function requireRootAccessToken() {
+  return requireAdminBearerToken();
+}
+
 export function createOsClient(baseUrl: string = requireBaseUrl()) {
   const authHeaders = requireAuthHeaders();
   return createORPCClient(

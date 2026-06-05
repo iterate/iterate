@@ -7,19 +7,15 @@ import {
   EXAMPLE_EGRESS_SECRET_KEY,
   EXAMPLE_EGRESS_SECRET_MATERIAL,
 } from "../../src/domains/secrets/example-secret.ts";
-import {
-  requireAdminBearerToken,
-  requireBaseUrl,
-  uniqueSuffix,
-} from "../test-support/os-client.ts";
+import { requireRootAccessToken, requireBaseUrl, uniqueSuffix } from "../test-support/os-client.ts";
 import type {
   IterateContext,
   IterateContextProps,
 } from "../../src/capnweb/iterate-context-capability.ts";
 
 const baseUrl = requireBaseUrl();
-const auth = adminAuth();
-const ADMIN_CAPNWEB_PREFIX = "/api/captnweb/admin";
+const auth = rootAccessAuth();
+const ROOT_ITERATE_CONTEXT_PREFIX = "/api/captnweb";
 const PROJECT_CAPNWEB_PATH = "/__iterate/capnweb";
 
 describe("capnweb", () => {
@@ -30,14 +26,14 @@ describe("capnweb", () => {
     expect(remaining).toEqual([]);
   });
 
-  it("creates, lists, gets, and removes projects through admin capnweb", async () => {
-    using admin = withAdminIterateFromNode({ auth, baseUrl });
+  it("creates, lists, gets, and removes projects through root Iterate context", async () => {
+    using root = withRootIterateContextFromNode({ auth, baseUrl });
     await using project = await createDisposableProject({
-      admin,
+      root,
       slug: `${testRunSlugPrefix}-crud-${uniqueSuffix()}`.slice(0, 40),
     });
     expect(project).toMatchObject({ id: expect.stringMatching(/^proj_/) });
-    const projects = await admin.projects;
+    const projects = await root.projects;
     const list = await projects.list({ limit: 1_000 });
     expect(list.projects).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: project.id, slug: project.slug })]),
@@ -51,7 +47,7 @@ describe("capnweb", () => {
     }
     expect(
       await runCapnwebFunctionFromNode({
-        ctx: admin,
+        ctx: root,
         fn: describeProjectThroughProjects,
         vars: { projectId: project.id },
       }),
@@ -76,9 +72,9 @@ describe("capnweb", () => {
   });
 
   it("connects directly to the project durable object capnweb session", async () => {
-    using admin = withAdminIterateFromNode({ auth, baseUrl });
+    using root = withRootIterateContextFromNode({ auth, baseUrl });
     await using project = await createDisposableProject({
-      admin,
+      root,
       slug: `${testRunSlugPrefix}-stream-${uniqueSuffix()}`.slice(0, 40),
     });
     using iterate = withIterateFromNode({ auth, ingressUrl: project.ingressUrl });
@@ -98,9 +94,9 @@ describe("capnweb", () => {
   });
 
   it("updates iterate-config and calls env.ITERATE.context from dynamic worker fetch", async () => {
-    using admin = withAdminIterateFromNode({ auth, baseUrl });
+    using root = withRootIterateContextFromNode({ auth, baseUrl });
     await using project = await createDisposableProject({
-      admin,
+      root,
       slug: `${testRunSlugPrefix}-worker-${uniqueSuffix()}`.slice(0, 40),
     });
     using iterate = withIterateFromNode({ auth, ingressUrl: project.ingressUrl });
@@ -217,9 +213,9 @@ describe("capnweb", () => {
   });
 
   it("uses codemode ctx.project.fetch and ctx.project.egressFetch from worker.js", async () => {
-    using admin = withAdminIterateFromNode({ auth, baseUrl });
+    using root = withRootIterateContextFromNode({ auth, baseUrl });
     await using project = await createDisposableProject({
-      admin,
+      root,
       slug: `${testRunSlugPrefix}-project-fetch-${uniqueSuffix()}`.slice(0, 40),
     });
 
@@ -245,9 +241,9 @@ describe("capnweb", () => {
   });
 
   it("applies IterateContext mount props for target, method, catchall, and system shortcuts", async () => {
-    using admin = withAdminIterateFromNode({ auth, baseUrl });
+    using root = withRootIterateContextFromNode({ auth, baseUrl });
     await using project = await createDisposableProject({
-      admin,
+      root,
       slug: `${testRunSlugPrefix}-mounts-${uniqueSuffix()}`.slice(0, 40),
     });
     const marker = `mounts-${uniqueSuffix()}`;
@@ -404,19 +400,19 @@ describe("capnweb", () => {
   });
 });
 
-function withAdminIterateFromNode(input: {
-  auth: AdminAuth;
+function withRootIterateContextFromNode(input: {
+  auth: RootAccessAuth;
   baseUrl: string;
 }): RpcStub<IterateContext> {
-  const wsUrl = new URL(ADMIN_CAPNWEB_PREFIX, input.baseUrl);
+  const wsUrl = new URL(ROOT_ITERATE_CONTEXT_PREFIX, input.baseUrl);
   wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
-  const socket = new WebSocket(wsUrl.toString(), { headers: adminAuthHeaders(input.auth) });
+  const socket = new WebSocket(wsUrl.toString(), { headers: rootAccessAuthHeaders(input.auth) });
   return newWebSocketRpcSession<IterateContext>(
     socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
   );
 }
 
-function withIterateFromNode(input: { auth: AdminAuth; ingressUrl: string }): {
+function withIterateFromNode(input: { auth: RootAccessAuth; ingressUrl: string }): {
   ctx: RpcStub<IterateContext>;
   onWsFrame: (frame: unknown) => void;
   [Symbol.dispose](): void;
@@ -430,7 +426,7 @@ function withIterateFromNode(input: { auth: AdminAuth; ingressUrl: string }): {
   wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
   const socket = new WebSocket(wsUrl.toString(), {
     headers: {
-      ...adminAuthHeaders(input.auth),
+      ...rootAccessAuthHeaders(input.auth),
       ...(wsUrl.host === base.host
         ? {
             Host: ingress.hostname,
@@ -683,7 +679,7 @@ async function runCapnwebFunctionInDynamicWorker<
   props?: IterateContextProps;
   vars: Vars;
 }): Promise<Awaited<Result>> {
-  const url = new URL(`${ADMIN_CAPNWEB_PREFIX}/run`, baseUrl);
+  const url = new URL(`${ROOT_ITERATE_CONTEXT_PREFIX}/run`, baseUrl);
   const response = await fetch(url, {
     body: JSON.stringify({
       functionSource: input.fn.toString(),
@@ -691,7 +687,7 @@ async function runCapnwebFunctionInDynamicWorker<
       vars: input.vars,
     }),
     headers: {
-      ...adminAuthHeaders(auth),
+      ...rootAccessAuthHeaders(auth),
       "content-type": "application/json",
     },
     method: "POST",
@@ -703,21 +699,20 @@ async function runCapnwebFunctionInDynamicWorker<
   return body as Awaited<Result>;
 }
 
-function adminAuth() {
+function rootAccessAuth() {
   return {
-    type: "admin" as const,
-    token: new Redacted(requireAdminBearerToken()),
+    token: new Redacted(requireRootAccessToken()),
   };
 }
 
-type AdminAuth = ReturnType<typeof adminAuth>;
+type RootAccessAuth = ReturnType<typeof rootAccessAuth>;
 
-function adminAuthHeaders(auth: AdminAuth) {
+function rootAccessAuthHeaders(auth: RootAccessAuth) {
   return { Authorization: `Bearer ${auth.token.exposeSecret()}` };
 }
 
-async function createDisposableProject(input: { admin: RpcStub<IterateContext>; slug: string }) {
-  const projects = await input.admin.projects;
+async function createDisposableProject(input: { root: RpcStub<IterateContext>; slug: string }) {
+  const projects = await input.root.projects;
   const project = await projects.create({ slug: input.slug });
   return {
     ...project,
@@ -730,8 +725,8 @@ async function createDisposableProject(input: { admin: RpcStub<IterateContext>; 
 async function listProjectsWithSlugPrefix(prefix: string) {
   const matches: Array<{ id: string; slug: string }> = [];
   const limit = 100;
-  using admin = withAdminIterateFromNode({ auth, baseUrl });
-  const projects = await admin.projects;
+  using root = withRootIterateContextFromNode({ auth, baseUrl });
+  const projects = await root.projects;
   for (let offset = 0; ; offset += limit) {
     const page = await projects.list({ limit, offset });
     matches.push(...page.projects.filter((project) => project.slug.startsWith(prefix)));

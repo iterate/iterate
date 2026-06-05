@@ -108,11 +108,12 @@ The routing rule:
 Do not over-design this yet. The current capnweb e2e flow proves only two
 authorization shapes:
 
-- The admin Cap'n Web endpoint is opened with the admin bearer token:
+- The root Cap'n Web endpoint is opened with a bearer token that grants
+  all-project scopes:
 
 ```ts
-using admin = withAdminIterateFromNode({ auth, baseUrl });
-const project = await admin.projects.create({ slug });
+using root = withRootIterateContextFromNode({ auth, baseUrl });
+const project = await root.projects.create({ slug });
 ```
 
 - The project Cap'n Web endpoint is reached through that project's ingress URL
@@ -137,8 +138,8 @@ abstract scope type invented in this document.
 
 There should be one root capability model: `IterateContext`.
 
-Admin access is not a separate kind of context. It is an `IterateContext` whose
-`scopes` allow cross-project access and whose mount list may be empty:
+All-project access is not a separate kind of context. It is an `IterateContext`
+whose `scopes` allow cross-project access and whose mount list may be empty:
 
 ```ts
 const ctx = iterate.with({
@@ -689,7 +690,7 @@ separate codemode-only tool system.
 The project is special in two ways:
 
 1. It is the singleton resource behind a project-scoped `IterateContext`.
-2. It is also part of the admin collection, because projects can be created,
+2. It is also part of the root collection, because projects can be created,
    listed, found, and removed.
 
 Inside an `IterateContext`, `ctx.project` is the project resource capability.
@@ -1143,16 +1144,16 @@ and `{ scopes: { projectId } }`.
 The capnweb e2e test should demonstrate three lanes:
 
 ```ts
-using admin = withAdminIterateFromNode({ auth, baseUrl });
+using root = withRootIterateContextFromNode({ auth, baseUrl });
 
 await using project = await createDisposableProject({
-  admin,
+  root,
   slug: `capnweb-${uniqueSuffix()}`,
 });
 
-// Admin lifecycle.
-await admin.projects.list({ limit: 1_000 });
-await admin.projects.get(project.id).describe();
+// Project lifecycle through the root Iterate context.
+await root.projects.list({ limit: 1_000 });
+await root.projects.get(project.id).describe();
 
 // Project-scoped Cap'n Web session.
 using iterate = withIterateFromNode({ auth, ingressUrl: project.ingressUrl });
@@ -1190,9 +1191,9 @@ branches bypass the project DO.
 - Make `IterateContext` construct non-project domain capabilities directly from
   `{ scopes }` and the domain's own runtime binding, rather than routing through
   the project Durable Object.
-- Keep authorization facts aligned with the current capnweb e2e shape: admin
-  bearer auth for the admin root, and project-context access through the project
-  Durable Object selected by ingress/project ID.
+- Keep authorization facts aligned with the current capnweb e2e shape:
+  all-project bearer auth for the root context, and project-context access
+  through the project Durable Object selected by ingress/project ID.
 - Model integrations under `ctx.integrations`, starting with Slack as a normal
   capability backed by the Slack SDK/Web API, not a codemode provider.
 - Keep codemode focused on wrapping `async (ctx) => {}` and optional local

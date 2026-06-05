@@ -144,6 +144,13 @@ export function authenticateAdminApiSecret(
   return adminPrincipal;
 }
 
+export function authenticateRootApiSecret(
+  context: Pick<AppContext, "config">,
+  request: Request,
+): Principal | null {
+  return authenticateAdminApiSecret(context, request);
+}
+
 function createOsIterateAuth(context: AppContext, request: Request) {
   const config = context.config.iterateAuth;
   if (!config) return null;

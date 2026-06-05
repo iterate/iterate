@@ -483,12 +483,12 @@ export function createProjectsCapability(input: { context: AppContext }) {
   return new ProjectsCapability({
     activeOrganization: {
       isAdminApi: true,
-      orgId: "admin-api",
+      orgId: "root-context",
       orgPermissions: [],
-      orgRole: "admin",
-      orgSlug: "admin-api",
-      sessionId: "admin-api",
-      userId: "admin-api",
+      orgRole: "root",
+      orgSlug: "root-context",
+      sessionId: "root-context",
+      userId: "root-context",
     },
     context: input.context,
     createProjectContext: ({ project, projectId, projects }) =>

@@ -6,16 +6,16 @@ import {
 } from "./iterate-context-capability.ts";
 import { ProjectsCapability } from "./projects-capability.ts";
 import type { AppConfig } from "~/app.ts";
-import { authenticateAdminApiSecret } from "~/auth/middleware.ts";
+import { authenticateRootApiSecret } from "~/auth/middleware.ts";
 import type { AppContext } from "~/context.ts";
 
 export { ProjectsCapability };
 
-export const ADMIN_CAPNWEB_PREFIX = "/api/captnweb/admin";
+export const ROOT_ITERATE_CONTEXT_PREFIX = "/api/captnweb";
 
 type CaptnwebVars = Record<string, unknown>;
 
-export async function handleAdminCapnwebFetch(input: {
+export async function handleRootIterateContextFetch(input: {
   config: AppConfig;
   context: AppContext;
   env: Env;
@@ -23,17 +23,17 @@ export async function handleAdminCapnwebFetch(input: {
 }): Promise<Response | null> {
   const url = new URL(input.request.url);
   if (
-    url.pathname !== ADMIN_CAPNWEB_PREFIX &&
-    !url.pathname.startsWith(`${ADMIN_CAPNWEB_PREFIX}/`)
+    url.pathname !== ROOT_ITERATE_CONTEXT_PREFIX &&
+    !url.pathname.startsWith(`${ROOT_ITERATE_CONTEXT_PREFIX}/`)
   ) {
     return null;
   }
 
-  const principal = authenticateAdminApiSecret({ config: input.config }, input.request);
+  const principal = authenticateRootApiSecret({ config: input.config }, input.request);
   if (!principal) return new Response("Unauthorized", { status: 401 });
 
-  if (url.pathname === `${ADMIN_CAPNWEB_PREFIX}/run`) {
-    return await handleAdminRunLeg(input);
+  if (url.pathname === `${ROOT_ITERATE_CONTEXT_PREFIX}/run`) {
+    return await handleRootRunLeg(input);
   }
 
   return newWorkersRpcResponse(
@@ -46,7 +46,7 @@ export async function handleAdminCapnwebFetch(input: {
   );
 }
 
-function adminRunWorkerSrc(input: {
+function rootRunWorkerSrc(input: {
   functionSource: string;
   moduleByTargetKey: Record<string, string>;
   props: IterateContextProps;
@@ -216,7 +216,7 @@ mountModules.set(${JSON.stringify(targetKey)}, mountModule${index});`;
 `;
 }
 
-async function handleAdminRunLeg(input: { context: AppContext; env: Env; request: Request }) {
+async function handleRootRunLeg(input: { context: AppContext; env: Env; request: Request }) {
   if (!input.env.LOADER) {
     return Response.json({ error: "LOADER binding not available" }, { status: 503 });
   }
@@ -250,7 +250,7 @@ async function handleAdminRunLeg(input: { context: AppContext; env: Env; request
     },
     mainModule: "worker.js",
     modules: {
-      "worker.js": adminRunWorkerSrc({
+      "worker.js": rootRunWorkerSrc({
         functionSource: body.functionSource,
         moduleByTargetKey: mountModules.moduleByTargetKey,
         props,

@@ -23,9 +23,9 @@ dynamic worker.
 
 ## `/run` should be a JSON bridge
 
-The admin `/api/captnweb/admin/run` path executes codemode-shaped snippets in a
-dynamic Worker, but its response should always be plain JSON. Snippets may use
-Cap'n Web / Workers RPC internally, but the snippet result must be serializable.
+The root `/api/captnweb/run` path executes codemode-shaped snippets in a dynamic
+Worker, but its response should always be plain JSON. Snippets may use Cap'n Web
+/ Workers RPC internally, but the snippet result must be serializable.
 
 ## WorkerLoader cannot be passed into a dynamic worker
 
