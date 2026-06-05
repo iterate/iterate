@@ -1,7 +1,7 @@
 // Runnable in the Node/vitest runtime, fully in-process (no worker needed).
 // Proves the processor model: per-event afterAppend, durable blockProcessorUntil,
-// the builtin beforeAppend gate folded into the core processor, child-stream
-// topology, circuit breaker, and the SQLite-projector shape.
+// the core beforeAppend gate, child-stream topology, circuit breaker, and the
+// SQLite-projector shape.
 
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
@@ -15,7 +15,10 @@ import { implementProcessor } from "./processor.ts";
 import { createProcessorRunner, type Snapshot, type ProcessorStream } from "./processor-runner.ts";
 import { echoExampleProcessor } from "./processors/examples/echo/implementation.ts";
 import { circuitBreakerProcessor } from "./processors/circuit-breaker/implementation.ts";
-import { circuitBreakerProcessorContract } from "./processors/circuit-breaker/contract.ts";
+import {
+  circuitBreakerProcessorContract,
+  type CircuitBreakerProcessorState,
+} from "./processors/circuit-breaker/contract.ts";
 import { coreProcessor, getAncestorStreamPaths } from "./processors/core/implementation.ts";
 import { coreProcessorContract } from "./processors/core/contract.ts";
 import type { StreamPersistedProcessorState } from "./types.ts";
@@ -375,21 +378,21 @@ describe("projector processor (consumes everything, writes to a db port)", () =>
 });
 
 // ---------------------------------------------------------------------------
-// builtin processors — stream bookkeeping + circuit breaker + child topology
+// core stream state + subscription processors
 // ---------------------------------------------------------------------------
 
-class BuiltinStreamSim {
+class CoreStreamSim {
   readonly streams = new Map<
     string,
-    { processorState: StreamPersistedProcessorState; offset: number }
+    { state: StreamPersistedProcessorState; events: StreamEvent[] }
   >();
 
   #entry(path: string) {
     let entry = this.streams.get(path);
     if (entry === undefined) {
       entry = {
-        processorState: initialBuiltinProcessorState({ namespace: "stream", path }),
-        offset: 0,
+        state: initialCoreProcessorState({ namespace: "stream", path }),
+        events: [],
       };
       this.streams.set(path, entry);
     }
@@ -398,7 +401,7 @@ class BuiltinStreamSim {
 
   append(path: string, input: StreamEventInput, createdAtMs = 0): StreamEvent {
     const entry = this.#entry(path);
-    const coreBuiltin = coreProcessor.build({
+    const coreInline = coreProcessor.build({
       propagateChildStreamCreated: (coreState) => {
         for (const ancestor of getAncestorStreamPaths(coreState.path)) {
           this.append(ancestor, {
@@ -409,18 +412,15 @@ class BuiltinStreamSim {
         }
       },
     });
-    const circuitBreaker = circuitBreakerProcessor.build({
-      readStreamState: () => entry.processorState.core,
-    });
 
-    coreBuiltin.beforeAppend?.({
+    coreInline.beforeAppend?.({
       event: input,
-      state: entry.processorState.core,
+      state: entry.state,
     });
 
     const committed: StreamEvent = {
       ...input,
-      offset: entry.offset + 1,
+      offset: entry.state.maxOffset + 1,
       createdAt: iso(createdAtMs),
     };
     const appendStream: ProcessorStream = {
@@ -428,8 +428,7 @@ class BuiltinStreamSim {
       appendBatch: (args) => args.events.map((event) => this.append(path, event, createdAtMs)),
     };
 
-    const previousCoreState = entry.processorState.core;
-    const previousCircuitBreakerState = entry.processorState["circuit-breaker"];
+    const previousCoreState = entry.state;
 
     const coreReduction = runProcessorReduce({
       processor: { contract: coreProcessorContract },
@@ -440,37 +439,13 @@ class BuiltinStreamSim {
       throw new Error(`core cannot reduce ${committed.type}`);
     }
 
-    const circuitBreakerReduction = runProcessorReduce({
-      processor: { contract: circuitBreakerProcessorContract },
-      event: committed,
-      state: previousCircuitBreakerState,
-    });
-    if (circuitBreakerReduction === undefined) {
-      throw new Error(`circuit-breaker cannot reduce ${committed.type}`);
-    }
+    entry.state = coreProcessorContract.stateSchema.parse(coreReduction.state);
+    entry.events.push(committed);
 
-    entry.processorState = {
-      core: coreProcessorContract.stateSchema.parse(coreReduction.state),
-      "circuit-breaker": circuitBreakerProcessorContract.stateSchema.parse(
-        circuitBreakerReduction.state,
-      ),
-    };
-    entry.offset = committed.offset;
-
-    coreBuiltin.afterAppend?.({
+    coreInline.afterAppend?.({
       event: coreReduction.event,
       previousState: previousCoreState,
-      state: entry.processorState.core,
-      streamMaxOffset: committed.offset,
-      stream: appendStream,
-      shouldApplySideEffects: () => true,
-      blockProcessorUntil: (work) => void work(),
-      keepAlive: (work) => void work,
-    });
-    circuitBreaker.afterAppend?.({
-      event: circuitBreakerReduction.event,
-      previousState: previousCircuitBreakerState,
-      state: entry.processorState["circuit-breaker"],
+      state: entry.state,
       streamMaxOffset: committed.offset,
       stream: appendStream,
       shouldApplySideEffects: () => true,
@@ -482,52 +457,85 @@ class BuiltinStreamSim {
   }
 }
 
-function initialBuiltinProcessorState(args: {
+function initialCoreProcessorState(args: {
   namespace: string;
   path: string;
 }): StreamPersistedProcessorState {
-  return {
-    core: coreProcessorContract.stateSchema.parse({
-      ...getInitialProcessorState(coreProcessorContract),
-      namespace: args.namespace,
-      path: args.path,
-    }),
-    "circuit-breaker": getInitialProcessorState(circuitBreakerProcessorContract),
-  };
+  return coreProcessorContract.stateSchema.parse({
+    ...getInitialProcessorState(coreProcessorContract),
+    namespace: args.namespace,
+    path: args.path,
+  });
 }
 
-describe("builtin processors (inline)", () => {
+describe("core stream state and subscription processors", () => {
   it("propagates child-stream-created up the ancestor chain", () => {
-    const sim = new BuiltinStreamSim();
+    const sim = new CoreStreamSim();
     sim.append("/a/b/c", {
       type: "events.iterate.com/stream/created",
       payload: { namespace: "stream", path: "/a/b/c" },
     });
-    expect(sim.streams.get("/")?.processorState.core.childPaths).toEqual(["/a"]);
-    expect(sim.streams.get("/a")?.processorState.core.childPaths).toEqual(["/a/b"]);
-    expect(sim.streams.get("/a/b")?.processorState.core.childPaths).toEqual(["/a/b/c"]);
+    expect(sim.streams.get("/")?.state.childPaths).toEqual(["/a"]);
+    expect(sim.streams.get("/a")?.state.childPaths).toEqual(["/a/b"]);
+    expect(sim.streams.get("/a/b")?.state.childPaths).toEqual(["/a/b/c"]);
   });
 
-  it("circuit breaker trips after the burst budget and rejects further appends", () => {
-    const sim = new BuiltinStreamSim();
+  it("circuit breaker trips from an ordinary subscription processor", async () => {
+    const sim = new CoreStreamSim();
     sim.append("/cb", {
       type: "events.iterate.com/stream/created",
       payload: { namespace: "stream", path: "/cb" },
+    });
+    const subscriptionConfigured = sim.append("/cb", {
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: {
+        subscriptionKey: "circuit-breaker",
+        subscriber: {
+          type: "external-url",
+          transport: "capnweb-websocket",
+          url: "https://example.com/circuit-breaker",
+        },
+      },
     });
     sim.append("/cb", {
       type: "events.iterate.com/circuit-breaker/configured",
       payload: { burstCapacity: 2, refillRatePerMinute: 1 },
     });
 
-    let rejected = 0;
     for (let i = 0; i < 5; i++) {
-      try {
-        sim.append("/cb", { type: "test.widget", payload: { i } });
-      } catch {
-        rejected += 1;
-      }
+      sim.append("/cb", { type: "test.widget", payload: { i } }, i + 1);
     }
-    expect(sim.streams.get("/cb")?.processorState.core.paused).toBe(true);
+
+    const entry = sim.streams.get("/cb");
+    if (entry === undefined) throw new Error("missing /cb stream");
+
+    let saved: Snapshot<CircuitBreakerProcessorState> | undefined;
+    const runner = createProcessorRunner({
+      processor: circuitBreakerProcessor,
+      deps: undefined,
+      storage: { load: () => saved, save: (snapshot) => void (saved = snapshot) },
+      stream: {
+        append: (args) => sim.append("/cb", args.event),
+        appendBatch: (args) => args.events.map((event) => sim.append("/cb", event)),
+      },
+      sideEffectAnchor: {
+        offset: subscriptionConfigured.offset,
+        createdAt: subscriptionConfigured.createdAt,
+      },
+    });
+
+    await runner.processEventBatch({
+      events: [...entry.events],
+      streamMaxOffset: entry.state.maxOffset,
+    });
+
+    expect(sim.streams.get("/cb")?.state.paused).toBe(true);
+    let rejected = 0;
+    try {
+      sim.append("/cb", { type: "test.widget", payload: { afterPause: true } });
+    } catch {
+      rejected += 1;
+    }
     expect(rejected).toBeGreaterThan(0);
   });
 });

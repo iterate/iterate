@@ -7,14 +7,15 @@ import {
   type ProcessorRunner,
   type Snapshot,
 } from "../../processor-runner.ts";
-// The SAME processor the Node e2e (inbound) and the browser tab (inbound) run.
 import { echoExampleProcessor } from "../../processors/examples/echo/implementation.ts";
-import type { EchoExampleState } from "../../processors/examples/echo/contract.ts";
+import { circuitBreakerProcessor } from "../../processors/circuit-breaker/implementation.ts";
 import type { StreamPersistedProcessorState } from "../../types.ts";
 import type { SubscriptionConfiguredEvent } from "../../processors/core/contract.ts";
 import type { StreamProcessorRunnerRpc, StreamRpc, SubscriptionSink } from "../../types.ts";
+import type { Processor } from "../../processor.ts";
 
-type EchoExampleRunnerSnapshot = Snapshot<EchoExampleState>;
+type HostedProcessor = Processor<any, undefined>;
+type HostedProcessorRunnerSnapshot = Snapshot<unknown>;
 
 export class StreamProcessorRunner extends DurableObject {
   #stream: RpcStub<StreamRpc> | undefined;
@@ -31,8 +32,6 @@ export class StreamProcessorRunner extends DurableObject {
 
   // The Stream Durable Object calls this method and we have to return an RpcTarget
   // that implements processEventBatch.
-  // The Stream durable object helpfully shares the subscriptionConfiguredEvent with us,
-  // so we can decide which built-in processor implementation to use.
   async requestSubscription(args: {
     stream: RpcStub<StreamRpc>;
     subscriptionKey: string;
@@ -40,30 +39,23 @@ export class StreamProcessorRunner extends DurableObject {
     subscriptionConfiguredEvent: SubscriptionConfiguredEvent;
     streamRuntimeState: { state: StreamPersistedProcessorState };
   }): Promise<{ sink: SubscriptionSink; replayAfterOffset?: number }> {
-    const subscriber = args.subscriptionConfiguredEvent.payload.subscriber;
-    if (subscriber.type !== "built-in") {
-      throw new Error("StreamProcessorRunner only supports built-in subscribers");
-    }
-    if (subscriber.transport !== "capnweb-websocket") {
-      throw new Error("StreamProcessorRunner only supports capnweb-websocket subscribers");
-    }
-    const processor = getBuiltInProcessor(subscriber.processorSlug);
+    const processor = getHostedProcessor(args.subscriptionKey);
     if (processor === undefined) {
-      throw new Error(`Unknown built-in processor slug: ${subscriber.processorSlug}`);
+      throw new Error(`Unknown hosted processor subscription key: ${args.subscriptionKey}`);
     }
 
     await this.#processing?.[Symbol.asyncDispose]();
     await this.#subscription?.[Symbol.asyncDispose]();
     this.#stream?.[Symbol.dispose]();
     this.#stream = args.stream.dup();
-    this.ctx.storage.kv.put("processorSlug", subscriber.processorSlug);
+    this.ctx.storage.kv.put("processorSlug", processor.contract.slug);
     // Same runner path as Node/browser. KV is the storage port; the stream stub is
     // the exact Stream RPC API passed to processor afterAppend.
     this.#runner = createProcessorRunner({
       processor,
       deps: undefined,
       storage: {
-        load: () => this.ctx.storage.kv.get<EchoExampleRunnerSnapshot>("snapshot"),
+        load: () => this.ctx.storage.kv.get<HostedProcessorRunnerSnapshot>("snapshot"),
         save: (snapshot) => void this.ctx.storage.kv.put("snapshot", snapshot),
       },
       stream: this.#stream,
@@ -89,7 +81,7 @@ export class StreamProcessorRunner extends DurableObject {
   runtimeState() {
     return {
       processorSlug: this.ctx.storage.kv.get<string>("processorSlug"),
-      snapshot: this.ctx.storage.kv.get<EchoExampleRunnerSnapshot>("snapshot"),
+      snapshot: this.ctx.storage.kv.get<HostedProcessorRunnerSnapshot>("snapshot"),
     };
   }
 }
@@ -99,7 +91,8 @@ export const StreamProcessorRunnerRpcTarget = makeRpcTargetClass<
   StreamProcessorRunner
 >(StreamProcessorRunner);
 
-function getBuiltInProcessor(slug: string) {
+function getHostedProcessor(slug: string): HostedProcessor | undefined {
   if (slug === "echo-example") return echoExampleProcessor;
+  if (slug === "circuit-breaker") return circuitBreakerProcessor;
   return undefined;
 }

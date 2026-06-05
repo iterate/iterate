@@ -265,10 +265,10 @@ function createStreamRuntime(
     const localMaxOffset = checkpoint?.offset ?? -1;
     if (localMaxOffset < 0) return;
     const { state: serverState } = await rpc.runtimeState();
-    if (serverState.core.maxOffset >= localMaxOffset) return;
+    if (serverState.maxOffset >= localMaxOffset) return;
     console.warn(
       `[stream ${args.streamPath}] Server has fewer events than the local mirror; discarding local ${slug} tables.`,
-      { serverMaxOffset: serverState.core.maxOffset, localMaxOffset },
+      { serverMaxOffset: serverState.maxOffset, localMaxOffset },
     );
     await discardLocalMirror();
   }

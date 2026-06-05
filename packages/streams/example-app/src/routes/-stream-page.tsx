@@ -1222,8 +1222,7 @@ function StreamControlTool({
   streamStore: StreamBrowserStore;
 }) {
   const { runtimeState, pollError } = useStreamRuntimeState(streamStore, snapshot.connectionStatus);
-  const core = runtimeState?.state.core;
-  const circuitBreaker = runtimeState?.state["circuit-breaker"];
+  const core = runtimeState?.state;
   const paused = core?.paused ?? false;
   const pauseReason = core?.pauseReason ?? null;
 
@@ -1236,19 +1235,6 @@ function StreamControlTool({
   const [controlAction, setControlAction] = useState<
     "idle" | "resuming" | "configuring" | "done" | "error"
   >("idle");
-
-  const circuitBreakerBurstCapacity = circuitBreaker?.burstCapacity;
-  const circuitBreakerRefillRatePerMinute = circuitBreaker?.refillRatePerMinute;
-  useEffect(() => {
-    if (
-      circuitBreakerBurstCapacity === undefined ||
-      circuitBreakerRefillRatePerMinute === undefined
-    ) {
-      return;
-    }
-    setBurstCapacity(String(circuitBreakerBurstCapacity));
-    setRefillRatePerMinute(String(circuitBreakerRefillRatePerMinute));
-  }, [circuitBreakerBurstCapacity, circuitBreakerRefillRatePerMinute]);
 
   async function resumeStream() {
     setControlAction("resuming");
@@ -1321,19 +1307,6 @@ function StreamControlTool({
                 data-testid="stream-pause-reason"
               >
                 {pauseReason}
-              </output>
-            </dd>
-          </div>
-        )}
-        {circuitBreaker === undefined ? null : (
-          <div title="Token-bucket balance after the latest committed event. Trips below zero and appends stream/paused.">
-            <dt>Tokens</dt>
-            <dd>
-              <output
-                className="whitespace-nowrap font-mono text-[11px] text-[#263142]"
-                data-testid="circuit-breaker-tokens"
-              >
-                {circuitBreaker.availableTokens} / {circuitBreaker.burstCapacity}
               </output>
             </dd>
           </div>

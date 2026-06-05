@@ -1,7 +1,6 @@
 import type { RpcStub, RpcTarget } from "capnweb";
 import type { StreamEvent, StreamEventInput } from "./shared/event.ts";
 import type { Snapshot } from "./processor-runner.ts";
-import type { CircuitBreakerProcessorState } from "./processors/circuit-breaker/contract.ts";
 import type {
   CoreProcessorState,
   SubscriptionConfiguredEvent,
@@ -9,10 +8,7 @@ import type {
 
 type MaybePromise<T> = T | Promise<T>;
 
-export type StreamPersistedProcessorState = {
-  core: CoreProcessorState;
-  "circuit-breaker": CircuitBreakerProcessorState;
-};
+export type StreamPersistedProcessorState = CoreProcessorState;
 
 /**
  * The subscriber-side capnweb RPC target that receives stream event batches.
@@ -91,6 +87,6 @@ export type StreamProcessorRunnerRpc = {
     streamMaxOffset: number;
     subscriptionConfiguredEvent: SubscriptionConfiguredEvent;
     streamRuntimeState: { state: StreamPersistedProcessorState };
-  }): { sink: SubscriptionSink; replayAfterOffset?: number };
+  }): MaybePromise<{ sink: SubscriptionSink; replayAfterOffset?: number }>;
   runtimeState(): StreamProcessorRunnerRuntimeState;
 };

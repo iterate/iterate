@@ -8,6 +8,14 @@ import type { StreamEvent, StreamEventInput } from "../../../src/shared/event.ts
 import type { StreamPersistedProcessorState } from "../../../src/types.ts";
 import type { SubscriptionConfiguredEvent } from "../../../src/processors/core/contract.ts";
 import type { StreamProcessorRunnerRpc, StreamRpc, SubscriptionSink } from "../../../src/types.ts";
+import { createStreamSubscription, type StreamSubscription } from "../../../src/subscription.ts";
+import {
+  createProcessorRunner,
+  type ProcessorRunner,
+  type Snapshot,
+} from "../../../src/processor-runner.ts";
+import { circuitBreakerProcessor } from "../../../src/processors/circuit-breaker/implementation.ts";
+import type { CircuitBreakerProcessorState } from "../../../src/processors/circuit-breaker/contract.ts";
 import { connectStreamProcessorRunner } from "../../../src/node/connect-processor-runner.ts";
 import { withStreamConnectionFromBrowser } from "../../../src/browser/connect.ts";
 import { withStreamConnectionFromNode } from "../../../src/node/connect.ts";
@@ -60,6 +68,65 @@ class NodeStreamProcessorRunner extends RpcTarget implements StreamProcessorRunn
     return {
       processorSlug: undefined,
       snapshot: undefined,
+    };
+  }
+}
+
+class CircuitBreakerNodeStreamProcessorRunner
+  extends RpcTarget
+  implements StreamProcessorRunnerRpc
+{
+  readonly requestHeaders: Headers[] = [];
+  subscriptionConfiguredEvent: SubscriptionConfiguredEvent | undefined;
+  streamRuntimeState: { state: StreamPersistedProcessorState } | undefined;
+
+  #stream: RpcStub<StreamRpc> | undefined;
+  #runner: ProcessorRunner | undefined;
+  #subscription: StreamSubscription | undefined;
+  #processing: AsyncDisposable | undefined;
+  #snapshot: Snapshot<CircuitBreakerProcessorState> | undefined;
+
+  async requestSubscription(args: {
+    stream: RpcStub<StreamRpc>;
+    subscriptionKey: string;
+    streamMaxOffset: number;
+    subscriptionConfiguredEvent: SubscriptionConfiguredEvent;
+    streamRuntimeState: { state: StreamPersistedProcessorState };
+  }): Promise<{ sink: SubscriptionSink; replayAfterOffset?: number }> {
+    this.subscriptionConfiguredEvent = args.subscriptionConfiguredEvent;
+    this.streamRuntimeState = args.streamRuntimeState;
+
+    await this.#processing?.[Symbol.asyncDispose]();
+    await this.#subscription?.[Symbol.asyncDispose]();
+    this.#stream?.[Symbol.dispose]();
+    this.#stream = args.stream.dup();
+
+    this.#runner = createProcessorRunner({
+      processor: circuitBreakerProcessor,
+      deps: undefined,
+      storage: {
+        load: () => this.#snapshot,
+        save: (snapshot) => void (this.#snapshot = snapshot),
+      },
+      stream: this.#stream,
+      sideEffectAnchor: {
+        offset: args.subscriptionConfiguredEvent.offset,
+        createdAt: args.subscriptionConfiguredEvent.createdAt,
+      },
+    });
+    const snapshot = await this.#runner.snapshot();
+    this.#subscription = createStreamSubscription({ subscriptionKey: args.subscriptionKey });
+    this.#processing = this.#runner.run({ subscription: this.#subscription });
+    return {
+      sink: this.#subscription.sink,
+      replayAfterOffset: snapshot?.offset,
+    };
+  }
+
+  runtimeState() {
+    return {
+      processorSlug: "circuit-breaker",
+      snapshot: this.#snapshot,
     };
   }
 }
@@ -326,7 +393,7 @@ describe("stream capnweb protocol", () => {
       },
     });
 
-    expect(state.core.config.simulatedStorageSyncDelayMs).toBe(25);
+    expect(state.config.simulatedStorageSyncDelayMs).toBe(25);
   });
 
   e2eIt("replays history and then delivers live batches to inbound subscribers", async () => {
@@ -359,7 +426,7 @@ describe("stream capnweb protocol", () => {
           type: "events.iterate.com/stream/created",
           offset: 1,
           payload: {
-            namespace: runtime.state.core.namespace,
+            namespace: runtime.state.namespace,
             path,
           },
         }),
@@ -422,14 +489,14 @@ describe("stream capnweb protocol", () => {
     expect(sinkA.batches.length).toBe(1);
   });
 
-  e2eIt("runs a built-in outbound processor from subscription-configured", async () => {
+  e2eIt("runs a hosted outbound processor from subscription-configured", async () => {
     const path = `stream-capnweb-processor-${crypto.randomUUID()}`;
     const subscriptionKey = "echo-example";
     using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl(path) });
     const runtime = await stream.stream.runtimeState();
     await using processor = await connectStreamProcessorRunner({
       url: toStreamProcessorRunnerWebSocketUrl(
-        `${runtime.state.core.namespace}:${path}:${subscriptionKey}`,
+        `${runtime.state.namespace}:${path}:${subscriptionKey}`,
       ),
     });
 
@@ -440,9 +507,11 @@ describe("stream capnweb protocol", () => {
         payload: {
           subscriptionKey,
           subscriber: {
-            type: "built-in",
+            type: "external-url",
             transport: "capnweb-websocket",
-            processorSlug: "echo-example",
+            url: toStreamProcessorRunnerHttpUrl(
+              `${runtime.state.namespace}:${path}:${subscriptionKey}`,
+            ),
           },
         },
       },
@@ -509,7 +578,7 @@ describe("stream capnweb protocol", () => {
       await waitFor(
         () =>
           runner.subscriptionConfiguredEvent?.offset === configured.offset &&
-          runner.streamRuntimeState?.state.core.path === path &&
+          runner.streamRuntimeState?.state.path === path &&
           runner.requestHeaders.some((headers) => headers.get("x-stream-test") === headerValue),
         10_000,
       );
@@ -527,6 +596,63 @@ describe("stream capnweb protocol", () => {
         10_000,
       );
       expect(runner.batches.flat()).toContainEqual(appended);
+    },
+  );
+
+  localWorkerE2eIt(
+    "runs circuit breaker from a subscription-configured external-url processor",
+    async () => {
+      const path = `stream-capnweb-circuit-breaker-${crypto.randomUUID()}`;
+      const subscriptionKey = "circuit-breaker";
+      const runner = new CircuitBreakerNodeStreamProcessorRunner();
+      await using runnerServer = await startNodeStreamProcessorRunnerServer({
+        port: externalRunnerPort,
+        runner,
+      });
+      using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl(path) });
+
+      const configured = await stream.stream.append({
+        event: {
+          type: "events.iterate.com/stream/subscription-configured",
+          idempotencyKey: `subscription:${subscriptionKey}`,
+          payload: {
+            subscriptionKey,
+            subscriber: {
+              type: "external-url",
+              transport: "capnweb-websocket",
+              url: runnerServer.url,
+            },
+          },
+        },
+      });
+
+      await stream.stream.append({
+        event: {
+          type: "events.iterate.com/circuit-breaker/configured",
+          payload: { burstCapacity: 1, refillRatePerMinute: 1 },
+        },
+      });
+      await stream.stream.append({
+        event: { type: "test.circuit-breaker.input", payload: { n: 1 } },
+      });
+      await stream.stream.append({
+        event: { type: "test.circuit-breaker.input", payload: { n: 2 } },
+      });
+
+      await waitFor(async () => {
+        const runtime = await stream.stream.runtimeState();
+        return (
+          runner.subscriptionConfiguredEvent?.offset === configured.offset &&
+          runner.streamRuntimeState?.state.path === path &&
+          runtime.state.paused
+        );
+      }, 10_000);
+
+      await expect(
+        stream.stream.append({
+          event: { type: "test.circuit-breaker.rejected", payload: { path } },
+        }),
+      ).rejects.toThrow("stream paused");
     },
   );
 
@@ -565,7 +691,7 @@ describe("stream capnweb protocol", () => {
       await waitFor(
         () =>
           runner.subscriptionConfiguredEvent?.offset === configured.offset &&
-          runner.streamRuntimeState?.state.core.path === path &&
+          runner.streamRuntimeState?.state.path === path &&
           runner.requestHeaders.some((headers) => headers.get("x-stream-test") === headerValue),
         30_000,
       );
@@ -718,7 +844,7 @@ describe("stream capnweb protocol", () => {
 
 async function startNodeStreamProcessorRunnerServer(args: {
   port: number;
-  runner: NodeStreamProcessorRunner;
+  runner: StreamProcessorRunnerRpc & { requestHeaders: Headers[] };
 }): Promise<
   AsyncDisposable & {
     url: string;
@@ -904,6 +1030,12 @@ function toStreamProcessorRunnerWebSocketUrl(path: string) {
   url.pathname = `/stream-processor-runner/${path}`;
   if (url.protocol === "http:") url.protocol = "ws:";
   if (url.protocol === "https:") url.protocol = "wss:";
+  return url.toString();
+}
+
+function toStreamProcessorRunnerHttpUrl(path: string) {
+  const url = new URL(workerUrl);
+  url.pathname = `/stream-processor-runner/${path}`;
   return url.toString();
 }
 
