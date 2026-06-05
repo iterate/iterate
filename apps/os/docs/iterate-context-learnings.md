@@ -59,6 +59,22 @@ the parent and should call built-in capabilities like
 `env.ITERATE.context.streams.append(...)`. That path must not require loading a
 second dynamic worker from inside the config worker.
 
+Two smaller direct-RPC variants were tested and failed with the same workerd
+error:
+
+- passing the real `ctx: await env.ITERATE.context` into `/run` snippets and
+  exposing dynamic-worker mounts like `ctx.tools` as real prototype getters;
+- keeping the real context for built-ins but using a tiny local path proxy that
+  called `env.ITERATE.callMounted(["tools", "echo"], args)` for dynamic-worker
+  mount roots.
+
+Both preserve the desired authoring shape in JavaScript, but both still make a
+dynamic worker call the parent which then calls a second dynamically-loaded
+worker. Today that boundary fails before the result can be returned. The current
+`/run` implementation therefore inlines dynamic-worker mount scripts into the
+same dynamic worker as the snippet. That bridge is not just ergonomic sugar; it
+keeps mounted dynamic-worker tools in-process where workerd allows the call.
+
 ## Project config worker capabilities need a facade too
 
 `ctx.project.worker` must not expose the raw dynamic worker entrypoint returned
