@@ -567,7 +567,7 @@ describe("stream capnweb protocol", () => {
           runner.subscriptionConfiguredEvent?.offset === configured.offset &&
           runner.streamRuntimeState?.state.core.path === path &&
           runner.requestHeaders.some((headers) => headers.get("x-stream-test") === headerValue),
-        10_000,
+        30_000,
       );
 
       const appended = await stream.stream.append({
@@ -580,13 +580,14 @@ describe("stream capnweb protocol", () => {
       await waitFor(
         () =>
           runner.batches.some((batch) => batch.some((event) => event.offset === appended.offset)),
-        10_000,
+        30_000,
       );
       expect(runner.batches.flat()).toContainEqual(appended);
     },
-    // Quick-tunnel startup + edge-registration + propagation buffer exceeds the
-    // file's default 30s test timeout before the assertions even begin.
-    90_000,
+    // Quick-tunnel startup + edge-registration + propagation buffer plus delivery
+    // through cloudflared (slower under concurrent load / when two tunnels run in one
+    // suite) far exceeds the file's default 30s test timeout.
+    180_000,
   );
 
   cloudflaredE2eIt(
@@ -643,11 +644,11 @@ describe("stream capnweb protocol", () => {
       await waitFor(
         () =>
           runner.batches.some((batch) => batch.some((event) => event.offset === gapEvent.offset)),
-        10_000,
+        30_000,
       );
       expect(runner.batches.flat()).toContainEqual(gapEvent);
     },
-    90_000,
+    180_000,
   );
 
   e2eIt("delivers event batches without subscriber-originated return traffic", async () => {
