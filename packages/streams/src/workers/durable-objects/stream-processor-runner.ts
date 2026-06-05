@@ -39,17 +39,23 @@ export class StreamProcessorRunner extends DurableObject {
     subscriptionConfiguredEvent: SubscriptionConfiguredEvent;
     streamRuntimeState: { coreProcessorState: StreamCoreProcessorState };
   }): Promise<{ sink: SubscriptionSink; replayAfterOffset?: number }> {
-    const processorSlug = getHostedProcessorSlug(args);
-    const processor = getHostedProcessor(processorSlug);
+    const subscriber = args.subscriptionConfiguredEvent.payload.subscriber;
+    if (subscriber.type !== "built-in") {
+      throw new Error("StreamProcessorRunner only supports built-in subscribers");
+    }
+    if (subscriber.transport !== "capnweb-websocket") {
+      throw new Error("StreamProcessorRunner only supports capnweb-websocket subscribers");
+    }
+    const processor = getBuiltInProcessor(subscriber.processorSlug);
     if (processor === undefined) {
-      throw new Error(`Unknown hosted processor slug: ${processorSlug}`);
+      throw new Error(`Unknown built-in processor slug: ${subscriber.processorSlug}`);
     }
 
     await this.#processing?.[Symbol.asyncDispose]();
     await this.#subscription?.[Symbol.asyncDispose]();
     this.#stream?.[Symbol.dispose]();
     this.#stream = args.stream.dup();
-    this.ctx.storage.kv.put("processorSlug", processor.contract.slug);
+    this.ctx.storage.kv.put("processorSlug", subscriber.processorSlug);
     // Same runner path as Node/browser. KV is the storage port; the stream stub is
     // the exact Stream RPC API passed to processor afterAppend.
     this.#runner = createProcessorRunner({
@@ -92,16 +98,8 @@ export const StreamProcessorRunnerRpcTarget = makeRpcTargetClass<
   StreamProcessorRunner
 >(StreamProcessorRunner);
 
-function getHostedProcessor(slug: string): HostedProcessor | undefined {
+function getBuiltInProcessor(slug: string): HostedProcessor | undefined {
   if (slug === "echo-example") return echoExampleProcessor;
   if (slug === "circuit-breaker") return circuitBreakerProcessor;
   return undefined;
-}
-
-function getHostedProcessorSlug(args: {
-  subscriptionKey: string;
-  subscriptionConfiguredEvent: SubscriptionConfiguredEvent;
-}): string {
-  const url = args.subscriptionConfiguredEvent.payload.subscriber.url;
-  return new URL(url).searchParams.get("processorSlug") ?? args.subscriptionKey;
 }

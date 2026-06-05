@@ -592,9 +592,20 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     subscriptionKey: string;
   }) {
     const subscriber = args.configured.latestConfiguredEvent.payload.subscriber;
-    const headers = new Headers(subscriber.headers);
-    headers.set("Upgrade", "websocket");
-    const response = await fetch(new Request(subscriber.url, { headers }));
+    let response: Response;
+    if (subscriber.type === "built-in") {
+      response = await this.env.STREAM_PROCESSOR_RUNNER.getByName(
+        `${this.#coreProcessorState.namespace}:${this.#coreProcessorState.path}:${args.subscriptionKey}`,
+      ).fetch(
+        new Request("https://stream-processor.local/", {
+          headers: { Upgrade: "websocket" },
+        }),
+      );
+    } else {
+      const headers = new Headers(subscriber.headers);
+      headers.set("Upgrade", "websocket");
+      response = await fetch(new Request(subscriber.url, { headers }));
+    }
     const webSocket = response.webSocket;
     if (webSocket === null) {
       throw new Error(
@@ -609,7 +620,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
       subscriptionKey: args.subscriptionKey,
       streamMaxOffset: this.#coreProcessorState.maxOffset,
       subscriptionConfiguredEvent: args.configured.latestConfiguredEvent,
-      streamRuntimeState: this.runtimeState(),
+      streamRuntimeState: { coreProcessorState: this.#coreProcessorState },
     });
 
     this.#openConnection({

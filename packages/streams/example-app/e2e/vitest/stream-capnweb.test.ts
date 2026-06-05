@@ -506,9 +506,9 @@ describe("stream capnweb protocol", () => {
         payload: {
           subscriptionKey,
           subscriber: {
-            type: "external-url",
+            type: "built-in",
             transport: "capnweb-websocket",
-            url: toStreamProcessorRunnerHttpUrl(runnerName, { processorSlug: "echo-example" }),
+            processorSlug: "echo-example",
           },
         },
       },
@@ -535,6 +535,68 @@ describe("stream capnweb protocol", () => {
         snapshot.offset > configured.offset
       );
     }, 1_000);
+  });
+
+  e2eIt("runs the hosted circuit breaker processor from a built-in subscription", async () => {
+    const path = `stream-capnweb-hosted-circuit-breaker-${crypto.randomUUID()}`;
+    const subscriptionKey = `hosted-breaker-${crypto.randomUUID()}`;
+    using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl(path) });
+    const runtime = await stream.stream.runtimeState();
+    const runnerName = `${runtime.coreProcessorState.namespace}:${path}:${subscriptionKey}`;
+    await using processor = await connectStreamProcessorRunner({
+      url: toStreamProcessorRunnerWebSocketUrl(runnerName, { processorSlug: "circuit-breaker" }),
+    });
+
+    const configured = await stream.stream.append({
+      event: {
+        type: "events.iterate.com/stream/subscription-configured",
+        idempotencyKey: `subscription:${subscriptionKey}`,
+        payload: {
+          subscriptionKey,
+          subscriber: {
+            type: "built-in",
+            transport: "capnweb-websocket",
+            processorSlug: "circuit-breaker",
+          },
+        },
+      },
+    });
+
+    await waitFor(async () => {
+      const status = await processor.rpc.runtimeState();
+      return status.processorSlug === "circuit-breaker" && status.snapshot === undefined;
+    }, 1_000);
+
+    await stream.stream.append({
+      event: {
+        type: "events.iterate.com/circuit-breaker/configured",
+        payload: { burstCapacity: 1, refillRatePerMinute: 1 },
+      },
+    });
+    await stream.stream.append({
+      event: { type: "test.hosted-circuit-breaker.input", payload: { n: 1 } },
+    });
+    await stream.stream.append({
+      event: { type: "test.hosted-circuit-breaker.input", payload: { n: 2 } },
+    });
+
+    await waitFor(async () => {
+      const [streamRuntime, processorRuntime] = await Promise.all([
+        stream.stream.runtimeState(),
+        processor.rpc.runtimeState(),
+      ]);
+      return (
+        streamRuntime.coreProcessorState.paused &&
+        processorRuntime.snapshot !== undefined &&
+        processorRuntime.snapshot.offset > configured.offset
+      );
+    }, 10_000);
+
+    await expect(
+      stream.stream.append({
+        event: { type: "test.hosted-circuit-breaker.rejected", payload: { path } },
+      }),
+    ).rejects.toThrow("stream paused");
   });
 
   localWorkerE2eIt(
