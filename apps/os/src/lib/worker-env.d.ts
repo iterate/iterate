@@ -11,6 +11,7 @@ type WorkerMainModule = Pick<
     | "AiCapability"
     | "FetchCapability"
     | "GmailCapability"
+    | "IterateCapabilityEntrypoint"
     | "OpenApiBridge"
     | "OrpcCapability"
     | "ProjectCapability"

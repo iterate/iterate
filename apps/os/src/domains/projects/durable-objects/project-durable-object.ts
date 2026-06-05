@@ -520,7 +520,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
       throw new Error(`Project config worker does not export ${input.functionName}.`);
     }
 
-    return await fn(...(input.args ?? []));
+    return await Reflect.apply(fn, entrypoint, input.args ?? []);
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -668,6 +668,9 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
         }),
         () =>
           projectDynamicWorkerCodeWithStreams({
+            iterate: readLoopbackExports(this.ctx).IterateCapabilityEntrypoint({
+              props: { projectId: input.projectId },
+            }),
             streams: readLoopbackExports(this.ctx).StreamsCapability({
               props: { projectId: input.projectId },
             }),
@@ -1263,6 +1266,7 @@ function projectDynamicWorkerCode(input: string) {
 }
 
 function projectDynamicWorkerCodeWithStreams(input: {
+  iterate: Fetcher;
   streams: Fetcher;
   workerCode: ProjectDynamicWorkerCode;
 }): ProjectDynamicWorkerCode {
@@ -1270,6 +1274,7 @@ function projectDynamicWorkerCodeWithStreams(input: {
     ...input.workerCode,
     env: {
       ...(input.workerCode.env ?? {}),
+      ITERATE: input.iterate,
       STREAMS: input.streams,
     },
   };
@@ -1452,6 +1457,7 @@ function projectRuntimeEnv(env: ProjectEnv): ProjectRuntimeEnv {
 
 function readLoopbackExports(ctx: DurableObjectState) {
   return ctx.exports as unknown as Cloudflare.Exports & {
+    IterateCapabilityEntrypoint(input: { props: { projectId: string } }): Fetcher;
     StreamsCapability(input: { props: StreamsCapabilityProps }): Fetcher;
   };
 }

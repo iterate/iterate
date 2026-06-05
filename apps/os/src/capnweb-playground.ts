@@ -26,11 +26,14 @@
  * Project capabilities are minted from scopes, but project methods validate
  * against the real app database before exposing project data.
  */
-import { RpcTarget } from "cloudflare:workers";
+import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 import { newWorkersRpcResponse } from "capnweb";
 import { ORPCError } from "@orpc/server";
+import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
+import { createRequestLogger } from "@iterate-com/shared/request-logging";
 import { isValidTypeId, typeid } from "@iterate-com/shared/typeid";
-import type { AppConfig } from "~/app.ts";
+import { createD1Client } from "sqlfu";
+import manifest, { AppConfig } from "~/app.ts";
 import { authenticateAdminApiSecret } from "~/auth/middleware.ts";
 import type { AppContext } from "~/context.ts";
 import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
@@ -174,12 +177,58 @@ function projectDurableObject(context: AppContext, projectId: string) {
   ).getByName(getProjectDurableObjectName(projectId));
 }
 
+function createEntrypointContext(input: { ctx: ExecutionContext; env: Env }): AppContext {
+  const config = parseAppConfigFromEnv({
+    configSchema: AppConfig,
+    prefix: "APP_CONFIG_",
+    env: input.env as unknown as Record<string, unknown>,
+  });
+
+  return {
+    manifest,
+    config,
+    db: createD1Client(input.env.DB),
+    doCatalog: input.env.DO_CATALOG ?? input.env.DB,
+    log: createRequestLogger({
+      method: "CAPTNWEB",
+      path: "captnweb://iterate-entrypoint",
+      requestId: crypto.randomUUID(),
+    }),
+    projectHostnameBases: config.projectHostnameBases,
+    waitUntil: (promise) => input.ctx.waitUntil(promise),
+    agent: input.env.AGENT,
+    callableEnv: input.env as unknown as Record<string, unknown>,
+    codemodeSession: input.env.CODEMODE_SESSION,
+    loader: input.env.LOADER,
+    projectDurableObjectNamespace: input.env.PROJECT,
+    repo: input.env.REPO,
+    slackAgent: input.env.SLACK_AGENT,
+    slackIntegration: input.env.SLACK_INTEGRATION,
+    stream: input.env.STREAM,
+    workerExports: input.ctx.exports,
+  };
+}
+
 // ── the capability tree (every node is an RpcTarget; props passed as a bag) ──
 
 export interface IterateCapabilityProps {
   scopes: string[];
   context?: AppContext;
   activeOrganization?: ActiveOrganizationAuth;
+}
+
+export class IterateCapabilityEntrypoint extends WorkerEntrypoint<Env, { projectId: string }> {
+  project(): ProjectCapability {
+    const projectId = this.ctx.props.projectId;
+    return new ProjectCapability({
+      context: createEntrypointContext({
+        ctx: this.ctx,
+        env: this.env,
+      }),
+      projectId,
+      scopes: [`${PROJECT_SCOPE_PREFIX}${projectId}`],
+    });
+  }
 }
 
 export class IterateCapability extends RpcTarget {
@@ -466,20 +515,17 @@ export class ProjectCapability extends RpcTarget {
 
   get repos(): CaptnwebReposCapability {
     this.#assertProjectScope();
-    return (this.#repos ??= getReposCapability({
-      exports: this.#requireContext().workerExports,
-      props: { projectId: this.#projectId },
+    return (this.#repos ??= new ProjectReposCapability({
+      context: this.#requireContext(),
+      projectId: this.#projectId,
     }));
   }
 
   get streams(): CaptnwebStreamsCapability {
     this.#assertProjectScope();
-    return (this.#streams ??= getStreamsCapability({
-      exports: this.#requireContext().workerExports,
-      props: {
-        appendPolicy: { mode: "any" },
-        projectId: this.#projectId,
-      },
+    return (this.#streams ??= new ProjectStreamsCapability({
+      context: this.#requireContext(),
+      projectId: this.#projectId,
     }));
   }
 
@@ -532,18 +578,111 @@ type ProjectCapabilityChildProps = {
   scopes: string[];
 };
 
-type CaptnwebReposCapability = Pick<
+type ReposClient = Pick<
   ReposCapability,
   "create" | "createInfo" | "ensureIterateConfigInfo" | "get" | "getInfo" | "list"
 >;
-type CaptnwebStreamsCapability = Pick<
+type StreamsClient = Pick<
   StreamsCapability,
   "append" | "appendBatch" | "create" | "getState" | "list" | "listChildren" | "read"
 >;
+type CaptnwebReposCapability = ProjectReposCapability;
+type CaptnwebStreamsCapability = ProjectStreamsCapability;
 type WorkspaceClient = Pick<
   WorkspaceCapability,
   "gitAdd" | "gitClone" | "gitCommit" | "gitPush" | "gitStatus" | "readFile" | "writeFile"
 >;
+
+class ProjectReposCapability extends RpcTarget {
+  readonly #context: AppContext;
+  readonly #projectId: string;
+
+  constructor(input: { context: AppContext; projectId: string }) {
+    super();
+    this.#context = input.context;
+    this.#projectId = input.projectId;
+  }
+
+  async create(input: Parameters<ReposClient["create"]>[0]) {
+    return await this.#repos().create(input);
+  }
+
+  async createInfo(input: Parameters<ReposClient["createInfo"]>[0]) {
+    return await this.#repos().createInfo(input);
+  }
+
+  async ensureIterateConfigInfo(input: Parameters<ReposClient["ensureIterateConfigInfo"]>[0]) {
+    return await this.#repos().ensureIterateConfigInfo(input);
+  }
+
+  async get(input: Parameters<ReposClient["get"]>[0]) {
+    return await this.#repos().get(input);
+  }
+
+  async getInfo(input: Parameters<ReposClient["getInfo"]>[0]) {
+    return await this.#repos().getInfo(input);
+  }
+
+  async list() {
+    return await this.#repos().list();
+  }
+
+  #repos(): ReposClient {
+    return getReposCapability({
+      exports: this.#context.workerExports,
+      props: { projectId: this.#projectId },
+    });
+  }
+}
+
+class ProjectStreamsCapability extends RpcTarget {
+  readonly #context: AppContext;
+  readonly #projectId: string;
+
+  constructor(input: { context: AppContext; projectId: string }) {
+    super();
+    this.#context = input.context;
+    this.#projectId = input.projectId;
+  }
+
+  async append(input: Parameters<StreamsClient["append"]>[0]) {
+    return await this.#streams().append(input);
+  }
+
+  async appendBatch(input: Parameters<StreamsClient["appendBatch"]>[0]) {
+    return await this.#streams().appendBatch(input);
+  }
+
+  async create(input: Parameters<StreamsClient["create"]>[0]) {
+    return await this.#streams().create(input);
+  }
+
+  async getState(input: Parameters<StreamsClient["getState"]>[0]) {
+    return await this.#streams().getState(input);
+  }
+
+  async list() {
+    return await this.#streams().list();
+  }
+
+  async listChildren(input: Parameters<StreamsClient["listChildren"]>[0]) {
+    return await this.#streams().listChildren(input);
+  }
+
+  async read(input: Parameters<StreamsClient["read"]>[0]) {
+    return await this.#streams().read(input);
+  }
+
+  #streams(): StreamsClient {
+    return getStreamsCapability({
+      exports: this.#context.workerExports,
+      props: {
+        appendPolicy: { mode: "any" },
+        projectId: this.#projectId,
+      },
+    });
+  }
+}
 
 class ProjectWorkspaceCapability extends RpcTarget {
   readonly #workspace: WorkspaceClient;
@@ -640,6 +779,20 @@ export class ProjectWorkerCapability extends RpcTarget {
 
   async someFunction(...args: unknown[]): Promise<unknown> {
     return await this.call({ args, functionName: "someFunction" });
+  }
+
+  async fetchJson(input: { url: string }): Promise<unknown> {
+    const response = (await projectDurableObject(
+      this.#requireContext(),
+      this.#projectId,
+    ).callConfigWorkerFunction({
+      args: [new Request(input.url)],
+      functionName: "fetch",
+    })) as Response;
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+    return await response.json();
   }
 
   #requireContext(): AppContext {

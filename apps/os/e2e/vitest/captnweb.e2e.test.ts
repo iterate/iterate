@@ -249,10 +249,39 @@ describe("captnweb", () => {
           });
           try {
             const marker = `captnweb-worker-${uniqueSuffix()}`;
+            const streamPath = `/captnweb/worker/${marker}`;
+            const eventType = `events.iterate.com/captnweb/worker/${marker}`;
             const workerSource = dedent`
               export default {
-                async fetch() {
-                  return new Response(${JSON.stringify(`captnweb worker ${marker}`)});
+                async fetch(request, env) {
+                  const url = new URL(request.url);
+                  const project = await env.ITERATE.project();
+                  const streamPath = url.searchParams.get("streamPath");
+                  const eventType = url.searchParams.get("eventType");
+                  const marker = url.searchParams.get("marker");
+                  const appended = await project.streams.append({
+                    streamPath,
+                    event: {
+                      type: eventType,
+                      payload: {
+                        marker,
+                        source: "iterate-config",
+                      },
+                    },
+                  });
+                  const events = await project.streams.read({
+                    afterOffset: "start",
+                    streamPath,
+                  });
+                  return Response.json({
+                    appended: {
+                      eventType: appended.type,
+                      marker: appended.payload.marker,
+                      offset: appended.offset,
+                      streamPath,
+                    },
+                    events,
+                  });
                 },
                 async someFunction(input = {}) {
                   return { from: "iterate-config", input, marker: ${JSON.stringify(marker)} };
@@ -262,7 +291,19 @@ describe("captnweb", () => {
 
             const result = await runWithIterateContext({
               scopes: [`project:${project.id}`],
-              vars: { marker, workerSource },
+              vars: {
+                eventType,
+                fetchUrl: `https://iterate-config.local/captnweb-fetch/${marker}?${new URLSearchParams(
+                  {
+                    eventType,
+                    marker,
+                    streamPath,
+                  },
+                )}`,
+                marker,
+                streamPath,
+                workerSource,
+              },
               fn: async ({ iterate, vars }) => {
                 await iterate.project.streams.append({
                   streamPath: `/captnweb/worker/${Date.now()}`,
@@ -296,6 +337,12 @@ describe("captnweb", () => {
                   ref: repo.defaultBranch,
                   ...repo.credentials,
                 });
+                const streamFetch = (await iterate.project.worker.fetchJson({
+                  url: vars.fetchUrl,
+                })) as {
+                  appended: unknown;
+                  events: unknown[];
+                };
 
                 return {
                   called: await iterate.project.worker.someFunction({
@@ -304,6 +351,11 @@ describe("captnweb", () => {
                   commit,
                   repo: { defaultBranch: repo.defaultBranch, slug: repo.slug },
                   status: await iterate.project.workspace.git.status({ dir }),
+                  streamFetch,
+                  streamEvents: await iterate.project.streams.read({
+                    afterOffset: "start",
+                    streamPath: vars.streamPath,
+                  }),
                 };
               },
             });
@@ -317,6 +369,34 @@ describe("captnweb", () => {
               input: { echo: marker },
               marker,
             });
+            expect(result.streamFetch.appended).toMatchObject({
+              eventType,
+              marker,
+              offset: expect.any(Number),
+              streamPath,
+            });
+            expect(result.streamFetch.events).toEqual(
+              expect.arrayContaining([
+                expect.objectContaining({
+                  type: eventType,
+                  payload: {
+                    marker,
+                    source: "iterate-config",
+                  },
+                }),
+              ]),
+            );
+            expect(result.streamEvents).toEqual(
+              expect.arrayContaining([
+                expect.objectContaining({
+                  type: eventType,
+                  payload: {
+                    marker,
+                    source: "iterate-config",
+                  },
+                }),
+              ]),
+            );
           } finally {
             await removeCaptnwebProject({ project, runWithIterateContext }).catch(() => undefined);
           }
