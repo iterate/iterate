@@ -2,8 +2,8 @@ import { SELF, env } from "cloudflare:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { StreamPath } from "@iterate-com/shared/streams/types";
-import { getInitializedStreamStub } from "@iterate-com/shared/streams/helpers";
 import { describe, expect, test } from "vitest";
+import { getInitializedStreamStub } from "~/domains/streams/new-stream-runtime.ts";
 
 type TestEnv = {
   STREAM: Env["STREAM"];

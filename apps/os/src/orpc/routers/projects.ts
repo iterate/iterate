@@ -261,9 +261,10 @@ export const projectsRouter = {
       .use(projectScopeMiddleware)
       .handler(async ({ context }) => {
         const project = requireProjectScope(context);
-        return await requireProjectDurableObjectNamespace(context)
-          .getByName(getProjectDurableObjectName(project.id))
-          .getProjectLifecycleRunnerState();
+        return await projectLifecycleDurableObject(
+          context,
+          project.id,
+        ).getProjectLifecycleRunnerState();
       }),
     codemode: {
       ...projectCodemodeRouter,
@@ -388,4 +389,17 @@ function projectDurableObject(context: AppContext, projectId: string) {
   return requireProjectDurableObjectNamespace(context).getByName(
     getProjectDurableObjectName(projectId),
   );
+}
+
+type ProjectLifecycleStateRpc = {
+  getProjectLifecycleRunnerState(): Promise<unknown>;
+};
+
+function projectLifecycleDurableObject(
+  context: AppContext,
+  projectId: string,
+): ProjectLifecycleStateRpc {
+  return requireProjectDurableObjectNamespace(context).getByName(
+    getProjectDurableObjectName(projectId),
+  ) as unknown as ProjectLifecycleStateRpc;
 }

@@ -50,6 +50,7 @@
     "@iterate-com/auth-contract": "workspace:*",
     "@iterate-com/os-contract": "workspace:*",
     "@iterate-com/shared": "workspace:*",
+    "@iterate-com/streams": "workspace:*",
     "@iterate-com/ui": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@opentui/core": "0.1.102",

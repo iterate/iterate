@@ -5,25 +5,18 @@ import {
   deriveDurableObjectNameFromStructuredName,
   NotInitializedError,
 } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import { withStreamProcessorRunner } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor-runner";
-import { createSlackAgentProcessor } from "@iterate-com/shared/stream-processors/slack-agent/implementation";
-import { SlackAgentProcessorContract } from "@iterate-com/shared/stream-processors/slack-agent/contract";
-import type { ProcessorStreamApi, StreamEvent } from "@iterate-com/shared/stream-processors";
-import {
-  getInitializedStreamStub,
-  type StreamDurableObjectNamespace,
-} from "@iterate-com/shared/streams/helpers";
-import type { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
 import {
   type Event,
-  type EventInput,
-  type StreamCursor,
   StreamPath,
   type StreamPath as StreamPathType,
 } from "@iterate-com/shared/streams/types";
+import {
+  getInitializedStreamStub,
+  type StreamDurableObjectNamespace,
+  type StreamDurableObject,
+} from "~/domains/streams/new-stream-runtime.ts";
 import { getProjectSecret } from "~/domains/secrets/secrets-store.ts";
-import { callSlackWebApi } from "~/domains/slack/entrypoints/slack-capability.ts";
-import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
+import type { StreamProcessorRunner } from "~/domains/streams/durable-objects/stream-processor-runner.ts";
 
 export type SlackAgentDurableObjectStructuredName = {
   projectId: string;
@@ -46,16 +39,7 @@ type SlackAgentEnv = {
   DO_CATALOG: D1Database;
   SLACK_BOT_TOKEN?: string;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
-};
-
-type SlackAgentStreamApi = ProcessorStreamApi<typeof SlackAgentProcessorContract> & {
-  append(args: { event: EventInput; streamPath?: string }): Promise<Event>;
-  appendBatch(args: { events: EventInput[]; streamPath?: string }): Promise<Event[]>;
-  read(args?: {
-    streamPath?: string;
-    afterOffset?: StreamCursor;
-    beforeOffset?: StreamCursor;
-  }): Promise<Event[]>;
+  STREAM_PROCESSOR_RUNNER: DurableObjectNamespace<StreamProcessorRunner>;
 };
 
 const SlackAgentLifecycleBase = createIterateDurableObjectBase<
@@ -71,55 +55,44 @@ const SlackAgentLifecycleBase = createIterateDurableObjectBase<
   nameSchema: SlackAgentDurableObjectStructuredName,
 });
 
-const SlackAgentBase = withStreamProcessorRunner<
-  SlackAgentDurableObjectStructuredName,
-  SlackAgentEnv,
-  typeof SlackAgentProcessorContract
->({
-  processor(args) {
-    return createSlackAgentProcessor({
-      callSlackApi: async (method, body) => {
-        const token = await readSlackToken({
-          db: args.env.DO_CATALOG,
-          env: args.env,
-          projectId: args.structuredName.projectId,
-        });
-        if (!token) return;
-        try {
-          await callSlackWebApi({ body, method, token });
-        } catch (error) {
-          console.error("[os-slack-agent] Slack side effect failed", {
-            error,
-            method,
-            streamPath: args.structuredName.streamPath,
-          });
-        }
-      },
-    });
-  },
-  streamApi(args) {
-    return slackAgentStreamApiFromNamespace({
-      durableObjectNamespace: args.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: args.structuredName.projectId,
-      streamPath: args.structuredName.streamPath,
-    });
-  },
-})(SlackAgentLifecycleBase);
-
-export class SlackAgentDurableObject extends SlackAgentBase<SlackAgentEnv> {
+export class SlackAgentDurableObject extends SlackAgentLifecycleBase<SlackAgentEnv> {
   async afterAppend(input: { event: Event }) {
+    void input;
     await this.ensureStartedOrInitializeFromRuntimeName();
-    return await this.consumeStreamProcessorEvent({ event: input.event as StreamEvent });
+    await this.waitForSlackAgentProcessorCatchUp();
+    return await this.getRunnerState();
   }
 
   async ensureReady() {
     await this.ensureStartedOrInitializeFromRuntimeName();
-    return this.getStreamProcessorRunnerState();
+    await this.waitForSlackAgentProcessorCatchUp();
+    return await this.getRunnerState();
   }
 
   async getRunnerState() {
     await this.ensureStartedOrInitializeFromRuntimeName();
-    return this.getStreamProcessorRunnerState();
+    return await this.env.STREAM_PROCESSOR_RUNNER.getByName(
+      slackAgentProcessorRunnerName(this.structuredName),
+    ).runtimeState();
+  }
+
+  private async waitForSlackAgentProcessorCatchUp() {
+    const maxOffset = await this.currentStreamMaxOffset();
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      const state = (await this.getRunnerState()) as { reducedThroughOffset: number };
+      if (state.reducedThroughOffset >= maxOffset) return;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
+  private async currentStreamMaxOffset() {
+    const stream = await getInitializedStreamStub({
+      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+      namespace: this.structuredName.projectId,
+      path: this.structuredName.streamPath,
+    });
+    return (await stream.history({ before: "end" })).at(-1)?.offset ?? 0;
   }
 
   private async ensureStartedOrInitializeFromRuntimeName() {
@@ -134,57 +107,7 @@ export class SlackAgentDurableObject extends SlackAgentBase<SlackAgentEnv> {
   }
 }
 
-function slackAgentStreamApiFromNamespace(args: {
-  durableObjectNamespace: StreamDurableObjectNamespace;
-  namespace: string;
-  streamPath: StreamPathType;
-}): SlackAgentStreamApi {
-  return {
-    async append(input) {
-      const stream = await getInitializedStreamStub({
-        durableObjectNamespace: args.durableObjectNamespace,
-        namespace: args.namespace,
-        path: resolveProcessorStreamPath({
-          basePath: args.streamPath,
-          pathInput: input.streamPath,
-        }),
-      });
-      return await stream.append(input.event as EventInput);
-    },
-    async appendBatch(input) {
-      const stream = await getInitializedStreamStub({
-        durableObjectNamespace: args.durableObjectNamespace,
-        namespace: args.namespace,
-        path: resolveProcessorStreamPath({
-          basePath: args.streamPath,
-          pathInput: input.streamPath,
-        }),
-      });
-      return await stream.appendBatch(input.events as EventInput[]);
-    },
-    async read(input = {}) {
-      const stream = await getInitializedStreamStub({
-        durableObjectNamespace: args.durableObjectNamespace,
-        namespace: args.namespace,
-        path: resolveProcessorStreamPath({
-          basePath: args.streamPath,
-          pathInput: input.streamPath,
-        }),
-      });
-      return await stream.history({
-        after: input.afterOffset,
-        before: input.beforeOffset ?? "end",
-      });
-    },
-    async *subscribe(input = {}) {
-      void input;
-      yield* [];
-      throw new Error("Slack agent processors receive live events through afterAppend RPC.");
-    },
-  };
-}
-
-async function readSlackToken(input: {
+export async function readSlackToken(input: {
   db: D1Database;
   env: Pick<SlackAgentEnv, "APP_CONFIG_SLACK_BOT_TOKEN" | "SLACK_BOT_TOKEN">;
   projectId: string;
@@ -198,22 +121,20 @@ async function readSlackToken(input: {
   return input.env.SLACK_BOT_TOKEN ?? input.env.APP_CONFIG_SLACK_BOT_TOKEN ?? "";
 }
 
-function resolveProcessorStreamPath(input: { basePath: StreamPathType; pathInput?: string }) {
-  if (input.pathInput == null) {
-    return input.basePath;
-  }
+export function slackAgentProcessorSubscriptionKey(input: {
+  projectId: string;
+  streamPath: StreamPathType | string;
+}) {
+  return `slack-agent:${input.projectId}:${StreamPath.parse(input.streamPath)}`;
+}
 
-  const trimmedPath = input.pathInput.trim();
-  if (!trimmedPath) {
-    throw new Error("Stream path is required.");
-  }
-
-  if (trimmedPath.startsWith("/")) {
-    return resolveStreamPath(trimmedPath);
-  }
-
-  const relativePath = trimmedPath.replace(/^\.\//, "").replace(/^\/+/, "");
-  return resolveStreamPath(
-    input.basePath === "/" ? `/${relativePath}` : `${input.basePath}/${relativePath}`,
-  );
+export function slackAgentProcessorRunnerName(input: {
+  projectId: string;
+  streamPath: StreamPathType | string;
+}) {
+  const streamPath = StreamPath.parse(input.streamPath);
+  return `${input.projectId}:${streamPath}:${slackAgentProcessorSubscriptionKey({
+    projectId: input.projectId,
+    streamPath,
+  })}`;
 }

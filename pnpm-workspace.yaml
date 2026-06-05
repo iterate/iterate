@@ -10,6 +10,7 @@ packages:
   - apps/events-contract
   - apps/*
   - packages/*
+  - packages/*/example-app
   - .github/ts-workflows
 
 catalogs:

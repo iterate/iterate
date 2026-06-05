@@ -1,12 +1,12 @@
 import { ORPCError } from "@orpc/server";
 import { listD1ObjectCatalogRecordsByIndex } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import type { Event, EventInput, StreamPath } from "@iterate-com/shared/streams/types";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
-} from "@iterate-com/shared/streams/helpers";
-import type { Event, EventInput, StreamPath } from "@iterate-com/shared/streams/types";
-import type { StreamDurableObject } from "@iterate-com/shared/streams/stream-durable-object";
+  type StreamDurableObject,
+} from "~/domains/streams/new-stream-runtime.ts";
 import {
   configuredAgentSetupEvents,
   normalizeAgentPresetBasePath,
