@@ -1,6 +1,7 @@
 import { createD1Client } from "sqlfu";
 import { z } from "zod";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
+import { newWorkersRpcResponse } from "capnweb";
 import { acceptCaptunTunnel, type Fetcher } from "captun";
 import type { Callable, FetchCallable } from "@iterate-com/shared/callable/types.ts";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
@@ -23,12 +24,12 @@ import {
 } from "@iterate-com/shared/streams/types";
 import { typeid } from "@iterate-com/shared/typeid";
 import { AppConfig } from "~/app.ts";
+import { authenticateAdminApiSecret } from "~/auth/middleware.ts";
 import {
   createCapnwebAppContext,
   createIterateContext,
   type IterateContext,
-} from "~/capnweb/iterate-context.ts";
-import { handleProjectCapnwebFetch } from "~/capnweb/project-handler.ts";
+} from "~/capnweb/iterate-context-capability.ts";
 import {
   AGENTS_STREAM_PATH,
   type AgentDurableObject,
@@ -196,6 +197,7 @@ const PROJECT_CONFIG_REFRESH_INTERVAL_MS = 10_000;
 const PROJECT_DYNAMIC_WORKER_MAIN_MODULE = "worker.js";
 const PROJECT_DYNAMIC_WORKER_COMPATIBILITY_DATE = "2026-04-27";
 const PROJECT_DYNAMIC_WORKER_COMPATIBILITY_FLAGS = ["nodejs_compat"];
+const PROJECT_CAPNWEB_PATH = "/__iterate/capnweb";
 
 type ProjectConfigWorkspaceName = {
   projectId: string;
@@ -447,11 +449,7 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
     await this.ensureStarted();
     const summary = this.requireSummary();
     const url = new URL(request.url);
-    const capnwebResponse = await handleProjectCapnwebFetch({
-      config: this.getAppConfig(),
-      getContext: () => this.getIterateContext(),
-      request,
-    });
+    const capnwebResponse = await this.handleProjectCapnwebFetch(request);
     if (capnwebResponse) return capnwebResponse;
 
     if (url.pathname === "/__iterate/intercept-project-egress") {
@@ -552,10 +550,20 @@ export class ProjectDurableObject extends ProjectBase<ProjectEnv> {
   }
 
   async fetch(request: Request): Promise<Response> {
+    const capnwebResponse = await this.handleProjectCapnwebFetch(request);
+    if (capnwebResponse) return capnwebResponse;
+
     if (new URL(request.url).pathname === "/__iterate/intercept-project-egress") {
       return this.acceptProjectEgressInterceptTunnel(request);
     }
     return await this.egressFetch(request);
+  }
+
+  private async handleProjectCapnwebFetch(request: Request): Promise<Response | null> {
+    if (new URL(request.url).pathname !== PROJECT_CAPNWEB_PATH) return null;
+    const principal = authenticateAdminApiSecret({ config: this.getAppConfig() }, request);
+    if (!principal) return new Response("Unauthorized", { status: 401 });
+    return newWorkersRpcResponse(request, await this.getIterateContext());
   }
 
   private acceptProjectEgressInterceptTunnel(request: Request): Response {

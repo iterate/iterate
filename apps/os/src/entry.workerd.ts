@@ -36,6 +36,7 @@ import type { ExactHostIngressRule } from "~/ingress/types.ts";
 import { DEBUG_APPEND_CHAIN_EVENT_TYPE } from "~/durable-objects/debug-append-chain-subscriber.ts";
 import { handleMcpFetch } from "~/domains/inbound-mcp-server/mcp-handler.ts";
 import { handleAdminCapnwebFetch } from "~/capnweb/admin-capability.ts";
+import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
 
 // Re-export rpc-targets used by OS's existing loopback callable paths.
 // Stream processor subscriptions do not use these exports; they target Durable
@@ -54,7 +55,7 @@ export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.t
 export { AiCapability, OrpcCapability } from "~/domains/codemode/example-capabilities.ts";
 export { FetchCapability } from "~/domains/codemode/fetch-capability.ts";
 export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
-export { IterateContextEntrypoint } from "~/capnweb/iterate-context.ts";
+export { IterateContextEntrypoint } from "~/capnweb/iterate-context-capability.ts";
 export { ProjectCapability } from "~/domains/projects/entrypoints/project-capability.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
 export { ProjectMcpServerEntrypoint } from "~/domains/inbound-mcp-server/entrypoints/project-mcp-server-entrypoint.ts";
@@ -68,6 +69,7 @@ export { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-
 export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 
 const CAPTUN_TUNNEL_ROUTE_PREFIX = "/__iterate/captun";
+const PROJECT_CAPNWEB_PATH = "/__iterate/capnweb";
 
 const config = parseAppConfigFromEnv({
   configSchema: AppConfig,
@@ -136,6 +138,14 @@ export default {
         });
 
         if (ingressMatch) {
+          if (
+            new URL(request.url).pathname === PROJECT_CAPNWEB_PATH &&
+            ingressMatch.rule.projectId
+          ) {
+            return await env.PROJECT.getByName(
+              getProjectDurableObjectName(ingressMatch.rule.projectId),
+            ).fetch(request);
+          }
           return await dispatchFetchCallable({
             callable: ingressMatch.rule.callable,
             context: {

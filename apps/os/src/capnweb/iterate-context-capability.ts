@@ -54,9 +54,12 @@ type WorkspaceClient = Pick<
 >;
 
 export class IterateContextEntrypoint extends WorkerEntrypoint<Env, { projectId: string }> {
-  get ctx() {
+  getContext() {
+    const workerCtx = Reflect.get(this, "ctx") as unknown as ExecutionContext<{
+      projectId: string;
+    }>;
     return this.env.PROJECT.getByName(
-      getProjectDurableObjectName(this.ctx.props.projectId),
+      getProjectDurableObjectName(workerCtx.props.projectId),
     ).getIterateContext();
   }
 }

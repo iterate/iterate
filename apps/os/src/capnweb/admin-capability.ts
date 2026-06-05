@@ -23,7 +23,7 @@ import {
   type ProjectDurableObject,
 } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import type { ActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
-import { createIterateContext } from "./iterate-context.ts";
+import { createIterateContext } from "./iterate-context-capability.ts";
 
 export const ADMIN_CAPNWEB_PREFIX = "/api/captnweb/admin";
 
