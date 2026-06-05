@@ -1,6 +1,11 @@
 import { RpcTarget } from "cloudflare:workers";
 import { ORPCError } from "@orpc/server";
 import { isValidTypeId, typeid } from "@iterate-com/shared/typeid";
+import type {
+  IterateContext,
+  ProjectDurableObjectContextClient,
+  ProjectsCapabilityClient,
+} from "./iterate-context-capability.ts";
 import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 import type { AppContext } from "~/context.ts";
 import {
@@ -20,11 +25,6 @@ import {
   type ProjectDurableObject,
 } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import type { ActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
-import type {
-  IterateContext,
-  ProjectDurableObjectContextClient,
-  ProjectsCapabilityClient,
-} from "./iterate-context-capability.ts";
 
 type ProjectRow = {
   id: string;
