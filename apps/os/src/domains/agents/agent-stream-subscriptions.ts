@@ -3,6 +3,7 @@ import { StreamPath as StreamPathSchema } from "@iterate-com/shared/streams/type
 import { AgentChatProcessorContract } from "@iterate-com/shared/stream-processors/agent-chat/contract";
 import { AgentProcessorContract } from "@iterate-com/shared/stream-processors/agent/contract";
 import { CloudflareAiProcessorContract } from "@iterate-com/shared/stream-processors/cloudflare-ai/contract";
+import { buildProcessorRegisteredEvent } from "@iterate-com/shared/stream-processors/core/contract";
 import { OpenAiWsProcessorContract } from "@iterate-com/shared/stream-processors/openai-ws/contract";
 import type { AgentLlmProvider } from "~/domains/agents/agent-presets.ts";
 
@@ -36,6 +37,12 @@ export function agentProcessorSubscriptionConfiguredEvents(input: {
       processorSlug,
       projectId: input.projectId,
     }),
+  );
+}
+
+export function defaultAgentProcessorRegisteredEvents(provider: AgentLlmProvider): EventInput[] {
+  return defaultAgentProcessorContracts(provider).map((contract) =>
+    toEventInput(buildProcessorRegisteredEvent({ contract })),
   );
 }
 
@@ -77,4 +84,22 @@ export function agentProcessorRunnerName(input: {
     processorSlug: input.processorSlug,
     projectId: input.projectId,
   })}`;
+}
+
+type SharedProcessorContract = Parameters<typeof buildProcessorRegisteredEvent>[0]["contract"];
+
+function defaultAgentProcessorContracts(provider: AgentLlmProvider): SharedProcessorContract[] {
+  return [
+    AgentChatProcessorContract,
+    AgentProcessorContract,
+    provider === "openai-ws" ? OpenAiWsProcessorContract : CloudflareAiProcessorContract,
+  ];
+}
+
+function toEventInput(input: ReturnType<typeof buildProcessorRegisteredEvent>): EventInput {
+  return {
+    type: input.type,
+    idempotencyKey: input.idempotencyKey,
+    payload: input.payload,
+  };
 }

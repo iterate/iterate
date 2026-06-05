@@ -39,6 +39,7 @@ import {
 import {
   agentProcessorSubscriptionConfiguredEvents,
   defaultAgentProcessorSlugs,
+  defaultAgentProcessorRegisteredEvents,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
 import { agentPathFromInput } from "~/lib/agent-links.ts";
 import { streamPathToSplat } from "~/lib/stream-links.ts";
@@ -395,6 +396,7 @@ function buildPreviewEvents(input: {
           processorSlugs: defaultAgentProcessorSlugs(input.provider),
           projectId: input.projectId,
         }),
+        ...defaultAgentProcessorRegisteredEvents(input.provider),
         ...customEvents,
         ...codemodeProviderRegistrationEvents(dedupeToolProviders(providers)),
       ],
