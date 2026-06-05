@@ -56,6 +56,7 @@ import {
 import {
   AGENT_HOST_PROCESSOR_SLUG,
   createOpenAiResponsesWebSocketClient,
+  ensureAgentRunnerForOwnStream,
   ensureChildAgentRunner,
   handleAgentOutputAddedForCodemode,
   handleCodemodeScriptExecutionCompletedForAgent,
@@ -397,6 +398,18 @@ function createAgentHostProcessor(): Processor<any, AgentHostProcessorDeps> {
   return implementProcessor(AgentHostProcessorContract as any, (deps: AgentHostProcessorDeps) => ({
     afterAppend(args) {
       const event = toLegacyEvent(args.event as StreamEvent, deps.streamPath);
+      // Wake this stream's agent WITHOUT blocking the host's checkpoint. The agent's
+      // onInstanceWake waits for every processor on the stream (including this agent-host) to
+      // catch up; awaiting it inside blockProcessorUntil would deadlock the host against itself.
+      // keepAlive runs it in the background so the host advances and the catch-up can complete.
+      args.keepAlive(
+        ensureAgentRunnerForOwnStream({
+          agentNamespace: deps.env.AGENT,
+          event,
+          projectId: deps.projectId,
+          streamPath: deps.streamPath,
+        }),
+      );
       args.blockProcessorUntil(async () => {
         await ensureChildAgentRunner({
           agentNamespace: deps.env.AGENT,

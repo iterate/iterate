@@ -20,7 +20,6 @@ import {
 } from "@iterate-com/shared/stream-processors/openai-ws/implementation";
 import { JsonataReactorProcessorContract } from "@iterate-com/shared/stream-processors/jsonata-reactor/contract";
 import type { ProcessorStreamApi } from "@iterate-com/shared/stream-processors";
-import { STREAM_CHILD_STREAM_CREATED_TYPE } from "@iterate-com/shared/streams/core-event-types";
 import type { Event, EventInput, StreamCursor } from "@iterate-com/shared/streams/types";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import {
@@ -75,6 +74,12 @@ export {
 } from "~/domains/agents/agent-stream-subscriptions.ts";
 
 export const AGENTS_STREAM_PATH = StreamPath.parse("/agents");
+
+// Core lifecycle event types emitted by the @iterate-com/streams runtime. These use the
+// `events.iterate.com/stream/` prefix (NOT the legacy `@iterate-com/shared/streams` `/core/`
+// prefix, which never matches new-runtime events).
+const STREAM_CREATED_TYPE = "events.iterate.com/stream/created";
+const STREAM_CHILD_STREAM_CREATED_TYPE = "events.iterate.com/stream/child-stream-created";
 
 export type AgentDurableObjectStructuredName = {
   agentPath: StreamPath;
@@ -659,6 +664,33 @@ export async function ensureChildAgentRunner(args: {
 
   const name = getAgentDurableObjectName({
     agentPath: childPath.data,
+    projectId: args.projectId,
+  });
+  const stub = args.agentNamespace.getByName(name);
+  await stub.initialize({ name });
+}
+
+// Ensures the AgentDurableObject for the stream the host processor is running on is initialized.
+//
+// Agent streams created by routing (e.g. Slack-routed `/agents/slack/<channel>/<ts>` streams) are
+// bootstrapped with only the `slack-agent` and `agent-host` subscriptions. Unlike the UI new-agent
+// flow, nothing registers the LLM processors (`agent-chat`/`agent`/the provider processor) or seeds
+// the agent setup events. Waking the AgentDurableObject here runs its `onInstanceWake` hook, which
+// registers those processors and setup events — restoring the behaviour the old runtime got from
+// subscribing a callable to `AgentDurableObject.afterAppend` on the routed stream.
+export async function ensureAgentRunnerForOwnStream(args: {
+  agentNamespace: DurableObjectNamespace<AgentDurableObject> | undefined;
+  event: Event;
+  projectId: string;
+  streamPath: StreamPath;
+}) {
+  if (args.agentNamespace === undefined) return;
+  if (args.event.type !== STREAM_CREATED_TYPE) return;
+  // The `/agents` root DO is created explicitly by the project lifecycle; it is not an agent.
+  if (args.streamPath === AGENTS_STREAM_PATH) return;
+
+  const name = getAgentDurableObjectName({
+    agentPath: args.streamPath,
     projectId: args.projectId,
   });
   const stub = args.agentNamespace.getByName(name);

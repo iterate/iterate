@@ -12,6 +12,10 @@ import {
   type StreamDurableObject,
 } from "~/domains/streams/new-stream-runtime.ts";
 import { type AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
+import {
+  AGENT_HOST_PROCESSOR_SLUG,
+  agentProcessorSubscriptionConfiguredEvent,
+} from "~/domains/agents/agent-stream-subscriptions.ts";
 import { SLACK_INTEGRATION_STREAM_PATH } from "~/domains/secrets/integration-streams.ts";
 import { type SlackAgentDurableObject } from "~/domains/slack/durable-objects/slack-agent-durable-object.ts";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
@@ -158,18 +162,15 @@ export function routedStreamBootstrapEvents(input: {
         },
       },
     },
-    {
-      type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      idempotencyKey: `agent-subscription:${input.projectId}:${input.streamPath}`,
-      payload: {
-        subscriptionKey: `agent:${input.projectId}:${input.streamPath}`,
-        subscriber: {
-          type: "built-in",
-          transport: "capnweb-websocket",
-          processorSlug: "agent-host",
-        },
-      },
-    },
+    // Subscribe the agent host using the same subscription key the AgentDurableObject uses, so the
+    // host this bootstrap starts and the one AgentDurableObject.onInstanceWake re-declares dedupe to
+    // a single runner. The host wakes the AgentDurableObject for this stream (see
+    // `ensureAgentRunnerForOwnStream`), which registers the LLM processors and agent setup events.
+    agentProcessorSubscriptionConfiguredEvent({
+      agentPath: resolveStreamPath(input.streamPath),
+      processorSlug: AGENT_HOST_PROCESSOR_SLUG,
+      projectId: input.projectId,
+    }),
   ];
 }
 
