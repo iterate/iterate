@@ -1,6 +1,7 @@
 import { createD1Client } from "sqlfu";
 import { z } from "zod";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
+import { createRpcTargetClass } from "@iterate-com/shared/capabilities";
 import { newWorkersRpcResponse } from "capnweb";
 import { acceptCaptunTunnel, type Fetcher } from "captun";
 import type { FetchCallable } from "@iterate-com/shared/callable/types.ts";
@@ -20,6 +21,7 @@ import { authenticateAdminApiSecret } from "~/auth/middleware.ts";
 import {
   createCapnwebAppContext,
   createIterateContext,
+  createProjectsCapability,
   type IterateContext,
 } from "~/capnweb/iterate-context-capability.ts";
 import {
@@ -84,6 +86,25 @@ export type ProjectSummary = {
   hosts: string[];
 };
 
+export type ProjectCapabilityApi = Pick<
+  ProjectDurableObject,
+  | "afterAppend"
+  | "callConfigWorkerFunction"
+  | "checkAccess"
+  | "createProject"
+  | "describe"
+  | "egressFetch"
+  | "fetch"
+  | "getConfigWorker"
+  | "getIterateContext"
+  | "getProjectLifecycleRunnerState"
+  | "getSummary"
+  | "ingressFetch"
+  | "ingressUrl"
+> & {
+  getCapability(props?: { scopes?: unknown }): ProjectCapabilityApi;
+};
+
 export type CreateProjectInput = {
   projectId: string;
   slug: string;
@@ -124,8 +145,8 @@ type ProjectIngressRouteRow = {
   updated_at_ms: number;
 };
 
-type ProjectDynamicWorkerEntrypoint = {
-  [key: string]: unknown;
+export type ProjectDynamicWorkerEntrypoint = {
+  [key: string]: any;
   fetch(request: Request): Response | Promise<Response>;
   afterAppend?(input: { event: Event }): unknown | Promise<unknown>;
 };
@@ -369,18 +390,33 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     return this.requireSummary();
   }
 
+  async describe(): Promise<ProjectSummary & { ingressUrl: string }> {
+    await this.ensureStarted();
+    return {
+      ...this.requireSummary(),
+      ingressUrl: await this.ingressUrl(),
+    };
+  }
+
+  getCapability(_props: { scopes?: unknown } = {}): ProjectCapability {
+    return new ProjectCapability(this);
+  }
+
   async getIterateContext(): Promise<IterateContext> {
     await this.ensureStarted();
     const summary = this.requireSummary();
+    const context = createCapnwebAppContext({
+      ctx: this.ctx,
+      env: this.env as unknown as Env,
+      method: "CAPNWEB",
+      path: "capnweb://project-durable-object",
+    });
     return createIterateContext({
-      context: createCapnwebAppContext({
-        ctx: this.ctx,
-        env: this.env as unknown as Env,
-        method: "CAPNWEB",
-        path: "capnweb://project-durable-object",
-      }),
+      context,
       project: this,
       projectId: summary.id,
+      projects: createProjectsCapability({ context }),
+      props: { scopes: { projects: [summary.id] } },
     });
   }
 
@@ -526,14 +562,14 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     return await Reflect.apply(fn, entrypoint, input.args ?? []);
   }
 
-  async fetch(request: Request): Promise<Response> {
-    const capnwebResponse = await this.handleProjectCapnwebFetch(request);
-    if (capnwebResponse) return capnwebResponse;
+  async getConfigWorker(): Promise<ProjectDynamicWorkerEntrypoint> {
+    await this.ensureStarted();
+    const summary = this.requireSummary();
+    return await this.getFreshProjectDynamicWorkerEntrypoint(summary);
+  }
 
-    if (new URL(request.url).pathname === "/__iterate/intercept-project-egress") {
-      return this.acceptProjectEgressInterceptTunnel(request);
-    }
-    return await this.egressFetch(request);
+  async fetch(request: Request): Promise<Response> {
+    return await this.ingressFetch(request);
   }
 
   private async handleProjectCapnwebFetch(request: Request): Promise<Response | null> {
@@ -682,7 +718,7 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
         () =>
           projectDynamicWorkerCodeWithStreams({
             iterate: readLoopbackExports(this.ctx).IterateContextEntrypoint({
-              props: { projectId: input.projectId },
+              props: { scopes: { projects: [input.projectId] } },
             }),
             streams: readLoopbackExports(this.ctx).StreamsCapability({
               props: { projectId: input.projectId },
@@ -1131,6 +1167,11 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
   }
 }
 
+export class ProjectCapability extends createRpcTargetClass<
+  ProjectCapabilityApi,
+  ProjectDurableObject
+>(ProjectDurableObject) {}
+
 function projectLifecycleSubscriptionKey(projectId: string) {
   return `project-lifecycle:${projectId}`;
 }
@@ -1385,7 +1426,13 @@ function projectRuntimeEnv(env: ProjectEnv): ProjectRuntimeEnv {
 
 function readLoopbackExports(ctx: DurableObjectState) {
   return ctx.exports as unknown as Cloudflare.Exports & {
-    IterateContextEntrypoint(input: { props: { projectId: string } }): Fetcher;
+    IterateContextEntrypoint(input: {
+      props: {
+        scopes: {
+          projects: string[];
+        };
+      };
+    }): Fetcher;
     StreamsCapability(input: { props: StreamsCapabilityProps }): Fetcher;
   };
 }

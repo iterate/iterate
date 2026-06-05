@@ -34,7 +34,7 @@ import { projectReposRouter } from "~/orpc/routers/repos.ts";
 import { projectIntegrationsRouter } from "~/orpc/routers/integrations.ts";
 import { projectSecretsRouter } from "~/orpc/routers/secrets.ts";
 import { projectStreamsRouter } from "~/orpc/routers/streams.ts";
-import { ProjectAdminCapability } from "~/capnweb/admin-capability.ts";
+import { ProjectsCapability } from "~/capnweb/admin-capability.ts";
 
 type ProjectRow = {
   id: string;
@@ -122,19 +122,19 @@ export const projectsRouter = {
     create: os.projects.create
       .use(activeOrganizationMiddleware)
       .handler(async ({ context, input }) => {
-        return await new ProjectAdminCapability({
+        return await new ProjectsCapability({
           activeOrganization: context.activeOrganization,
           context,
         }).create(input);
       }),
     list: os.projects.list.use(activeOrganizationMiddleware).handler(async ({ context, input }) => {
-      return await new ProjectAdminCapability({
+      return await new ProjectsCapability({
         activeOrganization: context.activeOrganization,
         context,
       }).list(input);
     }),
     find: os.projects.find.use(activeOrganizationMiddleware).handler(async ({ context, input }) => {
-      return await new ProjectAdminCapability({
+      return await new ProjectsCapability({
         activeOrganization: context.activeOrganization,
         context,
       }).find(input);
@@ -142,7 +142,7 @@ export const projectsRouter = {
     findBySlug: os.projects.findBySlug
       .use(activeOrganizationMiddleware)
       .handler(async ({ context, input }) => {
-        return await new ProjectAdminCapability({
+        return await new ProjectsCapability({
           activeOrganization: context.activeOrganization,
           context,
         }).findBySlug(input);
@@ -246,7 +246,7 @@ export const projectsRouter = {
     remove: os.projects.remove
       .use(activeOrganizationMiddleware)
       .handler(async ({ context, input }) => {
-        return await new ProjectAdminCapability({
+        return await new ProjectsCapability({
           activeOrganization: context.activeOrganization,
           context,
         }).remove(input);

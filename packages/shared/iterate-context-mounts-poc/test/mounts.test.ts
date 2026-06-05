@@ -116,7 +116,7 @@ const demoProps = (): IterateContextProps => ({
 
 async function runHost(input: {
   props?: IterateContextProps;
-  action: "callMounted" | "getMounted" | "localProxy" | "prototypeMethod";
+  action: "callMounted" | "getMounted" | "localProxy" | "prototypeMethod" | "catchallProbe";
   path?: string[];
   args?: unknown[];
   scenario?: string;
@@ -278,6 +278,40 @@ describe("iterate context mounts poc", () => {
     expect(result.value).toMatchObject({
       fromMount: { ok: true },
       eventCount: 1,
+    });
+  });
+
+  it("probes whether normal Workers RPC exposes an infinite catchall property chain", async () => {
+    const result = await runHost({
+      action: "catchallProbe",
+      methodArgs: [{ channel: "C123", text: "hi" }],
+    });
+
+    expect(result.value).toEqual({
+      rpcTargetConstructorProxy: {
+        ok: false,
+        error: expect.stringContaining("Couldn't create a stub for the Proxy"),
+        name: "DataCloneError",
+        stack: expect.any(String),
+      },
+      rpcTargetGetterReturnsProxy: {
+        ok: false,
+        error: expect.stringContaining('The RPC receiver does not implement the method "chat"'),
+        name: "TypeError",
+        stack: expect.any(String),
+      },
+      workerEntrypointConstructorProxyDirect: {
+        ok: false,
+        error: expect.stringContaining('The RPC receiver does not implement the method "chat"'),
+        name: "TypeError",
+        stack: expect.any(String),
+      },
+      workerEntrypointConstructorProxy: {
+        ok: false,
+        error: expect.stringContaining("ServiceStub serialization requires"),
+        name: "DataCloneError",
+        stack: expect.any(String),
+      },
     });
   });
 });

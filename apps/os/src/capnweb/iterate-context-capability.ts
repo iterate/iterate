@@ -2,12 +2,12 @@ import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { createRequestLogger } from "@iterate-com/shared/request-logging";
 import { createD1Client } from "sqlfu";
+import { ProjectsCapability } from "./projects-capability.ts";
 import manifest, { AppConfig } from "~/app.ts";
 import type { AppContext } from "~/context.ts";
-import { getProjectById } from "~/db/queries/.generated/index.ts";
 import {
   getProjectDurableObjectName,
-  type ProjectDurableObject,
+  type ProjectCapabilityApi,
 } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import {
   getReposCapability,
@@ -21,23 +21,98 @@ import type { WorkspaceCapability } from "~/domains/workspaces/entrypoints/works
 
 type RuntimeContext = Pick<ExecutionContext, "exports" | "waitUntil">;
 
-export type ProjectDurableObjectContextClient = Pick<
-  ProjectDurableObject,
-  "callConfigWorkerFunction" | "getSummary" | "ingressUrl"
->;
+export type ProjectDurableObjectContextClient = {
+  getCapability(props?: { scopes?: unknown }): ProjectCapabilityApi;
+};
+
+export type ProjectScopes = {
+  projects: "all" | string[];
+};
+
+export type IterateContextProps = {
+  mounts?: Mount[];
+  scopes: ProjectScopes;
+};
+
+export type Mount = {
+  path: string[];
+  invoke?: "target" | "method" | "catchall";
+  target: MountTarget;
+};
+
+type MountDefinition =
+  | Mount
+  | {
+      invoke?: "target" | "method" | "catchall";
+      path: string[];
+      target: MountTarget;
+    };
+
+export type MountTarget =
+  | {
+      call?: TargetCall[];
+      entrypoint?: string;
+      loader?: "load" | { get: string };
+      script: string;
+      type: "dynamic-worker";
+    }
+  | {
+      call?: TargetCall[];
+      type: "ctx";
+    };
+
+export type TargetCall =
+  | string
+  | {
+      args?: unknown[];
+      method: string;
+    };
+
+export type ProjectsCapabilityClient = {
+  create(input: { id?: string; slug: string }): Promise<{
+    customHostname: string | null;
+    createdAt: string;
+    id: string;
+    ingressUrl: string;
+    slug: string;
+    updatedAt: string;
+  }>;
+  find(input: { id: string }): Promise<{
+    customHostname: string | null;
+    createdAt: string;
+    id: string;
+    ingressUrl: string;
+    slug: string;
+    updatedAt: string;
+  }>;
+  findBySlug(input: { slug: string }): Promise<{
+    customHostname: string | null;
+    createdAt: string;
+    id: string;
+    ingressUrl: string;
+    slug: string;
+    updatedAt: string;
+  }>;
+  get(projectId: string): IterateContext;
+  list(input?: { limit?: number; offset?: number }): Promise<{
+    projects: Array<{
+      customHostname: string | null;
+      createdAt: string;
+      id: string;
+      slug: string;
+      updatedAt: string;
+    }>;
+    total: number;
+  }>;
+  remove(input: { id: string }): Promise<{ deleted: boolean; id: string; ok: true }>;
+};
 
 export type IterateContextRuntime = {
   context: AppContext;
-  project: ProjectDurableObjectContextClient;
-  projectId: string;
-};
-
-type ProjectRow = {
-  id: string;
-  slug: string;
-  custom_hostname?: string | null;
-  created_at: string;
-  updated_at: string;
+  project?: ProjectDurableObjectContextClient;
+  projectId?: string;
+  projects?: ProjectsCapabilityClient;
+  props: IterateContextProps;
 };
 
 type ReposClient = Pick<
@@ -53,20 +128,47 @@ type WorkspaceClient = Pick<
   "gitAdd" | "gitClone" | "gitCommit" | "gitPush" | "gitStatus" | "readFile" | "writeFile"
 >;
 
-export class IterateContextEntrypoint extends WorkerEntrypoint<Env, { projectId: string }> {
-  getContext() {
-    const workerCtx = Reflect.get(this, "ctx") as unknown as ExecutionContext<{
-      projectId: string;
-    }>;
-    return this.env.PROJECT.getByName(
-      getProjectDurableObjectName(workerCtx.props.projectId),
-    ).getIterateContext();
+export class IterateContextEntrypoint extends WorkerEntrypoint<Env, IterateContextProps> {
+  get context() {
+    const workerCtx = Reflect.get(this, "ctx") as unknown as ExecutionContext<IterateContextProps>;
+    const appContext = createCapnwebAppContext({
+      ctx: workerCtx,
+      env: this.env,
+      method: "CAPNWEB",
+      path: "capnweb://iterate-context-entrypoint",
+    });
+    const projectId = singleProjectIdFromScopes(workerCtx.props.scopes);
+    const project = projectId
+      ? (this.env.PROJECT.getByName(
+          getProjectDurableObjectName(projectId),
+        ) as unknown as ProjectDurableObjectContextClient)
+      : undefined;
+    return createIterateContext({
+      context: appContext,
+      project,
+      projectId: projectId ?? undefined,
+      projects: createProjectsCapability({
+        context: appContext,
+      }),
+      props: workerCtx.props,
+    });
+  }
+
+  async callMounted(path: string[], args: unknown[] = []) {
+    return await this.context.callMounted(path, args);
+  }
+
+  async callContext(call: TargetCall[]) {
+    return await this.context.callContext(call);
   }
 }
 
 export class IterateContext extends RpcTarget {
   readonly #runtime: IterateContextRuntime;
-  #project?: ProjectInfoCapability;
+  readonly #dynamicWorkerTargets = new Map<string, unknown>();
+  readonly #mounts: MountDefinition[];
+  #projects?: ProjectsCapabilityClient;
+  #projectCapability?: ProjectCapabilityApi;
   #repos?: ProjectReposCapability;
   #streams?: ProjectStreamsCapability;
   #workspace?: ProjectWorkspaceCapability;
@@ -75,31 +177,329 @@ export class IterateContext extends RpcTarget {
   constructor(runtime: IterateContextRuntime) {
     super();
     this.#runtime = runtime;
+    this.#mounts = [...mountsFromScopes(runtime), ...(runtime.props.mounts ?? [])];
+    installMountedRootMembers(this, this.#mounts);
   }
 
-  get project() {
-    return (this.#project ??= new ProjectInfoCapability(this.#runtime));
+  get projects(): ProjectsCapabilityClient {
+    return this.getMounted(["projects"]) as ProjectsCapabilityClient;
   }
 
-  get repos() {
+  get project(): IterateContext {
+    return this.getMounted(["project"]) as IterateContext;
+  }
+
+  get repos(): ProjectReposCapability {
+    return this.getMounted(["repos"]) as ProjectReposCapability;
+  }
+
+  get streams(): ProjectStreamsCapability {
+    return this.getMounted(["streams"]) as ProjectStreamsCapability;
+  }
+
+  get worker(): ProjectWorkerCapability {
+    return this.getMounted(["worker"]) as ProjectWorkerCapability;
+  }
+
+  get workspace(): ProjectWorkspaceCapability {
+    return this.getMounted(["workspace"]) as ProjectWorkspaceCapability;
+  }
+
+  private get projectsTarget() {
+    if (!this.#runtime.projects) {
+      throw new Error("Projects capability is not available in this IterateContext.");
+    }
+    return (this.#projects ??= this.#runtime.projects);
+  }
+
+  private get projectTarget() {
+    this.requireSingleProjectId();
+    return this;
+  }
+
+  private get reposTarget() {
+    this.requireSingleProjectId();
     return (this.#repos ??= new ProjectReposCapability(this.#runtime));
   }
 
-  get streams() {
+  private get streamsTarget() {
+    this.requireSingleProjectId();
     return (this.#streams ??= new ProjectStreamsCapability(this.#runtime));
   }
 
-  get workspace() {
+  private get workspaceTarget() {
+    this.requireSingleProjectId();
     return (this.#workspace ??= new ProjectWorkspaceCapability(this.#runtime));
   }
 
-  get worker() {
-    return (this.#worker ??= createProjectWorkerCapability(this.#runtime));
+  private get workerTarget() {
+    this.requireSingleProjectId();
+    return (this.#worker ??= new ProjectWorkerCapability(this.projectCapability()));
+  }
+
+  async describe() {
+    return await this.projectCapability().describe();
+  }
+
+  async fetch(request: Request) {
+    return await this.projectCapability().fetch(request);
+  }
+
+  async getSummary() {
+    return await this.projectCapability().getSummary();
+  }
+
+  async ingressFetch(request: Request) {
+    return await this.projectCapability().ingressFetch(request);
+  }
+
+  async egressFetch(request: Request) {
+    return await this.projectCapability().egressFetch(request);
+  }
+
+  async ingressUrl() {
+    return await this.projectCapability().ingressUrl();
+  }
+
+  async callMounted(path: string[], args: unknown[] = []) {
+    const match = resolveMount(this.#mounts, path);
+    if (!match) {
+      throw new Error(`No mount registered for ${path.join(".")}`);
+    }
+
+    if (match.mount.target.type === "dynamic-worker") {
+      try {
+        return await this.invokeDynamicWorkerMount({
+          args,
+          invoke: match.mount.invoke ?? "target",
+          remainder: match.remainder,
+          target: match.mount.target,
+        });
+      } catch (error) {
+        const cause = error instanceof Error ? error.message : String(error);
+        throw new Error(`Dynamic worker mount ${path.join(".")} failed: ${cause}`, {
+          cause: error,
+        });
+      }
+    }
+
+    const resolved = {
+      ...match,
+      target: this.resolveMountTarget(match.mount.target),
+    };
+    if (resolved.mount.invoke === "catchall") {
+      if (typeof resolved.target !== "function") {
+        throw new Error(
+          `Catchall mount ${resolved.mount.path.join(".")} did not resolve to a function.`,
+        );
+      }
+      return await resolved.target({ path: resolved.remainder, args });
+    }
+
+    if (resolved.remainder.length > 0) {
+      const method = resolveTargetCall(resolved.target, resolved.remainder);
+      if (typeof method !== "function") {
+        throw new Error(`Mounted path ${path.join(".")} did not resolve to a function.`);
+      }
+      return await method(...args);
+    }
+
+    if (typeof resolved.target !== "function") {
+      throw new Error(`Mounted path ${path.join(".")} did not resolve to a function.`);
+    }
+    return await resolved.target(...args);
+  }
+
+  async callContext(call: TargetCall[]) {
+    return await invokeTargetCall(this, call, []);
+  }
+
+  getMounted(path: string[]) {
+    const resolved = this.resolveMountedPath(path);
+    if (resolved.mount.invoke === "catchall") {
+      return new CatchallMountCapability(this, resolved.mount.path);
+    }
+    if (resolved.remainder.length === 0) return resolved.target;
+    return resolveTargetCall(resolved.target, resolved.remainder);
+  }
+
+  private requireProject() {
+    if (!this.#runtime.project) {
+      throw new Error("Project capability requires a single-project IterateContext.");
+    }
+    return this.#runtime.project;
+  }
+
+  private projectCapability() {
+    const projectId = this.requireSingleProjectId();
+    return (this.#projectCapability ??= this.requireProject().getCapability({
+      scopes: { projectId },
+    }));
+  }
+
+  private requireSingleProjectId() {
+    const scopedProjectId = singleProjectIdFromScopes(this.#runtime.props.scopes);
+    const projectId = this.#runtime.projectId ?? scopedProjectId;
+    if (!projectId) {
+      throw new Error("This IterateContext is not scoped to exactly one project.");
+    }
+    return projectId;
+  }
+
+  private resolveMountedPath(path: string[]) {
+    const match = resolveMount(this.#mounts, path);
+    if (!match) {
+      throw new Error(`No mount registered for ${path.join(".")}`);
+    }
+    return {
+      ...match,
+      target: this.resolveMountTarget(match.mount.target),
+    };
+  }
+
+  private resolveMountTarget(target: MountDefinition["target"]): unknown {
+    switch (target.type) {
+      case "dynamic-worker":
+        return new DynamicWorkerMountCapability(this, target);
+      case "ctx":
+        return this.resolveContextCall(target.call ?? []);
+    }
+  }
+
+  private resolveContextCall(call: readonly TargetCall[]): unknown {
+    let current: unknown = this;
+    for (const step of call) {
+      if (current instanceof IterateContext && typeof step === "string") {
+        current = current.contextMember(step);
+        continue;
+      }
+
+      if (current instanceof IterateContext && typeof step !== "string") {
+        const member = current.contextMember(step.method);
+        if (typeof member === "function") {
+          current = member.apply(current, step.args ?? []);
+          continue;
+        }
+      }
+
+      current = resolveTargetCall(current, [step]);
+    }
+    return current;
+  }
+
+  private contextMember(name: string): unknown {
+    switch (name) {
+      case "project":
+        return this.projectTarget;
+      case "projects":
+        return this.projectsTarget;
+      case "repos":
+        return this.reposTarget;
+      case "streams":
+        return this.streamsTarget;
+      case "worker":
+        return this.workerTarget;
+      case "workspace":
+        return this.workspaceTarget;
+      default:
+        return (this as Record<string, unknown>)[name];
+    }
+  }
+
+  resolveDynamicWorkerTarget(target: Extract<MountTarget, { type: "dynamic-worker" }>) {
+    const cacheKey = JSON.stringify({
+      entrypoint: target.entrypoint,
+      loader: target.loader,
+      script: target.script,
+    });
+    const cached = this.#dynamicWorkerTargets.get(cacheKey);
+    if (cached) return cached;
+
+    const loader = this.#runtime.context.loader;
+    if (!loader) throw new Error("LOADER binding is not available.");
+
+    const iterateEntrypoint = this.#runtime.context.workerExports?.IterateContextEntrypoint as
+      | ((options: { props: IterateContextProps }) => unknown)
+      | undefined;
+    if (!iterateEntrypoint) {
+      throw new Error("IterateContextEntrypoint export is not available.");
+    }
+
+    const workerCode = {
+      compatibilityDate: "2026-04-27",
+      env: {
+        ITERATE: iterateEntrypoint({ props: { scopes: this.#runtime.props.scopes } }),
+      },
+      mainModule: "mount-worker.js",
+      modules: {
+        "mount-worker.js": target.script,
+      },
+    };
+    const worker =
+      target.loader && typeof target.loader === "object"
+        ? loader.get(target.loader.get, () => workerCode)
+        : loader.load(workerCode);
+    const entrypoint =
+      target.entrypoint != null ? worker.getEntrypoint(target.entrypoint) : worker.getEntrypoint();
+    this.#dynamicWorkerTargets.set(cacheKey, entrypoint);
+    return entrypoint;
+  }
+
+  resolveDynamicWorkerTargetCall(
+    target: Extract<MountTarget, { type: "dynamic-worker" }>,
+    call: readonly TargetCall[],
+  ) {
+    return resolveTargetCall(this.resolveDynamicWorkerTarget(target), call);
+  }
+
+  private async invokeDynamicWorkerMount(input: {
+    args: unknown[];
+    invoke: "target" | "method" | "catchall";
+    remainder: string[];
+    target: Extract<MountTarget, { type: "dynamic-worker" }>;
+  }) {
+    if (input.invoke === "catchall") {
+      return await invokeTargetCall(
+        this.resolveDynamicWorkerTarget(input.target),
+        input.target.call ?? [],
+        [{ path: input.remainder, args: input.args }],
+      );
+    }
+
+    const call = [...(input.target.call ?? []), ...input.remainder];
+    return await invokeTargetCall(this.resolveDynamicWorkerTarget(input.target), call, input.args);
+  }
+
+  hasDynamicWorkerCatchallTarget(target: Extract<MountTarget, { type: "dynamic-worker" }>) {
+    return this.#mounts.some((mount) => mount.target === target && mount.invoke === "catchall");
   }
 }
 
 export function createIterateContext(input: IterateContextRuntime) {
   return new IterateContext(input);
+}
+
+export function createProjectsCapability(input: { context: AppContext }) {
+  return new ProjectsCapability({
+    activeOrganization: {
+      isAdminApi: true,
+      orgId: "admin-api",
+      orgPermissions: [],
+      orgRole: "admin",
+      orgSlug: "admin-api",
+      sessionId: "admin-api",
+      userId: "admin-api",
+    },
+    context: input.context,
+    createProjectContext: ({ project, projectId, projects }) =>
+      createIterateContext({
+        context: input.context,
+        project,
+        projectId,
+        projects,
+        props: { scopes: { projects: [projectId] } },
+      }),
+  });
 }
 
 export function createCapnwebAppContext(input: {
@@ -139,28 +539,6 @@ export function createCapnwebAppContext(input: {
   };
 }
 
-class ProjectInfoCapability extends RpcTarget {
-  readonly #runtime: IterateContextRuntime;
-
-  constructor(runtime: IterateContextRuntime) {
-    super();
-    this.#runtime = runtime;
-  }
-
-  get id() {
-    return this.#runtime.projectId;
-  }
-
-  async describe() {
-    const row = await getProjectById(this.#runtime.context.db, { id: this.#runtime.projectId });
-    if (!row) throw new Error(`Project ${this.#runtime.projectId} not found`);
-    return {
-      ...toProject(row),
-      ingressUrl: await this.#runtime.project.ingressUrl(),
-    };
-  }
-}
-
 class ProjectReposCapability extends RpcTarget {
   readonly #runtime: IterateContextRuntime;
 
@@ -194,9 +572,10 @@ class ProjectReposCapability extends RpcTarget {
   }
 
   #repos(): ReposClient {
+    const projectId = requireRuntimeProjectId(this.#runtime);
     return getReposCapability({
       exports: this.#runtime.context.workerExports,
-      props: { projectId: this.#runtime.projectId },
+      props: { projectId },
     });
   }
 }
@@ -238,11 +617,12 @@ class ProjectStreamsCapability extends RpcTarget {
   }
 
   #streams(): StreamsClient {
+    const projectId = requireRuntimeProjectId(this.#runtime);
     return getStreamsCapability({
       exports: this.#runtime.context.workerExports,
       props: {
         appendPolicy: { mode: "any" },
-        projectId: this.#runtime.projectId,
+        projectId,
       },
     });
   }
@@ -259,9 +639,10 @@ class ProjectWorkspaceCapability extends RpcTarget {
       props: { projectId: string; workspaceId: string };
     }) => WorkspaceClient;
     if (!workspaceCapability) throw new Error("WorkspaceCapability export is not available.");
+    const projectId = requireRuntimeProjectId(runtime);
     this.#workspace = workspaceCapability({
       props: {
-        projectId: runtime.projectId,
+        projectId,
         workspaceId: "capnweb",
       },
     });
@@ -309,52 +690,309 @@ class ProjectWorkspaceGitCapability extends RpcTarget {
   }
 }
 
-export type ProjectWorkerMethods = ProjectWorkerCapability &
-  Record<string, (...args: unknown[]) => Promise<unknown>>;
+class CatchallMountCapability extends RpcTarget {
+  constructor(
+    private readonly context: IterateContext,
+    private readonly mountPath: string[],
+  ) {
+    super();
+  }
+
+  async call(input: { args?: unknown[]; path: string[] }) {
+    return await this.context.callMounted([...this.mountPath, ...input.path], input.args ?? []);
+  }
+}
+
+class MountedPathCapability extends RpcTarget {
+  constructor(
+    private readonly context: IterateContext,
+    private readonly path: string[],
+  ) {
+    super();
+    return createCallablePathProxy(this, [], async (remainder, args) => {
+      return await this.context.callMounted([...this.path, ...remainder], args);
+    }) as MountedPathCapability;
+  }
+}
 
 class ProjectWorkerCapability extends RpcTarget {
-  readonly #runtime: IterateContextRuntime;
-
-  constructor(runtime: IterateContextRuntime) {
+  constructor(private readonly project: ProjectCapabilityApi) {
     super();
-    this.#runtime = runtime;
-  }
-
-  async call(input: { args?: unknown[]; functionName: string }): Promise<unknown> {
-    return await this.#runtime.project.callConfigWorkerFunction(input);
-  }
-
-  async fetchJson(input: { url: string }): Promise<unknown> {
-    const response = (await this.#runtime.project.callConfigWorkerFunction({
-      args: [new Request(input.url)],
-      functionName: "fetch",
-    })) as Response;
-    if (!response.ok) throw new Error(await response.text());
-    return await response.json();
-  }
-}
-
-function createProjectWorkerCapability(runtime: IterateContextRuntime): ProjectWorkerMethods {
-  const target = new ProjectWorkerCapability(runtime);
-  return new Proxy(target, {
-    get(receiver, prop) {
-      if (typeof prop !== "string") return Reflect.get(receiver, prop, receiver);
-      if (prop === "then") return undefined;
-      if (prop in receiver) {
-        const value = Reflect.get(receiver, prop, receiver);
-        return typeof value === "function" ? value.bind(receiver) : value;
+    return createCallablePathProxy(this, [], async (path, args) => {
+      if (path.length !== 1) {
+        throw new Error(`Project worker path ${path.join(".")} is not supported yet.`);
       }
-      return async (...args: unknown[]) => await receiver.call({ args, functionName: prop });
-    },
-  }) as ProjectWorkerMethods;
+      return await this.project.callConfigWorkerFunction({
+        args,
+        functionName: path[0]!,
+      });
+    }) as ProjectWorkerCapability;
+  }
+
+  async fetch(request: Request) {
+    return await this.project.fetch(request);
+  }
 }
 
-function toProject(row: ProjectRow) {
+class DynamicWorkerMountCapability extends RpcTarget {
+  constructor(
+    private readonly context: IterateContext,
+    private readonly target: Extract<MountTarget, { type: "dynamic-worker" }>,
+  ) {
+    super();
+    // Dynamic-worker entrypoints cannot be transferred to another Worker. This
+    // parent-owned RpcTarget keeps the entrypoint private and forwards wildcard
+    // calls inside the parent isolate, preserving ergonomic code like
+    // `ctx.tools.echo()` and `ctx.sdk.chat.postMessage()`.
+    return createCallablePathProxy(this, [], async (path, args) => {
+      if (this.target.call && isCatchallTarget(this.context, this.target)) {
+        return await invokeTargetCall(
+          this.context.resolveDynamicWorkerTarget(this.target),
+          this.target.call,
+          [{ path, args }],
+        );
+      }
+
+      const call = [...(this.target.call ?? []), ...path];
+      return await invokeTargetCall(
+        this.context.resolveDynamicWorkerTarget(this.target),
+        call,
+        args,
+      );
+    }) as DynamicWorkerMountCapability;
+  }
+
+  async invoke(input: {
+    args: unknown[];
+    invoke: "target" | "method" | "catchall";
+    remainder: string[];
+  }) {
+    if (input.invoke === "catchall") {
+      return await invokeTargetCall(
+        this.context.resolveDynamicWorkerTarget(this.target),
+        this.target.call ?? [],
+        [{ path: input.remainder, args: input.args }],
+      );
+    }
+
+    const call = [...(this.target.call ?? []), ...input.remainder];
+    return await invokeTargetCall(
+      this.context.resolveDynamicWorkerTarget(this.target),
+      call,
+      input.args,
+    );
+  }
+}
+
+function isCatchallTarget(
+  context: IterateContext,
+  target: Extract<MountTarget, { type: "dynamic-worker" }>,
+) {
+  return context.hasDynamicWorkerCatchallTarget(target);
+}
+
+function createCallablePathProxy(
+  target: RpcTarget,
+  path: string[],
+  call: (path: string[], args: unknown[]) => unknown,
+): object {
+  return new Proxy(target, {
+    get(innerTarget, prop, receiver) {
+      if (typeof prop === "symbol" || prop in innerTarget) {
+        return Reflect.get(innerTarget, prop, receiver);
+      }
+      if (prop === "then") return undefined;
+      return createCallableFunctionProxy([...path, prop], call);
+    },
+  });
+}
+
+function createCallableFunctionProxy(
+  path: string[],
+  call: (path: string[], args: unknown[]) => unknown,
+): (...args: unknown[]) => unknown {
+  const fn = (...args: unknown[]) => call(path, args);
+  return new Proxy(fn, {
+    get(innerTarget, prop, receiver) {
+      if (typeof prop === "symbol" || prop in innerTarget) {
+        return Reflect.get(innerTarget, prop, receiver);
+      }
+      if (prop === "then") return undefined;
+      return createCallableFunctionProxy([...path, prop], call);
+    },
+  });
+}
+
+function mountsFromScopes(runtime: IterateContextRuntime): MountDefinition[] {
+  const mounts: MountDefinition[] = [
+    { path: ["projects"], target: { call: ["projects"], type: "ctx" } },
+  ];
+
+  const projectId = singleProjectIdFromScopes(runtime.props.scopes);
+  if (projectId) {
+    const projectTarget = {
+      call: ["projects", { method: "get", args: [projectId] }],
+      type: "ctx",
+    } satisfies MountTarget;
+
+    mounts.push(
+      { path: ["project"], target: projectTarget },
+      { path: ["repos"], target: { ...projectTarget, call: [...projectTarget.call, "repos"] } },
+      { path: ["streams"], target: { ...projectTarget, call: [...projectTarget.call, "streams"] } },
+      {
+        path: ["workspace"],
+        target: { ...projectTarget, call: [...projectTarget.call, "workspace"] },
+      },
+      { path: ["worker"], target: { ...projectTarget, call: [...projectTarget.call, "worker"] } },
+    );
+  }
+
+  return mounts;
+}
+
+function installMountedRootMembers(context: IterateContext, mounts: MountDefinition[]) {
+  const rootNames = [
+    ...new Set(
+      mounts
+        .filter((mount) => mount.invoke === "method" || mount.target.type !== "dynamic-worker")
+        .map((mount) => mount.path[0])
+        .filter((name) => name != null),
+    ),
+  ];
+  if (rootNames.length === 0) return;
+
+  const prototype = Object.getPrototypeOf(context) as object;
+
+  for (const rootName of rootNames) {
+    if (rootName in prototype) continue;
+    const rootMount = mounts.find((mount) => mount.path.length === 1 && mount.path[0] === rootName);
+    const invoke = rootMount?.invoke ?? "target";
+
+    if (invoke === "method") {
+      // Both Cap'n Web and Workers RPC expose prototype methods, not own
+      // instance properties. User-defined method mounts must therefore be
+      // installed on the actual class prototype so dynamic workers can call
+      // `ctx.someMethod(...)` exactly like Cap'n Web clients do.
+      Object.defineProperty(prototype, rootName, {
+        configurable: true,
+        value: async function mountedMethod(this: IterateContext, ...args: unknown[]) {
+          return await this.callMounted([rootName], args);
+        },
+        writable: false,
+      });
+      continue;
+    }
+
+    // Target and catchall mounts are prototype getters. The getter name is
+    // shared process-wide once installed, but the lookup resolves through this
+    // instance's mount table, so scopes and mounted targets remain per-context.
+    Object.defineProperty(prototype, rootName, {
+      configurable: true,
+      get(this: IterateContext) {
+        if (rootMount) return this.getMounted(rootMount.path);
+        return new MountedPathCapability(this, [rootName]);
+      },
+    });
+  }
+}
+
+function resolveMount(mounts: MountDefinition[], path: string[]) {
+  const candidates = mounts
+    .filter((mount) => isPathPrefix(mount.path, path))
+    .sort((left, right) => right.path.length - left.path.length);
+  const mount = candidates[0];
+  if (!mount) return null;
   return {
-    id: row.id,
-    slug: row.slug,
-    customHostname: row.custom_hostname ?? null,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    mount,
+    remainder: path.slice(mount.path.length),
   };
+}
+
+function isPathPrefix(prefix: string[], path: string[]) {
+  return prefix.every((segment, index) => path[index] === segment);
+}
+
+function resolveTargetCall(target: unknown, call: readonly TargetCall[]): unknown {
+  let current = target;
+  for (const step of call) {
+    if (current == null) {
+      throw new Error(`Cannot resolve target call through ${String(current)}.`);
+    }
+
+    if (typeof step === "string") {
+      const parent = current;
+      const value = (parent as Record<string, unknown>)[step];
+      current = typeof value === "function" ? value.bind(parent) : value;
+      continue;
+    }
+
+    const method = (current as Record<string, unknown>)[step.method];
+    if (typeof method !== "function") {
+      throw new Error(`Target method ${step.method} is not callable.`);
+    }
+    current = method.apply(current, step.args ?? []);
+  }
+  return current;
+}
+
+async function invokeTargetCall(
+  target: unknown,
+  call: readonly TargetCall[],
+  args: unknown[],
+): Promise<unknown> {
+  let current = target;
+  for (let index = 0; index < call.length; index++) {
+    if (current == null) {
+      throw new Error(`Cannot resolve target call through ${String(current)}.`);
+    }
+
+    const step = call[index]!;
+    const isLast = index === call.length - 1;
+    if (typeof step === "string") {
+      const value = (current as Record<string, unknown>)[step];
+      if (isLast) {
+        if (typeof value !== "function") {
+          throw new Error(`Target method ${step} is not callable.`);
+        }
+        return await value.apply(current, args);
+      }
+      current = value;
+      continue;
+    }
+
+    const method = (current as Record<string, unknown>)[step.method];
+    if (typeof method !== "function") {
+      throw new Error(`Target method ${step.method} is not callable.`);
+    }
+    const result = method.apply(current, step.args ?? []);
+    if (isLast) {
+      if (args.length > 0) {
+        if (typeof result !== "function") {
+          throw new Error(`Target method ${step.method} did not return a callable value.`);
+        }
+        return await result(...args);
+      }
+      return await result;
+    }
+    current = result;
+  }
+
+  if (typeof current !== "function") {
+    throw new Error("Mounted target did not resolve to a function.");
+  }
+  return await current(...args);
+}
+
+export function singleProjectIdFromScopes(scopes: ProjectScopes): string | null {
+  return Array.isArray(scopes.projects) && scopes.projects.length === 1
+    ? scopes.projects[0]!
+    : null;
+}
+
+function requireRuntimeProjectId(runtime: IterateContextRuntime) {
+  const projectId = runtime.projectId ?? singleProjectIdFromScopes(runtime.props.scopes);
+  if (!projectId) {
+    throw new Error("This capability requires an IterateContext scoped to exactly one project.");
+  }
+  return projectId;
 }

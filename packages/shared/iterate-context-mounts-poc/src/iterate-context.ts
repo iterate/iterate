@@ -17,6 +17,7 @@ export class IterateContextCapability extends RpcTarget {
   constructor(input: {
     index: MountIndex;
     mountRuntime: MountRuntime;
+    mounts: MountSpec[];
     streams: StreamsCapability;
     project: ProjectCapability;
   }) {
@@ -25,6 +26,7 @@ export class IterateContextCapability extends RpcTarget {
     this.#mountRuntime = input.mountRuntime;
     this.#streams = input.streams;
     this.#project = input.project;
+    installMountedMethods(this, input.mounts);
   }
 
   get streams() {
@@ -135,22 +137,25 @@ export function createIterateContext(input: {
     getIterateStub: input.getIterateStub,
   });
 
-  return new (createMountedIterateContextClass(input.props.mounts ?? []))({
+  return new IterateContextCapability({
     index,
     mountRuntime,
+    mounts: input.props.mounts ?? [],
     streams,
     project,
   });
 }
 
-export function createMountedIterateContextClass(mounts: MountSpec[]) {
-  class MountedIterateContext extends IterateContextCapability {}
+function installMountedMethods(target: IterateContextCapability, mounts: MountSpec[]) {
+  const methods = mounts.filter((mount) => mount.mode === "function" && mount.path.length === 1);
+  if (methods.length === 0) return;
 
-  for (const mount of mounts) {
-    if (mount.mode !== "function" || mount.path.length !== 1) continue;
+  const instancePrototype = Object.create(Object.getPrototypeOf(target)) as object;
+
+  for (const mount of methods) {
     const methodName = mount.path[0]!;
 
-    Object.defineProperty(MountedIterateContext.prototype, methodName, {
+    Object.defineProperty(instancePrototype, methodName, {
       value: async function callMountedFunction(
         this: IterateContextCapability,
         ...args: unknown[]
@@ -162,5 +167,5 @@ export function createMountedIterateContextClass(mounts: MountSpec[]) {
     });
   }
 
-  return MountedIterateContext;
+  Object.setPrototypeOf(target, instancePrototype);
 }

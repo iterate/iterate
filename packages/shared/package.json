@@ -23,6 +23,7 @@
     "./apps/internal-router": "./src/apps/internal-router.ts",
     "./apps/internal-router-contract": "./src/apps/internal-router-contract.ts",
     "./apps/orpc": "./src/apps/orpc.ts",
+    "./capabilities": "./src/capabilities.ts",
     "./apps/middleware/require-header": "./src/apps/middleware/require-header.ts",
     "./test-helpers": "./src/test-helpers/index.ts",
     "./test-support/vitest-e2e": "./src/test-support/vitest-e2e/index.ts",
