@@ -18,7 +18,7 @@ import { circuitBreakerProcessor } from "./processors/circuit-breaker/implementa
 import type { CircuitBreakerProcessorState } from "./processors/circuit-breaker/contract.ts";
 import { coreProcessor, getAncestorStreamPaths } from "./processors/core/implementation.ts";
 import { coreProcessorContract } from "./processors/core/contract.ts";
-import type { StreamPersistedProcessorState } from "./types.ts";
+import type { StreamCoreProcessorState } from "./types.ts";
 import type { StreamRpc } from "./types.ts";
 
 const iso = (ms = 0) => new Date(ms).toISOString();
@@ -381,14 +381,14 @@ describe("projector processor (consumes everything, writes to a db port)", () =>
 class CoreStreamSim {
   readonly streams = new Map<
     string,
-    { state: StreamPersistedProcessorState; events: StreamEvent[] }
+    { coreProcessorState: StreamCoreProcessorState; events: StreamEvent[] }
   >();
 
   #entry(path: string) {
     let entry = this.streams.get(path);
     if (entry === undefined) {
       entry = {
-        state: initialCoreProcessorState({ namespace: "stream", path }),
+        coreProcessorState: initialCoreProcessorState({ namespace: "stream", path }),
         events: [],
       };
       this.streams.set(path, entry);
@@ -412,12 +412,12 @@ class CoreStreamSim {
 
     coreInline.beforeAppend?.({
       event: input,
-      state: entry.state,
+      state: entry.coreProcessorState,
     });
 
     const committed: StreamEvent = {
       ...input,
-      offset: entry.state.maxOffset + 1,
+      offset: entry.coreProcessorState.maxOffset + 1,
       createdAt: iso(createdAtMs),
     };
     const appendStream: ProcessorStream = {
@@ -425,7 +425,7 @@ class CoreStreamSim {
       appendBatch: (args) => args.events.map((event) => this.append(path, event, createdAtMs)),
     };
 
-    const previousCoreState = entry.state;
+    const previousCoreState = entry.coreProcessorState;
 
     const coreReduction = runProcessorReduce({
       processor: { contract: coreProcessorContract },
@@ -436,13 +436,13 @@ class CoreStreamSim {
       throw new Error(`core cannot reduce ${committed.type}`);
     }
 
-    entry.state = coreProcessorContract.stateSchema.parse(coreReduction.state);
+    entry.coreProcessorState = coreProcessorContract.stateSchema.parse(coreReduction.state);
     entry.events.push(committed);
 
     coreInline.afterAppend?.({
       event: coreReduction.event,
       previousState: previousCoreState,
-      state: entry.state,
+      state: entry.coreProcessorState,
       streamMaxOffset: committed.offset,
       stream: appendStream,
       shouldApplySideEffects: () => true,
@@ -457,7 +457,7 @@ class CoreStreamSim {
 function initialCoreProcessorState(args: {
   namespace: string;
   path: string;
-}): StreamPersistedProcessorState {
+}): StreamCoreProcessorState {
   return coreProcessorContract.stateSchema.parse({
     ...getInitialProcessorState(coreProcessorContract),
     namespace: args.namespace,
@@ -472,9 +472,9 @@ describe("core stream state and subscription processors", () => {
       type: "events.iterate.com/stream/created",
       payload: { namespace: "stream", path: "/a/b/c" },
     });
-    expect(sim.streams.get("/")?.state.childPaths).toEqual(["/a"]);
-    expect(sim.streams.get("/a")?.state.childPaths).toEqual(["/a/b"]);
-    expect(sim.streams.get("/a/b")?.state.childPaths).toEqual(["/a/b/c"]);
+    expect(sim.streams.get("/")?.coreProcessorState.childPaths).toEqual(["/a"]);
+    expect(sim.streams.get("/a")?.coreProcessorState.childPaths).toEqual(["/a/b"]);
+    expect(sim.streams.get("/a/b")?.coreProcessorState.childPaths).toEqual(["/a/b/c"]);
   });
 
   it("circuit breaker trips from an ordinary subscription processor", async () => {
@@ -523,10 +523,10 @@ describe("core stream state and subscription processors", () => {
 
     await runner.processEventBatch({
       events: [...entry.events],
-      streamMaxOffset: entry.state.maxOffset,
+      streamMaxOffset: entry.coreProcessorState.maxOffset,
     });
 
-    expect(sim.streams.get("/cb")?.state.paused).toBe(true);
+    expect(sim.streams.get("/cb")?.coreProcessorState.paused).toBe(true);
     let rejected = 0;
     try {
       sim.append("/cb", { type: "test.widget", payload: { afterPause: true } });

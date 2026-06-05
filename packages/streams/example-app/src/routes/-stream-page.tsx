@@ -1222,7 +1222,7 @@ function StreamControlTool({
   streamStore: StreamBrowserStore;
 }) {
   const { runtimeState, pollError } = useStreamRuntimeState(streamStore, snapshot.connectionStatus);
-  const core = runtimeState?.state;
+  const core = runtimeState?.coreProcessorState;
   const paused = core?.paused ?? false;
   const pauseReason = core?.pauseReason ?? null;
 

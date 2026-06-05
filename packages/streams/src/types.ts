@@ -8,7 +8,7 @@ import type {
 
 type MaybePromise<T> = T | Promise<T>;
 
-export type StreamPersistedProcessorState = CoreProcessorState;
+export type StreamCoreProcessorState = CoreProcessorState;
 
 /**
  * The subscriber-side capnweb RPC target that receives stream event batches.
@@ -47,7 +47,7 @@ export type StreamRpc = {
     replayAfterOffset?: number;
   }): { subscriptionKey: SubscriptionKey; streamMaxOffset: number; unsubscribe(): void };
   runtimeState(): {
-    state: StreamPersistedProcessorState;
+    coreProcessorState: StreamCoreProcessorState;
     runtime: {
       connections: Record<SubscriptionKey, ConnectionInfo>;
     };
@@ -57,8 +57,8 @@ export type StreamRpc = {
   reset(): Promise<void>;
   reduce(args: {
     event: StreamEvent;
-    state?: StreamPersistedProcessorState;
-  }): StreamPersistedProcessorState;
+    coreProcessorState?: StreamCoreProcessorState;
+  }): StreamCoreProcessorState;
 };
 
 export type SubscriptionKey = string;
@@ -86,7 +86,7 @@ export type StreamProcessorRunnerRpc = {
     subscriptionKey: SubscriptionKey;
     streamMaxOffset: number;
     subscriptionConfiguredEvent: SubscriptionConfiguredEvent;
-    streamRuntimeState: { state: StreamPersistedProcessorState };
+    streamRuntimeState: { coreProcessorState: StreamCoreProcessorState };
   }): MaybePromise<{ sink: SubscriptionSink; replayAfterOffset?: number }>;
   runtimeState(): StreamProcessorRunnerRuntimeState;
 };

@@ -9,7 +9,7 @@ import {
 } from "../../processor-runner.ts";
 import { echoExampleProcessor } from "../../processors/examples/echo/implementation.ts";
 import { circuitBreakerProcessor } from "../../processors/circuit-breaker/implementation.ts";
-import type { StreamPersistedProcessorState } from "../../types.ts";
+import type { StreamCoreProcessorState } from "../../types.ts";
 import type { SubscriptionConfiguredEvent } from "../../processors/core/contract.ts";
 import type { StreamProcessorRunnerRpc, StreamRpc, SubscriptionSink } from "../../types.ts";
 import type { Processor } from "../../processor.ts";
@@ -37,7 +37,7 @@ export class StreamProcessorRunner extends DurableObject {
     subscriptionKey: string;
     streamMaxOffset: number;
     subscriptionConfiguredEvent: SubscriptionConfiguredEvent;
-    streamRuntimeState: { state: StreamPersistedProcessorState };
+    streamRuntimeState: { coreProcessorState: StreamCoreProcessorState };
   }): Promise<{ sink: SubscriptionSink; replayAfterOffset?: number }> {
     const processor = getHostedProcessor(args.subscriptionKey);
     if (processor === undefined) {

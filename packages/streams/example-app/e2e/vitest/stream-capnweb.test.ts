@@ -5,7 +5,7 @@ import { WebSocket as WsWebSocket, WebSocketServer } from "ws";
 import { newWebSocketRpcSession, RpcTarget, type RpcStub } from "capnweb";
 import { describe, expect, it } from "vitest";
 import type { StreamEvent, StreamEventInput } from "../../../src/shared/event.ts";
-import type { StreamPersistedProcessorState } from "../../../src/types.ts";
+import type { StreamCoreProcessorState } from "../../../src/types.ts";
 import type { SubscriptionConfiguredEvent } from "../../../src/processors/core/contract.ts";
 import type { StreamProcessorRunnerRpc, StreamRpc, SubscriptionSink } from "../../../src/types.ts";
 import { createStreamSubscription, type StreamSubscription } from "../../../src/subscription.ts";
@@ -46,14 +46,14 @@ class NodeStreamProcessorRunner extends RpcTarget implements StreamProcessorRunn
   readonly requestHeaders: Headers[] = [];
   readonly batches: StreamEvent[][] = [];
   subscriptionConfiguredEvent: SubscriptionConfiguredEvent | undefined;
-  streamRuntimeState: { state: StreamPersistedProcessorState } | undefined;
+  streamRuntimeState: { coreProcessorState: StreamCoreProcessorState } | undefined;
 
   requestSubscription(args: {
     stream: RpcStub<StreamRpc>;
     subscriptionKey: string;
     streamMaxOffset: number;
     subscriptionConfiguredEvent: SubscriptionConfiguredEvent;
-    streamRuntimeState: { state: StreamPersistedProcessorState };
+    streamRuntimeState: { coreProcessorState: StreamCoreProcessorState };
   }): { sink: SubscriptionSink; replayAfterOffset?: number } {
     this.subscriptionConfiguredEvent = args.subscriptionConfiguredEvent;
     this.streamRuntimeState = args.streamRuntimeState;
@@ -78,7 +78,7 @@ class CircuitBreakerNodeStreamProcessorRunner
 {
   readonly requestHeaders: Headers[] = [];
   subscriptionConfiguredEvent: SubscriptionConfiguredEvent | undefined;
-  streamRuntimeState: { state: StreamPersistedProcessorState } | undefined;
+  streamRuntimeState: { coreProcessorState: StreamCoreProcessorState } | undefined;
 
   #stream: RpcStub<StreamRpc> | undefined;
   #runner: ProcessorRunner | undefined;
@@ -91,7 +91,7 @@ class CircuitBreakerNodeStreamProcessorRunner
     subscriptionKey: string;
     streamMaxOffset: number;
     subscriptionConfiguredEvent: SubscriptionConfiguredEvent;
-    streamRuntimeState: { state: StreamPersistedProcessorState };
+    streamRuntimeState: { coreProcessorState: StreamCoreProcessorState };
   }): Promise<{ sink: SubscriptionSink; replayAfterOffset?: number }> {
     this.subscriptionConfiguredEvent = args.subscriptionConfiguredEvent;
     this.streamRuntimeState = args.streamRuntimeState;
@@ -426,7 +426,7 @@ describe("stream capnweb protocol", () => {
           type: "events.iterate.com/stream/created",
           offset: 1,
           payload: {
-            namespace: runtime.state.namespace,
+            namespace: runtime.coreProcessorState.namespace,
             path,
           },
         }),
@@ -496,7 +496,7 @@ describe("stream capnweb protocol", () => {
     const runtime = await stream.stream.runtimeState();
     await using processor = await connectStreamProcessorRunner({
       url: toStreamProcessorRunnerWebSocketUrl(
-        `${runtime.state.namespace}:${path}:${subscriptionKey}`,
+        `${runtime.coreProcessorState.namespace}:${path}:${subscriptionKey}`,
       ),
     });
 
@@ -510,7 +510,7 @@ describe("stream capnweb protocol", () => {
             type: "external-url",
             transport: "capnweb-websocket",
             url: toStreamProcessorRunnerHttpUrl(
-              `${runtime.state.namespace}:${path}:${subscriptionKey}`,
+              `${runtime.coreProcessorState.namespace}:${path}:${subscriptionKey}`,
             ),
           },
         },
@@ -578,7 +578,7 @@ describe("stream capnweb protocol", () => {
       await waitFor(
         () =>
           runner.subscriptionConfiguredEvent?.offset === configured.offset &&
-          runner.streamRuntimeState?.state.path === path &&
+          runner.streamRuntimeState?.coreProcessorState.path === path &&
           runner.requestHeaders.some((headers) => headers.get("x-stream-test") === headerValue),
         10_000,
       );
@@ -643,8 +643,8 @@ describe("stream capnweb protocol", () => {
         const runtime = await stream.stream.runtimeState();
         return (
           runner.subscriptionConfiguredEvent?.offset === configured.offset &&
-          runner.streamRuntimeState?.state.path === path &&
-          runtime.state.paused
+          runner.streamRuntimeState?.coreProcessorState.path === path &&
+          runtime.coreProcessorState.paused
         );
       }, 10_000);
 
@@ -691,7 +691,7 @@ describe("stream capnweb protocol", () => {
       await waitFor(
         () =>
           runner.subscriptionConfiguredEvent?.offset === configured.offset &&
-          runner.streamRuntimeState?.state.path === path &&
+          runner.streamRuntimeState?.coreProcessorState.path === path &&
           runner.requestHeaders.some((headers) => headers.get("x-stream-test") === headerValue),
         30_000,
       );
