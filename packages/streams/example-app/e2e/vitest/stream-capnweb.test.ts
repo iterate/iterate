@@ -491,13 +491,12 @@ describe("stream capnweb protocol", () => {
 
   e2eIt("runs a hosted outbound processor from subscription-configured", async () => {
     const path = `stream-capnweb-processor-${crypto.randomUUID()}`;
-    const subscriptionKey = "echo-example";
+    const subscriptionKey = `hosted-echo-${crypto.randomUUID()}`;
     using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl(path) });
     const runtime = await stream.stream.runtimeState();
+    const runnerName = `${runtime.coreProcessorState.namespace}:${path}:${subscriptionKey}`;
     await using processor = await connectStreamProcessorRunner({
-      url: toStreamProcessorRunnerWebSocketUrl(
-        `${runtime.coreProcessorState.namespace}:${path}:${subscriptionKey}`,
-      ),
+      url: toStreamProcessorRunnerWebSocketUrl(runnerName, { processorSlug: "echo-example" }),
     });
 
     const configured = await stream.stream.append({
@@ -509,9 +508,7 @@ describe("stream capnweb protocol", () => {
           subscriber: {
             type: "external-url",
             transport: "capnweb-websocket",
-            url: toStreamProcessorRunnerHttpUrl(
-              `${runtime.coreProcessorState.namespace}:${path}:${subscriptionKey}`,
-            ),
+            url: toStreamProcessorRunnerHttpUrl(runnerName, { processorSlug: "echo-example" }),
           },
         },
       },
@@ -519,11 +516,7 @@ describe("stream capnweb protocol", () => {
 
     await waitFor(async () => {
       const status = await processor.rpc.runtimeState();
-      return (
-        status.processorSlug === "echo-example" &&
-        status.snapshot?.offset === configured.offset &&
-        (status.snapshot?.state as { seen: number } | undefined)?.seen === 0
-      );
+      return status.processorSlug === "echo-example" && status.snapshot === undefined;
     }, 1_000);
 
     await stream.stream.append({
@@ -1025,17 +1018,24 @@ function streamApiPath(path: string) {
   return `/api/streams/${path.startsWith("/") ? encodeURIComponent(path) : path.split("/").map(encodeURIComponent).join("/")}`;
 }
 
-function toStreamProcessorRunnerWebSocketUrl(path: string) {
+function toStreamProcessorRunnerWebSocketUrl(
+  path: string,
+  params: { processorSlug?: string } = {},
+) {
   const url = new URL(workerUrl);
   url.pathname = `/stream-processor-runner/${path}`;
+  if (params.processorSlug !== undefined)
+    url.searchParams.set("processorSlug", params.processorSlug);
   if (url.protocol === "http:") url.protocol = "ws:";
   if (url.protocol === "https:") url.protocol = "wss:";
   return url.toString();
 }
 
-function toStreamProcessorRunnerHttpUrl(path: string) {
+function toStreamProcessorRunnerHttpUrl(path: string, params: { processorSlug?: string } = {}) {
   const url = new URL(workerUrl);
   url.pathname = `/stream-processor-runner/${path}`;
+  if (params.processorSlug !== undefined)
+    url.searchParams.set("processorSlug", params.processorSlug);
   return url.toString();
 }
 

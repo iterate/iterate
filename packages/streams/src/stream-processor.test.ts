@@ -535,4 +535,33 @@ describe("core stream state and subscription processors", () => {
     }
     expect(rejected).toBeGreaterThan(0);
   });
+
+  it("does not pause the stream from pre-anchor circuit breaker replay", async () => {
+    const { stream, committed } = memoryStream();
+    let saved: Snapshot<CircuitBreakerProcessorState> | undefined;
+    const runner = createProcessorRunner({
+      processor: circuitBreakerProcessor,
+      deps: undefined,
+      storage: { load: () => undefined, save: (snapshot) => void (saved = snapshot) },
+      stream,
+      sideEffectAnchor: { offset: 4, createdAt: iso(4_000) },
+    });
+
+    await runner.processEventBatch({
+      events: [
+        event({
+          type: "events.iterate.com/circuit-breaker/configured",
+          offset: 1,
+          payload: { burstCapacity: 1, refillRatePerMinute: 1 },
+          createdAtMs: 1_000,
+        }),
+        event({ type: "test.widget", offset: 2, payload: {}, createdAtMs: 2_000 }),
+        event({ type: "test.widget", offset: 3, payload: {}, createdAtMs: 3_000 }),
+      ],
+      streamMaxOffset: 3,
+    });
+
+    expect(committed).toEqual([]);
+    expect(saved?.offset).toBe(3);
+  });
 });

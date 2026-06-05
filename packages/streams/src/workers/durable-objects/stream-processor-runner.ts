@@ -39,9 +39,10 @@ export class StreamProcessorRunner extends DurableObject {
     subscriptionConfiguredEvent: SubscriptionConfiguredEvent;
     streamRuntimeState: { coreProcessorState: StreamCoreProcessorState };
   }): Promise<{ sink: SubscriptionSink; replayAfterOffset?: number }> {
-    const processor = getHostedProcessor(args.subscriptionKey);
+    const processorSlug = getHostedProcessorSlug(args);
+    const processor = getHostedProcessor(processorSlug);
     if (processor === undefined) {
-      throw new Error(`Unknown hosted processor subscription key: ${args.subscriptionKey}`);
+      throw new Error(`Unknown hosted processor slug: ${processorSlug}`);
     }
 
     await this.#processing?.[Symbol.asyncDispose]();
@@ -73,7 +74,7 @@ export class StreamProcessorRunner extends DurableObject {
     });
     return {
       sink: this.#subscription.sink,
-      replayAfterOffset: snapshot?.offset ?? 0,
+      replayAfterOffset: snapshot?.offset,
     };
   }
 
@@ -95,4 +96,12 @@ function getHostedProcessor(slug: string): HostedProcessor | undefined {
   if (slug === "echo-example") return echoExampleProcessor;
   if (slug === "circuit-breaker") return circuitBreakerProcessor;
   return undefined;
+}
+
+function getHostedProcessorSlug(args: {
+  subscriptionKey: string;
+  subscriptionConfiguredEvent: SubscriptionConfiguredEvent;
+}): string {
+  const url = args.subscriptionConfiguredEvent.payload.subscriber.url;
+  return new URL(url).searchParams.get("processorSlug") ?? args.subscriptionKey;
 }

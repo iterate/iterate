@@ -6,10 +6,11 @@ import { implementProcessor } from "../../processor.ts";
 import { circuitBreakerProcessorContract, shouldTripCircuitBreaker } from "./contract.ts";
 
 export const circuitBreakerProcessor = implementProcessor(circuitBreakerProcessorContract, () => ({
-  afterAppend({ event, previousState, state, stream, keepAlive }) {
+  afterAppend({ event, previousState, state, stream, shouldApplySideEffects, keepAlive }) {
     if (!shouldTripCircuitBreaker(state)) return;
     if (shouldTripCircuitBreaker(previousState)) return;
     if (event.type === "events.iterate.com/stream/paused") return;
+    if (!shouldApplySideEffects({ event })) return;
     keepAlive(
       stream.append({
         event: {

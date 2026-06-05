@@ -1254,16 +1254,34 @@ function StreamControlTool({
   }
 
   async function applyCircuitBreakerConfig() {
+    if (core === undefined) return;
     const burst = Math.floor(Number(burstCapacity));
     const refill = Math.floor(Number(refillRatePerMinute));
     if (!Number.isFinite(burst) || burst <= 0 || !Number.isFinite(refill) || refill <= 0) {
       return;
     }
 
+    const subscriptionKey = "circuit-breaker";
     setControlAction("configuring");
     try {
       await streamStore.appendBatch({
         events: [
+          {
+            type: "events.iterate.com/stream/subscription-configured",
+            payload: {
+              subscriptionKey,
+              subscriber: {
+                type: "external-url",
+                transport: "capnweb-websocket",
+                url: hostedProcessorRunnerUrl({
+                  namespace: core.namespace,
+                  streamPath: core.path,
+                  processorSlug: "circuit-breaker",
+                }),
+              },
+            },
+            idempotencyKey: `subscription:${subscriptionKey}`,
+          },
           {
             type: "events.iterate.com/circuit-breaker/configured",
             payload: { burstCapacity: burst, refillRatePerMinute: refill },
@@ -1401,6 +1419,19 @@ function StreamControlTool({
       )}
     </section>
   );
+}
+
+function hostedProcessorRunnerUrl(args: {
+  namespace: string;
+  streamPath: string;
+  processorSlug: string;
+}) {
+  const url = new URL(window.location.href);
+  const runnerName = `${args.namespace}:${args.streamPath}:${args.processorSlug}`;
+  url.pathname = `/stream-processor-runner/${encodeURIComponent(runnerName)}`;
+  url.search = "";
+  url.searchParams.set("processorSlug", args.processorSlug);
+  return url.toString();
 }
 
 function formatByteSize(bytes: number) {
