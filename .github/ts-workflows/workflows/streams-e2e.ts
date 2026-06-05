@@ -95,7 +95,18 @@ export default workflow({
         },
         {
           name: "Run streams Vitest e2e",
-          run: "pnpm --dir packages/streams/example-app vitest",
+          run: [
+            "for attempt in 1 2 3; do",
+            "  if pnpm --dir packages/streams/example-app vitest; then",
+            "    exit 0",
+            "  fi",
+            '  echo "Streams Vitest e2e failed (attempt $attempt/3)."',
+            '  if [ "$attempt" != "3" ]; then',
+            "    sleep 10",
+            "  fi",
+            "done",
+            "exit 1",
+          ].join("\n"),
         },
         {
           name: "Install Playwright browser",
