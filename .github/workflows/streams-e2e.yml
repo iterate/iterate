@@ -22,7 +22,7 @@ jobs:
     if: github.event.action != 'closed'
     runs-on: depot-ubuntu-24.04-32
     env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       WORKER_NAME: stream-staging-area-pr-${{ github.event.pull_request.number }}
       WORKER_URL: https://stream-staging-area-pr-${{ github.event.pull_request.number }}.iterate-dev-preview.workers.dev
       STREAM_STAGING_E2E: "true"
@@ -40,15 +40,19 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install
+      - name: Install Doppler CLI
+        run: |-
+          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
+          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
       - name: Destroy existing streams worker
         working-directory: packages/streams/example-app
-        run: pnpm exec wrangler delete "$WORKER_NAME" --force || true
+        run: doppler run --project _shared --config prd -- pnpm exec wrangler delete "$WORKER_NAME" --force || true
       - name: Build streams example app
         working-directory: packages/streams/example-app
         run: pnpm build
       - name: Deploy streams worker
         working-directory: packages/streams/example-app
-        run: pnpm exec wrangler deploy --name "$WORKER_NAME"
+        run: doppler run --project _shared --config prd -- pnpm exec wrangler deploy --name "$WORKER_NAME"
       - name: Run streams Vitest e2e
         run: pnpm --dir packages/streams/example-app vitest
       - name: Install Playwright browser
@@ -59,7 +63,7 @@ jobs:
     if: github.event.action == 'closed'
     runs-on: depot-ubuntu-24.04-32
     env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       WORKER_NAME: stream-staging-area-pr-${{ github.event.pull_request.number }}
     steps:
       - name: Checkout code
@@ -75,6 +79,10 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install
+      - name: Install Doppler CLI
+        run: |-
+          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
+          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
       - name: Destroy streams worker
         working-directory: packages/streams/example-app
-        run: pnpm exec wrangler delete "$WORKER_NAME" --force || true
+        run: doppler run --project _shared --config prd -- pnpm exec wrangler delete "$WORKER_NAME" --force || true

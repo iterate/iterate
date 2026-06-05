@@ -27,17 +27,18 @@ export default workflow({
       if: "github.event.action != 'closed'",
       ...utils.runsOnDepotUbuntu,
       env: {
-        CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}",
+        DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
         WORKER_NAME: workerName,
         WORKER_URL: `https://${workerName}.iterate-dev-preview.workers.dev`,
         STREAM_STAGING_E2E: "true",
       },
       steps: [
         ...utils.getSetupRepo({ ref: "${{ github.event.pull_request.head.sha }}" }),
+        utils.installDopplerCli,
         {
           name: "Destroy existing streams worker",
           "working-directory": "packages/streams/example-app",
-          run: 'pnpm exec wrangler delete "$WORKER_NAME" --force || true',
+          run: 'doppler run --project _shared --config prd -- pnpm exec wrangler delete "$WORKER_NAME" --force || true',
         },
         {
           name: "Build streams example app",
@@ -47,7 +48,7 @@ export default workflow({
         {
           name: "Deploy streams worker",
           "working-directory": "packages/streams/example-app",
-          run: 'pnpm exec wrangler deploy --name "$WORKER_NAME"',
+          run: 'doppler run --project _shared --config prd -- pnpm exec wrangler deploy --name "$WORKER_NAME"',
         },
         {
           name: "Run streams Vitest e2e",
@@ -67,15 +68,16 @@ export default workflow({
       if: "github.event.action == 'closed'",
       ...utils.runsOnDepotUbuntu,
       env: {
-        CLOUDFLARE_API_TOKEN: "${{ secrets.CLOUDFLARE_API_TOKEN }}",
+        DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
         WORKER_NAME: workerName,
       },
       steps: [
         ...utils.setupRepo,
+        utils.installDopplerCli,
         {
           name: "Destroy streams worker",
           "working-directory": "packages/streams/example-app",
-          run: 'pnpm exec wrangler delete "$WORKER_NAME" --force || true',
+          run: 'doppler run --project _shared --config prd -- pnpm exec wrangler delete "$WORKER_NAME" --force || true',
         },
       ],
     },

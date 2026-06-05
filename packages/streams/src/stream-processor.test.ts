@@ -15,10 +15,7 @@ import { implementProcessor } from "./processor.ts";
 import { createProcessorRunner, type Snapshot, type ProcessorStream } from "./processor-runner.ts";
 import { echoExampleProcessor } from "./processors/examples/echo/implementation.ts";
 import { circuitBreakerProcessor } from "./processors/circuit-breaker/implementation.ts";
-import {
-  circuitBreakerProcessorContract,
-  type CircuitBreakerProcessorState,
-} from "./processors/circuit-breaker/contract.ts";
+import type { CircuitBreakerProcessorState } from "./processors/circuit-breaker/contract.ts";
 import { coreProcessor, getAncestorStreamPaths } from "./processors/core/implementation.ts";
 import { coreProcessorContract } from "./processors/core/contract.ts";
 import type { StreamPersistedProcessorState } from "./types.ts";
