@@ -4,13 +4,10 @@ import dedent from "dedent";
 import WebSocket from "ws";
 import { Redacted } from "@iterate-com/shared/apps/config";
 import {
-  createAdminOsClient,
   requireAdminBearerToken,
   requireBaseUrl,
   uniqueSuffix,
 } from "../test-support/os-client.ts";
-import { CodemodeBuilder } from "../test-support/codemode-builder.ts";
-import { createExampleRpcProviderRegistration } from "../../src/domains/codemode/example-provider-registrations.ts";
 import type { IterateCapability } from "~/capnweb-playground.ts";
 
 const baseUrl = requireBaseUrl();
@@ -245,15 +242,13 @@ describe("captnweb", () => {
           );
         });
 
-        it("calls a function added to iterate-config worker.js by codemode", async () => {
+        it("updates iterate-config and calls the project worker through capnweb", async () => {
           const project = await createCaptnwebProject({
             runWithIterateContext,
             slug: `${testRunSlugPrefix}-worker-${uniqueSuffix()}`.slice(0, 40),
           });
           try {
             const marker = `captnweb-worker-${uniqueSuffix()}`;
-            const os = createAdminOsClient(baseUrl);
-            const streamPath = `/captnweb/worker/${uniqueSuffix()}`;
             const workerSource = dedent`
               export default {
                 async fetch() {
@@ -265,80 +260,59 @@ describe("captnweb", () => {
               };
             `;
 
-            await os.project.streams.append({
-              projectSlugOrId: project.slug,
-              streamPath,
-              event: {
-                type: "events.iterate.com/codemode/tool-provider-registered",
-                payload: createExampleRpcProviderRegistration({
-                  exportName: "ReposCapability",
-                  instructions:
-                    "Use ctx.repos.ensureIterateConfigInfo({ projectSlug }) to create or inspect the iterate-config Repo.",
-                  path: ["repos"],
-                  projectId: project.id,
-                }),
+            const result = await runWithIterateContext({
+              scopes: [`project:${project.id}`],
+              vars: { marker, workerSource },
+              fn: async ({ iterate, vars }) => {
+                await iterate.project.streams.append({
+                  streamPath: `/captnweb/worker/${Date.now()}`,
+                  event: {
+                    type: "events.iterate.com/captnweb/config-edit-started",
+                    payload: { marker: vars.marker },
+                  },
+                });
+
+                const repo = await iterate.project.repos.ensureIterateConfigInfo({
+                  projectSlug: null,
+                });
+                const dir = `/iterate-config-${Date.now()}`;
+                await iterate.project.workspace.git.clone({
+                  url: repo.remote,
+                  dir,
+                  branch: repo.defaultBranch,
+                  depth: 1,
+                  ...repo.credentials,
+                });
+                await iterate.project.workspace.writeFile(`${dir}/worker.js`, vars.workerSource);
+                await iterate.project.workspace.git.add({ dir, filepath: "worker.js" });
+                const commit = await iterate.project.workspace.git.commit({
+                  dir,
+                  message: "Add captnweb worker proof",
+                  author: { name: "Capnweb", email: "captnweb-e2e@iterate.com" },
+                });
+                await iterate.project.workspace.git.push({
+                  dir,
+                  remote: "origin",
+                  ref: repo.defaultBranch,
+                  ...repo.credentials,
+                });
+
+                return {
+                  called: await iterate.project.worker.someFunction({
+                    echo: vars.marker,
+                  }),
+                  commit,
+                  repo: { defaultBranch: repo.defaultBranch, slug: repo.slug },
+                  status: await iterate.project.workspace.git.status({ dir }),
+                };
               },
             });
-
-            const codemodeResult = (
-              await new CodemodeBuilder(os, {
-                projectSlugOrId: project.slug,
-                providers: [],
-                streamPath,
-              })
-                .var("MARKER", marker)
-                .var("WORKER_SOURCE", workerSource)
-                .execute(async (ctx) => {
-                  const repo = await ctx.repos.ensureIterateConfigInfo({ projectSlug: null });
-                  const dir = `/iterate-config-${Date.now()}`;
-
-                  await ctx.workspace.git.clone({
-                    url: repo.remote,
-                    dir,
-                    branch: repo.defaultBranch,
-                    depth: 1,
-                    ...repo.credentials,
-                  });
-
-                  await ctx.workspace.writeFile(
-                    `${dir}/worker.js`,
-                    ctx.codemode.vars.WORKER_SOURCE,
-                  );
-                  await ctx.workspace.git.add({ dir, filepath: "worker.js" });
-                  const commit = await ctx.workspace.git.commit({
-                    dir,
-                    message: "Add captnweb worker proof",
-                    author: { name: "Codemode", email: "codemode@iterate.com" },
-                  });
-                  await ctx.workspace.git.push({
-                    dir,
-                    remote: "origin",
-                    ref: repo.defaultBranch,
-                    ...repo.credentials,
-                  });
-
-                  return {
-                    commit,
-                    repo: { defaultBranch: repo.defaultBranch, slug: repo.slug },
-                    status: await ctx.workspace.git.status({ dir }),
-                  };
-                })
-            ).success();
-            expect(codemodeResult).toMatchObject({
+            expect(result).toMatchObject({
               commit: { oid: expect.any(String) },
               repo: { defaultBranch: "main", slug: "iterate-config" },
               status: [],
             });
-
-            const called = await runWithIterateContext({
-              scopes: [`project:${project.id}`],
-              vars: { marker },
-              fn: async ({ iterate, vars }) =>
-                iterate.project.worker.someFunction({
-                  echo: vars.marker,
-                }),
-            });
-            expect(called).toEqual({
+            expect(result.called).toEqual({
               from: "iterate-config",
               input: { echo: marker },
               marker,

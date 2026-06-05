@@ -29,7 +29,6 @@
 import { RpcTarget } from "cloudflare:workers";
 import { newWorkersRpcResponse } from "capnweb";
 import { ORPCError } from "@orpc/server";
-import type { Event, EventInput, StreamCursor } from "@iterate-com/shared/streams/types";
 import { isValidTypeId, typeid } from "@iterate-com/shared/typeid";
 import type { AppConfig } from "~/app.ts";
 import { authenticateAdminApiSecret } from "~/auth/middleware.ts";
@@ -52,7 +51,15 @@ import {
   getProjectDurableObjectName,
   type ProjectDurableObject,
 } from "~/domains/projects/durable-objects/project-durable-object.ts";
-import { getStreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
+import {
+  getReposCapability,
+  type ReposCapability,
+} from "~/domains/repos/entrypoints/repo-capability.ts";
+import {
+  getStreamsCapability,
+  type StreamsCapability,
+} from "~/domains/streams/entrypoints/streams-capability.ts";
+import type { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-capability.ts";
 
 export const CAPTNWEB_PREFIX = "/api/captnweb";
 
@@ -440,7 +447,9 @@ export class ProjectCapability extends RpcTarget {
   readonly #context: AppContext | undefined;
   readonly #projectId: string;
   readonly #scopes: string[];
-  #streams?: ProjectStreamsCapability;
+  #repos?: CaptnwebReposCapability;
+  #streams?: CaptnwebStreamsCapability;
+  #workspace?: CaptnwebWorkspaceCapability;
   #worker?: ProjectWorkerMethods;
 
   constructor(props: ProjectCapabilityProps) {
@@ -455,12 +464,31 @@ export class ProjectCapability extends RpcTarget {
     return this.#projectId;
   }
 
-  get streams(): ProjectStreamsCapability {
-    return (this.#streams ??= new ProjectStreamsCapability({
-      activeOrganization: this.#activeOrganization,
-      context: this.#context,
+  get repos(): CaptnwebReposCapability {
+    this.#assertProjectScope();
+    return (this.#repos ??= getReposCapability({
+      exports: this.#requireContext().workerExports,
+      props: { projectId: this.#projectId },
+    }));
+  }
+
+  get streams(): CaptnwebStreamsCapability {
+    this.#assertProjectScope();
+    return (this.#streams ??= getStreamsCapability({
+      exports: this.#requireContext().workerExports,
+      props: {
+        appendPolicy: { mode: "any" },
+        projectId: this.#projectId,
+      },
+    }));
+  }
+
+  get workspace(): CaptnwebWorkspaceCapability {
+    this.#assertProjectScope();
+    return (this.#workspace ??= new ProjectWorkspaceCapability({
+      context: this.#requireContext(),
       projectId: this.#projectId,
-      scopes: this.#scopes,
+      workspaceId: "captnweb-playground",
     }));
   }
 
@@ -483,6 +511,12 @@ export class ProjectCapability extends RpcTarget {
     return toProject(project);
   }
 
+  #assertProjectScope() {
+    if (!this.#activeOrganization && !authorizesProject(this.#scopes, this.#projectId)) {
+      throw new Error(`Not authorized for project: ${this.#projectId}`);
+    }
+  }
+
   #requireContext(): AppContext {
     if (!this.#context) {
       throw new Error("ProjectCapability requires app context for this operation.");
@@ -498,78 +532,83 @@ type ProjectCapabilityChildProps = {
   scopes: string[];
 };
 
-type StreamAppendInput = {
-  event: EventInput;
-  streamPath: string;
-};
+type CaptnwebReposCapability = Pick<
+  ReposCapability,
+  "create" | "createInfo" | "ensureIterateConfigInfo" | "get" | "getInfo" | "list"
+>;
+type CaptnwebStreamsCapability = Pick<
+  StreamsCapability,
+  "append" | "appendBatch" | "create" | "getState" | "list" | "listChildren" | "read"
+>;
+type WorkspaceClient = Pick<
+  WorkspaceCapability,
+  "gitAdd" | "gitClone" | "gitCommit" | "gitPush" | "gitStatus" | "readFile" | "writeFile"
+>;
 
-type StreamReadInput = {
-  afterOffset?: StreamCursor;
-  beforeOffset?: StreamCursor;
-  streamPath: string;
-};
+class ProjectWorkspaceCapability extends RpcTarget {
+  readonly #workspace: WorkspaceClient;
+  #git?: ProjectWorkspaceGitCapability;
 
-export class ProjectStreamsCapability extends RpcTarget {
-  readonly #activeOrganization: ActiveOrganizationAuth | undefined;
-  readonly #context: AppContext | undefined;
-  readonly #projectId: string;
-  readonly #scopes: string[];
-
-  constructor(props: ProjectCapabilityChildProps) {
+  constructor(input: { context: AppContext; projectId: string; workspaceId: string }) {
     super();
-    this.#activeOrganization = props.activeOrganization;
-    this.#context = props.context;
-    this.#projectId = props.projectId;
-    this.#scopes = props.scopes;
-  }
-
-  async append(input: StreamAppendInput): Promise<Event> {
-    await this.#requireProject();
-    return await this.#streams().append(input);
-  }
-
-  async read(input: StreamReadInput): Promise<Event[]> {
-    await this.#requireProject();
-    return await this.#streams().read(input);
-  }
-
-  async getState(input: { streamPath: string }) {
-    await this.#requireProject();
-    return await this.#streams().getState(input);
-  }
-
-  async list() {
-    await this.#requireProject();
-    return await this.#streams().list();
-  }
-
-  async #requireProject() {
-    await requireProject({
-      activeOrganization: this.#activeOrganization,
-      context: this.#requireContext(),
-      projectId: this.#projectId,
-      scopes: this.#scopes,
-    });
-  }
-
-  #streams() {
-    const context = this.#requireContext();
-    return getStreamsCapability({
-      exports: context.workerExports,
+    if (!input.context.workerExports) {
+      throw new Error("WorkspaceCapability export is not available.");
+    }
+    const workspaceCapability = input.context.workerExports
+      .WorkspaceCapability as unknown as (options: {
+      props: { projectId: string; workspaceId: string };
+    }) => WorkspaceClient;
+    this.#workspace = workspaceCapability({
       props: {
-        appendPolicy: { mode: "any" },
-        projectId: this.#projectId,
+        projectId: input.projectId,
+        workspaceId: input.workspaceId,
       },
     });
   }
 
-  #requireContext(): AppContext {
-    if (!this.#context) {
-      throw new Error("ProjectStreamsCapability requires app context for this operation.");
-    }
-    return this.#context;
+  get git() {
+    return (this.#git ??= new ProjectWorkspaceGitCapability(this.#workspace));
+  }
+
+  async readFile(path: string) {
+    return await this.#workspace.readFile(path);
+  }
+
+  async writeFile(path: string, content: string) {
+    return await this.#workspace.writeFile(path, content);
   }
 }
+
+class ProjectWorkspaceGitCapability extends RpcTarget {
+  readonly #workspace: WorkspaceClient;
+
+  constructor(workspace: WorkspaceClient) {
+    super();
+    this.#workspace = workspace;
+  }
+
+  async add(input: Record<string, unknown>) {
+    return await this.#workspace.gitAdd(input);
+  }
+
+  async clone(input: Record<string, unknown>) {
+    return await this.#workspace.gitClone(input);
+  }
+
+  async commit(input: Record<string, unknown>) {
+    return await this.#workspace.gitCommit(input);
+  }
+
+  async push(input: Record<string, unknown>) {
+    return await this.#workspace.gitPush(input);
+  }
+
+  async status(input: Record<string, unknown>) {
+    return await this.#workspace.gitStatus(input);
+  }
+}
+
+type CaptnwebWorkspaceCapability = ProjectWorkspaceCapability;
 
 export type ProjectWorkerMethods = ProjectWorkerCapability &
   Record<string, (...args: unknown[]) => Promise<unknown>>;
