@@ -2,7 +2,7 @@
 // runtimeState() RPC. No browser processor and no SQLite table.
 
 import { useEffect, useState } from "react";
-import { connectStream, streamRpcPath } from "../../../src/browser/connect.ts";
+import { withStreamConnectionFromBrowser, streamRpcPath } from "../../../src/browser/connect.ts";
 
 const POLL_INTERVAL_MS = 1_000;
 
@@ -14,11 +14,11 @@ export function StreamStateView({ streamPath }: { streamPath: string }) {
   useEffect(() => {
     let disposed = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let connection: Awaited<ReturnType<typeof connectStream>> | undefined;
+    let connection: Awaited<ReturnType<typeof withStreamConnectionFromBrowser>> | undefined;
 
     void (async () => {
       try {
-        connection = await connectStream({
+        connection = await withStreamConnectionFromBrowser({
           url: new URL(streamRpcPath(streamPath), window.location.href),
           onConnectionStatusChange: (next) => {
             if (!disposed) setStatus(next);

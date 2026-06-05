@@ -9,7 +9,7 @@ import type { StreamPersistedProcessorState } from "../../../src/types.ts";
 import type { SubscriptionConfiguredEvent } from "../../../src/processors/core/contract.ts";
 import type { StreamProcessorRunnerRpc, StreamRpc, SubscriptionSink } from "../../../src/types.ts";
 import { connectStreamProcessorRunner } from "../../../src/node/connect-processor-runner.ts";
-import { connectStream as connectBrowserStream } from "../../../src/browser/connect.ts";
+import { withStreamConnectionFromBrowser } from "../../../src/browser/connect.ts";
 
 const workerUrl = process.env.WORKER_URL ?? "http://localhost:5173";
 const e2eIt = process.env.STREAM_STAGING_E2E === "true" ? it : it.skip;
@@ -70,7 +70,7 @@ class NodeStreamProcessorRunner extends RpcTarget implements StreamProcessorRunn
 describe("stream capnweb protocol", () => {
   e2eIt("browser client appends events by stream URL", async () => {
     const path = `stream-browser-client-${crypto.randomUUID()}`;
-    await using stream = await connectBrowserStream({ url: toStreamWebSocketUrl(path) });
+    await using stream = await withStreamConnectionFromBrowser({ url: toStreamWebSocketUrl(path) });
 
     const appended = await stream.stream.append({
       event: {
@@ -493,6 +493,67 @@ describe("stream capnweb protocol", () => {
     },
     // Quick-tunnel startup + edge-registration + propagation buffer exceeds the
     // file's default 30s test timeout before the assertions even begin.
+    90_000,
+  );
+
+  cloudflaredE2eIt(
+    "replays events committed in the subscription-configured -> dial gap (external-url through cloudflared)",
+    async () => {
+      const path = `stream-capnweb-cloudflared-gap-${crypto.randomUUID()}`;
+      const subscriptionKey = "cloudflared-gap";
+      const headerValue = crypto.randomUUID();
+      const runner = new NodeStreamProcessorRunner();
+      await using runnerServer = await startNodeStreamProcessorRunnerServer({
+        port: externalRunnerPort,
+        runner,
+      });
+      await using tunnel = await startCloudflaredTunnel(runnerServer.url);
+      await using stream = await connectStream(path);
+
+      // Configure the outbound subscription and then immediately append an event,
+      // WITHOUT waiting for the worker's outbound dial to complete. Dialing the
+      // subscriber runs through cloudflared (worker -> edge -> tunnel -> node server
+      // -> websocket upgrade), which is far slower than this direct capnweb append,
+      // so this event commits in the gap between the `subscription-configured`
+      // append and a successful dial.
+      const configured = await stream.stream.append({
+        event: {
+          type: "events.iterate.com/stream/subscription-configured",
+          idempotencyKey: `subscription:${subscriptionKey}`,
+          payload: {
+            subscriptionKey,
+            subscriber: {
+              type: "external-url",
+              transport: "capnweb-websocket",
+              url: tunnel.url,
+              headers: {
+                "x-stream-test": headerValue,
+              },
+            },
+          },
+        },
+      });
+
+      const gapEvent = await stream.stream.append({
+        event: {
+          type: "test.processor.cloudflared-gap-input",
+          payload: { path },
+        },
+      });
+      expect(gapEvent.offset).toBeGreaterThan(configured.offset);
+
+      // The regressed behavior defaulted the outbound connection's `replayAfterOffset`
+      // to `streamMaxOffset` at dial time, which already included `gapEvent`, so the
+      // single dial skipped it forever (reconciliation only re-dials on topology
+      // change or RPC break). The fix defaults to the subscription-configured offset,
+      // so every event after the subscription was added is replayed.
+      await waitFor(
+        () =>
+          runner.batches.some((batch) => batch.some((event) => event.offset === gapEvent.offset)),
+        10_000,
+      );
+      expect(runner.batches.flat()).toContainEqual(gapEvent);
+    },
     90_000,
   );
 

@@ -668,11 +668,10 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
 
         webSocket.accept();
         const runner = newWebSocketRpcSession<StreamProcessorRunnerRpc>(webSocket);
-        const streamMaxOffsetBeforeHandshake = this.#state.core.maxOffset;
         const request = await runner.requestSubscription({
           stream: new StreamRpcTarget(this),
           subscriptionKey,
-          streamMaxOffset: streamMaxOffsetBeforeHandshake,
+          streamMaxOffset: this.#state.core.maxOffset,
           subscriptionConfiguredEvent: configured.latestConfiguredEvent,
           streamRuntimeState: this.runtimeState(),
         });
@@ -680,7 +679,13 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
         this.#openConnection({
           ...request,
           direction: "outbound",
-          replayAfterOffset: request.replayAfterOffset ?? streamMaxOffsetBeforeHandshake,
+          // Default to the offset the subscription was configured at, so that events
+          // committed in the gap between the `subscription-configured` append and a
+          // successful dial are replayed rather than skipped. `replayAfterOffset` is
+          // exclusive, so this delivers from the first event after the subscription
+          // was added. A subscriber that returns its own `replayAfterOffset` (e.g. a
+          // built-in runner resuming from a checkpoint) still wins.
+          replayAfterOffset: request.replayAfterOffset ?? configured.latestConfiguredEvent.offset,
           subscriptionKey,
           onClose: () => runner[Symbol.dispose](),
         });

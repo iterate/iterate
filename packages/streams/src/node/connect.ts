@@ -6,7 +6,7 @@ import {
 } from "../connection.ts";
 
 /** Connects from Node.js using the runtime's global WebSocket. */
-export async function connectStream(args: {
+export async function withStreamConnectionFromNode(args: {
   url: string | URL;
   headers?: HeadersInit;
 }): Promise<StreamConnection> {

@@ -18,7 +18,11 @@ import { createProcessorRunner } from "../processor-runner.ts";
 import type { Processor } from "../processor.ts";
 import type { StreamPersistedProcessorState, StreamRpc } from "../types.ts";
 import { createStreamSubscription, type StreamSubscription } from "../subscription.ts";
-import { connectStream, streamRpcPath, type StreamBrowserConnectionStatus } from "./connect.ts";
+import {
+  withStreamConnectionFromBrowser,
+  streamRpcPath,
+  type StreamBrowserConnectionStatus,
+} from "./connect.ts";
 import { acquireWriterRole, streamWriterLockName, type WriterRole } from "./stream-leader.ts";
 import {
   StreamBrowserDatabase,
@@ -141,7 +145,7 @@ function createStreamRuntime(
   };
 
   const listeners = new Set<() => void>();
-  let stream: Awaited<ReturnType<typeof connectStream>> | undefined;
+  let stream: Awaited<ReturnType<typeof withStreamConnectionFromBrowser>> | undefined;
   let subscriptionHandle: { unsubscribe(): void } | undefined;
   let subscription: StreamSubscription | undefined;
   let processing: AsyncDisposable | undefined;
@@ -273,7 +277,7 @@ function createStreamRuntime(
     if (stream !== undefined || disposed) return;
     const streamUrl = new URL(streamRpcPath(args.streamPath), window.location.href);
 
-    void connectStream({
+    void withStreamConnectionFromBrowser({
       url: streamUrl,
       onConnectionStatusChange(connectionStatus, connectionError) {
         if (disposed) return;
@@ -307,7 +311,7 @@ function createStreamRuntime(
   }
 
   function startSubscriptionElection(election: {
-    connection: Awaited<ReturnType<typeof connectStream>>;
+    connection: Awaited<ReturnType<typeof withStreamConnectionFromBrowser>>;
   }) {
     snapshot = { ...snapshot, subscriptionStatus: "electing" };
     emitSnapshot();

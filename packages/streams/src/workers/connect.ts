@@ -7,7 +7,7 @@ import {
 type FetchEndpoint = (request: Request) => Promise<Response>;
 
 /** Connects from a Worker or Durable Object using fetch plus a WebSocket upgrade. */
-export async function connectStream(args: {
+export async function withStreamConnectionFromWorkers(args: {
   url: string | URL;
   fetch: FetchEndpoint;
   headers?: HeadersInit;

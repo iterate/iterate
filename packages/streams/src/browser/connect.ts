@@ -7,7 +7,7 @@ import {
 export type StreamBrowserConnectionStatus = "connecting" | "connected" | "closed" | "error";
 
 /** Connects browser JavaScript to one stream URL over capnweb-WebSocket. */
-export async function connectStream(args: {
+export async function withStreamConnectionFromBrowser(args: {
   url: string | URL;
   onConnectionStatusChange?: (
     status: StreamBrowserConnectionStatus,
