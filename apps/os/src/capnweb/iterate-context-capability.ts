@@ -316,31 +316,21 @@ export class IterateContext extends RpcTarget {
       }
     }
 
-    const resolved = {
-      ...match,
-      target: this.resolveMountTarget(match.mount.target),
-    };
-    if (resolved.mount.invoke === "catchall") {
-      if (typeof resolved.target !== "function") {
+    const target = this.resolveMountTarget(match.mount.target);
+    if (match.mount.invoke === "catchall") {
+      if (typeof target !== "function") {
         throw new Error(
-          `Catchall mount ${resolved.mount.path.join(".")} did not resolve to a function.`,
+          `Catchall mount ${match.mount.path.join(".")} did not resolve to a function.`,
         );
       }
-      return await resolved.target({ path: resolved.remainder, args });
+      return await target({ path: match.remainder, args });
     }
 
-    if (resolved.remainder.length > 0) {
-      const method = resolveTargetCall(resolved.target, resolved.remainder);
-      if (typeof method !== "function") {
-        throw new Error(`Mounted path ${path.join(".")} did not resolve to a function.`);
-      }
-      return await method(...args);
-    }
-
-    if (typeof resolved.target !== "function") {
+    const method = match.remainder.length > 0 ? resolveTargetCall(target, match.remainder) : target;
+    if (typeof method !== "function") {
       throw new Error(`Mounted path ${path.join(".")} did not resolve to a function.`);
     }
-    return await resolved.target(...args);
+    return await method(...args);
   }
 
   getMounted(path: string[]) {
