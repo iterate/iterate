@@ -41,39 +41,48 @@ So a dynamic worker cannot be given the parent loader binding and load its own
 mount workers that way. Loading and forwarding must happen in the parent Worker
 that already has the loader binding.
 
-## Dynamic-to-dynamic worker forwarding also hits entrypoint transfer limits
+## `/run` dynamic mount forwarding must avoid transferring entrypoints
 
 A dynamic `/run` worker calling `env.ITERATE.callMounted(["tools", "echo"], ...)`
-cannot have the parent Worker load another dynamic worker and return that
-entrypoint's method result over the same RPC call. Even when the parent keeps the
-entrypoint private and only returns the method result, workerd still throws the
-dynamic entrypoint transfer error at the caller.
+can work, but only if the parent Worker is very careful never to transfer or
+serialize the mounted dynamic worker entrypoint, its bound methods, or unresolved
+RPC promises.
 
-For `/run`, the practical workaround is to load user mount scripts as modules in
-the same dynamic worker that runs the snippet. The snippet still calls
-`ctx.tools.echo(...)`, but that dynamic-worker mount is invoked in-process inside
-the `/run` worker. Built-in ctx mounts still forward through `env.ITERATE`.
+The working `/run` shape is:
+
+- the parent creates the normal `IterateContext` and passes it to
+  `run({ ctx, vars })`;
+- the dynamic `/run` worker wraps that context with `liftLocalProxies(...)`;
+- for dynamic-worker mount roots only, the `/run` worker creates a local marker
+  proxy that calls `env.ITERATE.callMounted([root, ...path], args)`;
+- `IterateContextEntrypoint.callMounted()` runs in the parent Worker, loads or
+  reuses the mounted dynamic worker, awaits intermediate getter/RPC-promise
+  values, and invokes the final method directly.
+
+The important implementation details are:
+
+- do not return the mounted dynamic worker entrypoint from the parent call;
+- do not create a bound function from a method on the mounted dynamic worker
+  entrypoint, because workerd treats that as transferring the dynamic entrypoint;
+- do await intermediate nested targets like `tools.nested` before calling
+  `describe(...)`, otherwise the parent tries to serialize an unresolved
+  `RpcPromise`;
+- when a mount's `target.call` names a final method such as `["echo"]`, invoke
+  it as `parent.echo(...args)` so the mounted worker receives the right `this`.
 
 Project config `worker.js` is a different case: it receives `env.ITERATE` from
 the parent and should call built-in capabilities like
 `env.ITERATE.context.streams.append(...)`. That path must not require loading a
 second dynamic worker from inside the config worker.
 
-Two smaller direct-RPC variants were tested and failed with the same workerd
-error:
+Some tempting variants still fail:
 
 - passing the real `ctx: await env.ITERATE.context` into `/run` snippets and
   exposing dynamic-worker mounts like `ctx.tools` as real prototype getters;
 - keeping the real context for built-ins but using a tiny local path proxy that
-  called `env.ITERATE.callMounted(["tools", "echo"], args)` for dynamic-worker
-  mount roots.
-
-Both preserve the desired authoring shape in JavaScript, but both still make a
-dynamic worker call the parent which then calls a second dynamically-loaded
-worker. Today that boundary fails before the result can be returned. The current
-`/run` implementation therefore inlines dynamic-worker mount scripts into the
-same dynamic worker as the snippet. That bridge is not just ergonomic sugar; it
-keeps mounted dynamic-worker tools in-process where workerd allows the call.
+  calls a generic parent resolver that binds dynamic-entrypoint methods;
+- walking nested dynamic-worker targets without awaiting intermediate
+  `RpcPromise` values.
 
 An even smaller variant, passing only the lifted real context into `/run` with no
 local dynamic mount bridge, failed at the first mounted method call:
@@ -81,8 +90,8 @@ local dynamic mount bridge, failed at the first mounted method call:
 dynamic-worker mount roots did not arrive with their callable target shape.
 
 Injecting the real `IterateContext` into `/run` is still useful. Built-in
-capabilities can use the same object as Node Cap'n Web tests, while only
-dynamic-worker user mounts need the local in-process module bridge.
+capabilities use the same object as Node Cap'n Web tests, while dynamic-worker
+user mounts use the parent-owned `callMounted()` bridge.
 
 ## Project config worker capabilities need a facade too
 

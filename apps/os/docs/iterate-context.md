@@ -419,9 +419,11 @@ These are observed constraints from the e2e implementation:
   another context.
 - Dynamic-worker entrypoints returned by `env.LOADER.load(...).getEntrypoint()`
   cannot be transferred to another Worker.
-- A dynamic `/run` worker cannot call the parent and have the parent forward to
-  a second dynamic worker over the same RPC call. `/run` therefore loads dynamic
-  mount scripts as modules in the same dynamic worker isolate as the snippet.
+- A dynamic `/run` worker receives the real `IterateContext` as `run({ ctx,
+vars })`. Built-in roots use that object directly. Dynamic-worker mount roots
+  use a local marker proxy that calls the parent-owned `env.ITERATE.callMounted`
+  binding; the parent owns the Worker Loader and forwards into the mounted
+  dynamic worker without exposing the dynamic worker entrypoint to `/run`.
 - Normal Cap'n Web and Workers RPC stubs should pass through untouched. The
   local SDK proxy applies only to marker values returned by `localProxyCaller`.
 - SDK marker ergonomics require the caller side to run `liftLocalProxies(...)`

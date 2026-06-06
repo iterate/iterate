@@ -47,31 +47,16 @@ export async function handleRootIterateContextFetch(input: {
   );
 }
 
-function rootRunWorkerSrc(input: {
-  functionSource: string;
-  moduleByTargetKey: Record<string, string>;
-  props: IterateContextProps;
-}) {
-  const mountImports = Object.entries(input.moduleByTargetKey)
-    .map(([targetKey, moduleName], index) => {
-      return `import * as mountModule${index} from ${JSON.stringify(`./${moduleName}`)};
-mountModules.set(${JSON.stringify(targetKey)}, mountModule${index});`;
-    })
-    .join("\n");
-
+function rootRunWorkerSrc(input: { functionSource: string; props: IterateContextProps }) {
   return /* js */ `
   import { WorkerEntrypoint } from "cloudflare:workers";
   import {
-    callLocalProxyCaller,
-    isLocalProxyCaller,
     liftLocalProxies,
     localProxyCaller,
   } from "./local-proxy-wrapper.js";
 
   const snippet = (${input.functionSource});
   const props = ${JSON.stringify(input.props)};
-  const mountModules = new Map();
-  ${mountImports}
 
   function __using(stack, value, isAsync) {
     if (value == null) return value;
@@ -131,70 +116,10 @@ mountModules.set(${JSON.stringify(targetKey)}, mountModule${index});`;
     if (hasError) throw error;
   }
 
-  function isPathPrefix(prefix, path) {
-    return prefix.every((segment, index) => path[index] === segment);
-  }
-
-  function dynamicMountForPath(path) {
-    let match;
-    for (const mount of props.mounts ?? []) {
-      if (mount.target.type !== "dynamic-worker") continue;
-      if (!isPathPrefix(mount.path, path)) continue;
-      if (!match || mount.path.length > match.path.length) match = mount;
-    }
-    return match;
-  }
-
   function hasDynamicMountRoot(rootName) {
     return (props.mounts ?? []).some(
       (mount) => mount.target.type === "dynamic-worker" && mount.path[0] === rootName,
     );
-  }
-
-  function targetKey(target) {
-    return JSON.stringify({
-      entrypoint: target.entrypoint,
-      loader: target.loader,
-      script: target.script,
-    });
-  }
-
-  function localTargetFromModule(module, target, env) {
-    const exported = target.entrypoint != null ? module[target.entrypoint] : module.default;
-    if (typeof exported === "function") {
-      const instance = Object.create(exported.prototype);
-      Object.defineProperty(instance, "env", { value: env });
-      return instance;
-    }
-    return exported;
-  }
-
-  function resolveTargetCall(target, call) {
-    let current = target;
-    for (const step of call) {
-      if (current == null) throw new Error("Cannot resolve target call through " + String(current));
-      if (typeof step === "string") {
-        const parent = current;
-        const value = parent[step];
-        current = typeof value === "function" ? value.bind(parent) : value;
-        continue;
-      }
-      const method = current[step.method];
-      if (typeof method !== "function") throw new Error("Target method " + step.method + " is not callable.");
-      current = method.apply(current, step.args ?? []);
-    }
-    return current;
-  }
-
-  async function invokeResolvedMountTarget(target, remainder, args, path) {
-    if (isLocalProxyCaller(target)) {
-      return await callLocalProxyCaller(target, { path: remainder, args });
-    }
-    const method = remainder.length > 0 ? resolveTargetCall(target, remainder) : target;
-    if (typeof method !== "function") {
-      throw new Error("Mounted path " + path.join(".") + " did not resolve to a function.");
-    }
-    return await method(...args);
   }
 
   function ctxWithLocalDynamicMounts(host, ctx) {
@@ -202,12 +127,14 @@ mountModules.set(${JSON.stringify(targetKey)}, mountModule${index});`;
     return new Proxy(lifted, {
       get(target, prop, receiver) {
         if (typeof prop === "string" && hasDynamicMountRoot(prop)) {
-          // Dynamic worker entrypoints cannot be transferred from one dynamic
-          // worker to another. The parent still owns the run worker, but /run
-          // executes user dynamic mounts in this same isolate so snippets can
-          // call ctx.tools.echo() and ctx.sdk.chat.postMessage() normally.
+          // Built-in roots can travel as the injected ctx object. Dynamic-worker
+          // mounts cannot expose their entrypoint to this run worker, so the
+          // local proxy records the rest of the JavaScript path and asks the
+          // parent-owned ITERATE binding to forward the final call.
           return liftLocalProxies(
-            localProxyCaller(({ path, args }) => host.callDynamicMount([prop, ...path], args)),
+            localProxyCaller(({ path, args }) =>
+              host.env.ITERATE.callMounted([prop, ...path], args),
+            ),
           );
         }
         return Reflect.get(target, prop, receiver);
@@ -216,28 +143,6 @@ mountModules.set(${JSON.stringify(targetKey)}, mountModule${index});`;
   }
 
   export default class extends WorkerEntrypoint {
-    localTargets = new Map();
-
-    localDynamicWorkerTarget(target) {
-      const key = targetKey(target);
-      const cached = this.localTargets.get(key);
-      if (cached) return cached;
-      const module = mountModules.get(key);
-      if (!module) throw new Error("No local mount module for dynamic worker target.");
-      const localTarget = localTargetFromModule(module, target, this.env);
-      this.localTargets.set(key, localTarget);
-      return localTarget;
-    }
-
-    async callDynamicMount(path, args) {
-      const mount = dynamicMountForPath(path);
-      if (!mount) throw new Error("No dynamic worker mount registered for " + path.join("."));
-      const remainder = path.slice(mount.path.length);
-      const target = this.localDynamicWorkerTarget(mount.target);
-      const resolvedTarget = resolveTargetCall(target, mount.target.call ?? []);
-      return await invokeResolvedMountTarget(resolvedTarget, remainder, args, path);
-    }
-
     async run({ ctx, vars }) {
       try {
         const result = await snippet({
@@ -281,7 +186,6 @@ async function handleRootRunLeg(input: { context: AppContext; env: Env; request:
     );
   }
   const props = body.props ?? { scopes: { projects: "all" } };
-  const mountModules = dynamicWorkerMountModules(props);
   const context = createIterateContext({
     context: input.context,
     projects: createProjectsCapability({ context: input.context }),
@@ -298,11 +202,9 @@ async function handleRootRunLeg(input: { context: AppContext; env: Env; request:
     modules: {
       "worker.js": rootRunWorkerSrc({
         functionSource: body.functionSource,
-        moduleByTargetKey: mountModules.moduleByTargetKey,
         props,
       }),
       "local-proxy-wrapper.js": localProxyWrapperSource,
-      ...mountModules.modules,
     },
   });
   const entry = worker.getEntrypoint() as unknown as {
@@ -334,22 +236,4 @@ async function handleRootRunLeg(input: { context: AppContext; env: Env; request:
   } finally {
     entry[Symbol.dispose]?.();
   }
-}
-
-function dynamicWorkerMountModules(props: IterateContextProps) {
-  const modules: Record<string, string> = {};
-  const moduleByTargetKey: Record<string, string> = {};
-  for (const mount of props.mounts ?? []) {
-    if (mount.target.type !== "dynamic-worker") continue;
-    const key = JSON.stringify({
-      entrypoint: mount.target.entrypoint,
-      loader: mount.target.loader,
-      script: mount.target.script,
-    });
-    if (moduleByTargetKey[key]) continue;
-    const moduleName = `mount-${Object.keys(moduleByTargetKey).length}.js`;
-    moduleByTargetKey[key] = moduleName;
-    modules[moduleName] = mount.target.script;
-  }
-  return { moduleByTargetKey, modules };
 }

@@ -109,6 +109,10 @@ export class IterateContextEntrypoint extends WorkerEntrypoint<Env, IterateConte
       props: workerCtx.props,
     });
   }
+
+  async callMounted(path: string[], args: unknown[] = []) {
+    return await this.context.callMounted(path, args);
+  }
 }
 
 class IterateCapability extends RpcTarget {
@@ -360,16 +364,11 @@ export class IterateContext extends RpcTarget {
     remainder: string[];
     target: Extract<MountTarget, { type: "dynamic-worker" }>;
   }) {
-    return await invokeResolvedMountTarget({
+    return await invokeDynamicWorkerTarget({
       args: input.args,
-      path: [...(input.target.call ?? []), ...input.remainder].map((step) =>
-        typeof step === "string" ? step : step.method,
-      ),
-      remainder: input.remainder,
-      target: resolveTargetCall(
-        this.resolveDynamicWorkerTarget(input.target),
-        input.target.call ?? [],
-      ),
+      call: input.target.call ?? [],
+      path: input.remainder,
+      target: this.resolveDynamicWorkerTarget(input.target),
     });
   }
 }
@@ -735,6 +734,89 @@ async function invokeResolvedMountTarget(input: {
     throw new Error(`Mounted path ${input.path.join(".")} did not resolve to a function.`);
   }
   return await method(...input.args);
+}
+
+async function invokeDynamicWorkerTarget(input: {
+  args: unknown[];
+  call: readonly TargetCall[];
+  path: string[];
+  target: unknown;
+}) {
+  const lastCallStep = input.call.at(-1);
+  if (input.path.length === 0 && typeof lastCallStep === "string") {
+    // A method mount like target.call=["echo"] must preserve method-call
+    // syntax. Pulling echo off the dynamic-worker entrypoint and binding it can
+    // make workerd try to transfer the entrypoint; calling parent.echo(...)
+    // keeps the entrypoint private to the parent Worker and preserves `this`.
+    const parent = (await resolveDynamicTargetCall(input.target, input.call.slice(0, -1)))
+      .value as Record<string, (...args: unknown[]) => unknown>;
+    if (typeof parent[lastCallStep] !== "function") {
+      throw new Error(`Dynamic target method ${lastCallStep} is not callable.`);
+    }
+    return await parent[lastCallStep](...input.args);
+  }
+
+  const resolved = await resolveDynamicTargetCall(input.target, input.call);
+  let current = resolved.value;
+
+  if (isLocalProxyCaller(current)) {
+    return await callLocalProxyCaller(current, {
+      args: input.args,
+      path: input.path,
+    });
+  }
+
+  if (input.path.length === 0) {
+    if (typeof current !== "function") {
+      throw new Error("Dynamic worker mount did not resolve to a callable target.");
+    }
+    return await Reflect.apply(current, resolved.receiver, input.args);
+  }
+
+  for (const segment of input.path.slice(0, -1)) {
+    // Nested dynamic-worker getters like tools.nested return RPC promises.
+    // Await them in the parent before walking deeper so the final result is
+    // serializable back to the /run worker.
+    current = await (current as Record<string, unknown>)[segment];
+  }
+
+  const methodName = input.path.at(-1)!;
+  const method = (current as Record<string, unknown>)[methodName];
+  if (typeof method !== "function") {
+    throw new Error(`Dynamic worker mount ${input.path.join(".")} did not resolve to a function.`);
+  }
+  return await Reflect.apply(method, current, input.args);
+}
+
+async function resolveDynamicTargetCall(
+  target: unknown,
+  call: readonly TargetCall[],
+): Promise<{ receiver: unknown; value: unknown }> {
+  let current = target;
+  let receiver: unknown;
+  for (const step of call) {
+    current = await current;
+    if (current == null) {
+      throw new Error(`Cannot resolve dynamic target call through ${String(current)}.`);
+    }
+
+    if (typeof step === "string") {
+      const parent = current;
+      const value = (parent as Record<string, unknown>)[step];
+      receiver = parent;
+      current = value;
+      continue;
+    }
+
+    const parent = current;
+    const method = (current as Record<string, unknown>)[step.method];
+    if (typeof method !== "function") {
+      throw new Error(`Dynamic target method ${step.method} is not callable.`);
+    }
+    receiver = undefined;
+    current = Reflect.apply(method, parent, step.args ?? []);
+  }
+  return { receiver, value: await current };
 }
 
 export function singleProjectIdFromScopes(scopes: ProjectScopes): string | null {
