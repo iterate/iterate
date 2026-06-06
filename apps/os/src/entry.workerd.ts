@@ -63,6 +63,7 @@ export { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-
 export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 
 const CAPTUN_TUNNEL_ROUTE_PREFIX = "/__iterate/captun";
+const EGRESS_ECHO_PATH = "/api/captnweb/egress-echo";
 const PROJECT_CAPNWEB_PATH = "/__iterate/capnweb";
 const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 
@@ -76,6 +77,9 @@ export default {
   async fetch(request: Request, env: Env, cfCtx: ExecutionContext) {
     const captunTunnelResponse = await handleCaptunTunnelFetch({ env, request });
     if (captunTunnelResponse) return captunTunnelResponse;
+
+    const egressEchoResponse = handleEgressEchoFetch({ request });
+    if (egressEchoResponse) return egressEchoResponse;
 
     const debugAppendChainResponse = await handleDebugAppendChainFetch({ request, env });
     if (debugAppendChainResponse) return debugAppendChainResponse;
@@ -195,6 +199,25 @@ export default {
     });
   },
 };
+
+function handleEgressEchoFetch(input: { request: Request }) {
+  const url = new URL(input.request.url);
+  if (url.pathname !== EGRESS_ECHO_PATH) return null;
+
+  const expectedToken = config.adminApiSecret?.exposeSecret();
+  if (
+    expectedToken == null ||
+    input.request.headers.get("authorization") !== `Bearer ${expectedToken}`
+  ) {
+    return Response.json({ error: "Unauthorized." }, { status: 401 });
+  }
+
+  return Response.json({
+    headers: Object.fromEntries(input.request.headers),
+    method: input.request.method,
+    url: url.toString(),
+  });
+}
 
 async function handleCaptunTunnelFetch(input: { env: Env; request: Request }) {
   const url = new URL(input.request.url);

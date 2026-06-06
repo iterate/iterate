@@ -2,7 +2,7 @@ import { RpcTarget } from "cloudflare:workers";
 import { ORPCError } from "@orpc/server";
 import { isValidTypeId, typeid } from "@iterate-com/shared/typeid";
 import type {
-  IterateContext,
+  ProjectContextCapability,
   ProjectDurableObjectContextClient,
   ProjectsCapabilityClient,
 } from "./iterate-context-capability.ts";
@@ -52,7 +52,7 @@ export class ProjectsCapability extends RpcTarget implements ProjectsCapabilityC
         project: ProjectDurableObjectContextClient;
         projectId: string;
         projects: ProjectsCapability;
-      }) => IterateContext;
+      }) => ProjectContextCapability;
     },
   ) {
     super();

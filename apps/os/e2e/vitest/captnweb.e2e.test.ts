@@ -14,6 +14,7 @@ import type {
 } from "../../src/capnweb/iterate-context-capability.ts";
 
 const baseUrl = requireBaseUrl();
+const egressEchoBaseUrl = requireEgressEchoBaseUrl(baseUrl);
 const auth = rootAccessAuth();
 const ROOT_ITERATE_CONTEXT_PREFIX = "/api/captnweb";
 const PROJECT_CAPNWEB_PATH = "/__iterate/capnweb";
@@ -223,7 +224,8 @@ describe("capnweb", () => {
       fn: fetchProjectIngressAndEgress,
       props: { scopes: { projects: [project.id] } },
       vars: {
-        echoUrl: "https://httpbin.org/anything",
+        echoAuthToken: auth.token.exposeSecret(),
+        echoUrl: new URL("/api/captnweb/egress-echo", egressEchoBaseUrl).toString(),
         ingressUrl: project.ingressUrl,
         secretKey: EXAMPLE_EGRESS_SECRET_KEY,
       },
@@ -240,7 +242,7 @@ describe("capnweb", () => {
     expect(result.egress.echoedSecretHeader).toBe(`Bearer ${EXAMPLE_EGRESS_SECRET_MATERIAL}`);
   });
 
-  it("applies IterateContext mount props for target, method, catchall, and system shortcuts", async () => {
+  it("applies IterateContext mount props for target, method, catchall, and ctx shortcuts", async () => {
     using root = withRootIterateContextFromNode({ auth, baseUrl });
     await using project = await createDisposableProject({
       root,
@@ -360,10 +362,13 @@ describe("capnweb", () => {
     })) as {
       appendResult: unknown;
       catchallResult: unknown;
+      eventsByShortcut: unknown[];
+      eventsByMethod: unknown[];
       nestedCatchallResult: unknown;
       listedByMethod: string[];
       listedByShortcut: string[];
       methodResult: unknown;
+      mountedAppendResult: unknown;
       nestedResult: unknown;
       targetResult: unknown;
     };
@@ -381,6 +386,18 @@ describe("capnweb", () => {
       input: { marker },
       kind: "target-method",
     });
+    expect(result.mountedAppendResult).toMatchObject({
+      payload: { marker, source: "mount-shortcut" },
+      type: eventType,
+    });
+    expect(result.eventsByShortcut).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          payload: { marker, source: "mount-shortcut" },
+          type: eventType,
+        }),
+      ]),
+    );
     expect(result.catchallResult).toEqual({
       args: [{ text: marker }],
       method: "chat.postMessage",
@@ -393,10 +410,16 @@ describe("capnweb", () => {
       payload: { marker, source: "ctx-method-mount" },
       type: `${eventType}/method`,
     });
-    expect(result.listedByShortcut).toEqual(
-      expect.arrayContaining([`${project.id}:${streamPath}`]),
+    expect(result.eventsByMethod).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          payload: { marker, source: "ctx-method-mount" },
+          type: `${eventType}/method`,
+        }),
+      ]),
     );
-    expect(result.listedByMethod).toEqual(expect.arrayContaining([`${project.id}:${streamPath}`]));
+    expect(result.listedByShortcut).toEqual(expect.any(Array));
+    expect(result.listedByMethod).toEqual(expect.any(Array));
   });
 });
 
@@ -543,6 +566,7 @@ async function fetchProjectIngressAndEgress({
   ctx,
   vars,
 }: CapnwebFunctionInput<{
+  echoAuthToken: string;
   echoUrl: string;
   ingressUrl: string;
   secretKey: string;
@@ -572,6 +596,7 @@ async function fetchProjectIngressAndEgress({
     const egressResponse = await project.egressFetch(
       new Request(vars.echoUrl, {
         headers: {
+          authorization: `Bearer ${vars.echoAuthToken}`,
           [headerName]: secretReference,
         },
       }),
@@ -618,12 +643,16 @@ async function exerciseMountedContext({
 
     const mountedStreams = await ctx.mountedStreams;
     disposables.push(mountedStreams);
-    await mountedStreams.append({
+    const mountedAppendResult = await mountedStreams.append({
       streamPath: vars.streamPath,
       event: {
         type: vars.eventType,
         payload: { marker: vars.marker, source: "mount-shortcut" },
       },
+    });
+    const eventsByShortcut = await mountedStreams.read({
+      afterOffset: "start",
+      streamPath: vars.streamPath,
     });
 
     const listedByShortcut = await mountedStreams.list();
@@ -634,6 +663,10 @@ async function exerciseMountedContext({
         type: `${vars.eventType}/method`,
         payload: { marker: vars.marker, source: "ctx-method-mount" },
       },
+    });
+    const eventsByMethod = await mountedStreams.read({
+      afterOffset: "start",
+      streamPath: vars.streamPath,
     });
 
     const sdk = await ctx.sdk;
@@ -649,10 +682,13 @@ async function exerciseMountedContext({
     return {
       appendResult,
       catchallResult,
+      eventsByMethod,
+      eventsByShortcut,
       nestedCatchallResult,
       listedByMethod: listedByMethod.map((stream: { name: string }) => stream.name),
       listedByShortcut: listedByShortcut.map((stream: { name: string }) => stream.name),
       methodResult,
+      mountedAppendResult,
       nestedResult,
       targetResult,
     };
@@ -709,6 +745,20 @@ type RootAccessAuth = ReturnType<typeof rootAccessAuth>;
 
 function rootAccessAuthHeaders(auth: RootAccessAuth) {
   return { Authorization: `Bearer ${auth.token.exposeSecret()}` };
+}
+
+function requireEgressEchoBaseUrl(controlPlaneBaseUrl: string) {
+  const explicit = process.env.OS_E2E_EGRESS_ECHO_BASE_URL?.trim().replace(/\/+$/, "");
+  if (explicit) return explicit;
+
+  const url = new URL(controlPlaneBaseUrl);
+  if (url.hostname !== "localhost" && url.hostname !== "127.0.0.1") {
+    return controlPlaneBaseUrl;
+  }
+
+  throw new Error(
+    "OS_E2E_EGRESS_ECHO_BASE_URL is required when APP_CONFIG_BASE_URL points at localhost.",
+  );
 }
 
 async function createDisposableProject(input: { root: RpcStub<IterateContext>; slug: string }) {

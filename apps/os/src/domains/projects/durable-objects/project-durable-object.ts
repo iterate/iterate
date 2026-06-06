@@ -52,7 +52,7 @@ import {
   type RepoInfo,
 } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import { stripArtifactTokenQuery } from "~/domains/repos/artifacts.ts";
-import { getReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
+import { ensureIterateConfigInfoForProject } from "~/domains/repos/entrypoints/repo-capability.ts";
 import { ITERATE_CONFIG_REPO_SLUG } from "~/domains/repos/iterate-config-repo.ts";
 import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 import type { StreamsCapabilityProps } from "~/domains/streams/entrypoints/streams-capability.ts";
@@ -1082,10 +1082,11 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
   }
 
   private async getOrCreateIterateConfigRepo(summary: ProjectSummary) {
-    return await getReposCapability({
-      exports: readLoopbackExports(this.ctx),
-      props: { projectId: summary.id },
-    }).ensureIterateConfigInfo({ projectSlug: summary.slug });
+    return await ensureIterateConfigInfoForProject({
+      env: this.env,
+      projectId: summary.id,
+      projectSlug: summary.slug,
+    });
   }
 
   private async ensureAgentsRoot(projectId: string) {

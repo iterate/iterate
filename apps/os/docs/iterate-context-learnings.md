@@ -75,6 +75,10 @@ worker. Today that boundary fails before the result can be returned. The current
 same dynamic worker as the snippet. That bridge is not just ergonomic sugar; it
 keeps mounted dynamic-worker tools in-process where workerd allows the call.
 
+Injecting the real `IterateContext` into `/run` is still useful. Built-in
+capabilities can use the same object as Node Cap'n Web tests, while only
+dynamic-worker user mounts need the local in-process module bridge.
+
 ## Project config worker capabilities need a facade too
 
 `ctx.project.worker` must not expose the raw dynamic worker entrypoint returned
@@ -88,3 +92,48 @@ The workable shape is a parent-owned `ProjectWorkerCapability` facade:
   such as `callConfigWorkerFunction({ functionName: "someTool", args })`.
 
 That keeps the config worker entrypoint inside the Project Durable Object.
+
+## Local dev Artifacts can fail below IterateContext
+
+The local Alchemy dev app currently binds the real Cloudflare Artifacts binding.
+When that remote proxy fails, project setup fails while creating the
+`iterate-config` repo with:
+
+```text
+Error: WebSocket connection failed.
+```
+
+The failure happens below the context tree, inside
+`RepoDurableObject.createRepo()` when the repo DO calls the Artifacts binding.
+It affects tests that need the project config repo or default project worker,
+but context-only calls such as project CRUD, project-scoped streams, and dynamic
+mount dispatch can still pass.
+
+Running `pnpm artifacts:seed-config-base` can still succeed because that script
+talks to the Cloudflare Artifacts REST API from Node. That does not prove the
+Worker runtime `ARTIFACTS` binding is healthy; project setup can still fail when
+the Worker calls the binding at runtime.
+
+## Cloudflare Artifacts fallback must tolerate partial repo creation
+
+The REST fallback for Cloudflare Artifacts can see a `409` from
+`POST /repos/<source>/fork` when a previous attempt created the target artifact
+repo but did not finish the Repo Durable Object's local storage/event setup.
+
+For the `iterate-config` path, treating that conflict as idempotent is the right
+shape: read the target repo and let the Repo Durable Object continue creating
+its token and appending the repo-created event. This keeps retries clean without
+special-casing the caller.
+
+## Do not put worker e2e helpers under `/__debug`
+
+The local Cloudflare dev server reserves `/__debug` and returns the devtools
+redirect HTML before the Worker fetch handler sees the request. That is why a
+JSON echo endpoint under `/__debug/egress-echo` worked conceptually but failed
+in local e2e with HTML parse errors.
+
+Use an app-owned route such as `/api/captnweb/egress-echo` for e2e helper
+endpoints that need to work in both local dev and deployed preview workers.
+When a local e2e uses `APP_CONFIG_BASE_URL=http://127.0.0.1:5173` for the Node
+client, worker-to-worker egress should target the Doppler dev tunnel instead,
+for example with `OS_E2E_EGRESS_ECHO_BASE_URL=https://os.iterate-dev-jonas.com`.
