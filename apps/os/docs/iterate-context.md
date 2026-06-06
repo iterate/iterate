@@ -91,6 +91,18 @@ using target = await connections.get("someConnectionKey");
 await target.someMethod({ value: 1 });
 ```
 
+Direct project ingress at `/__iterate/capnweb` returns the project capability
+itself, not the iterate context. Callers that want the scoped context ask the
+project for it:
+
+```ts
+using project = await connectToProjectCapnweb("/__iterate/capnweb");
+await project.ingressFetch(request);
+
+using ctx = await project.getIterateContext();
+await ctx.project.fetch(request);
+```
+
 The path is canonical API shape, not a routing diagram. `ctx.project.fetch()`
 uses the Project Durable Object because ingress/config-worker behavior is
 project-owned. `ctx.streams.read(...)` may go directly to the stream runtime

@@ -124,6 +124,12 @@ The same duplication rule applies when storing the target passed to
 `provideCapability()`. Cap'n Web may release the argument stub after the call
 returns, so the Project Durable Object stores `input.rpcTarget.dup()`.
 
+The project ingress Cap'n Web endpoint now returns the project capability
+directly. A caller that wants `ctx` calls `project.getIterateContext()`. In tests
+that means the WebSocket session owns two handles: the root project stub and the
+derived context stub. Dispose the derived context handle first, then the project
+stub and socket.
+
 ## Project config worker capabilities need a facade too
 
 `ctx.project.worker` must not expose the raw dynamic worker entrypoint returned
