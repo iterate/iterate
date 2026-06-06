@@ -2,7 +2,7 @@ import { createD1Client } from "sqlfu";
 import { z } from "zod";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { createRpcTargetClass } from "@iterate-com/shared/capabilities";
-import { newWorkersRpcResponse } from "capnweb";
+import { newWebSocketRpcSession, newWorkersRpcResponse, type RpcStub } from "capnweb";
 import { acceptCaptunTunnel, type Fetcher } from "captun";
 import type { FetchCallable } from "@iterate-com/shared/callable/types.ts";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
@@ -64,6 +64,10 @@ import {
 import type { StreamProcessorRunner } from "~/domains/streams/durable-objects/stream-processor-runner.ts";
 
 type CaptunServerTunnel = Fetcher & Disposable;
+type ProjectCapnwebConnectionTarget = Record<string, any>;
+type ProjectCapnwebConnection = Disposable & {
+  target: RpcStub<ProjectCapnwebConnectionTarget>;
+};
 
 export type ProjectStructuredName = {
   projectId: string;
@@ -96,6 +100,7 @@ export type ProjectCapabilityApi = Pick<
   | "egressFetch"
   | "fetch"
   | "getConfigWorker"
+  | "getConnection"
   | "getIterateContext"
   | "getProjectLifecycleRunnerState"
   | "getSummary"
@@ -212,6 +217,7 @@ const PROJECT_DYNAMIC_WORKER_MAIN_MODULE = "worker.js";
 const PROJECT_DYNAMIC_WORKER_COMPATIBILITY_DATE = "2026-04-27";
 const PROJECT_DYNAMIC_WORKER_COMPATIBILITY_FLAGS = ["nodejs_compat"];
 const PROJECT_CAPNWEB_PATH = "/__iterate/capnweb";
+const PROJECT_CAPNWEB_CONNECTIONS_PATH = "/__iterate/capnweb/connections";
 const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 
 type ProjectConfigWorkspaceName = {
@@ -246,6 +252,10 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
   } | null = null;
   #projectEgressInterceptTunnel: CaptunServerTunnel | null = null;
   #projectConfigWorkerBuildPromise: Promise<ProjectDynamicWorkerEntrypoint> | null = null;
+  // Live Cap'n Web connections keyed by caller-chosen names. Like stream
+  // processor connections, these are runtime-only sockets, not durable project
+  // state; reconnecting recreates the target under the same key.
+  #capnwebConnections = new Map<string, ProjectCapnwebConnection>();
 
   constructor(ctx: DurableObjectState, env: ProjectEnv) {
     super(ctx, env);
@@ -400,6 +410,17 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
 
   getCapability(_props: { scopes?: unknown } = {}): ProjectCapability {
     return new ProjectCapability(this);
+  }
+
+  getConnection(connectionKey: string): RpcStub<ProjectCapnwebConnectionTarget> {
+    const connection = this.#capnwebConnections.get(connectionKey);
+    if (!connection) {
+      throw new Error(`Project Cap'n Web connection ${connectionKey} is not connected.`);
+    }
+    // Hand callers a duplicate handle. Disposing the returned stub should
+    // release that caller's reference, not tear down the registered socket that
+    // other ctx.project.connections.get(key) callers may still need.
+    return connection.target.dup();
   }
 
   async getIterateContext(): Promise<IterateContext> {
@@ -571,10 +592,54 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
   }
 
   private async handleProjectCapnwebFetch(request: Request): Promise<Response | null> {
-    if (new URL(request.url).pathname !== PROJECT_CAPNWEB_PATH) return null;
+    const url = new URL(request.url);
+    if (url.pathname === PROJECT_CAPNWEB_CONNECTIONS_PATH) {
+      return this.acceptProjectCapnwebConnection(request, url);
+    }
+    if (url.pathname !== PROJECT_CAPNWEB_PATH) return null;
     const principal = authenticateAdminApiSecret({ config: this.getAppConfig() }, request);
     if (!principal) return new Response("Unauthorized", { status: 401 });
     return newWorkersRpcResponse(request, await this.getIterateContext());
+  }
+
+  private acceptProjectCapnwebConnection(request: Request, url: URL): Response {
+    const principal = authenticateAdminApiSecret({ config: this.getAppConfig() }, request);
+    if (!principal) return new Response("Unauthorized", { status: 401 });
+
+    if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+      return Response.json(
+        { error: "Project Cap'n Web connections require a WebSocket upgrade." },
+        { status: 400 },
+      );
+    }
+
+    const connectionKey = url.searchParams.get("key")?.trim();
+    if (!connectionKey) {
+      return Response.json({ error: "Missing project Cap'n Web connection key." }, { status: 400 });
+    }
+
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    server.accept();
+
+    const target = newWebSocketRpcSession<ProjectCapnwebConnectionTarget>(server);
+    const connection: ProjectCapnwebConnection = {
+      target,
+      [Symbol.dispose]: () => {
+        if (this.#capnwebConnections.get(connectionKey) === connection) {
+          this.#capnwebConnections.delete(connectionKey);
+        }
+        target[Symbol.dispose]();
+        server.close();
+      },
+    };
+
+    this.#capnwebConnections.get(connectionKey)?.[Symbol.dispose]();
+    this.#capnwebConnections.set(connectionKey, connection);
+    server.addEventListener("close", () => connection[Symbol.dispose]());
+    server.addEventListener("error", () => connection[Symbol.dispose]());
+
+    return new Response(null, { status: 101, webSocket: client });
   }
 
   private acceptProjectEgressInterceptTunnel(request: Request): Response {

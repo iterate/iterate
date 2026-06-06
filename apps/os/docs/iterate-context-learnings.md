@@ -93,6 +93,38 @@ Injecting the real `IterateContext` into `/run` is still useful. Built-in
 capabilities use the same object as Node Cap'n Web tests, while dynamic-worker
 user mounts use the parent-owned `callMounted()` bridge.
 
+## Project Cap'n Web connection handles must be duplicated
+
+`ctx.project.connections.get(key)` returns a live Cap'n Web target that was
+registered over a project-ingress WebSocket. Callers should still write normal
+disposal code:
+
+```ts
+using project = await ctx.project;
+using connections = await project.connections;
+using target = await connections.get("someConnectionKey");
+await target.someMethod();
+```
+
+The Project Durable Object must not return the raw stored `RpcStub` for that
+target. Disposing the caller's returned stub can release the stored WebSocket
+session, which makes later callers see "connection is not connected". Return
+`connection.target.dup()` instead: the caller disposes its borrowed handle, and
+the registered socket stays alive until the original connection closes.
+
+The project ingress Worker also has to bypass generic callable dispatch for
+WebSocket connection paths. A `Response` containing `webSocket` cannot pass
+through the current callable dispatch path; workerd throws:
+
+```text
+DataCloneError: Could not serialize object of type "WebSocket".
+This type does not support serialization.
+```
+
+So `/__iterate/capnweb` and `/__iterate/capnweb/connections` both route
+directly to the Project Durable Object when the request host resolves to a
+project.
+
 ## Project config worker capabilities need a facade too
 
 `ctx.project.worker` must not expose the raw dynamic worker entrypoint returned

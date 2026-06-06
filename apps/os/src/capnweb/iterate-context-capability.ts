@@ -197,6 +197,7 @@ export class ProjectContextCapability extends RpcTarget {
   readonly #runtime: IterateContextRuntime;
   readonly #project: ProjectDurableObjectContextClient;
   readonly #projectId: string;
+  #connections?: ProjectConnectionsCapability;
   #projectCapability?: ProjectCapabilityApi;
   #repos?: ProjectReposCapability;
   #streams?: ProjectStreamsCapability;
@@ -230,6 +231,10 @@ export class ProjectContextCapability extends RpcTarget {
     return (this.#worker ??= new ProjectWorkerCapability(this.projectCapability()));
   }
 
+  get connections(): ProjectConnectionsCapability {
+    return (this.#connections ??= new ProjectConnectionsCapability(this.projectCapability()));
+  }
+
   async describe() {
     return await this.projectCapability().describe();
   }
@@ -258,6 +263,16 @@ export class ProjectContextCapability extends RpcTarget {
     return (this.#projectCapability ??= this.#project.getCapability({
       scopes: { projectId: this.#projectId },
     }));
+  }
+}
+
+export class ProjectConnectionsCapability extends RpcTarget {
+  constructor(private readonly project: ProjectCapabilityApi) {
+    super();
+  }
+
+  get(connectionKey: string) {
+    return this.project.getConnection(connectionKey);
   }
 }
 

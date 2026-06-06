@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from "vitest";
-import { newWebSocketRpcSession, type RpcStub } from "capnweb";
+import { newWebSocketRpcSession, RpcTarget, type RpcStub } from "capnweb";
 import dedent from "dedent";
 import WebSocket from "ws";
 import { Redacted } from "@iterate-com/shared/apps/config";
@@ -19,6 +19,7 @@ const egressEchoBaseUrl = requireEgressEchoBaseUrl(baseUrl);
 const auth = rootAccessAuth();
 const ROOT_ITERATE_CONTEXT_PREFIX = "/api/captnweb";
 const PROJECT_CAPNWEB_PATH = "/__iterate/capnweb";
+const PROJECT_CAPNWEB_CONNECTIONS_PATH = "/__iterate/capnweb/connections";
 
 describe("capnweb", () => {
   const testRunSlugPrefix = `captnweb-${crypto.randomUUID().slice(0, 8)}`;
@@ -93,6 +94,44 @@ describe("capnweb", () => {
     expect(events).toEqual(
       expect.arrayContaining([expect.objectContaining({ payload: { marker }, type: eventType })]),
     );
+  });
+
+  it("calls a project Cap'n Web connection from node and dynamic worker code", async () => {
+    using root = withRootIterateContextFromNode({ auth, baseUrl });
+    await using project = await createDisposableProject({
+      root,
+      slug: `${testRunSlugPrefix}-connection-${uniqueSuffix()}`.slice(0, 40),
+    });
+    const connectionKey = `connection-${uniqueSuffix()}`;
+    await using connection = await withProjectConnectionFromNode({
+      auth,
+      connectionKey,
+      ingressUrl: project.ingressUrl,
+      target: new ProjectConnectionTestTarget({ marker: connectionKey }),
+    });
+
+    using iterate = withIterateFromNode({ auth, ingressUrl: project.ingressUrl });
+    const fromNode = await runCapnwebFunctionFromNode({
+      ctx: iterate.ctx,
+      fn: callProjectConnection,
+      vars: { connectionKey, source: "node" },
+    });
+    const fromDynamicWorker = await runCapnwebFunctionInDynamicWorker({
+      fn: callProjectConnection,
+      props: { scopes: { projects: [project.id] } },
+      vars: { connectionKey, source: "dynamic-worker" },
+    });
+
+    expect(fromNode).toEqual({
+      callCount: 1,
+      marker: connectionKey,
+      source: "node",
+    });
+    expect(fromDynamicWorker).toEqual({
+      callCount: 2,
+      marker: connectionKey,
+      source: "dynamic-worker",
+    });
   });
 
   it("updates iterate-config and calls env.ITERATE.context from dynamic worker fetch", async () => {
@@ -457,25 +496,12 @@ function withIterateFromNode(input: { auth: RootAccessAuth; ingressUrl: string }
   onWsFrame: (frame: unknown) => void;
   [Symbol.dispose](): void;
 } {
-  const base = new URL(baseUrl);
-  const ingress = new URL(input.ingressUrl);
-  const wsUrl = new URL(
-    PROJECT_CAPNWEB_PATH,
-    base.hostname === "localhost" || base.hostname === "127.0.0.1" ? base : ingress,
-  );
-  wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
-  const socket = new WebSocket(wsUrl.toString(), {
-    headers: {
-      ...rootAccessAuthHeaders(input.auth),
-      ...(wsUrl.host === base.host
-        ? {
-            Host: ingress.hostname,
-            "x-forwarded-host": ingress.hostname,
-            "x-iterate-ingress-hostname": ingress.hostname,
-          }
-        : {}),
-    },
+  const { headers, wsUrl } = projectCapnwebWebSocketRequest({
+    auth: input.auth,
+    ingressUrl: input.ingressUrl,
+    path: PROJECT_CAPNWEB_PATH,
   });
+  const socket = new WebSocket(wsUrl.toString(), { headers });
   const ctx = liftLocalProxies(
     newWebSocketRpcSession<IterateContext>(
       socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
@@ -491,7 +517,67 @@ function withIterateFromNode(input: { auth: RootAccessAuth; ingressUrl: string }
   };
 }
 
-type MountedIterateContext = RpcStub<IterateContext> & Record<string, any>;
+async function withProjectConnectionFromNode(input: {
+  auth: RootAccessAuth;
+  connectionKey: string;
+  ingressUrl: string;
+  target: RpcTarget;
+}): Promise<Disposable> {
+  const { headers, wsUrl } = projectCapnwebWebSocketRequest({
+    auth: input.auth,
+    ingressUrl: input.ingressUrl,
+    path: PROJECT_CAPNWEB_CONNECTIONS_PATH,
+  });
+  wsUrl.searchParams.set("key", input.connectionKey);
+  const socket = new WebSocket(wsUrl.toString(), { headers });
+  const session = newWebSocketRpcSession(
+    socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
+    input.target,
+  );
+  await new Promise<void>((resolve, reject) => {
+    socket.once("open", resolve);
+    socket.once("error", reject);
+  });
+  return {
+    [Symbol.dispose]() {
+      session[Symbol.dispose]?.();
+      socket.close();
+    },
+  };
+}
+
+function projectCapnwebWebSocketRequest(input: {
+  auth: RootAccessAuth;
+  ingressUrl: string;
+  path: string;
+}) {
+  const base = new URL(baseUrl);
+  const ingress = new URL(input.ingressUrl);
+  const wsUrl = new URL(
+    input.path,
+    base.hostname === "localhost" || base.hostname === "127.0.0.1" ? base : ingress,
+  );
+  wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
+  return {
+    headers: {
+      ...rootAccessAuthHeaders(input.auth),
+      ...(wsUrl.host === base.host
+        ? {
+            Host: ingress.hostname,
+            "x-forwarded-host": ingress.hostname,
+            "x-iterate-ingress-hostname": ingress.hostname,
+          }
+        : {}),
+    },
+    wsUrl,
+  };
+}
+
+// The shared capnweb functions below are deliberately JavaScript-shaped: the
+// same source is executed from Node and stringified into a dynamic worker. Cap'n
+// Web stubs expose wildcard members at runtime, so this test harness keeps the
+// context dynamic instead of making every example fight proxy placeholder types.
+type MountedIterateContext = any;
 
 type CapnwebFunctionInput<Vars extends Record<string, unknown>> = {
   ctx: MountedIterateContext;
@@ -502,6 +588,25 @@ type CapnwebFunctionInput<Vars extends Record<string, unknown>> = {
 type ProjectConfigWorkerTestApi = {
   someFunction(input: { echo: string }): Promise<unknown>;
 };
+
+class ProjectConnectionTestTarget extends RpcTarget {
+  #callCount = 0;
+  readonly #marker: string;
+
+  constructor(input: { marker: string }) {
+    super();
+    this.#marker = input.marker;
+  }
+
+  someMethod(input: { source: string }) {
+    this.#callCount += 1;
+    return {
+      callCount: this.#callCount,
+      marker: this.#marker,
+      source: input.source,
+    };
+  }
+}
 
 type CapnwebFunction<Vars extends Record<string, unknown>, Result> = (
   input: CapnwebFunctionInput<Vars>,
@@ -621,6 +726,16 @@ async function fetchProjectIngressAndEgress({
     },
     ingress,
   };
+}
+
+async function callProjectConnection({
+  ctx,
+  vars,
+}: CapnwebFunctionInput<{ connectionKey: string; source: string }>) {
+  using project = await ctx.project;
+  using connections = await project.connections;
+  using connection = await connections.get(vars.connectionKey);
+  return await connection.someMethod({ source: vars.source });
 }
 
 async function exerciseMountedContext({

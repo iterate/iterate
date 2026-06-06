@@ -12,6 +12,7 @@ await ctx.projects.get("proj_123").describe();
 await ctx.project.fetch(request);
 await ctx.streams.read({ streamPath: "/agents/a", afterOffset: "start" });
 await ctx.project.worker.someTool({ input: "value" });
+await ctx.project.connections.get("someConnectionKey").someMethod();
 using sdk = await ctx.sdk;
 await sdk.chat.postMessage({ channel: "C123", text: "hi" });
 ```
@@ -52,7 +53,8 @@ ctx
 │       ├── streams
 │       ├── repos
 │       ├── workspace
-│       └── worker
+│       ├── worker
+│       └── connections
 ├── project        # shortcut when scopes contain exactly one project
 ├── streams        # shortcut to ctx.project.streams
 ├── repos          # shortcut to ctx.project.repos
@@ -70,6 +72,18 @@ using sameProject = await ctx.project;
 
 await sameProject.fetch(request);
 await sameProject.ingressFetch(request);
+```
+
+Project connections are live Cap'n Web targets registered through project
+ingress. They are useful when a parent process owns an RPC object and wants
+codemode, dynamic workers, and Node e2e code to call it through the same context
+tree:
+
+```ts
+using project = await ctx.project;
+using connections = await project.connections;
+using target = await connections.get("someConnectionKey");
+await target.someMethod({ value: 1 });
 ```
 
 The path is canonical API shape, not a routing diagram. `ctx.project.fetch()`
