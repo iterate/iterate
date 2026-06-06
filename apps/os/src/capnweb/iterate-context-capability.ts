@@ -60,54 +60,10 @@ export type TargetCall =
       method: string;
     };
 
-export type ProjectsCapabilityClient = {
-  create(input: { id?: string; slug: string }): Promise<{
-    customHostname: string | null;
-    createdAt: string;
-    id: string;
-    ingressUrl: string;
-    slug: string;
-    updatedAt: string;
-  }>;
-  find(input: { id: string }): Promise<{
-    customHostname: string | null;
-    createdAt: string;
-    id: string;
-    ingressUrl: string;
-    slug: string;
-    updatedAt: string;
-  }>;
-  findBySlug(input: { slug: string }): Promise<{
-    customHostname: string | null;
-    createdAt: string;
-    id: string;
-    ingressUrl: string;
-    slug: string;
-    updatedAt: string;
-  }>;
-  get(projectId: string): ProjectContextCapability;
-  list(input?: { limit?: number; offset?: number }): Promise<{
-    projects: Array<{
-      customHostname: string | null;
-      createdAt: string;
-      id: string;
-      slug: string;
-      updatedAt: string;
-    }>;
-    total: number;
-  }>;
-  remove(input: { id: string }): Promise<{ deleted: boolean; id: string; ok: true }>;
-};
-
 export type IterateContextRuntime = {
   context: AppContext;
-  projects?: ProjectsCapabilityClient;
+  projects?: ProjectsCapability;
   props: IterateContextProps;
-};
-
-type IterateContextInput = {
-  iterateCapability: IterateCapability;
-  mounts?: Mount[];
 };
 
 type ReposClient = Pick<
@@ -151,7 +107,7 @@ class IterateCapability extends RpcTarget {
     this.#runtime = runtime;
   }
 
-  get projects(): ProjectsCapabilityClient {
+  get projects(): ProjectsCapability {
     if (!this.#runtime.projects) {
       throw new Error("Projects capability is not available in this IterateContext.");
     }
@@ -299,14 +255,14 @@ export class IterateContext extends RpcTarget {
   readonly #iterateCapability: IterateCapability;
   readonly #mounts: Mount[];
 
-  constructor(input: IterateContextInput) {
+  constructor(input: { iterateCapability: IterateCapability; mounts?: Mount[] }) {
     super();
     this.#iterateCapability = input.iterateCapability;
     this.#mounts = input.mounts ?? [];
     installMountedRootMembers(this, this.#mounts);
   }
 
-  get projects(): ProjectsCapabilityClient {
+  get projects(): ProjectsCapability {
     return this.#iterateCapability.projects;
   }
 
@@ -408,12 +364,8 @@ export class IterateContext extends RpcTarget {
       case "dynamic-worker":
         throw new Error("Dynamic-worker mounts must be invoked through callMounted.");
       case "ctx":
-        return this.resolveContextCall(target.call ?? []);
+        return resolveTargetCall(this.#iterateCapability, target.call ?? []);
     }
-  }
-
-  private resolveContextCall(call: readonly TargetCall[]): unknown {
-    return resolveTargetCall(this.#iterateCapability, call);
   }
 
   resolveDynamicWorkerTarget(target: Extract<MountTarget, { type: "dynamic-worker" }>) {

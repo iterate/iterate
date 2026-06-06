@@ -4,7 +4,6 @@ import { isValidTypeId, typeid } from "@iterate-com/shared/typeid";
 import type {
   ProjectContextCapability,
   ProjectDurableObjectContextClient,
-  ProjectsCapabilityClient,
 } from "./iterate-context-capability.ts";
 import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 import type { AppContext } from "~/context.ts";
@@ -43,7 +42,7 @@ type ProjectWithIngressUrl = ReturnType<typeof toProject> & {
   ingressUrl: string;
 };
 
-export class ProjectsCapability extends RpcTarget implements ProjectsCapabilityClient {
+export class ProjectsCapability extends RpcTarget {
   constructor(
     private readonly props: {
       activeOrganization?: ActiveOrganizationAuth;
