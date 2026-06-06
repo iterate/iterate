@@ -109,6 +109,7 @@ export class IterateContextEntrypoint extends WorkerEntrypoint<Env, IterateConte
 class IterateCapability extends RpcTarget {
   readonly #runtime: IterateContextRuntime;
   readonly #dynamicWorkerTargets = new Map<string, unknown>();
+  #project?: ProjectContextCapability;
 
   constructor(runtime: IterateContextRuntime) {
     super();
@@ -120,6 +121,26 @@ class IterateCapability extends RpcTarget {
       throw new Error("Projects capability is not available in this IterateContext.");
     }
     return this.#runtime.projects;
+  }
+
+  get project(): ProjectContextCapability {
+    return (this.#project ??= this.projects.get(requireRuntimeProjectId(this.#runtime)));
+  }
+
+  get repos(): ProjectReposCapability {
+    return this.project.repos;
+  }
+
+  get streams(): ProjectStreamsCapability {
+    return this.project.streams;
+  }
+
+  get workspace(): ProjectWorkspaceCapability {
+    return this.project.workspace;
+  }
+
+  get worker(): ProjectWorkerCapability {
+    return this.project.worker;
   }
 
   resolveDynamicWorkerTarget(target: Extract<MountTarget, { type: "dynamic-worker" }>) {
@@ -246,23 +267,23 @@ export class IterateContext extends RpcTarget {
   }
 
   get project(): ProjectContextCapability {
-    return this.getMounted(["project"]) as ProjectContextCapability;
+    return this.#iterateCapability.project;
   }
 
   get repos(): ProjectReposCapability {
-    return this.getMounted(["repos"]) as ProjectReposCapability;
+    return this.#iterateCapability.repos;
   }
 
   get streams(): ProjectStreamsCapability {
-    return this.getMounted(["streams"]) as ProjectStreamsCapability;
+    return this.#iterateCapability.streams;
   }
 
   get worker(): ProjectWorkerCapability {
-    return this.getMounted(["worker"]) as ProjectWorkerCapability;
+    return this.#iterateCapability.worker;
   }
 
   get workspace(): ProjectWorkspaceCapability {
-    return this.getMounted(["workspace"]) as ProjectWorkspaceCapability;
+    return this.#iterateCapability.workspace;
   }
 
   async callMounted(path: string[], args: unknown[] = []) {
@@ -363,7 +384,7 @@ export class IterateContext extends RpcTarget {
 export function createIterateContext(input: IterateContextRuntime) {
   return new IterateContext({
     iterateCapability: new IterateCapability(input),
-    mounts: [...mountsFromScopes(input), ...(input.props.mounts ?? [])],
+    mounts: input.props.mounts ?? [],
   });
 }
 
@@ -641,31 +662,6 @@ function createCallableFunctionProxy(
       return createCallableFunctionProxy([...path, prop], call);
     },
   });
-}
-
-function mountsFromScopes(runtime: IterateContextRuntime): Mount[] {
-  const mounts: Mount[] = [{ path: ["projects"], target: { call: ["projects"], type: "ctx" } }];
-
-  const projectId = singleProjectIdFromScopes(runtime.props.scopes);
-  if (projectId) {
-    const projectTarget = {
-      call: ["projects", { method: "get", args: [projectId] }],
-      type: "ctx",
-    } satisfies MountTarget;
-
-    mounts.push(
-      { path: ["project"], target: projectTarget },
-      { path: ["repos"], target: { ...projectTarget, call: [...projectTarget.call, "repos"] } },
-      { path: ["streams"], target: { ...projectTarget, call: [...projectTarget.call, "streams"] } },
-      {
-        path: ["workspace"],
-        target: { ...projectTarget, call: [...projectTarget.call, "workspace"] },
-      },
-      { path: ["worker"], target: { ...projectTarget, call: [...projectTarget.call, "worker"] } },
-    );
-  }
-
-  return mounts;
 }
 
 function installMountedRootMembers(context: IterateContext, mounts: Mount[]) {

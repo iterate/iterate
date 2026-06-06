@@ -206,7 +206,8 @@ await target.call({
 
 ## Built-In Mounts
 
-Built-in shortcuts are inferred from scopes. They are not trusted user input.
+Built-in roots and shortcuts are normal `IterateCapability` getters inferred
+from scopes. They are not user mounts and are not trusted user input.
 
 For `scopes: { projects: "all" }`, the root `projects` collection is available:
 

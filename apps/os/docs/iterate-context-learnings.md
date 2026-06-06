@@ -254,3 +254,15 @@ The marker's `call` should be a plain function, not a tiny `RpcTarget` with an
 reference, so `{ __localProxyCaller: true, call }` is enough: the marker object
 crosses by value, and the function remains the server-owned capability with its
 captured closure.
+
+## Built-in context roots should not be expressed as user mounts
+
+`ctx.projects`, `ctx.project`, `ctx.streams`, `ctx.repos`, `ctx.workspace`, and
+`ctx.worker` are the stable root capability tree. They should be direct
+`IterateCapability` getters inferred from scopes, not generated entries in the
+same `mounts` array used for user-provided shortcuts and tools.
+
+This keeps the security boundary easier to read: scopes determine the built-in
+tree, while mounts only add execution-local shortcuts or custom targets. A
+single-project `ctx.project` now reads directly as `ctx.projects.get(projectId)`,
+which is the intended symmetry with other project-domain capabilities.
