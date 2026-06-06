@@ -363,17 +363,19 @@ export default class Tools extends WorkerEntrypoint {
 
 ## `/run` Snippets
 
-The `/api/captnweb/run` path exists so Vitest and codemode can run the same
-function shape in Node or in a dynamic worker:
+The `/api/captnweb/run` path exists so Vitest can prove the same codemode-shaped
+function can run over a Node Cap'n Web session or inside a dynamic worker. The
+dynamic worker gets `env.ITERATE` as a normal Worker binding and resolves the
+context itself:
 
 ```ts
-type CapnwebFunctionInput<Vars> = {
+type CapnwebScriptInput = {
   ctx: IterateContext;
   env: Record<string, unknown>;
-  vars: Vars;
+  vars: Record<string, unknown>;
 };
 
-async function snippet({ ctx, vars }: CapnwebFunctionInput<{ projectId: string }>) {
+async function snippet({ ctx, vars }: CapnwebScriptInput) {
   using projects = await ctx.projects;
   using project = await projects.get(vars.projectId);
   return await project.describe();
@@ -381,11 +383,15 @@ async function snippet({ ctx, vars }: CapnwebFunctionInput<{ projectId: string }
 ```
 
 The dynamic `/run` response is always JSON. Snippet results must be serializable.
+The `/run` worker source should stay small: it imports the local SDK marker
+adapter, calls `await env.ITERATE.context`, and invokes the snippet with
+`{ ctx, env, vars }`.
 
-Because Vitest lowers `using` before `fn.toString()`, the `/run` wrapper provides
-the explicit-resource-management helper functions that the serialized snippet
-expects. Use `using` in shared test/snippet code instead of manual disposable
-arrays.
+If Vitest lowers `using` before `fn.toString()`, that is a test serialization
+problem. The e2e helper repairs that lowered function string by wrapping it with
+esbuild's explicit-resource-management helpers. The `/run` worker itself does
+not import those helpers, because workerd supports native `using` on the
+compatibility date used here.
 
 ## Project Config Worker
 
@@ -450,11 +456,12 @@ These are observed constraints from the e2e implementation:
   another context.
 - Dynamic-worker entrypoints returned by `env.LOADER.load(...).getEntrypoint()`
   cannot be transferred to another Worker.
-- A dynamic `/run` worker receives the real `IterateContext` as `run({ ctx,
-vars })`. Built-in roots use that object directly. Dynamic-worker mount roots
-  use a local marker proxy that calls the parent-owned `env.ITERATE.callMounted`
-  binding; the parent owns the Worker Loader and forwards into the mounted
-  dynamic worker without exposing the dynamic worker entrypoint to `/run`.
+- A dynamic `/run` worker receives an `env.ITERATE` Worker binding and resolves
+  the real context with `await env.ITERATE.context`. Built-in roots use that
+  object directly. Dynamic-worker mount roots use a local marker proxy that
+  calls the parent-owned `env.ITERATE.callMounted` binding; the parent owns the
+  Worker Loader and forwards into the mounted dynamic worker without exposing
+  the dynamic worker entrypoint to `/run`.
 - Normal Cap'n Web and Workers RPC stubs should pass through untouched. The
   local SDK proxy applies only to marker values returned by `localProxyCaller`.
 - SDK marker ergonomics require the caller side to run `liftLocalProxies(...)`

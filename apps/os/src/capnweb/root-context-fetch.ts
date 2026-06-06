@@ -50,7 +50,7 @@ export async function handleRootIterateContextFetch(input: {
 function rootRunWorkerSrc(input: { dynamicMountRoots: string[]; functionSource: string }) {
   return /* js */ `
   import { WorkerEntrypoint } from "cloudflare:workers";
-  import { __callDispose, __using, liftLocalProxies, localProxyCaller } from "./local-proxy-wrapper.js";
+  import { liftLocalProxies, localProxyCaller } from "./local-proxy-wrapper.js";
 
   const snippet = (${input.functionSource});
   const dynamicMountRoots = new Set(${JSON.stringify(input.dynamicMountRoots)});

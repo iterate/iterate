@@ -17,7 +17,4 @@ export function callLocalProxyCaller(
   input: LocalProxyCallInput,
 ): unknown;
 
-export function __using<T>(stack: unknown[], value: T, isAsync: boolean): T;
-export function __callDispose(stack: unknown[], error: unknown, hasError: boolean): void;
-
 export function liftLocalProxies<T>(value: T): T;

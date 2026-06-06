@@ -71,64 +71,6 @@ export function callLocalProxyCaller(value, input) {
   return value.call(input);
 }
 
-export function __using(stack, value, isAsync) {
-  if (value == null) return value;
-  const dispose =
-    isAsync && Symbol.asyncDispose && value[Symbol.asyncDispose]
-      ? value[Symbol.asyncDispose]
-      : value[Symbol.dispose];
-  if (typeof dispose !== "function") {
-    throw new TypeError("Object is not disposable.");
-  }
-  stack.push({ async: Boolean(isAsync), dispose, value });
-  return value;
-}
-
-export function __callDispose(stack, error, hasError) {
-  let promise;
-  const rememberError = (disposeError) => {
-    if (hasError) {
-      error =
-        typeof SuppressedError === "function"
-          ? new SuppressedError(disposeError, error, "An error was suppressed during disposal.")
-          : disposeError;
-    } else {
-      error = disposeError;
-      hasError = true;
-    }
-  };
-  const disposeSync = (entry) => {
-    try {
-      entry.dispose.call(entry.value);
-    } catch (disposeError) {
-      rememberError(disposeError);
-    }
-  };
-  const disposeAsync = async (entry) => {
-    try {
-      await entry.dispose.call(entry.value);
-    } catch (disposeError) {
-      rememberError(disposeError);
-    }
-  };
-
-  while (stack.length > 0) {
-    const entry = stack.pop();
-    if (promise || entry.async) {
-      promise = Promise.resolve(promise).then(() => disposeAsync(entry));
-    } else {
-      disposeSync(entry);
-    }
-  }
-
-  if (promise) {
-    return promise.then(() => {
-      if (hasError) throw error;
-    });
-  }
-  if (hasError) throw error;
-}
-
 function adapt(value) {
   if (!isLocalProxyCaller(value)) return value;
   return pathProxy(value.call);

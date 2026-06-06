@@ -50,9 +50,9 @@ RPC promises.
 
 The working `/run` shape is:
 
-- the parent creates the normal `IterateContext` and passes it to
-  `run({ ctx, vars })`;
-- the dynamic `/run` worker wraps that context with `liftLocalProxies(...)`;
+- the parent passes `env.ITERATE` as an `IterateContextEntrypoint` binding;
+- the dynamic `/run` worker resolves `ctx` with `await env.ITERATE.context` and
+  wraps that context with `liftLocalProxies(...)`;
 - for dynamic-worker mount roots only, the `/run` worker creates a local marker
   proxy that calls `env.ITERATE.callMounted([root, ...path], args)`;
 - `IterateContextEntrypoint.callMounted()` runs in the parent Worker, loads or
@@ -77,8 +77,8 @@ second dynamic worker from inside the config worker.
 
 Some tempting variants still fail:
 
-- passing the real `ctx: await env.ITERATE.context` into `/run` snippets and
-  exposing dynamic-worker mounts like `ctx.tools` as real prototype getters;
+- passing the mounted dynamic-worker entrypoint into `/run` and exposing
+  dynamic-worker mounts like `ctx.tools` as real prototype getters;
 - keeping the real context for built-ins but using a tiny local path proxy that
   calls a generic parent resolver that binds dynamic-entrypoint methods;
 - walking nested dynamic-worker targets without awaiting intermediate
@@ -270,17 +270,21 @@ The Slack `!debug` reply links to the project stream viewer at
 route. Tests should assert that direct stream URL and avoid depending on older
 org-scoped navigation.
 
-## `/run` snippets need the explicit-resource-management helpers
+## Vitest-lowered `/run` snippets need test-only ERM repair
 
 Vitest lowers `using` declarations inside test helper functions before
 `fn.toString()` reaches the `/run` dynamic worker. The serialized function body
 therefore references helper globals such as `__using()` and `__callDispose()`,
 but those helpers are not included in the function string.
 
-The `/run` wrapper must provide those helpers if we want the same function body
-to run in Node and in Cloudflare dynamic workers. Local in-process proxy values
-created only for `/run` should expose a no-op `Symbol.dispose`; real RPC stubs
-still use their own disposal behavior.
+Do not put those helpers in the `/run` worker source. Workerd supports native
+`using` on the compatibility date used by the dynamic worker, so this is a
+Vitest serialization artifact, not a runtime requirement. The e2e helper should
+detect lowered function strings and wrap them with esbuild's own
+explicit-resource-management helper preamble before posting them to `/run`.
+
+Local in-process proxy values created only for `/run` should expose a no-op
+`Symbol.dispose`; real RPC stubs still use their own disposal behavior.
 
 ## Local SDK proxies must be marker-only
 

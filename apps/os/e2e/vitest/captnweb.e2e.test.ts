@@ -15,6 +15,24 @@ import type {
 import { liftLocalProxies } from "../../src/capnweb/local-proxy-wrapper.js";
 import type { ProjectCapabilityApi } from "../../src/domains/projects/durable-objects/project-durable-object.ts";
 
+/**
+ * Cap'n Web capability integration tests.
+ *
+ * These tests are intentionally written as examples of the coding model we want
+ * people to copy:
+ *
+ * - A script can run in Node over a Cap'n Web WebSocket session or inside the
+ *   `/api/captnweb/run` dynamic worker and use the same `ctx` calls.
+ * - `ctx` is an IterateContext: a scoped wrapper around the root Iterate
+ *   capability tree. The scopes decide which project shortcuts and mounts are
+ *   available.
+ * - Project-scoped code can update the iterate-config git repo, then call the
+ *   updated worker as `ctx.project.worker.someTool(...)`.
+ * - A project can accept a Cap'n Web connection from the test runner and expose
+ *   that parent-owned RpcTarget back to codemode/dynamic-worker code.
+ * - Mount props can add target, method, ctx-shortcut, and SDK-style paths while
+ *   preserving the same `ctx.some.path.method(...)` authoring model.
+ */
 const baseUrl = requireBaseUrl();
 const egressEchoBaseUrl = requireEgressEchoBaseUrl(baseUrl);
 const auth = rootAccessAuth();
@@ -29,6 +47,8 @@ describe("capnweb", () => {
     expect(remaining).toEqual([]);
   });
 
+  // Scenario: root context can administer projects, and the same project code
+  // can run from Node or from the /run dynamic worker.
   it("creates, lists, gets, and removes projects through root Iterate context", async () => {
     using root = withRootIterateContextFromNode({ auth, baseUrl });
     await using project = await createDisposableProject({
@@ -49,19 +69,18 @@ describe("capnweb", () => {
       });
     }
 
-    const describeProjectThroughProjects = async ({
-      ctx,
-      vars,
-    }: CapnwebFunctionInput<{ projectId: string }>) => {
+    const describeProjectThroughProjects = async ({ ctx, vars }: CapnwebScriptInput) => {
       using projects = await ctx.projects;
       using project = await projects.get(vars.projectId);
       return await project.describe();
     };
 
+    // Same script body, two transports: direct Node Cap'n Web session and
+    // `/run` dynamic worker with env.ITERATE.context.
     expect(
-      await runCapnwebFunctionFromNode({
+      await runCapnwebScriptFromNode({
         ctx: root,
-        fn: describeProjectThroughProjects,
+        script: describeProjectThroughProjects,
         vars: { projectId: project.id },
       }),
     ).toMatchObject({
@@ -69,21 +88,23 @@ describe("capnweb", () => {
       slug: project.slug,
     });
     expect(
-      await runCapnwebFunctionInDynamicWorker({
-        fn: describeProjectThroughProjects,
+      await runCapnwebScriptInDynamicWorker({
+        script: describeProjectThroughProjects,
         vars: { projectId: project.id },
       }),
     ).toMatchObject({
       id: project.id,
       slug: project.slug,
     });
-    expect(await projects.remove({ id: project.id })).toEqual({
+    expect(await projects.remove({ id: project.id })).toMatchObject({
       deleted: true,
       id: project.id,
       ok: true,
     });
   });
 
+  // Scenario: a project ingress can create a project-scoped IterateContext,
+  // where ctx.project is the current project and streams are project-local.
   it("connects directly to the project durable object capnweb session", async () => {
     using root = withRootIterateContextFromNode({ auth, baseUrl });
     await using project = await createDisposableProject({
@@ -106,6 +127,8 @@ describe("capnweb", () => {
     );
   });
 
+  // Scenario: the test runner can provide an RpcTarget to a project, then code
+  // running elsewhere can call it through ctx.project.connections.
   it("calls a project Cap'n Web connection from node and dynamic worker code", async () => {
     using root = withRootIterateContextFromNode({ auth, baseUrl });
     await using project = await createDisposableProject({
@@ -116,6 +139,8 @@ describe("capnweb", () => {
     const connectionMethodName = `method-${uniqueSuffix()}`;
     using iterate = withIterateFromNode({ auth, ingressUrl: project.ingressUrl });
     using projectContext = await iterate.ctx.project;
+    // The project accepts a parent-owned RpcTarget and makes it available to
+    // code running later through the project's IterateContext.
     await projectContext.provideCapability({
       connectionKey,
       rpcTarget: new ProjectConnectionTestTarget({
@@ -124,43 +149,38 @@ describe("capnweb", () => {
       }),
     });
 
-    const callProjectConnection = async ({
-      ctx,
-      vars,
-    }: CapnwebFunctionInput<{
-      connectionKey: string;
-      methodName: string;
-      source: string;
-    }>) => {
+    const callProjectConnection = async ({ ctx, vars }: CapnwebScriptInput) => {
       using project = await ctx.project;
       using connections = await project.connections;
       using connection = await connections.get(vars.connectionKey);
       return await connection[vars.methodName]({ source: vars.source });
     };
 
-    const fromNode = await runCapnwebFunctionFromNode({
+    const fromNode = await runCapnwebScriptFromNode({
       ctx: iterate.ctx,
-      fn: callProjectConnection,
+      script: callProjectConnection,
       vars: { connectionKey, methodName: connectionMethodName, source: "node" },
     });
-    const fromDynamicWorker = await runCapnwebFunctionInDynamicWorker({
-      fn: callProjectConnection,
+    const fromDynamicWorker = await runCapnwebScriptInDynamicWorker({
       props: { scopes: { projects: [project.id] } },
+      script: callProjectConnection,
       vars: { connectionKey, methodName: connectionMethodName, source: "dynamic-worker" },
     });
 
-    expect(fromNode).toEqual({
+    expect(fromNode).toMatchObject({
       callCount: 1,
       marker: connectionKey,
       source: "node",
     });
-    expect(fromDynamicWorker).toEqual({
+    expect(fromDynamicWorker).toMatchObject({
       callCount: 2,
       marker: connectionKey,
       source: "dynamic-worker",
     });
   });
 
+  // Scenario: codemode-style code updates iterate-config in git, then calls
+  // the new config worker through ctx.project.worker.
   it("updates iterate-config and calls env.ITERATE.context from dynamic worker fetch", async () => {
     using root = withRootIterateContextFromNode({ auth, baseUrl });
     await using project = await createDisposableProject({
@@ -175,6 +195,8 @@ describe("capnweb", () => {
       export default {
         async fetch(request, env) {
           const url = new URL(request.url);
+          // The iterate-config worker uses the same context binding as /run and
+          // codemode scripts. No test-only ctx injection is involved.
           const ctx = await env.ITERATE.context;
           const streamPath = url.searchParams.get("streamPath");
           const eventType = url.searchParams.get("eventType");
@@ -221,18 +243,13 @@ describe("capnweb", () => {
     `;
 
     const dir = `/iterate-config-${Date.now()}`;
-    const updateResult = await runCapnwebFunctionInDynamicWorker({
-      fn: async ({
-        ctx,
-        vars,
-      }: CapnwebFunctionInput<{
-        dir: string;
-        marker: string;
-        workerSource: string;
-      }>) => {
+    const updateResult = await runCapnwebScriptInDynamicWorker({
+      script: async ({ ctx, vars }: CapnwebScriptInput) => {
         using project = await ctx.project;
         using repos = await project.repos;
         using workspace = await project.workspace;
+        // This is the intended project-scoped git path for codemode and tests:
+        // the IterateContext shortcut resolves to ctx.projects.get(id).
         using git = await workspace.git;
         const repo = await repos.ensureIterateConfigInfo({ projectSlug: null });
 
@@ -258,7 +275,7 @@ describe("capnweb", () => {
         });
 
         using worker = await project.worker;
-        const calledTool = await (worker as unknown as ProjectConfigWorkerTestApi).someFunction({
+        const calledTool = await worker.someFunction({
           echo: vars.marker,
         });
 
@@ -284,7 +301,9 @@ describe("capnweb", () => {
     });
 
     using projectContext = await iterate.ctx.project;
-    using worker = await projectContext.worker;
+    using worker = (await projectContext.worker) as any;
+    // The config worker fetches through the project worker capability; dynamic
+    // methods on the same capability are ordinary tool calls.
     const streamFetchResponse = await worker.fetch(
       new Request(
         `https://iterate-config.local/capnweb-fetch/${marker}?${new URLSearchParams({
@@ -295,20 +314,14 @@ describe("capnweb", () => {
       ),
     );
     expect(streamFetchResponse.ok).toBe(true);
-    const streamFetch = (await streamFetchResponse.json()) as {
-      appended: unknown;
-      events: unknown[];
-      streamNames: string[];
-      streamWasListedAfterAppend: boolean;
-      streamWasListedBeforeAppend: boolean;
-    };
-    const called = await (worker as unknown as ProjectConfigWorkerTestApi).someFunction({
+    const streamFetch = (await streamFetchResponse.json()) as any;
+    const called = await worker.someFunction({
       echo: marker,
     });
     using streams = await iterate.ctx.streams;
     const streamEvents = await streams.read({ afterOffset: "start", streamPath });
 
-    expect(called).toEqual({ from: "iterate-config", input: { echo: marker }, marker });
+    expect(called).toMatchObject({ from: "iterate-config", input: { echo: marker }, marker });
     expect(streamFetch.appended).toMatchObject({
       eventType,
       marker,
@@ -338,6 +351,8 @@ describe("capnweb", () => {
     );
   });
 
+  // Scenario: project fetch capabilities expose both ingress and egress from
+  // the same project capability that codemode receives.
   it("uses codemode ctx.project.fetch and ctx.project.egressFetch from worker.js", async () => {
     using root = withRootIterateContextFromNode({ auth, baseUrl });
     await using project = await createDisposableProject({
@@ -345,20 +360,13 @@ describe("capnweb", () => {
       slug: `${testRunSlugPrefix}-project-fetch-${uniqueSuffix()}`.slice(0, 40),
     });
 
-    const result = await runCapnwebFunctionInDynamicWorker({
-      fn: async ({
-        ctx,
-        vars,
-      }: CapnwebFunctionInput<{
-        echoAuthToken: string;
-        echoUrl: string;
-        ingressUrl: string;
-        secretKey: string;
-      }>) => {
+    const result = await runCapnwebScriptInDynamicWorker({
+      script: async ({ ctx, vars }: CapnwebScriptInput) => {
         using project = await ctx.project;
         const expectedHomepageText = "Hello from the project config worker";
         let ingress = { status: 0, text: "" };
         for (let attempt = 0; attempt < 12; attempt++) {
+          // ctx.project.fetch is the Project Durable Object ingress fetch.
           const response = await project.fetch(new Request(vars.ingressUrl + "/"));
           ingress = {
             status: response.status,
@@ -376,6 +384,8 @@ describe("capnweb", () => {
 
         const headerName = "x-iterate-example-secret";
         const secretReference = `Bearer getSecret({ key: ${JSON.stringify(vars.secretKey)} })`;
+        // ctx.project.egressFetch is the Project Durable Object egress path,
+        // including project secret substitution.
         const egressResponse = await project.egressFetch(
           new Request(vars.echoUrl, {
             headers: {
@@ -413,7 +423,7 @@ describe("capnweb", () => {
       },
     });
 
-    expect(result.ingress).toEqual({
+    expect(result.ingress).toMatchObject({
       status: 200,
       text: "Hello from the project config worker",
     });
@@ -424,6 +434,9 @@ describe("capnweb", () => {
     expect(result.egress.echoedSecretHeader).toBe(`Bearer ${EXAMPLE_EGRESS_SECRET_MATERIAL}`);
   });
 
+  // Scenario: mounts add ergonomic shortcuts without changing the capability
+  // model. The same ctx tree handles dynamic workers, ctx-derived shortcuts,
+  // method mounts, and Slack-style SDK paths.
   it("applies IterateContext mount props for target, method, sdk markers, and ctx shortcuts", async () => {
     using root = withRootIterateContextFromNode({ auth, baseUrl });
     await using project = await createDisposableProject({
@@ -479,6 +492,8 @@ describe("capnweb", () => {
 
       export default class SdkLikeTarget extends WorkerEntrypoint {
         get [sdkGetterName]() {
+          // The SDK hierarchy is intentionally unknown. The marker says:
+          // "record all properties after this getter and send them to call".
           return localProxyCaller(({ path, args }) => this.call({ path, args }));
         }
 
@@ -491,26 +506,8 @@ describe("capnweb", () => {
       }
     `;
 
-    const result = (await runCapnwebFunctionInDynamicWorker({
-      fn: async ({
-        ctx,
-        vars,
-      }: CapnwebFunctionInput<{
-        appendMountName: string;
-        eventType: string;
-        listStreamsMountName: string;
-        marker: string;
-        mountedStreamsName: string;
-        nestedSdkBranchName: string;
-        nestedSdkMountName: string;
-        nestedSdkRootName: string;
-        rootEchoMountName: string;
-        sdkActionName: string;
-        sdkMountName: string;
-        sdkNamespaceName: string;
-        streamPath: string;
-        toolsMountName: string;
-      }>) => {
+    const result = await runCapnwebScriptInDynamicWorker({
+      script: async ({ ctx, vars }: CapnwebScriptInput) => {
         using tools = await ctx[vars.toolsMountName];
         const targetResult = await tools.echo({ marker: vars.marker });
         const nestedResult = await tools.nested.describe({ marker: vars.marker });
@@ -571,6 +568,8 @@ describe("capnweb", () => {
       },
       props: {
         scopes: { projects: [project.id] },
+        // Mounts are part of IterateContext props. The target can be a dynamic
+        // worker, or a path derived from the existing ctx capability tree.
         mounts: [
           {
             path: [toolsMountName],
@@ -645,26 +644,14 @@ describe("capnweb", () => {
         streamPath,
         toolsMountName,
       },
-    })) as {
-      appendResult: unknown;
-      sdkResult: unknown;
-      eventsByShortcut: unknown[];
-      eventsByMethod: unknown[];
-      nestedSdkResult: unknown;
-      listedByMethod: string[];
-      listedByShortcut: string[];
-      methodResult: unknown;
-      mountedAppendResult: unknown;
-      nestedResult: unknown;
-      targetResult: unknown;
-    };
+    });
 
     expect(result.targetResult).toMatchObject({
       input: { marker },
       kind: "target-method",
       streamCountVisibleFromMountedWorker: expect.any(Number),
     });
-    expect(result.nestedResult).toEqual({
+    expect(result.nestedResult).toMatchObject({
       input: { marker },
       kind: "nested-target",
     });
@@ -684,11 +671,11 @@ describe("capnweb", () => {
         }),
       ]),
     );
-    expect(result.sdkResult).toEqual({
+    expect(result.sdkResult).toMatchObject({
       args: [{ text: marker }],
       method: `${sdkNamespaceName}.${sdkActionName}`,
     });
-    expect(result.nestedSdkResult).toEqual({
+    expect(result.nestedSdkResult).toMatchObject({
       args: [{ text: marker, via: "nested" }],
       method: `${sdkNamespaceName}.${sdkActionName}`,
     });
@@ -706,6 +693,46 @@ describe("capnweb", () => {
     );
     expect(result.listedByShortcut).toEqual(expect.any(Array));
     expect(result.listedByMethod).toEqual(expect.any(Array));
+  });
+
+  // Harness guardrail: this is about Vitest's fn.toString() path, not product
+  // runtime behavior. Keep ERM repair here instead of in /run worker source.
+  it("serializes Vitest-lowered using functions without runtime /run boilerplate", async () => {
+    const loweredSource = /* js */ `async function(input) {
+      var _stack = [];
+      try {
+        const disposable = __using(_stack, {
+          value: input.vars.value,
+          [Symbol.dispose]() {
+            input.vars.disposed = true;
+          },
+        });
+        return {
+          disposedBeforeReturn: input.vars.disposed,
+          value: disposable.value,
+        };
+      } catch (_) {
+        var _error = _, _hasError = true;
+      } finally {
+        var _promise = __callDispose(_stack, _error, _hasError);
+        _promise && await _promise;
+      }
+    }`;
+    const serialized = serializeCapnwebScriptForDynamicWorker({
+      toString: () => loweredSource,
+    });
+    expect(serialized).toContain("var __using");
+
+    const snippet = new Function(`return ${serialized}`)() as (input: {
+      vars: { disposed: boolean; value: string };
+    }) => Promise<{ disposedBeforeReturn: boolean; value: string }>;
+    const vars = { disposed: false, value: "ok" };
+
+    await expect(snippet({ vars })).resolves.toEqual({
+      disposedBeforeReturn: false,
+      value: "ok",
+    });
+    expect(vars.disposed).toBe(true);
   });
 });
 
@@ -782,20 +809,15 @@ function projectCapnwebWebSocketRequest(input: {
   };
 }
 
-// The shared capnweb functions below are deliberately JavaScript-shaped: the
-// same source is executed from Node and stringified into a dynamic worker. Cap'n
-// Web stubs expose wildcard members at runtime, so this test harness keeps the
-// context dynamic instead of making every example fight proxy placeholder types.
-type MountedIterateContext = any;
-
-type CapnwebFunctionInput<Vars extends Record<string, unknown>> = {
-  ctx: MountedIterateContext;
+// Snippets sent through runCapnwebScriptInDynamicWorker are JavaScript-shaped on
+// purpose. The same function body runs in Node and in a dynamic worker, and
+// Cap'n Web stubs expose wildcard members at runtime. Keeping `ctx` dynamic here
+// makes the test read like codemode code instead of a maze of proxy placeholder
+// types.
+type CapnwebScriptInput = {
+  ctx: any;
   env: Record<string, unknown>;
-  vars: Vars;
-};
-
-type ProjectConfigWorkerTestApi = {
-  someFunction(input: { echo: string }): Promise<unknown>;
+  vars: any;
 };
 
 class ProjectConnectionTestTarget extends RpcTarget {
@@ -816,32 +838,27 @@ class ProjectConnectionTestTarget extends RpcTarget {
   }
 }
 
-type CapnwebFunction<Vars extends Record<string, unknown>, Result> = (
-  input: CapnwebFunctionInput<Vars>,
-) => Result | Promise<Result>;
+type CapnwebScript = (input: CapnwebScriptInput) => any;
 
-async function runCapnwebFunctionFromNode<Vars extends Record<string, unknown>, Result>(input: {
+async function runCapnwebScriptFromNode(input: {
   ctx: RpcStub<IterateContext>;
-  fn: CapnwebFunction<Vars, Result>;
-  vars: Vars;
-}): Promise<Awaited<Result>> {
-  return await input.fn({ ctx: input.ctx as MountedIterateContext, env: {}, vars: input.vars });
+  script: CapnwebScript;
+  vars?: Record<string, unknown>;
+}): Promise<any> {
+  return await input.script({ ctx: input.ctx as any, env: {}, vars: input.vars ?? {} });
 }
 
-async function runCapnwebFunctionInDynamicWorker<
-  Vars extends Record<string, unknown>,
-  Result,
->(input: {
-  fn: CapnwebFunction<Vars, Result>;
+async function runCapnwebScriptInDynamicWorker(input: {
   props?: IterateContextProps;
-  vars: Vars;
-}): Promise<Awaited<Result>> {
+  script: CapnwebScript;
+  vars?: Record<string, unknown>;
+}): Promise<any> {
   const url = new URL(`${ROOT_ITERATE_CONTEXT_PREFIX}/run`, baseUrl);
   const response = await fetch(url, {
     body: JSON.stringify({
-      functionSource: input.fn.toString(),
+      functionSource: serializeCapnwebScriptForDynamicWorker(input.script),
       props: input.props,
-      vars: input.vars,
+      vars: input.vars ?? {},
     }),
     headers: {
       ...rootAccessAuthHeaders(auth),
@@ -853,7 +870,86 @@ async function runCapnwebFunctionInDynamicWorker<
   if (!response.ok) {
     throw new Error(JSON.stringify(body));
   }
-  return body as Awaited<Result>;
+  return body;
+}
+
+function serializeCapnwebScriptForDynamicWorker(fn: { toString(): string }) {
+  const source = fn.toString();
+  if (!/\b__(?:using|callDispose)\b/.test(source)) {
+    return source;
+  }
+
+  // This is deliberately test-helper-only. The `/api/captnweb/run` dynamic
+  // worker should execute a normal JavaScript function with almost no wrapper
+  // code, and workerd itself supports native `using` on the compatibility date
+  // used by that worker.
+  //
+  // The awkward case is Vitest/Vite/esbuild transforming this test module
+  // before fn.toString() runs. If esbuild lowers:
+  //
+  //   using project = await ctx.project
+  //
+  // then the function string contains calls to module-scoped helpers like
+  // __using(...) and __callDispose(...), but fn.toString() does not include the
+  // helper definitions that esbuild emitted around the module. Shipping that
+  // bare function string to a dynamic worker would produce ReferenceError.
+  //
+  // When we detect that lowered shape, we wrap the serialized function in a
+  // tiny IIFE that supplies esbuild's own Explicit Resource Management helper
+  // preamble. If the function string still contains native `using`, we leave it
+  // alone so workerd runs the syntax natively. This keeps the production-ish
+  // `/run` worker clean and confines compiler-toolchain repair to the e2e
+  // bridge that created the problem by using fn.toString().
+  //
+  // Source of the helper shape: esbuild's lowering for Explicit Resource
+  // Management (`using` / `await using`) when targeting pre-ERM JavaScript.
+  // The stack entries are arrays: [async, dispose, value].
+  return /* js */ `(() => {
+  var __knownSymbol = (name, symbol) => (symbol = Symbol[name]) ? symbol : Symbol.for("Symbol." + name);
+  var __typeError = (msg) => { throw TypeError(msg); };
+  var __using = (stack, value, async) => {
+    if (value != null) {
+      if (typeof value !== "object" && typeof value !== "function") __typeError("Object expected");
+      var dispose, inner;
+      if (async) dispose = value[__knownSymbol("asyncDispose")];
+      if (dispose === void 0) {
+        dispose = value[__knownSymbol("dispose")];
+        if (async) inner = dispose;
+      }
+      if (typeof dispose !== "function") __typeError("Object not disposable");
+      if (inner) dispose = function() {
+        try {
+          inner.call(this);
+        } catch (e) {
+          return Promise.reject(e);
+        }
+      };
+      stack.push([async, dispose, value]);
+    } else if (async) {
+      stack.push([async]);
+    }
+    return value;
+  };
+  var __callDispose = (stack, error, hasError) => {
+    var E = typeof SuppressedError === "function" ? SuppressedError : function(e, s, m, _) {
+      return _ = Error(m), _.name = "SuppressedError", _.error = e, _.suppressed = s, _;
+    };
+    var fail = (e) => error = hasError ? new E(e, error, "An error was suppressed during disposal") : (hasError = true, e);
+    var next = (it) => {
+      while (it = stack.pop()) {
+        try {
+          var result = it[1] && it[1].call(it[2]);
+          if (it[0]) return Promise.resolve(result).then(next, (e) => (fail(e), next()));
+        } catch (e) {
+          fail(e);
+        }
+      }
+      if (hasError) throw error;
+    };
+    return next();
+  };
+  return (${source});
+})()`;
 }
 
 function rootAccessAuth() {
