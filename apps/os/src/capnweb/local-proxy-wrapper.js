@@ -7,8 +7,10 @@ export const LOCAL_PROXY_CALLER_MARK = "__localProxyCaller";
  *
  *   await ctx.projects.get("proj_123").streams.read({ streamPath: "/events" })
  *
- * We do not want to interfere with that path. If a value is a normal RPC stub,
- * this wrapper should behave like a transparent pass-through.
+ * We do not want to change that path's semantics. The wrapper may proxy normal
+ * objects so it can notice when a promise resolves to a marker, but only marker
+ * values get SDK-style path behavior. Ordinary RPC members still dispatch
+ * through their own runtime stubs.
  *
  * The one place where we deliberately cheat is SDK-shaped APIs whose method
  * tree is not known ahead of time. Slack is the motivating example. The Slack

@@ -609,52 +609,25 @@ function mountedPathCaller(context: IterateContext, path: string[]) {
 class ProjectWorkerCapability extends RpcTarget {
   constructor(private readonly project: ProjectCapabilityApi) {
     super();
-    return createCallablePathProxy(this, [], async (path, args) => {
-      if (path.length !== 1) {
-        throw new Error(`Project worker path ${path.join(".")} is not supported yet.`);
-      }
-      return await this.project.callConfigWorkerFunction({
-        args,
-        functionName: path[0]!,
-      });
+    return new Proxy(this, {
+      get(target, prop, receiver) {
+        if (prop === "then") return undefined;
+        if (typeof prop === "symbol" || prop in target) {
+          return Reflect.get(target, prop, receiver);
+        }
+        return async (...args: unknown[]) => {
+          return await target.project.callConfigWorkerFunction({
+            args,
+            functionName: prop,
+          });
+        };
+      },
     }) as ProjectWorkerCapability;
   }
 
   async fetch(request: Request) {
     return await this.project.fetch(request);
   }
-}
-
-function createCallablePathProxy(
-  target: RpcTarget,
-  path: string[],
-  call: (path: string[], args: unknown[]) => unknown,
-): object {
-  return new Proxy(target, {
-    get(innerTarget, prop, receiver) {
-      if (typeof prop === "symbol" || prop in innerTarget) {
-        return Reflect.get(innerTarget, prop, receiver);
-      }
-      if (prop === "then") return undefined;
-      return createCallableFunctionProxy([...path, prop], call);
-    },
-  });
-}
-
-function createCallableFunctionProxy(
-  path: string[],
-  call: (path: string[], args: unknown[]) => unknown,
-): (...args: unknown[]) => unknown {
-  const fn = (...args: unknown[]) => call(path, args);
-  return new Proxy(fn, {
-    get(innerTarget, prop, receiver) {
-      if (typeof prop === "symbol" || prop in innerTarget) {
-        return Reflect.get(innerTarget, prop, receiver);
-      }
-      if (prop === "then") return undefined;
-      return createCallableFunctionProxy([...path, prop], call);
-    },
-  });
 }
 
 function installMountedRootMembers(context: IterateContext, mounts: Mount[]) {

@@ -229,7 +229,7 @@ The mount resolver still finds the most specific path. The difference is that
 the target decides whether the returned value is a normal RPC target, a method,
 or an SDK-shaped local proxy marker.
 
-## Built-In Mounts
+## Built-In Roots
 
 Built-in roots and shortcuts are normal `IterateCapability` getters inferred
 from scopes. They are not user mounts and are not trusted user input.
@@ -466,6 +466,6 @@ using nestedSdk = await ctx.some.path.sdk;
 await nestedSdk.chat.postMessage({ text: marker, via: "nested" });
 ```
 
-The full local and deployed preview e2e suites also prove that this model does
-not break existing codemode, agents, oRPC, stream, workspace, MCP, or Slack
-flows.
+The Cap'n Web e2e file runs alongside the full local and deployed preview OS
+e2e suites so context changes are checked against codemode, agents, oRPC,
+streams, workspace, MCP, and Slack flows.
