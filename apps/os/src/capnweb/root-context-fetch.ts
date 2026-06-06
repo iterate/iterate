@@ -151,18 +151,6 @@ mountModules.set(${JSON.stringify(targetKey)}, mountModule${index});`;
     );
   }
 
-  function exactRootTargetMount(rootName) {
-    return (props.mounts ?? []).find(
-      (mount) =>
-        mount.target.type === "dynamic-worker" &&
-        mount.path.length === 1 &&
-        mount.path[0] === rootName &&
-        (mount.invoke ?? "target") === "target" &&
-        mount.target.call &&
-        mount.target.call.length > 0,
-    );
-  }
-
   function targetKey(target) {
     return JSON.stringify({
       entrypoint: target.entrypoint,
@@ -218,10 +206,6 @@ mountModules.set(${JSON.stringify(targetKey)}, mountModule${index});`;
           // worker to another. The parent still owns the run worker, but /run
           // executes user dynamic mounts in this same isolate so snippets can
           // call ctx.tools.echo() and ctx.sdk.chat.postMessage() normally.
-          const rootMount = exactRootTargetMount(prop);
-          if (rootMount) {
-            return liftLocalProxies(host.getDynamicMountRoot(rootMount));
-          }
           return liftLocalProxies(
             localProxyCaller(({ path, args }) => host.callDynamicMount([prop, ...path], args)),
           );
@@ -243,11 +227,6 @@ mountModules.set(${JSON.stringify(targetKey)}, mountModule${index});`;
       const localTarget = localTargetFromModule(module, target, this.env);
       this.localTargets.set(key, localTarget);
       return localTarget;
-    }
-
-    getDynamicMountRoot(mount) {
-      const target = this.localDynamicWorkerTarget(mount.target);
-      return resolveTargetCall(target, mount.target.call ?? []);
     }
 
     async callDynamicMount(path, args) {

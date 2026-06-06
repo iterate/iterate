@@ -324,18 +324,6 @@ export class IterateContext extends RpcTarget {
   getMounted(path: string[]) {
     const match = this.requireMount(path);
     if (match.mount.target.type === "dynamic-worker") {
-      const invoke = match.mount.invoke ?? "target";
-      if (
-        invoke === "target" &&
-        match.remainder.length === 0 &&
-        match.mount.target.call &&
-        match.mount.target.call.length > 0
-      ) {
-        return resolveTargetCall(
-          this.resolveDynamicWorkerTarget(match.mount.target),
-          match.mount.target.call ?? [],
-        );
-      }
       return mountedPathCaller(this, path);
     }
     const resolved = {
