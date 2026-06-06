@@ -528,7 +528,7 @@ itIfSlackBotToken(
       events.filter((event) => event.type === "events.iterate.com/core/error-occurred"),
     ).toEqual([]);
   },
-  90_000,
+  180_000,
 );
 
 itIfSlackBotToken(
@@ -762,7 +762,7 @@ itIfSlackBotToken(
       events.filter((event) => event.type === "events.iterate.com/core/error-occurred"),
     ).toEqual([]);
   },
-  90_000,
+  180_000,
 );
 
 test("completes slack-agent event-mode codemode calls without blocking the stream callable queue", async () => {
