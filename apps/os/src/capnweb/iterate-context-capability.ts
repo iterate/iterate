@@ -180,8 +180,7 @@ class IterateCapability extends RpcTarget {
   }
 
   private requireSingleProjectId() {
-    const scopedProjectId = singleProjectIdFromScopes(this.#runtime.props.scopes);
-    const projectId = this.#runtime.projectId ?? scopedProjectId;
+    const projectId = singleProjectIdFromScopes(this.#runtime.props.scopes);
     if (!projectId) {
       throw new Error("This IterateCapability is not scoped to exactly one project.");
     }
