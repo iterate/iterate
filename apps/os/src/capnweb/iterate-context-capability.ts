@@ -14,6 +14,11 @@ import {
 } from "~/domains/repos/entrypoints/repo-capability.ts";
 import {
   getStreamsCapability,
+  type StreamAppendBatchInput,
+  type StreamAppendInput,
+  type StreamListChildrenInput,
+  type StreamPathInput,
+  type StreamReadInput,
   type StreamsCapability,
 } from "~/domains/streams/entrypoints/streams-capability.ts";
 import type { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-capability.ts";
@@ -70,6 +75,9 @@ type ReposClient = Pick<
   ReposCapability,
   "create" | "createInfo" | "ensureIterateConfigInfo" | "get" | "getInfo" | "list"
 >;
+type RepoCreateInput = { projectSlug?: string; slug: string };
+type RepoEnsureIterateConfigInfoInput = { projectSlug: string | null };
+type RepoGetInput = { slug: string };
 type StreamsClient = Pick<
   StreamsCapability,
   "append" | "appendBatch" | "create" | "getState" | "list" | "listChildren" | "read"
@@ -470,15 +478,15 @@ class ProjectReposCapability extends RpcTarget {
     this.#projectId = requireRuntimeProjectId(runtime);
   }
 
-  async create(input: Parameters<ReposClient["create"]>[0]) {
+  async create(input: RepoCreateInput) {
     return await this.#repos().create(input);
   }
 
-  async createInfo(input: Parameters<ReposClient["createInfo"]>[0]) {
+  async createInfo(input: RepoCreateInput) {
     return await this.#repos().createInfo(input);
   }
 
-  async ensureIterateConfigInfo(input: Parameters<ReposClient["ensureIterateConfigInfo"]>[0]) {
+  async ensureIterateConfigInfo(input: RepoEnsureIterateConfigInfoInput) {
     return await ensureIterateConfigInfoForProject({
       env: this.#context.callableEnv as Pick<ReposCapabilityEnv, "REPO">,
       projectId: this.#projectId,
@@ -486,11 +494,11 @@ class ProjectReposCapability extends RpcTarget {
     });
   }
 
-  async get(input: Parameters<ReposClient["get"]>[0]) {
+  async get(input: RepoGetInput) {
     return await this.#repos().get(input);
   }
 
-  async getInfo(input: Parameters<ReposClient["getInfo"]>[0]) {
+  async getInfo(input: RepoGetInput) {
     return await this.#repos().getInfo(input);
   }
 
@@ -516,19 +524,19 @@ class ProjectStreamsCapability extends RpcTarget {
     this.#projectId = requireRuntimeProjectId(runtime);
   }
 
-  async append(input: Parameters<StreamsClient["append"]>[0]) {
+  async append(input: StreamAppendInput) {
     return await this.#streams().append(input);
   }
 
-  async appendBatch(input: Parameters<StreamsClient["appendBatch"]>[0]) {
+  async appendBatch(input: StreamAppendBatchInput) {
     return await this.#streams().appendBatch(input);
   }
 
-  async create(input: Parameters<StreamsClient["create"]>[0]) {
+  async create(input: StreamPathInput) {
     return await this.#streams().create(input);
   }
 
-  async getState(input: Parameters<StreamsClient["getState"]>[0]) {
+  async getState(input: StreamPathInput) {
     return await this.#streams().getState(input);
   }
 
@@ -536,11 +544,11 @@ class ProjectStreamsCapability extends RpcTarget {
     return await this.#streams().list();
   }
 
-  async listChildren(input: Parameters<StreamsClient["listChildren"]>[0]) {
+  async listChildren(input: StreamListChildrenInput) {
     return await this.#streams().listChildren(input);
   }
 
-  async read(input: Parameters<StreamsClient["read"]>[0]) {
+  async read(input: StreamReadInput) {
     return await this.#streams().read(input);
   }
 
