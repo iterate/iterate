@@ -414,11 +414,7 @@ export class IterateContext extends RpcTarget {
   }
 
   private resolveContextCall(call: readonly TargetCall[]): unknown {
-    let current: unknown = this.#iterateCapability;
-    for (const step of call) {
-      current = resolveTargetCall(current, [step]);
-    }
-    return current;
+    return resolveTargetCall(this.#iterateCapability, call);
   }
 
   resolveDynamicWorkerTarget(target: Extract<MountTarget, { type: "dynamic-worker" }>) {
