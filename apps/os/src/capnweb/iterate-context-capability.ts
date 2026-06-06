@@ -49,7 +49,7 @@ export type MountTarget =
   | {
       call?: TargetCall[];
       entrypoint?: string;
-      loader?: "load" | { get: string };
+      loader?: { get: string };
       script: string;
       type: "dynamic-worker";
     }

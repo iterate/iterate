@@ -240,7 +240,7 @@ type MountTarget =
       type: "dynamic-worker";
       script: string;
       entrypoint?: string;
-      loader?: "load" | { get: string };
+      loader?: { get: string };
       call?: TargetCall[];
     }
   | {
