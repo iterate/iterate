@@ -213,3 +213,8 @@ An e2e test for Slack routing should not assert that this setup event is absent.
 The useful negative assertion is narrower: routing the Slack webhook should not
 append `events.iterate.com/agent-chat/*` output before the bang command or debug
 command has actually run.
+
+The Slack `!debug` reply links to the project stream viewer at
+`/projects/<projectSlug>/streams/<streamPath>`, not an organization settings
+route. Tests should assert that direct stream URL and avoid depending on older
+org-scoped navigation.

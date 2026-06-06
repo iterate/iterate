@@ -749,8 +749,13 @@ itIfSlackBotToken(
       "events.iterate.com/codemode/function-call-completed",
       "slack.chat.postMessage",
     );
+    const expectedStreamUrl = `${baseUrl}/projects/${encodeURIComponent(project.slug)}/streams/${routedAgentPath
+      .replace(/^\/+/, "")
+      .split("/")
+      .map(encodeURIComponent)
+      .join("/")}`;
     const debugSlackPayload = JSON.stringify(debugSlackCallCompleted.payload);
-    expect(debugSlackPayload).toContain(`${baseUrl}/orgs/`);
+    expect(debugSlackPayload).toContain(expectedStreamUrl);
     expect(debugSlackPayload).not.toContain("events.iterate.com");
     expect(
       debugEvents.filter((event) => event.type.startsWith("events.iterate.com/agent-chat/")),
