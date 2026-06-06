@@ -86,7 +86,7 @@ export class IterateContextEntrypoint extends WorkerEntrypoint<Env, IterateConte
   }
 }
 
-class IterateCapability extends RpcTarget {
+export class IterateCapability extends RpcTarget {
   readonly #runtime: IterateContextRuntime;
   readonly #dynamicWorkerTargets = new Map<string, unknown>();
   #project?: ProjectContextCapability;
@@ -164,39 +164,13 @@ class IterateCapability extends RpcTarget {
   }
 }
 
-export class IterateContext extends RpcTarget {
-  readonly #iterateCapability: IterateCapability;
+export class IterateContext extends IterateCapability {
   readonly #mounts: Mount[];
 
-  constructor(input: { iterateCapability: IterateCapability; mounts?: Mount[] }) {
-    super();
-    this.#iterateCapability = input.iterateCapability;
-    this.#mounts = input.mounts ?? [];
+  constructor(input: IterateContextRuntime) {
+    super(input);
+    this.#mounts = input.props.mounts ?? [];
     installMountedRootMembers(this, this.#mounts);
-  }
-
-  get projects(): ProjectsCapability {
-    return this.#iterateCapability.projects;
-  }
-
-  get project(): ProjectContextCapability {
-    return this.#iterateCapability.project;
-  }
-
-  get repos(): ProjectReposCapability {
-    return this.#iterateCapability.repos;
-  }
-
-  get streams(): ProjectStreamsCapability {
-    return this.#iterateCapability.streams;
-  }
-
-  get worker(): ProjectWorkerCapability {
-    return this.#iterateCapability.worker;
-  }
-
-  get workspace(): ProjectWorkspaceCapability {
-    return this.#iterateCapability.workspace;
   }
 
   async callMounted(path: string[], args: unknown[] = []) {
@@ -259,7 +233,7 @@ export class IterateContext extends RpcTarget {
   }
 
   resolveDynamicWorkerTarget(target: Extract<MountTarget, { type: "dynamic-worker" }>) {
-    return this.#iterateCapability.resolveDynamicWorkerTarget(target);
+    return super.resolveDynamicWorkerTarget(target);
   }
 
   private async invokeDynamicWorkerMount(input: {
@@ -277,10 +251,7 @@ export class IterateContext extends RpcTarget {
 }
 
 export function createIterateContext(input: IterateContextRuntime) {
-  return new IterateContext({
-    iterateCapability: new IterateCapability(input),
-    mounts: input.props.mounts ?? [],
-  });
+  return new IterateContext(input);
 }
 
 export function createProjectsCapability(input: { context: AppContext }) {
