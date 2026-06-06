@@ -2,6 +2,7 @@ import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { createRequestLogger } from "@iterate-com/shared/request-logging";
 import { createD1Client } from "sqlfu";
+import { localProxyCaller } from "./local-proxy-wrapper.js";
 import { ProjectsCapability } from "./projects-capability.ts";
 import manifest, { AppConfig } from "~/app.ts";
 import type { AppContext } from "~/context.ts";
@@ -24,7 +25,6 @@ import {
 import type { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-capability.ts";
 
 type RuntimeContext = Pick<ExecutionContext, "exports" | "waitUntil">;
-const LOCAL_PATH_CALLER_MARK = "__localProxyCaller";
 
 export type ProjectDurableObjectContextClient = {
   getCapability(props?: { scopes?: unknown }): ProjectCapabilityApi;
@@ -307,14 +307,14 @@ export class IterateContext extends RpcTarget {
   getMounted(path: string[]) {
     const match = this.requireMount(path);
     if (match.mount.target.type === "dynamic-worker") {
-      return localPathCaller(new MountedPathCaller(this, path));
+      return mountedPathCaller(this, path);
     }
     const resolved = {
       ...match,
       target: this.resolveMountTarget(match.mount.target),
     };
     if (resolved.mount.invoke === "catchall") {
-      return new MountedPathCaller(this, resolved.mount.path);
+      return mountedPathCaller(this, resolved.mount.path);
     }
     if (resolved.remainder.length === 0) return resolved.target;
     return resolveTargetCall(resolved.target, resolved.remainder);
@@ -586,6 +586,10 @@ class ProjectWorkspaceGitCapability extends RpcTarget {
   }
 }
 
+function mountedPathCaller(context: IterateContext, path: string[]) {
+  return localProxyCaller(new MountedPathCaller(context, path));
+}
+
 class MountedPathCaller extends RpcTarget {
   constructor(
     private readonly context: IterateContext,
@@ -594,18 +598,9 @@ class MountedPathCaller extends RpcTarget {
     super();
   }
 
-  async call(input: { args?: unknown[]; path: string[] }) {
+  async invoke(input: { args?: unknown[]; path: string[] }) {
     return await this.context.callMounted([...this.path, ...input.path], input.args ?? []);
   }
-}
-
-function localPathCaller(call: MountedPathCaller) {
-  // The marker must be a string key so structured clone preserves it across
-  // Cap'n Web and Workers RPC. The RpcTarget travels by reference in `call`.
-  return {
-    [LOCAL_PATH_CALLER_MARK]: true,
-    call,
-  };
 }
 
 class ProjectWorkerCapability extends RpcTarget {
@@ -720,7 +715,7 @@ function installMountedRootMembers(context: IterateContext, mounts: Mount[]) {
       configurable: true,
       get(this: IterateContext) {
         if (rootMount) return this.getMounted(rootMount.path);
-        return localPathCaller(new MountedPathCaller(this, [rootName]));
+        return mountedPathCaller(this, [rootName]);
       },
     });
   }

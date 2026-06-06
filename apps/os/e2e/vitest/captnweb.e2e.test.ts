@@ -12,6 +12,7 @@ import type {
   IterateContext,
   IterateContextProps,
 } from "../../src/capnweb/iterate-context-capability.ts";
+import { liftLocalProxies } from "../../src/capnweb/local-proxy-wrapper.js";
 
 const baseUrl = requireBaseUrl();
 const egressEchoBaseUrl = requireEgressEchoBaseUrl(baseUrl);
@@ -441,8 +442,10 @@ function withRootIterateContextFromNode(input: {
   const wsUrl = new URL(ROOT_ITERATE_CONTEXT_PREFIX, input.baseUrl);
   wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
   const socket = new WebSocket(wsUrl.toString(), { headers: rootAccessAuthHeaders(input.auth) });
-  return newWebSocketRpcSession<IterateContext>(
-    socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
+  return liftLocalProxies(
+    newWebSocketRpcSession<IterateContext>(
+      socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
+    ),
   );
 }
 
@@ -470,8 +473,10 @@ function withIterateFromNode(input: { auth: RootAccessAuth; ingressUrl: string }
         : {}),
     },
   });
-  const ctx = newWebSocketRpcSession<IterateContext>(
-    socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
+  const ctx = liftLocalProxies(
+    newWebSocketRpcSession<IterateContext>(
+      socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
+    ),
   );
   return {
     ctx,

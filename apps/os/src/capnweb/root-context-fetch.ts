@@ -4,6 +4,7 @@ import {
   createProjectsCapability,
   type IterateContextProps,
 } from "./iterate-context-capability.ts";
+import localProxyWrapperSource from "./local-proxy-wrapper.js?raw";
 import { ProjectsCapability } from "./projects-capability.ts";
 import type { AppConfig } from "~/app.ts";
 import { authenticateRootApiSecret } from "~/auth/middleware.ts";
@@ -60,9 +61,10 @@ mountModules.set(${JSON.stringify(targetKey)}, mountModule${index});`;
 
   return /* js */ `
   import { WorkerEntrypoint } from "cloudflare:workers";
+  import { liftLocalProxies, localProxyCaller } from "./local-proxy-wrapper.js";
+
   const snippet = (${input.functionSource});
   const props = ${JSON.stringify(input.props)};
-  const LOCAL_PATH_CALLER_MARK = "__localProxyCaller";
   const mountModules = new Map();
   ${mountImports}
 
@@ -157,22 +159,9 @@ mountModules.set(${JSON.stringify(targetKey)}, mountModule${index});`;
     if (typeof exported === "function") {
       const instance = Object.create(exported.prototype);
       Object.defineProperty(instance, "env", { value: env });
-      return disposableLocalValue(instance);
+      return instance;
     }
-    return disposableLocalValue(exported);
-  }
-
-  function disposableLocalValue(value) {
-    if ((typeof value !== "object" && typeof value !== "function") || value === null) {
-      return value;
-    }
-    if (!value[Symbol.dispose]) {
-      Object.defineProperty(value, Symbol.dispose, {
-        configurable: true,
-        value() {},
-      });
-    }
-    return value;
+    return exported;
   }
 
   async function invokeTargetCall(target, call, args) {
@@ -193,62 +182,18 @@ mountModules.set(${JSON.stringify(targetKey)}, mountModule${index});`;
     return await current(...args);
   }
 
-  function pathProxy(call, path = []) {
-    const fn = (...args) => call(path, args);
-    Object.defineProperty(fn, Symbol.dispose, {
-      configurable: true,
-      value() {},
-    });
-    return new Proxy(fn, {
-      get(target, prop, receiver) {
-        if (typeof prop === "symbol" || prop in target) {
-          return Reflect.get(target, prop, receiver);
-        }
-        if (prop === "then") return undefined;
-        return pathProxy(call, [...path, prop]);
-      },
-    });
-  }
-
-  function adapt(value) {
-    if (
-      value &&
-      typeof value === "object" &&
-      value[LOCAL_PATH_CALLER_MARK] === true &&
-      value.call
-    ) {
-      return pathProxy((path, args) => value.call.call({ path, args }));
-    }
-    return value;
-  }
-
-  function lift(value) {
-    if ((typeof value !== "object" && typeof value !== "function") || value === null) {
-      return value;
-    }
-    return new Proxy(value, {
-      get(target, prop, receiver) {
-        if (prop === "then" && typeof target.then === "function") {
-          return (onFulfilled, onRejected) =>
-            target.then((resolved) => onFulfilled(adapt(resolved)), onRejected);
-        }
-        const member = Reflect.get(target, prop, receiver);
-        return lift(member);
-      },
-      apply(target, thisArg, args) {
-        return lift(Reflect.apply(target, thisArg, args));
-      },
-    });
-  }
-
   function ctxWithLocalDynamicMounts(host, ctx) {
-    const lifted = lift(ctx);
+    const lifted = liftLocalProxies(ctx);
     return new Proxy(lifted, {
       get(target, prop, receiver) {
         if (typeof prop === "string" && hasDynamicMountRoot(prop)) {
-          // A dynamic /run worker cannot call back to the parent and have the
-          // parent call a second dynamic worker. Keep user mounts in-process.
-          return pathProxy((path, args) => host.callDynamicMount(path, args), [prop]);
+          // Dynamic worker entrypoints cannot be transferred from one dynamic
+          // worker to another. The parent still owns the run worker, but /run
+          // executes user dynamic mounts in this same isolate so snippets can
+          // call ctx.tools.echo() and ctx.sdk.chat.postMessage() normally.
+          return liftLocalProxies(
+            localProxyCaller(({ path, args }) => host.callDynamicMount([prop, ...path], args)),
+          );
         }
         return Reflect.get(target, prop, receiver);
       },
@@ -282,7 +227,11 @@ mountModules.set(${JSON.stringify(targetKey)}, mountModule${index});`;
 
     async run({ ctx, vars }) {
       try {
-        const result = await snippet({ ctx: ctxWithLocalDynamicMounts(this, ctx), env: this.env, vars });
+        const result = await snippet({
+          ctx: ctxWithLocalDynamicMounts(this, ctx),
+          env: this.env,
+          vars,
+        });
         return JSON.stringify({ ok: true, result });
       } catch (error) {
         return JSON.stringify({
@@ -318,7 +267,6 @@ async function handleRootRunLeg(input: { context: AppContext; env: Env; request:
       { status: 503 },
     );
   }
-
   const props = body.props ?? { scopes: { projects: "all" } };
   const mountModules = dynamicWorkerMountModules(props);
   const context = createIterateContext({
@@ -340,6 +288,7 @@ async function handleRootRunLeg(input: { context: AppContext; env: Env; request:
         moduleByTargetKey: mountModules.moduleByTargetKey,
         props,
       }),
+      "local-proxy-wrapper.js": localProxyWrapperSource,
       ...mountModules.modules,
     },
   });

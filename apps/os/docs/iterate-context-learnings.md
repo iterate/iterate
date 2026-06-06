@@ -230,3 +230,21 @@ The `/run` wrapper must provide those helpers if we want the same function body
 to run in Node and in Cloudflare dynamic workers. Local in-process proxy values
 created only for `/run` should expose a no-op `Symbol.dispose`; real RPC stubs
 still use their own disposal behavior.
+
+## Local SDK proxies must be marker-only
+
+The helper that turns a catchall mount into `ctx.sdk.chat.postMessage(...)`
+must not broadly wrap every object and function returned by Cap'n Web or
+Workers RPC. Ordinary RPC stubs already have runtime-specific receiver and
+method-call behavior. Rebinding those functions can break mounted prototype
+methods with errors such as:
+
+```text
+TypeError: this.callMounted is not a function
+```
+
+The safe shape is marker-only: normal RPC values pass through untouched, while a
+server-side marker from `localProxyCaller(...)` becomes a local path proxy. That
+keeps `using sdk = await ctx.sdk` and `await sdk.chat.postMessage(...)`
+ergonomic without changing the semantics of built-in calls like
+`await ctx.append(...)` or `await ctx.projects.get(id)`.
