@@ -587,20 +587,9 @@ class ProjectWorkspaceGitCapability extends RpcTarget {
 }
 
 function mountedPathCaller(context: IterateContext, path: string[]) {
-  return localProxyCaller(new MountedPathCaller(context, path));
-}
-
-class MountedPathCaller extends RpcTarget {
-  constructor(
-    private readonly context: IterateContext,
-    private readonly path: string[],
-  ) {
-    super();
-  }
-
-  async invoke(input: { args?: unknown[]; path: string[] }) {
-    return await this.context.callMounted([...this.path, ...input.path], input.args ?? []);
-  }
+  return localProxyCaller(async (input) => {
+    return await context.callMounted([...path, ...input.path], input.args);
+  });
 }
 
 class ProjectWorkerCapability extends RpcTarget {

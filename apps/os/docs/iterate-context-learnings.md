@@ -248,3 +248,9 @@ server-side marker from `localProxyCaller(...)` becomes a local path proxy. That
 keeps `using sdk = await ctx.sdk` and `await sdk.chat.postMessage(...)`
 ergonomic without changing the semantics of built-in calls like
 `await ctx.append(...)` or `await ctx.projects.get(id)`.
+
+The marker's `call` should be a plain function, not a tiny `RpcTarget` with an
+`invoke()` method. Functions already cross Cap'n Web and Workers RPC by
+reference, so `{ __localProxyCaller: true, call }` is enough: the marker object
+crosses by value, and the function remains the server-owned capability with its
+captured closure.

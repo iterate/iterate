@@ -29,7 +29,8 @@ export const LOCAL_PROXY_CALLER_MARK = "__localProxyCaller";
  *
  *    The marker is plain data, so it crosses RPC by value. Its `call` function
  *    crosses RPC by reference, so invoking it still runs on the server with the
- *    closure that created it.
+ *    closure that created it. This is intentionally just a function, not a
+ *    tiny RpcTarget class. The function already is the capability.
  *
  * 2. Client-side code wraps an RPC stub once:
  *
@@ -60,10 +61,7 @@ function isLocalProxyCaller(value) {
     value !== null &&
     typeof value === "object" &&
     value[LOCAL_PROXY_CALLER_MARK] === true &&
-    (typeof value.call === "function" ||
-      (value.call !== null &&
-        typeof value.call === "object" &&
-        (typeof value.call.invoke === "function" || typeof value.call.call === "function")))
+    typeof value.call === "function"
   );
 }
 
@@ -159,7 +157,5 @@ function pathProxy(call, path = []) {
 }
 
 function invokeLocalProxyCall(call, input) {
-  if (typeof call === "function") return call(input);
-  if (typeof call.invoke === "function") return call.invoke(input);
-  return call.call(input);
+  return call(input);
 }
