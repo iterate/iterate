@@ -758,10 +758,13 @@ function installMountedRootMembers(context: IterateContext, mounts: Mount[]) {
 }
 
 function resolveMount(mounts: Mount[], path: string[]) {
-  const candidates = mounts
-    .filter((mount) => isPathPrefix(mount.path, path))
-    .sort((left, right) => right.path.length - left.path.length);
-  const mount = candidates[0];
+  let mount: Mount | undefined;
+  for (const candidate of mounts) {
+    if (!isPathPrefix(candidate.path, path)) continue;
+    if (!mount || candidate.path.length > mount.path.length) {
+      mount = candidate;
+    }
+  }
   if (!mount) return null;
   return {
     mount,
