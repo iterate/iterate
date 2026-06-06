@@ -201,3 +201,15 @@ In that DO path, event-provider calls append
 matching `codemode/function-call-completed` arrives. Relying on
 `CodemodeSession.afterAppend()` for that completion is not enough unless the
 session is also configured as a live callable subscriber for completion events.
+
+## Slack-routed agent streams are real agent streams
+
+When the Slack router creates `/agents/slack/<channel>/<thread>` it wakes the
+Agent Durable Object for that stream. That initialization registers the agent
+processors and appends the default setup events, including
+`events.iterate.com/agent/llm-config-updated`.
+
+An e2e test for Slack routing should not assert that this setup event is absent.
+The useful negative assertion is narrower: routing the Slack webhook should not
+append `events.iterate.com/agent-chat/*` output before the bang command or debug
+command has actually run.

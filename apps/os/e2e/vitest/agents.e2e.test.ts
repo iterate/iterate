@@ -648,9 +648,14 @@ itIfSlackBotToken(
         }),
       }),
     );
-    expect(
-      events.filter((event) => event.type === "events.iterate.com/agent/llm-config-updated"),
-    ).toEqual([]);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/agent/llm-config-updated",
+        payload: expect.objectContaining({
+          model: "gpt-5.5",
+        }),
+      }),
+    );
     expect(
       events.filter((event) => event.type.startsWith("events.iterate.com/agent-chat/")),
     ).toEqual([]);
