@@ -103,23 +103,27 @@ describe("capnweb", () => {
       slug: `${testRunSlugPrefix}-connection-${uniqueSuffix()}`.slice(0, 40),
     });
     const connectionKey = `connection-${uniqueSuffix()}`;
+    const connectionMethodName = `method-${uniqueSuffix()}`;
     await using connection = await withProjectConnectionFromNode({
       auth,
       connectionKey,
       ingressUrl: project.ingressUrl,
-      target: new ProjectConnectionTestTarget({ marker: connectionKey }),
+      target: new ProjectConnectionTestTarget({
+        marker: connectionKey,
+        methodName: connectionMethodName,
+      }),
     });
 
     using iterate = withIterateFromNode({ auth, ingressUrl: project.ingressUrl });
     const fromNode = await runCapnwebFunctionFromNode({
       ctx: iterate.ctx,
       fn: callProjectConnection,
-      vars: { connectionKey, source: "node" },
+      vars: { connectionKey, methodName: connectionMethodName, source: "node" },
     });
     const fromDynamicWorker = await runCapnwebFunctionInDynamicWorker({
       fn: callProjectConnection,
       props: { scopes: { projects: [project.id] } },
-      vars: { connectionKey, source: "dynamic-worker" },
+      vars: { connectionKey, methodName: connectionMethodName, source: "dynamic-worker" },
     });
 
     expect(fromNode).toEqual({
@@ -302,6 +306,18 @@ describe("capnweb", () => {
     const marker = `mounts-${uniqueSuffix()}`;
     const streamPath = `/capnweb/mounts/${marker}`;
     const eventType = `events.iterate.com/capnweb/mounts/${marker}`;
+    const appendMountName = `append-${uniqueSuffix()}`;
+    const listStreamsMountName = `listStreams-${uniqueSuffix()}`;
+    const mountedStreamsName = `mountedStreams-${uniqueSuffix()}`;
+    const nestedSdkBranchName = `branch-${uniqueSuffix()}`;
+    const nestedSdkMountName = `nestedSdk-${uniqueSuffix()}`;
+    const nestedSdkRootName = `root-${uniqueSuffix()}`;
+    const rootEchoMountName = `rootEcho-${uniqueSuffix()}`;
+    const sdkActionName = `postMessage-${uniqueSuffix()}`;
+    const sdkGetterName = `sdkGetter-${uniqueSuffix()}`;
+    const sdkMountName = `sdk-${uniqueSuffix()}`;
+    const sdkNamespaceName = `chat-${uniqueSuffix()}`;
+    const toolsMountName = `tools-${uniqueSuffix()}`;
     const toolsScript = dedent`
       import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 
@@ -332,8 +348,10 @@ describe("capnweb", () => {
       import { WorkerEntrypoint } from "cloudflare:workers";
       import { localProxyCaller } from "./local-proxy-wrapper.js";
 
+      const sdkGetterName = ${JSON.stringify(sdkGetterName)};
+
       export default class SdkLikeTarget extends WorkerEntrypoint {
-        get sdk() {
+        get [sdkGetterName]() {
           return localProxyCaller(({ path, args }) => this.call({ path, args }));
         }
 
@@ -352,7 +370,7 @@ describe("capnweb", () => {
         scopes: { projects: [project.id] },
         mounts: [
           {
-            path: ["tools"],
+            path: [toolsMountName],
             target: {
               script: toolsScript,
               type: "dynamic-worker",
@@ -360,7 +378,7 @@ describe("capnweb", () => {
           },
           {
             invoke: "method",
-            path: ["rootEcho"],
+            path: [rootEchoMountName],
             target: {
               call: ["echo"],
               script: toolsScript,
@@ -368,23 +386,23 @@ describe("capnweb", () => {
             },
           },
           {
-            path: ["sdk"],
+            path: [sdkMountName],
             target: {
-              call: ["sdk"],
+              call: [sdkGetterName],
               script: sdkScript,
               type: "dynamic-worker",
             },
           },
           {
-            path: ["some", "path", "sdk"],
+            path: [nestedSdkRootName, nestedSdkBranchName, nestedSdkMountName],
             target: {
-              call: ["sdk"],
+              call: [sdkGetterName],
               script: sdkScript,
               type: "dynamic-worker",
             },
           },
           {
-            path: ["mountedStreams"],
+            path: [mountedStreamsName],
             target: {
               call: ["projects", { method: "get", args: [project.id] }, "streams"],
               type: "ctx",
@@ -392,7 +410,7 @@ describe("capnweb", () => {
           },
           {
             invoke: "method",
-            path: ["listStreams"],
+            path: [listStreamsMountName],
             target: {
               call: ["projects", { method: "get", args: [project.id] }, "streams", "list"],
               type: "ctx",
@@ -400,7 +418,7 @@ describe("capnweb", () => {
           },
           {
             invoke: "method",
-            path: ["append"],
+            path: [appendMountName],
             target: {
               call: ["projects", { method: "get", args: [project.id] }, "streams", "append"],
               type: "ctx",
@@ -409,9 +427,20 @@ describe("capnweb", () => {
         ],
       },
       vars: {
+        appendMountName,
         eventType,
+        listStreamsMountName,
         marker,
+        mountedStreamsName,
+        nestedSdkBranchName,
+        nestedSdkMountName,
+        nestedSdkRootName,
+        rootEchoMountName,
+        sdkActionName,
+        sdkMountName,
+        sdkNamespaceName,
         streamPath,
+        toolsMountName,
       },
     })) as {
       appendResult: unknown;
@@ -454,11 +483,11 @@ describe("capnweb", () => {
     );
     expect(result.sdkResult).toEqual({
       args: [{ text: marker }],
-      method: "chat.postMessage",
+      method: `${sdkNamespaceName}.${sdkActionName}`,
     });
     expect(result.nestedSdkResult).toEqual({
       args: [{ text: marker, via: "nested" }],
-      method: "chat.postMessage",
+      method: `${sdkNamespaceName}.${sdkActionName}`,
     });
     expect(result.appendResult).toMatchObject({
       payload: { marker, source: "ctx-method-mount" },
@@ -590,21 +619,20 @@ type ProjectConfigWorkerTestApi = {
 };
 
 class ProjectConnectionTestTarget extends RpcTarget {
-  #callCount = 0;
-  readonly #marker: string;
-
-  constructor(input: { marker: string }) {
+  constructor(input: { marker: string; methodName: string }) {
     super();
-    this.#marker = input.marker;
-  }
-
-  someMethod(input: { source: string }) {
-    this.#callCount += 1;
-    return {
-      callCount: this.#callCount,
-      marker: this.#marker,
-      source: input.source,
-    };
+    let callCount = 0;
+    Object.defineProperty(Object.getPrototypeOf(this), input.methodName, {
+      configurable: true,
+      value(callInput: { source: string }) {
+        callCount += 1;
+        return {
+          callCount,
+          marker: input.marker,
+          source: callInput.source,
+        };
+      },
+    });
   }
 }
 
@@ -731,28 +759,39 @@ async function fetchProjectIngressAndEgress({
 async function callProjectConnection({
   ctx,
   vars,
-}: CapnwebFunctionInput<{ connectionKey: string; source: string }>) {
+}: CapnwebFunctionInput<{ connectionKey: string; methodName: string; source: string }>) {
   using project = await ctx.project;
   using connections = await project.connections;
   using connection = await connections.get(vars.connectionKey);
-  return await connection.someMethod({ source: vars.source });
+  return await connection[vars.methodName]({ source: vars.source });
 }
 
 async function exerciseMountedContext({
   ctx,
   vars,
 }: CapnwebFunctionInput<{
+  appendMountName: string;
   eventType: string;
+  listStreamsMountName: string;
   marker: string;
+  mountedStreamsName: string;
+  nestedSdkBranchName: string;
+  nestedSdkMountName: string;
+  nestedSdkRootName: string;
+  rootEchoMountName: string;
+  sdkActionName: string;
+  sdkMountName: string;
+  sdkNamespaceName: string;
   streamPath: string;
+  toolsMountName: string;
 }>) {
-  using tools = await ctx.tools;
+  using tools = await ctx[vars.toolsMountName];
   const targetResult = await tools.echo({ marker: vars.marker });
   const nestedResult = await tools.nested.describe({ marker: vars.marker });
 
-  const methodResult = await ctx.rootEcho({ marker: vars.marker });
+  const methodResult = await ctx[vars.rootEchoMountName]({ marker: vars.marker });
 
-  using mountedStreams = await ctx.mountedStreams;
+  using mountedStreams = await ctx[vars.mountedStreamsName];
   const mountedAppendResult = await mountedStreams.append({
     streamPath: vars.streamPath,
     event: {
@@ -766,8 +805,8 @@ async function exerciseMountedContext({
   });
 
   const listedByShortcut = await mountedStreams.list();
-  const listedByMethod = await ctx.listStreams();
-  const appendResult = await ctx.append({
+  const listedByMethod = await ctx[vars.listStreamsMountName]();
+  const appendResult = await ctx[vars.appendMountName]({
     streamPath: vars.streamPath,
     event: {
       type: `${vars.eventType}/method`,
@@ -779,10 +818,11 @@ async function exerciseMountedContext({
     streamPath: vars.streamPath,
   });
 
-  using sdk = await ctx.sdk;
-  const sdkResult = await sdk.chat.postMessage({ text: vars.marker });
-  using nestedSdk = await ctx.some.path.sdk;
-  const nestedSdkResult = await nestedSdk.chat.postMessage({
+  using sdk = await ctx[vars.sdkMountName];
+  const sdkResult = await sdk[vars.sdkNamespaceName][vars.sdkActionName]({ text: vars.marker });
+  using nestedSdk =
+    await ctx[vars.nestedSdkRootName][vars.nestedSdkBranchName][vars.nestedSdkMountName];
+  const nestedSdkResult = await nestedSdk[vars.sdkNamespaceName][vars.sdkActionName]({
     text: vars.marker,
     via: "nested",
   });
