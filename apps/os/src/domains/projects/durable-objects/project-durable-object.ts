@@ -1,7 +1,6 @@
 import { createD1Client } from "sqlfu";
 import { z } from "zod";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
-import { createRpcTargetClass } from "@iterate-com/shared/capabilities";
 import { newWorkersRpcResponse, type RpcStub } from "capnweb";
 import { acceptCaptunTunnel, type Fetcher } from "captun";
 import type { FetchCallable } from "@iterate-com/shared/callable/types.ts";
@@ -25,6 +24,7 @@ import {
   type IterateContext,
   type IterateContextProps,
 } from "~/capnweb/iterate-context-capability.ts";
+import { ProjectCapability } from "~/capnweb/project-capability.ts";
 import {
   AGENTS_STREAM_PATH,
   type AgentDurableObject,
@@ -1215,11 +1215,6 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     return prefix !== "" && !prefix.includes(".") ? prefix : null;
   }
 }
-
-export class ProjectCapability extends createRpcTargetClass<
-  ProjectCapabilityApi,
-  ProjectDurableObject
->(ProjectDurableObject) {}
 
 function projectLifecycleSubscriptionKey(projectId: string) {
   return `project-lifecycle:${projectId}`;
