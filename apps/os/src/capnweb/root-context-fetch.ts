@@ -47,95 +47,44 @@ export async function handleRootIterateContextFetch(input: {
   );
 }
 
-function rootRunWorkerSrc(input: { functionSource: string; props: IterateContextProps }) {
+function rootRunWorkerSrc(input: { dynamicMountRoots: string[]; functionSource: string }) {
   return /* js */ `
   import { WorkerEntrypoint } from "cloudflare:workers";
-  import {
-    liftLocalProxies,
-    localProxyCaller,
-  } from "./local-proxy-wrapper.js";
+  import { __callDispose, __using, liftLocalProxies, localProxyCaller } from "./local-proxy-wrapper.js";
 
   const snippet = (${input.functionSource});
-  const props = ${JSON.stringify(input.props)};
+  const dynamicMountRoots = new Set(${JSON.stringify(input.dynamicMountRoots)});
 
-  function __using(stack, value, isAsync) {
-    if (value == null) return value;
-    const dispose =
-      isAsync && Symbol.asyncDispose && value[Symbol.asyncDispose]
-        ? value[Symbol.asyncDispose]
-        : value[Symbol.dispose];
-    if (typeof dispose !== "function") {
-      throw new TypeError("Object is not disposable.");
-    }
-    stack.push({ async: Boolean(isAsync), dispose, value });
-    return value;
-  }
-
-  function __callDispose(stack, error, hasError) {
-    let promise;
-    const rememberError = (disposeError) => {
-      if (hasError) {
-        error =
-          typeof SuppressedError === "function"
-            ? new SuppressedError(disposeError, error, "An error was suppressed during disposal.")
-            : disposeError;
-      } else {
-        error = disposeError;
-        hasError = true;
-      }
-    };
-    const disposeSync = (entry) => {
-      try {
-        entry.dispose.call(entry.value);
-      } catch (disposeError) {
-        rememberError(disposeError);
-      }
-    };
-    const disposeAsync = async (entry) => {
-      try {
-        await entry.dispose.call(entry.value);
-      } catch (disposeError) {
-        rememberError(disposeError);
-      }
-    };
-
-    while (stack.length > 0) {
-      const entry = stack.pop();
-      if (promise || entry.async) {
-        promise = Promise.resolve(promise).then(() => disposeAsync(entry));
-      } else {
-        disposeSync(entry);
-      }
-    }
-
-    if (promise) {
-      return promise.then(() => {
-        if (hasError) throw error;
-      });
-    }
-    if (hasError) throw error;
-  }
-
-  function hasDynamicMountRoot(rootName) {
-    return (props.mounts ?? []).some(
-      (mount) => mount.target.type === "dynamic-worker" && mount.path[0] === rootName,
-    );
-  }
-
-  function ctxWithLocalDynamicMounts(host, ctx) {
+  function contextForRun(host, ctx) {
     const lifted = liftLocalProxies(ctx);
+    if (dynamicMountRoots.size === 0) return lifted;
+    // This Proxy is a narrow /run compatibility overlay, not the canonical
+    // context object. The /run worker gets ctx from env.ITERATE.context so
+    // built-in roots like ctx.projects and ctx.project are the normal
+    // parent-provided RPC stubs. Dynamic-worker mounts are different: their
+    // actual WorkerEntrypoint is owned by the parent worker with the LOADER
+    // binding and cannot be transferred into this /run worker. For just those
+    // root names, this proxy returns a local SDK-style marker that forwards the
+    // eventual call back to the parent-owned env.ITERATE.callMounted(...).
+    //
+    // Effect:
+    //   ctx.tools.echo(arg)
+    // becomes:
+    //   env.ITERATE.callMounted(["tools", "echo"], [arg])
+    //
+    // Normal properties fall through untouched. This keeps the symmetric
+    // snippet model ("const ctx = await env.ITERATE.context") while preserving
+    // the dynamic-worker mount rule that the loader owner forwards the call.
+    //
+    // References:
+    // - Dynamic Workers API: https://developers.cloudflare.com/dynamic-workers/api-reference/
+    // - Workers RPC stubs: https://developers.cloudflare.com/workers/runtime-apis/rpc/
     return new Proxy(lifted, {
       get(target, prop, receiver) {
-        if (typeof prop === "string" && hasDynamicMountRoot(prop)) {
-          // Built-in roots can travel as the injected ctx object. Dynamic-worker
-          // mounts cannot expose their entrypoint to this run worker, so the
-          // local proxy records the rest of the JavaScript path and asks the
-          // parent-owned ITERATE binding to forward the final call.
-          return liftLocalProxies(
-            localProxyCaller(({ path, args }) =>
-              host.env.ITERATE.callMounted([prop, ...path], args),
-            ),
-          );
+        if (typeof prop === "string" && dynamicMountRoots.has(prop)) {
+          return liftLocalProxies(localProxyCaller(({ path, args }) =>
+            host.env.ITERATE.callMounted([prop, ...path], args)
+          ));
         }
         return Reflect.get(target, prop, receiver);
       },
@@ -143,10 +92,11 @@ function rootRunWorkerSrc(input: { functionSource: string; props: IterateContext
   }
 
   export default class extends WorkerEntrypoint {
-    async run({ ctx, vars }) {
+    async run(vars) {
       try {
+        const ctx = contextForRun(this, await this.env.ITERATE.context);
         const result = await snippet({
-          ctx: ctxWithLocalDynamicMounts(this, ctx),
+          ctx,
           env: this.env,
           vars,
         });
@@ -159,7 +109,7 @@ function rootRunWorkerSrc(input: { functionSource: string; props: IterateContext
         });
       }
     }
-}
+  }
 `;
 }
 
@@ -186,11 +136,14 @@ async function handleRootRunLeg(input: { context: AppContext; env: Env; request:
     );
   }
   const props = body.props ?? { scopes: { projects: "all" } };
-  const context = createIterateContext({
-    context: input.context,
-    projects: createProjectsCapability({ context: input.context }),
-    props,
-  });
+  const dynamicMountRoots = [
+    ...new Set(
+      (props.mounts ?? [])
+        .filter((mount) => mount.target.type === "dynamic-worker")
+        .map((mount) => mount.path[0])
+        .filter((root): root is string => root != null),
+    ),
+  ];
   const worker = input.env.LOADER.load({
     compatibilityDate: "2026-04-27",
     env: {
@@ -201,23 +154,17 @@ async function handleRootRunLeg(input: { context: AppContext; env: Env; request:
     mainModule: "worker.js",
     modules: {
       "worker.js": rootRunWorkerSrc({
+        dynamicMountRoots,
         functionSource: body.functionSource,
-        props,
       }),
       "local-proxy-wrapper.js": localProxyWrapperSource,
     },
   });
   const entry = worker.getEntrypoint() as unknown as {
-    run(input: {
-      ctx: ReturnType<typeof createIterateContext>;
-      vars: CaptnwebVars;
-    }): string | Promise<string>;
+    run(vars: CaptnwebVars): string | Promise<string>;
   } & Partial<Disposable>;
   try {
-    const json = await entry.run({
-      ctx: context,
-      vars: body.vars ?? {},
-    });
+    const json = await entry.run(body.vars ?? {});
     const runResult = JSON.parse(json) as
       | { ok: true; result: unknown }
       | { error: string; ok: false; stack?: string };

@@ -410,7 +410,17 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
   }
 
   getCapability(_props: { scopes?: unknown } = {}): ProjectCapability {
-    return new ProjectCapability(this);
+    const context = createCapnwebAppContext({
+      ctx: this.ctx,
+      env: this.env as unknown as Env,
+      method: "CAPNWEB",
+      path: "capnweb://project-capability",
+    });
+    return new ProjectCapability({
+      context,
+      project: this,
+      projectId: this.structuredName.projectId,
+    });
   }
 
   getConnection(connectionKey: string): RpcStub<ProjectCapnwebConnectionTarget> {

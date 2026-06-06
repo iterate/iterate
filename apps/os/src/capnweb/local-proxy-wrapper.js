@@ -71,6 +71,64 @@ export function callLocalProxyCaller(value, input) {
   return value.call(input);
 }
 
+export function __using(stack, value, isAsync) {
+  if (value == null) return value;
+  const dispose =
+    isAsync && Symbol.asyncDispose && value[Symbol.asyncDispose]
+      ? value[Symbol.asyncDispose]
+      : value[Symbol.dispose];
+  if (typeof dispose !== "function") {
+    throw new TypeError("Object is not disposable.");
+  }
+  stack.push({ async: Boolean(isAsync), dispose, value });
+  return value;
+}
+
+export function __callDispose(stack, error, hasError) {
+  let promise;
+  const rememberError = (disposeError) => {
+    if (hasError) {
+      error =
+        typeof SuppressedError === "function"
+          ? new SuppressedError(disposeError, error, "An error was suppressed during disposal.")
+          : disposeError;
+    } else {
+      error = disposeError;
+      hasError = true;
+    }
+  };
+  const disposeSync = (entry) => {
+    try {
+      entry.dispose.call(entry.value);
+    } catch (disposeError) {
+      rememberError(disposeError);
+    }
+  };
+  const disposeAsync = async (entry) => {
+    try {
+      await entry.dispose.call(entry.value);
+    } catch (disposeError) {
+      rememberError(disposeError);
+    }
+  };
+
+  while (stack.length > 0) {
+    const entry = stack.pop();
+    if (promise || entry.async) {
+      promise = Promise.resolve(promise).then(() => disposeAsync(entry));
+    } else {
+      disposeSync(entry);
+    }
+  }
+
+  if (promise) {
+    return promise.then(() => {
+      if (hasError) throw error;
+    });
+  }
+  if (hasError) throw error;
+}
+
 function adapt(value) {
   if (!isLocalProxyCaller(value)) return value;
   return pathProxy(value.call);
@@ -82,6 +140,18 @@ function lift(value) {
     return value;
   }
 
+  // This Proxy is client-side only. Cloudflare Workers RPC and Cap'n Web both
+  // already use JavaScript Proxy objects for remote stubs:
+  // - https://developers.cloudflare.com/workers/runtime-apis/rpc/
+  // - https://github.com/cloudflare/capnweb
+  //
+  // We wrap the stub/promise locally so property reads on an unresolved RPC
+  // promise still pipeline through to the eventual value, but we do not change
+  // ordinary RPC semantics. The only special case is a value marked by
+  // localProxyCaller(), which becomes an SDK-shaped local path proxy. This is
+  // why normal calls such as ctx.projects.get(id).describe() still dispatch
+  // through the runtime stub, while marker values can support Slack-style
+  // unknown paths such as ctx.slack.chat.postMessage(...).
   return new Proxy(value, {
     get(target, key, receiver) {
       if (key === "then" && typeof target.then === "function") {
@@ -143,6 +213,19 @@ function pathProxy(call, path = []) {
     });
   }
 
+  // This Proxy is the deliberate "infinite SDK path" object. We cannot model a
+  // Slack-style SDK as Worker RPC prototype methods because the namespace tree
+  // is not known ahead of time. The Cap'n Web README documents that RPC stubs
+  // themselves are Proxies, and the Workers RPC docs describe stubs as Proxy
+  // objects, but this object is not a remote stub. It is a local recorder:
+  // each property read appends one path segment, and the final function call
+  // invokes the by-reference `call` capability with { path, args }. Returning
+  // undefined for `then` is essential so `await ctx.slack` does not treat the
+  // path proxy as a promise and accidentally call the remote SDK.
+  //
+  // References:
+  // - https://github.com/cloudflare/capnweb
+  // - https://developers.cloudflare.com/workers/runtime-apis/rpc/
   return new Proxy(fn, {
     get(target, key, receiver) {
       if (typeof key === "symbol" || key in target) {

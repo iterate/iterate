@@ -1026,6 +1026,25 @@ function __stringify(value) {
 	    return result;
 	  }
 
+	  // This Proxy is the codemode "ctx" object given to user-authored snippets.
+	  // It is intentionally not a real RpcTarget stub. Codemode needs an open
+	  // tool namespace where an LLM can write ctx.workspace.git.status(...),
+	  // ctx.fetch(...), or future provider paths without the host predeclaring
+	  // every method as a JavaScript class member. Each property read appends a
+	  // path segment; the final function call sends { path, args } to the owning
+	  // CodemodeSession Durable Object via callFunction(...). The host then
+	  // resolves the provider and records/disposes any returned RPC stubs.
+	  //
+	  // Returning undefined for then/catch/finally is required. Promise
+	  // machinery probes those names; if the path proxy looked thenable, "await
+	  // ctx.workspace" would call the tool path instead of preserving the path
+	  // recorder.
+	  //
+	  // References:
+	  // - Workers RPC stubs use Proxy objects:
+	  //   https://developers.cloudflare.com/workers/runtime-apis/rpc/
+	  // - Cap'n Web documents the same proxy/stub model:
+	  //   https://github.com/cloudflare/capnweb
 	  const make = (path = []) => new Proxy(async () => {}, {
 	    get: (_target, key) => {
 	      if (key === "then" || key === "catch" || key === "finally") return undefined;

@@ -48,6 +48,16 @@ describe("capnweb", () => {
         slug: project.slug,
       });
     }
+
+    const describeProjectThroughProjects = async ({
+      ctx,
+      vars,
+    }: CapnwebFunctionInput<{ projectId: string }>) => {
+      using projects = await ctx.projects;
+      using project = await projects.get(vars.projectId);
+      return await project.describe();
+    };
+
     expect(
       await runCapnwebFunctionFromNode({
         ctx: root,
@@ -113,6 +123,20 @@ describe("capnweb", () => {
         methodName: connectionMethodName,
       }),
     });
+
+    const callProjectConnection = async ({
+      ctx,
+      vars,
+    }: CapnwebFunctionInput<{
+      connectionKey: string;
+      methodName: string;
+      source: string;
+    }>) => {
+      using project = await ctx.project;
+      using connections = await project.connections;
+      using connection = await connections.get(vars.connectionKey);
+      return await connection[vars.methodName]({ source: vars.source });
+    };
 
     const fromNode = await runCapnwebFunctionFromNode({
       ctx: iterate.ctx,
@@ -198,11 +222,57 @@ describe("capnweb", () => {
 
     const dir = `/iterate-config-${Date.now()}`;
     const updateResult = await runCapnwebFunctionInDynamicWorker({
-      fn: updateIterateConfigWorker,
+      fn: async ({
+        ctx,
+        vars,
+      }: CapnwebFunctionInput<{
+        dir: string;
+        marker: string;
+        workerSource: string;
+      }>) => {
+        using project = await ctx.project;
+        using repos = await project.repos;
+        using workspace = await project.workspace;
+        using git = await workspace.git;
+        const repo = await repos.ensureIterateConfigInfo({ projectSlug: null });
+
+        await git.clone({
+          branch: repo.defaultBranch,
+          depth: 1,
+          dir: vars.dir,
+          url: repo.remote,
+          ...repo.credentials,
+        });
+        await workspace.writeFile(vars.dir + "/worker.js", vars.workerSource);
+        await git.add({ dir: vars.dir, filepath: "worker.js" });
+        await git.commit({
+          author: { name: "Capnweb", email: "captnweb-e2e@iterate.com" },
+          dir: vars.dir,
+          message: "Add capnweb worker proof from /run",
+        });
+        await git.push({
+          dir: vars.dir,
+          ref: repo.defaultBranch,
+          remote: "origin",
+          ...repo.credentials,
+        });
+
+        using worker = await project.worker;
+        const calledTool = await (worker as unknown as ProjectConfigWorkerTestApi).someFunction({
+          echo: vars.marker,
+        });
+
+        return {
+          calledTool,
+          project: await project.describe(),
+          repoSlug: repo.slug,
+          workspaceGitPath: "ctx.project.workspace.git",
+        };
+      },
+      props: { scopes: { projects: [project.id] } },
       vars: {
         dir,
         marker,
-        projectId: project.id,
         workerSource,
       },
     });
@@ -210,6 +280,7 @@ describe("capnweb", () => {
       calledTool: { from: "iterate-config", input: { echo: marker }, marker },
       project: { id: project.id, slug: project.slug },
       repoSlug: "iterate-config",
+      workspaceGitPath: "ctx.project.workspace.git",
     });
 
     using projectContext = await iterate.ctx.project;
@@ -275,7 +346,64 @@ describe("capnweb", () => {
     });
 
     const result = await runCapnwebFunctionInDynamicWorker({
-      fn: fetchProjectIngressAndEgress,
+      fn: async ({
+        ctx,
+        vars,
+      }: CapnwebFunctionInput<{
+        echoAuthToken: string;
+        echoUrl: string;
+        ingressUrl: string;
+        secretKey: string;
+      }>) => {
+        using project = await ctx.project;
+        const expectedHomepageText = "Hello from the project config worker";
+        let ingress = { status: 0, text: "" };
+        for (let attempt = 0; attempt < 12; attempt++) {
+          const response = await project.fetch(new Request(vars.ingressUrl + "/"));
+          ingress = {
+            status: response.status,
+            text: await response.text(),
+          };
+          if (ingress.status === 200 && ingress.text === expectedHomepageText) break;
+          await new Promise((resolve) => setTimeout(resolve, 1_000));
+        }
+
+        if (ingress.status !== 200 || ingress.text !== expectedHomepageText) {
+          throw new Error(
+            `Expected project fetch to return default homepage, got ${ingress.status}: ${ingress.text}`,
+          );
+        }
+
+        const headerName = "x-iterate-example-secret";
+        const secretReference = `Bearer getSecret({ key: ${JSON.stringify(vars.secretKey)} })`;
+        const egressResponse = await project.egressFetch(
+          new Request(vars.echoUrl, {
+            headers: {
+              authorization: `Bearer ${vars.echoAuthToken}`,
+              [headerName]: secretReference,
+            },
+          }),
+        );
+        const body = (await egressResponse.json()) as {
+          headers?: Record<string, string | string[] | undefined>;
+          url?: string;
+        };
+        const echoedHeader =
+          body.headers?.[headerName] ?? body.headers?.["X-Iterate-Example-Secret"];
+        const echoedSecretHeader = Array.isArray(echoedHeader)
+          ? echoedHeader.join(", ")
+          : String(echoedHeader ?? "");
+
+        return {
+          egress: {
+            echoedSecretHeader,
+            echoUrl: body.url,
+            secretReferenceWasSubstituted: echoedSecretHeader !== secretReference,
+            status: egressResponse.status,
+          },
+          ingress,
+        };
+      },
       props: { scopes: { projects: [project.id] } },
       vars: {
         echoAuthToken: auth.token.exposeSecret(),
@@ -364,7 +492,83 @@ describe("capnweb", () => {
     `;
 
     const result = (await runCapnwebFunctionInDynamicWorker({
-      fn: exerciseMountedContext,
+      fn: async ({
+        ctx,
+        vars,
+      }: CapnwebFunctionInput<{
+        appendMountName: string;
+        eventType: string;
+        listStreamsMountName: string;
+        marker: string;
+        mountedStreamsName: string;
+        nestedSdkBranchName: string;
+        nestedSdkMountName: string;
+        nestedSdkRootName: string;
+        rootEchoMountName: string;
+        sdkActionName: string;
+        sdkMountName: string;
+        sdkNamespaceName: string;
+        streamPath: string;
+        toolsMountName: string;
+      }>) => {
+        using tools = await ctx[vars.toolsMountName];
+        const targetResult = await tools.echo({ marker: vars.marker });
+        const nestedResult = await tools.nested.describe({ marker: vars.marker });
+
+        const methodResult = await ctx[vars.rootEchoMountName]({ marker: vars.marker });
+
+        using mountedStreams = await ctx[vars.mountedStreamsName];
+        const mountedAppendResult = await mountedStreams.append({
+          streamPath: vars.streamPath,
+          event: {
+            type: vars.eventType,
+            payload: { marker: vars.marker, source: "mount-shortcut" },
+          },
+        });
+        const eventsByShortcut = await mountedStreams.read({
+          afterOffset: "start",
+          streamPath: vars.streamPath,
+        });
+
+        const listedByShortcut = await mountedStreams.list();
+        const listedByMethod = await ctx[vars.listStreamsMountName]();
+        const appendResult = await ctx[vars.appendMountName]({
+          streamPath: vars.streamPath,
+          event: {
+            type: `${vars.eventType}/method`,
+            payload: { marker: vars.marker, source: "ctx-method-mount" },
+          },
+        });
+        const eventsByMethod = await mountedStreams.read({
+          afterOffset: "start",
+          streamPath: vars.streamPath,
+        });
+
+        using sdk = await ctx[vars.sdkMountName];
+        const sdkResult = await sdk[vars.sdkNamespaceName][vars.sdkActionName]({
+          text: vars.marker,
+        });
+        using nestedSdk =
+          await ctx[vars.nestedSdkRootName][vars.nestedSdkBranchName][vars.nestedSdkMountName];
+        const nestedSdkResult = await nestedSdk[vars.sdkNamespaceName][vars.sdkActionName]({
+          text: vars.marker,
+          via: "nested",
+        });
+
+        return {
+          appendResult,
+          eventsByMethod,
+          eventsByShortcut,
+          nestedSdkResult,
+          listedByMethod: listedByMethod.map((stream: { name: string }) => stream.name),
+          listedByShortcut: listedByShortcut.map((stream: { name: string }) => stream.name),
+          methodResult,
+          mountedAppendResult,
+          nestedResult,
+          sdkResult,
+          targetResult,
+        };
+      },
       props: {
         scopes: { projects: [project.id] },
         mounts: [
@@ -615,208 +819,6 @@ class ProjectConnectionTestTarget extends RpcTarget {
 type CapnwebFunction<Vars extends Record<string, unknown>, Result> = (
   input: CapnwebFunctionInput<Vars>,
 ) => Result | Promise<Result>;
-
-async function describeProjectThroughProjects({
-  ctx,
-  vars,
-}: CapnwebFunctionInput<{ projectId: string }>) {
-  using projects = await ctx.projects;
-  using project = await projects.get(vars.projectId);
-  return await project.describe();
-}
-
-async function updateIterateConfigWorker({
-  ctx,
-  vars,
-}: CapnwebFunctionInput<{
-  dir: string;
-  marker: string;
-  projectId: string;
-  workerSource: string;
-}>) {
-  using projects = await ctx.projects;
-  using project = await projects.get(vars.projectId);
-  using repos = await project.repos;
-  using workspace = await project.workspace;
-  using git = await workspace.git;
-  const repo = await repos.ensureIterateConfigInfo({ projectSlug: null });
-
-  await git.clone({
-    branch: repo.defaultBranch,
-    depth: 1,
-    dir: vars.dir,
-    url: repo.remote,
-    ...repo.credentials,
-  });
-  await workspace.writeFile(vars.dir + "/worker.js", vars.workerSource);
-  await git.add({ dir: vars.dir, filepath: "worker.js" });
-  await git.commit({
-    author: { name: "Capnweb", email: "captnweb-e2e@iterate.com" },
-    dir: vars.dir,
-    message: "Add capnweb worker proof from /run",
-  });
-  await git.push({
-    dir: vars.dir,
-    ref: repo.defaultBranch,
-    remote: "origin",
-    ...repo.credentials,
-  });
-
-  using worker = await project.worker;
-  const calledTool = await (worker as unknown as ProjectConfigWorkerTestApi).someFunction({
-    echo: vars.marker,
-  });
-
-  return {
-    calledTool,
-    project: await project.describe(),
-    repoSlug: repo.slug,
-  };
-}
-
-async function fetchProjectIngressAndEgress({
-  ctx,
-  vars,
-}: CapnwebFunctionInput<{
-  echoAuthToken: string;
-  echoUrl: string;
-  ingressUrl: string;
-  secretKey: string;
-}>) {
-  using project = await ctx.project;
-  const expectedHomepageText = "Hello from the project config worker";
-  let ingress = { status: 0, text: "" };
-  for (let attempt = 0; attempt < 12; attempt++) {
-    const response = await project.fetch(new Request(vars.ingressUrl + "/"));
-    ingress = {
-      status: response.status,
-      text: await response.text(),
-    };
-    if (ingress.status === 200 && ingress.text === expectedHomepageText) break;
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
-  }
-
-  if (ingress.status !== 200 || ingress.text !== expectedHomepageText) {
-    throw new Error(
-      `Expected project fetch to return default homepage, got ${ingress.status}: ${ingress.text}`,
-    );
-  }
-
-  const headerName = "x-iterate-example-secret";
-  const secretReference = `Bearer getSecret({ key: ${JSON.stringify(vars.secretKey)} })`;
-  const egressResponse = await project.egressFetch(
-    new Request(vars.echoUrl, {
-      headers: {
-        authorization: `Bearer ${vars.echoAuthToken}`,
-        [headerName]: secretReference,
-      },
-    }),
-  );
-  const body = (await egressResponse.json()) as {
-    headers?: Record<string, string | string[] | undefined>;
-    url?: string;
-  };
-  const echoedHeader = body.headers?.[headerName] ?? body.headers?.["X-Iterate-Example-Secret"];
-  const echoedSecretHeader = Array.isArray(echoedHeader)
-    ? echoedHeader.join(", ")
-    : String(echoedHeader ?? "");
-
-  return {
-    egress: {
-      echoedSecretHeader,
-      echoUrl: body.url,
-      secretReferenceWasSubstituted: echoedSecretHeader !== secretReference,
-      status: egressResponse.status,
-    },
-    ingress,
-  };
-}
-
-async function callProjectConnection({
-  ctx,
-  vars,
-}: CapnwebFunctionInput<{ connectionKey: string; methodName: string; source: string }>) {
-  using project = await ctx.project;
-  using connections = await project.connections;
-  using connection = await connections.get(vars.connectionKey);
-  return await connection[vars.methodName]({ source: vars.source });
-}
-
-async function exerciseMountedContext({
-  ctx,
-  vars,
-}: CapnwebFunctionInput<{
-  appendMountName: string;
-  eventType: string;
-  listStreamsMountName: string;
-  marker: string;
-  mountedStreamsName: string;
-  nestedSdkBranchName: string;
-  nestedSdkMountName: string;
-  nestedSdkRootName: string;
-  rootEchoMountName: string;
-  sdkActionName: string;
-  sdkMountName: string;
-  sdkNamespaceName: string;
-  streamPath: string;
-  toolsMountName: string;
-}>) {
-  using tools = await ctx[vars.toolsMountName];
-  const targetResult = await tools.echo({ marker: vars.marker });
-  const nestedResult = await tools.nested.describe({ marker: vars.marker });
-
-  const methodResult = await ctx[vars.rootEchoMountName]({ marker: vars.marker });
-
-  using mountedStreams = await ctx[vars.mountedStreamsName];
-  const mountedAppendResult = await mountedStreams.append({
-    streamPath: vars.streamPath,
-    event: {
-      type: vars.eventType,
-      payload: { marker: vars.marker, source: "mount-shortcut" },
-    },
-  });
-  const eventsByShortcut = await mountedStreams.read({
-    afterOffset: "start",
-    streamPath: vars.streamPath,
-  });
-
-  const listedByShortcut = await mountedStreams.list();
-  const listedByMethod = await ctx[vars.listStreamsMountName]();
-  const appendResult = await ctx[vars.appendMountName]({
-    streamPath: vars.streamPath,
-    event: {
-      type: `${vars.eventType}/method`,
-      payload: { marker: vars.marker, source: "ctx-method-mount" },
-    },
-  });
-  const eventsByMethod = await mountedStreams.read({
-    afterOffset: "start",
-    streamPath: vars.streamPath,
-  });
-
-  using sdk = await ctx[vars.sdkMountName];
-  const sdkResult = await sdk[vars.sdkNamespaceName][vars.sdkActionName]({ text: vars.marker });
-  using nestedSdk =
-    await ctx[vars.nestedSdkRootName][vars.nestedSdkBranchName][vars.nestedSdkMountName];
-  const nestedSdkResult = await nestedSdk[vars.sdkNamespaceName][vars.sdkActionName]({
-    text: vars.marker,
-    via: "nested",
-  });
-
-  return {
-    appendResult,
-    eventsByMethod,
-    eventsByShortcut,
-    nestedSdkResult,
-    listedByMethod: listedByMethod.map((stream: { name: string }) => stream.name),
-    listedByShortcut: listedByShortcut.map((stream: { name: string }) => stream.name),
-    methodResult,
-    mountedAppendResult,
-    nestedResult,
-    sdkResult,
-    targetResult,
-  };
-}
 
 async function runCapnwebFunctionFromNode<Vars extends Record<string, unknown>, Result>(input: {
   ctx: RpcStub<IterateContext>;

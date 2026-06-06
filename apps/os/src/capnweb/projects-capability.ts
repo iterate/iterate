@@ -1,10 +1,7 @@
 import { RpcTarget } from "cloudflare:workers";
 import { ORPCError } from "@orpc/server";
 import { isValidTypeId, typeid } from "@iterate-com/shared/typeid";
-import type {
-  ProjectContextCapability,
-  ProjectDurableObjectContextClient,
-} from "./project-context-capability.ts";
+import { ProjectCapability } from "./project-capability.ts";
 import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 import type { AppContext } from "~/context.ts";
 import {
@@ -21,6 +18,7 @@ import {
 } from "~/db/queries/.generated/index.ts";
 import {
   getProjectDurableObjectName,
+  type ProjectCapabilityApi,
   type ProjectDurableObject,
 } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import type { ActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
@@ -42,16 +40,15 @@ type ProjectWithIngressUrl = ReturnType<typeof toProject> & {
   ingressUrl: string;
 };
 
+type ProjectDurableObjectContextClient = {
+  getCapability(props?: { scopes?: unknown }): ProjectCapabilityApi;
+};
+
 export class ProjectsCapability extends RpcTarget {
   constructor(
     private readonly props: {
       activeOrganization?: ActiveOrganizationAuth;
       context: AppContext;
-      createProjectContext?: (input: {
-        project: ProjectDurableObjectContextClient;
-        projectId: string;
-        projects: ProjectsCapability;
-      }) => ProjectContextCapability;
     },
   ) {
     super();
@@ -62,10 +59,11 @@ export class ProjectsCapability extends RpcTarget {
       this.props.context,
       projectId,
     ) as unknown as ProjectDurableObjectContextClient;
-    if (!this.props.createProjectContext) {
-      throw new Error("Project context factory is not available.");
-    }
-    return this.props.createProjectContext({ project, projectId, projects: this });
+    return new ProjectCapability({
+      context: this.props.context,
+      project: project.getCapability({ scopes: { projects: [projectId] } }),
+      projectId,
+    });
   }
 
   async list(input: { limit?: number; offset?: number } = {}): Promise<ProjectListResult> {

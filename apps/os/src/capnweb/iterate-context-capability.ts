@@ -8,11 +8,7 @@ import {
   localProxyCaller,
 } from "./local-proxy-wrapper.js";
 import localProxyWrapperSource from "./local-proxy-wrapper.js?raw";
-import {
-  ProjectContextCapability,
-  type ProjectDurableObjectContextClient,
-  type ProjectWorkerCapability,
-} from "./project-context-capability.ts";
+import type { ProjectCapability, ProjectWorkerCapability } from "./project-capability.ts";
 import { ProjectsCapability } from "./projects-capability.ts";
 import type { ProjectReposCapability } from "./repos-capability.ts";
 import type { ProjectStreamsCapability } from "./streams-capability.ts";
@@ -89,7 +85,7 @@ export class IterateContextEntrypoint extends WorkerEntrypoint<Env, IterateConte
 export class IterateCapability extends RpcTarget {
   readonly #runtime: IterateContextRuntime;
   readonly #dynamicWorkerTargets = new Map<string, unknown>();
-  #project?: ProjectContextCapability;
+  #project?: ProjectCapability;
 
   constructor(runtime: IterateContextRuntime) {
     super();
@@ -103,7 +99,7 @@ export class IterateCapability extends RpcTarget {
     return this.#runtime.projects;
   }
 
-  get project(): ProjectContextCapability {
+  get project(): ProjectCapability {
     return (this.#project ??= this.projects.get(requireRuntimeProjectId(this.#runtime)));
   }
 
@@ -266,12 +262,6 @@ export function createProjectsCapability(input: { context: AppContext }) {
       userId: "root-context",
     },
     context: input.context,
-    createProjectContext: ({ project, projectId }) =>
-      new ProjectContextCapability({
-        context: input.context,
-        project,
-        projectId,
-      }),
   });
 }
 
