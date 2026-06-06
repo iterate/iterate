@@ -12,7 +12,8 @@ await ctx.projects.get("proj_123").describe();
 await ctx.project.fetch(request);
 await ctx.streams.read({ streamPath: "/agents/a", afterOffset: "start" });
 await ctx.project.worker.someTool({ input: "value" });
-await ctx.sdk.chat.postMessage({ channel: "C123", text: "hi" });
+using sdk = await ctx.sdk;
+await sdk.chat.postMessage({ channel: "C123", text: "hi" });
 ```
 
 ## Model
@@ -423,7 +424,7 @@ These are observed constraints from the e2e implementation:
   mount scripts as modules in the same dynamic worker isolate as the snippet.
 - Normal Cap'n Web and Workers RPC stubs should pass through untouched. The
   local SDK proxy applies only to marker values returned by `localProxyCaller`.
-- Catchall SDK ergonomics require the caller side to run `liftLocalProxies(...)`
+- SDK marker ergonomics require the caller side to run `liftLocalProxies(...)`
   once around the Cap'n Web session or injected context.
 - The root `/run` bridge returns JSON, not live RPC stubs.
 

@@ -75,6 +75,11 @@ worker. Today that boundary fails before the result can be returned. The current
 same dynamic worker as the snippet. That bridge is not just ergonomic sugar; it
 keeps mounted dynamic-worker tools in-process where workerd allows the call.
 
+An even smaller variant, passing only the lifted real context into `/run` with no
+local dynamic mount bridge, failed at the first mounted method call:
+`tools.echo is not a function`. Built-in roots still transferred, but
+dynamic-worker mount roots did not arrive with their callable target shape.
+
 Injecting the real `IterateContext` into `/run` is still useful. Built-in
 capabilities can use the same object as Node Cap'n Web tests, while only
 dynamic-worker user mounts need the local in-process module bridge.
