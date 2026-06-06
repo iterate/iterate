@@ -158,7 +158,6 @@ export class IterateContextEntrypoint extends WorkerEntrypoint<Env, IterateConte
 class IterateCapability extends RpcTarget {
   readonly #runtime: IterateContextRuntime;
   readonly #dynamicWorkerTargets = new Map<string, unknown>();
-  #projects?: ProjectsCapabilityClient;
 
   constructor(runtime: IterateContextRuntime) {
     super();
@@ -166,7 +165,10 @@ class IterateCapability extends RpcTarget {
   }
 
   get projects(): ProjectsCapabilityClient {
-    return this.projectsTarget;
+    if (!this.#runtime.projects) {
+      throw new Error("Projects capability is not available in this IterateContext.");
+    }
+    return this.#runtime.projects;
   }
 
   get project(): ProjectContextCapability {
@@ -188,13 +190,6 @@ class IterateCapability extends RpcTarget {
 
   get workspace(): ProjectWorkspaceCapability {
     return this.project.workspace;
-  }
-
-  private get projectsTarget() {
-    if (!this.#runtime.projects) {
-      throw new Error("Projects capability is not available in this IterateContext.");
-    }
-    return (this.#projects ??= this.#runtime.projects);
   }
 
   private requireSingleProjectId() {

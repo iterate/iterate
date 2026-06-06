@@ -214,11 +214,7 @@ function withRestRepoMethods(
         );
       } catch (error) {
         if (error instanceof CloudflareArtifactsRestError && error.status === 409) {
-          forked = await artifactsApi<CloudflareArtifactRepo>(
-            input,
-            "GET",
-            `/repos/${encodeURIComponent(name)}`,
-          );
+          forked = await waitForRestRepo(input, name);
         } else {
           throw error;
         }
@@ -260,6 +256,22 @@ class CloudflareArtifactsRestError extends Error {
   ) {
     super(`Cloudflare Artifacts request failed (${status} ${apiPath}): ${message}`);
   }
+}
+
+async function waitForRestRepo(input: CloudflareArtifactsRestBindingInput, name: string) {
+  const apiPath = `/repos/${encodeURIComponent(name)}`;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    try {
+      return await artifactsApi<CloudflareArtifactRepo>(input, "GET", apiPath);
+    } catch (error) {
+      if (!(error instanceof CloudflareArtifactsRestError) || error.status !== 409) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5_000));
+    }
+  }
+
+  return await artifactsApi<CloudflareArtifactRepo>(input, "GET", apiPath);
 }
 
 type CloudflareApiEnvelope<T> = {

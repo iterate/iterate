@@ -125,6 +125,12 @@ shape: read the target repo and let the Repo Durable Object continue creating
 its token and appending the repo-created event. This keeps retries clean without
 special-casing the caller.
 
+The follow-up read can also return `409` for a short period with a message like
+`Repository "<name>" is currently being forked and is not yet available.; Retry
+after 5 seconds.` The fallback needs to poll the target repo until the fork
+finishes instead of assuming that a conflict means the repo is immediately
+readable.
+
 ## Do not put worker e2e helpers under `/__debug`
 
 The local Cloudflare dev server reserves `/__debug` and returns the devtools
