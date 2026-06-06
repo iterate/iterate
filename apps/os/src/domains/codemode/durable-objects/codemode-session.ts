@@ -201,8 +201,12 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
 
   async afterAppend(input: { event: Event }) {
     await this.ensureStarted();
-    await this.waitForProcessorCatchUp();
+    // Event-mediated providers complete by appending function-call-completed
+    // back to the stream. Resolve the live script waiter before waiting for the
+    // codemode processor to catch up; otherwise the processor can be waiting on
+    // the script that is waiting on this completion.
     this.resolvePendingFunctionCallFromEvent(input.event);
+    await this.waitForProcessorCatchUp();
     return await this.getRunnerState();
   }
 
@@ -343,11 +347,6 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
     }
 
     const provider = await this.resolveRegisteredProvider(input.path);
-    const pending =
-      provider.invocation.kind === "event"
-        ? this.ensurePendingFunctionCallResult(functionCallId)
-        : null;
-
     const requestedEvent = await this.appendAndConsume({
       type: "events.iterate.com/codemode/function-call-requested",
       payload: {
@@ -415,13 +414,10 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
       }
     }
 
-    this.resolvePendingFunctionCallFromEvent(requestedEvent);
-
-    try {
-      return await pending!.promise;
-    } finally {
-      this.#pendingFunctionCallResults.delete(functionCallId);
-    }
+    return await this.waitForEventProviderResult({
+      afterOffset: requestedEvent.offset,
+      functionCallId,
+    });
   }
 
   async receiveFunctionCallResult(input: ReceiveFunctionCallResultInput) {
@@ -515,6 +511,24 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
     await this.waitForProcessorCatchUp();
     this.resolvePendingFunctionCallFromEvent(event);
     return event;
+  }
+
+  private async waitForEventProviderResult(input: { afterOffset: number; functionCallId: string }) {
+    const deadline = Date.now() + 60_000;
+    while (Date.now() < deadline) {
+      const result = findFunctionCallCompletedEvent({
+        events: await this.streamsEntrypoint().read({
+          afterOffset: input.afterOffset,
+          beforeOffset: "end",
+        }),
+        functionCallId: input.functionCallId,
+      });
+      if (result?.outcome.status === "returned") return result.outcome.value;
+      if (result?.outcome.status === "threw") throw new Error(String(result.outcome.error));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    throw new Error(`Timed out waiting for event provider call ${input.functionCallId}.`);
   }
 
   createSessionCapabilityCallable(): Callable {
@@ -776,6 +790,31 @@ function processorStreamApiFromNamespace(args: {
       throw new Error("CodemodeSession processors receive live events through afterAppend RPC.");
     },
   };
+}
+
+function findFunctionCallCompletedEvent(input: {
+  events: readonly Event[];
+  functionCallId: string;
+}):
+  | {
+      outcome: { status: "returned"; value: unknown } | { status: "threw"; error: unknown };
+    }
+  | undefined {
+  for (const event of input.events) {
+    if (event.type !== "events.iterate.com/codemode/function-call-completed") continue;
+    const payload = event.payload as {
+      functionCallId?: unknown;
+      outcome?: unknown;
+    };
+    if (payload.functionCallId !== input.functionCallId) continue;
+    const outcome = payload.outcome as
+      | { status: "returned"; value: unknown }
+      | { status: "threw"; error: unknown }
+      | undefined;
+    if (outcome?.status === "returned" || outcome?.status === "threw") {
+      return { outcome };
+    }
+  }
 }
 
 function resolveProcessorStreamPath(input: { basePath: StreamPath; pathInput?: string }) {

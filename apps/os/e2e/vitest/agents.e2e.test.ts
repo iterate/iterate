@@ -7,12 +7,13 @@
  *   pnpm --dir apps/os e2e -t "project agents codemode"
  */
 import { expect, test } from "vitest";
-import { STREAM_SUBSCRIPTION_CONFIGURED_TYPE } from "@iterate-com/shared/streams/core-event-types";
 import type { Event } from "@iterate-com/shared/streams/types";
 import { DEFAULT_WORKERS_AI_AGENT_MODEL } from "@iterate-com/shared/stream-processors/agent/contract";
 import dedent from "dedent";
 import { createTestProjectFixture } from "../test-support/create-test-project.ts";
 import type { OsClient } from "../test-support/os-client.ts";
+
+const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 
 type SlackChannel = {
   id: string;
@@ -552,27 +553,7 @@ itIfSlackBotToken(
     await client.project.streams.append({
       projectSlugOrId: project.id,
       streamPath: "/integrations/slack",
-      event: {
-        type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-        idempotencyKey: `slack-integration-e2e-subscription:${suffix}`,
-        payload: {
-          slug: `slack-integration-e2e:${suffix}`,
-          type: "callable",
-          callable: {
-            type: "workers-rpc",
-            via: {
-              type: "env-binding",
-              bindingType: "durable-object-namespace",
-              bindingName: "SLACK_INTEGRATION",
-              durableObject: {
-                name: slackIntegrationDurableObjectName(project.id),
-              },
-            },
-            rpcMethod: "afterAppend",
-            argsMode: "object",
-          },
-        },
-      },
+      event: slackProcessorSubscriptionEvent({ projectId: project.id, suffix }),
     });
 
     await client.project.streams.append({
@@ -621,7 +602,8 @@ itIfSlackBotToken(
       expect.objectContaining({
         type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
         payload: expect.objectContaining({
-          slug: expect.stringContaining("slack-agent:"),
+          subscriptionKey: expect.stringContaining("slack-agent:"),
+          subscriber: expect.objectContaining({ processorSlug: "slack-agent" }),
         }),
       }),
     );
@@ -629,7 +611,8 @@ itIfSlackBotToken(
       expect.objectContaining({
         type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
         payload: expect.objectContaining({
-          slug: expect.stringContaining("agent:"),
+          subscriptionKey: expect.stringContaining("agent:"),
+          subscriber: expect.objectContaining({ processorSlug: "agent-host" }),
         }),
       }),
     );
@@ -797,27 +780,7 @@ test("completes slack-agent event-mode codemode calls without blocking the strea
   await client.project.streams.append({
     projectSlugOrId: project.id,
     streamPath: "/integrations/slack",
-    event: {
-      type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      idempotencyKey: `slack-integration-e2e-thread-info-subscription:${suffix}`,
-      payload: {
-        slug: `slack-integration-e2e-thread-info:${suffix}`,
-        type: "callable",
-        callable: {
-          type: "workers-rpc",
-          via: {
-            type: "env-binding",
-            bindingType: "durable-object-namespace",
-            bindingName: "SLACK_INTEGRATION",
-            durableObject: {
-              name: slackIntegrationDurableObjectName(project.id),
-            },
-          },
-          rpcMethod: "afterAppend",
-          argsMode: "object",
-        },
-      },
-    },
+    event: slackProcessorSubscriptionEvent({ projectId: project.id, suffix }),
   });
 
   await client.project.streams.append({
@@ -1140,8 +1103,19 @@ function sanitizeSlackPathPart(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
 }
 
-function slackIntegrationDurableObjectName(projectId: string) {
-  return JSON.stringify({ projectId });
+function slackProcessorSubscriptionEvent(input: { projectId: string; suffix: string }) {
+  return {
+    type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
+    idempotencyKey: `slack-integration-e2e-subscription:${input.projectId}:${input.suffix}`,
+    payload: {
+      subscriptionKey: `slack:${input.projectId}:${input.suffix}`,
+      subscriber: {
+        type: "built-in",
+        transport: "capnweb-websocket",
+        processorSlug: "slack",
+      },
+    },
+  } as const;
 }
 
 function maxGapAfter(events: readonly Event[], afterOffset: number) {

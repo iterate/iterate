@@ -143,3 +143,61 @@ endpoints that need to work in both local dev and deployed preview workers.
 When a local e2e uses `APP_CONFIG_BASE_URL=http://127.0.0.1:5173` for the Node
 client, worker-to-worker egress should target the Doppler dev tunnel instead,
 for example with `OS_E2E_EGRESS_ECHO_BASE_URL=https://os.iterate-dev-jonas.com`.
+
+## Canonical MCP is app-scoped and project-selected
+
+The current MCP endpoint is the app-level `/mcp`, derived from
+`APP_CONFIG_BASE_URL`. The old project-hostname-derived MCP URL is no longer
+enough.
+
+Admin MCP tokens can see multiple projects, so `exec_js` calls through the
+canonical endpoint must include the selected project slug or ID in the tool
+arguments:
+
+```ts
+await client.callTool({
+  name: "exec_js",
+  arguments: { code, project: fixture.project.slug },
+});
+```
+
+Without that argument the tool input schema rejects the call when more than one
+project is available to the token.
+
+## New stream subscriptions use the stream event dialect
+
+OS now runs the newer stream runtime for built-in processors. Its outbound
+subscription event is:
+
+```ts
+{
+  type: "events.iterate.com/stream/subscription-configured",
+  payload: {
+    subscriptionKey,
+    subscriber: {
+      type: "built-in",
+      transport: "capnweb-websocket",
+      processorSlug,
+    },
+  },
+}
+```
+
+The older `events.iterate.com/core/subscription-configured` event with
+`{ slug, type: "callable", callable }` can still pass some public validation,
+but it does not reconcile the new built-in stream processor runners. Tests that
+need the Slack router should subscribe the built-in `slack` processor directly
+with the new shape.
+
+## OS codemode event providers wait by reading the stream
+
+The portable shared codemode processor can wait for event-provider completions
+through a stream subscription. OS codemode scripts normally call a
+`CodemodeSession` Durable Object capability instead, because dynamic workers use
+that parent-owned session capability while executing.
+
+In that DO path, event-provider calls append
+`codemode/function-call-requested` and then read the same stream until the
+matching `codemode/function-call-completed` arrives. Relying on
+`CodemodeSession.afterAppend()` for that completion is not enough unless the
+session is also configured as a live callable subscriber for completion events.
