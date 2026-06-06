@@ -71,9 +71,13 @@ mountModules.set(${JSON.stringify(targetKey)}, mountModule${index});`;
   }
 
   function dynamicMountForPath(path) {
-    return (props.mounts ?? [])
-      .filter((mount) => mount.target.type === "dynamic-worker" && isPathPrefix(mount.path, path))
-      .sort((left, right) => right.path.length - left.path.length)[0];
+    let match;
+    for (const mount of props.mounts ?? []) {
+      if (mount.target.type !== "dynamic-worker") continue;
+      if (!isPathPrefix(mount.path, path)) continue;
+      if (!match || mount.path.length > match.path.length) match = mount;
+    }
+    return match;
   }
 
   function hasDynamicMountRoot(rootName) {
